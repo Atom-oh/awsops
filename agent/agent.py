@@ -19,6 +19,7 @@ GATEWAYS = {
     "infra": "https://awsops-network-gateway-oimomguf7x.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
     "ops": "https://awsops-ops-gateway-ybcvjkwu71.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
     "iac": "https://awsops-iac-gateway-i0vlfltmwu.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "cost": "https://awsops-cost-gateway-uanqtckgzm.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
 }
 DEFAULT_GATEWAY = "ops"
 GATEWAY_REGION = "ap-northeast-2"
@@ -47,6 +48,14 @@ You have MCP tools for:
 - AWS Knowledge: search documentation, check regional availability
 - Core MCP: execute AWS CLI commands, get solution design guidance
 Always be concise, provide actionable insights. Format in markdown. Respond in the user's language.""",
+
+    "cost": """You are AWSops FinOps Specialist, an expert in AWS cost optimization and financial operations.
+You have MCP tools for:
+- Cost Explorer: get cost/usage data, compare periods, analyze cost drivers, forecast
+- Pricing: look up AWS service pricing
+- Budgets: check budget status and forecasted spend
+Always provide costs in USD with 2 decimal places. Identify optimization opportunities.
+Format in markdown. Respond in the user's language.""",
 
     "iac": """You are AWSops IaC Specialist, an expert in Infrastructure as Code.
 You have MCP tools for:

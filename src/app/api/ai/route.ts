@@ -157,6 +157,15 @@ function needsInfra(message: string): boolean {
   return keywords.some(k => lower.includes(k));
 }
 
+// Cost keywords → route to Cost Gateway
+function needsCost(message: string): boolean {
+  const lower = message.toLowerCase();
+  const keywords = ['cost','비용','billing','청구','forecast','예측','budget','예산',
+    'pricing','가격','spend','지출','savings','절감','optimization','최적화',
+    'cost explorer','월별','monthly cost','daily cost'];
+  return keywords.some(k => lower.includes(k));
+}
+
 // IaC keywords → route to IaC Gateway (CDK, CloudFormation, Terraform)
 function needsIaC(message: string): boolean {
   const lower = message.toLowerCase();
@@ -169,13 +178,13 @@ function needsIaC(message: string): boolean {
 // AWS resource overview keywords → Steampipe + Bedrock direct
 function needsAWSData(message: string): boolean {
   const lower = message.toLowerCase();
-  const keywords = ['ec2','s3','rds','vpc','lambda','iam','security','cost','k8s','eks','elb',
-    'instance','bucket','서버','네트워크','비용','보안','데이터베이스','현황','리소스','pod'];
+  const keywords = ['ec2','s3','rds','vpc','lambda','iam','security','k8s','elb',
+    'instance','bucket','서버','네트워크','보안','데이터베이스','현황','리소스','pod'];
   return keywords.some(k => lower.includes(k));
 }
 
 // AgentCore Runtime invoke with gateway selection
-async function invokeAgentCore(message: string, gateway: 'infra' | 'ops' | 'iac' = 'ops'): Promise<string | null> {
+async function invokeAgentCore(message: string, gateway: 'infra' | 'ops' | 'iac' | 'cost' = 'ops'): Promise<string | null> {
   try {
     const command = new InvokeAgentRuntimeCommand({
       agentRuntimeArn: AGENT_RUNTIME_ARN,
@@ -234,6 +243,7 @@ export async function POST(request: NextRequest) {
     const useCodeInterpreter = needsCodeInterpreter(lastMessage);
     const useInfra = needsInfra(lastMessage);
     const useIaC = needsIaC(lastMessage);
+    const useCost = needsCost(lastMessage);
     const needsData = needsAWSData(lastMessage);
 
     // Route Code: Code execution request → Code Interpreter + AI analysis
@@ -313,7 +323,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Route 1: AWS resource questions → Bedrock Direct + Steampipe data
+    // Route 1: Cost questions → AgentCore Runtime (Cost Gateway)
+    if (useCost) {
+      const agentResponse = await invokeAgentCore(lastMessage, 'cost');
+      if (agentResponse) {
+        return NextResponse.json({
+          content: agentResponse,
+          model: 'sonnet-4.6',
+          via: 'AgentCore Runtime → Cost Gateway (9 tools)',
+          queriedResources: ['cost-gateway'],
+        });
+      }
+    }
+
+    // Route 2: AWS resource questions → Bedrock Direct + Steampipe data
     if (needsData) {
       const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
       const autoQueries = detectQueries(lastMessage);
