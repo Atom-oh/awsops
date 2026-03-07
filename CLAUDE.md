@@ -6,7 +6,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 ## Architecture
 - **Frontend**: Next.js 14 (App Router) + Tailwind CSS dark theme + Recharts + React Flow
 - **Data**: Steampipe embedded PostgreSQL (port 9193) — 380+ AWS tables, 60+ K8s tables
-- **AI**: Bedrock Sonnet/Opus 4.6 + AgentCore Runtime (Strands) + Gateway MCP (4 Lambda targets)
+- **AI**: Bedrock Sonnet/Opus 4.6 + AgentCore Runtime (Strands) + 7 Gateways (Infra/IaC/Data/Security/Monitoring/Cost/Ops) + 19 Lambda + 125 MCP tools
 - **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1) + CloudFront
 - **Infra**: CDK (`infra-cdk/`) → CloudFront (CACHING_DISABLED) → ALB (SG: CF prefix list, port 80-3000) → EC2 (t4g.2xlarge, Private Subnet)
 
@@ -51,6 +51,8 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `src/components/layout/Sidebar.tsx` — Navigation (6 groups)
 - `infra-cdk/lib/awsops-stack.ts` — CDK 인프라 (VPC, EC2, ALB, CloudFront)
 - `infra-cdk/lib/cognito-stack.ts` — CDK Cognito (User Pool, Lambda@Edge)
+- `agent/lambda/create_targets.py` — Gateway target creation script
+- `agent/lambda/*.py (19 Lambda sources)` — AgentCore Lambda function sources
 - `scripts/ARCHITECTURE.md` — Full architecture documentation
 - `docs/TROUBLESHOOTING.md` — 10 known issues + solutions
 
@@ -63,7 +65,7 @@ Step 3:  03-build-deploy.sh              Production 빌드
 Step 5:  05-setup-cognito.sh             Cognito 인증
 Step 6a: 06a-setup-agentcore-runtime.sh  Runtime (IAM, ECR, Docker, Endpoint)
 Step 6b: 06b-setup-agentcore-gateway.sh  Gateway (MCP)
-Step 6c: 06c-setup-agentcore-tools.sh    Tools (4 Lambda + 4 Gateway Targets)
+Step 6c: 06c-setup-agentcore-tools.sh    Tools (19 Lambda + 7 Gateways, 125 tools)
 Step 6d: 06d-setup-agentcore-interpreter.sh  Code Interpreter
 Step 7:  07-setup-cloudfront-auth.sh     Lambda@Edge → CloudFront 연동
 ```
@@ -76,6 +78,7 @@ Step 7:  07-setup-cloudfront-auth.sh     Lambda@Edge → CloudFront 연동
 - Code Interpreter 이름: 하이픈 불가, 언더스코어만 (`[a-zA-Z][a-zA-Z0-9_]`)
 - CloudFront CachePolicy: TTL=0 시 HeaderBehavior 불가 → 관리형 CACHING_DISABLED 사용
 - ALB SG: CloudFront prefix list 120+ IP → 포트 범위(80-3000) 단일 규칙으로 통합
+- psycopg2 → pg8000 for VPC Lambda (no native binary dependency)
 
 ## Adding New Pages
 1. Check columns: `steampipe query "SELECT column_name FROM information_schema.columns WHERE table_name='TABLE'" --output json --input=false`

@@ -20,9 +20,9 @@ AWSops Dashboard is an AWS + Kubernetes operations dashboard providing real-time
 
 ### AI Layer (`src/app/api/ai/`)
 - **Models**: Bedrock Sonnet/Opus 4.6
-- **AgentCore**: Runtime (Strands) + Gateway MCP (20 tools)
+- **AgentCore**: Runtime (Strands) + 7 Gateways (125 MCP tools via 19 Lambda)
 - **Code Interpreter**: Sandboxed code execution for analysis
-- **Routing**: 4-route priority system (Code → Network → AWS → General)
+- **Routing**: 9-route priority system (Code → Infra → IaC → Data → Security → Monitoring → Cost → AWS → General)
 
 ### Auth & Delivery
 - **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1)
@@ -52,9 +52,35 @@ AWSops Dashboard is an AWS + Kubernetes operations dashboard providing real-time
 | 3 | `03-build-deploy.sh` | Production build + start |
 | 5 | `05-setup-cognito.sh` | Cognito User Pool + Lambda@Edge |
 | 6a | `06a-setup-agentcore-runtime.sh` | IAM, ECR, Docker, Runtime, Endpoint |
-| 6b | `06b-setup-agentcore-gateway.sh` | AgentCore Gateway (MCP) |
-| 6c | `06c-setup-agentcore-tools.sh` | 4 Lambda + 4 Gateway Targets |
+| 6b | `06b-setup-agentcore-gateway.sh` | 7 AgentCore Gateways (role-based MCP routing) |
+| 6c | `06c-setup-agentcore-tools.sh` | 19 Lambda + create_targets.py → 125 MCP tools |
 | 6d | `06d-setup-agentcore-interpreter.sh` | Code Interpreter |
 | 7 | `07-setup-cloudfront-auth.sh` | Lambda@Edge → CloudFront 연동 |
+
+## AgentCore Gateway Architecture
+
+The AI layer uses 7 role-based Gateways, each with domain-specific Lambda targets and MCP tools:
+
+| Gateway | Tools | Description |
+|---------|-------|-------------|
+| Infra Gateway | 12 | Network analysis: ENI, reachability, flow logs, route tables, VPN, TGW, NACLs |
+| IaC Gateway | 16 | Infrastructure as Code: CDK, CloudFormation, Terraform, Checkov scanning |
+| Data Gateway | 24 | Data & Analytics: DynamoDB, RDS/Aurora, ElastiCache, MSK, Steampipe queries |
+| Security Gateway | 14 | IAM analysis: policy simulation, role policies, access advisor, trust relationships |
+| Monitoring Gateway | 16 | Observability: CloudWatch metrics/alarms/logs, CloudTrail events, dashboards |
+| Cost Gateway | 9 | Cost management: Cost Explorer, forecasts, budgets, savings plans |
+| Ops Gateway | 9 | General operations: EC2, S3, ECS, Lambda overview and Istio/EKS |
+| **Total** | **125** | **Across 19 Lambda functions** |
+
+Route priority in `src/app/api/ai/route.ts`:
+1. Code execution keywords → Code Interpreter
+2. Infrastructure keywords → Infra Gateway
+3. IaC keywords → IaC Gateway
+4. Data & Analytics keywords → Data Gateway
+5. Security keywords → Security Gateway
+6. Monitoring keywords → Monitoring Gateway
+7. Cost keywords → Cost Gateway
+8. AWS resource keywords → Steampipe + Bedrock Direct
+9. General questions → Ops Gateway (fallback → Bedrock Direct)
 
 See also: `scripts/ARCHITECTURE.md` for detailed architecture diagrams.

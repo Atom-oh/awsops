@@ -77,37 +77,53 @@
 
 ## AI Assistant
 
-4가지 라우팅으로 질문 유형에 따라 최적 경로를 자동 선택합니다.
+9가지 라우팅으로 질문 유형에 따라 최적 경로를 자동 선택합니다.
 
 ```
 사용자 질문
     │
-    ├─ "코드 실행", "계산" ──────→ Bedrock + Code Interpreter (Python sandbox)
+    ├─ "코드 실행", "계산" ──────→ Code → Bedrock + Code Interpreter (Python sandbox)
     │
-    ├─ ENI, 라우트, flow log ───→ AgentCore Runtime (Strands)
-    │                                → Gateway MCP (4 Lambda, 20 tools)
-    │                                  ├─ Reachability Analyzer
-    │                                  ├─ Flow Monitor
-    │                                  ├─ Network MCP (TGW, NACL, ENI)
-    │                                  └─ Steampipe Query
+    ├─ CDK, Terraform, CFn ────→ Infra → AgentCore Runtime (Strands)
+    │                                → Infrastructure Gateway
     │
-    ├─ EC2, VPC, RDS, Cost ────→ Steampipe 실시간 쿼리 + Bedrock 분석
+    ├─ IaC 분석 ───────────────→ IaC → AgentCore Runtime (Strands)
+    │                                → IaC Gateway
     │
-    └─ 일반 질문 ──────────────→ AgentCore Runtime → Bedrock 폴백
+    ├─ DynamoDB, RDS, Cache ───→ Data → AgentCore Runtime (Strands)
+    │                                → Data Gateway
+    │
+    ├─ IAM, SG, 컴플라이언스 ──→ Security → AgentCore Runtime (Strands)
+    │                                → Security Gateway
+    │
+    ├─ CloudWatch, 알람, 로그 ──→ Monitoring → AgentCore Runtime (Strands)
+    │                                → Monitoring Gateway
+    │
+    ├─ 비용, 예산, 절감 ────────→ Cost → AgentCore Runtime (Strands)
+    │                                → Cost Gateway
+    │
+    ├─ EC2, VPC, RDS, ENI ────→ AWS Data → Steampipe 실시간 쿼리 + Bedrock 분석
+    │                                → Network Gateway (Reachability, Flow, TGW)
+    │
+    └─ 일반 질문 ──────────────→ Ops → AgentCore Runtime → Bedrock 폴백
 ```
 
 ### Models
 - **Claude Sonnet 4.6** — 빠른 응답 (기본)
 - **Claude Opus 4.6** — 심층 분석
 
-### AgentCore Gateway MCP Tools (20개)
+### AgentCore Gateway MCP Tools (7 Gateways)
 
-| Lambda Target | Tools |
-|--------------|-------|
-| **reachability-analyzer** | analyzeReachability, listInsightsPaths, listAnalyses |
-| **flow-monitor** | listFlowLogs, queryFlowLogs, findEni, getSecurityGroupRules, getRouteTables, listVpnConnections |
-| **network-mcp** | getPathTraceMethodology, getEniDetails, getTgwRoutes, getTgwAttachments, getSubnetNacls, getVpcConfig, listTransitGateways |
-| **steampipe-query** | queryAWSResources (14종 사전정의 쿼리) |
+| Gateway | Lambda Targets | Tool Count |
+|---------|---------------|------------|
+| **Network Gateway** | reachability-analyzer, flow-monitor, network-mcp | 16 |
+| **Infrastructure Gateway** | infra-mcp | 5 |
+| **IaC Gateway** | iac-mcp | 4 |
+| **Data Gateway** | data-mcp | 6 |
+| **Security Gateway** | security-mcp | 5 |
+| **Monitoring Gateway** | monitoring-mcp | 5 |
+| **Cost Gateway** | cost-mcp | 4 |
+| **steampipe-query** | steampipe-query | 1 (14종 사전정의 쿼리) |
 
 ---
 
@@ -131,6 +147,7 @@
 | AI (네트워크 분석) | AgentCore → Gateway MCP → Lambda | ~30-60초 |
 | AI (코드 실행) | Bedrock + Code Interpreter | ~10초 |
 | CIS Compliance | Powerpipe → Steampipe → AWS API | ~3-5분 |
+| Data Analytics | DynamoDB/RDS/ElastiCache/MSK → Data Gateway | ~10-30초 |
 | Topology 그래프 | Steampipe → React Flow | ~2초 |
 
 ---
@@ -144,7 +161,10 @@
 | CloudFront | Global | CDN + HTTPS |
 | Cognito | ap-northeast-2 | 사용자 인증 |
 | Lambda@Edge | us-east-1 | CloudFront 인증 |
-| Lambda (x4) | ap-northeast-2 | 네트워크 분석 도구 |
+| Lambda (x19) | ap-northeast-2 | MCP 도구 (네트워크, 인프라, IaC, 데이터, 보안, 모니터링, 비용) |
+| DynamoDB | ap-northeast-2 | 테이블 데이터 조회 |
+| ElastiCache | ap-northeast-2 | Redis/Memcached 클러스터 모니터링 |
+| MSK | ap-northeast-2 | Kafka 클러스터 모니터링 |
 | AgentCore Runtime | ap-northeast-2 | Strands AI Agent |
 | AgentCore Gateway | ap-northeast-2 | MCP 도구 라우팅 |
 | AgentCore Code Interpreter | ap-northeast-2 | Python Sandbox |
@@ -229,6 +249,7 @@ awsops/
 │   ├── lib/queries/              # SQL queries (13 files)
 │   └── types/aws.ts
 ├── agent/                        # Strands Agent (Docker, arm64)
+│   └── lambda/                   # 19 Lambda source files + create_targets.py
 ├── powerpipe/                    # CIS Benchmark mod
 ├── infra-cdk/                    # CDK (VPC, ALB, CF, Cognito, AgentCore)
 ├── scripts/                      # 14 install/ops scripts + ARCHITECTURE.md
@@ -272,6 +293,8 @@ awsops/
 | ALB SG 규칙 한도 초과 (CF prefix 120+) | 포트 범위 80-3000 단일 규칙으로 통합 |
 | Gateway Target CLI inlinePayload 오류 | Python/boto3 사용 (`mcp.lambda` 구조) |
 | Code Interpreter 이름 하이픈 | 언더스코어만 허용 (`[a-zA-Z][a-zA-Z0-9_]`) |
+| Istio 리소스 조회 | Steampipe K8s CRD 테이블 (`kubernetes_custom_resource`) 사용 |
+| VPC Lambda Steampipe 접근 | Lambda를 VPC 내 배치 + Steampipe SG 인바운드 허용 |
 
 ---
 
