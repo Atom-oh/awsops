@@ -6,9 +6,9 @@ set -e
 #                                                                              #
 #   Creates:                                                                   #
 #     1. IAM Role for Lambda (network permissions)                             #
-#     2. Lambda functions (4: reachability, flow-monitor, network-mcp,         #
-#        steampipe-query) with inline Python code                              #
-#     3. Gateway Targets (4) linking Lambda to Gateway via MCP                 #
+#     2. Lambda functions (5: reachability, flow-monitor, network-mcp,         #
+#        steampipe-query, aws-knowledge) with inline Python code               #
+#     3. Gateway Targets (5) linking Lambda to Gateway via MCP                 #
 #                                                                              #
 #   Known issues handled:                                                      #
 #     - Gateway toolSchema uses inlinePayload (not OpenAPI)                   #
@@ -291,11 +291,77 @@ aws lambda add-permission --function-name awsops-steampipe-query \
 
 echo "  Lambda: awsops-steampipe-query (VPC, pg8000 → Steampipe :9193)"
 
+# Deploy aws-knowledge Lambda (proxy to remote AWS Knowledge MCP server)
+echo ""
+echo -e "  ${YELLOW}NOTE: aws-knowledge proxies to https://knowledge-mcp.global.api.aws${NC}"
+
+cat > /tmp/aws_knowledge.py << 'LAMBDAEOF'
+import json, urllib.request
+
+MCP_URL = "https://knowledge-mcp.global.api.aws"
+TOOL_MAP = {
+    "search_documentation": "aws___search_documentation",
+    "read_documentation": "aws___read_documentation",
+    "recommend": "aws___recommend",
+    "list_regions": "aws___list_regions",
+    "get_regional_availability": "aws___get_regional_availability",
+}
+
+def call_mcp_tool(tool_name, arguments):
+    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments}}).encode()
+    req = urllib.request.Request(MCP_URL, data=payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode())
+    content = data.get("result", {}).get("content", [])
+    texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+    return "\n".join(texts) if texts else json.dumps(data.get("result", {}))
+
+def lambda_handler(event, context):
+    params = event if isinstance(event, dict) else json.loads(event)
+    tool_name = params.get("tool_name", "")
+    arguments = params.get("arguments", params)
+    if not tool_name:
+        if "search_phrase" in params: tool_name = "search_documentation"
+        elif "url" in params and "max_length" in params: tool_name = "read_documentation"
+        elif "url" in params: tool_name = "recommend"
+        elif "resource_type" in params: tool_name = "get_regional_availability"
+        else: tool_name = "list_regions"
+        arguments = params
+    mcp_tool = TOOL_MAP.get(tool_name, "")
+    if not mcp_tool:
+        return {"statusCode": 400, "body": json.dumps({"error": "Unknown tool: " + tool_name})}
+    try:
+        result = call_mcp_tool(mcp_tool, arguments)
+        return {"statusCode": 200, "body": result[:50000]}
+    except Exception as e:
+        return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
+LAMBDAEOF
+
+cd /tmp && zip -j aws_knowledge.zip aws_knowledge.py 2>/dev/null
+aws lambda create-function \
+    --function-name awsops-aws-knowledge --runtime python3.12 \
+    --handler "aws_knowledge.lambda_handler" \
+    --role "$LAMBDA_ROLE_ARN" --zip-file "fileb:///tmp/aws_knowledge.zip" \
+    --timeout 30 --memory-size 256 \
+    --region "$REGION" 2>/dev/null || \
+aws lambda update-function-code \
+    --function-name awsops-aws-knowledge --zip-file "fileb:///tmp/aws_knowledge.zip" \
+    --region "$REGION" 2>/dev/null
+
+aws lambda add-permission --function-name awsops-aws-knowledge \
+    --statement-id agentcore-invoke --action lambda:InvokeFunction \
+    --principal bedrock-agentcore.amazonaws.com \
+    --region "$REGION" 2>/dev/null || true
+
+echo "  Lambda: awsops-aws-knowledge (proxy → AWS Knowledge MCP)"
+
 # -- [3/3] Create Gateway Targets (via Python/boto3) --------------------------
 #   KNOWN ISSUE: AWS CLI has issues with inlinePayload JSON format.
 #   Using Python/boto3 with correct mcp.lambda structure.
 echo ""
-echo -e "${CYAN}[3/3] Creating Gateway targets (4) via boto3...${NC}"
+echo -e "${CYAN}[3/3] Creating Gateway targets (5) via boto3...${NC}"
 echo -e "  ${YELLOW}NOTE: Using Python/boto3 (CLI has issues with inlinePayload)${NC}"
 
 # Auto-detect Gateway ID
@@ -359,6 +425,34 @@ targets = [
        'inputSchema': {'type': 'object', 'properties': {
            'sql': prop('string', 'SQL query to execute')},
         'required': ['sql']}}]),
+    ('aws-knowledge-target', 'awsops-aws-knowledge',
+     'AWS Knowledge MCP - documentation search, regional availability, recommendations',
+     [{'name': 'search_documentation',
+       'description': 'Search AWS documentation. Primary source for AWS service info.',
+       'inputSchema': {'type': 'object', 'properties': {
+           'search_phrase': prop('string', 'Search phrase for AWS docs'),
+           'limit': prop('integer', 'Max results to return')},
+        'required': ['search_phrase']}},
+      {'name': 'read_documentation',
+       'description': 'Fetch and convert an AWS documentation page to markdown.',
+       'inputSchema': {'type': 'object', 'properties': {
+           'url': prop('string', 'URL of AWS documentation page'),
+           'max_length': prop('integer', 'Max characters to return')},
+        'required': ['url']}},
+      {'name': 'recommend',
+       'description': 'Get content recommendations for an AWS documentation page.',
+       'inputSchema': {'type': 'object', 'properties': {
+           'url': prop('string', 'URL of AWS documentation page')},
+        'required': ['url']}},
+      {'name': 'list_regions',
+       'description': 'List all AWS regions with identifiers and names.',
+       'inputSchema': {'type': 'object', 'properties': {}}},
+      {'name': 'get_regional_availability',
+       'description': 'Check AWS regional availability for products, APIs, or CloudFormation.',
+       'inputSchema': {'type': 'object', 'properties': {
+           'resource_type': prop('string', 'product, api, or cfn'),
+           'region': prop('string', 'AWS region code')},
+        'required': ['resource_type']}}]),
 ]
 
 for name, fn, desc, tools in targets:
@@ -400,9 +494,10 @@ echo "  Lambda Functions:"
 echo "    - awsops-reachability-analyzer"
 echo "    - awsops-flow-monitor"
 echo "    - awsops-network-mcp"
-echo "    - awsops-steampipe-query"
+echo "    - awsops-steampipe-query     (VPC, pg8000 → Steampipe :9193)"
+echo "    - awsops-aws-knowledge       (proxy → AWS Knowledge MCP)"
 echo ""
-echo "  Gateway Targets: 4 (via boto3 with mcp.lambda + inlinePayload)"
+echo "  Gateway Targets: 5 (via boto3 with mcp.lambda + inlinePayload)"
 echo ""
 echo "  Next: bash scripts/06d-setup-agentcore-interpreter.sh"
 echo ""
