@@ -77,22 +77,15 @@ export class AwsopsStack extends cdk.Stack {
       description: 'ALB SG - HTTP from CloudFront origin-facing only',
       allowAllOutbound: true,
     });
-    // Use CfnSecurityGroupIngress for prefix list (L2 doesn't support prefix list directly)
-    new ec2.CfnSecurityGroupIngress(this, 'ALBIngressPort80', {
+    // Use single port range (80-3000) to stay within SG rules limit
+    // CloudFront prefix list has 120+ entries; each entry counts as 1 rule
+    new ec2.CfnSecurityGroupIngress(this, 'ALBIngressFromCloudFront', {
       groupId: albSg.securityGroupId,
       ipProtocol: 'tcp',
       fromPort: 80,
-      toPort: 80,
-      sourcePrefixListId: cloudFrontPrefixListId.valueAsString,
-      description: 'HTTP from CloudFront origin-facing',
-    });
-    new ec2.CfnSecurityGroupIngress(this, 'ALBIngressPort3000', {
-      groupId: albSg.securityGroupId,
-      ipProtocol: 'tcp',
-      fromPort: 3000,
       toPort: 3000,
       sourcePrefixListId: cloudFrontPrefixListId.valueAsString,
-      description: 'Dashboard port from CloudFront origin-facing',
+      description: 'HTTP/Dashboard ports from CloudFront origin-facing',
     });
 
     // EC2 SG: allow traffic from ALB only
@@ -398,20 +391,10 @@ export class AwsopsStack extends cdk.Stack {
       },
     });
 
-    // Cache policy: no caching (pass through everything)
-    const noCachePolicy = new cloudfront.CachePolicy(this, 'NoCachePolicy', {
-      cachePolicyName: `${this.stackName}-NoCache`,
-      defaultTtl: cdk.Duration.seconds(0),
-      minTtl: cdk.Duration.seconds(0),
-      maxTtl: cdk.Duration.seconds(0),
-      headerBehavior: cloudfront.CacheHeaderBehavior.allowList(
-        'Host', 'Origin', 'Referer', 'Accept', 'Accept-Language',
-      ),
-      cookieBehavior: cloudfront.CacheCookieBehavior.all(),
-      queryStringBehavior: cloudfront.CacheQueryStringBehavior.all(),
-    });
+    // Cache policy: no caching (use managed CachingDisabled policy)
+    const noCachePolicy = cloudfront.CachePolicy.CACHING_DISABLED;
 
-    // Origin request policy: forward all headers
+    // Origin request policy: forward all viewer headers, cookies, query strings
     const allViewerOriginPolicy = cloudfront.OriginRequestPolicy.ALL_VIEWER;
 
     this.distribution = new cloudfront.Distribution(this, 'CloudFrontDistribution', {
