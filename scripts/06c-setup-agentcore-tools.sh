@@ -141,36 +141,55 @@ def lambda_handler(event, context):
     return {'statusCode': 200, 'body': json.dumps(resp, default=str)}
 LAMBDAEOF
 
-# --- steampipe_query.py ---
-cat > /tmp/steampipe_query.py << 'LAMBDAEOF'
-import boto3, json
+# --- steampipe_query.py (VPC Lambda → real Steampipe SQL via pg8000) ---
+#   This Lambda runs inside the VPC and connects to EC2 Steampipe PostgreSQL.
+#   Uses pg8000 (pure Python) instead of psycopg2 (requires native binary).
+#   EC2 Steampipe must listen on network: steampipe service start --database-listen network
+mkdir -p /tmp/steampipe-lambda-pkg && cd /tmp/steampipe-lambda-pkg && rm -rf *
+pip3 install pg8000 -t . --quiet 2>&1 | tail -3 || true
+
+cat > steampipe_query.py << 'LAMBDAEOF'
+import json, os, pg8000
+
+DB_CONFIG = {
+    "host": os.environ.get("STEAMPIPE_HOST", "10.254.2.254"),
+    "port": int(os.environ.get("STEAMPIPE_PORT", "9193")),
+    "database": "steampipe",
+    "user": "steampipe",
+    "password": os.environ.get("STEAMPIPE_PASSWORD", ""),
+    "timeout": 30,
+}
 
 def lambda_handler(event, context):
-    ec2 = boto3.client('ec2')
     params = event if isinstance(event, dict) else json.loads(event)
-    sql = params['sql'].lower()
-
-    if 'instance' in sql or 'ec2' in sql:
-        resp = ec2.describe_instances()
-        instances = [{'InstanceId': i['InstanceId'], 'State': i['State']['Name'],
-            'InstanceType': i['InstanceType'], 'PrivateIp': i.get('PrivateIpAddress')}
-            for r in resp['Reservations'] for i in r['Instances']]
-        return {'statusCode': 200, 'body': json.dumps({'instances': instances}, default=str)}
-    elif 'vpc' in sql:
-        return {'statusCode': 200, 'body': json.dumps(ec2.describe_vpcs().get('Vpcs', []), default=str)}
-    elif 'subnet' in sql:
-        return {'statusCode': 200, 'body': json.dumps(ec2.describe_subnets().get('Subnets', []), default=str)}
-    elif 'security' in sql or 'sg' in sql:
-        return {'statusCode': 200, 'body': json.dumps(ec2.describe_security_groups().get('SecurityGroups', []), default=str)}
-    return {'statusCode': 400, 'body': json.dumps({'error': 'Use keywords: instance, ec2, vpc, subnet, security'})}
+    sql = params.get("sql", "").strip()
+    if not sql:
+        return {"statusCode": 400, "body": json.dumps({"error": "sql parameter required"})}
+    # Security: block write operations
+    for kw in ["drop", "delete", "update", "insert", "alter", "create", "truncate"]:
+        if kw in sql.lower().split():
+            return {"statusCode": 400, "body": json.dumps({"error": "Only SELECT queries allowed"})}
+    try:
+        conn = pg8000.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute(sql)
+        columns = [desc[0] for desc in cur.description] if cur.description else []
+        rows = cur.fetchmany(100)
+        results = [dict(zip(columns, [str(v) if v is not None else None for v in row])) for row in rows]
+        cur.close()
+        conn.close()
+        return {"statusCode": 200, "body": json.dumps({"columns": columns, "rows": results, "rowCount": len(results), "sql": sql})}
+    except Exception as e:
+        return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
 LAMBDAEOF
 
-# Deploy all 4 Lambda functions
+zip -r /tmp/steampipe_query.zip . -x "*.pyc" "__pycache__/*" 2>/dev/null
+
+# Deploy 3 standard Lambda functions (reachability, flowmonitor, network_mcp)
 declare -A FUNC_MAP=(
     ["awsops-reachability-analyzer"]="reachability"
     ["awsops-flow-monitor"]="flowmonitor"
     ["awsops-network-mcp"]="network_mcp"
-    ["awsops-steampipe-query"]="steampipe_query"
 )
 
 for FUNC_NAME in "${!FUNC_MAP[@]}"; do
@@ -194,6 +213,83 @@ for FUNC_NAME in "${!FUNC_MAP[@]}"; do
 
     echo "  Lambda: $FUNC_NAME"
 done
+
+# Deploy steampipe-query Lambda (VPC + pg8000 package)
+#   This Lambda runs inside the VPC to connect to EC2 Steampipe PostgreSQL.
+#   Requires: VPC subnets, security group, Steampipe network listen mode.
+echo ""
+echo -e "  ${YELLOW}NOTE: steampipe-query deploys into VPC (connects to EC2 Steampipe :9193)${NC}"
+
+# Auto-detect EC2 private IP, VPC, subnets
+EC2_IP=$(aws ec2 describe-instances \
+    --filters "Name=tag:Name,Values=*AWSops*" "Name=instance-state-name,Values=running" \
+    --query "Reservations[0].Instances[0].PrivateIpAddress" --output text --region "$REGION" 2>/dev/null || echo "")
+EC2_VPC=$(aws ec2 describe-instances \
+    --filters "Name=tag:Name,Values=*AWSops*" "Name=instance-state-name,Values=running" \
+    --query "Reservations[0].Instances[0].VpcId" --output text --region "$REGION" 2>/dev/null || echo "")
+EC2_SG=$(aws ec2 describe-instances \
+    --filters "Name=tag:Name,Values=*AWSops*" "Name=instance-state-name,Values=running" \
+    --query "Reservations[0].Instances[0].SecurityGroups[0].GroupId" --output text --region "$REGION" 2>/dev/null || echo "")
+PRIVATE_SUBNETS=$(aws ec2 describe-subnets \
+    --filters "Name=vpc-id,Values=$EC2_VPC" "Name=tag:Name,Values=*Private*" \
+    --query "Subnets[*].SubnetId" --output text --region "$REGION" 2>/dev/null | tr '\t' ',')
+SP_PASS=$(steampipe service status --show-password 2>/dev/null | grep Password | awk '{print $2}')
+
+echo "  EC2 IP: $EC2_IP | VPC: $EC2_VPC | Subnets: $PRIVATE_SUBNETS"
+
+# Create Lambda security group for Steampipe access
+LAMBDA_SG=$(aws ec2 create-security-group \
+    --group-name awsops-lambda-steampipe-sg \
+    --description "Lambda SG for Steampipe query access to EC2:9193" \
+    --vpc-id "$EC2_VPC" --region "$REGION" \
+    --query "GroupId" --output text 2>/dev/null || \
+    aws ec2 describe-security-groups \
+    --filters "Name=group-name,Values=awsops-lambda-steampipe-sg" "Name=vpc-id,Values=$EC2_VPC" \
+    --query "SecurityGroups[0].GroupId" --output text --region "$REGION" 2>/dev/null)
+echo "  Lambda SG: $LAMBDA_SG"
+
+# Allow Lambda SG → EC2 SG on port 9193
+aws ec2 authorize-security-group-ingress \
+    --group-id "$EC2_SG" --protocol tcp --port 9193 \
+    --source-group "$LAMBDA_SG" --region "$REGION" 2>/dev/null || true
+
+# Ensure Steampipe listens on network (not just localhost)
+steampipe service stop 2>/dev/null || true
+sleep 2
+steampipe service start --database-listen network --database-port 9193 2>/dev/null
+
+# Add VPC execution role
+aws iam attach-role-policy --role-name AWSopsLambdaNetworkRole \
+    --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole 2>/dev/null || true
+
+# Deploy steampipe-query with VPC config
+aws lambda create-function \
+    --function-name awsops-steampipe-query --runtime python3.12 \
+    --handler "steampipe_query.lambda_handler" \
+    --role "$LAMBDA_ROLE_ARN" --zip-file "fileb:///tmp/steampipe_query.zip" \
+    --timeout 60 --memory-size 256 \
+    --vpc-config "SubnetIds=$PRIVATE_SUBNETS,SecurityGroupIds=$LAMBDA_SG" \
+    --environment "Variables={STEAMPIPE_HOST=$EC2_IP,STEAMPIPE_PORT=9193,STEAMPIPE_PASSWORD=$SP_PASS}" \
+    --region "$REGION" 2>/dev/null || \
+aws lambda update-function-code \
+    --function-name awsops-steampipe-query --zip-file "fileb:///tmp/steampipe_query.zip" \
+    --region "$REGION" 2>/dev/null
+
+# Update VPC config if function already existed
+sleep 5
+aws lambda update-function-configuration \
+    --function-name awsops-steampipe-query \
+    --vpc-config "SubnetIds=$PRIVATE_SUBNETS,SecurityGroupIds=$LAMBDA_SG" \
+    --environment "Variables={STEAMPIPE_HOST=$EC2_IP,STEAMPIPE_PORT=9193,STEAMPIPE_PASSWORD=$SP_PASS}" \
+    --timeout 60 --memory-size 256 \
+    --region "$REGION" 2>/dev/null || true
+
+aws lambda add-permission --function-name awsops-steampipe-query \
+    --statement-id agentcore-invoke --action lambda:InvokeFunction \
+    --principal bedrock-agentcore.amazonaws.com \
+    --region "$REGION" 2>/dev/null || true
+
+echo "  Lambda: awsops-steampipe-query (VPC, pg8000 → Steampipe :9193)"
 
 # -- [3/3] Create Gateway Targets (via Python/boto3) --------------------------
 #   KNOWN ISSUE: AWS CLI has issues with inlinePayload JSON format.
