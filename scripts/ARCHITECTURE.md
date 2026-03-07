@@ -280,44 +280,45 @@ React Flow (인터랙티브 그래프)
 
 ---
 
-## 7. Deployment Architecture (CloudFormation)
+## 7. Deployment Architecture (CDK)
 
 ```
-Template: /home/ec2-user/ec2_vscode/vscode_server_secure.yaml
+IaC: infra-cdk/lib/awsops-stack.ts (CDK TypeScript)
+Deploy: bash scripts/00-deploy-infra.sh
 
 ┌─────────────────────────────────────────────────────────┐
 │  VPC (10.254.0.0/16)                                    │
 │                                                         │
 │  ┌─────────────────────┐  ┌─────────────────────┐     │
 │  │ Public Subnet A     │  │ Public Subnet B     │     │
-│  │ 10.254.11.0/24      │  │ 10.254.12.0/24      │     │
 │  │                     │  │                     │     │
 │  │  ┌───────────────┐  │  │                     │     │
 │  │  │ NAT Gateway   │  │  │                     │     │
 │  │  └───────────────┘  │  │                     │     │
 │  │  ┌───────────────────────────────────┐       │     │
 │  │  │ ALB (Internet-facing)             │       │     │
-│  │  │  Port 80  → VSCode (8888)        │       │     │
+│  │  │  Port 80   → VSCode (8888)       │       │     │
 │  │  │  Port 3000 → Dashboard (3000)    │       │     │
+│  │  │  SG: CloudFront Prefix List      │       │     │
+│  │  │      Port range 80-3000 (※1)     │       │     │
 │  │  └───────────────────────────────────┘       │     │
 │  └─────────────────────┘  └─────────────────────┘     │
 │                                                         │
 │  ┌─────────────────────┐  ┌─────────────────────┐     │
 │  │ Private Subnet A    │  │ Private Subnet B    │     │
-│  │ 10.254.21.0/24      │  │ 10.254.22.0/24      │     │
 │  │                     │  │                     │     │
 │  │  ┌───────────────┐  │  │                     │     │
 │  │  │ EC2           │  │  │                     │     │
 │  │  │ t4g.2xlarge   │  │  │                     │     │
-│  │  │ 10.254.21.101 │  │  │                     │     │
+│  │  │ (ARM64)       │  │  │                     │     │
 │  │  │               │  │  │                     │     │
-│  │  │ ┌───────────┐ │  │  │                     │     │
-│  │  │ │ Next.js   │ │  │  │ SSM VPC Endpoints   │     │
-│  │  │ │ Steampipe │ │  │  │ ┌─────────────────┐ │     │
-│  │  │ │ Powerpipe │ │  │  │ │ ssm             │ │     │
-│  │  │ │ VSCode    │ │  │  │ │ ssmmessages     │ │     │
-│  │  │ │ Docker    │ │  │  │ │ ec2messages     │ │     │
-│  │  │ └───────────┘ │  │  │ └─────────────────┘ │     │
+│  │  │ ┌───────────┐ │  │  │ SSM VPC Endpoints   │     │
+│  │  │ │ Next.js   │ │  │  │ ┌─────────────────┐ │     │
+│  │  │ │ Steampipe │ │  │  │ │ ssm             │ │     │
+│  │  │ │ Powerpipe │ │  │  │ │ ssmmessages     │ │     │
+│  │  │ │ VSCode    │ │  │  │ │ ec2messages     │ │     │
+│  │  │ │ Docker    │ │  │  │ └─────────────────┘ │     │
+│  │  │ └───────────┘ │  │  │                     │     │
 │  │  └───────────────┘  │  │                     │     │
 │  └─────────────────────┘  └─────────────────────┘     │
 │                                                         │
@@ -329,6 +330,16 @@ Template: /home/ec2-user/ec2_vscode/vscode_server_secure.yaml
          ▼
     CloudFront → ALB → EC2
     (HTTPS)     (HTTP)  (Private)
+
+  ※1 SG 규칙 한도: CloudFront prefix list에 120+ IP가 있어
+      포트별 개별 규칙 대신 포트 범위(80-3000)로 통합.
+      CachePolicy: 관리형 CACHING_DISABLED 사용
+      (커스텀 TTL=0 + HeaderBehavior 조합은 CloudFront에서 거부)
+
+CDK Stacks:
+  AwsopsStack         → VPC, EC2, ALB, CloudFront (ap-northeast-2)
+  AwsopsCognitoStack  → User Pool, Lambda@Edge   (us-east-1)
+  AwsopsAgentCoreStack → Placeholder (스크립트로 배포)
 ```
 
 ---
@@ -336,8 +347,10 @@ Template: /home/ec2-user/ec2_vscode/vscode_server_secure.yaml
 ## 8. Installation Flow
 
 ```
-Step 0: CloudFormation 배포              ← 00-deploy-infra.sh
-  │     (VPC, ALB, CloudFront, EC2)
+Step 0: CDK 인프라 배포 (로컬)           ← 00-deploy-infra.sh
+  │     ├─ cdk bootstrap (ap-northeast-2 + us-east-1)
+  │     ├─ cdk deploy AwsopsStack
+  │     └─ VPC, EC2, ALB, CloudFront, SSM Endpoints
   │     기본: t4g.2xlarge (ARM64 Graviton)
   │
   ├── SSM 접속
@@ -369,25 +382,56 @@ Step 9: 검증 (46항목)                    ← 09-verify.sh
   │     ├─ APIs (3 엔드포인트)
   │     └─ Configuration (4 설정)
   │
-  ▼ (Optional)
-Step 4: ALB 대시보드 연결                ← 04-setup-alb.sh
-  │     └─ Target Group + Listener (port 3000)
+  ────── 대시보드 기본 동작 완료 ──────
   │
+  ▼
 Step 5: Cognito 인증                     ← 05-setup-cognito.sh
   │     ├─ User Pool + Domain + App Client
-  │     ├─ Admin 사용자 생성
-  │     └─ Lambda@Edge (us-east-1) → CloudFront 연동
+  │     ├─ Admin 사용자 생성 (email format, symbols 불필요)
+  │     └─ Lambda@Edge (us-east-1, Python 3.12)
   │
-Step 6: AgentCore AI                     ← 06-setup-agentcore.sh
-        ├─ IAM Roles
-        ├─ ECR + Docker image (arm64)
-        ├─ AgentCore Gateway (MCP, 서울)
-        ├─ AgentCore Runtime (Strands Agent, 서울)
-        └─ Lambda Functions (4개)
-           ├─ reachability-analyzer
-           ├─ flow-monitor
-           ├─ network-mcp
-           └─ steampipe-query
+  ▼
+Step 6: AgentCore AI                     ← 06-setup-agentcore.sh (래퍼)
+  │                                         또는 개별 실행:
+  │
+  ├─ Step 6a: Runtime                    ← 06a-setup-agentcore-runtime.sh
+  │     ├─ IAM Role (AWSopsAgentCoreRole)
+  │     ├─ ECR Repository (awsops-agent)
+  │     ├─ Docker image (arm64, docker buildx)
+  │     ├─ AgentCore Runtime (Strands Agent)
+  │     └─ Runtime Endpoint
+  │
+  ├─ Step 6b: Gateway                    ← 06b-setup-agentcore-gateway.sh
+  │     └─ AgentCore Gateway (MCP protocol, NONE auth)
+  │
+  ├─ Step 6c: Tools & MCP               ← 06c-setup-agentcore-tools.sh
+  │     ├─ IAM Role (AWSopsLambdaNetworkRole)
+  │     ├─ Lambda Functions (4개, inline Python)
+  │     │   ├─ awsops-reachability-analyzer
+  │     │   ├─ awsops-flow-monitor
+  │     │   ├─ awsops-network-mcp
+  │     │   └─ awsops-steampipe-query
+  │     └─ Gateway Targets (4개, boto3)
+  │         ├─ targetConfiguration: mcp.lambda (※2)
+  │         └─ credentialProviderConfigurations: GATEWAY_IAM_ROLE
+  │
+  └─ Step 6d: Code Interpreter           ← 06d-setup-agentcore-interpreter.sh
+        └─ Code Interpreter (awsops_code_interpreter)
+            ├─ 이름: 언더스코어만 허용 ([a-zA-Z][a-zA-Z0-9_])
+            └─ networkConfiguration: {"networkMode":"PUBLIC"}
+  │
+  ▼
+Step 7: CloudFront Lambda@Edge 연동      ← 07-setup-cloudfront-auth.sh
+        ├─ CloudFront distribution 자동 감지
+        ├─ Lambda@Edge ARN 자동 감지 (최신 published version)
+        ├─ /awsops* behavior에 viewer-request 연결
+        └─ 배포 대기 + 302 리다이렉트 검증
+
+  ※2 Gateway Target API 주의사항:
+      - CLI가 아닌 Python/boto3 사용 (CLI는 inlinePayload 이슈)
+      - targetConfiguration.mcp.lambda.toolSchema.inlinePayload 구조
+      - inlinePayload: [{name, description, inputSchema: {type, properties, required}}]
+      - credentialProviderConfigurations 필수
 ```
 
 ---
@@ -404,18 +448,28 @@ Step 6: AgentCore AI                     ← 06-setup-agentcore.sh
 
 ## 10. AWS Services Used
 
-| Service | Region | Purpose |
-|---------|--------|---------|
-| CloudFormation | ap-northeast-2 | 인프라 배포 |
-| EC2 (t4g.2xlarge) | ap-northeast-2 | 전체 서비스 호스팅 |
-| ALB | ap-northeast-2 | 로드밸런서 |
-| CloudFront | Global | CDN + HTTPS |
-| Cognito | ap-northeast-2 | 사용자 인증 |
-| Lambda@Edge | us-east-1 | CloudFront 인증 |
-| AgentCore Runtime | ap-northeast-2 | Strands AI Agent |
-| AgentCore Gateway | ap-northeast-2 | MCP 도구 라우팅 |
-| Lambda (4개) | ap-northeast-2 | 네트워크 분석 도구 |
-| ECR | ap-northeast-2 | Agent Docker 이미지 |
-| Bedrock (Sonnet/Opus 4.6) | us-east-1 | AI 모델 |
-| SSM | ap-northeast-2 | EC2 접근 |
-| IAM | Global | 권한 관리 |
+| Service | Region | Purpose | Deployed By |
+|---------|--------|---------|-------------|
+| CloudFormation / CDK | ap-northeast-2 | 인프라 배포 (AwsopsStack) | Step 0 |
+| EC2 (t4g.2xlarge) | ap-northeast-2 | 전체 서비스 호스팅 | Step 0 (CDK) |
+| ALB | ap-northeast-2 | 로드밸런서 (SG: CF prefix list, port 80-3000) | Step 0 (CDK) |
+| CloudFront | Global | CDN + HTTPS + CACHING_DISABLED | Step 0 (CDK) |
+| Cognito User Pool | ap-northeast-2 | 사용자 인증 (OAuth2 code flow) | Step 5 |
+| Lambda@Edge | us-east-1 | CloudFront 인증 (Python 3.12) | Step 5 → Step 7 |
+| AgentCore Runtime | ap-northeast-2 | Strands AI Agent (arm64 container) | Step 6a |
+| AgentCore Gateway | ap-northeast-2 | MCP 도구 라우팅 (NONE auth) | Step 6b |
+| Lambda (4개) | ap-northeast-2 | 네트워크 분석 도구 (inline Python) | Step 6c |
+| AgentCore Code Interpreter | ap-northeast-2 | Python 코드 실행 샌드박스 | Step 6d |
+| ECR | ap-northeast-2 | Agent Docker 이미지 (arm64) | Step 6a |
+| Bedrock (Sonnet/Opus 4.6) | us-east-1 | AI 모델 (cross-region) | Step 6a |
+| SSM + VPC Endpoints | ap-northeast-2 | EC2 프라이빗 접근 | Step 0 (CDK) |
+| IAM | Global | 권한 관리 (3 roles) | Step 0, 5, 6a, 6c |
+
+### IAM Roles
+
+| Role | Created By | Purpose |
+|------|-----------|---------|
+| AwsopsStack-EC2Role | CDK (Step 0) | EC2 인스턴스 (SSM + CloudWatch) |
+| AWSopsAgentCoreRole | Step 6a | AgentCore Runtime (Bedrock + ECR + Lambda) |
+| AWSopsLambdaNetworkRole | Step 6c | Lambda 함수 (EC2/VPC/Logs 네트워크 권한) |
+| AWSopsLambdaEdgeRole | Step 5 | Lambda@Edge (CloudFront 인증) |

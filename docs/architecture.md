@@ -25,9 +25,9 @@ AWSops Dashboard is an AWS + Kubernetes operations dashboard providing real-time
 - **Routing**: 4-route priority system (Code → Network → AWS → General)
 
 ### Auth & Delivery
-- **Auth**: Cognito + Lambda@Edge
-- **CDN**: CloudFront → ALB → EC2 (t4g.2xlarge)
-- **IaC**: CloudFormation (`cfn/`) and CDK (`infra-cdk/`)
+- **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1)
+- **CDN**: CloudFront → ALB → EC2 (t4g.2xlarge), CachePolicy: CACHING_DISABLED
+- **IaC**: CDK (`infra-cdk/`) — AwsopsStack, CognitoStack, AgentCoreStack(placeholder)
 
 ## Data Flow
 1. User requests page → Next.js server renders shell
@@ -36,10 +36,25 @@ AWSops Dashboard is an AWS + Kubernetes operations dashboard providing real-time
 4. AI queries routed through `/awsops/api/ai/` → Bedrock/AgentCore → streamed response
 
 ## Infrastructure
-- **Compute**: EC2 t4g.2xlarge (ARM64, Graviton)
-- **CDN**: CloudFront distribution with Lambda@Edge auth
-- **Load Balancer**: ALB forwarding to EC2
+- **Compute**: EC2 t4g.2xlarge (ARM64, Graviton) in Private Subnet
+- **CDN**: CloudFront with Lambda@Edge auth (viewer-request on /awsops*)
+- **Load Balancer**: ALB (SG: CloudFront prefix list, port range 80-3000)
 - **Monitoring**: CloudWatch metrics, CloudTrail audit logs
-- **Scripts**: `scripts/` directory contains 10+ operational scripts
+- **SSM**: VPC Endpoints (ssm, ssmmessages, ec2messages) for private access
 
-See also: `scripts/ARCHITECTURE.md` for detailed architecture documentation.
+## Deployment (10 Steps)
+
+| Step | Script | Description |
+|------|--------|-------------|
+| 0 | `00-deploy-infra.sh` | CDK deploy (VPC, EC2, ALB, CloudFront) |
+| 1 | `01-install-base.sh` | Steampipe + Powerpipe |
+| 2 | `02-setup-nextjs.sh` | Next.js + Steampipe service |
+| 3 | `03-build-deploy.sh` | Production build + start |
+| 5 | `05-setup-cognito.sh` | Cognito User Pool + Lambda@Edge |
+| 6a | `06a-setup-agentcore-runtime.sh` | IAM, ECR, Docker, Runtime, Endpoint |
+| 6b | `06b-setup-agentcore-gateway.sh` | AgentCore Gateway (MCP) |
+| 6c | `06c-setup-agentcore-tools.sh` | 4 Lambda + 4 Gateway Targets |
+| 6d | `06d-setup-agentcore-interpreter.sh` | Code Interpreter |
+| 7 | `07-setup-cloudfront-auth.sh` | Lambda@Edge → CloudFront 연동 |
+
+See also: `scripts/ARCHITECTURE.md` for detailed architecture diagrams.
