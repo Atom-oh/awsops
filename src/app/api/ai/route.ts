@@ -175,7 +175,7 @@ function needsAWSData(message: string): boolean {
 }
 
 // AgentCore Runtime invoke with gateway selection
-async function invokeAgentCore(message: string, gateway: 'infra' | 'ops' | 'iac' | 'all' = 'ops'): Promise<string | null> {
+async function invokeAgentCore(message: string, gateway: 'infra' | 'ops' | 'iac' = 'ops'): Promise<string | null> {
   try {
     const command = new InvokeAgentRuntimeCommand({
       agentRuntimeArn: AGENT_RUNTIME_ARN,

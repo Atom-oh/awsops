@@ -19,8 +19,6 @@ GATEWAYS = {
     "infra": "https://awsops-network-gateway-oimomguf7x.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
     "ops": "https://awsops-ops-gateway-ybcvjkwu71.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
     "iac": "https://awsops-iac-gateway-i0vlfltmwu.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
-    # Legacy: single gateway with all tools
-    "all": "https://awsops-gateway-g0ihtogknw.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
 }
 DEFAULT_GATEWAY = "ops"
 GATEWAY_REGION = "ap-northeast-2"
@@ -57,9 +55,6 @@ You have MCP tools for:
 - Terraform: search AWS/AWSCC provider docs, analyze Registry modules, best practices
 Always be concise, provide actionable insights. Format in markdown. Respond in the user's language.""",
 
-    "all": """You are AWSops AI Assistant, an expert in AWS cloud operations.
-You have access to MCP tools via AgentCore Gateway for network troubleshooting, AWS operations, and IaC.
-Always be concise, provide actionable insights. Format in markdown. Respond in the user's language.""",
 }
 
 
