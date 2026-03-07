@@ -21,6 +21,7 @@ GATEWAYS = {
     "iac": "https://awsops-iac-gateway-i0vlfltmwu.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
     "cost": "https://awsops-cost-gateway-uanqtckgzm.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
     "monitoring": "https://awsops-monitoring-gateway-lal7vj9ozv.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "security": "https://awsops-security-gateway-orxxph0a0s.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
 }
 DEFAULT_GATEWAY = "ops"
 GATEWAY_REGION = "ap-northeast-2"
@@ -49,6 +50,14 @@ You have MCP tools for:
 - AWS Knowledge: search documentation, check regional availability
 - Core MCP: execute AWS CLI commands, get solution design guidance
 Always be concise, provide actionable insights. Format in markdown. Respond in the user's language.""",
+
+    "security": """You are AWSops Security Specialist, an expert in AWS IAM and security.
+You have MCP tools for:
+- IAM: list/get users, roles, groups, policies, access keys, MFA status
+- Policy Simulation: test permissions before applying
+- Security Summary: account-level IAM security posture
+Focus on least-privilege, MFA enforcement, unused credentials, and overly permissive policies.
+Format in markdown. Respond in the user's language.""",
 
     "monitoring": """You are AWSops Monitoring Specialist, an expert in AWS observability and troubleshooting.
 You have MCP tools for:

@@ -157,6 +157,15 @@ function needsInfra(message: string): boolean {
   return keywords.some(k => lower.includes(k));
 }
 
+// Security keywords → route to Security Gateway (IAM)
+function needsSecurity(message: string): boolean {
+  const lower = message.toLowerCase();
+  const keywords = ['iam','사용자 권한','role policy','역할 정책','policy simulation','정책 시뮬레이션',
+    'access key','액세스 키','mfa','인라인 정책','inline policy','trust policy','신뢰 정책',
+    'least privilege','최소 권한','security summary','보안 요약','who has access','권한 확인'];
+  return keywords.some(k => lower.includes(k));
+}
+
 // Monitoring keywords → route to Monitoring Gateway (CloudWatch + CloudTrail)
 function needsMonitoring(message: string): boolean {
   const lower = message.toLowerCase();
@@ -187,13 +196,13 @@ function needsIaC(message: string): boolean {
 // AWS resource overview keywords → Steampipe + Bedrock direct
 function needsAWSData(message: string): boolean {
   const lower = message.toLowerCase();
-  const keywords = ['ec2','s3','rds','vpc','lambda','iam','security','k8s','elb',
-    'instance','bucket','서버','네트워크','보안','데이터베이스','현황','리소스','pod'];
+  const keywords = ['ec2','s3','rds','vpc','lambda','k8s','elb',
+    'instance','bucket','서버','네트워크','데이터베이스','현황','리소스','pod'];
   return keywords.some(k => lower.includes(k));
 }
 
 // AgentCore Runtime invoke with gateway selection
-async function invokeAgentCore(message: string, gateway: 'infra' | 'ops' | 'iac' | 'cost' | 'monitoring' = 'ops'): Promise<string | null> {
+async function invokeAgentCore(message: string, gateway: 'infra' | 'ops' | 'iac' | 'cost' | 'monitoring' | 'security' = 'ops'): Promise<string | null> {
   try {
     const command = new InvokeAgentRuntimeCommand({
       agentRuntimeArn: AGENT_RUNTIME_ARN,
@@ -252,6 +261,7 @@ export async function POST(request: NextRequest) {
     const useCodeInterpreter = needsCodeInterpreter(lastMessage);
     const useInfra = needsInfra(lastMessage);
     const useIaC = needsIaC(lastMessage);
+    const useSecurity = needsSecurity(lastMessage);
     const useMonitoring = needsMonitoring(lastMessage);
     const useCost = needsCost(lastMessage);
     const needsData = needsAWSData(lastMessage);
@@ -333,7 +343,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Route 1: Monitoring → AgentCore Runtime (Monitoring Gateway)
+    // Route 1: Security → AgentCore Runtime (Security Gateway)
+    if (useSecurity) {
+      const agentResponse = await invokeAgentCore(lastMessage, 'security');
+      if (agentResponse) {
+        return NextResponse.json({
+          content: agentResponse,
+          model: 'sonnet-4.6',
+          via: 'AgentCore Runtime → Security Gateway (14 tools)',
+          queriedResources: ['security-gateway'],
+        });
+      }
+    }
+
+    // Route 2: Monitoring → AgentCore Runtime (Monitoring Gateway)
     if (useMonitoring) {
       const agentResponse = await invokeAgentCore(lastMessage, 'monitoring');
       if (agentResponse) {
