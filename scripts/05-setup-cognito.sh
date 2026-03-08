@@ -35,7 +35,9 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/nu
 CF_DOMAIN="${CF_DOMAIN:-}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@awsops.local}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-!234Qwer}"
-COGNITO_DOMAIN_PREFIX="${COGNITO_DOMAIN_PREFIX:-ops-dashboard-auth}"
+# Cognito 도메인은 전체 AWS에서 고유해야 함 → 계정 ID 포함
+# Cognito domain must be globally unique → include account ID
+COGNITO_DOMAIN_PREFIX="${COGNITO_DOMAIN_PREFIX:-ops-dashboard-${ACCOUNT_ID}}"
 
 echo ""
 echo -e "${CYAN}=================================================================${NC}"
