@@ -1,3 +1,6 @@
+// AI routing API: routes user messages to the appropriate backend / AI 라우팅 API: 사용자 메시지를 적절한 백엔드로 라우팅
+// Priority: Code Interpreter → Infra → IaC → Data → Security → Monitoring → Cost → AWSData → Ops → Fallback
+// 우선순위: 코드 인터프리터 → 인프라 → IaC → 데이터 → 보안 → 모니터링 → 비용 → AWS데이터 → 운영 → 폴백
 import { NextRequest, NextResponse } from 'next/server';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import {
@@ -10,16 +13,19 @@ import {
 } from '@aws-sdk/client-bedrock-agentcore';
 import { runQuery } from '@/lib/steampipe';
 
-const BEDROCK_REGION = 'us-east-1';
-const AGENTCORE_REGION = 'ap-northeast-2';
+// Service configuration / 서비스 설정
+const BEDROCK_REGION = 'us-east-1';           // Bedrock model region / Bedrock 모델 리전
+const AGENTCORE_REGION = 'ap-northeast-2';    // AgentCore Runtime region / AgentCore Runtime 리전
 const AGENT_RUNTIME_ARN = 'arn:aws:bedrock-agentcore:ap-northeast-2:605134447633:runtime/awsops_agent-zMwFdo9X4Y';
 const CODE_INTERPRETER_ID = 'awsops_code_interpreter-pnEkzLpDfH';
 
+// Available Bedrock models / 사용 가능한 Bedrock 모델
 const MODELS: Record<string, string> = {
   'sonnet-4.6': 'us.anthropic.claude-sonnet-4-6',
   'opus-4.6': 'us.anthropic.claude-opus-4-6-v1',
 };
 
+// AWS SDK clients / AWS SDK 클라이언트
 const bedrockClient = new BedrockRuntimeClient({ region: BEDROCK_REGION });
 const agentCoreClient = new BedrockAgentCoreClient({ region: AGENTCORE_REGION });
 
@@ -71,20 +77,22 @@ function detectQueries(message: string): Record<string, string> {
   return queries;
 }
 
-// Code execution keywords → route to Code Interpreter
+// Code execution keywords → route to Code Interpreter / 코드 실행 키워드 → 코드 인터프리터로 라우팅
+// Detects requests to run Python code or perform calculations / Python 코드 실행 또는 계산 요청 감지
 function needsCodeInterpreter(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ['코드 실행', 'execute', 'run code', '계산'];
   return keywords.some(k => lower.includes(k));
 }
 
-// Extract python code blocks from AI response text
+// Extract python code blocks from AI response text / AI 응답 텍스트에서 Python 코드 블록 추출
 function extractPythonCode(text: string): string | null {
   const match = text.match(/```python\s*\n([\s\S]*?)```/);
   return match ? match[1].trim() : null;
 }
 
-// Execute code via Code Interpreter
+// Execute code via Code Interpreter / 코드 인터프리터를 통해 코드 실행
+// Creates a session, runs Python code, collects output, then stops session / 세션 생성, Python 코드 실행, 출력 수집 후 세션 종료
 async function executeCodeInterpreter(code: string): Promise<{ output: string; exitCode: number }> {
   let sessionId: string | undefined;
   try {
@@ -146,7 +154,8 @@ async function executeCodeInterpreter(code: string): Promise<{ output: string; e
   }
 }
 
-// Infrastructure keywords → route to Infra Gateway (network + EKS)
+// Infrastructure keywords → route to Infra Gateway (network + EKS + ECS + Istio) / 인프라 키워드 → 인프라 게이트웨이로 라우팅 (네트워크 + EKS + ECS + Istio)
+// Matches networking, container orchestration, and service mesh terms / 네트워킹, 컨테이너 오케스트레이션, 서비스 메시 관련 용어 매칭
 function needsInfra(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ['eni','reachability','연결 확인','경로 분석','flow log','플로우','route table',
@@ -158,7 +167,8 @@ function needsInfra(message: string): boolean {
   return keywords.some(k => lower.includes(k));
 }
 
-// Data & Analytics keywords → route to Data Gateway
+// Data & Analytics keywords → route to Data Gateway / 데이터 및 분석 키워드 → 데이터 게이트웨이로 라우팅
+// Matches database (DynamoDB, RDS, ElastiCache) and streaming (MSK) terms / 데이터베이스(DynamoDB, RDS, ElastiCache)와 스트리밍(MSK) 관련 용어 매칭
 function needsData(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ['dynamodb','dynamo','rds','aurora','mysql','postgres','postgresql',
@@ -168,7 +178,8 @@ function needsData(message: string): boolean {
   return keywords.some(k => lower.includes(k));
 }
 
-// Security keywords → route to Security Gateway (IAM)
+// Security keywords → route to Security Gateway (IAM) / 보안 키워드 → 보안 게이트웨이로 라우팅 (IAM)
+// Matches IAM, policy, access control, and credential management terms / IAM, 정책, 접근 제어, 자격 증명 관리 관련 용어 매칭
 function needsSecurity(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ['iam','사용자 권한','role policy','역할 정책','policy simulation','정책 시뮬레이션',
@@ -177,7 +188,8 @@ function needsSecurity(message: string): boolean {
   return keywords.some(k => lower.includes(k));
 }
 
-// Monitoring keywords → route to Monitoring Gateway (CloudWatch + CloudTrail)
+// Monitoring keywords → route to Monitoring Gateway (CloudWatch + CloudTrail) / 모니터링 키워드 → 모니터링 게이트웨이로 라우팅 (CloudWatch + CloudTrail)
+// Matches observability, metrics, alarms, logs, and audit trail terms / 관측성, 메트릭, 알람, 로그, 감사 추적 관련 용어 매칭
 function needsMonitoring(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ['cloudwatch','metric','메트릭','alarm','알람','경보','log group','로그 그룹',
@@ -186,7 +198,8 @@ function needsMonitoring(message: string): boolean {
   return keywords.some(k => lower.includes(k));
 }
 
-// Cost keywords → route to Cost Gateway
+// Cost keywords → route to Cost Gateway / 비용 키워드 → 비용 게이트웨이로 라우팅
+// Matches FinOps, billing, budgets, pricing, and optimization terms / FinOps, 청구, 예산, 가격, 최적화 관련 용어 매칭
 function needsCost(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ['cost','비용','billing','청구','forecast','예측','budget','예산',
@@ -195,7 +208,8 @@ function needsCost(message: string): boolean {
   return keywords.some(k => lower.includes(k));
 }
 
-// IaC keywords → route to IaC Gateway (CDK, CloudFormation, Terraform)
+// IaC keywords → route to IaC Gateway (CDK, CloudFormation, Terraform) / IaC 키워드 → IaC 게이트웨이로 라우팅 (CDK, CloudFormation, Terraform)
+// Matches Infrastructure as Code tools and deployment terms / IaC 도구 및 배포 관련 용어 매칭
 function needsIaC(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ['cdk','cloudformation','cfn','terraform','terragrunt','checkov',
@@ -204,7 +218,8 @@ function needsIaC(message: string): boolean {
   return keywords.some(k => lower.includes(k));
 }
 
-// AWS resource overview keywords → Steampipe + Bedrock direct
+// AWS resource overview keywords → Steampipe + Bedrock direct / AWS 리소스 개요 키워드 → Steampipe + Bedrock 직접 호출
+// Matches general AWS resource names for live data queries via Steampipe / 라이브 데이터 쿼리를 위해 일반적인 AWS 리소스 이름 매칭
 function needsAWSData(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ['ec2','s3','vpc','lambda','k8s','elb',
@@ -212,9 +227,12 @@ function needsAWSData(message: string): boolean {
   return keywords.some(k => lower.includes(k));
 }
 
-// AgentCore Runtime invoke with gateway selection
+// AgentCore Runtime invoke with gateway selection / 게이트웨이 선택을 통한 AgentCore Runtime 호출
+// Sends prompt + gateway role to the Strands agent running on AgentCore / Strands 에이전트에 프롬프트 + 게이트웨이 역할을 전송
+// Returns agent response text or null on failure / 에이전트 응답 텍스트 반환, 실패 시 null
 async function invokeAgentCore(message: string, gateway: 'infra' | 'ops' | 'iac' | 'cost' | 'monitoring' | 'security' | 'data' = 'ops'): Promise<string | null> {
   try {
+    // Build the invoke command with prompt and gateway role in payload / 페이로드에 프롬프트와 게이트웨이 역할을 포함한 호출 명령 구성
     const command = new InvokeAgentRuntimeCommand({
       agentRuntimeArn: AGENT_RUNTIME_ARN,
       qualifier: 'DEFAULT',
@@ -222,10 +240,12 @@ async function invokeAgentCore(message: string, gateway: 'infra' | 'ops' | 'iac'
     });
     const response = await agentCoreClient.send(command);
     const sessionId = response.runtimeSessionId;
+    // Parse streaming response body to string / 스트리밍 응답 본문을 문자열로 파싱
     const body = await streamToString(response.response);
+    // Handle double-quoted JSON string responses / 이중 따옴표로 감싸진 JSON 문자열 응답 처리
     const text = body.startsWith('"') ? JSON.parse(body) : body;
 
-    // Stop session to release microVM
+    // Stop session to release microVM / microVM 해제를 위해 세션 중지
     if (sessionId) {
       try {
         await agentCoreClient.send(new StopRuntimeSessionCommand({
@@ -262,12 +282,16 @@ async function streamToString(stream: any): Promise<string> {
   return String(stream);
 }
 
+// POST handler: main AI routing logic / POST 핸들러: 메인 AI 라우팅 로직
+// Routes user messages through keyword detection to the appropriate backend / 키워드 감지를 통해 사용자 메시지를 적절한 백엔드로 라우팅
 export async function POST(request: NextRequest) {
   try {
+    // Parse request body and validate messages array / 요청 본문 파싱 및 메시지 배열 유효성 검증
     const { messages, model: modelKey } = await request.json();
     if (!messages || !Array.isArray(messages) || messages.length === 0)
       return NextResponse.json({ error: 'Messages required' }, { status: 400 });
 
+    // Detect routing keywords from the last user message / 마지막 사용자 메시지에서 라우팅 키워드 감지
     const lastMessage = messages[messages.length - 1]?.content || '';
     const useCodeInterpreter = needsCodeInterpreter(lastMessage);
     const useInfra = needsInfra(lastMessage);
@@ -278,7 +302,7 @@ export async function POST(request: NextRequest) {
     const useCost = needsCost(lastMessage);
     const needsData = needsAWSData(lastMessage);
 
-    // Route Code: Code execution request → Code Interpreter + AI analysis
+    // Route Code: Code execution request → Code Interpreter + AI analysis / 코드 라우트: 코드 실행 요청 → 코드 인터프리터 + AI 분석
     if (useCodeInterpreter) {
       // First, get AI to generate or process the code request
       const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
@@ -328,7 +352,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Route 0: Infrastructure (network + EKS) → AgentCore Runtime (Infra Gateway)
+    // Route 0: Infrastructure (network + EKS) → AgentCore Runtime (Infra Gateway) / 라우트 0: 인프라 (네트워크 + EKS) → AgentCore Runtime (인프라 게이트웨이)
     if (useInfra) {
       const agentResponse = await invokeAgentCore(lastMessage, 'infra');
       if (agentResponse) {
@@ -339,10 +363,10 @@ export async function POST(request: NextRequest) {
           queriedResources: ['infra-gateway'],
         });
       }
-      // Fall through to Bedrock if AgentCore fails
+      // Fall through to Bedrock if AgentCore fails / AgentCore 실패 시 Bedrock으로 폴스루
     }
 
-    // Route 0.5: IaC questions → AgentCore Runtime (IaC Gateway)
+    // Route 0.5: IaC questions → AgentCore Runtime (IaC Gateway) / 라우트 0.5: IaC 질문 → AgentCore Runtime (IaC 게이트웨이)
     if (useIaC) {
       const agentResponse = await invokeAgentCore(lastMessage, 'iac');
       if (agentResponse) {
@@ -355,7 +379,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Route 1: Data & Analytics → AgentCore Runtime (Data Gateway)
+    // Route 1: Data & Analytics → AgentCore Runtime (Data Gateway) / 라우트 1: 데이터 및 분석 → AgentCore Runtime (데이터 게이트웨이)
     if (useDataAnalytics) {
       const agentResponse = await invokeAgentCore(lastMessage, 'data');
       if (agentResponse) {
@@ -368,7 +392,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Route 2: Security → AgentCore Runtime (Security Gateway)
+    // Route 2: Security → AgentCore Runtime (Security Gateway) / 라우트 2: 보안 → AgentCore Runtime (보안 게이트웨이)
     if (useSecurity) {
       const agentResponse = await invokeAgentCore(lastMessage, 'security');
       if (agentResponse) {
@@ -381,7 +405,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Route 2: Monitoring → AgentCore Runtime (Monitoring Gateway)
+    // Route 2: Monitoring → AgentCore Runtime (Monitoring Gateway) / 라우트 2: 모니터링 → AgentCore Runtime (모니터링 게이트웨이)
     if (useMonitoring) {
       const agentResponse = await invokeAgentCore(lastMessage, 'monitoring');
       if (agentResponse) {
@@ -394,7 +418,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Route 2: Cost questions → AgentCore Runtime (Cost Gateway)
+    // Route 2: Cost questions → AgentCore Runtime (Cost Gateway) / 라우트 2: 비용 질문 → AgentCore Runtime (비용 게이트웨이)
     if (useCost) {
       const agentResponse = await invokeAgentCore(lastMessage, 'cost');
       if (agentResponse) {
@@ -407,7 +431,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Route 2: AWS resource questions → Bedrock Direct + Steampipe data
+    // Route 2: AWS resource questions → Bedrock Direct + Steampipe data / 라우트 2: AWS 리소스 질문 → Bedrock 직접 호출 + Steampipe 데이터
+    // Queries live AWS data via Steampipe and enriches AI context / Steampipe로 실시간 AWS 데이터 조회 후 AI 컨텍스트에 추가
     if (needsData) {
       const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
       const autoQueries = detectQueries(lastMessage);
@@ -457,7 +482,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Route 2: General questions → AgentCore Runtime (Ops Gateway)
+    // Route 2: General questions → AgentCore Runtime (Ops Gateway) / 라우트 2: 일반 질문 → AgentCore Runtime (운영 게이트웨이)
+    // Default route when no specific domain is matched / 특정 도메인이 매칭되지 않을 때 기본 라우트
     const agentResponse = await invokeAgentCore(lastMessage, 'ops');
     if (agentResponse) {
       return NextResponse.json({
@@ -468,7 +494,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Route 3: Fallback → Bedrock Direct
+    // Route 3: Fallback → Bedrock Direct (no tools, pure LLM) / 라우트 3: 폴백 → Bedrock 직접 호출 (도구 없이 순수 LLM)
+    // Last resort when all AgentCore routes fail / 모든 AgentCore 라우트 실패 시 최후 수단
     const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
     const body = JSON.stringify({
       anthropic_version: 'bedrock-2023-05-31',

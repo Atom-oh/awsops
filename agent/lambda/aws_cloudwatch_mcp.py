@@ -1,4 +1,7 @@
-"""AWS CloudWatch MCP Lambda - Metrics, Alarms, Logs, Log Insights"""
+"""
+AWS CloudWatch MCP Lambda - Metrics, Alarms, Logs, Log Insights
+AWS CloudWatch MCP 람다 - 지표, 알람, 로그, 로그 인사이트
+"""
 import json
 import boto3
 import time
@@ -6,11 +9,13 @@ from datetime import datetime, timedelta
 
 
 def lambda_handler(event, context):
+    # Parse event and route to appropriate tool handler / 이벤트 파싱 후 적절한 도구 핸들러로 라우팅
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
     region = args.get("region", "ap-northeast-2")
 
+    # Auto-detect tool from parameters if not specified / tool_name 미지정 시 파라미터로 도구 자동 감지
     if not t:
         if "query" in params and "log_group" in params: t = "execute_log_insights_query"
         elif "query_id" in params: t = "get_logs_insight_query_results"
@@ -26,7 +31,8 @@ def lambda_handler(event, context):
         cw = boto3.client('cloudwatch', region_name=region)
         logs = boto3.client('logs', region_name=region)
 
-        # ========== Metrics ==========
+        # ========== Metrics / 지표 ==========
+        # Get metric statistics for a given time range / 지정 시간 범위의 지표 통계 조회
         if t == "get_metric_data":
             namespace = args.get("namespace", "AWS/EC2")
             metric_name = args.get("metric_name", "CPUUtilization")
@@ -39,6 +45,7 @@ def lambda_handler(event, context):
             end = datetime.utcnow()
             start = end - timedelta(minutes=minutes)
 
+            # Retrieve metric statistics from CloudWatch / CloudWatch에서 지표 통계 조회
             resp = cw.get_metric_statistics(
                 Namespace=namespace, MetricName=metric_name,
                 Dimensions=dim_list, StartTime=start, EndTime=end,
@@ -49,6 +56,7 @@ def lambda_handler(event, context):
                 "datapoints": [{"timestamp": str(d["Timestamp"]), "value": round(d.get(stat, 0), 4)}
                     for d in datapoints[-30:]]})
 
+        # Get metric metadata (available dimensions) / 지표 메타데이터 (사용 가능한 차원) 조회
         elif t == "get_metric_metadata":
             namespace = args.get("namespace", "AWS/EC2")
             metric_name = args.get("metric_name", "")
@@ -59,6 +67,7 @@ def lambda_handler(event, context):
                 {"name": m["MetricName"], "dimensions": {d["Name"]: d["Value"] for d in m.get("Dimensions", [])}}
                 for m in metrics]})
 
+        # Analyze 24h metric trend (avg/max/min) / 24시간 지표 추세 분석 (평균/최대/최소)
         elif t == "analyze_metric":
             namespace = args.get("namespace", "AWS/EC2")
             metric_name = args.get("metric_name", "CPUUtilization")
@@ -67,6 +76,7 @@ def lambda_handler(event, context):
             end = datetime.utcnow()
             start = end - timedelta(hours=24)
 
+            # Fetch 24h metric data with hourly granularity / 1시간 간격으로 24시간 지표 데이터 조회
             resp = cw.get_metric_statistics(
                 Namespace=namespace, MetricName=metric_name,
                 Dimensions=dim_list, StartTime=start, EndTime=end,
@@ -85,6 +95,7 @@ def lambda_handler(event, context):
                     "trend": trend, "datapoints": len(dps)})
             return ok({"metric": metric_name, "message": "No datapoints found"})
 
+        # Get recommended alarm thresholds for common metrics / 주요 지표의 권장 알람 임계값 조회
         elif t == "get_recommended_metric_alarms":
             namespace = args.get("namespace", "AWS/EC2")
             metric_name = args.get("metric_name", "CPUUtilization")
@@ -99,8 +110,10 @@ def lambda_handler(event, context):
             return ok({"metric": metric_name, "namespace": namespace, "recommendation": rec,
                 "note": "Adjust threshold based on your baseline workload"})
 
-        # ========== Alarms ==========
+        # ========== Alarms / 알람 ==========
+        # Get all currently active (ALARM state) alarms / 현재 활성(ALARM 상태) 알람 전체 조회
         elif t == "get_active_alarms":
+            # Describe alarms in ALARM state / ALARM 상태의 알람 조회
             resp = cw.describe_alarms(StateValue="ALARM")
             alarms = [{"name": a["AlarmName"], "metric": a.get("MetricName", ""),
                 "namespace": a.get("Namespace", ""), "state": a["StateValue"],
@@ -110,6 +123,7 @@ def lambda_handler(event, context):
                 for a in resp.get("MetricAlarms", [])[:20]]
             return ok({"activeAlarms": alarms, "count": len(alarms)})
 
+        # Get alarm state change history / 알람 상태 변경 이력 조회
         elif t == "get_alarm_history":
             alarm_name = args.get("alarm_name", "")
             days = args.get("days", 7)
@@ -123,7 +137,8 @@ def lambda_handler(event, context):
                 for h in resp.get("AlarmHistoryItems", [])]
             return ok({"alarmName": alarm_name, "history": history})
 
-        # ========== Logs ==========
+        # ========== Logs / 로그 ==========
+        # List CloudWatch log groups / CloudWatch 로그 그룹 목록 조회
         elif t == "describe_log_groups":
             prefix = args.get("prefix", "")
             kwargs = {"limit": 20}
@@ -135,12 +150,14 @@ def lambda_handler(event, context):
                 for g in resp.get("logGroups", [])]
             return ok({"logGroups": groups, "count": len(groups)})
 
+        # Filter and analyze log events by pattern / 패턴으로 로그 이벤트 필터링 및 분석
         elif t == "analyze_log_group":
             log_group = args.get("log_group", "")
             minutes = args.get("minutes", 30)
             start_time = int((time.time() - minutes * 60) * 1000)
             filter_pattern = args.get("filter_pattern", "ERROR")
 
+            # Filter log events by pattern and time range / 패턴과 시간 범위로 로그 이벤트 필터링
             resp = logs.filter_log_events(
                 logGroupName=log_group, startTime=start_time,
                 filterPattern=filter_pattern, limit=50)
@@ -151,6 +168,7 @@ def lambda_handler(event, context):
                 "timeRange": "{} minutes".format(minutes),
                 "matchingEvents": len(events), "events": events})
 
+        # Start a CloudWatch Logs Insights query / CloudWatch 로그 인사이트 쿼리 시작
         elif t == "execute_log_insights_query":
             log_group = args.get("log_group", "")
             query = args.get("query", "fields @timestamp, @message | sort @timestamp desc | limit 20")
@@ -159,6 +177,7 @@ def lambda_handler(event, context):
             start_time = end_time - minutes * 60
 
             log_groups = [log_group] if isinstance(log_group, str) else log_group
+            # Start Logs Insights query / 로그 인사이트 쿼리 시작
             resp = logs.start_query(
                 logGroupNames=log_groups, startTime=start_time,
                 endTime=end_time, queryString=query)
@@ -166,6 +185,7 @@ def lambda_handler(event, context):
             return ok({"queryId": query_id, "status": "STARTED",
                 "note": "Use get_logs_insight_query_results with this queryId to get results"})
 
+        # Get results of a Logs Insights query / 로그 인사이트 쿼리 결과 조회
         elif t == "get_logs_insight_query_results":
             query_id = args.get("query_id", "")
             resp = logs.get_query_results(queryId=query_id)
@@ -177,6 +197,7 @@ def lambda_handler(event, context):
                 "results": results, "count": len(results),
                 "stats": resp.get("statistics", {})})
 
+        # Cancel a running Logs Insights query / 실행 중인 로그 인사이트 쿼리 취소
         elif t == "cancel_logs_insight_query":
             query_id = args.get("query_id", "")
             logs.stop_query(queryId=query_id)
@@ -188,8 +209,10 @@ def lambda_handler(event, context):
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
 
 
+# Return success response / 성공 응답 반환
 def ok(body):
     return {"statusCode": 200, "body": json.dumps(body, default=str)}
 
+# Return error response / 오류 응답 반환
 def err(msg):
     return {"statusCode": 400, "body": json.dumps({"error": msg})}

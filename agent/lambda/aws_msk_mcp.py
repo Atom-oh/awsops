@@ -1,14 +1,19 @@
-"""AWS MSK MCP Lambda - Kafka cluster management, configuration, monitoring"""
+"""
+AWS MSK MCP Lambda - Kafka cluster management, configuration, monitoring
+AWS MSK MCP 람다 - Kafka 클러스터 관리, 구성, 모니터링
+"""
 import json
 import boto3
 
 
 def lambda_handler(event, context):
+    # Parse event and route to appropriate tool handler / 이벤트 파싱 후 적절한 도구 핸들러로 라우팅
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
     region = args.get("region", "ap-northeast-2")
 
+    # Auto-detect tool from parameters if not specified / tool_name 미지정 시 파라미터로 도구 자동 감지
     if not t:
         if "cluster_arn" in params and "configuration" in str(params).lower(): t = "get_configuration_info"
         elif "cluster_arn" in params: t = "get_cluster_info"
@@ -18,7 +23,9 @@ def lambda_handler(event, context):
     try:
         kafka = boto3.client('kafka', region_name=region)
 
+        # List all MSK clusters (provisioned and serverless) / 모든 MSK 클러스터 조회 (프로비저닝 및 서버리스)
         if t == "list_clusters":
+            # List clusters using v2 API / v2 API로 클러스터 목록 조회
             resp = kafka.list_clusters_v2()
             clusters = []
             for c in resp.get("ClusterInfoList", [])[:20]:
@@ -29,8 +36,10 @@ def lambda_handler(event, context):
                     "brokerCount": info.get("NumberOfBrokerNodes", 0)})
             return ok({"clusters": clusters, "count": len(clusters)})
 
+        # Get detailed MSK cluster info with broker config / MSK 클러스터 상세 정보 및 브로커 설정 조회
         elif t == "get_cluster_info":
             arn = args["cluster_arn"]
+            # Describe cluster using v2 API / v2 API로 클러스터 상세 조회
             c = kafka.describe_cluster_v2(ClusterArn=arn)["ClusterInfo"]
             info = c.get("Provisioned", {})
             broker_info = info.get("BrokerNodeGroupInfo", {})
@@ -44,6 +53,7 @@ def lambda_handler(event, context):
                 "zookeeperEndpoints": c.get("ZookeeperConnectString", ""),
                 "bootstrapBrokers": get_bootstrap(kafka, arn)})
 
+        # Get MSK configuration details or list configurations / MSK 구성 상세 조회 또는 구성 목록 조회
         elif t == "get_configuration_info":
             arn = args.get("configuration_arn", "")
             if arn:
@@ -55,9 +65,11 @@ def lambda_handler(event, context):
             return ok({"configurations": [{"name": c.get("Name"), "arn": c.get("Arn"),
                 "state": c.get("State")} for c in configs[:20]]})
 
+        # Get bootstrap broker connection string / 부트스트랩 브로커 연결 문자열 조회
         elif t == "get_bootstrap_brokers":
             return ok({"bootstrapBrokers": get_bootstrap(kafka, args["cluster_arn"])})
 
+        # List broker nodes in the cluster / 클러스터 내 브로커 노드 목록 조회
         elif t == "list_nodes":
             arn = args["cluster_arn"]
             nodes = kafka.list_nodes(ClusterArn=arn).get("NodeInfoList", [])
@@ -67,6 +79,7 @@ def lambda_handler(event, context):
                 "endpoints": n.get("BrokerNodeInfo", {}).get("Endpoints", [])}
                 for n in nodes[:30]]})
 
+        # Return MSK/Kafka best practices / MSK/Kafka 모범 사례 반환
         elif t == "msk_best_practices":
             return ok({"bestPractices": [
                 "Use m7g.xlarge+ for production brokers",
@@ -83,11 +96,14 @@ def lambda_handler(event, context):
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
 
 
+# Get bootstrap broker string for a cluster / 클러스터의 부트스트랩 브로커 문자열 조회
 def get_bootstrap(kafka, arn):
     try:
         resp = kafka.get_bootstrap_brokers(ClusterArn=arn)
         return resp.get("BootstrapBrokerStringTls", resp.get("BootstrapBrokerString", ""))
     except: return ""
 
+# Return success response / 성공 응답 반환
 def ok(body): return {"statusCode": 200, "body": json.dumps(body, default=str)}
+# Return error response / 오류 응답 반환
 def err(msg): return {"statusCode": 400, "body": json.dumps({"error": msg})}

@@ -1,4 +1,7 @@
-"""AWS Core MCP Lambda - prompt_understanding + call_aws + suggest_aws_commands"""
+"""
+AWS Core MCP Lambda - prompt_understanding + call_aws + suggest_aws_commands
+프롬프트 이해, AWS CLI 실행, AWS CLI 명령어 추천을 위한 AWS Core MCP 람다
+"""
 import json
 import boto3
 import shlex
@@ -42,7 +45,8 @@ PROMPT_UNDERSTANDING = """# AWS Solution Design Guide
 
 
 def call_aws(cli_command, max_results=None):
-    """Execute an AWS CLI-style command via boto3."""
+    """Execute an AWS CLI-style command via boto3. / boto3를 통해 AWS CLI 스타일 명령어를 실행합니다."""
+    # Parse CLI command into parts / CLI 명령어를 부분으로 분리
     parts = shlex.split(cli_command)
     if len(parts) < 3 or parts[0] != "aws":
         return {"error": "Command must start with 'aws <service> <action>'"}
@@ -50,7 +54,7 @@ def call_aws(cli_command, max_results=None):
     service = parts[1]
     action = parts[2].replace("-", "_")
 
-    # Parse --key value pairs
+    # Parse --key value pairs into kwargs / --key value 쌍을 kwargs로 파싱
     kwargs = {}
     i = 3
     while i < len(parts):
@@ -58,7 +62,7 @@ def call_aws(cli_command, max_results=None):
             key = parts[i][2:].replace("-", "_")
             if i + 1 < len(parts) and not parts[i + 1].startswith("--"):
                 val = parts[i + 1]
-                # Try to parse as JSON
+                # Try to parse as JSON for complex values / 복합 값을 위해 JSON 파싱 시도
                 try:
                     val = json.loads(val)
                 except (json.JSONDecodeError, ValueError):
@@ -75,19 +79,22 @@ def call_aws(cli_command, max_results=None):
         kwargs["MaxResults"] = max_results
 
     try:
+        # Create boto3 client and invoke the API method / boto3 클라이언트 생성 후 API 메서드 호출
         client = boto3.client(service)
         method = getattr(client, action)
         response = method(**kwargs)
         response.pop("ResponseMetadata", None)
         return response
     except Exception as e:
+        # Return error if AWS API call fails / AWS API 호출 실패 시 오류 반환
         return {"error": str(e)}
 
 
 def suggest_aws_commands(query):
-    """Suggest AWS CLI commands based on natural language query."""
+    """Suggest AWS CLI commands based on natural language query. / 자연어 쿼리를 기반으로 AWS CLI 명령어를 추천합니다."""
     suggestions = []
 
+    # Match query against known service/keyword patterns / 쿼리를 알려진 서비스/키워드 패턴과 매칭
     q = query.lower()
     patterns = [
         ("ec2", "instance", "aws ec2 describe-instances"),
@@ -121,6 +128,7 @@ def suggest_aws_commands(query):
         if svc in q or (kw and kw in q):
             suggestions.append(cmd)
 
+    # Return default suggestions if no pattern matched / 패턴이 매칭되지 않으면 기본 추천 반환
     if not suggestions:
         suggestions = [
             "aws ec2 describe-instances",
@@ -132,11 +140,12 @@ def suggest_aws_commands(query):
 
 
 def lambda_handler(event, context):
+    """Lambda entry point for Core MCP tools. / Core MCP 도구의 람다 진입점."""
     params = event if isinstance(event, dict) else json.loads(event)
     tool_name = params.get("tool_name", "")
     arguments = params.get("arguments", params)
 
-    # Infer tool from parameters
+    # Infer tool from parameters if not specified / 도구명이 없으면 파라미터로 추론
     if not tool_name:
         if "cli_command" in params:
             tool_name = "call_aws"
@@ -147,21 +156,26 @@ def lambda_handler(event, context):
         else:
             tool_name = "prompt_understanding"
 
+    # Tool handler: return solution design guide / 도구 핸들러: 솔루션 설계 가이드 반환
     if tool_name == "prompt_understanding":
         return {"statusCode": 200, "body": PROMPT_UNDERSTANDING}
 
+    # Tool handler: execute AWS CLI command via boto3 / 도구 핸들러: boto3를 통해 AWS CLI 명령어 실행
     elif tool_name == "call_aws":
         cli_cmd = arguments.get("cli_command", "")
         max_res = arguments.get("max_results")
+        # Support batch execution of up to 5 commands / 최대 5개 명령어 일괄 실행 지원
         if isinstance(cli_cmd, list):
             results = [call_aws(c, max_res) for c in cli_cmd[:5]]
             return {"statusCode": 200, "body": json.dumps(results, default=str)[:50000]}
         result = call_aws(cli_cmd, max_res)
         return {"statusCode": 200, "body": json.dumps(result, default=str)[:50000]}
 
+    # Tool handler: suggest AWS CLI commands / 도구 핸들러: AWS CLI 명령어 추천
     elif tool_name == "suggest_aws_commands":
         query = arguments.get("query", "")
         suggestions = suggest_aws_commands(query)
         return {"statusCode": 200, "body": json.dumps({"suggestions": suggestions, "query": query})}
 
+    # Unknown tool error / 알 수 없는 도구 오류
     return {"statusCode": 400, "body": json.dumps({"error": "Unknown tool: " + tool_name})}

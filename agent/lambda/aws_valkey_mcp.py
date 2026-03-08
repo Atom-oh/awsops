@@ -1,14 +1,19 @@
-"""AWS Valkey/ElastiCache MCP Lambda - cluster management, cache operations"""
+"""
+AWS Valkey/ElastiCache MCP Lambda - cluster management, cache operations
+AWS Valkey/ElastiCache MCP 람다 - 클러스터 관리, 캐시 운영
+"""
 import json
 import boto3
 
 
 def lambda_handler(event, context):
+    # Parse event and route to appropriate tool handler / 이벤트 파싱 후 적절한 도구 핸들러로 라우팅
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
     region = args.get("region", "ap-northeast-2")
 
+    # Auto-detect tool from parameters if not specified / tool_name 미지정 시 파라미터로 도구 자동 감지
     if not t:
         if "replication_group_id" in params: t = "describe_replication_group"
         elif "cluster_id" in params: t = "describe_cache_cluster"
@@ -19,7 +24,9 @@ def lambda_handler(event, context):
     try:
         ec = boto3.client('elasticache', region_name=region)
 
+        # List all ElastiCache clusters with node info / 모든 ElastiCache 클러스터 및 노드 정보 조회
         if t == "list_cache_clusters":
+            # Describe cache clusters with node details / 노드 상세 포함 캐시 클러스터 조회
             clusters = ec.describe_cache_clusters(ShowCacheNodeInfo=True).get("CacheClusters", [])
             return ok({"clusters": [{"id": c["CacheClusterId"], "engine": c.get("Engine"),
                 "version": c.get("EngineVersion"), "nodeType": c.get("CacheNodeType"),
@@ -28,6 +35,7 @@ def lambda_handler(event, context):
                 "endpoint": c.get("CacheNodes", [{}])[0].get("Endpoint", {}).get("Address", "") if c.get("CacheNodes") else ""}
                 for c in clusters[:20]]})
 
+        # Get detailed cache cluster info / 캐시 클러스터 상세 정보 조회
         elif t == "describe_cache_cluster":
             c = ec.describe_cache_clusters(CacheClusterId=args["cluster_id"], ShowCacheNodeInfo=True)["CacheClusters"][0]
             return ok({"id": c["CacheClusterId"], "engine": c.get("Engine"), "version": c.get("EngineVersion"),
@@ -40,6 +48,7 @@ def lambda_handler(event, context):
                     "endpoint": n.get("Endpoint", {}).get("Address", "")}
                     for n in c.get("CacheNodes", [])]})
 
+        # List replication groups (Redis/Valkey clusters) / 복제 그룹 (Redis/Valkey 클러스터) 목록 조회
         elif t == "list_replication_groups":
             groups = ec.describe_replication_groups().get("ReplicationGroups", [])
             return ok({"replicationGroups": [{"id": g["ReplicationGroupId"],
@@ -49,6 +58,7 @@ def lambda_handler(event, context):
                 "endpoint": g.get("ConfigurationEndpoint", {}).get("Address", "") if g.get("ConfigurationEndpoint") else g.get("NodeGroups", [{}])[0].get("PrimaryEndpoint", {}).get("Address", "") if g.get("NodeGroups") else ""}
                 for g in groups[:20]]})
 
+        # Get detailed replication group info with node groups / 복제 그룹 상세 정보 및 노드 그룹 조회
         elif t == "describe_replication_group":
             g = ec.describe_replication_groups(ReplicationGroupId=args["replication_group_id"])["ReplicationGroups"][0]
             return ok({"id": g["ReplicationGroupId"], "status": g["Status"],
@@ -61,6 +71,7 @@ def lambda_handler(event, context):
                     "reader": ng.get("ReaderEndpoint", {}).get("Address", "")}
                     for ng in g.get("NodeGroups", [])]})
 
+        # List ElastiCache serverless caches / ElastiCache 서버리스 캐시 목록 조회
         elif t == "list_serverless_caches":
             try:
                 caches = ec.describe_serverless_caches().get("ServerlessCaches", [])
@@ -71,6 +82,7 @@ def lambda_handler(event, context):
             except Exception:
                 return ok({"serverlessCaches": [], "note": "Serverless cache API may not be available in this region"})
 
+        # Return ElastiCache/Valkey best practices / ElastiCache/Valkey 모범 사례 반환
         elif t == "elasticache_best_practices":
             return ok({"bestPractices": [
                 "Use Valkey/Redis cluster mode for horizontal scaling",
@@ -85,5 +97,7 @@ def lambda_handler(event, context):
     except Exception as e:
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
 
+# Return success response / 성공 응답 반환
 def ok(body): return {"statusCode": 200, "body": json.dumps(body, default=str)}
+# Return error response / 오류 응답 반환
 def err(msg): return {"statusCode": 400, "body": json.dumps({"error": msg})}

@@ -1,14 +1,19 @@
-"""AWS Cost Operations MCP Lambda - Cost Explorer, Pricing, Budgets"""
+"""
+AWS Cost Operations MCP Lambda - Cost Explorer, Pricing, Budgets
+AWS 비용 운영 MCP 람다 - Cost Explorer, 요금 조회, 예산 관리
+"""
 import json
 import boto3
 from datetime import datetime, timedelta
 
 
 def lambda_handler(event, context):
+    # Parse event and route to appropriate tool handler / 이벤트 파싱 후 적절한 도구 핸들러로 라우팅
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
 
+    # Auto-detect tool from parameters if not specified / tool_name 미지정 시 파라미터로 도구 자동 감지
     if not t:
         if "dimension" in params: t = "get_dimension_values"
         elif "tag_key" in params: t = "get_tag_values"
@@ -22,6 +27,7 @@ def lambda_handler(event, context):
         args = params
 
     try:
+        # Get today's date and useful date references / 오늘 날짜 및 유용한 날짜 참조 반환
         if t == "get_today_date":
             now = datetime.utcnow()
             return ok({"today": now.strftime("%Y-%m-%d"), "month": now.strftime("%Y-%m"),
@@ -29,6 +35,7 @@ def lambda_handler(event, context):
                 "last_month_start": (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m-01"),
                 "last_month_end": now.strftime("%Y-%m-01")})
 
+        # Get cost and usage breakdown by service / 서비스별 비용 및 사용량 조회
         elif t == "get_cost_and_usage":
             ce = boto3.client('ce', region_name='us-east-1')
             now = datetime.utcnow()
@@ -47,6 +54,7 @@ def lambda_handler(event, context):
             if args.get("filter"):
                 kwargs["Filter"] = args["filter"]
 
+            # Query Cost Explorer for usage data / Cost Explorer에서 사용량 데이터 조회
             resp = ce.get_cost_and_usage(**kwargs)
             results = []
             for period in resp.get("ResultsByTime", []):
@@ -62,6 +70,7 @@ def lambda_handler(event, context):
             return ok({"period": "{} ~ {}".format(start, end), "granularity": granularity,
                 "metric": metric, "total": round(total, 2), "breakdown": results[:30]})
 
+        # Compare current vs previous month costs / 이번 달과 지난 달 비용 비교
         elif t == "get_cost_and_usage_comparisons":
             ce = boto3.client('ce', region_name='us-east-1')
             now = datetime.utcnow()
@@ -102,6 +111,7 @@ def lambda_handler(event, context):
                 "currentTotal": round(sum(cur_costs.values()), 2),
                 "comparison": comparison[:20]})
 
+        # Identify top cost change drivers between months / 월간 비용 변동 주요 원인 분석
         elif t == "get_cost_comparison_drivers":
             ce = boto3.client('ce', region_name='us-east-1')
             now = datetime.utcnow()
@@ -135,6 +145,7 @@ def lambda_handler(event, context):
             return ok({"topDrivers": drivers[:10],
                 "period": "{} ~ {} vs {} ~ {}".format(prev_start, prev_end, cur_start, cur_end)})
 
+        # Forecast future costs / 향후 비용 예측
         elif t == "get_cost_forecast":
             ce = boto3.client('ce', region_name='us-east-1')
             now = datetime.utcnow()
@@ -143,6 +154,7 @@ def lambda_handler(event, context):
             next_month = now.replace(day=28) + timedelta(days=4)
             end = (next_month.replace(day=28) + timedelta(days=4)).replace(day=1).strftime("%Y-%m-01")
             granularity = args.get("granularity", "MONTHLY")
+            # Get cost forecast from Cost Explorer / Cost Explorer에서 비용 예측 조회
             resp = ce.get_cost_forecast(
                 TimePeriod={"Start": start, "End": end}, Metric="UNBLENDED_COST",
                 Granularity=granularity)
@@ -155,6 +167,7 @@ def lambda_handler(event, context):
                 "unit": resp.get("Total", {}).get("Unit", "USD"),
                 "forecasts": forecasts})
 
+        # Get available dimension values (e.g., SERVICE, REGION) / 사용 가능한 차원 값 조회 (예: SERVICE, REGION)
         elif t == "get_dimension_values":
             ce = boto3.client('ce', region_name='us-east-1')
             now = datetime.utcnow()
@@ -166,6 +179,7 @@ def lambda_handler(event, context):
             values = [v["Value"] for v in resp.get("DimensionValues", [])]
             return ok({"dimension": dimension, "values": values[:50], "count": len(values)})
 
+        # Get tag values for cost allocation / 비용 할당용 태그 값 조회
         elif t == "get_tag_values":
             ce = boto3.client('ce', region_name='us-east-1')
             now = datetime.utcnow()
@@ -175,6 +189,7 @@ def lambda_handler(event, context):
             resp = ce.get_tags(TimePeriod={"Start": start, "End": end}, TagKey=tag_key if tag_key else None)
             return ok({"tagKey": tag_key, "values": resp.get("Tags", [])[:50]})
 
+        # Get AWS service pricing information / AWS 서비스 요금 정보 조회
         elif t == "get_pricing":
             pricing = boto3.client('pricing', region_name='us-east-1')
             service_code = args.get("service_code", "AmazonEC2")
@@ -182,6 +197,7 @@ def lambda_handler(event, context):
             kwargs = {"ServiceCode": service_code, "MaxResults": 10}
             if filters:
                 kwargs["Filters"] = filters
+            # Query AWS Pricing API / AWS Pricing API 조회
             resp = pricing.get_products(**kwargs)
             products = []
             for p in resp.get("PriceList", []):
@@ -193,8 +209,10 @@ def lambda_handler(event, context):
                     "attributes": {k: v for k, v in list(attrs.items())[:10]}})
             return ok({"serviceCode": service_code, "products": products})
 
+        # List AWS Budgets with spend info / AWS 예산 목록 및 지출 정보 조회
         elif t == "list_budgets":
             budgets = boto3.client('budgets', region_name='us-east-1')
+            # Get account ID for Budgets API / Budgets API용 계정 ID 조회
             account_id = boto3.client('sts').get_caller_identity()['Account']
             resp = budgets.describe_budgets(AccountId=account_id)
             budget_list = [{"name": b["BudgetName"], "type": b["BudgetType"],
@@ -210,5 +228,6 @@ def lambda_handler(event, context):
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
 
 
+# Return success response / 성공 응답 반환
 def ok(body):
     return {"statusCode": 200, "body": json.dumps(body, default=str)}
