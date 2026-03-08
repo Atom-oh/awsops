@@ -1,8 +1,9 @@
-# AWSops Infrastructure CDK
+# AWSops Infrastructure CDK / AWSops 인프라 CDK
 
 CDK project that recreates the AWSops Dashboard CloudFormation infrastructure.
+(AWSops 대시보드 CloudFormation 인프라를 CDK로 재구성한 프로젝트입니다.)
 
-## Stacks
+## Stacks / 스택
 
 | Stack | Description |
 |-------|-------------|
@@ -10,14 +11,14 @@ CDK project that recreates the AWSops Dashboard CloudFormation infrastructure.
 | `AwsopsCognitoStack` | Cognito User Pool, Lambda@Edge auth (us-east-1) |
 | `AwsopsAgentCoreStack` | AgentCore placeholder (deploy via script) |
 
-## Prerequisites
+## Prerequisites / 사전 요구 사항
 
 - Node.js 20+
 - AWS CDK CLI: `npm install -g aws-cdk`
-- AWS credentials configured
-- CloudFront prefix list ID for your region
+- AWS credentials configured (AWS 자격 증명 설정 완료)
+- CloudFront prefix list ID for your region (해당 리전의 CloudFront 접두사 목록 ID)
 
-## Quick Start
+## Quick Start / 빠른 시작
 
 ```bash
 cd infra-cdk
@@ -37,7 +38,7 @@ cdk deploy --all \
   --parameters AwsopsStack:InstanceType=t4g.2xlarge
 ```
 
-## Parameters
+## Parameters / 파라미터
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -45,7 +46,7 @@ cdk deploy --all \
 | `VSCodePassword` | (required) | code-server password (min 8 chars) |
 | `CloudFrontPrefixListId` | (required) | CloudFront prefix list for ALB SG |
 
-## Architecture
+## Architecture / 아키텍처
 
 ```
 Internet -> CloudFront (HTTPS)
@@ -58,17 +59,18 @@ VPC 10.254.0.0/16
   Private Subnets: EC2, SSM VPC Endpoints
 ```
 
-## Post-Deploy Steps
+## Post-Deploy Steps / 배포 후 단계
 
 After CDK deploy, continue with the setup scripts:
-1. SSM into EC2: `aws ssm start-session --target INSTANCE_ID`
-2. Run `01-install-base.sh` (Steampipe + Powerpipe)
-3. Run `02-setup-nextjs.sh` (Next.js app)
-4. Run `03-build-deploy.sh` (build and start)
-5. Run `05-setup-cognito.sh` (update Cognito callback URLs)
-6. Run `06-setup-agentcore.sh` (AI agent)
+(CDK 배포 후, 아래 설정 스크립트를 순서대로 실행하세요:)
+1. SSM into EC2: `aws ssm start-session --target INSTANCE_ID` (SSM으로 EC2 접속)
+2. Run `01-install-base.sh` (Steampipe + Powerpipe) (기본 도구 설치)
+3. Run `02-setup-nextjs.sh` (Next.js app) (Next.js 앱 설정)
+4. Run `03-build-deploy.sh` (build and start) (빌드 및 실행)
+5. Run `05-setup-cognito.sh` (update Cognito callback URLs) (Cognito 콜백 URL 업데이트)
+6. Run `06-setup-agentcore.sh` (AI agent) (AI 에이전트 설정)
 
-## Cleanup
+## Cleanup / 정리
 
 ```bash
 cdk destroy --all

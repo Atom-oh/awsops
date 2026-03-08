@@ -1,6 +1,6 @@
-# AWSops Dashboard - Installation Guide
+# AWSops Dashboard - Installation Guide / AWSops 대시보드 - 설치 가이드
 
-## Architecture Overview
+## Architecture Overview / 아키텍처 개요
 
 ```
 Browser → CloudFront (Cognito Auth) → ALB → EC2 (Next.js:3000)
@@ -21,7 +21,7 @@ Browser → CloudFront (Cognito Auth) → ALB → EC2 (Next.js:3000)
                                                             └─ Lambda: Steampipe Query
 ```
 
-## Dashboard Pages (21 pages)
+## Dashboard Pages (21 pages) / 대시보드 페이지 (21개)
 
 | Category | Page | Path | Features |
 |----------|------|------|----------|
@@ -46,25 +46,25 @@ Browser → CloudFront (Cognito Auth) → ALB → EC2 (Next.js:3000)
 | | Security | `/awsops/security` | Public buckets, open SGs, CVE |
 | | CIS Compliance | `/awsops/compliance` | CIS v1.5-v4.0 benchmarks |
 
-## Prerequisites
+## Prerequisites / 사전 요구 사항
 
-- AWS Account with admin access
-- EC2 Instance (Amazon Linux 2023, t3.medium+)
+- AWS Account with admin access (관리자 권한의 AWS 계정)
+- EC2 Instance (Amazon Linux 2023, t3.medium+) (EC2 인스턴스)
 - Node.js 20+
 - Docker
 - AWS CLI v2
-- kubectl + kubeconfig (for K8s features)
-- AWS credentials configured
+- kubectl + kubeconfig (for K8s features) (K8s 기능에 필요)
+- AWS credentials configured (AWS 자격 증명 설정 완료)
 
 ---
 
-## Installation Steps
+## Installation Steps / 설치 단계
 
-### Quick Install (All-in-One)
+### Quick Install (All-in-One) / 빠른 설치 (일괄 실행)
 
 ```bash
-# Download and run
+# Download and run (다운로드 후 실행)
 curl -sL https://raw.githubusercontent.com/your-repo/awsops/main/scripts/install.sh | bash
 ```
 
-### Or follow the step-by-step guide below.
+### Or follow the step-by-step guide below. / 또는 아래의 단계별 가이드를 따르세요.
