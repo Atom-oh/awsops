@@ -300,7 +300,7 @@ export async function POST(request: NextRequest) {
     const useSecurity = needsSecurity(lastMessage);
     const useMonitoring = needsMonitoring(lastMessage);
     const useCost = needsCost(lastMessage);
-    const needsData = needsAWSData(lastMessage);
+    const useAWSData = needsAWSData(lastMessage);
 
     // Route Code: Code execution request → Code Interpreter + AI analysis / 코드 라우트: 코드 실행 요청 → 코드 인터프리터 + AI 분석
     if (useCodeInterpreter) {
@@ -433,7 +433,7 @@ export async function POST(request: NextRequest) {
 
     // Route 2: AWS resource questions → Bedrock Direct + Steampipe data / 라우트 2: AWS 리소스 질문 → Bedrock 직접 호출 + Steampipe 데이터
     // Queries live AWS data via Steampipe and enriches AI context / Steampipe로 실시간 AWS 데이터 조회 후 AI 컨텍스트에 추가
-    if (needsData) {
+    if (useAWSData) {
       const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
       const autoQueries = detectQueries(lastMessage);
       let contextData = '';
