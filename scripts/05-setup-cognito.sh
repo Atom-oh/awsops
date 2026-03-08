@@ -43,18 +43,59 @@ echo -e "${CYAN}   Step 5: Cognito Authentication Setup${NC}"
 echo -e "${CYAN}=================================================================${NC}"
 echo ""
 
-# Auto-detect CloudFront domain if not set
+# CloudFront 도메인 자동 감지 / Auto-detect CloudFront domain
 if [ -z "$CF_DOMAIN" ]; then
-    CF_DOMAIN=$(aws cloudfront list-distributions \
-        --query "DistributionList.Items[?contains(Origins.Items[].DomainName, 'elb.amazonaws.com')].DomainName | [0]" \
-        --output text --region us-east-1 2>/dev/null || echo "")
-    if [ -n "$CF_DOMAIN" ] && [ "$CF_DOMAIN" != "None" ]; then
-        echo "  Auto-detected CloudFront: $CF_DOMAIN"
-    else
-        echo -e "${RED}ERROR: CF_DOMAIN not set and could not auto-detect.${NC}"
+    # 방법 1: CloudFormation 스택 출력에서 조회 / Method 1: from stack outputs
+    CF_DOMAIN=$(aws cloudformation describe-stacks \
+        --stack-name AwsopsStack --region "$REGION" \
+        --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue | [0]" \
+        --output text 2>/dev/null | sed 's|https://||' || echo "")
+
+    # 방법 2: CloudFront API에서 ALB 오리진으로 검색 / Method 2: search by ALB origin
+    if [ -z "$CF_DOMAIN" ] || [ "$CF_DOMAIN" = "None" ]; then
+        CF_DOMAIN=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?contains(Origins.Items[].DomainName, 'elb.amazonaws.com')].DomainName | [0]" \
+            --output text 2>/dev/null || echo "")
+    fi
+
+    # 방법 3: 전체 CloudFront 배포 목록에서 선택 / Method 3: select from all distributions
+    if [ -z "$CF_DOMAIN" ] || [ "$CF_DOMAIN" = "None" ]; then
+        echo -e "  ${YELLOW}CloudFront 자동 감지 실패. 목록에서 선택하세요.${NC}"
+        echo -e "  ${YELLOW}Auto-detect failed. Select from list:${NC}"
+        echo ""
+        CF_LIST=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[*].[DomainName, Comment]" \
+            --output text 2>/dev/null || echo "")
+        if [ -n "$CF_LIST" ]; then
+            CF_DOMAINS=()
+            IDX=0
+            while IFS=$'\t' read -r domain comment; do
+                IDX=$((IDX + 1))
+                comment="${comment:-(설명 없음 / no comment)}"
+                printf "    %2d) %s  %s\n" "$IDX" "$domain" "$comment"
+                CF_DOMAINS+=("$domain")
+            done <<< "$CF_LIST"
+            echo ""
+            read -p "  번호 선택 / Select number: " CF_SELECT
+            if [[ "$CF_SELECT" =~ ^[0-9]+$ ]] && [ "$CF_SELECT" -ge 1 ] && [ "$CF_SELECT" -le "${#CF_DOMAINS[@]}" ]; then
+                CF_DOMAIN="${CF_DOMAINS[$((CF_SELECT-1))]}"
+            fi
+        fi
+    fi
+
+    # 최종: 직접 입력 / Final fallback: manual input
+    if [ -z "$CF_DOMAIN" ] || [ "$CF_DOMAIN" = "None" ]; then
+        echo ""
+        read -p "  CloudFront 도메인 직접 입력 / Enter CloudFront domain: " CF_DOMAIN
+    fi
+
+    if [ -z "$CF_DOMAIN" ] || [ "$CF_DOMAIN" = "None" ]; then
+        echo -e "${RED}오류: CloudFront 도메인을 확인할 수 없습니다.${NC}"
+        echo -e "${RED}ERROR: Cannot determine CloudFront domain.${NC}"
         echo "  export CF_DOMAIN='dXXXXXXXXXX.cloudfront.net'"
         exit 1
     fi
+    echo -e "  ${GREEN}CloudFront 감지됨 / Detected: $CF_DOMAIN${NC}"
 fi
 
 echo "  CloudFront:   $CF_DOMAIN"
