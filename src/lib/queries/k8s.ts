@@ -87,8 +87,8 @@ export const queries = {
       phase,
       storage_class,
       volume_name,
-      capacity,
-      access_modes,
+      capacity::text as capacity,
+      access_modes::text as access_modes,
       creation_timestamp
     FROM
       kubernetes_persistent_volume_claim

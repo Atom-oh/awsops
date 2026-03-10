@@ -82,7 +82,7 @@ run_or_fail "IAM put-role-policy (ECRAndLambda)" \
         \"Version\": \"2012-10-17\",
         \"Statement\": [{
             \"Effect\": \"Allow\",
-            \"Action\": [\"ecr:*\", \"lambda:InvokeFunction\", \"lambda:GetFunction\"],
+            \"Action\": [\"ecr:*\", \"lambda:InvokeFunction\", \"lambda:GetFunction\", \"bedrock-agentcore:*\"],
             \"Resource\": \"*\"
         }]
     }"

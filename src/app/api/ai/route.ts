@@ -568,8 +568,14 @@ export async function POST(request: NextRequest) {
     const agentResponse = await invokeAgentCore(messages, gateway);
 
     if (agentResponse) {
+      // Strip tool_call/tool_response tags from AgentCore output / AgentCore 출력에서 도구 호출 태그 제거
+      const cleanedResponse = agentResponse
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/g, '')
+        .replace(/<tool_response>[\s\S]*?<\/tool_response>\s*/g, '')
+        .trim();
+
       return NextResponse.json({
-        content: agentResponse,
+        content: cleanedResponse || agentResponse,
         model: 'sonnet-4.6',
         via: `AgentCore → ${config.display}`,
         queriedResources: [`${gateway}-gateway`],
