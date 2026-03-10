@@ -165,7 +165,9 @@ echo ""
 echo -e "${CYAN}[4/6] EKS 접근 항목 등록 / Registering access entry...${NC}"
 
 # EC2 역할 ARN 조회 / Get EC2 role ARN
-EC2_ROLE_ARN=$(aws sts get-caller-identity --query "Arn" --output text 2>/dev/null | sed 's|:assumed-role/|:role/|; s|/i-.*||')
+# sts:assumed-role → iam:role 변환 / Convert sts:assumed-role to iam:role format
+EC2_ROLE_ARN=$(aws sts get-caller-identity --query "Arn" --output text 2>/dev/null \
+    | sed 's|:assumed-role/|:role/|; s|/i-.*||; s|:sts:|:iam:|')
 echo "  EC2 역할 / EC2 Role: $EC2_ROLE_ARN"
 
 for ENTRY in "${SELECTED_CLUSTERS[@]}"; do
