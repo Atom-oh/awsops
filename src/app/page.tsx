@@ -152,7 +152,7 @@ export default function DashboardPage() {
           ].filter(Boolean).join(', ');
           return (
             <div
-              onClick={() => router.push('/awsops/security')}
+              onClick={() => router.push('/security')}
               className={`cursor-pointer transition-all hover:scale-[1.02] hover:border-accent-cyan/50 rounded-lg ${totalIssues > 0 ? 'ring-1 ring-accent-red/30' : ''}`}
               title={totalIssues > 0 ? `⚠ ${details} — Click to view details` : '✓ No security issues detected'}
             >
