@@ -91,12 +91,6 @@ export default function LambdaPage() {
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => parseInt(a.name) - parseInt(b.name));
 
-  const parseJson = (val: any) => {
-    if (!val) return null;
-    if (typeof val === 'string') try { return JSON.parse(val); } catch { return null; }
-    return typeof val === 'object' ? val : null;
-  };
-
   const formatBytes = (v: number) => {
     if (!v) return '--';
     if (v < 1024) return `${v} B`;
@@ -246,19 +240,15 @@ export default function LambdaPage() {
                 </Section>
 
                 <Section title="Network" icon={Network}>
-                  {(() => {
-                    const vpc = parseJson(selected.vpc_config);
-                    if (vpc && vpc.VpcId) {
-                      return (
-                        <>
-                          <Row label="VPC ID" value={vpc.VpcId} />
-                          <Row label="Subnets" value={vpc.SubnetIds?.join(', ')} />
-                          <Row label="Security Groups" value={vpc.SecurityGroupIds?.join(', ')} />
-                        </>
-                      );
-                    }
-                    return <p className="text-gray-500 text-sm">Not in VPC</p>;
-                  })()}
+                  {selected.vpc_id ? (
+                    <>
+                      <Row label="VPC ID" value={selected.vpc_id} />
+                      <Row label="Subnets" value={selected.vpc_subnet_ids || '--'} />
+                      <Row label="Security Groups" value={selected.vpc_security_group_ids || '--'} />
+                    </>
+                  ) : (
+                    <p className="text-gray-500 text-sm">Not in VPC</p>
+                  )}
                 </Section>
 
                 {/* Note: environment_variables and tags excluded — SCP may block hydrate */}

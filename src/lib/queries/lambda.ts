@@ -39,7 +39,9 @@ export const queries = {
       package_type,
       architectures::text AS architectures,
       layers::text AS layers,
-      vpc_config::text AS vpc_config,
+      vpc_id,
+      vpc_subnet_ids::text AS vpc_subnet_ids,
+      vpc_security_group_ids::text AS vpc_security_group_ids,
       region
     FROM
       aws_lambda_function
