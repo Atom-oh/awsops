@@ -200,15 +200,50 @@ export default function LambdaPage() {
               </div>
             ) : selected ? (
               <div className="p-6 space-y-6">
+                {/* Description / 설명 */}
+                {selected.description && (
+                  <div className="text-sm text-gray-400 bg-navy-900 rounded-lg border border-navy-600 p-3">
+                    {selected.description}
+                  </div>
+                )}
+
                 <Section title="Function" icon={Zap}>
                   <Row label="Name" value={selected.name} />
                   <Row label="ARN" value={selected.arn} />
                   <Row label="Runtime" value={selected.runtime || 'custom'} />
                   <Row label="Handler" value={selected.handler} />
-                  <Row label="Architectures" value={Array.isArray(selected.architectures) ? selected.architectures.join(', ') : selected.architectures} />
+                  <Row label="Architectures" value={(() => { try { const a = JSON.parse(selected.architectures || '[]'); return Array.isArray(a) ? a.join(', ') : selected.architectures; } catch { return selected.architectures; } })()} />
                   <Row label="Package Type" value={selected.package_type} />
                   <Row label="Code Size" value={formatBytes(Number(selected.code_size))} />
+                  <Row label="Code SHA256" value={selected.code_sha_256 ? `${String(selected.code_sha_256).slice(0, 16)}...` : '--'} />
+                </Section>
+
+                {/* Deploy / Version / 배포 및 버전 */}
+                <Section title="Deployment" icon={Zap}>
+                  <Row label="Version" value={`$LATEST${selected.version && selected.version !== '$LATEST' ? ` (${selected.version})` : ''}`} />
+                  <Row label="State" value={selected.state || '--'} />
+                  <Row label="Last Update" value={selected.last_update_status || '--'} />
                   <Row label="Last Modified" value={selected.last_modified ? new Date(selected.last_modified).toLocaleString() : '--'} />
+                  {(() => {
+                    try {
+                      const layers = JSON.parse(selected.layers || '[]');
+                      if (Array.isArray(layers) && layers.length > 0) {
+                        return (
+                          <>
+                            <Row label="Layers" value={`${layers.length} layer(s)`} />
+                            <div className="mt-1 space-y-1">
+                              {layers.map((l: any, i: number) => (
+                                <div key={i} className="text-xs font-mono text-gray-400 pl-2 border-l border-navy-600">
+                                  {typeof l === 'string' ? l.split(':').slice(-2).join(':') : l?.Arn?.split(':').slice(-2).join(':') || JSON.stringify(l)}
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        );
+                      }
+                    } catch {}
+                    return <Row label="Layers" value="None" />;
+                  })()}
                 </Section>
 
                 <Section title="Configuration" icon={Settings}>

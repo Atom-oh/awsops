@@ -25,12 +25,22 @@ export const queries = {
     SELECT
       name,
       arn,
+      description,
       runtime,
       handler,
       code_size,
+      code_sha_256,
       last_modified,
       memory_size,
       timeout,
+      version,
+      state,
+      last_update_status,
+      package_type,
+      architectures::text AS architectures,
+      layers::text AS layers,
+      vpc_config::text AS vpc_config,
+      environment_variables::text AS environment_variables,
       region
     FROM
       aws_lambda_function
