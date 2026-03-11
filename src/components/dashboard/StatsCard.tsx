@@ -22,15 +22,15 @@ export default function StatsCard({ label, value, icon: Icon, color, change, hig
   const colors = colorMap[color] ?? colorMap.cyan;
 
   return (
-    <div className="bg-navy-800 rounded-lg border border-navy-600 p-5 relative overflow-hidden">
+    <div className="bg-navy-800 rounded-lg border border-navy-600 p-5 relative overflow-hidden h-full">
       {/* Icon */}
       <div className={`absolute top-4 right-4 p-2.5 rounded-lg ${colors.bg}`}>
         <Icon size={20} className={colors.text} />
       </div>
 
-      {/* Content */}
+      {/* Content — auto-size for long values / 긴 값은 자동 축소 */}
       <p className="text-sm text-gray-400 mb-1">{label}</p>
-      <p className={`text-3xl font-bold font-mono ${highlight ? colors.text : 'text-white'}`}>{value}</p>
+      <p className={`font-bold font-mono truncate ${String(value).length > 8 ? 'text-2xl' : 'text-3xl'} ${highlight ? colors.text : 'text-white'}`}>{value}</p>
 
       {change && (
         <p
