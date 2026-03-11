@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import StatusBadge from '@/components/dashboard/StatusBadge';
@@ -19,6 +19,7 @@ export default function EC2Page() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [vpcFilter, setVpcFilter] = useState('');
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -70,6 +71,17 @@ export default function EC2Page() {
   const stopped = total - running;
   const totalVcpus = Number(summary?.total_vcpus) || 0;
 
+  // VPC filter / VPC 필터
+  const vpcList = useMemo(() => {
+    const vpcs = new Set<string>();
+    list.forEach((r: any) => { if (r.vpc_id) vpcs.add(String(r.vpc_id)); });
+    return Array.from(vpcs).sort();
+  }, [list]);
+  const filteredList = useMemo(() => {
+    if (!vpcFilter) return list;
+    return list.filter((r: any) => String(r.vpc_id) === vpcFilter);
+  }, [list, vpcFilter]);
+
   const parseSGs = (sgs: any) => {
     if (!sgs) return [];
     if (typeof sgs === 'string') try { return JSON.parse(sgs); } catch { return []; }
@@ -110,6 +122,30 @@ export default function EC2Page() {
         <BarChartCard title="Instance Status" data={statusData} color="#00d4ff" />
       </div>
 
+      {/* VPC Filter / VPC 필터 */}
+      <div className="flex items-center gap-3">
+        <select
+          value={vpcFilter}
+          onChange={(e) => setVpcFilter(e.target.value)}
+          className="bg-navy-800 border border-navy-600 rounded-lg px-4 py-2 text-sm text-gray-200 focus:ring-accent-cyan focus:border-accent-cyan"
+        >
+          <option value="">All VPCs ({list.length})</option>
+          {vpcList.map((vpc) => (
+            <option key={vpc} value={vpc}>
+              {vpc} ({list.filter((r: any) => String(r.vpc_id) === vpc).length})
+            </option>
+          ))}
+        </select>
+        {vpcFilter && (
+          <button onClick={() => setVpcFilter('')} className="text-xs text-gray-500 hover:text-white transition-colors">
+            Clear
+          </button>
+        )}
+        <span className="text-xs text-gray-500 ml-auto">
+          {filteredList.length} instance{filteredList.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
       <DataTable
         columns={[
           { key: 'instance_id', label: 'Instance ID' },
@@ -118,10 +154,10 @@ export default function EC2Page() {
           { key: 'instance_state', label: 'State', render: (v: string) => <StatusBadge status={v || 'unknown'} /> },
           { key: 'public_ip_address', label: 'Public IP', render: (v: string) => v || <span className="text-gray-600">--</span> },
           { key: 'private_ip_address', label: 'Private IP' },
+          { key: 'vpc_id', label: 'VPC' },
           { key: 'launch_time', label: 'Launch Time', render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
-          { key: 'region', label: 'Region' },
         ]}
-        data={loading && !list.length ? undefined : list}
+        data={loading && !filteredList.length ? undefined : filteredList}
         onRowClick={(row) => fetchDetail(row.instance_id)}
       />
 
