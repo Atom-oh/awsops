@@ -67,7 +67,7 @@ export default function SecurityPage() {
   const highCVE = trivySummary.find((s: any) => s.name === 'HIGH')?.value || 0;
 
   const severityColors: Record<string, string> = { CRITICAL: '#ef4444', HIGH: '#f59e0b', MEDIUM: '#a855f7', LOW: '#00d4ff', UNKNOWN: '#6b7280' };
-  const cvePieData = trivySummary.map(s => ({ name: s.name, value: s.value, color: severityColors[s.name] || '#6b7280' }));
+  const cvePieData = trivySummary.map((s: any) => ({ name: s.name, value: s.value, color: severityColors[s.name] || '#6b7280' }));
   const securityIssuesBar = [
     { name: 'Public Buckets', value: publicBucketCount },
     { name: 'MFA Issues', value: mfaIssues },
