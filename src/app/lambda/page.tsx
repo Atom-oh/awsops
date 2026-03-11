@@ -6,7 +6,7 @@ import StatsCard from '@/components/dashboard/StatsCard';
 import PieChartCard from '@/components/charts/PieChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
-import { Zap, X, Settings, Network, Tag } from 'lucide-react';
+import { Zap, X, Settings, Network } from 'lucide-react';
 import { queries as lambdaQ } from '@/lib/queries/lambda';
 
 interface PageData {
@@ -90,12 +90,6 @@ export default function LambdaPage() {
   const memoryData = Object.entries(memoryMap)
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => parseInt(a.name) - parseInt(b.name));
-
-  const parseTags = (tags: any) => {
-    if (!tags) return {};
-    if (typeof tags === 'string') try { return JSON.parse(tags); } catch { return {}; }
-    return typeof tags === 'object' ? tags : {};
-  };
 
   const parseJson = (val: any) => {
     if (!val) return null;
@@ -267,43 +261,7 @@ export default function LambdaPage() {
                   })()}
                 </Section>
 
-                <Section title="Environment" icon={Settings}>
-                  {(() => {
-                    const env = parseJson(selected.environment_variables);
-                    if (env && typeof env === 'object') {
-                      const keys = Object.keys(env);
-                      return (
-                        <>
-                          <Row label="Variable Count" value={keys.length} />
-                          <div className="mt-2 space-y-1">
-                            {keys.map(k => (
-                              <div key={k} className="flex gap-2 text-xs font-mono">
-                                <span className="text-accent-purple min-w-[120px]">{k}</span>
-                                <span className="text-gray-500">[hidden]</span>
-                              </div>
-                            ))}
-                          </div>
-                        </>
-                      );
-                    }
-                    return <p className="text-gray-500 text-sm">No environment variables</p>;
-                  })()}
-                </Section>
-
-                <Section title="Tags" icon={Tag}>
-                  {Object.keys(parseTags(selected.tags)).length > 0 ? (
-                    <div className="space-y-1">
-                      {Object.entries(parseTags(selected.tags)).map(([k, v]) => (
-                        <div key={k} className="flex gap-2 text-sm">
-                          <span className="text-accent-purple font-mono text-xs min-w-[120px]">{k}</span>
-                          <span className="text-gray-300">{String(v)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-gray-500 text-sm">No tags</p>
-                  )}
-                </Section>
+                {/* Note: environment_variables and tags excluded — SCP may block hydrate */}
               </div>
             ) : null}
           </div>

@@ -40,7 +40,6 @@ export const queries = {
       architectures::text AS architectures,
       layers::text AS layers,
       vpc_config::text AS vpc_config,
-      environment_variables::text AS environment_variables,
       region
     FROM
       aws_lambda_function
