@@ -13,6 +13,7 @@ interface Message {
   queriedResources?: string[];
   via?: string;           // Routing path display / 라우팅 경로 표시
   route?: string;         // Classified intent route / 분류된 의도 라우트
+  statusMessage?: string; // SSE progress status / SSE 진행 상태 메시지
 }
 
 export default function AIPage() {
@@ -27,6 +28,8 @@ export default function AIPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const [statusMessage, setStatusMessage] = useState('');
+
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
 
@@ -35,6 +38,7 @@ export default function AIPage() {
     setMessages(newMessages);
     setInput('');
     setLoading(true);
+    setStatusMessage('🔍 질문 분석 중...');
 
     try {
       const res = await fetch('/awsops/api/ai', {
@@ -43,32 +47,75 @@ export default function AIPage() {
         body: JSON.stringify({
           messages: newMessages.map(m => ({ role: m.role, content: m.content })),
           model,
+          stream: true,
         }),
       });
-      // Handle non-JSON responses (502, HTML error pages, etc.) / 비-JSON 응답 처리 (502, HTML 에러 페이지 등)
-      const contentType = res.headers.get('content-type') || '';
-      if (!res.ok || !contentType.includes('application/json')) {
-        const errorText = res.ok ? 'Unexpected response format' : `Server error (${res.status})`;
-        setMessages([...newMessages, { role: 'assistant', content: `Error: ${errorText}. Please try again.`, model }]);
+
+      if (!res.ok) {
+        setMessages([...newMessages, { role: 'assistant', content: `Error: Server error (${res.status}). Please try again.`, model }]);
         return;
       }
-      const data = await res.json();
-      if (data.error) {
-        setMessages([...newMessages, { role: 'assistant', content: `Error: ${data.error}`, model }]);
+
+      const contentType = res.headers.get('content-type') || '';
+
+      // SSE streaming mode / SSE 스트리밍 모드
+      if (contentType.includes('text/event-stream') && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE events from buffer / 버퍼에서 SSE 이벤트 파싱
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          let eventType = '';
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith('data: ') && eventType) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (eventType === 'status') {
+                  setStatusMessage(data.message || '');
+                } else if (eventType === 'done') {
+                  setMessages([...newMessages, {
+                    role: 'assistant', content: data.content,
+                    model: data.model, queriedResources: data.queriedResources,
+                    via: data.via, route: data.route,
+                  }]);
+                } else if (eventType === 'error') {
+                  setMessages([...newMessages, { role: 'assistant', content: `Error: ${data.error}`, model }]);
+                }
+              } catch {}
+              eventType = '';
+            }
+          }
+        }
+      } else if (contentType.includes('application/json')) {
+        // Fallback: non-streaming JSON response / 폴백: 비스트리밍 JSON 응답
+        const data = await res.json();
+        if (data.error) {
+          setMessages([...newMessages, { role: 'assistant', content: `Error: ${data.error}`, model }]);
+        } else {
+          setMessages([...newMessages, {
+            role: 'assistant', content: data.content,
+            model: data.model, queriedResources: data.queriedResources,
+            via: data.via, route: data.route,
+          }]);
+        }
       } else {
-        setMessages([...newMessages, {
-          role: 'assistant',
-          content: data.content,
-          model: data.model,
-          queriedResources: data.queriedResources,
-          via: data.via,
-          route: data.route,
-        }]);
+        setMessages([...newMessages, { role: 'assistant', content: 'Error: Unexpected response format.', model }]);
       }
     } catch (err: any) {
       setMessages([...newMessages, { role: 'assistant', content: `Connection error: ${err.message}`, model }]);
     } finally {
       setLoading(false);
+      setStatusMessage('');
       inputRef.current?.focus();
     }
   };
@@ -194,7 +241,7 @@ export default function AIPage() {
           </div>
         ))}
 
-        {/* Loading */}
+        {/* Loading with SSE status / SSE 상태와 함께 로딩 표시 */}
         {loading && (
           <div className="flex gap-3">
             <div className="shrink-0 w-8 h-8 rounded-lg bg-accent-cyan/10 flex items-center justify-center mt-1">
@@ -203,7 +250,7 @@ export default function AIPage() {
             <div className="bg-navy-800 border border-navy-600 rounded-lg px-4 py-3">
               <div className="flex items-center gap-2 text-sm text-gray-400">
                 <Loader2 size={14} className="animate-spin" />
-                Querying AWS resources & generating response...
+                <span className="transition-all duration-300">{statusMessage || 'Processing...'}</span>
               </div>
             </div>
           </div>

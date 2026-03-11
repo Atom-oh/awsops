@@ -468,77 +468,219 @@ async function streamToString(stream: any): Promise<string> {
 }
 
 // ============================================================================
-// POST handler / POST 핸들러
+// SSE helpers / SSE 헬퍼
+// ============================================================================
+function sseEvent(event: string, data: any): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+// ============================================================================
+// POST handler — SSE streaming with step-by-step progress events
+// POST 핸들러 — 단계별 진행 이벤트를 포함한 SSE 스트리밍
 // ============================================================================
 export async function POST(request: NextRequest) {
-  try {
-    const { messages, model: modelKey } = await request.json();
-    if (!messages || !Array.isArray(messages) || messages.length === 0)
-      return NextResponse.json({ error: 'Messages required' }, { status: 400 });
+  const reqBody = await request.json();
+  const { messages, model: modelKey, stream: useStream } = reqBody;
 
-    // Step 1: Classify intent / 1단계: 의도 분류
+  if (!messages || !Array.isArray(messages) || messages.length === 0)
+    return NextResponse.json({ error: 'Messages required' }, { status: 400 });
+
+  // Non-streaming mode: return JSON (backward compatible for test scripts)
+  // 비스트리밍 모드: JSON 반환 (테스트 스크립트 하위 호환)
+  if (!useStream) {
+    return handleNonStreaming(messages, modelKey);
+  }
+
+  // Streaming mode: SSE events / 스트리밍 모드: SSE 이벤트
+  const encoder = new TextEncoder();
+  const readable = new ReadableStream({
+    async start(controller) {
+      const send = (event: string, data: any) => {
+        controller.enqueue(encoder.encode(sseEvent(event, data)));
+      };
+
+      try {
+        // Step 1: Classify intent / 1단계: 의도 분류
+        send('status', { step: 'classifying', message: '🔍 질문 분석 중...' });
+        const route = await classifyIntent(messages);
+        const config = ROUTE_REGISTRY[route];
+        const lastMessage = messages[messages.length - 1]?.content || '';
+        send('status', { step: 'classified', route, display: config.display, message: `📡 ${config.display} 연결 중...` });
+
+        // Step 2: Route to handler / 2단계: 핸들러로 라우팅
+
+        // Handler: Code Interpreter / 핸들러: 코드 인터프리터
+        if (config.handler === 'code') {
+          send('status', { step: 'generating', message: '💻 코드 생성 중...' });
+          const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+          const codeSystemPrompt = SYSTEM_PROMPT + `\n\nThe user wants to execute code. If they provide code, wrap it in a \`\`\`python code block. If they describe a task, generate Python code to accomplish it and wrap it in a \`\`\`python code block. Always include print statements to show results.`;
+          const body = JSON.stringify({
+            anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: codeSystemPrompt,
+            messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })),
+          });
+          const aiResponse = await bedrockClient.send(new InvokeModelCommand({
+            modelId, contentType: 'application/json', accept: 'application/json', body: encoder.encode(body),
+          }));
+          const aiText = JSON.parse(new TextDecoder().decode(aiResponse.body)).content?.[0]?.text || '';
+          const pythonCode = extractPythonCode(aiText) || extractPythonCode(lastMessage);
+
+          if (pythonCode) {
+            send('status', { step: 'executing', message: '⚡ 코드 실행 중...' });
+            const codeResult = await executeCodeInterpreter(pythonCode);
+            const executionBlock = `\n\n---\n**Code Execution Result** (exit code: ${codeResult.exitCode}):\n\`\`\`\n${codeResult.output}\n\`\`\``;
+            send('done', {
+              content: aiText + executionBlock, model: modelKey || 'sonnet-4.6',
+              via: `Bedrock + ${config.display}`, queriedResources: ['code-interpreter'], route,
+            });
+          } else {
+            send('done', {
+              content: aiText, model: modelKey || 'sonnet-4.6',
+              via: 'Bedrock (code request)', queriedResources: [], route,
+            });
+          }
+          controller.close();
+          return;
+        }
+
+        // Handler: SQL (aws-data) / SQL 핸들러
+        if (config.handler === 'sql') {
+          send('status', { step: 'sql-generating', message: '📝 SQL 생성 중...' });
+          const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+          let sql = await generateSQL(messages);
+          let queryResult: { data: string; rowCount: number; error?: string } | null = null;
+
+          for (let attempt = 0; attempt < 2 && sql; attempt++) {
+            send('status', { step: 'sql-querying', message: `🔎 Steampipe 쿼리 실행 중...${attempt > 0 ? ' (재시도)' : ''}`, sql });
+            queryResult = await queryAWS(sql);
+            if (!queryResult.error) break;
+            if (attempt === 0) {
+              send('status', { step: 'sql-retrying', message: '🔄 SQL 수정 후 재시도...' });
+              const fixMessages = [
+                ...messages.slice(-4),
+                { role: 'assistant' as const, content: `I generated this SQL: ${sql}` },
+                { role: 'user' as const, content: `That SQL failed with error: ${queryResult.error}. Fix the SQL using only valid column names.` },
+              ];
+              sql = await generateSQL(fixMessages);
+            }
+          }
+
+          if (sql && queryResult && !queryResult.error) {
+            send('status', { step: 'analyzing', message: `📊 ${queryResult.rowCount}건 데이터 분석 중...` });
+            const contextData = `\n\n--- LIVE AWS RESOURCE DATA (${queryResult.rowCount} rows) ---\nSQL: ${sql}\n\`\`\`json\n${queryResult.data}\n\`\`\``;
+            const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
+            bedrockMessages[bedrockMessages.length - 1].content += contextData;
+            const body = JSON.stringify({
+              anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT, messages: bedrockMessages,
+            });
+            const response = await bedrockClient.send(new InvokeModelCommand({
+              modelId, contentType: 'application/json', accept: 'application/json', body: encoder.encode(body),
+            }));
+            const result = JSON.parse(new TextDecoder().decode(response.body));
+            send('done', {
+              content: result.content?.[0]?.text || 'No response', model: modelKey || 'sonnet-4.6',
+              via: `${config.display} (${queryResult.rowCount} rows)`, queriedResources: ['steampipe'], route,
+            });
+            controller.close();
+            return;
+          }
+          send('status', { step: 'sql-fallback', message: '⚠️ SQL 실패, AgentCore로 전환...' });
+        }
+
+        // Handler: AgentCore Gateway / 핸들러: AgentCore 게이트웨이
+        const gateway = config.gateway || 'ops';
+        send('status', { step: 'agentcore', message: `🤖 ${config.display} 도구 호출 중...` });
+        const agentResponse = await invokeAgentCore(messages, gateway);
+
+        if (agentResponse) {
+          const cleanedResponse = agentResponse
+            .replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/g, '')
+            .replace(/<tool_response>[\s\S]*?<\/tool_response>\s*/g, '')
+            .trim();
+          send('done', {
+            content: cleanedResponse || agentResponse, model: 'sonnet-4.6',
+            via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], route,
+          });
+          controller.close();
+          return;
+        }
+
+        // Fallback: Bedrock Direct / 폴백: Bedrock 직접
+        send('status', { step: 'fallback', message: '🔄 Bedrock Direct 폴백...' });
+        const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+        const body = JSON.stringify({
+          anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT,
+          messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })),
+        });
+        const response = await bedrockClient.send(new InvokeModelCommand({
+          modelId, contentType: 'application/json', accept: 'application/json', body: encoder.encode(body),
+        }));
+        const result = JSON.parse(new TextDecoder().decode(response.body));
+        send('done', {
+          content: result.content?.[0]?.text || 'No response', model: modelKey || 'sonnet-4.6',
+          via: `Bedrock Direct (fallback from ${config.display})`, queriedResources: [], route,
+        });
+      } catch (err: any) {
+        send('error', { error: err.message || 'AI request failed' });
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+}
+
+// ============================================================================
+// Non-streaming handler (backward compatible) / 비스트리밍 핸들러 (하위 호환)
+// ============================================================================
+async function handleNonStreaming(messages: Array<{role: string; content: string}>, modelKey?: string) {
+  try {
     const route = await classifyIntent(messages);
     const config = ROUTE_REGISTRY[route];
     const lastMessage = messages[messages.length - 1]?.content || '';
 
-    // Step 2: Route to handler / 2단계: 핸들러로 라우팅
-
-    // Handler: Code Interpreter / 핸들러: 코드 인터프리터
+    // Code handler / 코드 핸들러
     if (config.handler === 'code') {
       const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
       const codeSystemPrompt = SYSTEM_PROMPT + `\n\nThe user wants to execute code. If they provide code, wrap it in a \`\`\`python code block. If they describe a task, generate Python code to accomplish it and wrap it in a \`\`\`python code block. Always include print statements to show results.`;
-
       const body = JSON.stringify({
-        anthropic_version: 'bedrock-2023-05-31',
-        max_tokens: 4096,
-        system: codeSystemPrompt,
+        anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: codeSystemPrompt,
         messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })),
       });
-
       const aiResponse = await bedrockClient.send(new InvokeModelCommand({
         modelId, contentType: 'application/json', accept: 'application/json',
         body: new TextEncoder().encode(body),
       }));
-
-      const aiResult = JSON.parse(new TextDecoder().decode(aiResponse.body));
-      const aiText = aiResult.content?.[0]?.text || '';
-
+      const aiText = JSON.parse(new TextDecoder().decode(aiResponse.body)).content?.[0]?.text || '';
       const pythonCode = extractPythonCode(aiText) || extractPythonCode(lastMessage);
       if (pythonCode) {
         const codeResult = await executeCodeInterpreter(pythonCode);
         const executionBlock = `\n\n---\n**Code Execution Result** (exit code: ${codeResult.exitCode}):\n\`\`\`\n${codeResult.output}\n\`\`\``;
         return NextResponse.json({
-          content: aiText + executionBlock,
-          model: modelKey || 'sonnet-4.6',
-          via: `Bedrock + ${config.display}`,
-          queriedResources: ['code-interpreter'],
-          route,
-          codeExecution: { output: codeResult.output, exitCode: codeResult.exitCode },
+          content: aiText + executionBlock, model: modelKey || 'sonnet-4.6',
+          via: `Bedrock + ${config.display}`, queriedResources: ['code-interpreter'], route,
         });
       }
-
       return NextResponse.json({
-        content: aiText,
-        model: modelKey || 'sonnet-4.6',
-        via: 'Bedrock (code request - no executable code generated)',
-        queriedResources: [],
-        route,
+        content: aiText, model: modelKey || 'sonnet-4.6',
+        via: 'Bedrock (code request)', queriedResources: [], route,
       });
     }
 
-    // Handler: SQL (aws-data) — Sonnet generates SQL → pg Pool → Sonnet analyzes / SQL 핸들러: Sonnet SQL 생성 → pg Pool → Sonnet 분석
+    // SQL handler / SQL 핸들러
     if (config.handler === 'sql') {
       const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
       let sql = await generateSQL(messages);
       let queryResult: { data: string; rowCount: number; error?: string } | null = null;
-
-      // Auto-retry on SQL error / SQL 오류 시 자동 재시도
       for (let attempt = 0; attempt < 2 && sql; attempt++) {
-        console.log(`[AWS-Data] Attempt ${attempt + 1}, SQL: ${sql}`);
         queryResult = await queryAWS(sql);
         if (!queryResult.error) break;
         if (attempt === 0) {
-          console.warn(`[AWS-Data] SQL error: ${queryResult.error}, retrying`);
           const fixMessages = [
             ...messages.slice(-4),
             { role: 'assistant' as const, content: `I generated this SQL: ${sql}` },
@@ -547,78 +689,53 @@ export async function POST(request: NextRequest) {
           sql = await generateSQL(fixMessages);
         }
       }
-
       if (sql && queryResult && !queryResult.error) {
         const contextData = `\n\n--- LIVE AWS RESOURCE DATA (${queryResult.rowCount} rows) ---\nSQL: ${sql}\n\`\`\`json\n${queryResult.data}\n\`\`\``;
         const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
         bedrockMessages[bedrockMessages.length - 1].content += contextData;
-
         const body = JSON.stringify({
-          anthropic_version: 'bedrock-2023-05-31',
-          max_tokens: 4096,
-          system: SYSTEM_PROMPT,
-          messages: bedrockMessages,
+          anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT, messages: bedrockMessages,
         });
-
         const response = await bedrockClient.send(new InvokeModelCommand({
           modelId, contentType: 'application/json', accept: 'application/json',
           body: new TextEncoder().encode(body),
         }));
-
         const result = JSON.parse(new TextDecoder().decode(response.body));
         return NextResponse.json({
-          content: result.content?.[0]?.text || 'No response',
-          model: modelKey || 'sonnet-4.6',
-          via: `${config.display} (${queryResult.rowCount} rows)`,
-          queriedResources: ['steampipe'],
-          route,
+          content: result.content?.[0]?.text || 'No response', model: modelKey || 'sonnet-4.6',
+          via: `${config.display} (${queryResult.rowCount} rows)`, queriedResources: ['steampipe'], route,
         });
       }
-      console.warn('[AWS-Data] SQL failed, falling through to AgentCore');
     }
 
-    // Handler: AgentCore Gateway (default for all other routes) / 핸들러: AgentCore 게이트웨이 (기본)
+    // AgentCore Gateway / AgentCore 게이트웨이
     const gateway = config.gateway || 'ops';
     const agentResponse = await invokeAgentCore(messages, gateway);
-
     if (agentResponse) {
-      // Strip tool_call/tool_response tags from AgentCore output / AgentCore 출력에서 도구 호출 태그 제거
       const cleanedResponse = agentResponse
         .replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/g, '')
         .replace(/<tool_response>[\s\S]*?<\/tool_response>\s*/g, '')
         .trim();
-
       return NextResponse.json({
-        content: cleanedResponse || agentResponse,
-        model: 'sonnet-4.6',
-        via: `AgentCore → ${config.display}`,
-        queriedResources: [`${gateway}-gateway`],
-        route,
+        content: cleanedResponse || agentResponse, model: 'sonnet-4.6',
+        via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], route,
       });
     }
 
-    // Step 3: Fallback → Bedrock Direct / 3단계: 폴백 → Bedrock 직접
-    console.warn(`[Fallback] AgentCore failed for route=${route}, Bedrock Direct`);
+    // Fallback / 폴백
     const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
     const body = JSON.stringify({
-      anthropic_version: 'bedrock-2023-05-31',
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
+      anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT,
       messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })),
     });
-
     const response = await bedrockClient.send(new InvokeModelCommand({
       modelId, contentType: 'application/json', accept: 'application/json',
       body: new TextEncoder().encode(body),
     }));
-
     const result = JSON.parse(new TextDecoder().decode(response.body));
     return NextResponse.json({
-      content: result.content?.[0]?.text || 'No response',
-      model: modelKey || 'sonnet-4.6',
-      via: `Bedrock Direct (fallback from ${config.display})`,
-      queriedResources: [],
-      route,
+      content: result.content?.[0]?.text || 'No response', model: modelKey || 'sonnet-4.6',
+      via: `Bedrock Direct (fallback from ${config.display})`, queriedResources: [], route,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'AI request failed' }, { status: 500 });
