@@ -79,6 +79,21 @@ export const queries = {
       instance_id = '{instance_id}'
   `,
 
+  // Instance type specs (memory, vCPU, network) / 인스턴스 타입 사양 (메모리, vCPU, 네트워크)
+  instanceTypeSpec: `
+    SELECT
+      instance_type,
+      memory_info_size_in_mib AS memory_mib,
+      v_cpu_info_default_v_cpus AS vcpus,
+      network_info_maximum_network_interfaces AS max_enis,
+      network_info_network_performance AS network_performance,
+      instance_storage_supported
+    FROM
+      aws_ec2_instance_type
+    WHERE
+      instance_type = '{instance_type}'
+  `,
+
   summary: `
     SELECT
       COUNT(*) AS total_instances,
