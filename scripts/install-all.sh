@@ -43,10 +43,11 @@ echo "    Step 4:  EKS 접근 설정              (04-setup-eks-access.sh)"
 echo "    Step 5:  Cognito 인증               (05-setup-cognito.sh)"
 echo "    Step 6:  AgentCore AI (일괄)        (06-setup-agentcore.sh)"
 echo "      Step 6a: Runtime                  (06a-setup-agentcore-runtime.sh)"
-echo "      Step 6b: 7 Gateways              (06b-setup-agentcore-gateway.sh)"
+echo "      Step 6b: 8 Gateways              (06b-setup-agentcore-gateway.sh)"
 echo "      Step 6c: 19 Lambda + 19 Targets  (06c-setup-agentcore-tools.sh)"
 echo "      Step 6d: Code Interpreter        (06d-setup-agentcore-interpreter.sh)"
-echo "      Step 6e: 설정 적용 (ARN/URL)     (06e-setup-agentcore-config.sh)"
+echo "      Step 6e: 설정 적용 + 리빌드       (06e-setup-agentcore-config.sh)"
+echo "      Docker: 재빌드 + Runtime 업데이트  (6e 후 수동 실행)"
 echo "    Step 7:  CloudFront Lambda@Edge    (07-setup-cloudfront-auth.sh)"
 echo ""
 echo "  운영 스크립트 / Operations:"
@@ -115,10 +116,26 @@ echo "    - Next.js   (production server, port 3000)"
 echo "    - Powerpipe (CIS benchmark CLI)"
 echo ""
 
-# Auto-detect CloudFront URL
-CF_DOMAIN=$(aws cloudfront list-distributions \
-    --query "DistributionList.Items[?contains(Origins.Items[].DomainName, 'elb.amazonaws.com')].DomainName | [0]" \
-    --output text --region us-east-1 2>/dev/null || echo "")
+# Auto-detect CloudFront URL from CDK stack / CDK 스택에서 CloudFront URL 자동 감지
+CF_DOMAIN=""
+CF_STACK=$(aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+    --query "StackSummaries[?contains(StackName, 'AwsopsStack') || contains(StackName, 'awsops')].StackName | [0]" \
+    --output text --region "$REGION" 2>/dev/null || echo "None")
+if [ -n "$CF_STACK" ] && [ "$CF_STACK" != "None" ]; then
+    CF_DIST_ID=$(aws cloudformation list-stack-resources --stack-name "$CF_STACK" \
+        --query "StackResourceSummaries[?ResourceType=='AWS::CloudFront::Distribution'].PhysicalResourceId | [0]" \
+        --output text --region "$REGION" 2>/dev/null || echo "None")
+    if [ -n "$CF_DIST_ID" ] && [ "$CF_DIST_ID" != "None" ]; then
+        CF_DOMAIN=$(aws cloudfront get-distribution --id "$CF_DIST_ID" \
+            --query "Distribution.DomainName" --output text --region us-east-1 2>/dev/null || echo "")
+    fi
+fi
+# Fallback: ALB origin / 폴백: ALB origin
+if [ -z "$CF_DOMAIN" ] || [ "$CF_DOMAIN" = "None" ]; then
+    CF_DOMAIN=$(aws cloudfront list-distributions \
+        --query "DistributionList.Items[?contains(Origins.Items[].DomainName, 'elb.amazonaws.com')].DomainName | [0]" \
+        --output text --region us-east-1 2>/dev/null || echo "")
+fi
 if [ -n "$CF_DOMAIN" ] && [ "$CF_DOMAIN" != "None" ]; then
     echo -e "  CloudFront: ${GREEN}https://${CF_DOMAIN}/awsops${NC}"
     echo ""
