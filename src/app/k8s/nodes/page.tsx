@@ -44,6 +44,14 @@ function formatK8sMemory(mem: any): string {
   return `${Math.round(value * 1024)} KiB`;
 }
 
+// Parse K8s CPU values (e.g. "8" → 8, "7910m" → 7.91) / K8s CPU 파싱 (밀리코어 지원)
+function parseCpu(cpu: any): number {
+  if (!cpu) return 0;
+  const s = String(cpu).trim();
+  if (s.endsWith('m')) return parseFloat(s) / 1000;
+  return parseFloat(s) || 0;
+}
+
 export default function K8sNodesPage() {
   const [data, setData] = useState<DashboardData>({});
   const [_loading, setLoading] = useState(true);
@@ -80,7 +88,7 @@ export default function K8sNodesPage() {
   // CPU & Memory capacity bar data
   const cpuBarData = nodes.map((n: any) => ({
     name: n.name,
-    value: Number(n.capacity_cpu) || 0,
+    value: parseCpu(n.capacity_cpu),
   }));
 
   // Parse K8s memory to MiB for charts / 차트용 MiB 변환
@@ -103,7 +111,7 @@ export default function K8sNodesPage() {
   }));
 
   // Sum totals
-  const totalCpu = nodes.reduce((sum: number, n: any) => sum + (Number(n.capacity_cpu) || 0), 0);
+  const totalCpu = nodes.reduce((sum: number, n: any) => sum + parseCpu(n.capacity_cpu), 0);
   const totalMemMiB = nodes.reduce((sum: number, n: any) => sum + parseMiB(n.capacity_memory), 0);
   const memLabel = formatK8sMemory(`${totalMemMiB}Mi`);
 
@@ -130,15 +138,15 @@ export default function K8sNodesPage() {
             <h3 className="text-sm font-semibold text-white mb-4">CPU Allocation per Node</h3>
             <div className="space-y-3">
               {nodes.map((n: any) => {
-                const cap = Number(n.capacity_cpu) || 1;
-                const alloc = Number(n.allocatable_cpu) || 0;
-                const used = cap - alloc;
-                const pct = Math.round((used / cap) * 100);
+                const cap = parseCpu(n.capacity_cpu) || 1;
+                const alloc = parseCpu(n.allocatable_cpu) || 0;
+                const reserved = cap - alloc;
+                const pct = Math.round((reserved / cap) * 100);
                 return (
                   <div key={`cpu-${n.name}`}>
                     <div className="flex items-center justify-between text-xs mb-1">
                       <span className="text-gray-400 font-mono truncate max-w-[200px]">{n.name}</span>
-                      <span className="text-white font-mono">{used}/{cap} vCPU ({pct}%)</span>
+                      <span className="text-white font-mono">{reserved.toFixed(1)}/{cap} vCPU ({pct}%)</span>
                     </div>
                     <div className="h-4 bg-navy-900 rounded-full overflow-hidden">
                       <div
