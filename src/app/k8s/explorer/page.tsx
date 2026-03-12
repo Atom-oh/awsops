@@ -180,6 +180,7 @@ export default function K8sExplorerPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [showNodes, setShowNodes] = useState(false);
+  const [clusterFilter, setClusterFilter] = useState('');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchData = useCallback(async (bustCache = false) => {
@@ -335,13 +336,18 @@ export default function K8sExplorerPage() {
           <span className="text-gray-600">|</span>
           <span className="text-accent-cyan text-sm">Explorer</span>
           <span className="text-gray-600">|</span>
-          {(data.eksClusters?.rows || []).map((c: any) => (
-            <span key={c.cluster_name} className="text-xs font-mono bg-navy-800 border border-navy-600 px-2 py-0.5 rounded">
-              <span className="text-accent-green">{c.cluster_name}</span>
-              <span className="text-gray-600 ml-1">v{c.version}</span>
-              <span className="text-gray-600 ml-1">({c.vpc_id?.slice(-8)})</span>
-            </span>
-          ))}
+          {/* Cluster selector / 클러스터 선택 */}
+          {(data.eksClusters?.rows || []).length > 0 && (
+            <select value={clusterFilter} onChange={(e) => setClusterFilter(e.target.value)}
+              className="bg-navy-800 border border-navy-600 rounded px-2 py-0.5 text-xs text-accent-green font-mono focus:border-accent-cyan/50 focus:outline-none">
+              <option value="">All Clusters ({(data.eksClusters?.rows || []).length})</option>
+              {(data.eksClusters?.rows || []).map((c: any) => (
+                <option key={c.cluster_name} value={c.cluster_name}>
+                  {c.cluster_name} (v{c.version})
+                </option>
+              ))}
+            </select>
+          )}
           <span className="text-gray-500 text-xs">
             {filteredResources.length} resources
           </span>
