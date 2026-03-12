@@ -105,7 +105,7 @@ export default function Sidebar() {
         key={item.href}
         href={item.href}
         className={`
-          flex items-center gap-3 px-4 py-2 text-sm transition-colors relative
+          flex items-center gap-3 px-4 py-2.5 text-[15px] transition-colors relative
           ${
             active
               ? 'bg-navy-700 text-accent-cyan border-l-2 border-accent-cyan'
@@ -113,7 +113,7 @@ export default function Sidebar() {
           }
         `}
       >
-        <Icon size={16} />
+        <Icon size={18} />
         <span>{item.label}</span>
       </Link>
     );

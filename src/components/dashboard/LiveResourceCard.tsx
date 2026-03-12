@@ -30,7 +30,7 @@ export default function LiveResourceCard({
   const colors = colorMap[color] ?? colorMap.cyan;
 
   return (
-    <div className="bg-navy-800 rounded-lg border border-navy-600 p-4">
+    <div className="bg-navy-800 rounded-lg border border-navy-600 p-4 h-full flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
@@ -43,7 +43,7 @@ export default function LiveResourceCard({
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 gap-2 mb-3">
+      <div className="grid grid-cols-2 gap-2 mb-3 flex-1">
         {stats.map((stat) => (
           <div key={stat.label}>
             <p className="text-xs text-gray-500 uppercase tracking-wider">{stat.label}</p>
