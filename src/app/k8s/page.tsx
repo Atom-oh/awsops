@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Filter, X as XIcon } from 'lucide-react';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import StatusBadge from '@/components/dashboard/StatusBadge';
@@ -42,6 +43,9 @@ const NODE_LIST_QUERY = `
 export default function K8sOverviewPage() {
   const [data, setData] = useState<DashboardData>({});
   const [loading, setLoading] = useState(true);
+  const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
+  const [selectedVpcs, setSelectedVpcs] = useState<Set<string>>(new Set());
+  const [showFilter, setShowFilter] = useState(false);
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -58,6 +62,7 @@ export default function K8sOverviewPage() {
             warningEvents: k8sQ.warningEvents,
             namespaceSummary: k8sQ.namespaceSummary,
             nodeList: NODE_LIST_QUERY,
+            eksClusters: k8sQ.eksClusterList,
           },
         }),
       });
@@ -81,6 +86,44 @@ export default function K8sOverviewPage() {
   const events = get('warningEvents');
   const namespaces = get('namespaceSummary');
   const nodes = get('nodeList');
+  const eksClusters = get('eksClusters');
+
+  // Extract unique clusters and VPCs / 클러스터 및 VPC 목록 추출
+  const clusterNames = useMemo(() => eksClusters.map((c: any) => String(c.cluster_name)).sort(), [eksClusters]);
+  const vpcList = useMemo(() => {
+    const vpcs = new Set<string>();
+    eksClusters.forEach((c: any) => { if (c.vpc_id) vpcs.add(String(c.vpc_id)); });
+    return Array.from(vpcs).sort();
+  }, [eksClusters]);
+
+  // Filter clusters / 클러스터 필터링
+  const filteredClusters = useMemo(() => {
+    if (selectedClusters.size === 0 && selectedVpcs.size === 0) return eksClusters;
+    return eksClusters.filter((c: any) => {
+      const matchCluster = selectedClusters.size === 0 || selectedClusters.has(String(c.cluster_name));
+      const matchVpc = selectedVpcs.size === 0 || selectedVpcs.has(String(c.vpc_id));
+      return matchCluster && matchVpc;
+    });
+  }, [eksClusters, selectedClusters, selectedVpcs]);
+
+  const hasFilters = selectedClusters.size > 0 || selectedVpcs.size > 0;
+
+  // Toggle helpers / 토글 헬퍼
+  const toggleCluster = (name: string) => {
+    setSelectedClusters(prev => {
+      const next = new Set(prev);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
+  };
+  const toggleVpc = (vpc: string) => {
+    setSelectedVpcs(prev => {
+      const next = new Set(prev);
+      next.has(vpc) ? next.delete(vpc) : next.add(vpc);
+      return next;
+    });
+  };
+  const clearFilters = () => { setSelectedClusters(new Set()); setSelectedVpcs(new Set()); };
 
   // Pod status pie data
   const podStatusData = [
@@ -105,6 +148,102 @@ export default function K8sOverviewPage() {
       />
 
       <main className="p-6 space-y-6">
+        {/* EKS Cluster / VPC Filter / EKS 클러스터 및 VPC 필터 */}
+        {eksClusters.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowFilter(!showFilter)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                  showFilter || hasFilters
+                    ? 'bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/30'
+                    : 'bg-navy-800 text-gray-400 border border-navy-600 hover:text-white'
+                }`}
+              >
+                <Filter size={14} />
+                Cluster / VPC Filter
+                {hasFilters && (
+                  <span className="bg-accent-cyan/20 text-accent-cyan text-xs px-1.5 py-0.5 rounded-full">
+                    {selectedClusters.size + selectedVpcs.size}
+                  </span>
+                )}
+              </button>
+              {hasFilters && (
+                <button onClick={clearFilters} className="text-xs text-gray-500 hover:text-white transition-colors">
+                  Clear all
+                </button>
+              )}
+              <span className="text-xs text-gray-500 ml-auto">
+                {filteredClusters.length} / {eksClusters.length} clusters
+              </span>
+            </div>
+
+            {showFilter && (
+              <div className="bg-navy-800 border border-navy-600 rounded-lg p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Cluster select / 클러스터 선택 */}
+                <div>
+                  <p className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-2">EKS Clusters</p>
+                  <div className="flex flex-wrap gap-2">
+                    {clusterNames.map((name: string) => (
+                      <button
+                        key={name}
+                        onClick={() => toggleCluster(name)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors ${
+                          selectedClusters.has(name)
+                            ? 'bg-accent-cyan/20 text-accent-cyan border border-accent-cyan/40'
+                            : 'bg-navy-900 text-gray-400 border border-navy-700 hover:text-white hover:border-navy-500'
+                        }`}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* VPC select / VPC 선택 */}
+                <div>
+                  <p className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-2">VPCs</p>
+                  <div className="flex flex-wrap gap-2">
+                    {vpcList.map((vpc: string) => {
+                      const clusterCount = eksClusters.filter((c: any) => String(c.vpc_id) === vpc).length;
+                      return (
+                        <button
+                          key={vpc}
+                          onClick={() => toggleVpc(vpc)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors ${
+                            selectedVpcs.has(vpc)
+                              ? 'bg-accent-purple/20 text-accent-purple border border-accent-purple/40'
+                              : 'bg-navy-900 text-gray-400 border border-navy-700 hover:text-white hover:border-navy-500'
+                          }`}
+                        >
+                          {vpc} <span className="text-gray-600">({clusterCount})</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* EKS Cluster Cards / EKS 클러스터 카드 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {filteredClusters.map((c: any) => (
+                <div key={c.cluster_name} className="bg-navy-800 border border-navy-600 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-white font-mono text-sm font-semibold">{c.cluster_name}</span>
+                    <StatusBadge status={c.status || 'UNKNOWN'} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div><span className="text-gray-500">Version: </span><span className="text-gray-300 font-mono">{c.version}</span></div>
+                    <div><span className="text-gray-500">VPC: </span><span className="text-accent-purple font-mono">{c.vpc_id}</span></div>
+                    <div><span className="text-gray-500">Platform: </span><span className="text-gray-300 font-mono">{c.platform_version || '--'}</span></div>
+                    <div><span className="text-gray-500">Region: </span><span className="text-gray-300 font-mono">{c.region}</span></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatsCard

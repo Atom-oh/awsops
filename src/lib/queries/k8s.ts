@@ -1,4 +1,21 @@
 export const queries = {
+  // EKS cluster list with VPC info / EKS 클러스터 목록 + VPC 정보
+  eksClusterList: `
+    SELECT
+      name AS cluster_name,
+      status,
+      version,
+      endpoint,
+      vpc_config ->> 'VpcId' AS vpc_id,
+      platform_version,
+      created_at,
+      region
+    FROM
+      aws_eks_cluster
+    ORDER BY
+      name
+  `,
+
   nodeSummary: `
     SELECT
       COUNT(*) AS total_nodes,
