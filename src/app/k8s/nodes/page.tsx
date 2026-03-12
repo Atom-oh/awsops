@@ -65,6 +65,20 @@ function parseCpu(cpu: any): number {
   return parseFloat(s) || 0;
 }
 
+// Parse K8s memory to MiB (e.g. "32986188Ki" → 32213) / K8s 메모리 MiB 변환
+function parseMiB(mem: any): number {
+  if (!mem) return 0;
+  const s = String(mem);
+  const match = s.match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti)?$/i);
+  if (!match) return parseInt(s) || 0;
+  let v = parseFloat(match[1]);
+  const u = (match[2] || '').toLowerCase();
+  if (u === 'ki') v = v / 1024;
+  else if (u === 'gi') v = v * 1024;
+  else if (u === 'ti') v = v * 1024 * 1024;
+  return Math.round(v);
+}
+
 export default function K8sNodesPage() {
   const [data, setData] = useState<DashboardData>({});
   const [_loading, setLoading] = useState(true);
@@ -118,20 +132,6 @@ export default function K8sNodesPage() {
     name: n.name,
     value: parseCpu(n.capacity_cpu),
   }));
-
-  // Parse K8s memory to MiB for charts / 차트용 MiB 변환
-  const parseMiB = (mem: any): number => {
-    if (!mem) return 0;
-    const s = String(mem);
-    const match = s.match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti)?$/i);
-    if (!match) return parseInt(s) || 0;
-    let v = parseFloat(match[1]);
-    const u = (match[2] || '').toLowerCase();
-    if (u === 'ki') v = v / 1024;
-    else if (u === 'gi') v = v * 1024;
-    else if (u === 'ti') v = v * 1024 * 1024;
-    return Math.round(v);
-  };
 
   const memBarData = nodes.map((n: any) => ({
     name: n.name,
