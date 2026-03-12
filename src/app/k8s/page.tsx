@@ -40,6 +40,40 @@ const NODE_LIST_QUERY = `
   FROM kubernetes_node
 `;
 
+const POD_REQUESTS_QUERY = `
+  SELECT
+    p.node_name,
+    c->'resources'->'requests'->>'cpu' AS cpu_req,
+    c->'resources'->'requests'->>'memory' AS mem_req
+  FROM
+    kubernetes_pod p,
+    jsonb_array_elements(p.containers) AS c
+  WHERE
+    p.phase = 'Running' AND p.node_name IS NOT NULL
+`;
+
+// Parse K8s CPU (e.g. "8" → 8, "7910m" → 7.91) / K8s CPU 파싱
+function parseCpu(cpu: any): number {
+  if (!cpu) return 0;
+  const s = String(cpu).trim();
+  if (s.endsWith('m')) return parseFloat(s) / 1000;
+  return parseFloat(s) || 0;
+}
+
+// Parse K8s memory to MiB / K8s 메모리 MiB 변환
+function parseMiB(mem: any): number {
+  if (!mem) return 0;
+  const s = String(mem);
+  const match = s.match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti)?$/i);
+  if (!match) return parseInt(s) || 0;
+  let v = parseFloat(match[1]);
+  const u = (match[2] || '').toLowerCase();
+  if (u === 'ki') v = v / 1024;
+  else if (u === 'gi') v = v * 1024;
+  else if (u === 'ti') v = v * 1024 * 1024;
+  return Math.round(v);
+}
+
 export default function K8sOverviewPage() {
   const [data, setData] = useState<DashboardData>({});
   const [loading, setLoading] = useState(true);
@@ -62,6 +96,7 @@ export default function K8sOverviewPage() {
             warningEvents: k8sQ.warningEvents,
             namespaceSummary: k8sQ.namespaceSummary,
             nodeList: NODE_LIST_QUERY,
+            podRequests: POD_REQUESTS_QUERY,
             eksClusters: k8sQ.eksClusterList,
           },
         }),
@@ -86,7 +121,19 @@ export default function K8sOverviewPage() {
   const events = get('warningEvents');
   const namespaces = get('namespaceSummary');
   const nodes = get('nodeList');
+  const podReqRows = get('podRequests');
   const eksClusters = get('eksClusters');
+
+  // Aggregate pod requests per node / 노드별 Pod 리소스 요청 집계
+  const reqMap: Record<string, { cpuReq: number; memReqMiB: number; podCount: number }> = {};
+  podReqRows.forEach((r: any) => {
+    const node = String(r.node_name || '');
+    if (!node) return;
+    if (!reqMap[node]) reqMap[node] = { cpuReq: 0, memReqMiB: 0, podCount: 0 };
+    reqMap[node].podCount += 1;
+    if (r.cpu_req) reqMap[node].cpuReq += parseCpu(r.cpu_req);
+    if (r.mem_req) reqMap[node].memReqMiB += parseMiB(r.mem_req);
+  });
 
   // Extract unique clusters and VPCs / 클러스터 및 VPC 목록 추출
   const clusterNames = useMemo(() => eksClusters.map((c: any) => String(c.cluster_name)).sort(), [eksClusters]);
@@ -279,41 +326,53 @@ export default function K8sOverviewPage() {
         <div>
           <h2 className="text-lg font-semibold text-white mb-3">Nodes</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {nodes.map((node: any) => (
-              <div
-                key={node.name}
-                className="bg-navy-800 border border-navy-600 rounded-lg p-4"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Server size={16} className="text-accent-cyan" />
-                    <span className="text-white font-mono text-sm">{node.name}</span>
+            {nodes.map((node: any) => {
+              const capCpu = parseCpu(node.capacity_cpu) || 1;
+              const capMiB = parseMiB(node.capacity_memory) || 1;
+              const req = reqMap[node.name] || { cpuReq: 0, memReqMiB: 0, podCount: 0 };
+              const cpuPct = Math.min(Math.round((req.cpuReq / capCpu) * 100), 100);
+              const memPct = Math.min(Math.round((req.memReqMiB / capMiB) * 100), 100);
+              return (
+                <div
+                  key={node.name}
+                  className="bg-navy-800 border border-navy-600 rounded-lg p-4"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Server size={16} className="text-accent-cyan" />
+                      <span className="text-white font-mono text-sm">{node.name.split('.')[0]}</span>
+                    </div>
+                    <StatusBadge status={node.status ?? 'Unknown'} />
                   </div>
-                  <StatusBadge status={node.status ?? 'Unknown'} />
+
+                  {/* CPU Usage Bar / CPU 사용량 바 */}
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="text-gray-500">CPU</span>
+                      <span className="text-white font-mono">{req.cpuReq.toFixed(1)} / {capCpu} vCPU <span className={cpuPct >= 80 ? 'text-accent-red' : cpuPct >= 50 ? 'text-accent-orange' : 'text-accent-cyan'}>({cpuPct}%)</span></span>
+                    </div>
+                    <div className="h-3 bg-navy-900 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${cpuPct >= 80 ? 'bg-accent-red' : cpuPct >= 50 ? 'bg-accent-orange' : 'bg-accent-cyan'}`} style={{ width: `${cpuPct}%` }} />
+                    </div>
+                  </div>
+
+                  {/* Memory Usage Bar / 메모리 사용량 바 */}
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="text-gray-500">Memory</span>
+                      <span className="text-white font-mono">{formatK8sMemory(`${req.memReqMiB}Mi`)} / {formatK8sMemory(node.capacity_memory)} <span className={memPct >= 80 ? 'text-accent-red' : memPct >= 50 ? 'text-accent-orange' : 'text-accent-purple'}>({memPct}%)</span></span>
+                    </div>
+                    <div className="h-3 bg-navy-900 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${memPct >= 80 ? 'bg-accent-red' : memPct >= 50 ? 'bg-accent-orange' : 'bg-accent-purple'}`} style={{ width: `${memPct}%` }} />
+                    </div>
+                  </div>
+
+                  <div className="text-[10px] text-gray-500">
+                    {req.podCount} pods {node.pod_cidr && `· CIDR ${node.pod_cidr}`}
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <p className="text-gray-500 mb-1">CPU Capacity</p>
-                    <p className="text-white font-mono">{node.capacity_cpu ?? '-'} vCPU</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500 mb-1">Memory Capacity</p>
-                    <p className="text-white font-mono">{formatK8sMemory(node.capacity_memory)}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500 mb-1">Allocatable CPU</p>
-                    <p className="text-white font-mono">{node.allocatable_cpu ?? '-'}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500 mb-1">Allocatable Mem</p>
-                    <p className="text-white font-mono">{formatK8sMemory(node.allocatable_memory)}</p>
-                  </div>
-                </div>
-                {node.pod_cidr && (
-                  <p className="text-gray-500 text-xs mt-2">CIDR: <span className="text-gray-400 font-mono">{node.pod_cidr}</span></p>
-                )}
-              </div>
-            ))}
+              );
+            })}
             {nodes.length === 0 && !loading && (
               <div className="col-span-full text-center text-gray-500 py-8">No nodes found</div>
             )}
