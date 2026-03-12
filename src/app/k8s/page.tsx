@@ -10,6 +10,23 @@ import DataTable from '@/components/table/DataTable';
 import { Box, Rocket, Network, Server, AlertTriangle } from 'lucide-react';
 import { queries as k8sQ } from '@/lib/queries/k8s';
 
+// Format K8s memory values (e.g. "32986188Ki" → "31.5 GiB") / K8s 메모리 가독성 변환
+function formatK8sMemory(mem: any): string {
+  if (!mem) return '--';
+  const s = String(mem);
+  const match = s.match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti|K|M|G|T|k|m|g|t)?$/);
+  if (!match) return s;
+  let value = parseFloat(match[1]);
+  const unit = (match[2] || '').toLowerCase();
+  if (unit === 'ki' || unit === 'k') value = value / 1024;
+  else if (unit === 'gi' || unit === 'g') value = value * 1024;
+  else if (unit === 'ti' || unit === 't') value = value * 1024 * 1024;
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} TiB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} GiB`;
+  if (value >= 1) return `${Math.round(value)} MiB`;
+  return `${Math.round(value * 1024)} KiB`;
+}
+
 interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
 }
@@ -142,7 +159,7 @@ export default function K8sOverviewPage() {
                   </div>
                   <div>
                     <p className="text-gray-500 mb-1">Memory Capacity</p>
-                    <p className="text-white font-mono">{node.capacity_memory ?? '-'}</p>
+                    <p className="text-white font-mono">{formatK8sMemory(node.capacity_memory)}</p>
                   </div>
                   <div>
                     <p className="text-gray-500 mb-1">Allocatable CPU</p>
@@ -150,7 +167,7 @@ export default function K8sOverviewPage() {
                   </div>
                   <div>
                     <p className="text-gray-500 mb-1">Allocatable Mem</p>
-                    <p className="text-white font-mono">{node.allocatable_memory ?? '-'}</p>
+                    <p className="text-white font-mono">{formatK8sMemory(node.allocatable_memory)}</p>
                   </div>
                 </div>
                 {node.pod_cidr && (

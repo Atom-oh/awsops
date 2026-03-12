@@ -24,6 +24,26 @@ const NODE_DETAIL_QUERY = `
   ORDER BY name
 `;
 
+// Format K8s memory values (e.g. "32986188Ki" → "31.5 GiB") / K8s 메모리 가독성 변환
+function formatK8sMemory(mem: any): string {
+  if (!mem) return '--';
+  const s = String(mem);
+  const match = s.match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti|K|M|G|T|k|m|g|t)?$/);
+  if (!match) return s;
+  let value = parseFloat(match[1]);
+  const unit = (match[2] || '').toLowerCase();
+  // Convert to MiB / MiB로 변환
+  if (unit === 'ki' || unit === 'k') value = value / 1024;
+  else if (unit === 'mi' || unit === 'm' || unit === '') value = value;
+  else if (unit === 'gi' || unit === 'g') value = value * 1024;
+  else if (unit === 'ti' || unit === 't') value = value * 1024 * 1024;
+  // Format to human readable / 사람이 읽기 쉬운 형식으로 변환
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} TiB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} GiB`;
+  if (value >= 1) return `${Math.round(value)} MiB`;
+  return `${Math.round(value * 1024)} KiB`;
+}
+
 export default function K8sNodesPage() {
   const [data, setData] = useState<DashboardData>({});
   const [_loading, setLoading] = useState(true);
@@ -63,18 +83,29 @@ export default function K8sNodesPage() {
     value: Number(n.capacity_cpu) || 0,
   }));
 
+  // Parse K8s memory to MiB for charts / 차트용 MiB 변환
+  const parseMiB = (mem: any): number => {
+    if (!mem) return 0;
+    const s = String(mem);
+    const match = s.match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti)?$/i);
+    if (!match) return parseInt(s) || 0;
+    let v = parseFloat(match[1]);
+    const u = (match[2] || '').toLowerCase();
+    if (u === 'ki') v = v / 1024;
+    else if (u === 'gi') v = v * 1024;
+    else if (u === 'ti') v = v * 1024 * 1024;
+    return Math.round(v);
+  };
+
   const memBarData = nodes.map((n: any) => ({
     name: n.name,
-    value: parseInt(String(n.capacity_memory)) || 0,
+    value: Math.round(parseMiB(n.capacity_memory) / 1024), // GiB for chart
   }));
 
   // Sum totals
   const totalCpu = nodes.reduce((sum: number, n: any) => sum + (Number(n.capacity_cpu) || 0), 0);
-  const totalMem = nodes.reduce((sum: number, n: any) => {
-    const mem = String(n.capacity_memory || '');
-    return sum + (parseInt(mem) || 0);
-  }, 0);
-  const memLabel = totalMem > 1024 ? `${(totalMem / 1024).toFixed(1)} Gi` : `${totalMem} Mi`;
+  const totalMemMiB = nodes.reduce((sum: number, n: any) => sum + parseMiB(n.capacity_memory), 0);
+  const memLabel = formatK8sMemory(`${totalMemMiB}Mi`);
 
   return (
     <div className="min-h-screen">
@@ -96,7 +127,7 @@ export default function K8sNodesPage() {
         {/* Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <BarChartCard title="CPU Capacity per Node" data={cpuBarData} color="#00d4ff" />
-          <BarChartCard title="Memory Capacity per Node" data={memBarData} color="#a855f7" />
+          <BarChartCard title="Memory Capacity per Node (GiB)" data={memBarData} color="#a855f7" />
         </div>
 
         {/* Table */}
@@ -109,9 +140,9 @@ export default function K8sNodesPage() {
               render: (value: string) => <StatusBadge status={value ?? 'Unknown'} />,
             },
             { key: 'capacity_cpu', label: 'CPU Capacity' },
-            { key: 'capacity_memory', label: 'Memory Capacity' },
+            { key: 'capacity_memory', label: 'Memory Capacity', render: (v: any) => formatK8sMemory(v) },
             { key: 'allocatable_cpu', label: 'Allocatable CPU' },
-            { key: 'allocatable_memory', label: 'Allocatable Memory' },
+            { key: 'allocatable_memory', label: 'Allocatable Memory', render: (v: any) => formatK8sMemory(v) },
             { key: 'creation_timestamp', label: 'Created' },
           ]}
           data={nodes}
