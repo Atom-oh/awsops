@@ -22,6 +22,7 @@ export default function VPCPage() {
   const [tgwRoutes, setTgwRoutes] = useState<Record<string, any[]>>({});
   const [vpcMap, setVpcMap] = useState<{ subnets: any[]; routeTables: any[]; vpcInfo: any } | null>(null);
   const [showResourceMap, setShowResourceMap] = useState(false);
+  const [mapSelection, setMapSelection] = useState<{ type: string; id: string } | null>(null);
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -705,9 +706,17 @@ export default function VPCPage() {
                 <h1 className="text-xl font-bold text-white font-mono">
                   {vpcMap?.vpcInfo?.vpc_id} / {vpcMap?.vpcInfo?.name || 'VPC'}
                 </h1>
-                <p className="text-sm text-gray-400 mt-1">Resource Map</p>
+                <div className="flex items-center gap-3 mt-1">
+                  <p className="text-sm text-gray-400">Resource Map</p>
+                  {mapSelection && (
+                    <button onClick={() => setMapSelection(null)}
+                      className="text-[10px] px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/30">
+                      Clear selection
+                    </button>
+                  )}
+                </div>
               </div>
-              <button onClick={() => setShowResourceMap(false)}
+              <button onClick={() => { setShowResourceMap(false); setMapSelection(null); }}
                 className="px-4 py-2 rounded-lg bg-navy-800 border border-navy-600 text-gray-400 hover:text-white transition-colors">
                 <X size={18} />
               </button>
@@ -752,6 +761,68 @@ export default function VPCPage() {
                 azGroups[az].push(s);
               });
 
+              // Build reverse maps for highlighting / 하이라이트용 역매핑
+              const rtToSubnets: Record<string, string[]> = {};
+              Object.entries(subnetToRt).forEach(([sid, rtId]) => {
+                if (!rtToSubnets[rtId]) rtToSubnets[rtId] = [];
+                rtToSubnets[rtId].push(sid);
+              });
+              // RT → target IDs
+              const rtToTargets: Record<string, Set<string>> = {};
+              vpcMap.routeTables.forEach((rt: any) => {
+                const routes = parseArray(rt.routes);
+                const targets = new Set<string>();
+                routes.forEach((r: any) => {
+                  const gw = r.GatewayId || r.gateway_id;
+                  const nat = r.NatGatewayId || r.nat_gateway_id;
+                  const tgwR = r.TransitGatewayId || r.transit_gateway_id;
+                  const peer = r.VpcPeeringConnectionId || r.vpc_peering_connection_id;
+                  if (gw && gw !== 'local') targets.add(gw);
+                  if (nat) targets.add(nat);
+                  if (tgwR) targets.add(tgwR);
+                  if (peer) targets.add(peer);
+                });
+                rtToTargets[rt.route_table_id] = targets;
+              });
+
+              // Determine highlighted IDs based on selection / 선택에 따른 하이라이트 ID
+              const hlSubnets = new Set<string>();
+              const hlRts = new Set<string>();
+              const hlTargets = new Set<string>();
+              if (mapSelection) {
+                if (mapSelection.type === 'subnet') {
+                  hlSubnets.add(mapSelection.id);
+                  const rtId = subnetToRt[mapSelection.id] || mainRtId;
+                  if (rtId) { hlRts.add(rtId); rtToTargets[rtId]?.forEach(t => hlTargets.add(t)); }
+                } else if (mapSelection.type === 'rt') {
+                  hlRts.add(mapSelection.id);
+                  (rtToSubnets[mapSelection.id] || []).forEach(s => hlSubnets.add(s));
+                  // If main RT, add subnets without explicit association
+                  if (mapSelection.id === mainRtId) {
+                    vpcMap.subnets.forEach((s: any) => { if (!subnetToRt[s.subnet_id]) hlSubnets.add(s.subnet_id); });
+                  }
+                  rtToTargets[mapSelection.id]?.forEach(t => hlTargets.add(t));
+                } else if (mapSelection.type === 'target') {
+                  hlTargets.add(mapSelection.id);
+                  Object.entries(rtToTargets).forEach(([rtId, targets]) => {
+                    if (targets.has(mapSelection.id)) {
+                      hlRts.add(rtId);
+                      (rtToSubnets[rtId] || []).forEach(s => hlSubnets.add(s));
+                      if (rtId === mainRtId) vpcMap.subnets.forEach((s: any) => { if (!subnetToRt[s.subnet_id]) hlSubnets.add(s.subnet_id); });
+                    }
+                  });
+                }
+              }
+              const hasHl = mapSelection !== null;
+              const isHl = (type: string, id: string) => {
+                if (!hasHl) return false;
+                if (type === 'subnet') return hlSubnets.has(id);
+                if (type === 'rt') return hlRts.has(id);
+                if (type === 'target') return hlTargets.has(id);
+                return false;
+              };
+              const dimmed = (type: string, id: string) => hasHl && !isHl(type, id);
+
               const targetColor = (type: string) => {
                 if (type === 'IGW') return 'border-accent-green text-accent-green';
                 if (type === 'NAT GW') return 'border-accent-orange text-accent-orange';
@@ -785,7 +856,12 @@ export default function VPCPage() {
                               const rtId = subnetToRt[s.subnet_id] || mainRtId;
                               return (
                                 <div key={s.subnet_id}
-                                  className={`rounded-lg border p-2 text-xs font-mono ${isPublic ? 'border-accent-green/40 bg-accent-green/5' : 'border-navy-600 bg-navy-800'}`}>
+                                  onClick={() => setMapSelection(mapSelection?.id === s.subnet_id ? null : { type: 'subnet', id: s.subnet_id })}
+                                  className={`rounded-lg border p-2 text-xs font-mono cursor-pointer transition-all ${
+                                    isHl('subnet', s.subnet_id) ? 'border-accent-cyan ring-2 ring-accent-cyan/50 bg-accent-cyan/10' :
+                                    dimmed('subnet', s.subnet_id) ? 'border-navy-700 bg-navy-900/50 opacity-40' :
+                                    isPublic ? 'border-accent-green/40 bg-accent-green/5 hover:border-accent-green' : 'border-navy-600 bg-navy-800 hover:border-navy-400'
+                                  }`}>
                                   <div className="flex items-center gap-1.5">
                                     <span className={`w-5 h-5 rounded flex items-center justify-center text-[9px] font-bold ${isPublic ? 'bg-accent-green/20 text-accent-green' : 'bg-accent-cyan/20 text-accent-cyan'}`}>
                                       {az.slice(-1).toUpperCase()}
@@ -811,7 +887,13 @@ export default function VPCPage() {
                         const routes = parseArray(rt.routes);
                         const isMain = rt.route_table_id === mainRtId;
                         return (
-                          <div key={rt.route_table_id} className={`rounded-lg border p-2 text-xs font-mono ${isMain ? 'border-accent-orange/40 bg-accent-orange/5' : 'border-navy-600 bg-navy-800'}`}>
+                          <div key={rt.route_table_id}
+                            onClick={() => setMapSelection(mapSelection?.id === rt.route_table_id ? null : { type: 'rt', id: rt.route_table_id })}
+                            className={`rounded-lg border p-2 text-xs font-mono cursor-pointer transition-all ${
+                              isHl('rt', rt.route_table_id) ? 'border-accent-cyan ring-2 ring-accent-cyan/50 bg-accent-cyan/10' :
+                              dimmed('rt', rt.route_table_id) ? 'border-navy-700 bg-navy-900/50 opacity-40' :
+                              isMain ? 'border-accent-orange/40 bg-accent-orange/5 hover:border-accent-orange' : 'border-navy-600 bg-navy-800 hover:border-navy-400'
+                            }`}>
                             <div className="flex items-center justify-between">
                               <span className="text-white">{rt.name || rt.route_table_id}</span>
                               {isMain && <span className="text-[9px] bg-accent-orange/20 text-accent-orange px-1.5 py-0.5 rounded">main</span>}
@@ -852,7 +934,13 @@ export default function VPCPage() {
                       {Object.values(networkTargets).length === 0 ? (
                         <p className="text-gray-500 text-xs">No external connections</p>
                       ) : Object.values(networkTargets).map((t) => (
-                        <div key={t.id} className={`rounded-lg border-2 p-3 text-xs font-mono ${targetColor(t.type)}`}>
+                        <div key={t.id}
+                          onClick={() => setMapSelection(mapSelection?.id === t.id ? null : { type: 'target', id: t.id })}
+                          className={`rounded-lg border-2 p-3 text-xs font-mono cursor-pointer transition-all ${
+                            isHl('target', t.id) ? 'border-accent-cyan ring-2 ring-accent-cyan/50 bg-accent-cyan/10' :
+                            dimmed('target', t.id) ? 'border-navy-700 bg-navy-900/50 opacity-40' :
+                            targetColor(t.type) + ' hover:opacity-80'
+                          }`}>
                           <p className="font-bold">{t.type}</p>
                           <p className="text-gray-400 mt-0.5">{t.id}</p>
                         </div>
