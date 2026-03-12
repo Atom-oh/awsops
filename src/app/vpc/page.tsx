@@ -81,25 +81,16 @@ export default function VPCPage() {
     } catch {} finally { setDetailLoading(false); }
   };
 
-  // Open VPC Resource Map / VPC 리소스 맵 열기
-  const openResourceMap = async (vpcId: string, cidrBlock: string, vpcName?: string) => {
+  // Open VPC Resource Map — instant from cached data / VPC 리소스 맵 열기 — 캐시 데이터에서 즉시
+  const openResourceMap = (vpcId: string, cidrBlock: string, vpcName?: string) => {
+    const vpcSubnets = subnets.filter((s: any) => String(s.vpc_id) === vpcId);
+    const vpcRts = rtbs.filter((rt: any) => String(rt.vpc_id) === vpcId);
+    setVpcMap({
+      subnets: vpcSubnets,
+      routeTables: vpcRts,
+      vpcInfo: { vpc_id: vpcId, cidr_block: cidrBlock, name: vpcName },
+    });
     setShowResourceMap(true);
-    setVpcMap(null);
-    try {
-      const subnetSql = vpcQ.vpcSubnets.replace('{vpc_id}', vpcId);
-      const rtSql = vpcQ.vpcRouteTables.replace('{vpc_id}', vpcId);
-      const res = await fetch('/awsops/api/steampipe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { subnets: subnetSql, routeTables: rtSql } }),
-      });
-      const result = await res.json();
-      setVpcMap({
-        subnets: result.subnets?.rows || [],
-        routeTables: result.routeTables?.rows || [],
-        vpcInfo: { vpc_id: vpcId, cidr_block: cidrBlock, name: vpcName },
-      });
-    } catch {}
   };
 
   // Fetch TGW detail with route tables + routes / TGW 상세 + 라우트 테이블 + 라우트

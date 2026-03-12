@@ -176,7 +176,9 @@ export const queries = {
       route_table_id, vpc_id, owner_id, region,
       tags ->> 'Name' AS name,
       jsonb_array_length(associations) AS association_count,
-      jsonb_array_length(routes) AS route_count
+      jsonb_array_length(routes) AS route_count,
+      associations::text AS associations,
+      routes::text AS routes
     FROM aws_vpc_route_table
     ORDER BY vpc_id, route_table_id
   `,
