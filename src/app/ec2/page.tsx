@@ -7,7 +7,7 @@ import StatusBadge from '@/components/dashboard/StatusBadge';
 import PieChartCard from '@/components/charts/PieChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
-import { Server, X, Cpu, HardDrive, Network, Shield, Tag } from 'lucide-react';
+import { Server, X, Cpu, HardDrive, Network, Shield, Tag, Search } from 'lucide-react';
 import { queries as ec2Q } from '@/lib/queries/ec2';
 
 interface PageData {
@@ -20,6 +20,9 @@ export default function EC2Page() {
   const [selected, setSelected] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [vpcFilter, setVpcFilter] = useState('');
+  const [stateFilter, setStateFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [searchText, setSearchText] = useState('');
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -71,16 +74,40 @@ export default function EC2Page() {
   const stopped = total - running;
   const totalVcpus = Number(summary?.total_vcpus) || 0;
 
-  // VPC filter / VPC 필터
+  // Filter options / 필터 옵션 목록
   const vpcList = useMemo(() => {
     const vpcs = new Set<string>();
     list.forEach((r: any) => { if (r.vpc_id) vpcs.add(String(r.vpc_id)); });
     return Array.from(vpcs).sort();
   }, [list]);
+  const stateList = useMemo(() => {
+    const states = new Set<string>();
+    list.forEach((r: any) => { if (r.instance_state) states.add(String(r.instance_state)); });
+    return Array.from(states).sort();
+  }, [list]);
+  const typeList = useMemo(() => {
+    const types = new Set<string>();
+    list.forEach((r: any) => { if (r.instance_type) types.add(String(r.instance_type)); });
+    return Array.from(types).sort();
+  }, [list]);
+
+  // Combined filter / 복합 필터
   const filteredList = useMemo(() => {
-    if (!vpcFilter) return list;
-    return list.filter((r: any) => String(r.vpc_id) === vpcFilter);
-  }, [list, vpcFilter]);
+    let filtered = list;
+    if (vpcFilter) filtered = filtered.filter((r: any) => String(r.vpc_id) === vpcFilter);
+    if (stateFilter) filtered = filtered.filter((r: any) => String(r.instance_state) === stateFilter);
+    if (typeFilter) filtered = filtered.filter((r: any) => String(r.instance_type) === typeFilter);
+    if (searchText) {
+      const lower = searchText.toLowerCase();
+      filtered = filtered.filter((r: any) =>
+        Object.values(r).some(v => String(v ?? '').toLowerCase().includes(lower))
+      );
+    }
+    return filtered;
+  }, [list, vpcFilter, stateFilter, typeFilter, searchText]);
+
+  const hasFilters = vpcFilter || stateFilter || typeFilter || searchText;
+  const clearAllFilters = () => { setVpcFilter(''); setStateFilter(''); setTypeFilter(''); setSearchText(''); };
 
   const parseSGs = (sgs: any) => {
     if (!sgs) return [];
@@ -122,27 +149,39 @@ export default function EC2Page() {
         <BarChartCard title="Instance Status" data={statusData} color="#00d4ff" />
       </div>
 
-      {/* VPC Filter / VPC 필터 */}
-      <div className="flex items-center gap-3">
-        <select
-          value={vpcFilter}
-          onChange={(e) => setVpcFilter(e.target.value)}
-          className="bg-navy-800 border border-navy-600 rounded-lg px-4 py-2 text-sm text-gray-200 focus:ring-accent-cyan focus:border-accent-cyan"
-        >
-          <option value="">All VPCs ({list.length})</option>
-          {vpcList.map((vpc) => (
-            <option key={vpc} value={vpc}>
-              {vpc} ({list.filter((r: any) => String(r.vpc_id) === vpc).length})
-            </option>
-          ))}
+      {/* Filters / 필터 */}
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Search / 검색 */}
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
+          <input type="text" value={searchText} onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Search (ID, Name, IP...)"
+            className="bg-navy-800 border border-navy-600 rounded-lg pl-9 pr-3 py-2 text-sm text-gray-200 placeholder-gray-600 w-56 focus:ring-accent-cyan focus:border-accent-cyan focus:outline-none" />
+        </div>
+        {/* State / 상태 */}
+        <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}
+          className="bg-navy-800 border border-navy-600 rounded-lg px-3 py-2 text-sm text-gray-200 focus:ring-accent-cyan focus:border-accent-cyan">
+          <option value="">All States</option>
+          {stateList.map(s => <option key={s} value={s}>{s} ({list.filter((r: any) => String(r.instance_state) === s).length})</option>)}
         </select>
-        {vpcFilter && (
-          <button onClick={() => setVpcFilter('')} className="text-xs text-gray-500 hover:text-white transition-colors">
-            Clear
-          </button>
+        {/* Instance Type / 인스턴스 타입 */}
+        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
+          className="bg-navy-800 border border-navy-600 rounded-lg px-3 py-2 text-sm text-gray-200 focus:ring-accent-cyan focus:border-accent-cyan">
+          <option value="">All Types</option>
+          {typeList.map(t => <option key={t} value={t}>{t} ({list.filter((r: any) => String(r.instance_type) === t).length})</option>)}
+        </select>
+        {/* VPC */}
+        <select value={vpcFilter} onChange={(e) => setVpcFilter(e.target.value)}
+          className="bg-navy-800 border border-navy-600 rounded-lg px-3 py-2 text-sm text-gray-200 focus:ring-accent-cyan focus:border-accent-cyan">
+          <option value="">All VPCs</option>
+          {vpcList.map(v => <option key={v} value={v}>{v} ({list.filter((r: any) => String(r.vpc_id) === v).length})</option>)}
+        </select>
+        {/* Clear + Count / 초기화 + 카운트 */}
+        {hasFilters && (
+          <button onClick={clearAllFilters} className="text-xs text-gray-500 hover:text-white transition-colors">Clear all</button>
         )}
         <span className="text-xs text-gray-500 ml-auto">
-          {filteredList.length} instance{filteredList.length !== 1 ? 's' : ''}
+          {filteredList.length} / {list.length} instances
         </span>
       </div>
 
