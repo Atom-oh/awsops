@@ -106,6 +106,18 @@ export const queries = {
     LIMIT 24
   `,
 
+  // EC2 Instance detail metrics with configurable period / EC2 인스턴스 상세 메트릭 (기간 설정 가능)
+  ec2DetailMetrics: `
+    SELECT metric_name, average, maximum, minimum, timestamp
+    FROM aws_cloudwatch_metric_statistic_data_point
+    WHERE namespace = 'AWS/EC2'
+      AND dimensions = '[{"Name":"InstanceId","Value":"{instance_id}"}]'::jsonb
+      AND metric_name IN ('CPUUtilization', 'NetworkIn', 'NetworkOut', 'DiskReadOps', 'DiskWriteOps', 'NetworkPacketsIn', 'NetworkPacketsOut')
+      AND period = {period}
+      AND timestamp >= NOW() - INTERVAL '{range}'
+    ORDER BY metric_name, timestamp ASC
+  `,
+
   // K8s per-node pod resource requests
   k8sNodePodResources: `
     SELECT node_name,

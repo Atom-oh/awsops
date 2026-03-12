@@ -6,7 +6,8 @@ import StatsCard from '@/components/dashboard/StatsCard';
 import LineChartCard from '@/components/charts/LineChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
-import { Activity, Cpu, HardDrive, Database, X, MemoryStick, Wifi } from 'lucide-react';
+import { Activity, Cpu, HardDrive, Database, X, MemoryStick, Wifi, ArrowLeft, Calendar } from 'lucide-react';
+import LineChartCard from '@/components/charts/LineChartCard';
 import { queries as metQ } from '@/lib/queries/metrics';
 
 type TabKey = 'ec2' | 'network' | 'memory' | 'ebs' | 'rds';
@@ -19,6 +20,10 @@ export default function MonitoringPage() {
   const [detailData, setDetailData] = useState<any[]>([]);
   const [detailTitle, setDetailTitle] = useState('');
   const [networkData, setNetworkData] = useState<Record<string, any>>({});
+  const [detailInstance, setDetailInstance] = useState<any>(null);
+  const [detailMetrics, setDetailMetrics] = useState<Record<string, any[]>>({});
+  const [detailMetricLoading, setDetailMetricLoading] = useState(false);
+  const [dateRange, setDateRange] = useState('1h');
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -46,6 +51,45 @@ export default function MonitoringPage() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  const DATE_RANGES = [
+    { label: '1h', range: '1 hour', period: 300 },
+    { label: '6h', range: '6 hours', period: 300 },
+    { label: '24h', range: '1 day', period: 3600 },
+    { label: '7d', range: '7 days', period: 86400 },
+    { label: '30d', range: '30 days', period: 86400 },
+  ];
+
+  const fetchInstanceMetrics = useCallback(async (instance: any, range?: string) => {
+    const r = range || dateRange;
+    const config = DATE_RANGES.find(d => d.label === r) || DATE_RANGES[0];
+    setDetailMetricLoading(true);
+    setDetailInstance(instance);
+    try {
+      const sql = metQ.ec2DetailMetrics
+        .replace('{instance_id}', instance.instance_id)
+        .replace('{period}', String(config.period))
+        .replace('{range}', config.range);
+      const res = await fetch('/awsops/api/steampipe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queries: { metrics: sql } }),
+      });
+      const result = await res.json();
+      const rows = result.metrics?.rows || [];
+      const grouped: Record<string, any[]> = {};
+      rows.forEach((m: any) => {
+        if (!grouped[m.metric_name]) grouped[m.metric_name] = [];
+        grouped[m.metric_name].push(m);
+      });
+      setDetailMetrics(grouped);
+    } catch {} finally { setDetailMetricLoading(false); }
+  }, [dateRange]);
+
+  const handleDateRangeChange = (r: string) => {
+    setDateRange(r);
+    if (detailInstance) fetchInstanceMetrics(detailInstance, r);
+  };
 
   const get = (key: string) => data[key]?.rows || [];
 
@@ -243,6 +287,90 @@ export default function MonitoringPage() {
     { key: 'rds', label: `RDS (${rdsMetrics.length})`, icon: Database },
   ];
 
+  // Instance detail view / 인스턴스 상세 메트릭 뷰
+  if (detailInstance) {
+    const formatVal = (name: string, v: number) => {
+      if (name === 'CPUUtilization') return `${v.toFixed(1)}%`;
+      if (name === 'NetworkIn' || name === 'NetworkOut') return `${(v / 1024 / 1024).toFixed(2)} MB`;
+      if (name === 'NetworkPacketsIn' || name === 'NetworkPacketsOut') return `${(v / 1000).toFixed(1)}K`;
+      return v.toFixed(0);
+    };
+    const metricColor: Record<string, string> = {
+      CPUUtilization: '#ef4444', NetworkIn: '#00d4ff', NetworkOut: '#a855f7',
+      DiskReadOps: '#f59e0b', DiskWriteOps: '#ec4899',
+      NetworkPacketsIn: '#00ff88', NetworkPacketsOut: '#f59e0b',
+    };
+
+    return (
+      <div className="p-6 space-y-6 animate-fade-in">
+        {/* Back + Instance info / 뒤로가기 + 인스턴스 정보 */}
+        <div className="flex items-center gap-4">
+          <button onClick={() => { setDetailInstance(null); setDetailMetrics({}); }}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-navy-800 border border-navy-600 text-gray-400 hover:text-white transition-colors text-sm">
+            <ArrowLeft size={16} /> Back
+          </button>
+          <div>
+            <h1 className="text-lg font-bold text-white font-mono">{detailInstance.name || detailInstance.instance_id}</h1>
+            <p className="text-xs text-gray-500">{detailInstance.instance_id} · {detailInstance.instance_type} · CPU: {detailInstance.avg_cpu}%</p>
+          </div>
+          {/* Date Range / 기간 필터 */}
+          <div className="ml-auto flex items-center gap-1">
+            <Calendar size={14} className="text-gray-500" />
+            {DATE_RANGES.map(d => (
+              <button key={d.label} onClick={() => handleDateRangeChange(d.label)}
+                className={`px-2.5 py-1 rounded text-xs font-mono transition-colors ${dateRange === d.label ? 'bg-accent-cyan/20 text-accent-cyan border border-accent-cyan/40' : 'bg-navy-800 text-gray-400 border border-navy-600 hover:text-white'}`}>
+                {d.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {detailMetricLoading && (
+          <div className="w-full h-1 bg-navy-700 rounded-full overflow-hidden">
+            <div className="h-full bg-accent-cyan rounded-full animate-pulse" style={{ width: '60%' }} />
+          </div>
+        )}
+
+        {/* Metric Charts / 메트릭 차트 */}
+        {Object.keys(detailMetrics).length > 0 ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {Object.entries(detailMetrics).map(([name, points]) => {
+              const sorted = [...points].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+              const latest = points[0];
+              const chartData = sorted.map(p => ({
+                name: dateRange === '7d' || dateRange === '30d'
+                  ? new Date(p.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })
+                  : new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                value: Math.round((Number(p.average) || 0) * 100) / 100,
+              }));
+              return (
+                <div key={name} className="bg-navy-800 rounded-lg border border-navy-600 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-sm font-semibold text-white">{name}</h3>
+                    <div className="text-xs font-mono text-gray-400">
+                      Avg: <span className="text-white">{formatVal(name, Number(latest?.average) || 0)}</span>
+                      <span className="mx-1">·</span>
+                      Max: <span className="text-accent-orange">{formatVal(name, Number(latest?.maximum) || 0)}</span>
+                    </div>
+                  </div>
+                  <div className="h-40">
+                    <LineChartCard title="" data={chartData} color={metricColor[name] || '#00d4ff'} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : !detailMetricLoading ? (
+          <div className="text-center text-gray-500 py-10">
+            <Activity size={32} className="mx-auto mb-3 text-gray-600" />
+            <p>No metric data available for this instance.</p>
+            <p className="text-xs mt-1">CloudWatch detailed monitoring may not be enabled.</p>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6 animate-fade-in">
       <Header title="Performance Monitor" subtitle="CPU, Memory, Network, Disk I/O Metrics" onRefresh={() => fetchData(true)} />
@@ -298,7 +426,7 @@ export default function MonitoringPage() {
           { key: 'max_cpu', label: 'Max CPU %', render: (v: number) => <span className={`font-mono ${cpuColor(v)}`}>{v}%</span> },
           { key: 'timestamp', label: 'Time', render: (v: string) => v ? new Date(v).toLocaleTimeString() : '--' },
         ]} data={loading && !ec2Cpu.length ? undefined : ec2Cpu}
-           onRowClick={(row) => showDetail(row.instance_id, 'ec2')} />
+           onRowClick={(row) => fetchInstanceMetrics(row)} />
       )}
 
       {/* Network In/Out */}
