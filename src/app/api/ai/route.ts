@@ -253,7 +253,7 @@ async function classifyIntent(messages: Array<{role: string; content: string}>):
     const multiMatch = text.match(/\{[^}]*"routes"\s*:\s*\[([^\]]+)\][^}]*\}/);
     if (multiMatch) {
       const routes = multiMatch[1].match(/"([^"]+)"/g)?.map((s: string) => s.replace(/"/g, '')) || [];
-      const valid = routes.filter(r => VALID_ROUTES.includes(r as RouteType)).slice(0, 3) as RouteType[];
+      const valid = routes.filter((r: string) => VALID_ROUTES.includes(r as RouteType)).slice(0, 3) as RouteType[];
       if (valid.length > 0) {
         console.log(`[Intent] Classified as: ${valid.join(', ')}`);
         return valid;
