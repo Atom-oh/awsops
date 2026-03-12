@@ -7,7 +7,8 @@ import StatusBadge from '@/components/dashboard/StatusBadge';
 import PieChartCard from '@/components/charts/PieChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
-import { Database, X, HardDrive, Network, Shield, Tag } from 'lucide-react';
+import { Database, X, HardDrive, Network, Shield, Tag, Activity, Search } from 'lucide-react';
+import LineChartCard from '@/components/charts/LineChartCard';
 import { queries as rdsQ } from '@/lib/queries/rds';
 
 interface PageData {
@@ -19,6 +20,9 @@ export default function RDSPage() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [sgDetails, setSgDetails] = useState<any[]>([]);
+  const [rdsMetrics, setRdsMetrics] = useState<Record<string, any[]>>({});
+  const [searchText, setSearchText] = useState('');
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -46,17 +50,49 @@ export default function RDSPage() {
 
   const fetchDetail = async (id: string) => {
     setDetailLoading(true);
+    setSgDetails([]);
+    setRdsMetrics({});
     try {
-      const sql = rdsQ.detail.replace('{id}', id);
+      const detailSql = rdsQ.detail.replace(/{id}/g, id);
+      const metricSql = rdsQ.rdsMetrics.replace(/{id}/g, id);
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ queries: { detail: detailSql, metrics: metricSql } }),
       });
       const result = await res.json();
-      if (result.detail?.rows?.[0]) {
-        setSelected(result.detail.rows[0]);
+      const detail = result.detail?.rows?.[0];
+      if (detail) {
+        setSelected(detail);
+        // Fetch SG details for each SG / 각 SG 상세 조회
+        try {
+          const sgs = JSON.parse(detail.security_groups || '[]');
+          const sgIds = sgs.map((sg: any) => sg.VpcSecurityGroupId || sg.vpc_security_group_id).filter(Boolean);
+          if (sgIds.length > 0) {
+            const sgQueries: Record<string, string> = {};
+            sgIds.forEach((sgId: string) => { sgQueries[sgId] = rdsQ.sgInbound.replace('{sg_id}', sgId); });
+            const sgRes = await fetch('/awsops/api/steampipe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ queries: sgQueries }),
+            });
+            const sgResult = await sgRes.json();
+            const sgList: any[] = [];
+            Object.entries(sgResult).forEach(([, val]: [string, any]) => {
+              if (val?.rows?.[0]) sgList.push(val.rows[0]);
+            });
+            setSgDetails(sgList);
+          }
+        } catch {}
       }
+      // Process metrics / 메트릭 처리
+      const metricRows = result.metrics?.rows || [];
+      const grouped: Record<string, any[]> = {};
+      metricRows.forEach((m: any) => {
+        if (!grouped[m.metric_name]) grouped[m.metric_name] = [];
+        grouped[m.metric_name].push(m);
+      });
+      setRdsMetrics(grouped);
     } catch {} finally { setDetailLoading(false); }
   };
 
@@ -78,6 +114,10 @@ export default function RDSPage() {
       value: Number(r.allocated_storage) || 0,
     }))
     .slice(0, 10);
+
+  const filteredList = searchText
+    ? list.filter((r: any) => Object.values(r).some(v => String(v ?? '').toLowerCase().includes(searchText.toLowerCase())))
+    : list;
 
   const totalStorage = list.reduce(
     (sum: number, r: Record<string, unknown>) => sum + (Number(r.allocated_storage) || 0),
@@ -106,11 +146,17 @@ export default function RDSPage() {
         <BarChartCard title="Storage by Instance (GB)" data={storageData} color="#a855f7" />
       </div>
 
-      {loading && !list.length && (
-        <div className="space-y-2">
-          {[1, 2, 3].map(i => <div key={i} className="h-10 skeleton rounded" />)}
+      {/* Search / 검색 */}
+      <div className="flex items-center gap-3">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
+          <input type="text" value={searchText} onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Search identifier, engine..."
+            className="bg-navy-800 border border-navy-600 rounded-lg pl-9 pr-3 py-2 text-sm text-gray-200 placeholder-gray-600 w-56 focus:ring-accent-cyan focus:border-accent-cyan focus:outline-none" />
         </div>
-      )}
+        {searchText && <button onClick={() => setSearchText('')} className="text-xs text-gray-500 hover:text-white">Clear</button>}
+        <span className="text-xs text-gray-500 ml-auto">{filteredList.length} / {list.length} instances</span>
+      </div>
 
       <DataTable
         columns={[
@@ -135,7 +181,7 @@ export default function RDSPage() {
           },
           { key: 'region', label: 'Region' },
         ]}
-        data={loading && !list.length ? undefined : list}
+        data={loading && !filteredList.length ? undefined : filteredList}
         onRowClick={(row) => fetchDetail(row.db_instance_identifier)}
       />
 
@@ -204,6 +250,92 @@ export default function RDSPage() {
                   <Row label="Backup Window" value={selected.preferred_backup_window} />
                   <Row label="Latest Restorable" value={selected.latest_restorable_time ? new Date(selected.latest_restorable_time).toLocaleString() : '--'} />
                 </Section>
+
+                {/* Security Groups with Inbound Rules / SG + 인바운드 규칙 */}
+                <Section title="Security Groups" icon={Shield}>
+                  {sgDetails.length > 0 ? (
+                    <div className="space-y-3">
+                      {sgDetails.map((sg: any) => {
+                        const rules = (() => { try { return JSON.parse(sg.inbound_rules || '[]'); } catch { return []; } })();
+                        return (
+                          <div key={sg.group_id} className="bg-navy-800 rounded p-3">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-accent-cyan font-mono text-xs">{sg.group_id}</span>
+                              <span className="text-gray-400 text-xs">{sg.group_name}</span>
+                            </div>
+                            {rules.length > 0 ? (
+                              <div className="space-y-1">
+                                {rules.map((r: any, i: number) => (
+                                  <div key={i} className="text-[10px] font-mono flex flex-wrap gap-2 pl-2 border-l border-navy-600">
+                                    <span className="text-accent-cyan">{r.IpProtocol === '-1' ? 'All' : r.IpProtocol?.toUpperCase()}</span>
+                                    {r.FromPort !== undefined && <span className="text-gray-400">{r.FromPort === r.ToPort ? r.FromPort : `${r.FromPort}-${r.ToPort}`}</span>}
+                                    {(r.IpRanges || []).map((ip: any, j: number) => (
+                                      <span key={j} className="text-gray-300">{ip.CidrIp}{ip.Description ? ` (${ip.Description})` : ''}</span>
+                                    ))}
+                                    {(r.UserIdGroupPairs || []).map((g: any, j: number) => (
+                                      <span key={`g${j}`} className="text-accent-purple">{g.GroupId}{g.Description ? ` (${g.Description})` : ''}</span>
+                                    ))}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : <p className="text-gray-600 text-xs">No inbound rules</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-gray-500 text-sm">{detailLoading ? 'Loading...' : 'No security groups'}</p>
+                  )}
+                </Section>
+
+                {/* Configuration extras / 추가 설정 */}
+                <Section title="Features" icon={Database}>
+                  <Row label="Deletion Protection" value={selected.deletion_protection ? 'Yes' : 'No'} />
+                  <Row label="IAM Auth" value={selected.iam_database_authentication_enabled ? 'Enabled' : 'Disabled'} />
+                  <Row label="Performance Insights" value={selected.performance_insights_enabled ? 'Enabled' : 'Disabled'} />
+                  <Row label="Auto Minor Upgrade" value={selected.auto_minor_version_upgrade ? 'Yes' : 'No'} />
+                  <Row label="Copy Tags to Snapshot" value={selected.copy_tags_to_snapshot ? 'Yes' : 'No'} />
+                </Section>
+
+                {/* CloudWatch Metrics / CloudWatch 메트릭 */}
+                {Object.keys(rdsMetrics).length > 0 && (
+                  <Section title="Metrics (Last 1h)" icon={Activity}>
+                    <div className="space-y-3">
+                      {Object.entries(rdsMetrics).map(([name, points]) => {
+                        const sorted = [...points].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+                        const latest = points[0];
+                        const chartData = sorted.map(p => ({
+                          name: new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                          value: Math.round((Number(p.average) || 0) * 100) / 100,
+                        }));
+                        const formatVal = (v: number) => {
+                          if (name === 'FreeableMemory' || name === 'FreeStorageSpace') return `${(v / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+                          if (name === 'CPUUtilization') return `${v.toFixed(1)}%`;
+                          return v.toFixed(0);
+                        };
+                        return (
+                          <div key={name} className="bg-navy-800 rounded p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-mono text-accent-cyan">{name}</span>
+                              <span className="text-xs font-mono text-white">{formatVal(Number(latest?.average) || 0)}</span>
+                            </div>
+                            {chartData.length > 2 ? (
+                              <div className="h-16">
+                                <LineChartCard title="" data={chartData} color={name === 'CPUUtilization' ? '#ef4444' : '#00d4ff'} />
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-3 gap-2 text-[10px] font-mono">
+                                <div><span className="text-gray-500">Avg:</span> <span className="text-white">{formatVal(Number(latest?.average) || 0)}</span></div>
+                                <div><span className="text-gray-500">Max:</span> <span className="text-white">{formatVal(Number(latest?.maximum) || 0)}</span></div>
+                                <div><span className="text-gray-500">Min:</span> <span className="text-white">{formatVal(Number(latest?.minimum) || 0)}</span></div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Section>
+                )}
 
                 <Section title="Tags" icon={Tag}>
                   {Object.keys(parseTags(selected.tags)).length > 0 ? (
