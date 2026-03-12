@@ -247,6 +247,13 @@ export default function MonitoringPage() {
     <div className="p-6 space-y-6 animate-fade-in">
       <Header title="Performance Monitor" subtitle="CPU, Memory, Network, Disk I/O Metrics" onRefresh={() => fetchData(true)} />
 
+      {/* Loading progress bar / 로딩 프로그레스 바 */}
+      {loading && (
+        <div className="w-full h-1 bg-navy-700 rounded-full overflow-hidden">
+          <div className="h-full bg-accent-cyan rounded-full animate-pulse" style={{ width: '60%' }} />
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatsCard label="Avg CPU (EC2)" value={`${avgCpuAll}%`} icon={Cpu}
           color={Number(avgCpuAll) > 80 ? 'red' : Number(avgCpuAll) > 50 ? 'orange' : 'green'} />
