@@ -1,19 +1,31 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import LineChartCard from '@/components/charts/LineChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
+import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
-import { DollarSign, Info, X, TrendingUp } from 'lucide-react';
+import { DollarSign, Info, X, TrendingUp, Filter, Calendar } from 'lucide-react';
 import { queries as costQ } from '@/lib/queries/cost';
+
+// Period options / 기간 옵션
+const PERIODS = [
+  { label: 'This Month', value: '1m' },
+  { label: '3 Months', value: '3m' },
+  { label: '6 Months', value: '6m' },
+  { label: '1 Year', value: '12m' },
+];
 
 export default function CostPage() {
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [period, setPeriod] = useState('3m');
+  const [selectedServices, setSelectedServices] = useState<Set<string>>(new Set());
+  const [showServiceFilter, setShowServiceFilter] = useState(false);
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -41,50 +53,119 @@ export default function CostPage() {
         body: JSON.stringify({ queries: { detail: sql } }),
       });
       const result = await res.json();
-      const rows = result.detail?.rows || [];
-      setSelected({ service, rows });
+      setSelected({ service, rows: result.detail?.rows || [] });
     } catch {} finally { setDetailLoading(false); }
   };
 
   const get = (key: string) => data[key]?.rows || [];
   const monthlyRows = get('monthlyCost');
   const dailyRows = get('dailyCost');
-  const serviceCostData = get('serviceCost').map((r: any) => ({ name: String(r.name), value: Number(r.value) || 0 }));
 
   const hasData = monthlyRows.length > 0 || dailyRows.length > 0;
   const hasError = data['monthlyCost']?.error || data['dailyCost']?.error;
 
+  // Period filter — months to include / 기간 필터 — 포함할 월 수
+  const monthsToShow = parseInt(period);
+
+  // All unique services / 전체 서비스 목록
+  const allServices = useMemo(() => {
+    const svcs = new Set<string>();
+    monthlyRows.forEach((r: any) => { if (r.service) svcs.add(String(r.service)); });
+    return Array.from(svcs).sort();
+  }, [monthlyRows]);
+
+  // Filter monthly rows by period + service / 기간 + 서비스 필터 적용
+  const filteredMonthly = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - monthsToShow);
+    return monthlyRows.filter((r: any) => {
+      const date = new Date(r.period_start);
+      const matchPeriod = date >= cutoff;
+      const matchService = selectedServices.size === 0 || selectedServices.has(String(r.service));
+      return matchPeriod && matchService;
+    });
+  }, [monthlyRows, monthsToShow, selectedServices]);
+
+  const filteredDaily = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - monthsToShow);
+    return dailyRows.filter((r: any) => {
+      const date = new Date(r.period_start);
+      const matchPeriod = date >= cutoff;
+      const matchService = selectedServices.size === 0 || selectedServices.has(String(r.service));
+      return matchPeriod && matchService;
+    });
+  }, [dailyRows, monthsToShow, selectedServices]);
+
+  // Monthly totals / 월별 합계
   const monthlyTotals: Record<string, number> = {};
-  monthlyRows.forEach((r: any) => {
-    const period = String(r.period_start || '').slice(0, 7);
-    monthlyTotals[period] = (monthlyTotals[period] || 0) + (Number(r.blended_cost) || 0);
+  filteredMonthly.forEach((r: any) => {
+    const p = String(r.period_start || '').slice(0, 7);
+    monthlyTotals[p] = (monthlyTotals[p] || 0) + (Number(r.blended_cost) || 0);
   });
   const sortedMonths = Object.keys(monthlyTotals).sort();
   const thisMonth = sortedMonths.length > 0 ? monthlyTotals[sortedMonths[sortedMonths.length - 1]] || 0 : 0;
   const lastMonth = sortedMonths.length > 1 ? monthlyTotals[sortedMonths[sortedMonths.length - 2]] || 0 : 0;
+  const momChange = lastMonth > 0 ? (((thisMonth - lastMonth) / lastMonth) * 100).toFixed(1) : '0';
 
+  // Projected month-end cost / 예상 월말 비용
+  const today = new Date();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const dayOfMonth = today.getDate();
+  const projectedCost = dayOfMonth > 0 ? (thisMonth / dayOfMonth) * daysInMonth : 0;
+
+  // Daily totals / 일별 합계
   const dailyTotals: Record<string, number> = {};
-  dailyRows.forEach((r: any) => {
+  filteredDaily.forEach((r: any) => {
     const day = String(r.period_start || '').slice(0, 10);
     dailyTotals[day] = (dailyTotals[day] || 0) + (Number(r.blended_cost) || 0);
   });
   const sortedDays = Object.keys(dailyTotals).sort();
   const dailyAvg = sortedDays.length > 0 ? sortedDays.reduce((sum, d) => sum + dailyTotals[d], 0) / sortedDays.length : 0;
-  const momChange = lastMonth > 0 ? (((thisMonth - lastMonth) / lastMonth) * 100).toFixed(1) : '0';
 
+  // Chart data / 차트 데이터
   const dailyLineData = sortedDays.slice(-30).map(day => ({
     name: day.slice(5),
     value: Math.round(dailyTotals[day] * 100) / 100,
   }));
 
-  const serviceTable: Record<string, number> = {};
-  monthlyRows.forEach((r: any) => {
+  const monthlyLineData = sortedMonths.map(m => ({
+    name: m,
+    value: Math.round(monthlyTotals[m] * 100) / 100,
+  }));
+
+  // Service cost for current period / 현재 기간 서비스별 비용
+  const serviceTotals: Record<string, { current: number; previous: number }> = {};
+  const currentMonth = sortedMonths[sortedMonths.length - 1];
+  const previousMonth = sortedMonths.length > 1 ? sortedMonths[sortedMonths.length - 2] : null;
+
+  filteredMonthly.forEach((r: any) => {
     const svc = String(r.service || 'Unknown');
-    serviceTable[svc] = (serviceTable[svc] || 0) + (Number(r.blended_cost) || 0);
+    const p = String(r.period_start || '').slice(0, 7);
+    if (!serviceTotals[svc]) serviceTotals[svc] = { current: 0, previous: 0 };
+    if (p === currentMonth) serviceTotals[svc].current += Number(r.blended_cost) || 0;
+    if (p === previousMonth) serviceTotals[svc].previous += Number(r.blended_cost) || 0;
   });
-  const serviceTableRows = Object.entries(serviceTable)
-    .map(([service, cost]) => ({ service, blended_cost_amount: Math.round(cost * 100) / 100 }))
-    .sort((a, b) => b.blended_cost_amount - a.blended_cost_amount);
+
+  const serviceTableRows = Object.entries(serviceTotals)
+    .map(([service, { current, previous }]) => {
+      const change = previous > 0 ? ((current - previous) / previous * 100) : 0;
+      const share = thisMonth > 0 ? (current / thisMonth * 100) : 0;
+      return { service, current: Math.round(current * 100) / 100, previous: Math.round(previous * 100) / 100, change: Math.round(change * 10) / 10, share: Math.round(share * 10) / 10 };
+    })
+    .sort((a, b) => b.current - a.current);
+
+  // Pie chart — top services / 파이 차트 — 상위 서비스
+  const pieData = serviceTableRows.slice(0, 8).map(r => ({ name: r.service, value: r.current }));
+
+  // Service filter toggle / 서비스 필터 토글
+  const toggleService = (svc: string) => {
+    setSelectedServices(prev => {
+      const next = new Set(prev);
+      if (next.has(svc)) next.delete(svc); else next.add(svc);
+      return next;
+    });
+  };
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
@@ -107,29 +188,99 @@ export default function CostPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* Period + Service Filter / 기간 + 서비스 필터 */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-1">
+          <Calendar size={14} className="text-gray-500" />
+          {PERIODS.map(p => (
+            <button key={p.value} onClick={() => setPeriod(p.value)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors ${
+                period === p.value
+                  ? 'bg-accent-cyan/20 text-accent-cyan border border-accent-cyan/40'
+                  : 'bg-navy-800 text-gray-400 border border-navy-600 hover:text-white'
+              }`}>{p.label}</button>
+          ))}
+        </div>
+        <button onClick={() => setShowServiceFilter(!showServiceFilter)}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${
+            showServiceFilter || selectedServices.size > 0
+              ? 'bg-accent-purple/20 text-accent-purple border border-accent-purple/40'
+              : 'bg-navy-800 text-gray-400 border border-navy-600 hover:text-white'
+          }`}>
+          <Filter size={12} />
+          Services {selectedServices.size > 0 && <span className="bg-accent-purple/30 px-1.5 py-0.5 rounded-full">{selectedServices.size}</span>}
+        </button>
+        {selectedServices.size > 0 && (
+          <button onClick={() => setSelectedServices(new Set())} className="text-xs text-gray-500 hover:text-white">Clear</button>
+        )}
+      </div>
+
+      {showServiceFilter && (
+        <div className="bg-navy-800 border border-navy-600 rounded-lg p-4">
+          <p className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-2">Filter by Service</p>
+          <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
+            {allServices.map(svc => (
+              <button key={svc} onClick={() => toggleService(svc)}
+                className={`px-2.5 py-1 rounded text-[11px] font-mono transition-colors ${
+                  selectedServices.has(svc)
+                    ? 'bg-accent-purple/20 text-accent-purple border border-accent-purple/40'
+                    : 'bg-navy-900 text-gray-500 border border-navy-700 hover:text-white'
+                }`}>{svc}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Stats Cards / 통계 카드 */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatsCard label="This Month" value={`$${thisMonth.toFixed(2)}`} icon={DollarSign} color="cyan" />
         <StatsCard label="Last Month" value={`$${lastMonth.toFixed(2)}`} icon={DollarSign} color="purple" />
+        <StatsCard label="Projected" value={`$${projectedCost.toFixed(2)}`} icon={TrendingUp} color="orange"
+          change={`Day ${dayOfMonth}/${daysInMonth}`} />
         <StatsCard label="Daily Avg" value={`$${dailyAvg.toFixed(2)}`} icon={DollarSign} color="green" />
         <StatsCard label="MoM Change" value={`${Number(momChange) > 0 ? '+' : ''}${momChange}%`} icon={DollarSign}
           color={Number(momChange) > 10 ? 'red' : Number(momChange) < 0 ? 'green' : 'orange'} />
+        <StatsCard label="Services" value={Object.keys(serviceTotals).length} icon={DollarSign} color="pink"
+          change={`${serviceTableRows.filter(s => s.change > 20).length} increasing >20%`} />
       </div>
 
+      {/* Charts Row 1 / 차트 행 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <LineChartCard title="Daily Cost Trend" data={dailyLineData} color="#00d4ff" />
-        <BarChartCard title="Cost by Service" data={serviceCostData.slice(0, 10)} color="#a855f7" />
+        <LineChartCard title="Daily Cost Trend (Last 30 Days)" data={dailyLineData} color="#00d4ff" />
+        <LineChartCard title="Monthly Cost Trend" data={monthlyLineData} color="#a855f7" />
       </div>
 
+      {/* Charts Row 2 / 차트 행 2 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <PieChartCard title="Cost by Service (Top 8)" data={pieData} />
+        <BarChartCard title="Top 10 Services" data={serviceTableRows.slice(0, 10).map(r => ({ name: r.service, value: r.current }))} color="#f59e0b" />
+      </div>
+
+      {/* Service Table / 서비스 테이블 */}
       <DataTable
         columns={[
           { key: 'service', label: 'Service' },
-          { key: 'blended_cost_amount', label: 'Blended Cost', render: (v: number) => <span className="font-mono">${(v || 0).toFixed(2)}</span> },
+          { key: 'current', label: 'This Month', render: (v: number) => <span className="font-mono">${(v || 0).toFixed(2)}</span> },
+          { key: 'previous', label: 'Last Month', render: (v: number) => <span className="font-mono text-gray-500">${(v || 0).toFixed(2)}</span> },
+          { key: 'change', label: 'Change', render: (v: number) => (
+            <span className={`font-mono text-xs ${v > 20 ? 'text-accent-red' : v > 0 ? 'text-accent-orange' : v < 0 ? 'text-accent-green' : 'text-gray-500'}`}>
+              {v > 0 ? '+' : ''}{(v || 0).toFixed(1)}%
+            </span>
+          )},
+          { key: 'share', label: 'Share', render: (v: number) => (
+            <div className="flex items-center gap-2">
+              <div className="w-16 h-2 bg-navy-900 rounded-full overflow-hidden">
+                <div className="h-full bg-accent-cyan rounded-full" style={{ width: `${Math.min(v, 100)}%` }} />
+              </div>
+              <span className="font-mono text-xs text-gray-400">{(v || 0).toFixed(1)}%</span>
+            </div>
+          )},
         ]}
         data={loading && !serviceTableRows.length ? undefined : serviceTableRows}
         onRowClick={(row) => fetchServiceDetail(row.service)}
       />
 
-      {/* Service Detail Panel */}
+      {/* Service Detail Panel / 서비스 상세 패널 */}
       {(selected || detailLoading) && (
         <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setSelected(null)}>
           <div className="absolute inset-0 bg-black/50" />
@@ -149,28 +300,33 @@ export default function CostPage() {
               <div className="p-6 space-y-4">{[1,2,3,4].map(i => <div key={i} className="h-12 skeleton rounded" />)}</div>
             ) : selected ? (
               <div className="p-6 space-y-6">
-                {/* Total */}
                 <Section title="Cost Summary" icon={DollarSign}>
                   <Row label="Service" value={selected.service} />
-                  <Row label="Total Cost" value={`$${selected.rows.reduce((s: number, r: any) => s + (Number(r.blended_cost) || 0), 0).toFixed(4)}`} />
+                  <Row label="Total Cost" value={`$${selected.rows.reduce((s: number, r: any) => s + (Number(r.blended_cost) || 0), 0).toFixed(2)}`} />
                   <Row label="Periods" value={`${selected.rows.length} months`} />
                 </Section>
 
-                {/* Monthly breakdown */}
+                {/* Monthly line chart in detail / 상세 월별 라인 차트 */}
+                <LineChartCard title="Monthly Trend" color="#00d4ff"
+                  data={selected.rows.slice().reverse().map((r: any) => ({
+                    name: String(r.period_start || '').slice(0, 7),
+                    value: Math.round((Number(r.blended_cost) || 0) * 100) / 100,
+                  }))} />
+
                 <Section title="Monthly Breakdown" icon={TrendingUp}>
                   {selected.rows.length > 0 ? (
                     <div className="space-y-2">
                       {selected.rows.map((r: any, i: number) => {
-                        const period = String(r.period_start || '').slice(0, 7);
+                        const period2 = String(r.period_start || '').slice(0, 7);
                         const cost = Number(r.blended_cost) || 0;
                         const unblended = Number(r.unblended_cost) || 0;
                         return (
                           <div key={i} className="flex items-center justify-between bg-navy-800 rounded p-2">
-                            <span className="text-sm font-mono text-gray-300">{period}</span>
+                            <span className="text-sm font-mono text-gray-300">{period2}</span>
                             <div className="text-right">
-                              <span className="text-sm font-mono text-white">${cost.toFixed(4)}</span>
-                              {unblended !== cost && (
-                                <span className="text-xs text-gray-500 ml-2">(unblended: ${unblended.toFixed(4)})</span>
+                              <span className="text-sm font-mono text-white">${cost.toFixed(2)}</span>
+                              {Math.abs(unblended - cost) > 0.01 && (
+                                <span className="text-xs text-gray-500 ml-2">(unblended: ${unblended.toFixed(2)})</span>
                               )}
                             </div>
                           </div>
