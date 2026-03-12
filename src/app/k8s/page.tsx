@@ -52,6 +52,22 @@ const POD_REQUESTS_QUERY = `
     p.phase = 'Running' AND p.node_name IS NOT NULL
 `;
 
+// Format bytes to human readable / 바이트를 가독성 있게 변환
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes.toFixed(0)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function formatPackets(pkts: number): string {
+  if (pkts <= 0) return '0';
+  if (pkts < 1000) return `${pkts.toFixed(0)}`;
+  if (pkts < 1000000) return `${(pkts / 1000).toFixed(1)}K`;
+  return `${(pkts / 1000000).toFixed(1)}M`;
+}
+
 // Parse K8s CPU (e.g. "8" → 8, "7910m" → 7.91) / K8s CPU 파싱
 function parseCpu(cpu: any): number {
   if (!cpu) return 0;
@@ -82,22 +98,39 @@ export default function K8sOverviewPage() {
   const [showFilter, setShowFilter] = useState(false);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [nodeEnis, setNodeEnis] = useState<any[]>([]);
+  const [nodeTraffic, setNodeTraffic] = useState<any>(null);
   const [eniLoading, setEniLoading] = useState(false);
 
-  // Fetch ENI data for selected node / 선택된 노드의 ENI 데이터 조회
+  // Fetch ENI data + traffic for selected node / 선택된 노드의 ENI + 트래픽 조회
   const fetchNodeEnis = useCallback(async (nodeName: string) => {
     setEniLoading(true);
+    setNodeTraffic(null);
     try {
-      // Extract IP pattern from node name (ip-10-11-90-116 → ip-10-11-90-116%)
       const ipPrefix = nodeName.split('.')[0];
-      const sql = `SELECT network_interface_id, status, interface_type, private_ip_address::text AS primary_ip, attachment_status, private_ip_addresses::text AS all_ips FROM aws_ec2_network_interface WHERE attached_instance_id IN (SELECT instance_id FROM aws_ec2_instance WHERE private_dns_name LIKE '${ipPrefix}%')`;
+      const eniSql = `SELECT network_interface_id, status, interface_type, private_ip_address::text AS primary_ip, attachment_status, private_ip_addresses::text AS all_ips FROM aws_ec2_network_interface WHERE attached_instance_id IN (SELECT instance_id FROM aws_ec2_instance WHERE private_dns_name LIKE '${ipPrefix}%')`;
+      const trafficSql = `SELECT metric_name, average, unit, timestamp FROM aws_cloudwatch_metric_statistic_data_point WHERE namespace = 'AWS/EC2' AND metric_name IN ('NetworkIn', 'NetworkOut', 'NetworkPacketsIn', 'NetworkPacketsOut') AND dimension_name = 'InstanceId' AND dimension_value IN (SELECT instance_id FROM aws_ec2_instance WHERE private_dns_name LIKE '${ipPrefix}%') AND period = 300 AND timestamp >= NOW() - INTERVAL '1 hour' ORDER BY metric_name, timestamp DESC`;
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { enis: sql } }),
+        body: JSON.stringify({ queries: { enis: eniSql, traffic: trafficSql } }),
       });
       const result = await res.json();
       setNodeEnis(result.enis?.rows || []);
+      // Aggregate traffic metrics / 트래픽 메트릭 집계
+      const trafficRows = result.traffic?.rows || [];
+      const metrics: Record<string, number[]> = {};
+      trafficRows.forEach((r: any) => {
+        const name = String(r.metric_name);
+        if (!metrics[name]) metrics[name] = [];
+        metrics[name].push(Number(r.average) || 0);
+      });
+      const avg = (arr: number[]) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+      setNodeTraffic({
+        networkIn: avg(metrics['NetworkIn'] || []),
+        networkOut: avg(metrics['NetworkOut'] || []),
+        packetsIn: avg(metrics['NetworkPacketsIn'] || []),
+        packetsOut: avg(metrics['NetworkPacketsOut'] || []),
+      });
     } catch {
       setNodeEnis([]);
     } finally {
@@ -333,8 +366,30 @@ export default function K8sOverviewPage() {
               Network Interfaces (ENI)
               {!eniLoading && <span className="text-xs text-gray-500 font-normal ml-2">{nodeEnis.length} ENIs</span>}
             </h2>
+            {/* Traffic Summary / 트래픽 요약 */}
+            {nodeTraffic && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <div className="bg-navy-800 border border-navy-600 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-gray-500 uppercase mb-1">Network In (avg/5m)</p>
+                  <p className="text-lg font-mono font-bold text-accent-cyan">{formatBytes(nodeTraffic.networkIn)}</p>
+                </div>
+                <div className="bg-navy-800 border border-navy-600 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-gray-500 uppercase mb-1">Network Out (avg/5m)</p>
+                  <p className="text-lg font-mono font-bold text-accent-purple">{formatBytes(nodeTraffic.networkOut)}</p>
+                </div>
+                <div className="bg-navy-800 border border-navy-600 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-gray-500 uppercase mb-1">Packets In (avg/5m)</p>
+                  <p className="text-lg font-mono font-bold text-accent-green">{formatPackets(nodeTraffic.packetsIn)}</p>
+                </div>
+                <div className="bg-navy-800 border border-navy-600 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-gray-500 uppercase mb-1">Packets Out (avg/5m)</p>
+                  <p className="text-lg font-mono font-bold text-accent-orange">{formatPackets(nodeTraffic.packetsOut)}</p>
+                </div>
+              </div>
+            )}
+
             {eniLoading ? (
-              <div className="space-y-2">{[1,2].map(i => <div key={i} className="h-20 skeleton rounded" />)}</div>
+              <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-24 skeleton rounded" />)}</div>
             ) : nodeEnis.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {nodeEnis.map((eni: any) => {
