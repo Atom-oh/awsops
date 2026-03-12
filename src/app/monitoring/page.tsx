@@ -7,6 +7,7 @@ import LineChartCard from '@/components/charts/LineChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Activity, Cpu, HardDrive, Database, X, MemoryStick, Wifi, ArrowLeft, Calendar } from 'lucide-react';
+import { LineChart, Line, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { queries as metQ } from '@/lib/queries/metrics';
 
 type TabKey = 'ec2' | 'network' | 'memory' | 'ebs' | 'rds';
@@ -344,7 +345,7 @@ export default function MonitoringPage() {
               }));
               return (
                 <div key={name} className="bg-navy-800 rounded-lg border border-navy-600 p-4">
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-semibold text-white">{name}</h3>
                     <div className="text-xs font-mono text-gray-400">
                       Avg: <span className="text-white">{formatVal(name, Number(latest?.average) || 0)}</span>
@@ -352,8 +353,15 @@ export default function MonitoringPage() {
                       Max: <span className="text-accent-orange">{formatVal(name, Number(latest?.maximum) || 0)}</span>
                     </div>
                   </div>
-                  <div className="h-40">
-                    <LineChartCard title="" data={chartData} color={metricColor[name] || '#00d4ff'} />
+                  <div className="h-36">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={chartData}>
+                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#6b7280', fontSize: 10 }} interval="preserveStartEnd" />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fill: '#6b7280', fontSize: 10 }} width={45} />
+                        <RTooltip contentStyle={{ background: '#0f1629', border: '1px solid #1a2540', borderRadius: 8, fontSize: 11 }} labelStyle={{ color: '#6b7280' }} />
+                        <Line type="monotone" dataKey="value" stroke={metricColor[name] || '#00d4ff'} strokeWidth={2} dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
                   </div>
                 </div>
               );
