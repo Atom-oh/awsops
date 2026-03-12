@@ -14,9 +14,49 @@ interface DashboardData {
 
 const NODE_QUERY = `
   SELECT
-    name, capacity_cpu as cpu_capacity, capacity_memory as memory_capacity
+    name, capacity_cpu as cpu_capacity, capacity_memory as memory_capacity,
+    allocatable_cpu, allocatable_memory
   FROM kubernetes_node
 `;
+
+const POD_REQUESTS_QUERY = `
+  SELECT
+    p.node_name,
+    c->'resources'->'requests'->>'cpu' AS cpu_req,
+    c->'resources'->'requests'->>'memory' AS mem_req
+  FROM
+    kubernetes_pod p,
+    jsonb_array_elements(p.containers) AS c
+  WHERE
+    p.phase = 'Running' AND p.node_name IS NOT NULL
+`;
+
+// Parse K8s CPU (e.g. "8" → 8, "7910m" → 7.91)
+function parseCpu(cpu: any): number {
+  if (!cpu) return 0;
+  const s = String(cpu).trim();
+  if (s.endsWith('m')) return parseFloat(s) / 1000;
+  return parseFloat(s) || 0;
+}
+
+// Parse K8s memory to MiB
+function parseMiB(mem: any): number {
+  if (!mem) return 0;
+  const s = String(mem);
+  const match = s.match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti)?$/i);
+  if (!match) return parseInt(s) || 0;
+  let v = parseFloat(match[1]);
+  const u = (match[2] || '').toLowerCase();
+  if (u === 'ki') v = v / 1024;
+  else if (u === 'gi') v = v * 1024;
+  else if (u === 'ti') v = v * 1024 * 1024;
+  return Math.round(v);
+}
+
+function formatMem(mib: number): string {
+  if (mib >= 1024) return `${(mib / 1024).toFixed(1)} GiB`;
+  return `${Math.round(mib)} MiB`;
+}
 
 const tabConfig: Record<string, { query: string; label: string; columns: { key: string; label: string }[] }> = {
   pods: {
@@ -151,6 +191,7 @@ export default function K8sExplorerPage() {
           queries: {
             resources: currentConfig?.query ?? '',
             nodes: NODE_QUERY,
+            podRequests: POD_REQUESTS_QUERY,
           },
         }),
       });
@@ -186,11 +227,30 @@ export default function K8sExplorerPage() {
   }, [activeTab]);
 
   const resources = data.resources?.rows || [];
-  const nodes = (data.nodes?.rows || []).map((n: any) => ({
-    name: n.name,
-    cpu_capacity: Number(n.cpu_capacity) || 0,
-    memory_capacity: Number(n.memory_capacity) || 0,
-  }));
+
+  // Aggregate pod requests per node / 노드별 Pod 요청 집계
+  const podReqRows = data.podRequests?.rows || [];
+  const reqMap: Record<string, { cpuReq: number; memReqMiB: number }> = {};
+  podReqRows.forEach((r: any) => {
+    const node = String(r.node_name || '');
+    if (!node) return;
+    if (!reqMap[node]) reqMap[node] = { cpuReq: 0, memReqMiB: 0 };
+    if (r.cpu_req) reqMap[node].cpuReq += parseCpu(r.cpu_req);
+    if (r.mem_req) reqMap[node].memReqMiB += parseMiB(r.mem_req);
+  });
+
+  const nodes = (data.nodes?.rows || []).map((n: any) => {
+    const capCpu = parseCpu(n.cpu_capacity);
+    const capMiB = parseMiB(n.memory_capacity);
+    const req = reqMap[n.name] || { cpuReq: 0, memReqMiB: 0 };
+    return {
+      name: n.name,
+      cpu_capacity: capCpu,
+      memory_capacity: capMiB,
+      cpu_percent: capCpu > 0 ? (req.cpuReq / capCpu) * 100 : 0,
+      memory_percent: capMiB > 0 ? (req.memReqMiB / capMiB) * 100 : 0,
+    };
+  });
 
   // Extract unique namespaces
   const namespaces = useMemo(() => {

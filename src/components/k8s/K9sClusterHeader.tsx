@@ -52,7 +52,7 @@ export default function K9sClusterHeader({ context, nodes }: K9sClusterHeaderPro
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-accent-green">{node.name}</span>
               <span className="text-[10px] text-gray-600">
-                {node.cpu_capacity} vCPU / {node.memory_capacity} MiB
+                {node.cpu_capacity} vCPU / {node.memory_capacity >= 1024 ? `${(node.memory_capacity / 1024).toFixed(1)} GiB` : `${Math.round(node.memory_capacity)} MiB`}
               </span>
             </div>
             <div className="space-y-1.5">
