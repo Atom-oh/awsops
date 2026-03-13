@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { Send, Bot, User, Loader2, Sparkles, Database, Copy, Check, Activity, ChevronDown, ChevronUp } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -45,12 +45,12 @@ export default function AIPage() {
     const routeCounts: Record<string, number> = {};
     let totalTime = 0;
     let successCount = 0;
-    let failCount = 0;
+    let _failCount = 0;
 
     assistantMsgs.forEach(m => {
       if (m.route) routeCounts[m.route] = (routeCounts[m.route] || 0) + 1;
       if (m.responseTime) totalTime += m.responseTime;
-      if (m.content?.startsWith('Error')) failCount++; else successCount++;
+      if (m.content?.startsWith('Error')) _failCount++; else successCount++;
     });
 
     return {
