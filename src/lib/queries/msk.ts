@@ -1,26 +1,30 @@
+// MSK data is nested in `provisioned` JSONB column
+// MSK 데이터는 `provisioned` JSONB 컬럼에 중첩됨
 export const queries = {
   summary: `
     SELECT
       COUNT(*) AS total_clusters,
       COUNT(*) FILTER (WHERE state = 'ACTIVE') AS active_clusters,
       COUNT(*) FILTER (WHERE state != 'ACTIVE') AS inactive_clusters,
-      COUNT(*) FILTER (WHERE enhanced_monitoring != 'DEFAULT') AS enhanced_monitoring,
-      COUNT(*) FILTER (WHERE encryption_info::text LIKE '%TLS%' OR encryption_info::text LIKE '%encryption%') AS encrypted_clusters
+      SUM((provisioned ->> 'NumberOfBrokerNodes')::int) AS total_brokers,
+      COUNT(*) FILTER (WHERE provisioned -> 'EnhancedMonitoring' IS NOT NULL
+        AND provisioned ->> 'EnhancedMonitoring' != 'DEFAULT') AS enhanced_monitoring,
+      COUNT(*) FILTER (WHERE provisioned -> 'EncryptionInfo' -> 'EncryptionInTransit' ->> 'InCluster' = 'true') AS encrypted_in_transit
     FROM aws_msk_cluster
   `,
 
   list: `
     SELECT
       cluster_name,
-      cluster_arn,
+      arn AS cluster_arn,
       state,
       cluster_type,
-      kafka_version,
-      number_of_broker_nodes,
-      enhanced_monitoring,
+      provisioned -> 'CurrentBrokerSoftwareInfo' ->> 'KafkaVersion' AS kafka_version,
+      (provisioned ->> 'NumberOfBrokerNodes')::int AS number_of_broker_nodes,
+      provisioned ->> 'EnhancedMonitoring' AS enhanced_monitoring,
+      provisioned -> 'BrokerNodeGroupInfo' ->> 'InstanceType' AS instance_type,
+      provisioned -> 'BrokerNodeGroupInfo' -> 'StorageInfo' -> 'EbsStorageInfo' ->> 'VolumeSize' AS ebs_volume_gb,
       creation_time,
-      encryption_info::text AS encryption_info,
-      broker_node_group_info::text AS broker_info,
       tags ->> 'Name' AS name
     FROM aws_msk_cluster
     ORDER BY creation_time DESC
@@ -34,9 +38,11 @@ export const queries = {
   `,
 
   versionDistribution: `
-    SELECT kafka_version AS name, COUNT(*) AS value
+    SELECT
+      provisioned -> 'CurrentBrokerSoftwareInfo' ->> 'KafkaVersion' AS name,
+      COUNT(*) AS value
     FROM aws_msk_cluster
-    GROUP BY kafka_version
+    GROUP BY 1
     ORDER BY value DESC
   `,
 
@@ -44,19 +50,14 @@ export const queries = {
   detail: `
     SELECT
       cluster_name,
-      cluster_arn,
+      arn AS cluster_arn,
       state,
       cluster_type,
-      kafka_version,
-      number_of_broker_nodes,
-      enhanced_monitoring,
-      creation_time,
-      zookeeper_connect_string,
-      encryption_info::text AS encryption_info,
-      broker_node_group_info::text AS broker_info,
-      open_monitoring::text AS open_monitoring,
-      logging_info::text AS logging_info,
       current_version,
+      creation_time,
+      bootstrap_broker_string,
+      bootstrap_broker_string_tls,
+      provisioned::text AS provisioned,
       tags::text AS tags
     FROM aws_msk_cluster
     WHERE cluster_name = '{cluster_name}'
