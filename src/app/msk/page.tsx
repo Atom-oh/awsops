@@ -18,6 +18,7 @@ export default function MSKPage() {
   const [selected, setSelected] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
+  const [brokerNodes, setBrokerNodes] = useState<any[]>([]);
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -40,17 +41,27 @@ export default function MSKPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const fetchDetail = async (clusterName: string) => {
+  const fetchDetail = async (clusterName: string, clusterArn?: string) => {
     setDetailLoading(true);
+    setBrokerNodes([]);
     try {
       const sql = mskQ.detail.replace(/{cluster_name}/g, clusterName);
-      const res = await fetch('/awsops/api/steampipe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
-      });
-      const result = await res.json();
+      const [steampipeRes, nodesRes] = await Promise.all([
+        fetch('/awsops/api/steampipe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ queries: { detail: sql } }),
+        }),
+        clusterArn
+          ? fetch(`/awsops/api/msk?clusterArn=${encodeURIComponent(clusterArn)}`)
+          : Promise.resolve(null),
+      ]);
+      const result = await steampipeRes.json();
       setSelected(result.detail?.rows?.[0] || null);
+      if (nodesRes) {
+        const nodesData = await nodesRes.json();
+        setBrokerNodes(nodesData.nodes || []);
+      }
     } catch {} finally { setDetailLoading(false); }
   };
 
@@ -132,7 +143,7 @@ export default function MSKPage() {
           { key: 'creation_time', label: 'Created', render: (v: any) => v ? new Date(v).toLocaleDateString() : '-' },
         ]}
         data={loading ? undefined : clusters as any[]}
-        onRowClick={(row: any) => fetchDetail(row.cluster_name)}
+        onRowClick={(row: any) => fetchDetail(row.cluster_name, row.cluster_arn)}
       />
 
       {/* Detail Panel */}
@@ -280,6 +291,65 @@ export default function MSKPage() {
                       )}
                     </div>
                   )}
+
+                  {/* Broker Nodes — from AWS CLI / 브로커 노드 — AWS CLI 조회 */}
+                  <div className="bg-navy-900 rounded-lg p-4">
+                    <h3 className="text-xs font-semibold text-accent-cyan uppercase tracking-wider mb-3">
+                      Broker Nodes ({brokerNodes.filter(n => n.NodeType === 'BROKER').length} brokers · {brokerNodes.filter(n => n.NodeType === 'CONTROLLER').length} controllers)
+                    </h3>
+                    {brokerNodes.length === 0 ? (
+                      <p className="text-sm text-gray-500 text-center py-3">Loading nodes...</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {/* Broker nodes */}
+                        {brokerNodes.filter(n => n.NodeType === 'BROKER').map((node: any, i: number) => {
+                          const bi = node.BrokerNodeInfo;
+                          return (
+                            <div key={i} className="bg-navy-800 rounded-lg p-3 border border-navy-600">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <Radio size={14} className="text-accent-cyan" />
+                                  <span className="text-sm font-medium text-white">Broker {bi?.BrokerId ? Math.round(bi.BrokerId) : i + 1}</span>
+                                </div>
+                                <span className="text-xs font-mono text-accent-green">{node.InstanceType}</span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-1 text-xs">
+                                <div><span className="text-gray-500">IP: </span><span className="text-gray-300 font-mono">{bi?.ClientVpcIpAddress || '-'}</span></div>
+                                <div><span className="text-gray-500">Subnet: </span><span className="text-gray-300 font-mono text-[10px]">{bi?.ClientSubnet || '-'}</span></div>
+                                <div><span className="text-gray-500">ENI: </span><span className="text-gray-300 font-mono text-[10px]">{bi?.AttachedENIId || '-'}</span></div>
+                                <div><span className="text-gray-500">Kafka: </span><span className="text-gray-300 font-mono">{bi?.CurrentBrokerSoftwareInfo?.KafkaVersion || '-'}</span></div>
+                                {bi?.Endpoints?.[0] && (
+                                  <div className="col-span-2"><span className="text-gray-500">Endpoint: </span><span className="text-gray-400 font-mono text-[10px] break-all">{bi.Endpoints[0]}</span></div>
+                                )}
+                                {node.AddedToClusterTime && (
+                                  <div className="col-span-2"><span className="text-gray-500">Added: </span><span className="text-gray-400">{new Date(node.AddedToClusterTime).toLocaleString()}</span></div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {/* Controller nodes */}
+                        {brokerNodes.filter(n => n.NodeType === 'CONTROLLER').length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-xs text-gray-500 mb-1.5">Controllers (KRaft)</p>
+                            <div className="space-y-1">
+                              {brokerNodes.filter(n => n.NodeType === 'CONTROLLER').map((node: any, i: number) => (
+                                <div key={i} className="flex items-center justify-between bg-navy-800 rounded p-2 text-xs border border-navy-700">
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-accent-purple" />
+                                    <span className="text-gray-300">Controller {i + 1}</span>
+                                  </div>
+                                  <span className="text-gray-400 font-mono text-[10px]">
+                                    {node.ControllerNodeInfo?.Endpoints?.[0] || '-'}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
 
                   {/* Monitoring */}
                   {monitoring && (
