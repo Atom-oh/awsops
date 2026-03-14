@@ -21,6 +21,7 @@ export default function MSKPage() {
   const [brokerNodes, setBrokerNodes] = useState<any[]>([]);
   const [allNodes, setAllNodes] = useState<{ clusterName: string; nodes: any[] }[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
+  const [brokerMetrics, setBrokerMetrics] = useState<Record<string, Record<number, Record<string, number>>>>({});
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -54,6 +55,22 @@ export default function MSKPage() {
         const allResults = await Promise.all(nodePromises);
         setAllNodes(allResults);
         setNodesLoading(false);
+
+        // Fetch CloudWatch metrics for each cluster's brokers / 클러스터별 브로커 메트릭 조회
+        const metricsMap: Record<string, Record<number, Record<string, number>>> = {};
+        const metricPromises = allResults.map(async (cluster) => {
+          const brokerIds = cluster.nodes
+            .filter((n: any) => n.NodeType === 'BROKER' && n.BrokerNodeInfo?.BrokerId)
+            .map((n: any) => Math.round(n.BrokerNodeInfo.BrokerId));
+          if (brokerIds.length === 0) return;
+          try {
+            const mRes = await fetch(`/awsops/api/msk?action=metrics&clusterName=${encodeURIComponent(cluster.clusterName)}&brokerIds=${brokerIds.join(',')}`);
+            const mData = await mRes.json();
+            metricsMap[cluster.clusterName] = mData.metrics || {};
+          } catch {}
+        });
+        await Promise.all(metricPromises);
+        setBrokerMetrics(metricsMap);
       }
     } catch {} finally { setLoading(false); }
   }, []);
@@ -186,17 +203,27 @@ export default function MSKPage() {
               <table className="w-full">
                 <thead>
                   <tr className="bg-navy-700">
-                    {['Cluster', 'Type', 'Broker ID', 'Instance', 'VPC IP', 'Subnet', 'ENI', 'Kafka', 'Endpoint', 'Added'].map(h => (
+                    {['Cluster', 'Type', 'ID', 'Instance', 'VPC IP', 'ENI', 'CPU', 'Memory', 'Net In', 'Net Out', 'Endpoint'].map(h => (
                       <th key={h} className="px-3 py-2 text-left text-xs font-mono font-semibold uppercase tracking-wider text-accent-cyan">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {allNodes.flatMap(cluster =>
-                    cluster.nodes
+                  {allNodes.flatMap(cluster => {
+                    const cm = brokerMetrics[cluster.clusterName] || {};
+                    return cluster.nodes
                       .filter((n: any) => n.NodeType === 'BROKER')
                       .map((node: any, i: number) => {
                         const bi = node.BrokerNodeInfo;
+                        const bId = bi?.BrokerId ? Math.round(bi.BrokerId) : 0;
+                        const m = cm[bId] || {};
+                        const cpuTotal = (m.cpu_user || 0) + (m.cpu_system || 0);
+                        const memUsed = m.mem_used || 0;
+                        const memFree = m.mem_free || 0;
+                        const memTotal = memUsed + memFree;
+                        const memPct = memTotal > 0 ? (memUsed / memTotal) * 100 : 0;
+                        const bytesIn = m.bytes_in || 0;
+                        const bytesOut = m.bytes_out || 0;
                         return (
                           <tr key={`${cluster.clusterName}-${i}`} className="border-b border-navy-600 hover:bg-navy-700 transition-colors">
                             <td className="px-3 py-2 text-sm text-white">{cluster.clusterName}</td>
@@ -205,18 +232,43 @@ export default function MSKPage() {
                                 <span className="w-1.5 h-1.5 rounded-full bg-accent-cyan" />BROKER
                               </span>
                             </td>
-                            <td className="px-3 py-2 text-sm font-mono text-gray-300">{bi?.BrokerId ? Math.round(bi.BrokerId) : '-'}</td>
+                            <td className="px-3 py-2 text-sm font-mono text-gray-300">{bId || '-'}</td>
                             <td className="px-3 py-2 text-xs font-mono text-accent-green">{node.InstanceType || '-'}</td>
                             <td className="px-3 py-2 text-xs font-mono text-gray-300">{bi?.ClientVpcIpAddress || '-'}</td>
-                            <td className="px-3 py-2 text-xs font-mono text-gray-500">{bi?.ClientSubnet || '-'}</td>
-                            <td className="px-3 py-2 text-xs font-mono text-gray-500">{bi?.AttachedENIId || '-'}</td>
-                            <td className="px-3 py-2 text-xs font-mono text-gray-300">{bi?.CurrentBrokerSoftwareInfo?.KafkaVersion || '-'}</td>
-                            <td className="px-3 py-2 text-xs font-mono text-gray-400 max-w-[200px] truncate">{bi?.Endpoints?.[0] || '-'}</td>
-                            <td className="px-3 py-2 text-xs text-gray-500">{node.AddedToClusterTime ? new Date(node.AddedToClusterTime).toLocaleDateString() : '-'}</td>
+                            <td className="px-3 py-2 text-xs font-mono text-gray-500 max-w-[120px] truncate">{bi?.AttachedENIId || '-'}</td>
+                            <td className="px-3 py-2">
+                              {cpuTotal > 0 ? (
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-16 h-2 bg-navy-600 rounded-full overflow-hidden">
+                                    <div className={`h-full rounded-full ${cpuTotal > 80 ? 'bg-accent-red' : cpuTotal > 50 ? 'bg-accent-orange' : 'bg-accent-cyan'}`}
+                                      style={{ width: `${Math.min(cpuTotal, 100)}%` }} />
+                                  </div>
+                                  <span className="text-xs font-mono text-gray-300">{cpuTotal.toFixed(1)}%</span>
+                                </div>
+                              ) : <span className="text-xs text-gray-600">-</span>}
+                            </td>
+                            <td className="px-3 py-2">
+                              {memTotal > 0 ? (
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-16 h-2 bg-navy-600 rounded-full overflow-hidden">
+                                    <div className={`h-full rounded-full ${memPct > 85 ? 'bg-accent-red' : memPct > 60 ? 'bg-accent-orange' : 'bg-accent-green'}`}
+                                      style={{ width: `${Math.min(memPct, 100)}%` }} />
+                                  </div>
+                                  <span className="text-xs font-mono text-gray-300">{memPct.toFixed(0)}%</span>
+                                </div>
+                              ) : <span className="text-xs text-gray-600">-</span>}
+                            </td>
+                            <td className="px-3 py-2 text-xs font-mono text-gray-300">
+                              {bytesIn > 0 ? `${(bytesIn / 1024).toFixed(1)} KB/s` : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-xs font-mono text-gray-300">
+                              {bytesOut > 0 ? `${(bytesOut / 1024).toFixed(1)} KB/s` : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-xs font-mono text-gray-400 max-w-[180px] truncate">{bi?.Endpoints?.[0] || '-'}</td>
                           </tr>
                         );
-                      })
-                  )}
+                      });
+                  })}
                   {/* Controller rows */}
                   {allNodes.flatMap(cluster =>
                     cluster.nodes
@@ -226,17 +278,15 @@ export default function MSKPage() {
                           <td className="px-3 py-2 text-sm text-gray-400">{cluster.clusterName}</td>
                           <td className="px-3 py-2">
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-accent-purple/10 text-accent-purple">
-                              <span className="w-1.5 h-1.5 rounded-full bg-accent-purple" />CONTROLLER
+                              <span className="w-1.5 h-1.5 rounded-full bg-accent-purple" />CTRL
                             </span>
                           </td>
-                          <td className="px-3 py-2 text-sm font-mono text-gray-500">-</td>
+                          <td className="px-3 py-2 text-xs text-gray-500">-</td>
                           <td className="px-3 py-2 text-xs text-gray-500">KRaft</td>
                           <td className="px-3 py-2 text-xs text-gray-500">-</td>
                           <td className="px-3 py-2 text-xs text-gray-500">-</td>
-                          <td className="px-3 py-2 text-xs text-gray-500">-</td>
-                          <td className="px-3 py-2 text-xs text-gray-500">-</td>
-                          <td className="px-3 py-2 text-xs font-mono text-gray-400 max-w-[200px] truncate">{node.ControllerNodeInfo?.Endpoints?.[0] || '-'}</td>
-                          <td className="px-3 py-2 text-xs text-gray-500">-</td>
+                          <td className="px-3 py-2 text-xs text-gray-500" colSpan={4}>-</td>
+                          <td className="px-3 py-2 text-xs font-mono text-gray-400 max-w-[180px] truncate">{node.ControllerNodeInfo?.Endpoints?.[0] || '-'}</td>
                         </tr>
                       ))
                   )}
