@@ -78,10 +78,10 @@ const ROUTE_REGISTRY: Record<string, RouteConfig> = {
       'VPC Flow Logs 조회 및 트래픽 분석',
     ],
     examples: [
-      '"TGW 현황" → network', '"VPN 연결 확인" → network',
-      '"EC2 간 통신 가능한지 확인" → network', '"보안그룹 규칙 확인" → network',
-      '"플로우 로그 조회" → network', '"VPC 현황" → network',
-      '"서브넷 구성" → network', '"라우트 테이블" → network',
+      '"TGW 라우트 분석" → network', '"VPN 연결 상태 진단" → network',
+      '"EC2 간 통신 가능한지 확인" → network', '"네트워크 경로 분석" → network',
+      '"플로우 로그 조회" → network', '"VPC 피어링 트러블슈팅" → network',
+      '"Reachability Analyzer 실행" → network', '"방화벽 규칙 확인" → network',
     ],
   },
   container: {
@@ -170,6 +170,9 @@ const ROUTE_REGISTRY: Record<string, RouteConfig> = {
     examples: [
       '"EC2 인스턴스 목록" → aws-data', '"S3 버킷 현황" → aws-data',
       '"Lambda 함수 목록" → aws-data', '"전체 리소스 요약" → aws-data',
+      '"VPC 목록" → aws-data', '"VPC 현황" → aws-data',
+      '"서브넷 리스트" → aws-data', '"보안그룹 목록" → aws-data',
+      '"RDS 인스턴스 몇개" → aws-data', '"EKS 노드 목록" → aws-data',
     ],
     handler: 'sql',
   },
@@ -215,9 +218,13 @@ Classification rules:
 - Most questions need only 1 route. Use multiple routes ONLY when the question explicitly asks about different domains.
 - Examples of multi-route: "VPC 보안그룹과 비용을 분석해줘" → ["network", "cost"], "보안 점검하고 IAM 사용자도 확인" → ["security"]
 - If the user asks a follow-up ("그중에서", "그건", "더 자세히"), use PREVIOUS context to determine the route.
-- Prefer specialized routes (network, container, data, security, monitoring, cost) over general ones (aws-data, general).
-- "aws-data" is ONLY for simple resource listing/counting via SQL. If dedicated tools exist, use that route instead.
+- Prefer specialized routes for ANALYSIS, TROUBLESHOOTING, and TOOL-based operations.
+- "aws-data" is for simple resource LISTING, COUNTING, STATUS queries (e.g. "VPC 목록", "EC2 현황", "S3 버킷 몇개", "서브넷 리스트").
+- Use "network" only for ANALYSIS, TROUBLESHOOTING, or specific tools (reachability, flow logs, TGW routes, firewall rules). NOT for simple VPC/Subnet/SG listing.
+- Use "container" only for ANALYSIS or specific tools (EKS troubleshooting, Istio config). NOT for simple EKS/ECS listing.
 - "code" and "aws-data" should NOT be combined with other routes.
+- Keywords like "목록", "리스트", "현황", "몇개", "list", "count", "show" → prefer "aws-data"
+- Keywords like "분석", "진단", "문제", "확인해줘", "troubleshoot", "analyze" → prefer specialized route
 
 Examples:
 ${examples}
