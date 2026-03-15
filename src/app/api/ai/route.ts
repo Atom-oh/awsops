@@ -805,6 +805,11 @@ async function handleSingleRoute(
   const agentResponse = await invokeAgentCore(messages, gateway);
   if (agentResponse) {
     const usedTools = extractUsedTools(agentResponse);
+    // 디버그: raw 응답에서 도구 패턴 로깅 / Debug: log tool patterns in raw response
+    console.log(`[Tools Debug] gateway=${gateway}, extracted=${usedTools.length}, raw_length=${agentResponse.length}`);
+    console.log(`[Tools Debug] has_tool_call=${agentResponse.includes('<tool_call>')}, has_tool_use=${agentResponse.includes('tool_use')}, has_tool_name=${agentResponse.includes('tool_name')}`);
+    // raw에서 첫 500자 출력 / Print first 500 chars of raw
+    console.log(`[Tools Debug] raw_start: ${agentResponse.substring(0, 500).replace(/\n/g, '\\n')}`);
     const cleaned = agentResponse.replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/g, '').replace(/<tool_response>[\s\S]*?<\/tool_response>\s*/g, '').trim();
     return { content: cleaned || agentResponse, via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], usedTools };
   }
