@@ -10,6 +10,7 @@ interface Message {
   content: string;
   model?: string;
   queriedResources?: string[];
+  usedTools?: string[];   // 사용된 MCP 도구 목록 / Used MCP tools list
   via?: string;           // Routing path display / 라우팅 경로 표시
   route?: string;         // Classified intent route / 분류된 의도 라우트
   statusMessage?: string; // SSE progress status / SSE 진행 상태 메시지
@@ -111,6 +112,7 @@ export default function AIPage() {
                   setMessages([...newMessages, {
                     role: 'assistant', content: data.content,
                     model: data.model, queriedResources: data.queriedResources,
+                    usedTools: data.usedTools,
                     via: data.via, route: data.route,
                     responseTime: Math.round((Date.now() - startTime) / 100) / 10,
                   }]);
@@ -131,6 +133,7 @@ export default function AIPage() {
           setMessages([...newMessages, {
             role: 'assistant', content: data.content,
             model: data.model, queriedResources: data.queriedResources,
+            usedTools: data.usedTools,
             via: data.via, route: data.route,
             responseTime: Math.round((Date.now() - startTime) / 100) / 10,
           }]);
@@ -238,6 +241,20 @@ export default function AIPage() {
                 ? 'bg-accent-cyan/10 border border-accent-cyan/20 text-gray-200'
                 : 'bg-navy-800 border border-navy-600 text-gray-300'
             }`}>
+              {/* 사용된 도구 표시 / Used tools indicator */}
+              {msg.usedTools && msg.usedTools.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                  <span className="text-[10px] text-gray-500 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
+                    Tools used:
+                  </span>
+                  {msg.usedTools.map((tool, i) => (
+                    <span key={i} className="px-1.5 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan text-[10px] font-mono border border-accent-cyan/20">
+                      {tool}
+                    </span>
+                  ))}
+                </div>
+              )}
               {/* Queried resources indicator */}
               {msg.queriedResources && msg.queriedResources.length > 0 && (
                 <div className="flex items-center gap-1.5 mb-2 text-[10px] text-gray-500">

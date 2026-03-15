@@ -504,6 +504,27 @@ async function streamToString(stream: any): Promise<string> {
 }
 
 // ============================================================================
+// Tool usage extraction / 사용된 도구 추출
+// ============================================================================
+function extractUsedTools(rawResponse: string): string[] {
+  const tools = new Set<string>();
+  let m: RegExpExecArray | null;
+  // <tool_call> 태그에서 도구 이름 추출 / Extract tool names from <tool_call> tags
+  const callRegex = /<tool_call>\s*\{[^}]*"name"\s*:\s*"([^"]+)"/g;
+  while ((m = callRegex.exec(rawResponse)) !== null) tools.add(m[1]);
+  // tool_name 형식에서도 추출 / Also extract from tool_name format
+  const useRegex = /"tool_name"\s*:\s*"([^"]+)"/g;
+  while ((m = useRegex.exec(rawResponse)) !== null) tools.add(m[1]);
+  // 단순 함수 호출 패턴 / Simple function call patterns
+  const funcRegex = /(?:calling|using|called)\s+['"]?([a-z][a-z0-9_]+)['"]?/gi;
+  while ((m = funcRegex.exec(rawResponse)) !== null) {
+    const name = m[1].toLowerCase();
+    if (name.length > 3 && !['true', 'false', 'null', 'none', 'this', 'that', 'with'].includes(name)) tools.add(name);
+  }
+  return Array.from(tools);
+}
+
+// ============================================================================
 // SSE helpers / SSE 헬퍼
 // ============================================================================
 function sseEvent(event: string, data: any): string {
@@ -671,6 +692,7 @@ export async function POST(request: NextRequest) {
         const agentResponse = await invokeAgentCore(messages, gateway);
 
         if (agentResponse) {
+          const usedTools = extractUsedTools(agentResponse);
           const cleanedResponse = agentResponse
             .replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/g, '')
             .replace(/<tool_response>[\s\S]*?<\/tool_response>\s*/g, '')
@@ -678,6 +700,7 @@ export async function POST(request: NextRequest) {
           send('done', {
             content: cleanedResponse || agentResponse, model: 'sonnet-4.6',
             via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], route, routes,
+            usedTools,
           });
           controller.close();
           return;
@@ -719,7 +742,7 @@ export async function POST(request: NextRequest) {
 // ============================================================================
 async function handleSingleRoute(
   route: RouteType, messages: Array<{role: string; content: string}>, modelKey?: string
-): Promise<{ content: string; via: string; queriedResources: string[] } | null> {
+): Promise<{ content: string; via: string; queriedResources: string[]; usedTools?: string[] } | null> {
   const config = ROUTE_REGISTRY[route];
   const lastMessage = messages[messages.length - 1]?.content || '';
 
@@ -781,8 +804,9 @@ async function handleSingleRoute(
   const gateway = config.gateway || 'ops';
   const agentResponse = await invokeAgentCore(messages, gateway);
   if (agentResponse) {
+    const usedTools = extractUsedTools(agentResponse);
     const cleaned = agentResponse.replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/g, '').replace(/<tool_response>[\s\S]*?<\/tool_response>\s*/g, '').trim();
-    return { content: cleaned || agentResponse, via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`] };
+    return { content: cleaned || agentResponse, via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], usedTools };
   }
   return null;
 }
@@ -827,7 +851,7 @@ async function handleNonStreaming(messages: Array<{role: string; content: string
         return NextResponse.json({
           content: result.content, model: modelKey || 'sonnet-4.6',
           via: result.via, queriedResources: result.queriedResources,
-          route: primaryRoute, routes,
+          usedTools: result.usedTools || [], route: primaryRoute, routes,
         });
       }
       // Fallback / 폴백
