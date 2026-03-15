@@ -703,26 +703,35 @@ export async function POST(request: NextRequest) {
           );
           const successful: { route: string; content: string; via: string }[] = [];
           const allResources: string[] = [];
+          const allUsedTools: string[] = [];
           results.forEach((r, i) => {
             if (r.status === 'fulfilled' && r.value) {
               successful.push({ route: routes[i], content: r.value.content, via: r.value.via });
               allResources.push(...r.value.queriedResources);
+              if (r.value.usedTools) allUsedTools.push(...r.value.usedTools);
             }
           });
+          // 합성 응답에서도 도구 추출 / Also extract tools from synthesized content
+          const dedupedTools = Array.from(new Set(allUsedTools));
 
           if (successful.length > 1) {
             send('status', { step: 'synthesizing', message: `📊 ${successful.length}개 응답 합성 중...` });
             const lastMsg = messages[messages.length - 1]?.content || '';
             const synthesized = await synthesizeResponses(lastMsg, successful, modelKey);
+            // 합성된 응답에서도 추가 도구 추출 / Extract additional tools from synthesized response
+            const synthesizedTools = extractUsedTools(synthesized);
+            const finalTools = Array.from(new Set([...dedupedTools, ...synthesizedTools]));
             const viaList = successful.map(s => s.via).join(' + ');
             send('done', {
               content: synthesized, model: modelKey || 'sonnet-4.6',
               via: `Multi-Route: ${viaList}`, queriedResources: allResources, route, routes,
+              usedTools: finalTools,
             });
           } else if (successful.length === 1) {
             send('done', {
               content: successful[0].content, model: modelKey || 'sonnet-4.6',
               via: successful[0].via, queriedResources: allResources, route, routes,
+              usedTools: dedupedTools,
             });
           } else {
             // 모든 Gateway 실패 → Bedrock Direct 폴백 / All gateways failed → Bedrock Direct fallback
