@@ -633,6 +633,15 @@ function sseEvent(event: string, data: any): string {
 }
 
 // ============================================================================
+// Helper: 통계 기록 + 대화 저장을 한 번에 / Record stats + save conversation in one call
+function recordAndSave(p: {
+  route: string; gateway: string; responseTimeMs: number; usedTools: string[];
+  success: boolean; via: string; question: string; summary: string; userId: string;
+}): void {
+  recordCall({ timestamp: new Date().toISOString(), route: p.route, gateway: p.gateway, responseTimeMs: p.responseTimeMs, usedTools: p.usedTools, success: p.success, via: p.via });
+  saveConversation({ id: `${Date.now()}`, userId: p.userId, timestamp: new Date().toISOString(), route: p.route, gateway: p.gateway, question: p.question.slice(0, 100), summary: p.summary.slice(0, 200), usedTools: p.usedTools, responseTimeMs: p.responseTimeMs, via: p.via }).catch(() => {});
+}
+
 // POST handler — SSE streaming with step-by-step progress events
 // POST 핸들러 — 단계별 진행 이벤트를 포함한 SSE 스트리밍
 // ============================================================================
@@ -748,8 +757,7 @@ export async function POST(request: NextRequest) {
             const sqlTools = extractUsedTools(sqlContent);
             if (sql) sqlTools.push(`steampipe: ${sql.match(/FROM\s+(\w+)/i)?.[1] || 'query'}`);
             const sqlTimeMs = Date.now() - callStartTime;
-            recordCall({ timestamp: new Date().toISOString(), route, gateway: 'steampipe', responseTimeMs: sqlTimeMs, usedTools: sqlTools, success: true, via: `${config.display} (${queryResult.rowCount} rows)` });
-            saveConversation({ id: `${Date.now()}`, userId: currentUser.email, timestamp: new Date().toISOString(), route, gateway: 'steampipe', question: lastMessage.slice(0, 100), summary: sqlContent.slice(0, 200), usedTools: sqlTools, responseTimeMs: sqlTimeMs, via: `${config.display} (${queryResult.rowCount} rows)` }).catch(() => {});
+            recordAndSave({ route, gateway: 'steampipe', responseTimeMs: sqlTimeMs, usedTools: sqlTools, success: true, via: `${config.display} (${queryResult.rowCount} rows)`, question: lastMessage, summary: sqlContent, userId: currentUser.email });
             send('done', {
               content: sqlContent, model: modelKey || 'sonnet-4.6',
               via: `${config.display} (${queryResult.rowCount} rows)`, queriedResources: ['steampipe'], route,
@@ -790,8 +798,7 @@ export async function POST(request: NextRequest) {
             const finalTools = Array.from(new Set([...dedupedTools, ...synthesizedTools]));
             const viaList = successful.map(s => s.via).join(' + ');
             const multiTimeMs = Date.now() - callStartTime;
-            recordCall({ timestamp: new Date().toISOString(), route, gateway: `multi:${routes.join('+')}`, responseTimeMs: multiTimeMs, usedTools: finalTools, success: true, via: `Multi-Route: ${viaList}` });
-            saveConversation({ id: `${Date.now()}`, userId: currentUser.email, timestamp: new Date().toISOString(), route, gateway: `multi:${routes.join('+')}`, question: lastMsg.slice(0, 100), summary: synthesized.slice(0, 200), usedTools: finalTools, responseTimeMs: multiTimeMs, via: `Multi-Route: ${viaList}` }).catch(() => {});
+            recordAndSave({ route, gateway: `multi:${routes.join('+')}`, responseTimeMs: multiTimeMs, usedTools: finalTools, success: true, via: `Multi-Route: ${viaList}`, question: lastMsg, summary: synthesized, userId: currentUser.email });
             send('done', {
               content: synthesized, model: modelKey || 'sonnet-4.6',
               via: `Multi-Route: ${viaList}`, queriedResources: allResources, route, routes,
@@ -845,8 +852,7 @@ export async function POST(request: NextRequest) {
             .trim();
           const responseTimeMs = Date.now() - callStartTime;
           const finalContent = cleanedResponse || agentResponse;
-          recordCall({ timestamp: new Date().toISOString(), route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}` });
-          saveConversation({ id: `${Date.now()}`, userId: currentUser.email, timestamp: new Date().toISOString(), route, gateway, question: lastMessage.slice(0, 100), summary: finalContent.slice(0, 200), usedTools, responseTimeMs, via: `AgentCore → ${config.display}` }).catch(() => {});
+          recordAndSave({ route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}`, question: lastMessage, summary: finalContent, userId: currentUser.email });
           send('done', {
             content: finalContent, model: 'sonnet-4.6',
             via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], route, routes,
@@ -870,8 +876,7 @@ export async function POST(request: NextRequest) {
         const fallbackContent = result.content?.[0]?.text || 'No response';
         const fallbackTools = extractUsedTools(fallbackContent);
         const fbTimeMs = Date.now() - callStartTime;
-        recordCall({ timestamp: new Date().toISOString(), route, gateway: 'bedrock-fallback', responseTimeMs: fbTimeMs, usedTools: fallbackTools, success: false, via: `Bedrock Direct (fallback from ${config.display})` });
-        saveConversation({ id: `${Date.now()}`, userId: currentUser.email, timestamp: new Date().toISOString(), route, gateway: 'bedrock-fallback', question: lastMessage.slice(0, 100), summary: fallbackContent.slice(0, 200), usedTools: fallbackTools, responseTimeMs: fbTimeMs, via: `Bedrock Direct (fallback)` }).catch(() => {});
+        recordAndSave({ route, gateway: 'bedrock-fallback', responseTimeMs: fbTimeMs, usedTools: fallbackTools, success: false, via: `Bedrock Direct (fallback)`, question: lastMessage, summary: fallbackContent, userId: currentUser.email });
         send('done', {
           content: fallbackContent, model: modelKey || 'sonnet-4.6',
           via: `Bedrock Direct (fallback from ${config.display})`, queriedResources: [], route,

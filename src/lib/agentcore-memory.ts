@@ -1,84 +1,84 @@
-// AgentCore Memory — 대화 이력 및 분석 결과 영구 저장
-// AgentCore Memory — persistent conversation history and analysis results
-// AgentCore Memory API 사용, 미지원 시 로컬 파일 폴백
-// Uses AgentCore Memory API, falls back to local file storage
+// AgentCore Memory — 대화 이력 영구 저장 (인메모리 캐시 + 디바운스 flush)
+// Persistent conversation history with in-memory cache + debounced flush
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, resolve } from 'path';
-import { execFileSync } from 'child_process';
-import { getConfig } from '@/lib/app-config';
 
 const DATA_DIR = resolve(process.cwd(), 'data/memory');
-const REGION = 'ap-northeast-2';
-const MAX_CONVERSATIONS = 100; // 최대 대화 수 / Max conversations stored
+const MAX_CONVERSATIONS = 100;
 
 export interface ConversationRecord {
   id: string;
-  userId: string;          // Cognito 사용자 ID (email) / Cognito user ID (email)
+  userId: string;
   timestamp: string;
   route: string;
   gateway: string;
-  question: string;        // 사용자 질문 요약 / User question summary
-  summary: string;         // 응답 요약 (첫 200자) / Response summary (first 200 chars)
+  question: string;
+  summary: string;
   usedTools: string[];
   responseTimeMs: number;
   via: string;
-  fullResponse?: string;   // 전체 응답 (로컬 저장 시) / Full response (local storage)
 }
 
-export interface MemoryStore {
+interface MemoryStore {
   conversations: ConversationRecord[];
   lastUpdated: string;
 }
 
-function ensureDir(): void {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-}
+// 인메모리 캐시 / In-memory cache
+let _store: MemoryStore | null = null;
+let _flushTimer: ReturnType<typeof setTimeout> | null = null;
+const FLUSH_DELAY = 5000;
 
-function getMemoryId(): string {
-  return getConfig().memoryId || 'local-fallback';
-}
+function getStoreFile(): string { return join(DATA_DIR, 'conversations.json'); }
 
-// AgentCore Memory API로 저장 시도, 실패 시 로컬 / Try AgentCore API, fallback to local
-export async function saveConversation(record: ConversationRecord): Promise<void> {
-  const memoryId = getMemoryId();
-
-  // 로컬 저장 (항상 수행) / Always save locally
-  saveLocal(record);
-
-  // AgentCore Memory API 시도 / Try AgentCore Memory API
-  if (memoryId && memoryId !== 'local-fallback') {
-    try {
-      const content = JSON.stringify({
-        question: record.question,
-        summary: record.summary,
-        route: record.route,
-        gateway: record.gateway,
-        usedTools: record.usedTools,
-        timestamp: record.timestamp,
-      });
-      execFileSync('aws', [
-        'bedrock-agentcore', 'create-memory-record',
-        '--memory-id', memoryId,
-        '--content', content,
-        '--region', REGION,
-        '--output', 'json',
-      ], { encoding: 'utf-8', timeout: 10000 });
-    } catch {
-      // AgentCore Memory API 실패 — 로컬 저장은 이미 완료됨
-    }
+function loadFromDisk(): MemoryStore {
+  try {
+    const raw = readFileSync(getStoreFile(), 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return { conversations: [], lastUpdated: new Date().toISOString() };
   }
 }
 
-// 대화 이력 조회 (사용자별) / Get conversation history (per user)
+function flushToDisk(): void {
+  if (!_store) return;
+  try {
+    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(getStoreFile(), JSON.stringify(_store, null, 2), 'utf-8');
+  } catch {}
+}
+
+function scheduleFlush(): void {
+  if (_flushTimer) clearTimeout(_flushTimer);
+  _flushTimer = setTimeout(flushToDisk, FLUSH_DELAY);
+}
+
+function getStore(): MemoryStore {
+  if (!_store) _store = loadFromDisk();
+  return _store;
+}
+
+// 대화 저장 (fire-and-forget) / Save conversation
+export async function saveConversation(record: ConversationRecord): Promise<void> {
+  const store = getStore();
+  store.conversations.unshift(record);
+  if (store.conversations.length > MAX_CONVERSATIONS) {
+    store.conversations = store.conversations.slice(0, MAX_CONVERSATIONS);
+  }
+  store.lastUpdated = new Date().toISOString();
+  scheduleFlush();
+}
+
+// 대화 이력 조회 (사용자별) / Get conversations (per user)
 export async function getConversations(limit = 20, userId?: string): Promise<ConversationRecord[]> {
-  const all = getLocalConversations(MAX_CONVERSATIONS);
+  const all = getStore().conversations;
   const filtered = userId ? all.filter(c => c.userId === userId) : all;
   return filtered.slice(0, limit);
 }
 
 // 키워드 검색 (사용자별) / Search by keyword (per user)
 export async function searchConversations(query: string, limit = 10, userId?: string): Promise<ConversationRecord[]> {
-  const all = getLocalConversations(MAX_CONVERSATIONS);
+  const all = getStore().conversations;
   const q = query.toLowerCase();
   return all.filter(c =>
     (!userId || c.userId === userId) &&
@@ -97,57 +97,17 @@ export function getMemoryStats(): {
   topRoutes: Record<string, number>;
   topTools: Record<string, number>;
 } {
-  const all = getLocalConversations(MAX_CONVERSATIONS);
+  const all = getStore().conversations;
   const topRoutes: Record<string, number> = {};
   const topTools: Record<string, number> = {};
-
   all.forEach(c => {
     topRoutes[c.route] = (topRoutes[c.route] || 0) + 1;
     c.usedTools.forEach(t => { topTools[t] = (topTools[t] || 0) + 1; });
   });
-
   return {
     totalConversations: all.length,
     oldestDate: all.length > 0 ? all[all.length - 1].timestamp : null,
     newestDate: all.length > 0 ? all[0].timestamp : null,
-    topRoutes,
-    topTools,
+    topRoutes, topTools,
   };
-}
-
-// --- 로컬 파일 저장 / Local file storage ---
-
-function getStoreFile(): string {
-  return join(DATA_DIR, 'conversations.json');
-}
-
-function loadStore(): MemoryStore {
-  ensureDir();
-  const file = getStoreFile();
-  try {
-    if (existsSync(file)) {
-      return JSON.parse(readFileSync(file, 'utf-8'));
-    }
-  } catch {}
-  return { conversations: [], lastUpdated: new Date().toISOString() };
-}
-
-function saveStore(store: MemoryStore): void {
-  ensureDir();
-  writeFileSync(getStoreFile(), JSON.stringify(store, null, 2), 'utf-8');
-}
-
-function saveLocal(record: ConversationRecord): void {
-  const store = loadStore();
-  store.conversations.unshift(record);
-  if (store.conversations.length > MAX_CONVERSATIONS) {
-    store.conversations = store.conversations.slice(0, MAX_CONVERSATIONS);
-  }
-  store.lastUpdated = new Date().toISOString();
-  saveStore(store);
-}
-
-function getLocalConversations(limit: number): ConversationRecord[] {
-  const store = loadStore();
-  return store.conversations.slice(0, limit);
 }

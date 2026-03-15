@@ -13,13 +13,23 @@ export interface AppConfig {
 
 const DEFAULT_CONFIG: AppConfig = { costEnabled: true };
 
+// 캐시된 config (60초 TTL) / Cached config with 60s TTL
+let _configCache: AppConfig | null = null;
+let _configCacheTime = 0;
+const CONFIG_CACHE_TTL = 60000;
+
 export function getConfig(): AppConfig {
+  const now = Date.now();
+  if (_configCache && now - _configCacheTime < CONFIG_CACHE_TTL) return _configCache;
   try {
-    if (existsSync(CONFIG_PATH)) {
-      return { ...DEFAULT_CONFIG, ...JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) };
-    }
-  } catch { /* return default */ }
-  return DEFAULT_CONFIG;
+    const raw = readFileSync(CONFIG_PATH, 'utf-8');
+    const parsed: AppConfig = { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+    _configCache = parsed;
+    _configCacheTime = now;
+    return parsed;
+  } catch {
+    return DEFAULT_CONFIG;
+  }
 }
 
 export function saveConfig(config: Partial<AppConfig>): void {
@@ -28,4 +38,6 @@ export function saveConfig(config: Partial<AppConfig>): void {
   const dir = dirname(CONFIG_PATH);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), 'utf-8');
+  _configCache = merged as AppConfig;
+  _configCacheTime = Date.now();
 }

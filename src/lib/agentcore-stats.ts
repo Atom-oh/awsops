@@ -1,5 +1,5 @@
-// AgentCore 사용 통계 저장/조회 — data/agentcore-stats.json
-// AgentCore usage stats: save/load from data/agentcore-stats.json
+// AgentCore 호출 통계 — 인메모리 캐시 + 디바운스 flush
+// AgentCore call stats — in-memory cache with debounced disk flush
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 
@@ -24,7 +24,7 @@ export interface AgentCoreStats {
   uniqueToolsUsed: string[];
   callsByGateway: Record<string, number>;
   callsByRoute: Record<string, number>;
-  recentCalls: AgentCoreCallRecord[];  // 최근 50건 / last 50 calls
+  recentCalls: AgentCoreCallRecord[];
   lastUpdated: string;
 }
 
@@ -35,53 +35,67 @@ const DEFAULT_STATS: AgentCoreStats = {
   recentCalls: [], lastUpdated: new Date().toISOString(),
 };
 
-function ensureDir(): void {
-  const dir = dirname(STATS_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+// 인메모리 캐시 — 디스크 읽기 최소화 / In-memory cache to minimize disk reads
+let _stats: AgentCoreStats | null = null;
+let _flushTimer: ReturnType<typeof setTimeout> | null = null;
+const FLUSH_DELAY = 5000; // 5초 디바운스 / 5s debounce
+
+function loadFromDisk(): AgentCoreStats {
+  try {
+    const raw = readFileSync(STATS_PATH, 'utf-8');
+    return { ...DEFAULT_STATS, ...JSON.parse(raw) };
+  } catch {
+    return { ...DEFAULT_STATS };
+  }
+}
+
+function flushToDisk(): void {
+  if (!_stats) return;
+  try {
+    const dir = dirname(STATS_PATH);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(STATS_PATH, JSON.stringify(_stats, null, 2), 'utf-8');
+  } catch {}
+}
+
+function scheduleFlush(): void {
+  if (_flushTimer) clearTimeout(_flushTimer);
+  _flushTimer = setTimeout(flushToDisk, FLUSH_DELAY);
 }
 
 export function getStats(): AgentCoreStats {
-  try {
-    if (existsSync(STATS_PATH)) {
-      return { ...DEFAULT_STATS, ...JSON.parse(readFileSync(STATS_PATH, 'utf-8')) };
-    }
-  } catch {}
-  return { ...DEFAULT_STATS };
+  if (!_stats) _stats = loadFromDisk();
+  return _stats;
 }
 
 export function recordCall(record: AgentCoreCallRecord): void {
-  ensureDir();
-  const stats = getStats();
+  if (!_stats) _stats = loadFromDisk();
 
-  stats.totalCalls++;
-  if (record.success) stats.successCalls++;
-  else stats.failedCalls++;
+  _stats.totalCalls++;
+  if (record.success) _stats.successCalls++;
+  else _stats.failedCalls++;
 
-  // 평균 응답 시간 갱신 / Update average response time
-  const prevTotal = stats.avgResponseTimeMs * (stats.totalCalls - 1);
-  stats.avgResponseTimeMs = Math.round((prevTotal + record.responseTimeMs) / stats.totalCalls);
+  const prevTotal = _stats.avgResponseTimeMs * (_stats.totalCalls - 1);
+  _stats.avgResponseTimeMs = Math.round((prevTotal + record.responseTimeMs) / _stats.totalCalls);
 
-  // 도구 사용 통계 / Tool usage stats
-  stats.totalToolsUsed += record.usedTools.length;
-  const uniqueSet = new Set(stats.uniqueToolsUsed);
+  _stats.totalToolsUsed += record.usedTools.length;
+  const uniqueSet = new Set(_stats.uniqueToolsUsed);
   record.usedTools.forEach(t => uniqueSet.add(t));
-  stats.uniqueToolsUsed = Array.from(uniqueSet);
+  // uniqueToolsUsed 최대 200개 / Cap at 200
+  _stats.uniqueToolsUsed = Array.from(uniqueSet).slice(0, 200);
 
-  // 게이트웨이별 호출 수 / Calls by gateway
   if (record.gateway) {
-    stats.callsByGateway[record.gateway] = (stats.callsByGateway[record.gateway] || 0) + 1;
+    _stats.callsByGateway[record.gateway] = (_stats.callsByGateway[record.gateway] || 0) + 1;
   }
-
-  // 라우트별 호출 수 / Calls by route
   if (record.route) {
-    stats.callsByRoute[record.route] = (stats.callsByRoute[record.route] || 0) + 1;
+    _stats.callsByRoute[record.route] = (_stats.callsByRoute[record.route] || 0) + 1;
   }
 
-  // 최근 50건 유지 / Keep last 50 records
-  stats.recentCalls.unshift(record);
-  if (stats.recentCalls.length > 50) stats.recentCalls = stats.recentCalls.slice(0, 50);
+  _stats.recentCalls.unshift(record);
+  if (_stats.recentCalls.length > 50) _stats.recentCalls = _stats.recentCalls.slice(0, 50);
 
-  stats.lastUpdated = new Date().toISOString();
+  _stats.lastUpdated = new Date().toISOString();
 
-  writeFileSync(STATS_PATH, JSON.stringify(stats, null, 2), 'utf-8');
+  // 디바운스 flush — 매 호출마다 디스크 쓰기 안 함 / Debounced flush, not every call
+  scheduleFlush();
 }

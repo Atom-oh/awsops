@@ -40,7 +40,7 @@ export default function AIPage() {
       .catch(() => {});
   };
 
-  useEffect(() => { loadHistory(); }, []);
+  // 히스토리는 토글 시에만 로드 (마운트 시 불필요) / Only load on toggle, not mount
 
   // Session stats from chat messages / 채팅 메시지에서 세션 통계
   const sessionStats = useMemo(() => {
@@ -48,12 +48,11 @@ export default function AIPage() {
     const routeCounts: Record<string, number> = {};
     let totalTime = 0;
     let successCount = 0;
-    let _failCount = 0;
 
     assistantMsgs.forEach(m => {
       if (m.route) routeCounts[m.route] = (routeCounts[m.route] || 0) + 1;
       if (m.responseTime) totalTime += m.responseTime;
-      if (m.content?.startsWith('Error')) _failCount++; else successCount++;
+      if (!m.content?.startsWith('Error')) successCount++;
     });
 
     return {

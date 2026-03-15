@@ -11,12 +11,13 @@ interface HeaderProps {
 
 export default function Header({ title, subtitle, onRefresh }: HeaderProps) {
   const [spinning, setSpinning] = useState(false);
-  const [lastUpdated] = useState(() => new Date().toLocaleTimeString());
+  const [lastUpdated, setLastUpdated] = useState(() => new Date().toLocaleTimeString());
 
   const handleRefresh = () => {
     if (!onRefresh) return;
     setSpinning(true);
     onRefresh();
+    setLastUpdated(new Date().toLocaleTimeString());
     setTimeout(() => setSpinning(false), 1000);
   };
 
