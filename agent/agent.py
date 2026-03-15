@@ -21,14 +21,14 @@ app = BedrockAgentCoreApp()
 # Gateway URLs by role / 역할별 게이트웨이 URL
 # 8 Gateways: network, container, iac, data, security, monitoring, cost, ops
 GATEWAYS = {
-    "network": "https://awsops-network-gateway-PLACEHOLDER.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
-    "container": "https://awsops-container-gateway-PLACEHOLDER.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
-    "ops": "https://awsops-ops-gateway-ybcvjkwu71.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
-    "iac": "https://awsops-iac-gateway-i0vlfltmwu.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
-    "cost": "https://awsops-cost-gateway-uanqtckgzm.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
-    "monitoring": "https://awsops-monitoring-gateway-lal7vj9ozv.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
-    "security": "https://awsops-security-gateway-orxxph0a0s.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
-    "data": "https://awsops-data-gateway-vnm22bj3ji.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "network": "https://awsops-network-gateway-m7gnn58pzi.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "container": "https://awsops-container-gateway-saxxnzqyc9.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "ops": "https://awsops-ops-gateway-pxkzao9oqc.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "iac": "https://awsops-iac-gateway-gkgkro8s06.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "cost": "https://awsops-cost-gateway-sd3iflsjxm.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "monitoring": "https://awsops-monitoring-gateway-ouzu0kpyq0.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "security": "https://awsops-security-gateway-irksjlz54h.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+    "data": "https://awsops-data-gateway-j9ecawmxpr.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
 }
 DEFAULT_GATEWAY = "ops"
 GATEWAY_REGION = "ap-northeast-2"
