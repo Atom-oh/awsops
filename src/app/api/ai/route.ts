@@ -444,7 +444,7 @@ async function executeCodeInterpreter(code: string): Promise<{ output: string; e
 // ============================================================================
 // AgentCore Runtime / AgentCore 런타임
 // ============================================================================
-const AGENTCORE_TIMEOUT_MS = 60000;
+const AGENTCORE_TIMEOUT_MS = 90000; // 90초 — Gateway 도구 실행 시간 고려 / 90s for tool execution
 
 async function invokeAgentCore(
   messages: Array<{role: string; content: string}>,
@@ -725,7 +725,26 @@ export async function POST(request: NextRequest) {
               via: successful[0].via, queriedResources: allResources, route, routes,
             });
           } else {
-            send('error', { error: 'All routes failed' });
+            // 모든 Gateway 실패 → Bedrock Direct 폴백 / All gateways failed → Bedrock Direct fallback
+            send('status', { step: 'fallback', message: '🔄 Gateway 타임아웃, Bedrock Direct로 전환...' });
+            const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+            const fallbackBody = JSON.stringify({
+              anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT,
+              messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })),
+            });
+            try {
+              const fallbackResp = await bedrockClient.send(new InvokeModelCommand({
+                modelId, contentType: 'application/json', accept: 'application/json',
+                body: encoder.encode(fallbackBody),
+              }));
+              const fallbackResult = JSON.parse(new TextDecoder().decode(fallbackResp.body));
+              send('done', {
+                content: fallbackResult.content?.[0]?.text || 'No response', model: modelKey || 'sonnet-4.6',
+                via: `Bedrock Direct (multi-route fallback: ${routes.join('+')} timed out)`, queriedResources: [], route, routes,
+              });
+            } catch {
+              send('error', { error: 'All routes and fallback failed' });
+            }
           }
           controller.close();
           return;
