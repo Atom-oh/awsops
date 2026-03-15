@@ -425,23 +425,23 @@ export default function AIPage() {
         </button>
 
         {showHistory && (
-          <div className="px-6 py-3 bg-navy-900/20 max-h-60 overflow-y-auto space-y-1.5">
+          <div className="px-5 py-4 bg-navy-900/30 max-h-80 overflow-y-auto space-y-2">
             {historyData.length === 0 ? (
-              <p className="text-xs text-gray-600 text-center py-3">아직 대화 이력이 없습니다</p>
+              <p className="text-sm text-gray-500 text-center py-6">아직 대화 이력이 없습니다. 질문을 시작해보세요.</p>
             ) : (
               historyData.map((conv: any, i: number) => (
                 <div key={conv.id || i}
                   onClick={() => { setInput(conv.question); setShowHistory(false); inputRef.current?.focus(); }}
-                  className="flex items-center gap-3 px-3 py-2 rounded-lg bg-navy-800/50 hover:bg-navy-700/50 cursor-pointer transition-colors group"
+                  className="flex items-center gap-4 px-4 py-3 rounded-lg bg-navy-800/60 hover:bg-navy-700/60 border border-navy-700/50 hover:border-accent-cyan/30 cursor-pointer transition-all group"
                 >
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs text-gray-300 truncate group-hover:text-white">{conv.question}</p>
-                    <p className="text-[10px] text-gray-600 truncate mt-0.5">{conv.summary?.slice(0, 80)}</p>
+                    <p className="text-sm text-gray-200 truncate group-hover:text-white font-medium">{conv.question}</p>
+                    <p className="text-xs text-gray-500 truncate mt-1">{conv.summary?.slice(0, 100)}</p>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="px-1.5 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan text-[9px] font-mono">{conv.route}</span>
-                    <span className="text-[9px] font-mono text-gray-600">{(conv.responseTimeMs / 1000).toFixed(1)}s</span>
-                    <span className="text-[9px] text-gray-700">{conv.timestamp ? new Date(conv.timestamp).toLocaleDateString() : ''}</span>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="px-2 py-0.5 rounded-full bg-accent-cyan/10 text-accent-cyan text-xs font-mono border border-accent-cyan/20">{conv.route}</span>
+                    <span className="text-xs font-mono text-gray-400">{(conv.responseTimeMs / 1000).toFixed(1)}s</span>
+                    <span className="text-xs text-gray-500">{conv.timestamp ? new Date(conv.timestamp).toLocaleDateString() : ''}</span>
                   </div>
                 </div>
               ))
