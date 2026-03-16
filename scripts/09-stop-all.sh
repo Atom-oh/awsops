@@ -22,7 +22,7 @@ echo -e "${CYAN}   AWSops Dashboard - Stop All Services${NC}"
 echo -e "${CYAN}=================================================================${NC}"
 echo ""
 
-# -- [1/2] Stop Next.js -------------------------------------------------------
+# -- [1/3] Stop Next.js -------------------------------------------------------
 echo -e "${CYAN}[1/2] Stopping Next.js (port 3000)...${NC}"
 if fuser 3000/tcp 2>/dev/null; then
     fuser -k 3000/tcp 2>/dev/null || true
@@ -31,7 +31,16 @@ else
     echo "  Not running"
 fi
 
-# -- [2/2] Stop Steampipe ------------------------------------------------------
+# -- [2/3] Stop OpenCost port-forward ------------------------------------------
+echo ""
+echo -e "${CYAN}[2/3] Stopping OpenCost port-forward...${NC}"
+if pkill -f "kubectl port-forward.*opencost.*9003" 2>/dev/null; then
+    echo -e "  ${GREEN}Stopped${NC}"
+else
+    echo "  Not running"
+fi
+
+# -- [3/3] Stop Steampipe ------------------------------------------------------
 echo ""
 echo -e "${CYAN}[2/2] Stopping Steampipe service...${NC}"
 if steampipe service status 2>&1 | grep -q "running"; then
@@ -59,6 +68,13 @@ if steampipe service status 2>&1 | grep -q "running"; then
     echo -e "  ${RED}WARN${NC} Steampipe still running"
 else
     echo -e "  ${GREEN}OK${NC}  Steampipe stopped"
+fi
+
+# Verify OpenCost port-forward stopped
+if pgrep -f "kubectl port-forward.*opencost.*9003" &>/dev/null; then
+    echo -e "  ${RED}WARN${NC} OpenCost port-forward still running"
+else
+    echo -e "  ${GREEN}OK${NC}  OpenCost port-forward stopped"
 fi
 
 echo ""

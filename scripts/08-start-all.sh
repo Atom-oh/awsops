@@ -51,6 +51,24 @@ nohup sh -c "PORT=3000 npm run start" > /tmp/awsops-server.log 2>&1 &
 sleep 3
 echo -e "  ${GREEN}Started (log: /tmp/awsops-server.log)${NC}"
 
+# -- [3/3] OpenCost port-forward (if OpenCost installed) ----------------------
+echo ""
+echo -e "${CYAN}[3/3] Starting OpenCost port-forward (if installed)...${NC}"
+if kubectl get deployment opencost -n opencost &>/dev/null 2>&1; then
+    # Kill existing port-forward / 기존 포트 포워딩 종료
+    pkill -f "kubectl port-forward.*opencost.*9003" 2>/dev/null || true
+    sleep 1
+    nohup kubectl port-forward svc/opencost 9003:9003 -n opencost --address 0.0.0.0 > /tmp/opencost-portforward.log 2>&1 &
+    sleep 3
+    if curl -s --connect-timeout 3 "http://localhost:9003/healthz" &>/dev/null; then
+        echo -e "  ${GREEN}OpenCost port-forward active (localhost:9003)${NC}"
+    else
+        echo -e "  ${YELLOW}OpenCost port-forward starting... (check /tmp/opencost-portforward.log)${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}OpenCost not installed (skip)${NC}"
+fi
+
 # -- Service status check ------------------------------------------------------
 echo ""
 echo -e "${CYAN}=================================================================${NC}"
@@ -81,6 +99,15 @@ if echo "$API" | grep -q "ok"; then
     echo -e "  ${GREEN}OK${NC}  Steampipe API      working"
 else
     echo -e "  ${RED}FAIL${NC}  Steampipe API      NOT responding"
+fi
+
+# OpenCost
+if curl -s --connect-timeout 3 "http://localhost:9003/healthz" &>/dev/null; then
+    echo -e "  ${GREEN}OK${NC}  OpenCost           port 9003  (port-forward)"
+elif kubectl get deployment opencost -n opencost &>/dev/null 2>&1; then
+    echo -e "  ${YELLOW}WARN${NC}  OpenCost           installed but port-forward not active"
+else
+    echo -e "  ${YELLOW}SKIP${NC}  OpenCost           not installed"
 fi
 
 # -- Access URLs ---------------------------------------------------------------

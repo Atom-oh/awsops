@@ -1,12 +1,15 @@
 #!/bin/bash
 ###############################################################################
-# Step 6f: Install Metrics Server + OpenCost on EKS cluster                   #
-# 단계 6f: EKS 클러스터에 Metrics Server + OpenCost 설치                      #
+# Step 6f: Install Prometheus + Metrics Server + OpenCost on EKS cluster      #
+# 단계 6f: EKS 클러스터에 Prometheus + Metrics Server + OpenCost 설치         #
 #                                                                             #
 # Prerequisites / 전제 조건:                                                   #
 #   - EKS cluster accessible via kubectl                                      #
 #   - AWS credentials configured                                              #
 #   - KUBECONFIG set (~/.kube/config)                                         #
+#                                                                             #
+# OpenCost requires Prometheus for metrics collection                         #
+# OpenCost는 메트릭 수집을 위해 Prometheus가 필요합니다                        #
 ###############################################################################
 
 set -e
@@ -15,14 +18,15 @@ REGION="ap-northeast-2"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$PROJECT_DIR/data/config.json"
+OPENCOST_LOCAL_PORT=9003
 
 echo "============================================"
-echo "  Step 6f: Metrics Server + OpenCost Setup"
+echo "  Step 6f: Prometheus + OpenCost Setup"
 echo "============================================"
 echo ""
 
 # 0. Verify kubectl access / kubectl 접근 확인
-echo "[0/6] Verifying kubectl access..."
+echo "[0/8] Verifying kubectl access..."
 if ! kubectl cluster-info &>/dev/null; then
   echo "ERROR: kubectl cannot access the cluster. Check KUBECONFIG."
   echo "  export KUBECONFIG=~/.kube/config"
@@ -33,7 +37,7 @@ echo "  Cluster: $CLUSTER_NAME"
 echo ""
 
 # 1. Install Helm / Helm 설치
-echo "[1/6] Checking Helm..."
+echo "[1/8] Checking Helm..."
 if ! command -v helm &>/dev/null; then
   echo "  Installing Helm 3..."
   curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
@@ -43,7 +47,7 @@ fi
 echo ""
 
 # 2. Install Metrics Server / Metrics Server 설치
-echo "[2/6] Installing Metrics Server..."
+echo "[2/8] Installing Metrics Server..."
 if kubectl get deployment metrics-server -n kube-system &>/dev/null; then
   echo "  Metrics Server already installed"
 else
@@ -54,78 +58,101 @@ else
 fi
 echo ""
 
-# 3. Install OpenCost / OpenCost 설치
-echo "[3/6] Installing OpenCost..."
+# 3. Install Prometheus (required by OpenCost) / Prometheus 설치 (OpenCost 필수)
+echo "[3/8] Installing Prometheus..."
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
+helm repo update
+
+if helm status prometheus -n opencost &>/dev/null; then
+  echo "  Prometheus already installed"
+else
+  kubectl create namespace opencost 2>/dev/null || true
+  helm install prometheus prometheus-community/prometheus \
+    --namespace opencost \
+    --set server.persistentVolume.enabled=false \
+    --set alertmanager.enabled=false \
+    --set kube-state-metrics.enabled=true \
+    --set prometheus-node-exporter.enabled=true \
+    --set prometheus-pushgateway.enabled=false
+  echo "  Waiting for Prometheus to be ready..."
+  kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server -n opencost --timeout=180s
+  echo "  Prometheus installed"
+fi
+echo ""
+
+# 4. Install OpenCost / OpenCost 설치
+echo "[4/8] Installing OpenCost..."
+helm repo add opencost https://opencost.github.io/opencost-helm-chart 2>/dev/null || true
+
 if helm status opencost -n opencost &>/dev/null; then
   echo "  OpenCost already installed, upgrading..."
   helm upgrade opencost opencost/opencost \
     --namespace opencost \
     --set opencost.exporter.defaultClusterId="$CLUSTER_NAME" \
-    --set opencost.exporter.aws.service_account_region="$REGION"
+    --set opencost.exporter.aws.service_account_region="$REGION" \
+    --set opencost.prometheus.internal.serviceName=prometheus-server \
+    --set opencost.prometheus.internal.namespaceName=opencost \
+    --set opencost.prometheus.internal.port=80
 else
-  helm repo add opencost https://opencost.github.io/opencost-helm-chart 2>/dev/null || true
-  helm repo update
   helm install opencost opencost/opencost \
-    --namespace opencost --create-namespace \
+    --namespace opencost \
     --set opencost.exporter.defaultClusterId="$CLUSTER_NAME" \
-    --set opencost.exporter.aws.service_account_region="$REGION"
+    --set opencost.exporter.aws.service_account_region="$REGION" \
+    --set opencost.prometheus.internal.serviceName=prometheus-server \
+    --set opencost.prometheus.internal.namespaceName=opencost \
+    --set opencost.prometheus.internal.port=80
 fi
 echo ""
 
-# 4. Wait for OpenCost ready / OpenCost 준비 대기
-echo "[4/6] Waiting for OpenCost to be ready..."
+# 5. Wait for OpenCost ready / OpenCost 준비 대기
+echo "[5/8] Waiting for OpenCost to be ready..."
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=opencost -n opencost --timeout=180s
 echo "  OpenCost is ready"
 echo ""
 
-# 5. Create NodePort service for EC2 access / EC2 접근용 NodePort 서비스
-echo "[5/6] Creating NodePort service..."
-if kubectl get svc opencost-external -n opencost &>/dev/null; then
-  echo "  NodePort service already exists"
-else
-  kubectl expose deployment opencost -n opencost \
-    --type=NodePort --port=9003 --target-port=9003 --name=opencost-external
-  echo "  NodePort service created"
-fi
+# 6. Start port-forward (EC2 localhost:9003 -> OpenCost) / 포트 포워딩 시작
+echo "[6/8] Starting port-forward (localhost:${OPENCOST_LOCAL_PORT} -> OpenCost)..."
+# Kill existing port-forward / 기존 포트 포워딩 종료
+pkill -f "kubectl port-forward.*opencost.*${OPENCOST_LOCAL_PORT}" 2>/dev/null || true
+sleep 1
 
-OPENCOST_NODEPORT=$(kubectl get svc opencost-external -n opencost -o jsonpath='{.spec.ports[0].nodePort}')
-# Get a worker node IP / 워커 노드 IP 가져오기
-NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-OPENCOST_ENDPOINT="http://${NODE_IP}:${OPENCOST_NODEPORT}"
-echo "  OpenCost endpoint: $OPENCOST_ENDPOINT"
+nohup kubectl port-forward svc/opencost ${OPENCOST_LOCAL_PORT}:9003 -n opencost --address 0.0.0.0 > /tmp/opencost-portforward.log 2>&1 &
+sleep 3
+
+OPENCOST_ENDPOINT="http://localhost:${OPENCOST_LOCAL_PORT}"
+
+# Verify port-forward / 포트 포워딩 확인
+if curl -s --connect-timeout 3 "${OPENCOST_ENDPOINT}/healthz" &>/dev/null; then
+  echo "  Port-forward active: ${OPENCOST_ENDPOINT}"
+else
+  echo "  WARNING: Port-forward may not be ready yet. Check /tmp/opencost-portforward.log"
+fi
 echo ""
 
-# 6. Update config.json / config.json 업데이트
-echo "[6/6] Updating config.json..."
+# 7. Update config.json / config.json 업데이트
+echo "[7/8] Updating config.json..."
 if [ -f "$CONFIG_FILE" ]; then
-  # Check if opencostEndpoint already exists / 이미 있는지 확인
-  if grep -q "opencostEndpoint" "$CONFIG_FILE"; then
-    # Update existing value / 기존 값 업데이트
-    sed -i "s|\"opencostEndpoint\":.*|\"opencostEndpoint\": \"$OPENCOST_ENDPOINT\"|" "$CONFIG_FILE"
-  else
-    # Add before last closing brace / 마지막 } 앞에 추가
-    sed -i "s|}$|,\n  \"opencostEndpoint\": \"$OPENCOST_ENDPOINT\"\n}|" "$CONFIG_FILE"
-  fi
-  echo "  Updated: opencostEndpoint = $OPENCOST_ENDPOINT"
+  python3 -c "
+import json
+with open('$CONFIG_FILE') as f: c = json.load(f)
+c['opencostEndpoint'] = '$OPENCOST_ENDPOINT'
+with open('$CONFIG_FILE', 'w') as f: json.dump(c, f, indent=2)
+print('  Updated: opencostEndpoint =', c['opencostEndpoint'])
+"
 else
   echo "  WARNING: $CONFIG_FILE not found. Manually add:"
   echo "    \"opencostEndpoint\": \"$OPENCOST_ENDPOINT\""
 fi
 echo ""
 
-# 7. Verify / 검증
-echo "============================================"
-echo "  Verification"
-echo "============================================"
-echo ""
-echo "Testing OpenCost API..."
-RESPONSE=$(curl -s --connect-timeout 5 "$OPENCOST_ENDPOINT/allocation/compute?window=1h&aggregate=namespace" 2>/dev/null || echo "FAILED")
-if echo "$RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
-  echo "  OpenCost API: OK (valid JSON response)"
+# 8. Verify API / API 검증
+echo "[8/8] Testing OpenCost API..."
+RESPONSE=$(curl -s --connect-timeout 5 "${OPENCOST_ENDPOINT}/allocation/compute?window=1h&aggregate=namespace" 2>/dev/null || echo "FAILED")
+if echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('  Namespaces found:', len(d.get('data',[{}])[0]))" 2>/dev/null; then
+  echo "  OpenCost API: OK"
 else
-  echo "  OpenCost API: FAILED or not ready yet"
-  echo "  This may take a few minutes for data to populate."
-  echo "  Retry: curl $OPENCOST_ENDPOINT/allocation/compute?window=1h"
+  echo "  OpenCost API: Not ready yet (data may take a few minutes to populate)"
+  echo "  Retry: curl ${OPENCOST_ENDPOINT}/allocation/compute?window=1h&aggregate=namespace"
 fi
 echo ""
 
@@ -133,15 +160,17 @@ echo "============================================"
 echo "  Setup Complete!"
 echo "============================================"
 echo ""
-echo "  OpenCost endpoint: $OPENCOST_ENDPOINT"
-echo "  NodePort: $OPENCOST_NODEPORT"
-echo "  Config: $CONFIG_FILE"
+echo "  Prometheus:   installed in opencost namespace"
+echo "  OpenCost:     ${OPENCOST_ENDPOINT}"
+echo "  Port-forward: kubectl port-forward svc/opencost ${OPENCOST_LOCAL_PORT}:9003 -n opencost"
+echo "  Config:       $CONFIG_FILE"
+echo "  Log:          /tmp/opencost-portforward.log"
 echo ""
 echo "  Next steps / 다음 단계:"
-echo "  1. Ensure EKS worker node SG allows inbound from EC2 on port $OPENCOST_NODEPORT"
-echo "     (EKS 워커 노드 SG에서 EC2의 포트 $OPENCOST_NODEPORT 인바운드 허용 필요)"
-echo "  2. Rebuild & restart dashboard: npm run build && pkill -f 'next-server'"
-echo "     (대시보드 재빌드 및 재시작)"
-echo "  3. Check EKS Container Cost page — OpenCost data will appear"
-echo "     (EKS Container Cost 페이지에서 OpenCost 데이터 확인)"
+echo "  1. Rebuild dashboard: cd ~/awsops && npm run build"
+echo "  2. Restart server: pkill -f 'next-server' && nohup sh -c 'PORT=3000 npm run start' > /tmp/awsops-server.log 2>&1 &"
+echo "  3. Check EKS Container Cost page for OpenCost data"
+echo ""
+echo "  Note: port-forward stops on EC2 reboot."
+echo "  Use 'bash scripts/08-start-all.sh' to restart all services including port-forward."
 echo ""
