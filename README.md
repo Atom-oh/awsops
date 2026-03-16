@@ -191,8 +191,20 @@ User Question / 사용자 질문
 
 ## 스크린샷
 
-> TODO: Add screenshots of Dashboard, AI Assistant, Topology, CIS Compliance pages
-> TODO: 대시보드, AI 어시스턴트, 토폴로지, CIS 컴플라이언스 페이지 스크린샷 추가
+### Dashboard / 대시보드
+![Dashboard](images/01.dashboard.png)
+
+### AI Assistant / AI 어시스턴트
+![AI Assistant](images/02.AI_Assitant.png)
+
+### EC2 Instances / EC2 인스턴스
+![EC2](images/03.ec2.png)
+
+### EKS Overview / EKS 개요
+![EKS](images/04.eks.png)
+
+### Cost Explorer / 비용 분석
+![Cost](images/05.cost.png)
 
 ---
 
