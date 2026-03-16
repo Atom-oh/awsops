@@ -175,12 +175,7 @@ export default function ContainerCostPage() {
 
       {/* Task Table / Task 테이블 */}
       <div className="bg-navy-800 rounded-lg p-4 border border-navy-600">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-white font-medium">ECS Tasks — Cost Breakdown</h3>
-          <span className="text-xs text-gray-400">
-            Fargate tasks show calculated cost. EC2 tasks require node cost allocation (Phase 2).
-          </span>
-        </div>
+        <h3 className="text-white font-medium mb-4">ECS Tasks — Cost Breakdown</h3>
         <DataTable
           columns={[
             { key: 'cluster_name', label: 'Cluster' },
