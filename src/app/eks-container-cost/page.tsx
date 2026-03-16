@@ -238,38 +238,99 @@ export default function EksContainerCostPage() {
         </button>
         {showBasis && (
           <div className="mt-4 space-y-4 text-sm text-gray-300">
+            {/* Data Source Comparison / 데이터 소스 비교 */}
             <div>
-              <h4 className="text-cyan-400 font-medium mb-2">Method / 계산 방식</h4>
-              <p className="text-gray-400">
-                Request-based cost allocation: Each pod&apos;s cost is proportional to its CPU/Memory requests
-                relative to the node&apos;s allocatable resources. Node cost is split 50% by CPU ratio and 50% by Memory ratio.
-              </p>
-              <p className="text-gray-400 mt-1">
-                리소스 요청 기반 비용 분배: 각 Pod의 비용은 노드의 할당 가능 리소스 대비 CPU/Memory 요청 비율에 비례합니다.
-                노드 비용은 CPU 비율 50% + Memory 비율 50%로 분배됩니다.
+              <h4 className="text-cyan-400 font-medium mb-2">Two Cost Calculation Methods / 두 가지 비용 계산 방식</h4>
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-navy-600 text-gray-400">
+                    <th className="py-1.5 pr-3">항목 / Item</th>
+                    <th className="py-1.5 pr-3">Request 기반 (기본)</th>
+                    <th className="py-1.5">OpenCost (설치 시)</th>
+                  </tr>
+                </thead>
+                <tbody className="text-gray-300">
+                  <tr className="border-b border-navy-700">
+                    <td className="py-1.5 pr-3 text-white">CPU</td>
+                    <td className="py-1.5 pr-3">Request 비율 × 노드 비용</td>
+                    <td className="py-1.5"><span className="text-green-400">실제 사용량 × AWS 가격</span></td>
+                  </tr>
+                  <tr className="border-b border-navy-700">
+                    <td className="py-1.5 pr-3 text-white">Memory</td>
+                    <td className="py-1.5 pr-3">Request 비율 × 노드 비용</td>
+                    <td className="py-1.5"><span className="text-green-400">실제 사용량 × AWS 가격</span></td>
+                  </tr>
+                  <tr className="border-b border-navy-700">
+                    <td className="py-1.5 pr-3 text-white">Network</td>
+                    <td className="py-1.5 pr-3 text-gray-500">미포함</td>
+                    <td className="py-1.5"><span className="text-green-400">CNI 기반 전송량 추적</span></td>
+                  </tr>
+                  <tr className="border-b border-navy-700">
+                    <td className="py-1.5 pr-3 text-white">Storage (PV)</td>
+                    <td className="py-1.5 pr-3 text-gray-500">미포함</td>
+                    <td className="py-1.5"><span className="text-green-400">PVC → EBS 비용 매핑</span></td>
+                  </tr>
+                  <tr className="border-b border-navy-700">
+                    <td className="py-1.5 pr-3 text-white">GPU</td>
+                    <td className="py-1.5 pr-3 text-gray-500">미포함</td>
+                    <td className="py-1.5"><span className="text-green-400">GPU 사용 시간 추적</span></td>
+                  </tr>
+                  <tr>
+                    <td className="py-1.5 pr-3 text-white">Data Source</td>
+                    <td className="py-1.5 pr-3">Steampipe kubernetes_pod</td>
+                    <td className="py-1.5">Prometheus + Metrics Server</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p className="mt-2 text-gray-400 text-xs">
+                {data?.opencostEnabled
+                  ? '✅ OpenCost is configured — more accurate cost data available via API.'
+                  : '⚠️ Currently using Request-based estimation. Install OpenCost for actual usage data: scripts/06f-setup-opencost.sh'}
               </p>
             </div>
 
+            {/* Request-based Method / Request 기반 방식 */}
             <div>
-              <h4 className="text-cyan-400 font-medium mb-2">Formula / 공식</h4>
+              <h4 className="text-cyan-400 font-medium mb-2">Method A: Request-based (Default) / Request 기반 (기본)</h4>
               <div className="bg-navy-900 rounded p-3 font-mono text-xs space-y-1">
                 <p><span className="text-purple-400">CPU Ratio</span> = Pod CPU Request / Node Allocatable CPU</p>
                 <p><span className="text-purple-400">Memory Ratio</span> = Pod Memory Request / Node Allocatable Memory</p>
-                <p><span className="text-yellow-400">Pod Daily Cost</span> = (CPU Ratio x 0.5 + Memory Ratio x 0.5) x Node Hourly Rate x 24h</p>
+                <p><span className="text-yellow-400">Pod Daily Cost</span> = (CPU Ratio × 0.5 + Memory Ratio × 0.5) × Node Hourly Rate × 24h</p>
               </div>
+              <p className="mt-1 text-gray-400 text-xs">
+                노드 비용을 CPU 50% + Memory 50% 비율로 각 Pod에 분배합니다.
+              </p>
             </div>
 
+            {/* OpenCost Method / OpenCost 방식 */}
             <div>
-              <h4 className="text-cyan-400 font-medium mb-2">Example / 예시</h4>
+              <h4 className="text-cyan-400 font-medium mb-2">Method B: OpenCost (Prometheus) / OpenCost 방식</h4>
+              <div className="bg-navy-900 rounded p-3 font-mono text-xs space-y-1">
+                <p><span className="text-purple-400">CPU Cost</span> = Actual CPU Usage (cores) × AWS EC2 vCPU Price</p>
+                <p><span className="text-purple-400">Memory Cost</span> = Actual Memory Usage (bytes) × AWS EC2 Memory Price</p>
+                <p><span className="text-purple-400">Network Cost</span> = Cross-AZ/Region Transfer × Data Transfer Price</p>
+                <p><span className="text-purple-400">Storage Cost</span> = PVC Provisioned Size × EBS Volume Price</p>
+                <p><span className="text-yellow-400">Pod Total Cost</span> = CPU + Memory + Network + Storage + GPU</p>
+              </div>
+              <p className="mt-1 text-gray-400 text-xs">
+                Prometheus가 수집한 실제 사용량 메트릭과 AWS 가격 정보를 결합하여 5가지 비용 항목을 계산합니다.
+                Install: <code className="text-cyan-400">bash scripts/06f-setup-opencost.sh</code>
+              </p>
+            </div>
+
+            {/* Example / 예시 */}
+            <div>
+              <h4 className="text-cyan-400 font-medium mb-2">Example (Request-based) / 예시</h4>
               <div className="bg-navy-900 rounded p-3 text-xs space-y-1">
                 <p className="text-gray-400">Pod: 0.5 vCPU request, 512 MB memory request</p>
                 <p className="text-gray-400">Node: m5.xlarge (4 vCPU, 16 GB allocatable), $0.236/hr</p>
                 <p>CPU Ratio: 0.5 / 4 = 0.125</p>
                 <p>Memory Ratio: 512 / 16384 = 0.03125</p>
-                <p>Daily Cost: (0.125 x 0.5 + 0.03125 x 0.5) x $0.236 x 24 = <span className="text-yellow-400 font-medium">$0.442/day</span></p>
+                <p>Daily Cost: (0.125 × 0.5 + 0.03125 × 0.5) × $0.236 × 24 = <span className="text-yellow-400 font-medium">$0.442/day</span></p>
               </div>
             </div>
 
+            {/* EC2 Pricing / EC2 가격 */}
             <div>
               <h4 className="text-cyan-400 font-medium mb-2">EC2 Pricing (ap-northeast-2, on-demand) / EC2 가격</h4>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
@@ -284,14 +345,17 @@ export default function EksContainerCostPage() {
               </div>
             </div>
 
+            {/* Notes / 참고 */}
             <div>
-              <h4 className="text-cyan-400 font-medium mb-2">Limitations / 제한 사항</h4>
+              <h4 className="text-cyan-400 font-medium mb-2">Notes / 참고 사항</h4>
               <ul className="list-disc list-inside space-y-1 text-gray-400">
-                <li>Based on resource <strong>requests</strong>, not actual usage (리소스 <strong>요청</strong> 기준, 실제 사용량 아님)</li>
-                <li>Pods without resource requests show $0.00 (리소스 요청이 없는 Pod는 $0.00)</li>
-                <li>Network, Storage, GPU costs not included (네트워크, 스토리지, GPU 비용 미포함)</li>
-                <li>For actual usage-based cost, install OpenCost (<code className="text-cyan-400">scripts/06f-setup-opencost.sh</code>)</li>
-                <li>EC2 on-demand pricing used — Spot/RI not reflected (온디맨드 가격 사용 — Spot/RI 미반영)</li>
+                <li><strong>Request 기반</strong>: 리소스 요청 기준 추정 — 실제 사용량과 차이 있음</li>
+                <li><strong>OpenCost</strong>: Prometheus 실제 메트릭 기반 — Network, Storage, GPU 포함</li>
+                <li>Pods without resource requests show $0.00 in Request mode (Request 모드에서 리소스 요청 없는 Pod는 $0.00)</li>
+                <li>EC2 on-demand pricing used — Spot/RI not reflected (온디맨드 가격 — Spot/RI 미반영)</li>
+                <li>OpenCost Network cost: cross-AZ transfer only, same-AZ is free (OpenCost 네트워크: cross-AZ만, 같은 AZ는 무료)</li>
+                <li>OpenCost Storage cost: PVC-based only, EmptyDir/HostPath excluded (PVC만, 임시 스토리지 제외)</li>
+                <li>Config: <code className="text-cyan-400">data/config.json</code> → opencostEndpoint for OpenCost API</li>
               </ul>
             </div>
           </div>
