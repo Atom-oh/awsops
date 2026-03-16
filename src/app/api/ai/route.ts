@@ -159,8 +159,9 @@ const ROUTE_REGISTRY: Record<string, RouteConfig> = {
       'Cost Forecast (비용 예측)',
       'Pricing (AWS 서비스 가격 조회)',
       'Budgets (예산 상태 확인)',
+      'Container Cost (ECS/EKS 워크로드별 비용 분석)',
     ],
-    examples: ['"이번 달 비용" → cost', '"EC2 비용 분석" → cost', '"비용 예측" → cost'],
+    examples: ['"이번 달 비용" → cost', '"EC2 비용 분석" → cost', '"비용 예측" → cost', '"컨테이너 비용" → cost', '"ECS Task 비용" → cost', '"Pod 비용 분석" → cost', '"네임스페이스별 비용" → cost'],
   },
   'aws-data': {
     gateway: 'ops',
@@ -773,9 +774,18 @@ export async function POST(request: NextRequest) {
         if (isMulti) {
           // Multi-route: parallel calls + synthesis / 멀티 라우트: 병렬 호출 + 합성
           send('status', { step: 'multi-call', message: `🤖 ${routes.length}개 Gateway 병렬 호출 중...` });
+
+          // Keepalive for multi-route / 멀티 라우트 keepalive
+          let multiKeepCount = 0;
+          const multiKeepInterval = setInterval(() => {
+            multiKeepCount++;
+            send('status', { step: 'multi-call', message: `🤖 ${routes.length}개 Gateway 실행 중... (${multiKeepCount * 15}s)` });
+          }, 15000);
+
           const results = await Promise.allSettled(
             routes.map(r => handleSingleRoute(r, messages, modelKey))
           );
+          clearInterval(multiKeepInterval);
           const successful: { route: string; content: string; via: string }[] = [];
           const allResources: string[] = [];
           const allUsedTools: string[] = [];
@@ -842,7 +852,17 @@ export async function POST(request: NextRequest) {
         // Single route: existing logic / 단일 라우트: 기존 로직
         const gateway = config.gateway || 'ops';
         send('status', { step: 'agentcore', message: `🤖 ${config.display} 도구 호출 중...` });
+
+        // Keepalive: send periodic status during AgentCore call to prevent CloudFront timeout
+        // Keepalive: AgentCore 호출 중 주기적 상태 전송으로 CloudFront 타임아웃 방지
+        let keepaliveCount = 0;
+        const keepaliveInterval = setInterval(() => {
+          keepaliveCount++;
+          send('status', { step: 'agentcore', message: `🤖 ${config.display} 도구 실행 중... (${keepaliveCount * 15}s)` });
+        }, 15000);
+
         const agentResponse = await invokeAgentCore(messages, gateway);
+        clearInterval(keepaliveInterval);
 
         if (agentResponse) {
           const usedTools = extractUsedTools(agentResponse);
