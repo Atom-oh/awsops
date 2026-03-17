@@ -12,7 +12,7 @@ const config: Config = {
   },
 
   url: process.env.SITE_URL || 'https://www.atomai.click',
-  baseUrl: process.env.BASE_URL || '/awsops/guide/',
+  baseUrl: process.env.BASE_URL || '/awsops/',
 
   organizationName: 'Atom-oh',
   projectName: 'awsops',

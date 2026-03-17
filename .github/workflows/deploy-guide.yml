@@ -36,7 +36,7 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
           SITE_URL: ${{ vars.SITE_URL || 'https://www.atomai.click' }}
-          BASE_URL: ${{ vars.BASE_URL || '/awsops/guide/' }}
+          BASE_URL: ${{ vars.BASE_URL || '/awsops/' }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
