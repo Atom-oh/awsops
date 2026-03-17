@@ -11,8 +11,8 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://atom-oh.github.io',
-  baseUrl: '/awsops/guide/',
+  url: process.env.SITE_URL || 'https://www.atomai.click',
+  baseUrl: process.env.BASE_URL || '/awsops/guide/',
 
   organizationName: 'Atom-oh',
   projectName: 'awsops',
