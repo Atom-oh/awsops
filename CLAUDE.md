@@ -15,7 +15,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 | 항목 | 수치 |
 |------|------|
 | 페이지 | 35 |
-| 라우트 | 49 |
+| 라우트 | 50 |
 | SQL 쿼리 파일 | 25 |
 | API 라우트 | 13 |
 | 컴포넌트 | 14 |
@@ -75,7 +75,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `resource-inventory.ts` — 리소스 인벤토리 스냅샷 (data/inventory/, 추가 쿼리 0건)
 - `cost-snapshot.ts` — Cost 데이터 스냅샷 폴백 (data/cost/)
 - `app-config.ts` — 앱 설정 (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId)
-- `agentcore-stats.ts` — AgentCore 호출 통계 (총 호출, 평균 응답시간, 게이트웨이별)
+- `agentcore-stats.ts` — AgentCore 호출 통계 (총 호출, 평균 응답시간, 게이트웨이별, 모델별 토큰 사용량)
 - `agentcore-memory.ts` — 대화 이력 영구 저장/검색 (사용자별 분리, data/memory/)
 - `auth-utils.ts` — Cognito JWT에서 사용자 정보 추출 (email, sub)
 
@@ -92,7 +92,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `benchmark/route.ts` — CIS 컴플라이언스 벤치마크
 - `container-cost/route.ts` — ECS 컨테이너 비용 (CloudWatch Container Insights + Fargate 가격)
 - `eks-container-cost/route.ts` — EKS 컨테이너 비용 (OpenCost API + Request 기반 폴백)
-- `bedrock-metrics/route.ts` — Bedrock 모델 사용량/비용 (CloudWatch AWS/Bedrock)
+- `bedrock-metrics/route.ts` — Bedrock 모델 사용량 메트릭 (CloudWatch + AWSops 앱 토큰 통계)
 
 ### 인프라
 - `infra-cdk/lib/awsops-stack.ts` — CDK 인프라 (VPC, EC2, ALB, CloudFront)
@@ -172,7 +172,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 | Item | Count |
 |------|-------|
 | Pages | 35 |
-| Routes | 49 |
+| Routes | 50 |
 | SQL Query Files | 25 |
 | API Routes | 13 |
 | Components | 14 |
@@ -230,7 +230,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `resource-inventory.ts` — Resource inventory snapshots (data/inventory/, zero extra queries)
 - `cost-snapshot.ts` — Cost data snapshot fallback (data/cost/)
 - `app-config.ts` — App config (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId)
-- `agentcore-stats.ts` — AgentCore call stats (total calls, avg time, per-gateway)
+- `agentcore-stats.ts` — AgentCore call stats (total calls, avg time, per-gateway, per-model token usage)
 - `agentcore-memory.ts` — Conversation history persistence/search (per-user, data/memory/)
 - `auth-utils.ts` — Extract Cognito user info from JWT (email, sub)
 
@@ -247,7 +247,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `benchmark/route.ts` — CIS compliance benchmark
 - `container-cost/route.ts` — ECS Container Cost (CloudWatch Container Insights + Fargate pricing)
 - `eks-container-cost/route.ts` — EKS Container Cost (OpenCost API + request-based fallback)
-- `bedrock-metrics/route.ts` — Bedrock model usage/cost (CloudWatch AWS/Bedrock)
+- `bedrock-metrics/route.ts` — Bedrock model usage metrics (CloudWatch + AWSops app token stats)
 
 ### Infrastructure
 - `infra-cdk/lib/awsops-stack.ts` — CDK infra (VPC, EC2, ALB, CloudFront)
