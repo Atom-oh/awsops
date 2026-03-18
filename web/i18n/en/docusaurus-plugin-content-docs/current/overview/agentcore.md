@@ -14,31 +14,7 @@ AgentCore handles tool execution for the AI Assistant, powered by Amazon Bedrock
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    AgentCore Runtime (Strands)                   │
-│                    Docker arm64 Container                        │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      8 MCP Gateways                              │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐               │
-│  │ Network │ │Container│ │   IaC   │ │  Data   │               │
-│  │ 17 tools│ │ 24 tools│ │ 12 tools│ │ 24 tools│               │
-│  └─────────┘ └─────────┘ └─────────┘ └─────────┘               │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐               │
-│  │Security │ │Monitoring│ │  Cost   │ │   Ops   │               │
-│  │ 14 tools│ │ 16 tools│ │ 9 tools │ │ 9 tools │               │
-│  └─────────┘ └─────────┘ └─────────┘ └─────────┘               │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      19 Lambda Functions                         │
-│              (Inside VPC, direct AWS API calls)                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+![AgentCore Architecture](/diagrams/agentcore-architecture.png)
 
 ## AgentCore Runtime
 

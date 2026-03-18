@@ -14,23 +14,7 @@ The AI Assistant is powered by Amazon Bedrock AgentCore, enabling you to analyze
 
 ## Architecture
 
-```
-User Question
-    │
-    ▼
-┌─────────────────────────────────┐
-│  Intent Classification          │  ← Claude Sonnet classifies intent
-│  (Selects 1-3 of 10 routes)     │
-└─────────────────────────────────┘
-    │
-    ├─── code ──────▶ Code Interpreter (Python)
-    │
-    ├─── aws-data ──▶ Bedrock SQL generation → Steampipe query
-    │
-    └─── other ─────▶ AgentCore Gateway → MCP Tools → Response
-                            │
-                            └── Multi-route: parallel processing then synthesis
-```
+![AI Intent Routing](/diagrams/ai-routing.png)
 
 ## 10-Route Classification
 

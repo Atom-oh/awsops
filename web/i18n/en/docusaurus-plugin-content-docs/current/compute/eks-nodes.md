@@ -53,18 +53,7 @@ Display Memory resource status per node with the same 3-level bar chart:
 
 ## Understanding Resource Concepts
 
-```
-┌─────────────────────────────────────────────────┐
-│                   Capacity                       │
-│  ┌─────────────────────────────────────────────┐│
-│  │              Allocatable                     ││
-│  │  ┌─────────────────────────────────────────┐││
-│  │  │    Pod Requested    │    Available      │││
-│  │  └─────────────────────────────────────────┘││
-│  └─────────────────────────────────────────────┘│
-│  └── System Reserved ──┘                        │
-└─────────────────────────────────────────────────┘
-```
+![Node Resource Hierarchy](/diagrams/eks-node-resources.png)
 
 | Term | Description |
 |------|-------------|

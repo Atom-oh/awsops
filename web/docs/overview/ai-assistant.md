@@ -14,23 +14,7 @@ AI 어시스턴트는 Amazon Bedrock AgentCore를 기반으로 자연어로 AWS 
 
 ## 아키텍처
 
-```
-사용자 질문
-    │
-    ▼
-┌─────────────────────────────────┐
-│  Intent Classification          │  ← Claude Sonnet으로 의도 분류
-│  (10 routes 중 1-3개 선택)      │
-└─────────────────────────────────┘
-    │
-    ├─── code ──────▶ Code Interpreter (Python)
-    │
-    ├─── aws-data ──▶ Bedrock SQL 생성 → Steampipe 쿼리
-    │
-    └─── 기타 ──────▶ AgentCore Gateway → MCP Tools → 응답
-                            │
-                            └── 멀티 라우트 시 병렬 처리 후 합성
-```
+![AI 의도 분류 흐름](/diagrams/ai-routing.png)
 
 ## 10단계 라우팅
 
