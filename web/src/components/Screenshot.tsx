@@ -14,12 +14,23 @@ export default function Screenshot({ src, alt, fullWidth }: ScreenshotProps): Re
   const src1_5x = `${base}@1.5x.png`;
   const src2x = `${base}@2x.png`;
 
+  const resolvedSrc = useBaseUrl(src1x);
+  const resolvedSrcSet = `${useBaseUrl(src1x)} 1x, ${useBaseUrl(src1_5x)} 1.5x, ${useBaseUrl(src2x)} 2x`;
+
   return (
     <img
-      src={useBaseUrl(src1x)}
-      srcSet={`${useBaseUrl(src1x)} 1x, ${useBaseUrl(src1_5x)} 1.5x, ${useBaseUrl(src2x)} 2x`}
+      src={resolvedSrc}
+      srcSet={resolvedSrcSet}
       alt={alt}
       loading="lazy"
+      onError={(e) => {
+        // If high-DPR variants are missing, fall back to base src only
+        const img = e.currentTarget;
+        if (img.srcSet) {
+          img.srcSet = '';
+          img.src = resolvedSrc;
+        }
+      }}
       style={{
         width: fullWidth ? '100%' : undefined,
         maxWidth: '100%',

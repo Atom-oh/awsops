@@ -11,6 +11,11 @@ const config: Config = {
     v4: true,
   },
 
+  markdown: {
+    mermaid: true,
+  },
+  themes: ['@docusaurus/theme-mermaid'],
+
   url: process.env.SITE_URL || 'https://www.atomai.click',
   baseUrl: process.env.BASE_URL || '/awsops/',
 

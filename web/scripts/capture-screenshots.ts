@@ -53,6 +53,7 @@ const pages: PageCapture[] = [
   { category: 'storage', name: 'opensearch', path: '/opensearch' },
   { category: 'storage', name: 'msk', path: '/msk' },
   // Monitoring
+  { category: 'monitoring', name: 'bedrock', path: '/bedrock' },
   { category: 'monitoring', name: 'monitoring', path: '/monitoring' },
   { category: 'monitoring', name: 'cloudwatch', path: '/cloudwatch' },
   { category: 'monitoring', name: 'cloudtrail', path: '/cloudtrail' },

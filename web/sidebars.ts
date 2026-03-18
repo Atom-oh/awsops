@@ -68,6 +68,7 @@ const sidebars: SidebarsConfig = {
       label: 'Monitoring',
       items: [
         'monitoring/monitoring',
+        'monitoring/bedrock',
         'monitoring/cloudwatch',
         'monitoring/cloudtrail',
         'monitoring/cost',
@@ -90,6 +91,7 @@ const sidebars: SidebarsConfig = {
         'faq/general',
         'faq/troubleshooting',
         'faq/ai-assistant',
+        'faq/architecture',
       ],
     },
   ],
