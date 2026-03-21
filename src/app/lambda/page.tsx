@@ -8,6 +8,7 @@ import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Zap, X, Settings, Network } from 'lucide-react';
 import { queries as lambdaQ } from '@/lib/queries/lambda';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -22,6 +23,7 @@ const DEPRECATED_RUNTIMES = [
 ];
 
 export default function LambdaPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -100,13 +102,13 @@ export default function LambdaPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="Lambda Functions" subtitle="Serverless Compute" onRefresh={() => fetchData(true)} />
+      <Header title={t('lambda.title')} subtitle={t('lambda.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Total Functions" value={totalFunctions} icon={Zap} color="cyan" />
-        <StatsCard label="Runtimes" value={uniqueRuntimes} icon={Zap} color="purple" />
-        <StatsCard label="Avg Memory (MB)" value={avgMemory} icon={Zap} color="green" />
-        <StatsCard label="Long Timeout (>5m)" value={longTimeout} icon={Zap} color="orange"
+        <StatsCard label={t('lambda.totalFunctions')} value={totalFunctions} icon={Zap} color="cyan" />
+        <StatsCard label={t('lambda.runtimes')} value={uniqueRuntimes} icon={Zap} color="purple" />
+        <StatsCard label={t('lambda.avgMemory')} value={avgMemory} icon={Zap} color="green" />
+        <StatsCard label={t('lambda.longTimeout')} value={longTimeout} icon={Zap} color="orange"
           change={longTimeout > 0 ? 'Functions with timeout > 300s' : undefined} />
       </div>
 
@@ -123,10 +125,10 @@ export default function LambdaPage() {
 
       <DataTable
         columns={[
-          { key: 'name', label: 'Function Name' },
+          { key: 'name', label: t('lambda.functionName') },
           {
             key: 'runtime',
-            label: 'Runtime',
+            label: t('lambda.runtime'),
             render: (v: string) => {
               const deprecated = DEPRECATED_RUNTIMES.includes(v);
               return (
@@ -141,19 +143,19 @@ export default function LambdaPage() {
               );
             },
           },
-          { key: 'memory_size', label: 'Memory (MB)' },
-          { key: 'timeout', label: 'Timeout (s)' },
+          { key: 'memory_size', label: t('lambda.memory') },
+          { key: 'timeout', label: t('lambda.timeout') },
           {
             key: 'code_size',
-            label: 'Code Size',
+            label: t('lambda.codeSize'),
             render: (v: number) => formatBytes(v),
           },
           {
             key: 'last_modified',
-            label: 'Last Modified',
+            label: t('lambda.lastModified'),
             render: (v: string) => v ? new Date(v).toLocaleDateString() : '--',
           },
-          { key: 'region', label: 'Region' },
+          { key: 'region', label: t('common.region') },
         ]}
         data={loading && !list.length ? undefined : list}
         onRowClick={(row) => fetchDetail(row.name)}

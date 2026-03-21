@@ -9,12 +9,14 @@ import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Bell, X, Settings } from 'lucide-react';
 import { queries as cwQ } from '@/lib/queries/cloudwatch';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
 }
 
 export default function CloudWatchPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -85,13 +87,13 @@ export default function CloudWatchPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="CloudWatch" subtitle="Monitoring & Alarms" onRefresh={() => fetchData(true)} />
+      <Header title={t('cloudwatch.title')} subtitle={t('cloudwatch.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <StatsCard label="OK" value={okCount} icon={Bell} color="green" />
-        <StatsCard label="ALARM" value={alarmCount} icon={Bell} color="red"
+        <StatsCard label={t('cloudwatch.okState')} value={okCount} icon={Bell} color="green" />
+        <StatsCard label={t('cloudwatch.inAlarm')} value={alarmCount} icon={Bell} color="red"
           change={alarmCount > 0 ? 'Active alarms!' : undefined} />
-        <StatsCard label="INSUFFICIENT DATA" value={insufficientCount} icon={Bell} color="orange" />
+        <StatsCard label={t('cloudwatch.insufficientData')} value={insufficientCount} icon={Bell} color="orange" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -107,12 +109,12 @@ export default function CloudWatchPage() {
 
       <DataTable
         columns={[
-          { key: 'name', label: 'Alarm Name' },
-          { key: 'namespace', label: 'Namespace' },
-          { key: 'metric_name', label: 'Metric' },
+          { key: 'name', label: t('cloudwatch.alarmName') },
+          { key: 'namespace', label: t('cloudwatch.namespace') },
+          { key: 'metric_name', label: t('cloudwatch.metricName') },
           {
             key: 'state_value',
-            label: 'State',
+            label: t('cloudwatch.stateValue'),
             render: (value: string) => <StatusBadge status={value || 'unknown'} />,
           },
           {

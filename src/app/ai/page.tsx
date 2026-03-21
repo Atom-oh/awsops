@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { Send, Bot, User, Loader2, Sparkles, Database, Copy, Check, Activity, History, ChevronDown, ChevronUp } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -32,6 +33,7 @@ function calcTokenCost(model: string, inputTokens: number, outputTokens: number)
 }
 
 export default function AIPage() {
+  const { t } = useLanguage();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -216,8 +218,8 @@ export default function AIPage() {
       {/* Header — matches Dashboard style / 대시보드와 동일 스타일 */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-navy-600 bg-navy-800/80 backdrop-blur-sm">
         <div>
-          <h1 className="text-2xl font-bold text-white">AI Assistant</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Powered by Amazon Bedrock AgentCore</p>
+          <h1 className="text-2xl font-bold text-white">{t('ai.title')}</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{t('ai.subtitle')}</p>
         </div>
         <div className="flex items-center gap-4">
           <select value={model} onChange={(e) => setModel(e.target.value as any)}
@@ -240,7 +242,7 @@ export default function AIPage() {
             <div className="p-4 rounded-2xl bg-accent-cyan/10 mb-4">
               <Sparkles size={40} className="text-accent-cyan" />
             </div>
-            <h2 className="text-xl font-semibold text-white mb-2">AWSops AI Assistant</h2>
+            <h2 className="text-xl font-semibold text-white mb-2">{t('ai.title')}</h2>
             <p className="text-sm text-gray-400 text-center mb-2">AWS 인프라에 대해 질문하세요.</p>
             <p className="text-sm text-gray-400 text-center mb-6">Amazon Bedrock AgentCore가 LLM과 Tools를 활용해 답변을 드립니다.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-w-2xl w-full">
@@ -398,7 +400,7 @@ export default function AIPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="AWS 인프라에 대해 질문하세요... (Shift+Enter for new line)"
+              placeholder={t('ai.placeholder')}
               rows={1}
               className="w-full bg-navy-900 border border-navy-600 rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-500 resize-none focus:ring-accent-cyan focus:border-accent-cyan focus:outline-none"
               style={{ minHeight: 42, maxHeight: 120 }}
@@ -442,7 +444,7 @@ export default function AIPage() {
         >
           <span className="flex items-center gap-3 text-sm font-medium text-gray-300">
             <History size={16} className="text-accent-cyan" />
-            대화 이력
+            {t('ai.chatHistory')}
             <span className="px-2 py-0.5 rounded-full bg-accent-cyan/15 text-accent-cyan text-xs font-mono">{historyData.length}건</span>
           </span>
           {showHistory ? <ChevronDown size={18} className="text-gray-400" /> : <ChevronUp size={18} className="text-gray-400" />}

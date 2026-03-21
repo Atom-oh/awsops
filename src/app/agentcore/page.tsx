@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import { Activity, Cpu, Wifi, Box, Shield, DollarSign, Database, Network, Terminal, Zap, BarChart3, Clock, Wrench, MessageSquare, Search } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 const GATEWAY_ICONS: Record<string, any> = {
   network: Network, container: Box, iac: Terminal, data: Database,
@@ -16,6 +17,7 @@ const GATEWAY_TOOLS: Record<string, number> = {
 };
 
 export default function AgentCorePage() {
+  const { t } = useLanguage();
   const [status, setStatus] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
   const [conversations, setConversations] = useState<any[]>([]);
@@ -55,7 +57,7 @@ export default function AgentCorePage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="AgentCore Dashboard" subtitle="Amazon Bedrock AgentCore Runtime & Gateways" onRefresh={fetchStatus} />
+      <Header title={t('agentcore.title')} subtitle={t('agentcore.subtitle')} onRefresh={fetchStatus} />
 
       {loading && (
         <div className="w-full h-1 bg-navy-700 rounded-full overflow-hidden">
@@ -65,15 +67,15 @@ export default function AgentCorePage() {
 
       {/* Stats / 통계 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Runtime" value={status?.runtime?.status || '--'} icon={Cpu}
+        <StatsCard label={t('agentcore.runtime')} value={status?.runtime?.status || '--'} icon={Cpu}
           color={status?.runtime?.status === 'READY' ? 'green' : 'orange'}
           change={`v${status?.runtime?.version || '?'} · ${status?.runtime?.id?.slice(-10) || ''}`} />
-        <StatsCard label="Gateways" value={`${readyGateways}/${totalGateways}`} icon={Wifi}
+        <StatsCard label={t('agentcore.gateways')} value={`${readyGateways}/${totalGateways}`} icon={Wifi}
           color={readyGateways === totalGateways && totalGateways > 0 ? 'green' : 'orange'}
           change={`${totalGateways} gateways · ${totalTools} tools`} />
-        <StatsCard label="MCP Tools" value={totalTools} icon={Activity} color="cyan"
+        <StatsCard label={t('agentcore.tools')} value={totalTools} icon={Activity} color="cyan"
           change="8 gateways · 19 Lambda" />
-        <StatsCard label="Code Interpreter" value="Active" icon={Terminal} color="purple"
+        <StatsCard label={t('agentcore.codeInterpreter')} value="Active" icon={Terminal} color="purple"
           change={status?.codeInterpreter?.id?.slice(-10) || ''} />
       </div>
 
@@ -81,9 +83,9 @@ export default function AgentCorePage() {
       {stats && stats.totalCalls > 0 && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            <StatsCard label="총 호출" value={stats.totalCalls} icon={BarChart3} color="cyan"
+            <StatsCard label={t('agentcore.totalCalls')} value={stats.totalCalls} icon={BarChart3} color="cyan"
               change={`${stats.successCalls} 성공 · ${stats.failedCalls} 실패`} />
-            <StatsCard label="평균 응답 시간" value={`${(stats.avgResponseTimeMs / 1000).toFixed(1)}s`} icon={Clock} color="purple"
+            <StatsCard label={t('agentcore.avgResponseTime')} value={`${(stats.avgResponseTimeMs / 1000).toFixed(1)}s`} icon={Clock} color="purple"
               change={stats.totalCalls > 0 ? `${stats.totalCalls}건 평균` : ''} />
             <StatsCard label="사용된 도구" value={stats.uniqueToolsUsed?.length || 0} icon={Wrench} color="green"
               change={`총 ${stats.totalToolsUsed || 0}회 호출`} />
@@ -204,12 +206,12 @@ export default function AgentCorePage() {
       <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-            <MessageSquare size={16} className="text-accent-cyan" /> 대화 이력 ({conversations.length}건)
+            <MessageSquare size={16} className="text-accent-cyan" /> {t('agentcore.conversationHistory')} ({conversations.length})
           </h3>
           <div className="flex items-center gap-2">
             <div className="relative">
               <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
-              <input type="text" placeholder="검색..." value={memorySearch}
+              <input type="text" placeholder={t('agentcore.searchHistory')} value={memorySearch}
                 onChange={e => setMemorySearch(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && searchMemory()}
                 className="pl-8 pr-3 py-1.5 bg-navy-900 border border-navy-600 rounded-lg text-xs text-gray-300 placeholder-gray-600 w-48 focus:outline-none focus:border-accent-cyan/50" />
@@ -222,7 +224,7 @@ export default function AgentCorePage() {
         </div>
 
         {conversations.length === 0 ? (
-          <p className="text-gray-500 text-sm text-center py-6">아직 대화 이력이 없습니다. AI Assistant에서 질문해보세요.</p>
+          <p className="text-gray-500 text-sm text-center py-6">{t('agentcore.noHistory')}</p>
         ) : (
           <div className="space-y-2 max-h-96 overflow-y-auto">
             {conversations.map((conv: any, i: number) => (

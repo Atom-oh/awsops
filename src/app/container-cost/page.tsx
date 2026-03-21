@@ -9,6 +9,7 @@ import StatsCard from '@/components/dashboard/StatsCard';
 import DataTable from '@/components/table/DataTable';
 import { DollarSign, Container, Cpu, TrendingUp } from 'lucide-react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface Task {
   task_id: string;
@@ -43,6 +44,7 @@ interface ContainerCostData {
 const CHART_COLORS = ['#00d4ff', '#00ff88', '#a855f7', '#f59e0b', '#ef4444', '#6366f1', '#14b8a6', '#f97316'];
 
 export default function ContainerCostPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<ContainerCostData | null>(null);
   const [_loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,8 +74,8 @@ export default function ContainerCostPage() {
   return (
     <div className="space-y-6">
       <Header
-        title="Container Cost"
-        subtitle="ECS Task cost analysis based on Fargate pricing and Container Insights"
+        title={t('containerCost.title')}
+        subtitle={t('containerCost.subtitle')}
       />
 
       {error && (
@@ -85,19 +87,19 @@ export default function ContainerCostPage() {
       {/* StatsCards / 통계 카드 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatsCard
-          label="Daily Cost (ECS)"
+          label={t('containerCost.dailyCost')}
           value={data ? formatCostLg(data.summary.totalDailyCost) : '-'}
           icon={DollarSign}
           color="cyan"
         />
         <StatsCard
-          label="Monthly Estimate"
+          label={t('containerCost.totalCost')}
           value={data ? formatCostLg(data.summary.totalMonthly) : '-'}
           icon={TrendingUp}
           color="green"
         />
         <StatsCard
-          label="Running Tasks"
+          label={t('containerCost.taskCount')}
           value={data ? `${data.summary.taskCount} (F:${data.summary.fargateCount} / EC2:${data.summary.ec2Count})` : '-'}
           icon={Container}
           color="purple"
@@ -136,7 +138,7 @@ export default function ContainerCostPage() {
             </ResponsiveContainer>
           ) : (
             <div className="h-[300px] flex items-center justify-center text-gray-500">
-              No ECS tasks running
+              {t('containerCost.noData')}
             </div>
           )}
         </div>
@@ -178,9 +180,9 @@ export default function ContainerCostPage() {
         <h3 className="text-white font-medium mb-4">ECS Tasks — Cost Breakdown</h3>
         <DataTable
           columns={[
-            { key: 'cluster_name', label: 'Cluster' },
+            { key: 'cluster_name', label: t('containerCost.clusterName') },
             {
-              key: 'service_name', label: 'Service',
+              key: 'service_name', label: t('containerCost.serviceName'),
               render: (v: string) => <span className="text-cyan-400">{(v || '').replace(/^service:/, '')}</span>,
             },
             { key: 'task_id', label: 'Task ID', render: (v: string) => <span className="font-mono text-xs">{v?.slice(0, 12)}</span> },
@@ -195,7 +197,7 @@ export default function ContainerCostPage() {
             { key: 'cpu', label: 'CPU (units)', render: (v: string) => `${v} (${(parseInt(v) / 1024).toFixed(2)} vCPU)` },
             { key: 'memory', label: 'Memory (MB)', render: (v: string) => `${v} (${(parseInt(v) / 1024).toFixed(1)} GB)` },
             {
-              key: 'dailyCost', label: 'Daily Cost',
+              key: 'dailyCost', label: t('containerCost.estimatedCost'),
               render: (_: any, row: Task) => row.launch_type === 'FARGATE'
                 ? <span className="text-green-400 font-medium">{formatCost(row.dailyCost.totalCost)}</span>
                 : <span className="text-gray-500">N/A (EC2)</span>,

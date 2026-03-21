@@ -7,8 +7,10 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Users, AlertTriangle, X, Shield, Tag, Clock } from 'lucide-react';
 import { queries as iamQ } from '@/lib/queries/iam';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 export default function IAMPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -83,7 +85,7 @@ export default function IAMPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="IAM" subtitle="Identity & Access Management" onRefresh={() => fetchData(true)} />
+      <Header title={t('iam.title')} subtitle={t('iam.subtitle')} onRefresh={() => fetchData(true)} />
 
       {mfaNotEnabled > 0 && (
         <div className="flex items-center gap-3 p-4 rounded-lg bg-accent-red/10 border border-accent-red/30">
@@ -96,34 +98,34 @@ export default function IAMPage() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Users" value={totalUsers} icon={Users} color="cyan" />
-        <StatsCard label="Roles" value={totalRoles} icon={Users} color="purple" />
-        <StatsCard label="Custom Policies" value={customPolicies} icon={Users} color="green" />
-        <StatsCard label="MFA Not Enabled" value={mfaNotEnabled} icon={Users} color="red" />
+        <StatsCard label={t('iam.totalUsers')} value={totalUsers} icon={Users} color="cyan" />
+        <StatsCard label={t('iam.totalRoles')} value={totalRoles} icon={Users} color="purple" />
+        <StatsCard label={t('iam.policies')} value={customPolicies} icon={Users} color="green" />
+        <StatsCard label={t('iam.mfaNotEnabled')} value={mfaNotEnabled} icon={Users} color="red" />
       </div>
 
       <PieChartCard title="MFA Status" data={mfaData} />
 
       <div>
-        <h3 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">IAM Users</h3>
+        <h3 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">{t('iam.users')}</h3>
         <DataTable columns={[
-          { key: 'name', label: 'Username' },
-          { key: 'user_id', label: 'User ID' },
-          { key: 'create_date', label: 'Created', render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
-          { key: 'password_last_used', label: 'Password Last Used', render: (v: string) => v ? new Date(v).toLocaleDateString() : <span className="text-gray-600">Never</span> },
+          { key: 'name', label: t('iam.userName') },
+          { key: 'user_id', label: t('common.id') },
+          { key: 'create_date', label: t('iam.createDate'), render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
+          { key: 'password_last_used', label: t('iam.passwordLastUsed'), render: (v: string) => v ? new Date(v).toLocaleDateString() : <span className="text-gray-600">Never</span> },
         ]} data={loading && !userList.length ? undefined : userList}
            onRowClick={(row) => fetchDetail('user', row.name)} />
       </div>
 
       <div>
-        <h3 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">IAM Roles</h3>
+        <h3 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">{t('iam.roles')}</h3>
         <DataTable columns={[
-          { key: 'name', label: 'Role Name' },
-          { key: 'role_id', label: 'Role ID' },
-          { key: 'path', label: 'Path' },
-          { key: 'description', label: 'Description', render: (v: string) => v || <span className="text-gray-600">--</span> },
-          { key: 'create_date', label: 'Created', render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
-          { key: 'max_session_duration', label: 'Max Session', render: (v: number) => v ? `${v / 3600}h` : '--' },
+          { key: 'name', label: t('iam.roleName') },
+          { key: 'role_id', label: t('common.id') },
+          { key: 'path', label: t('iam.path') },
+          { key: 'description', label: t('common.description'), render: (v: string) => v || <span className="text-gray-600">--</span> },
+          { key: 'create_date', label: t('iam.createDate'), render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
+          { key: 'max_session_duration', label: t('iam.maxSession'), render: (v: number) => v ? `${v / 3600}h` : '--' },
         ]} data={loading && !roleList.length ? undefined : roleList}
            onRowClick={(row) => fetchDetail('role', row.name)} />
       </div>

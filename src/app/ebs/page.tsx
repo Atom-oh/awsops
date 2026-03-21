@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 // StatusBadge only takes status prop / StatusBadge는 status만 받음
@@ -21,6 +22,7 @@ interface Attachment {
 }
 
 export default function EBSPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -135,21 +137,21 @@ export default function EBSPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="EBS Volumes & Snapshots" subtitle="Elastic Block Store" onRefresh={() => fetchData(true)} />
+      <Header title={t('ebs.title')} subtitle={t('ebs.subtitle')} onRefresh={() => fetchData(true)} />
 
       {/* Stats Cards / 통계 카드 */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <StatsCard label="Total Volumes" value={Number(sum?.total_volumes) || 0} icon={HardDrive} color="cyan"
+        <StatsCard label={t('ebs.totalVolumes')} value={Number(sum?.total_volumes) || 0} icon={HardDrive} color="cyan"
           change={`${Number(sum?.in_use) || 0} in-use · ${Number(sum?.available) || 0} available`} />
-        <StatsCard label="Total Size" value={`${Number(sum?.total_size_gb) || 0} GB`} icon={HardDrive} color="purple"
+        <StatsCard label={t('ebs.totalSize')} value={`${Number(sum?.total_size_gb) || 0} GB`} icon={HardDrive} color="purple"
           change={`${Number(sum?.in_use_size_gb) || 0} GB used · ${Number(sum?.available_size_gb) || 0} GB idle`} />
-        <StatsCard label="Encrypted" value={`${encPct}%`} icon={Shield}
+        <StatsCard label={t('common.encrypted')} value={`${encPct}%`} icon={Shield}
           color={Number(encPct) >= 100 ? 'green' : Number(encPct) >= 80 ? 'orange' : 'red'}
           change={`${Number(sum?.encrypted_count) || 0} enc · ${Number(sum?.unencrypted_count) || 0} unenc`} />
-        <StatsCard label="Unencrypted" value={Number(sum?.unencrypted_count) || 0} icon={Shield}
+        <StatsCard label={t('ebs.unencryptedVolumes')} value={Number(sum?.unencrypted_count) || 0} icon={Shield}
           color={Number(sum?.unencrypted_count) > 0 ? 'red' : 'green'} highlight={Number(sum?.unencrypted_count) > 0}
           change={Number(sum?.unencrypted_count) > 0 ? 'Action required' : 'All encrypted'} />
-        <StatsCard label="Snapshots" value={Number(snapSum?.total_snapshots) || 0} icon={Camera} color="orange"
+        <StatsCard label={t('ebs.snapshots')} value={Number(snapSum?.total_snapshots) || 0} icon={Camera} color="orange"
           change={`${Number(snapSum?.encrypted_snapshots) || 0} encrypted · ${Number(snapSum?.total_snapshot_size_gb) || 0} GB`} />
         <StatsCard label="Idle Volumes" value={Number(sum?.available) || 0} icon={HardDrive}
           color={Number(sum?.available) > 0 ? 'orange' : 'green'}
@@ -166,12 +168,12 @@ export default function EBSPage() {
       {/* Tab + Search / 탭 + 검색 */}
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-1 bg-navy-900 rounded-lg p-0.5">
-          {(['volumes', 'snapshots'] as const).map(t => (
-            <button key={t} onClick={() => setTab(t)}
+          {(['volumes', 'snapshots'] as const).map(tabKey => (
+            <button key={tabKey} onClick={() => setTab(tabKey)}
               className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-                tab === t ? 'bg-navy-600 text-white' : 'text-gray-500 hover:text-gray-300'
+                tab === tabKey ? 'bg-navy-600 text-white' : 'text-gray-500 hover:text-gray-300'
               }`}>
-              {t === 'volumes' ? `Volumes (${Number(sum?.total_volumes) || 0})` : `Snapshots (${Number(snapSum?.total_snapshots) || 0})`}
+              {tabKey === 'volumes' ? `${t('ebs.volumes')} (${Number(sum?.total_volumes) || 0})` : `${t('ebs.snapshots')} (${Number(snapSum?.total_snapshots) || 0})`}
             </button>
           ))}
         </div>
@@ -189,21 +191,21 @@ export default function EBSPage() {
       {tab === 'volumes' && (
         <DataTable
           columns={[
-            { key: 'name', label: 'Name', render: (v: any) => <span className="text-white">{v || '-'}</span> },
-            { key: 'volume_id', label: 'Volume ID', render: (v: any) => <span className="font-mono text-xs text-accent-cyan">{v}</span> },
-            { key: 'volume_type', label: 'Type' },
-            { key: 'size', label: 'Size (GB)', render: (v: any) => <span className="font-mono">{v}</span> },
-            { key: 'state', label: 'State', render: (v: any) => <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+            { key: 'name', label: t('common.name'), render: (v: any) => <span className="text-white">{v || '-'}</span> },
+            { key: 'volume_id', label: t('ebs.volumeId'), render: (v: any) => <span className="font-mono text-xs text-accent-cyan">{v}</span> },
+            { key: 'volume_type', label: t('ebs.volumeType') },
+            { key: 'size', label: t('common.size'), render: (v: any) => <span className="font-mono">{v}</span> },
+            { key: 'state', label: t('common.status'), render: (v: any) => <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
                 v === 'in-use' ? 'bg-accent-green/10 text-accent-green' : v === 'available' ? 'bg-accent-orange/10 text-accent-orange' : 'bg-accent-red/10 text-accent-red'
               }`}><span className={`w-1.5 h-1.5 rounded-full ${
                 v === 'in-use' ? 'bg-accent-green' : v === 'available' ? 'bg-accent-orange' : 'bg-accent-red'
               }`} />{v}</span> },
-            { key: 'encrypted', label: 'Encrypted', render: (v: any) => (
+            { key: 'encrypted', label: t('common.encrypted'), render: (v: any) => (
               <span className={`text-xs font-medium ${v ? 'text-accent-green' : 'text-accent-red'}`}>
                 {v ? 'Yes' : 'No'}
               </span>
             )},
-            { key: 'attachments', label: 'Attached To', render: (v: any) => {
+            { key: 'attachments', label: t('ebs.attachedTo'), render: (v: any) => {
               const atts = parseAttachments(v);
               if (atts.length === 0) return <span className="text-gray-600 text-xs">Unattached</span>;
               return (
@@ -217,7 +219,7 @@ export default function EBSPage() {
                 </div>
               );
             }},
-            { key: 'iops', label: 'IOPS', render: (v: any) => <span className="font-mono text-xs">{v || '-'}</span> },
+            { key: 'iops', label: t('ebs.iops'), render: (v: any) => <span className="font-mono text-xs">{v || '-'}</span> },
             { key: 'availability_zone', label: 'AZ' },
           ]}
           data={loading ? undefined : volumes as any[]}
@@ -229,8 +231,8 @@ export default function EBSPage() {
       {tab === 'snapshots' && (
         <DataTable
           columns={[
-            { key: 'name', label: 'Name', render: (v: any) => <span className="text-white">{v || '-'}</span> },
-            { key: 'snapshot_id', label: 'Snapshot ID', render: (v: any) => <span className="font-mono text-xs text-accent-cyan">{v}</span> },
+            { key: 'name', label: t('common.name'), render: (v: any) => <span className="text-white">{v || '-'}</span> },
+            { key: 'snapshot_id', label: t('ebs.snapshotId'), render: (v: any) => <span className="font-mono text-xs text-accent-cyan">{v}</span> },
             { key: 'volume_id', label: 'Volume ID', render: (v: any) => <span className="font-mono text-xs">{v}</span> },
             { key: 'volume_size', label: 'Size (GB)', render: (v: any) => <span className="font-mono">{v}</span> },
             { key: 'state', label: 'State', render: (v: any) => <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -238,7 +240,7 @@ export default function EBSPage() {
               }`}><span className={`w-1.5 h-1.5 rounded-full ${
                 v === 'completed' ? 'bg-accent-green' : 'bg-accent-orange'
               }`} />{v}</span> },
-            { key: 'encrypted', label: 'Encrypted', render: (v: any) => (
+            { key: 'encrypted', label: t('common.encrypted'), render: (v: any) => (
               <span className={`text-xs font-medium ${v ? 'text-accent-green' : 'text-accent-red'}`}>{v ? 'Yes' : 'No'}</span>
             )},
             { key: 'start_time', label: 'Created', render: (v: any) => v ? new Date(v).toLocaleDateString() : '-' },

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import PieChartCard from '@/components/charts/PieChartCard';
@@ -13,6 +14,7 @@ interface PageData {
 }
 
 export default function OpenSearchPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -87,22 +89,22 @@ export default function OpenSearchPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="Amazon OpenSearch" subtitle="Search & Analytics" onRefresh={() => fetchData(true)} />
+      <Header title={t('opensearch.title')} subtitle={t('opensearch.subtitle')} onRefresh={() => fetchData(true)} />
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <StatsCard label="Total Domains" value={Number(sum?.total_domains) || 0} icon={Database} color="cyan"
+        <StatsCard label={t('opensearch.totalDomains')} value={Number(sum?.total_domains) || 0} icon={Database} color="cyan"
           change={`${Number(sum?.active_domains) || 0} active`} />
         <StatsCard label="Processing" value={Number(sum?.processing_domains) || 0} icon={Database}
           color={Number(sum?.processing_domains) > 0 ? 'orange' : 'green'}
           change={Number(sum?.processing_domains) > 0 ? 'Configuration updating' : 'All stable'} />
-        <StatsCard label="Node-to-Node Enc" value={Number(sum?.node_encrypted) || 0} icon={Shield}
+        <StatsCard label={t('opensearch.nodeEncrypted')} value={Number(sum?.node_encrypted) || 0} icon={Shield}
           color={Number(sum?.node_encrypted) === Number(sum?.total_domains) ? 'green' : 'orange'}
           change={`of ${Number(sum?.total_domains) || 0} domains`} />
         <StatsCard label="At-Rest Enc" value={Number(sum?.rest_encrypted) || 0} icon={Shield}
           color={Number(sum?.rest_encrypted) === Number(sum?.total_domains) ? 'green' : 'orange'}
           change={`of ${Number(sum?.total_domains) || 0} domains`} />
-        <StatsCard label="VPC Domains" value={Number(sum?.vpc_domains) || 0} icon={Network} color="purple"
+        <StatsCard label={t('opensearch.vpcDomain')} value={Number(sum?.vpc_domains) || 0} icon={Network} color="purple"
           change={`of ${Number(sum?.total_domains) || 0} domains`} />
         <StatsCard label="Public Domains" value={Math.max(0, (Number(sum?.total_domains) || 0) - (Number(sum?.vpc_domains) || 0))} icon={Network}
           color={(Number(sum?.total_domains) || 0) - (Number(sum?.vpc_domains) || 0) > 0 ? 'red' : 'green'}
@@ -126,18 +128,18 @@ export default function OpenSearchPage() {
       {/* Table */}
       <DataTable
         columns={[
-          { key: 'domain_name', label: 'Domain Name', render: (v: any) => <span className="text-white font-medium">{v}</span> },
-          { key: 'engine_version', label: 'Engine', render: (v: any) => <span className="font-mono text-xs text-accent-cyan">{v}</span> },
-          { key: 'processing', label: 'Status', render: (v: any) => (
+          { key: 'domain_name', label: t('opensearch.domainName'), render: (v: any) => <span className="text-white font-medium">{v}</span> },
+          { key: 'engine_version', label: t('opensearch.engineVersion'), render: (v: any) => <span className="font-mono text-xs text-accent-cyan">{v}</span> },
+          { key: 'processing', label: t('common.status'), render: (v: any) => (
             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
               !v ? 'bg-accent-green/10 text-accent-green' : 'bg-accent-orange/10 text-accent-orange'
             }`}><span className={`w-1.5 h-1.5 rounded-full ${!v ? 'bg-accent-green' : 'bg-accent-orange'}`} />{v ? 'Processing' : 'Active'}</span>
           )},
-          { key: 'cluster_config', label: 'Instance', render: (v: any) => {
+          { key: 'cluster_config', label: t('opensearch.instanceType'), render: (v: any) => {
             const cfg = safeJson(v);
             return <span className="font-mono text-xs">{cfg?.InstanceType || '-'}</span>;
           }},
-          { key: 'cluster_config', label: 'Nodes', render: (v: any, row: any) => {
+          { key: 'cluster_config', label: t('opensearch.instanceCount'), render: (v: any, row: any) => {
             const cfg = safeJson(row.cluster_config);
             return <span className="font-mono">{cfg?.InstanceCount || '-'}</span>;
           }},
@@ -147,7 +149,7 @@ export default function OpenSearchPage() {
           { key: 'encrypt_at_rest', label: 'Rest Enc', render: (v: any) => (
             <span className={`text-xs font-medium ${v === 'true' ? 'text-accent-green' : 'text-accent-red'}`}>{v === 'true' ? 'Yes' : 'No'}</span>
           )},
-          { key: 'ebs_options', label: 'Storage', render: (v: any) => {
+          { key: 'ebs_options', label: t('opensearch.storageSize'), render: (v: any) => {
             const ebs = safeJson(v);
             return <span className="font-mono text-xs">{ebs?.VolumeSize || '-'} GB</span>;
           }},
@@ -161,7 +163,7 @@ export default function OpenSearchPage() {
         <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Database size={16} className="text-accent-cyan" />
-            Domain Metrics
+            {t('opensearch.domainMetrics')}
             <span className="text-xs text-gray-500 font-normal ml-1">({domains.length} domains · last 1h)</span>
           </h3>
           <div className="overflow-x-auto">

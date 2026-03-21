@@ -53,7 +53,7 @@ export default function LiveResourceCard({
       </div>
 
       {/* Footer */}
-      <p className="text-[11px] text-gray-500">Last checked: {lastChecked}</p>
+      <p className="text-[11px] text-gray-500">{lastChecked}</p>
     </div>
   );
 }

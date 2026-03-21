@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import StatusBadge from '@/components/dashboard/StatusBadge';
@@ -23,6 +24,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function DynamoDBPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -112,13 +114,13 @@ export default function DynamoDBPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="DynamoDB" subtitle="NoSQL Database Service" onRefresh={() => fetchData(true)} />
+      <Header title={t('dynamodb.title')} subtitle={t('dynamodb.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Tables" value={totalTables} icon={Table} color="cyan" />
-        <StatsCard label="Active" value={activeTables} icon={Table} color="green" />
-        <StatsCard label="Total Items" value={totalItems.toLocaleString()} icon={Table} color="purple" />
-        <StatsCard label="Total Size" value={formatBytes(totalSize)} icon={Table} color="orange" />
+        <StatsCard label={t('dynamodb.totalTables')} value={totalTables} icon={Table} color="cyan" />
+        <StatsCard label={t('common.active')} value={activeTables} icon={Table} color="green" />
+        <StatsCard label={t('dynamodb.itemCount')} value={totalItems.toLocaleString()} icon={Table} color="purple" />
+        <StatsCard label={t('dynamodb.tableSize')} value={formatBytes(totalSize)} icon={Table} color="orange" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -134,28 +136,28 @@ export default function DynamoDBPage() {
 
       <DataTable
         columns={[
-          { key: 'name', label: 'Table Name' },
+          { key: 'name', label: t('dynamodb.tableName') },
           {
             key: 'table_status',
-            label: 'Status',
+            label: t('dynamodb.tableStatus'),
             render: (value: string) => <StatusBadge status={value || 'unknown'} />,
           },
-          { key: 'item_count', label: 'Items', render: (v: number) => (v || 0).toLocaleString() },
+          { key: 'item_count', label: t('dynamodb.itemCount'), render: (v: number) => (v || 0).toLocaleString() },
           {
             key: 'table_size_bytes',
-            label: 'Size',
+            label: t('dynamodb.tableSize'),
             render: (v: number) => formatBytes(v || 0),
           },
           {
             key: 'billing_mode',
-            label: 'Billing',
+            label: t('dynamodb.billingMode'),
             render: (v: string) => (
               <span className="text-xs font-mono">
                 {v === 'PAY_PER_REQUEST' ? 'On-Demand' : v || 'Provisioned'}
               </span>
             ),
           },
-          { key: 'region', label: 'Region' },
+          { key: 'region', label: t('common.region') },
         ]}
         data={loading && !tableList.length ? undefined : tableList}
         onRowClick={(row) => fetchDetail(row.name)}

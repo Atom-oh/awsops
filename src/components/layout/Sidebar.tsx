@@ -32,84 +32,86 @@ import {
   LogOut,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface NavItem {
-  label: string;
+  labelKey: string;
   href: string;
   icon: LucideIcon;
 }
 
 interface NavGroup {
-  title: string;
+  titleKey: string;
   items: NavItem[];
 }
 
 const navGroups: NavGroup[] = [
   {
-    title: '',
+    titleKey: '',
     items: [
-      { label: 'Dashboard', href: '/', icon: LayoutDashboard },
-      { label: 'AI Assistant', href: '/ai', icon: BrainCircuit },
-      { label: 'AgentCore', href: '/agentcore', icon: Activity },
+      { labelKey: 'sidebar.dashboard', href: '/', icon: LayoutDashboard },
+      { labelKey: 'sidebar.aiAssistant', href: '/ai', icon: BrainCircuit },
+      { labelKey: 'sidebar.agentcore', href: '/agentcore', icon: Activity },
     ],
   },
   {
-    title: 'Compute',
+    titleKey: 'sidebar.compute',
     items: [
-      { label: 'EC2', href: '/ec2', icon: Server },
-      { label: 'Lambda', href: '/lambda', icon: Zap },
-      { label: 'ECS', href: '/ecs', icon: Container },
-      { label: 'ECR', href: '/ecr', icon: Package },
-      { label: 'EKS', href: '/k8s', icon: Box },
-      { label: 'EKS Explorer', href: '/k8s/explorer', icon: Terminal },
-      { label: 'ECS Container Cost', href: '/container-cost', icon: DollarSign },
-      { label: 'EKS Container Cost', href: '/eks-container-cost', icon: DollarSign },
+      { labelKey: 'sidebar.ec2', href: '/ec2', icon: Server },
+      { labelKey: 'sidebar.lambda', href: '/lambda', icon: Zap },
+      { labelKey: 'sidebar.ecs', href: '/ecs', icon: Container },
+      { labelKey: 'sidebar.ecr', href: '/ecr', icon: Package },
+      { labelKey: 'sidebar.eks', href: '/k8s', icon: Box },
+      { labelKey: 'sidebar.eksExplorer', href: '/k8s/explorer', icon: Terminal },
+      { labelKey: 'sidebar.ecsContainerCost', href: '/container-cost', icon: DollarSign },
+      { labelKey: 'sidebar.eksContainerCost', href: '/eks-container-cost', icon: DollarSign },
     ],
   },
   {
-    title: 'Network & CDN',
+    titleKey: 'sidebar.networkCdn',
     items: [
-      { label: 'VPC / Network', href: '/vpc', icon: Network },
-      { label: 'CloudFront', href: '/cloudfront-cdn', icon: Globe },
-      { label: 'WAF', href: '/waf', icon: Shield },
-      { label: 'Topology', href: '/topology', icon: GitBranch },
+      { labelKey: 'sidebar.vpcNetwork', href: '/vpc', icon: Network },
+      { labelKey: 'sidebar.cloudfront', href: '/cloudfront-cdn', icon: Globe },
+      { labelKey: 'sidebar.waf', href: '/waf', icon: Shield },
+      { labelKey: 'sidebar.topology', href: '/topology', icon: GitBranch },
     ],
   },
   {
-    title: 'Storage & DB',
+    titleKey: 'sidebar.storageDb',
     items: [
-      { label: 'EBS', href: '/ebs', icon: HardDrive },
-      { label: 'S3', href: '/s3', icon: Database },
-      { label: 'RDS', href: '/rds', icon: Database },
-      { label: 'DynamoDB', href: '/dynamodb', icon: Table },
-      { label: 'ElastiCache', href: '/elasticache', icon: Database },
-      { label: 'OpenSearch', href: '/opensearch', icon: Search },
-      { label: 'MSK', href: '/msk', icon: Radio },
+      { labelKey: 'sidebar.ebs', href: '/ebs', icon: HardDrive },
+      { labelKey: 'sidebar.s3', href: '/s3', icon: Database },
+      { labelKey: 'sidebar.rds', href: '/rds', icon: Database },
+      { labelKey: 'sidebar.dynamodb', href: '/dynamodb', icon: Table },
+      { labelKey: 'sidebar.elasticache', href: '/elasticache', icon: Database },
+      { labelKey: 'sidebar.opensearch', href: '/opensearch', icon: Search },
+      { labelKey: 'sidebar.msk', href: '/msk', icon: Radio },
     ],
   },
   {
-    title: 'Monitoring',
+    titleKey: 'sidebar.monitoring',
     items: [
-      { label: 'Monitoring', href: '/monitoring', icon: Activity },
-      { label: 'Bedrock', href: '/bedrock', icon: Sparkles },
-      { label: 'CloudWatch', href: '/cloudwatch', icon: Bell },
-      { label: 'CloudTrail', href: '/cloudtrail', icon: FileSearch },
-      { label: 'Cost', href: '/cost', icon: DollarSign },
-      { label: 'Resource Inventory', href: '/inventory', icon: BarChart3 },
+      { labelKey: 'sidebar.monitoringPage', href: '/monitoring', icon: Activity },
+      { labelKey: 'sidebar.bedrock', href: '/bedrock', icon: Sparkles },
+      { labelKey: 'sidebar.cloudwatch', href: '/cloudwatch', icon: Bell },
+      { labelKey: 'sidebar.cloudtrail', href: '/cloudtrail', icon: FileSearch },
+      { labelKey: 'sidebar.cost', href: '/cost', icon: DollarSign },
+      { labelKey: 'sidebar.resourceInventory', href: '/inventory', icon: BarChart3 },
     ],
   },
   {
-    title: 'Security',
+    titleKey: 'sidebar.security',
     items: [
-      { label: 'IAM', href: '/iam', icon: Users },
-      { label: 'Security', href: '/security', icon: ShieldCheck },
-      { label: 'CIS Compliance', href: '/compliance', icon: ShieldCheck },
+      { labelKey: 'sidebar.iam', href: '/iam', icon: Users },
+      { labelKey: 'sidebar.securityPage', href: '/security', icon: ShieldCheck },
+      { labelKey: 'sidebar.cisCompliance', href: '/compliance', icon: ShieldCheck },
     ],
   },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { lang, setLang, t } = useLanguage();
   const [costEnabled, setCostEnabled] = useState(true);
 
   useEffect(() => {
@@ -123,6 +125,10 @@ export default function Sidebar() {
     const path = pathname.replace('/awsops', '') || '/';
     if (href === '/') return path === '/';
     return path.startsWith(href);
+  };
+
+  const toggleLang = () => {
+    setLang(lang === 'ko' ? 'en' : 'ko');
   };
 
   const renderNavItem = (item: NavItem) => {
@@ -143,39 +149,50 @@ export default function Sidebar() {
         `}
       >
         <Icon size={18} />
-        <span>{item.label}</span>
+        <span>{t(item.labelKey)}</span>
       </Link>
     );
   };
 
   return (
     <aside className="w-60 min-w-[240px] h-screen bg-navy-800 border-r border-navy-600 flex flex-col shrink-0">
-      {/* Logo + Sign Out */}
+      {/* Logo + Language Toggle + Sign Out / 로고 + 언어 전환 + 로그아웃 */}
       <div className="px-5 py-4 border-b border-navy-600 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-accent-cyan tracking-tight">AWSops</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Cloud Operations Dashboard</p>
+          <p className="text-xs text-gray-500 mt-0.5">{t('sidebar.tagline')}</p>
         </div>
-        <button
-          onClick={async () => {
-            await fetch('/awsops/api/auth', { method: 'POST' });
-            window.location.href = '/awsops';
-          }}
-          className="p-2 rounded-lg text-gray-500 hover:text-accent-red hover:bg-navy-700 transition-colors"
-          title="Sign Out"
-        >
-          <LogOut size={16} />
-        </button>
+        <div className="flex items-center gap-1">
+          {/* Language toggle / 언어 전환 */}
+          <button
+            onClick={toggleLang}
+            className="p-2 rounded-lg text-gray-500 hover:text-accent-cyan hover:bg-navy-700 transition-colors"
+            title={lang === 'ko' ? 'Switch to English' : '한국어로 전환'}
+          >
+            <span className="text-xs font-bold font-mono">{lang === 'ko' ? 'EN' : '한'}</span>
+          </button>
+          {/* Sign Out / 로그아웃 */}
+          <button
+            onClick={async () => {
+              await fetch('/awsops/api/auth', { method: 'POST' });
+              window.location.href = '/awsops';
+            }}
+            className="p-2 rounded-lg text-gray-500 hover:text-accent-red hover:bg-navy-700 transition-colors"
+            title={t('sidebar.signOut')}
+          >
+            <LogOut size={16} />
+          </button>
+        </div>
       </div>
 
-      {/* Navigation */}
+      {/* Navigation / 네비게이션 */}
       <nav className="flex-1 overflow-y-auto py-2">
         {navGroups.map((group, gi) => (
           <div key={gi}>
             {gi > 0 && <div className="my-2 mx-4 border-t border-navy-600/50" />}
-            {group.title && (
+            {group.titleKey && (
               <p className="px-4 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-600">
-                {group.title}
+                {t(group.titleKey)}
               </p>
             )}
             <div className="space-y-0.5">
@@ -187,7 +204,7 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer */}
+      {/* Footer / 푸터 */}
       <div className="px-4 py-3 border-t border-navy-600 space-y-2">
         <button
           onClick={() => {
@@ -204,7 +221,7 @@ export default function Sidebar() {
           className="flex items-center gap-2 text-[11px] text-gray-600 hover:text-gray-400 transition-colors"
         >
           <DollarSign size={12} />
-          <span>Cost: {costEnabled ? 'ON' : 'OFF'}</span>
+          <span>{t('sidebar.costToggle')} {costEnabled ? t('sidebar.costOn') : t('sidebar.costOff')}</span>
           <span className={`w-1.5 h-1.5 rounded-full ${costEnabled ? 'bg-accent-green' : 'bg-gray-600'}`} />
         </button>
         <p className="text-xs text-gray-600 font-mono">v1.6.0</p>

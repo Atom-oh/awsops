@@ -9,10 +9,12 @@ import DataTable from '@/components/table/DataTable';
 import { Activity, Cpu, HardDrive, Database, X, MemoryStick, Wifi, ArrowLeft, Calendar } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { queries as metQ } from '@/lib/queries/metrics';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 type TabKey = 'ec2' | 'network' | 'memory' | 'ebs' | 'rds';
 
 export default function MonitoringPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('ec2');
@@ -307,7 +309,7 @@ export default function MonitoringPage() {
         <div className="flex items-center gap-4">
           <button onClick={() => { setDetailInstance(null); setDetailMetrics({}); }}
             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-navy-800 border border-navy-600 text-gray-400 hover:text-white transition-colors text-sm">
-            <ArrowLeft size={16} /> Back
+            <ArrowLeft size={16} /> {t('common.back')}
           </button>
           <div>
             <h1 className="text-lg font-bold text-white font-mono">{detailInstance.name || detailInstance.instance_id}</h1>
@@ -370,7 +372,7 @@ export default function MonitoringPage() {
         ) : !detailMetricLoading ? (
           <div className="text-center text-gray-500 py-10">
             <Activity size={32} className="mx-auto mb-3 text-gray-600" />
-            <p>No metric data available for this instance.</p>
+            <p>{t('monitoring.noMetrics')}</p>
             <p className="text-xs mt-1">CloudWatch detailed monitoring may not be enabled.</p>
           </div>
         ) : null}
@@ -380,7 +382,7 @@ export default function MonitoringPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="Performance Monitor" subtitle="CPU, Memory, Network, Disk I/O Metrics" onRefresh={() => fetchData(true)} />
+      <Header title={t('monitoring.title')} subtitle={t('monitoring.subtitle')} onRefresh={() => fetchData(true)} />
 
       {/* Loading progress bar / 로딩 프로그레스 바 */}
       {loading && (
@@ -390,13 +392,13 @@ export default function MonitoringPage() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <StatsCard label="Avg CPU (EC2)" value={`${avgCpuAll}%`} icon={Cpu}
+        <StatsCard label={t('monitoring.cpuUtilization')} value={`${avgCpuAll}%`} icon={Cpu}
           color={Number(avgCpuAll) > 80 ? 'red' : Number(avgCpuAll) > 50 ? 'orange' : 'green'} />
         <StatsCard label="High CPU (>80%)" value={highCpuCount} icon={Activity}
           color={highCpuCount > 0 ? 'red' : 'green'} />
         <StatsCard label="Peak CPU" value={maxCpuInstance ? `${maxCpuInstance.max_cpu}%` : '--'} icon={Cpu} color="orange"
           change={maxCpuInstance?.name?.slice(0, 20) || maxCpuInstance?.instance_id?.slice(-8)} />
-        <StatsCard label="K8s Memory" value={`${totalCapMem.toFixed(0)} GB`} icon={MemoryStick} color="purple"
+        <StatsCard label={t('monitoring.memoryUsage')} value={`${totalCapMem.toFixed(0)} GB`} icon={MemoryStick} color="purple"
           change={`${totalAllocMem.toFixed(0)} GB allocatable`} />
         <StatsCard label="K8s Nodes" value={k8sNodes.length} icon={Activity} color="cyan" />
         <StatsCard label="Monitored" value={ec2Cpu.length + ebsLatest.length + rdsMetrics.length} icon={Activity} color="green" />

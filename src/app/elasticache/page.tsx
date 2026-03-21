@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import StatusBadge from '@/components/dashboard/StatusBadge';
@@ -12,6 +13,7 @@ import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
 import { queries as ecQ } from '@/lib/queries/elasticache';
 
 export default function ElastiCachePage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -113,18 +115,18 @@ export default function ElastiCachePage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="ElastiCache" subtitle="Valkey · Redis · Memcached" onRefresh={() => fetchData(true)} />
+      <Header title={t('elasticache.title')} subtitle={t('elasticache.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-        <StatsCard label="Clusters" value={Number(summary?.total_clusters) || 0} icon={Database} color="cyan"
+        <StatsCard label={t('elasticache.totalClusters')} value={Number(summary?.total_clusters) || 0} icon={Database} color="cyan"
           change={`${Number(summary?.total_replication_groups) || 0} repl groups`} />
-        <StatsCard label="Total Nodes" value={Number(summary?.total_nodes) || 0} icon={Database} color="purple"
+        <StatsCard label={t('elasticache.totalNodes')} value={Number(summary?.total_nodes) || 0} icon={Database} color="purple"
           change={`${Number(summary?.node_types) || 0} node types`} />
         <StatsCard label="Valkey" value={Number(summary?.valkey_count) || 0} icon={Database} color="red"
           change={Number(summary?.valkey_count) > 0 ? 'Valkey engine' : 'Not in use'} />
-        <StatsCard label="Redis" value={Number(summary?.redis_count) || 0} icon={Database} color="orange"
+        <StatsCard label={t('elasticache.redisCount')} value={Number(summary?.redis_count) || 0} icon={Database} color="orange"
           change={Number(summary?.redis_count) > 0 ? 'Redis engine' : 'Not in use'} />
-        <StatsCard label="Memcached" value={Number(summary?.memcached_count) || 0} icon={Database} color="green"
+        <StatsCard label={t('elasticache.memcachedCount')} value={Number(summary?.memcached_count) || 0} icon={Database} color="green"
           change={Number(summary?.memcached_count) > 0 ? 'Memcached engine' : 'Not in use'} />
         <StatsCard label="Repl Groups" value={Number(summary?.total_replication_groups) || 0} icon={Database} color="pink"
           change="Replication groups" />
@@ -152,17 +154,17 @@ export default function ElastiCachePage() {
         <h3 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">Cache Clusters</h3>
         <DataTable
           columns={[
-            { key: 'cache_cluster_id', label: 'Cluster ID' },
-            { key: 'engine', label: 'Engine' },
-            { key: 'engine_version', label: 'Version' },
-            { key: 'cache_node_type', label: 'Node Type' },
-            { key: 'cache_cluster_status', label: 'Status', render: (v: string) => <StatusBadge status={v || 'unknown'} /> },
-            { key: 'num_cache_nodes', label: 'Nodes' },
+            { key: 'cache_cluster_id', label: t('elasticache.clusterId') },
+            { key: 'engine', label: t('elasticache.engine') },
+            { key: 'engine_version', label: t('elasticache.engineVersion') },
+            { key: 'cache_node_type', label: t('elasticache.nodeType') },
+            { key: 'cache_cluster_status', label: t('elasticache.cacheStatus'), render: (v: string) => <StatusBadge status={v || 'unknown'} /> },
+            { key: 'num_cache_nodes', label: t('elasticache.numNodes') },
             { key: 'replication_group_id', label: 'Repl Group' },
-            { key: 'at_rest_encryption_enabled', label: 'Encryption', render: (v: any) => (
+            { key: 'at_rest_encryption_enabled', label: t('common.encrypted'), render: (v: any) => (
               <span className={v ? 'text-accent-green' : 'text-accent-red'}>{v ? 'Yes' : 'No'}</span>
             )},
-            { key: 'region', label: 'Region' },
+            { key: 'region', label: t('common.region') },
           ]}
           data={loading ? undefined : get('clusters')}
           onRowClick={(row) => fetchDetail(row.cache_cluster_id)}
@@ -195,7 +197,7 @@ export default function ElastiCachePage() {
         <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Database size={16} className="text-accent-cyan" />
-            Cache Nodes
+            {t('elasticache.nodeMetrics')}
             <span className="text-xs text-gray-500 font-normal ml-1">
               ({get('clusters').reduce((sum: number, c: any) => {
                 try { return sum + JSON.parse(c.cache_nodes || '[]').length; } catch { return sum; }

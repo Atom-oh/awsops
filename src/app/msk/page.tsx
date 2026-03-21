@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import PieChartCard from '@/components/charts/PieChartCard';
@@ -13,6 +14,7 @@ interface PageData {
 }
 
 export default function MSKPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -123,13 +125,13 @@ export default function MSKPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="Amazon MSK" subtitle="Managed Streaming for Apache Kafka" onRefresh={() => fetchData(true)} />
+      <Header title={t('msk.title')} subtitle={t('msk.subtitle')} onRefresh={() => fetchData(true)} />
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <StatsCard label="Total Clusters" value={Number(sum?.total_clusters) || 0} icon={Radio} color="cyan"
+        <StatsCard label={t('msk.totalClusters')} value={Number(sum?.total_clusters) || 0} icon={Radio} color="cyan"
           change={`${Number(sum?.active_clusters) || 0} active`} />
-        <StatsCard label="Active" value={Number(sum?.active_clusters) || 0} icon={Activity} color="green"
+        <StatsCard label={t('msk.activeClusters')} value={Number(sum?.active_clusters) || 0} icon={Activity} color="green"
           change={Number(sum?.inactive_clusters) > 0 ? `${sum.inactive_clusters} inactive` : 'All active'} />
         <StatsCard label="Total Brokers" value={Number(sum?.total_brokers) || 0} icon={Radio} color="purple"
           change="Across all clusters" />
@@ -162,21 +164,21 @@ export default function MSKPage() {
       {/* Table */}
       <DataTable
         columns={[
-          { key: 'cluster_name', label: 'Cluster Name', render: (v: any) => <span className="text-white font-medium">{v}</span> },
-          { key: 'state', label: 'State', render: (v: any) => (
+          { key: 'cluster_name', label: t('msk.clusterName'), render: (v: any) => <span className="text-white font-medium">{v}</span> },
+          { key: 'state', label: t('common.status'), render: (v: any) => (
             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
               v === 'ACTIVE' ? 'bg-accent-green/10 text-accent-green' : 'bg-accent-orange/10 text-accent-orange'
             }`}><span className={`w-1.5 h-1.5 rounded-full ${v === 'ACTIVE' ? 'bg-accent-green' : 'bg-accent-orange'}`} />{v}</span>
           )},
-          { key: 'kafka_version', label: 'Kafka Version', render: (v: any) => <span className="font-mono text-xs">{v || '-'}</span> },
-          { key: 'cluster_type', label: 'Type' },
-          { key: 'instance_type', label: 'Instance', render: (v: any) => <span className="font-mono text-xs">{v || '-'}</span> },
-          { key: 'number_of_broker_nodes', label: 'Brokers', render: (v: any) => <span className="font-mono">{v}</span> },
+          { key: 'kafka_version', label: t('msk.kafkaVersion'), render: (v: any) => <span className="font-mono text-xs">{v || '-'}</span> },
+          { key: 'cluster_type', label: t('common.type') },
+          { key: 'instance_type', label: t('msk.instanceType'), render: (v: any) => <span className="font-mono text-xs">{v || '-'}</span> },
+          { key: 'number_of_broker_nodes', label: t('msk.brokerNodes'), render: (v: any) => <span className="font-mono">{v}</span> },
           { key: 'ebs_volume_gb', label: 'EBS (GB)', render: (v: any) => <span className="font-mono text-xs">{v || '-'}</span> },
           { key: 'enhanced_monitoring', label: 'Monitoring', render: (v: any) => (
             <span className={`text-xs ${v && v !== 'DEFAULT' ? 'text-accent-green' : 'text-gray-500'}`}>{v || '-'}</span>
           )},
-          { key: 'creation_time', label: 'Created', render: (v: any) => v ? new Date(v).toLocaleDateString() : '-' },
+          { key: 'creation_time', label: t('common.created'), render: (v: any) => v ? new Date(v).toLocaleDateString() : '-' },
         ]}
         data={loading ? undefined : clusters as any[]}
         onRowClick={(row: any) => fetchDetail(row.cluster_name, row.cluster_arn)}
@@ -187,7 +189,7 @@ export default function MSKPage() {
         <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Radio size={16} className="text-accent-cyan" />
-            Broker Nodes
+            {t('msk.brokerNodes')}
             {!nodesLoading && (
               <span className="text-xs text-gray-500 font-normal ml-1">
                 ({allNodes.reduce((s, c) => s + c.nodes.filter((n: any) => n.NodeType === 'BROKER').length, 0)} brokers · {allNodes.reduce((s, c) => s + c.nodes.filter((n: any) => n.NodeType === 'CONTROLLER').length, 0)} controllers)

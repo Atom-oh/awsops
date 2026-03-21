@@ -8,6 +8,7 @@ import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Server, CheckCircle, Cpu, HardDrive } from 'lucide-react';
 import { queries as k8sQ } from '@/lib/queries/k8s';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -80,6 +81,7 @@ function parseMiB(mem: any): number {
 }
 
 export default function K8sNodesPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<DashboardData>({});
   const [_loading, setLoading] = useState(true);
 
@@ -146,18 +148,18 @@ export default function K8sNodesPage() {
   return (
     <div className="min-h-screen">
       <Header
-        title="Kubernetes Nodes"
-        subtitle="Node inventory and capacity"
+        title={t('k8s.nodesTitle')}
+        subtitle={t('k8s.nodesSubtitle')}
         onRefresh={() => fetchData(true)}
       />
 
       <main className="p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatsCard label="Total Nodes" value={summary.total_nodes ?? '-'} icon={Server} color="cyan" />
-          <StatsCard label="Ready" value={summary.ready_nodes ?? '-'} icon={CheckCircle} color="green" />
-          <StatsCard label="Total CPU" value={`${totalCpu} vCPU`} icon={Cpu} color="purple" />
-          <StatsCard label="Total Memory" value={memLabel} icon={HardDrive} color="orange" />
+          <StatsCard label={t('k8s.totalNodes')} value={summary.total_nodes ?? '-'} icon={Server} color="cyan" />
+          <StatsCard label={t('k8s.readyNodes')} value={summary.ready_nodes ?? '-'} icon={CheckCircle} color="green" />
+          <StatsCard label={t('k8s.cpu')} value={`${totalCpu} vCPU`} icon={Cpu} color="purple" />
+          <StatsCard label={t('k8s.memory')} value={memLabel} icon={HardDrive} color="orange" />
         </div>
 
         {/* Node Resource Usage Charts — Requested / Allocatable / Capacity */}
@@ -257,17 +259,17 @@ export default function K8sNodesPage() {
         {/* Table */}
         <DataTable
           columns={[
-            { key: 'name', label: 'Name' },
+            { key: 'name', label: t('k8s.nodeName') },
             {
               key: 'status',
-              label: 'Status',
+              label: t('common.status'),
               render: (value: string) => <StatusBadge status={value ?? 'Unknown'} />,
             },
-            { key: 'capacity_cpu', label: 'CPU Capacity', render: (v: any) => `${parseCpu(v)} vCPU` },
-            { key: 'capacity_memory', label: 'Memory Capacity', render: (v: any) => formatK8sMemory(v) },
-            { key: 'allocatable_cpu', label: 'Allocatable CPU', render: (v: any) => `${parseCpu(v).toFixed(2)} vCPU` },
-            { key: 'allocatable_memory', label: 'Allocatable Memory', render: (v: any) => formatK8sMemory(v) },
-            { key: 'creation_timestamp', label: 'Created' },
+            { key: 'capacity_cpu', label: `${t('k8s.capacity')} CPU`, render: (v: any) => `${parseCpu(v)} vCPU` },
+            { key: 'capacity_memory', label: `${t('k8s.capacity')} ${t('k8s.memory')}`, render: (v: any) => formatK8sMemory(v) },
+            { key: 'allocatable_cpu', label: `${t('k8s.allocatable')} CPU`, render: (v: any) => `${parseCpu(v).toFixed(2)} vCPU` },
+            { key: 'allocatable_memory', label: `${t('k8s.allocatable')} ${t('k8s.memory')}`, render: (v: any) => formatK8sMemory(v) },
+            { key: 'creation_timestamp', label: t('common.created') },
           ]}
           data={nodes}
         />

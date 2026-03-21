@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import StatusBadge from '@/components/dashboard/StatusBadge';
@@ -12,6 +13,7 @@ import { queries as vpcQ } from '@/lib/queries/vpc';
 type TabKey = 'vpcs' | 'subnets' | 'sgs' | 'rtb' | 'tgw' | 'elb' | 'nat' | 'igw';
 
 export default function VPCPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('vpcs');
@@ -168,33 +170,33 @@ export default function VPCPage() {
   };
 
   const tabs: { key: TabKey; label: string }[] = [
-    { key: 'vpcs', label: `VPCs (${vpcs.length})` },
-    { key: 'subnets', label: `Subnets (${subnets.length})` },
-    { key: 'sgs', label: `SGs (${sgs.length})` },
-    { key: 'rtb', label: `Route Tables (${rtbs.length})` },
-    { key: 'tgw', label: `TGW (${tgws.length})` },
-    { key: 'elb', label: `ELB (${elbs.length})` },
+    { key: 'vpcs', label: `${t('vpc.vpcs')} (${vpcs.length})` },
+    { key: 'subnets', label: `${t('vpc.subnets')} (${subnets.length})` },
+    { key: 'sgs', label: `${t('vpc.securityGroups')} (${sgs.length})` },
+    { key: 'rtb', label: `${t('vpc.routeTables')} (${rtbs.length})` },
+    { key: 'tgw', label: `${t('vpc.tgw')} (${tgws.length})` },
+    { key: 'elb', label: `${t('vpc.elb')} (${elbs.length})` },
     { key: 'nat', label: `NAT (${nats.length})` },
     { key: 'igw', label: `IGW (${igws.length})` },
   ];
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="VPC & Network" subtitle="Virtual Private Cloud, Transit Gateway, Load Balancers" onRefresh={() => fetchData(true)} />
+      <Header title={t('vpc.title')} subtitle={t('vpc.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-4">
-        <StatsCard label="VPCs" value={Number(summary?.vpc_count) || 0} icon={Network} color="cyan" />
-        <StatsCard label="Subnets" value={Number(summary?.subnet_count) || 0} icon={Network} color="green" />
-        <StatsCard label="Security Groups" value={Number(summary?.security_group_count) || 0} icon={Shield} color="purple" />
-        <StatsCard label="Route Tables" value={Number(summary?.route_table_count) || 0} icon={ArrowRightLeft} color="orange" />
-        <StatsCard label="TGW" value={Number(summary?.tgw_count) || 0} icon={ArrowRightLeft} color="orange" />
+        <StatsCard label={t('vpc.vpcs')} value={Number(summary?.vpc_count) || 0} icon={Network} color="cyan" />
+        <StatsCard label={t('vpc.subnets')} value={Number(summary?.subnet_count) || 0} icon={Network} color="green" />
+        <StatsCard label={t('vpc.securityGroups')} value={Number(summary?.security_group_count) || 0} icon={Shield} color="purple" />
+        <StatsCard label={t('vpc.routeTables')} value={Number(summary?.route_table_count) || 0} icon={ArrowRightLeft} color="orange" />
+        <StatsCard label={t('vpc.tgw')} value={Number(summary?.tgw_count) || 0} icon={ArrowRightLeft} color="orange" />
         <StatsCard label="ALB" value={Number(summary?.alb_count) || 0} icon={Globe} color="pink" />
         <StatsCard label="NLB" value={Number(summary?.nlb_count) || 0} icon={Globe} color="red" />
-        <StatsCard label="NAT GW" value={Number(summary?.nat_gateway_count) || 0} icon={Network} color="cyan" />
-        <StatsCard label="IGW" value={Number(summary?.internet_gateway_count) || 0} icon={Network} color="green" />
+        <StatsCard label={t('vpc.natGateways')} value={Number(summary?.nat_gateway_count) || 0} icon={Network} color="cyan" />
+        <StatsCard label={t('vpc.igw')} value={Number(summary?.internet_gateway_count) || 0} icon={Network} color="green" />
       </div>
 
-      <PieChartCard title="Subnets per VPC" data={subnetPieData} />
+      <PieChartCard title={`${t('vpc.subnets')} per VPC`} data={subnetPieData} />
 
       {/* Tabs */}
       <div className="flex gap-1 bg-navy-800 rounded-lg border border-navy-600 p-1 overflow-x-auto">
@@ -209,16 +211,16 @@ export default function VPCPage() {
       {/* VPCs */}
       {activeTab === 'vpcs' && (
         <DataTable columns={[
-          { key: 'vpc_id', label: 'VPC ID' },
-          { key: 'name', label: 'Name', render: (v: string) => v || <span className="text-gray-600">--</span> },
-          { key: 'cidr_block', label: 'CIDR' },
-          { key: 'state', label: 'State', render: (v: string) => <StatusBadge status={v || 'unknown'} /> },
-          { key: 'is_default', label: 'Default', render: (v: boolean) => v ? 'Yes' : 'No' },
-          { key: 'region', label: 'Region' },
+          { key: 'vpc_id', label: t('vpc.vpcId') },
+          { key: 'name', label: t('common.name'), render: (v: string) => v || <span className="text-gray-600">--</span> },
+          { key: 'cidr_block', label: t('vpc.cidrBlock') },
+          { key: 'state', label: t('common.status'), render: (v: string) => <StatusBadge status={v || 'unknown'} /> },
+          { key: 'is_default', label: t('vpc.isDefault'), render: (v: boolean) => v ? t('common.yes') : t('common.no') },
+          { key: 'region', label: t('common.region') },
           { key: 'vpc_id', label: '', render: (_v: string, row: any) => (
             <button onClick={(e) => { e.stopPropagation(); openResourceMap(row.vpc_id, row.cidr_block, row.name); }}
               className="text-[10px] px-2 py-1 rounded bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/30 hover:bg-accent-cyan/20 transition-colors whitespace-nowrap">
-              Resource Map
+              {t('vpc.resourceMap')}
             </button>
           )},
         ]} data={loading && !vpcs.length ? undefined : vpcs}
@@ -228,13 +230,13 @@ export default function VPCPage() {
       {/* Subnets */}
       {activeTab === 'subnets' && (
         <DataTable columns={[
-          { key: 'subnet_id', label: 'Subnet ID' },
-          { key: 'name', label: 'Name', render: (v: string) => v || <span className="text-gray-600">--</span> },
+          { key: 'subnet_id', label: t('vpc.subnetId') },
+          { key: 'name', label: t('common.name'), render: (v: string) => v || <span className="text-gray-600">--</span> },
           { key: 'vpc_id', label: 'VPC' },
-          { key: 'cidr_block', label: 'CIDR' },
+          { key: 'cidr_block', label: t('vpc.cidrBlock') },
           { key: 'availability_zone', label: 'AZ' },
-          { key: 'available_ip_address_count', label: 'Free IPs' },
-          { key: 'map_public_ip_on_launch', label: 'Public', render: (v: boolean) => v ? <span className="text-accent-orange">Yes</span> : 'No' },
+          { key: 'available_ip_address_count', label: t('vpc.availableIps') },
+          { key: 'map_public_ip_on_launch', label: t('vpc.autoAssignPublicIp'), render: (v: boolean) => v ? <span className="text-accent-orange">{t('common.yes')}</span> : t('common.no') },
         ]} data={loading && !subnets.length ? undefined : subnets}
            onRowClick={(row) => fetchDetail('subnet', vpcQ.subnetDetail, '{subnet_id}', row.subnet_id)} />
       )}
@@ -242,11 +244,11 @@ export default function VPCPage() {
       {/* Security Groups */}
       {activeTab === 'sgs' && (
         <DataTable columns={[
-          { key: 'group_id', label: 'Group ID' },
-          { key: 'group_name', label: 'Name' },
+          { key: 'group_id', label: t('vpc.sgId') },
+          { key: 'group_name', label: t('vpc.sgName') },
           { key: 'vpc_id', label: 'VPC' },
-          { key: 'description', label: 'Description' },
-          { key: 'region', label: 'Region' },
+          { key: 'description', label: t('common.description') },
+          { key: 'region', label: t('common.region') },
         ]} data={loading && !sgs.length ? undefined : sgs}
            onRowClick={(row) => fetchDetail('sg', vpcQ.sgDetail, '{group_id}', row.group_id)} />
       )}

@@ -7,10 +7,12 @@ import StatusBadge from '@/components/dashboard/StatusBadge';
 import DataTable from '@/components/table/DataTable';
 import { FileSearch, X, Shield, Settings, Tag, HardDrive } from 'lucide-react';
 import { queries as ctQ } from '@/lib/queries/cloudtrail';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 type TabKey = 'trails' | 'events' | 'writes';
 
 export default function CloudTrailPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('trails');
@@ -102,13 +104,13 @@ export default function CloudTrailPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="CloudTrail" subtitle="API Activity & Audit Logs" onRefresh={() => fetchData(true)} />
+      <Header title={t('cloudtrail.title')} subtitle={t('cloudtrail.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Total Trails" value={Number(summary?.total_trails) || 0} icon={FileSearch} color="cyan" />
-        <StatsCard label="Active" value={Number(summary?.active_trails) || 0} icon={FileSearch} color="green" />
-        <StatsCard label="Multi-Region" value={Number(summary?.multi_region_trails) || 0} icon={FileSearch} color="purple" />
-        <StatsCard label="Log Validated" value={Number(summary?.log_validated_trails) || 0} icon={FileSearch} color="orange" />
+        <StatsCard label={t('cloudtrail.totalTrails')} value={Number(summary?.total_trails) || 0} icon={FileSearch} color="cyan" />
+        <StatsCard label={t('cloudtrail.activeTrails')} value={Number(summary?.active_trails) || 0} icon={FileSearch} color="green" />
+        <StatsCard label={t('cloudtrail.multiRegionTrails')} value={Number(summary?.multi_region_trails) || 0} icon={FileSearch} color="purple" />
+        <StatsCard label={t('cloudtrail.validatedTrails')} value={Number(summary?.log_validated_trails) || 0} icon={FileSearch} color="orange" />
       </div>
 
       {/* Charts loaded when event tabs are accessed */}
@@ -124,12 +126,12 @@ export default function CloudTrailPage() {
 
       {activeTab === 'trails' && (
         <DataTable columns={[
-          { key: 'name', label: 'Trail Name' },
-          { key: 'home_region', label: 'Home Region' },
-          { key: 'is_logging', label: 'Logging', render: (v: boolean) => <StatusBadge status={v ? 'active' : 'stopped'} /> },
-          { key: 'is_multi_region_trail', label: 'Multi-Region', render: (v: boolean) => v ? <span className="text-accent-green">Yes</span> : 'No' },
-          { key: 'log_file_validation_enabled', label: 'Validation', render: (v: boolean) => v ? <span className="text-accent-green">Yes</span> : <span className="text-accent-red">No</span> },
-          { key: 's3_bucket_name', label: 'S3 Bucket' },
+          { key: 'name', label: t('cloudtrail.trailName') },
+          { key: 'home_region', label: t('common.region') },
+          { key: 'is_logging', label: t('cloudtrail.isLogging'), render: (v: boolean) => <StatusBadge status={v ? 'active' : 'stopped'} /> },
+          { key: 'is_multi_region_trail', label: t('cloudtrail.isMultiRegion'), render: (v: boolean) => v ? <span className="text-accent-green">Yes</span> : 'No' },
+          { key: 'log_file_validation_enabled', label: t('cloudtrail.logValidation'), render: (v: boolean) => v ? <span className="text-accent-green">Yes</span> : <span className="text-accent-red">No</span> },
+          { key: 's3_bucket_name', label: t('cloudtrail.s3Bucket') },
           { key: 'latest_delivery_time', label: 'Last Delivery', render: (v: string) => v ? new Date(v).toLocaleString() : '--' },
         ]} data={loading && !trails.length ? undefined : trails}
            onRowClick={(row) => fetchTrailDetail(row.name)} />

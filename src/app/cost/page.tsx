@@ -9,6 +9,7 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
 import { DollarSign, Info, X, TrendingUp, Filter, Calendar } from 'lucide-react';
 import { queries as costQ } from '@/lib/queries/cost';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 // Period options / 기간 옵션
 const PERIODS = [
@@ -19,6 +20,7 @@ const PERIODS = [
 ];
 
 export default function CostPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -218,14 +220,14 @@ export default function CostPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="Cost Explorer" subtitle="AWS Billing & Cost Management" onRefresh={() => fetchData(true)} />
+      <Header title={t('cost.title')} subtitle={t('cost.subtitle')} onRefresh={() => fetchData(true)} />
 
       {costAvailable === false && !usingSnapshot && (
         <div className="bg-navy-800 rounded-lg border border-accent-purple/30 p-8 text-center">
           <DollarSign size={48} className="text-accent-purple mx-auto mb-4 opacity-50" />
           <h2 className="text-xl font-bold text-white mb-2">Cost Explorer Unavailable</h2>
           <p className="text-sm text-gray-400 mb-1">
-            {costReason || 'Cost data cannot be retrieved in this environment.'}
+            {costReason || t('cost.costUnavailable')}
           </p>
           <p className="text-xs text-gray-500 mb-6">
             No cached cost snapshots available. Visit this page when Cost Explorer is accessible to build a local cache.
@@ -349,12 +351,12 @@ export default function CostPage() {
 
       {/* Stats Cards / 통계 카드 */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <StatsCard label="This Month" value={`$${thisMonth.toFixed(2)}`} icon={DollarSign} color="cyan" />
-        <StatsCard label="Last Month" value={`$${lastMonth.toFixed(2)}`} icon={DollarSign} color="purple" />
-        <StatsCard label="Projected" value={`$${projectedCost.toFixed(2)}`} icon={TrendingUp} color="orange"
+        <StatsCard label={t('cost.thisMonth')} value={`$${thisMonth.toFixed(2)}`} icon={DollarSign} color="cyan" />
+        <StatsCard label={t('cost.lastMonth')} value={`$${lastMonth.toFixed(2)}`} icon={DollarSign} color="purple" />
+        <StatsCard label={t('cost.monthlyForecast')} value={`$${projectedCost.toFixed(2)}`} icon={TrendingUp} color="orange"
           change={`Day ${dayOfMonth}/${daysInMonth}`} />
-        <StatsCard label="Daily Avg" value={`$${dailyAvg.toFixed(2)}`} icon={DollarSign} color="green" />
-        <StatsCard label="MoM Change" value={`${Number(momChange) > 0 ? '+' : ''}${momChange}%`} icon={DollarSign}
+        <StatsCard label={t('cost.dailyAverage')} value={`$${dailyAvg.toFixed(2)}`} icon={DollarSign} color="green" />
+        <StatsCard label={t('cost.mom')} value={`${Number(momChange) > 0 ? '+' : ''}${momChange}%`} icon={DollarSign}
           color={Number(momChange) > 10 ? 'red' : Number(momChange) < 0 ? 'green' : 'orange'} />
         <StatsCard label="Services" value={Object.keys(serviceTotals).length} icon={DollarSign} color="pink"
           change={`${serviceTableRows.filter(s => s.change > 20).length} increasing >20%`} />
@@ -362,22 +364,22 @@ export default function CostPage() {
 
       {/* Charts Row 1 / 차트 행 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <LineChartCard title="Daily Cost Trend (Last 30 Days)" data={dailyLineData} color="#00d4ff" />
-        <LineChartCard title="Monthly Cost Trend" data={monthlyLineData} color="#a855f7" />
+        <LineChartCard title={t('cost.costTrend')} data={dailyLineData} color="#00d4ff" />
+        <LineChartCard title={`${t('cost.costTrend')} (Monthly)`} data={monthlyLineData} color="#a855f7" />
       </div>
 
       {/* Charts Row 2 / 차트 행 2 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <PieChartCard title="Cost by Service (Top 8)" data={pieData} />
+        <PieChartCard title={t('cost.costByService')} data={pieData} />
         <BarChartCard title="Top 10 Services" data={serviceTableRows.slice(0, 10).map(r => ({ name: r.service, value: r.current }))} color="#f59e0b" />
       </div>
 
       {/* Service Table / 서비스 테이블 */}
       <DataTable
         columns={[
-          { key: 'service', label: 'Service' },
-          { key: 'current', label: 'This Month', render: (v: number) => <span className="font-mono">${(v || 0).toFixed(2)}</span> },
-          { key: 'previous', label: 'Last Month', render: (v: number) => <span className="font-mono text-gray-500">${(v || 0).toFixed(2)}</span> },
+          { key: 'service', label: t('cost.serviceName') },
+          { key: 'current', label: t('cost.thisMonth'), render: (v: number) => <span className="font-mono">${(v || 0).toFixed(2)}</span> },
+          { key: 'previous', label: t('cost.lastMonth'), render: (v: number) => <span className="font-mono text-gray-500">${(v || 0).toFixed(2)}</span> },
           { key: 'change', label: 'Change', render: (v: number) => (
             <span className={`font-mono text-xs ${v > 20 ? 'text-accent-red' : v > 0 ? 'text-accent-orange' : v < 0 ? 'text-accent-green' : 'text-gray-500'}`}>
               {v > 0 ? '+' : ''}{(v || 0).toFixed(1)}%

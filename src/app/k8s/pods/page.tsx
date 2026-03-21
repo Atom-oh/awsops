@@ -8,12 +8,14 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Box, Play, Clock, XCircle } from 'lucide-react';
 import { queries as k8sQ } from '@/lib/queries/k8s';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
 }
 
 export default function K8sPodsPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<DashboardData>({});
   const [_loading, setLoading] = useState(true);
 
@@ -56,18 +58,18 @@ export default function K8sPodsPage() {
   return (
     <div className="min-h-screen">
       <Header
-        title="Kubernetes Pods"
-        subtitle="Pod inventory and status"
+        title={t('k8s.podsTitle')}
+        subtitle={t('k8s.podsSubtitle')}
         onRefresh={() => fetchData(true)}
       />
 
       <main className="p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatsCard label="Total Pods" value={summary.total_pods ?? '-'} icon={Box} color="cyan" />
-          <StatsCard label="Running" value={summary.running_pods ?? '-'} icon={Play} color="green" />
-          <StatsCard label="Pending" value={summary.pending_pods ?? '-'} icon={Clock} color="orange" />
-          <StatsCard label="Failed" value={summary.failed_pods ?? '-'} icon={XCircle} color="red" />
+          <StatsCard label={t('k8s.totalPods')} value={summary.total_pods ?? '-'} icon={Box} color="cyan" />
+          <StatsCard label={t('k8s.runningPods')} value={summary.running_pods ?? '-'} icon={Play} color="green" />
+          <StatsCard label={t('k8s.pendingPods')} value={summary.pending_pods ?? '-'} icon={Clock} color="orange" />
+          <StatsCard label={t('k8s.failedPods')} value={summary.failed_pods ?? '-'} icon={XCircle} color="red" />
         </div>
 
         {/* Chart */}
@@ -78,15 +80,15 @@ export default function K8sPodsPage() {
         {/* Table */}
         <DataTable
           columns={[
-            { key: 'name', label: 'Name' },
-            { key: 'namespace', label: 'Namespace' },
+            { key: 'name', label: t('k8s.podName') },
+            { key: 'namespace', label: t('k8s.namespace') },
             {
               key: 'phase',
-              label: 'Status',
+              label: t('common.status'),
               render: (value: string) => <StatusBadge status={value ?? 'Unknown'} />,
             },
-            { key: 'node_name', label: 'Node' },
-            { key: 'creation_timestamp', label: 'Created' },
+            { key: 'node_name', label: t('k8s.nodeName') },
+            { key: 'creation_timestamp', label: t('common.created') },
           ]}
           data={pods}
         />

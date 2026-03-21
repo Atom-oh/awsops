@@ -6,12 +6,14 @@ import StatsCard from '@/components/dashboard/StatsCard';
 import DataTable from '@/components/table/DataTable';
 import { Rocket, CheckCircle, AlertTriangle } from 'lucide-react';
 import { queries as k8sQ } from '@/lib/queries/k8s';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
 }
 
 export default function K8sDeploymentsPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<DashboardData>({});
   const [_loading, setLoading] = useState(true);
 
@@ -54,8 +56,8 @@ export default function K8sDeploymentsPage() {
   return (
     <div className="min-h-screen">
       <Header
-        title="Kubernetes Deployments"
-        subtitle="Deployment health and replica status"
+        title={t('k8s.deploymentsTitle')}
+        subtitle={t('k8s.deploymentsSubtitle')}
         onRefresh={() => fetchData(true)}
       />
 
@@ -63,19 +65,19 @@ export default function K8sDeploymentsPage() {
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <StatsCard
-            label="Total Deployments"
+            label={t('k8s.deployments')}
             value={summary.total_deployments ?? '-'}
             icon={Rocket}
             color="cyan"
           />
           <StatsCard
-            label="Fully Available"
+            label={t('k8s.availableReplicas')}
             value={summary.fully_available ?? '-'}
             icon={CheckCircle}
             color="green"
           />
           <StatsCard
-            label="Partially Available"
+            label={t('common.pending')}
             value={summary.partially_available ?? '-'}
             icon={AlertTriangle}
             color="orange"
@@ -114,12 +116,12 @@ export default function K8sDeploymentsPage() {
         {/* Table */}
         <DataTable
           columns={[
-            { key: 'name', label: 'Name' },
-            { key: 'namespace', label: 'Namespace' },
-            { key: 'replicas', label: 'Desired' },
-            { key: 'available_replicas', label: 'Available' },
-            { key: 'ready_replicas', label: 'Ready' },
-            { key: 'creation_timestamp', label: 'Created' },
+            { key: 'name', label: t('k8s.deploymentName') },
+            { key: 'namespace', label: t('k8s.namespace') },
+            { key: 'replicas', label: t('k8s.replicas') },
+            { key: 'available_replicas', label: t('k8s.availableReplicas') },
+            { key: 'ready_replicas', label: t('k8s.ready') },
+            { key: 'creation_timestamp', label: t('common.created') },
           ]}
           data={deployments}
         />

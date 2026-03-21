@@ -10,6 +10,7 @@ import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Box, Rocket, Network, Server, AlertTriangle } from 'lucide-react';
 import { queries as k8sQ } from '@/lib/queries/k8s';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 // Format K8s memory values (e.g. "32986188Ki" → "31.5 GiB") / K8s 메모리 가독성 변환
 function formatK8sMemory(mem: any): string {
@@ -91,6 +92,7 @@ function parseMiB(mem: any): number {
 }
 
 export default function K8sOverviewPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<DashboardData>({});
   const [loading, setLoading] = useState(true);
   const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
@@ -461,9 +463,9 @@ export default function K8sOverviewPage() {
             </h2>
             <DataTable
               columns={[
-                { key: 'name', label: 'Pod Name' },
-                { key: 'namespace', label: 'Namespace' },
-                { key: 'phase', label: 'Status', render: (v: string) => <StatusBadge status={v || 'Unknown'} /> },
+                { key: 'name', label: t('k8s.podName') },
+                { key: 'namespace', label: t('k8s.namespace') },
+                { key: 'phase', label: t('common.status'), render: (v: string) => <StatusBadge status={v || 'Unknown'} /> },
                 { key: 'pod_ip', label: 'Pod IP' },
                 { key: 'service_account_name', label: 'Service Account' },
                 { key: 'creation_timestamp', label: 'Created', render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
@@ -479,8 +481,8 @@ export default function K8sOverviewPage() {
   return (
     <div className="min-h-screen">
       <Header
-        title="Kubernetes Overview"
-        subtitle="Cluster health and resource summary"
+        title={t('k8s.title')}
+        subtitle={t('k8s.subtitle')}
         onRefresh={() => fetchData(true)}
       />
 
@@ -584,28 +586,28 @@ export default function K8sOverviewPage() {
         {/* Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatsCard
-            label="Nodes"
+            label={t('k8s.nodes')}
             value={nodeSummary.total_nodes ?? '-'}
             icon={Server}
             color="cyan"
             change={`${nodeSummary.ready_nodes ?? 0} ready`}
           />
           <StatsCard
-            label="Pods"
+            label={t('k8s.pods')}
             value={podSummary.total_pods ?? '-'}
             icon={Box}
             color="green"
             change={`${podSummary.running_pods ?? 0} running`}
           />
           <StatsCard
-            label="Deployments"
+            label={t('k8s.deployments')}
             value={deploySummary.total_deployments ?? '-'}
             icon={Rocket}
             color="purple"
             change={`${deploySummary.fully_available ?? 0} fully available`}
           />
           <StatsCard
-            label="Services"
+            label={t('k8s.services')}
             value={services.length}
             icon={Network}
             color="orange"
@@ -614,7 +616,7 @@ export default function K8sOverviewPage() {
 
         {/* Node Cards Grid */}
         <div>
-          <h2 className="text-lg font-semibold text-white mb-3">Nodes</h2>
+          <h2 className="text-lg font-semibold text-white mb-3">{t('k8s.nodes')}</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {nodes.map((node: any) => {
               const capCpu = parseCpu(node.capacity_cpu) || 1;

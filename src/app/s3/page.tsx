@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import StatusBadge from '@/components/dashboard/StatusBadge';
@@ -15,6 +16,7 @@ interface PageData {
 }
 
 export default function S3Page() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -124,7 +126,7 @@ export default function S3Page() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="S3 Buckets" subtitle="Simple Storage Service" onRefresh={() => fetchData(true)} />
+      <Header title={t('s3.title')} subtitle={t('s3.subtitle')} onRefresh={() => fetchData(true)} />
 
       {loading && (
         <div className="w-full h-1 bg-navy-700 rounded-full overflow-hidden">
@@ -133,11 +135,11 @@ export default function S3Page() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Total Buckets" value={totalBuckets} icon={Database} color="cyan" />
-        <StatsCard label="Public Buckets" value={publicBuckets} icon={Database}
+        <StatsCard label={t('s3.totalBuckets')} value={totalBuckets} icon={Database} color="cyan" />
+        <StatsCard label={t('s3.publicBuckets')} value={publicBuckets} icon={Database}
           color={publicBuckets > 0 ? 'red' : 'green'} highlight
           change={publicBuckets > 0 ? 'Requires attention!' : '✓ All private'} />
-        <StatsCard label="Versioning" value={versioningEnabled} icon={Database} color="green"
+        <StatsCard label={t('s3.versioning')} value={versioningEnabled} icon={Database} color="green"
           change={`${totalBuckets - versioningEnabled} disabled`} />
         <StatsCard label="Logging" value={loggingCount} icon={Database} color="purple"
           change={`${totalBuckets - loggingCount} without logging`} />
@@ -206,16 +208,16 @@ export default function S3Page() {
 
       <DataTable
         columns={[
-          { key: 'name', label: 'Bucket Name' },
-          { key: 'region', label: 'Region' },
-          { key: 'versioning_enabled', label: 'Versioning', render: (v: boolean) => <StatusBadge status={v ? 'active' : 'stopped'} /> },
-          { key: 'encryption_enabled', label: 'Encryption', render: (v: boolean) => <StatusBadge status={v ? 'active' : 'stopped'} /> },
+          { key: 'name', label: t('s3.bucketName') },
+          { key: 'region', label: t('common.region') },
+          { key: 'versioning_enabled', label: t('s3.versioning'), render: (v: boolean) => <StatusBadge status={v ? 'active' : 'stopped'} /> },
+          { key: 'encryption_enabled', label: t('s3.encryption'), render: (v: boolean) => <StatusBadge status={v ? 'active' : 'stopped'} /> },
           { key: 'logging_target', label: 'Logging', render: (v: string) => v ? <StatusBadge status="active" /> : <span className="text-gray-600">--</span> },
-          { key: 'bucket_policy_is_public', label: 'Access', render: (v: boolean) =>
+          { key: 'bucket_policy_is_public', label: t('s3.accessControl'), render: (v: boolean) =>
             v ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent-red/10 text-accent-red"><span className="w-1.5 h-1.5 rounded-full bg-accent-red" />PUBLIC</span>
               : <span className="text-gray-500 text-xs">Private</span>
           },
-          { key: 'creation_date', label: 'Created', render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
+          { key: 'creation_date', label: t('s3.creationDate'), render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
         ]}
         data={loading && !filteredList.length ? undefined : filteredList}
         onRowClick={(row) => fetchDetail(row.name)}

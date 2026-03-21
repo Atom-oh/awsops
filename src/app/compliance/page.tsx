@@ -6,6 +6,7 @@ import StatsCard from '@/components/dashboard/StatsCard';
 import PieChartCard from '@/components/charts/PieChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
 import { ShieldCheck, Play, Loader2, X, CheckCircle, AlertTriangle, XCircle, MinusCircle, Info } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface BenchmarkSummary {
   status: { alarm: number; ok: number; info: number; skip: number; error: number };
@@ -20,6 +21,7 @@ interface BenchmarkGroup {
 }
 
 export default function CompliancePage() {
+  const { t } = useLanguage();
   const [benchmarkId, setBenchmarkId] = useState('cis_v300');
   const [status, setStatus] = useState<string>('none');
   const [data, setData] = useState<any>(null);
@@ -133,7 +135,7 @@ export default function CompliancePage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="CIS Compliance" subtitle="AWS CIS Benchmark Assessment" />
+      <Header title={t('compliance.title')} subtitle={t('compliance.subtitle')} />
 
       {/* Benchmark selector + Run button */}
       <div className="flex items-center gap-4">
@@ -148,7 +150,7 @@ export default function CompliancePage() {
               : 'bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20 border border-accent-cyan/30'
           }`}>
           {status === 'running' ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-          {status === 'running' ? 'Running...' : 'Run Benchmark'}
+          {status === 'running' ? t('compliance.running') : t('compliance.runBenchmark')}
         </button>
         {status === 'running' && (
           <span className="text-xs text-gray-500 animate-pulse">This may take 2-5 minutes...</span>
@@ -158,13 +160,13 @@ export default function CompliancePage() {
       {/* Results */}
       {data && (<>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-          <StatsCard label="Pass Rate" value={`${passRate}%`} icon={ShieldCheck}
+          <StatsCard label={t('compliance.passRate')} value={`${passRate}%`} icon={ShieldCheck}
             color={Number(passRate) >= 80 ? 'green' : Number(passRate) >= 50 ? 'orange' : 'red'} />
-          <StatsCard label="Total Controls" value={total} icon={ShieldCheck} color="cyan" />
-          <StatsCard label="OK" value={summary.ok} icon={CheckCircle} color="green" />
-          <StatsCard label="Alarm" value={summary.alarm} icon={XCircle} color="red" />
-          <StatsCard label="Skipped" value={summary.skip} icon={MinusCircle} color="purple" />
-          <StatsCard label="Errors" value={summary.error} icon={AlertTriangle} color="orange" />
+          <StatsCard label={t('compliance.totalControls')} value={total} icon={ShieldCheck} color="cyan" />
+          <StatsCard label={t('compliance.passed')} value={summary.ok} icon={CheckCircle} color="green" />
+          <StatsCard label={t('compliance.alarmed')} value={summary.alarm} icon={XCircle} color="red" />
+          <StatsCard label={t('compliance.skipped')} value={summary.skip} icon={MinusCircle} color="purple" />
+          <StatsCard label={t('compliance.errored')} value={summary.error} icon={AlertTriangle} color="orange" />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -294,8 +296,7 @@ export default function CompliancePage() {
       {!data && status !== 'running' && (
         <div className="flex flex-col items-center justify-center py-20 text-gray-500">
           <ShieldCheck size={48} className="mb-4 text-gray-600" />
-          <p className="text-lg">No benchmark results available</p>
-          <p className="text-sm mt-1">Select a benchmark and click &quot;Run Benchmark&quot; to start</p>
+          <p className="text-lg">{t('compliance.noResults')}</p>
         </div>
       )}
     </div>

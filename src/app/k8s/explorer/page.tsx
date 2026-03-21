@@ -7,6 +7,7 @@ import K9sResourceTable from '@/components/k8s/K9sResourceTable';
 import K9sDetailPanel from '@/components/k8s/K9sDetailPanel';
 import NamespaceFilter from '@/components/k8s/NamespaceFilter';
 import { queries as k8sQ } from '@/lib/queries/k8s';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -167,6 +168,7 @@ const tabConfig: Record<string, { query: string; label: string; columns: { key: 
 const TAB_KEYS = Object.keys(tabConfig);
 
 export default function K8sExplorerPage() {
+  const { t } = useLanguage();
   const [activeTab, setActiveTab] = useState('pods');
   const [selectedNamespace, setSelectedNamespace] = useState('');
   const [searchText, setSearchText] = useState('');
@@ -334,7 +336,7 @@ export default function K8sExplorerPage() {
         <div className="flex items-center gap-3">
           <span className="text-accent-green font-bold text-lg tracking-wider">K9s</span>
           <span className="text-gray-600">|</span>
-          <span className="text-accent-cyan text-sm">Explorer</span>
+          <span className="text-accent-cyan text-sm">{t('k8s.explorer')}</span>
           <span className="text-gray-600">|</span>
           {/* Cluster selector / 클러스터 선택 */}
           {(data.eksClusters?.rows || []).length > 0 && (

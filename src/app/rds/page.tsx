@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import StatusBadge from '@/components/dashboard/StatusBadge';
@@ -16,6 +17,7 @@ interface PageData {
 }
 
 export default function RDSPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -144,13 +146,13 @@ export default function RDSPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="RDS Instances" subtitle="Relational Database Service" onRefresh={() => fetchData(true)} />
+      <Header title={t('rds.title')} subtitle={t('rds.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Total Instances" value={totalInstances} icon={Database} color="cyan" />
-        <StatsCard label="Storage (GB)" value={totalStorage} icon={Database} color="purple" />
-        <StatsCard label="Multi-AZ" value={multiAz} icon={Database} color="green" />
-        <StatsCard label="Engines" value={uniqueEngines} icon={Database} color="orange" />
+        <StatsCard label={t('rds.totalInstances')} value={totalInstances} icon={Database} color="cyan" />
+        <StatsCard label={t('rds.totalStorage')} value={totalStorage} icon={Database} color="purple" />
+        <StatsCard label={t('rds.multiAzCount')} value={multiAz} icon={Database} color="green" />
+        <StatsCard label={t('rds.engine')} value={uniqueEngines} icon={Database} color="orange" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -172,26 +174,26 @@ export default function RDSPage() {
 
       <DataTable
         columns={[
-          { key: 'db_instance_identifier', label: 'Identifier' },
-          { key: 'engine', label: 'Engine' },
-          { key: 'engine_version', label: 'Version' },
-          { key: 'db_instance_class', label: 'Class' },
+          { key: 'db_instance_identifier', label: t('rds.dbIdentifier') },
+          { key: 'engine', label: t('rds.engine') },
+          { key: 'engine_version', label: t('rds.engineVersion') },
+          { key: 'db_instance_class', label: t('rds.dbClass') },
           {
             key: 'status',
-            label: 'Status',
+            label: t('common.status'),
             render: (value: string) => <StatusBadge status={value || 'unknown'} />,
           },
-          { key: 'allocated_storage', label: 'Storage (GB)' },
+          { key: 'allocated_storage', label: t('rds.storage') },
           {
             key: 'multi_az',
-            label: 'Multi-AZ',
+            label: t('rds.multiAz'),
             render: (v: boolean) => (
               <span className={`text-xs font-medium ${v ? 'text-accent-green' : 'text-gray-500'}`}>
                 {v ? 'Yes' : 'No'}
               </span>
             ),
           },
-          { key: 'region', label: 'Region' },
+          { key: 'region', label: t('common.region') },
         ]}
         data={loading && !filteredList.length ? undefined : filteredList}
         onRowClick={(row) => fetchDetail(row.db_instance_identifier)}
@@ -202,7 +204,7 @@ export default function RDSPage() {
         <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Database size={16} className="text-accent-cyan" />
-            Instance Metrics
+            {t('rds.metrics')}
             <span className="text-xs text-gray-500 font-normal ml-1">({filteredList.length} instances · last 1h)</span>
           </h3>
           <div className="overflow-x-auto">
