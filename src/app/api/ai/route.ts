@@ -663,6 +663,15 @@ export async function POST(request: NextRequest) {
     synthesizing: (count: number) => isEn ? `📊 Synthesizing ${count} responses...` : `📊 ${count}개 응답 합성 중...`,
     gatewayTimeout: isEn ? '🔄 Gateway timeout, switching to Bedrock Direct...' : '🔄 Gateway 타임아웃, Bedrock Direct로 전환...',
     fallback: isEn ? '🔄 Bedrock Direct fallback...' : '🔄 Bedrock Direct 폴백...',
+    codeGenerating: isEn ? '💻 Generating code...' : '💻 코드 생성 중...',
+    codeExecuting: isEn ? '⚡ Executing code...' : '⚡ 코드 실행 중...',
+    sqlGenerating: isEn ? '📝 Generating SQL...' : '📝 SQL 생성 중...',
+    sqlQuerying: (retry: boolean) => isEn ? `🔎 Running Steampipe query...${retry ? ' (retry)' : ''}` : `🔎 Steampipe 쿼리 실행 중...${retry ? ' (재시도)' : ''}`,
+    sqlFallback: isEn ? '⚠️ SQL failed, switching to AgentCore...' : '⚠️ SQL 실패, AgentCore로 전환...',
+    multiCall: (count: number) => isEn ? `🤖 Calling ${count} Gateways in parallel...` : `🤖 ${count}개 Gateway 병렬 호출 중...`,
+    multiCallProgress: (count: number, sec: number) => isEn ? `🤖 Running ${count} Gateways... (${sec}s)` : `🤖 ${count}개 Gateway 실행 중... (${sec}s)`,
+    agentcoreCall: (display: string) => isEn ? `🤖 Calling ${display} tools...` : `🤖 ${display} 도구 호출 중...`,
+    agentcoreProgress: (display: string, sec: number) => isEn ? `🤖 Running ${display} tools... (${sec}s)` : `🤖 ${display} 도구 실행 중... (${sec}s)`,
   };
 
   if (!messages || !Array.isArray(messages) || messages.length === 0)
@@ -710,7 +719,7 @@ export async function POST(request: NextRequest) {
 
         // Handler: Code Interpreter / 핸들러: 코드 인터프리터
         if (config.handler === 'code') {
-          send('status', { step: 'generating', message: '💻 코드 생성 중...' });
+          send('status', { step: 'generating', message: STATUS.codeGenerating });
           const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
           const codeSystemPrompt = SYSTEM_PROMPT + `\n\nThe user wants to execute code. If they provide code, wrap it in a \`\`\`python code block. If they describe a task, generate Python code to accomplish it and wrap it in a \`\`\`python code block. Always include print statements to show results.`;
           const body = JSON.stringify({
@@ -726,7 +735,7 @@ export async function POST(request: NextRequest) {
           const pythonCode = extractPythonCode(aiText) || extractPythonCode(lastMessage);
 
           if (pythonCode) {
-            send('status', { step: 'executing', message: '⚡ 코드 실행 중...' });
+            send('status', { step: 'executing', message: STATUS.codeExecuting });
             const codeResult = await executeCodeInterpreter(pythonCode);
             const executionBlock = `\n\n---\n**Code Execution Result** (exit code: ${codeResult.exitCode}):\n\`\`\`\n${codeResult.output}\n\`\`\``;
             send('done', {
@@ -747,13 +756,13 @@ export async function POST(request: NextRequest) {
 
         // Handler: SQL (aws-data) / SQL 핸들러
         if (config.handler === 'sql') {
-          send('status', { step: 'sql-generating', message: '📝 SQL 생성 중...' });
+          send('status', { step: 'sql-generating', message: STATUS.sqlGenerating });
           const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
           let sql = await generateSQL(messages);
           let queryResult: { data: string; rowCount: number; error?: string } | null = null;
 
           for (let attempt = 0; attempt < 2 && sql; attempt++) {
-            send('status', { step: 'sql-querying', message: `🔎 Steampipe 쿼리 실행 중...${attempt > 0 ? ' (재시도)' : ''}`, sql });
+            send('status', { step: 'sql-querying', message: STATUS.sqlQuerying(attempt > 0), sql });
             queryResult = await queryAWS(sql);
             if (!queryResult.error) break;
             if (attempt === 0) {
@@ -794,19 +803,19 @@ export async function POST(request: NextRequest) {
             controller.close();
             return;
           }
-          send('status', { step: 'sql-fallback', message: isEn ? '⚠️ SQL failed, switching to AgentCore...' : '⚠️ SQL 실패, AgentCore로 전환...' });
+          send('status', { step: 'sql-fallback', message: STATUS.sqlFallback });
         }
 
         // Handler: AgentCore Gateway — single or multi / AgentCore 게이트웨이 — 단일 또는 멀티
         if (isMulti) {
           // Multi-route: parallel calls + synthesis / 멀티 라우트: 병렬 호출 + 합성
-          send('status', { step: 'multi-call', message: `🤖 ${routes.length}개 Gateway 병렬 호출 중...` });
+          send('status', { step: 'multi-call', message: STATUS.multiCall(routes.length) });
 
           // Keepalive for multi-route / 멀티 라우트 keepalive
           let multiKeepCount = 0;
           const multiKeepInterval = setInterval(() => {
             multiKeepCount++;
-            send('status', { step: 'multi-call', message: `🤖 ${routes.length}개 Gateway 실행 중... (${multiKeepCount * 15}s)` });
+            send('status', { step: 'multi-call', message: STATUS.multiCallProgress(routes.length, multiKeepCount * 15) });
           }, 15000);
 
           const results = await Promise.allSettled(
@@ -882,14 +891,14 @@ export async function POST(request: NextRequest) {
 
         // Single route: existing logic / 단일 라우트: 기존 로직
         const gateway = config.gateway || 'ops';
-        send('status', { step: 'agentcore', message: `🤖 ${config.display} 도구 호출 중...` });
+        send('status', { step: 'agentcore', message: STATUS.agentcoreCall(config.display) });
 
         // Keepalive: send periodic status during AgentCore call to prevent CloudFront timeout
         // Keepalive: AgentCore 호출 중 주기적 상태 전송으로 CloudFront 타임아웃 방지
         let keepaliveCount = 0;
         const keepaliveInterval = setInterval(() => {
           keepaliveCount++;
-          send('status', { step: 'agentcore', message: `🤖 ${config.display} 도구 실행 중... (${keepaliveCount * 15}s)` });
+          send('status', { step: 'agentcore', message: STATUS.agentcoreProgress(config.display, keepaliveCount * 15) });
         }, 15000);
 
         const agentResponse = await invokeAgentCore(messages, gateway);
