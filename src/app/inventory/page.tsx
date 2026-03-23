@@ -12,6 +12,7 @@ import {
 import Header from '@/components/layout/Header';
 import DataTable from '@/components/table/DataTable';
 import { TrendingUp, Info, BarChart3 } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface InventorySnapshot {
   date: string;
@@ -116,6 +117,7 @@ function MultiLineTooltip({ active, payload, label }: any) {
 }
 
 export default function InventoryPage() {
+  const { t } = useLanguage();
   const [history, setHistory] = useState<InventorySnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [visibleResources, setVisibleResources] = useState<Set<string>>(new Set(PRIMARY_RESOURCES));
@@ -256,14 +258,14 @@ export default function InventoryPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="Resource Inventory" subtitle="Capacity tracking & trend analysis" onRefresh={fetchData} />
+      <Header title={t('inventory.title')} subtitle={t('inventory.subtitle')} onRefresh={fetchData} />
 
       {/* Empty data notice */}
       {history.length === 0 && !loading && (
         <div className="flex items-center gap-3 p-4 rounded-lg bg-accent-cyan/10 border border-accent-cyan/30">
           <Info size={20} className="text-accent-cyan flex-shrink-0" />
           <div>
-            <p className="text-sm font-medium text-accent-cyan">No inventory history yet</p>
+            <p className="text-sm font-medium text-accent-cyan">{t('inventory.noInventory')}</p>
             <p className="text-xs text-gray-400 mt-0.5">Snapshots are captured automatically when the Dashboard loads.</p>
           </div>
         </div>
@@ -416,7 +418,7 @@ export default function InventoryPage() {
       {/* DataTable - full resource inventory */}
       <DataTable
         columns={[
-          { key: 'label', label: 'Resource' },
+          { key: 'label', label: t('inventory.resourceType') },
           {
             key: 'current',
             label: 'Current',
@@ -463,7 +465,7 @@ export default function InventoryPage() {
         <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
           <div className="flex items-center gap-2 mb-3">
             <TrendingUp size={16} className="text-accent-cyan" />
-            <h3 className="text-sm font-semibold text-white">Cost Impact Estimation (30d growth)</h3>
+            <h3 className="text-sm font-semibold text-white">{t('inventory.costImpact')}</h3>
           </div>
           <p className="text-xs text-gray-400 mb-4">Approximate monthly cost impact based on resource count changes.</p>
           <div className="space-y-2">

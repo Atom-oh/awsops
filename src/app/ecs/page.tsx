@@ -8,12 +8,14 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Container, X, Settings, Tag } from 'lucide-react';
 import { queries as ecsQ } from '@/lib/queries/ecs';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
 }
 
 export default function ECSPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -90,13 +92,13 @@ export default function ECSPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="ECS" subtitle="Elastic Container Service" onRefresh={() => fetchData(true)} />
+      <Header title={t('ecs.title')} subtitle={t('ecs.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Clusters" value={totalClusters} icon={Container} color="cyan" />
-        <StatsCard label="Services" value={totalServices} icon={Container} color="purple" />
-        <StatsCard label="Tasks" value={totalTasks} icon={Container} color="green" />
-        <StatsCard label="Container Instances" value={totalContainerInstances} icon={Container} color="orange" />
+        <StatsCard label={t('ecs.clusters')} value={totalClusters} icon={Container} color="cyan" />
+        <StatsCard label={t('ecs.services')} value={totalServices} icon={Container} color="purple" />
+        <StatsCard label={t('ecs.tasks')} value={totalTasks} icon={Container} color="green" />
+        <StatsCard label={t('ecs.containerInstances')} value={totalContainerInstances} icon={Container} color="orange" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -104,7 +106,7 @@ export default function ECSPage() {
       </div>
 
       <div>
-        <h3 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">Clusters</h3>
+        <h3 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">{t('ecs.clusters')}</h3>
         {loading && !clusters.length && (
           <div className="space-y-2">
             {[1, 2, 3].map(i => <div key={i} className="h-10 skeleton rounded" />)}
@@ -112,17 +114,17 @@ export default function ECSPage() {
         )}
         <DataTable
           columns={[
-            { key: 'cluster_name', label: 'Cluster Name' },
+            { key: 'cluster_name', label: t('ecs.clusterName') },
             {
               key: 'status',
-              label: 'Status',
+              label: t('common.status'),
               render: (value: string) => <StatusBadge status={value || 'unknown'} />,
             },
-            { key: 'running_tasks_count', label: 'Running Tasks' },
-            { key: 'pending_tasks_count', label: 'Pending Tasks' },
-            { key: 'active_services_count', label: 'Active Services' },
-            { key: 'registered_container_instances_count', label: 'Container Instances' },
-            { key: 'region', label: 'Region' },
+            { key: 'running_tasks_count', label: t('ecs.runningCount') },
+            { key: 'pending_tasks_count', label: t('ecs.pendingCount') },
+            { key: 'active_services_count', label: t('ecs.services') },
+            { key: 'registered_container_instances_count', label: t('ecs.containerInstances') },
+            { key: 'region', label: t('common.region') },
           ]}
           data={loading && !clusters.length ? undefined : clusters}
           onRowClick={(row) => fetchDetail(row.cluster_name)}
@@ -130,20 +132,20 @@ export default function ECSPage() {
       </div>
 
       <div>
-        <h3 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">Services</h3>
+        <h3 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">{t('ecs.services')}</h3>
         <DataTable
           columns={[
-            { key: 'service_name', label: 'Service Name' },
+            { key: 'service_name', label: t('ecs.serviceName') },
             {
               key: 'status',
-              label: 'Status',
+              label: t('common.status'),
               render: (value: string) => <StatusBadge status={value || 'unknown'} />,
             },
-            { key: 'desired_count', label: 'Desired' },
-            { key: 'running_count', label: 'Running' },
-            { key: 'pending_count', label: 'Pending' },
-            { key: 'launch_type', label: 'Launch Type' },
-            { key: 'scheduling_strategy', label: 'Strategy' },
+            { key: 'desired_count', label: t('ecs.desiredCount') },
+            { key: 'running_count', label: t('ecs.runningCount') },
+            { key: 'pending_count', label: t('ecs.pendingCount') },
+            { key: 'launch_type', label: t('ecs.launchType') },
+            { key: 'scheduling_strategy', label: t('k8s.strategy') },
           ]}
           data={loading && !services.length ? undefined : services}
         />

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import ReactFlow, {
   Node, Edge, Background, Controls, MiniMap, MarkerType,
   Position, ConnectionLineType,
@@ -65,6 +66,7 @@ function makeEdge(source: string, target: string, label?: string): Edge {
 }
 
 export default function TopologyPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'infra' | 'k8s'>('infra');
@@ -500,17 +502,17 @@ export default function TopologyPage() {
 
   return (
     <div className="p-6 space-y-4 animate-fade-in">
-      <Header title="Resource Topology" subtitle="AWS Infrastructure Relationship Map" onRefresh={() => fetchData(true)} />
+      <Header title={t('topology.title')} subtitle={t('topology.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="flex items-center gap-3">
         <div className="flex gap-1 bg-navy-800 rounded-lg border border-navy-600 p-1">
           <button onClick={() => setView('infra')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${view === 'infra' ? 'bg-accent-cyan/10 text-accent-cyan' : 'text-gray-400 hover:text-white'}`}>
-            Infrastructure
+            {t('topology.infraMap')}
           </button>
           <button onClick={() => setView('k8s')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${view === 'k8s' ? 'bg-accent-cyan/10 text-accent-cyan' : 'text-gray-400 hover:text-white'}`}>
-            Kubernetes
+            {t('topology.k8sMap')}
           </button>
         </div>
         {view === 'infra' && (

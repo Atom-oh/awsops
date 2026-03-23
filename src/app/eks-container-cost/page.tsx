@@ -9,6 +9,7 @@ import StatsCard from '@/components/dashboard/StatsCard';
 import DataTable from '@/components/table/DataTable';
 import { DollarSign, Box, Server, TrendingUp } from 'lucide-react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface PodCost {
   pod_name: string;
@@ -55,6 +56,7 @@ interface EksCostData {
 const CHART_COLORS = ['#00d4ff', '#00ff88', '#a855f7', '#f59e0b', '#ef4444', '#6366f1', '#14b8a6', '#f97316'];
 
 export default function EksContainerCostPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<EksCostData | null>(null);
   const [_loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -85,8 +87,8 @@ export default function EksContainerCostPage() {
   return (
     <div className="space-y-6">
       <Header
-        title="EKS Container Cost"
-        subtitle="Pod cost estimation based on resource requests and EC2 node pricing"
+        title={t('eksContainerCost.title')}
+        subtitle={t('eksContainerCost.subtitle')}
       />
 
       {error && (
@@ -106,7 +108,7 @@ export default function EksContainerCostPage() {
       {/* StatsCards / 통계 카드 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatsCard
-          label="Pod Cost (Daily)"
+          label={t('eksContainerCost.totalCost')}
           value={data ? formatCostLg(data.summary.totalPodCostDaily) : '-'}
           icon={DollarSign}
           color="cyan"
@@ -153,7 +155,7 @@ export default function EksContainerCostPage() {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-[300px] flex items-center justify-center text-gray-500">No pods running</div>
+            <div className="h-[300px] flex items-center justify-center text-gray-500">{t('eksContainerCost.noData')}</div>
           )}
         </div>
 
@@ -208,11 +210,11 @@ export default function EksContainerCostPage() {
         {activeTab === 'pods' ? (
           <DataTable
             columns={[
-              { key: 'namespace', label: 'Namespace', render: (v: string) => <span className="text-cyan-400">{v}</span> },
+              { key: 'namespace', label: t('eksContainerCost.namespace'), render: (v: string) => <span className="text-cyan-400">{v}</span> },
               { key: 'pod_name', label: 'Pod', render: (v: string) => <span className="font-mono text-xs">{v}</span> },
               { key: 'node_name', label: 'Node', render: (v: string) => <span className="text-xs">{v?.split('.')[0]}</span> },
-              { key: 'cpuCostDaily', label: 'CPU', render: (v: number) => <span className="text-xs">{formatCost(v)}</span> },
-              { key: 'memCostDaily', label: 'Memory', render: (v: number) => <span className="text-xs">{formatCost(v)}</span> },
+              { key: 'cpuCostDaily', label: t('eksContainerCost.cpuCost'), render: (v: number) => <span className="text-xs">{formatCost(v)}</span> },
+              { key: 'memCostDaily', label: t('eksContainerCost.memoryCost'), render: (v: number) => <span className="text-xs">{formatCost(v)}</span> },
               ...(data?.dataSource === 'opencost' ? [
                 { key: 'networkCostDaily', label: 'Network', render: (v: number) => <span className="text-xs">{formatCost(v || 0)}</span> },
                 { key: 'pvCostDaily', label: 'Storage', render: (v: number) => <span className="text-xs">{formatCost(v || 0)}</span> },

@@ -8,6 +8,7 @@ import BarChartCard from '@/components/charts/BarChartCard';
 import LineChartCard from '@/components/charts/LineChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Sparkles, DollarSign, Zap, Clock, AlertTriangle, Database, Calendar } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 type RangeKey = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -44,6 +45,7 @@ interface AwsopsUsage {
 }
 
 export default function BedrockPage() {
+  const { t } = useLanguage();
   const [metrics, setMetrics] = useState<ModelMetric[]>([]);
   const [totalCost, setTotalCost] = useState(0);
   const [totalCacheSavings, setTotalCacheSavings] = useState(0);
@@ -149,7 +151,7 @@ export default function BedrockPage() {
   return (
     <div className="p-6 space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
-        <Header title="Bedrock Monitoring" subtitle="Model Usage, Token Costs & Prompt Caching" onRefresh={() => fetchData()} />
+        <Header title={t('bedrock.title')} subtitle={t('bedrock.subtitle')} onRefresh={() => fetchData()} />
         <div className="flex items-center gap-1">
           <Calendar size={14} className="text-gray-500 mr-1" />
           {RANGES.map(r => (
@@ -173,14 +175,14 @@ export default function BedrockPage() {
 
       {/* Stats Cards / 통계 카드 */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-        <StatsCard label="Total Cost" value={formatCost(totalCost)} icon={DollarSign} color="orange" />
-        <StatsCard label="Invocations" value={totals.invocations.toLocaleString()} icon={Zap} color="cyan" />
-        <StatsCard label="Input Tokens" value={formatTokens(totals.inputTokens)} icon={Sparkles} color="purple" />
-        <StatsCard label="Output Tokens" value={formatTokens(totals.outputTokens)} icon={Sparkles} color="green" />
+        <StatsCard label={t('bedrock.estimatedCost')} value={formatCost(totalCost)} icon={DollarSign} color="orange" />
+        <StatsCard label={t('bedrock.invocations')} value={totals.invocations.toLocaleString()} icon={Zap} color="cyan" />
+        <StatsCard label={t('bedrock.inputTokens')} value={formatTokens(totals.inputTokens)} icon={Sparkles} color="purple" />
+        <StatsCard label={t('bedrock.outputTokens')} value={formatTokens(totals.outputTokens)} icon={Sparkles} color="green" />
         <StatsCard label="Avg Latency" value={`${(totals.avgLatency / 1000).toFixed(1)}s`} icon={Clock} color="cyan" />
-        <StatsCard label="Errors" value={totals.errors} icon={AlertTriangle}
+        <StatsCard label={t('common.error')} value={totals.errors} icon={AlertTriangle}
           color={totals.errors > 0 ? 'red' : 'green'} />
-        <StatsCard label="Cache Savings" value={formatCost(totalCacheSavings)} icon={Database} color="green"
+        <StatsCard label={t('bedrock.promptCaching')} value={formatCost(totalCacheSavings)} icon={Database} color="green"
           change={totalCacheSavings > 0 ? `${cacheHitRate}% hit rate` : undefined} />
         <StatsCard label="Models Used" value={metrics.length} icon={Sparkles} color="purple" />
       </div>
@@ -190,7 +192,7 @@ export default function BedrockPage() {
         <div className="bg-navy-800 rounded-lg border border-navy-600 p-4">
           <h3 className="text-xs font-mono uppercase text-accent-cyan tracking-wider mb-4 flex items-center gap-2">
             <Zap size={14} />
-            Account Total vs AWSops Usage / 계정 전체 vs AWSops 사용량
+            {t('bedrock.accountTotal')} vs {t('bedrock.awsopsUsage')}
           </h3>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Account Total (CloudWatch) / 계정 전체 (CloudWatch) */}
@@ -270,7 +272,7 @@ export default function BedrockPage() {
         <div className="bg-navy-800 rounded-lg border border-navy-600 p-4">
           <h3 className="text-xs font-mono uppercase text-accent-green tracking-wider mb-3 flex items-center gap-2">
             <Database size={14} />
-            Prompt Caching / 프롬프트 캐싱
+            {t('bedrock.promptCaching')}
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div className="text-center">
@@ -303,14 +305,14 @@ export default function BedrockPage() {
       {metrics.length > 0 ? (
         <DataTable
           columns={[
-            { key: 'label', label: 'Model' },
-            { key: 'invocations', label: 'Invocations', render: (v: number) => (
+            { key: 'label', label: t('bedrock.modelId') },
+            { key: 'invocations', label: t('bedrock.invocations'), render: (v: number) => (
               <span className="font-mono text-accent-cyan">{v.toLocaleString()}</span>
             )},
-            { key: 'inputTokens', label: 'Input Tokens', render: (v: number) => (
+            { key: 'inputTokens', label: t('bedrock.inputTokens'), render: (v: number) => (
               <span className="font-mono">{formatTokens(v)}</span>
             )},
-            { key: 'outputTokens', label: 'Output Tokens', render: (v: number) => (
+            { key: 'outputTokens', label: t('bedrock.outputTokens'), render: (v: number) => (
               <span className="font-mono">{formatTokens(v)}</span>
             )},
             { key: 'avgLatencyMs', label: 'Avg Latency', render: (v: number) => (
@@ -318,13 +320,13 @@ export default function BedrockPage() {
                 {(v / 1000).toFixed(1)}s
               </span>
             )},
-            { key: 'cacheReadTokens', label: 'Cache Read', render: (v: number) => (
+            { key: 'cacheReadTokens', label: t('bedrock.cacheHits'), render: (v: number) => (
               v > 0 ? <span className="font-mono text-accent-green">{formatTokens(v)}</span> : <span className="text-gray-600">-</span>
             )},
             { key: 'cacheSavings', label: 'Cache Savings', render: (v: number) => (
               v > 0 ? <span className="font-mono text-accent-green">{formatCost(v)}</span> : <span className="text-gray-600">-</span>
             )},
-            { key: 'totalCost', label: 'Total Cost', render: (v: number) => (
+            { key: 'totalCost', label: t('bedrock.estimatedCost'), render: (v: number) => (
               <span className="font-mono font-bold text-accent-orange">{formatCost(v)}</span>
             )},
             { key: 'clientErrors', label: 'Errors', render: (_v: number, row: any) => {
@@ -340,7 +342,7 @@ export default function BedrockPage() {
       ) : !loading ? (
         <div className="text-center py-16 text-gray-500">
           <Sparkles size={48} className="mx-auto mb-4 text-gray-600" />
-          <p className="text-lg">No Bedrock usage data found</p>
+          <p className="text-lg">{t('bedrock.noUsage')}</p>
           <p className="text-xs mt-2">Bedrock 모델 호출이 이 리전에서 감지되지 않았습니다.</p>
           <p className="text-xs mt-1">Use AI Assistant or invoke Bedrock models to see metrics here.</p>
         </div>

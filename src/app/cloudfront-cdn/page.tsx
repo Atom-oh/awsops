@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import DataTable from '@/components/table/DataTable';
@@ -9,6 +10,7 @@ import { Globe, X, Tag } from 'lucide-react';
 import { queries as cfQ } from '@/lib/queries/cloudfront';
 
 export default function CloudFrontPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -50,23 +52,23 @@ export default function CloudFrontPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="CloudFront" subtitle="Content Delivery Network" onRefresh={() => fetchData(true)} />
+      <Header title={t('cloudfront.title')} subtitle={t('cloudfront.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Distributions" value={Number(summary?.total_distributions) || 0} icon={Globe} color="cyan" />
-        <StatsCard label="Enabled" value={Number(summary?.enabled_count) || 0} icon={Globe} color="green" />
-        <StatsCard label="Disabled" value={Number(summary?.disabled_count) || 0} icon={Globe} color="red" />
+        <StatsCard label={t('cloudfront.totalDistributions')} value={Number(summary?.total_distributions) || 0} icon={Globe} color="cyan" />
+        <StatsCard label={t('cloudfront.enabledDistributions')} value={Number(summary?.enabled_count) || 0} icon={Globe} color="green" />
+        <StatsCard label={t('common.disabled')} value={Number(summary?.disabled_count) || 0} icon={Globe} color="red" />
         <StatsCard label="HTTP Allowed" value={Number(summary?.http_allowed) || 0} icon={Globe}
           color={Number(summary?.http_allowed) > 0 ? 'orange' : 'green'}
           change={Number(summary?.http_allowed) > 0 ? 'Consider HTTPS only' : '✓ All HTTPS'} />
       </div>
 
       <DataTable columns={[
-        { key: 'id', label: 'Distribution ID' },
-        { key: 'name', label: 'Name', render: (v: string) => v || <span className="text-gray-600">--</span> },
-        { key: 'domain_name', label: 'Domain' },
-        { key: 'status', label: 'Status', render: (v: string) => <StatusBadge status={v || 'unknown'} /> },
-        { key: 'enabled', label: 'Enabled', render: (v: boolean) => v ? <span className="text-accent-green">Yes</span> : <span className="text-accent-red">No</span> },
+        { key: 'id', label: t('cloudfront.distributionId') },
+        { key: 'name', label: t('common.name'), render: (v: string) => v || <span className="text-gray-600">--</span> },
+        { key: 'domain_name', label: t('cloudfront.domainName') },
+        { key: 'status', label: t('common.status'), render: (v: string) => <StatusBadge status={v || 'unknown'} /> },
+        { key: 'enabled', label: t('common.enabled'), render: (v: boolean) => v ? <span className="text-accent-green">{t('common.yes')}</span> : <span className="text-accent-red">{t('common.no')}</span> },
         { key: 'viewer_protocol', label: 'Protocol' },
       ]} data={loading && !list.length ? undefined : list}
          onRowClick={(row) => fetchDetail(row.id)} />

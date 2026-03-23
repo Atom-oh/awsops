@@ -2,6 +2,7 @@
 
 import { RefreshCw } from 'lucide-react';
 import { useState } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface HeaderProps {
   title: string;
@@ -10,6 +11,7 @@ interface HeaderProps {
 }
 
 export default function Header({ title, subtitle, onRefresh }: HeaderProps) {
+  const { t } = useLanguage();
   const [spinning, setSpinning] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(() => new Date().toLocaleTimeString());
 
@@ -32,14 +34,14 @@ export default function Header({ title, subtitle, onRefresh }: HeaderProps) {
 
       <div className="flex items-center gap-4">
         <span className="text-xs text-gray-500 font-mono">
-          Last updated: {lastUpdated}
+          {t('common.lastUpdated')} {lastUpdated}
         </span>
 
         {onRefresh && (
           <button
             onClick={handleRefresh}
             className="p-2 rounded-lg bg-navy-700 border border-navy-600 text-gray-400 hover:text-accent-cyan hover:border-accent-cyan/50 transition-colors"
-            title="Refresh"
+            title={t('common.refresh')}
           >
             <RefreshCw
               size={16}
@@ -50,7 +52,7 @@ export default function Header({ title, subtitle, onRefresh }: HeaderProps) {
 
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-accent-green/10 text-accent-green border border-accent-green/20">
           <span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse" />
-          ONLINE
+          {t('common.online')}
         </span>
       </div>
     </header>

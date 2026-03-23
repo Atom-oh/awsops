@@ -9,12 +9,14 @@ import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Server, X, Cpu, HardDrive, Network, Shield, Tag, Search } from 'lucide-react';
 import { queries as ec2Q } from '@/lib/queries/ec2';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
 }
 
 export default function EC2Page() {
+  const { t } = useLanguage();
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -135,13 +137,13 @@ export default function EC2Page() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="EC2 Instances" subtitle="Elastic Compute Cloud" onRefresh={() => fetchData(true)} />
+      <Header title={t('ec2.title')} subtitle={t('ec2.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Running" value={running} icon={Server} color="green" />
-        <StatsCard label="Stopped" value={stopped} icon={Server} color="red" />
-        <StatsCard label="Total vCPUs" value={totalVcpus} icon={Server} color="cyan" />
-        <StatsCard label="Instance Types" value={typeData.length} icon={Server} color="purple" />
+        <StatsCard label={t('ec2.runningInstances')} value={running} icon={Server} color="green" />
+        <StatsCard label={t('ec2.stoppedInstances')} value={stopped} icon={Server} color="red" />
+        <StatsCard label={t('ec2.totalInstances')} value={totalVcpus} icon={Server} color="cyan" />
+        <StatsCard label={t('ec2.instanceType')} value={typeData.length} icon={Server} color="purple" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -187,14 +189,14 @@ export default function EC2Page() {
 
       <DataTable
         columns={[
-          { key: 'instance_id', label: 'Instance ID' },
-          { key: 'name', label: 'Name' },
-          { key: 'instance_type', label: 'Type' },
-          { key: 'instance_state', label: 'State', render: (v: string) => <StatusBadge status={v || 'unknown'} /> },
-          { key: 'public_ip_address', label: 'Public IP', render: (v: string) => v || <span className="text-gray-600">--</span> },
-          { key: 'private_ip_address', label: 'Private IP' },
-          { key: 'vpc_id', label: 'VPC' },
-          { key: 'launch_time', label: 'Launch Time', render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
+          { key: 'instance_id', label: t('ec2.instanceId') },
+          { key: 'name', label: t('ec2.instanceName') },
+          { key: 'instance_type', label: t('ec2.instanceType') },
+          { key: 'instance_state', label: t('ec2.state'), render: (v: string) => <StatusBadge status={v || 'unknown'} /> },
+          { key: 'public_ip_address', label: t('ec2.publicIp'), render: (v: string) => v || <span className="text-gray-600">--</span> },
+          { key: 'private_ip_address', label: t('ec2.privateIp') },
+          { key: 'vpc_id', label: t('ec2.vpcId') },
+          { key: 'launch_time', label: t('ec2.launchTime'), render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
         ]}
         data={loading && !filteredList.length ? undefined : filteredList}
         onRowClick={(row) => fetchDetail(row.instance_id)}

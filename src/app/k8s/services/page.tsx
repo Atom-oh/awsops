@@ -7,12 +7,14 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Network, Globe, Server, Share2 } from 'lucide-react';
 import { queries as k8sQ } from '@/lib/queries/k8s';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
 }
 
 export default function K8sServicesPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<DashboardData>({});
   const [_loading, setLoading] = useState(true);
 
@@ -56,15 +58,15 @@ export default function K8sServicesPage() {
   return (
     <div className="min-h-screen">
       <Header
-        title="Kubernetes Services"
-        subtitle="Service discovery and networking"
+        title={t('k8s.servicesTitle')}
+        subtitle={t('k8s.servicesSubtitle')}
         onRefresh={() => fetchData(true)}
       />
 
       <main className="p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatsCard label="Total Services" value={total} icon={Network} color="cyan" />
+          <StatsCard label={t('k8s.services')} value={total} icon={Network} color="cyan" />
           <StatsCard label="ClusterIP" value={clusterIP} icon={Server} color="green" />
           <StatsCard label="NodePort" value={nodePort} icon={Share2} color="purple" />
           <StatsCard label="LoadBalancer" value={loadBalancer} icon={Globe} color="orange" />
@@ -78,12 +80,12 @@ export default function K8sServicesPage() {
         {/* Table */}
         <DataTable
           columns={[
-            { key: 'name', label: 'Name' },
-            { key: 'namespace', label: 'Namespace' },
-            { key: 'type', label: 'Type' },
-            { key: 'cluster_ip', label: 'Cluster IP' },
-            { key: 'external_ip', label: 'External IP' },
-            { key: 'creation_timestamp', label: 'Created' },
+            { key: 'name', label: t('k8s.serviceName') },
+            { key: 'namespace', label: t('k8s.namespace') },
+            { key: 'type', label: t('k8s.serviceType') },
+            { key: 'cluster_ip', label: t('k8s.clusterIp') },
+            { key: 'external_ip', label: t('k8s.externalIp') },
+            { key: 'creation_timestamp', label: t('common.created') },
           ]}
           data={services}
         />

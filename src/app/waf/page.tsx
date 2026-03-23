@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import DataTable from '@/components/table/DataTable';
@@ -8,6 +9,7 @@ import { Shield, X, Tag } from 'lucide-react';
 import { queries as wafQ } from '@/lib/queries/waf';
 
 export default function WAFPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -49,21 +51,21 @@ export default function WAFPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="WAF" subtitle="Web Application Firewall" onRefresh={() => fetchData(true)} />
+      <Header title={t('waf.title')} subtitle={t('waf.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <StatsCard label="Web ACLs" value={Number(summary?.total_web_acls) || 0} icon={Shield} color="cyan" />
-        <StatsCard label="Rule Groups" value={Number(summary?.total_rule_groups) || 0} icon={Shield} color="purple" />
-        <StatsCard label="IP Sets" value={Number(summary?.total_ip_sets) || 0} icon={Shield} color="orange" />
+        <StatsCard label={t('waf.webAcls')} value={Number(summary?.total_web_acls) || 0} icon={Shield} color="cyan" />
+        <StatsCard label={t('waf.ruleGroups')} value={Number(summary?.total_rule_groups) || 0} icon={Shield} color="purple" />
+        <StatsCard label={t('waf.ipSets')} value={Number(summary?.total_ip_sets) || 0} icon={Shield} color="orange" />
       </div>
 
       <DataTable columns={[
-        { key: 'name', label: 'Name' },
-        { key: 'id', label: 'ID' },
-        { key: 'scope', label: 'Scope' },
+        { key: 'name', label: t('waf.aclName') },
+        { key: 'id', label: t('common.id') },
+        { key: 'scope', label: t('waf.scope') },
         { key: 'capacity', label: 'Capacity' },
-        { key: 'description', label: 'Description' },
-        { key: 'region', label: 'Region' },
+        { key: 'description', label: t('common.description') },
+        { key: 'region', label: t('common.region') },
       ]} data={loading && !list.length ? undefined : list}
          onRowClick={(row) => fetchDetail(row.id, row.name)} />
 

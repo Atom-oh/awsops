@@ -19,6 +19,8 @@ export interface AppConfig {
   steampipePassword?: string;
   fargatePricing?: FargatePricing;
   opencostEndpoint?: string;   // OpenCost API endpoint (Phase 2) / OpenCost API 엔드포인트 (2단계)
+  customerLogo?: string;       // Customer logo path in public/logos/ (e.g. "autoever.png") / 고객 로고 경로
+  customerName?: string;       // Customer name displayed next to logo / 로고 옆에 표시할 고객명
 }
 
 const DEFAULT_CONFIG: AppConfig = {

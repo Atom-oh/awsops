@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
-import { Activity, Cpu, Wifi, Box, Shield, DollarSign, Database, Network, Terminal, Zap, BarChart3, Clock, Wrench, MessageSquare, Search } from 'lucide-react';
+import { Activity, Cpu, Wifi, Box, Shield, DollarSign, Database, Network, Terminal, Zap, BarChart3, Clock, Wrench, MessageSquare, Search, RefreshCw } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 const GATEWAY_ICONS: Record<string, any> = {
   network: Network, container: Box, iac: Terminal, data: Database,
@@ -16,11 +17,13 @@ const GATEWAY_TOOLS: Record<string, number> = {
 };
 
 export default function AgentCorePage() {
+  const { t } = useLanguage();
   const [status, setStatus] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
   const [conversations, setConversations] = useState<any[]>([]);
   const [memorySearch, setMemorySearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [cacheInfo, setCacheInfo] = useState<any>(null);
 
   const fetchStatus = () => {
     setLoading(true);
@@ -28,10 +31,12 @@ export default function AgentCorePage() {
       fetch('/awsops/api/agentcore').then(r => r.json()),
       fetch('/awsops/api/agentcore?action=stats').then(r => r.json()),
       fetch('/awsops/api/agentcore?action=conversations&limit=20').then(r => r.json()),
-    ]).then(([statusData, statsData, convData]) => {
+      fetch('/awsops/api/agentcore?action=cache-status').then(r => r.json()),
+    ]).then(([statusData, statsData, convData, cacheData]) => {
       if (!statusData.error) setStatus(statusData);
       setStats(statsData);
       setConversations(convData.conversations || []);
+      setCacheInfo({ ...cacheData, fromCache: statusData.fromCache || false, fetchDurationSec: statusData.fetchDurationSec });
     }).catch(() => {}).finally(() => setLoading(false));
   };
 
@@ -55,7 +60,7 @@ export default function AgentCorePage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="AgentCore Dashboard" subtitle="Amazon Bedrock AgentCore Runtime & Gateways" onRefresh={fetchStatus} />
+      <Header title={t('agentcore.title')} subtitle={t('agentcore.subtitle')} onRefresh={fetchStatus} />
 
       {loading && (
         <div className="w-full h-1 bg-navy-700 rounded-full overflow-hidden">
@@ -65,15 +70,15 @@ export default function AgentCorePage() {
 
       {/* Stats / 통계 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatsCard label="Runtime" value={status?.runtime?.status || '--'} icon={Cpu}
+        <StatsCard label={t('agentcore.runtime')} value={status?.runtime?.status || '--'} icon={Cpu}
           color={status?.runtime?.status === 'READY' ? 'green' : 'orange'}
           change={`v${status?.runtime?.version || '?'} · ${status?.runtime?.id?.slice(-10) || ''}`} />
-        <StatsCard label="Gateways" value={`${readyGateways}/${totalGateways}`} icon={Wifi}
+        <StatsCard label={t('agentcore.gateways')} value={`${readyGateways}/${totalGateways}`} icon={Wifi}
           color={readyGateways === totalGateways && totalGateways > 0 ? 'green' : 'orange'}
           change={`${totalGateways} gateways · ${totalTools} tools`} />
-        <StatsCard label="MCP Tools" value={totalTools} icon={Activity} color="cyan"
+        <StatsCard label={t('agentcore.tools')} value={totalTools} icon={Activity} color="cyan"
           change="8 gateways · 19 Lambda" />
-        <StatsCard label="Code Interpreter" value="Active" icon={Terminal} color="purple"
+        <StatsCard label={t('agentcore.codeInterpreter')} value="Active" icon={Terminal} color="purple"
           change={status?.codeInterpreter?.id?.slice(-10) || ''} />
       </div>
 
@@ -81,26 +86,26 @@ export default function AgentCorePage() {
       {stats && stats.totalCalls > 0 && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            <StatsCard label="총 호출" value={stats.totalCalls} icon={BarChart3} color="cyan"
-              change={`${stats.successCalls} 성공 · ${stats.failedCalls} 실패`} />
-            <StatsCard label="평균 응답 시간" value={`${(stats.avgResponseTimeMs / 1000).toFixed(1)}s`} icon={Clock} color="purple"
-              change={stats.totalCalls > 0 ? `${stats.totalCalls}건 평균` : ''} />
-            <StatsCard label="사용된 도구" value={stats.uniqueToolsUsed?.length || 0} icon={Wrench} color="green"
-              change={`총 ${stats.totalToolsUsed || 0}회 호출`} />
-            <StatsCard label="성공률" value={`${stats.totalCalls > 0 ? ((stats.successCalls / stats.totalCalls) * 100).toFixed(0) : 0}%`} icon={Activity}
+            <StatsCard label={t('agentcore.totalCalls')} value={stats.totalCalls} icon={BarChart3} color="cyan"
+              change={t('agentcore.successFail', { success: stats.successCalls, fail: stats.failedCalls })} />
+            <StatsCard label={t('agentcore.avgResponseTime')} value={`${(stats.avgResponseTimeMs / 1000).toFixed(1)}s`} icon={Clock} color="purple"
+              change={stats.totalCalls > 0 ? t('agentcore.avgOf', { count: stats.totalCalls }) : ''} />
+            <StatsCard label={t('agentcore.usedTools')} value={stats.uniqueToolsUsed?.length || 0} icon={Wrench} color="green"
+              change={t('agentcore.totalToolCalls', { count: stats.totalToolsUsed || 0 })} />
+            <StatsCard label={t('agentcore.successRate')} value={`${stats.totalCalls > 0 ? ((stats.successCalls / stats.totalCalls) * 100).toFixed(0) : 0}%`} icon={Activity}
               color={stats.successCalls / stats.totalCalls >= 0.8 ? 'green' : 'orange'}
               change={`${stats.successCalls}/${stats.totalCalls}`} />
-            <StatsCard label="멀티 라우트" value={Object.keys(stats.callsByGateway || {}).filter(k => k.startsWith('multi:')).length > 0 ? Object.entries(stats.callsByGateway || {}).filter(([k]) => k.startsWith('multi:')).reduce((s, [, v]) => s + (v as number), 0) : 0} icon={Wifi} color="orange"
-              change="병렬 Gateway 호출" />
-            <StatsCard label="Steampipe SQL" value={stats.callsByGateway?.steampipe || 0} icon={Database} color="cyan"
-              change="aws-data 라우트" />
+            <StatsCard label={t('agentcore.multiRoute')} value={Object.keys(stats.callsByGateway || {}).filter(k => k.startsWith('multi:')).length > 0 ? Object.entries(stats.callsByGateway || {}).filter(([k]) => k.startsWith('multi:')).reduce((s, [, v]) => s + (v as number), 0) : 0} icon={Wifi} color="orange"
+              change={t('agentcore.parallelGateway')} />
+            <StatsCard label={t('agentcore.steampipeSql')} value={stats.callsByGateway?.steampipe || 0} icon={Database} color="cyan"
+              change={t('agentcore.awsDataRoute')} />
           </div>
 
           {/* 라우트별 호출 분포 / Calls by route */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
               <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                <BarChart3 size={16} className="text-accent-cyan" /> 라우트별 호출 수
+                <BarChart3 size={16} className="text-accent-cyan" /> {t('agentcore.callsByRoute')}
               </h3>
               <div className="space-y-2">
                 {Object.entries(stats.callsByRoute || {}).sort(([, a], [, b]) => (b as number) - (a as number)).map(([route, count]) => {
@@ -121,7 +126,7 @@ export default function AgentCorePage() {
             {/* 최근 호출 / Recent calls */}
             <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
               <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                <Clock size={16} className="text-accent-cyan" /> 최근 호출 (최대 10건)
+                <Clock size={16} className="text-accent-cyan" /> {t('agentcore.recentCalls')}
               </h3>
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
                 {(stats.recentCalls || []).slice(0, 10).map((call: any, i: number) => (
@@ -140,7 +145,7 @@ export default function AgentCorePage() {
                   </div>
                 ))}
                 {(!stats.recentCalls || stats.recentCalls.length === 0) && (
-                  <p className="text-gray-500 text-center py-3">아직 호출 기록이 없습니다</p>
+                  <p className="text-gray-500 text-center py-3">{t('agentcore.noCallHistory')}</p>
                 )}
               </div>
             </div>
@@ -204,25 +209,25 @@ export default function AgentCorePage() {
       <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-            <MessageSquare size={16} className="text-accent-cyan" /> 대화 이력 ({conversations.length}건)
+            <MessageSquare size={16} className="text-accent-cyan" /> {t('agentcore.conversationHistory')} ({t('agentcore.historyCount', { count: conversations.length })})
           </h3>
           <div className="flex items-center gap-2">
             <div className="relative">
               <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
-              <input type="text" placeholder="검색..." value={memorySearch}
+              <input type="text" placeholder={t('agentcore.searchHistory')} value={memorySearch}
                 onChange={e => setMemorySearch(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && searchMemory()}
                 className="pl-8 pr-3 py-1.5 bg-navy-900 border border-navy-600 rounded-lg text-xs text-gray-300 placeholder-gray-600 w-48 focus:outline-none focus:border-accent-cyan/50" />
             </div>
             <button onClick={searchMemory}
               className="px-3 py-1.5 text-xs bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20 rounded-lg hover:bg-accent-cyan/20 transition-colors">
-              검색
+              {t('agentcore.searchBtn')}
             </button>
           </div>
         </div>
 
         {conversations.length === 0 ? (
-          <p className="text-gray-500 text-sm text-center py-6">아직 대화 이력이 없습니다. AI Assistant에서 질문해보세요.</p>
+          <p className="text-gray-500 text-sm text-center py-6">{t('agentcore.noHistory')}</p>
         ) : (
           <div className="space-y-2 max-h-96 overflow-y-auto">
             {conversations.map((conv: any, i: number) => (
@@ -298,6 +303,44 @@ export default function AgentCorePage() {
           <p>  → SQL:    <span className="text-accent-orange">Bedrock</span> → SQL generate → <span className="text-accent-cyan">Steampipe pg Pool</span></p>
         </div>
       </div>
+
+      {/* Cache Status Bar / 캐시 상태 바 */}
+      {cacheInfo && (
+        <div className="flex items-center gap-4 px-4 py-2.5 rounded-lg bg-navy-800/60 border border-navy-600/50 text-[11px] font-mono text-gray-500">
+          <div className="flex items-center gap-1.5">
+            <RefreshCw size={12} className="text-gray-600" />
+            <span className="text-gray-400">{t('agentcore.cache')}</span>
+          </div>
+          {cacheInfo.fromCache ? (
+            <>
+              <span className="text-accent-green">Cache hit</span>
+              <span className="text-gray-600">|</span>
+              <span>{t('dashboard.lastCached')}: <span className="text-accent-cyan">{cacheInfo.cachedAt ? getTimeAgo(cacheInfo.cachedAt, t) : '-'}</span></span>
+              <span className="text-gray-600">|</span>
+              <span>TTL: <span className="text-gray-300">{cacheInfo.ttlRemaining > 0 ? `${cacheInfo.ttlRemaining}s` : 'expired'}</span></span>
+              <span className="text-gray-600">|</span>
+              <span>{t('agentcore.originalFetch')}: <span className="text-gray-300">{cacheInfo.fetchDurationSec || '-'}s</span></span>
+            </>
+          ) : (
+            <>
+              <span className="text-accent-orange">Fresh fetch</span>
+              {cacheInfo.fetchDurationSec && (
+                <>
+                  <span className="text-gray-600">|</span>
+                  <span>{t('dashboard.duration')}: <span className="text-accent-cyan">{cacheInfo.fetchDurationSec}s</span></span>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+function getTimeAgo(isoString: string, t: (key: string, params?: any) => string): string {
+  const diff = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (diff < 60) return t('dashboard.secondsAgo', { count: diff });
+  if (diff < 3600) return t('dashboard.minutesAgo', { count: Math.floor(diff / 60) });
+  return t('dashboard.hoursAgo', { count: Math.floor(diff / 3600) });
 }

@@ -9,10 +9,12 @@ import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
 import { ShieldCheck, X, Database, Shield, HardDrive, Bug, Users } from 'lucide-react';
 import { queries as secQ } from '@/lib/queries/security';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 type SecurityTab = 'publicBuckets' | 'mfa' | 'openSGs' | 'unencrypted' | 'cve';
 
 export default function SecurityPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<SecurityTab>('publicBuckets');
@@ -78,24 +80,24 @@ export default function SecurityPage() {
   ].filter(d => d.value > 0);
 
   const tabs: { key: SecurityTab; label: string; count: number }[] = [
-    { key: 'publicBuckets', label: 'Public Buckets', count: publicBuckets.length },
+    { key: 'publicBuckets', label: t('security.publicS3Buckets'), count: publicBuckets.length },
     { key: 'mfa', label: 'MFA Status', count: mfaStatus.length },
-    { key: 'openSGs', label: 'Open SGs', count: openSGs.length },
-    { key: 'unencrypted', label: 'Unencrypted Volumes', count: unencryptedVols.length },
-    { key: 'cve', label: 'CVE Vulnerabilities', count: trivyVulns.length },
+    { key: 'openSGs', label: t('security.openSecurityGroups'), count: openSGs.length },
+    { key: 'unencrypted', label: t('security.unencryptedEBS'), count: unencryptedVols.length },
+    { key: 'cve', label: t('security.cveVulnerabilities'), count: trivyVulns.length },
   ];
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="Security Overview" subtitle="Security Posture & Vulnerabilities" onRefresh={() => fetchData(true)} />
+      <Header title={t('security.title')} subtitle={t('security.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <StatsCard label="Public Buckets" value={publicBucketCount} icon={ShieldCheck} color="red" change={publicBucketCount > 0 ? 'Exposed!' : undefined} />
+        <StatsCard label={t('security.publicS3Buckets')} value={publicBucketCount} icon={ShieldCheck} color="red" change={publicBucketCount > 0 ? 'Exposed!' : undefined} />
         <StatsCard label="MFA Issues" value={mfaIssues} icon={ShieldCheck} color="red" />
-        <StatsCard label="Open SGs" value={openSGCount} icon={ShieldCheck} color="orange" change={openSGCount > 0 ? '0.0.0.0/0 ingress' : undefined} />
-        <StatsCard label="Unencrypted Vols" value={unencryptedCount} icon={ShieldCheck} color="orange" />
-        <StatsCard label="CVE Critical" value={Number(criticalCVE)} icon={ShieldCheck} color="red" />
-        <StatsCard label="CVE High" value={Number(highCVE)} icon={ShieldCheck} color="orange" />
+        <StatsCard label={t('security.openSecurityGroups')} value={openSGCount} icon={ShieldCheck} color="orange" change={openSGCount > 0 ? '0.0.0.0/0 ingress' : undefined} />
+        <StatsCard label={t('security.unencryptedEBS')} value={unencryptedCount} icon={ShieldCheck} color="orange" />
+        <StatsCard label={t('security.critical')} value={Number(criticalCVE)} icon={ShieldCheck} color="red" />
+        <StatsCard label={t('security.high')} value={Number(highCVE)} icon={ShieldCheck} color="orange" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -161,7 +163,7 @@ export default function SecurityPage() {
       {activeTab === 'cve' && (
         <DataTable columns={[
           { key: 'vulnerability_id', label: 'CVE ID' },
-          { key: 'severity', label: 'Severity', render: (v: string) => {
+          { key: 'severity', label: t('security.severity'), render: (v: string) => {
             const cm: Record<string, string> = { CRITICAL: 'bg-accent-red/10 text-accent-red', HIGH: 'bg-accent-orange/10 text-accent-orange', MEDIUM: 'bg-accent-purple/10 text-accent-purple', LOW: 'bg-accent-cyan/10 text-accent-cyan' };
             return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cm[v] || 'bg-gray-500/10 text-gray-400'}`}>{v}</span>;
           }},

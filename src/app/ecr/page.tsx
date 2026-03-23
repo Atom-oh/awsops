@@ -6,8 +6,10 @@ import StatsCard from '@/components/dashboard/StatsCard';
 import DataTable from '@/components/table/DataTable';
 import { Package, X, Tag } from 'lucide-react';
 import { queries as ecrQ } from '@/lib/queries/ecr';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 export default function ECRPage() {
+  const { t } = useLanguage();
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -48,23 +50,21 @@ export default function ECRPage() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <Header title="ECR" subtitle="Elastic Container Registry" onRefresh={() => fetchData(true)} />
+      <Header title={t('ecr.title')} subtitle={t('ecr.subtitle')} onRefresh={() => fetchData(true)} />
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <StatsCard label="Repositories" value={Number(summary?.total_repos) || 0} icon={Package} color="cyan" />
-        <StatsCard label="Scan on Push" value={Number(summary?.scan_enabled) || 0} icon={Package} color="green"
-          change="Image scanning enabled" />
-        <StatsCard label="Immutable Tags" value={Number(summary?.immutable_tags) || 0} icon={Package} color="purple"
-          change="Tag immutability" />
+        <StatsCard label={t('ecr.totalRepos')} value={Number(summary?.total_repos) || 0} icon={Package} color="cyan" />
+        <StatsCard label={t('ecr.scanOnPush')} value={Number(summary?.scan_enabled) || 0} icon={Package} color="green" />
+        <StatsCard label={t('ecr.tagImmutability')} value={Number(summary?.immutable_tags) || 0} icon={Package} color="purple" />
       </div>
 
       <DataTable columns={[
-        { key: 'repository_name', label: 'Repository' },
-        { key: 'repository_uri', label: 'URI' },
-        { key: 'image_tag_mutability', label: 'Tag Mutability' },
-        { key: 'scan_on_push', label: 'Scan', render: (v: string) => v === 'true' ? <span className="text-accent-green">Yes</span> : <span className="text-gray-500">No</span> },
-        { key: 'encryption_type', label: 'Encryption' },
-        { key: 'created_at', label: 'Created', render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
+        { key: 'repository_name', label: t('ecr.repoName') },
+        { key: 'repository_uri', label: t('ecr.repositoryUri') },
+        { key: 'image_tag_mutability', label: t('ecr.tagImmutability') },
+        { key: 'scan_on_push', label: t('ecr.scanOnPush'), render: (v: string) => v === 'true' ? <span className="text-accent-green">{t('common.yes')}</span> : <span className="text-gray-500">{t('common.no')}</span> },
+        { key: 'encryption_type', label: t('ecr.encryptionType') },
+        { key: 'created_at', label: t('ecr.createdAt'), render: (v: string) => v ? new Date(v).toLocaleDateString() : '--' },
       ]} data={loading && !list.length ? undefined : list}
          onRowClick={(row) => fetchDetail(row.repository_name)} />
 
