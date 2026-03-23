@@ -3,7 +3,7 @@
 // Flow: classify intent (from registry) → route to handler → fallback
 // 흐름: 의도 분류 (레지스트리 기반) → 핸들러 라우팅 → 폴백
 import { NextRequest, NextResponse } from 'next/server';
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, InvokeModelCommand, InvokeModelWithResponseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import {
   BedrockAgentCoreClient,
   InvokeAgentRuntimeCommand,
@@ -641,6 +641,56 @@ function sseEvent(event: string, data: any): string {
 }
 
 // ============================================================================
+// Bedrock streaming helper: stream response chunks as SSE events
+// Bedrock 스트리밍 헬퍼: 응답 청크를 SSE 이벤트로 전송
+// ============================================================================
+async function streamBedrockToSSE(
+  params: { modelId: string; system: string; messages: Array<{role: string; content: string}>; maxTokens?: number },
+  send: (event: string, data: any) => void,
+): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
+  const body = JSON.stringify({
+    anthropic_version: 'bedrock-2023-05-31',
+    max_tokens: params.maxTokens || 4096,
+    system: params.system,
+    messages: params.messages,
+  });
+
+  const response = await bedrockClient.send(new InvokeModelWithResponseStreamCommand({
+    modelId: params.modelId,
+    contentType: 'application/json',
+    accept: 'application/json',
+    body: new TextEncoder().encode(body),
+  }));
+
+  let fullContent = '';
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  if (response.body) {
+    for await (const event of response.body) {
+      if (event.chunk?.bytes) {
+        const parsed = JSON.parse(new TextDecoder().decode(event.chunk.bytes));
+        // content_block_delta contains streaming text / 스트리밍 텍스트 포함
+        if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+          fullContent += parsed.delta.text;
+          send('chunk', { delta: parsed.delta.text });
+        }
+        // message_delta contains stop reason / 메시지 종료 정보
+        if (parsed.type === 'message_delta' && parsed.usage) {
+          outputTokens = parsed.usage.output_tokens || 0;
+        }
+        // message_start contains input token count / 입력 토큰 수
+        if (parsed.type === 'message_start' && parsed.message?.usage) {
+          inputTokens = parsed.message.usage.input_tokens || 0;
+        }
+      }
+    }
+  }
+
+  return { content: fullContent, inputTokens, outputTokens };
+}
+
+// ============================================================================
 // Helper: 통계 기록 + 대화 저장을 한 번에 / Record stats + save conversation in one call
 function recordAndSave(p: {
   route: string; gateway: string; responseTimeMs: number; usedTools: string[];
@@ -730,22 +780,22 @@ export async function POST(request: NextRequest) {
           send('status', { step: 'generating', message: STATUS.codeGenerating });
           const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
           const codeSystemPrompt = SYSTEM_PROMPT + `\n\nThe user wants to execute code. If they provide code, wrap it in a \`\`\`python code block. If they describe a task, generate Python code to accomplish it and wrap it in a \`\`\`python code block. Always include print statements to show results.`;
-          const body = JSON.stringify({
-            anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: codeSystemPrompt,
-            messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })),
-          });
-          const aiResponse = await bedrockClient.send(new InvokeModelCommand({
-            modelId, contentType: 'application/json', accept: 'application/json', body: encoder.encode(body),
-          }));
-          const aiResult = JSON.parse(new TextDecoder().decode(aiResponse.body));
-          const aiText = aiResult.content?.[0]?.text || '';
-          if (aiResult.usage) { totalInputTokens += aiResult.usage.input_tokens || 0; totalOutputTokens += aiResult.usage.output_tokens || 0; }
+          // Stream code generation / 코드 생성 스트리밍
+          const codeStreamResult = await streamBedrockToSSE(
+            { modelId, system: codeSystemPrompt, messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })) },
+            send,
+          );
+          const aiText = codeStreamResult.content || '';
+          totalInputTokens += codeStreamResult.inputTokens;
+          totalOutputTokens += codeStreamResult.outputTokens;
           const pythonCode = extractPythonCode(aiText) || extractPythonCode(lastMessage);
 
           if (pythonCode) {
             send('status', { step: 'executing', message: STATUS.codeExecuting });
             const codeResult = await executeCodeInterpreter(pythonCode);
             const executionBlock = `\n\n---\n**Code Execution Result** (exit code: ${codeResult.exitCode}):\n\`\`\`\n${codeResult.output}\n\`\`\``;
+            // Send execution result as chunk / 실행 결과를 chunk로 전송
+            send('chunk', { delta: executionBlock });
             send('done', {
               content: aiText + executionBlock, model: modelKey || 'sonnet-4.6',
               via: `Bedrock + ${config.display}`, queriedResources: ['code-interpreter'], route,
@@ -789,15 +839,14 @@ export async function POST(request: NextRequest) {
             const contextData = `\n\n--- LIVE AWS RESOURCE DATA (${queryResult.rowCount} rows) ---\nSQL: ${sql}\n\`\`\`json\n${queryResult.data}\n\`\`\``;
             const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
             bedrockMessages[bedrockMessages.length - 1].content += contextData;
-            const body = JSON.stringify({
-              anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT, messages: bedrockMessages,
-            });
-            const response = await bedrockClient.send(new InvokeModelCommand({
-              modelId, contentType: 'application/json', accept: 'application/json', body: encoder.encode(body),
-            }));
-            const result = JSON.parse(new TextDecoder().decode(response.body));
-            if (result.usage) { totalInputTokens += result.usage.input_tokens || 0; totalOutputTokens += result.usage.output_tokens || 0; }
-            const sqlContent = result.content?.[0]?.text || 'No response';
+            // Stream Bedrock analysis response / Bedrock 분석 응답 스트리밍
+            const streamResult = await streamBedrockToSSE(
+              { modelId, system: SYSTEM_PROMPT, messages: bedrockMessages },
+              send,
+            );
+            totalInputTokens += streamResult.inputTokens;
+            totalOutputTokens += streamResult.outputTokens;
+            const sqlContent = streamResult.content || 'No response';
             const sqlTools = extractUsedTools(sqlContent);
             if (sql) sqlTools.push(`steampipe: ${sql.match(/FROM\s+(\w+)/i)?.[1] || 'query'}`);
             const sqlTimeMs = Date.now() - callStartTime;
@@ -867,21 +916,17 @@ export async function POST(request: NextRequest) {
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
             });
           } else {
-            // 모든 Gateway 실패 → Bedrock Direct 폴백 / All gateways failed → Bedrock Direct fallback
+            // 모든 Gateway 실패 → Bedrock Direct 스트리밍 폴백 / All gateways failed → Bedrock Direct streaming fallback
             send('status', { step: 'fallback', message: STATUS.gatewayTimeout });
             const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
-            const fallbackBody = JSON.stringify({
-              anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT,
-              messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })),
-            });
             try {
-              const fallbackResp = await bedrockClient.send(new InvokeModelCommand({
-                modelId, contentType: 'application/json', accept: 'application/json',
-                body: encoder.encode(fallbackBody),
-              }));
-              const fallbackResult = JSON.parse(new TextDecoder().decode(fallbackResp.body));
-              if (fallbackResult.usage) { totalInputTokens += fallbackResult.usage.input_tokens || 0; totalOutputTokens += fallbackResult.usage.output_tokens || 0; }
-              const mfContent = fallbackResult.content?.[0]?.text || 'No response';
+              const mfStreamResult = await streamBedrockToSSE(
+                { modelId, system: SYSTEM_PROMPT, messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })) },
+                send,
+              );
+              totalInputTokens += mfStreamResult.inputTokens;
+              totalOutputTokens += mfStreamResult.outputTokens;
+              const mfContent = mfStreamResult.content || 'No response';
               const mfTools = extractUsedTools(mfContent);
               send('done', {
                 content: mfContent, model: modelKey || 'sonnet-4.6',
@@ -931,19 +976,16 @@ export async function POST(request: NextRequest) {
           return;
         }
 
-        // Fallback: Bedrock Direct / 폴백: Bedrock 직접
+        // Fallback: Bedrock Direct streaming / 폴백: Bedrock 직접 스트리밍
         send('status', { step: 'fallback', message: STATUS.fallback });
         const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
-        const body = JSON.stringify({
-          anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT,
-          messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })),
-        });
-        const response = await bedrockClient.send(new InvokeModelCommand({
-          modelId, contentType: 'application/json', accept: 'application/json', body: encoder.encode(body),
-        }));
-        const result = JSON.parse(new TextDecoder().decode(response.body));
-        if (result.usage) { totalInputTokens += result.usage.input_tokens || 0; totalOutputTokens += result.usage.output_tokens || 0; }
-        const fallbackContent = result.content?.[0]?.text || 'No response';
+        const fbStreamResult = await streamBedrockToSSE(
+          { modelId, system: SYSTEM_PROMPT, messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })) },
+          send,
+        );
+        totalInputTokens += fbStreamResult.inputTokens;
+        totalOutputTokens += fbStreamResult.outputTokens;
+        const fallbackContent = fbStreamResult.content || 'No response';
         const fallbackTools = extractUsedTools(fallbackContent);
         const fbTimeMs = Date.now() - callStartTime;
         recordAndSave({ route, gateway: 'bedrock-fallback', responseTimeMs: fbTimeMs, usedTools: fallbackTools, success: false, via: `Bedrock Direct (fallback)`, question: lastMessage, summary: fallbackContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });

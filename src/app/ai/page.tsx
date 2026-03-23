@@ -41,12 +41,14 @@ export default function AIPage() {
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [historyData, setHistoryData] = useState<any[]>([]);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [streamingContent, setStreamingContent] = useState(''); // Accumulates streaming chunks / 스트리밍 청크 누적
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, streamingContent]);
 
   // 대화 이력 로드 / Load conversation history
   const loadHistory = () => {
@@ -80,8 +82,6 @@ export default function AIPage() {
     };
   }, [messages]);
 
-  const [statusMessage, setStatusMessage] = useState('');
-
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
 
@@ -90,6 +90,7 @@ export default function AIPage() {
     setMessages(newMessages);
     setInput('');
     setLoading(true);
+    setStreamingContent('');
     setStatusMessage(`🔍 ${t('ai.analyzing')}`);
     const startTime = Date.now();
 
@@ -136,7 +137,11 @@ export default function AIPage() {
                 const data = JSON.parse(line.slice(6));
                 if (eventType === 'status') {
                   setStatusMessage(data.message || '');
+                } else if (eventType === 'chunk') {
+                  // Incremental streaming: accumulate content / 점진적 스트리밍: 콘텐츠 누적
+                  setStreamingContent(prev => prev + (data.delta || ''));
                 } else if (eventType === 'done') {
+                  setStreamingContent(''); // Clear streaming buffer / 스트리밍 버퍼 초기화
                   setMessages([...newMessages, {
                     role: 'assistant', content: data.content,
                     model: data.model, queriedResources: data.queriedResources,
@@ -175,6 +180,7 @@ export default function AIPage() {
     } finally {
       setLoading(false);
       setStatusMessage('');
+      setStreamingContent('');
       inputRef.current?.focus();
     }
   };
@@ -363,17 +369,59 @@ export default function AIPage() {
           </div>
         ))}
 
-        {/* Loading with SSE status / SSE 상태와 함께 로딩 표시 */}
+        {/* Loading: show streaming content or status spinner / 로딩: 스트리밍 콘텐츠 또는 상태 스피너 표시 */}
         {loading && (
           <div className="flex gap-3">
             <div className="shrink-0 w-8 h-8 rounded-lg bg-accent-cyan/10 flex items-center justify-center mt-1">
               <Bot size={16} className="text-accent-cyan" />
             </div>
-            <div className="bg-navy-800 border border-navy-600 rounded-lg px-4 py-3">
-              <div className="flex items-center gap-2 text-sm text-gray-400">
-                <Loader2 size={14} className="animate-spin" />
-                <span className="transition-all duration-300">{statusMessage || t('ai.processing')}</span>
-              </div>
+            <div className="max-w-5xl bg-navy-800 border border-navy-600 rounded-lg px-4 py-3">
+              {streamingContent ? (
+                <>
+                  {/* Real-time streaming markdown / 실시간 스트리밍 마크다운 */}
+                  <div className="text-sm leading-relaxed break-words markdown-body">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        h1: ({children}) => <h1 className="text-xl font-bold text-white mt-4 mb-2">{children}</h1>,
+                        h2: ({children}) => <h2 className="text-lg font-bold text-white mt-3 mb-2">{children}</h2>,
+                        h3: ({children}) => <h3 className="text-base font-semibold text-white mt-3 mb-1">{children}</h3>,
+                        p: ({children}) => <p className="text-gray-300 mb-2">{children}</p>,
+                        strong: ({children}) => <strong className="text-white font-semibold">{children}</strong>,
+                        em: ({children}) => <em className="text-gray-300">{children}</em>,
+                        code: ({children, className}) => {
+                          const isBlock = className?.includes('language-');
+                          if (isBlock) return <code className="text-xs text-gray-300">{children}</code>;
+                          return <code className="bg-navy-900 text-accent-cyan px-1.5 py-0.5 rounded text-xs font-mono">{children}</code>;
+                        },
+                        pre: ({children}) => <pre className="bg-navy-900 rounded-lg p-3 my-2 overflow-x-auto text-xs font-mono">{children}</pre>,
+                        table: ({children}) => <div className="overflow-x-auto my-2"><table className="w-full text-xs">{children}</table></div>,
+                        thead: ({children}) => <thead className="bg-navy-900">{children}</thead>,
+                        th: ({children}) => <th className="px-3 py-2 text-left text-accent-cyan font-mono uppercase text-[10px] border-b border-navy-600">{children}</th>,
+                        td: ({children}) => <td className="px-3 py-1.5 border-b border-navy-600/50 text-gray-300">{children}</td>,
+                        ul: ({children}) => <ul className="list-disc list-inside space-y-1 text-gray-300 mb-2">{children}</ul>,
+                        ol: ({children}) => <ol className="list-decimal list-inside space-y-1 text-gray-300 mb-2">{children}</ol>,
+                        li: ({children}) => <li>{children}</li>,
+                        a: ({href, children}) => <a href={href} className="text-accent-cyan hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+                        blockquote: ({children}) => <blockquote className="border-l-2 border-accent-cyan pl-3 my-2 text-gray-400 italic">{children}</blockquote>,
+                        hr: () => <hr className="border-navy-600 my-3" />,
+                      }}
+                    >
+                      {streamingContent}
+                    </ReactMarkdown>
+                  </div>
+                  {/* Streaming indicator / 스트리밍 진행 표시 */}
+                  <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
+                    <Loader2 size={12} className="animate-spin" />
+                    <span>{statusMessage || t('ai.processing')}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-2 text-sm text-gray-400">
+                  <Loader2 size={14} className="animate-spin" />
+                  <span className="transition-all duration-300">{statusMessage || t('ai.processing')}</span>
+                </div>
+              )}
             </div>
           </div>
         )}
