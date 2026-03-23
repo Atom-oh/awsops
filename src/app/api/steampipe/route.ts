@@ -3,9 +3,12 @@ import { batchQuery, clearCache, checkCostAvailability } from '@/lib/steampipe';
 import { saveSnapshot, getHistory } from '@/lib/resource-inventory';
 import { saveCostSnapshot, getLatestCostSnapshot } from '@/lib/cost-snapshot';
 import { getConfig, saveConfig } from '@/lib/app-config';
-import { getCacheWarmerStatus } from '@/lib/cache-warmer';
+import { getCacheWarmerStatus, ensureCacheWarmerStarted } from '@/lib/cache-warmer';
 
 export async function GET(request: NextRequest) {
+  // Auto-start cache warmer on first request / 첫 요청 시 캐시 워머 자동 시작
+  ensureCacheWarmerStarted();
+
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
   const bustCache = searchParams.get('bustCache') === 'true';
@@ -80,6 +83,9 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // Auto-start cache warmer on first request / 첫 요청 시 캐시 워머 자동 시작
+  ensureCacheWarmerStarted();
+
   try {
     const { searchParams } = new URL(request.url);
     const bustCache = searchParams.get('bustCache') === 'true';

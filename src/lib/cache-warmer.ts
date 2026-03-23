@@ -30,6 +30,7 @@ const WARM_INTERVAL_MS = 4 * 60 * 1000; // 4 minutes / 4분
 const METRIC_CACHE_TTL = 600; // 10 minutes for CloudWatch metric queries / CloudWatch 메트릭 쿼리는 10분
 let warmingTimer: ReturnType<typeof setInterval> | null = null;
 let isWarming = false;
+let initialized = false; // Lazy-init flag / 지연 초기화 플래그
 
 // ============================================================================
 // Cache warmer status tracking / 캐시 워머 상태 추적
@@ -170,4 +171,12 @@ export function stopCacheWarmer(): void {
     warmingTimer = null;
     console.log('[CacheWarmer] Stopped background cache warming');
   }
+}
+
+// Lazy-init: auto-start on first API request (more reliable than instrumentation.ts)
+// 지연 초기화: 첫 API 요청 시 자동 시작 (instrumentation.ts보다 안정적)
+export function ensureCacheWarmerStarted(): void {
+  if (initialized) return;
+  initialized = true;
+  startCacheWarmer();
 }

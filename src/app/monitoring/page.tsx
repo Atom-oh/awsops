@@ -6,7 +6,7 @@ import StatsCard from '@/components/dashboard/StatsCard';
 import LineChartCard from '@/components/charts/LineChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
-import { Activity, Cpu, HardDrive, Database, X, MemoryStick, Wifi, ArrowLeft, Calendar } from 'lucide-react';
+import { Activity, Cpu, HardDrive, Database, X, MemoryStick, Wifi, ArrowLeft, Calendar, RefreshCw } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { queries as metQ } from '@/lib/queries/metrics';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -26,6 +26,7 @@ export default function MonitoringPage() {
   const [detailMetrics, setDetailMetrics] = useState<Record<string, any[]>>({});
   const [detailMetricLoading, setDetailMetricLoading] = useState(false);
   const [dateRange, setDateRange] = useState('1h');
+  const [cacheStatus, setCacheStatus] = useState<any>(null);
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -49,10 +50,14 @@ export default function MonitoringPage() {
         }),
       });
       setData(await res.json());
+      fetch('/awsops/api/steampipe?action=cache-status').then(r => r.json()).then(d => setCacheStatus(d)).catch(() => {});
     } catch {} finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    fetchData();
+    fetch('/awsops/api/steampipe?action=cache-status').then(r => r.json()).then(d => setCacheStatus(d)).catch(() => {});
+  }, [fetchData]);
 
   const DATE_RANGES = [
     { label: '1h', range: '1 hour', period: 300 },
@@ -679,6 +684,36 @@ export default function MonitoringPage() {
           </div>
         </div>
       )}
+
+      {/* Cache Warmer Status Bar / 캐시 워머 상태 바 */}
+      {cacheStatus && (
+        <div className="flex items-center gap-4 px-4 py-2.5 rounded-lg bg-navy-800/60 border border-navy-600/50 text-[11px] font-mono text-gray-500">
+          <div className="flex items-center gap-1.5">
+            <RefreshCw size={12} className={cacheStatus.isRunning ? 'text-accent-cyan animate-spin' : 'text-gray-600'} />
+            <span className="text-gray-400">{t('dashboard.cacheWarmer')}</span>
+          </div>
+          {cacheStatus.lastWarmedAt && (
+            <>
+              <span>{t('dashboard.lastCached')}: <span className="text-accent-green">{getTimeAgo(cacheStatus.lastWarmedAt, t)}</span></span>
+              <span className="text-gray-600">|</span>
+              <span>{t('dashboard.duration')}: <span className="text-accent-cyan">{cacheStatus.lastDurationSec}s</span></span>
+              <span className="text-gray-600">|</span>
+              <span>Metric TTL: <span className="text-gray-300">{cacheStatus.metricCacheTtlMin}min</span></span>
+              <span className="text-gray-600">|</span>
+              <span>{t('dashboard.warmCount')}: <span className="text-accent-purple">{cacheStatus.warmCount}</span></span>
+            </>
+          )}
+          {cacheStatus.isRunning && <span className="text-accent-cyan">{t('dashboard.warming')}</span>}
+          {!cacheStatus.lastWarmedAt && !cacheStatus.isRunning && <span className="text-gray-600">{t('dashboard.waitingFirstWarm')}</span>}
+        </div>
+      )}
     </div>
   );
+}
+
+function getTimeAgo(isoString: string, t: (key: string, params?: any) => string): string {
+  const diff = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (diff < 60) return t('dashboard.secondsAgo', { count: diff });
+  if (diff < 3600) return t('dashboard.minutesAgo', { count: Math.floor(diff / 60) });
+  return t('dashboard.hoursAgo', { count: Math.floor(diff / 3600) });
 }
