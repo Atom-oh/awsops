@@ -9,7 +9,7 @@ import BarChartCard from '@/components/charts/BarChartCard';
 import {
   Server, Database, DollarSign, Box, Shield, Network,
   Bell, Container, ShieldCheck, AlertTriangle, Zap, Table,
-  FileSearch, Globe, Package, HardDrive, Radio, Search,
+  FileSearch, Globe, Package, HardDrive, Radio, Search, RefreshCw,
 } from 'lucide-react';
 import { queries as ec2Q } from '@/lib/queries/ec2';
 import { queries as s3Q } from '@/lib/queries/s3';
@@ -54,6 +54,7 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardData>({});
   const [loading, setLoading] = useState(true);
   const [costAvailable, setCostAvailable] = useState<boolean | null>(null);
+  const [cacheStatus, setCacheStatus] = useState<any>(null);
 
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
@@ -96,6 +97,8 @@ export default function DashboardPage() {
         }),
       });
       setData(await res.json());
+      // Refresh cache status after data load / 데이터 로드 후 캐시 상태 갱신
+      fetch('/awsops/api/steampipe?action=cache-status').then(r => r.json()).then(d => setCacheStatus(d)).catch(() => {});
     } catch {} finally { setLoading(false); }
   }, [costAvailable]);
 
@@ -105,6 +108,11 @@ export default function DashboardPage() {
       .then(r => r.json())
       .then(d => setCostAvailable(d.available !== false))
       .catch(() => setCostAvailable(false));
+    // Cache warmer status / 캐시 워머 상태 조회
+    fetch('/awsops/api/steampipe?action=cache-status')
+      .then(r => r.json())
+      .then(d => setCacheStatus(d))
+      .catch(() => {});
   }, []);
 
   // cost-check 완료 후 fetchData 실행 / Run fetchData after cost-check resolves
@@ -398,6 +406,46 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {/* Cache Warmer Status Bar / 캐시 워머 상태 바 */}
+      {cacheStatus && (
+        <div className="flex items-center gap-4 px-4 py-2.5 rounded-lg bg-navy-800/60 border border-navy-600/50 text-[11px] font-mono text-gray-500">
+          <div className="flex items-center gap-1.5">
+            <RefreshCw size={12} className={cacheStatus.isRunning ? 'text-accent-cyan animate-spin' : 'text-gray-600'} />
+            <span className="text-gray-400">{t('dashboard.cacheWarmer')}</span>
+          </div>
+          {cacheStatus.lastWarmedAt && (
+            <>
+              <span>{t('dashboard.lastCached')}: <span className="text-accent-green">{getTimeAgo(cacheStatus.lastWarmedAt, t)}</span></span>
+              <span className="text-gray-600">|</span>
+              <span>{t('dashboard.duration')}: <span className="text-accent-cyan">{cacheStatus.lastDurationSec}s</span></span>
+              <span className="text-gray-600">|</span>
+              <span>{t('dashboard.queries')}: <span className="text-gray-300">{cacheStatus.dashboardQueries + cacheStatus.monitoringQueries}</span></span>
+              <span className="text-gray-600">|</span>
+              <span>{t('dashboard.refreshCycle')}: <span className="text-gray-300">{cacheStatus.intervalMin}{t('dashboard.min')}</span></span>
+              <span className="text-gray-600">|</span>
+              <span>{t('dashboard.warmCount')}: <span className="text-accent-purple">{cacheStatus.warmCount}</span></span>
+            </>
+          )}
+          {cacheStatus.isRunning && (
+            <span className="text-accent-cyan">{t('dashboard.warming')}</span>
+          )}
+          {!cacheStatus.lastWarmedAt && !cacheStatus.isRunning && (
+            <span className="text-gray-600">{t('dashboard.waitingFirstWarm')}</span>
+          )}
+          {cacheStatus.lastError && (
+            <span className="text-accent-red">Error: {cacheStatus.lastError}</span>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+// Helper: relative time display / 상대 시간 표시
+function getTimeAgo(isoString: string, t: (key: string, params?: any) => string): string {
+  const diff = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (diff < 60) return t('dashboard.secondsAgo', { count: diff });
+  if (diff < 3600) return t('dashboard.minutesAgo', { count: Math.floor(diff / 60) });
+  return t('dashboard.hoursAgo', { count: Math.floor(diff / 3600) });
 }

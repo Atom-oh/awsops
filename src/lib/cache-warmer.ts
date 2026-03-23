@@ -31,6 +31,40 @@ const METRIC_CACHE_TTL = 600; // 10 minutes for CloudWatch metric queries / Clou
 let warmingTimer: ReturnType<typeof setInterval> | null = null;
 let isWarming = false;
 
+// ============================================================================
+// Cache warmer status tracking / 캐시 워머 상태 추적
+// ============================================================================
+interface CacheWarmerStatus {
+  isRunning: boolean;           // Currently warming / 현재 워밍 중
+  lastWarmedAt: string | null;  // Last successful warm timestamp / 마지막 성공 시각
+  lastDurationSec: number | null; // Last warm duration in seconds / 마지막 소요 시간
+  warmCount: number;            // Total successful warms since start / 시작 이후 총 성공 횟수
+  lastError: string | null;     // Last error message / 마지막 에러
+  startedAt: string | null;     // Server start time / 서버 시작 시각
+  intervalMin: number;          // Refresh interval in minutes / 갱신 주기 (분)
+  dashboardQueries: number;     // Number of dashboard queries / 대시보드 쿼리 수
+  monitoringQueries: number;    // Number of monitoring queries / 모니터링 쿼리 수
+  metricCacheTtlMin: number;    // Metric cache TTL in minutes / 메트릭 캐시 TTL (분)
+}
+
+const status: CacheWarmerStatus = {
+  isRunning: false,
+  lastWarmedAt: null,
+  lastDurationSec: null,
+  warmCount: 0,
+  lastError: null,
+  startedAt: null,
+  intervalMin: WARM_INTERVAL_MS / 60000,
+  dashboardQueries: 0,
+  monitoringQueries: 10,
+  metricCacheTtlMin: METRIC_CACHE_TTL / 60,
+};
+
+// Export status getter / 상태 조회 함수
+export function getCacheWarmerStatus(): CacheWarmerStatus {
+  return { ...status, isRunning: isWarming };
+}
+
 // Dashboard queries (same as page.tsx) / 대시보드 쿼리 (page.tsx와 동일)
 function getDashboardQueries(includeCost: boolean): Record<string, string> {
   return {
@@ -88,16 +122,23 @@ async function warmCache(): Promise<void> {
     const includeCost = costResult.available;
 
     // 2. Run dashboard queries / 대시보드 쿼리 실행
-    await batchQuery(getDashboardQueries(includeCost));
+    const dashQueries = getDashboardQueries(includeCost);
+    status.dashboardQueries = Object.keys(dashQueries).length;
+    await batchQuery(dashQueries);
 
     // 3. Run monitoring queries with longer TTL (CloudWatch metrics are slow)
     // 모니터링 쿼리는 CloudWatch API 호출이 느리므로 TTL을 10분으로 설정
     await batchQuery(getMonitoringQueries(), false, METRIC_CACHE_TTL);
 
-    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-    console.log(`[CacheWarmer] Warmed dashboard + monitoring cache in ${elapsed}s`);
+    const elapsed = (Date.now() - start) / 1000;
+    status.lastWarmedAt = new Date().toISOString();
+    status.lastDurationSec = Math.round(elapsed * 10) / 10;
+    status.warmCount++;
+    status.lastError = null;
+    console.log(`[CacheWarmer] Warmed dashboard (${status.dashboardQueries}) + monitoring (${status.monitoringQueries}) cache in ${elapsed.toFixed(1)}s`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
+    status.lastError = message;
     console.error(`[CacheWarmer] Failed: ${message}`);
   } finally {
     isWarming = false;
@@ -108,6 +149,7 @@ async function warmCache(): Promise<void> {
 export function startCacheWarmer(): void {
   if (warmingTimer) return; // Already started / 이미 시작됨
 
+  status.startedAt = new Date().toISOString();
   console.log('[CacheWarmer] Starting background cache warming (interval: 4min)');
 
   // Initial warm after 5s delay (let server fully start) / 서버 시작 5초 후 초기 워밍

@@ -3,6 +3,7 @@ import { batchQuery, clearCache, checkCostAvailability } from '@/lib/steampipe';
 import { saveSnapshot, getHistory } from '@/lib/resource-inventory';
 import { saveCostSnapshot, getLatestCostSnapshot } from '@/lib/cost-snapshot';
 import { getConfig, saveConfig } from '@/lib/app-config';
+import { getCacheWarmerStatus } from '@/lib/cache-warmer';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -32,6 +33,10 @@ export async function GET(request: NextRequest) {
 
   if (action === 'config') {
     return NextResponse.json(getConfig());
+  }
+
+  if (action === 'cache-status') {
+    return NextResponse.json(getCacheWarmerStatus());
   }
 
   if (action === 'cost-snapshot') {
