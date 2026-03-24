@@ -14,11 +14,11 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 ## 현황 (v1.7.0)
 | 항목 | 수치 |
 |------|------|
-| 페이지 | 35 |
+| 페이지 | 36 (/accounts 추가) |
 | 라우트 | 50 |
 | SQL 쿼리 파일 | 25 |
 | API 라우트 | 13 |
-| 컴포넌트 | 15 (AccountBadge 추가) |
+| 컴포넌트 | 17 (AccountBadge, AccountSelector 추가) |
 | MCP 도구 | 125 (8 Gateway, 19 Lambda) |
 | ADR | 8 (001-008) |
 
@@ -83,10 +83,11 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `queries/*.ts` — 25개 SQL 쿼리 파일 (ebs, msk, opensearch, container-cost, eks-container-cost, bedrock 포함)
 - `resource-inventory.ts` — 리소스 인벤토리 스냅샷 (data/inventory/, 추가 쿼리 0건)
 - `cost-snapshot.ts` — Cost 데이터 스냅샷 폴백 (data/cost/)
-- `app-config.ts` — 앱 설정 (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId, accounts[])
+- `app-config.ts` — 앱 설정 (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId, accounts[], customerLogo, adminEmails)
 - `agentcore-stats.ts` — AgentCore 호출 통계 (총 호출, 평균 응답시간, 게이트웨이별, 모델별 토큰 사용량)
 - `agentcore-memory.ts` — 대화 이력 영구 저장/검색 (사용자별 분리, data/memory/)
 - `auth-utils.ts` — Cognito JWT에서 사용자 정보 추출 (email, sub)
+- `cache-warmer.ts` — 백그라운드 캐시 프리워밍 (대시보드 23개 + 모니터링 10개 쿼리, 4분 주기)
 
 ### API 라우트 (`src/app/api/`, 13개)
 - `ai/route.ts` — AI 라우팅 (10 routes, 멀티 라우트, SSE 스트리밍, 도구 추론)
@@ -185,11 +186,11 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 ## Stats (v1.7.0)
 | Item | Count |
 |------|-------|
-| Pages | 35 |
+| Pages | 36 (incl. /accounts) |
 | Routes | 50 |
 | SQL Query Files | 25 |
 | API Routes | 13 |
-| Components | 15 (incl. AccountBadge) |
+| Components | 17 (incl. AccountBadge, AccountSelector) |
 | MCP Tools | 125 (8 Gateways, 19 Lambda) |
 | ADRs | 8 (001-008) |
 
@@ -256,6 +257,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `agentcore-stats.ts` — AgentCore call stats (total calls, avg time, per-gateway, per-model token usage)
 - `agentcore-memory.ts` — Conversation history persistence/search (per-user, data/memory/)
 - `auth-utils.ts` — Extract Cognito user info from JWT (email, sub)
+- `cache-warmer.ts` — Background cache pre-warming (dashboard 23 + monitoring 10 queries, 4-min interval)
 
 ### API Routes (`src/app/api/`, 13 routes)
 - `ai/route.ts` — AI routing (10 routes, multi-route, SSE streaming, tool inference)

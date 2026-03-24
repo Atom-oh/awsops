@@ -1,4 +1,4 @@
-# AWSops 대시보드 v1.6.0
+# AWSops 대시보드 v1.7.0
 
 > Steampipe, Next.js 14, Amazon Bedrock AgentCore 기반 AWS + Kubernetes 운영 대시보드
 
@@ -428,7 +428,7 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for details.
 
 ---
 
-# AWSops Dashboard v1.6.0 (English)
+# AWSops Dashboard v1.7.0 (English)
 
 > AWS + Kubernetes Operations Dashboard — Steampipe, Next.js 14, Amazon Bedrock AgentCore
 

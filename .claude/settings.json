@@ -18,8 +18,6 @@
     "sync-docs": ".claude/skills/sync-docs/SKILL.md"
   },
   "hooks": {
-    "pre-commit": ".claude/hooks/pre-commit.sh",
-    "post-build": ".claude/hooks/post-build.sh",
     "PostToolUse": [
       {
         "matcher": "Write|Edit",

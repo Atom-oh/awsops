@@ -1,11 +1,12 @@
 # Lambda 모듈 / Lambda Module
 
 ## 역할 / Role
-AgentCore 게이트웨이 MCP 도구용 19개 Lambda 함수. 각 Lambda는 특정 AWS 서비스 작업을 구현.
-(19 Lambda functions for AgentCore Gateway MCP tools. Each Lambda implements specific AWS service operations.)
+AgentCore 게이트웨이 MCP 도구용 19개 Lambda 함수 + 1개 공유 모듈. 각 Lambda는 특정 AWS 서비스 작업을 구현.
+(19 Lambda functions + 1 shared module for AgentCore Gateway MCP tools.)
 
 ## 주요 파일 / Key Files
 - `create_targets.py` — 8개 게이트웨이에 걸쳐 19개 게이트웨이 타겟 생성 (Creates all 19 Gateway Targets across 8 Gateways, Python/boto3)
+- `cross_account.py` — 크로스 어카운트 STS AssumeRole 헬퍼 (credential 캐싱 50분, ExternalId, 감사 로그) (Cross-account credential helper with caching, audit logging)
 
 ### Network Gateway (17 tools)
 - `network_mcp.py` — VPC, TGW, VPN, ENI, Network Firewall (15 tools)
