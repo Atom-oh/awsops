@@ -10,7 +10,7 @@ export const queries = {
   `,
 
   publicBuckets: `
-    SELECT name, region, creation_date, bucket_policy_is_public,
+    SELECT account_id, name, region, creation_date, bucket_policy_is_public,
       block_public_acls, block_public_policy, restrict_public_buckets, ignore_public_acls
     FROM aws_s3_bucket
     WHERE bucket_policy_is_public = true OR block_public_acls = false OR block_public_policy = false
@@ -18,13 +18,13 @@ export const queries = {
   `,
 
   mfaStatus: `
-    SELECT name, user_id, arn, password_last_used, create_date
+    SELECT account_id, name, user_id, arn, password_last_used, create_date
     FROM aws_iam_user
     ORDER BY name
   `,
 
   openSecurityGroups: `
-    SELECT sg.group_id, sg.group_name, sg.vpc_id,
+    SELECT sg.account_id, sg.group_id, sg.group_name, sg.vpc_id,
       sgr.type, sgr.ip_protocol, sgr.from_port, sgr.to_port, sgr.cidr_ipv4,
       sg.tags ->> 'Name' AS name
     FROM aws_vpc_security_group AS sg
@@ -34,7 +34,7 @@ export const queries = {
   `,
 
   unencryptedVolumes: `
-    SELECT volume_id, volume_type, size, state, encrypted,
+    SELECT account_id, volume_id, volume_type, size, state, encrypted,
       availability_zone, create_time, tags ->> 'Name' AS name
     FROM aws_ebs_volume
     WHERE encrypted = false

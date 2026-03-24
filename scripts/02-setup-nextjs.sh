@@ -111,10 +111,20 @@ COST_RESULT=$(PGPASSWORD="$SP_PASSWORD" psql -h localhost -p 9193 -U steampipe -
   -c "SELECT 1 FROM aws_cost_by_service_monthly LIMIT 1" -t -A 2>&1 || echo "COST_FAIL")
 
 if echo "$COST_RESULT" | grep -q "^1$"; then
-    echo '{"costEnabled": true}' > "$CONFIG_FILE"
+    python3 -c "
+import json, os
+cfg = json.load(open('${CONFIG_FILE}')) if os.path.exists('${CONFIG_FILE}') else {}
+cfg['costEnabled'] = True
+json.dump(cfg, open('${CONFIG_FILE}', 'w'), indent=2)
+"
     echo -e "  ${GREEN}Direct Payer — Cost Explorer enabled${NC}"
 else
-    echo '{"costEnabled": false}' > "$CONFIG_FILE"
+    python3 -c "
+import json, os
+cfg = json.load(open('${CONFIG_FILE}')) if os.path.exists('${CONFIG_FILE}') else {}
+cfg['costEnabled'] = False
+json.dump(cfg, open('${CONFIG_FILE}', 'w'), indent=2)
+"
     echo -e "  ${YELLOW}MSP/Payer account — Cost Explorer disabled${NC}"
     echo -e "  ${YELLOW}Cost menu and queries will be hidden at runtime${NC}"
     if echo "$COST_RESULT" | grep -qi "permission denied\|AccessDenied\|not authorized"; then
@@ -125,6 +135,78 @@ else
         echo "  Reason: $COST_RESULT"
     fi
 fi
+
+# -- [5/5] Register host account -----------------------------------------------
+echo ""
+echo -e "${CYAN}[5/5] Registering host account in config.json...${NC}"
+
+# Host account = 현재 EC2의 AWS 계정. profile 없이 EC2 기본 credentials 사용.
+# Host account = the current EC2's AWS account. No profile — uses EC2 default credentials.
+COST_ENABLED=$(python3 -c "import json; print('true' if json.load(open('${CONFIG_FILE}')).get('costEnabled', False) else 'false')" 2>/dev/null || echo "false")
+EKS_ENABLED="false"
+aws eks list-clusters --output json >/dev/null 2>&1 && EKS_ENABLED="true"
+
+# Rename existing "connection "aws"" to "connection "aws_{ACCOUNT_ID}"" for aggregator support
+SPC_FILE="$HOME/.steampipe/config/aws.spc"
+if [ -f "$SPC_FILE" ] && ! grep -q "aws_${ACCOUNT_ID}" "$SPC_FILE"; then
+    sed -i "0,/^connection \"aws\"/s//connection \"aws_${ACCOUNT_ID}\"/" "$SPC_FILE"
+    echo -e "  ${GREEN}Renamed connection 'aws' → 'aws_${ACCOUNT_ID}' in aws.spc${NC}"
+
+    # Add aggregator
+    if ! grep -q 'type.*=.*"aggregator"' "$SPC_FILE"; then
+        cat >> "$SPC_FILE" <<'AGGR'
+
+connection "aws" {
+  plugin      = "aws"
+  type        = "aggregator"
+  connections = ["aws_*"]
+}
+AGGR
+        echo -e "  ${GREEN}Added aggregator connection 'aws' in aws.spc${NC}"
+    fi
+
+    # Restart Steampipe with new config
+    steampipe service restart --force 2>/dev/null || true
+    sleep 2
+fi
+
+export CONFIG_FILE ACCOUNT_ID REGION COST_ENABLED EKS_ENABLED
+python3 << 'PYEOF'
+import json, os
+cfg_path = os.environ.get('CONFIG_FILE', 'data/config.json')
+account_id = os.environ.get('ACCOUNT_ID', 'unknown')
+region = os.environ.get('REGION', 'ap-northeast-2')
+cost_enabled = os.environ.get('COST_ENABLED', 'false') == 'true'
+eks_enabled = os.environ.get('EKS_ENABLED', 'false') == 'true'
+
+cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
+accounts = cfg.get('accounts', [])
+if not any(a.get('isHost') for a in accounts):
+    host = {
+        'accountId': account_id,
+        'alias': 'Host',
+        'connectionName': f'aws_{account_id}',
+        'region': region,
+        'isHost': True,
+        'features': {
+            'costEnabled': cost_enabled,
+            'eksEnabled': eks_enabled,
+            'k8sEnabled': False
+        }
+    }
+    accounts.insert(0, host)
+    cfg['accounts'] = accounts
+    json.dump(cfg, open(cfg_path, 'w'), indent=2)
+    print(f'  Host account registered: {account_id}')
+else:
+    print('  Host account already registered')
+PYEOF
+if [ $? -ne 0 ]; then
+    echo -e "  ${YELLOW}Warning: Could not register host account${NC}"
+fi
+
+echo -e "  Account ID: ${ACCOUNT_ID}"
+echo -e "  Region:     ${REGION}"
 
 # -- Summary -------------------------------------------------------------------
 echo ""

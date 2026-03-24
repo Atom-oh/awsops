@@ -2,14 +2,15 @@
 // MSK 브로커 노드 + 메트릭 API — AWS CLI 사용
 import { NextRequest, NextResponse } from 'next/server';
 import { execFileSync } from 'child_process';
+import { getAccountById, validateAccountId } from '@/lib/app-config';
 
 const REGION = 'ap-northeast-2';
 const ARN_PATTERN = /^arn:aws:kafka:[a-z0-9-]+:\d{12}:cluster\/[a-zA-Z0-9._-]+\/[a-z0-9-]+$/;
 const CLUSTER_NAME_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
-function awsCli(args: string[], timeout = 15000): any {
+function awsCli(args: string[], timeout = 15000, profileArgs: string[] = []): any {
   try {
-    const output = execFileSync('aws', [...args, '--region', REGION, '--output', 'json'],
+    const output = execFileSync('aws', [...args, ...profileArgs, '--output', 'json'],
       { encoding: 'utf-8', timeout });
     return JSON.parse(output);
   } catch { return null; }
@@ -56,6 +57,10 @@ export async function GET(request: NextRequest) {
   const action = searchParams.get('action');
   const clusterArn = searchParams.get('clusterArn');
   const clusterName = searchParams.get('clusterName');
+  const accountIdParam = searchParams.get('accountId') || undefined;
+  const account = accountIdParam && validateAccountId(accountIdParam) ? getAccountById(accountIdParam) : undefined;
+  const region = account?.region || REGION;
+  const profileArgs = account?.profile ? ['--profile', account.profile] : [];
 
   // Action: metrics — fetch CloudWatch metrics for brokers
   if (action === 'metrics') {
@@ -89,8 +94,9 @@ export async function GET(request: NextRequest) {
 
       const result = awsCli([
         'cloudwatch', 'get-metric-data',
+        '--region', region,
         '--cli-input-json', `file://${tmpFile}`,
-      ], 20000);
+      ], 20000, profileArgs);
 
       // Clean up temp file
       try { execFileSync('rm', [tmpFile]); } catch {}
@@ -129,7 +135,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const data = awsCli(['kafka', 'list-nodes', '--cluster-arn', clusterArn]);
+    const data = awsCli(['kafka', 'list-nodes', '--region', region, '--cluster-arn', clusterArn], 15000, profileArgs);
     return NextResponse.json({ nodes: data?.NodeInfoList || [] });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to list MSK nodes';

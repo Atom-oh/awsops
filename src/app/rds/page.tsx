@@ -11,6 +11,8 @@ import DataTable from '@/components/table/DataTable';
 import { Database, X, HardDrive, Network, Shield, Tag, Activity, Search } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
 import { queries as rdsQ } from '@/lib/queries/rds';
+import { useAccountContext } from '@/contexts/AccountContext';
+import AccountBadge from '@/components/dashboard/AccountBadge';
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -18,6 +20,8 @@ interface PageData {
 
 export default function RDSPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -34,6 +38,7 @@ export default function RDSPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: rdsQ.summary,
             engineDistribution: rdsQ.engineDistribution,
@@ -49,7 +54,7 @@ export default function RDSPage() {
       if (instanceList.length > 0) {
         const ids = instanceList.map((r: any) => r.db_instance_identifier).filter(Boolean);
         try {
-          const mRes = await fetch(`/awsops/api/rds?instanceIds=${encodeURIComponent(ids.join(','))}`);
+          const mRes = await fetch(`/awsops/api/rds?instanceIds=${encodeURIComponent(ids.join(','))}&accountId=${currentAccountId}`);
           const mData = await mRes.json();
           setInstanceMetrics(mData.metrics || {});
         } catch {}
@@ -58,7 +63,7 @@ export default function RDSPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -72,7 +77,7 @@ export default function RDSPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: detailSql, metrics: metricSql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: detailSql, metrics: metricSql } }),
       });
       const result = await res.json();
       const detail = result.detail?.rows?.[0];
@@ -88,7 +93,7 @@ export default function RDSPage() {
             const sgRes = await fetch('/awsops/api/steampipe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ queries: sgQueries }),
+              body: JSON.stringify({ accountId: currentAccountId, queries: sgQueries }),
             });
             const sgResult = await sgRes.json();
             const sgList: any[] = [];
@@ -211,7 +216,7 @@ export default function RDSPage() {
             <table className="w-full">
               <thead>
                 <tr className="bg-navy-700">
-                  {['Identifier', 'Engine', 'Class', 'Status', 'CPU', 'Free Memory', 'Connections', 'Read IOPS', 'Write IOPS', 'Net In', 'Net Out', 'Free Storage'].map(h => (
+                  {[...(isMultiAccount ? ['Account'] : []), 'Identifier', 'Engine', 'Class', 'Status', 'CPU', 'Free Memory', 'Connections', 'Read IOPS', 'Write IOPS', 'Net In', 'Net Out', 'Free Storage'].map(h => (
                     <th key={h} className="px-3 py-2 text-left text-xs font-mono font-semibold uppercase tracking-wider text-accent-cyan">{h}</th>
                   ))}
                 </tr>
@@ -230,6 +235,11 @@ export default function RDSPage() {
                   return (
                     <tr key={inst.db_instance_identifier} className="border-b border-navy-600 hover:bg-navy-700 transition-colors cursor-pointer"
                       onClick={() => fetchDetail(inst.db_instance_identifier)}>
+                      {isMultiAccount && (
+                        <td className="px-3 py-2 text-sm">
+                          {inst.account_id ? <AccountBadge accountId={inst.account_id} /> : '-'}
+                        </td>
+                      )}
                       <td className="px-3 py-2 text-sm text-white">{inst.db_instance_identifier}</td>
                       <td className="px-3 py-2">
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-accent-cyan/10 text-accent-cyan">
@@ -329,6 +339,9 @@ export default function RDSPage() {
                 </div>
 
                 <Section title="Instance" icon={Database}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="Identifier" value={selected.db_instance_identifier} />
                   <Row label="Engine" value={selected.engine} />
                   <Row label="Version" value={selected.engine_version} />

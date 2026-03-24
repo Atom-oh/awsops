@@ -3,7 +3,7 @@ AWS DynamoDB MCP Lambda - table management, query, scan, data modeling
 AWS DynamoDB MCP 람다 - 테이블 관리, 쿼리, 스캔, 데이터 모델링
 """
 import json
-import boto3
+from cross_account import get_client, get_resource, get_role_arn
 
 
 def lambda_handler(event, context):
@@ -11,6 +11,8 @@ def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    target_account_id = args.pop('target_account_id', None)
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
     region = args.get("region", "ap-northeast-2")
 
     # Auto-detect tool from parameters if not specified / tool_name 미지정 시 파라미터로 도구 자동 감지
@@ -22,8 +24,8 @@ def lambda_handler(event, context):
         args = params
 
     try:
-        ddb = boto3.client('dynamodb', region_name=region)
-        ddb_r = boto3.resource('dynamodb', region_name=region)
+        ddb = get_client('dynamodb', region, role_arn)
+        ddb_r = get_resource('dynamodb', region, role_arn)
 
         # List all DynamoDB tables with status and size / 모든 DynamoDB 테이블 상태 및 크기 조회
         if t == "list_tables":

@@ -2,13 +2,14 @@
 // RDS 인스턴스 메트릭 API — DB 인스턴스별 CloudWatch 메트릭 조회
 import { NextRequest, NextResponse } from 'next/server';
 import { execFileSync } from 'child_process';
+import { getAccountById, validateAccountId } from '@/lib/app-config';
 
 const REGION = 'ap-northeast-2';
 const ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
-function awsCli(args: string[], timeout = 15000): any {
+function awsCli(args: string[], timeout = 15000, profileArgs: string[] = []): any {
   try {
-    const output = execFileSync('aws', [...args, '--region', REGION, '--output', 'json'],
+    const output = execFileSync('aws', [...args, ...profileArgs, '--output', 'json'],
       { encoding: 'utf-8', timeout });
     return JSON.parse(output);
   } catch { return null; }
@@ -52,6 +53,10 @@ function buildMetricQueries(instanceIds: string[]): any[] {
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const instanceIdsParam = searchParams.get('instanceIds');
+  const accountIdParam = searchParams.get('accountId') || undefined;
+  const account = accountIdParam && validateAccountId(accountIdParam) ? getAccountById(accountIdParam) : undefined;
+  const region = account?.region || REGION;
+  const profileArgs = account?.profile ? ['--profile', account.profile] : [];
 
   if (!instanceIdsParam) {
     return NextResponse.json({ error: 'Missing instanceIds' }, { status: 400 });
@@ -78,8 +83,9 @@ export async function GET(request: NextRequest) {
 
     const result = awsCli([
       'cloudwatch', 'get-metric-data',
+      '--region', region,
       '--cli-input-json', `file://${tmpFile}`,
-    ], 20000);
+    ], 20000, profileArgs);
 
     try { execFileSync('rm', [tmpFile]); } catch {}
 

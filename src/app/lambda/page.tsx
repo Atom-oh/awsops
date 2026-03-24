@@ -9,6 +9,8 @@ import DataTable from '@/components/table/DataTable';
 import { Zap, X, Settings, Network } from 'lucide-react';
 import { queries as lambdaQ } from '@/lib/queries/lambda';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -24,6 +26,8 @@ const DEPRECATED_RUNTIMES = [
 
 export default function LambdaPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -36,6 +40,7 @@ export default function LambdaPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: lambdaQ.summary,
             runtimeDistribution: lambdaQ.runtimeDistribution,
@@ -49,7 +54,7 @@ export default function LambdaPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -60,7 +65,7 @@ export default function LambdaPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
       });
       const result = await res.json();
       if (result.detail?.rows?.[0]) {
@@ -198,6 +203,9 @@ export default function LambdaPage() {
                 )}
 
                 <Section title="Function" icon={Zap}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="Name" value={selected.name} />
                   <Row label="ARN" value={selected.arn} />
                   <Row label="Runtime" value={selected.runtime || 'custom'} />

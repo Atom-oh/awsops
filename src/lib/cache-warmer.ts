@@ -4,6 +4,7 @@
 // 서버 시작 시 + 4분마다 실행 (5분 캐시 TTL 만료 전)
 
 import { batchQuery, checkCostAvailability } from '@/lib/steampipe';
+import { getAccounts, isMultiAccount } from '@/lib/app-config';
 import { queries as ec2Q } from '@/lib/queries/ec2';
 import { queries as s3Q } from '@/lib/queries/s3';
 import { queries as rdsQ } from '@/lib/queries/rds';
@@ -129,14 +130,31 @@ async function warmCache(): Promise<void> {
 
     // 3. Run monitoring queries with longer TTL (CloudWatch metrics are slow)
     // 모니터링 쿼리는 CloudWatch API 호출이 느리므로 TTL을 10분으로 설정
-    await batchQuery(getMonitoringQueries(), false, METRIC_CACHE_TTL);
+    await batchQuery(getMonitoringQueries(), { ttl: METRIC_CACHE_TTL });
+
+    // 4. Multi-account: warm each account's dashboard cache (max 3 accounts)
+    // 멀티 어카운트: 각 계정별 대시보드 캐시 워밍 (최대 3개)
+    if (isMultiAccount()) {
+      const MAX_WARM_ACCOUNTS = 3;
+      const accounts = getAccounts().slice(0, MAX_WARM_ACCOUNTS);
+      for (const acc of accounts) {
+        try {
+          const accDash = getDashboardQueries(acc.features?.costEnabled ?? false);
+          await batchQuery(accDash, { accountId: acc.accountId });
+        } catch (err: unknown) {
+          console.warn(`[CacheWarmer] Account ${acc.alias} warm failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+        }
+      }
+      console.log(`[CacheWarmer] Warmed ${accounts.length} account caches`);
+    }
 
     const elapsed = (Date.now() - start) / 1000;
     status.lastWarmedAt = new Date().toISOString();
     status.lastDurationSec = Math.round(elapsed * 10) / 10;
     status.warmCount++;
     status.lastError = null;
-    console.log(`[CacheWarmer] Warmed dashboard (${status.dashboardQueries}) + monitoring (${status.monitoringQueries}) cache in ${elapsed.toFixed(1)}s`);
+    const acctInfo = isMultiAccount() ? ` + ${Math.min(getAccounts().length, 3)} accounts` : '';
+    console.log(`[CacheWarmer] Warmed dashboard (${status.dashboardQueries}) + monitoring (${status.monitoringQueries})${acctInfo} cache in ${elapsed.toFixed(1)}s`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     status.lastError = message;

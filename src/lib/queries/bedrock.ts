@@ -7,6 +7,7 @@ export const queries = {
   // Foundation models list (for reference) / 파운데이션 모델 목록 (참고용)
   foundationList: `
     SELECT
+      account_id,
       model_id,
       model_name,
       provider_name,

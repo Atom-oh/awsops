@@ -9,7 +9,7 @@ export const queries = {
 
   ec2CpuLatest: `
     SELECT DISTINCT ON (m.instance_id)
-      m.instance_id, i.tags ->> 'Name' AS name, i.instance_type, i.instance_state,
+      i.account_id, m.instance_id, i.tags ->> 'Name' AS name, i.instance_type, i.instance_state,
       ROUND(m.average::numeric, 2) AS avg_cpu, ROUND(m.maximum::numeric, 2) AS max_cpu,
       m.timestamp
     FROM aws_ec2_instance_metric_cpu_utilization_hourly m
@@ -38,7 +38,7 @@ export const queries = {
 
   ebsIopsLatest: `
     SELECT DISTINCT ON (r.volume_id)
-      r.volume_id, v.tags ->> 'Name' AS name, v.volume_type, v.size, v.state,
+      v.account_id, r.volume_id, v.tags ->> 'Name' AS name, v.volume_type, v.size, v.state,
       ROUND(r.average::numeric, 0) AS read_iops, r.timestamp
     FROM aws_ebs_volume_metric_read_ops_hourly r
     JOIN aws_ebs_volume v ON r.volume_id = v.volume_id
@@ -47,10 +47,11 @@ export const queries = {
 
   rdsMetrics: `
     SELECT DISTINCT ON (c.db_instance_identifier)
-      c.db_instance_identifier, c.engine, c.class AS db_instance_class,
+      r.account_id, c.db_instance_identifier, c.engine, c.class AS db_instance_class,
       ROUND(c.average::numeric, 2) AS avg_cpu, ROUND(c.maximum::numeric, 2) AS max_cpu,
       c.timestamp
     FROM aws_rds_db_instance_metric_cpu_utilization_hourly c
+    JOIN aws_rds_db_instance r ON c.db_instance_identifier = r.db_instance_identifier
     ORDER BY c.db_instance_identifier, c.timestamp DESC
   `,
 
@@ -134,6 +135,7 @@ export const queries = {
   // (Network 메트릭은 클릭 시 CloudWatch API로 조회 / Network metrics fetched on click via CloudWatch)
   ec2NetworkLatest: `
     SELECT
+      i.account_id,
       i.instance_id,
       i.tags ->> 'Name' AS name,
       i.instance_type,

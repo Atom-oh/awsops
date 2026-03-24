@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { execSync, exec } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { validateAccountId, getAccountById } from '@/lib/app-config';
 
 const RESULTS_DIR = '/tmp/powerpipe-results';
 const MOD_DIR = '/home/ec2-user/awsops/powerpipe';
@@ -33,9 +34,14 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const benchmark = searchParams.get('benchmark') || 'cis_v300';
   const action = searchParams.get('action') || 'status';
+  const accountIdParam = searchParams.get('accountId') || undefined;
+  const account = accountIdParam && validateAccountId(accountIdParam) ? getAccountById(accountIdParam) : undefined;
+  const searchPathArgs = account ? `--search-path "public,${account.connectionName},kubernetes,trivy"` : '';
 
-  const resultFile = join(RESULTS_DIR, `${benchmark}.json`);
-  const statusFile = join(RESULTS_DIR, `${benchmark}.status`);
+  // Include accountId in file names for per-account results / 계정별 결과를 위해 파일명에 accountId 포함
+  const fileSuffix = account ? `_${account.accountId}` : '';
+  const resultFile = join(RESULTS_DIR, `${benchmark}${fileSuffix}.json`);
+  const statusFile = join(RESULTS_DIR, `${benchmark}${fileSuffix}.status`);
 
   if (action === 'run') {
     // Start benchmark in background
@@ -49,7 +55,7 @@ export async function GET(request: NextRequest) {
     writeFileSync(statusFile, 'running', 'utf-8');
 
     const dbUrl = getDbUrl();
-    const cmd = `powerpipe benchmark run aws_compliance.benchmark.${benchmark} --database "${dbUrl}" --mod-location "${MOD_DIR}" --output json --progress=false > "${resultFile}" 2>/dev/null && echo "done" > "${statusFile}" || echo "error" > "${statusFile}"`;
+    const cmd = `powerpipe benchmark run aws_compliance.benchmark.${benchmark} --database "${dbUrl}" --mod-location "${MOD_DIR}" ${searchPathArgs} --output json --progress=false > "${resultFile}" 2>/dev/null && echo "done" > "${statusFile}" || echo "error" > "${statusFile}"`;
     exec(cmd);
 
     return NextResponse.json({ status: 'started', message: 'Benchmark started' });

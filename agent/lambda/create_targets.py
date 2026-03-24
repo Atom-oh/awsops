@@ -32,6 +32,18 @@ def find_gateway(name_pattern):
 
 
 def create_target(gw_id, name, fn, desc, tools):
+    # Auto-inject target_account_id into all tool schemas
+    for tool in tools:
+        schema = tool.get('inputSchema', {})
+        props = schema.get('properties', {})
+        if 'target_account_id' not in props:
+            props['target_account_id'] = {
+                'type': 'string',
+                'description': 'Target AWS account ID for cross-account access (12 digits). Only provide when instructed.'
+            }
+            schema['properties'] = props
+            tool['inputSchema'] = schema
+
     arn = 'arn:aws:lambda:{}:{}:function:{}'.format(REGION, ACCOUNT_ID, fn)
     # Check if target already exists
     existing = client.list_gateway_targets(gatewayIdentifier=gw_id).get('items', [])

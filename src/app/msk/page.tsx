@@ -8,6 +8,8 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Radio, X, Shield, Search, Activity } from 'lucide-react';
 import { queries as mskQ } from '@/lib/queries/msk';
+import { useAccountContext } from '@/contexts/AccountContext';
+import AccountBadge from '@/components/dashboard/AccountBadge';
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -15,6 +17,8 @@ interface PageData {
 
 export default function MSKPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -32,6 +36,7 @@ export default function MSKPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: mskQ.summary,
             list: mskQ.list,
@@ -49,7 +54,7 @@ export default function MSKPage() {
         const nodePromises = clusterList.map(async (c: any) => {
           if (!c.cluster_arn) return { clusterName: c.cluster_name, nodes: [] };
           try {
-            const nRes = await fetch(`/awsops/api/msk?clusterArn=${encodeURIComponent(c.cluster_arn)}`);
+            const nRes = await fetch(`/awsops/api/msk?clusterArn=${encodeURIComponent(c.cluster_arn)}&accountId=${currentAccountId}`);
             const nData = await nRes.json();
             return { clusterName: c.cluster_name as string, nodes: nData.nodes || [] };
           } catch { return { clusterName: c.cluster_name as string, nodes: [] }; }
@@ -66,7 +71,7 @@ export default function MSKPage() {
             .map((n: any) => Math.round(n.BrokerNodeInfo.BrokerId));
           if (brokerIds.length === 0) return;
           try {
-            const mRes = await fetch(`/awsops/api/msk?action=metrics&clusterName=${encodeURIComponent(cluster.clusterName)}&brokerIds=${brokerIds.join(',')}`);
+            const mRes = await fetch(`/awsops/api/msk?action=metrics&clusterName=${encodeURIComponent(cluster.clusterName)}&brokerIds=${brokerIds.join(',')}&accountId=${currentAccountId}`);
             const mData = await mRes.json();
             metricsMap[cluster.clusterName] = mData.metrics || {};
           } catch {}
@@ -75,7 +80,7 @@ export default function MSKPage() {
         setBrokerMetrics(metricsMap);
       }
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -88,10 +93,10 @@ export default function MSKPage() {
         fetch('/awsops/api/steampipe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: { detail: sql } }),
+          body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
         }),
         clusterArn
-          ? fetch(`/awsops/api/msk?clusterArn=${encodeURIComponent(clusterArn)}`)
+          ? fetch(`/awsops/api/msk?clusterArn=${encodeURIComponent(clusterArn)}&accountId=${currentAccountId}`)
           : Promise.resolve(null),
       ]);
       const result = await steampipeRes.json();
@@ -205,7 +210,7 @@ export default function MSKPage() {
               <table className="w-full">
                 <thead>
                   <tr className="bg-navy-700">
-                    {['Cluster', 'Type', 'ID', 'Instance', 'VPC IP', 'ENI', 'CPU', 'Memory', 'Net In', 'Net Out', 'Endpoint'].map(h => (
+                    {[...(isMultiAccount ? ['Account'] : []), 'Cluster', 'Type', 'ID', 'Instance', 'VPC IP', 'ENI', 'CPU', 'Memory', 'Net In', 'Net Out', 'Endpoint'].map(h => (
                       <th key={h} className="px-3 py-2 text-left text-xs font-mono font-semibold uppercase tracking-wider text-accent-cyan">{h}</th>
                     ))}
                   </tr>
@@ -213,6 +218,7 @@ export default function MSKPage() {
                 <tbody>
                   {allNodes.flatMap(cluster => {
                     const cm = brokerMetrics[cluster.clusterName] || {};
+                    const clusterInfo = get('list').find((c: any) => c.cluster_name === cluster.clusterName);
                     return cluster.nodes
                       .filter((n: any) => n.NodeType === 'BROKER')
                       .map((node: any, i: number) => {
@@ -228,6 +234,11 @@ export default function MSKPage() {
                         const bytesOut = m.bytes_out || 0;
                         return (
                           <tr key={`${cluster.clusterName}-${i}`} className="border-b border-navy-600 hover:bg-navy-700 transition-colors">
+                            {isMultiAccount && (
+                              <td className="px-3 py-2 text-sm">
+                                {clusterInfo?.account_id ? <AccountBadge accountId={String(clusterInfo.account_id)} /> : '-'}
+                              </td>
+                            )}
                             <td className="px-3 py-2 text-sm text-white">{cluster.clusterName}</td>
                             <td className="px-3 py-2">
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-accent-cyan/10 text-accent-cyan">
@@ -272,11 +283,17 @@ export default function MSKPage() {
                       });
                   })}
                   {/* Controller rows */}
-                  {allNodes.flatMap(cluster =>
-                    cluster.nodes
+                  {allNodes.flatMap(cluster => {
+                    const clusterInfo = get('list').find((c: any) => c.cluster_name === cluster.clusterName);
+                    return cluster.nodes
                       .filter((n: any) => n.NodeType === 'CONTROLLER')
                       .map((node: any, i: number) => (
                         <tr key={`${cluster.clusterName}-ctrl-${i}`} className="border-b border-navy-600/50 hover:bg-navy-700 transition-colors">
+                          {isMultiAccount && (
+                            <td className="px-3 py-2 text-sm">
+                              {clusterInfo?.account_id ? <AccountBadge accountId={String(clusterInfo.account_id)} /> : '-'}
+                            </td>
+                          )}
                           <td className="px-3 py-2 text-sm text-gray-400">{cluster.clusterName}</td>
                           <td className="px-3 py-2">
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-accent-purple/10 text-accent-purple">
@@ -290,8 +307,8 @@ export default function MSKPage() {
                           <td className="px-3 py-2 text-xs text-gray-500" colSpan={4}>-</td>
                           <td className="px-3 py-2 text-xs font-mono text-gray-400 max-w-[180px] truncate">{node.ControllerNodeInfo?.Endpoints?.[0] || '-'}</td>
                         </tr>
-                      ))
-                  )}
+                      ));
+                  })}
                 </tbody>
               </table>
             </div>
@@ -328,6 +345,7 @@ export default function MSKPage() {
                   <div className="bg-navy-900 rounded-lg p-4 space-y-2">
                     <h3 className="text-xs font-semibold text-accent-cyan uppercase tracking-wider mb-2">Cluster Info</h3>
                     {[
+                      ...(selected.account_id && isMultiAccount ? [['Account', selected.account_id]] : []),
                       ['Cluster Name', selected.cluster_name],
                       ['State', selected.state],
                       ['Type', selected.cluster_type],

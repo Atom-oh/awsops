@@ -8,6 +8,8 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Search as SearchIcon, X, Shield, Database, Network } from 'lucide-react';
 import { queries as osQ } from '@/lib/queries/opensearch';
+import { useAccountContext } from '@/contexts/AccountContext';
+import AccountBadge from '@/components/dashboard/AccountBadge';
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -15,6 +17,8 @@ interface PageData {
 
 export default function OpenSearchPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -29,6 +33,7 @@ export default function OpenSearchPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: osQ.summary,
             list: osQ.list,
@@ -45,13 +50,13 @@ export default function OpenSearchPage() {
       if (domainList.length > 0) {
         const names = domainList.map((d: any) => d.domain_name).filter(Boolean);
         try {
-          const mRes = await fetch(`/awsops/api/opensearch?domains=${encodeURIComponent(names.join(','))}`);
+          const mRes = await fetch(`/awsops/api/opensearch?domains=${encodeURIComponent(names.join(','))}&accountId=${currentAccountId}`);
           const mData = await mRes.json();
           setDomainMetrics(mData.metrics || {});
         } catch {}
       }
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -62,7 +67,7 @@ export default function OpenSearchPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
       });
       const result = await res.json();
       setSelected(result.detail?.rows?.[0] || null);
@@ -170,7 +175,7 @@ export default function OpenSearchPage() {
             <table className="w-full">
               <thead>
                 <tr className="bg-navy-700">
-                  {['Domain', 'Engine', 'Cluster Status', 'CPU', 'JVM Memory', 'Nodes', 'Documents', 'Free Storage', 'Search Rate', 'Search Latency', 'Index Rate', 'Index Latency'].map(h => (
+                  {[...(isMultiAccount ? ['Account'] : []), 'Domain', 'Engine', 'Cluster Status', 'CPU', 'JVM Memory', 'Nodes', 'Documents', 'Free Storage', 'Search Rate', 'Search Latency', 'Index Rate', 'Index Latency'].map(h => (
                     <th key={h} className="px-3 py-2 text-left text-xs font-mono font-semibold uppercase tracking-wider text-accent-cyan">{h}</th>
                   ))}
                 </tr>
@@ -194,6 +199,11 @@ export default function OpenSearchPage() {
                   return (
                     <tr key={d.domain_name} className="border-b border-navy-600 hover:bg-navy-700 transition-colors cursor-pointer"
                       onClick={() => fetchDetail(d.domain_name)}>
+                      {isMultiAccount && (
+                        <td className="px-3 py-2 text-sm">
+                          {d.account_id ? <AccountBadge accountId={d.account_id} /> : '-'}
+                        </td>
+                      )}
                       <td className="px-3 py-2 text-sm text-white">{d.domain_name}</td>
                       <td className="px-3 py-2 text-xs font-mono text-accent-cyan">{d.engine_version}</td>
                       {/* Cluster Status */}
@@ -293,6 +303,7 @@ export default function OpenSearchPage() {
                 <div className="bg-navy-900 rounded-lg p-4 space-y-2">
                   <h3 className="text-xs font-semibold text-accent-cyan uppercase tracking-wider mb-2">Domain Info</h3>
                   {[
+                    ...(selected.account_id && isMultiAccount ? [['Account', selected.account_id]] : []),
                     ['Domain Name', selected.domain_name],
                     ['Domain ID', selected.domain_id],
                     ['Engine', selected.engine_version],

@@ -11,9 +11,13 @@ import DataTable from '@/components/table/DataTable';
 import { Database, X, Network, Shield, Settings, Tag, Activity, Search } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
 import { queries as ecQ } from '@/lib/queries/elasticache';
+import { useAccountContext } from '@/contexts/AccountContext';
+import AccountBadge from '@/components/dashboard/AccountBadge';
 
 export default function ElastiCachePage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -30,6 +34,7 @@ export default function ElastiCachePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: ecQ.summary,
             engines: ecQ.engineDistribution,
@@ -47,13 +52,13 @@ export default function ElastiCachePage() {
       if (clusterList.length > 0) {
         const ids = clusterList.map((c: any) => c.cache_cluster_id).filter(Boolean);
         try {
-          const mRes = await fetch(`/awsops/api/elasticache?clusterIds=${encodeURIComponent(ids.join(','))}`);
+          const mRes = await fetch(`/awsops/api/elasticache?clusterIds=${encodeURIComponent(ids.join(','))}&accountId=${currentAccountId}`);
           const mData = await mRes.json();
           setNodeMetrics(mData.metrics || {});
         } catch {}
       }
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -67,7 +72,7 @@ export default function ElastiCachePage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: detailSql, metrics: metricSql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: detailSql, metrics: metricSql } }),
       });
       const result = await res.json();
       const detail = result.detail?.rows?.[0];
@@ -83,7 +88,7 @@ export default function ElastiCachePage() {
             const sgRes = await fetch('/awsops/api/steampipe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ queries: sgQueries }),
+              body: JSON.stringify({ accountId: currentAccountId, queries: sgQueries }),
             });
             const sgResult = await sgRes.json();
             const sgList: any[] = [];
@@ -208,7 +213,7 @@ export default function ElastiCachePage() {
             <table className="w-full">
               <thead>
                 <tr className="bg-navy-700">
-                  {['Cluster ID', 'Engine', 'Version', 'Node Type', 'Node ID', 'Status', 'CPU', 'Engine CPU', 'Memory', 'Net In', 'Net Out', 'Connections', 'AZ', 'Endpoint'].map(h => (
+                  {[...(isMultiAccount ? ['Account'] : []), 'Cluster ID', 'Engine', 'Version', 'Node Type', 'Node ID', 'Status', 'CPU', 'Engine CPU', 'Memory', 'Net In', 'Net Out', 'Connections', 'AZ', 'Endpoint'].map(h => (
                     <th key={h} className="px-3 py-2 text-left text-xs font-mono font-semibold uppercase tracking-wider text-accent-cyan">{h}</th>
                   ))}
                 </tr>
@@ -233,6 +238,11 @@ export default function ElastiCachePage() {
                     const conn = m.conn || 0;
                     return nodes.map((node: any, i: number) => (
                       <tr key={`${cluster.cache_cluster_id}-${i}`} className="border-b border-navy-600 hover:bg-navy-700 transition-colors">
+                        {isMultiAccount && (
+                          <td className="px-3 py-2 text-sm">
+                            {cluster.account_id ? <AccountBadge accountId={cluster.account_id} /> : '-'}
+                          </td>
+                        )}
                         <td className="px-3 py-2 text-sm text-white">{cluster.cache_cluster_id}</td>
                         <td className="px-3 py-2">
                           <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -346,6 +356,9 @@ export default function ElastiCachePage() {
                 </div>
 
                 <Section title="Cluster" icon={Database}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="Cluster ID" value={selected.cache_cluster_id} />
                   <Row label="ARN" value={selected.arn} />
                   <Row label="Engine" value={selected.engine} />

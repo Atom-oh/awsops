@@ -9,6 +9,7 @@ export const queries = {
 
   userDetail: `
     SELECT
+      account_id,
       name,
       user_id,
       arn,
@@ -23,6 +24,7 @@ export const queries = {
 
   userList: `
     SELECT
+      account_id,
       name,
       user_id,
       arn,
@@ -36,6 +38,7 @@ export const queries = {
 
   roleList: `
     SELECT
+      account_id,
       name,
       role_id,
       arn,
@@ -51,7 +54,7 @@ export const queries = {
 
   roleDetail: `
     SELECT
-      name, arn, role_id, description, path,
+      account_id, name, arn, role_id, description, path,
       create_date, max_session_duration,
       role_last_used_date, role_last_used_region,
       instance_profile_arns,

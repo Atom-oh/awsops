@@ -9,6 +9,7 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
 import { HardDrive, X, Shield, Server, Search, Camera } from 'lucide-react';
 import { queries as ebsQ } from '@/lib/queries/ebs';
+import { useAccountContext } from '@/contexts/AccountContext';
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -23,6 +24,8 @@ interface Attachment {
 
 export default function EBSPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -39,6 +42,7 @@ export default function EBSPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: ebsQ.summary,
             typeDistribution: ebsQ.typeDistribution,
@@ -52,7 +56,7 @@ export default function EBSPage() {
       });
       setData(await res.json());
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -73,7 +77,7 @@ export default function EBSPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: detailSql, snapshots: snapSql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: detailSql, snapshots: snapSql } }),
       });
       const result = await res.json();
       const detail = result.detail?.rows?.[0];
@@ -90,7 +94,7 @@ export default function EBSPage() {
           const instRes = await fetch('/awsops/api/steampipe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ queries: instQueries }),
+            body: JSON.stringify({ accountId: currentAccountId, queries: instQueries }),
           });
           const instResult = await instRes.json();
           const map: Record<string, any> = {};
@@ -272,6 +276,7 @@ export default function EBSPage() {
                 <div className="bg-navy-900 rounded-lg p-4 space-y-2">
                   <h3 className="text-xs font-semibold text-accent-cyan uppercase tracking-wider mb-2">Volume Info</h3>
                   {[
+                    ...(selected.account_id && isMultiAccount ? [['Account', selected.account_id]] : []),
                     ['Volume ID', selected.volume_id],
                     ['Name', (() => { try { const t = JSON.parse(selected.tags || '{}'); return t.Name || '-'; } catch { return '-'; } })()],
                     ['Type', selected.volume_type],

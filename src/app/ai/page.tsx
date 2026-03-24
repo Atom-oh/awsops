@@ -5,6 +5,8 @@ import { Send, Bot, User, Loader2, Sparkles, Database, Copy, Check, Activity, Hi
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 interface Message {
   role: 'user' | 'assistant';
@@ -34,6 +36,8 @@ function calcTokenCost(model: string, inputTokens: number, outputTokens: number)
 
 export default function AIPage() {
   const { lang, t } = useLanguage();
+  const { currentAccountId } = useAccountContext();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -103,6 +107,7 @@ export default function AIPage() {
           model,
           stream: true,
           lang,
+          accountId: currentAccountId,
         }),
       });
 

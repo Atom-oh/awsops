@@ -9,6 +9,8 @@ import LineChartCard from '@/components/charts/LineChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Sparkles, DollarSign, Zap, Clock, AlertTriangle, Database, Calendar } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 type RangeKey = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -53,18 +55,20 @@ export default function BedrockPage() {
   const [loading, setLoading] = useState(true);
   const [range, setRange] = useState<RangeKey>('7d');
   const [selected, setSelected] = useState<ModelMetric | null>(null);
+  const { currentAccountId } = useAccountContext();
 
   const fetchData = useCallback(async (r?: RangeKey) => {
     setLoading(true);
     try {
-      const res = await fetch(`/awsops/api/bedrock-metrics?action=summary&range=${r || range}`);
+      const acctParam = currentAccountId && currentAccountId !== '__all__' ? `&accountId=${currentAccountId}` : '';
+      const res = await fetch(`/awsops/api/bedrock-metrics?action=summary&range=${r || range}${acctParam}`);
       const data = await res.json();
       setMetrics(data.metrics || []);
       setTotalCost(data.totalCost || 0);
       setTotalCacheSavings(data.totalCacheSavings || 0);
       setAwsopsUsage(data.awsopsUsage || { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0, tokensByModel: {} });
     } catch {} finally { setLoading(false); }
-  }, [range]);
+  }, [range, currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

@@ -6,8 +6,8 @@ AWS 네트워크 MCP Lambda - VPC, TGW, VPN, ENI, Network Firewall, Flow Logs
 # AgentCore Gateway MCP를 통해 15개 이상의 네트워크 트러블슈팅 도구를 제공합니다.
 """
 import json
-import boto3
 import time
+from cross_account import get_client, get_role_arn
 
 
 def lambda_handler(event, context):
@@ -15,6 +15,8 @@ def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    target_account_id = args.pop('target_account_id', None)
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
     region = args.get("region", "ap-northeast-2")
 
     # Auto-detect tool from parameters if tool_name not provided / tool_name이 없으면 파라미터로 도구를 자동 감지
@@ -32,7 +34,7 @@ def lambda_handler(event, context):
 
     try:
         # Initialize EC2 client for the specified region / 지정된 리전에 대한 EC2 클라이언트 초기화
-        ec2 = boto3.client('ec2', region_name=region)
+        ec2 = get_client('ec2', region, role_arn)
 
         # ========== General / 일반 ==========
         # Return step-by-step network path tracing methodology / 네트워크 경로 추적 방법론을 단계별로 반환
@@ -157,7 +159,7 @@ def lambda_handler(event, context):
                 return ok({"vpc_id": vpc_id, "flowLogs": [{"id": f["FlowLogId"], "destination": f.get("LogDestination", "")} for f in fls],
                     "message": "Flow logs use S3 destination, not CloudWatch"})
             # Query CloudWatch Logs for flow log events / CloudWatch Logs에서 플로우 로그 이벤트 조회
-            logs = boto3.client('logs', region_name=region)
+            logs = get_client('logs', region, role_arn)
             start = int((time.time() - minutes * 60) * 1000)
             try:
                 resp = logs.filter_log_events(logGroupName=log_group, startTime=start, limit=50, filterPattern=filter_pattern)
@@ -268,13 +270,13 @@ def lambda_handler(event, context):
         # ========== Network Firewall / 네트워크 방화벽 관련 ==========
         # List AWS Network Firewalls / AWS Network Firewall 목록 조회
         elif t == "list_network_firewalls":
-            nfw = boto3.client('network-firewall', region_name=region)
+            nfw = get_client('network-firewall', region, role_arn)
             fws = nfw.list_firewalls().get("Firewalls", [])
             return ok({"firewalls": [{"name": f.get("FirewallName"), "arn": f.get("FirewallArn")} for f in fws[:20]]})
 
         # Get firewall policy rules (stateless + stateful) / 방화벽 정책 규칙 조회 (스테이트리스 + 스테이트풀)
         elif t == "get_firewall_rules":
-            nfw = boto3.client('network-firewall', region_name=region)
+            nfw = get_client('network-firewall', region, role_arn)
             fw_name = args.get("firewall_name", "")
             # Describe firewall and its associated policy / 방화벽 및 연결된 정책 조회
             fw = nfw.describe_firewall(FirewallName=fw_name)

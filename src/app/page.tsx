@@ -32,6 +32,8 @@ import { queries as ebsQ } from '@/lib/queries/ebs';
 import { queries as mskQ } from '@/lib/queries/msk';
 import { queries as osQ } from '@/lib/queries/opensearch';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -51,6 +53,8 @@ function CardLink({ href, children, className = '' }: { href: string; children: 
 export default function DashboardPage() {
   const router = useRouter();
   const { t } = useLanguage();
+  const { currentAccountId } = useAccountContext();
+
   const [data, setData] = useState<DashboardData>({});
   const [loading, setLoading] = useState(true);
   const [costAvailable, setCostAvailable] = useState<boolean | null>(null);
@@ -64,6 +68,7 @@ export default function DashboardPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           saveInventory: true,
           queries: {
             ec2Status: ec2Q.statusCount,
@@ -100,11 +105,12 @@ export default function DashboardPage() {
       // Refresh cache status after data load / 데이터 로드 후 캐시 상태 갱신
       fetch('/awsops/api/steampipe?action=cache-status').then(r => r.json()).then(d => setCacheStatus(d)).catch(() => {});
     } catch {} finally { setLoading(false); }
-  }, [costAvailable]);
+  }, [costAvailable, currentAccountId]);
 
   // Cost Explorer 가용성 선 확인 / Pre-check cost availability
   useEffect(() => {
-    fetch('/awsops/api/steampipe?action=cost-check')
+    const acctQ = currentAccountId && currentAccountId !== '__all__' ? `&accountId=${currentAccountId}` : '';
+    fetch(`/awsops/api/steampipe?action=cost-check${acctQ}`)
       .then(r => r.json())
       .then(d => setCostAvailable(d.available !== false))
       .catch(() => setCostAvailable(false));
@@ -113,7 +119,7 @@ export default function DashboardPage() {
       .then(r => r.json())
       .then(d => setCacheStatus(d))
       .catch(() => {});
-  }, []);
+  }, [currentAccountId]);
 
   // cost-check 완료 후 fetchData 실행 / Run fetchData after cost-check resolves
   useEffect(() => {

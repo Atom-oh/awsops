@@ -1,7 +1,15 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
+import { isMultiAccount, validateAccountId } from '@/lib/app-config';
 
 const DATA_DIR = resolve(process.cwd(), 'data/inventory');
+
+function getInventoryDir(accountId?: string): string {
+  if (accountId && accountId !== '__all__' && isMultiAccount() && validateAccountId(accountId)) {
+    return resolve(process.cwd(), `data/inventory/${accountId}`);
+  }
+  return resolve(process.cwd(), 'data/inventory');
+}
 
 // Dashboard query key → field → inventory label 매핑
 // 대시보드의 기존 쿼리 결과에서 수량 추출 (추가 쿼리 0건)
@@ -51,9 +59,9 @@ export interface InventoryTrend {
   pct30: number | null;
 }
 
-function ensureDir(): void {
-  if (!existsSync(DATA_DIR)) {
-    mkdirSync(DATA_DIR, { recursive: true });
+function ensureDir(dir: string = DATA_DIR): void {
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 }
 
@@ -62,9 +70,11 @@ function dateStr(d: Date = new Date()): string {
 }
 
 export async function saveSnapshot(
-  dashboardData: Record<string, { rows: unknown[]; error?: string }>
+  dashboardData: Record<string, { rows: unknown[]; error?: string }>,
+  accountId?: string
 ): Promise<void> {
-  ensureDir();
+  const dir = getInventoryDir(accountId);
+  ensureDir(dir);
   const today = dateStr();
   const resources: Record<string, number> = {};
 
@@ -94,26 +104,62 @@ export async function saveSnapshot(
     resources,
   };
 
-  writeFileSync(join(DATA_DIR, `${today}.json`), JSON.stringify(snapshot, null, 2), 'utf-8');
-  cleanOldSnapshots(90);
+  writeFileSync(join(dir, `${today}.json`), JSON.stringify(snapshot, null, 2), 'utf-8');
+  cleanOldSnapshots(90, dir);
+
+  // Incremental aggregate: read only this account's previous snapshot + current aggregate
+  // 증분 합산: 이전 스냅샷과 현재 합산만 읽어서 O(1) 파일 I/O
+  if (dir !== DATA_DIR && isMultiAccount() && accountId) {
+    try {
+      ensureDir(DATA_DIR);
+      const aggregatePath = join(DATA_DIR, `${today}.json`);
+      const prevPerAcctPath = join(DATA_DIR, `.prev_${accountId}.json`);
+
+      const aggregate: InventorySnapshot = existsSync(aggregatePath)
+        ? JSON.parse(readFileSync(aggregatePath, 'utf-8'))
+        : { date: today, timestamp: '', resources: {} };
+
+      // Subtract this account's previous values from aggregate
+      if (existsSync(prevPerAcctPath)) {
+        try {
+          const prev: Record<string, number> = JSON.parse(readFileSync(prevPerAcctPath, 'utf-8'));
+          for (const [label, count] of Object.entries(prev)) {
+            aggregate.resources[label] = (aggregate.resources[label] || 0) - count;
+            if (aggregate.resources[label] <= 0) delete aggregate.resources[label];
+          }
+        } catch { /* skip corrupt prev */ }
+      }
+
+      // Add this account's new values
+      for (const [label, count] of Object.entries(resources)) {
+        aggregate.resources[label] = (aggregate.resources[label] || 0) + count;
+      }
+
+      aggregate.timestamp = new Date().toISOString();
+      aggregate.date = today;
+      writeFileSync(aggregatePath, JSON.stringify(aggregate, null, 2), 'utf-8');
+
+      // Save current values as "previous" for next incremental update
+      writeFileSync(prevPerAcctPath, JSON.stringify(resources), 'utf-8');
+    } catch { /* non-critical */ }
+  }
 }
 
-export async function getHistory(days: number = 90): Promise<InventorySnapshot[]> {
-  ensureDir();
+export async function getHistory(days: number = 90, accountId?: string): Promise<InventorySnapshot[]> {
+  const dir = getInventoryDir(accountId);
+  ensureDir(dir);
 
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
   const cutoffStr = dateStr(cutoff);
 
-  const files = readdirSync(DATA_DIR)
-    .filter(f => f.endsWith('.json'))
-    .sort();
-
+  if (!existsSync(dir)) return [];
+  const files = readdirSync(dir).filter(f => f.endsWith('.json')).sort();
   const history: InventorySnapshot[] = [];
   for (const file of files) {
     if (file.replace('.json', '') < cutoffStr) continue;
     try {
-      const raw = readFileSync(join(DATA_DIR, file), 'utf-8');
+      const raw = readFileSync(join(dir, file), 'utf-8');
       history.push(JSON.parse(raw));
     } catch { /* skip corrupt files */ }
   }
@@ -162,15 +208,15 @@ export function calculateTrends(history: InventorySnapshot[]): InventoryTrend[] 
   });
 }
 
-function cleanOldSnapshots(maxDays: number): void {
+function cleanOldSnapshots(maxDays: number, dir: string = DATA_DIR): void {
   try {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - maxDays);
     const cutoffStr = dateStr(cutoff);
-    const files = readdirSync(DATA_DIR).filter(f => f.endsWith('.json'));
+    const files = readdirSync(dir).filter(f => f.endsWith('.json'));
     for (const file of files) {
       if (file.replace('.json', '') < cutoffStr) {
-        unlinkSync(join(DATA_DIR, file));
+        unlinkSync(join(dir, file));
       }
     }
   } catch { /* ignore cleanup errors */ }

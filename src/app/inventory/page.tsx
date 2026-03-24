@@ -71,6 +71,8 @@ const RESOURCE_COLORS: Record<string, string> = {
   'Unencrypted EBS': '#fca5a5',
 };
 
+import { useAccountContext } from '@/contexts/AccountContext';
+
 const FALLBACK_COLORS = ['#38bdf8', '#c084fc', '#4ade80', '#facc15', '#fb923c', '#f87171', '#2dd4bf', '#818cf8'];
 
 function getResourceColor(label: string, idx: number): string {
@@ -118,6 +120,8 @@ function MultiLineTooltip({ active, payload, label }: any) {
 
 export default function InventoryPage() {
   const { t } = useLanguage();
+  const { currentAccountId } = useAccountContext();
+
   const [history, setHistory] = useState<InventorySnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [visibleResources, setVisibleResources] = useState<Set<string>>(new Set(PRIMARY_RESOURCES));
@@ -126,11 +130,12 @@ export default function InventoryPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/awsops/api/steampipe?action=inventory&days=90');
+      const acctParam = currentAccountId && currentAccountId !== '__all__' ? `&accountId=${currentAccountId}` : '';
+      const res = await fetch(`/awsops/api/steampipe?action=inventory&days=90${acctParam}`);
       const data = await res.json();
       setHistory(data.history || []);
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

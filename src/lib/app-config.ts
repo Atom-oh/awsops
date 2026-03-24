@@ -10,6 +10,25 @@ export interface FargatePricing {
   storagePerGbHour?: number; // Ephemeral storage price / 임시 스토리지 가격
 }
 
+// Multi-account support / 멀티 어카운트 지원
+export const ALL_ACCOUNTS = '__all__';
+
+export interface AccountFeatures {
+  costEnabled: boolean;
+  eksEnabled: boolean;
+  k8sEnabled: boolean;
+}
+
+export interface AccountConfig {
+  accountId: string;       // 12-digit AWS account ID
+  alias: string;           // Human-readable name ("Production", "Staging")
+  connectionName: string;  // Steampipe connection name ("aws_123456789012")
+  region: string;          // Primary region
+  isHost: boolean;         // Is this the host account (where AWSops runs)
+  features: AccountFeatures;
+  profile?: string;        // AWS CLI profile for cross-account access
+}
+
 export interface AppConfig {
   costEnabled: boolean;
   agentRuntimeArn?: string;
@@ -21,6 +40,9 @@ export interface AppConfig {
   opencostEndpoint?: string;   // OpenCost API endpoint (Phase 2) / OpenCost API 엔드포인트 (2단계)
   customerLogo?: string;       // Customer logo path in public/logos/ (e.g. "autoever.png") / 고객 로고 경로
   customerName?: string;       // Customer name displayed next to logo / 로고 옆에 표시할 고객명
+  customerLogoBg?: string;     // Logo background: "light" (white bg) or "dark" (transparent) / 로고 배경: light=흰색, dark=투명
+  adminEmails?: string[];      // Admin user emails allowed to access /accounts / 계정 관리 접근 허용 이메일
+  accounts?: AccountConfig[];
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -60,4 +82,26 @@ export function saveConfig(config: Partial<AppConfig>): void {
   writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), 'utf-8');
   _configCache = merged as AppConfig;
   _configCacheTime = Date.now();
+}
+
+// --- Multi-account utilities ---
+
+export function validateAccountId(id: string): boolean {
+  return /^\d{12}$/.test(id);
+}
+
+export function getAccounts(): AccountConfig[] {
+  return getConfig().accounts || [];
+}
+
+export function getAccountById(id: string): AccountConfig | undefined {
+  return getAccounts().find(a => a.accountId === id);
+}
+
+export function isMultiAccount(): boolean {
+  return getAccounts().length > 1;
+}
+
+export function getHostAccount(): AccountConfig | undefined {
+  return getAccounts().find(a => a.isHost);
 }

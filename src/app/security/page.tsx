@@ -10,11 +10,15 @@ import DataTable from '@/components/table/DataTable';
 import { ShieldCheck, X, Database, Shield, HardDrive, Bug, Users } from 'lucide-react';
 import { queries as secQ } from '@/lib/queries/security';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 type SecurityTab = 'publicBuckets' | 'mfa' | 'openSGs' | 'unencrypted' | 'cve';
 
 export default function SecurityPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<SecurityTab>('publicBuckets');
@@ -28,6 +32,7 @@ export default function SecurityPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: secQ.summary,
             publicBuckets: secQ.publicBuckets,
@@ -41,7 +46,7 @@ export default function SecurityPage() {
       });
       setData(await res.json());
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -197,6 +202,9 @@ export default function SecurityPage() {
               {/* Public Bucket Detail */}
               {detailType === 'bucket' && (<>
                 <Section title="S3 Bucket" icon={Database}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="Name" value={selected.name} />
                   <Row label="Region" value={selected.region} />
                   <Row label="Created" value={selected.creation_date ? new Date(selected.creation_date).toLocaleString() : '--'} />
@@ -213,6 +221,9 @@ export default function SecurityPage() {
               {/* User Detail */}
               {detailType === 'user' && (<>
                 <Section title="IAM User" icon={Users}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="Name" value={selected.name} />
                   <Row label="User ID" value={selected.user_id} />
                   <Row label="ARN" value={selected.arn} />
@@ -224,6 +235,9 @@ export default function SecurityPage() {
               {/* Open SG Detail */}
               {detailType === 'sg' && (<>
                 <Section title="Security Group Rule" icon={Shield}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="Group ID" value={selected.group_id} />
                   <Row label="Group Name" value={selected.group_name} />
                   <Row label="VPC" value={selected.vpc_id} />
@@ -242,6 +256,9 @@ export default function SecurityPage() {
               {/* Unencrypted Volume Detail */}
               {detailType === 'volume' && (<>
                 <Section title="EBS Volume" icon={HardDrive}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="Volume ID" value={selected.volume_id} />
                   <Row label="Name" value={selected.name || '--'} />
                   <Row label="Type" value={selected.volume_type} />
@@ -266,6 +283,9 @@ export default function SecurityPage() {
                   })()}
                 </div>
                 <Section title="Vulnerability" icon={Bug}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="CVE ID" value={selected.vulnerability_id} />
                   <Row label="Title" value={selected.title} />
                   <Row label="Severity" value={selected.severity} />

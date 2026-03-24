@@ -6,7 +6,6 @@ Istio 서비스 메시 MCP Lambda - Steampipe Kubernetes CRD 테이블 + EKS API
 # Steampipe K8s 플러그인을 통해 12개의 Istio 메시 검사 도구를 제공합니다 (VPC Lambda 필요).
 """
 import json
-import boto3
 import os
 import pg8000
 
@@ -47,6 +46,7 @@ def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    args.pop('target_account_id', None)  # not used — Steampipe-only Lambda
 
     # Auto-detect tool from parameters using keyword matching / 키워드 매칭을 통해 파라미터에서 도구를 자동 감지
     if not t:

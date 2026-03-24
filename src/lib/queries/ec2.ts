@@ -23,6 +23,7 @@ export const queries = {
 
   list: `
     SELECT
+      account_id,
       instance_id,
       instance_state,
       instance_type,
@@ -41,6 +42,7 @@ export const queries = {
 
   detail: `
     SELECT
+      i.account_id,
       i.instance_id,
       i.instance_state,
       i.instance_type,

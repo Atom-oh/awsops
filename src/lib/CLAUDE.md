@@ -4,10 +4,11 @@
 핵심 라이브러리: Steampipe 데이터베이스 연결, SQL 쿼리 정의, 인벤토리, 설정 관리.
 
 ## 주요 파일
-- `steampipe.ts` — pg 풀 연결 (max 5, 120s 타임아웃, 5분 TTL 캐시, Cost 가용성 probe)
-- `resource-inventory.ts` — 리소스 인벤토리 스냅샷 (data/inventory/, 추가 쿼리 0건)
-- `cost-snapshot.ts` — Cost 데이터 스냅샷 폴백 (data/cost/)
-- `app-config.ts` — 앱 설정 (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId)
+- `steampipe.ts` — pg 풀 + 배치 쿼리 + 캐시 + Cost 가용성 + buildSearchPath + runCostQueriesPerAccount
+- `resource-inventory.ts` — 리소스 인벤토리 스냅샷 (data/inventory/, 계정별 디렉토리)
+- `cost-snapshot.ts` — Cost 데이터 스냅샷 폴백 (data/cost/, 계정별)
+- `app-config.ts` — 앱 설정 (costEnabled, agentRuntimeArn, accounts[], customerLogo, adminEmails 등)
+- `cache-warmer.ts` — 백그라운드 캐시 프리워밍 (대시보드 23 + 모니터링 10 쿼리, 4분 주기, lazy-init)
 - `agentcore-stats.ts` — AgentCore 호출 통계 + 모델별 토큰 사용량 추적 (data/agentcore-stats.json)
 - `agentcore-memory.ts` — 대화 이력 저장/검색, 사용자별 분리 (data/memory/)
 - `auth-utils.ts` — Cognito JWT에서 사용자 정보 추출 (Lambda@Edge 검증 후 payload 디코딩)
@@ -30,10 +31,11 @@
 Core libraries: Steampipe database connection, SQL query definitions, inventory, config management.
 
 ## Key Files
-- `steampipe.ts` — pg Pool (max 5, 120s timeout, 5min TTL cache, checkCostAvailability)
-- `resource-inventory.ts` — Resource inventory snapshots (data/inventory/, zero extra queries)
-- `cost-snapshot.ts` — Cost data snapshot fallback (data/cost/)
-- `app-config.ts` — App config (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId)
+- `steampipe.ts` — pg Pool + batchQuery + cache + Cost probe + buildSearchPath + runCostQueriesPerAccount
+- `resource-inventory.ts` — Resource inventory snapshots (data/inventory/, per-account directories)
+- `cost-snapshot.ts` — Cost data snapshot fallback (data/cost/, per-account)
+- `app-config.ts` — App config (costEnabled, agentRuntimeArn, accounts[], customerLogo, adminEmails, etc.)
+- `cache-warmer.ts` — Background cache pre-warming (dashboard 23 + monitoring 10 queries, 4-min interval, lazy-init)
 - `agentcore-stats.ts` — AgentCore call stats + per-model token usage tracking (data/agentcore-stats.json)
 - `agentcore-memory.ts` — Conversation history save/search, per-user isolation (data/memory/)
 - `auth-utils.ts` — Extract Cognito user from JWT (payload decode after Lambda@Edge verification)

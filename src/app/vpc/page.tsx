@@ -9,11 +9,14 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Network, X, Tag, Shield, Globe, ArrowRightLeft } from 'lucide-react';
 import { queries as vpcQ } from '@/lib/queries/vpc';
+import { useAccountContext } from '@/contexts/AccountContext';
 
 type TabKey = 'vpcs' | 'subnets' | 'sgs' | 'rtb' | 'tgw' | 'elb' | 'nat' | 'igw';
 
 export default function VPCPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('vpcs');
@@ -34,6 +37,7 @@ export default function VPCPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: vpcQ.summary,
             vpcList: vpcQ.vpcList,
@@ -50,7 +54,7 @@ export default function VPCPage() {
       });
       setData(await res.json());
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -62,7 +66,7 @@ export default function VPCPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
       });
       const result = await res.json();
       if (result.detail?.rows?.[0]) setSelected(result.detail.rows[0]);
@@ -78,7 +82,7 @@ export default function VPCPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
       });
       const result = await res.json();
       if (result.detail?.rows?.[0]) setSelected(result.detail.rows[0]);
@@ -109,7 +113,7 @@ export default function VPCPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: detailSql, tgwRTs: rtSql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: detailSql, tgwRTs: rtSql } }),
       });
       const result = await res.json();
       if (result.detail?.rows?.[0]) setSelected(result.detail.rows[0]);
@@ -124,7 +128,7 @@ export default function VPCPage() {
         const rRes = await fetch('/awsops/api/steampipe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: routeQueries }),
+          body: JSON.stringify({ accountId: currentAccountId, queries: routeQueries }),
         });
         const rResult = await rRes.json();
         const routeMap: Record<string, any[]> = {};
@@ -362,6 +366,9 @@ export default function VPCPage() {
                 {/* VPC Detail */}
                 {detailType === 'vpc' && (<>
                   <Section title="VPC Info" icon={Network}>
+                    {selected.account_id && isMultiAccount && (
+                      <Row label="Account" value={selected.account_id} />
+                    )}
                     <Row label="VPC ID" value={selected.vpc_id} />
                     <Row label="CIDR Block" value={selected.cidr_block} />
                     <Row label="State" value={selected.state} />
