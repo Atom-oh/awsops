@@ -42,10 +42,12 @@ export function useCanvas(draw: DrawFn, height = 500) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const _canvas = canvasRef.current;
+    if (!_canvas) return;
+    const canvas: HTMLCanvasElement = _canvas;
+    const _ctx = canvas.getContext('2d');
+    if (!_ctx) return;
+    const ctx: CanvasRenderingContext2D = _ctx;
 
     const dpr = window.devicePixelRatio || 1;
 

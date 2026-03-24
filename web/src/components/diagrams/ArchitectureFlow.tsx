@@ -332,10 +332,11 @@ export default function ArchitectureFlow() {
     }
 
     // Draw tooltip for hovered node
-    if (hoveredNode && hoveredNode.id !== 'users') {
-      const tooltipX = hoveredNode.x + hoveredNode.w + s(10);
-      const tooltipY = hoveredNode.y;
-      const lines = hoveredNode.details.split('\n');
+    const hn = hoveredNode as Node | null;
+    if (hn && hn.id !== 'users') {
+      const tooltipX = hn.x + hn.w + s(10);
+      const tooltipY = hn.y;
+      const lines = hn.details.split('\n');
       const tooltipW = s(180);
       const tooltipH = s(20 + lines.length * 16);
 
@@ -343,7 +344,7 @@ export default function ArchitectureFlow() {
       let tx = tooltipX;
       let ty = tooltipY;
       if (tx + tooltipW > width - s(10)) {
-        tx = hoveredNode.x - tooltipW - s(10);
+        tx = hn.x - tooltipW - s(10);
       }
       if (ty + tooltipH > height - s(10)) {
         ty = height - tooltipH - s(10);
@@ -351,7 +352,7 @@ export default function ArchitectureFlow() {
 
       // Tooltip background
       ctx.fillStyle = THEME.border;
-      ctx.strokeStyle = hoveredNode.color;
+      ctx.strokeStyle = hn.color;
       ctx.lineWidth = 1 * dpr * scale;
       roundRect(ctx, tx, ty, tooltipW, tooltipH, 6 * dpr * scale);
       ctx.fill();
