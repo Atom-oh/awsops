@@ -37,6 +37,9 @@ yarn-error.log*
 *.JPG
 *.jpg
 
+# oh-my-claudecode state
+.omc/
+
 # claude code sessions
 .claude/
 
