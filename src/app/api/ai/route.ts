@@ -3,7 +3,7 @@
 // Flow: classify intent (from registry) → route to handler → fallback
 // 흐름: 의도 분류 (레지스트리 기반) → 핸들러 라우팅 → 폴백
 import { NextRequest, NextResponse } from 'next/server';
-import { BedrockRuntimeClient, InvokeModelCommand, InvokeModelWithResponseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, InvokeModelCommand, InvokeModelWithResponseStreamCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import {
   BedrockAgentCoreClient,
   InvokeAgentRuntimeCommand,
@@ -930,9 +930,8 @@ export async function POST(request: NextRequest) {
           if (successful.length > 1) {
             send('status', { step: 'synthesizing', message: STATUS.synthesizing(successful.length) });
             const lastMsg = messages[messages.length - 1]?.content || '';
-            const synthesized = await synthesizeResponses(lastMsg, successful, modelKey, clientLang);
-            // Simulate streaming for synthesized response / 합성 응답 타이핑 시뮬레이션
-            await simulateStreaming(synthesized, send);
+            // Real streaming synthesis via Converse API / Converse API 실시간 스트리밍 합성
+            const synthesized = await synthesizeResponsesStreaming(lastMsg, successful, send, modelKey, clientLang);
             // 합성된 응답에서도 추가 도구 추출 / Extract additional tools from synthesized response
             const synthesizedTools = extractUsedTools(synthesized);
             const finalTools = Array.from(new Set([...dedupedTools, ...synthesizedTools]));
@@ -1129,6 +1128,7 @@ async function handleSingleRoute(
 
 // ============================================================================
 // Synthesize multi-route responses / 멀티 라우트 응답 합성
+// Non-streaming version for handleNonStreaming / 비스트리밍용
 // ============================================================================
 async function synthesizeResponses(
   question: string, responses: { route: string; content: string; via: string }[], modelKey?: string, lang?: string
@@ -1150,6 +1150,37 @@ async function synthesizeResponses(
   }));
   const result = JSON.parse(new TextDecoder().decode(response.body));
   return result.content?.[0]?.text || responses.map(r => r.content).join('\n\n---\n\n');
+}
+
+// Streaming version using Converse API / Converse API 스트리밍 합성
+async function synthesizeResponsesStreaming(
+  question: string, responses: { route: string; content: string; via: string }[],
+  send: (event: string, data: any) => void, modelKey?: string, lang?: string,
+): Promise<string> {
+  const systemPrompt = getSystemPrompt(lang) + `\n\nYou are synthesizing answers from multiple AWS service agents. Combine them into one coherent, well-structured response. Do not repeat information.`;
+  const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+  const parts = responses.map(r => `--- ${r.via} ---\n${r.content}`).join('\n\n');
+
+  const response = await bedrockClient.send(new ConverseStreamCommand({
+    modelId,
+    system: [{ text: systemPrompt }],
+    messages: [
+      { role: 'user', content: [{ text: `Question: ${question}\n\nMultiple agents responded:\n\n${parts}\n\nPlease synthesize into one comprehensive answer.` }] },
+    ],
+    inferenceConfig: { maxTokens: 4096 },
+  }));
+
+  let fullContent = '';
+  if (response.stream) {
+    for await (const event of response.stream) {
+      if (event.contentBlockDelta?.delta?.text) {
+        const text = event.contentBlockDelta.delta.text;
+        fullContent += text;
+        send('chunk', { delta: text });
+      }
+    }
+  }
+  return fullContent || responses.map(r => r.content).join('\n\n---\n\n');
 }
 
 // ============================================================================
