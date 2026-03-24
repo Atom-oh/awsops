@@ -15,11 +15,10 @@
     "code-review": ".claude/skills/code-review/SKILL.md",
     "refactor": ".claude/skills/refactor/SKILL.md",
     "release": ".claude/skills/release/SKILL.md",
-    "sync-docs": ".claude/skills/sync-docs/SKILL.md"
+    "sync-docs": ".claude/skills/sync-docs/SKILL.md",
+    "sync-guides": ".claude/skills/sync-guides/SKILL.md"
   },
   "hooks": {
-    "pre-commit": ".claude/hooks/pre-commit.sh",
-    "post-build": ".claude/hooks/post-build.sh",
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
@@ -27,6 +26,14 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/check-doc-sync.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/accumulate-pending-guides.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-guide-i18n-sync.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
           }
         ]
       }

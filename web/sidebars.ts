@@ -11,6 +11,8 @@ const sidebars: SidebarsConfig = {
         'getting-started/login',
         'getting-started/navigation',
         'getting-started/ai-assistant',
+        'getting-started/deployment',
+        'getting-started/auth',
       ],
     },
     {

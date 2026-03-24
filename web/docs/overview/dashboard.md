@@ -5,12 +5,33 @@ description: AWSops 메인 대시보드 상세 가이드
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
+import ArchitectureFlow from '@site/src/components/diagrams/ArchitectureFlow';
 
 # 대시보드
 
 대시보드는 AWSops의 메인 페이지로, AWS 및 Kubernetes 인프라의 전체 현황을 한눈에 파악할 수 있습니다.
 
 <Screenshot src="/screenshots/overview/dashboard.png" alt="대시보드" />
+
+## 시스템 아키텍처
+
+<ArchitectureFlow />
+
+### 인프라 구성
+
+| 컴포넌트 | 구성 |
+|----------|------|
+| **VPC** | 10.254.0.0/16, 2 AZ, NAT Gateway, Public + Private Subnet |
+| **EC2** | t4g.2xlarge (ARM64 Graviton), 100GB GP3 EBS, Private Subnet |
+| **ALB** | Internet-facing, port 80 (VSCode) / 3000 (Dashboard) |
+| **CloudFront** | CACHING_DISABLED, Custom Header 검증으로 ALB 직접 접근 차단 |
+| **Cognito** | Lambda@Edge (us-east-1) JWT 검증, HttpOnly 쿠키 인증 |
+
+### 데이터 레이어
+
+- **Steampipe PostgreSQL** (port 9193): 380+ AWS 테이블, 60+ K8s 테이블
+- **캐시**: node-cache 5분 TTL, 배치 쿼리 5 sequential
+- **AI 엔진**: Bedrock AgentCore Runtime (Strands) + 8 Gateway (125 MCP 도구)
 
 ## 화면 구성
 

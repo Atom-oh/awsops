@@ -5,12 +5,33 @@ description: AWSops main dashboard detailed guide
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
+import ArchitectureFlow from '@site/src/components/diagrams/ArchitectureFlow';
 
 # Dashboard
 
 The Dashboard is the main page of AWSops, providing an at-a-glance view of your entire AWS and Kubernetes infrastructure.
 
 <Screenshot src="/screenshots/overview/dashboard.png" alt="Dashboard" />
+
+## System Architecture
+
+<ArchitectureFlow />
+
+### Infrastructure
+
+| Component | Configuration |
+|-----------|---------------|
+| **VPC** | 10.254.0.0/16, 2 AZs, NAT Gateway, Public + Private Subnets |
+| **EC2** | t4g.2xlarge (ARM64 Graviton), 100GB GP3 EBS, Private Subnet |
+| **ALB** | Internet-facing, port 80 (VSCode) / 3000 (Dashboard) |
+| **CloudFront** | CACHING_DISABLED, Custom Header validation blocks direct ALB access |
+| **Cognito** | Lambda@Edge (us-east-1) JWT validation, HttpOnly cookie auth |
+
+### Data Layer
+
+- **Steampipe PostgreSQL** (port 9193): 380+ AWS tables, 60+ K8s tables
+- **Cache**: node-cache 5min TTL, 5 sequential batch queries
+- **AI Engine**: Bedrock AgentCore Runtime (Strands) + 8 Gateways (125 MCP tools)
 
 ## Screen Layout
 

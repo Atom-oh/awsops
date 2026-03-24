@@ -5,6 +5,7 @@ description: Amazon Bedrock AgentCore architecture and MCP tool details
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
+import AgentCoreFlow from '@site/src/components/diagrams/AgentCoreFlow';
 
 # AgentCore
 
@@ -15,6 +16,20 @@ AgentCore handles tool execution for the AI Assistant, powered by Amazon Bedrock
 ## Architecture
 
 ![AgentCore Architecture](/diagrams/agentcore-architecture.png)
+
+### AI Routing Flow
+
+<AgentCoreFlow />
+
+### Deployment Requirements
+
+| Item | Requirement |
+|------|-------------|
+| **Docker** | arm64 required (`docker buildx --platform linux/arm64 --load`) |
+| **agent.py** | Update per-account Gateway URLs then rebuild Docker |
+| **Code Interpreter** | No hyphens in name, underscores only |
+| **Memory Store** | No hyphens in name (`awsops_memory`), max 365-day retention |
+| **Runtime Update** | `--role-arn` + `--network-configuration` required |
 
 ## AgentCore Runtime
 
