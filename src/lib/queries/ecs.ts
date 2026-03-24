@@ -9,6 +9,7 @@ export const queries = {
 
   clusterDetail: `
     SELECT
+      account_id,
       cluster_name,
       cluster_arn,
       status,
@@ -27,6 +28,7 @@ export const queries = {
 
   clusterList: `
     SELECT
+      account_id,
       cluster_name,
       cluster_arn,
       status,
@@ -44,6 +46,7 @@ export const queries = {
 
   serviceList: `
     SELECT
+      account_id,
       service_name,
       cluster_arn,
       status,
@@ -62,6 +65,7 @@ export const queries = {
 
   taskList: `
     SELECT
+      account_id,
       task_arn,
       cluster_arn,
       task_definition_arn,

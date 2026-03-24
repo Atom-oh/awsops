@@ -11,6 +11,8 @@ import DataTable from '@/components/table/DataTable';
 import { Box, Rocket, Network, Server, AlertTriangle } from 'lucide-react';
 import { queries as k8sQ } from '@/lib/queries/k8s';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 // Format K8s memory values (e.g. "32986188Ki" → "31.5 GiB") / K8s 메모리 가독성 변환
 function formatK8sMemory(mem: any): string {
@@ -93,6 +95,8 @@ function parseMiB(mem: any): number {
 
 export default function K8sOverviewPage() {
   const { t } = useLanguage();
+  const { currentAccountId } = useAccountContext();
+
   const [data, setData] = useState<DashboardData>({});
   const [loading, setLoading] = useState(true);
   const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
@@ -113,7 +117,7 @@ export default function K8sOverviewPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { enis: eniSql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { enis: eniSql } }),
       });
       const result = await res.json();
       const eniRows = result.enis?.rows || [];
@@ -127,7 +131,7 @@ export default function K8sOverviewPage() {
           const tRes = await fetch('/awsops/api/steampipe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ queries: { traffic: trafficSql } }),
+            body: JSON.stringify({ accountId: currentAccountId, queries: { traffic: trafficSql } }),
           });
           const tResult = await tRes.json();
           const trafficRows = tResult.traffic?.rows || [];
@@ -160,7 +164,7 @@ export default function K8sOverviewPage() {
     } finally {
       setEniLoading(false);
     }
-  }, []);
+  }, [currentAccountId]);
 
   // Select node + fetch ENIs / 노드 선택 + ENI 조회
   const selectNode = useCallback((nodeName: string) => {
@@ -176,6 +180,7 @@ export default function K8sOverviewPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             nodeSummary: k8sQ.nodeSummary,
             podSummary: k8sQ.podSummary,
@@ -196,7 +201,7 @@ export default function K8sOverviewPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

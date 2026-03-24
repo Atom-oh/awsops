@@ -7,6 +7,8 @@ import PieChartCard from '@/components/charts/PieChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
 import { ShieldCheck, Play, Loader2, X, CheckCircle, AlertTriangle, XCircle, MinusCircle, Info } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 interface BenchmarkSummary {
   status: { alarm: number; ok: number; info: number; skip: number; error: number };
@@ -28,31 +30,36 @@ export default function CompliancePage() {
   const [selectedGroup, setSelectedGroup] = useState<any>(null);
   const [selectedControl, setSelectedControl] = useState<any>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const { currentAccountId } = useAccountContext();
 
+  // NOTE: Compliance uses GET (not POST like other pages) because benchmark API
+  // uses Powerpipe CLI with query params (action=start/status/result).
+  // accountId is passed as a query param, not in the request body.
   const BASE = '/awsops/api/benchmark';
+  const acctParam = currentAccountId && currentAccountId !== '__all__' ? `&accountId=${currentAccountId}` : '';
 
   const checkStatus = useCallback(async () => {
-    const res = await fetch(`${BASE}?benchmark=${benchmarkId}&action=status`);
+    const res = await fetch(`${BASE}?benchmark=${benchmarkId}&action=status${acctParam}`);
     const result = await res.json();
     setStatus(result.status);
     if (result.hasResult && result.status !== 'running') {
-      const resData = await fetch(`${BASE}?benchmark=${benchmarkId}&action=result`);
+      const resData = await fetch(`${BASE}?benchmark=${benchmarkId}&action=result${acctParam}`);
       const benchData = await resData.json();
       if (!benchData.error) setData(benchData);
     }
-  }, [benchmarkId]);
+  }, [benchmarkId, acctParam]);
 
   useEffect(() => { checkStatus(); }, [checkStatus]);
 
   useEffect(() => {
     if (status === 'running') {
       pollRef.current = setInterval(async () => {
-        const res = await fetch(`${BASE}?benchmark=${benchmarkId}&action=status`);
+        const res = await fetch(`${BASE}?benchmark=${benchmarkId}&action=status${acctParam}`);
         const result = await res.json();
         if (result.status !== 'running') {
           setStatus(result.status);
           if (result.hasResult) {
-            const resData = await fetch(`${BASE}?benchmark=${benchmarkId}&action=result`);
+            const resData = await fetch(`${BASE}?benchmark=${benchmarkId}&action=result${acctParam}`);
             const benchData = await resData.json();
             if (!benchData.error) setData(benchData);
           }
@@ -66,7 +73,7 @@ export default function CompliancePage() {
   const runBenchmark = async () => {
     setData(null);
     setStatus('running');
-    await fetch(`${BASE}?benchmark=${benchmarkId}&action=run`);
+    await fetch(`${BASE}?benchmark=${benchmarkId}&action=run${acctParam}`);
   };
 
   const summary = data?.summary?.status || { alarm: 0, ok: 0, info: 0, skip: 0, error: 0 };

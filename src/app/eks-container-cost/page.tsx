@@ -10,6 +10,8 @@ import DataTable from '@/components/table/DataTable';
 import { DollarSign, Box, Server, TrendingUp } from 'lucide-react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 interface PodCost {
   pod_name: string;
@@ -57,6 +59,8 @@ const CHART_COLORS = ['#00d4ff', '#00ff88', '#a855f7', '#f59e0b', '#ef4444', '#6
 
 export default function EksContainerCostPage() {
   const { t } = useLanguage();
+  const { currentAccountId } = useAccountContext();
+
   const [data, setData] = useState<EksCostData | null>(null);
   const [_loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +70,8 @@ export default function EksContainerCostPage() {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch('/awsops/api/eks-container-cost');
+      const acctParam = currentAccountId && currentAccountId !== '__all__' ? `?accountId=${currentAccountId}` : '';
+      const res = await fetch(`/awsops/api/eks-container-cost${acctParam}`);
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -77,7 +82,7 @@ export default function EksContainerCostPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

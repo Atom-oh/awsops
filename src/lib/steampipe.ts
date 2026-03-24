@@ -1,26 +1,30 @@
 import { Pool } from 'pg';
 import NodeCache from 'node-cache';
-import { getConfig } from '@/lib/app-config';
+import { getConfig, isMultiAccount, getAccounts, ALL_ACCOUNTS } from '@/lib/app-config';
+import type { AccountConfig } from '@/lib/app-config';
 
 const cache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 // Steampipe 비밀번호: config에서 읽기, 환경변수 폴백
 // Steampipe password: from config, env var fallback
-const spPassword = getConfig().steampipePassword
-  || process.env.STEAMPIPE_PASSWORD
-  || 'steampipe';
+function createPool(): Pool {
+  const spPassword = getConfig().steampipePassword
+    || process.env.STEAMPIPE_PASSWORD
+    || 'steampipe';
+  return new Pool({
+    host: '127.0.0.1',
+    port: 9193,
+    database: 'steampipe',
+    user: 'steampipe',
+    password: spPassword,
+    max: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 30000,
+    statement_timeout: 120000,
+  });
+}
 
-const pool = new Pool({
-  host: '127.0.0.1',
-  port: 9193,
-  database: 'steampipe',
-  user: 'steampipe',
-  password: spPassword,
-  max: 5,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 30000,
-  statement_timeout: 120000,
-});
+let pool = createPool();
 
 const ALLOWED_PATTERN = /^\s*SELECT\s/i;
 
@@ -33,12 +37,25 @@ function validateQuery(sql: string): void {
   }
 }
 
+// Build search_path for account-scoped queries / 계정별 search_path 생성
+function buildSearchPath(accountId?: string): string {
+  if (!accountId || accountId === ALL_ACCOUNTS) return '';
+  if (!isMultiAccount()) return '';
+  const sanitized = accountId.replace(/[^0-9]/g, '');
+  if (sanitized.length !== 12) return '';
+  const accounts = getAccounts();
+  if (!accounts.some(a => a.accountId === sanitized)) return '';
+  return `public, aws_${sanitized}, kubernetes, trivy`;
+}
+
 export async function runQuery<T = Record<string, unknown>>(
   sql: string,
-  bustCache = false,
-  ttl?: number // Custom TTL in seconds (default: 300s) / 커스텀 TTL (기본: 300초)
+  opts?: boolean | { bustCache?: boolean; accountId?: string; ttl?: number }
 ): Promise<{ rows: T[]; error?: string }> {
-  const cacheKey = `sp:${sql}`;
+  const { bustCache = false, accountId, ttl } = typeof opts === 'boolean'
+    ? { bustCache: opts, accountId: undefined, ttl: undefined }
+    : (opts || {});
+  const cacheKey = `sp:${accountId || ALL_ACCOUNTS}:${sql}`;
 
   if (!bustCache) {
     const cached = cache.get<{ rows: T[] }>(cacheKey);
@@ -47,8 +64,35 @@ export async function runQuery<T = Record<string, unknown>>(
 
   try {
     validateQuery(sql);
-    const result = await pool.query(sql);
-    const rows: T[] = result.rows || [];
+    const searchPath = buildSearchPath(accountId);
+
+    let rows: T[];
+    if (searchPath) {
+      // Dedicated client for account-scoped search_path / 계정별 search_path 전용 클라이언트
+      const client = await pool.connect();
+      let released = false;
+      try {
+        await client.query(`SET search_path TO ${searchPath}`);
+        const result = await client.query(sql);
+        rows = result.rows || [];
+        await client.query('RESET search_path');
+      } catch (queryErr) {
+        // Attempt to reset before releasing; if RESET fails, destroy the connection
+        try {
+          await client.query('RESET search_path');
+        } catch {
+          client.release(true);
+          released = true;
+        }
+        throw queryErr;
+      } finally {
+        if (!released) client.release();
+      }
+    } else {
+      const result = await pool.query(sql);
+      rows = result.rows || [];
+    }
+
     const data = { rows };
     if (ttl) {
       cache.set(cacheKey, data, ttl);
@@ -64,9 +108,12 @@ export async function runQuery<T = Record<string, unknown>>(
 
 export async function batchQuery(
   queries: Record<string, string>,
-  bustCache = false,
-  ttl?: number // Custom TTL in seconds / 커스텀 TTL (초)
+  opts?: boolean | { bustCache?: boolean; accountId?: string; ttl?: number }
 ): Promise<Record<string, { rows: unknown[]; error?: string }>> {
+  const normalizedOpts = typeof opts === 'boolean'
+    ? { bustCache: opts }
+    : (opts || {});
+
   const results: Record<string, { rows: unknown[]; error?: string }> = {};
   const entries = Object.entries(queries);
 
@@ -75,7 +122,7 @@ export async function batchQuery(
   for (let i = 0; i < entries.length; i += BATCH_SIZE) {
     const batch = entries.slice(i, i + BATCH_SIZE);
     const settled = await Promise.allSettled(
-      batch.map(([, sql]) => runQuery(sql, bustCache, ttl))
+      batch.map(([, sql]) => runQuery(sql, normalizedOpts))
     );
     batch.forEach(([key], j) => {
       const s = settled[j];
@@ -96,11 +143,11 @@ export function clearCache(): void {
 
 // Cost Explorer availability probe / Cost Explorer 가용성 확인
 // 설치 시 config로 MSP 판별 → 런타임에 Steampipe 쿼리 스킵
-const COST_CACHE_KEY = 'cost:available';
 const COST_CACHE_TTL = 3600; // 1시간
 
 export async function checkCostAvailability(
-  bustCache = false
+  bustCache = false,
+  accountId?: string
 ): Promise<{ available: boolean; reason?: string; checkedAt?: string }> {
   // 설치 시 판별된 config 확인 — MSP Payer면 쿼리 없이 즉시 반환
   const config = getConfig();
@@ -112,18 +159,24 @@ export async function checkCostAvailability(
     };
   }
 
+  const costCacheKey = `cost:available:${accountId || ALL_ACCOUNTS}`;
+
   if (!bustCache) {
-    const cached = cache.get<{ available: boolean; reason?: string; checkedAt?: string }>(COST_CACHE_KEY);
+    const cached = cache.get<{ available: boolean; reason?: string; checkedAt?: string }>(costCacheKey);
     if (cached) return cached;
   }
 
+  const searchPath = buildSearchPath(accountId);
   let client;
   try {
     client = await pool.connect();
-    await client.query("SET LOCAL statement_timeout = '10000'"); // 10초 전용 타임아웃
+    if (searchPath) {
+      await client.query(`SET search_path TO ${searchPath}`);
+    }
+    await client.query("SET statement_timeout = '10000'"); // 10초 전용 타임아웃
     await client.query('SELECT 1 FROM aws_cost_by_service_monthly LIMIT 1');
     const result = { available: true, checkedAt: new Date().toISOString() };
-    cache.set(COST_CACHE_KEY, result, COST_CACHE_TTL);
+    cache.set(costCacheKey, result, COST_CACHE_TTL);
     return result;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -135,9 +188,79 @@ export async function checkCostAvailability(
           ? 'Cost Explorer not enabled'
           : `Cost Explorer unavailable: ${message}`;
     const result = { available: false, reason, checkedAt: new Date().toISOString() };
-    cache.set(COST_CACHE_KEY, result, COST_CACHE_TTL);
+    cache.set(costCacheKey, result, COST_CACHE_TTL);
     return result;
   } finally {
-    if (client) client.release();
+    if (client) {
+      let released = false;
+      try {
+        await client.query('RESET statement_timeout');
+      } catch {
+        client.release(true);
+        released = true;
+      }
+      if (!released && searchPath) {
+        try { await client.query('RESET search_path'); } catch { client.release(true); released = true; }
+      }
+      if (!released) client.release();
+    }
+  }
+}
+
+// Run cost queries per-account, merge results with account tags / 계정별 비용 쿼리 실행 후 결과 병합
+export async function runCostQueriesPerAccount(
+  queries: Record<string, string>,
+  accounts?: AccountConfig[]
+): Promise<Record<string, { rows: unknown[]; error?: string }>> {
+  const accts = (accounts || getAccounts()).filter(a => a.features.costEnabled);
+  if (accts.length === 0) return batchQuery(queries);
+
+  const ACCOUNT_BATCH_SIZE = 2;
+  const perAccountResults: PromiseSettledResult<Record<string, { rows: unknown[]; error?: string }>>[] = [];
+  for (let i = 0; i < accts.length; i += ACCOUNT_BATCH_SIZE) {
+    const chunk = accts.slice(i, i + ACCOUNT_BATCH_SIZE);
+    const chunkResults = await Promise.allSettled(
+      chunk.map(acc => batchQuery(queries, { accountId: acc.accountId }))
+    );
+    perAccountResults.push(...chunkResults);
+  }
+
+  const merged: Record<string, { rows: unknown[]; error?: string }> = {};
+  for (const key of Object.keys(queries)) {
+    merged[key] = { rows: [] };
+  }
+
+  const failedAccounts: string[] = [];
+  perAccountResults.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      const { accountId, alias } = accts[i];
+      for (const [key, val] of Object.entries(result.value)) {
+        if (val.rows) {
+          const tagged = val.rows.map((r: unknown) => ({ ...(r as Record<string, unknown>), account_id: accountId, account_alias: alias }));
+          (merged[key].rows as unknown[]).push(...tagged);
+        }
+      }
+    } else {
+      failedAccounts.push(accts[i].accountId);
+    }
+  });
+
+  if (failedAccounts.length > 0) {
+    for (const key of Object.keys(queries)) {
+      merged[key].error = `Partial: failed accounts ${failedAccounts.join(', ')}`;
+    }
+  }
+
+  return merged;
+}
+
+// Reset pool and flush cache / 풀 리셋 및 캐시 초기화
+export async function resetPool(): Promise<void> {
+  try { await pool.end(); } catch { /* ignore */ }
+  pool = createPool();
+  cache.flushAll();
+  for (let i = 0; i < 15; i++) {
+    try { await pool.query('SELECT 1'); return; }
+    catch { await new Promise(r => setTimeout(r, 1000)); }
   }
 }

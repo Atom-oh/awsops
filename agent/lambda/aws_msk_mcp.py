@@ -3,7 +3,7 @@ AWS MSK MCP Lambda - Kafka cluster management, configuration, monitoring
 AWS MSK MCP 람다 - Kafka 클러스터 관리, 구성, 모니터링
 """
 import json
-import boto3
+from cross_account import get_client, get_role_arn
 
 
 def lambda_handler(event, context):
@@ -11,6 +11,8 @@ def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    target_account_id = args.pop('target_account_id', None)
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
     region = args.get("region", "ap-northeast-2")
 
     # Auto-detect tool from parameters if not specified / tool_name 미지정 시 파라미터로 도구 자동 감지
@@ -21,7 +23,7 @@ def lambda_handler(event, context):
         args = params
 
     try:
-        kafka = boto3.client('kafka', region_name=region)
+        kafka = get_client('kafka', region, role_arn)
 
         # List all MSK clusters (provisioned and serverless) / 모든 MSK 클러스터 조회 (프로비저닝 및 서버리스)
         if t == "list_clusters":

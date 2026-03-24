@@ -8,11 +8,15 @@ import DataTable from '@/components/table/DataTable';
 import { FileSearch, X, Shield, Settings, Tag, HardDrive } from 'lucide-react';
 import { queries as ctQ } from '@/lib/queries/cloudtrail';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 type TabKey = 'trails' | 'events' | 'writes';
 
 export default function CloudTrailPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('trails');
@@ -28,12 +32,13 @@ export default function CloudTrailPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: { summary: ctQ.summary, trailList: ctQ.trailList },
         }),
       });
       setData(await res.json());
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   const [eventsLoaded, setEventsLoaded] = useState(false);
   const fetchEvents = useCallback(async () => {
@@ -43,6 +48,7 @@ export default function CloudTrailPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: { recentEvents: ctQ.recentEvents, writeEvents: ctQ.writeEvents },
         }),
       });
@@ -50,7 +56,7 @@ export default function CloudTrailPage() {
       setData((prev: any) => ({ ...prev, ...result }));
       setEventsLoaded(true);
     } catch {}
-  }, [eventsLoaded, loading]);
+  }, [eventsLoaded, loading, currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -69,7 +75,7 @@ export default function CloudTrailPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
       });
       const result = await res.json();
       if (result.detail?.rows?.[0]) setSelected(result.detail.rows[0]);
@@ -192,6 +198,9 @@ export default function CloudTrailPage() {
                   <Section title="Trail" icon={FileSearch}>
                     <Row label="Name" value={selected.name} />
                     <Row label="ARN" value={selected.arn} />
+                    {selected.account_id && isMultiAccount && (
+                      <Row label="Account" value={selected.account_id} />
+                    )}
                     <Row label="Home Region" value={selected.home_region} />
                     <Row label="Logging" value={selected.is_logging ? 'Yes' : 'No'} />
                     <Row label="Multi-Region" value={selected.is_multi_region_trail ? 'Yes' : 'No'} />
@@ -241,6 +250,9 @@ export default function CloudTrailPage() {
                   <Section title="Event" icon={FileSearch}>
                     <Row label="Event ID" value={selected.event_id} />
                     <Row label="Event Name" value={selected.event_name} />
+                    {selected.account_id && isMultiAccount && (
+                      <Row label="Account" value={selected.account_id} />
+                    )}
                     <Row label="Event Source" value={selected.event_source} />
                     <Row label="Time" value={selected.event_time ? new Date(selected.event_time).toLocaleString() : '--'} />
                     <Row label="User" value={selected.username} />

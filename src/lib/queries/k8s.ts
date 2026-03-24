@@ -2,6 +2,7 @@ export const queries = {
   // EKS cluster list with VPC info / EKS 클러스터 목록 + VPC 정보
   eksClusterList: `
     SELECT
+      account_id,
       name AS cluster_name,
       status,
       version,

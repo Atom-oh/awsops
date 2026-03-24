@@ -37,6 +37,7 @@ export const queries = {
   // Volume list with attachment info / 볼륨 목록 (어태치 정보 포함)
   list: `
     SELECT
+      v.account_id,
       v.volume_id,
       v.volume_type,
       v.size,
@@ -58,6 +59,7 @@ export const queries = {
   // Volume detail with attachment mapping / 볼륨 상세 (어태치먼트 매핑)
   detail: `
     SELECT
+      v.account_id,
       v.volume_id,
       v.volume_type,
       v.size,
@@ -79,6 +81,7 @@ export const queries = {
   // Snapshots for a volume / 볼륨의 스냅샷 목록
   volumeSnapshots: `
     SELECT
+      account_id,
       snapshot_id,
       volume_id,
       volume_size,
@@ -106,6 +109,7 @@ export const queries = {
   // Snapshot list / 스냅샷 전체 목록
   snapshotList: `
     SELECT
+      s.account_id,
       s.snapshot_id,
       s.volume_id,
       s.volume_size,
@@ -123,6 +127,7 @@ export const queries = {
   // Attached instance lookup / 어태치된 인스턴스 조회
   attachedInstance: `
     SELECT
+      account_id,
       instance_id,
       instance_state,
       instance_type,

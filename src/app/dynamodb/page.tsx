@@ -10,6 +10,7 @@ import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
 import { Table, X, Database, Settings, Shield, Tag } from 'lucide-react';
 import { queries as dynamoQ } from '@/lib/queries/dynamodb';
+import { useAccountContext } from '@/contexts/AccountContext';
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -25,6 +26,8 @@ function formatBytes(bytes: number): string {
 
 export default function DynamoDBPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -37,6 +40,7 @@ export default function DynamoDBPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: dynamoQ.summary,
             tableList: dynamoQ.tableList,
@@ -49,7 +53,7 @@ export default function DynamoDBPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -60,7 +64,7 @@ export default function DynamoDBPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
       });
       const result = await res.json();
       if (result.detail?.rows?.[0]) {
@@ -197,6 +201,9 @@ export default function DynamoDBPage() {
                 </div>
 
                 <Section title="Table" icon={Database}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="Name" value={selected.name} />
                   <Row label="ARN" value={selected.arn} />
                   <Row label="Status" value={selected.table_status} />

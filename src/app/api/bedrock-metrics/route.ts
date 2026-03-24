@@ -3,12 +3,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { execFileSync } from 'child_process';
 import { getStats } from '@/lib/agentcore-stats';
+import { getAccountById, validateAccountId } from '@/lib/app-config';
 
 const REGION = 'ap-northeast-2';
 
-function awsCli(args: string[], timeout = 20000): any {
+function awsCli(args: string[], timeout = 20000, profileArgs: string[] = []): any {
   try {
-    const output = execFileSync('aws', [...args, '--region', REGION, '--output', 'json'],
+    const output = execFileSync('aws', [...args, ...profileArgs, '--output', 'json'],
       { encoding: 'utf-8', timeout });
     return JSON.parse(output);
   } catch { return null; }
@@ -75,6 +76,10 @@ export async function GET(request: NextRequest) {
   const action = searchParams.get('action') || 'summary';
   const range = searchParams.get('range') || '24h';
   const rangeConfig = RANGE_CONFIGS[range] || RANGE_CONFIGS['24h'];
+  const accountIdParam = searchParams.get('accountId') || undefined;
+  const account = accountIdParam && validateAccountId(accountIdParam) ? getAccountById(accountIdParam) : undefined;
+  const region = account?.region || REGION;
+  const profileArgs = account?.profile ? ['--profile', account.profile] : [];
 
   // Step 1: Discover active models / 활성 모델 발견
   if (action === 'models' || action === 'summary') {
@@ -82,9 +87,10 @@ export async function GET(request: NextRequest) {
       // List metrics to find active models / 활성 모델 찾기 위해 메트릭 목록 조회
       const listResult = awsCli([
         'cloudwatch', 'list-metrics',
+        '--region', region,
         '--namespace', 'AWS/Bedrock',
         '--metric-name', 'Invocations',
-      ]);
+      ], 20000, profileArgs);
 
       const modelIds = new Set<string>();
       for (const metric of (listResult?.Metrics || [])) {
@@ -156,8 +162,9 @@ export async function GET(request: NextRequest) {
 
       const result = awsCli([
         'cloudwatch', 'get-metric-data',
+        '--region', region,
         '--cli-input-json', `file://${tmpFile}`,
-      ], 30000);
+      ], 30000, profileArgs);
 
       try { execFileSync('rm', [tmpFile]); } catch {}
 

@@ -127,6 +127,7 @@ def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    args.pop('target_account_id', None)  # not used — HTTP proxy Lambda
 
     # Infer tool from parameters if not specified / 도구명이 없으면 파라미터로 추론
     if not t:

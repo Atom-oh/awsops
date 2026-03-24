@@ -3,7 +3,7 @@ AWS IAM MCP Lambda - Users, Roles, Groups, Policies, Access Keys, Policy Simulat
 AWS IAM MCP 람다 - 사용자, 역할, 그룹, 정책, 액세스 키, 정책 시뮬레이션
 """
 import json
-import boto3
+from cross_account import get_client, get_role_arn
 
 
 def lambda_handler(event, context):
@@ -11,6 +11,8 @@ def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    target_account_id = args.pop('target_account_id', None)
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
 
     # Auto-detect tool from parameters if not specified / tool_name 미지정 시 파라미터로 도구 자동 감지
     if not t:
@@ -27,7 +29,7 @@ def lambda_handler(event, context):
         args = params
 
     try:
-        iam = boto3.client('iam')
+        iam = get_client('iam', 'us-east-1', role_arn)
 
         # ========== Users / 사용자 ==========
         # List all IAM users with basic info / 모든 IAM 사용자 기본 정보 조회

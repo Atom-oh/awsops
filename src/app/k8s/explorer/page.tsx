@@ -8,6 +8,8 @@ import K9sDetailPanel from '@/components/k8s/K9sDetailPanel';
 import NamespaceFilter from '@/components/k8s/NamespaceFilter';
 import { queries as k8sQ } from '@/lib/queries/k8s';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -169,6 +171,8 @@ const TAB_KEYS = Object.keys(tabConfig);
 
 export default function K8sExplorerPage() {
   const { t } = useLanguage();
+  const { currentAccountId } = useAccountContext();
+
   const [activeTab, setActiveTab] = useState('pods');
   const [selectedNamespace, setSelectedNamespace] = useState('');
   const [searchText, setSearchText] = useState('');
@@ -193,6 +197,7 @@ export default function K8sExplorerPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             resources: currentConfig?.query ?? '',
             nodes: NODE_QUERY,
@@ -207,7 +212,7 @@ export default function K8sExplorerPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab]);
+  }, [activeTab, currentAccountId]);
 
   useEffect(() => {
     fetchData();

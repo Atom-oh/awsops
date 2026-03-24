@@ -14,7 +14,7 @@ export const queries = {
 
   vpcDetail: `
     SELECT
-      vpc_id, cidr_block, state, is_default, dhcp_options_id,
+      account_id, vpc_id, cidr_block, state, is_default, dhcp_options_id,
       instance_tenancy, owner_id, arn, region, tags
     FROM aws_vpc
     WHERE vpc_id = '{vpc_id}'
@@ -22,7 +22,7 @@ export const queries = {
 
   vpcList: `
     SELECT
-      vpc_id, cidr_block, state, is_default, owner_id, region,
+      account_id, vpc_id, cidr_block, state, is_default, owner_id, region,
       tags ->> 'Name' AS name
     FROM aws_vpc
     ORDER BY vpc_id
@@ -30,7 +30,7 @@ export const queries = {
 
   subnetList: `
     SELECT
-      subnet_id, vpc_id, cidr_block, availability_zone, state,
+      account_id, subnet_id, vpc_id, cidr_block, availability_zone, state,
       available_ip_address_count, map_public_ip_on_launch,
       tags ->> 'Name' AS name
     FROM aws_vpc_subnet
@@ -39,7 +39,7 @@ export const queries = {
 
   subnetDetail: `
     SELECT
-      subnet_id, subnet_arn, vpc_id, cidr_block, state, owner_id,
+      account_id, subnet_id, subnet_arn, vpc_id, cidr_block, state, owner_id,
       availability_zone, availability_zone_id,
       available_ip_address_count, map_public_ip_on_launch,
       default_for_az, assign_ipv6_address_on_creation,
@@ -50,7 +50,7 @@ export const queries = {
 
   sgList: `
     SELECT
-      group_id, group_name, vpc_id, description, region,
+      account_id, group_id, group_name, vpc_id, description, region,
       tags ->> 'Name' AS name
     FROM aws_vpc_security_group
     ORDER BY group_name
@@ -58,7 +58,7 @@ export const queries = {
 
   sgDetail: `
     SELECT
-      group_id, group_name, arn, vpc_id, description, owner_id,
+      account_id, group_id, group_name, arn, vpc_id, description, owner_id,
       ip_permissions, ip_permissions_egress,
       region, tags
     FROM aws_vpc_security_group
@@ -67,7 +67,7 @@ export const queries = {
 
   natList: `
     SELECT
-      nat_gateway_id, vpc_id, subnet_id, state, create_time,
+      account_id, nat_gateway_id, vpc_id, subnet_id, state, create_time,
       tags ->> 'Name' AS name
     FROM aws_vpc_nat_gateway
     ORDER BY create_time DESC
@@ -75,7 +75,7 @@ export const queries = {
 
   igwList: `
     SELECT
-      internet_gateway_id, owner_id, region,
+      account_id, internet_gateway_id, owner_id, region,
       tags ->> 'Name' AS name,
       jsonb_array_elements(attachments) ->> 'VpcId' AS vpc_id,
       jsonb_array_elements(attachments) ->> 'State' AS state
@@ -85,7 +85,7 @@ export const queries = {
 
   natDetail: `
     SELECT
-      nat_gateway_id, arn, state, vpc_id, subnet_id,
+      account_id, nat_gateway_id, arn, state, vpc_id, subnet_id,
       nat_gateway_addresses, create_time, delete_time,
       failure_code, failure_message, provisioned_bandwidth,
       region, tags
@@ -95,7 +95,7 @@ export const queries = {
 
   igwDetail: `
     SELECT
-      internet_gateway_id, owner_id, attachments,
+      account_id, internet_gateway_id, owner_id, attachments,
       region, tags
     FROM aws_vpc_internet_gateway
     WHERE internet_gateway_id = '{igw_id}'
@@ -104,6 +104,7 @@ export const queries = {
   // TGW Route Tables for a specific TGW / 특정 TGW의 라우트 테이블
   tgwRouteTables: `
     SELECT
+      account_id,
       transit_gateway_route_table_id,
       transit_gateway_id,
       state,
@@ -119,6 +120,7 @@ export const queries = {
   // TGW Routes for a specific route table / 특정 TGW 라우트 테이블의 라우트
   tgwRoutes: `
     SELECT
+      account_id,
       transit_gateway_route_table_id,
       destination_cidr_block,
       prefix_list_id,
@@ -133,6 +135,7 @@ export const queries = {
   // TGW Attachment detail / TGW 어태치먼트 상세
   tgwAttachmentDetail: `
     SELECT
+      account_id,
       transit_gateway_attachment_id,
       transit_gateway_id,
       transit_gateway_owner_id,
@@ -152,7 +155,7 @@ export const queries = {
   // VPC Resource Map: subnets + route tables + routes for a VPC / VPC 리소스 맵
   vpcSubnets: `
     SELECT
-      subnet_id, cidr_block, availability_zone,
+      account_id, subnet_id, cidr_block, availability_zone,
       available_ip_address_count, map_public_ip_on_launch,
       tags ->> 'Name' AS name
     FROM aws_vpc_subnet
@@ -162,7 +165,7 @@ export const queries = {
 
   vpcRouteTables: `
     SELECT
-      route_table_id,
+      account_id, route_table_id,
       associations::text AS associations,
       routes::text AS routes,
       tags ->> 'Name' AS name
@@ -173,7 +176,7 @@ export const queries = {
 
   routeTableList: `
     SELECT
-      route_table_id, vpc_id, owner_id, region,
+      account_id, route_table_id, vpc_id, owner_id, region,
       tags ->> 'Name' AS name,
       jsonb_array_length(associations) AS association_count,
       jsonb_array_length(routes) AS route_count,
@@ -185,7 +188,7 @@ export const queries = {
 
   routeTableDetail: `
     SELECT
-      route_table_id, vpc_id, owner_id, region,
+      account_id, route_table_id, vpc_id, owner_id, region,
       tags ->> 'Name' AS name,
       associations::text AS associations,
       routes::text AS routes,
@@ -196,7 +199,7 @@ export const queries = {
 
   tgwList: `
     SELECT
-      transit_gateway_id, state, description, owner_id,
+      account_id, transit_gateway_id, state, description, owner_id,
       amazon_side_asn, dns_support, vpn_ecmp_support,
       auto_accept_shared_attachments, default_route_table_association,
       default_route_table_propagation, creation_time, region,
@@ -207,7 +210,7 @@ export const queries = {
 
   tgwDetail: `
     SELECT
-      transit_gateway_id, transit_gateway_arn, state, description, owner_id,
+      account_id, transit_gateway_id, transit_gateway_arn, state, description, owner_id,
       amazon_side_asn, dns_support, vpn_ecmp_support, multicast_support,
       auto_accept_shared_attachments, default_route_table_association,
       default_route_table_propagation,
@@ -219,7 +222,7 @@ export const queries = {
 
   tgwAttachments: `
     SELECT
-      transit_gateway_attachment_id, transit_gateway_id,
+      account_id, transit_gateway_attachment_id, transit_gateway_id,
       resource_id, resource_type, state,
       association_state, creation_time,
       tags ->> 'Name' AS name
@@ -229,13 +232,13 @@ export const queries = {
 
   elbList: `
     SELECT
-      name, arn, type, scheme, state_code, vpc_id, dns_name,
+      account_id, name, arn, type, scheme, state_code, vpc_id, dns_name,
       ip_address_type, created_time, region,
       'ALB' AS lb_type
     FROM aws_ec2_application_load_balancer
     UNION ALL
     SELECT
-      name, arn, type, scheme, state_code, vpc_id, dns_name,
+      account_id, name, arn, type, scheme, state_code, vpc_id, dns_name,
       ip_address_type, created_time, region,
       'NLB' AS lb_type
     FROM aws_ec2_network_load_balancer
@@ -244,7 +247,7 @@ export const queries = {
 
   elbDetail: `
     SELECT
-      name, arn, type, scheme, state_code, vpc_id, dns_name,
+      account_id, name, arn, type, scheme, state_code, vpc_id, dns_name,
       ip_address_type, canonical_hosted_zone_id,
       availability_zones, security_groups,
       created_time, region, tags
@@ -252,7 +255,7 @@ export const queries = {
     WHERE name = '{name}'
     UNION ALL
     SELECT
-      name, arn, type, scheme, state_code, vpc_id, dns_name,
+      account_id, name, arn, type, scheme, state_code, vpc_id, dns_name,
       ip_address_type, canonical_hosted_zone_id,
       availability_zones, security_groups,
       created_time, region, tags

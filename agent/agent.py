@@ -256,7 +256,13 @@ SKILL_BASE = {
 }
 
 # Common footer appended to all prompts / 모든 프롬프트에 추가되는 공통 푸터
-COMMON_FOOTER = "\n\nFormat responses in markdown. Respond in the user's language."
+COMMON_FOOTER = """
+
+## Multi-Account Rules
+- If [Target Account: XXXX], MUST pass target_account_id='XXXX' to EVERY tool call.
+- This is mandatory.
+
+Format responses in markdown. Respond in the user's language."""
 
 
 def build_skill_prompt(gateway_role, tools):
@@ -338,6 +344,18 @@ def build_conversation(payload):
     return user_input, []
 
 
+def build_account_directive(account_id, account_alias):
+    """Build cross-account directive for system prompt. / 시스템 프롬프트용 크로스 어카운트 지시문 생성."""
+    if not account_id or account_id == '__all__':
+        return ''
+    return f"""
+
+## MANDATORY: Target Account
+You are operating on AWS account: {account_alias} ({account_id}).
+You MUST include "target_account_id": "{account_id}" in EVERY tool call's arguments.
+This is a non-negotiable requirement for cross-account access."""
+
+
 # Main handler / 메인 핸들러
 @app.entrypoint
 def handler(payload):
@@ -348,7 +366,16 @@ def handler(payload):
     gateway_role = payload.get("gateway", DEFAULT_GATEWAY)
     gateway_url = GATEWAYS.get(gateway_role, GATEWAYS[DEFAULT_GATEWAY])
 
-    logging.info(f"Gateway: {gateway_role} -> {gateway_url} (history: {len(history)} messages)")
+    # Extract cross-account info / 크로스 어카운트 정보 추출
+    account_id = payload.get('accountId', '')
+    account_alias = payload.get('accountAlias', '')
+    account_directive = build_account_directive(account_id, account_alias)
+
+    # Prefix user input with account context / 사용자 입력에 어카운트 컨텍스트 접두사 추가
+    if account_id and account_id != '__all__':
+        user_input = f"[Target Account: {account_alias or account_id} ({account_id})] {user_input}"
+
+    logging.info(f"Gateway: {gateway_role} -> {gateway_url} (history: {len(history)} messages, account: {account_id or 'default'})")
 
     try:
         mcp_client = MCPClient(lambda: create_gateway_transport(gateway_url))
@@ -358,8 +385,9 @@ def handler(payload):
             tool_names = [t.tool_name for t in tools]
             logging.info(f"Gateway [{gateway_role}] MCP tools ({len(tools)}): {tool_names}")
 
-            # Build skill prompt: static patterns + dynamic tool list / 스킬 프롬프트 구성: 정적 패턴 + 동적 도구 목록
-            system_prompt = build_skill_prompt(gateway_role, tools)
+            # Build skill prompt: static patterns + dynamic tool list + account directive
+            # 스킬 프롬프트 구성: 정적 패턴 + 동적 도구 목록 + 어카운트 지시문
+            system_prompt = build_skill_prompt(gateway_role, tools) + account_directive
 
             agent = Agent(
                 model=model,
@@ -374,7 +402,7 @@ def handler(payload):
     except Exception as e:
         logging.error(f"Gateway MCP error [{gateway_role}]: {e}")
         # Fallback: Bedrock direct with base prompt only / 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출
-        base_prompt = SKILL_BASE.get(gateway_role, SKILL_BASE[DEFAULT_GATEWAY]) + COMMON_FOOTER
+        base_prompt = SKILL_BASE.get(gateway_role, SKILL_BASE[DEFAULT_GATEWAY]) + COMMON_FOOTER + account_directive
         agent = Agent(
             model=model,
             system_prompt=base_prompt,

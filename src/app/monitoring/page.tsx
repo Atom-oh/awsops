@@ -10,11 +10,15 @@ import { Activity, Cpu, HardDrive, Database, X, MemoryStick, Wifi, ArrowLeft, Ca
 import { LineChart, Line, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { queries as metQ } from '@/lib/queries/metrics';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 type TabKey = 'ec2' | 'network' | 'memory' | 'ebs' | 'rds';
 
 export default function MonitoringPage() {
   const { t } = useLanguage();
+  const { currentAccountId } = useAccountContext();
+
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('ec2');
@@ -35,6 +39,7 @@ export default function MonitoringPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             ec2CpuLatest: metQ.ec2CpuLatest,
             ec2CpuHourly: metQ.ec2CpuHourly,
@@ -52,7 +57,7 @@ export default function MonitoringPage() {
       setData(await res.json());
       fetch('/awsops/api/steampipe?action=cache-status').then(r => r.json()).then(d => setCacheStatus(d)).catch(() => {});
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => {
     fetchData();
@@ -80,7 +85,7 @@ export default function MonitoringPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { metrics: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { metrics: sql } }),
       });
       const result = await res.json();
       const rows = result.metrics?.rows || [];
@@ -156,7 +161,7 @@ export default function MonitoringPage() {
           const outSql = metQ.ec2NetworkDetail.replace('{metric}', 'NetworkOut').replace('{instance_id}', id);
           const res = await fetch('/awsops/api/steampipe', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ queries: { netIn: inSql, netOut: outSql } }),
+            body: JSON.stringify({ accountId: currentAccountId, queries: { netIn: inSql, netOut: outSql } }),
           });
           const result = await res.json();
           const cached = { netIn: result.netIn?.rows || [], netOut: result.netOut?.rows || [] };
@@ -195,7 +200,7 @@ export default function MonitoringPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { netIn: inSql, netOut: outSql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { netIn: inSql, netOut: outSql } }),
       });
       const result = await res.json();
       const cached = { netIn: result.netIn?.rows || [], netOut: result.netOut?.rows || [] };
@@ -251,7 +256,7 @@ export default function MonitoringPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { mem: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { mem: sql } }),
       });
       const result = await res.json();
       const rows = result.mem?.rows || [];

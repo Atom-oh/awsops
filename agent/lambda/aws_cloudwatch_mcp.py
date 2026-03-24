@@ -3,9 +3,9 @@ AWS CloudWatch MCP Lambda - Metrics, Alarms, Logs, Log Insights
 AWS CloudWatch MCP 람다 - 지표, 알람, 로그, 로그 인사이트
 """
 import json
-import boto3
 import time
 from datetime import datetime, timedelta
+from cross_account import get_client, get_role_arn
 
 
 def lambda_handler(event, context):
@@ -13,6 +13,8 @@ def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    target_account_id = args.pop('target_account_id', None)
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
     region = args.get("region", "ap-northeast-2")
 
     # Auto-detect tool from parameters if not specified / tool_name 미지정 시 파라미터로 도구 자동 감지
@@ -28,8 +30,8 @@ def lambda_handler(event, context):
         args = params
 
     try:
-        cw = boto3.client('cloudwatch', region_name=region)
-        logs = boto3.client('logs', region_name=region)
+        cw = get_client('cloudwatch', region, role_arn)
+        logs = get_client('logs', region, role_arn)
 
         # ========== Metrics / 지표 ==========
         # Get metric statistics for a given time range / 지정 시간 범위의 지표 통계 조회

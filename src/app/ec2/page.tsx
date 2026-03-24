@@ -10,6 +10,8 @@ import DataTable from '@/components/table/DataTable';
 import { Server, X, Cpu, HardDrive, Network, Shield, Tag, Search } from 'lucide-react';
 import { queries as ec2Q } from '@/lib/queries/ec2';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -17,6 +19,8 @@ interface PageData {
 
 export default function EC2Page() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -33,6 +37,7 @@ export default function EC2Page() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: ec2Q.summary,
             statusCount: ec2Q.statusCount,
@@ -43,7 +48,7 @@ export default function EC2Page() {
       });
       setData(await res.json());
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -54,7 +59,7 @@ export default function EC2Page() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
       });
       const result = await res.json();
       if (result.detail?.rows?.[0]) {
@@ -240,6 +245,9 @@ export default function EC2Page() {
 
                 {/* Instance Info */}
                 <Section title="Instance" icon={Server}>
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="Instance ID" value={selected.instance_id} />
                   <Row label="Image (AMI)" value={selected.image_id} />
                   <Row label="Architecture" value={selected.architecture} />

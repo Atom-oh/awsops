@@ -6,7 +6,7 @@ AWS EKS MCP Lambda - EKS 클러스터 관리, K8s 리소스, CloudWatch, IAM
 # AgentCore Gateway MCP를 통해 9개 이상의 EKS 운영 도구를 제공합니다.
 """
 import json
-import boto3
+from cross_account import get_client, get_role_arn
 
 
 def lambda_handler(event, context):
@@ -14,6 +14,8 @@ def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    target_account_id = args.pop('target_account_id', None)
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
 
     # Auto-detect tool from parameters if tool_name not provided / tool_name이 없으면 파라미터로 도구를 자동 감지
     if not t:
@@ -42,7 +44,7 @@ def lambda_handler(event, context):
     try:
         # List all EKS clusters with status and version / 모든 EKS 클러스터를 상태 및 버전과 함께 목록 조회
         if t == "list_eks_clusters":
-            eks = boto3.client('eks')
+            eks = get_client('eks', 'ap-northeast-2', role_arn)
             clusters = eks.list_clusters().get('clusters', [])
             details = []
             for c in clusters[:10]:
@@ -53,7 +55,7 @@ def lambda_handler(event, context):
 
         # Get EKS cluster VPC/network configuration / EKS 클러스터 VPC/네트워크 구성 조회
         elif t == "get_eks_vpc_config":
-            eks = boto3.client('eks')
+            eks = get_client('eks', 'ap-northeast-2', role_arn)
             # Describe cluster to extract VPC config / 클러스터 조회하여 VPC 설정 추출
             cluster = eks.describe_cluster(name=args['cluster_name'])['cluster']
             vpc = cluster.get('resourcesVpcConfig', {})
@@ -68,7 +70,7 @@ def lambda_handler(event, context):
 
         # Get EKS cluster insights (upgrade, security recommendations) / EKS 클러스터 인사이트 조회 (업그레이드, 보안 권장사항)
         elif t == "get_eks_insights":
-            eks = boto3.client('eks')
+            eks = get_client('eks', 'ap-northeast-2', role_arn)
             cn = args['cluster_name']
             if args.get('insight_id'):
                 resp = eks.describe_insight(clusterName=cn, id=args['insight_id'])
@@ -104,7 +106,7 @@ def lambda_handler(event, context):
         # Get CloudWatch logs for EKS (application, host, performance, control-plane)
         # EKS CloudWatch 로그 조회 (애플리케이션, 호스트, 성능, 컨트롤 플레인)
         elif t == "get_cloudwatch_logs":
-            logs = boto3.client('logs')
+            logs = get_client('logs', 'ap-northeast-2', role_arn)
             cn = args['cluster_name']
             log_type = args.get('log_type', 'application')
             # Map log type to CloudWatch log group name / 로그 유형을 CloudWatch 로그 그룹 이름으로 매핑
@@ -132,7 +134,7 @@ def lambda_handler(event, context):
 
         # Get CloudWatch metrics for EKS Container Insights / EKS Container Insights CloudWatch 메트릭 조회
         elif t == "get_cloudwatch_metrics":
-            cw = boto3.client('cloudwatch')
+            cw = get_client('cloudwatch', 'ap-northeast-2', role_arn)
             import time, datetime
             minutes = args.get('minutes', 60)
             end = datetime.datetime.utcnow()
@@ -162,7 +164,7 @@ def lambda_handler(event, context):
 
         # Get IAM policies attached to an EKS role (managed + inline) / EKS 역할에 연결된 IAM 정책 조회 (관리형 + 인라인)
         elif t == "get_policies_for_role":
-            iam = boto3.client('iam')
+            iam = get_client('iam', 'us-east-1', role_arn)
             rn = args['role_name']
             # Fetch role details, managed policies, and inline policy names / 역할 상세, 관리형 정책, 인라인 정책 이름 조회
             role = iam.get_role(RoleName=rn)['Role']

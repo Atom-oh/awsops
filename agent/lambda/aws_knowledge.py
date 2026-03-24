@@ -51,6 +51,7 @@ def lambda_handler(event, context):
     # Determine tool name / 도구 이름 결정
     tool_name = params.get("tool_name", "")
     arguments = params.get("arguments", params)
+    arguments.pop('target_account_id', None)  # strip — not applicable to HTTP proxy
 
     # Infer tool from parameters if not specified / 도구명이 없으면 파라미터로 추론
     if not tool_name:

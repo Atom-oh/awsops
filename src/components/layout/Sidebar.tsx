@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import AccountSelector from '@/components/layout/AccountSelector';
+import { useAccountContext } from '@/contexts/AccountContext';
 import {
   LayoutDashboard,
   Server,
@@ -30,6 +32,7 @@ import {
   Search,
   Sparkles,
   LogOut,
+  Layers,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -52,6 +55,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'sidebar.dashboard', href: '/', icon: LayoutDashboard },
       { labelKey: 'sidebar.aiAssistant', href: '/ai', icon: BrainCircuit },
       { labelKey: 'sidebar.agentcore', href: '/agentcore', icon: Activity },
+      { labelKey: 'sidebar.accounts', href: '/accounts', icon: Layers },
     ],
   },
   {
@@ -116,6 +120,8 @@ export default function Sidebar() {
   const [customerLogo, setCustomerLogo] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState<string | null>(null);
   const [customerLogoBg, setCustomerLogoBg] = useState<string>('dark'); // 'light' for white bg, 'dark' for transparent / 밝은 로고는 light, 어두운 로고는 dark
+  const { getFeatures, isMultiAccount } = useAccountContext();
+  const features = getFeatures();
 
   useEffect(() => {
     fetch('/awsops/api/steampipe?action=config')
@@ -205,6 +211,9 @@ export default function Sidebar() {
         </div>
       </div>
 
+      {/* Account Selector (multi-account only) */}
+      <AccountSelector />
+
       {/* Navigation / 네비게이션 */}
       <nav className="flex-1 overflow-y-auto py-2">
         {navGroups.map((group, gi) => (
@@ -217,7 +226,17 @@ export default function Sidebar() {
             )}
             <div className="space-y-0.5">
               {group.items
-                .filter(item => costEnabled || item.href !== '/cost')
+                .filter(item => {
+                  // Cost items: show if global costEnabled AND (single-account OR account has cost)
+                  if (item.href === '/cost' || item.href === '/container-cost' || item.href === '/eks-container-cost') {
+                    return costEnabled && (!isMultiAccount || features.costEnabled);
+                  }
+                  // K8s items: show if single-account OR account has EKS
+                  if (item.href.startsWith('/k8s')) {
+                    return !isMultiAccount || features.eksEnabled;
+                  }
+                  return true;
+                })
                 .map(renderNavItem)}
             </div>
           </div>

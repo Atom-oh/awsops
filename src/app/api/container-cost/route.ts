@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { execFileSync } from 'child_process';
 import { runQuery } from '@/lib/steampipe';
-import { getConfig } from '@/lib/app-config';
+import { getConfig, getAccountById, validateAccountId } from '@/lib/app-config';
 import { queries } from '@/lib/queries/container-cost';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
@@ -12,9 +12,9 @@ import { tmpdir } from 'os';
 const REGION = 'ap-northeast-2';
 
 // AWS CLI helper — same pattern as msk/route.ts / AWS CLI 헬퍼 — msk/route.ts와 동일 패턴
-function awsCli(args: string[]): any | null {
+function awsCli(args: string[], profileArgs: string[] = []): any | null {
   try {
-    const result = execFileSync('aws', [...args, '--region', REGION, '--output', 'json'], {
+    const result = execFileSync('aws', [...args, ...profileArgs, '--output', 'json'], {
       encoding: 'utf-8', timeout: 30000,
     });
     return JSON.parse(result);
@@ -37,7 +37,12 @@ function calculateFargateCost(cpuUnits: number, memoryMb: number, hours: number)
 }
 
 // Container Insights metrics query / Container Insights 메트릭 쿼리
-function getContainerInsightsMetrics(clusterName: string, serviceName?: string): any | null {
+function getContainerInsightsMetrics(
+  clusterName: string,
+  serviceName?: string,
+  region: string = REGION,
+  profileArgs: string[] = []
+): any | null {
   const now = new Date();
   const start = new Date(now.getTime() - 3600 * 1000); // 1 hour ago / 1시간 전
 
@@ -74,7 +79,7 @@ function getContainerInsightsMetrics(clusterName: string, serviceName?: string):
   const tmpFile = join(tmpdir(), `container-cost-${Date.now()}.json`);
   try {
     writeFileSync(tmpFile, JSON.stringify(input));
-    const result = awsCli(['cloudwatch', 'get-metric-data', '--cli-input-json', `file://${tmpFile}`]);
+    const result = awsCli(['cloudwatch', 'get-metric-data', '--region', region, '--cli-input-json', `file://${tmpFile}`], profileArgs);
     unlinkSync(tmpFile);
 
     if (!result?.MetricDataResults) return null;
@@ -96,11 +101,16 @@ function getContainerInsightsMetrics(clusterName: string, serviceName?: string):
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action') || 'summary';
+  const accountIdParam = searchParams.get('accountId') || undefined;
+  const account = accountIdParam && validateAccountId(accountIdParam) ? getAccountById(accountIdParam) : undefined;
+  const region = account?.region || REGION;
+  const profileArgs = account?.profile ? ['--profile', account.profile] : [];
+  const queryOpts = accountIdParam && validateAccountId(accountIdParam) ? { accountId: accountIdParam } : undefined;
 
   try {
     if (action === 'tasks') {
       // ECS running tasks / ECS 실행 중 Task 목록
-      const result = await runQuery(queries.ecsRunningTasks);
+      const result = await runQuery(queries.ecsRunningTasks, queryOpts);
       if (result.error) return NextResponse.json({ error: result.error }, { status: 500 });
 
       // Calculate cost per task / Task별 비용 계산
@@ -127,7 +137,7 @@ export async function GET(request: NextRequest) {
       const serviceName = searchParams.get('service') || undefined;
       if (!clusterName) return NextResponse.json({ error: 'cluster required' }, { status: 400 });
 
-      const metrics = getContainerInsightsMetrics(clusterName, serviceName);
+      const metrics = getContainerInsightsMetrics(clusterName, serviceName, region, profileArgs);
       if (!metrics) {
         return NextResponse.json({
           metrics: null,
@@ -140,9 +150,9 @@ export async function GET(request: NextRequest) {
 
     // Default: summary / 기본: 요약
     const [tasksResult, servicesResult, clustersResult] = await Promise.all([
-      runQuery(queries.ecsRunningTasks),
-      runQuery(queries.ecsServiceSummary),
-      runQuery(queries.ecsClusters),
+      runQuery(queries.ecsRunningTasks, queryOpts),
+      runQuery(queries.ecsServiceSummary, queryOpts),
+      runQuery(queries.ecsClusters, queryOpts),
     ]);
 
     const tasks = (tasksResult.rows || []).map((t: any) => {

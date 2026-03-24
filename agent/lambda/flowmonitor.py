@@ -1,11 +1,16 @@
 """VPC Flow Log Monitor Lambda / VPC 흐름 로그 모니터링 Lambda"""
 # VPC 흐름 로그 조회 및 분석 / Query and analyze VPC flow logs
 import boto3, json
+from cross_account import get_client, get_role_arn
 
 def lambda_handler(event, context):
     # 파라미터 추출 / Extract parameters
-    ec2 = boto3.client('ec2')
     params = event if isinstance(event, dict) else json.loads(event)
+    args = params.get("arguments", params)
+    target_account_id = args.pop('target_account_id', None)
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
+    region = args.get("region", "ap-northeast-2")
+    ec2 = get_client('ec2', region, role_arn)
     vpc_id = params['vpc_id']
 
     # 흐름 로그 조회 / Query flow logs

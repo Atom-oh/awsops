@@ -10,6 +10,8 @@ import DataTable from '@/components/table/DataTable';
 import { Bell, X, Settings } from 'lucide-react';
 import { queries as cwQ } from '@/lib/queries/cloudwatch';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 interface PageData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -17,6 +19,8 @@ interface PageData {
 
 export default function CloudWatchPage() {
   const { t } = useLanguage();
+  const { currentAccountId, isMultiAccount } = useAccountContext();
+
   const [data, setData] = useState<PageData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -29,6 +33,7 @@ export default function CloudWatchPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             summary: cwQ.summary,
             alarmList: cwQ.alarmList,
@@ -42,7 +47,7 @@ export default function CloudWatchPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -53,7 +58,7 @@ export default function CloudWatchPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
       });
       const result = await res.json();
       if (result.detail?.rows?.[0]) {
@@ -176,6 +181,9 @@ export default function CloudWatchPage() {
                 <Section title="Alarm" icon={Bell}>
                   <Row label="Name" value={selected.name} />
                   <Row label="ARN" value={selected.arn} />
+                  {selected.account_id && isMultiAccount && (
+                    <Row label="Account" value={selected.account_id} />
+                  )}
                   <Row label="State" value={selected.state_value} />
                   <Row label="State Reason" value={selected.state_reason} />
                   <Row label="Namespace" value={selected.namespace} />

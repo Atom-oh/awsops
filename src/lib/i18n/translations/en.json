@@ -51,6 +51,7 @@
   "sidebar.dashboard": "Dashboard",
   "sidebar.aiAssistant": "AI Assistant",
   "sidebar.agentcore": "AgentCore",
+  "sidebar.accounts": "Accounts",
   "sidebar.compute": "Compute",
   "sidebar.ec2": "EC2",
   "sidebar.lambda": "Lambda",

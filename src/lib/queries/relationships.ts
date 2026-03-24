@@ -2,6 +2,7 @@ export const queries = {
   // EC2 -> VPC, Subnet, SGs
   ec2Relations: `
     SELECT
+      i.account_id,
       i.instance_id,
       i.instance_type,
       i.instance_state,
@@ -17,6 +18,7 @@ export const queries = {
   // VPC -> Subnets
   vpcSubnets: `
     SELECT
+      v.account_id,
       v.vpc_id,
       v.cidr_block AS vpc_cidr,
       v.tags ->> 'Name' AS vpc_name,
@@ -32,6 +34,7 @@ export const queries = {
   // ELB -> VPC, SGs
   elbRelations: `
     SELECT
+      account_id,
       name AS elb_name,
       arn,
       type,
@@ -43,6 +46,7 @@ export const queries = {
     FROM aws_ec2_application_load_balancer
     UNION ALL
     SELECT
+      account_id,
       name AS elb_name,
       arn,
       type,
@@ -56,7 +60,7 @@ export const queries = {
 
   // NAT GW -> VPC, Subnet
   natRelations: `
-    SELECT nat_gateway_id, vpc_id, subnet_id, state,
+    SELECT account_id, nat_gateway_id, vpc_id, subnet_id, state,
       tags ->> 'Name' AS name
     FROM aws_vpc_nat_gateway
   `,
@@ -64,6 +68,7 @@ export const queries = {
   // IGW -> VPC
   igwRelations: `
     SELECT
+      account_id,
       internet_gateway_id,
       jsonb_array_elements(attachments) ->> 'VpcId' AS vpc_id,
       tags ->> 'Name' AS name
@@ -73,6 +78,7 @@ export const queries = {
   // TGW -> Attachments
   tgwRelations: `
     SELECT
+      account_id,
       transit_gateway_attachment_id,
       transit_gateway_id,
       resource_id,
@@ -85,6 +91,7 @@ export const queries = {
   // RDS -> VPC, Subnet Group
   rdsRelations: `
     SELECT
+      account_id,
       db_instance_identifier,
       engine,
       class AS db_instance_class,

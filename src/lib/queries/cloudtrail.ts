@@ -8,7 +8,7 @@ export const queries = {
   `,
 
   trailList: `
-    SELECT name, home_region, is_multi_region_trail, is_logging,
+    SELECT account_id, name, home_region, is_multi_region_trail, is_logging,
       log_file_validation_enabled, s3_bucket_name,
       is_organization_trail, include_global_service_events,
       latest_delivery_time, region
@@ -17,7 +17,7 @@ export const queries = {
   `,
 
   trailDetail: `
-    SELECT name, arn, home_region, is_multi_region_trail, is_logging,
+    SELECT account_id, name, arn, home_region, is_multi_region_trail, is_logging,
       log_file_validation_enabled, s3_bucket_name, s3_key_prefix,
       sns_topic_arn, kms_key_id, log_group_arn, cloudwatch_logs_role_arn,
       is_organization_trail, include_global_service_events,
@@ -31,7 +31,7 @@ export const queries = {
   `,
 
   recentEvents: `
-    SELECT event_id, event_name, event_source, username,
+    SELECT account_id, event_id, event_name, event_source, username,
       event_time, read_only, resource_name, resource_type,
       access_key_id, cloud_trail_event
     FROM aws_cloudtrail_lookup_event
@@ -40,7 +40,7 @@ export const queries = {
   `,
 
   writeEvents: `
-    SELECT event_id, event_name, event_source, username,
+    SELECT account_id, event_id, event_name, event_source, username,
       event_time, resource_name, resource_type,
       access_key_id, cloud_trail_event
     FROM aws_cloudtrail_lookup_event

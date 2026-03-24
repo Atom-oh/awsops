@@ -10,6 +10,8 @@ import DataTable from '@/components/table/DataTable';
 import { DollarSign, Info, X, TrendingUp, Filter, Calendar } from 'lucide-react';
 import { queries as costQ } from '@/lib/queries/cost';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 // Period options / 기간 옵션
 const PERIODS = [
@@ -21,6 +23,8 @@ const PERIODS = [
 
 export default function CostPage() {
   const { t } = useLanguage();
+  const { currentAccountId } = useAccountContext();
+
   const [data, setData] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -33,6 +37,8 @@ export default function CostPage() {
   const [usingSnapshot, setUsingSnapshot] = useState(false);
   const [snapshotDate, setSnapshotDate] = useState('');
 
+  const costAcctQ = currentAccountId && currentAccountId !== '__all__' ? `&accountId=${currentAccountId}` : '';
+
   const fetchData = useCallback(async (bustCache = false) => {
     setLoading(true);
     try {
@@ -40,6 +46,7 @@ export default function CostPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: { monthlyCost: costQ.monthlyCost, dailyCost: costQ.dailyCost, serviceCost: costQ.serviceCost },
         }),
       });
@@ -55,11 +62,12 @@ export default function CostPage() {
     // Live query failed or empty — try cached snapshot
     await loadSnapshot();
     setLoading(false);
-  }, []);
+  }, [currentAccountId]);
 
   const loadSnapshot = useCallback(async () => {
     try {
-      const res = await fetch('/awsops/api/steampipe?action=cost-snapshot');
+      const acctQ = currentAccountId && currentAccountId !== '__all__' ? `&accountId=${currentAccountId}` : '';
+      const res = await fetch(`/awsops/api/steampipe?action=cost-snapshot${acctQ}`);
       if (!res.ok) return;
       const snap = await res.json();
       setData({
@@ -75,7 +83,7 @@ export default function CostPage() {
 
   // Cost Explorer 가용성 먼저 확인 후 데이터 로딩
   useEffect(() => {
-    fetch('/awsops/api/steampipe?action=cost-check')
+    fetch(`/awsops/api/steampipe?action=cost-check${costAcctQ}`)
       .then(r => r.json())
       .then(d => {
         setCostAvailable(d.available !== false);
@@ -101,7 +109,7 @@ export default function CostPage() {
       const res = await fetch('/awsops/api/steampipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: { detail: sql } }),
+        body: JSON.stringify({ accountId: currentAccountId, queries: { detail: sql } }),
       });
       const result = await res.json();
       setSelected({ service, rows: result.detail?.rows || [] });
@@ -236,7 +244,7 @@ export default function CostPage() {
             <button
               onClick={() => {
                 setCostAvailable(null);
-                fetch('/awsops/api/steampipe?action=cost-check&bustCache=true')
+                fetch(`/awsops/api/steampipe?action=cost-check&bustCache=true${costAcctQ}`)
                   .then(r => r.json())
                   .then(d => {
                     setCostAvailable(d.available !== false);
@@ -271,7 +279,7 @@ export default function CostPage() {
             onClick={() => {
               setCostAvailable(null);
               setUsingSnapshot(false);
-              fetch('/awsops/api/steampipe?action=cost-check&bustCache=true')
+              fetch(`/awsops/api/steampipe?action=cost-check&bustCache=true${costAcctQ}`)
                 .then(r => r.json())
                 .then(d => {
                   setCostAvailable(d.available !== false);

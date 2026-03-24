@@ -3,7 +3,7 @@ AWS Valkey/ElastiCache MCP Lambda - cluster management, cache operations
 AWS Valkey/ElastiCache MCP 람다 - 클러스터 관리, 캐시 운영
 """
 import json
-import boto3
+from cross_account import get_client, get_role_arn
 
 
 def lambda_handler(event, context):
@@ -11,6 +11,8 @@ def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    target_account_id = args.pop('target_account_id', None)
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
     region = args.get("region", "ap-northeast-2")
 
     # Auto-detect tool from parameters if not specified / tool_name 미지정 시 파라미터로 도구 자동 감지
@@ -22,7 +24,7 @@ def lambda_handler(event, context):
         args = params
 
     try:
-        ec = boto3.client('elasticache', region_name=region)
+        ec = get_client('elasticache', region, role_arn)
 
         # List all ElastiCache clusters with node info / 모든 ElastiCache 클러스터 및 노드 정보 조회
         if t == "list_cache_clusters":

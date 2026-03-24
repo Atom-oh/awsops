@@ -8,6 +8,8 @@ import DataTable from '@/components/table/DataTable';
 import { Network, Globe, Server, Share2 } from 'lucide-react';
 import { queries as k8sQ } from '@/lib/queries/k8s';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAccountContext } from '@/contexts/AccountContext';
+
 
 interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
@@ -15,6 +17,8 @@ interface DashboardData {
 
 export default function K8sServicesPage() {
   const { t } = useLanguage();
+  const { currentAccountId } = useAccountContext();
+
   const [data, setData] = useState<DashboardData>({});
   const [_loading, setLoading] = useState(true);
 
@@ -25,6 +29,7 @@ export default function K8sServicesPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          accountId: currentAccountId,
           queries: {
             serviceList: k8sQ.serviceList,
           },
@@ -36,7 +41,7 @@ export default function K8sServicesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

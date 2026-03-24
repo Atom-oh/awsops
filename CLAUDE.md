@@ -1,4 +1,4 @@
-# AWSops 대시보드 v1.6.0 — Claude 컨텍스트
+# AWSops 대시보드 v1.7.0 — Claude 컨텍스트
 
 ## 프로젝트 개요
 실시간 AWS/Kubernetes 리소스 모니터링, 네트워크 문제 해결, CIS 컴플라이언스, AI 기반 분석을 제공하는 운영 대시보드.
@@ -6,29 +6,38 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 
 ## 아키텍처
 - **프론트엔드**: Next.js 14 (App Router) + Tailwind CSS 다크 테마 + Recharts + React Flow
-- **데이터**: Steampipe 내장 PostgreSQL (포트 9193) — AWS 380+ 테이블, K8s 60+ 테이블
+- **데이터**: Steampipe 내장 PostgreSQL (포트 9193) — AWS 380+ 테이블, K8s 60+ 테이블, 멀티 어카운트 Aggregator
 - **AI 엔진**: Bedrock Sonnet/Opus 4.6 + AgentCore Runtime (Strands) + 8 Gateway (125 MCP 도구) + 19 Lambda
 - **인증**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1) + CloudFront
 - **인프라**: CDK (`infra-cdk/`) → CloudFront (CACHING_DISABLED) → ALB → EC2 (t4g.2xlarge, Private Subnet)
 
-## 현황 (v1.6.0)
+## 현황 (v1.7.0)
 | 항목 | 수치 |
 |------|------|
 | 페이지 | 35 |
 | 라우트 | 50 |
 | SQL 쿼리 파일 | 25 |
 | API 라우트 | 13 |
-| 컴포넌트 | 14 |
+| 컴포넌트 | 15 (AccountBadge 추가) |
 | MCP 도구 | 125 (8 Gateway, 19 Lambda) |
-| ADR | 7 (001-007) |
+| ADR | 8 (001-008) |
 
 ## 필수 규칙
 
 ### 데이터 접근
 - 모든 쿼리는 `src/lib/steampipe.ts`의 **pg Pool**을 통해 실행 — Steampipe CLI 사용 금지
 - 풀 설정: `max: 5, statement_timeout: 120s, batchQuery: 5 sequential`
-- 결과는 node-cache를 통해 5분간 캐싱
+- 결과는 node-cache를 통해 5분간 캐싱 (멀티 어카운트: 캐시키에 accountId 접두사)
 - `steampipe query "SQL"` CLI는 660배 느림 — 절대 사용 금지
+
+### 멀티 어카운트
+- `data/config.json`의 `accounts[]` 배열로 계정 관리 — 코드 수정 불필요
+- Steampipe Aggregator 패턴: `aws` = 모든 계정 통합, `aws_123456789012` = 개별 계정
+- `buildSearchPath(accountId)` → `public, aws_{id}, kubernetes, trivy`로 계정별 쿼리 스코핑
+- 모든 페이지: `useAccount()` 훅 → `accountId: currentAccountId` 전달
+- DataTable: `isMultiAccount && data[0].account_id` 감지 시 Account 컬럼 자동 추가
+- Cost 쿼리: `runCostQueriesPerAccount()`로 계정별 실행 후 `account_id` 태깅 병합
+- SQL 쿼리: AWS 테이블 `list` 쿼리에 `account_id` 컬럼 필수 포함
 
 ### Next.js 규칙
 - `basePath: '/awsops'` — `next.config.mjs`에 설정
@@ -70,11 +79,11 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 ## 주요 파일
 
 ### 핵심 라이브러리 (`src/lib/`)
-- `steampipe.ts` — pg 풀 + 배치 쿼리 + 캐시 + Cost 가용성 probe
+- `steampipe.ts` — pg 풀 + 배치 쿼리 + 캐시 + Cost 가용성 probe + buildSearchPath + runCostQueriesPerAccount
 - `queries/*.ts` — 25개 SQL 쿼리 파일 (ebs, msk, opensearch, container-cost, eks-container-cost, bedrock 포함)
 - `resource-inventory.ts` — 리소스 인벤토리 스냅샷 (data/inventory/, 추가 쿼리 0건)
 - `cost-snapshot.ts` — Cost 데이터 스냅샷 폴백 (data/cost/)
-- `app-config.ts` — 앱 설정 (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId)
+- `app-config.ts` — 앱 설정 (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId, accounts[])
 - `agentcore-stats.ts` — AgentCore 호출 통계 (총 호출, 평균 응답시간, 게이트웨이별, 모델별 토큰 사용량)
 - `agentcore-memory.ts` — 대화 이력 영구 저장/검색 (사용자별 분리, data/memory/)
 - `auth-utils.ts` — Cognito JWT에서 사용자 정보 추출 (email, sub)
@@ -108,12 +117,16 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
   "agentRuntimeArn": "arn:aws:bedrock-agentcore:REGION:ACCOUNT:runtime/RUNTIME_ID",
   "codeInterpreterName": "awsops_code_interpreter-XXXXX",
   "memoryId": "awsops_memory-XXXXX",
-  "memoryName": "awsops_memory"
+  "memoryName": "awsops_memory",
+  "accounts": [
+    { "accountId": "111111111111", "alias": "Host", "connectionName": "aws_111111111111", "region": "ap-northeast-2", "isHost": true, "features": { "costEnabled": true, "eksEnabled": true, "k8sEnabled": true } },
+    { "accountId": "222222222222", "alias": "Staging", "connectionName": "aws_222222222222", "region": "ap-northeast-2", "isHost": false, "features": { "costEnabled": false, "eksEnabled": false, "k8sEnabled": false } }
+  ]
 }
 ```
-계정별 배포 시 이 파일만 변경 — 코드 수정 불필요.
+계정별 배포 시 이 파일만 변경 — 코드 수정 불필요. `accounts` 배열은 `scripts/11-setup-multi-account.sh`로 관리.
 
-## 배포 스크립트 (10단계)
+## 배포 스크립트 (11단계)
 ```
 Step 0:  00-deploy-infra.sh              CDK 인프라 (로컬에서 실행)
 Step 1:  01-install-base.sh              Steampipe + Powerpipe
@@ -127,6 +140,7 @@ Step 6d: 06d-setup-agentcore-interpreter.sh  Code Interpreter
 Step 6e: 06e-setup-agentcore-memory.sh   Memory Store (대화 이력, 365일 보관)
 Step 6f: 06f-setup-opencost.sh           Prometheus + OpenCost (EKS 비용 분석)
 Step 7:  07-setup-cloudfront-auth.sh     Lambda@Edge → CloudFront 연동
+Step 11: 11-setup-multi-account.sh       멀티 어카운트 설정 (선택, Aggregator + 교차 계정 IAM 역할)
 ```
 
 ## AgentCore 알려진 이슈
@@ -156,35 +170,44 @@ Step 7:  07-setup-cloudfront-auth.sh     Lambda@Edge → CloudFront 연동
 
 ---
 
-# AWSops Dashboard v1.6.0 — Claude Context (English)
+# AWSops Dashboard v1.7.0 — Claude Context (English)
 
 ## Project Overview
 AWS + Kubernetes operations dashboard with real-time resource monitoring, network troubleshooting, CIS compliance, and AI-powered analysis. Built with Steampipe, Next.js 14, and Amazon Bedrock AgentCore.
 
 ## Architecture
 - **Frontend**: Next.js 14 (App Router) + Tailwind CSS dark theme + Recharts + React Flow
-- **Data**: Steampipe embedded PostgreSQL (port 9193) — 380+ AWS tables, 60+ K8s tables
+- **Data**: Steampipe embedded PostgreSQL (port 9193) — 380+ AWS tables, 60+ K8s tables, multi-account Aggregator
 - **AI**: Bedrock Sonnet/Opus 4.6 + AgentCore Runtime (Strands) + 8 Gateways (125 MCP tools) + 19 Lambda
 - **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1) + CloudFront
 - **Infra**: CDK → CloudFront (CACHING_DISABLED) → ALB → EC2 (t4g.2xlarge, Private Subnet)
 
-## Stats (v1.6.0)
+## Stats (v1.7.0)
 | Item | Count |
 |------|-------|
 | Pages | 35 |
 | Routes | 50 |
 | SQL Query Files | 25 |
 | API Routes | 13 |
-| Components | 14 |
+| Components | 15 (incl. AccountBadge) |
 | MCP Tools | 125 (8 Gateways, 19 Lambda) |
-| ADRs | 7 (001-007) |
+| ADRs | 8 (001-008) |
 
 ## Critical Rules
 
 ### Data Access
 - ALL queries through `src/lib/steampipe.ts` pg Pool — NOT Steampipe CLI
-- Pool: max 5, 120s timeout, 5 sequential batch. Cache: 5min TTL (node-cache)
+- Pool: max 5, 120s timeout, 5 sequential batch. Cache: 5min TTL (node-cache, accountId-prefixed keys)
 - Never use `steampipe query "SQL"` CLI — it's 660x slower
+
+### Multi-Account
+- Accounts managed via `accounts[]` array in `data/config.json` — no code changes
+- Steampipe Aggregator pattern: `aws` = all accounts merged, `aws_123456789012` = single account
+- `buildSearchPath(accountId)` returns `public, aws_{id}, kubernetes, trivy` for per-account query scoping
+- All pages: `useAccount()` hook passes `accountId: currentAccountId` in fetch calls
+- DataTable: auto-adds Account column when `isMultiAccount && data[0].account_id` detected
+- Cost queries: `runCostQueriesPerAccount()` runs per-account then merges with `account_id` tags
+- SQL queries: AWS table `list` queries must include `account_id` column
 
 ### Next.js
 - `basePath: '/awsops'` in `next.config.mjs`
@@ -225,11 +248,11 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 ## Key Files
 
 ### Core Libraries (`src/lib/`)
-- `steampipe.ts` — pg Pool + batchQuery + cache + checkCostAvailability
+- `steampipe.ts` — pg Pool + batchQuery + cache + checkCostAvailability + buildSearchPath + runCostQueriesPerAccount
 - `queries/*.ts` — 25 SQL query files (incl. ebs, msk, opensearch, container-cost, eks-container-cost, bedrock)
 - `resource-inventory.ts` — Resource inventory snapshots (data/inventory/, zero extra queries)
 - `cost-snapshot.ts` — Cost data snapshot fallback (data/cost/)
-- `app-config.ts` — App config (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId)
+- `app-config.ts` — App config (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId, accounts[])
 - `agentcore-stats.ts` — AgentCore call stats (total calls, avg time, per-gateway, per-model token usage)
 - `agentcore-memory.ts` — Conversation history persistence/search (per-user, data/memory/)
 - `auth-utils.ts` — Extract Cognito user info from JWT (email, sub)
@@ -263,12 +286,16 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
   "agentRuntimeArn": "arn:aws:bedrock-agentcore:REGION:ACCOUNT:runtime/RUNTIME_ID",
   "codeInterpreterName": "awsops_code_interpreter-XXXXX",
   "memoryId": "awsops_memory-XXXXX",
-  "memoryName": "awsops_memory"
+  "memoryName": "awsops_memory",
+  "accounts": [
+    { "accountId": "111111111111", "alias": "Host", "connectionName": "aws_111111111111", "region": "ap-northeast-2", "isHost": true, "features": { "costEnabled": true, "eksEnabled": true, "k8sEnabled": true } },
+    { "accountId": "222222222222", "alias": "Staging", "connectionName": "aws_222222222222", "region": "ap-northeast-2", "isHost": false, "features": { "costEnabled": false, "eksEnabled": false, "k8sEnabled": false } }
+  ]
 }
 ```
-Per-account deployment: only change this file — no code changes needed.
+Per-account deployment: only change this file — no code changes needed. `accounts` array managed by `scripts/11-setup-multi-account.sh`.
 
-## Deployment Scripts (10 Steps)
+## Deployment Scripts (11 Steps)
 ```
 Step 0:  00-deploy-infra.sh              CDK infrastructure (run locally)
 Step 1:  01-install-base.sh              Steampipe + Powerpipe
@@ -282,6 +309,7 @@ Step 6d: 06d-setup-agentcore-interpreter.sh  Code Interpreter
 Step 6e: 06e-setup-agentcore-memory.sh   Memory Store (conversation history, 365-day retention)
 Step 6f: 06f-setup-opencost.sh           Prometheus + OpenCost (EKS cost analysis)
 Step 7:  07-setup-cloudfront-auth.sh     Lambda@Edge → CloudFront integration
+Step 11: 11-setup-multi-account.sh       Multi-account setup (optional, Aggregator + cross-account IAM role)
 ```
 
 ## AgentCore Known Issues

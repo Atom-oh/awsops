@@ -13,7 +13,7 @@ import {
   StopCodeInterpreterSessionCommand,
 } from '@aws-sdk/client-bedrock-agentcore';
 import { runQuery } from '@/lib/steampipe';
-import { getConfig } from '@/lib/app-config';
+import { getConfig, validateAccountId, getAccountById } from '@/lib/app-config';
 import { recordCall } from '@/lib/agentcore-stats';
 import { saveConversation } from '@/lib/agentcore-memory';
 import { getUserFromRequest } from '@/lib/auth-utils';
@@ -362,12 +362,16 @@ Examples:
 - "VPC 네트워크 구성 분석" → SELECT v.vpc_id, v.tags ->> 'Name' AS name, v.cidr_block, v.is_default, v.state, (SELECT COUNT(*) FROM aws_vpc_subnet s WHERE s.vpc_id = v.vpc_id) AS subnet_count, (SELECT COUNT(*) FROM aws_vpc_route_table r WHERE r.vpc_id = v.vpc_id) AS route_table_count, (SELECT COUNT(DISTINCT group_id) FROM aws_vpc_security_group sg WHERE sg.vpc_id = v.vpc_id) AS sg_count FROM aws_vpc v ORDER BY v.tags ->> 'Name'
 - "서브넷 구성" → SELECT subnet_id, tags ->> 'Name' AS name, vpc_id, cidr_block, availability_zone, map_public_ip_on_launch, available_ip_address_count FROM aws_vpc_subnet ORDER BY vpc_id, availability_zone`;
 
-async function generateSQL(messages: Array<{role: string; content: string}>): Promise<string | null> {
+async function generateSQL(messages: Array<{role: string; content: string}>, accountId?: string, accountAlias?: string): Promise<string | null> {
   try {
+    let systemPrompt = SQL_GEN_PROMPT;
+    if (accountId) {
+      systemPrompt += `\n\nNote: Query targets AWS account ${accountAlias || accountId}. The search_path is already set for this account, so use standard table names (no account prefix needed).`;
+    }
     const body = JSON.stringify({
       anthropic_version: 'bedrock-2023-05-31',
       max_tokens: 500,
-      system: SQL_GEN_PROMPT,
+      system: systemPrompt,
       messages: messages.slice(-6).map(m => ({ role: m.role, content: m.content })),
     });
     const response = await bedrockClient.send(new InvokeModelCommand({
@@ -387,9 +391,9 @@ async function generateSQL(messages: Array<{role: string; content: string}>): Pr
   }
 }
 
-async function queryAWS(sql: string): Promise<{ data: string; rowCount: number; error?: string }> {
+async function queryAWS(sql: string, accountId?: string): Promise<{ data: string; rowCount: number; error?: string }> {
   try {
-    const result = await runQuery(sql);
+    const result = await runQuery(sql, { accountId });
     if (result.error) return { data: `Query error: ${result.error}`, rowCount: 0, error: result.error };
     if (result.rows.length === 0) return { data: 'No results found.', rowCount: 0 };
     return { data: JSON.stringify(result.rows, null, 2), rowCount: result.rows.length };
@@ -459,14 +463,21 @@ const AGENTCORE_TIMEOUT_MS = 90000; // 90초 — Gateway 도구 실행 시간 �
 
 async function invokeAgentCore(
   messages: Array<{role: string; content: string}>,
-  gateway: string
+  gateway: string,
+  accountId?: string,
+  accountAlias?: string
 ): Promise<string | null> {
   try {
     const recentMessages = messages.slice(-10);
     const command = new InvokeAgentRuntimeCommand({
       agentRuntimeArn: getAgentRuntimeArn(),
       qualifier: 'DEFAULT',
-      payload: JSON.stringify({ messages: recentMessages, gateway }),
+      payload: JSON.stringify({
+        messages: recentMessages,
+        gateway,
+        accountId: accountId || '',
+        accountAlias: accountAlias || '',
+      }),
     });
 
     const timeoutPromise = new Promise<null>((resolve) =>
@@ -706,7 +717,11 @@ function recordAndSave(p: {
 // ============================================================================
 export async function POST(request: NextRequest) {
   const reqBody = await request.json();
-  const { messages, model: modelKey, stream: useStream, lang: clientLang } = reqBody;
+  const { messages, model: modelKey, stream: useStream, lang: clientLang, accountId: rawAccountId } = reqBody;
+
+  // Account context / 계정 컨텍스트
+  const accountId = rawAccountId && validateAccountId(rawAccountId) ? rawAccountId : undefined;
+  const account = accountId ? getAccountById(accountId) : undefined;
 
   // i18n status messages / 다국어 상태 메시지
   const isEn = clientLang === 'en';
@@ -741,7 +756,7 @@ export async function POST(request: NextRequest) {
   // Non-streaming mode: return JSON (backward compatible for test scripts)
   // 비스트리밍 모드: JSON 반환 (테스트 스크립트 하위 호환)
   if (!useStream) {
-    return handleNonStreaming(messages, modelKey, clientLang);
+    return handleNonStreaming(messages, modelKey, clientLang, accountId, account?.alias);
   }
 
   // Streaming mode: SSE events / 스트리밍 모드: SSE 이벤트
@@ -816,12 +831,12 @@ export async function POST(request: NextRequest) {
         if (config.handler === 'sql') {
           send('status', { step: 'sql-generating', message: STATUS.sqlGenerating });
           const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
-          let sql = await generateSQL(messages);
+          let sql = await generateSQL(messages, accountId, account?.alias);
           let queryResult: { data: string; rowCount: number; error?: string } | null = null;
 
           for (let attempt = 0; attempt < 2 && sql; attempt++) {
             send('status', { step: 'sql-querying', message: STATUS.sqlQuerying(attempt > 0), sql });
-            queryResult = await queryAWS(sql);
+            queryResult = await queryAWS(sql, accountId);
             if (!queryResult.error) break;
             if (attempt === 0) {
               send('status', { step: 'sql-retrying', message: STATUS.sqlRetrying });
@@ -830,7 +845,7 @@ export async function POST(request: NextRequest) {
                 { role: 'assistant' as const, content: `I generated this SQL: ${sql}` },
                 { role: 'user' as const, content: `That SQL failed with error: ${queryResult.error}. Fix the SQL using only valid column names.` },
               ];
-              sql = await generateSQL(fixMessages);
+              sql = await generateSQL(fixMessages, accountId, account?.alias);
             }
           }
 
@@ -876,7 +891,7 @@ export async function POST(request: NextRequest) {
           }, 15000);
 
           const results = await Promise.allSettled(
-            routes.map(r => handleSingleRoute(r, messages, modelKey, clientLang))
+            routes.map(r => handleSingleRoute(r, messages, modelKey, clientLang, accountId, account?.alias))
           );
           clearInterval(multiKeepInterval);
           const successful: { route: string; content: string; via: string }[] = [];
@@ -954,7 +969,7 @@ export async function POST(request: NextRequest) {
           send('status', { step: 'agentcore', message: STATUS.agentcoreProgress(config.display, keepaliveCount * 15) });
         }, 15000);
 
-        const agentResponse = await invokeAgentCore(messages, gateway);
+        const agentResponse = await invokeAgentCore(messages, gateway, accountId, account?.alias);
         clearInterval(keepaliveInterval);
 
         if (agentResponse) {
@@ -1015,7 +1030,8 @@ export async function POST(request: NextRequest) {
 // Single route handler / 단일 라우트 핸들러
 // ============================================================================
 async function handleSingleRoute(
-  route: RouteType, messages: Array<{role: string; content: string}>, modelKey?: string, lang?: string
+  route: RouteType, messages: Array<{role: string; content: string}>, modelKey?: string, lang?: string,
+  accountId?: string, accountAlias?: string
 ): Promise<{ content: string; via: string; queriedResources: string[]; usedTools?: string[] } | null> {
   const SYSTEM_PROMPT = getSystemPrompt(lang);
   const config = ROUTE_REGISTRY[route];
@@ -1046,17 +1062,17 @@ async function handleSingleRoute(
   // SQL handler / SQL 핸들러
   if (config.handler === 'sql') {
     const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
-    let sql = await generateSQL(messages);
+    let sql = await generateSQL(messages, accountId, accountAlias);
     let queryResult: { data: string; rowCount: number; error?: string } | null = null;
     for (let attempt = 0; attempt < 2 && sql; attempt++) {
-      queryResult = await queryAWS(sql);
+      queryResult = await queryAWS(sql, accountId);
       if (!queryResult.error) break;
       if (attempt === 0) {
         const fixMessages = [...messages.slice(-4),
           { role: 'assistant' as const, content: `I generated this SQL: ${sql}` },
           { role: 'user' as const, content: `That SQL failed with error: ${queryResult.error}. Fix the SQL using only valid column names.` },
         ];
-        sql = await generateSQL(fixMessages);
+        sql = await generateSQL(fixMessages, accountId, accountAlias);
       }
     }
     if (sql && queryResult && !queryResult.error) {
@@ -1077,7 +1093,7 @@ async function handleSingleRoute(
 
   // AgentCore Gateway / AgentCore 게이트웨이
   const gateway = config.gateway || 'ops';
-  const agentResponse = await invokeAgentCore(messages, gateway);
+  const agentResponse = await invokeAgentCore(messages, gateway, accountId, accountAlias);
   if (agentResponse) {
     const usedTools = extractUsedTools(agentResponse);
     const cleaned = agentResponse.replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/g, '').replace(/<tool_response>[\s\S]*?<\/tool_response>\s*/g, '').trim();
@@ -1114,7 +1130,7 @@ async function synthesizeResponses(
 // ============================================================================
 // Non-streaming handler — supports multi-route / 비스트리밍 — 멀티 라우트 지원
 // ============================================================================
-async function handleNonStreaming(messages: Array<{role: string; content: string}>, modelKey?: string, lang?: string) {
+async function handleNonStreaming(messages: Array<{role: string; content: string}>, modelKey?: string, lang?: string, accountId?: string, accountAlias?: string) {
   const SYSTEM_PROMPT = getSystemPrompt(lang);
   try {
     const classifyResult = await classifyIntent(messages);
@@ -1124,7 +1140,7 @@ async function handleNonStreaming(messages: Array<{role: string; content: string
 
     // Single route (most common) / 단일 라우트 (일반적)
     if (routes.length === 1) {
-      const result = await handleSingleRoute(primaryRoute, messages, modelKey, lang);
+      const result = await handleSingleRoute(primaryRoute, messages, modelKey, lang, accountId, accountAlias);
       if (result) {
         return NextResponse.json({
           content: result.content, model: modelKey || 'sonnet-4.6',
@@ -1152,7 +1168,7 @@ async function handleNonStreaming(messages: Array<{role: string; content: string
     // Multi-route: parallel execution + synthesis / 멀티 라우트: 병렬 실행 + 합성
     console.log(`[Multi-Route] ${routes.join(' + ')}`);
     const results = await Promise.allSettled(
-      routes.map(r => handleSingleRoute(r, messages, modelKey, lang))
+      routes.map(r => handleSingleRoute(r, messages, modelKey, lang, accountId, accountAlias))
     );
 
     const successful: { route: string; content: string; via: string }[] = [];
