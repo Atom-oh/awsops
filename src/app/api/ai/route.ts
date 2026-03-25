@@ -3,7 +3,7 @@
 // Flow: classify intent (from registry) → route to handler → fallback
 // 흐름: 의도 분류 (레지스트리 기반) → 핸들러 라우팅 → 폴백
 import { NextRequest, NextResponse } from 'next/server';
-import { BedrockRuntimeClient, InvokeModelCommand, InvokeModelWithResponseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, InvokeModelCommand, InvokeModelWithResponseStreamCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import {
   BedrockAgentCoreClient,
   InvokeAgentRuntimeCommand,
@@ -652,6 +652,26 @@ function sseEvent(event: string, data: any): string {
 }
 
 // ============================================================================
+// Simulated streaming: send pre-generated text as chunks for typing effect
+// 시뮬레이션 스트리밍: 완성된 텍스트를 청크로 나눠 타이핑 효과 구현
+// ============================================================================
+const CHUNK_SIZE = 50;  // Characters per chunk / 청크당 글자 수
+const CHUNK_DELAY_MS = 15; // Delay between chunks (ms) / 청크 간 딜레이
+
+async function simulateStreaming(
+  text: string,
+  send: (event: string, data: any) => void,
+): Promise<void> {
+  for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+    const chunk = text.slice(i, i + CHUNK_SIZE);
+    send('chunk', { delta: chunk });
+    if (i + CHUNK_SIZE < text.length) {
+      await new Promise(r => setTimeout(r, CHUNK_DELAY_MS));
+    }
+  }
+}
+
+// ============================================================================
 // Bedrock streaming helper: stream response chunks as SSE events
 // Bedrock 스트리밍 헬퍼: 응답 청크를 SSE 이벤트로 전송
 // ============================================================================
@@ -910,7 +930,8 @@ export async function POST(request: NextRequest) {
           if (successful.length > 1) {
             send('status', { step: 'synthesizing', message: STATUS.synthesizing(successful.length) });
             const lastMsg = messages[messages.length - 1]?.content || '';
-            const synthesized = await synthesizeResponses(lastMsg, successful, modelKey, clientLang);
+            // Real streaming synthesis via Converse API / Converse API 실시간 스트리밍 합성
+            const synthesized = await synthesizeResponsesStreaming(lastMsg, successful, send, modelKey, clientLang);
             // 합성된 응답에서도 추가 도구 추출 / Extract additional tools from synthesized response
             const synthesizedTools = extractUsedTools(synthesized);
             const finalTools = Array.from(new Set([...dedupedTools, ...synthesizedTools]));
@@ -924,6 +945,7 @@ export async function POST(request: NextRequest) {
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
             });
           } else if (successful.length === 1) {
+            await simulateStreaming(successful[0].content, send);
             send('done', {
               content: successful[0].content, model: modelKey || 'sonnet-4.6',
               via: successful[0].via, queriedResources: allResources, route, routes,
@@ -980,6 +1002,8 @@ export async function POST(request: NextRequest) {
             .trim();
           const responseTimeMs = Date.now() - callStartTime;
           const finalContent = cleanedResponse || agentResponse;
+          // Simulate streaming for AgentCore responses / AgentCore 응답 타이핑 시뮬레이션
+          await simulateStreaming(finalContent, send);
           recordAndSave({ route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}`, question: lastMessage, summary: finalContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
           send('done', {
             content: finalContent, model: 'sonnet-4.6',
@@ -1104,6 +1128,7 @@ async function handleSingleRoute(
 
 // ============================================================================
 // Synthesize multi-route responses / 멀티 라우트 응답 합성
+// Non-streaming version for handleNonStreaming / 비스트리밍용
 // ============================================================================
 async function synthesizeResponses(
   question: string, responses: { route: string; content: string; via: string }[], modelKey?: string, lang?: string
@@ -1125,6 +1150,37 @@ async function synthesizeResponses(
   }));
   const result = JSON.parse(new TextDecoder().decode(response.body));
   return result.content?.[0]?.text || responses.map(r => r.content).join('\n\n---\n\n');
+}
+
+// Streaming version using Converse API / Converse API 스트리밍 합성
+async function synthesizeResponsesStreaming(
+  question: string, responses: { route: string; content: string; via: string }[],
+  send: (event: string, data: any) => void, modelKey?: string, lang?: string,
+): Promise<string> {
+  const systemPrompt = getSystemPrompt(lang) + `\n\nYou are synthesizing answers from multiple AWS service agents. Combine them into one coherent, well-structured response. Do not repeat information.`;
+  const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+  const parts = responses.map(r => `--- ${r.via} ---\n${r.content}`).join('\n\n');
+
+  const response = await bedrockClient.send(new ConverseStreamCommand({
+    modelId,
+    system: [{ text: systemPrompt }],
+    messages: [
+      { role: 'user', content: [{ text: `Question: ${question}\n\nMultiple agents responded:\n\n${parts}\n\nPlease synthesize into one comprehensive answer.` }] },
+    ],
+    inferenceConfig: { maxTokens: 4096 },
+  }));
+
+  let fullContent = '';
+  if (response.stream) {
+    for await (const event of response.stream) {
+      if (event.contentBlockDelta?.delta?.text) {
+        const text = event.contentBlockDelta.delta.text;
+        fullContent += text;
+        send('chunk', { delta: text });
+      }
+    }
+  }
+  return fullContent || responses.map(r => r.content).join('\n\n---\n\n');
 }
 
 // ============================================================================

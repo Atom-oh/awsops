@@ -276,7 +276,7 @@ export default function AIPage() {
                 <Bot size={16} className="text-accent-cyan" />
               </div>
             )}
-            <div className={`max-w-5xl rounded-lg px-4 py-3 ${
+            <div className={`w-full max-w-5xl rounded-lg px-4 py-3 ${
               msg.role === 'user'
                 ? 'bg-accent-cyan/10 border border-accent-cyan/20 text-gray-200'
                 : 'bg-navy-800 border border-navy-600 text-gray-300'
@@ -380,7 +380,7 @@ export default function AIPage() {
             <div className="shrink-0 w-8 h-8 rounded-lg bg-accent-cyan/10 flex items-center justify-center mt-1">
               <Bot size={16} className="text-accent-cyan" />
             </div>
-            <div className="max-w-5xl bg-navy-800 border border-navy-600 rounded-lg px-4 py-3">
+            <div className="w-full max-w-5xl bg-navy-800 border border-navy-600 rounded-lg px-4 py-3">
               {streamingContent ? (
                 <>
                   {/* Real-time streaming markdown / 실시간 스트리밍 마크다운 */}
