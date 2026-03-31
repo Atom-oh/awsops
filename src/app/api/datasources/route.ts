@@ -9,6 +9,35 @@ import { getUserFromRequest } from '@/lib/auth-utils';
 
 const VALID_TYPES: DatasourceType[] = ['prometheus', 'loki', 'tempo', 'clickhouse', 'jaeger', 'dynatrace', 'datadog'];
 
+// --- URL validation (SSRF prevention) / URL 검증 (SSRF 방지) ---
+// Block requests to internal/private networks and cloud metadata endpoints
+// 내부/사설 네트워크 및 클라우드 메타데이터 엔드포인트 요청 차단
+function isAllowedUrl(urlStr: string): boolean {
+  try {
+    const parsed = new URL(urlStr);
+    const hostname = parsed.hostname.toLowerCase();
+    // Block cloud metadata endpoints / 클라우드 메타데이터 엔드포인트 차단
+    if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal' || hostname === '100.100.100.200') return false;
+    // Block link-local and loopback / 링크로컬 및 루프백 차단
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]') return false;
+    if (hostname.endsWith('.internal') || hostname.endsWith('.local')) return false;
+    // Block private IP ranges / 사설 IP 대역 차단
+    const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (ipMatch) {
+      const [, a, b] = ipMatch.map(Number);
+      if (a === 10) return false;                          // 10.0.0.0/8
+      if (a === 172 && b >= 16 && b <= 31) return false;   // 172.16.0.0/12
+      if (a === 192 && b === 168) return false;             // 192.168.0.0/16
+      if (a === 169 && b === 254) return false;             // 169.254.0.0/16
+    }
+    // Only allow http/https protocols / http/https 프로토콜만 허용
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // --- Credential masking / 자격증명 마스킹 ---
 // Returns a shallow copy with sensitive fields replaced by '***'
 // password, token 등 민감 필드를 '***'로 대체한 복사본 반환
@@ -75,11 +104,18 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { action } = body as { action?: string };
 
-    // --- Test connection / 연결 테스트 ---
+    // --- Test connection (admin-only) / 연결 테스트 (관리자 전용) ---
     if (action === 'test') {
+      const adminCheck = checkAdmin(request);
+      if (adminCheck.error) return adminCheck.error;
+
       const { datasource } = body as { datasource: DatasourceConfig };
       if (!datasource || !datasource.url || !datasource.type) {
         return NextResponse.json({ error: 'Missing datasource url or type for test' }, { status: 400 });
+      }
+      // SSRF prevention: validate URL before making server-side request
+      if (!isAllowedUrl(datasource.url)) {
+        return NextResponse.json({ ok: false, latency: 0, error: 'URL not allowed: private/internal addresses are blocked' }, { status: 400 });
       }
       try {
         const result = await testConnection(datasource);

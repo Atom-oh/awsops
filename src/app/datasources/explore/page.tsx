@@ -5,14 +5,14 @@ import Header from '@/components/layout/Header';
 import DataTable from '@/components/table/DataTable';
 import LineChartCard from '@/components/charts/LineChartCard';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
-import { Play, Clock, Database, Activity, FileText, Waypoints, ChevronDown } from 'lucide-react';
+import { Play, Clock, Database, Activity, FileText, Waypoints, ChevronDown, Radar, Gauge, Dog } from 'lucide-react';
 
 // --- Types / 타입 정의 ---
 
 interface Datasource {
   id: string;
   name: string;
-  type: 'prometheus' | 'loki' | 'tempo' | 'clickhouse';
+  type: 'prometheus' | 'loki' | 'tempo' | 'clickhouse' | 'jaeger' | 'dynatrace' | 'datadog';
   url: string;
   isDefault?: boolean;
 }
@@ -70,6 +70,24 @@ const EXAMPLE_QUERIES: Record<string, string[]> = {
     "SELECT * FROM system.metrics WHERE metric LIKE '%Query%'",
     'SELECT toStartOfHour(event_time) AS hour, count() AS queries FROM system.query_log WHERE event_date = today() GROUP BY hour ORDER BY hour',
   ],
+  jaeger: [
+    'service=frontend',
+    'service=api-gateway&operation=GET /users',
+    'service=payment&tags={"error":"true"}',
+    'service=order&lookback=2h&limit=50',
+  ],
+  dynatrace: [
+    'builtin:host.cpu.usage',
+    'builtin:host.mem.usage',
+    'builtin:service.response.time:avg',
+    'HOST(displayName="web-server")',
+  ],
+  datadog: [
+    'avg:system.cpu.user{*}',
+    'sum:trace.http.request.hits{service:web-app}.as_count()',
+    'logs:service=frontend status=error',
+    'avg:system.mem.used{host:web-01} by {host}',
+  ],
 };
 
 // Placeholder text per datasource type / 데이터소스 타입별 플레이스홀더
@@ -78,6 +96,9 @@ const PLACEHOLDERS: Record<string, string> = {
   loki: 'Enter LogQL query... e.g. {job="varlogs"} |= "error"',
   tempo: 'Enter TraceQL query or trace ID... e.g. { duration > 500ms }',
   clickhouse: 'Enter SQL query... e.g. SELECT count() FROM system.tables',
+  jaeger: 'Enter service name or trace ID... e.g. service=frontend',
+  dynatrace: 'Enter metric selector or entity query... e.g. builtin:host.cpu.usage',
+  datadog: 'Enter metric query or log search... e.g. avg:system.cpu.user{*}',
 };
 
 // Icon map for datasource types / 데이터소스 타입별 아이콘 매핑
@@ -86,6 +107,9 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
   loki: <FileText size={14} className="text-accent-green" />,
   tempo: <Waypoints size={14} className="text-accent-cyan" />,
   clickhouse: <Database size={14} className="text-accent-purple" />,
+  jaeger: <Radar size={14} className="text-accent-cyan" />,
+  dynatrace: <Gauge size={14} className="text-accent-green" />,
+  datadog: <Dog size={14} className="text-accent-purple" />,
 };
 
 // Color map for datasource types / 데이터소스 타입별 색상 매핑
@@ -94,6 +118,9 @@ const TYPE_COLORS: Record<string, string> = {
   loki: '#00ff88',
   tempo: '#00d4ff',
   clickhouse: '#a855f7',
+  jaeger: '#00d4ff',
+  dynatrace: '#00ff88',
+  datadog: '#a855f7',
 };
 
 // --- Component / 컴포넌트 ---

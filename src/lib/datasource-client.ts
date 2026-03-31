@@ -318,7 +318,11 @@ async function queryClickHouse(ds: DatasourceConfig, query: string, opts?: Query
   if (!/^\s*SELECT\s/i.test(query) && !/^\s*SHOW\s/i.test(query) && !/^\s*DESCRIBE\s/i.test(query)) {
     throw new Error('Only SELECT, SHOW, and DESCRIBE queries are allowed');
   }
-  if (/[|&`]/.test(query)) throw new Error('Invalid characters in query');
+  if (/[|&`;]/.test(query)) throw new Error('Invalid characters in query');
+  // Block dangerous ClickHouse table functions that can access external resources
+  if (/\b(url|file|remote|remoteSecure|s3|gcs|hdfs|input|cluster|mysql|postgresql|jdbc|odbc|mongo)\s*\(/i.test(query)) {
+    throw new Error('Table functions are not allowed for security reasons');
+  }
 
   const timeout = ds.settings?.timeout || 30000;
   const headers = buildHeaders(ds);
