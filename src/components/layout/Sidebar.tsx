@@ -33,6 +33,8 @@ import {
   Sparkles,
   LogOut,
   Layers,
+  DatabaseZap,
+  SearchCode,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -56,6 +58,8 @@ const navGroups: NavGroup[] = [
       { labelKey: 'sidebar.aiAssistant', href: '/ai', icon: BrainCircuit },
       { labelKey: 'sidebar.agentcore', href: '/agentcore', icon: Activity },
       { labelKey: 'sidebar.accounts', href: '/accounts', icon: Layers },
+      { labelKey: 'sidebar.datasources', href: '/datasources', icon: DatabaseZap },
+      { labelKey: 'sidebar.datasourceExplore', href: '/datasources/explore', icon: SearchCode },
     ],
   },
   {

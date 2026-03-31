@@ -17,6 +17,10 @@ import { getConfig, validateAccountId, getAccountById } from '@/lib/app-config';
 import { recordCall } from '@/lib/agentcore-stats';
 import { saveConversation } from '@/lib/agentcore-memory';
 import { getUserFromRequest } from '@/lib/auth-utils';
+import { getDefaultDatasource } from '@/lib/app-config';
+import type { DatasourceType } from '@/lib/app-config';
+import { queryDatasource } from '@/lib/datasource-client';
+import { detectDatasourceType, DATASOURCE_TYPES } from '@/lib/datasource-registry';
 
 // Service configuration — config 파일에서 읽거나 자동 감지
 // Service config — read from data/config.json or auto-detect
@@ -56,7 +60,7 @@ interface RouteConfig {
   description: string;         // What this route handles / 이 라우트가 처리하는 것
   tools: string[];             // Available tool capabilities / 사용 가능한 도구 기능
   examples?: string[];         // Classification examples / 분류 예시
-  handler?: 'code' | 'sql';   // Special handler type / 특수 핸들러 타입 (code: Code Interpreter, sql: pg Pool 직접)
+  handler?: 'code' | 'sql' | 'datasource';   // Special handler type / 특수 핸들러 타입 (code: Code Interpreter, sql: pg Pool 직접, datasource: 외부 데이터소스)
 }
 
 const ROUTE_REGISTRY: Record<string, RouteConfig> = {
@@ -181,6 +185,24 @@ const ROUTE_REGISTRY: Record<string, RouteConfig> = {
       '"네트워크 현황" → aws-data', '"인프라 구성 보여줘" → aws-data',
     ],
     handler: 'sql',
+  },
+  datasource: {
+    gateway: '',
+    display: 'Datasource Analytics',
+    description: 'External datasource metrics, logs, and traces analysis (Prometheus, Loki, Tempo, ClickHouse)',
+    tools: [
+      'Prometheus PromQL 메트릭 쿼리 및 분석',
+      'Loki LogQL 로그 검색 및 패턴 분석',
+      'Tempo TraceQL 분산 트레이스 분석',
+      'ClickHouse SQL 데이터 분석',
+    ],
+    examples: [
+      '"프로메테우스에서 CPU 사용량 확인" → datasource', '"prometheus cpu usage" → datasource',
+      '"로키에서 에러 로그 검색" → datasource', '"loki error logs" → datasource',
+      '"트레이스 조회" → datasource', '"tempo traces" → datasource',
+      '"클릭하우스 데이터 분석" → datasource', '"clickhouse query" → datasource',
+    ],
+    handler: 'datasource',
   },
   general: {
     gateway: 'ops',
@@ -362,6 +384,106 @@ Examples:
 - "VPC 네트워크 구성 분석" → SELECT v.vpc_id, v.tags ->> 'Name' AS name, v.cidr_block, v.is_default, v.state, (SELECT COUNT(*) FROM aws_vpc_subnet s WHERE s.vpc_id = v.vpc_id) AS subnet_count, (SELECT COUNT(*) FROM aws_vpc_route_table r WHERE r.vpc_id = v.vpc_id) AS route_table_count, (SELECT COUNT(DISTINCT group_id) FROM aws_vpc_security_group sg WHERE sg.vpc_id = v.vpc_id) AS sg_count FROM aws_vpc v ORDER BY v.tags ->> 'Name'
 - "서브넷 구성" → SELECT subnet_id, tags ->> 'Name' AS name, vpc_id, cidr_block, availability_zone, map_public_ip_on_launch, available_ip_address_count FROM aws_vpc_subnet ORDER BY vpc_id, availability_zone`;
 
+// ============================================================================
+// Datasource query generation prompts / 외부 데이터소스 쿼리 생성 프롬프트
+// ============================================================================
+const DATASOURCE_QUERY_PROMPTS: Record<DatasourceType, string> = {
+  prometheus: `You are a Prometheus PromQL expert. Generate a PromQL query for the user's metrics question.
+
+Rules:
+- Return ONLY the PromQL query, no explanation, no markdown, no code blocks.
+- Use common metric names: node_cpu_seconds_total, node_memory_MemAvailable_bytes, up, http_requests_total, etc.
+- Use appropriate functions: rate(), irate(), histogram_quantile(), avg(), sum(), count(), etc.
+- For CPU usage: rate(node_cpu_seconds_total{mode="idle"}[5m])
+- For memory: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes * 100
+- For HTTP latency: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+
+Examples:
+- "CPU 사용량" → rate(node_cpu_seconds_total{mode!="idle"}[5m])
+- "메모리 사용률" → (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100
+- "HTTP 요청 수" → sum(rate(http_requests_total[5m])) by (method, status)`,
+
+  loki: `You are a Loki LogQL expert. Generate a LogQL query for the user's log search question.
+
+Rules:
+- Return ONLY the LogQL query, no explanation, no markdown, no code blocks.
+- Use stream selectors: {job="X"}, {namespace="X"}, {app="X"}
+- Use filter expressions: |= "text", != "text", |~ "regex", !~ "regex"
+- Use parser: | json, | logfmt, | regexp
+- For metric queries: rate(), count_over_time(), bytes_over_time()
+
+Examples:
+- "에러 로그" → {job=~".+"} |= "error"
+- "nginx 접근 로그" → {job="nginx"} | json
+- "에러 비율" → sum(rate({job=~".+"} |= "error" [5m])) / sum(rate({job=~".+"} [5m]))`,
+
+  tempo: `You are a Tempo TraceQL expert. Generate a TraceQL query for the user's trace search question.
+
+Rules:
+- Return ONLY the TraceQL query, no explanation, no markdown, no code blocks.
+- Use resource attributes: resource.service.name, resource.namespace
+- Use span attributes: span.http.status_code, span.http.method, name
+- Use intrinsics: duration, status, kind
+
+Examples:
+- "느린 요청" → { duration > 1s }
+- "에러 트레이스" → { status = error }
+- "특정 서비스" → { resource.service.name = "frontend" }`,
+
+  clickhouse: `You are a ClickHouse SQL expert. Generate a SELECT query for the user's analytics question.
+
+Rules:
+- Return ONLY the SQL query, no explanation, no markdown, no code blocks.
+- Only SELECT, SHOW, or DESCRIBE queries.
+- Use ClickHouse functions: toStartOfHour(), toStartOfDay(), count(), avg(), etc.
+- Use system tables for metadata: system.tables, system.metrics, system.query_log
+
+Examples:
+- "테이블 목록" → SELECT database, name, engine, total_rows FROM system.tables WHERE database != 'system' ORDER BY database, name
+- "쿼리 통계" → SELECT toStartOfHour(event_time) AS hour, count() AS queries FROM system.query_log WHERE event_date = today() GROUP BY hour ORDER BY hour`,
+
+  jaeger: `You are a Jaeger tracing expert. Generate a Jaeger search query for the user's question.
+
+Rules:
+- Return ONLY the query string in "key=value&key=value" format, no explanation.
+- Use parameters: service, operation, tags, lookback, limit, minDuration, maxDuration
+- For trace ID lookups, return just the trace ID.
+- Tags should be JSON: tags={"error":"true","http.status_code":"500"}
+
+Examples:
+- "프론트엔드 에러 트레이스" → service=frontend&tags={"error":"true"}
+- "느린 API 요청" → service=api-gateway&minDuration=1s&limit=20
+- "결제 서비스 최근 트레이스" → service=payment&lookback=1h&limit=50`,
+
+  dynatrace: `You are a Dynatrace API expert. Generate a Dynatrace metric selector or entity selector for the user's question.
+
+Rules:
+- Return ONLY the selector string, no explanation, no markdown.
+- For metrics: use builtin metric selectors (e.g., builtin:host.cpu.usage)
+- For entities: use entity selectors starting with type (e.g., type("HOST"),entityName("web-01"))
+- Common metric prefixes: builtin:host.*, builtin:service.*, builtin:process.*, builtin:apps.*
+
+Examples:
+- "호스트 CPU 사용량" → builtin:host.cpu.usage
+- "서비스 응답 시간" → builtin:service.response.time:avg
+- "서비스 에러 수" → builtin:service.errors.total.count:sum
+- "호스트 목록" → type("HOST")`,
+
+  datadog: `You are a Datadog query expert. Generate a Datadog metric query or log search for the user's question.
+
+Rules:
+- Return ONLY the query string, no explanation, no markdown.
+- For metrics: use standard Datadog query syntax (avg:metric{tags} by {group})
+- For log searches: prefix with search terms, use facets (@field:value)
+- Common metrics: system.cpu.user, system.mem.used, trace.http.request.hits
+
+Examples:
+- "CPU 사용률" → avg:system.cpu.user{*} by {host}
+- "서비스 에러 로그" → service:web-app status:error
+- "HTTP 요청 수" → sum:trace.http.request.hits{service:web-app}.as_count()
+- "메모리 사용량" → avg:system.mem.used{*} by {host}`,
+};
+
 async function generateSQL(messages: Array<{role: string; content: string}>, accountId?: string, accountAlias?: string): Promise<string | null> {
   try {
     let systemPrompt = SQL_GEN_PROMPT;
@@ -399,6 +521,33 @@ async function queryAWS(sql: string, accountId?: string): Promise<{ data: string
     return { data: JSON.stringify(result.rows, null, 2), rowCount: result.rows.length };
   } catch (e: any) {
     return { data: `Error: ${e.message}`, rowCount: 0, error: e.message };
+  }
+}
+
+async function generateDatasourceQuery(
+  messages: Array<{role: string; content: string}>,
+  dsType: DatasourceType,
+): Promise<string | null> {
+  try {
+    const body = JSON.stringify({
+      anthropic_version: 'bedrock-2023-05-31',
+      max_tokens: 300,
+      system: DATASOURCE_QUERY_PROMPTS[dsType],
+      messages: messages.slice(-6).map(m => ({ role: m.role, content: m.content })),
+    });
+    const response = await bedrockClient.send(new InvokeModelCommand({
+      modelId: MODELS['sonnet-4.6'],
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: new TextEncoder().encode(body),
+    }));
+    const result = JSON.parse(new TextDecoder().decode(response.body));
+    let query = (result.content?.[0]?.text || '').trim();
+    query = query.replace(/^```(?:\w+)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    return query || null;
+  } catch (err: any) {
+    console.error(`[DS Query Gen] Failed for ${dsType}:`, err.message);
+    return null;
   }
 }
 
@@ -845,6 +994,76 @@ export async function POST(request: NextRequest) {
           }
           controller.close();
           return;
+        }
+
+        // Handler: External Datasource / 외부 데이터소스 핸들러
+        if (config.handler === 'datasource') {
+          // Detect datasource type from question / 질문에서 데이터소스 타입 감지
+          const dsType = detectDatasourceType(lastMessage);
+          if (!dsType) {
+            send('status', { step: 'datasource-no-type', message: '데이터소스 타입을 감지할 수 없습니다. 프로메테우스, 로키, 템포, 클릭하우스 중 하나를 지정해주세요.' });
+            // Fall through to general handler
+          } else {
+            const ds = getDefaultDatasource(dsType);
+            if (!ds) {
+              send('status', { step: 'datasource-not-found', message: `${DATASOURCE_TYPES[dsType].label} 데이터소스가 설정되지 않았습니다. /datasources에서 추가해주세요.` });
+              // Fall through to general handler
+            } else {
+              const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+              send('status', { step: 'datasource-generating', message: `${DATASOURCE_TYPES[dsType].label} ${DATASOURCE_TYPES[dsType].queryLanguage} 쿼리 생성 중...` });
+
+              let dsQuery = await generateDatasourceQuery(messages, dsType);
+              let queryResult: any = null;
+
+              for (let attempt = 0; attempt < 2 && dsQuery; attempt++) {
+                send('status', { step: 'datasource-querying', message: `${ds.name}에 쿼리 실행 중${attempt > 0 ? ' (재시도)' : ''}...`, query: dsQuery });
+                try {
+                  queryResult = await queryDatasource(ds, dsQuery, { start: '1h' });
+                  break; // success
+                } catch (err: any) {
+                  if (attempt === 0) {
+                    send('status', { step: 'datasource-retrying', message: `쿼리 오류 수정 중...` });
+                    const fixMessages = [
+                      ...messages.slice(-4),
+                      { role: 'assistant' as const, content: `I generated this ${DATASOURCE_TYPES[dsType].queryLanguage} query: ${dsQuery}` },
+                      { role: 'user' as const, content: `That query failed with error: ${err.message}. Fix the query.` },
+                    ];
+                    dsQuery = await generateDatasourceQuery(fixMessages, dsType);
+                  } else {
+                    queryResult = null;
+                  }
+                }
+              }
+
+              if (dsQuery && queryResult) {
+                send('status', { step: 'datasource-analyzing', message: `${queryResult.metadata.totalRows || queryResult.rows.length}건 결과 분석 중...` });
+                const contextData = `\n\n--- LIVE ${DATASOURCE_TYPES[dsType].label.toUpperCase()} DATA (${queryResult.rows.length} rows) ---\nDatasource: ${ds.name} (${ds.url})\n${DATASOURCE_TYPES[dsType].queryLanguage}: ${dsQuery}\n\`\`\`json\n${JSON.stringify(queryResult.rows.slice(0, 100), null, 2)}\n\`\`\``;
+                const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
+                bedrockMessages[bedrockMessages.length - 1].content += contextData;
+
+                const streamResult = await streamBedrockToSSE(
+                  { modelId, system: SYSTEM_PROMPT, messages: bedrockMessages },
+                  send,
+                );
+                totalInputTokens += streamResult.inputTokens;
+                totalOutputTokens += streamResult.outputTokens;
+                const dsContent = streamResult.content || 'No response';
+                const dsTools = [`${dsType}: ${dsQuery}`];
+                const dsTimeMs = Date.now() - callStartTime;
+                recordAndSave({ route, gateway: dsType, responseTimeMs: dsTimeMs, usedTools: dsTools, success: true, via: `${DATASOURCE_TYPES[dsType].label} (${queryResult.rows.length} rows)`, question: lastMessage, summary: dsContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+                send('done', {
+                  content: dsContent, model: modelKey || 'sonnet-4.6',
+                  via: `${DATASOURCE_TYPES[dsType].label} Analytics (${queryResult.rows.length} rows)`,
+                  queriedResources: [dsType], route,
+                  usedTools: dsTools,
+                  inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
+                });
+                controller.close();
+                return;
+              }
+              send('status', { step: 'datasource-fallback', message: '데이터소스 쿼리 실패. Bedrock으로 폴백합니다.' });
+            }
+          }
         }
 
         // Handler: SQL (aws-data) / SQL 핸들러
