@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Header from '@/components/layout/Header';
 import DataTable from '@/components/table/DataTable';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -210,6 +210,8 @@ export default function DatasourceExplorePage() {
   const [aiError, setAiError] = useState<string | null>(null);
   const [generatedExplanation, setGeneratedExplanation] = useState<string | null>(null);
   const [chartType, setChartType] = useState<'line' | 'bar'>('line');
+  const dsDropdownRef = useRef<HTMLDivElement>(null);
+  const timeDropdownRef = useRef<HTMLDivElement>(null);
 
   // Fetch datasource list / 데이터소스 목록 조회
   const fetchDatasources = useCallback(async () => {
@@ -316,12 +318,16 @@ export default function DatasourceExplorePage() {
 
   // Close dropdowns on outside click / 외부 클릭 시 드롭다운 닫기
   useEffect(() => {
-    const handleClick = () => {
-      setDsDropdownOpen(false);
-      setTimeDropdownOpen(false);
+    const handleMouseDown = (e: MouseEvent) => {
+      if (dsDropdownRef.current && !dsDropdownRef.current.contains(e.target as Node)) {
+        setDsDropdownOpen(false);
+      }
+      if (timeDropdownRef.current && !timeDropdownRef.current.contains(e.target as Node)) {
+        setTimeDropdownOpen(false);
+      }
     };
-    document.addEventListener('click', handleClick);
-    return () => document.removeEventListener('click', handleClick);
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
   }, []);
 
   // --- Render helpers / 렌더 헬퍼 ---
@@ -434,7 +440,7 @@ export default function DatasourceExplorePage() {
         <div className="flex items-center gap-3 flex-wrap">
 
           {/* Datasource selector / 데이터소스 선택기 */}
-          <div className="relative" onClick={(e) => e.stopPropagation()}>
+          <div className="relative" ref={dsDropdownRef}>
             <button
               onClick={() => { setDsDropdownOpen(!dsDropdownOpen); setTimeDropdownOpen(false); }}
               className="flex items-center gap-2 px-3 py-2 rounded-lg bg-navy-900 border border-navy-600 text-sm text-gray-200 hover:border-accent-cyan/50 transition-colors min-w-[200px]"
@@ -487,7 +493,7 @@ export default function DatasourceExplorePage() {
           </div>
 
           {/* Time range selector / 시간 범위 선택기 */}
-          <div className="relative" onClick={(e) => e.stopPropagation()}>
+          <div className="relative" ref={timeDropdownRef}>
             <button
               onClick={() => { setTimeDropdownOpen(!timeDropdownOpen); setDsDropdownOpen(false); }}
               className="flex items-center gap-2 px-3 py-2 rounded-lg bg-navy-900 border border-navy-600 text-sm text-gray-200 hover:border-accent-cyan/50 transition-colors"
