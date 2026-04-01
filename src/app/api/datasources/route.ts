@@ -2,36 +2,84 @@
 // 외부 데이터소스 CRUD + 연결 테스트 + 쿼리 API
 // Supports: Prometheus, Loki, Tempo, ClickHouse
 import { NextRequest, NextResponse } from 'next/server';
-import { getConfig, saveConfig, getDatasources, getDatasourceById } from '@/lib/app-config';
+import { getConfig, saveConfig, getDatasources, getDatasourceById, getDatasourceAllowedNetworks } from '@/lib/app-config';
 import type { DatasourceConfig, DatasourceType } from '@/lib/app-config';
 import { queryDatasource, testConnection } from '@/lib/datasource-client';
 import { getUserFromRequest } from '@/lib/auth-utils';
 
 const VALID_TYPES: DatasourceType[] = ['prometheus', 'loki', 'tempo', 'clickhouse', 'jaeger', 'dynatrace', 'datadog'];
 
+// --- SSRF prevention helpers / SSRF 방지 헬퍼 ---
+
+// Convert IPv4 string to 32-bit unsigned integer / IPv4 문자열을 32비트 정수로 변환
+function ipToInt(ip: string): number {
+  const parts = ip.split('.').map(Number);
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+// Check if IP falls within a CIDR range / IP가 CIDR 범위에 속하는지 확인
+function isIpInCidr(ip: string, cidr: string): boolean {
+  const [cidrIp, prefixStr] = cidr.split('/');
+  if (!prefixStr) return ip === cidrIp; // Single IP, exact match
+  const prefix = parseInt(prefixStr, 10);
+  if (prefix < 0 || prefix > 32) return false;
+  const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+  return (ipToInt(ip) & mask) === (ipToInt(cidrIp) & mask);
+}
+
+// Match hostname against pattern (exact or *.suffix glob) / 호스트명 패턴 매칭
+function matchesHostnamePattern(hostname: string, pattern: string): boolean {
+  const p = pattern.toLowerCase();
+  if (p.startsWith('*.')) return hostname.endsWith(p.slice(1)) || hostname === p.slice(2);
+  return hostname === p;
+}
+
+// Check if hostname is a private/internal address / 사설/내부 주소 여부 확인
+function isPrivateOrLocal(hostname: string): boolean {
+  if (hostname.endsWith('.internal') || hostname.endsWith('.local')) return true;
+  const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ipMatch) {
+    const [, a, b] = ipMatch.map(Number);
+    if (a === 10) return true;                          // 10.0.0.0/8
+    if (a === 172 && b >= 16 && b <= 31) return true;   // 172.16.0.0/12
+    if (a === 192 && b === 168) return true;             // 192.168.0.0/16
+    if (a === 169 && b === 254) return true;             // 169.254.0.0/16
+  }
+  return false;
+}
+
+// Check if hostname/IP matches any entry in the allowlist / allowlist 매칭 확인
+function matchesAllowlist(hostname: string, allowlist: string[]): boolean {
+  for (const entry of allowlist) {
+    // CIDR or IP match (only if hostname is an IP)
+    if (/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(entry) && /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+      if (isIpInCidr(hostname, entry)) return true;
+    } else {
+      // Hostname pattern match
+      if (matchesHostnamePattern(hostname, entry)) return true;
+    }
+  }
+  return false;
+}
+
 // --- URL validation (SSRF prevention) / URL 검증 (SSRF 방지) ---
-// Block requests to internal/private networks and cloud metadata endpoints
-// 내부/사설 네트워크 및 클라우드 메타데이터 엔드포인트 요청 차단
+// Block metadata/loopback unconditionally, allow private IPs only if in allowlist
+// 메타데이터/루프백은 무조건 차단, 사설 IP는 allowlist에 있을 때만 허용
 function isAllowedUrl(urlStr: string): boolean {
   try {
     const parsed = new URL(urlStr);
     const hostname = parsed.hostname.toLowerCase();
-    // Block cloud metadata endpoints / 클라우드 메타데이터 엔드포인트 차단
+    // 1. ALWAYS block cloud metadata — no exceptions / 클라우드 메타데이터 무조건 차단
     if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal' || hostname === '100.100.100.200') return false;
-    // Block link-local and loopback / 링크로컬 및 루프백 차단
+    // 2. ALWAYS block loopback / 루프백 무조건 차단
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]') return false;
-    if (hostname.endsWith('.internal') || hostname.endsWith('.local')) return false;
-    // Block private IP ranges / 사설 IP 대역 차단
-    const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-    if (ipMatch) {
-      const [, a, b] = ipMatch.map(Number);
-      if (a === 10) return false;                          // 10.0.0.0/8
-      if (a === 172 && b >= 16 && b <= 31) return false;   // 172.16.0.0/12
-      if (a === 192 && b === 168) return false;             // 192.168.0.0/16
-      if (a === 169 && b === 254) return false;             // 169.254.0.0/16
-    }
-    // Only allow http/https protocols / http/https 프로토콜만 허용
+    // 3. Protocol check / 프로토콜 확인
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    // 4. If private/internal, check allowlist / 사설/내부 주소면 allowlist 확인
+    if (isPrivateOrLocal(hostname)) {
+      const allowlist = getDatasourceAllowedNetworks();
+      return matchesAllowlist(hostname, allowlist);
+    }
     return true;
   } catch {
     return false;
@@ -75,6 +123,13 @@ function checkAdmin(req: NextRequest): { isAdmin: boolean; error?: NextResponse 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action') || 'list';
+
+  // Allowlist query (admin-only) / 허용 네트워크 목록 조회 (관리자 전용)
+  if (action === 'allowlist') {
+    const adminCheck = checkAdmin(request);
+    if (adminCheck.error) return adminCheck.error;
+    return NextResponse.json({ allowedNetworks: getDatasourceAllowedNetworks() });
+  }
 
   // Single datasource by ID / ID로 단건 조회
   if (action === 'get') {
@@ -124,6 +179,39 @@ export async function POST(request: NextRequest) {
         const message = err instanceof Error ? err.message : 'Connection test failed';
         return NextResponse.json({ ok: false, latency: 0, error: message });
       }
+    }
+
+    // --- Update allowlist (admin-only) / 허용 네트워크 목록 업데이트 (관리자 전용) ---
+    if (action === 'update-allowlist') {
+      const adminCheck = checkAdmin(request);
+      if (adminCheck.error) return adminCheck.error;
+      const { networks } = body as { networks?: string[] };
+      if (!Array.isArray(networks)) {
+        return NextResponse.json({ error: 'networks must be an array' }, { status: 400 });
+      }
+      // Validate each entry and reject metadata IPs / 각 항목 검증, 메타데이터 IP 거부
+      const BLOCKED_METADATA = ['169.254.169.254', 'metadata.google.internal', '100.100.100.200'];
+      for (const entry of networks) {
+        if (typeof entry !== 'string' || entry.trim().length === 0) {
+          return NextResponse.json({ error: `Invalid entry: empty value` }, { status: 400 });
+        }
+        const trimmed = entry.trim().toLowerCase();
+        if (BLOCKED_METADATA.includes(trimmed) || BLOCKED_METADATA.includes(trimmed.split('/')[0])) {
+          return NextResponse.json({ error: `Cannot allowlist metadata endpoint: ${entry}` }, { status: 400 });
+        }
+        if (trimmed === 'localhost' || trimmed === '127.0.0.1' || trimmed === '::1') {
+          return NextResponse.json({ error: `Cannot allowlist loopback address: ${entry}` }, { status: 400 });
+        }
+        // Must be valid CIDR, IP, or hostname pattern
+        const isIpOrCidr = /^\d+\.\d+\.\d+\.\d+(\/\d{1,2})?$/.test(trimmed);
+        const isHostnamePattern = /^(\*\.)?[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(trimmed);
+        if (!isIpOrCidr && !isHostnamePattern) {
+          return NextResponse.json({ error: `Invalid format: ${entry}. Use CIDR (10.0.0.0/24), IP (10.0.1.1), or hostname (*.example.com)` }, { status: 400 });
+        }
+      }
+      const cleaned = networks.map(n => n.trim());
+      saveConfig({ datasourceAllowedNetworks: cleaned });
+      return NextResponse.json({ allowedNetworks: cleaned });
     }
 
     // --- Execute query / 쿼리 실행 ---

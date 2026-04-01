@@ -75,6 +75,7 @@ export interface AppConfig {
   adminEmails?: string[];      // Admin user emails allowed to access /accounts / 계정 관리 접근 허용 이메일
   accounts?: AccountConfig[];
   datasources?: DatasourceConfig[];  // External datasources / 외부 데이터소스
+  datasourceAllowedNetworks?: string[];  // Allowed private CIDRs/hostnames for datasource SSRF allowlist
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -155,4 +156,8 @@ export function getDefaultDatasource(type: DatasourceType): DatasourceConfig | u
 
 export function getDatasourcesByType(type: DatasourceType): DatasourceConfig[] {
   return getDatasources().filter(d => d.type === type);
+}
+
+export function getDatasourceAllowedNetworks(): string[] {
+  return getConfig().datasourceAllowedNetworks || [];
 }

@@ -56,6 +56,7 @@ const agentCoreClient = new BedrockAgentCoreClient({ region: AGENTCORE_REGION })
 // ============================================================================
 interface RouteConfig {
   gateway: string;             // AgentCore gateway role / AgentCore 게이트웨이 역할
+  skill?: string;              // SKILL_BASE override (when different from gateway) / 게이트웨이와 다른 스킬 프롬프트 사용 시
   display: string;             // UI display name / UI 표시 이름
   description: string;         // What this route handles / 이 라우트가 처리하는 것
   tools: string[];             // Available tool capabilities / 사용 가능한 도구 기능
@@ -185,6 +186,27 @@ const ROUTE_REGISTRY: Record<string, RouteConfig> = {
       '"네트워크 현황" → aws-data', '"인프라 구성 보여줘" → aws-data',
     ],
     handler: 'sql',
+  },
+  'datasource-diag': {
+    gateway: 'monitoring',
+    skill: 'diagnostics',
+    display: 'Datasource Diagnostics (8 tools)',
+    description: 'Datasource connectivity troubleshooting — DNS, network path, SG, NLB targets, HTTP connectivity',
+    tools: [
+      'URL 검증/SSRF 위험 판단/프로토콜 확인',
+      'DNS 해석/IP→VPC CIDR 매핑',
+      'NLB 타겟 그룹 헬스 체크',
+      '보안그룹 체인 분석 (소스→목적지)',
+      '네트워크 경로 추적 (TGW/Peering/Cross-VPC)',
+      'HTTP 엔드포인트 연결 테스트',
+      'K8s Service 엔드포인트/Pod 매칭 확인',
+      '전체 6단계 자동 진단 (run_full_diagnosis)',
+    ],
+    examples: [
+      '"Prometheus 연결 진단" → datasource-diag', '"데이터소스 연결 안됨" → datasource-diag',
+      '"NLB 타겟 헬스 확인" → datasource-diag', '"datasource connection timeout" → datasource-diag',
+      '"datasource connectivity troubleshoot" → datasource-diag', '"데이터소스 네트워크 경로 확인" → datasource-diag',
+    ],
   },
   datasource: {
     gateway: '',
@@ -614,19 +636,22 @@ async function invokeAgentCore(
   messages: Array<{role: string; content: string}>,
   gateway: string,
   accountId?: string,
-  accountAlias?: string
+  accountAlias?: string,
+  skill?: string,
 ): Promise<string | null> {
   try {
     const recentMessages = messages.slice(-10);
+    const payload: Record<string, any> = {
+      messages: recentMessages,
+      gateway,
+      accountId: accountId || '',
+      accountAlias: accountAlias || '',
+    };
+    if (skill) payload.skill = skill;
     const command = new InvokeAgentRuntimeCommand({
       agentRuntimeArn: getAgentRuntimeArn(),
       qualifier: 'DEFAULT',
-      payload: JSON.stringify({
-        messages: recentMessages,
-        gateway,
-        accountId: accountId || '',
-        accountAlias: accountAlias || '',
-      }),
+      payload: JSON.stringify(payload),
     });
 
     const timeoutPromise = new Promise<null>((resolve) =>
@@ -721,6 +746,10 @@ const KNOWN_TOOLS = new Set([
   // Ops (9)
   'search_documentation', 'read_documentation', 'recommend', 'list_regions',
   'get_regional_availability', 'prompt_understanding', 'call_aws', 'suggest_aws_commands', 'run_steampipe_query',
+  // Diagnostics (8)
+  'validate_datasource_url', 'resolve_dns', 'check_nlb_targets',
+  'analyze_security_groups', 'trace_network_path', 'test_http_connectivity',
+  'check_k8s_service_endpoints', 'run_full_diagnosis',
 ]);
 
 // 응답 내용 기반 도구 추론 매핑 / Infer tools from response content keywords
@@ -766,6 +795,15 @@ const TOOL_KEYWORD_MAP: Record<string, string[]> = {
   'list_db_instances': ['RDS', 'rds', 'DB 인스턴스'],
   'list_cache_clusters': ['ElastiCache', 'elasticache', 'Redis', 'Valkey'],
   'list_clusters': ['MSK', 'Kafka', 'kafka'],
+  // Diagnostics
+  'validate_datasource_url': ['URL 검증', 'SSRF', 'ssrf', 'URL validation'],
+  'resolve_dns': ['DNS 해석', 'dns resolution', 'DNS lookup', '호스트 해석'],
+  'check_nlb_targets': ['NLB 타겟', 'nlb target', 'target health', '타겟 헬스'],
+  'analyze_security_groups': ['SG 분석', 'security group analysis', 'SG 체인', 'sg chain'],
+  'trace_network_path': ['네트워크 경로', 'network path', 'cross-vpc', '크로스VPC'],
+  'test_http_connectivity': ['HTTP 연결', 'http connectivity', 'health check', '헬스체크'],
+  'check_k8s_service_endpoints': ['K8s 엔드포인트', 'service endpoint', 'Pod 매칭'],
+  'run_full_diagnosis': ['전체 진단', 'full diagnosis', '연결 진단', 'connectivity diagnosis'],
 };
 
 function extractUsedTools(rawResponse: string): string[] {
@@ -1210,7 +1248,7 @@ export async function POST(request: NextRequest) {
           send('status', { step: 'agentcore', message: STATUS.agentcoreProgress(config.display, keepaliveCount * 15) });
         }, 15000);
 
-        const agentResponse = await invokeAgentCore(messages, gateway, accountId, account?.alias);
+        const agentResponse = await invokeAgentCore(messages, gateway, accountId, account?.alias, config.skill);
         clearInterval(keepaliveInterval);
 
         if (agentResponse) {
@@ -1336,7 +1374,7 @@ async function handleSingleRoute(
 
   // AgentCore Gateway / AgentCore 게이트웨이
   const gateway = config.gateway || 'ops';
-  const agentResponse = await invokeAgentCore(messages, gateway, accountId, accountAlias);
+  const agentResponse = await invokeAgentCore(messages, gateway, accountId, accountAlias, config.skill);
   if (agentResponse) {
     const usedTools = extractUsedTools(agentResponse);
     const cleaned = agentResponse.replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/g, '').replace(/<tool_response>[\s\S]*?<\/tool_response>\s*/g, '').trim();

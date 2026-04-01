@@ -31,9 +31,10 @@ AgentCore 게이트웨이 MCP 도구용 19개 Lambda 함수 + 1개 공유 모듈
 ### Security Gateway (14 tools)
 - `aws_iam_mcp.py` — IAM users/roles/groups/policies, simulation (14 tools)
 
-### Monitoring Gateway (16 tools)
+### Monitoring Gateway (24 tools)
 - `aws_cloudwatch_mcp.py` — Metrics, alarms, Log Insights (11 tools)
 - `aws_cloudtrail_mcp.py` — Event lookup, CloudTrail Lake (5 tools)
+- `datasource_diag_mcp.py` — 데이터소스 연결 진단 (Datasource connectivity diagnostics, 8 tools: URL validation, DNS, NLB targets, SG analysis, network path, HTTP connectivity, K8s endpoints, full diagnosis)
 
 ### Cost Gateway (9 tools)
 - `aws_cost_mcp.py` — Cost Explorer, Pricing, Budgets (9 tools)

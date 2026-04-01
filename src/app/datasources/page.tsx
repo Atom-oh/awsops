@@ -8,8 +8,9 @@ import { useLanguage } from '@/lib/i18n/LanguageContext';
 import {
   Database, Activity, FileText, Waypoints, Plus, Trash2, Edit3,
   Check, X, RefreshCw, TestTube, Shield, CheckCircle, XCircle, Settings, Lock,
-  Radar, Gauge, Dog,
+  Radar, Gauge, Dog, Globe, Info, Stethoscope,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 // --- Types / 타입 ---
 
@@ -122,6 +123,7 @@ function emptyForm(): Omit<DatasourceEntry, 'id' | 'createdAt' | 'updatedAt'> {
 
 export default function DatasourcesPage() {
   const { t } = useLanguage();
+  const router = useRouter();
 
   // --- State ---
   const [datasources, setDatasources] = useState<DatasourceEntry[]>([]);
@@ -143,6 +145,12 @@ export default function DatasourcesPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+
+  // Allowed networks state / 허용 네트워크 상태
+  const [allowedNetworks, setAllowedNetworks] = useState<string[]>([]);
+  const [newNetwork, setNewNetwork] = useState('');
+  const [networkError, setNetworkError] = useState<string | null>(null);
+  const [networkSaving, setNetworkSaving] = useState(false);
 
   // --- Data loading / 데이터 로딩 ---
 
@@ -169,6 +177,19 @@ export default function DatasourcesPage() {
   }, []);
 
   useEffect(() => { loadDatasources(); }, [loadDatasources]);
+
+  // Load allowed networks (admin-only) / 허용 네트워크 로딩 (관리자 전용)
+  const loadAllowedNetworks = useCallback(async () => {
+    try {
+      const res = await fetch('/awsops/api/datasources?action=allowlist');
+      if (res.ok) {
+        const data = await res.json();
+        setAllowedNetworks(data.allowedNetworks || []);
+      }
+    } catch { /* non-admin or error — ignore */ }
+  }, []);
+
+  useEffect(() => { if (isAdmin) loadAllowedNetworks(); }, [isAdmin, loadAllowedNetworks]);
 
   // --- Stats / 통계 ---
 
@@ -301,6 +322,61 @@ export default function DatasourcesPage() {
   const updateSettings = (patch: Partial<DatasourceSettings>) =>
     setForm(prev => ({ ...prev, settings: { ...prev.settings, ...patch } }));
 
+  // --- Allowed networks handlers / 허용 네트워크 핸들러 ---
+
+  const handleAddNetwork = async () => {
+    const trimmed = newNetwork.trim();
+    if (!trimmed) return;
+    if (allowedNetworks.includes(trimmed)) {
+      setNetworkError('Already in the list');
+      return;
+    }
+    setNetworkSaving(true);
+    setNetworkError(null);
+    try {
+      const updated = [...allowedNetworks, trimmed];
+      const res = await fetch('/awsops/api/datasources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update-allowlist', networks: updated }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setNetworkError(data.error);
+      } else {
+        setAllowedNetworks(data.allowedNetworks || updated);
+        setNewNetwork('');
+      }
+    } catch {
+      setNetworkError('Failed to update');
+    } finally {
+      setNetworkSaving(false);
+    }
+  };
+
+  const handleRemoveNetwork = async (entry: string) => {
+    setNetworkSaving(true);
+    setNetworkError(null);
+    try {
+      const updated = allowedNetworks.filter(n => n !== entry);
+      const res = await fetch('/awsops/api/datasources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update-allowlist', networks: updated }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setNetworkError(data.error);
+      } else {
+        setAllowedNetworks(data.allowedNetworks || updated);
+      }
+    } catch {
+      setNetworkError('Failed to update');
+    } finally {
+      setNetworkSaving(false);
+    }
+  };
+
   // --- Access denied / 접근 거부 ---
 
   if (accessChecked && !isAdmin && datasources.length === 0) {
@@ -369,6 +445,17 @@ export default function DatasourcesPage() {
           label: t('datasources.actions') !== 'datasources.actions' ? t('datasources.actions') : 'Actions',
           render: (_: any, row: DatasourceEntry) => (
             <div className="flex items-center gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const msg = encodeURIComponent(`${row.name} (${row.url}) 연결을 진단해줘`);
+                  router.push(`/awsops/ai?message=${msg}`);
+                }}
+                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs bg-purple-500/20 text-purple-400 border border-purple-500/30 hover:bg-purple-500/30 transition-colors"
+                title={t('datasources.diagnose') !== 'datasources.diagnose' ? t('datasources.diagnose') : 'Diagnose'}
+              >
+                <Stethoscope size={12} />
+              </button>
               <button
                 onClick={(e) => { e.stopPropagation(); openEditPanel(row); }}
                 className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30 transition-colors"
@@ -457,6 +544,82 @@ export default function DatasourcesPage() {
             color="purple"
           />
         </div>
+
+        {/* Allowed Networks (admin-only) / 허용 네트워크 (관리자 전용) */}
+        {isAdmin && (
+          <div className="bg-navy-800 rounded-xl border border-navy-600 p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Globe size={16} className="text-accent-cyan" />
+              <h3 className="text-sm font-semibold text-white">
+                {t('datasources.allowedNetworks') !== 'datasources.allowedNetworks' ? t('datasources.allowedNetworks') : 'Allowed Networks'}
+              </h3>
+            </div>
+            <p className="text-xs text-gray-400 mb-3">
+              {t('datasources.allowedNetworksDesc') !== 'datasources.allowedNetworksDesc'
+                ? t('datasources.allowedNetworksDesc')
+                : 'Allowlist for accessing datasources inside VPC (e.g. Private NLB). Route 53 Private Hosted Zone domains recommended.'}
+            </p>
+
+            {/* Current entries / 현재 항목 */}
+            {allowedNetworks.length > 0 ? (
+              <div className="space-y-1.5 mb-3">
+                {allowedNetworks.map((entry) => (
+                  <div key={entry} className="flex items-center justify-between px-3 py-2 rounded-lg bg-navy-900 border border-navy-600 group">
+                    <span className="font-mono text-sm text-gray-300">{entry}</span>
+                    <button
+                      onClick={() => handleRemoveNetwork(entry)}
+                      disabled={networkSaving}
+                      className="opacity-0 group-hover:opacity-100 p-1 rounded text-red-400 hover:bg-red-500/20 transition-all disabled:opacity-50"
+                      title={t('datasources.removeNetwork') !== 'datasources.removeNetwork' ? t('datasources.removeNetwork') : 'Remove'}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500 mb-3 italic">
+                {t('datasources.allowedNetworksEmpty') !== 'datasources.allowedNetworksEmpty'
+                  ? t('datasources.allowedNetworksEmpty')
+                  : 'No allowed networks configured'}
+              </p>
+            )}
+
+            {/* Add new entry / 새 항목 추가 */}
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newNetwork}
+                onChange={(e) => { setNewNetwork(e.target.value); setNetworkError(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAddNetwork(); }}
+                placeholder={t('datasources.allowedNetworksPlaceholder') !== 'datasources.allowedNetworksPlaceholder'
+                  ? t('datasources.allowedNetworksPlaceholder')
+                  : '10.0.1.0/24 or prometheus.corp.internal'}
+                className="flex-1 bg-navy-700 border border-navy-600 rounded-lg px-3 py-2 text-gray-200 focus:border-cyan-500 focus:outline-none font-mono text-sm placeholder-gray-600"
+              />
+              <button
+                onClick={handleAddNetwork}
+                disabled={networkSaving || !newNetwork.trim()}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-accent-cyan/20 text-accent-cyan border border-accent-cyan/30 hover:bg-accent-cyan/30 transition-colors disabled:opacity-50"
+              >
+                {t('datasources.addNetwork') !== 'datasources.addNetwork' ? t('datasources.addNetwork') : 'Add'}
+              </button>
+            </div>
+
+            {networkError && (
+              <p className="text-xs text-red-400 mt-2">{networkError}</p>
+            )}
+
+            <div className="flex items-start gap-1.5 mt-3">
+              <Info size={12} className="text-gray-500 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-gray-500">
+                {t('datasources.allowedNetworksHint') !== 'datasources.allowedNetworksHint'
+                  ? t('datasources.allowedNetworksHint')
+                  : 'Supports CIDR, IP address, hostname pattern (*.example.com)'}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Add button + table header / 추가 버튼 + 테이블 헤더 */}
         <div className="flex items-center justify-between">

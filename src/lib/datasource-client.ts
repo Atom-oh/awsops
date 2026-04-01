@@ -101,7 +101,7 @@ function toUnixSeconds(ts: string): string {
 async function queryPrometheus(ds: DatasourceConfig, query: string, opts?: QueryOptions): Promise<QueryResult> {
   const timeout = ds.settings?.timeout || 30000;
   const headers = buildHeaders(ds);
-  const baseUrl = ds.url.replace(/\/$/, '');
+  const baseUrl = ds.url.trim().replace(/\/$/, '');
 
   const isRange = opts?.start || opts?.step;
   const now = Date.now() / 1000;
@@ -170,7 +170,7 @@ function normalizePrometheusResult(data: any, ds: DatasourceConfig): QueryResult
 async function queryLoki(ds: DatasourceConfig, query: string, opts?: QueryOptions): Promise<QueryResult> {
   const timeout = ds.settings?.timeout || 30000;
   const headers = buildHeaders(ds);
-  const baseUrl = ds.url.replace(/\/$/, '');
+  const baseUrl = ds.url.trim().replace(/\/$/, '');
 
   const isRange = opts?.start || opts?.step;
   const params = new URLSearchParams({ query });
@@ -240,7 +240,7 @@ function normalizeLokiResult(data: any, ds: DatasourceConfig): QueryResult {
 async function queryTempo(ds: DatasourceConfig, query: string, opts?: QueryOptions): Promise<QueryResult> {
   const timeout = ds.settings?.timeout || 30000;
   const headers = buildHeaders(ds);
-  const baseUrl = ds.url.replace(/\/$/, '');
+  const baseUrl = ds.url.trim().replace(/\/$/, '');
 
   // Detect trace ID lookup vs TraceQL search
   const isTraceId = /^[a-f0-9]{16,32}$/i.test(query.trim());
@@ -327,7 +327,7 @@ async function queryClickHouse(ds: DatasourceConfig, query: string, opts?: Query
   const timeout = ds.settings?.timeout || 30000;
   const headers = buildHeaders(ds);
   headers['Content-Type'] = 'text/plain';
-  const baseUrl = ds.url.replace(/\/$/, '');
+  const baseUrl = ds.url.trim().replace(/\/$/, '');
 
   const params = new URLSearchParams();
   if (ds.settings?.database) params.set('database', ds.settings.database);
@@ -368,7 +368,7 @@ function normalizeClickHouseResult(data: any, ds: DatasourceConfig): QueryResult
 async function queryJaeger(ds: DatasourceConfig, query: string, opts?: QueryOptions): Promise<QueryResult> {
   const timeout = ds.settings?.timeout || 30000;
   const headers = buildHeaders(ds);
-  const baseUrl = ds.url.replace(/\/$/, '');
+  const baseUrl = ds.url.trim().replace(/\/$/, '');
 
   // Detect trace ID lookup vs service search
   const isTraceId = /^[a-f0-9]{16,32}$/i.test(query.trim());
@@ -449,7 +449,7 @@ function normalizeJaegerSearch(data: any, ds: DatasourceConfig): QueryResult {
 async function queryDynatrace(ds: DatasourceConfig, query: string, opts?: QueryOptions): Promise<QueryResult> {
   const timeout = ds.settings?.timeout || 30000;
   const headers = buildHeaders(ds);
-  const baseUrl = ds.url.replace(/\/$/, '');
+  const baseUrl = ds.url.trim().replace(/\/$/, '');
 
   // Detect entity query vs metric query
   const isEntity = /^(HOST|SERVICE|PROCESS|APPLICATION)/i.test(query.trim());
@@ -521,7 +521,7 @@ function normalizeDynatraceMetrics(data: any, ds: DatasourceConfig): QueryResult
 async function queryDatadog(ds: DatasourceConfig, query: string, opts?: QueryOptions): Promise<QueryResult> {
   const timeout = ds.settings?.timeout || 30000;
   const headers = buildHeaders(ds);
-  const baseUrl = ds.url.replace(/\/$/, '');
+  const baseUrl = ds.url.trim().replace(/\/$/, '');
 
   // Detect log search vs metric query
   const isLogSearch = /^(logs:|search:|source:|service:|status:)/i.test(query.trim()) || query.includes('"');
@@ -633,7 +633,7 @@ export async function testConnection(ds: DatasourceConfig): Promise<TestResult> 
 
   const timeout = ds.settings?.timeout || 10000;
   const headers = buildHeaders(ds);
-  const baseUrl = ds.url.replace(/\/$/, '');
+  const baseUrl = ds.url.trim().replace(/\/$/, '');
   const start = Date.now();
 
   try {
@@ -656,7 +656,9 @@ export async function testConnection(ds: DatasourceConfig): Promise<TestResult> 
     return { ok: true, latency, version };
   } catch (err: any) {
     const latency = Date.now() - start;
-    if (err.name === 'AbortError') return { ok: false, latency, error: 'Connection timeout' };
-    return { ok: false, latency, error: err.message };
+    const cause = err.cause ? ` (${err.cause.code || err.cause.message || err.cause})` : '';
+    console.error(`[datasource-test] URL=${baseUrl}${meta.healthEndpoint} err=${err.message}${cause} name=${err.name} latency=${latency}ms`);
+    if (err.name === 'AbortError' || err.cause?.name === 'AbortError') return { ok: false, latency, error: 'Connection timeout' };
+    return { ok: false, latency, error: `${err.message}${cause}` };
   }
 }
