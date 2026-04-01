@@ -75,6 +75,7 @@ const sidebars: SidebarsConfig = {
         'monitoring/cloudtrail',
         'monitoring/cost',
         'monitoring/inventory',
+        'monitoring/datasources',
       ],
     },
     {

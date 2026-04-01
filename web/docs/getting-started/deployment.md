@@ -31,7 +31,7 @@ cd infra-cdk && cdk deploy --all
 ```
 
 CDK가 배포하는 리소스:
-- **VPC**: 10.254.0.0/16, 2 AZ, NAT Gateway, Public + Private Subnet
+- **VPC**: 10.10.0.0/16, 2 AZ, NAT Gateway, Public + Private Subnet (CDK 컨텍스트 파라미터 `newVpcCidr`로 변경 가능)
 - **EC2**: t4g.2xlarge (ARM64 Graviton), 100GB GP3, Private Subnet
 - **ALB**: Internet-facing, Custom Header 검증
 - **CloudFront**: CACHING_DISABLED, ALB Origin

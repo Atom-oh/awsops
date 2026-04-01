@@ -31,7 +31,7 @@ cd infra-cdk && cdk deploy --all
 ```
 
 Resources deployed by CDK:
-- **VPC**: 10.254.0.0/16, 2 AZs, NAT Gateway, Public + Private Subnets
+- **VPC**: 10.10.0.0/16, 2 AZs, NAT Gateway, Public + Private Subnets (configurable via CDK context parameter `newVpcCidr`)
 - **EC2**: t4g.2xlarge (ARM64 Graviton), 100GB GP3, Private Subnet
 - **ALB**: Internet-facing, Custom Header validation
 - **CloudFront**: CACHING_DISABLED, ALB Origin

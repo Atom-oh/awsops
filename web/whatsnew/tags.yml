@@ -40,3 +40,9 @@ deployment:
 docs:
   label: Docs
   description: Documentation and user guides
+datasources:
+  label: Datasources
+  description: External datasource integrations (Prometheus, Loki, ClickHouse, etc.)
+infrastructure:
+  label: Infrastructure
+  description: VPC, CIDR, TGW, CDK infrastructure changes
