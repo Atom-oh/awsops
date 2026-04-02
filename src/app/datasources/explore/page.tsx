@@ -598,7 +598,7 @@ export default function DatasourceExplorePage() {
                 ? (selectedDs ? AI_PLACEHOLDERS[selectedDs.type] : 'Select a datasource first...')
                 : (selectedDs ? PLACEHOLDERS[selectedDs.type] : 'Select a datasource to start querying...')
             }
-            className={`w-full bg-navy-900 border rounded-lg p-3 text-sm text-gray-200 placeholder-gray-600 resize-y focus:outline-none transition-colors ${
+            className={`w-full bg-navy-900 border rounded-lg p-3 text-sm text-gray-200 placeholder-gray-600 resize-y min-h-[72px] max-h-[50vh] focus:outline-none transition-colors ${
               aiMode
                 ? 'border-accent-purple/30 focus:border-accent-purple/50 focus:ring-1 focus:ring-accent-purple/20'
                 : 'border-navy-600 focus:border-accent-cyan/50 focus:ring-1 focus:ring-accent-cyan/20 font-mono'
