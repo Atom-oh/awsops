@@ -320,6 +320,8 @@
   "k8s.noAccess.title": "EKS cluster access required",
   "k8s.noAccess.description": "To display Kubernetes data, the EC2 instance role must be authenticated to the EKS cluster. Ask the cluster admin to register an Access Entry or aws-auth ConfigMap.",
   "k8s.noAccess.guide": "Authentication Guide",
+  "k8s.noAccess.noEntry": "No Access",
+  "k8s.noAccess.register": "Register ViewPolicy",
   "k8s.clusters": "Clusters",
   "k8s.nodes": "Nodes",
   "k8s.pods": "Pods",

@@ -8,7 +8,7 @@ import StatusBadge from '@/components/dashboard/StatusBadge';
 import PieChartCard from '@/components/charts/PieChartCard';
 import BarChartCard from '@/components/charts/BarChartCard';
 import DataTable from '@/components/table/DataTable';
-import { Box, Rocket, Network, Server, AlertTriangle, BookOpen } from 'lucide-react';
+import { Box, Rocket, Network, Server, AlertTriangle, BookOpen, ShieldCheck, ShieldAlert, Plus, Loader2 } from 'lucide-react';
 import { queries as k8sQ } from '@/lib/queries/k8s';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAccountContext } from '@/contexts/AccountContext';
@@ -106,6 +106,9 @@ export default function K8sOverviewPage() {
   const [nodeEnis, setNodeEnis] = useState<any[]>([]);
   const [nodeTraffic, setNodeTraffic] = useState<any>(null);
   const [eniLoading, setEniLoading] = useState(false);
+  const [ec2RoleArn, setEc2RoleArn] = useState<string | null>(null);
+  const [registeringCluster, setRegisteringCluster] = useState<string | null>(null);
+  const [registerResult, setRegisterResult] = useState<{ cluster: string; ok: boolean; msg: string } | null>(null);
 
   // Fetch ENI data + traffic for selected node / 선택된 노드의 ENI + 트래픽 조회
   const fetchNodeEnis = useCallback(async (nodeName: string) => {
@@ -192,18 +195,62 @@ export default function K8sOverviewPage() {
             podRequests: POD_REQUESTS_QUERY,
             podList: k8sQ.podList,
             eksClusters: k8sQ.eksClusterList,
+            accessEntries: `SELECT cluster_name, principal_arn, type FROM aws_eks_access_entry`,
           },
         }),
       });
       setData(await res.json());
+      // Fetch EC2 role ARN for access entry matching / Access Entry 매칭용 EC2 역할 ARN 조회
+      if (!ec2RoleArn) {
+        try {
+          const roleRes = await fetch('/awsops/api/steampipe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ queries: { callerArn: `SELECT arn FROM aws_iam_role WHERE arn = (SELECT replace(replace(replace(arn, ':sts:', ':iam:'), ':assumed-role/', ':role/'), '/' || split_part(arn, '/', 3), '') FROM aws_sts_caller_identity) LIMIT 1` } }),
+          });
+          const roleData = await roleRes.json();
+          const arn = roleData.callerArn?.rows?.[0]?.arn;
+          if (arn) setEc2RoleArn(arn);
+        } catch {}
+      }
     } catch {
       // keep existing data
     } finally {
       setLoading(false);
     }
-  }, [currentAccountId]);
+  }, [currentAccountId, ec2RoleArn]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Register EKS Access Entry + ViewPolicy / Access Entry + ViewPolicy 등록
+  const registerAccessEntry = useCallback(async (clusterName: string, region: string) => {
+    if (!ec2RoleArn) return;
+    setRegisteringCluster(clusterName);
+    setRegisterResult(null);
+    try {
+      const res = await fetch('/awsops/api/steampipe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'eks-register-access',
+          clusterName,
+          region,
+          principalArn: ec2RoleArn,
+        }),
+      });
+      const result = await res.json();
+      if (result.error) {
+        setRegisterResult({ cluster: clusterName, ok: false, msg: result.error });
+      } else {
+        setRegisterResult({ cluster: clusterName, ok: true, msg: result.message || 'Access Entry registered' });
+        setTimeout(() => fetchData(true), 2000);
+      }
+    } catch (err: any) {
+      setRegisterResult({ cluster: clusterName, ok: false, msg: err.message || 'Failed' });
+    } finally {
+      setRegisteringCluster(null);
+    }
+  }, [ec2RoleArn, fetchData]);
 
   const get = (key: string) => data[key]?.rows || [];
   const getFirst = (key: string) => get(key)[0] || {};
@@ -217,6 +264,14 @@ export default function K8sOverviewPage() {
   const nodes = get('nodeList');
   const podReqRows = get('podRequests');
   const eksClusters = get('eksClusters');
+
+  // Access entry data per cluster / 클러스터별 Access Entry 데이터
+  const accessEntries = get('accessEntries');
+  const getClusterAccess = (clusterName: string) => {
+    if (!ec2RoleArn) return 'unknown';
+    const hasEntry = accessEntries.some((e: any) => e.cluster_name === clusterName && e.principal_arn === ec2RoleArn);
+    return hasEntry ? 'registered' : 'none';
+  };
 
   // Detect missing K8s access / K8s 접근 권한 미설정 감지
   const hasK8sData = nodes.length > 0 || get('podSummary').length > 0;
@@ -615,11 +670,28 @@ export default function K8sOverviewPage() {
 
             {/* EKS Cluster Cards / EKS 클러스터 카드 */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {filteredClusters.map((c: any) => (
+              {filteredClusters.map((c: any) => {
+                const access = getClusterAccess(c.cluster_name);
+                const isRegistering = registeringCluster === c.cluster_name;
+                const result = registerResult?.cluster === c.cluster_name ? registerResult : null;
+                return (
                 <div key={c.cluster_name} className="bg-navy-800 border border-navy-600 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-white font-mono text-sm font-semibold">{c.cluster_name}</span>
-                    <StatusBadge status={c.status || 'UNKNOWN'} />
+                    <div className="flex items-center gap-2">
+                      {access === 'registered' ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent-green/10 text-accent-green border border-accent-green/20">
+                          <ShieldCheck size={10} />
+                          Access Entry
+                        </span>
+                      ) : access === 'none' ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent-red/10 text-accent-red border border-accent-red/20">
+                          <ShieldAlert size={10} />
+                          {t('k8s.noAccess.noEntry')}
+                        </span>
+                      ) : null}
+                      <StatusBadge status={c.status || 'UNKNOWN'} />
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div><span className="text-gray-500">Version: </span><span className="text-gray-300 font-mono">{c.version}</span></div>
@@ -627,8 +699,36 @@ export default function K8sOverviewPage() {
                     <div><span className="text-gray-500">Platform: </span><span className="text-gray-300 font-mono">{c.platform_version || '--'}</span></div>
                     <div><span className="text-gray-500">Region: </span><span className="text-gray-300 font-mono">{c.region}</span></div>
                   </div>
+                  {/* Register Access Entry button / Access Entry 등록 버튼 */}
+                  {access === 'none' && ec2RoleArn && (
+                    <div className="mt-2 pt-2 border-t border-navy-700">
+                      <button
+                        onClick={() => registerAccessEntry(c.cluster_name, c.region)}
+                        disabled={isRegistering}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/30 hover:bg-accent-cyan/20 disabled:opacity-50 transition-colors"
+                      >
+                        {isRegistering ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                        {t('k8s.noAccess.register')}
+                      </button>
+                      <a
+                        href="/awsops-docs/docs/compute/eks-auth"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 ml-2 text-[10px] text-gray-500 hover:text-accent-cyan transition-colors"
+                      >
+                        <BookOpen size={10} />
+                        {t('k8s.noAccess.guide')}
+                      </a>
+                    </div>
+                  )}
+                  {result && (
+                    <div className={`mt-2 px-2 py-1.5 rounded text-xs ${result.ok ? 'bg-accent-green/10 text-accent-green' : 'bg-accent-red/10 text-accent-red'}`}>
+                      {result.msg}
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
