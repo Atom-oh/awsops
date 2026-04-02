@@ -196,29 +196,22 @@ export default function K8sOverviewPage() {
             podList: k8sQ.podList,
             eksClusters: k8sQ.eksClusterList,
             accessEntries: `SELECT cluster_name, principal_arn, type FROM aws_eks_access_entry`,
+            callerRole: `SELECT replace(replace(replace(arn, ':sts:', ':iam:'), ':assumed-role/', ':role/'), '/' || split_part(arn, '/', 3), '') as arn FROM aws_sts_caller_identity`,
           },
         }),
       });
-      setData(await res.json());
-      // Fetch EC2 role ARN for access entry matching / Access Entry 매칭용 EC2 역할 ARN 조회
-      if (!ec2RoleArn) {
-        try {
-          const roleRes = await fetch('/awsops/api/steampipe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ queries: { callerArn: `SELECT replace(replace(replace(arn, ':sts:', ':iam:'), ':assumed-role/', ':role/'), '/' || split_part(arn, '/', 3), '') as arn FROM aws_sts_caller_identity` } }),
-          });
-          const roleData = await roleRes.json();
-          const arn = roleData.callerArn?.rows?.[0]?.arn;
-          if (arn) setEc2RoleArn(arn);
-        } catch {}
-      }
+      const result = await res.json();
+      setData(result);
+      // Extract EC2 role ARN from batch result / 배치 결과에서 EC2 역할 ARN 추출
+      const detectedArn = result.callerRole?.rows?.[0]?.arn;
+      if (detectedArn && !ec2RoleArn) setEc2RoleArn(detectedArn);
     } catch {
       // keep existing data
     } finally {
       setLoading(false);
     }
-  }, [currentAccountId, ec2RoleArn]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentAccountId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
