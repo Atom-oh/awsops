@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import {
   BarChart,
   Bar,
@@ -26,12 +27,15 @@ function CustomTooltip({ active, payload, label }: any) {
 }
 
 export default function BarChartCard({ title, data, color = '#00d4ff' }: BarChartCardProps) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
   return (
     <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
       <h3 className="text-sm font-semibold text-white mb-4">{title}</h3>
 
       <div className="h-52">
-        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        {mounted && <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data}>
             <XAxis
               dataKey="name"
@@ -48,7 +52,7 @@ export default function BarChartCard({ title, data, color = '#00d4ff' }: BarChar
             <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(0,212,255,0.05)' }} />
             <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={40} />
           </BarChart>
-        </ResponsiveContainer>
+        </ResponsiveContainer>}
       </div>
     </div>
   );
