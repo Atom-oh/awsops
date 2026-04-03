@@ -799,6 +799,7 @@ export default function K8sOverviewPage() {
             icon={Server}
             color="cyan"
             change={`${nodeSummary.ready_nodes ?? 0} ready`}
+            href="/k8s/nodes"
           />
           <StatsCard
             label={t('k8s.pods')}
@@ -806,6 +807,7 @@ export default function K8sOverviewPage() {
             icon={Box}
             color="green"
             change={`${podSummary.running_pods ?? 0} running`}
+            href="/k8s/pods"
           />
           <StatsCard
             label={t('k8s.deployments')}
@@ -813,12 +815,14 @@ export default function K8sOverviewPage() {
             icon={Rocket}
             color="purple"
             change={`${deploySummary.fully_available ?? 0} fully available`}
+            href="/k8s/deployments"
           />
           <StatsCard
             label={t('k8s.services')}
             value={filteredServices.length}
             icon={Network}
             color="orange"
+            href="/k8s/services"
           />
         </div>
 
