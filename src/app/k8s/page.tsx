@@ -35,25 +35,6 @@ interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
 }
 
-const NODE_LIST_QUERY = `
-  SELECT
-    name, uid, pod_cidr, capacity_cpu, capacity_memory,
-    allocatable_cpu, allocatable_memory, context_name,
-    CASE WHEN jsonb_array_length(conditions) > 0 THEN 'Ready' ELSE 'NotReady' END as status
-  FROM kubernetes_node
-`;
-
-const POD_REQUESTS_QUERY = `
-  SELECT
-    p.node_name,
-    c->'resources'->'requests'->>'cpu' AS cpu_req,
-    c->'resources'->'requests'->>'memory' AS mem_req
-  FROM
-    kubernetes_pod p,
-    jsonb_array_elements(p.containers) AS c
-  WHERE
-    p.phase = 'Running' AND p.node_name IS NOT NULL
-`;
 
 // Format bytes to human readable / 바이트를 가독성 있게 변환
 function formatBytes(bytes: number): string {
@@ -217,12 +198,12 @@ export default function K8sOverviewPage() {
             warningEvents: k8sQ.warningEvents,
             namespaceSummary: k8sQ.namespaceSummary,
             podsPerNamespace: k8sQ.podsPerNamespace,
-            nodeList: NODE_LIST_QUERY,
-            podRequests: POD_REQUESTS_QUERY,
+            nodeList: k8sQ.nodeList,
+            podRequests: k8sQ.podRequests,
             podList: k8sQ.podList,
             eksClusters: k8sQ.eksClusterList,
             serviceResources: k8sQ.serviceResources,
-            callerRole: `SELECT replace(replace(replace(arn, ':sts:', ':iam:'), ':assumed-role/', ':role/'), '/' || split_part(arn, '/', 3), '') as arn FROM aws_sts_caller_identity`,
+            callerRole: k8sQ.callerRole,
           },
         }),
       });

@@ -15,26 +15,6 @@ interface DashboardData {
   [key: string]: { rows: Record<string, unknown>[]; error?: string };
 }
 
-const NODE_QUERY = `
-  SELECT
-    name, capacity_cpu as cpu_capacity, capacity_memory as memory_capacity,
-    allocatable_cpu, allocatable_memory, context_name
-  FROM kubernetes_node
-`;
-
-const POD_REQUESTS_QUERY = `
-  SELECT
-    p.node_name,
-    c->'resources'->'requests'->>'cpu' AS cpu_req,
-    c->'resources'->'requests'->>'memory' AS mem_req,
-    p.context_name
-  FROM
-    kubernetes_pod p,
-    jsonb_array_elements(p.containers) AS c
-  WHERE
-    p.phase = 'Running' AND p.node_name IS NOT NULL
-`;
-
 // Parse K8s CPU (e.g. "8" → 8, "7910m" → 7.91)
 function parseCpu(cpu: any): number {
   if (!cpu) return 0;
@@ -226,8 +206,8 @@ export default function K8sExplorerPage() {
           accountId: currentAccountId,
           queries: {
             resources: currentConfig?.query ?? '',
-            nodes: NODE_QUERY,
-            podRequests: POD_REQUESTS_QUERY,
+            nodes: k8sQ.nodeCapacity,
+            podRequests: k8sQ.podRequestsWithContext,
             eksClusters: k8sQ.eksClusterList,
           },
         }),

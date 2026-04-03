@@ -343,5 +343,58 @@ export const queries = {
       AND s.selector IS NOT NULL
       AND s.selector != '{}'::jsonb
     ORDER BY s.namespace, s.name
+  `,
+
+  // ── Page-level queries (shared with cache-warmer) ──
+  // K8s Overview page inline queries / K8s 개요 페이지 인라인 쿼리
+
+  // Node list with status (K8s overview) / 노드 상세 목록 + 상태
+  nodeList: `
+    SELECT
+      name, uid, pod_cidr, capacity_cpu, capacity_memory,
+      allocatable_cpu, allocatable_memory, context_name,
+      CASE WHEN jsonb_array_length(conditions) > 0 THEN 'Ready' ELSE 'NotReady' END as status
+    FROM kubernetes_node
+  `,
+
+  // Node capacity (K8s explorer) / 노드 CPU/메모리 용량
+  nodeCapacity: `
+    SELECT
+      name, capacity_cpu as cpu_capacity, capacity_memory as memory_capacity,
+      allocatable_cpu, allocatable_memory, context_name
+    FROM kubernetes_node
+  `,
+
+  // Pod resource requests (K8s overview) / 파드 리소스 요청
+  podRequests: `
+    SELECT
+      p.node_name,
+      c->'resources'->'requests'->>'cpu' AS cpu_req,
+      c->'resources'->'requests'->>'memory' AS mem_req
+    FROM
+      kubernetes_pod p,
+      jsonb_array_elements(p.containers) AS c
+    WHERE
+      p.phase = 'Running' AND p.node_name IS NOT NULL
+  `,
+
+  // Pod resource requests with context (K8s explorer) / 파드 리소스 요청 + context
+  podRequestsWithContext: `
+    SELECT
+      p.node_name,
+      c->'resources'->'requests'->>'cpu' AS cpu_req,
+      c->'resources'->'requests'->>'memory' AS mem_req,
+      p.context_name
+    FROM
+      kubernetes_pod p,
+      jsonb_array_elements(p.containers) AS c
+    WHERE
+      p.phase = 'Running' AND p.node_name IS NOT NULL
+  `,
+
+  // Caller IAM role ARN (STS identity) / 현재 IAM 역할 ARN
+  callerRole: `
+    SELECT replace(replace(replace(arn, ':sts:', ':iam:'), ':assumed-role/', ':role/'), '/' || split_part(arn, '/', 3), '') as arn
+    FROM aws_sts_caller_identity
   `
 };
