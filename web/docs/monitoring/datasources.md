@@ -6,6 +6,7 @@ description: 외부 데이터소스 연동 관리 (Prometheus, Loki, Tempo, Clic
 
 import Screenshot from '@site/src/components/Screenshot';
 import DatasourceFlow from '@site/src/components/diagrams/DatasourceFlow';
+import DatasourceExploreFlow from '@site/src/components/diagrams/DatasourceExploreFlow';
 
 # 데이터소스
 
@@ -184,8 +185,8 @@ AI 어시스턴트는 등록된 데이터소스를 활용하여 분석을 수행
 2. 데이터소스 유형에 맞는 쿼리를 자동 생성
 3. 쿼리 결과를 기반으로 분석 및 인사이트 제공
 
-:::tip aws-data 라우트 연동
-데이터소스 관련 질문은 `aws-data` 라우트를 통해 처리됩니다. AI가 Steampipe 데이터와 외부 데이터소스를 함께 분석할 수 있습니다.
+:::tip datasource 라우트 연동
+데이터소스 관련 질문은 `datasource` 라우트를 통해 처리됩니다. AI가 Steampipe 데이터와 외부 데이터소스를 함께 분석할 수 있습니다.
 :::
 
 ## 설정 참조
@@ -209,6 +210,108 @@ AI 어시스턴트는 등록된 데이터소스를 활용하여 분석을 수행
 - 쿼리 결과 최대 행 수: 1,000행
 - ClickHouse: SELECT 쿼리만 허용 (DDL/DML 차단)
 - URL: 프라이빗 IP 및 메타데이터 엔드포인트 차단
+
+## Explore 페이지
+
+Explore 페이지에서는 등록된 데이터소스에 직접 쿼리를 실행하고 결과를 시각화할 수 있습니다. AI 쿼리 생성과 멀티 시리즈 차트를 지원합니다.
+
+<DatasourceExploreFlow />
+
+### 주요 기능
+
+- **데이터소스 선택 드롭다운**: 등록된 모든 데이터소스 중 쿼리 대상을 선택합니다.
+- **시간 범위 프리셋**: 15m, 1h, 6h, 24h, 7d, 30d 중 선택하여 조회 기간을 지정합니다.
+- **네이티브 쿼리 에디터**: 데이터소스 타입별 구문 하이라이팅이 적용된 쿼리 에디터를 제공합니다 (PromQL, LogQL, SQL 등).
+- **예제 쿼리 칩**: 데이터소스 타입별로 자주 사용되는 쿼리를 원클릭으로 입력할 수 있습니다.
+- **결과 메타데이터**: 쿼리 실행 후 행 수, 실행 시간(ms), 쿼리 언어가 상단에 표시됩니다.
+
+### AI 쿼리 생성
+
+**AI Assist** 토글을 활성화하면 자연어로 쿼리를 작성할 수 있습니다. Bedrock Sonnet이 데이터소스 타입에 맞는 쿼리를 자동 생성하고 설명 배너를 표시합니다.
+
+**데이터소스 타입별 예시 프롬프트:**
+
+| 데이터소스 | 예시 프롬프트 |
+|-----------|-------------|
+| Prometheus | "지난 1시간 동안 CPU 사용률 상위 5개 Pod" |
+| Loki | "production 네임스페이스에서 error 레벨 로그 검색" |
+| ClickHouse | "오늘 시간대별 이벤트 수 집계" |
+| Tempo | "500 에러가 발생한 트레이스 검색" |
+
+**사용 방법:**
+
+1. AI Assist 토글을 ON으로 전환
+2. 자연어로 원하는 데이터를 설명
+3. **Ctrl+Enter** 또는 실행 버튼 클릭
+4. Bedrock Sonnet이 PromQL/LogQL/SQL 쿼리를 생성
+5. 생성된 쿼리와 함께 설명 배너가 표시됨
+
+:::tip AI Assist 단축키
+**Ctrl+Enter**로 빠르게 쿼리를 생성하고 실행할 수 있습니다.
+:::
+
+### 멀티 시리즈 차트
+
+Prometheus 데이터소스에서 최대 **8개 시리즈**를 동시에 시각화할 수 있습니다.
+
+- **Line/Bar 차트 토글**: 데이터 특성에 맞는 차트 유형을 선택합니다.
+- **커스텀 컬러 팔레트**: 각 시리즈에 고유 색상이 자동 할당되며, 8가지 테마 컬러를 사용합니다.
+- **시리즈 수 표시기**: 차트 하단에 현재 렌더링 중인 시리즈 수가 표시됩니다.
+
+:::info 시리즈 제한
+성능을 위해 Prometheus 멀티 시리즈 차트는 최대 8개 시리즈로 제한됩니다. 8개를 초과하는 결과는 상위 8개만 표시됩니다.
+:::
+
+## 데이터소스 진단
+
+데이터소스 연결에 문제가 있을 때 **Diagnose** 버튼(청진기 아이콘)을 클릭하면 자동으로 8단계 진단을 수행합니다.
+
+:::info 관리자 전용
+Diagnose 기능은 관리자 역할이 필요합니다.
+:::
+
+### datasource-diag AI 라우트
+
+진단 요청은 `datasource-diag` AI 라우트로 전달됩니다. 이 라우트는 데이터소스 연결 문제를 체계적으로 분석하기 위해 8개의 전문 진단 도구를 순차적으로 실행합니다.
+
+### 8단계 자동 진단
+
+| 단계 | 도구 | 설명 |
+|------|------|------|
+| 1 | **URL Validation** | URL 형식, 프로토콜, Allowed Networks 목록 검증 |
+| 2 | **DNS Resolution** | 호스트명을 IP로 변환하고 도달 가능성 확인 |
+| 3 | **NLB Health** | Network Load Balancer 대상 그룹 상태 점검 |
+| 4 | **SG Chain** | Security Group 인바운드/아웃바운드 규칙 체인 검증 |
+| 5 | **Network Path** | VPC 라우팅, 서브넷, NACL 경로 추적 |
+| 6 | **HTTP Test** | HTTP 요청 전송 및 응답 코드/본문 검증 |
+| 7 | **K8s Endpoint** | Kubernetes Service 및 Pod 엔드포인트 상태 확인 |
+| 8 | **Full Report** | 모든 결과를 종합한 진단 리포트 생성 |
+
+진단이 시작되면 자동으로 AI 어시스턴트 화면으로 이동하여 실시간으로 진단 과정을 확인할 수 있습니다.
+
+## Allowed Networks
+
+관리자는 SSRF 방지로 차단되는 프라이빗 네트워크에 대해 예외 허용 목록을 설정할 수 있습니다.
+
+:::info 관리자 전용
+Allowed Networks 설정은 관리자 역할이 필요합니다.
+:::
+
+### 지원 패턴
+
+| 패턴 유형 | 예시 | 설명 |
+|----------|------|------|
+| **CIDR** | `10.0.0.0/16` | 특정 서브넷 대역 허용 |
+| **단일 IP** | `10.0.1.50` | 특정 IP 주소 허용 |
+| **호스트명** | `prometheus.internal` | 특정 내부 호스트명 허용 |
+
+### SSRF 방지와의 관계
+
+기본적으로 프라이빗 IP 대역(`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`)은 SSRF 방지를 위해 차단됩니다. Allowed Networks에 등록된 주소는 이 차단 규칙의 예외로 처리되어, 내부 네트워크에 위치한 데이터소스에도 안전하게 접근할 수 있습니다.
+
+:::caution 보안 주의
+Allowed Networks에 지나치게 넓은 CIDR 대역을 추가하면 SSRF 보호가 약화될 수 있습니다. 필요한 최소 범위만 등록하세요.
+:::
 
 ## 관련 페이지
 
