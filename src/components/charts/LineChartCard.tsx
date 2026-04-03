@@ -1,14 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import {
   LineChart,
   Line,
   XAxis,
   YAxis,
   Tooltip,
-  ResponsiveContainer,
 } from 'recharts';
+import SafeResponsiveContainer from './SafeResponsiveContainer';
 
 interface LineChartCardProps {
   title: string;
@@ -27,15 +26,12 @@ function CustomTooltip({ active, payload, label }: any) {
 }
 
 export default function LineChartCard({ title, data, color = '#00d4ff' }: LineChartCardProps) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
-
   return (
     <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
       <h3 className="text-sm font-semibold text-white mb-4">{title}</h3>
 
       <div className="h-52">
-        {mounted && <ResponsiveContainer width="100%" height="100%">
+        <SafeResponsiveContainer>
           <LineChart data={data}>
             <XAxis
               dataKey="name"
@@ -59,7 +55,7 @@ export default function LineChartCard({ title, data, color = '#00d4ff' }: LineCh
               activeDot={{ r: 5, fill: color, strokeWidth: 2, stroke: '#0f1629' }}
             />
           </LineChart>
-        </ResponsiveContainer>}
+        </SafeResponsiveContainer>
       </div>
     </div>
   );

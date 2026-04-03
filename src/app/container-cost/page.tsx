@@ -8,7 +8,8 @@ import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import DataTable from '@/components/table/DataTable';
 import { DollarSign, Container, Cpu, TrendingUp } from 'lucide-react';
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import SafeResponsiveContainer from '@/components/charts/SafeResponsiveContainer';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAccountContext } from '@/contexts/AccountContext';
 
@@ -190,7 +191,7 @@ export default function ContainerCostPage() {
         <div className="bg-navy-800 rounded-lg p-4 border border-navy-600">
           <h3 className="text-white font-medium mb-4">Service Cost Distribution (Daily)</h3>
           {filteredServiceCosts.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300} minWidth={0}>
+            <SafeResponsiveContainer height={300}>
               <PieChart>
                 <Pie
                   data={filteredServiceCosts.map(s => ({
@@ -207,7 +208,7 @@ export default function ContainerCostPage() {
                 </Pie>
                 <Tooltip contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1a2540', borderRadius: '8px' }} />
               </PieChart>
-            </ResponsiveContainer>
+            </SafeResponsiveContainer>
           ) : (
             <div className="h-[300px] flex items-center justify-center text-gray-500">
               {t('containerCost.noData')}
@@ -219,7 +220,7 @@ export default function ContainerCostPage() {
         <div className="bg-navy-800 rounded-lg p-4 border border-navy-600">
           <h3 className="text-white font-medium mb-4">Cost by Service (CPU vs Memory)</h3>
           {filteredServiceCosts.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300} minWidth={0}>
+            <SafeResponsiveContainer height={300}>
               <BarChart data={filteredServiceCosts.map(s => {
                 const svcTasks = filteredTasks.filter(t => t.service_name === s.name);
                 const cpuCost = svcTasks.reduce((sum, t) => sum + t.dailyCost.cpuCost, 0);
@@ -238,7 +239,7 @@ export default function ContainerCostPage() {
                 <Bar dataKey="CPU" fill="#00d4ff" />
                 <Bar dataKey="Memory" fill="#00ff88" />
               </BarChart>
-            </ResponsiveContainer>
+            </SafeResponsiveContainer>
           ) : (
             <div className="h-[300px] flex items-center justify-center text-gray-500">
               No service data available

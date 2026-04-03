@@ -8,7 +8,8 @@ import Header from '@/components/layout/Header';
 import StatsCard from '@/components/dashboard/StatsCard';
 import DataTable from '@/components/table/DataTable';
 import { DollarSign, Box, Server, TrendingUp } from 'lucide-react';
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import SafeResponsiveContainer from '@/components/charts/SafeResponsiveContainer';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAccountContext } from '@/contexts/AccountContext';
 
@@ -225,7 +226,7 @@ export default function EksContainerCostPage() {
         <div className="bg-navy-800 rounded-lg p-4 border border-navy-600">
           <h3 className="text-white font-medium mb-4">Namespace Cost Distribution (Daily)</h3>
           {filteredNsCosts.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300} minWidth={0}>
+            <SafeResponsiveContainer height={300}>
               <PieChart>
                 <Pie
                   data={filteredNsCosts.map(s => ({ name: s.name, value: s.cost }))}
@@ -239,7 +240,7 @@ export default function EksContainerCostPage() {
                 </Pie>
                 <Tooltip contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1a2540', borderRadius: '8px' }} />
               </PieChart>
-            </ResponsiveContainer>
+            </SafeResponsiveContainer>
           ) : (
             <div className="h-[300px] flex items-center justify-center text-gray-500">{t('eksContainerCost.noData')}</div>
           )}
@@ -249,7 +250,7 @@ export default function EksContainerCostPage() {
         <div className="bg-navy-800 rounded-lg p-4 border border-navy-600">
           <h3 className="text-white font-medium mb-4">Node Daily Cost + Pod Count</h3>
           {filteredNodes.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300} minWidth={0}>
+            <SafeResponsiveContainer height={300}>
               <BarChart data={filteredNodes.map(n => ({
                 name: n.node_name.split('.')[0],
                 'Daily Cost': n.dailyCost,
@@ -264,7 +265,7 @@ export default function EksContainerCostPage() {
                 <Bar yAxisId="left" dataKey="Daily Cost" fill="#00d4ff" />
                 <Bar yAxisId="right" dataKey="Pod Count" fill="#a855f7" />
               </BarChart>
-            </ResponsiveContainer>
+            </SafeResponsiveContainer>
           ) : (
             <div className="h-[300px] flex items-center justify-center text-gray-500">No node data</div>
           )}

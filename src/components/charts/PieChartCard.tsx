@@ -1,13 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import {
   PieChart,
   Pie,
   Cell,
   Tooltip,
-  ResponsiveContainer,
 } from 'recharts';
+import SafeResponsiveContainer from './SafeResponsiveContainer';
 
 const DEFAULT_COLORS = ['#00d4ff', '#00ff88', '#a855f7', '#f59e0b', '#ef4444', '#ec4899'];
 
@@ -28,15 +27,12 @@ function CustomTooltip({ active, payload }: any) {
 }
 
 export default function PieChartCard({ title, data }: PieChartCardProps) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
-
   return (
     <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
       <h3 className="text-sm font-semibold text-white mb-4">{title}</h3>
 
       <div className="h-52">
-        {mounted && <ResponsiveContainer width="100%" height="100%">
+        <SafeResponsiveContainer>
           <PieChart>
             <Pie
               data={data}
@@ -57,7 +53,7 @@ export default function PieChartCard({ title, data }: PieChartCardProps) {
             </Pie>
             <Tooltip content={<CustomTooltip />} />
           </PieChart>
-        </ResponsiveContainer>}
+        </SafeResponsiveContainer>
       </div>
 
       {/* Legend */}
