@@ -90,9 +90,10 @@ function parseRelativeTime(rel: string): string {
 }
 
 function toUnixSeconds(ts: string): string {
-  if (/^\d+(\.\d+)?$/.test(ts)) return ts;
-  if (/^\d+[smhd]$/.test(ts)) return String(new Date(parseRelativeTime(ts)).getTime() / 1000);
-  return String(new Date(ts).getTime() / 1000);
+  if (/^\d+$/.test(ts)) return ts;
+  if (/^\d+\.\d+$/.test(ts)) return String(Math.floor(parseFloat(ts)));
+  if (/^\d+[smhd]$/.test(ts)) return String(Math.floor(new Date(parseRelativeTime(ts)).getTime() / 1000));
+  return String(Math.floor(new Date(ts).getTime() / 1000));
 }
 
 // ============================================================================
@@ -256,7 +257,7 @@ async function queryTempo(ds: DatasourceConfig, query: string, opts?: QueryOptio
   const params = new URLSearchParams({ q: query });
   if (opts?.limit) params.set('limit', String(opts.limit));
   if (opts?.start) params.set('start', toUnixSeconds(opts.start));
-  if (opts?.end) params.set('end', toUnixSeconds(opts.end || String(Date.now() / 1000)));
+  params.set('end', toUnixSeconds(opts?.end || String(Math.floor(Date.now() / 1000))));
 
   const resp = await fetchWithTimeout(`${baseUrl}/api/search?${params}`, { headers }, timeout);
   if (!resp.ok) throw new Error(`Tempo error ${resp.status}: ${await resp.text()}`);

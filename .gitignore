@@ -40,6 +40,9 @@ yarn-error.log*
 # oh-my-claudecode state
 .omc/
 
+# playwright mcp
+.playwright-mcp/
+
 # claude code sessions
 .claude/
 
