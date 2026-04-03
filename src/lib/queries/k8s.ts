@@ -79,7 +79,7 @@ export const queries = {
       namespace,
       type,
       cluster_ip,
-      external_ip,
+      external_ips,
       creation_timestamp,
       selector,
       context_name
@@ -270,7 +270,7 @@ export const queries = {
   `,
 
   serviceDescribe: `
-    SELECT name, namespace, type, cluster_ip, external_ip,
+    SELECT name, namespace, type, cluster_ip, external_ips,
       creation_timestamp, context_name,
       labels, annotations, ports, selector
     FROM kubernetes_service

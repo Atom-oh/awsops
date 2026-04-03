@@ -110,7 +110,7 @@ export default function K9sDetailPanel({ resource, type, onClose }: K9sDetailPan
             <DetailRow label="Service Account" value={resource.service_account_name} />
             <DetailRow label="Service Name" value={resource.service_name} />
             <DetailRow label="Cluster IP" value={resource.cluster_ip} />
-            <DetailRow label="External IP" value={resource.external_ip} />
+            <DetailRow label="External IPs" value={resource.external_ips} />
             <DetailRow label="Type" value={resource.type} />
             <DetailRow label="Replicas" value={resource.replicas} />
             <DetailRow label="Ready" value={resource.ready_replicas} />
