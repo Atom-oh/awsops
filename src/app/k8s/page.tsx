@@ -109,6 +109,7 @@ export default function K8sOverviewPage() {
   const [ec2RoleArn, setEc2RoleArn] = useState<string | null>(null);
   const [registeringCluster, setRegisteringCluster] = useState<string | null>(null);
   const [registerResult, setRegisterResult] = useState<{ cluster: string; ok: boolean; msg: string } | null>(null);
+  const [chartTab, setChartTab] = useState<'pods' | 'services'>('pods');
 
   // Register kubeconfig for an EKS cluster / EKS 클러스터 kubeconfig 등록
   const registerKubeconfig = useCallback(async (clusterName: string, region: string) => {
@@ -220,7 +221,8 @@ export default function K8sOverviewPage() {
             podRequests: POD_REQUESTS_QUERY,
             podList: k8sQ.podList,
             eksClusters: k8sQ.eksClusterList,
-            callerRole: `SELECT arn FROM aws_sts_caller_identity`,
+            serviceResources: k8sQ.serviceResources,
+            callerRole: `SELECT replace(replace(replace(arn, ':sts:', ':iam:'), ':assumed-role/', ':role/'), '/' || split_part(arn, '/', 3), '') as arn FROM aws_sts_caller_identity`,
           },
         }),
       });
@@ -377,6 +379,25 @@ export default function K8sOverviewPage() {
     name: r.namespace,
     value: Number(r.pod_count) || 0,
   }));
+
+  // Service CPU/Memory aggregation / Service별 CPU/Memory 집계
+  const serviceResourceData = useMemo(() => {
+    const svcRes = get('serviceResources');
+    const cpuMap: Record<string, number> = {};
+    const memMap: Record<string, number> = {};
+    svcRes.forEach((r: any) => {
+      const key = `${r.namespace}/${r.service_name}`;
+      cpuMap[key] = (cpuMap[key] || 0) + parseCpu(r.cpu_request);
+      memMap[key] = (memMap[key] || 0) + parseMiB(r.memory_request);
+    });
+    return {
+      cpu: Object.entries(cpuMap).map(([name, value]) => ({ name, value: Math.round(value * 1000) }))
+        .sort((a, b) => b.value - a.value).slice(0, 15),
+      memory: Object.entries(memMap).map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value).slice(0, 15),
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
   // Node Detail View / 노드 상세 뷰
   if (selectedNode && selectedNodeData) {
@@ -856,10 +877,32 @@ export default function K8sOverviewPage() {
           </div>
         </div>
 
-        {/* Charts */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <PieChartCard title="Pod Status Distribution" data={podStatusData} />
-          <BarChartCard title="Pods per Namespace" data={podsPerNsData} color="#00d4ff" />
+        {/* Charts with tabs / 차트 탭 */}
+        <div className="space-y-3">
+          <div className="flex gap-1 bg-navy-800 rounded-lg border border-navy-600 p-1 w-fit">
+            <button onClick={() => setChartTab('pods')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                chartTab === 'pods' ? 'bg-accent-cyan/10 text-accent-cyan' : 'text-gray-400 hover:text-white hover:bg-navy-700'
+              }`}>Pod Analysis</button>
+            <button onClick={() => setChartTab('services')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                chartTab === 'services' ? 'bg-accent-cyan/10 text-accent-cyan' : 'text-gray-400 hover:text-white hover:bg-navy-700'
+              }`}>Service Resources</button>
+          </div>
+
+          {chartTab === 'pods' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <PieChartCard title="Pod Status Distribution" data={podStatusData} />
+              <BarChartCard title="Pods per Namespace" data={podsPerNsData} color="#00d4ff" />
+            </div>
+          )}
+
+          {chartTab === 'services' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <BarChartCard title="CPU per Service (millicores)" data={serviceResourceData.cpu} color="#f59e0b" />
+              <BarChartCard title="Memory per Service (MiB)" data={serviceResourceData.memory} color="#a855f7" />
+            </div>
+          )}
         </div>
 
         {/* Warning Events Table */}

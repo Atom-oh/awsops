@@ -324,5 +324,24 @@ export const queries = {
       creation_timestamp, context_name,
       labels, annotations
     FROM kubernetes_persistent_volume_claim
+  `,
+
+  // Service별 Pod 리소스 조회 — selector로 pod 매칭
+  // CPU/Memory requests per service (join by selector → pod labels)
+  serviceResources: `
+    SELECT
+      s.name AS service_name,
+      s.namespace,
+      p.name AS pod_name,
+      c->>'name' AS container_name,
+      c->'resources'->'requests'->>'cpu' AS cpu_request,
+      c->'resources'->'requests'->>'memory' AS memory_request
+    FROM kubernetes_service s
+    JOIN kubernetes_pod p ON p.labels @> s.selector AND p.namespace = s.namespace
+    CROSS JOIN jsonb_array_elements(p.containers) AS c
+    WHERE p.phase = 'Running'
+      AND s.selector IS NOT NULL
+      AND s.selector != '{}'::jsonb
+    ORDER BY s.namespace, s.name
   `
 };
