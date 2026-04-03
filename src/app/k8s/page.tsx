@@ -718,7 +718,11 @@ export default function K8sOverviewPage() {
               {filteredClusters.map((c: any) => {
                 const access = getClusterAccess(c.cluster_name);
                 return (
-                <div key={c.cluster_name} className="bg-navy-800 border border-navy-600 rounded-lg p-3">
+                <div key={c.cluster_name}
+                  onClick={() => toggleCluster(c.cluster_name)}
+                  className={`bg-navy-800 border rounded-lg p-3 cursor-pointer transition-colors ${
+                    selectedClusters.has(c.cluster_name) ? 'border-accent-cyan/50 ring-1 ring-accent-cyan/20' : 'border-navy-600 hover:border-navy-500'
+                  }`}>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-white font-mono text-sm font-semibold">{c.cluster_name}</span>
                     <div className="flex items-center gap-2">
