@@ -680,6 +680,7 @@ npx cdk deploy AwsopsStack \
     --parameters ExistingVpcId="${EXISTING_VPC_ID}" \
     $CDK_CONTEXT \
     --require-approval never \
+    --no-rollback \
     --region "$REGION" 2>&1
 
 ###############################################################################
@@ -766,7 +767,7 @@ echo "  VSCode Server 또는 SSM으로 EC2에 접속한 후:"
 echo "  After connecting to EC2 via VSCode Server or SSM:"
 echo ""
 echo "    cd /home/ec2-user"
-echo "    git clone https://github.com/Atom-oh/awsops.git"
+echo "    git clone https://github.com/whchoi98/awsops.git"
 echo "    cd awsops"
 echo "    bash scripts/install-all.sh"
 echo ""

@@ -266,8 +266,9 @@ export class AwsopsStack extends cdk.Stack {
       'curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - || true',
       'dnf install -y nodejs || true',
       'if ! command -v node &>/dev/null || [ "$(node -v | cut -d. -f1 | tr -d v)" -lt 20 ]; then',
+      '  export HOME=/root',
       '  curl -fsSL https://fnm.vercel.app/install | bash',
-      '  export FNM_DIR="/root/.local/share/fnm"',
+      '  FNM_DIR="$(find /root/.local /.local -maxdepth 2 -name fnm -type f 2>/dev/null | head -1 | xargs dirname)"',
       '  export PATH="$FNM_DIR:$PATH"',
       '  eval "$(fnm env)"',
       '  fnm install 20 && fnm use 20',
@@ -290,6 +291,14 @@ export class AwsopsStack extends cdk.Stack {
       'dnf install -y docker',
       'systemctl enable docker && systemctl start docker',
       'usermod -aG docker ec2-user',
+      '',
+      '# kubectl',
+      'if [ "$ARCH" = "aarch64" ]; then',
+      '  curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/arm64/kubectl"',
+      'else',
+      '  curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"',
+      'fi',
+      'install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && rm -f kubectl',
       '',
       '# Steampipe',
       '# Steampipe: install as root (/usr/local/bin requires root), plugins as ec2-user',
@@ -372,6 +381,7 @@ export class AwsopsStack extends cdk.Stack {
       ],
     });
     cdk.Tags.of(this.instance).add('Name', `${this.stackName}-AWSops-Server`);
+    cdk.Tags.of(this.instance).add('UserDataVersion', '2');
 
     // -------------------------------------------------------
     // Application Load Balancer (Internet-facing)
