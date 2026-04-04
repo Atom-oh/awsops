@@ -228,6 +228,12 @@ export class AwsopsStack extends cdk.Stack {
       ],
     }));
 
+    // S3 report upload (diagnosis report PPTX → awsops-deploy bucket)
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: ['s3:PutObject', 's3:GetObject'],
+      resources: [`arn:aws:s3:::awsops-deploy-${this.account}/reports/*`],
+    }));
+
     // EKS Access Entry management (register Steampipe read-only access to EKS clusters)
     // AssociateAccessPolicy requires access-entry resource, so use wildcard
     ec2Role.addToPolicy(new iam.PolicyStatement({
