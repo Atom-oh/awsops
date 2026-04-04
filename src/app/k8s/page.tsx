@@ -209,12 +209,17 @@ export default function K8sOverviewPage() {
       });
       const result = await res.json();
       setData(result);
-      // STS ARN → IAM Role ARN (arn:aws:sts::ACCT:assumed-role/ROLE/SESSION → arn:aws:iam::ACCT:role/ROLE)
+      // STS ARN → IAM Role ARN (SQL already transforms via replace() in callerRole query)
+      // JS fallback only if SQL didn't transform (raw STS ARN)
       const rawArn = result.callerRole?.rows?.[0]?.arn || '';
-      const detectedArn = rawArn
-        .replace(':sts:', ':iam:')
-        .replace(':assumed-role/', ':role/')
-        .replace(/\/[^/]*$/, '');
+      let detectedArn = rawArn;
+      if (rawArn.includes(':assumed-role/')) {
+        // SQL transform failed — apply JS fallback
+        detectedArn = rawArn
+          .replace(':sts:', ':iam:')
+          .replace(':assumed-role/', ':role/')
+          .replace(/\/[^/]*$/, '');
+      }
       if (detectedArn && !ec2RoleArn) setEc2RoleArn(detectedArn);
     } catch {
       // keep existing data
