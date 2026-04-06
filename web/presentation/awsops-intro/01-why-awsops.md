@@ -50,36 +50,36 @@ Junseok Oh | Solutions Architect | AWS
 
 # 클라우드 운영의 도전 과제
 
-:::: left
+::: left
 
-### Console Hopping {.click}
+### Console Hopping
 
 - EC2 확인 → CloudWatch → VPC → IAM → Cost Explorer
 - **평균 5-7개 콘솔** 페이지를 오가며 문제 해결
 - 멀티 어카운트 환경에서는 **로그인만 10번**
 
-### 데이터 사일로 {.click}
+### 데이터 사일로
 
 - CloudWatch 메트릭 ≠ Prometheus 메트릭 ≠ 로그 ≠ 트레이스
 - **교차 분석 불가** → 근본 원인 파악 지연
 
-::::
+:::
 
-:::: right
+::: right
 
-### 반복적 수작업 {.click}
+### 반복적 수작업
 
 - "이 인스턴스 rightsizing 필요한가?"
 - "미사용 리소스 정리해야 하는데..."
 - **매번 같은 CLI 명령어** 반복 실행
 
-### 보고서 작성 부담 {.click}
+### 보고서 작성 부담
 
 - Well-Architected Review 수작업
 - FinOps 리포트 매월 수동 작성
 - **2-3일 소요** → 실시간성 부족
 
-::::
+:::
 
 :::notes
 {timing: 3min}
@@ -110,27 +110,65 @@ AWSops는 이 4가지 문제를 동시에 해결합니다.
 # AWSops — Single Pane of Glass
 
 :::html
-<div class="flow-h">
-  <div class="flow-group bg-blue" data-fragment-index="1">
-    <div class="flow-group-label">Data Layer</div>
-    <div class="flow-box">Steampipe</div>
-    <div class="flow-box">380+ AWS Tables</div>
-    <div class="flow-box">60+ K8s Tables</div>
+<div class="tab-bar" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#00d4ff;color:#0a0e1a;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,0)">Data Layer</button>
+  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,1)">AI Engine</button>
+  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,2)">Dashboard</button>
+</div>
+<div class="tc" style="display:block;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:20px;">
+    <div style="color:#00d4ff;font-weight:bold;font-size:18px;margin-bottom:8px;">Steampipe — SQL for Cloud</div>
+    <div style="color:#b0b0b0;line-height:1.6;">AWS API를 PostgreSQL 테이블로 변환<br>CLI 대비 <span style="color:#00ff88;font-weight:bold;">660x</span> 빠른 쿼리 성능</div>
   </div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-group bg-orange" data-fragment-index="2">
-    <div class="flow-group-label">AI Engine</div>
-    <div class="flow-box">Bedrock Claude</div>
-    <div class="flow-box">8 MCP Gateways</div>
-    <div class="flow-box">125 Tools</div>
+  <div style="display:grid;grid-template-rows:1fr 1fr;gap:12px;">
+    <div style="background:rgba(0,212,255,0.05);border:1px solid rgba(0,212,255,0.2);border-radius:8px;padding:12px;text-align:center;">
+      <div style="color:#00d4ff;font-size:28px;font-weight:bold;">380+</div>
+      <div style="color:#8b95a5;font-size:13px;">AWS Tables</div>
+    </div>
+    <div style="background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.2);border-radius:8px;padding:12px;text-align:center;">
+      <div style="color:#00ff88;font-size:28px;font-weight:bold;">60+</div>
+      <div style="color:#8b95a5;font-size:13px;">K8s Tables</div>
+    </div>
   </div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-group bg-pink" data-fragment-index="3">
-    <div class="flow-group-label">Dashboard</div>
-    <div class="flow-box">36 Pages</div>
-    <div class="flow-box">13 API Routes</div>
-    <div class="flow-box">6 AI Agents</div>
+</div>
+</div>
+<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:20px;">
+    <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Bedrock AgentCore</div>
+    <div style="color:#b0b0b0;line-height:1.6;">Claude Opus 4.6 (심층 분석)<br>Claude Sonnet 4.6 (빠른 분류)<br>AgentCore Runtime + MCP Gateway</div>
   </div>
+  <div style="display:grid;grid-template-rows:1fr 1fr;gap:12px;">
+    <div style="background:rgba(245,158,11,0.05);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:12px;text-align:center;">
+      <div style="color:#f59e0b;font-size:28px;font-weight:bold;">8</div>
+      <div style="color:#8b95a5;font-size:13px;">MCP Gateways</div>
+    </div>
+    <div style="background:rgba(168,85,247,0.05);border:1px solid rgba(168,85,247,0.2);border-radius:8px;padding:12px;text-align:center;">
+      <div style="color:#a855f7;font-size:28px;font-weight:bold;">125</div>
+      <div style="color:#8b95a5;font-size:13px;">MCP Tools</div>
+    </div>
+  </div>
+</div>
+</div>
+<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;text-align:center;">
+    <div style="color:#ef4444;font-size:32px;font-weight:bold;">36</div>
+    <div style="color:#8b95a5;font-size:13px;margin-top:4px;">Pages</div>
+    <div style="color:#666;font-size:11px;">EC2, Lambda, ECS, EKS, S3, RDS, VPC...</div>
+  </div>
+  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;text-align:center;">
+    <div style="color:#ef4444;font-size:32px;font-weight:bold;">13</div>
+    <div style="color:#8b95a5;font-size:13px;margin-top:4px;">API Routes</div>
+    <div style="color:#666;font-size:11px;">AI, Steampipe, CloudWatch, Cost...</div>
+  </div>
+  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;text-align:center;">
+    <div style="color:#ef4444;font-size:32px;font-weight:bold;">6</div>
+    <div style="color:#8b95a5;font-size:13px;margin-top:4px;">AI Agents</div>
+    <div style="color:#666;font-size:11px;">EKS, DB, MSK, Idle, Trace, Incident</div>
+  </div>
+</div>
 </div>
 :::
 
@@ -187,27 +225,27 @@ AI 라우트가 18개라는 것은, 사용자가 자연어로 질문하면 자�
 
 # AWSops가 주는 가치
 
-:::: left
+::: left
 
-### For DevOps / SRE {.click}
+### For DevOps / SRE
 
 - **Console Hopping 제거** — 한 화면에서 모든 리소스
 - **자연어 트러블슈팅** — "VPC Flow Log 분석해줘"
 - **실시간 인시던트 분석** — Prometheus + Loki + Tempo + CloudWatch 교차 분석
 - K9s 스타일 **터미널 UI** 포함
 
-::::
+:::
 
-:::: right
+::: right
 
-### For FinOps / Management {.click}
+### For FinOps / Management
 
 - **자동 비용 최적화** — EKS/RDS/MSK rightsizing
 - **유휴 리소스 스캔** — 미사용 EBS, EIP, 중지된 EC2
 - **종합진단 리포트** — PPTX 자동 생성 (15 섹션, 6 Pillar)
 - **CIS 컴플라이언스** — v1.5 ~ v4.0 자동 벤치마크
 
-::::
+:::
 
 :::notes
 {timing: 3min}
