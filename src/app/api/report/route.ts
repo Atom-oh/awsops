@@ -1,5 +1,5 @@
-// AWSops Comprehensive Diagnosis Report API — Async background generation + S3 storage
-// AWSops 종합진단 리포트 API — 비동기 백그라운드 생성 + S3 저장
+// AWSops AI Diagnosis Report API — Async background generation + S3 storage + Scheduling
+// AWSops AI 종합진단 리포트 API — 비동기 백그라운드 생성 + S3 저장 + 스케줄링
 import { NextRequest, NextResponse } from 'next/server';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -7,8 +7,9 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { collectReportData, formatReportForBedrock } from '@/lib/report-generator';
 import type { ReportData } from '@/lib/report-generator';
 import { REPORT_SECTIONS } from '@/lib/report-prompts';
-import { generateReportPptx } from '@/lib/report-pptx';
+import { generateReportDocx } from '@/lib/report-docx';
 import { validateAccountId, getAccountById } from '@/lib/app-config';
+import { readSchedule, writeSchedule, startScheduler, type ReportSchedule } from '@/lib/report-scheduler';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -50,10 +51,15 @@ interface ReportMeta {
   accountAlias?: string;
   createdAt: string;
   completedAt: string | null;
-  s3Key: string | null;
-  downloadUrl: string | null;
+  s3Key: string | null;         // legacy (PPTX) — kept for old reports
+  s3KeyDocx?: string | null;
+  s3KeyMd?: string | null;
+  downloadUrl: string | null;   // legacy (PPTX)
+  downloadUrlDocx?: string | null;
+  downloadUrlMd?: string | null;
   sections: SectionResult[];
   error: string | null;
+  scheduledBy?: string;         // 'manual' | 'weekly' | 'monthly' etc.
 }
 
 // ============================================================================
@@ -137,6 +143,42 @@ function markStaleReportsAsFailed(): void {
 
 // Run on module load (server startup)
 markStaleReportsAsFailed();
+
+// Start scheduler for periodic report generation
+// 주기적 리포트 생성 스케줄러 시작
+startScheduler(async (schedule: ReportSchedule) => {
+  const reportId = randomUUID();
+  const isEn = schedule.lang === 'en';
+  const accountId = schedule.accountId && validateAccountId(schedule.accountId) ? schedule.accountId : undefined;
+  const account = accountId ? getAccountById(accountId) : undefined;
+
+  const meta: ReportMeta = {
+    reportId,
+    status: 'generating',
+    progress: { current: 0, total: 15, currentSection: '' },
+    accountId,
+    accountAlias: account?.alias,
+    createdAt: new Date().toISOString(),
+    completedAt: null,
+    s3Key: null,
+    downloadUrl: null,
+    sections: [],
+    error: null,
+    scheduledBy: schedule.frequency,
+  };
+
+  fs.mkdirSync(REPORTS_META_DIR, { recursive: true });
+  fs.writeFileSync(path.join(REPORTS_META_DIR, `${reportId}.json`), JSON.stringify(meta, null, 2));
+  console.log(`[Report Scheduler] Triggered report ${reportId} (${schedule.frequency})`);
+
+  generateReportBackground(reportId, accountId, account?.alias, isEn).catch(err => {
+    console.error(`[Report Scheduler] Generation failed for ${reportId}:`, err);
+    updateReportMeta(reportId, {
+      status: 'failed',
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+});
 
 function reorderSections(sections: SectionResult[]): SectionResult[] {
   const byKey = new Map<string, SectionResult>();
@@ -332,48 +374,80 @@ async function generateReportBackground(
   // Reorder: executive-summary first, appendix last
   const ordered = reorderSections(sectionResults);
 
-  // Phase 3: Generate PPTX
-  // 3단계: PPTX 생성
+  // Phase 3: Generate DOCX + MD
+  // 3단계: DOCX + MD 생성
   updateReportMeta(reportId, {
-    progress: { current: 15, total: 15, currentSection: 'generating-pptx' },
+    progress: { current: 15, total: 15, currentSection: 'generating-report' },
   });
 
-  const pptxBuffer = await generateReportPptx({
-    title: isEn ? 'AWSops Comprehensive Diagnosis Report' : 'AWSops 종합진단 리포트',
+  const reportInput = {
+    title: isEn ? 'AWSops AI Diagnosis Report' : 'AWSops AI 종합진단 리포트',
     subtitle: new Date().toLocaleDateString(isEn ? 'en-US' : 'ko-KR', {
       year: 'numeric',
       month: 'long',
     }),
     accountAlias,
     generatedAt: new Date().toISOString(),
-    sections: ordered.map(r => ({ title: r.title, content: r.content })),
-  });
+    sections: ordered.map(r => ({ section: r.section, title: r.title, content: r.content })),
+  };
+
+  // Generate DOCX
+  const docxBuffer = await generateReportDocx(reportInput);
+
+  // Generate MD (raw markdown concatenation)
+  const mdLines: string[] = [
+    `# ${reportInput.title}`,
+    `> ${reportInput.subtitle}${accountAlias ? ` — ${accountAlias}` : ''}`,
+    `> Generated: ${new Date().toISOString().split('T')[0]}`,
+    '',
+    '---',
+    '',
+  ];
+  for (const s of ordered) {
+    mdLines.push(`## ${s.title}`, '', s.content, '', '---', '');
+  }
+  const mdBuffer = Buffer.from(mdLines.join('\n'), 'utf-8');
 
   // Phase 4: Save locally (permanent) + Upload to S3
   // 4단계: 로컬 영구 저장 + S3 업로드
-  const localPptxPath = path.join(REPORTS_META_DIR, `${reportId}.pptx`);
-  fs.writeFileSync(localPptxPath, pptxBuffer);
+  const localDocxPath = path.join(REPORTS_META_DIR, `${reportId}.docx`);
+  const localMdPath = path.join(REPORTS_META_DIR, `${reportId}.md`);
+  fs.writeFileSync(localDocxPath, docxBuffer);
+  fs.writeFileSync(localMdPath, mdBuffer);
 
-  const s3Key = `${REPORT_S3_PREFIX}${reportId}.pptx`;
-  await s3Client.send(new PutObjectCommand({
-    Bucket: REPORT_BUCKET,
-    Key: s3Key,
-    Body: pptxBuffer,
-    ContentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  }));
+  const s3KeyDocx = `${REPORT_S3_PREFIX}${reportId}.docx`;
+  const s3KeyMd = `${REPORT_S3_PREFIX}${reportId}.md`;
+  await Promise.all([
+    s3Client.send(new PutObjectCommand({
+      Bucket: REPORT_BUCKET,
+      Key: s3KeyDocx,
+      Body: docxBuffer,
+      ContentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    })),
+    s3Client.send(new PutObjectCommand({
+      Bucket: REPORT_BUCKET,
+      Key: s3KeyMd,
+      Body: mdBuffer,
+      ContentType: 'text/markdown; charset=utf-8',
+    })),
+  ]);
 
-  // Generate presigned URL (valid for 7 days)
+  // Generate presigned URLs (valid for 7 days)
   // 7일간 유효한 사전 서명 URL 생성
-  const downloadUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-    Bucket: REPORT_BUCKET,
-    Key: s3Key,
-  }), { expiresIn: 7 * 24 * 60 * 60 });
+  const [downloadUrlDocx, downloadUrlMd] = await Promise.all([
+    getSignedUrl(s3Client, new GetObjectCommand({ Bucket: REPORT_BUCKET, Key: s3KeyDocx }), { expiresIn: 7 * 24 * 60 * 60 }),
+    getSignedUrl(s3Client, new GetObjectCommand({ Bucket: REPORT_BUCKET, Key: s3KeyMd }), { expiresIn: 7 * 24 * 60 * 60 }),
+  ]);
 
   updateReportMeta(reportId, {
     status: 'completed',
     completedAt: new Date().toISOString(),
-    s3Key,
-    downloadUrl,
+    s3Key: null,
+    s3KeyDocx,
+    s3KeyMd,
+    downloadUrl: null,
+    downloadUrlDocx,
+    downloadUrlMd,
     sections: ordered,
   });
 }
@@ -385,6 +459,26 @@ async function generateReportBackground(
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
+  const { action } = body;
+
+  // ── Schedule management ──
+  if (action === 'set-schedule') {
+    const { enabled, frequency, dayOfWeek, dayOfMonth, hour, accountId: schedAcct, lang: schedLang } = body;
+    const current = readSchedule();
+    const updated: ReportSchedule = {
+      ...current,
+      enabled: typeof enabled === 'boolean' ? enabled : current.enabled,
+      frequency: frequency || current.frequency,
+      dayOfWeek: typeof dayOfWeek === 'number' ? dayOfWeek : current.dayOfWeek,
+      dayOfMonth: typeof dayOfMonth === 'number' ? dayOfMonth : current.dayOfMonth,
+      hour: typeof hour === 'number' ? hour : current.hour,
+      accountId: schedAcct !== undefined ? schedAcct : current.accountId,
+      lang: schedLang || current.lang,
+    };
+    writeSchedule(updated);
+    return NextResponse.json({ schedule: readSchedule() });
+  }
+
   const { accountId: rawAccountId, lang } = body;
   const accountId = rawAccountId && validateAccountId(rawAccountId) ? rawAccountId : undefined;
   const account = accountId ? getAccountById(accountId) : undefined;
@@ -436,6 +530,11 @@ export async function GET(request: NextRequest) {
   const action = request.nextUrl.searchParams.get('action') || 'status';
   const id = request.nextUrl.searchParams.get('id');
 
+  // ── Get schedule ──
+  if (action === 'schedule') {
+    return NextResponse.json({ schedule: readSchedule() });
+  }
+
   // ── List recent reports ──
   if (action === 'list') {
     try {
@@ -449,6 +548,9 @@ export async function GET(request: NextRequest) {
         accountAlias?: string;
         createdAt: string;
         completedAt: string | null;
+        downloadUrlDocx?: string | null;
+        downloadUrlMd?: string | null;
+        scheduledBy?: string;
       }> = [];
 
       for (const file of files) {
@@ -461,6 +563,9 @@ export async function GET(request: NextRequest) {
             accountAlias: meta.accountAlias,
             createdAt: meta.createdAt,
             completedAt: meta.completedAt,
+            downloadUrlDocx: meta.downloadUrlDocx,
+            downloadUrlMd: meta.downloadUrlMd,
+            scheduledBy: meta.scheduledBy,
           });
         } catch {
           // Skip corrupted files
@@ -487,27 +592,40 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Report not found' }, { status: 404 });
     }
 
-    // If completed and downloadUrl might be expired, regenerate presigned URL
+    // If completed and downloadUrl might be expired, regenerate presigned URLs
     // 완료 상태에서 downloadUrl이 만료되었을 수 있으면 사전 서명 URL 재생성
-    let downloadUrl = meta.downloadUrl;
-    if (meta.status === 'completed' && meta.s3Key) {
-      try {
-        downloadUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-          Bucket: REPORT_BUCKET,
-          Key: meta.s3Key,
-        }), { expiresIn: 7 * 24 * 60 * 60 });
-        // Update stored URL
-        updateReportMeta(id, { downloadUrl });
-      } catch {
-        // Keep existing URL if regeneration fails
+    let downloadUrlDocx = meta.downloadUrlDocx;
+    let downloadUrlMd = meta.downloadUrlMd;
+    if (meta.status === 'completed') {
+      const refreshPromises: Promise<void>[] = [];
+      if (meta.s3KeyDocx) {
+        refreshPromises.push((async () => {
+          try {
+            downloadUrlDocx = await getSignedUrl(s3Client, new GetObjectCommand({
+              Bucket: REPORT_BUCKET, Key: meta.s3KeyDocx!,
+            }), { expiresIn: 7 * 24 * 60 * 60 });
+          } catch { /* keep existing */ }
+        })());
       }
+      if (meta.s3KeyMd) {
+        refreshPromises.push((async () => {
+          try {
+            downloadUrlMd = await getSignedUrl(s3Client, new GetObjectCommand({
+              Bucket: REPORT_BUCKET, Key: meta.s3KeyMd!,
+            }), { expiresIn: 7 * 24 * 60 * 60 });
+          } catch { /* keep existing */ }
+        })());
+      }
+      await Promise.all(refreshPromises);
+      updateReportMeta(id, { downloadUrlDocx, downloadUrlMd });
     }
 
     return NextResponse.json({
       reportId: meta.reportId,
       status: meta.status,
       progress: meta.progress,
-      downloadUrl: meta.status === 'completed' ? downloadUrl : undefined,
+      downloadUrlDocx: meta.status === 'completed' ? downloadUrlDocx : undefined,
+      downloadUrlMd: meta.status === 'completed' ? downloadUrlMd : undefined,
       sections: meta.status === 'completed' ? meta.sections : undefined,
       error: meta.error,
       createdAt: meta.createdAt,
@@ -515,44 +633,99 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // ── Download (redirect to fresh presigned URL) ──
-  if (action === 'download') {
+  // ── Download DOCX (redirect to fresh presigned URL) ──
+  if (action === 'download-docx') {
     const meta = readReportMeta(id);
     if (!meta) {
       return NextResponse.json({ error: 'Report not found' }, { status: 404 });
     }
-    if (meta.status !== 'completed' || !meta.s3Key) {
+    if (meta.status !== 'completed' || !meta.s3KeyDocx) {
       return NextResponse.json(
-        { error: 'Report not yet completed' },
+        { error: 'DOCX report not available' },
         { status: meta.status === 'failed' ? 410 : 202 },
       );
     }
 
     try {
-      // Generate fresh presigned URL (valid for 1 hour for immediate download)
-      // 즉시 다운로드용 1시간 유효 사전 서명 URL 생성
       const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
         Bucket: REPORT_BUCKET,
-        Key: meta.s3Key,
+        Key: meta.s3KeyDocx,
       }), { expiresIn: 60 * 60 });
 
       return NextResponse.redirect(freshUrl, 302);
     } catch {
       // S3 presigned URL failed — fallback to local file
-      const localPath = path.join(REPORTS_META_DIR, `${id}.pptx`);
+      const localPath = path.join(REPORTS_META_DIR, `${id}.docx`);
       if (fs.existsSync(localPath)) {
         const buffer = fs.readFileSync(localPath);
         const date = new Date().toISOString().split('T')[0];
         return new NextResponse(buffer, {
           headers: {
-            'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'Content-Disposition': `attachment; filename="AWSops_Report_${date}.pptx"`,
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'Content-Disposition': `attachment; filename="AWSops_Report_${date}.docx"`,
             'Content-Length': String(buffer.length),
           },
         });
       }
-      return NextResponse.json({ error: 'Report file not available' }, { status: 500 });
+      return NextResponse.json({ error: 'DOCX file not available' }, { status: 500 });
     }
+  }
+
+  // ── Download Markdown ──
+  if (action === 'download-md') {
+    const meta = readReportMeta(id);
+    if (!meta) {
+      return NextResponse.json({ error: 'Report not found' }, { status: 404 });
+    }
+    if (meta.status !== 'completed') {
+      return NextResponse.json(
+        { error: 'Report not available' },
+        { status: meta.status === 'failed' ? 410 : 202 },
+      );
+    }
+
+    // Try S3 presigned URL first
+    if (meta.s3KeyMd) {
+      try {
+        const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
+          Bucket: REPORT_BUCKET, Key: meta.s3KeyMd,
+        }), { expiresIn: 60 * 60 });
+        return NextResponse.redirect(freshUrl, 302);
+      } catch { /* fallback below */ }
+    }
+
+    // Fallback: local file or regenerate from sections
+    const localPath = path.join(REPORTS_META_DIR, `${id}.md`);
+    if (fs.existsSync(localPath)) {
+      const buffer = fs.readFileSync(localPath);
+      const date = new Date().toISOString().split('T')[0];
+      return new NextResponse(buffer, {
+        headers: {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          'Content-Disposition': `attachment; filename="AWSops_Report_${date}.md"`,
+          'Content-Length': String(buffer.length),
+        },
+      });
+    }
+
+    // Last resort: generate from stored sections
+    if (meta.sections?.length) {
+      const lines = [`# AWSops AI Diagnosis Report`, '', '---', ''];
+      for (const s of meta.sections) {
+        lines.push(`## ${s.title}`, '', s.content, '', '---', '');
+      }
+      const md = Buffer.from(lines.join('\n'), 'utf-8');
+      const date = new Date().toISOString().split('T')[0];
+      return new NextResponse(md, {
+        headers: {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          'Content-Disposition': `attachment; filename="AWSops_Report_${date}.md"`,
+          'Content-Length': String(md.length),
+        },
+      });
+    }
+
+    return NextResponse.json({ error: 'Markdown file not available' }, { status: 500 });
   }
 
   return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });

@@ -2,11 +2,10 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Header from '@/components/layout/Header';
-import { Play, Loader2, Download, FileText, CheckCircle, AlertTriangle, XCircle, Clock, ChevronDown, ChevronRight } from 'lucide-react';
+import { Play, Loader2, Download, FileText, CheckCircle, AlertTriangle, XCircle, Clock, ChevronDown, ChevronRight, FileDown, Printer, List, FileCode, CalendarClock } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAccountContext } from '@/contexts/AccountContext';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import ReportMarkdown from '@/components/ReportMarkdown';
 
 // --- Types ---
 
@@ -28,11 +27,25 @@ interface ReportListItem {
   reportId: string;
   accountId?: string;
   accountAlias?: string;
+  downloadUrlDocx?: string;
+  downloadUrlMd?: string;
   status: 'generating' | 'completed' | 'failed';
   createdAt: string;
   progress?: ReportProgress;
-  downloadUrl?: string;
   elapsedSeconds?: number;
+  scheduledBy?: string;
+}
+
+interface ReportSchedule {
+  enabled: boolean;
+  frequency: 'weekly' | 'biweekly' | 'monthly';
+  dayOfWeek: number;
+  dayOfMonth: number;
+  hour: number;
+  accountId?: string;
+  lang: string;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
 }
 
 // --- Constants ---
@@ -114,6 +127,43 @@ const SECTION_FULL_NAMES: Record<string, { ko: string; en: string }> = {
 
 const POLL_INTERVAL = 5000;
 
+// Section accent colors (Tailwind classes) for visual variety
+const SECTION_ACCENT_CLASSES: Record<string, string> = {
+  'executive-summary': 'text-accent-cyan border-accent-cyan',
+  'cost-overview': 'text-accent-green border-accent-green',
+  'cost-compute': 'text-accent-green border-accent-green',
+  'cost-network': 'text-accent-green border-accent-green',
+  'cost-storage': 'text-accent-green border-accent-green',
+  'idle-resources': 'text-accent-orange border-accent-orange',
+  'security-posture': 'text-red-400 border-red-400',
+  'network-architecture': 'text-accent-purple border-accent-purple',
+  'compute-analysis': 'text-accent-cyan border-accent-cyan',
+  'eks-analysis': 'text-accent-purple border-accent-purple',
+  'database-analysis': 'text-accent-cyan border-accent-cyan',
+  'msk-analysis': 'text-accent-orange border-accent-orange',
+  'storage-analysis': 'text-accent-cyan border-accent-cyan',
+  'recommendations': 'text-accent-green border-accent-green',
+  'appendix': 'text-gray-400 border-gray-400',
+};
+
+const SECTION_ACCENT_TEXT: Record<string, string> = {
+  'executive-summary': 'text-accent-cyan',
+  'cost-overview': 'text-accent-green',
+  'cost-compute': 'text-accent-green',
+  'cost-network': 'text-accent-green',
+  'cost-storage': 'text-accent-green',
+  'idle-resources': 'text-accent-orange',
+  'security-posture': 'text-red-400',
+  'network-architecture': 'text-accent-purple',
+  'compute-analysis': 'text-accent-cyan',
+  'eks-analysis': 'text-accent-purple',
+  'database-analysis': 'text-accent-cyan',
+  'msk-analysis': 'text-accent-orange',
+  'storage-analysis': 'text-accent-cyan',
+  'recommendations': 'text-accent-green',
+  'appendix': 'text-gray-400',
+};
+
 // --- Helpers ---
 
 function formatElapsed(seconds: number): string {
@@ -151,11 +201,16 @@ export default function DiagnosisPage() {
   const [status, setStatus] = useState<'idle' | 'generating' | 'completed' | 'failed'>('idle');
   const [progress, setProgress] = useState<ReportProgress>({ current: 0, total: 15, currentSection: '' });
   const [sections, setSections] = useState<ReportSection[]>([]);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [reports, setReports] = useState<ReportListItem[]>([]);
-  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [downloadUrlDocx, setDownloadUrlDocx] = useState<string | null>(null);
+  const [downloadUrlMd, setDownloadUrlMd] = useState<string | null>(null);
+  const [showToc, setShowToc] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [schedule, setSchedule] = useState<ReportSchedule | null>(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
 
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -201,9 +256,10 @@ export default function DiagnosisPage() {
           } else if (data.status === 'completed') {
             setCurrentReportId(savedId);
             setStatus('completed');
-            setDownloadUrl(data.downloadUrl || null);
+            setDownloadUrlDocx(data.downloadUrlDocx || null);
+            setDownloadUrlMd(data.downloadUrlMd || null);
             setSections(data.sections || []);
-            if (data.sections?.[0]) setExpandedSection(data.sections[0].section);
+            setCollapsedSections(new Set());
           }
         })
         .catch(() => {});
@@ -268,11 +324,10 @@ export default function DiagnosisPage() {
           if (data.status === 'completed') {
             stopPolling();
             setStatus('completed');
-            setDownloadUrl(data.downloadUrl || null);
+            setDownloadUrlDocx(data.downloadUrlDocx || null);
+            setDownloadUrlMd(data.downloadUrlMd || null);
             setSections(data.sections || []);
-            if (data.sections?.[0]) {
-              setExpandedSection(data.sections[0].section);
-            }
+            setCollapsedSections(new Set());
             fetchReportList();
           } else if (data.status === 'failed') {
             stopPolling();
@@ -299,8 +354,9 @@ export default function DiagnosisPage() {
     setStatus('generating');
     setError(null);
     setSections([]);
-    setDownloadUrl(null);
-    setExpandedSection(null);
+    setCollapsedSections(new Set());
+    setDownloadUrlDocx(null);
+    setDownloadUrlMd(null);
     setProgress({ current: 0, total: 15, currentSection: '' });
 
     try {
@@ -328,15 +384,6 @@ export default function DiagnosisPage() {
     }
   }, [currentAccountId, lang]);
 
-  // --- Download ---
-
-  const downloadPptx = useCallback((url?: string | null) => {
-    const target = url || downloadUrl;
-    if (target) {
-      window.open(target, '_blank');
-    }
-  }, [downloadUrl]);
-
   // --- View a completed report from history ---
 
   const viewReport = useCallback(async (reportId: string) => {
@@ -349,18 +396,16 @@ export default function DiagnosisPage() {
         setCurrentReportId(reportId);
         setStatus('completed');
         setSections(data.sections || []);
-        setDownloadUrl(data.downloadUrl || null);
+        setDownloadUrlDocx(data.downloadUrlDocx || null);
+        setDownloadUrlMd(data.downloadUrlMd || null);
         setError(null);
-        if (data.sections?.[0]) {
-          setExpandedSection(data.sections[0].section);
-        }
+        setCollapsedSections(new Set());
       } else if (data.status === 'generating') {
         setCurrentReportId(reportId);
         setStatus('generating');
         setProgress(data.progress || { current: 0, total: 15, currentSection: '' });
         setError(null);
         setSections([]);
-        setDownloadUrl(null);
       }
     } catch {
       // Silently fail
@@ -386,6 +431,36 @@ export default function DiagnosisPage() {
     return found ? found.alias : accountId;
   };
 
+  // --- Schedule ---
+
+  const fetchSchedule = useCallback(async () => {
+    try {
+      const res = await fetch('/awsops/api/report?action=schedule');
+      if (res.ok) {
+        const data = await res.json();
+        setSchedule(data.schedule);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { fetchSchedule(); }, [fetchSchedule]);
+
+  const saveSchedule = useCallback(async (updates: Partial<ReportSchedule>) => {
+    setScheduleLoading(true);
+    try {
+      const res = await fetch('/awsops/api/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set-schedule', ...updates }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSchedule(data.schedule);
+      }
+    } catch { /* ignore */ }
+    setScheduleLoading(false);
+  }, []);
+
   // --- Progress bar percentage ---
 
   const progressPercent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
@@ -393,7 +468,7 @@ export default function DiagnosisPage() {
   return (
     <div className="space-y-6">
       <Header
-        title={isEn ? 'Comprehensive Diagnosis' : '종합진단'}
+        title={isEn ? 'AI Diagnosis' : 'AI 종합진단'}
         subtitle={isEn
           ? 'AWS infrastructure health assessment — Cost, Compute, Security, FinOps (15 sections)'
           : 'AWS 인프라 건강 진단 — 비용, 컴퓨팅, 보안, FinOps 종합 분석 (15개 섹션)'}
@@ -417,30 +492,158 @@ export default function DiagnosisPage() {
           <div className="flex items-center gap-3 text-sm">
             <span className="text-gray-400">
               {progress.current}/{progress.total}
-              {progress.currentSection && progress.currentSection !== 'data-collection' && progress.currentSection !== 'generating-pptx' && (
+              {progress.currentSection && progress.currentSection !== 'data-collection' && progress.currentSection !== 'generating-report' && (
                 <> — {SECTION_ICONS[progress.currentSection] || ''} {(isEn ? SECTION_FULL_NAMES[progress.currentSection]?.en : SECTION_FULL_NAMES[progress.currentSection]?.ko) || progress.currentSection} {isEn ? 'analyzing...' : '분석 중...'}</>
               )}
               {progress.currentSection === 'data-collection' && (
                 <> — {isEn ? 'Collecting data...' : '데이터 수집 중...'}</>
               )}
-              {progress.currentSection === 'generating-pptx' && (
-                <> — {isEn ? 'Creating PPTX...' : 'PPTX 생성 중...'}</>
+              {progress.currentSection === 'generating-report' && (
+                <> — {isEn ? 'Creating report files...' : '리포트 파일 생성 중...'}</>
               )}
             </span>
             <span className="text-accent-cyan font-mono">{formatElapsed(elapsedTime)}</span>
           </div>
         )}
 
-        {status === 'completed' && downloadUrl && (
+        {status === 'completed' && downloadUrlDocx && (
           <button
-            onClick={() => downloadPptx()}
-            className="flex items-center gap-2 px-4 py-3 bg-accent-purple/10 border border-accent-purple/30 rounded-lg text-accent-purple hover:bg-accent-purple/20 transition-colors"
+            onClick={() => window.open(downloadUrlDocx, '_blank')}
+            className="flex items-center gap-2 px-4 py-3 bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg text-accent-cyan hover:bg-accent-cyan/20 transition-colors"
           >
             <Download size={18} />
-            {isEn ? 'Download PPTX' : 'PPTX 다운로드'}
+            {isEn ? 'Download DOCX' : 'DOCX 다운로드'}
           </button>
         )}
+
+        <div className="flex-1" />
+        <button
+          onClick={() => setShowSchedule(s => !s)}
+          className={`flex items-center gap-2 px-4 py-3 rounded-lg border transition-colors ${
+            schedule?.enabled
+              ? 'bg-accent-green/10 border-accent-green/30 text-accent-green'
+              : 'bg-navy-800 border-navy-600 text-gray-400 hover:text-gray-200'
+          }`}
+        >
+          <CalendarClock size={18} />
+          {isEn ? 'Schedule' : '자동 스케줄'}
+          {schedule?.enabled && <span className="w-2 h-2 rounded-full bg-accent-green animate-pulse" />}
+        </button>
       </div>
+
+      {/* Schedule Panel */}
+      {showSchedule && schedule && (
+        <div className="bg-navy-800 border border-navy-600 rounded-lg p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <CalendarClock size={18} className="text-accent-cyan" />
+              <span className="text-white font-medium text-sm">{isEn ? 'Scheduled Diagnosis' : '자동 진단 스케줄'}</span>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <span className="text-xs text-gray-400">{schedule.enabled ? (isEn ? 'ON' : '활성') : (isEn ? 'OFF' : '비활성')}</span>
+              <button
+                onClick={() => saveSchedule({ enabled: !schedule.enabled })}
+                className={`relative w-10 h-5 rounded-full transition-colors ${schedule.enabled ? 'bg-accent-green' : 'bg-navy-600'}`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${schedule.enabled ? 'left-5.5 translate-x-0.5' : 'left-0.5'}`} />
+              </button>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {/* Frequency */}
+            <div>
+              <label className="block text-xs text-gray-400 mb-1.5">{isEn ? 'Frequency' : '주기'}</label>
+              <select
+                value={schedule.frequency}
+                onChange={e => saveSchedule({ frequency: e.target.value as ReportSchedule['frequency'] })}
+                className="w-full bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-sm text-white focus:border-accent-cyan/50 focus:outline-none"
+              >
+                <option value="weekly">{isEn ? 'Weekly' : '매주'}</option>
+                <option value="biweekly">{isEn ? 'Biweekly' : '격주'}</option>
+                <option value="monthly">{isEn ? 'Monthly' : '매월'}</option>
+              </select>
+            </div>
+
+            {/* Day selection */}
+            <div>
+              <label className="block text-xs text-gray-400 mb-1.5">
+                {schedule.frequency === 'monthly' ? (isEn ? 'Day of Month' : '날짜') : (isEn ? 'Day of Week' : '요일')}
+              </label>
+              {schedule.frequency === 'monthly' ? (
+                <select
+                  value={schedule.dayOfMonth}
+                  onChange={e => saveSchedule({ dayOfMonth: Number(e.target.value) })}
+                  className="w-full bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-sm text-white focus:border-accent-cyan/50 focus:outline-none"
+                >
+                  {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
+                    <option key={d} value={d}>{d}{isEn ? '' : '일'}</option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  value={schedule.dayOfWeek}
+                  onChange={e => saveSchedule({ dayOfWeek: Number(e.target.value) })}
+                  className="w-full bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-sm text-white focus:border-accent-cyan/50 focus:outline-none"
+                >
+                  {(isEn
+                    ? ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+                    : ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일']
+                  ).map((name, i) => (
+                    <option key={i} value={i}>{name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {/* Hour */}
+            <div>
+              <label className="block text-xs text-gray-400 mb-1.5">{isEn ? 'Time (KST)' : '시간 (KST)'}</label>
+              <select
+                value={schedule.hour}
+                onChange={e => saveSchedule({ hour: Number(e.target.value) })}
+                className="w-full bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-sm text-white focus:border-accent-cyan/50 focus:outline-none"
+              >
+                {Array.from({ length: 24 }, (_, i) => (
+                  <option key={i} value={i}>{i.toString().padStart(2, '0')}:00</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Language */}
+            <div>
+              <label className="block text-xs text-gray-400 mb-1.5">{isEn ? 'Language' : '언어'}</label>
+              <select
+                value={schedule.lang}
+                onChange={e => saveSchedule({ lang: e.target.value })}
+                className="w-full bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-sm text-white focus:border-accent-cyan/50 focus:outline-none"
+              >
+                <option value="ko">한국어</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Status info */}
+          <div className="mt-4 flex items-center gap-4 text-xs text-gray-500">
+            {schedule.enabled && schedule.nextRunAt && (
+              <span className="flex items-center gap-1.5">
+                <Clock size={12} />
+                {isEn ? 'Next run:' : '다음 실행:'}{' '}
+                <span className="text-accent-cyan font-mono">{formatDatetime(schedule.nextRunAt)}</span>
+              </span>
+            )}
+            {schedule.lastRunAt && (
+              <span className="flex items-center gap-1.5">
+                <CheckCircle size={12} />
+                {isEn ? 'Last run:' : '최근 실행:'}{' '}
+                <span className="text-gray-400 font-mono">{formatDatetime(schedule.lastRunAt)}</span>
+              </span>
+            )}
+            {scheduleLoading && <Loader2 size={12} className="animate-spin text-accent-cyan" />}
+          </div>
+        </div>
+      )}
 
       {/* Progress Bar (while generating) */}
       {status === 'generating' && (
@@ -450,7 +653,7 @@ export default function DiagnosisPage() {
             <div className="flex items-center gap-3">
               <Loader2 size={20} className="animate-spin text-accent-cyan" />
               <span className="text-white font-medium">
-                {isEn ? 'Generating Comprehensive Diagnosis Report...' : '종합진단 리포트 생성 중...'}
+                {isEn ? 'Generating AI Diagnosis Report...' : 'AI 종합진단 리포트 생성 중...'}
               </span>
             </div>
             <div className="flex items-center gap-4 text-sm">
@@ -468,7 +671,7 @@ export default function DiagnosisPage() {
           </div>
 
           {/* Active section detail panel */}
-          {progress.currentSection && progress.currentSection !== 'data-collection' && progress.currentSection !== 'generating-pptx' && (
+          {progress.currentSection && progress.currentSection !== 'data-collection' && progress.currentSection !== 'generating-report' && (
             <div className="bg-navy-900/50 border border-accent-cyan/20 rounded-lg p-3 mb-3">
               <div className="flex items-center gap-2 mb-2">
                 <Loader2 size={14} className="animate-spin text-accent-cyan" />
@@ -498,12 +701,12 @@ export default function DiagnosisPage() {
               )}
             </div>
           )}
-          {progress.currentSection === 'generating-pptx' && (
+          {progress.currentSection === 'generating-report' && (
             <div className="bg-navy-900/50 border border-accent-purple/20 rounded-lg p-3 mb-3">
               <div className="flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin text-accent-purple" />
                 <span className="text-accent-purple font-medium text-sm">
-                  {isEn ? 'Generating PPTX report file...' : 'PPTX 리포트 파일 생성 중...'}
+                  {isEn ? 'Generating report files...' : '리포트 파일 생성 중...'}
                 </span>
               </div>
             </div>
@@ -550,11 +753,11 @@ export default function DiagnosisPage() {
           <div className="w-12 h-12 mx-auto rounded-full bg-accent-cyan/10 flex items-center justify-center mb-4">
             <FileText size={24} className="text-accent-cyan/50" />
           </div>
-          <h3 className="text-lg text-white mb-2">{isEn ? 'AWS Comprehensive Diagnosis' : 'AWS 종합진단'}</h3>
+          <h3 className="text-lg text-white mb-2">{isEn ? 'AWS AI Diagnosis' : 'AWS AI 종합진단'}</h3>
           <p className="text-gray-400 text-sm max-w-lg mx-auto">
             {isEn
-              ? 'Analyzes your entire AWS infrastructure across 15 dimensions: cost breakdown, compute rightsizing, security posture, idle resources, EKS/DB/MSK efficiency. Generates a downloadable PPTX report.'
-              : '전체 AWS 인프라를 15개 영역에서 분석합니다: 비용 분석, 컴퓨팅 rightsizing, 보안 진단, 유휴 리소스, EKS/DB/MSK 효율 분석. PPTX 리포트를 다운로드할 수 있습니다.'}
+              ? 'AI-powered analysis of your AWS infrastructure across 15 dimensions: cost breakdown, compute rightsizing, security posture, idle resources, EKS/DB/MSK efficiency. Export as DOCX, Markdown, or PDF.'
+              : 'AI가 전체 AWS 인프라를 15개 영역에서 분석합니다: 비용 분석, 컴퓨팅 rightsizing, 보안 진단, 유휴 리소스, EKS/DB/MSK 효율 분석. DOCX, Markdown, PDF로 내보낼 수 있습니다.'}
           </p>
           <div className="mt-6 grid grid-cols-3 md:grid-cols-5 gap-3 max-w-3xl mx-auto text-xs text-gray-500">
             {Object.entries(SECTION_ICONS).map(([key, icon]) => (
@@ -570,79 +773,135 @@ export default function DiagnosisPage() {
       {/* Report Results (completed) */}
       {status === 'completed' && sections.length > 0 && (
         <div className="space-y-3">
-          {/* Stats summary */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-navy-800 border border-navy-600 rounded-lg p-4">
-              <div className="text-xs text-gray-400">{isEn ? 'Sections Analyzed' : '분석 섹션'}</div>
-              <div className="text-2xl font-bold text-accent-cyan mt-1">{sections.length}</div>
+          {/* Stats + Download bar */}
+          <div className="flex flex-wrap items-center gap-3 bg-navy-800 border border-navy-600 rounded-lg px-4 py-3">
+            <div className="flex items-center gap-2 text-sm">
+              <CheckCircle size={16} className="text-accent-green" />
+              <span className="text-gray-300">{sections.length} {isEn ? 'sections' : '섹션'}</span>
+              <span className="text-gray-600">|</span>
+              <Clock size={14} className="text-gray-500" />
+              <span className="text-gray-400">{formatElapsed(elapsedTime)}</span>
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-500 font-mono text-xs">{currentReportId?.slice(0, 8)}</span>
             </div>
-            <div className="bg-navy-800 border border-navy-600 rounded-lg p-4">
-              <div className="text-xs text-gray-400">{isEn ? 'Analysis Time' : '분석 시간'}</div>
-              <div className="text-2xl font-bold text-accent-purple mt-1">{formatElapsed(elapsedTime)}</div>
-            </div>
-            <div className="bg-navy-800 border border-navy-600 rounded-lg p-4">
-              <div className="text-xs text-gray-400">{isEn ? 'Report ID' : '리포트 ID'}</div>
-              <div className="text-sm font-mono text-accent-green mt-2">{currentReportId?.slice(0, 8) || '—'}</div>
-            </div>
-            {downloadUrl ? (
+            <div className="flex-1" />
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => downloadPptx()}
-                className="bg-navy-800 border border-accent-orange/30 rounded-lg p-4 hover:bg-accent-orange/10 transition-colors text-left"
+                onClick={() => setShowToc(t => !t)}
+                className={`p-2 rounded-lg border transition-colors ${showToc ? 'border-accent-cyan/30 text-accent-cyan bg-accent-cyan/10' : 'border-navy-600 text-gray-500 hover:text-gray-300'}`}
+                title={isEn ? 'Toggle TOC' : '목차 토글'}
               >
-                <div className="text-xs text-gray-400">{isEn ? 'Download' : '다운로드'}</div>
-                <div className="flex items-center gap-2 mt-1">
-                  <Download size={18} className="text-accent-orange" />
-                  <span className="text-lg font-bold text-accent-orange">PPTX</span>
-                </div>
+                <List size={16} />
               </button>
-            ) : (
-              <div className="bg-navy-800 border border-navy-600 rounded-lg p-4">
-                <div className="text-xs text-gray-400">{isEn ? 'Download' : '다운로드'}</div>
-                <div className="text-sm text-gray-500 mt-2">{isEn ? 'Not available' : '준비 중'}</div>
-              </div>
-            )}
+              <span className="text-gray-600">|</span>
+              {downloadUrlDocx && (
+                <button
+                  onClick={() => window.open(downloadUrlDocx, '_blank')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent-cyan/30 text-accent-cyan hover:bg-accent-cyan/10 text-xs font-medium transition-colors"
+                >
+                  <FileDown size={14} /> DOCX
+                </button>
+              )}
+              {downloadUrlMd && (
+                <button
+                  onClick={() => window.open(downloadUrlMd, '_blank')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent-green/30 text-accent-green hover:bg-accent-green/10 text-xs font-medium transition-colors"
+                >
+                  <FileCode size={14} /> MD
+                </button>
+              )}
+              <button
+                onClick={() => window.open(`/awsops/ai-diagnosis/report?id=${currentReportId}`, '_blank')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent-purple/30 text-accent-purple hover:bg-accent-purple/10 text-xs font-medium transition-colors"
+              >
+                <Printer size={14} /> PDF
+              </button>
+            </div>
           </div>
 
-          {/* Accordion sections */}
-          {sections.map((section) => (
-            <div
-              key={section.section}
-              className="bg-navy-800 border border-navy-600 rounded-lg overflow-hidden"
-            >
-              <button
-                onClick={() => setExpandedSection(expandedSection === section.section ? null : section.section)}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-navy-700 transition-colors"
-              >
-                <span className="text-lg">{SECTION_ICONS[section.section] || '\u{1F4C4}'}</span>
-                <span className="flex-1 text-white font-medium text-sm">{section.title}</span>
-                {getSeverityIcon(section.content)}
-                {expandedSection === section.section ? (
-                  <ChevronDown size={16} className="text-gray-500" />
-                ) : (
-                  <ChevronRight size={16} className="text-gray-500" />
-                )}
-              </button>
-
-              {expandedSection === section.section && (
-                <div className="px-4 pb-4 border-t border-navy-600">
-                  <div className="prose prose-invert prose-sm max-w-none mt-3
-                    prose-headings:text-accent-cyan prose-headings:text-sm prose-headings:font-bold
-                    prose-p:text-gray-300 prose-p:text-xs prose-p:leading-relaxed
-                    prose-li:text-gray-300 prose-li:text-xs
-                    prose-strong:text-white
-                    prose-table:text-xs
-                    prose-th:text-accent-cyan prose-th:border-navy-600 prose-th:px-2 prose-th:py-1
-                    prose-td:text-gray-300 prose-td:border-navy-600 prose-td:px-2 prose-td:py-1
-                    prose-code:text-accent-green prose-code:text-xs
-                    prose-a:text-accent-cyan">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {section.content}
-                    </ReactMarkdown>
+          {/* TOC Sidebar + Section Content */}
+          <div className="flex gap-4">
+            {/* Sticky TOC sidebar */}
+            {showToc && (
+              <nav className="hidden lg:block w-52 flex-shrink-0">
+                <div className="sticky top-20 space-y-0.5 bg-navy-800 border border-navy-600 rounded-lg p-2 max-h-[calc(100vh-6rem)] overflow-y-auto">
+                  <div className="text-[10px] text-gray-500 uppercase tracking-wider px-2 py-1 font-medium">
+                    {isEn ? 'Contents' : '목차'}
                   </div>
+                  {sections.map((section) => {
+                    const isCollapsed = collapsedSections.has(section.section);
+                    const accentClass = SECTION_ACCENT_CLASSES[section.section] || 'text-accent-cyan border-accent-cyan';
+                    return (
+                      <button
+                        key={section.section}
+                        onClick={() => {
+                          if (isCollapsed) {
+                            setCollapsedSections(prev => { const n = new Set(prev); n.delete(section.section); return n; });
+                          }
+                          document.getElementById(`section-${section.section}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }}
+                        className={`w-full text-left flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors hover:bg-navy-700 ${
+                          isCollapsed ? 'text-gray-500' : accentClass.split(' ')[0]
+                        }`}
+                      >
+                        <span className="text-sm">{SECTION_ICONS[section.section] || ''}</span>
+                        <span className="truncate">{section.title}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
+              </nav>
+            )}
+
+            {/* Main content — all sections expanded by default */}
+            <div className="flex-1 min-w-0 space-y-4">
+              {sections.map((section) => {
+                const isCollapsed = collapsedSections.has(section.section);
+                const accentClasses = SECTION_ACCENT_CLASSES[section.section] || 'text-accent-cyan border-accent-cyan';
+                const accentText = SECTION_ACCENT_TEXT[section.section] || 'text-accent-cyan';
+                return (
+                  <div
+                    key={section.section}
+                    id={`section-${section.section}`}
+                    className={`bg-navy-800 border rounded-lg overflow-hidden scroll-mt-20 ${
+                      isCollapsed ? 'border-navy-600' : `border-l-4 ${accentClasses.split(' ')[1]} border-t border-r border-b border-t-navy-600 border-r-navy-600 border-b-navy-600`
+                    }`}
+                  >
+                    <button
+                      onClick={() => {
+                        setCollapsedSections(prev => {
+                          const n = new Set(prev);
+                          if (n.has(section.section)) n.delete(section.section);
+                          else n.add(section.section);
+                          return n;
+                        });
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-navy-700/50 transition-colors"
+                    >
+                      <span className="text-lg">{SECTION_ICONS[section.section] || '\u{1F4C4}'}</span>
+                      <span className={`flex-1 font-semibold text-sm ${isCollapsed ? 'text-gray-400' : 'text-white'}`}>
+                        {section.title}
+                      </span>
+                      {getSeverityIcon(section.content)}
+                      {isCollapsed ? (
+                        <ChevronRight size={16} className="text-gray-500" />
+                      ) : (
+                        <ChevronDown size={16} className="text-gray-500" />
+                      )}
+                    </button>
+
+                    {!isCollapsed && (
+                      <div className="px-5 pb-5 border-t border-navy-600/50">
+                        <div className="mt-3">
+                          <ReportMarkdown content={section.content} accentColor={accentText} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          ))}
+          </div>
         </div>
       )}
 
@@ -721,13 +980,20 @@ export default function DiagnosisPage() {
                             >
                               {isEn ? 'View' : '보기'}
                             </button>
-                            {report.downloadUrl && (
+                            {report.downloadUrlDocx && (
                               <button
-                                onClick={() => downloadPptx(report.downloadUrl)}
-                                className="inline-flex items-center gap-1 text-xs text-accent-orange hover:text-accent-orange/80 transition-colors"
+                                onClick={() => window.open(report.downloadUrlDocx, '_blank')}
+                                className="inline-flex items-center gap-1 text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors"
                               >
-                                <Download size={12} />
-                                PPTX
+                                <Download size={12} /> DOCX
+                              </button>
+                            )}
+                            {report.downloadUrlMd && (
+                              <button
+                                onClick={() => window.open(report.downloadUrlMd, '_blank')}
+                                className="inline-flex items-center gap-1 text-xs text-accent-green hover:text-accent-green/80 transition-colors"
+                              >
+                                <Download size={12} /> MD
                               </button>
                             )}
                           </>
