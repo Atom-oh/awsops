@@ -36,7 +36,7 @@
           <div class="agenda-dot">1</div>
           <div class="agenda-connector"></div>
           <div class="agenda-label">
-            <strong><strong>Why AWSops</strong> — 클라우드 운영의 도전 과제 <code>20min</code></strong>
+            <strong><strong>Why AWSops</strong> — 클라우드 운영의 도전 과제</strong>
             
           </div>
         </div>
@@ -44,7 +44,7 @@
           <div class="agenda-dot">2</div>
           <div class="agenda-connector"></div>
           <div class="agenda-label">
-            <strong><strong>Architecture Deep Dive</strong> — 기술 스택과 AI 에이전트 <code>20min</code></strong>
+            <strong><strong>Architecture Deep Dive</strong> — 기술 스택과 AI 에이전트</strong>
             
           </div>
         </div>
@@ -52,7 +52,7 @@
           <div class="agenda-dot">3</div>
           
           <div class="agenda-label">
-            <strong><strong>Demo & Diagnosis Report</strong> — 실전 시나리오와 종합진단 <code>20min</code></strong>
+            <strong><strong>Demo & Diagnosis Report</strong> — 실전 시나리오와 종합진단</strong>
             
           </div>
         </div>
@@ -1477,7 +1477,7 @@
   <div class="ds-i"><span>진행률: <span id="dPct2">0%</span></span><span>경과: <span id="dTm2">00:00</span></span></div>
   <div class="ds-btns">
     <button class="db db1" id="dSt2">진단 시작</button>
-    <button class="db db2" id="dDl2" disabled>&#x2193; PPTX</button>
+    <button class="db db2" id="dDl2" disabled>&#x2193; DOCX / MD / PDF</button>
     <button class="db db3" id="dRs2" disabled>재설정</button>
   </div>
   <div class="ds-sc" id="dSc2"></div>
@@ -1498,7 +1498,9 @@
       pct=document.getElementById('dPct2'),tm=document.getElementById('dTm2'),
       bS=document.getElementById('dSt2'),bD=document.getElementById('dDl2'),bR=document.getElementById('dRs2');
   var idx=0,run=false,t0=0,iv=null,to=null;
+  var TOTAL_SIM_SECS=925;
   function fmt(s){return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+  function simTime(){return fmt(Math.round(idx/S.length*TOTAL_SIM_SECS))}
   function render(){
     while(el.firstChild)el.removeChild(el.firstChild);
     var g={};S.forEach(function(s,i){if(!g[s.p])g[s.p]={c:s.c,items:[]};g[s.p].items.push({n:s.n,i:i})});
@@ -1514,17 +1516,17 @@
   }
   function setI(i,v){var r=el.querySelector('[data-idx="'+i+'"] .ic');if(r)r.textContent=v}
   function prog(){var p=idx/S.length*100;bar.style.width=p+'%';pct.textContent=Math.round(p)+'%'}
-  function tick(){if(run)tm.textContent=fmt(Math.floor((Date.now()-t0)/1000))}
+  function tick(){if(run)tm.textContent=simTime()}
   function next(){
     if(idx<S.length){if(idx>0)setI(idx-1,'\u2705');setI(idx,'\u23F3');prog();idx++;to=setTimeout(next,800)}
-    else{setI(S.length-1,'\u2705');prog();run=false;clearInterval(iv);bD.disabled=false}
+    else{setI(S.length-1,'\u2705');prog();run=false;clearInterval(iv);tm.textContent='15:25';bD.disabled=false}
   }
   function start(){if(run)return;run=true;t0=Date.now();idx=0;bS.disabled=true;bR.disabled=false;bD.disabled=true;
     clearTimeout(to);clearInterval(iv);render();prog();tm.textContent='00:00';iv=setInterval(tick,1000);next()}
   function reset(){run=false;idx=0;clearInterval(iv);clearTimeout(to);render();bar.style.width='0%';pct.textContent='0%';
     tm.textContent='00:00';bS.disabled=false;bD.disabled=true;bR.disabled=true}
   render();bS.addEventListener('click',start);bR.addEventListener('click',reset);
-  bD.addEventListener('click',function(){alert('PPTX download is a simulation.')});
+  bD.addEventListener('click',function(){alert('DOCX / MD / PDF download is a simulation.')});
 })();
 </script>
   </div>
@@ -1628,6 +1630,7 @@
 </div>
 <script src="./common/animation-utils.js"></script>
 <script src="./common/slide-framework.js"></script>
+<script src="./common/slide-patches.js"></script>
 <script src="./common/quiz-component.js"></script>
 <script src="./common/presenter-view.js"></script>
 

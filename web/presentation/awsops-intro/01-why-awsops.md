@@ -31,9 +31,9 @@ Junseok Oh | Solutions Architect | AWS
 
 # Agenda
 
-1. **Why AWSops** — 클라우드 운영의 도전 과제 `20min`
-2. **Architecture Deep Dive** — 기술 스택과 AI 에이전트 `20min`
-3. **Demo & Diagnosis Report** — 실전 시나리오와 종합진단 `20min`
+1. **Why AWSops** — 클라우드 운영의 도전 과제
+2. **Architecture Deep Dive** — 기술 스택과 AI 에이전트
+3. **Demo & Diagnosis Report** — 실전 시나리오와 종합진단
 
 :::notes
 {timing: 1min}
