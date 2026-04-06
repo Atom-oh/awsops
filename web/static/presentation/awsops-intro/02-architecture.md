@@ -31,8 +31,8 @@ Level 300 세션답게 내부 구현 디테일까지 다루겠습니다.
 # Overall Architecture
 
 :::html
-<div style="display:flex;justify-content:center;align-items:center;width:100%;height:100%;background:linear-gradient(135deg, #e8f4f8 0%, #f0f4ff 50%, #eef2fb 100%);border-radius:8px;padding:8px;">
-  <img src="./diagrams/overall-architecture.png" alt="AWSops Overall Architecture" style="max-width:100%;max-height:100%;object-fit:contain;">
+<div style="display:flex;justify-content:center;align-items:center;width:100%;height:100%;">
+  <img src="./diagrams/overall-architecture.png" alt="AWSops Overall Architecture" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;">
 </div>
 :::
 
