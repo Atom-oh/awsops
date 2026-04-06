@@ -92,6 +92,11 @@ const config: Config = {
           position: 'right',
         },
         {
+          href: 'pathname:///presentation/awsops-intro/index.html',
+          label: 'Presentation',
+          position: 'left',
+        },
+        {
           href: 'https://awsops.whchoi.net/awsops/',
           label: '대시보드',
           position: 'right',
