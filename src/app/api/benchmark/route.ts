@@ -57,7 +57,9 @@ export async function GET(request: NextRequest) {
 
     const dbUrl = getDbUrl();
     const tmpFile = `${resultFile}.tmp`;
-    const cmd = `powerpipe mod install --mod-location "${MOD_DIR}" > /dev/null 2>&1; powerpipe benchmark run aws_compliance.benchmark.${benchmark} --mod-location "${MOD_DIR}" ${searchPathArgs} --output json --progress=false > "${tmpFile}" 2>"${errorFile}" && mv "${tmpFile}" "${resultFile}" && echo "done" > "${statusFile}" || (rm -f "${tmpFile}" && echo "error" > "${statusFile}")`;
+    // Powerpipe exits with code 2 when controls have alarms — this is expected.
+    // Check output file validity instead of relying on exit code.
+    const cmd = `powerpipe mod install --mod-location "${MOD_DIR}" > /dev/null 2>&1; powerpipe benchmark run aws_compliance.benchmark.${benchmark} --mod-location "${MOD_DIR}" ${searchPathArgs} --output json --progress=false > "${tmpFile}" 2>"${errorFile}"; if [ -s "${tmpFile}" ]; then mv "${tmpFile}" "${resultFile}" && echo "done" > "${statusFile}"; else rm -f "${tmpFile}" && echo "error" > "${statusFile}"; fi`;
     // Note: exec() is used here intentionally — the command requires shell features
     // (pipes, redirects, &&/||). All parameters (benchmark, dbUrl, MOD_DIR) are
     // server-controlled values, not user input.
