@@ -645,6 +645,58 @@ export default function DiagnosisPage() {
         </div>
       )}
 
+      {/* Report History Table */}
+      {reports.length > 0 && (
+        <div className="bg-navy-800 border border-navy-600 rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-navy-600">
+            <h3 className="text-sm font-medium text-white">
+              {isEn ? 'Report History' : '리포트 이력'}
+            </h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-navy-600">
+                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{isEn ? 'Date' : '날짜'}</th>
+                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{isEn ? 'Account' : '계정'}</th>
+                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{isEn ? 'Status' : '상태'}</th>
+                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{isEn ? 'Actions' : ''}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reports.map((report) => (
+                  <tr
+                    key={report.reportId}
+                    className={`border-b border-navy-700 hover:bg-navy-700/50 transition-colors ${currentReportId === report.reportId ? 'bg-navy-700/30' : ''}`}
+                  >
+                    <td className="px-4 py-2.5 text-gray-300 font-mono text-xs">{formatDatetime(report.createdAt)}</td>
+                    <td className="px-4 py-2.5 text-gray-300 text-xs">{report.accountAlias || getAccountAlias(report.accountId)}</td>
+                    <td className="px-4 py-2.5">
+                      {report.status === 'completed' && <span className="inline-flex items-center gap-1 text-accent-green text-xs"><CheckCircle size={14} />{isEn ? 'Completed' : '완료'}</span>}
+                      {report.status === 'generating' && <span className="inline-flex items-center gap-1 text-accent-cyan text-xs"><Loader2 size={14} className="animate-spin" />{isEn ? 'Generating' : '생성 중'}{report.progress && <span className="text-gray-500 ml-1">({report.progress.current}/{report.progress.total})</span>}</span>}
+                      {report.status === 'failed' && <span className="inline-flex items-center gap-1 text-red-400 text-xs"><XCircle size={14} />{isEn ? 'Failed' : '실패'}</span>}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        {report.status === 'completed' && (
+                          <>
+                            <button onClick={() => viewReport(report.reportId)} className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors">{isEn ? 'View' : '보기'}</button>
+                            {report.downloadUrlDocx && <button onClick={() => window.open(report.downloadUrlDocx, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors"><Download size={12} /> DOCX</button>}
+                            {report.downloadUrlMd && <button onClick={() => window.open(report.downloadUrlMd, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-green hover:text-accent-green/80 transition-colors"><Download size={12} /> MD</button>}
+                          </>
+                        )}
+                        {report.status === 'generating' && <button onClick={() => viewReport(report.reportId)} className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors">{isEn ? 'Track' : '진행 확인'}</button>}
+                        {report.status === 'failed' && <span className="text-xs text-gray-500">—</span>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Progress Bar (while generating) */}
       {status === 'generating' && (
         <div className="bg-navy-800 border border-navy-600 rounded-lg p-5">
@@ -905,119 +957,6 @@ export default function DiagnosisPage() {
         </div>
       )}
 
-      {/* Report History Table */}
-      {reports.length > 0 && (
-        <div className="bg-navy-800 border border-navy-600 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-navy-600">
-            <h3 className="text-sm font-medium text-white">
-              {isEn ? 'Report History' : '리포트 이력'}
-            </h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-navy-600">
-                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">
-                    {isEn ? 'Date' : '날짜'}
-                  </th>
-                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">
-                    {isEn ? 'Account' : '계정'}
-                  </th>
-                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">
-                    {isEn ? 'Status' : '상태'}
-                  </th>
-                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">
-                    {isEn ? 'Actions' : ''}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {reports.map((report) => (
-                  <tr
-                    key={report.reportId}
-                    className={`border-b border-navy-700 hover:bg-navy-700/50 transition-colors ${
-                      currentReportId === report.reportId ? 'bg-navy-700/30' : ''
-                    }`}
-                  >
-                    <td className="px-4 py-2.5 text-gray-300 font-mono text-xs">
-                      {formatDatetime(report.createdAt)}
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-300 text-xs">
-                      {report.accountAlias || getAccountAlias(report.accountId)}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      {report.status === 'completed' && (
-                        <span className="inline-flex items-center gap-1 text-accent-green text-xs">
-                          <CheckCircle size={14} />
-                          {isEn ? 'Completed' : '완료'}
-                        </span>
-                      )}
-                      {report.status === 'generating' && (
-                        <span className="inline-flex items-center gap-1 text-accent-cyan text-xs">
-                          <Loader2 size={14} className="animate-spin" />
-                          {isEn ? 'Generating' : '생성 중'}
-                          {report.progress && (
-                            <span className="text-gray-500 ml-1">
-                              ({report.progress.current}/{report.progress.total})
-                            </span>
-                          )}
-                        </span>
-                      )}
-                      {report.status === 'failed' && (
-                        <span className="inline-flex items-center gap-1 text-red-400 text-xs">
-                          <XCircle size={14} />
-                          {isEn ? 'Failed' : '실패'}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-2">
-                        {report.status === 'completed' && (
-                          <>
-                            <button
-                              onClick={() => viewReport(report.reportId)}
-                              className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors"
-                            >
-                              {isEn ? 'View' : '보기'}
-                            </button>
-                            {report.downloadUrlDocx && (
-                              <button
-                                onClick={() => window.open(report.downloadUrlDocx, '_blank')}
-                                className="inline-flex items-center gap-1 text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors"
-                              >
-                                <Download size={12} /> DOCX
-                              </button>
-                            )}
-                            {report.downloadUrlMd && (
-                              <button
-                                onClick={() => window.open(report.downloadUrlMd, '_blank')}
-                                className="inline-flex items-center gap-1 text-xs text-accent-green hover:text-accent-green/80 transition-colors"
-                              >
-                                <Download size={12} /> MD
-                              </button>
-                            )}
-                          </>
-                        )}
-                        {report.status === 'generating' && (
-                          <button
-                            onClick={() => viewReport(report.reportId)}
-                            className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors"
-                          >
-                            {isEn ? 'Track' : '진행 확인'}
-                          </button>
-                        )}
-                        {report.status === 'failed' && (
-                          <span className="text-xs text-gray-500">—</span>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
