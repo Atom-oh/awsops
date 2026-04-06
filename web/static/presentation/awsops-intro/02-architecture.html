@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture Deep Dive</title>
+  <meta name="generator" content="remarp">
+  <meta name="remarp-version" content="1">
+  <meta name="remarp-source" content="02-architecture.md">
+  <meta name="remarp-block" content="default">
+  <link rel="stylesheet" href="./common/theme.css">
+  <link rel="stylesheet" href="./common/pptx-theme/theme-override.css">
+  
+  
+  <script>window.__remarpTheme = {"colors": {}, "footer": "\u00a9 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved. Amazon Confidential and Trademark.", "pagination": true, "fonts": {}};</script>
+</head>
+<body>
+<div class="slide-deck">
+<div class="slide title-slide">
+    <h1>Architecture Deep Dive</h1>
+  <p class="subtitle">AWSops 기술 아키텍처</p>
+</div>
+
+<div class="slide" data-remarp-id="s1" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s1-header"><h2>Overall Architecture</h2></div>
+  <div class="slide-body" data-remarp-id="s1-body">
+    <p><!-- Slide 2: Overall Architecture Diagram --></p>
+<div class="flow-h">
+  <div class="flow-group bg-blue" data-fragment-index="1">
+    <div class="flow-group-label">Client</div>
+    <div class="flow-box">Browser</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-orange" data-fragment-index="2">
+    <div class="flow-group-label">Edge</div>
+    <div class="flow-box">CloudFront</div>
+    <div class="flow-box">Lambda@Edge</div>
+    <div class="flow-box">Cognito JWT</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-pink" data-fragment-index="3">
+    <div class="flow-group-label">Application</div>
+    <div class="flow-box">ALB (Internal)</div>
+    <div class="flow-box">EC2 t4g.2xlarge</div>
+    <div class="flow-box">Next.js 14</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-green" data-fragment-index="4">
+    <div class="flow-group-label">Data + AI</div>
+    <div class="flow-box">Steampipe PostgreSQL</div>
+    <div class="flow-box">Bedrock AgentCore</div>
+    <div class="flow-box">8 MCP Gateways</div>
+  </div>
+</div>
+  </div>
+</div>
+
+<div class="slide" data-remarp-id="s2" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s2-header"><h2>CDK Infrastructure-as-Code</h2></div>
+  <div class="slide-body" data-remarp-id="s2-body">
+    <div class="columns">
+<div class="col">
+<div class="fragment fade-in" data-fragment-index="0"><h3><code>infra-cdk/</code> 구조</h3>
+<ul><li><strong>awsops-stack.ts</strong> — VPC, EC2, ALB, CloudFront</li><li><strong>cognito-stack.ts</strong> — User Pool, Lambda@Edge</li><li><code>cdk deploy</code> 한 번에 전체 인프라 생성</li></ul>
+</div><div class="fragment fade-in" data-fragment-index="1"><h3>네트워크 설계</h3>
+<ul><li>VPC — 기존 VPC 사용 또는 자동 생성</li><li>EC2 — <strong>Private Subnet</strong> (Public IP 없음)</li><li>ALB — Internal, CloudFront Prefix List만 허용</li><li>CloudFront — <strong>CACHING_DISABLED</strong> (실시간 데이터)</li></ul>
+</div><div class="col">
+</div><div class="fragment fade-in" data-fragment-index="2"><h3>EC2 인스턴스 설정</h3>
+<ul><li><strong>t4g.2xlarge</strong> (8 vCPU, 32GB, ARM64)</li><li>Steampipe + Next.js + Powerpipe 동시 실행</li><li>IMDSv2 강제 (Hop Limit 2)</li><li>SSM Session Manager 접근 (SSH 불필요)</li></ul>
+</div><div class="fragment fade-in" data-fragment-index="3"><h3>CloudFront 설정</h3>
+<ul><li>X-Custom-Secret 헤더로 ALB 원본 검증</li><li>CACHING_DISABLED 정책 (실시간 데이터)</li><li>Lambda@Edge Python 3.12 (us-east-1)</li></ul>
+</div>
+</div>
+  </div>
+</div></div>
+
+<div class="slide" data-remarp-id="s3" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s3-header"><h2>Data Layer: Steampipe</h2></div>
+  <div class="slide-body" data-remarp-id="s3-body">
+    <p><!-- Slide 4: Data Layer — Steampipe --></p>
+<div class="flow-h">
+  <div class="flow-group bg-blue" data-fragment-index="1">
+    <div class="flow-group-label">AWS APIs</div>
+    <div class="flow-box">EC2, S3, RDS...</div>
+    <div class="flow-box">380+ Tables</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-orange" data-fragment-index="2">
+    <div class="flow-group-label">Steampipe</div>
+    <div class="flow-box">Embedded PostgreSQL</div>
+    <div class="flow-box">Port 9193</div>
+    <div class="flow-box">FDW Plugin</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-pink" data-fragment-index="3">
+    <div class="flow-group-label">Application</div>
+    <div class="flow-box">pg Pool (max: 5)</div>
+    <div class="flow-box">node-cache (5min TTL)</div>
+    <div class="flow-box">batchQuery (5 seq)</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-green" data-fragment-index="4">
+    <div class="flow-group-label">Multi-Account</div>
+    <div class="flow-box">Aggregator</div>
+    <div class="flow-box">buildSearchPath()</div>
+    <div class="flow-box">Per-Account Cache</div>
+  </div>
+</div>
+  </div>
+</div>
+
+<div class="slide" data-remarp-id="s4" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s4-header"><h2>AI Engine: Bedrock AgentCore</h2></div>
+  <div class="slide-body" data-remarp-id="s4-body">
+    <p><!-- Slide 5: AI Engine — Bedrock AgentCore --></p>
+<div class="flow-h">
+  <div class="flow-group bg-blue" data-fragment-index="1">
+    <div class="flow-group-label">AI Runtime</div>
+    <div class="flow-box">Strands Agent (Python)</div>
+    <div class="flow-box">Claude Opus 4.6</div>
+    <div class="flow-box">Docker ARM64</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-orange" data-fragment-index="2">
+    <div class="flow-group-label">8 MCP Gateways</div>
+    <div class="flow-box">Network (17 tools)</div>
+    <div class="flow-box">Container (24 tools)</div>
+    <div class="flow-box">Data (24 tools)</div>
+    <div class="flow-box">Security (14 tools)</div>
+    <div class="flow-box">+4 more</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-pink" data-fragment-index="3">
+    <div class="flow-group-label">19 Lambda Functions</div>
+    <div class="flow-box">VPC Reachability</div>
+    <div class="flow-box">Flow Log Analysis</div>
+    <div class="flow-box">IAM Simulator</div>
+    <div class="flow-box">K8s Troubleshoot</div>
+    <div class="flow-box">+15 more</div>
+  </div>
+</div>
+  </div>
+</div>
+
+<div class="slide" data-remarp-id="s5" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s5-header"><h2>AI Route Classification</h2></div>
+  <div class="slide-body" data-remarp-id="s5-body">
+    <p><!-- Slide 6: AI Route Classification --></p>
+<div class="flow-h">
+  <div class="flow-group bg-blue" data-fragment-index="1">
+    <div class="flow-group-label">User Input</div>
+    <div class="flow-box">"EKS 비용 개선점 찾아줘"</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-orange" data-fragment-index="2">
+    <div class="flow-group-label">Sonnet 4.6 Classifier</div>
+    <div class="flow-box">Route Registry</div>
+    <div class="flow-box">18 Routes</div>
+    <div class="flow-box">Intent Classification</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-pink" data-fragment-index="3">
+    <div class="flow-group-label">Handler</div>
+    <div class="flow-box">auto-collect</div>
+    <div class="flow-box">sql</div>
+    <div class="flow-box">datasource</div>
+    <div class="flow-box">code</div>
+    <div class="flow-box">gateway</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-green" data-fragment-index="4">
+    <div class="flow-group-label">Response</div>
+    <div class="flow-box">SSE Streaming</div>
+    <div class="flow-box">Tool Usage Display</div>
+  </div>
+</div>
+  </div>
+</div>
+
+<div class="slide" data-remarp-id="s6" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s6-header"><h2>Auto-Collect Agents</h2></div>
+  <div class="slide-body" data-remarp-id="s6-body">
+    <div class="columns">
+<div class="col">
+<div class="fragment fade-in" data-fragment-index="0"><h3>6 Collectors</h3>
+<table><thead><tr><th>Agent</th><th>Target</th></tr></thead><tbody><tr><td><strong>eks-optimize</strong></td><td>EKS rightsizing</td></tr><tr><td><strong>db-optimize</strong></td><td>RDS/ElastiCache/OpenSearch</td></tr><tr><td><strong>msk-optimize</strong></td><td>MSK Kafka brokers</td></tr><tr><td><strong>idle-scan</strong></td><td>Unused resources</td></tr><tr><td><strong>trace-analyze</strong></td><td>Distributed traces</td></tr><tr><td><strong>incident</strong></td><td>Multi-source incidents</td></tr></tbody></table>
+</div><div class="col">
+</div><div class="fragment fade-in" data-fragment-index="1"><h3>4-Phase Architecture</h3>
+<ol><li><strong>Detect</strong> -- 데이터소스 자동 탐지
+<ul><li>Prometheus, Loki, Tempo, CloudWatch</li></ul></li><li><strong>Collect</strong> -- 병렬 데이터 수집
+<ul><li>PromQL + Steampipe SQL + CloudWatch</li></ul></li><li><strong>Format</strong> -- Bedrock 컨텍스트 포맷팅
+<ul><li><code>formatContext()</code> 메서드</li></ul></li><li><strong>Analyze</strong> -- Opus 4.6 심층 분석
+<ul><li><code>analysisPrompt</code> 시스템 프롬프트</li></ul></li></ol>
+</div><div class="fragment fade-in" data-fragment-index="2"><h3>Collector Interface</h3>
+<div class="code-block">interface Collector {
+  collect(send, accountId?)
+  formatContext(data)
+  <span class="key">analysisPrompt</span>: string
+  <span class="key">displayName</span>: string
+}</div>
+</div>
+</div>
+  </div>
+</div></div>
+
+<div class="slide" data-remarp-id="s7" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s7-header"><h2>Datasource Integration</h2></div>
+  <div class="slide-body" data-remarp-id="s7-body">
+    <p><!-- Slide 8: Datasource Integration --></p>
+<div class="flow-h">
+  <div class="flow-group bg-orange" data-fragment-index="1">
+    <div class="flow-group-label">Metrics</div>
+    <div class="flow-box">Prometheus (PromQL)</div>
+    <div class="flow-box">Datadog (Query)</div>
+    <div class="flow-box">Dynatrace (API)</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-green" data-fragment-index="2">
+    <div class="flow-group-label">Logs</div>
+    <div class="flow-box">Loki (LogQL)</div>
+    <div class="flow-box">ClickHouse (SQL)</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-blue" data-fragment-index="3">
+    <div class="flow-group-label">Traces</div>
+    <div class="flow-box">Tempo (TraceQL)</div>
+    <div class="flow-box">Jaeger (API)</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-pink" data-fragment-index="4">
+    <div class="flow-group-label">Unified</div>
+    <div class="flow-box">datasource-client.ts</div>
+    <div class="flow-box">datasource-registry.ts</div>
+    <div class="flow-box">Auto-Discovery</div>
+  </div>
+</div>
+  </div>
+</div>
+
+<div class="slide" data-remarp-id="s8" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s8-header"><h2>Security Architecture</h2></div>
+  <div class="slide-body" data-remarp-id="s8-body">
+    <p><!-- Slide 9: Security Architecture --></p>
+<div class="flow-h">
+  <div class="flow-group bg-blue" data-fragment-index="1">
+    <div class="flow-group-label">Authentication</div>
+    <div class="flow-box">Cognito User Pool</div>
+    <div class="flow-box">Lambda@Edge (Python)</div>
+    <div class="flow-box">JWT Verification</div>
+    <div class="flow-box">HttpOnly Cookie</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-orange" data-fragment-index="2">
+    <div class="flow-group-label">Network Security</div>
+    <div class="flow-box">Private Subnet Only</div>
+    <div class="flow-box">No Public IP</div>
+    <div class="flow-box">CF Prefix List &rarr; ALB SG</div>
+    <div class="flow-box">X-Custom-Secret Header</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-group bg-green" data-fragment-index="3">
+    <div class="flow-group-label">Access Control</div>
+    <div class="flow-box">IMDSv2 (Hop Limit 2)</div>
+    <div class="flow-box">SSM Session Manager</div>
+    <div class="flow-box">Admin Email List</div>
+    <div class="flow-box">Per-User Memory</div>
+  </div>
+</div>
+  </div>
+</div>
+
+<div class="slide" data-remarp-id="s9" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s9-header"><h2>Key Architecture Decisions</h2></div>
+  <div class="slide-body" data-remarp-id="s9-body">
+    <div class="columns">
+<div class="col">
+<div class="fragment fade-in" data-fragment-index="0"><h3>Performance Decisions</h3>
+<ul><li><strong>pg Pool > Steampipe CLI</strong> -- 660x faster</li><li><strong>node-cache 5min TTL</strong> -- 대시보드 23개 쿼리 프리워밍</li><li><strong>batchQuery (5 sequential)</strong> -- 동시 연결 제한 준수</li><li><strong>cache-warmer</strong> -- 4분 주기 백그라운드 워밍</li></ul>
+</div><div class="fragment fade-in" data-fragment-index="1"><h3>AI Decisions</h3>
+<ul><li><strong>Sonnet 4.6</strong> -- 라우트 분류 (빠르고 정확)</li><li><strong>Opus 4.6</strong> -- 종합진단 리포트 (깊은 분석)</li><li><strong>MetricCandidate</strong> -- PromQL 자동 탐색 패턴</li></ul>
+</div><div class="col">
+</div><div class="fragment fade-in" data-fragment-index="2"><h3>Resilience Decisions</h3>
+<ul><li><strong>Graceful Degradation</strong> -- 데이터소스 없으면 Skip</li><li><strong>Cost Availability Probe</strong> -- MSP 환경 자동 감지</li><li><strong>Snapshot Fallback</strong> -- Cost API 실패 시 로컬 스냅샷</li><li><strong>Inventory Snapshot</strong> -- 추가 쿼리 0건으로 추이 추적</li></ul>
+</div><div class="fragment fade-in" data-fragment-index="3"><h3>Multi-Account Decisions</h3>
+<ul><li><strong>config.json</strong> -- 코드 수정 없이 계정 추가</li><li><strong>Aggregator</strong> -- 통합/개별 조회 모두 지원</li><li><strong>buildSearchPath()</strong> -- 동적 search_path 생성</li><li><strong>Per-Account Cache</strong> -- accountId 접두사 캐시키</li></ul>
+</div>
+</div>
+  </div>
+</div></div>
+
+<div class="slide" data-remarp-id="s10" style="transition: opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s10-header"><h2>Technology Stack</h2></div>
+  <div class="slide-body" data-remarp-id="s10-body">
+    <p><!-- Slide 11: Technology Stack Summary --></p>
+<table><thead><tr><th>Layer</th><th>Technology</th><th>Details</th></tr></thead><tbody><tr><td><strong>Frontend</strong></td><td>Next.js 14</td><td>App Router, Tailwind, Recharts, React Flow</td></tr><tr><td><strong>Data</strong></td><td>Steampipe</td><td>380+ AWS, 60+ K8s tables, pg Pool</td></tr><tr><td><strong>AI Model</strong></td><td>Bedrock Claude</td><td>Sonnet 4.6 (classify), Opus 4.6 (analyze)</td></tr><tr><td><strong>AI Runtime</strong></td><td>AgentCore</td><td>Strands Agent, 8 Gateways, 125 Tools</td></tr><tr><td><strong>Functions</strong></td><td>Lambda</td><td>19 functions (MCP tool implementations)</td></tr><tr><td><strong>Auth</strong></td><td>Cognito</td><td>User Pool + Lambda@Edge + CloudFront</td></tr><tr><td><strong>Infra</strong></td><td>CDK</td><td>VPC, EC2, ALB, CloudFront as Code</td></tr><tr><td><strong>Observability</strong></td><td>Multi-Source</td><td>Prometheus, Loki, Tempo, Jaeger, Datadog, Dynatrace, ClickHouse</td></tr></tbody></table>
+  </div>
+</div>
+
+<div class="slide" data-remarp-id="s11" style="transition: opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s11-header"><h2>Key Takeaways -- Architecture</h2></div>
+  <div class="slide-body" data-remarp-id="s11-body">
+    <p><!-- Slide 12: Key Takeaways --></p>
+<ul><li><strong>Steampipe pg Pool</strong> -- AWS API를 SQL로, CLI 대비 660x 성능</li><li><strong>AgentCore + 8 MCP Gateway</strong> -- 125 도구를 전문 영역별로 분리</li><li><strong>Route Registry</strong> -- 18 라우트 단일 소스, Sonnet 자동 분류</li><li><strong>Auto-Collect 4-Phase</strong> -- Detect → Collect → Format → Analyze</li><li><strong>7 Datasource Integration</strong> -- Prometheus, Loki, Tempo, Jaeger, ClickHouse, Datadog, Dynatrace</li><li><strong>Zero Trust Network</strong> -- Private Subnet + CloudFront + Lambda@Edge</li></ul>
+  </div>
+</div>
+</div>
+<script src="./common/animation-utils.js"></script>
+<script src="./common/slide-framework.js"></script>
+<script src="./common/quiz-component.js"></script>
+<script src="./common/presenter-view.js"></script>
+
+<script>
+  
+  const presenterNotes = {
+    1: "[1min] 이제 AWSops가 어떻게 만들어졌는지, 기술 아키텍처를 상세히 살펴보겠습니다.\n인프라부터 데이터 레이어, AI 엔진, 보안까지 순서대로 진행합니다.\nLevel 300 세션답게 내부 구현 디테일까지 다루겠습니다.\n\n전체 아키텍처 다이어그램부터 보겠습니다.",
+    2: "❓ ⏸️ [3min] 전체 아키텍처는 4개 계층입니다.\n\n클라이언트 브라우저에서 시작하여 CloudFront를 거칩니다. CloudFront에는 Lambda@Edge가 붙어있고, 여기서 Cognito JWT 토큰을 검증합니다. 인증되지 않은 요청은 여기서 차단됩니다.\n\n\n\n인증을 통과하면 Internal ALB로 라우팅됩니다. ALB 뒤에는 Private Subnet의 EC2 인스턴스가 있고, Next.js 14 App Router가 실행됩니다. EC2는 t4g.2xlarge ARM 인스턴스를 사용합니다. Graviton 기반이라 x86 대비 20% 가격 절감이 있습니다.\n\n데이터는 Steampipe의 내장 PostgreSQL에서 조회하고, AI 분석은 Bedrock AgentCore를 통해 처리합니다.\n\n\n중요한 포인트는, EC2에 Public IP가 없습니다. CloudFront + ALB를 통해서만 접근 가능하고, ALB의 Security Group은 CloudFront Managed Prefix List만 허용합니다.\n\n\nCDK로 이 전체 인프라를 코드로 관리합니다.",
+    3: "[2min] 인프라는 CDK 두 개의 스택으로 관리합니다.\n\nawsops-stack.ts가 핵심인데, VPC, EC2, ALB, CloudFront를 하나의 스택으로 생성합니다. 기존 VPC가 있으면 파라미터로 전달해서 재사용할 수 있고, 없으면 자동으로 새 VPC를 만듭니다.\n\n중요한 설계 결정이 CloudFront의 CACHING_DISABLED입니다. 일반적으로 CloudFront는 캐싱을 위해 사용하지만, AWSops는 실시간 데이터 대시보드라서 캐싱을 끄고, 순수하게 보안과 글로벌 엣지 접근을 위해 사용합니다.\n\n\n이제 데이터 레이어를 보겠습니다.",
+    4: "⏸️ [3min] 데이터 레이어의 핵심은 Steampipe입니다.\n\nSteampipe는 AWS API를 PostgreSQL 테이블로 변환하는 오픈소스 도구입니다. EC2 인스턴스 목록을 보려면 SELECT * FROM aws_ec2_instance 하면 됩니다. AWS CLI로 describe-instances를 호출하는 것보다 660배 빠릅니다.\n\n\n\n왜 그렇게 빠르냐면, Steampipe CLI를 쓰면 매번 프로세스를 띄우고, 플러그인을 로드하고, 연결을 맺어야 합니다. 하지만 pg Pool로 직접 연결하면 이미 떠있는 PostgreSQL에 SQL을 보내기만 하면 됩니다. 이것이 아키텍처의 핵심 결정 중 하나였습니다.\n\n멀티 어카운트는 Aggregator 패턴을 사용합니다. aws라는 연결명은 모든 계정을 통합 조회하고, aws_123456789012처럼 계정 ID를 붙이면 개별 계정만 조회합니다. buildSearchPath 함수가 search_path를 동적으로 생성합니다.\n\n캐시는 node-cache로 5분 TTL을 적용합니다. 멀티 어카운트 환경에서는 캐시 키에 accountId를 접두사로 붙여서 계정별로 분리합니다.\n\n\n다음은 AI 엔진입니다.",
+    5: "⏸️ [3min] AI 엔진의 핵심은 Bedrock AgentCore입니다.\n\nAgentCore Runtime에서 Strands Agent가 실행됩니다. Python으로 작성된 에이전트가 Docker ARM64 이미지로 패키징되어 AgentCore 관리형 서비스에서 실행됩니다. EC2에서는 Docker 이미지를 빌드만 하고, 실제 실행은 AgentCore가 담당합니다.\n\n\n\n8개의 MCP Gateway가 전문 영역별로 나뉘어 있습니다. Network Gateway는 VPC, TGW, VPN, Reachability Analyzer 등 17개 도구를 제공합니다. Container Gateway는 EKS, ECS, Istio 관련 24개 도구를 가지고 있습니다.\n\n각 Gateway 뒤에는 19개의 Lambda 함수가 실제 작업을 수행합니다. 예를 들어 VPC Reachability Analyzer는 Lambda에서 Network Insights Path를 생성하고 분석 결과를 반환합니다.\n\n총 125개의 도구가 이 구조를 통해 AI 에이전트에 제공됩니다.\n\n\n이 125개의 도구를 어떻게 자동으로 선택하느냐가 다음 주제입니다.",
+    6: "⏸️ [3min] AI 라우팅의 핵심은 ROUTE_REGISTRY라는 단일 소스입니다.\n\n18개의 라우트가 등록되어 있고, 각 라우트에는 gateway, display name, description, tools, examples가 정의되어 있습니다. 새로운 도구를 추가하면 분류 프롬프트, UI 표시, 게이트웨이 매핑이 자동으로 업데이트됩니다.\n\n\n\n분류 흐름을 보면, 사용자가 자연어로 질문하면 Sonnet 4.6 모델이 18개 라우트 중 1-3개를 선택합니다. 멀티 라우트도 지원합니다. 예를 들어 \"VPC 보안그룹과 비용을 분석해줘\"라고 하면 network과 cost 두 라우트가 선택됩니다.\n\n핸들러 타입이 5가지 있습니다. auto-collect는 자동 데이터 수집 에이전트, sql은 Steampipe 직접 쿼리, datasource는 Prometheus 같은 외부 데이터소스, code는 Python 코드 인터프리터, gateway는 MCP Gateway 호출입니다.\n\n\nauto-collect가 가장 흥미로운 부분입니다.",
+    7: "⏸️ [3min] Auto-Collect Agent는 AWSops의 가장 강력한 기능입니다.\n\n6개의 Collector가 있고, 모두 같은 인터페이스를 구현합니다. collect 메서드로 데이터를 수집하고, formatContext로 Bedrock에 전달할 컨텍스트를 만들고, analysisPrompt로 분석 프롬프트를 제공합니다.\n\n\n\n4단계 아키텍처를 보면, 첫 번째 Detect 단계에서 사용 가능한 데이터소스를 자동 탐지합니다. Prometheus가 연결되어 있으면 PromQL을 사용하고, 없으면 CloudWatch와 Steampipe만으로 분석합니다. 이 Graceful Degradation이 핵심입니다.\n\n예를 들어 eks-optimize는 Prometheus에서 CPU/Memory 사용량, CPU Throttling, Pod 재시작, HTTP 에러율을 수집하고, Steampipe에서 K8s 리소스 request/limit를 수집합니다. 없는 메트릭은 건너뜁니다. 이를 MetricCandidate 패턴이라고 합니다. 여러 PromQL 쿼리를 순서대로 시도하고, 첫 번째로 데이터가 반환되는 쿼리를 사용합니다.\n\n\n데이터소스 통합을 좀 더 자세히 보겠습니다.",
+    8: "⏸️ [2min] AWSops는 7가지 외부 데이터소스를 지원합니다.\n\n메트릭은 Prometheus, Datadog, Dynatrace. 로그는 Loki와 ClickHouse. 트레이스는 Tempo와 Jaeger입니다.\n\n\n\n모든 데이터소스는 datasource-registry.ts에 메타데이터가 등록되어 있습니다. 쿼리 언어, 헬스체크 엔드포인트, 기본 포트, 예제 쿼리가 포함됩니다. datasource-client.ts가 통합 쿼리 인터페이스를 제공해서, queryDatasource 함수 하나로 어떤 데이터소스든 쿼리할 수 있습니다.\n\nAuto-Discovery 기능이 있어서, data/config.json에 URL만 등록하면 헬스체크로 연결 가능 여부를 자동 감지합니다. 사용자 질문에서 키워드를 분석해서 적절한 데이터소스로 자동 라우팅합니다.\n\n\n마지막으로 보안 아키텍처를 보겠습니다.",
+    9: "⏸️ [2min] 보안은 3계층 방어입니다.\n\n인증 계층에서는 Cognito User Pool과 Lambda@Edge를 사용합니다. Lambda@Edge가 CloudFront에서 모든 요청의 JWT 토큰을 검증합니다. 토큰이 없거나 만료되면 Cognito 로그인 페이지로 리다이렉트합니다. 로그아웃 시 HttpOnly 쿠키는 브라우저 JavaScript로 삭제할 수 없기 때문에 서버 사이드 API를 통해 삭제합니다.\n\n\n\n네트워크 계층에서는 EC2가 Private Subnet에만 있고 Public IP가 없습니다. ALB Security Group은 CloudFront Managed Prefix List만 허용합니다. 추가로 X-Custom-Secret 헤더로 ALB가 CloudFront를 통한 요청인지 검증합니다. 이 헤더가 없는 직접 ALB 접근은 차단됩니다.\n\n접근 제어 계층에서는 IMDSv2를 강제하고 Hop Limit 2로 컨테이너 환경에서의 메타데이터 접근도 차단합니다. SSH 대신 SSM Session Manager를 사용하고, Accounts 페이지 같은 관리 기능은 adminEmails 설정으로 접근을 제한합니다.\n\n\n정리하겠습니다.",
+    10: "⏸️ [2min] 주요 아키텍처 결정을 정리합니다.\n\n성능 측면에서 가장 중요한 결정은 Steampipe CLI 대신 pg Pool을 사용한 것입니다. 660배 차이는 대시보드 사용성에 결정적이었습니다.\n\nAI 측면에서는 분류에 빠른 Sonnet을, 심층 분석에 강력한 Opus를 분리해서 사용합니다. MetricCandidate 패턴은 다양한 Prometheus 환경에서 호환성을 보장합니다.\n\n\n\n복원력 측면에서 Graceful Degradation이 핵심입니다. Prometheus가 없어도 CloudWatch와 Steampipe만으로 분석합니다. Cost API가 차단된 MSP 환경에서도 로컬 스냅샷으로 동작합니다.\n\n멀티 어카운트는 config.json 하나만 수정하면 코드 변경 없이 계정을 추가할 수 있습니다.\n\n\n마지막 슬라이드입니다.",
+    11: "[1min] 기술 스택을 한 눈에 보여드리는 정리 슬라이드입니다.\n\n프론트엔드는 Next.js 14, 데이터는 Steampipe, AI는 Bedrock과 AgentCore, 인증은 Cognito, 인프라는 CDK입니다.\n\n특히 Observability 계층에서 7가지 외부 데이터소스를 통합 지원하는 것이 AWSops의 차별점입니다.\n\n\n핵심 내용을 정리하겠습니다.",
+    12: "[2min] 아키텍처 파트를 6가지로 정리합니다.\n\n첫째, Steampipe pg Pool로 AWS 리소스를 SQL로 빠르게 조회합니다.\n둘째, AgentCore와 8개 MCP Gateway로 125개 도구를 전문 영역별로 관리합니다.\n셋째, Route Registry 하나로 18개 라우트를 자동 분류합니다.\n넷째, Auto-Collect Agent는 4단계로 데이터를 자동 수집하고 분석합니다.\n다섯째, 7가지 외부 데이터소스를 통합 지원합니다.\n여섯째, Private Subnet 기반 Zero Trust 네트워크입니다.\n\n\n이제 실제 데모와 종합진단 리포트를 보여드리겠습니다."
+  };
+  const deck = new SlideFramework({
+    logoSrc: '../common/pptx-theme/images/logo_1.png',
+    footer: '© 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved. Amazon Confidential and Trademark.',
+    
+    pagination: true,
+    sidebar: true,
+    presenterNotes: presenterNotes,
+    onSlideChange: (index, slide) => {}
+  });
+</script>
+</body>
+</html>

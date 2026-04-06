@@ -181,8 +181,8 @@ const DEFAULT_HOURLY_RATE = 0.236; // 매칭 실패 시 m5.xlarge 기준
 ### OpenCost 설치
 
 ```bash
-# scripts/06f-setup-opencost.sh 실행
-bash scripts/06f-setup-opencost.sh
+# scripts/07-setup-opencost.sh 실행
+bash scripts/07-setup-opencost.sh
 
 # 설치 내용: Metrics Server → Prometheus → OpenCost
 # 설치 후 data/config.json에 엔드포인트 추가:
@@ -316,8 +316,46 @@ const keepaliveInterval = setInterval(() => {
 }, 15000);
 ```
 
-**6. 스트리밍 응답 개선 (향후)**
-현재는 AgentCore의 전체 응답을 받은 후 `done` 이벤트로 전송합니다. AgentCore가 토큰 단위 스트리밍을 지원하면 FTTT를 크게 단축할 수 있습니다.
+**6. 3가지 스트리밍 모드 (구현 완료)**
+
+AWSops는 경로별로 최적화된 3가지 스트리밍 모드를 제공합니다:
+
+| 모드 | 적용 경로 | 방식 | 지연 |
+|------|----------|------|------|
+| **Real Streaming** | 멀티 라우트 합성 | `ConverseStreamCommand` (Bedrock Converse API) | 토큰 단위 즉시 전송 |
+| **Simulated Streaming** | 단일 Gateway 응답 | `simulateStreaming()` (50자/15ms 청킹) | 타이핑 효과 |
+| **Direct Streaming** | Bedrock Direct (aws-data) | `InvokeModelWithResponseStreamCommand` | 토큰 단위 즉시 전송 |
+
+```typescript
+// 멀티 라우트 합성: Converse Stream API로 실시간 스트리밍
+async function synthesizeResponsesStreaming(results, send) {
+  const command = new ConverseStreamCommand({
+    modelId: 'anthropic.claude-sonnet-4-6-20250514-v1:0',
+    messages: [{ role: 'user', content: [{ text: synthesisPrompt }] }],
+  });
+  const response = await bedrockClient.send(command);
+  for await (const event of response.stream) {
+    if (event.contentBlockDelta?.delta?.text) {
+      send('chunk', { delta: event.contentBlockDelta.delta.text });
+    }
+  }
+}
+
+// 단일 Gateway 응답: 타이핑 효과 시뮬레이션
+async function simulateStreaming(content, send) {
+  const CHUNK_SIZE = 50, CHUNK_DELAY_MS = 15;
+  for (let i = 0; i < content.length; i += CHUNK_SIZE) {
+    send('chunk', { delta: content.slice(i, i + CHUNK_SIZE) });
+    await new Promise(r => setTimeout(r, CHUNK_DELAY_MS));
+  }
+}
+```
+
+:::info 왜 3가지 모드인가?
+- **AgentCore Gateway**는 전체 응답을 한 번에 반환하므로 simulateStreaming으로 타이핑 효과 제공
+- **멀티 라우트 합성**은 여러 Gateway 결과를 Bedrock이 통합하므로 Converse API의 네이티브 스트리밍 활용
+- **Bedrock Direct**는 원래부터 토큰 스트리밍을 지원
+:::
 
 </details>
 
@@ -329,7 +367,7 @@ const keepaliveInterval = setInterval(() => {
 현재 AWSops에서 AlertManager는 **비활성화** 상태입니다:
 
 ```bash
-# scripts/06f-setup-opencost.sh
+# scripts/07-setup-opencost.sh
 helm install prometheus prometheus-community/prometheus \
   --set alertmanager.enabled=false   # ← 명시적 비활성화
 ```
@@ -345,7 +383,7 @@ Prometheus는 OpenCost의 메트릭 수집용으로만 설치되어 있습니다
 
 **Step 1. AlertManager 활성화**
 
-`scripts/06f-setup-opencost.sh` 수정:
+`scripts/07-setup-opencost.sh` 수정:
 ```bash
 helm upgrade prometheus prometheus-community/prometheus \
   --set alertmanager.enabled=true
@@ -701,7 +739,7 @@ export function getUserFromRequest(request: NextRequest): UserInfo {
 
 ### 현재 설치 상태
 
-`scripts/06f-setup-opencost.sh`로 설치된 Prometheus 구성:
+`scripts/07-setup-opencost.sh`로 설치된 Prometheus 구성:
 
 ```bash
 helm install prometheus prometheus-community/prometheus \

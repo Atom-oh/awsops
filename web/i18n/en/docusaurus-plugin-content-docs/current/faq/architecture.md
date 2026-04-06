@@ -181,8 +181,8 @@ const DEFAULT_HOURLY_RATE = 0.236; // m5.xlarge fallback
 ### Installing OpenCost
 
 ```bash
-# Run scripts/06f-setup-opencost.sh
-bash scripts/06f-setup-opencost.sh
+# Run scripts/07-setup-opencost.sh
+bash scripts/07-setup-opencost.sh
 
 # Installs: Metrics Server -> Prometheus -> OpenCost
 # After install, add endpoint to data/config.json:
@@ -303,8 +303,46 @@ const keepaliveInterval = setInterval(() => {
 }, 15000);
 ```
 
-**6. Streaming response improvement (future)**
-Currently, the full AgentCore response is received before sending a `done` event. Once AgentCore supports token-level streaming, FTTT can be significantly reduced.
+**6. Three Streaming Modes (Implemented)**
+
+AWSops provides three optimized streaming modes for different response paths:
+
+| Mode | Applied Path | Method | Latency |
+|------|-------------|--------|---------|
+| **Real Streaming** | Multi-route synthesis | `ConverseStreamCommand` (Bedrock Converse API) | Token-level immediate delivery |
+| **Simulated Streaming** | Single Gateway response | `simulateStreaming()` (50 chars/15ms chunking) | Typing effect |
+| **Direct Streaming** | Bedrock Direct (aws-data) | `InvokeModelWithResponseStreamCommand` | Token-level immediate delivery |
+
+```typescript
+// Multi-route synthesis: Real-time streaming via Converse Stream API
+async function synthesizeResponsesStreaming(results, send) {
+  const command = new ConverseStreamCommand({
+    modelId: 'anthropic.claude-sonnet-4-6-20250514-v1:0',
+    messages: [{ role: 'user', content: [{ text: synthesisPrompt }] }],
+  });
+  const response = await bedrockClient.send(command);
+  for await (const event of response.stream) {
+    if (event.contentBlockDelta?.delta?.text) {
+      send('chunk', { delta: event.contentBlockDelta.delta.text });
+    }
+  }
+}
+
+// Single Gateway response: Simulated typing effect
+async function simulateStreaming(content, send) {
+  const CHUNK_SIZE = 50, CHUNK_DELAY_MS = 15;
+  for (let i = 0; i < content.length; i += CHUNK_SIZE) {
+    send('chunk', { delta: content.slice(i, i + CHUNK_SIZE) });
+    await new Promise(r => setTimeout(r, CHUNK_DELAY_MS));
+  }
+}
+```
+
+:::info Why three modes?
+- **AgentCore Gateway** returns the complete response at once, so simulateStreaming provides a typing effect
+- **Multi-route synthesis** combines results from multiple Gateways via Bedrock, utilizing the Converse API's native streaming
+- **Bedrock Direct** natively supports token streaming
+:::
 
 </details>
 
@@ -316,7 +354,7 @@ Currently, the full AgentCore response is received before sending a `done` event
 AlertManager is currently **disabled** in AWSops:
 
 ```bash
-# scripts/06f-setup-opencost.sh
+# scripts/07-setup-opencost.sh
 helm install prometheus prometheus-community/prometheus \
   --set alertmanager.enabled=false   # Explicitly disabled
 ```
@@ -332,7 +370,7 @@ However, **CloudWatch alarm tools** already exist:
 
 **Step 1. Enable AlertManager**
 
-Modify `scripts/06f-setup-opencost.sh`:
+Modify `scripts/07-setup-opencost.sh`:
 ```bash
 helm upgrade prometheus prometheus-community/prometheus \
   --set alertmanager.enabled=true
