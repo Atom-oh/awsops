@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-04-07
+
 ### Added
 
 - External datasource integration with 7 observability platforms: Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog ([#10](https://github.com/whchoi98/awsops/pull/10))
@@ -20,10 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Datasource Explore page (`/datasources/explore`) with direct query execution and AI query generation (natural language to PromQL/LogQL/TraceQL/SQL)
 - Multi-datasource AI correlation: cross-analyze external metrics with AWS resources via `datasource` route
 - AI routing expanded from 10 to 11 routes (added `datasource` route for external platform queries)
+- EKS Access Entry status display and kubeconfig registration ([#11](https://github.com/whchoi98/awsops/pull/11))
+- EKS Service Resources tab with clickable navigation and node ENI traffic metrics
+- AI comprehensive diagnosis with 15-section Bedrock Opus analysis ([#13](https://github.com/whchoi98/awsops/pull/13))
+- Diagnosis report export to DOCX, Markdown, and browser Print-to-PDF
+- Scheduled auto-diagnosis (weekly/biweekly/monthly) via report scheduler
+- Print-friendly report page (`/ai-diagnosis/report`) with A4 page breaks
 - SSRF protection with allowlist-based private network access and defense-in-depth URL validation
 - Converse Stream API for multi-route synthesis with real-time SSE streaming
 - Typing effect simulation for AgentCore gateway responses
 - Automatic zombie PostgreSQL connection cleanup (queries running longer than 5 minutes)
+- App version displayed in sidebar, auto-read from package.json
 
 ### Fixed
 
@@ -31,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove monitoring queries from cache warmer to prevent pg pool exhaustion from slow CloudWatch FDW calls
 - Add time range filters to all monitoring metric queries to prevent unbounded query execution
 - Prevent AI chat bubble width jump during SSE streaming ([#8](https://github.com/whchoi98/awsops/pull/8))
+- SQL injection prevention: sanitize nodeName and validate ENI IDs before SQL interpolation in EKS pages
+- Add missing `involved_object_kind`, `involved_object_name`, `count` columns to warningEvents query
+- Fix undefined `errorFile` variable in benchmark route
+- Add missing `ClipboardCheck` icon import in Sidebar
 
 ### Security
 
@@ -38,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Admin-only access enforced on datasource query and AI query generation actions
 - IPv6 private/link-local address detection added (`fc00::/7`, `fe80::/10`)
 - Regex capture groups for safe Tempo/Jaeger trace ID URL insertion
+- Remove hardcoded S3 bucket with account ID from report route, read from `config.reportBucket`
 
 ## [1.7.0] - 2026-03-24
 
@@ -265,7 +279,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AI routing: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 integration
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/whchoi98/awsops/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/whchoi98/awsops/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/whchoi98/awsops/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/whchoi98/awsops/compare/v1.4.0...v1.5.2
@@ -286,6 +301,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-04-07
+
 ### Added
 
 - 7종 외부 관측성 플랫폼 연동: Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog ([#10](https://github.com/whchoi98/awsops/pull/10))
@@ -293,10 +310,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 데이터소스 Explore 페이지(`/datasources/explore`) — 직접 쿼리 실행 + AI 쿼리 생성 (자연어 → PromQL/LogQL/TraceQL/SQL)
 - 멀티 데이터소스 AI 상관 분석: `datasource` 라우트로 외부 메트릭과 AWS 리소스 교차 분석
 - AI 라우팅 10개 → 11개로 확장 (외부 플랫폼 쿼리용 `datasource` 라우트 추가)
+- EKS Access Entry 상태 표시 및 kubeconfig 등록 ([#11](https://github.com/whchoi98/awsops/pull/11))
+- EKS Service Resources 탭 — 클릭 네비게이션, 노드 ENI 트래픽 메트릭
+- AI 종합 진단 — 15섹션 Bedrock Opus 분석 ([#13](https://github.com/whchoi98/awsops/pull/13))
+- 진단 리포트 DOCX, Markdown, 브라우저 Print-to-PDF 내보내기
+- 자동 진단 스케줄러 (weekly/biweekly/monthly)
+- 인쇄용 리포트 페이지(`/ai-diagnosis/report`) — A4 페이지 브레이크
 - SSRF 방지: allowlist 기반 사설 네트워크 접근 제어 + 심층 방어 URL 검증
 - 멀티 라우트 합성에 Converse Stream API 적용 (실시간 SSE 스트리밍)
 - AgentCore 게이트웨이 응답에 타이핑 효과 시뮬레이션 추가
 - 좀비 PostgreSQL 연결 자동 정리 (5분 이상 실행 쿼리 종료)
+- 사이드바 앱 버전 표시 (package.json에서 자동 읽기)
 
 ### Fixed
 
@@ -304,6 +328,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CloudWatch FDW의 느린 API 호출로 인한 pg 풀 고갈 방지를 위해 캐시 워머에서 모니터링 쿼리 제거
 - 모든 모니터링 메트릭 쿼리에 시간 범위 필터 추가 (무제한 쿼리 실행 방지)
 - AI 채팅 버블이 SSE 스트리밍 중 폭이 점프하는 현상 수정 ([#8](https://github.com/whchoi98/awsops/pull/8))
+- EKS 페이지 SQL Injection 방지: nodeName sanitize + ENI ID 정규식 검증
+- warningEvents 쿼리에 `involved_object_kind`, `involved_object_name`, `count` 컬럼 추가
+- 벤치마크 라우트 `errorFile` 변수 미선언 수정
+- Sidebar `ClipboardCheck` 아이콘 import 누락 수정
 
 ### Security
 
@@ -311,6 +339,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 데이터소스 쿼리 및 AI 쿼리 생성 액션에 관리자 전용 접근 적용
 - IPv6 사설/링크로컬 주소 차단 추가 (`fc00::/7`, `fe80::/10`)
 - Tempo/Jaeger trace ID URL 삽입에 정규식 캡처 그룹 사용
+- 리포트 라우트에서 계정 ID 하드코딩된 S3 버킷 제거, `config.reportBucket`에서 읽기
 
 ## [1.7.0] - 2026-03-24
 
@@ -538,7 +567,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AI 라우팅: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 통합
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/whchoi98/awsops/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/whchoi98/awsops/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/whchoi98/awsops/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/whchoi98/awsops/compare/v1.4.0...v1.5.2
