@@ -567,3 +567,9 @@ npm run build
 - **메인테이너**: 최우형 ([@whchoi98](https://github.com/whchoi98))
 - **이슈**: [GitHub Issues](https://github.com/whchoi98/awsops/issues)
 - **이메일**: whchoi98@gmail.com
+
+<!-- harness-eval-badge:start -->
+![Harness Score](https://img.shields.io/badge/harness-7.1%2F10-yellow)
+![Harness Grade](https://img.shields.io/badge/grade-B-yellow)
+![Last Eval](https://img.shields.io/badge/eval-2026--04--07-blue)
+<!-- harness-eval-badge:end -->
