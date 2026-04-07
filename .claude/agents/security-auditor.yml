@@ -5,7 +5,18 @@ tools:
   - Read
   - Grep
   - Glob
-  - Bash
+
+input:
+  format: codebase-scan
+  delivery: agent-initiated
+
+output_schema:
+  type: array
+  items:
+    severity: CRITICAL | HIGH | MEDIUM | LOW
+    file: string
+    issue: string
+    recommendation: string
 
 prompt: |
   You are a security auditor for the AWSops dashboard.
@@ -35,4 +46,5 @@ prompt: |
      - XSS: Check for unsafe HTML rendering with user-controlled content
      - SSRF: Verify no user-controlled URLs in server-side fetch calls
 
-  Report findings sorted by severity (CRITICAL > HIGH > MEDIUM > LOW).
+  Report findings as a JSON array with fields: severity, file, issue, recommendation.
+  Sort by severity (CRITICAL > HIGH > MEDIUM > LOW).

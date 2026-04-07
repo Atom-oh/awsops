@@ -9,7 +9,16 @@
   ],
   "permissions": {
     "allow": [],
-    "deny": []
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -f:*)",
+      "Bash(chmod 777:*)",
+      "Bash(eval:*)",
+      "Bash(shutdown:*)",
+      "Bash(reboot:*)"
+    ]
   },
   "skills": {
     "code-review": ".claude/skills/code-review/SKILL.md",
@@ -36,7 +45,16 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/secret-scan.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
+            "command": "bash .claude/hooks/secret-scan.sh \"$TOOL_INPUT_PATH\" 2>/dev/null"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/pre-commit.sh 2>/dev/null || true"
           }
         ]
       }
@@ -56,6 +74,21 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/check-guide-i18n-sync.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-menu-guide-sync.sh \"$TOOL_INPUT_PATH\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/post-build.sh 2>/dev/null || true"
           }
         ]
       }

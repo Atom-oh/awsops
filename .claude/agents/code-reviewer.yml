@@ -5,7 +5,19 @@ tools:
   - Read
   - Grep
   - Glob
-  - Bash
+
+input:
+  format: git-diff
+  delivery: user-message
+
+output_schema:
+  type: array
+  items:
+    severity: HIGH | MEDIUM | LOW
+    file: string
+    line: number
+    issue: string
+    recommendation: string
 
 prompt: |
   You are a code reviewer for the AWSops dashboard (Next.js 14 + Steampipe + Bedrock AgentCore).
@@ -32,5 +44,5 @@ prompt: |
      - StatsCard color uses name strings ('cyan') not hex
      - Tailwind classes use navy-* and accent-* tokens
 
-  Report findings with confidence level (HIGH/MEDIUM/LOW).
+  Report findings as a JSON array with fields: severity, file, line, issue, recommendation.
   Only report HIGH confidence issues.
