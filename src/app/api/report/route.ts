@@ -431,36 +431,51 @@ async function generateReportBackground(
   }
   const mdBuffer = Buffer.from(mdLines.join('\n'), 'utf-8');
 
-  // Phase 4: Save locally (permanent) + Upload to S3
-  // 4단계: 로컬 영구 저장 + S3 업로드
+  // Phase 4: Save locally (permanent) + Upload to S3 (optional)
+  // 4단계: 로컬 영구 저장 + S3 업로드 (선택)
   const localDocxPath = path.join(REPORTS_META_DIR, `${reportId}.docx`);
   const localMdPath = path.join(REPORTS_META_DIR, `${reportId}.md`);
   fs.writeFileSync(localDocxPath, docxBuffer);
   fs.writeFileSync(localMdPath, mdBuffer);
 
-  const s3KeyDocx = `${REPORT_S3_PREFIX}${reportId}.docx`;
-  const s3KeyMd = `${REPORT_S3_PREFIX}${reportId}.md`;
-  await Promise.all([
-    s3Client.send(new PutObjectCommand({
-      Bucket: getReportBucket(),
-      Key: s3KeyDocx,
-      Body: docxBuffer,
-      ContentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    })),
-    s3Client.send(new PutObjectCommand({
-      Bucket: getReportBucket(),
-      Key: s3KeyMd,
-      Body: mdBuffer,
-      ContentType: 'text/markdown; charset=utf-8',
-    })),
-  ]);
+  let s3KeyDocx: string | null = null;
+  let s3KeyMd: string | null = null;
+  let downloadUrlDocx: string | null = null;
+  let downloadUrlMd: string | null = null;
 
-  // Generate presigned URLs (valid for 7 days)
-  // 7일간 유효한 사전 서명 URL 생성
-  const [downloadUrlDocx, downloadUrlMd] = await Promise.all([
-    getSignedUrl(s3Client, new GetObjectCommand({ Bucket: getReportBucket(), Key: s3KeyDocx }), { expiresIn: 7 * 24 * 60 * 60 }),
-    getSignedUrl(s3Client, new GetObjectCommand({ Bucket: getReportBucket(), Key: s3KeyMd }), { expiresIn: 7 * 24 * 60 * 60 }),
-  ]);
+  const bucket = getReportBucket();
+  if (bucket) {
+    // S3 upload + presigned URLs
+    s3KeyDocx = `${REPORT_S3_PREFIX}${reportId}.docx`;
+    s3KeyMd = `${REPORT_S3_PREFIX}${reportId}.md`;
+    try {
+      await Promise.all([
+        s3Client.send(new PutObjectCommand({
+          Bucket: bucket, Key: s3KeyDocx, Body: docxBuffer,
+          ContentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        })),
+        s3Client.send(new PutObjectCommand({
+          Bucket: bucket, Key: s3KeyMd, Body: mdBuffer,
+          ContentType: 'text/markdown; charset=utf-8',
+        })),
+      ]);
+      [downloadUrlDocx, downloadUrlMd] = await Promise.all([
+        getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: s3KeyDocx }), { expiresIn: 7 * 24 * 60 * 60 }),
+        getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: s3KeyMd }), { expiresIn: 7 * 24 * 60 * 60 }),
+      ]);
+    } catch (s3Err) {
+      console.warn(`[Report] S3 upload failed (using local files): ${s3Err instanceof Error ? s3Err.message : s3Err}`);
+      s3KeyDocx = null;
+      s3KeyMd = null;
+    }
+  } else {
+    console.log(`[Report] No reportBucket configured — serving files locally`);
+  }
+
+  // Local download URLs as fallback (served via GET download-docx/download-md actions)
+  // 로컬 다운로드 URL 폴백 (GET download-docx/download-md 액션으로 서빙)
+  if (!downloadUrlDocx) downloadUrlDocx = `/awsops/api/report?action=download-docx&id=${reportId}`;
+  if (!downloadUrlMd) downloadUrlMd = `/awsops/api/report?action=download-md&id=${reportId}`;
 
   updateReportMeta(reportId, {
     status: 'completed',
