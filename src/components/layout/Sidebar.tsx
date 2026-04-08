@@ -133,7 +133,7 @@ export default function Sidebar() {
   const [customerName, setCustomerName] = useState<string | null>(null);
   const [customerLogoBg, setCustomerLogoBg] = useState<string>('dark'); // 'light' for white bg, 'dark' for transparent / 밝은 로고는 light, 어두운 로고는 dark
   const [expandedMenus, setExpandedMenus] = useState<Record<string, boolean>>({});
-  const { getFeatures, isMultiAccount } = useAccountContext();
+  const { getFeatures, isMultiAccount, allowedPages } = useAccountContext();
   const features = getFeatures();
 
   useEffect(() => {
@@ -304,6 +304,11 @@ export default function Sidebar() {
             <div className="space-y-0.5">
               {group.items
                 .filter(item => {
+                  // Department page filter / 부서별 페이지 필터
+                  if (allowedPages && !allowedPages.some(p => item.href === p || item.href.startsWith(p + '/'))) {
+                    // Always show dashboard / 대시보드는 항상 표시
+                    if (item.href !== '/') return false;
+                  }
                   // Cost items: show if global costEnabled AND (single-account OR account has cost)
                   if (item.href === '/cost' || item.href === '/container-cost' || item.href === '/eks-container-cost') {
                     return costEnabled && (!isMultiAccount || features.costEnabled);

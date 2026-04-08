@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { execFileSync } from 'child_process';
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
+import { getUserFromRequest } from '@/lib/auth-utils';
+import { getAllowedEksClusters } from '@/lib/app-config';
 
 const HOME = process.env.HOME || '/home/ec2-user';
 const K8S_SPC_PATH = resolve(HOME, '.steampipe/config/kubernetes.spc');
@@ -45,6 +47,12 @@ export async function POST(req: NextRequest) {
 
     if (!clusterName || !/^[a-zA-Z0-9_-]+$/.test(clusterName)) {
       return NextResponse.json({ error: 'Invalid cluster name' }, { status: 400 });
+    }
+    // Department EKS access check / 부서별 EKS 접근 검증
+    const user = getUserFromRequest(req);
+    const allowedClusters = getAllowedEksClusters(user.groups);
+    if (allowedClusters !== null && !allowedClusters.includes(clusterName)) {
+      return NextResponse.json({ error: 'Access denied: cluster not allowed for your department' }, { status: 403 });
     }
     if (!region || !/^[a-z]{2}-[a-z]+-\d$/.test(region)) {
       return NextResponse.json({ error: 'Invalid region' }, { status: 400 });

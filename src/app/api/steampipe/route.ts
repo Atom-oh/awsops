@@ -5,7 +5,7 @@ import { homedir } from 'os';
 import { batchQuery, clearCache, checkCostAvailability, runCostQueriesPerAccount, resetPool } from '@/lib/steampipe';
 import { saveSnapshot, getHistory } from '@/lib/resource-inventory';
 import { saveCostSnapshot, getLatestCostSnapshot } from '@/lib/cost-snapshot';
-import { getConfig, saveConfig, validateAccountId, getAccounts, isMultiAccount, getAllowedAccountIds, isAccountAllowed } from '@/lib/app-config';
+import { getConfig, saveConfig, validateAccountId, getAccounts, isMultiAccount, getAllowedAccountIds, isAccountAllowed, getAllowedPages, getAllowedEksClusters, getAllowedDatasources } from '@/lib/app-config';
 import type { AccountConfig } from '@/lib/app-config';
 import { getCacheWarmerStatus, ensureCacheWarmerStarted } from '@/lib/cache-warmer';
 import { getUserFromRequest } from '@/lib/auth-utils';
@@ -77,8 +77,14 @@ export async function GET(request: NextRequest) {
   // 부서 기반 계정 필터링 — 현재 사용자에게 허용된 계정 ID 반환
   if (action === 'allowed-accounts') {
     const user = getUserFromRequest(request);
-    const allowedAccountIds = getAllowedAccountIds(user.groups);
-    return NextResponse.json({ allowedAccountIds });
+    const groups = user.groups;
+    return NextResponse.json({
+      allowedAccountIds: getAllowedAccountIds(groups),
+      allowedPages: getAllowedPages(groups),
+      allowedEksClusters: getAllowedEksClusters(groups),
+      allowedDatasources: getAllowedDatasources(groups),
+      groups,
+    });
   }
 
   if (action === 'config') {

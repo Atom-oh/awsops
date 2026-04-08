@@ -19,6 +19,10 @@ interface AccountContextType {
   getFeatures: () => { costEnabled: boolean; eksEnabled: boolean; k8sEnabled: boolean };
   refetchAccounts: () => Promise<void>;
   isDepartmentFiltered: boolean;  // true when departments config restricts this user
+  allowedPages: string[] | null;        // null = all allowed / 부서별 허용 페이지
+  allowedEksClusters: string[] | null;  // null = all allowed / 부서별 허용 EKS 클러스터
+  allowedDatasources: string[] | null;  // null = all allowed / 부서별 허용 데이터소스
+  userGroups: string[];                 // Cognito groups / 사용자 Cognito 그룹
 }
 
 export const ALL_ACCOUNTS = '__all__';
@@ -33,6 +37,10 @@ const defaultContext: AccountContextType = {
   getFeatures: () => ({ costEnabled: true, eksEnabled: true, k8sEnabled: true }),
   refetchAccounts: async () => {},
   isDepartmentFiltered: false,
+  allowedPages: null,
+  allowedEksClusters: null,
+  allowedDatasources: null,
+  userGroups: [],
 };
 
 const AccountContext = createContext<AccountContextType>(defaultContext);
@@ -45,6 +53,10 @@ export default function AccountProvider({ children }: { children: ReactNode }) {
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [currentAccountId, setCurrentAccountIdState] = useState<string>(ALL_ACCOUNTS);
   const [isDepartmentFiltered, setIsDepartmentFiltered] = useState(false);
+  const [allowedPages, setAllowedPages] = useState<string[] | null>(null);
+  const [allowedEksClusters, setAllowedEksClusters] = useState<string[] | null>(null);
+  const [allowedDatasources, setAllowedDatasources] = useState<string[] | null>(null);
+  const [userGroups, setUserGroups] = useState<string[]>([]);
 
   const refetchAccounts = useCallback(async () => {
     try {
@@ -55,7 +67,18 @@ export default function AccountProvider({ children }: { children: ReactNode }) {
         fetch('/awsops/api/steampipe?action=allowed-accounts'),
       ]);
       const config = await configRes.json();
-      const { allowedAccountIds } = await allowedRes.json() as { allowedAccountIds: string[] | null };
+      const allowedData = await allowedRes.json() as {
+        allowedAccountIds: string[] | null;
+        allowedPages: string[] | null;
+        allowedEksClusters: string[] | null;
+        allowedDatasources: string[] | null;
+        groups: string[];
+      };
+      const { allowedAccountIds } = allowedData;
+      setAllowedPages(allowedData.allowedPages ?? null);
+      setAllowedEksClusters(allowedData.allowedEksClusters ?? null);
+      setAllowedDatasources(allowedData.allowedDatasources ?? null);
+      setUserGroups(allowedData.groups ?? []);
 
       if (config.accounts && config.accounts.length > 0) {
         let fetched: AccountInfo[] = config.accounts.map((a: Record<string, unknown>) => ({
@@ -123,8 +146,10 @@ export default function AccountProvider({ children }: { children: ReactNode }) {
   }, [isMultiAccount, currentAccountId, accounts, currentAccount]);
 
   const contextValue = useMemo(() => ({
-    currentAccountId, accounts, isMultiAccount, setCurrentAccountId, currentAccount, getFeatures, refetchAccounts, isDepartmentFiltered,
-  }), [currentAccountId, accounts, isMultiAccount, setCurrentAccountId, currentAccount, getFeatures, refetchAccounts, isDepartmentFiltered]);
+    currentAccountId, accounts, isMultiAccount, setCurrentAccountId, currentAccount, getFeatures, refetchAccounts,
+    isDepartmentFiltered, allowedPages, allowedEksClusters, allowedDatasources, userGroups,
+  }), [currentAccountId, accounts, isMultiAccount, setCurrentAccountId, currentAccount, getFeatures, refetchAccounts,
+    isDepartmentFiltered, allowedPages, allowedEksClusters, allowedDatasources, userGroups]);
 
   return (
     <AccountContext.Provider value={contextValue}>

@@ -85,9 +85,12 @@ export interface AppConfig {
 
 // Department → Account mapping / 부서 → 계정 매핑
 export interface DepartmentConfig {
-  name: string;            // Display name ("DevTeam", "OpsTeam")
-  cognitoGroup: string;    // Cognito User Pool group name
-  accounts: string[];      // Allowed account IDs ("*" = all) / 허용 계정 ID ("*" = 전체)
+  name: string;              // Display name ("DevOps", "FinOps", "Security")
+  cognitoGroup: string;      // Cognito User Pool group name
+  accounts: string[];        // Allowed account IDs ("*" = all) / 허용 계정 ID ("*" = 전체)
+  pages?: string[];          // Allowed page paths ("*" = all, e.g. ["/ec2", "/vpc"]) / 허용 페이지 경로
+  eksClusterNames?: string[];// Allowed EKS cluster names ("*" = all) / 허용 EKS 클러스터명
+  datasourceIds?: string[];  // Allowed datasource IDs ("*" = all) / 허용 데이터소스 ID
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -204,4 +207,51 @@ export function isAccountAllowed(accountId: string | undefined, groups: string[]
   if (allowed === null) return true; // 필터링 비활성 → 전체 접근
   if (!accountId || accountId === ALL_ACCOUNTS) return false; // 부서 제한 있으면 "All" 불가
   return allowed.includes(accountId);
+}
+
+// 부서별 허용 페이지 목록 / Get allowed page paths for user's groups
+// null = 전체 허용 (미설정), [] = 접근 없음
+export function getAllowedPages(groups: string[]): string[] | null {
+  const departments = getDepartments();
+  if (departments.length === 0) return null;
+  const matched = departments.filter(d => groups.includes(d.cognitoGroup));
+  if (matched.length === 0) return [];
+  // pages 미설정이면 전체 허용 취급
+  if (matched.some(d => !d.pages || d.pages.includes('*'))) return null;
+  const pageSet = new Set<string>();
+  matched.forEach(d => (d.pages || []).forEach(p => pageSet.add(p)));
+  return Array.from(pageSet);
+}
+
+// 특정 페이지 경로가 허용되는지 확인 / Check if page path is allowed
+export function isPageAllowed(path: string, groups: string[]): boolean {
+  const allowed = getAllowedPages(groups);
+  if (allowed === null) return true;
+  // / (dashboard) is always allowed / 대시보드는 항상 허용
+  if (path === '/') return true;
+  return allowed.some(p => path === p || path.startsWith(p + '/'));
+}
+
+// 부서별 허용 EKS 클러스터 / Get allowed EKS cluster names
+export function getAllowedEksClusters(groups: string[]): string[] | null {
+  const departments = getDepartments();
+  if (departments.length === 0) return null;
+  const matched = departments.filter(d => groups.includes(d.cognitoGroup));
+  if (matched.length === 0) return [];
+  if (matched.some(d => !d.eksClusterNames || d.eksClusterNames.includes('*'))) return null;
+  const set = new Set<string>();
+  matched.forEach(d => (d.eksClusterNames || []).forEach(c => set.add(c)));
+  return Array.from(set);
+}
+
+// 부서별 허용 데이터소스 / Get allowed datasource IDs
+export function getAllowedDatasources(groups: string[]): string[] | null {
+  const departments = getDepartments();
+  if (departments.length === 0) return null;
+  const matched = departments.filter(d => groups.includes(d.cognitoGroup));
+  if (matched.length === 0) return [];
+  if (matched.some(d => !d.datasourceIds || d.datasourceIds.includes('*'))) return null;
+  const set = new Set<string>();
+  matched.forEach(d => (d.datasourceIds || []).forEach(id => set.add(id)));
+  return Array.from(set);
 }
