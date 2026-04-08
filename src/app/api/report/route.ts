@@ -88,6 +88,28 @@ const SECTION_ORDER: string[] = [
 ];
 
 // ============================================================================
+// Filename helper — user-facing download name (internal storage stays UUID)
+// 파일명 헬퍼 — 사용자에게 보이는 다운로드 파일명 (내부 저장은 UUID 유지)
+// ============================================================================
+
+function buildReportFilename(
+  meta: { createdAt: string; accountAlias?: string | null },
+  extension: string,
+): string {
+  const dt = new Date(meta.createdAt);
+  const kst = new Date(dt.getTime() + 9 * 60 * 60 * 1000);
+  const yyyy = kst.getUTCFullYear();
+  const MM = String(kst.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(kst.getUTCDate()).padStart(2, '0');
+  const HH = String(kst.getUTCHours()).padStart(2, '0');
+  const mm = String(kst.getUTCMinutes()).padStart(2, '0');
+  const alias = meta.accountAlias
+    ? `_${meta.accountAlias.replace(/[^a-zA-Z0-9_-]/g, '')}`
+    : '';
+  return `AI_WADD_REPORT_${yyyy}${MM}${dd}_${HH}${mm}${alias}.${extension}`;
+}
+
+// ============================================================================
 // Meta file helpers
 // ============================================================================
 
@@ -437,9 +459,17 @@ async function generateReportBackground(
 
   // Generate presigned URLs (valid for 7 days)
   // 7일간 유효한 사전 서명 URL 생성
+  const currentMeta = readReportMeta(reportId);
+  const fileMeta = { createdAt: currentMeta?.createdAt || new Date().toISOString(), accountAlias };
   const [downloadUrlDocx, downloadUrlMd] = await Promise.all([
-    getSignedUrl(s3Client, new GetObjectCommand({ Bucket: REPORT_BUCKET, Key: s3KeyDocx }), { expiresIn: 7 * 24 * 60 * 60 }),
-    getSignedUrl(s3Client, new GetObjectCommand({ Bucket: REPORT_BUCKET, Key: s3KeyMd }), { expiresIn: 7 * 24 * 60 * 60 }),
+    getSignedUrl(s3Client, new GetObjectCommand({
+      Bucket: REPORT_BUCKET, Key: s3KeyDocx,
+      ResponseContentDisposition: `attachment; filename="${buildReportFilename(fileMeta, 'docx')}"`,
+    }), { expiresIn: 7 * 24 * 60 * 60 }),
+    getSignedUrl(s3Client, new GetObjectCommand({
+      Bucket: REPORT_BUCKET, Key: s3KeyMd,
+      ResponseContentDisposition: `attachment; filename="${buildReportFilename(fileMeta, 'md')}"`,
+    }), { expiresIn: 7 * 24 * 60 * 60 }),
   ]);
 
   updateReportMeta(reportId, {
@@ -623,6 +653,7 @@ export async function GET(request: NextRequest) {
           try {
             downloadUrlDocx = await getSignedUrl(s3Client, new GetObjectCommand({
               Bucket: REPORT_BUCKET, Key: meta.s3KeyDocx!,
+              ResponseContentDisposition: `attachment; filename="${buildReportFilename(meta, 'docx')}"`,
             }), { expiresIn: 7 * 24 * 60 * 60 });
           } catch { /* keep existing */ }
         })());
@@ -632,6 +663,7 @@ export async function GET(request: NextRequest) {
           try {
             downloadUrlMd = await getSignedUrl(s3Client, new GetObjectCommand({
               Bucket: REPORT_BUCKET, Key: meta.s3KeyMd!,
+              ResponseContentDisposition: `attachment; filename="${buildReportFilename(meta, 'md')}"`,
             }), { expiresIn: 7 * 24 * 60 * 60 });
           } catch { /* keep existing */ }
         })());
@@ -670,6 +702,7 @@ export async function GET(request: NextRequest) {
       const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
         Bucket: REPORT_BUCKET,
         Key: meta.s3KeyDocx,
+        ResponseContentDisposition: `attachment; filename="${buildReportFilename(meta, 'docx')}"`,
       }), { expiresIn: 60 * 60 });
 
       return NextResponse.redirect(freshUrl, 302);
@@ -678,11 +711,10 @@ export async function GET(request: NextRequest) {
       const localPath = path.join(REPORTS_META_DIR, `${id}.docx`);
       if (fs.existsSync(localPath)) {
         const buffer = fs.readFileSync(localPath);
-        const date = new Date().toISOString().split('T')[0];
         return new NextResponse(buffer, {
           headers: {
             'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'Content-Disposition': `attachment; filename="AWSops_Report_${date}.docx"`,
+            'Content-Disposition': `attachment; filename="${buildReportFilename(meta, 'docx')}"`,
             'Content-Length': String(buffer.length),
           },
         });
@@ -709,6 +741,7 @@ export async function GET(request: NextRequest) {
       try {
         const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
           Bucket: REPORT_BUCKET, Key: meta.s3KeyMd,
+          ResponseContentDisposition: `attachment; filename="${buildReportFilename(meta, 'md')}"`,
         }), { expiresIn: 60 * 60 });
         return NextResponse.redirect(freshUrl, 302);
       } catch { /* fallback below */ }
@@ -718,11 +751,10 @@ export async function GET(request: NextRequest) {
     const localPath = path.join(REPORTS_META_DIR, `${id}.md`);
     if (fs.existsSync(localPath)) {
       const buffer = fs.readFileSync(localPath);
-      const date = new Date().toISOString().split('T')[0];
       return new NextResponse(buffer, {
         headers: {
           'Content-Type': 'text/markdown; charset=utf-8',
-          'Content-Disposition': `attachment; filename="AWSops_Report_${date}.md"`,
+          'Content-Disposition': `attachment; filename="${buildReportFilename(meta, 'md')}"`,
           'Content-Length': String(buffer.length),
         },
       });
@@ -735,11 +767,10 @@ export async function GET(request: NextRequest) {
         lines.push(`## ${s.title}`, '', s.content, '', '---', '');
       }
       const md = Buffer.from(lines.join('\n'), 'utf-8');
-      const date = new Date().toISOString().split('T')[0];
       return new NextResponse(md, {
         headers: {
           'Content-Type': 'text/markdown; charset=utf-8',
-          'Content-Disposition': `attachment; filename="AWSops_Report_${date}.md"`,
+          'Content-Disposition': `attachment; filename="${buildReportFilename(meta, 'md')}"`,
           'Content-Length': String(md.length),
         },
       });
