@@ -1,12 +1,9 @@
-# sample files
-*.pptx
-
 # dependencies
 node_modules/
 /.pnp
 .pnp.js
 .yarn/install-state.gz
-.sensitive/
+
 # next.js
 /.next/
 /out/
@@ -17,16 +14,14 @@ next-env.d.ts
 # env & secrets
 .env*.local
 *.pem
+.sensitive/
 
 # steampipe / powerpipe
 powerpipe/.powerpipe/
 powerpipe/.mod.cache.json
 
-# resource inventory snapshots (auto-generated daily)
-data/inventory/
-
-# cost snapshots (auto-generated daily)
-data/cost/
+# data (config, inventory, cost, memory, stats — all local/auto-generated)
+data/
 
 # logs
 npm-debug.log*
@@ -42,9 +37,6 @@ yarn-error.log*
 
 # oh-my-claudecode state
 .omc/
-
-# playwright mcp
-.playwright-mcp/
 
 # claude code sessions
 .claude/
@@ -81,9 +73,3 @@ docs/COMPARISON_VS_FAST.md
 infra-cdk/cdk.context.json
 powerpipe/.mod.cache.json
 .gitignore
-data/config.json
-data/agentcore-stats.json
-data/memory/
-
-# reports (auto-generated)
-reports/
