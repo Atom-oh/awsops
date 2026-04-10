@@ -351,7 +351,9 @@ export class AwsopsStack extends cdk.Stack {
       actions: [
         'sns:CreateTopic',
         'sns:Subscribe',
+        'sns:Unsubscribe',
         'sns:Publish',
+        'sns:ListSubscriptionsByTopic',
       ],
       resources: [`arn:aws:sns:${this.region}:${this.account}:awsops-*`],
     }));

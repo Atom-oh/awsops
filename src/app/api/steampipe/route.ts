@@ -446,6 +446,34 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ accounts: updated });
     }
 
+    // --- Department CRUD / 부서 CRUD ---
+
+    if (action === 'departments') {
+      return NextResponse.json({ departments: getConfig().departments || [] });
+    }
+
+    if (action === 'save-departments') {
+      const body = await request.json();
+      const departments = body.departments;
+      if (!Array.isArray(departments)) {
+        return NextResponse.json({ error: 'departments must be an array' }, { status: 400 });
+      }
+      // Validate each department entry
+      for (const dept of departments) {
+        if (!dept.name || typeof dept.name !== 'string' || !dept.name.trim()) {
+          return NextResponse.json({ error: 'Each department must have a name' }, { status: 400 });
+        }
+        if (!dept.cognitoGroup || typeof dept.cognitoGroup !== 'string' || !dept.cognitoGroup.trim()) {
+          return NextResponse.json({ error: `Department "${dept.name}" must have a cognitoGroup` }, { status: 400 });
+        }
+        if (!Array.isArray(dept.accounts) || dept.accounts.length === 0) {
+          return NextResponse.json({ error: `Department "${dept.name}" must have at least one account (or "*")` }, { status: 400 });
+        }
+      }
+      saveConfig({ departments });
+      return NextResponse.json({ departments });
+    }
+
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Internal server error';
