@@ -79,6 +79,14 @@ export class CognitoStack extends cdk.Stack {
     });
 
     // -------------------------------------------------------
+    // Cognito Hosted UI Customization (Dark Theme)
+    // CSS + Logo applied via set-ui-customization.
+    // Run `scripts/setup-cognito-ui.sh` after deployment to apply.
+    // CDK CfnUserPoolUICustomizationAttachment requires the domain
+    // to be fully created first, so we use a script for reliability.
+    // -------------------------------------------------------
+
+    // -------------------------------------------------------
     // Lambda@Edge for CloudFront Authentication
     // This function must be deployed in us-east-1 for Lambda@Edge.
     // It validates JWT tokens from the awsops_token cookie,
