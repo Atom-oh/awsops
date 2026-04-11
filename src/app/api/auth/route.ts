@@ -28,8 +28,13 @@ function computeSecretHash(email: string): string {
 }
 
 export async function POST(request: NextRequest) {
-  const body = await request.json();
-  const { action } = body;
+  let body: Record<string, unknown> = {};
+  try {
+    body = await request.json();
+  } catch {
+    // Empty body = logout request
+  }
+  const action = body.action as string | undefined;
 
   // --- Login ---
   if (action === 'login') {

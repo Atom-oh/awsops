@@ -279,7 +279,7 @@ export default function Sidebar() {
           <button
             onClick={async () => {
               await fetch('/awsops/api/auth', { method: 'POST' });
-              window.location.href = '/awsops';
+              window.location.href = '/awsops/login';
             }}
             className="p-2 rounded-lg text-gray-500 hover:text-accent-red hover:bg-navy-700 transition-colors"
             title={t('sidebar.signOut')}
