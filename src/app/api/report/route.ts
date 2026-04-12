@@ -1,7 +1,7 @@
 // AWSops AI Diagnosis Report API — Async background generation + S3 storage + Scheduling
 // AWSops AI 종합진단 리포트 API — 비동기 백그라운드 생성 + S3 저장 + 스케줄링
 import { NextRequest, NextResponse } from 'next/server';
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, InvokeModelWithResponseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { collectReportData, formatReportForBedrock } from '@/lib/report-generator';
@@ -260,18 +260,46 @@ async function analyzeSection(
     ],
   });
 
-  const resp = await bedrockClient.send(
-    new InvokeModelCommand({
-      modelId: MODEL_ID,
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: new TextEncoder().encode(body),
-    }),
-  );
+  // Streaming with idle timeout — abort if no token received for 60 seconds
+  // 스트리밍 + 유휴 타임아웃 — 60초간 토큰이 없으면 중단
+  const IDLE_TIMEOUT_MS = 60 * 1000;
+  const abortController = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const decoded = JSON.parse(new TextDecoder().decode(resp.body));
-  const text: string = decoded.content?.[0]?.text || '';
-  return { section, key: section, title, content: text };
+  const resetIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => abortController.abort(), IDLE_TIMEOUT_MS);
+  };
+
+  try {
+    resetIdleTimer();
+    const resp = await bedrockClient.send(
+      new InvokeModelWithResponseStreamCommand({
+        modelId: MODEL_ID,
+        contentType: 'application/json',
+        accept: 'application/json',
+        body: new TextEncoder().encode(body),
+      }),
+      { abortSignal: abortController.signal },
+    );
+
+    let fullContent = '';
+    if (resp.body) {
+      for await (const event of resp.body) {
+        resetIdleTimer(); // token received — reset idle timer / 토큰 수신 — 유휴 타이머 리셋
+        if (event.chunk?.bytes) {
+          const parsed = JSON.parse(new TextDecoder().decode(event.chunk.bytes));
+          if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+            fullContent += parsed.delta.text;
+          }
+        }
+      }
+    }
+
+    return { section, key: section, title, content: fullContent };
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+  }
 }
 
 // ============================================================================
@@ -343,35 +371,44 @@ async function generateReportBackground(
     // Update status with sub-topics for each section in the batch
     const batchTopics = batch.flatMap(s => (SECTION_SUBTOPICS[s] || [s]).slice(0, 2)).join(', ');
     console.log(`[Report] ${reportId} — Batch: ${batch.join(', ')}`);
-    updateReportMeta(reportId, {
-      progress: { current: completed, total: 15, currentSection: batch[0], statusMessage: batchTopics, completedSections },
-    });
 
-    const results = await Promise.allSettled(
-      batch.map(section => analyzeSection(section, reportData, !!isEn, sectionResults)),
-    );
+    // Wrap each section call to update progress immediately on completion
+    // 각 섹션 호출을 래핑하여 완료 즉시 progress 업데이트
+    const wrappedCalls = batch.map(section => {
+      // Update progress when this section starts analyzing
+      const topics = (SECTION_SUBTOPICS[section] || [section]).slice(0, 3).join(', ');
+      updateReportMeta(reportId, {
+        progress: { current: completed, total: 15, currentSection: section, statusMessage: topics, completedSections },
+      });
 
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      if (r.status === 'fulfilled') {
-        sectionResults.push(r.value);
-      } else {
-        sectionResults.push({
-          section: batch[i],
-          key: batch[i],
-          title: batch[i],
-          content: isEn
-            ? `Analysis failed: ${r.reason?.message || 'Unknown error'}`
-            : `분석 실패: ${r.reason?.message || '알 수 없는 오류'}`,
+      return analyzeSection(section, reportData, !!isEn, sectionResults)
+        .then(result => {
+          sectionResults.push(result);
+          completed++;
+          completedSections.push(section);
+          updateReportMeta(reportId, {
+            progress: { current: completed, total: 15, currentSection: section, statusMessage: '', completedSections },
+          });
+          console.log(`[Report] ${reportId} — ✓ ${section} (${completed}/15)`);
+          return result;
+        })
+        .catch(err => {
+          const msg = err?.name === 'AbortError'
+            ? (isEn ? 'Analysis timed out (no response for 60s)' : '분석 시간 초과 (60초간 응답 없음)')
+            : (isEn ? `Analysis failed: ${err?.message || 'Unknown error'}` : `분석 실패: ${err?.message || '알 수 없는 오류'}`);
+          const fallback: SectionResult = { section, key: section, title: section, content: msg };
+          sectionResults.push(fallback);
+          completed++;
+          completedSections.push(section);
+          updateReportMeta(reportId, {
+            progress: { current: completed, total: 15, currentSection: section, statusMessage: '', completedSections },
+          });
+          console.warn(`[Report] ${reportId} — ✗ ${section}: ${msg}`);
+          return fallback;
         });
-      }
-      completed++;
-      completedSections.push(batch[i]);
-    }
-
-    updateReportMeta(reportId, {
-      progress: { current: completed, total: 15, currentSection: batch[batch.length - 1], statusMessage: '', completedSections },
     });
+
+    await Promise.allSettled(wrappedCalls);
   }
 
   // Reorder: executive-summary first, appendix last
@@ -423,7 +460,7 @@ async function generateReportBackground(
   let downloadUrlDocx: string | null = null;
   let downloadUrlMd: string | null = null;
 
-  const bucket = getReportBucket();
+  const bucket = REPORT_BUCKET;
   if (bucket) {
     // S3 upload + presigned URLs
     s3KeyDocx = `${REPORT_S3_PREFIX}${reportId}.docx`;
