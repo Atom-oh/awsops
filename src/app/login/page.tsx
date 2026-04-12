@@ -91,7 +91,7 @@ export default function LoginPage() {
           <div className="flex flex-col items-center justify-center gap-2 text-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/awsops/logos/aws-dark.png"
+              src="/awsops/logos/aws-logo-dark.png"
               alt="AWS"
               className="object-contain mb-1"
               style={{ height: '36px' }}

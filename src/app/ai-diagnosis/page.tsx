@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Header from '@/components/layout/Header';
-import { Play, Loader2, Download, FileText, CheckCircle, AlertTriangle, XCircle, Clock, ChevronDown, ChevronRight, FileDown, Printer, List, FileCode, CalendarClock, Mail, Bell, BellOff, Send, Plus, X } from 'lucide-react';
+import { Play, Loader2, Download, FileText, CheckCircle, AlertTriangle, XCircle, Clock, ChevronDown, ChevronRight, ChevronLeft, FileDown, Printer, List, FileCode, CalendarClock, Mail, Bell, BellOff, Send, Plus, X, Calendar } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAccountContext } from '@/contexts/AccountContext';
 import ReportMarkdown from '@/components/ReportMarkdown';
@@ -219,6 +219,31 @@ export default function DiagnosisPage() {
   const [notifNewEmail, setNotifNewEmail] = useState('');
   const [notifLoading, setNotifLoading] = useState(false);
   const [notifMessage, setNotifMessage] = useState<string | null>(null);
+  const [listPage, setListPage] = useState(1);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
+  const PAGE_SIZE = 5;
+
+  const filteredReports = useMemo(() => {
+    let filtered = reports;
+    if (dateFrom) {
+      const from = new Date(dateFrom);
+      filtered = filtered.filter(r => new Date(r.createdAt) >= from);
+    }
+    if (dateTo) {
+      const to = new Date(dateTo);
+      to.setDate(to.getDate() + 1); // include the entire "to" day
+      filtered = filtered.filter(r => new Date(r.createdAt) < to);
+    }
+    return filtered;
+  }, [reports, dateFrom, dateTo]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredReports.length / PAGE_SIZE));
+  const paginatedReports = useMemo(() => {
+    const start = (listPage - 1) * PAGE_SIZE;
+    return filteredReports.slice(start, start + PAGE_SIZE);
+  }, [filteredReports, listPage]);
 
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -834,10 +859,38 @@ export default function DiagnosisPage() {
       {/* Report History Table */}
       {reports.length > 0 && (
         <div className="bg-navy-800 border border-navy-600 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-navy-600">
+          <div className="px-4 py-3 border-b border-navy-600 flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-medium text-white">
               {isEn ? 'Report History' : '리포트 이력'}
+              <span className="ml-2 text-xs text-gray-400">({filteredReports.length})</span>
             </h3>
+            <div className="flex items-center gap-2">
+              <Calendar size={14} className="text-gray-400" />
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={e => { setDateFrom(e.target.value); setListPage(1); }}
+                className="bg-navy-700 border border-navy-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-accent-cyan [color-scheme:dark]"
+                title={isEn ? 'From date' : '시작일'}
+              />
+              <span className="text-gray-500 text-xs">~</span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={e => { setDateTo(e.target.value); setListPage(1); }}
+                className="bg-navy-700 border border-navy-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-accent-cyan [color-scheme:dark]"
+                title={isEn ? 'To date' : '종료일'}
+              />
+              {(dateFrom || dateTo) && (
+                <button
+                  onClick={() => { setDateFrom(''); setDateTo(''); setListPage(1); }}
+                  className="text-xs text-gray-400 hover:text-white transition-colors"
+                  title={isEn ? 'Clear filter' : '필터 초기화'}
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -850,7 +903,9 @@ export default function DiagnosisPage() {
                 </tr>
               </thead>
               <tbody>
-                {reports.map((report) => (
+                {paginatedReports.length === 0 ? (
+                  <tr><td colSpan={4} className="px-4 py-6 text-center text-xs text-gray-500">{isEn ? 'No reports found' : '리포트가 없습니다'}</td></tr>
+                ) : paginatedReports.map((report) => (
                   <tr
                     key={report.reportId}
                     className={`border-b border-navy-700 hover:bg-navy-700/50 transition-colors ${currentReportId === report.reportId ? 'bg-navy-700/30' : ''}`}
@@ -881,6 +936,41 @@ export default function DiagnosisPage() {
               </tbody>
             </table>
           </div>
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="px-4 py-2.5 border-t border-navy-600 flex items-center justify-between">
+              <span className="text-xs text-gray-400">
+                {isEn
+                  ? `Page ${listPage} of ${totalPages}`
+                  : `${listPage} / ${totalPages} 페이지`}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setListPage(p => Math.max(1, p - 1))}
+                  disabled={listPage <= 1}
+                  className="p-1 rounded hover:bg-navy-700 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setListPage(p)}
+                    className={`px-2 py-0.5 rounded text-xs transition-colors ${p === listPage ? 'bg-accent-cyan/20 text-accent-cyan' : 'text-gray-400 hover:text-white hover:bg-navy-700'}`}
+                  >
+                    {p}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setListPage(p => Math.min(totalPages, p + 1))}
+                  disabled={listPage >= totalPages}
+                  className="p-1 rounded hover:bg-navy-700 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
