@@ -126,8 +126,6 @@ const navGroups: NavGroup[] = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  // Hide sidebar on login page / 로그인 페이지에서 사이드바 숨김
-  if (pathname === '/login') return null;
   const { lang, setLang, t } = useLanguage();
   const [costEnabled, setCostEnabled] = useState(true);
   const [customerLogo, setCustomerLogo] = useState<string | null>(null);
@@ -148,6 +146,9 @@ export default function Sidebar() {
       })
       .catch(() => {});
   }, []);
+
+  // Hide sidebar on login page / 로그인 페이지에서 사이드바 숨김
+  if (pathname === '/login') return null;
 
   const isActive = (href: string) => {
     const path = pathname.replace('/awsops', '') || '/';

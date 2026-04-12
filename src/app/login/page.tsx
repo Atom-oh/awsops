@@ -89,18 +89,13 @@ export default function LoginPage() {
 
           {/* Header */}
           <div className="flex flex-col items-center justify-center gap-2 text-center">
-            <div className="w-12 h-12 rounded-lg flex items-center justify-center mb-2"
-                 style={{
-                   background: 'rgba(0,0,0,0.4)',
-                   border: '1px solid rgba(255,255,255,0.1)',
-                   boxShadow: '0 0 15px rgba(6,232,249,0.1)'
-                 }}>
-              <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                <path d="M14 3L3 8.5V19.5L14 25L25 19.5V8.5L14 3Z" stroke="#06e8f9" strokeWidth="1.5" fill="none"/>
-                <circle cx="14" cy="14" r="4" fill="#06e8f9" opacity="0.3"/>
-                <circle cx="14" cy="14" r="2" fill="#06e8f9"/>
-              </svg>
-            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/awsops/logos/aws-dark.png"
+              alt="AWS"
+              className="object-contain mb-1"
+              style={{ height: '36px' }}
+            />
             <h1 className="font-bold text-3xl tracking-tight" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
               AWSops
             </h1>
