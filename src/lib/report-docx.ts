@@ -280,56 +280,94 @@ function convertSectionContent(content: string, sectionColor: string): (Paragrap
 function buildCoverPage(input: ReportInput): Paragraph[] {
   const elements: Paragraph[] = [];
 
-  // Spacer
-  elements.push(new Paragraph({ spacing: { before: 2000 }, children: [] }));
+  // Push content to vertical center of page (~40% from top)
+  // 콘텐츠를 페이지 세로 중앙부로 배치 (~상단 40%)
+  elements.push(new Paragraph({ spacing: { before: 5600 }, children: [] }));
+
+  // Top accent bar
+  elements.push(new Paragraph({
+    spacing: { after: 400 },
+    border: { top: { style: BorderStyle.SINGLE, size: 12, color: COLORS.accent } },
+    children: [new TextRun({ text: '' })],
+  }));
 
   // Title
   elements.push(new Paragraph({
     alignment: AlignmentType.LEFT,
-    spacing: { after: 200 },
-    children: [new TextRun({ text: input.title, bold: true, size: 56, color: COLORS.primary })],
-  }));
-
-  // Accent line
-  elements.push(new Paragraph({
-    spacing: { after: 200 },
-    border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: COLORS.accent } },
-    children: [new TextRun({ text: '' })],
+    spacing: { after: 120 },
+    children: [new TextRun({ text: input.title, bold: true, size: 60, color: COLORS.primary })],
   }));
 
   // Subtitle
   if (input.subtitle) {
     elements.push(new Paragraph({
-      spacing: { after: 80 },
+      spacing: { after: 300 },
       children: [new TextRun({ text: input.subtitle, size: 28, color: COLORS.accent })],
     }));
   }
 
-  // Account
-  if (input.accountAlias) {
+  // Divider line
+  elements.push(new Paragraph({
+    spacing: { after: 300 },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: COLORS.tableBorder } },
+    children: [new TextRun({ text: '' })],
+  }));
+
+  // Account + Date row
+  const metaParts: string[] = [];
+  if (input.accountAlias) metaParts.push(`Account: ${input.accountAlias}`);
+  metaParts.push(input.generatedAt);
+  elements.push(new Paragraph({
+    spacing: { after: 120 },
+    children: [new TextRun({ text: metaParts.join('  |  '), size: 22, color: COLORS.textLight })],
+  }));
+
+  // Section count
+  if (input.sections.length > 0) {
     elements.push(new Paragraph({
-      spacing: { after: 80 },
-      children: [new TextRun({ text: `Account: ${input.accountAlias}`, size: 24, color: COLORS.textLight })],
+      spacing: { after: 300 },
+      children: [new TextRun({ text: `${input.sections.length} Sections`, size: 22, color: COLORS.textLight })],
     }));
   }
 
-  // Date
-  elements.push(new Paragraph({
-    spacing: { after: 80 },
-    children: [new TextRun({ text: input.generatedAt, size: 22, color: COLORS.textLight })],
-  }));
-
-  // Health Score
+  // Health Score — prominent display with grade label
+  // 건강 점수 — 등급 라벨과 함께 크게 표시
   if (input.healthScore !== undefined) {
-    elements.push(new Paragraph({ spacing: { before: 400 }, children: [] }));
-    const scoreColor = input.healthScore >= 80 ? COLORS.accentGreen : input.healthScore >= 50 ? COLORS.accentOrange : COLORS.accentRed;
+    const score = input.healthScore;
+    const scoreColor = score >= 80 ? COLORS.accentGreen : score >= 50 ? COLORS.accentOrange : COLORS.accentRed;
+    const grade = score >= 90 ? 'Excellent' : score >= 80 ? 'Good' : score >= 60 ? 'Fair' : score >= 40 ? 'Needs Attention' : 'Critical';
+    elements.push(new Paragraph({ spacing: { before: 200 }, children: [] }));
     elements.push(new Paragraph({
       children: [
-        new TextRun({ text: 'Health Score: ', size: 28, color: COLORS.textLight }),
-        new TextRun({ text: `${input.healthScore}/100`, bold: true, size: 36, color: scoreColor }),
+        new TextRun({ text: 'Infrastructure Health Score', size: 24, color: COLORS.textLight }),
+      ],
+    }));
+    elements.push(new Paragraph({
+      spacing: { after: 80 },
+      children: [
+        new TextRun({ text: `${score}`, bold: true, size: 72, color: scoreColor }),
+        new TextRun({ text: ' / 100  ', size: 28, color: COLORS.textLight }),
+        new TextRun({ text: grade, bold: true, size: 28, color: scoreColor }),
       ],
     }));
   }
+
+  // Total Savings
+  if (input.totalSavings) {
+    elements.push(new Paragraph({
+      spacing: { after: 80 },
+      children: [
+        new TextRun({ text: 'Estimated Monthly Savings: ', size: 22, color: COLORS.textLight }),
+        new TextRun({ text: input.totalSavings, bold: true, size: 24, color: COLORS.accentGreen }),
+      ],
+    }));
+  }
+
+  // Branding
+  elements.push(new Paragraph({ spacing: { before: 600 }, children: [] }));
+  elements.push(new Paragraph({
+    children: [new TextRun({ text: 'Powered by Amazon Bedrock', size: 18, color: COLORS.textLight, italics: true })],
+  }));
 
   // Page break
   elements.push(new Paragraph({ pageBreakBefore: true, children: [] }));

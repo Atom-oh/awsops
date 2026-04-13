@@ -303,28 +303,32 @@ export default function DiagnosisPage() {
 
   // --- Fetch report list ---
 
-  const fetchReportList = useCallback(async () => {
+  const fetchReportList = useCallback(async (): Promise<ReportListItem[]> => {
     try {
       const res = await fetch('/awsops/api/report?action=list');
-      if (!res.ok) return;
+      if (!res.ok) return [];
       const data = await res.json();
-      setReports(data.reports || []);
+      const list: ReportListItem[] = data.reports || [];
+      setReports(list);
+      return list;
+    } catch {
+      return [];
+    }
+  }, []);
 
-      // If any report is still generating, resume polling for the most recent one
-      const generating = (data.reports || []).find((r: ReportListItem) => r.status === 'generating');
+  // On mount: fetch list and resume tracking any generating report
+  // 초기 마운트: 리스트 조회 + 생성 중인 리포트 추적 재개
+  useEffect(() => {
+    fetchReportList().then(list => {
+      const generating = list.find(r => r.status === 'generating');
       if (generating) {
         setCurrentReportId(generating.reportId);
         setStatus('generating');
         setProgress(generating.progress || { current: 0, total: 15, currentSection: '' });
       }
-    } catch {
-      // Silently fail on list fetch
-    }
-  }, [currentReportId]);
-
-  useEffect(() => {
-    fetchReportList();
-  }, [fetchReportList]);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // --- Elapsed timer ---
 

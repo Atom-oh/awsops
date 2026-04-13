@@ -408,15 +408,28 @@ async function generateReportBackground(
     progress: { current: 15, total: 15, currentSection: 'generating-report' },
   });
 
+  // Extract health score and savings from executive summary for cover page
+  // 커버 페이지용 건강점수 및 절감액 추출
+  const execSummarySection = ordered.find((s: SectionResult) => s.key === 'executive-summary');
+  let healthScore: number | undefined;
+  let totalSavings: string | undefined;
+  if (execSummarySection?.content) {
+    const scoreMatch = execSummarySection.content.match(/(?:Health\s*Score|인프라\s*건강\s*점수)[:\s]*(\d{1,3})\s*\/\s*100/i);
+    if (scoreMatch) healthScore = parseInt(scoreMatch[1], 10);
+    const savingsMatch = execSummarySection.content.match(/\$[\d,]+(?:\s*[~–-]\s*\$[\d,]+)?/);
+    if (savingsMatch) totalSavings = savingsMatch[0];
+  }
+
   const reportInput = {
     title: isEn ? 'AWSops AI Diagnosis Report' : 'AWSops AI 종합진단 리포트',
-    subtitle: new Date().toLocaleDateString(isEn ? 'en-US' : 'ko-KR', {
-      year: 'numeric',
-      month: 'long',
-    }),
+    subtitle: isEn ? 'AWS Infrastructure Comprehensive Analysis' : 'AWS 인프라 종합 분석',
     accountAlias,
-    generatedAt: new Date().toISOString(),
+    generatedAt: new Date().toLocaleDateString(isEn ? 'en-US' : 'ko-KR', {
+      year: 'numeric', month: 'long', day: 'numeric',
+    }),
     sections: ordered.map(r => ({ section: r.section, title: r.title, content: r.content })),
+    healthScore,
+    totalSavings,
   };
 
   // Generate DOCX
@@ -531,8 +544,7 @@ async function generateReportBackground(
       reportId,
       accountAlias: accountAlias || undefined,
       executiveSummary: summaryText,
-      downloadUrlDocx,
-      downloadUrlMd,
+      dashboardBaseUrl: undefined, // uses default (awsops.atomai.click)
     });
   } catch {
     // SNS notification is best-effort; don't fail the report
@@ -754,7 +766,7 @@ export async function GET(request: NextRequest) {
         Bucket: REPORT_BUCKET,
         Key: meta.s3KeyDocx,
         ResponseContentDisposition: `attachment; filename="${buildReportFilename(meta, 'docx')}"`,
-      }), { expiresIn: 60 * 60 });
+      }), { expiresIn: 7 * 24 * 60 * 60 });
 
       return NextResponse.redirect(freshUrl, 302);
     } catch {
@@ -793,7 +805,7 @@ export async function GET(request: NextRequest) {
         const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
           Bucket: REPORT_BUCKET, Key: meta.s3KeyMd,
           ResponseContentDisposition: `attachment; filename="${buildReportFilename(meta, 'md')}"`,
-        }), { expiresIn: 60 * 60 });
+        }), { expiresIn: 7 * 24 * 60 * 60 });
         return NextResponse.redirect(freshUrl, 302);
       } catch { /* fallback below */ }
     }
@@ -849,7 +861,7 @@ export async function GET(request: NextRequest) {
         const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
           Bucket: REPORT_BUCKET, Key: meta.s3KeyPdf,
           ResponseContentDisposition: `attachment; filename="${buildReportFilename(meta, 'pdf')}"`,
-        }), { expiresIn: 60 * 60 });
+        }), { expiresIn: 7 * 24 * 60 * 60 });
         return NextResponse.redirect(freshUrl, 302);
       } catch { /* fallback below */ }
     }
