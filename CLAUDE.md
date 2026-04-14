@@ -19,11 +19,11 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 | 페이지 | 40 (/datasources, /ai-diagnosis 추가) |
 | 라우트 | 54 |
 | SQL 쿼리 파일 | 25 |
-| API 라우트 | 16 (datasources, k8s, report 추가) |
+| API 라우트 | 17 (datasources, k8s, report, alert-webhook 추가) |
 | 컴포넌트 | 18 (ReportMarkdown 추가) |
 | MCP 도구 | 125 (8 Gateway, 19 Lambda) |
 | AI 라우트 | 11 (datasource 라우트 추가) |
-| ADR | 8 (001-008) |
+| ADR | 9 (001-009) |
 
 ## 필수 규칙
 
@@ -100,8 +100,13 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `report-docx.ts` — DOCX 리포트 생성 (A4, TOC, 마크다운 변환)
 - `report-pptx.ts` — PPTX 리포트 생성 (WADD 스타일)
 - `report-scheduler.ts` — 자동 진단 스케줄러 (weekly/biweekly/monthly)
+- `alert-types.ts` — 알림 이벤트 타입 + 소스별 정규화 함수 (CloudWatch, Alertmanager, Grafana, Generic)
+- `alert-correlation.ts` — 알림 상관 분석 엔진 (시간/서비스/리소스 기반 그룹화, 중복 제거, 심각도 에스컬레이션)
+- `alert-diagnosis.ts` — 알림 진단 오케스트레이터 (전략 선택, 컬렉터/데이터소스 병렬 실행, 변경 감지, Bedrock 분석)
+- `alert-knowledge.ts` — 알림 지식 베이스 (진단 기록 저장/유사도 검색/통계)
+- `slack-notification.ts` — Slack 알림 클라이언트 (Block Kit, 채널 라우팅, 스레드 업데이트)
 
-### API 라우트 (`src/app/api/`, 16개)
+### API 라우트 (`src/app/api/`, 17개)
 - `ai/route.ts` — AI 라우팅 (11 routes, 멀티 라우트, SSE 스트리밍, 도구 추론, datasource 라우트)
 - `steampipe/route.ts` — Steampipe 쿼리 + Cost 가용성 + 인벤토리 (POST/GET/PUT)
 - `auth/route.ts` — 로그아웃 (HttpOnly 쿠키 서버 사이드 삭제)
@@ -118,6 +123,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `datasources/route.ts` — 외부 데이터소스 CRUD + 쿼리 실행 + AI 쿼리 생성 (SSRF 방지)
 - `k8s/route.ts` — EKS kubeconfig 등록
 - `report/route.ts` — AI 종합 진단 리포트 생성 + S3 저장 + 스케줄링
+- `alert-webhook/route.ts` — 알림 웹훅 수신 (CloudWatch SNS, Alertmanager, Grafana, Generic) + HMAC 인증 + 상관 분석 트리거
 
 ### 인프라
 - `infra-cdk/lib/awsops-stack.ts` — CDK 인프라 (VPC, EC2, ALB, CloudFront)
@@ -210,11 +216,11 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 | Pages | 40 (incl. /datasources, /ai-diagnosis) |
 | Routes | 54 |
 | SQL Query Files | 25 |
-| API Routes | 16 (incl. datasources, k8s, report) |
+| API Routes | 17 (incl. datasources, k8s, report, alert-webhook) |
 | Components | 18 (incl. ReportMarkdown) |
 | MCP Tools | 125 (8 Gateways, 19 Lambda) |
 | AI Routes | 11 (incl. datasource route) |
-| ADRs | 8 (001-008) |
+| ADRs | 9 (001-009) |
 
 ## Critical Rules
 
@@ -289,8 +295,13 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `report-docx.ts` — DOCX report generation (A4, TOC, markdown conversion)
 - `report-pptx.ts` — PPTX report generation (WADD-style)
 - `report-scheduler.ts` — Auto-diagnosis scheduler (weekly/biweekly/monthly)
+- `alert-types.ts` — Alert event types + per-source normalizers (CloudWatch, Alertmanager, Grafana, Generic)
+- `alert-correlation.ts` — Alert correlation engine (time/service/resource grouping, dedup, severity escalation)
+- `alert-diagnosis.ts` — Alert diagnosis orchestrator (strategy selection, parallel collectors/datasources, change detection, Bedrock analysis)
+- `alert-knowledge.ts` — Alert knowledge base (diagnosis record storage, similarity search, statistics)
+- `slack-notification.ts` — Slack notification client (Block Kit, severity-based channel routing, thread updates)
 
-### API Routes (`src/app/api/`, 16 routes)
+### API Routes (`src/app/api/`, 17 routes)
 - `ai/route.ts` — AI routing (11 routes, multi-route, SSE streaming, tool inference, datasource route)
 - `steampipe/route.ts` — Steampipe queries + Cost availability + Inventory (POST/GET/PUT)
 - `auth/route.ts` — Logout (server-side HttpOnly cookie deletion)
@@ -307,6 +318,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `datasources/route.ts` — External datasource CRUD + query execution + AI query generation (SSRF-protected)
 - `k8s/route.ts` — EKS kubeconfig registration
 - `report/route.ts` — AI diagnosis report generation + S3 storage + scheduling
+- `alert-webhook/route.ts` — Alert webhook receiver (CloudWatch SNS, Alertmanager, Grafana, Generic) + HMAC auth + correlation trigger
 
 ### Infrastructure
 - `infra-cdk/lib/awsops-stack.ts` — CDK infra (VPC, EC2, ALB, CloudFront)
