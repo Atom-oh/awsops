@@ -105,4 +105,16 @@ Route priority in `src/app/api/ai/route.ts`:
 9. AWS resource keywords → Steampipe + Bedrock Direct
 10. General questions → Ops Gateway (fallback → Bedrock Direct)
 
+## Alert-Triggered AI Diagnosis (Proposed)
+
+Multi-stage AI diagnosis pipeline that automatically receives alerts from external systems (CloudWatch Alarms via SNS, Prometheus Alertmanager webhook, Grafana webhook, SQS queue), correlates related alerts into incidents, investigates root cause using existing collectors (7 types), datasources (7 platforms), and AgentCore gateways (125 MCP tools), then delivers analysis to Slack (Block Kit) and SNS email. Includes knowledge base for past incident reference, change detection (CloudTrail + K8s rollouts), and severity-based channel routing. See [ADR-009](decisions/009-alert-triggered-ai-diagnosis.md) for the full design.
+
+Key pipeline stages:
+1. **Ingestion** -- Webhook endpoint normalizes 5 alert source formats into unified `AlertEvent`
+2. **Correlation** -- Groups related alerts by resource/service/time-window into `Incident` objects (30s buffering)
+3. **Investigation** -- Strategy-selected parallel execution of collectors + datasource queries + change detection
+4. **Analysis** -- Bedrock Opus root cause analysis with structured timeline, remediation, and prevention
+5. **Knowledge** -- Stores diagnosis records for similarity search on future incidents
+6. **Dispatch** -- Slack (severity-routed channels, thread updates), SNS email, dashboard indicator
+
 See also: `scripts/ARCHITECTURE.md` for detailed architecture diagrams.

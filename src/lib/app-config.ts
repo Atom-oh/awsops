@@ -60,6 +60,46 @@ export interface DatasourceConfig {
   updatedAt: string;
 }
 
+// Alert source configuration / 알림 소스 설정
+export type AlertSource = 'cloudwatch' | 'alertmanager' | 'grafana' | 'sqs' | 'generic';
+
+export interface AlertSourceConfig {
+  enabled: boolean;
+  secret?: string;              // HMAC secret for webhook verification
+  snsSubscriptionArn?: string;  // CloudWatch: SNS subscription ARN
+  queueUrl?: string;            // SQS: queue URL
+  region?: string;              // SQS: queue region
+}
+
+export interface AlertDiagnosisConfig {
+  enabled: boolean;
+  sources?: Partial<Record<AlertSource, AlertSourceConfig>>;
+  // Correlation settings
+  correlationWindowSeconds?: number;      // default 30
+  deduplicationWindowMinutes?: number;    // default 15
+  cooldownMinutes?: number;               // default 5
+  maxConcurrentInvestigations?: number;   // default 3
+  // Investigation settings
+  investigationTimeoutSeconds?: number;   // default 120
+  includeChangeDetection?: boolean;       // default true
+  knowledgeBaseEnabled?: boolean;         // default true
+  minimumSeverity?: 'critical' | 'warning' | 'info'; // default 'warning'
+}
+
+export interface SlackConfig {
+  enabled: boolean;
+  method: 'webhook' | 'bot';
+  webhookUrl?: string;
+  botToken?: string;
+  defaultChannel?: string;               // e.g., '#ops-alerts'
+  channelMapping?: {
+    critical?: string;
+    warning?: string;
+    info?: string;
+  };
+  threadUpdates?: boolean;               // default true
+}
+
 export interface AppConfig {
   costEnabled: boolean;
   agentRuntimeArn?: string;
@@ -81,6 +121,8 @@ export interface AppConfig {
   notificationEmails?: string[];      // Mailing list for report/benchmark notifications / 리포트/벤치마크 알림 메일링 리스트
   notificationEnabled?: boolean;      // Enable auto-notification on report completion / 리포트 완료 시 자동 알림 활성화
   departments?: DepartmentConfig[];   // Department-based account filtering / 부서별 계정 필터링
+  alertDiagnosis?: AlertDiagnosisConfig;  // Alert-triggered AI diagnosis / 알림 트리거 AI 진단
+  slack?: SlackConfig;                    // Slack integration / Slack 연동
 }
 
 // Department → Account mapping / 부서 → 계정 매핑
@@ -254,4 +296,23 @@ export function getAllowedDatasources(groups: string[]): string[] | null {
   const set = new Set<string>();
   matched.forEach(d => (d.datasourceIds || []).forEach(id => set.add(id)));
   return Array.from(set);
+}
+
+// --- Alert diagnosis utilities / 알림 진단 유틸리티 ---
+
+export function getAlertDiagnosisConfig(): AlertDiagnosisConfig {
+  return getConfig().alertDiagnosis || { enabled: false };
+}
+
+export function isAlertDiagnosisEnabled(): boolean {
+  return getAlertDiagnosisConfig().enabled === true;
+}
+
+export function getAlertSourceConfig(source: AlertSource): AlertSourceConfig | undefined {
+  return getAlertDiagnosisConfig().sources?.[source];
+}
+
+export function getSlackConfig(): SlackConfig | undefined {
+  const config = getConfig().slack;
+  return config?.enabled ? config : undefined;
 }
