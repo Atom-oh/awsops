@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Alert-triggered AI diagnosis pipeline (ADR-009): automatic root cause analysis from external alert sources ([#20](https://github.com/whchoi98/awsops/pull/20))
+  - Webhook endpoint (`/api/alert-webhook`) for CloudWatch Alarms (SNS), Prometheus Alertmanager, Grafana Alerting, SQS, and generic webhooks
+  - Alert correlation engine: groups related alerts into incidents (30s buffer, time/service/resource matching, dedup, severity escalation)
+  - Investigation orchestrator: auto-selects collectors + datasource queries based on alert context, change detection (CloudTrail + K8s rollouts)
+  - Bedrock Opus root cause analysis with structured output (timeline, remediation, prevention)
+  - Slack notification client (Block Kit, severity-based channel routing, thread updates)
+  - Knowledge base for past incident similarity search
+  - SQS background poller, Alert Settings admin page (`/alert-settings`)
+  - HMAC-SHA256 webhook authentication and rate limiting
+
+### Fixed
+
+- Report download buttons use proxy URLs instead of raw S3 presigned URLs (STS session expiry fix)
+- SSRF protection for SNS SubscribeURL, admin auth for alert config, PromQL/LogQL injection prevention
+- Alert correlation: bounded retry, timer cleanup, dedup map cap, rate limit hardening
+
 ## [1.8.0] - 2026-04-07
 
 ### Added
@@ -300,6 +318,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+### Added
+
+- 알림 트리거 AI 자동 진단 파이프라인 (ADR-009): 외부 알림 소스에서 자동 근본 원인 분석 ([#20](https://github.com/whchoi98/awsops/pull/20))
+  - 웹훅 엔드포인트(`/api/alert-webhook`): CloudWatch Alarm(SNS), Prometheus Alertmanager, Grafana, SQS, Generic 지원
+  - 알림 상관 분석 엔진: 30초 버퍼링, 시간/서비스/리소스 매칭, 중복 제거, 심각도 에스컬레이션
+  - 조사 오케스트레이터: 알림 컨텍스트 기반 컬렉터/데이터소스 자동 선택, 변경 감지(CloudTrail + K8s Rollout)
+  - Bedrock Opus 근본 원인 분석 (타임라인, 대응 조치, 예방 방안)
+  - Slack 알림 (Block Kit, 심각도별 채널 라우팅, 스레드 업데이트)
+  - 지식 베이스: 과거 인시던트 유사도 검색
+  - SQS 백그라운드 폴러, 알림 설정 관리 페이지(`/alert-settings`)
+  - HMAC-SHA256 웹훅 인증 + Rate Limiting
+
+### Fixed
+
+- 리포트 다운로드 버튼이 S3 presigned URL 대신 프록시 URL 사용 (STS 세션 만료 해결)
+- SNS SubscribeURL SSRF 방지, 알림 설정 admin 인증, PromQL/LogQL 인젝션 방지
+- 상관 분석: 재시도 제한, 타이머 정리, dedup map 제한, Rate Limit 강화
 
 ## [1.8.0] - 2026-04-07
 
