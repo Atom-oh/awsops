@@ -63,6 +63,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'sidebar.diagnosis', href: '/ai-diagnosis', icon: ClipboardCheck },
       { labelKey: 'sidebar.agentcore', href: '/agentcore', icon: Activity },
       { labelKey: 'sidebar.accounts', href: '/accounts', icon: Layers },
+      { labelKey: 'sidebar.alertSettings', href: '/alert-settings', icon: Bell },
     ],
   },
   {

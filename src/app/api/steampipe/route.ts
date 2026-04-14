@@ -474,6 +474,15 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ departments });
     }
 
+    // Save alert diagnosis + Slack configuration
+    if (action === 'save-alert-config') {
+      const body = await request.json();
+      const alertDiagnosis = body.alertDiagnosis || {};
+      const slack = body.slack || {};
+      saveConfig({ alertDiagnosis, slack });
+      return NextResponse.json({ alertDiagnosis, slack });
+    }
+
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Internal server error';

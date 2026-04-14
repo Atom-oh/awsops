@@ -53,6 +53,7 @@
   "sidebar.agentcore": "AgentCore",
   "sidebar.diagnosis": "AI 종합진단",
   "sidebar.accounts": "계정 관리",
+  "sidebar.alertSettings": "알림 진단",
   "sidebar.compute": "컴퓨팅",
   "sidebar.ec2": "EC2",
   "sidebar.lambda": "Lambda",
