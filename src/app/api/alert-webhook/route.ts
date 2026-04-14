@@ -29,9 +29,16 @@ import { ensureAlertDiagnosisStarted } from '@/lib/alert-diagnosis';
 const rateLimitMap: Map<string, { count: number; resetAt: number }> = new Map();
 const RATE_LIMIT = 60;
 const RATE_WINDOW_MS = 60_000;
+const MAX_RATE_ENTRIES = 10_000;
 
 function checkRateLimit(ip: string): boolean {
   const now = Date.now();
+  // Prune expired entries when map grows too large
+  if (rateLimitMap.size > MAX_RATE_ENTRIES) {
+    Array.from(rateLimitMap.entries()).forEach(([key, entry]) => {
+      if (now > entry.resetAt) rateLimitMap.delete(key);
+    });
+  }
   const entry = rateLimitMap.get(ip);
   if (!entry || now > entry.resetAt) {
     rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
@@ -39,6 +46,14 @@ function checkRateLimit(ip: string): boolean {
   }
   entry.count++;
   return entry.count <= RATE_LIMIT;
+}
+
+// Extract client IP: use second-to-last from x-forwarded-for (behind CloudFront + ALB)
+function extractClientIp(request: Request): string {
+  const forwarded = request.headers.get('x-forwarded-for') || '';
+  const ips = forwarded.split(',').map(s => s.trim()).filter(Boolean);
+  // CloudFront appends client IP, ALB appends CF IP. Second-to-last is real client.
+  return ips.length >= 2 ? ips[ips.length - 2] : ips[0] || 'unknown';
 }
 
 // HMAC-SHA256 verification
@@ -52,10 +67,12 @@ function verifySignature(body: string, signature: string, secret: string): boole
   }
 }
 
-// SNS subscription confirmation
+// SNS subscription confirmation — validate URL is genuinely AWS before fetching
+const SNS_URL_PATTERN = /^https:\/\/sns\.[a-z0-9-]+\.amazonaws\.com\//;
+
 async function confirmSnsSubscription(body: Record<string, unknown>): Promise<NextResponse> {
   const subscribeUrl = body.SubscribeURL as string;
-  if (subscribeUrl && typeof subscribeUrl === 'string' && subscribeUrl.startsWith('https://sns.')) {
+  if (subscribeUrl && typeof subscribeUrl === 'string' && SNS_URL_PATTERN.test(subscribeUrl)) {
     try {
       await fetch(subscribeUrl);
       console.log(`[AlertWebhook] SNS subscription confirmed: ${body.TopicArn}`);
@@ -74,7 +91,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   // Rate limiting
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+  const ip = extractClientIp(request);
   if (!checkRateLimit(ip)) {
     return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
   }
@@ -124,11 +141,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'No valid alerts found in payload' }, { status: 400 });
   }
 
-  // Filter out stale alerts
+  // Filter out stale alerts and alerts with unparseable timestamps
   const now = Date.now();
   const freshAlerts = alerts.filter(a => {
     const alertTime = new Date(a.timestamp).getTime();
-    return isNaN(alertTime) || (now - alertTime) < maxAge;
+    if (isNaN(alertTime)) return false; // reject unparseable timestamps
+    return (now - alertTime) < maxAge;
   });
 
   if (freshAlerts.length === 0) {
@@ -159,13 +177,44 @@ export async function POST(request: Request): Promise<NextResponse> {
   });
 }
 
-// GET: Health check + status
-export async function GET(): Promise<NextResponse> {
+// GET: Health check + status + history
+export async function GET(_request: Request): Promise<NextResponse> {
   const enabled = isAlertDiagnosisEnabled();
   const config = getAlertDiagnosisConfig();
   const enabledSources = Object.entries(config.sources || {})
     .filter(([, v]) => v?.enabled)
     .map(([k]) => k);
+
+  // Load recent diagnoses and stats for the history section
+  let recentDiagnoses: unknown[] = [];
+  let stats = null;
+  try {
+    const { getAlertStats } = await import('@/lib/alert-knowledge');
+    stats = await getAlertStats(30);
+
+    // Load recent records (last 30 days, max 20)
+    const { existsSync, readdirSync, readFileSync } = await import('fs');
+    const { resolve, join } = await import('path');
+    const baseDir = resolve(process.cwd(), 'data/alert-diagnosis');
+    if (existsSync(baseDir)) {
+      const monthDirs = readdirSync(baseDir).filter((d: string) => /^\d{4}-\d{2}$/.test(d)).sort().reverse();
+      const records: unknown[] = [];
+      for (const md of monthDirs.slice(0, 2)) {
+        const files = readdirSync(join(baseDir, md)).filter((f: string) => f.endsWith('.json')).sort().reverse();
+        for (const f of files.slice(0, 20 - records.length)) {
+          try {
+            const raw = readFileSync(join(baseDir, md, f), 'utf-8');
+            const rec = JSON.parse(raw);
+            // Exclude the full markdown to keep response size small
+            const { diagnosisMarkdown: _dm, ...rest } = rec;
+            records.push(rest);
+          } catch { /* skip */ }
+        }
+        if (records.length >= 20) break;
+      }
+      recentDiagnoses = records;
+    }
+  } catch { /* knowledge base optional */ }
 
   return NextResponse.json({
     enabled,
@@ -173,5 +222,7 @@ export async function GET(): Promise<NextResponse> {
     correlationWindowSeconds: config.correlationWindowSeconds || 30,
     deduplicationWindowMinutes: config.deduplicationWindowMinutes || 15,
     minimumSeverity: config.minimumSeverity || 'warning',
+    recentDiagnoses,
+    stats,
   });
 }
