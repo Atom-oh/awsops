@@ -101,6 +101,7 @@ export default function AlertSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ success: boolean; text: string } | null>(null);
   const [accessDenied, setAccessDenied] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [testingSlack, setTestingSlack] = useState(false);
 
   const [sources, setSources] = useState<Record<string, AlertSourceState>>(DEFAULT_SOURCES);
@@ -214,13 +215,15 @@ export default function AlertSettingsPage() {
   const testSlack = async () => {
     setTestingSlack(true);
     try {
-      const resp = await fetch('/awsops/api/alert-webhook?action=test-slack', {
-        method: 'POST',
+      // Save config first, then test via admin endpoint
+      await saveAll();
+      const resp = await fetch('/awsops/api/steampipe', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slack }),
+        body: JSON.stringify({ action: 'test-slack' }),
       });
       const data = await resp.json();
-      setMessage({ success: data.ok, text: data.ok ? 'Slack connection successful!' : `Slack test failed: ${data.error}` });
+      setMessage({ success: data.ok !== false, text: data.ok !== false ? 'Slack connection successful!' : `Slack test failed: ${data.error || 'Unknown error'}` });
     } catch (err) {
       setMessage({ success: false, text: err instanceof Error ? err.message : 'Slack test failed' });
     } finally {
@@ -476,16 +479,23 @@ export default function AlertSettingsPage() {
           </div>
         )}
 
-        {/* Investigation Settings */}
+        {/* Investigation Settings (Advanced — collapsed by default) */}
         {config.enabled && (
           <div className="bg-navy-800 rounded-xl border border-navy-600 overflow-hidden">
-            <div className="px-6 py-4 border-b border-navy-600">
+            <button
+              onClick={() => setAdvancedOpen(!advancedOpen)}
+              className="w-full px-6 py-4 flex items-center justify-between hover:bg-navy-700/50 transition-colors"
+            >
               <h2 className="text-lg font-semibold text-white flex items-center gap-2">
                 <Clock size={18} className="text-cyan-400" />
-                Investigation Settings
+                Advanced Settings
               </h2>
-            </div>
-            <div className="px-6 py-5 space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">Defaults are recommended for most use cases</span>
+                {advancedOpen ? <ChevronDown size={18} className="text-gray-400" /> : <ChevronRight size={18} className="text-gray-400" />}
+              </div>
+            </button>
+            {advancedOpen && <div className="px-6 py-5 space-y-4 border-t border-navy-600">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Minimum Severity</label>
@@ -574,12 +584,12 @@ export default function AlertSettingsPage() {
                   Knowledge Base (past incident reference)
                 </label>
               </div>
-            </div>
+            </div>}
           </div>
         )}
 
-        {/* Save Button */}
-        <div className="flex items-center gap-3">
+        {/* Save Button — sticky at bottom */}
+        <div className="sticky bottom-0 z-10 bg-navy-900/95 backdrop-blur-sm border-t border-navy-700 -mx-6 px-6 py-3 flex items-center gap-3">
           <button
             onClick={saveAll}
             disabled={saving}

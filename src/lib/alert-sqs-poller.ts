@@ -14,8 +14,15 @@ const MAX_MESSAGES = 10;
 const VISIBILITY_TIMEOUT = 120; // seconds — enough for normalization + ingestion
 
 let pollerTimer: ReturnType<typeof setInterval> | null = null;
+let initialTimer: ReturnType<typeof setTimeout> | null = null;
 let isPolling = false;
 let initialized = false;
+let cachedSqsClient: SQSClient | null = null;
+
+function getSqsClient(region: string): SQSClient {
+  if (!cachedSqsClient) cachedSqsClient = new SQSClient({ region });
+  return cachedSqsClient;
+}
 
 interface SqsPollerStatus {
   isRunning: boolean;
@@ -50,7 +57,7 @@ export function ensureSqsPollerStarted(): void {
   ensureAlertDiagnosisStarted();
 
   // Initial poll after 15 seconds
-  setTimeout(() => pollOnce(), 15_000);
+  initialTimer = setTimeout(() => pollOnce(), 15_000);
 
   // Then every POLL_INTERVAL_MS
   pollerTimer = setInterval(() => pollOnce(), POLL_INTERVAL_MS);
@@ -58,10 +65,9 @@ export function ensureSqsPollerStarted(): void {
 }
 
 export function stopSqsPoller(): void {
-  if (pollerTimer) {
-    clearInterval(pollerTimer);
-    pollerTimer = null;
-  }
+  if (initialTimer) { clearTimeout(initialTimer); initialTimer = null; }
+  if (pollerTimer) { clearInterval(pollerTimer); pollerTimer = null; }
+  cachedSqsClient = null;
   initialized = false;
   console.log('[SqsPoller] Stopped');
 }
@@ -77,7 +83,7 @@ async function pollOnce(): Promise<void> {
 
   try {
     const region = sqsConfig.region || 'ap-northeast-2';
-    const client = new SQSClient({ region });
+    const client = getSqsClient(region);
 
     const response = await client.send(new ReceiveMessageCommand({
       QueueUrl: sqsConfig.queueUrl,

@@ -17,6 +17,8 @@ import { getAlertDiagnosisConfig } from '@/lib/app-config';
 const activeIncidents: Map<string, Incident> = new Map();
 const processedAlertIds: Map<string, number> = new Map(); // alertId → timestamp for dedup
 const bufferTimers: Map<string, NodeJS.Timeout> = new Map();
+const MAX_DEDUP_ENTRIES = 10_000;
+const MAX_INVESTIGATION_RETRIES = 5;
 
 // Callback registered by the diagnosis orchestrator
 let onIncidentReady: ((incident: Incident) => Promise<void>) | null = null;
@@ -40,6 +42,13 @@ export function ingestAlert(alert: AlertEvent): void {
   if (lastSeen && Date.now() - lastSeen < dedupWindow) {
     console.log(`[AlertCorrelation] Dedup skip: ${alert.alertName} (${alert.id})`);
     return;
+  }
+  // Cap dedup map size to prevent unbounded memory growth
+  if (processedAlertIds.size > MAX_DEDUP_ENTRIES) {
+    const now = Date.now();
+    Array.from(processedAlertIds.entries()).forEach(([id, ts]) => {
+      if (now - ts > 3_600_000) processedAlertIds.delete(id);
+    });
   }
   processedAlertIds.set(alert.id, Date.now());
 
@@ -84,10 +93,12 @@ export function cleanupStaleData(): void {
     if (now - ts > 3_600_000) processedAlertIds.delete(id);
   });
 
-  // Archive incidents older than 24 hours
+  // Archive incidents older than 24 hours + clear their timers
   Array.from(activeIncidents.entries()).forEach(([id, incident]) => {
     const age = now - new Date(incident.createdAt).getTime();
     if (age > 24 * 3_600_000 && incident.status !== 'investigating') {
+      const timer = bufferTimers.get(id);
+      if (timer) { clearTimeout(timer); bufferTimers.delete(id); }
       activeIncidents.delete(id);
     }
   });
@@ -196,7 +207,11 @@ function handleResolvedAlert(alert: AlertEvent): void {
   }
 }
 
-async function triggerInvestigation(incident: Incident): Promise<void> {
+async function triggerInvestigation(incident: Incident, retryCount: number = 0): Promise<void> {
+  // Guard: incident may have been cleaned up or resolved during retry wait
+  if (!activeIncidents.has(incident.id)) return;
+  if (incident.status === 'resolved' || incident.status === 'analyzed') return;
+
   // Check concurrent investigation limit
   const config = getAlertDiagnosisConfig();
   const maxConcurrent = config.maxConcurrentInvestigations || 3;
@@ -204,10 +219,18 @@ async function triggerInvestigation(incident: Incident): Promise<void> {
     .filter(i => i.status === 'investigating').length;
 
   if (currentInvestigations >= maxConcurrent) {
-    console.log(`[AlertCorrelation] Max concurrent investigations (${maxConcurrent}) reached, queuing ${incident.id}`);
-    // Retry after cooldown
+    if (retryCount >= MAX_INVESTIGATION_RETRIES) {
+      console.error(`[AlertCorrelation] Max retries (${MAX_INVESTIGATION_RETRIES}) reached for ${incident.id}, giving up`);
+      incident.status = 'analyzed';
+      return;
+    }
+    console.log(`[AlertCorrelation] Max concurrent investigations (${maxConcurrent}) reached, retry ${retryCount + 1} for ${incident.id}`);
     const cooldown = (config.cooldownMinutes || 5) * 60_000;
-    setTimeout(() => triggerInvestigation(incident), cooldown);
+    const timer = setTimeout(() => {
+      bufferTimers.delete(incident.id);
+      triggerInvestigation(incident, retryCount + 1);
+    }, cooldown);
+    bufferTimers.set(incident.id, timer);
     return;
   }
 

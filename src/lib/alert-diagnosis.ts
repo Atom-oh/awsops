@@ -87,13 +87,14 @@ function buildInvestigationPlan(incident: Incident): InvestigationPlan {
   // Build targeted Prometheus queries based on alert context
   for (const alert of incident.alerts) {
     if (alert.metric?.name) {
+      const metricName = sanitizeMetricName(alert.metric.name);
       plan.prometheusQueries.push(
-        `topk(10, ${alert.metric.name}{${buildPromLabels(alert)}})`
+        `topk(10, ${metricName}{${buildPromLabels(alert)}})`
       );
     }
     // Service-level error rate
     if (alert.labels.service || alert.labels.job) {
-      const svc = alert.labels.service || alert.labels.job;
+      const svc = sanitizePromValue(alert.labels.service || alert.labels.job || '');
       plan.prometheusQueries.push(
         `sum(rate(http_requests_total{service="${svc}",code=~"5.."}[5m]))`
       );
@@ -103,11 +104,11 @@ function buildInvestigationPlan(incident: Incident): InvestigationPlan {
   // Loki: targeted log queries
   for (const alert of incident.alerts) {
     if (alert.labels.namespace && alert.labels.pod) {
-      plan.lokiQueries.push(`{namespace="${alert.labels.namespace}",pod="${alert.labels.pod}"} |= "error"`);
+      plan.lokiQueries.push(`{namespace="${sanitizePromValue(alert.labels.namespace)}",pod="${sanitizePromValue(alert.labels.pod)}"} |= "error"`);
     } else if (alert.labels.service) {
-      plan.lokiQueries.push(`{service="${alert.labels.service}"} |= "error"`);
+      plan.lokiQueries.push(`{service="${sanitizePromValue(alert.labels.service)}"} |= "error"`);
     } else if (alert.labels.namespace) {
-      plan.lokiQueries.push(`{namespace="${alert.labels.namespace}"} |~ "error|fatal|panic"`);
+      plan.lokiQueries.push(`{namespace="${sanitizePromValue(alert.labels.namespace)}"} |~ "error|fatal|panic"`);
     }
   }
 
@@ -119,12 +120,22 @@ function buildInvestigationPlan(incident: Incident): InvestigationPlan {
   return plan;
 }
 
+// Sanitize PromQL/LogQL label values — prevent injection
+function sanitizePromValue(val: string): string {
+  return val.replace(/["\\\n\r}]/g, '').slice(0, 200);
+}
+
+// Sanitize PromQL metric name — must match [a-zA-Z_:][a-zA-Z0-9_:]*
+function sanitizeMetricName(name: string): string {
+  return /^[a-zA-Z_:][a-zA-Z0-9_:]*$/.test(name) ? name : 'unknown_metric';
+}
+
 function buildPromLabels(alert: AlertEvent): string {
   const parts: string[] = [];
-  if (alert.labels.namespace) parts.push(`namespace="${alert.labels.namespace}"`);
-  if (alert.labels.service) parts.push(`service="${alert.labels.service}"`);
-  if (alert.labels.pod) parts.push(`pod="${alert.labels.pod}"`);
-  if (alert.labels.instance) parts.push(`instance="${alert.labels.instance}"`);
+  if (alert.labels.namespace) parts.push(`namespace="${sanitizePromValue(alert.labels.namespace)}"`);
+  if (alert.labels.service) parts.push(`service="${sanitizePromValue(alert.labels.service)}"`);
+  if (alert.labels.pod) parts.push(`pod="${sanitizePromValue(alert.labels.pod)}"`);
+  if (alert.labels.instance) parts.push(`instance="${sanitizePromValue(alert.labels.instance)}"`);
   return parts.join(',');
 }
 
@@ -140,12 +151,14 @@ async function investigateIncident(incident: Incident): Promise<void> {
     const timeout = (config.investigationTimeoutSeconds || 120) * 1000;
 
     // Phase 1: Parallel data collection (with timeout)
+    let timeoutId: NodeJS.Timeout;
     const collectionResult = await Promise.race([
       collectInvestigationData(plan, incident),
-      new Promise<InvestigationData>((_, reject) =>
-        setTimeout(() => reject(new Error('Investigation timeout')), timeout)
-      ),
+      new Promise<InvestigationData>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Investigation timeout')), timeout);
+      }),
     ]);
+    clearTimeout(timeoutId!);
 
     // Phase 1.5: Knowledge base — find similar past incidents
     let similarIncidents: string = '';
