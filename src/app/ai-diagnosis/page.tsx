@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Header from '@/components/layout/Header';
-import { Play, Loader2, Download, FileText, CheckCircle, AlertTriangle, XCircle, Clock, ChevronDown, ChevronRight, ChevronLeft, FileDown, Printer, List, FileCode, CalendarClock, Mail, Bell, BellOff, Send, Plus, X, Calendar } from 'lucide-react';
+import { Play, Loader2, Download, FileText, CheckCircle, AlertTriangle, XCircle, Clock, ChevronDown, ChevronRight, ChevronLeft, FileDown, List, FileCode, CalendarClock, Mail, Bell, BellOff, Send, Plus, X, Calendar } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAccountContext } from '@/contexts/AccountContext';
 import ReportMarkdown from '@/components/ReportMarkdown';
@@ -204,9 +204,8 @@ export default function DiagnosisPage() {
   const [sections, setSections] = useState<ReportSection[]>([]);
   const [reports, setReports] = useState<ReportListItem[]>([]);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
-  const [downloadUrlDocx, setDownloadUrlDocx] = useState<string | null>(null);
-  const [downloadUrlMd, setDownloadUrlMd] = useState<string | null>(null);
-  const [downloadUrlPdf, setDownloadUrlPdf] = useState<string | null>(null);
+  // Download URLs no longer stored — use proxy URLs via /api/report?id=X&action=download-*
+  // which generate fresh presigned URLs on each request (STS token-safe)
   const [showToc, setShowToc] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -289,9 +288,7 @@ export default function DiagnosisPage() {
           } else if (data.status === 'completed') {
             setCurrentReportId(savedId);
             setStatus('completed');
-            setDownloadUrlDocx(data.downloadUrlDocx || null);
-            setDownloadUrlMd(data.downloadUrlMd || null);
-            setDownloadUrlPdf(data.downloadUrlPdf || null);
+            // Download URLs now served via proxy endpoint
             setSections(data.sections || []);
             setCollapsedSections(new Set());
           }
@@ -358,9 +355,7 @@ export default function DiagnosisPage() {
           if (data.status === 'completed') {
             stopPolling();
             setStatus('completed');
-            setDownloadUrlDocx(data.downloadUrlDocx || null);
-            setDownloadUrlMd(data.downloadUrlMd || null);
-            setDownloadUrlPdf(data.downloadUrlPdf || null);
+            // Download URLs now served via proxy endpoint
             setSections(data.sections || []);
             setCollapsedSections(new Set());
             fetchReportList();
@@ -390,9 +385,7 @@ export default function DiagnosisPage() {
     setError(null);
     setSections([]);
     setCollapsedSections(new Set());
-    setDownloadUrlDocx(null);
-    setDownloadUrlMd(null);
-    setDownloadUrlPdf(null);
+    // Download URLs served via proxy — no state to reset
     setProgress({ current: 0, total: 15, currentSection: '' });
 
     try {
@@ -432,9 +425,7 @@ export default function DiagnosisPage() {
         setCurrentReportId(reportId);
         setStatus('completed');
         setSections(data.sections || []);
-        setDownloadUrlDocx(data.downloadUrlDocx || null);
-        setDownloadUrlMd(data.downloadUrlMd || null);
-        setDownloadUrlPdf(data.downloadUrlPdf || null);
+        // Download URLs served via proxy — no state to set
         setError(null);
         setCollapsedSections(new Set());
       } else if (data.status === 'generating') {
@@ -619,9 +610,9 @@ export default function DiagnosisPage() {
           </div>
         )}
 
-        {status === 'completed' && downloadUrlDocx && (
+        {status === 'completed' && currentReportId && (
           <button
-            onClick={() => window.open(downloadUrlDocx, '_blank')}
+            onClick={() => window.open(`/awsops/api/report?id=${currentReportId}&action=download-docx`, '_blank')}
             className="flex items-center gap-2 px-4 py-3 bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg text-accent-cyan hover:bg-accent-cyan/20 transition-colors"
           >
             <Download size={18} />
@@ -922,9 +913,9 @@ export default function DiagnosisPage() {
                         {report.status === 'completed' && (
                           <>
                             <button onClick={() => viewReport(report.reportId)} className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors">{isEn ? 'View' : '보기'}</button>
-                            {report.downloadUrlDocx && <button onClick={() => window.open(report.downloadUrlDocx, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors"><Download size={12} /> DOCX</button>}
-                            {report.downloadUrlMd && <button onClick={() => window.open(report.downloadUrlMd, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-green hover:text-accent-green/80 transition-colors"><Download size={12} /> MD</button>}
-                            {report.downloadUrlPdf && <button onClick={() => window.open(report.downloadUrlPdf, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-purple hover:text-accent-purple/80 transition-colors"><Download size={12} /> PDF</button>}
+                            <button onClick={() => window.open(`/awsops/api/report?id=${report.reportId}&action=download-docx`, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors"><Download size={12} /> DOCX</button>
+                            <button onClick={() => window.open(`/awsops/api/report?id=${report.reportId}&action=download-md`, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-green hover:text-accent-green/80 transition-colors"><Download size={12} /> MD</button>
+                            <button onClick={() => window.open(`/awsops/api/report?id=${report.reportId}&action=download-pdf`, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-purple hover:text-accent-purple/80 transition-colors"><Download size={12} /> PDF</button>
                           </>
                         )}
                         {report.status === 'generating' && <button onClick={() => viewReport(report.reportId)} className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors">{isEn ? 'Track' : '진행 확인'}</button>}
@@ -1123,35 +1114,28 @@ export default function DiagnosisPage() {
                 <List size={16} />
               </button>
               <span className="text-gray-600">|</span>
-              {downloadUrlDocx && (
+              {currentReportId && (
                 <button
-                  onClick={() => window.open(downloadUrlDocx, '_blank')}
+                  onClick={() => window.open(`/awsops/api/report?id=${currentReportId}&action=download-docx`, '_blank')}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent-cyan/30 text-accent-cyan hover:bg-accent-cyan/10 text-xs font-medium transition-colors"
                 >
                   <FileDown size={14} /> DOCX
                 </button>
               )}
-              {downloadUrlMd && (
+              {currentReportId && (
                 <button
-                  onClick={() => window.open(downloadUrlMd, '_blank')}
+                  onClick={() => window.open(`/awsops/api/report?id=${currentReportId}&action=download-md`, '_blank')}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent-green/30 text-accent-green hover:bg-accent-green/10 text-xs font-medium transition-colors"
                 >
                   <FileCode size={14} /> MD
                 </button>
               )}
-              {downloadUrlPdf ? (
+              {currentReportId && (
                 <button
-                  onClick={() => window.open(downloadUrlPdf, '_blank')}
+                  onClick={() => window.open(`/awsops/api/report?id=${currentReportId}&action=download-pdf`, '_blank')}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent-purple/30 text-accent-purple hover:bg-accent-purple/10 text-xs font-medium transition-colors"
                 >
                   <FileDown size={14} /> PDF
-                </button>
-              ) : (
-                <button
-                  onClick={() => window.open(`/awsops/ai-diagnosis/report?id=${currentReportId}`, '_blank')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent-purple/30 text-accent-purple hover:bg-accent-purple/10 text-xs font-medium transition-colors"
-                >
-                  <Printer size={14} /> PDF
                 </button>
               )}
             </div>
