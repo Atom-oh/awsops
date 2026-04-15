@@ -46,64 +46,86 @@ Build a **multi-stage AI diagnosis pipeline** that automatically receives alerts
 
 ### Architecture Overview / 아키텍처 개요
 
+> **Networking constraint / 네트워크 제약**: EC2 is in a Private Subnet behind CloudFront → ALB. CloudFront has Cognito Lambda@Edge authentication, which blocks unauthenticated HTTP requests (including SNS HTTP subscriptions). Therefore, **CloudWatch Alarm alerts must use the SNS → SQS → EC2 Polling path** (not direct webhook). Webhook is reserved for VPC-internal sources (Alertmanager, Grafana) that can reach ALB directly.
+>
+> EC2는 CloudFront → ALB 뒤의 Private Subnet에 위치. CloudFront에 Cognito Lambda@Edge 인증이 적용되어 있어 인증 없는 HTTP 요청(SNS HTTP 구독 포함)이 차단됨. 따라서 **CloudWatch Alarm 알림은 반드시 SNS → SQS → EC2 Polling 경로**를 사용해야 함. Webhook은 ALB에 직접 접근 가능한 VPC 내부 소스(Alertmanager, Grafana) 전용.
+
 ```
 Alert Sources                    AWSops Pipeline                        Output
 ================                ===================                   ========
 
-CloudWatch Alarm ──SNS──┐
-                        ├──► /api/alert-webhook ──► Alert Normalizer
-Alertmanager ──webhook──┤                              │
-                        │                    ┌─────────▼──────────┐
-Grafana ──webhook───────┤                    │ Correlation Engine │
-                        │                    │  (time + service   │
-SQS Queue ──poller──────┘                    │   + resource)      │
-                                             └─────────┬──────────┘
-                                                       │
-                                             ┌─────────▼──────────┐
-                                             │ Investigation      │──► Slack
-                                             │ Orchestrator       │    (Block Kit)
-                                             │                    │
-                                             │ ┌─Collectors─────┐ │──► SNS Email
-                                             │ │ incident       │ │
-                                             │ │ trace-analyze  │ │──► Dashboard
-                                             │ │ eks-optimize   │ │    Alert History
-                                             │ └────────────────┘ │
-                                             │ ┌─Datasources────┐ │──► Memory Store
-                                             │ │ Prometheus     │ │    (knowledge)
-                                             │ │ Loki logs      │ │
-                                             │ │ Tempo traces   │ │
-                                             │ └────────────────┘ │
-                                             │ ┌─Change Detect──┐ │
-                                             │ │ CloudTrail     │ │
-                                             │ │ K8s Rollouts   │ │
-                                             │ └────────────────┘ │
-                                             │                    │
-                                             │ Bedrock Opus 4.6   │
-                                             │ Root Cause Analysis │
-                                             └────────────────────┘
+CloudWatch Alarm ──► SNS Topic ──► SQS Queue ──► alert-sqs-poller.ts
+                                      │                │
+                   (SNS Fan-out OK)   └► DLQ (3x fail) │
+                                                       ▼
+                                             Alert Normalizer
+Alertmanager ──webhook──┐                        │
+  (VPC internal)        ├──► /api/alert-webhook ─┤
+Grafana ──webhook───────┘                        │
+  (VPC internal)                       ┌─────────▼──────────┐
+                                       │ Correlation Engine │
+                                       │  (time + service   │
+                                       │   + resource)      │
+                                       └─────────┬──────────┘
+                                                 │
+                                       ┌─────────▼──────────┐
+                                       │ Investigation      │──► Slack
+                                       │ Orchestrator       │    (Block Kit)
+                                       │                    │
+                                       │ ┌─Collectors─────┐ │──► SNS Email
+                                       │ │ incident       │ │
+                                       │ │ trace-analyze  │ │──► Dashboard
+                                       │ │ eks-optimize   │ │    Alert History
+                                       │ └────────────────┘ │
+                                       │ ┌─Datasources────┐ │──► Memory Store
+                                       │ │ Prometheus     │ │    (knowledge)
+                                       │ │ Loki logs      │ │
+                                       │ │ Tempo traces   │ │
+                                       │ └────────────────┘ │
+                                       │ ┌─Change Detect──┐ │
+                                       │ │ CloudTrail     │ │
+                                       │ │ K8s Rollouts   │ │
+                                       │ └────────────────┘ │
+                                       │                    │
+                                       │ Bedrock Opus 4.6   │
+                                       │ Root Cause Analysis │
+                                       └────────────────────┘
 ```
 
 ---
 
 ### Stage 1: Alert Ingestion / 알림 수집
 
-**New file**: `src/app/api/alert-webhook/route.ts`
+Two ingestion paths exist, each serving different source types:
 
-A single endpoint that understands multiple alert formats:
+**Path A (Primary): SNS → SQS → EC2 Polling** — for CloudWatch Alarms and other AWS-native alerts.
+CloudWatch Alarm → SNS Topic (`awsops-alert-topic`) → SQS Queue (`awsops-alert-queue`) → `alert-sqs-poller.ts` polls every 30 seconds. This path avoids the CloudFront + Cognito Lambda@Edge authentication barrier.
 
-| Source | Delivery | Detection Method |
-|--------|----------|-----------------|
-| CloudWatch Alarm | SNS HTTP POST (JSON) | `Type: "Notification"` + `Message.AlarmName` |
-| Prometheus Alertmanager | Webhook POST | `alerts[]` array with `labels`, `annotations`, `startsAt` |
-| Grafana Alerting | Webhook POST | `alerts[]` with `dashboardURL`, `panelURL` |
-| Generic / Custom | Webhook POST | `source` + `title` + `severity` + `message` |
-| SQS | Background poller | Polled from configured queue URL |
+경로 A (Primary): CloudWatch Alarm 등 AWS 네이티브 알림용. CloudWatch Alarm → SNS Topic → SQS Queue → `alert-sqs-poller.ts`가 30초마다 폴링. CloudFront + Cognito Lambda@Edge 인증 장벽을 회피.
+
+**Path B (Secondary): Direct Webhook** — for VPC-internal sources (Alertmanager, Grafana) that can reach ALB directly without going through CloudFront.
+
+경로 B (Secondary): ALB에 직접 접근 가능한 VPC 내부 소스(Alertmanager, Grafana) 전용 Webhook.
+
+**New file**: `src/app/api/alert-webhook/route.ts` (VPC-internal sources only)
+
+| Source | Delivery | Path | Detection Method |
+|--------|----------|------|-----------------|
+| CloudWatch Alarm | **SNS → SQS → Poller** | A (Primary) | SNS envelope: `Type: "Notification"` + `Message.AlarmName` |
+| Prometheus Alertmanager | Webhook POST (VPC internal) | B | `alerts[]` array with `labels`, `annotations`, `startsAt` |
+| Grafana Alerting | Webhook POST (VPC internal) | B | `alerts[]` with `dashboardURL`, `panelURL` |
+| Generic / Custom | Webhook POST (VPC internal) | B | `source` + `title` + `severity` + `message` |
+
+> **Why not SNS → Webhook directly?** EC2 is in a Private Subnet. External access is only through CloudFront → ALB, but CloudFront has Cognito Lambda@Edge authentication. SNS HTTP subscriptions send `SubscriptionConfirmation` and `Notification` requests without authentication headers, so Lambda@Edge rejects them with 401/403. Using SQS as an intermediary completely avoids this issue since EC2 polls SQS outbound (no inbound networking required).
+>
+> **왜 SNS → Webhook 직접 경로가 안 되는가?** EC2는 Private Subnet에 위치하고 외부 접근은 CloudFront → ALB를 통해서만 가능. CloudFront에 Cognito Lambda@Edge 인증이 적용되어 있어 SNS의 `SubscriptionConfirmation`과 `Notification` 요청이 인증 헤더 없이 전송되므로 Lambda@Edge가 401/403으로 거부. SQS를 중간 매개로 사용하면 EC2가 아웃바운드로 SQS를 폴링하므로 이 문제를 완전히 회피.
 
 **Security**:
-- HMAC-SHA256 signature verification per source (configurable secret per source)
-- Rate limiting: 60 requests/min per source IP
-- SNS subscription confirmation auto-response (handles `SubscriptionConfirmation` type)
-- Replay protection: reject alerts older than 15 minutes
+- SQS: Messages are authenticated by AWS IAM (SNS → SQS subscription policy). No external HTTP endpoint exposed.
+- Webhook: HMAC-SHA256 signature verification per source (configurable secret per source)
+- Webhook: Rate limiting: 60 requests/min per source IP
+- Webhook: SNS subscription confirmation auto-response retained for testing/fallback
+- Both: Replay protection — reject alerts older than 15 minutes
 
 **Normalization** to unified `AlertEvent`:
 ```typescript
@@ -410,11 +432,46 @@ Real-time notification to the dashboard via:
 
 ---
 
-### Stage 6: SQS Integration / SQS 연동
+### Stage 6: SQS Integration (Primary Path) / SQS 연동 (주요 경로)
 
-For AWS-native alert pipelines: CloudWatch Alarm → SNS → SQS → AWSops
+This is the **primary ingestion path** for CloudWatch Alarms and other AWS-native alert sources: CloudWatch Alarm → SNS Topic → SQS Queue → AWSops
 
-**New file**: `src/lib/alert-sqs-poller.ts`
+이것이 CloudWatch Alarm 및 기타 AWS 네이티브 알림 소스의 **주요 수집 경로**: CloudWatch Alarm → SNS Topic → SQS Queue → AWSops
+
+**CDK Infrastructure** (`infra-cdk/lib/awsops-stack.ts`):
+
+```typescript
+// Dead Letter Queue — messages that fail processing 3 times
+const alertDlq = new sqs.Queue(this, 'AlertDLQ', {
+  queueName: 'awsops-alert-dlq',
+  retentionPeriod: cdk.Duration.days(14),
+});
+
+// Main alert queue
+const alertQueue = new sqs.Queue(this, 'AlertQueue', {
+  queueName: 'awsops-alert-queue',
+  visibilityTimeout: cdk.Duration.seconds(120),
+  retentionPeriod: cdk.Duration.days(4),
+  deadLetterQueue: { queue: alertDlq, maxReceiveCount: 3 },
+});
+
+// SNS Topic — CloudWatch Alarms publish here
+const alertTopic = new sns.Topic(this, 'AlertTopic', {
+  topicName: 'awsops-alert-topic',
+});
+
+// SNS → SQS subscription (automatic)
+alertTopic.addSubscription(new subs.SqsSubscription(alertQueue));
+
+// EC2 IAM permissions to poll SQS
+ec2Role.addToPolicy(new iam.PolicyStatement({
+  sid: 'SQSAlertPoller',
+  actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes'],
+  resources: [alertQueue.queueArn, alertDlq.queueArn],
+}));
+```
+
+**Application Poller** (`src/lib/alert-sqs-poller.ts`):
 
 Follows the `cache-warmer.ts` / `report-scheduler.ts` background task pattern:
 
@@ -430,8 +487,8 @@ export function ensureAlertPollerStarted() {
 }
 
 function startAlertPoller() {
-  // Initial poll after 10s delay
-  setTimeout(() => pollOnce(), 10_000);
+  // Initial poll after 15s delay
+  setTimeout(() => pollOnce(), 15_000);
   // Then every 30 seconds
   setInterval(() => pollOnce(), 30_000);
 }
@@ -440,15 +497,18 @@ async function pollOnce() {
   if (isPolling) return; // guard against concurrent polls
   isPolling = true;
   try {
-    // SQS ReceiveMessage (max 10, visibility 120s)
-    // For each message: normalize → correlation engine → delete on success
+    // SQS ReceiveMessage (max 10, long polling 5s, visibility 120s)
+    // For each message: unwrap SNS envelope → normalize → correlation engine → delete on success
+    // Failed messages: don't delete — SQS returns them after visibility timeout → DLQ after 3 failures
   } finally {
     isPolling = false;
   }
 }
 ```
 
-**DLQ**: Configure a Dead Letter Queue for messages that fail processing 3 times. Alert on DLQ depth via CloudWatch.
+**DLQ**: Messages that fail processing 3 times move to `awsops-alert-dlq` (14-day retention). Monitor DLQ depth via CloudWatch `ApproximateNumberOfMessagesVisible` metric.
+
+**Networking**: EC2 accesses SQS outbound via existing NAT Gateway (or VPC Endpoint for SQS if configured). No inbound networking changes required.
 
 ---
 

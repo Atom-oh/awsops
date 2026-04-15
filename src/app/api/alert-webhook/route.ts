@@ -1,12 +1,20 @@
-// Alert webhook API endpoint — receives alerts from external systems
-// 알림 웹훅 API 엔드포인트 — 외부 시스템 알림 수신
-// ADR-009
+// Alert webhook API endpoint — VPC-internal sources only (ADR-009)
+// 알림 웹훅 API 엔드포인트 — VPC 내부 소스 전용 (ADR-009)
 //
-// Supported sources:
-//   - CloudWatch Alarm (via SNS HTTP subscription)
+// This endpoint is for alert sources that can reach ALB directly within the VPC,
+// bypassing CloudFront + Cognito Lambda@Edge authentication.
+// 이 엔드포인트는 CloudFront + Cognito Lambda@Edge 인증을 우회하여 VPC 내에서
+// ALB에 직접 접근 가능한 알림 소스 전용.
+//
+// For CloudWatch Alarms (external/AWS-native):
+//   Use SNS → SQS → alert-sqs-poller.ts (primary path)
+//   CloudFront Lambda@Edge blocks unauthenticated SNS HTTP requests.
+//
+// Supported sources (VPC-internal):
 //   - Prometheus Alertmanager (webhook)
 //   - Grafana Alerting (webhook contact point)
 //   - Generic webhook (custom format)
+//   - CloudWatch SNS (only if ALB is reachable without CloudFront, e.g., testing)
 //
 // Security: HMAC-SHA256 verification, rate limiting, replay protection
 
