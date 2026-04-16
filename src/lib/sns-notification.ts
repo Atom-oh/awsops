@@ -137,6 +137,28 @@ export async function publishNotification(
   }
 }
 
+// Strip markdown syntax for plain-text email
+// 이메일용 마크다운 제거 (SNS는 plain text만 지원)
+function stripMarkdown(md: string): string {
+  return md
+    .replace(/^#{1,6}\s+/gm, '')           // headings: ### Title → Title
+    .replace(/\*\*([^*]+)\*\*/g, '$1')      // bold: **text** → text
+    .replace(/\*([^*]+)\*/g, '$1')          // italic: *text* → text
+    .replace(/`([^`]+)`/g, '$1')            // inline code: `code` → code
+    .replace(/^>\s?/gm, '  ')              // blockquote: > text → text
+    .replace(/^---+$/gm, '────────────────')// horizontal rule
+    .replace(/^\|.*\|$/gm, (line) => {     // table rows → aligned text
+      if (/^[\s|:-]+$/.test(line)) return '';// remove separator rows (|---|---|)
+      return line
+        .replace(/^\||\|$/g, '')           // trim outer pipes
+        .split('|')
+        .map(cell => cell.trim().padEnd(25))
+        .join('  ');
+    })
+    .replace(/\n{3,}/g, '\n\n')            // collapse multiple blank lines
+    .trim();
+}
+
 // Send report completion notification
 // 리포트 완료 알림 발송
 export async function notifyReportCompleted(opts: {
@@ -163,7 +185,7 @@ export async function notifyReportCompleted(opts: {
 
   if (executiveSummary) {
     lines.push(`── Executive Summary ──`);
-    lines.push(executiveSummary.slice(0, 500));
+    lines.push(stripMarkdown(executiveSummary).slice(0, 600));
     lines.push(``);
   }
 
@@ -253,11 +275,12 @@ export async function notifyAlertDiagnosis(opts: {
     ``,
   ];
 
-  // Include first 1000 chars of the diagnosis markdown
+  // Include first 1000 chars of the diagnosis (stripped of markdown)
   if (result.markdown) {
+    const plain = stripMarkdown(result.markdown);
     lines.push(`── Diagnosis ──`);
-    lines.push(result.markdown.slice(0, 1000));
-    if (result.markdown.length > 1000) lines.push(`... (전체 내용은 대시보드에서 확인)`);
+    lines.push(plain.slice(0, 1000));
+    if (plain.length > 1000) lines.push(`... (전체 내용은 대시보드에서 확인)`);
     lines.push(``);
   }
 
