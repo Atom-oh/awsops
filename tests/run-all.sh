@@ -64,6 +64,18 @@ API_COUNT=$(find src/app/api -name 'route.ts' 2>/dev/null | wc -l)
 QUERY_COUNT=$(find src/lib/queries -name '*.ts' -not -name 'CLAUDE.md' 2>/dev/null | wc -l)
 [ "$QUERY_COUNT" -ge 20 ] && pass "Query files: $QUERY_COUNT (expected >= 20)" || fail "Query files: $QUERY_COUNT (expected >= 20)"
 
+# ── Vitest Unit Tests (alert modules) ──
+echo "# Vitest unit tests"
+if command -v npx &>/dev/null && [ -f "vitest.config.ts" ]; then
+  if npx vitest run --reporter=tap 2>/dev/null; then
+    pass "Vitest unit tests passed"
+  else
+    fail "Vitest unit tests failed"
+  fi
+else
+  echo "# SKIP: vitest not available"
+fi
+
 echo ""
 echo "# Results: $PASS passed, $FAIL failed, $TOTAL total"
 echo "1..$TOTAL"
