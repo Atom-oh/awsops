@@ -146,8 +146,9 @@ export async function notifyReportCompleted(opts: {
   pillarScores?: Record<string, string>;
   downloadUrlDocx?: string;
   downloadUrlMd?: string;
+  dashboardBaseUrl?: string;
 }): Promise<boolean> {
-  const { reportId, accountAlias, executiveSummary, pillarScores, downloadUrlDocx, downloadUrlMd } = opts;
+  const { reportId, accountAlias, executiveSummary, pillarScores, dashboardBaseUrl } = opts;
   const account = accountAlias || 'Default';
   const subject = `[AWSops] 종합진단 리포트 완료 — ${account}`;
 
@@ -174,15 +175,16 @@ export async function notifyReportCompleted(opts: {
     lines.push(``);
   }
 
-  if (downloadUrlDocx) {
-    lines.push(`Download DOCX: ${downloadUrlDocx}`);
-  }
-  if (downloadUrlMd) {
-    lines.push(`Download MD: ${downloadUrlMd}`);
-  }
+  // Use short dashboard download URLs instead of raw S3 presigned URLs
+  // (presigned URLs are too long and get truncated in email clients)
+  // 대시보드 다운로드 URL 사용 (S3 presigned URL은 너무 길어서 이메일에서 잘림)
+  const base = dashboardBaseUrl || 'https://awsops.atomai.click/awsops';
+  lines.push(`── Download ──`);
+  lines.push(`[Download DOCX] ${base}/api/report?id=${reportId}&action=download-docx`);
+  lines.push(`[Download Markdown] ${base}/api/report?id=${reportId}&action=download-md`);
   lines.push(``);
-  lines.push(`※ 다운로드 링크는 1시간 유효합니다.`);
-  lines.push(`※ AWSops 대시보드에서 이전 리포트를 확인할 수 있습니다.`);
+  lines.push(`※ 다운로드 링크는 7일간 유효합니다 (로그인 필요).`);
+  lines.push(`※ 대시보드에서 이전 리포트 확인: ${base}/ai-diagnosis`);
 
   return publishNotification(subject, lines.join('\n'));
 }
