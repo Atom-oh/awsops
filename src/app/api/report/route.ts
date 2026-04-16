@@ -21,7 +21,11 @@ import { randomUUID } from 'crypto';
 const bedrockClient = new BedrockRuntimeClient({ region: 'ap-northeast-2' });
 const s3Client = new S3Client({ region: 'ap-northeast-2' });
 const MODEL_ID = 'global.anthropic.claude-opus-4-6-v1';
-const REPORT_BUCKET = 'awsops-deploy-180294183052';
+// Read bucket from config — no hardcoded account IDs
+import { getConfig } from '@/lib/app-config';
+function getReportBucket(): string {
+  return getConfig().reportBucket || process.env.getReportBucket() || '';
+}
 const REPORT_S3_PREFIX = 'reports/';
 const REPORTS_META_DIR = path.join(process.cwd(), 'data', 'reports');
 
@@ -129,8 +133,9 @@ function markStaleReportsAsFailed(): void {
         const meta: ReportMeta = JSON.parse(fs.readFileSync(path.join(REPORTS_META_DIR, file), 'utf-8'));
         if (meta.status === 'generating') {
           const created = new Date(meta.createdAt).getTime();
-          // If generating for more than 15 minutes, it's stale (worker died)
-          if (now - created > 15 * 60 * 1000) {
+          // If generating for more than 30 minutes, it's stale (worker died)
+          // Opus 모델 15섹션 기준 최대 25분 소요 가능 → 30분으로 설정
+          if (now - created > 30 * 60 * 1000) {
             updateReportMeta(meta.reportId, {
               status: 'failed',
               error: 'Report generation was interrupted (server restart). Please start a new diagnosis.',
@@ -460,7 +465,7 @@ async function generateReportBackground(
   let downloadUrlDocx: string | null = null;
   let downloadUrlMd: string | null = null;
 
-  const bucket = REPORT_BUCKET;
+  const bucket = getReportBucket();
   if (bucket) {
     // S3 upload + presigned URLs
     s3KeyDocx = `${REPORT_S3_PREFIX}${reportId}.docx`;
@@ -674,7 +679,7 @@ export async function GET(request: NextRequest) {
         refreshPromises.push((async () => {
           try {
             downloadUrlDocx = await getSignedUrl(s3Client, new GetObjectCommand({
-              Bucket: REPORT_BUCKET, Key: meta.s3KeyDocx!,
+              Bucket: getReportBucket(), Key: meta.s3KeyDocx!,
             }), { expiresIn: 7 * 24 * 60 * 60 });
           } catch { /* keep existing */ }
         })());
@@ -683,7 +688,7 @@ export async function GET(request: NextRequest) {
         refreshPromises.push((async () => {
           try {
             downloadUrlMd = await getSignedUrl(s3Client, new GetObjectCommand({
-              Bucket: REPORT_BUCKET, Key: meta.s3KeyMd!,
+              Bucket: getReportBucket(), Key: meta.s3KeyMd!,
             }), { expiresIn: 7 * 24 * 60 * 60 });
           } catch { /* keep existing */ }
         })());
@@ -720,7 +725,7 @@ export async function GET(request: NextRequest) {
 
     try {
       const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-        Bucket: REPORT_BUCKET,
+        Bucket: getReportBucket(),
         Key: meta.s3KeyDocx,
       }), { expiresIn: 60 * 60 });
 
@@ -760,7 +765,7 @@ export async function GET(request: NextRequest) {
     if (meta.s3KeyMd) {
       try {
         const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-          Bucket: REPORT_BUCKET, Key: meta.s3KeyMd,
+          Bucket: getReportBucket(), Key: meta.s3KeyMd,
         }), { expiresIn: 60 * 60 });
         return NextResponse.redirect(freshUrl, 302);
       } catch { /* fallback below */ }
