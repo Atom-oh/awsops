@@ -60,9 +60,10 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'sidebar.dashboard', href: '/', icon: LayoutDashboard },
       { labelKey: 'sidebar.aiAssistant', href: '/ai', icon: BrainCircuit },
-      { labelKey: 'sidebar.agentcore', href: '/agentcore', icon: Activity },
       { labelKey: 'sidebar.diagnosis', href: '/ai-diagnosis', icon: ClipboardCheck },
+      { labelKey: 'sidebar.agentcore', href: '/agentcore', icon: Activity },
       { labelKey: 'sidebar.accounts', href: '/accounts', icon: Layers },
+      { labelKey: 'sidebar.alertSettings', href: '/alert-settings', icon: Bell },
     ],
   },
   {
@@ -132,7 +133,7 @@ export default function Sidebar() {
   const [customerName, setCustomerName] = useState<string | null>(null);
   const [customerLogoBg, setCustomerLogoBg] = useState<string>('dark'); // 'light' for white bg, 'dark' for transparent / 밝은 로고는 light, 어두운 로고는 dark
   const [expandedMenus, setExpandedMenus] = useState<Record<string, boolean>>({});
-  const { getFeatures, isMultiAccount } = useAccountContext();
+  const { getFeatures, isMultiAccount, allowedPages } = useAccountContext();
   const features = getFeatures();
 
   useEffect(() => {
@@ -150,7 +151,7 @@ export default function Sidebar() {
   const isActive = (href: string) => {
     const path = pathname.replace('/awsops', '') || '/';
     if (href === '/') return path === '/';
-    return path.startsWith(href);
+    return path === href || path.startsWith(href + '/');
   };
 
   const toggleMenu = (href: string) => {
@@ -277,7 +278,7 @@ export default function Sidebar() {
           <button
             onClick={async () => {
               await fetch('/awsops/api/auth', { method: 'POST' });
-              window.location.href = '/awsops';
+              window.location.href = '/awsops/login';
             }}
             className="p-2 rounded-lg text-gray-500 hover:text-accent-red hover:bg-navy-700 transition-colors"
             title={t('sidebar.signOut')}
@@ -303,6 +304,11 @@ export default function Sidebar() {
             <div className="space-y-0.5">
               {group.items
                 .filter(item => {
+                  // Department page filter / 부서별 페이지 필터
+                  if (allowedPages && !allowedPages.some(p => item.href === p || item.href.startsWith(p + '/'))) {
+                    // Always show dashboard / 대시보드는 항상 표시
+                    if (item.href !== '/') return false;
+                  }
                   // Cost items: show if global costEnabled AND (single-account OR account has cost)
                   if (item.href === '/cost' || item.href === '/container-cost' || item.href === '/eks-container-cost') {
                     return costEnabled && (!isMultiAccount || features.costEnabled);
@@ -339,7 +345,7 @@ export default function Sidebar() {
           <span>{t('sidebar.costToggle')} {costEnabled ? t('sidebar.costOn') : t('sidebar.costOff')}</span>
           <span className={`w-1.5 h-1.5 rounded-full ${costEnabled ? 'bg-accent-green' : 'bg-gray-600'}`} />
         </button>
-        <p className="text-xs text-gray-600 font-mono">v1.6.0</p>
+        <p className="text-xs text-gray-600 font-mono">v{process.env.NEXT_PUBLIC_APP_VERSION || '1.8.0'}</p>
       </div>
     </aside>
   );

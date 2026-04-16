@@ -2,7 +2,7 @@
 // 외부 데이터소스 CRUD + 연결 테스트 + 쿼리 API
 // Supports: Prometheus, Loki, Tempo, ClickHouse
 import { NextRequest, NextResponse } from 'next/server';
-import { getConfig, saveConfig, getDatasources, getDatasourceById, getDatasourceAllowedNetworks } from '@/lib/app-config';
+import { getConfig, saveConfig, getDatasources, getDatasourceById, getDatasourceAllowedNetworks, getAllowedDatasources } from '@/lib/app-config';
 import type { DatasourceConfig, DatasourceType } from '@/lib/app-config';
 import { queryDatasource, testConnection } from '@/lib/datasource-client';
 import { getUserFromRequest } from '@/lib/auth-utils';
@@ -232,6 +232,12 @@ export async function POST(request: NextRequest) {
       const ds = getDatasourceById(datasourceId);
       if (!ds) {
         return NextResponse.json({ error: 'Datasource not found' }, { status: 404 });
+      }
+      // Department datasource access check / 부서별 데이터소스 접근 검증
+      const user = getUserFromRequest(request);
+      const allowedDs = getAllowedDatasources(user.groups);
+      if (allowedDs !== null && !allowedDs.includes(datasourceId)) {
+        return NextResponse.json({ error: 'Access denied: datasource not allowed for your department' }, { status: 403 });
       }
       try {
         const result = await queryDatasource(ds, query, options);

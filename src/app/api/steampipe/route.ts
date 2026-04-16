@@ -5,7 +5,7 @@ import { homedir } from 'os';
 import { batchQuery, clearCache, checkCostAvailability, runCostQueriesPerAccount, resetPool } from '@/lib/steampipe';
 import { saveSnapshot, getHistory } from '@/lib/resource-inventory';
 import { saveCostSnapshot, getLatestCostSnapshot } from '@/lib/cost-snapshot';
-import { getConfig, saveConfig, validateAccountId, getAccounts, isMultiAccount } from '@/lib/app-config';
+import { getConfig, saveConfig, validateAccountId, getAccounts, isMultiAccount, getAllowedAccountIds, isAccountAllowed, getAllowedPages, getAllowedEksClusters, getAllowedDatasources } from '@/lib/app-config';
 import type { AccountConfig } from '@/lib/app-config';
 import { getCacheWarmerStatus, ensureCacheWarmerStarted } from '@/lib/cache-warmer';
 import { getUserFromRequest } from '@/lib/auth-utils';
@@ -73,8 +73,41 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Department-based account filtering — returns allowed account IDs for current user
+  // 부서 기반 계정 필터링 — 현재 사용자에게 허용된 계정 ID 반환
+  if (action === 'allowed-accounts') {
+    const user = getUserFromRequest(request);
+    const groups = user.groups;
+    return NextResponse.json({
+      allowedAccountIds: getAllowedAccountIds(groups),
+      allowedPages: getAllowedPages(groups),
+      allowedEksClusters: getAllowedEksClusters(groups),
+      allowedDatasources: getAllowedDatasources(groups),
+      groups,
+    });
+  }
+
   if (action === 'config') {
-    return NextResponse.json(getConfig());
+    const cfg = { ...getConfig() };
+    // Redact sensitive fields for non-admin callers
+    if (cfg.slack) {
+      cfg.slack = { ...cfg.slack };
+      if (cfg.slack.botToken) cfg.slack.botToken = '****';
+      if (cfg.slack.webhookUrl) cfg.slack.webhookUrl = cfg.slack.webhookUrl.slice(0, 30) + '****';
+    }
+    if (cfg.alertDiagnosis?.sources) {
+      const sources = cfg.alertDiagnosis.sources;
+      const redactedSources: Record<string, unknown> = {};
+      for (const [key, src] of Object.entries(sources)) {
+        if (src && typeof src === 'object' && 'secret' in src && src.secret) {
+          redactedSources[key] = { ...src, secret: '****' };
+        } else {
+          redactedSources[key] = src;
+        }
+      }
+      cfg.alertDiagnosis = { ...cfg.alertDiagnosis, sources: redactedSources as typeof sources };
+    }
+    return NextResponse.json(cfg);
   }
 
   if (action === 'cache-status') {
@@ -105,7 +138,7 @@ export async function PUT(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
 
-    const adminActions = ['add-account', 'remove-account', 'init-host'];
+    const adminActions = ['add-account', 'remove-account', 'init-host', 'save-alert-config', 'save-departments', 'test-slack'];
     if (action && adminActions.includes(action)) {
       const user = getUserFromRequest(request);
       if (user.email === 'anonymous') {
@@ -432,6 +465,80 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ accounts: updated });
     }
 
+    // --- Department CRUD / 부서 CRUD ---
+
+    if (action === 'departments') {
+      return NextResponse.json({ departments: getConfig().departments || [] });
+    }
+
+    if (action === 'save-departments') {
+      const body = await request.json();
+      const departments = body.departments;
+      if (!Array.isArray(departments)) {
+        return NextResponse.json({ error: 'departments must be an array' }, { status: 400 });
+      }
+      // Validate each department entry
+      for (const dept of departments) {
+        if (!dept.name || typeof dept.name !== 'string' || !dept.name.trim()) {
+          return NextResponse.json({ error: 'Each department must have a name' }, { status: 400 });
+        }
+        if (!dept.cognitoGroup || typeof dept.cognitoGroup !== 'string' || !dept.cognitoGroup.trim()) {
+          return NextResponse.json({ error: `Department "${dept.name}" must have a cognitoGroup` }, { status: 400 });
+        }
+        if (!Array.isArray(dept.accounts) || dept.accounts.length === 0) {
+          return NextResponse.json({ error: `Department "${dept.name}" must have at least one account (or "*")` }, { status: 400 });
+        }
+      }
+      saveConfig({ departments });
+      return NextResponse.json({ departments });
+    }
+
+    // Save alert diagnosis + Slack configuration (admin-gated above)
+    if (action === 'save-alert-config') {
+      const body = await request.json();
+      const alertDiagnosis = body.alertDiagnosis || {};
+      const slack = body.slack || {};
+
+      // Validate alertDiagnosis
+      if (alertDiagnosis.enabled !== undefined && typeof alertDiagnosis.enabled !== 'boolean') {
+        return NextResponse.json({ error: 'alertDiagnosis.enabled must be boolean' }, { status: 400 });
+      }
+      if (alertDiagnosis.minimumSeverity && !['critical', 'warning', 'info'].includes(alertDiagnosis.minimumSeverity)) {
+        return NextResponse.json({ error: 'Invalid minimumSeverity' }, { status: 400 });
+      }
+
+      // Validate slack
+      if (slack.enabled !== undefined && typeof slack.enabled !== 'boolean') {
+        return NextResponse.json({ error: 'slack.enabled must be boolean' }, { status: 400 });
+      }
+      if (slack.method && !['webhook', 'bot'].includes(slack.method)) {
+        return NextResponse.json({ error: 'slack.method must be webhook or bot' }, { status: 400 });
+      }
+      if (slack.webhookUrl && typeof slack.webhookUrl === 'string' && slack.webhookUrl.length > 0) {
+        if (!slack.webhookUrl.startsWith('https://hooks.slack.com/')) {
+          return NextResponse.json({ error: 'Invalid Slack webhook URL format' }, { status: 400 });
+        }
+      }
+
+      saveConfig({ alertDiagnosis, slack });
+      return NextResponse.json({ alertDiagnosis, slack });
+    }
+
+    // Test Slack connection (admin-gated above)
+    if (action === 'test-slack') {
+      const slackCfg = getConfig().slack;
+      if (!slackCfg?.enabled) {
+        return NextResponse.json({ ok: false, error: 'Slack is not enabled' });
+      }
+      try {
+        const { testSlackConnection } = await import('@/lib/slack-notification');
+        const result = await testSlackConnection(slackCfg);
+        return NextResponse.json(result);
+      } catch (err) {
+        return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : 'Test failed' });
+      }
+    }
+
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Internal server error';
@@ -513,6 +620,16 @@ export async function POST(request: NextRequest) {
     }
 
     const safeAccountId = accountId && validateAccountId(accountId) ? accountId : undefined;
+
+    // Department-based authorization: verify user can access the requested account
+    // 부서 기반 권한 검증: 요청된 계정 접근 허용 여부 확인
+    const user = getUserFromRequest(request);
+    if (!isAccountAllowed(safeAccountId, user.groups)) {
+      return NextResponse.json(
+        { error: 'Access denied. Your department does not have access to this account.' },
+        { status: 403 }
+      );
+    }
 
     let results: Record<string, { rows: unknown[]; error?: string }>;
 

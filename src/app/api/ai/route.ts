@@ -15,7 +15,8 @@ import {
 import { runQuery } from '@/lib/steampipe';
 import { getConfig, validateAccountId, getAccountById } from '@/lib/app-config';
 import { recordCall } from '@/lib/agentcore-stats';
-import { saveConversation } from '@/lib/agentcore-memory';
+import { saveConversation, saveSession, cleanupOldSessions } from '@/lib/agentcore-memory';
+import type { SessionMessage } from '@/lib/agentcore-memory';
 import { getUserFromRequest } from '@/lib/auth-utils';
 import { getDefaultDatasource } from '@/lib/app-config';
 import type { DatasourceType } from '@/lib/app-config';
@@ -907,9 +908,23 @@ function recordAndSave(p: {
   route: string; gateway: string; responseTimeMs: number; usedTools: string[];
   success: boolean; via: string; question: string; summary: string; userId: string;
   inputTokens?: number; outputTokens?: number; model?: string;
+  sessionId?: string;
 }): void {
   recordCall({ timestamp: new Date().toISOString(), route: p.route, gateway: p.gateway, responseTimeMs: p.responseTimeMs, usedTools: p.usedTools, success: p.success, via: p.via, inputTokens: p.inputTokens, outputTokens: p.outputTokens, model: p.model });
   saveConversation({ id: `${Date.now()}`, userId: p.userId, timestamp: new Date().toISOString(), route: p.route, gateway: p.gateway, question: p.question.slice(0, 100), summary: p.summary.slice(0, 200), usedTools: p.usedTools, responseTimeMs: p.responseTimeMs, via: p.via }).catch(() => {});
+
+  // 세션에 전체 대화 저장 / Save full messages to session
+  if (p.sessionId) {
+    const now = new Date().toISOString();
+    const userMsg: SessionMessage = { role: 'user', content: p.question, timestamp: now };
+    const assistantMsg: SessionMessage = {
+      role: 'assistant', content: p.summary, route: p.route, via: p.via,
+      usedTools: p.usedTools, model: p.model, responseTimeMs: p.responseTimeMs,
+      inputTokens: p.inputTokens, outputTokens: p.outputTokens, timestamp: now,
+    };
+    saveSession(p.sessionId, p.userId, userMsg, assistantMsg).catch(() => {});
+    cleanupOldSessions();
+  }
 }
 
 // POST handler — SSE streaming with step-by-step progress events
@@ -922,7 +937,7 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
-  const { messages, model: modelKey, stream: useStream, lang: clientLang, accountId: rawAccountId } = reqBody;
+  const { messages, model: modelKey, stream: useStream, lang: clientLang, accountId: rawAccountId, sessionId } = reqBody;
 
   // Account context / 계정 컨텍스트
   const accountId = rawAccountId && validateAccountId(rawAccountId) ? rawAccountId : undefined;
@@ -1105,7 +1120,7 @@ export async function POST(request: NextRequest) {
               const dsTools = successResults.map(s => `${s.dsType}: ${s.dsQuery}`);
               const viaStr = successResults.map(s => `${DATASOURCE_TYPES[s.dsType].label} (${s.result.rows.length} rows)`).join(' + ');
               const dsTimeMs = Date.now() - callStartTime;
-              recordAndSave({ route, gateway: `datasource:${successResults.map(s => s.dsType).join('+')}`, responseTimeMs: dsTimeMs, usedTools: dsTools, success: true, via: viaStr, question: lastMessage, summary: dsContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+              recordAndSave({ route, gateway: `datasource:${successResults.map(s => s.dsType).join('+')}`, responseTimeMs: dsTimeMs, usedTools: dsTools, success: true, via: viaStr, question: lastMessage, summary: dsContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6', sessionId });
               send('done', {
                 content: dsContent, model: modelKey || 'sonnet-4.6',
                 via: `Datasource Analytics: ${viaStr}`,
@@ -1146,7 +1161,7 @@ export async function POST(request: NextRequest) {
             totalOutputTokens += streamResult.outputTokens;
 
             const timeMs = Date.now() - callStartTime;
-            recordAndSave({ route, gateway: route, responseTimeMs: timeMs, usedTools: data.usedTools, success: true, via: data.viaSummary, question: lastMessage, summary: streamResult.content || '', userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+            recordAndSave({ route, gateway: route, responseTimeMs: timeMs, usedTools: data.usedTools, success: true, via: data.viaSummary, question: lastMessage, summary: streamResult.content || '', userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6', sessionId });
             send('done', {
               content: streamResult.content || 'No response', model: modelKey || 'sonnet-4.6',
               via: data.viaSummary, queriedResources: data.queriedResources, route,
@@ -1199,7 +1214,7 @@ export async function POST(request: NextRequest) {
             const sqlTools = extractUsedTools(sqlContent);
             if (sql) sqlTools.push(`steampipe: ${sql.match(/FROM\s+(\w+)/i)?.[1] || 'query'}`);
             const sqlTimeMs = Date.now() - callStartTime;
-            recordAndSave({ route, gateway: 'steampipe', responseTimeMs: sqlTimeMs, usedTools: sqlTools, success: true, via: `${config.display} (${queryResult.rowCount} rows)`, question: lastMessage, summary: sqlContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+            recordAndSave({ route, gateway: 'steampipe', responseTimeMs: sqlTimeMs, usedTools: sqlTools, success: true, via: `${config.display} (${queryResult.rowCount} rows)`, question: lastMessage, summary: sqlContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6', sessionId });
             send('done', {
               content: sqlContent, model: modelKey || 'sonnet-4.6',
               via: `${config.display} (${queryResult.rowCount} rows)`, queriedResources: ['steampipe'], route,
@@ -1251,7 +1266,7 @@ export async function POST(request: NextRequest) {
             const finalTools = Array.from(new Set([...dedupedTools, ...synthesizedTools]));
             const viaList = successful.map(s => s.via).join(' + ');
             const multiTimeMs = Date.now() - callStartTime;
-            recordAndSave({ route, gateway: `multi:${routes.join('+')}`, responseTimeMs: multiTimeMs, usedTools: finalTools, success: true, via: `Multi-Route: ${viaList}`, question: lastMsg, summary: synthesized, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+            recordAndSave({ route, gateway: `multi:${routes.join('+')}`, responseTimeMs: multiTimeMs, usedTools: finalTools, success: true, via: `Multi-Route: ${viaList}`, question: lastMsg, summary: synthesized, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6', sessionId });
             send('done', {
               content: synthesized, model: modelKey || 'sonnet-4.6',
               via: `Multi-Route: ${viaList}`, queriedResources: allResources, route, routes,
@@ -1318,7 +1333,7 @@ export async function POST(request: NextRequest) {
           const finalContent = cleanedResponse || agentResponse;
           // Simulate streaming for AgentCore responses / AgentCore 응답 타이핑 시뮬레이션
           await simulateStreaming(finalContent, send);
-          recordAndSave({ route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}`, question: lastMessage, summary: finalContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+          recordAndSave({ route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}`, question: lastMessage, summary: finalContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6', sessionId });
           send('done', {
             content: finalContent, model: 'sonnet-4.6',
             via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], route, routes,
@@ -1341,7 +1356,7 @@ export async function POST(request: NextRequest) {
         const fallbackContent = fbStreamResult.content || 'No response';
         const fallbackTools = extractUsedTools(fallbackContent);
         const fbTimeMs = Date.now() - callStartTime;
-        recordAndSave({ route, gateway: 'bedrock-fallback', responseTimeMs: fbTimeMs, usedTools: fallbackTools, success: false, via: `Bedrock Direct (fallback)`, question: lastMessage, summary: fallbackContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+        recordAndSave({ route, gateway: 'bedrock-fallback', responseTimeMs: fbTimeMs, usedTools: fallbackTools, success: false, via: `Bedrock Direct (fallback)`, question: lastMessage, summary: fallbackContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6', sessionId });
         send('done', {
           content: fallbackContent, model: modelKey || 'sonnet-4.6',
           via: `Bedrock Direct (fallback from ${config.display})`, queriedResources: [], route,

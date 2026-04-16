@@ -60,6 +60,46 @@ export interface DatasourceConfig {
   updatedAt: string;
 }
 
+// Alert source configuration / 알림 소스 설정
+export type AlertSource = 'cloudwatch' | 'alertmanager' | 'grafana' | 'sqs' | 'generic';
+
+export interface AlertSourceConfig {
+  enabled: boolean;
+  secret?: string;              // HMAC secret for webhook verification
+  snsSubscriptionArn?: string;  // CloudWatch: SNS subscription ARN
+  queueUrl?: string;            // SQS: queue URL
+  region?: string;              // SQS: queue region
+}
+
+export interface AlertDiagnosisConfig {
+  enabled: boolean;
+  sources?: Partial<Record<AlertSource, AlertSourceConfig>>;
+  // Correlation settings
+  correlationWindowSeconds?: number;      // default 30
+  deduplicationWindowMinutes?: number;    // default 15
+  cooldownMinutes?: number;               // default 5
+  maxConcurrentInvestigations?: number;   // default 3
+  // Investigation settings
+  investigationTimeoutSeconds?: number;   // default 120
+  includeChangeDetection?: boolean;       // default true
+  knowledgeBaseEnabled?: boolean;         // default true
+  minimumSeverity?: 'critical' | 'warning' | 'info'; // default 'warning'
+}
+
+export interface SlackConfig {
+  enabled: boolean;
+  method: 'webhook' | 'bot';
+  webhookUrl?: string;
+  botToken?: string;
+  defaultChannel?: string;               // e.g., '#ops-alerts'
+  channelMapping?: {
+    critical?: string;
+    warning?: string;
+    info?: string;
+  };
+  threadUpdates?: boolean;               // default true
+}
+
 export interface AppConfig {
   costEnabled: boolean;
   agentRuntimeArn?: string;
@@ -73,9 +113,26 @@ export interface AppConfig {
   customerName?: string;       // Customer name displayed next to logo / 로고 옆에 표시할 고객명
   customerLogoBg?: string;     // Logo background: "light" (white bg) or "dark" (transparent) / 로고 배경: light=흰색, dark=투명
   adminEmails?: string[];      // Admin user emails allowed to access /accounts / 계정 관리 접근 허용 이메일
+  reportBucket?: string;       // S3 bucket for diagnosis reports / 진단 리포트 S3 버킷
   accounts?: AccountConfig[];
   datasources?: DatasourceConfig[];  // External datasources / 외부 데이터소스
   datasourceAllowedNetworks?: string[];  // Allowed private CIDRs/hostnames for datasource SSRF allowlist
+  snsTopicArn?: string;               // SNS topic ARN for email notifications / 이메일 알림용 SNS 토픽 ARN
+  notificationEmails?: string[];      // Mailing list for report/benchmark notifications / 리포트/벤치마크 알림 메일링 리스트
+  notificationEnabled?: boolean;      // Enable auto-notification on report completion / 리포트 완료 시 자동 알림 활성화
+  departments?: DepartmentConfig[];   // Department-based account filtering / 부서별 계정 필터링
+  alertDiagnosis?: AlertDiagnosisConfig;  // Alert-triggered AI diagnosis / 알림 트리거 AI 진단
+  slack?: SlackConfig;                    // Slack integration / Slack 연동
+}
+
+// Department → Account mapping / 부서 → 계정 매핑
+export interface DepartmentConfig {
+  name: string;              // Display name ("DevOps", "FinOps", "Security")
+  cognitoGroup: string;      // Cognito User Pool group name
+  accounts: string[];        // Allowed account IDs ("*" = all) / 허용 계정 ID ("*" = 전체)
+  pages?: string[];          // Allowed page paths ("*" = all, e.g. ["/ec2", "/vpc"]) / 허용 페이지 경로
+  eksClusterNames?: string[];// Allowed EKS cluster names ("*" = all) / 허용 EKS 클러스터명
+  datasourceIds?: string[];  // Allowed datasource IDs ("*" = all) / 허용 데이터소스 ID
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -160,4 +217,102 @@ export function getDatasourcesByType(type: DatasourceType): DatasourceConfig[] {
 
 export function getDatasourceAllowedNetworks(): string[] {
   return getConfig().datasourceAllowedNetworks || [];
+}
+
+// --- Department-based filtering / 부서별 필터링 ---
+
+export function getDepartments(): DepartmentConfig[] {
+  return getConfig().departments || [];
+}
+
+// Cognito 그룹 목록으로 허용된 계정 ID 반환 / Get allowed account IDs for user's Cognito groups
+// departments 미설정 시 null 반환 (= 필터링 비활성, 전체 접근) / Returns null if no departments configured (= no filtering)
+export function getAllowedAccountIds(groups: string[]): string[] | null {
+  const departments = getDepartments();
+  if (departments.length === 0) return null; // 부서 필터 미설정 → 전체 접근
+
+  const matched = departments.filter(d => groups.includes(d.cognitoGroup));
+  if (matched.length === 0) return []; // 그룹 매칭 없음 → 접근 불가
+
+  // "*" 포함 시 전체 접근 / If any department has "*", grant full access
+  if (matched.some(d => d.accounts.includes('*'))) return null;
+
+  // 허용 계정 합산 (중복 제거) / Union of all allowed accounts (deduplicated)
+  const accountSet = new Set<string>();
+  matched.forEach(d => d.accounts.forEach(a => accountSet.add(a)));
+  return Array.from(accountSet);
+}
+
+// 특정 accountId가 사용자에게 허용되는지 검증 / Check if accountId is allowed for user
+export function isAccountAllowed(accountId: string | undefined, groups: string[]): boolean {
+  const allowed = getAllowedAccountIds(groups);
+  if (allowed === null) return true; // 필터링 비활성 → 전체 접근
+  if (!accountId || accountId === ALL_ACCOUNTS) return false; // 부서 제한 있으면 "All" 불가
+  return allowed.includes(accountId);
+}
+
+// 부서별 허용 페이지 목록 / Get allowed page paths for user's groups
+// null = 전체 허용 (미설정), [] = 접근 없음
+export function getAllowedPages(groups: string[]): string[] | null {
+  const departments = getDepartments();
+  if (departments.length === 0) return null;
+  const matched = departments.filter(d => groups.includes(d.cognitoGroup));
+  if (matched.length === 0) return [];
+  // pages 미설정이면 전체 허용 취급
+  if (matched.some(d => !d.pages || d.pages.includes('*'))) return null;
+  const pageSet = new Set<string>();
+  matched.forEach(d => (d.pages || []).forEach(p => pageSet.add(p)));
+  return Array.from(pageSet);
+}
+
+// 특정 페이지 경로가 허용되는지 확인 / Check if page path is allowed
+export function isPageAllowed(path: string, groups: string[]): boolean {
+  const allowed = getAllowedPages(groups);
+  if (allowed === null) return true;
+  // / (dashboard) is always allowed / 대시보드는 항상 허용
+  if (path === '/') return true;
+  return allowed.some(p => path === p || path.startsWith(p + '/'));
+}
+
+// 부서별 허용 EKS 클러스터 / Get allowed EKS cluster names
+export function getAllowedEksClusters(groups: string[]): string[] | null {
+  const departments = getDepartments();
+  if (departments.length === 0) return null;
+  const matched = departments.filter(d => groups.includes(d.cognitoGroup));
+  if (matched.length === 0) return [];
+  if (matched.some(d => !d.eksClusterNames || d.eksClusterNames.includes('*'))) return null;
+  const set = new Set<string>();
+  matched.forEach(d => (d.eksClusterNames || []).forEach(c => set.add(c)));
+  return Array.from(set);
+}
+
+// 부서별 허용 데이터소스 / Get allowed datasource IDs
+export function getAllowedDatasources(groups: string[]): string[] | null {
+  const departments = getDepartments();
+  if (departments.length === 0) return null;
+  const matched = departments.filter(d => groups.includes(d.cognitoGroup));
+  if (matched.length === 0) return [];
+  if (matched.some(d => !d.datasourceIds || d.datasourceIds.includes('*'))) return null;
+  const set = new Set<string>();
+  matched.forEach(d => (d.datasourceIds || []).forEach(id => set.add(id)));
+  return Array.from(set);
+}
+
+// --- Alert diagnosis utilities / 알림 진단 유틸리티 ---
+
+export function getAlertDiagnosisConfig(): AlertDiagnosisConfig {
+  return getConfig().alertDiagnosis || { enabled: false };
+}
+
+export function isAlertDiagnosisEnabled(): boolean {
+  return getAlertDiagnosisConfig().enabled === true;
+}
+
+export function getAlertSourceConfig(source: AlertSource): AlertSourceConfig | undefined {
+  return getAlertDiagnosisConfig().sources?.[source];
+}
+
+export function getSlackConfig(): SlackConfig | undefined {
+  const config = getConfig().slack;
+  return config?.enabled ? config : undefined;
 }

@@ -251,6 +251,158 @@ export class AwsopsStack extends cdk.Stack {
       resources: [`arn:aws:cloudfront::${this.account}:distribution/*`],
     }));
 
+    // ----- Cognito setup (05-setup-cognito.sh) -----
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'CognitoSetup',
+      actions: [
+        'cognito-idp:CreateUserPool',
+        'cognito-idp:CreateUserPoolDomain',
+        'cognito-idp:CreateUserPoolClient',
+        'cognito-idp:AdminCreateUser',
+        'cognito-idp:AdminSetUserPassword',
+      ],
+      resources: ['*'],
+    }));
+
+    // ----- IAM role management (05, 06a, 06c — create roles for Lambda@Edge, AgentCore, MCP Lambda) -----
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'IAMRoleManagement',
+      actions: [
+        'iam:CreateRole',
+        'iam:AttachRolePolicy',
+        'iam:PutRolePolicy',
+        'iam:PassRole',
+      ],
+      resources: [
+        `arn:aws:iam::${this.account}:role/AWSopsLambdaEdgeRole`,
+        `arn:aws:iam::${this.account}:role/AWSopsAgentCoreRole`,
+        `arn:aws:iam::${this.account}:role/AWSopsLambdaNetworkRole`,
+      ],
+    }));
+
+    // ----- Lambda management (05-cognito Lambda@Edge, 06c MCP Lambda tools) -----
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'LambdaManagement',
+      actions: [
+        'lambda:CreateFunction',
+        'lambda:UpdateFunctionCode',
+        'lambda:UpdateFunctionConfiguration',
+        'lambda:PublishVersion',
+        'lambda:AddPermission',
+      ],
+      resources: [
+        `arn:aws:lambda:*:${this.account}:function:awsops-*`,
+      ],
+    }));
+
+    // ----- ECR — Docker build & push for AgentCore Runtime (06a) -----
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'ECRPush',
+      actions: [
+        'ecr:CreateRepository',
+        'ecr:PutImage',
+        'ecr:InitiateLayerUpload',
+        'ecr:UploadLayerPart',
+        'ecr:CompleteLayerUpload',
+        'ecr:BatchCheckLayerAvailability',
+      ],
+      resources: [`arn:aws:ecr:${this.region}:${this.account}:repository/awsops-agent`],
+    }));
+
+    // ----- Bedrock AgentCore — deploy scripts 06a~06f + runtime invocation -----
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreSetup',
+      actions: [
+        // Deploy: 06a Runtime
+        'bedrock-agentcore:CreateAgentRuntime',
+        'bedrock-agentcore:CreateAgentRuntimeEndpoint',
+        // Deploy: 06b Gateway
+        'bedrock-agentcore:CreateGateway',
+        // Deploy: 06c Gateway Targets
+        'bedrock-agentcore:CreateGatewayTarget',
+        // Deploy: 06d Code Interpreter
+        'bedrock-agentcore:CreateCodeInterpreter',
+        // Deploy: 06f Memory
+        'bedrock-agentcore:CreateMemory',
+        // Runtime: AI chat invocation
+        'bedrock-agentcore:InvokeAgentRuntime',
+        'bedrock-agentcore:StopRuntimeSession',
+        // Runtime: Code Interpreter
+        'bedrock-agentcore:StartCodeInterpreterSession',
+        'bedrock-agentcore:InvokeCodeInterpreter',
+        'bedrock-agentcore:StopCodeInterpreterSession',
+      ],
+      resources: ['*'],
+    }));
+
+    // ----- EC2 Security Group for VPC Lambda (06c) -----
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'EC2SecurityGroup',
+      actions: [
+        'ec2:CreateSecurityGroup',
+        'ec2:AuthorizeSecurityGroupIngress',
+      ],
+      resources: ['*'],
+    }));
+
+    // ----- SNS notification for diagnosis reports -----
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'SNSNotification',
+      actions: [
+        'sns:CreateTopic',
+        'sns:Subscribe',
+        'sns:Unsubscribe',
+        'sns:Publish',
+        'sns:ListSubscriptionsByTopic',
+      ],
+      resources: [`arn:aws:sns:${this.region}:${this.account}:awsops-*`],
+    }));
+
+    // ----- SQS: Alert-triggered AI diagnosis (ADR-009) -----
+    // CloudWatch Alarm → SNS Topic → SQS Queue → EC2 Polling
+    // Primary path: avoids CloudFront/Cognito Lambda@Edge auth barrier
+    const alertDlq = new cdk.aws_sqs.Queue(this, 'AlertDLQ', {
+      queueName: 'awsops-alert-dlq',
+      retentionPeriod: cdk.Duration.days(14),
+    });
+
+    const alertQueue = new cdk.aws_sqs.Queue(this, 'AlertQueue', {
+      queueName: 'awsops-alert-queue',
+      visibilityTimeout: cdk.Duration.seconds(120),
+      retentionPeriod: cdk.Duration.days(4),
+      deadLetterQueue: { queue: alertDlq, maxReceiveCount: 3 },
+    });
+
+    const alertTopic = new cdk.aws_sns.Topic(this, 'AlertTopic', {
+      topicName: 'awsops-alert-topic',
+    });
+
+    alertTopic.addSubscription(
+      new cdk.aws_sns_subscriptions.SqsSubscription(alertQueue),
+    );
+
+    // EC2 needs to poll SQS and monitor DLQ
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'SQSAlertPoller',
+      actions: [
+        'sqs:ReceiveMessage',
+        'sqs:DeleteMessage',
+        'sqs:GetQueueAttributes',
+        'sqs:ChangeMessageVisibility',
+      ],
+      resources: [alertQueue.queueArn, alertDlq.queueArn],
+    }));
+
+    // Output the SNS Topic ARN and SQS Queue URL for CloudWatch Alarm configuration
+    new cdk.CfnOutput(this, 'AlertTopicArn', {
+      value: alertTopic.topicArn,
+      description: 'SNS Topic ARN — set as CloudWatch Alarm action',
+    });
+    new cdk.CfnOutput(this, 'AlertQueueUrl', {
+      value: alertQueue.queueUrl,
+      description: 'SQS Queue URL — used by alert-sqs-poller.ts',
+    });
+
     // -------------------------------------------------------
     // EC2 Instance (Private Subnet, ARM64 Graviton by default)
     // -------------------------------------------------------
