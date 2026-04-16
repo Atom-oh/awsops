@@ -358,6 +358,51 @@ export class AwsopsStack extends cdk.Stack {
       resources: [`arn:aws:sns:${this.region}:${this.account}:awsops-*`],
     }));
 
+    // ----- SQS: Alert-triggered AI diagnosis (ADR-009) -----
+    // CloudWatch Alarm → SNS Topic → SQS Queue → EC2 Polling
+    // Primary path: avoids CloudFront/Cognito Lambda@Edge auth barrier
+    const alertDlq = new cdk.aws_sqs.Queue(this, 'AlertDLQ', {
+      queueName: 'awsops-alert-dlq',
+      retentionPeriod: cdk.Duration.days(14),
+    });
+
+    const alertQueue = new cdk.aws_sqs.Queue(this, 'AlertQueue', {
+      queueName: 'awsops-alert-queue',
+      visibilityTimeout: cdk.Duration.seconds(120),
+      retentionPeriod: cdk.Duration.days(4),
+      deadLetterQueue: { queue: alertDlq, maxReceiveCount: 3 },
+    });
+
+    const alertTopic = new cdk.aws_sns.Topic(this, 'AlertTopic', {
+      topicName: 'awsops-alert-topic',
+    });
+
+    alertTopic.addSubscription(
+      new cdk.aws_sns_subscriptions.SqsSubscription(alertQueue),
+    );
+
+    // EC2 needs to poll SQS and monitor DLQ
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'SQSAlertPoller',
+      actions: [
+        'sqs:ReceiveMessage',
+        'sqs:DeleteMessage',
+        'sqs:GetQueueAttributes',
+        'sqs:ChangeMessageVisibility',
+      ],
+      resources: [alertQueue.queueArn, alertDlq.queueArn],
+    }));
+
+    // Output the SNS Topic ARN and SQS Queue URL for CloudWatch Alarm configuration
+    new cdk.CfnOutput(this, 'AlertTopicArn', {
+      value: alertTopic.topicArn,
+      description: 'SNS Topic ARN — set as CloudWatch Alarm action',
+    });
+    new cdk.CfnOutput(this, 'AlertQueueUrl', {
+      value: alertQueue.queueUrl,
+      description: 'SQS Queue URL — used by alert-sqs-poller.ts',
+    });
+
     // -------------------------------------------------------
     // EC2 Instance (Private Subnet, ARM64 Graviton by default)
     // -------------------------------------------------------

@@ -16,6 +16,11 @@
 - `report-pptx.ts` — PPTX 리포트 생성 (WADD 스타일: 타이틀바, 요약바, 2컬럼/카드 레이아웃, 인라인 테이블, 마크다운 파싱)
 - `report-docx.ts` — DOCX 리포트 생성 (docx 패키지, A4/라이트 테마, TOC, 마크다운→문단/테이블/블릿 변환, 헤더/푸터/페이지 번호)
 - `report-scheduler.ts` — 리포트 스케줄러 (주기적 자동 진단, weekly/biweekly/monthly, KST 기준, data/report-schedule.json)
+- `alert-types.ts` — 알림 이벤트 타입 + 소스별 정규화 (CloudWatch SNS, Alertmanager, Grafana, Generic)
+- `alert-correlation.ts` — 알림 상관 분석 엔진 (시간/서비스/리소스 매칭, 중복 제거, 심각도 에스컬레이션, 30초 버퍼링)
+- `alert-diagnosis.ts` — 알림 진단 오케스트레이터 (전략 선택, 컬렉터/데이터소스 병렬 실행, 변경 감지, Bedrock Opus 분석)
+- `alert-knowledge.ts` — 알림 지식 베이스 (진단 기록 저장 data/alert-diagnosis/, 유사도 검색, 통계)
+- `slack-notification.ts` — Slack 알림 (Block Kit, Bot Token/Webhook, 채널 라우팅, 스레드 업데이트)
 - `queries/*.ts` — 25개 SQL 쿼리 파일 (ebs, msk, opensearch, container-cost, eks-container-cost, bedrock 포함)
 
 ## 규칙
@@ -47,6 +52,11 @@ Core libraries: Steampipe database connection, SQL query definitions, inventory,
 - `report-pptx.ts` — PPTX report generation (WADD-style: title bars, summary bars, 2-column/card layouts, inline tables, markdown parsing)
 - `report-docx.ts` — DOCX report generation (docx package, A4/light theme, TOC, markdown→paragraph/table/bullet conversion, header/footer/page numbers)
 - `report-scheduler.ts` — Report scheduler (periodic auto-diagnosis, weekly/biweekly/monthly, KST-based, data/report-schedule.json)
+- `alert-types.ts` — Alert event types + per-source normalizers (CloudWatch SNS, Alertmanager, Grafana, Generic)
+- `alert-correlation.ts` — Alert correlation engine (time/service/resource matching, dedup, severity escalation, 30s buffering)
+- `alert-diagnosis.ts` — Alert diagnosis orchestrator (strategy selection, parallel collectors/datasources, change detection, Bedrock Opus analysis)
+- `alert-knowledge.ts` — Alert knowledge base (diagnosis record storage data/alert-diagnosis/, similarity search, statistics)
+- `slack-notification.ts` — Slack notification client (Block Kit, Bot Token/Webhook, severity channel routing, thread updates)
 - `queries/*.ts` — 25 SQL query files (incl. ebs, msk, opensearch, container-cost, eks-container-cost, bedrock)
 
 ## Rules

@@ -223,3 +223,45 @@ export async function notifyBenchmarkCompleted(opts: {
 
   return publishNotification(subject, lines.join('\n'));
 }
+
+// Send alert diagnosis notification
+// 알림 진단 결과 발송
+export async function notifyAlertDiagnosis(opts: {
+  incident: import('@/lib/alert-types').Incident;
+  result: import('@/lib/alert-types').DiagnosisResult;
+}): Promise<boolean> {
+  const { incident, result } = opts;
+  const sevLabel = incident.severity.toUpperCase();
+  const subject = `[AWSops] ${sevLabel} Alert Diagnosis — ${incident.primaryAlert.alertName}`;
+
+  const lines: string[] = [
+    `AWSops 알림 자동 진단이 완료되었습니다.`,
+    ``,
+    `Incident: ${incident.id}`,
+    `Severity: ${sevLabel}`,
+    `Alerts: ${incident.alerts.length}개 (상관 분석됨)`,
+    `Services: ${incident.affectedServices.join(', ') || 'unknown'}`,
+    `Time: ${new Date(incident.createdAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}`,
+    ``,
+    `── Root Cause (${result.confidence}) ──`,
+    result.rootCause,
+    `Category: ${result.rootCauseCategory}`,
+    ``,
+    `── Investigation Summary ──`,
+    `Sources: ${result.investigationSources.join(', ')}`,
+    `Analysis Time: ${(result.processingTimeMs / 1000).toFixed(1)}s`,
+    ``,
+  ];
+
+  // Include first 1000 chars of the diagnosis markdown
+  if (result.markdown) {
+    lines.push(`── Diagnosis ──`);
+    lines.push(result.markdown.slice(0, 1000));
+    if (result.markdown.length > 1000) lines.push(`... (전체 내용은 대시보드에서 확인)`);
+    lines.push(``);
+  }
+
+  lines.push(`대시보드에서 전체 진단 결과 확인: https://awsops.atomai.click/awsops/alert-settings`);
+
+  return publishNotification(subject, lines.join('\n'));
+}

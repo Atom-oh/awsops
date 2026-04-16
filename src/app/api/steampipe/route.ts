@@ -88,7 +88,26 @@ export async function GET(request: NextRequest) {
   }
 
   if (action === 'config') {
-    return NextResponse.json(getConfig());
+    const cfg = { ...getConfig() };
+    // Redact sensitive fields for non-admin callers
+    if (cfg.slack) {
+      cfg.slack = { ...cfg.slack };
+      if (cfg.slack.botToken) cfg.slack.botToken = '****';
+      if (cfg.slack.webhookUrl) cfg.slack.webhookUrl = cfg.slack.webhookUrl.slice(0, 30) + '****';
+    }
+    if (cfg.alertDiagnosis?.sources) {
+      const sources = cfg.alertDiagnosis.sources;
+      const redactedSources: Record<string, unknown> = {};
+      for (const [key, src] of Object.entries(sources)) {
+        if (src && typeof src === 'object' && 'secret' in src && src.secret) {
+          redactedSources[key] = { ...src, secret: '****' };
+        } else {
+          redactedSources[key] = src;
+        }
+      }
+      cfg.alertDiagnosis = { ...cfg.alertDiagnosis, sources: redactedSources as typeof sources };
+    }
+    return NextResponse.json(cfg);
   }
 
   if (action === 'cache-status') {
@@ -119,7 +138,7 @@ export async function PUT(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
 
-    const adminActions = ['add-account', 'remove-account', 'init-host'];
+    const adminActions = ['add-account', 'remove-account', 'init-host', 'save-alert-config', 'save-departments', 'test-slack'];
     if (action && adminActions.includes(action)) {
       const user = getUserFromRequest(request);
       if (user.email === 'anonymous') {
@@ -472,6 +491,52 @@ export async function PUT(request: NextRequest) {
       }
       saveConfig({ departments });
       return NextResponse.json({ departments });
+    }
+
+    // Save alert diagnosis + Slack configuration (admin-gated above)
+    if (action === 'save-alert-config') {
+      const body = await request.json();
+      const alertDiagnosis = body.alertDiagnosis || {};
+      const slack = body.slack || {};
+
+      // Validate alertDiagnosis
+      if (alertDiagnosis.enabled !== undefined && typeof alertDiagnosis.enabled !== 'boolean') {
+        return NextResponse.json({ error: 'alertDiagnosis.enabled must be boolean' }, { status: 400 });
+      }
+      if (alertDiagnosis.minimumSeverity && !['critical', 'warning', 'info'].includes(alertDiagnosis.minimumSeverity)) {
+        return NextResponse.json({ error: 'Invalid minimumSeverity' }, { status: 400 });
+      }
+
+      // Validate slack
+      if (slack.enabled !== undefined && typeof slack.enabled !== 'boolean') {
+        return NextResponse.json({ error: 'slack.enabled must be boolean' }, { status: 400 });
+      }
+      if (slack.method && !['webhook', 'bot'].includes(slack.method)) {
+        return NextResponse.json({ error: 'slack.method must be webhook or bot' }, { status: 400 });
+      }
+      if (slack.webhookUrl && typeof slack.webhookUrl === 'string' && slack.webhookUrl.length > 0) {
+        if (!slack.webhookUrl.startsWith('https://hooks.slack.com/')) {
+          return NextResponse.json({ error: 'Invalid Slack webhook URL format' }, { status: 400 });
+        }
+      }
+
+      saveConfig({ alertDiagnosis, slack });
+      return NextResponse.json({ alertDiagnosis, slack });
+    }
+
+    // Test Slack connection (admin-gated above)
+    if (action === 'test-slack') {
+      const slackCfg = getConfig().slack;
+      if (!slackCfg?.enabled) {
+        return NextResponse.json({ ok: false, error: 'Slack is not enabled' });
+      }
+      try {
+        const { testSlackConnection } = await import('@/lib/slack-notification');
+        const result = await testSlackConnection(slackCfg);
+        return NextResponse.json(result);
+      } catch (err) {
+        return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : 'Test failed' });
+      }
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
