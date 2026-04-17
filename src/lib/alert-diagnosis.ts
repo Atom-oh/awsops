@@ -14,8 +14,8 @@ import { saveAlertDiagnosis, findSimilarIncidents } from '@/lib/alert-knowledge'
 import type { Incident, DiagnosisResult, AlertEvent } from '@/lib/alert-types';
 import type { CollectorResult, SendFn } from '@/lib/collectors/types';
 
-const BEDROCK_REGION = 'us-east-1';
-const OPUS_MODEL = 'anthropic.claude-opus-4-20250514';
+const BEDROCK_REGION = 'ap-northeast-2';
+const ANALYSIS_MODEL = 'global.anthropic.claude-sonnet-4-6';
 const MAX_CONTEXT_CHARS = 60_000;
 
 // --- Initialization ---
@@ -186,7 +186,7 @@ async function investigateIncident(incident: Incident): Promise<void> {
       confidence: diagnosis.confidence,
       investigationSources: collectionResult.sources,
       processingTimeMs: Date.now() - startTime,
-      model: OPUS_MODEL,
+      model: ANALYSIS_MODEL,
       inputTokens: diagnosis.inputTokens,
       outputTokens: diagnosis.outputTokens,
     };
@@ -392,7 +392,7 @@ async function analyzeWithBedrock(
 
   const client = new BedrockRuntimeClient({ region: BEDROCK_REGION });
   const response = await client.send(new InvokeModelCommand({
-    modelId: OPUS_MODEL,
+    modelId: ANALYSIS_MODEL,
     contentType: 'application/json',
     accept: 'application/json',
     body: JSON.stringify({
