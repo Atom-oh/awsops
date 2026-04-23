@@ -20,12 +20,12 @@ AgentCore 런타임용 Strands 에이전트. MCP 프로토콜을 통해 8개 역
 | **IaC** | 12 | CloudFormation, CDK, Terraform |
 | **Data** | 24 | DynamoDB, RDS, ElastiCache, MSK |
 | **Security** | 14 | IAM users/roles/policies, simulation |
-| **Monitoring** | 24 | CloudWatch metrics/alarms/logs, CloudTrail, Datasource diagnostics |
-| **Cost** | 9 | Cost Explorer, Pricing, Budgets |
+| **Monitoring** | 16 | CloudWatch metrics/alarms/logs, CloudTrail, Datasource diagnostics |
+| **Cost** | 9 | Cost Explorer, Pricing, Budgets, FinOps (Compute Optimizer, RI/SP, Trusted Advisor) |
 | **Ops** | 9 | AWS docs, CLI, Steampipe SQL |
-| **Total** | **133** | |
+| **Total** | **125** | Across 19 Lambda functions |
 
-## 10 Routes (route.ts) / 10개 라우트
+## 11 Routes (route.ts) / 11개 라우트
 
 1. `code` — Code Interpreter (Python sandbox)
 2. `network` — Network Gateway (VPC, TGW, VPN, ENI, Flow Logs)
@@ -34,9 +34,10 @@ AgentCore 런타임용 Strands 에이전트. MCP 프로토콜을 통해 8개 역
 5. `data` — Data Gateway (DynamoDB, RDS, ElastiCache, MSK)
 6. `security` — Security Gateway (IAM, policies, simulation)
 7. `monitoring` — Monitoring Gateway (CloudWatch, CloudTrail)
-8. `cost` — Cost Gateway (Cost Explorer, Pricing, Budgets)
-9. `aws-data` — Steampipe SQL + Bedrock (리소스 인벤토리 조회 / resource inventory)
-10. `general` — Ops Gateway + Bedrock 폴백 (fallback)
+8. `cost` — Cost Gateway (Cost Explorer, Pricing, Budgets, FinOps)
+9. `datasource` — External datasources (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+10. `aws-data` — Steampipe SQL + Bedrock (리소스 인벤토리 조회 / resource inventory)
+11. `general` — Ops Gateway + Bedrock 폴백 (fallback)
 
 ## Multi-Route Support / 멀티 라우트 지원
 - 분류기(classifier)가 1~3개 라우트를 반환 (Classifier returns 1-3 routes)

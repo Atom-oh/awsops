@@ -15,9 +15,16 @@ AWSops is an integrated operations dashboard for real-time monitoring and manage
 ## Key Features
 
 ### Real-time Resource Monitoring
-- View AWS and Kubernetes resource status at a glance across **37 pages**
+- View AWS and Kubernetes resource status at a glance across **40 pages**
 - Dashboards for major services including EC2, Lambda, ECS, EKS, S3, RDS, and VPC
 - Real-time CloudWatch metrics integration
+
+### AI Comprehensive Diagnosis & Alert Pipeline
+- **15-section Bedrock Opus diagnosis report** with weekly/biweekly/monthly schedules
+- DOCX / Markdown / PDF / PPTX export
+- CloudWatch / Alertmanager / Grafana webhook ingestion with HMAC auth
+- Alert correlation → automatic partial AI diagnosis on `critical` severity
+- Slack Block Kit notifications (thread updates, severity-based channel routing)
 
 ### AI-Powered Analysis
 - AI assistant powered by **Amazon Bedrock AgentCore**
@@ -65,8 +72,9 @@ AWSops is an integrated operations dashboard for real-time monitoring and manage
 | Item | Count |
 |------|-------|
 | **App Router** | 8 |
-| **Pages** | 37 |
-| **API Routes** | 13 |
+| **Pages** | 40 |
+| **API Routes** | 18 |
+| **AI Routes** | 11 (incl. datasource, alert-webhook) |
 | **SSE Streaming** | Real-time AI response streaming |
 
 ### Data Layer

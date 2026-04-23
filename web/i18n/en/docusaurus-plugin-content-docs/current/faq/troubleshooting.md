@@ -202,3 +202,47 @@ curl -X POST https://<domain>/awsops/api/auth
 ```
 
 </details>
+
+<details>
+<summary>Alerts are not arriving in Slack</summary>
+
+The pipeline has three stages: **webhook ingestion → correlation → dispatch**. Check them in order.
+
+**1. Verify the webhook was received**
+```bash
+curl -s https://<domain>/awsops/api/alert-webhook | jq .activeCounts
+```
+If `total: 0`, the webhook never reached AWSops.
+
+**2. HMAC signature error**
+A 401 response means `X-Signature-256` is wrong. Confirm the shared secret in `alertWebhookSecret` in `data/config.json` matches the sender.
+
+**3. Silence / dedup suppression**
+Alerts with the same fingerprint within 1 minute are suppressed. Check `data/alert-diagnosis/silences.json` for any matching rule.
+
+**4. Slack channel mapping**
+In `data/config.json`, verify `slackChannels` per severity and ensure the Bot Token or Webhook URL is valid.
+
+**5. Deeper diagnosis**
+The server-side runbook [alert-pipeline-troubleshoot.md](https://github.com/Atom-oh/awsops/tree/main/docs/runbooks/alert-pipeline-troubleshoot.md) has a symptom-based checklist.
+
+</details>
+
+<details>
+<summary>AI Comprehensive Diagnosis fails partway through</summary>
+
+When a 15-section diagnosis stalls, check the following.
+
+**1. Identify the failing section**
+Sections marked red in the progress indicator show their error when clicked.
+
+**2. Bedrock quota exceeded**
+Concurrent-request limits produce `ThrottlingException`. Re-run or lower `reportParallelism` in `data/config.json` (default 5 → 2).
+
+**3. Cost section timeout**
+Cost Explorer responses can be slow (up to 2 min). Set `costEnabled: false` to skip that section, or retry with the **Sonnet** model.
+
+**4. Report save failure**
+Check S3 bucket permissions and `reportBucket` in config. Save failures show up as `NoSuchBucket` or `AccessDenied` in server logs.
+
+</details>

@@ -15,9 +15,16 @@ AWSops는 AWS 및 Kubernetes 인프라를 실시간으로 모니터링하고 관
 ## 주요 기능
 
 ### 실시간 리소스 모니터링
-- **37개 페이지**를 통해 AWS 및 Kubernetes 리소스 현황을 한눈에 파악
+- **40개 페이지**를 통해 AWS 및 Kubernetes 리소스 현황을 한눈에 파악
 - EC2, Lambda, ECS, EKS, S3, RDS, VPC 등 주요 서비스 대시보드
 - 실시간 CloudWatch 메트릭 연동
+
+### AI 종합 진단 & 알림 파이프라인
+- **15섹션 Bedrock Opus 진단 리포트** 자동 생성 (주간/격주/월간 스케줄)
+- DOCX / Markdown / PDF / PPTX 내보내기
+- CloudWatch / Alertmanager / Grafana 웹훅 통합 + HMAC 인증
+- 알림 상관 분석 → 심각도 `critical` 시 자동 AI 부분 진단
+- Slack Block Kit 알림 (스레드 업데이트, 심각도별 채널 라우팅)
 
 ### AI 기반 분석
 - **Amazon Bedrock AgentCore** 기반 AI 어시스턴트
@@ -65,8 +72,9 @@ AWSops는 AWS 및 Kubernetes 인프라를 실시간으로 모니터링하고 관
 | 항목 | 수치 |
 |------|------|
 | **App Router** | 8개 |
-| **Pages** | 37개 |
-| **API Routes** | 13개 |
+| **Pages** | 40개 |
+| **API Routes** | 18개 |
+| **AI 라우트** | 11개 (datasource, alert-webhook 포함) |
 | **SSE Streaming** | AI 응답 실시간 스트리밍 |
 
 ### 데이터 레이어

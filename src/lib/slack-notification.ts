@@ -46,6 +46,11 @@ export async function sendSlackResolvedUpdate(
 
   if (config.method === 'bot' && config.botToken) {
     await postWithBotToken(config.botToken, channel, 'Alert resolved', blocks, threadTs);
+  } else if (config.webhookUrl) {
+    // Webhook mode: Slack Incoming Webhooks accept thread_ts in the payload when
+    // the webhook targets the same channel as the parent message. If the workspace
+    // hasn't granted threading, it falls back to a channel-level message.
+    await postWithWebhook(config.webhookUrl, 'Alert resolved', blocks, threadTs);
   }
 }
 
@@ -192,11 +197,19 @@ async function postWithBotToken(
   }
 }
 
-async function postWithWebhook(webhookUrl: string, text: string, blocks: unknown[]): Promise<void> {
+async function postWithWebhook(
+  webhookUrl: string,
+  text: string,
+  blocks: unknown[],
+  threadTs?: string,
+): Promise<void> {
+  const payload: Record<string, unknown> = { text, blocks };
+  if (threadTs) payload.thread_ts = threadTs;
+
   const resp = await fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, blocks }),
+    body: JSON.stringify(payload),
   });
 
   if (!resp.ok) {

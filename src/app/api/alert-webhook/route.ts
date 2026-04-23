@@ -30,7 +30,7 @@ import {
   getAlertSourceConfig,
   getAlertDiagnosisConfig,
 } from '@/lib/app-config';
-import { ingestAlert } from '@/lib/alert-correlation';
+import { ingestAlert, getActiveIncidents } from '@/lib/alert-correlation';
 import { ensureAlertDiagnosisStarted } from '@/lib/alert-diagnosis';
 
 // Rate limiting: per-source IP, 60 requests/min
@@ -224,12 +224,32 @@ export async function GET(_request: Request): Promise<NextResponse> {
     }
   } catch { /* knowledge base optional */ }
 
+  // Active incidents snapshot (in-memory, since alerts ingested this process)
+  const activeIncidents = getActiveIncidents()
+    .filter(i => i.status === 'buffering' || i.status === 'investigating')
+    .map(i => ({
+      id: i.id,
+      severity: i.severity,
+      status: i.status,
+      createdAt: i.createdAt,
+      alertCount: i.alerts.length,
+      affectedServices: i.affectedServices,
+      topAlertName: i.alerts[0]?.alertName || '',
+    }));
+  const activeCounts = {
+    total: activeIncidents.length,
+    critical: activeIncidents.filter(i => i.severity === 'critical').length,
+    warning: activeIncidents.filter(i => i.severity === 'warning').length,
+  };
+
   return NextResponse.json({
     enabled,
     sources: enabledSources,
     correlationWindowSeconds: config.correlationWindowSeconds || 30,
     deduplicationWindowMinutes: config.deduplicationWindowMinutes || 15,
     minimumSeverity: config.minimumSeverity || 'warning',
+    activeIncidents,
+    activeCounts,
     recentDiagnoses,
     stats,
   });

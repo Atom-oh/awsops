@@ -59,6 +59,114 @@ export async function saveAlertDiagnosis(incident: Incident, result: DiagnosisRe
   const filePath = join(dir, `${incident.id}.json`);
   writeFileSync(filePath, JSON.stringify(record, null, 2), 'utf-8');
   console.log(`[AlertKnowledge] Saved ${incident.id} → ${filePath}`);
+
+  // Opportunistically refresh the monthly summary — cheap file IO, keeps the
+  // dashboard/reports in sync without a separate scheduler.
+  try {
+    await updateMonthlySummary(monthDir);
+  } catch (err) {
+    console.warn('[AlertKnowledge] Monthly summary update failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+// --- Monthly Summary ---
+
+export interface MonthlySummary {
+  month: string; // "YYYY-MM"
+  generatedAt: string;
+  totalIncidents: number;
+  bySeverity: Record<string, number>;
+  byCategory: Record<string, number>;
+  byConfidence: Record<string, number>;
+  topAlertNames: Array<{ name: string; count: number }>;
+  topServices: Array<{ service: string; count: number }>;
+  topResources: Array<{ resource: string; count: number }>;
+  avgProcessingTimeMs: number;
+  mttrSeconds: number | null;
+  investigationSources: Record<string, number>;
+}
+
+async function updateMonthlySummary(monthDir: string): Promise<void> {
+  const dirPath = join(BASE_DIR, monthDir);
+  if (!existsSync(dirPath)) return;
+
+  const files = readdirSync(dirPath).filter(f => f.endsWith('.json') && f !== 'summary.json');
+  const records: DiagnosisRecord[] = [];
+  for (const file of files) {
+    try {
+      const raw = readFileSync(join(dirPath, file), 'utf-8');
+      records.push(JSON.parse(raw));
+    } catch { /* skip corrupt */ }
+  }
+
+  if (records.length === 0) return;
+
+  const bySeverity: Record<string, number> = {};
+  const byCategory: Record<string, number> = {};
+  const byConfidence: Record<string, number> = {};
+  const nameCounts: Record<string, number> = {};
+  const serviceCounts: Record<string, number> = {};
+  const resourceCounts: Record<string, number> = {};
+  const sourceCounts: Record<string, number> = {};
+  let totalTime = 0;
+
+  for (const r of records) {
+    bySeverity[r.severity] = (bySeverity[r.severity] || 0) + 1;
+    byCategory[r.rootCauseCategory] = (byCategory[r.rootCauseCategory] || 0) + 1;
+    byConfidence[r.confidence] = (byConfidence[r.confidence] || 0) + 1;
+    totalTime += r.processingTimeMs;
+    for (const n of r.alertNames) nameCounts[n] = (nameCounts[n] || 0) + 1;
+    for (const s of r.affectedServices) serviceCounts[s] = (serviceCounts[s] || 0) + 1;
+    for (const res of r.affectedResources) resourceCounts[res] = (resourceCounts[res] || 0) + 1;
+    for (const src of r.investigationSources) sourceCounts[src] = (sourceCounts[src] || 0) + 1;
+  }
+
+  const rankTop = <K extends string>(obj: Record<string, number>, key: K, limit = 10): Array<Record<K, string> & { count: number }> =>
+    Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, limit)
+      .map(([k, count]) => ({ [key]: k, count } as Record<K, string> & { count: number }));
+
+  const summary: MonthlySummary = {
+    month: monthDir,
+    generatedAt: new Date().toISOString(),
+    totalIncidents: records.length,
+    bySeverity,
+    byCategory,
+    byConfidence,
+    topAlertNames: rankTop(nameCounts, 'name'),
+    topServices: rankTop(serviceCounts, 'service'),
+    topResources: rankTop(resourceCounts, 'resource'),
+    avgProcessingTimeMs: totalTime / records.length,
+    mttrSeconds: totalTime > 0 ? totalTime / records.length / 1000 : null,
+    investigationSources: sourceCounts,
+  };
+
+  const summaryPath = resolve(BASE_DIR, `summary-${monthDir}.json`);
+  writeFileSync(summaryPath, JSON.stringify(summary, null, 2), 'utf-8');
+  console.log(`[AlertKnowledge] Updated monthly summary → ${summaryPath}`);
+}
+
+export async function getMonthlySummary(month: string): Promise<MonthlySummary | null> {
+  const summaryPath = resolve(BASE_DIR, `summary-${month}.json`);
+  if (!existsSync(summaryPath)) return null;
+  try {
+    return JSON.parse(readFileSync(summaryPath, 'utf-8')) as MonthlySummary;
+  } catch {
+    return null;
+  }
+}
+
+export async function listMonthlySummaries(): Promise<MonthlySummary[]> {
+  if (!existsSync(BASE_DIR)) return [];
+  const files = readdirSync(BASE_DIR)
+    .filter(f => /^summary-\d{4}-\d{2}\.json$/.test(f))
+    .sort().reverse();
+  const out: MonthlySummary[] = [];
+  for (const f of files) {
+    try {
+      out.push(JSON.parse(readFileSync(join(BASE_DIR, f), 'utf-8')));
+    } catch { /* skip corrupt */ }
+  }
+  return out;
 }
 
 // --- Find Similar Incidents ---

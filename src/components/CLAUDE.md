@@ -3,10 +3,11 @@
 ## 역할
 페이지 전반에 걸쳐 사용되는 공유 React 컴포넌트. 레이아웃, 카드, 차트, 테이블, K8s UI.
 
-## 주요 파일 (17개)
+## 주요 파일 (20개)
 
-### layout/ — 레이아웃 (3)
+### layout/ — 레이아웃 (4)
 - `layout/Sidebar.tsx` — 메인 네비게이션 (6개 그룹, Bedrock 포함) + Sign Out 버튼 (로고 우측) + AccountSelector + 계정별 기능 필터링
+- `layout/SidebarWrapper.tsx` — Sidebar 래퍼 (Suspense, 계정 초기 로딩 폴백)
 - `layout/Header.tsx` — 페이지 헤더 (새로고침, ONLINE 상태)
 - `layout/AccountSelector.tsx` — 어카운트 선택 드롭다운 (멀티 어카운트 모드에서만 표시)
 
@@ -20,10 +21,11 @@
 - `dashboard/StatusBadge.tsx` — 상태 배지 (`status` prop만 받음 — `text` prop 없음)
 - `dashboard/AccountBadge.tsx` — 어카운트 배지 (accountId로 alias + 컬러 도트 표시)
 
-### charts/ — Recharts 차트 래퍼 (3)
+### charts/ — Recharts 차트 래퍼 (4)
 - `charts/BarChartCard.tsx` — 바 차트
 - `charts/LineChartCard.tsx` — 라인 차트
 - `charts/PieChartCard.tsx` — 파이 차트
+- `charts/SafeResponsiveContainer.tsx` — ResponsiveContainer 래퍼 (SSR 0×0 버그 가드, 최소 높이 보장)
 
 ### table/ — 데이터 테이블 (1)
 - `table/DataTable.tsx` — 범용 데이터 테이블 (정렬, render 함수, 멀티어카운트 시 Account 컬럼 자동 추가)
@@ -47,10 +49,11 @@
 ## Role
 Shared React components across pages: layout, cards, charts, tables, K8s UI.
 
-## Key Files (17)
+## Key Files (20)
 
-### layout/ — Layout (3)
+### layout/ — Layout (4)
 - `layout/Sidebar.tsx` — Main navigation (6 groups, incl. Bedrock) + Sign Out button (next to logo) + AccountSelector + account feature filtering
+- `layout/SidebarWrapper.tsx` — Sidebar wrapper (Suspense boundary, initial account loading fallback)
 - `layout/Header.tsx` — Page header (refresh, ONLINE status)
 - `layout/AccountSelector.tsx` — Account selector dropdown (only visible in multi-account mode)
 
@@ -64,10 +67,11 @@ Shared React components across pages: layout, cards, charts, tables, K8s UI.
 - `dashboard/StatusBadge.tsx` — Status badge (`status` prop only — no `text` prop)
 - `dashboard/AccountBadge.tsx` — Account badge (shows alias + colored dot from accountId)
 
-### charts/ — Recharts Chart Wrappers (3)
+### charts/ — Recharts Chart Wrappers (4)
 - `charts/BarChartCard.tsx` — Bar chart
 - `charts/LineChartCard.tsx` — Line chart
 - `charts/PieChartCard.tsx` — Pie chart
+- `charts/SafeResponsiveContainer.tsx` — ResponsiveContainer wrapper (guards against SSR 0×0 bug, ensures minimum height)
 
 ### table/ — Data Table (1)
 - `table/DataTable.tsx` — Generic data table (sorting, render functions, auto Account column in multi-account mode)

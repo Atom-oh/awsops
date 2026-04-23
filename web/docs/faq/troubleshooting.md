@@ -202,3 +202,47 @@ curl -X POST https://<domain>/awsops/api/auth
 ```
 
 </details>
+
+<details>
+<summary>알림이 Slack으로 오지 않아요</summary>
+
+알림 파이프라인은 **웹훅 수신 → 상관 분석 → 발송**의 3단계로 구성됩니다. 단계별로 확인하세요.
+
+**1. 웹훅이 도달했는지 확인**
+```bash
+curl -s https://<domain>/awsops/api/alert-webhook | jq .activeCounts
+```
+`total: 0`이면 웹훅 자체가 도달하지 않은 것입니다.
+
+**2. HMAC 서명 오류**
+401 응답이 나오면 `X-Signature-256` 헤더가 잘못된 것입니다. 발신 측과 `data/config.json`의 `alertWebhookSecret`이 일치하는지 확인하세요.
+
+**3. Silence / Dedup에 걸림**
+같은 fingerprint 알림이 1분 내 재수신되면 자동 억제됩니다. `data/alert-diagnosis/silences.json`에 해당 레이블이 등록되어 있지는 않은지 확인하세요.
+
+**4. Slack 채널 매핑 확인**
+`data/config.json`의 `slackChannels`에서 심각도별 채널이 올바른지, Bot Token 또는 Webhook URL이 유효한지 확인하세요.
+
+**5. 자세한 진단**
+서버 측 런북 [alert-pipeline-troubleshoot.md](https://github.com/Atom-oh/awsops/tree/main/docs/runbooks/alert-pipeline-troubleshoot.md)에 증상별 체크리스트가 있습니다.
+
+</details>
+
+<details>
+<summary>AI 종합 진단이 중간에 실패해요</summary>
+
+15섹션 진단이 중간에 멈추는 경우 다음을 확인하세요.
+
+**1. 섹션별 실패 원인 확인**
+UI의 진행률 표시기에서 빨간색으로 표시된 섹션을 클릭하면 에러 메시지가 보입니다.
+
+**2. Bedrock 할당량 초과**
+동시 요청 쿼터 초과 시 `ThrottlingException`이 발생합니다. 재실행하거나, `data/config.json`의 `reportParallelism`을 낮추세요 (기본 5 → 2).
+
+**3. Cost 섹션 타임아웃**
+Cost Explorer API는 응답이 느릴 수 있습니다 (최대 2분). `costEnabled: false`로 해당 섹션을 건너뛰거나 **Sonnet** 모델로 재시도하세요.
+
+**4. 리포트 저장 실패**
+S3 버킷 권한 또는 `reportBucket` 설정을 확인하세요. 저장 실패는 로그에 `NoSuchBucket` 또는 `AccessDenied`로 기록됩니다.
+
+</details>

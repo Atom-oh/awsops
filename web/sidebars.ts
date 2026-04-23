@@ -78,6 +78,8 @@ const sidebars: SidebarsConfig = {
         'monitoring/cost',
         'monitoring/inventory',
         'monitoring/datasources',
+        'monitoring/ai-diagnosis',
+        'monitoring/alerts',
       ],
     },
     {

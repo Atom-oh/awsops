@@ -1,6 +1,7 @@
 'use client';
 
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Siren } from 'lucide-react';
+import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 
@@ -10,13 +11,40 @@ interface HeaderProps {
   onRefresh?: () => void;
 }
 
+interface ActiveIncidentCounts {
+  total: number;
+  critical: number;
+  warning: number;
+}
+
 export default function Header({ title, subtitle, onRefresh }: HeaderProps) {
   const { t } = useLanguage();
   const [spinning, setSpinning] = useState(false);
   const [lastUpdated, setLastUpdated] = useState('');
+  const [activeIncidents, setActiveIncidents] = useState<ActiveIncidentCounts | null>(null);
 
   useEffect(() => {
     setLastUpdated(new Date().toLocaleTimeString());
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch('/awsops/api/alert-webhook', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        if (data?.activeCounts) {
+          setActiveIncidents(data.activeCounts);
+        } else {
+          setActiveIncidents({ total: 0, critical: 0, warning: 0 });
+        }
+      } catch { /* silently ignore polling errors */ }
+    };
+    poll();
+    const id = setInterval(poll, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   const handleRefresh = () => {
@@ -37,6 +65,21 @@ export default function Header({ title, subtitle, onRefresh }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-4">
+        {activeIncidents && activeIncidents.total > 0 && (
+          <Link
+            href="/awsops/ai-diagnosis"
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+              activeIncidents.critical > 0
+                ? 'bg-accent-red/10 text-accent-red border-accent-red/30 hover:bg-accent-red/20'
+                : 'bg-accent-orange/10 text-accent-orange border-accent-orange/30 hover:bg-accent-orange/20'
+            }`}
+            title={`${activeIncidents.critical} critical, ${activeIncidents.warning} warning`}
+          >
+            <Siren size={12} className="animate-pulse" />
+            {activeIncidents.total} active
+          </Link>
+        )}
+
         <span className="text-xs text-gray-500 font-mono" suppressHydrationWarning>
           {t('common.lastUpdated')} {lastUpdated}
         </span>

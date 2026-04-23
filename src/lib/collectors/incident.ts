@@ -3,7 +3,7 @@
 import { queryDatasource } from '@/lib/datasource-client';
 import { getDefaultDatasource } from '@/lib/app-config';
 import { runQuery } from '@/lib/steampipe';
-import type { Collector, CollectorResult, SendFn } from './types';
+import type { AlertContext, Collector, CollectorResult, SendFn } from './types';
 
 // ============================================================================
 // Steampipe queries — always available
@@ -38,6 +38,71 @@ WHERE type = 'Warning'
 ORDER BY last_timestamp DESC
 LIMIT 30
 `;
+
+// Escape single quotes for safe inlining into Steampipe SQL (plain
+// string-splice because pg driver's parameterized queries are not always
+// supported through the pool wrapper for these ad-hoc WHERE clauses).
+function sqlQuote(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
+// Build context-scoped SQL variants that filter by the incident's affected
+// resources/namespaces/services. Falls back to the broad query when no
+// scoping signals are available.
+function buildAlertScopedQueries(ctx: AlertContext): { alarms: string; events: string } {
+  const resNames = (ctx.resources || []).filter(r => r && r.length < 200);
+  const alertNames = (ctx.alertNames || []).filter(a => a && a.length < 200);
+  const namespaces = (ctx.namespaces || []).filter(n => n && n.length < 100);
+  const services = (ctx.services || []).filter(s => s && s.length < 100);
+
+  let alarmsSQL = CLOUDWATCH_ALARMS_SQL;
+  const alarmFilters: string[] = [];
+  if (alertNames.length) {
+    alarmFilters.push(`name IN (${alertNames.map(sqlQuote).join(', ')})`);
+  }
+  if (resNames.length) {
+    // Match alarm dimensions (JSON text) containing any resource id
+    const likes = resNames.map(r => `dimensions::text ILIKE '%${r.replace(/'/g, "''").replace(/%/g, '')}%'`).join(' OR ');
+    alarmFilters.push(`(${likes})`);
+  }
+  if (alarmFilters.length) {
+    // Keep base filter (state_value = 'ALARM') plus any scoped match via OR so
+    // we still get the triggering alarm even if state flipped momentarily.
+    alarmsSQL = `
+SELECT name, namespace, metric_name, state_value, state_reason,
+       state_updated_timestamp, account_id
+FROM aws_cloudwatch_alarm
+WHERE state_value = 'ALARM' OR (${alarmFilters.join(' OR ')})
+ORDER BY state_updated_timestamp DESC
+LIMIT 30
+`;
+  }
+
+  let eventsSQL = K8S_WARNING_EVENTS_SQL;
+  const eventFilters: string[] = [];
+  if (namespaces.length) {
+    eventFilters.push(`namespace IN (${namespaces.map(sqlQuote).join(', ')})`);
+  }
+  if (resNames.length) {
+    eventFilters.push(`involved_object_name IN (${resNames.map(sqlQuote).join(', ')})`);
+  }
+  if (services.length) {
+    const svcLikes = services.map(s => `involved_object_name ILIKE '%${s.replace(/'/g, "''").replace(/%/g, '')}%'`).join(' OR ');
+    eventFilters.push(`(${svcLikes})`);
+  }
+  if (eventFilters.length) {
+    eventsSQL = `
+SELECT reason, message, type, namespace, involved_object_kind,
+       involved_object_name, last_timestamp
+FROM kubernetes_event
+WHERE type IN ('Warning', 'Normal') AND (${eventFilters.join(' OR ')})
+ORDER BY last_timestamp DESC
+LIMIT 50
+`;
+  }
+
+  return { alarms: alarmsSQL, events: eventsSQL };
+}
 
 // ============================================================================
 // Prometheus anomaly queries
@@ -117,7 +182,7 @@ async function collectErrorTraces(ds: any, dsType: 'tempo' | 'jaeger'): Promise<
 const incidentCollector: Collector = {
   displayName: 'Incident Analyzer',
 
-  async collect(send: SendFn, accountId?: string, isEn?: boolean): Promise<CollectorResult> {
+  async collect(send: SendFn, accountId?: string, isEn?: boolean, alertContext?: AlertContext): Promise<CollectorResult> {
     const promDs = getDefaultDatasource('prometheus');
     const lokiDs = getDefaultDatasource('loki');
     const tempoDs = getDefaultDatasource('tempo');
@@ -125,24 +190,32 @@ const incidentCollector: Collector = {
     const tracingDs = tempoDs || jaegerDs;
     const tracingType: 'tempo' | 'jaeger' | null = tempoDs ? 'tempo' : jaegerDs ? 'jaeger' : null;
 
+    const scoped = alertContext ? buildAlertScopedQueries(alertContext) : null;
+    const alarmsSQL = scoped?.alarms || CLOUDWATCH_ALARMS_SQL;
+    const eventsSQL = scoped?.events || K8S_WARNING_EVENTS_SQL;
+
     // Report available sources
     const sources: string[] = ['CloudWatch Alarms (Steampipe)'];
     if (promDs) sources.push(`Prometheus (${promDs.name})`);
     if (lokiDs) sources.push(`Loki (${lokiDs.name})`);
     if (tracingDs) sources.push(`${tracingType === 'tempo' ? 'Tempo' : 'Jaeger'} (${tracingDs.name})`);
 
+    const scopeSuffix = alertContext
+      ? ` [scoped: ${[...(alertContext.services || []), ...(alertContext.resources || []), ...(alertContext.namespaces || [])].slice(0, 3).join(', ') || 'alert context'}]`
+      : '';
+
     send('status', { step: 'incident-start', message: isEn
-      ? `🔍 Scanning ${sources.length} sources: ${sources.join(', ')}...`
-      : `🔍 ${sources.length}개 소스 스캔 중: ${sources.join(', ')}...` });
+      ? `🔍 Scanning ${sources.length} sources: ${sources.join(', ')}...${scopeSuffix}`
+      : `🔍 ${sources.length}개 소스 스캔 중: ${sources.join(', ')}...${scopeSuffix}` });
 
     // Run ALL sources in parallel via Promise.allSettled
     const queryOpts = accountId ? { accountId } : undefined;
 
     const [alarmsResult, k8sEventsResult, promResult, lokiResult, tracesResult] = await Promise.allSettled([
-      // 1. CloudWatch Alarms (always available)
-      runQuery(CLOUDWATCH_ALARMS_SQL, queryOpts),
+      // 1. CloudWatch Alarms (always available, scoped if alertContext given)
+      runQuery(alarmsSQL, queryOpts),
       // 2. K8s Warning Events (optional — fails gracefully if no K8s connection)
-      runQuery(K8S_WARNING_EVENTS_SQL, queryOpts),
+      runQuery(eventsSQL, queryOpts),
       // 3. Prometheus anomalies (optional)
       promDs ? collectPrometheusAnomalies(promDs) : Promise.resolve([]),
       // 4. Loki errors (optional)

@@ -1124,7 +1124,7 @@ export async function POST(request: NextRequest) {
         // 자동 데이터 수집 분석 핸들러 — collector 파일을 route key로 동적 import
         if (config.handler === 'auto-collect') {
           try {
-            const collectorModule = await import(`@/lib/collectors/${route}`);
+            const collectorModule = await import(/* webpackInclude: /\.(ts|tsx|js)$/ */ `@/lib/collectors/${route}`);
             const collector = collectorModule.default as import('@/lib/collectors/types').Collector;
 
             const data = await collector.collect(send, accountId, isEn);
@@ -1487,7 +1487,7 @@ async function handleSingleRoute(
   // 자동 수집 핸들러 (비스트리밍, 멀티 라우트 참여용)
   if (config.handler === 'auto-collect') {
     try {
-      const collectorModule = await import(`@/lib/collectors/${route}`);
+      const collectorModule = await import(/* webpackInclude: /\.(ts|tsx|js)$/ */ `@/lib/collectors/${route}`);
       const collector = collectorModule.default as import('@/lib/collectors/types').Collector;
       const noopSend = () => {};
       const data = await collector.collect(noopSend, accountId, true);
