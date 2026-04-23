@@ -273,7 +273,7 @@ async function collectInvestigationData(plan: InvestigationPlan, incident: Incid
     tasks.push(
       (async () => {
         try {
-          const collectorMod = await import(`@/lib/collectors/${key}`);
+          const collectorMod = await import(/* webpackInclude: /\.(ts|tsx|js)$/ */ `@/lib/collectors/${key}`);
           const collector = collectorMod.default as import('@/lib/collectors/types').Collector;
           const result = await collector.collect(nullSend, undefined, false, alertContext);
           data.collectorResults[key] = result;
