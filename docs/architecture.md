@@ -18,7 +18,7 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 
 ### Data Layer (`src/lib/`)
 - **Steampipe**: Embedded PostgreSQL on port 9193 — 380+ AWS tables, 60+ K8s tables
-- **Connection**: pg Pool (max 5, 120s timeout, sequential batch of 5)
+- **Connection**: pg Pool (max 10, 120s timeout, sequential batch of 8; see ADR-017)
 - **Cache**: node-cache with 5-minute TTL
 - **쿼리**: `src/lib/queries/`에 25개 SQL 쿼리 파일 (25 SQL query files)
 - **Inventory**: Resource count snapshots (data/inventory/, zero extra queries)
@@ -42,9 +42,17 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **Memory Store**: 대화 이력 영구 저장 (사용자별, 365일 보관) / Conversation history persistence (per-user, 365-day retention)
 
 ### Auth & Delivery
-- **Auth**: Cognito User Pool + Lambda@Edge (Node.js 20, us-east-1)
+- **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1)
 - **CDN**: CloudFront → ALB → EC2 (t4g.2xlarge), CachePolicy: CACHING_DISABLED
-- **IaC**: CDK (`infra-cdk/`) — AwsopsStack, CognitoStack, AgentCoreStack(placeholder)
+- **IaC**: CDK (`infra-cdk/`) — AwsopsStack, CognitoStack, AgentCoreStack
+
+### Alert Pipeline (`src/lib/alert-*.ts`, `src/lib/collectors/`)
+- **Ingestion**: `/api/alert-webhook` normalizes CloudWatch SNS · Alertmanager · Grafana · Generic into `AlertEvent` (HMAC-SHA256 verified)
+- **Poller**: `alert-sqs-poller.ts` consumes SNS→SQS background path (EC2 service), with DLQ handling and rate limiting
+- **Correlation**: `alert-correlation.ts` groups alerts into `Incident` objects (30s buffer, time/service/resource matching)
+- **Investigation**: `alert-diagnosis.ts` invokes collectors + datasources in parallel with change detection (CloudTrail + K8s rollouts)
+- **Notification**: `/api/notification` dispatches to Slack (Block Kit) and SNS (markdown-stripped email), severity-based channel routing
+- **Knowledge**: `alert-knowledge.ts` persists diagnosis records to `data/alert-diagnosis/` for similarity search
 
 ## Data Flow
 1. User requests page → Next.js server renders shell
@@ -59,7 +67,7 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **Monitoring**: CloudWatch metrics, CloudTrail audit logs
 - **SSM**: VPC Endpoints (ssm, ssmmessages, ec2messages) for private access
 
-## Deployment (10 Steps)
+## Deployment (11 Steps)
 
 | Step | Script | Description |
 |------|--------|-------------|
@@ -67,14 +75,19 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 | 1 | `01-install-base.sh` | Steampipe + Powerpipe |
 | 2 | `02-setup-nextjs.sh` | Next.js + Steampipe service |
 | 3 | `03-build-deploy.sh` | Production build + start |
+| 4 | `04-setup-eks-access.sh` | EKS Access Entry + kubeconfig |
 | 5 | `05-setup-cognito.sh` | Cognito User Pool + Lambda@Edge |
 | 6a | `06a-setup-agentcore-runtime.sh` | IAM, ECR, Docker, Runtime, Endpoint |
 | 6b | `06b-setup-agentcore-gateway.sh` | 8 AgentCore Gateways (role-based MCP routing) |
 | 6c | `06c-setup-agentcore-tools.sh` | 19 Lambda + create_targets.py → 125 MCP tools |
 | 6d | `06d-setup-agentcore-interpreter.sh` | Code Interpreter |
+| 6e | `06e-setup-agentcore-config.sh` | AgentCore config apply (ARN, Gateway URL injection into data/config.json) |
 | 6f | `06f-setup-agentcore-memory.sh` | Memory Store (대화 이력 365일 보관) |
 | 7 | `07-setup-opencost.sh` | Prometheus + OpenCost (EKS 비용 분석) |
 | 8 | `08-setup-cloudfront-auth.sh` | Lambda@Edge → CloudFront 연동 |
+| 9 | `09-start-all.sh` | Start all services (steampipe, nextjs, alert-sqs-poller) |
+| 10 | `10-stop-all.sh` | Stop all services |
+| 11 | `11-verify.sh` | Health check (ports, queries, Gateway responses) |
 | 12 | `12-setup-multi-account.sh` | Multi-Account (Target account IAM role + Steampipe connection) |
 
 ## AgentCore Gateway Architecture
@@ -88,12 +101,12 @@ The AI layer uses 8 role-based Gateways, each with domain-specific Lambda target
 | IaC Gateway | 12 | Infrastructure as Code: CDK, CloudFormation, Terraform |
 | Data Gateway | 24 | Data & Analytics: DynamoDB, RDS/Aurora, ElastiCache, MSK |
 | Security Gateway | 14 | IAM analysis: policy simulation, role policies, trust relationships |
-| Monitoring Gateway | 16 | Observability: CloudWatch metrics/alarms/logs, CloudTrail events |
-| Cost Gateway | 9 | Cost management: Cost Explorer, forecasts, budgets |
+| Monitoring Gateway | 16 | Observability: CloudWatch metrics/alarms/logs, CloudTrail events, datasource diagnostics |
+| Cost Gateway | 9 | Cost management: Cost Explorer, forecasts, budgets, FinOps (Compute Optimizer, RI/SP, Trusted Advisor) |
 | Ops Gateway | 9 | General operations: AWS docs, CLI, Steampipe SQL |
 | **Total** | **125** | **Across 19 Lambda functions** |
 
-Route priority in `src/app/api/ai/route.ts`:
+Route priority in `src/app/api/ai/route.ts` (11 routes):
 1. Code execution keywords → Code Interpreter
 2. Network keywords → Network Gateway
 3. Container keywords → Container Gateway
@@ -102,10 +115,11 @@ Route priority in `src/app/api/ai/route.ts`:
 6. Security keywords → Security Gateway
 7. Monitoring keywords → Monitoring Gateway
 8. Cost keywords → Cost Gateway
-9. AWS resource keywords → Steampipe + Bedrock Direct
-10. General questions → Ops Gateway (fallback → Bedrock Direct)
+9. External datasource keywords → Datasource route (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+10. AWS resource keywords → Steampipe + Bedrock Direct
+11. General questions → Ops Gateway (fallback → Bedrock Direct)
 
-## Alert-Triggered AI Diagnosis (Proposed)
+## Alert-Triggered AI Diagnosis (Implemented — ADR-009)
 
 Multi-stage AI diagnosis pipeline that automatically receives alerts from external systems (CloudWatch Alarms via SNS, Prometheus Alertmanager webhook, Grafana webhook, SQS queue), correlates related alerts into incidents, investigates root cause using existing collectors (7 types), datasources (7 platforms), and AgentCore gateways (125 MCP tools), then delivers analysis to Slack (Block Kit) and SNS email. Includes knowledge base for past incident reference, change detection (CloudTrail + K8s rollouts), and severity-based channel routing. See [ADR-009](decisions/009-alert-triggered-ai-diagnosis.md) for the full design.
 

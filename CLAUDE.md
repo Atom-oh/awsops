@@ -19,7 +19,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 | 페이지 | 40 (/datasources, /ai-diagnosis 추가) |
 | 라우트 | 54 |
 | SQL 쿼리 파일 | 25 |
-| API 라우트 | 17 (datasources, k8s, report, alert-webhook 추가) |
+| API 라우트 | 18 (datasources, k8s, report, alert-webhook, notification 포함) |
 | 컴포넌트 | 18 (ReportMarkdown 추가) |
 | MCP 도구 | 125 (8 Gateway, 19 Lambda) |
 | AI 라우트 | 11 (datasource 라우트 추가) |
@@ -29,7 +29,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 
 ### 데이터 접근
 - 모든 쿼리는 `src/lib/steampipe.ts`의 **pg Pool**을 통해 실행 — Steampipe CLI 사용 금지
-- 풀 설정: `max: 5, statement_timeout: 120s, batchQuery: 5 sequential`
+- 풀 설정: `max: 10, statement_timeout: 120s, batchQuery: 8 sequential`
 - 결과는 node-cache를 통해 5분간 캐싱 (멀티 어카운트: 캐시키에 accountId 접두사)
 - `steampipe query "SQL"` CLI는 660배 느림 — 절대 사용 금지
 
@@ -106,7 +106,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `alert-knowledge.ts` — 알림 지식 베이스 (진단 기록 저장/유사도 검색/통계)
 - `slack-notification.ts` — Slack 알림 클라이언트 (Block Kit, 채널 라우팅, 스레드 업데이트)
 
-### API 라우트 (`src/app/api/`, 17개)
+### API 라우트 (`src/app/api/`, 18개)
 - `ai/route.ts` — AI 라우팅 (11 routes, 멀티 라우트, SSE 스트리밍, 도구 추론, datasource 라우트)
 - `steampipe/route.ts` — Steampipe 쿼리 + Cost 가용성 + 인벤토리 (POST/GET/PUT)
 - `auth/route.ts` — 로그아웃 (HttpOnly 쿠키 서버 사이드 삭제)
@@ -124,6 +124,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `k8s/route.ts` — EKS kubeconfig 등록
 - `report/route.ts` — AI 종합 진단 리포트 생성 + S3 저장 + 스케줄링
 - `alert-webhook/route.ts` — 알림 웹훅 수신 (CloudWatch SNS, Alertmanager, Grafana, Generic) + HMAC 인증 + 상관 분석 트리거
+- `notification/route.ts` — Slack/SNS 알림 발송 (Block Kit, 심각도 채널 라우팅, 마크다운→평문 변환)
 
 ### 인프라
 - `infra-cdk/lib/awsops-stack.ts` — CDK 인프라 (VPC, EC2, ALB, CloudFront)
@@ -216,7 +217,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 | Pages | 40 (incl. /datasources, /ai-diagnosis) |
 | Routes | 54 |
 | SQL Query Files | 25 |
-| API Routes | 17 (incl. datasources, k8s, report, alert-webhook) |
+| API Routes | 18 (incl. datasources, k8s, report, alert-webhook, notification) |
 | Components | 18 (incl. ReportMarkdown) |
 | MCP Tools | 125 (8 Gateways, 19 Lambda) |
 | AI Routes | 11 (incl. datasource route) |
@@ -226,7 +227,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 
 ### Data Access
 - ALL queries through `src/lib/steampipe.ts` pg Pool — NOT Steampipe CLI
-- Pool: max 5, 120s timeout, 5 sequential batch. Cache: 5min TTL (node-cache, accountId-prefixed keys)
+- Pool: max 10, 120s timeout, 8 sequential batch. Cache: 5min TTL (node-cache, accountId-prefixed keys)
 - Never use `steampipe query "SQL"` CLI — it's 660x slower
 
 ### Multi-Account
@@ -301,7 +302,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `alert-knowledge.ts` — Alert knowledge base (diagnosis record storage, similarity search, statistics)
 - `slack-notification.ts` — Slack notification client (Block Kit, severity-based channel routing, thread updates)
 
-### API Routes (`src/app/api/`, 17 routes)
+### API Routes (`src/app/api/`, 18 routes)
 - `ai/route.ts` — AI routing (11 routes, multi-route, SSE streaming, tool inference, datasource route)
 - `steampipe/route.ts` — Steampipe queries + Cost availability + Inventory (POST/GET/PUT)
 - `auth/route.ts` — Logout (server-side HttpOnly cookie deletion)
@@ -319,6 +320,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `k8s/route.ts` — EKS kubeconfig registration
 - `report/route.ts` — AI diagnosis report generation + S3 storage + scheduling
 - `alert-webhook/route.ts` — Alert webhook receiver (CloudWatch SNS, Alertmanager, Grafana, Generic) + HMAC auth + correlation trigger
+- `notification/route.ts` — Slack/SNS notification dispatch (Block Kit, severity-based channel routing, markdown-to-plaintext)
 
 ### Infrastructure
 - `infra-cdk/lib/awsops-stack.ts` — CDK infra (VPC, EC2, ALB, CloudFront)

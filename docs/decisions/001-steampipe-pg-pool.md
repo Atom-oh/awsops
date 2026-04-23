@@ -17,8 +17,8 @@ CLI 대신 pg Pool 직접 연결을 사용합니다.
   (pg Pool: ~0.006 seconds per query — 660x faster)
 - CLI는 SQL 내 `$` 문자로 인한 셸 인젝션 위험이 있음 — K8s jsonb 쿼리
   (CLI has shell injection risks with `$` characters in SQL — K8s jsonb queries)
-- pg Pool은 커넥션 풀링(최대 3개) 및 구문 타임아웃(120초)을 지원합니다
-  (pg Pool allows connection pooling (max:3) and statement timeouts (120s))
+- pg Pool은 커넥션 풀링(최대 10개) 및 구문 타임아웃(120초)을 지원합니다. 배치 쿼리는 8개씩 순차 실행, 캐시는 node-cache (TTL 300초, 계정별 접두사 키). 상세 튜닝 근거는 ADR-017 참고.
+  (pg Pool allows connection pooling (max:10) and statement timeouts (120s). Batch queries run 8 sequentially; cache is node-cache (TTL 300s, accountId-prefixed keys). See ADR-017 for tuning rationale.)
 
 ## 결과 / Consequences
 - Steampipe를 서비스로 실행해야 합니다: `steampipe service start --database-port 9193`

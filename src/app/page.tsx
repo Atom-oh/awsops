@@ -10,6 +10,7 @@ import {
   Server, Database, DollarSign, Box, Shield, Network,
   Bell, Container, ShieldCheck, AlertTriangle, Zap, Table,
   FileSearch, Globe, Package, HardDrive, Radio, Search, RefreshCw,
+  Siren,
 } from 'lucide-react';
 import { queries as ec2Q } from '@/lib/queries/ec2';
 import { queries as s3Q } from '@/lib/queries/s3';
@@ -156,6 +157,26 @@ export default function DashboardPage() {
   const os = getFirst('osSummary') as any;
   const podSum = getFirst('k8sPods') as any;
   const totalPods = Number(podSum?.total_pods) || 0;
+
+  // Recent alert-triggered incidents (ADR-009) / 최근 알림 기반 인시던트
+  const [recentIncidents, setRecentIncidents] = useState<any[]>([]);
+  const [activeIncidents, setActiveIncidents] = useState<any[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchIncidents = () => {
+      fetch('/awsops/api/alert-webhook', { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (cancelled || !d) return;
+          setActiveIncidents(Array.isArray(d.activeIncidents) ? d.activeIncidents : []);
+          setRecentIncidents(Array.isArray(d.recentDiagnoses) ? d.recentDiagnoses.slice(0, 5) : []);
+        })
+        .catch(() => {});
+    };
+    fetchIncidents();
+    const id = setInterval(fetchIncidents, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   // CIS benchmark cached result / CIS 벤치마크 캐시 결과
   const [cisSummary, setCisSummary] = useState<any>(null);
@@ -369,6 +390,55 @@ export default function DashboardPage() {
                 className="flex items-center gap-3 p-2.5 rounded bg-navy-900 cursor-pointer hover:bg-navy-700 transition-colors">
                 <w.icon size={16} className={w.severity === 'error' ? 'text-accent-red' : 'text-accent-orange'} />
                 <span className="text-sm">{w.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Alert-triggered incidents (ADR-009) / 알림 기반 인시던트 */}
+      {(activeIncidents.length > 0 || recentIncidents.length > 0) && (
+        <div className="bg-navy-800 rounded-lg border border-navy-600 p-5">
+          <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <Siren size={14} className={activeIncidents.length > 0 ? 'text-accent-red animate-pulse' : 'text-gray-500'} />
+            Alert Incidents
+            {activeIncidents.length > 0 && (
+              <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-accent-red/10 text-accent-red border border-accent-red/30">
+                {activeIncidents.length} active
+              </span>
+            )}
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {activeIncidents.slice(0, 6).map((inc: any) => (
+              <div key={inc.id}
+                onClick={() => router.push('/ai-diagnosis')}
+                className={`flex items-start gap-2 p-3 rounded cursor-pointer hover:bg-navy-700 transition-colors ${
+                  inc.severity === 'critical' ? 'bg-accent-red/5 border border-accent-red/20' : 'bg-accent-orange/5 border border-accent-orange/20'
+                }`}
+              >
+                <Siren size={12} className={inc.severity === 'critical' ? 'text-accent-red mt-0.5' : 'text-accent-orange mt-0.5'} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-mono text-gray-400 truncate">{inc.id}</div>
+                  <div className="text-sm text-white truncate">{inc.topAlertName || '(no alert name)'}</div>
+                  <div className="text-[11px] text-gray-500 mt-0.5">
+                    {inc.alertCount} alert{inc.alertCount !== 1 ? 's' : ''} · {inc.status} · {(inc.affectedServices || []).slice(0, 2).join(', ') || 'unknown'}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {activeIncidents.length === 0 && recentIncidents.map((rec: any) => (
+              <div key={rec.incidentId}
+                onClick={() => router.push('/ai-diagnosis')}
+                className="flex items-start gap-2 p-3 rounded bg-navy-900 cursor-pointer hover:bg-navy-700 transition-colors"
+              >
+                <ShieldCheck size={12} className="text-accent-green mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-mono text-gray-500 truncate">{rec.incidentId}</div>
+                  <div className="text-sm text-gray-300 truncate">{rec.rootCause || 'Analysis complete'}</div>
+                  <div className="text-[11px] text-gray-600 mt-0.5">
+                    {rec.rootCauseCategory || 'unknown'} · {rec.confidence || 'medium'} confidence
+                  </div>
+                </div>
               </div>
             ))}
           </div>

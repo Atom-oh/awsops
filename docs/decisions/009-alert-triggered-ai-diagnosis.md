@@ -1,6 +1,6 @@
 # ADR-009: Alert-Triggered AI Diagnosis / 알림 트리거 AI 자동 진단
 
-## Status: Proposed / 상태: 제안됨
+## Status: Accepted (2026-04-22) / 상태: 채택됨
 
 ## Context / 컨텍스트
 
@@ -692,6 +692,10 @@ Add a new **Alert & Notifications** page (`src/app/alert-settings/page.tsx`) or 
 - **Maximum reuse**: Leverages all 7 existing collectors, 125 MCP tools, 7 datasource types, and Bedrock infrastructure. Estimated 70%+ of investigation code is reused
 - **Multi-channel**: Slack (rich Block Kit), SNS email, dashboard -- operations teams get results wherever they work
 - **Extensible**: New alert sources require only a normalizer function (~30 lines). New investigation strategies are declarative (add to decision matrix)
+
+### Post-acceptance deviations / 채택 후 변경사항
+- **Analysis model: Sonnet 4.6 instead of Opus 4.6**. Commit `ba03173` switched `alert-diagnosis.ts` to `global.anthropic.claude-sonnet-4-6` (ap-northeast-2 regional endpoint) to reduce per-incident cost by ~5x and avoid cross-region (us-east-1) latency. Quality tradeoff accepted for automated pipeline — on-demand deep investigation in AI chat still uses Opus via AgentCore.
+- **분석 모델: Opus 4.6 → Sonnet 4.6 변경**. 커밋 `ba03173`에서 `alert-diagnosis.ts`가 `global.anthropic.claude-sonnet-4-6`로 교체됨(ap-northeast-2 리전 엔드포인트). 인시던트당 비용 약 5배 절감 + us-east-1 크로스 리전 지연 회피. AI 채팅의 on-demand 심층 조사는 여전히 AgentCore 경유 Opus 사용.
 
 ### Negative / 부정적
 - **In-process resource sharing**: Background investigations share CPU/memory with the dashboard. Mitigated by `maxConcurrentInvestigations` (default 3) and `cooldownMinutes`
