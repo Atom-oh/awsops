@@ -8,36 +8,32 @@ import { getAllowedEksClusters } from '@/lib/app-config';
 const HOME = process.env.HOME || '/home/ec2-user';
 const K8S_SPC_PATH = resolve(HOME, '.steampipe/config/kubernetes.spc');
 
-// Add a connection block for the new context if it doesn't exist
-// 새 컨텍스트에 대한 connection 블록이 없으면 추가
+// Add a connection block for the new context if it doesn't exist.
+// Rewrites the file so there is exactly one `connection "kubernetes"` (the aggregator)
+// — a duplicate default + aggregator pair causes Steampipe to error:
+//   `duplicate connection name: 'kubernetes'` which nukes schema loading for ALL clusters.
+// 새 컨텍스트에 대한 connection 블록이 없으면 추가. `connection "kubernetes"`는 오직 aggregator 하나만 남겨야 함.
 function addConnectionIfMissing(clusterName: string, contextArn: string) {
   const connName = 'kubernetes_' + clusterName.replace(/[^a-zA-Z0-9]/g, '_');
+  const aggregatorBlock = `connection "kubernetes" {\n  plugin      = "kubernetes"\n  type        = "aggregator"\n  connections = ["kubernetes_*"]\n}\n`;
+  const newBlock = `connection "${connName}" {\n  plugin = "kubernetes"\n  config_context = "${contextArn}"\n  custom_resource_tables = ["*"]\n}\n`;
+
+  let content = '';
   try {
-    const content = readFileSync(K8S_SPC_PATH, 'utf-8');
-    if (content.includes(contextArn)) return false; // already exists
-
-    // Insert new connection block before the aggregator (or at end)
-    const newBlock = `\nconnection "${connName}" {\n  plugin = "kubernetes"\n  config_context = "${contextArn}"\n  custom_resource_tables = ["*"]\n}\n`;
-
-    const aggregatorMatch = /connection\s+"kubernetes"\s*\{[\s\S]*?type\s*=\s*"aggregator"[\s\S]*?\}/.exec(content);
-    if (!aggregatorMatch) {
-      // No aggregator — append connection + create aggregator
-      const withAggregator = content + newBlock + `\nconnection "kubernetes" {\n  plugin      = "kubernetes"\n  type        = "aggregator"\n  connections = ["kubernetes_*"]\n}\n`;
-      writeFileSync(K8S_SPC_PATH, withAggregator, 'utf-8');
-    } else {
-      // Insert before aggregator block, remove any duplicates first
-      const aggStart = aggregatorMatch.index;
-      const before = content.slice(0, aggStart);
-      const aggBlock = aggregatorMatch[0];
-      // Strip any extra aggregator blocks that might follow
-      writeFileSync(K8S_SPC_PATH, before + newBlock + '\n' + aggBlock + '\n', 'utf-8');
-    }
-    return true; // added
+    content = readFileSync(K8S_SPC_PATH, 'utf-8');
   } catch {
-    // File missing — create from scratch
-    writeFileSync(K8S_SPC_PATH, `connection "${connName}" {\n  plugin = "kubernetes"\n  config_context = "${contextArn}"\n  custom_resource_tables = ["*"]\n}\n\nconnection "kubernetes" {\n  plugin    = "kubernetes"\n  type      = "aggregator"\n  connections = ["kubernetes_*"]\n}\n`, 'utf-8');
+    writeFileSync(K8S_SPC_PATH, newBlock + '\n' + aggregatorBlock, 'utf-8');
     return true;
   }
+
+  if (content.includes(contextArn)) return false; // already exists
+
+  // Strip every `connection "kubernetes" { ... }` block (aggregator or default)
+  // to avoid duplicate-connection errors; we re-append a single aggregator at the end.
+  const stripped = content.replace(/connection\s+"kubernetes"\s*\{[\s\S]*?\n\}\s*/g, '').trimEnd() + '\n';
+
+  writeFileSync(K8S_SPC_PATH, stripped + '\n' + newBlock + '\n' + aggregatorBlock, 'utf-8');
+  return true;
 }
 
 // POST: Register kubeconfig + add Steampipe connection + restart Steampipe

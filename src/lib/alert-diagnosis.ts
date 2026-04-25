@@ -12,10 +12,10 @@ import { sendSlackAlert } from '@/lib/slack-notification';
 import { notifyAlertDiagnosis } from '@/lib/sns-notification';
 import { saveAlertDiagnosis, findSimilarIncidents } from '@/lib/alert-knowledge';
 import type { Incident, DiagnosisResult, AlertEvent } from '@/lib/alert-types';
-import type { CollectorResult, SendFn } from '@/lib/collectors/types';
+import type { AlertContext, CollectorResult, SendFn } from '@/lib/collectors/types';
 
-const BEDROCK_REGION = 'us-east-1';
-const OPUS_MODEL = 'anthropic.claude-opus-4-20250514';
+const BEDROCK_REGION = 'ap-northeast-2';
+const ANALYSIS_MODEL = 'global.anthropic.claude-sonnet-4-6';
 const MAX_CONTEXT_CHARS = 60_000;
 
 // --- Initialization ---
@@ -186,7 +186,7 @@ async function investigateIncident(incident: Incident): Promise<void> {
       confidence: diagnosis.confidence,
       investigationSources: collectionResult.sources,
       processingTimeMs: Date.now() - startTime,
-      model: OPUS_MODEL,
+      model: ANALYSIS_MODEL,
       inputTokens: diagnosis.inputTokens,
       outputTokens: diagnosis.outputTokens,
     };
@@ -229,6 +229,26 @@ interface RecentChanges {
   k8sRollouts: Record<string, unknown>[];
 }
 
+function buildAlertContext(incident: Incident): AlertContext {
+  const namespaces = new Set<string>();
+  const alertNames = new Set<string>();
+  let earliest: string | undefined;
+
+  for (const alert of incident.alerts) {
+    if (alert.labels.namespace) namespaces.add(alert.labels.namespace);
+    if (alert.alertName) alertNames.add(alert.alertName);
+    if (!earliest || alert.timestamp < earliest) earliest = alert.timestamp;
+  }
+
+  return {
+    services: incident.affectedServices,
+    resources: incident.affectedResources,
+    alertNames: Array.from(alertNames),
+    namespaces: Array.from(namespaces),
+    since: earliest,
+  };
+}
+
 async function collectInvestigationData(plan: InvestigationPlan, incident: Incident): Promise<InvestigationData> {
   const data: InvestigationData = {
     collectorResults: {},
@@ -241,6 +261,10 @@ async function collectInvestigationData(plan: InvestigationPlan, incident: Incid
   // Null SSE sender (we're running in background, not streaming to UI)
   const nullSend: SendFn = () => {};
 
+  // Build alert-scoped context so collectors can narrow their queries to the
+  // firing alert's services/resources/namespaces (ADR-009).
+  const alertContext = buildAlertContext(incident);
+
   // Run all collections in parallel
   const tasks: Promise<void>[] = [];
 
@@ -249,9 +273,9 @@ async function collectInvestigationData(plan: InvestigationPlan, incident: Incid
     tasks.push(
       (async () => {
         try {
-          const collectorMod = await import(`@/lib/collectors/${key}`);
+          const collectorMod = await import(/* webpackInclude: /\.(ts|tsx|js)$/ */ `@/lib/collectors/${key}`);
           const collector = collectorMod.default as import('@/lib/collectors/types').Collector;
-          const result = await collector.collect(nullSend);
+          const result = await collector.collect(nullSend, undefined, false, alertContext);
           data.collectorResults[key] = result;
           data.sources.push(...result.queriedResources);
         } catch (err) {
@@ -392,7 +416,7 @@ async function analyzeWithBedrock(
 
   const client = new BedrockRuntimeClient({ region: BEDROCK_REGION });
   const response = await client.send(new InvokeModelCommand({
-    modelId: OPUS_MODEL,
+    modelId: ANALYSIS_MODEL,
     contentType: 'application/json',
     accept: 'application/json',
     body: JSON.stringify({

@@ -44,6 +44,7 @@ vi.mock('@/lib/app-config', () => ({
 // Mock correlation engine
 vi.mock('@/lib/alert-correlation', () => ({
   ingestAlert: vi.fn(),
+  getActiveIncidents: vi.fn(() => []),
 }));
 
 // Mock diagnosis

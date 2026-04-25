@@ -74,6 +74,8 @@ export interface AlertSourceConfig {
 export interface AlertDiagnosisConfig {
   enabled: boolean;
   sources?: Partial<Record<AlertSource, AlertSourceConfig>>;
+  alertTopicArn?: string;
+  alertQueueUrl?: string;
   // Correlation settings
   correlationWindowSeconds?: number;      // default 30
   deduplicationWindowMinutes?: number;    // default 15

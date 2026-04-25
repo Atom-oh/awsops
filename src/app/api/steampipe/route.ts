@@ -8,6 +8,7 @@ import { saveCostSnapshot, getLatestCostSnapshot } from '@/lib/cost-snapshot';
 import { getConfig, saveConfig, validateAccountId, getAccounts, isMultiAccount, getAllowedAccountIds, isAccountAllowed, getAllowedPages, getAllowedEksClusters, getAllowedDatasources } from '@/lib/app-config';
 import type { AccountConfig } from '@/lib/app-config';
 import { getCacheWarmerStatus, ensureCacheWarmerStarted } from '@/lib/cache-warmer';
+import { ensureSqsPollerStarted } from '@/lib/alert-sqs-poller';
 import { getUserFromRequest } from '@/lib/auth-utils';
 
 const COST_QUERY_KEYS = ['monthlyCost', 'costSummary', 'dailyCost', 'serviceCost', 'costDetail'];
@@ -30,8 +31,10 @@ function checkRateLimit(userId: string): boolean {
 }
 
 export async function GET(request: NextRequest) {
-  // Auto-start cache warmer on first request / 첫 요청 시 캐시 워머 자동 시작
+  // Auto-start cache warmer + SQS alert poller on first request
+  // 첫 요청 시 캐시 워머 + SQS 알림 폴러 자동 시작
   ensureCacheWarmerStarted();
+  ensureSqsPollerStarted();
 
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
@@ -138,7 +141,7 @@ export async function PUT(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
 
-    const adminActions = ['add-account', 'remove-account', 'init-host', 'save-alert-config', 'save-departments', 'test-slack'];
+    const adminActions = ['add-account', 'remove-account', 'init-host', 'save-alert-config', 'save-departments', 'test-slack', 'setup-alert-pipeline', 'test-alert'];
     if (action && adminActions.includes(action)) {
       const user = getUserFromRequest(request);
       if (user.email === 'anonymous') {
@@ -536,6 +539,185 @@ export async function PUT(request: NextRequest) {
         return NextResponse.json(result);
       } catch (err) {
         return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : 'Test failed' });
+      }
+    }
+
+    // Setup alert pipeline — auto-create SNS topic + SQS queue + subscription
+    // 알림 파이프라인 설정 — SNS 토픽 + SQS 큐 + 구독 자동 생성
+    if (action === 'setup-alert-pipeline') {
+      try {
+        const { SNSClient, CreateTopicCommand, SubscribeCommand, ListSubscriptionsByTopicCommand } = await import('@aws-sdk/client-sns');
+        const { SQSClient, GetQueueUrlCommand, CreateQueueCommand, GetQueueAttributesCommand, SetQueueAttributesCommand } = await import('@aws-sdk/client-sqs');
+
+        // Resolve region from host account config
+        const currentConfig = getConfig();
+        const hostAccount = (currentConfig.accounts || []).find((a: AccountConfig) => a.isHost);
+        const region = hostAccount?.region || process.env.AWS_REGION || 'ap-northeast-2';
+        const accountId = hostAccount?.accountId || '180294183052';
+        const snsClient = new SNSClient({ region });
+        const sqsClient = new SQSClient({ region });
+
+        // 1. Find/create SNS topic (CreateTopic is idempotent)
+        const topicResp = await snsClient.send(new CreateTopicCommand({ Name: 'awsops-alert-topic' }));
+        const topicArn = topicResp.TopicArn!;
+
+        // 2. Find or create SQS DLQ + main queue
+        let queueUrl: string;
+        try {
+          const queueResp = await sqsClient.send(new GetQueueUrlCommand({ QueueName: 'awsops-alert-queue' }));
+          queueUrl = queueResp.QueueUrl!;
+        } catch {
+          // Create DLQ first
+          const dlqResp = await sqsClient.send(new CreateQueueCommand({
+            QueueName: 'awsops-alert-dlq',
+            Attributes: { MessageRetentionPeriod: '1209600' },
+          }));
+          const dlqUrl = dlqResp.QueueUrl!;
+          const dlqAttr = await sqsClient.send(new GetQueueAttributesCommand({
+            QueueUrl: dlqUrl, AttributeNames: ['QueueArn'],
+          }));
+          const dlqArn = dlqAttr.Attributes?.QueueArn || '';
+
+          // Create main queue with redrive policy
+          const mainResp = await sqsClient.send(new CreateQueueCommand({
+            QueueName: 'awsops-alert-queue',
+            Attributes: {
+              MessageRetentionPeriod: '86400',
+              VisibilityTimeout: '120',
+              RedrivePolicy: JSON.stringify({ deadLetterTargetArn: dlqArn, maxReceiveCount: '3' }),
+            },
+          }));
+          queueUrl = mainResp.QueueUrl!;
+          console.log(`[AlertPipeline] Created SQS queue + DLQ`);
+        }
+
+        // 3. Get SQS queue ARN
+        const attrResp = await sqsClient.send(new GetQueueAttributesCommand({
+          QueueUrl: queueUrl, AttributeNames: ['QueueArn'],
+        }));
+        const queueArn = attrResp.Attributes?.QueueArn || '';
+
+        // 4. Set SQS policy to allow SNS to send messages
+        const sqsPolicy = JSON.stringify({
+          Version: '2012-10-17',
+          Statement: [{
+            Effect: 'Allow',
+            Principal: { Service: 'sns.amazonaws.com' },
+            Action: 'sqs:SendMessage',
+            Resource: queueArn,
+            Condition: { ArnLike: { 'aws:SourceArn': `arn:aws:sns:${region}:${accountId}:awsops-*` } },
+          }],
+        });
+        await sqsClient.send(new SetQueueAttributesCommand({
+          QueueUrl: queueUrl, Attributes: { Policy: sqsPolicy },
+        }));
+
+        // 5. Find or create SNS→SQS subscription
+        let subscribed = false;
+        const subsResp = await snsClient.send(new ListSubscriptionsByTopicCommand({ TopicArn: topicArn }));
+        const existingSub = (subsResp.Subscriptions || []).find(
+          s => s.Protocol === 'sqs' && s.Endpoint === queueArn
+        );
+
+        if (existingSub) {
+          subscribed = true;
+        } else {
+          await snsClient.send(new SubscribeCommand({
+            TopicArn: topicArn,
+            Protocol: 'sqs',
+            Endpoint: queueArn,
+          }));
+          subscribed = true;
+          console.log(`[AlertPipeline] Created SNS→SQS subscription`);
+        }
+
+        // 5. Save to config — enable diagnosis + SQS + CloudWatch sources
+        const alertDiagnosis = currentConfig.alertDiagnosis || { enabled: false };
+        alertDiagnosis.enabled = true;
+        alertDiagnosis.alertTopicArn = topicArn;
+        alertDiagnosis.alertQueueUrl = queueUrl;
+        if (!alertDiagnosis.sources) alertDiagnosis.sources = {};
+        alertDiagnosis.sources.sqs = {
+          ...(alertDiagnosis.sources.sqs || {}),
+          enabled: true,
+          queueUrl,
+          region,
+        };
+        alertDiagnosis.sources.cloudwatch = {
+          ...(alertDiagnosis.sources.cloudwatch || {}),
+          enabled: true,
+        };
+        saveConfig({ alertDiagnosis });
+
+        // 6. Restart SQS poller with new config
+        const { stopSqsPoller } = await import('@/lib/alert-sqs-poller');
+        stopSqsPoller();
+        ensureSqsPollerStarted();
+
+        return NextResponse.json({
+          topicArn,
+          queueUrl,
+          queueArn,
+          subscribed,
+          sourcesEnabled: ['sqs', 'cloudwatch'],
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Pipeline setup failed';
+        return NextResponse.json({ error: msg }, { status: 500 });
+      }
+    }
+
+    // Test alert — publish a test CloudWatch Alarm message to the alert SNS topic
+    // 테스트 알림 — 알림 SNS 토픽에 테스트 CloudWatch Alarm 메시지 발행
+    if (action === 'test-alert') {
+      try {
+        const currentConfig = getConfig();
+        const diagConfig = currentConfig.alertDiagnosis;
+        const topicArn = diagConfig?.alertTopicArn;
+        if (!topicArn) {
+          return NextResponse.json({ error: 'Alert pipeline not configured. Run Auto-Setup first.' }, { status: 400 });
+        }
+
+        const hostAccount = (currentConfig.accounts || []).find((a: AccountConfig) => a.isHost);
+        const region = hostAccount?.region || process.env.AWS_REGION || 'ap-northeast-2';
+
+        const { SNSClient, PublishCommand } = await import('@aws-sdk/client-sns');
+        const snsClient = new SNSClient({ region });
+
+        const testMessage = {
+          AlarmName: 'AWSops-Test-Alert',
+          AlarmDescription: 'Test alert from AWSops Alert Settings',
+          NewStateValue: 'ALARM',
+          NewStateReason: 'Test alert triggered manually from AWSops dashboard',
+          StateChangeTime: new Date().toISOString(),
+          Region: region,
+          AlarmArn: `arn:aws:cloudwatch:${region}:000000000000:alarm:AWSops-Test-Alert`,
+          AWSAccountId: '000000000000',
+          OldStateValue: 'OK',
+          Trigger: {
+            MetricName: 'CPUUtilization',
+            Namespace: 'AWS/EC2',
+            StatisticType: 'Statistic',
+            Statistic: 'AVERAGE',
+            Period: 300,
+            EvaluationPeriods: 1,
+            ComparisonOperator: 'GreaterThanThreshold',
+            Threshold: 80.0,
+            TreatMissingData: 'missing',
+            Dimensions: [{ name: 'InstanceId', value: 'i-test-alert-000' }],
+          },
+        };
+
+        await snsClient.send(new PublishCommand({
+          TopicArn: topicArn,
+          Subject: 'ALARM: "AWSops-Test-Alert" in Asia Pacific (Seoul)',
+          Message: JSON.stringify(testMessage),
+        }));
+
+        return NextResponse.json({ published: true, topicArn });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Test alert failed';
+        return NextResponse.json({ error: msg, published: false }, { status: 500 });
       }
     }
 

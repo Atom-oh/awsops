@@ -137,6 +137,28 @@ export async function publishNotification(
   }
 }
 
+// Strip markdown syntax for plain-text email
+// 이메일용 마크다운 제거 (SNS는 plain text만 지원)
+function stripMarkdown(md: string): string {
+  return md
+    .replace(/^#{1,6}\s+/gm, '')           // headings: ### Title → Title
+    .replace(/\*\*([^*]+)\*\*/g, '$1')      // bold: **text** → text
+    .replace(/\*([^*]+)\*/g, '$1')          // italic: *text* → text
+    .replace(/`([^`]+)`/g, '$1')            // inline code: `code` → code
+    .replace(/^>\s?/gm, '  ')              // blockquote: > text → text
+    .replace(/^---+$/gm, '────────────────')// horizontal rule
+    .replace(/^\|.*\|$/gm, (line) => {     // table rows → aligned text
+      if (/^[\s|:-]+$/.test(line)) return '';// remove separator rows (|---|---|)
+      return line
+        .replace(/^\||\|$/g, '')           // trim outer pipes
+        .split('|')
+        .map(cell => cell.trim().padEnd(25))
+        .join('  ');
+    })
+    .replace(/\n{3,}/g, '\n\n')            // collapse multiple blank lines
+    .trim();
+}
+
 // Send report completion notification
 // 리포트 완료 알림 발송
 export async function notifyReportCompleted(opts: {
@@ -146,8 +168,9 @@ export async function notifyReportCompleted(opts: {
   pillarScores?: Record<string, string>;
   downloadUrlDocx?: string;
   downloadUrlMd?: string;
+  dashboardBaseUrl?: string;
 }): Promise<boolean> {
-  const { reportId, accountAlias, executiveSummary, pillarScores, downloadUrlDocx, downloadUrlMd } = opts;
+  const { reportId, accountAlias, executiveSummary, pillarScores, dashboardBaseUrl } = opts;
   const account = accountAlias || 'Default';
   const subject = `[AWSops] 종합진단 리포트 완료 — ${account}`;
 
@@ -162,7 +185,7 @@ export async function notifyReportCompleted(opts: {
 
   if (executiveSummary) {
     lines.push(`── Executive Summary ──`);
-    lines.push(executiveSummary.slice(0, 500));
+    lines.push(stripMarkdown(executiveSummary).slice(0, 600));
     lines.push(``);
   }
 
@@ -174,15 +197,16 @@ export async function notifyReportCompleted(opts: {
     lines.push(``);
   }
 
-  if (downloadUrlDocx) {
-    lines.push(`Download DOCX: ${downloadUrlDocx}`);
-  }
-  if (downloadUrlMd) {
-    lines.push(`Download MD: ${downloadUrlMd}`);
-  }
+  // Use short dashboard download URLs instead of raw S3 presigned URLs
+  // (presigned URLs are too long and get truncated in email clients)
+  // 대시보드 다운로드 URL 사용 (S3 presigned URL은 너무 길어서 이메일에서 잘림)
+  const base = dashboardBaseUrl || 'https://awsops.atomai.click/awsops';
+  lines.push(`── Download ──`);
+  lines.push(`[Download DOCX] ${base}/api/report?id=${reportId}&action=download-docx`);
+  lines.push(`[Download Markdown] ${base}/api/report?id=${reportId}&action=download-md`);
   lines.push(``);
-  lines.push(`※ 다운로드 링크는 1시간 유효합니다.`);
-  lines.push(`※ AWSops 대시보드에서 이전 리포트를 확인할 수 있습니다.`);
+  lines.push(`※ 다운로드 링크는 7일간 유효합니다 (로그인 필요).`);
+  lines.push(`※ 대시보드에서 이전 리포트 확인: ${base}/ai-diagnosis`);
 
   return publishNotification(subject, lines.join('\n'));
 }
@@ -251,11 +275,12 @@ export async function notifyAlertDiagnosis(opts: {
     ``,
   ];
 
-  // Include first 1000 chars of the diagnosis markdown
+  // Include first 1000 chars of the diagnosis (stripped of markdown)
   if (result.markdown) {
+    const plain = stripMarkdown(result.markdown);
     lines.push(`── Diagnosis ──`);
-    lines.push(result.markdown.slice(0, 1000));
-    if (result.markdown.length > 1000) lines.push(`... (전체 내용은 대시보드에서 확인)`);
+    lines.push(plain.slice(0, 1000));
+    if (plain.length > 1000) lines.push(`... (전체 내용은 대시보드에서 확인)`);
     lines.push(``);
   }
 
