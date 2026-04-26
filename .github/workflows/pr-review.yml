@@ -1,0 +1,117 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: awsops-claude-arm
+    permissions:
+      pull-requests: write
+      contents: read
+    env:
+      ANTHROPIC_MODEL: us.anthropic.claude-opus-4-7
+      CLAUDE_CODE_USE_BEDROCK: 1
+      ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+          gh pr view "$PR_NUMBER" --json title,body --jq '{title: .title, body: .body}' > /tmp/pr-info.json
+          echo "Diff: $(wc -l < /tmp/pr-diff.txt) lines"
+
+      - name: Review with Claude Code
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          PR_TITLE=$(cat /tmp/pr-info.json | python3 -c "import json,sys; print(json.load(sys.stdin).get('title',''))" 2>/dev/null || echo "")
+          DIFF=$(head -3000 /tmp/pr-diff.txt)
+
+          claude -p "You are reviewing PR #${PR_NUMBER}: ${PR_TITLE}
+
+          Read CLAUDE.md for project context. Then review this diff:
+
+          \`\`\`diff
+          ${DIFF}
+          \`\`\`
+
+          Provide:
+          1. **Summary** — what this PR does (2-3 sentences)
+          2. **Issues** — bugs, security risks, logic errors (CRITICAL/MAJOR/MINOR)
+          3. **Suggestions** — improvements
+          4. **Verdict** — LGTM / Changes Requested
+
+          Rules:
+          - Read CLAUDE.md to understand project conventions
+          - This is an AWS operations dashboard (Next.js 14 + Steampipe + Bedrock AgentCore)
+          - Check: SQL injection in Steampipe queries, SSRF in external datasource calls, Cognito auth bypass
+          - Check: basePath '/awsops' consistency in fetch URLs, node-cache invalidation, pg pool usage
+          - Check: CDK security (no public resources, KMS encryption, Cognito config)
+          - Be concise. Write in Korean with English technical terms.
+          - Output ONLY the review markdown, no preamble.
+          - IMPORTANT: The very last line of your output MUST be exactly one of:
+            VERDICT: PASS
+            VERDICT: FAIL
+          Use FAIL if there are any CRITICAL or MAJOR issues. Use PASS otherwise." --output-format text > /tmp/review.md
+
+          echo "Review generated: $(wc -c < /tmp/review.md) bytes"
+
+      - name: Check for blocking issues
+        id: gate
+        run: |
+          VERDICT_LINE=$(tail -5 /tmp/review.md | grep -i "^VERDICT:" | tail -1)
+          echo "Verdict line: $VERDICT_LINE"
+          if echo "$VERDICT_LINE" | grep -qi "FAIL"; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=$VERDICT_LINE" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+            echo "reason=No blocking issues" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GATE_RESULT: ${{ steps.gate.outputs.result }}
+        run: |
+          MARKER="<!-- bedrock-pr-review -->"
+          if [ "$GATE_RESULT" = "fail" ]; then
+            STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
+          else
+            STATUS_BADGE="**Status: PASSED** — No blocking issues found"
+          fi
+          sed -i '/^VERDICT:/d' /tmp/review.md
+          {
+            echo "$MARKER"
+            echo "## AI Code Review (Claude Code + Opus 4.7)"
+            echo ""
+            echo "$STATUS_BADGE"
+            echo ""
+            cat /tmp/review.md
+            echo ""
+            echo "---"
+            echo "_Automated review by Claude Code CLI with Bedrock Opus 4.7_"
+          } > /tmp/comment.md
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->")) | .id' 2>/dev/null | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api "repos/$REPO/issues/comments/$EXISTING" -X DELETE 2>/dev/null || true
+          fi
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+
+      - name: Fail if CRITICAL or MAJOR
+        if: steps.gate.outputs.result == 'fail'
+        run: |
+          echo "AI Review failed: ${{ steps.gate.outputs.reason }}"
+          exit 1
