@@ -54,14 +54,25 @@ echo -e "  ${GREEN}Started (log: /tmp/awsops-server.log)${NC}"
 # -- [3/3] OpenCost port-forward (if OpenCost installed) ----------------------
 echo ""
 echo -e "${CYAN}[3/3] Starting OpenCost port-forward (if installed)...${NC}"
-if kubectl get deployment opencost -n opencost &>/dev/null 2>&1; then
+# Read opencostContext from config.json — pinned to the cluster where OpenCost was installed
+# config.json의 opencostContext를 읽음 — OpenCost가 설치된 클러스터에 고정
+OPENCOST_CTX=""
+if [ -f "$(dirname "$0")/../data/config.json" ]; then
+    OPENCOST_CTX=$(python3 -c "import json; print(json.load(open('$(dirname "$0")/../data/config.json')).get('opencostContext',''))" 2>/dev/null || echo "")
+fi
+KUBECTL_CTX_ARG=""
+[ -n "$OPENCOST_CTX" ] && KUBECTL_CTX_ARG="--context=$OPENCOST_CTX"
+
+if kubectl $KUBECTL_CTX_ARG get deployment opencost -n opencost &>/dev/null 2>&1; then
     # Kill existing port-forward / 기존 포트 포워딩 종료
     pkill -f "kubectl port-forward.*opencost.*9003" 2>/dev/null || true
     sleep 1
-    nohup kubectl port-forward svc/opencost 9003:9003 -n opencost --address 0.0.0.0 > /tmp/opencost-portforward.log 2>&1 &
+    nohup kubectl $KUBECTL_CTX_ARG port-forward svc/opencost 9003:9003 -n opencost --address 0.0.0.0 > /tmp/opencost-portforward.log 2>&1 &
     sleep 3
     if curl -s --connect-timeout 3 "http://localhost:9003/healthz" &>/dev/null; then
-        echo -e "  ${GREEN}OpenCost port-forward active (localhost:9003)${NC}"
+        CTX_LABEL="${OPENCOST_CTX##*/}"
+        [ -z "$CTX_LABEL" ] && CTX_LABEL="current-context"
+        echo -e "  ${GREEN}OpenCost port-forward active (localhost:9003, cluster=$CTX_LABEL)${NC}"
     else
         echo -e "  ${YELLOW}OpenCost port-forward starting... (check /tmp/opencost-portforward.log)${NC}"
     fi

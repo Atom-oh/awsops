@@ -29,8 +29,11 @@
 - `report-generator.ts` — 종합 진단 데이터 수집 오케스트레이터 (Steampipe + CloudWatch + 데이터소스)
 - `report-prompts.ts` — 15섹션 진단 프롬프트 정의
 - `report-pdf.ts` — Puppeteer 기반 PDF 리포트 (헤드리스 브라우저 print)
-- `queries/*.ts` — 25개 SQL 쿼리 파일 (ebs, msk, opensearch, container-cost, eks-container-cost, bedrock 포함)
+- `queries/*.ts` — 26개 SQL 쿼리 파일 (ebs, msk, opensearch, container-cost, eks-container-cost, bedrock, event-scaling 포함)
 - `collectors/*.ts` — 자동 수집 에이전트 (ADR-009): incident · eks-optimize · db-optimize · msk-optimize · network-flow · trace-analyze · idle-scan (상세: `collectors/CLAUDE.md`)
+- `event-scaling.ts` — 이벤트 사전 스케일링 데이터 모델 + JSON 영속화 (data/event-scaling/, ADR-010 Phase 1+2)
+- `event-scaling-prompts.ts` — Bedrock Sonnet 4.6 프롬프트 (다단계 워밍업 플랜 생성, PLAN_JSON 마커 파싱)
+- `event-scaling-scripts.ts` — 자원 타입별 안전한 bash 스크립트 생성 (KEDA/HPA/Aurora/MSK/ASG/EBS, 검토-후-실행)
 
 ## 규칙
 - 모든 DB 접근은 `steampipe.ts`의 `runQuery()` 또는 `batchQuery()`를 통해 수행 (pg Pool `max: 10`, `BATCH_SIZE: 8`, statement_timeout 120s, node-cache TTL 300s)
@@ -74,8 +77,11 @@ Core libraries: Steampipe database connection, SQL query definitions, inventory,
 - `report-generator.ts` — Diagnosis data collection orchestrator (Steampipe + CloudWatch + datasources)
 - `report-prompts.ts` — 15-section diagnosis prompt definitions
 - `report-pdf.ts` — Puppeteer-based PDF report (headless browser print)
-- `queries/*.ts` — 25 SQL query files (incl. ebs, msk, opensearch, container-cost, eks-container-cost, bedrock)
+- `queries/*.ts` — 26 SQL query files (incl. ebs, msk, opensearch, container-cost, eks-container-cost, bedrock, event-scaling)
 - `collectors/*.ts` — Auto-collect agents (ADR-009): incident · eks-optimize · db-optimize · msk-optimize · network-flow · trace-analyze · idle-scan (see `collectors/CLAUDE.md`)
+- `event-scaling.ts` — Event pre-scaling data model + JSON persistence (data/event-scaling/, ADR-010 Phase 1+2)
+- `event-scaling-prompts.ts` — Bedrock Sonnet 4.6 prompts (multi-phase warmup plan, PLAN_JSON marker extraction)
+- `event-scaling-scripts.ts` — Safe bash script generators per resource type (KEDA/HPA/Aurora/MSK/ASG/EBS, review-then-run)
 
 ## Rules
 - ALL database access through `runQuery()` or `batchQuery()` in steampipe.ts (pg Pool `max: 10`, `BATCH_SIZE: 8`, 120s statement timeout, 300s node-cache TTL)

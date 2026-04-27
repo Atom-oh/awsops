@@ -131,17 +131,24 @@ echo ""
 
 # 7. Update config.json / config.json 업데이트
 echo "[7/8] Updating config.json..."
+CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "")
 if [ -f "$CONFIG_FILE" ]; then
   python3 -c "
 import json
 with open('$CONFIG_FILE') as f: c = json.load(f)
 c['opencostEndpoint'] = '$OPENCOST_ENDPOINT'
+c['opencostContext'] = '$CURRENT_CONTEXT'
+c['opencostCluster'] = '$CLUSTER_NAME'
 with open('$CONFIG_FILE', 'w') as f: json.dump(c, f, indent=2)
 print('  Updated: opencostEndpoint =', c['opencostEndpoint'])
+print('           opencostContext  =', c['opencostContext'])
+print('           opencostCluster  =', c['opencostCluster'])
 "
 else
   echo "  WARNING: $CONFIG_FILE not found. Manually add:"
   echo "    \"opencostEndpoint\": \"$OPENCOST_ENDPOINT\""
+  echo "    \"opencostContext\":  \"$CURRENT_CONTEXT\""
+  echo "    \"opencostCluster\":  \"$CLUSTER_NAME\""
 fi
 echo ""
 

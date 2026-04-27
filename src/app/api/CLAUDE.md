@@ -4,7 +4,7 @@
 Next.js App Router 기반 서버 API. 브라우저가 호출하는 모든 동적 엔드포인트는 이 디렉토리 아래의 `route.ts` 파일로 구현된다.
 (All dynamic server endpoints live here as `route.ts` files under Next.js App Router.)
 
-## 엔드포인트 매트릭스 / Endpoint Matrix (18개)
+## 엔드포인트 매트릭스 / Endpoint Matrix (19개)
 | 경로 | Method | 설명 |
 |------|--------|------|
 | `ai/route.ts` | POST (SSE) | 11-라우트 AI 라우터: code → network → container → iac → data → security → monitoring → cost → datasource → aws-data → general |
@@ -25,6 +25,7 @@ Next.js App Router 기반 서버 API. 브라우저가 호출하는 모든 동적
 | `report/route.ts` | POST/GET | AI 종합 진단 리포트 생성 · S3 저장 · 스케줄링 |
 | `alert-webhook/route.ts` | POST | 알림 웹훅 수신 (CloudWatch SNS / Alertmanager / Grafana / Generic) + HMAC + 상관 분석 트리거 |
 | `notification/route.ts` | POST | Slack/웹훅 알림 발송 |
+| `event-scaling/route.ts` | GET/POST/PUT/DELETE | 이벤트 사전 스케일링 (CRUD + 메트릭 + Bedrock 플랜 + 스크립트, admin 전용, 실행 없음) |
 
 ## 규칙 / Rules
 - 외부 호스트로 `fetch` 시 반드시 **allowlist + SSRF 방지** (`datasource-client.ts`)

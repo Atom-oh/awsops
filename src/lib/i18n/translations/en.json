@@ -54,6 +54,7 @@
   "sidebar.diagnosis": "AI Diagnosis",
   "sidebar.accounts": "Accounts",
   "sidebar.alertSettings": "Alert Diagnosis",
+  "sidebar.eventScaling": "Event Pre-Scaling",
   "sidebar.compute": "Compute",
   "sidebar.ec2": "EC2",
   "sidebar.lambda": "Lambda",

@@ -65,7 +65,8 @@ export type AlertSource = 'cloudwatch' | 'alertmanager' | 'grafana' | 'sqs' | 'g
 
 export interface AlertSourceConfig {
   enabled: boolean;
-  secret?: string;              // HMAC secret for webhook verification
+  secret?: string;              // HMAC secret (active) — primary signing key
+  standbySecret?: string;       // HMAC secret (standby) — accepted during rotation; see ADR-022
   snsSubscriptionArn?: string;  // CloudWatch: SNS subscription ARN
   queueUrl?: string;            // SQS: queue URL
   region?: string;              // SQS: queue region
