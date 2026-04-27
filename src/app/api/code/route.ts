@@ -37,10 +37,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ADR-027: Code Interpreter requires Step 6d (provisioning) + 6e (config injection).
+    // If codeInterpreterName is missing, return 503 with an operator-facing hint
+    // rather than letting the AWS SDK fail with an opaque error.
+    const codeInterpreterName = getCodeInterpreterName();
+    if (!codeInterpreterName) {
+      return NextResponse.json(
+        {
+          error: 'Code Interpreter is not configured',
+          detail: 'Run scripts/06d-setup-agentcore-interpreter.sh and scripts/06e-setup-agentcore-config.sh to provision and register the interpreter, then restart the Next.js service.',
+        },
+        { status: 503 }
+      );
+    }
+
     // 1. Start a Code Interpreter session
     const startResponse = await client.send(
       new StartCodeInterpreterSessionCommand({
-        codeInterpreterIdentifier: getCodeInterpreterName(),
+        codeInterpreterIdentifier: codeInterpreterName,
       })
     );
     sessionId = startResponse.sessionId;
@@ -55,7 +69,7 @@ export async function POST(request: NextRequest) {
     // 2. Execute code
     const invokeResponse = await client.send(
       new InvokeCodeInterpreterCommand({
-        codeInterpreterIdentifier: getCodeInterpreterName(),
+        codeInterpreterIdentifier: codeInterpreterName,
         sessionId,
         name: 'executeCode',
         arguments: { code, language: 'python' } as any,

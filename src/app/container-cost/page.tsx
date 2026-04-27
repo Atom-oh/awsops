@@ -365,7 +365,7 @@ export default function ContainerCostPage() {
         <h3 className="text-white font-medium mb-2">EKS Pod Cost (Phase 2)</h3>
         <p className="text-gray-400 text-sm">
           OpenCost integration for EKS pod-level cost analysis (CPU, Memory, Network, Storage, GPU).
-          Install OpenCost with <code className="text-cyan-400">scripts/06f-setup-opencost.sh</code> to enable.
+          Install OpenCost with <code className="text-cyan-400">scripts/07-setup-opencost.sh</code> to enable.
         </p>
       </div>
     </div>

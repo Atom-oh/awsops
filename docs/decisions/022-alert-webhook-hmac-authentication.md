@@ -70,8 +70,8 @@ Admin UI           : /alert-settings, password-masked, admin-only per adminEmail
 - **Rate limit as DoS mitigation, not authentication.** The 60/min/IP limit exists to cap CPU consumed by HMAC verification during an alert storm or a misconfigured emitter — not to authenticate. When the map grows past 10 000 entries expired rows are pruned; this is coarse but adequate for a VPC-internal endpoint.
 - **인증이 아닌 DoS 완화로서의 속도 제한.** 분당 60회/IP 제한은 알림 폭주나 설정 오류 상황에서 HMAC 검증이 소비하는 CPU를 상한하기 위한 것이지 인증 수단이 아니다. 맵이 1만 엔트리를 넘으면 만료 행을 전지하며, VPC 내부 엔드포인트용으로는 충분한 수준의 coarse 구현이다.
 
-- **Rotation operational model.** Rotation is cooperative between operator and emitter: change the secret in `/alert-settings`, update the emitter, verify accepted alerts, then remove any exposure of the old value. The current implementation holds a single active secret per source; the UI is wired to support an active/standby pair as documented in `src/app/alert-settings/CLAUDE.md`, but the verifier currently accepts exactly one value at a time. Until the standby field lands in `AlertSourceConfig`, rotation requires a brief coordination window; emitters may be batched per source to keep the window short.
-- **회전 운영 모델.** 회전은 운영자와 발신기의 협력으로 수행된다 — `/alert-settings` 에서 시크릿을 교체하고, 발신기를 갱신한 뒤, 수신이 정상인지 확인하고, 이전 값의 노출을 제거한다. 현재 구현은 소스당 단일 활성 시크릿을 보관하며, UI는 `src/app/alert-settings/CLAUDE.md` 에 기록된 활성/대기 쌍을 전제로 설계되었으나 검증기는 현시점에 한 번에 하나의 값만 허용한다. `AlertSourceConfig` 에 standby 필드가 도입되기 전까지 회전은 짧은 조율 창이 필요하며, 소스별로 발신기를 묶어 창을 최소화한다.
+- **Rotation operational model (active + standby pair — implemented 2026-04-23).** `AlertSourceConfig` holds both `secret` (active) and `standbySecret` (optional). The verifier tries both and logs when the standby value matches — providing rotation audit. Zero-downtime rotation: (1) set `standbySecret` to the new value; (2) update emitters to sign with the new value — either key is accepted; (3) promote new value to `secret` and clear `standbySecret`; (4) retire old value at emitter.
+- **회전 운영 모델 (활성 + 대기 쌍 — 2026-04-23 구현).** `AlertSourceConfig` 가 `secret`(활성) 과 `standbySecret`(선택) 를 함께 보관하며, 검증기는 두 값을 순서대로 시도하고 standby 매칭 시 로그를 남겨 감사 추적을 제공한다. 무중단 회전: (1) `standbySecret` 에 새 값 설정; (2) 발신기를 새 값으로 서명 변경 — 양쪽 모두 유효; (3) 새 값을 `secret` 으로 승격하고 `standbySecret` 비움; (4) 발신기에서 이전 값 제거.
 
 ## Consequences / 결과
 
@@ -100,8 +100,8 @@ Admin UI           : /alert-settings, password-masked, admin-only per adminEmail
 - **HMAC verification adds CPU per request.** SHA-256 over a few-kilobyte payload is cheap, but a misconfigured emitter firing at thousands of requests per second would consume EC2 CPU; the 60/min/IP rate limit and the map-pruning guard are the mitigations.
 - **요청당 HMAC 검증 CPU가 추가된다.** 수 킬로바이트 페이로드 위 SHA-256 자체는 가볍지만, 설정 오류로 초당 수천 요청을 발사하는 발신기는 EC2 CPU를 소진할 수 있다. 분당 60회/IP 제한과 맵 전지 가드가 완화 수단이다.
 
-- **Rotation currently requires a brief window.** Until an active/standby pair lives in `AlertSourceConfig`, operators must coordinate a short changeover when rotating; the `/alert-settings` UI treats this as a single-value edit.
-- **현재 회전은 짧은 창이 필요하다.** `AlertSourceConfig` 에 활성/대기 쌍이 도입되기 전까지 운영자는 전환 시 짧은 조율 창을 가져야 하며, `/alert-settings` UI도 단일 값 편집으로 동작한다.
+- **Rotation is now first-class but still operator-driven.** The active/standby pair eliminates the brief coordination window, but promotion of the new value and retirement of the old are manual steps — no TTL-based auto-promotion. A future enhancement could add scheduled rotation with automatic promotion after a validation window.
+- **회전은 일급 기능이지만 여전히 운영자 주도이다.** 활성/대기 쌍이 짧은 조율 창을 없앴으나, 새 값의 승격과 이전 값의 폐기는 수동 단계이다 — TTL 기반 자동 승격 없음. 검증 창 이후 자동 승격되는 스케줄형 회전은 추후 개선 여지.
 
 ## References / 참고
 

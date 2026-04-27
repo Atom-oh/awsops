@@ -92,6 +92,14 @@ export class CognitoStack extends cdk.Stack {
     // It validates JWT tokens from the awsops_token cookie,
     // redirects unauthenticated users to Cognito Hosted UI,
     // and handles the OAuth2 callback to exchange code for tokens.
+    //
+    // ⚠ DRIFT NOTE (ADR-020): The inline stub below is NODEJS_20_X with
+    // placeholder code. The production runtime is installed by
+    // `scripts/05-setup-cognito.sh` which UPDATES this function to
+    // `python3.12` with the actual auth handler. CDK deploys the
+    // scaffold (IAM role, function ARN, versioning); the script owns
+    // the code and runtime. Do not rely on this stub as the source of
+    // truth for Lambda@Edge behaviour.
     // -------------------------------------------------------
     const edgeFunctionRole = new iam.Role(this, 'EdgeFunctionRole', {
       assumedBy: new iam.CompositePrincipal(

@@ -72,24 +72,43 @@ export async function GET(request: NextRequest) {
     if (opencostEndpoint && action !== 'request-only') {
       // OpenCost mode: actual usage-based cost (CPU, Memory, Network, Storage, GPU)
       // OpenCost 모드: 실제 사용량 기반 비용 (CPU, Memory, Network, Storage, GPU)
+      // Health probe first — 800ms — so dead port-forward falls back fast instead of 10s
+      // 포트포워딩이 끊겼을 때 10초 기다리지 않고 빠르게 폴백
+      let healthy = false;
       try {
+        const probe = await fetch(`${opencostEndpoint}/healthz`, { signal: AbortSignal.timeout(800) });
+        healthy = probe.ok;
+      } catch { healthy = false; }
+      if (!healthy) {
+        console.warn('[EKS Cost] OpenCost healthz failed, using request-based fallback');
+      }
+      if (healthy) try {
         const window = searchParams.get('window') || '1d';
-        const res = await fetch(
-          `${opencostEndpoint}/allocation/compute?window=${window}&aggregate=namespace,pod`,
-          { signal: AbortSignal.timeout(10000) }
-        );
-        const ocData = await res.json();
+        // Fetch pod-level + node-level aggregations in parallel
+        // Pod 단위 + Node 단위 집계를 병렬로 가져오기
+        const [podRes, nodeRes] = await Promise.all([
+          fetch(`${opencostEndpoint}/allocation/compute?window=${window}&aggregate=cluster,namespace,pod`,
+            { signal: AbortSignal.timeout(10000) }),
+          fetch(`${opencostEndpoint}/allocation/compute?window=${window}&aggregate=cluster,node`,
+            { signal: AbortSignal.timeout(10000) }),
+        ]);
+        const ocData = await podRes.json();
+        const nodeOcData = await nodeRes.json().catch(() => null);
 
         if (ocData.code === 200 && ocData.data?.[0]) {
           const allocations = ocData.data[0];
           const podList: any[] = [];
           const nsCosts: Record<string, number> = {};
+          // Helper: format context_name so frontend extractCluster() returns the cluster name
+          // 프론트엔드 extractCluster()가 클러스터명만 반환하도록 ARN 유사 포맷으로 채움
+          const ctxName = (cluster: string) => cluster ? `cluster/${cluster}` : '';
           let totalDailyCost = 0;
 
           Object.entries(allocations).forEach(([key, alloc]: [string, any]) => {
             if (!alloc || key === '__idle__') return;
             const ns = alloc.properties?.namespace || 'unknown';
             const podName = alloc.properties?.pod || alloc.name || key;
+            const cluster = alloc.properties?.cluster || '';
             // Scale costs to 24h based on actual window minutes / 실제 윈도우 분 기준 24시간으로 환산
             const minutes = alloc.minutes || 60;
             const scale = (24 * 60) / minutes;
@@ -105,6 +124,8 @@ export async function GET(request: NextRequest) {
               namespace: ns,
               node_name: alloc.properties?.node || '',
               instance_type: '',
+              context_name: ctxName(cluster),
+              cluster,
               cpu_request_vcpu: alloc.cpuCoreRequestAverage || 0,
               memory_request_mb: Math.round((alloc.ramByteRequestAverage || 0) / (1024 * 1024)),
               cpuCostDaily: Math.round(cpuCost * 10000) / 10000,
@@ -127,19 +148,54 @@ export async function GET(request: NextRequest) {
             .map(([name, cost]) => ({ name, cost: Math.round(cost * 1000) / 1000 }))
             .sort((a, b) => b.cost - a.cost);
 
+          // Build node list from cluster,node aggregation (pod-cost-allocated to each node)
+          // 클러스터,노드 집계로 노드 비용 리스트 구성 (각 노드에 할당된 Pod 비용 합)
+          const nodeList: any[] = [];
+          let totalNodeCost = 0;
+          if (nodeOcData?.code === 200 && nodeOcData.data?.[0]) {
+            const podsByNode: Record<string, number> = {};
+            podList.forEach((p) => {
+              if (p.node_name) podsByNode[p.node_name] = (podsByNode[p.node_name] || 0) + 1;
+            });
+            Object.entries(nodeOcData.data[0]).forEach(([k, n]: [string, any]) => {
+              if (!n || k === '__idle__' || !n.properties?.node) return;
+              const minutes = n.minutes || 60;
+              const scale = (24 * 60) / minutes;
+              const cpuCost = (n.cpuCost || 0) * scale;
+              const memCost = (n.ramCost || 0) * scale;
+              const dailyCost = cpuCost + memCost;
+              const cluster = n.properties.cluster || '';
+              const nodeName = n.properties.node;
+              nodeList.push({
+                node_name: nodeName,
+                instance_type: 'unknown',
+                hourlyRate: dailyCost / 24,
+                dailyCost: Math.round(dailyCost * 100) / 100,
+                allocatable_cpu: 0,
+                allocatable_memory_mb: 0,
+                pod_count: podsByNode[nodeName] || 0,
+                container_count: 0,
+                context_name: ctxName(cluster),
+                cluster,
+              });
+              totalNodeCost += dailyCost;
+            });
+            nodeList.sort((a, b) => b.dailyCost - a.dailyCost);
+          }
+
           return NextResponse.json({
             summary: {
               totalPodCostDaily: Math.round(totalDailyCost * 1000) / 1000,
               totalPodCostMonthly: Math.round(totalDailyCost * 30 * 100) / 100,
-              totalNodeCostDaily: 0,
-              totalNodeCostMonthly: 0,
+              totalNodeCostDaily: Math.round(totalNodeCost * 100) / 100,
+              totalNodeCostMonthly: Math.round(totalNodeCost * 30 * 100) / 100,
               podCount: podList.length,
-              nodeCount: 0,
+              nodeCount: nodeList.length,
               namespaceCount: namespaceCosts.length,
               topNamespace: namespaceCosts[0] || null,
             },
             pods: podList,
-            nodes: [],
+            nodes: nodeList,
             namespaces: [],
             namespaceCosts,
             opencostEnabled: true,

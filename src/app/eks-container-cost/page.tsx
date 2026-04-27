@@ -168,7 +168,7 @@ export default function EksContainerCostPage() {
         <div className={`${data.dataSource === 'opencost' ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'} border rounded-lg p-3 text-sm`}>
           {data.dataSource === 'opencost'
             ? '✅ OpenCost (Prometheus) — Actual usage-based cost: CPU + Memory + Network + Storage + GPU'
-            : '⚠️ Request-based estimation — CPU + Memory only. Install OpenCost for full cost data: scripts/06f-setup-opencost.sh'}
+            : '⚠️ Request-based estimation — CPU + Memory only. Install OpenCost for full cost data: scripts/07-setup-opencost.sh'}
         </div>
       )}
 
@@ -386,7 +386,7 @@ export default function EksContainerCostPage() {
               <p className="mt-2 text-gray-400 text-xs">
                 {data?.opencostEnabled
                   ? '✅ OpenCost is configured — more accurate cost data available via API.'
-                  : '⚠️ Currently using Request-based estimation. Install OpenCost for actual usage data: scripts/06f-setup-opencost.sh'}
+                  : '⚠️ Currently using Request-based estimation. Install OpenCost for actual usage data: scripts/07-setup-opencost.sh'}
               </p>
             </div>
 
@@ -415,7 +415,7 @@ export default function EksContainerCostPage() {
               </div>
               <p className="mt-1 text-gray-400 text-xs">
                 Prometheus가 수집한 실제 사용량 메트릭과 AWS 가격 정보를 결합하여 5가지 비용 항목을 계산합니다.
-                Install: <code className="text-cyan-400">bash scripts/06f-setup-opencost.sh</code>
+                Install: <code className="text-cyan-400">bash scripts/07-setup-opencost.sh</code>
               </p>
             </div>
 

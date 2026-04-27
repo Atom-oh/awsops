@@ -11,7 +11,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 | [onboarding.md](onboarding.md) | 신규 팀원 온보딩 |
 | [INSTALL_GUIDE.md](INSTALL_GUIDE.md) | 설치 가이드 (11단계) |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 일반 트러블슈팅 모음 |
-| [decisions/](decisions/) | ADR (Architecture Decision Records), 001~028 |
+| [decisions/](decisions/) | ADR (Architecture Decision Records), 001~029 |
 | [runbooks/](runbooks/) | 운영 시나리오별 대응 가이드 |
 | [reviews/](reviews/) | 코드 리뷰 / 교차 리뷰 결과 |
 | [plans/](plans/) | 기능 설계/기획 문서 |
@@ -20,7 +20,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 
 ## 문서 규칙 / Conventions
 - 모든 신규 문서는 **한국어/영어 병기**
-- ADR 번호는 `docs/decisions/` 의 최고 번호 + 1 (현재 028)
+- ADR 번호는 `docs/decisions/` 의 최고 번호 + 1 (현재 029)
 - ADR 파일명: `NNN-kebab-case-title.md`
 - 런북은 `docs/runbooks/CLAUDE.md` 규칙 준수
 

@@ -489,6 +489,47 @@ aws_vpc_security_group:
 aws_ec2_application_load_balancer:
   name, type, scheme, state_code, vpc_id, dns_name
 
+aws_elasticache_cluster:
+  cache_cluster_id, engine (redis/valkey/memcached), engine_version, cache_node_type,
+  cache_cluster_status, num_cache_nodes, preferred_availability_zone, replication_group_id,
+  security_groups, cache_subnet_group_name, at_rest_encryption_enabled,
+  transit_encryption_enabled, auth_token_enabled, tags ->> 'Name' AS name
+
+aws_elasticache_replication_group:
+  replication_group_id, description, status, cache_node_type, cluster_enabled,
+  automatic_failover (string: enabled/disabled), multi_az (string: enabled/disabled),
+  at_rest_encryption_enabled, transit_encryption_enabled, auth_token_enabled,
+  member_clusters (array), node_groups (jsonb), snapshot_retention_limit
+  — NOTE: NO tags column, NO engine column — use aws_elasticache_cluster for those
+
+aws_msk_cluster:
+  cluster_name, cluster_type (PROVISIONED/SERVERLESS), state, creation_time,
+  current_version, provisioned (jsonb — contains numberOfBrokerNodes, brokerNodeGroupInfo,
+  enhancedMonitoring, encryptionInfo, kafkaVersion, openMonitoring), cluster_operation,
+  bootstrap_broker_string, bootstrap_broker_string_tls, tags ->> 'Name' AS name
+  — Use: provisioned -> 'numberOfBrokerNodes' for node count,
+        provisioned -> 'brokerNodeGroupInfo' ->> 'instanceType' for broker type,
+        provisioned -> 'encryptionInfo' for encryption config
+
+aws_opensearch_domain:
+  domain_name, domain_id, engine_type (OpenSearch/Elasticsearch), engine_version,
+  created, deleted, processing, endpoint, cluster_config (jsonb),
+  ebs_options (jsonb), encryption_at_rest_options (jsonb — has Enabled),
+  node_to_node_encryption_options_enabled, vpc_options (jsonb), tags
+
+aws_dynamodb_table:
+  name, arn, table_status, billing_mode, item_count, table_size_bytes,
+  read_capacity, write_capacity, creation_date_time, deletion_protection_enabled,
+  continuous_backups_status, sse_description (jsonb), tags
+
+aws_ecr_repository:
+  repository_name, registry_id, repository_uri, created_at, image_tag_mutability,
+  image_scanning_configuration (jsonb), encryption_configuration (jsonb), tags
+
+aws_ebs_volume:
+  volume_id, volume_type, size, state, iops, throughput, encrypted, availability_zone,
+  create_time, attachments (jsonb), tags ->> 'Name' AS name
+
 kubernetes_pod:
   name, namespace, phase, node_name, creation_timestamp
 
@@ -537,6 +578,31 @@ async function queryAWS(sql: string, accountId?: string): Promise<{ data: string
   } catch (e: any) {
     return { data: `Error: ${e.message}`, rowCount: 0, error: e.message };
   }
+}
+
+// Extract AWS table names from failing SQL and fetch their real column lists.
+// Used to give Bedrock accurate schema context on retry when a column-not-found error occurs.
+async function fetchColumnHints(sql: string, accountId?: string): Promise<string> {
+  const tableRe = /\b(?:from|join)\s+(aws_\w+|kubernetes_\w+|trivy_\w+)/gi;
+  const matches: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = tableRe.exec(sql)) !== null) matches.push(m[1].toLowerCase());
+  const tables = Array.from(new Set(matches));
+  if (tables.length === 0) return '';
+  const parts: string[] = [];
+  for (const t of tables.slice(0, 3)) {
+    try {
+      const r = await runQuery(
+        `SELECT column_name FROM information_schema.columns WHERE table_name = '${t}' ORDER BY column_name`,
+        { accountId },
+      );
+      if (r.rows.length > 0) {
+        const cols = Array.from(new Set(r.rows.map((row: any) => row.column_name))).join(', ');
+        parts.push(`${t}: ${cols}`);
+      }
+    } catch { /* ignore */ }
+  }
+  return parts.length > 0 ? `\n\nActual columns available:\n${parts.join('\n')}` : '';
 }
 
 async function generateDatasourceQuery(
@@ -1174,10 +1240,11 @@ export async function POST(request: NextRequest) {
             if (!queryResult.error) break;
             if (attempt === 0) {
               send('status', { step: 'sql-retrying', message: STATUS.sqlRetrying });
+              const columnHints = await fetchColumnHints(sql, accountId);
               const fixMessages = [
                 ...messages.slice(-4),
                 { role: 'assistant' as const, content: `I generated this SQL: ${sql}` },
-                { role: 'user' as const, content: `That SQL failed with error: ${queryResult.error}. Fix the SQL using only valid column names.` },
+                { role: 'user' as const, content: `That SQL failed with error: ${queryResult.error}. Fix the SQL using only valid column names.${columnHints}` },
               ];
               sql = await generateSQL(fixMessages, accountId, account?.alias);
             }
@@ -1406,9 +1473,10 @@ async function handleSingleRoute(
       queryResult = await queryAWS(sql, accountId);
       if (!queryResult.error) break;
       if (attempt === 0) {
+        const columnHints = await fetchColumnHints(sql, accountId);
         const fixMessages = [...messages.slice(-4),
           { role: 'assistant' as const, content: `I generated this SQL: ${sql}` },
-          { role: 'user' as const, content: `That SQL failed with error: ${queryResult.error}. Fix the SQL using only valid column names.` },
+          { role: 'user' as const, content: `That SQL failed with error: ${queryResult.error}. Fix the SQL using only valid column names.${columnHints}` },
         ];
         sql = await generateSQL(fixMessages, accountId, accountAlias);
       }
