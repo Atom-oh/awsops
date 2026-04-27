@@ -22,7 +22,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 007 | 리소스 인벤토리 베이스라인 | Accepted |
 | 008 | 멀티 어카운트 지원 | Accepted |
 | 009 | 알림 트리거 AI 진단 | Accepted (2026-04-22) |
-| 010 | 이벤트 기반 사전 스케일링 | Proposed |
+| 010 | 이벤트 기반 사전 스케일링 (Phase 1+2) | Accepted (2026-04-26) |
 | 011 | 외부 데이터소스 통합 | Accepted (2026-04-22) |
 | 012 | SNS 알림 전략 | Accepted (2026-04-22) |
 | 013 | 자동 수집 조사 에이전트 | Accepted (2026-04-22) |
@@ -41,6 +41,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 026 | i18n LanguageProvider | Accepted (2026-04-22) |
 | 027 | Code Interpreter 세션 격리 | Accepted (2026-04-22) |
 | 028 | CloudFront CACHING_DISABLED | Accepted (2026-04-22) |
+| 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | Proposed (2026-04-26) |
 
 ## 새 ADR 추가 / Adding a New ADR
 1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1

@@ -16,14 +16,14 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 ## 현황 (v1.8.0)
 | 항목 | 수치 |
 |------|------|
-| 페이지 | 40 (/datasources, /ai-diagnosis 추가) |
-| 라우트 | 54 |
-| SQL 쿼리 파일 | 25 |
-| API 라우트 | 18 (datasources, k8s, report, alert-webhook, notification 포함) |
+| 페이지 | 41 (/event-scaling 추가) |
+| 라우트 | 55 |
+| SQL 쿼리 파일 | 26 (event-scaling 추가) |
+| API 라우트 | 19 (event-scaling 추가) |
 | 컴포넌트 | 18 (ReportMarkdown 추가) |
 | MCP 도구 | 125 (8 Gateway, 19 Lambda) |
 | AI 라우트 | 11 (datasource 라우트 추가) |
-| ADR | 9 (001-009) |
+| ADR | 29 (001-029, ADR-029 Phase 3 게이트 Proposed) |
 
 ## 필수 규칙
 
@@ -105,8 +105,11 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `alert-diagnosis.ts` — 알림 진단 오케스트레이터 (전략 선택, 컬렉터/데이터소스 병렬 실행, 변경 감지, Bedrock 분석)
 - `alert-knowledge.ts` — 알림 지식 베이스 (진단 기록 저장/유사도 검색/통계)
 - `slack-notification.ts` — Slack 알림 클라이언트 (Block Kit, 채널 라우팅, 스레드 업데이트)
+- `event-scaling.ts` — 이벤트 사전 스케일링 데이터 모델 + JSON 영속화 (data/event-scaling/, ADR-010 Phase 1+2)
+- `event-scaling-prompts.ts` — Bedrock Sonnet 4.6 프롬프트 (다단계 스케일 플랜 생성, PLAN_JSON 마커 파싱)
+- `event-scaling-scripts.ts` — 자원 타입별 안전한 bash 스크립트 생성 (KEDA/HPA/Aurora/MSK/ASG/EBS, 검토 후 수동 실행)
 
-### API 라우트 (`src/app/api/`, 18개)
+### API 라우트 (`src/app/api/`, 19개)
 - `ai/route.ts` — AI 라우팅 (11 routes, 멀티 라우트, SSE 스트리밍, 도구 추론, datasource 라우트)
 - `steampipe/route.ts` — Steampipe 쿼리 + Cost 가용성 + 인벤토리 (POST/GET/PUT)
 - `auth/route.ts` — 로그아웃 (HttpOnly 쿠키 서버 사이드 삭제)
@@ -125,6 +128,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `report/route.ts` — AI 종합 진단 리포트 생성 + S3 저장 + 스케줄링
 - `alert-webhook/route.ts` — 알림 웹훅 수신 (CloudWatch SNS, Alertmanager, Grafana, Generic) + HMAC 인증 + 상관 분석 트리거
 - `notification/route.ts` — Slack/SNS 알림 발송 (Block Kit, 심각도 채널 라우팅, 마크다운→평문 변환)
+- `event-scaling/route.ts` — 이벤트 사전 스케일링 CRUD + 메트릭 수집 + Bedrock 플랜 생성 + 스크립트 다운로드 (Phase 1+2, 관리자 전용, 실행 없음)
 
 ### 인프라
 - `infra-cdk/lib/awsops-stack.ts` — CDK 인프라 (VPC, EC2, ALB, CloudFront)
@@ -214,14 +218,14 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 ## Stats (v1.8.0)
 | Item | Count |
 |------|-------|
-| Pages | 40 (incl. /datasources, /ai-diagnosis) |
-| Routes | 54 |
-| SQL Query Files | 25 |
-| API Routes | 18 (incl. datasources, k8s, report, alert-webhook, notification) |
+| Pages | 41 (incl. /event-scaling) |
+| Routes | 55 |
+| SQL Query Files | 26 (incl. event-scaling) |
+| API Routes | 19 (incl. event-scaling) |
 | Components | 18 (incl. ReportMarkdown) |
 | MCP Tools | 125 (8 Gateways, 19 Lambda) |
 | AI Routes | 11 (incl. datasource route) |
-| ADRs | 9 (001-009) |
+| ADRs | 29 (001-029, ADR-029 Phase 3 gate Proposed) |
 
 ## Critical Rules
 
@@ -301,8 +305,11 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `alert-diagnosis.ts` — Alert diagnosis orchestrator (strategy selection, parallel collectors/datasources, change detection, Bedrock analysis)
 - `alert-knowledge.ts` — Alert knowledge base (diagnosis record storage, similarity search, statistics)
 - `slack-notification.ts` — Slack notification client (Block Kit, severity-based channel routing, thread updates)
+- `event-scaling.ts` — Event pre-scaling data model + JSON persistence (data/event-scaling/, ADR-010 Phase 1+2)
+- `event-scaling-prompts.ts` — Bedrock Sonnet 4.6 prompts (multi-phase scaling plan, PLAN_JSON marker extraction)
+- `event-scaling-scripts.ts` — Safe bash script generators per resource type (KEDA/HPA/Aurora/MSK/ASG/EBS, manual review-then-run)
 
-### API Routes (`src/app/api/`, 18 routes)
+### API Routes (`src/app/api/`, 19 routes)
 - `ai/route.ts` — AI routing (11 routes, multi-route, SSE streaming, tool inference, datasource route)
 - `steampipe/route.ts` — Steampipe queries + Cost availability + Inventory (POST/GET/PUT)
 - `auth/route.ts` — Logout (server-side HttpOnly cookie deletion)
@@ -321,6 +328,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `report/route.ts` — AI diagnosis report generation + S3 storage + scheduling
 - `alert-webhook/route.ts` — Alert webhook receiver (CloudWatch SNS, Alertmanager, Grafana, Generic) + HMAC auth + correlation trigger
 - `notification/route.ts` — Slack/SNS notification dispatch (Block Kit, severity-based channel routing, markdown-to-plaintext)
+- `event-scaling/route.ts` — Event pre-scaling CRUD + metrics collection + Bedrock plan generation + script download (Phase 1+2, admin-only, no execution)
 
 ### Infrastructure
 - `infra-cdk/lib/awsops-stack.ts` — CDK infra (VPC, EC2, ALB, CloudFront)

@@ -11,6 +11,7 @@ import {
 interface AlertSourceState {
   enabled: boolean;
   secret: string;
+  standbySecret?: string;
   queueUrl?: string;
   region?: string;
 }
@@ -336,7 +337,7 @@ export default function AlertSettingsPage() {
                   {sources[key]?.enabled && (
                     <div className="space-y-2 mt-3">
                       <div>
-                        <label className="block text-xs text-gray-500 mb-1">HMAC Secret (optional)</label>
+                        <label className="block text-xs text-gray-500 mb-1">HMAC Secret — Active (optional)</label>
                         <input
                           type="password"
                           value={sources[key]?.secret || ''}
@@ -344,7 +345,20 @@ export default function AlertSettingsPage() {
                             ...prev,
                             [key]: { ...prev[key], secret: e.target.value },
                           }))}
-                          placeholder="Leave empty to skip signature verification"
+                          placeholder="Primary signing key — leave empty to skip verification"
+                          className="w-full bg-navy-700 border border-navy-600 rounded-lg px-3 py-2 text-gray-200 focus:border-cyan-500 focus:outline-none text-sm font-mono placeholder-gray-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">HMAC Secret — Standby (rotation)</label>
+                        <input
+                          type="password"
+                          value={sources[key]?.standbySecret || ''}
+                          onChange={e => setSources(prev => ({
+                            ...prev,
+                            [key]: { ...prev[key], standbySecret: e.target.value },
+                          }))}
+                          placeholder="Optional — accepted during rotation (see ADR-022)"
                           className="w-full bg-navy-700 border border-navy-600 rounded-lg px-3 py-2 text-gray-200 focus:border-cyan-500 focus:outline-none text-sm font-mono placeholder-gray-600"
                         />
                       </div>

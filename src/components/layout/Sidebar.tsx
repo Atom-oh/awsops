@@ -38,6 +38,7 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
+  CalendarDays,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -64,6 +65,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'sidebar.agentcore', href: '/agentcore', icon: Activity },
       { labelKey: 'sidebar.accounts', href: '/accounts', icon: Layers },
       { labelKey: 'sidebar.alertSettings', href: '/alert-settings', icon: Bell },
+      { labelKey: 'sidebar.eventScaling', href: '/event-scaling', icon: CalendarDays },
     ],
   },
   {

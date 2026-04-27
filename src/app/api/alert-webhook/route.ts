@@ -64,15 +64,30 @@ function extractClientIp(request: Request): string {
   return ips.length >= 2 ? ips[ips.length - 2] : ips[0] || 'unknown';
 }
 
-// HMAC-SHA256 verification
-function verifySignature(body: string, signature: string, secret: string): boolean {
+// HMAC-SHA256 verification — accepts active or standby secret (ADR-022 rotation)
+function verifySignature(body: string, signature: string, secrets: Array<string | undefined>): { ok: boolean; matched?: 'active' | 'standby' } {
+  const sig = signature.replace(/^sha256=/, '');
+  let sigBuf: Buffer;
   try {
-    const expected = createHmac('sha256', secret).update(body).digest('hex');
-    const sig = signature.replace(/^sha256=/, '');
-    return timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'));
+    sigBuf = Buffer.from(sig, 'hex');
   } catch {
-    return false;
+    return { ok: false };
   }
+  const labels: Array<'active' | 'standby'> = ['active', 'standby'];
+  for (let i = 0; i < secrets.length; i++) {
+    const s = secrets[i];
+    if (!s) continue;
+    try {
+      const expected = createHmac('sha256', s).update(body).digest('hex');
+      const expectedBuf = Buffer.from(expected, 'hex');
+      if (sigBuf.length === expectedBuf.length && timingSafeEqual(sigBuf, expectedBuf)) {
+        return { ok: true, matched: labels[i] };
+      }
+    } catch {
+      // try next
+    }
+  }
+  return { ok: false };
 }
 
 // SNS subscription confirmation — validate URL is genuinely AWS before fetching
@@ -129,13 +144,18 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: `Source ${detectedSource} is disabled` }, { status: 403 });
   }
 
-  if (sourceConfig?.secret) {
+  if (sourceConfig?.secret || sourceConfig?.standbySecret) {
     const signature = request.headers.get('x-webhook-signature') ||
       request.headers.get('x-hub-signature-256') ||  // GitHub-style
       request.headers.get('x-alertmanager-signature') || '';
 
-    if (!signature || !verifySignature(rawBody, signature, sourceConfig.secret)) {
+    const result = verifySignature(rawBody, signature, [sourceConfig.secret, sourceConfig.standbySecret]);
+    if (!signature || !result.ok) {
       return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+    }
+    if (result.matched === 'standby') {
+      // Surfaced for rotation audit; operator should promote standby to active and retire old active.
+      console.log(`[AlertWebhook] HMAC matched standby secret for source=${detectedSource}`);
     }
   }
 
