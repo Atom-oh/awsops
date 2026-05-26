@@ -2,10 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { execSync, exec } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { validateAccountId, getAccountById } from '@/lib/app-config';
+import { validateAccountId, getAccountById, isMultiAccount } from '@/lib/app-config';
 
 const RESULTS_DIR = '/tmp/powerpipe-results';
 const MOD_DIR = '/home/ec2-user/awsops/powerpipe';
+
+const ALLOWED_BENCHMARKS = ['cis_v300', 'cis_v200', 'cis_v150', 'cis_v400'] as const;
+type BenchmarkId = typeof ALLOWED_BENCHMARKS[number];
+function isAllowedBenchmark(id: string): id is BenchmarkId {
+  return (ALLOWED_BENCHMARKS as readonly string[]).includes(id);
+}
 
 // Dynamically get Steampipe password (avoid hardcoded mismatch across deployments)
 // Steampipe 비밀번호를 동적으로 가져옴 (배포 환경별 불일치 방지)
@@ -32,14 +38,21 @@ function ensureDir() {
 export async function GET(request: NextRequest) {
   ensureDir();
   const { searchParams } = new URL(request.url);
-  const benchmark = searchParams.get('benchmark') || 'cis_v300';
+  const benchmarkParam = searchParams.get('benchmark') || 'cis_v300';
+  if (!isAllowedBenchmark(benchmarkParam)) {
+    return NextResponse.json({ error: 'Unknown benchmark' }, { status: 400 });
+  }
+  const benchmark: BenchmarkId = benchmarkParam;
   const action = searchParams.get('action') || 'status';
   const accountIdParam = searchParams.get('accountId') || undefined;
   const account = accountIdParam && validateAccountId(accountIdParam) ? getAccountById(accountIdParam) : undefined;
-  const searchPathArgs = account ? `--search-path "public,${account.connectionName},kubernetes,trivy"` : '';
+  // Only scope search_path when multi-account is active — single-account deployments
+  // have one default `aws` connection (no `aws_{id}` schema exists).
+  // Matches buildSearchPath() in src/lib/steampipe.ts.
+  const scopedAccount = account && isMultiAccount() ? account : undefined;
+  const searchPathArgs = scopedAccount ? `--search-path "public,${scopedAccount.connectionName},kubernetes,trivy"` : '';
 
-  // Include accountId in file names for per-account results / 계정별 결과를 위해 파일명에 accountId 포함
-  const fileSuffix = account ? `_${account.accountId}` : '';
+  const fileSuffix = scopedAccount ? `_${scopedAccount.accountId}` : '';
   const resultFile = join(RESULTS_DIR, `${benchmark}${fileSuffix}.json`);
   const statusFile = join(RESULTS_DIR, `${benchmark}${fileSuffix}.status`);
   const errorFile = join(RESULTS_DIR, `${benchmark}${fileSuffix}.err`);

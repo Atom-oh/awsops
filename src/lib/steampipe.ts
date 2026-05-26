@@ -1,26 +1,29 @@
-import { Pool } from 'pg';
+import { Pool, Client } from 'pg';
 import NodeCache from 'node-cache';
 import { getConfig, isMultiAccount, getAccounts, ALL_ACCOUNTS } from '@/lib/app-config';
 import type { AccountConfig } from '@/lib/app-config';
 
 const cache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
+function getSpPassword(): string {
+  return getConfig().steampipePassword || process.env.STEAMPIPE_PASSWORD || 'steampipe';
+}
+
 // Steampipe 비밀번호: config에서 읽기, 환경변수 폴백
 // Steampipe password: from config, env var fallback
 function createPool(): Pool {
-  const spPassword = getConfig().steampipePassword
-    || process.env.STEAMPIPE_PASSWORD
-    || 'steampipe';
   return new Pool({
     host: '127.0.0.1',
     port: 9193,
     database: 'steampipe',
     user: 'steampipe',
-    password: spPassword,
+    password: getSpPassword(),
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 15000,
     statement_timeout: 30000,
+    // Postgres-side guard for idle-in-transaction backends (independent of FDW hangs)
+    idle_in_transaction_session_timeout: 60000,
   });
 }
 
@@ -28,32 +31,48 @@ let pool = createPool();
 
 // Kill zombie PostgreSQL connections on startup and periodically
 // 앱 시작 시 + 주기적으로 좀비 PostgreSQL 연결 정리
-const ZOMBIE_MAX_MINUTES = 5; // Kill queries running longer than 5 min / 5분 이상 실행 쿼리 종료
+// Threshold lowered: Steampipe FDW (Cost Explorer, Lambda tags, IAM summary) can hang past statement_timeout
+// 임계값 단축: Steampipe FDW 호출은 statement_timeout으로 끊기지 않을 수 있음
+const ZOMBIE_MAX_SECONDS = 90;
 let zombieCleanupStarted = false;
 
+// Use a dedicated short-lived Client (NOT the pool) — survives pool exhaustion
+// 풀 고갈 상황에서도 동작하도록 전용 Client 사용
 async function cleanupZombieConnections(): Promise<number> {
+  const client = new Client({
+    host: '127.0.0.1',
+    port: 9193,
+    database: 'steampipe',
+    user: 'steampipe',
+    password: getSpPassword(),
+    statement_timeout: 5000,
+    connectionTimeoutMillis: 3000,
+  });
   try {
-    // Only kill connections from the app (client_addr = 127.0.0.1 with SELECT queries).
-    // Exclude Steampipe internal FDW/plugin connections (client_addr IS NULL).
-    // 앱 커넥션만 정리 — Steampipe 내부 FDW/플러그인 커넥션(client_addr IS NULL) 제외
-    const result = await pool.query(`
-      SELECT pg_terminate_backend(pid)
+    await client.connect();
+    const result = await client.query(`
+      SELECT pg_terminate_backend(pid) AS terminated, pid, state, query
       FROM pg_stat_activity
-      WHERE state = 'active'
+      WHERE datname = 'steampipe'
         AND pid != pg_backend_pid()
         AND client_addr IS NOT NULL
-        AND query LIKE 'SELECT %'
-        AND query NOT LIKE '%pg_terminate%'
-        AND query NOT LIKE '%pg_stat_activity%'
-        AND query_start < NOW() - INTERVAL '${ZOMBIE_MAX_MINUTES} minutes'
+        AND state IN ('active', 'idle in transaction', 'idle in transaction (aborted)')
+        AND regexp_replace(query, '^\\s+', '') ILIKE 'SELECT%'
+        AND query NOT ILIKE '%pg_terminate_backend%'
+        AND query NOT ILIKE '%pg_stat_activity%'
+        AND age(now(), COALESCE(query_start, state_change)) > INTERVAL '${ZOMBIE_MAX_SECONDS} seconds'
     `);
     const killed = result.rowCount || 0;
     if (killed > 0) {
-      console.log(`[Pool] Cleaned up ${killed} zombie connection(s) (>${ZOMBIE_MAX_MINUTES}min)`);
+      console.log(`[Pool] Cleaned up ${killed} zombie connection(s) (>${ZOMBIE_MAX_SECONDS}s)`);
     }
     return killed;
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown';
+    console.warn(`[Pool] Zombie cleanup failed: ${message}`);
     return 0;
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
   }
 }
 
@@ -62,8 +81,8 @@ export function startZombieCleanup(): void {
   zombieCleanupStarted = true;
   // Initial cleanup after 3s / 3초 후 초기 정리
   setTimeout(() => cleanupZombieConnections(), 3000);
-  // Periodic cleanup every 2 minutes / 2분마다 주기적 정리
-  setInterval(() => cleanupZombieConnections(), 2 * 60 * 1000);
+  // Periodic cleanup every 60 seconds / 60초마다 주기적 정리
+  setInterval(() => cleanupZombieConnections(), 60 * 1000);
 }
 
 const ALLOWED_PATTERN = /^\s*SELECT\s/i;
