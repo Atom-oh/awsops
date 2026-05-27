@@ -17,6 +17,8 @@ import { isAuroraEnabled, checkDbHealth } from '@/lib/db';
 import { getDriftCounters } from '@/lib/db/drift';
 import { countAuroraCalls } from '@/lib/db/agentcore-stats-writer';
 import { getStats } from '@/lib/agentcore-stats';
+import { listEvents } from '@/lib/event-scaling';
+import { countAuroraEvents } from '@/lib/db/event-scaling-writer';
 
 function isAdminUser(req: NextRequest): boolean {
   const user = getUserFromRequest(req);
@@ -59,6 +61,30 @@ async function agentcoreStatsParity(hours: number): Promise<AgentCoreStatsParity
   };
 }
 
+interface EventScalingPlansParity {
+  source: 'event_scaling_plans';
+  inSync: boolean;
+  jsonCount: number;
+  auroraCount: number;
+  drift: number;
+  note: string;
+}
+
+async function eventScalingPlansParity(): Promise<EventScalingPlansParity> {
+  const jsonCount = listEvents().length;
+  const auroraCount = await countAuroraEvents();
+  return {
+    source: 'event_scaling_plans',
+    inSync: jsonCount === auroraCount,
+    jsonCount,
+    auroraCount,
+    drift: Math.abs(auroraCount - jsonCount),
+    note:
+      'Count-based parity for slice 3. Per-event field diff lands in a ' +
+      'follow-up once Phase 1 dual-write covers all 7 sources.',
+  };
+}
+
 export async function GET(req: NextRequest) {
   if (!isAdminUser(req)) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
@@ -94,15 +120,22 @@ export async function GET(req: NextRequest) {
       parity: [await agentcoreStatsParity(hours)],
     });
   }
+  if (source === 'event_scaling_plans') {
+    return NextResponse.json({
+      auroraEnabled: true,
+      health,
+      drift: driftCounters.filter((c) => c.source === source),
+      parity: [await eventScalingPlansParity()],
+    });
+  }
 
   return NextResponse.json({
     auroraEnabled: true,
     health,
     drift: driftCounters,
-    parity: [await agentcoreStatsParity(hours)],
+    parity: [await agentcoreStatsParity(hours), await eventScalingPlansParity()],
     note:
-      'Phase 1 dual-write — agentcore_stats is the only source wired so far. ' +
-      'Other sources (inventory, cost, memory, alerts, event-scaling, schedules) ' +
-      'land in subsequent commits.',
+      'Phase 1 dual-write — agentcore_stats + event_scaling_plans wired so far. ' +
+      'Other sources (inventory, cost, memory, alerts, schedules) land in subsequent commits.',
   });
 }

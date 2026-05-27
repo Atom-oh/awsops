@@ -21,15 +21,41 @@ import { getConfig, getAccountById, validateAccountId } from '@/lib/app-config';
 import {
   listEvents,
   getEvent,
-  createEvent,
-  updateEvent,
-  deleteEvent,
+  createEvent as _createEvent,
+  updateEvent as _updateEvent,
+  deleteEvent as _deleteEvent,
   validateCreateInput,
   type ScalingEvent,
   type ScalingPhase,
   type EventStatus,
   type ReferenceEvent,
+  type CreateEventInput,
 } from '@/lib/event-scaling';
+import {
+  fireAndForgetUpsertEvent,
+  fireAndForgetDeleteEvent,
+} from '@/lib/db/event-scaling-writer';
+
+// ADR-030 Phase 1 dual-write — thin wrappers around the JSON-backed
+// mutators in @/lib/event-scaling. Each call shadows into Aurora's
+// event_scaling_plans table fire-and-forget. Failures land in the drift
+// counter (queryable via /api/parity) and never block the response.
+// JSON file remains the source of truth until Phase 2 cutover.
+function createEvent(input: CreateEventInput): ScalingEvent {
+  const event = _createEvent(input);
+  fireAndForgetUpsertEvent(event);
+  return event;
+}
+function updateEvent(eventId: string, patch: Partial<ScalingEvent>): ScalingEvent | null {
+  const updated = _updateEvent(eventId, patch);
+  if (updated) fireAndForgetUpsertEvent(updated);
+  return updated;
+}
+function deleteEvent(eventId: string): boolean {
+  const ok = _deleteEvent(eventId);
+  if (ok) fireAndForgetDeleteEvent(eventId);
+  return ok;
+}
 import {
   SCALING_SYSTEM_PROMPT,
   buildScalingUserPrompt,
