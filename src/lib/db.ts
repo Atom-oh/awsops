@@ -11,6 +11,8 @@
  * without Aurora provisioned don't pay the connection cost at startup.
  */
 import { Pool, type PoolConfig } from 'pg';
+import { readFileSync, existsSync } from 'fs';
+import type { TlsOptions } from 'tls';
 
 let pool: Pool | null = null;
 let initPromise: Promise<Pool> | null = null;
@@ -65,6 +67,45 @@ function resolveCredentials(): AuroraCredentials | null {
   };
 }
 
+/**
+ * Build TLS options for the Aurora connection.
+ *
+ * Default is `rejectUnauthorized: true` — RDS is always TLS, and the in-VPC
+ * SG-only ingress doesn't excuse skipping cert verification. Use one of:
+ *   - AURORA_SSL_CA      — PEM string (full chain)
+ *   - AURORA_SSL_CA_FILE — path to a PEM file (e.g. RDS global bundle)
+ *   - AURORA_SSL_INSECURE=1 — local-dev escape hatch (logs a warning)
+ *
+ * Without an explicit CA, Node falls back to the system trust store; the
+ * RDS root chains to Amazon Trust Services which is in the default bundle.
+ * Operators are still encouraged to pin the RDS global bundle via
+ * AURORA_SSL_CA_FILE for defense in depth.
+ */
+function buildSsl(creds: AuroraCredentials): TlsOptions | false {
+  if (!creds.ssl) return false;
+
+  if (process.env.AURORA_SSL_INSECURE === '1') {
+    console.warn('[db] AURORA_SSL_INSECURE=1 — TLS cert verification disabled. ' +
+      'Do NOT use in production.');
+    return { rejectUnauthorized: false };
+  }
+
+  const caInline = process.env.AURORA_SSL_CA?.trim();
+  if (caInline) return { rejectUnauthorized: true, ca: caInline };
+
+  const caFile = process.env.AURORA_SSL_CA_FILE?.trim();
+  if (caFile) {
+    if (!existsSync(caFile)) {
+      throw new Error(`AURORA_SSL_CA_FILE points to a missing file: ${caFile}`);
+    }
+    return { rejectUnauthorized: true, ca: readFileSync(caFile, 'utf-8') };
+  }
+
+  // Default: verify against the system trust store. RDS global bundle chains
+  // through Amazon Trust Services, which is in the default Node bundle.
+  return { rejectUnauthorized: true };
+}
+
 function buildPoolConfig(creds: AuroraCredentials): PoolConfig {
   return {
     host: creds.host,
@@ -77,7 +118,7 @@ function buildPoolConfig(creds: AuroraCredentials): PoolConfig {
     connectionTimeoutMillis: 10_000,
     statement_timeout: 30_000,
     idle_in_transaction_session_timeout: 60_000,
-    ssl: creds.ssl ? { rejectUnauthorized: false } : undefined,
+    ssl: buildSsl(creds),
     application_name: 'awsops-dashboard',
   };
 }

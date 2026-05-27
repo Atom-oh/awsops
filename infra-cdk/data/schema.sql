@@ -127,6 +127,8 @@ CREATE INDEX IF NOT EXISTS idx_diag_fingerprint
 -- -------------------------------------------------------------------
 -- event_scaling_plans — replaces data/event-scaling/*.json (ADR-010)
 -- -------------------------------------------------------------------
+-- Status values must match src/lib/event-scaling.ts `EventStatus` exactly.
+-- 상태 값은 src/lib/event-scaling.ts의 EventStatus와 정확히 일치해야 한다.
 CREATE TABLE IF NOT EXISTS event_scaling_plans (
   id              BIGSERIAL    PRIMARY KEY,
   plan_id         TEXT         NOT NULL UNIQUE,
@@ -134,7 +136,7 @@ CREATE TABLE IF NOT EXISTS event_scaling_plans (
   event_start_at  TIMESTAMPTZ  NOT NULL,
   event_end_at    TIMESTAMPTZ,
   status          TEXT         NOT NULL
-                              CHECK (status IN ('draft','analyzed','planned','scripts_generated','archived')),
+                              CHECK (status IN ('planned','analyzing','plan-ready','approved','cancelled')),
   owner_email     TEXT,
   payload         JSONB        NOT NULL,
   created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),

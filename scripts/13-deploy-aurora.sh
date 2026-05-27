@@ -44,7 +44,11 @@ stack_output() {
     --output text 2>/dev/null
 }
 
-fetch_secret_dsn() {
+# Fetches credentials and exports them as PGHOST/PGPORT/PGUSER/PGDATABASE +
+# PGPASSWORD env vars so subsequent `psql` invocations don't expose the
+# password on the process command line (visible via `ps`/proc).
+# 자격 증명을 env에 export — `psql` 인자에 패스워드가 노출되지 않도록 함.
+load_pg_env() {
   local secret_arn="$1"
   local endpoint="$2"
   local port="$3"
@@ -55,13 +59,30 @@ fetch_secret_dsn() {
     --region "${REGION}" \
     --secret-id "${secret_arn}" \
     --query SecretString --output text)
-  local user pw
-  user=$(echo "${secret_json}" | jq -r .username)
-  pw=$(echo "${secret_json}"   | jq -r .password)
-  # URL-encode password (handles special chars in the master password)
+  export PGHOST="${endpoint}"
+  export PGPORT="${port}"
+  export PGDATABASE="${db}"
+  export PGUSER
+  export PGPASSWORD
+  export PGSSLMODE=verify-full
+  PGUSER=$(echo "${secret_json}"     | jq -r .username)
+  PGPASSWORD=$(echo "${secret_json}" | jq -r .password)
+  # If a CA bundle is present, point libpq at it.
+  if [[ -n "${PGSSLROOTCERT:-}" && -f "${PGSSLROOTCERT}" ]]; then
+    : # already set by caller
+  elif [[ -f "${SCRIPT_DIR}/rds-global-bundle.pem" ]]; then
+    export PGSSLROOTCERT="${SCRIPT_DIR}/rds-global-bundle.pem"
+  fi
+}
+
+# Compose a DSN for display/export only (used by `dsn` subcommand). Never
+# passed to psql directly.
+# DSN 출력용 — psql 인자로 절대 전달하지 않음.
+compose_dsn_for_display() {
+  local user="$1" pw="$2" endpoint="$3" port="$4" db="$5"
   local pw_enc
   pw_enc=$(jq -rn --arg p "${pw}" '$p|@uri')
-  echo "postgres://${user}:${pw_enc}@${endpoint}:${port}/${db}?sslmode=require"
+  echo "postgres://${user}:${pw_enc}@${endpoint}:${port}/${db}?sslmode=verify-full"
 }
 
 cmd_deploy() {
@@ -84,14 +105,13 @@ cmd_schema() {
   [[ -n "${endpoint}" ]]   || err "ClusterEndpoint not found in stack outputs"
   [[ -n "${secret_arn}" ]] || err "MasterSecretArn not found in stack outputs"
 
-  local dsn
-  dsn=$(fetch_secret_dsn "${secret_arn}" "${endpoint}" "${port:-5432}" "${db:-awsops}")
+  load_pg_env "${secret_arn}" "${endpoint}" "${port:-5432}" "${db:-awsops}"
 
   log "Applying schema (${SCHEMA_FILE}) to ${endpoint}/${db}..."
-  PGPASSWORD_HIDDEN=1 psql "${dsn}" -v ON_ERROR_STOP=1 -f "${SCHEMA_FILE}"
+  psql -v ON_ERROR_STOP=1 -f "${SCHEMA_FILE}"
 
   log "Schema version after apply:"
-  psql "${dsn}" -c "SELECT version, applied_at, description FROM schema_migrations ORDER BY version;"
+  psql -c "SELECT version, applied_at, description FROM schema_migrations ORDER BY version;"
 }
 
 cmd_status() {
@@ -112,11 +132,10 @@ cmd_status() {
   echo "Database:      ${db:-awsops}"
   echo "Secret ARN:    ${secret_arn}"
 
-  local dsn
-  dsn=$(fetch_secret_dsn "${secret_arn}" "${endpoint}" "${port:-5432}" "${db:-awsops}")
+  load_pg_env "${secret_arn}" "${endpoint}" "${port:-5432}" "${db:-awsops}"
   echo
   echo "Schema migrations:"
-  psql "${dsn}" -c "SELECT version, applied_at, description FROM schema_migrations ORDER BY version;" \
+  psql -c "SELECT version, applied_at, description FROM schema_migrations ORDER BY version;" \
     || log "(could not query schema_migrations — cluster may not be reachable from this host)"
 }
 
@@ -127,7 +146,15 @@ cmd_dsn() {
   db=$(stack_output DatabaseName)
   secret_arn=$(stack_output MasterSecretArn)
   [[ -n "${endpoint}" ]]   || err "Stack ${STACK} not deployed"
-  fetch_secret_dsn "${secret_arn}" "${endpoint}" "${port:-5432}" "${db:-awsops}"
+
+  local secret_json user pw
+  secret_json=$(aws secretsmanager get-secret-value \
+    --region "${REGION}" \
+    --secret-id "${secret_arn}" \
+    --query SecretString --output text)
+  user=$(echo "${secret_json}" | jq -r .username)
+  pw=$(echo "${secret_json}"   | jq -r .password)
+  compose_dsn_for_display "${user}" "${pw}" "${endpoint}" "${port:-5432}" "${db:-awsops}"
 }
 
 case "${1:-deploy}" in

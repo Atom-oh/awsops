@@ -47,7 +47,7 @@ if (app.node.tryGetContext('enableAurora') === 'true') {
     env,
     description: 'AWSops Dashboard - Aurora Serverless v2 application state (ADR-030)',
     vpc: infra.vpc,
-    appSecurityGroup: infra.instance.connections.securityGroups[0],
+    appSecurityGroup: infra.appSecurityGroup,
   });
   data.addDependency(infra);
 }

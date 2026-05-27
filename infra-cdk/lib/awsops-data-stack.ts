@@ -74,15 +74,27 @@ export class AwsopsDataStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    // Parameter group with logical replication + slow query logging enabled.
-    // Logical replication is required for future Phase 2 change capture during dual-write.
-    const parameterGroup = new rds.ParameterGroup(this, 'AuroraParameterGroup', {
-      engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_15_5,
-      }),
-      description: 'AWSops Aurora parameter group',
+    // Parameter groups: Aurora distinguishes cluster-level vs instance-level.
+    // `rds.logical_replication` is cluster-level — must live on a cluster
+    // parameter group, otherwise it's silently ignored.
+    // Aurora의 cluster vs instance 파라미터 구분을 명시적으로 분리.
+    const engine = rds.DatabaseClusterEngine.auroraPostgres({
+      version: rds.AuroraPostgresEngineVersion.VER_15_5,
+    });
+
+    const clusterParameterGroup = new rds.ParameterGroup(this, 'AuroraClusterParameterGroup', {
+      engine,
+      description: 'AWSops Aurora cluster-level parameters',
       parameters: {
+        // Required for future Phase 2 change capture during dual-write.
         'rds.logical_replication': '1',
+      },
+    });
+
+    const instanceParameterGroup = new rds.ParameterGroup(this, 'AuroraInstanceParameterGroup', {
+      engine,
+      description: 'AWSops Aurora instance-level parameters',
+      parameters: {
         'log_min_duration_statement': '1000',
         'log_statement': 'ddl',
         'log_lock_waits': '1',
@@ -93,15 +105,13 @@ export class AwsopsDataStack extends cdk.Stack {
     // ADR-030 cost estimate is anchored on this range.
     this.cluster = new rds.DatabaseCluster(this, 'AuroraCluster', {
       clusterIdentifier: 'awsops-aurora',
-      engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_15_5,
-      }),
+      engine,
       credentials: rds.Credentials.fromSecret(this.credentialsSecret),
       defaultDatabaseName: databaseName,
       vpc: props.vpc,
       subnetGroup,
       securityGroups: [this.clusterSecurityGroup],
-      parameterGroup,
+      parameterGroup: clusterParameterGroup,
       storageEncrypted: true,
       storageEncryptionKey: storageKey,
       iamAuthentication: true,
@@ -116,12 +126,14 @@ export class AwsopsDataStack extends cdk.Stack {
       writer: rds.ClusterInstance.serverlessV2('Writer', {
         autoMinorVersionUpgrade: true,
         publiclyAccessible: false,
+        parameterGroup: instanceParameterGroup,
       }),
       readers: [
         rds.ClusterInstance.serverlessV2('Reader1', {
           autoMinorVersionUpgrade: true,
           publiclyAccessible: false,
           scaleWithWriter: true,
+          parameterGroup: instanceParameterGroup,
         }),
       ],
       serverlessV2MinCapacity: 0.5,

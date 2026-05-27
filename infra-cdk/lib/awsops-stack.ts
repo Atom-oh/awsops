@@ -15,6 +15,10 @@ export class AwsopsStack extends cdk.Stack {
   public readonly alb: elbv2.ApplicationLoadBalancer;
   public readonly distribution: cloudfront.Distribution;
   public readonly instance: ec2.Instance;
+  // Explicit handle for cross-stack consumers (e.g. AwsopsDataStack — ADR-030).
+  // Don't reach through `instance.connections.securityGroups[i]` from other
+  // stacks: the index is fragile and can shift if more SGs are attached later.
+  public readonly appSecurityGroup: ec2.ISecurityGroup;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -156,6 +160,7 @@ export class AwsopsStack extends cdk.Stack {
     });
     ec2Sg.addIngressRule(albSg, ec2.Port.tcp(8888), 'VSCode from ALB');
     ec2Sg.addIngressRule(albSg, ec2.Port.tcp(3000), 'Dashboard from ALB');
+    this.appSecurityGroup = ec2Sg;
 
     // -------------------------------------------------------
     // SSM VPC Endpoints: skipVpcEndpoints=true이면 건너뜀
