@@ -19,6 +19,8 @@ const getConversationsMock = vi.fn();
 const countAuroraMemoryMock = vi.fn();
 const countJsonInventoryDaysMock = vi.fn();
 const countAuroraInventoryRowsMock = vi.fn();
+const countJsonCostSnapshotsMock = vi.fn();
+const countAuroraCostSnapshotsMock = vi.fn();
 
 vi.mock('@/lib/auth-utils', () => ({ getUserFromRequest: (...args: unknown[]) => getUserFromRequestMock(...args) }));
 vi.mock('@/lib/app-config', () => ({ getConfig: () => getConfigMock() }));
@@ -41,6 +43,8 @@ vi.mock('@/lib/inventory-fs', () => ({ countJsonInventoryDays: () => countJsonIn
 vi.mock('@/lib/db/inventory-writer', () => ({
   countAuroraInventoryRows: (opts?: { distinct?: boolean }) => countAuroraInventoryRowsMock(opts),
 }));
+vi.mock('@/lib/cost-fs', () => ({ countJsonCostSnapshots: () => countJsonCostSnapshotsMock() }));
+vi.mock('@/lib/db/cost-writer', () => ({ countAuroraCostSnapshots: () => countAuroraCostSnapshotsMock() }));
 
 import { GET } from '@/app/api/parity/route';
 
@@ -55,7 +59,8 @@ describe('parity route — GET /api/parity', () => {
      getDriftCountersMock, countAuroraCallsMock, getStatsMock, listEventsMock,
      readEventsFromAuroraMock, countAuroraEventsMock, countAuroraDiagnosesMock,
      countJsonDiagnosesMock, getConversationsMock, countAuroraMemoryMock,
-     countJsonInventoryDaysMock, countAuroraInventoryRowsMock].forEach((m) => m.mockReset());
+     countJsonInventoryDaysMock, countAuroraInventoryRowsMock,
+     countJsonCostSnapshotsMock, countAuroraCostSnapshotsMock].forEach((m) => m.mockReset());
 
     listEventsMock.mockReturnValue([]);
     readEventsFromAuroraMock.mockResolvedValue([]);
@@ -66,6 +71,8 @@ describe('parity route — GET /api/parity', () => {
     countAuroraMemoryMock.mockResolvedValue(0);
     countJsonInventoryDaysMock.mockReturnValue(0);
     countAuroraInventoryRowsMock.mockResolvedValue(0);
+    countJsonCostSnapshotsMock.mockReturnValue(0);
+    countAuroraCostSnapshotsMock.mockResolvedValue(0);
 
     getUserFromRequestMock.mockReturnValue(adminUser());
     getConfigMock.mockReturnValue(configWithAdmin());
@@ -83,32 +90,28 @@ describe('parity route — GET /api/parity', () => {
 
   it('returns 403 when caller is not an admin', async () => {
     getUserFromRequestMock.mockReturnValue({ email: 'bob@example.com', sub: 'bob', groups: [] });
-    const res = await GET(makeReq());
-    expect(res.status).toBe(403);
+    expect((await GET(makeReq())).status).toBe(403);
   });
 
   it('treats fresh installs (empty adminEmails) as admin', async () => {
     getUserFromRequestMock.mockReturnValue({ email: 'anonymous', sub: 'x', groups: [] });
     getConfigMock.mockReturnValue(configFreshInstall());
-    const res = await GET(makeReq());
-    expect(res.status).toBe(200);
+    expect((await GET(makeReq())).status).toBe(200);
   });
 
   it('returns auroraEnabled:false when not configured', async () => {
     isAuroraEnabledMock.mockReturnValue(false);
-    const res = await GET(makeReq());
-    const body = await res.json();
+    const body = await (await GET(makeReq())).json();
     expect(body.auroraEnabled).toBe(false);
     expect(body.message).toMatch(/AURORA_DATABASE_URL|AURORA_HOST/);
   });
 
-  it('returns health, drift, and parity arrays when enabled', async () => {
+  it('returns health, drift, parity arrays when enabled', async () => {
     getDriftCountersMock.mockReturnValue([
       { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
     ]);
     countAuroraCallsMock.mockResolvedValue(5);
-    const res = await GET(makeReq());
-    const body = await res.json();
+    const body = await (await GET(makeReq())).json();
     expect(body.auroraEnabled).toBe(true);
     expect(body.health).toEqual({ ok: true, schemaVersion: 1 });
     expect(Array.isArray(body.parity)).toBe(true);
@@ -128,13 +131,12 @@ describe('parity route — GET /api/parity', () => {
       { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
       { source: 'inventory_snapshots', writes: 2, failures: 1, failureRate: 0.33, lastFailureAt: 't', lastFailureMessage: 'm' },
     ]);
-    const res = await GET(makeReq('http://x/api/parity?source=agentcore_stats'));
-    const body = await res.json();
+    const body = await (await GET(makeReq('http://x/api/parity?source=agentcore_stats'))).json();
     expect(body.drift).toHaveLength(1);
     expect(body.drift[0].source).toBe('agentcore_stats');
   });
 
-  it('computes |auroraCount - jsonRecentCalls| as drift', async () => {
+  it('computes |auroraCount - jsonRecentCalls| as drift for agentcore_stats', async () => {
     countAuroraCallsMock.mockResolvedValue(7);
     const now = Date.now();
     getStatsMock.mockReturnValue({
@@ -148,18 +150,18 @@ describe('parity route — GET /api/parity', () => {
       lastUpdated: new Date().toISOString(),
       totalInputTokens: 0, totalOutputTokens: 0, tokensByModel: {},
     });
-    const res = await GET(makeReq());
-    const body = await res.json();
+    const body = await (await GET(makeReq())).json();
     const p = body.parity.find((x: { source: string }) => x.source === 'agentcore_stats');
     expect(p.drift).toBe(5);
   });
 
-  describe('per-source parity', () => {
+  describe('per-source parity coverage', () => {
     const sources = [
       { source: 'event_scaling_plans', mockJson: listEventsMock, mockAur: countAuroraEventsMock, jsonShape: (n: number) => Array(n).fill({ eventId: 'x' }) },
       { source: 'alert_diagnosis', mockJson: countJsonDiagnosesMock, mockAur: countAuroraDiagnosesMock, jsonShape: (n: number) => n },
       { source: 'agentcore_memory', mockJson: getConversationsMock, mockAur: countAuroraMemoryMock, jsonShape: (n: number) => Array(n).fill({ id: 'x' }) },
       { source: 'inventory_snapshots', mockJson: countJsonInventoryDaysMock, mockAur: countAuroraInventoryRowsMock, jsonShape: (n: number) => n },
+      { source: 'cost_snapshots', mockJson: countJsonCostSnapshotsMock, mockAur: countAuroraCostSnapshotsMock, jsonShape: (n: number) => n },
     ];
 
     for (const { source, mockJson, mockAur, jsonShape } of sources) {
