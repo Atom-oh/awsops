@@ -61,6 +61,24 @@ Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
 - Memory: 1 GB x $0.004445/hr x 24hr = **$0.107/day**
 - Total: **$0.593/day ($17.78/month)**
 
+## 계산 근거 토글 (Cost Calculation Basis)
+
+테이블 하단에 **▶ Cost Calculation Basis / 비용 계산 근거** 접기 가능 섹션이 있습니다. `showBasis` 토글 시 다음을 인라인으로 확장합니다:
+
+- **Fargate Pricing 표** (`ap-northeast-2`, On-Demand 기준)
+  - vCPU hourly rate: `$0.04048`
+  - GB hourly rate: `$0.004445`
+- 예시 계산: 0.5 vCPU × 1 GB 태스크 → `$0.593/day` 환산
+- Spot, ARM(Graviton) 변동분에 대한 참고 노트
+
+가격 값은 `data/config.json`의 `fargatePricing`으로 오버라이드 가능합니다.
+
+## EKS Pod Cost 포인터 (Phase 2)
+
+페이지 하단에 EKS 컨테이너 비용 분석으로 안내하는 카드가 있습니다 — 이 페이지는 ECS Fargate에 한정되며, EKS Pod 단위 비용은 별도 페이지에서 다룹니다:
+
+→ [EKS Container Cost](./eks-container-cost) — Pod / Node 탭, OpenCost (Prometheus) 또는 Request-based 추정
+
 ## 사용 방법
 
 1. 사이드바에서 **Compute > Container Cost**를 클릭합니다

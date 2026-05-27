@@ -1,10 +1,14 @@
 import { chromium, type Page, type Browser, type BrowserContext } from 'playwright';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as dns from 'dns';
 
-const BASE_URL = 'https://awsops.whchoi.net/awsops';
-const LOGIN_EMAIL = 'admin@awsops.local';
-const LOGIN_PASSWORD = '!234Qwer';
+// VPC内 default resolver does not know atomai.click — fall back to public DNS.
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+
+const BASE_URL = process.env.AWSOPS_CAPTURE_URL || 'https://awsops.atomai.click/awsops';
+const LOGIN_EMAIL = process.env.AWSOPS_LOGIN_EMAIL || 'admin@awsops.local';
+const LOGIN_PASSWORD = process.env.AWSOPS_LOGIN_PASSWORD || '!234Qwer';
 const OUTPUT_DIR = path.join(__dirname, '..', 'static', 'screenshots');
 
 // DPR resolution map: viewport stays 1920x1080, only pixel density changes
@@ -26,6 +30,9 @@ const pages: PageCapture[] = [
   { category: 'overview', name: 'dashboard', path: '/' },
   { category: 'overview', name: 'ai-assistant', path: '/ai' },
   { category: 'overview', name: 'agentcore', path: '/agentcore' },
+  { category: 'overview', name: 'accounts', path: '/accounts' },
+  { category: 'overview', name: 'alert-settings', path: '/alert-settings' },
+  { category: 'overview', name: 'event-scaling', path: '/event-scaling' },
   // Compute
   { category: 'compute', name: 'ec2', path: '/ec2' },
   { category: 'compute', name: 'lambda', path: '/lambda' },
@@ -59,11 +66,20 @@ const pages: PageCapture[] = [
   { category: 'monitoring', name: 'cloudtrail', path: '/cloudtrail' },
   { category: 'monitoring', name: 'cost', path: '/cost' },
   { category: 'monitoring', name: 'inventory', path: '/inventory' },
+  { category: 'monitoring', name: 'ai-diagnosis', path: '/ai-diagnosis' },
+  { category: 'monitoring', name: 'datasources', path: '/datasources' },
+  { category: 'monitoring', name: 'datasources-explore', path: '/datasources/explore' },
   // Security
   { category: 'security', name: 'iam', path: '/iam' },
   { category: 'security', name: 'security', path: '/security' },
   { category: 'security', name: 'compliance', path: '/compliance' },
 ];
+
+function parseOnlyArg(): string[] | null {
+  const onlyArg = process.argv.find(a => a.startsWith('--only='));
+  if (!onlyArg) return null;
+  return onlyArg.split('=')[1].split(',').map(s => s.trim()).filter(Boolean);
+}
 
 function parseDprArg(): string[] {
   const dprArg = process.argv.find(a => a.startsWith('--dpr='));
@@ -89,6 +105,13 @@ function parseDprArg(): string[] {
 }
 
 async function login(page: Page): Promise<void> {
+  // localhost / EC2 direct serves the app without Cognito (auth is enforced at CloudFront).
+  if (BASE_URL.includes('localhost') || BASE_URL.includes('127.0.0.1')) {
+    console.log('Local URL detected — skipping Cognito login.');
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(2000);
+    return;
+  }
   console.log('Navigating to login page...');
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
@@ -187,7 +210,13 @@ async function captureAllDprs(
   browser: Browser,
   dprKeys: string[],
   cookies: { name: string; value: string; domain: string; path: string }[],
+  filter: string[] | null,
 ): Promise<void> {
+  const targets = filter
+    ? pages.filter(p => filter.includes(p.name) || filter.includes(`${p.category}/${p.name}`))
+    : pages;
+  console.log(`Pages to capture: ${targets.length}${filter ? ` (filtered from ${pages.length})` : ''}`);
+
   for (const key of dprKeys) {
     const { dpr, suffix } = DPR_MAP[key];
     const label = `${key.toUpperCase()} (DPR ${dpr}${suffix || ''})`;
@@ -206,7 +235,7 @@ async function captureAllDprs(
 
     const page = await context.newPage();
 
-    for (const capture of pages) {
+    for (const capture of targets) {
       const url = `${BASE_URL}${capture.path}`;
       console.log(`  ${capture.category}/${capture.name}${suffix} (${url})`);
 
@@ -231,8 +260,11 @@ async function captureAllDprs(
 
 async function main(): Promise<void> {
   const dprKeys = parseDprArg();
+  const onlyFilter = parseOnlyArg();
   console.log('Starting screenshot capture...');
+  console.log(`Base URL: ${BASE_URL}`);
   console.log(`DPR targets: ${dprKeys.map(k => `${k} (${DPR_MAP[k].dpr}x)`).join(', ')}`);
+  if (onlyFilter) console.log(`Filter: --only=${onlyFilter.join(',')}`);
   console.log(`Output directory: ${OUTPUT_DIR}`);
 
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -251,7 +283,7 @@ async function main(): Promise<void> {
     const cookies = await loginContext.cookies();
     await loginContext.close();
 
-    await captureAllDprs(browser, dprKeys, cookies);
+    await captureAllDprs(browser, dprKeys, cookies, onlyFilter);
 
     console.log(`\nAll screenshots captured to ${OUTPUT_DIR}`);
   } catch (err) {

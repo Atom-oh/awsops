@@ -17,9 +17,13 @@ AI 어시스턴트는 Amazon Bedrock AgentCore를 기반으로 자연어로 AWS 
 
 ![AI 의도 분류 흐름](/diagrams/ai-routing.png)
 
-## 10단계 라우팅
+## 11단계 라우팅
 
-AI 어시스턴트는 질문을 분석하여 가장 적합한 라우트로 자동 분류합니다.
+AI 어시스턴트는 질문을 분석하여 가장 적합한 라우트로 자동 분류합니다. 우선순위: `code` → `network` → `container` → `iac` → `data` → `security` → `monitoring` → `cost` → `datasource` → `aws-data` → `general`.
+
+내부적으로 추가 분류 라우트도 존재합니다:
+- `datasource-diag` — 데이터소스 연결 진단 (6단계 자동 진단)
+- `incident` — 알림 기반 부분 진단 (alert-correlation에서 호출)
 
 ### 라우팅 테이블
 
@@ -253,13 +257,19 @@ AI: (VPC 목록 응답)
 AI: (이전 컨텍스트를 참조하여 default VPC 상세 응답)
 ```
 
-### 저장된 이력
+### 저장된 이력 (AgentCore Memory)
 
-대화 이력은 사용자별로 저장되며, 화면 하단 패널에서 확인할 수 있습니다.
+대화 이력은 AgentCore Memory Store에 사용자별로 저장됩니다. 화면 우측 패널에서 확인하고 클릭으로 복원할 수 있습니다.
 
-- **저장 정보**: 질문, 응답 요약, 라우트, 응답 시간, 타임스탬프
-- **보관 기간**: 365일
-- **검색**: 키워드로 이전 대화 검색 가능
+| 기능 | API |
+|------|-----|
+| 세션 목록 (최근 30개) | `GET /awsops/api/agentcore?action=sessions&limit=30` |
+| 단일 세션 로드 | `GET /awsops/api/agentcore?action=session&id={sessionId}` |
+
+- **저장 정보**: 질문, 응답, 라우트, 토큰 사용량, 타임스탬프
+- **세션 ID**: 클라이언트에서 페이지 진입 시 `s_{timestamp}_{rand}` 형태로 생성, 응답에 포함되어 서버에 기록
+- **보관 기간**: 365일 (`agentcore-memory.ts` `eventExpiryDuration` 상한)
+- **복원 동작**: 세션 클릭 시 해당 세션의 메시지 배열로 현재 대화창을 덮어쓰고, 후속 질문은 같은 `sessionId`로 연속 호출 — Bedrock 컨텍스트 유지
 
 ## 세션 통계
 

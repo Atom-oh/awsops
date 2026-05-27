@@ -22,13 +22,23 @@ AWS 인프라 전반의 성능 메트릭을 한 화면에서 종합적으로 모
 - **RDS**: 데이터베이스 CPU, 커넥션, FreeableMemory
 
 ### 탭별 상세 보기
-| 탭 | 내용 |
-|---|------|
-| EC2 CPU | 인스턴스별 CPU 사용률 테이블, 클릭 시 시계열 차트 |
-| Network | Network In/Out 트래픽, 24시간 추이 그래프 |
-| Memory | K8s 노드 리소스 + RDS FreeableMemory |
-| EBS IOPS | 볼륨별 Read IOPS, 시간별 추이 |
-| RDS | CPU, 커넥션 수, 일별 추이 |
+페이지 상단에는 5개의 탭이 항상 보이며 카운트가 라벨에 함께 표시됩니다.
+
+| 탭 | 라벨 | 내용 | 데이터 조회 |
+|---|------|------|------------|
+| `ec2` | `EC2 CPU ({n})` | 인스턴스별 평균/최대 CPU, 클릭 시 시계열 상세 뷰 | 페이지 로드 시 일괄 |
+| `network` | `Network ({n})` | Network In/Out (MB/h), 행 클릭 시 인스턴스별 24h 그래프 | **온디맨드** — 탭 진입 시 instance별 `fetchNetwork()` 순차 호출 |
+| `memory` | `Memory ({n} nodes)` | K8s 노드 메모리 + RDS FreeableMemory 통합 | 페이지 로드 시 일괄 |
+| `ebs` | `EBS IOPS ({n})` | 볼륨별 Read/Write IOPS, 시간별 추이 | 페이지 로드 시 일괄 |
+| `rds` | `RDS ({n})` | CPU + Connection + FreeableMemory | 페이지 로드 시 일괄 |
+
+:::info Network 탭 동작 방식
+Network 탭은 진입 시점에 인스턴스별로 CloudWatch `NetworkIn/Out`을 **순차** 호출합니다 (`useEffect`에서 `activeTab === 'network'` 감지). 인스턴스가 많으면 모든 그래프가 채워지는 데 수십 초가 걸릴 수 있습니다 — 다른 탭에서는 호출하지 않아 평소 로딩 비용을 줄입니다.
+:::
+
+:::info EBS IOPS 탭
+페이지의 `ebsLatest` 데이터는 dashboard pre-warm 캐시(`cache-warmer.ts`)에서 가져옵니다. 새로고침 버튼은 `bustCache=true`로 캐시를 무효화합니다.
+:::
 
 ### 인스턴스 상세 메트릭
 EC2 인스턴스 행을 클릭하면 상세 메트릭 뷰로 이동합니다:

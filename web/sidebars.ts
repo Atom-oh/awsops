@@ -80,6 +80,8 @@ const sidebars: SidebarsConfig = {
         'monitoring/datasources',
         'monitoring/ai-diagnosis',
         'monitoring/alerts',
+        'monitoring/alert-settings',
+        'monitoring/event-scaling',
       ],
     },
     {
