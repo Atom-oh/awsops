@@ -1,6 +1,6 @@
 # ADR-030: ECS Fargate Workload + Aurora App State + Dual-Tier ECR
 
-## Status: Proposed (2026-05-27) / 상태: 제안됨 (2026-05-27)
+## Status: Accepted (2026-05-27) / 상태: 채택됨 (2026-05-27)
 
 ## Context / 컨텍스트
 
@@ -128,6 +128,17 @@ ECS launch type: 모든 4개 서비스 **Fargate**. Web과 jobs는 기존 Steamp
 ### Post-acceptance deviations / 채택 후 변경 사항
 
 - (none yet — to be filled as phases land)
+
+### Open follow-ups at acceptance / 채택 시점의 미해결 항목
+
+The ADR is accepted to unblock implementation, with the following items tracked as Phase 0 pre-work:
+
+구현 착수를 위해 ADR을 먼저 채택하되, 아래 항목은 Phase 0 사전 작업으로 추적한다:
+
+- **Cost validation**: confirm the +\$50–80/mo estimate against actual workload profile (web concurrency, Steampipe FDW pool size, Aurora ACU floor).
+- **Aurora schema review**: finalize column types and indexes for the 7 tables in the migration table before Phase 1 dual-write begins.
+- **cosign key custody**: decide between AWS KMS-backed signing (preferred for audit trail) vs. local key file (faster bootstrap). Required before any Public ECR push in Phase 3.
+- **Runbooks**: Aurora failover, Fargate task replacement, Public ECR rollback, cosign key rotation — must exist in `docs/runbooks/` before Phase 3 cutover.
 
 ## References / 참고 자료
 
