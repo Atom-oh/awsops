@@ -8,6 +8,7 @@ import { collectReportData, formatReportForBedrock } from '@/lib/report-generato
 import type { ReportData } from '@/lib/report-generator';
 import { REPORT_SECTIONS } from '@/lib/report-prompts';
 import { generateReportDocx } from '@/lib/report-docx';
+import { generateReportPdf } from '@/lib/report-pdf';
 import { validateAccountId, getAccountById } from '@/lib/app-config';
 import { readSchedule, writeSchedule, startScheduler, type ReportSchedule } from '@/lib/report-scheduler';
 import * as fs from 'fs';
@@ -722,9 +723,11 @@ export async function GET(request: NextRequest) {
     }
 
     try {
+      const date = new Date().toISOString().split('T')[0];
       const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
         Bucket: getReportBucket(),
         Key: meta.s3KeyDocx,
+        ResponseContentDisposition: `attachment; filename="AWSops_Report_${date}.docx"`,
       }), { expiresIn: 7 * 24 * 60 * 60 });
 
       return NextResponse.redirect(freshUrl, 302);
@@ -759,11 +762,16 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Try S3 presigned URL first
+    // Try S3 presigned URL first — force attachment via response-content-disposition
+    // so the browser downloads instead of rendering text/markdown inline.
     if (meta.s3KeyMd) {
       try {
+        const date = new Date().toISOString().split('T')[0];
         const freshUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-          Bucket: getReportBucket(), Key: meta.s3KeyMd,
+          Bucket: getReportBucket(),
+          Key: meta.s3KeyMd,
+          ResponseContentDisposition: `attachment; filename="AWSops_Report_${date}.md"`,
+          ResponseContentType: 'text/markdown; charset=utf-8',
         }), { expiresIn: 7 * 24 * 60 * 60 });
         return NextResponse.redirect(freshUrl, 302);
       } catch { /* fallback below */ }
@@ -801,6 +809,51 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({ error: 'Markdown file not available' }, { status: 500 });
+  }
+
+  // ── Download PDF (HTML → Puppeteer) ──
+  // Generated on demand from stored sections — no S3 PDF artifact yet because
+  // generation is ~2s per call. Light caching could be added if hit rate grows.
+  if (action === 'download-pdf') {
+    const meta = readReportMeta(id);
+    if (!meta) {
+      return NextResponse.json({ error: 'Report not found' }, { status: 404 });
+    }
+    if (meta.status !== 'completed') {
+      return NextResponse.json(
+        { error: 'Report not available' },
+        { status: meta.status === 'failed' ? 410 : 202 },
+      );
+    }
+    if (!meta.sections?.length) {
+      return NextResponse.json({ error: 'No sections to render' }, { status: 500 });
+    }
+
+    try {
+      const completedAt = meta.completedAt ?? meta.createdAt;
+      const isEn = (meta.scheduledBy?.startsWith('en') ?? false);
+      const pdfBuffer = await generateReportPdf({
+        title: isEn ? 'AWSops AI Diagnosis Report' : 'AWSops AI 종합진단 리포트',
+        subtitle: new Date(completedAt).toLocaleDateString(isEn ? 'en-US' : 'ko-KR', {
+          year: 'numeric', month: 'long', day: 'numeric',
+        }),
+        accountAlias: meta.accountAlias,
+        generatedAt: completedAt,
+        sections: meta.sections.map(s => ({ section: s.section, title: s.title, content: s.content })),
+      });
+      const date = new Date(completedAt).toISOString().split('T')[0];
+      return new NextResponse(new Uint8Array(pdfBuffer), {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="AWSops_Report_${date}.pdf"`,
+          'Content-Length': String(pdfBuffer.length),
+        },
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[report] PDF generation failed:', msg);
+      return NextResponse.json({ error: 'PDF generation failed', detail: msg }, { status: 500 });
+    }
   }
 
   return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
