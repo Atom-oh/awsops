@@ -15,6 +15,8 @@ import { getConversations } from '@/lib/agentcore-memory';
 import { countAuroraMemory } from '@/lib/db/agentcore-memory-writer';
 import { countJsonInventoryDays } from '@/lib/inventory-fs';
 import { countAuroraInventoryRows } from '@/lib/db/inventory-writer';
+import { countJsonCostSnapshots } from '@/lib/cost-fs';
+import { countAuroraCostSnapshots } from '@/lib/db/cost-writer';
 
 function isAdminUser(req: NextRequest): boolean {
   const user = getUserFromRequest(req);
@@ -104,6 +106,17 @@ async function inventorySnapshotsParity(): Promise<CountParity<'inventory_snapsh
   };
 }
 
+async function costSnapshotsParity(): Promise<CountParity<'cost_snapshots'>> {
+  const jsonCount = countJsonCostSnapshots();
+  const auroraCount = await countAuroraCostSnapshots();
+  return {
+    source: 'cost_snapshots',
+    inSync: jsonCount === auroraCount, jsonCount, auroraCount,
+    drift: Math.abs(auroraCount - jsonCount),
+    note: 'JSON: one file per (account,day). Aurora: one row per (account,day,granularity=SNAPSHOT).',
+  };
+}
+
 export async function GET(req: NextRequest) {
   if (!isAdminUser(req)) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
@@ -147,6 +160,9 @@ export async function GET(req: NextRequest) {
   if (source === 'inventory_snapshots') {
     return NextResponse.json({ auroraEnabled: true, health, drift: filteredDrift, parity: [await inventorySnapshotsParity()] });
   }
+  if (source === 'cost_snapshots') {
+    return NextResponse.json({ auroraEnabled: true, health, drift: filteredDrift, parity: [await costSnapshotsParity()] });
+  }
 
   return NextResponse.json({
     auroraEnabled: true,
@@ -158,10 +174,9 @@ export async function GET(req: NextRequest) {
       await alertDiagnosisParity(),
       await agentcoreMemoryParity(),
       await inventorySnapshotsParity(),
+      await costSnapshotsParity(),
     ],
     note:
-      'Phase 1 dual-write — 5 of 7 sources wired (agentcore_stats, event_scaling_plans, ' +
-      'alert_diagnosis, agentcore_memory, inventory_snapshots). cost_snapshots and ' +
-      'report_schedules land in subsequent commits.',
+      'Phase 1 dual-write — 6 of 7 sources wired. report_schedules lands in a follow-up commit.',
   });
 }
