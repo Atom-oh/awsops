@@ -1,8 +1,4 @@
 // ADR-030 Phase 1 dual-write parity check.
-//
-// During Phase 1, JSON is the source of truth and Aurora is a shadow write.
-// This endpoint compares the two so the 7-day parity gate (zero drift) from
-// the ADR can be measured before Phase 2 flips reads to Aurora.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/auth-utils';
@@ -17,6 +13,8 @@ import { countAuroraDiagnoses } from '@/lib/db/alert-diagnosis-writer';
 import { countJsonDiagnoses } from '@/lib/alert-knowledge-fs';
 import { getConversations } from '@/lib/agentcore-memory';
 import { countAuroraMemory } from '@/lib/db/agentcore-memory-writer';
+import { countJsonInventoryDays } from '@/lib/inventory-fs';
+import { countAuroraInventoryRows } from '@/lib/db/inventory-writer';
 
 function isAdminUser(req: NextRequest): boolean {
   const user = getUserFromRequest(req);
@@ -49,14 +47,12 @@ async function agentcoreStatsParity(hours: number): Promise<AgentCoreStatsParity
     jsonRecentCalls: jsonRecentInWindow,
     auroraCount,
     drift: Math.abs(auroraCount - jsonRecentInWindow),
-    note:
-      'JSON side caps at 50 most-recent calls; comparison is exact only ' +
-      'when call volume in the window < 50.',
+    note: 'JSON side caps at 50 most-recent calls; exact only when volume < 50.',
   };
 }
 
-interface EventScalingPlansParity {
-  source: 'event_scaling_plans';
+interface CountParity<S extends string> {
+  source: S;
   inSync: boolean;
   jsonCount: number;
   auroraCount: number;
@@ -64,64 +60,47 @@ interface EventScalingPlansParity {
   note: string;
 }
 
-async function eventScalingPlansParity(): Promise<EventScalingPlansParity> {
+async function eventScalingPlansParity(): Promise<CountParity<'event_scaling_plans'>> {
   const jsonCount = listEvents().length;
   const auroraCount = await countAuroraEvents();
   return {
     source: 'event_scaling_plans',
-    inSync: jsonCount === auroraCount,
-    jsonCount,
-    auroraCount,
+    inSync: jsonCount === auroraCount, jsonCount, auroraCount,
     drift: Math.abs(auroraCount - jsonCount),
     note: 'Count-based parity for slice 3. Per-event field diff lands later.',
   };
 }
 
-interface AlertDiagnosisParity {
-  source: 'alert_diagnosis';
-  inSync: boolean;
-  jsonCount: number;
-  auroraCount: number;
-  drift: number;
-  note: string;
-}
-
-async function alertDiagnosisParity(): Promise<AlertDiagnosisParity> {
+async function alertDiagnosisParity(): Promise<CountParity<'alert_diagnosis'>> {
   const jsonCount = countJsonDiagnoses();
   const auroraCount = await countAuroraDiagnoses();
   return {
     source: 'alert_diagnosis',
-    inSync: jsonCount === auroraCount,
-    jsonCount,
-    auroraCount,
+    inSync: jsonCount === auroraCount, jsonCount, auroraCount,
     drift: Math.abs(auroraCount - jsonCount),
-    note:
-      'Count-based parity. INSERT is idempotent on (incident_id), so duplicate ' +
-      'dispatches do not inflate Aurora.',
+    note: 'INSERT idempotent on (incident_id) so duplicate dispatches do not inflate.',
   };
 }
 
-interface AgentCoreMemoryParity {
-  source: 'agentcore_memory';
-  inSync: boolean;
-  jsonCount: number;
-  auroraCount: number;
-  drift: number;
-  note: string;
-}
-
-async function agentcoreMemoryParity(): Promise<AgentCoreMemoryParity> {
+async function agentcoreMemoryParity(): Promise<CountParity<'agentcore_memory'>> {
   const jsonCount = (await getConversations(10_000)).length;
   const auroraCount = await countAuroraMemory();
   return {
     source: 'agentcore_memory',
-    inSync: jsonCount === auroraCount,
-    jsonCount,
-    auroraCount,
+    inSync: jsonCount === auroraCount, jsonCount, auroraCount,
     drift: Math.abs(auroraCount - jsonCount),
-    note:
-      'JSON side keeps the last 100 conversations only; Aurora keeps them until ' +
-      'expires_at (365 days). Exact parity is meaningful only when volume < 100.',
+    note: 'JSON keeps last 100; Aurora keeps until expires_at (365d). Exact only when volume < 100.',
+  };
+}
+
+async function inventorySnapshotsParity(): Promise<CountParity<'inventory_snapshots'>> {
+  const jsonCount = countJsonInventoryDays();
+  const auroraCount = await countAuroraInventoryRows({ distinct: true });
+  return {
+    source: 'inventory_snapshots',
+    inSync: jsonCount === auroraCount, jsonCount, auroraCount,
+    drift: Math.abs(auroraCount - jsonCount),
+    note: 'Compares snapshot-days not rows; Aurora stores N rows per snapshot.',
   };
 }
 
@@ -151,34 +130,22 @@ export async function GET(req: NextRequest) {
   }
 
   const driftCounters = getDriftCounters();
+  const filteredDrift = source ? driftCounters.filter((c) => c.source === source) : driftCounters;
 
   if (source === 'agentcore_stats') {
-    return NextResponse.json({
-      auroraEnabled: true, health,
-      drift: driftCounters.filter((c) => c.source === source),
-      parity: [await agentcoreStatsParity(hours)],
-    });
+    return NextResponse.json({ auroraEnabled: true, health, drift: filteredDrift, parity: [await agentcoreStatsParity(hours)] });
   }
   if (source === 'event_scaling_plans') {
-    return NextResponse.json({
-      auroraEnabled: true, health,
-      drift: driftCounters.filter((c) => c.source === source),
-      parity: [await eventScalingPlansParity()],
-    });
+    return NextResponse.json({ auroraEnabled: true, health, drift: filteredDrift, parity: [await eventScalingPlansParity()] });
   }
   if (source === 'alert_diagnosis') {
-    return NextResponse.json({
-      auroraEnabled: true, health,
-      drift: driftCounters.filter((c) => c.source === source),
-      parity: [await alertDiagnosisParity()],
-    });
+    return NextResponse.json({ auroraEnabled: true, health, drift: filteredDrift, parity: [await alertDiagnosisParity()] });
   }
   if (source === 'agentcore_memory') {
-    return NextResponse.json({
-      auroraEnabled: true, health,
-      drift: driftCounters.filter((c) => c.source === source),
-      parity: [await agentcoreMemoryParity()],
-    });
+    return NextResponse.json({ auroraEnabled: true, health, drift: filteredDrift, parity: [await agentcoreMemoryParity()] });
+  }
+  if (source === 'inventory_snapshots') {
+    return NextResponse.json({ auroraEnabled: true, health, drift: filteredDrift, parity: [await inventorySnapshotsParity()] });
   }
 
   return NextResponse.json({
@@ -190,9 +157,11 @@ export async function GET(req: NextRequest) {
       await eventScalingPlansParity(),
       await alertDiagnosisParity(),
       await agentcoreMemoryParity(),
+      await inventorySnapshotsParity(),
     ],
     note:
-      'Phase 1 dual-write — agentcore_stats + event_scaling_plans + alert_diagnosis + agentcore_memory wired so far. ' +
-      'Other sources (inventory, cost, schedules) land in subsequent commits.',
+      'Phase 1 dual-write — 5 of 7 sources wired (agentcore_stats, event_scaling_plans, ' +
+      'alert_diagnosis, agentcore_memory, inventory_snapshots). cost_snapshots and ' +
+      'report_schedules land in subsequent commits.',
   });
 }

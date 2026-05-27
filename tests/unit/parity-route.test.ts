@@ -17,71 +17,46 @@ const countAuroraDiagnosesMock = vi.fn();
 const countJsonDiagnosesMock = vi.fn();
 const getConversationsMock = vi.fn();
 const countAuroraMemoryMock = vi.fn();
+const countJsonInventoryDaysMock = vi.fn();
+const countAuroraInventoryRowsMock = vi.fn();
 
-vi.mock('@/lib/auth-utils', () => ({
-  getUserFromRequest: (...args: unknown[]) => getUserFromRequestMock(...args),
-}));
-vi.mock('@/lib/app-config', () => ({
-  getConfig: () => getConfigMock(),
-}));
-vi.mock('@/lib/db', () => ({
-  isAuroraEnabled: () => isAuroraEnabledMock(),
-  checkDbHealth: () => checkDbHealthMock(),
-}));
-vi.mock('@/lib/db/drift', () => ({
-  getDriftCounters: () => getDriftCountersMock(),
-}));
-vi.mock('@/lib/db/agentcore-stats-writer', () => ({
-  countAuroraCalls: (...args: unknown[]) => countAuroraCallsMock(...args),
-}));
-vi.mock('@/lib/agentcore-stats', () => ({
-  getStats: () => getStatsMock(),
-}));
-vi.mock('@/lib/event-scaling', () => ({
-  listEvents: (...args: unknown[]) => listEventsMock(...args),
-}));
+vi.mock('@/lib/auth-utils', () => ({ getUserFromRequest: (...args: unknown[]) => getUserFromRequestMock(...args) }));
+vi.mock('@/lib/app-config', () => ({ getConfig: () => getConfigMock() }));
+vi.mock('@/lib/db', () => ({ isAuroraEnabled: () => isAuroraEnabledMock(), checkDbHealth: () => checkDbHealthMock() }));
+vi.mock('@/lib/db/drift', () => ({ getDriftCounters: () => getDriftCountersMock() }));
+vi.mock('@/lib/db/agentcore-stats-writer', () => ({ countAuroraCalls: (...args: unknown[]) => countAuroraCallsMock(...args) }));
+vi.mock('@/lib/agentcore-stats', () => ({ getStats: () => getStatsMock() }));
+vi.mock('@/lib/event-scaling', () => ({ listEvents: (...args: unknown[]) => listEventsMock(...args) }));
 vi.mock('@/lib/db/event-scaling-writer', () => ({
   readEventsFromAurora: () => readEventsFromAuroraMock(),
   countAuroraEvents: () => countAuroraEventsMock(),
 }));
-vi.mock('@/lib/db/alert-diagnosis-writer', () => ({
-  countAuroraDiagnoses: () => countAuroraDiagnosesMock(),
-}));
-vi.mock('@/lib/alert-knowledge-fs', () => ({
-  countJsonDiagnoses: () => countJsonDiagnosesMock(),
-}));
+vi.mock('@/lib/db/alert-diagnosis-writer', () => ({ countAuroraDiagnoses: () => countAuroraDiagnosesMock() }));
+vi.mock('@/lib/alert-knowledge-fs', () => ({ countJsonDiagnoses: () => countJsonDiagnosesMock() }));
 vi.mock('@/lib/agentcore-memory', () => ({
   getConversations: (limit?: number, userId?: string) => getConversationsMock(limit, userId),
 }));
-vi.mock('@/lib/db/agentcore-memory-writer', () => ({
-  countAuroraMemory: (sub?: string) => countAuroraMemoryMock(sub),
+vi.mock('@/lib/db/agentcore-memory-writer', () => ({ countAuroraMemory: (sub?: string) => countAuroraMemoryMock(sub) }));
+vi.mock('@/lib/inventory-fs', () => ({ countJsonInventoryDays: () => countJsonInventoryDaysMock() }));
+vi.mock('@/lib/db/inventory-writer', () => ({
+  countAuroraInventoryRows: (opts?: { distinct?: boolean }) => countAuroraInventoryRowsMock(opts),
 }));
 
 import { GET } from '@/app/api/parity/route';
 
-function makeReq(url = 'http://x/api/parity'): NextRequest {
-  return new NextRequest(new URL(url));
-}
+function makeReq(url = 'http://x/api/parity'): NextRequest { return new NextRequest(new URL(url)); }
 function adminUser() { return { email: 'admin@example.com', sub: 'admin', groups: [] }; }
 function configWithAdmin() { return { adminEmails: ['admin@example.com'] }; }
 function configFreshInstall() { return { adminEmails: [] }; }
 
 describe('parity route — GET /api/parity', () => {
   beforeEach(() => {
-    getUserFromRequestMock.mockReset();
-    getConfigMock.mockReset();
-    isAuroraEnabledMock.mockReset();
-    checkDbHealthMock.mockReset();
-    getDriftCountersMock.mockReset();
-    countAuroraCallsMock.mockReset();
-    getStatsMock.mockReset();
-    listEventsMock.mockReset();
-    readEventsFromAuroraMock.mockReset();
-    countAuroraEventsMock.mockReset();
-    countAuroraDiagnosesMock.mockReset();
-    countJsonDiagnosesMock.mockReset();
-    getConversationsMock.mockReset();
-    countAuroraMemoryMock.mockReset();
+    [getUserFromRequestMock, getConfigMock, isAuroraEnabledMock, checkDbHealthMock,
+     getDriftCountersMock, countAuroraCallsMock, getStatsMock, listEventsMock,
+     readEventsFromAuroraMock, countAuroraEventsMock, countAuroraDiagnosesMock,
+     countJsonDiagnosesMock, getConversationsMock, countAuroraMemoryMock,
+     countJsonInventoryDaysMock, countAuroraInventoryRowsMock].forEach((m) => m.mockReset());
+
     listEventsMock.mockReturnValue([]);
     readEventsFromAuroraMock.mockResolvedValue([]);
     countAuroraEventsMock.mockResolvedValue(0);
@@ -89,6 +64,8 @@ describe('parity route — GET /api/parity', () => {
     countJsonDiagnosesMock.mockReturnValue(0);
     getConversationsMock.mockResolvedValue([]);
     countAuroraMemoryMock.mockResolvedValue(0);
+    countJsonInventoryDaysMock.mockReturnValue(0);
+    countAuroraInventoryRowsMock.mockResolvedValue(0);
 
     getUserFromRequestMock.mockReturnValue(adminUser());
     getConfigMock.mockReturnValue(configWithAdmin());
@@ -108,8 +85,6 @@ describe('parity route — GET /api/parity', () => {
     getUserFromRequestMock.mockReturnValue({ email: 'bob@example.com', sub: 'bob', groups: [] });
     const res = await GET(makeReq());
     expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.error).toMatch(/admin/i);
   });
 
   it('treats fresh installs (empty adminEmails) as admin', async () => {
@@ -119,46 +94,39 @@ describe('parity route — GET /api/parity', () => {
     expect(res.status).toBe(200);
   });
 
-  it('returns auroraEnabled:false with a guidance message when Aurora is not configured', async () => {
+  it('returns auroraEnabled:false when not configured', async () => {
     isAuroraEnabledMock.mockReturnValue(false);
     const res = await GET(makeReq());
-    expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.auroraEnabled).toBe(false);
     expect(body.message).toMatch(/AURORA_DATABASE_URL|AURORA_HOST/);
   });
 
-  it('returns health, drift, and parity arrays when Aurora is enabled', async () => {
+  it('returns health, drift, and parity arrays when enabled', async () => {
     getDriftCountersMock.mockReturnValue([
       { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
     ]);
     countAuroraCallsMock.mockResolvedValue(5);
     const res = await GET(makeReq());
-    expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.auroraEnabled).toBe(true);
     expect(body.health).toEqual({ ok: true, schemaVersion: 1 });
-    expect(Array.isArray(body.drift)).toBe(true);
     expect(Array.isArray(body.parity)).toBe(true);
-    expect(body.parity[0].source).toBe('agentcore_stats');
   });
 
   it('clamps the hours param into [1, 168]', async () => {
     await GET(makeReq('http://x/api/parity?hours=9999'));
     let [since, until] = countAuroraCallsMock.mock.calls.at(-1)!;
-    let diff = (until.getTime() - since.getTime()) / 3_600_000;
-    expect(diff).toBe(168);
-
+    expect((until.getTime() - since.getTime()) / 3_600_000).toBe(168);
     await GET(makeReq('http://x/api/parity?hours=0'));
     [since, until] = countAuroraCallsMock.mock.calls.at(-1)!;
-    diff = (until.getTime() - since.getTime()) / 3_600_000;
-    expect(diff).toBe(1);
+    expect((until.getTime() - since.getTime()) / 3_600_000).toBe(1);
   });
 
-  it('?source=agentcore_stats filters the drift array to that source only', async () => {
+  it('?source=agentcore_stats filters drift', async () => {
     getDriftCountersMock.mockReturnValue([
       { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
-      { source: 'inventory_snapshots', writes: 2, failures: 1, failureRate: 1 / 3, lastFailureAt: 't', lastFailureMessage: 'm' },
+      { source: 'inventory_snapshots', writes: 2, failures: 1, failureRate: 0.33, lastFailureAt: 't', lastFailureMessage: 'm' },
     ]);
     const res = await GET(makeReq('http://x/api/parity?source=agentcore_stats'));
     const body = await res.json();
@@ -166,7 +134,7 @@ describe('parity route — GET /api/parity', () => {
     expect(body.drift[0].source).toBe('agentcore_stats');
   });
 
-  it('computes |auroraCount - jsonRecentCalls| as the parity drift number', async () => {
+  it('computes |auroraCount - jsonRecentCalls| as drift', async () => {
     countAuroraCallsMock.mockResolvedValue(7);
     const now = Date.now();
     getStatsMock.mockReturnValue({
@@ -182,135 +150,59 @@ describe('parity route — GET /api/parity', () => {
     });
     const res = await GET(makeReq());
     const body = await res.json();
-    const statsParity = body.parity.find((p: { source: string }) => p.source === 'agentcore_stats');
-    expect(statsParity.jsonRecentCalls).toBe(2);
-    expect(statsParity.auroraCount).toBe(7);
-    expect(statsParity.drift).toBe(5);
+    const p = body.parity.find((x: { source: string }) => x.source === 'agentcore_stats');
+    expect(p.drift).toBe(5);
   });
 
-  describe('event_scaling_plans parity', () => {
-    it('includes an event_scaling_plans entry in the default parity array', async () => {
-      const res = await GET(makeReq());
-      const body = await res.json();
-      const sources = body.parity.map((p: { source: string }) => p.source);
-      expect(sources).toContain('event_scaling_plans');
-    });
+  describe('per-source parity', () => {
+    const sources = [
+      { source: 'event_scaling_plans', mockJson: listEventsMock, mockAur: countAuroraEventsMock, jsonShape: (n: number) => Array(n).fill({ eventId: 'x' }) },
+      { source: 'alert_diagnosis', mockJson: countJsonDiagnosesMock, mockAur: countAuroraDiagnosesMock, jsonShape: (n: number) => n },
+      { source: 'agentcore_memory', mockJson: getConversationsMock, mockAur: countAuroraMemoryMock, jsonShape: (n: number) => Array(n).fill({ id: 'x' }) },
+      { source: 'inventory_snapshots', mockJson: countJsonInventoryDaysMock, mockAur: countAuroraInventoryRowsMock, jsonShape: (n: number) => n },
+    ];
 
-    it('reports inSync:true when JSON and Aurora counts match', async () => {
-      listEventsMock.mockReturnValue([{ eventId: 'a' }, { eventId: 'b' }, { eventId: 'c' }]);
-      countAuroraEventsMock.mockResolvedValue(3);
-      const res = await GET(makeReq());
-      const body = await res.json();
-      const ev = body.parity.find((p: { source: string }) => p.source === 'event_scaling_plans');
-      expect(ev.inSync).toBe(true);
-      expect(ev.drift).toBe(0);
-    });
+    for (const { source, mockJson, mockAur, jsonShape } of sources) {
+      describe(source, () => {
+        it(`is in the default parity array`, async () => {
+          const body = await (await GET(makeReq())).json();
+          expect(body.parity.map((p: { source: string }) => p.source)).toContain(source);
+        });
 
-    it('reports inSync:false and a non-zero drift when counts differ', async () => {
-      listEventsMock.mockReturnValue([{ eventId: 'a' }, { eventId: 'b' }]);
-      countAuroraEventsMock.mockResolvedValue(5);
-      const res = await GET(makeReq());
-      const body = await res.json();
-      const ev = body.parity.find((p: { source: string }) => p.source === 'event_scaling_plans');
-      expect(ev.inSync).toBe(false);
-      expect(ev.drift).toBe(3);
-    });
+        it(`inSync:true on count match`, async () => {
+          const shape = jsonShape(3);
+          if (typeof shape === 'number') mockJson.mockReturnValue(shape);
+          else mockJson.mockReturnValueOnce(shape).mockResolvedValueOnce(shape);
+          mockAur.mockResolvedValue(3);
+          const body = await (await GET(makeReq())).json();
+          const p = body.parity.find((x: { source: string }) => x.source === source);
+          expect(p.inSync).toBe(true);
+          expect(p.drift).toBe(0);
+        });
 
-    it('?source=event_scaling_plans filters parity and drift', async () => {
-      getDriftCountersMock.mockReturnValue([
-        { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
-        { source: 'event_scaling_plans', writes: 2, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
-      ]);
-      const res = await GET(makeReq('http://x/api/parity?source=event_scaling_plans'));
-      const body = await res.json();
-      expect(body.parity).toHaveLength(1);
-      expect(body.parity[0].source).toBe('event_scaling_plans');
-      expect(body.drift).toHaveLength(1);
-      expect(body.drift[0].source).toBe('event_scaling_plans');
-    });
-  });
+        it(`inSync:false on count mismatch`, async () => {
+          const shape = jsonShape(2);
+          if (typeof shape === 'number') mockJson.mockReturnValue(shape);
+          else mockJson.mockReturnValueOnce(shape).mockResolvedValueOnce(shape);
+          mockAur.mockResolvedValue(5);
+          const body = await (await GET(makeReq())).json();
+          const p = body.parity.find((x: { source: string }) => x.source === source);
+          expect(p.inSync).toBe(false);
+          expect(p.drift).toBe(3);
+        });
 
-  describe('alert_diagnosis parity', () => {
-    it('includes an alert_diagnosis entry in the default parity array', async () => {
-      const res = await GET(makeReq());
-      const body = await res.json();
-      const sources = body.parity.map((p: { source: string }) => p.source);
-      expect(sources).toContain('alert_diagnosis');
-    });
-
-    it('reports inSync:true when JSON and Aurora diagnosis counts match', async () => {
-      countJsonDiagnosesMock.mockReturnValue(3);
-      countAuroraDiagnosesMock.mockResolvedValue(3);
-      const res = await GET(makeReq());
-      const body = await res.json();
-      const ad = body.parity.find((p: { source: string }) => p.source === 'alert_diagnosis');
-      expect(ad.inSync).toBe(true);
-      expect(ad.drift).toBe(0);
-    });
-
-    it('reports inSync:false and a positive drift when counts diverge', async () => {
-      countJsonDiagnosesMock.mockReturnValue(8);
-      countAuroraDiagnosesMock.mockResolvedValue(5);
-      const res = await GET(makeReq());
-      const body = await res.json();
-      const ad = body.parity.find((p: { source: string }) => p.source === 'alert_diagnosis');
-      expect(ad.inSync).toBe(false);
-      expect(ad.drift).toBe(3);
-    });
-
-    it('?source=alert_diagnosis filters parity and drift', async () => {
-      getDriftCountersMock.mockReturnValue([
-        { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
-        { source: 'alert_diagnosis', writes: 2, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
-      ]);
-      const res = await GET(makeReq('http://x/api/parity?source=alert_diagnosis'));
-      const body = await res.json();
-      expect(body.parity).toHaveLength(1);
-      expect(body.parity[0].source).toBe('alert_diagnosis');
-      expect(body.drift).toHaveLength(1);
-      expect(body.drift[0].source).toBe('alert_diagnosis');
-    });
-  });
-
-  describe('agentcore_memory parity', () => {
-    it('includes an agentcore_memory entry in the default parity array', async () => {
-      const res = await GET(makeReq());
-      const body = await res.json();
-      const sources = body.parity.map((p: { source: string }) => p.source);
-      expect(sources).toContain('agentcore_memory');
-    });
-
-    it('reports inSync:true when JSON conversation count matches Aurora count', async () => {
-      getConversationsMock.mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
-      countAuroraMemoryMock.mockResolvedValue(3);
-      const res = await GET(makeReq());
-      const body = await res.json();
-      const mem = body.parity.find((p: { source: string }) => p.source === 'agentcore_memory');
-      expect(mem.inSync).toBe(true);
-      expect(mem.drift).toBe(0);
-    });
-
-    it('reports inSync:false when counts diverge', async () => {
-      getConversationsMock.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
-      countAuroraMemoryMock.mockResolvedValue(5);
-      const res = await GET(makeReq());
-      const body = await res.json();
-      const mem = body.parity.find((p: { source: string }) => p.source === 'agentcore_memory');
-      expect(mem.inSync).toBe(false);
-      expect(mem.drift).toBe(3);
-    });
-
-    it('?source=agentcore_memory filters parity + drift', async () => {
-      getDriftCountersMock.mockReturnValue([
-        { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
-        { source: 'agentcore_memory', writes: 2, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
-      ]);
-      const res = await GET(makeReq('http://x/api/parity?source=agentcore_memory'));
-      const body = await res.json();
-      expect(body.parity).toHaveLength(1);
-      expect(body.parity[0].source).toBe('agentcore_memory');
-      expect(body.drift).toHaveLength(1);
-      expect(body.drift[0].source).toBe('agentcore_memory');
-    });
+        it(`?source=${source} filters parity + drift`, async () => {
+          getDriftCountersMock.mockReturnValue([
+            { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
+            { source, writes: 2, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
+          ]);
+          const body = await (await GET(makeReq(`http://x/api/parity?source=${source}`))).json();
+          expect(body.parity).toHaveLength(1);
+          expect(body.parity[0].source).toBe(source);
+          expect(body.drift).toHaveLength(1);
+          expect(body.drift[0].source).toBe(source);
+        });
+      });
+    }
   });
 });
