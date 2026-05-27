@@ -4,6 +4,7 @@ import * as cdk from 'aws-cdk-lib';
 import { AwsopsStack } from '../lib/awsops-stack';
 import { CognitoStack } from '../lib/cognito-stack';
 import { AgentCoreStack } from '../lib/agentcore-stack';
+import { AwsopsDataStack } from '../lib/awsops-data-stack';
 
 const app = new cdk.App();
 
@@ -37,5 +38,18 @@ const agentCore = new AgentCoreStack(app, 'AwsopsAgentCoreStack', {
   description: 'AWSops Dashboard - Bedrock AgentCore Runtime and Gateway',
 });
 agentCore.addDependency(infra);
+
+// ADR-030 Phase 1: Aurora Serverless v2 for application state.
+// Deployed conditionally via context flag so existing single-host deployments
+// stay unchanged: `cdk deploy AwsopsDataStack -c enableAurora=true`.
+if (app.node.tryGetContext('enableAurora') === 'true') {
+  const data = new AwsopsDataStack(app, 'AwsopsDataStack', {
+    env,
+    description: 'AWSops Dashboard - Aurora Serverless v2 application state (ADR-030)',
+    vpc: infra.vpc,
+    appSecurityGroup: infra.instance.connections.securityGroups[0],
+  });
+  data.addDependency(infra);
+}
 
 app.synth();
