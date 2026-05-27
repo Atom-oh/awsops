@@ -16,14 +16,14 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 ## 현황 (v1.8.0)
 | 항목 | 수치 |
 |------|------|
-| 페이지 | 41 (/event-scaling 추가) |
+| 페이지 | 43 (login 포함) |
 | 라우트 | 55 |
 | SQL 쿼리 파일 | 26 (event-scaling 추가) |
 | API 라우트 | 19 (event-scaling 추가) |
 | 컴포넌트 | 18 (ReportMarkdown 추가) |
 | MCP 도구 | 125 (8 Gateway, 19 Lambda) |
 | AI 라우트 | 11 (datasource 라우트 추가) |
-| ADR | 29 (001-029, ADR-029 Phase 3 게이트 Proposed) |
+| ADR | 30 (001-030, ADR-029·030 Proposed) |
 
 ## 필수 규칙
 
@@ -218,14 +218,14 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 ## Stats (v1.8.0)
 | Item | Count |
 |------|-------|
-| Pages | 41 (incl. /event-scaling) |
+| Pages | 43 (incl. /login) |
 | Routes | 55 |
 | SQL Query Files | 26 (incl. event-scaling) |
 | API Routes | 19 (incl. event-scaling) |
 | Components | 18 (incl. ReportMarkdown) |
 | MCP Tools | 125 (8 Gateways, 19 Lambda) |
 | AI Routes | 11 (incl. datasource route) |
-| ADRs | 29 (001-029, ADR-029 Phase 3 gate Proposed) |
+| ADRs | 30 (001-030, ADR-029·030 Proposed) |
 
 ## Critical Rules
 
