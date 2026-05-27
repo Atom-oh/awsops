@@ -12,7 +12,7 @@
  */
 import { Pool, type PoolConfig } from 'pg';
 import { readFileSync, existsSync } from 'fs';
-import type { TlsOptions } from 'tls';
+import type { ConnectionOptions } from 'tls';
 
 let pool: Pool | null = null;
 let initPromise: Promise<Pool> | null = null;
@@ -81,7 +81,7 @@ function resolveCredentials(): AuroraCredentials | null {
  * Operators are still encouraged to pin the RDS global bundle via
  * AURORA_SSL_CA_FILE for defense in depth.
  */
-function buildSsl(creds: AuroraCredentials): TlsOptions | false {
+function buildSsl(creds: AuroraCredentials): ConnectionOptions | false {
   if (!creds.ssl) return false;
 
   if (process.env.AURORA_SSL_INSECURE === '1') {
