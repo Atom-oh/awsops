@@ -17,6 +17,41 @@ interface DataTableProps {
   onRowClick?: (row: any) => void;
 }
 
+const UNIT_MULTIPLIERS: Record<string, number> = {
+  '': 1,
+  '%': 1,
+  k: 1e3, ki: 1024, kb: 1e3, kib: 1024,
+  m: 1e6, mi: 1024 ** 2, mb: 1e6, mib: 1024 ** 2,
+  g: 1e9, gi: 1024 ** 3, gb: 1e9, gib: 1024 ** 3,
+  t: 1e12, ti: 1024 ** 4, tb: 1e12, tib: 1024 ** 4,
+  p: 1e15, pi: 1024 ** 5, pb: 1e15, pib: 1024 ** 5,
+  b: 1, bytes: 1,
+  vcpu: 1, cpu: 1, core: 1, cores: 1,
+  ms: 1, s: 1, sec: 1,
+};
+
+// Coerce raw cell values into a sortable number. Returns null when the value
+// is not numeric so callers can fall back to string comparison. Handles:
+//   - JS numbers
+//   - pg BIGINT/NUMERIC strings ("1024")
+//   - currency / thousand separators ("$1,234.56")
+//   - unit-suffixed sizes ("123Ki", "1.5 GiB", "50%", "2 vCPU")
+function toSortableNumber(v: any): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v !== 'string') return null;
+  const trimmed = v.trim();
+  if (trimmed === '') return null;
+  const match = trimmed.match(/^-?\s*\$?\s*([\d,]+(?:\.\d+)?)\s*([a-zA-Z%]+)?$/);
+  if (!match) return null;
+  const n = Number(match[1].replace(/,/g, ''));
+  if (!Number.isFinite(n)) return null;
+  const unit = (match[2] ?? '').toLowerCase();
+  const mult = UNIT_MULTIPLIERS[unit];
+  if (mult === undefined) return null;
+  const sign = trimmed.startsWith('-') ? -1 : 1;
+  return sign * n * mult;
+}
+
 export default function DataTable({ columns, data, onRowClick }: DataTableProps) {
   const { isMultiAccount } = useAccountContext();
   const [sortKey, setSortKey] = useState<string | null>(null);
@@ -49,8 +84,10 @@ export default function DataTable({ columns, data, onRowClick }: DataTableProps)
       if (aVal == null && bVal == null) return 0;
       if (aVal == null) return 1;
       if (bVal == null) return -1;
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
+      const aNum = toSortableNumber(aVal);
+      const bNum = toSortableNumber(bVal);
+      if (aNum !== null && bNum !== null) {
+        return sortDir === 'asc' ? aNum - bNum : bNum - aNum;
       }
       const cmp = String(aVal).localeCompare(String(bVal));
       return sortDir === 'asc' ? cmp : -cmp;
