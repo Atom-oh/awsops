@@ -1,5 +1,8 @@
 // Datasource type metadata registry / 데이터소스 타입 메타데이터 레지스트리
-// Provides labels, icons, colors, query language info, and example queries per datasource type
+// Provides labels, icons, colors, and query language info per datasource type.
+// (Hardcoded SQL/PromQL examples were removed — examples are now AI-generated
+//  from natural-language prompts; see datasource-prompts.ts.)
+// (하드코딩 예제는 제거. AI가 자연어로부터 생성한다.)
 import type { DatasourceType } from './app-config';
 
 export interface DatasourceTypeMeta {
@@ -11,7 +14,6 @@ export interface DatasourceTypeMeta {
   healthEndpoint: string; // path to check connectivity
   defaultPort: number;
   placeholder: string;    // URL placeholder
-  examples: string[];     // example queries for Explore page
 }
 
 export const DATASOURCE_TYPES: Record<DatasourceType, DatasourceTypeMeta> = {
@@ -24,12 +26,6 @@ export const DATASOURCE_TYPES: Record<DatasourceType, DatasourceTypeMeta> = {
     healthEndpoint: '/-/healthy',
     defaultPort: 9090,
     placeholder: 'http://prometheus:9090',
-    examples: [
-      'up',
-      'rate(node_cpu_seconds_total{mode="idle"}[5m])',
-      'node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes * 100',
-      'histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))',
-    ],
   },
   loki: {
     label: 'Loki',
@@ -40,12 +36,6 @@ export const DATASOURCE_TYPES: Record<DatasourceType, DatasourceTypeMeta> = {
     healthEndpoint: '/ready',
     defaultPort: 3100,
     placeholder: 'http://loki:3100',
-    examples: [
-      '{job="varlogs"}',
-      '{namespace="default"} |= "error"',
-      'rate({job="nginx"}[5m])',
-      '{app="frontend"} | json | level="error" | line_format "{{.message}}"',
-    ],
   },
   tempo: {
     label: 'Tempo',
@@ -56,12 +46,6 @@ export const DATASOURCE_TYPES: Record<DatasourceType, DatasourceTypeMeta> = {
     healthEndpoint: '/ready',
     defaultPort: 3200,
     placeholder: 'http://tempo:3200',
-    examples: [
-      '{ resource.service.name = "frontend" }',
-      '{ span.http.status_code >= 400 }',
-      '{ duration > 500ms }',
-      '{ resource.service.name = "api" && status = error }',
-    ],
   },
   clickhouse: {
     label: 'ClickHouse',
@@ -72,12 +56,6 @@ export const DATASOURCE_TYPES: Record<DatasourceType, DatasourceTypeMeta> = {
     healthEndpoint: '/ping',
     defaultPort: 8123,
     placeholder: 'http://clickhouse:8123',
-    examples: [
-      'SELECT count() FROM system.tables',
-      'SELECT database, name, engine FROM system.tables ORDER BY database, name',
-      'SELECT * FROM system.metrics WHERE metric LIKE \'%Query%\'',
-      'SELECT toStartOfHour(event_time) AS hour, count() AS queries FROM system.query_log WHERE event_date = today() GROUP BY hour ORDER BY hour',
-    ],
   },
   jaeger: {
     label: 'Jaeger',
@@ -88,12 +66,6 @@ export const DATASOURCE_TYPES: Record<DatasourceType, DatasourceTypeMeta> = {
     healthEndpoint: '/',
     defaultPort: 16686,
     placeholder: 'http://jaeger:16686',
-    examples: [
-      'service=frontend',
-      'service=api-gateway&operation=GET /users',
-      'service=payment&tags={"error":"true"}',
-      'service=order&lookback=2h&limit=50',
-    ],
   },
   dynatrace: {
     label: 'Dynatrace',
@@ -104,12 +76,6 @@ export const DATASOURCE_TYPES: Record<DatasourceType, DatasourceTypeMeta> = {
     healthEndpoint: '/api/v1/config/clusterversion',
     defaultPort: 443,
     placeholder: 'https://abc12345.live.dynatrace.com',
-    examples: [
-      'builtin:host.cpu.usage',
-      'builtin:host.mem.usage',
-      'builtin:service.response.time:avg',
-      'builtin:service.errors.total.count:sum',
-    ],
   },
   datadog: {
     label: 'Datadog',
@@ -120,12 +86,6 @@ export const DATASOURCE_TYPES: Record<DatasourceType, DatasourceTypeMeta> = {
     healthEndpoint: '/api/v1/validate',
     defaultPort: 443,
     placeholder: 'https://api.datadoghq.com',
-    examples: [
-      'avg:system.cpu.user{*}',
-      'sum:trace.http.request.hits{service:web-app}.as_count()',
-      'avg:system.mem.used{host:web-01} by {host}',
-      'sum:aws.ec2.cpuutilization{region:us-east-1} by {instance_id}',
-    ],
   },
 };
 

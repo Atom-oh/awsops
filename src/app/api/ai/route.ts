@@ -21,7 +21,8 @@ import { getDefaultDatasource } from '@/lib/app-config';
 import type { DatasourceType } from '@/lib/app-config';
 import { queryDatasource } from '@/lib/datasource-client';
 import { detectDatasourceTypes, DATASOURCE_TYPES } from '@/lib/datasource-registry';
-import { DATASOURCE_QUERY_PROMPTS } from '@/lib/datasource-prompts';
+import { buildDatasourcePrompt } from '@/lib/datasource-prompts';
+import { getDatasourceSchema } from '@/lib/datasource-schema';
 
 // Service configuration — config 파일에서 읽거나 자동 감지
 // Service config — read from data/config.json or auto-detect
@@ -608,12 +609,19 @@ async function fetchColumnHints(sql: string, accountId?: string): Promise<string
 async function generateDatasourceQuery(
   messages: Array<{role: string; content: string}>,
   dsType: DatasourceType,
+  ds?: { id: string; type: DatasourceType; url: string; auth?: any; settings?: any } | null,
 ): Promise<string | null> {
   try {
+    // Live schema injection — only when caller passed a concrete datasource.
+    // 호출자가 데이터소스를 넘기면 라이브 스키마 주입.
+    let schema = '';
+    if (ds) {
+      try { schema = await getDatasourceSchema(ds as any); } catch { /* best-effort */ }
+    }
     const body = JSON.stringify({
       anthropic_version: 'bedrock-2023-05-31',
-      max_tokens: 300,
-      system: DATASOURCE_QUERY_PROMPTS[dsType],
+      max_tokens: 600,
+      system: buildDatasourcePrompt(dsType, { schema }),
       messages: messages.slice(-6).map(m => ({ role: m.role, content: m.content })),
     });
     const response = await bedrockClient.send(new InvokeModelCommand({
@@ -1116,7 +1124,7 @@ export async function POST(request: NextRequest) {
                   return null;
                 }
                 send('status', { step: 'datasource-generating', message: `${DATASOURCE_TYPES[dsType].label} ${DATASOURCE_TYPES[dsType].queryLanguage} 쿼리 생성 중...` });
-                let dsQuery: string | null = await generateDatasourceQuery(messages, dsType);
+                let dsQuery: string | null = await generateDatasourceQuery(messages, dsType, ds);
                 if (!dsQuery) return null;
                 for (let attempt = 0; attempt < 2 && dsQuery; attempt++) {
                   send('status', { step: 'datasource-querying', message: `${ds.name}에 쿼리 실행 중${attempt > 0 ? ' (재시도)' : ''}...`, query: dsQuery });
@@ -1131,7 +1139,7 @@ export async function POST(request: NextRequest) {
                         { role: 'assistant' as const, content: `I generated this ${DATASOURCE_TYPES[dsType].queryLanguage} query: ${dsQuery}` },
                         { role: 'user' as const, content: `That query failed with error: ${err.message}. Fix the query.` },
                       ];
-                      dsQuery = await generateDatasourceQuery(fixMessages, dsType);
+                      dsQuery = await generateDatasourceQuery(fixMessages, dsType, ds);
                     }
                   }
                 }
@@ -1506,7 +1514,7 @@ async function handleSingleRoute(
     const dsResults = await Promise.allSettled(dsTypes.map(async (dsType) => {
       const ds = getDefaultDatasource(dsType);
       if (!ds) return null;
-      let dsQuery: string | null = await generateDatasourceQuery(messages, dsType);
+      let dsQuery: string | null = await generateDatasourceQuery(messages, dsType, ds);
       if (!dsQuery) return null;
       for (let attempt = 0; attempt < 2 && dsQuery; attempt++) {
         try {
@@ -1517,7 +1525,7 @@ async function handleSingleRoute(
             const fixMsgs = [...messages.slice(-4),
               { role: 'assistant' as const, content: `I generated this ${DATASOURCE_TYPES[dsType].queryLanguage} query: ${dsQuery}` },
               { role: 'user' as const, content: `That query failed with error: ${err.message}. Fix the query.` }];
-            dsQuery = await generateDatasourceQuery(fixMsgs, dsType);
+            dsQuery = await generateDatasourceQuery(fixMsgs, dsType, ds);
           }
         }
       }

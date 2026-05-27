@@ -47,51 +47,12 @@ const TIME_RANGES = [
   { label: '30d', value: '30d', step: '14400s' },
 ];
 
-// Example queries per datasource type / 데이터소스 타입별 예제 쿼리
-const EXAMPLE_QUERIES: Record<string, string[]> = {
-  prometheus: [
-    'up',
-    'rate(node_cpu_seconds_total{mode="idle"}[5m])',
-    'node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes * 100',
-    'histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))',
-  ],
-  loki: [
-    '{job="varlogs"}',
-    '{namespace="default"} |= "error"',
-    'rate({job="nginx"}[5m])',
-    '{app="frontend"} | json | level="error" | line_format "{{.message}}"',
-  ],
-  tempo: [
-    '{ resource.service.name = "frontend" }',
-    '{ span.http.status_code >= 400 }',
-    '{ duration > 500ms }',
-    '{ resource.service.name = "api" && status = error }',
-  ],
-  clickhouse: [
-    'SELECT count() FROM system.tables',
-    'SELECT database, name, engine FROM system.tables ORDER BY database, name',
-    "SELECT * FROM system.metrics WHERE metric LIKE '%Query%'",
-    'SELECT toStartOfHour(event_time) AS hour, count() AS queries FROM system.query_log WHERE event_date = today() GROUP BY hour ORDER BY hour',
-  ],
-  jaeger: [
-    'service=frontend',
-    'service=api-gateway&operation=GET /users',
-    'service=payment&tags={"error":"true"}',
-    'service=order&lookback=2h&limit=50',
-  ],
-  dynatrace: [
-    'builtin:host.cpu.usage',
-    'builtin:host.mem.usage',
-    'builtin:service.response.time:avg',
-    'HOST(displayName="web-server")',
-  ],
-  datadog: [
-    'avg:system.cpu.user{*}',
-    'sum:trace.http.request.hits{service:web-app}.as_count()',
-    'logs:service=frontend status=error',
-    'avg:system.mem.used{host:web-01} by {host}',
-  ],
-};
+// Example queries previously hardcoded here have been removed.
+// The explore page now uses AI_EXAMPLES (natural language) for both modes:
+//  - AI mode: clicking fills the input and the user presses Generate.
+//  - Raw mode: clicking auto-runs AI generation to produce a working query.
+// 예전 하드코딩 SQL/PromQL 예제는 환경별로 실제로 동작하지 않아 제거되었다.
+// 자연어 예제(AI_EXAMPLES) 하나로 통일하고, raw 모드에서 클릭하면 AI가 즉시 쿼리를 생성한다.
 
 // Placeholder text per datasource type / 데이터소스 타입별 플레이스홀더
 const PLACEHOLDERS: Record<string, string> = {
@@ -277,8 +238,11 @@ export default function DatasourceExplorePage() {
   }, [selectedDs, query, timeRange]);
 
   // AI query generation / AI 쿼리 생성
-  const generateQuery = useCallback(async () => {
-    if (!selectedDs || !query.trim()) return;
+  // Pass datasourceId so the server can do live schema introspection.
+  // 서버가 라이브 스키마 인트로스펙션을 할 수 있도록 datasourceId 전달.
+  const generateQuery = useCallback(async (naturalLanguageOverride?: string) => {
+    const nl = (naturalLanguageOverride ?? query).trim();
+    if (!selectedDs || !nl) return;
     setAiLoading(true);
     setAiError(null);
     setGeneratedExplanation(null);
@@ -289,7 +253,8 @@ export default function DatasourceExplorePage() {
         body: JSON.stringify({
           action: 'generate-query',
           datasourceType: selectedDs.type,
-          naturalLanguage: query.trim(),
+          datasourceId: selectedDs.id,
+          naturalLanguage: nl,
           timeRange: timeRange.value,
         }),
       });
@@ -307,6 +272,16 @@ export default function DatasourceExplorePage() {
       setAiLoading(false);
     }
   }, [selectedDs, query, timeRange]);
+
+  // Example button click: in AI mode fills the input; in raw mode auto-generates.
+  // 예제 버튼: AI 모드에서는 입력만 채움, raw 모드에서는 자동으로 AI 생성 실행.
+  const handleExampleClick = useCallback((ex: string) => {
+    setQuery(ex);
+    setGeneratedExplanation(null);
+    if (!aiMode && selectedDs) {
+      generateQuery(ex);
+    }
+  }, [aiMode, selectedDs, generateQuery]);
 
   // Keyboard shortcut: Ctrl/Cmd + Enter / 단축키: Ctrl/Cmd + Enter
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -539,7 +514,7 @@ export default function DatasourceExplorePage() {
           {/* Run Query / Generate button / 쿼리 실행 / 생성 버튼 */}
           {aiMode ? (
             <button
-              onClick={generateQuery}
+              onClick={() => generateQuery()}
               disabled={aiLoading || !selectedDs || !query.trim()}
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent-purple text-white font-semibold text-sm hover:bg-accent-purple/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
@@ -622,24 +597,25 @@ export default function DatasourceExplorePage() {
             </div>
           )}
 
-          {/* Example queries/prompts / 예제 쿼리/프롬프트 */}
+          {/* Example prompts (natural language for both modes) / 예제 프롬프트 */}
           {selectedDs && (
             <div className="mt-3">
               <span className="text-xs text-gray-500 mr-2">
-                {aiMode ? t('datasources.examples') + ':' : 'Examples:'}
+                {t('datasources.examples')}:
+                {!aiMode && (
+                  <span className="ml-1 text-accent-purple/70">(click → AI generates query)</span>
+                )}
               </span>
               <div className="flex flex-wrap gap-1.5 mt-1">
-                {(aiMode ? AI_EXAMPLES[selectedDs.type] || [] : EXAMPLE_QUERIES[selectedDs.type] || []).map((ex, i) => (
+                {(AI_EXAMPLES[selectedDs.type] || []).map((ex, i) => (
                   <button
                     key={i}
-                    onClick={() => { setQuery(ex); setGeneratedExplanation(null); }}
-                    className={`px-2.5 py-1 rounded-md text-xs border transition-colors truncate max-w-[300px] ${
-                      aiMode
-                        ? 'bg-accent-purple/5 border-accent-purple/20 text-gray-400 hover:text-accent-purple hover:border-accent-purple/40'
-                        : 'font-mono bg-navy-700 border-navy-600 text-gray-400 hover:text-accent-cyan hover:border-accent-cyan/30'
-                    }`}
+                    onClick={() => handleExampleClick(ex)}
+                    disabled={aiLoading}
+                    className="px-2.5 py-1 rounded-md text-xs border transition-colors truncate max-w-[300px] bg-accent-purple/5 border-accent-purple/20 text-gray-400 hover:text-accent-purple hover:border-accent-purple/40 disabled:opacity-50"
                     title={ex}
                   >
+                    <Sparkles size={10} className="inline mr-1" />
                     {ex}
                   </button>
                 ))}
