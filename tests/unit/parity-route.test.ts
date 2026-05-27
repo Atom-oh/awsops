@@ -18,6 +18,8 @@ const getStatsMock = vi.fn();
 const listEventsMock = vi.fn();
 const readEventsFromAuroraMock = vi.fn();
 const countAuroraEventsMock = vi.fn();
+const countAuroraDiagnosesMock = vi.fn();
+const countJsonDiagnosesMock = vi.fn();
 
 vi.mock('@/lib/auth-utils', () => ({
   getUserFromRequest: (...args: unknown[]) => getUserFromRequestMock(...args),
@@ -44,6 +46,12 @@ vi.mock('@/lib/event-scaling', () => ({
 vi.mock('@/lib/db/event-scaling-writer', () => ({
   readEventsFromAurora: () => readEventsFromAuroraMock(),
   countAuroraEvents: () => countAuroraEventsMock(),
+}));
+vi.mock('@/lib/db/alert-diagnosis-writer', () => ({
+  countAuroraDiagnoses: () => countAuroraDiagnosesMock(),
+}));
+vi.mock('@/lib/alert-knowledge-fs', () => ({
+  countJsonDiagnoses: () => countJsonDiagnosesMock(),
 }));
 
 import { GET } from '@/app/api/parity/route';
@@ -76,9 +84,13 @@ describe('parity route — GET /api/parity', () => {
     listEventsMock.mockReset();
     readEventsFromAuroraMock.mockReset();
     countAuroraEventsMock.mockReset();
+    countAuroraDiagnosesMock.mockReset();
+    countJsonDiagnosesMock.mockReset();
     listEventsMock.mockReturnValue([]);
     readEventsFromAuroraMock.mockResolvedValue([]);
     countAuroraEventsMock.mockResolvedValue(0);
+    countAuroraDiagnosesMock.mockResolvedValue(0);
+    countJsonDiagnosesMock.mockReturnValue(0);
 
     // Sensible defaults — individual tests override.
     getUserFromRequestMock.mockReturnValue(adminUser());
@@ -174,11 +186,10 @@ describe('parity route — GET /api/parity', () => {
     const now = Date.now();
     getStatsMock.mockReturnValue({
       recentCalls: [
-        { timestamp: new Date(now - 30 * 60_000).toISOString() },  // 30 min ago
-        { timestamp: new Date(now - 5 * 60_000).toISOString() },   // 5 min ago
-        { timestamp: new Date(now - 25 * 3_600_000).toISOString() }, // 25h ago — outside default 24h window
+        { timestamp: new Date(now - 30 * 60_000).toISOString() },
+        { timestamp: new Date(now - 5 * 60_000).toISOString() },
+        { timestamp: new Date(now - 25 * 3_600_000).toISOString() },
       ],
-      // unused fields stubbed
       totalCalls: 0, successCalls: 0, failedCalls: 0, avgResponseTimeMs: 0,
       totalToolsUsed: 0, uniqueToolsUsed: [], callsByGateway: {}, callsByRoute: {},
       lastUpdated: new Date().toISOString(),
@@ -202,9 +213,7 @@ describe('parity route — GET /api/parity', () => {
     });
 
     it('reports inSync:true when JSON and Aurora counts match', async () => {
-      listEventsMock.mockReturnValue([
-        { eventId: 'a' }, { eventId: 'b' }, { eventId: 'c' },
-      ]);
+      listEventsMock.mockReturnValue([{ eventId: 'a' }, { eventId: 'b' }, { eventId: 'c' }]);
       countAuroraEventsMock.mockResolvedValue(3);
 
       const res = await GET(makeReq());
@@ -240,6 +249,50 @@ describe('parity route — GET /api/parity', () => {
       expect(body.parity[0].source).toBe('event_scaling_plans');
       expect(body.drift).toHaveLength(1);
       expect(body.drift[0].source).toBe('event_scaling_plans');
+    });
+  });
+
+  describe('alert_diagnosis parity', () => {
+    it('includes an alert_diagnosis entry in the default parity array', async () => {
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const sources = body.parity.map((p: { source: string }) => p.source);
+      expect(sources).toContain('alert_diagnosis');
+    });
+
+    it('reports inSync:true when JSON and Aurora diagnosis counts match', async () => {
+      countJsonDiagnosesMock.mockReturnValue(3);
+      countAuroraDiagnosesMock.mockResolvedValue(3);
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const ad = body.parity.find((p: { source: string }) => p.source === 'alert_diagnosis');
+      expect(ad.inSync).toBe(true);
+      expect(ad.jsonCount).toBe(3);
+      expect(ad.auroraCount).toBe(3);
+      expect(ad.drift).toBe(0);
+    });
+
+    it('reports inSync:false and a positive drift when counts diverge', async () => {
+      countJsonDiagnosesMock.mockReturnValue(8);
+      countAuroraDiagnosesMock.mockResolvedValue(5);
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const ad = body.parity.find((p: { source: string }) => p.source === 'alert_diagnosis');
+      expect(ad.inSync).toBe(false);
+      expect(ad.drift).toBe(3);
+    });
+
+    it('?source=alert_diagnosis filters parity and drift to that source only', async () => {
+      getDriftCountersMock.mockReturnValue([
+        { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
+        { source: 'alert_diagnosis', writes: 2, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
+      ]);
+      const res = await GET(makeReq('http://x/api/parity?source=alert_diagnosis'));
+      const body = await res.json();
+      expect(body.parity).toHaveLength(1);
+      expect(body.parity[0].source).toBe('alert_diagnosis');
+      expect(body.drift).toHaveLength(1);
+      expect(body.drift[0].source).toBe('alert_diagnosis');
     });
   });
 });
