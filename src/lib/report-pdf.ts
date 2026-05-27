@@ -1,5 +1,13 @@
 // AWSops AI Diagnosis Report — Server-side PDF generation via Puppeteer
 // Puppeteer를 사용한 서버사이드 PDF 생성 (사이드바 없는 순수 보고서)
+//
+// Runtime requirements (Amazon Linux 2023):
+//   sudo dnf install -y google-noto-sans-cjk-kr-fonts google-noto-emoji-fonts
+//   sudo dnf install -y mesa-libgbm alsa-lib atk at-spi2-atk \
+//                       libXfixes libXrandr libXcomposite libXdamage \
+//                       cups-libs pango cairo
+//   npx playwright install chromium      # provides the Chrome binary
+// Without the CJK font, Korean text renders as blanks.
 import puppeteer from 'puppeteer-core';
 import { marked } from 'marked';
 import * as fs from 'fs';
@@ -74,12 +82,18 @@ function buildFullHtml(input: ReportInput): string {
 <head>
 <meta charset="UTF-8">
 <style>
-  @page { margin: 1.5cm 2cm; size: A4; }
+  @page { margin: 1.8cm 1.8cm 2cm 1.8cm; size: A4; }
   * { box-sizing: border-box; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif;
-    color: #1f2937; background: white; margin: 0; padding: 40px;
-    line-height: 1.6; font-size: 13px;
+    /* Noto Sans CJK KR must come BEFORE Latin sans-serif so Korean
+       text renders even when Chromium also has 'sans-serif' aliases.
+       Noto Emoji handles emoji glyphs. */
+    font-family: 'Noto Sans CJK KR', 'Noto Sans KR', -apple-system, BlinkMacSystemFont,
+                 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Emoji', sans-serif;
+    color: #1f2937; background: white; margin: 0; padding: 0;
+    line-height: 1.6; font-size: 12px;
+    word-break: keep-all;          /* avoid mid-syllable Korean breaks */
+    -webkit-print-color-adjust: exact;
   }
 
   /* Markdown content styles */
@@ -156,14 +170,17 @@ export async function generateReportPdf(input: ReportInput): Promise<Buffer> {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
+    // Use preferCSSPageSize so @page margins from the inlined stylesheet win;
+    // otherwise puppeteer's defaults override and the body padding ends up
+    // doubling the page margin.
     const pdfUint8 = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '1.5cm', bottom: '1.5cm', left: '2cm', right: '2cm' },
+      preferCSSPageSize: true,
       displayHeaderFooter: true,
       headerTemplate: '<div></div>',
       footerTemplate: `
-        <div style="width:100%; text-align:center; font-size:9px; color:#9ca3af; padding:0 2cm;">
+        <div style="width:100%; text-align:center; font-size:9px; color:#9ca3af; padding:0 1.8cm;">
           <span class="pageNumber"></span> / <span class="totalPages"></span>
         </div>`,
     });
