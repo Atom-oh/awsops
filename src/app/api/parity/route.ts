@@ -3,12 +3,6 @@
 // During Phase 1, JSON is the source of truth and Aurora is a shadow write.
 // This endpoint compares the two so the 7-day parity gate (zero drift) from
 // the ADR can be measured before Phase 2 flips reads to Aurora.
-//
-// GET /api/parity                        → all sources, current drift snapshot
-// GET /api/parity?source=agentcore_stats&hours=24
-//                                        → 24h window comparison for one source
-//
-// Admin-only.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/auth-utils';
@@ -21,6 +15,8 @@ import { listEvents } from '@/lib/event-scaling';
 import { countAuroraEvents } from '@/lib/db/event-scaling-writer';
 import { countAuroraDiagnoses } from '@/lib/db/alert-diagnosis-writer';
 import { countJsonDiagnoses } from '@/lib/alert-knowledge-fs';
+import { getConversations } from '@/lib/agentcore-memory';
+import { countAuroraMemory } from '@/lib/db/agentcore-memory-writer';
 
 function isAdminUser(req: NextRequest): boolean {
   const user = getUserFromRequest(req);
@@ -41,15 +37,12 @@ interface AgentCoreStatsParity {
 async function agentcoreStatsParity(hours: number): Promise<AgentCoreStatsParity> {
   const until = new Date();
   const since = new Date(until.getTime() - hours * 3_600_000);
-
   const jsonStats = getStats();
   const jsonRecentInWindow = jsonStats.recentCalls.filter((c) => {
     const t = new Date(c.timestamp).getTime();
     return t >= since.getTime() && t < until.getTime();
   }).length;
-
   const auroraCount = await countAuroraCalls(since, until);
-
   return {
     source: 'agentcore_stats',
     windowHours: hours,
@@ -58,8 +51,7 @@ async function agentcoreStatsParity(hours: number): Promise<AgentCoreStatsParity
     drift: Math.abs(auroraCount - jsonRecentInWindow),
     note:
       'JSON side caps at 50 most-recent calls; comparison is exact only ' +
-      'when call volume in the window < 50. Use the drift counter for ' +
-      'cumulative write-failure visibility.',
+      'when call volume in the window < 50.',
   };
 }
 
@@ -81,9 +73,7 @@ async function eventScalingPlansParity(): Promise<EventScalingPlansParity> {
     jsonCount,
     auroraCount,
     drift: Math.abs(auroraCount - jsonCount),
-    note:
-      'Count-based parity for slice 3. Per-event field diff lands in a ' +
-      'follow-up once Phase 1 dual-write covers all 7 sources.',
+    note: 'Count-based parity for slice 3. Per-event field diff lands later.',
   };
 }
 
@@ -108,6 +98,30 @@ async function alertDiagnosisParity(): Promise<AlertDiagnosisParity> {
     note:
       'Count-based parity. INSERT is idempotent on (incident_id), so duplicate ' +
       'dispatches do not inflate Aurora.',
+  };
+}
+
+interface AgentCoreMemoryParity {
+  source: 'agentcore_memory';
+  inSync: boolean;
+  jsonCount: number;
+  auroraCount: number;
+  drift: number;
+  note: string;
+}
+
+async function agentcoreMemoryParity(): Promise<AgentCoreMemoryParity> {
+  const jsonCount = (await getConversations(10_000)).length;
+  const auroraCount = await countAuroraMemory();
+  return {
+    source: 'agentcore_memory',
+    inSync: jsonCount === auroraCount,
+    jsonCount,
+    auroraCount,
+    drift: Math.abs(auroraCount - jsonCount),
+    note:
+      'JSON side keeps the last 100 conversations only; Aurora keeps them until ' +
+      'expires_at (365 days). Exact parity is meaningful only when volume < 100.',
   };
 }
 
@@ -140,26 +154,30 @@ export async function GET(req: NextRequest) {
 
   if (source === 'agentcore_stats') {
     return NextResponse.json({
-      auroraEnabled: true,
-      health,
+      auroraEnabled: true, health,
       drift: driftCounters.filter((c) => c.source === source),
       parity: [await agentcoreStatsParity(hours)],
     });
   }
   if (source === 'event_scaling_plans') {
     return NextResponse.json({
-      auroraEnabled: true,
-      health,
+      auroraEnabled: true, health,
       drift: driftCounters.filter((c) => c.source === source),
       parity: [await eventScalingPlansParity()],
     });
   }
   if (source === 'alert_diagnosis') {
     return NextResponse.json({
-      auroraEnabled: true,
-      health,
+      auroraEnabled: true, health,
       drift: driftCounters.filter((c) => c.source === source),
       parity: [await alertDiagnosisParity()],
+    });
+  }
+  if (source === 'agentcore_memory') {
+    return NextResponse.json({
+      auroraEnabled: true, health,
+      drift: driftCounters.filter((c) => c.source === source),
+      parity: [await agentcoreMemoryParity()],
     });
   }
 
@@ -171,9 +189,10 @@ export async function GET(req: NextRequest) {
       await agentcoreStatsParity(hours),
       await eventScalingPlansParity(),
       await alertDiagnosisParity(),
+      await agentcoreMemoryParity(),
     ],
     note:
-      'Phase 1 dual-write — agentcore_stats + event_scaling_plans + alert_diagnosis wired so far. ' +
-      'Other sources (inventory, cost, memory, schedules) land in subsequent commits.',
+      'Phase 1 dual-write — agentcore_stats + event_scaling_plans + alert_diagnosis + agentcore_memory wired so far. ' +
+      'Other sources (inventory, cost, schedules) land in subsequent commits.',
   });
 }
