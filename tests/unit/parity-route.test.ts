@@ -15,6 +15,9 @@ const checkDbHealthMock = vi.fn();
 const getDriftCountersMock = vi.fn();
 const countAuroraCallsMock = vi.fn();
 const getStatsMock = vi.fn();
+const listEventsMock = vi.fn();
+const readEventsFromAuroraMock = vi.fn();
+const countAuroraEventsMock = vi.fn();
 
 vi.mock('@/lib/auth-utils', () => ({
   getUserFromRequest: (...args: unknown[]) => getUserFromRequestMock(...args),
@@ -34,6 +37,13 @@ vi.mock('@/lib/db/agentcore-stats-writer', () => ({
 }));
 vi.mock('@/lib/agentcore-stats', () => ({
   getStats: () => getStatsMock(),
+}));
+vi.mock('@/lib/event-scaling', () => ({
+  listEvents: (...args: unknown[]) => listEventsMock(...args),
+}));
+vi.mock('@/lib/db/event-scaling-writer', () => ({
+  readEventsFromAurora: () => readEventsFromAuroraMock(),
+  countAuroraEvents: () => countAuroraEventsMock(),
 }));
 
 import { GET } from '@/app/api/parity/route';
@@ -63,6 +73,12 @@ describe('parity route — GET /api/parity', () => {
     getDriftCountersMock.mockReset();
     countAuroraCallsMock.mockReset();
     getStatsMock.mockReset();
+    listEventsMock.mockReset();
+    readEventsFromAuroraMock.mockReset();
+    countAuroraEventsMock.mockReset();
+    listEventsMock.mockReturnValue([]);
+    readEventsFromAuroraMock.mockResolvedValue([]);
+    countAuroraEventsMock.mockResolvedValue(0);
 
     // Sensible defaults — individual tests override.
     getUserFromRequestMock.mockReturnValue(adminUser());
@@ -171,8 +187,59 @@ describe('parity route — GET /api/parity', () => {
 
     const res = await GET(makeReq());
     const body = await res.json();
-    expect(body.parity[0].jsonRecentCalls).toBe(2);
-    expect(body.parity[0].auroraCount).toBe(7);
-    expect(body.parity[0].drift).toBe(5);
+    const statsParity = body.parity.find((p: { source: string }) => p.source === 'agentcore_stats');
+    expect(statsParity.jsonRecentCalls).toBe(2);
+    expect(statsParity.auroraCount).toBe(7);
+    expect(statsParity.drift).toBe(5);
+  });
+
+  describe('event_scaling_plans parity', () => {
+    it('includes an event_scaling_plans entry in the default parity array', async () => {
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const sources = body.parity.map((p: { source: string }) => p.source);
+      expect(sources).toContain('event_scaling_plans');
+    });
+
+    it('reports inSync:true when JSON and Aurora counts match', async () => {
+      listEventsMock.mockReturnValue([
+        { eventId: 'a' }, { eventId: 'b' }, { eventId: 'c' },
+      ]);
+      countAuroraEventsMock.mockResolvedValue(3);
+
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const ev = body.parity.find((p: { source: string }) => p.source === 'event_scaling_plans');
+      expect(ev.inSync).toBe(true);
+      expect(ev.jsonCount).toBe(3);
+      expect(ev.auroraCount).toBe(3);
+      expect(ev.drift).toBe(0);
+    });
+
+    it('reports inSync:false and a non-zero drift when counts differ', async () => {
+      listEventsMock.mockReturnValue([{ eventId: 'a' }, { eventId: 'b' }]);
+      countAuroraEventsMock.mockResolvedValue(5);
+
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const ev = body.parity.find((p: { source: string }) => p.source === 'event_scaling_plans');
+      expect(ev.inSync).toBe(false);
+      expect(ev.jsonCount).toBe(2);
+      expect(ev.auroraCount).toBe(5);
+      expect(ev.drift).toBe(3);
+    });
+
+    it('?source=event_scaling_plans filters parity and drift to that source only', async () => {
+      getDriftCountersMock.mockReturnValue([
+        { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
+        { source: 'event_scaling_plans', writes: 2, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
+      ]);
+      const res = await GET(makeReq('http://x/api/parity?source=event_scaling_plans'));
+      const body = await res.json();
+      expect(body.parity).toHaveLength(1);
+      expect(body.parity[0].source).toBe('event_scaling_plans');
+      expect(body.drift).toHaveLength(1);
+      expect(body.drift[0].source).toBe('event_scaling_plans');
+    });
   });
 });
