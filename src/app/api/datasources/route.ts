@@ -7,7 +7,8 @@ import type { DatasourceConfig, DatasourceType } from '@/lib/app-config';
 import { queryDatasource, testConnection } from '@/lib/datasource-client';
 import { getUserFromRequest } from '@/lib/auth-utils';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
-import { DATASOURCE_QUERY_PROMPTS } from '@/lib/datasource-prompts';
+import { buildDatasourcePrompt } from '@/lib/datasource-prompts';
+import { getDatasourceSchema, invalidateDatasourceSchema } from '@/lib/datasource-schema';
 
 const VALID_TYPES: DatasourceType[] = ['prometheus', 'loki', 'tempo', 'clickhouse', 'jaeger', 'dynatrace', 'datadog'];
 
@@ -250,10 +251,11 @@ export async function POST(request: NextRequest) {
 
     // --- AI query generation / AI 쿼리 생성 ---
     if (action === 'generate-query') {
-      const { datasourceType, naturalLanguage, timeRange: tr } = body as {
+      const { datasourceType, naturalLanguage, timeRange: tr, datasourceId } = body as {
         datasourceType?: string;
         naturalLanguage?: string;
         timeRange?: string;
+        datasourceId?: string;
       };
       if (!datasourceType || !naturalLanguage) {
         return NextResponse.json({ error: 'Missing datasourceType or naturalLanguage' }, { status: 400 });
@@ -262,32 +264,73 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: `Invalid datasourceType: ${datasourceType}` }, { status: 400 });
       }
       const dsType = datasourceType as DatasourceType;
-      const systemPrompt = DATASOURCE_QUERY_PROMPTS[dsType]
-        + (tr ? `\n\nTime context: the user is looking at data from the last ${tr}.` : '');
+      const QUERY_LANGUAGES: Record<string, string> = {
+        prometheus: 'PromQL', loki: 'LogQL', tempo: 'TraceQL',
+        clickhouse: 'SQL', jaeger: 'Jaeger', dynatrace: 'DQL', datadog: 'Datadog',
+      };
       try {
-        const bedrockBody = JSON.stringify({
-          anthropic_version: 'bedrock-2023-05-31',
-          max_tokens: 300,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: naturalLanguage }],
-        });
-        const response = await bedrockClient.send(new InvokeModelCommand({
-          modelId: 'global.anthropic.claude-sonnet-4-6',
-          contentType: 'application/json',
-          accept: 'application/json',
-          body: new TextEncoder().encode(bedrockBody),
-        }));
-        const result = JSON.parse(new TextDecoder().decode(response.body));
-        let query = (result.content?.[0]?.text || '').trim();
-        query = query.replace(/^```(?:\w+)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-        const QUERY_LANGUAGES: Record<string, string> = {
-          prometheus: 'PromQL', loki: 'LogQL', tempo: 'TraceQL',
-          clickhouse: 'SQL', jaeger: 'Jaeger', dynatrace: 'DQL', datadog: 'Datadog',
+        // 1) Optional schema introspection — only when the caller passed a specific
+        //    datasource. Falls back to a static prompt for type-only generation.
+        //    데이터소스 ID가 있으면 라이브 스키마를 가져와 프롬프트에 주입.
+        let schema = '';
+        let datasourceForRetry: DatasourceConfig | undefined;
+        if (datasourceId) {
+          const ds = getDatasourceById(datasourceId);
+          if (ds) {
+            datasourceForRetry = ds;
+            schema = await getDatasourceSchema(ds);
+          }
+        }
+
+        const generate = async (recentError?: { query: string; error: string }): Promise<string> => {
+          const systemPrompt = buildDatasourcePrompt(dsType, { timeRange: tr, schema, recentError });
+          const bedrockBody = JSON.stringify({
+            anthropic_version: 'bedrock-2023-05-31',
+            max_tokens: 600,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: naturalLanguage }],
+          });
+          const response = await bedrockClient.send(new InvokeModelCommand({
+            modelId: 'global.anthropic.claude-sonnet-4-6',
+            contentType: 'application/json',
+            accept: 'application/json',
+            body: new TextEncoder().encode(bedrockBody),
+          }));
+          const result = JSON.parse(new TextDecoder().decode(response.body));
+          let q = (result.content?.[0]?.text || '').trim();
+          q = q.replace(/^```(?:\w+)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+          return q;
         };
+
+        // 2) First-pass generation.
+        let query = await generate();
+        let retried = false;
+
+        // 3) ClickHouse dry-run: validate via EXPLAIN SYNTAX. One retry on failure.
+        //    ClickHouse는 EXPLAIN SYNTAX로 사전 검증, 실패 시 1회 재시도.
+        if (dsType === 'clickhouse' && datasourceForRetry && query) {
+          const cleaned = query.replace(/;\s*$/, '');
+          if (/^\s*SELECT\s/i.test(cleaned)) {
+            try {
+              await queryDatasource(datasourceForRetry, `EXPLAIN SYNTAX ${cleaned}`, { limit: 1 });
+            } catch (dryErr: any) {
+              const errMsg = (dryErr?.message || '').slice(0, 1500);
+              if (errMsg) {
+                retried = true;
+                query = await generate({ query, error: errMsg });
+              }
+            }
+          }
+        }
+
         return NextResponse.json({
           query,
-          explanation: `Generated ${QUERY_LANGUAGES[dsType] || dsType} query from: "${naturalLanguage}"`,
+          explanation: retried
+            ? `Generated ${QUERY_LANGUAGES[dsType] || dsType} query (auto-corrected after dry-run) from: "${naturalLanguage}"`
+            : `Generated ${QUERY_LANGUAGES[dsType] || dsType} query from: "${naturalLanguage}"`,
           queryLanguage: QUERY_LANGUAGES[dsType] || dsType,
+          schemaHint: schema ? true : false,
+          retried,
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'AI query generation failed';
@@ -396,6 +439,9 @@ export async function PUT(request: NextRequest) {
 
     datasources[idx] = updated;
     saveConfig({ datasources });
+    // Invalidate cached schema since URL/auth may have changed.
+    // URL/인증이 바뀌었을 수 있으니 스키마 캐시 무효화.
+    invalidateDatasourceSchema(id);
     return NextResponse.json({ datasources: datasources.map(maskCredentials) });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Internal server error';
@@ -425,6 +471,7 @@ export async function DELETE(request: NextRequest) {
 
     const filtered = datasources.filter(d => d.id !== id);
     saveConfig({ datasources: filtered });
+    invalidateDatasourceSchema(id);
     return NextResponse.json({ datasources: filtered.map(maskCredentials) });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Internal server error';

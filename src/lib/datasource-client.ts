@@ -43,7 +43,7 @@ function cacheKey(dsId: string, query: string, opts?: QueryOptions): string {
 }
 
 // --- Auth header builder ---
-function buildHeaders(ds: DatasourceConfig): Record<string, string> {
+export function buildHeaders(ds: DatasourceConfig): Record<string, string> {
   const headers: Record<string, string> = { 'Accept': 'application/json' };
   if (ds.auth) {
     switch (ds.auth.type) {
@@ -69,7 +69,7 @@ function buildHeaders(ds: DatasourceConfig): Record<string, string> {
 }
 
 // --- Timeout fetch wrapper ---
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
