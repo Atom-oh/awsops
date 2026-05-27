@@ -6,9 +6,16 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # IAM
 
-IAM(Identity and Access Management) 페이지에서는 AWS 계정의 사용자, 역할, 정책을 한눈에 확인하고 관리할 수 있습니다.
+IAM(Identity and Access Management) 페이지에서는 AWS 계정의 사용자, 역할, 정책을 한눈에 확인합니다. **admin 전용** 페이지로 `data/config.json`의 `adminEmails`에 등록된 사용자만 접근 가능합니다.
 
 <Screenshot src="/screenshots/security/iam.png" alt="IAM" />
+
+:::caution Admin 전용
+페이지 진입 시 `/awsops/api/steampipe?action=admin-check`로 권한을 확인합니다. 일반 사용자는 **Access Denied** 화면을 봅니다. IAM 사용자/역할/정책은 민감 정보이므로 의도된 동작입니다.
+:::
+
+## 멀티 어카운트 동작
+멀티 어카운트 환경에서는 사이드바의 **AccountSelector**로 대상 계정을 전환할 수 있습니다. 데이터 테이블은 `data[0].account_id`를 감지하면 **Account** 컬럼을 자동 추가하고 `AccountBadge`로 별칭+컬러 도트를 표시합니다.
 
 ## 주요 기능
 
@@ -92,8 +99,29 @@ MFA가 활성화되지 않은 사용자가 있으면 상단에 경고 배너가 
 
 ## 데이터 새로고침
 
-우측 상단의 새로고침 버튼을 클릭하면 캐시를 무효화하고 최신 데이터를 조회합니다.
+우측 상단의 새로고침 버튼을 클릭하면 `bustCache=true`로 5분 캐시를 무효화하고 최신 데이터를 조회합니다.
 
-:::tip 캐시 정책
-IAM 데이터는 5분간 캐시됩니다. 즉시 반영이 필요한 경우 새로고침 버튼을 사용하세요.
+## 쿼리 구조
+
+페이지가 호출하는 SQL 쿼리(`src/lib/queries/iam.ts`):
+
+| 쿼리 키 | 용도 |
+|---------|------|
+| `summary` | Users / Roles / Custom Policies / MFA Not Enabled 카운트 |
+| `userList` | 사용자 목록 + account_id 컬럼 |
+| `roleList` | 역할 목록 + account_id 컬럼 |
+| `userDetail` | 클릭 시 동적 SQL (이름 치환) |
+| `roleDetail` | 클릭 시 동적 SQL — 트러스트 정책 + 인스턴스 프로파일 포함 |
+
+:::info SCP 차단 컬럼 회피
+`mfa_enabled`, `attached_policy_arns`는 목록 쿼리에서 제외됩니다 (조직 SCP가 `ListMFADevices`, `ListAttachedUserPolicies`를 차단하는 환경 대응). MFA 통계는 별도 `summary` 쿼리에서 집계합니다.
 :::
+
+## 관련 페이지
+- [Security](./security.md) — Public S3, Open SG, 미암호화 EBS 등 종합 보안 진단
+- [Compliance](./compliance) — CIS 벤치마크 (IAM 통제 다수 포함)
+- [Accounts](../overview/accounts) — 어카운트 추가 + Department(Cognito 그룹) 관리
+
+## 참고
+- `src/lib/queries/iam.ts` — SQL 쿼리 정의
+- ADR-024: admin 전용 페이지 게이트 (`adminEmails` 매트릭스)

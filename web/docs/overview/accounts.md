@@ -106,6 +106,39 @@ aws cloudformation deploy \
 5. **확인**: 등록된 계정 테이블에서 Features 배지 확인
 6. **Steampipe 설정**: 새 계정의 Steampipe connection 구성 (Aggregator에 자동 추가)
 
+## Departments (Cognito 그룹 기반 접근 제어)
+
+`/accounts` 페이지 하단의 **Departments** 섹션에서 Cognito 그룹별로 페이지·계정·EKS 클러스터·외부 데이터소스 접근 권한을 세분화할 수 있습니다.
+
+| 필드 | 설명 |
+|------|------|
+| `name` | 부서명 (예: "FinOps", "SecOps") |
+| `cognitoGroup` | Cognito User Pool 그룹명 (정확 일치) |
+| `accounts` | 접근 가능 계정 ID 배열 — `["*"]`이면 전체 |
+| `pages` | 접근 가능 페이지 경로 배열 (`/ec2`, `/cost` 등) — `["*"]`이면 전체 |
+| `eksClusterNames` | 접근 가능 EKS 클러스터 이름 — `["*"]`이면 전체 |
+| `datasourceIds` | 접근 가능 외부 데이터소스 ID — `["*"]`이면 전체 |
+
+### 동작 방식
+- Cognito JWT의 `cognito:groups` 클레임을 읽어 매칭되는 Department의 제한을 적용합니다.
+- 매칭되는 Department가 없으면 admin 여부에 따라 동작 (admin은 전체 접근, 비 admin은 차단).
+- 빈 배열은 "전체 비활성" → **`["*"]`을 명시**해야 전체 허용입니다.
+
+### API
+```bash
+# 부서 목록 조회
+curl '/awsops/api/steampipe?action=config' | jq '.departments'
+
+# 부서 저장 (admin 전용)
+curl -X POST '/awsops/api/steampipe?action=save-departments' \
+  -H 'Content-Type: application/json' \
+  -d '{"departments":[{"name":"FinOps","cognitoGroup":"finops","accounts":["*"],"pages":["/cost","/inventory","/bedrock"],"eksClusterNames":["*"],"datasourceIds":["*"]}]}'
+```
+
+:::caution Departments를 비우면 비활성화
+`departments` 배열이 비어 있으면 부서 기반 접근 제어가 **완전히 비활성**됩니다 — 모든 로그인 사용자가 admin/일반 정책만으로 접근 권한이 결정됩니다.
+:::
+
 ## 사용 팁
 
 :::tip 기능 배지

@@ -55,6 +55,30 @@ EKS Pod의 비용을 분석하는 페이지입니다. OpenCost (기본) 또는 R
 | Daily Cost | 일일 비용 |
 | Pods | Pod 수 |
 
+## 데이터 소스 인디케이터 배너
+
+페이지 상단에 현재 사용 중인 계산 방식을 색상 배너로 표시합니다:
+
+| 배너 색상 | 조건 | 메시지 |
+|----------|------|--------|
+| 🟢 초록 | `data.dataSource === 'opencost'` | "OpenCost (Prometheus) — Actual usage-based cost: CPU + Memory + Network + Storage + GPU" |
+| 🟡 노랑 | `dataSource !== 'opencost'` | "Request-based estimation — CPU + Memory only. Install OpenCost for full cost data: scripts/07-setup-opencost.sh" |
+
+배너 아래의 카드 하단 라벨도 동일 출처를 명시합니다:
+- `Source: OpenCost (Prometheus actual usage × AWS pricing)` 또는
+- `Source: Request-based (Pod request ratio × EC2 node cost)`
+
+## 탭 — Pods vs Nodes
+
+페이지에는 **Pods** / **Nodes** 두 개의 탭이 있습니다 (`activeTab: 'pods' | 'nodes'`).
+
+| 탭 | 라벨 색 | 내용 |
+|----|---------|------|
+| `pods` | cyan | Pod별 CPU/Memory(/Network/Storage/GPU) 비용 — 네임스페이스·노드 필터링 |
+| `nodes` | purple | 노드별 인스턴스 타입, 시간당 단가, 일일 비용, Pod 수 |
+
+탭 전환 시 데이터는 캐시되며 추가 호출이 발생하지 않습니다.
+
 ## 두 가지 비용 계산 방식
 
 ### Method A: Request-based (기본)

@@ -141,6 +141,26 @@ Kubernetes Pod 상태별 분포를 파이 차트로 표시합니다.
 
 - Namespace, Pod 이름, Reason, Message
 
+## Alert Incidents (ADR-009)
+
+알림 파이프라인이 그룹화한 **활성 incident**가 있으면 별도 카드 섹션이 표시됩니다:
+
+- **active incident 배지** — 빨간색 사이렌 아이콘 + 펄스 애니메이션 (`activeIncidents.length`)
+- 각 incident 카드: incident ID, 대표 알림 이름, alert count, status, affected services
+- 클릭 시 `/ai-diagnosis`로 이동해 부분 진단 결과 확인
+- 활성 incident가 없으면 최근 6건이 회색 톤으로 표시
+
+이 카드는 `/awsops/api/alert-webhook`에서 가져온 진단 기록을 기반으로 합니다. 알림 파이프라인 설정은 [Alert Settings](../monitoring/alert-settings) 참고.
+
+## Compliance Polling
+
+대시보드에서 Compliance 카드를 클릭하면 백그라운드로 `/awsops/api/benchmark` 폴링이 시작됩니다:
+
+1. POST 요청으로 CIS 벤치마크 실행 트리거
+2. `pollingId`를 받아 1초 간격으로 진행률 폴링
+3. 완료되면 카드에 통과/실패 비율 표시
+4. 별도 페이지 이동 없이 인라인 결과
+
 ## 데이터 새로고침
 
 ### 자동 로드

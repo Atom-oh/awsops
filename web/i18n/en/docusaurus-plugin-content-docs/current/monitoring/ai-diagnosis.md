@@ -1,126 +1,179 @@
 ---
 sidebar_position: 8
 title: AI Comprehensive Diagnosis
-description: 15-section Bedrock Opus diagnosis report, DOCX/MD/PDF export, auto-scheduling
+description: 15-section Bedrock Opus diagnosis report, DOCX/MD/PDF export, scheduling, email notifications
 ---
+
+import Screenshot from '@site/src/components/Screenshot';
 
 # AI Comprehensive Diagnosis
 
-Generate a **15-section AI diagnosis report** for your entire AWSops infrastructure and export it as DOCX, Markdown, PDF, or PPTX (`/ai-diagnosis`).
+The `/ai-diagnosis` page generates a 15-section infrastructure analysis report using Amazon Bedrock **Claude Opus 4.6**.
+
+<Screenshot src="/screenshots/monitoring/ai-diagnosis.png" alt="AI Comprehensive Diagnosis page" />
 
 ## Overview
 
-Amazon Bedrock Claude Opus (or Sonnet) analyzes Steampipe inventory, CloudWatch metrics, Cost Explorer, and compliance results together and stitches them into a single report. Use it for monthly operational reviews, quarterly architecture reviews, or audit responses.
-
 | Item | Value |
 |------|-------|
-| **Model** | `global.anthropic.claude-sonnet-4-6` (default), Opus selectable |
-| **Sections** | 15 (Executive Summary → Action Plan) |
-| **Output formats** | DOCX (A4, TOC), Markdown, PDF, PPTX |
-| **Storage** | S3 report bucket + metadata in `data/reports/*.json` |
-| **Schedule** | none / weekly / biweekly / monthly |
+| **Model** | `global.anthropic.claude-opus-4-6-v1` (fixed) |
+| **Sections** | 15 (4 cost + 6 infra + 2 security/network + 3 summary) |
+| **Output formats** | DOCX (A4 + TOC), Markdown, PDF (browser print) |
+| **Storage** | S3 report bucket + `data/reports/*.json` cache |
+| **Progress polling** | 5-second SSE |
+| **Auto schedule** | disabled / weekly / biweekly / monthly (KST) |
+| **Email notifications** | PDF attachment to registered recipients on completion |
 
-## 15 Sections
+## Page Layout
 
-| # | Section | Source |
-|---|---------|--------|
-| 1 | Executive Summary | Aggregated from all sections |
-| 2 | Resource Inventory | `data/inventory/*.json` |
-| 3 | Compute (EC2/Lambda/ECS/EKS) | Steampipe + CloudWatch |
-| 4 | Storage & DB (S3/EBS/RDS/DDB) | Steampipe + CW |
-| 5 | Network & CDN (VPC/CloudFront/WAF) | Steampipe |
-| 6 | Security (IAM/Public/Open SG) | Steampipe + Compliance |
-| 7 | Compliance (CIS Benchmark) | Powerpipe results |
-| 8 | Cost Analysis | Cost Explorer + snapshot |
-| 9 | Resource Trend | Resource Inventory |
-| 10 | Performance Anomalies | CloudWatch metrics |
-| 11 | Incident History & Alert Correlation | Alert Knowledge Base |
-| 12 | External Datasource Summary | Prometheus/Loki etc. |
-| 13 | AI Conversation Usage | AgentCore Memory stats |
-| 14 | Key Risks & Recommendations | AI synthesis |
-| 15 | Action Plan (30/60/90 days) | AI synthesis |
+### 1. Top Action Bar
+- **Run Diagnosis** — start a full run (avg. 6–10 min for 15 sections)
+- **Schedule** icon — open the auto-schedule panel (admin only)
+- **Notification** icon — manage email recipients (admin only)
+- **DOCX Download** — download the latest completed report immediately
 
-## Running a Diagnosis
+### 2. Left TOC Sidebar
+Expanding a completed report reveals the 15-section TOC; clicking scrolls to that section. Multiple sections can be expanded simultaneously for side-by-side comparison.
 
-### Manual run
+### 3. Report History Table
+| Column | Description |
+|--------|-------------|
+| Created | YYYY-MM-DD HH:MM (KST) |
+| Account | Target account alias (in multi-account mode) |
+| Status | completed / generating / failed |
+| Download | DOCX · MD · PDF |
 
-1. Click **AI Diagnosis** in the sidebar.
-2. Click **Run Diagnosis**.
-3. Watch the per-section progress indicator (average 3–6 min).
-4. A new report card appears at the top of the list when complete.
+Pagination: 5 per page; narrow with the date-range filter.
 
-:::tip Duration
-With Opus + 15 sections, average runtime is 4–6 minutes. Many accounts or slow Cost API responses can push this to 10 minutes.
+## The 15 Sections (Actual Order)
+
+The order in `src/lib/report-prompts.ts` `REPORT_SECTIONS`:
+
+| # | Section ID | Korean | English |
+|---|------------|--------|---------|
+| 1 | `cost-overview` | 비용 현황 | Cost Overview |
+| 2 | `cost-compute` | 컴퓨팅 비용 심층분석 | Compute Cost Deep Dive |
+| 3 | `cost-network` | 네트워크 전송 비용 | Network & Data Transfer Cost |
+| 4 | `cost-storage` | 스토리지 비용 심층분석 | Storage Cost Deep Dive |
+| 5 | `idle-resources` | 유휴 리소스 & 낭비 | Idle Resources & Waste |
+| 6 | `security-posture` | 보안 현황 | Security Posture |
+| 7 | `network-architecture` | 네트워크 아키텍처 | Network Architecture |
+| 8 | `compute-analysis` | 컴퓨팅 인프라 분석 | Compute Infrastructure |
+| 9 | `eks-analysis` | EKS & 컨테이너 분석 | EKS & Container Analysis |
+| 10 | `database-analysis` | 데이터베이스 분석 | Database Analysis |
+| 11 | `msk-analysis` | MSK & 스트리밍 분석 | MSK & Streaming Analysis |
+| 12 | `storage-analysis` | 스토리지 인프라 분석 | Storage Infrastructure |
+| 13 | `executive-summary` | 종합 요약 | Executive Summary |
+| 14 | `recommendations` | 권장사항 & 로드맵 | Recommendations & Roadmap |
+| 15 | `appendix` | 부록: 리소스 인벤토리 | Appendix: Resource Inventory |
+
+:::tip Execution order vs presentation order
+The prompts run starting from `cost-overview`, but **Executive Summary** (#13) is synthesized last so it can summarize the other sections. The TOC shows the definition order.
 :::
 
-### Auto-scheduling
+## Report Generation Flow
 
-| Schedule | When |
-|----------|------|
-| `weekly` | Every Monday at 9 AM KST |
-| `biweekly` | Every other Monday at 9 AM |
-| `monthly` | 1st of every month at 9 AM |
-| `none` | Disabled |
+1. Click **Run Diagnosis** → POST `/awsops/api/report` (action: `generate`)
+2. `collectReportData()` collects Steampipe + CloudWatch + Cost Explorer data
+3. The 15 `REPORT_SECTIONS` are sent to Opus sequentially (~30–60s each)
+4. The page polls GET `?action=status&id=<reportId>` every 5s to update progress
+5. On completion:
+   - DOCX is generated and uploaded to S3
+   - Markdown is immediately available
+   - PDF opens a print-friendly page that triggers the browser's Print dialog
+   - If email notifications are on, recipients receive an alert
 
-Set this via `reportSchedule` in `data/config.json`, or use the **Schedule** dropdown in the UI.
+## Auto Scheduling
 
-## Export Formats
+The schedule panel (admin only — checked against `adminEmails`) configures:
 
-| Format | Use case | Details |
-|--------|----------|---------|
-| **DOCX** | Deliverables | A4, auto-generated TOC, tables and charts |
-| **Markdown** | GitHub/Notion paste | Raw text with image links |
-| **PDF** | Print/email | DOCX-converted, fonts embedded |
-| **PPTX** | Executive brief | WADD-style, 1–2 slides per section |
+| Field | Value |
+|-------|-------|
+| `enabled` | true/false |
+| `frequency` | `weekly` / `biweekly` / `monthly` |
+| `dayOfWeek` | 0 (Sun) – 6 (Sat) — for weekly/biweekly |
+| `dayOfMonth` | 1 – 28 — for monthly |
+| `hour` | 0 – 23 (KST, default 6 AM) |
+| `accountId` | restrict to a single account (blank = all) |
+| `lang` | `ko` / `en` |
 
-:::info Report proxy download
-Instead of exposing the S3 URL directly, the Next.js API generates a presigned URL and proxies the download. Large files (100MB+) can be downloaded without exposing credentials (ADR-014).
+The schedule is persisted to `data/report-schedule.json`. `startScheduler()` checks `isDue()` hourly and triggers as needed. `nextRunAt` is computed in KST.
+
+:::info Biweekly safety net
+For biweekly schedules, if less than 13 days passed since the last run and the next slot is under 7 days away, the scheduler adds +7 days to enforce the minimum spacing (`report-scheduler.ts:85-93`).
 :::
 
-## Notification Integration
+## Email Notifications
 
-On completion, notifications are sent to the configured channels:
+The notification panel manages a recipient list. When a diagnosis completes:
+- Subject: `[AWSops] AI Diagnosis Report — {YYYY-MM-DD}`
+- Body: section count, top recommendations summary, download links
+- Attachment: PDF (optional)
 
-- **Slack**: Block Kit card with risk count, severity, download links
-- **Email**: summary + PDF attachment to users in `adminEmails`
+Recipients are stored alongside the schedule in `data/report-schedule.json` (`notifEmails`).
 
-Configure channels in `notificationChannels` in `data/config.json`.
+## Export Format Details
 
-## Alert-Triggered Diagnosis
+| Format | Generation path | Notes |
+|--------|----------------|-------|
+| **DOCX** | `lib/report-docx.ts` → API `download-docx` | A4 light theme, TOC, header/footer/page numbers, markdown → paragraph/table/bullet conversion |
+| **Markdown** | API `download-md` | Raw source (all 15 sections concatenated) |
+| **PDF** | `/ai-diagnosis/report` page + browser Print | White background, A4 page breaks, no extra PDF library (bundle-size hygiene) |
 
-When a real-time alert (CloudWatch/Alertmanager/Grafana) aggregates to `critical` severity, AWSops automatically runs a scoped partial diagnosis:
+:::tip Why no dedicated PDF library
+ADR-019: a separate PDF library (Puppeteer, etc.) significantly bloats the Next.js bundle and EC2 memory. Instead we render a print-friendly page and use the browser's Print-to-PDF — equivalent output quality, zero new dependencies.
+:::
 
-- Scope limited to affected services/resources/namespaces
-- Only 3–5 relevant sections are regenerated (1–2 min)
-- Results posted as a reply on the alert's Slack thread
+## Integration With the Alert Pipeline
 
-See [Alert Pipeline](./alerts.md) for details.
+When the alert pipeline (CloudWatch / Alertmanager / Grafana) escalates to `critical`, a **partial diagnosis** is triggered (`alert-diagnosis.ts`):
 
-## Tips
+- Section selection is scoped to the affected services/resources (typically 3–5 sections)
+- Completes within 1–2 minutes
+- Result is replied into the Slack alert thread
 
-### Cost control
-Opus costs about 5× Sonnet. Instead of weekly Opus, use **monthly Opus + weekly Sonnet**. The model picker is in the UI.
+See [Alert Pipeline](./alerts.md) for the full flow.
 
-### Running specific sections
-Call the API directly to skip sections:
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Stuck for 10+ minutes | Steampipe query timeout | Check `statement_timeout` in next.js log, re-run the offending section only |
+| DOCX download fails | S3 upload failure (IAM) | Verify EC2 instance profile has `s3:PutObject` on the bucket |
+| Runs at midnight unexpectedly | `dayOfMonth` not set | For monthly mode, set explicitly within 1–28 |
+| No email received | SNS topic subscription unconfirmed | Click the SNS confirm link in your inbox |
+
+## Direct API Usage
+
 ```bash
+# Start a diagnosis
 curl -X POST /awsops/api/report \
   -H 'Content-Type: application/json' \
-  -d '{"sections": ["cost", "compliance"], "model": "sonnet"}'
-```
+  -d '{"action":"generate","lang":"en"}'
 
-### Diff against previous report
-Toggle **Compare with previous** to include a diff against the prior report.
+# Check progress
+curl '/awsops/api/report?action=status&id=<reportId>'
+
+# List reports (paginated)
+curl '/awsops/api/report?action=list&page=1&pageSize=5'
+
+# Update schedule
+curl -X POST /awsops/api/report \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"set-schedule","schedule":{"enabled":true,"frequency":"weekly","dayOfWeek":1,"hour":6,"lang":"en"}}'
+```
 
 ## Related Pages
 
-- [Alert Pipeline](./alerts.md) — alert-triggered partial diagnosis
-- [Resource Inventory](./inventory.md) — source for section 2
-- [Compliance](../security/compliance) — source for section 7
-- [Cost Explorer](./cost) — source for section 8
+- [Alert Pipeline](./alerts.md) — partial diagnosis trigger
+- [Resource Inventory](./inventory.md) — Appendix section data source
+- [Compliance](../security/compliance) — Security Posture section source
+- [Cost Explorer](./cost) — source for the 4 cost sections
 
 ## References
 
-- ADR-019: Diagnosis report format matrix
-- ADR-014: Report proxy download URL
-- ADR-016: Bedrock model selection strategy
+- ADR-019: report format matrix
+- ADR-014: report proxy download URLs
+- ADR-016: Bedrock model selection (Opus 4.6 pinned)
+- `src/lib/report-prompts.ts` — 15-section prompt definitions (exact output structure)
+- `src/lib/report-scheduler.ts` — schedule computation (KST)
