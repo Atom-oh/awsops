@@ -42,6 +42,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 027 | Code Interpreter 세션 격리 | Accepted (2026-04-22) |
 | 028 | CloudFront CACHING_DISABLED | Accepted (2026-04-22) |
 | 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | Proposed (2026-04-26) |
+| 030 | ECS Fargate 워크로드 + Aurora 앱 상태 + 이중 ECR | Accepted (2026-05-27) |
 
 ## 새 ADR 추가 / Adding a New ADR
 1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1

@@ -10,8 +10,8 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **Styling**: Tailwind CSS dark navy theme with custom accent colors
 - **Charts**: Recharts for metrics visualization
 - **Topology**: React Flow for network topology diagrams
-- **페이지**: 40개 리소스 페이지 (EC2, EBS, S3, VPC, IAM, Lambda, RDS, ECS, MSK, OpenSearch, Inventory, Datasources, AI Diagnosis 등)
-  (40 resource pages)
+- **페이지**: 43개 리소스 페이지 (EC2, EBS, S3, VPC, IAM, Lambda, RDS, ECS, MSK, OpenSearch, Inventory, Datasources, AI Diagnosis, Event Scaling 등 — login 포함)
+  (43 resource pages, incl. /login)
 - 멀티 어카운트 지원 (AccountSelector, AccountContext)
 - Bedrock 모델 사용량 모니터링, i18n 다국어(ko/en) 지원
 - 외부 데이터소스 연동 (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
@@ -131,16 +131,12 @@ Key pipeline stages:
 5. **Knowledge** -- Stores diagnosis records for similarity search on future incidents
 6. **Dispatch** -- Slack (severity-routed channels, thread updates), SNS email, dashboard indicator
 
-## Alert-Triggered AI Diagnosis (Proposed)
+## Future: ECS Fargate + Aurora Migration (Proposed — ADR-030)
 
-Multi-stage AI diagnosis pipeline that automatically receives alerts from external systems (CloudWatch Alarms via SNS, Prometheus Alertmanager webhook, Grafana webhook, SQS queue), correlates related alerts into incidents, investigates root cause using existing collectors (7 types), datasources (7 platforms), and AgentCore gateways (125 MCP tools), then delivers analysis to Slack (Block Kit) and SNS email. Includes knowledge base for past incident reference, change detection (CloudTrail + K8s rollouts), and severity-based channel routing. See [ADR-009](decisions/009-alert-triggered-ai-diagnosis.md) for the full design.
+To decouple build from runtime, all dashboard workloads will migrate from the single `t4g.2xlarge` EC2 host to ECS Fargate (web · steampipe · jobs · alert-poller), application state (`data/*.json`) will move to Aurora Serverless v2, and the OSS distribution model splits into Private ECR (dev) / Public ECR (prod, cosign-signed). Steampipe remains stateless and runs as its own Fargate task with config mounted from Secrets Manager. See [ADR-030](decisions/030-ecs-fargate-aurora-split.md) for the three-phase cutover plan.
 
-Key pipeline stages:
-1. **Ingestion** -- Webhook endpoint normalizes 5 alert source formats into unified `AlertEvent`
-2. **Correlation** -- Groups related alerts by resource/service/time-window into `Incident` objects (30s buffering)
-3. **Investigation** -- Strategy-selected parallel execution of collectors + datasource queries + change detection
-4. **Analysis** -- Bedrock Opus root cause analysis with structured timeline, remediation, and prevention
-5. **Knowledge** -- Stores diagnosis records for similarity search on future incidents
-6. **Dispatch** -- Slack (severity-routed channels, thread updates), SNS email, dashboard indicator
+## Event-Driven Pre-Scaling (Implemented — ADR-010 Phase 1+2)
+
+Admin-only event registration page (`/event-scaling`) that analyzes historical CloudWatch metrics for traffic spikes, generates multi-phase warmup plans via Bedrock Sonnet 4.6 (PLAN_JSON marker parsing), and emits safe bash scripts per resource type (KEDA/HPA, Aurora reader, MSK partition expansion, ASG warm pool, EBS IOPS). The plan and scripts are **review-then-run** — the dashboard never executes mutations on its own. ADR-029 Phase 3 (mutating action gate with approval workflow) is in Proposed status.
 
 See also: `scripts/ARCHITECTURE.md` for detailed architecture diagrams.
