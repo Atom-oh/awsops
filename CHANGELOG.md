@@ -13,6 +13,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-05-27
+
+### Added
+
+- Event-driven pre-scaling — Phase 1+2 (ADR-010) ([#13](https://github.com/whchoi98/awsops/pull/13))
+  - New `/event-scaling` admin page: register events, collect historical CloudWatch metrics (ASG/RDS/MSK/EBS/ALB), Bedrock Sonnet 4.6 multi-phase warmup plan via `PLAN_JSON` marker, downloadable bash scripts per resource type (KEDA/HPA, Aurora reader, MSK partition expansion, ASG warm pool, EBS IOPS)
+  - **Review-then-run**: scripts are downloaded for operator review; the dashboard never executes mutating actions
+  - New API route `/api/event-scaling` (GET/POST/PUT/DELETE, admin-only)
+  - New SQL query file `event-scaling.ts` with CloudWatch GetMetricData batch + resource-state queries
+  - 3 new libraries: `event-scaling.ts` (data model + JSON persistence), `event-scaling-prompts.ts`, `event-scaling-scripts.ts`
+- ADR-029 (Proposed): Mutating Action Framework — gate model for any future write actions (ADR-010 Phase 3 dependency)
+- ADR-030 (Accepted): ECS Fargate + Aurora App State + Dual-Tier ECR
+  - **Phase 1 foundation** (this release): `AwsopsDataStack` CDK stack provisioning Aurora Serverless v2 PostgreSQL 15.5 (0.5–4 ACU, writer + reader, KMS-encrypted, IAM auth, private subnets), idempotent 7-table schema (`infra-cdk/data/schema.sql`), app-side pg Pool (`src/lib/db.ts`) with DSN/discrete env var resolution, and deploy script `scripts/13-deploy-aurora.sh` (deploy / schema / status / dsn subcommands)
+  - Gated behind `cdk deploy AwsopsDataStack -c enableAurora=true` — default-off, doesn't affect existing single-host deployments
+  - **Phase 1 dual-write** (next release): 7 source files will gain Aurora write alongside the current `data/*.json` write; reads stay on JSON until 7-day parity gate clears
+- AI code-review workflow ([#12](https://github.com/whchoi98/awsops/pull/12)) — automated PR reviews via GitHub Actions invoking Claude
+- Test coverage analysis and improvement plan ([#11](https://github.com/whchoi98/awsops/pull/11)) — `docs/TEST-COVERAGE-PLAN.md` with current gaps and prioritized targets
+
+### Fixed
+
+- Zombie connection cleanup hardened to survive Steampipe FDW hangs — uses a dedicated short-lived `Client` (not pool) so it works even when the pool is exhausted; threshold lowered to 90s for Cost Explorer / IAM summary FDW paths
+- CIS benchmark fails with `relation does not exist` in single-account mode — schema resolution fixed for non-aggregator setups
+- Benchmark parameter validated against allowlist before shell invocation (prevents command injection)
+- `global.anthropic.claude-sonnet-4-6` model ID used for alert diagnosis (was returning a 4xx with the regional ID)
+
+### Infrastructure
+
+- New CDK stack `AwsopsDataStack` (`infra-cdk/lib/awsops-data-stack.ts`) — opt-in via `enableAurora` context flag
+- `infra-cdk/data/schema.sql` is source-controlled (negation rule added to `.gitignore`)
+- 4 CDK stacks total: `AwsopsStack`, `AwsopsCognitoStack`, `AwsopsAgentCoreStack`, `AwsopsDataStack`
+
+### Documentation
+
+- ADR-029 (Proposed), ADR-030 (Accepted) — 2 new ADRs (29 → 30)
+- `docs/architecture.md` — Future: ECS Fargate + Aurora Migration section, data-layer description for Aurora
+
 ## [1.8.1] - 2026-04-23
 
 ### Added
@@ -340,6 +376,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+## [1.9.0] - 2026-05-27
+
+### Added
+
+- 이벤트 기반 사전 스케일링 — Phase 1+2 (ADR-010) ([#13](https://github.com/whchoi98/awsops/pull/13))
+  - 신규 `/event-scaling` 관리자 페이지: 이벤트 등록 → 과거 CloudWatch 메트릭 수집(ASG/RDS/MSK/EBS/ALB) → Bedrock Sonnet 4.6 다단계 워밍업 플랜(`PLAN_JSON` 마커) → 자원 타입별 bash 스크립트 다운로드(KEDA/HPA, Aurora 리더, MSK 파티션 확장, ASG warm pool, EBS IOPS)
+  - **검토-후-실행**: 스크립트는 운영자 검토용으로 다운로드만 제공 — 대시보드는 변경 작업을 직접 실행하지 않음
+  - 신규 API 라우트 `/api/event-scaling` (GET/POST/PUT/DELETE, admin 전용)
+  - 신규 SQL 쿼리 `event-scaling.ts` (CloudWatch GetMetricData 배치 + 자원 상태 쿼리)
+  - 라이브러리 3개 추가: `event-scaling.ts` (데이터 모델 + JSON 영속화), `event-scaling-prompts.ts`, `event-scaling-scripts.ts`
+- ADR-029 (Proposed): 변경 작업 프레임워크 — 향후 모든 쓰기 작업의 게이트 모델 (ADR-010 Phase 3 선행 조건)
+- ADR-030 (Accepted): ECS Fargate + Aurora 앱 상태 + 이중 ECR
+  - **Phase 1 기반** (본 릴리스): `AwsopsDataStack` CDK 스택 — Aurora Serverless v2 PostgreSQL 15.5(0.5–4 ACU, Writer + Reader, KMS 암호화, IAM 인증, Private Subnet) 프로비저닝, 7개 테이블 idempotent 스키마(`infra-cdk/data/schema.sql`), 앱 측 pg Pool(`src/lib/db.ts`) DSN/개별 환경변수 지원, 배포 스크립트 `scripts/13-deploy-aurora.sh` (deploy / schema / status / dsn 서브커맨드)
+  - `cdk deploy AwsopsDataStack -c enableAurora=true` 컨텍스트 플래그 뒤로 가드 — 기본 off, 기존 단일 호스트 배포는 영향 없음
+  - **Phase 1 이중 쓰기** (다음 릴리스): 7개 소스 파일이 기존 `data/*.json` 쓰기와 함께 Aurora 쓰기 추가, 7일 패리티 게이트 통과 전까지 읽기는 JSON 유지
+- AI 코드 리뷰 워크플로 ([#12](https://github.com/whchoi98/awsops/pull/12)) — GitHub Actions에서 Claude를 호출해 PR 자동 리뷰
+- 테스트 커버리지 분석 및 개선 계획 ([#11](https://github.com/whchoi98/awsops/pull/11)) — `docs/TEST-COVERAGE-PLAN.md`에 현재 갭과 우선순위 정리
+
+### Fixed
+
+- 좀비 연결 정리가 Steampipe FDW 행에서도 살아남도록 강화 — 풀이 아닌 전용 단명 `Client` 사용으로 풀 고갈 상태에서도 동작; Cost Explorer/IAM 요약 FDW 경로용 임계값을 90초로 단축
+- 단일 어카운트 모드에서 CIS 벤치마크 `relation does not exist` 오류 — non-aggregator 환경에서 스키마 해석 수정
+- 벤치마크 파라미터를 셸 호출 전 allowlist로 검증 (커맨드 인젝션 방지)
+- 알림 진단에 `global.anthropic.claude-sonnet-4-6` 모델 ID 사용 (리전 ID로 4xx 반환되던 문제 해결)
+
+### Infrastructure
+
+- 신규 CDK 스택 `AwsopsDataStack` (`infra-cdk/lib/awsops-data-stack.ts`) — `enableAurora` 컨텍스트 플래그로 opt-in
+- `infra-cdk/data/schema.sql`은 소스 관리 대상 (`.gitignore`에 negation 규칙 추가)
+- CDK 스택 총 4개: `AwsopsStack`, `AwsopsCognitoStack`, `AwsopsAgentCoreStack`, `AwsopsDataStack`
+
+### Documentation
+
+- ADR-029(Proposed), ADR-030(Accepted) 신규 — ADR 29건 → 30건
+- `docs/architecture.md` — Future: ECS Fargate + Aurora Migration 섹션, Aurora 데이터 계층 설명 추가
 
 ## [1.8.1] - 2026-04-23
 

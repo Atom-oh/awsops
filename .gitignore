@@ -28,6 +28,9 @@ powerpipe/.mod.cache.json
 
 # data (config, inventory, cost, memory, stats — all local/auto-generated)
 data/
+# CDK schema/seed files (ADR-030) live under infra-cdk/data/ and are source-controlled
+!infra-cdk/data/
+!infra-cdk/data/**
 
 # logs
 npm-debug.log*
