@@ -19,6 +19,8 @@ import { countAuroraCalls } from '@/lib/db/agentcore-stats-writer';
 import { getStats } from '@/lib/agentcore-stats';
 import { listEvents } from '@/lib/event-scaling';
 import { countAuroraEvents } from '@/lib/db/event-scaling-writer';
+import { countAuroraDiagnoses } from '@/lib/db/alert-diagnosis-writer';
+import { countJsonDiagnoses } from '@/lib/alert-knowledge-fs';
 
 function isAdminUser(req: NextRequest): boolean {
   const user = getUserFromRequest(req);
@@ -85,6 +87,30 @@ async function eventScalingPlansParity(): Promise<EventScalingPlansParity> {
   };
 }
 
+interface AlertDiagnosisParity {
+  source: 'alert_diagnosis';
+  inSync: boolean;
+  jsonCount: number;
+  auroraCount: number;
+  drift: number;
+  note: string;
+}
+
+async function alertDiagnosisParity(): Promise<AlertDiagnosisParity> {
+  const jsonCount = countJsonDiagnoses();
+  const auroraCount = await countAuroraDiagnoses();
+  return {
+    source: 'alert_diagnosis',
+    inSync: jsonCount === auroraCount,
+    jsonCount,
+    auroraCount,
+    drift: Math.abs(auroraCount - jsonCount),
+    note:
+      'Count-based parity. INSERT is idempotent on (incident_id), so duplicate ' +
+      'dispatches do not inflate Aurora.',
+  };
+}
+
 export async function GET(req: NextRequest) {
   if (!isAdminUser(req)) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
@@ -128,14 +154,26 @@ export async function GET(req: NextRequest) {
       parity: [await eventScalingPlansParity()],
     });
   }
+  if (source === 'alert_diagnosis') {
+    return NextResponse.json({
+      auroraEnabled: true,
+      health,
+      drift: driftCounters.filter((c) => c.source === source),
+      parity: [await alertDiagnosisParity()],
+    });
+  }
 
   return NextResponse.json({
     auroraEnabled: true,
     health,
     drift: driftCounters,
-    parity: [await agentcoreStatsParity(hours), await eventScalingPlansParity()],
+    parity: [
+      await agentcoreStatsParity(hours),
+      await eventScalingPlansParity(),
+      await alertDiagnosisParity(),
+    ],
     note:
-      'Phase 1 dual-write — agentcore_stats + event_scaling_plans wired so far. ' +
-      'Other sources (inventory, cost, memory, alerts, schedules) land in subsequent commits.',
+      'Phase 1 dual-write — agentcore_stats + event_scaling_plans + alert_diagnosis wired so far. ' +
+      'Other sources (inventory, cost, memory, schedules) land in subsequent commits.',
   });
 }
