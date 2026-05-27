@@ -3,6 +3,21 @@
 ## 역할
 페이지 전반에 걸쳐 사용되는 공유 React 컴포넌트. 레이아웃, 카드, 차트, 테이블, K8s UI.
 
+> **정책**: 각 서브디렉토리는 단일 책임 그룹이므로 개별 `CLAUDE.md`를 두지 않는다.
+> 이 인벤토리가 컴포넌트 그룹의 단일 진실 공급원(SoT)이다.
+> 자세한 기준은 루트 `CLAUDE.md` § 자동 동기화 규칙.
+
+## 서브디렉토리 역할
+| 디렉토리 | 역할 | 핵심 의존성 |
+|----------|------|-------------|
+| `layout/` | 전역 셸: 사이드바·헤더·계정 선택기. 모든 페이지가 `layout.tsx`를 통해 렌더링 | next/navigation, AccountContext |
+| `providers/` | 클라이언트 사이드 컨텍스트 트리. App Router의 `'use client'` 경계 격리 | LanguageProvider, AccountProvider |
+| `dashboard/` | 대시보드 홈 카드. `color` prop은 항상 이름 문자열 | StatsCard 호환 색상 토큰 |
+| `charts/` | Recharts 래퍼. SSR/0×0 버그 가드 포함 | recharts, SafeResponsiveContainer |
+| `table/` | 범용 데이터 테이블. 멀티 어카운트 시 Account 컬럼 자동 추가 | AccountContext |
+| `k8s/` | K9s 스타일 EKS 탐색 UI. `src/app/k8s/explorer/`에서만 사용 | kubeconfig API |
+| (root) | 페이지 간 공유되지만 그룹에 속하지 않는 컴포넌트 (예: ReportMarkdown) | — |
+
 ## 주요 파일 (20개)
 
 ### layout/ — 레이아웃 (4)
@@ -48,6 +63,21 @@
 
 ## Role
 Shared React components across pages: layout, cards, charts, tables, K8s UI.
+
+> **Policy**: Each subdirectory is a single-responsibility group and intentionally
+> has no `CLAUDE.md` of its own. This inventory is the single source of truth.
+> See the root `CLAUDE.md` § Auto-Sync Rules for the criteria.
+
+## Subdirectory roles
+| Directory | Role | Key dependencies |
+|-----------|------|------------------|
+| `layout/` | Global shell: sidebar, header, account selector. Every page renders through `layout.tsx` | next/navigation, AccountContext |
+| `providers/` | Client-side context tree. Isolates the App Router `'use client'` boundary | LanguageProvider, AccountProvider |
+| `dashboard/` | Dashboard home cards. `color` prop is always a name string | StatsCard color tokens |
+| `charts/` | Recharts wrappers, including the SSR / 0×0 bug guard | recharts, SafeResponsiveContainer |
+| `table/` | Generic data table; auto-adds an Account column in multi-account mode | AccountContext |
+| `k8s/` | K9s-style EKS exploration UI; used only from `src/app/k8s/explorer/` | kubeconfig API |
+| (root) | Shared components that don't belong to any group (e.g. ReportMarkdown) | — |
 
 ## Key Files (20)
 

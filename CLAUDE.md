@@ -193,10 +193,20 @@ Step 12: 12-setup-multi-account.sh       멀티 어카운트 설정 (선택, Agg
 6. 빌드 검증 후 문서 업데이트
 
 ## 자동 동기화 규칙
-- `src/` 아래 새 디렉토리 → `CLAUDE.md` 생성
-- API 엔드포인트 변경 → `src/app/CLAUDE.md` 업데이트
-- 쿼리 파일 변경 → `src/lib/CLAUDE.md`, `src/lib/queries/CLAUDE.md` 업데이트
-- 컴포넌트 변경 → `src/components/CLAUDE.md` 업데이트
+
+### CLAUDE.md 작성 기준 (어느 디렉토리에 둘지)
+- **필수**: `src/` 최상위 모듈 (`src/app`, `src/components`, `src/contexts`, `src/hooks`, `src/lib`, `src/types`)
+- **필수**: 자체 규칙·아키텍처·외부 의존성·SSRF/보안 정책 등 부모 문서로 압축 불가능한 복잡 feature 디렉토리
+  - 예: `src/app/api`, `src/app/datasources`, `src/app/ai-diagnosis`, `src/app/alert-settings`, `src/app/accounts`, `src/app/k8s`, `src/app/container-cost`, `src/app/eks-container-cost`, `src/lib/collectors`, `src/lib/queries`, `src/lib/i18n`
+- **불필요**: 부모 모듈 CLAUDE.md의 표 한 줄로 충분히 설명되는 단순 페이지 디렉토리 (`src/app/ec2`, `src/app/s3`, `src/app/iam` 등 대부분의 단일 페이지) — 별도 문서 추가 시 부모 문서와 중복만 발생
+- **불필요**: 단일 책임 컴포넌트 그룹 (`src/components/charts`, `src/components/table` 등) — `src/components/CLAUDE.md`의 컴포넌트 인벤토리만 유지
+
+### 변경 → 업데이트 매트릭스
+- API 엔드포인트 추가/제거 → `src/app/CLAUDE.md` + `src/app/api/CLAUDE.md` (라우트 수/목록 업데이트)
+- 쿼리 파일 변경 → `src/lib/CLAUDE.md`, `src/lib/queries/CLAUDE.md`
+- 컴포넌트 변경 → `src/components/CLAUDE.md`
+- 페이지 추가/제거 → `src/app/CLAUDE.md` 페이지 목록 + 루트 `CLAUDE.md` 현황 표
+- 데이터소스/외부 통합 → `src/app/datasources/CLAUDE.md` + `src/lib/CLAUDE.md`
 - ADR 번호: `docs/decisions/ADR-*.md`에서 가장 높은 번호 + 1
 
 ---
@@ -393,8 +403,18 @@ Step 12: 12-setup-multi-account.sh       Multi-account setup (optional, Aggregat
 6. Build verification and documentation update
 
 ## Auto-Sync Rules
-- New directory under `src/` → create `CLAUDE.md`
-- API endpoint changed → update `src/app/CLAUDE.md`
+
+### Where CLAUDE.md belongs
+- **Required**: top-level modules under `src/` (`src/app`, `src/components`, `src/contexts`, `src/hooks`, `src/lib`, `src/types`)
+- **Required**: complex feature directories whose own rules, architecture, external dependencies, or SSRF/security policies cannot be compressed into the parent doc
+  - Examples: `src/app/api`, `src/app/datasources`, `src/app/ai-diagnosis`, `src/app/alert-settings`, `src/app/accounts`, `src/app/k8s`, `src/app/container-cost`, `src/app/eks-container-cost`, `src/lib/collectors`, `src/lib/queries`, `src/lib/i18n`
+- **Not required**: simple page directories fully described by a single row in the parent module's CLAUDE.md (`src/app/ec2`, `src/app/s3`, `src/app/iam`, etc.) — adding one only duplicates the parent doc
+- **Not required**: single-responsibility component groups (`src/components/charts`, `src/components/table`, etc.) — keep them only in the `src/components/CLAUDE.md` inventory
+
+### Change → update matrix
+- API endpoint added/removed → update `src/app/CLAUDE.md` + `src/app/api/CLAUDE.md` (route count and list)
 - Query file changed → update `src/lib/CLAUDE.md`, `src/lib/queries/CLAUDE.md`
 - Component changed → update `src/components/CLAUDE.md`
+- Page added/removed → update `src/app/CLAUDE.md` page list + the root `CLAUDE.md` stats table
+- Datasource / external integration → update `src/app/datasources/CLAUDE.md` + `src/lib/CLAUDE.md`
 - ADR numbering: highest in `docs/decisions/ADR-*.md` + 1
