@@ -2,7 +2,7 @@
 // Puppeteer를 사용한 서버사이드 PDF 생성 (사이드바 없는 순수 보고서)
 //
 // Runtime requirements (Amazon Linux 2023):
-//   sudo dnf install -y google-noto-sans-cjk-kr-fonts google-noto-emoji-fonts
+//   sudo dnf install -y google-noto-sans-cjk-kr-fonts google-noto-emoji-color-fonts
 //   sudo dnf install -y mesa-libgbm alsa-lib atk at-spi2-atk \
 //                       libXfixes libXrandr libXcomposite libXdamage \
 //                       cups-libs pango cairo
@@ -89,7 +89,9 @@ function buildFullHtml(input: ReportInput): string {
        text renders even when Chromium also has 'sans-serif' aliases.
        Noto Emoji handles emoji glyphs. */
     font-family: 'Noto Sans CJK KR', 'Noto Sans KR', -apple-system, BlinkMacSystemFont,
-                 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Emoji', sans-serif;
+                 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+                 'Noto Color Emoji', 'Noto Emoji', 'Apple Color Emoji',
+                 'Segoe UI Emoji', sans-serif;
     color: #1f2937; background: white; margin: 0; padding: 0;
     line-height: 1.6; font-size: 12px;
     word-break: keep-all;          /* avoid mid-syllable Korean breaks */
