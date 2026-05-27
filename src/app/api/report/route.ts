@@ -551,6 +551,12 @@ export async function POST(request: NextRequest) {
       lang: schedLang || current.lang,
     };
     writeSchedule(updated);
+    // ADR-030 Phase 1 dual-write — fire-and-forget shadow upsert into Aurora
+    // report_schedules. Failures land in /api/parity drift; the API response
+    // is not blocked. readSchedule() below still reads from JSON.
+    void import('@/lib/db/schedule-writer')
+      .then((m) => m.fireAndForgetWriteSchedule(readSchedule()))
+      .catch(() => { /* dynamic import failure is non-fatal */ });
     return NextResponse.json({ schedule: readSchedule() });
   }
 

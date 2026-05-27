@@ -17,6 +17,8 @@ import { isAuroraEnabled, checkDbHealth } from '@/lib/db';
 import { getDriftCounters } from '@/lib/db/drift';
 import { countAuroraCalls } from '@/lib/db/agentcore-stats-writer';
 import { getStats } from '@/lib/agentcore-stats';
+import { readSchedule } from '@/lib/report-scheduler';
+import { readScheduleFromAurora, type AuroraScheduleRow } from '@/lib/db/schedule-writer';
 
 function isAdminUser(req: NextRequest): boolean {
   const user = getUserFromRequest(req);
@@ -32,6 +34,19 @@ interface AgentCoreStatsParity {
   auroraCount: number;
   drift: number;
   note: string;
+}
+
+interface ReportSchedulesParity {
+  source: 'report_schedules';
+  inSync: boolean;
+  mismatchedFields: string[];
+  jsonRow: {
+    frequency: string;
+    enabled: boolean;
+    lastRunAt: string | null;
+    nextRunAt: string | null;
+  };
+  auroraRow: AuroraScheduleRow | null;
 }
 
 async function agentcoreStatsParity(hours: number): Promise<AgentCoreStatsParity> {
@@ -56,6 +71,42 @@ async function agentcoreStatsParity(hours: number): Promise<AgentCoreStatsParity
       'JSON side caps at 50 most-recent calls; comparison is exact only ' +
       'when call volume in the window < 50. Use the drift counter for ' +
       'cumulative write-failure visibility.',
+  };
+}
+
+async function reportSchedulesParity(): Promise<ReportSchedulesParity> {
+  const json = readSchedule();
+  const aurora = await readScheduleFromAurora();
+
+  const jsonRow = {
+    frequency: json.frequency,
+    enabled: json.enabled,
+    lastRunAt: json.lastRunAt,
+    nextRunAt: json.nextRunAt,
+  };
+
+  if (!aurora) {
+    return {
+      source: 'report_schedules',
+      inSync: false,
+      mismatchedFields: ['_no_aurora_row'],
+      jsonRow,
+      auroraRow: null,
+    };
+  }
+
+  const mismatchedFields: string[] = [];
+  if (json.frequency !== aurora.scheduleType) mismatchedFields.push('frequency');
+  if (json.enabled !== aurora.enabled) mismatchedFields.push('enabled');
+  if ((json.lastRunAt ?? null) !== (aurora.lastRunAt ?? null)) mismatchedFields.push('lastRunAt');
+  if ((json.nextRunAt ?? null) !== (aurora.nextRunAt ?? null)) mismatchedFields.push('nextRunAt');
+
+  return {
+    source: 'report_schedules',
+    inSync: mismatchedFields.length === 0,
+    mismatchedFields,
+    jsonRow,
+    auroraRow: aurora,
   };
 }
 
@@ -94,15 +145,22 @@ export async function GET(req: NextRequest) {
       parity: [await agentcoreStatsParity(hours)],
     });
   }
+  if (source === 'report_schedules') {
+    return NextResponse.json({
+      auroraEnabled: true,
+      health,
+      drift: driftCounters.filter((c) => c.source === source),
+      parity: [await reportSchedulesParity()],
+    });
+  }
 
   return NextResponse.json({
     auroraEnabled: true,
     health,
     drift: driftCounters,
-    parity: [await agentcoreStatsParity(hours)],
+    parity: [await agentcoreStatsParity(hours), await reportSchedulesParity()],
     note:
-      'Phase 1 dual-write — agentcore_stats is the only source wired so far. ' +
-      'Other sources (inventory, cost, memory, alerts, event-scaling, schedules) ' +
-      'land in subsequent commits.',
+      'Phase 1 dual-write — agentcore_stats + report_schedules wired so far. ' +
+      'Other sources (inventory, cost, memory, alerts, event-scaling) land in subsequent commits.',
   });
 }

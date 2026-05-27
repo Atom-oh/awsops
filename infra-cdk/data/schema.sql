@@ -151,20 +151,38 @@ CREATE INDEX IF NOT EXISTS idx_scaling_event_time
 -- report_schedules — replaces data/report-schedule.json
 -- Singleton per (user, schedule_type).
 -- -------------------------------------------------------------------
+-- next_run_at is nullable to match writeSchedule() in src/lib/report-scheduler.ts:
+-- when a schedule is disabled the next-run time is intentionally null.
+-- next_run_at은 nullable — 스케줄이 disabled일 때 nextRunAt=null이 되는 코드 동작과 일치.
 CREATE TABLE IF NOT EXISTS report_schedules (
   id            BIGSERIAL    PRIMARY KEY,
   user_sub      TEXT         NOT NULL,
   schedule_type TEXT         NOT NULL CHECK (schedule_type IN ('weekly','biweekly','monthly')),
   enabled       BOOLEAN      NOT NULL DEFAULT true,
   last_run_at   TIMESTAMPTZ,
-  next_run_at   TIMESTAMPTZ  NOT NULL,
+  next_run_at   TIMESTAMPTZ,
   config        JSONB        NOT NULL DEFAULT '{}'::jsonb,
   created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_schedule UNIQUE (user_sub, schedule_type)
 );
+-- Defensive idempotent ALTER for any environment that already applied v1 schema
+-- (PR #16 deployed report_schedules with next_run_at NOT NULL). Skips silently
+-- when the column is already nullable.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'report_schedules'
+      AND column_name = 'next_run_at'
+      AND is_nullable = 'NO'
+  ) THEN
+    ALTER TABLE report_schedules ALTER COLUMN next_run_at DROP NOT NULL;
+  END IF;
+END;
+$$;
 CREATE INDEX IF NOT EXISTS idx_schedule_next_run
-  ON report_schedules (next_run_at) WHERE enabled = true;
+  ON report_schedules (next_run_at) WHERE enabled = true AND next_run_at IS NOT NULL;
 
 -- -------------------------------------------------------------------
 -- updated_at auto-touch trigger for tables that mutate in-place.
@@ -195,6 +213,10 @@ $$;
 
 INSERT INTO schema_migrations (version, description)
 VALUES (1, 'ADR-030 Phase 1: initial 7-table app state schema')
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO schema_migrations (version, description)
+VALUES (2, 'ADR-030 Phase 1 slice 2: report_schedules.next_run_at nullable')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;

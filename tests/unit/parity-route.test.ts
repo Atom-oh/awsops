@@ -15,6 +15,8 @@ const checkDbHealthMock = vi.fn();
 const getDriftCountersMock = vi.fn();
 const countAuroraCallsMock = vi.fn();
 const getStatsMock = vi.fn();
+const readScheduleMock = vi.fn();
+const readScheduleFromAuroraMock = vi.fn();
 
 vi.mock('@/lib/auth-utils', () => ({
   getUserFromRequest: (...args: unknown[]) => getUserFromRequestMock(...args),
@@ -34,6 +36,12 @@ vi.mock('@/lib/db/agentcore-stats-writer', () => ({
 }));
 vi.mock('@/lib/agentcore-stats', () => ({
   getStats: () => getStatsMock(),
+}));
+vi.mock('@/lib/report-scheduler', () => ({
+  readSchedule: () => readScheduleMock(),
+}));
+vi.mock('@/lib/db/schedule-writer', () => ({
+  readScheduleFromAurora: () => readScheduleFromAuroraMock(),
 }));
 
 import { GET } from '@/app/api/parity/route';
@@ -63,6 +71,29 @@ describe('parity route — GET /api/parity', () => {
     getDriftCountersMock.mockReset();
     countAuroraCallsMock.mockReset();
     getStatsMock.mockReset();
+    readScheduleMock.mockReset();
+    readScheduleFromAuroraMock.mockReset();
+
+    readScheduleMock.mockReturnValue({
+      enabled: true,
+      frequency: 'weekly',
+      dayOfWeek: 1,
+      dayOfMonth: 1,
+      hour: 6,
+      lang: 'ko',
+      lastRunAt: null,
+      nextRunAt: '2026-06-01T21:00:00.000Z',
+      createdAt: '2026-05-27T00:00:00.000Z',
+      updatedAt: '2026-05-27T00:00:00.000Z',
+    });
+    readScheduleFromAuroraMock.mockResolvedValue({
+      scheduleType: 'weekly',
+      enabled: true,
+      lastRunAt: null,
+      nextRunAt: '2026-06-01T21:00:00.000Z',
+      config: { day_of_week: 1, day_of_month: 1, hour: 6, lang: 'ko', account_id: null },
+      updatedAt: '2026-05-27T00:00:00.000Z',
+    });
 
     // Sensible defaults — individual tests override.
     getUserFromRequestMock.mockReturnValue(adminUser());
@@ -151,6 +182,56 @@ describe('parity route — GET /api/parity', () => {
     const body = await res.json();
     expect(body.drift).toHaveLength(1);
     expect(body.drift[0].source).toBe('agentcore_stats');
+  });
+
+  describe('report_schedules parity', () => {
+    it('includes a report_schedules entry in the default parity array', async () => {
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const sources = body.parity.map((p: { source: string }) => p.source);
+      expect(sources).toContain('report_schedules');
+    });
+
+    it('reports inSync:true when JSON and Aurora rows match on frequency + enabled + nextRunAt', async () => {
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const sched = body.parity.find((p: { source: string }) => p.source === 'report_schedules');
+      expect(sched.inSync).toBe(true);
+    });
+
+    it('reports inSync:false when frequency differs between JSON and Aurora', async () => {
+      readScheduleMock.mockReturnValue({
+        ...readScheduleMock.getMockImplementation()!.call(null),
+        frequency: 'monthly',
+      });
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const sched = body.parity.find((p: { source: string }) => p.source === 'report_schedules');
+      expect(sched.inSync).toBe(false);
+      expect(sched.mismatchedFields).toContain('frequency');
+    });
+
+    it('reports auroraRow:null when no Aurora row exists yet', async () => {
+      readScheduleFromAuroraMock.mockResolvedValue(null);
+      const res = await GET(makeReq());
+      const body = await res.json();
+      const sched = body.parity.find((p: { source: string }) => p.source === 'report_schedules');
+      expect(sched.auroraRow).toBeNull();
+      expect(sched.inSync).toBe(false);
+    });
+
+    it('?source=report_schedules filters parity and drift to that source only', async () => {
+      getDriftCountersMock.mockReturnValue([
+        { source: 'agentcore_stats', writes: 5, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
+        { source: 'report_schedules', writes: 2, failures: 0, failureRate: 0, lastFailureAt: null, lastFailureMessage: null },
+      ]);
+      const res = await GET(makeReq('http://x/api/parity?source=report_schedules'));
+      const body = await res.json();
+      expect(body.parity).toHaveLength(1);
+      expect(body.parity[0].source).toBe('report_schedules');
+      expect(body.drift).toHaveLength(1);
+      expect(body.drift[0].source).toBe('report_schedules');
+    });
   });
 
   it('computes |auroraCount - jsonRecentCalls| as the parity drift number', async () => {

@@ -126,6 +126,11 @@ export function startScheduler(onTrigger: (schedule: ReportSchedule) => Promise<
         schedule.lastRunAt = new Date().toISOString();
         schedule.nextRunAt = computeNextRun(schedule);
         writeSchedule(schedule);
+        // ADR-030 Phase 1 dual-write — shadow the tick update into Aurora.
+        // Failures land in /api/parity drift; the tick continues regardless.
+        void import('@/lib/db/schedule-writer')
+          .then((m) => m.fireAndForgetWriteSchedule(schedule))
+          .catch(() => { /* dynamic import failure is non-fatal */ });
         if (triggerCallback) {
           await triggerCallback(schedule);
         }
