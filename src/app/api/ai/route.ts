@@ -982,7 +982,15 @@ function recordAndSave(p: {
   success: boolean; via: string; question: string; summary: string; userId: string;
   inputTokens?: number; outputTokens?: number; model?: string;
 }): void {
-  recordCall({ timestamp: new Date().toISOString(), route: p.route, gateway: p.gateway, responseTimeMs: p.responseTimeMs, usedTools: p.usedTools, success: p.success, via: p.via, inputTokens: p.inputTokens, outputTokens: p.outputTokens, model: p.model });
+  const callRecord = { timestamp: new Date().toISOString(), route: p.route, gateway: p.gateway, responseTimeMs: p.responseTimeMs, usedTools: p.usedTools, success: p.success, via: p.via, inputTokens: p.inputTokens, outputTokens: p.outputTokens, model: p.model };
+  recordCall(callRecord);
+  // ADR-030 Phase 1 dual-write — fire-and-forget Aurora INSERT for the
+  // same record. Failures land in the drift counter (queryable via
+  // /api/parity); they never block the request. Dynamic import keeps
+  // pg out of the cold-path bundle when Aurora is not enabled.
+  void import('@/lib/db/agentcore-stats-writer')
+    .then((m) => m.fireAndForgetCallToAurora(callRecord))
+    .catch(() => { /* dynamic import failure is non-fatal */ });
   saveConversation({ id: `${Date.now()}`, userId: p.userId, timestamp: new Date().toISOString(), route: p.route, gateway: p.gateway, question: p.question.slice(0, 100), summary: p.summary.slice(0, 200), usedTools: p.usedTools, responseTimeMs: p.responseTimeMs, via: p.via }).catch(() => {});
 }
 
