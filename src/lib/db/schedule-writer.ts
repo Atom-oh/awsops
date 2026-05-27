@@ -17,6 +17,18 @@ import type { ReportSchedule, ScheduleFrequency } from '@/lib/report-scheduler';
 const SOURCE = 'report_schedules';
 const GLOBAL_SUB = '_global';
 
+// Phase 1 uses a single global row per user_sub. When the user changes the
+// frequency (e.g. weekly → monthly), the old (_global, weekly) row would
+// otherwise persist alongside the new (_global, monthly) row. Phase 1 parity
+// (LIMIT 1 by updated_at) would silently pass, but Phase 2's read cutover
+// would inherit broken multi-row state. Issue DELETE-of-stale BEFORE the
+// UPSERT, both on the same pool connection.
+// AI review on PR #19에서 발견된 이슈 — frequency 변경 시 stale row 누적 방지.
+const DELETE_STALE_SQL = `
+  DELETE FROM report_schedules
+  WHERE user_sub = $1 AND schedule_type <> $2
+`;
+
 const UPSERT_SQL = `
   INSERT INTO report_schedules (
     user_sub, schedule_type, enabled, last_run_at, next_run_at, config
@@ -54,6 +66,7 @@ export async function shadowWriteSchedule(schedule: ReportSchedule): Promise<voi
 
   try {
     const db = await getDb();
+    await db.query(DELETE_STALE_SQL, [GLOBAL_SUB, schedule.frequency]);
     await db.query(UPSERT_SQL, [
       GLOBAL_SUB,
       schedule.frequency,

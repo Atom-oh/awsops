@@ -62,6 +62,21 @@ function configFreshInstall() {
   return { adminEmails: [] };
 }
 
+function makeBaseJsonSchedule() {
+  return {
+    enabled: true,
+    frequency: 'weekly',
+    dayOfWeek: 1,
+    dayOfMonth: 1,
+    hour: 6,
+    lang: 'ko',
+    lastRunAt: null,
+    nextRunAt: '2026-06-01T21:00:00.000Z',
+    createdAt: '2026-05-27T00:00:00.000Z',
+    updatedAt: '2026-05-27T00:00:00.000Z',
+  };
+}
+
 describe('parity route — GET /api/parity', () => {
   beforeEach(() => {
     getUserFromRequestMock.mockReset();
@@ -74,18 +89,7 @@ describe('parity route — GET /api/parity', () => {
     readScheduleMock.mockReset();
     readScheduleFromAuroraMock.mockReset();
 
-    readScheduleMock.mockReturnValue({
-      enabled: true,
-      frequency: 'weekly',
-      dayOfWeek: 1,
-      dayOfMonth: 1,
-      hour: 6,
-      lang: 'ko',
-      lastRunAt: null,
-      nextRunAt: '2026-06-01T21:00:00.000Z',
-      createdAt: '2026-05-27T00:00:00.000Z',
-      updatedAt: '2026-05-27T00:00:00.000Z',
-    });
+    readScheduleMock.mockReturnValue(makeBaseJsonSchedule());
     readScheduleFromAuroraMock.mockResolvedValue({
       scheduleType: 'weekly',
       enabled: true,
@@ -200,10 +204,10 @@ describe('parity route — GET /api/parity', () => {
     });
 
     it('reports inSync:false when frequency differs between JSON and Aurora', async () => {
-      readScheduleMock.mockReturnValue({
-        ...readScheduleMock.getMockImplementation()!.call(null),
-        frequency: 'monthly',
-      });
+      // Use a fresh base object (not the prior mock's implementation) — relying
+      // on vitest's internal mockImplementation storage was fragile and broke
+      // when the default was set via mockReturnValue.
+      readScheduleMock.mockReturnValue({ ...makeBaseJsonSchedule(), frequency: 'monthly' });
       const res = await GET(makeReq());
       const body = await res.json();
       const sched = body.parity.find((p: { source: string }) => p.source === 'report_schedules');

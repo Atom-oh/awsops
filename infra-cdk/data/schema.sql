@@ -181,7 +181,13 @@ BEGIN
   END IF;
 END;
 $$;
-CREATE INDEX IF NOT EXISTS idx_schedule_next_run
+-- `CREATE INDEX IF NOT EXISTS` only checks the index name, not its
+-- definition. An environment that already applied v1 still has the older
+-- partial index without `next_run_at IS NOT NULL`. Drop and re-create so
+-- v2's stricter predicate takes effect.
+-- v1을 적용한 환경에는 옛 partial index가 남아 있으므로 명시적 DROP 후 재생성.
+DROP INDEX IF EXISTS idx_schedule_next_run;
+CREATE INDEX idx_schedule_next_run
   ON report_schedules (next_run_at) WHERE enabled = true AND next_run_at IS NOT NULL;
 
 -- -------------------------------------------------------------------

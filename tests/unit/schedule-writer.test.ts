@@ -52,18 +52,29 @@ describe('schedule-writer', () => {
       expect(getDriftCounters()).toEqual([]);
     });
 
+    // Helper: locate the UPSERT (INSERT INTO report_schedules) call. After
+    // the PR #19 fix the writer issues DELETE-stale + UPSERT, so positional
+    // indexing into mock.calls is no longer safe.
+    function findUpsertCall() {
+      const call = mockQuery.mock.calls.find(([s]) =>
+        /INSERT INTO report_schedules/i.test(s),
+      );
+      expect(call).toBeDefined();
+      return call!;
+    }
+
     it('issues an INSERT … ON CONFLICT DO UPDATE (upsert)', async () => {
       await shadowWriteSchedule(makeSchedule());
-      expect(mockQuery).toHaveBeenCalledTimes(1);
-      const [sql] = mockQuery.mock.calls[0];
-      expect(sql).toMatch(/INSERT INTO report_schedules/);
+      // DELETE-stale + UPSERT = exactly 2 calls.
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      const [sql] = findUpsertCall();
       expect(sql).toMatch(/ON CONFLICT/);
       expect(sql).toMatch(/DO UPDATE/);
     });
 
     it('uses "_global" as the user_sub sentinel (slice 2 — no per-user schedules yet)', async () => {
       await shadowWriteSchedule(makeSchedule());
-      const [, params] = mockQuery.mock.calls[0];
+      const [, params] = findUpsertCall();
       // Params: user_sub($1), schedule_type($2), enabled($3),
       //         last_run_at($4), next_run_at($5), config($6)
       expect(params[0]).toBe('_global');
@@ -71,19 +82,19 @@ describe('schedule-writer', () => {
 
     it('maps frequency to schedule_type', async () => {
       await shadowWriteSchedule(makeSchedule({ frequency: 'biweekly' }));
-      const [, params] = mockQuery.mock.calls[0];
+      const [, params] = findUpsertCall();
       expect(params[1]).toBe('biweekly');
     });
 
     it('passes enabled through unchanged', async () => {
       await shadowWriteSchedule(makeSchedule({ enabled: false }));
-      const [, params] = mockQuery.mock.calls[0];
+      const [, params] = findUpsertCall();
       expect(params[2]).toBe(false);
     });
 
     it('writes null for last_run_at and next_run_at when undefined', async () => {
       await shadowWriteSchedule(makeSchedule({ lastRunAt: null, nextRunAt: null }));
-      const [, params] = mockQuery.mock.calls[0];
+      const [, params] = findUpsertCall();
       expect(params[3]).toBeNull();
       expect(params[4]).toBeNull();
     });
@@ -93,7 +104,7 @@ describe('schedule-writer', () => {
         lastRunAt: '2026-05-20T03:00:00.000Z',
         nextRunAt: '2026-06-01T21:00:00.000Z',
       }));
-      const [, params] = mockQuery.mock.calls[0];
+      const [, params] = findUpsertCall();
       expect(params[3]).toBeInstanceOf(Date);
       expect((params[3] as Date).toISOString()).toBe('2026-05-20T03:00:00.000Z');
       expect(params[4]).toBeInstanceOf(Date);
@@ -108,7 +119,7 @@ describe('schedule-writer', () => {
         lang: 'en',
         accountId: '111111111111',
       }));
-      const [, params] = mockQuery.mock.calls[0];
+      const [, params] = findUpsertCall();
       const config = JSON.parse(params[5]);
       expect(config).toEqual({
         day_of_week: 5,
@@ -117,6 +128,32 @@ describe('schedule-writer', () => {
         lang: 'en',
         account_id: '111111111111',
       });
+    });
+
+    it('deletes stale rows for the same user_sub with a different schedule_type', async () => {
+      // AI review on PR #19 surfaced this: when the user changes frequency
+      // (weekly → monthly), the prior (_global, weekly) row would persist.
+      // Phase 1 parity (LIMIT 1 by updated_at) would silently pass, but
+      // Phase 2 read cutover would inherit broken multi-row state.
+      await shadowWriteSchedule(makeSchedule({ frequency: 'monthly' }));
+
+      const deleteCall = mockQuery.mock.calls.find(([sql]) =>
+        /DELETE FROM report_schedules/i.test(sql),
+      );
+      expect(deleteCall).toBeDefined();
+
+      const [sql, params] = deleteCall!;
+      expect(sql).toMatch(/WHERE user_sub\s*=\s*\$1/i);
+      expect(sql).toMatch(/schedule_type\s*<>\s*\$2/i);
+      expect(params[0]).toBe('_global');
+      expect(params[1]).toBe('monthly');
+    });
+
+    it('still increments drift writes exactly once on success despite the DELETE', async () => {
+      // The DELETE+UPSERT counts as a single logical shadow write.
+      await shadowWriteSchedule(makeSchedule({ frequency: 'biweekly' }));
+      const snap = getDriftCounters();
+      expect(snap[0]).toMatchObject({ source: 'report_schedules', writes: 1, failures: 0 });
     });
 
     it('increments drift writes counter on successful upsert', async () => {
