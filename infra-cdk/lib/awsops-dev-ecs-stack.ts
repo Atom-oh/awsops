@@ -99,14 +99,24 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       ],
     });
 
+    // PR #26 review fix (CRITICAL): the original draft attached
+    // `SecretsManagerReadWrite` which includes `secretsmanager:CreateSecret`,
+    // `PutSecretValue`, and `DeleteSecret` — far beyond what a read-only
+    // operations dashboard should hold. Replaced with the read-only managed
+    // policy.
+    //
+    // PR #26 review note (MAJOR, deferred): `ReadOnlyAccess` is still broad
+    // (account-wide S3 object reads, IAM metadata, etc.). A follow-up will
+    // scope this to just the AWS services Steampipe actually queries so dev
+    // can't read prod data. Tracked alongside the prod EC2 IAM tightening.
     const taskRole = new iam.Role(this, 'TaskRole', {
       roleName: 'awsops-dev-task',
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-      // ReadOnly is sufficient for the dashboard's Steampipe queries + Bedrock
-      // invocation; tighten in a follow-up once the dev environment proves out.
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('ReadOnlyAccess'),
-        iam.ManagedPolicy.fromAwsManagedPolicyName('SecretsManagerReadWrite'),
+        // Read-only — listing + retrieving Secrets is sufficient for the
+        // dashboard. WRITE on Secrets is intentionally excluded.
+        iam.ManagedPolicy.fromAwsManagedPolicyName('SecretsManagerReadOnly'),
       ],
     });
     taskRole.addToPolicy(new iam.PolicyStatement({
@@ -170,20 +180,17 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       },
     });
 
-    // Steampipe sidecar — Next.js reaches it at 127.0.0.1:9193 (same task
-    // network namespace under awsvpc mode). Image is a placeholder until
-    // we publish an awsops-steampipe image; the deploy script can pin a
-    // specific tag later.
-    taskDefinition.addContainer('steampipe', {
-      containerName: 'steampipe',
-      image: ecs.ContainerImage.fromEcrRepository(this.repository, 'steampipe-latest'),
-      essential: false,
-      portMappings: [{ containerPort: 9193, protocol: ecs.Protocol.TCP }],
-      logging: ecs.LogDriver.awsLogs({
-        streamPrefix: 'steampipe',
-        logGroup,
-      }),
-    });
+    // PR #26 review fix (MAJOR): the initial draft added a Steampipe sidecar
+    // referencing `awsops-dev:steampipe-latest`, but 14-deploy-dev-ecs.sh
+    // only builds the Next.js image. On first deploy ECS would fail to pull
+    // the sidecar and every Steampipe query in the dashboard would break
+    // on `127.0.0.1:9193`. The sidecar is intentionally OMITTED for slice 1.
+    //
+    // Follow-up (Phase 1.5): publish `awsops-steampipe` ARM64 image (Steampipe
+    // CLI + plugins baked in), then add the sidecar with `essential: true`
+    // so the task dies cleanly if Steampipe crashes. Until then, the dev
+    // dashboard's Steampipe-backed routes will surface connection errors —
+    // documented in the PR body.
 
     // -------------------------------------------------------
     // ALB (separate from prod EC2 ALB)
@@ -226,7 +233,11 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       targetType: elbv2.TargetType.IP,                // required for Fargate
       healthCheck: {
         path: '/awsops/api/agentcore',
-        healthyHttpCodes: '200-499',                  // route can return 4xx without auth — that's still alive
+        // PR #26 review fix (MAJOR): tightened from `200-499` to `200-399`.
+        // 4xx must NOT count as healthy or the ECS deployment circuit breaker
+        // can't catch route regressions. The agentcore status route returns
+        // 200 unauthenticated, so this stays passing.
+        healthyHttpCodes: '200-399',
         interval: cdk.Duration.seconds(30),
         timeout: cdk.Duration.seconds(10),
       },
@@ -286,6 +297,18 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       httpPort: 80,
     });
 
+    // ⚠ PR #26 review (MAJOR, deferred): Lambda@Edge auth function is NOT
+    // attached here. CognitoStack creates `awsops-auth-edge` in us-east-1
+    // (CDK scaffold only) and `scripts/08-setup-cloudfront-auth.sh` attaches
+    // the *published version* of the function to the prod CloudFront's
+    // viewer-request after `setup-cognito.sh` overwrites the code. Until
+    // an equivalent step runs for THIS distribution, the dev environment
+    // is publicly reachable. Mitigations before going live:
+    //   1. Run `08-setup-cloudfront-auth.sh` against the dev distribution
+    //      ID (see `EcsDistributionId` output below), OR
+    //   2. Temporarily attach an AWS WAF web ACL with an IP allowlist to
+    //      this distribution.
+    // Tracked as a Phase 1.5 follow-up.
     this.distribution = new cloudfront.Distribution(this, 'DevCloudFront', {
       comment: `AWSops dev (ECS Fargate) — ${customDomain}`,
       domainNames: [customDomain],
@@ -305,14 +328,19 @@ export class AwsopsDevEcsStack extends cdk.Stack {
           cachePolicy: noCachePolicy,
           originRequestPolicy: allViewerOriginPolicy,
         },
-        '/awsops/_next/*': {
+        // PR #26 review fix (MINOR): narrowed `/awsops/_next/*` → `/awsops/_next/static/*`.
+        // Next.js standalone only emits long-lived hashed assets under
+        // `_next/static`. Cache-optimized policy on the broader path could
+        // cache `_next/data/*` JSON which must not be cached.
+        '/awsops/_next/static/*': {
           origin: albOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         },
       },
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_ALL,
+      // PR #26 review fix (MINOR): dev does not need the full edge footprint.
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
     });
 
     new route53.ARecord(this, 'DevARecord', {
@@ -343,6 +371,10 @@ export class AwsopsDevEcsStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DevAlbDns', {
       value: this.alb.loadBalancerDnsName,
       description: 'Dev ALB DNS (for direct testing)',
+    });
+    new cdk.CfnOutput(this, 'EcsDistributionId', {
+      value: this.distribution.distributionId,
+      description: 'Dev CloudFront distribution ID — pass to 08-setup-cloudfront-auth.sh to attach Lambda@Edge',
     });
   }
 }

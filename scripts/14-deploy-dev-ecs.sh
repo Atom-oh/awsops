@@ -94,6 +94,26 @@ cmd_full() {
   cmd_roll
 }
 
+# Reminder banner — dev CloudFront ships without Lambda@Edge auth attached
+# (see awsops-dev-ecs-stack.ts comment + PR #26 review). Operator MUST run
+# `08-setup-cloudfront-auth.sh` against the dev distribution before sharing
+# the URL externally.
+print_auth_warning() {
+  local dist_id
+  dist_id=$(stack_output EcsDistributionId)
+  cat >&2 <<EOF
+
+================================================================================
+  ⚠  Dev CloudFront ${dist_id} has NO Lambda@Edge auth attached.
+     The dev URL is PUBLIC until you run:
+
+         ./scripts/08-setup-cloudfront-auth.sh ${dist_id}
+
+     (or attach a WAF IP allowlist to the distribution).
+================================================================================
+EOF
+}
+
 cmd_status() {
   load_stack_outputs
   echo "Stack:       ${STACK}"
@@ -112,9 +132,9 @@ cmd_status() {
 }
 
 case "${1:-full}" in
-  build)  cmd_build  ;;
-  roll)   cmd_roll   ;;
-  full)   cmd_full   ;;
-  status) cmd_status ;;
+  build)  cmd_build ;;
+  roll)   cmd_roll;  load_stack_outputs; print_auth_warning ;;
+  full)   cmd_full;  load_stack_outputs; print_auth_warning ;;
+  status) cmd_status; print_auth_warning ;;
   *) err "Usage: $0 {build|roll|full|status}" ;;
 esac
