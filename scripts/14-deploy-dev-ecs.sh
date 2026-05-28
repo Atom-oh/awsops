@@ -63,15 +63,64 @@ cmd_build() {
   aws ecr get-login-password --region "${REGION}" \
     | docker login --username AWS --password-stdin "${ECR_URI%/*}"
 
-  log "Building awsops-dev image (arm64) :${tag} and :latest..."
+  # ---- Next.js image: tags = SHA + latest ---------------------------------
+  log "Building awsops-dev Next.js image (arm64) :${tag} and :latest..."
   docker buildx build \
     --platform linux/arm64 \
     --tag "${ECR_URI}:${tag}" \
     --tag "${ECR_URI}:latest" \
     --push \
     "${REPO_ROOT}"
+  log "Pushed Next.js: ${ECR_URI}:${tag} and :latest"
 
-  log "Pushed ${ECR_URI}:${tag} and :latest"
+  # ---- Steampipe sidecar image: tag = steampipe-latest --------------------
+  log "Building awsops-dev Steampipe sidecar image (arm64) :steampipe-${tag} and :steampipe-latest..."
+  docker buildx build \
+    --platform linux/arm64 \
+    --tag "${ECR_URI}:steampipe-${tag}" \
+    --tag "${ECR_URI}:steampipe-latest" \
+    --push \
+    "${REPO_ROOT}/infra-cdk/docker/steampipe"
+  log "Pushed Steampipe: ${ECR_URI}:steampipe-${tag} and :steampipe-latest"
+}
+
+cmd_build_next() {
+  load_stack_outputs
+  local sha
+  sha=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo dev)
+  local tag="${IMAGE_TAG:-${sha}}"
+
+  log "Logging in to ECR ${ECR_URI%/*}..."
+  aws ecr get-login-password --region "${REGION}" \
+    | docker login --username AWS --password-stdin "${ECR_URI%/*}"
+
+  log "Building awsops-dev Next.js image only (arm64) :${tag} and :latest..."
+  docker buildx build \
+    --platform linux/arm64 \
+    --tag "${ECR_URI}:${tag}" \
+    --tag "${ECR_URI}:latest" \
+    --push \
+    "${REPO_ROOT}"
+  log "Pushed Next.js: ${ECR_URI}:${tag} and :latest"
+}
+
+cmd_build_steampipe() {
+  load_stack_outputs
+  local sha
+  sha=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo dev)
+
+  log "Logging in to ECR ${ECR_URI%/*}..."
+  aws ecr get-login-password --region "${REGION}" \
+    | docker login --username AWS --password-stdin "${ECR_URI%/*}"
+
+  log "Building Steampipe sidecar only (arm64) :steampipe-latest..."
+  docker buildx build \
+    --platform linux/arm64 \
+    --tag "${ECR_URI}:steampipe-${sha}" \
+    --tag "${ECR_URI}:steampipe-latest" \
+    --push \
+    "${REPO_ROOT}/infra-cdk/docker/steampipe"
+  log "Pushed Steampipe: ${ECR_URI}:steampipe-${sha} and :steampipe-latest"
 }
 
 cmd_roll() {
@@ -132,9 +181,11 @@ cmd_status() {
 }
 
 case "${1:-full}" in
-  build)  cmd_build ;;
-  roll)   cmd_roll;  load_stack_outputs; print_auth_warning ;;
-  full)   cmd_full;  load_stack_outputs; print_auth_warning ;;
-  status) cmd_status; print_auth_warning ;;
-  *) err "Usage: $0 {build|roll|full|status}" ;;
+  build)            cmd_build ;;
+  build-next)       cmd_build_next ;;
+  build-steampipe)  cmd_build_steampipe ;;
+  roll)             cmd_roll;  load_stack_outputs; print_auth_warning ;;
+  full)             cmd_full;  load_stack_outputs; print_auth_warning ;;
+  status)           cmd_status; print_auth_warning ;;
+  *) err "Usage: $0 {build|build-next|build-steampipe|roll|full|status}" ;;
 esac
