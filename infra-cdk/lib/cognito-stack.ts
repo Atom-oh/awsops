@@ -16,6 +16,14 @@ export interface CognitoStackProps extends cdk.StackProps {
    * When set, Cognito callback URLs will use this domain instead of the CloudFront domain.
    */
   customDomain?: string;
+
+  /**
+   * Additional callback domains (e.g., 'awsops-dev.atomai.click' for the ADR-030
+   * ECS Fargate dev environment). Each entry gets its own /awsops/_callback and
+   * /awsops/ URL registered on the App Client so the same User Pool serves
+   * prod + dev. Strictly additive — does not affect the primary callback.
+   */
+  extraCallbackDomains?: string[];
 }
 
 export class CognitoStack extends cdk.Stack {
@@ -31,6 +39,14 @@ export class CognitoStack extends cdk.Stack {
     // -------------------------------------------------------
     // Callback domain: use custom domain if provided, otherwise CloudFront distribution domain
     const callbackDomain = props.customDomain || props.distribution.distributionDomainName;
+
+    // Build full callback + logout URL lists, including any extra dev/staging
+    // domains. Each entry gets both the OAuth callback path and the post-logout
+    // landing page registered. Order does not matter to Cognito — it accepts
+    // a literal match from this list.
+    const allDomains = [callbackDomain, ...(props.extraCallbackDomains ?? [])];
+    const callbackUrls = allDomains.map((d) => `https://${d}/awsops/_callback`);
+    const logoutUrls = allDomains.map((d) => `https://${d}/awsops/`);
 
     this.userPool = new cognito.UserPool(this, 'AWSopsUserPool', {
       userPoolName: 'awsops-user-pool',
@@ -66,8 +82,8 @@ export class CognitoStack extends cdk.Stack {
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-        callbackUrls: [`https://${callbackDomain}/awsops/_callback`],
-        logoutUrls: [`https://${callbackDomain}/awsops/`],
+        callbackUrls,
+        logoutUrls,
       },
       authFlows: {
         userPassword: true,
