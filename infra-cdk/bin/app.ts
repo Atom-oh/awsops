@@ -84,9 +84,12 @@ if (app.node.tryGetContext('enableDevEcs') === 'true') {
     // Construct refs to avoid cyclic dependencies (the ECS Secret integration
     // would otherwise call `secret.grantRead(executionRole)` and pin a
     // policy on the data stack's secret referencing the dev stack's role).
+    // KMS key ARN is required too — fromSecretCompleteArn alone wouldn't
+    // grant kms:Decrypt and task startup would fail with KMS AccessDenied.
     auroraHost: dataStack?.cluster.clusterEndpoint.hostname,
     auroraPort: dataStack ? cdk.Token.asString(dataStack.cluster.clusterEndpoint.port) : undefined,
     auroraSecretArn: dataStack?.credentialsSecret.secretArn,
+    auroraSecretKeyArn: dataStack?.storageKey.keyArn,
     auroraDatabaseName: 'awsops',
   });
   devEcs.addDependency(infra);

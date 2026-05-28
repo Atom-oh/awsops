@@ -11,6 +11,7 @@ import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import { Construct } from 'constructs';
 
 export interface AwsopsDevEcsStackProps extends cdk.StackProps {
@@ -59,6 +60,15 @@ export interface AwsopsDevEcsStackProps extends cdk.StackProps {
   auroraPort?: string;
   auroraDatabaseName?: string;
   auroraSecretArn?: string;
+  /**
+   * ARN of the CMK encrypting `auroraSecretArn`. Required when the Aurora
+   * stack uses a customer-managed key (which AwsopsDataStack does), because
+   * `Secret.fromSecretCompleteArn` alone would only grant
+   * `secretsmanager:GetSecretValue` — task startup would fail with KMS
+   * AccessDenied. Passing this ARN lets the dev stack grant `kms:Decrypt`
+   * to the task execution role.
+   */
+  auroraSecretKeyArn?: string;
 }
 
 /**
@@ -91,12 +101,22 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       auroraPort,
       auroraDatabaseName,
       auroraSecretArn,
+      auroraSecretKeyArn,
     } = props;
 
     // Reconstruct the secret reference locally so the grant lives entirely
-    // inside this stack — no cross-stack policy mutation.
+    // inside this stack — no cross-stack policy mutation on the data stack.
+    // We use `fromSecretAttributes` rather than `fromSecretCompleteArn` so
+    // we can pass the encrypting CMK; `grantRead` then issues both
+    // `secretsmanager:GetSecretValue` AND `kms:Decrypt`. Without the key the
+    // ECS Secret integration would fail at task start with KMS AccessDenied.
     const auroraSecret = auroraSecretArn
-      ? secretsmanager.Secret.fromSecretCompleteArn(this, 'ImportedAuroraSecret', auroraSecretArn)
+      ? secretsmanager.Secret.fromSecretAttributes(this, 'ImportedAuroraSecret', {
+          secretCompleteArn: auroraSecretArn,
+          encryptionKey: auroraSecretKeyArn
+            ? kms.Key.fromKeyArn(this, 'ImportedAuroraKey', auroraSecretKeyArn)
+            : undefined,
+        })
       : undefined;
 
     // -------------------------------------------------------
@@ -106,10 +126,25 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       repositoryName: 'awsops-dev',
       imageScanOnPush: true,
       imageTagMutability: ecr.TagMutability.MUTABLE,
-      lifecycleRules: [{
-        description: 'Keep only the 10 most recent images',
-        maxImageCount: 10,
-      }],
+      // Two streams share this repo: Next.js (no prefix, e.g. `<sha>`,
+      // `latest`) and Steampipe sidecar (`steampipe-*` prefix). A single
+      // global `maxImageCount` would prune the sidecar after enough Next
+      // rebuilds. Split per-prefix so each stream retains its own history.
+      lifecycleRules: [
+        {
+          rulePriority: 1,
+          description: 'Keep the 10 most recent Steampipe sidecar images',
+          tagStatus: ecr.TagStatus.TAGGED,
+          tagPrefixList: ['steampipe-'],
+          maxImageCount: 10,
+        },
+        {
+          rulePriority: 2,
+          description: 'Keep the 10 most recent Next.js images (catch-all for non-steampipe tags)',
+          tagStatus: ecr.TagStatus.ANY,
+          maxImageCount: 10,
+        },
+      ],
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -201,8 +236,13 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       // Steampipe takes ~10s to bind its FDW Postgres on cold start. The
       // healthcheck pings the network listener so Fargate marks the container
       // healthy only once it accepts TCP connections.
+      //
+      // `pg_isready` ships inside turbot/steampipe (Steampipe bundles
+      // Postgres). Using it instead of `nc` (not installed in the base image)
+      // avoids the "healthcheck never passes" failure mode that would
+      // otherwise block the `next` container's HEALTHY dependency forever.
       healthCheck: {
-        command: ['CMD-SHELL', 'nc -z 127.0.0.1 9193 || exit 1'],
+        command: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 9193 -q || exit 1'],
         interval: cdk.Duration.seconds(15),
         timeout: cdk.Duration.seconds(5),
         retries: 5,
