@@ -10,6 +10,8 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import { Construct } from 'constructs';
 
 export interface AwsopsDevEcsStackProps extends cdk.StackProps {
@@ -39,6 +41,34 @@ export interface AwsopsDevEcsStackProps extends cdk.StackProps {
    * Optional explicit hosted zone name (overrides inference).
    */
   hostedZoneName?: string;
+
+  /**
+   * Optional Aurora connection info to wire into the Fargate task. Pass
+   * the *primitives* (host string + secret ARN string) rather than CDK
+   * Construct references — passing the construct itself triggers an ECS
+   * `secret.grantRead(executionRole)` that creates a cyclic dependency
+   * between AwsopsDataStack (where the secret lives) and AwsopsDevEcsStack
+   * (where the execution role lives).
+   *
+   * When provided:
+   *   - AURORA_HOST/PORT/DB/SSLMODE set as plain env vars
+   *   - AURORA_USER/PASSWORD pulled at task start via ECS Secrets Manager
+   *     integration against the imported secret ARN
+   * `bin/app.ts` extracts these strings from AwsopsDataStack outputs.
+   */
+  auroraHost?: string;
+  auroraPort?: string;
+  auroraDatabaseName?: string;
+  auroraSecretArn?: string;
+  /**
+   * ARN of the CMK encrypting `auroraSecretArn`. Required when the Aurora
+   * stack uses a customer-managed key (which AwsopsDataStack does), because
+   * `Secret.fromSecretCompleteArn` alone would only grant
+   * `secretsmanager:GetSecretValue` — task startup would fail with KMS
+   * AccessDenied. Passing this ARN lets the dev stack grant `kms:Decrypt`
+   * to the task execution role.
+   */
+  auroraSecretKeyArn?: string;
 }
 
 /**
@@ -62,7 +92,32 @@ export class AwsopsDevEcsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: AwsopsDevEcsStackProps) {
     super(scope, id, props);
 
-    const { vpc, cloudFrontPrefixListId, customDomain, hostedZoneName } = props;
+    const {
+      vpc,
+      cloudFrontPrefixListId,
+      customDomain,
+      hostedZoneName,
+      auroraHost,
+      auroraPort,
+      auroraDatabaseName,
+      auroraSecretArn,
+      auroraSecretKeyArn,
+    } = props;
+
+    // Reconstruct the secret reference locally so the grant lives entirely
+    // inside this stack — no cross-stack policy mutation on the data stack.
+    // We use `fromSecretAttributes` rather than `fromSecretCompleteArn` so
+    // we can pass the encrypting CMK; `grantRead` then issues both
+    // `secretsmanager:GetSecretValue` AND `kms:Decrypt`. Without the key the
+    // ECS Secret integration would fail at task start with KMS AccessDenied.
+    const auroraSecret = auroraSecretArn
+      ? secretsmanager.Secret.fromSecretAttributes(this, 'ImportedAuroraSecret', {
+          secretCompleteArn: auroraSecretArn,
+          encryptionKey: auroraSecretKeyArn
+            ? kms.Key.fromKeyArn(this, 'ImportedAuroraKey', auroraSecretKeyArn)
+            : undefined,
+        })
+      : undefined;
 
     // -------------------------------------------------------
     // ECR repository (dev-tagged so it can't collide with prod)
@@ -71,10 +126,25 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       repositoryName: 'awsops-dev',
       imageScanOnPush: true,
       imageTagMutability: ecr.TagMutability.MUTABLE,
-      lifecycleRules: [{
-        description: 'Keep only the 10 most recent images',
-        maxImageCount: 10,
-      }],
+      // Two streams share this repo: Next.js (no prefix, e.g. `<sha>`,
+      // `latest`) and Steampipe sidecar (`steampipe-*` prefix). A single
+      // global `maxImageCount` would prune the sidecar after enough Next
+      // rebuilds. Split per-prefix so each stream retains its own history.
+      lifecycleRules: [
+        {
+          rulePriority: 1,
+          description: 'Keep the 10 most recent Steampipe sidecar images',
+          tagStatus: ecr.TagStatus.TAGGED,
+          tagPrefixList: ['steampipe-'],
+          maxImageCount: 10,
+        },
+        {
+          rulePriority: 2,
+          description: 'Keep the 10 most recent Next.js images (catch-all for non-steampipe tags)',
+          tagStatus: ecr.TagStatus.ANY,
+          maxImageCount: 10,
+        },
+      ],
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -151,7 +221,36 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       taskRole,
     });
 
-    taskDefinition.addContainer('next', {
+    // PR #28 follow-up: bake the Steampipe sidecar back in now that the deploy
+    // script (14-deploy-dev-ecs.sh) builds + pushes the awsops-steampipe ARM64
+    // image. Defined BEFORE the next container so we can wire dependsOn below.
+    const steampipeContainer = taskDefinition.addContainer('steampipe', {
+      containerName: 'steampipe',
+      image: ecs.ContainerImage.fromEcrRepository(this.repository, 'steampipe-latest'),
+      essential: true,
+      portMappings: [{ containerPort: 9193, protocol: ecs.Protocol.TCP }],
+      logging: ecs.LogDriver.awsLogs({
+        streamPrefix: 'steampipe',
+        logGroup,
+      }),
+      // Steampipe takes ~10s to bind its FDW Postgres on cold start. The
+      // healthcheck pings the network listener so Fargate marks the container
+      // healthy only once it accepts TCP connections.
+      //
+      // `pg_isready` ships inside turbot/steampipe (Steampipe bundles
+      // Postgres). Using it instead of `nc` (not installed in the base image)
+      // avoids the "healthcheck never passes" failure mode that would
+      // otherwise block the `next` container's HEALTHY dependency forever.
+      healthCheck: {
+        command: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 9193 -q || exit 1'],
+        interval: cdk.Duration.seconds(15),
+        timeout: cdk.Duration.seconds(5),
+        retries: 5,
+        startPeriod: cdk.Duration.seconds(60),
+      },
+    });
+
+    const nextContainer = taskDefinition.addContainer('next', {
       containerName: 'next',
       image: ecs.ContainerImage.fromEcrRepository(this.repository, 'latest'),
       essential: true,
@@ -162,11 +261,27 @@ export class AwsopsDevEcsStack extends cdk.Stack {
         HOSTNAME: '0.0.0.0',
         STEAMPIPE_HOST: '127.0.0.1',
         STEAMPIPE_PORT: '9193',
-        // Aurora connection — set if AwsopsDataStack is enabled. The deploy
-        // script fetches the secret and injects it as an env var on the task
-        // (or via Secrets Manager integration in a follow-up).
-        AURORA_HOST: '',
+        // Aurora env vars are populated when bin/app.ts passes through the
+        // AwsopsDataStack outputs. Setting them unconditionally to non-empty
+        // defaults would defeat `isAuroraEnabled()`'s gating in src/lib/db.ts.
+        ...(auroraHost
+          ? {
+              AURORA_HOST: auroraHost,
+              AURORA_PORT: auroraPort ?? '5432',
+              AURORA_DB: auroraDatabaseName ?? 'awsops',
+              AURORA_SSLMODE: 'verify-full',
+            }
+          : { AURORA_HOST: '' }),
       },
+      // ECS Secrets Manager integration — the agent at task-start time fetches
+      // these values, exports them as env vars to the container, and the values
+      // never appear in plaintext task definitions or describe-tasks output.
+      secrets: auroraSecret
+        ? {
+            AURORA_USER: ecs.Secret.fromSecretsManager(auroraSecret, 'username'),
+            AURORA_PASSWORD: ecs.Secret.fromSecretsManager(auroraSecret, 'password'),
+          }
+        : undefined,
       logging: ecs.LogDriver.awsLogs({
         streamPrefix: 'next',
         logGroup,
@@ -180,17 +295,13 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       },
     });
 
-    // PR #26 review fix (MAJOR): the initial draft added a Steampipe sidecar
-    // referencing `awsops-dev:steampipe-latest`, but 14-deploy-dev-ecs.sh
-    // only builds the Next.js image. On first deploy ECS would fail to pull
-    // the sidecar and every Steampipe query in the dashboard would break
-    // on `127.0.0.1:9193`. The sidecar is intentionally OMITTED for slice 1.
-    //
-    // Follow-up (Phase 1.5): publish `awsops-steampipe` ARM64 image (Steampipe
-    // CLI + plugins baked in), then add the sidecar with `essential: true`
-    // so the task dies cleanly if Steampipe crashes. Until then, the dev
-    // dashboard's Steampipe-backed routes will surface connection errors —
-    // documented in the PR body.
+    // Wait for Steampipe to report HEALTHY before starting the Next.js
+    // container — avoids the dashboard's startup queries hitting a
+    // connection-refused window during cold starts.
+    nextContainer.addContainerDependencies({
+      container: steampipeContainer,
+      condition: ecs.ContainerDependencyCondition.HEALTHY,
+    });
 
     // -------------------------------------------------------
     // ALB (separate from prod EC2 ALB)
@@ -274,6 +385,26 @@ export class AwsopsDevEcsStack extends cdk.Stack {
       enableExecuteCommand: true,                     // ECS Exec for debugging
     });
     this.service.attachToApplicationTargetGroup(targetGroup);
+
+    // Aurora SG ingress is intentionally NOT added here. Doing
+    // `auroraClusterSecurityGroup.addIngressRule(serviceSg, …)` from the dev
+    // stack would create a cyclic CDK dependency (data stack would then
+    // import the dev service SG). Instead, after deploying both stacks the
+    // operator runs:
+    //
+    //   AURORA_SG=$(aws cloudformation describe-stacks \
+    //     --stack-name AwsopsDataStack \
+    //     --query "Stacks[0].Outputs[?OutputKey=='SecurityGroupId'].OutputValue" \
+    //     --output text)
+    //   DEV_SG=$(aws cloudformation describe-stacks \
+    //     --stack-name AwsopsDevEcsStack \
+    //     --query "Stacks[0].Outputs[?OutputKey=='DevServiceSgId'].OutputValue" \
+    //     --output text)
+    //   aws ec2 authorize-security-group-ingress \
+    //     --group-id "$AURORA_SG" --protocol tcp --port 5432 \
+    //     --source-group "$DEV_SG"
+    //
+    // The DevServiceSgId output below exposes the ID for that step.
 
     // -------------------------------------------------------
     // ACM cert + Route53 + CloudFront for awsops-dev.atomai.click
@@ -375,6 +506,10 @@ export class AwsopsDevEcsStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'EcsDistributionId', {
       value: this.distribution.distributionId,
       description: 'Dev CloudFront distribution ID — pass to 08-setup-cloudfront-auth.sh to attach Lambda@Edge',
+    });
+    new cdk.CfnOutput(this, 'DevServiceSgId', {
+      value: serviceSg.securityGroupId,
+      description: 'Fargate service SG — add as source on the Aurora SG to allow dev tasks to reach the database',
     });
   }
 }

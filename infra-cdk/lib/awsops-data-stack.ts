@@ -25,6 +25,14 @@ export class AwsopsDataStack extends cdk.Stack {
   public readonly cluster: rds.DatabaseCluster;
   public readonly credentialsSecret: secretsmanager.ISecret;
   public readonly clusterSecurityGroup: ec2.SecurityGroup;
+  /**
+   * Customer-managed KMS key encrypting both the Aurora storage and the
+   * master secret. Exposed so cross-stack consumers (e.g. AwsopsDevEcsStack)
+   * can grant their own roles `kms:Decrypt` against this key — necessary
+   * because Secrets Manager retrieval of the master secret requires
+   * decrypting with the CMK.
+   */
+  public readonly storageKey: kms.IKey;
 
   constructor(scope: Construct, id: string, props: AwsopsDataStackProps) {
     super(scope, id, props);
@@ -33,11 +41,11 @@ export class AwsopsDataStack extends cdk.Stack {
     const masterUsername = 'awsops_admin';
 
     // KMS CMK for storage + secret encryption (audit trail across both services).
-    const storageKey = new kms.Key(this, 'AuroraStorageKey', {
+    const storageKey = (this.storageKey = new kms.Key(this, 'AuroraStorageKey', {
       description: 'AWSops Aurora storage + Secrets Manager encryption (ADR-030)',
       enableKeyRotation: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
+    }));
     storageKey.addAlias('alias/awsops-aurora');
 
     // Auto-generated master credentials. The secret is the source of truth —

@@ -8,6 +8,8 @@ set -e
 #                                                                              #
 #   Environment variables:                                                     #
 #     CF_DOMAIN            - CloudFront domain (auto-detect)                   #
+#     CF_STACK_NAME        - CDK stack name to pin (e.g. AwsopsDevEcsStack)    #
+#                            Skips auto-detect; useful for dev environments.   #
 #     LAMBDA_EDGE_ARN      - Lambda@Edge ARN (auto-detect)                     #
 #                                                                              #
 ################################################################################
@@ -32,10 +34,14 @@ echo -e "${CYAN}[1/4] Auto-detecting CloudFront distribution...${NC}"
 
 if [ -z "$CF_DOMAIN" ]; then
     # Method 1: Find from CDK CloudFormation stack / CDK 스택에서 검색
-    CF_STACK_NAME=$(aws cloudformation list-stacks \
-        --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
-        --query "StackSummaries[?contains(StackName, 'AwsopsStack') || contains(StackName, 'awsops')].StackName | [0]" \
-        --output text --region "$REGION" 2>/dev/null || echo "None")
+    # If caller already pinned a stack (e.g. CF_STACK_NAME=AwsopsDevEcsStack for
+    # the ADR-030 dev environment), respect it instead of auto-detecting prod.
+    if [ -z "${CF_STACK_NAME:-}" ]; then
+        CF_STACK_NAME=$(aws cloudformation list-stacks \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+            --query "StackSummaries[?contains(StackName, 'AwsopsStack') || contains(StackName, 'awsops')].StackName | [0]" \
+            --output text --region "$REGION" 2>/dev/null || echo "None")
+    fi
 
     if [ -n "$CF_STACK_NAME" ] && [ "$CF_STACK_NAME" != "None" ]; then
         echo "  Found CDK stack: $CF_STACK_NAME"

@@ -49,14 +49,15 @@ agentCore.addDependency(infra);
 // ADR-030 Phase 1: Aurora Serverless v2 for application state.
 // Deployed conditionally via context flag so existing single-host deployments
 // stay unchanged: `cdk deploy AwsopsDataStack -c enableAurora=true`.
+let dataStack: AwsopsDataStack | undefined;
 if (app.node.tryGetContext('enableAurora') === 'true') {
-  const data = new AwsopsDataStack(app, 'AwsopsDataStack', {
+  dataStack = new AwsopsDataStack(app, 'AwsopsDataStack', {
     env,
     description: 'AWSops Dashboard - Aurora Serverless v2 application state (ADR-030)',
     vpc: infra.vpc,
     appSecurityGroup: infra.appSecurityGroup,
   });
-  data.addDependency(infra);
+  dataStack.addDependency(infra);
 }
 
 // ADR-030 dev ECS Fargate environment. Reuses the AwsopsStack VPC, runs the
@@ -79,8 +80,22 @@ if (app.node.tryGetContext('enableDevEcs') === 'true') {
     vpc: infra.vpc,
     cloudFrontPrefixListId: prefixListId,
     customDomain: devDomain,
+    // Cross-stack Aurora wiring. Pass primitive ARNs/hostnames rather than
+    // Construct refs to avoid cyclic dependencies (the ECS Secret integration
+    // would otherwise call `secret.grantRead(executionRole)` and pin a
+    // policy on the data stack's secret referencing the dev stack's role).
+    // KMS key ARN is required too — fromSecretCompleteArn alone wouldn't
+    // grant kms:Decrypt and task startup would fail with KMS AccessDenied.
+    auroraHost: dataStack?.cluster.clusterEndpoint.hostname,
+    auroraPort: dataStack ? cdk.Token.asString(dataStack.cluster.clusterEndpoint.port) : undefined,
+    auroraSecretArn: dataStack?.credentialsSecret.secretArn,
+    auroraSecretKeyArn: dataStack?.storageKey.keyArn,
+    auroraDatabaseName: 'awsops',
   });
   devEcs.addDependency(infra);
+  if (dataStack) {
+    devEcs.addDependency(dataStack);
+  }
 }
 
 app.synth();
