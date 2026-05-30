@@ -169,7 +169,7 @@ v1의 가장 큰 운영 통증인 **17개 순차 셸 스크립트**(00~12, 6a~6f
 
 **"쉽게 배포·개선"의 4원칙**:
 
-1. **명령 최소화**: `make bootstrap` → `terraform apply` → `make deploy ENV=dev`. 17단계 → 3명령.
+1. **명령 최소화**: `make configure`(Node TUI: 클러스터 발견·선택·도메인·계정·feature 플래그 입력 → `terraform.tfvars` 생성/갱신) → `terraform apply`(전 인프라 + 선택 EKS Access Entry + OpenCost) → `make deploy ENV=dev`(앱 빌드+푸시+ECS 갱신). 17단계 → 3명령. **EKS는 별도 make 타깃 없이 `make configure`에 통합** (전용 타깃은 활용성 낮음).
 2. **선언적·멱등**: 모든 게 코드. `terraform plan`으로 변경 미리보기, 재실행 안전. AgentCore Gateway/도구/메모리/인터프리터도 카탈로그(YAML/TS)에서 선언 → 한 곳 수정 = 한 PR.
 3. **config-driven (손편집 제거)**: v1의 "단계 사이 config.json 주입"·"agent.py GATEWAYS 하드코딩 후 Docker 재빌드" 제거 → Gateway URL·ARN은 Terraform output/SSM에서 런타임 주입.
 4. **안전한 개선 루프**: 코드 변경 → CI 빌드 → **ECS 롤링 + circuit breaker 자동 롤백**. 인프라 변경 → `plan` 리뷰 → `apply`.
@@ -182,16 +182,15 @@ v1의 가장 큰 운영 통증인 **17개 순차 셸 스크립트**(00~12, 6a~6f
 
 **신뢰 경계 원칙**: 고객 인프라(EKS 클러스터)에 접근/설치하는 것은 고객 권한이 필요한 작업이라 대시보드가 자기에게 부여 불가. 따라서 **"자동화 가능한 건 전부 자동화, 게이트되는 한 단계는 one-command"** 로 설계한다.
 
-**EKS 통합 — `make onboard-eks` TUI 플로우** (자동발견 → 선택 → 즉시 부여 → 자동등록):
-1. **자동 발견**: `eks:ListClusters`(계정 레벨 read IAM, ADR-008 assume-role로 크로스 계정·리전) → 클러스터 인벤토리 수집.
-2. **TUI 멀티 선택**: `make onboard-eks` 실행 시 발견된 클러스터를 **Node TUI(`@inquirer/prompts` 또는 `ink`)** 로 표시(이름·계정·리전·연결상태) → 운영자가 등록할 클러스터 선택. 앱이 쓰는 AWS SDK·`config.json`을 재사용(스택 일관, 크로스플랫폼).
-3. **자격 preflight (신뢰 경계 분기)**: 선택 클러스터에 Access Entry를 만들 권한이 운영자에게 있는지 확인.
-   - **있으면**(자가 운영 / admin assume-role): 선택 클러스터를 **Access Entry Terraform 모듈에 자동 주입 → `terraform apply` → 권한 즉시 획득**. `enable_opencost`면 이어서 **Helm 설치**까지 그 자리에서.
-   - **없으면**: 동일 모듈 + apply/helm 명령을 **핸드오프 산출물**로 출력 → 클러스터 소유자가 실행 (완전 무인 불가 케이스).
-4. **자동 등록**: Access Entry 감지 시 kubeconfig를 **자동 등록** → 대시보드가 바로 쿼리 시작 (v1의 수동 등록 단계 제거).
-5. **멱등**: 재실행 시 이미 연결된 클러스터 표시 + 추가/해제 가능.
+**모델: 통합 `make configure`(Node TUI)가 `terraform.tfvars`를 생성 → 단일 `terraform apply`가 선언적으로 전부 처리.** EKS는 이 통합 흐름의 한 단계일 뿐 별도 make 타깃이 아니다. TUI는 HCL을 손편집하지 않게 해주는 친절한 프런트엔드일 뿐, 진짜 작업은 Terraform이 한다.
 
-**OpenCost**: 위 3의 권한 보유 분기에서 **`enable_opencost=true` 플래그**로 Helm 설치 통합(Terraform Helm provider 또는 helm CLI). 운영자의 kubectl 접근 필요 — 보통 Access Entry를 만드는 admin이 이미 보유. v1의 request 기반 폴백(`eks-container-cost`) 유지 → 없으면 graceful degrade(필수 아님).
+1. **자동 발견**: `make configure` TUI가 `eks:ListClusters`(계정 레벨 read IAM, ADR-008 assume-role로 크로스 계정·리전)로 클러스터 인벤토리 수집. (앱이 쓰는 AWS SDK·`config.json` 재사용, 크로스플랫폼)
+2. **TUI 멀티 선택 → tfvars 기록**: 발견된 클러스터를 **Node TUI(`@inquirer/prompts` 또는 `ink`)** 로 표시(이름·계정·리전·연결상태) → 등록할 클러스터 + `enable_opencost` 등 선택 → **`terraform.tfvars`에 데이터로 기록** (예: `onboard_eks_clusters = ["arn:...:cluster/a", ...]`, `enable_opencost = true`). 도메인·리전·계정·feature 플래그(`investigationEngine`/`devopsAgent`)도 같은 TUI에서 tfvars로.
+3. **`terraform apply` (선언적)**: tfvars의 클러스터 목록을 순회하며 각 클러스터에 **Access Entry + AccessPolicy 바인딩**(AWS provider, 대상 계정 assume-role) + 선택 시 **OpenCost Helm 릴리스**(helm/kubernetes provider). 멱등 — tfvars에서 추가/제거 후 재apply만 하면 반영.
+4. **자동 등록**: apply 후 Terraform output(또는 SSM)에 기록된 접근 정보를 대시보드가 감지 → kubeconfig **자동 등록** (v1의 수동 등록 제거).
+5. **신뢰 경계 (preflight)**: `terraform apply`는 Access Entry 생성 권한이 있는 자격으로 실행돼야 함(대상 클러스터 admin / assume-role). 권한 없는 클러스터는 TUI가 **preflight로 표시** → 소유자가 적용할 **분리 tfvars/모듈을 핸드오프**.
+
+**OpenCost**: tfvars `enable_opencost=true` → 위 3에서 Helm 릴리스로 설치. **Provider 주의**: 같은 apply에서 Access Entry(AWS) + OpenCost(helm)를 함께 처리 시, helm provider는 *운영자 자격*으로 인증(대시보드 role 아님)하며 access-entry 생성에 순서 의존(`depends_on` 또는 2-stage apply) → P1에서 검증. v1의 request 기반 폴백(`eks-container-cost`) 유지 → 없으면 graceful degrade(필수 아님).
 
 **Observability 데이터소스 (플러그형 레지스트리 + OTLP + 카테고리)**:
 - **플러그형**: `datasource-registry.ts` 확장 — 데이터소스 추가 = 레지스트리 항목 1 + 클라이언트 어댑터 1 (ADR-029 카탈로그 패턴). SSRF allowlist 유지.
@@ -209,7 +208,7 @@ v2는 다중 서브시스템이라 독립 spec으로 나눠 순차 진행한다.
 
 | Phase | Sub-project | 산출물 | 완료 기준(초안) |
 |---|---|---|---|
-| **P1** | Terraform 기반 인프라 + 배포 토폴로지 | VPC/ECS/Aurora/ECR/**Internal ALB+VPC Origin**/CloudFront/Cognito 스택, CI/CD 파이프라인, `make` 래퍼 + **`make onboard-eks` Node TUI** + EKS Access Entry/OpenCost Terraform 모듈, AgentCore 멱등 provisioner, 빈 web 띄우기 + **SSE 경로 실측** | `terraform apply`로 신규 도메인에 web 헬스체크 통과 + SSE 정상 + `make onboard-eks`로 클러스터 1개 등록·자동연결 |
+| **P1** | Terraform 기반 인프라 + 배포 토폴로지 | VPC/ECS/Aurora/ECR/**Internal ALB+VPC Origin**/CloudFront/Cognito 스택, CI/CD 파이프라인, **`make configure` Node TUI(tfvars 생성, EKS 선택 통합)** + EKS Access Entry/OpenCost Terraform 모듈, AgentCore 멱등 provisioner, 빈 web 띄우기 + **SSE 경로 실측** | `terraform apply`로 신규 도메인에 web 헬스체크 통과 + SSE 정상 + `make configure`+apply로 클러스터 1개 등록·자동연결 |
 | **P2** | 비동기 워커 백본 | SQS+Step Functions+Lambda/Fargate 워커, OOM 격리, 기존 무거운 작업(AI 합성·리포트·대용량 스캔) 이전 | 무거운 작업이 web 밖에서 실행, 워커 OOM 시 web 무영향 검증 |
 | **P3** | 9+1 에이전트 + UI | 9 Gateway 재분배, 섹션=라우팅, 우측 패널 UI, 테마링, **플러그형 데이터소스 레지스트리 + OTLP + 시드 확장**(External Observability 에이전트) | 각 섹션에서 분류기 없이 도메인 에이전트 응답 + OTLP 백엔드 1종 쿼리 |
 | **P4** | Incident & ChatOps | 오케스트레이터, 조사 엔진 포트, Slack 양방향, DevOps Agent config 게이팅 | native 엔진으로 incident 자동 진단 + Slack 양방향 동작; config로 DevOps Agent 토글 |
@@ -248,7 +247,7 @@ v2는 다중 서브시스템이라 독립 spec으로 나눠 순차 진행한다.
 | Incident/ChatOps | federate-ready, config 게이팅(native 기본/devopsAgent 옵트인), Slack 양방향 우리 소유 |
 | 상태/데이터 | Aurora Serverless v2 + 7 테이블 (별도 신규 provisioning) |
 | IaC/배포 | Terraform + CI/CD + 3-명령 + 선언적 AgentCore |
-| EKS/OpenCost 온보딩 | `make onboard-eks` Node TUI: 자동발견→선택→preflight→즉시 apply+Helm / 핸드오프 폴백 + 자동등록 |
+| EKS/OpenCost 온보딩 | 통합 `make configure` TUI가 tfvars에 클러스터 선택 기록 → `terraform apply`가 Access Entry+OpenCost (preflight 핸드오프 폴백) + 자동등록. **EKS 전용 make 없음** |
 | Observability | 플러그형 레지스트리 + OTLP 제너릭 + 카테고리 시드 (DevOps Agent parity) |
 | v1/v2 공존 | 완전 분리 병렬 (새 스택 + 새 도메인) |
 
