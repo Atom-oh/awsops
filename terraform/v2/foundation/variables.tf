@@ -34,3 +34,21 @@ variable "image_tag" {
   description = "Spine image tag in ECR"
   default     = "spine-latest"
 }
+
+variable "create_network" {
+  type        = bool
+  description = "true=create new VPC/subnets/NAT; false=reuse existing (set existing_* below)"
+  default     = true
+}
+
+variable "existing_vpc_id" {
+  type        = string
+  description = "Existing VPC ID to reuse when create_network=false"
+  default     = ""
+}
+
+variable "existing_private_subnet_ids" {
+  type        = list(string)
+  description = "Existing private subnets (>=2 AZ, NAT egress) for ALB/Fargate when create_network=false"
+  default     = []
+}
