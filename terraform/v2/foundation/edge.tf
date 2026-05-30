@@ -44,17 +44,23 @@ data "aws_cloudfront_origin_request_policy" "all_viewer" {
 }
 
 # CloudFront VPC Origin — reach the INTERNAL ALB without it being internet-facing. Requires aws provider 6.x (or 5.73+).
+# CloudFront rejects in-place protocol-policy changes while a VPC origin is attached to a distribution
+# (409 CannotUpdateEntityWhileInUse). create_before_destroy + a distinct name lets Terraform stand up the
+# new https-only origin, repoint the distribution, then delete the old http-only origin — the AWS-supported swap.
 resource "aws_cloudfront_vpc_origin" "alb" {
   vpc_origin_endpoint_config {
-    name                   = "${var.project}-alb-origin"
+    name                   = "${var.project}-alb-origin-tls"
     arn                    = aws_lb.internal.arn
     http_port              = 80
     https_port             = 443
-    origin_protocol_policy = "http-only"
+    origin_protocol_policy = "https-only"
     origin_ssl_protocols {
       items    = ["TLSv1.2"]
       quantity = 1
     }
+  }
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
@@ -65,10 +71,12 @@ resource "aws_cloudfront_distribution" "main" {
   price_class = "PriceClass_200"
 
   origin {
-    domain_name = aws_lb.internal.dns_name
+    domain_name = var.domain_name
     origin_id   = "alb-vpc-origin"
     vpc_origin_config {
-      vpc_origin_id = aws_cloudfront_vpc_origin.alb.id
+      vpc_origin_id            = aws_cloudfront_vpc_origin.alb.id
+      origin_read_timeout      = 60
+      origin_keepalive_timeout = 5
     }
   }
 

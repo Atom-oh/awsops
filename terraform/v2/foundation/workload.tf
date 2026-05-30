@@ -85,17 +85,40 @@ resource "aws_ecs_task_definition" "spine" {
   ])
 }
 
+# CloudFront provisions VPC Origin ENIs into a managed security group
+# ("CloudFront-VPCOrigins-Service-SG"). The ALB must allow that SG as a source
+# on 443 — a VPC-CIDR rule alone is not sufficient for the CloudFront→ALB hop
+# (matches the proven AWS-Demo-Platform alb-internal pattern, which gates on
+# this SG). Created lazily by CloudFront once a VPC origin exists in the VPC.
+data "aws_security_group" "cf_vpc_origin" {
+  filter {
+    name   = "group-name"
+    values = ["CloudFront-VPCOrigins-Service-SG"]
+  }
+  filter {
+    name   = "vpc-id"
+    values = [local.vpc_id]
+  }
+}
+
 resource "aws_security_group" "alb" {
   name        = "${var.project}-alb-sg"
   description = "Internal ALB - reachable from within the VPC (CloudFront VPC Origin ENIs)"
   vpc_id      = local.vpc_id
 
   ingress {
-    description = "HTTP from within VPC (incl. CloudFront VPC Origin ENIs)"
-    from_port   = 80
-    to_port     = 80
+    description = "HTTPS from within VPC (incl. CloudFront VPC Origin ENIs)"
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = [local.vpc_cidr]
+  }
+  ingress {
+    description     = "HTTPS from CloudFront VPC Origin managed SG"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [data.aws_security_group.cf_vpc_origin.id]
   }
   egress {
     from_port   = 0
@@ -125,6 +148,24 @@ resource "aws_security_group" "service" {
   }
 }
 
+# Regional (ap-northeast-2) ACM cert for the ALB HTTPS listener. CloudFront's
+# VPC Origin connects over TLS with SNI = var.domain_name, so the ALB must
+# present a cert covering it. Validated via the SAME Route53 CNAMEs the
+# CloudFront cert (edge.tf) already created — ACM uses one validation record
+# per domain, so no new DNS records and no conflict.
+resource "aws_acm_certificate" "alb" {
+  domain_name       = var.domain_name
+  validation_method = "DNS"
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_acm_certificate_validation" "alb" {
+  certificate_arn         = aws_acm_certificate.alb.arn
+  validation_record_fqdns = [for r in aws_route53_record.cf_validation : r.fqdn]
+}
+
 resource "aws_lb" "internal" {
   name               = "${var.project}-alb"
   internal           = true
@@ -151,10 +192,12 @@ resource "aws_lb_target_group" "spine" {
   deregistration_delay = 30
 }
 
-resource "aws_lb_listener" "http" {
+resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.internal.arn
-  port              = 80
-  protocol          = "HTTP"
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = aws_acm_certificate_validation.alb.certificate_arn
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.spine.arn
@@ -185,5 +228,5 @@ resource "aws_ecs_service" "spine" {
     rollback = true
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.https]
 }
