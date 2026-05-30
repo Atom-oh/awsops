@@ -108,7 +108,7 @@ v1은 **CloudFront → public ALB → EC2**, ALB를 CloudFront 관리형 prefix 
 - **섹션 강조색으로 에이전트 크롬 테마링** (Network=cyan, Cost=green, Security=red 등) → "테마에 맞는 에이전트" 시각화.
 - 테이블·차트·토폴로지를 **보면서 동시에 대화**, 접으면 콘텐츠 풀폭.
 - 전역 **Incidents/Response 섹션**(빨강 테마, 동일 패널 패턴) — Incident 오케스트레이터와 대화.
-- Next.js 14 App Router 유지. basePath는 v2 신규 도메인 기준으로 재설정.
+- Next.js 14 App Router 유지. **v2는 basePath 제거** — 전용 도메인(`awsops-v2.atomai.click`)에서 루트(`/`) 서빙. v1의 `/awsops` 접두사 규칙(`basePath: '/awsops'`, 모든 fetch `/awsops/api/*`)은 v2에서 **폐기** → fetch는 `/api/*`, 정적 자산 `/_next/static/*`, CloudFront 기본 behavior가 `/` 전체 커버. (실제 앱은 P1d에서 `next.config.mjs` basePath 제거 + fetch 경로 정리.)
 - 기각된 대안: 하단 드로어(차트 가림), 플로팅 버블(동시 참조 불편).
 
 ---
