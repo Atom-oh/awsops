@@ -4,9 +4,9 @@
 
 **목표:** v2 인프라 spine을 세운다 — 완전히 새로운 VPC를, **오직 private 엣지(CloudFront → VPC Origin → internal ALB → ECS Fargate)** 를 통해서만 도달 가능하게 만들고, 헬스 엔드포인트와 SSE 스트림을 end-to-end로 제공함을 증명한다. 전부 Terraform + 원격 상태로 구성.
 
-**아키텍처:** `bootstrap` 루트 모듈이 S3 + DynamoDB 원격 상태 백엔드를 만든다. 이어서 `foundation` 루트 모듈이 네트워크(VPC/서브넷/NAT), 일회용 "spine" Fargate 서비스(약 40줄 Node SSE/헬스 서버), **internal** ALB, 그리고 **VPC Origin**을 통해 internal ALB에 도달하는 CloudFront 배포를 구축한다 (internet-facing LB 없음, CloudFront prefix-list 꼼수 없음). spine 컨테이너는 엣지 경로 검증용일 뿐이며 P1d에서 실제 Next.js 이미지로 교체된다.
+**아키텍처:** `bootstrap` 루트 모듈이 S3 원격 상태 백엔드(S3 네이티브 상태 락)를 만든다. 이어서 `foundation` 루트 모듈이 네트워크(VPC/서브넷/NAT), 일회용 "spine" Fargate 서비스(약 40줄 Node SSE/헬스 서버), **internal** ALB, 그리고 **VPC Origin**을 통해 internal ALB에 도달하는 CloudFront 배포를 구축한다 (internet-facing LB 없음, CloudFront prefix-list 꼼수 없음). spine 컨테이너는 엣지 경로 검증용일 뿐이며 P1d에서 실제 Next.js 이미지로 교체된다.
 
-**기술 스택:** Terraform `~> 1.9`, AWS provider `~> 5.80` (CloudFront VPC origin은 `>= 5.73` 필요), ECS Fargate (ARM64), CloudFront, ACM (us-east-1), Route53, Node 20 (spine 컨테이너), Docker buildx (linux/arm64).
+**기술 스택:** Terraform `>= 1.15`, AWS provider `~> 6.0` (6.47+; CloudFront VPC origin은 5.73+/6.x에 존재, S3 네이티브 상태 락은 TF 1.10+), ECS Fargate (ARM64), CloudFront, ACM (us-east-1), Route53, Node 20 (spine 컨테이너), Docker buildx (linux/arm64).
 
 **범위 밖 (후속 sub-plan):** Cognito/Lambda@Edge 인증(P1b), Aurora(P1c), CI/CD + 실제 앱 이미지(P1d), `make configure` TUI + EKS 모듈(P1e), AgentCore provisioner(P1f). P1a는 spine을 **인증 없이** 배포한다 — P1a 동안에는 의도적으로 공개 상태이며, 실제 데이터를 서빙하기 전 P1b에서 잠근다.
 
@@ -16,8 +16,8 @@
 
 시작 전에 확인 (이건 구축 Step이 아니라 환경 전제):
 
-- VPC/ECS/CloudFront/ACM/Route53/S3/DynamoDB/ECR/IAM을 생성할 수 있는 **호스트 계정**의 admin 수준 AWS 자격 증명.
-- Terraform `>= 1.9`, Docker + `buildx` 로컬 설치.
+- VPC/ECS/CloudFront/ACM/Route53/S3/ECR/IAM을 생성할 수 있는 **호스트 계정**의 admin 수준 AWS 자격 증명.
+- Terraform `>= 1.15`, Docker + `buildx` 로컬 설치.
 - 상위 도메인(`atomai.click`)의 Route53 **public hosted zone**이 존재해야 함. 확인:
   ```bash
   aws route53 list-hosted-zones-by-name --dns-name atomai.click \
@@ -39,11 +39,11 @@
 ```
 terraform/v2/
   bootstrap/
-    main.tf            # S3 상태 버킷 + DynamoDB 락 테이블 (local state)
-    variables.tf       # region, project, 버킷/테이블 이름
-    outputs.tf         # 버킷명, 테이블명 (foundation/backend.tf에 입력)
+    main.tf            # S3 상태 버킷 (S3 네이티브 락; local state)
+    variables.tf       # region, project, 버킷 이름
+    outputs.tf         # 버킷명 (foundation/backend.tf에 입력)
   foundation/
-    backend.tf         # s3 backend (bootstrap output을 가리킴)
+    backend.tf         # partial s3 backend (backend.hcl로 주입 — OSS-portable)
     providers.tf       # aws (ap-northeast-2) + aws.use1 (us-east-1) alias
     variables.tf       # domain, vpc_cidr, azs, image_tag 등
     network.tf         # VPC, public 2 + private 2 서브넷, IGW, NAT, route
@@ -51,6 +51,7 @@ terraform/v2/
     edge.tf            # ACM(us-east-1) + DNS 검증, CloudFront VPC Origin, distribution, Route53 alias
     outputs.tf         # cloudfront domain, alb arn, ecr uri, distribution id 등
     terraform.tfvars.example
+    backend.hcl.example   # partial backend 설정 예시 (실제 backend.hcl은 gitignored)
 spine/
   server.js            # 약 40줄 Node http 서버: /awsops/healthz + /awsops/api/stream (SSE)
   Dockerfile           # node:20-alpine, arm64
@@ -85,22 +86,17 @@ variable "state_bucket_name" {
   description = "Globally-unique S3 bucket for Terraform state. Override per account."
   default     = "awsops-v2-tfstate"
 }
-
-variable "lock_table_name" {
-  type    = string
-  default = "awsops-v2-tflock"
-}
 ```
 
 - [ ] **Step 2: `main.tf` 작성**
 
 ```hcl
 terraform {
-  required_version = ">= 1.9"
+  required_version = ">= 1.15"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.80"
+      version = "~> 6.0"
     }
   }
 }
@@ -143,16 +139,6 @@ resource "aws_s3_bucket_public_access_block" "state" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
-
-resource "aws_dynamodb_table" "lock" {
-  name         = var.lock_table_name
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID"
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-}
 ```
 
 - [ ] **Step 3: `outputs.tf` 작성**
@@ -160,10 +146,6 @@ resource "aws_dynamodb_table" "lock" {
 ```hcl
 output "state_bucket" {
   value = aws_s3_bucket.state.id
-}
-
-output "lock_table" {
-  value = aws_dynamodb_table.lock.name
 }
 ```
 
@@ -181,22 +163,21 @@ cd terraform/v2/bootstrap && terraform init && terraform fmt && terraform valida
 ```bash
 terraform plan -out tfplan && terraform apply tfplan
 ```
-기대값: 6개 리소스 생성(`aws_s3_bucket.state`, versioning, encryption, public_access_block, `aws_dynamodb_table.lock`). 버킷명이 글로벌하게 충돌하면 `-var state_bucket_name=awsops-v2-tfstate-<account-id>`로 재실행하고, 선택한 이름을 Task 2용으로 기록.
+기대값: 4개 리소스 생성(`aws_s3_bucket.state`, versioning, encryption, public_access_block). 버킷명이 글로벌하게 충돌하면 `-var state_bucket_name=awsops-v2-tfstate-<account-id>`로 재실행하고, 선택한 이름을 Task 2용으로 기록.
 
 - [ ] **Step 6: 검증**
 
 실행:
 ```bash
 aws s3api head-bucket --bucket "$(terraform output -raw state_bucket)" && echo "BUCKET_OK"
-aws dynamodb describe-table --table-name "$(terraform output -raw lock_table)" --query 'Table.TableStatus' --output text
 ```
-기대값: `BUCKET_OK` 다음 `ACTIVE`.
+기대값: `BUCKET_OK`.
 
 - [ ] **Step 7: 커밋**
 
 ```bash
 git add terraform/v2/bootstrap
-git commit -m "feat(v2-p1a): terraform remote-state backend (S3 + DynamoDB)"
+git commit -m "feat(v2-p1a): terraform remote-state backend (S3 + native locking)"
 ```
 
 ---
@@ -208,25 +189,22 @@ git commit -m "feat(v2-p1a): terraform remote-state backend (S3 + DynamoDB)"
 - 생성: `terraform/v2/foundation/providers.tf`
 - 생성: `terraform/v2/foundation/variables.tf`
 - 생성: `terraform/v2/foundation/terraform.tfvars.example`
+- 생성: `terraform/v2/foundation/backend.hcl.example`
 
-- [ ] **Step 1: `backend.tf` 작성** (Task 1의 버킷/테이블 이름 사용; `awsops-v2-tfstate`를 오버라이드했다면 교체)
+- [ ] **Step 1: `backend.tf` 작성** (partial backend — 버킷명을 박지 않고 `backend.hcl`로 주입; OSS-portable)
 
 ```hcl
 terraform {
-  required_version = ">= 1.9"
+  required_version = ">= 1.15"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.80"
+      version = "~> 6.0"
     }
   }
-  backend "s3" {
-    bucket         = "awsops-v2-tfstate"
-    key            = "foundation/terraform.tfstate"
-    region         = "ap-northeast-2"
-    dynamodb_table = "awsops-v2-tflock"
-    encrypt        = true
-  }
+  # Partial backend: OSS-portable, 버킷명을 박지 않음. init 시
+  # `-backend-config=backend.hcl`로 주입 (make configure가 생성).
+  backend "s3" {}
 }
 ```
 
@@ -298,12 +276,22 @@ variable "image_tag" {
 }
 ```
 
-- [ ] **Step 4: `terraform.tfvars.example` 작성**
+- [ ] **Step 4: `terraform.tfvars.example` + `backend.hcl.example` 작성**
 
+`terraform.tfvars.example`:
 ```hcl
 domain_name      = "v2.atomai.click"
 hosted_zone_name = "atomai.click"
 # vpc_cidr       = "10.20.0.0/16"   # 오버라이드하려면 주석 해제
+```
+
+`backend.hcl.example` (OSS-portable — 고객이 자기 버킷명으로 복사):
+```hcl
+bucket       = "awsops-v2-tfstate"   # Task 1에서 만든 전역 유일 버킷명
+key          = "foundation/terraform.tfstate"
+region       = "ap-northeast-2"
+encrypt      = true
+use_lockfile = true                  # TF 1.10+ S3 네이티브 락 (DynamoDB 불필요)
 ```
 
 - [ ] **Step 5: 원격 backend로 init**
@@ -312,7 +300,8 @@ hosted_zone_name = "atomai.click"
 ```bash
 cd terraform/v2/foundation
 cp terraform.tfvars.example terraform.tfvars
-terraform init
+cp backend.hcl.example backend.hcl     # bucket을 Task 1에서 만든 값으로 수정
+terraform init -backend-config=backend.hcl
 ```
 기대값: `Successfully configured the backend "s3"! ... Terraform has been successfully initialized!`
 
@@ -324,9 +313,9 @@ terraform init
 - [ ] **Step 7: 커밋** (`.gitignore`가 실제 tfvars를 제외해야 함)
 
 ```bash
-printf '%s\n' 'terraform/v2/**/.terraform/*' 'terraform/v2/**/terraform.tfvars' 'terraform/v2/**/*.tfplan' >> .gitignore
-git add terraform/v2/foundation/backend.tf terraform/v2/foundation/providers.tf terraform/v2/foundation/variables.tf terraform/v2/foundation/terraform.tfvars.example .gitignore
-git commit -m "feat(v2-p1a): foundation skeleton (s3 backend, dual-region providers, vars)"
+printf '%s\n' 'terraform/v2/**/.terraform/*' 'terraform/v2/**/terraform.tfvars' 'terraform/v2/**/backend.hcl' 'terraform/v2/**/*.tfplan' >> .gitignore
+git add terraform/v2/foundation/backend.tf terraform/v2/foundation/providers.tf terraform/v2/foundation/variables.tf terraform/v2/foundation/terraform.tfvars.example terraform/v2/foundation/backend.hcl.example .gitignore
+git commit -m "feat(v2-p1a): foundation skeleton (partial s3 backend, dual-region providers, vars)"
 ```
 
 ---
@@ -850,7 +839,7 @@ data "aws_cloudfront_origin_request_policy" "all_viewer" {
 }
 
 # CloudFront VPC Origin — internal ALB를 internet-facing 없이 도달하게 함.
-# aws provider >= 5.73 필요.
+# aws provider 6.x (또는 5.73+)에 존재.
 resource "aws_cloudfront_vpc_origin" "alb" {
   vpc_origin_endpoint_config {
     name                   = "${var.project}-alb-origin"
@@ -953,7 +942,7 @@ output "ecr_uri" {
 실행: `terraform fmt && terraform validate`
 기대값: `Success! The configuration is valid.`
 
-> `terraform validate`가 `aws_cloudfront_vpc_origin` 또는 `vpc_origin_config` 블록을 거부하면 provider가 5.73보다 낮은 것. `terraform init -upgrade` 실행 후 `terraform version`이 aws provider `>= 5.73`인지 확인. 이 계획에서 가장 가능성 높은 스키마-버전 실패 지점.
+> `terraform validate`가 `aws_cloudfront_vpc_origin` 또는 `vpc_origin_config` 블록을 거부하면 provider가 너무 낮은 것(이 기능은 5.73+/6.x에 존재). `terraform init -upgrade` 후 `terraform version`이 aws provider `>= 6.47`인지 확인. 이 계획에서 가장 가능성 높은 스키마-버전 실패 지점.
 
 - [ ] **Step 6: plan + apply**
 
