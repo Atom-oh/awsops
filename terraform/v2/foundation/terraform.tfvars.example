@@ -1,0 +1,3 @@
+domain_name      = "v2.atomai.click"
+hosted_zone_name = "atomai.click"
+# vpc_cidr       = "10.20.0.0/16"   # uncomment to override
