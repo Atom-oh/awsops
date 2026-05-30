@@ -91,3 +91,4 @@ data/memory/
 
 # reports (auto-generated)
 reports/
+.superpowers/
