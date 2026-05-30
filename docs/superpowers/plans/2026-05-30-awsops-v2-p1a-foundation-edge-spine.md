@@ -1,73 +1,73 @@
-# AWSops v2 — P1a: Terraform Foundation + Private Edge + Spine Implementation Plan
+# AWSops v2 — P1a: Terraform 기반 인프라 + Private 엣지 + Spine 구현 계획
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **에이전트 작업자용:** 필수 SUB-SKILL: 이 계획은 superpowers:subagent-driven-development(권장) 또는 superpowers:executing-plans로 Task 단위 실행한다. Step은 체크박스(`- [ ]`)로 진행 추적.
 
-**Goal:** Stand up the v2 infrastructure spine — a brand-new VPC reachable only through a fully-private edge (CloudFront → VPC Origin → **internal** ALB → ECS Fargate) — and prove it serves both a health endpoint and an SSE stream end-to-end, all via Terraform with remote state.
+**목표:** v2 인프라 spine을 세운다 — 완전히 새로운 VPC를, **오직 private 엣지(CloudFront → VPC Origin → internal ALB → ECS Fargate)** 를 통해서만 도달 가능하게 만들고, 헬스 엔드포인트와 SSE 스트림을 end-to-end로 제공함을 증명한다. 전부 Terraform + 원격 상태로 구성.
 
-**Architecture:** A `bootstrap` root module creates the S3 + DynamoDB remote-state backend. A `foundation` root module then builds the network (VPC/subnets/NAT), a throwaway "spine" Fargate service (a ~40-line Node SSE/health server), an **internal** ALB, and a CloudFront distribution that reaches the internal ALB via a **VPC Origin** (no internet-facing load balancer, no CloudFront prefix-list hack). The spine container exists only to validate the edge path and is replaced by the real Next.js image in P1d.
+**아키텍처:** `bootstrap` 루트 모듈이 S3 + DynamoDB 원격 상태 백엔드를 만든다. 이어서 `foundation` 루트 모듈이 네트워크(VPC/서브넷/NAT), 일회용 "spine" Fargate 서비스(약 40줄 Node SSE/헬스 서버), **internal** ALB, 그리고 **VPC Origin**을 통해 internal ALB에 도달하는 CloudFront 배포를 구축한다 (internet-facing LB 없음, CloudFront prefix-list 꼼수 없음). spine 컨테이너는 엣지 경로 검증용일 뿐이며 P1d에서 실제 Next.js 이미지로 교체된다.
 
-**Tech Stack:** Terraform `~> 1.9`, AWS provider `~> 5.80` (CloudFront VPC origins require `>= 5.73`), ECS Fargate (ARM64), CloudFront, ACM (us-east-1), Route53, Node 20 (spine container), Docker buildx (linux/arm64).
+**기술 스택:** Terraform `~> 1.9`, AWS provider `~> 5.80` (CloudFront VPC origin은 `>= 5.73` 필요), ECS Fargate (ARM64), CloudFront, ACM (us-east-1), Route53, Node 20 (spine 컨테이너), Docker buildx (linux/arm64).
 
-**Out of scope (later sub-plans):** Cognito/Lambda@Edge auth (P1b), Aurora (P1c), CI/CD + real app image (P1d), `make configure` TUI + EKS module (P1e), AgentCore provisioner (P1f). P1a deploys the spine **without auth** — it is intentionally public for the duration of P1a and is locked down in P1b before any real data is served.
+**범위 밖 (후속 sub-plan):** Cognito/Lambda@Edge 인증(P1b), Aurora(P1c), CI/CD + 실제 앱 이미지(P1d), `make configure` TUI + EKS 모듈(P1e), AgentCore provisioner(P1f). P1a는 spine을 **인증 없이** 배포한다 — P1a 동안에는 의도적으로 공개 상태이며, 실제 데이터를 서빙하기 전 P1b에서 잠근다.
 
 ---
 
-## Prerequisites
+## 사전 조건 (Prerequisites)
 
-Confirm before starting (these are environmental facts, not steps to build):
+시작 전에 확인 (이건 구축 Step이 아니라 환경 전제):
 
-- AWS credentials for the **host account** with admin-equivalent rights to create VPC/ECS/CloudFront/ACM/Route53/S3/DynamoDB/ECR/IAM.
-- Terraform `>= 1.9` and Docker with `buildx` installed locally.
-- An existing Route53 **public hosted zone** for the parent domain (`atomai.click`). Verify:
+- VPC/ECS/CloudFront/ACM/Route53/S3/DynamoDB/ECR/IAM을 생성할 수 있는 **호스트 계정**의 admin 수준 AWS 자격 증명.
+- Terraform `>= 1.9`, Docker + `buildx` 로컬 설치.
+- 상위 도메인(`atomai.click`)의 Route53 **public hosted zone**이 존재해야 함. 확인:
   ```bash
   aws route53 list-hosted-zones-by-name --dns-name atomai.click \
     --query "HostedZones[0].{Name:Name,Id:Id}" --output table
   ```
-  Expected: a row showing `atomai.click.` and a `/hostedzone/ZXXXX` Id.
-- The v2 subdomain is **`v2.atomai.click`** (distinct from v1 `awsops.*` and dev `awsops-dev.atomai.click`). It must NOT already resolve:
+  기대값: `atomai.click.` 와 `/hostedzone/ZXXXX` Id가 표시되는 행.
+- v2 서브도메인은 **`v2.atomai.click`** (v1 `awsops.*` 및 dev `awsops-dev.atomai.click`와 구분). 아직 resolve되면 안 됨:
   ```bash
   dig +short v2.atomai.click
   ```
-  Expected: empty output.
-- Region: `ap-northeast-2` (primary). CloudFront ACM cert lives in `us-east-1`.
-- VPC CIDR `10.20.0.0/16` is chosen to avoid overlap with v1. If v1 already uses `10.20.0.0/16`, change `var.vpc_cidr` consistently in Task 3.
+  기대값: 빈 출력.
+- 리전: `ap-northeast-2` (주). CloudFront ACM 인증서는 `us-east-1`.
+- VPC CIDR `10.20.0.0/16` — v1과 겹치지 않도록 선택. 만약 v1이 이미 `10.20.0.0/16`을 쓰면 Task 3에서 `var.vpc_cidr`를 일관되게 변경.
 
 ---
 
-## File Structure
+## 파일 구조 (File Structure)
 
 ```
 terraform/v2/
   bootstrap/
-    main.tf            # S3 state bucket + DynamoDB lock table (local state)
-    variables.tf       # region, project, bucket/table names
-    outputs.tf         # bucket name, table name (fed into foundation/backend.tf)
+    main.tf            # S3 상태 버킷 + DynamoDB 락 테이블 (local state)
+    variables.tf       # region, project, 버킷/테이블 이름
+    outputs.tf         # 버킷명, 테이블명 (foundation/backend.tf에 입력)
   foundation/
-    backend.tf         # s3 backend (points at bootstrap outputs)
+    backend.tf         # s3 backend (bootstrap output을 가리킴)
     providers.tf       # aws (ap-northeast-2) + aws.use1 (us-east-1) alias
-    variables.tf       # domain, vpc_cidr, azs, image_tag, etc.
-    network.tf         # VPC, 2x public + 2x private subnets, IGW, NAT, routes
-    workload.tf        # ECR repo, ECS cluster, task def (spine), internal ALB, TG, service, SGs
-    edge.tf            # ACM (us-east-1) + DNS validation, CloudFront VPC Origin, distribution, Route53 alias
-    outputs.tf         # cloudfront domain, alb arn, ecr uri, distribution id, etc.
+    variables.tf       # domain, vpc_cidr, azs, image_tag 등
+    network.tf         # VPC, public 2 + private 2 서브넷, IGW, NAT, route
+    workload.tf        # ECR repo, ECS cluster, task def(spine), internal ALB, TG, service, SG
+    edge.tf            # ACM(us-east-1) + DNS 검증, CloudFront VPC Origin, distribution, Route53 alias
+    outputs.tf         # cloudfront domain, alb arn, ecr uri, distribution id 등
     terraform.tfvars.example
 spine/
-  server.js            # ~40-line Node http server: /awsops/healthz + /awsops/api/stream (SSE)
+  server.js            # 약 40줄 Node http 서버: /awsops/healthz + /awsops/api/stream (SSE)
   Dockerfile           # node:20-alpine, arm64
 ```
 
-Each file has one responsibility: `network.tf` owns connectivity, `workload.tf` owns compute+LB, `edge.tf` owns the CloudFront/ACM/DNS edge. They share one Terraform state (the spine is a single deployable unit); later sub-plans (Aurora, AI) get their own root modules + state keys under `terraform/v2/`.
+각 파일은 단일 책임: `network.tf`=연결성, `workload.tf`=컴퓨트+LB, `edge.tf`=CloudFront/ACM/DNS 엣지. 셋은 하나의 Terraform state를 공유한다(spine은 단일 배포 단위). 후속 sub-plan(Aurora, AI)은 `terraform/v2/` 아래 각자의 루트 모듈 + state key를 가진다.
 
 ---
 
-## Task 1: Remote-state backend (bootstrap module)
+## Task 1: 원격 상태 백엔드 (bootstrap 모듈)
 
-**Files:**
-- Create: `terraform/v2/bootstrap/main.tf`
-- Create: `terraform/v2/bootstrap/variables.tf`
-- Create: `terraform/v2/bootstrap/outputs.tf`
+**파일:**
+- 생성: `terraform/v2/bootstrap/main.tf`
+- 생성: `terraform/v2/bootstrap/variables.tf`
+- 생성: `terraform/v2/bootstrap/outputs.tf`
 
-- [ ] **Step 1: Write `variables.tf`**
+- [ ] **Step 1: `variables.tf` 작성**
 
 ```hcl
 variable "region" {
@@ -92,7 +92,7 @@ variable "lock_table_name" {
 }
 ```
 
-- [ ] **Step 2: Write `main.tf`**
+- [ ] **Step 2: `main.tf` 작성**
 
 ```hcl
 terraform {
@@ -155,7 +155,7 @@ resource "aws_dynamodb_table" "lock" {
 }
 ```
 
-- [ ] **Step 3: Write `outputs.tf`**
+- [ ] **Step 3: `outputs.tf` 작성**
 
 ```hcl
 output "state_bucket" {
@@ -167,32 +167,32 @@ output "lock_table" {
 }
 ```
 
-- [ ] **Step 4: Init + validate**
+- [ ] **Step 4: init + validate**
 
-Run:
+실행:
 ```bash
 cd terraform/v2/bootstrap && terraform init && terraform fmt && terraform validate
 ```
-Expected: `Success! The configuration is valid.`
+기대값: `Success! The configuration is valid.`
 
-- [ ] **Step 5: Plan + apply**
+- [ ] **Step 5: plan + apply**
 
-Run:
+실행:
 ```bash
 terraform plan -out tfplan && terraform apply tfplan
 ```
-Expected: 6 resources created (`aws_s3_bucket.state`, versioning, encryption, public_access_block, `aws_dynamodb_table.lock`). If the bucket name collides globally, set `-var state_bucket_name=awsops-v2-tfstate-<account-id>` and re-run; record the chosen name for Task 2.
+기대값: 6개 리소스 생성(`aws_s3_bucket.state`, versioning, encryption, public_access_block, `aws_dynamodb_table.lock`). 버킷명이 글로벌하게 충돌하면 `-var state_bucket_name=awsops-v2-tfstate-<account-id>`로 재실행하고, 선택한 이름을 Task 2용으로 기록.
 
-- [ ] **Step 6: Verify**
+- [ ] **Step 6: 검증**
 
-Run:
+실행:
 ```bash
 aws s3api head-bucket --bucket "$(terraform output -raw state_bucket)" && echo "BUCKET_OK"
 aws dynamodb describe-table --table-name "$(terraform output -raw lock_table)" --query 'Table.TableStatus' --output text
 ```
-Expected: `BUCKET_OK` then `ACTIVE`.
+기대값: `BUCKET_OK` 다음 `ACTIVE`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: 커밋**
 
 ```bash
 git add terraform/v2/bootstrap
@@ -201,15 +201,15 @@ git commit -m "feat(v2-p1a): terraform remote-state backend (S3 + DynamoDB)"
 
 ---
 
-## Task 2: Foundation skeleton — backend + providers + variables
+## Task 2: foundation 스켈레톤 — backend + providers + variables
 
-**Files:**
-- Create: `terraform/v2/foundation/backend.tf`
-- Create: `terraform/v2/foundation/providers.tf`
-- Create: `terraform/v2/foundation/variables.tf`
-- Create: `terraform/v2/foundation/terraform.tfvars.example`
+**파일:**
+- 생성: `terraform/v2/foundation/backend.tf`
+- 생성: `terraform/v2/foundation/providers.tf`
+- 생성: `terraform/v2/foundation/variables.tf`
+- 생성: `terraform/v2/foundation/terraform.tfvars.example`
 
-- [ ] **Step 1: Write `backend.tf`** (use the bucket/table names from Task 1; replace `awsops-v2-tfstate` if you overrode it)
+- [ ] **Step 1: `backend.tf` 작성** (Task 1의 버킷/테이블 이름 사용; `awsops-v2-tfstate`를 오버라이드했다면 교체)
 
 ```hcl
 terraform {
@@ -230,7 +230,7 @@ terraform {
 }
 ```
 
-- [ ] **Step 2: Write `providers.tf`** (the `use1` alias is mandatory — CloudFront certs must be in us-east-1)
+- [ ] **Step 2: `providers.tf` 작성** (`use1` alias는 필수 — CloudFront 인증서는 us-east-1이어야 함)
 
 ```hcl
 provider "aws" {
@@ -257,7 +257,7 @@ provider "aws" {
 }
 ```
 
-- [ ] **Step 3: Write `variables.tf`**
+- [ ] **Step 3: `variables.tf` 작성**
 
 ```hcl
 variable "region" {
@@ -298,30 +298,30 @@ variable "image_tag" {
 }
 ```
 
-- [ ] **Step 4: Write `terraform.tfvars.example`**
+- [ ] **Step 4: `terraform.tfvars.example` 작성**
 
 ```hcl
 domain_name      = "v2.atomai.click"
 hosted_zone_name = "atomai.click"
-# vpc_cidr       = "10.20.0.0/16"   # uncomment to override
+# vpc_cidr       = "10.20.0.0/16"   # 오버라이드하려면 주석 해제
 ```
 
-- [ ] **Step 5: Init against the remote backend**
+- [ ] **Step 5: 원격 backend로 init**
 
-Run:
+실행:
 ```bash
 cd terraform/v2/foundation
 cp terraform.tfvars.example terraform.tfvars
 terraform init
 ```
-Expected: `Successfully configured the backend "s3"! ... Terraform has been successfully initialized!`
+기대값: `Successfully configured the backend "s3"! ... Terraform has been successfully initialized!`
 
-- [ ] **Step 6: Validate**
+- [ ] **Step 6: validate**
 
-Run: `terraform fmt && terraform validate`
-Expected: `Success! The configuration is valid.` (No resources yet — only providers/vars.)
+실행: `terraform fmt && terraform validate`
+기대값: `Success! The configuration is valid.` (아직 리소스 없음 — providers/vars만)
 
-- [ ] **Step 7: Commit** (`.gitignore` must exclude real tfvars)
+- [ ] **Step 7: 커밋** (`.gitignore`가 실제 tfvars를 제외해야 함)
 
 ```bash
 printf '%s\n' 'terraform/v2/**/.terraform/*' 'terraform/v2/**/terraform.tfvars' 'terraform/v2/**/*.tfplan' >> .gitignore
@@ -331,12 +331,12 @@ git commit -m "feat(v2-p1a): foundation skeleton (s3 backend, dual-region provid
 
 ---
 
-## Task 3: Network — VPC, subnets, NAT, routes
+## Task 3: 네트워크 — VPC, 서브넷, NAT, route
 
-**Files:**
-- Create: `terraform/v2/foundation/network.tf`
+**파일:**
+- 생성: `terraform/v2/foundation/network.tf`
 
-- [ ] **Step 1: Write `network.tf`**
+- [ ] **Step 1: `network.tf` 작성**
 
 ```hcl
 resource "aws_vpc" "main" {
@@ -411,26 +411,26 @@ resource "aws_route_table_association" "private" {
 }
 ```
 
-- [ ] **Step 2: Validate**
+- [ ] **Step 2: validate**
 
-Run: `terraform fmt && terraform validate`
-Expected: `Success! The configuration is valid.`
+실행: `terraform fmt && terraform validate`
+기대값: `Success! The configuration is valid.`
 
-- [ ] **Step 3: Plan + apply**
+- [ ] **Step 3: plan + apply**
 
-Run: `terraform plan -out tfplan && terraform apply tfplan`
-Expected: ~13 resources created (VPC, IGW, 2 public + 2 private subnets, EIP, NAT, 2 route tables, 4 associations).
+실행: `terraform plan -out tfplan && terraform apply tfplan`
+기대값: 약 13개 리소스 생성(VPC, IGW, public 2 + private 2 서브넷, EIP, NAT, route table 2, association 4).
 
-- [ ] **Step 4: Verify**
+- [ ] **Step 4: 검증**
 
-Run:
+실행:
 ```bash
 aws ec2 describe-vpcs --filters "Name=tag:Name,Values=awsops-v2-vpc" \
   --query 'Vpcs[0].CidrBlock' --output text
 ```
-Expected: `10.20.0.0/16`.
+기대값: `10.20.0.0/16`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: 커밋**
 
 ```bash
 git add terraform/v2/foundation/network.tf
@@ -439,14 +439,14 @@ git commit -m "feat(v2-p1a): VPC, 2x public/private subnets, NAT, routes"
 
 ---
 
-## Task 4: Spine container (Node SSE/health server) + ECR repo
+## Task 4: spine 컨테이너 (Node SSE/헬스 서버) + ECR repo
 
-**Files:**
-- Create: `spine/server.js`
-- Create: `spine/Dockerfile`
-- Create: `terraform/v2/foundation/workload.tf` (ECR repo only in this task)
+**파일:**
+- 생성: `spine/server.js`
+- 생성: `spine/Dockerfile`
+- 생성: `terraform/v2/foundation/workload.tf` (이 Task에선 ECR repo만)
 
-- [ ] **Step 1: Write `spine/server.js`**
+- [ ] **Step 1: `spine/server.js` 작성**
 
 ```js
 const http = require('http');
@@ -483,7 +483,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '0.0.0.0', () => console.log(`spine listening on ${PORT}`));
 ```
 
-- [ ] **Step 2: Write `spine/Dockerfile`**
+- [ ] **Step 2: `spine/Dockerfile` 작성**
 
 ```dockerfile
 FROM public.ecr.aws/docker/library/node:20-alpine
@@ -493,9 +493,9 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 ```
 
-- [ ] **Step 3: Smoke-test the spine locally (fails first if server.js is wrong)**
+- [ ] **Step 3: spine 로컬 스모크 테스트 (server.js가 틀리면 먼저 실패)**
 
-Run:
+실행:
 ```bash
 node spine/server.js &
 sleep 1
@@ -503,9 +503,9 @@ curl -s localhost:3000/awsops/healthz; echo
 curl -sN localhost:3000/awsops/api/stream | head -3
 kill %1
 ```
-Expected: `ok`, then `data: tick 1`, `data: tick 2`, `data: tick 3` (one per second).
+기대값: `ok`, 이어서 `data: tick 1`, `data: tick 2`, `data: tick 3` (초당 1개씩).
 
-- [ ] **Step 4: Add the ECR repo to `workload.tf`**
+- [ ] **Step 4: `workload.tf`에 ECR repo 추가**
 
 ```hcl
 resource "aws_ecr_repository" "spine" {
@@ -514,39 +514,39 @@ resource "aws_ecr_repository" "spine" {
   image_scanning_configuration {
     scan_on_push = true
   }
-  force_delete = true   # spine is throwaway; replaced by real image in P1d
+  force_delete = true   # spine은 일회용; P1d에서 실제 이미지로 교체
 }
 ```
 
-- [ ] **Step 5: Apply just the ECR repo**
+- [ ] **Step 5: ECR repo만 apply**
 
-Run: `terraform apply -target=aws_ecr_repository.spine`
-Expected: 1 resource created. Capture the URI:
+실행: `terraform apply -target=aws_ecr_repository.spine`
+기대값: 1개 리소스 생성. URI 캡처:
 ```bash
 ECR_URI=$(aws ecr describe-repositories --repository-names awsops-v2-spine \
   --query 'repositories[0].repositoryUri' --output text); echo "$ECR_URI"
 ```
 
-- [ ] **Step 6: Build (arm64) + push**
+- [ ] **Step 6: build (arm64) + push**
 
-Run:
+실행:
 ```bash
 aws ecr get-login-password --region ap-northeast-2 \
   | docker login --username AWS --password-stdin "${ECR_URI%/*}"
 docker buildx build --platform linux/arm64 -t "$ECR_URI:spine-latest" spine --push
 ```
-Expected: `pushing manifest ... done`.
+기대값: `pushing manifest ... done`.
 
-- [ ] **Step 7: Verify the image exists**
+- [ ] **Step 7: 이미지 존재 검증**
 
-Run:
+실행:
 ```bash
 aws ecr describe-images --repository-name awsops-v2-spine \
   --query 'imageDetails[?contains(imageTags,`spine-latest`)].imageTags' --output text
 ```
-Expected: `spine-latest`.
+기대값: `spine-latest`.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: 커밋**
 
 ```bash
 git add spine terraform/v2/foundation/workload.tf
@@ -555,12 +555,12 @@ git commit -m "feat(v2-p1a): spine Node SSE/health container + ECR repo"
 
 ---
 
-## Task 5: Workload — ECS cluster, task def, internal ALB, service
+## Task 5: 워크로드 — ECS cluster, task def, internal ALB, service
 
-**Files:**
-- Modify: `terraform/v2/foundation/workload.tf` (append to the ECR repo from Task 4)
+**파일:**
+- 수정: `terraform/v2/foundation/workload.tf` (Task 4의 ECR repo 뒤에 append)
 
-- [ ] **Step 1: Append ECS cluster + IAM + log group + task definition**
+- [ ] **Step 1: ECS cluster + IAM + log group + task definition append**
 
 ```hcl
 resource "aws_ecs_cluster" "main" {
@@ -642,14 +642,13 @@ resource "aws_ecs_task_definition" "spine" {
 }
 ```
 
-- [ ] **Step 2: Append SGs — internal ALB (from VPC CIDR) + service (from ALB)**
+- [ ] **Step 2: SG append — internal ALB(VPC CIDR에서) + service(ALB에서)**
 
 ```hcl
-# Internal ALB SG. The ALB is NOT internet-facing; CloudFront reaches it
-# through a VPC Origin whose managed ENIs live in our private subnets, so
-# allowing the VPC CIDR inbound is a correct (and private) source. Tightened
-# to a dedicated VPC-origin SG as a follow-up once the GA SG mechanism is
-# confirmed in Step 7 verification.
+# Internal ALB SG. ALB는 internet-facing이 아님; CloudFront는 VPC Origin을 통해
+# 도달하며, 그 관리형 ENI는 우리 private 서브넷에 있으므로 VPC CIDR 인바운드 허용이
+# 올바른(그리고 사설) 소스다. GA SG 메커니즘이 Step 7 검증에서 확인되면 전용
+# VPC-origin SG로 좁히는 것을 후속 작업으로 한다.
 resource "aws_security_group" "alb" {
   name        = "${var.project}-alb-sg"
   description = "Internal ALB - reachable from within the VPC (CloudFront VPC Origin ENIs)"
@@ -691,12 +690,12 @@ resource "aws_security_group" "service" {
 }
 ```
 
-- [ ] **Step 3: Append internal ALB + target group + listener**
+- [ ] **Step 3: internal ALB + target group + listener append**
 
 ```hcl
 resource "aws_lb" "internal" {
   name               = "${var.project}-alb"
-  internal           = true                       # KEY: private LB, not internet-facing
+  internal           = true                       # 핵심: private LB, internet-facing 아님
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
   subnets            = aws_subnet.private[*].id
@@ -707,7 +706,7 @@ resource "aws_lb_target_group" "spine" {
   port        = 3000
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
-  target_type = "ip"                              # required for Fargate awsvpc
+  target_type = "ip"                              # Fargate awsvpc에 필요
 
   health_check {
     path                = "/awsops/healthz"
@@ -731,7 +730,7 @@ resource "aws_lb_listener" "http" {
 }
 ```
 
-- [ ] **Step 4: Append the ECS service**
+- [ ] **Step 4: ECS service append**
 
 ```hcl
 resource "aws_ecs_service" "spine" {
@@ -762,28 +761,28 @@ resource "aws_ecs_service" "spine" {
 }
 ```
 
-- [ ] **Step 5: Validate**
+- [ ] **Step 5: validate**
 
-Run: `terraform fmt && terraform validate`
-Expected: `Success! The configuration is valid.`
+실행: `terraform fmt && terraform validate`
+기대값: `Success! The configuration is valid.`
 
-- [ ] **Step 6: Plan + apply**
+- [ ] **Step 6: plan + apply**
 
-Run: `terraform plan -out tfplan && terraform apply tfplan`
-Expected: cluster, 2 IAM roles + attachment, log group, task def, 2 SGs, ALB, target group, listener, service created.
+실행: `terraform plan -out tfplan && terraform apply tfplan`
+기대값: cluster, IAM role 2 + attachment, log group, task def, SG 2, ALB, target group, listener, service 생성.
 
-- [ ] **Step 7: Verify the task is healthy behind the internal ALB**
+- [ ] **Step 7: internal ALB 뒤에서 task가 healthy인지 검증**
 
-Run (wait ~90s for the task to reach RUNNING + target HEALTHY):
+실행 (task가 RUNNING + target HEALTHY 될 때까지 약 90초 대기):
 ```bash
 aws ecs wait services-stable --cluster awsops-v2 --services awsops-v2-spine
 TG_ARN=$(aws elbv2 describe-target-groups --names awsops-v2-tg --query 'TargetGroups[0].TargetGroupArn' --output text)
 aws elbv2 describe-target-health --target-group-arn "$TG_ARN" \
   --query 'TargetHealthDescriptions[0].TargetHealth.State' --output text
 ```
-Expected: `healthy`. (The ALB is internal so it cannot be curled from your laptop yet — that happens through CloudFront in Task 6.)
+기대값: `healthy`. (ALB는 internal이라 아직 노트북에서 직접 curl 불가 — Task 6에서 CloudFront를 통해 확인.)
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: 커밋**
 
 ```bash
 git add terraform/v2/foundation/workload.tf
@@ -792,13 +791,13 @@ git commit -m "feat(v2-p1a): ECS Fargate spine service behind internal ALB"
 
 ---
 
-## Task 6: Edge — ACM cert, CloudFront VPC Origin, distribution, DNS
+## Task 6: 엣지 — ACM 인증서, CloudFront VPC Origin, distribution, DNS
 
-**Files:**
-- Create: `terraform/v2/foundation/edge.tf`
-- Create: `terraform/v2/foundation/outputs.tf`
+**파일:**
+- 생성: `terraform/v2/foundation/edge.tf`
+- 생성: `terraform/v2/foundation/outputs.tf`
 
-- [ ] **Step 1: Write the ACM cert (us-east-1) + DNS validation in `edge.tf`**
+- [ ] **Step 1: `edge.tf`에 ACM 인증서(us-east-1) + DNS 검증 작성**
 
 ```hcl
 data "aws_route53_zone" "main" {
@@ -835,7 +834,7 @@ resource "aws_acm_certificate_validation" "cf" {
 }
 ```
 
-- [ ] **Step 2: Append the CloudFront VPC Origin + managed policy data sources**
+- [ ] **Step 2: CloudFront VPC Origin + 관리형 정책 data source append**
 
 ```hcl
 data "aws_cloudfront_cache_policy" "disabled" {
@@ -850,8 +849,8 @@ data "aws_cloudfront_origin_request_policy" "all_viewer" {
   name = "Managed-AllViewer"
 }
 
-# CloudFront VPC Origin — lets CloudFront reach the INTERNAL ALB without it
-# being internet-facing. Requires aws provider >= 5.73.
+# CloudFront VPC Origin — internal ALB를 internet-facing 없이 도달하게 함.
+# aws provider >= 5.73 필요.
 resource "aws_cloudfront_vpc_origin" "alb" {
   vpc_origin_endpoint_config {
     name                   = "${var.project}-alb-origin"
@@ -867,7 +866,7 @@ resource "aws_cloudfront_vpc_origin" "alb" {
 }
 ```
 
-- [ ] **Step 3: Append the CloudFront distribution + Route53 alias**
+- [ ] **Step 3: CloudFront distribution + Route53 alias append**
 
 ```hcl
 resource "aws_cloudfront_distribution" "main" {
@@ -925,7 +924,7 @@ resource "aws_route53_record" "alias" {
 }
 ```
 
-- [ ] **Step 4: Write `outputs.tf`**
+- [ ] **Step 4: `outputs.tf` 작성**
 
 ```hcl
 output "cloudfront_domain" {
@@ -949,27 +948,27 @@ output "ecr_uri" {
 }
 ```
 
-- [ ] **Step 5: Validate**
+- [ ] **Step 5: validate**
 
-Run: `terraform fmt && terraform validate`
-Expected: `Success! The configuration is valid.`
+실행: `terraform fmt && terraform validate`
+기대값: `Success! The configuration is valid.`
 
-> If `terraform validate` rejects `aws_cloudfront_vpc_origin` or the `vpc_origin_config` block, the provider is older than 5.73. Run `terraform init -upgrade` and confirm `terraform version` shows aws provider `>= 5.73`. This is the single most likely schema-version failure in this plan.
+> `terraform validate`가 `aws_cloudfront_vpc_origin` 또는 `vpc_origin_config` 블록을 거부하면 provider가 5.73보다 낮은 것. `terraform init -upgrade` 실행 후 `terraform version`이 aws provider `>= 5.73`인지 확인. 이 계획에서 가장 가능성 높은 스키마-버전 실패 지점.
 
-- [ ] **Step 6: Plan + apply**
+- [ ] **Step 6: plan + apply**
 
-Run: `terraform plan -out tfplan && terraform apply tfplan`
-Expected: ACM cert + validation records + validation, VPC origin, distribution, Route53 alias created. The distribution + ACM validation can take 5–10 minutes.
+실행: `terraform plan -out tfplan && terraform apply tfplan`
+기대값: ACM 인증서 + 검증 레코드 + 검증, VPC origin, distribution, Route53 alias 생성. distribution + ACM 검증은 5~10분 소요 가능.
 
-- [ ] **Step 7: Verify health through the full edge**
+- [ ] **Step 7: 전체 엣지를 통한 헬스 검증**
 
-Run (CloudFront + DNS propagation can take a few minutes after apply):
+실행 (apply 후 CloudFront + DNS 전파에 수 분 소요 가능):
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" https://v2.atomai.click/awsops/healthz
 ```
-Expected: `200`. If `502`/`503`, the VPC origin → internal ALB path is failing — see Task 7.
+기대값: `200`. `502`/`503`이면 VPC origin → internal ALB 경로 실패 — Task 7 참조.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: 커밋**
 
 ```bash
 git add terraform/v2/foundation/edge.tf terraform/v2/foundation/outputs.tf
@@ -978,67 +977,67 @@ git commit -m "feat(v2-p1a): private edge — CloudFront VPC Origin to internal 
 
 ---
 
-## Task 7: Verify SSE end-to-end through CloudFront (the P1a acceptance gate)
+## Task 7: CloudFront를 통한 SSE end-to-end 검증 (P1a 수용 게이트)
 
-**Files:** none (verification + documentation task)
+**파일:** 없음 (검증 + 문서화 Task)
 
-- [ ] **Step 1: Confirm health endpoint**
+- [ ] **Step 1: 헬스 엔드포인트 확인**
 
-Run:
+실행:
 ```bash
 curl -s https://v2.atomai.click/awsops/healthz; echo
 ```
-Expected: `ok`.
+기대값: `ok`.
 
-- [ ] **Step 2: Confirm SSE streams incrementally (not buffered)**
+- [ ] **Step 2: SSE가 (버퍼링 없이) 점진적으로 스트리밍되는지 확인**
 
-Run:
+실행:
 ```bash
 curl -N -s https://v2.atomai.click/awsops/api/stream
 ```
-Expected: ten lines arriving **one per second** (`data: tick 1` … `data: tick 10`), then `data: done`. If all ten arrive at once after ~10s, CloudFront/ALB is buffering — record this; it blocks ADR-021 SSE and must be resolved before P1d ships the real app.
+기대값: 10줄이 **초당 1개씩** 도착(`data: tick 1` … `data: tick 10`), 이어서 `data: done`. 10줄이 약 10초 후 한꺼번에 오면 CloudFront/ALB가 버퍼링 중 — 기록할 것; ADR-021 SSE를 막으므로 P1d에서 실제 앱 출시 전 해결해야 함.
 
-- [ ] **Step 3: Measure time-to-first-byte and inter-event gap**
+- [ ] **Step 3: time-to-first-byte 및 이벤트 간격 측정**
 
-Run:
+실행:
 ```bash
 curl -N -s -w "\nTTFB=%{time_starttransfer}s TOTAL=%{time_total}s\n" https://v2.atomai.click/awsops/api/stream | tail -3
 ```
-Expected: `TTFB` < 2s and `TOTAL` ≈ 10s (proves the connection stays open and streams for the full duration, i.e. no premature CloudFront origin read-timeout cut-off).
+기대값: `TTFB` < 2s, `TOTAL` ≈ 10s (연결이 전체 시간 동안 열려 스트리밍됨 = CloudFront origin read-timeout으로 조기 절단되지 않음을 증명).
 
-- [ ] **Step 4: If SSE buffers or times out — apply the documented mitigations and re-test**
+- [ ] **Step 4: SSE가 버퍼링/타임아웃되면 — 문서화된 완화책 적용 후 재테스트**
 
-Mitigations, in order (apply one, re-run Step 2, stop when streaming works):
-1. **Origin keepalive:** the spine already sends an event every 1s; confirm CloudFront's default origin read timeout (30s) is not exceeded by the gap. Real app must send a heartbeat comment (`: keepalive\n\n`) at least every 20s — note this requirement for P1d.
-2. **ALB idle timeout:** raise from the 60s default. Add to `aws_lb.internal`:
+완화책(순서대로 하나 적용 → Step 2 재실행 → 스트리밍되면 중단):
+1. **Origin keepalive:** spine은 이미 1초마다 이벤트 전송; CloudFront 기본 origin read timeout(30s)을 간격이 초과하지 않는지 확인. 실제 앱은 최소 20초마다 heartbeat 주석(`: keepalive\n\n`) 전송 필요 — P1d용으로 기록.
+2. **ALB idle timeout:** 60s 기본값에서 상향. `aws_lb.internal`에 추가:
    ```hcl
    idle_timeout = 300
    ```
-   Then `terraform apply` and re-test.
-3. **Disable response buffering at the edge:** confirm the `Managed-CachingDisabled` policy is attached to the default behavior (it is, in Task 6 Step 3). Caching must be off for the SSE path.
+   이후 `terraform apply` + 재테스트.
+3. **엣지 응답 버퍼링 비활성:** 기본 behavior에 `Managed-CachingDisabled` 정책이 붙어 있는지 확인(Task 6 Step 3에서 붙음). SSE 경로는 캐싱 OFF여야 함.
 
-- [ ] **Step 5: Confirm the ALB is genuinely private (negative test)**
+- [ ] **Step 5: ALB가 진짜 private인지 확인 (negative test)**
 
-Run:
+실행:
 ```bash
 ALB_DNS=$(aws elbv2 describe-load-balancers --names awsops-v2-alb --query 'LoadBalancers[0].DNSName' --output text)
 echo "ALB scheme: $(aws elbv2 describe-load-balancers --names awsops-v2-alb --query 'LoadBalancers[0].Scheme' --output text)"
 curl -s -m 5 -o /dev/null -w "%{http_code}\n" "http://$ALB_DNS/awsops/healthz" || echo "UNREACHABLE_AS_EXPECTED"
 ```
-Expected: scheme `internal`, and the direct curl from your laptop prints `UNREACHABLE_AS_EXPECTED` (the internal ALB has no public IP). This proves the edge is private.
+기대값: scheme `internal`, 그리고 노트북에서 직접 curl은 `UNREACHABLE_AS_EXPECTED` 출력(internal ALB는 public IP 없음). 엣지가 사설임을 증명.
 
-- [ ] **Step 6: Record results in the plan and commit a short verification note**
+- [ ] **Step 6: 결과를 기록하고 검증 노트 커밋**
 
-Create `terraform/v2/foundation/VERIFY.md`:
+`terraform/v2/foundation/VERIFY.md` 생성:
 ```markdown
-# P1a verification (fill in actual values)
-- Date:
+# P1a 검증 (실제 값 기입)
+- 날짜:
 - `https://v2.atomai.click/awsops/healthz` -> 200: [yes/no]
-- SSE streamed incrementally (1/s): [yes/no]
+- SSE 점진 스트리밍(1/s): [yes/no]
 - TTFB: __s, total: __s
-- ALB scheme internal + laptop-unreachable: [yes/no]
-- SSE mitigations applied (if any): [none / idle_timeout=300 / ...]
-- P1d note: real app must heartbeat SSE every <=20s
+- ALB scheme internal + 노트북 unreachable: [yes/no]
+- 적용한 SSE 완화책(있으면): [none / idle_timeout=300 / ...]
+- P1d 노트: 실제 앱은 SSE heartbeat을 <=20s마다 보내야 함
 ```
 
 ```bash
@@ -1048,25 +1047,25 @@ git commit -m "test(v2-p1a): verify private edge serves health + SSE end-to-end"
 
 ---
 
-## Task 8: Teardown rehearsal (prove the spine is reproducible/disposable)
+## Task 8: teardown 리허설 (spine이 재현/폐기 가능함을 증명)
 
-**Files:** none
+**파일:** 없음
 
-- [ ] **Step 1: Confirm a clean re-apply is a no-op (idempotency)**
+- [ ] **Step 1: 깨끗한 재-apply가 no-op인지 확인 (멱등성)**
 
-Run: `terraform plan`
-Expected: `No changes. Your infrastructure matches the configuration.`
+실행: `terraform plan`
+기대값: `No changes. Your infrastructure matches the configuration.`
 
-- [ ] **Step 2: (Optional, only if validating teardown) Destroy + re-apply**
+- [ ] **Step 2: (선택, teardown 검증 시에만) destroy + 재-apply**
 
-> Skip if the spine should stay up for P1b. If run, this proves disposability.
+> P1b를 위해 spine을 띄워둘 거면 건너뜀. 실행하면 폐기 가능성을 증명.
 ```bash
-terraform destroy            # type 'yes'
-terraform apply              # rebuild from scratch
+terraform destroy            # 'yes' 입력
+terraform apply              # 처음부터 재구축
 ```
-Expected: destroy removes all foundation resources except the remote-state backend (separate module); re-apply recreates them and `curl https://v2.atomai.click/awsops/healthz` returns `ok` again after CloudFront re-propagates.
+기대값: destroy는 foundation 리소스를 모두 제거(원격 상태 백엔드는 별도 모듈이라 유지), 재-apply는 재생성, CloudFront 재전파 후 `curl https://v2.atomai.click/awsops/healthz`가 다시 `ok` 반환.
 
-- [ ] **Step 3: Final commit (plan doc completion marker)**
+- [ ] **Step 3: 최종 커밋 (계획 완료 마커)**
 
 ```bash
 git commit --allow-empty -m "chore(v2-p1a): foundation spine complete — edge verified, ready for P1b auth"
@@ -1074,23 +1073,23 @@ git commit --allow-empty -m "chore(v2-p1a): foundation spine complete — edge v
 
 ---
 
-## Self-Review
+## Self-Review (셀프 리뷰)
 
-**Spec coverage (P1a slice of the design spec §2.1, §8, §9-P1):**
-- Internal ALB + CloudFront VPC Origin (spec §2.1) → Tasks 5–6. ✓
-- ALB SG = VPC-sourced, not prefix-list (spec §2.1 "완전 사설") → Task 5 Step 2 (with documented tightening follow-up). ✓
-- SSE-over-VPC-Origin verification (spec §2.1, §9-P1 완료기준, §11 위험) → Task 7. ✓
-- Terraform remote state + multi-module layout (spec §8) → Tasks 1–2. ✓
-- New domain, parallel to v1 (spec §1, §8 완전 분리 병렬) → `v2.atomai.click`, separate VPC `10.20.0.0/16`. ✓
-- Steampipe-as-sidecar / web container details → **deferred to P1d** (real image); P1a uses a spine stand-in. Documented in Goal/out-of-scope. ✓
-- Aurora, Cognito, CI/CD, make configure, EKS module, AgentCore provisioner → **explicitly deferred** to P1b–P1f (scope check). ✓
+**스펙 커버리지 (설계 스펙 §2.1, §8, §9-P1의 P1a 슬라이스):**
+- Internal ALB + CloudFront VPC Origin (스펙 §2.1) → Task 5~6. ✓
+- ALB SG = VPC 소스, prefix-list 아님 (스펙 §2.1 "완전 사설") → Task 5 Step 2 (좁히기는 후속 작업으로 문서화). ✓
+- SSE-over-VPC-Origin 검증 (스펙 §2.1, §9-P1 완료기준, §11 위험) → Task 7. ✓
+- Terraform 원격 상태 + 멀티 모듈 레이아웃 (스펙 §8) → Task 1~2. ✓
+- 새 도메인, v1과 병렬 (스펙 §1, §8 완전 분리 병렬) → `v2.atomai.click`, 별도 VPC `10.20.0.0/16`. ✓
+- Steampipe 사이드카 / web 컨테이너 상세 → **P1d로 연기** (실제 이미지); P1a는 spine 대역. 목표/범위밖에 문서화. ✓
+- Aurora, Cognito, CI/CD, make configure, EKS 모듈, AgentCore provisioner → **명시적으로 P1b~P1f로 연기** (스코프 체크). ✓
 
-**Placeholder scan:** No "TBD/TODO/handle edge cases." The one schema-version caveat (Task 6 Step 5) and SSE mitigations (Task 7 Step 4) are concrete, conditional, with exact commands — not placeholders.
+**플레이스홀더 스캔:** "TBD/TODO/edge case 처리" 없음. 스키마-버전 주의(Task 6 Step 5)와 SSE 완화책(Task 7 Step 4)은 구체적·조건부·정확한 명령 — 플레이스홀더 아님.
 
-**Type/name consistency:** Resource names referenced across files are consistent: `aws_lb.internal`, `aws_ecr_repository.spine`, `aws_security_group.alb`/`.service`, `aws_lb_target_group.spine`, `aws_cloudfront_vpc_origin.alb`, cluster/service `awsops-v2`/`awsops-v2-spine`, health path `/awsops/healthz`, SSE path `/awsops/api/stream`, image tag `spine-latest` (= `var.image_tag` default). Health-check matcher `200-399` matches the dev-stack precedent.
+**타입/이름 일관성:** 파일 간 참조하는 리소스 이름 일관: `aws_lb.internal`, `aws_ecr_repository.spine`, `aws_security_group.alb`/`.service`, `aws_lb_target_group.spine`, `aws_cloudfront_vpc_origin.alb`, cluster/service `awsops-v2`/`awsops-v2-spine`, 헬스 경로 `/awsops/healthz`, SSE 경로 `/awsops/api/stream`, 이미지 태그 `spine-latest` (= `var.image_tag` 기본값). 헬스체크 matcher `200-399`는 dev 스택 선례와 일치.
 
 ---
 
-## Execution Handoff
+## Execution Handoff (실행 인계)
 
-(filled in by the writing-plans flow after save)
+(저장 후 writing-plans 플로우가 채움)
