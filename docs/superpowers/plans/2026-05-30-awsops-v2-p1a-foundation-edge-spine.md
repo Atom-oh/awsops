@@ -313,22 +313,49 @@ terraform init -backend-config=backend.hcl
 - [ ] **Step 7: 커밋** (`.gitignore`가 실제 tfvars를 제외해야 함)
 
 ```bash
-printf '%s\n' 'terraform/v2/**/.terraform/*' 'terraform/v2/**/terraform.tfvars' 'terraform/v2/**/backend.hcl' 'terraform/v2/**/*.tfplan' >> .gitignore
+printf '%s\n' 'terraform/v2/**/.terraform/*' 'terraform/v2/**/terraform.tfvars' 'terraform/v2/**/backend.hcl' 'terraform/v2/**/*.tfplan' 'terraform/v2/**/*.tfstate' 'terraform/v2/**/*.tfstate.backup' >> .gitignore
 git add terraform/v2/foundation/backend.tf terraform/v2/foundation/providers.tf terraform/v2/foundation/variables.tf terraform/v2/foundation/terraform.tfvars.example terraform/v2/foundation/backend.hcl.example .gitignore
 git commit -m "feat(v2-p1a): foundation skeleton (partial s3 backend, dual-region providers, vars)"
 ```
 
 ---
 
-## Task 3: 네트워크 — VPC, 서브넷, NAT, route
+## Task 3: 네트워크 — 신규 VPC 생성 또는 기존 VPC 재사용
 
 **파일:**
+- 수정: `terraform/v2/foundation/variables.tf` (네트워킹 변수 추가)
 - 생성: `terraform/v2/foundation/network.tf`
 
-- [ ] **Step 1: `network.tf` 작성**
+`make configure`(P1e)는 이 변수들로 "새 VPC 생성 vs 기존 VPC 선택"을 운영자에게 묻는다(`ec2:DescribeVpcs`로 후보 나열). **이 선택 UX는 v1 `scripts/00-deploy-infra.sh`를 그대로 미러한다** — 1=새 VPC(CIDR 입력) / 2=기존 선택 → `describe-vpcs` 나열 → private=`MapPublicIpOnLaunch=false` 분류 → NAT/IGW 확인·경고 → CIDR 도출. (CDK의 `useExistingVpc`/`vpcId`/`vpcCidr` 컨텍스트 = TF의 `create_network`/`existing_vpc_id`/`existing_private_subnet_ids`.) P1a에서는 tfvars로 직접 지정. **기존 VPC 재사용 시 NAT 신규 비용·`ec2:Create*` 권한이 불필요.**
+
+- [ ] **Step 1: `variables.tf`에 네트워킹 변수 추가**
 
 ```hcl
+variable "create_network" {
+  type        = bool
+  description = "true=새 VPC/서브넷/NAT 생성; false=기존 VPC 재사용(existing_* 지정)"
+  default     = true
+}
+
+variable "existing_vpc_id" {
+  type        = string
+  description = "create_network=false일 때 사용할 기존 VPC ID"
+  default     = ""
+}
+
+variable "existing_private_subnet_ids" {
+  type        = list(string)
+  description = "create_network=false일 때 ALB/Fargate가 쓸 기존 private 서브넷 (≥2 AZ, NAT egress 필요)"
+  default     = []
+}
+```
+
+- [ ] **Step 2: `network.tf` 작성 (조건부 생성 + locals)**
+
+```hcl
+# 모든 네트워크 리소스는 create_network=true일 때만 생성. false면 기존 VPC 재사용.
 resource "aws_vpc" "main" {
+  count                = var.create_network ? 1 : 0
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
@@ -336,13 +363,14 @@ resource "aws_vpc" "main" {
 }
 
 resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.main.id
+  count  = var.create_network ? 1 : 0
+  vpc_id = aws_vpc.main[0].id
   tags   = { Name = "${var.project}-igw" }
 }
 
 resource "aws_subnet" "public" {
-  count                   = 2
-  vpc_id                  = aws_vpc.main.id
+  count                   = var.create_network ? 2 : 0
+  vpc_id                  = aws_vpc.main[0].id
   cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)       # 10.20.0.0/24, 10.20.1.0/24
   availability_zone       = var.azs[count.index]
   map_public_ip_on_launch = true
@@ -350,80 +378,102 @@ resource "aws_subnet" "public" {
 }
 
 resource "aws_subnet" "private" {
-  count             = 2
-  vpc_id            = aws_vpc.main.id
+  count             = var.create_network ? 2 : 0
+  vpc_id            = aws_vpc.main[0].id
   cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10)        # 10.20.10.0/24, 10.20.11.0/24
   availability_zone = var.azs[count.index]
   tags              = { Name = "${var.project}-private-${count.index}" }
 }
 
 resource "aws_eip" "nat" {
+  count  = var.create_network ? 1 : 0
   domain = "vpc"
   tags   = { Name = "${var.project}-nat-eip" }
 }
 
 resource "aws_nat_gateway" "nat" {
-  allocation_id = aws_eip.nat.id
+  count         = var.create_network ? 1 : 0
+  allocation_id = aws_eip.nat[0].id
   subnet_id     = aws_subnet.public[0].id
   tags          = { Name = "${var.project}-nat" }
   depends_on    = [aws_internet_gateway.igw]
 }
 
 resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
+  count  = var.create_network ? 1 : 0
+  vpc_id = aws_vpc.main[0].id
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.igw.id
+    gateway_id = aws_internet_gateway.igw[0].id
   }
   tags = { Name = "${var.project}-public-rt" }
 }
 
 resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
+  count  = var.create_network ? 1 : 0
+  vpc_id = aws_vpc.main[0].id
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.nat.id
+    nat_gateway_id = aws_nat_gateway.nat[0].id
   }
   tags = { Name = "${var.project}-private-rt" }
 }
 
 resource "aws_route_table_association" "public" {
-  count          = 2
+  count          = var.create_network ? 2 : 0
   subnet_id      = aws_subnet.public[count.index].id
-  route_table_id = aws_route_table.public.id
+  route_table_id = aws_route_table.public[0].id
 }
 
 resource "aws_route_table_association" "private" {
-  count          = 2
+  count          = var.create_network ? 2 : 0
   subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private[0].id
+}
+
+# 기존 VPC 재사용 시 CIDR을 조회(SG 규칙용). create_network=true면 미사용.
+data "aws_vpc" "existing" {
+  count = var.create_network ? 0 : 1
+  id    = var.existing_vpc_id
+}
+
+# 다운스트림(workload/edge)은 항상 이 locals를 참조 — 생성/기존 분기를 흡수.
+locals {
+  vpc_id             = var.create_network ? aws_vpc.main[0].id : var.existing_vpc_id
+  private_subnet_ids = var.create_network ? aws_subnet.private[*].id : var.existing_private_subnet_ids
+  vpc_cidr           = var.create_network ? var.vpc_cidr : data.aws_vpc.existing[0].cidr_block
 }
 ```
 
-- [ ] **Step 2: validate**
+- [ ] **Step 3: validate**
 
 실행: `terraform fmt && terraform validate`
 기대값: `Success! The configuration is valid.`
 
-- [ ] **Step 3: plan + apply**
+- [ ] **Step 4: plan + apply**
+
+P1a 기본은 새 VPC 생성(`create_network=true`). 기존 VPC 재사용을 검증하려면 tfvars에 `create_network=false`, `existing_vpc_id`, `existing_private_subnet_ids`를 지정.
 
 실행: `terraform plan -out tfplan && terraform apply tfplan`
-기대값: 약 13개 리소스 생성(VPC, IGW, public 2 + private 2 서브넷, EIP, NAT, route table 2, association 4).
+기대값:
+- `create_network=true`(기본): 약 13개 리소스 생성(VPC, IGW, public 2 + private 2 서브넷, EIP, NAT, route table 2, association 4).
+- `create_network=false`(기존 재사용): **네트워크 리소스 0개** 생성(locals만 기존 ID/CIDR로 해석). NAT 신규 비용·`ec2:Create*` 권한 불필요.
 
-- [ ] **Step 4: 검증**
+- [ ] **Step 5: 검증**
 
-실행:
+- `create_network=true`:
 ```bash
 aws ec2 describe-vpcs --filters "Name=tag:Name,Values=awsops-v2-vpc" \
   --query 'Vpcs[0].CidrBlock' --output text
 ```
 기대값: `10.20.0.0/16`.
+- `create_network=false`: `terraform console <<<'local.vpc_id'` / `local.private_subnet_ids`가 지정한 기존 값으로 해석되는지 확인. (기존 private 서브넷은 NAT egress가 있어야 Fargate가 ECR pull 가능 — v1 `00-deploy-infra.sh`도 NAT 개수를 확인·경고한다.)
 
-- [ ] **Step 5: 커밋**
+- [ ] **Step 6: 커밋**
 
 ```bash
-git add terraform/v2/foundation/network.tf
-git commit -m "feat(v2-p1a): VPC, 2x public/private subnets, NAT, routes"
+git add terraform/v2/foundation/network.tf terraform/v2/foundation/variables.tf
+git commit -m "feat(v2-p1a): network — create new VPC/NAT or reuse existing (create_network flag)"
 ```
 
 ---
@@ -641,14 +691,14 @@ resource "aws_ecs_task_definition" "spine" {
 resource "aws_security_group" "alb" {
   name        = "${var.project}-alb-sg"
   description = "Internal ALB - reachable from within the VPC (CloudFront VPC Origin ENIs)"
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = local.vpc_id
 
   ingress {
     description = "HTTP from within VPC (incl. CloudFront VPC Origin ENIs)"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    cidr_blocks = [local.vpc_cidr]
   }
   egress {
     from_port   = 0
@@ -661,7 +711,7 @@ resource "aws_security_group" "alb" {
 resource "aws_security_group" "service" {
   name        = "${var.project}-service-sg"
   description = "Spine Fargate tasks"
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = local.vpc_id
 
   ingress {
     description     = "ALB to Fargate"
@@ -687,14 +737,14 @@ resource "aws_lb" "internal" {
   internal           = true                       # 핵심: private LB, internet-facing 아님
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  subnets            = aws_subnet.private[*].id
+  subnets            = local.private_subnet_ids
 }
 
 resource "aws_lb_target_group" "spine" {
   name        = "${var.project}-tg"
   port        = 3000
   protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = local.vpc_id
   target_type = "ip"                              # Fargate awsvpc에 필요
 
   health_check {
@@ -730,7 +780,7 @@ resource "aws_ecs_service" "spine" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = local.private_subnet_ids
     security_groups  = [aws_security_group.service.id]
     assign_public_ip = false
   }

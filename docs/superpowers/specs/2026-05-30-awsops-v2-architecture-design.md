@@ -176,6 +176,8 @@ v1의 가장 큰 운영 통증인 **17개 순차 셸 스크립트**(00~12, 6a~6f
 
 **OSS 이식성 (단일 repo 자가 배포)**: awsops repo에 private 값(backend 버킷·도메인·계정·인증서)을 박지 않는다. backend는 **partial**(`backend "s3" {}`) — 고객이 `make configure`로 `terraform.tfvars` + `backend.hcl`(둘 다 gitignored)을 생성 → `make deploy`가 bootstrap(state 버킷, `use_lockfile`) + `init -backend-config` + apply. **private consumer root 불필요** — OSS repo만으로 고객이 배포(원안의 make 흐름 유지). 사용자 자신의 배포도 동일 경로다. (사내 Atlantis(`AWS-Demo-Platform`)를 배포 백엔드로 평가했으나 — TF 1.9.6 핀 + private 백엔드 + OSS에 못 박는 제약 때문에 — 미사용으로 결정, 대신 **신규 backend + Terraform 1.15 + `use_lockfile`**(DynamoDB 불필요) 채택.)
 
+**네트워크 선택 (신규 vs 기존 VPC)**: `make configure`는 **새 VPC 생성** 또는 **기존 VPC 재사용**을 운영자가 고르게 한다 — v1 `scripts/00-deploy-infra.sh`의 선택 UX(1=새 VPC / 2=기존→`describe-vpcs`→private subnet 분류→NAT 확인→CIDR 도출)를 그대로 미러. Terraform은 `create_network` 플래그 + `data.aws_vpc`(기존 CIDR) + locals(vpc_id/subnets/cidr 분기)로 흡수. 기존 VPC 재사용 시 NAT 신규 비용·`ec2:Create*` 권한 불필요.
+
 **OSS 메트릭/배지 (P1d 배포 폴백)**: README에 GitHub stars/forks/issues/license/last-commit/CI 배지는 즉시 추가(인프라 0). "다운로드 수"는 GitHub clone 통계가 비공개라 공개 배지 불가 — 대신 **릴리스 자산 다운로드 배지**(릴리스 자산 발행 시) 또는 **Public ECR pull-count용 커스텀 shields.io endpoint 배지**(작은 Lambda가 `ecr-public` 통계 조회)를 P1d 배포 단계에서 추가. Docker Hub 미러링 시 `docker/pulls` 배지도 가능.
 
 **스택 분할**(실패 도메인 기준, ADR-024 정신 계승): `edge`(CloudFront·**VPC Origin**·**Internal ALB**·Lambda@Edge·Cognito) / `network`(VPC·서브넷·SG) / `data`(Aurora) / `workload`(ECS·web·steampipe) / `ai`(AgentCore·워커·SQS·SFN) / `incident`.
