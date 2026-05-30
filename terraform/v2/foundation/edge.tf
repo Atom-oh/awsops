@@ -90,7 +90,7 @@ resource "aws_cloudfront_distribution" "main" {
   }
 
   ordered_cache_behavior {
-    path_pattern           = "/awsops/_next/static/*"
+    path_pattern           = "/_next/static/*"
     target_origin_id       = "alb-vpc-origin"
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD"]

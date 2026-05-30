@@ -67,7 +67,7 @@ resource "aws_ecs_task_definition" "spine" {
       portMappings = [{ containerPort = 3000, protocol = "tcp" }]
       environment  = [{ name = "PORT", value = "3000" }]
       healthCheck = {
-        command     = ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/awsops/healthz || exit 1"]
+        command     = ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/healthz || exit 1"]
         interval    = 30
         timeout     = 5
         retries     = 3
@@ -182,7 +182,7 @@ resource "aws_lb_target_group" "spine" {
   target_type = "ip"
 
   health_check {
-    path                = "/awsops/healthz"
+    path                = "/healthz"
     matcher             = "200-399"
     interval            = 30
     timeout             = 10

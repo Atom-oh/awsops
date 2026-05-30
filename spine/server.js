@@ -2,12 +2,12 @@ const http = require('http');
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
-  if (req.url === '/awsops/healthz') {
+  if (req.url === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('ok');
     return;
   }
-  if (req.url === '/awsops/api/stream') {
+  if (req.url === '/api/stream') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -23,6 +23,11 @@ const server = http.createServer((req, res) => {
       }
     }, 1000);
     req.on('close', () => clearInterval(timer));
+    return;
+  }
+  if (req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('AWSops v2 spine — ok (root)');
     return;
   }
   res.writeHead(404, { 'Content-Type': 'text/plain' });
