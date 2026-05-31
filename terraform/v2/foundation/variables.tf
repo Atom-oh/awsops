@@ -31,8 +31,13 @@ variable "azs" {
 
 variable "image_tag" {
   type        = string
-  description = "Spine image tag in ECR"
-  default     = "spine-latest"
+  description = "Web image tag in ECR"
+  default     = "web-latest"
+}
+
+variable "allow_vpc_db_access" {
+  type    = bool
+  default = true
 }
 
 variable "create_network" {

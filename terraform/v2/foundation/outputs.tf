@@ -15,7 +15,7 @@ output "alb_arn" {
 }
 
 output "ecr_uri" {
-  value = aws_ecr_repository.spine.repository_url
+  value = aws_ecr_repository.web.repository_url
 }
 
 output "cognito_user_pool_id" { value = aws_cognito_user_pool.main.id }
@@ -28,3 +28,6 @@ output "aurora_secret_arn" { value = aws_rds_cluster.aurora.master_user_secret[0
 
 output "ecr_web_uri" { value = aws_ecr_repository.web.repository_url }
 output "ecr_public_uri" { value = aws_ecrpublic_repository.web.repository_uri }
+
+output "ecs_cluster_name" { value = aws_ecs_cluster.main.name }
+output "ecs_service_name" { value = aws_ecs_service.web.name }

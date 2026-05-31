@@ -25,12 +25,15 @@ resource "aws_security_group" "aurora" {
     protocol        = "tcp"
     security_groups = [aws_security_group.service.id]
   }
-  ingress {
-    description = "In-VPC migration (deploy host)"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = [local.vpc_cidr]
+  dynamic "ingress" {
+    for_each = var.allow_vpc_db_access ? [1] : []
+    content {
+      description = "In-VPC migration (deploy host) - dev only"
+      from_port   = 5432
+      to_port     = 5432
+      protocol    = "tcp"
+      cidr_blocks = [local.vpc_cidr]
+    }
   }
   egress {
     from_port   = 0
