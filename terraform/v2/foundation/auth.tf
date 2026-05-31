@@ -39,3 +39,53 @@ resource "aws_cognito_user" "admin" {
     email_verified = true
   }
 }
+
+data "aws_iam_policy_document" "edge_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com", "edgelambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "edge" {
+  name               = "${var.project}-edge-auth"
+  assume_role_policy = data.aws_iam_policy_document.edge_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "edge_basic" {
+  role       = aws_iam_role.edge.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+locals {
+  edge_src = templatefile("${path.module}/edge-lambda/cognito_edge.py.tftpl", {
+    client_id      = aws_cognito_user_pool_client.main.id
+    client_secret  = aws_cognito_user_pool_client.main.client_secret
+    cognito_domain = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com"
+  })
+}
+
+data "archive_file" "edge" {
+  type        = "zip"
+  output_path = "${path.module}/.build/cognito_edge.zip"
+  source {
+    content  = local.edge_src
+    filename = "cognito_edge.py"
+  }
+}
+
+resource "aws_lambda_function" "edge" {
+  provider         = aws.use1
+  function_name    = "${var.project}-cognito-auth"
+  runtime          = "python3.12"
+  handler          = "cognito_edge.lambda_handler"
+  role             = aws_iam_role.edge.arn
+  filename         = data.archive_file.edge.output_path
+  source_code_hash = data.archive_file.edge.output_base64sha256
+  timeout          = 5
+  memory_size      = 128
+  publish          = true
+}

@@ -99,3 +99,4 @@ terraform/v2/**/*.tfplan
 terraform/v2/**/*.tfstate
 terraform/v2/**/*.tfstate.backup
 terraform/v2/**/tfplan
+terraform/v2/**/.build/

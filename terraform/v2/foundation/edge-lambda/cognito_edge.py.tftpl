@@ -1,0 +1,83 @@
+import json, base64, urllib.request, urllib.parse, time
+
+CONFIG = {
+    'CLIENT_ID': '${client_id}',
+    'CLIENT_SECRET': '${client_secret}',
+    'COGNITO_DOMAIN': '${cognito_domain}',
+    'CALLBACK_PATH': '/_callback',
+}
+
+def lambda_handler(event, context):
+    request = event['Records'][0]['cf']['request']
+    uri = request.get('uri', '')
+    headers = request.get('headers', {})
+
+    if uri == CONFIG['CALLBACK_PATH']:
+        return handle_callback(request, headers)
+
+    cookies = parse_cookies(headers)
+    id_token = cookies.get('awsops_token', '')
+    if id_token:
+        try:
+            payload = decode_jwt_payload(id_token)
+            if payload.get('exp', 0) > time.time():
+                return request
+        except Exception:
+            pass
+
+    host = headers.get('host', [{}])[0].get('value', '')
+    cb = f'https://{host}{CONFIG["CALLBACK_PATH"]}'
+    url = (f'https://{CONFIG["COGNITO_DOMAIN"]}/login?'
+           f'client_id={CONFIG["CLIENT_ID"]}&response_type=code&'
+           f'scope=openid+email+profile&redirect_uri={urllib.parse.quote(cb)}')
+    return {
+        'status': '302', 'statusDescription': 'Found',
+        'headers': {
+            'location': [{'key': 'Location', 'value': url}],
+            'cache-control': [{'key': 'Cache-Control', 'value': 'no-cache'}],
+        },
+    }
+
+def handle_callback(request, headers):
+    params = dict(urllib.parse.parse_qsl(request.get('querystring', '')))
+    code = params.get('code', '')
+    if not code:
+        return {'status': '400', 'statusDescription': 'Bad Request', 'body': 'Missing authorization code'}
+    host = headers.get('host', [{}])[0].get('value', '')
+    cb = f'https://{host}{CONFIG["CALLBACK_PATH"]}'
+    auth = base64.b64encode(f'{CONFIG["CLIENT_ID"]}:{CONFIG["CLIENT_SECRET"]}'.encode()).decode()
+    data = urllib.parse.urlencode({
+        'grant_type': 'authorization_code', 'code': code,
+        'redirect_uri': cb, 'client_id': CONFIG['CLIENT_ID'],
+    }).encode()
+    req = urllib.request.Request(
+        f'https://{CONFIG["COGNITO_DOMAIN"]}/oauth2/token', data=data,
+        headers={'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': f'Basic {auth}'})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            tokens = json.loads(resp.read())
+    except Exception as e:
+        return {'status': '500', 'statusDescription': 'Server Error', 'body': str(e)}
+    return {
+        'status': '302', 'statusDescription': 'Found',
+        'headers': {
+            'location': [{'key': 'Location', 'value': f'https://{host}/'}],
+            'set-cookie': [{'key': 'Set-Cookie',
+                'value': f'awsops_token={tokens.get("id_token","")};Path=/;Secure;HttpOnly;SameSite=Lax;Max-Age=3600'}],
+            'cache-control': [{'key': 'Cache-Control', 'value': 'no-cache'}],
+        },
+    }
+
+def parse_cookies(headers):
+    cookies = {}
+    for c in headers.get('cookie', []):
+        for p in c.get('value', '').split(';'):
+            if '=' in p:
+                k, v = p.strip().split('=', 1)
+                cookies[k] = v
+    return cookies
+
+def decode_jwt_payload(token):
+    p = token.split('.')[1]
+    p += '=' * (4 - len(p) % 4)
+    return json.loads(base64.urlsafe_b64decode(p))
