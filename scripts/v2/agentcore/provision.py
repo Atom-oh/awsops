@@ -130,15 +130,24 @@ def ensure_targets(ctrl, ac, gw_ids):
 
 
 def ensure_memory(ctrl):
+    # ListMemories items carry id/arn/status but NOT name; resolve name via get_memory.
     for m in _items(ctrl.list_memories()):
-        if m.get("name") == MEMORY_NAME:
-            mid = m.get("memoryId") or m.get("id")
+        mid = m.get("id") or m.get("memoryId")
+        if not mid:
+            continue
+        try:
+            detail = ctrl.get_memory(memoryId=mid).get("memory", {})
+        except ClientError:
+            detail = {}
+        if detail.get("name") == MEMORY_NAME:
             log("memory", "EXISTS", mid)
             return mid
     try:
         resp = ctrl.create_memory(name=MEMORY_NAME, description="AWSops v2 conversation history",
                                   eventExpiryDuration=365)
-        mid = resp.get("memoryId") or resp.get("id") or resp.get("memory", {}).get("memoryId")
+        # CreateMemory returns {"memory": {"id": ...}}.
+        mem = resp.get("memory", resp)
+        mid = mem.get("id") or mem.get("memoryId")
         log("memory", "CREATED", mid)
         return mid
     except ClientError as e:
