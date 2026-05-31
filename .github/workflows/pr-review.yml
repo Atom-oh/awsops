@@ -15,7 +15,7 @@ jobs:
       pull-requests: write
       contents: read
     env:
-      ANTHROPIC_MODEL: us.anthropic.claude-opus-4-7
+      ANTHROPIC_MODEL: us.anthropic.claude-opus-4-8
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
       AWS_REGION: us-east-1
@@ -114,14 +114,14 @@ jobs:
           sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
             echo "$MARKER"
-            echo "## AI Code Review (Claude Code + Opus 4.7)"
+            echo "## AI Code Review (Claude Code + Opus 4.8)"
             echo ""
             echo "$STATUS_BADGE"
             echo ""
             cat /tmp/review-clean.md
             echo ""
             echo "---"
-            echo "_Automated review by Claude Code CLI with Bedrock Opus 4.7_"
+            echo "_Automated review by Claude Code CLI with Bedrock Opus 4.8_"
           } > /tmp/comment.md
           EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->")) | .id' 2>/dev/null | head -1)
