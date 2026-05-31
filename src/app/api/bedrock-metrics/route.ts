@@ -21,6 +21,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cacheRead?:
   // Claude 4.x — cross-region inference IDs (as seen in CloudWatch) / 교차 추론 ID (CloudWatch 실제 값)
   'anthropic.claude-sonnet-4-6': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 4.6' },
   'anthropic.claude-sonnet-4-6-v1': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 4.6' },
+  'anthropic.claude-opus-4-8-v1': { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75, label: 'Claude Opus 4.8' },
+  'anthropic.claude-opus-4-8': { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75, label: 'Claude Opus 4.8' },
+  'anthropic.claude-opus-4-7-v1': { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75, label: 'Claude Opus 4.7' },
+  'anthropic.claude-opus-4-7': { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75, label: 'Claude Opus 4.7' },
   'anthropic.claude-opus-4-6-v1': { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75, label: 'Claude Opus 4.6' },
   'anthropic.claude-opus-4-6': { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75, label: 'Claude Opus 4.6' },
   'anthropic.claude-sonnet-4-5-20250514-v1:0': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 4.5' },

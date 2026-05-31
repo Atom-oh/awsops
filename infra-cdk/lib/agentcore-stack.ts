@@ -28,7 +28,7 @@ import { Construct } from 'constructs';
  *     - Tools: reachability-analyzer, flow-monitor, network-mcp, steampipe-query
  *
  * - AgentCore Runtime (ap-northeast-2):
- *     - Strands Agent with Bedrock Sonnet/Opus 4.6 (us-east-1 cross-region)
+ *     - Strands Agent with Bedrock Sonnet 4.6 / Opus 4.8 (us-east-1 cross-region)
  *     - Connected to Gateway for MCP tool access
  *     - ARM64 container on microVM
  *

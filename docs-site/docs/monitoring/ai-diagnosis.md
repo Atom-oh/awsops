@@ -8,7 +8,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # AI 종합 진단
 
-`/ai-diagnosis` 페이지는 Amazon Bedrock **Claude Opus 4.6**가 15섹션으로 AWS 인프라 전반을 자동 분석하는 종합 리포트 도구입니다.
+`/ai-diagnosis` 페이지는 Amazon Bedrock **Claude Opus 4.8**가 15섹션으로 AWS 인프라 전반을 자동 분석하는 종합 리포트 도구입니다.
 
 <Screenshot src="/screenshots/monitoring/ai-diagnosis.png" alt="AI 종합 진단 페이지" />
 
@@ -16,7 +16,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 | 항목 | 값 |
 |------|---|
-| **모델** | `global.anthropic.claude-opus-4-6-v1` (고정) |
+| **모델** | `global.anthropic.claude-opus-4-8-v1` (고정) |
 | **섹션 수** | 15 (비용 4 + 인프라 6 + 보안/네트워크 2 + 요약 3) |
 | **출력 포맷** | DOCX (A4 + TOC), Markdown, PDF (브라우저 print) |
 | **저장 위치** | S3 리포트 버킷 + `data/reports/*.json` 캐시 |
@@ -174,6 +174,6 @@ curl -X POST /awsops/api/report \
 
 - ADR-019: 진단 리포트 포맷 매트릭스
 - ADR-014: 리포트 프록시 다운로드 URL
-- ADR-016: Bedrock 모델 선택 전략 (Opus 4.6 고정)
+- ADR-016: Bedrock 모델 선택 전략 (Opus 4.8 고정)
 - `src/lib/report-prompts.ts` — 15섹션 프롬프트 정의 (정확한 출력 구조)
 - `src/lib/report-scheduler.ts` — 스케줄 계산 로직 (KST 기준)

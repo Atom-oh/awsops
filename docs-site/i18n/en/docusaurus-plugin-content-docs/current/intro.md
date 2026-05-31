@@ -30,7 +30,7 @@ AWSops is an integrated operations dashboard for real-time monitoring and manage
 - AI assistant powered by **Amazon Bedrock AgentCore**
 - Query and analyze infrastructure using natural language
 - Leverage 8 specialized Gateways and 125 MCP tools
-- Support for Claude Sonnet/Opus 4.6 models
+- Support for Claude Sonnet 4.6 / Opus 4.8 models
 
 ### Network Troubleshooting
 - VPC Flow Logs analysis
@@ -103,7 +103,7 @@ Docker arm64 images are built on EC2, pushed to ECR, and run on AgentCore manage
 
 | Component | Description |
 |-----------|-------------|
-| **Bedrock Model** | Claude Sonnet/Opus 4.6 |
+| **Bedrock Model** | Claude Sonnet 4.6 / Opus 4.8 |
 | **Runtime** | Strands Agent Framework (Docker arm64, ECR) |
 | **Code Interpreter** | Python sandbox (pandas, matplotlib, etc.) |
 | **Memory** | Conversation history storage (365-day retention) |
@@ -182,7 +182,7 @@ Monitor the following resources by connecting to EKS clusters:
 |-----------|------------|
 | Frontend | Next.js 14 (App Router), Tailwind CSS, Recharts, React Flow |
 | Backend | Steampipe (embedded PostgreSQL port 9193), Node.js |
-| AI Engine | Amazon Bedrock (Claude Sonnet/Opus 4.6), AgentCore Runtime (Strands) |
+| AI Engine | Amazon Bedrock (Claude Sonnet 4.6 / Opus 4.8), AgentCore Runtime (Strands) |
 | AI Tools | 8 Gateways, 125 MCP tools, 19 Lambda, Code Interpreter, Memory |
 | Auth | Amazon Cognito, Lambda@Edge (us-east-1) |
 | Infrastructure | AWS CDK, CloudFront, ALB, EC2 (t4g.2xlarge ARM64) |

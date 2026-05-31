@@ -30,7 +30,7 @@ AWSops는 AWS 및 Kubernetes 인프라를 실시간으로 모니터링하고 관
 - **Amazon Bedrock AgentCore** 기반 AI 어시스턴트
 - 자연어로 인프라 질문 및 분석 요청
 - 8개 전문 Gateway와 125개 MCP 도구 활용
-- Claude Sonnet/Opus 4.6 모델 지원
+- Claude Sonnet 4.6 / Opus 4.8 모델 지원
 
 ### 네트워크 문제 해결
 - VPC Flow Logs 분석
@@ -103,7 +103,7 @@ EC2에서 Docker arm64 이미지를 빌드하여 ECR에 푸시하고, AgentCore 
 
 | 컴포넌트 | 설명 |
 |----------|------|
-| **Bedrock Model** | Claude Sonnet/Opus 4.6 |
+| **Bedrock Model** | Claude Sonnet 4.6 / Opus 4.8 |
 | **Runtime** | Strands Agent Framework (Docker arm64, ECR) |
 | **Code Interpreter** | Python 샌드박스 (pandas, matplotlib 등) |
 | **Memory** | 대화 이력 저장 (365일 보관) |
@@ -182,7 +182,7 @@ EKS 클러스터에 연결하여 다음 리소스를 모니터링합니다:
 |---------|------|
 | Frontend | Next.js 14 (App Router), Tailwind CSS, Recharts, React Flow |
 | Backend | Steampipe (내장 PostgreSQL port 9193), Node.js |
-| AI Engine | Amazon Bedrock (Claude Sonnet/Opus 4.6), AgentCore Runtime (Strands) |
+| AI Engine | Amazon Bedrock (Claude Sonnet 4.6 / Opus 4.8), AgentCore Runtime (Strands) |
 | AI Tools | 8 Gateway, 125 MCP 도구, 19 Lambda, Code Interpreter, Memory |
 | 인증 | Amazon Cognito, Lambda@Edge (us-east-1) |
 | 인프라 | AWS CDK, CloudFront, ALB, EC2 (t4g.2xlarge ARM64) |

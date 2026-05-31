@@ -22,7 +22,7 @@ Assign Bedrock models to flows by **depth-vs-latency axis**, using only two cano
 // src/app/api/ai/route.ts
 const MODELS: Record<string, string> = {
   'sonnet-4.6': 'global.anthropic.claude-sonnet-4-6',
-  'opus-4.6':   'global.anthropic.claude-opus-4-6-v1',
+  'opus-4.8':   'global.anthropic.claude-opus-4-8-v1',
 };
 ```
 
@@ -32,9 +32,9 @@ const MODELS: Record<string, string> = {
 | Router classifier + tool inference | `src/app/api/ai/route.ts` | `global.anthropic.claude-sonnet-4-6` | Short prompts, high QPS, prompt-caching friendly |
 | Datasource NL→query | `src/app/api/datasources/route.ts` | `global.anthropic.claude-sonnet-4-6` | 300-token output cap, sub-second required |
 | Alert diagnosis orchestrator | `src/lib/alert-diagnosis.ts` | `global.anthropic.claude-sonnet-4-6` | Burst concurrency, Slack time budget, commit `ba03173` |
-| 15-section comprehensive diagnosis | `src/app/api/report/route.ts` | `global.anthropic.claude-opus-4-6-v1` | Multi-minute background job, depth over speed |
-| Scheduled full-report runs | `src/lib/report-scheduler.ts` → report route | `global.anthropic.claude-opus-4-6-v1` | Same path as manual report |
-| Opt-in Opus in AI chat | `src/app/api/ai/route.ts` (`modelKey: 'opus-4.6'`) | `global.anthropic.claude-opus-4-6-v1` | Power-user override only |
+| 15-section comprehensive diagnosis | `src/app/api/report/route.ts` | `global.anthropic.claude-opus-4-8-v1` | Multi-minute background job, depth over speed |
+| Scheduled full-report runs | `src/lib/report-scheduler.ts` → report route | `global.anthropic.claude-opus-4-8-v1` | Same path as manual report |
+| Opt-in Opus in AI chat | `src/app/api/ai/route.ts` (`modelKey: 'opus-4.8'`) | `global.anthropic.claude-opus-4-8-v1` | Power-user override only |
 
 ## Rationale / 근거
 
@@ -76,10 +76,15 @@ const MODELS: Record<string, string> = {
 - Per-route model selection is a config-level knob, not a business-logic change.
 
 ### Negative / 부정적
-- Sonnet on alert diagnosis may miss edge-case reasoning that Opus would catch. Mitigated by the collector depth and the structured prompt in `alert-diagnosis.ts` (see ADR-009, Stage 3), and by the fact that on-demand deep investigation via AI chat still has an `opus-4.6` opt-in.
+- Sonnet on alert diagnosis may miss edge-case reasoning that Opus would catch. Mitigated by the collector depth and the structured prompt in `alert-diagnosis.ts` (see ADR-009, Stage 3), and by the fact that on-demand deep investigation via AI chat still has an `opus-4.8` opt-in.
 - Two canonical model IDs must be tracked and rotated together when new Claude versions ship. The `MODELS` map and the `MODEL_ID` constant in `report/route.ts` must stay aligned.
 - Per-flow budget monitoring is now mandatory — the Bedrock Metrics dashboard page (`src/app/bedrock/page.tsx`) is the primary observability surface for this tradeoff, and the `agentcore-stats.ts` per-model token counters feed it.
 - Other code paths (`src/app/api/datasources/route.ts:275`) hardcode the Sonnet ID directly instead of referencing the `MODELS` map; a follow-up cleanup would consolidate these.
+
+### Post-acceptance deviations / 채택 후 편차
+
+- **2026-05-31: Opus 4.6 → 4.8.** The Opus canonical ID and `modelKey` were bumped across all paths — `MODELS` map (`opus-4.8` → `global.anthropic.claude-opus-4-8-v1`), `report/route.ts` `MODEL_ID`, the AI chat opt-in, the `bedrock-metrics` pricing table, and the UI selector. Sonnet stays at 4.6 (still the current Sonnet). Pricing is unchanged (Opus tier `$15`/`$75`). The exact Bedrock profile string follows the existing `-v1` convention and must be confirmed against the account's Bedrock model catalog before deploy.
+- **2026-05-31: Opus 4.6 → 4.8.** Opus 표준 ID와 `modelKey`를 전 경로에서 상향 — `MODELS` 맵, `report/route.ts` `MODEL_ID`, AI 채팅 opt-in, `bedrock-metrics` 가격 테이블, UI 셀렉터. Sonnet은 4.6 유지(현재 Sonnet). 가격 동일(Opus `$15`/`$75`). 정확한 Bedrock 프로파일 문자열은 기존 `-v1` 관례를 따르되 배포 전 계정의 Bedrock 모델 카탈로그로 확인 필요.
 
 ## References / 참고 자료
 

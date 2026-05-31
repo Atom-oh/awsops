@@ -64,7 +64,7 @@ The AI assistant answers various questions through 10 specialized routes:
 <details>
 <summary>What if the AI gives an incorrect answer?</summary>
 
-The AI assistant is based on Amazon Bedrock (Claude Sonnet/Opus 4.6).
+The AI assistant is based on Amazon Bedrock (Claude Sonnet 4.6 / Opus 4.8).
 
 **Data Accuracy**
 - AWS resource data is queried **in real-time** through Steampipe

@@ -137,7 +137,7 @@ AWSops는 이 4가지 문제를 동시에 해결합니다.
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
   <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:20px;">
     <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Bedrock AgentCore</div>
-    <div style="color:#b0b0b0;line-height:1.6;">Claude Opus 4.6 (심층 분석)<br>Claude Sonnet 4.6 (빠른 분류)<br>AgentCore Runtime + MCP Gateway</div>
+    <div style="color:#b0b0b0;line-height:1.6;">Claude Opus 4.8 (심층 분석)<br>Claude Sonnet 4.6 (빠른 분류)<br>AgentCore Runtime + MCP Gateway</div>
   </div>
   <div style="display:grid;grid-template-rows:1fr 1fr;gap:12px;">
     <div style="background:rgba(245,158,11,0.05);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:12px;text-align:center;">

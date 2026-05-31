@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto';
 
 const bedrockClient = new BedrockRuntimeClient({ region: 'ap-northeast-2' });
 const s3Client = new S3Client({ region: 'ap-northeast-2' });
-const MODEL_ID = 'global.anthropic.claude-opus-4-6-v1';
+const MODEL_ID = 'global.anthropic.claude-opus-4-8-v1';
 // Read bucket from config — no hardcoded account IDs
 import { getConfig } from '@/lib/app-config';
 function getReportBucket(): string {

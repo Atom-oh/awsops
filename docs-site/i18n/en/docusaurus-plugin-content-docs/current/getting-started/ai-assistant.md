@@ -140,7 +140,7 @@ Responses are streamed in real-time and displayed progressively on screen. The o
 Select a model from the dropdown in the upper right corner:
 
 - **Claude Sonnet 4.6**: Fast responses, suitable for general questions (default)
-- **Claude Opus 4.6**: Complex analysis, suitable for deep reasoning
+- **Claude Opus 4.8**: Complex analysis, suitable for deep reasoning
 
 ## Related Questions
 

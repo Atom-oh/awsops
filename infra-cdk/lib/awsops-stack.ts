@@ -224,7 +224,7 @@ export class AwsopsStack extends cdk.Stack {
       description: 'AWSops EC2 role - SSM, CloudWatch, ReadOnlyAccess for Steampipe',
     });
 
-    // Bedrock model invoke permissions (AI assistant uses Sonnet/Opus 4.6 via global inference profiles)
+    // Bedrock model invoke permissions (AI assistant uses Sonnet 4.6 / Opus 4.8 via global inference profiles)
     ec2Role.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
       resources: [

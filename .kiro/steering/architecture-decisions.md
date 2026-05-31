@@ -23,7 +23,7 @@
 - 따라서 AWS 리소스 질문은 Steampipe + Bedrock Direct로 처리
 - 네트워크/컨테이너/보안 등 전문 분석은 Gateway MCP 도구 활용
 - 멀티 라우트: 복합 질문 시 1~3개 Gateway 병렬 호출 + 결과 통합
-- Models: Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6`), Opus 4.6 (`global.anthropic.claude-opus-4-6-v1`)
+- Models: Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6`), Opus 4.8 (`global.anthropic.claude-opus-4-8-v1`)
 
 ### Security: SCP Column Handling
 - `ignore_error_codes`는 테이블 레벨만 처리

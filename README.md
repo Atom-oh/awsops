@@ -80,7 +80,7 @@
 | Category | Page | Path | Features / 기능 |
 |----------|------|------|-----------------|
 | **Overview** | Dashboard | `/awsops` | 18 StatsCards, Live Resources, Charts, Warnings |
-| | AI Assistant | `/awsops/ai` | Claude Sonnet/Opus 4.6, SSE streaming, multi-route |
+| | AI Assistant | `/awsops/ai` | Claude Sonnet 4.6 / Opus 4.8, SSE streaming, multi-route |
 | | AgentCore | `/awsops/agentcore` | Runtime status, 8 Gateways, 125 tools |
 | | Bedrock | `/awsops/bedrock` | Model usage, token costs, prompt caching, Account vs AWSops |
 | | Accounts | /awsops/accounts | Multi-account management, target account CRUD (admin only) |
@@ -149,7 +149,7 @@ User Question / 사용자 질문
 
 ### 모델
 - **Claude Sonnet 4.6** (`global.anthropic.claude-sonnet-4-6`) — Fast responses / 빠른 응답 (default)
-- **Claude Opus 4.6** (`global.anthropic.claude-opus-4-6-v1`) — Deep analysis / 심층 분석
+- **Claude Opus 4.8** (`global.anthropic.claude-opus-4-8-v1`) — Deep analysis / 심층 분석
 
 ### 8 AgentCore Gateways (125 MCP Tools)
 
@@ -366,7 +366,7 @@ awsops/
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS (dark navy theme), Recharts, React Flow |
 | Backend | Node.js 20, pg (PostgreSQL client), node-cache |
 | Data | Steampipe (embedded PostgreSQL, 380+ AWS tables, 60+ K8s tables), Powerpipe |
-| AI | Amazon Bedrock (Claude Sonnet/Opus 4.6, ap-northeast-2 global.*), AgentCore Runtime (Strands), 8 AgentCore Gateways (MCP), Code Interpreter |
+| AI | Amazon Bedrock (Claude Sonnet 4.6 / Opus 4.8, ap-northeast-2 global.*), AgentCore Runtime (Strands), 8 AgentCore Gateways (MCP), Code Interpreter |
 | Auth | Amazon Cognito (User Pool + Hosted UI), Lambda@Edge (JWT, Python 3.12) |
 | IaC | CDK TypeScript (`infra-cdk/`) — AwsopsStack, CognitoStack |
 | Container | Docker (arm64), ECR |
@@ -387,7 +387,7 @@ awsops/
 | AgentCore Runtime | ap-northeast-2 | Strands AI Agent |
 | AgentCore Gateway (x8) | ap-northeast-2 | MCP tool routing / MCP 도구 라우팅 |
 | AgentCore Code Interpreter | ap-northeast-2 | Python Sandbox |
-| Bedrock (Sonnet/Opus 4.6) | ap-northeast-2 | AI models (global.* cross-region inference) |
+| Bedrock (Sonnet 4.6 / Opus 4.8) | ap-northeast-2 | AI models (global.* cross-region inference) |
 | ECR | ap-northeast-2 | Agent Docker image |
 | DynamoDB | ap-northeast-2 | Table data queries |
 | ElastiCache | ap-northeast-2 | Redis/Memcached cluster monitoring |

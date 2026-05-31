@@ -28,7 +28,7 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **External Datasources**: 7종 관측성 플랫폼 HTTP 클라이언트 (SSRF 방지, allowlist, AI 쿼리 생성) / 7 observability platform HTTP clients (SSRF-protected, allowlist, AI query generation)
 
 ### AI Layer (`src/app/api/ai/`)
-- **Models**: Bedrock Sonnet/Opus 4.6
+- **Models**: Bedrock Sonnet 4.6 / Opus 4.8
 - **AgentCore**: Runtime (Strands) + 8 Gateways (125 MCP tools via 19 Lambda)
 - **Code Interpreter**: Sandboxed code execution for analysis
 - **Routing**: 11-route priority system (Code → Network → Container → IaC → Data → Security → Monitoring → Cost → Datasource → AWS → General)

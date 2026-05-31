@@ -8,7 +8,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # AI Comprehensive Diagnosis
 
-The `/ai-diagnosis` page generates a 15-section infrastructure analysis report using Amazon Bedrock **Claude Opus 4.6**.
+The `/ai-diagnosis` page generates a 15-section infrastructure analysis report using Amazon Bedrock **Claude Opus 4.8**.
 
 <Screenshot src="/screenshots/monitoring/ai-diagnosis.png" alt="AI Comprehensive Diagnosis page" />
 
@@ -16,7 +16,7 @@ The `/ai-diagnosis` page generates a 15-section infrastructure analysis report u
 
 | Item | Value |
 |------|-------|
-| **Model** | `global.anthropic.claude-opus-4-6-v1` (fixed) |
+| **Model** | `global.anthropic.claude-opus-4-8-v1` (fixed) |
 | **Sections** | 15 (4 cost + 6 infra + 2 security/network + 3 summary) |
 | **Output formats** | DOCX (A4 + TOC), Markdown, PDF (browser print) |
 | **Storage** | S3 report bucket + `data/reports/*.json` cache |
@@ -174,6 +174,6 @@ curl -X POST /awsops/api/report \
 
 - ADR-019: report format matrix
 - ADR-014: report proxy download URLs
-- ADR-016: Bedrock model selection (Opus 4.6 pinned)
+- ADR-016: Bedrock model selection (Opus 4.8 pinned)
 - `src/lib/report-prompts.ts` — 15-section prompt definitions (exact output structure)
 - `src/lib/report-scheduler.ts` — schedule computation (KST)

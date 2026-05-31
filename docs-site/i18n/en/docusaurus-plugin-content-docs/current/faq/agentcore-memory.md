@@ -28,7 +28,7 @@ flowchart TD
   ECR -->|"Image reference"| RT
 
   AGENT -->|"MCP + SigV4"| GW["8 Gateways<br/>(125 tools)"]
-  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet/Opus 4.6"]
+  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8"]
 ```
 
 ### AgentCore Runtime

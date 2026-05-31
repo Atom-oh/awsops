@@ -7,7 +7,7 @@ AWS + Kubernetes 운영 대시보드 (Steampipe, Next.js 14, Amazon Bedrock Agen
 ## Tech Stack
 - **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind CSS (dark navy), Recharts, React Flow
 - **Data**: Steampipe embedded PostgreSQL :9193 (380+ AWS, 60+ K8s, trivy), pg Pool (max 5, 120s timeout), node-cache 5min
-- **AI**: Bedrock Claude Sonnet/Opus 4.6 (global.* cross-region), AgentCore Runtime (Strands), 8 Gateways, Code Interpreter
+- **AI**: Bedrock Claude Sonnet 4.6 / Opus 4.8 (global.* cross-region), AgentCore Runtime (Strands), 8 Gateways, Code Interpreter
 - **Auth**: Cognito + Lambda@Edge (JWT cookie, Python 3.12, us-east-1)
 - **Infra**: CDK TypeScript → CloudFront → ALB → EC2 t4g.2xlarge (Private Subnet)
 
@@ -35,7 +35,7 @@ AWS + Kubernetes 운영 대시보드 (Steampipe, Next.js 14, Amazon Bedrock Agen
 - 분류기가 1~3개 route 반환 → 병렬 Gateway 호출 → Bedrock 응답 합성
 - code → Code Interpreter | network/container/iac/data/security/monitoring/cost → AgentCore Gateway
 - aws-data → Steampipe + Bedrock Direct | general → Ops Gateway + Bedrock fallback
-- Models: Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6`), Opus 4.6 (`global.anthropic.claude-opus-4-6-v1`)
+- Models: Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6`), Opus 4.8 (`global.anthropic.claude-opus-4-8-v1`)
 
 ### Dark Theme Colors
 - BG: navy-900 `#0a0e1a`, navy-800 `#0f1629`, navy-700 `#151d30`
