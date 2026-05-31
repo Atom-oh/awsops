@@ -1,0 +1,23 @@
+{
+  "name": "awsops-web",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "pg": "8.13.1"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "@types/node": "20.16.5",
+    "@types/react": "18.3.8",
+    "@types/react-dom": "18.3.0",
+    "@types/pg": "8.11.10"
+  }
+}
