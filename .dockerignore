@@ -20,6 +20,7 @@ agent/__pycache__/
 # Tests and docs (not needed at runtime).
 tests/
 docs/
+docs-site/
 web/
 reports/
 scripts/

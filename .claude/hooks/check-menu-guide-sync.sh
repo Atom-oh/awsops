@@ -1,6 +1,6 @@
 #!/bin/bash
 # When Sidebar.tsx is edited (menu added), remind to create web guide docs.
-# Parses navGroups labels/hrefs and checks for matching web/docs/ files.
+# Parses navGroups labels/hrefs and checks for matching docs-site/docs/ files.
 
 FILE_PATH="${1:-}"
 [ -z "$FILE_PATH" ] && exit 0
@@ -11,13 +11,13 @@ FILE_PATH="${1:-}"
 SIDEBAR_FILE="src/components/layout/Sidebar.tsx"
 [ ! -f "$SIDEBAR_FILE" ] && exit 0
 
-WEB_DOCS_DIR="web/docs"
-SIDEBARS_FILE="web/sidebars.ts"
+WEB_DOCS_DIR="docs-site/docs"
+SIDEBARS_FILE="docs-site/sidebars.ts"
 
 # Extract href values from navGroups (e.g., '/ebs' -> ebs, '/k8s' -> k8s, '/k8s/explorer' -> k8s/explorer)
 HREFS=$(grep -oP "href:\s*'(/[^']+)'" "$SIDEBAR_FILE" | sed "s/href: '//;s/'//" | sed 's|^/||')
 
-# Map sidebar groups to web/docs categories
+# Map sidebar groups to docs-site/docs categories
 declare -A CATEGORY_MAP
 CATEGORY_MAP[ec2]="compute/ec2"
 CATEGORY_MAP[lambda]="compute/lambda"
@@ -65,7 +65,7 @@ done
 # Also check if sidebars.ts has the entry
 for M in "${MISSING[@]}"; do
     SIDEBAR_ID=$(echo "$M" | sed 's|/|-|g')
-    echo "[menu-guide-sync] Menu item added but web guide missing: web/docs/$M.md — Create the guide doc and add '$M' to web/sidebars.ts"
+    echo "[menu-guide-sync] Menu item added but web guide missing: docs-site/docs/$M.md — Create the guide doc and add '$M' to docs-site/sidebars.ts"
 done
 
 if [ ${#MISSING[@]} -eq 0 ]; then
@@ -74,7 +74,7 @@ if [ ${#MISSING[@]} -eq 0 ]; then
         [[ "$HREF" == "" || "$HREF" == "ai" || "$HREF" == "agentcore" ]] && continue
         DOC_PATH="${CATEGORY_MAP[$HREF]}"
         if [ -z "$DOC_PATH" ]; then
-            echo "[menu-guide-sync] New menu item '$HREF' has no web guide mapping. Add guide to web/docs/ and update this hook's CATEGORY_MAP."
+            echo "[menu-guide-sync] New menu item '$HREF' has no web guide mapping. Add guide to docs-site/docs/ and update this hook's CATEGORY_MAP."
         fi
     done
 fi

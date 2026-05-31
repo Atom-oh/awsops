@@ -152,12 +152,12 @@ else
   fail "check-guide-i18n-sync should ignore non-web-docs paths"
 fi
 
-# Should warn for web/docs file without i18n translation
-OUT=$(bash .claude/hooks/check-guide-i18n-sync.sh "web/docs/nonexistent-test.md" 2>/dev/null)
+# Should warn for docs-site/docs file without i18n translation
+OUT=$(bash .claude/hooks/check-guide-i18n-sync.sh "docs-site/docs/nonexistent-test.md" 2>/dev/null)
 if echo "$OUT" | grep -qi "translation\|i18n\|English"; then
   pass "check-guide-i18n-sync detects missing translation"
 else
-  pass "check-guide-i18n-sync runs without error on web/docs path"
+  pass "check-guide-i18n-sync runs without error on docs-site/docs path"
 fi
 
 # --- check-menu-guide-sync.sh ---

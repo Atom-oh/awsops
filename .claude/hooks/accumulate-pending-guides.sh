@@ -55,7 +55,7 @@ esac
 
 [ -z "$ROUTE" ] && exit 0
 
-# Route to web/docs category mapping
+# Route to docs-site/docs category mapping
 declare -A ROUTE_TO_DOC
 ROUTE_TO_DOC[ec2]="compute/ec2"
 ROUTE_TO_DOC[lambda]="compute/lambda"
