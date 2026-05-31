@@ -93,6 +93,22 @@ function describeNatGatewayIds(vpcId) {
   return out.split(/\s+/).filter(Boolean);
 }
 
+/** List EKS cluster names in REGION. */
+function listEksClusters() {
+  const data = awsJson(['eks', 'list-clusters', '--region', REGION]);
+  return data.clusters || [];
+}
+
+/** Cluster authentication mode (API / API_AND_CONFIG_MAP / CONFIG_MAP). */
+function eksAuthMode(name) {
+  try {
+    const d = awsJson(['eks', 'describe-cluster', '--name', name, '--region', REGION]);
+    return (d.cluster && d.cluster.accessConfig && d.cluster.accessConfig.authenticationMode) || 'CONFIG_MAP';
+  } catch {
+    return 'UNKNOWN';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // HCL writers
 // ---------------------------------------------------------------------------
@@ -127,6 +143,9 @@ function buildTfvars(cfg) {
     lines.push(
       `existing_private_subnet_ids = ${hclStringList(cfg.existingPrivateSubnetIds)}`,
     );
+  }
+  if (cfg.onboardEksClusters && cfg.onboardEksClusters.length > 0) {
+    lines.push(`onboard_eks_clusters = ${hclStringList(cfg.onboardEksClusters)}`);
   }
   return lines.join('\n') + '\n';
 }
@@ -301,6 +320,34 @@ async function main() {
     vpcCidr = vpcCidr.trim();
   }
 
+  // EKS onboarding (optional). Access Entry requires an API-capable auth mode.
+  let onboardEksClusters = [];
+  console.log('');
+  console.log(`Discovering EKS clusters in ${REGION}...`);
+  const eksClusters = listEksClusters();
+  if (eksClusters.length === 0) {
+    console.log('  No EKS clusters found. Skipping EKS onboarding.');
+  } else {
+    const usable = [];
+    const handoff = [];
+    for (const name of eksClusters) {
+      const mode = eksAuthMode(name);
+      (mode.startsWith('API') ? usable : handoff).push({ name, mode });
+    }
+    if (handoff.length > 0) {
+      console.log('');
+      console.log('  These clusters are CONFIG_MAP-only (Access Entry unavailable).');
+      console.log('  Switch them to API_AND_CONFIG_MAP, or grant access manually:');
+      handoff.forEach((c) => console.log(`    - ${c.name} (${c.mode})`));
+    }
+    if (usable.length > 0) {
+      onboardEksClusters = await checkbox({
+        message: 'Select EKS clusters to grant the dashboard read access (Access Entry):',
+        choices: usable.map((c) => ({ name: `${c.name}  (${c.mode})`, value: c.name })),
+      });
+    }
+  }
+
   const cfg = {
     domainName: domainName.trim(),
     hostedZoneName: hostedZoneName.trim(),
@@ -309,6 +356,7 @@ async function main() {
     vpcCidr,
     existingVpcId,
     existingPrivateSubnetIds,
+    onboardEksClusters,
   };
 
   // Summary
@@ -328,6 +376,9 @@ async function main() {
       `  private subnets  : ${cfg.existingPrivateSubnetIds.join(', ')}`,
     );
   }
+  console.log(
+    `  EKS onboard      : ${cfg.onboardEksClusters.length ? cfg.onboardEksClusters.join(', ') : '(none)'}`,
+  );
   console.log('');
   console.log(`  -> ${TFVARS_PATH}`);
   console.log(`  -> ${BACKEND_PATH}`);
