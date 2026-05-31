@@ -52,3 +52,20 @@ variable "existing_private_subnet_ids" {
   description = "Existing private subnets (>=2 AZ, NAT egress) for ALB/Fargate when create_network=false"
   default     = []
 }
+
+variable "cognito_domain_prefix" {
+  type        = string
+  description = "Globally-unique Cognito Hosted-UI domain prefix (no 'aws', no symbols)."
+  default     = "awsops-v2-auth"
+}
+
+variable "admin_email" {
+  type        = string
+  description = "Initial Cognito admin user email"
+}
+
+variable "admin_password" {
+  type        = string
+  description = "Initial admin permanent password (>=8, upper+lower+number)"
+  sensitive   = true
+}
