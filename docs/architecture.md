@@ -40,6 +40,8 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **AI 라우팅 전략**: 목록/현황/구성 분석 → `aws-data` (Steampipe SQL), 트러블슈팅/진단 → 전문 Gateway
   (Routing strategy: listing/analysis → Steampipe SQL, troubleshooting → specialized Gateway)
 - **Memory Store**: 대화 이력 영구 저장 (사용자별, 365일 보관) / Conversation history persistence (per-user, 365-day retention)
+- **Custom Agents & Skills (제안)**: 관리자가 대시보드에서 런타임에 에이전트·스킬을 항목별로 구성 — Aurora 카탈로그 + 요청별 리졸버 + 계정별 Agent Space + BYO-MCP, 재빌드 없음 (ADR-031, Proposed; AWS DevOps/Security Agent 모델 차용)
+  (Proposed: admin-composed custom agents/skills at runtime — Aurora catalog + per-request resolver + per-account Agent Spaces + bring-your-own MCP, no rebuild; modeled on AWS DevOps/Security Agent)
 
 ### Auth & Delivery
 - **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1)

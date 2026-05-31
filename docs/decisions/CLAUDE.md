@@ -43,6 +43,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 028 | CloudFront CACHING_DISABLED | Accepted (2026-04-22) |
 | 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | Proposed (2026-04-26) |
 | 030 | ECS Fargate 워크로드 + Aurora 앱 상태 + 이중 ECR | Accepted (2026-05-27) |
+| 031 | 런타임 커스터마이즈 에이전트·스킬 (관리자 구성 Agent Space + BYO-MCP) | Proposed (2026-05-31) |
 
 ## 새 ADR 추가 / Adding a New ADR
 1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1
