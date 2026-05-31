@@ -21,7 +21,8 @@ AWSops handles authentication using Amazon Cognito + Lambda@Edge + CloudFront.
 | **Password Policy** | 8+ characters, upper/lowercase + digits required |
 | **OAuth** | Authorization Code Grant, OpenID/Email/Profile |
 | **Token Validity** | 1 hour |
-| **Domain** | `awsops-{accountId}` (Hosted UI) |
+| **Login UI** | Custom login page (`/awsops/login`) — Cognito Hosted UI not used |
+| **Auth flow** | `USER_PASSWORD_AUTH` (InitiateAuth) via `/api/auth` |
 
 ## Authentication Flow Details
 
@@ -29,13 +30,12 @@ AWSops handles authentication using Amazon Cognito + Lambda@Edge + CloudFront.
 
 1. Browser navigates to `/awsops`
 2. CloudFront triggers Lambda@Edge on viewer-request
-3. Lambda@Edge checks for `awsops_token` cookie → not found
-4. 302 redirect to Cognito Hosted UI
-5. User logs in with email/password
-6. Cognito redirects to callback URL with auth code
-7. Lambda@Edge exchanges auth code for tokens (OAuth2)
-8. Sets `awsops_token` HttpOnly cookie (1 hour)
-9. Authenticated request flows through CloudFront → ALB → EC2
+3. Lambda@Edge checks for `awsops_token` cookie → not found/expired
+4. **302 redirect to the custom login page `/awsops/login`** (not Cognito Hosted UI)
+5. User enters email/password → `POST /awsops/api/auth` (`action: login`)
+6. Server calls Cognito **InitiateAuth (`USER_PASSWORD_AUTH`)** → obtains IdToken
+7. Sets `awsops_token` HttpOnly·Secure·SameSite=Lax cookie (1 hour)
+8. Authenticated requests then flow through CloudFront → ALB → EC2
 
 ### Return Visit (Valid Cookie)
 

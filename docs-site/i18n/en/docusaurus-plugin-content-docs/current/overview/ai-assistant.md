@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: AI Assistant
-description: AWSops AI Assistant detailed guide - 10-route classification and advanced features
+description: AWSops AI Assistant detailed guide - 11-route classification and advanced features
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
@@ -17,7 +17,7 @@ The AI Assistant is powered by Amazon Bedrock AgentCore, enabling you to analyze
 
 ![AI Intent Routing](/diagrams/ai-routing.png)
 
-## 10-Route Classification
+## 11-Route Classification
 
 The AI Assistant analyzes questions and automatically routes them to the most appropriate destination.
 
@@ -33,8 +33,9 @@ The AI Assistant analyzes questions and automatically routes them to the most ap
 | 6 | **security** | Security | 14 | IAM, policy simulation, security summary |
 | 7 | **monitoring** | Monitoring | 16 | CloudWatch, CloudTrail |
 | 8 | **cost** | Cost | 9 | Cost analysis, forecasting, budgets |
-| 9 | **aws-data** | Ops | SQL | Resource lists/status (Steampipe SQL) |
-| 10 | **general** | Ops | 9 | General AWS questions, documentation search |
+| 9 | **datasource** | - | 7 DS | External observability (Prometheus/Loki/Tempo/ClickHouse/Jaeger/Dynatrace/Datadog) — natural language → query |
+| 10 | **aws-data** | Ops | SQL | Resource lists/status (Steampipe SQL) |
+| 11 | **general** | Ops | 9 | General AWS questions, documentation search |
 
 ### Route Details
 
@@ -148,7 +149,21 @@ Used for cost analysis and optimization.
 - "Compare costs by service"
 - "Forecast next month's costs"
 
-#### 9. aws-data - Bedrock + Steampipe SQL
+#### 9. datasource - External observability (natural language → query)
+
+Used for questions about connected external observability platforms (Prometheus/Loki/Tempo/ClickHouse/Jaeger/Dynatrace/Datadog).
+
+**How it works:**
+1. Claude converts the natural-language question into the platform's query language (PromQL/LogQL/TraceQL/SQL)
+2. Runs the query against datasources that pass the SSRF allowlist
+3. Analyzes the result and responds
+
+**Example questions:**
+- "Show the 5xx trend for the payment service" (Prometheus)
+- "Find error logs in the last hour" (Loki)
+- "Analyze slow traces" (Tempo/Jaeger)
+
+#### 10. aws-data - Bedrock + Steampipe SQL
 
 Used for resource lists, status, and count queries.
 
@@ -163,7 +178,7 @@ Used for resource lists, status, and count queries.
 - "Analyze VPC network configuration"
 - "Summarize all resources"
 
-#### 10. general - Ops Gateway
+#### 11. general - Ops Gateway
 
 Used for general AWS questions, documentation search, and best practices.
 

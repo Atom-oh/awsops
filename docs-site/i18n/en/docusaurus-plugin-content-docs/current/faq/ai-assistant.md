@@ -9,7 +9,7 @@ Questions and answers about the AWSops AI assistant.
 <details>
 <summary>What questions can I ask?</summary>
 
-The AI assistant answers various questions through 10 specialized routes:
+The AI assistant answers various questions through 11 specialized routes:
 
 **1. Code (Code Execution)**
 - "Analyze this data for me"
@@ -51,12 +51,17 @@ The AI assistant answers various questions through 10 specialized routes:
 - "What caused the cost spike?"
 - "Recommend cost optimization strategies"
 
-**9. AWS Data (Resource Listing/Status)**
+**9. Datasource (External observability — natural language → query)**
+- "Show the 5xx trend for the payment service" (Prometheus)
+- "Find error logs in the last hour" (Loki)
+- "Analyze slow traces" (Tempo/Jaeger) — supports Prometheus/Loki/Tempo/ClickHouse/Jaeger/Dynatrace/Datadog
+
+**10. AWS Data (Resource Listing/Status)**
 - "Show me EC2 instance list"
 - "Check RDS instance status"
 - "Lambda function statistics by runtime"
 
-**10. General (General)**
+**11. General (General)**
 - AWS-related questions not fitting the above categories
 
 </details>

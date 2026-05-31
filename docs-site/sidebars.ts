@@ -19,6 +19,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Overview',
       items: [
+        'overview/why-awsops',
         'overview/dashboard',
         'overview/ai-assistant',
         'overview/agentcore',

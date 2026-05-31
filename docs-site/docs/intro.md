@@ -15,7 +15,7 @@ AWSops는 AWS 및 Kubernetes 인프라를 실시간으로 모니터링하고 관
 ## 주요 기능
 
 ### 실시간 리소스 모니터링
-- **40개 페이지**를 통해 AWS 및 Kubernetes 리소스 현황을 한눈에 파악
+- **43개 페이지**를 통해 AWS 및 Kubernetes 리소스 현황을 한눈에 파악
 - EC2, Lambda, ECS, EKS, S3, RDS, VPC 등 주요 서비스 대시보드
 - 실시간 CloudWatch 메트릭 연동
 
@@ -30,7 +30,8 @@ AWSops는 AWS 및 Kubernetes 인프라를 실시간으로 모니터링하고 관
 - **Amazon Bedrock AgentCore** 기반 AI 어시스턴트
 - 자연어로 인프라 질문 및 분석 요청
 - 8개 전문 Gateway와 125개 MCP 도구 활용
-- Claude Sonnet 4.6 / Opus 4.8 모델 지원
+- Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5 모델 지원
+- 외부 관측성(Prometheus/Loki/Tempo 등) **자연어 → 쿼리** 자동 생성
 
 ### 네트워크 문제 해결
 - VPC Flow Logs 분석
@@ -62,7 +63,7 @@ AWSops는 AWS 및 Kubernetes 인프라를 실시간으로 모니터링하고 관
 |----------|------|------|
 | **CloudFront** | CACHING_DISABLED | Custom Header 검증으로 ALB 직접 접근 차단 |
 | **Lambda@Edge** | us-east-1, Node.js 20 | JWT 검증, OAuth2 콜백, 쿠키 관리 |
-| **Cognito** | User Pool + Hosted UI | 이메일/사용자명 로그인, HttpOnly 쿠키 인증 |
+| **Cognito** | User Pool + 커스텀 로그인 페이지 | 이메일 로그인, HttpOnly 쿠키 인증 |
 | **ALB** | Internet-facing | Port 80 (VSCode) / 3000 (Dashboard) |
 | **EC2** | t4g.2xlarge (ARM64 Graviton) | 100GB GP3 EBS, Private Subnet |
 | **VPC** | 10.10.0.0/16, 2 AZ | NAT Gateway, Public + Private Subnet |
@@ -72,8 +73,8 @@ AWSops는 AWS 및 Kubernetes 인프라를 실시간으로 모니터링하고 관
 | 항목 | 수치 |
 |------|------|
 | **App Router** | 8개 |
-| **Pages** | 40개 |
-| **API Routes** | 18개 |
+| **Pages** | 43개 |
+| **API Routes** | 20개 |
 | **AI 라우트** | 11개 (datasource, alert-webhook 포함) |
 | **SSE Streaming** | AI 응답 실시간 스트리밍 |
 
@@ -103,12 +104,12 @@ EC2에서 Docker arm64 이미지를 빌드하여 ECR에 푸시하고, AgentCore 
 
 | 컴포넌트 | 설명 |
 |----------|------|
-| **Bedrock Model** | Claude Sonnet 4.6 / Opus 4.8 |
+| **Bedrock Model** | Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5 |
 | **Runtime** | Strands Agent Framework (Docker arm64, ECR) |
 | **Code Interpreter** | Python 샌드박스 (pandas, matplotlib 등) |
 | **Memory** | 대화 이력 저장 (365일 보관) |
 
-### AI 라우팅 (10단계 우선순위)
+### AI 라우팅 (11단계 우선순위)
 
 질문 유형에 따라 최적의 Gateway로 자동 라우팅됩니다:
 
@@ -122,8 +123,9 @@ EC2에서 Docker arm64 이미지를 빌드하여 ECR에 푸시하고, AgentCore 
 | 6 | `security` | Security Gateway — IAM, 정책 시뮬레이션 |
 | 7 | `monitoring` | Monitoring Gateway — CloudWatch, CloudTrail |
 | 8 | `cost` | Cost Gateway — 비용 분석, 예측, 예산 |
-| 9 | `aws-data` | Steampipe SQL — 목록/현황/구성 분석 |
-| 10 | `general` | Ops Gateway — AWS 문서, API 호출, 폴백 |
+| 9 | `datasource` | 외부 데이터소스 — Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog (자연어 → 쿼리) |
+| 10 | `aws-data` | Steampipe SQL — 목록/현황/구성 분석 |
+| 11 | `general` | Ops Gateway — AWS 문서, API 호출, 폴백 |
 
 ### 8 Gateway × 125 MCP 도구
 
@@ -182,7 +184,7 @@ EKS 클러스터에 연결하여 다음 리소스를 모니터링합니다:
 |---------|------|
 | Frontend | Next.js 14 (App Router), Tailwind CSS, Recharts, React Flow |
 | Backend | Steampipe (내장 PostgreSQL port 9193), Node.js |
-| AI Engine | Amazon Bedrock (Claude Sonnet 4.6 / Opus 4.8), AgentCore Runtime (Strands) |
+| AI Engine | Amazon Bedrock (Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5), AgentCore Runtime (Strands) |
 | AI Tools | 8 Gateway, 125 MCP 도구, 19 Lambda, Code Interpreter, Memory |
 | 인증 | Amazon Cognito, Lambda@Edge (us-east-1) |
 | 인프라 | AWS CDK, CloudFront, ALB, EC2 (t4g.2xlarge ARM64) |

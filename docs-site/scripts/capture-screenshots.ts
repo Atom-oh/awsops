@@ -178,6 +178,19 @@ async function login(page: Page): Promise<void> {
     // Wait for redirect back to app
     await page.waitForURL('**/awsops/**', { timeout: 60000 });
     console.log('Login successful, redirected to app.');
+  } else if (currentUrl.includes('/login') || (await page.locator('input[type="password"]').count()) > 0) {
+    // Custom AWSops login page (/awsops/login) — email + Security Key + "Authenticate" button.
+    console.log('Custom login page detected, filling credentials...');
+    const emailField = page.getByPlaceholder('admin@awsops.internal').first();
+    if (await emailField.count() > 0) {
+      await emailField.fill(LOGIN_EMAIL);
+    } else {
+      await page.locator('input[type="email"], input[type="text"]').first().fill(LOGIN_EMAIL);
+    }
+    await page.locator('input[type="password"]').first().fill(LOGIN_PASSWORD);
+    await page.getByRole('button', { name: /Authenticate/i }).click();
+    await page.waitForURL((u) => /\/awsops(\/|$)/.test(String(u)) && !String(u).includes('/login'), { timeout: 60000 });
+    console.log('Custom login successful, redirected to app.');
   } else {
     console.log('Already logged in or no Cognito redirect.');
   }

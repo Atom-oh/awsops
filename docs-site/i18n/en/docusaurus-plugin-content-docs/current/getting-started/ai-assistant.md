@@ -78,9 +78,9 @@ What's the EKS cluster status?
 Check the ECS service status
 ```
 
-## 10-Route Classification
+## 11-Route Classification
 
-The AI Assistant analyzes questions and automatically routes them to the most appropriate of 10 specialized routes.
+The AI Assistant analyzes questions and automatically routes them to the most appropriate of 11 specialized routes.
 
 | Priority | Route | Purpose |
 |----------|-------|---------|
@@ -92,8 +92,9 @@ The AI Assistant analyzes questions and automatically routes them to the most ap
 | 6 | security | IAM, policy simulation, security summary |
 | 7 | monitoring | CloudWatch, CloudTrail |
 | 8 | cost | Cost analysis, forecasting, budgets |
-| 9 | aws-data | Resource lists/status (Steampipe SQL) |
-| 10 | general | General AWS questions, documentation search |
+| 9 | datasource | External observability — Prometheus/Loki/Tempo/ClickHouse/Jaeger/Dynatrace/Datadog (natural language → query) |
+| 10 | aws-data | Resource lists/status (Steampipe SQL) |
+| 11 | general | General AWS questions, documentation search |
 
 :::tip Checking the Route
 You can see which Gateway was used in the route information displayed at the bottom of each response.
@@ -164,5 +165,5 @@ Expand the **Conversation History** panel at the bottom of the screen to view an
 
 ## Next Steps
 
-- [AI Assistant Details](../overview/ai-assistant) - 10-route classification details and advanced features
+- [AI Assistant Details](../overview/ai-assistant) - 11-route classification details and advanced features
 - [AgentCore Details](../overview/agentcore) - AgentCore architecture and tool list

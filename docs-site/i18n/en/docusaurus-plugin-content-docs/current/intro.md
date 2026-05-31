@@ -15,7 +15,7 @@ AWSops is an integrated operations dashboard for real-time monitoring and manage
 ## Key Features
 
 ### Real-time Resource Monitoring
-- View AWS and Kubernetes resource status at a glance across **40 pages**
+- View AWS and Kubernetes resource status at a glance across **43 pages**
 - Dashboards for major services including EC2, Lambda, ECS, EKS, S3, RDS, and VPC
 - Real-time CloudWatch metrics integration
 
@@ -30,7 +30,8 @@ AWSops is an integrated operations dashboard for real-time monitoring and manage
 - AI assistant powered by **Amazon Bedrock AgentCore**
 - Query and analyze infrastructure using natural language
 - Leverage 8 specialized Gateways and 125 MCP tools
-- Support for Claude Sonnet 4.6 / Opus 4.8 models
+- Support for Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5 models
+- Natural-language → query generation for external observability (Prometheus/Loki/Tempo, etc.)
 
 ### Network Troubleshooting
 - VPC Flow Logs analysis
@@ -62,7 +63,7 @@ AWSops is an integrated operations dashboard for real-time monitoring and manage
 |-----------|--------------|-------------|
 | **CloudFront** | CACHING_DISABLED | Custom Header validation blocks direct ALB access |
 | **Lambda@Edge** | us-east-1, Node.js 20 | JWT validation, OAuth2 callback, cookie management |
-| **Cognito** | User Pool + Hosted UI | Email/username login, HttpOnly cookie auth |
+| **Cognito** | User Pool + custom login page | Email login, HttpOnly cookie auth |
 | **ALB** | Internet-facing | Port 80 (VSCode) / 3000 (Dashboard) |
 | **EC2** | t4g.2xlarge (ARM64 Graviton) | 100GB GP3 EBS, Private Subnet |
 | **VPC** | 10.10.0.0/16, 2 AZs | NAT Gateway, Public + Private Subnets |
@@ -72,8 +73,8 @@ AWSops is an integrated operations dashboard for real-time monitoring and manage
 | Item | Count |
 |------|-------|
 | **App Router** | 8 |
-| **Pages** | 40 |
-| **API Routes** | 18 |
+| **Pages** | 43 |
+| **API Routes** | 20 |
 | **AI Routes** | 11 (incl. datasource, alert-webhook) |
 | **SSE Streaming** | Real-time AI response streaming |
 
@@ -103,12 +104,12 @@ Docker arm64 images are built on EC2, pushed to ECR, and run on AgentCore manage
 
 | Component | Description |
 |-----------|-------------|
-| **Bedrock Model** | Claude Sonnet 4.6 / Opus 4.8 |
+| **Bedrock Model** | Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5 |
 | **Runtime** | Strands Agent Framework (Docker arm64, ECR) |
 | **Code Interpreter** | Python sandbox (pandas, matplotlib, etc.) |
 | **Memory** | Conversation history storage (365-day retention) |
 
-### AI Routing (10-Level Priority)
+### AI Routing (11-Level Priority)
 
 Questions are automatically routed to the optimal Gateway based on type:
 
@@ -122,8 +123,9 @@ Questions are automatically routed to the optimal Gateway based on type:
 | 6 | `security` | Security Gateway — IAM, policy simulation |
 | 7 | `monitoring` | Monitoring Gateway — CloudWatch, CloudTrail |
 | 8 | `cost` | Cost Gateway — billing, forecast, budget |
-| 9 | `aws-data` | Steampipe SQL — listing/status/config analysis |
-| 10 | `general` | Ops Gateway — AWS docs, API calls, fallback |
+| 9 | `datasource` | External observability — Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog (natural language → query) |
+| 10 | `aws-data` | Steampipe SQL — listing/status/config analysis |
+| 11 | `general` | Ops Gateway — AWS docs, API calls, fallback |
 
 ### 8 Gateways × 125 MCP Tools
 
@@ -182,7 +184,7 @@ Monitor the following resources by connecting to EKS clusters:
 |-----------|------------|
 | Frontend | Next.js 14 (App Router), Tailwind CSS, Recharts, React Flow |
 | Backend | Steampipe (embedded PostgreSQL port 9193), Node.js |
-| AI Engine | Amazon Bedrock (Claude Sonnet 4.6 / Opus 4.8), AgentCore Runtime (Strands) |
+| AI Engine | Amazon Bedrock (Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5), AgentCore Runtime (Strands) |
 | AI Tools | 8 Gateways, 125 MCP tools, 19 Lambda, Code Interpreter, Memory |
 | Auth | Amazon Cognito, Lambda@Edge (us-east-1) |
 | Infrastructure | AWS CDK, CloudFront, ALB, EC2 (t4g.2xlarge ARM64) |

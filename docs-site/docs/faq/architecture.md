@@ -877,9 +877,9 @@ flowchart LR
   CF -->|"Lambda@Edge<br/>(Viewer Request)"| EDGE["JWT 검증<br/>(Python 3.12)"]
 
   EDGE -->|"유효한 토큰"| ALB["ALB → EC2"]
-  EDGE -->|"토큰 없음/만료"| COGNITO["Cognito<br/>Hosted UI<br/>(로그인 페이지)"]
-  COGNITO -->|"인증 성공"| CALLBACK["/api/auth/callback"]
-  CALLBACK -->|"HttpOnly 쿠키 설정"| CF
+  EDGE -->|"토큰 없음/만료"| LOGIN["커스텀 로그인 페이지<br/>/awsops/login"]
+  LOGIN -->|"POST /api/auth"| AUTH["Cognito InitiateAuth<br/>(USER_PASSWORD_AUTH)"]
+  AUTH -->|"HttpOnly 쿠키 설정"| CF
 ```
 
 ### 각 단계 상세
@@ -889,12 +889,12 @@ flowchart LR
 - 모든 요청에서 `awsops_token` 쿠키의 JWT를 검증
 - JWT 서명, 만료 시간, issuer 확인
 - 유효하면 요청을 Origin(EC2)으로 전달
-- 무효하면 Cognito Hosted UI로 리다이렉트
+- 무효하면 커스텀 로그인 페이지(`/awsops/login`)로 리다이렉트
 
 **2. Cognito User Pool**
-- 사용자 관리 (회원가입, 로그인, MFA)
-- OAuth 2.0 / OIDC 표준 지원
-- Hosted UI로 로그인 페이지 제공
+- 사용자 관리 (사용자 생성, 로그인)
+- 커스텀 로그인 페이지가 `POST /api/auth` → **InitiateAuth (`USER_PASSWORD_AUTH`)** 로 자격 증명 검증
+- Cognito Hosted UI는 사용하지 않음
 
 **3. EC2에서 사용자 식별**
 
