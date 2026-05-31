@@ -21,7 +21,7 @@ resource "aws_cognito_user_pool_domain" "main" {
 resource "aws_cognito_user_pool_client" "main" {
   name                                 = "${var.project}-client"
   user_pool_id                         = aws_cognito_user_pool.main.id
-  generate_secret                      = true
+  generate_secret                      = false # public client + PKCE (no secret in edge code)
   supported_identity_providers         = ["COGNITO"]
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
@@ -60,11 +60,18 @@ resource "aws_iam_role_policy_attachment" "edge_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "random_password" "edge_state_key" {
+  length  = 48
+  special = false
+}
+
 locals {
   edge_src = templatefile("${path.module}/edge-lambda/cognito_edge.py.tftpl", {
     client_id      = aws_cognito_user_pool_client.main.id
-    client_secret  = aws_cognito_user_pool_client.main.client_secret
     cognito_domain = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com"
+    region         = var.region
+    user_pool_id   = aws_cognito_user_pool.main.id
+    state_key      = random_password.edge_state_key.result
   })
 }
 

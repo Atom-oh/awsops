@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
   # Partial backend: OSS-portable, no hardcoded bucket. Config supplied at
   # init time via `-backend-config=backend.hcl`.
