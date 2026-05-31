@@ -104,7 +104,7 @@ resource "aws_iam_role_policy" "agentcore" {
 # ---- SSM String params (placeholders; provision.py overwrites the value). Not secrets → String. ----
 resource "aws_ssm_parameter" "agentcore_runtime_arn" {
   count     = local.ac_count
-  name      = "/${var.project}/agentcore/runtime_arn"
+  name      = "/ops/${var.project}/agentcore/runtime_arn"
   type      = "String"
   value     = "PENDING"
   overwrite = true
@@ -115,7 +115,7 @@ resource "aws_ssm_parameter" "agentcore_runtime_arn" {
 
 resource "aws_ssm_parameter" "agentcore_interpreter_id" {
   count     = local.ac_count
-  name      = "/${var.project}/agentcore/interpreter_id"
+  name      = "/ops/${var.project}/agentcore/interpreter_id"
   type      = "String"
   value     = "PENDING"
   overwrite = true
@@ -126,7 +126,7 @@ resource "aws_ssm_parameter" "agentcore_interpreter_id" {
 
 resource "aws_ssm_parameter" "agentcore_memory_id" {
   count     = local.ac_count
-  name      = "/${var.project}/agentcore/memory_id"
+  name      = "/ops/${var.project}/agentcore/memory_id"
   type      = "String"
   value     = "PENDING"
   overwrite = true
@@ -146,7 +146,7 @@ resource "aws_iam_role_policy" "task_agentcore_ssm" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["ssm:GetParameter", "ssm:GetParameters"]
-      Resource = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project}/agentcore/*"
+      Resource = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/ops/${var.project}/agentcore/*"
     }]
   })
 }
