@@ -11,7 +11,7 @@
 #   make help        # list targets
 
 .DEFAULT_GOAL := help
-.PHONY: help configure deps deploy
+.PHONY: help configure deps deploy agentcore
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -24,3 +24,6 @@ configure: deps ## Interactive TUI: choose new/existing VPC, domain, bucket → 
 
 deploy: ## Build arm64, push to ECR, roll ECS, wait stable, smoke /api/health
 	@node scripts/v2/deploy.mjs
+
+agentcore: ## Build arm64 agent image, push ECR, run idempotent AgentCore provisioner (--smoke to invoke). Run after `terraform apply`.
+	@node scripts/v2/agentcore.mjs $(if $(SMOKE),--smoke,)
