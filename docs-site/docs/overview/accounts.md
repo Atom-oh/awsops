@@ -13,6 +13,10 @@ import MultiAccountSetupFlow from '@site/src/components/diagrams/MultiAccountSet
 
 <Screenshot src="/screenshots/overview/accounts.png" alt="계정 관리" />
 
+:::tip 고객 세션 포인트
+Steampipe Aggregator로 **전 계정을 단일 창**에서 조회 — 계정 추가/삭제는 `data/config.json`의 `accounts[]`만 수정하면 되고 **코드 변경이 없습니다**. → [왜 AWSops인가](./why-awsops)
+:::
+
 ## 설정 흐름
 
 아래 다이어그램은 Host 계정과 Target 계정의 등록 과정, 그리고 Admin 접근 제어 흐름을 보여줍니다. 각 노드에 마우스를 올리면 상세 설명이 표시됩니다.

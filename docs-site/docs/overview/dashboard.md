@@ -13,6 +13,10 @@ import ArchitectureFlow from '@site/src/components/diagrams/ArchitectureFlow';
 
 <Screenshot src="/screenshots/overview/dashboard.png" alt="대시보드" />
 
+:::tip 고객 세션 포인트
+모든 계정·리소스가 **한 화면**에 — 캐시 워머가 핵심 23개 쿼리를 4분 주기로 프리워밍해 **서브초 응답**을 보장합니다. 전체 가치 요약은 [왜 AWSops인가](./why-awsops)를 참고하세요.
+:::
+
 ## 시스템 아키텍처
 
 <ArchitectureFlow />
