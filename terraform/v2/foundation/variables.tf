@@ -69,3 +69,17 @@ variable "admin_password" {
   description = "Initial admin permanent password (>=8, upper+lower+number)"
   sensitive   = true
 }
+
+variable "aurora_engine_version" {
+  type        = string
+  description = "Aurora PostgreSQL engine version (available, Serverless v2 / provisioned mode)"
+  default     = "15.10"
+}
+variable "aurora_min_acu" {
+  type    = number
+  default = 0.5
+}
+variable "aurora_max_acu" {
+  type    = number
+  default = 4
+}
