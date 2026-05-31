@@ -147,6 +147,9 @@ function buildTfvars(cfg) {
   if (cfg.onboardEksClusters && cfg.onboardEksClusters.length > 0) {
     lines.push(`onboard_eks_clusters = ${hclStringList(cfg.onboardEksClusters)}`);
   }
+  if (cfg.agentcoreEnabled) {
+    lines.push('agentcore_enabled = true');
+  }
   return lines.join('\n') + '\n';
 }
 
@@ -348,6 +351,13 @@ async function main() {
     }
   }
 
+  // AgentCore skeleton (optional). Provisions ECR/IAM/Lambda/SSM; `make agentcore` does the rest.
+  console.log('');
+  const agentcoreEnabled = await confirm({
+    message: 'Provision the AgentCore skeleton (9 gateways + runtime + slice tools)? You run `make agentcore` after apply.',
+    default: false,
+  });
+
   const cfg = {
     domainName: domainName.trim(),
     hostedZoneName: hostedZoneName.trim(),
@@ -357,6 +367,7 @@ async function main() {
     existingVpcId,
     existingPrivateSubnetIds,
     onboardEksClusters,
+    agentcoreEnabled,
   };
 
   // Summary
@@ -379,6 +390,7 @@ async function main() {
   console.log(
     `  EKS onboard      : ${cfg.onboardEksClusters.length ? cfg.onboardEksClusters.join(', ') : '(none)'}`,
   );
+  console.log(`  AgentCore        : ${cfg.agentcoreEnabled ? 'enabled' : '(disabled)'}`);
   console.log('');
   console.log(`  -> ${TFVARS_PATH}`);
   console.log(`  -> ${BACKEND_PATH}`);
