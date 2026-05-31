@@ -11,7 +11,7 @@
 #   make help        # list targets
 
 .DEFAULT_GOAL := help
-.PHONY: help configure deps
+.PHONY: help configure deps deploy
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -21,3 +21,6 @@ deps: ## Install node deps required by the configurator (idempotent; first run o
 
 configure: deps ## Interactive TUI: choose new/existing VPC, domain, bucket → terraform.tfvars + backend.hcl
 	@node scripts/v2/configure.mjs
+
+deploy: ## Build arm64, push to ECR, roll ECS, wait stable, smoke /api/health
+	@node scripts/v2/deploy.mjs
