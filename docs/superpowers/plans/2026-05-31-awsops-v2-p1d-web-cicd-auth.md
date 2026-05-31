@@ -370,30 +370,16 @@ output "ecr_web_uri"    { value = aws_ecr_repository.web.repository_url }
 output "ecr_public_uri" { value = aws_ecrpublic_repository.web.repository_uri }
 ```
 
-- [ ] **Step 3: `variables.tf` — change `image_tag` default + add DB-access gate** (used in D3)
-```hcl
-# (MODIFY existing image_tag default)
-variable "image_tag" {
-  type        = string
-  description = "Web image tag in ECR"
-  default     = "web-latest"
-}
-
-# (ADD) dev convenience: allow the in-VPC deploy host to reach Aurora on 5432 for
-# psql migrations. Set false in prod to drop the broad VPC-CIDR ingress (review #4).
-variable "allow_vpc_db_access" {
-  type    = bool
-  default = true
-}
-```
+- [ ] **Step 3 — DEFERRED TO D3 (do NOT modify `variables.tf` here):** Setting `image_tag` to `web-latest` now would make the still-live `spine` task definition reference a nonexistent tag and break on the next ECS reconcile. The `image_tag` + `allow_vpc_db_access` variable changes happen in **D3 Step 0**, alongside the cutover.
 
 - [ ] **Step 4: validate + apply ECR only**
 ```bash
 cd terraform/v2/foundation
 terraform fmt && terraform validate
-terraform plan -out tfplan && terraform apply tfplan
+terraform plan -out tfplan   # inspect: MUST be only the 2 ECR repos + 2 outputs; NO ECS/ALB/spine/edge changes
+terraform apply tfplan
 ```
-Expected: creates `aws_ecr_repository.web` + `aws_ecrpublic_repository.web` (and the `image_tag` default change is a no-op until D3). NO changes to ECS/ALB/edge. `terraform output ecr_web_uri` prints a URL.
+Expected: creates ONLY `aws_ecr_repository.web` + `aws_ecrpublic_repository.web`. NO changes to ECS/ALB/edge/spine. `terraform output ecr_web_uri` prints a URL.
 
 - [ ] **Step 5: `scripts/v2/deploy.mjs`** (build arm64 → push → force-deploy → wait → smoke; `sudo docker` by default per the deploy host)
 ```js
@@ -461,9 +447,26 @@ git commit -m "feat(v2-p1d): dual-tier ECR (dev-private + prod-public) + make de
 
 ## Task D3: cutover spine → web (rename + Aurora secret wiring + health path + SG min)
 
-**Files:** Modify `terraform/v2/foundation/workload.tf`, `data.tf`, `outputs.tf`.
+**Files:** Modify `terraform/v2/foundation/variables.tf`, `workload.tf`, `data.tf`, `outputs.tf`.
 
-> This is the apply that swaps the running service to the real Next.js image. The first web image already exists in ECR (D2 Step 7), so the new task can pull and pass health checks. `moved {}` blocks preserve state where names are stable; name-changing resources recreate once (brief, the image is throwaway/idempotent).
+> This is the apply that swaps the running service to the real Next.js image. The first web image already exists in ECR (D2), so the new task can pull and pass health checks. `moved {}` blocks preserve state where names are stable; name-changing resources recreate once (brief, the image is throwaway/idempotent).
+
+- [ ] **Step 0: `variables.tf` — point `image_tag` at the web image + add the DB-access gate** (deferred from D2 so the live spine task def wasn't broken early)
+```hcl
+# (MODIFY existing image_tag default)
+variable "image_tag" {
+  type        = string
+  description = "Web image tag in ECR"
+  default     = "web-latest"
+}
+
+# (ADD) dev convenience: allow the in-VPC deploy host to reach Aurora on 5432 for
+# psql migrations. Set false in prod to drop the broad VPC-CIDR ingress (review #4).
+variable "allow_vpc_db_access" {
+  type    = bool
+  default = true
+}
+```
 
 - [ ] **Step 1: replace `workload.tf`** (full file — spine→web everywhere; delete the old `aws_ecr_repository.spine` since `aws_ecr_repository.web` now lives in `ecr.tf`)
 ```hcl
