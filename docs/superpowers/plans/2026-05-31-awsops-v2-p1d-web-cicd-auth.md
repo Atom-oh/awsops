@@ -48,7 +48,22 @@ terraform/v2/foundation/
   edge-lambda/cognito_edge.py.tftpl   # REWRITE — JWKS RS256 + state + PKCE + public-path bypass
 ```
 
-After cutover, `spine/` is deleted (Task D5).
+After cutover, `spine/` is deleted (Task D5). **Prereq (Task D0):** `web/` currently holds the Docusaurus guide site → relocated to `docs-site/` first so the v2 app can use `web/`.
+
+---
+
+## Task D0: relocate Docusaurus guide site (web/ → docs-site/)
+
+**Why:** `web/` is already a tracked Docusaurus docs site (v1 user guide, 322 files, deployed by `.github/workflows/deploy-guide.yml` and wired into the guide-sync hooks/skill). The plan's D1–D5 use `web/` for the v2 Next.js app, so the guide site must move first. (Discovered during execution — the directory wasn't inspected at plan time.)
+
+**Files:** `git mv web docs-site`; Modify `.github/workflows/deploy-guide.yml`, root `.dockerignore`, `.claude/hooks/{check-guide-i18n-sync,check-menu-guide-sync,accumulate-pending-guides}.sh`, `.claude/skills/sync-guides/SKILL.md`, `tests/hooks/test-hook-behavior.sh`.
+
+- [ ] **Step 1: move the directory** — `git mv web docs-site`
+- [ ] **Step 2: `.github/workflows/deploy-guide.yml`** — `paths: ['web/**']`→`['docs-site/**']`, `working-directory: web`→`docs-site`, `cache-dependency-path: web/package-lock.json`→`docs-site/package-lock.json`, `path: web/build`→`docs-site/build`
+- [ ] **Step 3: root `.dockerignore`** — change the `web/` line to `docs-site/` AND add a new `web/` line (v1 root build then excludes BOTH the guide site and the future v2 app)
+- [ ] **Step 4: hooks + skill + test** — replace `web/docs`→`docs-site/docs`, `web/i18n`→`docs-site/i18n`, `web/sidebars.ts`→`docs-site/sidebars.ts`, `web/src`→`docs-site/src` across `.claude/hooks/check-guide-i18n-sync.sh`, `.claude/hooks/check-menu-guide-sync.sh`, `.claude/hooks/accumulate-pending-guides.sh`, `.claude/skills/sync-guides/SKILL.md`, `tests/hooks/test-hook-behavior.sh`
+- [ ] **Step 5: verify** — `git grep -nE "web/(docs|i18n|sidebars|src|build|package-lock)" -- ':(exclude)docs-site/' ':(exclude)docs/superpowers/plans/'` returns nothing; `web/` no longer exists; `docs-site/docusaurus.config.ts` exists
+- [ ] **Step 6: commit** — `chore(v2-p1d): relocate Docusaurus guide site web/ -> docs-site/ (free web/ for v2 app)`
 
 ---
 
