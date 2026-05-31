@@ -114,6 +114,8 @@ def ensure_targets(ctrl, ac, gw_ids):
                 tid = existing[tname]["targetId"]
                 cur = ctrl.get_gateway_target(gatewayIdentifier=gw_id, targetId=tid)
                 cur_tools = cur.get("targetConfiguration", {}).get("mcp", {}).get("lambda", {}).get("toolSchema", {}).get("inlinePayload", [])
+                # Drift = tool-NAME set only; intra-tool schema edits (description/inputSchema/required)
+                # are NOT detected. Adding/removing a tool re-syncs; editing one in place needs a rename.
                 if {t["name"] for t in cur_tools} == {t["name"] for t in tools}:
                     log(f"target:{tname}", "EXISTS", f"{len(tools)} tools")
                 else:
