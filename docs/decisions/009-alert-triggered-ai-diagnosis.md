@@ -2,6 +2,9 @@
 
 ## Status: Accepted (2026-04-22) / 상태: 채택됨
 
+> **Supersession proposed (2026-05-31)**: [ADR-032](032-event-triggered-autonomous-incident-lifecycle.md) proposes to supersede this ADR's single-pass diagnosis flow with a durable, staged, multi-agent incident lifecycle (Trigger → Triage → Investigation → Mitigation → Prevention). This ADR's **correlation engine (`alert-correlation.ts`) is retained**, carried forward as ADR-032's Triage look-back component — it is not discarded. This ADR remains **Accepted** and in force until ADR-032 is Accepted.
+> **승계 제안 (2026-05-31)**: [ADR-032](032-event-triggered-autonomous-incident-lifecycle.md)가 본 ADR의 단일 패스 진단 플로우를 내구성 있는 단계별 멀티 에이전트 인시던트 라이프사이클(Trigger → Triage → Investigation → Mitigation → Prevention)로 승계할 것을 제안한다. 본 ADR의 **상관분석 엔진(`alert-correlation.ts`)은 보존**되어 ADR-032의 Triage look-back 컴포넌트로 이월된다 — 폐기되지 않는다. ADR-032가 채택될 때까지 본 ADR은 **Accepted** 상태로 유효하다.
+
 ## Context / 컨텍스트
 
 AWSops provides comprehensive AI diagnosis through manual triggers (AI chat, 15-section report, auto-scheduler). However, when an operational incident actually occurs -- a CloudWatch alarm fires, Prometheus Alertmanager triggers, or Kubernetes pods crash-loop -- the operations team must manually open the dashboard and ask questions to understand root cause. The gap between "alert fires" and "root cause identified" averages 15-30 minutes of manual investigation.

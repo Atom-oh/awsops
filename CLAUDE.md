@@ -23,7 +23,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 | 컴포넌트 | 18 (ReportMarkdown 추가) |
 | MCP 도구 | 125 (8 Gateway, 19 Lambda) |
 | AI 라우트 | 11 (datasource 라우트 추가) |
-| ADR | 31 (001-031, ADR-030 Accepted, ADR-029·031 Proposed) |
+| ADR | 32 (001-032, ADR-030 Accepted, ADR-029·031·032 Proposed) |
 
 ## 필수 규칙
 
@@ -235,7 +235,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 | Components | 18 (incl. ReportMarkdown) |
 | MCP Tools | 125 (8 Gateways, 19 Lambda) |
 | AI Routes | 11 (incl. datasource route) |
-| ADRs | 31 (001-031, ADR-030 Accepted, ADR-029·031 Proposed) |
+| ADRs | 32 (001-032, ADR-030 Accepted, ADR-029·031·032 Proposed) |
 
 ## Critical Rules
 
