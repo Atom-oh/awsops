@@ -31,6 +31,9 @@ data/
 # CDK schema/seed files (ADR-030) live under infra-cdk/data/ and are source-controlled
 !infra-cdk/data/
 !infra-cdk/data/**
+# v2 foundation schema/seed files (ADR-030) — source-controlled, same as infra-cdk/data/
+!terraform/v2/foundation/data/
+!terraform/v2/foundation/data/**
 
 # logs
 npm-debug.log*
