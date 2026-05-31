@@ -13,6 +13,7 @@ Run from the repo root (so `terraform -chdir=...` resolves) AFTER `terraform app
 import argparse
 import copy
 import json
+import os
 import subprocess
 import sys
 import time
@@ -26,6 +27,7 @@ TFDIR = "terraform/v2/foundation"
 RUNTIME_NAME = "awsops_v2_agent"                 # underscores only
 MEMORY_NAME = "awsops_v2_memory"                 # underscores only
 INTERPRETER_NAME = "awsops_v2_code_interpreter"  # underscores only
+IMAGE_TAG = os.environ.get("AGENT_IMAGE_TAG", "agent-latest")  # keep in sync with agentcore.mjs push tag
 
 report = []  # (resource, status, detail)
 
@@ -51,13 +53,24 @@ def _items(resp):
     return []
 
 
+def _list_all(list_fn, **kwargs):
+    """Paginate an AgentCore list_* call (nextToken) and return ALL items."""
+    out, token = [], None
+    while True:
+        resp = list_fn(**{**kwargs, "nextToken": token}) if token else list_fn(**kwargs)
+        out.extend(_items(resp))
+        token = resp.get("nextToken")
+        if not token:
+            return out
+
+
 def gateway_url(gw_id, region):
     return f"https://{gw_id}.gateway.bedrock-agentcore.{region}.amazonaws.com/mcp"
 
 
 def ensure_gateways(ctrl, ac):
     """9 gateways, idempotent by exact name. Returns {short_key: gateway_id}."""
-    existing = {g.get("name"): g.get("gatewayId") for g in _items(ctrl.list_gateways())}
+    existing = {g.get("name"): g.get("gatewayId") for g in _list_all(ctrl.list_gateways)}
     ids = {}
     for key in catalog.GATEWAYS:
         name = f"awsops-{key}-gateway"
@@ -108,7 +121,7 @@ def ensure_targets(ctrl, ac, gw_ids):
         tools = _inject_account(spec["tools"])
         cfg = {"mcp": {"lambda": {"lambdaArn": lambda_arn, "toolSchema": {"inlinePayload": tools}}}}
         creds = [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
-        existing = {t.get("name"): t for t in _items(ctrl.list_gateway_targets(gatewayIdentifier=gw_id))}
+        existing = {t.get("name"): t for t in _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id)}
         try:
             if tname in existing:
                 tid = existing[tname]["targetId"]
@@ -133,7 +146,7 @@ def ensure_targets(ctrl, ac, gw_ids):
 
 def ensure_memory(ctrl):
     # ListMemories items carry id/arn/status but NOT name; resolve name via get_memory.
-    for m in _items(ctrl.list_memories()):
+    for m in _list_all(ctrl.list_memories):
         mid = m.get("id") or m.get("memoryId")
         if not mid:
             continue
@@ -158,7 +171,7 @@ def ensure_memory(ctrl):
 
 
 def ensure_interpreter(ctrl):
-    for c in _items(ctrl.list_code_interpreters()):
+    for c in _list_all(ctrl.list_code_interpreters):
         if c.get("name") == INTERPRETER_NAME:
             cid = c.get("codeInterpreterId") or c.get("id")
             log("interpreter", "EXISTS", cid)
@@ -177,10 +190,10 @@ def ensure_interpreter(ctrl):
 def ensure_runtime(ctrl, ac, gw_ids):
     region = ac["region"]
     gateways_json = json.dumps({k: gateway_url(v, region) for k, v in gw_ids.items()})
-    artifact = {"containerConfiguration": {"containerUri": f"{ac['ecr_uri']}:agent-latest"}}
+    artifact = {"containerConfiguration": {"containerUri": f"{ac['ecr_uri']}:{IMAGE_TAG}"}}
     netcfg = {"networkMode": "PUBLIC"}
     env = {"AWS_REGION": region, "GATEWAYS_JSON": gateways_json}
-    existing = {r.get("agentRuntimeName"): r for r in _items(ctrl.list_agent_runtimes())}
+    existing = {r.get("agentRuntimeName"): r for r in _list_all(ctrl.list_agent_runtimes)}
     try:
         if RUNTIME_NAME in existing:
             rid = existing[RUNTIME_NAME].get("agentRuntimeId")

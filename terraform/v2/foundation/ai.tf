@@ -77,6 +77,25 @@ resource "aws_iam_role_policy" "agentcore" {
         Effect   = "Allow"
         Action   = ["lambda:InvokeFunction"]
         Resource = "arn:aws:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${var.project}-agent-*"
+      },
+      {
+        # Runtime pulls its container image from the private ECR repo via this role.
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid      = "EcrPullAgentImage"
+        Effect   = "Allow"
+        Action   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"]
+        Resource = aws_ecr_repository.agentcore[0].arn
+      },
+      {
+        Sid      = "RuntimeLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:*"
       }
     ]
   })
@@ -222,6 +241,8 @@ resource "aws_lambda_permission" "agent_agentcore" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.agent[each.key].function_name
   principal     = "bedrock-agentcore.amazonaws.com"
+  # Confused-deputy guard: only AgentCore gateways in THIS account may invoke.
+  source_account = data.aws_caller_identity.current.account_id
 }
 
 # ---- outputs consumed by scripts/v2/agentcore/provision.py ----

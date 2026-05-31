@@ -21,7 +21,7 @@ const repo = ac.ecr_uri;
 const registry = repo.split('/')[0];
 
 console.log(`\n[1/3] ECR login -> ${registry}`);
-sh(`aws ecr get-login-password --region ${REGION} | ${DOCKER} login --username AWS --password-stdin ${registry}`);
+sh(`aws ecr get-login-password --region ${ac.region || REGION} | ${DOCKER} login --username AWS --password-stdin ${registry}`);
 
 console.log(`\n[2/3] build + push arm64 agent image -> ${repo}:${TAG}`);
 sh(`${DOCKER} buildx build --platform linux/arm64 -t ${repo}:${TAG} --push agent/`);
