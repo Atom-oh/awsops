@@ -149,7 +149,8 @@ User Question / 사용자 질문
 
 ### 모델
 - **Claude Sonnet 4.6** (`global.anthropic.claude-sonnet-4-6`) — Fast responses / 빠른 응답 (default)
-- **Claude Opus 4.8** (`global.anthropic.claude-opus-4-8-v1`) — Deep analysis / 심층 분석
+- **Claude Opus 4.8** (`global.anthropic.claude-opus-4-8`) — Deep analysis / 심층 분석
+- **Claude Haiku 4.5** (`global.anthropic.claude-haiku-4-5-20251001-v1:0`) — Fast / low-cost / 빠르고 저렴
 
 ### 8 AgentCore Gateways (125 MCP Tools)
 

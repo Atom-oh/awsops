@@ -16,7 +16,7 @@ The `/ai-diagnosis` page generates a 15-section infrastructure analysis report u
 
 | Item | Value |
 |------|-------|
-| **Model** | `global.anthropic.claude-opus-4-8-v1` (fixed) |
+| **Model** | `global.anthropic.claude-opus-4-8` (fixed) |
 | **Sections** | 15 (4 cost + 6 infra + 2 security/network + 3 summary) |
 | **Output formats** | DOCX (A4 + TOC), Markdown, PDF (browser print) |
 | **Storage** | S3 report bucket + `data/reports/*.json` cache |

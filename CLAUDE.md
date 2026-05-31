@@ -8,7 +8,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - **프론트엔드**: Next.js 14 (App Router) + Tailwind CSS 다크 테마 + Recharts + React Flow
 - **데이터**: Steampipe 내장 PostgreSQL (포트 9193) — AWS 380+ 테이블, K8s 60+ 테이블, 멀티 어카운트 Aggregator
 - **외부 데이터소스**: Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog (SSRF 방지 + allowlist)
-- **AI 엔진**: Bedrock Sonnet 4.6 / Opus 4.8 + AgentCore Runtime (Strands) + 8 Gateway (125 MCP 도구) + 19 Lambda
+- **AI 엔진**: Bedrock Sonnet 4.6 / Opus 4.8 / Haiku 4.5 + AgentCore Runtime (Strands) + 8 Gateway (125 MCP 도구) + 19 Lambda
 - **AI 진단**: 15섹션 Bedrock Opus 분석 + DOCX/MD/PDF 내보내기 + 자동 스케줄링
 - **인증**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1) + CloudFront
 - **인프라**: CDK (`infra-cdk/`) → CloudFront (CACHING_DISABLED) → ALB → EC2 (t4g.2xlarge, Private Subnet)
@@ -220,7 +220,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - **Frontend**: Next.js 14 (App Router) + Tailwind CSS dark theme + Recharts + React Flow
 - **Data**: Steampipe embedded PostgreSQL (port 9193) — 380+ AWS tables, 60+ K8s tables, multi-account Aggregator
 - **External Datasources**: Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog (SSRF-protected + allowlist)
-- **AI**: Bedrock Sonnet 4.6 / Opus 4.8 + AgentCore Runtime (Strands) + 8 Gateways (125 MCP tools) + 19 Lambda
+- **AI**: Bedrock Sonnet 4.6 / Opus 4.8 / Haiku 4.5 + AgentCore Runtime (Strands) + 8 Gateways (125 MCP tools) + 19 Lambda
 - **AI Diagnosis**: 15-section Bedrock Opus analysis + DOCX/MD/PDF export + auto-scheduling
 - **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1) + CloudFront
 - **Infra**: CDK → CloudFront (CACHING_DISABLED) → ALB → EC2 (t4g.2xlarge, Private Subnet)

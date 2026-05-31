@@ -43,7 +43,8 @@ function getCodeInterpreterName(): string {
 // Seoul region uses global.* prefix for cross-region inference / 서울 리전은 global.* 접두사 사용
 const MODELS: Record<string, string> = {
   'sonnet-4.6': 'global.anthropic.claude-sonnet-4-6',
-  'opus-4.8': 'global.anthropic.claude-opus-4-8-v1',
+  'opus-4.8': 'global.anthropic.claude-opus-4-8',
+  'haiku-4.5': 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
 };
 
 // AWS SDK clients / AWS SDK 클라이언트

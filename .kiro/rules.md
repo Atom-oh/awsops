@@ -35,7 +35,7 @@ AWS + Kubernetes 운영 대시보드 (Steampipe, Next.js 14, Amazon Bedrock Agen
 - 분류기가 1~3개 route 반환 → 병렬 Gateway 호출 → Bedrock 응답 합성
 - code → Code Interpreter | network/container/iac/data/security/monitoring/cost → AgentCore Gateway
 - aws-data → Steampipe + Bedrock Direct | general → Ops Gateway + Bedrock fallback
-- Models: Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6`), Opus 4.8 (`global.anthropic.claude-opus-4-8-v1`)
+- Models: Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6`), Opus 4.8 (`global.anthropic.claude-opus-4-8`), Haiku 4.5 (`global.anthropic.claude-haiku-4-5-20251001-v1:0`)
 
 ### Dark Theme Colors
 - BG: navy-900 `#0a0e1a`, navy-800 `#0f1629`, navy-700 `#151d30`

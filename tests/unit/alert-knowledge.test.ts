@@ -90,7 +90,7 @@ function makeDiagnosisResult(overrides: Partial<DiagnosisResult> = {}): Diagnosi
     confidence: 'high',
     investigationSources: ['cloudwatch', 'prometheus'],
     processingTimeMs: 5200,
-    model: 'anthropic.claude-opus-4-20250514',
+    model: 'anthropic.claude-opus-4-8',
     inputTokens: 12000,
     outputTokens: 3500,
     ...overrides,

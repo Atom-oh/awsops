@@ -141,6 +141,7 @@ Select a model from the dropdown in the upper right corner:
 
 - **Claude Sonnet 4.6**: Fast responses, suitable for general questions (default)
 - **Claude Opus 4.8**: Complex analysis, suitable for deep reasoning
+- **Claude Haiku 4.5**: Fast and low-cost, suitable for simple questions / high volume
 
 ## Related Questions
 

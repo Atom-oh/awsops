@@ -16,7 +16,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 | 항목 | 값 |
 |------|---|
-| **모델** | `global.anthropic.claude-opus-4-8-v1` (고정) |
+| **모델** | `global.anthropic.claude-opus-4-8` (고정) |
 | **섹션 수** | 15 (비용 4 + 인프라 6 + 보안/네트워크 2 + 요약 3) |
 | **출력 포맷** | DOCX (A4 + TOC), Markdown, PDF (브라우저 print) |
 | **저장 위치** | S3 리포트 버킷 + `data/reports/*.json` 캐시 |

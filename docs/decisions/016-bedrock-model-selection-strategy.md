@@ -14,15 +14,16 @@ The landing commit `ba03173` ("fix: use global.anthropic.claude-sonnet-4-6 model
 
 ## Decision / 결정
 
-Assign Bedrock models to flows by **depth-vs-latency axis**, using only two canonical model IDs with the cross-region inference profile prefix `global.` so the call resolves within the same Bedrock availability boundary:
+Assign Bedrock models to flows by **depth-vs-latency axis**, using a small set of canonical model IDs with the cross-region inference profile prefix `global.` so the call resolves within the same Bedrock availability boundary:
 
-경로별로 **깊이 대 지연 축(depth-vs-latency axis)**에 따라 Bedrock 모델을 배정한다. 표준 모델 ID는 크로스 리전 추론 프로파일 접두사 `global.`을 포함하여 두 개만 사용하며, Bedrock 가용성 경계 내에서 호출이 해석되도록 한다.
+경로별로 **깊이 대 지연 축(depth-vs-latency axis)**에 따라 Bedrock 모델을 배정한다. 표준 모델 ID는 크로스 리전 추론 프로파일 접두사 `global.`을 포함한 소수만 사용하며, Bedrock 가용성 경계 내에서 호출이 해석되도록 한다.
 
 ```typescript
 // src/app/api/ai/route.ts
 const MODELS: Record<string, string> = {
   'sonnet-4.6': 'global.anthropic.claude-sonnet-4-6',
-  'opus-4.8':   'global.anthropic.claude-opus-4-8-v1',
+  'opus-4.8':   'global.anthropic.claude-opus-4-8',
+  'haiku-4.5':  'global.anthropic.claude-haiku-4-5-20251001-v1:0',
 };
 ```
 
@@ -32,9 +33,10 @@ const MODELS: Record<string, string> = {
 | Router classifier + tool inference | `src/app/api/ai/route.ts` | `global.anthropic.claude-sonnet-4-6` | Short prompts, high QPS, prompt-caching friendly |
 | Datasource NL→query | `src/app/api/datasources/route.ts` | `global.anthropic.claude-sonnet-4-6` | 300-token output cap, sub-second required |
 | Alert diagnosis orchestrator | `src/lib/alert-diagnosis.ts` | `global.anthropic.claude-sonnet-4-6` | Burst concurrency, Slack time budget, commit `ba03173` |
-| 15-section comprehensive diagnosis | `src/app/api/report/route.ts` | `global.anthropic.claude-opus-4-8-v1` | Multi-minute background job, depth over speed |
-| Scheduled full-report runs | `src/lib/report-scheduler.ts` → report route | `global.anthropic.claude-opus-4-8-v1` | Same path as manual report |
-| Opt-in Opus in AI chat | `src/app/api/ai/route.ts` (`modelKey: 'opus-4.8'`) | `global.anthropic.claude-opus-4-8-v1` | Power-user override only |
+| 15-section comprehensive diagnosis | `src/app/api/report/route.ts` | `global.anthropic.claude-opus-4-8` | Multi-minute background job, depth over speed |
+| Scheduled full-report runs | `src/lib/report-scheduler.ts` → report route | `global.anthropic.claude-opus-4-8` | Same path as manual report |
+| Opt-in Opus in AI chat | `src/app/api/ai/route.ts` (`modelKey: 'opus-4.8'`) | `global.anthropic.claude-opus-4-8` | Power-user override only |
+| Opt-in Haiku in AI chat | `src/app/api/ai/route.ts` (`modelKey: 'haiku-4.5'`) | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Fast/low-cost user-selectable option; router default stays Sonnet |
 
 ## Rationale / 근거
 
@@ -83,8 +85,8 @@ const MODELS: Record<string, string> = {
 
 ### Post-acceptance deviations / 채택 후 편차
 
-- **2026-05-31: Opus 4.6 → 4.8.** The Opus canonical ID and `modelKey` were bumped across all paths — `MODELS` map (`opus-4.8` → `global.anthropic.claude-opus-4-8-v1`), `report/route.ts` `MODEL_ID`, the AI chat opt-in, the `bedrock-metrics` pricing table, and the UI selector. Sonnet stays at 4.6 (still the current Sonnet). Pricing is unchanged (Opus tier `$15`/`$75`). The exact Bedrock profile string follows the existing `-v1` convention and must be confirmed against the account's Bedrock model catalog before deploy.
-- **2026-05-31: Opus 4.6 → 4.8.** Opus 표준 ID와 `modelKey`를 전 경로에서 상향 — `MODELS` 맵, `report/route.ts` `MODEL_ID`, AI 채팅 opt-in, `bedrock-metrics` 가격 테이블, UI 셀렉터. Sonnet은 4.6 유지(현재 Sonnet). 가격 동일(Opus `$15`/`$75`). 정확한 Bedrock 프로파일 문자열은 기존 `-v1` 관례를 따르되 배포 전 계정의 Bedrock 모델 카탈로그로 확인 필요.
+- **2026-05-31: Opus 4.6 → 4.8 + Haiku 4.5 added.** Active Opus bumped to `global.anthropic.claude-opus-4-8` across `MODELS`, `report/route.ts` `MODEL_ID`, the AI-chat opt-in, and the UI selector. Per the [Bedrock model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html), Opus 4.8 has **no** `-v1` suffix — only the 4.6-era ID used `-v1` (`claude-opus-4-6-v1`); an earlier `-v1` guess on 4.8 was corrected. Sonnet stays 4.6. Added **Haiku 4.5** (`global.anthropic.claude-haiku-4-5-20251001-v1:0`, ~`$1`/`$5`) as a third user-selectable chat model — the router default stays Sonnet, so "Why not Haiku for the router" above still holds. `bedrock-metrics` `MODEL_PRICING` is a reverse lookup and retains Opus 4.6/4.7/4.8 + Haiku 4.5 entries. ap-northeast-2 (Seoul) is Global-only for both new models, matching the `global.` prefix rule.
+- **2026-05-31: Opus 4.6 → 4.8 + Haiku 4.5 추가.** 활성 Opus를 `global.anthropic.claude-opus-4-8`로 상향 — `MODELS`, `report/route.ts` `MODEL_ID`, AI 채팅 opt-in, UI 셀렉터. [Bedrock 모델 카드](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html) 기준 Opus 4.8은 `-v1` 접미사가 **없다** — `-v1`은 4.6 세대 ID(`claude-opus-4-6-v1`)에만 존재하며, 4.8에 붙였던 `-v1` 추정을 정정했다. Sonnet은 4.6 유지. **Haiku 4.5**(`global.anthropic.claude-haiku-4-5-20251001-v1:0`, ~`$1`/`$5`)를 세 번째 사용자 선택 채팅 모델로 추가 — 라우터 기본값은 여전히 Sonnet이므로 위 "라우터에 Haiku를 쓰지 않는 이유"는 유효하다. `bedrock-metrics` `MODEL_PRICING`은 역방향 조회 테이블이라 Opus 4.6/4.7/4.8 + Haiku 4.5 항목을 모두 유지한다. ap-northeast-2(서울)는 두 신규 모델 모두 Global 전용이라 `global.` 접두사 규칙과 일치한다.
 
 ## References / 참고 자료
 
