@@ -1,8 +1,11 @@
 """AWSops v2 P1f — AgentCore skeleton catalog (MID-minus).
 
-GATEWAYS: 9 domain gateways. 8 reuse v1-stable names (agent.py auto-discovers by
-stripping 'awsops-'/'-gateway'); 'external-obs' is the NEW §4 #7 split, left EMPTY in
-P1f (its plugin datasource registry + OTLP + datasource-diag re-home are P3).
+GATEWAYS: 9 domain gateway short-keys. provision.py provisions each as
+'awsops-v2-<key>-gateway' (v2-namespaced to avoid colliding with v1 'awsops-*' in a
+shared account); the agent runtime receives the {key: url} map via GATEWAYS_JSON, so
+these short keys (not the gateway names) are what payload.gateway selects. 'external-obs'
+is the NEW §4 #7 split, left EMPTY in P1f (plugin datasource registry + OTLP + datasource-diag
+re-home are P3).
 
 TARGETS: the representative read-only slice proving every provisioner code path:
   - iam-mcp (14 tools, cross-account, largest schema) -> security gateway
@@ -11,7 +14,7 @@ Schemas are copied verbatim from agent/lambda/create_targets.py. provision.py in
 target_account_id into every tool inputSchema (cross-account), exactly like v1.
 """
 
-# short-key -> gateway display name. provision.py builds 'awsops-<key>-gateway'.
+# short-key -> domain. provision.py builds the gateway name 'awsops-v2-<key>-gateway'.
 GATEWAYS = [
     "network", "container", "data", "security", "cost",
     "monitoring", "iac", "ops", "external-obs",

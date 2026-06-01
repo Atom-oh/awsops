@@ -73,7 +73,7 @@ def ensure_gateways(ctrl, ac):
     existing = {g.get("name"): g.get("gatewayId") for g in _list_all(ctrl.list_gateways)}
     ids = {}
     for key in catalog.GATEWAYS:
-        name = f"awsops-{key}-gateway"
+        name = f"awsops-v2-{key}-gateway"  # v2-namespaced: isolate from v1 awsops-* in shared accounts
         if name in existing:
             ids[key] = existing[name]
             log(f"gateway:{key}", "EXISTS", name)
