@@ -77,8 +77,8 @@ variable "admin_password" {
 
 variable "aurora_engine_version" {
   type        = string
-  description = "Aurora PostgreSQL engine version (available, Serverless v2 / provisioned mode)"
-  default     = "15.10"
+  description = "Aurora PostgreSQL engine version (Serverless v2). Exact minor for a deterministic major upgrade; future minor auto-upgrades are absorbed by ignore_changes on the cluster/instance (not by a major-only pin — that mis-fires on aws_rds_cluster)."
+  default     = "17.9"
 }
 variable "aurora_min_acu" {
   type    = number

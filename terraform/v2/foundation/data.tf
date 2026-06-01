@@ -48,6 +48,8 @@ resource "aws_rds_cluster" "aurora" {
   engine                        = "aurora-postgresql"
   engine_mode                   = "provisioned"
   engine_version                = var.aurora_engine_version
+  allow_major_version_upgrade   = true # required for 15.x→17 major bump (default param groups → no param-group work)
+  apply_immediately             = true # perform the major-upgrade reboot synchronously, not deferred to a maintenance window
   database_name                 = "awsops"
   master_username               = "awsops_admin"
   manage_master_user_password   = true
@@ -64,6 +66,14 @@ resource "aws_rds_cluster" "aurora" {
     min_capacity = var.aurora_min_acu
     max_capacity = var.aurora_max_acu
   }
+
+  # A major upgrade is a deliberate, exact-version action (bump var.aurora_engine_version
+  # to a verified target + a fresh apply). Absorb AWS auto-MINOR upgrades (17.x→17.y) so
+  # they never surface as Terraform drift. (Major-only "17" pinning mis-fires on
+  # aws_rds_cluster — the provider's prefix diff-suppress is fixed only for aws_db_instance.)
+  lifecycle {
+    ignore_changes = [engine_version]
+  }
 }
 
 resource "aws_rds_cluster_instance" "writer" {
@@ -72,4 +82,9 @@ resource "aws_rds_cluster_instance" "writer" {
   engine             = aws_rds_cluster.aurora.engine
   engine_version     = aws_rds_cluster.aurora.engine_version
   instance_class     = "db.serverless"
+
+  # Instance follows the cluster engine version; ignore minor auto-upgrades like the cluster.
+  lifecycle {
+    ignore_changes = [engine_version]
+  }
 }
