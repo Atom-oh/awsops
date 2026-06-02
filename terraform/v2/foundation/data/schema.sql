@@ -198,3 +198,31 @@ VALUES (1, 'ADR-030 Phase 1: initial 7-table app state schema')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
+
+-- P2: async worker backbone job ledger (infra table; orthogonal to ADR-030 7 app-state tables)
+CREATE TABLE IF NOT EXISTS worker_jobs (
+  job_id            UUID PRIMARY KEY,
+  type              TEXT NOT NULL,
+  runtime           TEXT,                          -- 'lambda' | 'fargate' (set by SFN/worker)
+  status            TEXT NOT NULL DEFAULT 'queued'
+                      CHECK (status IN ('queued','running','succeeded','failed','canceled')),
+  payload           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result            JSONB,                          -- small inline result
+  artifact_uri      TEXT,                           -- large result: s3://bucket/key
+  error             TEXT,
+  dry_run           BOOLEAN NOT NULL DEFAULT false,
+  idempotency_key   TEXT UNIQUE,                    -- enqueue dedup (NULL allowed)
+  attempt           INTEGER NOT NULL DEFAULT 0,
+  sfn_execution_arn TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_worker_jobs_status ON worker_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_worker_jobs_status_updated ON worker_jobs(status, updated_at);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_worker_jobs_touch') THEN
+    CREATE TRIGGER trg_worker_jobs_touch BEFORE UPDATE ON worker_jobs
+      FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+END $$;
