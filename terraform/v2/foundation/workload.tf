@@ -80,6 +80,11 @@ resource "aws_ecs_task_definition" "web" {
       portMappings = [{ containerPort = 3000, protocol = "tcp" }]
       environment = [
         { name = "PORT", value = "3000" },
+        # Force Next.js standalone to bind 0.0.0.0. Docker/ECS sets the runtime HOSTNAME to the
+        # container hostname (→ ENI IP only), overriding the Dockerfile's ENV HOSTNAME=0.0.0.0,
+        # so the app listened on the ENI IP and the 127.0.0.1 container healthcheck probe failed
+        # (ALB to the ENI IP still passed). Pinning HOSTNAME here makes loopback reachable.
+        { name = "HOSTNAME", value = "0.0.0.0" },
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name }
       ]
