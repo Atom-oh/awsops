@@ -12,6 +12,29 @@
 
 ---
 
+## 0. 설계 리뷰 필수 수정 (MANDATORY — co-agent 패널 codex+gemini+kiro, 2026-06-02)
+
+플랜 리뷰 VERDICT: codex FAIL / gemini·kiro REVIEW. **아래 교정을 해당 task의 코드/HCL에 반드시 반영**(task 본문보다 우선). 각 implementer 프롬프트에 관련 항목을 주입한다.
+
+- **C1 [CRIT] W6 — Lambda에 pg8000 번들**: DB Lambda(worker/status_updater/reaper)는 `db.py`가 `pg8000`을 import하나 Lambda 런타임에 없음 → `ImportError`. 수정: 각 DB-Lambda zip을 **스테이징 디렉토리에 `pip install -r requirements.txt -t <dir>` + .py 복사 후 `archive_file{type=zip, source_dir=<dir>}`**로 빌드(현 `source{content=file()}` 폐기). 빌드 스텝을 W6에 추가(예: `scripts/v2/workers/build-lambda.sh <fn>`이 staging 생성). 디스패처는 pg8000 불요(그대로 file()). Fargate는 Dockerfile pip이라 무관.
+- **C2 [CRIT] W2 db.py — SSLContext**: `ssl_context=True` → `import ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE` 후 `Connection(..., ssl_context=ctx)`(web의 `rejectUnauthorized:false`와 동일; prod는 RDS CA 번들 — 후속).
+- **C3 [CRIT] W2 db.py — JSONB ::jsonb 캐스트**: text→jsonb 암묵 캐스트 없음 → `insert_job` `VALUES (:id,:t,:p::jsonb,:d,:k)`, `finish_job` `result=:res::jsonb`. (pg8000.native는 `:name` 정상; `:p::jsonb`의 `::`는 캐스트로 올바르게 파싱됨.)
+- **C4 [CRIT] W7 web getPool**: 기존 `getPool()`은 `web/app/api/db/route.ts`에 **인라인·비export**. → `web/lib/db.ts`로 추출(동일 Pool 설정: AURORA_ENDPOINT/USER/PASSWORD, `ssl:{rejectUnauthorized:false}`, max 3), `app/api/db/route.ts`도 이 모듈 import로 변경, jobs 라우트는 `import { getPool } from '@/lib/db'`. `@/` 별칭이 web 루트인지 tsconfig 확인(아니면 상대경로).
+- **C5 [HIGH] W6 SFN IAM**: `.sync`엔 `ecs:DescribeTasks`+`ecs:StopTask` 필요(현 RunTask+events만) → 추가(Resource `*`).
+- **C6 [HIGH] W7 멱등 원자성**: SELECT-후-INSERT 레이스 → `INSERT ... ON CONFLICT (idempotency_key) DO NOTHING RETURNING job_id`; 반환 없으면 기존 job SELECT.
+- **C7 [HIGH] W3 claim_running 반환 확인**: worker_lambda·fargate_worker에서 `claim_running()==0`(이미 터미널/claim됨)이면 핸들러 실행 **skip**(재시도·지연호출 시 부작용 중복 방지).
+- **C8 [HIGH] W6 SG 규칙 혼용 금지**: P1c Aurora SG는 **인라인 ingress** → standalone `aws_vpc_security_group_ingress_rule` 추가 시 perpetual diff/규칙 제거. 수정: **워커 전용 SG·Aurora ingress 규칙을 제거하고 워커가 기존 `aws_security_group.service`를 재사용**(Aurora 인라인 ingress가 이미 허용; egress-all 존재). (W6에서 data.tf의 aurora SG ingress가 service SG를 허용하는지 확인.)
+- **C9 [HIGH] W9 검증 실증**: OOM을 **SFN 경유**로 증명(Fargate `--oom` 잡 → OOM → SFN Catch → status_updater=failed + web 무영향). kill-switch/멱등 스텝을 **실제 enqueue+상태 assert** 명령으로(주석 아님).
+- **C10 [MED] W2 get_job**: SELECT에 `payload` 추가(현재 누락 → fargate 핸들러가 {} 받음).
+- **C11 [MED] W6 ESM depends_on**: `aws_lambda_event_source_mapping.dispatch`에 디스패처 SQS-consume IAM 정책 `depends_on`.
+- **C12 [MED] W3 reaper**: `now() - make_interval(mins => :m)`(문자열 concat 금지); **dispatch ESM이 disabled면 queued reap 생략**(kill-switch 중 큐 보존) — `get_event_source_mapping` State 확인 후 running만 reap.
+- **C13 [MED] W7/W9 빌드**: web 검증은 `npm run build`(repo 표준; `tsc||true` 금지). 새 task def는 `make deploy`로 롤아웃.
+- **C14 [MED] W6 디스패처 역할 분리**: 디스패처는 **별도 최소 역할**(states:StartExecution + SQS consume + logs만; Aurora/KMS/S3 제거). DB-Lambda 3종만 Aurora 역할.
+- **C15 [MED] W3/W9 S3 descope**: proof 핸들러는 **inline 결과만**(대용량 아티팩트 없음) → P2는 S3 업로드 미실증(버킷+IAM+artifact_uri 컬럼은 프로비전, 실제 업로드는 P3 대용량 ops에서). 플랜의 artifact 업로드 주장 제거.
+- 기각: gemini Makefile 지적(실제 `@node`, 오인), pg8000 `:name`(native 정상).
+
+---
+
 ## File Structure
 
 ```
