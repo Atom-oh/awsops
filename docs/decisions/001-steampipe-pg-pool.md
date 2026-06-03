@@ -2,6 +2,8 @@
 
 ## 상태: 승인됨 / Status: Accepted
 
+> **v2 note (2026-06-03)**: the core decision (query Steampipe via the **pg Pool, not the CLI**) still holds in v2. Only the *host location* changes — **ADR-030** moves Steampipe off the EC2 host (`localhost:9193`) into a separate `awsops-steampipe` Fargate task reached via Service Connect DNS (`awsops-steampipe.awsops.local:9193`). / 핵심 결정(**CLI가 아닌 pg Pool**로 Steampipe 조회)은 v2에서도 유효. *호스트 위치*만 변경 — **ADR-030**이 Steampipe를 EC2 `localhost:9193`에서 Service Connect DNS(`awsops-steampipe.awsops.local:9193`)로 접근하는 별도 Fargate 태스크로 이전.
+
 ## 컨텍스트 / Context
 Steampipe는 CLI(`steampipe query "SQL"`) 또는 PostgreSQL 프로토콜(pg Pool, 포트 9193)을 통해 접근할 수 있습니다.
 (Steampipe can be accessed via CLI (`steampipe query "SQL"`) or PostgreSQL protocol (pg Pool to port 9193).)

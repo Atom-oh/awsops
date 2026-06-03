@@ -21,3 +21,7 @@
   (Gateway management complexity increased — 7 vs 1)
 - Lambda 소스는 agent/lambda/에서 버전 관리
   (Lambda sources version controlled in agent/lambda/)
+
+## 업데이트 / Update (2026-06-03, co-agent 3-AI review)
+- **게이트웨이 수는 현재 8개입니다 (7개 아님).** 이후 Network Gateway가 추가되어 Network/Container/IaC/Data/Security/Monitoring/Cost/Ops = **8개 역할 기반 Gateway, 125개 MCP 도구**가 되었습니다. 위 본문의 "7개"·"7 vs 1" 표현은 채택 시점 기준이며, ADR-009/011/021/024/025·README·AGENTS.md가 일관되게 인용하는 현재 수치는 **8**입니다.
+- **The gateway count is now 8 (not 7).** A Network Gateway was added later, making it Network/Container/IaC/Data/Security/Monitoring/Cost/Ops = **8 role-based Gateways with 125 MCP tools**. The "7" / "7 vs 1" wording above reflects the acceptance-time count; the current figure consistently cited by ADR-009/011/021/024/025, the README, and AGENTS.md is **8**.

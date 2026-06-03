@@ -13,11 +13,11 @@ Records of major design decisions. Update this index when status/outcome changes
 
 | # | 제목 / Title | 상태 / Status |
 |---|---|---|
-| 001 | Steampipe pg Pool (CLI 배제) | Accepted |
-| 002 | AI 하이브리드 라우팅 | Accepted |
+| 001 | Steampipe pg Pool (CLI 배제) | Accepted — v2 호스트 위치는 030이 승계 (pg Pool 결정 유효) |
+| 002 | AI 하이브리드 라우팅 | Accepted — 라우트 4→11 확장 (현황은 011/016/025) |
 | 003 | SCP 차단 컬럼 처리 | Accepted |
-| 004 | Gateway 역할 분리 | Accepted |
-| 005 | VPC Lambda → Steampipe 접근 | Accepted |
+| 004 | Gateway 역할 분리 | Accepted — 게이트웨이 수 7→8 정정 |
+| 005 | VPC Lambda → Steampipe 접근 | Accepted — v2 네트워킹 경로는 030이 승계 |
 | 006 | Cost 가용성 Probe | Accepted |
 | 007 | 리소스 인벤토리 베이스라인 | Accepted |
 | 008 | 멀티 어카운트 지원 | Accepted |
@@ -36,7 +36,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 021 | AI 응답 SSE 스트리밍 | Accepted (2026-04-22) |
 | 022 | 알림 웹훅 HMAC-SHA256 인증 | Accepted (2026-04-22) |
 | 023 | Admin Role Model (adminEmails) | Accepted (2026-04-22) |
-| 024 | CDK 3-Stack 분할 (Awsops/Cognito/AgentCore) | Accepted (2026-04-22) |
+| 024 | CDK 3-Stack 분할 (Awsops/Cognito/AgentCore) | Accepted (2026-04-22) — v2 인프라는 030이 승계, Lambda 수 20 |
 | 025 | 멀티 라우트 병렬 Synthesis | Accepted (2026-04-22) |
 | 026 | i18n LanguageProvider | Accepted (2026-04-22) |
 | 027 | Code Interpreter 세션 격리 | Accepted (2026-04-22) |

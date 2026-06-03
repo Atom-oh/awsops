@@ -2,6 +2,8 @@
 
 ## Status: Accepted (2026-04-22) / 상태: 채택됨 (2026-04-22)
 
+> **Note (2026-06-03, co-agent 3-AI review)**: the Context's "Bedrock (Sonnet/Opus **4.6**)" is stale — per ADR-016 the active Opus was bumped to **Opus 4.8** (`global.anthropic.claude-opus-4-8`) on 2026-05-31, with Sonnet staying 4.6 and Haiku 4.5 added. ADR-016 is authoritative for model IDs. / Context의 "Opus **4.6**" 표기는 stale — ADR-016에 따라 2026-05-31 활성 Opus가 **Opus 4.8**로 상향(Sonnet은 4.6 유지, Haiku 4.5 추가). 모델 ID는 ADR-016이 기준.
+
 ## Context / 컨텍스트
 
 The AI Assistant route at `src/app/api/ai/route.ts` calls Bedrock (Sonnet/Opus 4.6) directly or indirectly through AgentCore Runtime and eight Gateways (125 MCP tools, per ADR-002). A full request-response cycle can take 10-60 seconds: intent classification, AgentCore Runtime spin-up, Gateway tool invocation, Steampipe SQL retry, external datasource query, and final Bedrock synthesis. Blocking the browser on a single JSON response that long produces a "frozen" UX — users cannot tell whether the request is running, stalled, or failed, and they receive no visibility into which Gateway was selected or which tools were invoked. The route also needs to advertise multi-phase progress (classification, routing, SQL execution, Bedrock streaming, tool usage) rather than a single opaque status. The same progress pattern appears in the auto-collect investigation agents (ADR-013) and in `src/lib/report-generator.ts` for diagnosis reports, all of which emit step-by-step events through a shared `SendFn` contract defined in `src/lib/collectors/types.ts`.

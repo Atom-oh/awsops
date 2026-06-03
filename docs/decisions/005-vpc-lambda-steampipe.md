@@ -2,6 +2,8 @@
 
 ## 상태: 승인됨 / Status: Accepted
 
+> **v2 note (2026-06-03)**: the EC2-host networking path (Lambda SG → EC2 SG on port 9193) is superseded **for v2** by **ADR-030** — Steampipe runs as the `awsops-steampipe` Fargate task, so the path becomes Lambda/task → Service Connect (`awsops-steampipe.awsops.local:9193`). Accepted as v1 history. / EC2 호스트 네트워킹 경로(Lambda SG → EC2 SG, 9193)는 **v2에 한해 ADR-030**이 승계 — Steampipe가 `awsops-steampipe` Fargate 태스크로 동작하여 경로가 Lambda/태스크 → Service Connect(`awsops-steampipe.awsops.local:9193`)로 변경. v1 이력으로 Accepted 유지.
+
 ## 컨텍스트 / Context
 AgentCore Runtime microVM은 EC2 localhost:9193(Steampipe PostgreSQL)에 접근할 수 없습니다. 초기 steampipe-query Lambda는 boto3 키워드 폴백을 사용했습니다 — API 4개만 지원, 실제 SQL 미지원.
 (AgentCore Runtime microVM cannot access EC2 localhost:9193 (Steampipe PostgreSQL). Initial steampipe-query Lambda used boto3 keyword fallback — 4 APIs only, no real SQL.)
