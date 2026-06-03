@@ -83,6 +83,7 @@ docs/COMPARISON_VS_FAST.md
 
 # 로컬 설정 (세션 데이터, 공유 불필요) / local settings
 .claude/settings.local.json
+.claude/co-agent.local.json
 
 # CDK 컨텍스트 (계정 종속, 자동 생성) / CDK context (account-specific)
 infra-cdk/cdk.context.json
