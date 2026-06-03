@@ -257,5 +257,11 @@ output "agentcore" {
     ssm_runtime_arn    = aws_ssm_parameter.agentcore_runtime_arn[0].name
     ssm_interpreter_id = aws_ssm_parameter.agentcore_interpreter_id[0].name
     ssm_memory_id      = aws_ssm_parameter.agentcore_memory_id[0].name
+    # Runtime VPC mode (Pattern 2): ENIs in our private subnets (apne2-az1/az2, AgentCore-supported)
+    # so section agents can reach private resources (Aurora/EKS) directly. Reuse the service SG —
+    # the Aurora SG already allows it (C8), and its egress→NAT lets the runtime still reach
+    # Bedrock/AgentCore/ECR. provision.py emits networkMode=VPC when these are present.
+    subnets         = local.private_subnet_ids
+    security_groups = [aws_security_group.service.id]
   } : null
 }

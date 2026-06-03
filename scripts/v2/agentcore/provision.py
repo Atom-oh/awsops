@@ -191,7 +191,16 @@ def ensure_runtime(ctrl, ac, gw_ids):
     region = ac["region"]
     gateways_json = json.dumps({k: gateway_url(v, region) for k, v in gw_ids.items()})
     artifact = {"containerConfiguration": {"containerUri": f"{ac['ecr_uri']}:{IMAGE_TAG}"}}
-    netcfg = {"networkMode": "PUBLIC"}
+    # VPC mode when the TF output supplies subnets+SGs (Pattern 2: ENIs in our VPC so agents reach
+    # private Aurora/EKS; egress to Bedrock/AgentCore still works via the subnets' NAT). Falls back
+    # to PUBLIC otherwise. networkMode/networkModeConfig flip in-place (no interruption).
+    subnets = ac.get("subnets") or []
+    sgs = ac.get("security_groups") or []
+    if subnets and sgs:
+        netcfg = {"networkMode": "VPC",
+                  "networkModeConfig": {"subnets": subnets, "securityGroups": sgs}}
+    else:
+        netcfg = {"networkMode": "PUBLIC"}
     env = {"AWS_REGION": region, "GATEWAYS_JSON": gateways_json}
     existing = {r.get("agentRuntimeName"): r for r in _list_all(ctrl.list_agent_runtimes)}
     try:
