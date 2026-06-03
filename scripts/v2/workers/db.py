@@ -69,12 +69,10 @@ def finish_job(conn, job_id, status, result=None, artifact_uri=None, error=None)
     return len(rows)
 
 
+# Single source of truth for get_job's SELECT + dict keys (avoids positional-zip drift).
+_JOB_COLS = ["job_id", "type", "status", "payload", "result", "artifact_uri", "error", "dry_run"]
+
+
 def get_job(conn, job_id):
-    rows = conn.run(
-        "SELECT job_id,type,status,payload,result,artifact_uri,error,dry_run FROM worker_jobs WHERE job_id=:id",
-        id=job_id,
-    )
-    if not rows:
-        return None
-    k = ["job_id", "type", "status", "payload", "result", "artifact_uri", "error", "dry_run"]
-    return dict(zip(k, rows[0]))
+    rows = conn.run(f"SELECT {','.join(_JOB_COLS)} FROM worker_jobs WHERE job_id=:id", id=job_id)
+    return dict(zip(_JOB_COLS, rows[0])) if rows else None
