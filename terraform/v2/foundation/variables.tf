@@ -88,3 +88,15 @@ variable "aurora_max_acu" {
   type    = number
   default = 4
 }
+
+variable "workers_enabled" {
+  type        = bool
+  description = "P2 async worker backbone gate. false (default) = 0 worker resources/cost. Enable in P2 W9."
+  default     = false
+}
+
+variable "worker_image_tag" {
+  type        = string
+  description = "Worker Fargate image tag in the worker ECR repo."
+  default     = "worker-latest"
+}

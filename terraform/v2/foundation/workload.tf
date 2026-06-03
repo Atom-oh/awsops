@@ -78,7 +78,9 @@ resource "aws_ecs_task_definition" "web" {
       image        = "${aws_ecr_repository.web.repository_url}:${var.image_tag}"
       essential    = true
       portMappings = [{ containerPort = 3000, protocol = "tcp" }]
-      environment = [
+      # concat keeps this byte-identical when workers_enabled=false (concat(base, []) == base →
+      # no web task-def revision / redeploy). Enabling workers adds JOBS_QUEUE_URL (W7 producer).
+      environment = concat([
         { name = "PORT", value = "3000" },
         # Force Next.js standalone to bind 0.0.0.0. Docker/ECS sets the runtime HOSTNAME to the
         # container hostname (→ ENI IP only), overriding the Dockerfile's ENV HOSTNAME=0.0.0.0,
@@ -87,7 +89,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "HOSTNAME", value = "0.0.0.0" },
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name }
-      ]
+        ], var.workers_enabled ? [
+        { name = "JOBS_QUEUE_URL", value = one(aws_sqs_queue.jobs[*].url) }
+      ] : [])
       secrets = [
         { name = "AURORA_USER", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:username::" },
         { name = "AURORA_PASSWORD", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:password::" }

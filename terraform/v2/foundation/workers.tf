@@ -1,0 +1,576 @@
+# AWSops v2 P2 — async worker backbone (SQS → dispatcher → Step Functions → Lambda/Fargate).
+# EVERY resource here is gated by var.workers_enabled (default false → count=0 → zero AWS
+# resources and zero cost). Enable only in P2 W9. Design refs: ADR-029/030 + the P2 spec/plan.
+# Key decisions baked in:
+#   C1  pg8000 vendored as a Lambda LAYER (worker/status/reaper import pg8000; dispatcher does not).
+#   C5  SFN role carries ecs:RunTask + StopTask + DescribeTasks + iam:PassRole + the .sync managed rule.
+#   C8  workers REUSE aws_security_group.service (no new SG; Aurora SG already allows it → no drift).
+#   C11 the SQS→dispatcher ESM depends_on the dispatcher SQS-consume policy.
+#   C14 the dispatcher has its own MINIMAL role (StartExecution + SQS consume + logs only).
+
+locals {
+  we           = var.workers_enabled ? 1 : 0
+  workers_src  = "${path.module}/../../../scripts/v2/workers"
+  worker_cname = "worker" # MUST equal the ContainerOverrides Name in sfn.asl.json
+  acct         = data.aws_caller_identity.current.account_id
+}
+
+############################################################
+# SQS job queue + DLQ
+############################################################
+resource "aws_sqs_queue" "jobs_dlq" {
+  count                     = local.we
+  name                      = "${var.project}-jobs-dlq"
+  message_retention_seconds = 1209600 # 14 days — poison-message sink
+}
+
+resource "aws_sqs_queue" "jobs" {
+  count                      = local.we
+  name                       = "${var.project}-jobs"
+  visibility_timeout_seconds = 180 # > dispatcher Lambda timeout (60s) with margin
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.jobs_dlq[0].arn
+    maxReceiveCount     = 5
+  })
+}
+
+############################################################
+# Lambda packaging
+#   - function code: one zip from the shared workers/ sources (handler selects the module)
+#   - pg8000 as a LAYER (C1): built via pip into .build/, attached to worker/status/reaper only
+############################################################
+data "archive_file" "workers_src" {
+  count       = local.we
+  type        = "zip"
+  output_path = "${path.module}/.build/workers_src.zip"
+  source {
+    content  = file("${local.workers_src}/db.py")
+    filename = "db.py"
+  }
+  source {
+    content  = file("${local.workers_src}/handlers.py")
+    filename = "handlers.py"
+  }
+  source {
+    content  = file("${local.workers_src}/worker_lambda.py")
+    filename = "worker_lambda.py"
+  }
+  source {
+    content  = file("${local.workers_src}/status_updater.py")
+    filename = "status_updater.py"
+  }
+  source {
+    content  = file("${local.workers_src}/reaper.py")
+    filename = "reaper.py"
+  }
+  source {
+    content  = file("${local.workers_src}/dispatcher.py")
+    filename = "dispatcher.py"
+  }
+}
+
+# pg8000 (pure-Python; works on any arch incl. arm64 Lambda). Rebuilt only when requirements change.
+resource "terraform_data" "pg8000_layer_build" {
+  count            = local.we
+  triggers_replace = filemd5("${local.workers_src}/requirements.txt")
+  provisioner "local-exec" {
+    command = <<-EOT
+      set -e
+      rm -rf ${path.module}/.build/pg8000_layer
+      mkdir -p ${path.module}/.build/pg8000_layer/python
+      python3 -m pip install pg8000==1.31.2 --target ${path.module}/.build/pg8000_layer/python
+    EOT
+  }
+}
+
+data "archive_file" "pg8000_layer" {
+  count       = local.we
+  type        = "zip"
+  source_dir  = "${path.module}/.build/pg8000_layer"
+  output_path = "${path.module}/.build/pg8000_layer.zip"
+  depends_on  = [terraform_data.pg8000_layer_build]
+}
+
+resource "aws_lambda_layer_version" "pg8000" {
+  count                    = local.we
+  layer_name               = "${var.project}-pg8000"
+  filename                 = data.archive_file.pg8000_layer[0].output_path
+  source_code_hash         = data.archive_file.pg8000_layer[0].output_base64sha256
+  compatible_runtimes      = ["python3.12"]
+  compatible_architectures = ["arm64"]
+}
+
+############################################################
+# IAM — dispatcher (MINIMAL, C14) + worker-lambda (VPC+Aurora) + worker-task + SFN
+############################################################
+data "aws_iam_policy_document" "worker_lambda_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+# ---- dispatcher role: StartExecution + SQS consume + logs ONLY (C14) ----
+resource "aws_iam_role" "dispatcher" {
+  count              = local.we
+  name               = "${var.project}-dispatcher"
+  assume_role_policy = data.aws_iam_policy_document.worker_lambda_assume.json
+}
+
+resource "aws_iam_role_policy" "dispatcher" {
+  count = local.we
+  name  = "${var.project}-dispatcher"
+  role  = aws_iam_role.dispatcher[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "Logs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:${var.region}:${local.acct}:*"
+      },
+      {
+        Sid      = "SqsConsume"
+        Effect   = "Allow"
+        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+        Resource = aws_sqs_queue.jobs[0].arn
+      },
+      {
+        Sid      = "StartSfn"
+        Effect   = "Allow"
+        Action   = ["states:StartExecution"]
+        Resource = aws_sfn_state_machine.workers[0].arn
+      }
+    ]
+  })
+}
+
+# ---- worker/status/reaper shared role: VPC ENI + Aurora secret + KMS + logs ----
+resource "aws_iam_role" "worker_lambda" {
+  count              = local.we
+  name               = "${var.project}-worker-lambda"
+  assume_role_policy = data.aws_iam_policy_document.worker_lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "worker_lambda_vpc" {
+  count      = local.we
+  role       = aws_iam_role.worker_lambda[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
+resource "aws_iam_role_policy" "worker_lambda" {
+  count = local.we
+  name  = "${var.project}-worker-lambda"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "Logs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:${var.region}:${local.acct}:*"
+      },
+      {
+        Sid      = "AuroraSecret"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      },
+      {
+        Sid      = "AuroraKms"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = aws_kms_key.aurora.arn
+      },
+      {
+        # reaper kill-switch check: GetEventSourceMapping has no resource-level scoping → "*".
+        # Read-only; the slight over-grant to worker/status is acceptable & documented.
+        Sid      = "ReaperReadEsm"
+        Effect   = "Allow"
+        Action   = ["lambda:GetEventSourceMapping"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# ---- worker Fargate task role: Aurora secret + KMS (db.py fetches creds via boto3) ----
+resource "aws_iam_role" "worker_task" {
+  count              = local.we
+  name               = "${var.project}-worker-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json # reuse (workload.tf)
+}
+
+resource "aws_iam_role_policy" "worker_task" {
+  count = local.we
+  name  = "${var.project}-worker-task"
+  role  = aws_iam_role.worker_task[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = aws_kms_key.aurora.arn
+      }
+    ]
+  })
+}
+
+# ---- Step Functions role (C5 + .sync managed-rule perms) ----
+resource "aws_iam_role" "sfn" {
+  count = local.we
+  name  = "${var.project}-workers-sfn"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "states.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "sfn" {
+  count = local.we
+  name  = "${var.project}-workers-sfn"
+  role  = aws_iam_role.sfn[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "InvokeWorkers"
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = [aws_lambda_function.worker[0].arn, aws_lambda_function.status_updater[0].arn]
+      },
+      {
+        Sid      = "RunWorkerTask"
+        Effect   = "Allow"
+        Action   = ["ecs:RunTask"]
+        Resource = "arn:aws:ecs:${var.region}:${local.acct}:task-definition/${var.project}-worker:*"
+      },
+      {
+        # .sync (runTask.sync) needs StopTask (on SFN timeout/abort) + DescribeTasks (poll). C5.
+        Sid      = "ControlTasks"
+        Effect   = "Allow"
+        Action   = ["ecs:StopTask", "ecs:DescribeTasks"]
+        Resource = "*"
+      },
+      {
+        Sid      = "PassTaskRoles"
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = [aws_iam_role.execution.arn, aws_iam_role.worker_task[0].arn]
+        Condition = {
+          StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
+        }
+      },
+      {
+        # runTask.sync uses an EventBridge managed rule to get task-state-change events.
+        Sid      = "EcsSyncManagedRule"
+        Effect   = "Allow"
+        Action   = ["events:PutTargets", "events:PutRule", "events:DescribeRule"]
+        Resource = "arn:aws:events:${var.region}:${local.acct}:rule/StepFunctionsGetEventsForECSTaskRule"
+      },
+      {
+        Sid      = "SfnLogging"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery", "logs:DeleteLogDelivery", "logs:ListLogDeliveries", "logs:PutResourcePolicy", "logs:DescribeResourcePolicies", "logs:DescribeLogGroups"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+############################################################
+# ECR (worker image) + CloudWatch log groups
+############################################################
+resource "aws_ecr_repository" "worker" {
+  count                = local.we
+  name                 = "${var.project}-worker"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+  force_delete = true
+}
+
+resource "aws_cloudwatch_log_group" "worker_fargate" {
+  count             = local.we
+  name              = "/ecs/${var.project}-worker"
+  retention_in_days = 30
+}
+resource "aws_cloudwatch_log_group" "dispatcher" {
+  count             = local.we
+  name              = "/aws/lambda/${var.project}-dispatcher"
+  retention_in_days = 30
+}
+resource "aws_cloudwatch_log_group" "worker_fn" {
+  count             = local.we
+  name              = "/aws/lambda/${var.project}-worker"
+  retention_in_days = 30
+}
+resource "aws_cloudwatch_log_group" "status_updater" {
+  count             = local.we
+  name              = "/aws/lambda/${var.project}-status-updater"
+  retention_in_days = 30
+}
+resource "aws_cloudwatch_log_group" "reaper" {
+  count             = local.we
+  name              = "/aws/lambda/${var.project}-reaper"
+  retention_in_days = 30
+}
+resource "aws_cloudwatch_log_group" "sfn" {
+  count             = local.we
+  name              = "/aws/vendedlogs/states/${var.project}-workers"
+  retention_in_days = 30
+}
+
+############################################################
+# Worker Fargate task definition (the long/heavy + OOM-demo path)
+############################################################
+resource "aws_ecs_task_definition" "worker" {
+  count                    = local.we
+  family                   = "${var.project}-worker"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"                           # low on purpose: --oom path OOM-kills; noop-heavy still succeeds
+  execution_role_arn       = aws_iam_role.execution.arn      # reuse: ECR pull + awslogs
+  task_role_arn            = aws_iam_role.worker_task[0].arn # SM + KMS for db.py creds
+  runtime_platform {
+    cpu_architecture        = "ARM64"
+    operating_system_family = "LINUX"
+  }
+  container_definitions = jsonencode([
+    {
+      name      = local.worker_cname
+      image     = "${aws_ecr_repository.worker[0].repository_url}:${var.worker_image_tag}"
+      essential = true
+      environment = [
+        { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
+        { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
+        { name = "AURORA_SECRET_ARN", value = aws_rds_cluster.aurora.master_user_secret[0].secret_arn },
+        { name = "AWS_REGION", value = var.region }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.worker_fargate[0].name
+          "awslogs-region"        = var.region
+          "awslogs-stream-prefix" = "worker"
+        }
+      }
+    }
+  ])
+}
+
+############################################################
+# Lambda functions
+#   dispatcher: NO VPC (reaches SQS/SFN APIs directly); minimal role; ESM = kill-switch
+#   worker/status/reaper: VPC (Aurora) + pg8000 layer + service SG (C8)
+############################################################
+resource "aws_lambda_function" "dispatcher" {
+  count            = local.we
+  function_name    = "${var.project}-dispatcher"
+  role             = aws_iam_role.dispatcher[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "dispatcher.lambda_handler"
+  filename         = data.archive_file.workers_src[0].output_path
+  source_code_hash = data.archive_file.workers_src[0].output_base64sha256
+  timeout          = 60
+  memory_size      = 128
+  environment {
+    variables = { STATE_MACHINE_ARN = aws_sfn_state_machine.workers[0].arn }
+  }
+  depends_on = [aws_cloudwatch_log_group.dispatcher]
+}
+
+resource "aws_lambda_function" "worker" {
+  count            = local.we
+  function_name    = "${var.project}-worker"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "worker_lambda.lambda_handler"
+  filename         = data.archive_file.workers_src[0].output_path
+  source_code_hash = data.archive_file.workers_src[0].output_base64sha256
+  timeout          = 900
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.worker_fn, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+resource "aws_lambda_function" "status_updater" {
+  count            = local.we
+  function_name    = "${var.project}-status-updater"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "status_updater.lambda_handler"
+  filename         = data.archive_file.workers_src[0].output_path
+  source_code_hash = data.archive_file.workers_src[0].output_base64sha256
+  timeout          = 60
+  memory_size      = 128
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.status_updater, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+resource "aws_lambda_function" "reaper" {
+  count            = local.we
+  function_name    = "${var.project}-reaper"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "reaper.lambda_handler"
+  filename         = data.archive_file.workers_src[0].output_path
+  source_code_hash = data.archive_file.workers_src[0].output_base64sha256
+  timeout          = 120
+  memory_size      = 128
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      DISPATCH_ESM_UUID = aws_lambda_event_source_mapping.dispatcher[0].uuid
+      QUEUED_STALE_MIN  = "30"
+      RUNNING_STALE_MIN = "60"
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.reaper, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+############################################################
+# Step Functions state machine (Standard) — the worker orchestrator
+############################################################
+resource "aws_sfn_state_machine" "workers" {
+  count    = local.we
+  name     = "${var.project}-workers"
+  role_arn = aws_iam_role.sfn[0].arn
+  type     = "STANDARD"
+  definition = templatefile("${local.workers_src}/sfn.asl.json", {
+    worker_fn_arn  = aws_lambda_function.worker[0].arn
+    status_fn_arn  = aws_lambda_function.status_updater[0].arn
+    cluster_arn    = aws_ecs_cluster.main.arn
+    task_def_arn   = aws_ecs_task_definition.worker[0].arn
+    subnets_json   = jsonencode(local.private_subnet_ids)
+    sg_id          = aws_security_group.service.id
+    container_name = local.worker_cname
+  })
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.sfn[0].arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
+  depends_on = [aws_iam_role_policy.sfn]
+}
+
+############################################################
+# SQS → dispatcher event-source mapping (the KILL-SWITCH) + reaper schedule
+############################################################
+resource "aws_lambda_event_source_mapping" "dispatcher" {
+  count                   = local.we
+  event_source_arn        = aws_sqs_queue.jobs[0].arn
+  function_name           = aws_lambda_function.dispatcher[0].arn
+  batch_size              = 10
+  function_response_types = ["ReportBatchItemFailures"]
+  enabled                 = true # kill-switch: disable to pause all dispatch (jobs stay queued)
+  # C11: the ESM must not start consuming before the dispatcher can read SQS + start SFN.
+  depends_on = [aws_iam_role_policy.dispatcher]
+}
+
+resource "aws_cloudwatch_event_rule" "reaper" {
+  count               = local.we
+  name                = "${var.project}-reaper"
+  description         = "Periodic reconcile of stale worker_jobs (running->failed; queued->failed when dispatch enabled)"
+  schedule_expression = "rate(5 minutes)"
+}
+
+resource "aws_cloudwatch_event_target" "reaper" {
+  count     = local.we
+  rule      = aws_cloudwatch_event_rule.reaper[0].name
+  target_id = "reaper"
+  arn       = aws_lambda_function.reaper[0].arn
+}
+
+resource "aws_lambda_permission" "reaper_events" {
+  count         = local.we
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.reaper[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.reaper[0].arn
+}
+
+############################################################
+# Web tier → SQS (the producer). Gated so the web task role is untouched when disabled.
+# (JOBS_QUEUE_URL is injected into the web container env in workload.tf, also gated.)
+############################################################
+resource "aws_iam_role_policy" "web_sqs_send" {
+  count = local.we
+  name  = "${var.project}-web-jobs-send"
+  role  = aws_iam_role.task.id # the web task role (workload.tf)
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = aws_sqs_queue.jobs[0].arn
+    }]
+  })
+}
+
+############################################################
+# Outputs (null when disabled — consumed by W8 make targets / W9 verification)
+############################################################
+output "jobs_queue_url" {
+  value = one(aws_sqs_queue.jobs[*].url)
+}
+output "workers_state_machine_arn" {
+  value = one(aws_sfn_state_machine.workers[*].arn)
+}
+output "dispatcher_esm_uuid" {
+  value = one(aws_lambda_event_source_mapping.dispatcher[*].uuid)
+}
+output "worker_ecr_uri" {
+  value = one(aws_ecr_repository.worker[*].repository_url)
+}
