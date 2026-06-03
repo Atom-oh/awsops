@@ -42,40 +42,63 @@ export async function POST(req: NextRequest) {
   const idempotencyKey =
     typeof body?.idempotency_key === 'string' && body.idempotency_key ? body.idempotency_key : null;
 
-  const pool = getPool();
-  // C6: insert-or-get. ON CONFLICT fires only for a non-null DUPLICATE idempotency_key
-  // (NULLs are distinct in the unique index, so keyless jobs always insert a fresh row).
-  let jobId: string;
-  let status = 'queued';
-  const ins = await pool.query(
-    `INSERT INTO worker_jobs (job_id, type, payload, dry_run, idempotency_key, status)
-     VALUES ($1, $2, $3::jsonb, $4, $5, 'queued')
-     ON CONFLICT (idempotency_key) DO NOTHING
-     RETURNING job_id`,
-    [randomUUID(), type, JSON.stringify(payload), dryRun, idempotencyKey],
-  );
-  if (ins.rows.length > 0) {
-    jobId = ins.rows[0].job_id;
-  } else {
-    const existing = await pool.query(
-      `SELECT job_id, status FROM worker_jobs WHERE idempotency_key = $1`,
-      [idempotencyKey],
-    );
-    if (existing.rows.length === 0) {
-      return NextResponse.json({ message: 'idempotency conflict but no existing row' }, { status: 500 });
-    }
-    jobId = existing.rows[0].job_id;
-    status = existing.rows[0].status;
+  // M3: bound the payload well under the SQS 256 KB message cap (the body also wraps
+  // job_id/type/dry_run), and keep the JSONB column sane. Reject early, before any write.
+  const payloadJson = JSON.stringify(payload);
+  if (payloadJson.length > 200_000) {
+    return NextResponse.json({ message: 'payload too large (max ~200KB)' }, { status: 413 });
   }
 
-  // Enqueue after the row exists (the worker claims by job_id). Re-send on idempotent replay is
-  // safe: the dispatcher dedups via the SFN execution name (== job_id).
-  await getSqs().send(
-    new SendMessageCommand({
-      QueueUrl: queueUrl,
-      MessageBody: JSON.stringify({ job_id: jobId, type, payload, dry_run: dryRun }),
-    }),
-  );
+  // Phase 1 — durable ledger write (source of truth). C6: insert-or-get; ON CONFLICT fires only
+  // for a non-null DUPLICATE idempotency_key (NULLs are distinct → keyless jobs always insert).
+  let jobId = '';
+  let status = 'queued';
+  try {
+    const pool = getPool();
+    const ins = await pool.query(
+      `INSERT INTO worker_jobs (job_id, type, payload, dry_run, idempotency_key, status)
+       VALUES ($1, $2, $3::jsonb, $4, $5, 'queued')
+       ON CONFLICT (idempotency_key) DO NOTHING
+       RETURNING job_id`,
+      [randomUUID(), type, payloadJson, dryRun, idempotencyKey],
+    );
+    if (ins.rows.length > 0) {
+      jobId = ins.rows[0].job_id;
+    } else {
+      const existing = await pool.query(
+        `SELECT job_id, status FROM worker_jobs WHERE idempotency_key = $1`,
+        [idempotencyKey],
+      );
+      if (existing.rows.length === 0) {
+        return NextResponse.json({ message: 'idempotency conflict but no existing row' }, { status: 500 });
+      }
+      jobId = existing.rows[0].job_id;
+      status = existing.rows[0].status;
+    }
+  } catch (e) {
+    return NextResponse.json(
+      { status: 'error', message: e instanceof Error ? e.message : String(e) },
+      { status: 500 },
+    );
+  }
+
+  // Phase 2 — enqueue (best-effort delivery; the ledger row above is the source of truth). Re-send
+  // on idempotent replay is safe: the dispatcher dedups via the SFN execution name (== job_id).
+  // I1: NEVER drop the job_id. If the send fails the row is already 'queued' (client can poll); a
+  // redrive/sweeper re-enqueues, or the reaper fails it when the dispatcher ESM is enabled.
+  try {
+    await getSqs().send(
+      new SendMessageCommand({
+        QueueUrl: queueUrl,
+        MessageBody: JSON.stringify({ job_id: jobId, type, payload, dry_run: dryRun }),
+      }),
+    );
+  } catch (e) {
+    return NextResponse.json(
+      { job_id: jobId, status, enqueue: 'failed', message: e instanceof Error ? e.message : String(e) },
+      { status: 202 },
+    );
+  }
 
   return NextResponse.json({ job_id: jobId, status }, { status: 202 });
 }
