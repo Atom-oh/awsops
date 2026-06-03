@@ -473,7 +473,11 @@ resource "aws_lambda_function" "reaper" {
       AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
       DISPATCH_ESM_UUID = aws_lambda_event_source_mapping.dispatcher[0].uuid
       QUEUED_STALE_MIN  = "30"
-      RUNNING_STALE_MIN = "60"
+      # Must EXCEED the longest legit run (the Fargate SFN TimeoutSeconds = 3600s = 60min) so the
+      # SFN/status_updater is always the authority on a timed-out job's terminal state; the reaper
+      # then only catches truly-orphaned 'running' rows. Equal-to-60 races: a ~60min job could be
+      # reaped to 'failed' and its later 'succeeded' silently dropped (terminal-immutable). (W6 review)
+      RUNNING_STALE_MIN = "75"
     }
   }
   depends_on = [aws_cloudwatch_log_group.reaper, aws_iam_role_policy_attachment.worker_lambda_vpc]
@@ -513,9 +517,15 @@ resource "aws_lambda_event_source_mapping" "dispatcher" {
   function_name           = aws_lambda_function.dispatcher[0].arn
   batch_size              = 10
   function_response_types = ["ReportBatchItemFailures"]
-  enabled                 = true # kill-switch: disable to pause all dispatch (jobs stay queued)
+  enabled                 = true # kill-switch INITIAL state: disable to pause all dispatch (jobs stay queued)
   # C11: the ESM must not start consuming before the dispatcher can read SQS + start SFN.
   depends_on = [aws_iam_role_policy.dispatcher]
+  # The kill-switch is OPERATIONALLY toggled (aws lambda update-event-source-mapping --no-enabled).
+  # Without this, any later `terraform apply` would silently re-enable dispatch and undo an
+  # out-of-band pause. TF sets the initial enabled=true; operators own it thereafter. (W6 review)
+  lifecycle {
+    ignore_changes = [enabled]
+  }
 }
 
 resource "aws_cloudwatch_event_rule" "reaper" {
