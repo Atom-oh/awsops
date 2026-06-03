@@ -1,5 +1,5 @@
 {
-  "Comment": "AWSops v2 P2 async worker backbone. Route by $.runtime; the worker sets running->succeeded itself; on any Catch the status_updater Lambda sets failed (SFN cannot write VPC Aurora). Idempotent: execution name == job_id (set by the dispatcher).",
+  "Comment": "AWSops v2 P2 async worker backbone. Route by $.runtime; the web enqueues 'queued', the worker claims running and sets succeeded itself; on any Catch the status_updater Lambda sets failed (SFN cannot write VPC Aurora). Idempotent: execution name == job_id (set by the dispatcher). Task TimeoutSeconds bound runaway/wedged runs so .sync stops the ECS task and Catch records failed (the reaper is only the slow backstop).",
   "StartAt": "Route",
   "States": {
     "Route": {
@@ -13,6 +13,7 @@
     "RunLambda": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 960,
       "Parameters": {
         "FunctionName": "${worker_fn_arn}",
         "Payload.$": "$"
@@ -21,6 +22,10 @@
         {
           "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
           "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2.0
+        },
+        {
+          "ErrorEquals": ["States.Timeout"],
+          "IntervalSeconds": 5, "MaxAttempts": 1, "BackoffRate": 2.0
         }
       ],
       "Catch": [
@@ -44,6 +49,7 @@
     "RunFargate": {
       "Type": "Task",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "TimeoutSeconds": 3600,
       "Parameters": {
         "Cluster": "${cluster_arn}",
         "TaskDefinition": "${task_def_arn}",
@@ -75,6 +81,7 @@
     "RunFargateOOM": {
       "Type": "Task",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "TimeoutSeconds": 3600,
       "Parameters": {
         "Cluster": "${cluster_arn}",
         "TaskDefinition": "${task_def_arn}",
@@ -112,6 +119,8 @@
     "MarkFailed": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 60,
+      "Comment": "Last chance to record failure in Aurora; retry hard (6x) and wide so a transient Lambda blip does not leave the job stuck 'running' until the reaper. No Catch by design — if even this fails, the reaper is the backstop.",
       "Parameters": {
         "FunctionName": "${status_fn_arn}",
         "Payload": {
@@ -120,7 +129,10 @@
         }
       },
       "Retry": [
-        { "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2.0 }
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException", "States.Timeout"],
+          "IntervalSeconds": 2, "MaxAttempts": 6, "BackoffRate": 2.0
+        }
       ],
       "Next": "JobFailed"
     },
