@@ -36,6 +36,7 @@ export async function verifyUser(cookieHeader: string | null): Promise<User | nu
     const { payload } = await jwtVerify(token, getJwks(), {
       issuer: `https://cognito-idp.${region}.amazonaws.com/${pool}`,
       audience: process.env.COGNITO_CLIENT_ID,
+      algorithms: ['RS256'], // Cognito id tokens are always RS256; pin to block alg-confusion
     });
     if (payload.token_use !== 'id' || !payload.sub) return null;
     return { sub: String(payload.sub), email: payload.email ? String(payload.email) : undefined };
