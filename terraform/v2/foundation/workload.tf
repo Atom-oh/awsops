@@ -88,7 +88,11 @@ resource "aws_ecs_task_definition" "web" {
         # (ALB to the ENI IP still passed). Pinning HOSTNAME here makes loopback reachable.
         { name = "HOSTNAME", value = "0.0.0.0" },
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
-        { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name }
+        { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
+        { name = "AWS_REGION", value = var.region },
+        { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
+        { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.main.id },
+        { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
         ], var.workers_enabled ? [
         { name = "JOBS_QUEUE_URL", value = one(aws_sqs_queue.jobs[*].url) }
       ] : [])

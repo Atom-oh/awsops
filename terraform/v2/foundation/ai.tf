@@ -151,6 +151,25 @@ resource "aws_iam_role_policy" "task_agentcore_ssm" {
   })
 }
 
+# web task role may invoke the AgentCore runtime (P3-A chat). Scoped to our runtime name prefix
+# (the runtime ID suffix is provisioner-generated) + its DEFAULT endpoint. No wildcard actions.
+resource "aws_iam_role_policy" "task_agentcore_invoke" {
+  count = local.ac_count
+  name  = "${var.project}-task-agentcore-invoke"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["bedrock-agentcore:InvokeAgentRuntime"]
+      Resource = [
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${replace(var.project, "-", "_")}_agent-*",
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${replace(var.project, "-", "_")}_agent-*/runtime-endpoint/*"
+      ]
+    }]
+  })
+}
+
 data "aws_caller_identity" "current" {}
 
 # ---- agent Lambda execution role (read-only invariant; reachability/write ops excluded) ----
