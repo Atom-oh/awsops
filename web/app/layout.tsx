@@ -1,23 +1,15 @@
-import type { ReactNode } from 'react';
+import TopNav from '@/components/shell/TopNav';
+import ChatDrawer from '@/components/chat/ChatDrawer';
 
-export const metadata = {
-  title: 'AWSops v2',
-  description: 'AWSops v2 — thin-BFF web tier',
-};
+export const metadata = { title: 'AWSops v2' };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ko">
-      <body
-        style={{
-          margin: 0,
-          minHeight: '100vh',
-          background: '#0a0e1a',
-          color: '#e2e8f0',
-          fontFamily: 'system-ui, -apple-system, sans-serif',
-        }}
-      >
+      <body style={{ margin: 0, background: '#0a0e1a', color: '#e6eefb', fontFamily: 'system-ui, sans-serif' }}>
+        <TopNav />
         {children}
+        <ChatDrawer />
       </body>
     </html>
   );
