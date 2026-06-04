@@ -77,7 +77,7 @@ export default function ChatDrawer() {
     try {
       const obj = JSON.parse(data);
       if (isMeta && obj.gateway) patchLast((m) => ({ ...m, gateway: obj.gateway }));
-      else if (obj.delta) patchLast((m) => ({ ...m, content: m.content + obj.delta }));
+      else if (obj.delta !== undefined) patchLast((m) => ({ ...m, content: m.content + obj.delta }));
       else if (obj.error) patchLast((m) => ({ ...m, content: `⚠️ ${obj.error}`, streaming: false }));
     } catch { /* heartbeat / non-JSON */ }
   }
