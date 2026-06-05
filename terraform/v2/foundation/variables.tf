@@ -100,3 +100,15 @@ variable "worker_image_tag" {
   description = "Worker Fargate image tag in the worker ECR repo."
   default     = "worker-latest"
 }
+
+variable "steampipe_enabled" {
+  type        = bool
+  description = "D1 inventory data layer (warm Steampipe Fargate + sync Lambda). false (default) = 0 resources/cost."
+  default     = false
+}
+
+variable "steampipe_image_tag" {
+  type        = string
+  description = "Steampipe service image tag."
+  default     = "steampipe-latest"
+}
