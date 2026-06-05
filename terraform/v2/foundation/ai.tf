@@ -170,6 +170,22 @@ resource "aws_iam_role_policy" "task_agentcore_invoke" {
   })
 }
 
+# web task role reads Cost Explorer for the Cost page / Overview (P3-B). CE has no resource-level
+# scoping → "*". Read-only (GetCostAndUsage/GetCostForecast).
+resource "aws_iam_role_policy" "task_cost" {
+  count = local.ac_count
+  name  = "${var.project}-task-cost-read"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ce:GetCostAndUsage", "ce:GetCostForecast"]
+      Resource = "*"
+    }]
+  })
+}
+
 data "aws_caller_identity" "current" {}
 
 # ---- agent Lambda execution role (read-only invariant; reachability/write ops excluded) ----
