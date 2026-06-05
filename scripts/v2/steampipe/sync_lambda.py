@@ -57,15 +57,18 @@ def sync(resource_type):
         got = adb.run("SELECT pg_try_advisory_lock(hashtext(:t))", t=f"inv:{resource_type}")
         if not got[0][0]:
             return {"status": "busy", "type": resource_type}
-        adb.run("INSERT INTO inventory_sync_runs (resource_type, status, started_at, finished_at, row_count, error) "
-                "VALUES (:t,'running',now(),NULL,NULL,NULL) "
-                "ON CONFLICT (resource_type, account_id) DO UPDATE SET status='running', started_at=now(), "
-                "finished_at=NULL, error=NULL", t=resource_type)
         try:
+            # mark running INSIDE the try so a throw here records 'failed' and the finally still unlocks
+            adb.run("INSERT INTO inventory_sync_runs (resource_type, status, started_at, finished_at, row_count, error) "
+                    "VALUES (:t,'running',now(),NULL,NULL,NULL) "
+                    "ON CONFLICT (resource_type, account_id) DO UPDATE SET status='running', started_at=now(), "
+                    "finished_at=NULL, error=NULL", t=resource_type)
             sdb = _steampipe()
-            rows = sdb.run(sql)
-            cols = [c["name"] for c in sdb.columns]
-            sdb.close()
+            try:
+                rows = sdb.run(sql)
+                cols = [c["name"] for c in sdb.columns]
+            finally:
+                sdb.close()  # close even if the Steampipe query throws
             seen = []
             for r in rows:
                 rec = dict(zip(cols, r))
