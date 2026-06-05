@@ -226,3 +226,28 @@ DO $$ BEGIN
       FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
   END IF;
 END $$;
+
+-- D1 inventory: per-resource rows (NOT a JSONB blob-per-type — server-side paginate/filter).
+CREATE TABLE IF NOT EXISTS inventory_resources (
+  resource_type TEXT        NOT NULL,
+  account_id    TEXT        NOT NULL DEFAULT 'self',
+  region        TEXT        NOT NULL DEFAULT '',
+  resource_id   TEXT        NOT NULL,
+  data          JSONB       NOT NULL DEFAULT '{}'::jsonb,
+  captured_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (resource_type, account_id, region, resource_id)
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_type ON inventory_resources(resource_type, account_id);
+
+-- sync run status (freshness + error surface; one row per (type,account)).
+CREATE TABLE IF NOT EXISTS inventory_sync_runs (
+  resource_type TEXT        NOT NULL,
+  account_id    TEXT        NOT NULL DEFAULT 'self',
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at   TIMESTAMPTZ,
+  status        TEXT        NOT NULL DEFAULT 'running'
+                  CHECK (status IN ('running','succeeded','failed')),
+  row_count     INTEGER,
+  error         TEXT,
+  PRIMARY KEY (resource_type, account_id)
+);
