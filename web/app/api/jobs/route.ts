@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { getPool } from '@/lib/db';
+import { verifyUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -101,4 +102,22 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ job_id: jobId, status }, { status: 202 });
+}
+
+export async function GET(req: NextRequest) {
+  if (!(await verifyUser(req.headers.get('cookie')))) {
+    return NextResponse.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
+  }
+  try {
+    const r = await getPool().query(
+      `SELECT job_id, type, status, runtime, error, created_at, updated_at
+       FROM worker_jobs ORDER BY created_at DESC LIMIT 50`,
+    );
+    return NextResponse.json({ jobs: r.rows });
+  } catch (e) {
+    return NextResponse.json(
+      { status: 'error', message: e instanceof Error ? e.message : String(e) },
+      { status: 500 },
+    );
+  }
 }
