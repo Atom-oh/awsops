@@ -18,6 +18,20 @@ resource "aws_secretsmanager_secret_version" "steampipe" {
   secret_string = random_password.steampipe[0].result
 }
 
+# ECS resolves the task def `secrets`/valueFrom with the EXECUTION role (not the task role).
+# The shared execution_secrets policy only covers the Aurora secret; grant the Steampipe secret
+# too or the Steampipe task fails ResourceInitializationError on start. Gated so it stays plan-clean
+# when disabled. No kms grant needed — the secret uses the default aws/secretsmanager key.
+resource "aws_iam_role_policy" "execution_steampipe_secret" {
+  count = local.sp
+  name  = "${var.project}-exec-steampipe-secret"
+  role  = aws_iam_role.execution.id
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_secretsmanager_secret.steampipe[0].arn }]
+  })
+}
+
 # ---- ECR + log groups ----
 resource "aws_ecr_repository" "steampipe" {
   count                = local.sp
