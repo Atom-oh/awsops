@@ -41,13 +41,14 @@ Records of major design decisions. Update this index when status/outcome changes
 | 026 | i18n LanguageProvider | Accepted (2026-04-22) |
 | 027 | Code Interpreter 세션 격리 | Accepted (2026-04-22) |
 | 028 | CloudFront CACHING_DISABLED | Accepted (2026-04-22) |
-| 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | Proposed (2026-04-26) |
+| 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | Proposed (2026-04-26) — mechanism refined by 036 (6대 통제 유지, 실행 substrate는 하이브리드) |
 | 030 | ECS Fargate 워크로드 + Aurora 앱 상태 + 이중 ECR | Accepted (2026-05-27) |
 | 031 | 런타임 커스터마이즈 에이전트·스킬 (관리자 구성 Agent Space + BYO-MCP) | Proposed (2026-05-31) |
 | 032 | 이벤트 트리거 자율 인시던트 라이프사이클 (멀티 에이전트 Lead/Sub) | Proposed (2026-05-31) |
 | 033 | AIOps LLM 비용 최적화 (Haiku 분류·프롬프트 캐싱·응답 캐시·토큰 예산) | Proposed (2026-06-01) |
 | 034 | 알림 자동 RCA 라이트백 (OpsCenter/Incident Manager 양방향 보강) | Proposed (2026-06-01) |
 | 035 | K8sGPT 하이브리드 (MCP로 AgentCore에 통합하는 인클러스터 K8s 진단, Haiku 4.5) | Proposed (2026-06-04) |
+| 036 | 변경·조치 실행 substrate (SSM Automation + Change Manager × P2 워커 백본 하이브리드) | Proposed (2026-06-05) |
 
 ## 새 ADR 추가 / Adding a New ADR
 1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1
