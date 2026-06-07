@@ -93,6 +93,7 @@ resource "aws_ecs_task_definition" "web" {
         { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
         { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.main.id },
         { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
+        { name = "INV_SYNC_FUNCTION", value = var.steampipe_enabled ? "${var.project}-inv-sync" : "" },
         ], var.workers_enabled ? [
         { name = "JOBS_QUEUE_URL", value = one(aws_sqs_queue.jobs[*].url) }
       ] : [])
