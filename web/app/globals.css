@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* brand (Claude orange) */
+  --claude-50:#FBF1EC; --claude-100:#F5DCCF; --claude-200:#EEBFAA;
+  --claude-300:#E69F7F; --claude-400:#DF8663; --claude-500:#D97757;
+  --claude-600:#B75E40; --claude-700:#8E4830; --claude-800:#653321; --claude-900:#3D1F14;
+
+  /* ink (warm neutral) */
+  --ink-50:#F7F6F2; --ink-100:#EDEBE4; --ink-200:#D7D3C7; --ink-300:#B5AFA0;
+  --ink-400:#8A8474; --ink-500:#5F5A4D; --ink-600:#3F3B32; --ink-700:#2B2823;
+  --ink-800:#1F1E1D; --ink-900:#14130F;
+
+  /* paper surfaces */
+  --paper:#FAF9F5; --paper-muted:#F3F1EB; --white:#FFFFFF;
+
+  /* semantic accents */
+  --emerald-50:#ECFDF5; --emerald-200:#A7F3D0; --emerald-500:#10B981; --emerald-700:#047857;
+  --rose-50:#FFF1F2; --rose-200:#FECDD3; --rose-500:#F43F5E; --rose-700:#BE123C;
+
+  /* aliases — reach for these */
+  --surface-page:var(--paper); --surface-sunken:var(--paper-muted); --surface-card:var(--white);
+  --text-primary:var(--ink-800); --text-secondary:var(--ink-500);
+  --text-muted:var(--ink-400); --text-faint:var(--ink-300); --text-brand:var(--claude-700);
+  --border-subtle:var(--ink-100); --border-default:var(--ink-200); --border-brand:var(--claude-200);
+  --brand:var(--claude-500); --brand-hover:var(--claude-600); --brand-text:var(--claude-700);
+  --brand-subtle:var(--claude-50); --brand-subtle-border:var(--claude-200); --on-brand:var(--white);
+  --positive:var(--emerald-500); --positive-surface:var(--emerald-50); --positive-text:var(--emerald-700); --positive-border:var(--emerald-200);
+  --negative:var(--rose-500); --negative-surface:var(--rose-50); --negative-text:var(--rose-700); --negative-border:var(--rose-200);
+
+  /* chart palette */
+  --chart-1:var(--claude-500); --chart-2:var(--ink-400); --chart-3:var(--ink-800);
+  --chart-4:var(--claude-700); --chart-5:var(--claude-200);
+  --chart-grid:var(--ink-100); --chart-axis:var(--ink-400);
+
+  /* elevation */
+  --shadow-card:0 1px 2px rgba(31,30,29,.04), 0 4px 16px rgba(31,30,29,.06);
+  --shadow-sm:0 1px 2px rgba(31,30,29,.06);
+  --shadow-pop:0 6px 24px rgba(31,30,29,.18);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.22);
+}
+
+body {
+  background: var(--surface-page);
+  color: var(--text-primary);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'Pretendard',
+               'Helvetica Neue', Arial, sans-serif;
+  font-feature-settings: 'cv11','ss01','ss02';
+  -webkit-font-smoothing: antialiased;
+}
+
+/* tabular numerals — apply wherever numbers are compared/animated */
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* page-enter (route change) — keep subtle */
+@keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+.animate-fade-in { animation: fadeIn .2s cubic-bezier(.16,1,.3,1); }
+
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--ink-200); border-radius:999px; border:2px solid var(--paper); }
+::-webkit-scrollbar-track { background:transparent; }

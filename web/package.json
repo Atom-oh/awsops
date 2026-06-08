@@ -15,17 +15,23 @@
     "@aws-sdk/client-lambda": "^3.1063.0",
     "@aws-sdk/client-sqs": "^3.1060.0",
     "@aws-sdk/client-ssm": "^3.1061.0",
+    "clsx": "^2.1.1",
     "jose": "^5.10.0",
+    "lucide-react": "^1.17.0",
     "next": "14.2.35",
     "pg": "8.13.1",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@types/node": "20.16.5",
     "@types/pg": "8.11.10",
     "@types/react": "18.3.8",
     "@types/react-dom": "18.3.0",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^3.4.19",
     "typescript": "5.6.3",
     "vitest": "^2.1.9"
   }
