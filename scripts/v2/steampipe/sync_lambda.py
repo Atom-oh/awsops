@@ -18,9 +18,86 @@ QUERIES = {
         "instance_id",
         "region",
     ),
+    "s3": (
+        "SELECT name, region, account_id, creation_date, versioning_enabled, bucket_policy_is_public "
+        "FROM aws_s3_bucket ORDER BY creation_date DESC",
+        "name",
+        "region",
+    ),
+    "lambda": (
+        "SELECT name, region, account_id, runtime, memory_size, timeout, last_modified, state, package_type "
+        "FROM aws_lambda_function ORDER BY name",
+        "name",
+        "region",
+    ),
+    "rds": (
+        "SELECT db_instance_identifier, region, account_id, engine, engine_version, class, status, "
+        "multi_az, allocated_storage "
+        "FROM aws_rds_db_instance ORDER BY db_instance_identifier",
+        "db_instance_identifier",
+        "region",
+    ),
+    "ebs_volume": (
+        "SELECT volume_id, region, account_id, volume_type, size, state, encrypted, availability_zone "
+        "FROM aws_ebs_volume ORDER BY volume_id",
+        "volume_id",
+        "region",
+    ),
+    "vpc": (
+        "SELECT vpc_id, region, account_id, cidr_block, state, is_default, instance_tenancy "
+        "FROM aws_vpc ORDER BY vpc_id",
+        "vpc_id",
+        "region",
+    ),
+    "subnet": (
+        "SELECT subnet_id, region, account_id, vpc_id, cidr_block, availability_zone, "
+        "available_ip_address_count, map_public_ip_on_launch "
+        "FROM aws_vpc_subnet ORDER BY subnet_id",
+        "subnet_id",
+        "region",
+    ),
+    "security_group": (
+        "SELECT group_id, group_name, region, account_id, vpc_id, description "
+        "FROM aws_vpc_security_group ORDER BY group_id",
+        "group_id",
+        "region",
+    ),
+    "iam_role": (
+        "SELECT name, arn, region, account_id, role_id, create_date, path "
+        "FROM aws_iam_role ORDER BY create_date DESC",
+        "name",
+        "region",
+    ),
+    "iam_user": (
+        "SELECT name, arn, region, account_id, user_id, create_date, mfa_enabled, password_last_used "
+        "FROM aws_iam_user ORDER BY create_date DESC",
+        "name",
+        "region",
+    ),
+    "dynamodb": (
+        "SELECT name, region, account_id, table_status, billing_mode, item_count, table_size_bytes, "
+        "read_capacity, write_capacity "
+        "FROM aws_dynamodb_table ORDER BY name",
+        "name",
+        "region",
+    ),
+    "ecs_cluster": (
+        "SELECT cluster_name, region, account_id, status, running_tasks_count, pending_tasks_count, "
+        "active_services_count, registered_container_instances_count "
+        "FROM aws_ecs_cluster ORDER BY cluster_name",
+        "cluster_name",
+        "region",
+    ),
+    "ecr": (
+        "SELECT repository_name, region, account_id, repository_uri, image_tag_mutability, created_at "
+        "FROM aws_ecr_repository ORDER BY created_at DESC",
+        "repository_name",
+        "region",
+    ),
 }
 _ALLOWED = set(QUERIES)
 _sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
+_lambda = boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
 
 
 def _ssl_ctx():
@@ -98,6 +175,11 @@ def sync(resource_type):
         adb.close()
 
 
-def lambda_handler(event, _ctx):
-    rtype = (event or {}).get("type", "ec2")
+def lambda_handler(event, ctx):
+    rtype = (event or {}).get("type", "all")
+    if rtype == "all":
+        for rt in QUERIES:
+            _lambda.invoke(FunctionName=ctx.invoked_function_arn, InvocationType="Event",
+                           Payload=json.dumps({"type": rt}).encode())
+        return {"status": "dispatched", "types": list(QUERIES)}
     return sync(rtype)
