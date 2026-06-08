@@ -1,74 +1,47 @@
-# AWSops v2 — Frontend Modern Redesign Design
+# AWSops v2 — Frontend Modern Redesign (Implementation Spec)
 
-**Status:** Accepted (user chose "modern new design"; co-agent panel kiro+codex+gemini, Claude chair). 2026-06-08.
+**Status:** Accepted. SUPERSEDES the earlier dark+shadcn draft. **Authoritative design source = `DESIGN.md` (repo root) + `colors.css`/`typography.css`/`spacing.css`** (user-provided high-fidelity handoff). 2026-06-08.
 
-**Goal:** Replace the v2 thin-BFF's hand-rolled inline-styled MVP UI (48px top-nav + bare stat cards) with a **modern dashboard design system + app shell**, so the rich v2 backend (22 inventory types, agents, workers, cost/EKS) is presented like a real ops console — without verbatim-copying v1.
+**Goal:** Reskin the v2 web from its current **dark-navy + neon-cyan inline-styled MVP** to the handoff's **warm "paper + ink" light theme + single Claude-orange accent** — clean, document-like, data-dense. Theme + layout overhaul only; all data/routes/APIs/page-logic unchanged.
 
-**Non-goal:** Porting v1's exact look. New, clean, modern. Backend/data unchanged.
+> The handoff was written generically (references `src/`, `/awsops/login`, "v1.7"); our target is **`web/`** (the v2 thin-BFF), whose current dark `#0a0e1a`+cyan `#00d4ff` IS the "current" state the handoff describes — so it applies 1:1. No `prototype/` folder was provided; build from the DESIGN.md component catalog + exact token values.
 
----
+## Stack (handoff-driven; reconciles the co-agent panel)
+- **Tailwind CSS** — exact `theme.extend` + `globals.css :root` from DESIGN.md §"Wiring the tokens". Build-time → standalone ARM64 Docker safe.
+- **Custom components built with Tailwind** per the DESIGN.md **Components catalog** — NOT shadcn/ui. The handoff specs are precise (Card/StatTile/Badge/Button/Input/SegmentedControl/StatePill/Meter/NavItem/AwsopsMark); building them directly is more faithful than theming shadcn. (Supersedes the earlier DD1=shadcn.)
+- **lucide-react** for nav + UI icons (handoff explicitly permits the Lucide substitution for its stroke-icon set).
+- **recharts** for charts (handoff confirms; co-agent DD3=A) — **deferred to F2** (Overview/Cost trends). F1 is tables + KPI tiles.
+- **Sidebar shell** (co-agent DD2) + **incremental rollout** (co-agent DD4).
+- Theme is **light-only** (it's the design); no dark toggle. The optional "Tweaks/Variations" (accent swap, density, flat cards) in DESIGN.md §Variations are **out of scope** (orange default only).
 
-## Decisions (co-agent validated)
+## Tokens (exact — from the 3 CSS files / DESIGN.md)
+Page `#FAF9F5` · sunken/sidebar `#F3F1EB` · card `#FFFFFF`. Text primary `#1F1E1D` / secondary `#5F5A4D` / muted `#8A8474` / faint `#B5AFA0`. Brand `#D97757` (hover `#B75E40`, text `#8E4830`, subtle bg `#FBF1EC`, subtle border `#EEBFAA`). Positive emerald `#10B981`, negative rose `#F43F5E`. Borders subtle `#EDEBE4` / default `#D7D3C7`. Radii 6/8/12/16. Shadow-card `0 1px 2px rgba(31,30,29,.04),0 4px 16px rgba(31,30,29,.06)`. Font = system-sans stack + system-mono; tabular numerals on compared numbers. Weights 400/500/600 only. Sidebar 256px, page padding 32px, grid gap 16px.
 
-- **DD1 = A — Tailwind CSS + shadcn/ui** (unanimous). Build-time CSS → standalone ARM64 Docker safe (PostCSS at `next build`, output in `.next/static`, already COPYed by the Dockerfile). shadcn = copy-in source on Radix primitives (no runtime lock-in, accessible). Theme via CSS variables in `globals.css`.
-- **DD2 = C — collapsible left sidebar + slim top bar + Cmd-K command palette** (2/3; sidebar unanimous). 22 inventory types need hierarchy a top-nav can't hold. Cmd-K (`cmdk` via shadcn `<CommandDialog>`) indexes the inventory registry + fixed pages — cheap because the registry already enumerates everything. (codex's "stabilize routes first" caution absorbed: build the sidebar core first, Cmd-K as a thin add-on in the same shell.)
-- **DD3 = A — recharts** (2/3). Composes with shadcn (pure charting, no overlapping component lib; tremor would create a 2nd design system). **Charts are deferred** — inventory dashboard is tables+cards; recharts is the chosen lib for when Overview/Cost trends are added (F2+).
-- **DD4 = B — shell + design-system first, then retrofit pages incrementally** (unanimous). Lower blast radius, continuous deploy.
+## Screen → v2 page mapping
+| DESIGN.md screen | v2 target |
+|---|---|
+| App shell + sidebar | NEW `components/shell/AppShell` + `Sidebar` (replace `TopNav`); grouped nav = fixed pages (대시보드/AI/AgentCore-ish) + our inventory groups (Compute/Storage&DB/Network/Security/Monitoring) → `/inventory/<type>` + EKS/Jobs/Cost |
+| Overview dashboard | `app/page.tsx` → StatTile groups (SectionLabel eyebrows) + (charts F2) |
+| EC2 / EKS resource lists | generic `app/inventory/[type]/page.tsx` + `app/eks/page.tsx` → Card-wrapped table + StatePill/Meter, PageHeader, SegmentedControl/search |
+| Cost Explorer | `app/cost/page.tsx` → KPI tiles + HBar/charts (F2) |
+| AI Assistant | existing `components/chat/ChatDrawer` → restyle messages/cards to paper+ink (F2) |
+| Login | **N/A** — v2 auth = Cognito Hosted UI (not an app page). Cognito UI theming is a separate effort (DESIGN.md §1 + the existing Cognito CSS theme noted in commit bd92529); out of this scope. |
 
----
+## F1 wave (high-leverage, one deployable) — what we build now
+1. **F1a Foundation** — add deps (`tailwindcss`,`postcss`,`autoprefixer` dev; `lucide-react`,`tailwind-merge`,`clsx`); `tailwind.config.ts` (handoff `theme.extend` + content globs), `postcss.config.mjs`, `app/globals.css` (handoff `:root` + body + scrollbar + `animate-fade-in`), import in `layout.tsx`; `lib/cn.ts` (clsx+twMerge). **Build gate: `npm run build` clean + Tailwind CSS in `.next/static`.**
+2. **F1b Core components** (`components/ui/`) per the catalog: `Card`, `StatTile`, `Badge`, `Button`, `Input`, `SegmentedControl`, `StatePill`, `Meter`, `PageHeader`, `SectionLabel`, `AwsopsMark` (inline SVG: claude-500 rounded tile + white stroked cube). Tailwind classes matching the exact specs (radii/shadow/weights/states).
+3. **F1c App shell** — `Sidebar` (256px, `paper-muted` bg + blur, right hairline; lockup AwsopsMark+name+v2 badge; grouped nav with uppercase eyebrows + lucide stroke icons + active=`bg-claude-500 text-white`; footer admin chip + region/online dot) + `AppShell` (flex, sidebar + scrollable main) + Cmd-K command palette (lucide, registry-driven; co-agent DD2). Replace `TopNav` in `layout.tsx`; keep `ChatDrawer`.
+4. **F1d Shared-table retrofit** — `DataTable` → unpadded Card + hairline row separators + sticky header (uppercase xs/tracking-wide) + StatePill for state-ish cells + truncation; `RefreshButton` → `Button` secondary + lucide `RotateCw`. Upgrades all 22 inventory pages + EKS/Jobs/Cost at once. Keep prop signatures.
+5. **F1e Overview retrofit** — `app/page.tsx` → PageHeader + SectionLabel'd StatTile grid (reuse the same `StatCard`→`StatTile` swap; keep props). 
+6. **F1f Deploy + screenshot** — `make deploy`; controller renders locally (or post-deploy) and Playwright-screenshots the new shell + Overview + an inventory page for user review.
 
-## Theme tokens (carry the existing dark palette into shadcn CSS variables)
-
-Reuse the current inline palette so the new design feels continuous, mapped to shadcn's HSL variable contract in `globals.css` `:root` (dark-only — it's an ops console):
-
-| role | hex | shadcn var |
-|------|-----|-----------|
-| background | `#0a0e1a` | `--background` |
-| card/panel | `#0f1629` | `--card`, `--popover` |
-| border/input | `#1a2540` | `--border`, `--input` |
-| foreground | `#e6eefb` | `--foreground`, `--card-foreground` |
-| muted-foreground | `#7da2c9` | `--muted-foreground` |
-| primary (accent) | `#00d4ff` | `--primary` (foreground `#06121f`) |
-| muted bg | `#121c33` | `--muted`, `--secondary`, `--accent` |
-| destructive | `#ef4444` | `--destructive` |
-| ring | `#00d4ff` | `--ring` |
-
-Semantic status colors (success `#00ff88`, warning `#f59e0b`, info `#00d4ff`, purple `#a855f7`) exposed as Tailwind theme extension `colors.status.*` for stat cards / badges. `--radius: 0.5rem`.
-
----
-
-## Architecture
-
-### Foundation (F1a)
-- Add devDeps: `tailwindcss`, `postcss`, `autoprefixer`, `tailwindcss-animate`. Add deps: `class-variance-authority`, `clsx`, `tailwind-merge`, `lucide-react`, `cmdk`, and the Radix primitives the chosen shadcn components need (`@radix-ui/react-dialog`, `@radix-ui/react-dropdown-menu`, `@radix-ui/react-tooltip`, `@radix-ui/react-separator`, `@radix-ui/react-scroll-area`, `@radix-ui/react-slot`).
-- `tailwind.config.ts` (content globs over `app/**`, `components/**`; theme extends with the tokens + `tailwindcss-animate`), `postcss.config.mjs` (tailwindcss + autoprefixer), `app/globals.css` (`@tailwind base/components/utilities` + the `:root` token block + base body styles). Import `globals.css` in `app/layout.tsx`.
-- `lib/utils.ts` → `cn()` (clsx + tailwind-merge). shadcn primitives copied into `components/ui/` (NOT via the network CLI — author the files directly): `button.tsx`, `card.tsx`, `table.tsx`, `badge.tsx`, `input.tsx`, `dialog.tsx`, `command.tsx`, `separator.tsx`, `tooltip.tsx`, `scroll-area.tsx`, `dropdown-menu.tsx`. (Standard shadcn source, themed by the CSS vars.)
-- **Build gate (critical):** `npm run build` must stay clean and `.next/static` must contain the Tailwind CSS; the standalone Docker build must still succeed (verified at deploy).
-
-### App shell (F1b)
-- `components/shell/Sidebar.tsx` — collapsible left sidebar (`'use client'`): brand "AWSops", fixed links (Overview `/`, EKS `/eks`, Jobs `/jobs`, Cost `/cost`) each with a lucide icon; then the inventory groups from `inventoryGroups()` (Compute/Storage&DB/Network/Security/Monitoring), each group a collapsible section listing its types → `/inventory/<type>` with a group icon. Active state via `usePathname` (`===` for leaf, `startsWith('/inventory/')` for the inventory parent). Collapse toggle → icon-only (w-16) ↔ expanded (w-60), persisted in `localStorage`.
-- `components/shell/TopBar.tsx` — slim bar: current page title (derived from path/registry), a region/account chip (`ap-northeast-2 · 180294183052` — static for now), a Cmd-K trigger button (`⌘K`), and a user chip (`admin`).
-- `components/shell/CommandPalette.tsx` — `'use client'` shadcn `<CommandDialog>` opened by ⌘K/Ctrl-K (global keydown) or the TopBar trigger; lists the fixed pages + all 22 inventory types (from the registry) grouped; selecting routes via `next/navigation`.
-- `app/layout.tsx` — compose: `<div className="flex"> <Sidebar/> <div className="flex-1"> <TopBar/> <main>{children}</main> </div> </div> <ChatDrawer/> <CommandPalette/>`. Replaces the old `<TopNav/>` (delete `components/shell/TopNav.tsx`). Body class from globals (bg-background text-foreground).
-
-### Shared component retrofit (F1c) — highest leverage
-Retrofitting the 3 shared `components/ui` primitives upgrades **every** page at once (Overview + 22 inventory + EKS/Jobs/Cost all consume them):
-- `StatCard.tsx` → shadcn `<Card>` with a lucide icon, label (muted), big value, accent ring/dot. Keep the same props (`label`, `value`, `accent`) so callers are unchanged.
-- `DataTable.tsx` → shadcn `<Table>` (Card-wrapped, sticky header, zebra/hover rows, empty-state). Keep the same props (`columns`, `rows`). Boolean cells render as a colored badge; long values truncate with title.
-- `RefreshButton.tsx` → shadcn `<Button>` (primary) + lucide `RotateCw` (spin while busy) + a muted "updated …" timestamp with stale styling. Keep props (`busy`, `onClick`, `capturedAt`).
-
-### Overview retrofit (F1d)
-- `app/page.tsx` → grid of the new StatCards with lucide icons; section heading; loading/error states styled with the new tokens. (Validates the system end-to-end.)
-
-### F2+ (later waves, out of F1)
-Page-specific polish: chat drawer restyle to the design system; recharts on Overview (jobs/cost trends) + Cost page; EKS/Jobs page detail polish; responsive/mobile sidebar drawer; Cmd-K fuzzy actions (trigger refresh, etc.); accessibility pass (the F1 dropdown→sidebar already fixes the earlier hover-only a11y issue).
-
----
+## F2+ (later)
+recharts on Overview (리소스 추세 area, EC2-type donut, 리소스 분포 bar) + Cost (일별 추이 area, 서비스별 HBar, 구성 donut); ChatDrawer paper+ink restyle (assistant cards, route badges); EC2/EKS page-specific KPI tiles + Meter CPU/mem + namespace/state filters; Cognito Hosted UI theming (login); responsive/mobile sidebar; density/flat variations if wanted.
 
 ## Testing
-- Unit (vitest): existing 47 must stay green (the ui retrofits keep prop signatures, so page/route tests are unaffected; registry/nav tests updated if nav moves to the sidebar). Add a light test for `cn()` and that `CommandPalette`/`Sidebar` import the registry without error. The jsdom env must tolerate the new components (no real Radix portal in tests — keep tests at the lib/route level, not rendering the shell).
-- Build gate: `npm run build` clean + `.next/static` has Tailwind CSS + all routes present.
-- Live (controller deploy): `make deploy` → `/api/health` 200 → browser: new sidebar + Cmd-K + restyled Overview/inventory render correctly behind auth; existing data still loads (the BFF/API layer is untouched).
+- Unit (vitest): existing 47 stay green (component retrofits keep prop signatures → page/route tests unaffected; registry/nav tests updated if nav moves to Sidebar). jsdom: keep tests at lib/route level; do not render the full shell/portal in tests. Add a `cn()` test.
+- Build gate: `npm run build` clean, Tailwind CSS emitted, all routes present.
+- Live (controller): `make deploy` → `/api/health` 200 → Playwright screenshots (local render needs no Cognito; the edge auth is at CloudFront, the shell/components render with loading/empty states) → user visual review → iterate → done.
 
 ## Rollout
-F1 = foundation + shell + shared-component retrofit + Overview (one deployable wave, upgrades all pages visually). F2+ = per-page polish + charts + chat restyle. All under `web/`; no Terraform/backend change (pure presentation) — `make deploy` only.
+F1 = one deployable wave (foundation + components + shell + table/Overview retrofit) that visually transforms the whole app (every page sits in the new shell; all inventory/EKS/Jobs/Cost share the retrofitted DataTable). F2+ = charts + chat + per-page polish + login. All under `web/`; pure presentation, no Terraform/backend change → `make deploy` only.
