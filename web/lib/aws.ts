@@ -50,3 +50,21 @@ export async function getMtdCost(): Promise<CostBreakdown> {
   const total = byService.reduce((s, x) => s + x.amount, 0);
   return { total, currency, byService };
 }
+
+export interface CostTrendPoint { date: string; amount: number }
+
+/** Daily UnblendedCost for the trailing 30 days (no GroupBy) → [{ date, amount }] ascending. */
+export async function getCostTrend(): Promise<CostTrendPoint[]> {
+  const now = new Date();
+  const end = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10); // tomorrow → end is exclusive
+  const start = new Date(now.getTime() - 29 * 86_400_000).toISOString().slice(0, 10); // 30 days inclusive of today
+  const r = await ceClient().send(new GetCostAndUsageCommand({
+    TimePeriod: { Start: start, End: end },
+    Granularity: 'DAILY',
+    Metrics: ['UnblendedCost'],
+  }));
+  return (r.ResultsByTime ?? []).map((t) => ({
+    date: t.TimePeriod?.Start ?? '',
+    amount: Number(t.Total?.UnblendedCost?.Amount ?? 0),
+  }));
+}
