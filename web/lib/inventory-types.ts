@@ -16,8 +16,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'repository_uri', label: 'URI' }, { key: 'image_tag_mutability', label: 'Tag mutability' },
     { key: 'created_at', label: 'Created' } ] },
   s3: { label: 'S3 Buckets', group: 'Storage & DB', columns: [
-    { key: 'creation_date', label: 'Created' }, { key: 'versioning_enabled', label: 'Versioning' },
-    { key: 'bucket_policy_is_public', label: 'Public' } ] },
+    { key: 'creation_date', label: 'Created' } ] },
   ebs_volume: { label: 'EBS Volumes', group: 'Storage & DB', columns: [
     { key: 'volume_type', label: 'Type' }, { key: 'size', label: 'Size(GB)' },
     { key: 'state', label: 'State' }, { key: 'encrypted', label: 'Encrypted' }, { key: 'availability_zone', label: 'AZ' } ] },

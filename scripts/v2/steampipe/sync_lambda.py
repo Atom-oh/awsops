@@ -19,7 +19,11 @@ QUERIES = {
         "region",
     ),
     "s3": (
-        "SELECT name, region, account_id, creation_date, versioning_enabled, bucket_policy_is_public "
+        # ListBuckets-sourced columns only. versioning_enabled/bucket_policy_is_public trigger
+        # per-bucket GetBucketVersioning/GetBucketPolicyStatus, which a restrictive bucket
+        # resource policy (e.g. eks-hybrid-packages) can explicit-deny — and one denied bucket
+        # fails the WHOLE aws_s3_bucket query. Keep S3 robust against arbitrary bucket policies.
+        "SELECT name, region, account_id, creation_date "
         "FROM aws_s3_bucket ORDER BY creation_date DESC",
         "name",
         "region",

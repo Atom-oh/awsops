@@ -26,7 +26,8 @@ Each entry: `type` → (Steampipe table, `id_col`, `region_col`, SELECT columns,
 | type | table | id_col | region_col | SELECT columns (stored in `data` JSONB) | display columns (key → label) |
 |------|-------|--------|-----------|------------------------------------------|-------------------------------|
 | ec2 *(exists)* | aws_ec2_instance | instance_id | region | instance_id, instance_type, instance_state, region, account_id, private_ip_address, public_ip_address, vpc_id, launch_time | instance_type→Type, instance_state→State, private_ip_address→Private IP, vpc_id→VPC |
-| s3 | aws_s3_bucket | name | region | name, region, account_id, creation_date, versioning_enabled, bucket_policy_is_public | creation_date→Created, versioning_enabled→Versioning, bucket_policy_is_public→Public |
+| s3 | aws_s3_bucket | name | region | name, region, account_id, creation_date | creation_date→Created |
+| | | | | *(revised at deploy: versioning_enabled/bucket_policy_is_public dropped — they trigger per-bucket GetBucketVersioning/GetBucketPolicyStatus, which a restrictive bucket resource policy can explicit-deny, failing the whole query)* | |
 | lambda | aws_lambda_function | name | region | name, region, account_id, runtime, memory_size, timeout, last_modified, state, package_type | runtime→Runtime, memory_size→Mem(MB), timeout→Timeout(s), state→State |
 | rds | aws_rds_db_instance | db_instance_identifier | region | db_instance_identifier, region, account_id, engine, engine_version, class, status, multi_az, allocated_storage | engine→Engine, engine_version→Version, class→Class, status→Status, multi_az→Multi-AZ |
 | ebs_volume | aws_ebs_volume | volume_id | region | volume_id, region, account_id, volume_type, size, state, encrypted, availability_zone | volume_type→Type, size→Size(GB), state→State, encrypted→Encrypted, availability_zone→AZ |
