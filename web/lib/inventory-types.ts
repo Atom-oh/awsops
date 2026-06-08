@@ -38,9 +38,35 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' }, { key: 'role_id', label: 'Role ID' } ] },
   iam_user: { label: 'IAM Users', group: 'Security', columns: [
     { key: 'create_date', label: 'Created' }, { key: 'mfa_enabled', label: 'MFA' }, { key: 'password_last_used', label: 'Last PW use' } ] },
+  // ---- D3 wave ----
+  cloudfront: { label: 'CloudFront', group: 'Network', columns: [
+    { key: 'domain_name', label: 'Domain' }, { key: 'status', label: 'Status' },
+    { key: 'enabled', label: 'Enabled' }, { key: 'price_class', label: 'Price class' } ] },
+  alb: { label: 'App Load Balancers', group: 'Network', columns: [
+    { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
+    { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' } ] },
+  nlb: { label: 'Net Load Balancers', group: 'Network', columns: [
+    { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
+    { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' } ] },
+  waf: { label: 'WAF Web ACLs', group: 'Security', columns: [
+    { key: 'scope', label: 'Scope' }, { key: 'capacity', label: 'Capacity' },
+    { key: 'description', label: 'Description' }, { key: 'managed_by_firewall_manager', label: 'FMS-managed' } ] },
+  cloudtrail: { label: 'CloudTrail Trails', group: 'Security', columns: [
+    { key: 'is_logging', label: 'Logging' }, { key: 'is_multi_region_trail', label: 'Multi-region' },
+    { key: 'home_region', label: 'Home region' }, { key: 's3_bucket_name', label: 'S3 bucket' }, { key: 'log_file_validation_enabled', label: 'Log validation' } ] },
+  elasticache: { label: 'ElastiCache', group: 'Storage & DB', columns: [
+    { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
+    { key: 'cache_node_type', label: 'Node type' }, { key: 'cache_cluster_status', label: 'Status' }, { key: 'num_cache_nodes', label: 'Nodes' } ] },
+  opensearch: { label: 'OpenSearch', group: 'Storage & DB', columns: [
+    { key: 'engine_version', label: 'Version' }, { key: 'created', label: 'Created' }, { key: 'deleted', label: 'Deleted' } ] },
+  msk: { label: 'MSK Clusters', group: 'Storage & DB', columns: [
+    { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' }, { key: 'current_version', label: 'Version' } ] },
+  cloudwatch_alarm: { label: 'CloudWatch Alarms', group: 'Monitoring', columns: [
+    { key: 'state_value', label: 'State' }, { key: 'metric_name', label: 'Metric' }, { key: 'namespace', label: 'Namespace' },
+    { key: 'threshold', label: 'Threshold' }, { key: 'actions_enabled', label: 'Actions' } ] },
 };
 
-const GROUP_ORDER = ['Compute', 'Storage & DB', 'Network', 'Security'];
+const GROUP_ORDER = ['Compute', 'Storage & DB', 'Network', 'Security', 'Monitoring'];
 export function inventoryGroups(): { group: string; types: string[] }[] {
   return GROUP_ORDER.map((group) => ({
     group, types: Object.keys(INVENTORY_TYPES).filter((t) => INVENTORY_TYPES[t].group === group),

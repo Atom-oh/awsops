@@ -117,7 +117,16 @@ resource "aws_iam_role_policy" "steampipe_task" {
         "dynamodb:List*", "dynamodb:Describe*",
         "ecs:List*", "ecs:Describe*",
         "ecr:Describe*", "ecr:List*", "ecr:GetLifecyclePolicy", "ecr:GetRepositoryPolicy",
-        "iam:List*", "iam:Get*", "iam:GenerateCredentialReport"
+        "iam:List*", "iam:Get*", "iam:GenerateCredentialReport",
+        # D3 wave
+        "cloudfront:List*", "cloudfront:Get*",
+        "elasticloadbalancing:Describe*",
+        "elasticache:Describe*",
+        "es:Describe*", "es:List*",
+        "kafka:Describe*", "kafka:List*",
+        "wafv2:List*", "wafv2:Get*",
+        "cloudwatch:Describe*",
+        "cloudtrail:Describe*", "cloudtrail:List*", "cloudtrail:GetTrailStatus", "cloudtrail:GetEventSelectors", "cloudtrail:GetInsightSelectors"
       ]
       Resource = "*"
     }]

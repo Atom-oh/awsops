@@ -98,6 +98,61 @@ QUERIES = {
         "repository_name",
         "region",
     ),
+    # ---- D3 wave (verified columns; all Describe/List-based) ----
+    "cloudfront": (
+        "SELECT id, region, account_id, domain_name, status, enabled, price_class, comment "
+        "FROM aws_cloudfront_distribution ORDER BY id",
+        "id",
+        "region",
+    ),
+    "alb": (
+        "SELECT name, region, account_id, scheme, vpc_id, state_code, dns_name, type "
+        "FROM aws_ec2_application_load_balancer ORDER BY name",
+        "name",
+        "region",
+    ),
+    "nlb": (
+        "SELECT name, region, account_id, scheme, vpc_id, state_code, dns_name, type "
+        "FROM aws_ec2_network_load_balancer ORDER BY name",
+        "name",
+        "region",
+    ),
+    "elasticache": (
+        "SELECT cache_cluster_id, region, account_id, engine, engine_version, cache_node_type, cache_cluster_status, num_cache_nodes "
+        "FROM aws_elasticache_cluster ORDER BY cache_cluster_id",
+        "cache_cluster_id",
+        "region",
+    ),
+    "opensearch": (
+        "SELECT domain_name, region, account_id, engine_version, created, deleted "
+        "FROM aws_opensearch_domain ORDER BY domain_name",
+        "domain_name",
+        "region",
+    ),
+    "msk": (
+        "SELECT cluster_name, arn, region, account_id, state, cluster_type, current_version, creation_time "
+        "FROM aws_msk_cluster ORDER BY cluster_name",
+        "cluster_name",
+        "region",
+    ),
+    "waf": (
+        "SELECT name, arn, region, account_id, scope, description, capacity, managed_by_firewall_manager "
+        "FROM aws_wafv2_web_acl ORDER BY name",
+        "name",
+        "region",
+    ),
+    "cloudwatch_alarm": (
+        "SELECT name, region, account_id, state_value, metric_name, namespace, comparison_operator, threshold, actions_enabled "
+        "FROM aws_cloudwatch_alarm ORDER BY name",
+        "name",
+        "region",
+    ),
+    "cloudtrail": (
+        "SELECT name, region, account_id, is_multi_region_trail, is_logging, home_region, s3_bucket_name, log_file_validation_enabled "
+        "FROM aws_cloudtrail_trail ORDER BY name",
+        "name",
+        "region",
+    ),
 }
 _ALLOWED = set(QUERIES)
 _sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
