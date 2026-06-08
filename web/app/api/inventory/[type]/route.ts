@@ -1,11 +1,15 @@
 import { verifyUser } from '@/lib/auth';
 import { readResources } from '@/lib/inventory';
+import { INVENTORY_TYPES } from '@/lib/inventory-types';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request, { params }: { params: { type: string } }) {
   if (!(await verifyUser(request.headers.get('cookie')))) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
+  }
+  if (!(params.type in INVENTORY_TYPES)) {
+    return Response.json({ status: 'error', message: 'unknown type' }, { status: 404 });
   }
   const url = new URL(request.url);
   const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
