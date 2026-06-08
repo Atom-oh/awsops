@@ -21,4 +21,18 @@ describe('INVENTORY_TYPES registry', () => {
     expect(g.find((x) => x.group === 'Network')?.types).toContain('vpc');
     expect(g.find((x) => x.group === 'Monitoring')?.types).toContain('cloudwatch_alarm');
   });
+  it('stateKey/distKey (when present) reference a column key, resource_id, region, or a non-empty data field', () => {
+    const VIRTUAL = new Set(['resource_id', 'region']);
+    for (const [k, v] of Object.entries(INVENTORY_TYPES)) {
+      const colKeys = new Set(v.columns.map((c) => c.key));
+      const valid = (field: string) =>
+        typeof field === 'string' && field.length > 0 && (colKeys.has(field) || VIRTUAL.has(field));
+      if (v.stateKey !== undefined) expect(valid(v.stateKey), `${k}.stateKey=${v.stateKey}`).toBe(true);
+      if (v.distKey !== undefined) expect(valid(v.distKey), `${k}.distKey=${v.distKey}`).toBe(true);
+    }
+  });
+  it('ec2 has stateKey=instance_state and distKey=instance_type', () => {
+    expect(INVENTORY_TYPES.ec2.stateKey).toBe('instance_state');
+    expect(INVENTORY_TYPES.ec2.distKey).toBe('instance_type');
+  });
 });
