@@ -219,9 +219,109 @@ resource "aws_iam_role_policy" "agent_lambda_read" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Existing slice (iam-mcp / flow-monitor). ec2:Describe* also serves network-mcp.
         Sid      = "ReadOnlySlice"
         Effect   = "Allow"
         Action   = ["iam:Get*", "iam:List*", "iam:SimulatePrincipalPolicy", "ec2:Describe*"]
+        Resource = "*"
+      },
+      {
+        # network-mcp (ELB + Network Firewall; ec2:Describe* above covers VPC/TGW/VPN/ENI/FlowLogs).
+        Sid    = "NetworkRead"
+        Effect = "Allow"
+        Action = [
+          "elasticloadbalancing:Describe*",
+          "network-firewall:Describe*",
+          "network-firewall:List*"
+        ]
+        Resource = "*"
+      },
+      {
+        # container: eks-mcp (control-plane) + ecs-mcp (ECS + ECR).
+        Sid    = "ContainerRead"
+        Effect = "Allow"
+        Action = [
+          "eks:Describe*",
+          "eks:List*",
+          "ecs:Describe*",
+          "ecs:List*",
+          "ecr:Describe*",
+          "ecr:List*",
+          "ecr:BatchGet*"
+        ]
+        Resource = "*"
+      },
+      {
+        # data: rds (describe; execute_sql via Data API not granted → SELECT errors gracefully),
+        #       dynamodb (describe + read items), valkey (elasticache), msk (kafka).
+        Sid    = "DataRead"
+        Effect = "Allow"
+        Action = [
+          "rds:Describe*",
+          "rds:ListTagsForResource",
+          "dynamodb:Describe*",
+          "dynamodb:List*",
+          "dynamodb:Query",
+          "dynamodb:GetItem",
+          "dynamodb:Scan",
+          "elasticache:Describe*",
+          "kafka:Describe*",
+          "kafka:List*",
+          "kafka:Get*"
+        ]
+        Resource = "*"
+      },
+      {
+        # cost: cost-mcp (Cost Explorer + Pricing + Budgets) + finops-mcp (Compute Optimizer +
+        #       Savings Plans + Trusted Advisor via support).
+        Sid    = "CostRead"
+        Effect = "Allow"
+        Action = [
+          "ce:Get*",
+          "ce:List*",
+          "ce:Describe*",
+          "pricing:GetProducts",
+          "pricing:DescribeServices",
+          "budgets:Describe*",
+          "budgets:View*",
+          "compute-optimizer:Get*",
+          "savingsplans:Describe*",
+          "support:Describe*"
+        ]
+        Resource = "*"
+      },
+      {
+        # monitoring: cloudwatch-mcp (metrics + Logs Insights) + cloudtrail-mcp (Lake; StartQuery = read).
+        Sid    = "MonitoringRead"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:Get*",
+          "cloudwatch:List*",
+          "cloudwatch:Describe*",
+          "logs:Describe*",
+          "logs:Get*",
+          "logs:FilterLogEvents",
+          "logs:StartQuery",
+          "logs:StopQuery",
+          "cloudtrail:LookupEvents",
+          "cloudtrail:Describe*",
+          "cloudtrail:Get*",
+          "cloudtrail:List*",
+          "cloudtrail:StartQuery"
+        ]
+        Resource = "*"
+      },
+      {
+        # iac: iac-mcp (CloudFormation). terraform-mcp / aws-knowledge need no AWS IAM (public HTTPS).
+        Sid    = "IacRead"
+        Effect = "Allow"
+        Action = [
+          "cloudformation:Describe*",
+          "cloudformation:Detect*",
+          "cloudformation:Get*",
+          "cloudformation:List*",
+          "cloudformation:ValidateTemplate"
+        ]
         Resource = "*"
       },
       {
@@ -237,8 +337,22 @@ resource "aws_iam_role_policy" "agent_lambda_read" {
 # The slice. key → source file (handler is "<module>.lambda_handler"). cross_account.py is bundled.
 locals {
   agent_lambdas = var.agentcore_enabled ? {
-    "iam-mcp"      = { file = "aws_iam_mcp.py", handler = "aws_iam_mcp.lambda_handler" }
-    "flow-monitor" = { file = "flowmonitor.py", handler = "flowmonitor.lambda_handler" }
+    "iam-mcp"        = { file = "aws_iam_mcp.py", handler = "aws_iam_mcp.lambda_handler" }
+    "flow-monitor"   = { file = "flowmonitor.py", handler = "flowmonitor.lambda_handler" }
+    "network-mcp"    = { file = "network_mcp.py", handler = "network_mcp.lambda_handler" }
+    "eks-mcp"        = { file = "aws_eks_mcp.py", handler = "aws_eks_mcp.lambda_handler" }
+    "ecs-mcp"        = { file = "aws_ecs_mcp.py", handler = "aws_ecs_mcp.lambda_handler" }
+    "rds-mcp"        = { file = "aws_rds_mcp.py", handler = "aws_rds_mcp.lambda_handler" }
+    "dynamodb-mcp"   = { file = "aws_dynamodb_mcp.py", handler = "aws_dynamodb_mcp.lambda_handler" }
+    "msk-mcp"        = { file = "aws_msk_mcp.py", handler = "aws_msk_mcp.lambda_handler" }
+    "valkey-mcp"     = { file = "aws_valkey_mcp.py", handler = "aws_valkey_mcp.lambda_handler" }
+    "cost-mcp"       = { file = "aws_cost_mcp.py", handler = "aws_cost_mcp.lambda_handler" }
+    "finops-mcp"     = { file = "aws_finops_mcp.py", handler = "aws_finops_mcp.lambda_handler" }
+    "cloudwatch-mcp" = { file = "aws_cloudwatch_mcp.py", handler = "aws_cloudwatch_mcp.lambda_handler" }
+    "cloudtrail-mcp" = { file = "aws_cloudtrail_mcp.py", handler = "aws_cloudtrail_mcp.lambda_handler" }
+    "iac-mcp"        = { file = "aws_iac_mcp.py", handler = "aws_iac_mcp.lambda_handler" }
+    "terraform-mcp"  = { file = "aws_terraform_mcp.py", handler = "aws_terraform_mcp.lambda_handler" }
+    "aws-knowledge"  = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
   } : {}
 }
 
