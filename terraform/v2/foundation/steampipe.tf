@@ -102,9 +102,25 @@ resource "aws_iam_role_policy" "steampipe_task" {
   count = local.sp
   name  = "${var.project}-steampipe-read"
   role  = aws_iam_role.steampipe_task[0].id
+  # ec2:Describe* covers ec2/vpc/subnet/security_group/ebs. Curated read-only metadata
+  # actions per D2 wave (no object data, secrets, or KMS). Resource="*" — these list/describe
+  # APIs don't support resource-level scoping. Far narrower than ReadOnlyAccess.
   policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = [{ Effect = "Allow", Action = ["ec2:Describe*", "sts:GetCallerIdentity"], Resource = "*" }]
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ec2:Describe*", "sts:GetCallerIdentity",
+        "s3:ListAllMyBuckets", "s3:GetBucket*", "s3:GetAccountPublicAccessBlock", "s3:GetEncryptionConfiguration",
+        "lambda:List*", "lambda:GetFunction*", "lambda:GetPolicy",
+        "rds:Describe*", "rds:ListTagsForResource",
+        "dynamodb:List*", "dynamodb:Describe*",
+        "ecs:List*", "ecs:Describe*",
+        "ecr:Describe*", "ecr:List*", "ecr:GetLifecyclePolicy", "ecr:GetRepositoryPolicy",
+        "iam:List*", "iam:Get*", "iam:GenerateCredentialReport"
+      ]
+      Resource = "*"
+    }]
   })
 }
 
@@ -228,7 +244,9 @@ resource "aws_iam_role_policy" "inv_sync" {
     Statement = [
       { Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:*" },
       { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.steampipe[0].arn, aws_rds_cluster.aurora.master_user_secret[0].secret_arn] },
-      { Effect = "Allow", Action = ["kms:Decrypt"], Resource = aws_kms_key.aurora.arn }
+      { Effect = "Allow", Action = ["kms:Decrypt"], Resource = aws_kms_key.aurora.arn },
+      # self-invoke for type=all fan-out (async InvocationType=Event per type)
+      { Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = aws_lambda_function.inv_sync[0].arn }
     ]
   })
 }
@@ -271,7 +289,7 @@ resource "aws_cloudwatch_event_target" "inv_sync" {
   rule      = aws_cloudwatch_event_rule.inv_sync[0].name
   target_id = "inv-sync-ec2"
   arn       = aws_lambda_function.inv_sync[0].arn
-  input     = jsonencode({ type = "ec2" })
+  input     = jsonencode({ type = "all" })
 }
 resource "aws_lambda_permission" "inv_sync_events" {
   count         = local.sp
