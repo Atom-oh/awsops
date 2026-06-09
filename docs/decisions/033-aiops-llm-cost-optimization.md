@@ -26,9 +26,9 @@ This decision was cross-reviewed by two independent assistants (codex, gemini; k
 
 ### Option 1: Phased cost layer extending ADR-016 — chosen / ADR-016을 확장하는 단계적 비용 계층 — 채택
 
-Phase 1 (v1, in-process, no new infrastructure): heuristic/registry-derived keyword pre-filter → Haiku 4.5 classifier fallback → Sonnet only when ambiguous; Bedrock prompt caching on invariant prefixes; **exact-match** answer cache keyed by `(accountId, userSub, route, normalizedQuestion, sourceDataFingerprint)` with TTL ≤ the Steampipe 5-min window and invalidation on write events; per-tenant/user token budgets via `agentcore-stats` (warn 80%, soft cap, on-call override); confidence-based tiering (Haiku simple / Sonnet normal / Opus deep|low-confidence) and synthesis-skip for a single high-confidence route. Phase 2 (v2, Aurora ADR-030): **semantic** answer cache via Aurora `pgvector`, durable per-tenant budget/cache state, multi-runtime-safe.
+Phase 1 (v1, in-process, no new infrastructure): heuristic/registry-derived keyword pre-filter → Haiku 4.5 classifier fallback → Sonnet only when ambiguous; Bedrock prompt caching on invariant prefixes; **exact-match** answer cache keyed by `(accountId, userSub, route, normalizedQuestion, sourceDataFingerprint)` with TTL ≤ the Steampipe 5-min window and invalidation on write events; per-tenant/user token budgets via `agentcore-stats` (warn 80%, soft cap, on-call override); confidence-based tiering (Haiku simple / Sonnet normal / Opus deep|low-confidence) and synthesis-skip for a single high-confidence route. Phase 2 (v2, Aurora ADR-030): **durable per-tenant token budget** state (implemented — see §Phasing). The **semantic** answer cache via Aurora `pgvector` is split out to a **deferred Phase 3** (re-opened when a v2 AI route exists).
 
-Phase 1(v1, 인프로세스, 신규 인프라 없음): 휴리스틱/레지스트리 파생 키워드 pre-filter → Haiku 4.5 분류 폴백 → 애매할 때만 Sonnet; 불변 prefix에 Bedrock 프롬프트 캐싱; `(accountId, userSub, route, 정규화질문, sourceDataFingerprint)` 키의 **정확 일치** 응답 캐시(TTL ≤ Steampipe 5분, write 이벤트 시 무효화); `agentcore-stats` 기반 테넌트/사용자별 토큰 예산(80% 경고, 소프트 캡, 온콜 override); 신뢰도 기반 계단식(단순 Haiku / 일반 Sonnet / 심층·저신뢰 Opus) 및 단일 고신뢰 라우트의 합성 스킵. Phase 2(v2, Aurora ADR-030): Aurora `pgvector` 기반 **의미** 응답 캐시, 내구성 테넌트별 예산/캐시 상태, 멀티 런타임 안전.
+Phase 1(v1, 인프로세스, 신규 인프라 없음): 휴리스틱/레지스트리 파생 키워드 pre-filter → Haiku 4.5 분류 폴백 → 애매할 때만 Sonnet; 불변 prefix에 Bedrock 프롬프트 캐싱; `(accountId, userSub, route, 정규화질문, sourceDataFingerprint)` 키의 **정확 일치** 응답 캐시(TTL ≤ Steampipe 5분, write 이벤트 시 무효화); `agentcore-stats` 기반 테넌트/사용자별 토큰 예산(80% 경고, 소프트 캡, 온콜 override); 신뢰도 기반 계단식(단순 Haiku / 일반 Sonnet / 심층·저신뢰 Opus) 및 단일 고신뢰 라우트의 합성 스킵. Phase 2(v2, Aurora ADR-030): **내구성 테넌트별 토큰 예산** 상태(구현 완료 — §Phasing 참조). Aurora `pgvector` 기반 **의미** 응답 캐시는 **연기된 Phase 3**으로 분리(v2 AI 라우트 존재 시 재개).
 
 - **Pros / 장점**: Phase 1 is software-only on the existing single EC2 — no new AWS services, no write permissions. Prompt caching + Haiku classification cut marginal cost immediately on the highest-QPS paths; the exact answer cache compounds the existing Steampipe cache; budgets bound worst-case spend. Deferring semantic caching avoids correctness/isolation hazards until Aurora can enforce them. Reuses ADR-016's model IDs and the registry-driven classifier. / Phase 1은 기존 단일 EC2에서 소프트웨어만으로 — 신규 AWS 서비스·write 권한 불필요. 프롬프트 캐싱 + Haiku 분류는 최고 QPS 경로에서 즉시 한계비용을 절감하고, 정확 응답 캐시는 기존 Steampipe 캐시와 복리로 작용하며, 예산이 최악 지출을 제한한다. 의미 캐싱 연기는 Aurora가 강제할 수 있을 때까지 정확성·격리 위험을 회피한다. ADR-016 모델 ID와 레지스트리 기반 분류기를 재사용한다.
 - **Cons / 단점**: Adds state (caches, budgets), versioning, and invalidation paths; Haiku classification and cached answers introduce a quality-regression surface that needs golden-question regression tests and per-route/model telemetry; two phases mean the largest dedup win (semantic cache) waits for v2. / 상태(캐시·예산)·버저닝·무효화 경로가 추가된다. Haiku 분류와 캐시 응답은 품질 회귀 표면을 만들어 golden-question 회귀 테스트와 라우트/모델별 텔레메트리가 필요하다. 2단계 구성이라 가장 큰 dedup 이득(의미 캐시)은 v2를 기다린다.
@@ -72,6 +72,11 @@ Adopt **Option 1**. Relationships:
 Mutating nothing in customer infrastructure, ADR-033 is **not** gated by ADR-029.
 
 고객 인프라를 변경하지 않으므로 ADR-033은 ADR-029 게이트 대상이 **아니다**.
+
+### Phasing / 단계 구성
+
+- **Phase 2 (Aurora durable token budget)** — implemented: `ai_token_budget` table + dual-write + cold-start hydrate (the in-process budget no longer resets on restart). See `docs/superpowers/plans/2026-06-09-adr-033-phase2-durable-budget.md`.
+- **Phase 3 (deferred) — semantic answer cache** (Bedrock Titan embeddings + Aurora pgvector + similarity threshold/TTL/fingerprint invalidation): re-opened when a v2 AI route exists, where multi-runtime makes it worthwhile. Deferred per the 2026-06-09 `/co-agent` decision (single-EC2 v1's node-cache already covers exact repeats; staleness risk; YAGNI).
 
 ## Consequences / 영향
 
