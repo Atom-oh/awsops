@@ -35,132 +35,168 @@ QUERIES = {
         # per-bucket GetBucketVersioning/GetBucketPolicyStatus, which a restrictive bucket
         # resource policy (e.g. eks-hybrid-packages) can explicit-deny — and one denied bucket
         # fails the WHOLE aws_s3_bucket query. Keep S3 robust against arbitrary bucket policies.
-        "SELECT name, region, account_id, creation_date "
+        "SELECT name, region, account_id, arn, creation_date "
         "FROM aws_s3_bucket ORDER BY creation_date DESC",
         "name",
         "region",
     ),
     "lambda": (
-        "SELECT name, region, account_id, runtime, memory_size, timeout, last_modified, state, package_type "
+        "SELECT name, region, account_id, arn, runtime, handler, code_size, memory_size, timeout, "
+        "last_modified, version, state, last_update_status, package_type, architectures, layers, "
+        "vpc_id, vpc_subnet_ids, vpc_security_group_ids, description, code_sha_256 "
         "FROM aws_lambda_function ORDER BY name",
         "name",
         "region",
     ),
     "rds": (
-        "SELECT db_instance_identifier, region, account_id, engine, engine_version, class, status, "
-        "multi_az, allocated_storage "
+        # NON-metric detail fields only; v1's rdsMetrics CloudWatch JOIN is live/heavy → F5, not stored here.
+        "SELECT db_instance_identifier, region, account_id, arn, engine, engine_version, class, status, "
+        "multi_az, publicly_accessible, allocated_storage, storage_type, storage_encrypted, kms_key_id, "
+        "vpc_id, db_subnet_group_name, availability_zone, endpoint_address, endpoint_port, "
+        "backup_retention_period, preferred_backup_window, latest_restorable_time, vpc_security_groups, "
+        "auto_minor_version_upgrade, copy_tags_to_snapshot, deletion_protection, "
+        "iam_database_authentication_enabled, performance_insights_enabled, create_time, tags "
         "FROM aws_rds_db_instance ORDER BY db_instance_identifier",
         "db_instance_identifier",
         "region",
     ),
     "ebs_volume": (
-        "SELECT volume_id, region, account_id, volume_type, size, state, encrypted, availability_zone "
+        "SELECT volume_id, region, account_id, arn, volume_type, size, state, encrypted, iops, throughput, "
+        "availability_zone, create_time, snapshot_id, kms_key_id, multi_attach_enabled, attachments, tags, "
+        "(tags ->> 'Name') AS name "
         "FROM aws_ebs_volume ORDER BY volume_id",
         "volume_id",
         "region",
     ),
     "vpc": (
-        "SELECT vpc_id, region, account_id, cidr_block, state, is_default, instance_tenancy "
+        "SELECT vpc_id, region, account_id, arn, cidr_block, state, is_default, instance_tenancy, "
+        "dhcp_options_id, owner_id, tags, (tags ->> 'Name') AS name "
         "FROM aws_vpc ORDER BY vpc_id",
         "vpc_id",
         "region",
     ),
     "subnet": (
-        "SELECT subnet_id, region, account_id, vpc_id, cidr_block, availability_zone, "
-        "available_ip_address_count, map_public_ip_on_launch "
+        "SELECT subnet_id, region, account_id, subnet_arn, vpc_id, cidr_block, state, owner_id, "
+        "availability_zone, availability_zone_id, available_ip_address_count, map_public_ip_on_launch, "
+        "default_for_az, assign_ipv6_address_on_creation, tags, (tags ->> 'Name') AS name "
         "FROM aws_vpc_subnet ORDER BY subnet_id",
         "subnet_id",
         "region",
     ),
     "security_group": (
-        "SELECT group_id, group_name, region, account_id, vpc_id, description "
+        "SELECT group_id, region, account_id, arn, group_name, vpc_id, description, owner_id, "
+        "ip_permissions, ip_permissions_egress, tags, (tags ->> 'Name') AS name "
         "FROM aws_vpc_security_group ORDER BY group_id",
         "group_id",
         "region",
     ),
     "iam_role": (
-        "SELECT name, arn, region, account_id, role_id, create_date, path "
+        "SELECT name, region, account_id, arn, role_id, create_date, path, description, "
+        "max_session_duration, role_last_used_date, role_last_used_region, instance_profile_arns, "
+        "permissions_boundary_arn, assume_role_policy, tags "
         "FROM aws_iam_role ORDER BY create_date DESC",
         "name",
         "region",
     ),
     "iam_user": (
-        "SELECT name, arn, region, account_id, user_id, create_date, mfa_enabled, password_last_used "
+        "SELECT name, region, account_id, arn, user_id, create_date, path, password_last_used, "
+        "mfa_enabled, tags "
         "FROM aws_iam_user ORDER BY create_date DESC",
         "name",
         "region",
     ),
     "dynamodb": (
-        "SELECT name, region, account_id, table_status, billing_mode, item_count, table_size_bytes, "
-        "read_capacity, write_capacity "
+        "SELECT name, region, account_id, arn, table_status, billing_mode, item_count, table_size_bytes, "
+        "read_capacity, write_capacity, key_schema, point_in_time_recovery_description, sse_description, "
+        "creation_date_time, tags "
         "FROM aws_dynamodb_table ORDER BY name",
         "name",
         "region",
     ),
     "ecs_cluster": (
-        "SELECT cluster_name, region, account_id, status, running_tasks_count, pending_tasks_count, "
-        "active_services_count, registered_container_instances_count "
+        "SELECT cluster_name, region, account_id, cluster_arn, status, running_tasks_count, "
+        "pending_tasks_count, active_services_count, registered_container_instances_count, settings, tags "
         "FROM aws_ecs_cluster ORDER BY cluster_name",
         "cluster_name",
         "region",
     ),
     "ecr": (
-        "SELECT repository_name, region, account_id, repository_uri, image_tag_mutability, created_at "
+        "SELECT repository_name, region, account_id, arn, registry_id, repository_uri, "
+        "image_tag_mutability, image_scanning_configuration, encryption_configuration, lifecycle_policy, "
+        "created_at, tags "
         "FROM aws_ecr_repository ORDER BY created_at DESC",
         "repository_name",
         "region",
     ),
     # ---- D3 wave (verified columns; all Describe/List-based) ----
     "cloudfront": (
-        "SELECT id, region, account_id, domain_name, status, enabled, price_class, comment "
+        "SELECT id, region, account_id, arn, domain_name, status, enabled, e_tag, http_version, "
+        "is_ipv6_enabled, price_class, web_acl_id, default_cache_behavior, origins, aliases, "
+        "cache_behaviors, tags, (tags ->> 'Name') AS name "
         "FROM aws_cloudfront_distribution ORDER BY id",
         "id",
         "region",
     ),
     "alb": (
-        "SELECT name, region, account_id, scheme, vpc_id, state_code, dns_name, type "
+        "SELECT name, region, account_id, arn, type, scheme, state_code, vpc_id, dns_name, "
+        "ip_address_type, canonical_hosted_zone_id, availability_zones, security_groups, created_time, tags "
         "FROM aws_ec2_application_load_balancer ORDER BY name",
         "name",
         "region",
     ),
     "nlb": (
-        "SELECT name, region, account_id, scheme, vpc_id, state_code, dns_name, type "
+        "SELECT name, region, account_id, arn, type, scheme, state_code, vpc_id, dns_name, "
+        "ip_address_type, canonical_hosted_zone_id, availability_zones, security_groups, created_time, tags "
         "FROM aws_ec2_network_load_balancer ORDER BY name",
         "name",
         "region",
     ),
     "elasticache": (
-        "SELECT cache_cluster_id, region, account_id, engine, engine_version, cache_node_type, cache_cluster_status, num_cache_nodes "
+        # NON-metric detail fields only; v1's ecMetrics CloudWatch JOIN is live/heavy → F5, not stored here.
+        "SELECT cache_cluster_id, region, account_id, arn, engine, engine_version, cache_node_type, "
+        "cache_cluster_status, num_cache_nodes, replication_group_id, preferred_availability_zone, "
+        "cache_subnet_group_name, at_rest_encryption_enabled, transit_encryption_enabled, "
+        "auth_token_enabled, auto_minor_version_upgrade, snapshot_retention_limit, snapshot_window, "
+        "preferred_maintenance_window, cache_cluster_create_time, security_groups, tags "
         "FROM aws_elasticache_cluster ORDER BY cache_cluster_id",
         "cache_cluster_id",
         "region",
     ),
     "opensearch": (
-        "SELECT domain_name, region, account_id, engine_version, created, deleted "
+        "SELECT domain_name, region, account_id, arn, domain_id, engine_type, engine_version, processing, "
+        "created, deleted, endpoint, node_to_node_encryption_options_enabled, encryption_at_rest_options, "
+        "cluster_config, vpc_options, ebs_options, endpoints, cognito_options, advanced_security_options, tags "
         "FROM aws_opensearch_domain ORDER BY domain_name",
         "domain_name",
         "region",
     ),
     "msk": (
-        "SELECT cluster_name, arn, region, account_id, state, cluster_type, current_version, creation_time "
+        "SELECT cluster_name, region, account_id, arn, state, cluster_type, current_version, creation_time, "
+        "provisioned, tags "
         "FROM aws_msk_cluster ORDER BY cluster_name",
         "cluster_name",
         "region",
     ),
     "waf": (
-        "SELECT name, arn, region, account_id, scope, description, capacity, managed_by_firewall_manager "
+        "SELECT name, region, account_id, id, arn, scope, capacity, description, default_action, rules, "
+        "visibility_config, managed_by_firewall_manager, tags "
         "FROM aws_wafv2_web_acl ORDER BY name",
         "name",
         "region",
     ),
     "cloudwatch_alarm": (
-        "SELECT name, region, account_id, state_value, metric_name, namespace, comparison_operator, threshold, actions_enabled "
+        "SELECT name, region, account_id, arn, state_value, state_reason, state_updated_timestamp, "
+        "namespace, metric_name, comparison_operator, threshold, period, evaluation_periods, statistic, "
+        "actions_enabled, alarm_actions, ok_actions, insufficient_data_actions "
         "FROM aws_cloudwatch_alarm ORDER BY name",
         "name",
         "region",
     ),
     "cloudtrail": (
-        "SELECT name, region, account_id, is_multi_region_trail, is_logging, home_region, s3_bucket_name, log_file_validation_enabled "
+        "SELECT name, region, account_id, arn, home_region, is_multi_region_trail, is_logging, "
+        "log_file_validation_enabled, s3_bucket_name, s3_key_prefix, sns_topic_arn, kms_key_id, "
+        "log_group_arn, is_organization_trail, include_global_service_events, has_custom_event_selectors, "
+        "has_insight_selectors, latest_delivery_time, latest_delivery_error, start_logging_time, tags "
         "FROM aws_cloudtrail_trail ORDER BY name",
         "name",
         "region",
