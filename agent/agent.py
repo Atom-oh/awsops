@@ -395,6 +395,7 @@ def handler(payload):
 
     gateway_role = payload.get("gateway", DEFAULT_GATEWAY)
     skill_role = payload.get("skill", gateway_role)  # skill override for SKILL_BASE / SKILL_BASE용 스킬 오버라이드
+    system_prompt_override = payload.get("systemPromptOverride")  # ADR-031: resolver-supplied custom prompt
     gateway_url = GATEWAYS.get(gateway_role, GATEWAYS[DEFAULT_GATEWAY])
 
     # Extract cross-account info / 크로스 어카운트 정보 추출
@@ -416,9 +417,17 @@ def handler(payload):
             tool_names = [t.tool_name for t in tools]
             logging.info(f"Gateway [{gateway_role}] MCP tools ({len(tools)}): {tool_names}")
 
-            # Build skill prompt: static patterns + dynamic tool list + account directive
-            # 스킬 프롬프트 구성: 정적 패턴 + 동적 도구 목록 + 어카운트 지시문
-            system_prompt = build_skill_prompt(skill_role, tools) + account_directive
+            # ADR-031: resolver override (custom agent) OR built-in SKILL_BASE; + dynamic tools + account directive
+            if system_prompt_override:
+                tool_lines = []
+                for t in tools:
+                    desc = getattr(t, 'description', '') or ''
+                    short = desc.split('.')[0].strip() if desc else t.tool_name
+                    tool_lines.append(f"- **{t.tool_name}**: {short}")
+                tool_section = f"\n\n## Available Tools ({len(tools)}):\n" + "\n".join(tool_lines)
+                system_prompt = system_prompt_override + tool_section + COMMON_FOOTER + account_directive
+            else:
+                system_prompt = build_skill_prompt(skill_role, tools) + account_directive
 
             agent = Agent(
                 model=model,
@@ -433,7 +442,7 @@ def handler(payload):
     except Exception as e:
         logging.error(f"Gateway MCP error [{gateway_role}]: {e}")
         # Fallback: Bedrock direct with base prompt only / 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출
-        base_prompt = SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY]) + COMMON_FOOTER + account_directive
+        base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
         agent = Agent(
             model=model,
             system_prompt=base_prompt,
