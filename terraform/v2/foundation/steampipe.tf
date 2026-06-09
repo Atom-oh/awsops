@@ -121,7 +121,7 @@ resource "aws_iam_role_policy" "steampipe_task" {
         # D3 wave
         "cloudfront:List*", "cloudfront:Get*",
         "elasticloadbalancing:Describe*",
-        "elasticache:Describe*",
+        "elasticache:Describe*", "elasticache:ListTagsForResource",
         "es:Describe*", "es:List*",
         "kafka:Describe*", "kafka:List*",
         "wafv2:List*", "wafv2:Get*",
