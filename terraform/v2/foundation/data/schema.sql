@@ -339,3 +339,20 @@ ON CONFLICT (name) DO NOTHING;
 INSERT INTO schema_migrations (version, description)
 VALUES (2, 'ADR-031 Phase 1: agents/skills catalog + built-in seed')
 ON CONFLICT (version) DO NOTHING;
+
+-- ADR-033 Phase 2: durable per-(account,user,day) AI token budget.
+-- Source of truth for the daily token cap; the app keeps an in-process Map as a
+-- fast-path cache seeded from this table on cold start (see token-budget.ts).
+CREATE TABLE IF NOT EXISTS ai_token_budget (
+  account_id    TEXT        NOT NULL,
+  user_sub      TEXT        NOT NULL,
+  day           DATE        NOT NULL,
+  input_tokens  BIGINT      NOT NULL DEFAULT 0,
+  output_tokens BIGINT      NOT NULL DEFAULT 0,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, user_sub, day)
+);
+
+INSERT INTO schema_migrations (version, description)
+VALUES (3, 'ADR-033 Phase 2: durable AI token budget table')
+ON CONFLICT (version) DO NOTHING;
