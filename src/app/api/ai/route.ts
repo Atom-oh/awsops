@@ -27,6 +27,7 @@ import { heuristicClassify } from '@/lib/ai-cost/heuristic-classifier';
 import { pickClassifierModel } from '@/lib/ai-cost/model-tier';
 import { cachedSystem } from '@/lib/ai-cost/prompt-cache';
 import { getAnswer, setAnswer, answerCacheKey, sourceDataFingerprint } from '@/lib/ai-cost/answer-cache';
+import { checkBudget, recordSpend } from '@/lib/ai-cost/token-budget';
 const STEAMPIPE_SCHEMA_VERSION = 'v1'; // bump on Steampipe plugin/schema change to invalidate all cached answers
 // Note: getConfig is already imported at line 16 — reuse it for aiCost flags (Task 9), defaulting to off.
 
@@ -1008,6 +1009,11 @@ function recordAndSave(p: {
 }): void {
   const callRecord = { timestamp: new Date().toISOString(), route: p.route, gateway: p.gateway, responseTimeMs: p.responseTimeMs, usedTools: p.usedTools, success: p.success, via: p.via, inputTokens: p.inputTokens, outputTokens: p.outputTokens, model: p.model };
   recordCall(callRecord);
+  // ADR-033 Phase 1: record spend toward the per-user daily budget (no-op when
+  // budget is off). `recordAndSave` doesn't receive accountId, so Phase 1 buckets
+  // by 'all'+user; threading accountId is a flagged follow-up, not required to cap.
+  const _budget = (getConfig() as { aiCost?: { budget?: { dailyTokens: number } } }).aiCost?.budget;
+  if (_budget && p.userId) recordSpend('all', p.userId, (p.inputTokens || 0) + (p.outputTokens || 0));
   // ADR-030 Phase 1 dual-write — fire-and-forget Aurora INSERT for the
   // same record. Failures land in the drift counter (queryable via
   // /api/parity); they never block the request. Dynamic import keeps
@@ -1070,6 +1076,18 @@ export async function POST(request: NextRequest) {
 
   // Cognito 사용자 정보 추출 / Extract Cognito user from JWT
   const currentUser = getUserFromRequest(request);
+
+  // ADR-033 Phase 1: soft-cap gate at request entry. Default-off until Task 9's
+  // typed `aiCost.budget` config lands; read structurally (like the sibling
+  // promptCache/answerCache reads) so this compiles before the typed field exists.
+  const aiCost = (getConfig() as { aiCost?: { budget?: { dailyTokens: number; warnPct?: number; overrideEmails?: string[] } } }).aiCost;
+  if (aiCost?.budget) {
+    const limits = { dailyTokens: aiCost.budget.dailyTokens, warnPct: aiCost.budget.warnPct ?? 0.8, overrideEmails: aiCost.budget.overrideEmails ?? [] };
+    const b = checkBudget(accountId || 'all', currentUser.email, currentUser.email, limits);
+    if (!b.allowed) {
+      return NextResponse.json({ error: 'Daily AI token budget exceeded. Contact on-call for an override.', code: 'BUDGET_EXCEEDED' }, { status: 429 });
+    }
+  }
 
   // Non-streaming mode: return JSON (backward compatible for test scripts)
   // 비스트리밍 모드: JSON 반환 (테스트 스크립트 하위 호환)
