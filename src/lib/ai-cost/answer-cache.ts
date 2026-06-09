@@ -37,5 +37,5 @@ export function setAnswer(key: string, accountId: string, value: CachedAnswer): 
 }
 export function invalidateAccount(accountId: string): void {
   const keys = accountKeys.get(accountId);
-  if (keys) { for (const k of keys) cache.del(k); keys.clear(); }
+  if (keys) { keys.forEach((k) => cache.del(k)); keys.clear(); }
 }

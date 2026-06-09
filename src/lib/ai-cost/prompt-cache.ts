@@ -5,10 +5,12 @@
 // to this layer (per the 2026-06-09 consensus addendum) — do NOT call this there.
 type SystemField = string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
 
-// Bedrock requires a minimum cacheable prefix; below it, caching is a no-op cost.
-// (Plan listed 2000, but its own unit test caches a 3-char prefix and skips a
-// 2-char one, so the contract's minimum is 3 chars — honoring the test.)
-const MIN_CACHEABLE_CHARS = 3;
+// Bedrock/Anthropic prompt caching has a real minimum cacheable prefix (~1k+
+// tokens); below it a cache_control marker is silently ignored, so adding it is
+// pointless. 2000 chars is a conservative char-based proxy for that floor — the
+// invariant system prompts we cache (classifier registry, WA-15 / CIS-431, MCP
+// schemas) are all far larger, so this never suppresses a real cache hit.
+const MIN_CACHEABLE_CHARS = 2000;
 
 export function cachedSystem(system: string, enabled: boolean): SystemField {
   if (!enabled || system.length < MIN_CACHEABLE_CHARS) return system;

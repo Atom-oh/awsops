@@ -418,10 +418,8 @@ async function classifyIntent(messages: Array<{role: string; content: string}>):
     }
   }
   try {
-    // ADR-033 Phase 1: cache the invariant classification prompt prefix (flag-gated, default off).
-    // The typed `aiCost` config block lands in Task 9; until then read it structurally so
-    // the build stays green and behavior is unchanged (flag unset → cachedSystem is a no-op).
-    const promptCacheOn = (getConfig() as { aiCost?: { promptCache?: boolean } }).aiCost?.promptCache === true;
+    // ADR-033 Phase 1: cache the invariant classification prompt prefix (flag-gated, default off → cachedSystem is a no-op).
+    const promptCacheOn = getConfig().aiCost?.promptCache === true;
     const recentMessages = messages.slice(-10);
     const body = JSON.stringify({
       anthropic_version: 'bedrock-2023-05-31',
@@ -1013,7 +1011,7 @@ function recordAndSave(p: {
   // budget is off). `recordAndSave` doesn't receive accountId, so Phase 1 buckets
   // by 'all'+user. The entry gate (checkBudget) reads the SAME 'all' bucket so the
   // cap fires regardless of accountId; per-account buckets are a Phase 2 follow-up.
-  const _budget = (getConfig() as { aiCost?: { budget?: { dailyTokens: number } } }).aiCost?.budget;
+  const _budget = getConfig().aiCost?.budget;
   if (_budget && p.userId) recordSpend('all', p.userId, (p.inputTokens || 0) + (p.outputTokens || 0));
   // ADR-030 Phase 1 dual-write — fire-and-forget Aurora INSERT for the
   // same record. Failures land in the drift counter (queryable via
@@ -1086,7 +1084,7 @@ export async function POST(request: NextRequest) {
   // Keying the gate by accountId here would inspect an always-zero bucket and the
   // cap would never fire for the standard multi-account path (every page sends
   // accountId). Per-account budgets are a flagged Phase 2 follow-up.
-  const aiCost = (getConfig() as { aiCost?: { budget?: { dailyTokens: number; warnPct?: number; overrideEmails?: string[] } } }).aiCost;
+  const aiCost = getConfig().aiCost;
   if (aiCost?.budget) {
     const limits = { dailyTokens: aiCost.budget.dailyTokens, warnPct: aiCost.budget.warnPct ?? 0.8, overrideEmails: aiCost.budget.overrideEmails ?? [] };
     const b = checkBudget('all', currentUser.email, currentUser.email, limits);
@@ -1324,7 +1322,7 @@ export async function POST(request: NextRequest) {
           if (sql && queryResult && !queryResult.error) {
             send('status', { step: 'analyzing', message: STATUS.analyzing(queryResult.rowCount) });
             // Answer cache (ADR-033): on a fingerprint hit, skip the expensive Bedrock analysis call.
-            const answerCacheOn = (getConfig() as { aiCost?: { answerCache?: boolean } }).aiCost?.answerCache === true;
+            const answerCacheOn = getConfig().aiCost?.answerCache === true;
             let cacheKey: string | undefined;
             if (answerCacheOn) {
               const fp = sourceDataFingerprint(queryResult.data, STEAMPIPE_SCHEMA_VERSION);
@@ -1526,7 +1524,7 @@ async function handleSingleRoute(
 ): Promise<{ content: string; via: string; queriedResources: string[]; usedTools?: string[] } | null> {
   const SYSTEM_PROMPT = getSystemPrompt(lang);
   // ADR-033 Phase 1: prompt-cache the invariant system prefix on direct-invoke bodies (flag-gated, default off).
-  const promptCacheOn = (getConfig() as { aiCost?: { promptCache?: boolean } }).aiCost?.promptCache === true;
+  const promptCacheOn = getConfig().aiCost?.promptCache === true;
   const config = ROUTE_REGISTRY[route];
   const lastMessage = messages[messages.length - 1]?.content || '';
 
@@ -1685,7 +1683,7 @@ async function synthesizeResponses(
 ): Promise<string> {
   const SYSTEM_PROMPT = getSystemPrompt(lang);
   // ADR-033 Phase 1: prompt-cache the invariant synthesis system prefix (flag-gated, default off).
-  const promptCacheOn = (getConfig() as { aiCost?: { promptCache?: boolean } }).aiCost?.promptCache === true;
+  const promptCacheOn = getConfig().aiCost?.promptCache === true;
   const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
   const parts = responses.map(r => `--- ${r.via} ---\n${r.content}`).join('\n\n');
   const body = JSON.stringify({

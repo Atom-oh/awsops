@@ -24,7 +24,7 @@ export function heuristicClassify(text: string): HeuristicResult | null {
   const matched = new Set<string>();
   for (const r of RULES) if (r.any.test(text)) matched.add(r.route);
   if (matched.size > 1) return null;             // ambiguous → defer to LLM
-  if (matched.size === 1) return { routes: [...matched], confidence: 'high' };
+  if (matched.size === 1) return { routes: Array.from(matched), confidence: 'high' };
   if (AWS_DATA.test(text)) return { routes: ['aws-data'], confidence: 'high' };
   return null;                                    // no confident match → defer to LLM
 }
