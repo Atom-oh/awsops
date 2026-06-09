@@ -27,7 +27,8 @@ import { heuristicClassify } from '@/lib/ai-cost/heuristic-classifier';
 import { pickClassifierModel } from '@/lib/ai-cost/model-tier';
 import { cachedSystem } from '@/lib/ai-cost/prompt-cache';
 import { getAnswer, setAnswer, answerCacheKey, sourceDataFingerprint } from '@/lib/ai-cost/answer-cache';
-import { checkBudget, recordSpend } from '@/lib/ai-cost/token-budget';
+import { checkBudget, recordSpend, hydrateBudget } from '@/lib/ai-cost/token-budget';
+import { fireAndForgetSpendToAurora, readBudgetTotalFromAurora } from '@/lib/db/token-budget-writer';
 const STEAMPIPE_SCHEMA_VERSION = 'v1'; // bump on Steampipe plugin/schema change to invalidate all cached answers
 // Note: getConfig is already imported at line 16 — reuse it for aiCost flags (Task 9), defaulting to off.
 
@@ -1012,7 +1013,12 @@ function recordAndSave(p: {
   // by 'all'+user. The entry gate (checkBudget) reads the SAME 'all' bucket so the
   // cap fires regardless of accountId; per-account buckets are a Phase 2 follow-up.
   const _budget = getConfig().aiCost?.budget;
-  if (_budget && p.userId) recordSpend('all', p.userId, (p.inputTokens || 0) + (p.outputTokens || 0));
+  if (_budget && p.userId) {
+    recordSpend('all', p.userId, (p.inputTokens || 0) + (p.outputTokens || 0));
+    // ADR-033 Phase 2: dual-write the same spend to durable Aurora state
+    // (fire-and-forget; failures land in the drift counter, never block).
+    fireAndForgetSpendToAurora('all', p.userId, new Date().toISOString().slice(0, 10), p.inputTokens || 0, p.outputTokens || 0);
+  }
   // ADR-030 Phase 1 dual-write — fire-and-forget Aurora INSERT for the
   // same record. Failures land in the drift counter (queryable via
   // /api/parity); they never block the request. Dynamic import keeps
@@ -1087,6 +1093,10 @@ export async function POST(request: NextRequest) {
   const aiCost = getConfig().aiCost;
   if (aiCost?.budget) {
     const limits = { dailyTokens: aiCost.budget.dailyTokens, warnPct: aiCost.budget.warnPct ?? 0.8, overrideEmails: aiCost.budget.overrideEmails ?? [] };
+    // ADR-033 Phase 2: seed the in-process cap from durable Aurora state so a
+    // restart doesn't reset it (best-effort; degrades to in-process on failure).
+    // Hydrate uses the SAME 'all' bucket as the gate/recorder so reads line up.
+    await hydrateBudget('all', currentUser.email, readBudgetTotalFromAurora);
     const b = checkBudget('all', currentUser.email, currentUser.email, limits);
     if (!b.allowed) {
       return NextResponse.json({ error: 'Daily AI token budget exceeded. Contact on-call for an override.', code: 'BUDGET_EXCEEDED' }, { status: 429 });
