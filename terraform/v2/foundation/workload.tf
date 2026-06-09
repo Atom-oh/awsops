@@ -94,6 +94,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.main.id },
         { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
         { name = "INV_SYNC_FUNCTION", value = var.steampipe_enabled ? "${var.project}-inv-sync" : "" },
+        # P3-D: onboarded-cluster allow-list for the in-cluster (K8s) read routes.
+        # Static join of the tfvar (no cross-resource ref) — the BFF gates /api/eks/[cluster]/* on this.
+        { name = "ONBOARDED_EKS_CLUSTERS", value = join(",", var.onboard_eks_clusters) },
         ], var.workers_enabled ? [
         { name = "JOBS_QUEUE_URL", value = one(aws_sqs_queue.jobs[*].url) }
       ] : [])

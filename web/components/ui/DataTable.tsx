@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { isValidElement, useMemo, useState } from 'react';
 import Card from './Card';
 import Badge from './Badge';
 import StatePill from './StatePill';
@@ -13,6 +13,8 @@ export interface Column {
 const STATE_KEYS = new Set(['state', 'status', 'instance_state', 'cache_cluster_status', 'state_value']);
 
 function renderCell(key: string, value: unknown) {
+  // Pre-rendered cell (e.g. a drill-in <Link>) — render as-is, don't stringify.
+  if (isValidElement(value)) return value;
   if (typeof value === 'boolean') {
     return (
       <Badge tone={value ? 'positive' : 'neutral'} variant="soft">
