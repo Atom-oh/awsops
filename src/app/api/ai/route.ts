@@ -26,6 +26,8 @@ import { getDatasourceSchema } from '@/lib/datasource-schema';
 import { heuristicClassify } from '@/lib/ai-cost/heuristic-classifier';
 import { pickClassifierModel } from '@/lib/ai-cost/model-tier';
 import { cachedSystem } from '@/lib/ai-cost/prompt-cache';
+import { getAnswer, setAnswer, answerCacheKey, sourceDataFingerprint } from '@/lib/ai-cost/answer-cache';
+const STEAMPIPE_SCHEMA_VERSION = 'v1'; // bump on Steampipe plugin/schema change to invalidate all cached answers
 // Note: getConfig is already imported at line 16 — reuse it for aiCost flags (Task 9), defaulting to off.
 
 // Service configuration — config 파일에서 읽거나 자동 감지
@@ -1297,6 +1299,20 @@ export async function POST(request: NextRequest) {
 
           if (sql && queryResult && !queryResult.error) {
             send('status', { step: 'analyzing', message: STATUS.analyzing(queryResult.rowCount) });
+            // Answer cache (ADR-033): on a fingerprint hit, skip the expensive Bedrock analysis call.
+            const answerCacheOn = (getConfig() as { aiCost?: { answerCache?: boolean } }).aiCost?.answerCache === true;
+            let cacheKey: string | undefined;
+            if (answerCacheOn) {
+              const fp = sourceDataFingerprint(queryResult.data, STEAMPIPE_SCHEMA_VERSION);
+              cacheKey = answerCacheKey({ accountId: accountId || 'all', userSub: currentUser.email, route, question: lastMessage, fingerprint: fp });
+              const hit = getAnswer(cacheKey);
+              if (hit) {
+                await simulateStreaming(hit.content, send);
+                send('done', { content: hit.content, model: modelKey || 'sonnet-4.6', via: `${config.display} (cached)`, queriedResources: ['steampipe'], route, usedTools: hit.usedTools || [], inputTokens: 0, outputTokens: 0 });
+                controller.close();
+                return;
+              }
+            }
             const contextData = `\n\n--- LIVE AWS RESOURCE DATA (${queryResult.rowCount} rows) ---\nSQL: ${sql}\n\`\`\`json\n${queryResult.data}\n\`\`\``;
             const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
             bedrockMessages[bedrockMessages.length - 1].content += contextData;
@@ -1310,6 +1326,7 @@ export async function POST(request: NextRequest) {
             const sqlContent = streamResult.content || 'No response';
             const sqlTools = extractUsedTools(sqlContent);
             if (sql) sqlTools.push(`steampipe: ${sql.match(/FROM\s+(\w+)/i)?.[1] || 'query'}`);
+            if (answerCacheOn && cacheKey) setAnswer(cacheKey, accountId || 'all', { content: sqlContent, via: config.display, usedTools: sqlTools });
             const sqlTimeMs = Date.now() - callStartTime;
             recordAndSave({ route, gateway: 'steampipe', responseTimeMs: sqlTimeMs, usedTools: sqlTools, success: true, via: `${config.display} (${queryResult.rowCount} rows)`, question: lastMessage, summary: sqlContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
             send('done', {

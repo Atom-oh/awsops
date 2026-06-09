@@ -10,6 +10,7 @@ import type { AccountConfig } from '@/lib/app-config';
 import { getCacheWarmerStatus, ensureCacheWarmerStarted } from '@/lib/cache-warmer';
 import { ensureSqsPollerStarted } from '@/lib/alert-sqs-poller';
 import { getUserFromRequest } from '@/lib/auth-utils';
+import { invalidateAccount } from '@/lib/ai-cost/answer-cache';
 
 const COST_QUERY_KEYS = ['monthlyCost', 'costSummary', 'dailyCost', 'serviceCost', 'costDetail'];
 
@@ -849,6 +850,9 @@ export async function POST(request: NextRequest) {
           // ADR-030 Phase 1 dual-write — shadow into Aurora inventory_snapshots.
           // Failures land in /api/parity drift; JSON write above is unaffected.
           if (!snapshot) return;
+          // ADR-033: a successful inventory snapshot is a write event — drop cached answers
+          // for this account so they can't outlive the change.
+          invalidateAccount(safeAccountId || 'all');
           return import('@/lib/db/inventory-writer').then((m) =>
             m.fireAndForgetSaveInventorySnapshot(snapshot, safeAccountId),
           );
