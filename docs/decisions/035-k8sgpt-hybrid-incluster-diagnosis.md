@@ -1,6 +1,8 @@
 # ADR-035: K8sGPT Hybrid — In-Cluster Kubernetes Diagnosis via MCP into AgentCore / K8sGPT 하이브리드 — MCP로 AgentCore에 통합하는 인클러스터 K8s 진단
 
-## Status: Proposed (2026-06-04) / 상태: 제안 (2026-06-04)
+## Status: Accepted (2026-06-09) / 상태: 채택 (2026-06-09)
+
+> Consensus-reviewed 2026-06-09 (co-agent panel: kiro·codex·gemini, model-diverse). **Verdict: ACCEPT-WITH-CHANGES** — Option 1 (Hybrid) endorsed unanimously; the panel's refinements are folded into the binding rules below (Rule 5 strengthened; Rules 7–11 added) and the Phasing table. See *Consensus review* under Consequences. / 2026-06-09 멀티AI 합의 리뷰(만장일치 ACCEPT-WITH-CHANGES) — Option 1 채택 확정, 보강 사항을 Rule 5 강화 + Rule 7~11 추가 + Phasing에 반영.
 
 > Scoped to **P3** (consumes the P1f AgentCore fabric + P2 worker backbone + P1e EKS onboarding). Decision support: `~/Documents/K8sGPT_vs_AWSops_Research_20260604/` (deep-research, 22 sources). Depends on ADR-029 (Accepted? — Proposed) for the remediation tier; diagnosis-only scope ships without it.
 
@@ -46,16 +48,23 @@ Binding rules / 구속 규칙:
 | 2 | **Model = Claude Haiku 4.5 on Amazon Bedrock** for K8sGPT's explain step (in-region, e.g. `global.anthropic.claude-haiku-4-5-…`); the orchestrator uses Sonnet 4.6 (or higher) for cross-domain investigation. | The explain task is bounded narration → Haiku tier per ADR-033/ADR-016 cost strategy; deep reasoning stays at the orchestrator. **Do not** use OpenAI GPT-5.5/Codex here — K8sGPT's `amazonbedrock` backend targets Claude/Nova via Converse, not the OpenAI Responses API. |
 | 3 | **Integrate via MCP**: register K8sGPT (MCP v2, ≥ v0.4.27) as an MCP target consumed by AWSops' AgentCore container/orchestrator. K8sGPT output is treated as a **hypothesis to verify**, not an answer. | MCP-native on both sides; counters K8sGPT's inconsistency/false-negatives by cross-checking against AWSops infra state. |
 | 4 | **Remediation stays in the AWSops worker backbone** (ADR-029 mutating-action framework + ADR-030/P2 SQS→SFN→Lambda/Fargate, host-scoped, risk-gated, kill-switchable). **K8sGPT auto-remediation is NOT enabled.** | K8sGPT auto-remediation is opt-in Sandbox maturity; keep "propose" (K8sGPT/orchestrator) separate from "execute" (governed workers) per the AWS reference pattern and the observe→suggest→act maturity ramp. |
-| 5 | **Privacy posture**: enable `--anonymize`; for sensitive/regulated clusters require an in-region Bedrock model or a fully local model, never a public LLM. Note anonymization does **not** mask Event/Describe/ContainerStatus. | K8sGPT anonymization is partial; cluster data crosses an LLM boundary. |
+| 5 | **Privacy + backend lock (strengthened by consensus)**: K8sGPT's `ai.backend` **MUST be `amazonbedrock` in-region — no external/public LLM endpoint is permitted in any environment** (not just regulated clusters); `--anonymize` is **defense-in-depth, not the primary control**. Anonymization does **not** mask Event/Describe/ContainerStatus/ConfigMap values/env-var names/image URIs. | Partial anonymization + cluster data crossing an LLM boundary → the hard control is keeping the boundary inside AWS (Bedrock), not the masking. |
 | 6 | **AWSops adds the cross-boundary layer** K8sGPT cannot: correlate a K8sGPT finding with IRSA/IAM, security groups, dependency RDS/ELB, cost, and multi-account context; surface in the existing alert pipeline (ADR-032 lifecycle, ADR-034 write-back) and UI. | This is the durable differentiator; do not race K8sGPT on analyzer depth. |
+| 7 | **MCP tool contract = the stable abstraction (Sandbox exit strategy)**: pin the K8sGPT operator version, put a **versioned adapter layer** between K8sGPT's native output and our MCP tool schema, and gate operator upgrades behind a CI schema-compatibility test. The MCP tool's input/output contract — not K8sGPT's internals — is the durable interface; if K8sGPT is archived/diverges, swap the analyzer behind the same contract. | K8sGPT is CNCF **Sandbox** (≈30% 3-yr archival rate, breaking minor changes). Insulate AgentCore from upstream schema/version skew. |
+| 8 | **MCP response separates fact from hypothesis**: the tool returns deterministic `analyzer_result` (which analyzer fired, on which resource — high confidence) **distinctly from** `llm_explanation` (the Haiku narration — a hypothesis). On any conflict with AWSops' own deterministic cluster/AWS data, **the deterministic data wins**; the LLM explanation is supplementary context only, surfaced in the UI labelled "AI hypothesis". | Counters the ~8–15% explain-step error rate; "verify, don't trust" at the schema level. |
+| 9 | **Per-cluster operator is least-privilege + fail-safe**: deploy one operator per onboarded cluster with a **read-only ClusterRole (get/list/watch only; create/update/patch/delete explicitly denied)** and the K8sGPT **`--fix`/auto-remediation disabled at the operator config level** (defense-in-depth, not merely "not called"). The MCP tool exposes `last_scan_timestamp`; a stale (>5 min) or down operator **degrades gracefully** — the Container gateway's deterministic tools keep working without K8sGPT. | Sandbox-maturity + RBAC blast-radius + reliability: no single point of failure for cluster visibility. |
+| 10 | **Define the network/transport path**: K8sGPT MCP server ↔ AgentCore (ECS Fargate, VPC) reachability is explicit (private path — internal LB / VPC Lattice / SSE), and the in-cluster operator → Bedrock egress uses a VPC endpoint (or NAT) — never the public internet for cluster data. | Fargate-in-mgmt-VPC ↔ EKS-in-cluster-VPC + the Rule 5 backend-lock both require a defined private transport. |
+| 11 | **Cost cap + version matrix**: configurable scan interval + issue **de-duplication** (do not re-`--explain` an unchanged finding) + a **monthly Bedrock budget alarm**; document a supported K8s-version × K8sGPT-version matrix tested in CI. | Haiku × clusters × scan-freq is non-trivial at fleet scale (~$430/mo @ 10 clusters/5-min/20 issues est.); analyzers are version-sensitive. |
 
 ### Phasing / 단계
 
 | Phase | Scope | Done when |
 |-------|-------|-----------|
-| H1 | K8sGPT operator Helm-deployed to one onboarded EKS cluster (Bedrock Haiku 4.5 backend, `--anonymize`); `Result` CRDs + Prometheus metrics flowing. | `k8sgpt analyze --explain` returns real findings; metrics scraped. |
-| H2 | MCP integration: AgentCore container consumes K8sGPT MCP tool; container-section agent enriches findings with AWS-substrate context; surfaced read-only in UI. | A K8sGPT finding appears in AWSops enriched with ≥1 AWS-substrate cross-reference. |
-| H3 | Lifecycle wiring: K8sGPT-sourced incidents flow into ADR-032 correlation/RCA + ADR-034 write-back; remediation proposals routed to the ADR-029 worker tier (gated, no auto-apply). | An end-to-end "K8s finding → enriched RCA → gated remediation proposal" path demonstrated. |
+| H0 (POC gate, ~1wk) | Validate the three unknowns before committing: (a) K8sGPT operator stability on the target K8s version, (b) in-cluster → Bedrock network path (Rule 10) + `amazonbedrock` backend (Rule 5), (c) MCP tool round-trip latency budget. | Spike proves all three on one cluster, or the approach is re-scoped. |
+| H1 | K8sGPT operator Helm-deployed to one onboarded EKS cluster (Bedrock Haiku 4.5 backend, `--anonymize`, read-only RBAC + `--fix` off per Rule 9); `Result` CRDs + Prometheus metrics flowing. | `k8sgpt analyze --explain` returns real findings; metrics scraped; `last_scan_timestamp` exposed. |
+| H2 | MCP integration: AgentCore container consumes K8sGPT MCP tool (fact/hypothesis-separated per Rule 8, via the versioned adapter per Rule 7); container-section agent enriches findings with AWS-substrate context; surfaced read-only in UI. If >5 clusters are in scope, fleet/multi-cluster operator management is pulled in here. | A K8sGPT finding appears in AWSops enriched with ≥1 AWS-substrate cross-reference; multi-cluster disambiguation works. |
+| H3a | Remediation wiring: K8sGPT-sourced incidents flow into ADR-032 correlation/RCA + ADR-034 write-back; remediation **proposals** routed to the ADR-029 worker tier (gated, no auto-apply). | An end-to-end "K8s finding → enriched RCA → gated remediation proposal" path demonstrated. |
+| H3b (research spike) | Accuracy feedback loop: thumbs-up/down on hypotheses logged to Aurora; periodic accuracy audit (K8sGPT diagnosis vs incident-postmortem RCA). | A feedback signal is captured and a first accuracy-audit report is produced. |
 
 ## Consequences / 영향
 
@@ -72,8 +81,18 @@ Binding rules / 구속 규칙:
 - Privacy: cluster data crosses an LLM boundary with only partial anonymization — constrains backend choice for regulated clusters. / 부분 익명화로 클러스터 데이터가 LLM 경계를 넘음 — 규제 클러스터의 백엔드 선택 제약.
 - Net-new MCP integration + result-normalization work (H2/H3). / MCP 통합·결과 정규화 신규 작업.
 
+### Consensus review (2026-06-09) / 합의 리뷰
+Multi-AI panel (co-agent, model-diverse): **kiro** (auto), **codex** (gpt-5.5), **gemini** (default). Quorum 3/3. **Unanimous verdict: ACCEPT-WITH-CHANGES** — Option 1 (Hybrid sensor-via-MCP) endorsed by all three over build-native / K8sGPT-only / HolmesGPT. Folded-in changes (raw agreement ≥2, chair-verified against this ADR):
+- **3/3** — strengthen privacy to a hard `amazonbedrock`-in-region backend lock (→ Rule 5); `--anonymize` is defense-in-depth only.
+- **3/3** — treat the MCP tool contract as the stable abstraction + versioned adapter + pinned version (CNCF Sandbox exit strategy) (→ Rule 7).
+- **3/3** — separate deterministic `analyzer_result` from `llm_explanation` hypothesis; deterministic data wins on conflict (→ Rule 8).
+- **2/3** — formalize per-cluster read-only RBAC + `--fix` off at config + stale-scan health + graceful degradation (→ Rule 9).
+- **2/3** — define the Fargate↔EKS MCP transport + in-cluster→Bedrock egress path (→ Rule 10).
+- **2/3** — cost cap (scan interval/dedup/budget alarm) + K8s×K8sGPT version matrix (→ Rule 11).
+- Dissent/unique (kiro): confidence labelling + feedback loop + H0 POC gate + H3 split (→ Phasing). gemini: SSE/VPC-Lattice transport + Converse-API signature check.
+
 ### Post-acceptance deviations / 채택 후 편차
-- None yet (Proposed). / 아직 없음 (제안 상태).
+- None yet (just accepted 2026-06-09). / 아직 없음 (2026-06-09 채택).
 
 ## References / 참고
 - Decision support (deep-research, 2026-06-04): `~/Documents/K8sGPT_vs_AWSops_Research_20260604/K8sGPT_vs_AWSops_Research.md` (22 sources; Findings 4–6 + Recommendations).
