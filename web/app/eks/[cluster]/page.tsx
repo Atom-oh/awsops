@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { Search } from 'lucide-react';
 import DataTable, { type Column } from '@/components/ui/DataTable';
+import DetailPanel from '@/components/ui/DetailPanel';
 import PageHeader from '@/components/ui/PageHeader';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Input from '@/components/ui/Input';
@@ -66,6 +67,7 @@ export default function EksClusterPage() {
   const [err, setErr] = useState('');
   const [query, setQuery] = useState('');
   const [ns, setNs] = useState('전체');
+  const [selected, setSelected] = useState<Row | null>(null);
 
   const load = useCallback(async () => {
     setRows(null);
@@ -147,10 +149,15 @@ export default function EksClusterPage() {
                 </div>
               )}
             </div>
-            <DataTable columns={COLUMNS[tab]} rows={filteredRows} />
+            <DataTable columns={COLUMNS[tab]} rows={filteredRows} onRowClick={setSelected} />
           </>
         )}
       </div>
+      <DetailPanel
+        title={selected?.name as string | undefined}
+        data={selected}
+        onClose={() => setSelected(null)}
+      />
     </>
   );
 }

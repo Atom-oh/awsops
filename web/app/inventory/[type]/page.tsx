@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { Search } from 'lucide-react';
 import DataTable from '@/components/ui/DataTable';
+import DetailPanel from '@/components/ui/DetailPanel';
 import RefreshButton from '@/components/ui/RefreshButton';
 import PageHeader from '@/components/ui/PageHeader';
 import StatTile from '@/components/ui/StatTile';
@@ -45,6 +46,7 @@ export default function InventoryTypePage() {
   const [err, setErr] = useState('');
   const [query, setQuery] = useState('');
   const [stateFilter, setStateFilter] = useState('전체');
+  const [selected, setSelected] = useState<Row | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -156,7 +158,7 @@ export default function InventoryTypePage() {
                     stateFilter={stateFilter}
                     onState={setStateFilter}
                   />
-                  <DataTable columns={columns} rows={filteredRows} />
+                  <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
                 </div>
               </div>
             ) : (
@@ -168,12 +170,17 @@ export default function InventoryTypePage() {
                   stateFilter={stateFilter}
                   onState={setStateFilter}
                 />
-                <DataTable columns={columns} rows={filteredRows} />
+                <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
               </div>
             )}
           </>
         )}
       </div>
+      <DetailPanel
+        title={selected?.resource_id as string | undefined}
+        data={selected}
+        onClose={() => setSelected(null)}
+      />
     </>
   );
 }
