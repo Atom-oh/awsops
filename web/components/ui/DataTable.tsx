@@ -47,7 +47,15 @@ export function compareValues(a: unknown, b: unknown, dir: Dir): number {
   return dir === 'asc' ? cmp : -cmp;
 }
 
-export default function DataTable({ columns, rows }: { columns: Column[]; rows: Record<string, unknown>[] }) {
+export default function DataTable({
+  columns,
+  rows,
+  onRowClick,
+}: {
+  columns: Column[];
+  rows: Record<string, unknown>[];
+  onRowClick?: (row: Record<string, unknown>) => void;
+}) {
   const [sort, setSort] = useState<{ key: string; dir: Dir } | null>(null);
 
   const sortedRows = useMemo(() => {
@@ -91,7 +99,11 @@ export default function DataTable({ columns, rows }: { columns: Column[]; rows: 
           </thead>
           <tbody>
             {sortedRows.map((row, i) => (
-              <tr key={i} className="border-t border-ink-100 hover:bg-ink-50">
+              <tr
+                key={i}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                className={`border-t border-ink-100 hover:bg-ink-50${onRowClick ? ' cursor-pointer' : ''}`}
+              >
                 {columns.map((c) => (
                   <td key={c.key} className="py-2.5 px-3 text-ink-800 align-top">
                     {renderCell(c.key, row[c.key])}
