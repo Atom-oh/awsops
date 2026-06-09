@@ -9,12 +9,16 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-bedrock-agentcore": "^3.1061.0",
     "@aws-sdk/client-cost-explorer": "^3.1062.0",
     "@aws-sdk/client-eks": "^3.1062.0",
     "@aws-sdk/client-lambda": "^3.1063.0",
     "@aws-sdk/client-sqs": "^3.1060.0",
     "@aws-sdk/client-ssm": "^3.1061.0",
+    "@aws-sdk/credential-providers": "^3.1064.0",
+    "@smithy/protocol-http": "^5.4.6",
+    "@smithy/signature-v4": "^5.4.6",
     "clsx": "^2.1.1",
     "jose": "^5.10.0",
     "lucide-react": "^1.17.0",
