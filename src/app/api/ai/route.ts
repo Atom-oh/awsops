@@ -25,6 +25,7 @@ import { buildDatasourcePrompt } from '@/lib/datasource-prompts';
 import { getDatasourceSchema } from '@/lib/datasource-schema';
 import { heuristicClassify } from '@/lib/ai-cost/heuristic-classifier';
 import { pickClassifierModel } from '@/lib/ai-cost/model-tier';
+import { cachedSystem } from '@/lib/ai-cost/prompt-cache';
 // Note: getConfig is already imported at line 16 — reuse it for aiCost flags (Task 9), defaulting to off.
 
 // Service configuration — config 파일에서 읽거나 자동 감지
@@ -414,11 +415,15 @@ async function classifyIntent(messages: Array<{role: string; content: string}>):
     }
   }
   try {
+    // ADR-033 Phase 1: cache the invariant classification prompt prefix (flag-gated, default off).
+    // The typed `aiCost` config block lands in Task 9; until then read it structurally so
+    // the build stays green and behavior is unchanged (flag unset → cachedSystem is a no-op).
+    const promptCacheOn = (getConfig() as { aiCost?: { promptCache?: boolean } }).aiCost?.promptCache === true;
     const recentMessages = messages.slice(-10);
     const body = JSON.stringify({
       anthropic_version: 'bedrock-2023-05-31',
       max_tokens: 100,
-      system: CLASSIFICATION_PROMPT,
+      system: cachedSystem(CLASSIFICATION_PROMPT, promptCacheOn),
       messages: recentMessages.map(m => ({ role: m.role, content: m.content })),
     });
 
@@ -945,7 +950,9 @@ async function simulateStreaming(
 // Bedrock 스트리밍 헬퍼: 응답 청크를 SSE 이벤트로 전송
 // ============================================================================
 async function streamBedrockToSSE(
-  params: { modelId: string; system: string; messages: Array<{role: string; content: string}>; maxTokens?: number },
+  // ADR-033 Phase 1: `system` may be a plain string or a Bedrock/Anthropic cache-pointed
+  // block array (from cachedSystem). Either is passed straight into the JSON body.
+  params: { modelId: string; system: string | object[]; messages: Array<{role: string; content: string}>; maxTokens?: number },
   send: (event: string, data: any) => void,
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   const body = JSON.stringify({
@@ -1477,6 +1484,8 @@ async function handleSingleRoute(
   accountId?: string, accountAlias?: string
 ): Promise<{ content: string; via: string; queriedResources: string[]; usedTools?: string[] } | null> {
   const SYSTEM_PROMPT = getSystemPrompt(lang);
+  // ADR-033 Phase 1: prompt-cache the invariant system prefix on direct-invoke bodies (flag-gated, default off).
+  const promptCacheOn = (getConfig() as { aiCost?: { promptCache?: boolean } }).aiCost?.promptCache === true;
   const config = ROUTE_REGISTRY[route];
   const lastMessage = messages[messages.length - 1]?.content || '';
 
@@ -1524,7 +1533,7 @@ async function handleSingleRoute(
       const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
       bedrockMessages[bedrockMessages.length - 1].content += contextData;
       const body = JSON.stringify({
-        anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT, messages: bedrockMessages,
+        anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: cachedSystem(SYSTEM_PROMPT, promptCacheOn), messages: bedrockMessages,
       });
       const response = await bedrockClient.send(new InvokeModelCommand({
         modelId, contentType: 'application/json', accept: 'application/json',
@@ -1577,7 +1586,7 @@ async function handleSingleRoute(
     const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
     bedrockMessages[bedrockMessages.length - 1].content += '\n\n' + contextData;
     const body = JSON.stringify({
-      anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT, messages: bedrockMessages,
+      anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: cachedSystem(SYSTEM_PROMPT, promptCacheOn), messages: bedrockMessages,
     });
     const response = await bedrockClient.send(new InvokeModelCommand({
       modelId: MODELS[modelKey || 'sonnet-4.6'], contentType: 'application/json', accept: 'application/json',
@@ -1602,7 +1611,7 @@ async function handleSingleRoute(
       const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
       bedrockMessages[bedrockMessages.length - 1].content += context;
       const body = JSON.stringify({
-        anthropic_version: 'bedrock-2023-05-31', max_tokens: 8192, system: collector.analysisPrompt, messages: bedrockMessages,
+        anthropic_version: 'bedrock-2023-05-31', max_tokens: 8192, system: cachedSystem(collector.analysisPrompt, promptCacheOn), messages: bedrockMessages,
       });
       const response = await bedrockClient.send(new InvokeModelCommand({
         modelId: MODELS[modelKey || 'sonnet-4.6'], contentType: 'application/json', accept: 'application/json',
@@ -1634,12 +1643,14 @@ async function synthesizeResponses(
   question: string, responses: { route: string; content: string; via: string }[], modelKey?: string, lang?: string
 ): Promise<string> {
   const SYSTEM_PROMPT = getSystemPrompt(lang);
+  // ADR-033 Phase 1: prompt-cache the invariant synthesis system prefix (flag-gated, default off).
+  const promptCacheOn = (getConfig() as { aiCost?: { promptCache?: boolean } }).aiCost?.promptCache === true;
   const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
   const parts = responses.map(r => `--- ${r.via} ---\n${r.content}`).join('\n\n');
   const body = JSON.stringify({
     anthropic_version: 'bedrock-2023-05-31',
     max_tokens: 4096,
-    system: SYSTEM_PROMPT + `\n\nYou are synthesizing answers from multiple AWS service agents. Combine them into one coherent, well-structured response. Do not repeat information.`,
+    system: cachedSystem(SYSTEM_PROMPT + `\n\nYou are synthesizing answers from multiple AWS service agents. Combine them into one coherent, well-structured response. Do not repeat information.`, promptCacheOn),
     messages: [
       { role: 'user', content: `Question: ${question}\n\nMultiple agents responded:\n\n${parts}\n\nPlease synthesize into one comprehensive answer.` },
     ],
@@ -1661,6 +1672,8 @@ async function synthesizeResponsesStreaming(
   const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
   const parts = responses.map(r => `--- ${r.via} ---\n${r.content}`).join('\n\n');
 
+  // ADR-033 Phase 1: this path uses the Converse API; Converse-side prompt caching is a
+  // Phase-2 follow-up, so the system prefix is intentionally left uncached here.
   const response = await bedrockClient.send(new ConverseStreamCommand({
     modelId,
     system: [{ text: systemPrompt }],
