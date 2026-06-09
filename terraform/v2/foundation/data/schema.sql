@@ -251,3 +251,91 @@ CREATE TABLE IF NOT EXISTS inventory_sync_runs (
   error         TEXT,
   PRIMARY KEY (resource_type, account_id)
 );
+
+-- ============================================================================
+-- ADR-031 Phase 1: runtime-customizable agents & skills catalog
+-- (idempotent; admin-only authoring; disabled-by-default for custom rows)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS skills (
+  id             BIGSERIAL PRIMARY KEY,
+  name           TEXT NOT NULL UNIQUE,
+  description    TEXT NOT NULL,
+  instructions   TEXT NOT NULL DEFAULT '',
+  tool_allowlist JSONB NOT NULL DEFAULT '[]'::jsonb,
+  tier           TEXT NOT NULL CHECK (tier IN ('builtin','custom')),
+  content_hash   TEXT NOT NULL,
+  version        INT  NOT NULL DEFAULT 1,
+  enabled        BOOLEAN NOT NULL DEFAULT false,
+  created_by     TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agents (
+  id               BIGSERIAL PRIMARY KEY,
+  name             TEXT NOT NULL UNIQUE,
+  description      TEXT NOT NULL,
+  persona          TEXT NOT NULL DEFAULT '',
+  routing_keywords JSONB NOT NULL DEFAULT '[]'::jsonb,
+  gateway          TEXT NOT NULL,
+  model            TEXT,
+  tier             TEXT NOT NULL CHECK (tier IN ('builtin','custom')),
+  version          INT  NOT NULL DEFAULT 1,
+  enabled          BOOLEAN NOT NULL DEFAULT false,
+  created_by       TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_skills (
+  agent_id BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  skill_id BIGINT NOT NULL REFERENCES skills(id) ON DELETE RESTRICT,
+  ord      INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (agent_id, skill_id)
+);
+
+CREATE TABLE IF NOT EXISTS customization_audit (
+  id          BIGSERIAL PRIMARY KEY,
+  actor       TEXT NOT NULL,
+  action      TEXT NOT NULL,        -- upsert|enable|disable|attach|delete
+  object_type TEXT NOT NULL,        -- skill|agent|agent_skill
+  object_id   TEXT NOT NULL,
+  before_hash TEXT,
+  after_hash  TEXT,
+  at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agents_enabled ON agents (enabled) WHERE enabled = true;
+CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills (enabled) WHERE enabled = true;
+CREATE INDEX IF NOT EXISTS idx_audit_at ON customization_audit (at DESC);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_skills_touch') THEN
+    CREATE TRIGGER trg_skills_touch BEFORE UPDATE ON skills
+      FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_agents_touch') THEN
+    CREATE TRIGGER trg_agents_touch BEFORE UPDATE ON agents
+      FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+END $$;
+
+-- Seed the 8 built-in gateways as read-only catalog rows (enabled, no persona --
+-- their prompt is served by agent.py SKILL_BASE; resolver returns no override).
+INSERT INTO agents (name, description, persona, routing_keywords, gateway, tier, enabled)
+SELECT v.name, v.description, '', '[]'::jsonb, v.gateway, 'builtin', true
+FROM (VALUES
+  ('network','Built-in: VPC/TGW/VPN/ENI/Flow Logs','network'),
+  ('container','Built-in: EKS/ECS/Istio','container'),
+  ('iac','Built-in: CloudFormation/CDK/Terraform','iac'),
+  ('data','Built-in: DynamoDB/RDS/ElastiCache/MSK','data'),
+  ('security','Built-in: IAM/policy simulation','security'),
+  ('monitoring','Built-in: CloudWatch/CloudTrail','monitoring'),
+  ('cost','Built-in: Cost Explorer/Budgets/FinOps','cost'),
+  ('ops','Built-in: AWS docs/CLI/Steampipe','ops')
+) AS v(name, description, gateway)
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO schema_migrations (version, description)
+VALUES (2, 'ADR-031 Phase 1: agents/skills catalog + built-in seed')
+ON CONFLICT (version) DO NOTHING;
