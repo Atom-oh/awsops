@@ -47,4 +47,21 @@ describe('agentcore', () => {
     expect(text).toBe('ok');
     expect(acSend).toHaveBeenCalledTimes(2);
   });
+  it('includes systemPromptOverride + traceability in the payload when present', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue({ response: streamOf('"ok"') });
+    const { invokeAgent } = await import('./agentcore');
+    await invokeAgent({
+      gateway: 'security', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36),
+      systemPromptOverride: 'OVERRIDE', toolAllowlist: ['t1'], agentName: 'compliance', agentVersion: 3, skillHashes: ['h1'],
+    });
+    const cmd = acSend.mock.calls[0][0] as { input: { payload: Uint8Array } };
+    const sent = JSON.parse(new TextDecoder().decode(cmd.input.payload));
+    expect(sent.systemPromptOverride).toBe('OVERRIDE');
+    expect(sent.toolAllowlist).toEqual(['t1']);
+    expect(sent.agentName).toBe('compliance');
+    expect(sent.agentVersion).toBe(3);
+    expect(sent.skillHashes).toEqual(['h1']);
+  });
 });

@@ -28,6 +28,11 @@ export interface InvokeInput {
   gateway: string;
   messages: ChatMsg[];
   sessionId: string; // >=33 chars (a UUID works)
+  systemPromptOverride?: string; // ADR-031: resolved custom prompt
+  toolAllowlist?: string[];      // ADR-031: advisory in Phase 1
+  agentName?: string;            // ADR-031: traceability
+  agentVersion?: number;
+  skillHashes?: string[];
 }
 
 async function readResponse(resp: unknown): Promise<string> {
@@ -45,7 +50,13 @@ async function readResponse(resp: unknown): Promise<string> {
 export async function invokeAgent(input: InvokeInput): Promise<string> {
   const arn = await getRuntimeArn();
   if (!ac) ac = new BedrockAgentCoreClient({ region: REGION });
-  const payload = new TextEncoder().encode(JSON.stringify({ gateway: input.gateway, messages: input.messages }));
+  const body: Record<string, unknown> = { gateway: input.gateway, messages: input.messages };
+  if (input.systemPromptOverride) body.systemPromptOverride = input.systemPromptOverride;
+  if (input.toolAllowlist) body.toolAllowlist = input.toolAllowlist;
+  if (input.agentName) body.agentName = input.agentName;
+  if (input.agentVersion !== undefined) body.agentVersion = input.agentVersion;
+  if (input.skillHashes) body.skillHashes = input.skillHashes;
+  const payload = new TextEncoder().encode(JSON.stringify(body));
   const cmd = new InvokeAgentRuntimeCommand({
     agentRuntimeArn: arn,
     qualifier: 'DEFAULT',
