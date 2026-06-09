@@ -1011,7 +1011,8 @@ function recordAndSave(p: {
   recordCall(callRecord);
   // ADR-033 Phase 1: record spend toward the per-user daily budget (no-op when
   // budget is off). `recordAndSave` doesn't receive accountId, so Phase 1 buckets
-  // by 'all'+user; threading accountId is a flagged follow-up, not required to cap.
+  // by 'all'+user. The entry gate (checkBudget) reads the SAME 'all' bucket so the
+  // cap fires regardless of accountId; per-account buckets are a Phase 2 follow-up.
   const _budget = (getConfig() as { aiCost?: { budget?: { dailyTokens: number } } }).aiCost?.budget;
   if (_budget && p.userId) recordSpend('all', p.userId, (p.inputTokens || 0) + (p.outputTokens || 0));
   // ADR-030 Phase 1 dual-write — fire-and-forget Aurora INSERT for the
@@ -1080,10 +1081,15 @@ export async function POST(request: NextRequest) {
   // ADR-033 Phase 1: soft-cap gate at request entry. Default-off until Task 9's
   // typed `aiCost.budget` config lands; read structurally (like the sibling
   // promptCache/answerCache reads) so this compiles before the typed field exists.
+  // Bucket key MUST match the recorder: recordAndSave/recordSpend writes spend
+  // under the 'all' bucket (it has no accountId), so the gate reads 'all' too.
+  // Keying the gate by accountId here would inspect an always-zero bucket and the
+  // cap would never fire for the standard multi-account path (every page sends
+  // accountId). Per-account budgets are a flagged Phase 2 follow-up.
   const aiCost = (getConfig() as { aiCost?: { budget?: { dailyTokens: number; warnPct?: number; overrideEmails?: string[] } } }).aiCost;
   if (aiCost?.budget) {
     const limits = { dailyTokens: aiCost.budget.dailyTokens, warnPct: aiCost.budget.warnPct ?? 0.8, overrideEmails: aiCost.budget.overrideEmails ?? [] };
-    const b = checkBudget(accountId || 'all', currentUser.email, currentUser.email, limits);
+    const b = checkBudget('all', currentUser.email, currentUser.email, limits);
     if (!b.allowed) {
       return NextResponse.json({ error: 'Daily AI token budget exceeded. Contact on-call for an override.', code: 'BUDGET_EXCEEDED' }, { status: 429 });
     }
