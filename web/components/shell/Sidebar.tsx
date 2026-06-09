@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Box, Activity, DollarSign,
   Server, Database, Network, ShieldCheck,
+  Sparkles,
   LogOut,
   type LucideIcon,
 } from 'lucide-react';
@@ -19,6 +20,7 @@ const FIXED: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/eks', label: 'EKS', icon: Box },
   { href: '/jobs', label: 'Jobs', icon: Activity },
   { href: '/cost', label: 'Cost', icon: DollarSign },
+  { href: '/customization', label: 'Custom Agents', icon: Sparkles },
 ];
 
 // One lucide icon per inventory group.
