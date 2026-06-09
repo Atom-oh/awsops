@@ -21,4 +21,23 @@ export function checkBudget(accountId: string, userSub: string, userEmail: strin
   const remaining = Math.max(0, limits.dailyTokens - used);
   return { allowed: used < limits.dailyTokens, warn: used >= limits.dailyTokens * limits.warnPct, remaining };
 }
-export function _reset(): void { spent.clear(); } // test-only
+// --- ADR-033 Phase 2: cold-start hydrate from durable Aurora state ---
+// Pure: the Aurora read is injected so this module keeps zero db/ coupling.
+type BudgetReader = (accountId: string, userSub: string, day: string) => Promise<number>;
+const hydrated = new Set<string>();
+
+export async function hydrateBudget(accountId: string, userSub: string, read: BudgetReader): Promise<void> {
+  const day = new Date().toISOString().slice(0, 10);
+  const k = dayKey(accountId, userSub);
+  if (hydrated.has(k)) return;          // once per process per (account,user,day)
+  hydrated.add(k);
+  try {
+    const auroraTotal = await read(accountId, userSub, day);
+    // max() so a transient/stale read can never LOWER a live in-flight count.
+    spent.set(k, Math.max(spent.get(k) || 0, auroraTotal));
+  } catch {
+    hydrated.delete(k);               // allow a later retry; degrade to in-process behavior
+  }
+}
+
+export function _reset(): void { spent.clear(); hydrated.clear(); } // test-only

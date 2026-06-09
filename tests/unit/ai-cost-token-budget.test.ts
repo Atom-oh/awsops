@@ -1,6 +1,6 @@
 // tests/unit/ai-cost-token-budget.test.ts
-import { describe, it, expect, beforeEach } from 'vitest';
-import { checkBudget, recordSpend, _reset } from '@/lib/ai-cost/token-budget';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { checkBudget, recordSpend, hydrateBudget, _reset } from '@/lib/ai-cost/token-budget';
 
 const LIMITS = { dailyTokens: 1000, warnPct: 0.8, overrideEmails: ['oncall@x.com'] };
 
@@ -33,5 +33,27 @@ describe('token budget', () => {
     // must not bypass the budget. Here the sub is a UUID, email is a normal user.
     recordSpend('acc', USER_SUB, 5000);
     expect(checkBudget('acc', USER_SUB, USER_EMAIL, LIMITS).allowed).toBe(false);
+  });
+});
+
+describe('hydrateBudget', () => {
+  beforeEach(() => _reset());
+  it('seeds the in-process Map from the Aurora total so a restart does not reset the cap', async () => {
+    await hydrateBudget('acc', 'u', async () => 900);
+    // 900 already spent (durable) → only 100 remains; >=80% so warn
+    const r = checkBudget('acc', 'u', 'u@x.com', LIMITS);
+    expect(r.remaining).toBe(100);
+    expect(r.warn).toBe(true);
+  });
+  it('never lowers an in-flight count (max of existing Map and Aurora)', async () => {
+    recordSpend('acc', 'u', 950);            // in-flight, higher than Aurora
+    await hydrateBudget('acc', 'u', async () => 200);
+    expect(checkBudget('acc', 'u', 'u@x.com', LIMITS).remaining).toBe(50); // 1000-950, not 1000-200
+  });
+  it('is memoized per (account,user,day) — calls the reader once', async () => {
+    const reader = vi.fn(async () => 100);
+    await hydrateBudget('acc', 'u', reader);
+    await hydrateBudget('acc', 'u', reader);
+    expect(reader).toHaveBeenCalledTimes(1);
   });
 });
