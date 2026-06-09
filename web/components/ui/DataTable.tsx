@@ -1,3 +1,5 @@
+'use client';
+import { useMemo, useState } from 'react';
 import Card from './Card';
 import Badge from './Badge';
 import StatePill from './StatePill';
@@ -29,7 +31,31 @@ function renderCell(key: string, value: unknown) {
   );
 }
 
+type Dir = 'asc' | 'desc';
+
+// Natural/numeric-aware compare: "123" > "23" (numeric:true), and plain strings
+// still sort sensibly. Booleans/null coerce to string. Empty values sort last.
+export function compareValues(a: unknown, b: unknown, dir: Dir): number {
+  const ea = a == null || a === '';
+  const eb = b == null || b === '';
+  if (ea && eb) return 0;
+  if (ea) return 1; // empties always last, regardless of dir
+  if (eb) return -1;
+  const cmp = String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+  return dir === 'asc' ? cmp : -cmp;
+}
+
 export default function DataTable({ columns, rows }: { columns: Column[]; rows: Record<string, unknown>[] }) {
+  const [sort, setSort] = useState<{ key: string; dir: Dir } | null>(null);
+
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+    return [...rows].sort((ra, rb) => compareValues(ra[sort.key], rb[sort.key], sort.dir));
+  }, [rows, sort]);
+
+  const toggleSort = (key: string) =>
+    setSort((prev) => (prev?.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
+
   if (rows.length === 0) {
     return (
       <Card padded={false}>
@@ -43,18 +69,26 @@ export default function DataTable({ columns, rows }: { columns: Column[]; rows: 
         <table className="w-full text-[14px]">
           <thead className="sticky top-0 z-10 bg-white">
             <tr>
-              {columns.map((c) => (
-                <th
-                  key={c.key}
-                  className="text-left text-[11px] uppercase tracking-[0.04em] text-ink-400 font-medium py-2.5 px-3 border-b border-ink-100"
-                >
-                  {c.label}
-                </th>
-              ))}
+              {columns.map((c) => {
+                const active = sort?.key === c.key;
+                return (
+                  <th
+                    key={c.key}
+                    onClick={() => toggleSort(c.key)}
+                    aria-sort={active ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className={`text-left text-[11px] uppercase tracking-[0.04em] font-medium py-2.5 px-3 border-b border-ink-100 cursor-pointer select-none hover:text-ink-600 ${active ? 'text-claude-700' : 'text-ink-400'}`}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {c.label}
+                      <span className="text-[9px] leading-none">{active ? (sort!.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </span>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
+            {sortedRows.map((row, i) => (
               <tr key={i} className="border-t border-ink-100 hover:bg-ink-50">
                 {columns.map((c) => (
                   <td key={c.key} className="py-2.5 px-3 text-ink-800 align-top">
