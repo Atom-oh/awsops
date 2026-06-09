@@ -53,6 +53,27 @@ resource "aws_iam_role" "task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
 }
 
+# F5: read-only CloudWatch metrics + Pricing API for the EC2 page KPI cards
+# (평균 CPU via GetMetricData, 시간당 비용 via Pricing GetProducts). Read-only invariant.
+resource "aws_iam_role_policy" "task_metrics" {
+  name = "${var.project}-task-metrics-read"
+  role = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics",
+        "pricing:GetProducts",
+        "pricing:DescribeServices",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 resource "aws_cloudwatch_log_group" "web" {
   name              = "/ecs/${var.project}-web"
   retention_in_days = 30

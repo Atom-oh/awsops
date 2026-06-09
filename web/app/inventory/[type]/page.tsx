@@ -47,6 +47,8 @@ export default function InventoryTypePage() {
   const [query, setQuery] = useState('');
   const [stateFilter, setStateFilter] = useState('전체');
   const [selected, setSelected] = useState<Row | null>(null);
+  // Supplementary metric KPI cards (e.g. EC2 avg CPU + hourly cost). Degrade silently to [].
+  const [metricCards, setMetricCards] = useState<{ label: string; value: string | number; accent?: boolean }[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -58,6 +60,18 @@ export default function InventoryTypePage() {
     } catch (e) { setErr(String(e)); }
   }, [type]);
   useEffect(() => { if (spec) load(); }, [spec, load]);
+
+  // Supplementary metric cards — fetch separately so a failure never affects the table/donut.
+  useEffect(() => {
+    setMetricCards([]);
+    if (!spec) return;
+    let alive = true;
+    fetch(`/api/inventory/${type}/metrics`)
+      .then((r) => (r.ok ? r.json() : { cards: [] }))
+      .then((d) => { if (alive) setMetricCards(d.cards || []); })
+      .catch(() => { if (alive) setMetricCards([]); });
+    return () => { alive = false; };
+  }, [spec, type]);
 
   const refresh = async () => {
     setBusy(true); setErr('');
@@ -138,6 +152,9 @@ export default function InventoryTypePage() {
               <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" />
               {stateCounts.slice(0, 4).map((s) => (
                 <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} />
+              ))}
+              {metricCards.map((c) => (
+                <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />
               ))}
             </div>
 
