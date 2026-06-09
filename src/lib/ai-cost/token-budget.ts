@@ -12,8 +12,11 @@ export function recordSpend(accountId: string, userSub: string, tokens: number):
   const k = dayKey(accountId, userSub);
   spent.set(k, (spent.get(k) || 0) + Math.max(0, tokens));
 }
-export function checkBudget(accountId: string, userSub: string, limits: BudgetLimits): BudgetCheck {
-  if (limits.overrideEmails.includes(userSub)) return { allowed: true, warn: false, remaining: limits.dailyTokens };
+// `userSub` is the Cognito `sub` (UUID) used to partition the daily spend Map key.
+// `userEmail` is the Cognito email, compared against the on-call override list
+// (the rest of the codebase compares email lists against user.email, never user.sub).
+export function checkBudget(accountId: string, userSub: string, userEmail: string, limits: BudgetLimits): BudgetCheck {
+  if (limits.overrideEmails.includes(userEmail)) return { allowed: true, warn: false, remaining: limits.dailyTokens };
   const used = spent.get(dayKey(accountId, userSub)) || 0;
   const remaining = Math.max(0, limits.dailyTokens - used);
   return { allowed: used < limits.dailyTokens, warn: used >= limits.dailyTokens * limits.warnPct, remaining };
