@@ -12,9 +12,21 @@ import pg8000.native
 # resource_type -> (steampipe SQL, resource_id column, region column). Waves add rows here.
 QUERIES = {
     "ec2": (
-        "SELECT instance_id, instance_type, instance_state, region, account_id, "
-        "private_ip_address, public_ip_address, vpc_id, launch_time "
-        "FROM aws_ec2_instance ORDER BY launch_time DESC",
+        # v1-parity (src/lib/queries/ec2.ts `detail` + `list`): full instance detail + instance-type
+        # specs JOIN, stored in `data` so the detail panel matches v1. No feature reduced vs v1.
+        "SELECT i.instance_id, (i.tags ->> 'Name') AS name, i.instance_type, i.instance_state, "
+        "i.region, i.account_id, i.image_id, i.key_name, i.architecture, i.platform_details, "
+        "i.virtualization_type, i.hypervisor, i.ebs_optimized, i.ena_support, i.monitoring_state, "
+        "i.placement_availability_zone, i.placement_tenancy, i.private_ip_address, i.private_dns_name, "
+        "i.public_ip_address, i.public_dns_name, i.vpc_id, i.subnet_id, i.cpu_options_core_count, "
+        "i.cpu_options_threads_per_core, i.root_device_type, i.root_device_name, "
+        "i.iam_instance_profile_arn, i.launch_time, i.state_transition_time, "
+        "i.security_groups, i.block_device_mappings, i.network_interfaces, i.tags, "
+        "(t.memory_info ->> 'SizeInMiB') AS memory_mib, (t.v_cpu_info ->> 'DefaultVCpus') AS vcpus, "
+        "(t.network_info ->> 'NetworkPerformance') AS network_performance, "
+        "(t.network_info ->> 'MaximumNetworkInterfaces') AS max_enis, t.instance_storage_supported "
+        "FROM aws_ec2_instance i LEFT JOIN aws_ec2_instance_type t ON i.instance_type = t.instance_type "
+        "ORDER BY i.launch_time DESC",
         "instance_id",
         "region",
     ),

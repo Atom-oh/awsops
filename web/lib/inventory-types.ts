@@ -6,8 +6,9 @@ export interface InvType { label: string; group: string; columns: InvColumn[]; s
 // resource_id + region are prepended by the page; columns here are the type-specific extras.
 export const INVENTORY_TYPES: Record<string, InvType> = {
   ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', columns: [
-    { key: 'instance_type', label: 'Type' }, { key: 'instance_state', label: 'State' },
-    { key: 'private_ip_address', label: 'Private IP' }, { key: 'vpc_id', label: 'VPC' } ] },
+    { key: 'name', label: 'Name' }, { key: 'instance_type', label: 'Type' }, { key: 'instance_state', label: 'State' },
+    { key: 'private_ip_address', label: 'Private IP' }, { key: 'public_ip_address', label: 'Public IP' },
+    { key: 'subnet_id', label: 'Subnet' }, { key: 'vpc_id', label: 'VPC' }, { key: 'launch_time', label: 'Launch' } ] },
   lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', columns: [
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
     { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' } ] },
