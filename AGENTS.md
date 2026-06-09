@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 276fe45f0914 · generated-at: 2026-06-03 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 66ea0eb0ca35 · generated-at: 2026-06-09 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are Codex, an external reviewer — project context below.
 
 # AWSops v2 — Reviewer Context
