@@ -3,6 +3,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 export interface User {
   sub: string;
   email?: string;
+  groups?: string[];
 }
 
 function parseCookie(header: string | null, name: string): string | null {
@@ -39,7 +40,13 @@ export async function verifyUser(cookieHeader: string | null): Promise<User | nu
       algorithms: ['RS256'], // Cognito id tokens are always RS256; pin to block alg-confusion
     });
     if (payload.token_use !== 'id' || !payload.sub) return null;
-    return { sub: String(payload.sub), email: payload.email ? String(payload.email) : undefined };
+    const rawGroups = (payload as Record<string, unknown>)['cognito:groups'];
+    const groups = Array.isArray(rawGroups) ? rawGroups.map(String) : [];
+    return {
+      sub: String(payload.sub),
+      email: payload.email ? String(payload.email) : undefined,
+      groups,
+    };
   } catch {
     return null;
   }

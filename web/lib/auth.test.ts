@@ -25,7 +25,7 @@ describe('verifyUser', () => {
   it('returns {sub,email} for a valid id token', async () => {
     jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', email: 'a@b.com', token_use: 'id' } });
     const { verifyUser } = await import('./auth');
-    expect(await verifyUser('awsops_token=eyJ...; x=1')).toEqual({ sub: 'u-1', email: 'a@b.com' });
+    expect(await verifyUser('awsops_token=eyJ...; x=1')).toEqual({ sub: 'u-1', email: 'a@b.com', groups: [] });
   });
   it('returns null when token_use is not id', async () => {
     jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'access' } });
