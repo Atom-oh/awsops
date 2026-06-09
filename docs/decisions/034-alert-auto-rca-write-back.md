@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Proposed (2026-06-01) / 제안 (2026-06-01)
+Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES, codex/gemini/kiro). 피드백루프 차단 메커니즘 + observability-write 통제 부분집합 정의 + best-effort 비차단 + OpsCenter/Incident Manager 라우팅 규칙 보완 (§Post-acceptance 2026-06-09 참조).
 
 This ADR records the *output-channel* decision for autonomous diagnosis: **where** an AI root-cause analysis lands. It makes the alert pipeline's output **bidirectional** — writing the RCA back onto the originating alert/incident record — mirroring how AWS DevOps Agent posts findings back to the finding/console rather than only emitting a one-way message.
 
@@ -95,6 +95,15 @@ Default posture is **recommendation-only**: write-backs are labelled as AWSops r
 ### Post-acceptance deviations / 채택 후 편차
 - None yet (Proposed). / 아직 없음 (제안 상태).
 - **2026-06-03 (co-agent 3-AI review)**: clarified two cross-ADR points before any implementation — (1) customer-account incident write-back is **gated behind ADR-029 lifting its v1 host-only restriction**; v1 is host-account-only (Gemini/Codex flagged the boundary breach). (2) ADR-009 is **not yet superseded** — ADR-032 is still Proposed, so the "supersedes/superseded" language was softened to "will supersede once Accepted." / **2026-06-03 (co-agent 3-AI 리뷰)**: 구현 전 두 가지 교차-ADR 사항 명확화 — (1) 고객 계정 인시던트 라이트백은 **ADR-029의 v1 host-only 제약 해제 이후로 게이트**, v1은 host 계정 전용. (2) ADR-009는 **아직 승계되지 않음** — ADR-032가 Proposed이므로 "승계" 표현을 "Accepted 시 승계 예정"으로 완화.
+
+- **2026-06-09 (co-agent consensus review, ACCEPT-WITH-CHANGES)**:
+  - **Feedback-loop = concrete mechanism** (gemini + kiro MAJOR, was "intent"): every write-back carries a marker — OpsItem `OperationalData`/tag `CreatedBy=AWSops-AIOps` (and an equivalent `source` attribute on Incident Manager / Grafana annotations); the `alert-webhook` ingress **drops any event bearing the marker**; circuit-breaker = marker-filter **plus** a max-concurrent-RCA cap. This is a testable mechanism, not "exclude from ingestion." / 모든 라이트백에 마커 부여 → 인그레스가 마커 포함 이벤트 drop + 최대 동시 RCA 캡. 의도가 아닌 테스트 가능 메커니즘.
+  - **"observability-write" control subset defined** (kiro MAJOR): of ADR-029's six controls this tier applies #1 per-action IAM (scoped to `ssm:CreateOpsItem`/`ssm-incidents:*`), #3 admin gate (single-operator OK — **no 4-eyes** for a metadata note), #5 audit, #6 idempotency (dedup key); #2 dry-run = **render the OpsItem/incident body for review** (no mutation sim); #4 rollback = **resolve/annotate the OpsItem** (no infra revert). Implementers neither skip controls nor apply them absurdly. / 6대 통제 중 #1/#3(4-eyes 면제)/#5/#6 적용, #2 dry-run=본문 렌더, #4 롤백=OpsItem 해제/주석.
+  - **Best-effort, non-blocking** (gemini MINOR): write-back is a separate branch; an IAM/throttle failure MUST NOT block the primary Slack/SNS notification (ADR-012). / 라이트백 실패가 1차 Slack/SNS 알림을 막지 않음(별도 분기).
+  - **OpsCenter vs Incident Manager routing rule** (kiro MINOR, resolves the "or"): if an Incident Manager response plan matches the alarm → enrich that incident (`ssm-incidents`); otherwise create an OpsItem (`ssm:CreateOpsItem`). / IM 응답계획 매칭 시 인시던트 보강, 아니면 OpsItem 생성.
+  - **v1 dedup-restart limitation** (kiro MINOR): a process restart loses in-process dedup; mid-storm this re-triggers RCA per alert. Bounded in v1 by the max-concurrent-RCA cap (+ optional file-backed dedup log); durable identity moves to v2 Aurora. / 재시작 시 dedup 소실 → v1은 동시 RCA 캡으로 한정, v2 Aurora로 내구화.
+  - **Prompt-injection into RCA *content*** (kiro MINOR): beyond not influencing permissions, a crafted payload could manipulate the RCA *text* written to an incident. Mitigation: structured prompt isolation (alert text in a fenced, clearly-labelled data block) + an output sanity-check before write-back. / 권한뿐 아니라 RCA 본문 조작 가능 → 알림 텍스트 펜스 격리 + 출력 검증.
+  - ADR-009/032 supersession wording: already softened in the 2026-06-03 entry (builds on the ADR-032 diagnosis model; 009 superseded once 032 Accepted). / 승계 표현은 2026-06-03 항목에서 이미 완화됨.
 
 ## References / 참고 자료
 - ADR-032 (autonomous incident lifecycle), ADR-009 (alert-triggered diagnosis, superseded), ADR-012 (SNS/Slack notification), ADR-029 (mutating-action framework), ADR-022 (webhook HMAC), ADR-030 (ECS/Aurora split), ADR-033 (AIOps LLM cost optimization)

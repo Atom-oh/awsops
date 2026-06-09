@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Proposed (2026-06-05) / 제안 (2026-06-05)
+Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES, codex/gemini/kiro). `.sync` 사실오류 정정 + 완료추적·승인주체·per-action IAM·통제 매핑 보완 (§Consensus Review Addenda 참조).
 
 This ADR records *how* AWSops actually executes a mutating action. It **refines and partially supersedes the mechanism of ADR-029** (which chose a bespoke per-action Lambda + dedicated Step Functions stack) while **preserving ADR-029's six controls as a substrate-agnostic controls spec**. ADR-029 becomes a *controls* spec, not an *implementation* spec.
 
@@ -58,7 +58,7 @@ Adopt **Option D (Hybrid)**, with these load-bearing rules:
 **Option D(하이브리드)**를 채택하며, 다음을 핵심 규칙으로 한다:
 
 1. **P2 worker backbone is the single mutation control-plane and ledger.** No mutating path may start SSM (or any executor) directly outside `POST /api/jobs` → `worker_jobs`. P2 owns idempotency (execution-name == `job_id`), status, retry/reaper, and UI/SSE correlation. / **P2 워커 백본이 단일 변경 컨트롤 플레인·원장.** 어떤 변경 경로도 `POST /api/jobs` → `worker_jobs` 밖에서 SSM(또는 실행기)을 직접 시작하지 않는다. P2가 멱등(실행명 == `job_id`)·상태·재시도/reaper·UI/SSE 상관을 소유.
-2. **The Action Catalog is the single facade** (ADR-029 control #1, retained). Each entry binds `executor_type ∈ {ssm, lambda, fargate}`, target IAM role / `AutomationAssumeRole`, approval template, dry-run contract, paired rollback artifact, and account/region/resource conditions. The SFN `$.runtime` Choice is extended with an SSM branch (`ssm:startAutomationExecution.sync` via `aws-sdk` task) alongside the existing `lambda`/`fargate` branches. / **Action Catalog가 단일 facade**(ADR-029 통제 #1 보존). 각 항목은 `executor_type ∈ {ssm, lambda, fargate}`, 대상 IAM 역할/`AutomationAssumeRole`, 승인 템플릿, dry-run 계약, 페어 롤백 산출물, 계정/리전/리소스 조건을 바인딩. SFN `$.runtime` Choice에 기존 `lambda`/`fargate` 분기와 함께 SSM 분기(`ssm:startAutomationExecution.sync`)를 확장.
+2. **The Action Catalog is the single facade** (ADR-029 control #1, retained). Each entry binds `executor_type ∈ {ssm, lambda, fargate}`, target IAM role / `AutomationAssumeRole`, approval template, dry-run contract, paired rollback artifact, and account/region/resource conditions. The SFN `$.runtime` Choice is extended with an SSM branch — `aws-sdk:ssm:startAutomationExecution` (**request-response; NOT a `.sync` integration** — SSM Automation is not in Step Functions' supported `.sync`/Run-a-Job set), with completion tracked via `.waitForTaskToken` resumed by an EventBridge rule on SSM Automation `status-change` (poll `getAutomationExecution` as fallback) — alongside the existing `lambda`/`fargate` branches. / **Action Catalog가 단일 facade**(ADR-029 통제 #1 보존). 각 항목은 `executor_type ∈ {ssm, lambda, fargate}`, 대상 IAM 역할/`AutomationAssumeRole`, 승인 템플릿, dry-run 계약, 페어 롤백 산출물, 계정/리전/리소스 조건을 바인딩. SFN `$.runtime` Choice에 기존 `lambda`/`fargate` 분기와 함께 SSM 분기(`aws-sdk:ssm:startAutomationExecution` — **요청-응답이며 `.sync` 아님**; SSM Automation은 SFN `.sync` 미지원 → 완료는 EventBridge `status-change`로 `.waitForTaskToken` 재개, 폴백은 `getAutomationExecution` 폴링)를 확장.
 3. **AWS-resource actions → SSM Automation runbooks + Change Manager** (managed 4-eyes approval, change calendars, CloudTrail + execution-history audit, `AutomationAssumeRole` + `TargetLocations` cross-account per ADR-008). **K8s/KEDA/app-state/composite actions → P2 Lambda/Fargate** code executors. / **AWS 리소스 작업 → SSM Automation 런북 + Change Manager**; **K8s/KEDA/앱상태/복합 → P2 Lambda/Fargate** 코드 실행기.
 4. **ADR-029's six controls are mandatory for both executor types** (substrate-agnostic). SSM satisfies approval/audit/rollback/cross-account natively (configure `AutoApprove=false`, Approvers ≠ requester to enforce 4-eyes); P2 code satisfies them programmatically (Task-Token approval, Choice dry-run, Catch rollback). Dry-run and the idempotency token are AWSops-enforced in both. / **ADR-029 6대 통제는 두 실행기 모두 필수**(substrate 무관). SSM은 승인/감사/롤백/교차계정을 네이티브 충족(`AutoApprove=false`, Approvers ≠ 요청자로 4-eyes 강제); P2 코드는 프로그램적 충족(Task-Token 승인, Choice dry-run, Catch 롤백). dry-run과 멱등 토큰은 양쪽 모두 AWSops가 강제.
 
@@ -85,13 +85,36 @@ ADR-036 자체가 **변경 역량 결정**이며 게이트 유지: 카탈로그 
 - ADR-029 simplifies to a controls spec, decoupling governance from implementation. / ADR-029가 통제 사양으로 단순화 — 거버넌스를 구현에서 분리.
 
 ### Negative / 부정적
-- Two execution planes to operate and correlate (SSM executions + P2 Lambda/Fargate). Mitigation: P2 is the single ledger; every SSM execution is launched by and recorded against a `worker_jobs` row. / 운영·상관할 실행 평면 2개. 완화: P2가 단일 원장; 모든 SSM 실행은 `worker_jobs` 행에서 시작·기록.
+- Two execution planes to operate and correlate (SSM executions + P2 Lambda/Fargate). Mitigation: P2 is the single ledger; the SFN writes the `AutomationExecutionId` to the `worker_jobs` row **immediately on start**, an EventBridge rule on SSM Automation `status-change` (poll fallback) updates terminal status, and the reaper reconciles stuck rows — so a SFN timeout cannot orphan a running automation. / 운영·상관할 실행 평면 2개. 완화: P2가 단일 원장; SFN이 시작 **즉시** `AutomationExecutionId`를 `worker_jobs` 행에 기록, SSM Automation `status-change` EventBridge 규칙(폴백 폴링)이 종료 상태 갱신, reaper가 stuck 행 정합화 — SFN 타임아웃이 실행 중 automation을 고아로 만들지 않음.
 - Routing correctness risk (catalog binds the wrong `executor_type`). Mitigation: catalog entry is code-reviewed; dry-run runs on the resolved executor before execute. / 라우팅 정확성 위험. 완화: 카탈로그 항목 코드 리뷰; 해석된 실행기에서 execute 전 dry-run.
 - AWS lock-in for the SSM portion (gemini's dissent). Accepted: AWSops is explicitly AWS-only / customer-VPC; portability is not a product goal. Business logic for non-AWS actions stays in portable P2 code. / SSM 부분의 AWS 락인(gemini 이견). 수용: AWSops는 명시적 AWS-only/customer-VPC; 이식성은 제품 목표 아님. 비-AWS 작업 로직은 이식 가능 P2 코드 유지.
 - SSM runbook versioning is not Git-native and dry-run is partial for some APIs. Mitigation: a thin Git→SSM Document sync in deploy; the catalog's dry-run contract enforces a check mode where native `--dry-run` is absent. / SSM 런북 버저닝 비-Git-native, 일부 API dry-run 부분 지원. 완화: 배포에 Git→SSM Document 동기화; 네이티브 `--dry-run` 부재 시 카탈로그 dry-run 계약이 check 모드 강제.
 
 ### Post-acceptance deviations / 채택 후 편차
 - None yet (Proposed). / 아직 없음 (제안 상태).
+
+## Consensus Review Addenda (2026-06-09) / 합의 리뷰 보완
+
+Multi-AI consensus review (codex/gemini/kiro, Claude chair) returned ACCEPT-WITH-CHANGES. Resolved:
+
+멀티AI 합의 리뷰(codex/gemini/kiro, Claude 의장) 결과 ACCEPT-WITH-CHANGES. 반영:
+
+1. **`.sync` factual error (kiro MAJOR, verified)** — SSM Automation is not a Step Functions `.sync` integration. Corrected to request-response + `.waitForTaskToken`/EventBridge `status-change` completion tracking (Decision rule 2 + Negative consequences above). / SSM Automation은 SFN `.sync` 미지원 → 요청-응답 + `.waitForTaskToken`/EventBridge 완료추적으로 정정.
+2. **Approval-identity model (kiro MAJOR)** — AWSops is the automated *requester*; **approvers must be human IAM principals in the customer account** holding the Change Manager approver role + `ssm:SendAutomationSignal`. The 4-eyes invariant is enforced by the Change Manager template (`AutoApprove=false`, approver set **excludes** the AWSops principal). For the P2-code path, Task-Token approval is delivered to the same admin set (ADR-023) via the dashboard/Slack, with an expiry that fails closed. / AWSops는 자동 요청자; **승인자는 고객 계정의 사람 IAM 주체**(Change Manager 승인자 역할 + `ssm:SendAutomationSignal`). 4-eyes는 템플릿(`AutoApprove=false`, 승인자에서 AWSops 주체 제외)으로 강제. P2 코드 경로는 Task-Token 승인을 동일 admin(ADR-023)에 전달, 만료 시 fail-closed.
+3. **Per-action IAM for BOTH executors (kiro MINOR)** — SSM uses one `AutomationAssumeRole` per runbook; **P2 code executors get a per-action task role (NOT a shared worker role)** to prevent one action's executor calling another's APIs. The dispatcher only invokes/runs approved, catalog-pinned executors. / SSM은 런북당 `AutomationAssumeRole`; **P2 코드 실행기는 작업당 task role(공유 워커 역할 금지)** — 권한 상승 방지.
+4. **Control → substrate mapping (kiro MINOR — substantiate "~60–70%")**:
+
+   | ADR-029 control | SSM executor | P2-code executor |
+   |---|---|---|
+   | 1. Per-action IAM | `AutomationAssumeRole`/runbook (native) | per-action task role (built) |
+   | 2. Mandatory dry-run | partial native (`--dry-run`/Describe) + catalog check-mode | SFN Choice dry-run (built) |
+   | 3. 4-eyes approval | Change Manager template (native) | Task-Token + admin set (built) |
+   | 4. Paired rollback | runbook `onFailure`/`onCancel` (native, authored) | SFN Catch → rollback plan (built) |
+   | 5. Three audit sinks | CloudTrail + SSM execution history (native, exceeds) | CloudTrail + `worker_jobs` + log sink (built) |
+   | 6. Idempotency token | enforced by P2 `job_id` (single front-door) | enforced by P2 `job_id` |
+
+   → SSM natively covers controls 3 + 5 and most of 1/4 for AWS-resource actions (the deleted ~60–70%); the catalog, dry-run contract, idempotency, the web→SSM bridge, and the entire P2-code path remain AWSops-built (~30–40%).
+5. **ADR-034 low-risk observability writes (kiro MINOR)** — an OpsItem creation is a single API call; it routes through the **P2 `lambda` executor with ADR-034's reduced "observability-write" control subset**, NOT a full SSM remediation runbook (over-engineered) and NOT bypassing governance. Change-Manager approval applies only to the infrastructure-mutation tier. / OpsItem 생성은 단일 API 호출 → **P2 `lambda` 실행기 + ADR-034의 축소 "observability-write" 통제 부분집합**으로 라우팅(전체 SSM 런북은 과설계). Change Manager 승인은 인프라 변경 tier에만.
 
 ## References / 참고 자료
 - ADR-029 (mutating-action framework — mechanism refined here, controls retained), ADR-030 (ECS/Aurora + P2 backbone), ADR-008 (multi-account assume-role), ADR-010 (event pre-scaling Phase 3), ADR-032 (autonomous incident lifecycle mitigation), ADR-034 (alert auto-RCA write-back), ADR-015 (FinOps MCP Lambda), ADR-023 (admin gate)

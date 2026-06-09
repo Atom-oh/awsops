@@ -45,10 +45,10 @@ Records of major design decisions. Update this index when status/outcome changes
 | 030 | ECS Fargate 워크로드 + Aurora 앱 상태 + 이중 ECR | Accepted (2026-05-27) |
 | 031 | 런타임 커스터마이즈 에이전트·스킬 (관리자 구성 Agent Space + BYO-MCP) | Proposed (2026-05-31) |
 | 032 | 이벤트 트리거 자율 인시던트 라이프사이클 (멀티 에이전트 Lead/Sub) | Proposed (2026-05-31) |
-| 033 | AIOps LLM 비용 최적화 (Haiku 분류·프롬프트 캐싱·응답 캐시·토큰 예산) | Proposed (2026-06-01) |
-| 034 | 알림 자동 RCA 라이트백 (OpsCenter/Incident Manager 양방향 보강) | Proposed (2026-06-01) |
+| 033 | AIOps LLM 비용 최적화 (Haiku 분류·프롬프트 캐싱·응답 캐시·토큰 예산) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 프롬프트 캐싱 범위 정정(게이트웨이 호출 불투명)·sourceDataFingerprint·예산 영속 보완 |
+| 034 | 알림 자동 RCA 라이트백 (OpsCenter/Incident Manager 양방향 보강) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 피드백루프 차단 메커니즘·observability-write 통제 부분집합·best-effort 보완 |
 | 035 | K8sGPT 하이브리드 (MCP로 AgentCore에 통합하는 인클러스터 K8s 진단, Haiku 4.5) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); Rule 5 강화 + 7~11 추가 |
-| 036 | 변경·조치 실행 substrate (SSM Automation + Change Manager × P2 워커 백본 하이브리드) | Proposed (2026-06-05) |
+| 036 | 변경·조치 실행 substrate (SSM Automation + Change Manager × P2 워커 백본 하이브리드) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); `.sync` 사실오류 정정·완료추적·승인주체·per-action IAM·통제 매핑 보완 |
 
 ## 새 ADR 추가 / Adding a New ADR
 1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1

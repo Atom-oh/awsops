@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Proposed (2026-06-01) / 제안 (2026-06-01)
+Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES, codex/gemini/kiro). 프롬프트 캐싱 적용 범위 정정(게이트웨이 호출은 불투명) + sourceDataFingerprint 정의 + 예산 상태 영속성 + 033↔034 게이트 표현 명확화 (§Post-acceptance 2026-06-09 참조).
 
 This ADR records the *economic* control layer for AWSops' own Bedrock usage. It **extends ADR-016** (model selection strategy), which assigned models per flow and already *anticipated* prompt caching ("prompt-caching friendly", "caching gives a disproportionate win") but never implemented it. ADR-033 turns that anticipation into a concrete, phased cost-optimization decision.
 
@@ -86,7 +86,12 @@ Mutating nothing in customer infrastructure, ADR-033 is **not** gated by ADR-029
 - Token budgets can block a legitimate deep investigation mid-incident. Mitigation: explicit on-call override with audit trail. / 토큰 예산이 인시던트 중 정당한 심층 조사를 막을 수 있다. 완화: 감사 추적이 있는 명시적 온콜 override.
 
 ### Post-acceptance deviations / 채택 후 편차
-- None yet (Proposed). / 아직 없음 (제안 상태).
+- **2026-06-09 (co-agent consensus review, ACCEPT-WITH-CHANGES)**:
+  - **Prompt-caching reach corrected** (kiro MAJOR): Bedrock prompt caching applies ONLY to AWSops-controlled **direct `callBedrock`** paths (classifier, multi-route synthesis, 15-section report). The 1–3 AgentCore **gateway** calls — typically the largest token consumers — construct their prompts inside the Strands runtime (MCP over SigV4) and are **opaque** to caching applied at the AWSops layer. Phase-1 savings are bounded to the direct-invoke paths (the static classifier-registry / WA-15 / CIS-431 / MCP-schema prefixes are valid *there*); gateway tool-call tokens are out of scope unless AgentCore exposes caching directives. / 프롬프트 캐싱은 AWSops 직접 `callBedrock` 경로(분류·합성·리포트)에만 적용 — 1~3개 게이트웨이 호출은 Strands 런타임 내부에서 프롬프트 구성(MCP/SigV4)되어 **불투명**. Phase-1 절감은 직접 호출 경로에 한정.
+  - **`sourceDataFingerprint` defined** (gemini + kiro MINOR): a hash of (the Steampipe result-set rows that fed the answer) combined with the Steampipe plugin/schema version; the cache entry invalidates when either changes (and on write events) — coarse enough to hit, fine enough not to serve cross-version-stale state. / Steampipe 결과 행 + 플러그인/스키마 버전 해시; 둘 중 하나라도 변하면 무효화.
+  - **Budget-state persistence** (kiro MINOR): `agentcore-stats` counters are in-process and reset on restart, so a v1 daily/monthly cap could silently lift mid-period. Accepted v1 limitation (mitigate by persisting the running counter to disk + logged warning); durable budget state moves to v2 Aurora. / 예산 카운터는 인프로세스 → 재시작 시 리셋; v1 한계로 수용(디스크 영속+경고), v2 Aurora로 내구화.
+  - **033↔034 gate phrasing** (kiro MINOR): ADR-033's caching + severity-gating are *inputs* to ADR-034's ADR-029-gated write-back path — they do **not** grant ADR-034 a gate exemption. ADR-033 itself mutates nothing and is ungated; ADR-034's write-back stays gated. / ADR-033의 캐싱·게이트는 ADR-034 게이트 경로의 *입력*일 뿐 게이트 면제가 아님.
+  - **Tiering quality SLO** (kiro MINOR) + **exact-match normalization** (gemini MINOR): define a golden-question set + a classification-accuracy SLO; below it, fall back to always-Sonnet classification. Specify exact-match normalization (lower-case, trim, stop-word/lemmatize) so Phase-1 hit rate isn't near-zero before the Phase-2 semantic cache lands. / golden 셋 + 분류 정확도 SLO(미달 시 always-Sonnet 폴백); 정확매칭 정규화 명시.
 
 ## References / 참고 자료
 - ADR-016 (Bedrock model selection), ADR-025 (multi-route synthesis), ADR-017 (cache warmer), ADR-030 (ECS/Aurora split), ADR-018 (memory isolation), ADR-008 (multi-account)
