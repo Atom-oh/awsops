@@ -74,6 +74,30 @@ resource "aws_iam_role_policy" "task_metrics" {
   })
 }
 
+# ADR-031 Phase 1: admin gate (always-on — unlike AgentCore, the admin gate is not feature-flagged).
+# Comma-separated admin-email allowlist; managed out-of-band (ignore drift). Empty/blank = cognito:groups-only.
+resource "aws_ssm_parameter" "admin_emails" {
+  name        = "/ops/${var.project}/admin_emails"
+  description = "ADR-031: comma-separated admin email allowlist for custom-agent authoring. Blank = cognito:groups-only."
+  type        = "StringList"
+  value       = " "
+  lifecycle { ignore_changes = [value] }
+}
+
+# Web task role reads the admin-email allowlist (web/lib/admin.ts SSMClient.GetParameter). Read-only, single param.
+resource "aws_iam_role_policy" "task_admin_ssm" {
+  name = "${var.project}-task-admin-ssm"
+  role = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ssm:GetParameter"]
+      Resource = [aws_ssm_parameter.admin_emails.arn]
+    }]
+  })
+}
+
 resource "aws_cloudwatch_log_group" "web" {
   name              = "/ecs/${var.project}-web"
   retention_in_days = 30
@@ -118,6 +142,9 @@ resource "aws_ecs_task_definition" "web" {
         # P3-D: onboarded-cluster allow-list for the in-cluster (K8s) read routes.
         # Static join of the tfvar (no cross-resource ref) — the BFF gates /api/eks/[cluster]/* on this.
         { name = "ONBOARDED_EKS_CLUSTERS", value = join(",", var.onboard_eks_clusters) },
+        # ADR-031 Phase 1: admin gate config (always-on; the page/API 403s non-admins).
+        { name = "ADMIN_GROUP", value = "admins" },
+        { name = "SSM_ADMIN_EMAILS_PARAM", value = "/ops/${var.project}/admin_emails" },
         ], var.workers_enabled ? [
         { name = "JOBS_QUEUE_URL", value = one(aws_sqs_queue.jobs[*].url) }
       ] : [])
