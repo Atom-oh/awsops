@@ -23,6 +23,9 @@ import { queryDatasource } from '@/lib/datasource-client';
 import { detectDatasourceTypes, DATASOURCE_TYPES } from '@/lib/datasource-registry';
 import { buildDatasourcePrompt } from '@/lib/datasource-prompts';
 import { getDatasourceSchema } from '@/lib/datasource-schema';
+import { heuristicClassify } from '@/lib/ai-cost/heuristic-classifier';
+import { pickClassifierModel } from '@/lib/ai-cost/model-tier';
+// Note: getConfig is already imported at line 16 — reuse it for aiCost flags (Task 9), defaulting to off.
 
 // Service configuration — config 파일에서 읽거나 자동 감지
 // Service config — read from data/config.json or auto-detect
@@ -399,6 +402,17 @@ function getSystemPrompt(lang?: string): string {
 // Intent classification / 의도 분류
 // ============================================================================
 async function classifyIntent(messages: Array<{role: string; content: string}>): Promise<{ routes: RouteType[]; inputTokens: number; outputTokens: number }> {
+  const lastText = messages[messages.length - 1]?.content || '';
+  // ADR-033 Phase 1: deterministic pre-filter — a confident single-domain match
+  // skips the Bedrock classification call entirely (zero tokens).
+  const heuristic = heuristicClassify(lastText);
+  if (heuristic && heuristic.confidence === 'high') {
+    const valid = heuristic.routes.filter(r => VALID_ROUTES.includes(r as RouteType)) as RouteType[];
+    if (valid.length > 0) {
+      console.log(`[Intent] Heuristic (no-LLM): ${valid.join(', ')}`);
+      return { routes: valid, inputTokens: 0, outputTokens: 0 };
+    }
+  }
   try {
     const recentMessages = messages.slice(-10);
     const body = JSON.stringify({
@@ -409,7 +423,7 @@ async function classifyIntent(messages: Array<{role: string; content: string}>):
     });
 
     const response = await bedrockClient.send(new InvokeModelCommand({
-      modelId: MODELS['sonnet-4.6'],
+      modelId: MODELS[pickClassifierModel(heuristic)],   // Haiku for low-confidence, Sonnet otherwise
       contentType: 'application/json',
       accept: 'application/json',
       body: new TextEncoder().encode(body),
