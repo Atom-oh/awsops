@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Proposed (2026-05-31) / 제안 (2026-05-31)
+Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES; codex/gemini/kiro). 라이프사이클 상태머신은 건전; ADR-034/036 관계 추가, P2 백본에 실행 바인딩, look-back/타임아웃 설정값화, Lead 최소권한, 인젝션·알림스톰 통제 보완 (§Consensus Review Addenda 참조).
 
 This ADR records the *control-plane* decision: when agents are triggered, what staged lifecycle they execute, and who authorizes mutations. It deliberately does **not** redefine *what* agents/skills exist or how they are composed — that is ADR-031's *data-plane* concern, which this ADR consumes.
 
@@ -140,3 +140,16 @@ Phase 1 범위가 구현용으로 확정되고, ADR-029(현재 Proposed)·ADR-03
 - Cross-review consensus (codex / gemini / kiro-cli, 2026-05-31): unanimous "split into ADR-032"; unanimous "same product ⇒ same ADR is a category error".
 - Related ADRs: ADR-008 (Multi-account), ADR-009 (alert-triggered AI diagnosis — **superseded by this ADR**, correlation engine retained), ADR-022 (alert webhook HMAC auth — **extended**), ADR-029 (mutating-action gate — **extended**), ADR-030 (ECS Fargate + Aurora — **extended**), ADR-031 (Runtime-Customizable Agents & Skills — **consumed** for per-incident agent/skill resolution).
 - Source touchpoints: `src/lib/alert-correlation.ts`, `src/lib/alert-diagnosis.ts`, `src/lib/alert-knowledge.ts`, `src/app/api/alert-webhook/route.ts`, `agent/agent.py` (Lead/Sub execution), `data/config.json` (`accounts[]`).
+
+## Consensus Review Addenda (2026-06-09) / 합의 리뷰 보완
+
+Multi-AI consensus review (codex/gemini/kiro, Claude chair) → ACCEPT-WITH-CHANGES. The lifecycle/idempotency design is sound; resolved:
+
+1. **Relationship table += ADR-034 (Accepted)** (codex MAJOR): the lifecycle's RCA **output** is owned by ADR-034 — OpsCenter/Incident Manager/Slack routing, the observability-write control subset, the feedback-loop marker, and best-effort non-blocking behavior. 032 consumes 034 for output rather than leaving it implicit. / RCA 출력은 ADR-034가 소유.
+2. **Relationship table += ADR-036 (Accepted)** (codex/kiro MAJOR): the **Mitigation phase executes through ADR-036's hybrid substrate** — P2 Action-Catalog front door, AWS-resource actions via SSM Automation/Change Manager, K8s/app-state via P2 Lambda/Fargate. The Lead agent **never executes mutations directly**. / Mitigation은 036 하이브리드 substrate로 실행, Lead 직접 실행 금지.
+3. **Execution bound to the P2 backbone** (codex MAJOR, gemini MINOR): webhook/manual triggers **enqueue async work through P2** (ADR-030); the `incident_lifecycle` tables are **domain state, not a second orchestration spine**; the watchdog/checkpointing rely on P2/Step Functions, not bare Lambda/Fargate. / 실행은 P2 백본에 바인딩; incident_lifecycle은 도메인 상태(별도 오케스트레이션 아님).
+4. **Configurable windows** (gemini/kiro MAJOR): the ~20-min Triage look-back and the ~10-min per-stage timeout are **configurable** (SSM/Aurora: `INCIDENT_CORRELATION_WINDOW_MINUTES`, per-stage timeouts) — illustrative, not hardcoded constants, to avoid false "stalled" transitions on long Investigations. / look-back·스테이지 타임아웃은 설정값(상수 아님).
+5. **Lead-agent least privilege + define "coding-agent"** (gemini/kiro): the Lead (Incident Commander) cannot invoke mutating tools directly — it **delegates to a Sub-agent bound to a mutating skill, gated by ADR-029/036**. "human/coding-agent executes" = a **human-approved CI/automation actor that still transits the ADR-029 plan→execute flow** (not a bypass of recommendation-only). / Lead는 변경 직접 실행 불가·위임만; "coding-agent"는 029 plan→execute를 거치는 사람-승인 액터.
+6. **Prompt-injection** (codex MAJOR): alert payloads are attacker-controlled — they must not influence tool permissions, the agent roster, or mitigation approval; RCA text uses **structured input isolation + sanity-check before the ADR-034 write-back**. / 알림 페이로드 인젝션 방어(권한·로스터·승인 불가침).
+7. **Alert-storm controls** (codex MAJOR): max concurrent RCA/investigations, Sub-agent fan-out limits, queue backpressure/DLQ, retry budgets, and ADR-033 token-budget + severity gating. / 알림 스톰 통제(동시 RCA 캡·fan-out 한계·DLQ·ADR-033 예산).
+8. **Schema ownership** (codex MINOR): new Aurora tables land via `terraform/v2/foundation/data/schema.sql` + `schema_migrations` (normal Terraform plan/validation). / 신규 테이블은 terraform schema.sql + schema_migrations 경유.

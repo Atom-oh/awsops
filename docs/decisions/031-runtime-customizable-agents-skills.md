@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Proposed (2026-05-31) / 제안 (2026-05-31)
+Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES; codex/gemini/kiro). 데이터-플레인 분리는 건전; mutating BYO-MCP는 Action Catalog/P2 경유, revocation fail-closed, BYO-MCP 하드닝·인젝션 가드·ADR-033 비용 통제 보완 (§Consensus Review Addenda 참조).
 
 This ADR records the decision and its phased scope. Implementation detail (object model, Aurora schema, resolver, validation pipeline, acceptance criteria) lives in the companion spec `docs/superpowers/specs/2026-05-31-custom-agents-skills-design.md`.
 
@@ -121,3 +121,15 @@ Phase 1 범위가 구현용으로 확정될 때까지 상태는 **Proposed**로 
 - Companion spec: `docs/superpowers/specs/2026-05-31-custom-agents-skills-design.md`
 - Related ADRs: ADR-002 (AI hybrid routing), ADR-004 (Gateway role split), ADR-008 (Multi-account), ADR-011 (External datasource SSRF allowlist), ADR-021 (SSE streaming), ADR-023 (Admin role model), ADR-025 (Multi-route synthesis), ADR-029 (Mutating action gate), ADR-030 (ECS Fargate + Aurora; cosign key custody follow-up), ADR-032 (Event-triggered autonomous incident lifecycle — **consumes** this ADR's resolver/Agent Space for per-incident agent/skill resolution; this ADR remains unaware of triggers/lifecycle)
 - Source touchpoints: `agent/agent.py` (`SKILL_BASE`, `streamable_http_sigv4.py`), `src/app/api/ai/route.ts` (classifier), `data/config.json` (`accounts[]`)
+
+## Consensus Review Addenda (2026-06-09) / 합의 리뷰 보완
+
+Multi-AI consensus review (codex/gemini/kiro, Claude chair) → ACCEPT-WITH-CHANGES. The data-plane/resolver split is sound; resolved:
+
+1. **Mutating BYO-MCP routes through governance** (codex CRITICAL): a custom MCP tool may **not** expose raw write capability that bypasses ADR-029/036. Every mutating tool is an **Action Catalog entry enqueued via P2** (AWS-resource → SSM/Change Manager, K8s/app-state → P2 code). BYO-MCP read tools are allowlisted; write tools must be catalog-bound. / mutating BYO-MCP는 Action Catalog/P2 경유만 — raw write 노출 금지.
+2. **Revocation fails closed** (codex/kiro MAJOR): on multi-task Fargate, disabling a malicious skill/MCP endpoint must propagate **immediately across all resolver + AgentCore instances** (Aurora `LISTEN/NOTIFY` or a version-check on every resolve), not wait for the resolver TTL. Document the acceptable-staleness window (≤30s) for **non-security** changes only; security revocation is immediate. / 보안 revocation은 TTL 대기 없이 전 인스턴스 즉시 fail-closed.
+3. **v2 paths/state** (codex MAJOR): resolver + touchpoints are `web/` + Aurora (schema migrations) + SSM config — not `src/`/`data/config.json` for v2. / v2 경로·상태 현행화.
+4. **BYO-MCP hardening** (codex MAJOR, gemini MINOR): SigV4-only initially (reuse IAM trust); endpoint allowlist with DNS-rebinding/redirect handling; credentials in Secrets Manager with rotation; egress + per-account isolation. ADR-011 alone is insufficient. / BYO-MCP 하드닝: SigV4 우선·DNS rebinding 방어·Secrets Manager·egress 격리.
+5. **Injection controls** (codex/gemini): custom Markdown, MCP tool descriptions, and tool results are **untrusted**; enforce a server-side tool allowlist **outside the model** + a static, non-overridable **system-prompt safeguard** (recommendation-only/safety boundary) + output validation. / 커스텀 콘텐츠·MCP 결과는 신뢰 불가 → 서버측 allowlist + 불변 시스템 프롬프트 가드 + 출력 검증.
+6. **Phase-1 integrity scope** (codex MAJOR, kiro MINOR): Phase 1 = **admin-only uploads**; SHA-256 guards storage integrity/TOCTOU, **not** supply-chain. cosign/Sigstore is **Phase-3 opt-in hardening for external uploads**, not a hard blocker on Phase 1. / Phase-1은 관리자 업로드 한정·SHA-256은 무결성용; cosign은 Phase-3 외부 업로드용 선택 하드닝.
+7. **Cost integration (ADR-033)** (codex/gemini MINOR): per-Agent-Space prompt-size/tool-count limits + token budgets + model-tier policy + telemetry; custom skills are checked against the `agentcore_enabled` flag and SSM-sourced config. / Agent Space별 비용 통제(ADR-033) + `agentcore_enabled` 검사.

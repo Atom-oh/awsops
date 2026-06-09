@@ -21,7 +21,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 006 | Cost 가용성 Probe | Accepted |
 | 007 | 리소스 인벤토리 베이스라인 | Accepted |
 | 008 | 멀티 어카운트 지원 | Accepted |
-| 009 | 알림 트리거 AI 진단 | Accepted (2026-04-22) — supersession proposed by 032 (상관분석 엔진은 032 Triage로 이월) |
+| 009 | 알림 트리거 AI 진단 | Superseded by 032 (2026-06-09) — 032 Accepted; 상관분석 엔진은 032 Triage로 보존·이월 (원안 Accepted 2026-04-22) |
 | 010 | 이벤트 기반 사전 스케일링 (Phase 1+2) | Accepted (2026-04-26) |
 | 011 | 외부 데이터소스 통합 | Accepted (2026-04-22) |
 | 012 | SNS 알림 전략 | Accepted (2026-04-22) |
@@ -41,10 +41,10 @@ Records of major design decisions. Update this index when status/outcome changes
 | 026 | i18n LanguageProvider | Accepted (2026-04-22) |
 | 027 | Code Interpreter 세션 격리 | Accepted (2026-04-22) |
 | 028 | CloudFront CACHING_DISABLED | Accepted (2026-04-22) |
-| 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | Proposed (2026-04-26) — mechanism refined by 036 (6대 통제 유지, 실행 substrate는 하이브리드) |
+| 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | Accepted (2026-06-09) — 멀티AI 합의(REVISE×2/AWC×1) 반영 개정; 메커니즘은 036 하이브리드로 위임, v2(Terraform/Fargate/Aurora) 현행화·기술 정정, 6대 통제 유지 |
 | 030 | ECS Fargate 워크로드 + Aurora 앱 상태 + 이중 ECR | Accepted (2026-05-27) |
-| 031 | 런타임 커스터마이즈 에이전트·스킬 (관리자 구성 Agent Space + BYO-MCP) | Proposed (2026-05-31) |
-| 032 | 이벤트 트리거 자율 인시던트 라이프사이클 (멀티 에이전트 Lead/Sub) | Proposed (2026-05-31) |
+| 031 | 런타임 커스터마이즈 에이전트·스킬 (관리자 구성 Agent Space + BYO-MCP) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); mutating BYO-MCP 거버넌스 경유·revocation fail-closed·BYO-MCP 하드닝·인젝션 가드 보완 |
+| 032 | 이벤트 트리거 자율 인시던트 라이프사이클 (멀티 에이전트 Lead/Sub) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 034/036 관계·P2 실행 바인딩·look-back 설정값화·Lead 최소권한 보완 |
 | 033 | AIOps LLM 비용 최적화 (Haiku 분류·프롬프트 캐싱·응답 캐시·토큰 예산) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 프롬프트 캐싱 범위 정정(게이트웨이 호출 불투명)·sourceDataFingerprint·예산 영속 보완 |
 | 034 | 알림 자동 RCA 라이트백 (OpsCenter/Incident Manager 양방향 보강) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 피드백루프 차단 메커니즘·observability-write 통제 부분집합·best-effort 보완 |
 | 035 | K8sGPT 하이브리드 (MCP로 AgentCore에 통합하는 인클러스터 K8s 진단, Haiku 4.5) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); Rule 5 강화 + 7~11 추가 |
