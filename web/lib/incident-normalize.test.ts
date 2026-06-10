@@ -4,6 +4,8 @@ import {
   normalizeAlert,
   isolatePayload,
   correlationKey,
+  bearsSelfWritebackMarker,
+  SELF_WRITEBACK_MARKER,
   type AlertEvent,
 } from './incident-normalize';
 
@@ -200,5 +202,44 @@ describe('correlationKey — deterministic dedup-race UNIQUE key', () => {
     const a: AlertEvent = { id: '1', source: 'generic', alertName: 'X', severity: 'warning', status: 'firing',
       message: 'm', timestamp: 't', labels: {}, annotations: {}, services: [], resources: [], rawPayload: {} };
     expect(correlationKey(a)).toMatch(/^[0-9a-f]{32,64}$/);
+  });
+});
+
+describe('bearsSelfWritebackMarker — ADR-034 feedback-loop breaker (ALWAYS-ON safety)', () => {
+  const clean: AlertEvent = { id: '1', source: 'generic', alertName: 'X', severity: 'critical', status: 'firing',
+    message: 'm', timestamp: 't', labels: { service: 'api' }, annotations: { summary: 's' },
+    services: ['api'], resources: ['i-1'], rawPayload: { source: 'datadog' } };
+
+  it('the marker is the OpsItem/IM stamp CreatedBy=AWSops-AIOps', () => {
+    expect(SELF_WRITEBACK_MARKER).toEqual({ key: 'CreatedBy', value: 'AWSops-AIOps' });
+  });
+
+  it('a normal third-party alert is NOT flagged (false → it flows to triage)', () => {
+    expect(bearsSelfWritebackMarker(clean)).toBe(false);
+  });
+
+  it('drops OpsItem OperationalData/tag marker in labels (CreatedBy=AWSops-AIOps)', () => {
+    expect(bearsSelfWritebackMarker({ ...clean, labels: { CreatedBy: 'AWSops-AIOps' } })).toBe(true);
+  });
+
+  it('drops the marker in annotations', () => {
+    expect(bearsSelfWritebackMarker({ ...clean, annotations: { CreatedBy: 'AWSops-AIOps' } })).toBe(true);
+  });
+
+  it('drops the ssm-incidents source equivalent (labels.source=AWSops-AIOps)', () => {
+    expect(bearsSelfWritebackMarker({ ...clean, labels: { source: 'AWSops-AIOps' } })).toBe(true);
+  });
+
+  it('drops the /aws/AWSops OperationalData key form', () => {
+    expect(bearsSelfWritebackMarker({ ...clean, labels: { '/aws/AWSops': 'AWSops-AIOps' } })).toBe(true);
+  });
+
+  it('drops Incident Manager rawPayload.source=AWSops-AIOps (top-level source field)', () => {
+    expect(bearsSelfWritebackMarker({ ...clean, rawPayload: { source: 'AWSops-AIOps' } })).toBe(true);
+  });
+
+  it('is not fooled by a similar-but-different value', () => {
+    expect(bearsSelfWritebackMarker({ ...clean, labels: { CreatedBy: 'AWSops-AIOps-evil' } })).toBe(false);
+    expect(bearsSelfWritebackMarker({ ...clean, rawPayload: { source: 'not-AWSops-AIOps' } })).toBe(false);
   });
 });

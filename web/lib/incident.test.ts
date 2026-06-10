@@ -123,16 +123,30 @@ describe('reads — listIncidents / getIncident (degrade-safe)', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
-  it('getIncident returns row + stages/findings (one query each)', async () => {
+  it('getIncident returns row + stages/findings/writeback (one query each)', async () => {
     query
       .mockResolvedValueOnce({ rows: [{ id: 'inc-1', status: 'triaged' }] })
       .mockResolvedValueOnce({ rows: [{ stage: 'triage' }] })
-      .mockResolvedValueOnce({ rows: [{ sub_agent: 'network' }] });
+      .mockResolvedValueOnce({ rows: [{ sub_agent: 'network' }] })
+      .mockResolvedValueOnce({ rows: [{ target_system: 'opscenter', status: 'succeeded' }] });
     const { getIncident } = await import('./incident');
     const inc = await getIncident('inc-1');
     expect(inc?.id).toBe('inc-1');
     expect(inc?.stages).toEqual([{ stage: 'triage' }]);
     expect(inc?.findings).toEqual([{ sub_agent: 'network' }]);
+    expect(inc?.writeback).toEqual([{ target_system: 'opscenter', status: 'succeeded' }]);
+  });
+
+  it('getIncident write-back read is degrade-safe — [] when incident_writeback table/flag absent', async () => {
+    query
+      .mockResolvedValueOnce({ rows: [{ id: 'inc-2', status: 'triaged' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockRejectedValueOnce(new Error('relation "incident_writeback" does not exist'));
+    const { getIncident } = await import('./incident');
+    const inc = await getIncident('inc-2');
+    expect(inc?.id).toBe('inc-2');
+    expect(inc?.writeback).toEqual([]); // table absent → degrades, never throws
   });
 });
 

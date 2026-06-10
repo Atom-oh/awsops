@@ -310,3 +310,18 @@ export function correlationKey(event: AlertEvent): string {
   const input = JSON.stringify({ source: event.source, alertName: event.alertName, services, resources });
   return createHash('sha256').update(input).digest('hex').slice(0, 40);
 }
+
+// --- ADR-034 feedback-loop breaker: detect AWSops's own write-backs ---
+// Every write-back is stamped CreatedBy=AWSops-AIOps (OpsItem OperationalData/tag) or source=AWSops-AIOps
+// (Incident Manager). The webhook ingress drops any inbound event bearing this marker so our own
+// observability write can never re-trigger an RCA. ALWAYS-ON (harmless when nothing writes back).
+export const SELF_WRITEBACK_MARKER = { key: 'CreatedBy', value: 'AWSops-AIOps' } as const;
+
+export function bearsSelfWritebackMarker(event: AlertEvent): boolean {
+  const v = SELF_WRITEBACK_MARKER.value;
+  const inMap = (m?: Record<string, string>) =>
+    !!m && (m[SELF_WRITEBACK_MARKER.key] === v || m.source === v || m['/aws/AWSops'] === v);
+  return inMap(event.labels) || inMap(event.annotations) ||
+    (typeof (event.rawPayload as Record<string, unknown>)?.source === 'string' &&
+     (event.rawPayload as Record<string, string>).source === v);
+}

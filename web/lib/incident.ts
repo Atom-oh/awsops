@@ -125,7 +125,7 @@ export async function getIncident(id: string): Promise<IncidentDetail | null> {
   if (!process.env.AURORA_ENDPOINT) return null;
   const { rows } = await getPool().query(
     `SELECT id, correlation_key, fingerprint, status, severity, trigger_source, services, resources,
-            agent_space_version, rca, mitigation_plan, first_event_at, last_event_at, created_at, updated_at
+            agent_space_version, rca, mitigation_plan, writeback_status, first_event_at, last_event_at, created_at, updated_at
      FROM incidents WHERE id = $1`, [id]);
   const inc = rows[0];
   if (!inc) return null;
@@ -135,7 +135,18 @@ export async function getIncident(id: string): Promise<IncidentDetail | null> {
   const { rows: findings } = await getPool().query(
     `SELECT sub_agent, agent_version, skill_hashes, findings, created_at
      FROM incident_findings WHERE incident_id = $1 ORDER BY id`, [id]);
-  return { ...inc, stages, findings };
+  // ADR-034 write-back audit (read-only; the write path is the SM Lambda, never web). Degrade-safe:
+  // returns [] when the incident_writeback table / migration v6 is absent (flag-OFF substrate).
+  let writeback: Record<string, unknown>[] = [];
+  try {
+    const r = await getPool().query(
+      `SELECT target_system, status, source_object_id, rca_version, slack_thread_ts, created_at
+       FROM incident_writeback WHERE incident_id = $1 ORDER BY id`, [id]);
+    writeback = r.rows;
+  } catch {
+    writeback = []; // degrade-safe: table/flag absent
+  }
+  return { ...inc, stages, findings, writeback };
 }
 
 // --- SSM config readers (cached, mirror agentcore.ts TTL; Addendum #4/#7) ---

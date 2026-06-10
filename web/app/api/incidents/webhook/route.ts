@@ -18,7 +18,7 @@
 import { NextResponse } from 'next/server';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
-import { normalizeAlert, detectAlertSource, isolatePayload, type AlertSource } from '@/lib/incident-normalize';
+import { normalizeAlert, detectAlertSource, isolatePayload, bearsSelfWritebackMarker, type AlertSource } from '@/lib/incident-normalize';
 import { triageAndCreateOrLink, enqueueInitialStage } from '@/lib/incident';
 
 export const dynamic = 'force-dynamic';
@@ -172,12 +172,21 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'No valid alerts found in payload' }, { status: 400 });
   }
 
+  // ADR-034 feedback-loop breaker (ALWAYS-ON, independent of rca_writeback_enabled). Drop any event
+  // that carries AWSops's own write-back marker so an OpsItem/IM enrichment can never re-trigger RCA.
+  // Accepted-and-ignored (200) so the source does not retry. Harmless when nothing writes back.
+  const live = alerts.filter((a) => !bearsSelfWritebackMarker(a));
+  const droppedSelf = alerts.length - live.length;
+  if (live.length === 0) {
+    return NextResponse.json({ status: 'dropped_self_writeback', dropped: droppedSelf }, { status: 200 });
+  }
+
   // 7 — Triage each (severity gate + dedup-race live INSIDE triageAndCreateOrLink). isolatePayload
   //     defangs the attacker-controlled text up front (defense in depth; the agent tier re-isolates).
   let newCount = 0;
   let linkedCount = 0;
   let skippedCount = 0;
-  for (const alert of alerts) {
+  for (const alert of live) {
     isolatePayload(alert); // structured isolation — never trust raw alert text downstream
     const decision = await triageAndCreateOrLink(alert);
     if (decision.decision === 'New' && decision.incidentId) {
@@ -198,5 +207,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     new: newCount,
     linked: linkedCount,
     skipped: skippedCount,
+    droppedSelfWriteback: droppedSelf,
   }, { status: 202 });
 }

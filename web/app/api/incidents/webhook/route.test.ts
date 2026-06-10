@@ -115,6 +115,51 @@ describe('POST /api/incidents/webhook — HMAC (ADR-022 active/standby)', () => 
   });
 });
 
+describe('POST /api/incidents/webhook — ADR-034 marker-drop (ALWAYS-ON, independent of write-back flag)', () => {
+  // A self-write-back-marked generic alert (CreatedBy=AWSops-AIOps in labels).
+  const SELF = JSON.stringify({ title: 'HighCPU', severity: 'critical', source: 'generic', message: 'cpu high', labels: { service: 'api', CreatedBy: 'AWSops-AIOps' } });
+
+  it('200 dropped_self_writeback when the only alert carries our own marker — NEVER triages', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(post(SELF, { 'x-webhook-signature': sign(SELF) }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('dropped_self_writeback');
+    expect(body.dropped).toBe(1);
+    // The feedback-loop breaker must run BEFORE triage/enqueue — neither may fire.
+    expect(triageAndCreateOrLink).not.toHaveBeenCalled();
+    expect(enqueueInitialStage).not.toHaveBeenCalled();
+  });
+
+  it('marker-drop is ALWAYS-ON — fires even with rca_writeback_enabled unset/off', async () => {
+    delete process.env.RCA_WRITEBACK_ENABLED;
+    const { POST } = await import('./route');
+    const res = await POST(post(SELF, { 'x-webhook-signature': sign(SELF) }));
+    expect(res.status).toBe(200);
+    expect(triageAndCreateOrLink).not.toHaveBeenCalled();
+  });
+
+  it('mixed batch → drops only the marked alert, triages the live one, reports droppedSelfWriteback', async () => {
+    // Alertmanager batch: one carries the marker, one is clean.
+    const batch = JSON.stringify({
+      receiver: 'team-x',
+      groupLabels: { alertname: 'X' },
+      alerts: [
+        { status: 'firing', labels: { alertname: 'Mine', severity: 'critical', service: 'api', CreatedBy: 'AWSops-AIOps' }, annotations: {}, startsAt: '2026-06-10T00:00:00Z' },
+        { status: 'firing', labels: { alertname: 'Real', severity: 'critical', service: 'db' }, annotations: {}, startsAt: '2026-06-10T00:00:01Z' },
+      ],
+    });
+    triageAndCreateOrLink.mockResolvedValue({ decision: 'New', incidentId: 'inc-9' });
+    enqueueInitialStage.mockResolvedValue({ jobId: 'job-9' });
+    const { POST } = await import('./route');
+    const res = await POST(post(batch, { 'x-webhook-signature': sign(batch), 'x-forwarded-for': '10.0.0.77, 198.51.100.7' }));
+    expect(res.status).toBe(202);
+    const body = await res.json();
+    expect(body.droppedSelfWriteback).toBe(1);
+    expect(triageAndCreateOrLink).toHaveBeenCalledTimes(1); // only the live alert
+  });
+});
+
 describe('POST /api/incidents/webhook — rate limit + SNS confirm', () => {
   it('429 once over the per-IP cap', async () => {
     triageAndCreateOrLink.mockResolvedValue({ decision: 'Skipped' });
