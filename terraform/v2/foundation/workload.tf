@@ -242,6 +242,15 @@ resource "aws_ecs_task_definition" "web" {
         # ADR-038: hybrid routing flag + classifier model (BFF reads both at runtime).
         { name = "HYBRID_ROUTING_ENABLED", value = "true" },
         { name = "CLASSIFIER_MODEL_ID", value = "global.anthropic.claude-haiku-4-5-20251001-v1:0" }
+        ] : [], var.k8sgpt_enabled ? [
+        # ADR-035: the /api/eks/[cluster]/k8sgpt route reads K8SGPT_ENABLED FIRST and 503s when not
+        # "true" (no cluster read / STS presign / narration). concat(base, []) == base when
+        # k8sgpt_enabled=false → byte-identical web task def (no redeploy when off). Read-only: the
+        # route consumes deterministic K8sGPT Result CRDs via the P3-D GET-only path and narrates
+        # with our own Haiku (fact analyzer_result vs hypothesis llm_explanation kept separate).
+        { name = "K8SGPT_ENABLED", value = "true" },
+        { name = "K8SGPT_STALE_MINUTES", value = "5" },
+        { name = "K8SGPT_NARRATION_MODEL", value = "global.anthropic.claude-haiku-4-5-20251001-v1:0" },
       ] : [])
       secrets = [
         { name = "AURORA_USER", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:username::" },

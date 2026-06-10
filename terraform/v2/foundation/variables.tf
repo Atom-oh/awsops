@@ -75,6 +75,18 @@ variable "admin_password" {
   sensitive   = true
 }
 
+variable "k8sgpt_enabled" {
+  type        = bool
+  description = "ADR-035 K8sGPT in-cluster diagnosis (AWSops-side substrate) gate. false (default) = 0 gated infra ($0), the /api/eks/[cluster]/k8sgpt route is dark (503), NO cluster read, NO narration. The always-present k8s_findings/k8s_scan_runs tables (migration v7) are harmless when off. The K8sGPT OPERATOR install is OUT-OF-BAND (docs/runbooks/k8sgpt-operator-install.md) — AWSops NEVER writes to the EKS cluster. REQUIRES onboard_eks_clusters non-empty + agentcore_enabled (narration rides the Container agent)."
+  default     = false
+}
+
+variable "k8sgpt_monthly_bedrock_budget_usd" {
+  type        = number
+  description = "ADR-035 Rule 11 cost cap: monthly Bedrock spend budget (USD) for the K8sGPT narration. Alarm only (no enforcement). Tunable."
+  default     = 50
+}
+
 variable "aurora_engine_version" {
   type        = string
   description = "Aurora PostgreSQL engine version (Serverless v2). Exact minor for a deterministic major upgrade; future minor auto-upgrades are absorbed by ignore_changes on the cluster/instance (not by a major-only pin — that mis-fires on aws_rds_cluster)."
