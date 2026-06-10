@@ -10,7 +10,7 @@ import ssl
 import boto3
 import pg8000.native
 
-_TERMINAL = ("succeeded", "failed", "canceled")
+_TERMINAL = ("succeeded", "failed", "canceled", "manual_intervention")  # widen the terminal set
 _secret_cache = {}
 
 
@@ -76,3 +76,11 @@ _JOB_COLS = ["job_id", "type", "status", "payload", "result", "artifact_uri", "e
 def get_job(conn, job_id):
     rows = conn.run(f"SELECT {','.join(_JOB_COLS)} FROM worker_jobs WHERE job_id=:id", id=job_id)
     return dict(zip(_JOB_COLS, rows[0])) if rows else None
+
+
+def set_manual_intervention(conn, job_id, error):
+    rows = conn.run(
+        "UPDATE worker_jobs SET status='manual_intervention', error=:e "
+        "WHERE job_id=:id AND status NOT IN ('succeeded','failed','canceled','manual_intervention') RETURNING job_id",
+        e=error, id=job_id)
+    return len(rows)

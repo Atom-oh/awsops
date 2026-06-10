@@ -396,3 +396,86 @@ def test_reaper_remediation_select_excludes_manual_intervention(monkeypatch):
     assert sql.lstrip().startswith("SELECT")  # read-only: never UPDATEs remediation rows
     assert "'manual_intervention'" not in sql  # never reaps a terminal operator state
     assert "'running'" in sql and "'awaiting_approval'" in sql
+
+
+# ---------------------------------------------------------------------------
+# Task 7: remediation.asl.json — dry-run -> approval (fail-closed) -> ssm/lambda/fargate
+# -> rollback -> terminal MANUAL_INTERVENTION_REQUIRED. JSON-parse after substituting the
+# templatefile `${...}` placeholders ($.subnets_json is an unquoted array literal).
+# ---------------------------------------------------------------------------
+import re as _re  # noqa: E402
+
+
+def _load_asl():
+    raw = (_HERE / "remediation.asl.json").read_text()
+    # `${subnets_json}` is the only UNQUOTED placeholder (a JSON array literal at apply time).
+    raw = raw.replace("${subnets_json}", '["subnet-a", "subnet-b"]')
+    # Every other `${...}` sits inside a JSON string → swap for a plain token.
+    raw = _re.sub(r"\$\{[a-zA-Z0-9_]+\}", "SUBST", raw)
+    return json.loads(raw)
+
+
+def test_asl_parses_and_starts_with_dry_run():
+    asl = _load_asl()  # raises JSONDecodeError on malformed ASL
+    assert asl["StartAt"] == "DryRunFirst"
+    assert set(["DryRunFirst", "ApprovalWait", "Route", "RunSsm", "RunCodeLambda",
+                "RunCodeFargate", "Rollback", "ManualIntervention", "MarkFailed",
+                "JobFailed", "JobManual"]).issubset(asl["States"].keys())
+
+
+def test_asl_route_choice_has_ssm_branch():
+    states = _load_asl()["States"]
+    choices = states["Route"]["Choices"]
+    ssm = [c for c in choices if c.get("StringEquals") == "ssm"]
+    assert len(ssm) == 1 and ssm[0]["Next"] == "RunSsm"
+    assert all(c["Variable"] == "$.runtime" for c in choices)
+    assert states["Route"]["Default"] == "UnknownRuntime"
+
+
+def test_asl_ssm_branch_uses_wait_for_task_token():
+    run_ssm = _load_asl()["States"]["RunSsm"]
+    assert run_ssm["Resource"] == "arn:aws:states:::lambda:invoke.waitForTaskToken"
+    # The Choice routes ssm here; on error it rolls back (never silently ends).
+    assert run_ssm["Catch"][0]["Next"] == "Rollback"
+    assert run_ssm.get("End") is True
+
+
+def test_asl_approval_wait_fails_closed_on_timeout():
+    aw = _load_asl()["States"]["ApprovalWait"]
+    assert aw["Resource"] == "arn:aws:states:::lambda:invoke.waitForTaskToken"
+    # Finite timeout (not absent / not 0) so an un-approved action cannot hang forever.
+    assert isinstance(aw["TimeoutSeconds"], int) and aw["TimeoutSeconds"] > 0
+    # A States.Timeout Catch must route to MarkFailed (fail CLOSED — no execution).
+    timeout_catch = [c for c in aw["Catch"] if "States.Timeout" in c["ErrorEquals"]]
+    assert len(timeout_catch) == 1 and timeout_catch[0]["Next"] == "MarkFailed"
+
+
+def test_asl_rollback_failure_goes_to_manual_intervention():
+    states = _load_asl()["States"]
+    rb = states["Rollback"]
+    # On rollback FAILURE -> ManualIntervention (never an infinite retry loop).
+    catch = [c for c in rb["Catch"] if "States.ALL" in c["ErrorEquals"]]
+    assert len(catch) == 1 and catch[0]["Next"] == "ManualIntervention"
+    assert rb["Next"] == "MarkFailed"  # rollback SUCCESS still records failed
+    # ManualIntervention flags the terminal-operator status via status_updater.
+    mi = states["ManualIntervention"]
+    assert mi["Parameters"]["Payload"]["manual_intervention"] is True
+    assert mi["Next"] == "JobManual"
+
+
+def test_asl_jobmanual_is_terminal_fail():
+    jm = _load_asl()["States"]["JobManual"]
+    assert jm["Type"] == "Fail"
+    assert jm["Error"] == "ManualInterventionRequired"
+
+
+def test_db_terminal_set_includes_manual_intervention():
+    # ast-level assertion: db._TERMINAL widened to include 'manual_intervention'.
+    src = (_HERE.parent / "workers" / "db.py").read_text()
+    tree = ast.parse(src)
+    found = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "_TERMINAL" for t in node.targets):
+            found = {el.value for el in node.value.elts}
+    assert found is not None and "manual_intervention" in found

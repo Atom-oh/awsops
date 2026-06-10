@@ -11,7 +11,10 @@ def lambda_handler(event, _ctx):
         err = json.dumps(err)[:2000]
     conn = db.connect()
     try:
-        n = db.finish_job(conn, job_id, "failed", error=(err or "worker failed (SFN catch)"))
+        if event.get("manual_intervention"):
+            n = db.set_manual_intervention(conn, job_id, err or "rollback failed (MANUAL_INTERVENTION_REQUIRED)")
+        else:
+            n = db.finish_job(conn, job_id, "failed", error=(err or "worker failed (SFN catch)"))
         return {"job_id": job_id, "updated": n}
     finally:
         conn.close()
