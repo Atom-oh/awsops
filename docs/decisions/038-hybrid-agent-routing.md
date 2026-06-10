@@ -74,6 +74,10 @@ The reference materials' "300 tools → semantic search injects only ~4" pattern
   - **최종 regex 베이스라인 = 69.2% (45/65)** — 리뷰 라운드의 라벨 와이드닝 2건("백업"→data·ops, "디스크"→monitoring·observability) 반영 후. 초안 트레이스(67.7%)에서 +1케이스.
   - **⚠️ P3 전제조건 (load-bearing invariant)** — `agent/agent.py` `SKILL_BASE`에는 `observability` 키가 없고(`diagnostics`가 별도 존재), 미지 키는 `ops` 페르소나로 폴백한다. 오늘은 `observability`가 `active:false`라 하이브리드 단락이 에이전트 호출 자체를 막아 안전하지만, **P3에서 어떤 섹션이든 `active:true`로 전환하기 전에 해당 키의 `SKILL_BASE` 엔트리 존재를 확인해야 한다**(또는 agent.py에 active-section↔SKILL_BASE 패리티 기동 체크 추가). 위반 시 잘못된 전문가 프롬프트로 무음 라우팅된다.
   - 활성화(계획 Task 8)는 라이브 골든셋 게이트(`scripts/v2/routing-accuracy.mjs`) 통과가 전제 — 통과 수치를 본 섹션에 기록할 것.
+- **2026-06-10 (T8 활성화 — LIVE):**
+  - **게이트 결과: regex 69.2% → hybrid 96.9% (63/65), +27.7pp — PASSED** (SLO ≥85% 및 +15pp 모두 충족). `hybrid_routing_enabled=true` apply(IAM `task_classifier_bedrock` + env, task-def 리비전 교체) + `make deploy` + `make agentcore`(strands 1.41.0 핀 + 캐싱) 완료.
+  - **타임아웃 편차(스펙 §6 정정)**: 스펙의 분류기 abort 1s는 실측과 불일치 — `global.` 크로스리전 프로파일은 ap-northeast-2에서 **1.9~3.0s** 소요(게이트 1차 실행이 hybrid 72.3%로 FAIL한 원인 = 전 호출 abort→폴백). **3500ms로 상향**(`CLASSIFIER_TIMEOUT_MS` env 튜너블) 후 게이트 통과. 모호 질의의 first-byte 지연 상한도 3.5s로 갱신.
+  - **캐싱 검증(GREEN)**: agent 동일 세션 2회 호출 11.6s→7.0s; us-east-1 Sonnet 4.6 CloudWatch 30분 창 **CacheReadInputTokenCount 8,714 / CacheWrite 3,096 / uncached Input 5,954** — 입력 ~59% 캐시 히트(읽기 90% 할인) 확인.
 
 ## References / 참고 자료
 - 설계 스펙: `docs/superpowers/specs/2026-06-10-hybrid-agent-routing-design.md` (멀티AI 리뷰 8건 반영 이력 포함)
