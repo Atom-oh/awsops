@@ -4,6 +4,10 @@ import { HttpRequest } from '@smithy/protocol-http';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import { EKSClient, DescribeClusterCommand } from '@aws-sdk/client-eks';
+import { parseCpuCores, parseMem, type NodeRow, type PodRow } from './eks-resources';
+
+// Re-export the client-safe row types so existing importers keep resolving them here.
+export type { NodeRow, PodRow } from './eks-resources';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 
@@ -89,6 +93,8 @@ interface K8sItem {
     readyReplicas?: number;
     availableReplicas?: number;
     updatedReplicas?: number;
+    capacity?: Record<string, string>;
+    allocatable?: Record<string, string>;
   };
   spec?: {
     nodeName?: string;
@@ -96,11 +102,11 @@ interface K8sItem {
     type?: string;
     clusterIP?: string;
     ports?: { port?: number; protocol?: string }[];
+    containers?: { resources?: { requests?: Record<string, string> } }[];
   };
 }
 
-export interface NodeRow { name: string; status: string; roles: string; version: string; instanceType: string; zone: string; age: string }
-export interface PodRow { name: string; namespace: string; status: string; node: string; restarts: number; age: string }
+// NodeRow / PodRow are defined (and re-exported) from ./eks-resources (client-safe).
 export interface DeploymentRow { name: string; namespace: string; ready: string; upToDate: number; available: number; age: string }
 export interface ServiceRow { name: string; namespace: string; type: string; clusterIP: string; ports: string; age: string }
 export interface NamespaceRow { name: string; status: string; age: string }
@@ -117,6 +123,8 @@ function nodeRoles(labels: Record<string, string> = {}): string {
 export function normalizeNode(it: K8sItem): NodeRow {
   const labels = it.metadata?.labels ?? {};
   const ready = it.status?.conditions?.find((c) => c.type === 'Ready');
+  const cap = it.status?.capacity ?? {};
+  const alloc = it.status?.allocatable ?? {};
   return {
     name: it.metadata?.name ?? '',
     status: ready?.status === 'True' ? 'Ready' : 'NotReady',
@@ -125,11 +133,16 @@ export function normalizeNode(it: K8sItem): NodeRow {
     instanceType: labels['node.kubernetes.io/instance-type'] ?? labels['beta.kubernetes.io/instance-type'] ?? '',
     zone: labels['topology.kubernetes.io/zone'] ?? labels['failure-domain.beta.kubernetes.io/zone'] ?? '',
     age: age(it.metadata?.creationTimestamp),
+    cpuCapacity: parseCpuCores(cap.cpu),
+    cpuAllocatable: parseCpuCores(alloc.cpu),
+    memCapacity: parseMem(cap.memory),
+    memAllocatable: parseMem(alloc.memory),
   };
 }
 
 export function normalizePod(it: K8sItem): PodRow {
   const restarts = (it.status?.containerStatuses ?? []).reduce((s, c) => s + (c.restartCount ?? 0), 0);
+  const requests = (it.spec?.containers ?? []).map((c) => c.resources?.requests ?? {});
   return {
     name: it.metadata?.name ?? '',
     namespace: it.metadata?.namespace ?? '',
@@ -137,6 +150,8 @@ export function normalizePod(it: K8sItem): PodRow {
     node: it.spec?.nodeName ?? '',
     restarts,
     age: age(it.metadata?.creationTimestamp),
+    cpuRequest: requests.reduce((s, r) => s + parseCpuCores(r.cpu), 0),
+    memRequest: requests.reduce((s, r) => s + parseMem(r.memory), 0),
   };
 }
 

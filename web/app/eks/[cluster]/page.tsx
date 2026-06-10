@@ -8,6 +8,9 @@ import PageHeader from '@/components/ui/PageHeader';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Input from '@/components/ui/Input';
 import Badge from '@/components/ui/Badge';
+import Card from '@/components/ui/Card';
+import Meter from '@/components/ui/Meter';
+import { aggregateNodeResources, type NodeRow, type PodRow, type NodeResourceAgg } from '@/lib/eks-resources';
 
 type Row = Record<string, unknown>;
 type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'diagnosis';
@@ -98,6 +101,7 @@ export default function EksClusterPage() {
 
   const [tab, setTab] = useState<Tab>('nodes');
   const [rows, setRows] = useState<Row[] | null>(null);
+  const [nodeAgg, setNodeAgg] = useState<NodeResourceAgg[] | null>(null);
   const [diag, setDiag] = useState<DiagnosisResult | null>(null);
   const [err, setErr] = useState('');
   const [query, setQuery] = useState('');
@@ -106,6 +110,7 @@ export default function EksClusterPage() {
 
   const load = useCallback(async () => {
     setRows(null);
+    setNodeAgg(null);
     setDiag(null);
     setErr('');
     try {
@@ -131,6 +136,16 @@ export default function EksClusterPage() {
       }
       const d = await r.json();
       setRows(d.rows as Row[]);
+      // Nodes tab: also pull pods to aggregate per-node CPU/memory requests (best-effort).
+      if (tab === 'nodes') {
+        try {
+          const pr = await fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=pods`);
+          if (pr.ok) {
+            const pd = await pr.json();
+            setNodeAgg(aggregateNodeResources((d.rows ?? []) as NodeRow[], (pd.rows ?? []) as PodRow[]));
+          }
+        } catch { /* pods fetch is best-effort — the node table still renders without the viz */ }
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -254,6 +269,30 @@ export default function EksClusterPage() {
                     </div>
                   )}
                 </div>
+                {tab === 'nodes' && nodeAgg && nodeAgg.length > 0 && (
+                  <Card title="노드 리소스" subtitle="Pod 요청 합계 대비 노드 allocatable (CPU 코어 · 메모리 MiB)">
+                    <div className="flex flex-col gap-3">
+                      {nodeAgg.map((n) => (
+                        <div key={n.name} className="grid grid-cols-1 gap-1 sm:grid-cols-[1fr_auto_auto] sm:items-center sm:gap-6 text-[12px]">
+                          <span className="min-w-0 truncate font-mono text-ink-700" title={n.name}>
+                            {n.name}
+                            <span className="ml-2 text-ink-400">{n.podCount} pods</span>
+                          </span>
+                          <span className="flex items-center gap-2 text-ink-500">
+                            <span className="w-8">CPU</span>
+                            <Meter value={n.cpuPct} />
+                            <span className="tabular text-ink-400">{n.cpuRequest.toFixed(1)}/{n.cpuAllocatable.toFixed(1)}</span>
+                          </span>
+                          <span className="flex items-center gap-2 text-ink-500">
+                            <span className="w-8">Mem</span>
+                            <Meter value={n.memPct} />
+                            <span className="tabular text-ink-400">{Math.round(n.memRequest)}/{Math.round(n.memAllocatable)}</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
                 <DataTable
                   columns={COLUMNS[tab as Exclude<Tab, 'diagnosis'>]}
                   rows={filteredRows}
