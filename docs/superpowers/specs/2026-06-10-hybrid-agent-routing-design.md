@@ -1,7 +1,7 @@
-# 설계: 하이브리드 에이전트 라우팅 + 프롬프트 캐싱 (→ ADR-037)
+# 설계: 하이브리드 에이전트 라우팅 + 프롬프트 캐싱 (→ ADR-038)
 
 > 작성 2026-06-10 · 브랜치 `feat/v2-architecture-design` · 멀티AI 의사결정·리뷰(Kiro·Codex·Gemini) 반영
-> 후속: 이 스펙은 **ADR-037**로 정식화 예정. 구현 계획은 writing-plans로.
+> 후속: 이 스펙은 **ADR-038**로 정식화 (037은 동시 세션의 "v2 파운데이션" ADR이 선점). 구현 계획은 writing-plans로.
 
 ## 0. 멀티AI 스펙 리뷰 반영 (2026-06-10, Verdict REVIEW → 수정 완료)
 
@@ -83,7 +83,7 @@ meta의 ranked 칩은 **빌트인 섹션만** 노출. 커스텀 에이전트가 
 
 ## 4. 프롬프트 캐싱 + temperature=0 (부가 — ADR-033 확장, 선행검증 필수)
 
-- **ADR-033 관계.** ADR-033은 캐싱을 *결정*했으나 *"게이트웨이 호출은 불투명"*(=v1 `src/`의 게이트웨이 경유 호출은 `cache_control` 제어 불가)이라 정정. **v2의 `agent.py` Strands `BedrockModel`은 우리가 Bedrock을 직접 호출하는 지점**이라 제어 가능. ADR-037은 그 결정을 v2 호출 경로로 확장.
+- **ADR-033 관계.** ADR-033은 캐싱을 *결정*했으나 *"게이트웨이 호출은 불투명"*(=v1 `src/`의 게이트웨이 경유 호출은 `cache_control` 제어 불가)이라 정정. **v2의 `agent.py` Strands `BedrockModel`은 우리가 Bedrock을 직접 호출하는 지점**이라 제어 가능. ADR-038은 그 결정을 v2 호출 경로로 확장.
 - **선행 스파이크 (리뷰 #1 — 구현 전제조건).** 구현 착수 전 별도 spike로 다음을 확인하고 결과를 ADR에 기록:
   - `strands-agents` 버전 **핀**(현재 unpinned) + AgentCore arm64 이미지에서 `BedrockModel` 생성자/Converse 경로가 노출하는 정확한 캐시 파라미터(`cache_prompt`/`cache_tools` 또는 `additionalModelRequestFields`/`anthropic_beta` 헤더).
   - **기동 스모크테스트**: 잘못된 kwarg가 AgentCore 런타임 기동을 깨지 않는지(try/except 가드).
