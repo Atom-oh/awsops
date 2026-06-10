@@ -489,3 +489,101 @@ ON CONFLICT (name) DO NOTHING;
 INSERT INTO schema_migrations (version, description)
 VALUES (4, 'ADR-029+036: remediation substrate — action_catalog + action_plans + remediation_audit + worker_jobs cols (all disabled)')
 ON CONFLICT (version) DO NOTHING;
+
+-- ============================================================================
+-- ADR-032 (migration v5): incident lifecycle DOMAIN STATE — always-present,
+-- inert when incident_lifecycle_enabled=false. Extends (does NOT replace)
+-- alert_diagnosis. NO autonomous behavior; orchestration rides the P2 backbone.
+-- ============================================================================
+
+-- 1) incidents — one durable row per correlated incident (the lifecycle aggregate).
+--    correlation_key is the dedup-race UNIQUE key (Addendum (a)): concurrent
+--    alerts that both pass the look-back must NOT both create a 'New'.
+CREATE TABLE IF NOT EXISTS incidents (
+  id               UUID PRIMARY KEY,
+  correlation_key  TEXT NOT NULL UNIQUE,                 -- dedup-race winner; rest resolve to Linked
+  fingerprint      TEXT,                                 -- carried from alert_diagnosis correlation
+  status           TEXT NOT NULL DEFAULT 'triaged'
+                     CHECK (status IN ('triaged','investigating','root_cause',
+                            'mitigation_planned','prevention','resolved','stalled','skipped')),
+  severity         TEXT NOT NULL DEFAULT 'warning',
+  trigger_source   TEXT NOT NULL,                        -- cloudwatch|alertmanager|grafana|generic|manual
+  services         TEXT[] NOT NULL DEFAULT '{}',
+  resources        TEXT[] NOT NULL DEFAULT '{}',
+  agent_space_version TEXT,                              -- ADR-031 traceability
+  rca              JSONB,                                -- ADR-034 seam (persist locally; 034 writes back later)
+  mitigation_plan  JSONB,                                -- recommendation-only catalog action refs (NEVER executed here)
+  embedding_seam   JSONB,                                -- pgvector future-landing seam (deferred; see plan)
+  first_event_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_event_at    TIMESTAMPTZ NOT NULL DEFAULT now(),   -- look-back window anchor
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_active
+  ON incidents (status, last_event_at) WHERE status IN ('triaged','investigating');
+CREATE INDEX IF NOT EXISTS idx_incidents_services ON incidents USING GIN (services);
+CREATE INDEX IF NOT EXISTS idx_incidents_resources ON incidents USING GIN (resources);
+
+-- 2) incident_stages — per-stage checkpoint + idempotency (Addendum (b)+(c)).
+--    stage_idempotency_key UNIQUE per (incident, stage) so a retried Investigation
+--    resumes from the last checkpoint and never spawns duplicate Sub-agents.
+CREATE TABLE IF NOT EXISTS incident_stages (
+  id                   BIGSERIAL PRIMARY KEY,
+  incident_id          UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  stage                TEXT NOT NULL
+                         CHECK (stage IN ('triage','investigation','root_cause',
+                                'mitigation_plan','prevention')),
+  stage_idempotency_key TEXT NOT NULL,
+  job_id               UUID,                             -- the worker_jobs orchestration row (P2 accounting)
+  status               TEXT NOT NULL DEFAULT 'running'
+                         CHECK (status IN ('running','succeeded','failed','stalled')),
+  last_checkpoint_at   TIMESTAMPTZ NOT NULL DEFAULT now(),  -- watchdog anchor (Addendum (b))
+  timeout_seconds      INTEGER,                          -- snapshot of the configurable stage timeout
+  detail               JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (incident_id, stage_idempotency_key)            -- stage-level idempotency (Addendum (c))
+);
+CREATE INDEX IF NOT EXISTS idx_incident_stages_watch
+  ON incident_stages (status, last_checkpoint_at) WHERE status = 'running';
+
+-- 3) incident_findings — compressed Sub-agent findings (Phase 2 fan-out).
+CREATE TABLE IF NOT EXISTS incident_findings (
+  id           BIGSERIAL PRIMARY KEY,
+  incident_id  UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  sub_agent    TEXT NOT NULL,                            -- gateway/agent name (ADR-031)
+  agent_version INT,
+  skill_hashes JSONB NOT NULL DEFAULT '[]'::jsonb,       -- ADR-031 traceability
+  findings     JSONB NOT NULL DEFAULT '{}'::jsonb,       -- compacted
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_findings_incident ON incident_findings (incident_id);
+
+-- 4) incident_links — the 'Linked' alerts that lost the dedup race (Addendum (a)).
+CREATE TABLE IF NOT EXISTS incident_links (
+  id            BIGSERIAL PRIMARY KEY,
+  incident_id   UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  correlation_key TEXT NOT NULL,                         -- the losing alert's would-be key
+  reason        TEXT NOT NULL DEFAULT '',
+  linked_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_links_incident ON incident_links (incident_id);
+
+-- 5) prevention_recommendations — Phase-4 skeleton output.
+CREATE TABLE IF NOT EXISTS prevention_recommendations (
+  id           BIGSERIAL PRIMARY KEY,
+  incident_id  UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  category     TEXT NOT NULL,                            -- observability|testing|code|infra
+  recommendation TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_incidents_touch') THEN
+    CREATE TRIGGER trg_incidents_touch BEFORE UPDATE ON incidents
+      FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+END $$;
+
+INSERT INTO schema_migrations (version, description)
+VALUES (5, 'ADR-032: incident lifecycle domain — incidents + incident_stages (checkpoint/idempotency) + findings + links + prevention (inert when off)')
+ON CONFLICT (version) DO NOTHING;

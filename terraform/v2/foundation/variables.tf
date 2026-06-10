@@ -107,6 +107,12 @@ variable "remediation_enabled" {
   default     = false
 }
 
+variable "incident_lifecycle_enabled" {
+  type        = bool
+  description = "ADR-032 incident lifecycle gate. false (default) = 0 lifecycle infra, 0 cost, ZERO autonomous triggers. The always-present incident_* tables (migration v5) are harmless when off. REQUIRES workers_enabled=true to enable (reuses the P2 queue/dispatcher/reaper/status_updater/pg8000 layer)."
+  default     = false
+}
+
 variable "steampipe_enabled" {
   type        = bool
   description = "D1 inventory data layer (warm Steampipe Fargate + sync Lambda). false (default) = 0 resources/cost."
