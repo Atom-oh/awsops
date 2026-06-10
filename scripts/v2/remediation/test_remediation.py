@@ -116,3 +116,80 @@ def test_gate_passes_only_when_all_three_pass(monkeypatch):
     a, reason = ac.gate(_FakeConn([_ACTION_ROW]), "ec2-detach-sg")
     assert reason is None
     assert a is not None and a["name"] == "ec2-detach-sg"
+
+
+# ---------------------------------------------------------------------------
+# Task 4: remediation_executor.py — dry-run / execute / rollback skeleton.
+# No live AWS / no DB: monkeypatch db.connect, cat.gate, _assume.
+# ---------------------------------------------------------------------------
+import remediation_executor as ex  # noqa: E402
+
+
+class _ExecConn:
+    """Records every .run() and .close() so we can assert NO terminal write happened."""
+
+    def __init__(self):
+        self.calls = []
+        self.closed = False
+
+    def run(self, sql, **params):
+        self.calls.append((sql, params))
+        return []
+
+    def close(self):
+        self.closed = True
+
+
+def _boom_assume(*_a, **_k):  # pragma: no cover - must never be reached on a blocked path
+    raise AssertionError("_assume must not be called when the action is gate-blocked")
+
+
+def test_executor_module_compiles():
+    src = (_HERE / "remediation_executor.py").read_text()
+    ast.parse(src)  # raises SyntaxError on a broken module
+
+
+def test_dry_run_fns_are_pure_and_declare_no_mutation():
+    # A poisoned session: any boto3 attribute access raises — proves dry-run never touches AWS.
+    class _PoisonSession:
+        def __getattr__(self, _name):
+            raise AssertionError("dry-run must not touch boto3 / the session")
+
+    sess = _PoisonSession()
+    flag = ex._flag_dry_run({"flagKey": "beta", "value": True}, sess)
+    assert flag["mutates"] is False and flag["would_set"] == "beta"
+    ops = ex._opsitem_dry_run({"title": "investigate"}, sess)
+    assert ops["mutates"] is False and ops["would_create_opsitem_title"] == "investigate"
+
+
+def test_handler_gate_blocked_fails_closed_no_terminal_write(monkeypatch):
+    conn = _ExecConn()
+    monkeypatch.setattr(ex.db, "connect", lambda: conn)
+    monkeypatch.setattr(ex.cat, "gate", lambda _c, _n: (None, "killswitch_off"))
+    # If the role were ever assumed on a blocked path that is a safety violation.
+    monkeypatch.setattr(ex, "_assume", _boom_assume)
+
+    import pytest  # noqa: E402
+
+    with pytest.raises(RuntimeError, match="^blocked:killswitch_off$"):
+        ex.lambda_handler(
+            {"job_id": "j1", "action": "app-feature-flag-set", "phase": "execute"}, None)
+    # Fail-closed: no UPDATE/INSERT at all → no terminal status written.
+    assert conn.calls == []
+    assert conn.closed is True  # finally: conn.close() still ran
+
+
+def test_handler_rollback_without_handler_raises_manual(monkeypatch):
+    conn = _ExecConn()
+    monkeypatch.setattr(ex.db, "connect", lambda: conn)
+    # opscenter-create-opsitem has rb=None; gate must pass for us to reach the rollback branch.
+    monkeypatch.setattr(ex.cat, "gate", lambda _c, _n: ({"name": "opscenter-create-opsitem"}, None))
+    monkeypatch.setattr(ex, "_assume", lambda _arn: object())
+    monkeypatch.setenv("ACTION_ROLE_OPSCENTER_CREATE_OPSITEM", "arn:aws:iam::1:role/x")
+
+    import pytest  # noqa: E402
+
+    with pytest.raises(RuntimeError, match="MANUAL_INTERVENTION_REQUIRED"):
+        ex.lambda_handler(
+            {"job_id": "j2", "action": "opscenter-create-opsitem", "phase": "rollback"}, None)
+    assert conn.closed is True
