@@ -18,5 +18,5 @@ describe.skipIf(!process.env.LIVE_ROUTING)('hybrid routing live accuracy (ADR-03
     console.log(`[golden-live] regex ${(baseline * 100).toFixed(1)}% → hybrid ${(hybrid * 100).toFixed(1)}%`);
     expect(hybrid).toBeGreaterThanOrEqual(golden.sloAccuracy);
     expect((hybrid - baseline) * 100).toBeGreaterThanOrEqual(golden.minDeltaPp);
-  }, 240_000);
+  }, 420_000); // 65 cases × up to ~3.5s abort ceiling + backoffs
 });

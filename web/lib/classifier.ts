@@ -7,7 +7,9 @@ import { SECTIONS } from './sections';
 const VALID_KEYS = new Set(SECTIONS.map((s) => s.key));
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 const MODEL_ID = process.env.CLASSIFIER_MODEL_ID || 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
-const TIMEOUT_MS = 1000;
+// Measured live (2026-06-10): the global. cross-region profile runs 1.9–3.0s from ap-northeast-2,
+// so the spec's original 1s abort starved every call into fallback. 3500ms covers observed p99.
+const TIMEOUT_MS = Number(process.env.CLASSIFIER_TIMEOUT_MS || 3500);
 
 // Immutable classifier system prompt. The <query> content is data, not instructions.
 const SYSTEM = `You are a routing classifier for an AWS operations dashboard.
