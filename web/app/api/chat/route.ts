@@ -6,6 +6,8 @@ import { sectionByKey } from '@/lib/sections';
 import { getEnabledCustomAgents } from '@/lib/catalog-source';
 import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
+import { recordExchange } from '@/lib/chat-store';
+import { randomUUID } from 'crypto';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120; // long agent calls
@@ -24,7 +26,7 @@ export async function POST(request: Request) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
 
-  let body: { prompt?: string; messages?: ChatMsg[]; section?: string; switchedFrom?: string; sessionId?: string };
+  let body: { prompt?: string; messages?: ChatMsg[]; section?: string; switchedFrom?: string; sessionId?: string; threadId?: string };
   try {
     body = await request.json();
   } catch {
@@ -61,6 +63,21 @@ export async function POST(request: Request) {
   const inactiveSection = hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
     ? sectionByKey(spec.gateway)! : null;
   const messages: ChatMsg[] = [...(Array.isArray(body.messages) ? body.messages : []), { role: 'user', content: prompt }];
+  // Thread persistence: adopt a well-formed client threadId, else mint one. Ownership is
+  // enforced at write time by chat-store's owner-guarded upsert (forged ids just drop).
+  const THREAD_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const threadId = (typeof body.threadId === 'string' && THREAD_RE.test(body.threadId)) ? body.threadId : randomUUID();
+  const exchangeMeta = route
+    ? { ranked: route.ranked, method: route.method, ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}) }
+    : (spec.tier === 'custom' ? { customAgent: spec.agentName } : undefined);
+  const record = (assistantContent: string) => {
+    recordExchange({
+      threadId, userSub: user.sub, sessionId,
+      promptTitle: prompt.slice(0, 40),
+      userContent: prompt, assistantContent,
+      gateway: spec.gateway, meta: exchangeMeta,
+    }).catch(() => { /* store is never-throws by contract; belt-and-suspenders (P2 gate) */ });
+  };
 
   const enc = new TextEncoder();
   const stream = new ReadableStream({
@@ -68,7 +85,7 @@ export async function POST(request: Request) {
       controller.enqueue(enc.encode(': heartbeat\n\n')); // open immediately (CloudFront/ALB keepalive)
       // meta is ALWAYS emitted, on every path incl. inactive/fallback (spec §6).
       const meta = {
-        gateway: spec.gateway, agentName: spec.agentName, tier: spec.tier, skillHashes: spec.skillHashes,
+        gateway: spec.gateway, agentName: spec.agentName, tier: spec.tier, skillHashes: spec.skillHashes, threadId,
         ...(route ? { ranked: route.ranked, method: route.method } : {}),
         ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}),
       };
@@ -78,6 +95,7 @@ export async function POST(request: Request) {
         const guide = `🔒 ${inactiveSection.label} 에이전트는 P3에서 제공 예정입니다.` +
           (alts ? ` 활성 섹션(${alts}) 칩으로 다시 시도해 주세요.` : ' 활성 섹션으로 다시 시도해 주세요.');
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: guide })}\n\n`));
+        record(guide); // the question is worth keeping even when the section isn't live (spec §3)
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
         controller.close();
         return;
@@ -105,6 +123,7 @@ export async function POST(request: Request) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));
         await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
       }
+      record(text); // fire-and-forget after the chunk loop, before [DONE] (P2 gate placement)
       controller.enqueue(enc.encode('data: [DONE]\n\n'));
       controller.close();
     },

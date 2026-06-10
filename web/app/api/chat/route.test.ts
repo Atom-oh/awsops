@@ -22,6 +22,8 @@ vi.mock('@/lib/agent-resolver', () => ({
   resolveAgent: (...a: unknown[]) => resolveAgent(...a),
 }));
 vi.mock('@/lib/trace', () => ({ recordCustomAgentTrace: (...a: unknown[]) => recordCustomAgentTrace(...a) }));
+const recordExchange = vi.fn();
+vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
 
 function req(body: unknown, cookie = 'awsops_token=t') {
   return new Request('http://x/api/chat', {
@@ -57,6 +59,8 @@ beforeEach(() => {
   classifyRoute.mockReset();
   classifyRoute.mockResolvedValue({ primary: 'ops', ranked: [{ key: 'ops', score: 0, active: false }], method: 'regex' });
   classifyPrompt.mockReset();
+  recordExchange.mockReset();
+  recordExchange.mockResolvedValue(undefined);
   delete process.env.HYBRID_ROUTING_ENABLED;
 });
 
@@ -210,5 +214,69 @@ describe('hybrid routing (ADR-038)', () => {
     const res = await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) }));
     await readStream(res);
     expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything());
+  });
+});
+
+describe('thread persistence', () => {
+  it('emits threadId in meta and records the exchange after a successful invoke', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u1' });
+    pickGateway.mockReturnValue('security');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
+    invokeAgent.mockResolvedValue('answer');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: '질문', sessionId: 's'.repeat(36) })));
+    expect(body).toContain('"threadId":"');
+    expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({
+      userSub: 'u1', userContent: '질문', assistantContent: 'answer', gateway: 'security',
+    }));
+  });
+
+  it('reuses a provided threadId', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u1' });
+    pickGateway.mockReturnValue('security');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const tid = '123e4567-e89b-42d3-a456-426614174000';
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'q', threadId: tid, sessionId: 's'.repeat(36) })));
+    expect(body).toContain(`"threadId":"${tid}"`);
+    expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({ threadId: tid }));
+  });
+
+  it('does not record when the agent invoke fails, and chat still streams the error', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u1' });
+    pickGateway.mockReturnValue('security');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
+    invokeAgent.mockRejectedValue(new Error('boom'));
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(body).toContain('[DONE]');
+    expect(recordExchange).not.toHaveBeenCalled();
+  });
+
+  it('records the inactive-section guidance exchange too (spec §3)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u1' });
+    classifyRoute.mockResolvedValue({ primary: 'data', ranked: [{ key: 'data', score: 0.9, active: false }], method: 'llm' });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'data', skill: 'data', agentName: 'data', skillHashes: [] });
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'RDS 느린 쿼리', sessionId: 's'.repeat(36) })));
+    expect(invokeAgent).not.toHaveBeenCalled();
+    expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({
+      userContent: 'RDS 느린 쿼리',
+      assistantContent: expect.stringContaining('P3'),
+    }));
+  });
+
+  it('a rejecting recordExchange does not break the SSE stream (defensive)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u1' });
+    pickGateway.mockReturnValue('security');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
+    invokeAgent.mockResolvedValue('answer');
+    recordExchange.mockRejectedValue(new Error('store blew up'));
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(body).toContain('answer');
+    expect(body).toContain('[DONE]');
   });
 });
