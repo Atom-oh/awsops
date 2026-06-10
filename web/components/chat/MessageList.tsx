@@ -30,7 +30,7 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                   const s = sectionByKey(r.key);
                   if (!s) return null;
                   return (
-                    <button key={r.key} onClick={() => onSwitch?.(r.key)} aria-label={`${s.label}로 다시 실행`}
+                    <button key={r.key} onClick={() => onSwitch?.(r.key)} aria-label={`${s.label}로 다시`}
                       style={{ fontSize: 10.5, padding: '3px 8px', borderRadius: 7, cursor: 'pointer', background: `${s.color}14`, border: `1px solid ${s.color}55`, color: '#cfe3fb' }}>
                       → {s.icon} {s.label}로 다시
                     </button>

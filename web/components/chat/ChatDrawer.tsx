@@ -4,6 +4,7 @@ import SectionPicker from './SectionPicker';
 import PresetChips from './PresetChips';
 import Composer from './Composer';
 import MessageList, { type Msg } from './MessageList';
+import { sectionByKey } from '@/lib/sections';
 
 function newSessionId(): string {
   const s = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.round(Math.random() * 1e9)}`);
@@ -87,7 +88,11 @@ export default function ChatDrawer() {
   function resendWith(sectionKey: string) {
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
     const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant');
-    if (lastUser) void send(lastUser.content, sectionKey, lastAssistant?.gateway);
+    // Only count as a misroute candidate if the previous answer came from a LIVE agent —
+    // switching away from an inactive-section guidance bubble is not a misroute (ADR-038 §5).
+    const prevGateway = lastAssistant?.gateway;
+    const switchedFrom = prevGateway && sectionByKey(prevGateway)?.active ? prevGateway : undefined;
+    if (lastUser) void send(lastUser.content, sectionKey, switchedFrom);
   }
 
   if (!open) {
