@@ -587,3 +587,48 @@ END $$;
 INSERT INTO schema_migrations (version, description)
 VALUES (5, 'ADR-032: incident lifecycle domain — incidents + incident_stages (checkpoint/idempotency) + findings + links + prevention (inert when off)')
 ON CONFLICT (version) DO NOTHING;
+
+-- ============================================================================
+-- ADR-034 (migration v6): RCA write-back state — always-present, inert when
+-- rca_writeback_enabled=false. Records WHERE each incident's RCA was written
+-- back (OpsCenter OpsItem id OR Incident Manager incident ARN), the dedup key
+-- (idempotency #6), the recommendation-only marker, the RCA version, and the
+-- best-effort Slack thread_ts. NO autonomous behavior; the write itself rides
+-- the incident SM WriteBack stage (gated). Idempotent.
+-- ============================================================================
+
+-- One row per (incident) write-back attempt. dedup_key UNIQUE => exactly one
+-- write per incident (re-fire reuses the row / the Slack thread). The marker
+-- column documents the feedback-loop breaker stamp (CreatedBy=AWSops-AIOps).
+CREATE TABLE IF NOT EXISTS incident_writeback (
+  id              BIGSERIAL PRIMARY KEY,
+  incident_id     UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  dedup_key       TEXT NOT NULL UNIQUE,                 -- sha256(incident_id+':writeback') (idempotency #6)
+  target_system   TEXT NOT NULL
+                    CHECK (target_system IN ('opscenter','incident_manager')),
+  source_object_id TEXT,                                -- OpsItemId OR incidentRecordArn
+  rca_version     TEXT,                                 -- RCA_VERSION stamped at write time
+  marker          TEXT NOT NULL DEFAULT 'AWSops-AIOps', -- feedback-loop breaker stamp (CreatedBy)
+  status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','rendered','succeeded','failed','resolved','skipped')),
+  slack_thread_ts TEXT,                                 -- persistent thread reuse (ADR-012 threadTs)
+  detail          JSONB NOT NULL DEFAULT '{}'::jsonb,   -- rendered body / error / dry-run capture
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_writeback_incident ON incident_writeback (incident_id);
+CREATE INDEX IF NOT EXISTS idx_writeback_status ON incident_writeback (status, updated_at);
+
+-- A denormalized status on incidents for the detail UI (degrade-safe; nullable).
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS writeback_status TEXT;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_writeback_touch') THEN
+    CREATE TRIGGER trg_writeback_touch BEFORE UPDATE ON incident_writeback
+      FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+END $$;
+
+INSERT INTO schema_migrations (version, description)
+VALUES (6, 'ADR-034: RCA write-back state — incident_writeback (dedup/idempotent) + incidents.writeback_status (inert when off)')
+ON CONFLICT (version) DO NOTHING;

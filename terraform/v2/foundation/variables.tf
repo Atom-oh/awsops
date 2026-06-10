@@ -113,6 +113,12 @@ variable "incident_lifecycle_enabled" {
   default     = false
 }
 
+variable "rca_writeback_enabled" {
+  type        = bool
+  description = "ADR-034 RCA write-back gate (observability-write tier). false (default) = 0 write-back infra, 0 cost, ZERO OpsCenter/Incident-Manager write. The always-present incident_writeback table (migration v6) is harmless when off. REQUIRES incident_lifecycle_enabled=true (adds a stage to the incident SM, reads incidents.rca) AND remediation_enabled=true (reuses the opscenter-create-opsitem catalog action + action_opscenter_write per-action role from remediation.tf). The webhook marker-drop filter is ALWAYS-ON (a harmless safety filter independent of this flag)."
+  default     = false
+}
+
 variable "steampipe_enabled" {
   type        = bool
   description = "D1 inventory data layer (warm Steampipe Fargate + sync Lambda). false (default) = 0 resources/cost."
