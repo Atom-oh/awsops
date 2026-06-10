@@ -166,6 +166,8 @@ resource "aws_ecs_task_definition" "web" {
         ] : [], var.remediation_enabled ? [
         # ADR-029+036: the web execute route reads the kill-switch param name + remediation SM ARN.
         # concat(base, []) == base when remediation_enabled=false → byte-identical web task def.
+        # REMEDIATION_ENABLED is the flag the execute route fails-closed on (env-side hard gate).
+        { name = "REMEDIATION_ENABLED", value = "true" },
         { name = "MUTATING_ACTIONS_SSM", value = one(aws_ssm_parameter.mutating_enabled[*].name) },
         { name = "REMEDIATION_STATE_MACHINE_ARN", value = one(aws_sfn_state_machine.remediation[*].arn) }
       ] : [])
