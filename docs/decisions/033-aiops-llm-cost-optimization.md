@@ -76,7 +76,8 @@ Mutating nothing in customer infrastructure, ADR-033 is **not** gated by ADR-029
 ### Phasing / 단계 구성
 
 - **Phase 2 (Aurora durable token budget)** — implemented: `ai_token_budget` table + dual-write + cold-start hydrate (the in-process budget no longer resets on restart). See `docs/superpowers/plans/2026-06-09-adr-033-phase2-durable-budget.md`.
-- **Phase 3 (deferred) — semantic answer cache** (Bedrock Titan embeddings + Aurora pgvector + similarity threshold/TTL/fingerprint invalidation): re-opened when a v2 AI route exists, where multi-runtime makes it worthwhile. Deferred per the 2026-06-09 `/co-agent` decision (single-EC2 v1's node-cache already covers exact repeats; staleness risk; YAGNI).
+- **Phase 1 (v1, in-process)** targets the **frozen v1** app (`src/app/api/ai/route.ts`, single-EC2 node-cache). v1 is maintenance-only, so Phase 1's classifier/prompt-caching/answer-cache wins are **not back-ported** unless a v1 hotspot demands it; the durable equivalents are rebuilt natively in v2 (Phase 2 + Phase 3). The v2 AI surface is `web/app/api/chat/route.ts` (AgentCore section agents), not the v1 11-route classifier — so the *direct-`callBedrock` prompt-caching* and *exact-answer-cache* mechanics must be re-derived for v2's chat/agent path, not lifted verbatim.
+- **Phase 3 (deferred) — semantic answer cache** (Bedrock Titan embeddings + Aurora pgvector + similarity threshold/TTL/fingerprint invalidation): the original "re-open when a v2 AI route exists" gate is **now satisfied** — `web/app/api/chat/route.ts` exists — so Phase 3 is **eligible to be re-opened** as a v2 work item (still deferred until prioritized; single-EC2 node-cache covered exact repeats in v1, staleness risk, YAGNI until the v2 chat QPS justifies it).
 
 ## Consequences / 영향
 

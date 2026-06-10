@@ -1,6 +1,14 @@
 # ADR-030: ECS Fargate Workload + Aurora App State + Dual-Tier ECR
 
-## Status: Accepted (2026-05-27) / 상태: 채택됨 (2026-05-27)
+## Status: Accepted (2026-05-27) — mechanism refined by ADR-037 (2026-06-10) / 상태: 채택됨 (2026-05-27) — 메커니즘은 ADR-037이 정제 (2026-06-10)
+
+> **⚠️ v2 reality note (2026-06-10, co-agent ADR-consistency review)** — The *intent* of this ADR holds: **Aurora replaces the v1 `data/*.json` state layer**, and **dual-tier ECR** (dev-private / prod-public) is the OSS distribution model. But the **mechanism described in the body below was not implemented as written** and is superseded by **[ADR-037](037-v2-terraform-foundation.md)**:
+> - **IaC = Terraform**, not the "CDK refactor" in Consequences (`infra-cdk/lib/...` is v1-only).
+> - **Compute = one thin-BFF web service + a flag-gated async worker tier** (SQS → Step Functions → Lambda/Fargate), NOT the four long-lived containers (`awsops-web`/`awsops-steampipe`/`awsops-alert-poller`/`awsops-jobs`) + Service Connect mesh described here.
+> - **No live Steampipe.** Live AWS queries go through **AgentCore MCP Lambda tools**; the only Steampipe in v2 is a **flag-gated warm inventory-sync** batch (`var.steampipe_enabled`, default off), NOT a Service-Connect daemon at `awsops-steampipe.awsops.local:9193`. **The Supersession note at the bottom of this ADR is therefore factually wrong about Steampipe and is corrected by ADR-037.**
+> - **Config** (`accounts[]`, admin allowlist, AgentCore) lives in **SSM/Aurora**, not a mounted `data/config.json`. (The "`data/config.json` stays as file" row and the ADR-008 reference are v1-only.)
+>
+> **⚠️ v2 현행 정정 (2026-06-10)** — 본 ADR의 *의도*(Aurora가 v1 `data/*.json` 상태 계층 대체, 이중 ECR 배포)는 유효하나, **아래 본문의 메커니즘은 기술된 대로 구현되지 않았고 [ADR-037](037-v2-terraform-foundation.md)이 승계**한다: IaC=Terraform(CDK 아님), 컴퓨트=thin-BFF 웹 1 + flag-gated 비동기 워커 티어(4-컨테이너/Service Connect 아님), **라이브 Steampipe 없음**(AgentCore MCP, Steampipe는 flag-gated 인벤토리 sync 배치만), 설정=SSM/Aurora(`data/config.json` 아님). **하단 Supersession note의 Steampipe 표현은 사실오류이며 037이 정정.**
 
 ## Context / 컨텍스트
 

@@ -89,9 +89,9 @@ Phased scope / 단계별 범위:
 - **Phase 4 (gated)** — mutating tools routed through ADR-029.
 - **Phase 4 (게이트)** — 변경 도구를 ADR-029 경유.
 
-Status remains **Proposed** until Phase 1 scope is confirmed for implementation. Explicitly out of scope (YAGNI): learned/auto-tuned skills, per-user agents, cross-org skill marketplace, EventBridge pub-sub.
+**Accepted (2026-06-09)** via the multi-AI consensus review (see Status header + §Consensus Review Addenda). *(Historical drafting note: this paragraph previously read "Status remains Proposed until Phase 1 scope is confirmed" — that condition was met and the ADR was accepted; the header/index Status is authoritative.)* Explicitly out of scope (YAGNI): learned/auto-tuned skills, per-user agents, cross-org skill marketplace, EventBridge pub-sub.
 
-Phase 1 범위가 구현용으로 확정될 때까지 상태는 **Proposed**로 유지한다. 명시적 범위 제외(YAGNI): 학습형/자동 튜닝 스킬, 사용자별 에이전트, 조직 간 스킬 마켓플레이스, EventBridge pub-sub.
+**Accepted (2026-06-09)** — 멀티AI 합의 리뷰로 채택(Status 헤더 + §Consensus Review Addenda 참조). *(이력 메모: 본 문단은 과거 "Phase 1 범위 확정 전까지 Proposed 유지"였으나 조건이 충족되어 채택됨 — 헤더/인덱스 Status가 권위.)* 명시적 범위 제외(YAGNI): 학습형/자동 튜닝 스킬, 사용자별 에이전트, 조직 간 스킬 마켓플레이스, EventBridge pub-sub.
 
 ## Consequences / 결과
 
@@ -111,7 +111,7 @@ Phase 1 범위가 구현용으로 확정될 때까지 상태는 **Proposed**로 
 
 ### Post-acceptance deviations / 채택 후 편차
 
-- (none yet — Proposed) / (아직 없음 — 제안 상태)
+- (none yet) / (아직 없음)
 
 ## References / 참고 자료
 
@@ -120,7 +120,7 @@ Phase 1 범위가 구현용으로 확정될 때까지 상태는 **Proposed**로 
 - [Agent Toolkit for AWS](https://github.com/aws/agent-toolkit-for-aws), [Kiro Agent Skills](https://kiro.dev/docs/skills/)
 - Companion spec: `docs/superpowers/specs/2026-05-31-custom-agents-skills-design.md`
 - Related ADRs: ADR-002 (AI hybrid routing), ADR-004 (Gateway role split), ADR-008 (Multi-account), ADR-011 (External datasource SSRF allowlist), ADR-021 (SSE streaming), ADR-023 (Admin role model), ADR-025 (Multi-route synthesis), ADR-029 (Mutating action gate), ADR-030 (ECS Fargate + Aurora; cosign key custody follow-up), ADR-032 (Event-triggered autonomous incident lifecycle — **consumes** this ADR's resolver/Agent Space for per-incident agent/skill resolution; this ADR remains unaware of triggers/lifecycle)
-- Source touchpoints: `agent/agent.py` (`SKILL_BASE`, `streamable_http_sigv4.py`), `src/app/api/ai/route.ts` (classifier), `data/config.json` (`accounts[]`)
+- Source touchpoints (v2, per Addendum #3): `agent/agent.py` (`SKILL_BASE`, `streamable_http_sigv4.py`), resolver/classifier in **`web/`** (not v1 `src/app/api/ai/route.ts`), catalog in **Aurora** + config in **SSM** (not `data/config.json`). The v1 paths (`src/app/api/ai/route.ts`, `data/config.json`) are historical.
 
 ## Consensus Review Addenda (2026-06-09) / 합의 리뷰 보완
 

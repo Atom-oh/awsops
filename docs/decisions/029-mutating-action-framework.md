@@ -63,6 +63,8 @@ AWS 리소스 변경은 Option 2 경로를, KEDA `ScaledObject` 패치는 기존
 
 ## Decision / 결정
 
+> **⚠️ Read §Consensus Revision (2026-06-09) and ADR-036 first.** The *execution mechanism* described in this Decision section — "Option 2: per-action Lambda dispatcher + a **dedicated** Step Functions stack", "~10 new Lambdas", "new CDK stack `MutatingActionsStack`", "EC2 role", "`data/config.json`" — is **superseded**. ADR-029 is now a **substrate-agnostic *controls* spec** (the six controls below remain binding); execution runs on **ADR-036's hybrid substrate** (P2 worker backbone + SSM Automation/Change Manager) over the **[ADR-037](037-v2-terraform-foundation.md) Terraform/Fargate/Aurora foundation** — not the bespoke Lambda+SFN+CDK stack written below. The six controls are what to implement; the Option-2 plumbing below is historical. / **§Consensus Revision(2026-06-09)과 ADR-036을 먼저 읽을 것.** 아래 Decision의 *실행 메커니즘*("Option 2: 작업별 Lambda + **전용** SFN 스택", "~10 Lambda", "CDK 스택 `MutatingActionsStack`", "EC2 role", "`data/config.json`")은 **승계됨**. ADR-029는 이제 **substrate 무관 *통제* 사양**(아래 6대 통제는 유효)이고, 실행은 **[ADR-037](037-v2-terraform-foundation.md) Terraform/Fargate/Aurora 위 ADR-036 하이브리드 substrate**로 한다. 6대 통제만 구현 대상이며 아래 Option-2 배선은 이력이다.
+
 **Option 2: Per-action Lambda dispatcher + Step Functions, with the framework controls below.** This pattern is the only one that contains the IAM blast radius **per action** rather than per role, and durable Step Functions execution is the only credible answer to the "phase 2 hung at 70%" failure mode that ADR-010 §7 does not address.
 
 **Option 2(작업별 Lambda 디스패처 + Step Functions)** + 아래 프레임워크 통제. 이 패턴만이 IAM 영향 범위를 역할 단위가 아닌 **작업 단위**로 봉쇄하며, Step Functions의 영속적 실행이 ADR-010 §7이 다루지 않은 "Phase 2가 70%에서 멈춤" 시나리오에 대한 유일한 신뢰할 수 있는 답이다.

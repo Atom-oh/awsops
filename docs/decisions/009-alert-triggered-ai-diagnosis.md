@@ -2,8 +2,8 @@
 
 ## Status: Superseded by ADR-032 (2026-06-09) / 상태: ADR-032로 대체됨 (2026-06-09) — 원안 Accepted 2026-04-22
 
-> **Superseded (2026-06-09)**: [ADR-032](032-event-triggered-autonomous-incident-lifecycle.md) (now **Accepted**) supersedes this ADR's single-pass diagnosis flow with a durable, staged, multi-agent incident lifecycle (Trigger → Triage → Investigation → Mitigation → Prevention). This ADR's **correlation engine (`alert-correlation.ts`) is retained**, carried forward as ADR-032's Triage look-back component — it is not discarded. This ADR remains **Accepted** and in force until ADR-032 is Accepted.
-> **승계됨 (2026-06-09)**: [ADR-032](032-event-triggered-autonomous-incident-lifecycle.md)(현재 **Accepted**)가 본 ADR의 단일 패스 진단 플로우를 내구성 있는 단계별 멀티 에이전트 인시던트 라이프사이클(Trigger → Triage → Investigation → Mitigation → Prevention)로 승계할 것을 제안한다. 본 ADR의 **상관분석 엔진(`alert-correlation.ts`)은 보존**되어 ADR-032의 Triage look-back 컴포넌트로 이월된다 — 폐기되지 않는다. ADR-032가 채택될 때까지 본 ADR은 **Accepted** 상태로 유효하다.
+> **Superseded (2026-06-09)**: [ADR-032](032-event-triggered-autonomous-incident-lifecycle.md) (**Accepted 2026-06-09**) supersedes this ADR's single-pass diagnosis flow with a durable, staged, multi-agent incident lifecycle (Trigger → Triage → Investigation → Mitigation → Prevention). This ADR's **correlation engine (`alert-correlation.ts`) is retained**, carried forward as ADR-032's Triage look-back component — it is not discarded. **ADR-032 is now Accepted, so this ADR is fully superseded** (its body below is v1 history; the diagram's "Opus 4.6"/"17-route" labels are stale per ADR-016/002 and the Post-acceptance notes).
+> **승계됨 (2026-06-09)**: [ADR-032](032-event-triggered-autonomous-incident-lifecycle.md)(**2026-06-09 Accepted**)가 본 ADR의 단일 패스 진단 플로우를 내구성 있는 단계별 멀티 에이전트 인시던트 라이프사이클(Trigger → Triage → Investigation → Mitigation → Prevention)로 승계한다. 본 ADR의 **상관분석 엔진(`alert-correlation.ts`)은 보존**되어 ADR-032의 Triage look-back 컴포넌트로 이월된다 — 폐기되지 않는다. **ADR-032가 채택되었으므로 본 ADR은 완전히 승계됨**(아래 본문은 v1 이력; 다이어그램의 "Opus 4.6"/"17-route" 표기는 ADR-016/002 및 Post-acceptance 노트대로 stale).
 
 ## Context / 컨텍스트
 

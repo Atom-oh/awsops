@@ -5,12 +5,18 @@
 AWSops v2의 **애플리케이션 상태 저장 계층**. v1이 `data/*.json` 파일로 관리하던
 상태(인벤토리/비용 스냅샷, AgentCore 메모리·통계, 알림 진단, 이벤트 스케일링 플랜,
 리포트 스케줄)를 Aurora PostgreSQL로 이전한다. **Steampipe 대체가 아니라 v1 JSON
-상태 계층의 대체**다 — v2에는 아직 Steampipe가 없다.
+상태 계층의 대체**다 — v2에 **라이브 Steampipe는 없다**(라이브 AWS 조회는 AgentCore
+MCP Lambda). 단, 인벤토리 적재용 **flag-gated warm Steampipe Fargate→Aurora 배치
+sync**(`var.steampipe_enabled`, 기본 off, `steampipe.tf`)는 존재한다 — 상시
+Service Connect 라이브 쿼리 데몬이 아닌 배치 로더다. (ADR-037 §결정 #4 참조.)
 
 The v2 **application-state store**. It replaces v1's `data/*.json` state layer
 (inventory/cost snapshots, AgentCore memory + stats, alert diagnosis, event-scaling
 plans, report schedules) with Aurora PostgreSQL. It replaces the **v1 JSON state
-layer, NOT Steampipe** — v2 has no Steampipe.
+layer, NOT Steampipe**. v2 has **no *live* Steampipe** (live AWS queries go through
+AgentCore MCP Lambda tools); the only Steampipe is a **flag-gated warm
+inventory-sync batch** (`var.steampipe_enabled`, default off, `steampipe.tf`) that
+loads inventory into Aurora — not a Service-Connect live-query daemon. (See ADR-037 §Decision #4.)
 
 ## Current design / 현행 설계
 
@@ -33,8 +39,9 @@ layer, NOT Steampipe** — v2 has no Steampipe.
 - **Schema**: the **ADR-030 7-table schema** + a P2 `worker_jobs` table, applied via
   `psql` from an in-VPC deploy host. Tracked by a `schema_migrations` table.
   Idempotent (`CREATE TABLE IF NOT EXISTS` throughout).
-- **App access**: **node-pg** (`web/lib/db.ts`). No Steampipe in v2 — live AWS
-  queries go through AgentCore MCP Lambda tools (Steampipe is a P3 consideration).
+- **App access**: **node-pg** (`web/lib/db.ts`). No *live* Steampipe in v2 — live AWS
+  queries go through AgentCore MCP Lambda tools; a flag-gated warm Steampipe→Aurora
+  inventory-sync batch (default off) is the only Steampipe usage (ADR-037 §Decision #4).
 
 ### ADR-030 schema tables / 스키마 테이블
 

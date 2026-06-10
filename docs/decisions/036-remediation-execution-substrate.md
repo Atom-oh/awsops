@@ -91,7 +91,7 @@ ADR-036 자체가 **변경 역량 결정**이며 게이트 유지: 카탈로그 
 - SSM runbook versioning is not Git-native and dry-run is partial for some APIs. Mitigation: a thin Git→SSM Document sync in deploy; the catalog's dry-run contract enforces a check mode where native `--dry-run` is absent. / SSM 런북 버저닝 비-Git-native, 일부 API dry-run 부분 지원. 완화: 배포에 Git→SSM Document 동기화; 네이티브 `--dry-run` 부재 시 카탈로그 dry-run 계약이 check 모드 강제.
 
 ### Post-acceptance deviations / 채택 후 편차
-- None yet (Proposed). / 아직 없음 (제안 상태).
+- None yet. / 아직 없음.
 
 ## Consensus Review Addenda (2026-06-09) / 합의 리뷰 보완
 

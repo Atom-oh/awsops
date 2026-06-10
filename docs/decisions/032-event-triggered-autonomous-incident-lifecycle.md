@@ -108,9 +108,9 @@ The lifecycle is a persisted state machine, not a happy-path script. The followi
 - **At-least-once + idempotency keys / 최소 1회 + 멱등 키**: webhook/trigger delivery is at-least-once; every stage carries a stage-level idempotency key so a retried Investigation resumes from the last checkpoint rather than spawning duplicate Sub-agents or re-running mitigation. / 웹훅/트리거 전달은 최소 1회이며, 각 단계가 단계 수준 멱등 키를 가져 재시도된 Investigation이 Sub-agent 중복 생성이나 완화 재실행 대신 마지막 체크포인트에서 재개한다.
 - **Fargate task replacement / Fargate 태스크 교체**: an active investigation survives task replacement by resuming from the last Aurora checkpoint; in-flight Sub-agent work past the last checkpoint is re-executed (idempotent), not silently lost. / 활성 조사는 마지막 Aurora 체크포인트에서 재개하여 태스크 교체를 견딘다; 마지막 체크포인트 이후 진행 중이던 Sub-agent 작업은 (멱등하게) 재실행되며 조용히 소실되지 않는다.
 
-Status remains **Proposed** until Phase 1 scope is confirmed for implementation, and until ADR-029 (currently Proposed) and ADR-031 (currently Proposed) advance — Phases 2–3 depend on them. Explicitly out of scope (YAGNI): learned/auto-tuned investigation skills, autonomous (un-gated) remediation execution, cross-account incident federation beyond the existing multi-account model (ADR-008).
+**Accepted (2026-06-09)** via the multi-AI consensus review (see Status header + §Consensus Review Addenda). ADR-029 and ADR-031 are **also Accepted (2026-06-09)**, so the Phase 2–3 dependencies are unblocked at the ADR level (deployment still depends on ADR-030/037 Aurora being provisioned, per the Deployment-dependency note above). *(Historical drafting note: this paragraph previously read "remains Proposed … until ADR-029 (currently Proposed) and ADR-031 (currently Proposed) advance"; all three were accepted the same day — the header/index Status is authoritative.)* Explicitly out of scope (YAGNI): learned/auto-tuned investigation skills, autonomous (un-gated) remediation execution, cross-account incident federation beyond the existing multi-account model (ADR-008).
 
-Phase 1 범위가 구현용으로 확정되고, ADR-029(현재 Proposed)·ADR-031(현재 Proposed)이 진전될 때까지 상태는 **Proposed**로 유지한다 — Phase 2–3은 이에 의존한다. 명시적 범위 제외(YAGNI): 학습형/자동 튜닝 조사 스킬, 자율(게이트 없는) 조치 실행, 기존 멀티 어카운트 모델(ADR-008)을 넘는 교차 계정 인시던트 페더레이션.
+**Accepted (2026-06-09)** — 멀티AI 합의 리뷰로 채택. ADR-029·ADR-031도 **2026-06-09 Accepted**라 Phase 2–3 의존성은 ADR 수준에서 해제(배포는 위 배포-의존성 노트대로 ADR-030/037 Aurora 프로비저닝에 여전히 의존). *(이력 메모: 본 문단은 과거 "ADR-029(현재 Proposed)·ADR-031(현재 Proposed) 진전 전까지 Proposed"였으나 셋 다 같은 날 채택됨 — 헤더/인덱스 Status가 권위.)* 명시적 범위 제외(YAGNI): 학습형/자동 튜닝 조사 스킬, 자율(게이트 없는) 조치 실행, 기존 멀티 어카운트 모델(ADR-008)을 넘는 교차 계정 인시던트 페더레이션.
 
 ## Consequences / 결과
 
@@ -130,7 +130,7 @@ Phase 1 범위가 구현용으로 확정되고, ADR-029(현재 Proposed)·ADR-03
 
 ### Post-acceptance deviations / 채택 후 편차
 
-- (none yet — Proposed) / (아직 없음 — 제안 상태)
+- (none yet) / (아직 없음)
 
 ## References / 참고 자료
 
@@ -139,7 +139,7 @@ Phase 1 범위가 구현용으로 확정되고, ADR-029(현재 Proposed)·ADR-03
 - [From AI agent prototype to product (AWS DevOps Blog, 2026-01-15)](https://aws.amazon.com/blogs/devops/from-ai-agent-prototype-to-product-lessons-from-building-aws-devops-agent/) — Lead/Sub multi-agent rationale
 - Cross-review consensus (codex / gemini / kiro-cli, 2026-05-31): unanimous "split into ADR-032"; unanimous "same product ⇒ same ADR is a category error".
 - Related ADRs: ADR-008 (Multi-account), ADR-009 (alert-triggered AI diagnosis — **superseded by this ADR**, correlation engine retained), ADR-022 (alert webhook HMAC auth — **extended**), ADR-029 (mutating-action gate — **extended**), ADR-030 (ECS Fargate + Aurora — **extended**), ADR-031 (Runtime-Customizable Agents & Skills — **consumed** for per-incident agent/skill resolution).
-- Source touchpoints: `src/lib/alert-correlation.ts`, `src/lib/alert-diagnosis.ts`, `src/lib/alert-knowledge.ts`, `src/app/api/alert-webhook/route.ts`, `agent/agent.py` (Lead/Sub execution), `data/config.json` (`accounts[]`).
+- Source touchpoints: the v1 correlation/diagnosis logic (`src/lib/alert-correlation.ts`, `alert-diagnosis.ts`, `alert-knowledge.ts`, `src/app/api/alert-webhook/route.ts`) is the **carried-forward reference**; the v2 implementation lands in **`web/`** + the **P2 worker backbone** + **Aurora `incident_lifecycle`** tables (Addendum #3/#8, via `terraform/v2/foundation/data/schema.sql`), with config in **SSM**, not `data/config.json`.
 
 ## Consensus Review Addenda (2026-06-09) / 합의 리뷰 보완
 

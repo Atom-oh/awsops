@@ -2,7 +2,9 @@
 
 ## Status / 상태
 
-Accepted (2026-04-22) / 상태: 채택됨 (2026-04-22)
+Accepted (2026-04-22) — admin **store** superseded for v2 (2026-06-10); enforcement principle retained / 상태: 채택됨 (2026-04-22) — v2는 admin **저장소**가 승계됨 (2026-06-10), 강제 원칙은 유지
+
+> **v2 note (2026-06-10, co-agent ADR-consistency review)** — The *principle* holds (server-side admin gate, email/identity from the verified Cognito JWT, fail-closed). The **store changed**: v2 does not use `data/config.json` `adminEmails`. The v2 gate (`web/lib/admin.ts`) grants admin if the user is in the **Cognito `ADMIN_GROUP`** (`cognito:groups`) **OR** their email is in an **SSM-parameter allowlist** (`SSM_ADMIN_EMAILS_PARAM`, comma-separated, 5-min cache, fail-closed). ADR-029/032/036 references to "the ADR-023 `adminEmails` gate" should be read as **this v2 Cognito-group + SSM allowlist gate**. See [ADR-037](037-v2-terraform-foundation.md) (config source-of-truth = SSM). / **v2 노트 (2026-06-10)** — 원칙(서버측 게이트·검증 JWT·fail-closed)은 유지. **저장소가 변경**: v2는 `data/config.json` `adminEmails` 대신 `web/lib/admin.ts`가 **Cognito `ADMIN_GROUP`** 또는 **SSM 파라미터 allowlist**(`SSM_ADMIN_EMAILS_PARAM`)로 admin을 판정. ADR-029/032/036의 "ADR-023 `adminEmails` 게이트" 참조는 **이 v2 Cognito-group + SSM allowlist 게이트**로 읽는다.
 
 ## Context / 컨텍스트
 
