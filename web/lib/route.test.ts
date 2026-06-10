@@ -97,4 +97,16 @@ describe('classifyRoute', () => {
     expect(r.primary).toBe('ops'); // legacy pickGateway behavior preserved when flag off
     expect(r.method).toBe('regex');
   });
+  it('honors a pin to a valid-but-inactive section, surfacing active:false (spec §2.3)', async () => {
+    const r = await classifyRoute('아무거나', 'data', { llmEnabled: true, classify: vi.fn() });
+    expect(r).toEqual({ primary: 'data', ranked: [{ key: 'data', score: 1, active: false }], method: 'pin' });
+  });
+  it('marks an unknown key from a custom classifier as active:false (contract)', async () => {
+    const classify = vi.fn().mockResolvedValue([{ key: 'bogus-section', score: 0.9 }]);
+    const r = await classifyRoute('어제부터 뭔가 이상해요', undefined, { llmEnabled: true, classify });
+    // production classifyPrompt is enum-validated so this can't happen in the wired path;
+    // this documents the policy-layer contract for any future custom classify injection.
+    expect(r.method).toBe('llm');
+    expect(r.ranked[0]).toEqual({ key: 'bogus-section', score: 0.9, active: false });
+  });
 });
