@@ -1,6 +1,6 @@
 // web/lib/agent-space.test.ts
 // ADR-031 Phase 2 — pure intersection helper + degrade-safe CRUD.
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const query = vi.fn();
 const auditCalls: Array<Record<string, unknown>> = [];
