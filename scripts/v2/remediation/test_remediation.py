@@ -479,3 +479,58 @@ def test_db_terminal_set_includes_manual_intervention():
                 isinstance(t, ast.Name) and t.id == "_TERMINAL" for t in node.targets):
             found = {el.value for el in node.value.elts}
     assert found is not None and "manual_intervention" in found
+
+
+# ======================================================================================
+# Task 10 — Fargate executor CLI shim (CMD path). No live AWS / no DB: ast-level assertions
+# prove the shim compiles, delegates to remediation_executor, and forwards --phase.
+# ======================================================================================
+_CLI_SRC = (_HERE / "remediation_executor_cli.py").read_text()
+
+
+def test_cli_module_compiles():
+    ast.parse(_CLI_SRC)  # raises SyntaxError on a broken module
+
+
+def test_cli_imports_remediation_executor():
+    tree = ast.parse(_CLI_SRC)
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add(alias.name)
+    assert "remediation_executor" in imported, "CLI must reuse remediation_executor.lambda_handler"
+
+
+def test_cli_defines_and_forwards_phase():
+    tree = ast.parse(_CLI_SRC)
+    # --phase is a registered argparse argument (with an execute-by-default).
+    phase_args = [
+        c for c in ast.walk(tree)
+        if isinstance(c, ast.Call)
+        and isinstance(c.func, ast.Attribute) and c.func.attr == "add_argument"
+        and c.args and isinstance(c.args[0], ast.Constant) and c.args[0].value == "--phase"
+    ]
+    assert phase_args, "CLI must register a --phase argument"
+    assert any(
+        kw.arg == "default" and getattr(kw.value, "value", None) == "execute"
+        for kw in phase_args[0].keywords
+    ), "--phase must default to execute"
+    # The lambda-style event passed to lambda_handler carries a 'phase' key sourced from args.phase.
+    phase_forwarded = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                if (isinstance(k, ast.Constant) and k.value == "phase"
+                        and isinstance(v, ast.Attribute) and v.attr == "phase"):
+                    phase_forwarded = True
+    assert phase_forwarded, "CLI must forward args.phase into the executor event"
+
+
+def test_cli_calls_lambda_handler():
+    tree = ast.parse(_CLI_SRC)
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == "lambda_handler"
+        for node in ast.walk(tree)
+    ), "CLI must delegate to remediation_executor.lambda_handler"
