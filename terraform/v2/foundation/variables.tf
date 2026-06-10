@@ -101,6 +101,12 @@ variable "worker_image_tag" {
   default     = "worker-latest"
 }
 
+variable "remediation_enabled" {
+  type        = bool
+  description = "ADR-029+036 remediation/mutation substrate gate. false (default) = 0 mutating resources, 0 cost, ZERO live AWS mutation. The always-present catalog/plan/audit tables (migration v4) are harmless when off. Enable ONLY after the catalog + controls are reviewed AND an operator accepts the first mutating capability."
+  default     = false
+}
+
 variable "steampipe_enabled" {
   type        = bool
   description = "D1 inventory data layer (warm Steampipe Fargate + sync Lambda). false (default) = 0 resources/cost."
