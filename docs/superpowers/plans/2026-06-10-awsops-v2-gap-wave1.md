@@ -102,14 +102,18 @@ Add month-over-month % and projected month-end to the cost page; pure math in `w
 Surface node CPU/memory capacity vs requested. Pure parsers + aggregator in `eks-incluster.ts`, bars on the nodes tab.
 
 **Files:**
+- Create: `web/lib/eks-resources.ts`
+- Test: `web/lib/eks-resources.test.ts`
 - Modify: `web/lib/eks-incluster.ts`
 - Test: `web/lib/eks-incluster.test.ts`
 - Modify: `web/app/eks/[cluster]/page.tsx`
 
-- [ ] **Step 1 (RED):** `web/lib/eks-incluster.test.ts`: `parseCpuCores` (`'8'`→8, `'7910m'`→7.91, `''`→0), `parseMem` (Ki/Mi/Gi/Ti → bytes, per v1 `src/app/k8s/nodes/page.tsx:72-83`), `normalizeNode` maps `status.capacity/allocatable`, `normalizePod` carries per-pod cpu/mem requests, `aggregateNodeResources(nodes,pods)` → per-node `{cpuReq,memReq,podCount,reqPct}`. Run → fails.
-- [ ] **Step 2 (GREEN — GATE FIX MAJOR):** `web/lib/eks-incluster.ts`: extend `K8sItem` with `status.capacity/allocatable` (`Record<string,string>`) and `spec.containers[].resources.requests`. **Extend BOTH row types** (current `NodeRow = {name,status,roles,version,instanceType,zone,age}`, `PodRow = {name,namespace,status,node,restarts,age}` carry NO resource fields): add `cpuCapacity/cpuAllocatable/memCapacity/memAllocatable` to `NodeRow` (fill in `normalizeNode`) AND `cpuRequest/memRequest` to `PodRow` (fill in `normalizePod` by summing `spec.containers[].resources.requests` — currently dropped). Export `parseCpuCores`, `parseMem`, `aggregateNodeResources`. (Without PodRow carrying requests the client cannot aggregate — flagged by 2 panel models.)
-- [ ] **Step 3:** `web/app/eks/[cluster]/page.tsx`: on the nodes tab fetch BOTH `/api/eks/${cluster}/incluster?kind=nodes` and `?kind=pods` (exact endpoint — returns `{kind, rows}`), call `aggregateNodeResources(nodeRows, podRows)`, render per-node CPU/memory used-vs-capacity bars (reuse a `Meter`/segmented bar with existing design tokens). Root-path `/api/*` only.
-- [ ] **Step 4 (verify+commit):** `cd web && npx vitest run` green. `git add web/lib/eks-incluster.ts web/lib/eks-incluster.test.ts web/app/eks/[cluster]/page.tsx && git commit -m "feat(v2-gap-w1): EKS node CPU/mem capacity-vs-requested viz (pure parsers + aggregate)"`
+> **GATE FIX (MAJOR, codex round 2):** `web/lib/eks-incluster.ts` has top-level server-only imports (`node:https`, `@aws-sdk/*`, `@smithy/*`). A `'use client'` page importing pure fns from it would pull `node:https` into the browser bundle → build break. So the **client-safe pure functions + extended Row types live in a NEW `web/lib/eks-resources.ts`** (zero server imports); `eks-incluster.ts` imports them; the client page imports only from `eks-resources.ts`.
+
+- [ ] **Step 1 (RED):** `web/lib/eks-resources.test.ts`: `parseCpuCores` (`'8'`→8, `'7910m'`→7.91, `''`→0), `parseMem` (Ki/Mi/Gi/Ti → bytes, per v1 `src/app/k8s/nodes/page.tsx:72-83`), and `aggregateNodeResources(nodes,pods)` → per-node `{cpuReq,memReq,podCount,reqPct}` over plain row arrays. Run → fails.
+- [ ] **Step 2 (GREEN):** Create `web/lib/eks-resources.ts` (NO server imports): the extended row types `NodeRow` (+ `cpuCapacity/cpuAllocatable/memCapacity/memAllocatable`) and `PodRow` (+ `cpuRequest/memRequest`), plus pure `parseCpuCores`, `parseMem`, `aggregateNodeResources`.
+- [ ] **Step 3:** `web/lib/eks-incluster.ts`: import the Row types + parsers from `@/lib/eks-resources` (remove the local `NodeRow`/`PodRow` defs, re-export for compatibility if other modules import them from here); extend `K8sItem` with `status.capacity/allocatable` + `spec.containers[].resources.requests`; populate the new fields in `normalizeNode` (capacity/allocatable) and `normalizePod` (sum `spec.containers[].resources.requests` — currently dropped). Update `web/lib/eks-incluster.test.ts` for the populated fields.
+- [ ] **Step 4 (verify+commit):** `web/app/eks/[cluster]/page.tsx`: on the nodes tab fetch BOTH `/api/eks/${cluster}/incluster?kind=nodes` and `?kind=pods` (exact endpoint — returns `{kind, rows}`), import `aggregateNodeResources` + types from `@/lib/eks-resources` (client-safe), render per-node CPU/memory used-vs-capacity bars (reuse a `Meter`/segmented bar). Root-path `/api/*` only. `cd web && npx vitest run` green. `git add web/lib/eks-resources.ts web/lib/eks-resources.test.ts web/lib/eks-incluster.ts web/lib/eks-incluster.test.ts web/app/eks/[cluster]/page.tsx && git commit -m "feat(v2-gap-w1): EKS node CPU/mem capacity-vs-requested viz (client-safe eks-resources.ts + aggregate)"`
 
 ---
 
@@ -189,3 +193,8 @@ Lightweight i18n for shell/nav text + a persistent toggle. Keys the final nav se
 - **MAJOR** (codex): inventory `limit=100` truncates topology → Task 7 `?limit=500` + reactflow CSS import.
 - **MAJOR** (codex): new Next pages must `next build` → added to Task 7 Step 4 + Done criteria.
 - Dismissed: glm "InvType lacks `sections`" (Task 3 *adds* it — misread); line-anchor nits (plan anchors are `~`approximate, locate by content).
+
+## P2 gate record (round 2 — opus + codex on rev2)
+- **MAJOR** (codex): `eks-incluster.ts` server-only imports → client-side import breaks the bundle. **Fixed in rev3**: pure fns split into client-safe `web/lib/eks-resources.ts` (Task 5 rewritten).
+- **CRITICAL** (opus): `@xyflow/react` not in package.json. **Dismissed**: Task 7 Step 2 *installs* it (planned action, not a defect — same class as the glm `sections` misread). Execution risk noted: `npm install @xyflow/react` needs registry access in the worktree.
+- **Verdict: P2 PASSED at rev3.** All verified CRITICAL/MAJOR resolved; max_rounds (2) reached; chair confirmed each against code.
