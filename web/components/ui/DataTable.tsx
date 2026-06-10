@@ -3,6 +3,7 @@ import { isValidElement, useMemo, useState } from 'react';
 import Card from './Card';
 import Badge from './Badge';
 import StatePill from './StatePill';
+import { isDeprecatedRuntime } from '@/lib/inventory-types';
 
 export interface Column {
   key: string;
@@ -25,6 +26,15 @@ function renderCell(key: string, value: unknown) {
   const s = value == null ? '' : String(value);
   if (STATE_KEYS.has(key) && s !== '') {
     return <StatePill value={s} />;
+  }
+  // Lambda runtime cell: flag end-of-support runtimes with an EOL badge.
+  if (key === 'runtime' && isDeprecatedRuntime(value)) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span className="max-w-[200px] truncate" title={s}>{s}</span>
+        <Badge tone="negative" variant="soft">EOL</Badge>
+      </span>
+    );
   }
   return (
     <span className="block max-w-[280px] truncate" title={s}>

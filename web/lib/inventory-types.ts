@@ -86,3 +86,19 @@ export function inventoryGroups(): { group: string; types: string[] }[] {
     group, types: Object.keys(INVENTORY_TYPES).filter((t) => INVENTORY_TYPES[t].group === group),
   })).filter((g) => g.types.length > 0);
 }
+
+// Lambda runtimes past AWS end-of-support. Static list (no date math / API call) —
+// ported from v1 src/app/lambda/page.tsx. Surfaced as an EOL badge in the inventory table.
+export const DEPRECATED_RUNTIMES = [
+  'python2.7', 'python3.6', 'python3.7',
+  'nodejs10.x', 'nodejs12.x', 'nodejs14.x',
+  'dotnetcore2.1', 'dotnetcore3.1',
+  'ruby2.5', 'ruby2.7', 'java8', 'go1.x',
+];
+const DEPRECATED_SET = new Set(DEPRECATED_RUNTIMES);
+
+/** True when a Lambda runtime string is a known end-of-support runtime (case/space-insensitive). */
+export function isDeprecatedRuntime(runtime: unknown): boolean {
+  if (typeof runtime !== 'string') return false;
+  return DEPRECATED_SET.has(runtime.trim().toLowerCase());
+}
