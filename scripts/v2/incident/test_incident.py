@@ -791,5 +791,105 @@ class TestWatchdog(StageLambdaBase):
         self.assertEqual(out["stalled"], [])
 
 
+# ---------------------------------------------------------------------------
+# Task 6 — dispatcher `incident_stage` branch (additive; mirrors the `action`
+# branch). No live AWS / no SQS: a FakeSfn records start_execution calls. The
+# P2 `action`/`noop` paths are NOT exercised here (covered by the worker tests);
+# we only assert the new incident routing + the flag-off DROP.
+# ---------------------------------------------------------------------------
+
+class _AlreadyExists(Exception):
+    pass
+
+
+class FakeSfn:
+    """Records start_execution; .exceptions.ExecutionAlreadyExists mirrors botocore."""
+
+    class _Exc:
+        ExecutionAlreadyExists = _AlreadyExists
+
+    def __init__(self, raise_already_exists=False):
+        self.exceptions = FakeSfn._Exc()
+        self.calls = []
+        self._raise_dup = raise_already_exists
+
+    def start_execution(self, **kw):
+        self.calls.append(kw)
+        if self._raise_dup:
+            raise self.exceptions.ExecutionAlreadyExists("dup")
+        return {"executionArn": "arn:aws:states:::execution/x"}
+
+
+def _msg(body):
+    return {"messageId": "m-1", "body": json.dumps(body)}
+
+
+class TestDispatcherIncidentBranch(unittest.TestCase):
+    """The dispatcher reads STATE_MACHINE_ARN + INCIDENT_STATE_MACHINE_ARN at import; reload it
+    under a controlled env, then inject a FakeSfn. Empty INCIDENT_STATE_MACHINE_ARN => DROP."""
+
+    def _load(self, inc_arn, raise_dup=False):
+        import importlib
+        os.environ["STATE_MACHINE_ARN"] = "arn:aws:states:::stateMachine/workers"
+        os.environ.pop("REMEDIATION_STATE_MACHINE_ARN", None)
+        if inc_arn is None:
+            os.environ.pop("INCIDENT_STATE_MACHINE_ARN", None)
+        else:
+            os.environ["INCIDENT_STATE_MACHINE_ARN"] = inc_arn
+        import dispatcher  # from scripts/v2/workers (already on sys.path)
+        importlib.reload(dispatcher)
+        dispatcher._sfn = FakeSfn(raise_already_exists=raise_dup)
+        return dispatcher
+
+    def test_dropped_when_incident_sm_arn_empty(self):
+        d = self._load(inc_arn=None)
+        out = d.lambda_handler(
+            {"Records": [_msg({"job_id": "j-1", "type": "incident_stage",
+                               "incident_id": "inc-1", "payload": {"severity": "critical"}})]}, None)
+        self.assertEqual(d._INC_SM_ARN, "")
+        self.assertEqual(d._sfn.calls, [])            # no execution started
+        self.assertEqual(out["batchItemFailures"], [])  # dropped cleanly, NOT retried
+
+    def test_starts_one_execution_on_incident_sm(self):
+        arn = "arn:aws:states:::stateMachine/incident"
+        d = self._load(inc_arn=arn)
+        out = d.lambda_handler(
+            {"Records": [_msg({"job_id": "j-2", "type": "incident_stage",
+                               "incident_id": "inc-2", "payload": {"severity": "warning"}})]}, None)
+        self.assertEqual(len(d._sfn.calls), 1)
+        call = d._sfn.calls[0]
+        self.assertEqual(call["stateMachineArn"], arn)  # routed to the incident SM, not the worker SM
+        self.assertEqual(call["name"], "j-2")           # idempotent: execution name == job_id
+        payload = json.loads(call["input"])
+        self.assertEqual(payload["job_id"], "j-2")
+        self.assertEqual(payload["incident_id"], "inc-2")
+        self.assertEqual(payload["payload"], {"severity": "warning"})
+        self.assertEqual(out["batchItemFailures"], [])
+
+    def test_execution_already_exists_is_success_no_retry(self):
+        d = self._load(inc_arn="arn:aws:states:::stateMachine/incident", raise_dup=True)
+        out = d.lambda_handler(
+            {"Records": [_msg({"job_id": "j-3", "type": "incident_stage",
+                               "incident_id": "inc-3", "payload": {}})]}, None)
+        self.assertEqual(len(d._sfn.calls), 1)              # attempted exactly once
+        self.assertEqual(out["batchItemFailures"], [])      # ExecutionAlreadyExists == success
+
+    def test_payload_defaults_to_empty_dict(self):
+        d = self._load(inc_arn="arn:aws:states:::stateMachine/incident")
+        d.lambda_handler(
+            {"Records": [_msg({"job_id": "j-4", "type": "incident_stage"})]}, None)
+        payload = json.loads(d._sfn.calls[0]["input"])
+        self.assertEqual(payload["payload"], {})
+        self.assertIsNone(payload["incident_id"])
+
+    def test_incident_asl_parses(self):
+        with open(os.path.join(HERE, "incident.asl.json")) as f:
+            sm = json.load(f)
+        self.assertEqual(sm["StartAt"], "Triage")
+        # The Map fan-out cap is bound to the Lead-resolved maxConcurrency (the configurable cap).
+        self.assertEqual(sm["States"]["Investigation"]["MaxConcurrency.$"], "$.maxConcurrency")
+        self.assertEqual(sm["States"]["Investigation"]["ItemsPath"], "$.roster")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

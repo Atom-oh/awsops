@@ -13,6 +13,10 @@ _SM_ARN = os.environ["STATE_MACHINE_ARN"]
 # ADR-029+036: remediation jobs route to a SEPARATE state machine. Empty when remediation is off
 # (the gated infra in remediation.tf is the only thing that sets this) -> action jobs are DROPPED.
 _REM_SM_ARN = os.environ.get("REMEDIATION_STATE_MACHINE_ARN", "")
+# ADR-032: incident_stage jobs route to the SIBLING incident state machine. Empty when the
+# autonomous incident lifecycle is off (only the gated infra in incidents.tf sets this) ->
+# incident_stage jobs are DROPPED (never retried into a loop). The lifecycle ships flag-OFF.
+_INC_SM_ARN = os.environ.get("INCIDENT_STATE_MACHINE_ARN", "")
 
 
 def lambda_handler(event, _ctx):
@@ -42,6 +46,25 @@ def lambda_handler(event, _ctx):
                         "payload": body.get("payload", {}),
                         "dry_run": bool(body.get("dry_run", False)),
                         "runtime": body.get("executor_type", "lambda"),  # SM Choice routes on this
+                    }),
+                )
+                continue
+            if type_ == "incident_stage":
+                # ADR-032 autonomous incident lifecycle. The web Triage route already inserted the
+                # 'queued' worker_jobs row + the incidents/stage rows; the dispatcher only picks the
+                # sibling incident SM (it has NO Aurora access). Empty SM ARN => lifecycle is OFF
+                # (flag/infra) -> drop (never retry into a loop). The SM itself invokes the stage
+                # Lambdas; the Lead delegates only (no mutation here or downstream).
+                if not _INC_SM_ARN:
+                    print(f"DROP incident job (lifecycle disabled) job_id={job_id}")
+                    continue
+                _sfn.start_execution(
+                    stateMachineArn=_INC_SM_ARN,
+                    name=job_id,  # idempotent: execution name == job_id
+                    input=json.dumps({
+                        "job_id": job_id,
+                        "incident_id": body.get("incident_id"),
+                        "payload": body.get("payload", {}),
                     }),
                 )
                 continue
