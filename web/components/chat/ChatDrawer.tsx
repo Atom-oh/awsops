@@ -32,7 +32,7 @@ export default function ChatDrawer() {
     setMsgs([]); setBusy(false);
   }
 
-  async function send(prompt: string) {
+  async function send(prompt: string, overrideSection?: string, switchedFrom?: string) {
     if (busy) return;
     const history = msgs.map((m) => ({ role: m.role, content: m.content }));
     setMsgs((m) => [...m, { role: 'user', content: prompt }, { role: 'assistant', content: '', streaming: true }]);
@@ -43,7 +43,7 @@ export default function ChatDrawer() {
       const res = await fetch('/api/chat', {
         method: 'POST', signal: ac.signal,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, messages: history, section: pinned, sessionId: sessionRef.current }),
+        body: JSON.stringify({ prompt, messages: history, section: overrideSection ?? pinned, switchedFrom, sessionId: sessionRef.current }),
       });
       if (!res.ok || !res.body) {
         patchLast((m) => ({ ...m, content: res.status === 401 ? '세션이 만료되었습니다. 새로고침해 주세요.' : 'AI 응답을 받지 못했습니다.', streaming: false }));
@@ -76,13 +76,18 @@ export default function ChatDrawer() {
     if (data === '[DONE]') return;
     try {
       const obj = JSON.parse(data);
-      if (isMeta && obj.gateway) patchLast((m) => ({ ...m, gateway: obj.gateway }));
+      if (isMeta && obj.gateway) patchLast((m) => ({ ...m, gateway: obj.gateway, ranked: obj.ranked, method: obj.method }));
       else if (obj.delta !== undefined) patchLast((m) => ({ ...m, content: m.content + obj.delta }));
       else if (obj.error) patchLast((m) => ({ ...m, content: `⚠️ ${obj.error}`, streaming: false }));
     } catch { /* heartbeat / non-JSON */ }
   }
   function patchLast(fn: (m: Msg) => Msg) {
     setMsgs((arr) => arr.map((m, i) => (i === arr.length - 1 && m.role === 'assistant' ? fn(m) : m)));
+  }
+  function resendWith(sectionKey: string) {
+    const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
+    const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant');
+    if (lastUser) void send(lastUser.content, sectionKey, lastAssistant?.gateway);
   }
 
   if (!open) {
@@ -101,7 +106,7 @@ export default function ChatDrawer() {
         </span>
       </div>
       <SectionPicker pinned={pinned} onPin={setPinned} />
-      {msgs.length === 0 ? <PresetChips pinned={pinned} onPick={send} /> : <MessageList msgs={msgs} />}
+      {msgs.length === 0 ? <PresetChips pinned={pinned} onPick={send} /> : <MessageList msgs={msgs} onSwitch={resendWith} />}
       <Composer disabled={busy} onSend={send} />
     </div>
   );
