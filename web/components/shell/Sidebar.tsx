@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import { INVENTORY_TYPES, inventoryGroups } from '@/lib/inventory-types';
 import AwsopsMark from '@/components/ui/AwsopsMark';
-import Badge from '@/components/ui/Badge';
 import SectionLabel from '@/components/ui/SectionLabel';
 import { cn } from '@/lib/cn';
 
@@ -64,7 +63,6 @@ export default function Sidebar() {
           <div className="text-[15px] font-semibold leading-tight text-ink-800">AWSops</div>
           <div className="text-[10px] text-ink-400">Cloud Operations</div>
         </div>
-        <Badge tone="brand" variant="soft">v2.0</Badge>
       </div>
 
       {/* Nav */}
