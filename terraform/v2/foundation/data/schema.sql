@@ -710,3 +710,32 @@ END $$;
 INSERT INTO schema_migrations (version, description)
 VALUES (8, 'ADR-031 Phase 2: agent_spaces (per-account enablement + tool_allowlist cap; no row => Phase-1 global behavior)')
 ON CONFLICT (version) DO NOTHING;
+
+-- ============================================================
+-- v9: chat thread persistence (P3-A follow-up) — chat_threads + chat_messages
+-- New chat no longer wipes history; threads restore messages + AgentCore session.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id          UUID PRIMARY KEY,
+  user_sub    TEXT NOT NULL,
+  title       TEXT NOT NULL DEFAULT '새 대화',
+  session_id  TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_threads_user ON chat_threads (user_sub, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id          BIGSERIAL PRIMARY KEY,
+  thread_id   UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+  role        TEXT NOT NULL CHECK (role IN ('user','assistant')),
+  content     TEXT NOT NULL,
+  gateway     TEXT,
+  meta        JSONB,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages (thread_id, id);
+
+INSERT INTO schema_migrations (version, description)
+VALUES (9, 'chat thread persistence: chat_threads + chat_messages (new-chat no longer wipes history)')
+ON CONFLICT (version) DO NOTHING;
