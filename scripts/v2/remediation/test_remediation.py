@@ -193,3 +193,103 @@ def test_handler_rollback_without_handler_raises_manual(monkeypatch):
         ex.lambda_handler(
             {"job_id": "j2", "action": "opscenter-create-opsitem", "phase": "rollback"}, None)
     assert conn.closed is True
+
+
+# ---------------------------------------------------------------------------
+# Task 5: ssm_bridge.build_start_params + record_ssm_start + status_resume.
+# No live AWS / no DB: a fake conn + monkeypatched boto3 clients.
+# ---------------------------------------------------------------------------
+import ssm_bridge as sb  # noqa: E402
+import record_ssm_start as rss  # noqa: E402
+import status_resume as sr  # noqa: E402
+
+
+def test_ssm_modules_compile():
+    for f in ("ssm_bridge.py", "record_ssm_start.py", "status_resume.py"):
+        ast.parse((_HERE / f).read_text())  # raises SyntaxError on a broken module
+
+
+_SSM_ACTION = {
+    "name": "ec2-create-tags",
+    "assume_role_ref": "RemediationAutomationRole",
+    "conditions": {"accounts": ["self"]},
+}
+
+
+def test_build_start_params_host_only_omits_target_locations(monkeypatch):
+    monkeypatch.delenv("ALLOW_CROSS_ACCOUNT_MUTATION", raising=False)
+    monkeypatch.setenv("EC2_CREATE_TAGS_DOC", "AWSops-ec2-create-tags")
+    monkeypatch.setenv("ASSUME_ROLE_REMEDIATIONAUTOMATIONROLE", "arn:aws:iam::1:role/r")
+    params = sb.build_start_params(_SSM_ACTION, {"resourceId": "i-0abc"}, dry_run=True)
+    assert "TargetLocations" not in params
+    assert params["DocumentName"] == "AWSops-ec2-create-tags"
+    assert params["Parameters"]["AutomationAssumeRole"] == ["arn:aws:iam::1:role/r"]
+    assert params["Parameters"]["ResourceId"] == ["i-0abc"]
+    assert params["Parameters"]["DryRun"] == ["true"]
+
+
+def test_build_start_params_xacct_requires_flag_and_nonself_account(monkeypatch):
+    monkeypatch.setenv("EC2_CREATE_TAGS_DOC", "AWSops-ec2-create-tags")
+    monkeypatch.setenv("ASSUME_ROLE_REMEDIATIONAUTOMATIONROLE", "arn:aws:iam::1:role/r")
+    action = {**_SSM_ACTION,
+              "conditions": {"accounts": ["self", "222222222222"], "regions": ["ap-northeast-2"]}}
+    # flag unset → host-only even though a non-self account is present
+    monkeypatch.delenv("ALLOW_CROSS_ACCOUNT_MUTATION", raising=False)
+    assert "TargetLocations" not in sb.build_start_params(action, {}, dry_run=False)
+    # flag set but only 'self' in conditions → still host-only
+    monkeypatch.setenv("ALLOW_CROSS_ACCOUNT_MUTATION", "true")
+    assert "TargetLocations" not in sb.build_start_params(_SSM_ACTION, {}, dry_run=False)
+    # flag set AND a non-self account → emit TargetLocations
+    p = sb.build_start_params(action, {}, dry_run=False)
+    assert p["TargetLocations"] == [{"Accounts": ["222222222222"],
+                                     "Regions": ["ap-northeast-2"],
+                                     "ExecutionRoleName": "RemediationAutomationRole"}]
+    assert p["Parameters"]["DryRun"] == ["false"]
+
+
+def test_record_ssm_start_blocked_never_starts_automation(monkeypatch):
+    conn = _ExecConn()
+    monkeypatch.setattr(rss.db, "connect", lambda: conn)
+    monkeypatch.setattr(rss.cat, "gate", lambda _c, _n: (None, "killswitch_off"))
+
+    class _BoomSsm:
+        def start_automation_execution(self, **_k):  # pragma: no cover - must never run
+            raise AssertionError("start_automation_execution must not run on a blocked path")
+
+    monkeypatch.setattr(rss, "_ssm", _BoomSsm())
+
+    import pytest  # noqa: E402
+
+    with pytest.raises(RuntimeError, match="^blocked:killswitch_off$"):
+        rss.lambda_handler(
+            {"job_id": "j3", "action": "ec2-create-tags", "taskToken": "tok"}, None)
+    # Fail-closed: no claim/UPDATE at all → automation never started.
+    assert conn.calls == []
+    assert conn.closed is True
+
+
+def test_status_resume_routes_success_and_failure(monkeypatch):
+    calls = {"success": [], "failure": [], "finished": []}
+
+    class _FakeSfn:
+        def send_task_success(self, taskToken, output):  # noqa: N803
+            calls["success"].append((taskToken, output))
+
+        def send_task_failure(self, taskToken, error, cause):  # noqa: N803
+            calls["failure"].append((taskToken, error, cause))
+
+    conn = _ExecConn()
+    # Return the parked row (job_id, task_token) for the lookup-by-exec-id SELECT.
+    conn.run = lambda sql, **p: [("j4", "tok4")]  # type: ignore[assignment]
+    monkeypatch.setattr(sr.db, "connect", lambda: conn)
+    monkeypatch.setattr(sr, "_sfn", _FakeSfn())
+    monkeypatch.setattr(sr.db, "finish_job",
+                        lambda _c, jid, st, result=None: calls["finished"].append((jid, st)))
+
+    ok = sr.lambda_handler({"detail": {"ExecutionId": "e1", "Status": "Success"}}, None)
+    assert ok == {"matched": True, "status": "Success"}
+    assert len(calls["success"]) == 1 and calls["finished"] == [("j4", "succeeded")]
+
+    bad = sr.lambda_handler({"detail": {"ExecutionId": "e1", "Status": "Failed"}}, None)
+    assert bad == {"matched": True, "status": "Failed"}
+    assert len(calls["failure"]) == 1
