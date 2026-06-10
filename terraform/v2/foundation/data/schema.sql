@@ -632,3 +632,50 @@ END $$;
 INSERT INTO schema_migrations (version, description)
 VALUES (6, 'ADR-034: RCA write-back state — incident_writeback (dedup/idempotent) + incidents.writeback_status (inert when off)')
 ON CONFLICT (version) DO NOTHING;
+
+-- ============================================================================
+-- ADR-035 (migration v7): K8s-diagnosis DOMAIN STATE — always-present, inert when
+-- k8sgpt_enabled=false. AWSops READS deterministic K8sGPT Result CRDs (out-of-band
+-- operator, read-only) over the P3-D presigned-STS path and persists them here with
+-- dedup (Rule 11). NO autonomous behavior; NO cluster write. The deterministic
+-- analyzer columns (FACT) are kept distinct from the LLM narration column (HYPOTHESIS,
+-- Rule 8). The feedback column is the reserved H3b accuracy-audit seam. Idempotent.
+-- ============================================================================
+
+-- 1) k8s_findings — one durable row per deduped finding (cluster, fingerprint).
+--    Deterministic FACT columns (analyzer/error/details/parent_object) are distinct from the
+--    HYPOTHESIS column (llm_explanation) — Rule 8 enforced at the schema level.
+CREATE TABLE IF NOT EXISTS k8s_findings (
+  id              UUID PRIMARY KEY,
+  cluster         TEXT NOT NULL,
+  namespace       TEXT NOT NULL DEFAULT '',
+  kind            TEXT NOT NULL DEFAULT '',          -- analyzer kind (K8s resource kind)
+  name            TEXT NOT NULL DEFAULT '',          -- resource the analyzer fired on (ns/name)
+  analyzer        TEXT NOT NULL DEFAULT '',          -- which analyzer fired (FACT)
+  error           JSONB NOT NULL DEFAULT '[]'::jsonb,-- deterministic error texts (FACT)
+  details         TEXT NOT NULL DEFAULT '',          -- deterministic details (FACT)
+  parent_object   TEXT NOT NULL DEFAULT '',          -- (FACT)
+  fingerprint     TEXT NOT NULL,                     -- dedup id (Rule 11): sha256(analyzer+resource+errors)
+  llm_explanation TEXT,                              -- Haiku narration (HYPOTHESIS, Rule 8; nullable)
+  llm_model       TEXT,                              -- model id/version that produced the narration
+  adapter_version TEXT,                              -- ADAPTER_K8SGPT_VERSION provenance (Rule 7)
+  feedback        TEXT CHECK (feedback IN ('up','down')), -- H3b accuracy seam (thumbs up/down; reserved)
+  first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (cluster, fingerprint)                      -- dedup: one row per stable finding (Rule 11)
+);
+CREATE INDEX IF NOT EXISTS idx_k8s_findings_cluster ON k8s_findings (cluster, last_seen DESC);
+
+-- 2) k8s_scan_runs — last_scan_timestamp per cluster (Rule 9 staleness signal).
+CREATE TABLE IF NOT EXISTS k8s_scan_runs (
+  id                UUID PRIMARY KEY,
+  cluster           TEXT NOT NULL,
+  scanned_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finding_count     INTEGER NOT NULL DEFAULT 0,
+  operator_detected BOOLEAN NOT NULL DEFAULT false   -- false ⇒ operator down/absent (degrade, Rule 9)
+);
+CREATE INDEX IF NOT EXISTS idx_k8s_scan_runs_cluster ON k8s_scan_runs (cluster, scanned_at DESC);
+
+INSERT INTO schema_migrations (version, description)
+VALUES (7, 'ADR-035: K8s-diagnosis domain — k8s_findings (dedup fingerprint + fact/hypothesis split) + k8s_scan_runs (last_scan_timestamp/Rule 9), inert when off')
+ON CONFLICT (version) DO NOTHING;
