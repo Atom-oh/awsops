@@ -8,7 +8,7 @@
 
 **목표**: 대화를 **Aurora에 스레드 단위로 영속** — 새 챗은 "전환"일 뿐 기존 대화는 보존되고, 목록에서 돌아갈 수 있다. 기기 간 공유·영구 보관(사용자 선택: localStorage 아닌 서버 영속).
 
-## 2. 스키마 (migration **v8** — 현재 최신 v7/ADR-035)
+## 2. 스키마 (migration **v9** — v8은 동시 세션 ADR-031 Ph2 agent_spaces가 선점)
 
 `terraform/v2/foundation/data/schema.sql`에 추가 (멱등 `IF NOT EXISTS` + `schema_migrations` v8 행):
 

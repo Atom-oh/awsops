@@ -4,17 +4,17 @@
 
 **Goal:** 챗 대화를 Aurora 스레드로 영속 — `+` 새 챗이 기존 대화를 지우지 않고, 목록에서 복귀(메시지+AgentCore 세션 맥락까지)할 수 있다.
 
-**Architecture:** migration v8(chat_threads/chat_messages) → 단일 데이터 모듈 `web/lib/chat-store.ts`(fire-and-forget 기록, never-throws) → chat route가 응답 후 서버 기록 + meta에 threadId → threads REST API(user_sub 스코프) → ChatDrawer ☰ 목록/복귀/삭제. Aurora 미설정 시 현재의 휘발 동작으로 degrade.
+**Architecture:** migration v9(chat_threads/chat_messages) → 단일 데이터 모듈 `web/lib/chat-store.ts`(fire-and-forget 기록, never-throws) → chat route가 응답 후 서버 기록 + meta에 threadId → threads REST API(user_sub 스코프) → ChatDrawer ☰ 목록/복귀/삭제. Aurora 미설정 시 현재의 휘발 동작으로 degrade.
 
 **Tech Stack:** Next.js 14 BFF · node-pg(`getPool`) · vitest 2.x · 기존 trace.ts/jobs route 패턴 재사용
 
-**사전 확보된 사실:** schema_migrations 최신 v7(ADR-035) → 본 작업 v8. `verifyUser(cookie) → {sub,...}|null`. `web/lib/trace.ts` = fire-and-forget·never-throws·`AURORA_ENDPOINT` 게이트 전례. chat route는 ADR-038 통합 완료 상태(meta 선방출, `route`/`spec`/`inactiveSection`). ChatDrawer는 `send(prompt, overrideSection?, switchedFrom?)` + `handleFrame` meta 파싱 + `newChat()`이 `setMsgs([])`. 테스트 모킹 컨벤션 = `vi.fn()` 클로저 + `vi.mock('@/lib/...')` + 동적 `await import('./route')`.
+**사전 확보된 사실:** schema_migrations 최신 **v8**(ADR-031 Ph2 agent_spaces가 8509360에서 선점) → 본 작업 **v9**. `verifyUser(cookie) → {sub,...}|null`. `web/lib/trace.ts` = fire-and-forget·never-throws·`AURORA_ENDPOINT` 게이트 전례. chat route는 ADR-038 통합 완료 상태(meta 선방출, `route`/`spec`/`inactiveSection`). ChatDrawer는 `send(prompt, overrideSection?, switchedFrom?)` + `handleFrame` meta 파싱 + `newChat()`이 `setMsgs([])`. 테스트 모킹 컨벤션 = `vi.fn()` 클로저 + `vi.mock('@/lib/...')` + 동적 `await import('./route')`.
 
 **커밋 규율:** 태스크마다 명시 경로 add + 즉시 커밋. 메시지 끝 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 
 ---
 
-### Task 1: migration v8 — chat_threads / chat_messages
+### Task 1: migration v9 — chat_threads / chat_messages
 
 **Files:**
 - Modify: `terraform/v2/foundation/data/schema.sql`
@@ -23,7 +23,7 @@
 
 ```sql
 -- ============================================================
--- v8: chat thread persistence (P3-A follow-up) — chat_threads + chat_messages
+-- v9: chat thread persistence (P3-A follow-up) — chat_threads + chat_messages
 -- New chat no longer wipes history; threads restore messages + AgentCore session.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS chat_threads (
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages (thread_id, id);
 
 INSERT INTO schema_migrations (version, description)
-VALUES (8, 'chat thread persistence: chat_threads + chat_messages (new-chat no longer wipes history)')
+VALUES (9, 'chat thread persistence: chat_threads + chat_messages (new-chat no longer wipes history)')
 ON CONFLICT (version) DO NOTHING;
 ```
 
@@ -574,6 +574,6 @@ export default function ThreadList({ threads, activeId, onSelect, onDelete, onCl
 **Files:**
 - Modify: `terraform/v2/foundation/data/schema.sql` (Task 1에서 이미 — 본 태스크는 적용만)
 
-- [ ] **Step 1:** in-VPC psql로 migration v8 적용 (기존 v4~v7 절차와 동일) — `schema_migrations`에 8 확인.
+- [ ] **Step 1:** in-VPC psql로 migration v9 적용 (기존 v4~v7 절차와 동일) — `schema_migrations`에 9 확인.
 - [ ] **Step 2:** `make deploy` → smoke `/api/health` 200.
 - [ ] **Step 3:** 브라우저 확인: 대화 → `+` 새 챗 → ☰ 목록에 이전 대화 → 클릭 복귀(메시지+칩 복원) → 삭제.
