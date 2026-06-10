@@ -21,6 +21,7 @@ const FIXED: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/jobs', label: 'Jobs', icon: Activity },
   { href: '/cost', label: 'Cost', icon: DollarSign },
   { href: '/bedrock', label: 'Bedrock', icon: Gauge },
+  { href: '/topology', label: 'Topology', icon: Network },
   { href: '/customization', label: 'Custom Agents', icon: Sparkles },
 ];
 
