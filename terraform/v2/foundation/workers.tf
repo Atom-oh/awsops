@@ -393,7 +393,14 @@ resource "aws_lambda_function" "dispatcher" {
   timeout          = 60
   memory_size      = 128
   environment {
-    variables = { STATE_MACHINE_ARN = aws_sfn_state_machine.workers[0].arn }
+    # concat/merge keeps this byte-identical when remediation_enabled=false (merge(base,{})==base →
+    # no dispatcher revision). Enabling remediation adds the sibling SM ARN so the dispatcher can
+    # route catalog-flagged jobs to the remediation SFN. Remediation REQUIRES workers_enabled=true
+    # (this resource only exists when workers are on).
+    variables = merge(
+      { STATE_MACHINE_ARN = aws_sfn_state_machine.workers[0].arn },
+      var.remediation_enabled ? { REMEDIATION_STATE_MACHINE_ARN = aws_sfn_state_machine.remediation[0].arn } : {},
+    )
   }
   depends_on = [aws_cloudwatch_log_group.dispatcher]
 }

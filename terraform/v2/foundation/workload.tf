@@ -98,6 +98,22 @@ resource "aws_iam_role_policy" "task_admin_ssm" {
   })
 }
 
+# ADR-029+036: the web execute route reads the mutating-actions kill-switch param to fail-closed
+# before SendTaskSuccess. Gated (var.remediation_enabled) so the web task role is UNTOUCHED when off.
+resource "aws_iam_role_policy" "task_killswitch_ssm" {
+  count = var.remediation_enabled ? 1 : 0
+  name  = "${var.project}-task-killswitch-ssm"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ssm:GetParameter"]
+      Resource = [aws_ssm_parameter.mutating_enabled[0].arn]
+    }]
+  })
+}
+
 resource "aws_cloudwatch_log_group" "web" {
   name              = "/ecs/${var.project}-web"
   retention_in_days = 30
@@ -147,6 +163,11 @@ resource "aws_ecs_task_definition" "web" {
         { name = "SSM_ADMIN_EMAILS_PARAM", value = "/ops/${var.project}/admin_emails" },
         ], var.workers_enabled ? [
         { name = "JOBS_QUEUE_URL", value = one(aws_sqs_queue.jobs[*].url) }
+        ] : [], var.remediation_enabled ? [
+        # ADR-029+036: the web execute route reads the kill-switch param name + remediation SM ARN.
+        # concat(base, []) == base when remediation_enabled=false → byte-identical web task def.
+        { name = "MUTATING_ACTIONS_SSM", value = one(aws_ssm_parameter.mutating_enabled[*].name) },
+        { name = "REMEDIATION_STATE_MACHINE_ARN", value = one(aws_sfn_state_machine.remediation[*].arn) }
       ] : [])
       secrets = [
         { name = "AURORA_USER", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:username::" },
