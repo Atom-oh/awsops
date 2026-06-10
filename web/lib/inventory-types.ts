@@ -1,14 +1,25 @@
 export interface InvColumn { key: string; label: string }
 // stateKey: column holding a lifecycle state — drives state KPI tiles + the state filter.
 // distKey: column to chart a distribution donut by. Both optional; both reference a columns[].key.
-export interface InvType { label: string; group: string; columns: InvColumn[]; stateKey?: string; distKey?: string }
+// sections (optional): group the DetailPanel fields into ordered, labelled sections.
+// Each `keys` entry references resource_id/region or a columns[].key; absent keys are skipped,
+// leftover keys fall into an "Other" group. Types without `sections` render a flat list.
+export interface InvType {
+  label: string; group: string; columns: InvColumn[]; stateKey?: string; distKey?: string;
+  sections?: { label: string; keys: string[] }[];
+}
 
 // resource_id + region are prepended by the page; columns here are the type-specific extras.
 export const INVENTORY_TYPES: Record<string, InvType> = {
   ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', columns: [
     { key: 'name', label: 'Name' }, { key: 'instance_type', label: 'Type' }, { key: 'instance_state', label: 'State' },
     { key: 'private_ip_address', label: 'Private IP' }, { key: 'public_ip_address', label: 'Public IP' },
-    { key: 'subnet_id', label: 'Subnet' }, { key: 'vpc_id', label: 'VPC' }, { key: 'launch_time', label: 'Launch' } ] },
+    { key: 'subnet_id', label: 'Subnet' }, { key: 'vpc_id', label: 'VPC' }, { key: 'launch_time', label: 'Launch' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'region'] },
+      { label: 'Compute', keys: ['instance_type', 'instance_state', 'launch_time'] },
+      { label: 'Network', keys: ['private_ip_address', 'public_ip_address', 'subnet_id', 'vpc_id'] },
+    ] },
   lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', columns: [
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
     { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' },
@@ -29,7 +40,12 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
   rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'class', label: 'Class' }, { key: 'status', label: 'Status' }, { key: 'multi_az', label: 'Multi-AZ' },
-    { key: 'publicly_accessible', label: 'Public' }, { key: 'allocated_storage', label: 'Storage(GB)' }, { key: 'vpc_id', label: 'VPC' } ] },
+    { key: 'publicly_accessible', label: 'Public' }, { key: 'allocated_storage', label: 'Storage(GB)' }, { key: 'vpc_id', label: 'VPC' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'region', 'status'] },
+      { label: 'Engine', keys: ['engine', 'engine_version', 'class', 'allocated_storage'] },
+      { label: 'Network & HA', keys: ['multi_az', 'publicly_accessible', 'vpc_id'] },
+    ] },
   dynamodb: { label: 'DynamoDB Tables', group: 'Storage & DB', stateKey: 'table_status', distKey: 'billing_mode', columns: [
     { key: 'table_status', label: 'Status' }, { key: 'billing_mode', label: 'Billing' },
     { key: 'item_count', label: 'Items' }, { key: 'table_size_bytes', label: 'Size(B)' } ] },

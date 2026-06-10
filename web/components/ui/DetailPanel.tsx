@@ -2,6 +2,9 @@
 import { useEffect } from 'react';
 import { X } from 'lucide-react';
 import Badge from './Badge';
+import StatePill from './StatePill';
+import { buildDetailGroups, type DetailValue } from '@/lib/inventory-detail';
+import type { InvType } from '@/lib/inventory-types';
 
 /**
  * DetailPanel — right slide-in panel showing EVERY field of a resource row.
@@ -9,37 +12,43 @@ import Badge from './Badge';
  * table row ({resource_id, region, ...data}), so this renders all of it with
  * no extra fetch. Renders nothing when `data` is null. Closes on the × button,
  * an overlay click, or Escape. paper+ink tokens only (reuses Badge from F1).
+ *
+ * With a `spec` (InvType) carrying `sections`, fields render grouped under
+ * section headers with friendly labels; without a spec it stays a flat list
+ * of raw keys (backward-compatible).
  */
-function renderValue(value: unknown) {
-  if (typeof value === 'boolean') {
-    return (
-      <Badge tone={value ? 'positive' : 'neutral'} variant="soft">
-        {value ? 'true' : 'false'}
-      </Badge>
-    );
+function renderValue(fmt: DetailValue) {
+  switch (fmt.kind) {
+    case 'boolean':
+      return (
+        <Badge tone={fmt.bool ? 'positive' : 'neutral'} variant="soft">
+          {fmt.bool ? 'true' : 'false'}
+        </Badge>
+      );
+    case 'empty':
+      return <span className="text-ink-300">—</span>;
+    case 'code':
+      return (
+        <pre className="mt-0.5 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-ink-50 p-2 text-[11px] leading-snug text-ink-700">
+          {fmt.text}
+        </pre>
+      );
+    case 'state':
+      return <StatePill value={fmt.text!} />;
+    default:
+      return <span className="block break-words text-[13px] text-ink-800 select-text">{fmt.text}</span>;
   }
-  if (value == null || value === '') {
-    return <span className="text-ink-300">—</span>;
-  }
-  if (typeof value === 'object') {
-    return (
-      <pre className="mt-0.5 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded bg-ink-50 p-2 text-[11px] leading-snug text-ink-700">
-        {JSON.stringify(value, null, 2)}
-      </pre>
-    );
-  }
-  return (
-    <span className="block break-words text-[13px] text-ink-800 select-text">{String(value)}</span>
-  );
 }
 
 export default function DetailPanel({
   title,
   data,
+  spec,
   onClose,
 }: {
   title?: string;
   data: Record<string, unknown> | null;
+  spec?: InvType;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -53,7 +62,7 @@ export default function DetailPanel({
 
   if (!data) return null;
 
-  const entries = Object.entries(data);
+  const groups = buildDetailGroups(data, spec);
 
   return (
     <>
@@ -81,15 +90,24 @@ export default function DetailPanel({
             <X size={16} />
           </button>
         </header>
-        <div className="flex-1 overflow-y-auto px-4 py-3">
-          <dl className="space-y-2.5">
-            {entries.map(([key, value]) => (
-              <div key={key} className="grid grid-cols-1 gap-0.5">
-                <dt className="font-mono text-[11px] text-ink-500">{key}</dt>
-                <dd className="text-[13px] text-ink-800">{renderValue(value)}</dd>
-              </div>
-            ))}
-          </dl>
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+          {groups.map((group, gi) => (
+            <section key={group.label || gi}>
+              {group.label && (
+                <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-400">
+                  {group.label}
+                </h3>
+              )}
+              <dl className="space-y-2.5">
+                {group.items.map((it) => (
+                  <div key={it.key} className="grid grid-cols-1 gap-0.5">
+                    <dt className="font-mono text-[11px] text-ink-500">{it.label}</dt>
+                    <dd className="text-[13px] text-ink-800">{renderValue(it.fmt)}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ))}
         </div>
       </aside>
     </>

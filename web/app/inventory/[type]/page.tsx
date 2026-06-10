@@ -196,6 +196,7 @@ export default function InventoryTypePage() {
       <DetailPanel
         title={selected?.resource_id as string | undefined}
         data={selected}
+        spec={spec}
         onClose={() => setSelected(null)}
       />
     </>
