@@ -5,6 +5,8 @@ import { validateSkill, validateAgent } from '@/lib/skill-validation';
 import {
   upsertSkill, upsertAgent, attachSkill, setEnabled, listAgentsWithSkills, listSkills, writeAudit,
 } from '@/lib/catalog';
+import { getAgentSpace, upsertAgentSpace } from '@/lib/agent-space';
+import { currentAccountId } from '@/lib/account';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +25,14 @@ async function gate(request: Request) {
 export async function GET(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
-  return json({ aurora: true, agents: await listAgentsWithSkills(), skills: await listSkills() }, 200);
+  const accountId = currentAccountId();
+  return json({
+    aurora: true,
+    accountId,
+    agents: await listAgentsWithSkills(),
+    skills: await listSkills(),
+    space: await getAgentSpace(accountId), // null ⇒ Phase-1 (UI shows "global" mode)
+  }, 200);
 }
 
 export async function POST(request: Request) {
@@ -73,6 +82,20 @@ export async function PUT(request: Request) {
     await attachSkill(Number(body.agentId), Number(body.skillId), Number(body.ord ?? 0));
     await writeAudit({ actor, action: 'attach', objectType: 'agent_skill', objectId: `${body.agentId}:${body.skillId}` });
     return json({ ok: true }, 200);
+  }
+  if (body.op === 'space') {
+    const accountId = currentAccountId();
+    const toIds = (v: unknown) => Array.isArray(v) ? v.map(Number).filter((n) => Number.isFinite(n)) : [];
+    const toStrs = (v: unknown) => Array.isArray(v) ? v.map(String) : [];
+    const space = await upsertAgentSpace({
+      accountId,
+      enabledAgentIds: toIds(body.enabledAgentIds),
+      enabledSkillIds: toIds(body.enabledSkillIds),
+      toolAllowlist: toStrs(body.toolAllowlist),
+      actor,
+    });
+    // writeAudit already done inside upsertAgentSpace; return the new version
+    return json({ ok: true, version: space.version }, 200);
   }
   return json({ error: 'unknown op' }, 400);
 }
