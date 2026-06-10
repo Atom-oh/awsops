@@ -1124,7 +1124,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `docs/decisions/038-hybrid-agent-routing.md` (Post-acceptance 기록용 — 활성화 시점에)
 
-- [ ] **Step 1:** `terraform.tfvars`에 `hybrid_routing_enabled = true` → `plan` → 컨트롤러가 `apply tfplan` (공유 인프라 규율: -auto-approve 금지)
+- [ ] **Step 1:** `terraform.tfvars`에 `hybrid_routing_enabled = true` → `plan` → 컨트롤러가 `apply tfplan` (공유 인프라 규율: -auto-approve 금지). **주의(T7 리뷰)**: IAM 인라인 정책의 eventual consistency로 새 태스크의 첫 분류기 호출이 일시 AccessDenied→정규식 폴백할 수 있음 — 자가치유되며 정상.
 - [ ] **Step 2:** `make deploy` (web 재배포 — 새 env 반영)
 - [ ] **Step 3:** 분류기 호출 확인 — 모델 액세스는 **2026-06-10 실측으로 이미 활성** (`global.anthropic.claude-haiku-4-5-20251001-v1:0` @ ap-northeast-2 Converse 성공). 배포 후 web 로그에서 AccessDenied 부재 확인 (발생 시 분류기는 정규식 폴백으로 동작은 유지되나 하이브리드 효과 없음 — task role IAM 점검)
 - [ ] **Step 4:** `node scripts/v2/routing-accuracy.mjs` — 게이트(≥85% && +15pp) 통과 확인. 실패 시 `hybrid_routing_enabled = false`로 롤백하고 골든셋/프롬프트 보강
