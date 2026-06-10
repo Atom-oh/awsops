@@ -36,6 +36,19 @@ def lambda_handler(_event, _ctx):
             out["reaped_queued"] = len(q)
         else:
             out["reaped_queued"] = "skipped (dispatch ESM disabled)"
+        # ADR-029+036: remediation reconciliation (slow backstop only). Remediation rows carry an
+        # automation_execution_id; the EventBridge status_resume path is the PRIMARY completion path
+        # and the resume Lambda owns the terminal write. The reaper NEVER blindly fails them (a still-
+        # running SSM automation must not be reaped) and NEVER touches 'manual_intervention' (a
+        # terminal operator state). It only SELECTs stale rows for visibility/count + logs them.
+        rem = conn.run(
+            "SELECT job_id, automation_execution_id FROM worker_jobs "
+            "WHERE status IN ('running','awaiting_approval') "
+            "AND automation_execution_id IS NOT NULL "
+            "AND updated_at < now() - make_interval(mins => :m)", m=R)
+        out["stale_remediation_rows"] = len(rem)
+        for job_id, _exec_id in rem:
+            print(f"REMEDIATION stale (resume Lambda should finalize) job_id={job_id}")
         return out
     finally:
         conn.close()

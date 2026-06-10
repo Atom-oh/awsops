@@ -10,6 +10,9 @@ import handlers
 
 _sfn = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
 _SM_ARN = os.environ["STATE_MACHINE_ARN"]
+# ADR-029+036: remediation jobs route to a SEPARATE state machine. Empty when remediation is off
+# (the gated infra in remediation.tf is the only thing that sets this) -> action jobs are DROPPED.
+_REM_SM_ARN = os.environ.get("REMEDIATION_STATE_MACHINE_ARN", "")
 
 
 def lambda_handler(event, _ctx):
@@ -20,6 +23,28 @@ def lambda_handler(event, _ctx):
         try:
             body = json.loads(rec["body"])
             job_id, type_ = body["job_id"], body["type"]
+            if type_ == "action":
+                # ADR-029+036 remediation job. The web `execute` route already injected the catalog
+                # `action` name + `executor_type` (the dispatcher has NO Aurora access, so it does NOT
+                # resolve the catalog here — the catalog gate runs in-VPC in record_ssm_start /
+                # remediation_executor). The dispatcher only picks the remediation SM.
+                if not _REM_SM_ARN:
+                    # Remediation substrate is OFF (flag/infra) -> drop (never retry into a loop).
+                    print(f"DROP action job (remediation disabled) job_id={job_id}")
+                    continue
+                _sfn.start_execution(
+                    stateMachineArn=_REM_SM_ARN,
+                    name=job_id,  # idempotent: execution name == job_id
+                    input=json.dumps({
+                        "job_id": job_id,
+                        "plan_id": body.get("plan_id"),
+                        "action": body["action"],
+                        "payload": body.get("payload", {}),
+                        "dry_run": bool(body.get("dry_run", False)),
+                        "runtime": body.get("executor_type", "lambda"),  # SM Choice routes on this
+                    }),
+                )
+                continue
             if not handlers.is_allowed(type_):
                 # Disallowed/unknown type is a client error: it will NEVER succeed, so drop (do not
                 # retry into an infinite loop / DLQ). Logged for triage. The web route validates too.

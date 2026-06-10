@@ -2,6 +2,7 @@
 """ADR-029+036 remediation substrate tests — catalog loader + fail-closed gating (Task 3).
 No live AWS / no DB: a fake conn and a monkeypatched SSM client exercise every gate branch."""
 import ast
+import json
 import os
 import pathlib
 import sys
@@ -293,3 +294,105 @@ def test_status_resume_routes_success_and_failure(monkeypatch):
     bad = sr.lambda_handler({"detail": {"ExecutionId": "e1", "Status": "Failed"}}, None)
     assert bad == {"matched": True, "status": "Failed"}
     assert len(calls["failure"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 6: catalog-aware dispatcher + reaper reconciliation (backward-compatible).
+# No live AWS / no DB: a stub _sfn records start_execution; a fake conn records reaper SELECTs.
+# The existing P2 GREEN path (noop/noop-heavy -> workers SM) MUST stay byte-compatible.
+# ---------------------------------------------------------------------------
+# dispatcher.py reads os.environ["STATE_MACHINE_ARN"] at import + builds a boto3 client. Set the env
+# and a region BEFORE importing so the import succeeds with no live AWS.
+os.environ.setdefault("STATE_MACHINE_ARN", "arn:aws:states:ap-northeast-2:1:stateMachine:workers")
+import dispatcher as dsp  # noqa: E402
+import reaper as rp  # noqa: E402
+
+
+class _StubSfn:
+    """Records every start_execution; exposes .exceptions.ExecutionAlreadyExists like the real client."""
+
+    class exceptions:  # noqa: N801 (mirror boto3 client.exceptions namespace)
+        class ExecutionAlreadyExists(Exception):
+            pass
+
+    def __init__(self):
+        self.starts = []
+
+    def start_execution(self, stateMachineArn, name, input):  # noqa: N803
+        self.starts.append({"sm": stateMachineArn, "name": name, "input": json.loads(input)})
+
+
+def _sqs_event(body):
+    return {"Records": [{"messageId": "m1", "body": json.dumps(body)}]}
+
+
+def test_dispatcher_modules_compile():
+    for f in ("dispatcher.py", "reaper.py"):
+        ast.parse((_HERE.parent / "workers" / f).read_text())
+
+
+def test_dispatcher_routes_action_to_remediation_sm(monkeypatch):
+    stub = _StubSfn()
+    monkeypatch.setattr(dsp, "_sfn", stub)
+    monkeypatch.setattr(dsp, "_REM_SM_ARN", "arn:aws:states:ap-northeast-2:1:stateMachine:remediation")
+    out = dsp.lambda_handler(_sqs_event({
+        "job_id": "a1", "type": "action", "action": "ec2-detach-sg",
+        "executor_type": "ssm", "plan_id": "p1", "payload": {"resourceArn": "x"}, "dry_run": True}), None)
+    assert out == {"batchItemFailures": []}
+    assert len(stub.starts) == 1
+    s = stub.starts[0]
+    assert s["sm"].endswith(":remediation") and s["name"] == "a1"
+    assert s["input"]["action"] == "ec2-detach-sg"
+    assert s["input"]["runtime"] == "ssm"  # executor_type drives the remediation SM Choice
+    assert s["input"]["plan_id"] == "p1" and s["input"]["dry_run"] is True
+
+
+def test_dispatcher_drops_action_when_remediation_off(monkeypatch):
+    stub = _StubSfn()
+    monkeypatch.setattr(dsp, "_sfn", stub)
+    monkeypatch.setattr(dsp, "_REM_SM_ARN", "")  # remediation substrate OFF (no infra / flag off)
+    out = dsp.lambda_handler(_sqs_event({
+        "job_id": "a2", "type": "action", "action": "ec2-detach-sg", "executor_type": "ssm"}), None)
+    # DROPPED (not retried, not DLQ'd): no execution started, no batch failure.
+    assert out == {"batchItemFailures": []}
+    assert stub.starts == []
+
+
+def test_dispatcher_p2_noop_paths_unchanged(monkeypatch):
+    """Backward-compat: noop -> workers SM (lambda), noop-heavy -> workers SM (fargate)."""
+    stub = _StubSfn()
+    monkeypatch.setattr(dsp, "_sfn", stub)
+    monkeypatch.setattr(dsp, "_REM_SM_ARN", "arn:aws:states:ap-northeast-2:1:stateMachine:remediation")
+    dsp.lambda_handler(_sqs_event({"job_id": "n1", "type": "noop", "payload": {}}), None)
+    dsp.lambda_handler(_sqs_event({"job_id": "n2", "type": "noop-heavy", "payload": {}}), None)
+    assert len(stub.starts) == 2
+    assert all(s["sm"] == dsp._SM_ARN for s in stub.starts)  # NOT the remediation SM
+    assert stub.starts[0]["input"]["runtime"] == "lambda"
+    assert stub.starts[1]["input"]["runtime"] == "fargate"
+    assert "action" not in stub.starts[0]["input"]  # P2 input shape is unchanged
+
+
+def test_reaper_remediation_select_excludes_manual_intervention(monkeypatch):
+    """The reaper reconciliation SELECT must scope to running/awaiting_approval and NEVER touch
+    'manual_intervention' (a terminal operator state); and it must never UPDATE remediation rows."""
+    seen = []
+
+    class _ReapConn:
+        def run(self, sql, **params):
+            seen.append(sql)
+            return []  # no rows for any query
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(rp.db, "connect", lambda: _ReapConn())
+    monkeypatch.setattr(rp, "_dispatch_enabled", lambda: True)
+    out = rp.lambda_handler({}, None)
+    assert out["stale_remediation_rows"] == 0
+    # Find the remediation reconciliation SELECT.
+    rem = [s for s in seen if "automation_execution_id IS NOT NULL" in s]
+    assert len(rem) == 1
+    sql = rem[0]
+    assert sql.lstrip().startswith("SELECT")  # read-only: never UPDATEs remediation rows
+    assert "'manual_intervention'" not in sql  # never reaps a terminal operator state
+    assert "'running'" in sql and "'awaiting_approval'" in sql
