@@ -356,3 +356,136 @@ CREATE TABLE IF NOT EXISTS ai_token_budget (
 INSERT INTO schema_migrations (version, description)
 VALUES (3, 'ADR-033 Phase 2: durable AI token budget table')
 ON CONFLICT (version) DO NOTHING;
+
+-- ============================================================================
+-- ADR-029+036 (migration v4): remediation/mutation substrate — catalog + plans + audit.
+-- ALWAYS PRESENT (data only; zero infra, zero execution). Every catalog row ships
+-- enabled=false; no action is executable until remediation_enabled + the kill-switch
+-- + the row's enabled flag are all true AND a 4-eyes approval passes. Idempotent.
+-- ============================================================================
+
+-- 1) The typed Action Catalog — the single facade (ADR-029 control #1, ADR-036 rule #2).
+CREATE TABLE IF NOT EXISTS action_catalog (
+  name                TEXT PRIMARY KEY,
+  description         TEXT NOT NULL DEFAULT '',
+  executor_type       TEXT NOT NULL CHECK (executor_type IN ('ssm','lambda','fargate')),
+  target_resource_type TEXT NOT NULL,                     -- e.g. 'ec2:instance', 'k8s:scaledobject'
+  iam_actions         JSONB NOT NULL DEFAULT '[]'::jsonb, -- per-action IAM decomposition (doc only; real IAM is in TF)
+  assume_role_ref     TEXT,                               -- SSM: AutomationAssumeRole logical name; lambda/fargate: task-role logical name
+  required_inputs     JSONB NOT NULL DEFAULT '[]'::jsonb, -- e.g. ["resourceArn","tags"]
+  dry_run_contract    JSONB NOT NULL DEFAULT '{}'::jsonb, -- {"mode":"native|describe|check","describe":"..."} (ADR-029 #3 / ADR-036 #2)
+  rollback_ref        TEXT,                               -- runbook onFailure step name OR executor rollback fn id
+  approval_mode       TEXT NOT NULL DEFAULT 'four_eyes'
+                        CHECK (approval_mode IN ('four_eyes','change_manager')),
+  conditions          JSONB NOT NULL DEFAULT '{}'::jsonb, -- {"accounts":["self"],"regions":["ap-northeast-2"],"resourceArns":[...]}
+  enabled             BOOLEAN NOT NULL DEFAULT false,      -- HARD OFF by default
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 2) Action plans — the two-step plan→execute artifact (ADR-029 control #2).
+CREATE TABLE IF NOT EXISTS action_plans (
+  plan_id            UUID PRIMARY KEY,
+  action_name        TEXT NOT NULL REFERENCES action_catalog(name) ON DELETE RESTRICT,
+  idempotency_token  TEXT NOT NULL UNIQUE,                -- replay-safe; 5-min expiry below
+  inputs             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dry_run            JSONB NOT NULL DEFAULT '{}'::jsonb,   -- the dry-run result captured at plan time
+  rollback_plan      JSONB NOT NULL DEFAULT '{}'::jsonb,   -- paired, separately-validated rollback (ADR-029 #5)
+  status             TEXT NOT NULL DEFAULT 'planned'
+                        CHECK (status IN ('planned','approved','executing','succeeded','failed','canceled','expired')),
+  created_by         TEXT NOT NULL,                        -- authenticated principal (admin email/sub)
+  approved_by        TEXT,                                 -- MUST differ from created_by (4-eyes)
+  job_id             UUID,                                 -- the worker_jobs row enqueued at execute time
+  expires_at         TIMESTAMPTZ NOT NULL,                 -- created_at + 5 min
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_action_plans_status ON action_plans (status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_action_plans_action ON action_plans (action_name, created_at DESC);
+
+-- 3) Synchronous authenticated-principal audit sink (ADR-029 control #6; the S3 Object-Lock
+--    bucket is the second synchronous sink, CloudTrail is defense-in-depth, NOT a sync gate).
+CREATE TABLE IF NOT EXISTS remediation_audit (
+  id            BIGSERIAL PRIMARY KEY,
+  plan_id       UUID,
+  job_id        UUID,
+  action_name   TEXT,
+  phase         TEXT NOT NULL,        -- plan|approve|execute|dry_run|rollback|terminal
+  principal     TEXT NOT NULL,        -- authenticated email/sub (NOT "the task role")
+  decision      TEXT,                 -- approved|denied|expired|killswitch_blocked|flag_off
+  detail        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rem_audit_plan ON remediation_audit (plan_id, at);
+CREATE INDEX IF NOT EXISTS idx_rem_audit_at   ON remediation_audit (at DESC);
+
+-- 4) Extend worker_jobs for the remediation lifecycle WITHOUT renaming anything (additive).
+--    Widen the status CHECK to add awaiting_approval + manual_intervention.
+ALTER TABLE worker_jobs ADD COLUMN IF NOT EXISTS automation_execution_id TEXT; -- SSM AutomationExecutionId
+ALTER TABLE worker_jobs ADD COLUMN IF NOT EXISTS task_token             TEXT;  -- SFN .waitForTaskToken token (ssm branch)
+ALTER TABLE worker_jobs ADD COLUMN IF NOT EXISTS plan_id                UUID;  -- link back to action_plans
+DO $$ BEGIN
+  ALTER TABLE worker_jobs DROP CONSTRAINT IF EXISTS worker_jobs_status_check;
+  ALTER TABLE worker_jobs ADD CONSTRAINT worker_jobs_status_check
+    CHECK (status IN ('queued','running','awaiting_approval','manual_intervention',
+                      'succeeded','failed','canceled'));
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_action_catalog_touch') THEN
+    CREATE TRIGGER trg_action_catalog_touch BEFORE UPDATE ON action_catalog
+      FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_action_plans_touch') THEN
+    CREATE TRIGGER trg_action_plans_touch BEFORE UPDATE ON action_plans
+      FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+END $$;
+
+-- 5) Seed 2-3 EXAMPLE action definitions — ALL enabled=false, ALL approval-required.
+--    These are DEFINITIONS only; nothing runs until enabled + flag + kill-switch + approval.
+INSERT INTO action_catalog
+  (name, description, executor_type, target_resource_type, iam_actions, assume_role_ref,
+   required_inputs, dry_run_contract, rollback_ref, approval_mode, conditions, enabled)
+VALUES
+  -- (a) AWS-resource action via SSM Automation + Change Manager (the canonical Modify* case).
+  ('ec2-create-tags',
+   'Add tags to a specific EC2 instance via an SSM Automation runbook (Change-Manager 4-eyes).',
+   'ssm', 'ec2:instance',
+   '["ec2:CreateTags","ec2:DeleteTags","ec2:DescribeTags"]'::jsonb,
+   'ec2-create-tags',                                  -- AutomationAssumeRole logical name (remediation.tf)
+   '["resourceArn","tags"]'::jsonb,
+   '{"mode":"describe","describe":"ec2:DescribeTags"}'::jsonb,
+   'RollbackDeleteTags',                               -- runbook onFailure step name
+   'change_manager',
+   '{"accounts":["self"],"regions":["ap-northeast-2"],"resourceArnAllowlist":[]}'::jsonb,
+   false),
+  -- (b) App-state action via the P2 lambda code executor (per-action task role).
+  ('app-feature-flag-set',
+   'Set an application feature flag row in Aurora (app-state mutation; P2 lambda executor).',
+   'lambda', 'app:feature_flag',
+   '[]'::jsonb,
+   'app-feature-flag',                                 -- per-action task-role logical name (remediation.tf)
+   '["flagKey","value"]'::jsonb,
+   '{"mode":"check"}'::jsonb,
+   'rollback_feature_flag',                            -- remediation_executor.py rollback fn id
+   'four_eyes',
+   '{"accounts":["self"]}'::jsonb,
+   false),
+  -- (c) Observability-write via the P2 lambda executor with the reduced control subset (ADR-036 #5).
+  ('opscenter-create-opsitem',
+   'Create an OpsCenter OpsItem (low-risk observability write; reduced control subset, no SSM runbook).',
+   'lambda', 'ssm:opsitem',
+   '["ssm:CreateOpsItem"]'::jsonb,
+   'opscenter-write',
+   '["title","source","severity"]'::jsonb,
+   '{"mode":"check"}'::jsonb,
+   NULL,                                               -- create is non-destructive; rollback = resolve (manual)
+   'four_eyes',
+   '{"accounts":["self"]}'::jsonb,
+   false)
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO schema_migrations (version, description)
+VALUES (4, 'ADR-029+036: remediation substrate — action_catalog + action_plans + remediation_audit + worker_jobs cols (all disabled)')
+ON CONFLICT (version) DO NOTHING;
