@@ -13,6 +13,8 @@ function newSessionId(): string {
   return s.length >= 33 ? s : s.padEnd(36, '0');
 }
 
+const SIDEBAR_W = 208;
+
 export default function ChatDrawer() {
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState<string | null>(null);
@@ -24,6 +26,7 @@ export default function ChatDrawer() {
   const sessionRef = useRef<string>('');
   const abortRef = useRef<AbortController | null>(null);
   const threadIdRef = useRef<string | null>(null); // mirrors threadId for use inside send()
+  const showThreadsRef = useRef(false);            // mirrors showThreads for post-send refresh
   function setThread(id: string | null) {
     threadIdRef.current = id;
     setThreadId(id);
@@ -50,7 +53,7 @@ export default function ChatDrawer() {
     setMsgs([]); setBusy(false);
   }
 
-  async function openThreads() {
+  async function refreshThreads() {
     try {
       const res = await fetch('/api/chat/threads');
       const data = res.ok ? await res.json() : { threads: [] };
@@ -58,7 +61,13 @@ export default function ChatDrawer() {
     } catch {
       setThreads([]);
     }
-    setShowThreads(true);
+  }
+
+  function toggleThreads() {
+    const next = !showThreadsRef.current;
+    showThreadsRef.current = next;
+    setShowThreads(next);
+    if (next) void refreshThreads();
   }
 
   async function selectThread(id: string) {
@@ -78,14 +87,14 @@ export default function ChatDrawer() {
       sessionRef.current = data.thread.sessionId;
       localStorage.setItem('awsops_chat_session', data.thread.sessionId);
       setThread(id);
-      setShowThreads(false);
+      // Claude-app style: keep the sidebar open — switching stays one click away.
     } catch { /* degrade: keep current view */ }
   }
 
   async function removeThread(id: string) {
     try { await fetch(`/api/chat/threads/${id}`, { method: 'DELETE' }); } catch { /* best-effort */ }
     if (threadIdRef.current === id) newChat();
-    void openThreads(); // refresh the list
+    void refreshThreads();
   }
 
   async function send(prompt: string, overrideSection?: string, switchedFrom?: string) {
@@ -121,6 +130,7 @@ export default function ChatDrawer() {
     } finally {
       patchLast((m) => ({ ...m, streaming: false }));
       setBusy(false);
+      if (showThreadsRef.current) void refreshThreads(); // new title/order shows up immediately
     }
   }
 
@@ -158,19 +168,30 @@ export default function ChatDrawer() {
     );
   }
   return (
-    <div style={{ position: 'fixed', right: 0, top: 0, height: '100vh', width: 460, background: '#0f1629', borderLeft: '2px solid #00d4ff', boxShadow: '-12px 0 28px #000a', display: 'flex', flexDirection: 'column', zIndex: 50 }}>
+    <div style={{ position: 'fixed', right: 0, top: 0, height: '100vh', width: showThreads ? 460 + SIDEBAR_W : 460, background: '#0f1629', borderLeft: '2px solid #00d4ff', boxShadow: '-12px 0 28px #000a', display: 'flex', flexDirection: 'column', zIndex: 50, transition: 'width 160ms ease' }}>
       <div style={{ padding: '10px 12px', borderBottom: '1px solid #1a2540', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>AWSops Assistant</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button onClick={toggleThreads} title="대화 목록" aria-label="대화 목록"
+            style={{ ...iconBtn, marginLeft: 0, color: showThreads ? '#00d4ff' : '#7da2c9' }}>☰</button>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>AWSops Assistant</span>
+        </span>
         <span>
-          <button onClick={openThreads} title="대화 목록" aria-label="대화 목록" style={iconBtn}>☰</button>
           <button onClick={newChat} title="새 대화" style={iconBtn}>＋</button>
           <button onClick={() => { abortRef.current?.abort(); setOpen(false); }} title="닫기" style={iconBtn}>✕</button>
         </span>
       </div>
-      <SectionPicker pinned={pinned} onPin={setPinned} />
-      {msgs.length === 0 ? <PresetChips pinned={pinned} onPick={send} /> : <MessageList msgs={msgs} onSwitch={resendWith} />}
-      <Composer disabled={busy} onSend={send} />
-      {showThreads && <ThreadList threads={threads} activeId={threadId} onSelect={selectThread} onDelete={removeThread} onClose={() => setShowThreads(false)} />}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+        {showThreads && (
+          <div style={{ width: SIDEBAR_W, flexShrink: 0, borderRight: '1px solid #1a2540' }}>
+            <ThreadList threads={threads} activeId={threadId} onSelect={selectThread} onDelete={removeThread} onNew={newChat} />
+          </div>
+        )}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <SectionPicker pinned={pinned} onPin={setPinned} />
+          {msgs.length === 0 ? <PresetChips pinned={pinned} onPick={send} /> : <MessageList msgs={msgs} onSwitch={resendWith} />}
+          <Composer disabled={busy} onSend={send} />
+        </div>
+      </div>
     </div>
   );
 }
