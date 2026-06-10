@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Box, Activity, DollarSign,
   Server, Database, Network, ShieldCheck,
-  Sparkles,
+  Sparkles, Gauge,
   LogOut,
   type LucideIcon,
 } from 'lucide-react';
@@ -20,6 +20,7 @@ const FIXED: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/eks', label: 'EKS', icon: Box },
   { href: '/jobs', label: 'Jobs', icon: Activity },
   { href: '/cost', label: 'Cost', icon: DollarSign },
+  { href: '/bedrock', label: 'Bedrock', icon: Gauge },
   { href: '/customization', label: 'Custom Agents', icon: Sparkles },
 ];
 
