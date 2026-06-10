@@ -64,4 +64,23 @@ describe('agentcore', () => {
     expect(sent.agentVersion).toBe(3);
     expect(sent.skillHashes).toEqual(['h1']);
   });
+  it('threads accountId + accountAlias into the payload when present, omits them otherwise', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue({ response: streamOf('"ok"') });
+    const { invokeAgent } = await import('./agentcore');
+    await invokeAgent({
+      gateway: 'cost', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36),
+      accountId: '180294183052', accountAlias: 'prod',
+    });
+    const withAcct = JSON.parse(new TextDecoder().decode((acSend.mock.calls[0][0] as { input: { payload: Uint8Array } }).input.payload));
+    expect(withAcct.accountId).toBe('180294183052');
+    expect(withAcct.accountAlias).toBe('prod');
+
+    acSend.mockClear();
+    await invokeAgent({ gateway: 'cost', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36) });
+    const without = JSON.parse(new TextDecoder().decode((acSend.mock.calls[0][0] as { input: { payload: Uint8Array } }).input.payload));
+    expect('accountId' in without).toBe(false);
+    expect('accountAlias' in without).toBe(false);
+  });
 });

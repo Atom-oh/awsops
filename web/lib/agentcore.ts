@@ -29,10 +29,12 @@ export interface InvokeInput {
   messages: ChatMsg[];
   sessionId: string; // >=33 chars (a UUID works)
   systemPromptOverride?: string; // ADR-031: resolved custom prompt
-  toolAllowlist?: string[];      // ADR-031: advisory in Phase 1
+  toolAllowlist?: string[];      // ADR-031 Phase 2: now the server-side-enforced set
   agentName?: string;            // ADR-031: traceability
   agentVersion?: number;
   skillHashes?: string[];
+  accountId?: string;            // ADR-031 Phase 2: agent.py reads payload.accountId
+  accountAlias?: string;
 }
 
 async function readResponse(resp: unknown): Promise<string> {
@@ -56,6 +58,8 @@ export async function invokeAgent(input: InvokeInput): Promise<string> {
   if (input.agentName) body.agentName = input.agentName;
   if (input.agentVersion !== undefined) body.agentVersion = input.agentVersion;
   if (input.skillHashes) body.skillHashes = input.skillHashes;
+  if (input.accountId) body.accountId = input.accountId;
+  if (input.accountAlias) body.accountAlias = input.accountAlias;
   const payload = new TextEncoder().encode(JSON.stringify(body));
   const cmd = new InvokeAgentRuntimeCommand({
     agentRuntimeArn: arn,
