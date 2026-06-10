@@ -50,7 +50,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 035 | K8sGPT 하이브리드 (MCP로 AgentCore에 통합하는 인클러스터 K8s 진단, Haiku 4.5) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); Rule 5 강화 + 7~11 추가 |
 | 036 | 변경·조치 실행 substrate (SSM Automation + Change Manager × P2 워커 백본 하이브리드) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); `.sync` 사실오류 정정·완료추적·승인주체·per-action IAM·통제 매핑 보완 |
 | 037 | v2 파운데이션 — Terraform + thin-BFF 웹 + 비동기 워커 (CDK 폐기) | Accepted (2026-06-10) — co-agent ADR 일관성 리뷰; 024 전면 승계 + 030 메커니즘 정제(Steampipe 라이브 없음·flag-gated 인벤토리 sync 확정) |
-| 038 | 하이브리드 에이전트 라우팅 (정규식+Haiku 분류기) + v2 프롬프트 캐싱 | Accepted (2026-06-10) — 멀티AI 의사결정(A-now/C-at-P4 만장일치) + 스펙 리뷰 8건 반영; Gateway 시맨틱 검색은 P4 연기 명시; `hybrid_routing_enabled` flag·골든셋 ≥85%/+15pp 게이트 |
+| 038 | 하이브리드 에이전트 라우팅 (정규식+Haiku 분류기) + v2 프롬프트 캐싱 | Accepted (2026-06-10) — 멀티AI 의사결정(A-now/C-at-P4 만장일치) + 스펙 리뷰 8건 반영; Gateway 시맨틱 P4 연기; **활성화 LIVE (2026-06-10): 게이트 hybrid 96.9% (+27.7pp) PASSED·캐싱 GREEN·분류기 타임아웃 3.5s 정정** |
 
 ## 새 ADR 추가 / Adding a New ADR
 1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1
