@@ -64,7 +64,12 @@ The reference materials' "300 tools → semantic search injects only ~4" pattern
 - 분류기는 프롬프트 인젝션 표면(최악 = 오라우팅, 권한 영향 없음 — enum 검증으로 완화).
 
 ### Post-acceptance deviations / 채택 후 편차
-- (기록용 비움)
+- **2026-06-10 (구현 계획 적대적 검증 라운드, 3-렌즈 워크플로):**
+  - **캐싱 검증 방법 대체** — 스펙은 "ADR-033 토큰 기록으로 절감 검증"이라 했으나 ADR-033 기록 코드는 v1(`src/`) 전용으로 v2 `web/`에 부재. 검증은 **CloudWatch Logs의 usage(`cacheReadInputTokens`)**로 대체한다.
+  - **분류기 모델 ID 실측 확정** — `apac.` Haiku 4.5 inference profile은 존재하지 않음. 실측 ID = `global.anthropic.claude-haiku-4-5-20251001-v1:0` (ap-northeast-2 Converse 실호출 성공, 액세스 활성).
+  - **캐싱 파라미터 스파이크 완료** — `strands-agents==1.41.0`(핀)의 `BedrockConfig`가 `cache_config: CacheConfig(strategy="auto")` + `cache_tools="default"` + `temperature` 공식 지원 확인(소스 실측). `cache_prompt`는 deprecated라 미사용. 미지원 버전 대비 try/except graceful no-op 가드 포함.
+  - **오라우팅 적재 메커니즘 확정** — Aurora 테이블 대신 `switchedFrom` 필드 + 구조화 `console.warn` → CloudWatch Logs (P4 시맨틱 라우팅 코퍼스 용도로 충분).
+  - **골든셋 게이트 수학 보정** — 초안 52케이스의 regex 베이스라인이 82.7%로 +15pp 게이트를 달성 불가로 만들어, 무매칭 13케이스를 추가(65케이스, 베이스라인 67.7%). 게이트 수치(≥85% AND +15pp)는 불변 — 바인딩은 85% SLO.
 
 ## References / 참고 자료
 - 설계 스펙: `docs/superpowers/specs/2026-06-10-hybrid-agent-routing-design.md` (멀티AI 리뷰 8건 반영 이력 포함)
