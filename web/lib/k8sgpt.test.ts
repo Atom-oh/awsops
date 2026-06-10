@@ -3,9 +3,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const invokeAgent = vi.fn();
 const listK8sgptResults = vi.fn();
 const query = vi.fn();
+const triageAndCreateOrLink = vi.fn();
+const enqueueInitialStage = vi.fn();
 vi.mock('@/lib/agentcore', () => ({ invokeAgent }));
 vi.mock('@/lib/eks-incluster', () => ({ listK8sgptResults }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
+vi.mock('@/lib/incident', () => ({ triageAndCreateOrLink, enqueueInitialStage }));
 
 const crd = (over = {}) => ({
   spec: { kind: 'DaemonSet', name: 'observability/otel-collector',
@@ -18,6 +21,7 @@ async function load() { return await import('./k8sgpt'); }
 beforeEach(() => {
   vi.resetModules();
   invokeAgent.mockReset(); listK8sgptResults.mockReset(); query.mockReset();
+  triageAndCreateOrLink.mockReset(); enqueueInitialStage.mockReset();
   process.env.AURORA_ENDPOINT = 'aurora.local';
   process.env.K8SGPT_ENABLED = 'true';
   query.mockResolvedValue({ rows: [] }); // default: no existing finding, inserts return nothing
@@ -87,5 +91,43 @@ describe('stale-scan degrade (Rule 9)', () => {
     const { getDiagnosis } = await load();
     const r = await getDiagnosis('fsi-demo-cluster');
     expect(r.stale).toBe(true);
+  });
+});
+
+describe('H3a seam (twice-gated, NOT auto-invoked)', () => {
+  const finding = {
+    analyzer: 'DaemonSet', resourceName: 'observability/otel-collector', namespace: 'observability',
+    errors: ['5/8 ready pods'], details: 'CrashLoopBackOff', parentObject: 'DaemonSet/otel-collector',
+    fingerprint: 'abc123', adapterVersion: '0.4.x/result.core.k8sgpt.ai/v1',
+  };
+
+  it('K8SGPT flag OFF → {decision:"disabled"}, NO incident triage call (gate #1)', async () => {
+    process.env.K8SGPT_ENABLED = 'false';
+    const { raiseIncidentFromFinding } = await load();
+    const r = await raiseIncidentFromFinding('fsi-demo-cluster', finding);
+    expect(r.decision).toBe('disabled');
+    expect(triageAndCreateOrLink).not.toHaveBeenCalled();   // gate #1 short-circuits before triage
+    expect(enqueueInitialStage).not.toHaveBeenCalled();
+  });
+
+  it('flags ON: carries ONLY deterministic facts, enqueues stage only on a New incident (no auto-apply)', async () => {
+    triageAndCreateOrLink.mockResolvedValue({ decision: 'New', incidentId: 'inc-1' });
+    const { raiseIncidentFromFinding } = await load();
+    const r = await raiseIncidentFromFinding('fsi-demo-cluster', finding);
+    expect(r.decision).toBe('New');
+    expect(triageAndCreateOrLink).toHaveBeenCalledTimes(1);
+    const event = triageAndCreateOrLink.mock.calls[0][0];
+    expect(event.message).toBe('5/8 ready pods');                          // deterministic FACT only
+    expect(event.resources).toEqual(['eks:fsi-demo-cluster/observability/otel-collector']); // Rule 6 anchor
+    expect(JSON.stringify(event)).not.toContain('llm_explanation');        // NO LLM hypothesis crosses (Rule 8)
+    expect(enqueueInitialStage).toHaveBeenCalledWith('inc-1');
+  });
+
+  it('flags ON but triage gate OFF inside ⇒ {decision:"disabled"}, no stage enqueued (gate #2)', async () => {
+    triageAndCreateOrLink.mockResolvedValue({ decision: 'disabled' });
+    const { raiseIncidentFromFinding } = await load();
+    const r = await raiseIncidentFromFinding('fsi-demo-cluster', finding);
+    expect(r.decision).toBe('disabled');
+    expect(enqueueInitialStage).not.toHaveBeenCalled();   // PROPOSAL/no-auto-apply: no work created
   });
 });

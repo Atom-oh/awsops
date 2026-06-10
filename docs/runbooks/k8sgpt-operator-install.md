@@ -122,11 +122,40 @@ When this returns Results **AND** the `awsops-k8sgpt-result-reader` binding is l
 
 ---
 
-## H3a seam (twice-gated, NOT auto-invoked) / H3a 심
+## H3a remediation seam (twice-gated, NOT auto-invoked) / H3a remediation 심
 
-The H3a path (a K8sGPT finding seeding an ADR-032 incident → ADR-034 write-back → ADR-029/036-gated remediation PROPOSAL) is **twice-gated and never auto-invoked**: it requires both `k8sgpt_enabled` and the downstream remediation gates, and produces only a PROPOSAL — never a cluster write. K8sGPT itself stays deterministic-only here too. See ADR-035 §H3a and the H3a wiring in `web/lib/k8sgpt.ts`.
+The H3a path lets a deterministic K8sGPT finding **optionally** seed the downstream incident/remediation machinery — but it is **twice-gated, admin-initiated, and produces only a PROPOSAL** (ADR-035 Rule 4: no auto-apply; **no cluster write ever**). The route (`/api/eks/[cluster]/k8sgpt`) does **not** call it; the seam (`raiseIncidentFromFinding` in `web/lib/k8sgpt.ts`) is invoked only from an explicit, admin-initiated "raise incident" action (future H3a UI), so a finding never autonomously creates work.
 
-H3a 경로(K8sGPT 발견 → ADR-032 인시던트 → ADR-034 라이트백 → ADR-029/036 게이트된 remediation PROPOSAL)는 **이중 게이트이며 절대 자동 호출되지 않습니다**: `k8sgpt_enabled`와 하위 remediation 게이트를 모두 요구하고, PROPOSAL만 생성하며 클러스터 쓰기는 하지 않습니다. K8sGPT는 여기서도 deterministic-only 입니다.
+**End-to-end gated path** (every gate below must be ON for a PROPOSAL to materialize; any one OFF stops the chain harmlessly):
+
+```
+K8sGPT finding  (deterministic FACT only — the Haiku llm_explanation does NOT cross the seam, Rule 6/8)
+  │  gate 1: k8sgpt_enabled          (web env K8SGPT_ENABLED=true; else raiseIncidentFromFinding → {decision:'disabled'})
+  ▼
+raiseIncidentFromFinding → triageAndCreateOrLink   (web/lib/incident.ts)
+  │  gate 2: incident_lifecycle_enabled  (INCIDENT_LIFECYCLE_ENABLED=true; else → {decision:'disabled'}, no incident)
+  ▼
+ADR-032 incident  → incident SM (correlation / RCA stages)
+  │  gate 3: rca_writeback_enabled   (ADR-034 write-back stage of the incident SM → incidents.rca)
+  ▼
+ADR-034 write-back  (OpsCenter / Incident Manager observability write; ALSO requires gate 4)
+  │  gate 4: remediation_enabled     (ADR-029/036 substrate; reuses the action_catalog + per-action role)
+  ▼
+ADR-029/036 remediation PROPOSAL   (action_catalog — EVERY row enabled=false by default + per-row `enabled`
+                                     + kill-switch + 4-eyes approval)  →  PROPOSAL ONLY, never auto-applied
+```
+
+The seam carries **only deterministic facts** across the boundary (Rule 6/8): the incident `message` is the analyzer error text and `resources` is the `eks:<cluster>/<resource>` cross-boundary anchor (ADR-006). The LLM hypothesis (`llm_explanation`) is structurally excluded from the incident record. K8sGPT itself stays deterministic-only throughout. See ADR-035 §H3a, `web/lib/k8sgpt.ts` (`raiseIncidentFromFinding`), `web/lib/incident.ts`, and `terraform/v2/foundation/{incidents,writeback,remediation}.tf`.
+
+H3a 경로는 결정론적 K8sGPT 발견이 하위 인시던트/remediation 기계를 **선택적으로** 트리거할 수 있게 합니다 — 단 **이중 게이트, 관리자 수동 개시, PROPOSAL만 생성**(ADR-035 Rule 4: 자동 적용 없음; **클러스터 쓰기 절대 없음**). 라우트(`/api/eks/[cluster]/k8sgpt`)는 이 심을 **호출하지 않습니다**. 심(`web/lib/k8sgpt.ts`의 `raiseIncidentFromFinding`)은 관리자가 명시적으로 개시하는 "raise incident" 액션(향후 H3a UI)에서만 호출되므로, 발견이 스스로 작업을 만들지 않습니다.
+
+**엔드-투-엔드 게이트 경로**(아래 모든 게이트가 ON이어야 PROPOSAL 생성; 하나라도 OFF면 무해하게 중단):
+1. `k8sgpt_enabled`(web env `K8SGPT_ENABLED=true`; 아니면 `raiseIncidentFromFinding` → `{decision:'disabled'}`),
+2. `incident_lifecycle_enabled`(`INCIDENT_LIFECYCLE_ENABLED=true`; `triageAndCreateOrLink` 내부 게이트; 아니면 인시던트 생성 안 함),
+3. `rca_writeback_enabled`(ADR-034 라이트백 스테이지),
+4. `remediation_enabled` + 카탈로그 각 행의 `enabled`(전부 기본 false) + kill-switch + **4-eyes 승인**.
+
+심은 결정론적 사실만 경계를 넘깁니다(Rule 6/8): 인시던트 `message`는 analyzer 에러 텍스트, `resources`는 `eks:<cluster>/<resource>` 교차경계 앵커(ADR-006). LLM 가설(`llm_explanation`)은 인시던트 레코드에서 구조적으로 제외됩니다. 최종 결과는 항상 **PROPOSAL만**이며 자동 적용되지 않습니다.
 
 ---
 

@@ -13,6 +13,8 @@ import { getPool } from '@/lib/db';
 import { invokeAgent } from '@/lib/agentcore';
 import { listK8sgptResults } from '@/lib/eks-incluster';
 import { adaptResultList, type AnalyzerResult } from '@/lib/k8sgpt-adapter';
+import { triageAndCreateOrLink, enqueueInitialStage } from '@/lib/incident';
+import type { AlertEvent } from '@/lib/incident-normalize';
 
 const STALE_MS = (parseInt(process.env.K8SGPT_STALE_MINUTES || '5', 10) || 5) * 60 * 1000; // Rule 9
 
@@ -152,4 +154,38 @@ async function lastScanTimestamp(cluster: string): Promise<string | null> {
   const { rows } = await getPool().query(
     `SELECT scanned_at FROM k8s_scan_runs WHERE cluster = $1 ORDER BY scanned_at DESC LIMIT 1`, [cluster]);
   return rows[0]?.scanned_at ? new Date(rows[0].scanned_at).toISOString() : null;
+}
+
+// --- H3a SEAM (ADR-035 Rule 4/6) — thin, twice-gated, NOT auto-invoked ---
+//
+// Turn a deterministic K8sGPT finding into an ADR-032 incident, which (when
+// incident_lifecycle_enabled) drives correlation/RCA → ADR-034 write-back → ADR-029/036
+// remediation PROPOSALS (catalog enabled=false, gated by remediation_enabled). NO auto-apply.
+//
+// GATED TWICE + NOT auto-called: returns {decision:'disabled'} unless BOTH K8SGPT_ENABLED and the
+// incident lifecycle gate (INCIDENT_LIFECYCLE_ENABLED, enforced inside triageAndCreateOrLink) are on.
+// The route does NOT call this; it is invoked only from an explicit, admin-initiated "raise incident"
+// action (future H3a UI) so a finding never autonomously creates work. The seam carries ONLY
+// deterministic facts (Rule 6/8) — the LLM hypothesis (llm_explanation) does NOT cross into the
+// incident record. PROPOSAL only, never a cluster write (Rule 4).
+export async function raiseIncidentFromFinding(cluster: string, f: AnalyzerResult): Promise<{ decision: string; incidentId?: string }> {
+  if (!enabled()) return { decision: 'disabled' }; // gate #1: K8sGPT flag off → no seam, no incident
+  // gate #2 (INCIDENT_LIFECYCLE_ENABLED) is enforced inside triageAndCreateOrLink → {decision:'disabled'}.
+  const event: AlertEvent = {
+    id: `k8sgpt:${cluster}:${f.fingerprint}`,
+    source: 'generic',                    // ADR-032 trigger_source; K8sGPT is a sensor input
+    alertName: `[K8sGPT/${cluster}] ${f.analyzer} ${f.resourceName}`,
+    severity: 'warning',                  // deterministic finding default; UI may override at raise-time
+    status: 'firing',
+    message: f.errors.join('; '),         // deterministic FACT only; NO LLM hypothesis crosses the seam
+    timestamp: new Date().toISOString(),
+    labels: {},
+    annotations: { details: f.details, parentObject: f.parentObject, adapterVersion: f.adapterVersion },
+    services: [f.analyzer],
+    resources: [`eks:${cluster}/${f.resourceName}`], // ADR-006 cross-boundary anchor (Rule 6)
+    rawPayload: { kind: 'k8sgpt-finding', cluster, fingerprint: f.fingerprint }, // FACT provenance, no hypothesis
+  };
+  const tri = await triageAndCreateOrLink(event); // ADR-032 gate (INCIDENT_LIFECYCLE_ENABLED) inside
+  if (tri.decision === 'New' && tri.incidentId) await enqueueInitialStage(tri.incidentId);
+  return tri;
 }
