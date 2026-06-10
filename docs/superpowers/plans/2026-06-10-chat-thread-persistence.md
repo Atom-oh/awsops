@@ -557,15 +557,17 @@ export default function ThreadList({ threads, activeId, onSelect, onDelete, onCl
 - [ ] **Step 4: `ChatDrawer.tsx` 통합** — 변경점:
   - state 추가: `const [threadId, setThreadId] = useState<string | null>(null);` `const [threads, setThreads] = useState<ThreadSummary[]>([]);` `const [showThreads, setShowThreads] = useState(false);` (+ `import ThreadList from './ThreadList'; import type { ThreadSummary } from '@/lib/chat-store';`)
   - `handleFrame` meta에 `threadId: obj.threadId` 수신 → `if (isMeta && obj.threadId) { setThreadId(obj.threadId); localStorage.setItem('awsops_chat_thread', obj.threadId); }` (patchLast와 별도 라인)
-  - **mount 시 hydrate** (기존 session useEffect 안): `const tid = localStorage.getItem('awsops_chat_thread'); if (tid) setThreadId(tid);` — reload 후에도 활성 스레드 유지(P2 게이트 MAJOR). 단 msgs는 비어 있으므로, hydrate된 threadId가 있으면 `selectThread(tid)`를 호출해 메시지도 복원(실패 시 무시 — degrade).
+  - **mount 시 hydrate** (기존 session useEffect 안): `const tid = localStorage.getItem('awsops_chat_thread'); if (tid) setThreadId(tid);` — reload 후에도 활성 스레드 유지(P2 게이트 MAJOR). 단 msgs는 비어 있으므로, hydrate된 threadId가 있으면 `selectThread(tid)`를 호출해 메시지도 복원 — selectThread의 404 정리 로직이 stale 키도 청소한다(P2 r2 glm).
   - `send`의 body에 `threadId,` 추가.
   - `newChat()`: 기존 로직 유지 + `setThreadId(null); localStorage.removeItem('awsops_chat_thread');` — **msgs를 비워도 서버에 보존**되므로 사라짐 문제 해소.
   - 목록 열기: 헤더에 ☰ 버튼(`aria-label="대화 목록"`) → `openThreads()`: `fetch('/api/chat/threads')` → `setThreads(json.threads)` → `setShowThreads(true)`.
-  - `selectThread(id)`: `fetch('/api/chat/threads/'+id)` 200이면 `setMsgs(messages.map((m) => ({ role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: (m.meta as any)?.ranked, method: (m.meta as any)?.method })))`, `sessionRef.current = thread.sessionId; localStorage.setItem('awsops_chat_session', thread.sessionId);`, `setThreadId(id); localStorage.setItem('awsops_chat_thread', id); setShowThreads(false);`
+  - `selectThread(id)`: `fetch('/api/chat/threads/'+id)` 200이면 `setMsgs(messages.map((m) => ({ role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: (m.meta as any)?.ranked, method: (m.meta as any)?.method })))`, `sessionRef.current = thread.sessionId; localStorage.setItem('awsops_chat_session', thread.sessionId);`, `setThreadId(id); localStorage.setItem('awsops_chat_thread', id); setShowThreads(false);` **404/실패 시(P2 r2 glm): `localStorage.removeItem('awsops_chat_thread'); setThreadId(null);` 후 조용히 return** — stale threadId가 빈 히스토리로 잔존하는 것 방지.
   - `removeThread(id)`: `fetch(..., {method:'DELETE'})` → 목록 재로드; 삭제한 게 활성 스레드면 `newChat()` (localStorage thread 키도 제거됨).
   - 렌더: 드로어 컨테이너에 `position:'fixed'` 유지하면서 ThreadList는 `{showThreads && <ThreadList threads={threads} activeId={threadId} onSelect={selectThread} onDelete={removeThread} onClose={() => setShowThreads(false)} />}` (컨테이너에 `position: 'relative'`가 아니므로 드로어 root div에 그대로 — absolute inset 0이 드로어를 덮음; root에 이미 fixed라 OK).
 - [ ] **Step 5: GREEN + 빌드** — `npx vitest run components/chat/ThreadList.test.tsx && npx vitest run && npm run build`
 - [ ] **Step 6: 커밋** — `git add web/components/chat/ThreadList.tsx web/components/chat/ThreadList.test.tsx web/components/chat/ChatDrawer.tsx && git commit -m "feat(chat-threads): thread list UI + restore/switch/delete; new-chat no longer wipes history"`
+
+**비고(P2 r2 kiro-opus MINOR):** recordExchange의 3개 쿼리는 비트랜잭션 — 중간 실패 시 user 메시지만 남을 수 있으나 fire-and-forget 특성상 무해(다음 교환이 정상 기록). 트랜잭션화는 YAGNI.
 
 ### Task 6: 운영 — 마이그레이션 + 배포 (컨트롤러 실행)
 
