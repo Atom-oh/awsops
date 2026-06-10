@@ -679,3 +679,34 @@ CREATE INDEX IF NOT EXISTS idx_k8s_scan_runs_cluster ON k8s_scan_runs (cluster, 
 INSERT INTO schema_migrations (version, description)
 VALUES (7, 'ADR-035: K8s-diagnosis domain — k8s_findings (dedup fingerprint + fact/hypothesis split) + k8s_scan_runs (last_scan_timestamp/Rule 9), inert when off')
 ON CONFLICT (version) DO NOTHING;
+
+-- ============================================================================
+-- ADR-031 Phase 2 (migration v8): per-account Agent Spaces.
+-- ALWAYS PRESENT, but OPTIONAL per account: a missing row ⇒ Phase-1 global
+-- behavior (all globally-enabled custom agents/skills available, no extra
+-- tool scoping). One row per account (ADR-008). enabled_*_ids scope which
+-- globally-enabled customs are active for that account; tool_allowlist is the
+-- account-level cap that the resolver intersects (server-side enforcement,
+-- ADR-031 Addendum #5). version bumps on every change (traceability).
+-- Phase 3 will ADD enabled_mcp_ids via its own ALTER TABLE migration.
+-- Idempotent.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS agent_spaces (
+  account_id        TEXT PRIMARY KEY,
+  enabled_agent_ids JSONB NOT NULL DEFAULT '[]'::jsonb,   -- agents.id[] enabled for this account
+  enabled_skill_ids JSONB NOT NULL DEFAULT '[]'::jsonb,   -- skills.id[] enabled for this account
+  tool_allowlist    JSONB NOT NULL DEFAULT '[]'::jsonb,   -- account-level tool cap (server-side enforced)
+  version           INT  NOT NULL DEFAULT 1,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_agent_spaces_touch') THEN
+    CREATE TRIGGER trg_agent_spaces_touch BEFORE UPDATE ON agent_spaces
+      FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+END $$;
+
+INSERT INTO schema_migrations (version, description)
+VALUES (8, 'ADR-031 Phase 2: agent_spaces (per-account enablement + tool_allowlist cap; no row => Phase-1 global behavior)')
+ON CONFLICT (version) DO NOTHING;
