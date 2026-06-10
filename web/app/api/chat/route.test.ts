@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const verifyUser = vi.fn();
 const invokeAgent = vi.fn();
@@ -9,7 +9,13 @@ const resolveAgent = vi.fn();
 const recordCustomAgentTrace = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/agentcore', () => ({ invokeAgent: (...a: unknown[]) => invokeAgent(...a) }));
-vi.mock('@/lib/route', () => ({ pickGateway: (...a: unknown[]) => pickGateway(...a) }));
+const classifyRoute = vi.fn();
+vi.mock('@/lib/route', () => ({
+  pickGateway: (...a: unknown[]) => pickGateway(...a),
+  classifyRoute: (...a: unknown[]) => classifyRoute(...a),
+}));
+const classifyPrompt = vi.fn();
+vi.mock('@/lib/classifier', () => ({ classifyPrompt: (...a: unknown[]) => classifyPrompt(...a) }));
 vi.mock('@/lib/catalog-source', () => ({ getEnabledCustomAgents: (...a: unknown[]) => getEnabledCustomAgents(...a) }));
 vi.mock('@/lib/agent-resolver', () => ({
   pickCustomAgent: (...a: unknown[]) => pickCustomAgent(...a),
@@ -48,7 +54,13 @@ beforeEach(() => {
   getEnabledCustomAgents.mockResolvedValue([]);
   pickCustomAgent.mockReturnValue(null);
   resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+  classifyRoute.mockReset();
+  classifyRoute.mockResolvedValue({ primary: 'ops', ranked: [{ key: 'ops', score: 0, active: false }], method: 'regex' });
+  classifyPrompt.mockReset();
+  delete process.env.HYBRID_ROUTING_ENABLED;
 });
+
+afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; });
 
 describe('POST /api/chat', () => {
   it('401 when unauthenticated', async () => {
@@ -100,5 +112,103 @@ describe('POST /api/chat', () => {
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ systemPromptOverride: 'OVR', agentName: 'compliance' }));
     const body = await readStream(res);
     expect(body).toContain('"agentName":"compliance"');
+  });
+});
+
+describe('hybrid routing (ADR-038)', () => {
+  it('flag off: uses legacy pickGateway path, no classifyRoute call', async () => {
+    delete process.env.HYBRID_ROUTING_ENABLED;
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('cost');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'cost', skill: 'cost', agentName: 'cost', skillHashes: [] });
+    invokeAgent.mockResolvedValue('answer');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: '이번 달 비용', sessionId: 's'.repeat(36) }));
+    const body = await readStream(res);
+    expect(pickGateway).toHaveBeenCalled();
+    expect(classifyRoute).not.toHaveBeenCalled();
+    expect(body).toContain('"gateway":"cost"');
+  });
+
+  it('flag on: classifyRoute decides, meta carries ranked+method', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({
+      primary: 'network',
+      ranked: [
+        { key: 'network', score: 0.9, active: true },
+        { key: 'data', score: 0.5, active: false },
+      ],
+      method: 'llm',
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockResolvedValue('answer');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'EKS 파드가 RDS 연결 안돼', sessionId: 's'.repeat(36) }));
+    const body = await readStream(res);
+    expect(body).toContain('"method":"llm"');
+    expect(body).toContain('"ranked":[{"key":"network"');
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
+  });
+
+  it('flag on: inactive top-1 short-circuits — no agent call, guidance message, meta still emitted', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({
+      primary: 'data',
+      ranked: [{ key: 'data', score: 0.9, active: false }, { key: 'network', score: 0.4, active: true }],
+      method: 'llm',
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'data', skill: 'data', agentName: 'data', skillHashes: [] });
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'RDS 느린 쿼리', sessionId: 's'.repeat(36) }));
+    const body = await readStream(res);
+    expect(invokeAgent).not.toHaveBeenCalled();
+    expect(body).toContain('"method":"llm"'); // meta ALWAYS emitted (spec §6)
+    expect(body).toContain('P3'); // guidance delta mentions availability
+    expect(body).toContain('[DONE]');
+  });
+
+  it('flag on: explicit pin beats custom agent (spec §2.2 precedence)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({ primary: 'security', ranked: [{ key: 'security', score: 1, active: true }], method: 'pin' });
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance' }]);
+    pickCustomAgent.mockReturnValue('compliance'); // custom WOULD match...
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'run a CIS benchmark', section: 'security', sessionId: 's'.repeat(36) }));
+    await readStream(res);
+    // ...but the pin wins: resolveAgent called with the pinned section, not the custom name
+    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything());
+  });
+
+  it('logs a structured misroute candidate when the client reports a chip switch (spec §5)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({ primary: 'security', ranked: [{ key: 'security', score: 1, active: true }], method: 'pin' });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', section: 'security', switchedFrom: 'network', sessionId: 's'.repeat(36) })));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"misroute"'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"from":"network"'));
+    warn.mockRestore();
+  });
+
+  it('flag on: without a pin, custom agent still beats the classifier', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({ primary: 'security', ranked: [{ key: 'security', score: 1, active: true }], method: 'regex' });
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance' }]);
+    pickCustomAgent.mockReturnValue('compliance');
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', agentName: 'compliance', skillHashes: ['h'] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) }));
+    await readStream(res);
+    expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything());
   });
 });
