@@ -117,6 +117,11 @@ export async function bedrockModelMetrics(range = '24h'): Promise<BedrockMetrics
       MetricStat: { Metric: { Namespace: 'AWS/Bedrock', MetricName: d.name, Dimensions: [{ Name: 'ModelId', Value: id }] }, Period: cfg.period, Stat: d.stat },
     })),
   );
+  // CloudWatch caps GetMetricData at 500 queries/call. Warn rather than silently truncate
+  // (would only bite at >62 active models — well beyond reality, but no silent caps).
+  if (queries.length > 500) {
+    console.warn(`[bedrock] ${models.length} models × ${BEDROCK_METRICS.length} metrics = ${queries.length} queries > 500 cap; metrics truncated`);
+  }
   const r = await cwClient().send(new GetMetricDataCommand({
     StartTime: new Date(Date.now() - cfg.hours * 3600_000), EndTime: new Date(),
     MetricDataQueries: queries.slice(0, 500),
