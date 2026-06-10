@@ -5,7 +5,11 @@ import json
 import logging
 import os
 from strands import Agent
-from strands.models import BedrockModel
+try:
+    from strands.models import BedrockModel, CacheConfig
+except ImportError:  # pre-CacheConfig strands
+    from strands.models import BedrockModel
+    CacheConfig = None
 from strands.tools.mcp.mcp_client import MCPClient
 from botocore.credentials import Credentials
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -64,10 +68,26 @@ def _discover_gateways():
 GATEWAYS = _discover_gateways()
 
 # Bedrock Model / Bedrock 모델
-model = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-6",
-    region_name="us-east-1",
-)
+# ADR-038: deterministic tool selection + prompt caching (verified against strands-agents 1.41.0:
+# BedrockConfig exposes temperature / cache_config / cache_tools; cache_prompt is deprecated).
+# Cache params are guarded — an unsupported version degrades to temperature-only (spec §6 no-op rule).
+try:
+    if CacheConfig is None:
+        raise TypeError("CacheConfig unavailable")
+    model = BedrockModel(
+        model_id="us.anthropic.claude-sonnet-4-6",
+        region_name="us-east-1",
+        temperature=0.0,
+        cache_config=CacheConfig(strategy="auto"),  # auto cachePoint injection (system+messages)
+        cache_tools="default",                      # toolConfig cachePoint, 5m TTL
+    )
+except TypeError as e:  # older strands: unknown kwarg / CacheConfig missing
+    print(f"[Agent] prompt caching unavailable ({e}); falling back to temperature-only")
+    model = BedrockModel(
+        model_id="us.anthropic.claude-sonnet-4-6",
+        region_name="us-east-1",
+        temperature=0.0,
+    )
 
 # ============================================================================
 # Skill Base: Static decision patterns + workflows (rarely changes)

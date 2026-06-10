@@ -1,4 +1,4 @@
-strands-agents
+strands-agents==1.41.0
 strands-agents-tools
 boto3
 bedrock-agentcore<=0.1.5
