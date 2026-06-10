@@ -107,6 +107,12 @@ variable "remediation_enabled" {
   default     = false
 }
 
+variable "hybrid_routing_enabled" {
+  type        = bool
+  description = "ADR-038 hybrid chat routing gate. false (default) = legacy regex-only routing, no classifier Bedrock calls, no extra IAM. Enable only after the golden-set gate (scripts/v2/routing-accuracy.mjs) passes >=85% and >= +15pp over the regex baseline."
+  default     = false
+}
+
 variable "incident_lifecycle_enabled" {
   type        = bool
   description = "ADR-032 incident lifecycle gate. false (default) = 0 lifecycle infra, 0 cost, ZERO autonomous triggers. The always-present incident_* tables (migration v5) are harmless when off. REQUIRES workers_enabled=true to enable (reuses the P2 queue/dispatcher/reaper/status_updater/pg8000 layer)."

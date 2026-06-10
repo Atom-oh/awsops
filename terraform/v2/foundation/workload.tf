@@ -114,6 +114,25 @@ resource "aws_iam_role_policy" "task_killswitch_ssm" {
   })
 }
 
+# ADR-038: BFF Haiku routing classifier. Scoped to Haiku FM + global inference profile only.
+resource "aws_iam_role_policy" "task_classifier_bedrock" {
+  count = var.hybrid_routing_enabled ? 1 : 0
+  name  = "${var.project}-task-classifier-bedrock"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["bedrock:InvokeModel"]
+      Resource = [
+        # global cross-region profile fans out to per-region FMs → wildcard region on the FM ARN
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-*",
+        "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:inference-profile/global.anthropic.claude-haiku-4-5-*",
+      ]
+    }]
+  })
+}
+
 # ADR-032: the web incident ingress (HMAC webhook) + synchronous Triage path reads the incident SSM
 # params (window/storm-cap knobs + the HMAC webhook secret(s)) and synchronously consults the
 # read-only AgentCore runtime. Gated (local.il) so the web task role is UNTOUCHED when off (when
@@ -219,6 +238,10 @@ resource "aws_ecs_task_definition" "web" {
         { name = "INCIDENT_MIN_SEVERITY_PARAM", value = one(aws_ssm_parameter.incident_min_severity[*].name) },
         # AgentCore runtime-ARN param (the synchronous read-only Triage/consult path).
         { name = "AGENTCORE_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" }
+        ] : [], var.hybrid_routing_enabled ? [
+        # ADR-038: hybrid routing flag + classifier model (BFF reads both at runtime).
+        { name = "HYBRID_ROUTING_ENABLED", value = "true" },
+        { name = "CLASSIFIER_MODEL_ID", value = "global.anthropic.claude-haiku-4-5-20251001-v1:0" }
       ] : [])
       secrets = [
         { name = "AURORA_USER", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:username::" },
