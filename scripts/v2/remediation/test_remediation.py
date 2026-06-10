@@ -183,16 +183,18 @@ def test_handler_gate_blocked_fails_closed_no_terminal_write(monkeypatch):
 def test_handler_rollback_without_handler_raises_manual(monkeypatch):
     conn = _ExecConn()
     monkeypatch.setattr(ex.db, "connect", lambda: conn)
-    # opscenter-create-opsitem has rb=None; gate must pass for us to reach the rollback branch.
-    monkeypatch.setattr(ex.cat, "gate", lambda _c, _n: ({"name": "opscenter-create-opsitem"}, None))
+    # incident-manager-enrich has rb=None; gate must pass for us to reach the rollback branch.
+    # (ADR-034 gave opscenter-create-opsitem a real rollback = _opsitem_resolve, so the no-rollback
+    #  MANUAL_INTERVENTION path is now exercised via the enrich action.)
+    monkeypatch.setattr(ex.cat, "gate", lambda _c, _n: ({"name": "incident-manager-enrich"}, None))
     monkeypatch.setattr(ex, "_assume", lambda _arn: object())
-    monkeypatch.setenv("ACTION_ROLE_OPSCENTER_CREATE_OPSITEM", "arn:aws:iam::1:role/x")
+    monkeypatch.setenv("ACTION_ROLE_INCIDENT_MANAGER_ENRICH", "arn:aws:iam::1:role/x")
 
     import pytest  # noqa: E402
 
     with pytest.raises(RuntimeError, match="MANUAL_INTERVENTION_REQUIRED"):
         ex.lambda_handler(
-            {"job_id": "j2", "action": "opscenter-create-opsitem", "phase": "rollback"}, None)
+            {"job_id": "j2", "action": "incident-manager-enrich", "phase": "rollback"}, None)
     assert conn.closed is True
 
 

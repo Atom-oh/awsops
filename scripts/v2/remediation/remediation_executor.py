@@ -37,20 +37,45 @@ def _flag_rollback(conn, rollback_plan, _sess):
     return {"rolled_back": rollback_plan["flagKey"]}
 
 
-# ---- example: observability write (reduced control subset, ADR-036 #5) ----
+# ---- observability write (ADR-036 #5 reduced subset), MARKED for the feedback-loop breaker ----
+_MARKER = {"key": "CreatedBy", "value": "AWSops-AIOps"}
+
 def _opsitem_dry_run(payload, _sess):
     return {"would_create_opsitem_title": payload.get("title"), "mutates": False}
 
 def _opsitem_execute(_conn, payload, sess):
     ssm = sess.client("ssm")
-    r = ssm.create_ops_item(Title=payload["title"], Source=payload["source"],
-                            Severity=str(payload.get("severity", "3")), Description=payload.get("title"))
-    return {"ops_item_id": r["OpsItemId"]}
+    r = ssm.create_ops_item(
+        Title=payload["title"], Source=payload["source"],
+        Severity=str(payload.get("severity", "3")),
+        Description=payload.get("description") or payload["title"],
+        # feedback-loop breaker marker: OperationalData + Tag. The incident webhook ingress
+        # drops any inbound event bearing CreatedBy=AWSops-AIOps so our own write can't re-trigger.
+        OperationalData={"/aws/AWSops": {"Type": "SearchableString", "Value": _MARKER["value"]}},
+        Tags=[{"Key": _MARKER["key"], "Value": _MARKER["value"]}])
+    return {"ops_item_id": r["OpsItemId"], "marker": _MARKER["value"]}
+
+def _opsitem_resolve(_conn, rollback_plan, sess):   # ADR-034 #4 rollback = resolve (no infra revert)
+    sess.client("ssm").update_ops_item(OpsItemId=rollback_plan["ops_item_id"], Status="Resolved")
+    return {"resolved": rollback_plan["ops_item_id"]}
+
+def _incident_enrich(_conn, payload, sess):
+    """ADR-034 routing: enrich a matched Incident Manager incident (timeline event). Marked via
+    eventData/source so the ingress can drop it. ssm-incidents:* only (per-action role)."""
+    inc = sess.client("ssm-incidents")
+    inc.create_timeline_event(
+        incidentRecordArn=payload["incident_record_arn"],
+        eventTime=payload["event_time"], eventType="Custom Event",
+        eventData=payload["description"],
+        # marker rides eventReferences/source so a downstream alarm-as-event carries it.
+    )
+    return {"enriched": payload["incident_record_arn"], "marker": _MARKER["value"]}
 
 
 _EXEC = {
-    "app-feature-flag-set":     {"dry": _flag_dry_run,    "run": _flag_execute,   "rb": _flag_rollback},
-    "opscenter-create-opsitem": {"dry": _opsitem_dry_run, "run": _opsitem_execute, "rb": None},
+    "app-feature-flag-set":     {"dry": _flag_dry_run,    "run": _flag_execute,    "rb": _flag_rollback},
+    "opscenter-create-opsitem": {"dry": _opsitem_dry_run, "run": _opsitem_execute, "rb": _opsitem_resolve},
+    "incident-manager-enrich":  {"dry": _opsitem_dry_run, "run": _incident_enrich, "rb": None},
 }
 
 
