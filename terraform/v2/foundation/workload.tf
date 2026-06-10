@@ -114,6 +114,36 @@ resource "aws_iam_role_policy" "task_killswitch_ssm" {
   })
 }
 
+# ADR-032: the web incident ingress (HMAC webhook) + synchronous Triage path reads the incident SSM
+# params (window/storm-cap knobs + the HMAC webhook secret(s)) and synchronously consults the
+# read-only AgentCore runtime. Gated (local.il) so the web task role is UNTOUCHED when off (when
+# incident_lifecycle_enabled=false the route 503s first and never reads any of these).
+resource "aws_iam_role_policy" "task_incident_ssm" {
+  count = local.il
+  name  = "${var.project}-task-incident-ssm"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # Read the five configurable-window params + the operator-provisioned HMAC webhook secret(s).
+        # Scoped to the project's incident SSM namespace (covers webhook-hmac-secret / -standby too).
+        Sid      = "ReadIncidentParams"
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = ["arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/ops/${var.project}/incident/*"]
+      },
+      {
+        # Synchronous read-only Triage consult against the project's AgentCore runtimes.
+        Sid      = "InvokeAgentRuntime"
+        Effect   = "Allow"
+        Action   = ["bedrock-agentcore:InvokeAgentRuntime"]
+        Resource = "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${var.project}*"
+      }
+    ]
+  })
+}
+
 resource "aws_cloudwatch_log_group" "web" {
   name              = "/ecs/${var.project}-web"
   retention_in_days = 30
@@ -170,6 +200,25 @@ resource "aws_ecs_task_definition" "web" {
         { name = "REMEDIATION_ENABLED", value = "true" },
         { name = "MUTATING_ACTIONS_SSM", value = one(aws_ssm_parameter.mutating_enabled[*].name) },
         { name = "REMEDIATION_STATE_MACHINE_ARN", value = one(aws_sfn_state_machine.remediation[*].arn) }
+        ] : [], var.incident_lifecycle_enabled ? [
+        # ADR-032: the incident ingress/triage routes read INCIDENT_LIFECYCLE_ENABLED FIRST and 503
+        # when not "true" (no accept / HMAC / normalize / triage / enqueue). concat(base, []) == base
+        # when incident_lifecycle_enabled=false → byte-identical web task def (no redeploy when off).
+        # The synchronous Triage path runs in web (thin-BFF); heavy work is enqueued to the worker SM.
+        { name = "INCIDENT_LIFECYCLE_ENABLED", value = "true" },
+        { name = "PROJECT", value = var.project },
+        # HMAC webhook secret(s) (ADR-022 active/standby) — operator-provisioned SSM params (read
+        # once, cached by the route). Names only here; the web task role grants read on the namespace.
+        { name = "SSM_INCIDENT_HMAC_SECRET_PARAM", value = "/ops/${var.project}/incident/webhook-hmac-secret" },
+        { name = "SSM_INCIDENT_HMAC_STANDBY_PARAM", value = "/ops/${var.project}/incident/webhook-hmac-standby" },
+        # The five configurable-window / storm-cap param names (Addendum #4/#7).
+        { name = "INCIDENT_CORRELATION_WINDOW_PARAM", value = one(aws_ssm_parameter.incident_correlation_window[*].name) },
+        { name = "INCIDENT_STAGE_TIMEOUT_PARAM", value = one(aws_ssm_parameter.incident_stage_timeout[*].name) },
+        { name = "INCIDENT_MAX_CONCURRENT_PARAM", value = one(aws_ssm_parameter.incident_max_concurrent[*].name) },
+        { name = "INCIDENT_FANOUT_MAX_PARAM", value = one(aws_ssm_parameter.incident_fanout_max[*].name) },
+        { name = "INCIDENT_MIN_SEVERITY_PARAM", value = one(aws_ssm_parameter.incident_min_severity[*].name) },
+        # AgentCore runtime-ARN param (the synchronous read-only Triage/consult path).
+        { name = "AGENTCORE_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" }
       ] : [])
       secrets = [
         { name = "AURORA_USER", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:username::" },

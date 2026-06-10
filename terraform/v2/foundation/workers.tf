@@ -400,6 +400,11 @@ resource "aws_lambda_function" "dispatcher" {
     variables = merge(
       { STATE_MACHINE_ARN = aws_sfn_state_machine.workers[0].arn },
       var.remediation_enabled ? { REMEDIATION_STATE_MACHINE_ARN = aws_sfn_state_machine.remediation[0].arn } : {},
+      # ADR-032: enabling the incident lifecycle adds the sibling incident SM ARN so the dispatcher
+      # can route incident_stage jobs to it (dispatcher.py reads INCIDENT_STATE_MACHINE_ARN; empty
+      # → the incident branch is inert). merge(base,{}) == base when off → byte-identical dispatcher
+      # (no revision). Incident lifecycle REQUIRES workers_enabled=true (this Lambda only exists then).
+      var.incident_lifecycle_enabled ? { INCIDENT_STATE_MACHINE_ARN = aws_sfn_state_machine.incident[0].arn } : {},
     )
   }
   depends_on = [aws_cloudwatch_log_group.dispatcher]
