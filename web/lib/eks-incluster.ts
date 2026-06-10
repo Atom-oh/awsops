@@ -225,3 +225,20 @@ export async function listInCluster(cluster: string, kind: Kind): Promise<InClus
   const norm = NORMALIZERS[kind];
   return (parsed.items ?? []).map(norm);
 }
+
+// ── K8sGPT Result CRDs (ADR-035) — SAME presigned-STS token path, different API group ─────
+// result.core.k8sgpt.ai/v1, namespaced `results`; cluster-wide collection across namespaces.
+// READ-ONLY: a single HTTP GET, exactly like listInCluster. AWSops issues NO write verb.
+const K8SGPT_RESULTS_PATH = '/apis/result.core.k8sgpt.ai/v1/results';
+
+import type { K8sgptResultCrd } from '@/lib/k8sgpt-adapter';
+
+/** GET the K8sGPT Result CRD collection. Throws on transport/HTTP error (caller degrades gracefully).
+ *  A 404 here typically means the operator/CRD is absent → the caller treats it as "no operator". */
+export async function listK8sgptResults(cluster: string): Promise<K8sgptResultCrd[]> {
+  const { endpoint, caPem } = await clusterConn(cluster);   // reuse P3-D DescribeCluster+CA (cached)
+  const token = await eksToken(cluster, REGION);            // reuse P3-D presigned-STS bearer
+  const body = await k8sGet(endpoint, K8SGPT_RESULTS_PATH, token, caPem); // reuse P3-D GET-with-CA
+  const parsed = JSON.parse(body) as { items?: K8sgptResultCrd[] };
+  return parsed.items ?? [];
+}
