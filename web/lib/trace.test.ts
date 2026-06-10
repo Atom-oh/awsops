@@ -22,6 +22,14 @@ describe('recordCustomAgentTrace', () => {
     expect(payload.agentName).toBe('compliance');
     expect(payload.skillHashes).toEqual(['h1', 'h2']);
   });
+  it('carries spaceVersion into the payload (ADR-031 Phase 2)', async () => {
+    process.env.AURORA_ENDPOINT = 'h';
+    query.mockResolvedValue({ rows: [] });
+    await recordCustomAgentTrace({ gateway: 'security', userSub: 'u', agentName: 'compliance', agentVersion: 3, tier: 'custom', skillHashes: ['h1'], spaceVersion: 7 });
+    const params = query.mock.calls[0][1];
+    const payload = JSON.parse(params[params.length - 1]);
+    expect(payload.spaceVersion).toBe(7);
+  });
   it('never throws on DB error', async () => {
     process.env.AURORA_ENDPOINT = 'h';
     query.mockRejectedValue(new Error('down'));
