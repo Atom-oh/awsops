@@ -43,7 +43,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages (thread_id,
 - `POST /api/chat` body에 `threadId?: string` 추가.
 - 응답 **성공 완료 후** user 메시지 + assistant 응답을 **fire-and-forget**으로 기록 (`web/lib/trace.ts` 패턴: `AURORA_ENDPOINT` 없으면 조용히 생략, **절대 throw 금지** — 챗을 막지 않음). 스레드 `updated_at` 갱신.
 - `threadId` 미제공(새 대화 첫 메시지) → 서버가 `randomUUID()`로 스레드 생성, `title` = 프롬프트 앞 40자, `session_id` = 요청의 sessionId. **meta SSE 이벤트에 `threadId` 포함** → 클라이언트가 기억.
-- 소유 검증: 제공된 threadId가 존재하면 `user_sub` 일치 확인 — 불일치 시 **새 스레드 생성으로 폴백**(에러로 챗을 막지 않음, 로그만).
+- 소유 검증: upsert의 `WHERE user_sub = EXCLUDED.user_sub` 가드 — 불일치(위조/타인 threadId) 시 **기록을 drop하고 구조화 로그만 남긴다**(P2 게이트 합의: 정상 클라이언트는 서버가 meta로 발급한 threadId만 사용하므로 이 경로는 위조 시도뿐 — drop이 가장 안전하고 단순. 챗 스트림은 영향 없음).
 - 비활성 단락(ADR-038 안내 메시지) 응답도 동일하게 기록(사용자 질문 보존 가치).
 
 ## 4. API (신규 `web/app/api/chat/threads/`)
@@ -58,7 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages (thread_id,
 
 ## 5. ChatDrawer UX
 
-- 헤더에 **☰ 스레드 목록 버튼** 추가 → 드로어 내부 오버레이 패널: 스레드 제목·상대시간·삭제(🗑). 열 때 `GET /api/chat/threads`.
+- 헤더에 **☰ 스레드 목록 버튼** 추가 → 드로어 내부 오버레이 패널: 스레드 제목·시간·삭제(🗑). 열 때 `GET /api/chat/threads`.
 - **`+` 새 챗 = 전환만**: `msgs=[]`, 새 sessionId, `threadId=null` — 서버 기록은 다음 메시지부터 새 스레드로. **기존 대화는 서버에 남는다** (버그 해소 지점).
 - 스레드 클릭 → `GET /api/chat/threads/[id]` → msgs 복원(gateway/meta 포함 — ADR-038 칩도 복원) + **`sessionId` 를 그 스레드의 session_id로 복원** → AgentCore Memory 맥락 연속.
 - meta에서 받은 `threadId`를 state + localStorage(`awsops_chat_thread`)에 보관, 후속 메시지에 전달.
@@ -70,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages (thread_id,
 |---|---|
 | Aurora 미설정/INSERT 실패 | 기록 생략(현재처럼 휘발), 챗 정상. console.warn 1줄 |
 | threads API에서 DB 실패 | `{threads: []}` 또는 404 — UI는 빈 목록 표시 |
-| threadId 소유 불일치 | 새 스레드 폴백 + 로그 (chat) / 404 (threads API) |
+| threadId 소유 불일치 | 기록 drop + 구조화 로그 (chat — §3) / 404 (threads API) |
 | 비로그인 | 401 (기존 패턴) |
 
 ## 7. 테스트

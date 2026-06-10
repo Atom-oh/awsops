@@ -420,6 +420,32 @@ describe('thread persistence', () => {
     expect(body).toContain('[DONE]');
     expect(recordExchange).not.toHaveBeenCalled();
   });
+
+  it('records the inactive-section guidance exchange too (spec §3)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u1' });
+    classifyRoute.mockResolvedValue({ primary: 'data', ranked: [{ key: 'data', score: 0.9, active: false }], method: 'llm' });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'data', skill: 'data', agentName: 'data', skillHashes: [] });
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'RDS 느린 쿼리', sessionId: 's'.repeat(36) })));
+    expect(invokeAgent).not.toHaveBeenCalled();
+    expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({
+      userContent: 'RDS 느린 쿼리',
+      assistantContent: expect.stringContaining('P3'),
+    }));
+  });
+
+  it('a rejecting recordExchange does not break the SSE stream (defensive)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u1' });
+    pickGateway.mockReturnValue('security');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
+    invokeAgent.mockResolvedValue('answer');
+    recordExchange.mockRejectedValue(new Error('store blew up'));
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(body).toContain('answer');
+    expect(body).toContain('[DONE]');
+  });
 });
 ```
 
@@ -433,17 +459,20 @@ describe('thread persistence', () => {
     const threadId = (typeof body.threadId === 'string' && THREAD_RE.test(body.threadId)) ? body.threadId : randomUUID();
     ```
   - meta 객체에 `threadId,` 필드 추가 (gateway 옆).
-  - invokeAgent **성공 직후**(text 확보, 청크 루프 전) fire-and-forget:
+  - 타자기 청크 루프 **후, `[DONE]` 직전** fire-and-forget (P2 게이트: void는 비차단이지만 위치를 명시해 first-byte 우려 제거):
     ```ts
-    void recordExchange({
+    recordExchange({
       threadId, userSub: user.sub, sessionId,
       promptTitle: prompt.slice(0, 40),
       userContent: prompt, assistantContent: text,
       gateway: spec.gateway,
-      meta: route ? { ranked: route.ranked, method: route.method } : undefined,
-    });
+      meta: route
+        ? { ranked: route.ranked, method: route.method, ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}) }
+        : (spec.tier === 'custom' ? { customAgent: spec.agentName } : undefined),
+    }).catch(() => { /* store is never-throws by contract; belt-and-suspenders (P2 gate) */ });
     ```
-  - 비활성 단락 경로에도 guide 텍스트로 동일 기록(assistantContent=guide) — `[DONE]` 직전에 `void recordExchange({...})`.
+    (P2 게이트 codex: `customAgent` 포함 — meta 복원 시 ADR-038 칩/뱃지 완전성.)
+  - 비활성 단락 경로에도 guide 텍스트로 동일 기록(assistantContent=guide) — `[DONE]` 직전에 `recordExchange({...}).catch(() => {})` (meta 동일 규칙).
 - [ ] **Step 4: GREEN + 회귀** — chat 테스트 전체 + `npx vitest run`.
 - [ ] **Step 5: 커밋** — `git add web/app/api/chat/route.ts web/app/api/chat/route.test.ts && git commit -m "feat(chat-threads): server-side exchange recording + threadId in meta"`
 
@@ -527,12 +556,13 @@ export default function ThreadList({ threads, activeId, onSelect, onDelete, onCl
 
 - [ ] **Step 4: `ChatDrawer.tsx` 통합** — 변경점:
   - state 추가: `const [threadId, setThreadId] = useState<string | null>(null);` `const [threads, setThreads] = useState<ThreadSummary[]>([]);` `const [showThreads, setShowThreads] = useState(false);` (+ `import ThreadList from './ThreadList'; import type { ThreadSummary } from '@/lib/chat-store';`)
-  - `handleFrame` meta에 `threadId: obj.threadId` 수신 → `if (isMeta && obj.threadId) setThreadId(obj.threadId);` (patchLast와 별도 라인)
+  - `handleFrame` meta에 `threadId: obj.threadId` 수신 → `if (isMeta && obj.threadId) { setThreadId(obj.threadId); localStorage.setItem('awsops_chat_thread', obj.threadId); }` (patchLast와 별도 라인)
+  - **mount 시 hydrate** (기존 session useEffect 안): `const tid = localStorage.getItem('awsops_chat_thread'); if (tid) setThreadId(tid);` — reload 후에도 활성 스레드 유지(P2 게이트 MAJOR). 단 msgs는 비어 있으므로, hydrate된 threadId가 있으면 `selectThread(tid)`를 호출해 메시지도 복원(실패 시 무시 — degrade).
   - `send`의 body에 `threadId,` 추가.
-  - `newChat()`: 기존 로직 유지 + `setThreadId(null);` — **msgs를 비워도 서버에 보존**되므로 사라짐 문제 해소.
+  - `newChat()`: 기존 로직 유지 + `setThreadId(null); localStorage.removeItem('awsops_chat_thread');` — **msgs를 비워도 서버에 보존**되므로 사라짐 문제 해소.
   - 목록 열기: 헤더에 ☰ 버튼(`aria-label="대화 목록"`) → `openThreads()`: `fetch('/api/chat/threads')` → `setThreads(json.threads)` → `setShowThreads(true)`.
-  - `selectThread(id)`: `fetch('/api/chat/threads/'+id)` 200이면 `setMsgs(messages.map((m) => ({ role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: (m.meta as any)?.ranked, method: (m.meta as any)?.method })))`, `sessionRef.current = thread.sessionId; localStorage.setItem('awsops_chat_session', thread.sessionId);`, `setThreadId(id); setShowThreads(false);`
-  - `removeThread(id)`: `fetch(..., {method:'DELETE'})` → 목록 재로드; 삭제한 게 활성 스레드면 `newChat()`.
+  - `selectThread(id)`: `fetch('/api/chat/threads/'+id)` 200이면 `setMsgs(messages.map((m) => ({ role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: (m.meta as any)?.ranked, method: (m.meta as any)?.method })))`, `sessionRef.current = thread.sessionId; localStorage.setItem('awsops_chat_session', thread.sessionId);`, `setThreadId(id); localStorage.setItem('awsops_chat_thread', id); setShowThreads(false);`
+  - `removeThread(id)`: `fetch(..., {method:'DELETE'})` → 목록 재로드; 삭제한 게 활성 스레드면 `newChat()` (localStorage thread 키도 제거됨).
   - 렌더: 드로어 컨테이너에 `position:'fixed'` 유지하면서 ThreadList는 `{showThreads && <ThreadList threads={threads} activeId={threadId} onSelect={selectThread} onDelete={removeThread} onClose={() => setShowThreads(false)} />}` (컨테이너에 `position: 'relative'`가 아니므로 드로어 root div에 그대로 — absolute inset 0이 드로어를 덮음; root에 이미 fixed라 OK).
 - [ ] **Step 5: GREEN + 빌드** — `npx vitest run components/chat/ThreadList.test.tsx && npx vitest run && npm run build`
 - [ ] **Step 6: 커밋** — `git add web/components/chat/ThreadList.tsx web/components/chat/ThreadList.test.tsx web/components/chat/ChatDrawer.tsx && git commit -m "feat(chat-threads): thread list UI + restore/switch/delete; new-chat no longer wipes history"`
