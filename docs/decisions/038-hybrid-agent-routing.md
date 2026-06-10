@@ -69,7 +69,11 @@ The reference materials' "300 tools → semantic search injects only ~4" pattern
   - **분류기 모델 ID 실측 확정** — `apac.` Haiku 4.5 inference profile은 존재하지 않음. 실측 ID = `global.anthropic.claude-haiku-4-5-20251001-v1:0` (ap-northeast-2 Converse 실호출 성공, 액세스 활성).
   - **캐싱 파라미터 스파이크 완료** — `strands-agents==1.41.0`(핀)의 `BedrockConfig`가 `cache_config: CacheConfig(strategy="auto")` + `cache_tools="default"` + `temperature` 공식 지원 확인(소스 실측). `cache_prompt`는 deprecated라 미사용. 미지원 버전 대비 try/except graceful no-op 가드 포함.
   - **오라우팅 적재 메커니즘 확정** — Aurora 테이블 대신 `switchedFrom` 필드 + 구조화 `console.warn` → CloudWatch Logs (P4 시맨틱 라우팅 코퍼스 용도로 충분).
-  - **골든셋 게이트 수학 보정** — 초안 52케이스의 regex 베이스라인이 82.7%로 +15pp 게이트를 달성 불가로 만들어, 무매칭 13케이스를 추가(65케이스, 베이스라인 67.7%). 게이트 수치(≥85% AND +15pp)는 불변 — 바인딩은 85% SLO.
+  - **골든셋 게이트 수학 보정** — 초안 52케이스의 regex 베이스라인이 82.7%로 +15pp 게이트를 달성 불가로 만들어, 무매칭 13케이스를 추가(65케이스). 게이트 수치(≥85% AND +15pp)는 불변 — 바인딩은 85% SLO(이산 65케이스라 유효 바는 56/65 ≈ 86.2%).
+- **2026-06-10 (구현 완료, 최종 크로스태스크 리뷰 READY):**
+  - **최종 regex 베이스라인 = 69.2% (45/65)** — 리뷰 라운드의 라벨 와이드닝 2건("백업"→data·ops, "디스크"→monitoring·observability) 반영 후. 초안 트레이스(67.7%)에서 +1케이스.
+  - **⚠️ P3 전제조건 (load-bearing invariant)** — `agent/agent.py` `SKILL_BASE`에는 `observability` 키가 없고(`diagnostics`가 별도 존재), 미지 키는 `ops` 페르소나로 폴백한다. 오늘은 `observability`가 `active:false`라 하이브리드 단락이 에이전트 호출 자체를 막아 안전하지만, **P3에서 어떤 섹션이든 `active:true`로 전환하기 전에 해당 키의 `SKILL_BASE` 엔트리 존재를 확인해야 한다**(또는 agent.py에 active-section↔SKILL_BASE 패리티 기동 체크 추가). 위반 시 잘못된 전문가 프롬프트로 무음 라우팅된다.
+  - 활성화(계획 Task 8)는 라이브 골든셋 게이트(`scripts/v2/routing-accuracy.mjs`) 통과가 전제 — 통과 수치를 본 섹션에 기록할 것.
 
 ## References / 참고 자료
 - 설계 스펙: `docs/superpowers/specs/2026-06-10-hybrid-agent-routing-design.md` (멀티AI 리뷰 8건 반영 이력 포함)
