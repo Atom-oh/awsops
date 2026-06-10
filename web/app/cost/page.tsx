@@ -8,10 +8,12 @@ import DataTable from '@/components/ui/DataTable';
 import AreaTrend from '@/components/charts/AreaTrend';
 import HBarList from '@/components/charts/HBarList';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import { momChangePct, projectMonthEnd, trendPill } from '@/lib/cost';
 
 interface ServiceCost { service: string; amount: number; [k: string]: unknown }
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
-interface Cost { total: number; currency: string; byService: ServiceCost[]; trend?: TrendPoint[] }
+interface MonthlyPoint { month: string; total: number; [k: string]: unknown }
+interface Cost { total: number; currency: string; byService: ServiceCost[]; trend?: TrendPoint[]; monthly?: MonthlyPoint[]; forecast?: number | null }
 
 const DASH = '—';
 const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -46,6 +48,13 @@ export default function CostPage() {
     share: total > 0 ? `${((s.amount / total) * 100).toFixed(1)}%` : DASH,
   }));
 
+  // MoM (from the monthly series) + month-end forecast (AWS CE forecast if present, else linear projection).
+  const monthly = d?.monthly ?? [];
+  const thisMonth = monthly.length > 0 ? monthly[monthly.length - 1].total : total;
+  const lastMonth = monthly.length > 1 ? monthly[monthly.length - 2].total : 0;
+  const mom = momChangePct(thisMonth, lastMonth);
+  const monthEndEstimate = d?.forecast != null ? total + d.forecast : projectMonthEnd(total, new Date());
+
   return (
     <>
       <PageHeader
@@ -64,11 +73,23 @@ export default function CostPage() {
         {d && (
           <>
             {/* ---- KPI tiles ---- */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
               <StatTile
                 label={`이번 달 누적 (${d.currency})`}
                 value={usd(total)}
                 variant="accent"
+              />
+              <StatTile
+                label="전월 대비 (MoM)"
+                value={lastMonth > 0 ? `${mom >= 0 ? '+' : ''}${mom.toFixed(1)}%` : DASH}
+                trend={lastMonth > 0 ? trendPill(mom) : undefined}
+                hint={lastMonth > 0 ? `전월 ${usd(lastMonth)}` : '기준월 부족'}
+              />
+              <StatTile
+                label="예상 월말 비용"
+                value={usd(monthEndEstimate)}
+                hint={d?.forecast != null ? 'AWS 예측' : '선형 추정'}
+                variant="warn"
               />
               <StatTile label="서비스 수" value={byService.length} />
               <StatTile
@@ -78,6 +99,11 @@ export default function CostPage() {
                 variant="warn"
               />
             </div>
+
+            {/* ---- Monthly trend area (MoM context) ---- */}
+            {monthly.length > 1 && (
+              <AreaTrend title="월별 비용 추이" data={monthly} xKey="month" yKey="total" valuePrefix="$" />
+            )}
 
             {/* ---- Daily trend area (full-width) ---- */}
             {trend.length > 0 ? (
