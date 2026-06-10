@@ -107,3 +107,8 @@ terraform/v2/**/.build/
 
 # graphify knowledge-graph output (generated artifact — regenerate with /graphify)
 graphify-out/
+
+# Confidential reference material (Amazon Confidential PDFs) — never commit
+.reference/
+# co-agent consensus pipeline state (skill-managed, local)
+.claude/co-agent-consensus/
