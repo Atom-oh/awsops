@@ -4,7 +4,9 @@ import SectionPicker from './SectionPicker';
 import PresetChips from './PresetChips';
 import Composer from './Composer';
 import MessageList, { type Msg } from './MessageList';
+import ThreadList from './ThreadList';
 import { sectionByKey } from '@/lib/sections';
+import type { ThreadSummary, ThreadMessage } from '@/lib/chat-store';
 
 function newSessionId(): string {
   const s = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.round(Math.random() * 1e9)}`);
@@ -16,13 +18,27 @@ export default function ChatDrawer() {
   const [pinned, setPinned] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [showThreads, setShowThreads] = useState(false);
   const sessionRef = useRef<string>('');
   const abortRef = useRef<AbortController | null>(null);
+  const threadIdRef = useRef<string | null>(null); // mirrors threadId for use inside send()
+  function setThread(id: string | null) {
+    threadIdRef.current = id;
+    setThreadId(id);
+    if (id) localStorage.setItem('awsops_chat_thread', id);
+    else localStorage.removeItem('awsops_chat_thread');
+  }
 
   useEffect(() => {
     let sid = localStorage.getItem('awsops_chat_session');
     if (!sid) { sid = newSessionId(); localStorage.setItem('awsops_chat_session', sid); }
     sessionRef.current = sid;
+    // Restore the active thread across reloads; selectThread cleans up a stale key on 404.
+    const tid = localStorage.getItem('awsops_chat_thread');
+    if (tid) void selectThread(tid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function newChat() {
@@ -30,7 +46,44 @@ export default function ChatDrawer() {
     const sid = newSessionId();
     localStorage.setItem('awsops_chat_session', sid);
     sessionRef.current = sid;
+    setThread(null); // previous conversation stays on the server — switching, not wiping
     setMsgs([]); setBusy(false);
+  }
+
+  async function openThreads() {
+    try {
+      const res = await fetch('/api/chat/threads');
+      const data = res.ok ? await res.json() : { threads: [] };
+      setThreads(Array.isArray(data.threads) ? data.threads : []);
+    } catch {
+      setThreads([]);
+    }
+    setShowThreads(true);
+  }
+
+  async function selectThread(id: string) {
+    try {
+      const res = await fetch(`/api/chat/threads/${id}`);
+      if (!res.ok) { // stale/foreign thread — clear so it doesn't stick as blank history (P2 r2)
+        if (threadIdRef.current === id || localStorage.getItem('awsops_chat_thread') === id) setThread(null);
+        return;
+      }
+      const data: { thread: ThreadSummary; messages: ThreadMessage[] } = await res.json();
+      setMsgs(data.messages.map((m) => {
+        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string };
+        return { role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: meta.ranked, method: meta.method };
+      }));
+      sessionRef.current = data.thread.sessionId;
+      localStorage.setItem('awsops_chat_session', data.thread.sessionId);
+      setThread(id);
+      setShowThreads(false);
+    } catch { /* degrade: keep current view */ }
+  }
+
+  async function removeThread(id: string) {
+    try { await fetch(`/api/chat/threads/${id}`, { method: 'DELETE' }); } catch { /* best-effort */ }
+    if (threadIdRef.current === id) newChat();
+    void openThreads(); // refresh the list
   }
 
   async function send(prompt: string, overrideSection?: string, switchedFrom?: string) {
@@ -44,7 +97,7 @@ export default function ChatDrawer() {
       const res = await fetch('/api/chat', {
         method: 'POST', signal: ac.signal,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, messages: history, section: overrideSection ?? pinned, switchedFrom, sessionId: sessionRef.current }),
+        body: JSON.stringify({ prompt, messages: history, section: overrideSection ?? pinned, switchedFrom, sessionId: sessionRef.current, threadId: threadIdRef.current ?? undefined }),
       });
       if (!res.ok || !res.body) {
         patchLast((m) => ({ ...m, content: res.status === 401 ? '세션이 만료되었습니다. 새로고침해 주세요.' : 'AI 응답을 받지 못했습니다.', streaming: false }));
@@ -77,6 +130,7 @@ export default function ChatDrawer() {
     if (data === '[DONE]') return;
     try {
       const obj = JSON.parse(data);
+      if (isMeta && obj.threadId) setThread(obj.threadId); // server-issued thread (first message mints it)
       if (isMeta && obj.gateway) patchLast((m) => ({ ...m, gateway: obj.gateway, ranked: obj.ranked, method: obj.method }));
       else if (obj.delta !== undefined) patchLast((m) => ({ ...m, content: m.content + obj.delta }));
       else if (obj.error) patchLast((m) => ({ ...m, content: `⚠️ ${obj.error}`, streaming: false }));
@@ -106,6 +160,7 @@ export default function ChatDrawer() {
       <div style={{ padding: '10px 12px', borderBottom: '1px solid #1a2540', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontSize: 13, fontWeight: 600 }}>AWSops Assistant</span>
         <span>
+          <button onClick={openThreads} title="대화 목록" aria-label="대화 목록" style={iconBtn}>☰</button>
           <button onClick={newChat} title="새 대화" style={iconBtn}>＋</button>
           <button onClick={() => { abortRef.current?.abort(); setOpen(false); }} title="닫기" style={iconBtn}>✕</button>
         </span>
@@ -113,6 +168,7 @@ export default function ChatDrawer() {
       <SectionPicker pinned={pinned} onPin={setPinned} />
       {msgs.length === 0 ? <PresetChips pinned={pinned} onPick={send} /> : <MessageList msgs={msgs} onSwitch={resendWith} />}
       <Composer disabled={busy} onSend={send} />
+      {showThreads && <ThreadList threads={threads} activeId={threadId} onSelect={selectThread} onDelete={removeThread} onClose={() => setShowThreads(false)} />}
     </div>
   );
 }
