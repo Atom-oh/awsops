@@ -62,6 +62,8 @@ export default function ChatDrawer() {
   }
 
   async function selectThread(id: string) {
+    abortRef.current?.abort(); // P4 gate: an in-flight stream must not patch into the restored thread
+    setBusy(false);
     try {
       const res = await fetch(`/api/chat/threads/${id}`);
       if (!res.ok) { // stale/foreign thread — clear so it doesn't stick as blank history (P2 r2)

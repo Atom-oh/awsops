@@ -62,9 +62,12 @@ export async function getThread(userSub: string, threadId: string): Promise<{ th
     [threadId, userSub],
   );
   if (t.rows.length === 0) return null;
+  // Most-RECENT 200 in ascending display order (P4 gate: plain ASC LIMIT showed the oldest slice).
   const m = await getPool().query(
-    `SELECT role, content, gateway, meta, created_at FROM chat_messages
-     WHERE thread_id = $1 ORDER BY id ASC LIMIT 200`,
+    `SELECT role, content, gateway, meta, created_at FROM (
+       SELECT id, role, content, gateway, meta, created_at FROM chat_messages
+       WHERE thread_id = $1 ORDER BY id DESC LIMIT 200
+     ) recent ORDER BY id ASC`,
     [threadId],
   );
   const th = t.rows[0];
