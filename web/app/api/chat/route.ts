@@ -7,6 +7,8 @@ import { getEnabledCustomAgents } from '@/lib/catalog-source';
 import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
+import { currentAccountId, currentAccountAlias } from '@/lib/account';
+import { getAgentSpace } from '@/lib/agent-space';
 import { randomUUID } from 'crypto';
 
 export const dynamic = 'force-dynamic';
@@ -53,12 +55,16 @@ export async function POST(request: Request) {
     gateway = pickGateway(prompt, body.section);
   }
   // ADR-031 custom agents. ADR-038 precedence: explicit pin > custom > classifier (spec §2.2).
-  const customAgents = await getEnabledCustomAgents();          // [] when Aurora off / no customs
+  // ADR-031 Phase 2: per-account Agent Space. No row ⇒ Phase-1 global behavior.
+  const accountId = currentAccountId();
+  const accountAlias = currentAccountAlias();
+  const customAgents = await getEnabledCustomAgents(accountId);   // [] when Aurora off / no customs
+  const space = await getAgentSpace(accountId);                   // null ⇒ Phase-1
   const pinIsValid = !!(body.section && sectionByKey(body.section));
   const routeKey = (hybridOn && pinIsValid)
     ? gateway
     : (pickCustomAgent(prompt, customAgents) ?? gateway);
-  const spec = resolveAgent(routeKey, customAgents);
+  const spec = resolveAgent(routeKey, customAgents, space);       // server-side enforcement
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).
   const inactiveSection = hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
     ? sectionByKey(spec.gateway)! : null;
@@ -87,7 +93,7 @@ export async function POST(request: Request) {
       const meta = {
         gateway: spec.gateway, agentName: spec.agentName, tier: spec.tier, skillHashes: spec.skillHashes, threadId,
         ...(route ? { ranked: route.ranked, method: route.method } : {}),
-        ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}),
+        ...(spec.tier === 'custom' ? { customAgent: spec.agentName, spaceVersion: spec.spaceVersion } : {}),
       };
       controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(meta)}\n\n`));
       if (inactiveSection) {
@@ -107,6 +113,7 @@ export async function POST(request: Request) {
           systemPromptOverride: spec.systemPromptOverride,
           toolAllowlist: spec.toolAllowlist,
           agentName: spec.agentName, agentVersion: spec.agentVersion, skillHashes: spec.skillHashes,
+          accountId, accountAlias,
         });
       } catch (e) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));
@@ -116,7 +123,7 @@ export async function POST(request: Request) {
       }
       // traceability (fire-and-forget) — only custom invocations
       if (spec.tier === 'custom') {
-        void recordCustomAgentTrace({ gateway: spec.gateway, userSub: user.sub, agentName: spec.agentName, agentVersion: spec.agentVersion, tier: spec.tier, skillHashes: spec.skillHashes });
+        void recordCustomAgentTrace({ gateway: spec.gateway, userSub: user.sub, agentName: spec.agentName, agentVersion: spec.agentVersion, tier: spec.tier, skillHashes: spec.skillHashes, spaceVersion: spec.spaceVersion });
       }
       for (const c of chunk(text)) {
         if (request.signal.aborted) break;

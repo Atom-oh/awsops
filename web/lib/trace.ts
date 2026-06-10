@@ -9,6 +9,7 @@ export interface CustomAgentTrace {
   agentVersion?: number;
   tier: 'builtin' | 'custom';
   skillHashes: string[];
+  spaceVersion?: number; // ADR-031 Phase 2 traceability
 }
 
 /** Fire-and-forget. Records {agentName, agentVersion, skillHashes, tier} for reproducibility. Never throws. */
@@ -19,7 +20,8 @@ export async function recordCustomAgentTrace(t: CustomAgentTrace): Promise<void>
       `INSERT INTO agentcore_stats (event_type, gateway, user_sub, payload)
        VALUES ($1,$2,$3,$4::jsonb)`,
       ['custom_agent_invoke', t.gateway, t.userSub, JSON.stringify({
-        agentName: t.agentName, agentVersion: t.agentVersion, tier: t.tier, skillHashes: t.skillHashes,
+        agentName: t.agentName, agentVersion: t.agentVersion, tier: t.tier,
+        skillHashes: t.skillHashes, spaceVersion: t.spaceVersion,
       })],
     );
   } catch { /* tracing must not break chat */ }

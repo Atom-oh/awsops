@@ -184,8 +184,9 @@ describe('hybrid routing (ADR-038)', () => {
     const { POST } = await import('./route');
     const res = await POST(req({ prompt: 'run a CIS benchmark', section: 'security', sessionId: 's'.repeat(36) }));
     await readStream(res);
-    // ...but the pin wins: resolveAgent called with the pinned section, not the custom name
-    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything());
+    // ...but the pin wins: resolveAgent called with the pinned section, not the custom name.
+    // Phase 2: third arg is the per-account space (null here — no AURORA_ENDPOINT ⇒ Phase-1).
+    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null);
   });
 
   it('logs a structured misroute candidate when the client reports a chip switch (spec §5)', async () => {
@@ -213,7 +214,7 @@ describe('hybrid routing (ADR-038)', () => {
     const { POST } = await import('./route');
     const res = await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) }));
     await readStream(res);
-    expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything());
+    expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything(), null);
   });
 });
 
@@ -278,5 +279,46 @@ describe('thread persistence', () => {
     const body = await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
     expect(body).toContain('answer');
     expect(body).toContain('[DONE]');
+  });
+});
+
+describe('ADR-031 Phase 2 — per-account space wiring', () => {
+  it('resolves the account and threads accountId into the custom-agent loader, resolver, and invoke', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'status', sessionId: 's'.repeat(36) })));
+    // account resolves to the single-account default ('self') with no HOST_ACCOUNT_ID set.
+    expect(getEnabledCustomAgents).toHaveBeenCalledWith('self');
+    // no AURORA_ENDPOINT ⇒ getAgentSpace returns null ⇒ resolver gets null (Phase-1 behavior).
+    expect(resolveAgent).toHaveBeenCalledWith('ops', expect.anything(), null);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'self' }));
+  });
+
+  it('built-in path is unchanged: no spaceVersion in meta, PONG-style passthrough still streams', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('PONG');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'ping', sessionId: 's'.repeat(36) })));
+    expect(body).toContain('PONG');
+    expect(body).toContain('[DONE]');
+    expect(body).not.toContain('spaceVersion'); // built-in meta carries no space influence
+    expect(body).not.toContain('customAgent');
+  });
+
+  it('custom path surfaces spaceVersion in meta and the trace (when the resolver carries one)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('security');
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
+    pickCustomAgent.mockReturnValue('compliance');
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', agentVersion: 2, skillHashes: ['h1'], spaceVersion: 7 });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'cis check', section: 'security', sessionId: 's'.repeat(36) })));
+    expect(body).toContain('"spaceVersion":7');
+    expect(recordCustomAgentTrace).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'compliance', spaceVersion: 7 }));
   });
 });
