@@ -24,6 +24,8 @@ describe('golden-routing fixture (ADR-038 §5)', () => {
     const baseline = correct / golden.cases.length;
     // eslint-disable-next-line no-console
     console.log(`[golden] regex-only baseline: ${(baseline * 100).toFixed(1)}% (${correct}/${golden.cases.length})`);
+    // NOTE: sloAccuracy 0.85 over 65 discrete cases means the live gate's effective bar is
+    // ceil(0.85*65)=56/65 ≈ 86.2%. Baseline here moves if fixture labels change — bounds only.
     // sanity bounds only: baseline must leave headroom for the +15pp hybrid delta gate
     expect(baseline).toBeGreaterThan(0.3);
     expect(baseline).toBeLessThan(0.85);
