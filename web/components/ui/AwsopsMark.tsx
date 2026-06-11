@@ -2,7 +2,8 @@ import type { CSSProperties } from 'react';
 
 /**
  * AWSops brand mark — a claude-500 rounded-square tile (radius 10/40)
- * with a white stroked cube. Inline SVG, no external asset.
+ * with the neural-pulse graph (matches app/icon.svg favicon: same node layout,
+ * colors inverted for the orange tile — white nodes/edges, haloed AI node).
  * Used in the sidebar lockup, login, KPI watermark, and AI avatar.
  */
 export default function AwsopsMark({ size = 36, style }: { size?: number; style?: CSSProperties }) {
@@ -18,13 +19,18 @@ export default function AwsopsMark({ size = 36, style }: { size?: number; style?
     >
       {/* rounded-square brand tile — radius 10 on a 40 viewBox */}
       <rect width="40" height="40" rx="10" fill="#D97757" />
-      {/* white stroked cube */}
-      <g stroke="#FFFFFF" strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" fill="none">
-        <path d="M20 9 L29 14 L29 24 L20 29 L11 24 L11 14 Z" />
-        <path d="M20 9 L20 19 M20 19 L29 14 M20 19 L11 14" />
-        {/* base accent */}
-        <path d="M14 27 L26 27" opacity="0.7" />
+      {/* neural graph edges (ops infra links) */}
+      <g stroke="#FFFFFF" strokeOpacity="0.55" strokeWidth="2.2" strokeLinecap="round">
+        <line x1="11.5" y1="28.5" x2="20" y2="15" />
+        <line x1="20" y1="15" x2="30" y2="25" />
+        <line x1="11.5" y1="28.5" x2="30" y2="25" />
       </g>
+      {/* infra nodes */}
+      <circle cx="11.5" cy="28.5" r="4" fill="#FFFFFF" />
+      <circle cx="30" cy="25" r="4" fill="#FFFFFF" />
+      {/* the AI node — haloed pulse (favicon's orange pulse, inverted to white on orange) */}
+      <circle cx="20" cy="15" r="6.75" fill="#FFFFFF" fillOpacity="0.28" />
+      <circle cx="20" cy="15" r="4.5" fill="#FFFFFF" />
     </svg>
   );
 }

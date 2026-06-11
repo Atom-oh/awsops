@@ -4,7 +4,7 @@ import CommandPalette from '@/components/shell/CommandPalette';
 import ChatDrawer from '@/components/chat/ChatDrawer';
 import { LanguageProvider } from '@/components/shell/LanguageProvider';
 
-export const metadata = { title: 'AWSops v2' };
+export const metadata = { title: 'AWSops' };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

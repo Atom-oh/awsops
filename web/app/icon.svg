@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#14130F"/>
+  <g stroke="#5F5A4D" stroke-width="1.8">
+    <line x1="9" y1="23" x2="16" y2="12"/>
+    <line x1="16" y1="12" x2="24" y2="20"/>
+    <line x1="9" y1="23" x2="24" y2="20"/>
+  </g>
+  <circle cx="9"  cy="23" r="3.2" fill="#FAF9F5"/>
+  <circle cx="24" cy="20" r="3.2" fill="#FAF9F5"/>
+  <!-- the AI node, pulsing orange with a halo -->
+  <circle cx="16" cy="12" r="5.4" fill="#D9775733"/>
+  <circle cx="16" cy="12" r="3.6" fill="#D97757"/>
+</svg>

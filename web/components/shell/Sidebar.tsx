@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import { INVENTORY_TYPES, inventoryGroups } from '@/lib/inventory-types';
 import AwsopsMark from '@/components/ui/AwsopsMark';
-import Badge from '@/components/ui/Badge';
 import SectionLabel from '@/components/ui/SectionLabel';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import LanguageToggle from '@/components/shell/LanguageToggle';
@@ -70,7 +69,6 @@ export default function Sidebar() {
           <div className="text-[10px] text-ink-400">{t('sidebar.tagline')}</div>
         </div>
         <LanguageToggle />
-        <Badge tone="brand" variant="soft">v2.0</Badge>
       </div>
 
       {/* Nav */}
