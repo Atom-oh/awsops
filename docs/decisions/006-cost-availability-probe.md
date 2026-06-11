@@ -2,6 +2,8 @@
 
 ## 상태: 승인됨 (v2 — 설치 시 판별 + 스냅샷 폴백 추가) / Status: Accepted (v2 — install-time detection + snapshot fallback)
 
+> **정정 (v2 표기는 구 계획 기준 — 실현 안 됨)**: 위 "v2" 라벨은 pre-037 v2 계획 기준이다. 실현된 v2(ADR-037)는 Steampipe/`data/*.json`을 쓰지 않으므로 본 ADR의 메커니즘은 **v1 전용**이다. / **Correction (the "v2" label = the old pre-037 plan, never realized)**: the realized v2 (ADR-037) uses neither Steampipe nor `data/*.json`; this ADR's mechanism is **v1-only**.
+
 ## 컨텍스트 / Context
 MSP가 Payer인 환경에서 Cost Explorer API 접근이 SCP에 의해 차단되거나 타임아웃됨.
 현재 대시보드는 매 로딩마다 cost 쿼리 2개를 반복 실패시키며, Cost Explorer API 비용($0.01/건)도 발생.

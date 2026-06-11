@@ -1,6 +1,6 @@
 # ADR-002: AI 하이브리드 라우팅 / AI Hybrid Routing
 
-## 상태: 승인됨 / Status: Accepted
+## 상태: 승인됨 (v1 스코프 — Steampipe 기반 라우팅 서술은 v1 전용; v2 라우팅은 ADR-038이 대체) / Status: Accepted (v1 scope — Steampipe-based routing is v1-only; v2 routing is superseded by ADR-038)
 
 ## 컨텍스트 / Context
 AI 어시스턴트는 코드 실행, 네트워크 문제 해결, AWS 리소스 쿼리, 일반 질문의 4가지 유형을 처리해야 합니다. 각 유형은 서로 다른 데이터 소스와 처리 방식이 필요합니다.

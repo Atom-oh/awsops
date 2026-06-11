@@ -2,6 +2,8 @@
 
 ## 상태: 승인됨 (v2 — 멀티라인 차트 + EBS 추적 추가) / Status: Accepted (v2 — multi-line chart + EBS tracking)
 
+> **정정 (v2 표기는 구 계획 기준 — 실현 안 됨)**: 위 "v2" 라벨은 pre-037 v2 계획 기준이다. 실현된 v2(ADR-037)는 Steampipe/`data/*.json`을 쓰지 않으므로 본 ADR의 메커니즘은 **v1 전용**이다. / **Correction (the "v2" label = the old pre-037 plan, never realized)**: the realized v2 (ADR-037) uses neither Steampipe nor `data/*.json`; this ADR's mechanism is **v1-only**.
+
 ## 컨텍스트 / Context
 리소스 수량 추이 추적이 필요: 용량 계획, 이상 탐지, 비용-리소스 상관 분석.
 Cost Explorer 불가 시 리소스 변동으로 비용 증감 유추도 가능.
