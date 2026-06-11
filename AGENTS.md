@@ -18,7 +18,7 @@ v2 is a **read-only ops dashboard + AI diagnosis.** A mutating/autonomous tier w
 - **Data**: Aurora Serverless v2 (PG 17.9). ADR-030 7-table schema + `worker_jobs`. **No *live* Steampipe in v2** — live AWS queries go through AgentCore MCP Lambda tools; the only Steampipe is a **flag-gated warm inventory-sync** batch (`var.steampipe_enabled`, default off, `steampipe.tf` → Aurora), NOT a Service-Connect daemon (ADR-037 §Decision #4).
 - **AI**: Bedrock Sonnet 4.6 / Opus 4.8 / Haiku 4.5 + AgentCore (9 section gateways + 1 incident orchestrator design; reuses `agent/agent.py`). Config source of truth = SSM `/ops/awsops-v2/agentcore/*`. (Opus is 4.8, no `-v1` suffix; any "Opus 4.6"/"17-route" text is stale v1.)
 - **Chat routing (ADR-038, LIVE)**: `web/lib/route.ts`+`classifier.ts` — regex fast-path → Haiku 4.5 classifier fallback over 9 sections; priority `explicit pin > custom agent (ADR-031) > classifier > active fallback`; never routes to an inactive section. Prompt caching + temperature=0 on `agent.py` `BedrockModel` (strands-agents 1.41.0). Gated by `hybrid_routing_enabled`. AgentCore Gateway semantic tool search is deferred to P4.
-- **Async workers**: web `/api/jobs` → SQS → ESM → dispatcher Lambda → Step Functions → RunLambda or Fargate (`ecs:runTask.sync`) → status_updater on Catch → reaper. Files in `terraform/v2/foundation/workers.tf` + `scripts/v2/workers/`. This P2 backbone is also the single mutation control-plane/ledger (ADR-036).
+- **Async workers**: web `/api/jobs` → SQS → ESM → dispatcher Lambda → Step Functions → RunLambda or Fargate (`ecs:runTask.sync`) → status_updater on Catch → reaper. Files in `terraform/v2/foundation/workers.tf` + `scripts/v2/workers/`. Used for read-only/heavy async work (e.g. inventory sync). *(It once hosted the ADR-036 mutation control-plane — **reversed 2026-06-11**, frozen flag-OFF; see the Product-posture section above.)*
 
 ## Build · Test · Lint
 ```bash
@@ -58,7 +58,7 @@ No unit-test harness for web; verification = clean `terraform validate`/`plan` a
 4. Next.js standalone containers set `HOSTNAME=0.0.0.0` as a **runtime env** (task def), not just an image ENV.
 5. Fargate worker Dockerfiles use `CMD` (not exec-form ENTRYPOINT) so SFN `containerOverrides.command` doesn't double argv.
 6. web stays thin-BFF (heavy work enqueued); Aurora access via `getPool`; AgentCore ARNs from SSM; admin via `web/lib/admin.ts`.
-7. Auth verification stays RS256 JWKS; no new public routes; secrets on execution role; mutations gated through P2/SSM; nothing sensitive committed.
+7. Auth verification stays RS256 JWKS; no new public routes; secrets on execution role; no mutation/remediation path is enabled (029/036 reversed — flag any PR that turns it on); nothing sensitive committed.
 
 ## Known false-positives (do NOT flag)
 - Fetch to `/api/...` without an `/awsops` prefix is correct in v2 (basePath was dropped).
