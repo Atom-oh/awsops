@@ -18,8 +18,10 @@ REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 # run (an account id), not a slice of a longer/embedded number.
 _REDACTORS = [
     (re.compile(r"arn:aws:[^\s\"']+"), "<arn>"),
-    (re.compile(r"(?<!\d)\d{12}(?!\d)"), "<acct>"),
+    # [PR#37 review MINOR] email BEFORE acct: an email local-part with 12+ digits would otherwise
+    # be partially clobbered by the acct rule first.
     (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "<email>"),
+    (re.compile(r"(?<!\d)\d{12}(?!\d)"), "<acct>"),
     (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"), "<ip>"),
     (re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b"), "<akid>"),
 ]

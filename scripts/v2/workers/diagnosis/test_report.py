@@ -173,3 +173,65 @@ import handlers
 def test_report_registered_as_fargate():
     assert handlers.is_allowed("report")
     assert handlers.runtime_for("report") == "fargate"
+
+
+# --- Task 6: _report handler orchestration (PR#37 review MAJOR) ----------
+import pytest  # noqa: E402
+import db as _wdb  # noqa: E402
+from diagnosis import db as _ddb  # noqa: E402
+from diagnosis import report as _rpt  # noqa: E402
+
+
+def _patch_report(monkeypatch, *, generate):
+    """Wire fakes for the _report dependencies; return a dict capturing finish_report + close."""
+    state = {"closed": False, "finish": None}
+
+    class FakeConn:
+        def close(self):
+            state["closed"] = True
+
+    monkeypatch.setattr(_wdb, "connect", lambda: FakeConn())
+    monkeypatch.setattr(_rpt, "generate", generate)
+    monkeypatch.setattr(handlers, "_upload_markdown", lambda md, rid: f"s3://b/diagnosis/{rid}.md")
+
+    def _finish(conn, rid, **kw):
+        state["finish"] = {"rid": rid, **kw}
+    monkeypatch.setattr(_ddb, "finish_report", _finish)
+    return state
+
+
+def test_report_handler_success_uploads_sets_uri_and_closes(monkeypatch):
+    state = _patch_report(monkeypatch, generate=lambda c, a, t: ("# md", {"degraded": []}, ["inventory", "cost"]))
+    result, artifact = handlers._report(
+        {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 7}, dry_run=False)
+    assert result["status"] == "succeeded" and result["report_id"] == 7
+    assert artifact == b"# md"
+    assert state["finish"]["status"] == "succeeded"
+    assert state["finish"]["artifact_uri"].startswith("s3://b/diagnosis/7")
+    assert state["closed"] is True  # CRITICAL: connection always released
+
+
+def test_report_handler_partial_when_a_source_degraded(monkeypatch):
+    state = _patch_report(monkeypatch, generate=lambda c, a, t: ("# md", {"degraded": ["cost"]}, ["inventory"]))
+    result, _ = handlers._report(
+        {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 9}, dry_run=False)
+    assert result["status"] == "partial"
+    assert state["finish"]["status"] == "partial" and state["closed"] is True
+
+
+def test_report_handler_failure_marks_failed_str_error_and_closes(monkeypatch):
+    def boom(c, a, t):
+        raise RuntimeError("kaboom")
+    state = _patch_report(monkeypatch, generate=boom)
+    with pytest.raises(RuntimeError):
+        handlers._report({"account": "1", "tier": "mid", "requested_by": "u", "report_id": 5}, dry_run=False)
+    assert state["finish"]["status"] == "failed"
+    assert state["finish"]["error"] == "kaboom"  # str(e), not a full traceback
+    assert state["closed"] is True  # CRITICAL: closed even on the error path
+
+
+def test_report_handler_dry_run_does_no_work(monkeypatch):
+    # dry_run must not touch the DB/S3 at all (no connect).
+    monkeypatch.setattr(_wdb, "connect", lambda: (_ for _ in ()).throw(AssertionError("connect on dry_run")))
+    result, artifact = handlers._report({"account": "1", "tier": "mid"}, dry_run=True)
+    assert result["dry_run"] is True and artifact is None

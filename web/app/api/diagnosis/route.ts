@@ -29,6 +29,13 @@ export async function POST(req: Request) {
   }
   const tier = body?.tier === 'light' ? 'light' : 'mid'; // deep gated out of MVP
   const account = process.env.AWS_ACCOUNT_ID || '';
+  // [PR#37 review MAJOR] fail fast — an empty account would silently reach the LLM context.
+  if (!account) {
+    return NextResponse.json(
+      { message: 'AWS_ACCOUNT_ID not configured on the web task' },
+      { status: 503 },
+    );
+  }
   const email = user.email || user.sub;
 
   // [GATE-FIX R2 CRITICAL] Idempotency-FIRST → create the report with NULL fk → enqueue (inserts

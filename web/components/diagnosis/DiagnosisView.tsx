@@ -14,6 +14,7 @@ export default function DiagnosisView() {
   const [reports, setReports] = useState<ReportRow[]>([]);
   const [active, setActive] = useState<{ id: number; markdown: string | null } | null>(null);
   const [running, setRunning] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null); // [PR#37 review] surface deduped reports
 
   const loadList = useCallback(async () => {
     const r = await fetch('/api/diagnosis');
@@ -34,6 +35,7 @@ export default function DiagnosisView() {
 
   const run = async () => {
     setRunning(true);
+    setNotice(null);
     try {
       const r = await fetch('/api/diagnosis', {
         method: 'POST',
@@ -41,6 +43,15 @@ export default function DiagnosisView() {
         body: JSON.stringify({ tier }),
       });
       if (!r.ok) return;
+      const posted = await r.json();
+      // [PR#37 review MAJOR] a same-hour re-run is deduped server-side → open the existing report
+      // and tell the user (it can be up to ~60min old) instead of silently showing a stale view.
+      if (posted?.deduped && posted?.report_id) {
+        setNotice('최근 1시간 내 동일 조건 리포트를 표시합니다 (중복 실행 방지 — 최대 60분 이전 결과일 수 있음).');
+        await loadList();
+        await open(posted.report_id);
+        return;
+      }
       // Poll the list until a fresh report finishes (simple MVP poll, 3s × 100).
       for (let i = 0; i < 100; i++) {
         await new Promise((res) => setTimeout(res, 3000));
@@ -99,6 +110,11 @@ export default function DiagnosisView() {
         </ul>
       </aside>
       <main className="min-w-0 flex-1">
+        {notice && (
+          <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+            {notice}
+          </div>
+        )}
         {active?.markdown ? (
           <>
             <div className="mb-3 flex justify-end">

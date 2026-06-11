@@ -25,6 +25,7 @@ const req = (body?: unknown) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env.AWS_ACCOUNT_ID = '123456789012'; // POST fails fast (503) without it — set the default
   // Re-establish default implementations (clearAllMocks wipes call history, not implementations,
   // so a per-test override like mockRejectedValue would otherwise leak into the next test).
   (createReport as any).mockResolvedValue(42);
@@ -94,5 +95,14 @@ describe('POST /api/diagnosis', () => {
     (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
     await POST(req({ tier: 'deep' }));
     expect(createReport).toHaveBeenCalledWith('mid', 'u@x.io');
+  });
+
+  it('503 + no work when AWS_ACCOUNT_ID is unset (fails fast, no empty account to the LLM)', async () => {
+    (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    delete process.env.AWS_ACCOUNT_ID;
+    const r = await POST(req({ tier: 'mid' }));
+    expect(r.status).toBe(503);
+    expect(createReport).not.toHaveBeenCalled();
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 });

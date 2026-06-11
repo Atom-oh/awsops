@@ -46,21 +46,29 @@ def _report(payload, dry_run):
     import db as wdb
     from diagnosis import db as ddb
     from diagnosis import report as rpt
+    import traceback
     conn = wdb.connect()
-    # Fallback: if BFF didn't pre-create (older enqueue), create now (worker_job_id stays NULL).
-    if not report_id:
-        report_id = ddb.create_report(conn, worker_job_id=None, tier=tier, requested_by=requested_by)
-    try:
-        md, summary, sources_used = rpt.generate(conn, account, tier)
-        artifact_uri = _upload_markdown(md, report_id)
-        status = "partial" if summary.get("degraded") else "succeeded"
-        ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,
-                          summary=summary, artifact_uri=artifact_uri)
-        return {"report_id": report_id, "status": status, "artifact_uri": artifact_uri}, md.encode("utf-8")
-    except Exception:  # noqa: BLE001
-        import traceback
-        ddb.finish_report(conn, report_id, status="failed", error=traceback.format_exc(limit=3))
-        raise
+    try:  # [PR#37 review CRITICAL] always release the pg8000 connection (was leaked every call → Aurora pool exhaustion under retries)
+        # Fallback: if BFF didn't pre-create (older enqueue), create now (worker_job_id stays NULL).
+        if not report_id:
+            report_id = ddb.create_report(conn, worker_job_id=None, tier=tier, requested_by=requested_by)
+        try:
+            md, summary, sources_used = rpt.generate(conn, account, tier)
+            artifact_uri = _upload_markdown(md, report_id)
+            status = "partial" if summary.get("degraded") else "succeeded"
+            ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,
+                              summary=summary, artifact_uri=artifact_uri)
+            return {"report_id": report_id, "status": status, "artifact_uri": artifact_uri}, md.encode("utf-8")
+        except Exception as e:  # noqa: BLE001
+            print(traceback.format_exc())  # full trace → CloudWatch logs only
+            # [review MINOR] str(e) to the DB (the error field reaches the client via /api/diagnosis/[id])
+            ddb.finish_report(conn, report_id, status="failed", error=str(e))
+            raise
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # type -> (handler, runtime). runtime drives SFN routing (lambda<15min / fargate long+heavy).
