@@ -171,6 +171,8 @@ export function normalizeNode(it: K8sItem): NodeRow {
     cpuAllocatable: parseCpuCores(alloc.cpu),
     memCapacity: parseMem(cap.memory),
     memAllocatable: parseMem(alloc.memory),
+    diskCapacity: parseMem(cap['ephemeral-storage']),
+    diskAllocatable: parseMem(alloc['ephemeral-storage']),
   };
 }
 
@@ -198,6 +200,11 @@ export function normalizePod(it: K8sItem): PodRow {
       app.reduce((s, r) => s + parseMem(r.memory), 0),
       init.reduce((mx, r) => Math.max(mx, parseMem(r.memory)), 0),
       parseMem(it.spec?.overhead?.memory),
+    ),
+    diskRequest: eff(
+      app.reduce((s, r) => s + parseMem(r['ephemeral-storage']), 0),
+      init.reduce((mx, r) => Math.max(mx, parseMem(r['ephemeral-storage'])), 0),
+      parseMem(it.spec?.overhead?.['ephemeral-storage']),
     ),
   };
 }
