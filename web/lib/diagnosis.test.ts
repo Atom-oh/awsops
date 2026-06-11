@@ -26,12 +26,15 @@ describe('diagnosis queries', () => {
     const r = await getReport(1);
     expect(r?.tier).toBe('mid');
   });
-  it('createReport inserts a NULL-fk running row and returns id', async () => {
+  it('createReport inserts a NULL-fk running row, links the latest succeeded same-tier parent, and returns id', async () => {
     const id = await createReport('mid', 'u@x.io');
     expect(id).toBe(7);
     const [sql] = query.mock.calls.at(-1) as [string, unknown[]];
     expect(sql).toContain('VALUES (NULL');
     expect(sql).toContain("'running'");
+    // [Plan 2] parent_report_id subquery = most-recent succeeded report of the same tier
+    expect(sql).toContain('parent_report_id');
+    expect(sql).toContain("status = 'succeeded'");
   });
   it('reportForIdempotencyKey returns existing report id or null', async () => {
     const id = await reportForIdempotencyKey('report:u@x.io:mid:2026-06-11T00');
