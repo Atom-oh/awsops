@@ -117,7 +117,15 @@ function nodeRoles(labels: Record<string, string> = {}): string {
     .filter((k) => k.startsWith('node-role.kubernetes.io/'))
     .map((k) => k.slice('node-role.kubernetes.io/'.length))
     .filter(Boolean);
-  return roles.length ? roles.join(',') : '<none>';
+  if (roles.length) return roles.join(',');
+  // EKS managed/Karpenter/Fargate workers carry no node-role label (kubectl shows <none>) —
+  // surface the pool identity instead so the column carries real signal.
+  const ng = labels['eks.amazonaws.com/nodegroup'];
+  if (ng) return `nodegroup:${ng}`;
+  const pool = labels['karpenter.sh/nodepool'] ?? labels['karpenter.sh/provisioner-name'];
+  if (pool) return `karpenter:${pool}`;
+  if (labels['eks.amazonaws.com/compute-type'] === 'fargate') return 'fargate';
+  return 'worker';
 }
 
 export function normalizeNode(it: K8sItem): NodeRow {

@@ -79,13 +79,21 @@ describe('normalizers', () => {
     });
   });
 
-  it('node: missing Ready condition → NotReady, no roles → <none>', () => {
+  it('node: missing Ready condition → NotReady, no labels at all → generic worker', () => {
     const row = normalizeNode({ metadata: { name: 'n', labels: {} }, status: { conditions: [] } });
     expect(row.status).toBe('NotReady');
-    expect(row.roles).toBe('<none>');
+    expect(row.roles).toBe('worker'); // EKS workers carry no node-role label — show a meaningful default
     // capacity/allocatable absent → 0
     expect(row.cpuAllocatable).toBe(0);
     expect(row.memAllocatable).toBe(0);
+  });
+
+  it('node roles fallback chain: nodegroup > karpenter > fargate (EKS signal instead of <none>)', () => {
+    expect(normalizeNode({ metadata: { name: 'n', labels: { 'eks.amazonaws.com/nodegroup': 'ng-1' } }, status: { conditions: [] } }).roles).toBe('nodegroup:ng-1');
+    expect(normalizeNode({ metadata: { name: 'n', labels: { 'karpenter.sh/nodepool': 'default' } }, status: { conditions: [] } }).roles).toBe('karpenter:default');
+    expect(normalizeNode({ metadata: { name: 'n', labels: { 'eks.amazonaws.com/compute-type': 'fargate' } }, status: { conditions: [] } }).roles).toBe('fargate');
+    // explicit node-role labels still win
+    expect(normalizeNode({ metadata: { name: 'n', labels: { 'node-role.kubernetes.io/control-plane': '', 'eks.amazonaws.com/nodegroup': 'ng-1' } }, status: { conditions: [] } }).roles).toBe('control-plane');
   });
 
   it('node: parses capacity/allocatable cpu(cores) + memory(MiB)', () => {

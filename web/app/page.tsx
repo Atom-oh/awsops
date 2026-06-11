@@ -7,6 +7,7 @@ import Card from '@/components/ui/Card';
 import BarDistribution from '@/components/charts/BarDistribution';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import AreaTrend from '@/components/charts/AreaTrend';
+import AiOps from '@/components/overview/AiOps';
 
 interface Overview {
   jobs: { queued: number; running: number; succeeded: number; failed: number };
@@ -76,6 +77,9 @@ export default function Home() {
             운영 요약 로드 실패: {ovErr} (세션 만료면 새로고침)
           </div>
         )}
+
+        {/* ---- AI OPERATIONS (v1-parity: chat + analysis entry points) ---- */}
+        <AiOps />
 
         {/* ---- KPI group 1: COMPUTE & CONTAINERS ---- */}
         <section className="flex flex-col gap-3">
