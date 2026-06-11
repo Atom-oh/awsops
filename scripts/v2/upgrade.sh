@@ -23,11 +23,13 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"   # scripts/v2 → repo root
 cd "$ROOT"
 
 VER="$(node -e "process.stdout.write(require('./web/package.json').version||'?')" 2>/dev/null || echo '?')"
+VER_SAFE="${VER//./-}"   # RDS snapshot identifiers allow only letters/digits/hyphens — no dots
+MODE="PREVIEW (no writes/deploy; re-run with CONFIRM=go)"; [ "${CONFIRM:-}" = go ] && MODE=EXECUTE
 echo "════════════════════════════════════════════════════════════════"
 echo "  AWSops v2 — release upgrade"
 echo "  repo    : $ROOT"
 echo "  release : v$VER   ($(git rev-parse --short HEAD)  $(git log -1 --format=%s))"
-echo "  mode    : ${CONFIRM:+EXECUTE}${CONFIRM:-PREVIEW (no writes/deploy; re-run with CONFIRM=go)}"
+echo "  mode    : $MODE"
 echo "════════════════════════════════════════════════════════════════"
 
 # ── 0. sanity + resolve/verify the DB cluster ────────────────────────────────
@@ -56,7 +58,7 @@ if [ "${CONFIRM:-}" != "go" ]; then
 fi
 
 # ── 1. snapshot (safety net, first real action) ──────────────────────────────
-SNAP="awsops-v2-preupgrade-v${VER}-$(date +%Y%m%d%H%M)"
+SNAP="awsops-v2-preupgrade-v${VER_SAFE}-$(date +%Y%m%d%H%M)"
 echo ""
 echo "▶ [1/4] RDS cluster snapshot $SNAP (rollback target) …"
 aws rds create-db-cluster-snapshot --db-cluster-identifier "$CLUSTER" \

@@ -156,7 +156,9 @@ async function main() {
         die(`migration ${m.file} failed (rolled back): ${e instanceof Error ? e.message : e}`);
       }
     }
-    console.log(`\n✅ applied ${pending.length} migration(s)`);
+    console.log(DRY
+      ? `\n■ preview only — ${pending.length} migration(s) pending, nothing applied`
+      : `\n✅ applied ${pending.length} migration(s)`);
   } finally {
     if (locked) await client.query('SELECT pg_advisory_unlock($1)', [LOCK_KEY]).catch(() => {});
     await client.end().catch(() => {});
