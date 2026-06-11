@@ -30,6 +30,7 @@ resource "aws_eks_access_policy_association" "web_view" {
   for_each      = toset(var.onboard_eks_clusters)
   cluster_name  = each.value
   principal_arn = aws_iam_role.task.arn
+  # Keep in sync with scripts/v2/eks/auto_register.py _READONLY_POLICY_SUFFIXES (PR #36 r5).
   policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
   access_scope {
     type = "cluster"

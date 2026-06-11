@@ -1,8 +1,10 @@
 # ADR-010: Event-Driven Pre-Scaling System / 이벤트 기반 사전 스케일링 시스템
 
-## Status: Accepted (2026-04-26) — Phase 1+2 only / 상태: 승인 (2026-04-26) — Phase 1+2만
+## Status: Accepted (2026-04-26) — Phase 1+2 only; Phase 3 abandoned (2026-06-11) / 상태: 승인 (2026-04-26) — Phase 1+2만; Phase 3 폐기 (2026-06-11)
 
-Phase 1 (event registration + historical metrics analysis) and Phase 2 (AI scaling plan + script generation/download, **no execution**) are accepted and implemented. Phase 3 (integrated execution + rollback + IAM expansion + KEDA installation) is **deferred to [ADR-029: Mutating Action Framework](./029-mutating-action-framework.md)** because it introduces the first write/mutate capability to AWSops and requires independent review of the IAM/KEDA blast radius. ADR-029 must be Accepted before Phase 3 implementation begins.
+> **⛔ Phase 3 abandoned (2026-06-11)** — Phase 3 was gated on [ADR-029](./029-mutating-action-framework.md), which is now **REVERSED** (owner decision via 3-AI consensus; see `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`). AWSops stays a read-only ops dashboard; in-dashboard scaling **execution/rollback/KEDA install is do-not-pursue** — pre-scaling is left to the operator's SSM/Change Manager/IaC/console. **Phase 1+2 (register, analyze, generate review-ready scripts — no execution) stand.** / **Phase 3 폐기 (2026-06-11)** — Phase 3의 게이트였던 ADR-029가 **번복(REVERSED)** 됨. 대시보드 내 실행/롤백/KEDA 설치는 do-not-pursue; 사전 스케일링은 운영자 도구(SSM/Change Manager/IaC/콘솔)에 맡긴다. Phase 1+2(등록·분석·검토용 스크립트 생성, 실행 없음)는 유지.
+
+Phase 1 (event registration + historical metrics analysis) and Phase 2 (AI scaling plan + script generation/download, **no execution**) are accepted and implemented. Phase 3 (integrated execution + rollback + IAM expansion + KEDA installation) was **deferred to [ADR-029: Mutating Action Framework](./029-mutating-action-framework.md)** — and is now **abandoned** because ADR-029 was reversed (see banner above). The original deferral rationale (first write/mutate capability; IAM/KEDA blast radius) is retained as history.
 
 Phase 1(이벤트 등록 + 이력 메트릭 분석) 및 Phase 2(AI 스케일링 계획 + 스크립트 생성·다운로드, **실행 없음**)는 승인 및 구현. Phase 3(통합 실행 + 롤백 + IAM 확장 + KEDA 설치)는 AWSops 최초의 write/mutate 기능을 도입하고 IAM/KEDA의 영향 범위에 대한 독립적인 검토가 필요하므로 **[ADR-029: 변경 작업 프레임워크](./029-mutating-action-framework.md)로 분리**. ADR-029가 Accepted 된 이후에만 Phase 3 구현을 시작한다.
 

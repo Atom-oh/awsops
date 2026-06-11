@@ -40,8 +40,8 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **AI 라우팅 전략**: 목록/현황/구성 분석 → `aws-data` (Steampipe SQL), 트러블슈팅/진단 → 전문 Gateway
   (Routing strategy: listing/analysis → Steampipe SQL, troubleshooting → specialized Gateway)
 - **Memory Store**: 대화 이력 영구 저장 (사용자별, 365일 보관) / Conversation history persistence (per-user, 365-day retention)
-- **Custom Agents & Skills (제안)**: 관리자가 대시보드에서 런타임에 에이전트·스킬을 항목별로 구성 — Aurora 카탈로그 + 요청별 리졸버 + 계정별 Agent Space + BYO-MCP, 재빌드 없음 (ADR-031, Proposed; AWS DevOps/Security Agent 모델 차용)
-  (Proposed: admin-composed custom agents/skills at runtime — Aurora catalog + per-request resolver + per-account Agent Spaces + bring-your-own MCP, no rebuild; modeled on AWS DevOps/Security Agent)
+- **Custom Agents & Skills (v2 구현)**: 관리자가 런타임에 에이전트·스킬 구성 — Aurora 카탈로그 + 요청별 리졸버 + 계정별 Agent Space, 재빌드 없음 (ADR-031 **Phase 1/2 v2 LIVE**; **Phase 3 BYO-MCP·Phase 4 mutating은 2026-06-11 번복/폐기** — egress/변경 표면; AWS DevOps/Security Agent 모델 차용). v1은 고정 `SKILL_BASE`.
+  (v2-implemented: admin-composed agents/skills — Aurora catalog + resolver + per-account Agent Spaces, no rebuild; ADR-031 **Phase 1/2 LIVE in v2**, **Phase 3 BYO-MCP & Phase 4 mutating REVERSED 2026-06-11**. v1 keeps a fixed `SKILL_BASE`.)
 
 ### Auth & Delivery
 - **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1)
@@ -133,12 +133,16 @@ Key pipeline stages:
 5. **Knowledge** -- Stores diagnosis records for similarity search on future incidents
 6. **Dispatch** -- Slack (severity-routed channels, thread updates), SNS email, dashboard indicator
 
-## Future: ECS Fargate + Aurora Migration (Proposed — ADR-030)
+## v2 Architecture (branch `feat/v2-architecture-design` — substantially built, read-only)
 
-To decouple build from runtime, all dashboard workloads will migrate from the single `t4g.2xlarge` EC2 host to ECS Fargate (web · steampipe · jobs · alert-poller), application state (`data/*.json`) will move to Aurora Serverless v2, and the OSS distribution model splits into Private ECR (dev) / Public ECR (prod, cosign-signed). Steampipe remains stateless and runs as its own Fargate task with config mounted from Secrets Manager. See [ADR-030](decisions/030-ecs-fargate-aurora-split.md) for the three-phase cutover plan.
+> This document describes **v1.8.0**, the **untouched legacy production app**. A parallel **v2** rebuild (ADR-030/037) is substantially built on the `feat/v2-architecture-design` branch. The authoritative v2 context is the root [`CLAUDE.md`](../CLAUDE.md); per-component v2 design lives in [`docs/superpowers/reference/`](superpowers/reference/).
+
+v2 rebuilds the v1 single-EC2 monolith as a **Terraform-based MSA** (CDK dropped): private edge (CloudFront VPC Origin → internal ALB → Fargate `awsops-v2-web`), Cognito **Lambda@Edge RS256/PKCE** auth, **Aurora Serverless v2 (PG 17)** durable state (replaces `data/*.json`), Next.js 14 **thin-BFF** at the root path, dual-tier ECR, **AgentCore** (9 section gateways + Memory + Code Interpreter; runtime-customizable Agent Space — ADR-031 **Phase 1/2 LIVE**), an OOM-safe **async worker tier** (SQS+SFN+Lambda/Fargate, ADR-030/P2), and inventory via a warm Steampipe Fargate → Aurora sync (22 resource types) + read-only EKS in-cluster views.
+
+**Posture: read-only ops dashboard + AI diagnosis.** A mutating/autonomous tier was built flag-OFF and then **REVERSED (2026-06-11, 3-AI consensus — see [reviews/2026-06-11-high-risk-adr-reversal-consensus.md](reviews/2026-06-11-high-risk-adr-reversal-consensus.md))**: ADR-029+036 (mutation/remediation substrate) and ADR-031 Phase 3 (BYO-MCP) / Phase 4 (mutating tools) are **reversed (do-not-enable, frozen flag-OFF)**; ADR-032 (autonomous incident) and ADR-035 (K8sGPT) are **downgraded to read-only** (autonomous mitigation / H3a wiring dropped). Infra mutation stays with the operator's SSM/Change Manager/IaC. See [ADR-030](decisions/030-ecs-fargate-aurora-split.md), [ADR-037](decisions/037-v2-terraform-foundation.md).
 
 ## Event-Driven Pre-Scaling (Implemented — ADR-010 Phase 1+2)
 
-Admin-only event registration page (`/event-scaling`) that analyzes historical CloudWatch metrics for traffic spikes, generates multi-phase warmup plans via Bedrock Sonnet 4.6 (PLAN_JSON marker parsing), and emits safe bash scripts per resource type (KEDA/HPA, Aurora reader, MSK partition expansion, ASG warm pool, EBS IOPS). The plan and scripts are **review-then-run** — the dashboard never executes mutations on its own. ADR-029 Phase 3 (mutating action gate with approval workflow) is in Proposed status.
+Admin-only event registration page (`/event-scaling`) that analyzes historical CloudWatch metrics for traffic spikes, generates multi-phase warmup plans via Bedrock Sonnet 4.6 (PLAN_JSON marker parsing), and emits safe bash scripts per resource type (KEDA/HPA, Aurora reader, MSK partition expansion, ASG warm pool, EBS IOPS). The plan and scripts are **review-then-run** — the dashboard never executes mutations on its own. ADR-029 Phase 3 (mutating action gate) was accepted then **REVERSED in v2 (2026-06-11)** — the mutating direction is abandoned; AWSops stays review-then-run / read-only.
 
 See also: `scripts/ARCHITECTURE.md` for detailed architecture diagrams.
