@@ -20,6 +20,8 @@ export async function POST(request: Request, { params }: { params: { cluster: st
   // Cluster must actually exist (spec §3.2 ①) — never emit a guide for arbitrary input.
   const known = (await listClusters()).some((c) => c.name === params.cluster);
   if (!known) return json({ status: 'error', message: 'unknown cluster' }, 404);
+  // Terraform-managed clusters are already permanently allowed — idempotent no-op, no redundant DB row (P4 gate).
+  if (isEnvCluster(params.cluster)) return json({ registered: true, managedBy: 'terraform' }, 200);
   const entry = await hasAccessEntry(params.cluster);
   if (entry !== true) {
     // No entry (or undeterminable) — hand back the v1-style guide instead of failing opaquely.
@@ -38,5 +40,5 @@ export async function DELETE(request: Request, { params }: { params: { cluster: 
     return json({ status: 'error', message: 'Terraform(onboard_eks_clusters) 관할 — tfvars에서 제거하세요' }, 400);
   }
   const ok = await unregisterCluster(params.cluster);
-  return ok ? json({ unregistered: true }, 200) : json({ status: 'error', message: 'not registered' }, 404);
+  return ok ? json({ unregistered: true }, 200) : json({ status: 'error', message: 'not registered (or registry storage unavailable)' }, 404);
 }

@@ -26,9 +26,9 @@ export async function getTaskRoleArn(): Promise<string> {
 
 /** Does the cluster have an access entry for our task role? null = couldn't determine. */
 export async function hasAccessEntry(cluster: string): Promise<boolean | null> {
-  const principalArn = await getTaskRoleArn();
-  if (!eks) eks = new EKSClient({ region: REGION });
   try {
+    const principalArn = await getTaskRoleArn(); // inside try: an STS hiccup degrades to unknown, not a 500 (P4 gate)
+    if (!eks) eks = new EKSClient({ region: REGION });
     await eks.send(new DescribeAccessEntryCommand({ clusterName: cluster, principalArn }));
     return true;
   } catch (e) {
