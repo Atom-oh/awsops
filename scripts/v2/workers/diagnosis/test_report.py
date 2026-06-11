@@ -96,3 +96,24 @@ def test_throttle_is_loud(monkeypatch):
 
 def test_cw_metrics_collector_present():
     assert hasattr(sources, "collect_cw_metrics")
+
+
+# --- Task 4: sections.py -------------------------------------------------
+
+from diagnosis import sections
+
+
+def test_eight_sections_ordered_and_unique():
+    s = sections.SECTIONS
+    assert len(s) == 8
+    keys = [x["key"] for x in s]
+    assert keys[0] == "executive_summary"
+    assert len(set(keys)) == 8
+    for sec in s:
+        assert sec["title"] and sec["prompt"] and isinstance(sec["sources"], list)
+
+
+def test_cw_metrics_wired_into_compute_and_db_sections():
+    by_key = {s["key"]: s for s in sections.SECTIONS}
+    assert "cw_metrics" in by_key["compute_infrastructure"]["sources"]
+    assert "cw_metrics" in by_key["database_storage"]["sources"]
