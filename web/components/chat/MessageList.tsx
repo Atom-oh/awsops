@@ -33,7 +33,10 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                 <span>{sec.icon}</span> {sec.label}
               </div>
             )}
-            {me
+            {/* Plain text for user messages AND while the assistant is still streaming —
+                rendering Markdown per token re-parses the whole tree (O(n²)) and flashes
+                half-built tables. Switch to Markdown once the stream settles. */}
+            {me || m.streaming
               ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>
               : <Markdown>{m.content}</Markdown>}
             {m.streaming && <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-claude-500 align-middle" />}

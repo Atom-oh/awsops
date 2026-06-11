@@ -26,10 +26,14 @@ export default function ChatDrawer() {
   // Restore persisted width / maximized, and wire the cross-app "open chat" event.
   useEffect(() => {
     const w = Number(localStorage.getItem('awsops_chat_width'));
-    if (w >= MIN_W) setWidth(w);
+    if (w >= MIN_W) setWidth(Math.min(w, window.innerWidth - 60)); // clamp a width saved on a wider screen
     if (localStorage.getItem('awsops_chat_maximized') === '1') setMaximized(true);
-    const tid = localStorage.getItem('awsops_chat_thread');
-    if (tid) void chat.selectThread(tid);
+    // On /assistant the drawer is inert (renders null) — skip the restore fetch so it
+    // doesn't duplicate AssistantClient's selectThread or race on shared localStorage keys.
+    if (path !== '/assistant') {
+      const tid = localStorage.getItem('awsops_chat_thread');
+      if (tid) void chat.selectThread(tid);
+    }
     function onOpenChat(e: Event) {
       setOpen(true);
       const wanted = (e as CustomEvent).detail?.threadId as string | undefined;
@@ -50,7 +54,7 @@ export default function ChatDrawer() {
     setMaximized(false);
     try { localStorage.setItem('awsops_chat_maximized', '0'); } catch {}
     const onMove = (ev: MouseEvent) => {
-      const w = Math.min(Math.max(window.innerWidth - ev.clientX, MIN_W), window.innerWidth - 60);
+      const w = Math.min(Math.max(window.innerWidth - ev.clientX, MIN_W), Math.max(MIN_W, window.innerWidth - 60));
       setWidth(w);
     };
     const onUp = () => {

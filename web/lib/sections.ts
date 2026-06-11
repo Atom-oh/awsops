@@ -16,7 +16,7 @@ export const SECTIONS: Section[] = [
     'TGW/피어링 라우트 점검',
     '비정상 Flow Log 트래픽',
   ] },
-  { key: 'container', label: 'Container', icon: '📦', color: '#2F8F5B', active: false, presets: [
+  { key: 'container', label: 'Container', icon: '📦', color: '#1F7A48', active: false, presets: [
     '파드가 Pending/CrashLoop인 이유',
     'ECS 태스크 반복 재시작 진단',
     '네임스페이스 리소스 상태',
@@ -34,7 +34,7 @@ export const SECTIONS: Section[] = [
     '퍼블릭 노출된 리소스 찾기',
     '최근 90일 미사용 역할/키',
   ] },
-  { key: 'cost', label: 'Cost', icon: '💰', color: '#B7791F', active: true, presets: [
+  { key: 'cost', label: 'Cost', icon: '💰', color: '#8A5A12', active: true, presets: [
     '이번 달 비용 추세와 가장 많이 오른 서비스',
     '다음 달 비용 예측',
     'RDS·EKS 절감 제안 (Top 5)',
