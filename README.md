@@ -33,7 +33,7 @@ Internet -> CloudFront (Lambda@Edge Cognito auth) -> ALB -> EC2 (t4g.2xlarge, pr
 
 Stats: 43 pages, 55 routes, 26 SQL query files, 20 API routes, 18 components, 125 MCP tools (8 Gateways, 19 Lambda), 31 ADRs.
 
-> A v2 rewrite — Terraform-based microservices with an async worker tier, served on a dedicated domain — is under active development on the `feat/v2-architecture-design` branch.
+> A **v2 rewrite** — Terraform MSA on ECS Fargate + Aurora Serverless v2 + AgentCore, a private CloudFront-VPC-Origin edge, an async worker tier, and a runtime-customizable Agent Space — is substantially built on the `feat/v2-architecture-design` branch (this v1 app remains the legacy production release). v2's posture is a **read-only ops dashboard + AI diagnosis**: a mutating/autonomous tier was prototyped behind disabled flags and then **reversed** (2026-06-11) — infra mutation stays with the operator's own SSM/Change Manager/IaC.
 
 ## Features
 
@@ -189,7 +189,7 @@ Internet -> CloudFront (Lambda@Edge Cognito 인증) -> ALB -> EC2 (t4g.2xlarge, 
 
 현황: 43 페이지, 55 라우트, 26 SQL 쿼리 파일, 20 API 라우트, 18 컴포넌트, 125 MCP 도구(8 Gateway, 19 Lambda), 31 ADR.
 
-> v2 재설계(Terraform 기반 마이크로서비스 + 비동기 워커 계층, 전용 도메인 서빙)가 `feat/v2-architecture-design` 브랜치에서 개발 중입니다.
+> **v2 재설계** — Terraform MSA(ECS Fargate + Aurora Serverless v2 + AgentCore) · 비공개 CloudFront VPC Origin 엣지 · 비동기 워커 계층 · 런타임 커스터마이즈 Agent Space — 가 `feat/v2-architecture-design` 브랜치에 상당 부분 구축됨(이 v1 앱은 레거시 프로덕션으로 유지). v2 자세는 **read-only 운영 대시보드 + AI 진단**: 변경/자율 계층은 비활성 플래그로 프로토타입 후 **번복**(2026-06-11) — 인프라 변경은 운영자의 SSM/Change Manager/IaC가 담당.
 
 ## 주요 기능
 

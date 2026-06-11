@@ -2,10 +2,13 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  LayoutDashboard, Box, Activity, DollarSign,
-  Server, Database, Network, ShieldCheck,
-  Sparkles, Gauge, PiggyBank, MessagesSquare,
-  Stethoscope, LogOut,
+  LayoutDashboard, MessagesSquare, Activity, DollarSign, Sparkles,
+  Box, LogOut, Gauge, PiggyBank,
+  Server, Zap, Container, Package,
+  Archive, HardDrive, Database, Table, DatabaseZap, Search, Radio,
+  Network, Waypoints, BrickWall, Globe, Scale, Split,
+  KeyRound, Users, Shield, FileSearch, Bell,
+  Stethoscope, // /ai-diagnosis nav (this branch)
   type LucideIcon,
 } from 'lucide-react';
 import { INVENTORY_TYPES, inventoryGroups } from '@/lib/inventory-types';
@@ -28,13 +31,36 @@ const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
   { href: '/customization', tkey: 'nav.customAgents', icon: Sparkles },
 ];
 
-// One lucide icon per inventory group.
-const GROUP_ICON: Record<string, LucideIcon> = {
-  Compute: Server,
-  'Storage & DB': Database,
-  Network: Network,
-  Security: ShieldCheck,
-  Monitoring: Activity,
+// One distinct lucide icon per inventory type (keyed by the registry slug).
+// Mirrors v1's per-resource icons; v2-only types (subnet/SG/ALB/NLB/roles) get their own.
+const TYPE_ICON: Record<string, LucideIcon> = {
+  // Compute
+  ec2: Server,
+  lambda: Zap,
+  ecs_cluster: Container,
+  ecr: Package,
+  // Storage & DB
+  s3: Archive,
+  ebs_volume: HardDrive,
+  rds: Database,
+  dynamodb: Table,
+  elasticache: DatabaseZap,
+  opensearch: Search,
+  msk: Radio,
+  // Network
+  vpc: Network,
+  subnet: Waypoints,
+  security_group: BrickWall,
+  cloudfront: Globe,
+  alb: Scale,
+  nlb: Split,
+  // Security
+  iam_role: KeyRound,
+  iam_user: Users,
+  waf: Shield,
+  cloudtrail: FileSearch,
+  // Monitoring
+  cloudwatch_alarm: Bell,
 };
 
 function NavItem({ href, label, icon: Icon, active }: { href: string; label: string; icon: LucideIcon; active: boolean }) {
@@ -87,30 +113,27 @@ export default function Sidebar() {
           ))}
         </div>
 
-        {groups.map((g) => {
-          const Icon = GROUP_ICON[g.group] ?? Server;
-          return (
-            <div key={g.group} className="space-y-0.5">
-              <SectionLabel className="px-2.5 pb-1 text-[11px] tracking-[0.04em] text-ink-400">{g.group}</SectionLabel>
-              {g.group === 'Compute' && (
-                /* EKS keeps its own route/icon but lives under Compute (user feedback) */
-                <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} />
-              )}
-              {g.types.map((t) => {
-                const href = `/inventory/${t}`;
-                return (
-                  <NavItem
-                    key={t}
-                    href={href}
-                    label={INVENTORY_TYPES[t].label}
-                    icon={Icon}
-                    active={path === href}
-                  />
-                );
-              })}
-            </div>
-          );
-        })}
+        {groups.map((g) => (
+          <div key={g.group} className="space-y-0.5">
+            <SectionLabel className="px-2.5 pb-1 text-[11px] tracking-[0.04em] text-ink-400">{g.group}</SectionLabel>
+            {g.group === 'Compute' && (
+              /* EKS keeps its own route/icon but lives under Compute (user feedback) */
+              <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} />
+            )}
+            {g.types.map((t) => {
+              const href = `/inventory/${t}`;
+              return (
+                <NavItem
+                  key={t}
+                  href={href}
+                  label={INVENTORY_TYPES[t].label}
+                  icon={TYPE_ICON[t] ?? Server}
+                  active={path === href}
+                />
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* Footer */}
