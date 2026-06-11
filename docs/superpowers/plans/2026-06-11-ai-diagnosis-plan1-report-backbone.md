@@ -572,7 +572,11 @@ _SYSTEM = (
 
 
 def _bedrock_render(prompt, context_json):
-    client = boto3.client("bedrock-runtime", region_name=REGION)
+    # [GATE-FIX R2 MAJOR] A `us.*` inference profile must be invoked from a us region (agent.py pins
+    # us-east-1). Use a dedicated BEDROCK_REGION (default us-east-1), NOT the deployment REGION
+    # (ap-northeast-2) — else the us.* profile throws. Use apac.* + ap region if you prefer in-region.
+    bedrock_region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    client = boto3.client("bedrock-runtime", region_name=bedrock_region)
     body = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 1500,
@@ -800,17 +804,35 @@ export async function getReport(id: number): Promise<DiagnosisReport | null> {
   return (rows[0] as DiagnosisReport) ?? null;
 }
 
-// [GATE-FIX] BFF pre-creates the row (running) BEFORE enqueue so: (a) worker_job_id FK is set
-// (handlers never receive job_id), and (b) the UI sees the row immediately (no race).
-export async function createReport(
-  workerJobId: string, tier: DiagnosisTier, requestedBy: string,
-): Promise<number> {
+// [GATE-FIX R2 CRITICAL] FK ORDERING: diagnosis_reports.worker_job_id REFERENCES worker_jobs(job_id).
+// The row must be created with worker_job_id=NULL (column is nullable), and LINKED only AFTER the
+// worker_jobs row exists (post-enqueue) — otherwise the FK insert fails on the first request.
+// The worker finds its row via payload.report_id (not the FK), so NULL-at-insert is safe.
+export async function createReport(tier: DiagnosisTier, requestedBy: string): Promise<number> {
   const { rows } = await getPool().query(
     `INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status)
-     VALUES ($1, $2, $3, 'running') RETURNING id`,
-    [workerJobId, tier, requestedBy],
+     VALUES (NULL, $1, $2, 'running') RETURNING id`,
+    [tier, requestedBy],
   );
   return rows[0].id as number;
+}
+
+// Link the report to its job AFTER enqueueJob has inserted worker_jobs(job_id) (FK now satisfiable).
+export async function linkReportJob(reportId: number, workerJobId: string): Promise<void> {
+  await getPool().query(
+    `UPDATE diagnosis_reports SET worker_job_id = $1 WHERE id = $2`,
+    [workerJobId, reportId],
+  );
+}
+
+// Idempotency-first: return the report already attached to an existing job for this key, if any.
+export async function reportForIdempotencyKey(key: string): Promise<number | null> {
+  const { rows } = await getPool().query(
+    `SELECT r.id FROM diagnosis_reports r JOIN worker_jobs j ON j.job_id = r.worker_job_id
+     WHERE j.idempotency_key = $1 ORDER BY r.id DESC LIMIT 1`,
+    [key],
+  );
+  return rows[0]?.id ?? null;
 }
 ```
 
@@ -917,21 +939,31 @@ export async function POST(req: Request) {
   const account = process.env.AWS_ACCOUNT_ID || '';
   const email = (user as any).email || (user as any).sub || 'unknown';
 
-  const jobId = randomUUID();
-  const reportId = await createReport(jobId, tier, email); // row first → FK set + no UI race
-
-  // Idempotency: one running report per (user, tier, hour).
+  // [GATE-FIX R2 CRITICAL] Idempotency-FIRST, then create the report with NULL fk, enqueue
+  // (inserts worker_jobs), then LINK — so the FK is only set once worker_jobs(job_id) exists.
   const hour = new Date().toISOString().slice(0, 13);
   const idempotencyKey = `report:${email}:${tier}:${hour}`;
 
-  const job = await enqueueJob(
-    'report',
-    { account, tier, requested_by: email, report_id: reportId },
-    { idempotencyKey, jobId },
-  );
+  const existing = await reportForIdempotencyKey(idempotencyKey);
+  if (existing) return NextResponse.json({ report_id: existing, tier, deduped: true }, { status: 202 });
+
+  const jobId = randomUUID();
+  const reportId = await createReport(tier, email);          // worker_job_id = NULL (FK-safe)
+  let job: { job_id: string };
+  try {
+    job = await enqueueJob('report',
+      { account, tier, requested_by: email, report_id: reportId },
+      { idempotencyKey, jobId });                            // inserts worker_jobs(job_id=jobId)
+  } catch (e) {
+    await markReportFailed(reportId, 'enqueue failed');      // no orphan running row
+    throw e;
+  }
+  await linkReportJob(reportId, job.job_id);                 // FK now satisfiable
   return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier }, { status: 202 });
 }
 ```
+
+> Add `markReportFailed(id, msg)` to `web/lib/diagnosis.ts` (`UPDATE diagnosis_reports SET status='failed', error=$2 WHERE id=$1 AND status='running'`). If `enqueueJob` returns an *existing* job on idempotency conflict (job_id ≠ caller `jobId`), `linkReportJob` still links to the canonical `job.job_id` — correct.
 
 > The `enqueueJob` helper must accept a caller-supplied `jobId` (so the BFF can link `worker_job_id`
 > before the job runs). If the existing `jobs/route.ts` generates its own UUID, add a `jobId` option
