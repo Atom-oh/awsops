@@ -739,3 +739,24 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages (thread_id,
 INSERT INTO schema_migrations (version, description)
 VALUES (9, 'chat thread persistence: chat_threads + chat_messages (new-chat no longer wipes history)')
 ON CONFLICT (version) DO NOTHING;
+
+-- ============================================================
+-- v10 (PROVISIONAL): OpenCost read-only install config (cluster-scoped helm config the
+-- dashboard SAVES; install is out-of-band, AWSops never writes the cluster — ADR-035 pattern).
+-- ⚠️ CONTROLLER: this version integer is provisional (file was at v9). ADR-032 P4
+-- prevention_insights also targets v10 on its branch and `ON CONFLICT DO NOTHING` would
+-- SILENTLY MASK a collision. Before psql, run `SELECT max(version) FROM schema_migrations`
+-- on LIVE Aurora and renumber BOTH the VALUES integer and this header to live-max+1; treat
+-- the migration as applied ONLY after confirming the row exists at the chosen version.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS opencost_config (
+  cluster       TEXT PRIMARY KEY,
+  chart_version TEXT,
+  config        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_by    TEXT,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO schema_migrations (version, description)
+VALUES (10, 'opencost_config: read-only OpenCost install config (provisional version — controller reconciles to live max+1)')
+ON CONFLICT (version) DO NOTHING;
