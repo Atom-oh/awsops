@@ -540,8 +540,29 @@ import boto3
 from scripts.v2.workers.diagnosis import sources as src
 from scripts.v2.workers.diagnosis.sections import SECTIONS
 
-MODEL_ID = os.environ.get("DIAGNOSIS_MODEL_ID", "anthropic.claude-sonnet-4-6")
+# Inference-profile id — a BARE id ("anthropic.claude-...") throws ValidationException on
+# Claude 4.x invoke_model. Matches agent/agent.py's us.* profile convention.
+MODEL_ID = os.environ.get("DIAGNOSIS_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
+
+# [GATE-FIX CRITICAL] PII/secret redaction BEFORE any Bedrock call (spec §9 mandatory).
+import re
+_REDACTORS = [
+    (re.compile(r"arn:aws:[^\s\"']+"), "<arn>"),
+    (re.compile(r"\b\d{12}\b"), "<acct>"),
+    (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "<email>"),
+    (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"), "<ip>"),
+    (re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b"), "<akid>"),
+]
+
+
+def _redact(text):
+    """Deterministic scrub of ARNs/account-ids/emails/IPs/access-keys before the LLM sees data.
+    CloudTrail Username and other identity fields are stripped at the collector (sources.py)."""
+    for pat, repl in _REDACTORS:
+        text = pat.sub(repl, text)
+    return text
+
 
 _SYSTEM = (
     "너는 AWS 운영 진단 컨설턴트다. 제공된 데이터에만 근거해 read-only 진단을 작성한다. "
@@ -568,7 +589,8 @@ def _bedrock_render(prompt, context_json):
 def render_section(section, collected):
     # Section sees ONLY the sources it declares (least-context).
     ctx = {k: collected[k]["data"] for k in section["sources"] if k in collected}
-    body = _bedrock_render(section["prompt"], json.dumps(ctx, ensure_ascii=False, default=str))
+    ctx_json = _redact(json.dumps(ctx, ensure_ascii=False, default=str))  # [GATE-FIX] redact pre-LLM
+    body = _bedrock_render(section["prompt"], ctx_json)
     return {"key": section["key"], "title": section["title"], "body": body}
 
 
@@ -633,28 +655,46 @@ Expected: FAIL — `assert handlers.is_allowed("report")` is False.
 Add the import and handler, and register it. Replace the `REGISTRY` block:
 
 ```python
+import os
+
+
+def _upload_markdown(md, report_id):
+    """[GATE-FIX CRITICAL] The shared worker runners DISCARD the artifact return value
+    (worker_lambda.py / fargate_worker.py do `result, _artifact = fn(...)` and drop it; there
+    is NO put_object in the worker tier). So _report uploads to S3 itself and returns the URI."""
+    import boto3
+    bucket = os.environ["ARTIFACT_BUCKET"]  # set on the worker task (same bucket P2 uses)
+    key = f"diagnosis/{report_id}.md"
+    boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2")).put_object(
+        Bucket=bucket, Key=key, Body=md.encode("utf-8"), ContentType="text/markdown")
+    return f"s3://{bucket}/{key}"
+
+
 def _report(payload, dry_run):
-    """AI Diagnosis report. payload: {account, tier, requested_by, report_id?}.
-    Writes diagnosis_reports + returns markdown artifact. Read-only."""
+    """AI Diagnosis report. payload: {account, tier, requested_by, report_id}.
+    The BFF creates the diagnosis_reports row (running) and passes report_id (see Task 8) —
+    this fixes the worker_job_id FK (handlers receive only `payload`, never job_id) and the UI race.
+    _report uploads the markdown to S3 itself and writes artifact_uri. Read-only."""
     account = str(payload.get("account", ""))
     tier = payload.get("tier", "mid")
     requested_by = payload.get("requested_by", "unknown")
+    report_id = payload.get("report_id")
     if dry_run:
         return {"dry_run": True, "would_diagnose": account, "tier": tier}, None
-    # Local imports keep cold-start light for the noop path.
     from scripts.v2.workers import db as wdb
     from scripts.v2.workers.diagnosis import db as ddb
     from scripts.v2.workers.diagnosis import report as rpt
     conn = wdb.connect()
-    report_id = payload.get("report_id") or ddb.create_report(
-        conn, worker_job_id=payload.get("job_id"), tier=tier, requested_by=requested_by)
+    # Fallback: if BFF didn't pre-create (older enqueue), create now (worker_job_id stays NULL).
+    if not report_id:
+        report_id = ddb.create_report(conn, worker_job_id=None, tier=tier, requested_by=requested_by)
     try:
         md, summary, sources_used = rpt.generate(conn, account, tier)
+        artifact_uri = _upload_markdown(md, report_id)
         status = "partial" if summary.get("degraded") else "succeeded"
-        # artifact_uri is set by the runner after S3 upload; record metadata now.
-        ddb.finish_report(conn, report_id, status=status,
-                          sources_used=sources_used, summary=summary)
-        return {"report_id": report_id, "status": status, "summary": summary}, md.encode("utf-8")
+        ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,
+                          summary=summary, artifact_uri=artifact_uri)
+        return {"report_id": report_id, "status": status, "artifact_uri": artifact_uri}, md.encode("utf-8")
     except Exception as e:  # noqa: BLE001
         ddb.finish_report(conn, report_id, status="failed", error=str(e))
         raise
@@ -666,6 +706,8 @@ REGISTRY = {
     "report":     (_report, "fargate"),
 }
 ```
+
+> [GATE-FIX] Confirm `ARTIFACT_BUCKET` (or the existing P2 artifact bucket env var name) is set on the worker task def in `workers.tf`, and the worker task role has `s3:PutObject` on `diagnosis/*` (read-only mandate covers AWS *data* sources; writing our own report artifact to our own bucket is allowed). If P2 already defines an artifact bucket env, reuse that exact name.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -757,6 +799,19 @@ export async function getReport(id: number): Promise<DiagnosisReport | null> {
   );
   return (rows[0] as DiagnosisReport) ?? null;
 }
+
+// [GATE-FIX] BFF pre-creates the row (running) BEFORE enqueue so: (a) worker_job_id FK is set
+// (handlers never receive job_id), and (b) the UI sees the row immediately (no race).
+export async function createReport(
+  workerJobId: string, tier: DiagnosisTier, requestedBy: string,
+): Promise<number> {
+  const { rows } = await getPool().query(
+    `INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status)
+     VALUES ($1, $2, $3, 'running') RETURNING id`,
+    [workerJobId, tier, requestedBy],
+  );
+  return rows[0].id as number;
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -827,12 +882,21 @@ Expected: FAIL — cannot find `./route`.
 
 - [ ] **Step 3: Write minimal implementation** (`route.ts`)
 
-> Check `web/app/api/jobs/route.ts` for the exact enqueue helper. If it imports a helper (e.g. `enqueueJob` from `@/lib/jobs`), reuse it. If it enqueues inline, copy that pattern. The code below assumes a `@/lib/jobs` `enqueueJob(type, payload, { idempotencyKey })`; adapt to the real helper name found there.
+> **[GATE-FIX] `@/lib/jobs` does NOT exist** — enqueue is inline in `web/app/api/jobs/route.ts`
+> (insert `worker_jobs` with `ON CONFLICT (idempotency_key)` + an SQS `SendMessage`). **First, open
+> `web/app/api/jobs/route.ts` and extract its enqueue body into `web/lib/jobs.ts` as
+> `enqueueJob(type, payload, { idempotencyKey }): Promise<{ job_id: string }>`** (reuse its exact
+> `getPool()` insert + SQS client + queue-url env). Then both routes import the real helper. The
+> code below is the route AFTER that extraction; mock `@/lib/jobs` in the test to match the real seam.
+
+> **Enqueue order matters:** generate `job_id` → `createReport(job_id, …)` (row visible immediately,
+> FK set) → enqueue with `payload.report_id`. The worker's `_report` reads `payload.report_id`.
 
 ```typescript
 import { NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
 import { verifyUser } from '@/lib/auth';
-import { listReports } from '@/lib/diagnosis';
+import { listReports, createReport } from '@/lib/diagnosis';
 import { enqueueJob } from '@/lib/jobs';
 
 export const dynamic = 'force-dynamic';
@@ -853,14 +917,25 @@ export async function POST(req: Request) {
   const account = process.env.AWS_ACCOUNT_ID || '';
   const email = (user as any).email || (user as any).sub || 'unknown';
 
+  const jobId = randomUUID();
+  const reportId = await createReport(jobId, tier, email); // row first → FK set + no UI race
+
   // Idempotency: one running report per (user, tier, hour).
   const hour = new Date().toISOString().slice(0, 13);
   const idempotencyKey = `report:${email}:${tier}:${hour}`;
 
-  const job = await enqueueJob('report', { account, tier, requested_by: email }, { idempotencyKey });
-  return NextResponse.json({ job_id: job.job_id, tier }, { status: 202 });
+  const job = await enqueueJob(
+    'report',
+    { account, tier, requested_by: email, report_id: reportId },
+    { idempotencyKey, jobId },
+  );
+  return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier }, { status: 202 });
 }
 ```
+
+> The `enqueueJob` helper must accept a caller-supplied `jobId` (so the BFF can link `worker_job_id`
+> before the job runs). If the existing `jobs/route.ts` generates its own UUID, add a `jobId` option
+> when extracting the helper.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1217,3 +1292,38 @@ git commit -m "fix(worker): COPY diagnosis package into Fargate worker image"
 - Worker Dockerfile `COPY` of `diagnosis/` — confirm at Task 13 Step 2.
 - `schema_migrations` next version number — confirm at Task 1 Step 1.
 - Bedrock model id env `DIAGNOSIS_MODEL_ID` + worker task-role perms for `bedrock:InvokeModel`, `ce:GetCostAndUsage`, `xray:GetServiceGraph`, `securityhub:GetFindings`, `cloudtrail:LookupEvents` — ensure the worker task role grants these (Terraform `workers.tf`); add a follow-up Terraform task if missing (read-only actions only).
+
+---
+
+## P2 Gate Resolution (multi-AI consensus, 2026-06-11)
+
+Verdict **PASS-WITH-FIXES** (kiro-opus4.8 / gemini / kiro-glm5; codex FAIL on scope-framing). Inline code above already patched the two CRITICALs (artifact S3 upload in `_report`; redaction in `report.py`) + model-id + BFF-creates-row (FK + race) + enqueue grounding. Remaining required fixes, to apply during implementation:
+
+- **[MAJOR] Task 3 — `collect_what_changed` must strip CloudTrail `Username`/identity at the collector** (real PII) before it ever reaches the report context. Map each event to `{name, source, time}` ONLY (drop `Username`, `Resources`, request params). Already the shape in the code — keep it strict; add an assertion in the test that no `username` key survives.
+- **[MAJOR] Task 3 — distinguish throttled/failed from unconfigured.** Add `_classify(exc)`:
+  ```python
+  from botocore.exceptions import ClientError
+  def _classify(key, exc):
+      code = getattr(exc, "response", {}).get("Error", {}).get("Code", "") if isinstance(exc, ClientError) else ""
+      if code in ("Throttling", "ThrottlingException", "TooManyRequestsException", "RequestLimitExceeded"):
+          return _result(key, ok=False, degraded=True, notes=f"THROTTLED: {code}", data={"_failed": True})
+      return _result(key, ok=False, degraded=True, notes=str(exc), data={"_failed": True})
+  ```
+  Use `_classify(key, e)` in each collector's `except`. A `_failed` source → report summary marks `status='partial'` AND surfaces a loud "source X query failed/throttled" line (NOT the quiet "not configured" note). Prevents a false all-clear.
+- **[MAJOR] Task 3 — add `collect_cw_metrics`** (§4.1/§9 core source). Use `cloudwatch.get_metric_data` for `AWS/EC2 CPUUtilization` (avg) over instance ids from `inventory_resources`; return `{by_instance: {...}, avg_cpu}`. Wire into `compute_infrastructure` + `database_storage` section `sources`.
+- **[MAJOR] New Task 7b — extract `web/lib/jobs.ts` `enqueueJob`** from `web/app/api/jobs/route.ts` (the real inline enqueue: `worker_jobs` insert ON CONFLICT + SQS SendMessage), accepting an optional caller `jobId`. Refactor `jobs/route.ts` to use it (keep its tests green). Required before Task 8.
+- **[MAJOR] New Task 1b (Terraform) — worker read-only IAM.** In `workers.tf`, grant the worker task role: `bedrock:InvokeModel` (the diagnosis model arn), `ce:GetCostAndUsage`, `xray:GetServiceGraph`, `securityhub:GetFindings`, `cloudtrail:LookupEvents`, `cloudwatch:GetMetricData`, and `s3:PutObject` on `arn:aws:s3:::<artifact-bucket>/diagnosis/*`. **No wildcards on service actions beyond what's listed; no mutation actions.** Gate behind `workers_enabled`.
+- **[CRITICAL→done inline] Redaction unit fixture (spec §9):** add to `test_report.py`:
+  ```python
+  def test_redact_strips_pii():
+      from scripts.v2.workers.diagnosis import report as rpt
+      s = rpt._redact('arn:aws:iam::123456789012:role/x user a@b.io ip 10.0.0.1 AKIAABCDEFGHIJKLMNOP')
+      assert 'arn:aws' not in s and '123456789012' not in s and 'a@b.io' not in s
+      assert '10.0.0.1' not in s and 'AKIA' not in s
+  ```
+- **[MINOR] Task 1 — migration version = `max(version)+1`** (currently ~12, not 40). Confirm with the `SELECT max(version)` in Task 1 Step 1.
+- **[MINOR] Task 3 — drop the unused `region=` param** on `collect_cost`/etc. (the `_client()` helpers close over global `REGION`), or thread region through the helpers. Cosmetic.
+
+**Dismissed by the chair (verified non-issues, do NOT "fix"):** X-Ray `get_service_graph` IS a valid boto3 xray API; the `invoke_model` Messages-API body (`anthropic_version`/`messages`/`system`) IS correct for Claude 4.x (the `{"prompt":…}` form is legacy); `:param::jsonb` casts work with pg8000 (existing `workers/db.py:insert_job` uses `:p::jsonb`); CloudTrail `ReadOnly` IS a valid `LookupAttributes` key.
+
+**Scope note (addresses codex's FAIL):** Plan 1 is the **foundation half** of the §9 MVP — it ships an async, multi-source, persistent, viewable report (beats v1 on async/persistence/multi-source) but **NOT** the intended-vs-actual differentiator. The §9 "decisively beats v1" bar = **Plan 1 + Plan 2** (architecture_intent + invariant engine + Phase-1 confirm + diff). Plan 1's own done-bar is the report backbone; do not claim full §9 MVP on Plan 1 alone.
