@@ -4,22 +4,26 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Box, Activity, DollarSign,
   Server, Database, Network, ShieldCheck,
-  Sparkles,
+  Sparkles, Gauge,
   LogOut,
   type LucideIcon,
 } from 'lucide-react';
 import { INVENTORY_TYPES, inventoryGroups } from '@/lib/inventory-types';
 import AwsopsMark from '@/components/ui/AwsopsMark';
 import SectionLabel from '@/components/ui/SectionLabel';
+import { useI18n } from '@/components/shell/LanguageProvider';
+import LanguageToggle from '@/components/shell/LanguageToggle';
 import { cn } from '@/lib/cn';
 
-// Fixed top-level pages.
-const FIXED: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: '/', label: 'Overview', icon: LayoutDashboard },
-  { href: '/eks', label: 'EKS', icon: Box },
-  { href: '/jobs', label: 'Jobs', icon: Activity },
-  { href: '/cost', label: 'Cost', icon: DollarSign },
-  { href: '/customization', label: 'Custom Agents', icon: Sparkles },
+// Fixed top-level pages. `tkey` resolves the label via i18n.
+const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
+  { href: '/', tkey: 'nav.overview', icon: LayoutDashboard },
+  { href: '/eks', tkey: 'nav.eks', icon: Box },
+  { href: '/jobs', tkey: 'nav.jobs', icon: Activity },
+  { href: '/cost', tkey: 'nav.cost', icon: DollarSign },
+  { href: '/bedrock', tkey: 'nav.bedrock', icon: Gauge },
+  { href: '/topology', tkey: 'nav.topology', icon: Network },
+  { href: '/customization', tkey: 'nav.customAgents', icon: Sparkles },
 ];
 
 // One lucide icon per inventory group.
@@ -51,6 +55,7 @@ function NavItem({ href, label, icon: Icon, active }: { href: string; label: str
 export default function Sidebar() {
   const path = usePathname();
   const groups = inventoryGroups();
+  const { t } = useI18n();
 
   return (
     <aside
@@ -61,8 +66,9 @@ export default function Sidebar() {
         <AwsopsMark size={36} />
         <div className="min-w-0 flex-1">
           <div className="text-[15px] font-semibold leading-tight text-ink-800">AWSops</div>
-          <div className="text-[10px] text-ink-400">Cloud Operations</div>
+          <div className="text-[10px] text-ink-400">{t('sidebar.tagline')}</div>
         </div>
+        <LanguageToggle />
       </div>
 
       {/* Nav */}
@@ -72,7 +78,7 @@ export default function Sidebar() {
             <NavItem
               key={item.href}
               href={item.href}
-              label={item.label}
+              label={t(item.tkey)}
               icon={item.icon}
               active={path === item.href}
             />
@@ -105,15 +111,15 @@ export default function Sidebar() {
       <div className="mt-4 border-t border-ink-100 pt-3">
         <div className="flex items-center gap-2.5">
           <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-ink-800 text-[13px] font-semibold text-paper">
-            관
+            {t('sidebar.admin').charAt(0)}
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-[13px] font-medium leading-tight text-ink-800">관리자</div>
+            <div className="text-[13px] font-medium leading-tight text-ink-800">{t('sidebar.admin')}</div>
             <div className="truncate font-mono text-[11px] text-ink-400">ad*****@awsops.io</div>
           </div>
           <button
             type="button"
-            aria-label="로그아웃"
+            aria-label={t('sidebar.signOut')}
             className="rounded-md p-1 text-ink-400 transition-colors hover:bg-ink-100 hover:text-ink-800"
           >
             <LogOut size={16} strokeWidth={1.7} />
@@ -121,7 +127,7 @@ export default function Sidebar() {
         </div>
         <div className="mt-2 flex items-center gap-1.5 px-0.5 text-[11px] text-ink-400">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-          <span>ap-northeast-2 · 온라인</span>
+          <span>{t('sidebar.statusLine', { status: t('sidebar.online') })}</span>
         </div>
       </div>
     </aside>

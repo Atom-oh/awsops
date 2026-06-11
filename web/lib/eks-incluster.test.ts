@@ -83,6 +83,33 @@ describe('normalizers', () => {
     const row = normalizeNode({ metadata: { name: 'n', labels: {} }, status: { conditions: [] } });
     expect(row.status).toBe('NotReady');
     expect(row.roles).toBe('<none>');
+    // capacity/allocatable absent → 0
+    expect(row.cpuAllocatable).toBe(0);
+    expect(row.memAllocatable).toBe(0);
+  });
+
+  it('node: parses capacity/allocatable cpu(cores) + memory(MiB)', () => {
+    const row = normalizeNode({
+      metadata: { name: 'n', labels: {} },
+      status: { conditions: [{ type: 'Ready', status: 'True' }], capacity: { cpu: '4', memory: '8388608Ki' }, allocatable: { cpu: '3920m', memory: '7950Mi' } },
+    });
+    expect(row.cpuCapacity).toBe(4);
+    expect(row.cpuAllocatable).toBeCloseTo(3.92);
+    expect(row.memCapacity).toBe(8192); // 8388608Ki = 8192 MiB
+    expect(row.memAllocatable).toBe(7950);
+  });
+
+  it('pod: sums container resource requests (cpu cores, mem MiB)', () => {
+    const row = normalizePod({
+      metadata: { name: 'p', namespace: 'd' },
+      status: { phase: 'Running' },
+      spec: { nodeName: 'n1', containers: [
+        { resources: { requests: { cpu: '250m', memory: '256Mi' } } },
+        { resources: { requests: { cpu: '500m', memory: '512Mi' } } },
+      ] },
+    });
+    expect(row.cpuRequest).toBeCloseTo(0.75);
+    expect(row.memRequest).toBe(768);
   });
 
   it('pod: phase + nodeName + summed restarts', () => {

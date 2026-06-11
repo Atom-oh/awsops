@@ -21,7 +21,7 @@ export const SECTIONS: Section[] = [
     '네임스페이스 리소스 상태',
     'Istio 트래픽/사이드카 문제',
   ] },
-  { key: 'data', label: 'Data', icon: '🗄️', color: '#a855f7', active: false, presets: [
+  { key: 'data', label: 'Data', icon: '🗄️', color: '#a855f7', active: true, presets: [
     'RDS 느린 쿼리 진단',
     'DynamoDB 스로틀링 원인',
     'ElastiCache Evictions/메모리',
@@ -33,13 +33,13 @@ export const SECTIONS: Section[] = [
     '퍼블릭 노출된 리소스 찾기',
     '최근 90일 미사용 역할/키',
   ] },
-  { key: 'cost', label: 'Cost', icon: '💰', color: '#f59e0b', active: false, presets: [
+  { key: 'cost', label: 'Cost', icon: '💰', color: '#f59e0b', active: true, presets: [
     '이번 달 비용 추세와 가장 많이 오른 서비스',
     '다음 달 비용 예측',
     'RDS·EKS 절감 제안 (Top 5)',
     '계정/태그별 비용 분해',
   ] },
-  { key: 'monitoring', label: 'Monitoring', icon: '📊', color: '#00d4ff', active: false, presets: [
+  { key: 'monitoring', label: 'Monitoring', icon: '📊', color: '#00d4ff', active: true, presets: [
     '최근 알람 요약',
     '특정 리소스 지표 이상 탐지',
     '누가 이 리소스를 변경했나 (CloudTrail)',

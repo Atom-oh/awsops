@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 import DetailPanel from './DetailPanel';
+import { INVENTORY_TYPES } from '@/lib/inventory-types';
 
 afterEach(cleanup);
 
@@ -52,5 +53,18 @@ describe('DetailPanel', () => {
     render(<DetailPanel title="i-0abc123" data={MOCK} onClose={onClose} />);
     fireEvent.click(screen.getByLabelText('닫기'));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders grouped sections with friendly labels when a spec is passed', () => {
+    const row = { resource_id: 'i-1', region: 'ap-northeast-2', name: 'web', instance_type: 't3.micro', instance_state: 'running', vpc_id: 'vpc-1' };
+    render(<DetailPanel title="i-1" data={row} spec={INVENTORY_TYPES.ec2} onClose={() => {}} />);
+    // section headers from the ec2 spec (Identity always present; Network present because vpc_id is)
+    expect(screen.getByText('Identity')).toBeTruthy();
+    expect(screen.getByText('Network')).toBeTruthy();
+    // friendly column label ('Type' for instance_type), not the raw key
+    expect(screen.getByText('Type')).toBeTruthy();
+    expect(screen.queryByText('instance_type')).toBeNull();
+    // state key rendered as a StatePill (the value text is present)
+    expect(screen.getByText('running')).toBeTruthy();
   });
 });

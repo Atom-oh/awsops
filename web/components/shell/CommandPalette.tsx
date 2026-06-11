@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { INVENTORY_TYPES, inventoryGroups } from '@/lib/inventory-types';
 import Input from '@/components/ui/Input';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import { cn } from '@/lib/cn';
 
 interface Cmd { href: string; label: string; hint: string }
@@ -15,6 +16,7 @@ function buildCommands(): Cmd[] {
     { href: '/eks', label: 'EKS', hint: '파드' },
     { href: '/jobs', label: 'Jobs', hint: '비동기 작업' },
     { href: '/cost', label: 'Cost', hint: 'Cost Explorer' },
+    { href: '/bedrock', label: 'Bedrock', hint: '토큰 비용' },
   ];
   const inv: Cmd[] = inventoryGroups().flatMap((g) =>
     g.types.map((t) => ({ href: `/inventory/${t}`, label: INVENTORY_TYPES[t].label, hint: g.group })),
@@ -28,6 +30,7 @@ export default function CommandPalette() {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const commands = useMemo(buildCommands, []);
+  const { t } = useI18n();
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -99,20 +102,20 @@ export default function CommandPalette() {
         onKeyDown={onListKey}
         role="dialog"
         aria-modal="true"
-        aria-label="명령 팔레트"
+        aria-label={t('palette.aria')}
       >
         <div className="border-b border-ink-100 p-2.5">
           <Input
             autoFocus
             icon={<Search size={16} strokeWidth={1.7} />}
-            placeholder="페이지 또는 리소스 검색…"
+            placeholder={t('palette.placeholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
         <ul className="max-h-[320px] overflow-y-auto py-1">
           {results.length === 0 ? (
-            <li className="px-4 py-6 text-center text-[13px] text-ink-400">결과 없음</li>
+            <li className="px-4 py-6 text-center text-[13px] text-ink-400">{t('palette.noResults')}</li>
           ) : (
             results.map((c, i) => (
               <li key={c.href}>

@@ -5,6 +5,7 @@ const priceSend = vi.fn();
 vi.mock('@aws-sdk/client-cloudwatch', () => ({
   CloudWatchClient: class { send = cwSend; },
   GetMetricDataCommand: class { constructor(public input: unknown) {} },
+  ListMetricsCommand: class { constructor(public input: unknown) {} },
 }));
 vi.mock('@aws-sdk/client-pricing', () => ({
   PricingClient: class { send = priceSend; },
@@ -79,5 +80,47 @@ describe('ec2HourlyCost', () => {
     priceSend.mockResolvedValueOnce({ PriceList: [] });
     const { ec2HourlyCost } = await import('./metrics');
     expect(await ec2HourlyCost({ 'unpriced.type': 4 })).toBeNull();
+  });
+});
+
+describe('bedrockModelMetrics', () => {
+  it('discovers models via ListMetrics then aggregates + prices GetMetricData', async () => {
+    cwSend
+      // Step 1: ListMetrics → one model dimension
+      .mockResolvedValueOnce({ Metrics: [{ Dimensions: [{ Name: 'ModelId', Value: 'anthropic.claude-haiku-4-5' }] }] })
+      // Step 2: GetMetricData → 8 metric results for m0
+      .mockResolvedValueOnce({ MetricDataResults: [
+        { Id: 'inv_m0', Values: [10, 5], Timestamps: ['2026-06-10T00:00:00Z', '2026-06-10T01:00:00Z'] },
+        { Id: 'in_m0', Values: [600_000, 400_000], Timestamps: ['2026-06-10T00:00:00Z', '2026-06-10T01:00:00Z'] },
+        { Id: 'out_m0', Values: [2_000_000], Timestamps: ['2026-06-10T00:00:00Z'] },
+        { Id: 'lat_m0', Values: [120, 80] },
+        { Id: 'e4_m0', Values: [1] },
+        { Id: 'e5_m0', Values: [] },
+        { Id: 'cr_m0', Values: [1_000_000] },
+        { Id: 'cw_m0', Values: [0] },
+      ] });
+    const { bedrockModelMetrics } = await import('./metrics');
+    const r = await bedrockModelMetrics('24h');
+    expect(r.models).toHaveLength(1);
+    const m = r.models[0];
+    expect(m.label).toBe('Claude Haiku 4.5');
+    expect(m.invocations).toBe(15);
+    expect(m.inputTokens).toBe(1_000_000);
+    expect(m.outputTokens).toBe(2_000_000);
+    expect(m.avgLatencyMs).toBe(100); // (120+80)/2
+    expect(m.cacheReadTokens).toBe(1_000_000);
+    // haiku-4.5: input 1, output 5, cacheRead .1 → 1 + 10 + 0.1 = 11.1
+    expect(m.cost.total).toBeCloseTo(11.1);
+    expect(r.totalCost).toBeCloseTo(11.1);
+    // combined token series sums input+output per timestamp
+    expect(r.series.find((s) => s.t === '2026-06-10T00:00:00Z')?.tokens).toBe(2_600_000);
+  });
+
+  it('returns empty when ListMetrics finds no models (no GetMetricData call)', async () => {
+    cwSend.mockResolvedValueOnce({ Metrics: [] });
+    const { bedrockModelMetrics } = await import('./metrics');
+    const r = await bedrockModelMetrics('1h');
+    expect(r).toEqual({ models: [], totalCost: 0, series: [] });
+    expect(cwSend).toHaveBeenCalledTimes(1); // only ListMetrics
   });
 });

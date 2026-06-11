@@ -159,13 +159,13 @@ describe('hybrid routing (ADR-038)', () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     classifyRoute.mockResolvedValue({
-      primary: 'data',
-      ranked: [{ key: 'data', score: 0.9, active: false }, { key: 'network', score: 0.4, active: true }],
+      primary: 'container',
+      ranked: [{ key: 'container', score: 0.9, active: false }, { key: 'network', score: 0.4, active: true }],
       method: 'llm',
     });
-    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'data', skill: 'data', agentName: 'data', skillHashes: [] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    const res = await POST(req({ prompt: 'RDS 느린 쿼리', sessionId: 's'.repeat(36) }));
+    const res = await POST(req({ prompt: '파드 CrashLoop 원인', sessionId: 's'.repeat(36) }));
     const body = await readStream(res);
     expect(invokeAgent).not.toHaveBeenCalled();
     expect(body).toContain('"method":"llm"'); // meta ALWAYS emitted (spec §6)
@@ -258,13 +258,13 @@ describe('thread persistence', () => {
   it('records the inactive-section guidance exchange too (spec §3)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u1' });
-    classifyRoute.mockResolvedValue({ primary: 'data', ranked: [{ key: 'data', score: 0.9, active: false }], method: 'llm' });
-    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'data', skill: 'data', agentName: 'data', skillHashes: [] });
+    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 0.9, active: false }], method: 'llm' });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    await readStream(await POST(req({ prompt: 'RDS 느린 쿼리', sessionId: 's'.repeat(36) })));
+    await readStream(await POST(req({ prompt: '파드 CrashLoop 원인', sessionId: 's'.repeat(36) })));
     expect(invokeAgent).not.toHaveBeenCalled();
     expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({
-      userContent: 'RDS 느린 쿼리',
+      userContent: '파드 CrashLoop 원인',
       assistantContent: expect.stringContaining('P3'),
     }));
   });

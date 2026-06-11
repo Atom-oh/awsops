@@ -70,7 +70,7 @@ describe('classifyRoute', () => {
     expect(r.primary).toBe('network');
     expect(r.ranked).toEqual([
       { key: 'network', score: 0.9, active: true },
-      { key: 'data', score: 0.6, active: false },
+      { key: 'data', score: 0.6, active: true }, // data activated in Wave-1
       { key: 'container', score: 0.4, active: false },
     ]);
   });
@@ -98,8 +98,9 @@ describe('classifyRoute', () => {
     expect(r.method).toBe('regex');
   });
   it('honors a pin to a valid-but-inactive section, surfacing active:false (spec §2.3)', async () => {
-    const r = await classifyRoute('아무거나', 'data', { llmEnabled: true, classify: vi.fn() });
-    expect(r).toEqual({ primary: 'data', ranked: [{ key: 'data', score: 1, active: false }], method: 'pin' });
+    // 'container' is still inactive after the Wave-1 fleet activation (data/cost/monitoring went active)
+    const r = await classifyRoute('아무거나', 'container', { llmEnabled: true, classify: vi.fn() });
+    expect(r).toEqual({ primary: 'container', ranked: [{ key: 'container', score: 1, active: false }], method: 'pin' });
   });
   it('marks an unknown key from a custom classifier as active:false (contract)', async () => {
     const classify = vi.fn().mockResolvedValue([{ key: 'bogus-section', score: 0.9 }]);
