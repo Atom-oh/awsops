@@ -3,8 +3,25 @@ const verifyUser = vi.fn();
 const listClusters = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/aws', () => ({ listClusters: (...a: unknown[]) => listClusters(...a) }));
+const getAllowedClusters = vi.fn();
+const isEnvCluster = vi.fn();
+const hasAccessEntry = vi.fn();
+const isAdmin = vi.fn();
+vi.mock('@/lib/eks-registry', () => ({
+  getAllowedClusters: (...a: unknown[]) => getAllowedClusters(...a),
+  isEnvCluster: (...a: unknown[]) => isEnvCluster(...a),
+}));
+vi.mock('@/lib/eks-access', () => ({ hasAccessEntry: (...a: unknown[]) => hasAccessEntry(...a) }));
+vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 const req = (cookie = 'awsops_token=t') => new Request('http://x/api/eks', { headers: { cookie } });
-beforeEach(() => { verifyUser.mockReset(); listClusters.mockReset(); });
+beforeEach(() => {
+  verifyUser.mockReset(); listClusters.mockReset();
+  getAllowedClusters.mockReset(); isEnvCluster.mockReset(); hasAccessEntry.mockReset(); isAdmin.mockReset();
+  getAllowedClusters.mockResolvedValue(new Set());
+  isEnvCluster.mockReturnValue(false);
+  hasAccessEntry.mockResolvedValue(false);
+  isAdmin.mockResolvedValue(false);
+});
 
 describe('GET /api/eks', () => {
   it('401 unauth', async () => {
