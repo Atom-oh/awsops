@@ -9,6 +9,9 @@ COPY db.py handlers.py fargate_worker.py ./
 # remediation modules into this dir (gated on the files existing) — approach (b) per the plan, chosen
 # to avoid disturbing the GREEN worker image build context. The COPY is a no-op unless they're present.
 COPY action_catalog.py remediation_executor.py remediation_executor_cli.py ./
+# AI Diagnosis (Plan 1): the `report` handler imports the diagnosis package (sources/sections/
+# report/db). Ship it in the worker image so handlers.REGISTRY["report"] resolves at runtime.
+COPY diagnosis/ ./diagnosis/
 # CMD (not ENTRYPOINT): the SFN ContainerOverrides command REPLACES CMD but is APPENDED to an
 # ENTRYPOINT. With ENTRYPOINT the effective argv would double ("python fargate_worker.py python
 # fargate_worker.py --job-id X") and argparse would reject the extra positionals → every Fargate

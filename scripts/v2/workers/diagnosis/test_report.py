@@ -1,0 +1,237 @@
+import json
+
+from diagnosis import db
+
+
+class FakeConn:
+    def __init__(self):
+        self.calls = []
+        self.ret = []
+
+    def run(self, sql, **kw):
+        self.calls.append((sql, kw))
+        return self.ret
+
+
+# --- Task 2: db.py CRUD --------------------------------------------------
+
+def test_create_report_inserts_running_row():
+    c = FakeConn(); c.ret = [[123]]
+    rid = db.create_report(c, worker_job_id="job-1", tier="mid", requested_by="u@x.io")
+    assert rid == 123
+    sql, kw = c.calls[0]
+    assert "INSERT INTO diagnosis_reports" in sql
+    assert kw["t"] == "mid" and kw["rb"] == "u@x.io" and kw["jid"] == "job-1"
+
+
+def test_finish_report_sets_terminal_and_summary():
+    c = FakeConn(); c.ret = [[123]]
+    n = db.finish_report(c, 123, status="succeeded",
+                         sources_used=["inventory", "cost"],
+                         summary={"sections": 8}, artifact_uri="s3://b/k.md")
+    assert n == 1
+    sql, kw = c.calls[0]
+    assert "UPDATE diagnosis_reports" in sql and "status=:s" in sql
+    assert json.loads(kw["su"]) == ["inventory", "cost"]
+    assert kw["s"] == "succeeded"
+
+
+# --- Task 3: sources.py collectors --------------------------------------
+
+from diagnosis import sources
+
+
+def test_collector_degrades_on_exception(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("AccessDenied")
+    # cost collector calls a boto3 client; force it to raise
+    monkeypatch.setattr(sources, "_ce_client", boom)
+    res = sources.collect_cost()
+    assert res["key"] == "cost"
+    assert res["ok"] is False and res["degraded"] is True
+    assert "AccessDenied" in res["notes"]
+    assert res["data"] == {"_failed": True}
+
+
+def test_result_shape_keys():
+    res = sources._result("inventory", ok=True, data={"x": 1})
+    assert set(res) == {"key", "ok", "degraded", "notes", "data"}
+    assert res["degraded"] is False
+
+
+def test_what_changed_strips_pii(monkeypatch):
+    import datetime as dt
+
+    class _FakeCt:
+        def lookup_events(self, **kw):
+            return {"Events": [{
+                "EventName": "RunInstances",
+                "EventSource": "ec2.amazonaws.com",
+                "EventTime": dt.datetime(2026, 6, 11, 0, 0, 0),
+                "Username": "alice",                       # PII — must be dropped
+                "Resources": [{"ResourceName": "i-abc"}],  # must be dropped
+            }]}
+
+    monkeypatch.setattr(sources, "_ct_client", lambda: _FakeCt())
+    res = sources.collect_what_changed()
+    assert res["ok"] is True
+    ev = res["data"]["recent_changes"][0]
+    assert set(ev) == {"name", "source", "time"}
+    assert "username" not in {k.lower() for k in ev}
+    assert "Resources" not in ev
+
+
+def test_throttle_is_loud(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    def throttled(*a, **k):
+        raise ClientError({"Error": {"Code": "ThrottlingException"}}, "GetFindings")
+
+    monkeypatch.setattr(sources, "_sh_client", throttled)
+    res = sources.collect_posture()
+    assert res["ok"] is False and res["degraded"] is True
+    assert "THROTTLED" in res["notes"]
+    assert res["data"] == {"_failed": True}
+
+
+def test_cw_metrics_collector_present():
+    assert hasattr(sources, "collect_cw_metrics")
+
+
+# --- Task 4: sections.py -------------------------------------------------
+
+from diagnosis import sections
+
+
+def test_eight_sections_ordered_and_unique():
+    s = sections.SECTIONS
+    assert len(s) == 8
+    keys = [x["key"] for x in s]
+    assert keys[0] == "executive_summary"
+    assert len(set(keys)) == 8
+    for sec in s:
+        assert sec["title"] and sec["prompt"] and isinstance(sec["sources"], list)
+
+
+def test_cw_metrics_wired_into_compute_and_db_sections():
+    by_key = {s["key"]: s for s in sections.SECTIONS}
+    assert "cw_metrics" in by_key["compute_infrastructure"]["sources"]
+    assert "cw_metrics" in by_key["database_storage"]["sources"]
+
+
+# --- Task 5: report.py ---------------------------------------------------
+
+from diagnosis import report
+
+
+def test_build_markdown_has_toc_and_all_sections():
+    rendered = [
+        {"key": "executive_summary", "title": "Executive Summary", "body": "요약 본문"},
+        {"key": "security_posture", "title": "Security Posture", "body": "보안 본문"},
+    ]
+    md = report.build_markdown(rendered, account="180294183052", tier="mid")
+    assert md.startswith("# AWS 진단 리포트") or md.startswith("# AWSops")
+    assert "## Executive Summary" in md and "## Security Posture" in md
+    assert "요약 본문" in md and "보안 본문" in md
+    # TOC lists both sections
+    assert "Executive Summary" in md.split("##", 1)[0]
+
+
+def test_render_section_uses_only_its_sources(monkeypatch):
+    captured = {}
+
+    def fake_invoke(prompt, context_json):
+        captured["context"] = context_json
+        return "섹션 본문"
+
+    monkeypatch.setattr(report, "_bedrock_render", fake_invoke)
+    collected = {
+        "inventory": {"key": "inventory", "ok": True, "data": {"by_type": {"ec2": 3}}},
+        "cost": {"key": "cost", "ok": True, "data": {"mtd_by_service": {"EC2": 12.5}}},
+        "posture": {"key": "posture", "ok": True, "data": {}},
+    }
+    sec = {"key": "cost_overview", "title": "Cost Overview", "sources": ["cost"], "prompt": "p"}
+    out = report.render_section(sec, collected)
+    assert out["body"] == "섹션 본문"
+    # context must include cost but not inventory (section only declares 'cost')
+    assert "mtd_by_service" in captured["context"]
+    assert "by_type" not in captured["context"]
+
+
+def test_redact_strips_pii():
+    from diagnosis import report as rpt
+    s = rpt._redact('arn:aws:iam::123456789012:role/x user a@b.io ip 10.0.0.1 AKIAABCDEFGHIJKLMNOP')
+    assert 'arn:aws' not in s and '123456789012' not in s and 'a@b.io' not in s
+    assert '10.0.0.1' not in s and 'AKIA' not in s
+
+
+# --- Task 6: handlers registration --------------------------------------
+
+import handlers
+
+
+def test_report_registered_as_fargate():
+    assert handlers.is_allowed("report")
+    assert handlers.runtime_for("report") == "fargate"
+
+
+# --- Task 6: _report handler orchestration (PR#37 review MAJOR) ----------
+import pytest  # noqa: E402
+import db as _wdb  # noqa: E402
+from diagnosis import db as _ddb  # noqa: E402
+from diagnosis import report as _rpt  # noqa: E402
+
+
+def _patch_report(monkeypatch, *, generate):
+    """Wire fakes for the _report dependencies; return a dict capturing finish_report + close."""
+    state = {"closed": False, "finish": None}
+
+    class FakeConn:
+        def close(self):
+            state["closed"] = True
+
+    monkeypatch.setattr(_wdb, "connect", lambda: FakeConn())
+    monkeypatch.setattr(_rpt, "generate", generate)
+    monkeypatch.setattr(handlers, "_upload_markdown", lambda md, rid: f"s3://b/diagnosis/{rid}.md")
+
+    def _finish(conn, rid, **kw):
+        state["finish"] = {"rid": rid, **kw}
+    monkeypatch.setattr(_ddb, "finish_report", _finish)
+    return state
+
+
+def test_report_handler_success_uploads_sets_uri_and_closes(monkeypatch):
+    state = _patch_report(monkeypatch, generate=lambda c, a, t: ("# md", {"degraded": []}, ["inventory", "cost"]))
+    result, artifact = handlers._report(
+        {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 7}, dry_run=False)
+    assert result["status"] == "succeeded" and result["report_id"] == 7
+    assert artifact == b"# md"
+    assert state["finish"]["status"] == "succeeded"
+    assert state["finish"]["artifact_uri"].startswith("s3://b/diagnosis/7")
+    assert state["closed"] is True  # CRITICAL: connection always released
+
+
+def test_report_handler_partial_when_a_source_degraded(monkeypatch):
+    state = _patch_report(monkeypatch, generate=lambda c, a, t: ("# md", {"degraded": ["cost"]}, ["inventory"]))
+    result, _ = handlers._report(
+        {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 9}, dry_run=False)
+    assert result["status"] == "partial"
+    assert state["finish"]["status"] == "partial" and state["closed"] is True
+
+
+def test_report_handler_failure_marks_failed_str_error_and_closes(monkeypatch):
+    def boom(c, a, t):
+        raise RuntimeError("kaboom")
+    state = _patch_report(monkeypatch, generate=boom)
+    with pytest.raises(RuntimeError):
+        handlers._report({"account": "1", "tier": "mid", "requested_by": "u", "report_id": 5}, dry_run=False)
+    assert state["finish"]["status"] == "failed"
+    assert state["finish"]["error"] == "kaboom"  # str(e), not a full traceback
+    assert state["closed"] is True  # CRITICAL: closed even on the error path
+
+
+def test_report_handler_dry_run_does_no_work(monkeypatch):
+    # dry_run must not touch the DB/S3 at all (no connect).
+    monkeypatch.setattr(_wdb, "connect", lambda: (_ for _ in ()).throw(AssertionError("connect on dry_run")))
+    result, artifact = handlers._report({"account": "1", "tier": "mid"}, dry_run=True)
+    assert result["dry_run"] is True and artifact is None

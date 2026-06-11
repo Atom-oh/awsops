@@ -748,3 +748,6 @@ ON CONFLICT (version) DO NOTHING;
 -- both grabbing v10) and `ON CONFLICT DO NOTHING` silently masked it.
 -- See migrations/README.md + docs/reviews/2026-06-11-migration-mechanism-consensus.md.
 -- ============================================================
+
+-- (diagnosis_reports moved to migrations/01KTVGKN1Q3JQ3EN46PPD708W0_diagnosis_reports.sql
+--  per the ULID migration convention — schema.sql is the frozen baseline; see migrations/README.md.)

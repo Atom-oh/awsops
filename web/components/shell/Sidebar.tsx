@@ -8,6 +8,7 @@ import {
   Archive, HardDrive, Database, Table, DatabaseZap, Search, Radio,
   Network, Waypoints, BrickWall, Globe, Scale, Split,
   KeyRound, Users, Shield, FileSearch, Bell,
+  Stethoscope, // /ai-diagnosis nav (this branch)
   type LucideIcon,
 } from 'lucide-react';
 import { INVENTORY_TYPES, inventoryGroups } from '@/lib/inventory-types';
@@ -20,6 +21,7 @@ import { cn } from '@/lib/cn';
 // Fixed top-level pages. `tkey` resolves the label via i18n.
 const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
   { href: '/', tkey: 'nav.overview', icon: LayoutDashboard },
+  { href: '/ai-diagnosis', tkey: 'nav.aiDiagnosis', icon: Stethoscope },
   { href: '/assistant', tkey: 'nav.assistant', icon: MessagesSquare },
   { href: '/jobs', tkey: 'nav.jobs', icon: Activity },
   { href: '/cost', tkey: 'nav.cost', icon: DollarSign },
