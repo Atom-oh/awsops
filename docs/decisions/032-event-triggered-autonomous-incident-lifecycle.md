@@ -95,9 +95,9 @@ Phased scope / 단계별 범위:
 - **Phase 3** — ⛔ **ABANDONED (2026-06-11 downgrade)** — Mitigation Plan generation routed through the reversed ADR-029/036. Not pursued; the lifecycle stops at RCA + recommendation (no mitigation execution). / **폐기(2026-06-11)** — 완화 계획 생성은 reversed 029/036 경유였으므로 미추진; 라이프사이클은 RCA+권고에서 멈춘다.
 - **Phase 4** — Proactive Prevention feedback loop from investigation history. / 조사 이력 기반 사전 예방 피드백 루프.
 
-**Deployment dependency (not just ADR status) / 배포 의존성 (ADR 상태가 아님)**: Phase 1 persists incident state in Aurora, so it is blocked on ADR-030's *implementation progress* — specifically ADR-030 **Phase 1 (Aurora provisioning + schema migration)** must be **deployed**, not merely Accepted. "ADR Accepted" ≠ "infrastructure deployed"; Phase 1 of this ADR cannot start until the Aurora `incident_lifecycle` tables physically exist. (Phases 2–3 additionally require ADR-029 and ADR-031 to advance from Proposed.)
+**Deployment dependency (not just ADR status) / 배포 의존성 (ADR 상태가 아님)**: Phase 1 persists incident state in Aurora, so it is blocked on ADR-030's *implementation progress* — specifically ADR-030 **Phase 1 (Aurora provisioning + schema migration)** must be **deployed**, not merely Accepted. "ADR Accepted" ≠ "infrastructure deployed"; Phase 1 of this ADR cannot start until the Aurora `incident_lifecycle` tables physically exist. (Phases 2–3 depended on ADR-029/031 — both REVERSED 2026-06-11; the mitigation path is abandoned, only read-only Triage/RCA remains.)
 
-**배포 의존성**: Phase 1은 인시던트 상태를 Aurora에 영속하므로 ADR-030의 *구현 진행*에 묶인다 — 구체적으로 ADR-030 **Phase 1(Aurora 프로비저닝 + 스키마 이전)** 이 단지 Accepted가 아니라 **배포 완료**되어야 한다. "ADR Accepted" ≠ "인프라 배포됨"; Aurora `incident_lifecycle` 테이블이 물리적으로 존재하기 전엔 본 ADR Phase 1을 시작할 수 없다. (Phase 2–3은 추가로 ADR-029·031의 Proposed 탈피가 필요.)
+**배포 의존성**: Phase 1은 인시던트 상태를 Aurora에 영속하므로 ADR-030의 *구현 진행*에 묶인다 — 구체적으로 ADR-030 **Phase 1(Aurora 프로비저닝 + 스키마 이전)** 이 단지 Accepted가 아니라 **배포 완료**되어야 한다. "ADR Accepted" ≠ "인프라 배포됨"; Aurora `incident_lifecycle` 테이블이 물리적으로 존재하기 전엔 본 ADR Phase 1을 시작할 수 없다. (Phase 2–3은 ADR-029/031에 의존했으나 둘 다 2026-06-11 REVERSED — mitigation 경로는 폐기, read-only Triage/RCA만 유지.)
 
 ### State machine failure semantics / 상태 머신 실패 시맨틱
 
