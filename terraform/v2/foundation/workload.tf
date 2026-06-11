@@ -242,6 +242,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "INCIDENT_MIN_SEVERITY_PARAM", value = one(aws_ssm_parameter.incident_min_severity[*].name) },
         # AgentCore runtime-ARN param (the synchronous read-only Triage/consult path).
         { name = "AGENTCORE_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" }
+        ] : [], var.eks_auto_register_enabled ? [
+        # EKS auto-register is on — the onboarding guide promises hands-free connection.
+        { name = "EKS_AUTO_REGISTER", value = "true" }
         ] : [], var.hybrid_routing_enabled ? [
         # ADR-038: hybrid routing flag + classifier model (BFF reads both at runtime).
         { name = "HYBRID_ROUTING_ENABLED", value = "true" },

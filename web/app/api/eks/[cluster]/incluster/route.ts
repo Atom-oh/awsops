@@ -1,5 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { listInCluster, isKind } from '@/lib/eks-incluster';
+import { isAllowed } from '@/lib/eks-registry';
 
 export const dynamic = 'force-dynamic';
 
@@ -7,8 +8,7 @@ export async function GET(request: Request, { params }: { params: { cluster: str
   if (!(await verifyUser(request.headers.get('cookie')))) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
-  const allow = (process.env.ONBOARDED_EKS_CLUSTERS || '').split(',').filter(Boolean);
-  if (!allow.includes(params.cluster)) {
+  if (!(await isAllowed(params.cluster))) {
     return Response.json({ status: 'error', message: 'unknown cluster' }, { status: 404 });
   }
   const kind = new URL(request.url).searchParams.get('kind') || '';

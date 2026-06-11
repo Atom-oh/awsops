@@ -21,10 +21,17 @@ describe('parseMem (→ MiB)', () => {
     expect(parseMem('2Gi')).toBe(2048);
     expect(parseMem('1Ti')).toBe(1024 * 1024);
   });
-  it('handles no-unit and empty', () => {
-    expect(parseMem('100')).toBe(100);
+  it('decimal SI suffixes are 1000-based bytes (P4: codex)', () => {
+    expect(parseMem('500M')).toBe(Math.round(500e6 / (1024 * 1024))); // 477 MiB
+    expect(parseMem('1G')).toBe(Math.round(1e9 / (1024 * 1024)));     // 954 MiB
+    expect(parseMem('128974848k')).toBe(Math.round(128974848e3 / (1024 * 1024)));
+  });
+  it('bare quantity is BYTES, not MiB (P4: codex)', () => {
+    expect(parseMem('134217728')).toBe(128); // 128 MiB in bytes
+    expect(parseMem('100')).toBe(0);         // 100 bytes rounds to 0 MiB
     expect(parseMem('')).toBe(0);
     expect(parseMem(null)).toBe(0);
+    expect(parseMem('abc')).toBe(0);
   });
 });
 
