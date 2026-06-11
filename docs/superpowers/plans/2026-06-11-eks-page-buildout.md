@@ -411,10 +411,10 @@ export async function GET(request: Request) {
           access = entry === true ? 'entry-only' : entry === false ? 'no-entry' : 'unknown';
         }
       }
-      return { ...c, access, runtime: allowed.has(c.name) && !isEnv, admin: undefined };
+      return { ...c, access, runtime: allowed.has(c.name) && !isEnv };
     }));
     const admin = await isAdmin(user);
-    return Response.json({ clusters: rows.map(({ admin: _a, ...r }) => r), admin });
+    return Response.json({ clusters: rows, admin });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
