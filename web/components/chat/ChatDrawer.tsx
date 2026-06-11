@@ -1,198 +1,162 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
+import { Menu, Plus, X, Maximize2, Minimize2, ExternalLink, Sparkles } from 'lucide-react';
 import SectionPicker from './SectionPicker';
 import PresetChips from './PresetChips';
 import Composer from './Composer';
-import MessageList, { type Msg } from './MessageList';
+import MessageList from './MessageList';
 import ThreadList from './ThreadList';
-import { sectionByKey } from '@/lib/sections';
-import type { ThreadSummary, ThreadMessage } from '@/lib/chat-store';
+import { useChat } from './useChat';
 
-function newSessionId(): string {
-  const s = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.round(Math.random() * 1e9)}`);
-  return s.length >= 33 ? s : s.padEnd(36, '0');
-}
-
-const SIDEBAR_W = 208;
+const THREADS_W = 240;
+const DEFAULT_W = 420;
+const MIN_W = 360;
 
 export default function ChatDrawer() {
+  const chat = useChat();
+  const router = useRouter();
+  const path = usePathname();
   const [open, setOpen] = useState(false);
-  const [pinned, setPinned] = useState<string | null>(null);
-  const [msgs, setMsgs] = useState<Msg[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [threadId, setThreadId] = useState<string | null>(null);
-  const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [showThreads, setShowThreads] = useState(false);
-  const sessionRef = useRef<string>('');
-  const abortRef = useRef<AbortController | null>(null);
-  const threadIdRef = useRef<string | null>(null); // mirrors threadId for use inside send()
-  const showThreadsRef = useRef(false);            // mirrors showThreads for post-send refresh
-  function setThread(id: string | null) {
-    threadIdRef.current = id;
-    setThreadId(id);
-    if (id) localStorage.setItem('awsops_chat_thread', id);
-    else localStorage.removeItem('awsops_chat_thread');
-  }
+  const [maximized, setMaximized] = useState(false);
+  const [width, setWidth] = useState(DEFAULT_W);
+  const widthRef = useRef(DEFAULT_W);
+  widthRef.current = width;
 
+  // Restore persisted width / maximized, and wire the cross-app "open chat" event.
   useEffect(() => {
-    let sid = localStorage.getItem('awsops_chat_session');
-    if (!sid) { sid = newSessionId(); localStorage.setItem('awsops_chat_session', sid); }
-    sessionRef.current = sid;
-    // Restore the active thread across reloads; selectThread cleans up a stale key on 404.
+    const w = Number(localStorage.getItem('awsops_chat_width'));
+    if (w >= MIN_W) setWidth(w);
+    if (localStorage.getItem('awsops_chat_maximized') === '1') setMaximized(true);
     const tid = localStorage.getItem('awsops_chat_thread');
-    if (tid) void selectThread(tid);
+    if (tid) void chat.selectThread(tid);
+    function onOpenChat(e: Event) {
+      setOpen(true);
+      const wanted = (e as CustomEvent).detail?.threadId as string | undefined;
+      if (wanted) void chat.selectThread(wanted); // selectThread only touches refs/setters — closure-safe
+    }
+    window.addEventListener('awsops:open-chat', onOpenChat);
+    return () => window.removeEventListener('awsops:open-chat', onOpenChat);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function newChat() {
-    abortRef.current?.abort();
-    const sid = newSessionId();
-    localStorage.setItem('awsops_chat_session', sid);
-    sessionRef.current = sid;
-    setThread(null); // previous conversation stays on the server — switching, not wiping
-    setMsgs([]); setBusy(false);
+  function toggleMax() {
+    setMaximized((m) => { const next = !m; try { localStorage.setItem('awsops_chat_maximized', next ? '1' : '0'); } catch {} return next; });
   }
 
-  async function refreshThreads() {
-    try {
-      const res = await fetch('/api/chat/threads');
-      const data = res.ok ? await res.json() : { threads: [] };
-      setThreads(Array.isArray(data.threads) ? data.threads : []);
-    } catch {
-      setThreads([]);
-    }
+  // Drag the left edge to resize; persist on release. Disengages maximize.
+  function startResize(e: React.MouseEvent) {
+    e.preventDefault();
+    setMaximized(false);
+    try { localStorage.setItem('awsops_chat_maximized', '0'); } catch {}
+    const onMove = (ev: MouseEvent) => {
+      const w = Math.min(Math.max(window.innerWidth - ev.clientX, MIN_W), window.innerWidth - 60);
+      setWidth(w);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = '';
+      try { localStorage.setItem('awsops_chat_width', String(Math.round(widthRef.current))); } catch {}
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    document.body.style.userSelect = 'none';
   }
 
-  function toggleThreads() {
-    const next = !showThreadsRef.current;
-    showThreadsRef.current = next;
-    setShowThreads(next);
-    if (next) void refreshThreads();
+  function popOut() {
+    chat.abort();
+    setOpen(false);
+    router.push('/assistant' + (chat.threadId ? `?thread=${chat.threadId}` : ''));
   }
 
-  async function selectThread(id: string) {
-    abortRef.current?.abort(); // P4 gate: an in-flight stream must not patch into the restored thread
-    setBusy(false);
-    try {
-      const res = await fetch(`/api/chat/threads/${id}`);
-      if (!res.ok) { // stale/foreign thread — clear so it doesn't stick as blank history (P2 r2)
-        if (threadIdRef.current === id || localStorage.getItem('awsops_chat_thread') === id) setThread(null);
-        return;
-      }
-      const data: { thread: ThreadSummary; messages: ThreadMessage[] } = await res.json();
-      setMsgs(data.messages.map((m) => {
-        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string };
-        return { role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: meta.ranked, method: meta.method };
-      }));
-      sessionRef.current = data.thread.sessionId;
-      localStorage.setItem('awsops_chat_session', data.thread.sessionId);
-      setThread(id);
-      // Claude-app style: keep the sidebar open — switching stays one click away.
-    } catch { /* degrade: keep current view */ }
-  }
-
-  async function removeThread(id: string) {
-    try { await fetch(`/api/chat/threads/${id}`, { method: 'DELETE' }); } catch { /* best-effort */ }
-    if (threadIdRef.current === id) newChat();
-    void refreshThreads();
-  }
-
-  async function send(prompt: string, overrideSection?: string, switchedFrom?: string) {
-    if (busy) return;
-    const history = msgs.map((m) => ({ role: m.role, content: m.content }));
-    setMsgs((m) => [...m, { role: 'user', content: prompt }, { role: 'assistant', content: '', streaming: true }]);
-    setBusy(true);
-    const ac = new AbortController();
-    abortRef.current = ac;
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST', signal: ac.signal,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, messages: history, section: overrideSection ?? pinned, switchedFrom, sessionId: sessionRef.current, threadId: threadIdRef.current ?? undefined }),
-      });
-      if (!res.ok || !res.body) {
-        patchLast((m) => ({ ...m, content: res.status === 401 ? '세션이 만료되었습니다. 새로고침해 주세요.' : 'AI 응답을 받지 못했습니다.', streaming: false }));
-        return;
-      }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const frames = buf.split('\n\n');
-        buf = frames.pop() ?? '';
-        for (const f of frames) handleFrame(f);
-      }
-    } catch {
-      patchLast((m) => ({ ...m, streaming: false }));
-    } finally {
-      patchLast((m) => ({ ...m, streaming: false }));
-      setBusy(false);
-      if (showThreadsRef.current) void refreshThreads(); // new title/order shows up immediately
-    }
-  }
-
-  function handleFrame(frame: string) {
-    const isMeta = frame.startsWith('event: meta');
-    const line = frame.split('\n').find((l) => l.startsWith('data:'));
-    if (!line) return;
-    const data = line.slice(5).trim();
-    if (data === '[DONE]') return;
-    try {
-      const obj = JSON.parse(data);
-      if (isMeta && obj.threadId) setThread(obj.threadId); // server-issued thread (first message mints it)
-      if (isMeta && obj.gateway) patchLast((m) => ({ ...m, gateway: obj.gateway, ranked: obj.ranked, method: obj.method }));
-      else if (obj.delta !== undefined) patchLast((m) => ({ ...m, content: m.content + obj.delta }));
-      else if (obj.error) patchLast((m) => ({ ...m, content: `⚠️ ${obj.error}`, streaming: false }));
-    } catch { /* heartbeat / non-JSON */ }
-  }
-  function patchLast(fn: (m: Msg) => Msg) {
-    setMsgs((arr) => arr.map((m, i) => (i === arr.length - 1 && m.role === 'assistant' ? fn(m) : m)));
-  }
-  function resendWith(sectionKey: string) {
-    const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
-    const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant');
-    // Only count as a misroute candidate if the previous answer came from a LIVE agent —
-    // switching away from an inactive-section guidance bubble is not a misroute (ADR-038 §5).
-    const prevGateway = lastAssistant?.gateway;
-    const switchedFrom = prevGateway && sectionByKey(prevGateway)?.active ? prevGateway : undefined;
-    if (lastUser) void send(lastUser.content, sectionKey, switchedFrom);
-  }
+  // The /assistant page is the full-screen surface — no floating drawer there.
+  if (path === '/assistant') return null;
 
   if (!open) {
     return (
-      <button onClick={() => setOpen(true)} aria-label="AI 어시스턴트 열기"
-        style={{ position: 'fixed', right: 16, bottom: 16, width: 46, height: 46, borderRadius: '50%', background: '#00d4ff', color: '#06121f', border: 'none', fontSize: 20, fontWeight: 800, cursor: 'pointer', boxShadow: '0 4px 14px #00d4ff55' }}>✦</button>
+      <button
+        onClick={() => setOpen(true)}
+        aria-label="AI 어시스턴트 열기"
+        className="fixed bottom-5 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-claude-500 text-white shadow-pop transition-colors hover:bg-claude-600"
+      >
+        <Sparkles size={20} strokeWidth={2} />
+      </button>
     );
   }
+
+  const totalWidth = maximized ? '96vw' : `${width + (chat.showThreads ? THREADS_W : 0)}px`;
+
   return (
-    <div style={{ position: 'fixed', right: 0, top: 0, height: '100vh', width: showThreads ? 460 + SIDEBAR_W : 460, background: '#0f1629', borderLeft: '2px solid #00d4ff', boxShadow: '-12px 0 28px #000a', display: 'flex', flexDirection: 'column', zIndex: 50, transition: 'width 160ms ease' }}>
-      <div style={{ padding: '10px 12px', borderBottom: '1px solid #1a2540', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button onClick={toggleThreads} title="대화 목록" aria-label="대화 목록"
-            style={{ ...iconBtn, marginLeft: 0, color: showThreads ? '#00d4ff' : '#7da2c9' }}>☰</button>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>AWSops Assistant</span>
-        </span>
-        <span>
-          <button onClick={newChat} title="새 대화" style={iconBtn}>＋</button>
-          <button onClick={() => { abortRef.current?.abort(); setOpen(false); }} title="닫기" style={iconBtn}>✕</button>
-        </span>
+    <div
+      className="fixed right-0 top-0 z-50 flex h-screen flex-col border-l border-ink-100 bg-paper shadow-pop"
+      style={{ width: totalWidth }}
+    >
+      {/* resize grip (hidden while maximized) */}
+      {!maximized && (
+        <div
+          onMouseDown={startResize}
+          title="드래그하여 폭 조절"
+          aria-label="패널 폭 조절"
+          role="separator"
+          className="group absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize"
+        >
+          <div className="absolute left-0 top-0 h-full w-px bg-ink-100 transition-colors group-hover:w-0.5 group-hover:bg-claude-400" />
+        </div>
+      )}
+
+      {/* header */}
+      <div className="flex items-center justify-between border-b border-ink-100 px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <IconBtn onClick={chat.toggleThreads} title="대화 목록" label="대화 목록" active={chat.showThreads}><Menu size={16} /></IconBtn>
+          <span className="flex items-center gap-1.5 text-[13px] font-semibold text-ink-800">
+            <Sparkles size={14} className="text-claude-500" /> AWSops Assistant
+          </span>
+        </div>
+        <div className="flex items-center gap-0.5">
+          <IconBtn onClick={popOut} title="전체화면으로 열기" label="전체화면으로 열기"><ExternalLink size={15} /></IconBtn>
+          <IconBtn onClick={toggleMax} title={maximized ? '복원' : '최대화'} label={maximized ? '복원' : '최대화'}>
+            {maximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </IconBtn>
+          <IconBtn onClick={chat.newChat} title="새 대화" label="새 대화"><Plus size={16} /></IconBtn>
+          <IconBtn onClick={() => { chat.abort(); setOpen(false); }} title="닫기" label="닫기"><X size={16} /></IconBtn>
+        </div>
       </div>
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        {showThreads && (
-          <div style={{ width: SIDEBAR_W, flexShrink: 0, borderRight: '1px solid #1a2540' }}>
-            <ThreadList threads={threads} activeId={threadId} onSelect={selectThread} onDelete={removeThread} onNew={newChat} />
+
+      <div className="flex min-h-0 flex-1">
+        {chat.showThreads && (
+          <div className="shrink-0 border-r border-ink-100" style={{ width: THREADS_W }}>
+            <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onNew={chat.newChat} />
           </div>
         )}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <SectionPicker pinned={pinned} onPin={setPinned} />
-          {msgs.length === 0 ? <PresetChips pinned={pinned} onPick={send} /> : <MessageList msgs={msgs} onSwitch={resendWith} />}
-          <Composer disabled={busy} onSend={send} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <SectionPicker pinned={chat.pinned} onPin={chat.setPinned} />
+          <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+            {chat.msgs.length === 0
+              ? <PresetChips pinned={chat.pinned} onPick={chat.send} />
+              : <MessageList msgs={chat.msgs} onSwitch={chat.resendWith} />}
+            <Composer disabled={chat.busy} onSend={chat.send} />
+          </div>
         </div>
       </div>
     </div>
   );
 }
-const iconBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#7da2c9', fontSize: 15, cursor: 'pointer', marginLeft: 8 };
+
+function IconBtn({ onClick, title, label, active, children }: {
+  onClick: () => void; title: string; label: string; active?: boolean; children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={label}
+      className={
+        'flex h-7 w-7 items-center justify-center rounded-md transition-colors ' +
+        (active ? 'bg-claude-50 text-claude-600' : 'text-ink-400 hover:bg-ink-100 hover:text-ink-800')
+      }
+    >
+      {children}
+    </button>
+  );
+}

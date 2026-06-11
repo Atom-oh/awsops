@@ -1,15 +1,28 @@
 'use client';
 import { useState } from 'react';
+import { ArrowUp } from 'lucide-react';
 
 export default function Composer({ disabled, onSend }: { disabled: boolean; onSend: (text: string) => void }) {
   const [text, setText] = useState('');
   const send = () => { const t = text.trim(); if (t && !disabled) { onSend(t); setText(''); } };
   return (
-    <div style={{ padding: '10px 12px', borderTop: '1px solid #1a2540', display: 'flex', gap: 7 }}>
-      <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()}
-        placeholder="메시지를 입력하세요…" disabled={disabled}
-        style={{ flex: 1, height: 32, background: '#0a0e1a', border: '1px solid #2a3a5c', borderRadius: 8, color: '#e6eefb', padding: '0 10px' }} />
-      <button onClick={send} disabled={disabled} style={{ width: 32, height: 32, borderRadius: 8, background: '#00d4ff', color: '#06121f', border: 'none', fontWeight: 800, cursor: 'pointer' }}>➤</button>
+    <div className="flex items-center gap-2 border-t border-ink-100 px-3 py-3">
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && send()}
+        placeholder="메시지를 입력하세요…"
+        disabled={disabled}
+        className="h-9 flex-1 rounded-lg border border-ink-200 bg-white px-3 text-[13px] text-ink-800 placeholder:text-ink-400 outline-none transition-shadow focus:border-claude-300 focus:shadow-focus disabled:opacity-60"
+      />
+      <button
+        onClick={send}
+        disabled={disabled}
+        aria-label="보내기"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-claude-500 text-white transition-colors hover:bg-claude-600 disabled:opacity-40"
+      >
+        <ArrowUp size={17} strokeWidth={2.4} />
+      </button>
     </div>
   );
 }
