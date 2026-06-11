@@ -51,6 +51,7 @@ function MarkdownImpl({ children }: { children: string }) {
           thead: ({ children }) => <thead className="bg-paper-muted">{children}</thead>,
           th: ({ children }) => <th className="border-b border-ink-100 px-2.5 py-1.5 text-left font-semibold text-ink-800">{children}</th>,
           td: ({ children }) => <td className="border-b border-ink-100 px-2.5 py-1.5 align-top text-ink-600">{children}</td>,
+          // eslint-disable-next-line @next/next/no-img-element -- markdown images are arbitrary external URLs; next/image can't optimize them
           img: ({ src, alt }) => <img src={typeof src === 'string' ? src : undefined} alt={alt ?? ''} className="my-2 max-w-full rounded-md border border-ink-100" />,
         }}
       >
