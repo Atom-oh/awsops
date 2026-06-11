@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Box, Activity, DollarSign,
   Server, Database, Network, ShieldCheck,
-  Sparkles, Gauge,
+  Sparkles, Gauge, PiggyBank,
   LogOut,
   type LucideIcon,
 } from 'lucide-react';
@@ -23,6 +23,7 @@ const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
   { href: '/cost', tkey: 'nav.cost', icon: DollarSign },
   { href: '/bedrock', tkey: 'nav.bedrock', icon: Gauge },
   { href: '/topology', tkey: 'nav.topology', icon: Network },
+  { href: '/opencost', tkey: 'nav.opencost', icon: PiggyBank },
   { href: '/customization', tkey: 'nav.customAgents', icon: Sparkles },
 ];
 
