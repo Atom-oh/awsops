@@ -1,0 +1,58 @@
+import { NextResponse } from 'next/server';
+import { verifyUser } from '@/lib/auth';
+import {
+  listReports,
+  createReport,
+  linkReportJob,
+  reportForIdempotencyKey,
+  markReportFailed,
+} from '@/lib/diagnosis';
+import { enqueueJob } from '@/lib/jobs';
+
+export const dynamic = 'force-dynamic';
+
+export async function GET(req: Request) {
+  const user = await verifyUser(req.headers.get('cookie'));
+  if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
+  return NextResponse.json({ reports: await listReports(50) });
+}
+
+export async function POST(req: Request) {
+  const user = await verifyUser(req.headers.get('cookie'));
+  if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
+
+  let body: any = {};
+  try {
+    body = await req.json();
+  } catch {
+    /* empty body OK */
+  }
+  const tier = body?.tier === 'light' ? 'light' : 'mid'; // deep gated out of MVP
+  const account = process.env.AWS_ACCOUNT_ID || '';
+  const email = user.email || user.sub;
+
+  // [GATE-FIX R2 CRITICAL] Idempotency-FIRST → create the report with NULL fk → enqueue (inserts
+  // worker_jobs) → LINK. The FK is only set once worker_jobs(job_id) exists.
+  const hour = new Date().toISOString().slice(0, 13);
+  const key = `report:${email}:${tier}:${hour}`;
+
+  const existing = await reportForIdempotencyKey(key);
+  if (existing) {
+    return NextResponse.json({ report_id: existing, tier, deduped: true }, { status: 202 });
+  }
+
+  const reportId = await createReport(tier, email); // worker_job_id = NULL (FK-safe)
+  let job: { job_id: string; status: string };
+  try {
+    job = await enqueueJob(
+      'report',
+      { account, tier, requested_by: email, report_id: reportId },
+      { idempotencyKey: key },
+    );
+  } catch (e) {
+    await markReportFailed(reportId, 'enqueue failed'); // no orphan running row
+    throw e;
+  }
+  await linkReportJob(reportId, job.job_id); // FK now satisfiable
+  return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier }, { status: 202 });
+}
