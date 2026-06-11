@@ -117,3 +117,49 @@ def test_cw_metrics_wired_into_compute_and_db_sections():
     by_key = {s["key"]: s for s in sections.SECTIONS}
     assert "cw_metrics" in by_key["compute_infrastructure"]["sources"]
     assert "cw_metrics" in by_key["database_storage"]["sources"]
+
+
+# --- Task 5: report.py ---------------------------------------------------
+
+from diagnosis import report
+
+
+def test_build_markdown_has_toc_and_all_sections():
+    rendered = [
+        {"key": "executive_summary", "title": "Executive Summary", "body": "요약 본문"},
+        {"key": "security_posture", "title": "Security Posture", "body": "보안 본문"},
+    ]
+    md = report.build_markdown(rendered, account="180294183052", tier="mid")
+    assert md.startswith("# AWS 진단 리포트") or md.startswith("# AWSops")
+    assert "## Executive Summary" in md and "## Security Posture" in md
+    assert "요약 본문" in md and "보안 본문" in md
+    # TOC lists both sections
+    assert "Executive Summary" in md.split("##", 1)[0]
+
+
+def test_render_section_uses_only_its_sources(monkeypatch):
+    captured = {}
+
+    def fake_invoke(prompt, context_json):
+        captured["context"] = context_json
+        return "섹션 본문"
+
+    monkeypatch.setattr(report, "_bedrock_render", fake_invoke)
+    collected = {
+        "inventory": {"key": "inventory", "ok": True, "data": {"by_type": {"ec2": 3}}},
+        "cost": {"key": "cost", "ok": True, "data": {"mtd_by_service": {"EC2": 12.5}}},
+        "posture": {"key": "posture", "ok": True, "data": {}},
+    }
+    sec = {"key": "cost_overview", "title": "Cost Overview", "sources": ["cost"], "prompt": "p"}
+    out = report.render_section(sec, collected)
+    assert out["body"] == "섹션 본문"
+    # context must include cost but not inventory (section only declares 'cost')
+    assert "mtd_by_service" in captured["context"]
+    assert "by_type" not in captured["context"]
+
+
+def test_redact_strips_pii():
+    from diagnosis import report as rpt
+    s = rpt._redact('arn:aws:iam::123456789012:role/x user a@b.io ip 10.0.0.1 AKIAABCDEFGHIJKLMNOP')
+    assert 'arn:aws' not in s and '123456789012' not in s and 'a@b.io' not in s
+    assert '10.0.0.1' not in s and 'AKIA' not in s
