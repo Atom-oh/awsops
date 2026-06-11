@@ -76,9 +76,20 @@ async function main() {
       if (!BOOTSTRAP) die('schema_migrations.version is INTEGER but ULID migrations are pending.\n  Bootstrap required (controller-confirmed, run during a coordinated quiet window):\n    BOOTSTRAP=1 make migrate');
       console.log('[bootstrap] ALTER version→TEXT + ADD checksum + baseline marker');
       if (!DRY) {
-        await client.query('ALTER TABLE schema_migrations ALTER COLUMN version TYPE TEXT USING version::text');
-        await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT');
-        await client.query(`INSERT INTO schema_migrations(version, applied_at, description) VALUES ('baseline', now(), 'schema.sql baseline; future migrations are ULID files') ON CONFLICT (version) DO NOTHING`);
+        // All three are transactional DDL/DML in PostgreSQL — run them as ONE atomic unit so a
+        // crash/lock-timeout mid-bootstrap can't leave the column TEXT but the baseline marker
+        // missing (the integer→text gate at line 75 would then never re-insert it). Rolls back to
+        // the clean INTEGER state on any failure → fully re-runnable.
+        try {
+          await client.query('BEGIN');
+          await client.query('ALTER TABLE schema_migrations ALTER COLUMN version TYPE TEXT USING version::text');
+          await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT');
+          await client.query(`INSERT INTO schema_migrations(version, applied_at, description) VALUES ('baseline', now(), 'schema.sql baseline; future migrations are ULID files') ON CONFLICT (version) DO NOTHING`);
+          await client.query('COMMIT');
+        } catch (e) {
+          await client.query('ROLLBACK').catch(() => {});
+          die(`bootstrap failed (rolled back to INTEGER): ${e instanceof Error ? e.message : e}`);
+        }
       }
     } else if (!hasChecksum && !DRY && pending.length > 0) {
       await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT');
