@@ -114,6 +114,8 @@ interface K8sItem {
     clusterIP?: string;
     ports?: { port?: number; protocol?: string }[];
     containers?: { resources?: { requests?: Record<string, string> } }[];
+    initContainers?: { resources?: { requests?: Record<string, string> } }[];
+    overhead?: Record<string, string>;
   };
   // core /api/v1 Event fields (read by normalizeEvent)
   involvedObject?: { kind?: string; name?: string };
@@ -122,6 +124,7 @@ interface K8sItem {
   count?: number;
   lastTimestamp?: string;
   eventTime?: string;
+  series?: { lastObservedTime?: string };
   type?: string;
 }
 
@@ -173,7 +176,12 @@ export function normalizeNode(it: K8sItem): NodeRow {
 
 export function normalizePod(it: K8sItem): PodRow {
   const restarts = (it.status?.containerStatuses ?? []).reduce((s, c) => s + (c.restartCount ?? 0), 0);
-  const requests = (it.spec?.containers ?? []).map((c) => c.resources?.requests ?? {});
+  // Effective pod request = max(sum(app containers), max(init container)) + overhead —
+  // the scheduler's reservation semantics, so node bars match `kubectl describe node`
+  // (P4 gate: codex — app-container sum alone underreports init-heavy pods).
+  const app = (it.spec?.containers ?? []).map((c) => c.resources?.requests ?? {});
+  const init = (it.spec?.initContainers ?? []).map((c) => c.resources?.requests ?? {});
+  const eff = (sum: number, mx: number, overhead: number) => Math.max(sum, mx) + overhead;
   return {
     name: it.metadata?.name ?? '',
     namespace: it.metadata?.namespace ?? '',
@@ -181,8 +189,16 @@ export function normalizePod(it: K8sItem): PodRow {
     node: it.spec?.nodeName ?? '',
     restarts,
     age: age(it.metadata?.creationTimestamp),
-    cpuRequest: requests.reduce((s, r) => s + parseCpuCores(r.cpu), 0),
-    memRequest: requests.reduce((s, r) => s + parseMem(r.memory), 0),
+    cpuRequest: eff(
+      app.reduce((s, r) => s + parseCpuCores(r.cpu), 0),
+      init.reduce((mx, r) => Math.max(mx, parseCpuCores(r.cpu)), 0),
+      parseCpuCores(it.spec?.overhead?.cpu),
+    ),
+    memRequest: eff(
+      app.reduce((s, r) => s + parseMem(r.memory), 0),
+      init.reduce((mx, r) => Math.max(mx, parseMem(r.memory)), 0),
+      parseMem(it.spec?.overhead?.memory),
+    ),
   };
 }
 
@@ -226,7 +242,10 @@ export function normalizeEvent(it: K8sItem): EventRow {
   const name = it.involvedObject?.name ?? '';
   // events.k8s.io/v1 renames count/lastTimestamp → deprecatedCount/series; the
   // core /api/v1/events endpoint preserves the fields these fallbacks read.
-  const ts = it.lastTimestamp ?? it.eventTime ?? it.metadata?.creationTimestamp ?? '';
+  // series.lastObservedTime is the freshest signal for high-frequency events
+  // (kubectl LAST SEEN order) — then lastTimestamp → eventTime → creationTimestamp
+  // (P4 gate: gemini).
+  const ts = it.series?.lastObservedTime ?? it.lastTimestamp ?? it.eventTime ?? it.metadata?.creationTimestamp ?? '';
   const tsMs = ts ? Date.parse(ts) : 0;
   return {
     kind: it.involvedObject?.kind ?? '',

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import DataTable from '@/components/ui/DataTable';
 import Badge from '@/components/ui/Badge';
@@ -58,10 +58,15 @@ export default function EksPage() {
       .then((d) => { setRows(d.clusters); setAdmin(!!d.admin); })
       .catch((e) => setErr(String(e)));
   }, []);
+  // Monotonic fleet sequence — register/unregister re-fetches must not be
+  // overwritten by an older in-flight response (P4 gate: codex). Failures keep
+  // the previous fleet (best-effort live data beats a blank page).
+  const fleetSeqRef = useRef(0);
   const loadFleet = useCallback(() => { // fleet-wide live aggregates (v1 K8s-Overview parity) — best-effort
+    const seq = ++fleetSeqRef.current;
     fetch('/api/eks/fleet')
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setFleet(d?.clusters ?? []))
+      .then((d) => { if (d && seq === fleetSeqRef.current) setFleet(d.clusters ?? []); })
       .catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -205,6 +210,7 @@ export default function EksPage() {
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[12px]">
+                  <div><span className="text-ink-400">Status</span> <span className={c.status === 'ACTIVE' ? 'text-emerald-700' : 'text-ink-700'}>{c.status || '—'}</span></div>
                   <div><span className="text-ink-400">Version</span> <span className="text-ink-700">{c.version}</span></div>
                   <div><span className="text-ink-400">Region</span> <span className="text-ink-700">{c.region}</span></div>
                   <div><span className="text-ink-400">VPC</span> <span className="text-ink-700">{c.vpcId || '—'}</span></div>

@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { Search, X } from 'lucide-react';
 import DataTable, { type Column } from '@/components/ui/DataTable';
@@ -120,7 +120,14 @@ export default function EksClusterPage() {
   const [ns, setNs] = useState('전체');
   const [selected, setSelected] = useState<Row | null>(null);
 
+  // Monotonic load sequence — a late response from a superseded load (rapid
+  // tab/cluster switch) must not write stale rows/nodeAgg over the newer view
+  // (P4 gate: kimi-k2.5).
+  const loadSeqRef = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
+    const fresh = () => seq === loadSeqRef.current;
     setRows(null);
     setNodeAgg(null);
     setDiag(null);
@@ -130,6 +137,7 @@ export default function EksClusterPage() {
       // NOT {rows}. 503 (flag off) → degrade-safe disabled state, no thrown error.
       if (tab === 'diagnosis') {
         const r = await fetch(`/api/eks/${encodeURIComponent(cluster)}/k8sgpt`);
+        if (!fresh()) return;
         if (r.status === 503) {
           setDiag({ enabled: false, stale: true, findings: [] });
           return;
@@ -138,33 +146,36 @@ export default function EksClusterPage() {
           const d = await r.json().catch(() => null);
           throw new Error(d?.message ? String(d.message) : String(r.status));
         }
-        setDiag((await r.json()) as DiagnosisResult);
+        const diagBody = (await r.json()) as DiagnosisResult;
+        if (fresh()) setDiag(diagBody);
         return;
       }
+      // Nodes tab also needs pods for the per-node request aggregation — fire both
+      // fetches concurrently so the table and the bars land in one paint instead of
+      // table-then-bars (P4 gate: gemini). The pods leg is best-effort (null on failure).
+      const podsP = tab === 'nodes'
+        ? fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=pods`)
+            .then((pr) => (pr.ok ? pr.json() : null)).catch(() => null)
+        : null;
       const r = await fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=${tab}`);
       if (!r.ok) {
         const d = await r.json().catch(() => null);
         throw new Error(d?.message ? String(d.message) : String(r.status));
       }
       const d = await r.json();
+      if (!fresh()) return;
       // Events have no stable server order → sort newest-first (an unsorted
       // events table is a defect). Other kinds pass through untouched.
       const sorted = tab === 'events'
         ? [...(d.rows as Row[])].sort((a, b) => Number(b.lastSeenTs ?? 0) - Number(a.lastSeenTs ?? 0))
         : (d.rows as Row[]);
       setRows(sorted);
-      // Nodes tab: also pull pods to aggregate per-node CPU/memory requests (best-effort).
-      if (tab === 'nodes') {
-        try {
-          const pr = await fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=pods`);
-          if (pr.ok) {
-            const pd = await pr.json();
-            setNodeAgg(aggregateNodeResources((d.rows ?? []) as NodeRow[], (pd.rows ?? []) as PodRow[]));
-          }
-        } catch { /* pods fetch is best-effort — the node table still renders without the viz */ }
+      if (podsP) {
+        const pd = await podsP;
+        if (pd && fresh()) setNodeAgg(aggregateNodeResources((d.rows ?? []) as NodeRow[], (pd.rows ?? []) as PodRow[]));
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      if (fresh()) setErr(e instanceof Error ? e.message : String(e));
     }
   }, [cluster, tab]);
 

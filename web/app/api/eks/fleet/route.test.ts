@@ -37,6 +37,9 @@ describe('GET /api/eks/fleet', () => {
     expect(c.podsByNamespace).toEqual([{ namespace: 'default', count: 1 }]);
     expect(c.events[0].reason).toBe('BackOff');
     expect(JSON.stringify(body)).not.toContain('"restarts"'); // raw pod rows must not ship
+    expect(c).not.toHaveProperty('pods');      // schema check — aggregates only (P4: codex)
+    expect(c).not.toHaveProperty('nodes');
+    expect(c).not.toHaveProperty('serviceTypes'); // deliberately excluded from the payload
   });
   it('degrades a failing cluster to reachable:false (never 500)', async () => {
     getAllowedClusters.mockResolvedValue(new Set(['ok', 'down']));

@@ -178,6 +178,29 @@ describe('normalizeEvent', () => {
     expect(row.object).toBe('n1'); // no namespace → name only
     expect(row.lastSeenTs).toBe(Date.parse('2026-06-11T00:30:00Z'));
   });
+  it('prefers series.lastObservedTime over lastTimestamp (high-frequency events, P4: gemini)', () => {
+    const row = normalizeEvent({
+      metadata: { namespace: 'a', creationTimestamp: '2026-06-11T00:00:00Z' },
+      involvedObject: { kind: 'Pod', name: 'p' }, reason: 'X', message: 'm',
+      lastTimestamp: '2026-06-11T01:00:00Z',
+      series: { lastObservedTime: '2026-06-11T02:00:00Z' },
+    });
+    expect(row.lastSeenTs).toBe(Date.parse('2026-06-11T02:00:00Z'));
+  });
+  it('pod: effective request = max(app sum, init max) + overhead (P4: codex)', () => {
+    const row = normalizePod({
+      metadata: { name: 'p', namespace: 'd' },
+      status: { phase: 'Running' },
+      spec: {
+        nodeName: 'n1',
+        containers: [{ resources: { requests: { cpu: '200m', memory: '256Mi' } } }],
+        initContainers: [{ resources: { requests: { cpu: '1', memory: '128Mi' } } }],
+        overhead: { cpu: '50m', memory: '64Mi' },
+      },
+    });
+    expect(row.cpuRequest).toBeCloseTo(1.05); // max(0.2, 1) + 0.05
+    expect(row.memRequest).toBe(320);         // max(256, 128) + 64
+  });
   it('falls back to creationTimestamp when lastTimestamp/eventTime absent', () => {
     const row = normalizeEvent({
       metadata: { creationTimestamp: '2026-06-11T00:00:00Z' },
