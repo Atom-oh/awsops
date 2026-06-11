@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import DataTable from '@/components/ui/DataTable';
 import Badge from '@/components/ui/Badge';
+import StatCard from '@/components/ui/StatCard';
 
 // EKS cluster list — v1-parity columns + access badge + runtime registration
 // (the v2 equivalent of v1's "Register kubeconfig": Access-Entry holders register
@@ -13,7 +14,9 @@ interface Cluster {
   vpcId?: string; platformVersion?: string;
   access: 'connected' | 'entry-only' | 'no-entry' | 'unknown';
   runtime?: boolean;
+  guide?: Guide;
 }
+interface Summary { clusters: number; reachable: number; nodes: number; pods: number; deployments: number; services: number }
 interface Guide { commands: string[]; note: string }
 
 export default function EksPage() {
@@ -23,6 +26,7 @@ export default function EksPage() {
   const [notice, setNotice] = useState('');
   const [guide, setGuide] = useState<{ cluster: string; data: Guide } | null>(null);
   const [busyCluster, setBusyCluster] = useState('');
+  const [summary, setSummary] = useState<Summary | null>(null);
 
   const load = useCallback(() => {
     fetch('/api/eks')
@@ -31,6 +35,9 @@ export default function EksPage() {
       .catch((e) => setErr(String(e)));
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { // fleet-wide live counts (v1 K8s-Overview parity) — best-effort
+    fetch('/api/eks/summary').then((r) => (r.ok ? r.json() : null)).then(setSummary).catch(() => {});
+  }, []);
 
   async function register(cluster: string) {
     setBusyCluster(cluster); setNotice(''); setGuide(null);
@@ -72,8 +79,8 @@ export default function EksPage() {
         {admin && (c.access === 'entry-only' || c.access === 'unknown') && (
           <button className={btn} disabled={busyCluster === c.name} onClick={() => register(c.name)}>조회 등록</button>
         )}
-        {admin && c.access === 'no-entry' && (
-          <button className={btn} disabled={busyCluster === c.name} onClick={() => register(c.name)}>온보딩 가이드</button>
+        {c.access !== 'connected' && c.guide && (
+          <button className={btn} onClick={() => setGuide({ cluster: c.name, data: c.guide! })}>스크립트</button>
         )}
         {admin && c.runtime && (
           <button className={btn} disabled={busyCluster === c.name} onClick={() => unregister(c.name)}>해제</button>
@@ -88,6 +95,16 @@ export default function EksPage() {
         <h1 className="text-[15px] font-semibold text-ink-800">EKS Clusters</h1>
         <p className="text-[12px] text-ink-400">Access Entry가 있는 클러스터는 바로 조회 등록할 수 있습니다 (v1의 kubeconfig 등록 대체).</p>
       </div>
+      {summary && (
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+          <StatCard label="Clusters" value={summary.clusters === 0 ? (rows?.length ?? 0) : summary.clusters} />
+          <StatCard label="Connected" value={summary.reachable} />
+          <StatCard label="Nodes" value={summary.nodes} />
+          <StatCard label="Pods" value={summary.pods} />
+          <StatCard label="Deployments" value={summary.deployments} />
+          <StatCard label="Services" value={summary.services} />
+        </div>
+      )}
       {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
       {notice && <div className="text-[13px] text-claude-700">{notice}</div>}
       {!rows && !err && <div className="text-ink-400">로딩 중…</div>}

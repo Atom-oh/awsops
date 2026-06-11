@@ -62,7 +62,7 @@ describe('eks-access', () => {
     expect(g.commands[0]).toContain('--cluster-name my-c');
     expect(g.commands[0]).toContain('arn:aws:iam::1:role/awsops-v2-task');
     expect(g.commands[1]).toContain('associate-access-policy');
-    expect(g.commands[1]).toContain('AmazonEKSViewPolicy');
+    expect(g.commands[1]).toContain('AmazonEKSAdminViewPolicy');
     expect(g.note).toContain('make configure');
   });
 });

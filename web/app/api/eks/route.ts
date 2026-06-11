@@ -1,7 +1,7 @@
 import { verifyUser } from '@/lib/auth';
 import { listClusters } from '@/lib/aws';
 import { getAllowedClusters, isEnvCluster } from '@/lib/eks-registry';
-import { hasAccessEntry } from '@/lib/eks-access';
+import { hasAccessEntry, onboardingGuide } from '@/lib/eks-access';
 import { isAdmin } from '@/lib/admin';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +30,10 @@ export async function GET(request: Request) {
           access = entry === true ? 'entry-only' : entry === false ? 'no-entry' : 'unknown';
         }
       }
-      return { ...c, access, runtime: allowed.has(c.name) && !isEnv };
+      // v1 parity: the onboarding script is ALWAYS visible for not-yet-connected clusters
+      // (role ARN is cached — per-row cost is string templating only).
+      const guide = access === 'connected' ? undefined : await onboardingGuide(c.name);
+      return { ...c, access, runtime: allowed.has(c.name) && !isEnv, guide };
     }));
     const admin = await isAdmin(user);
     return Response.json({ clusters: rows, admin });

@@ -37,6 +37,7 @@ describe('GET /api/eks access synthesis', () => {
     getAllowedClusters.mockResolvedValue(new Set(['env-a', 'rt-ok', 'rt-revoked']));
     isEnvCluster.mockImplementation((n: string) => n === 'env-a');
     hasAccessEntry.mockImplementation(async (n: string) => (n === 'rt-ok' || n === 'b' ? true : false));
+    onboardingGuide.mockResolvedValue({ commands: ['c1', 'c2'], note: 'n' });
     const { GET } = await import('./route');
     const body = await (await GET(req('GET'))).json();
     const by = Object.fromEntries(body.clusters.map((c: { name: string; access: string }) => [c.name, c.access]));
@@ -45,6 +46,11 @@ describe('GET /api/eks access synthesis', () => {
     expect(body.admin).toBe(true);
     const rt = body.clusters.find((c: { name: string }) => c.name === 'rt-ok');
     expect(rt.runtime).toBe(true);
+    // v1 parity: not-connected rows always carry the onboarding script
+    const cold = body.clusters.find((c: { name: string }) => c.name === 'c');
+    expect(cold.guide.commands).toHaveLength(2);
+    const conn = body.clusters.find((c: { name: string }) => c.name === 'env-a');
+    expect(conn.guide).toBeUndefined();
   });
 });
 

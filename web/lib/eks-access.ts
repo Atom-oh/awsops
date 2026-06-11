@@ -45,7 +45,7 @@ export async function onboardingGuide(cluster: string): Promise<OnboardingGuide>
   return {
     commands: [
       `aws eks create-access-entry --cluster-name ${cluster} --region ${REGION} --principal-arn ${arn} --type STANDARD`,
-      `aws eks associate-access-policy --cluster-name ${cluster} --region ${REGION} --principal-arn ${arn} --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy --access-scope type=cluster`,
+      `aws eks associate-access-policy --cluster-name ${cluster} --region ${REGION} --principal-arn ${arn} --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy --access-scope type=cluster`,
     ],
     note: '명령 실행 후 [조회 등록]을 다시 누르세요. 영구 온보딩(Terraform)은 make configure → onboard_eks_clusters 를 사용하세요.',
   };

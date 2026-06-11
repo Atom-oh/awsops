@@ -18,12 +18,16 @@ resource "aws_eks_access_entry" "web" {
   type          = "STANDARD"
 }
 
-# Bind the AWS-managed read-only View policy at cluster scope.
+# Bind the AWS-managed read-only AdminView policy at cluster scope.
+# AdminView (not View): AmazonEKSViewPolicy mirrors the k8s 'view' ClusterRole and has NO
+# cluster-scoped resources — listing nodes 403s. AdminViewPolicy is */*/get,list,watch.
+# It can read Secrets, but the BFF only proxies an allow-listed set of kinds
+# (nodes/pods/deployments/services/namespaces in eks-incluster.ts) — secrets never transit.
 resource "aws_eks_access_policy_association" "web_view" {
   for_each      = toset(var.onboard_eks_clusters)
   cluster_name  = each.value
   principal_arn = aws_iam_role.task.arn
-  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
   access_scope {
     type = "cluster"
   }
