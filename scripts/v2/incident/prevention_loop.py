@@ -116,8 +116,10 @@ def lambda_handler(_event, _ctx):
     conn = db.connect()
     try:
         rows = conn.run(
+            # make_interval(days => int) — no string-concat interval (PR #36 r4: the window now
+            # arrives from SSM at runtime; int-typed param removes the injection-shaped pattern).
             "SELECT id::text, rca, services, severity FROM incidents "
-            "WHERE rca IS NOT NULL AND last_event_at > now() - (:w || ' days')::interval", w=str(window))
+            "WHERE rca IS NOT NULL AND last_event_at > now() - make_interval(days => :w)", w=int(window))
         incidents = [
             {"id": r[0], "rca": (r[1] if isinstance(r[1], dict) else (json.loads(r[1]) if r[1] else {})),
              "services": list(r[2] or []), "severity": r[3]}

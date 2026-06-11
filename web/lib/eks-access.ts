@@ -5,7 +5,7 @@ import { EKSClient, DescribeAccessEntryCommand } from '@aws-sdk/client-eks';
 // already trust me (DescribeAccessEntry), and the v1-style onboarding guide.
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
-const ARN_TTL_MS = 10 * 60 * 1000;
+const ARN_TTL_MS = 10 * 60 * 1000; // task-role ARN is effectively static; an IAM role swap (rare) self-heals within ≤10m (PR #36 r4)
 
 let sts: STSClient | null = null;
 let eks: EKSClient | null = null;

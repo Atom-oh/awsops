@@ -21,11 +21,18 @@ _SECRET_TTL_S = 300
 _secret_cache: dict = {}
 
 
+# Only read-only VIEW policy associations may auto-register (PR #36 r4): an operator
+# fat-fingering e.g. AmazonEKSEditPolicy onto the task role must NOT silently onboard
+# that cluster — ADR-029 reversal keeps this system strictly read-only.
+_READONLY_POLICY_SUFFIXES = ("/AmazonEKSViewPolicy", "/AmazonEKSAdminViewPolicy")
+
+
 def parse_event(event, task_role_name):
     """Pure: extract (action, cluster) from a CloudTrail-via-EventBridge EKS event.
 
     Returns ("register"|"unregister", cluster) or (None, reason). Only events whose
-    principalArn targets OUR task role count — other principals' entries are not ours.
+    principalArn targets OUR task role count — other principals' entries are not ours —
+    and only read-only view-policy associations register.
     """
     detail = event.get("detail") or {}
     name = detail.get("eventName") or ""
@@ -40,9 +47,12 @@ def parse_event(event, task_role_name):
     if not principal.endswith(f":role/{task_role_name}"):
         return None, f"principal is not {task_role_name}"
     if name == "AssociateAccessPolicy":
+        policy = urllib.parse.unquote(params.get("policyArn") or "")
+        if not policy.endswith(_READONLY_POLICY_SUFFIXES):
+            return None, f"policy is not a read-only view policy: {policy or '(absent)'}"
         return "register", cluster
     if name == "DeleteAccessEntry":
-        return "unregister", cluster
+        return "unregister", cluster  # entry deletion revokes ALL policies — always unregister
     return None, f"unhandled event {name}"
 
 
@@ -67,6 +77,9 @@ def _ssl_context():
     (rds-ca-bundle.pem = truststore.pki.rds.amazonaws.com/global/global-bundle.pem —
     all regions, so multi-region deploys need no swap; PR #36 r3) ships in the Lambda
     zip and hostname checking stays on (pg8000 passes host as server_hostname).
+    Bundle refresh (AWS rotates CAs rarely; bundle carries current+next gens):
+      curl -sf https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+        -o scripts/v2/eks/rds-ca-bundle.pem   # then terraform apply re-zips it
     """
     bundle = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rds-ca-bundle.pem")
     ctx = ssl.create_default_context(cafile=bundle)

@@ -4,6 +4,9 @@ from auto_register import parse_event
 ROLE = "awsops-v2-task"
 
 
+ADMIN_VIEW = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
+
+
 def ev(name, params, error=None):
     d = {"eventName": name, "requestParameters": params}
     if error:
@@ -13,7 +16,7 @@ def ev(name, params, error=None):
 
 def test_associate_for_our_role_registers():
     action, cluster = parse_event(
-        ev("AssociateAccessPolicy", {"name": "mall-apne2-az-a", "principalArn": "arn:aws:iam::1:role/awsops-v2-task"}),
+        ev("AssociateAccessPolicy", {"name": "mall-apne2-az-a", "principalArn": "arn:aws:iam::1:role/awsops-v2-task", "policyArn": ADMIN_VIEW}),
         ROLE,
     )
     assert (action, cluster) == ("register", "mall-apne2-az-a")
@@ -21,7 +24,7 @@ def test_associate_for_our_role_registers():
 
 def test_url_encoded_principal_is_decoded():
     action, cluster = parse_event(
-        ev("AssociateAccessPolicy", {"name": "c1", "principalArn": "arn%3Aaws%3Aiam%3A%3A1%3Arole%2Fawsops-v2-task"}),
+        ev("AssociateAccessPolicy", {"name": "c1", "principalArn": "arn%3Aaws%3Aiam%3A%3A1%3Arole%2Fawsops-v2-task", "policyArn": ADMIN_VIEW}),
         ROLE,
     )
     assert action == "register"
@@ -46,7 +49,7 @@ def test_delete_access_entry_unregisters():
 
 def test_errored_call_is_skipped():
     action, reason = parse_event(
-        ev("AssociateAccessPolicy", {"name": "c1", "principalArn": "arn:aws:iam::1:role/awsops-v2-task"},
+        ev("AssociateAccessPolicy", {"name": "c1", "principalArn": "arn:aws:iam::1:role/awsops-v2-task", "policyArn": ADMIN_VIEW},
            error="AccessDenied"),
         ROLE,
     )
@@ -55,7 +58,7 @@ def test_errored_call_is_skipped():
 
 
 def test_missing_cluster_is_skipped():
-    action, reason = parse_event(ev("AssociateAccessPolicy", {"principalArn": "arn:aws:iam::1:role/awsops-v2-task"}), ROLE)
+    action, reason = parse_event(ev("AssociateAccessPolicy", {"principalArn": "arn:aws:iam::1:role/awsops-v2-task", "policyArn": ADMIN_VIEW}), ROLE)
     assert action is None
 
 
@@ -103,3 +106,23 @@ def test_creds_cache_ttl_and_force_refresh(monkeypatch):
     assert ar._creds()["password"] == "p2"          # TTL expired → re-fetched
     assert ar._creds(force_refresh=True)["password"] == "p3"  # rotation retry path
     assert calls["n"] == 3
+
+
+def test_non_view_policy_association_is_rejected():
+    """PR #36 r4: a mutating-capable policy association must NOT auto-register (ADR-029 read-only)."""
+    action, reason = parse_event(
+        ev("AssociateAccessPolicy", {"name": "c1", "principalArn": "arn:aws:iam::1:role/awsops-v2-task",
+           "policyArn": "arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy"}),
+        ROLE,
+    )
+    assert action is None
+    assert "not a read-only view policy" in reason
+
+
+def test_view_policy_also_registers():
+    action, cluster = parse_event(
+        ev("AssociateAccessPolicy", {"name": "c1", "principalArn": "arn:aws:iam::1:role/awsops-v2-task",
+           "policyArn": "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"}),
+        ROLE,
+    )
+    assert (action, cluster) == ("register", "c1")
