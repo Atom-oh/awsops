@@ -212,6 +212,8 @@ resource "aws_ecs_task_definition" "web" {
         { name = "SSM_ADMIN_EMAILS_PARAM", value = "/ops/${var.project}/admin_emails" },
         # ADR-031 Phase 2: this account's id, so the BFF can resolve the per-account Agent Space.
         { name = "HOST_ACCOUNT_ID", value = data.aws_caller_identity.current.account_id },
+        # AI Diagnosis (Task 1b): the diagnosis POST route reads process.env.AWS_ACCOUNT_ID.
+        { name = "AWS_ACCOUNT_ID", value = data.aws_caller_identity.current.account_id },
         ], var.workers_enabled ? [
         { name = "JOBS_QUEUE_URL", value = one(aws_sqs_queue.jobs[*].url) }
         ] : [], var.remediation_enabled ? [
