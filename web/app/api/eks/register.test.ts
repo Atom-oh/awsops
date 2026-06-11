@@ -131,8 +131,19 @@ describe('POST /api/eks/[cluster]/register', () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     isAdmin.mockResolvedValue(true);
     isEnvCluster.mockReturnValue(false);
-    unregisterCluster.mockResolvedValue(true);
+    unregisterCluster.mockResolvedValue('deleted');
     const { DELETE } = await import('./[cluster]/register/route');
     expect((await DELETE(req('DELETE'), P)).status).toBe(200);
+  });
+
+  it('DELETE 404 when not registered vs 503 when storage is down (PR #36)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isAdmin.mockResolvedValue(true);
+    isEnvCluster.mockReturnValue(false);
+    const { DELETE } = await import('./[cluster]/register/route');
+    unregisterCluster.mockResolvedValue('not-found');
+    expect((await DELETE(req('DELETE'), P)).status).toBe(404);
+    unregisterCluster.mockResolvedValue('unavailable');
+    expect((await DELETE(req('DELETE'), P)).status).toBe(503);
   });
 });

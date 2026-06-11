@@ -22,7 +22,10 @@ resource "aws_eks_access_entry" "web" {
 # AdminView (not View): AmazonEKSViewPolicy mirrors the k8s 'view' ClusterRole and has NO
 # cluster-scoped resources — listing nodes 403s. AdminViewPolicy is */*/get,list,watch.
 # It can read Secrets, but the BFF only proxies an allow-listed set of kinds
-# (nodes/pods/deployments/services/namespaces in eks-incluster.ts) — secrets never transit.
+# (nodes/pods/deployments/services/namespaces/events in eks-incluster.ts isKind/KIND_PATH)
+# — secrets/configmaps never transit, and eks-incluster.test.ts pins their rejection.
+# ⚠️ This allow-list is the single line of defense behind AdminView: ANY new kind added
+# to eks-incluster.ts MUST update this comment + the negative-kind test in the same PR.
 resource "aws_eks_access_policy_association" "web_view" {
   for_each      = toset(var.onboard_eks_clusters)
   cluster_name  = each.value
@@ -73,6 +76,7 @@ locals {
 data "archive_file" "eks_auto_register" {
   count       = local.ear
   type        = "zip"
+  # (precondition은 아래 Lambda 리소스에서 검증 — data source는 lifecycle 미지원)
   output_path = "${path.module}/.build/eks_auto_register.zip"
   source {
     content  = file("${path.root}/../../../scripts/v2/eks/auto_register.py")

@@ -25,7 +25,8 @@ export async function POST(request: Request, { params }: { params: { cluster: st
   const entry = await hasAccessEntry(params.cluster);
   if (entry !== true) {
     // No entry (or undeterminable) — hand back the v1-style guide instead of failing opaquely.
-    return json({ registered: false, access: entry === false ? 'no-entry' : 'unknown', guide: await onboardingGuide(params.cluster) }, 409);
+    // cluster echoed for idempotent-call debugging (PR #36 review suggestion).
+    return json({ registered: false, cluster: params.cluster, access: entry === false ? 'no-entry' : 'unknown', guide: await onboardingGuide(params.cluster) }, 409);
   }
   const ok = await registerCluster(params.cluster, user.sub);
   if (!ok) return json({ status: 'error', message: 'registry storage unavailable' }, 503);
@@ -39,6 +40,10 @@ export async function DELETE(request: Request, { params }: { params: { cluster: 
   if (isEnvCluster(params.cluster)) {
     return json({ status: 'error', message: 'Terraform(onboard_eks_clusters) 관할 — tfvars에서 제거하세요' }, 400);
   }
-  const ok = await unregisterCluster(params.cluster);
-  return ok ? json({ unregistered: true }, 200) : json({ status: 'error', message: 'not registered (or registry storage unavailable)' }, 404);
+  // PR #36 review: not-found(404) vs storage-down(503) must be distinguishable — a DB
+  // outage presented as "already unregistered" misleads the operator.
+  const result = await unregisterCluster(params.cluster);
+  if (result === 'deleted') return json({ unregistered: true }, 200);
+  if (result === 'not-found') return json({ status: 'error', message: 'not registered' }, 404);
+  return json({ status: 'error', message: '등록 저장소(Aurora)를 사용할 수 없습니다' }, 503);
 }

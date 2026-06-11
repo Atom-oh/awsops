@@ -55,7 +55,11 @@ def _connect():
     import pg8000.native
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE  # match workers/db.py (dev posture; prod: bundle RDS CA)
+    # TODO(PR #36 review): bundle the RDS CA and verify. This matches workers/db.py's dev
+    # posture, but the threat model differs — this path is auto-triggered by EventBridge and
+    # WRITES the cluster allow-list, so a MITM on the Aurora hop could register an arbitrary
+    # cluster name. Backlog: ship rds-ca bundle in the zip + CERT_REQUIRED here AND in workers/db.py.
+    ctx.verify_mode = ssl.CERT_NONE
     c = _creds()
     return pg8000.native.Connection(
         user=c["username"], password=c["password"],
@@ -76,7 +80,7 @@ def handler(event, _ctx):
             conn.run(
                 "INSERT INTO eks_registrations (cluster_name, registered_by) VALUES (:c, :b) "
                 "ON CONFLICT (cluster_name) DO NOTHING",
-                c=cluster, b=f"eventbridge:{actor}"[:255],
+                c=cluster, b=f"eventbridge:{actor}",  # registered_by is TEXT — no truncation needed (PR #36 review)
             )
         else:
             conn.run("DELETE FROM eks_registrations WHERE cluster_name = :c", c=cluster)

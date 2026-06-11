@@ -64,7 +64,7 @@ const KIND_PATH: Record<Kind, string> = {
   // Core /api/v1/events (not events.k8s.io/v1): the events.k8s.io/v1 API renames
   // count/lastTimestamp to deprecatedCount/series, so the core endpoint is what
   // preserves the fields our normalizeEvent fallbacks read.
-  events: '/api/v1/events?fieldSelector=type%3DWarning', // Warning만 (v1 parity, read-only GET)
+  events: '/api/v1/events?fieldSelector=type=Warning', // Warning만 (v1 parity, read-only GET; 미인코딩 '='가 k8s 표준형 — PR #36)
 };
 
 export function isKind(k: string): k is Kind {

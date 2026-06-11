@@ -241,6 +241,10 @@ resource "aws_iam_role_policy" "incident_lambda" {
           aws_ssm_parameter.incident_max_concurrent[0].arn,
           aws_ssm_parameter.incident_fanout_max[0].arn,
           aws_ssm_parameter.incident_min_severity[0].arn,
+          # prevention_loop live-reads its window/threshold each run (PR #36 review: the
+          # env-baked copies went stale until the next apply, defeating ignore_changes tunability).
+          aws_ssm_parameter.incident_prevention_window_days[0].arn,
+          aws_ssm_parameter.incident_prevention_threshold[0].arn,
           "arn:aws:ssm:${var.region}:${local.inc_acct}:parameter${local.inc_runtime_arn_param}",
         ]
       }

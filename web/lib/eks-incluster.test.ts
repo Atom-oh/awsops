@@ -46,6 +46,9 @@ describe('eksToken', () => {
 });
 
 describe('isKind', () => {
+  // ⚠️ PR #36: with AmazonEKSAdminViewPolicy (*/get,list,watch — Secrets readable) this
+  // allow-list is the SINGLE line of defense. secrets/configmaps rejection below is pinned
+  // intentionally — any new kind must extend this test + the eks.tf comment in the same PR.
   it('accepts the read-only kinds and rejects others', () => {
     for (const k of ['nodes', 'pods', 'deployments', 'services', 'namespaces']) expect(isKind(k)).toBe(true);
     for (const k of ['secrets', 'configmaps', '', 'NODES', 'pods/exec']) expect(isKind(k)).toBe(false);

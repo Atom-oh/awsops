@@ -54,14 +54,18 @@ export async function registerCluster(cluster: string, userSub: string): Promise
   return true;
 }
 
-export async function unregisterCluster(cluster: string): Promise<boolean> {
-  if (!dbOn()) return false;
+// PR #36 review: 'not-found' and 'unavailable' must stay distinct — a DB outage shown
+// as "already unregistered" misleads the operator (route maps them to 404 vs 503).
+export type UnregisterResult = 'deleted' | 'not-found' | 'unavailable';
+
+export async function unregisterCluster(cluster: string): Promise<UnregisterResult> {
+  if (!dbOn()) return 'unavailable';
   try {
     const r = await getPool().query(`DELETE FROM eks_registrations WHERE cluster_name = $1`, [cluster]);
     cache = null;
-    return (r.rowCount ?? 0) > 0;
+    return (r.rowCount ?? 0) > 0 ? 'deleted' : 'not-found';
   } catch (e) {
     console.warn(`[eks-registry] unregister failed: ${e instanceof Error ? e.message : e}`);
-    return false;
+    return 'unavailable';
   }
 }

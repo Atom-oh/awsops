@@ -79,7 +79,15 @@ describe('eks-registry', () => {
   it('unregisterCluster deletes and reports whether a row was removed', async () => {
     query.mockResolvedValue({ rowCount: 1, rows: [] });
     const { unregisterCluster } = await import('./eks-registry');
-    expect(await unregisterCluster('db-c')).toBe(true);
+    expect(await unregisterCluster('db-c')).toBe('deleted');
+  });
+
+  it('unregisterCluster distinguishes not-found from storage failure (PR #36)', async () => {
+    query.mockResolvedValue({ rowCount: 0, rows: [] });
+    const { unregisterCluster } = await import('./eks-registry');
+    expect(await unregisterCluster('ghost')).toBe('not-found');
+    query.mockRejectedValue(new Error('db down'));
+    expect(await unregisterCluster('db-c')).toBe('unavailable');
   });
 
   it('isEnvCluster identifies Terraform-managed clusters', async () => {

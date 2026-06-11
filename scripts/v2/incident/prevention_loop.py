@@ -81,11 +81,31 @@ def _upsert(conn, ins):
         n=ins["recurrence_count"], ids=json.dumps(ins["source_incident_ids"]), ev=json.dumps(ins["evidence"]))
 
 
+def _tunable(param_env: str, default: int) -> int:
+    """Live-read an operator-tunable SSM param whose NAME arrives via env `param_env`.
+
+    TF sets ignore_changes on the SSM values so operators can tune from the console —
+    but the env-baked PREVENTION_* copies go stale until the next apply (PR #36 review).
+    Reading SSM per run makes the tunability real. Missing env/param/permission or a
+    non-integer value falls back to the baked default — a tuning knob must never break
+    the sweep (read-only GetParameter; no mutation surface added).
+    """
+    name = os.environ.get(param_env, "")
+    if not name:
+        return default
+    try:
+        import boto3
+        value = boto3.client("ssm").get_parameter(Name=name)["Parameter"]["Value"]
+        return int(value)
+    except Exception:
+        return default
+
+
 def lambda_handler(_event, _ctx):
     """Gated EventBridge target. Reads recent incidents w/ RCA, aggregates, UPSERTs insights.
     Recommend-only. Inert when no incidents. Never raises into the schedule (best-effort)."""
-    window = DEFAULT_WINDOW_DAYS
-    threshold = DEFAULT_THRESHOLD
+    window = _tunable("PREVENTION_WINDOW_DAYS_PARAM", DEFAULT_WINDOW_DAYS)
+    threshold = _tunable("PREVENTION_THRESHOLD_PARAM", DEFAULT_THRESHOLD)
     conn = db.connect()
     try:
         rows = conn.run(
