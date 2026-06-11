@@ -2,7 +2,7 @@
 
 ## 상태: 승인됨 / Status: Accepted
 
-> **v2 note (2026-06-03)**: the core decision (query Steampipe via the **pg Pool, not the CLI**) still holds in v2. Only the *host location* changes — **ADR-030** moves Steampipe off the EC2 host (`localhost:9193`) into a separate `awsops-steampipe` Fargate task reached via Service Connect DNS (`awsops-steampipe.awsops.local:9193`). / 핵심 결정(**CLI가 아닌 pg Pool**로 Steampipe 조회)은 v2에서도 유효. *호스트 위치*만 변경 — **ADR-030**이 Steampipe를 EC2 `localhost:9193`에서 Service Connect DNS(`awsops-steampipe.awsops.local:9193`)로 접근하는 별도 Fargate 태스크로 이전.
+> **v2 note (2026-06-03, corrected 2026-06-10 by ADR-037)**: the core decision (query Steampipe via the **pg Pool, not the CLI**) is a v1 detail. For v2, **ADR-037 is authoritative: there is no live Steampipe** — only a flag-gated inventory-sync batch (`var.steampipe_enabled`, D1) exists. The earlier note that ADR-030 would move Steampipe into an `awsops-steampipe` Fargate task reached via Service Connect DNS (`awsops-steampipe.awsops.local:9193`) was a superseded 030 draft mechanism that was never implemented; v2 live AWS queries go through **AgentCore MCP**. / 핵심 결정(**CLI가 아닌 pg Pool**로 Steampipe 조회)은 v1 세부. v2는 **ADR-037이 확정: 라이브 Steampipe 없음** — flag-gated 인벤토리 sync 배치(`var.steampipe_enabled`, D1)만 존재. ADR-030이 Steampipe를 Service Connect DNS(`awsops-steampipe.awsops.local:9193`) 접근 `awsops-steampipe` Fargate 태스크로 이전한다던 종전 노트는 구현되지 않은 폐기된 030 초안 메커니즘이며, v2 라이브 조회는 **AgentCore MCP** 경유.
 
 ## 컨텍스트 / Context
 Steampipe는 CLI(`steampipe query "SQL"`) 또는 PostgreSQL 프로토콜(pg Pool, 포트 9193)을 통해 접근할 수 있습니다.

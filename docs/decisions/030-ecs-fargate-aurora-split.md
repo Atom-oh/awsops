@@ -110,9 +110,9 @@ Prod images are signed with `cosign` and tagged with the semantic version (`v1.9
 
 Prod 이미지는 `cosign`으로 서명하며 시맨틱 버전(`v1.9.0`, `v1.9.0-arm64`)으로 태깅한다. Public ECR에서 태그 불변성을 강제한다.
 
-ECS launch type: **Fargate** for all four services. Web and jobs run on ARM64 (Graviton) Fargate to match the existing Steampipe binary and the AgentCore Runtime image. Service Connect provides internal DNS (`awsops-steampipe.awsops.local:9193`), removing the need for a separate service-discovery layer.
+ECS launch type: **Fargate** for all four services. Web and jobs run on ARM64 (Graviton) Fargate to match the existing Steampipe binary and the AgentCore Runtime image. ~~Service Connect provides internal DNS (`awsops-steampipe.awsops.local:9193`), removing the need for a separate service-discovery layer.~~ *(2026-06-10 ADR-037 correction: no live Steampipe — inventory sync only; no Service-Connect daemon.)*
 
-ECS launch type: 모든 4개 서비스 **Fargate**. Web과 jobs는 기존 Steampipe 바이너리·AgentCore Runtime 이미지에 맞춰 ARM64(Graviton) Fargate에서 실행. Service Connect가 내부 DNS(`awsops-steampipe.awsops.local:9193`)를 제공하여 별도 서비스 디스커버리 계층이 불필요.
+ECS launch type: 모든 4개 서비스 **Fargate**. Web과 jobs는 기존 Steampipe 바이너리·AgentCore Runtime 이미지에 맞춰 ARM64(Graviton) Fargate에서 실행. ~~Service Connect가 내부 DNS(`awsops-steampipe.awsops.local:9193`)를 제공하여 별도 서비스 디스커버리 계층이 불필요.~~ *(2026-06-10 ADR-037 정정: 라이브 Steampipe 없음 — 인벤토리 sync만; Service-Connect 데몬 없음.)*
 
 ## Consequences / 영향
 
@@ -152,7 +152,7 @@ The ADR is accepted to unblock implementation, with the following items tracked 
 
 ### Supersession note / 승계 표기 (2026-06-03)
 
-This ADR establishes the **v2 deployment topology** and therefore supersedes the single-EC2 / local-`data/` assumptions of earlier Accepted ADRs **for v2 deployments**: ADR-001 & ADR-005 (Steampipe on the EC2 host's `localhost:9193` → now a separate `awsops-steampipe` Fargate task reached via Service Connect DNS), ADR-024 (EC2/ALB CDK three-stack → ECS/Aurora workload+data stacks; EC2 build host decommissioned), and the `data/*.json` persistence in ADR-006/ADR-007 (cost & inventory snapshots → Aurora). Those ADRs remain Accepted as **v1 history**; their host-coupled assumptions do not apply to v2. / 본 ADR은 **v2 배포 토폴로지**를 확립하므로, **v2 배포에 한해** 이전 Accepted ADR들의 단일-EC2 / 로컬-`data/` 가정을 승계한다: ADR-001·ADR-005(EC2 `localhost:9193` Steampipe → Service Connect DNS로 접근하는 별도 `awsops-steampipe` 태스크), ADR-024(EC2/ALB CDK 3-stack → ECS/Aurora workload+data 스택, EC2 빌드 호스트 폐기), ADR-006/ADR-007의 `data/*.json` 영속화(비용·인벤토리 스냅샷 → Aurora). 해당 ADR들은 **v1 이력**으로 Accepted 유지되며 호스트 결합 가정은 v2에 적용되지 않는다.
+This ADR establishes the **v2 deployment topology** and therefore supersedes the single-EC2 / local-`data/` assumptions of earlier Accepted ADRs **for v2 deployments**: ADR-001 & ADR-005 (Steampipe on the EC2 host's `localhost:9193` → ~~now a separate `awsops-steampipe` Fargate task reached via Service Connect DNS~~ *(2026-06-10 ADR-037 correction: no live Steampipe — inventory sync only; live queries via AgentCore MCP)*), ADR-024 (EC2/ALB CDK three-stack → ECS/Aurora workload+data stacks; EC2 build host decommissioned), and the `data/*.json` persistence in ADR-006/ADR-007 (cost & inventory snapshots → Aurora). Those ADRs remain Accepted as **v1 history**; their host-coupled assumptions do not apply to v2. / 본 ADR은 **v2 배포 토폴로지**를 확립하므로, **v2 배포에 한해** 이전 Accepted ADR들의 단일-EC2 / 로컬-`data/` 가정을 승계한다: ADR-001·ADR-005(EC2 `localhost:9193` Steampipe → ~~Service Connect DNS로 접근하는 별도 `awsops-steampipe` 태스크~~ *(2026-06-10 ADR-037 정정: 라이브 Steampipe 없음 — 인벤토리 sync만; 라이브 조회는 AgentCore MCP)*), ADR-024(EC2/ALB CDK 3-stack → ECS/Aurora workload+data 스택, EC2 빌드 호스트 폐기), ADR-006/ADR-007의 `data/*.json` 영속화(비용·인벤토리 스냅샷 → Aurora). 해당 ADR들은 **v1 이력**으로 Accepted 유지되며 호스트 결합 가정은 v2에 적용되지 않는다.
 
 ## References / 참고 자료
 

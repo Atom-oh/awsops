@@ -13,11 +13,11 @@ Records of major design decisions. Update this index when status/outcome changes
 
 | # | 제목 / Title | 상태 / Status |
 |---|---|---|
-| 001 | Steampipe pg Pool (CLI 배제) | Accepted — v2 호스트 위치는 030이 승계 (pg Pool 결정 유효) |
+| 001 | Steampipe pg Pool (CLI 배제) | Accepted — v2 호스트 위치는 030이 승계 (pg Pool 결정 유효) (030 메커니즘은 037이 정정 — 라이브 Steampipe 없음) |
 | 002 | AI 하이브리드 라우팅 | Accepted — 라우트 4→11 확장 (현황은 011/016/025) |
 | 003 | SCP 차단 컬럼 처리 | Accepted |
 | 004 | Gateway 역할 분리 | Accepted — 게이트웨이 수 7→8 정정 |
-| 005 | VPC Lambda → Steampipe 접근 | Accepted — v2 네트워킹 경로는 030이 승계 |
+| 005 | VPC Lambda → Steampipe 접근 | Accepted — v2 네트워킹 경로는 030이 승계 (030 메커니즘은 037이 정정 — 라이브 Steampipe 없음) |
 | 006 | Cost 가용성 Probe | Accepted |
 | 007 | 리소스 인벤토리 베이스라인 | Accepted |
 | 008 | 멀티 어카운트 지원 | Accepted |
@@ -49,7 +49,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 034 | 알림 자동 RCA 라이트백 (OpsCenter/Incident Manager 양방향 보강) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 피드백루프 차단 메커니즘·observability-write 통제 부분집합·best-effort 보완 |
 | 035 | K8sGPT 하이브리드 (MCP로 AgentCore에 통합하는 인클러스터 K8s 진단, Haiku 4.5) | **⚠️ DOWNGRADED (2026-06-11)** — 3-AI 합의; read-only Result-CRD 통합만 유지(GET-only), **H3a(→032/034/029 제안) 배선 폐기**. (orig) Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); Rule 5 강화 + 7~11 추가 |
 | 036 | 변경·조치 실행 substrate (SSM Automation + Change Manager × P2 워커 백본 하이브리드) | **⛔ REVERSED (2026-06-11)** — 3-AI 합의; 029와 함께 실행 substrate 폐기, do-not-enable·동결. (orig) Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); `.sync` 사실오류 정정·완료추적·승인주체·per-action IAM·통제 매핑 보완 |
-| 037 | v2 파운데이션 — Terraform + thin-BFF 웹 + 비동기 워커 (CDK 폐기) | Accepted (2026-06-10) — co-agent ADR 일관성 리뷰; 024 전면 승계 + 030 메커니즘 정제(Steampipe 라이브 없음·flag-gated 인벤토리 sync 확정) |
+| 037 | v2 파운데이션 — Terraform + thin-BFF 웹 + 비동기 워커 (CDK 폐기) | Accepted (2026-06-10) — co-agent ADR 일관성 리뷰; 024 전면 승계 + 030 메커니즘 정제(Steampipe 라이브 없음·flag-gated 인벤토리 sync 확정) (029/036은 이 파운데이션 위에 설계됐으나 2026-06-11 REVERSED — 파운데이션 자체는 무관) |
 | 038 | 하이브리드 에이전트 라우팅 (정규식+Haiku 분류기) + v2 프롬프트 캐싱 | Accepted (2026-06-10) — 멀티AI 의사결정(A-now/C-at-P4 만장일치) + 스펙 리뷰 8건 반영; Gateway 시맨틱 P4 연기; **활성화 LIVE (2026-06-10): 게이트 hybrid 96.9% (+27.7pp) PASSED·캐싱 GREEN·분류기 타임아웃 3.5s 정정** |
 
 ## 새 ADR 추가 / Adding a New ADR
