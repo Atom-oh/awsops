@@ -45,6 +45,9 @@ interface FleetCluster {
   events: FleetEvent[];
 }
 
+// [PR#40 review MINOR] readable size: GiB at/above 1 GiB, else MiB (avoids tiny nodes showing "0.7").
+const fmtMib = (mib: number): string => (mib >= 1024 ? `${(mib / 1024).toFixed(1)}G` : `${Math.round(mib)}M`);
+
 export default function EksPage() {
   const [rows, setRows] = useState<Cluster[] | null>(null);
   const [admin, setAdmin] = useState(false);
@@ -265,7 +268,7 @@ export default function EksPage() {
       )}
 
       {connected > 0 && reachable.some((f) => f.nodeAgg.length > 0) && (
-        <Card title="노드 리소스" subtitle="Pod 요청 합계 대비 노드 allocatable (CPU 코어 · 메모리/디스크 GiB · request/allocatable 기준)">
+        <Card title="노드 리소스" subtitle="Pod 요청 합계 대비 노드 allocatable (CPU 코어 · 메모리/디스크 G=GiB·M=MiB · request/allocatable 기준 — 디스크는 Pod가 ephemeral-storage request를 명시할 때만 채워짐)">
           <div className="flex flex-col gap-4">
             {reachable.filter((f) => f.nodeAgg.length > 0).map((f) => (
               <div key={f.name} className="flex flex-col gap-2">
@@ -285,12 +288,12 @@ export default function EksPage() {
                     <span className="flex items-center gap-2 text-ink-500">
                       <span className="w-8 shrink-0">Mem</span>
                       <Meter value={n.memPct} />
-                      <span className="tabular text-ink-400">{(n.memRequest / 1024).toFixed(1)}/{(n.memAllocatable / 1024).toFixed(1)}</span>
+                      <span className="tabular text-ink-400">{fmtMib(n.memRequest)}/{fmtMib(n.memAllocatable)}</span>
                     </span>
                     <span className="flex items-center gap-2 text-ink-500">
                       <span className="w-8 shrink-0">Disk</span>
                       <Meter value={n.diskPct} />
-                      <span className="tabular text-ink-400">{(n.diskRequest / 1024).toFixed(1)}/{(n.diskAllocatable / 1024).toFixed(1)}</span>
+                      <span className="tabular text-ink-400">{fmtMib(n.diskRequest)}/{fmtMib(n.diskAllocatable)}</span>
                     </span>
                   </div>
                 ))}
