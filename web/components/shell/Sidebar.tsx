@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Box, Activity, DollarSign,
   Server, Database, Network, ShieldCheck,
   Sparkles, Gauge, PiggyBank, MessagesSquare,
-  LogOut,
+  Stethoscope, LogOut,
   type LucideIcon,
 } from 'lucide-react';
 import { INVENTORY_TYPES, inventoryGroups } from '@/lib/inventory-types';
@@ -18,6 +18,7 @@ import { cn } from '@/lib/cn';
 // Fixed top-level pages. `tkey` resolves the label via i18n.
 const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
   { href: '/', tkey: 'nav.overview', icon: LayoutDashboard },
+  { href: '/ai-diagnosis', tkey: 'nav.aiDiagnosis', icon: Stethoscope },
   { href: '/assistant', tkey: 'nav.assistant', icon: MessagesSquare },
   { href: '/eks', tkey: 'nav.eks', icon: Box },
   { href: '/jobs', tkey: 'nav.jobs', icon: Activity },
