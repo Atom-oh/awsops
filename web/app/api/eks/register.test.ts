@@ -144,6 +144,13 @@ describe('POST /api/eks/[cluster]/register', () => {
     expect((await POST(req(), P)).status).toBe(503);
   });
 
+  it('DELETE 400 for an invalid cluster name (panel r5: parity with POST)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isAdmin.mockResolvedValue(true);
+    const { DELETE } = await import('./[cluster]/register/route');
+    expect((await DELETE(req('DELETE'), { params: { cluster: 'bad/../name' } })).status).toBe(400);
+  });
+
   it('DELETE 400 for a Terraform(env) cluster', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     isAdmin.mockResolvedValue(true);

@@ -15,7 +15,8 @@ function json(obj: unknown, status: number) {
 // clusters). {0,99} caps at 100 chars — also the official EKS name-length limit. Injection
 // into the CLI guide is already double-guarded: this charset + the
 // listClusters() existence check below.
-const CLUSTER_NAME_RE = /^[0-9A-Za-z][A-Za-z0-9-_]{0,99}$/;
+// Hyphen escaped for unambiguity (panel r5: verified literal in JS either way — ':' '<' '@' all reject).
+const CLUSTER_NAME_RE = /^[0-9A-Za-z][A-Za-z0-9\-_]{0,99}$/;
 
 export async function POST(request: Request, { params }: { params: { cluster: string } }) {
   const user = await verifyUser(request.headers.get('cookie'));
@@ -44,6 +45,8 @@ export async function DELETE(request: Request, { params }: { params: { cluster: 
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
   if (!(await isAdmin(user))) return json({ status: 'error', message: 'admin only' }, 403);
+  // Same charset gate as POST — defense-in-depth consistency (panel r5: gemini).
+  if (!CLUSTER_NAME_RE.test(params.cluster)) return json({ status: 'error', message: 'invalid cluster name' }, 400);
   if (isEnvCluster(params.cluster)) {
     return json({ status: 'error', message: 'Terraform(onboard_eks_clusters) 관할 — tfvars에서 제거하세요' }, 400);
   }
