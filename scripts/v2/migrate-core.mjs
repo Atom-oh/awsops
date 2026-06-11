@@ -53,3 +53,28 @@ export function findDuplicateIds(filenames) {
 export function hasNoTxnFlag(sqlText) {
   return /^\s*--\s*migrate:no-transaction\b/m.test(String(sqlText));
 }
+
+/** Optional `-- since: <semver>` header → the release that introduced this migration, or null.
+ *  Documentation annotation only (release notes / migrate-status); never gates application. */
+export function parseSinceHeader(sqlText) {
+  const m = /^\s*--\s*since:\s*(\S+)/im.exec(String(sqlText));
+  return m ? m[1] : null;
+}
+
+/** Read the "version" field from package.json text. null on missing/invalid (never throws). */
+export function readPackageVersion(pkgJsonText) {
+  try {
+    const v = JSON.parse(String(pkgJsonText)).version;
+    return typeof v === 'string' && v ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Deployment version stamped on applied migrations: APP_VERSION env override (trimmed) →
+ *  package.json version → 'unknown'. Pure: callers pass the env value + package.json text. */
+export function resolveAppVersion(envValue, pkgJsonText) {
+  const env = (envValue ?? '').trim();
+  if (env) return env;
+  return readPackageVersion(pkgJsonText) ?? 'unknown';
+}
