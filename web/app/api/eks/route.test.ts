@@ -11,7 +11,11 @@ vi.mock('@/lib/eks-registry', () => ({
   getAllowedClusters: (...a: unknown[]) => getAllowedClusters(...a),
   isEnvCluster: (...a: unknown[]) => isEnvCluster(...a),
 }));
-vi.mock('@/lib/eks-access', () => ({ hasAccessEntry: (...a: unknown[]) => hasAccessEntry(...a) }));
+const onboardingGuide = vi.fn();
+vi.mock('@/lib/eks-access', () => ({
+  hasAccessEntry: (...a: unknown[]) => hasAccessEntry(...a),
+  onboardingGuide: (...a: unknown[]) => onboardingGuide(...a),
+}));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 const req = (cookie = 'awsops_token=t') => new Request('http://x/api/eks', { headers: { cookie } });
 beforeEach(() => {
@@ -21,6 +25,8 @@ beforeEach(() => {
   isEnvCluster.mockReturnValue(false);
   hasAccessEntry.mockResolvedValue(false);
   isAdmin.mockResolvedValue(false);
+  onboardingGuide.mockReset();
+  onboardingGuide.mockResolvedValue({ commands: ['c1', 'c2'], note: 'n' });
 });
 
 describe('GET /api/eks', () => {
