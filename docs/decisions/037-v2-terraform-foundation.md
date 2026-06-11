@@ -37,14 +37,14 @@ This ADR ratifies that implemented foundation as the decision of record so downs
 | **supersedes (full)** | ADR-024 | The CDK three-stack split is replaced by the Terraform single-root foundation. ADR-024 stays Accepted as **v1 history**; its topology does not apply to v2. |
 | **refines / partially supersedes** | ADR-030 | Replaces ADR-030's *mechanism* (4 containers, Service-Connect Steampipe daemon, CDK refactor, the `data/config.json` file-mount, the cache-warmer-in-`awsops-jobs` open follow-up). **Retains** ADR-030's *intent*: Aurora replaces the v1 JSON state layer; dual-tier ECR (dev-private / prod-public) for OSS distribution. |
 | **supersedes the v2 mechanism of** | ADR-001 / ADR-005 | Steampipe pg-Pool/VPC-Lambda host-location assumptions: v2 has no live Steampipe (AgentCore MCP replaces it); only a flag-gated inventory-sync remains. The pg-Pool-over-CLI principle (ADR-001) is moot in v2. |
-| **provides foundation for** | ADR-029 / ADR-036 | The mutating-action controls (029) and the hybrid execution substrate (036) run on this Terraform/Fargate/Aurora foundation and the P2 worker backbone defined here. |
+| **provides foundation for** | ADR-029 / ADR-036 | The mutating-action controls (029) and the hybrid execution substrate (036) were built on this Terraform/Fargate/Aurora foundation + P2 worker backbone. **⛔ Both were REVERSED on 2026-06-11** (do-not-enable, flag-OFF frozen — see `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`); the foundation itself is unaffected and the dark substrate code remains harmless. AWSops stays read-only; this foundation now serves async jobs + read-only AI, not mutation. |
 | **relates** | ADR-023 | Admin authority in v2 is Cognito group + SSM allowlist (`web/lib/admin.ts`), not `data/config.json` `adminEmails`. |
 
 ## Consequences / 영향
 
 ### Positive / 긍정적
 - One authoritative record of the v2 foundation; downstream ADRs (029/030/031/032/034/036) can reference it instead of repeating or contradicting stale CDK/EC2/Steampipe assumptions. / v2 파운데이션 단일 권위 기록.
-- The thin-BFF + worker-tier split keeps the request path fast and OOM-safe; one durable spine (P2) serves both async jobs and mutations (ADR-036). / thin-BFF + 워커 분리로 요청 경로 경량·OOM 안전, 단일 spine.
+- The thin-BFF + worker-tier split keeps the request path fast and OOM-safe; one durable spine (P2) serves async jobs (and *had* served the now-reversed ADR-036 mutation path — frozen flag-OFF since 2026-06-11). / thin-BFF + 워커 분리로 요청 경로 경량·OOM 안전, 단일 spine (036 mutation 경로는 2026-06-11 번복·동결).
 - Flag-gating (`agentcore_enabled`/`workers_enabled`/`steampipe_enabled`) keeps idle cost at $0 and makes feature rollout reversible. / flag 게이트로 유휴 비용 0·롤백 가능.
 
 ### Negative / 부정적

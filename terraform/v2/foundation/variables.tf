@@ -115,7 +115,7 @@ variable "worker_image_tag" {
 
 variable "remediation_enabled" {
   type        = bool
-  description = "ADR-029+036 remediation/mutation substrate gate. false (default) = 0 mutating resources, 0 cost, ZERO live AWS mutation. The always-present catalog/plan/audit tables (migration v4) are harmless when off. Enable ONLY after the catalog + controls are reviewed AND an operator accepts the first mutating capability."
+  description = "ADR-029+036 remediation/mutation substrate gate. ⛔ DECISION REVERSED 2026-06-11 (3-AI consensus; docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md) — DO NOT ENABLE. The mutating direction is abandoned (AWSops stays read-only; mutation = operator's SSM/Change Manager/IaC). Stays false permanently; the flag-OFF substrate is frozen, not deleted. false = 0 mutating resources, 0 cost, ZERO live AWS mutation; the always-present catalog/plan/audit tables (migration v4) are harmless when off."
   default     = false
 }
 
@@ -127,7 +127,7 @@ variable "hybrid_routing_enabled" {
 
 variable "incident_lifecycle_enabled" {
   type        = bool
-  description = "ADR-032 incident lifecycle gate. false (default) = 0 lifecycle infra, 0 cost, ZERO autonomous triggers. The always-present incident_* tables (migration v5) are harmless when off. REQUIRES workers_enabled=true to enable (reuses the P2 queue/dispatcher/reaper/status_updater/pg8000 layer)."
+  description = "ADR-032 incident lifecycle gate. ⚠️ DOWNGRADED 2026-06-11 (3-AI consensus) — the autonomous mitigation/action path is abandoned (it routed through the reversed ADR-029/036). If ever enabled, it is ANALYSIS-ONLY (read-only Triage/investigation/RCA, recommendation-only, NO mutation routing). false (default) = 0 lifecycle infra, 0 cost, ZERO autonomous triggers; the always-present incident_* tables (migration v5) are harmless when off. REQUIRES workers_enabled=true to enable."
   default     = false
 }
 
