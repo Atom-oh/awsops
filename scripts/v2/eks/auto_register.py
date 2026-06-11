@@ -7,10 +7,16 @@ the cluster in Aurora `eks_registrations` — the BFF allow-list (env ∪ DB) pi
 the next read. DeleteAccessEntry symmetrically unregisters. READ-ONLY toward AWS: we
 never create/modify AWS resources here — we only observe operator actions (ADR-029-safe).
 
+OPERATIONAL NOTE (PR #36 r5): registration reflects the policy posture AT GRANT TIME.
+A later AssociateAccessPolicy adding a broader policy is skipped by the read-only gate
+(the row stays — correctly, since the view policy is still attached), and removing the
+entry unregisters. The BFF's kind allow-list independently caps what can transit anyway.
+
 Env: AURORA_ENDPOINT, AURORA_DATABASE, AURORA_SECRET_ARN, TASK_ROLE_NAME, AWS_REGION.
 """
 import json
 import os
+import re
 import ssl
 import time
 import urllib.parse
@@ -24,6 +30,8 @@ _secret_cache: dict = {}
 # Only read-only VIEW policy associations may auto-register (PR #36 r4): an operator
 # fat-fingering e.g. AmazonEKSEditPolicy onto the task role must NOT silently onboard
 # that cluster — ADR-029 reversal keeps this system strictly read-only.
+# Keep in sync with terraform/v2/foundation/eks.tf aws_eks_access_policy_association.web_view
+# policy_arn (AdminViewPolicy) — both lists name AWS-managed, stable policy names (PR #36 r5).
 _READONLY_POLICY_SUFFIXES = ("/AmazonEKSViewPolicy", "/AmazonEKSAdminViewPolicy")
 
 
@@ -34,16 +42,25 @@ def parse_event(event, task_role_name):
     principalArn targets OUR task role count — other principals' entries are not ours —
     and only read-only view-policy associations register.
     """
+    # Defense-in-depth (PR #36 r5): the EventBridge rule already filters
+    # source=aws.eks + eventSource=eks.amazonaws.com (eks.tf), but a misconfigured
+    # rule edit or manual test invoke must not slip foreign events through.
+    if event.get("source") not in (None, "aws.eks"):
+        return None, f"unexpected event source: {event.get('source')}"
     detail = event.get("detail") or {}
     name = detail.get("eventName") or ""
     if detail.get("errorCode"):  # failed API calls must not register anything
-        return None, f"errored call: {detail.get('errorCode')}"
+        return None, f"errored call: {name or '(no eventName)'} -> {detail.get('errorCode')}"
     params = detail.get("requestParameters") or {}
     # EKS REST API: the cluster is the 'name' path param; principalArn may be URL-encoded.
     cluster = params.get("name") or params.get("clusterName") or ""
     principal = urllib.parse.unquote(params.get("principalArn") or "")
     if not cluster:
         return None, "no cluster in requestParameters"
+    # Same charset gate as the BFF's CLUSTER_NAME_RE — eks_registrations is a TEXT PK,
+    # so the Lambda must not be the path that lets a malformed name in (PR #36 r5).
+    if not re.fullmatch(r"[0-9A-Za-z][A-Za-z0-9-_]{0,99}", cluster):
+        return None, f"invalid cluster name: {cluster[:120]}"
     if not principal.endswith(f":role/{task_role_name}"):
         return None, f"principal is not {task_role_name}"
     if name == "AssociateAccessPolicy":

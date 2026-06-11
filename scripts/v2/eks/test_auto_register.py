@@ -126,3 +126,22 @@ def test_view_policy_also_registers():
         ROLE,
     )
     assert (action, cluster) == ("register", "c1")
+
+
+def test_foreign_event_source_is_rejected():
+    """PR #36 r5: defense-in-depth — only aws.eks events may act (rule already filters)."""
+    e = ev("AssociateAccessPolicy", {"name": "c1", "principalArn": "arn:aws:iam::1:role/awsops-v2-task", "policyArn": ADMIN_VIEW})
+    e["source"] = "aws.ec2"
+    action, reason = parse_event(e, ROLE)
+    assert action is None
+    assert "unexpected event source" in reason
+
+
+def test_malformed_cluster_name_is_rejected():
+    """PR #36 r5: TEXT PK must not accept names outside the EKS charset."""
+    action, reason = parse_event(
+        ev("AssociateAccessPolicy", {"name": "bad/../name", "principalArn": "arn:aws:iam::1:role/awsops-v2-task", "policyArn": ADMIN_VIEW}),
+        ROLE,
+    )
+    assert action is None
+    assert "invalid cluster name" in reason
