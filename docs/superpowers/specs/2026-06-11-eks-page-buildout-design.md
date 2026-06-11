@@ -15,7 +15,7 @@ v2 사실(정찰 확정):
 
 **목표**: ① 리스트를 v1 수준+로 강화(컬럼·접근배지·리스킨), ② Access Entry가 이미 있는 클러스터를 **버튼 한 번에(재배포 없이) 조회 등록**, ③ Entry 없는 클러스터에 v1식 온보딩 가이드.
 
-## 2. 데이터 — migration **v10** `eks_registrations` (현 최신 v9)
+## 2. 데이터 — migration **v11** `eks_registrations` (현 최신 v10 — ADR-032 P4가 v10 선점, P2 게이트 검증)
 
 ```sql
 CREATE TABLE IF NOT EXISTS eks_registrations (
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS eks_registrations (
 
 ### 3.2 API
 - **`GET /api/eks` 확장**: row마다 `{ name, status, version, region, vpcId, platformVersion, createdAt, access }` — `vpcId`/`platformVersion`은 기존 DescribeCluster 응답에서 추출(추가 IAM 0). `access: 'connected' | 'entry-only' | 'no-entry' | 'unknown'`:
-  - `connected` = 허용 리스트에 있음(env∪DB) **그리고** entry 확인됨(또는 env 출신 — Terraform이 entry를 보장하므로 entry 확인 생략 가능)
+  - `connected` = 허용 리스트에 있음 **그리고** entry 확인됨 — env 출신은 Terraform이 entry를 보장하므로 확인 생략, **DB(runtime) 출신은 매번 재확인**(entry가 회수되면 no-entry로 강등 표시, 등록은 유지되어 해제 가능)
   - `entry-only` = entry 있음 + 미등록 → "조회 등록" 버튼 대상
   - `no-entry` = entry 없음 → "온보딩 가이드" 버튼 대상
   - `unknown` = DescribeAccessEntry 에러(권한/스로틀) — 등록 버튼은 노출(서버가 재검증)
@@ -85,4 +85,4 @@ CREATE TABLE IF NOT EXISTS eks_registrations (
 
 ## 8. 운영(구현 후)
 
-migration v10 psql(승인 절차 — Aurora 마스터 `awsops_admin`+`PGSSLMODE=require`) → `make deploy`. 인프라 변경 0(plan 무변경 — IAM·env 기존 그대로).
+migration v11 psql(승인 절차 — Aurora 마스터 `awsops_admin`+`PGSSLMODE=require`) → `make deploy`. 인프라 변경 0(plan 무변경 — IAM·env 기존 그대로).

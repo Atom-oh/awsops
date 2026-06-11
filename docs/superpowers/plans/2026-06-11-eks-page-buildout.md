@@ -4,26 +4,26 @@
 
 **Goal:** `/eks`를 v1-parity+로 — 풍부한 리스트(컬럼·접근배지·paper+ink 리스킨) + Access Entry 보유 클러스터의 **런타임 조회 등록**(재배포 없음, v1 kubeconfig 등록의 v2 등가) + Entry 미보유 클러스터의 v1식 온보딩 가이드.
 
-**Architecture:** migration v10 `eks_registrations` → `eks-registry.ts`(허용리스트 = env ∪ DB, degrade=env-only) + `eks-access.ts`(STS role ARN·DescribeAccessEntry·가이드 생성) → `GET /api/eks` access 합성 + `POST/DELETE /api/eks/[cluster]/register`(admin) → 기존 incluster/k8sgpt 라우트 allow-list를 registry로 교체 → `/eks` 페이지 재작성.
+**Architecture:** migration v11 `eks_registrations` → `eks-registry.ts`(허용리스트 = env ∪ DB, degrade=env-only) + `eks-access.ts`(STS role ARN·DescribeAccessEntry·가이드 생성) → `GET /api/eks` access 합성 + `POST/DELETE /api/eks/[cluster]/register`(admin) → 기존 incluster/k8sgpt 라우트 allow-list를 registry로 교체 → `/eks` 페이지 재작성.
 
 **Tech Stack:** Next.js 14 BFF · node-pg(getPool) · @aws-sdk/client-eks(기존) + @aws-sdk/client-sts(신규 의존 — package.json 추가) · vitest 2.x
 
-**사전 확보 사실:** schema 최신 **v9** → 본 작업 **v10**. IAM 기존 보유: `eks:DescribeCluster/ListClusters/DescribeAccessEntry`(eks.tf) — **추가 IAM 불필요**(STS GetCallerIdentity는 IAM 권한 불요). `isAdmin(user)` = `web/lib/admin.ts:31`. 현재 allow-list 파싱은 `incluster/route.ts`·`k8sgpt/route.ts` 두 곳의 `(process.env.ONBOARDED_EKS_CLUSTERS || '').split(',').filter(Boolean)`. `listClusters()`는 `web/lib/aws.ts:14`(DescribeCluster 응답에서 vpcId=`cluster.resourcesVpcConfig.vpcId`, platformVersion=`cluster.platformVersion` 추출 가능). 디자인 시스템: paper+ink Tailwind — 패턴은 `web/app/inventory/[type]/page.tsx`·`web/components/ui/{DataTable,Badge}.tsx` 참조(구현 시 해당 파일 먼저 READ).
+**사전 확보 사실:** schema 최신 **v10**(ADR-032 P4 prevention_insights가 선점 — P2 게이트 opus 검증) → 본 작업 **v11**. IAM 기존 보유: `eks:DescribeCluster/ListClusters/DescribeAccessEntry`(eks.tf) — **추가 IAM 불필요**(STS GetCallerIdentity는 IAM 권한 불요). `isAdmin(user)` = `web/lib/admin.ts:31`. 현재 allow-list 파싱은 `incluster/route.ts`·`k8sgpt/route.ts` 두 곳의 `(process.env.ONBOARDED_EKS_CLUSTERS || '').split(',').filter(Boolean)`. `listClusters()`는 `web/lib/aws.ts:14`(DescribeCluster 응답에서 vpcId=`cluster.resourcesVpcConfig.vpcId`, platformVersion=`cluster.platformVersion` 추출 가능). 디자인 시스템: paper+ink Tailwind — 패턴은 `web/app/inventory/[type]/page.tsx`·`web/components/ui/{DataTable,Badge}.tsx` 참조(구현 시 해당 파일 먼저 READ).
 
 **커밋 규율:** 태스크마다 명시 경로 add+즉시 커밋, `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 
 ---
 
-### Task 1: migration v10 — eks_registrations
+### Task 1: migration v11 — eks_registrations
 
 **Files:**
 - Modify: `terraform/v2/foundation/data/schema.sql`
 
-- [ ] **Step 1:** 파일 끝(v9 블록 뒤)에 append — 먼저 `tail -8`로 현 최신이 v9인지 확인(동시 세션 선점 시 v11로 리넘버하고 본 계획 전체의 v10 표기를 갱신):
+- [ ] **Step 1:** 파일 끝(v9 블록 뒤)에 append — 먼저 `tail -8`로 현 최신이 v10인지 확인(동시 세션이 또 선점했으면 +1 리넘버):
 
 ```sql
 -- ============================================================
--- v10: EKS runtime registration — clusters an admin registered for in-app queries
+-- v11: EKS runtime registration — clusters an admin registered for in-app queries
 -- (the v2 equivalent of v1's "Register kubeconfig"; union'd with ONBOARDED_EKS_CLUSTERS env)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS eks_registrations (
@@ -33,11 +33,11 @@ CREATE TABLE IF NOT EXISTS eks_registrations (
 );
 
 INSERT INTO schema_migrations (version, description)
-VALUES (10, 'EKS runtime registration: eks_registrations (env-union allow-list, register button)')
+VALUES (11, 'EKS runtime registration: eks_registrations (env-union allow-list, register button)')
 ON CONFLICT (version) DO NOTHING;
 ```
 
-- [ ] **Step 2:** 커밋 — `git add terraform/v2/foundation/data/schema.sql && git commit -m "feat(eks-page): migration v10 — eks_registrations"`
+- [ ] **Step 2:** 커밋 — `git add terraform/v2/foundation/data/schema.sql && git commit -m "feat(eks-page): migration v11 — eks_registrations"`
 
 ### Task 2: `web/lib/eks-registry.ts` — 허용리스트 단일 소스
 
@@ -114,6 +114,12 @@ describe('eks-registry', () => {
     expect((await getAllowedClusters()).has('new-c')).toBe(true); // cache busted → re-query
   });
 
+  it('registerCluster returns false when the DB write fails (degrade, not throw)', async () => {
+    query.mockRejectedValue(new Error('db down'));
+    const { registerCluster } = await import('./eks-registry');
+    expect(await registerCluster('c', 'u')).toBe(false);
+  });
+
   it('registerCluster returns false without a DB', async () => {
     delete process.env.AURORA_ENDPOINT;
     const { registerCluster } = await import('./eks-registry');
@@ -179,20 +185,30 @@ export async function isAllowed(cluster: string): Promise<boolean> {
 
 export async function registerCluster(cluster: string, userSub: string): Promise<boolean> {
   if (!dbOn()) return false;
-  await getPool().query(
-    `INSERT INTO eks_registrations (cluster_name, registered_by) VALUES ($1, $2)
-     ON CONFLICT (cluster_name) DO NOTHING`,
-    [cluster, userSub],
-  );
+  try {
+    await getPool().query(
+      `INSERT INTO eks_registrations (cluster_name, registered_by) VALUES ($1, $2)
+       ON CONFLICT (cluster_name) DO NOTHING`,
+      [cluster, userSub],
+    );
+  } catch (e) { // write failure degrades to "storage unavailable" (route → 503), never a 500
+    console.warn(`[eks-registry] register failed: ${e instanceof Error ? e.message : e}`);
+    return false;
+  }
   cache = null; // bust so the next read sees it immediately
   return true;
 }
 
 export async function unregisterCluster(cluster: string): Promise<boolean> {
   if (!dbOn()) return false;
-  const r = await getPool().query(`DELETE FROM eks_registrations WHERE cluster_name = $1`, [cluster]);
-  cache = null;
-  return (r.rowCount ?? 0) > 0;
+  try {
+    const r = await getPool().query(`DELETE FROM eks_registrations WHERE cluster_name = $1`, [cluster]);
+    cache = null;
+    return (r.rowCount ?? 0) > 0;
+  } catch (e) {
+    console.warn(`[eks-registry] unregister failed: ${e instanceof Error ? e.message : e}`);
+    return false;
+  }
 }
 ```
 
@@ -347,6 +363,8 @@ export async function onboardingGuide(cluster: string): Promise<OnboardingGuide>
 - Modify: `web/app/api/eks/[cluster]/incluster/route.ts`
 - Modify: `web/app/api/eks/[cluster]/k8sgpt/route.ts`
 - Test: `web/app/api/eks/register.test.ts`
+- Modify: `web/app/api/eks/route.test.ts`
+- Modify: `web/lib/aws.test.ts`
 
 - [ ] **Step 1:** `aws.ts` — `ClusterInfo`에 `region/vpcId/platformVersion` 추가, `listClusters` 추출 확장:
 
@@ -363,29 +381,40 @@ push 객체에 추가: `region: REGION, vpcId: cluster?.resourcesVpcConfig?.vpcI
 ```ts
 import { verifyUser } from '@/lib/auth';
 import { listClusters } from '@/lib/aws';
-import { getAllowedClusters } from '@/lib/eks-registry';
+import { getAllowedClusters, isEnvCluster } from '@/lib/eks-registry';
 import { hasAccessEntry } from '@/lib/eks-access';
+import { isAdmin } from '@/lib/admin';
 
 export const dynamic = 'force-dynamic';
 
 export type AccessState = 'connected' | 'entry-only' | 'no-entry' | 'unknown';
 
 export async function GET(request: Request) {
-  if (!(await verifyUser(request.headers.get('cookie')))) {
+  const user = await verifyUser(request.headers.get('cookie'));
+  if (!user) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
   try {
     const [clusters, allowed] = await Promise.all([listClusters(), getAllowedClusters()]);
     const rows = await Promise.all(clusters.map(async (c) => {
       let access: AccessState;
-      if (allowed.has(c.name)) access = 'connected';
-      else {
+      const isEnv = isEnvCluster(c.name);
+      if (allowed.has(c.name) && isEnv) {
+        access = 'connected'; // Terraform guarantees the entry — skip the per-row API call
+      } else {
         const entry = await hasAccessEntry(c.name);
-        access = entry === true ? 'entry-only' : entry === false ? 'no-entry' : 'unknown';
+        if (allowed.has(c.name)) {
+          // runtime-registered: re-verify the entry (spec: connected = allowed AND entry) —
+          // a revoked entry shows as no-entry again (guide + still unregisterable)
+          access = entry === true ? 'connected' : entry === false ? 'no-entry' : 'unknown';
+        } else {
+          access = entry === true ? 'entry-only' : entry === false ? 'no-entry' : 'unknown';
+        }
       }
-      return { ...c, access };
+      return { ...c, access, runtime: allowed.has(c.name) && !isEnv, admin: undefined };
     }));
-    return Response.json({ clusters: rows });
+    const admin = await isAdmin(user);
+    return Response.json({ clusters: rows.map(({ admin: _a, ...r }) => r), admin });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
@@ -427,15 +456,21 @@ const P = { params: { cluster: 'c1' } };
 
 describe('GET /api/eks access synthesis', () => {
   beforeEach(() => { vi.clearAllMocks(); });
-  it('marks allowed clusters connected, entry holders entry-only, rest no-entry', async () => {
+  it('env-allowed=connected (no recheck), runtime-allowed=re-verified, entry holders=entry-only, rest=no-entry', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
-    listClusters.mockResolvedValue([{ name: 'a' }, { name: 'b' }, { name: 'c' }]);
-    getAllowedClusters.mockResolvedValue(new Set(['a']));
-    hasAccessEntry.mockImplementation(async (n: string) => (n === 'b' ? true : false));
+    isAdmin.mockResolvedValue(true);
+    listClusters.mockResolvedValue([{ name: 'env-a' }, { name: 'rt-ok' }, { name: 'rt-revoked' }, { name: 'b' }, { name: 'c' }]);
+    getAllowedClusters.mockResolvedValue(new Set(['env-a', 'rt-ok', 'rt-revoked']));
+    isEnvCluster.mockImplementation((n: string) => n === 'env-a');
+    hasAccessEntry.mockImplementation(async (n: string) => (n === 'rt-ok' || n === 'b' ? true : false));
     const { GET } = await import('./route');
     const body = await (await GET(req('GET'))).json();
     const by = Object.fromEntries(body.clusters.map((c: { name: string; access: string }) => [c.name, c.access]));
-    expect(by).toEqual({ a: 'connected', b: 'entry-only', c: 'no-entry' });
+    expect(by).toEqual({ 'env-a': 'connected', 'rt-ok': 'connected', 'rt-revoked': 'no-entry', b: 'entry-only', c: 'no-entry' });
+    expect(hasAccessEntry).not.toHaveBeenCalledWith('env-a');
+    expect(body.admin).toBe(true);
+    const rt = body.clusters.find((c: { name: string }) => c.name === 'rt-ok');
+    expect(rt.runtime).toBe(true);
   });
 });
 
@@ -455,9 +490,25 @@ describe('POST /api/eks/[cluster]/register', () => {
     expect((await POST(req(), P)).status).toBe(403);
   });
 
+  it('404 for a cluster that does not exist', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isAdmin.mockResolvedValue(true);
+    listClusters.mockResolvedValue([]);
+    const { POST } = await import('./[cluster]/register/route');
+    expect((await POST(req(), P)).status).toBe(404);
+  });
+
+  it('400 for an invalid cluster name', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isAdmin.mockResolvedValue(true);
+    const { POST } = await import('./[cluster]/register/route');
+    expect((await POST(req(), { params: { cluster: 'bad/../name' } })).status).toBe(400);
+  });
+
   it('200 registers when the access entry exists', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     isAdmin.mockResolvedValue(true);
+    listClusters.mockResolvedValue([{ name: 'c1' }]);
     hasAccessEntry.mockResolvedValue(true);
     registerCluster.mockResolvedValue(true);
     const { POST } = await import('./[cluster]/register/route');
@@ -469,6 +520,7 @@ describe('POST /api/eks/[cluster]/register', () => {
   it('409 + guide when no access entry', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     isAdmin.mockResolvedValue(true);
+    listClusters.mockResolvedValue([{ name: 'c1' }]);
     hasAccessEntry.mockResolvedValue(false);
     onboardingGuide.mockResolvedValue({ commands: ['cmd1', 'cmd2'], note: 'n' });
     const { POST } = await import('./[cluster]/register/route');
@@ -480,6 +532,7 @@ describe('POST /api/eks/[cluster]/register', () => {
   it('503 when the registry has no DB', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     isAdmin.mockResolvedValue(true);
+    listClusters.mockResolvedValue([{ name: 'c1' }]);
     hasAccessEntry.mockResolvedValue(true);
     registerCluster.mockResolvedValue(false);
     const { POST } = await import('./[cluster]/register/route');
@@ -512,6 +565,7 @@ import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { registerCluster, unregisterCluster, isEnvCluster } from '@/lib/eks-registry';
 import { hasAccessEntry, onboardingGuide } from '@/lib/eks-access';
+import { listClusters } from '@/lib/aws';
 
 export const dynamic = 'force-dynamic';
 
@@ -519,10 +573,16 @@ function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
 }
 
+const CLUSTER_NAME_RE = /^[0-9A-Za-z][A-Za-z0-9-_]{0,99}$/; // EKS cluster-name charset — also guards the CLI guide against injected text
+
 export async function POST(request: Request, { params }: { params: { cluster: string } }) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
   if (!(await isAdmin(user))) return json({ status: 'error', message: 'admin only' }, 403);
+  if (!CLUSTER_NAME_RE.test(params.cluster)) return json({ status: 'error', message: 'invalid cluster name' }, 400);
+  // Cluster must actually exist (spec §3.2 ①) — never emit a guide for arbitrary input.
+  const known = (await listClusters()).some((c) => c.name === params.cluster);
+  if (!known) return json({ status: 'error', message: 'unknown cluster' }, 404);
   const entry = await hasAccessEntry(params.cluster);
   if (entry !== true) {
     // No entry (or undeterminable) — hand back the v1-style guide instead of failing opaquely.
@@ -557,31 +617,35 @@ if (!(await isAllowed(params.cluster))) {
 ```
 (k8sgpt 라우트는 flag 503 가드 **뒤**의 allow-list만 교체 — 가드 순서 불변.)
 
-- [ ] **Step 6:** 기존 incluster/k8sgpt 라우트 테스트가 env를 직접 세팅한다면 `@/lib/eks-registry` 모킹으로 갱신(기존 케이스 의미 보존). `npx vitest run app/api/eks` 전체 GREEN + `npx vitest run` 회귀. 커밋(6파일).
+- [ ] **Step 6: 기존 테스트 갱신** (P2 게이트 codex — 깨질 기존 테스트들):
+  - `web/lib/aws.test.ts` — `ClusterInfo` 신규 3필드(region/vpcId/platformVersion)로 기대값 갱신.
+  - `web/app/api/eks/route.test.ts` — 신규 모듈(`@/lib/eks-registry`·`@/lib/eks-access`·`@/lib/admin`) 모킹 추가 + 기존 케이스 의미 보존.
+  - incluster/k8sgpt 라우트 테스트가 env를 직접 세팅한다면 `@/lib/eks-registry` `isAllowed` 모킹으로 갱신.
+- [ ] **Step 7:** `npx vitest run app/api/eks lib/aws.test.ts` 전체 GREEN + `npx vitest run` 회귀. 커밋(8파일).
 
 ### Task 5: UI — `/eks` 페이지 재작성 (paper+ink)
 
 **Files:**
 - Modify: `web/app/eks/page.tsx`
 - Create: `web/app/eks/eks-list.test.tsx`
+- Modify: `web/vitest.config.ts`
 
 - [ ] **Step 1:** 먼저 READ: `web/app/inventory/[type]/page.tsx`(페이지 골격·Tailwind 토큰), `web/components/ui/DataTable.tsx`, `web/components/ui/Badge.tsx` — 동일 패턴 사용.
 - [ ] **Step 2:** `page.tsx` 재작성 골격(디자인 토큰은 Step 1에서 확인한 실제 클래스 사용):
-  - `fetch('/api/eks')` + `fetch('/api/auth/me')`류가 없으므로 admin 여부는 **register 호출의 403으로 처리하지 말고**: GET 응답에 admin 플래그를 넣는 대신, 버튼은 모두에게 노출하되 403 응답 시 "관리자 전용" 토스트 — 단순화(서버가 최종 게이트). *(보안은 서버 게이트가 담당; UI 숨김은 cosmetic이라 단순화 채택)*
+  - `GET /api/eks` 응답의 **`admin: boolean`**(Task 4에서 추가)으로 등록/해제 버튼 노출 제어(스펙 §4) — 서버 403이 최종 게이트, UI는 admin=true일 때만 버튼 렌더.
   - 컬럼: Name / Status(Badge) / Version / Region / VPC / Platform / 연결(배지+액션)
   - `access==='connected'` → 🟢 Badge + Name이 `/eks/[cluster]` Link
   - `entry-only`·`unknown` → 🟡 Badge + [조회 등록] 버튼 → `POST .../register` → 200이면 리스트 재로드 / 409면 guide 패널 표시 / 403 "관리자 전용" / 503 "저장소 미설정"
   - `no-entry` → ⚪ Badge + [온보딩 가이드] 버튼 → 행 아래 확장 패널: `guide.commands` 코드블럭 2개(각각 복사 버튼 `navigator.clipboard.writeText`) + note. 가이드 데이터는 409 응답 재사용 또는 첫 클릭 시 POST(409 기대)로 획득
   - DB 등록 행(connected & !isEnv — GET 응답에 `runtime: boolean` 추가해 구분, route.ts에서 `runtime: allowed.has(c.name) && !isEnvCluster(c.name)`) → [등록 해제]
-- [ ] **Step 3:** GET route에 `runtime` 필드 추가(Task 4 Step 2 코드에 한 줄: `runtime: access === 'connected' && !isEnvCluster(c.name)` — import 추가).
-- [ ] **Step 4: 테스트** — `eks-list.test.tsx` (jsdom 프라그마 1행, fetch 모킹): connected 행 링크 활성 / entry-only 행 등록 버튼 → POST 호출 / no-entry 가이드 패널 commands 렌더 — 3케이스.
+- [ ] **Step 4: vitest include 수정** — `web/vitest.config.ts` include에 `'app/**/*.test.tsx'` 추가(현재 app은 `.ts`만 잡힘 — P2 게이트 codex 검증). 그 다음 **테스트** `eks-list.test.tsx` (jsdom 프라그마 1행, fetch 모킹): connected 행 링크 활성 / entry-only 행 등록 버튼 → POST 호출(admin=true 응답일 때만 버튼 렌더) / no-entry 가이드 패널 commands 렌더 — 3케이스.
 - [ ] **Step 5:** `npx vitest run app/eks && npx vitest run && npm run build` 전부 GREEN. 커밋.
 
-### Task 6: 운영 — migration v10 + deploy (컨트롤러)
+### Task 6: 운영 — migration v11 + deploy (컨트롤러)
 
 **Files:**
 - Modify: `terraform/v2/foundation/data/schema.sql` (적용만 — Task 1에서 커밋됨)
 
-- [ ] **Step 1:** in-VPC psql(마스터 `awsops_admin` + `PGSSLMODE=require`, **사용자 승인 후**) → `schema_migrations`에 10 확인.
+- [ ] **Step 1:** in-VPC psql(마스터 `awsops_admin` + `PGSSLMODE=require`, **사용자 승인 후**) → `schema_migrations`에 11 확인.
 - [ ] **Step 2:** `make deploy` → smoke 200.
 - [ ] **Step 3:** 브라우저: /eks 리스트 강화 확인 → 미온보딩 클러스터 [조회 등록]→409 가이드 → (가능하면 entry 있는 클러스터로 등록→Connected→상세 진입).
