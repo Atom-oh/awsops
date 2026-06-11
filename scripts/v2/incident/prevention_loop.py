@@ -15,6 +15,7 @@ import db
 PROJECT = os.environ.get("PROJECT", "awsops-v2")
 DEFAULT_WINDOW_DAYS = int(os.environ.get("PREVENTION_WINDOW_DAYS", "30"))
 DEFAULT_THRESHOLD = int(os.environ.get("PREVENTION_RECURRENCE_THRESHOLD", "2"))
+_ssm = None  # lazy SSM client (see _tunable)
 
 # rca.category -> (prevention category, base recommendation template). Mirrors prevention.py.
 _MAP = {
@@ -94,8 +95,11 @@ def _tunable(param_env: str, default: int) -> int:
     if not name:
         return default
     try:
-        import boto3
-        value = boto3.client("ssm").get_parameter(Name=name)["Parameter"]["Value"]
+        global _ssm
+        if _ssm is None:  # lazy module-level client — warm invocations reuse it (PR #36 r3)
+            import boto3
+            _ssm = boto3.client("ssm")
+        value = _ssm.get_parameter(Name=name)["Parameter"]["Value"]
         return int(value)
     except Exception as e:  # noqa: BLE001 — a tuning knob must never break the sweep
         # PR #36 review: don't swallow silently — leave a CloudWatch trace of the fallback.

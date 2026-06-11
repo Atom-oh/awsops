@@ -12,9 +12,13 @@ Env: AURORA_ENDPOINT, AURORA_DATABASE, AURORA_SECRET_ARN, TASK_ROLE_NAME, AWS_RE
 import json
 import os
 import ssl
+import time
 import urllib.parse
 
-_secret_cache = {}
+# Secret cache with TTL — a warm Lambda container must not hold a rotated-out password
+# forever (PR #36 r3: RDS-managed rotation would start failing auth after the cycle).
+_SECRET_TTL_S = 300
+_secret_cache: dict = {}
 
 
 def parse_event(event, task_role_name):
@@ -42,13 +46,15 @@ def parse_event(event, task_role_name):
     return None, f"unhandled event {name}"
 
 
-def _creds():
+def _creds(force_refresh=False):
     import boto3
     arn = os.environ["AURORA_SECRET_ARN"]
-    if arn not in _secret_cache:
+    hit = _secret_cache.get(arn)
+    if force_refresh or hit is None or time.monotonic() - hit["at"] > _SECRET_TTL_S:
         sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
-        _secret_cache[arn] = json.loads(sm.get_secret_value(SecretId=arn)["SecretString"])
-    return _secret_cache[arn]
+        hit = {"value": json.loads(sm.get_secret_value(SecretId=arn)["SecretString"]), "at": time.monotonic()}
+        _secret_cache[arn] = hit
+    return hit["value"]
 
 
 def _ssl_context():
@@ -57,9 +63,10 @@ def _ssl_context():
     This path is auto-triggered by EventBridge and WRITES the cluster allow-list, so a
     MITM on the Aurora hop could inject an arbitrary cluster into eks_registrations →
     the BFF would immediately proxy it. Unlike workers/db.py (job queue; different threat
-    model), this connection REQUIRES cert verification: the regional RDS CA bundle
-    (rds-ca-bundle.pem, truststore.pki.rds.amazonaws.com) ships in the Lambda zip and
-    hostname checking stays on (pg8000 passes host as server_hostname).
+    model), this connection REQUIRES cert verification: the GLOBAL RDS CA bundle
+    (rds-ca-bundle.pem = truststore.pki.rds.amazonaws.com/global/global-bundle.pem —
+    all regions, so multi-region deploys need no swap; PR #36 r3) ships in the Lambda
+    zip and hostname checking stays on (pg8000 passes host as server_hostname).
     """
     bundle = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rds-ca-bundle.pem")
     ctx = ssl.create_default_context(cafile=bundle)
@@ -83,7 +90,13 @@ def handler(event, _ctx):
         print(json.dumps({"evt": "eks_auto_register_skip", "reason": cluster}))
         return {"skipped": True, "reason": cluster}
     actor = ((event.get("detail") or {}).get("userIdentity") or {}).get("arn", "cloudtrail")
-    conn = _connect()
+    try:
+        conn = _connect()
+    except Exception:
+        # Likely a mid-TTL credential rotation — force-refresh the secret and retry once
+        # (PR #36 r3). A second failure propagates to EventBridge's retry policy.
+        _creds(force_refresh=True)
+        conn = _connect()
     try:
         if action == "register":
             conn.run(

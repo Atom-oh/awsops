@@ -109,10 +109,35 @@ describe('POST /api/eks/[cluster]/register', () => {
     expect((await res.json()).guide.commands).toHaveLength(2);
   });
 
+  it('env cluster: 200 managedBy terraform when the entry exists, NO db row (PR #36 r3)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isAdmin.mockResolvedValue(true);
+    listClusters.mockResolvedValue([{ name: 'c1' }]);
+    isEnvCluster.mockReturnValue(true);
+    hasAccessEntry.mockResolvedValue(true);
+    const { POST } = await import('./[cluster]/register/route');
+    const res = await POST(req(), P);
+    expect(res.status).toBe(200);
+    expect((await res.json()).managedBy).toBe('terraform');
+    expect(registerCluster).not.toHaveBeenCalled();
+  });
+
+  it('env cluster WITHOUT an entry yet (tfvars added, apply pending) gets 409+guide, not a hollow 200 (PR #36 r3)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isAdmin.mockResolvedValue(true);
+    listClusters.mockResolvedValue([{ name: 'c1' }]);
+    isEnvCluster.mockReturnValue(true);
+    hasAccessEntry.mockResolvedValue(false);
+    onboardingGuide.mockResolvedValue({ commands: ['cmd1'], note: 'n' });
+    const { POST } = await import('./[cluster]/register/route');
+    expect((await POST(req(), P)).status).toBe(409);
+  });
+
   it('503 when the registry has no DB', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     isAdmin.mockResolvedValue(true);
     listClusters.mockResolvedValue([{ name: 'c1' }]);
+    isEnvCluster.mockReturnValue(false); // clearAllMocks keeps implementations — the env tests above set true
     hasAccessEntry.mockResolvedValue(true);
     registerCluster.mockResolvedValue(false);
     const { POST } = await import('./[cluster]/register/route');

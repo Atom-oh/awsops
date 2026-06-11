@@ -21,6 +21,6 @@ CREATE TABLE IF NOT EXISTS prevention_insights (
   status              TEXT NOT NULL DEFAULT 'open'
                         CHECK (status IN ('open','addressed','dismissed')),
   first_seen_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_seen_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_prevention_insights_open ON prevention_insights (last_seen_at DESC) WHERE status = 'open';

@@ -74,3 +74,32 @@ def test_ssl_context_requires_verification():
     ctx = _ssl_context()
     assert ctx.verify_mode == ssl.CERT_REQUIRED
     assert ctx.check_hostname is True
+
+
+def test_creds_cache_ttl_and_force_refresh(monkeypatch):
+    """PR #36 r3: a warm container must not serve a rotated-out secret forever."""
+    import sys, types, json as _json
+    import auto_register as ar
+
+    calls = {"n": 0}
+
+    class FakeSM:
+        def get_secret_value(self, SecretId):
+            calls["n"] += 1
+            return {"SecretString": _json.dumps({"username": "u", "password": f"p{calls['n']}"})}
+
+    fake_boto3 = types.SimpleNamespace(client=lambda *a, **k: FakeSM())
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setenv("AURORA_SECRET_ARN", "arn:test")
+    ar._secret_cache.clear()
+
+    t = {"now": 1000.0}
+    monkeypatch.setattr(ar.time, "monotonic", lambda: t["now"])
+
+    assert ar._creds()["password"] == "p1"
+    assert ar._creds()["password"] == "p1"          # within TTL → cached
+    assert calls["n"] == 1
+    t["now"] += ar._SECRET_TTL_S + 1
+    assert ar._creds()["password"] == "p2"          # TTL expired → re-fetched
+    assert ar._creds(force_refresh=True)["password"] == "p3"  # rotation retry path
+    assert calls["n"] == 3

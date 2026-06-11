@@ -12,7 +12,8 @@ function json(obj: unknown, status: number) {
 
 // EKS CreateCluster's official name pattern is ^[0-9A-Za-z][A-Za-z0-9\-_]*$ (underscores ARE
 // accepted by the API — PR #36 review suggested dropping them, but that would reject legal
-// clusters). Injection into the CLI guide is already double-guarded: this charset + the
+// clusters). {0,99} caps at 100 chars — also the official EKS name-length limit. Injection
+// into the CLI guide is already double-guarded: this charset + the
 // listClusters() existence check below.
 const CLUSTER_NAME_RE = /^[0-9A-Za-z][A-Za-z0-9-_]{0,99}$/;
 
@@ -24,14 +25,16 @@ export async function POST(request: Request, { params }: { params: { cluster: st
   // Cluster must actually exist (spec §3.2 ①) — never emit a guide for arbitrary input.
   const known = (await listClusters()).some((c) => c.name === params.cluster);
   if (!known) return json({ status: 'error', message: 'unknown cluster' }, 404);
-  // Terraform-managed clusters are already permanently allowed — idempotent no-op, no redundant DB row (P4 gate).
-  if (isEnvCluster(params.cluster)) return json({ registered: true, managedBy: 'terraform' }, 200);
   const entry = await hasAccessEntry(params.cluster);
   if (entry !== true) {
     // No entry (or undeterminable) — hand back the v1-style guide instead of failing opaquely.
-    // cluster echoed for idempotent-call debugging (PR #36 review suggestion).
+    // This check runs BEFORE the env-cluster shortcut (PR #36 r3): a cluster added to tfvars
+    // but not yet applied must not get a "registered" 200 it can't honor (incluster would 403).
+    // cluster echoed for idempotent-call debugging.
     return json({ registered: false, cluster: params.cluster, access: entry === false ? 'no-entry' : 'unknown', guide: await onboardingGuide(params.cluster) }, 409);
   }
+  // Terraform-managed clusters are already permanently allowed — idempotent no-op, no redundant DB row (P4 gate).
+  if (isEnvCluster(params.cluster)) return json({ registered: true, managedBy: 'terraform' }, 200);
   const ok = await registerCluster(params.cluster, user.sub);
   if (!ok) return json({ status: 'error', message: 'registry storage unavailable' }, 503);
   return json({ registered: true }, 200);
