@@ -739,3 +739,12 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages (thread_id,
 INSERT INTO schema_migrations (version, description)
 VALUES (9, 'chat thread persistence: chat_threads + chat_messages (new-chat no longer wipes history)')
 ON CONFLICT (version) DO NOTHING;
+
+-- ============================================================
+-- NEW migrations go in terraform/v2/foundation/migrations/<ULID>_<name>.sql (applied by
+-- `make migrate`, run automatically before `make deploy`), NOT here. This file is the
+-- one-time baseline. The ULID runner replaces the old sequential-integer scheme — concurrent
+-- branches kept colliding on the same version integer (e.g. opencost_config vs prevention_insights
+-- both grabbing v10) and `ON CONFLICT DO NOTHING` silently masked it.
+-- See migrations/README.md + docs/reviews/2026-06-11-migration-mechanism-consensus.md.
+-- ============================================================
