@@ -51,20 +51,29 @@ def _creds():
     return _secret_cache[arn]
 
 
+def _ssl_context():
+    """Verified TLS to Aurora — PR #36 review MAJOR, implemented (not just TODO'd).
+
+    This path is auto-triggered by EventBridge and WRITES the cluster allow-list, so a
+    MITM on the Aurora hop could inject an arbitrary cluster into eks_registrations →
+    the BFF would immediately proxy it. Unlike workers/db.py (job queue; different threat
+    model), this connection REQUIRES cert verification: the regional RDS CA bundle
+    (rds-ca-bundle.pem, truststore.pki.rds.amazonaws.com) ships in the Lambda zip and
+    hostname checking stays on (pg8000 passes host as server_hostname).
+    """
+    bundle = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rds-ca-bundle.pem")
+    ctx = ssl.create_default_context(cafile=bundle)
+    # defaults with a cafile: verify_mode=CERT_REQUIRED, check_hostname=True — keep both.
+    return ctx
+
+
 def _connect():
     import pg8000.native
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    # TODO(PR #36 review): bundle the RDS CA and verify. This matches workers/db.py's dev
-    # posture, but the threat model differs — this path is auto-triggered by EventBridge and
-    # WRITES the cluster allow-list, so a MITM on the Aurora hop could register an arbitrary
-    # cluster name. Backlog: ship rds-ca bundle in the zip + CERT_REQUIRED here AND in workers/db.py.
-    ctx.verify_mode = ssl.CERT_NONE
     c = _creds()
     return pg8000.native.Connection(
         user=c["username"], password=c["password"],
         host=os.environ["AURORA_ENDPOINT"], database=os.environ["AURORA_DATABASE"],
-        port=5432, ssl_context=ctx,
+        port=5432, ssl_context=_ssl_context(),
     )
 
 

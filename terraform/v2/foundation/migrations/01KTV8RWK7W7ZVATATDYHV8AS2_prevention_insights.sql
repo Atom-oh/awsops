@@ -11,8 +11,10 @@ CREATE TABLE IF NOT EXISTS prevention_insights (
   category            TEXT NOT NULL,                        -- observability|testing|code|infra
   scope_ref           TEXT NOT NULL,                        -- "<rca.category>::<service|resource>"
   recommendation      TEXT NOT NULL,                        -- deterministic base recommendation
-  narration           TEXT,                                 -- optional Haiku enrichment (hypothesis; nullable)
-  llm_model           TEXT,
+  narration           TEXT,                                 -- optional Haiku enrichment (hypothesis; nullable).
+                                                            -- NOT yet written by prevention_loop.py — reserved for the
+                                                            -- planned narration follow-up (PR #36 review: intentional, not dead).
+  llm_model           TEXT,                                 -- ditto (reserved with narration)
   recurrence_count    INT NOT NULL DEFAULT 1,
   source_incident_ids JSONB NOT NULL DEFAULT '[]'::jsonb,   -- evidence: the incidents that recurred
   evidence            JSONB NOT NULL DEFAULT '{}'::jsonb,   -- {services[], severities[], window_days}

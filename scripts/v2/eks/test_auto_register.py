@@ -65,3 +65,12 @@ def test_unhandled_event_is_skipped():
         ROLE,
     )
     assert action is None  # entry alone isn't queryable yet — we register on policy association
+
+
+def test_ssl_context_requires_verification():
+    """PR #36 MAJOR: the Aurora write-path must verify TLS (CERT_REQUIRED + hostname)."""
+    import ssl
+    from auto_register import _ssl_context
+    ctx = _ssl_context()
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname is True

@@ -76,11 +76,16 @@ locals {
 data "archive_file" "eks_auto_register" {
   count       = local.ear
   type        = "zip"
-  # (precondition은 아래 Lambda 리소스에서 검증 — data source는 lifecycle 미지원)
   output_path = "${path.module}/.build/eks_auto_register.zip"
   source {
     content  = file("${path.root}/../../../scripts/v2/eks/auto_register.py")
     filename = "auto_register.py"
+  }
+  source {
+    # Regional RDS CA trust bundle — the Lambda REQUIRES verified TLS to Aurora
+    # (PR #36 review: this write-path must not run CERT_NONE).
+    content  = file("${path.root}/../../../scripts/v2/eks/rds-ca-bundle.pem")
+    filename = "rds-ca-bundle.pem"
   }
 }
 

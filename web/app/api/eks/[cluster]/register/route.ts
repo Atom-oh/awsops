@@ -10,7 +10,11 @@ function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
 }
 
-const CLUSTER_NAME_RE = /^[0-9A-Za-z][A-Za-z0-9-_]{0,99}$/; // EKS cluster-name charset — also guards the CLI guide against injected text
+// EKS CreateCluster's official name pattern is ^[0-9A-Za-z][A-Za-z0-9\-_]*$ (underscores ARE
+// accepted by the API — PR #36 review suggested dropping them, but that would reject legal
+// clusters). Injection into the CLI guide is already double-guarded: this charset + the
+// listClusters() existence check below.
+const CLUSTER_NAME_RE = /^[0-9A-Za-z][A-Za-z0-9-_]{0,99}$/;
 
 export async function POST(request: Request, { params }: { params: { cluster: string } }) {
   const user = await verifyUser(request.headers.get('cookie'));

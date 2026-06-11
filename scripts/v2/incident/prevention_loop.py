@@ -97,7 +97,10 @@ def _tunable(param_env: str, default: int) -> int:
         import boto3
         value = boto3.client("ssm").get_parameter(Name=name)["Parameter"]["Value"]
         return int(value)
-    except Exception:
+    except Exception as e:  # noqa: BLE001 — a tuning knob must never break the sweep
+        # PR #36 review: don't swallow silently — leave a CloudWatch trace of the fallback.
+        print(json.dumps({"evt": "tunable_fallback", "param": param_env, "default": default,
+                          "err": str(e)[:200]}))
         return default
 
 

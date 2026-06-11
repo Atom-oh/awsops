@@ -4,7 +4,7 @@ import { getPool } from './db';
 // Allow-list = ONBOARDED_EKS_CLUSTERS env (Terraform-managed, immutable here) ∪ eks_registrations (runtime).
 // DB failure/absence degrades to env-only — existing clusters keep working (never throws).
 
-const TTL_MS = 30_000;
+const TTL_MS = 30_000; // PR #36: revocation propagates within ≤TTL per Fargate task (register/unregister bust only the local cache); acceptable for a read-only proxy
 let cache: { set: Set<string>; at: number } | null = null;
 
 const dbOn = () => !!process.env.AURORA_ENDPOINT;
