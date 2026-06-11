@@ -11,7 +11,7 @@
 #   make help        # list targets
 
 .DEFAULT_GOAL := help
-.PHONY: help configure deps deploy agentcore workers
+.PHONY: help configure deps migrate deploy agentcore workers
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -22,7 +22,10 @@ deps: ## Install node deps required by the configurator (idempotent; first run o
 configure: deps ## Interactive TUI: choose new/existing VPC, domain, bucket → terraform.tfvars + backend.hcl
 	@node scripts/v2/configure.mjs
 
-deploy: ## Build arm64, push to ECR, roll ECS, wait stable, smoke /api/health
+migrate: ## Apply pending DB migrations (collision-free ULID files, advisory-locked, fail-loud). DRY_RUN=1 to preview.
+	@node scripts/v2/migrate.mjs
+
+deploy: migrate ## Apply pending migrations, then build arm64, push to ECR, roll ECS, wait stable, smoke /api/health
 	@node scripts/v2/deploy.mjs
 
 agentcore: ## Build arm64 agent image, push ECR, run idempotent AgentCore provisioner (--smoke to invoke). Run after `terraform apply`.
