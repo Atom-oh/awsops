@@ -12,7 +12,7 @@
 
 **파일 스코프 (scope guard):**
 - Modify: `web/lib/eks-incluster.ts`, `web/lib/eks-incluster.test.ts`, `web/app/eks/page.tsx`, `web/app/eks/eks-list.test.tsx`, `web/app/eks/[cluster]/page.tsx`
-- Create: `web/lib/eks-resources.ts`, `web/lib/eks-resources.test.ts` (cherry-pick), `web/lib/eks-tab-stats.ts`, `web/lib/eks-tab-stats.test.ts`, `web/app/api/eks/fleet/route.ts`, `web/app/api/eks/fleet/route.test.ts`
+- Create: `web/lib/eks-resources.ts`, `web/lib/eks-resources.test.ts` (cherry-pick), `web/lib/eks-tab-stats.ts`, `web/lib/eks-tab-stats.test.ts`, `web/app/api/eks/fleet/route.ts`, `web/app/api/eks/fleet/route.test.ts`, `web/app/eks/[cluster]/cluster-tabs.test.tsx`
 
 ---
 
@@ -71,7 +71,7 @@ describe('normalizeEvent', () => {
     expect(row.lastSeenTs).toBe(Date.parse('2026-06-11T01:02:03Z'));
     expect(row.lastSeen).toBeTruthy(); // compact age string
   });
-  it('falls back count→1 and lastTimestamp→eventTime→creationTimestamp', () => {
+  it('falls back count→1 and lastTimestamp→eventTime', () => {
     const row = normalizeEvent({
       metadata: { creationTimestamp: '2026-06-11T00:00:00Z' },
       involvedObject: { kind: 'Node', name: 'n1' },
@@ -81,27 +81,42 @@ describe('normalizeEvent', () => {
     expect(row.object).toBe('n1'); // no namespace → name only
     expect(row.lastSeenTs).toBe(Date.parse('2026-06-11T00:30:00Z'));
   });
+  it('falls back to creationTimestamp when lastTimestamp/eventTime absent (P2: codex)', () => {
+    const row = normalizeEvent({
+      metadata: { creationTimestamp: '2026-06-11T00:00:00Z' },
+      involvedObject: { kind: 'Node', name: 'n1' }, reason: 'X', message: 'm',
+    });
+    expect(row.lastSeenTs).toBe(Date.parse('2026-06-11T00:00:00Z'));
+  });
   it('events is a valid kind', () => { expect(isKind('events')).toBe(true); });
 });
 ```
 
 - [ ] **Step 2: 실패 확인** — `cd web && npx vitest run lib/eks-incluster.test.ts` → FAIL (normalizeEvent not exported)
 
-- [ ] **Step 3: 구현** — `web/lib/eks-incluster.ts`:
+- [ ] **Step 3: 구현** — `web/lib/eks-incluster.ts`. **P2 패널 합의: 아래 5곳이 전부 한 커밋에 함께 들어가야 tsc가 통과한다** (`Kind` union ↔ `Record<Kind,…>` 두 레코드 ↔ `InClusterRow` union ↔ NORMALIZERS):
 
 ```ts
-// Kind 확장
+// 1) Kind union 확장
 export type Kind = 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces' | 'events';
+
+// 2) KIND_PATH — fieldSelector 값은 인코딩(type%3DWarning)이 관례적 형태 (P2: kiro — 미인코딩도 동작하나 프록시 안전)
 const KIND_PATH: Record<Kind, string> = {
   // …기존 5개…
-  events: '/api/v1/events?fieldSelector=type=Warning', // Warning만 (v1 parity, read-only GET)
+  events: '/api/v1/events?fieldSelector=type%3DWarning', // Warning만 (v1 parity, read-only GET)
 };
-export function isKind(k: string): k is Kind { /* 기존 || k === 'events' */ }
 
-// K8sItem에 이벤트 필드 추가 (interface 확장)
+// 3) isKind — 명시적 전체 나열 (P2: gemini)
+export function isKind(k: string): k is Kind {
+  return k === 'nodes' || k === 'pods' || k === 'deployments' || k === 'services' || k === 'namespaces' || k === 'events';
+}
+
+// 4) K8sItem interface에 이벤트 필드 추가 (top-level optional):
 //   involvedObject?: { kind?: string; name?: string };
 //   reason?: string; message?: string; count?: number;
 //   lastTimestamp?: string; eventTime?: string; type?: string;
+// 참고(P2: kiro): 코어 /api/v1/events 선택이 맞음 — events.k8s.io/v1은 count/lastTimestamp를
+// deprecatedCount/series로 개명하므로 코어 엔드포인트를 유지할 것.
 
 export interface EventRow {
   kind: string; object: string; reason: string; message: string;
@@ -115,7 +130,7 @@ export function normalizeEvent(it: K8sItem): EventRow {
   const tsMs = ts ? Date.parse(ts) : 0;
   return {
     kind: it.involvedObject?.kind ?? '',
-    object: ns ? `${ns}/${name}` : name,
+    object: ns ? `${ns}/${name}` : name, // namespace는 object에 내장 (별도 컬럼 없음 — 설계 의도)
     reason: it.reason ?? '',
     message: it.message ?? '',
     count: it.count ?? 1,
@@ -123,8 +138,13 @@ export function normalizeEvent(it: K8sItem): EventRow {
     lastSeenTs: Number.isFinite(tsMs) ? tsMs : 0,
   };
 }
-// NORMALIZERS에 events: normalizeEvent 추가, InClusterRow union에 EventRow 추가
+
+// 5) union + NORMALIZERS 동시 갱신:
+export type InClusterRow = NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow | EventRow;
+//    NORMALIZERS: Record<Kind, …>에 events: normalizeEvent 추가
 ```
+
+추가(P2: kiro): 파일 상단 주석의 `AmazonEKSViewPolicy`는 stale — 현재 배포된 association은 `AmazonEKSAdminViewPolicy`(2026-06-11 403 수정). 이 주석도 함께 갱신.
 
 - [ ] **Step 4: green 확인 + 커밋**
 
@@ -169,6 +189,10 @@ describe('eks-tab-stats', () => {
   it('deploymentHealth treats desired 0 as 100%', () => {
     expect(deploymentHealth([{ name: 'z', namespace: 'x', ready: '0/0', available: 0 }])[0].pct).toBe(100);
   });
+  it('deploymentHealth falls back to the ready numerator when available is absent (P2: codex)', () => {
+    expect(deploymentHealth([{ name: 'y', namespace: 'x', ready: '2/3' }])[0]).toEqual(
+      { name: 'y', namespace: 'x', desired: 3, available: 2, pct: 67 });
+  });
   it('serviceTypeCounts counts by type', () => {
     expect(serviceTypeCounts([{ type: 'ClusterIP' }, { type: 'ClusterIP' }, { type: 'LoadBalancer' }]))
       .toEqual({ ClusterIP: 2, LoadBalancer: 1 });
@@ -198,10 +222,14 @@ export function podsByNamespace(rows: { namespace?: unknown }[]): { namespace: s
 }
 
 export interface DeploymentHealth { name: string; namespace: string; desired: number; available: number; pct: number }
+// pct = available/desired (스펙 §3.3 "available / desired" — readyReplicas가 아니라
+// availableReplicas 기준. 롤아웃 중 ready와 다를 수 있음은 의도된 동작, P2: kiro 확인).
 export function deploymentHealth(rows: { name?: unknown; namespace?: unknown; ready?: unknown; available?: unknown }[]): DeploymentHealth[] {
   return rows.map((r) => {
-    const desired = parseInt(String(r.ready ?? '').split('/')[1] ?? '0', 10) || 0;
-    const available = Number(r.available ?? 0) || 0;
+    const parts = String(r.ready ?? '').split('/');
+    const desired = parseInt(parts[1] ?? '0', 10) || 0;
+    // available 부재 시 ready 분자로 폴백 (P2: codex — 광고된 "a/b 파싱"을 실제로 커버)
+    const available = r.available != null ? Number(r.available) || 0 : parseInt(parts[0] ?? '0', 10) || 0;
     const pct = desired > 0 ? Math.max(0, Math.min(100, Math.round((available / desired) * 100))) : 100;
     return { name: String(r.name ?? ''), namespace: String(r.namespace ?? ''), desired, available, pct };
   }).sort((a, b) => a.pct - b.pct || a.name.localeCompare(b.name));
@@ -285,6 +313,30 @@ describe('GET /api/eks/fleet', () => {
     expect(down.reachable).toBe(false);
     expect(down.counts.nodes).toBe(0);
   });
+  it('an events-only failure keeps the cluster reachable with empty events (P2: kiro)', async () => {
+    listInCluster.mockImplementation(async (_c: string, kind: string) => {
+      if (kind === 'events') throw new Error('403');
+      return ({ nodes: [NODE], pods: [POD], deployments: [], services: [] } as Record<string, unknown[]>)[kind] ?? [];
+    });
+    const body = await (await GET(req())).json();
+    expect(body.clusters[0].reachable).toBe(true);
+    expect(body.clusters[0].events).toEqual([]);
+  });
+  it('caps events at 25 sorted by lastSeenTs desc (P2: kiro)', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ ...EVENT, object: `o${i}`, lastSeenTs: i }));
+    listInCluster.mockImplementation(async (_c: string, kind: string) => (
+      { nodes: [], pods: [], deployments: [], services: [], events: many } as Record<string, unknown[]>
+    )[kind] ?? []);
+    const body = await (await GET(req())).json();
+    expect(body.clusters[0].events).toHaveLength(25);
+    expect(body.clusters[0].events[0].lastSeenTs).toBe(29);
+  });
+  it('registry failure degrades to an empty fleet, not 500 (P2: kiro)', async () => {
+    getAllowedClusters.mockRejectedValue(new Error('aurora down'));
+    const res = await GET(req());
+    expect(res.status).toBe(200);
+    expect((await res.json()).clusters).toEqual([]);
+  });
 });
 ```
 
@@ -297,22 +349,33 @@ import { verifyUser } from '@/lib/auth';
 import { getAllowedClusters } from '@/lib/eks-registry';
 import { listInCluster, type NodeRow, type PodRow, type DeploymentRow, type ServiceRow, type EventRow } from '@/lib/eks-incluster';
 import { aggregateNodeResources } from '@/lib/eks-resources';
-import { podStatusCounts, podsByNamespace, serviceTypeCounts } from '@/lib/eks-tab-stats';
+import { podStatusCounts, podsByNamespace } from '@/lib/eks-tab-stats';
 
 export const dynamic = 'force-dynamic';
 
 // v1 /k8s Overview parity: per-cluster live aggregates, computed SERVER-side.
 // Raw pod rows never ship to the client (thin-BFF) — only small aggregates do.
-// Per-cluster failures degrade to reachable:false (the fleet view must not 500).
+// Per-cluster failures degrade to reachable:false; even a registry failure
+// returns 200 + empty fleet (the fleet view must not 500 — spec §3.1d).
+// NOTE: per-cluster podsByNamespace is pre-capped at 10, so the client-side
+// cross-cluster merge is an approximation near the cut — acceptable for an
+// overview (P2: kiro, documented).
 
 const EVENTS_CAP = 25;
 const NS_CAP = 10;
+
+const EMPTY = (name: string) => ({
+  name, reachable: false,
+  counts: { nodes: 0, nodesReady: 0, pods: 0, podsRunning: 0, deployments: 0, services: 0 },
+  nodeAgg: [], podStatus: {}, podsByNamespace: [], events: [],
+});
 
 export async function GET(request: Request) {
   if (!(await verifyUser(request.headers.get('cookie')))) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
-  const names = [...(await getAllowedClusters())];
+  let names: string[] = [];
+  try { names = [...(await getAllowedClusters())]; } catch { return Response.json({ clusters: [] }); }
   const clusters = await Promise.all(names.map(async (name) => {
     try {
       const [nodes, pods, deployments, services, events] = await Promise.all([
@@ -320,7 +383,7 @@ export async function GET(request: Request) {
         listInCluster(name, 'pods') as Promise<PodRow[]>,
         listInCluster(name, 'deployments') as Promise<DeploymentRow[]>,
         listInCluster(name, 'services') as Promise<ServiceRow[]>,
-        listInCluster(name, 'events').catch(() => []) as Promise<EventRow[]>, // events-only failure must not kill the cluster entry
+        (listInCluster(name, 'events') as Promise<EventRow[]>).catch(() => [] as EventRow[]), // events-only failure must not kill the cluster entry
       ]);
       return {
         name,
@@ -336,20 +399,17 @@ export async function GET(request: Request) {
         nodeAgg: aggregateNodeResources(nodes, pods),
         podStatus: podStatusCounts(pods),
         podsByNamespace: podsByNamespace(pods).slice(0, NS_CAP),
-        serviceTypes: serviceTypeCounts(services),
         events: [...events].sort((a, b) => b.lastSeenTs - a.lastSeenTs).slice(0, EVENTS_CAP),
       };
     } catch {
-      return {
-        name, reachable: false,
-        counts: { nodes: 0, nodesReady: 0, pods: 0, podsRunning: 0, deployments: 0, services: 0 },
-        nodeAgg: [], podStatus: {}, podsByNamespace: [], serviceTypes: {}, events: [],
-      };
+      return EMPTY(name);
     }
   }));
   return Response.json({ clusters });
 }
 ```
+
+(P2: kiro — `serviceTypes`는 리스트 페이지가 쓰지 않고 상세 탭은 incluster를 직접 부르므로 **페이로드에서 제외**. Step 1 테스트와 Task 5의 FLEET mock에서도 제외.)
 
 - [ ] **Step 4: green + 커밋**
 
@@ -378,17 +438,19 @@ const FLEET = {
       nodeAgg: [{ name: 'n1', cpuAllocatable: 3.9, cpuRequest: 1.2, cpuPct: 31, memAllocatable: 15000, memRequest: 4000, memPct: 27, podCount: 5 }],
       podStatus: { Running: 9, Pending: 1 },
       podsByNamespace: [{ namespace: 'default', count: 6 }, { namespace: 'kube-system', count: 4 }],
-      serviceTypes: { ClusterIP: 4 },
       events: [{ kind: 'Pod', object: 'default/p1', reason: 'BackOff', message: 'restarting', count: 3, lastSeen: '5m', lastSeenTs: 1000 }],
     }] },
   }),
 };
 // 모든 mockFetch({ ...SUMMARY, ... }) → mockFetch({ ...FLEET, ... })
+// (FLEET 클러스터 이름 'conn'은 기존 /api/eks fixture의 connected 클러스터와 일치 — 의도적)
 // 'renders the fleet summary stats row' 테스트: '10'(pods) 어서션 유지
 // 추가 어서션:
 //   - 클러스터 카드: screen.getByText('vpc-1') (카드 본문 VPC), getByText(/2 nodes/) (미니 카운트)
 //   - 노드 리소스: getByText('n1')
 //   - Warning Events: getByText('BackOff')
+//   - (P2: codex) 'admin sees the register button...' 테스트에 fleet 재요청 어서션:
+//     등록 성공 후 fetch가 'GET /api/eks/fleet'을 다시 호출했는지 카운트로 확인
 ```
 
 실행: `npx vitest run app/eks/eks-list.test.tsx` → FAIL (페이지가 아직 summary/테이블)
@@ -422,15 +484,27 @@ interface FleetCluster {
 }
 
 export default function EksPage() {
-  // 기존 state 유지 (summary → fleet 교체)
+  // 기존 state 유지 (summary → fleet 교체; 기존 summary useEffect는 제거 — P2: gemini)
   const [fleet, setFleet] = useState<FleetCluster[] | null>(null);
-  // load(): /api/eks (기존) · useEffect: /api/eks/fleet → setFleet
+
+  // (P2: codex) fleet 로드는 재사용 가능한 콜백으로 — register/unregister 성공 후에도 호출해
+  // 새로 연결된 클러스터의 카운트/노드바/이벤트가 즉시 반영되게 한다.
+  const loadFleet = useCallback(() => {
+    fetch('/api/eks/fleet').then((r) => (r.ok ? r.json() : null))
+      .then((d) => setFleet(d?.clusters ?? [])).catch(() => setFleet([]));
+  }, []);
+  useEffect(() => { loadFleet(); }, [loadFleet]);
+  // register()/unregister() 성공 분기에서 load() 다음에 loadFleet() 추가 호출.
 
   const fleetBy = useMemo(() => new Map((fleet ?? []).map((f) => [f.name, f])), [fleet]);
-  const totals = useMemo(() => { /* fleet 합산: connected/nodes/nodesReady/pods/podsRunning/deployments/services */ }, [fleet]);
+  const totals = useMemo(() => { /* fleet 합산: connected(=reachable 수)/nodes/nodesReady/pods/podsRunning/deployments/services */ }, [fleet]);
+  // (P2: kiro) Clusters 타일은 fleet이 아니라 /api/eks 전체 rows.length —
+  // fleet은 allowed 클러스터만 담으므로 entry-only/no-entry까지 세려면 rows 기준이어야 한다.
   const podStatusData = useMemo(() => { /* fleet podStatus 병합 → [{name, value}] */ }, [fleet]);
-  const nsData = useMemo(() => { /* fleet podsByNamespace 병합 → top 10 [{namespace, count}] */ }, [fleet]);
+  const nsData = useMemo(() => { /* fleet podsByNamespace 병합 → top 10 [{namespace, count}] (per-cluster pre-cap 10의 근사치 — 허용) */ }, [fleet]);
   const eventRows = useMemo(() => { /* fleet events 병합 + cluster 필드, lastSeenTs desc */ }, [fleet]);
+  // (P2: codex) 섹션 5(노드)/6(차트)/7(이벤트)은 totals.connected > 0 일 때만 렌더 —
+  // 연결 0개면 카드+가이드만 보이는 기존 온보딩 UX 유지 ("경고 이벤트 없음" 문구도 미렌더).
 
   return (
     <div className="px-8 py-8 flex flex-col gap-6">
@@ -504,6 +578,7 @@ git commit -m "feat(eks-ui): /eks rebuilt as v1-parity overview — cluster card
 
 **Files:**
 - Modify: `web/app/eks/[cluster]/page.tsx`
+- Create: `web/app/eks/[cluster]/cluster-tabs.test.tsx`
 
 - [ ] **Step 1: Events 탭 추가** — `Tab` union + `TABS`에 `{ value: 'events', label: 'Events' }` (Diagnosis 앞), `COLUMNS.events`:
 
@@ -517,9 +592,18 @@ events: [
   { key: 'lastSeen', label: 'Last Seen' },
 ],
 ```
-load()는 기존 incluster fetch가 kind=events를 그대로 처리. rows를 `lastSeenTs` desc로 사전 정렬 후 set. `lastSeenTs`는 컬럼 비노출.
+load()는 기존 incluster fetch가 kind=events를 그대로 처리(서버 라우트는 isKind만 게이트 — 추가 allow-list 없음, 확인 완료). **정렬은 명시적 분기** (P2: kiro — 빠뜨리면 무정렬 렌더):
 
-- [ ] **Step 2: 탭별 KPI/차트 블록** — import 추가(`StatTile`(=StatCard), `DonutBreakdown`, `Meter`, eks-tab-stats 헬퍼) 후, 검색/필터 행 위에 탭 조건부 렌더 (전부 `allRows` 기준 — 필터 전):
+```ts
+// load() 안, setRows 직전:
+const sorted = tab === 'events'
+  ? [...(d.rows as Row[])].sort((a, b) => Number(b.lastSeenTs ?? 0) - Number(a.lastSeenTs ?? 0))
+  : (d.rows as Row[]);
+setRows(sorted);
+```
+`lastSeenTs`는 컬럼 비노출. events는 `NAMESPACED` 미포함(namespace는 object에 내장).
+
+- [ ] **Step 2: 탭별 KPI/차트 블록** — import 추가(`StatCard`(= StatTile re-export — 기존 페이지 idiom 유지), `DonutBreakdown`, `Meter`, `Card`, eks-tab-stats 헬퍼) 후, 검색/필터 행 위에 탭 조건부 렌더 (전부 `allRows` 기준 — 필터 전):
 
 ```tsx
 {tab === 'pods' && allRows.length > 0 && (() => {
@@ -581,11 +665,70 @@ load()는 기존 incluster fetch가 kind=events를 그대로 처리. rows를 `la
 ```
 Nodes 탭은 Task 1(cherry-pick)의 "노드 리소스" Card 그대로. Diagnosis 변경 없음. events는 `NAMESPACED` 미포함(네임스페이스 필터 없음 — object에 ns 포함됨).
 
-- [ ] **Step 3: 검증 + 커밋**
+- [ ] **Step 3: 페이지 테스트 (P2: codex+kiro 합의 — 탭 와이어링은 tsc가 못 잡는다)** — `web/app/eks/[cluster]/cluster-tabs.test.tsx` (jsdom, eks-list.test.tsx의 mockFetch 패턴 재사용):
+
+```tsx
+// @vitest-environment jsdom
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import EksClusterPage from './page';
+
+vi.mock('next/navigation', () => ({ useParams: () => ({ cluster: 'c1' }) }));
+afterEach(cleanup);
+beforeEach(() => { vi.unstubAllGlobals(); });
+
+function mockKind(handlers: Record<string, unknown[]>) {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const kind = new URL(url, 'http://x').searchParams.get('kind') ?? '';
+    const rows = handlers[kind];
+    if (!rows) throw new Error(`unmocked kind: ${kind}`);
+    return { ok: true, status: 200, json: async () => ({ kind, rows }) } as Response;
+  }));
+}
+
+describe('EKS cluster tabs', () => {
+  it('pods tab: KPI counts stay pre-filter while the table filters (스펙 §3.3)', async () => {
+    mockKind({ nodes: [], pods: [
+      { name: 'p1', namespace: 'a', status: 'Running', node: 'n', restarts: 0, age: '1h' },
+      { name: 'p2', namespace: 'b', status: 'Pending', node: 'n', restarts: 0, age: '1h' },
+    ] });
+    render(<EksClusterPage />);
+    fireEvent.click(screen.getByText('Pods'));
+    await waitFor(() => expect(screen.getByText('p1')).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText('검색…'), { target: { value: 'p1' } });
+    expect(screen.queryByText('p2')).toBeNull();          // 테이블은 필터됨
+    expect(screen.getByText('Pending').closest('div')).toBeTruthy(); // KPI(Pending=1)는 유지
+  });
+  it('events tab renders warning rows sorted by lastSeenTs desc', async () => {
+    mockKind({ nodes: [], events: [
+      { kind: 'Pod', object: 'a/p', reason: 'Old', message: 'm', count: 1, lastSeen: '2d', lastSeenTs: 1 },
+      { kind: 'Pod', object: 'a/q', reason: 'New', message: 'm', count: 1, lastSeen: '5m', lastSeenTs: 9 },
+    ] });
+    render(<EksClusterPage />);
+    fireEvent.click(screen.getByText('Events'));
+    await waitFor(() => expect(screen.getByText('New')).toBeTruthy());
+    const cells = screen.getAllByText(/New|Old/).map((e) => e.textContent);
+    expect(cells.indexOf('New')).toBeLessThan(cells.indexOf('Old'));
+  });
+  it('deployments tab shows degraded-first replica bars', async () => {
+    mockKind({ nodes: [], deployments: [
+      { name: 'ok', namespace: 'x', ready: '3/3', upToDate: 3, available: 3, age: '1d' },
+      { name: 'bad', namespace: 'x', ready: '1/3', upToDate: 1, available: 1, age: '1d' },
+    ] });
+    render(<EksClusterPage />);
+    fireEvent.click(screen.getByText('Deployments'));
+    await waitFor(() => expect(screen.getByText('Degraded')).toBeTruthy());
+    expect(screen.getByText('1/3')).toBeTruthy(); // 레플리카 바 라벨
+  });
+});
+```
+(노트: nodes 탭이 기본 탭이라 첫 로드는 kind=nodes — mock에 `nodes: []` 포함. nodes 탭은 pods 보조 fetch를 best-effort로 하므로 `pods` 누락 시 throw해도 페이지는 살아있어야 하나, 단순화를 위해 mock에 pods를 넣어도 됨.)
+
+- [ ] **Step 4: 검증 + 커밋**
 
 ```bash
 cd web && npx vitest run && npx tsc --noEmit
-git add "web/app/eks/[cluster]/page.tsx"
+git add "web/app/eks/[cluster]/page.tsx" "web/app/eks/[cluster]/cluster-tabs.test.tsx"
 git commit -m "feat(eks-ui): per-tab KPI/viz — pods status donut, deployment replica bars, service types, events tab"
 ```
 
