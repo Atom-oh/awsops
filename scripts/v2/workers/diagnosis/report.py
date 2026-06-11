@@ -6,7 +6,9 @@ import re
 import boto3
 
 from . import sources as src
-from .sections import SECTIONS
+from . import invariants as inv
+from . import db as ddb
+from .sections import SECTIONS, INTENDED_VS_ACTUAL_SECTION
 
 # Inference-profile id — a BARE id ("anthropic.claude-...") throws ValidationException on
 # Claude 4.x invoke_model. Matches agent/agent.py's us.* profile convention.
@@ -80,12 +82,66 @@ def build_markdown(rendered, account, tier):
     return "\n".join(parts)
 
 
-def generate(conn, account, tier="mid"):
-    """Collect → render each section → markdown + summary. Returns (markdown, summary, sources_used)."""
+def _build_actual(collected):
+    """Assemble the deterministic-evaluator input from the Plan-1 collectors (read-only).
+    Shape: {"service_map": {edges:[...]}, "inventory": {by_type, unencrypted}} — exactly what
+    invariants.py expects. Missing/degraded collectors degrade to empty (the evaluator copes)."""
+    sm = (collected.get("service_map") or {}).get("data") or {}
+    invn = (collected.get("inventory") or {}).get("data") or {}
+    return {"service_map": sm, "inventory": invn}
+
+
+def _evaluate_intent(active, actual):
+    """Run the pure deterministic engine. Returns the full verdict list (passed True/False/None)."""
+    return inv.evaluate_all(active, actual)
+
+
+def _drift(verdicts):
+    """The failed verdicts only — these are the intended-vs-actual drifts surfaced in `summary`."""
+    return [v for v in verdicts if v.get("passed") is False]
+
+
+def _diff_summary(current_drift, parent_summary):
+    """Regression diff vs the parent report's summary. A regression = an invariant that PASSED in
+    the parent (i.e. was NOT in the parent's drift) but FAILS now (is in the current drift)."""
+    parent_failed = {v.get("id") for v in (parent_summary or {}).get("drift", [])}
+    regressions = [v for v in current_drift if v.get("id") not in parent_failed]
+    improvements = [vid for vid in parent_failed
+                    if vid not in {v.get("id") for v in current_drift}]
+    return {"regressions": regressions, "improvements": improvements}
+
+
+def generate(conn, account, tier="mid", report_id=None):
+    """Collect → evaluate active invariants → render each section → markdown + summary.
+    Returns (markdown, summary, sources_used). Read-only throughout; the LLM sees verdict-only
+    drift, never raw untrusted edge text. `report_id` (optional) enables the parent-report diff."""
     collected = {r["key"]: r for r in src.collect_all(conn)}
     sources_used = [k for k, r in collected.items() if r["ok"]]
     degraded = [k for k, r in collected.items() if r["degraded"]]
-    rendered = [render_section(sec, collected) for sec in SECTIONS]
+
+    # --- Plan 2: intended-vs-actual (active invariants only; deterministic; verdict-only) ---
+    actual = _build_actual(collected)
+    active = ddb.list_active_invariants(conn)
+    verdicts = _evaluate_intent(active, actual)
+    drift = _drift(verdicts)
+    # Inject ONLY the verdicts into a synthetic collector entry so render_section feeds verdict-only
+    # context to the LLM (never the raw edge dicts). The section declares sources=['intended_vs_actual'].
+    collected["intended_vs_actual"] = {
+        "key": "intended_vs_actual", "ok": True, "degraded": False, "notes": "",
+        "data": {"verdicts": verdicts},
+    }
+
+    catalog = list(SECTIONS) + [INTENDED_VS_ACTUAL_SECTION]
+    rendered = [render_section(sec, collected) for sec in catalog]
     md = build_markdown(rendered, account, tier)
-    summary = {"sections": len(rendered), "sources_used": sources_used, "degraded": degraded}
+    summary = {"sections": len(rendered), "sources_used": sources_used,
+               "degraded": degraded, "drift": drift}
+
+    # --- Plan 2: report diff vs the parent report (only if this report has a parent) ---
+    if report_id is not None:
+        parent_id, _ = ddb.get_report_summary(conn, report_id)
+        if parent_id is not None:
+            _, parent_summary = ddb.get_report_summary(conn, parent_id)
+            summary["diff"] = _diff_summary(drift, parent_summary)
+
     return md, summary, sources_used

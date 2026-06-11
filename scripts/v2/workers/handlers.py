@@ -53,7 +53,7 @@ def _report(payload, dry_run):
         if not report_id:
             report_id = ddb.create_report(conn, worker_job_id=None, tier=tier, requested_by=requested_by)
         try:
-            md, summary, sources_used = rpt.generate(conn, account, tier)
+            md, summary, sources_used = rpt.generate(conn, account, tier, report_id=report_id)
             artifact_uri = _upload_markdown(md, report_id)
             status = "partial" if summary.get("degraded") else "succeeded"
             ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,
