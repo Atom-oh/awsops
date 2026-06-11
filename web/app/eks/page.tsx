@@ -27,6 +27,7 @@ export default function EksPage() {
   const [guide, setGuide] = useState<{ cluster: string; data: Guide } | null>(null);
   const [busyCluster, setBusyCluster] = useState('');
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [copied, setCopied] = useState('');
 
   const load = useCallback(() => {
     fetch('/api/eks')
@@ -114,7 +115,17 @@ export default function EksPage() {
           {guide.data.commands.map((cmd) => (
             <div key={cmd} className="flex items-start gap-2">
               <code className="flex-1 rounded bg-ink-800 text-paper text-[11px] p-2 overflow-x-auto whitespace-pre">{cmd}</code>
-              <button className={btn} onClick={() => navigator.clipboard.writeText(cmd)}>복사</button>
+              <button
+                className={copied === cmd ? `${btn} !text-emerald-600 !border-emerald-300` : btn}
+                onClick={() => {
+                  void navigator.clipboard.writeText(cmd).then(() => {
+                    setCopied(cmd);
+                    setTimeout(() => setCopied((c) => (c === cmd ? '' : c)), 1500);
+                  });
+                }}
+              >
+                {copied === cmd ? 'Copied!' : '복사'}
+              </button>
             </div>
           ))}
           <div className="text-[12px] text-ink-500">{guide.data.note}</div>

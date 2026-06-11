@@ -47,6 +47,8 @@ export async function onboardingGuide(cluster: string): Promise<OnboardingGuide>
       `aws eks create-access-entry --cluster-name ${cluster} --region ${REGION} --principal-arn ${arn} --type STANDARD`,
       `aws eks associate-access-policy --cluster-name ${cluster} --region ${REGION} --principal-arn ${arn} --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy --access-scope type=cluster`,
     ],
-    note: '명령 실행 후 [조회 등록]을 다시 누르세요. 영구 온보딩(Terraform)은 make configure → onboard_eks_clusters 를 사용하세요.',
+    note: process.env.EKS_AUTO_REGISTER === 'true'
+      ? '명령 실행 후 1~2분 내 자동으로 연결됩니다(EventBridge). 바로 확인하려면 [조회 등록]을 누르세요. 영구 온보딩(Terraform)은 make configure → onboard_eks_clusters 를 사용하세요.'
+      : '명령 실행 후 [조회 등록]을 다시 누르세요. 영구 온보딩(Terraform)은 make configure → onboard_eks_clusters 를 사용하세요.',
   };
 }
