@@ -148,3 +148,9 @@ variable "steampipe_image_tag" {
   description = "Steampipe service image tag."
   default     = "steampipe-latest"
 }
+
+variable "eks_auto_register_enabled" {
+  type        = bool
+  description = "EKS auto-register gate: EventBridge(CloudTrail AssociateAccessPolicy/DeleteAccessEntry for the task role) -> Lambda -> eks_registrations. Observe-only toward AWS (no resource mutation). Requires workers_enabled (pg8000 layer reuse). false (default) = 0 resources."
+  default     = false
+}

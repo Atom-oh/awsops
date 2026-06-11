@@ -59,3 +59,107 @@ output "onboarded_eks_clusters" {
     }
   }
 }
+
+# ── EKS auto-register (EventBridge → Lambda → eks_registrations) ─────────────
+# v1 "Register kubeconfig"의 완전 자동화: 운영자가 CLI로 access entry + AdminViewPolicy를
+# 연계하면 CloudTrail 이벤트를 EventBridge가 잡아 Aurora 등록 리스트에 기록한다 (버튼 불요).
+# AWS 리소스를 변경하지 않는 관찰-전용 자동화 (ADR-029 reversal과 무충돌).
+# Requires workers_enabled=true (pg8000 layer + VPC plumbing 재사용).
+
+locals {
+  ear = var.eks_auto_register_enabled && var.workers_enabled ? 1 : 0
+}
+
+data "archive_file" "eks_auto_register" {
+  count       = local.ear
+  type        = "zip"
+  output_path = "${path.module}/.build/eks_auto_register.zip"
+  source {
+    content  = file("${path.root}/../../../scripts/v2/eks/auto_register.py")
+    filename = "auto_register.py"
+  }
+}
+
+resource "aws_iam_role" "eks_auto_register" {
+  count = local.ear
+  name  = "${var.project}-eks-auto-register"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eks_auto_register_vpc" {
+  count      = local.ear
+  role       = aws_iam_role.eks_auto_register[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
+resource "aws_iam_role_policy" "eks_auto_register_secret" {
+  count = local.ear
+  name  = "${var.project}-eks-auto-register-secret"
+  role  = aws_iam_role.eks_auto_register[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+    }]
+  })
+}
+
+resource "aws_lambda_function" "eks_auto_register" {
+  count            = local.ear
+  function_name    = "${var.project}-eks-auto-register"
+  role             = aws_iam_role.eks_auto_register[0].arn
+  runtime          = "python3.12"
+  handler          = "auto_register.handler"
+  filename         = data.archive_file.eks_auto_register[0].output_path
+  source_code_hash = data.archive_file.eks_auto_register[0].output_base64sha256
+  timeout          = 30
+  memory_size      = 128
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      TASK_ROLE_NAME    = aws_iam_role.task.name
+    }
+  }
+}
+
+# CloudTrail 경유 EKS 관리 이벤트 — 우리 task role 대상의 정책 연계/엔트리 삭제만 Lambda에서 필터.
+resource "aws_cloudwatch_event_rule" "eks_access_change" {
+  count       = local.ear
+  name        = "${var.project}-eks-access-change"
+  description = "EKS AssociateAccessPolicy/DeleteAccessEntry via CloudTrail -> auto (un)register for in-app queries"
+  event_pattern = jsonencode({
+    source        = ["aws.eks"]
+    "detail-type" = ["AWS API Call via CloudTrail"]
+    detail = {
+      eventSource = ["eks.amazonaws.com"]
+      eventName   = ["AssociateAccessPolicy", "DeleteAccessEntry"]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "eks_access_change" {
+  count = local.ear
+  rule  = aws_cloudwatch_event_rule.eks_access_change[0].name
+  arn   = aws_lambda_function.eks_auto_register[0].arn
+}
+
+resource "aws_lambda_permission" "eks_auto_register_events" {
+  count         = local.ear
+  statement_id  = "AllowEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.eks_auto_register[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.eks_access_change[0].arn
+}
