@@ -4,6 +4,7 @@
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { getDiagnosis } from '@/lib/k8sgpt';
+import { isAllowed } from '@/lib/eks-registry';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,8 +18,7 @@ export async function GET(request: Request, { params }: { params: { cluster: str
     return Response.json({ enabled: false, message: 'k8sgpt diagnosis disabled' }, { status: 503 });
   }
 
-  const allow = (process.env.ONBOARDED_EKS_CLUSTERS || '').split(',').filter(Boolean);
-  if (!allow.includes(params.cluster)) {
+  if (!(await isAllowed(params.cluster))) {
     return Response.json({ status: 'error', message: 'unknown cluster' }, { status: 404 });
   }
   try {

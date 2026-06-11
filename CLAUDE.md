@@ -45,7 +45,7 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 - **arm64 필수** (web/agent/worker 이미지 모두 `buildx --platform linux/arm64`).
 
 ### 데이터 / 설정
-- 앱 상태는 **Aurora**(node-pg). `data/*.json`(v1 패턴) 아님. 스키마는 `terraform/v2/foundation/data/schema.sql` + `schema_migrations`.
+- 앱 상태는 **Aurora**(node-pg). `data/*.json`(v1 패턴) 아님. **스키마 베이스라인** = `terraform/v2/foundation/data/schema.sql`(v9까지, 동결) — **신규 마이그레이션은 `terraform/v2/foundation/migrations/<ULID>_<name>.sql`**로 작성하고 `make migrate`(= `make deploy` 선행 단계)가 pending-only 적용 + ledger 스탬프. 순차 정수(vN) 방식은 동시 브랜치 충돌로 폐기 — `migrations/README.md` 참조.
 - ECS `secrets` valueFrom(Aurora secret)는 **실행 역할(execution role)** 권한 필요(task role 아님) — 아니면 `ResourceInitializationError`.
 - AgentCore 설정은 **SSM이 source of truth**(provision.py가 기록 → web BFF 런타임 read). valueFrom 미사용(레이스 회피).
 
@@ -167,7 +167,7 @@ Live env: account `180294183052`, domain `awsops-v2.atomai.click`, reused mgmt-v
 - **arm64 required** for web/agent/worker images.
 
 ### Data / Config
-- App state lives in **Aurora** (node-pg), not `data/*.json` (the v1 pattern). Schema: `terraform/v2/foundation/data/schema.sql` + `schema_migrations`.
+- App state lives in **Aurora** (node-pg), not `data/*.json` (the v1 pattern). **Schema baseline** = `terraform/v2/foundation/data/schema.sql` (frozen at v9) — **new migrations go in `terraform/v2/foundation/migrations/<ULID>_<name>.sql`**, applied pending-only by `make migrate` (runs before `make deploy`) with ledger stamping. The sequential-integer scheme was retired (concurrent-branch collisions) — see `migrations/README.md`.
 - ECS `secrets` valueFrom (Aurora secret) needs **execution-role** perms (not the task role), else `ResourceInitializationError`.
 - AgentCore config: **SSM is the source of truth** (provision.py writes → web BFF reads at runtime). No valueFrom (avoids the race).
 

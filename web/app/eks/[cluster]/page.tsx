@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { Search, X } from 'lucide-react';
 import DataTable, { type Column } from '@/components/ui/DataTable';
@@ -10,16 +10,20 @@ import Input from '@/components/ui/Input';
 import Badge from '@/components/ui/Badge';
 import Card from '@/components/ui/Card';
 import Meter from '@/components/ui/Meter';
+import StatCard from '@/components/ui/StatCard';
+import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { aggregateNodeResources, type NodeRow, type PodRow, type NodeResourceAgg } from '@/lib/eks-resources';
+import { podStatusCounts, deploymentHealth, serviceTypeCounts } from '@/lib/eks-tab-stats';
 
 type Row = Record<string, unknown>;
-type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'diagnosis';
+type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'events' | 'diagnosis';
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'nodes', label: 'Nodes' },
   { value: 'pods', label: 'Pods' },
   { value: 'deployments', label: 'Deployments' },
   { value: 'services', label: 'Services' },
+  { value: 'events', label: 'Events' },
   { value: 'diagnosis', label: 'Diagnosis' },
 ];
 
@@ -82,6 +86,14 @@ const COLUMNS: Record<Exclude<Tab, 'diagnosis'>, Column[]> = {
     { key: 'ports', label: 'Ports' },
     { key: 'age', label: 'Age' },
   ],
+  events: [
+    { key: 'kind', label: 'Kind' },
+    { key: 'object', label: 'Object' },
+    { key: 'reason', label: 'Reason' },
+    { key: 'message', label: 'Message' },
+    { key: 'count', label: 'Count' },
+    { key: 'lastSeen', label: 'Last Seen' },
+  ],
 };
 
 // ADR-035 Rule 8: the table surfaces ONLY the deterministic facts. The AI
@@ -108,7 +120,14 @@ export default function EksClusterPage() {
   const [ns, setNs] = useState('전체');
   const [selected, setSelected] = useState<Row | null>(null);
 
+  // Monotonic load sequence — a late response from a superseded load (rapid
+  // tab/cluster switch) must not write stale rows/nodeAgg over the newer view
+  // (P4 gate: kimi-k2.5).
+  const loadSeqRef = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
+    const fresh = () => seq === loadSeqRef.current;
     setRows(null);
     setNodeAgg(null);
     setDiag(null);
@@ -118,6 +137,7 @@ export default function EksClusterPage() {
       // NOT {rows}. 503 (flag off) → degrade-safe disabled state, no thrown error.
       if (tab === 'diagnosis') {
         const r = await fetch(`/api/eks/${encodeURIComponent(cluster)}/k8sgpt`);
+        if (!fresh()) return;
         if (r.status === 503) {
           setDiag({ enabled: false, stale: true, findings: [] });
           return;
@@ -126,28 +146,36 @@ export default function EksClusterPage() {
           const d = await r.json().catch(() => null);
           throw new Error(d?.message ? String(d.message) : String(r.status));
         }
-        setDiag((await r.json()) as DiagnosisResult);
+        const diagBody = (await r.json()) as DiagnosisResult;
+        if (fresh()) setDiag(diagBody);
         return;
       }
+      // Nodes tab also needs pods for the per-node request aggregation — fire both
+      // fetches concurrently so the table and the bars land in one paint instead of
+      // table-then-bars (P4 gate: gemini). The pods leg is best-effort (null on failure).
+      const podsP = tab === 'nodes'
+        ? fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=pods`)
+            .then((pr) => (pr.ok ? pr.json() : null)).catch(() => null)
+        : null;
       const r = await fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=${tab}`);
       if (!r.ok) {
         const d = await r.json().catch(() => null);
         throw new Error(d?.message ? String(d.message) : String(r.status));
       }
       const d = await r.json();
-      setRows(d.rows as Row[]);
-      // Nodes tab: also pull pods to aggregate per-node CPU/memory requests (best-effort).
-      if (tab === 'nodes') {
-        try {
-          const pr = await fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=pods`);
-          if (pr.ok) {
-            const pd = await pr.json();
-            setNodeAgg(aggregateNodeResources((d.rows ?? []) as NodeRow[], (pd.rows ?? []) as PodRow[]));
-          }
-        } catch { /* pods fetch is best-effort — the node table still renders without the viz */ }
+      if (!fresh()) return;
+      // Events have no stable server order → sort newest-first (an unsorted
+      // events table is a defect). Other kinds pass through untouched.
+      const sorted = tab === 'events'
+        ? [...(d.rows as Row[])].sort((a, b) => Number(b.lastSeenTs ?? 0) - Number(a.lastSeenTs ?? 0))
+        : (d.rows as Row[]);
+      setRows(sorted);
+      if (podsP) {
+        const pd = await podsP;
+        if (pd && fresh()) setNodeAgg(aggregateNodeResources((d.rows ?? []) as NodeRow[], (pd.rows ?? []) as PodRow[]));
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      if (fresh()) setErr(e instanceof Error ? e.message : String(e));
     }
   }, [cluster, tab]);
 
@@ -269,6 +297,68 @@ export default function EksClusterPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Per-tab KPI/viz — ALWAYS computed from allRows (pre-filter) so
+                    the summary describes the whole set, not the filtered table. */}
+                {tab === 'pods' && allRows.length > 0 && (() => {
+                  const s = podStatusCounts(allRows);
+                  const donut = Object.entries(s).map(([name, value]) => ({ name, value }));
+                  return (
+                    <>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <StatCard label="Total" value={allRows.length} />
+                        <StatCard label="Running" value={s.Running ?? 0} />
+                        <StatCard label="Pending" value={s.Pending ?? 0} variant={s.Pending ? 'warn' : 'default'} />
+                        <StatCard label="Failed" value={s.Failed ?? 0} variant={s.Failed ? 'danger' : 'default'} />
+                      </div>
+                      <DonutBreakdown title="Pod Status" data={donut} nameKey="name" valueKey="value" />
+                    </>
+                  );
+                })()}
+
+                {tab === 'deployments' && allRows.length > 0 && (() => {
+                  const health = deploymentHealth(allRows);
+                  const degraded = health.filter((h) => h.pct < 100).length;
+                  return (
+                    <>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        <StatCard label="Total" value={health.length} />
+                        <StatCard label="Fully available" value={health.length - degraded} />
+                        <StatCard label="Degraded" value={degraded} variant={degraded > 0 ? 'danger' : 'default'} />
+                      </div>
+                      <Card title="레플리카 가용성" subtitle="available / desired (degraded 우선)">
+                        <div className="flex flex-col gap-2">
+                          {health.map((h) => (
+                            <div key={`${h.namespace}/${h.name}`} className="grid grid-cols-[1fr_auto_auto] items-center gap-4 text-[12px]">
+                              <span className="min-w-0 truncate font-mono text-ink-700" title={`${h.namespace}/${h.name}`}>
+                                {h.namespace}/{h.name}
+                              </span>
+                              <Meter value={h.pct} />
+                              <span className="tabular text-ink-400">{h.available}/{h.desired}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </Card>
+                    </>
+                  );
+                })()}
+
+                {tab === 'services' && allRows.length > 0 && (() => {
+                  const t = serviceTypeCounts(allRows);
+                  const donut = Object.entries(t).map(([name, value]) => ({ name, value }));
+                  return (
+                    <>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <StatCard label="Total" value={allRows.length} />
+                        <StatCard label="ClusterIP" value={t.ClusterIP ?? 0} />
+                        <StatCard label="NodePort" value={t.NodePort ?? 0} />
+                        <StatCard label="LoadBalancer" value={t.LoadBalancer ?? 0} />
+                      </div>
+                      <DonutBreakdown title="Service Types" data={donut} nameKey="name" valueKey="value" />
+                    </>
+                  );
+                })()}
+
                 {tab === 'nodes' && nodeAgg && nodeAgg.length > 0 && (
                   <Card title="노드 리소스" subtitle="Pod 요청 합계 대비 노드 allocatable (CPU 코어 · 메모리 MiB)">
                     <div className="flex flex-col gap-3">

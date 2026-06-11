@@ -112,3 +112,5 @@ graphify-out/
 .reference/
 # co-agent consensus pipeline state (skill-managed, local)
 .claude/co-agent-consensus/
+# Public RDS CA trust bundle — NOT a key (PR #36: verified TLS for the auto-register write-path)
+!scripts/v2/eks/rds-ca-bundle.pem

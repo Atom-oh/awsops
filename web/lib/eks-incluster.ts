@@ -14,7 +14,7 @@ const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 /**
  * Replicate `aws eks get-token`: presign an STS GetCallerIdentity GET with the
  * `x-k8s-aws-id: <cluster>` header SIGNED, then `k8s-aws-v1.` + base64url(url).
- * The web task role's P1e Access Entry + AmazonEKSViewPolicy authorize the read.
+ * The web task role's P1e Access Entry + AmazonEKSAdminViewPolicy authorize the read.
  */
 export async function eksToken(cluster: string, region: string): Promise<string> {
   const host = `sts.${region}.amazonaws.com`;
@@ -53,7 +53,7 @@ export async function clusterConn(cluster: string): Promise<ClusterConn> {
 }
 
 // ── in-cluster list + normalize ────────────────────────────────────────────
-export type Kind = 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces';
+export type Kind = 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces' | 'events';
 
 const KIND_PATH: Record<Kind, string> = {
   nodes: '/api/v1/nodes',
@@ -61,10 +61,21 @@ const KIND_PATH: Record<Kind, string> = {
   deployments: '/apis/apps/v1/deployments',
   services: '/api/v1/services',
   namespaces: '/api/v1/namespaces',
+  // Core /api/v1/events (not events.k8s.io/v1): the events.k8s.io/v1 API renames
+  // count/lastTimestamp to deprecatedCount/series, so the core endpoint is what
+  // preserves the fields our normalizeEvent fallbacks read.
+  events: '/api/v1/events?fieldSelector=type=Warning', // Warning만 (v1 parity, read-only GET; 미인코딩 '='가 k8s 표준형 — PR #36)
 };
 
 export function isKind(k: string): k is Kind {
-  return k === 'nodes' || k === 'pods' || k === 'deployments' || k === 'services' || k === 'namespaces';
+  return (
+    k === 'nodes' ||
+    k === 'pods' ||
+    k === 'deployments' ||
+    k === 'services' ||
+    k === 'namespaces' ||
+    k === 'events'
+  );
 }
 
 /** ISO timestamp → compact age like "3d", "5h", "12m", "8s". */
@@ -103,21 +114,44 @@ interface K8sItem {
     clusterIP?: string;
     ports?: { port?: number; protocol?: string }[];
     containers?: { resources?: { requests?: Record<string, string> } }[];
+    initContainers?: { resources?: { requests?: Record<string, string> } }[];
+    overhead?: Record<string, string>;
   };
+  // core /api/v1 Event fields (read by normalizeEvent)
+  involvedObject?: { kind?: string; name?: string };
+  reason?: string;
+  message?: string;
+  count?: number;
+  lastTimestamp?: string;
+  eventTime?: string;
+  series?: { lastObservedTime?: string };
+  type?: string;
 }
 
 // NodeRow / PodRow are defined (and re-exported) from ./eks-resources (client-safe).
 export interface DeploymentRow { name: string; namespace: string; ready: string; upToDate: number; available: number; age: string }
 export interface ServiceRow { name: string; namespace: string; type: string; clusterIP: string; ports: string; age: string }
 export interface NamespaceRow { name: string; status: string; age: string }
-export type InClusterRow = NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow;
+export interface EventRow {
+  kind: string; object: string; reason: string; message: string;
+  count: number; lastSeen: string; lastSeenTs: number;
+}
+export type InClusterRow = NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow | EventRow;
 
 function nodeRoles(labels: Record<string, string> = {}): string {
   const roles = Object.keys(labels)
     .filter((k) => k.startsWith('node-role.kubernetes.io/'))
     .map((k) => k.slice('node-role.kubernetes.io/'.length))
     .filter(Boolean);
-  return roles.length ? roles.join(',') : '<none>';
+  if (roles.length) return roles.join(',');
+  // EKS managed/Karpenter/Fargate workers carry no node-role label (kubectl shows <none>) —
+  // surface the pool identity instead so the column carries real signal.
+  const ng = labels['eks.amazonaws.com/nodegroup'];
+  if (ng) return `nodegroup:${ng}`;
+  const pool = labels['karpenter.sh/nodepool'] ?? labels['karpenter.sh/provisioner-name'];
+  if (pool) return `karpenter:${pool}`;
+  if (labels['eks.amazonaws.com/compute-type'] === 'fargate') return 'fargate';
+  return 'worker';
 }
 
 export function normalizeNode(it: K8sItem): NodeRow {
@@ -142,7 +176,12 @@ export function normalizeNode(it: K8sItem): NodeRow {
 
 export function normalizePod(it: K8sItem): PodRow {
   const restarts = (it.status?.containerStatuses ?? []).reduce((s, c) => s + (c.restartCount ?? 0), 0);
-  const requests = (it.spec?.containers ?? []).map((c) => c.resources?.requests ?? {});
+  // Effective pod request = max(sum(app containers), max(init container)) + overhead —
+  // the scheduler's reservation semantics, so node bars match `kubectl describe node`
+  // (P4 gate: codex — app-container sum alone underreports init-heavy pods).
+  const app = (it.spec?.containers ?? []).map((c) => c.resources?.requests ?? {});
+  const init = (it.spec?.initContainers ?? []).map((c) => c.resources?.requests ?? {});
+  const eff = (sum: number, mx: number, overhead: number) => Math.max(sum, mx) + overhead;
   return {
     name: it.metadata?.name ?? '',
     namespace: it.metadata?.namespace ?? '',
@@ -150,8 +189,16 @@ export function normalizePod(it: K8sItem): PodRow {
     node: it.spec?.nodeName ?? '',
     restarts,
     age: age(it.metadata?.creationTimestamp),
-    cpuRequest: requests.reduce((s, r) => s + parseCpuCores(r.cpu), 0),
-    memRequest: requests.reduce((s, r) => s + parseMem(r.memory), 0),
+    cpuRequest: eff(
+      app.reduce((s, r) => s + parseCpuCores(r.cpu), 0),
+      init.reduce((mx, r) => Math.max(mx, parseCpuCores(r.cpu)), 0),
+      parseCpuCores(it.spec?.overhead?.cpu),
+    ),
+    memRequest: eff(
+      app.reduce((s, r) => s + parseMem(r.memory), 0),
+      init.reduce((mx, r) => Math.max(mx, parseMem(r.memory)), 0),
+      parseMem(it.spec?.overhead?.memory),
+    ),
   };
 }
 
@@ -190,12 +237,34 @@ export function normalizeNamespace(it: K8sItem): NamespaceRow {
   };
 }
 
+export function normalizeEvent(it: K8sItem): EventRow {
+  const ns = it.metadata?.namespace;
+  const name = it.involvedObject?.name ?? '';
+  // events.k8s.io/v1 renames count/lastTimestamp → deprecatedCount/series; the
+  // core /api/v1/events endpoint preserves the fields these fallbacks read.
+  // series.lastObservedTime is the freshest signal for high-frequency events
+  // (kubectl LAST SEEN order) — then lastTimestamp → eventTime → creationTimestamp
+  // (P4 gate: gemini).
+  const ts = it.series?.lastObservedTime ?? it.lastTimestamp ?? it.eventTime ?? it.metadata?.creationTimestamp ?? '';
+  const tsMs = ts ? Date.parse(ts) : 0;
+  return {
+    kind: it.involvedObject?.kind ?? '',
+    object: ns ? `${ns}/${name}` : name, // namespace embedded in object (by design)
+    reason: it.reason ?? '',
+    message: it.message ?? '',
+    count: it.count ?? 1,
+    lastSeen: age(ts),
+    lastSeenTs: Number.isFinite(tsMs) ? tsMs : 0,
+  };
+}
+
 const NORMALIZERS: Record<Kind, (it: K8sItem) => InClusterRow> = {
   nodes: normalizeNode,
   pods: normalizePod,
   deployments: normalizeDeployment,
   services: normalizeService,
   namespaces: normalizeNamespace,
+  events: normalizeEvent,
 };
 
 /** HTTPS GET against the cluster K8s API, verifying TLS with the cluster CA. */

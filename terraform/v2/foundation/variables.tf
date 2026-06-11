@@ -148,3 +148,16 @@ variable "steampipe_image_tag" {
   description = "Steampipe service image tag."
   default     = "steampipe-latest"
 }
+
+variable "eks_auto_register_enabled" {
+  type        = bool
+  description = "EKS auto-register gate: EventBridge(CloudTrail AssociateAccessPolicy/DeleteAccessEntry for the task role) -> Lambda -> eks_registrations. Observe-only toward AWS (no resource mutation). Requires workers_enabled (pg8000 layer reuse). false (default) = 0 resources."
+  default     = false
+
+  # PR #36 review: enabling this without workers_enabled used to silently produce
+  # zero resources (local.ear = enabled && workers_enabled) — fail loudly at plan instead.
+  validation {
+    condition     = !var.eks_auto_register_enabled || var.workers_enabled
+    error_message = "eks_auto_register_enabled requires workers_enabled=true (pg8000 layer + VPC plumbing)."
+  }
+}

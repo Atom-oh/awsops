@@ -241,6 +241,10 @@ resource "aws_iam_role_policy" "incident_lambda" {
           aws_ssm_parameter.incident_max_concurrent[0].arn,
           aws_ssm_parameter.incident_fanout_max[0].arn,
           aws_ssm_parameter.incident_min_severity[0].arn,
+          # prevention_loop live-reads its window/threshold each run (PR #36 review: the
+          # env-baked copies went stale until the next apply, defeating ignore_changes tunability).
+          aws_ssm_parameter.incident_prevention_window_days[0].arn,
+          aws_ssm_parameter.incident_prevention_threshold[0].arn,
           "arn:aws:ssm:${var.region}:${local.inc_acct}:parameter${local.inc_runtime_arn_param}",
         ]
       }
@@ -664,6 +668,120 @@ resource "aws_lambda_permission" "incident_watchdog" {
   function_name = aws_lambda_function.incident_watchdog[0].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.incident_watchdog[0].arn
+}
+
+############################################################
+# Step 6: ADR-032 Phase 4 — cross-incident PROACTIVE-PREVENTION feedback loop (gated; rate(24h)).
+#   A periodic analyzer that reads recent incident/RCA history, detects RECURRING patterns
+#   (rca.category x primary service over a window, recurrence >= threshold), and UPSERTs one
+#   prevention_insight per recurring pattern (idempotent on dedup_key). RECOMMEND-ONLY: it emits
+#   recommendations and performs ZERO AWS/k8s/SSM/SFN mutation — no /api/actions, no
+#   create_ops_item / start_execution / put_parameter. It REUSES the incident-Lambda role
+#   (aws_iam_role.incident_lambda — Aurora secret + KMS + scoped SSM reads; already grants
+#   ssm:GetParameter on the project incident params via the ReadIncidentAndRuntimeParams Sid),
+#   the pg8000 layer (aws_lambda_layer_version.pg8000), and the same vpc_config (private subnets +
+#   service SG) EXACTLY as incident_watchdog. Inert when off: no incidents => no insights, and with
+#   the lifecycle flag off the Lambda/schedule/SSM params are count=0 (plan No-changes, $0).
+############################################################
+
+# Operator-tunable window/threshold SSM params (ignore_changes on value — the analyzer reads the
+# live values with safe fallbacks; defaults mirror prevention_loop.py PREVENTION_* env defaults).
+resource "aws_ssm_parameter" "incident_prevention_window_days" {
+  count       = local.il
+  name        = "/ops/${var.project}/incident/prevention-window-days"
+  description = "ADR-032 #4: cross-incident prevention look-back window (days). Operator-tunable; ignore drift."
+  type        = "String"
+  value       = "30"
+  lifecycle { ignore_changes = [value] }
+}
+
+resource "aws_ssm_parameter" "incident_prevention_threshold" {
+  count       = local.il
+  name        = "/ops/${var.project}/incident/prevention-recurrence-threshold"
+  description = "ADR-032 #4: cross-incident recurrence threshold (>= N occurrences => emit one insight). Operator-tunable; ignore drift."
+  type        = "String"
+  value       = "2"
+  lifecycle { ignore_changes = [value] }
+}
+
+# Dedicated archive (multi-source, mirroring data.archive_file.incident_src): packages the shared
+# Aurora connector workers/db.py + the analyzer prevention_loop.py. prevention_loop.py imports `db`,
+# which lives in local.workers_src_il (NOT local.inc_src) — so it MUST be co-packaged here, exactly
+# as the incident archive co-packages db.py with each incident stage module.
+data "archive_file" "prevention_loop" {
+  count       = local.il
+  type        = "zip"
+  output_path = "${path.module}/.build/prevention_loop.zip"
+  source {
+    content  = file("${local.workers_src_il}/db.py") # shared Aurora pg8000 connector (same as incident_src)
+    filename = "db.py"
+  }
+  source {
+    content  = file("${local.inc_src}/prevention_loop.py")
+    filename = "prevention_loop.py"
+  }
+}
+
+# The prevention-loop Lambda. role/layer/vpc_config copied VERBATIM from incident_watchdog; only the
+# function name, handler, source archive, and env additions differ. Aurora env wiring matches the
+# other incident Lambdas (local.inc_env_base) — but inlined here (not local.inc_env) to add the two
+# PREVENTION_* defaults + param names without touching the shared incident env map. RECOMMEND-ONLY:
+# the incident-Lambda role carries NO mutating actions (no ecs:*, no states:StartExecution, no
+# ssm:PutParameter, no ssm:CreateOpsItem) — see aws_iam_role_policy.incident_lambda above.
+resource "aws_lambda_function" "prevention_loop" {
+  count            = local.il
+  function_name    = "${var.project}-prevention-loop"
+  role             = aws_iam_role.incident_lambda[0].arn # reuse the incident-Lambda least-priv role
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "prevention_loop.lambda_handler"
+  filename         = data.archive_file.prevention_loop[0].output_path
+  source_code_hash = data.archive_file.prevention_loop[0].output_base64sha256
+  timeout          = 120
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT                 = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE                 = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN               = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      PROJECT                         = var.project
+      PREVENTION_WINDOW_DAYS          = aws_ssm_parameter.incident_prevention_window_days[0].value
+      PREVENTION_RECURRENCE_THRESHOLD = aws_ssm_parameter.incident_prevention_threshold[0].value
+      PREVENTION_WINDOW_DAYS_PARAM    = aws_ssm_parameter.incident_prevention_window_days[0].name
+      PREVENTION_THRESHOLD_PARAM      = aws_ssm_parameter.incident_prevention_threshold[0].name
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.incident_lambdas, aws_iam_role_policy_attachment.incident_lambda_vpc]
+}
+
+# EventBridge rate(24 hours): the periodic prevention sweep. Fires ONLY when the lifecycle flag is on
+# (count=local.il) — no autonomous tick when off. The target Lambda is recommend-only.
+resource "aws_cloudwatch_event_rule" "prevention_loop" {
+  count               = local.il
+  name                = "${var.project}-prevention-loop"
+  description         = "ADR-032 Phase 4: daily cross-incident prevention sweep — UPSERTs recurring-pattern insights (recommend-only)."
+  schedule_expression = "rate(24 hours)"
+}
+
+resource "aws_cloudwatch_event_target" "prevention_loop" {
+  count     = local.il
+  rule      = aws_cloudwatch_event_rule.prevention_loop[0].name
+  target_id = "prevention-loop"
+  arn       = aws_lambda_function.prevention_loop[0].arn
+}
+
+resource "aws_lambda_permission" "prevention_loop_events" {
+  count         = local.il
+  statement_id  = "AllowEventBridgePreventionLoop"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.prevention_loop[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.prevention_loop[0].arn
 }
 
 ############################################################

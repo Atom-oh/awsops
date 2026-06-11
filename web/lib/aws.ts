@@ -9,7 +9,10 @@ function eksClient(): EKSClient { if (!eks) eks = new EKSClient({ region: REGION
 // Cost Explorer is a GLOBAL service reached via us-east-1 only.
 function ceClient(): CostExplorerClient { if (!ce) ce = new CostExplorerClient({ region: 'us-east-1' }); return ce; }
 
-export interface ClusterInfo { name: string; status: string; version: string; endpoint: string; createdAt: string }
+export interface ClusterInfo {
+  name: string; status: string; version: string; endpoint: string; createdAt: string;
+  region: string; vpcId: string; platformVersion: string;
+}
 
 export async function listClusters(): Promise<ClusterInfo[]> {
   const c = eksClient();
@@ -23,6 +26,9 @@ export async function listClusters(): Promise<ClusterInfo[]> {
       version: cluster?.version ?? '?',
       endpoint: cluster?.endpoint ?? '',
       createdAt: cluster?.createdAt instanceof Date ? cluster.createdAt.toISOString() : '',
+      region: REGION,
+      vpcId: cluster?.resourcesVpcConfig?.vpcId ?? '',
+      platformVersion: cluster?.platformVersion ?? '',
     });
   }
   return out;

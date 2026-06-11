@@ -22,19 +22,30 @@ export function parseCpuCores(cpu: unknown): number {
   return parseFloat(s) || 0;
 }
 
-/** Parse a K8s memory quantity to MiB: "32986188Ki"→32213, "512Mi"→512, "2Gi"→2048, ""/null→0. */
+/**
+ * Parse a K8s memory quantity to MiB: "32986188Ki"→32213, "512Mi"→512, "2Gi"→2048.
+ * K8s quantity semantics (P4 gate: codex): binary suffixes (Ki/Mi/Gi/Ti) are
+ * 1024-based, decimal suffixes (k/K/M/G/T) are 1000-based BYTES, and a bare
+ * number is plain BYTES — not MiB. ""/null/unparseable → 0.
+ */
 export function parseMem(mem: unknown): number {
   if (mem == null || mem === '') return 0;
   const s = String(mem).trim();
-  const m = s.match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti)?$/i);
-  if (!m) return parseInt(s, 10) || 0;
-  let v = parseFloat(m[1]);
-  const u = (m[2] || '').toLowerCase();
-  if (u === 'ki') v = v / 1024;
-  else if (u === 'gi') v = v * 1024;
-  else if (u === 'ti') v = v * 1024 * 1024;
-  // 'mi' or none → already MiB
-  return Math.round(v);
+  const m = s.match(/^(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti|k|K|M|G|T)?$/);
+  if (!m) return 0;
+  const v = parseFloat(m[1]);
+  const MI = 1024 * 1024;
+  switch (m[2] ?? '') {
+    case 'Ki': return Math.round(v / 1024);
+    case 'Mi': return Math.round(v);
+    case 'Gi': return Math.round(v * 1024);
+    case 'Ti': return Math.round(v * 1024 * 1024);
+    case 'k': case 'K': return Math.round((v * 1e3) / MI);
+    case 'M': return Math.round((v * 1e6) / MI);
+    case 'G': return Math.round((v * 1e9) / MI);
+    case 'T': return Math.round((v * 1e12) / MI);
+    default: return Math.round(v / MI); // bare quantity = bytes
+  }
 }
 
 export interface NodeResourceAgg {
