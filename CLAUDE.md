@@ -11,7 +11,7 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 - **엣지**: CloudFront(TLS) → **VPC Origin `https-only:443`** → **내부 ALB HTTPS:443**(리전 ACM) → HTTP → Fargate `awsops-v2-web:3000`. **공개 ALB 없음.** ALB SG는 CloudFront 관리형 SG `CloudFront-VPCOrigins-Service-SG`에서 443 허용(VPC-CIDR-only는 504).
 - **인증**: Cognito User Pool + **Lambda@Edge**(`us-east-1`, python3.12, viewer-request). **RS256 JWKS 서명 검증** + iss/aud/token_use + OAuth `state` + **PKCE public client**(시크릿 없음). 도메인 `a-ops-v2-auth-*`('aws'는 Cognito 예약어).
 - **웹**: **Next.js 14 thin-BFF** (`web/`, standalone **arm64**, **루트 경로 — basePath 없음**). 라우트: `/api/health`(공개), `/api/stream`(SSE), `/api/db`(Aurora ping), `/api/jobs`(+`/[id]`, P2 비동기 작업). 무거운 작업은 직접 처리하지 않고 **워커 큐로 enqueue**.
-- **데이터**: **Aurora Serverless v2** (`awsops-v2-aurora`, **PG 17.9**, 0.5–4 ACU, KMS CMK, RDS-관리 master secret). **ADR-030 7-테이블 스키마** + P2 `worker_jobs`. 앱은 **node-pg**(`web/lib/db.ts`)로 접근. **v2에는 Steampipe가 아직 없음** — 라이브 AWS 조회는 AgentCore MCP Lambda 도구가 담당(Steampipe 도입은 P3 검토).
+- **데이터**: **Aurora Serverless v2** (`awsops-v2-aurora`, **PG 17.9**, 0.5–4 ACU, KMS CMK, RDS-관리 master secret). **ADR-030 기반 스키마(베이스라인 v9 동결 — 테이블 수는 `data/schema.sql` 참조)** + P2 `worker_jobs`. 앱은 **node-pg**(`web/lib/db.ts`)로 접근. **flag-gated Steampipe 인벤토리 sync(D1, `steampipe_enabled`) 존재** — 라이브 쿼리는 여전히 AgentCore MCP Lambda 도구가 담당.
 - **AI (AgentCore)**: Bedrock Sonnet 4.6 / **Opus 4.8** / Haiku 4.5 + AgentCore Runtime(Strands, `agent/agent.py` 재사용) + **9 섹션 게이트웨이**(`awsops-v2-{network,container,data,security,cost,monitoring,iac,ops,external-obs}-gateway`) + Memory + Code Interpreter. **설계: 9 섹션 에이전트 + 1 인시던트 오케스트레이터**(v1의 8 Gateway 대체). 현재 read-only 슬라이스 2개 배포(iam-mcp 14도구→security, flow-monitor 1→network); 전체 함대는 P3. **설정 source of truth = SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
 - **비동기 워커(P2)**: web `POST /api/jobs` → `worker_jobs`(queued) + SQS → **ESM(킬스위치)** → dispatcher Lambda(멱등, job_id 기준) → **Step Functions Standard** `$.runtime` Choice → RunLambda(짧음) **또는** `ecs:runTask.sync` Fargate(긺/OOM) → 워커가 직접 running/succeeded 기록 → Catch 시 status_updater Lambda가 failed(SFN은 VPC Aurora 쓰기 불가) → reaper(EventBridge 5분)가 stale 정합화.
 - **EKS 온보딩**: `configure.mjs` 멀티선택 → `eks.tf`가 web task role에 **Access Entry + AmazonEKSViewPolicy**(클러스터 스코프) 부여. kubeconfig 자동등록/조회 UI는 P3.
@@ -21,7 +21,7 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 |------|------|------|
 | P1a | S3 backend + foundation + 비공개 엣지(CloudFront VPC Origin → 내부 ALB → Fargate) | ✅ GREEN |
 | P1b | Cognito + Lambda@Edge 인증 | ✅ |
-| P1c | Aurora Serverless v2 (7-테이블 스키마) | ✅ |
+| P1c | Aurora Serverless v2 (ADR-030 기반 스키마 — 베이스라인 v9 동결, 테이블 수는 `data/schema.sql` 참조) | ✅ |
 | P1d | web thin-BFF + dual-tier ECR + `make deploy` + RS256 인증 강화 | ✅ |
 | P1e | EKS 온보딩 (Access Entry + View policy) | ✅ |
 | P1f | AgentCore 멱등 provisioner (9 GW + Memory + Interpreter + Runtime) | ✅ |
@@ -63,7 +63,7 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 - `network.tf` — VPC 신규생성 or 기존 재사용(`create_network` 플래그)
 - `edge.tf` — CloudFront + VPC Origin + 내부 ALB + ACM
 - `auth.tf` + `edge-lambda/cognito_edge.py.tftpl` — Cognito + Lambda@Edge(RS256)
-- `data.tf` + `data/schema.sql` — Aurora Serverless v2 + 7-테이블 스키마
+- `data.tf` + `data/schema.sql` — Aurora Serverless v2 + ADR-030 기반 스키마(베이스라인 v9 동결 — 테이블 수는 `data/schema.sql` 참조)
 - `workload.tf` — ECS 클러스터/서비스/태스크(web)
 - `ecr.tf` — dual-tier ECR(dev-private + prod-public)
 - `ai.tf` — AgentCore ECR + IAM role + agent Lambda 슬라이스 + SSM(전부 `agentcore_enabled` 게이트)
@@ -133,7 +133,7 @@ AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds the v1 si
 - **Edge**: CloudFront(TLS) → **VPC Origin `https-only:443`** → **internal ALB HTTPS:443** (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** ALB SG allows 443 from the CloudFront managed SG `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only → 504).
 - **Auth**: Cognito User Pool + **Lambda@Edge** (`us-east-1`, python3.12, viewer-request). **RS256 JWKS signature verification** + iss/aud/token_use + OAuth `state` + **PKCE public client** (no secret). Domain `a-ops-v2-auth-*` ('aws' is a Cognito reserved word).
 - **Web**: **Next.js 14 thin-BFF** (`web/`, standalone **arm64**, **root path — no basePath**). Routes: `/api/health` (public), `/api/stream` (SSE), `/api/db` (Aurora ping), `/api/jobs` (+`/[id]`, P2 async jobs). Heavy work is **enqueued** to the worker queue, not run inline.
-- **Data**: **Aurora Serverless v2** (`awsops-v2-aurora`, **PG 17.9**, 0.5–4 ACU, KMS CMK, RDS-managed master secret). **ADR-030 7-table schema** + P2 `worker_jobs`. App uses **node-pg** (`web/lib/db.ts`). **v2 has no Steampipe yet** — live AWS queries go through AgentCore MCP Lambda tools (Steampipe adoption is a P3 consideration).
+- **Data**: **Aurora Serverless v2** (`awsops-v2-aurora`, **PG 17.9**, 0.5–4 ACU, KMS CMK, RDS-managed master secret). **ADR-030-based schema (baseline v9 frozen — table count per `data/schema.sql`)** + P2 `worker_jobs`. App uses **node-pg** (`web/lib/db.ts`). **A flag-gated Steampipe inventory sync (D1, `steampipe_enabled`) exists** — live queries still go through AgentCore MCP Lambda tools.
 - **AI (AgentCore)**: Bedrock Sonnet 4.6 / **Opus 4.8** / Haiku 4.5 + AgentCore Runtime (Strands, reuses `agent/agent.py`) + **9 section gateways** (`awsops-v2-{network,container,data,security,cost,monitoring,iac,ops,external-obs}-gateway`) + Memory + Code Interpreter. **Design: 9 section agents + 1 incident orchestrator** (replaces v1's 8 Gateways). Currently 2 read-only slices deployed (iam-mcp 14 tools→security, flow-monitor 1→network); full fleet is P3. **Config source of truth = SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
 - **Async workers (P2)**: web `POST /api/jobs` → `worker_jobs` (queued) + SQS → **ESM (kill-switch)** → dispatcher Lambda (idempotent on job_id) → **Step Functions Standard** Choice on `$.runtime` → RunLambda (short) **or** `ecs:runTask.sync` Fargate (long/OOM) → worker writes running/succeeded itself → on Catch, status_updater Lambda sets failed (SFN can't write VPC Aurora) → reaper (EventBridge 5min) reconciles stale.
 - **EKS onboarding**: `configure.mjs` multi-select → `eks.tf` grants the web task role an **Access Entry + AmazonEKSViewPolicy** (cluster-scoped). kubeconfig auto-registration / query UI is P3.
@@ -143,7 +143,7 @@ AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds the v1 si
 |-------|-------|-------|
 | P1a | S3 backend + foundation + private edge | ✅ GREEN |
 | P1b | Cognito + Lambda@Edge auth | ✅ |
-| P1c | Aurora Serverless v2 (7-table schema) | ✅ |
+| P1c | Aurora Serverless v2 (ADR-030-based schema — baseline v9 frozen, table count per `data/schema.sql`) | ✅ |
 | P1d | web thin-BFF + dual-tier ECR + `make deploy` + RS256 hardening | ✅ |
 | P1e | EKS onboarding (Access Entry + View policy) | ✅ |
 | P1f | AgentCore idempotent provisioner (9 GW + Memory + Interpreter + Runtime) | ✅ |
@@ -185,7 +185,7 @@ Live env: account `180294183052`, domain `awsops-v2.atomai.click`, reused mgmt-v
 - `network.tf` — new VPC or reuse existing (`create_network` flag)
 - `edge.tf` — CloudFront + VPC Origin + internal ALB + ACM
 - `auth.tf` + `edge-lambda/cognito_edge.py.tftpl` — Cognito + Lambda@Edge (RS256)
-- `data.tf` + `data/schema.sql` — Aurora Serverless v2 + 7-table schema
+- `data.tf` + `data/schema.sql` — Aurora Serverless v2 + ADR-030-based schema (baseline v9 frozen — table count per `data/schema.sql`)
 - `workload.tf` — ECS cluster/service/task (web)
 - `ecr.tf` — dual-tier ECR (dev-private + prod-public)
 - `ai.tf` — AgentCore ECR + IAM role + agent Lambda slice + SSM (all `agentcore_enabled`-gated)

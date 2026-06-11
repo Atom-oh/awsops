@@ -42,7 +42,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 027 | Code Interpreter 세션 격리 | Accepted (2026-04-22) |
 | 028 | CloudFront CACHING_DISABLED | Accepted (2026-04-22) |
 | 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | **⛔ REVERSED (2026-06-11)** — 3-AI 합의; mutating 방향 폐기, do-not-enable·substrate 동결(flag-OFF). (orig) Accepted (2026-06-09) — 멀티AI 합의(REVISE×2/AWC×1) 반영 개정; 메커니즘은 036 하이브리드로 위임, v2(Terraform/Fargate/Aurora) 현행화·기술 정정, 6대 통제 유지 |
-| 030 | ECS Fargate 워크로드 + Aurora 앱 상태 + 이중 ECR | Accepted (2026-05-27) — **메커니즘(4-컨테이너/Service Connect Steampipe/CDK)은 037이 정제·부분 승계**; Aurora·이중 ECR 의도는 유효 |
+| 030 | ECS Fargate 워크로드 + Aurora 앱 상태 + 이중 ECR | Accepted (2026-05-27) — **메커니즘(4-컨테이너/Service Connect Steampipe/CDK)은 037이 정제·부분 승계**; Aurora·이중 ECR 의도는 유효. (스키마 카운트는 030 시점 스냅샷 — 현행은 schema.sql(v9)+ULID 마이그레이션) |
 | 031 | 런타임 커스터마이즈 에이전트·스킬 (관리자 구성 Agent Space + BYO-MCP) | **⚠️ PARTIALLY REVERSED (2026-06-11)** — Phase 1(LIVE)·Phase 2(deployed) 유지; **Phase 3(BYO-MCP)·Phase 4(mutating 도구) 폐기**(3-AI 합의). (orig) Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); mutating BYO-MCP 거버넌스 경유·revocation fail-closed·BYO-MCP 하드닝·인젝션 가드 보완 |
 | 032 | 이벤트 트리거 자율 인시던트 라이프사이클 (멀티 에이전트 Lead/Sub) | **⚠️ DOWNGRADED (2026-06-11)** — 3-AI 합의; 자율 mitigation/action 폐기(029/036 reversed), read-only Triage/조사/RCA만 유지(권고전용, 활성화 시 analysis-only). (orig) Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 034/036 관계·P2 실행 바인딩·look-back 설정값화·Lead 최소권한 보완 |
 | 033 | AIOps LLM 비용 최적화 (Haiku 분류·프롬프트 캐싱·응답 캐시·토큰 예산) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 프롬프트 캐싱 범위 정정(게이트웨이 호출 불투명)·sourceDataFingerprint·예산 영속 보완; Phase 2 (Aurora durable budget) 구현, 의미 캐시는 v2 AI 라우트 동반 후속 페이즈로 연기 |
