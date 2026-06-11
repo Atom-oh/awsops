@@ -1,3 +1,4 @@
+-- since: 2.0.0
 -- opencost_config — read-only OpenCost install config. The dashboard SAVES a cluster-scoped
 -- helm version + values; install is out-of-band (AWSops never writes the cluster — ADR-035 pattern).
 -- First ULID migration: replaces the provisional integer "v10" block that collided with

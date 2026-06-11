@@ -1,8 +1,11 @@
 #!/usr/bin/env node
-// AWSops v2 DB migration runner — collision-free, fail-loud, advisory-locked.
+// AWSops v2 DB migration runner — collision-free, fail-loud, advisory-locked, version-stamped.
 //   make migrate            apply pending migrations (terraform/v2/foundation/migrations/*.sql)
-//   DRY_RUN=1 make migrate  list pending + SQL, no connect/exec
-//   BOOTSTRAP=1 make migrate one-time: ALTER schema_migrations.version→TEXT + ADD checksum (controller-confirmed)
+//   make migrate-status     offline summary: app version + each migration's declared release (--status)
+//   DRY_RUN=1 make migrate  list pending + SQL, no exec (DRY_RUN=1 OFFLINE=1 = no DB connect)
+//   BOOTSTRAP=1 make migrate one-time: ALTER schema_migrations.version→TEXT + ADD checksum/app_version (controller-confirmed)
+// Each applied migration is stamped with a release version (app_version column): the migration's
+//   `-- since: <semver>` header if present, else APP_VERSION env, else web/package.json "version".
 // Creds from `terraform output -raw aurora_secret_arn` → Secrets Manager (mirrors scripts/13-deploy-aurora.sh).
 // pg is resolved from the repo-root node_modules (also a web/ dep). Requires PostgreSQL DDL transactionality.
 import { execSync } from 'node:child_process';
@@ -10,7 +13,10 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import pg from 'pg';
-import { parseMigrationFile, computePending, sha256, findDuplicateIds, hasNoTxnFlag } from './migrate-core.mjs';
+import {
+  parseMigrationFile, computePending, sha256, findDuplicateIds, hasNoTxnFlag,
+  parseSinceHeader, resolveAppVersion,
+} from './migrate-core.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..'); // scripts/v2 → repo root
 const MIG_DIR = join(ROOT, 'terraform', 'v2', 'foundation', 'migrations');
@@ -19,6 +25,10 @@ const TF = 'terraform/v2/foundation';
 const LOCK_KEY = 4729411; // arbitrary constant — serializes concurrent `make migrate`
 const DRY = process.env.DRY_RUN === '1';
 const BOOTSTRAP = process.env.BOOTSTRAP === '1';
+const STATUS = process.argv.includes('--status') || process.env.STATUS === '1';
+// Release version stamped on each applied migration (APP_VERSION env → web/package.json → 'unknown').
+const PKG_JSON = (() => { try { return readFileSync(join(ROOT, 'web', 'package.json'), 'utf8'); } catch { return ''; } })();
+const APP_VERSION = resolveAppVersion(process.env.APP_VERSION, PKG_JSON);
 
 const tf = (out) => execSync(`terraform -chdir=${TF} output -raw ${out}`, { cwd: ROOT, encoding: 'utf8' }).trim();
 const die = (msg) => { console.error(`\n✗ ${msg}`); process.exit(1); };
@@ -29,10 +39,25 @@ const files = readdirSync(MIG_DIR).filter((f) => f.endsWith('.sql')).sort();
 const dups = findDuplicateIds(files);
 if (dups.length) die(`duplicate migration id(s): ${dups.join(', ')} — ids must be unique (ULID)`);
 const migrations = files
-  .map((f) => { const p = parseMigrationFile(f); return p ? { ...p, file: f, sql: readFileSync(join(MIG_DIR, f), 'utf8') } : null; })
+  .map((f) => {
+    const p = parseMigrationFile(f);
+    if (!p) return null;
+    const sql = readFileSync(join(MIG_DIR, f), 'utf8');
+    return { ...p, file: f, sql, since: parseSinceHeader(sql) }; // since = declared release (-- since: x.y.z)
+  })
   .filter(Boolean);
 const badNames = files.filter((f) => !parseMigrationFile(f));
 if (badNames.length) die(`malformed migration filename(s) (need <ULID>_<name>.sql): ${badNames.join(', ')}`);
+
+// Offline status (no DB): app version + each migration's declared release. Applied/pending state
+// vs the live ledger comes from `DRY_RUN=1 make migrate`.
+if (STATUS) {
+  console.log(`app version: ${APP_VERSION}`);
+  console.log(`migration files (${migrations.length}):`);
+  for (const m of migrations) console.log(`  ${m.file}  — release ${m.since ?? `${APP_VERSION} (apply-time default; no -- since: header)`}`);
+  console.log(`\n(applied vs pending against the live DB: \`DRY_RUN=1 make migrate\`)`);
+  process.exit(0);
+}
 
 // No migration files (e.g. empty migrations/ today) → nothing to do; skip the DB connection entirely
 // so `make deploy` (which depends on migrate) stays cheap until the first ULID migration is authored.
@@ -84,15 +109,18 @@ async function main() {
           await client.query('BEGIN');
           await client.query('ALTER TABLE schema_migrations ALTER COLUMN version TYPE TEXT USING version::text');
           await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT');
-          await client.query(`INSERT INTO schema_migrations(version, applied_at, description) VALUES ('baseline', now(), 'schema.sql baseline; future migrations are ULID files') ON CONFLICT (version) DO NOTHING`);
+          await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS app_version TEXT');
+          await client.query(`INSERT INTO schema_migrations(version, applied_at, description, app_version) VALUES ('baseline', now(), 'schema.sql baseline; future migrations are ULID files', $1) ON CONFLICT (version) DO NOTHING`, [APP_VERSION]);
           await client.query('COMMIT');
         } catch (e) {
           await client.query('ROLLBACK').catch(() => {});
           die(`bootstrap failed (rolled back to INTEGER): ${e instanceof Error ? e.message : e}`);
         }
       }
-    } else if (!hasChecksum && !DRY && pending.length > 0) {
+    } else if (!DRY && pending.length > 0) {
+      // already-TEXT ledger (fresh install or post-bootstrap): ensure both metadata columns exist.
       await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT');
+      await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS app_version TEXT');
     }
 
     // Drift check: an already-applied migration's file must not have changed.
@@ -114,12 +142,12 @@ async function main() {
       try {
         if (noTxn) {
           await client.query(m.sql); // autocommit (e.g. CREATE INDEX CONCURRENTLY)
-          await client.query('INSERT INTO schema_migrations(version, applied_at, description, checksum) VALUES ($1, now(), $2, $3)', [m.id, m.name, checksum]);
+          await client.query('INSERT INTO schema_migrations(version, applied_at, description, checksum, app_version) VALUES ($1, now(), $2, $3, $4)', [m.id, m.name, checksum, m.since ?? APP_VERSION]);
         } else {
           await client.query('BEGIN');
           await client.query(m.sql); // DDL — simple query, no params
           // plain INSERT (no ON CONFLICT) → duplicate id = PK violation = fail-loud
-          await client.query('INSERT INTO schema_migrations(version, applied_at, description, checksum) VALUES ($1, now(), $2, $3)', [m.id, m.name, checksum]);
+          await client.query('INSERT INTO schema_migrations(version, applied_at, description, checksum, app_version) VALUES ($1, now(), $2, $3, $4)', [m.id, m.name, checksum, m.since ?? APP_VERSION]);
           await client.query('COMMIT');
         }
         console.log(`  ✓ ${m.file}`);

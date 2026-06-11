@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 // scripts/ is a sibling of web/ — from web/lib/, `../..` is the worktree root.
 import {
   validateId, parseMigrationFile, sortIds, computePending, sha256, findDuplicateIds, hasNoTxnFlag,
+  parseSinceHeader, readPackageVersion, resolveAppVersion,
 } from '../../scripts/v2/migrate-core.mjs';
 
 const ULID = '01J9Z8XK3P7QF2VN6T0BC4D5EH';
@@ -66,5 +67,40 @@ describe('hasNoTxnFlag', () => {
 describe('sortIds', () => {
   it('lexical order', () => {
     expect(sortIds([ULID2, ULID])).toEqual([ULID, ULID2]);
+  });
+});
+
+describe('parseSinceHeader', () => {
+  it('extracts the release from a `-- since:` header (whitespace/case tolerant)', () => {
+    expect(parseSinceHeader('-- since: 2.1.0\nCREATE TABLE x ();')).toBe('2.1.0');
+    expect(parseSinceHeader('-- a comment\n--   Since:  2.0.0  \nSQL')).toBe('2.0.0');
+    expect(parseSinceHeader('-- since: 2.1.0-rc.1\n...')).toBe('2.1.0-rc.1'); // pre-release suffix kept
+  });
+  it('returns null when no header present', () => {
+    expect(parseSinceHeader('CREATE TABLE x ();')).toBeNull();
+    expect(parseSinceHeader('')).toBeNull();
+  });
+});
+
+describe('readPackageVersion', () => {
+  it('reads the version field', () => {
+    expect(readPackageVersion('{"version":"2.0.0"}')).toBe('2.0.0');
+  });
+  it('returns null on missing version or invalid JSON (never throws)', () => {
+    expect(readPackageVersion('{"name":"x"}')).toBeNull();
+    expect(readPackageVersion('not json')).toBeNull();
+    expect(readPackageVersion('{"version":""}')).toBeNull();
+  });
+});
+
+describe('resolveAppVersion', () => {
+  it('prefers a non-empty env override, trimmed', () => {
+    expect(resolveAppVersion('2.3.4', '{"version":"2.0.0"}')).toBe('2.3.4');
+    expect(resolveAppVersion('  2.3.4 ', '{"version":"2.0.0"}')).toBe('2.3.4');
+  });
+  it('falls back to package.json then to "unknown"', () => {
+    expect(resolveAppVersion('', '{"version":"2.0.0"}')).toBe('2.0.0');
+    expect(resolveAppVersion(undefined, '{"version":"2.0.0"}')).toBe('2.0.0');
+    expect(resolveAppVersion('', 'garbage')).toBe('unknown');
   });
 });
