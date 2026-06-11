@@ -34,7 +34,9 @@ const migrations = files
 const badNames = files.filter((f) => !parseMigrationFile(f));
 if (badNames.length) die(`malformed migration filename(s) (need <ULID>_<name>.sql): ${badNames.join(', ')}`);
 
-if (DRY && migrations.length === 0) { console.log('no migration files; nothing pending'); process.exit(0); }
+// No migration files (e.g. empty migrations/ today) → nothing to do; skip the DB connection entirely
+// so `make deploy` (which depends on migrate) stays cheap until the first ULID migration is authored.
+if (migrations.length === 0) { console.log('migrate: no migration files — nothing to do'); process.exit(0); }
 
 // 2. Creds (skip the network in pure dry-run with no DB).
 function loadCreds() {
