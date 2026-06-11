@@ -79,9 +79,14 @@ CREATE TABLE IF NOT EXISTS eks_registrations (
 
 ## 7. 범위 밖
 
-- **원클릭 Access Entry 생성**(mutating) → ADR-029 action_catalog `eks-create-access-entry` 후속(substrate ON 선행).
+- **원클릭 Access Entry 생성**(mutating) — ~~ADR-029 후속~~ → **영구 범위 밖**(2026-06-11 ADR-029/036 REVERSED: mutating 방향 전면 폐기). CLI 가이드가 최종 형태 — 본 구현의 read-only 접근이 새 정책과 정확히 부합.
 - 노드 CPU/mem 시각화 — worktree `gap-impl-wave1`에 구현·push됨(미머지) → 그쪽 머지로(중복 금지).
 - 로컬 kubectl용 kubeconfig 다운로드, K9s 7종 리소스 확장, 노드그룹/애드온 컬럼(추가 IAM 필요), 부서별 접근제어.
+
+## 7.5 배포 후 정정 (2026-06-11)
+
+- **403 근본원인**: `AmazonEKSViewPolicy`는 k8s `view` ClusterRole 상당 — **cluster-scope 리소스(nodes) 미포함**(공식 권한표 확인). P1e가 고른 정책의 설계상 한계였음(연계는 멀쩡). → 연계를 **`AmazonEKSAdminViewPolicy`**(`*`/get,list,watch)로 교체(eks.tf + 가이드 명령). Secrets 읽기가 포함되나 BFF kind allow-list가 프록시를 차단. v1 가이드도 AdminView였음.
+- **v1-parity UX 보강**: 온보딩 스크립트를 비연결 행에 **상시 노출**(GET이 guide 동봉, '스크립트' 버튼 — POST 불요) + **fleet stats row**(`GET /api/eks/summary`: connected 클러스터 합산 Nodes/Pods/Deployments/Services, per-cluster degrade).
 
 ## 8. 운영(구현 후)
 
