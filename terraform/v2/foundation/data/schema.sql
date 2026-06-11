@@ -741,22 +741,10 @@ VALUES (9, 'chat thread persistence: chat_threads + chat_messages (new-chat no l
 ON CONFLICT (version) DO NOTHING;
 
 -- ============================================================
--- v10 (PROVISIONAL): OpenCost read-only install config (cluster-scoped helm config the
--- dashboard SAVES; install is out-of-band, AWSops never writes the cluster — ADR-035 pattern).
--- ⚠️ CONTROLLER: this version integer is provisional (file was at v9). ADR-032 P4
--- prevention_insights also targets v10 on its branch and `ON CONFLICT DO NOTHING` would
--- SILENTLY MASK a collision. Before psql, run `SELECT max(version) FROM schema_migrations`
--- on LIVE Aurora and renumber BOTH the VALUES integer and this header to live-max+1; treat
--- the migration as applied ONLY after confirming the row exists at the chosen version.
+-- NEW migrations go in terraform/v2/foundation/migrations/<ULID>_<name>.sql (applied by
+-- `make migrate`, run automatically before `make deploy`), NOT here. This file is the
+-- one-time baseline. The ULID runner replaces the old sequential-integer scheme — concurrent
+-- branches kept colliding on the same version integer (e.g. opencost_config vs prevention_insights
+-- both grabbing v10) and `ON CONFLICT DO NOTHING` silently masked it.
+-- See migrations/README.md + docs/reviews/2026-06-11-migration-mechanism-consensus.md.
 -- ============================================================
-CREATE TABLE IF NOT EXISTS opencost_config (
-  cluster       TEXT PRIMARY KEY,
-  chart_version TEXT,
-  config        JSONB NOT NULL DEFAULT '{}'::jsonb,
-  updated_by    TEXT,
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-INSERT INTO schema_migrations (version, description)
-VALUES (10, 'opencost_config: read-only OpenCost install config (provisional version — controller reconciles to live max+1)')
-ON CONFLICT (version) DO NOTHING;
