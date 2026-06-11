@@ -2,6 +2,8 @@
 
 ## Status / 상태
 
+> **⛔ REVERSED (2026-06-11)** — owner decision via 3-AI consensus (kiro/codex/gemini; see `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`). The remediation/mutation **execution substrate is abandoned** with ADR-029 — AWSops does not become a write control plane; mutation stays with the operator's SSM/Change Manager/IaC/console. Built but shipped flag-OFF and now **frozen** (`remediation_enabled=false`, **do-not-enable**); dark code kept, not deleted. "Accepted" record below retained as history.
+
 Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES, codex/gemini/kiro). `.sync` 사실오류 정정 + 완료추적·승인주체·per-action IAM·통제 매핑 보완 (§Consensus Review Addenda 참조).
 
 This ADR records *how* AWSops actually executes a mutating action. It **refines and partially supersedes the mechanism of ADR-029** (which chose a bespoke per-action Lambda + dedicated Step Functions stack) while **preserving ADR-029's six controls as a substrate-agnostic controls spec**. ADR-029 becomes a *controls* spec, not an *implementation* spec.

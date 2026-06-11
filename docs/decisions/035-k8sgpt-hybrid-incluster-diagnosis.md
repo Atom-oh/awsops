@@ -1,6 +1,8 @@
 # ADR-035: K8sGPT Hybrid — In-Cluster Kubernetes Diagnosis via MCP into AgentCore / K8sGPT 하이브리드 — MCP로 AgentCore에 통합하는 인클러스터 K8s 진단
 
-## Status: Accepted (2026-06-09) / 상태: 채택 (2026-06-09)
+## Status: Accepted (2026-06-09) → DOWNGRADED (2026-06-11) / 상태: 채택 (2026-06-09) → 다운그레이드 (2026-06-11)
+
+> **⚠️ DOWNGRADED (2026-06-11)** — owner decision via 3-AI consensus (kiro/codex/gemini; see `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`). The **read-only K8sGPT Result-CRD integration STANDS** (GET-only, deterministic, low-risk; AWSops-side built flag-OFF `k8sgpt_enabled=false`). The **H3a wiring (K8sGPT finding → ADR-032 incident → ADR-034 write-back → ADR-029/036 remediation proposal) is ABANDONED** — it depended on the now-reversed mutation/autonomy tier (029/036 reversed, 032 downgraded). K8sGPT stays an optional, replaceable read-only data source only.
 
 > Consensus-reviewed 2026-06-09 (co-agent panel: kiro·codex·gemini, model-diverse). **Verdict: ACCEPT-WITH-CHANGES** — Option 1 (Hybrid) endorsed unanimously; the panel's refinements are folded into the binding rules below (Rule 5 strengthened; Rules 7–11 added) and the Phasing table. See *Consensus review* under Consequences. / 2026-06-09 멀티AI 합의 리뷰(만장일치 ACCEPT-WITH-CHANGES) — Option 1 채택 확정, 보강 사항을 Rule 5 강화 + Rule 7~11 추가 + Phasing에 반영.
 

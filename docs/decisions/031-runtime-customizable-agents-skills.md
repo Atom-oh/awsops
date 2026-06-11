@@ -2,6 +2,8 @@
 
 ## Status / 상태
 
+> **⚠️ PARTIALLY REVERSED (2026-06-11)** — owner decision via 3-AI consensus (kiro/codex/gemini; see `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`). **Phase 1 (custom-agent/skill catalog + resolver, LIVE) and Phase 2 (per-account Agent Spaces + tool-allowlist enforcement, deployed) STAND.** **Phase 3 (BYO-MCP external tool servers) and Phase 4 (mutating tools via the ADR-029 gate) are REVERSED/abandoned** — external-endpoint egress/SSRF/credential surface + agent-driven mutation are scope-creep a small team should not maintain; Phase 4 also depends on the now-reversed ADR-029/036. Phase 3/4 are NOT built; do-not-pursue.
+
 Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES; codex/gemini/kiro). 데이터-플레인 분리는 건전; mutating BYO-MCP는 Action Catalog/P2 경유, revocation fail-closed, BYO-MCP 하드닝·인젝션 가드·ADR-033 비용 통제 보완 (§Consensus Review Addenda 참조).
 
 This ADR records the decision and its phased scope. Implementation detail (object model, Aurora schema, resolver, validation pipeline, acceptance criteria) lives in the companion spec `docs/superpowers/specs/2026-05-31-custom-agents-skills-design.md`.
