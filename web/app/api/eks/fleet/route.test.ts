@@ -33,6 +33,8 @@ describe('GET /api/eks/fleet', () => {
     expect(c.reachable).toBe(true);
     expect(c.counts).toEqual({ nodes: 1, nodesReady: 1, pods: 1, podsRunning: 1, deployments: 1, services: 1 });
     expect(c.nodeAgg[0].name).toBe('n1');
+    expect(c.nodeAgg[0].instanceType).toBe('m5.large');
+    expect(c.instanceTypes).toEqual([{ type: 'm5.large', count: 1 }]);
     expect(c.podStatus).toEqual({ Running: 1 });
     expect(c.podsByNamespace).toEqual([{ namespace: 'default', count: 1 }]);
     expect(c.events[0].reason).toBe('BackOff');
