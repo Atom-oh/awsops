@@ -5,7 +5,9 @@ import Badge from '@/components/ui/Badge';
 import Card from '@/components/ui/Card';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 
-interface ClusterInfo { name: string; [k: string]: unknown }
+// Minimal local shape for the /api/eks response — intentionally NOT importing aws.ts ClusterInfo
+// (the page only needs .name; decoupled from the shared type per consensus Decision 2).
+interface EksClusterRow { name: string; [k: string]: unknown }
 interface InstallStatus { installed: boolean; ready: boolean; reason?: string }
 interface SavedConfig { chartVersion: string | null; config: { values?: Record<string, unknown>; override?: Record<string, unknown> } | null }
 
@@ -25,7 +27,7 @@ export default function OpencostPage() {
     fetch('/api/eks')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        const names = (d.clusters as ClusterInfo[]).map((c) => c.name);
+        const names = (d.clusters as EksClusterRow[]).map((c) => c.name);
         setClusters(names);
         if (names.length) setCluster(names[0]);
       })
