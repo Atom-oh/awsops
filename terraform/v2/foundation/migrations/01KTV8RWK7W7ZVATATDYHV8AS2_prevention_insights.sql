@@ -1,3 +1,4 @@
+-- since: 2.0.0
 -- prevention_insights — ADR-032 Phase 4 cross-incident proactive-prevention tier.
 -- The per-incident prevention_recommendations table (v5) is UNCHANGED. Recurring
 -- insights span multiple incidents (no single owner), so they live here.

@@ -1,3 +1,4 @@
+-- since: 2.0.0
 -- eks_registrations — EKS runtime registration: clusters an admin registered for
 -- in-app queries (the v2 equivalent of v1's "Register kubeconfig"; union'd with the
 -- ONBOARDED_EKS_CLUSTERS env). Also written by the EventBridge auto-register Lambda.
