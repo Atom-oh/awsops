@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Box, Activity, DollarSign,
   Server, Database, Network, ShieldCheck,
-  Sparkles, Gauge, PiggyBank,
+  Sparkles, Gauge, PiggyBank, MessagesSquare,
   LogOut,
   type LucideIcon,
 } from 'lucide-react';
@@ -18,6 +18,7 @@ import { cn } from '@/lib/cn';
 // Fixed top-level pages. `tkey` resolves the label via i18n.
 const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
   { href: '/', tkey: 'nav.overview', icon: LayoutDashboard },
+  { href: '/assistant', tkey: 'nav.assistant', icon: MessagesSquare },
   { href: '/eks', tkey: 'nav.eks', icon: Box },
   { href: '/jobs', tkey: 'nav.jobs', icon: Activity },
   { href: '/cost', tkey: 'nav.cost', icon: DollarSign },

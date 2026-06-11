@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import Badge from '@/components/ui/Badge';
-import Card from '@/components/ui/Card';
 import DataTable from '@/components/ui/DataTable';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AreaTrend from '@/components/charts/AreaTrend';

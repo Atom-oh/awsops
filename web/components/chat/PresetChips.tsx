@@ -6,11 +6,15 @@ export default function PresetChips({ pinned, onPick }: { pinned: string | null;
   const prompts = sec ? sec.presets : AUTO_PRESETS;
   const head = sec ? `${sec.icon} ${sec.label} — 무엇을 도와드릴까요?` : '무엇을 도와드릴까요?';
   return (
-    <div style={{ flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 9 }}>
-      <div style={{ fontSize: 12.5, color: '#9db8d8', textAlign: 'center', marginBottom: 4 }}>{head}</div>
+    <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-4">
+      <div className="mb-1 text-center text-[13px] text-ink-500">{head}</div>
       {prompts.map((p) => (
-        <button key={p} onClick={() => onPick(p)} style={{ fontSize: 12, color: '#dcebff', background: '#13233b', border: '1px solid #2a3f60', borderRadius: 18, padding: '8px 12px', cursor: 'pointer', textAlign: 'left' }}>
-          <span style={{ color: '#f59e0b', marginRight: 6 }}>▸</span>{p}
+        <button
+          key={p}
+          onClick={() => onPick(p)}
+          className="rounded-xl border border-ink-100 bg-white px-3.5 py-2.5 text-left text-[13px] text-ink-700 shadow-sm transition-colors hover:border-claude-200 hover:bg-claude-50"
+        >
+          <span className="mr-1.5 text-claude-500">▸</span>{p}
         </button>
       ))}
     </div>

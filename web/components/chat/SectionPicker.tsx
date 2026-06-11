@@ -1,20 +1,38 @@
 'use client';
+import { Compass } from 'lucide-react';
 import { SECTIONS } from '@/lib/sections';
 
 export default function SectionPicker({ pinned, onPin }: { pinned: string | null; onPin: (key: string | null) => void }) {
   return (
-    <div style={{ display: 'flex', gap: 5, padding: '8px 12px', borderBottom: '1px solid #1a2540', flexWrap: 'wrap' }}>
-      <button onClick={() => onPin(null)} title="Auto" style={chip(pinned === null, '#00d4ff')}>🧭</button>
-      {SECTIONS.map((s) => (
-        <button key={s.key} title={s.active ? s.label : `${s.label} (준비중)`}
-          onClick={() => onPin(s.key)} style={{ ...chip(pinned === s.key, s.color), opacity: s.active ? 1 : 0.4 }}>
-          {s.icon}
-        </button>
-      ))}
+    <div className="flex flex-wrap gap-1.5 border-b border-ink-100 px-3 py-2.5">
+      <button
+        onClick={() => onPin(null)}
+        title="자동 라우팅"
+        aria-label="자동 라우팅"
+        className={
+          'flex h-7 w-7 items-center justify-center rounded-md border transition-colors ' +
+          (pinned === null ? 'border-claude-300 bg-claude-50 text-claude-600' : 'border-ink-100 text-ink-400 hover:bg-ink-100')
+        }
+      >
+        <Compass size={15} />
+      </button>
+      {SECTIONS.map((s) => {
+        const on = pinned === s.key;
+        return (
+          <button
+            key={s.key}
+            title={s.active ? s.label : `${s.label} (준비중)`}
+            aria-label={s.label}
+            onClick={() => onPin(s.key)}
+            className={'flex h-7 w-7 items-center justify-center rounded-md border text-[14px] transition-colors ' + (s.active ? '' : 'opacity-40')}
+            style={on
+              ? { background: `${s.color}14`, borderColor: `${s.color}59` }
+              : { background: 'transparent', borderColor: 'var(--ink-100)' }}
+          >
+            {s.icon}
+          </button>
+        );
+      })}
     </div>
   );
-}
-function chip(on: boolean, color: string): React.CSSProperties {
-  return { width: 28, height: 28, borderRadius: 7, fontSize: 14, cursor: 'pointer',
-    background: on ? `${color}1a` : '#0a0e1a', border: `1px solid ${on ? color : '#21314e'}`, color: '#e6eefb' };
 }
