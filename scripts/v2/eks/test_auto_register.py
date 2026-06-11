@@ -145,3 +145,18 @@ def test_malformed_cluster_name_is_rejected():
     )
     assert action is None
     assert "invalid cluster name" in reason
+
+
+def test_explicit_aws_eks_source_is_accepted():
+    """Panel r6 (kiro): lock the contract — an explicit aws.eks source must pass the guard."""
+    e = ev("AssociateAccessPolicy", {"name": "c1", "principalArn": "arn:aws:iam::1:role/awsops-v2-task", "policyArn": ADMIN_VIEW})
+    e["source"] = "aws.eks"
+    assert parse_event(e, ROLE) == ("register", "c1")
+
+
+def test_cluster_name_length_cap():
+    """Panel r6 (kiro): 100 chars passes, 101 rejects ({0,99} after the first char)."""
+    ok = "a" * 100
+    too_long = "a" * 101
+    assert parse_event(ev("AssociateAccessPolicy", {"name": ok, "principalArn": "arn:aws:iam::1:role/awsops-v2-task", "policyArn": ADMIN_VIEW}), ROLE)[0] == "register"
+    assert parse_event(ev("AssociateAccessPolicy", {"name": too_long, "principalArn": "arn:aws:iam::1:role/awsops-v2-task", "policyArn": ADMIN_VIEW}), ROLE)[0] is None
