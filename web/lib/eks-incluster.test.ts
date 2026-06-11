@@ -16,6 +16,7 @@ import {
   normalizeDeployment,
   normalizeService,
   normalizeNamespace,
+  normalizeEvent,
 } from './eks-incluster';
 
 describe('eksToken', () => {
@@ -150,4 +151,39 @@ describe('normalizers', () => {
     const row = normalizeNamespace({ metadata: { name: 'kube-system' }, status: { phase: 'Active' } });
     expect(row).toMatchObject({ name: 'kube-system', status: 'Active' });
   });
+});
+
+describe('normalizeEvent', () => {
+  it('maps a Warning event to EventRow with sortable timestamp', () => {
+    const row = normalizeEvent({
+      metadata: { namespace: 'default', creationTimestamp: '2026-06-11T00:00:00Z' },
+      involvedObject: { kind: 'Pod', name: 'web-abc' },
+      reason: 'BackOff', message: 'Back-off restarting failed container',
+      count: 7, lastTimestamp: '2026-06-11T01:02:03Z', type: 'Warning',
+    });
+    expect(row.kind).toBe('Pod');
+    expect(row.object).toBe('default/web-abc');
+    expect(row.reason).toBe('BackOff');
+    expect(row.count).toBe(7);
+    expect(row.lastSeenTs).toBe(Date.parse('2026-06-11T01:02:03Z'));
+    expect(row.lastSeen).toBeTruthy(); // compact age string
+  });
+  it('falls back count→1 and lastTimestamp→eventTime', () => {
+    const row = normalizeEvent({
+      metadata: { creationTimestamp: '2026-06-11T00:00:00Z' },
+      involvedObject: { kind: 'Node', name: 'n1' },
+      reason: 'X', message: 'm', eventTime: '2026-06-11T00:30:00Z',
+    });
+    expect(row.count).toBe(1);
+    expect(row.object).toBe('n1'); // no namespace → name only
+    expect(row.lastSeenTs).toBe(Date.parse('2026-06-11T00:30:00Z'));
+  });
+  it('falls back to creationTimestamp when lastTimestamp/eventTime absent', () => {
+    const row = normalizeEvent({
+      metadata: { creationTimestamp: '2026-06-11T00:00:00Z' },
+      involvedObject: { kind: 'Node', name: 'n1' }, reason: 'X', message: 'm',
+    });
+    expect(row.lastSeenTs).toBe(Date.parse('2026-06-11T00:00:00Z'));
+  });
+  it('events is a valid kind', () => { expect(isKind('events')).toBe(true); });
 });

@@ -14,7 +14,7 @@ const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 /**
  * Replicate `aws eks get-token`: presign an STS GetCallerIdentity GET with the
  * `x-k8s-aws-id: <cluster>` header SIGNED, then `k8s-aws-v1.` + base64url(url).
- * The web task role's P1e Access Entry + AmazonEKSViewPolicy authorize the read.
+ * The web task role's P1e Access Entry + AmazonEKSAdminViewPolicy authorize the read.
  */
 export async function eksToken(cluster: string, region: string): Promise<string> {
   const host = `sts.${region}.amazonaws.com`;
@@ -53,7 +53,7 @@ export async function clusterConn(cluster: string): Promise<ClusterConn> {
 }
 
 // ── in-cluster list + normalize ────────────────────────────────────────────
-export type Kind = 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces';
+export type Kind = 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces' | 'events';
 
 const KIND_PATH: Record<Kind, string> = {
   nodes: '/api/v1/nodes',
@@ -61,10 +61,21 @@ const KIND_PATH: Record<Kind, string> = {
   deployments: '/apis/apps/v1/deployments',
   services: '/api/v1/services',
   namespaces: '/api/v1/namespaces',
+  // Core /api/v1/events (not events.k8s.io/v1): the events.k8s.io/v1 API renames
+  // count/lastTimestamp to deprecatedCount/series, so the core endpoint is what
+  // preserves the fields our normalizeEvent fallbacks read.
+  events: '/api/v1/events?fieldSelector=type%3DWarning', // Warning만 (v1 parity, read-only GET)
 };
 
 export function isKind(k: string): k is Kind {
-  return k === 'nodes' || k === 'pods' || k === 'deployments' || k === 'services' || k === 'namespaces';
+  return (
+    k === 'nodes' ||
+    k === 'pods' ||
+    k === 'deployments' ||
+    k === 'services' ||
+    k === 'namespaces' ||
+    k === 'events'
+  );
 }
 
 /** ISO timestamp → compact age like "3d", "5h", "12m", "8s". */
@@ -104,13 +115,25 @@ interface K8sItem {
     ports?: { port?: number; protocol?: string }[];
     containers?: { resources?: { requests?: Record<string, string> } }[];
   };
+  // core /api/v1 Event fields (read by normalizeEvent)
+  involvedObject?: { kind?: string; name?: string };
+  reason?: string;
+  message?: string;
+  count?: number;
+  lastTimestamp?: string;
+  eventTime?: string;
+  type?: string;
 }
 
 // NodeRow / PodRow are defined (and re-exported) from ./eks-resources (client-safe).
 export interface DeploymentRow { name: string; namespace: string; ready: string; upToDate: number; available: number; age: string }
 export interface ServiceRow { name: string; namespace: string; type: string; clusterIP: string; ports: string; age: string }
 export interface NamespaceRow { name: string; status: string; age: string }
-export type InClusterRow = NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow;
+export interface EventRow {
+  kind: string; object: string; reason: string; message: string;
+  count: number; lastSeen: string; lastSeenTs: number;
+}
+export type InClusterRow = NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow | EventRow;
 
 function nodeRoles(labels: Record<string, string> = {}): string {
   const roles = Object.keys(labels)
@@ -198,12 +221,31 @@ export function normalizeNamespace(it: K8sItem): NamespaceRow {
   };
 }
 
+export function normalizeEvent(it: K8sItem): EventRow {
+  const ns = it.metadata?.namespace;
+  const name = it.involvedObject?.name ?? '';
+  // events.k8s.io/v1 renames count/lastTimestamp → deprecatedCount/series; the
+  // core /api/v1/events endpoint preserves the fields these fallbacks read.
+  const ts = it.lastTimestamp ?? it.eventTime ?? it.metadata?.creationTimestamp ?? '';
+  const tsMs = ts ? Date.parse(ts) : 0;
+  return {
+    kind: it.involvedObject?.kind ?? '',
+    object: ns ? `${ns}/${name}` : name, // namespace embedded in object (by design)
+    reason: it.reason ?? '',
+    message: it.message ?? '',
+    count: it.count ?? 1,
+    lastSeen: age(ts),
+    lastSeenTs: Number.isFinite(tsMs) ? tsMs : 0,
+  };
+}
+
 const NORMALIZERS: Record<Kind, (it: K8sItem) => InClusterRow> = {
   nodes: normalizeNode,
   pods: normalizePod,
   deployments: normalizeDeployment,
   services: normalizeService,
   namespaces: normalizeNamespace,
+  events: normalizeEvent,
 };
 
 /** HTTPS GET against the cluster K8s API, verifying TLS with the cluster CA. */
