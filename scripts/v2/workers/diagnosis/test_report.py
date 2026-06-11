@@ -163,3 +163,13 @@ def test_redact_strips_pii():
     s = rpt._redact('arn:aws:iam::123456789012:role/x user a@b.io ip 10.0.0.1 AKIAABCDEFGHIJKLMNOP')
     assert 'arn:aws' not in s and '123456789012' not in s and 'a@b.io' not in s
     assert '10.0.0.1' not in s and 'AKIA' not in s
+
+
+# --- Task 6: handlers registration --------------------------------------
+
+import handlers
+
+
+def test_report_registered_as_fargate():
+    assert handlers.is_allowed("report")
+    assert handlers.runtime_for("report") == "fargate"
