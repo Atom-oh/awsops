@@ -101,11 +101,19 @@ resource "aws_iam_role_policy" "eks_auto_register_secret" {
   role  = aws_iam_role.eks_auto_register[0].id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
-    }]
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      },
+      {
+        # the RDS-managed secret is CMK-encrypted — decrypt is required to read it (workers.tf pattern)
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = aws_kms_key.aurora.arn
+      }
+    ]
   })
 }
 
