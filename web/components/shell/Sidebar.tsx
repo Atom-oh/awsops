@@ -27,7 +27,6 @@ const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
   { href: '/cost', tkey: 'nav.cost', icon: DollarSign },
   { href: '/bedrock', tkey: 'nav.bedrock', icon: Gauge },
   { href: '/topology', tkey: 'nav.topology', icon: Network },
-  { href: '/opencost', tkey: 'nav.opencost', icon: PiggyBank },
   { href: '/customization', tkey: 'nav.customAgents', icon: Sparkles },
 ];
 
@@ -63,7 +62,7 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   cloudwatch_alarm: Bell,
 };
 
-function NavItem({ href, label, icon: Icon, active }: { href: string; label: string; icon: LucideIcon; active: boolean }) {
+function NavItem({ href, label, icon: Icon, active, className }: { href: string; label: string; icon: LucideIcon; active: boolean; className?: string }) {
   return (
     <Link
       href={href}
@@ -72,6 +71,7 @@ function NavItem({ href, label, icon: Icon, active }: { href: string; label: str
         active
           ? 'bg-claude-500 text-white shadow-sm'
           : 'text-ink-500 hover:bg-ink-100 hover:text-ink-800',
+        className,
       )}
     >
       <Icon size={16} strokeWidth={1.7} className={cn('shrink-0', active ? 'text-white' : 'text-ink-400')} />
@@ -117,17 +117,21 @@ export default function Sidebar() {
           <div key={g.group} className="space-y-0.5">
             <SectionLabel className="px-2.5 pb-1 text-[11px] tracking-[0.04em] text-ink-400">{g.group}</SectionLabel>
             {g.group === 'Compute' && (
-              /* EKS keeps its own route/icon but lives under Compute (user feedback) */
-              <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} />
+              /* EKS keeps its own route/icon but lives under Compute (user feedback);
+                 OpenCost renders as an indented EKS submenu item. */
+              <>
+                <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} />
+                <NavItem href="/opencost" label={t('nav.opencost')} icon={PiggyBank} active={path === '/opencost'} className="ml-5" />
+              </>
             )}
-            {g.types.map((t) => {
-              const href = `/inventory/${t}`;
+            {g.types.map((ty) => {
+              const href = `/inventory/${ty}`;
               return (
                 <NavItem
-                  key={t}
+                  key={ty}
                   href={href}
-                  label={INVENTORY_TYPES[t].label}
-                  icon={TYPE_ICON[t] ?? Server}
+                  label={INVENTORY_TYPES[ty].label}
+                  icon={TYPE_ICON[ty] ?? Server}
                   active={path === href}
                 />
               );

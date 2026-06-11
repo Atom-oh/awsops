@@ -25,8 +25,10 @@ interface Guide { commands: string[]; note: string }
 
 interface NodeAgg {
   name: string;
+  instanceType: string;
   cpuAllocatable: number; cpuRequest: number; cpuPct: number;
   memAllocatable: number; memRequest: number; memPct: number;
+  diskAllocatable: number; diskRequest: number; diskPct: number;
   podCount: number;
 }
 interface FleetEvent {
@@ -37,10 +39,14 @@ interface FleetCluster {
   name: string; reachable: boolean;
   counts: { nodes: number; nodesReady: number; pods: number; podsRunning: number; deployments: number; services: number };
   nodeAgg: NodeAgg[];
+  instanceTypes: Array<{ type: string; count: number }>;
   podStatus: Record<string, number>;
   podsByNamespace: Array<{ namespace: string; count: number }>;
   events: FleetEvent[];
 }
+
+// [PR#40 review MINOR] readable size: GiB at/above 1 GiB, else MiB (avoids tiny nodes showing "0.7").
+const fmtMib = (mib: number): string => (mib >= 1024 ? `${(mib / 1024).toFixed(1)}G` : `${Math.round(mib)}M`);
 
 export default function EksPage() {
   const [rows, setRows] = useState<Cluster[] | null>(null);
@@ -138,6 +144,18 @@ export default function EksPage() {
       .map(([namespace, count]) => ({ namespace, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);
+  }, [reachable]);
+
+  // Instance-type distribution merged across the reachable fleet → [{name,value}]
+  // for the donut, sorted by count desc.
+  const instanceTypeData = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of reachable) {
+      for (const it of f.instanceTypes ?? []) m.set(it.type, (m.get(it.type) ?? 0) + it.count);
+    }
+    return [...m.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
   }, [reachable]);
 
   // Warning events merged across the fleet, newest first, with a cluster column.
@@ -250,26 +268,32 @@ export default function EksPage() {
       )}
 
       {connected > 0 && reachable.some((f) => f.nodeAgg.length > 0) && (
-        <Card title="노드 리소스" subtitle="Pod 요청 합계 대비 노드 allocatable (CPU 코어 · 메모리 MiB)">
+        <Card title="노드 리소스" subtitle="Pod 요청 합계 대비 노드 allocatable (CPU 코어 · 메모리/디스크 G=GiB·M=MiB · request/allocatable 기준 — 디스크는 Pod가 ephemeral-storage request를 명시할 때만 채워짐)">
           <div className="flex flex-col gap-4">
             {reachable.filter((f) => f.nodeAgg.length > 0).map((f) => (
               <div key={f.name} className="flex flex-col gap-2">
                 <div className="font-mono text-[12px] text-ink-500">{f.name}</div>
                 {f.nodeAgg.map((n) => (
-                  <div key={n.name} className="grid grid-cols-1 gap-1 sm:grid-cols-[1fr_auto_auto] sm:items-center sm:gap-6 text-[12px]">
+                  <div key={n.name} className="grid grid-cols-1 gap-y-1 sm:grid-cols-[minmax(0,14rem)_repeat(3,minmax(0,1fr))] sm:items-center sm:gap-x-4 text-[12px]">
                     <span className="min-w-0 truncate font-mono text-ink-700" title={n.name}>
                       {n.name}
+                      {n.instanceType && <span className="ml-2 text-ink-400">{n.instanceType}</span>}
                       <span className="ml-2 text-ink-400">{n.podCount} pods</span>
                     </span>
                     <span className="flex items-center gap-2 text-ink-500">
-                      <span className="w-8">CPU</span>
+                      <span className="w-8 shrink-0">CPU</span>
                       <Meter value={n.cpuPct} />
                       <span className="tabular text-ink-400">{n.cpuRequest.toFixed(1)}/{n.cpuAllocatable.toFixed(1)}</span>
                     </span>
                     <span className="flex items-center gap-2 text-ink-500">
-                      <span className="w-8">Mem</span>
+                      <span className="w-8 shrink-0">Mem</span>
                       <Meter value={n.memPct} />
-                      <span className="tabular text-ink-400">{Math.round(n.memRequest)}/{Math.round(n.memAllocatable)}</span>
+                      <span className="tabular text-ink-400">{fmtMib(n.memRequest)}/{fmtMib(n.memAllocatable)}</span>
+                    </span>
+                    <span className="flex items-center gap-2 text-ink-500">
+                      <span className="w-8 shrink-0">Disk</span>
+                      <Meter value={n.diskPct} />
+                      <span className="tabular text-ink-400">{fmtMib(n.diskRequest)}/{fmtMib(n.diskAllocatable)}</span>
                     </span>
                   </div>
                 ))}
@@ -280,8 +304,9 @@ export default function EksPage() {
       )}
 
       {connected > 0 && totalPods > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <DonutBreakdown title="Pod Status" data={podStatusData} nameKey="name" valueKey="value" />
+          <DonutBreakdown title="Instance Types" data={instanceTypeData} nameKey="name" valueKey="value" />
           <BarDistribution title="Pods per Namespace" data={nsData} xKey="namespace" yKey="count" />
         </div>
       )}

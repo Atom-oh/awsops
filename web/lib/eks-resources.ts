@@ -7,11 +7,13 @@ export interface NodeRow {
   name: string; status: string; roles: string; version: string; instanceType: string; zone: string; age: string;
   // capacity/allocatable: cpu in cores, memory in MiB (0 when the API didn't report it).
   cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number;
+  // ephemeral-storage capacity/allocatable in MiB (0 when the API didn't report it).
+  diskCapacity: number; diskAllocatable: number;
 }
 export interface PodRow {
   name: string; namespace: string; status: string; node: string; restarts: number; age: string;
-  // summed container requests: cpu in cores, memory in MiB.
-  cpuRequest: number; memRequest: number;
+  // summed container requests: cpu in cores, memory in MiB, ephemeral-storage in MiB.
+  cpuRequest: number; memRequest: number; diskRequest: number;
 }
 
 /** Parse a K8s CPU quantity to cores: "8"→8, "7910m"→7.91, ""/null→0. */
@@ -50,8 +52,10 @@ export function parseMem(mem: unknown): number {
 
 export interface NodeResourceAgg {
   name: string;
+  instanceType: string;
   cpuAllocatable: number; cpuRequest: number; cpuPct: number;
   memAllocatable: number; memRequest: number; memPct: number;
+  diskAllocatable: number; diskRequest: number; diskPct: number;
   podCount: number;
 }
 
@@ -61,23 +65,41 @@ export interface NodeResourceAgg {
  * (0 when allocatable is 0/unknown). Nodes with no scheduled pods report zeros.
  */
 export function aggregateNodeResources(nodes: NodeRow[], pods: PodRow[]): NodeResourceAgg[] {
-  const byNode = new Map<string, { cpu: number; mem: number; count: number }>();
+  const byNode = new Map<string, { cpu: number; mem: number; disk: number; count: number }>();
   for (const p of pods) {
     if (!p.node) continue;
-    const e = byNode.get(p.node) ?? { cpu: 0, mem: 0, count: 0 };
+    const e = byNode.get(p.node) ?? { cpu: 0, mem: 0, disk: 0, count: 0 };
     e.cpu += p.cpuRequest || 0;
     e.mem += p.memRequest || 0;
+    e.disk += p.diskRequest || 0;
     e.count += 1;
     byNode.set(p.node, e);
   }
   const pct = (req: number, alloc: number) => (alloc > 0 ? Math.min(100, Math.round((req / alloc) * 100)) : 0);
   return nodes.map((n) => {
-    const e = byNode.get(n.name) ?? { cpu: 0, mem: 0, count: 0 };
+    const e = byNode.get(n.name) ?? { cpu: 0, mem: 0, disk: 0, count: 0 };
     return {
       name: n.name,
+      instanceType: n.instanceType,
       cpuAllocatable: n.cpuAllocatable, cpuRequest: e.cpu, cpuPct: pct(e.cpu, n.cpuAllocatable),
       memAllocatable: n.memAllocatable, memRequest: e.mem, memPct: pct(e.mem, n.memAllocatable),
+      diskAllocatable: n.diskAllocatable, diskRequest: e.disk, diskPct: pct(e.disk, n.diskAllocatable),
       podCount: e.count,
     };
   });
+}
+
+/**
+ * Count nodes per instanceType, blank → 'unknown', sorted by count desc
+ * (ties broken by type name for stable output).
+ */
+export function instanceTypeDistribution(nodes: NodeRow[]): { type: string; count: number }[] {
+  const m = new Map<string, number>();
+  for (const n of nodes) {
+    const type = n.instanceType || 'unknown';
+    m.set(type, (m.get(type) ?? 0) + 1);
+  }
+  return [...m.entries()]
+    .map(([type, count]) => ({ type, count }))
+    .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
 }
