@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { X } from 'lucide-react';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
