@@ -2,6 +2,8 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import DataTable from '@/components/ui/DataTable';
+import PageHeader from '@/components/ui/PageHeader';
+import RefreshButton from '@/components/ui/RefreshButton';
 import Badge from '@/components/ui/Badge';
 import StatCard from '@/components/ui/StatCard';
 import Card from '@/components/ui/Card';
@@ -57,6 +59,8 @@ export default function EksPage() {
   const [busyCluster, setBusyCluster] = useState('');
   const [fleet, setFleet] = useState<FleetCluster[]>([]);
   const [copied, setCopied] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [capturedAt, setCapturedAt] = useState<string | null>(null);
 
   const load = useCallback(() => {
     fetch('/api/eks')
@@ -77,6 +81,31 @@ export default function EksPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadFleet(); }, [loadFleet]);
+
+  // Manual refresh: re-fetch both the access list and the live fleet; stamp
+  // capturedAt once the fleet load settles (best-effort — never throws).
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    try {
+      await Promise.allSettled([
+        fetch('/api/eks')
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+          .then((d) => { setRows(d.clusters); setAdmin(!!d.admin); setErr(''); })
+          .catch((e) => setErr(String(e))),
+        (async () => {
+          const seq = ++fleetSeqRef.current;
+          try {
+            const r = await fetch('/api/eks/fleet');
+            const d = r.ok ? await r.json() : null;
+            if (d && seq === fleetSeqRef.current) setFleet(d.clusters ?? []);
+          } catch { /* keep previous fleet */ }
+        })(),
+      ]);
+      setCapturedAt(new Date().toISOString());
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   async function register(cluster: string) {
     setBusyCluster(cluster); setNotice(''); setGuide(null);
@@ -166,12 +195,13 @@ export default function EksPage() {
   const totalPods = totals.pods;
 
   return (
-    <div className="px-8 py-8 flex flex-col gap-6">
-      <div>
-        <h1 className="text-[15px] font-semibold text-ink-800">EKS Clusters</h1>
-        <p className="text-[12px] text-ink-400">Access Entry가 있는 클러스터는 바로 조회 등록할 수 있습니다 (v1의 kubeconfig 등록 대체).</p>
-      </div>
-
+    <div>
+      <PageHeader
+        title="EKS Clusters"
+        subtitle="Access Entry가 있는 클러스터는 바로 조회 등록할 수 있습니다 (v1의 kubeconfig 등록 대체)."
+        right={<RefreshButton busy={busy} onClick={refresh} capturedAt={capturedAt} />}
+      />
+      <div className="px-8 py-8 flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <StatCard label="Clusters" value={(rows ?? []).length} />
         <StatCard label="Connected" value={connected} />
@@ -328,6 +358,7 @@ export default function EksPage() {
           <div className="text-[12px] text-ink-400">경고 이벤트 없음</div>
         )
       )}
+      </div>
     </div>
   );
 }
