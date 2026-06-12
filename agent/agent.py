@@ -336,6 +336,21 @@ def build_skill_prompt(gateway_role, tools):
     return base + tool_section + COMMON_FOOTER
 
 
+def _filter_tools(tools, allowlist):
+    """ADR-031/ADR-039: enforce the resolver-computed tool allowlist OUTSIDE the model.
+
+    Keeps only tools whose ``.tool_name`` is in ``allowlist``, preserving the original
+    tool order. ``None`` or ``[]`` ⇒ no restriction (the resolver omits the key when
+    empty; ``[]`` is NOT deny-all). Unknown names in the allowlist are ignored. A
+    non-empty allowlist that matches nothing yields an empty tool set (the agent then
+    runs tool-less — safe). This is the single point where the per-account / per-skill
+    cap actually takes effect at the runtime (the cap was previously dropped here)."""
+    if not allowlist:
+        return tools
+    allow = set(allowlist)
+    return [t for t in tools if getattr(t, "tool_name", None) in allow]
+
+
 def get_aws_credentials():
     """Get current AWS credentials for SigV4 signing. / 현재 AWS 자격 증명을 가져와 SigV4 서명에 사용."""
     session = boto3.Session()
@@ -418,6 +433,7 @@ def handler(payload):
     gateway_role = payload.get("gateway", DEFAULT_GATEWAY)
     skill_role = payload.get("skill", gateway_role)  # skill override for SKILL_BASE / SKILL_BASE용 스킬 오버라이드
     system_prompt_override = payload.get("systemPromptOverride")  # ADR-031: resolver-supplied custom prompt
+    tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
     gateway_url = GATEWAYS.get(gateway_role, GATEWAYS[DEFAULT_GATEWAY])
 
     # Extract cross-account info / 크로스 어카운트 정보 추출
@@ -436,8 +452,11 @@ def handler(payload):
 
         with mcp_client:
             tools = get_all_tools(mcp_client)
+            # ADR-031/039: enforce the resolver-computed allowlist OUTSIDE the model BEFORE the prompt
+            # tool-list and Agent(tools=) are built, so the cap actually takes effect at the runtime.
+            tools = _filter_tools(tools, tool_allowlist)
             tool_names = [t.tool_name for t in tools]
-            logging.info(f"Gateway [{gateway_role}] MCP tools ({len(tools)}): {tool_names}")
+            logging.info(f"Gateway [{gateway_role}] MCP tools ({len(tools)}, allowlist={'on' if tool_allowlist else 'off'}): {tool_names}")
 
             # ADR-031: resolver override (custom agent) OR built-in SKILL_BASE; + dynamic tools + account directive
             if system_prompt_override:
