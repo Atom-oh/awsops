@@ -26,9 +26,9 @@ export interface AreaTrendProps {
 }
 
 /**
- * AreaTrend — claude-orange gradient area over a dotted ink-100 grid.
- * Lead series claude-500, fill = vertical gradient #D97757 0.30 → 0.02,
- * axes/labels ink-400, dark inverse tooltip. DESIGN.md §Charts.
+ * AreaTrend — teal gradient area over a dotted ink-100 grid.
+ * Lead series teal (#01A88D), fill = vertical gradient 0.30 → 0.02,
+ * axes/labels ink-400, dark inverse tooltip. AgentCore chart palette.
  */
 export default function AreaTrend({
   title,
