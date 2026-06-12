@@ -46,8 +46,8 @@
   --shadow-focus:0 0 0 3px rgba(1,168,141,.26);
 }
 
-/* ===== azure theme: brand ramp + chart lead + focus ring ===== */
-[data-theme="azure"] {
+/* ===== cobalt theme: brand ramp + chart lead + focus ring ===== */
+[data-theme="cobalt"] {
   --brand-50:#EAF1FE; --brand-100:#D2E2FD; --brand-200:#A9C7FB; --brand-300:#7FA9F9;
   --brand-400:#5E96F8; --brand-500:#528DF8; --brand-600:#2E6BE6; --brand-700:#1F54C2;
   --brand-800:#1B4196; --brand-900:#15306B;

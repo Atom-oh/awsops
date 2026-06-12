@@ -51,7 +51,7 @@ function LoginForm() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-paper px-4">
-      {/* teal · azure radial glows */}
+      {/* teal · cobalt radial glows */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"

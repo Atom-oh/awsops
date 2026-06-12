@@ -12,13 +12,13 @@ afterEach(() => {
 
 describe('theme model', () => {
   it('exposes the three themes and a teal default', () => {
-    expect(THEMES).toEqual(['teal', 'azure', 'teal-console']);
+    expect(THEMES).toEqual(['teal', 'cobalt', 'teal-console']);
     expect(DEFAULT_THEME).toBe('teal');
     expect(THEME_LABELS['teal-console']).toBe('Console');
   });
 
   it('isTheme validates membership', () => {
-    expect(isTheme('azure')).toBe(true);
+    expect(isTheme('cobalt')).toBe(true);
     expect(isTheme('nope')).toBe(false);
     expect(isTheme(undefined)).toBe(false);
   });
@@ -30,8 +30,8 @@ describe('theme model', () => {
   });
 
   it('setStoredTheme + getStoredTheme round-trips', () => {
-    setStoredTheme('azure');
-    expect(getStoredTheme()).toBe('azure');
+    setStoredTheme('cobalt');
+    expect(getStoredTheme()).toBe('cobalt');
   });
 
   it('applyTheme sets the data-theme attribute on <html>', () => {
