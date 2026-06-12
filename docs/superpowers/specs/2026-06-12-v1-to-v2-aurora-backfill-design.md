@@ -63,7 +63,9 @@ node scripts/v2/backfill-v1.mjs --data-dir <path> [options]
 2. `AURORA_SECRET_ARN` + `AURORA_ENDPOINT` env (Secrets Manager) →
 3. `terraform -chdir=terraform/v2/foundation output -raw aurora_secret_arn` / `aurora_endpoint` → Secrets Manager (the `migrate.mjs` path).
 
-This adds the env/DSN fallback so the runner works from any host that reaches Aurora (e.g. the mgmt-vpc host, which can reach Aurora:5432) without terraform state. Connection uses `pg.Client` with `ssl: { rejectUnauthorized: false }`, `statement_timeout`, and a per-run `pg_advisory_lock` (a unique constant key) to serialize concurrent runs.
+This adds the env/DSN fallback so the runner works from any host that reaches Aurora (e.g. the mgmt-vpc host, which can reach Aurora:5432) without terraform state. Connection uses `pg.Client` with `statement_timeout` and a per-run `pg_advisory_lock` keyed by a **fixed large 64-bit constant** (distinct from `migrate.mjs`'s key) to serialize concurrent runs.
+
+**Secret hygiene & TLS** (panel: codex/gemini/kiro): the runner **never prints the DSN or resolved credentials** in the summary, sample, or error output (redact to `…@host/db`). TLS defaults to `rejectUnauthorized: false` to match `migrate.mjs` (documented trade-off — accepts any cert; acceptable for a one-time operator-run tool); an operator may supply the RDS CA bundle via `PGSSLROOTCERT` for full verification. The runbook prioritizes the Secrets Manager path over `--dsn` for any non-test use.
 
 ## 4. Source readers (layouts + skip rules)
 
@@ -89,7 +91,7 @@ DELETE FROM inventory_snapshots WHERE account_id=$1 AND captured_at>=$2 AND capt
 INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count, payload)
   VALUES ($1, $cap, $label, $count, $payload::jsonb);   -- repeated per label
 ```
-- `captured_at` = `snapshot.timestamp` (fallback `${snapshot.date}T00:00:00Z` if absent); day-bounds in UTC.
+- `captured_at` = `snapshot.timestamp` (fallback `${snapshot.date}T00:00:00Z` if absent). **The DELETE day-bounds are computed from the *resolved* `captured_at` (post-fallback)** so a missing `timestamp` still clears the correct day (a fallback applied only to the INSERT would leave the DELETE matching an Invalid Date and clear nothing) — unit-fixtured.
 - `payload` = `{ date, timestamp }`. Idempotent: re-running replaces that (account, day).
 
 ### 5.2 `cost_snapshots` — UPSERT
@@ -123,15 +125,16 @@ INSERT INTO event_scaling_plans (plan_id, event_name, event_start_at, event_end_
     event_end_at=EXCLUDED.event_end_at, status=EXCLUDED.status, owner_email=EXCLUDED.owner_email, payload=EXCLUDED.payload;
 ```
 - `plan_id`=`event.eventId`, `event_name`=`event.name`, `event_start_at`=`event.eventStart`, `event_end_at`=`event.eventEnd ?? NULL`, `owner_email`=`event.createdBy ?? NULL`, `payload`=the whole event.
-- `status` must be in the schema CHECK set (`planned|analyzing|plan-ready|approved|cancelled`); v1 `EventStatus` matches exactly. A file whose status falls outside the set is **skipped + reported** (never aborts the run on a CHECK violation).
+- `status` must be in the schema CHECK set (`planned|analyzing|plan-ready|approved|cancelled`); v1 `EventStatus` matches exactly. A file that would violate a CHECK or NOT NULL constraint — `status` outside the set, or missing `eventId`/`event_name`/`eventStart` — is **skipped + reported** (never aborts the run). (Generalizes beyond `status`; symmetry noted by the panel.)
 
 ## 6. Idempotency, transactions, dry-run, errors
 
-- **Idempotent by construction** — re-running yields the same end state: inventory DELETE-day+INSERT, cost/scaling UPSERT, alert INSERT…ON CONFLICT DO NOTHING.
-- **Per-file transaction + per-file try/catch** — one corrupt/invalid JSON file is recorded as an error and **skipped**; the run continues. (A run-wide abort on a single bad historical file would be operator-hostile.)
-- **`--dry-run`** parses + validates + prints per-source "would write" counts + a sample row, with **no DB connection** (doubles as offline validation).
-- **Summary report** at exit, per source: files scanned / skipped (with reason) / rows inserted / updated / conflict-skipped / errored. Non-zero exit if any file errored (so CI/guide runs fail loudly).
-- A single `pg_advisory_lock` wraps the whole run.
+- **Idempotent by construction** — re-running yields the same end state: inventory DELETE-day+INSERT, cost/scaling UPSERT, alert INSERT…ON CONFLICT DO NOTHING (the first-imported alert payload is preserved on rerun — asserted in the integration test).
+- **Per-file transaction + per-file try/catch** — the run continues past a single bad file. **"errored" ≠ "skipped":** an *errored* file is a parse/SQL failure (counts toward the non-zero exit); a *skipped* file is an intentional non-write (summary/`.prev_` files, out-of-set/invalid scaling record, empty `resources`) and is **not** an error. (A run-wide abort on one bad historical file would be operator-hostile.)
+- **Implementable counts** (panel codex MAJOR): pg `rowCount` cannot distinguish insert from update on an UPSERT, so the UPSERT sources (cost/scaling) use `... RETURNING (xmax = 0) AS inserted` to split inserted vs updated; alert `ON CONFLICT DO NOTHING` returns the inserted row (0 rows ⇒ conflict-skipped); inventory reports deleted + inserted.
+- **Summary report** at exit, per source: files scanned / skipped (with reason) / inserted / updated / conflict-skipped / errored — **with the DSN and credentials redacted** everywhere. **Non-zero exit iff any file *errored*** (skips do not trip it), so CI/guide runs fail loudly only on real failures.
+- **`--dry-run`** parses + validates + prints per-source **would-write / would-skip (reason) / would-error** counts + a (credential-free) sample row, with **no DB connection** (doubles as offline validation).
+- A single `pg_advisory_lock` (fixed 64-bit key) wraps the whole run.
 
 ## 7. Testing
 
@@ -144,12 +147,14 @@ Pure-function coverage of `backfill-core.mjs`:
 Substrate chosen: **local PostgreSQL 17 container** (same engine + identical `schema.sql` DDL → identical JSONB / `ON CONFLICT` / `TEXT[]` / advisory-lock behaviour as Aurora; free, fast, repeatable, guide-friendly).
 
 Flow:
-1. `sudo docker run -d --rm -p 127.0.0.1:<rand>:5432 -e POSTGRES_PASSWORD=… -e POSTGRES_DB=awsops postgres:17` (sudo docker confirmed available; daemon active). Skip the test with a clear message if docker is unreachable.
+1. `sudo docker run -d --rm -p 127.0.0.1:<rand>:5432 -e POSTGRES_PASSWORD=<random-generated-at-runtime> -e POSTGRES_DB=awsops postgres:17` — bound to `127.0.0.1` only, **password generated at runtime (never hard-coded/committed)**, passed onward via `BACKFILL_DSN`. Skip the test with a clear message if docker is unreachable. **Teardown trap on `EXIT`, `SIGINT`, `SIGTERM`** so a Ctrl-C never orphans the container.
 2. Wait healthy, then load `terraform/v2/foundation/data/schema.sql` (psql or `docker exec`).
 3. Build a fixture `data/` tree exercising every reader path + edge case (multi-account dir, single-account, `aws`→aggregate, corrupt file, skipped `summary`/`.prev_`, out-of-set status).
-4. Run the backfill against the container via `BACKFILL_DSN` (real run, not dry).
-5. Assert: per-table row counts; inventory **fan-out** (N labels → N rows); a JSONB payload spot-check; **idempotency** (run twice → identical counts); corrupt/skip files counted but not loaded.
-6. Tear down the container (and on failure, via trap).
+4. Assertions are split so the corrupt-file's non-zero exit doesn't fail the suite (panel codex MAJOR):
+   - **(a) clean-fixtures run** (no corrupt file) → expect **exit 0**; assert per-table counts, inventory **fan-out** (N labels → N rows), a JSONB payload spot-check; run **twice** → identical counts (idempotency), **the alert payload is unchanged on the second run** (DO NOTHING preserves the first import), **and the second run's summary reports cost/scaling/alert rows as *updated*/*conflict-skipped*, not *inserted*** — locking in the `RETURNING (xmax=0)` count logic from the MAJOR-(b) fix.
+   - **(b) corrupt-fixture run** → expect **non-zero exit**; assert the good rows still loaded and the corrupt record was **not** loaded; the skipped (`summary`/`.prev_`/out-of-set) files counted as *skipped*, not *errored*.
+   - **(c) `--only cost` run** → assert only `cost_snapshots` changed and the other three tables were untouched (covers the otherwise-untested `--only`).
+5. Tear down the container via the trap.
 
 ### 7.3 Acceptance criteria
 - `node --test scripts/v2/backfill-core.test.mjs` green.
@@ -165,7 +170,10 @@ Flow:
 3. **Dry-run** — `node scripts/v2/backfill-v1.mjs --data-dir ./v1-data --dry-run` and read the counts.
 4. **Run** — drop `--dry-run`; capture the summary report.
 5. **Verify** — `SELECT count(*)` per table + a spot-check query; re-run to confirm idempotency.
-6. **Notes** — fidelity gaps (alert `source`/`fingerprint`), no read-cutover, no source deletion.
+6. **Notes / fidelity gaps:**
+   - alert `source` = `--alert-source` default (`unknown`), and `fingerprint = NULL` → backfilled alert rows are **excluded from the `fingerprint` partial index**, i.e. invisible to fingerprint-based dedup/search (historical incidents won't surface there).
+   - **`--account-id` must match the id the v1 dual-write used** for those days; otherwise backfilled rows fork onto a different `account_id` than any live-written rows and the same-(account,day) idempotent-replace guarantee only holds within one id. (Optional pre-run `SELECT DISTINCT account_id` check.)
+   - no read-cutover (the app's source-of-truth is unchanged), no v1 source deletion. **Never echo the DSN/credentials** in logs.
 
 The `backfill-v1.mjs` header carries a concise usage block so the script reads well when embedded in the guide.
 
