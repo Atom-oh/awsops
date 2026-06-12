@@ -63,7 +63,9 @@ Edge Lambda 변경은 CloudFront 배포 갱신을 동반(긴 apply) → saved tf
 
 ## 5. 에러 / 엣지 케이스
 
-- `next`는 `/`로 시작하고 `//`로 시작하지 않는 상대경로만 허용(오픈 리다이렉트 차단)
+- `next`는 `/`로 시작하고 2번째 문자가 `/`·`\`가 아니며 `\`를 포함하지 않는 상대경로만
+  허용(오픈 리다이렉트 차단 — 브라우저의 `\`→`/` 정규화로 `/\evil.com` ≡ `//evil.com`
+  우회까지 차단)
 - 브루트포스: Cognito 내장 lockout/스로틀에 위임 — BFF는 상태 없음(thin-BFF 유지)
 - 만료 토큰 보유 상태에서 `/login` 접근 → public이므로 무한루프 없음
 - 로그인 페이지 favicon `/icon.svg`는 public 예외로 깨짐 방지

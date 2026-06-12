@@ -25,10 +25,15 @@
 - [ ] `initiateAuth(email, password)` 구현 — `https://cognito-idp.{region}.amazonaws.com/`
   POST, 반환은 discriminated union
   `{ ok: true, idToken, expiresIn } | { ok: false, code: 'invalid_credentials' | 'challenge' | 'unavailable' }`
+  (`expiresIn` = InitiateAuth `AuthenticationResult.ExpiresIn`, **초 단위** — Task 7 적용 후 43200;
+  모든 `ChallengeName` 값은 단일 `challenge` 코드로 수렴)
 - [ ] `sessionCookie(idToken, remember, expiresIn)` — `awsops_token=…; Path=/; Secure; HttpOnly; SameSite=Lax`
-  + remember일 때만 `; Max-Age={expiresIn}` (세션 쿠키 vs 지속 쿠키) — 테스트 포함
-- [ ] `safeNext(raw)` — `/`로 시작 && `//`로 시작하지 않는 상대경로만 허용, 그 외 `'/'`
-  (오픈 리다이렉트 차단) — 테스트 포함
+  + remember일 때만 `; Max-Age={expiresIn}` (세션 쿠키 vs 지속 쿠키) — 테스트 포함.
+  쿠키 이름은 edge 템플릿의 `awsops_token`과 동일해야 함(결합 계약 — 변경 시 양쪽 동시)
+- [ ] `safeNext(raw)` — `/`로 시작 && 2번째 문자가 `/`·`\`가 아니고 값에 `\` 미포함인
+  상대경로만 허용, 그 외 `'/'` (오픈 리다이렉트 차단 — 브라우저가 `\`를 `/`로 정규화하므로
+  `/\evil.com` ≡ `//evil.com` 우회를 함께 차단) — 테스트에 `//evil.com`, `/\evil.com`,
+  `/@evil.com`(허용 — same-origin 경로), `https://evil.com` 케이스 포함
 - [ ] `cd web && npx vitest run lib/login.test.ts` GREEN 확인 후 커밋
 
 ### Task 2: i18n 키 추가
@@ -49,13 +54,20 @@
 
 **Files:**
 - Create: `web/app/api/auth/login/route.ts`
+- Test: `web/app/api/auth/login/route.test.ts`
 
+- [ ] `route.test.ts` 먼저 — HTTP 어댑터 계층 검증(initiateAuth 모킹):
+  잘못된 body = 400 `{ error: 'invalid_request' }`, 성공 = 200 + `Set-Cookie` 헤더 존재,
+  `invalid_credentials` = 401, `challenge` = 403, `unavailable` = 502, 응답 JSON 구조
 - [ ] `export const dynamic = 'force-dynamic'` · JSON body 파싱, `email`/`password`
   비어있지 않은 string + 길이 상한(254/256) 검증 → 위반 시 400 `{ error: 'invalid_request' }`
+  (입력 검증 실패 = `invalid_request`, 인증 실패 = `invalid_credentials` — 코드 구분 유지)
 - [ ] `initiateAuth` 호출 → 매핑: 성공 = 200 `{ ok: true }` + `Set-Cookie: sessionCookie(...)`,
   `invalid_credentials` = 401, `challenge` = 403, `unavailable` = 502 — 각각
-  `{ error: <code> }` (메시지 문자열이 아닌 코드 반환, i18n은 클라이언트에서)
-- [ ] 로직은 전부 Task 1의 lib 함수 재사용(라우트에 신규 분기 없음) · `npx tsc --noEmit` 후 커밋
+  `{ error: <code> }` (메시지 문자열이 아닌 코드 반환, i18n은 클라이언트에서) ·
+  로그인 응답에 `Cache-Control: no-store` 헤더 명시
+- [ ] 로직은 전부 Task 1의 lib 함수 재사용(라우트에 신규 분기 없음) · vitest GREEN +
+  `npx tsc --noEmit` 후 커밋
 
 ### Task 4: signout 단순화 (Hosted UI 왕복 제거)
 
@@ -65,7 +77,8 @@
 
 - [ ] signout 라우트: 쿠키 삭제 헤더 유지, 응답을 `{ redirect: '/login' }`로 교체
   (Cognito `/logout` URL 구성 제거 — 자체 폼 로그인엔 Hosted UI 브라우저 세션이 없음),
-  상단 주석을 새 동작으로 갱신
+  상단 주석을 새 동작으로 갱신. `COGNITO_DOMAIN`/`APP_DOMAIN` env는 이 라우트에서
+  미사용이 되지만 task def에서 제거하지 않음(lib/auth.ts 등 다른 소비자 + 무해)
 - [ ] `UserIdentity.signOut()`: `window.location.href = redirect ?? '/login'`,
   catch 폴백도 `'/login'`으로 변경
 - [ ] vitest 전체 GREEN + `npx tsc --noEmit` 후 커밋
@@ -98,7 +111,8 @@
   필드(h-[42px], label xs/secondary) · "로그인 유지" 체크박스(accent claude, 기본 checked) ·
   "로그인 →" 풀폭 claude 버튼 — SSO 그리드·비밀번호 찾기 링크는 만들지 않음
 - [ ] 동작(`'use client'` + `useSearchParams`는 `<Suspense>` 경계로 래핑 — Next 14 요건):
-  submit → `POST /api/auth/login` → 성공 시 `window.location.replace(safeNext(next))`,
+  submit → `POST /api/auth/login` → 성공 시 `window.location.replace(safeNext(next))`
+  (`replace` 의도적 — 뒤로가기로 로그인 화면 복귀 방지),
   busy 동안 버튼 `login.busy` + disabled(가짜 850ms 아닌 실제 fetch 시간),
   오류 시 카드 상단 rose 톤 인라인 박스에 `login.error.{code}` 표시
 - [ ] 푸터(2xs/muted, 중앙): `ap-northeast-2 · CloudFront → Lambda@Edge · RS256 JWT`
@@ -123,11 +137,15 @@
 - Modify: `terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl`
 
 - [ ] `is_public()`에 `/login`, `/api/auth/login`, `/icon.svg` 추가(이유 주석 포함:
-  로그인 페이지·인증 API·파비콘은 미인증 접근 필수)
+  로그인 페이지·인증 API·파비콘은 미인증 접근 필수) — **기존 항목
+  `/_next/static/`·`/api/health`·`/api/auth/signout`은 그대로 유지**(additive 변경).
+  `/icon.svg`는 `web/app/icon.svg`(App Router 파일 컨벤션)가 서빙 — 실존 확인 완료
 - [ ] `lambda_handler`의 `return start_login(headers)` →
   `return login_redirect(uri, request.get('querystring', ''))` — 새 함수는
   `302 Location: /login?next={urllib.parse.quote(uri + ('?' + qs if qs else ''))}`
-  (상대 Location, flow 쿠키 불필요) · `start_login`/`handle_callback`은 다크 폴백으로 보존
+  + `Cache-Control: no-cache` (상대 Location, flow 쿠키 불필요) ·
+  `start_login`/`handle_callback`은 다크 폴백으로 보존(flow 쿠키 `Max-Age=600`은
+  PKCE 임시 상태용 의도적 단수명 — 변경하지 않음)
 - [ ] `handle_callback`의 토큰 쿠키 `Max-Age=3600` → `43200`(12h 토큰 수명 정합)
 - [ ] 렌더 산출물 파이썬 문법 검증:
   `python3 -c "import ast; ast.parse(open('terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl').read().replace('${', '{'))"` 수준의
@@ -156,4 +174,5 @@
 
 - web: 직전 이미지로 ECS 재배포(`make deploy`는 태그 푸시 — 이전 태스크데프 리비전 지정)
 - edge: `lambda_handler`의 redirect 한 줄을 `start_login(headers)`로 되돌려 re-apply
-  (Hosted UI 플로우 즉시 복원 — `explicit_auth_flows` 추가는 잔류해도 무해)
+  (Hosted UI 플로우 즉시 복원 — `explicit_auth_flows` 추가와 `is_public()` 추가 경로는
+  잔류해도 무해)
