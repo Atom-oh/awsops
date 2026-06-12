@@ -169,7 +169,9 @@ function sslOption() {
 
 /** Resolve a pg.Client config + a credential-free display string. */
 export function connConfig(args, env = process.env) {
-  if (args.dsn) return { config: { connectionString: args.dsn, ...sslOption() }, display: redactDsn(args.dsn) };
+  // --dsn governs its own TLS via the connection string's sslmode (so a local
+  // non-SSL test container works, and an Aurora DSN can opt in with sslmode=require).
+  if (args.dsn) return { config: { connectionString: args.dsn }, display: redactDsn(args.dsn) };
   const region = env.AWS_REGION || 'ap-northeast-2';
   const tf = (o) => execSync(`terraform -chdir=terraform/v2/foundation output -raw ${o}`, { encoding: 'utf8' }).trim();
   const secretArn = env.AURORA_SECRET_ARN || tf('aurora_secret_arn');
