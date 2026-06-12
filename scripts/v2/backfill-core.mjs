@@ -52,3 +52,97 @@ export function partitionAccountDir(entries) {
   }
   return { accountDirs, rootDateFiles };
 }
+
+// ---------------------------------------------------------------------------
+// Record → row mappers  (one per v1 store; columns match schema.sql exactly)
+// ---------------------------------------------------------------------------
+
+function utcDayBounds(iso) {
+  const t = new Date(iso);
+  const start = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()));
+  const next = new Date(start.getTime() + 24 * 3_600_000);
+  return { dayStartISO: start.toISOString(), dayNextISO: next.toISOString() };
+}
+
+/**
+ * v1 InventorySnapshot {date, timestamp, resources:{label→count}} →
+ * one inventory_snapshots row per label (fan-out). DELETE-day bounds and
+ * captured_at both use the RESOLVED timestamp (post-fallback) so a missing
+ * `timestamp` still clears the correct day. Mirrors src/lib/db/inventory-writer.ts.
+ */
+export function mapInventory(snapshot, accountId) {
+  const account = normalizeAccount(accountId);
+  const capturedAt = snapshot.timestamp || `${snapshot.date}T00:00:00Z`;
+  const { dayStartISO, dayNextISO } = utcDayBounds(capturedAt);
+  const payload = JSON.stringify({ date: snapshot.date, timestamp: snapshot.timestamp });
+  const rows = Object.entries(snapshot.resources || {}).map(([resourceType, count]) => ({
+    account, capturedAt, resourceType, resourceCount: Number(count) || 0, payload,
+  }));
+  return { account, capturedAt, dayStartISO, dayNextISO, rows };
+}
+
+/**
+ * v1 CostSnapshot {date, timestamp, monthlyCost, dailyCost, serviceCost} →
+ * one cost_snapshots row, granularity sentinel 'SNAPSHOT'. UPSERT on
+ * (account_id, period_start, period_end, granularity). Mirrors cost-writer.ts.
+ */
+export function mapCost(snapshot, accountId) {
+  const account = normalizeAccount(accountId);
+  const payload = JSON.stringify({
+    monthlyCost: snapshot.monthlyCost ?? [],
+    dailyCost: snapshot.dailyCost ?? [],
+    serviceCost: snapshot.serviceCost ?? [],
+    capturedAt: snapshot.timestamp,
+  });
+  return { account, periodStart: snapshot.date, periodEnd: snapshot.date, granularity: 'SNAPSHOT', payload };
+}
+
+/**
+ * v1 DiagnosisRecord → alert_diagnosis row. INSERT … ON CONFLICT(incident_id)
+ * DO NOTHING. `source` is not in the record (default via opts), `fingerprint`
+ * is not in the record (NULL). payload = the whole record (matches the writer's
+ * buildPayload shape). Backfill-specific (the writer takes Incident+Result).
+ */
+export function mapAlert(record, opts = {}) {
+  const source = opts.source || 'unknown';
+  if (!record.incidentId || !record.timestamp || !record.severity) {
+    return { skip: true, reason: 'missing required incidentId/timestamp/severity' };
+  }
+  return {
+    incidentId: record.incidentId,
+    occurredAt: record.timestamp,
+    severity: record.severity,
+    source,
+    services: record.affectedServices ?? [],
+    resources: record.affectedResources ?? [],
+    fingerprint: null,
+    payload: JSON.stringify(record),
+  };
+}
+
+export const VALID_SCALING_STATUS = new Set([
+  'planned', 'analyzing', 'plan-ready', 'approved', 'cancelled',
+]);
+
+/**
+ * v1 ScalingEvent → event_scaling_plans row. UPSERT on plan_id. A record that
+ * would violate a CHECK/NOT NULL constraint (status outside the set, or missing
+ * eventId/name/eventStart) is reported as {skip}. Mirrors event-scaling-writer.ts.
+ */
+export function mapScaling(event) {
+  if (!event.eventId || !event.name || !event.eventStart) {
+    return { skip: true, reason: 'missing required eventId/name/eventStart' };
+  }
+  if (!VALID_SCALING_STATUS.has(event.status)) {
+    return { skip: true, reason: `status '${event.status}' not in CHECK set` };
+  }
+  return {
+    planId: event.eventId,
+    eventName: event.name,
+    eventStartAt: event.eventStart,
+    eventEndAt: event.eventEnd ?? null,
+    status: event.status,
+    ownerEmail: event.createdBy ?? null,
+    payload: JSON.stringify(event),
+  };
+}
