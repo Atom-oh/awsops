@@ -1,7 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
+import RefreshButton from '@/components/ui/RefreshButton';
 import SectionLabel from '@/components/ui/SectionLabel';
 import Card from '@/components/ui/Card';
 import BarDistribution from '@/components/charts/BarDistribution';
@@ -29,22 +30,32 @@ export default function Home() {
   const [sum, setSum] = useState<Summary | null>(null);
   const [sumErr, setSumErr] = useState('');
   const [cost, setCost] = useState<Cost | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [capturedAt, setCapturedAt] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Three independent fetches — each degrades on its own.
-    fetch('/api/overview')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then(setOv)
-      .catch((e) => setOvErr(String(e)));
-    fetch('/api/inventory/summary')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then(setSum)
-      .catch((e) => setSumErr(String(e)));
-    fetch('/api/cost')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then(setCost)
-      .catch(() => setCost({ trend: [] }));
+  const loadAll = useCallback(async () => {
+    setBusy(true);
+    // Three independent fetches — each degrades on its own (Promise.allSettled
+    // so one failure never blanks the others).
+    await Promise.allSettled([
+      fetch('/api/overview')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((d) => { setOv(d); setOvErr(''); })
+        .catch((e) => setOvErr(String(e))),
+      fetch('/api/inventory/summary')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((d) => { setSum(d); setSumErr(''); })
+        .catch((e) => setSumErr(String(e))),
+      fetch('/api/cost')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then(setCost)
+        .catch(() => setCost({ trend: [] })),
+    ]);
+    setCapturedAt(new Date().toISOString());
+    setBusy(false);
   }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   // type → count lookup from the inventory summary (DASH when summary unavailable).
   const n = (type: string): number | string => {
@@ -69,7 +80,11 @@ export default function Home() {
 
   return (
     <>
-      <PageHeader title="대시보드" live subtitle="실시간 AWS · Kubernetes 운영 현황" />
+      <PageHeader
+        title="대시보드"
+        subtitle="실시간 AWS · Kubernetes 운영 현황"
+        right={<RefreshButton busy={busy} onClick={loadAll} capturedAt={capturedAt} />}
+      />
       <div className="px-8 py-8 flex flex-col gap-6">
         {loading && <div className="text-ink-400">로딩 중…</div>}
         {ovErr && (

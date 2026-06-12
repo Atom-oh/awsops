@@ -1,8 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
-import Badge from '@/components/ui/Badge';
+import RefreshButton from '@/components/ui/RefreshButton';
 import DataTable from '@/components/ui/DataTable';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AreaTrend from '@/components/charts/AreaTrend';
@@ -25,15 +25,28 @@ export default function BedrockPage() {
   const [range, setRange] = useState('24h');
   const [d, setD] = useState<BedrockData | null>(null);
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [capturedAt, setCapturedAt] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Closes over the current `range`; the range-switch useEffect re-fires this on
+  // change, and the RefreshButton re-runs it for the same range on demand.
+  const load = useCallback(async () => {
     setD(null);
     setErr('');
-    fetch(`/api/bedrock-metrics?range=${range}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then(setD)
-      .catch((e) => setErr(String(e)));
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/bedrock-metrics?range=${range}`);
+      if (!r.ok) throw new Error(String(r.status));
+      setD(await r.json());
+      setCapturedAt(new Date().toISOString());
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
   }, [range]);
+
+  useEffect(() => { load(); }, [load]);
 
   const models = d?.models ?? [];
   const totalCost = d?.totalCost ?? 0;
@@ -59,7 +72,7 @@ export default function BedrockPage() {
       <PageHeader
         title="Bedrock Usage"
         subtitle="AWS/Bedrock CloudWatch 메트릭 · 모델별 토큰·비용·캐시"
-        right={<Badge tone="brand" variant="soft" dot>CloudWatch · AWS/Bedrock</Badge>}
+        right={<RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />}
       />
       <div className="px-8 py-8 flex flex-col gap-6">
         <div className="overflow-x-auto">

@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import PageHeader from '@/components/ui/PageHeader';
+import RefreshButton from '@/components/ui/RefreshButton';
 import Badge from '@/components/ui/Badge';
 import Card from '@/components/ui/Card';
 import SegmentedControl from '@/components/ui/SegmentedControl';
@@ -22,17 +23,28 @@ export default function OpencostPage() {
   const [msg, setMsg] = useState('');
   const [bundle, setBundle] = useState<{ valuesYaml: string; installSh: string } | null>(null);
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [capturedAt, setCapturedAt] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch('/api/eks')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => {
-        const names = (d.clusters as EksClusterRow[]).map((c) => c.name);
-        setClusters(names);
-        if (names.length) setCluster(names[0]);
-      })
-      .catch((e) => setErr(String(e)));
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      const r = await fetch('/api/eks');
+      if (!r.ok) throw new Error(String(r.status));
+      const d = await r.json();
+      const names = (d.clusters as EksClusterRow[]).map((c) => c.name);
+      setClusters(names);
+      if (names.length) setCluster(names[0]);
+      setErr('');
+      setCapturedAt(new Date().toISOString());
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   const loadCluster = useCallback(async (name: string) => {
     setStatus(null); setBundle(null); setMsg('');
@@ -86,7 +98,12 @@ export default function OpencostPage() {
       <PageHeader
         title="OpenCost"
         subtitle="EKS 비용 — 설치 번들 생성(다운로드) · 설치상태 조회 (read-only, 설치는 직접 실행)"
-        right={<Badge tone="brand" variant="soft" dot>read-only</Badge>}
+        right={
+          <>
+            <Badge tone="brand" variant="soft" dot>read-only</Badge>
+            <RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />
+          </>
+        }
       />
       <div className="px-8 py-8 flex flex-col gap-6">
         {err && <div className="text-[13px] text-rose-600">클러스터 로드 실패: {err}</div>}

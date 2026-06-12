@@ -1,8 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
-import Badge from '@/components/ui/Badge';
+import RefreshButton from '@/components/ui/RefreshButton';
 import Card from '@/components/ui/Card';
 import DataTable from '@/components/ui/DataTable';
 import AreaTrend from '@/components/charts/AreaTrend';
@@ -21,12 +21,25 @@ const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigi
 export default function CostPage() {
   const [d, setD] = useState<Cost | null>(null);
   const [err, setErr] = useState('');
-  useEffect(() => {
-    fetch('/api/cost')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then(setD)
-      .catch((e) => setErr(String(e)));
+  const [busy, setBusy] = useState(false);
+  const [capturedAt, setCapturedAt] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      const r = await fetch('/api/cost');
+      if (!r.ok) throw new Error(String(r.status));
+      setD(await r.json());
+      setErr('');
+      setCapturedAt(new Date().toISOString());
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   // byService arrives sorted descending from getMtdCost.
   const byService = d?.byService ?? [];
@@ -60,7 +73,7 @@ export default function CostPage() {
       <PageHeader
         title="Cost Explorer"
         subtitle="Cost Explorer 기반 이번 달 누적 비용 · 서비스별 분포"
-        right={<Badge tone="brand" variant="soft" dot>Cost Explorer API</Badge>}
+        right={<RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />}
       />
       <div className="px-8 py-8 flex flex-col gap-6">
         {err && (
