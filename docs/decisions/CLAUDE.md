@@ -51,6 +51,7 @@ Records of major design decisions. Update this index when status/outcome changes
 | 036 | 변경·조치 실행 substrate (SSM Automation + Change Manager × P2 워커 백본 하이브리드) | **⛔ REVERSED (2026-06-11)** — 3-AI 합의; 029와 함께 실행 substrate 폐기, do-not-enable·동결. (orig) Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); `.sync` 사실오류 정정·완료추적·승인주체·per-action IAM·통제 매핑 보완 |
 | 037 | v2 파운데이션 — Terraform + thin-BFF 웹 + 비동기 워커 (CDK 폐기) | Accepted (2026-06-10) — co-agent ADR 일관성 리뷰; 024 전면 승계 + 030 메커니즘 정제(Steampipe 라이브 없음·flag-gated 인벤토리 sync 확정) (029/036은 이 파운데이션 위에 설계됐으나 2026-06-11 REVERSED — 037의 채택 자체는 029/036 reversal에 영향받지 않음) |
 | 038 | 하이브리드 에이전트 라우팅 (정규식+Haiku 분류기) + v2 프롬프트 캐싱 | Accepted (2026-06-10) — 멀티AI 의사결정(A-now/C-at-P4 만장일치) + 스펙 리뷰 8건 반영; Gateway 시맨틱 P4 연기; **활성화 LIVE (2026-06-10): 게이트 hybrid 96.9% (+27.7pp) PASSED·캐싱 GREEN·분류기 타임아웃 3.5s 정정** |
+| 039 | v2 인앱 로그인 (Cognito USER_PASSWORD_AUTH) | Accepted (2026-06-12) — 자체 `/login` 폼 + 무서명 공개 `InitiateAuth(USER_PASSWORD_AUTH)`가 Hosted UI를 주 경로에서 대체; 엣지 RS256 검증기·`awsops_token` 쿠키 계약 불변(037 기반·020 정제); 최소권한(REFRESH 미부여)·id_token 12h·Hosted UI PKCE는 다크 폴백·signout은 쿠키 삭제→`/login` |
 
 ## 새 ADR 추가 / Adding a New ADR
 1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1

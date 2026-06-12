@@ -1,6 +1,6 @@
 # 로그인 화면 (F4 login-theme) — 설계 스펙
 
-> 2026-06-12 · 브랜치 `feat/v2-architecture-design` · 상태: 사용자 승인(인증 = v1식 자체 폼, 외형 = **AgentCore teal 테마**), 컨센서스 게이트 통과
+> 2026-06-12 · 브랜치 `feat/v2-architecture-design` · 상태: **구현 완료**(F1–F9, ADR-039 채택) — 인증 = v1식 자체 폼, 외형 = **AgentCore teal 테마**. 결정 기록: `docs/decisions/039-v2-inapp-login.md`
 >
 > **테마 갱신(2026-06-12)**: 외형은 옛 DESIGN.md "1. Login"(paper+claude 오렌지)이 아니라 **AgentCore teal 테마**(brand/brand-action/negative/positive 토큰, 쿨 뉴트럴)를 따른다. **의존성**: `agentcore-theme-system` 플랜 Task 1–3(토큰→CSS변수 + `claude`→`brand` + `--brand-action`) 적용 후 구현. 로그인은 토큰 기반이라 활성 테마를 따른다(기본 teal 라이트, console=자동 다크).
 
