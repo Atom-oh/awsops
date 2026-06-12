@@ -6,7 +6,7 @@
 
 > **Notes (2026-06-03, co-agent 3-AI review)**:
 > - **Lambda count is 20, not 19.** This ADR cites "19 Lambdas"; ADR-015 added a 20th (`aws_finops_mcp.py`), so the current count is **20**. (CLAUDE.md/README "19" is likewise stale.)
-> - **v2 supersession**: the EC2/ALB CDK topology here is superseded **for v2** by **ADR-030** (ECS Fargate workload + Aurora data stacks; EC2 build host decommissioned). This ADR remains Accepted as v1 history. / **Lambda 수는 19가 아니라 20.** 본 ADR은 "19 Lambda"로 인용하나 ADR-015가 20번째(`aws_finops_mcp.py`)를 추가 → 현재 **20**(CLAUDE.md/README의 "19"도 stale). **v2 승계**: 여기의 EC2/ALB CDK 토폴로지는 **v2에 한해 ADR-030**(ECS Fargate + Aurora)이 승계. 본 ADR은 v1 이력으로 Accepted 유지.
+> - **v2 supersession**: the EC2/ALB CDK topology here is superseded **for v2** by **ADR-030** *(this 2026-06-03 note reflects the ADR-030 stage — the final supersession is ADR-037; see the header)* (ECS Fargate workload + Aurora data stacks; EC2 build host decommissioned). This ADR remains Accepted as v1 history. / **Lambda 수는 19가 아니라 20.** 본 ADR은 "19 Lambda"로 인용하나 ADR-015가 20번째(`aws_finops_mcp.py`)를 추가 → 현재 **20**(CLAUDE.md/README의 "19"도 stale). **v2 승계**: 여기의 EC2/ALB CDK 토폴로지는 **v2에 한해 ADR-030** *(2026-06-03 노트는 030 기준 — 최종 승계는 037)*(ECS Fargate + Aurora)이 승계. 본 ADR은 v1 이력으로 Accepted 유지.
 
 ## Context / 컨텍스트
 

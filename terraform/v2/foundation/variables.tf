@@ -133,8 +133,16 @@ variable "incident_lifecycle_enabled" {
 
 variable "rca_writeback_enabled" {
   type        = bool
-  description = "ADR-034 RCA write-back gate (observability-write tier). false (default) = 0 write-back infra, 0 cost, ZERO OpsCenter/Incident-Manager write. The always-present incident_writeback table (migration v6) is harmless when off. REQUIRES incident_lifecycle_enabled=true (adds a stage to the incident SM, reads incidents.rca) AND remediation_enabled=true (reuses the opscenter-create-opsitem catalog action + action_opscenter_write per-action role from remediation.tf). The webhook marker-drop filter is ALWAYS-ON (a harmless safety filter independent of this flag)."
+  description = "ADR-034 RCA write-back gate (observability-write tier). false (default) = 0 write-back infra, 0 cost, ZERO OpsCenter/Incident-Manager write. The always-present incident_writeback table (migration v6) is harmless when off. REQUIRES incident_lifecycle_enabled=true (adds a stage to the incident SM, reads incidents.rca) AND remediation_enabled=true (reuses the opscenter-create-opsitem catalog action + action_opscenter_write per-action role from remediation.tf — frozen-substrate reuse, so decoupling onto a self-contained role is a prerequisite before activation; the validation below enforces this fail-loud). The webhook marker-drop filter is ALWAYS-ON (a harmless safety filter independent of this flag)."
   default     = false
+
+  validation {
+    # ADR-034 vs 029/036 reversal: the write-back currently reuses the frozen substrate's
+    # action_opscenter_write role (count = remediation_enabled). Enabling rwb alone would
+    # hit an index-out-of-range deep in incidents.tf — fail here with the real story instead.
+    condition     = !var.rca_writeback_enabled || var.remediation_enabled
+    error_message = "rca_writeback_enabled currently requires remediation_enabled (frozen substrate role reuse — see ADR-034 banner). remediation_enabled is DO-NOT-ENABLE (2026-06-11 reversal): to activate write-back, first decouple it onto a self-contained role."
+  }
 }
 
 variable "steampipe_enabled" {
