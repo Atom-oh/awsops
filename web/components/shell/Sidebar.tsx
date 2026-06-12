@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, MessagesSquare, Activity, DollarSign, Sparkles,
-  Box, LogOut, Gauge, PiggyBank,
+  Box, Gauge, PiggyBank,
   Server, Zap, Container, Package,
   Archive, HardDrive, Database, Table, DatabaseZap, Search, Radio,
   Network, Waypoints, BrickWall, Globe, Scale, Split,
@@ -16,6 +16,7 @@ import AwsopsMark from '@/components/ui/AwsopsMark';
 import SectionLabel from '@/components/ui/SectionLabel';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import LanguageToggle from '@/components/shell/LanguageToggle';
+import UserIdentity from '@/components/shell/UserIdentity';
 import { cn } from '@/lib/cn';
 
 // Fixed top-level pages. `tkey` resolves the label via i18n.
@@ -142,22 +143,7 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="mt-4 border-t border-ink-100 pt-3">
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-ink-800 text-[13px] font-semibold text-paper">
-            {t('sidebar.admin').charAt(0)}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[13px] font-medium leading-tight text-ink-800">{t('sidebar.admin')}</div>
-            <div className="truncate font-mono text-[11px] text-ink-400">ad*****@awsops.io</div>
-          </div>
-          <button
-            type="button"
-            aria-label={t('sidebar.signOut')}
-            className="rounded-md p-1 text-ink-400 transition-colors hover:bg-ink-100 hover:text-ink-800"
-          >
-            <LogOut size={16} strokeWidth={1.7} />
-          </button>
-        </div>
+        <UserIdentity />
         <div className="mt-2 flex items-center gap-1.5 px-0.5 text-[11px] text-ink-400">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
           <span>{t('sidebar.statusLine', { status: t('sidebar.online') })}</span>

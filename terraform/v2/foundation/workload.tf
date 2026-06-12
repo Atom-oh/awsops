@@ -202,6 +202,10 @@ resource "aws_ecs_task_definition" "web" {
         { name = "AWS_REGION", value = var.region },
         { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
         { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.main.id },
+        # C02 sign-out: the BFF builds the hosted-UI /logout redirect from these (cookie clear
+        # alone leaves the Cognito session live). APP_DOMAIN matches auth.tf logout_urls.
+        { name = "COGNITO_DOMAIN", value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
+        { name = "APP_DOMAIN", value = var.domain_name },
         { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
         { name = "INV_SYNC_FUNCTION", value = var.steampipe_enabled ? "${var.project}-inv-sync" : "" },
         # P3-D: onboarded-cluster allow-list for the in-cluster (K8s) read routes.
