@@ -28,6 +28,17 @@ resource "aws_cognito_user_pool_client" "main" {
   allowed_oauth_flows_user_pool_client = true
   callback_urls                        = ["https://${var.domain_name}/_callback"]
   logout_urls                          = ["https://${var.domain_name}/"]
+
+  # USER_PASSWORD_AUTH powers the self-hosted /login form's BFF InitiateAuth call; the Hosted UI
+  # authorization-code (PKCE) flow above coexists as the edge dark fallback. No ALLOW_REFRESH_TOKEN_AUTH:
+  # the refresh flow is not implemented (least privilege — the BFF discards the RefreshToken immediately).
+  explicit_auth_flows   = ["ALLOW_USER_PASSWORD_AUTH"]
+  id_token_validity     = 12
+  access_token_validity = 12
+  token_validity_units {
+    id_token     = "hours"
+    access_token = "hours"
+  }
 }
 
 resource "aws_cognito_user" "admin" {
