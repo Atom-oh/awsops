@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -30,19 +30,26 @@ export default function BedrockPage() {
 
   // Closes over the current `range`; the range-switch useEffect re-fires this on
   // change, and the RefreshButton re-runs it for the same range on demand.
+  // Monotonic sequence — an older range's slow response must not overwrite the
+  // currently-selected range (P4 gate: codex).
+  const loadSeqRef = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setD(null);
     setErr('');
     setBusy(true);
     try {
       const r = await fetch(`/api/bedrock-metrics?range=${range}`);
+      if (seq !== loadSeqRef.current) return; // superseded (range switched or re-refreshed)
       if (!r.ok) throw new Error(String(r.status));
-      setD(await r.json());
+      const body = await r.json();
+      if (seq !== loadSeqRef.current) return;
+      setD(body);
       setCapturedAt(new Date().toISOString());
     } catch (e) {
-      setErr(String(e));
+      if (seq === loadSeqRef.current) setErr(String(e));
     } finally {
-      setBusy(false);
+      if (seq === loadSeqRef.current) setBusy(false);
     }
   }, [range]);
 

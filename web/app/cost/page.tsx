@@ -32,18 +32,24 @@ export default function CostPage() {
   const [detail, setDetail] = useState<ServiceDetail | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
 
+  // Monotonic sequence — a slower detail response for service A must not land
+  // under service B's panel title (P4 gate: codex; same class as the EKS guards).
+  const detailSeqRef = useRef(0);
   const openDetail = useCallback(async (service: string) => {
+    const seq = ++detailSeqRef.current;
     setPicked(service);
     setDetail(null);
     setDetailBusy(true);
     try {
       const r = await fetch(`/api/cost/detail?service=${encodeURIComponent(service)}`);
+      if (seq !== detailSeqRef.current) return; // superseded by a newer click
       if (!r.ok) throw new Error(String(r.status));
-      setDetail(await r.json());
+      const body = await r.json();
+      if (seq === detailSeqRef.current) setDetail(body);
     } catch {
-      setDetail(null);
+      if (seq === detailSeqRef.current) setDetail(null);
     } finally {
-      setDetailBusy(false);
+      if (seq === detailSeqRef.current) setDetailBusy(false);
     }
   }, []);
 

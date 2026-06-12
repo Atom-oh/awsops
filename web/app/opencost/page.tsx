@@ -34,7 +34,7 @@ export default function OpencostPage() {
       const d = await r.json();
       const names = (d.clusters as EksClusterRow[]).map((c) => c.name);
       setClusters(names);
-      if (names.length) setCluster(names[0]);
+      if (names.length) setCluster((c) => c || names[0]); // refresh keeps the user's selection (P4: kiro)
       setErr('');
       setCapturedAt(new Date().toISOString());
     } catch (e) {

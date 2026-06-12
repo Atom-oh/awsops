@@ -156,6 +156,15 @@ describe('getServiceCostDetail', () => {
       { usageType: 'BoxUsage', amount: 12 },
       { usageType: 'DataTransfer', amount: 3 },
     ]);
+    // P4 gate (codex): assert the CE command INPUTS — both legs SERVICE-filtered,
+    // correct granularity, and the usage-type leg grouped by USAGE_TYPE.
+    const inputs = ceSend.mock.calls.map((c) => c[0].input);
+    expect(inputs[0].Granularity).toBe('DAILY');
+    expect(inputs[0].Filter).toEqual({ Dimensions: { Key: 'SERVICE', Values: ['Amazon EC2'] } });
+    expect(inputs[0].GroupBy).toBeUndefined();
+    expect(inputs[1].Granularity).toBe('MONTHLY');
+    expect(inputs[1].Filter).toEqual({ Dimensions: { Key: 'SERVICE', Values: ['Amazon EC2'] } });
+    expect(inputs[1].GroupBy).toEqual([{ Type: 'DIMENSION', Key: 'USAGE_TYPE' }]);
   });
   it('null on the leg that fails, [] semantics preserved per-leg', async () => {
     ceSend
