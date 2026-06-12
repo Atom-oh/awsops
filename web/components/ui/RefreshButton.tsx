@@ -15,7 +15,7 @@ export default function RefreshButton({
   const age = capturedAt ? `업데이트: ${new Date(capturedAt).toLocaleString('ko-KR')}` : '미수집';
   const stale = capturedAt ? Date.now() - new Date(capturedAt).getTime() > 30 * 60 * 1000 : false;
   return (
-    <div className="flex items-center gap-2.5 mb-3">
+    <div className="flex items-center gap-2.5">
       <Button variant="secondary" size="sm" onClick={onClick} disabled={busy}>
         <RotateCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
         {busy ? '수집 중…' : 'Refresh'}

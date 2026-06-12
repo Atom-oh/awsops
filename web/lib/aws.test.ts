@@ -76,3 +76,103 @@ describe('getCostForecast', () => {
     if (v !== null) expect(v).toBeCloseTo(250.5);
   });
 });
+
+describe('rollupUsageTypes', () => {
+  it('sorts descending', async () => {
+    const { rollupUsageTypes } = await import('./aws');
+    const out = rollupUsageTypes([
+      { usageType: 'a', amount: 1 },
+      { usageType: 'b', amount: 3 },
+      { usageType: 'c', amount: 2 },
+    ], 8);
+    expect(out.map((x) => x.usageType)).toEqual(['b', 'c', 'a']);
+  });
+  it('keeps top-n and rolls the rest into 기타', async () => {
+    const { rollupUsageTypes } = await import('./aws');
+    const rows = [
+      { usageType: 'a', amount: 10 },
+      { usageType: 'b', amount: 8 },
+      { usageType: 'c', amount: 5 },
+      { usageType: 'd', amount: 3 },
+    ];
+    const out = rollupUsageTypes(rows, 2);
+    expect(out).toEqual([
+      { usageType: 'a', amount: 10 },
+      { usageType: 'b', amount: 8 },
+      { usageType: '기타', amount: 8 }, // 5 + 3
+    ]);
+  });
+  it('passes through unchanged when length <= n', async () => {
+    const { rollupUsageTypes } = await import('./aws');
+    const rows = [{ usageType: 'a', amount: 2 }, { usageType: 'b', amount: 1 }];
+    expect(rollupUsageTypes(rows, 8)).toEqual([
+      { usageType: 'a', amount: 2 },
+      { usageType: 'b', amount: 1 },
+    ]);
+  });
+  it('omits 기타 when the rest sums to zero', async () => {
+    const { rollupUsageTypes } = await import('./aws');
+    const rows = [
+      { usageType: 'a', amount: 5 },
+      { usageType: 'b', amount: 0 },
+      { usageType: 'c', amount: 0 },
+    ];
+    const out = rollupUsageTypes(rows, 1);
+    expect(out).toEqual([{ usageType: 'a', amount: 5 }]);
+  });
+});
+
+describe('getServiceCostDetail', () => {
+  it('returns trend + rolled-up byUsageType, each filtered by SERVICE', async () => {
+    ceSend
+      // ① DAILY trend
+      .mockResolvedValueOnce({
+        ResultsByTime: [
+          { TimePeriod: { Start: '2026-06-01' }, Total: { UnblendedCost: { Amount: '4', Unit: 'USD' } } },
+          { TimePeriod: { Start: '2026-06-02' }, Total: { UnblendedCost: { Amount: '6', Unit: 'USD' } } },
+        ],
+      })
+      // ② MONTHLY usage-type groups across months
+      .mockResolvedValueOnce({
+        ResultsByTime: [
+          { Groups: [
+            { Keys: ['DataTransfer'], Metrics: { UnblendedCost: { Amount: '3', Unit: 'USD' } } },
+            { Keys: ['BoxUsage'], Metrics: { UnblendedCost: { Amount: '7', Unit: 'USD' } } },
+          ] },
+          { Groups: [
+            { Keys: ['BoxUsage'], Metrics: { UnblendedCost: { Amount: '5', Unit: 'USD' } } },
+          ] },
+        ],
+      });
+    const { getServiceCostDetail } = await import('./aws');
+    const d = await getServiceCostDetail('Amazon EC2');
+    expect(d.service).toBe('Amazon EC2');
+    expect(d.trend).toEqual([
+      { date: '2026-06-01', amount: 4 },
+      { date: '2026-06-02', amount: 6 },
+    ]);
+    // BoxUsage = 7 + 5 = 12, DataTransfer = 3, sorted desc
+    expect(d.byUsageType).toEqual([
+      { usageType: 'BoxUsage', amount: 12 },
+      { usageType: 'DataTransfer', amount: 3 },
+    ]);
+    // P4 gate (codex): assert the CE command INPUTS — both legs SERVICE-filtered,
+    // correct granularity, and the usage-type leg grouped by USAGE_TYPE.
+    const inputs = ceSend.mock.calls.map((c) => c[0].input);
+    expect(inputs[0].Granularity).toBe('DAILY');
+    expect(inputs[0].Filter).toEqual({ Dimensions: { Key: 'SERVICE', Values: ['Amazon EC2'] } });
+    expect(inputs[0].GroupBy).toBeUndefined();
+    expect(inputs[1].Granularity).toBe('MONTHLY');
+    expect(inputs[1].Filter).toEqual({ Dimensions: { Key: 'SERVICE', Values: ['Amazon EC2'] } });
+    expect(inputs[1].GroupBy).toEqual([{ Type: 'DIMENSION', Key: 'USAGE_TYPE' }]);
+  });
+  it('null on the leg that fails, [] semantics preserved per-leg', async () => {
+    ceSend
+      .mockRejectedValueOnce(new Error('no ce perms')) // trend fails
+      .mockResolvedValueOnce({ ResultsByTime: [] });    // usage-type genuinely empty
+    const { getServiceCostDetail } = await import('./aws');
+    const d = await getServiceCostDetail('Amazon S3');
+    expect(d.trend).toBeNull();
+    expect(d.byUsageType).toEqual([]);
+  });
+});

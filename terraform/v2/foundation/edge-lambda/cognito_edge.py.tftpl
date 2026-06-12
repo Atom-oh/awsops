@@ -10,7 +10,11 @@ CONFIG = {
 }
 
 def is_public(uri):
-    return uri.startswith('/_next/static/') or uri == '/api/health'
+    # /api/auth/signout must be public: an expired token would otherwise trap the user in a
+    # 302→Cognito re-auth loop and they could never reach the route that clears the stale cookie.
+    # The route only clears the cookie + returns a logout redirect URL (no state mutation), so
+    # leaving it open is safe.
+    return uri.startswith('/_next/static/') or uri in ('/api/health', '/api/auth/signout')
 
 _JWKS = None
 def get_jwks():
