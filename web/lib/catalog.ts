@@ -126,6 +126,26 @@ export async function listAgentsWithSkills(opts?: { enabledOnly?: boolean }): Pr
   }));
 }
 
+/**
+ * ADR-031/ADR-039 fail-closed revocation. Authoritative (un-cached) check that a custom agent
+ * is still enabled, used on the chat hot path BEFORE routing to a keyword-picked custom agent.
+ * The catalog-source cache (30s TTL) can let `pickCustomAgent` *propose* a just-disabled agent;
+ * this re-check reads Aurora (the single source of truth) on whichever Fargate task serves the
+ * request, so a disable is effective immediately on every instance. Returns false (deny, never
+ * grant) for missing / disabled / builtin rows and on ANY query error.
+ */
+export async function isCustomAgentEnabled(name: string): Promise<boolean> {
+  try {
+    const { rows } = await getPool().query(
+      `SELECT 1 FROM agents WHERE name = $1 AND tier = 'custom' AND enabled = true LIMIT 1`,
+      [name],
+    );
+    return rows.length > 0;
+  } catch {
+    return false; // fail-closed
+  }
+}
+
 export async function writeAudit(a: { actor: string; action: string; objectType: string; objectId: string; beforeHash?: string; afterHash?: string }): Promise<void> {
   await getPool().query(
     `INSERT INTO customization_audit (actor, action, object_type, object_id, before_hash, after_hash)

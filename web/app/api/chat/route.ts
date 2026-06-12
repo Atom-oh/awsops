@@ -4,6 +4,7 @@ import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt } from '@/lib/classifier';
 import { sectionByKey } from '@/lib/sections';
 import { getEnabledCustomAgents } from '@/lib/catalog-source';
+import { isCustomAgentEnabled } from '@/lib/catalog';
 import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
@@ -61,9 +62,11 @@ export async function POST(request: Request) {
   const customAgents = await getEnabledCustomAgents(accountId);   // [] when Aurora off / no customs
   const space = await getAgentSpace(accountId);                   // null ⇒ Phase-1
   const pinIsValid = !!(body.section && sectionByKey(body.section));
-  const routeKey = (hybridOn && pinIsValid)
-    ? gateway
-    : (pickCustomAgent(prompt, customAgents) ?? gateway);
+  // ADR-031/039 fail-closed revocation: pickCustomAgent matches against the 30s-cached enabled
+  // set; re-check the picked custom agent against Aurora (authoritative) before routing to it, so
+  // a just-disabled agent is unusable immediately on every instance (not after the cache TTL).
+  const customPick = (hybridOn && pinIsValid) ? null : pickCustomAgent(prompt, customAgents);
+  const routeKey = customPick && (await isCustomAgentEnabled(customPick)) ? customPick : gateway;
   const spec = resolveAgent(routeKey, customAgents, space);       // server-side enforcement
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).
   const inactiveSection = hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false

@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
 
-import { computeSkillHash, upsertSkill, listAgentsWithSkills, writeAudit } from './catalog';
+import { computeSkillHash, upsertSkill, listAgentsWithSkills, writeAudit, isCustomAgentEnabled } from './catalog';
 
 beforeEach(() => query.mockReset());
 
@@ -46,5 +46,26 @@ describe('catalog', () => {
     query.mockResolvedValueOnce({ rows: [] });
     await writeAudit({ actor: 'a@x', action: 'upsert', objectType: 'skill', objectId: '1' });
     expect(query.mock.calls[0][0]).toMatch(/INSERT INTO customization_audit/i);
+  });
+});
+
+describe('isCustomAgentEnabled (fail-closed revocation)', () => {
+  it('true only for an enabled custom row, scoped by name+tier+enabled', async () => {
+    query.mockResolvedValueOnce({ rows: [{ '?column?': 1 }] });
+    expect(await isCustomAgentEnabled('my-agent')).toBe(true);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/tier = 'custom'/i);
+    expect(sql).toMatch(/enabled = true/i);
+    expect(params).toEqual(['my-agent']);
+  });
+
+  it('false for a disabled/missing/builtin row (no row returned)', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    expect(await isCustomAgentEnabled('disabled-or-builtin')).toBe(false);
+  });
+
+  it('false (fail-closed) on any query error — deny, never grant', async () => {
+    query.mockRejectedValueOnce(new Error('db down'));
+    await expect(isCustomAgentEnabled('x')).resolves.toBe(false);
   });
 });
