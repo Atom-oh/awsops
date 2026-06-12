@@ -17,7 +17,14 @@ interface Overview {
 }
 interface ByType { type: string; label: string; count: number; [k: string]: unknown }
 interface ByCategory { group: string; count: number; [k: string]: unknown }
-interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number }
+interface Splits {
+  ec2Running: number;
+  ec2Stopped: number;
+  ebsUnencrypted: number;
+  iamUserNoMfa: number;
+  sgOpenIngress: number;
+}
+interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; splits?: Splits }
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost { trend: TrendPoint[] }
 interface JobSlice { name: string; value: number; [k: string]: unknown }
@@ -100,7 +107,12 @@ export default function Home() {
         <section className="flex flex-col gap-3">
           <SectionLabel>COMPUTE &amp; CONTAINERS</SectionLabel>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <StatTile label="EC2 인스턴스" value={n('ec2')} variant="accent" />
+            <StatTile
+              label="EC2 인스턴스"
+              value={n('ec2')}
+              variant="accent"
+              hint={sum?.splits ? `${sum.splits.ec2Running} running · ${sum.splits.ec2Stopped} stopped` : undefined}
+            />
             <StatTile label="Lambda 함수" value={n('lambda')} />
             <StatTile label="ECS 클러스터" value={n('ecs_cluster')} />
             <StatTile label="ECR 리포지토리" value={n('ecr')} />
@@ -113,7 +125,12 @@ export default function Home() {
           <SectionLabel>STORAGE &amp; NETWORK</SectionLabel>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <StatTile label="S3 버킷" value={n('s3')} />
-            <StatTile label="EBS 볼륨" value={n('ebs_volume')} />
+            <StatTile
+              label="EBS 볼륨"
+              value={n('ebs_volume')}
+              hint={sum?.splits ? (sum.splits.ebsUnencrypted > 0 ? `미암호화 ${sum.splits.ebsUnencrypted}` : '전체 암호화') : undefined}
+              variant={sum?.splits && sum.splits.ebsUnencrypted > 0 ? 'warn' : 'default'}
+            />
             <StatTile label="RDS 인스턴스" value={n('rds')} />
             <StatTile label="DynamoDB 테이블" value={n('dynamodb')} />
             <StatTile label="VPC" value={n('vpc')} />
@@ -125,7 +142,12 @@ export default function Home() {
           <SectionLabel>SECURITY · OPS · COST</SectionLabel>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <StatTile label="IAM 역할" value={n('iam_role')} />
-            <StatTile label="보안 그룹" value={n('security_group')} />
+            <StatTile
+              label="보안 그룹"
+              value={n('security_group')}
+              hint={sum?.splits ? `인그레스 개방 ${sum.splits.sgOpenIngress}` : undefined}
+              variant={sum?.splits && sum.splits.sgOpenIngress > 0 ? 'warn' : 'default'}
+            />
             <StatTile
               label="작업 (성공/실패)"
               value={jobs ? `${jobs.succeeded} / ${jobs.failed}` : DASH}
