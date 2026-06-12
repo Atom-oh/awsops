@@ -20,7 +20,7 @@
 // Mapping is in backfill-core.mjs (derived from src/lib/db/*-writer.ts).
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import pg from 'pg';
 import * as core from './backfill-core.mjs';
 
@@ -40,7 +40,10 @@ function printHelp() {
 /** Hide the password in any DSN before it can reach a log line. */
 export function redactDsn(dsn) {
   if (!dsn) return dsn;
-  return dsn.replace(/(\/\/[^:/@]+:)[^@]*(@)/, '$1***$2');
+  // URL-parse so a password containing '@' is fully masked (the naive regex
+  // stopped at the first '@' and leaked the remainder — panel codex MAJOR).
+  try { const u = new URL(dsn); if (u.password) u.password = '***'; return u.toString(); }
+  catch { return dsn.replace(/(:\/\/[^:/@]+:)[^@]*(@)/, '$1***$2'); }
 }
 
 export function parseArgs(argv) {
@@ -89,7 +92,12 @@ export function gatherInventory(dataDir, defaultAccount) {
     const adir = join(dir, acct);
     for (const e of listEntries(adir)) if (!e.isDirectory && core.isDateFile(e.name)) jobs.push({ file: join(adir, e.name), account: acct });
   }
-  for (const f of rootDateFiles) jobs.push({ file: join(dir, f), account: defaultAccount });
+  // In a multi-account layout, root date files are the cross-account AGGREGATE —
+  // mapping them to --account-id would let the aggregate clobber a real account's
+  // rows (panel codex MAJOR). Bucket them under 'aggregate'; only a pure root-only
+  // (single-account) layout uses --account-id.
+  const rootAccount = accountDirs.length ? 'aggregate' : defaultAccount;
+  for (const f of rootDateFiles) jobs.push({ file: join(dir, f), account: rootAccount });
   return jobs.map((j) => tryMap(j.file, () => core.mapInventory(readJson(j.file), j.account)));
 }
 
@@ -102,7 +110,8 @@ export function gatherCost(dataDir, defaultAccount) {
     const adir = join(dir, acct);
     for (const e of listEntries(adir)) if (!e.isDirectory && core.isDateFile(e.name)) jobs.push({ file: join(adir, e.name), account: acct });
   }
-  for (const f of rootDateFiles) jobs.push({ file: join(dir, f), account: defaultAccount });
+  const rootAccount = accountDirs.length ? 'aggregate' : defaultAccount; // see gatherInventory
+  for (const f of rootDateFiles) jobs.push({ file: join(dir, f), account: rootAccount });
   return jobs.map((j) => tryMap(j.file, () => core.mapCost(readJson(j.file), j.account)));
 }
 
@@ -173,14 +182,14 @@ export function connConfig(args, env = process.env) {
   // non-SSL test container works, and an Aurora DSN can opt in with sslmode=require).
   if (args.dsn) return { config: { connectionString: args.dsn }, display: redactDsn(args.dsn) };
   const region = env.AWS_REGION || 'ap-northeast-2';
-  const tf = (o) => execSync(`terraform -chdir=terraform/v2/foundation output -raw ${o}`, { encoding: 'utf8' }).trim();
+  // execFileSync with arg arrays (no shell) — env/terraform values can't inject a command.
+  const tf = (o) => execFileSync('terraform', ['-chdir=terraform/v2/foundation', 'output', '-raw', o], { encoding: 'utf8' }).trim();
   const secretArn = env.AURORA_SECRET_ARN || tf('aurora_secret_arn');
   const endpoint = env.AURORA_ENDPOINT || tf('aurora_endpoint');
   const database = env.AURORA_DATABASE || 'awsops';
-  const secret = JSON.parse(execSync(
-    `aws secretsmanager get-secret-value --region ${region} --secret-id ${secretArn} --query SecretString --output text`,
-    { encoding: 'utf8' },
-  ));
+  const secret = JSON.parse(execFileSync('aws',
+    ['secretsmanager', 'get-secret-value', '--region', region, '--secret-id', secretArn, '--query', 'SecretString', '--output', 'text'],
+    { encoding: 'utf8' }));
   return {
     config: { host: endpoint, user: secret.username, password: secret.password, database, port: 5432, ...sslOption() },
     display: `${endpoint}/${database}`,

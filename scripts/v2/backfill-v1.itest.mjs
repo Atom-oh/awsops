@@ -37,8 +37,10 @@ function buildFixture({ corrupt }) {
   };
   // inventory: multi-account + aws→aggregate + single-account root + .prev_ (skip)
   W('inventory/180294183052/2026-06-01.json', { date: '2026-06-01', timestamp: '2026-06-01T09:00:00Z', resources: { 'EC2 Instances': 2, 'S3 Buckets': 1 } });
-  W('inventory/aws/2026-06-01.json', { date: '2026-06-01', resources: { Total: 5 } });
-  W('inventory/2026-06-02.json', { date: '2026-06-02', timestamp: '2026-06-02T00:00:00Z', resources: { 'EC2 Instances': 3 } });
+  // Root date file on the SAME day as the account dir: must bucket under 'aggregate'
+  // (NOT --account-id) so the cross-account aggregate can't clobber 180294183052's rows.
+  W('inventory/2026-06-01.json', { date: '2026-06-01', timestamp: '2026-06-01T00:00:00Z', resources: { 'EC2 Instances': 99 } });
+  W('inventory/aws/2026-06-02.json', { date: '2026-06-02', resources: { Total: 5 } });
   W('inventory/.prev_aws.json', { date: 'x', resources: {} });
   // cost
   W('cost/180294183052/2026-06-01.json', { date: '2026-06-01', timestamp: '2026-06-01T09:00:00Z', monthlyCost: [{ svc: 'EC2', cost: 10 }], dailyCost: [], serviceCost: [] });
@@ -88,9 +90,10 @@ async function main() {
   console.log('\n[a] clean run #1');
   const r1 = runBackfill(DSN, cleanFix);
   check('exit 0', r1.code === 0);
-  check('inventory_snapshots = 4 (2+1 aggregate +1 self, fan-out)', (await count('inventory_snapshots')) === 4);
-  check('  fan-out: 180294183052 has 2 rows', (await count("inventory_snapshots WHERE account_id='180294183052'")) === 2);
-  check('  aws→aggregate row present', (await count("inventory_snapshots WHERE account_id='aggregate'")) === 1);
+  check('inventory_snapshots = 4 (180294183052×2 + aggregate×2)', (await count('inventory_snapshots')) === 4);
+  check('  fan-out: 180294183052 has 2 rows (same-day root did NOT clobber)', (await count("inventory_snapshots WHERE account_id='180294183052'")) === 2);
+  check('  multi-account root + aws → aggregate (2 rows)', (await count("inventory_snapshots WHERE account_id='aggregate'")) === 2);
+  check('  no leak to default account (self=0)', (await count("inventory_snapshots WHERE account_id='self'")) === 0);
   check('cost_snapshots = 1', (await count('cost_snapshots')) === 1);
   check('alert_diagnosis = 1', (await count('alert_diagnosis')) === 1);
   check('event_scaling_plans = 1 (e-2 bogus skipped)', (await count('event_scaling_plans')) === 1);
