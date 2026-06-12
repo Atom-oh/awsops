@@ -18,7 +18,7 @@ export interface DonutBreakdownProps {
 
 /**
  * DonutBreakdown — PieChart innerRadius 55 / outerRadius 80, palette cycling
- * claude-500 / ink-400 / ink-800 / claude-700 / claude-200, a center total
+ * brand-500 / ink-400 / ink-800 / brand-700 / brand-200, a center total
  * label, and a side legend list. DESIGN.md §Charts.
  */
 export default function DonutBreakdown({

@@ -24,8 +24,8 @@ export interface BarDistributionProps {
 }
 
 /**
- * BarDistribution — vertical bars in claude-500, the max bar emphasised in
- * claude-700, dotted ink-100 grid, ink-400 axes, dark inverse tooltip.
+ * BarDistribution — vertical bars in brand-500, the max bar emphasised in
+ * brand-700, dotted ink-100 grid, ink-400 axes, dark inverse tooltip.
  * DESIGN.md §Charts.
  */
 export default function BarDistribution({

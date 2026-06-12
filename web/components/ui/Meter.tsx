@@ -2,7 +2,7 @@ import { cn } from '@/lib/cn';
 
 /**
  * Meter — 56px-wide track (bg-ink-100, radius-full) + threshold-colored fill
- * + a right-aligned % label. Fill color: ≥75 rose, ≥50 claude, else emerald.
+ * + a right-aligned % label. Fill color: ≥75 rose, ≥50 brand, else emerald.
  * Value is clamped to 0–100.
  */
 function fillColor(v: number): string {

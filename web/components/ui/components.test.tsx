@@ -83,7 +83,7 @@ describe('Meter', () => {
     expect(screen.getByText('17%')).toBeTruthy();
   });
 
-  it('colors claude in [50,75)', () => {
+  it('colors brand in [50,75)', () => {
     const { container } = render(<Meter value={60} />);
     expect(container.innerHTML).toContain('bg-brand-500');
   });

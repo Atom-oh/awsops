@@ -17,7 +17,7 @@ type Row = Record<string, unknown>;
 // Column per kind (VPC → Subnet → workloads) + a tint per kind.
 const COL: Record<TopoKind, number> = { vpc: 0, subnet: 1, ec2: 2, rds: 2, alb: 2 };
 const TINT: Record<TopoKind, string> = {
-  vpc: '#e0e7ff', subnet: '#dcfce7', ec2: '#fef3c7', rds: '#f3e8ff', alb: '#ffe4e6',
+  vpc: '#E6EEFE', subnet: '#E6F6F2', ec2: '#FEF3E2', rds: '#F1E9FF', alb: '#FDECE8',
 };
 
 async function fetchType(t: InvType): Promise<Row[]> {
@@ -68,7 +68,7 @@ export default function TopologyPage() {
         id: n.id,
         position: { x: c * 300, y: y * 64 },
         data: { label: `${n.kind.toUpperCase()} · ${n.label}` },
-        style: { background: TINT[n.kind], border: '1px solid #c7c7c7', borderRadius: 8, fontSize: 11, padding: 6, width: 220 },
+        style: { background: TINT[n.kind], border: '1px solid #D3DAE0', borderRadius: 8, fontSize: 11, padding: 6, width: 220 },
       };
     });
     const edges: Edge[] = g.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, animated: false }));

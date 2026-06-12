@@ -34,8 +34,8 @@ function trendTone(trend: string): string {
 /**
  * StatTile (KPI) — white card, radius 12, shadow-card.
  * Eyebrow (xs/uppercase/muted) → value (2xl/600/tabular) → optional trend
- * pill + hint. Variants: accent (claude border + faint AwsopsMark watermark),
- * danger (rose border + rose value), warn (claude-700 value).
+ * pill + hint. Variants: accent (brand border + faint AwsopsMark watermark),
+ * danger (rose border + rose value), warn (brand-700 value).
  *
  * Prop-compatible with the legacy StatCard: `{ label, value, accent? }`.
  */

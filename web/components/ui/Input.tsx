@@ -10,7 +10,7 @@ const SIZE: Record<InputSize, string> = {
 
 /**
  * Input — white, ink-100 border, radius-md, optional left icon.
- * Focus = claude-500 border + claude focus ring. Sizes sm/md (30/36px).
+ * Focus = brand-500 border + brand focus ring. Sizes sm/md (30/36px).
  */
 export default function Input({
   icon,

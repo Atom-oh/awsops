@@ -20,7 +20,7 @@ const SIZE: Record<ButtonSize, string> = {
 
 /**
  * Button — radius-md (8px), 500 weight, press = translateY(.5px),
- * claude focus ring. primary / secondary / ghost / danger × sm/md/lg.
+ * brand focus ring. primary / secondary / ghost / danger × sm/md/lg.
  */
 export default function Button({
   children,

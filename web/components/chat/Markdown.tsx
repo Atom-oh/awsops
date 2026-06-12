@@ -9,7 +9,7 @@ import remarkGfm from 'remark-gfm';
  * - remark-gfm → tables, strikethrough, task lists, autolinks.
  * - NO rehype-raw → raw HTML in the stream is NOT rendered (XSS-safe by default).
  *   Content is our own Bedrock agent output, but we keep the defensive default.
- * - Element styling maps onto the app's paper/ink + Claude-orange tokens so the
+ * - Element styling maps onto the app's paper/ink + brand (teal) tokens so the
  *   chat reads identically inside the drawer and the /assistant page.
  * - Tolerates partial markdown mid-stream (react-markdown never throws on incomplete input).
  */

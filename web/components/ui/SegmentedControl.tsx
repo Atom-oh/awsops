@@ -9,7 +9,7 @@ function normalize(o: SegOption): { value: string; label: string } {
 
 /**
  * SegmentedControl — pill group on a white track + ink-100 hairline,
- * radius-md, 2px padding. Active segment = solid claude + white + shadow-sm.
+ * radius-md, 2px padding. Active segment = solid brand + white + shadow-sm.
  * Options can be plain strings or { value, label }.
  */
 export default function SegmentedControl({
