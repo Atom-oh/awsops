@@ -1,9 +1,9 @@
 import type { CSSProperties } from 'react';
 
 /**
- * AWSops brand mark — a claude-500 rounded-square tile (radius 10/40)
+ * AWSops brand mark — a teal #01A88D rounded-square tile (radius 10/40)
  * with the neural-pulse graph (matches app/icon.svg favicon: same node layout,
- * colors inverted for the orange tile — white nodes/edges, haloed AI node).
+ * colors inverted for the teal tile — white nodes/edges, haloed AI node).
  * Used in the sidebar lockup, login, KPI watermark, and AI avatar.
  */
 export default function AwsopsMark({ size = 36, style }: { size?: number; style?: CSSProperties }) {
@@ -18,7 +18,7 @@ export default function AwsopsMark({ size = 36, style }: { size?: number; style?
       style={style}
     >
       {/* rounded-square brand tile — radius 10 on a 40 viewBox */}
-      <rect width="40" height="40" rx="10" fill="#D97757" />
+      <rect width="40" height="40" rx="10" fill="#01A88D" />
       {/* neural graph edges (ops infra links) */}
       <g stroke="#FFFFFF" strokeOpacity="0.55" strokeWidth="2.2" strokeLinecap="round">
         <line x1="11.5" y1="28.5" x2="20" y2="15" />

@@ -8,6 +8,6 @@
   <circle cx="9"  cy="23" r="3.2" fill="#FAF9F5"/>
   <circle cx="24" cy="20" r="3.2" fill="#FAF9F5"/>
   <!-- the AI node, pulsing orange with a halo -->
-  <circle cx="16" cy="12" r="5.4" fill="#D9775733"/>
-  <circle cx="16" cy="12" r="3.6" fill="#D97757"/>
+  <circle cx="16" cy="12" r="5.4" fill="#01A88D33"/>
+  <circle cx="16" cy="12" r="3.6" fill="#01A88D"/>
 </svg>
