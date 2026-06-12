@@ -20,7 +20,13 @@
 // Mapping is in backfill-core.mjs (derived from src/lib/db/*-writer.ts).
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { execSync } from 'node:child_process';
+import pg from 'pg';
 import * as core from './backfill-core.mjs';
+
+// Fixed 64-bit advisory-lock key — DISTINCT from migrate.mjs's 4729411 so a
+// backfill and a migration never block each other.
+const LOCK_KEY = 472941142;
 
 export const SOURCES = ['inventory', 'cost', 'alert', 'scaling'];
 
@@ -152,6 +158,99 @@ function sampleLine(source, r) {
   return `${r.planId} ${r.status} ${r.eventStartAt}`;
 }
 
+// --- DB connection (creds never logged) ------------------------------------
+
+function sslOption() {
+  // Full verification when an operator supplies the RDS CA bundle; otherwise
+  // match migrate.mjs (accepts any cert — acceptable for a one-time operator tool).
+  if (process.env.PGSSLROOTCERT) return { ssl: { ca: readFileSync(process.env.PGSSLROOTCERT, 'utf8') } };
+  return { ssl: { rejectUnauthorized: false } };
+}
+
+/** Resolve a pg.Client config + a credential-free display string. */
+export function connConfig(args, env = process.env) {
+  if (args.dsn) return { config: { connectionString: args.dsn, ...sslOption() }, display: redactDsn(args.dsn) };
+  const region = env.AWS_REGION || 'ap-northeast-2';
+  const tf = (o) => execSync(`terraform -chdir=terraform/v2/foundation output -raw ${o}`, { encoding: 'utf8' }).trim();
+  const secretArn = env.AURORA_SECRET_ARN || tf('aurora_secret_arn');
+  const endpoint = env.AURORA_ENDPOINT || tf('aurora_endpoint');
+  const database = env.AURORA_DATABASE || 'awsops';
+  const secret = JSON.parse(execSync(
+    `aws secretsmanager get-secret-value --region ${region} --secret-id ${secretArn} --query SecretString --output text`,
+    { encoding: 'utf8' },
+  ));
+  return {
+    config: { host: endpoint, user: secret.username, password: secret.password, database, port: 5432, ...sslOption() },
+    display: `${endpoint}/${database}`,
+  };
+}
+
+// --- per-source SQL (mirrors spec §5; idempotent) ---------------------------
+
+async function execOne(client, source, r, c) {
+  if (source === 'inventory') {
+    const del = await client.query(
+      'DELETE FROM inventory_snapshots WHERE account_id=$1 AND captured_at>=$2 AND captured_at<$3',
+      [r.account, r.dayStartISO, r.dayNextISO],
+    );
+    c.deleted += del.rowCount;
+    for (const row of r.rows) {
+      await client.query(
+        'INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count, payload) VALUES ($1,$2,$3,$4,$5::jsonb)',
+        [row.account, row.capturedAt, row.resourceType, row.resourceCount, row.payload],
+      );
+      c.inserted++;
+    }
+  } else if (source === 'cost') {
+    const res = await client.query(
+      `INSERT INTO cost_snapshots (account_id, period_start, period_end, granularity, payload)
+       VALUES ($1,$2,$3,$4,$5::jsonb)
+       ON CONFLICT (account_id, period_start, period_end, granularity) DO UPDATE SET payload=EXCLUDED.payload
+       RETURNING (xmax = 0) AS inserted`,
+      [r.account, r.periodStart, r.periodEnd, r.granularity, r.payload],
+    );
+    res.rows[0].inserted ? c.inserted++ : c.updated++;
+  } else if (source === 'alert') {
+    const res = await client.query(
+      `INSERT INTO alert_diagnosis (incident_id, occurred_at, severity, source, services, resources, fingerprint, payload)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+       ON CONFLICT (incident_id) DO NOTHING
+       RETURNING incident_id`,
+      [r.incidentId, r.occurredAt, r.severity, r.source, r.services, r.resources, r.fingerprint, r.payload],
+    );
+    res.rowCount ? c.inserted++ : c.conflictSkip++;
+  } else { // scaling
+    const res = await client.query(
+      `INSERT INTO event_scaling_plans (plan_id, event_name, event_start_at, event_end_at, status, owner_email, payload)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+       ON CONFLICT (plan_id) DO UPDATE SET
+         event_name=EXCLUDED.event_name, event_start_at=EXCLUDED.event_start_at, event_end_at=EXCLUDED.event_end_at,
+         status=EXCLUDED.status, owner_email=EXCLUDED.owner_email, payload=EXCLUDED.payload
+       RETURNING (xmax = 0) AS inserted`,
+      [r.planId, r.eventName, r.eventStartAt, r.eventEndAt, r.status, r.ownerEmail, r.payload],
+    );
+    res.rows[0].inserted ? c.inserted++ : c.updated++;
+  }
+}
+
+/** Write one source; each file in its own transaction (skip-and-report on error). */
+export async function writeSource(client, source, items) {
+  const c = { scanned: items.length, skipped: 0, inserted: 0, updated: 0, conflictSkip: 0, deleted: 0, errored: 0, errors: [] };
+  for (const { file, result } of items) {
+    if (result.error) { c.errored++; c.errors.push(`${file}: ${result.error}`); continue; }
+    if (result.skip) { c.skipped++; continue; }
+    try {
+      await client.query('BEGIN');
+      await execOne(client, source, result, c);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      c.errored++; c.errors.push(`${file}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return c;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const gathered = gatherAll(args);
@@ -169,8 +268,27 @@ async function main() {
     process.exit(totalErr > 0 ? 1 : 0);
   }
 
-  // Live write path is wired in Task 4.
-  die('live write path not yet implemented — re-run with --dry-run (Task 4 adds DB writes)');
+  // Live write path.
+  const { config, display } = connConfig(args);
+  const client = new pg.Client({ ...config, statement_timeout: 300_000 });
+  await client.connect();
+  let locked = false, totalErr = 0;
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [LOCK_KEY]);
+    locked = true;
+    console.log(`backfill → ${display} | account=${args.accountId} alert-source=${args.alertSource}`);
+    for (const s of args.only) {
+      const c = await writeSource(client, s, gathered[s]);
+      totalErr += c.errored;
+      console.log(`  ${s}: scanned=${c.scanned} inserted=${c.inserted} updated=${c.updated} conflict-skip=${c.conflictSkip} skipped=${c.skipped} deleted=${c.deleted} errored=${c.errored}`);
+      for (const e of c.errors.slice(0, 5)) console.log(`      ! ${e}`);
+    }
+  } finally {
+    if (locked) await client.query('SELECT pg_advisory_unlock($1)', [LOCK_KEY]).catch(() => {});
+    await client.end().catch(() => {});
+  }
+  console.log(totalErr > 0 ? `\n■ completed WITH ${totalErr} errored file(s)` : '\n✅ completed, no errors');
+  process.exit(totalErr > 0 ? 1 : 0);
 }
 
 // Only run when executed directly (not when imported by tests/itest).
