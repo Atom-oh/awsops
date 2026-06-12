@@ -41,7 +41,7 @@ v1처럼 **자체 로그인 화면**(이메일/비밀번호 폼)을 v2에 추가
 
 | 파일 | 변경 |
 |---|---|
-| `auth.tf` — `aws_cognito_user_pool_client.main` | `explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]` 추가 · `id_token_validity = 12`, `access_token_validity = 12` + `token_validity_units { id_token = "hours", access_token = "hours" }` |
+| `auth.tf` — `aws_cognito_user_pool_client.main` | `explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH"]` 추가(refresh 플로우 미구현이므로 `ALLOW_REFRESH_TOKEN_AUTH` 미부여 — 최소권한, BFF는 RefreshToken 즉시 폐기) · `id_token_validity = 12`, `access_token_validity = 12` + `token_validity_units { id_token = "hours", access_token = "hours" }` |
 | `edge-lambda/cognito_edge.py.tftpl` | `is_public()`에 `/login`, `/api/auth/login`, `/icon.svg` 추가 · 미인증 시 Hosted UI 대신 `302 /login?next={uri}` · `/_callback` 핸들러 코드 보존 · 폴백 쿠키 Max-Age 3600→43200 정합 |
 
 Edge Lambda 변경은 CloudFront 배포 갱신을 동반(긴 apply) → saved tfplan,

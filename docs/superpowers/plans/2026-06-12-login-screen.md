@@ -28,12 +28,15 @@
   (`expiresIn` = InitiateAuth `AuthenticationResult.ExpiresIn`, **초 단위** — Task 7 적용 후 43200;
   모든 `ChallengeName` 값은 단일 `challenge` 코드로 수렴)
 - [ ] `sessionCookie(idToken, remember, expiresIn)` — `awsops_token=…; Path=/; Secure; HttpOnly; SameSite=Lax`
-  + remember일 때만 `; Max-Age={expiresIn}` (세션 쿠키 vs 지속 쿠키) — 테스트 포함.
-  쿠키 이름은 edge 템플릿의 `awsops_token`과 동일해야 함(결합 계약 — 변경 시 양쪽 동시)
-- [ ] `safeNext(raw)` — `/`로 시작 && 2번째 문자가 `/`·`\`가 아니고 값에 `\` 미포함인
-  상대경로만 허용, 그 외 `'/'` (오픈 리다이렉트 차단 — 브라우저가 `\`를 `/`로 정규화하므로
-  `/\evil.com` ≡ `//evil.com` 우회를 함께 차단) — 테스트에 `//evil.com`, `/\evil.com`,
-  `/@evil.com`(허용 — same-origin 경로), `https://evil.com` 케이스 포함
+  + remember일 때만 `; Max-Age={expiresIn}` (세션 쿠키 vs 지속 쿠키) — 테스트는
+  `remember=true, expiresIn=43200` → `Max-Age=43200` 정확 수치, `remember=false` →
+  `Max-Age` 부재를 단언. 쿠키 이름은 edge 템플릿의 `awsops_token`과 동일해야
+  함(결합 계약 — 변경 시 양쪽 동시)
+- [ ] `safeNext(raw)` — `/`로 시작 && 2번째 문자가 `/`·`\`가 아니고 값에 `\` 미포함
+  && 길이 ≤2048인 상대경로만 허용, 그 외 `'/'` (오픈 리다이렉트 차단 — 브라우저가
+  `\`를 `/`로 정규화하므로 `/\evil.com` ≡ `//evil.com` 우회를 함께 차단) — 테스트에
+  `//evil.com`, `/\evil.com`, `/@evil.com`(허용 — same-origin 경로),
+  `https://evil.com`, 2049자 초과 케이스 포함
 - [ ] `cd web && npx vitest run lib/login.test.ts` GREEN 확인 후 커밋
 
 ### Task 2: i18n 키 추가
@@ -125,9 +128,10 @@
 - Modify: `terraform/v2/foundation/auth.tf`
 
 - [ ] `aws_cognito_user_pool_client.main`에 추가:
-  `explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]`,
-  `id_token_validity = 12`, `access_token_validity = 12`, `refresh_token_validity = 30`,
-  `token_validity_units { id_token = "hours"  access_token = "hours"  refresh_token = "days" }`
+  `explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH"]` — refresh 플로우는 구현하지
+  않으므로 `ALLOW_REFRESH_TOKEN_AUTH` 미부여(최소권한; BFF는 RefreshToken을 즉시 폐기),
+  `id_token_validity = 12`, `access_token_validity = 12`,
+  `token_validity_units { id_token = "hours"  access_token = "hours" }`
 - [ ] 주석: 자체 `/login` 폼의 BFF InitiateAuth 용도 + Hosted UI code 플로우는 폴백으로 공존 명기
 - [ ] `terraform -chdir=terraform/v2/foundation validate` 통과 후 커밋 (apply는 배포 절차에서)
 
@@ -147,9 +151,10 @@
   `start_login`/`handle_callback`은 다크 폴백으로 보존(flow 쿠키 `Max-Age=600`은
   PKCE 임시 상태용 의도적 단수명 — 변경하지 않음)
 - [ ] `handle_callback`의 토큰 쿠키 `Max-Age=3600` → `43200`(12h 토큰 수명 정합)
-- [ ] 렌더 산출물 파이썬 문법 검증:
-  `python3 -c "import ast; ast.parse(open('terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl').read().replace('${', '{'))"` 수준의
-  템플릿 치환 후 `terraform validate` + `plan` diff 확인 후 커밋 (apply는 배포 절차에서)
+- [ ] 렌더 산출물 파이썬 문법 검증: tftpl의 `${…}` 치환자를 더미 값으로 치환한 뒤
+  `ast.parse`로 문법 확인 — 한 줄 `-c`가 아닌 **파이썬 스크립트 파일로 실행**(셸의
+  `${` 이스케이프 함정 회피) + `terraform validate` + `plan` diff 확인 후 커밋
+  (apply는 배포 절차에서)
 
 ### Task 9: 문서 갱신
 
