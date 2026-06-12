@@ -1,6 +1,8 @@
 # 로그인 화면 (F4 login-theme) — 설계 스펙
 
-> 2026-06-12 · 브랜치 `feat/v2-architecture-design` · 상태: 사용자 구두 승인(인증 방식 = v1식 자체 폼), 컨센서스 게이트 대기
+> 2026-06-12 · 브랜치 `feat/v2-architecture-design` · 상태: 사용자 승인(인증 = v1식 자체 폼, 외형 = **AgentCore teal 테마**), 컨센서스 게이트 통과
+>
+> **테마 갱신(2026-06-12)**: 외형은 옛 DESIGN.md "1. Login"(paper+claude 오렌지)이 아니라 **AgentCore teal 테마**(brand/brand-action/negative/positive 토큰, 쿨 뉴트럴)를 따른다. **의존성**: `agentcore-theme-system` 플랜 Task 1–3(토큰→CSS변수 + `claude`→`brand` + `--brand-action`) 적용 후 구현. 로그인은 토큰 기반이라 활성 테마를 따른다(기본 teal 라이트, console=자동 다크).
 
 ## 1. 목표 / 범위
 
@@ -51,7 +53,7 @@ Edge Lambda 변경은 CloudFront 배포 갱신을 동반(긴 apply) → saved tf
 
 | 파일 | 내용 |
 |---|---|
-| `app/login/page.tsx` (신규) | DESIGN.md F4 스펙: paper 배경 + claude 오렌지 radial glow 2개(투명도 5–7%, top-left 16%/12% · bottom-right 84%/88%) · 400px 센터 컬럼 · AwsopsMark 52px + "AWSops" + "Cloud Operations Dashboard" · 흰 카드(radius 16, shadow-card, border-ink-100, padding 28) · "로그인" 헤더 + positive dot "보안 연결" 배지 · 이메일/비밀번호 필드(h-[42px]) · "로그인 유지" 체크박스(accent claude) · "로그인 →" 풀폭 claude 버튼 — busy는 실제 fetch 동안 "인증 중…" · 에러는 rose 톤 인라인 박스 · 푸터 `ap-northeast-2 · CloudFront → Lambda@Edge · RS256 JWT` |
+| `app/login/page.tsx` (신규) | **AgentCore teal 테마**(토큰 기반, 활성 테마 따름): `bg-paper`(쿨 뉴트럴) 배경 + **teal·azure** radial glow 2개(`rgba(1,168,141,.12)`/`rgba(82,141,248,.10)`, top-left 16%/12% · bottom-right 84%/88%) · 400px 센터 컬럼 · AwsopsMark 52px(teal 타일) + "AWSops" + "Cloud Operations Dashboard" · `bg-white` 카드(radius 16, shadow-card, border-ink-100, padding 28) · "로그인" 헤더 + `bg-positive` dot "보안 연결" 배지 · 이메일/비밀번호 필드(h-[42px], `focus:border-brand focus:shadow-focus`) · "로그인 유지" 체크박스(`accent-brand`) · "로그인 →" 풀폭 **`bg-brand-action` 버튼(AA)** — busy는 실제 fetch 동안 "인증 중…" · 에러는 **`negative` 톤**(`bg-negative-surface text-negative-text border-negative-border`) 인라인 박스 · 푸터 `ap-northeast-2 · CloudFront → Lambda@Edge · RS256 JWT` |
 | `app/api/auth/login/route.ts` (신규) | `InitiateAuth` plain fetch · 성공 시 쿠키 발급 · `NotAuthorizedException`/`UserNotFoundException` → 단일 메시지 "이메일 또는 비밀번호가 올바르지 않습니다"(계정 존재 비노출) · `ChallengeName` 응답(NEW_PASSWORD_REQUIRED 등) → 403 "관리자에게 문의하세요" |
 | `app/api/auth/signout/route.ts` (수정) | 쿠키 삭제 + `{ redirect: '/login' }` 반환으로 단순화 |
 | `components/shell/UserIdentity.tsx` (수정) | signout 응답의 redirect로 이동 (Cognito logout URL 의존 제거) |
