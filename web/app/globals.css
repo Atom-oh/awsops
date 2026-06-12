@@ -27,7 +27,7 @@
   --warning:#F59E0B; --warning-surface:#FEF3E2; --warning-text:#B26B05; --warning-border:#FAD9A0;
 
   /* ===== chart palette (DOM/CSS elements; recharts uses charts/theme.ts hex) ===== */
-  --chart-1:#01A88D; --chart-2:#528DF8; --chart-3:#7B26FF; --chart-4:#39C2B0; --chart-5:var(--ink-400);
+  --chart-1:#01A88D; --chart-2:#528DF8; --chart-3:#7B26FF; --chart-4:#39C2B0; --chart-5:#7D8A96;
   --chart-grid:var(--ink-100); --chart-axis:var(--ink-400);
 
   /* ===== aliases — reach for these ===== */

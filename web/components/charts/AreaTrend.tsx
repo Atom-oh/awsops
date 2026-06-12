@@ -11,6 +11,7 @@ import {
   YAxis,
 } from 'recharts';
 import Card from '@/components/ui/Card';
+import { useChartColors } from '@/lib/use-chart-colors';
 import { AXIS_TICK, CHART, TOOLTIP_STYLES } from './theme';
 
 export interface AreaTrendProps {
@@ -39,6 +40,7 @@ export default function AreaTrend({
   valuePrefix = '',
   className,
 }: AreaTrendProps) {
+  const c = useChartColors();
   const fmt = (v: number | string) => {
     const n = typeof v === 'number' ? v : Number(v);
     if (!Number.isFinite(n)) return String(v);
@@ -53,8 +55,8 @@ export default function AreaTrend({
         <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={CHART.lead} stopOpacity={0.3} />
-              <stop offset="100%" stopColor={CHART.lead} stopOpacity={0.02} />
+              <stop offset="0%" stopColor={c.lead} stopOpacity={0.3} />
+              <stop offset="100%" stopColor={c.lead} stopOpacity={0.02} />
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="2 4" stroke={CHART.grid} vertical={false} />
@@ -76,11 +78,11 @@ export default function AreaTrend({
           <Area
             type="monotone"
             dataKey={yKey}
-            stroke={CHART.lead}
+            stroke={c.lead}
             strokeWidth={2}
             fill={`url(#${gid})`}
             dot={false}
-            activeDot={{ r: 4, fill: CHART.lead, strokeWidth: 0 }}
+            activeDot={{ r: 4, fill: c.lead, strokeWidth: 0 }}
           />
         </AreaChart>
       </ResponsiveContainer>

@@ -12,6 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 import Card from '@/components/ui/Card';
+import { useChartColors } from '@/lib/use-chart-colors';
 import { AXIS_TICK, CHART, TOOLTIP_STYLES } from './theme';
 
 export interface BarDistributionProps {
@@ -36,6 +37,7 @@ export default function BarDistribution({
   yKey,
   className,
 }: BarDistributionProps) {
+  const c = useChartColors();
   const max = data.reduce((m, d) => {
     const n = Number(d[yKey]);
     return Number.isFinite(n) && n > m ? n : m;
@@ -62,7 +64,7 @@ export default function BarDistribution({
             {data.map((d, i) => (
               <Cell
                 key={i}
-                fill={Number(d[yKey]) === max ? CHART.leadStrong : CHART.lead}
+                fill={Number(d[yKey]) === max ? c.leadStrong : c.lead}
               />
             ))}
           </Bar>

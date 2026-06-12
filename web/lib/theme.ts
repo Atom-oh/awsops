@@ -3,6 +3,7 @@ export type Theme = (typeof THEMES)[number];
 
 export const DEFAULT_THEME: Theme = 'teal';
 export const STORAGE_KEY = 'awsops-theme';
+export const THEME_EVENT = 'awsops:themechange';
 
 export const THEME_LABELS: Record<Theme, string> = {
   teal: 'Teal',
@@ -33,4 +34,7 @@ export function setStoredTheme(theme: Theme): void {
 
 export function applyTheme(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', theme);
+  if (typeof window !== 'undefined') {
+    try { window.dispatchEvent(new Event(THEME_EVENT)); } catch { /* no-op */ }
+  }
 }

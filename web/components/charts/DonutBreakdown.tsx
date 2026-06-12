@@ -3,7 +3,8 @@
 import type { ReactNode } from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import Card from '@/components/ui/Card';
-import { PALETTE, TOOLTIP_STYLES } from './theme';
+import { useChartColors } from '@/lib/use-chart-colors';
+import { TOOLTIP_STYLES } from './theme';
 
 export interface DonutBreakdownProps {
   title: ReactNode;
@@ -30,6 +31,7 @@ export default function DonutBreakdown({
   valuePrefix = '',
   className,
 }: DonutBreakdownProps) {
+  const c = useChartColors();
   const total = data.reduce((s, d) => s + (Number(d[valueKey]) || 0), 0);
   const fmtTotal =
     valuePrefix === '$'
@@ -52,7 +54,7 @@ export default function DonutBreakdown({
                 stroke="none"
               >
                 {data.map((_, i) => (
-                  <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
+                  <Cell key={i} fill={c.palette[i % c.palette.length]} />
                 ))}
               </Pie>
               <Tooltip
@@ -80,7 +82,7 @@ export default function DonutBreakdown({
             <li key={i} className="flex items-center gap-2 text-[12px]">
               <span
                 className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ background: PALETTE[i % PALETTE.length] }}
+                style={{ background: c.palette[i % c.palette.length] }}
               />
               <span className="min-w-0 flex-1 truncate text-ink-600">{String(d[nameKey])}</span>
               <span className="tabular shrink-0 font-medium text-ink-800">
