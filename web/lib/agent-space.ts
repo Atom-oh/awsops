@@ -21,7 +21,15 @@ export interface AgentSpace {
  */
 export const KNOWN_TOOL_CATALOG: Record<string, string[] | null> = {
   network: null, container: null, iac: null, data: null,
-  security: null, monitoring: null, cost: null, ops: null,
+  // SOURCE OF TRUTH: agent/lambda/create_targets.py 'iam-mcp-target' (security-gateway, 14 tools).
+  // Keep in sync — adding a tool there without listing it here only OVER-restricts (safe).
+  // Full enumeration of the other gateways is deferred (P2); null = degrade-safe "inventory unknown here".
+  security: [
+    'list_users', 'get_user', 'list_roles', 'get_role_details', 'list_groups', 'get_group',
+    'list_policies', 'list_user_policies', 'list_role_policies', 'get_user_policy', 'get_role_policy',
+    'list_access_keys', 'simulate_principal_policy', 'get_account_security_summary',
+  ],
+  monitoring: null, cost: null, ops: null,
 };
 
 /**

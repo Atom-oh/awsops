@@ -55,6 +55,21 @@ describe('intersectToolAllowlist (pure)', () => {
     const out = intersectToolAllowlist('network', ['a', 'a', '', 'b'] as string[]);
     expect(out).toEqual(['a', 'b']);
   });
+
+  it('security catalog (iam slice) is populated and narrows declared tools', () => {
+    expect(KNOWN_TOOL_CATALOG.security).not.toBeNull();
+    expect(KNOWN_TOOL_CATALOG.security).toHaveLength(14);
+    expect(KNOWN_TOOL_CATALOG.security).toContain('simulate_principal_policy');
+    // a declared tool absent from the security catalog is dropped (over-restriction is safe)
+    expect(intersectToolAllowlist('security', ['simulate_principal_policy', 'not_a_real_tool']))
+      .toEqual(['simulate_principal_policy']);
+  });
+
+  it('non-security gateways remain null (degrade-safe; P2 enumeration)', () => {
+    for (const gw of ['network', 'container', 'iac', 'data', 'monitoring', 'cost', 'ops']) {
+      expect(KNOWN_TOOL_CATALOG[gw]).toBeNull();
+    }
+  });
 });
 
 describe('getAgentSpace (degrade-safe)', () => {
