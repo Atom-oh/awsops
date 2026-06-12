@@ -14,7 +14,10 @@ def is_public(uri):
     # 302→Cognito re-auth loop and they could never reach the route that clears the stale cookie.
     # The route only clears the cookie + returns a logout redirect URL (no state mutation), so
     # leaving it open is safe.
-    return uri.startswith('/_next/static/') or uri in ('/api/health', '/api/auth/signout')
+    # /login (self-hosted login page), /api/auth/login (BFF InitiateAuth endpoint), and /icon.svg
+    # (favicon, served by web/app/icon.svg App Router file) must be reachable while unauthenticated.
+    return uri.startswith('/_next/static/') or uri in (
+        '/api/health', '/api/auth/signout', '/login', '/api/auth/login', '/icon.svg')
 
 _JWKS = None
 def get_jwks():
@@ -88,7 +91,20 @@ def lambda_handler(event, context):
         if payload and claims_valid(payload):
             return request
 
-    return start_login(headers)
+    return login_redirect(uri, request.get('querystring', ''))
+
+def login_redirect(uri, querystring):
+    # Unauthenticated requests are sent to the self-hosted /login page (not the Cognito Hosted UI).
+    # The original path+query is preserved in ?next= (relative Location, no flow cookie — PKCE state
+    # is only needed for the Hosted UI fallback below). The /login page validates next= before use.
+    nxt = uri + ('?' + querystring if querystring else '')
+    return {
+        'status': '302', 'statusDescription': 'Found',
+        'headers': {
+            'location': [{'key': 'Location', 'value': '/login?next=' + urllib.parse.quote(nxt)}],
+            'cache-control': [{'key': 'Cache-Control', 'value': 'no-cache'}],
+        },
+    }
 
 def start_login(headers):
     host = headers.get('host', [{}])[0].get('value', '')
@@ -153,7 +169,7 @@ def handle_callback(request, headers):
         'headers': {
             'location': [{'key': 'Location', 'value': f'https://{host}/'}],
             'set-cookie': [
-                {'key': 'Set-Cookie', 'value': f'awsops_token={id_token};Path=/;Secure;HttpOnly;SameSite=Lax;Max-Age=3600'},
+                {'key': 'Set-Cookie', 'value': f'awsops_token={id_token};Path=/;Secure;HttpOnly;SameSite=Lax;Max-Age=43200'},
                 {'key': 'Set-Cookie', 'value': 'awsops_flow=;Path=/;Secure;HttpOnly;SameSite=Lax;Max-Age=0'},
             ],
             'cache-control': [{'key': 'Cache-Control', 'value': 'no-cache'}],
