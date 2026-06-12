@@ -71,12 +71,12 @@ function NavItem({ href, label, icon: Icon, active, className }: { href: string;
       className={cn(
         'flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium no-underline transition-colors duration-[120ms]',
         active
-          ? 'bg-claude-500 text-white shadow-sm'
-          : 'text-ink-500 hover:bg-ink-100 hover:text-ink-800',
+          ? 'bg-chrome-active text-chrome-active-fg shadow-sm'
+          : 'text-chrome-fg-muted hover:bg-chrome-active/40 hover:text-chrome-fg',
         className,
       )}
     >
-      <Icon size={16} strokeWidth={1.7} className={cn('shrink-0', active ? 'text-white' : 'text-ink-400')} />
+      <Icon size={16} strokeWidth={1.7} className={cn('shrink-0', active ? 'text-chrome-active-fg' : 'text-chrome-fg-muted')} />
       <span className="truncate">{label}</span>
     </Link>
   );
@@ -89,14 +89,14 @@ export default function Sidebar() {
 
   return (
     <aside
-      className="flex h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-ink-100 bg-paper-muted/60 px-4 pb-4 pt-[22px] backdrop-blur"
+      className="flex h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-chrome-border bg-chrome-muted px-4 pb-4 pt-[22px] backdrop-blur"
     >
       {/* Lockup */}
       <div className="mb-5 flex items-center gap-2.5">
         <AwsopsMark size={36} />
         <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-semibold leading-tight text-ink-800">AWSops</div>
-          <div className="text-[10px] text-ink-400">{t('sidebar.tagline')}</div>
+          <div className="text-[15px] font-semibold leading-tight text-chrome-fg">AWSops</div>
+          <div className="text-[10px] text-chrome-fg-muted">{t('sidebar.tagline')}</div>
         </div>
         <LanguageToggle />
       </div>
@@ -117,7 +117,7 @@ export default function Sidebar() {
 
         {groups.map((g) => (
           <div key={g.group} className="space-y-0.5">
-            <SectionLabel className="px-2.5 pb-1 text-[11px] tracking-[0.04em] text-ink-400">{g.group}</SectionLabel>
+            <SectionLabel className="px-2.5 pb-1 text-[11px] tracking-[0.04em] text-chrome-fg-muted">{g.group}</SectionLabel>
             {g.group === 'Compute' && (
               /* EKS keeps its own route/icon but lives under Compute (user feedback);
                  OpenCost renders as an indented EKS submenu item. */
