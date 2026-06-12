@@ -17,12 +17,6 @@ const config: Config = {
           800: 'var(--brand-800)', 900: 'var(--brand-900)',
           action: 'var(--brand-action)', 'action-hover': 'var(--brand-action-hover)',
         },
-        // TEMP alias so existing `*-claude-N` classes keep working — removed in Task 9
-        claude: {
-          50: 'var(--brand-50)', 100: 'var(--brand-100)', 200: 'var(--brand-200)', 300: 'var(--brand-300)',
-          400: 'var(--brand-400)', 500: 'var(--brand-500)', 600: 'var(--brand-600)', 700: 'var(--brand-700)',
-          800: 'var(--brand-800)', 900: 'var(--brand-900)',
-        },
         chrome: {
           DEFAULT: 'var(--surface-chrome)', muted: 'var(--surface-chrome-muted)',
           fg: 'var(--chrome-fg)', 'fg-muted': 'var(--chrome-fg-muted)', border: 'var(--chrome-border)',

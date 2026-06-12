@@ -42,7 +42,7 @@ export default function AiOps() {
           </p>
           <button
             onClick={() => openChat()}
-            className="self-start rounded-md bg-claude-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-claude-600"
+            className="self-start rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600"
           >
             대화 시작
           </button>
@@ -59,7 +59,7 @@ export default function AiOps() {
             <button
               key={t.id}
               onClick={() => openChat(t.id)}
-              className="text-left text-[12px] text-ink-600 hover:text-claude-700 truncate"
+              className="text-left text-[12px] text-ink-600 hover:text-brand-700 truncate"
               title={t.title}
             >
               • {t.title}
@@ -70,7 +70,7 @@ export default function AiOps() {
         {/* AI analysis surfaces — honest about what is live vs gated */}
         <Card className="p-4 flex flex-col gap-2">
           <div className="text-[13px] font-semibold text-ink-800">AI 분석</div>
-          <a href="/eks" className="flex items-center justify-between text-[12px] text-ink-600 hover:text-claude-700">
+          <a href="/eks" className="flex items-center justify-between text-[12px] text-ink-600 hover:text-brand-700">
             <span>EKS 진단 (K8sGPT)</span><Badge tone="neutral" variant="soft">게이트 OFF</Badge>
           </a>
           <div className="flex items-center justify-between text-[12px] text-ink-600">

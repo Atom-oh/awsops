@@ -56,7 +56,7 @@ export default function HBarList({
               </span>
               <span className="h-2 flex-1 overflow-hidden rounded-full bg-ink-100">
                 <span
-                  className="block h-full rounded-full bg-claude-500"
+                  className="block h-full rounded-full bg-brand-500"
                   style={{ width: `${pct}%` }}
                 />
               </span>

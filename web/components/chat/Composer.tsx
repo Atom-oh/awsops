@@ -13,13 +13,13 @@ export default function Composer({ disabled, onSend }: { disabled: boolean; onSe
         onKeyDown={(e) => e.key === 'Enter' && send()}
         placeholder="메시지를 입력하세요…"
         disabled={disabled}
-        className="h-9 flex-1 rounded-lg border border-ink-200 bg-white px-3 text-[13px] text-ink-800 placeholder:text-ink-400 outline-none transition-shadow focus:border-claude-300 focus:shadow-focus disabled:opacity-60"
+        className="h-9 flex-1 rounded-lg border border-ink-200 bg-white px-3 text-[13px] text-ink-800 placeholder:text-ink-400 outline-none transition-shadow focus:border-brand-300 focus:shadow-focus disabled:opacity-60"
       />
       <button
         onClick={send}
         disabled={disabled}
         aria-label="보내기"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-claude-500 text-white transition-colors hover:bg-claude-600 disabled:opacity-40"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-500 text-white transition-colors hover:bg-brand-600 disabled:opacity-40"
       >
         <ArrowUp size={17} strokeWidth={2.4} />
       </button>

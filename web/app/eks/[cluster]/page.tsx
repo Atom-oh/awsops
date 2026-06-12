@@ -486,7 +486,7 @@ function DiagnosisDetailPanel({
           </dl>
 
           {/* HYPOTHESIS half — Haiku narration, explicitly labelled UNVERIFIED. */}
-          <div className="mt-5 rounded-md border border-claude-200 bg-claude-50 px-3 py-3">
+          <div className="mt-5 rounded-md border border-brand-200 bg-brand-50 px-3 py-3">
             <div className="mb-1.5">
               <Badge tone="brand" variant="solid">
                 AI hypothesis (Haiku) — verify before acting

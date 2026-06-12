@@ -112,7 +112,7 @@ export default function DiagnosisView() {
           <button
             onClick={run}
             disabled={running}
-            className="rounded-md bg-claude-500 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded-md bg-brand-500 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
           >
             {running ? '진단 중…' : '진단 실행'}
           </button>

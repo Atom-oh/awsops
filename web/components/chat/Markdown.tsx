@@ -25,7 +25,7 @@ function MarkdownImpl({ children }: { children: string }) {
           h4: ({ children }) => <h4 className="mb-1.5 mt-2.5 text-[13px] font-semibold text-ink-800 first:mt-0">{children}</h4>,
           p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
           a: ({ children, href }) => (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-claude-700 underline decoration-claude-200 underline-offset-2 hover:text-claude-600">{children}</a>
+            <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-brand-700 underline decoration-brand-200 underline-offset-2 hover:text-brand-600">{children}</a>
           ),
           strong: ({ children }) => <strong className="font-semibold text-ink-800">{children}</strong>,
           em: ({ children }) => <em className="italic">{children}</em>,
@@ -33,11 +33,11 @@ function MarkdownImpl({ children }: { children: string }) {
           ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5 first:mt-0 last:mb-0">{children}</ol>,
           li: ({ children }) => <li className="marker:text-ink-300">{children}</li>,
           blockquote: ({ children }) => (
-            <blockquote className="my-2 border-l-2 border-claude-200 bg-claude-50/50 py-1 pl-3 text-ink-600">{children}</blockquote>
+            <blockquote className="my-2 border-l-2 border-brand-200 bg-brand-50/50 py-1 pl-3 text-ink-600">{children}</blockquote>
           ),
           hr: () => <hr className="my-3 border-ink-100" />,
           code: ({ children }) => (
-            <code className="rounded-[4px] border border-ink-100 bg-paper-muted px-1 py-px font-mono text-[12px] text-claude-700">{children}</code>
+            <code className="rounded-[4px] border border-ink-100 bg-paper-muted px-1 py-px font-mono text-[12px] text-brand-700">{children}</code>
           ),
           // Block code: <pre> wraps a <code>; neutralize the inline code chrome inside it.
           pre: ({ children }) => (

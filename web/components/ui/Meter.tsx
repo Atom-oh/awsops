@@ -7,7 +7,7 @@ import { cn } from '@/lib/cn';
  */
 function fillColor(v: number): string {
   if (v >= 75) return 'bg-rose-500';
-  if (v >= 50) return 'bg-claude-500';
+  if (v >= 50) return 'bg-brand-500';
   return 'bg-emerald-500';
 }
 

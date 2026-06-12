@@ -18,7 +18,7 @@ describe('Button', () => {
   it('renders children and applies the primary variant class', () => {
     const { container } = render(<Button>저장</Button>);
     expect(screen.getByText('저장')).toBeTruthy();
-    expect(container.querySelector('button')!.className).toContain('bg-claude-500');
+    expect(container.querySelector('button')!.className).toContain('bg-brand-action');
   });
 
   it('applies the secondary variant class', () => {
@@ -67,7 +67,7 @@ describe('StatePill', () => {
 
   it("maps 'Pending' to brand styling", () => {
     const { container } = render(<StatePill value="Pending" />);
-    expect(container.querySelector('span')!.className).toContain('bg-claude-50');
+    expect(container.querySelector('span')!.className).toContain('bg-brand-50');
   });
 
   it("maps 'stopped' to neutral styling", () => {
@@ -85,7 +85,7 @@ describe('Meter', () => {
 
   it('colors claude in [50,75)', () => {
     const { container } = render(<Meter value={60} />);
-    expect(container.innerHTML).toContain('bg-claude-500');
+    expect(container.innerHTML).toContain('bg-brand-500');
   });
 
   it('colors rose at or above 75', () => {

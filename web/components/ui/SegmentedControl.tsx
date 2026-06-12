@@ -41,7 +41,7 @@ export default function SegmentedControl({
             className={cn(
               'h-[26px] px-3 rounded-[6px] text-[12px] font-medium whitespace-nowrap',
               'transition-colors duration-[120ms] cursor-pointer',
-              active ? 'bg-claude-500 text-white shadow-sm' : 'text-ink-500 hover:text-ink-800',
+              active ? 'bg-brand-500 text-white shadow-sm' : 'text-ink-500 hover:text-ink-800',
             )}
           >
             {label}

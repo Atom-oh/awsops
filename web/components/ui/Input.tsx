@@ -32,7 +32,7 @@ export default function Input({
         className={cn(
           'w-full bg-white border border-ink-100 rounded-md text-ink-800 placeholder:text-ink-400',
           'transition-colors duration-[120ms] outline-none',
-          'focus:border-claude-500 focus:shadow-focus',
+          'focus:border-brand-500 focus:shadow-focus',
           icon ? 'pl-8 pr-3' : 'px-3',
           SIZE[inputSize],
           className,

@@ -76,7 +76,7 @@ export default function CustomizationPage() {
     <div className="text-ink-800">
       <PageHeader title="Custom Agents & Skills" />
       <div className="space-y-6 p-6">
-      {msg && <div className="text-[12px] text-claude-600">{msg}</div>}
+      {msg && <div className="text-[12px] text-brand-600">{msg}</div>}
 
       <section className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
         <h2 className="text-[13px] font-semibold">New Agent</h2>
@@ -87,7 +87,7 @@ export default function CustomizationPage() {
           {GATEWAYS.map((g) => <option key={g} value={g}>{g}</option>)}
         </select>
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="routing keywords (comma-separated)" value={agentForm.routingKeywords} onChange={(e) => setAgentForm({ ...agentForm, routingKeywords: e.target.value })} />
-        <button onClick={createAgent} className="rounded bg-claude-500 px-3 py-1 text-[12px] font-medium text-white">Create</button>
+        <button onClick={createAgent} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">Create</button>
       </section>
 
       <section className="space-y-2">
@@ -141,7 +141,7 @@ export default function CustomizationPage() {
                  value={allowlistText} onChange={(e) => setAllowlistText(e.target.value)} />
           <div className="mt-1 text-ink-400">Empty = no account cap (Phase-1 advisory). A non-empty list can only REMOVE tools a skill declared — it never grants new tools.</div>
         </div>
-        <button onClick={saveSpace} className="rounded bg-claude-500 px-3 py-1 text-[12px] font-medium text-white">Save Agent Space</button>
+        <button onClick={saveSpace} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">Save Agent Space</button>
       </section>
       </div>
     </div>

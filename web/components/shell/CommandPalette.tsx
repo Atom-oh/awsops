@@ -133,7 +133,7 @@ export default function CommandPalette() {
                   onClick={() => go(c)}
                   className={cn(
                     'flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-[13px] transition-colors',
-                    i === active ? 'bg-claude-500 text-white' : 'text-ink-800 hover:bg-ink-50',
+                    i === active ? 'bg-brand-500 text-white' : 'text-ink-800 hover:bg-ink-50',
                   )}
                 >
                   <span className="font-medium">{c.label}</span>

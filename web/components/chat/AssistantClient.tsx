@@ -47,7 +47,7 @@ export default function AssistantClient() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-ink-100 px-6 py-3.5">
           <div className="flex items-center gap-2 text-[15px] font-semibold text-ink-800">
-            <Sparkles size={17} className="text-claude-500" />
+            <Sparkles size={17} className="text-brand-500" />
             <span className="truncate">{title}</span>
           </div>
           {activeSec && (

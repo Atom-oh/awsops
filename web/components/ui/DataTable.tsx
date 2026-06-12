@@ -96,7 +96,7 @@ export default function DataTable({
                     key={c.key}
                     onClick={() => toggleSort(c.key)}
                     aria-sort={active ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                    className={`text-left text-[11px] uppercase tracking-[0.04em] font-medium py-2.5 px-3 border-b border-ink-100 cursor-pointer select-none hover:text-ink-600 ${active ? 'text-claude-700' : 'text-ink-400'}`}
+                    className={`text-left text-[11px] uppercase tracking-[0.04em] font-medium py-2.5 px-3 border-b border-ink-100 cursor-pointer select-none hover:text-ink-600 ${active ? 'text-brand-700' : 'text-ink-400'}`}
                   >
                     <span className="inline-flex items-center gap-1">
                       {c.label}

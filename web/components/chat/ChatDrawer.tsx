@@ -82,7 +82,7 @@ export default function ChatDrawer() {
       <button
         onClick={() => setOpen(true)}
         aria-label="AI 어시스턴트 열기"
-        className="fixed bottom-5 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-claude-500 text-white shadow-pop transition-colors hover:bg-claude-600"
+        className="fixed bottom-5 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600"
       >
         <Sparkles size={20} strokeWidth={2} />
       </button>
@@ -105,7 +105,7 @@ export default function ChatDrawer() {
           role="separator"
           className="group absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize"
         >
-          <div className="absolute left-0 top-0 h-full w-px bg-ink-100 transition-colors group-hover:w-0.5 group-hover:bg-claude-400" />
+          <div className="absolute left-0 top-0 h-full w-px bg-ink-100 transition-colors group-hover:w-0.5 group-hover:bg-brand-400" />
         </div>
       )}
 
@@ -114,7 +114,7 @@ export default function ChatDrawer() {
         <div className="flex items-center gap-2">
           <IconBtn onClick={chat.toggleThreads} title="대화 목록" label="대화 목록" active={chat.showThreads}><Menu size={16} /></IconBtn>
           <span className="flex items-center gap-1.5 text-[13px] font-semibold text-ink-800">
-            <Sparkles size={14} className="text-claude-500" /> AWSops Assistant
+            <Sparkles size={14} className="text-brand-500" /> AWSops Assistant
           </span>
         </div>
         <div className="flex items-center gap-0.5">
@@ -157,7 +157,7 @@ function IconBtn({ onClick, title, label, active, children }: {
       aria-label={label}
       className={
         'flex h-7 w-7 items-center justify-center rounded-md transition-colors ' +
-        (active ? 'bg-claude-50 text-claude-600' : 'text-ink-400 hover:bg-ink-100 hover:text-ink-800')
+        (active ? 'bg-brand-50 text-brand-600' : 'text-ink-400 hover:bg-ink-100 hover:text-ink-800')
       }
     >
       {children}

@@ -24,7 +24,7 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
             className={
               'rounded-lg px-3 py-2.5 ' +
               (me
-                ? 'max-w-[85%] self-end border border-claude-100 bg-claude-50 text-ink-800'
+                ? 'max-w-[85%] self-end border border-brand-100 bg-brand-50 text-ink-800'
                 : 'max-w-[92%] self-start border border-ink-100 bg-white text-ink-700 shadow-sm')
             }
           >
@@ -39,7 +39,7 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
             {me || m.streaming
               ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>
               : <Markdown>{m.content}</Markdown>}
-            {m.streaming && <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-claude-500 align-middle" />}
+            {m.streaming && <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-brand-500 align-middle" />}
             {alts.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {alts.map((r) => {

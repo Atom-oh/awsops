@@ -50,13 +50,13 @@ export default function StatTile({
 }: StatTileProps) {
   const border =
     variant === 'accent'
-      ? 'border-claude-200'
+      ? 'border-brand-200'
       : variant === 'danger'
         ? 'border-rose-200'
         : 'border-ink-100';
 
   const valueColor =
-    variant === 'danger' ? 'text-rose-700' : variant === 'warn' ? 'text-claude-700' : 'text-ink-800';
+    variant === 'danger' ? 'text-rose-700' : variant === 'warn' ? 'text-brand-700' : 'text-ink-800';
 
   return (
     <div className={cn('relative overflow-hidden bg-white border rounded-lg shadow-card p-4', border, className)}>

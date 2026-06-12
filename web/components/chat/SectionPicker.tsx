@@ -11,7 +11,7 @@ export default function SectionPicker({ pinned, onPin }: { pinned: string | null
         aria-label="자동 라우팅"
         className={
           'flex h-7 w-7 items-center justify-center rounded-md border transition-colors ' +
-          (pinned === null ? 'border-claude-300 bg-claude-50 text-claude-600' : 'border-ink-100 text-ink-400 hover:bg-ink-100')
+          (pinned === null ? 'border-brand-300 bg-brand-50 text-brand-600' : 'border-ink-100 text-ink-400 hover:bg-ink-100')
         }
       >
         <Compass size={15} />

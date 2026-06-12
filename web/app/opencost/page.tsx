@@ -134,7 +134,7 @@ export default function OpencostPage() {
                 className="mt-1 w-full rounded-md border border-ink-200 px-2 py-1 text-[12px] font-mono" />
             </label>
             <div className="flex items-center gap-3">
-              <button type="button" onClick={save} className={`${btn} bg-claude-500 text-white hover:bg-claude-600`}>저장 (admin)</button>
+              <button type="button" onClick={save} className={`${btn} bg-brand-500 text-white hover:bg-brand-600`}>저장 (admin)</button>
               <button type="button" onClick={download} className={`${btn} border border-ink-200 text-ink-700 hover:bg-ink-50`}>설치 번들 다운로드</button>
               {msg && <span className="text-[12px] text-ink-500">{msg}</span>}
             </div>
