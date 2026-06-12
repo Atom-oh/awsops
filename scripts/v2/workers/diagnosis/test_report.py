@@ -201,7 +201,7 @@ def _patch_report(monkeypatch, *, generate):
 
 
 def test_report_handler_success_uploads_sets_uri_and_closes(monkeypatch):
-    state = _patch_report(monkeypatch, generate=lambda c, a, t: ("# md", {"degraded": []}, ["inventory", "cost"]))
+    state = _patch_report(monkeypatch, generate=lambda c, a, t, **_: ("# md", {"degraded": []}, ["inventory", "cost"]))
     result, artifact = handlers._report(
         {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 7}, dry_run=False)
     assert result["status"] == "succeeded" and result["report_id"] == 7
@@ -212,7 +212,7 @@ def test_report_handler_success_uploads_sets_uri_and_closes(monkeypatch):
 
 
 def test_report_handler_partial_when_a_source_degraded(monkeypatch):
-    state = _patch_report(monkeypatch, generate=lambda c, a, t: ("# md", {"degraded": ["cost"]}, ["inventory"]))
+    state = _patch_report(monkeypatch, generate=lambda c, a, t, **_: ("# md", {"degraded": ["cost"]}, ["inventory"]))
     result, _ = handlers._report(
         {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 9}, dry_run=False)
     assert result["status"] == "partial"
@@ -220,7 +220,7 @@ def test_report_handler_partial_when_a_source_degraded(monkeypatch):
 
 
 def test_report_handler_failure_marks_failed_str_error_and_closes(monkeypatch):
-    def boom(c, a, t):
+    def boom(c, a, t, **_):
         raise RuntimeError("kaboom")
     state = _patch_report(monkeypatch, generate=boom)
     with pytest.raises(RuntimeError):

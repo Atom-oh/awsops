@@ -28,3 +28,15 @@ SECTIONS = [
      "sources": ["inventory", "cost", "posture", "service_map", "what_changed"],
      "prompt": "위 모든 데이터를 종합해 우선순위가 매겨진 read-only 권고 목록을 작성하라. 각 권고에 근거와 예상 효과를 명시. 자동 실행/변경 제안 금지."},
 ]
+
+# Plan 2 — intended-vs-actual drift section. Kept SEPARATE from the 8 base SECTIONS (which are the
+# native-source sections) and appended by report.generate, because this section consumes ONLY the
+# deterministic verdict list (passed/severity/observed) — never raw service-map edge text. The
+# evaluator (invariants.py) already decided pass/fail; the LLM only narrates the drift.
+INTENDED_VS_ACTUAL_SECTION = {
+    "key": "intended_vs_actual", "title": "Intended vs Actual",
+    "sources": ["intended_vs_actual"],
+    "prompt": "아래는 운영자가 확정한 불변식(intended)을 실제 상태(actual)와 비교한 '판정(verdict)' 목록이다. "
+              "passed=false 인 항목(드리프트)을 심각도순으로 정리하고 각 항목의 observed 근거를 명시하라. "
+              "데이터(verdict)에만 근거하라 — 추측/자동변경 제안 금지. 활성 불변식이 없으면 그렇게 보고하라.",
+}

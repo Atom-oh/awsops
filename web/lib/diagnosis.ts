@@ -37,10 +37,16 @@ export async function getReport(id: number): Promise<DiagnosisReport | null> {
 // The row must be created with worker_job_id=NULL (column is nullable), and LINKED only AFTER the
 // worker_jobs row exists (post-enqueue) — otherwise the FK insert fails on the first request.
 // The worker finds its row via payload.report_id (not the FK), so NULL-at-insert is safe.
+// [Plan 2] parent_report_id = the most-recent SUCCEEDED report of the SAME tier (diff lineage). Set
+// atomically in the INSERT via a subquery so the worker can compute summary.diff vs the prior run.
 export async function createReport(tier: DiagnosisTier, requestedBy: string): Promise<number> {
   const { rows } = await getPool().query(
-    `INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status)
-     VALUES (NULL, $1, $2, 'running') RETURNING id`,
+    `INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status, parent_report_id)
+     VALUES (NULL, $1, $2, 'running',
+       (SELECT id FROM diagnosis_reports
+         WHERE tier = $1 AND status = 'succeeded'
+         ORDER BY created_at DESC LIMIT 1))
+     RETURNING id`,
     [tier, requestedBy],
   );
   return rows[0].id as number;

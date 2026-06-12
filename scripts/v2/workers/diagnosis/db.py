@@ -4,6 +4,38 @@ import json
 _TERMINAL = ("succeeded", "failed", "partial")
 
 
+def _as_dict(v):
+    """pg8000 may hand back JSONB as a dict already, or as a str — normalize to dict."""
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except (ValueError, TypeError):
+            return {}
+    return {}
+
+
+def list_active_invariants(conn):
+    """Active (admin-promoted) invariants only — the deterministic engine evaluates these against
+    the live 'actual' state. Read-only; params normalized to a dict."""
+    rows = conn.run(
+        "SELECT id, kind, target, params, severity FROM architecture_intent WHERE status='active'"
+    )
+    return [{"id": r[0], "kind": r[1], "target": r[2],
+             "params": _as_dict(r[3]), "severity": r[4]} for r in rows]
+
+
+def get_report_summary(conn, report_id):
+    """Return a report's (parent_report_id, summary-dict) for diff lineage, or (None, {})."""
+    rows = conn.run(
+        "SELECT parent_report_id, summary FROM diagnosis_reports WHERE id=:id", id=report_id
+    )
+    if not rows:
+        return None, {}
+    return rows[0][0], _as_dict(rows[0][1])
+
+
 def create_report(conn, worker_job_id, tier, requested_by):
     rows = conn.run(
         "INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status) "
