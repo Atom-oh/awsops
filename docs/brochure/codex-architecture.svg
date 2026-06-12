@@ -1,0 +1,215 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">AWSops v2 architecture</title>
+  <desc id="desc">Read-only AWS operations dashboard architecture with CloudFront VPC Origin, private ECS Fargate web tier, Aurora, AgentCore diagnosis, async workers, and read-only targets.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#1f1e1d" flood-opacity=".10"/>
+    </filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#1f1e1d" flood-opacity=".08"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#545B64"/>
+    </marker>
+    <marker id="arrowHot" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D97757"/>
+    </marker>
+    <marker id="arrowAi" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#116D5B"/>
+    </marker>
+    <marker id="arrowAsync" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#BC1356"/>
+    </marker>
+    <style>
+      .bg{fill:#FAF9F5}
+      .sheet{fill:#FFFFFF;stroke:#EDEBE4;stroke-width:1.5}
+      .title{font:800 38px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#1F1E1D}
+      .subtitle{font:500 17px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#5F5A4D}
+      .kicker{font:700 12px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.08em;fill:#8E4830}
+      .group-label{font:800 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:.04em;text-transform:uppercase}
+      .stage-label{font:800 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#5A6C86;letter-spacing:.03em;text-transform:uppercase}
+      .node-label{font:800 15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#232F3E}
+      .node-detail{font:500 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#6B665A}
+      .badge{font:800 10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.05em}
+      .note{font:700 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#3F3B32}
+      .note2{font:500 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#6B665A}
+      .edge-panel{fill:#FFF7ED;stroke:#EAB08A;stroke-width:1.5}
+      .region-panel{fill:#F8FCFD;stroke:#00A4A6;stroke-width:1.5;stroke-dasharray:8 7}
+      .vpc-panel{fill:#F3FBFC;stroke:#879196;stroke-width:1.3}
+      .stage{fill:#FFFFFF;stroke:#D7D3C7;stroke-width:1}
+      .stage-ai{fill:#F6F3FB;stroke:#D8C8F0}
+      .stage-async{fill:#FFF1F5;stroke:#F4B9CB}
+      .stage-target{fill:#F7F6F2;stroke:#D7D3C7}
+      .svc{fill:#FFFFFF;stroke:#D7D3C7;stroke-width:1.2}
+      .svc-edge{stroke:#EAB08A}
+      .svc-web{stroke:#BBD7F5}
+      .svc-data{stroke:#B7E2CC}
+      .svc-ai{stroke:#D8C8F0}
+      .svc-async{stroke:#F4B9CB}
+      .svc-target{stroke:#C8CDD2}
+      .icon-edge{fill:#D97757}
+      .icon-web{fill:#147EBA}
+      .icon-data{fill:#047857}
+      .icon-ai{fill:#5A30B5}
+      .icon-async{fill:#BC1356}
+      .icon-target{fill:#5A6C86}
+      .icon-text{font:900 12px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#FFFFFF}
+      .line{fill:none;stroke:#545B64;stroke-width:2;marker-end:url(#arrow)}
+      .line-hot{fill:none;stroke:#D97757;stroke-width:3;marker-end:url(#arrowHot)}
+      .line-ai{fill:none;stroke:#116D5B;stroke-width:2.5;marker-end:url(#arrowAi)}
+      .line-async{fill:none;stroke:#BC1356;stroke-width:2.5;stroke-dasharray:8 8;marker-end:url(#arrowAsync)}
+      .line-muted{fill:none;stroke:#879196;stroke-width:1.7;stroke-dasharray:5 6;marker-end:url(#arrow)}
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="900"/>
+  <rect class="sheet" x="36" y="36" width="1528" height="828" rx="28" filter="url(#shadow)"/>
+  <text class="kicker" x="82" y="92">TERRAFORM / ECS FARGATE / AURORA / AGENTCORE</text>
+  <text class="title" x="80" y="135">AWSops v2 Architecture</text>
+  <text class="subtitle" x="82" y="166">Read-only operations dashboard with AI diagnosis. No autonomous mutation path.</text>
+
+  <rect x="72" y="374" width="130" height="112" rx="18" fill="#FFFFFF" stroke="#EDEBE4" filter="url(#soft)"/>
+  <circle cx="137" cy="414" r="22" fill="#232F3E"/>
+  <text class="icon-text" x="137" y="419" text-anchor="middle">OP</text>
+  <text class="node-label" x="137" y="454" text-anchor="middle">Operators</text>
+  <text class="node-detail" x="137" y="473" text-anchor="middle">Browser / mobile</text>
+
+  <rect class="edge-panel" x="234" y="214" width="218" height="484" rx="22"/>
+  <text class="group-label" x="260" y="250" fill="#8E4830">Global edge / auth</text>
+
+  <g filter="url(#soft)">
+    <rect class="svc svc-edge" x="270" y="286" width="146" height="76" rx="14"/>
+    <circle class="icon-edge" cx="300" cy="324" r="20"/>
+    <text class="icon-text" x="300" y="329" text-anchor="middle">CF</text>
+    <text class="node-label" x="330" y="318">CloudFront</text>
+    <text class="node-detail" x="330" y="338">VPC Origin TLS</text>
+
+    <rect class="svc svc-edge" x="270" y="420" width="146" height="76" rx="14"/>
+    <circle class="icon-edge" cx="300" cy="458" r="20"/>
+    <text class="icon-text" x="300" y="463" text-anchor="middle">LE</text>
+    <text class="node-label" x="330" y="452">Lambda@Edge</text>
+    <text class="node-detail" x="330" y="472">RS256 / PKCE</text>
+
+    <rect class="svc svc-edge" x="270" y="554" width="146" height="76" rx="14"/>
+    <circle class="icon-edge" cx="300" cy="592" r="20"/>
+    <text class="icon-text" x="300" y="597" text-anchor="middle">CO</text>
+    <text class="node-label" x="330" y="586">Cognito</text>
+    <text class="node-detail" x="330" y="606">User Pool</text>
+  </g>
+
+  <rect class="region-panel" x="504" y="196" width="1018" height="548" rx="24"/>
+  <text class="group-label" x="534" y="232" fill="#147EBA">AWS Region ap-northeast-2</text>
+  <text class="badge" x="1422" y="232" fill="#147EBA" text-anchor="end">ROOT PATH / NO BASEPATH</text>
+
+  <rect class="stage" x="532" y="270" width="146" height="398" rx="16"/>
+  <text class="stage-label" x="552" y="300">Private ingress</text>
+  <rect class="stage" x="700" y="270" width="146" height="398" rx="16"/>
+  <text class="stage-label" x="720" y="300">Web BFF</text>
+  <rect class="stage" x="868" y="270" width="146" height="398" rx="16"/>
+  <text class="stage-label" x="888" y="300">Data</text>
+  <rect class="stage stage-ai" x="1036" y="270" width="146" height="398" rx="16"/>
+  <text class="stage-label" x="1056" y="300">AI diagnosis</text>
+  <rect class="stage stage-async" x="1204" y="270" width="146" height="398" rx="16"/>
+  <text class="stage-label" x="1224" y="300">Async workers</text>
+  <rect class="stage stage-target" x="1372" y="270" width="118" height="398" rx="16"/>
+  <text class="stage-label" x="1388" y="300">Targets</text>
+
+  <g filter="url(#soft)">
+    <rect class="svc svc-web" x="548" y="410" width="114" height="76" rx="14"/>
+    <circle class="icon-web" cx="577" cy="448" r="20"/>
+    <text class="icon-text" x="577" y="453" text-anchor="middle">ALB</text>
+    <text class="node-label" x="607" y="442">Internal</text>
+    <text class="node-detail" x="607" y="462">ALB :443</text>
+
+    <rect class="svc svc-web" x="716" y="338" width="114" height="76" rx="14"/>
+    <circle class="icon-web" cx="745" cy="376" r="20"/>
+    <text class="icon-text" x="745" y="381" text-anchor="middle">ECS</text>
+    <text class="node-label" x="775" y="370">Fargate</text>
+    <text class="node-detail" x="775" y="390">Next.js BFF</text>
+
+    <rect class="svc svc-web" x="716" y="536" width="114" height="76" rx="14"/>
+    <circle class="icon-web" cx="745" cy="574" r="20"/>
+    <text class="icon-text" x="745" y="579" text-anchor="middle">SSM</text>
+    <text class="node-label" x="775" y="568">SSM</text>
+    <text class="node-detail" x="775" y="588">runtime config</text>
+
+    <rect class="svc svc-data" x="884" y="410" width="114" height="76" rx="14"/>
+    <circle class="icon-data" cx="913" cy="448" r="20"/>
+    <text class="icon-text" x="913" y="453" text-anchor="middle">DB</text>
+    <text class="node-label" x="943" y="442">Aurora</text>
+    <text class="node-detail" x="943" y="462">PG17 state</text>
+
+    <rect class="svc svc-ai" x="1052" y="338" width="114" height="76" rx="14"/>
+    <circle class="icon-ai" cx="1081" cy="376" r="20"/>
+    <text class="icon-text" x="1081" y="381" text-anchor="middle">AC</text>
+    <text class="node-label" x="1111" y="370">AgentCore</text>
+    <text class="node-detail" x="1111" y="390">Sonnet / Opus</text>
+
+    <rect class="svc svc-ai" x="1052" y="536" width="114" height="76" rx="14"/>
+    <circle class="icon-ai" cx="1081" cy="574" r="20"/>
+    <text class="icon-text" x="1081" y="579" text-anchor="middle">MCP</text>
+    <text class="node-label" x="1111" y="568">Tool</text>
+    <text class="node-detail" x="1111" y="588">Lambda</text>
+
+    <rect class="svc svc-async" x="1220" y="320" width="114" height="68" rx="14"/>
+    <circle class="icon-async" cx="1248" cy="354" r="18"/>
+    <text class="icon-text" x="1248" y="359" text-anchor="middle">SQS</text>
+    <text class="node-label" x="1276" y="349">Queue</text>
+    <text class="node-detail" x="1276" y="368">jobs</text>
+
+    <rect class="svc svc-async" x="1220" y="444" width="114" height="68" rx="14"/>
+    <circle class="icon-async" cx="1248" cy="478" r="18"/>
+    <text class="icon-text" x="1248" y="483" text-anchor="middle">SFN</text>
+    <text class="node-label" x="1276" y="473">Step</text>
+    <text class="node-detail" x="1276" y="492">Functions</text>
+
+    <rect class="svc svc-async" x="1220" y="568" width="114" height="68" rx="14"/>
+    <circle class="icon-async" cx="1248" cy="602" r="18"/>
+    <text class="icon-text" x="1248" y="607" text-anchor="middle">FG</text>
+    <text class="node-label" x="1276" y="597">Worker</text>
+    <text class="node-detail" x="1276" y="616">long jobs</text>
+
+    <rect class="svc svc-target" x="1385" y="320" width="92" height="68" rx="14"/>
+    <circle class="icon-target" cx="1410" cy="354" r="18"/>
+    <text class="icon-text" x="1410" y="359" text-anchor="middle">EKS</text>
+    <text class="node-detail" x="1438" y="350">EKS</text>
+    <text class="node-detail" x="1438" y="369">view</text>
+
+    <rect class="svc svc-target" x="1385" y="444" width="92" height="68" rx="14"/>
+    <circle class="icon-target" cx="1410" cy="478" r="18"/>
+    <text class="icon-text" x="1410" y="483" text-anchor="middle">API</text>
+    <text class="node-detail" x="1438" y="474">AWS</text>
+    <text class="node-detail" x="1438" y="493">APIs</text>
+
+    <rect class="svc svc-target" x="1385" y="568" width="92" height="68" rx="14"/>
+    <circle class="icon-target" cx="1410" cy="602" r="18"/>
+    <text class="icon-text" x="1410" y="607" text-anchor="middle">OBS</text>
+    <text class="node-detail" x="1438" y="598">Ext.</text>
+    <text class="node-detail" x="1438" y="617">obs</text>
+  </g>
+
+  <path class="line-hot" d="M202 430 C226 430 238 324 268 324"/>
+  <path class="line-muted" d="M343 362 L343 418"/>
+  <path class="line-muted" d="M343 496 L343 552"/>
+  <path class="line-hot" d="M416 324 C460 324 462 448 546 448"/>
+  <path class="line-hot" d="M662 448 C684 448 692 376 714 376"/>
+  <path class="line" d="M830 376 C848 376 862 448 882 448"/>
+  <path class="line-ai" d="M830 376 C910 376 970 376 1050 376"/>
+  <path class="line-muted" d="M773 414 L773 534"/>
+  <path class="line-ai" d="M1109 414 L1109 534"/>
+  <path class="line-ai" d="M1166 574 C1250 574 1300 354 1383 354"/>
+  <path class="line-ai" d="M1166 574 C1250 574 1300 478 1383 478"/>
+  <path class="line-ai" d="M1166 574 C1250 574 1300 602 1383 602"/>
+  <path class="line-async" d="M830 376 C1000 260 1100 354 1218 354"/>
+  <path class="line-async" d="M1277 388 L1277 442"/>
+  <path class="line-async" d="M1277 512 L1277 566"/>
+
+  <rect x="82" y="778" width="1436" height="54" rx="16" fill="#FFF7ED" stroke="#EAB08A"/>
+  <text class="note" x="112" y="801">Read-only posture</text>
+  <text class="note2" x="112" y="821">The web tier can read Aurora, call AgentCore, and enqueue heavy read-only jobs. MCP tools query AWS, EKS, and observability sources without enabling remediation or autonomous mutation.</text>
+
+  <g>
+    <rect x="1264" y="84" width="240" height="34" rx="17" fill="#EAF7F1" stroke="#B7E2CC"/>
+    <text class="badge" x="1384" y="105" text-anchor="middle" fill="#047857">READ-ONLY / FLAG-SAFE</text>
+  </g>
+</svg>
