@@ -17,6 +17,7 @@ import SectionLabel from '@/components/ui/SectionLabel';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import LanguageToggle from '@/components/shell/LanguageToggle';
 import UserIdentity from '@/components/shell/UserIdentity';
+import ThemeToggle from '@/components/shell/ThemeToggle';
 import { cn } from '@/lib/cn';
 
 // Fixed top-level pages. `tkey` resolves the label via i18n.
@@ -142,12 +143,13 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="mt-4 border-t border-ink-100 pt-3">
+      <div className="mt-4 border-t border-chrome-border pt-3">
         <UserIdentity />
-        <div className="mt-2 flex items-center gap-1.5 px-0.5 text-[11px] text-ink-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        <div className="mt-2 flex items-center gap-1.5 px-0.5 text-[11px] text-chrome-fg-muted">
+          <span className="h-1.5 w-1.5 rounded-full bg-positive" />
           <span>{t('sidebar.statusLine', { status: t('sidebar.online') })}</span>
         </div>
+        <ThemeToggle />
       </div>
     </aside>
   );
