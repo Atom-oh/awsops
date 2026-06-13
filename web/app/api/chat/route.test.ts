@@ -6,6 +6,7 @@ const pickGateway = vi.fn();
 const getEnabledCustomAgents = vi.fn();
 const pickCustomAgent = vi.fn();
 const resolveAgent = vi.fn();
+const isCustomAgentEnabled = vi.fn();
 const recordCustomAgentTrace = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/agentcore', () => ({ invokeAgent: (...a: unknown[]) => invokeAgent(...a) }));
@@ -21,6 +22,7 @@ vi.mock('@/lib/agent-resolver', () => ({
   pickCustomAgent: (...a: unknown[]) => pickCustomAgent(...a),
   resolveAgent: (...a: unknown[]) => resolveAgent(...a),
 }));
+vi.mock('@/lib/catalog', () => ({ isCustomAgentEnabled: (...a: unknown[]) => isCustomAgentEnabled(...a) }));
 vi.mock('@/lib/trace', () => ({ recordCustomAgentTrace: (...a: unknown[]) => recordCustomAgentTrace(...a) }));
 const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
@@ -51,10 +53,13 @@ beforeEach(() => {
   getEnabledCustomAgents.mockReset();
   pickCustomAgent.mockReset();
   resolveAgent.mockReset();
+  isCustomAgentEnabled.mockReset();
   recordCustomAgentTrace.mockReset();
   // default to the built-in no-op shape
   getEnabledCustomAgents.mockResolvedValue([]);
   pickCustomAgent.mockReturnValue(null);
+  isCustomAgentEnabled.mockResolvedValue(true); // ADR-039: authoritative re-check passes by default
+
   resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
   classifyRoute.mockReset();
   classifyRoute.mockResolvedValue({ primary: 'ops', ranked: [{ key: 'ops', score: 0, active: false }], method: 'regex' });
@@ -215,6 +220,21 @@ describe('hybrid routing (ADR-038)', () => {
     const res = await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) }));
     await readStream(res);
     expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything(), null);
+  });
+
+  it('fail-closed revocation: a disabled custom agent is NOT used — falls back to the gateway', async () => {
+    delete process.env.HYBRID_ROUTING_ENABLED;            // hybrid off → gateway = pickGateway
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('security');
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance' }]); // 30s-stale cache still lists it
+    pickCustomAgent.mockReturnValue('compliance');
+    isCustomAgentEnabled.mockResolvedValue(false);        // authoritative Aurora check: revoked
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) })));
+    expect(isCustomAgentEnabled).toHaveBeenCalledWith('compliance');
+    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null); // gateway, not the revoked custom
   });
 });
 

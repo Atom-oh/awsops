@@ -45,12 +45,14 @@ describe('resolveAgent', () => {
 });
 
 describe('resolveAgent — Phase 2 server-side tool-allowlist enforcement', () => {
-  // A custom agent declaring two tools at the security gateway (KNOWN_TOOL_CATALOG.security = null).
+  // A custom agent declaring two tools at the security gateway. Both are REAL IAM tools present in
+  // KNOWN_TOOL_CATALOG.security (ADR-039 Task 3 populated it from create_targets.py iam-mcp-target),
+  // so the known-catalog intersection keeps both — the test still demonstrates the skill-declared union.
   const customTwoTools: AgentWithSkills = {
     ...custom,
     skills: [
       { name: 'cis-pack', instructions: 'Always cite the control id.', contentHash: 'h1', ord: 0,
-        toolAllowlist: ['simulate_principal_policy', 'get_account_authorization_details'] },
+        toolAllowlist: ['simulate_principal_policy', 'get_account_security_summary'] },
     ],
   };
 
@@ -70,9 +72,9 @@ describe('resolveAgent — Phase 2 server-side tool-allowlist enforcement', () =
     expect(spec).toEqual(resolveAgent('security', []));
   });
 
-  it('no space ⇒ Phase-1 toolAllowlist (skill-declared union; KNOWN_TOOL_CATALOG.security is null)', () => {
+  it('no space ⇒ skill-declared union ∩ known security catalog (both tools are valid IAM tools)', () => {
     const spec = resolveAgent('compliance', [customTwoTools]); // no 3rd arg
-    expect(spec.toolAllowlist).toEqual(['simulate_principal_policy', 'get_account_authorization_details']);
+    expect(spec.toolAllowlist).toEqual(['simulate_principal_policy', 'get_account_security_summary']);
     expect(spec.spaceVersion).toBeUndefined();
   });
 
