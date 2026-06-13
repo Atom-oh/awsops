@@ -14,6 +14,7 @@ import StatCard from '@/components/ui/StatCard';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { aggregateNodeResources, type NodeRow, type PodRow, type NodeResourceAgg } from '@/lib/eks-resources';
 import { podStatusCounts, deploymentHealth, serviceTypeCounts } from '@/lib/eks-tab-stats';
+import OpencostPanel from './OpencostPanel';
 
 type Row = Record<string, unknown>;
 type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'events' | 'diagnosis';
@@ -248,6 +249,10 @@ export default function EksClusterPage() {
         <div className="overflow-x-auto">
           <SegmentedControl options={TABS} value={tab} onChange={(v) => setTab(v as Tab)} />
         </div>
+
+        {/* Cluster-scoped OpenCost: read-only install status + download guide (collapses when
+            installed, auto-opens the guide when not). Shown on every tab. */}
+        <OpencostPanel cluster={cluster} />
 
         {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
 

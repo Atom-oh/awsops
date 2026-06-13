@@ -9,13 +9,28 @@ beforeEach(() => { vi.unstubAllGlobals(); });
 
 function mockKind(handlers: Record<string, unknown[]>) {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    const kind = new URL(String(url), 'http://x').searchParams.get('kind') ?? '';
+    const u = String(url);
+    // The OpenCost panel (mounted on this page) fetches /api/me + /api/opencost/* — answer
+    // them deterministically so the panel mounts without disturbing the per-tab assertions.
+    if (u.endsWith('/api/me')) return { ok: true, status: 200, json: async () => ({ sub: 'u', groups: [], isAdmin: false }) } as Response;
+    if (u.includes('/api/opencost/')) {
+      if (u.includes('/status')) return { ok: true, status: 200, json: async () => ({ installed: false, ready: false }) } as Response;
+      if (u.includes('/bundle')) return { ok: true, status: 200, json: async () => ({ valuesYaml: '', installSh: '' }) } as Response;
+      return { ok: true, status: 200, json: async () => ({ cluster: 'c1', config: null }) } as Response;
+    }
+    const kind = new URL(u, 'http://x').searchParams.get('kind') ?? '';
     const rows = handlers[kind] ?? [];
     return { ok: true, status: 200, json: async () => ({ kind, rows }) } as Response;
   }));
 }
 
 describe('EKS [cluster] per-tab KPI/viz', () => {
+  it('mounts the per-cluster OpenCost panel', async () => {
+    mockKind({ nodes: [] });
+    render(<EksClusterPage />);
+    await waitFor(() => expect(screen.getByText('OpenCost')).toBeTruthy());
+  });
+
   it('pods tab: KPI counts stay pre-filter while the table filters', async () => {
     mockKind({
       pods: [
