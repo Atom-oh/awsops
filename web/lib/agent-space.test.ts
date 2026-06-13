@@ -90,36 +90,42 @@ describe('getAgentSpace (degrade-safe)', () => {
     await expect(getAgentSpace('self')).resolves.toBeNull();
   });
 
-  it('maps a present row into AgentSpace, defaulting nullish arrays', async () => {
+  it('maps a present row into AgentSpace, incl. integration + flag columns (nullish-safe)', async () => {
     process.env.AURORA_ENDPOINT = 'aurora.example';
     query.mockResolvedValueOnce({ rows: [{
       account_id: '180294183052', enabled_agent_ids: [1, 2], enabled_skill_ids: null,
-      tool_allowlist: ['a'], version: 3,
+      enabled_integration_ids: [7], tool_allowlist: ['a'],
+      allow_private_datasource: true, non_admin_authoring: null, version: 3,
     }] });
     const sp = await getAgentSpace('180294183052');
     expect(sp).toEqual({
       accountId: '180294183052', enabledAgentIds: [1, 2], enabledSkillIds: [],
-      toolAllowlist: ['a'], version: 3,
+      enabledIntegrationIds: [7], toolAllowlist: ['a'],
+      allowPrivateDatasource: true, nonAdminAuthoring: false, version: 3,
     });
+    expect(query.mock.calls[0][0]).toMatch(/enabled_integration_ids/i);
+    expect(query.mock.calls[0][0]).toMatch(/allow_private_datasource/i);
   });
 });
 
 describe('upsertAgentSpace', () => {
-  it('inserts with version bump on conflict + writes an audit row', async () => {
+  it('inserts with version bump + persists enabled_integration_ids + writes an audit row', async () => {
     query.mockResolvedValueOnce({ rows: [{
-      account_id: 'self', enabled_agent_ids: [1], enabled_skill_ids: [2],
-      tool_allowlist: ['a'], version: 2,
+      account_id: 'self', enabled_agent_ids: [1], enabled_skill_ids: [2], enabled_integration_ids: [9],
+      tool_allowlist: ['a'], allow_private_datasource: false, non_admin_authoring: false, version: 2,
     }] });
     const out = await upsertAgentSpace({
-      accountId: 'self', enabledAgentIds: [1], enabledSkillIds: [2], toolAllowlist: ['a'], actor: 'admin@x',
+      accountId: 'self', enabledAgentIds: [1], enabledSkillIds: [2], enabledIntegrationIds: [9], toolAllowlist: ['a'], actor: 'admin@x',
     });
     expect(out.version).toBe(2);
+    expect(out.enabledIntegrationIds).toEqual([9]);
     const [sql, params] = query.mock.calls[0];
     expect(sql).toMatch(/INSERT INTO agent_spaces/i);
     expect(sql).toMatch(/ON CONFLICT \(account_id\) DO UPDATE/i);
+    expect(sql).toMatch(/enabled_integration_ids\s*=\s*EXCLUDED\.enabled_integration_ids/i);
     expect(sql).toMatch(/version\s*=\s*agent_spaces\.version \+ 1/i);
     expect(params[0]).toBe('self');
-    expect(params).toContain(JSON.stringify([1]));
+    expect(params).toContain(JSON.stringify([9])); // enabled_integration_ids param
     expect(auditCalls).toHaveLength(1);
     expect(auditCalls[0]).toMatchObject({ actor: 'admin@x', action: 'upsert', objectType: 'space', objectId: 'self' });
   });

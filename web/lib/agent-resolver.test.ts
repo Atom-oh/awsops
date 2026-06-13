@@ -1,6 +1,6 @@
 // web/lib/agent-resolver.test.ts
 import { describe, it, expect } from 'vitest';
-import { resolveAgent, pickCustomAgent, SAFEGUARD_LINE } from './agent-resolver';
+import { resolveAgent, pickCustomAgent, SAFEGUARD_LINE, MAX_PROVIDED_CONTEXT_CHARS } from './agent-resolver';
 import type { AgentWithSkills } from './catalog';
 import type { AgentSpace } from './agent-space';
 
@@ -114,5 +114,51 @@ describe('pickCustomAgent', () => {
   });
   it('ignores disabled candidates', () => {
     expect(pickCustomAgent('cis', [{ ...custom, enabled: false }])).toBeNull();
+  });
+});
+
+describe('resolveAgent — ADR-039 egress-READ integration injection', () => {
+  // custom is on the 'security' gateway whose KNOWN_TOOL_CATALOG has 14 IAM tools.
+  it('integration tools BYPASS the gateway catalog (a non-IAM tool survives) and union with skill tools', () => {
+    const spec = resolveAgent('compliance', [custom], null, [
+      { name: 'dd', exposedTools: ['datadog_query'], providedContext: { dashboards: 5 } },
+    ]);
+    // skill tool (in the security catalog) AND the external integration tool (catalog-bypassed) both present
+    expect(spec.toolAllowlist).toContain('simulate_principal_policy');
+    expect(spec.toolAllowlist).toContain('datadog_query');
+  });
+
+  it('appends an "## Integration context" block to the system prompt (after SAFEGUARD/persona/skills)', () => {
+    const spec = resolveAgent('compliance', [custom], null, [
+      { name: 'dd', exposedTools: [], providedContext: { topology: 'svc-graph' } },
+    ]);
+    expect(spec.systemPromptOverride).toMatch(/## Integration context/);
+    expect(spec.systemPromptOverride!.indexOf(SAFEGUARD_LINE)).toBe(0); // SAFEGUARD stays first
+    expect(spec.systemPromptOverride).toMatch(/svc-graph/);
+  });
+
+  it('caps the combined integration context at MAX_PROVIDED_CONTEXT_CHARS', () => {
+    const big = { name: 'big', exposedTools: [], providedContext: { blob: 'x'.repeat(5000) } };
+    const spec = resolveAgent('compliance', [custom], null, [big]);
+    // the integration block is bounded; total override is persona+skills + the capped block (+joins)
+    const block = spec.systemPromptOverride!.split('## Integration context')[1] ?? '';
+    expect(block.length).toBeLessThanOrEqual(MAX_PROVIDED_CONTEXT_CHARS + 2);
+    expect(spec.systemPromptOverride).toMatch(/…\[truncated\]/);
+  });
+
+  it('integration tools are still subject to a non-empty Agent Space cap', () => {
+    const space: AgentSpace = { accountId: 'a', toolAllowlist: ['datadog_query'], enabledAgentIds: [], enabledSkillIds: [], version: 1 };
+    const spec = resolveAgent('compliance', [custom], space, [
+      { name: 'dd', exposedTools: ['datadog_query', 'datadog_write'], providedContext: {} },
+    ]);
+    expect(spec.toolAllowlist).toContain('datadog_query');
+    expect(spec.toolAllowlist).not.toContain('datadog_write'); // space cap removed it
+  });
+
+  it('no integrations passed ⇒ behavior is unchanged (Phase-2 baseline)', () => {
+    const a = resolveAgent('compliance', [custom], null);
+    const b = resolveAgent('compliance', [custom], null, []);
+    expect(a.toolAllowlist).toEqual(b.toolAllowlist);
+    expect(a.systemPromptOverride).toEqual(b.systemPromptOverride);
   });
 });

@@ -41,32 +41,66 @@ export function pickCustomAgent(prompt: string, candidates: AgentWithSkills[]): 
  *                   allowlist; has NO effect on the built-in branch. No space (or a DB
  *                   miss/error from getAgentSpace returning null) ⇒ Phase-1 behavior.
  */
+// ADR-039 P2 — egress READ integration as the resolver sees it (only these contribute tools/context).
+export interface EgressReadIntegration {
+  name: string;
+  exposedTools: string[];
+  providedContext?: Record<string, unknown>;
+}
+
+// ADR-033 — bound the integration context injected into the prompt.
+export const MAX_PROVIDED_CONTEXT_CHARS = 2000;
+
+/** Render enabled egress-READ integrations' provided_context into a single bounded block. */
+function renderIntegrationContext(integrations: EgressReadIntegration[]): string {
+  const lines = integrations
+    .filter((i) => i.providedContext && Object.keys(i.providedContext).length > 0)
+    .map((i) => `- ${i.name}: ${JSON.stringify(i.providedContext)}`);
+  if (lines.length === 0) return '';
+  const block = `## Integration context\n${lines.join('\n')}`;
+  return block.length > MAX_PROVIDED_CONTEXT_CHARS
+    ? `${block.slice(0, MAX_PROVIDED_CONTEXT_CHARS - 14)}\n…[truncated]`
+    : block;
+}
+
+/**
+ * @param egressReadIntegrations enabled integrations with direction='egress' && capability='read'.
+ *   Only these contribute tools/context (ingress + READ_WRITE contribute NONE — writes go via the gate).
+ */
 export function resolveAgent(
   routeKey: string,
   candidates: AgentWithSkills[],
   space?: AgentSpace | null,
+  egressReadIntegrations: EgressReadIntegration[] = [],
 ): ResolvedAgentSpec {
   const custom = candidates.find((a) => a.name === routeKey && a.enabled && a.tier === 'custom');
   if (custom) {
     const ordered = [...custom.skills].sort((a, b) => a.ord - b.ord);
     const skillBlock = ordered.map((s) => s.instructions).filter(Boolean).join('\n\n');
-    const systemPromptOverride = [SAFEGUARD_LINE, custom.persona.trim(), skillBlock].filter(Boolean).join('\n\n');
+    const integrationBlock = renderIntegrationContext(egressReadIntegrations);
+    const systemPromptOverride = [SAFEGUARD_LINE, custom.persona.trim(), skillBlock, integrationBlock]
+      .filter(Boolean).join('\n\n');
     // Phase 2: server-side enforcement (ADR-031 Addendum #5) — OUTSIDE the model.
-    // skill-declared tools ∩ known catalog ∩ Agent Space cap. A skill cannot grant
-    // a tool the space does not allow. No space ⇒ Phase-1 advisory (skill ∩ catalog).
+    // Skill tools: ∩ known catalog ∩ Agent Space cap. Integration tools are EXTERNAL (not gateway-native)
+    // so they BYPASS the KNOWN_TOOL_CATALOG[gateway] narrowing (else e.g. a datadog tool is dropped on the
+    // security gateway) — they are still subject ONLY to the account space cap (a non-catalog gateway key
+    // makes intersectToolAllowlist apply the space cap without any catalog filter). Then union.
     const declared = ordered.flatMap((s) => s.toolAllowlist);
-    const enforced = intersectToolAllowlist(custom.gateway, declared, space);
+    const skillEnforced = intersectToolAllowlist(custom.gateway, declared, space);
+    const integTools = egressReadIntegrations.flatMap((i) => i.exposedTools ?? []);
+    const integEnforced = intersectToolAllowlist('__integration__', integTools, space);
+    const merged = Array.from(new Set([...skillEnforced, ...integEnforced]));
     return {
       tier: 'custom',
       gateway: custom.gateway,
       systemPromptOverride,
-      toolAllowlist: enforced.length ? enforced : undefined,
+      toolAllowlist: merged.length ? merged : undefined,
       agentName: custom.name,
       agentVersion: custom.version,
       skillHashes: ordered.map((s) => s.contentHash),
       spaceVersion: space?.version, // traceability; undefined when no space
     };
   }
-  // Built-in passthrough — UNCHANGED from Phase 1. Never tool-scoped; space has no effect.
+  // Built-in passthrough — UNCHANGED from Phase 1. Never tool-scoped; space/integrations have no effect.
   return { tier: 'builtin', gateway: routeKey, skill: routeKey, agentName: routeKey, skillHashes: [] };
 }

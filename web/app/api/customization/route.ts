@@ -105,6 +105,7 @@ export async function PUT(request: Request) {
       accountId,
       enabledAgentIds: toIds(body.enabledAgentIds),
       enabledSkillIds: toIds(body.enabledSkillIds),
+      enabledIntegrationIds: toIds(body.enabledIntegrationIds), // ADR-039 P2 — per-space integrations
       toolAllowlist: toStrs(body.toolAllowlist),
       actor,
     });

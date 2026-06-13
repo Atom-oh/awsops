@@ -5,6 +5,7 @@ import { classifyPrompt } from '@/lib/classifier';
 import { sectionByKey } from '@/lib/sections';
 import { getEnabledCustomAgents } from '@/lib/catalog-source';
 import { isCustomAgentEnabled } from '@/lib/catalog';
+import { getEnabledIntegrations } from '@/lib/integrations';
 import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
@@ -67,7 +68,12 @@ export async function POST(request: Request) {
   // a just-disabled agent is unusable immediately on every instance (not after the cache TTL).
   const customPick = (hybridOn && pinIsValid) ? null : pickCustomAgent(prompt, customAgents);
   const routeKey = customPick && (await isCustomAgentEnabled(customPick)) ? customPick : gateway;
-  const spec = resolveAgent(routeKey, customAgents, space);       // server-side enforcement
+  // ADR-039 P2: enabled egress-READ integrations contribute tools + bounded context (per-space scoped).
+  // ingress + READ_WRITE contribute nothing here (writes go via the mutating gate).
+  const egressReadIntegrations = (await getEnabledIntegrations(accountId))
+    .filter((i) => i.direction === 'egress' && i.capability === 'read')
+    .map((i) => ({ name: i.name, exposedTools: i.exposedTools, providedContext: i.providedContext }));
+  const spec = resolveAgent(routeKey, customAgents, space, egressReadIntegrations); // server-side enforcement
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).
   const inactiveSection = hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
     ? sectionByKey(spec.gateway)! : null;

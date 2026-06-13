@@ -9,6 +9,11 @@ export interface AgentSpace {
   enabledSkillIds: number[];
   toolAllowlist: string[];
   version: number;
+  // ADR-039 P2 — optional so existing AgentSpace literals/fixtures stay valid; getAgentSpace/
+  // upsertAgentSpace always populate them (with defaults).
+  enabledIntegrationIds?: number[];     // per-space enabled integrations
+  allowPrivateDatasource?: boolean;     // ADR-011 private-egress opt-in (default false)
+  nonAdminAuthoring?: boolean;          // §10 non-admin authoring flag (default false)
 }
 
 /**
@@ -63,7 +68,8 @@ export async function getAgentSpace(accountId: string): Promise<AgentSpace | nul
   if (!process.env.AURORA_ENDPOINT) return null;
   try {
     const { rows } = await getPool().query(
-      `SELECT account_id, enabled_agent_ids, enabled_skill_ids, tool_allowlist, version
+      `SELECT account_id, enabled_agent_ids, enabled_skill_ids, enabled_integration_ids, tool_allowlist,
+              allow_private_datasource, non_admin_authoring, version
        FROM agent_spaces WHERE account_id = $1`, [accountId]);
     if (rows.length === 0) return null; // NO ROW ⇒ Phase-1 global behavior
     const r = rows[0] as Record<string, unknown>;
@@ -71,7 +77,10 @@ export async function getAgentSpace(accountId: string): Promise<AgentSpace | nul
       accountId: r.account_id as string,
       enabledAgentIds: (r.enabled_agent_ids as number[]) ?? [],
       enabledSkillIds: (r.enabled_skill_ids as number[]) ?? [],
+      enabledIntegrationIds: (r.enabled_integration_ids as number[]) ?? [],
       toolAllowlist: (r.tool_allowlist as string[]) ?? [],
+      allowPrivateDatasource: r.allow_private_datasource === true,
+      nonAdminAuthoring: r.non_admin_authoring === true,
       version: r.version as number,
     };
   } catch {
@@ -81,20 +90,25 @@ export async function getAgentSpace(accountId: string): Promise<AgentSpace | nul
 
 export async function upsertAgentSpace(input: {
   accountId: string; enabledAgentIds: number[]; enabledSkillIds: number[]; toolAllowlist: string[];
-  actor: string;
+  enabledIntegrationIds?: number[]; actor: string;
 }): Promise<AgentSpace> {
+  // enabled_integration_ids is persisted here; allow_private_datasource / non_admin_authoring are NOT
+  // in the SET clause → preserved across upsert (default false on first insert), returned for the mapped result.
   const { rows } = await getPool().query(
-    `INSERT INTO agent_spaces (account_id, enabled_agent_ids, enabled_skill_ids, tool_allowlist, version)
-     VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, 1)
+    `INSERT INTO agent_spaces (account_id, enabled_agent_ids, enabled_skill_ids, enabled_integration_ids, tool_allowlist, version)
+     VALUES ($1, $2::jsonb, $3::jsonb, $5::jsonb, $4::jsonb, 1)
      ON CONFLICT (account_id) DO UPDATE
-       SET enabled_agent_ids = EXCLUDED.enabled_agent_ids,
-           enabled_skill_ids = EXCLUDED.enabled_skill_ids,
-           tool_allowlist    = EXCLUDED.tool_allowlist,
-           version           = agent_spaces.version + 1,
-           updated_at        = NOW()
-     RETURNING account_id, enabled_agent_ids, enabled_skill_ids, tool_allowlist, version`,
+       SET enabled_agent_ids       = EXCLUDED.enabled_agent_ids,
+           enabled_skill_ids       = EXCLUDED.enabled_skill_ids,
+           enabled_integration_ids = EXCLUDED.enabled_integration_ids,
+           tool_allowlist          = EXCLUDED.tool_allowlist,
+           version                 = agent_spaces.version + 1,
+           updated_at              = NOW()
+     RETURNING account_id, enabled_agent_ids, enabled_skill_ids, enabled_integration_ids, tool_allowlist,
+               allow_private_datasource, non_admin_authoring, version`,
     [input.accountId, JSON.stringify(input.enabledAgentIds),
-     JSON.stringify(input.enabledSkillIds), JSON.stringify(input.toolAllowlist)],
+     JSON.stringify(input.enabledSkillIds), JSON.stringify(input.toolAllowlist),
+     JSON.stringify(input.enabledIntegrationIds ?? [])],
   );
   const r = rows[0] as Record<string, unknown>;
   await writeAudit({
@@ -104,7 +118,10 @@ export async function upsertAgentSpace(input: {
     accountId: r.account_id as string,
     enabledAgentIds: (r.enabled_agent_ids as number[]) ?? [],
     enabledSkillIds: (r.enabled_skill_ids as number[]) ?? [],
+    enabledIntegrationIds: (r.enabled_integration_ids as number[]) ?? [],
     toolAllowlist: (r.tool_allowlist as string[]) ?? [],
+    allowPrivateDatasource: r.allow_private_datasource === true,
+    nonAdminAuthoring: r.non_admin_authoring === true,
     version: r.version as number,
   };
 }
