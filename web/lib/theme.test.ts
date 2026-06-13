@@ -11,9 +11,9 @@ afterEach(() => {
 });
 
 describe('theme model', () => {
-  it('exposes the three themes and a teal default', () => {
+  it('exposes the three themes and a cobalt default', () => {
     expect(THEMES).toEqual(['teal', 'cobalt', 'teal-console']);
-    expect(DEFAULT_THEME).toBe('teal');
+    expect(DEFAULT_THEME).toBe('cobalt');
     expect(THEME_LABELS['teal-console']).toBe('Console');
   });
 
@@ -24,9 +24,9 @@ describe('theme model', () => {
   });
 
   it('getStoredTheme returns default when unset or invalid', () => {
-    expect(getStoredTheme()).toBe('teal');
+    expect(getStoredTheme()).toBe('cobalt');
     localStorage.setItem(STORAGE_KEY, 'bogus');
-    expect(getStoredTheme()).toBe('teal');
+    expect(getStoredTheme()).toBe('cobalt');
   });
 
   it('setStoredTheme + getStoredTheme round-trips', () => {

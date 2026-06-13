@@ -1,7 +1,7 @@
 export const THEMES = ['teal', 'cobalt', 'teal-console'] as const;
 export type Theme = (typeof THEMES)[number];
 
-export const DEFAULT_THEME: Theme = 'teal';
+export const DEFAULT_THEME: Theme = 'cobalt';
 export const STORAGE_KEY = 'awsops-theme';
 export const THEME_EVENT = 'awsops:themechange';
 

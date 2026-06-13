@@ -8,11 +8,11 @@ export interface ChartColors {
   palette: string[];
 }
 
-// First-paint / SSR fallback = the default (teal) theme values.
+// First-paint / SSR fallback = the default (cobalt) theme values.
 const FALLBACK: ChartColors = {
-  lead: '#01A88D',
-  leadStrong: '#0A6B5A',
-  palette: ['#01A88D', '#528DF8', '#7B26FF', '#39C2B0', '#7D8A96'],
+  lead: '#528DF8',
+  leadStrong: '#1F54C2',
+  palette: ['#528DF8', '#01A88D', '#7B26FF', '#39C2B0', '#7D8A96'],
 };
 
 function read(): ChartColors {

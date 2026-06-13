@@ -6,7 +6,7 @@ export const metadata = { title: 'AWSops' };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ko" data-theme="teal" suppressHydrationWarning>
+    <html lang="ko" data-theme="cobalt" suppressHydrationWarning>
       <head>
         {/* No-flash: set data-theme from localStorage before first paint. */}
         <script
