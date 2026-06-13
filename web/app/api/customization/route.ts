@@ -47,6 +47,7 @@ export async function POST(request: Request) {
     const id = await upsertSkill({
       name: String(body.name), description: String(body.description), instructions: String(body.instructions),
       toolAllowlist: (body.toolAllowlist as string[]) ?? [], tier: 'custom', createdBy: g.user!.email,
+      agentTypes: (body.agentTypes as string[]) ?? undefined, referenceKeys: (body.referenceKeys as string[]) ?? undefined,
     });
     await writeAudit({ actor: g.user!.email ?? g.user!.sub, action: 'upsert', objectType: 'skill', objectId: String(id) });
     return json({ ok: true, id }, 200);
@@ -58,6 +59,9 @@ export async function POST(request: Request) {
       name: String(body.name), description: String(body.description), persona: String(body.persona ?? ''),
       routingKeywords: (body.routingKeywords as string[]) ?? [], gateway: String(body.gateway),
       model: body.model ? String(body.model) : undefined, tier: 'custom', createdBy: g.user!.email,
+      agentType: body.agentType ? String(body.agentType) : undefined,
+      gateways: (body.gateways as string[]) ?? undefined,
+      responseLanguage: body.responseLanguage ? String(body.responseLanguage) : undefined,
     });
     await writeAudit({ actor: g.user!.email ?? g.user!.sub, action: 'upsert', objectType: 'agent', objectId: String(id) });
     return json({ ok: true, id }, 200);

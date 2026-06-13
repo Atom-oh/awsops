@@ -12,23 +12,35 @@ export interface SkillInput {
   toolAllowlist: string[];
   tier: Tier;
   createdBy?: string;
+  agentTypes?: string[];      // ADR-039: agent-type targeting (default ['generic'])
+  referenceKeys?: string[];   // ADR-039: S3 reference/asset object keys
 }
 export interface AgentInput {
   name: string;
   description: string;
   persona: string;
   routingKeywords: string[];
-  gateway: string;
+  gateway: string;            // legacy primary gateway (kept; = gateways[0])
   model?: string;
   tier: Tier;
   createdBy?: string;
+  agentType?: string;         // ADR-039: generic|on_demand|triage|rca|mitigation|evaluation (default 'generic')
+  gateways?: string[];        // ADR-039: multi-gateway frontier scope (default [gateway])
+  responseLanguage?: string;  // ADR-039: Agent Space response language
 }
 export interface SkillRef {
   name: string; instructions: string; contentHash: string; ord: number; toolAllowlist: string[];
 }
+export interface SkillRow {
+  id: number; name: string; description: string; tier: Tier; enabled: boolean; version: number;
+  contentHash: string; agentTypes: string[]; referenceKeys: string[];
+}
 export interface AgentWithSkills {
   id: number; name: string; description: string; persona: string; gateway: string;
   tier: Tier; version: number; enabled: boolean; routingKeywords: string[]; skills: SkillRef[];
+  // ADR-039 frontier-agent fields — optional so existing call sites/fixtures stay valid;
+  // listAgentsWithSkills always populates them (with defaults) from the new columns.
+  agentType?: string; gateways?: string[]; responseLanguage?: string | null;
 }
 
 /** SHA-256 over canonical JSON of integrity-relevant fields. Order-independent on toolAllowlist. */
@@ -43,32 +55,40 @@ export function computeSkillHash(s: { name: string; description: string; instruc
 export async function upsertSkill(s: SkillInput): Promise<number> {
   const hash = computeSkillHash(s);
   const { rows } = await getPool().query(
-    `INSERT INTO skills (name, description, instructions, tool_allowlist, tier, content_hash, created_by, enabled)
-     VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7, false)
+    `INSERT INTO skills (name, description, instructions, tool_allowlist, tier, content_hash, created_by, agent_types, reference_keys, enabled)
+     VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,$9::jsonb, false)
      ON CONFLICT (name) DO UPDATE
        SET description = EXCLUDED.description,
            instructions = EXCLUDED.instructions,
            tool_allowlist = EXCLUDED.tool_allowlist,
            content_hash = EXCLUDED.content_hash,
+           agent_types = EXCLUDED.agent_types,
+           reference_keys = EXCLUDED.reference_keys,
            version = skills.version + 1,
            enabled = false,
            updated_at = NOW()
      RETURNING id`,
-    [s.name, s.description, s.instructions, JSON.stringify(s.toolAllowlist), s.tier, hash, s.createdBy ?? null],
+    [s.name, s.description, s.instructions, JSON.stringify(s.toolAllowlist), s.tier, hash, s.createdBy ?? null,
+     JSON.stringify(s.agentTypes ?? ['generic']), JSON.stringify(s.referenceKeys ?? [])],
   );
   return rows[0].id;
 }
 
 export async function upsertAgent(a: AgentInput): Promise<number> {
+  // gateways defaults to [gateway] when the caller doesn't supply a multi-gateway scope.
+  const gateways = a.gateways && a.gateways.length ? a.gateways : [a.gateway];
   const { rows } = await getPool().query(
-    `INSERT INTO agents (name, description, persona, routing_keywords, gateway, model, tier, created_by, enabled)
-     VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8, false)
+    `INSERT INTO agents (name, description, persona, routing_keywords, gateway, model, tier, created_by, agent_type, gateways, response_language, enabled)
+     VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10::jsonb,$11, false)
      ON CONFLICT (name) DO UPDATE
        SET description = EXCLUDED.description, persona = EXCLUDED.persona,
            routing_keywords = EXCLUDED.routing_keywords, gateway = EXCLUDED.gateway,
-           model = EXCLUDED.model, version = agents.version + 1, enabled = false, updated_at = NOW()
+           model = EXCLUDED.model, agent_type = EXCLUDED.agent_type, gateways = EXCLUDED.gateways,
+           response_language = EXCLUDED.response_language,
+           version = agents.version + 1, enabled = false, updated_at = NOW()
      RETURNING id`,
-    [a.name, a.description, a.persona, JSON.stringify(a.routingKeywords), a.gateway, a.model ?? null, a.tier, a.createdBy ?? null],
+    [a.name, a.description, a.persona, JSON.stringify(a.routingKeywords), a.gateway, a.model ?? null, a.tier,
+     a.createdBy ?? null, a.agentType ?? 'generic', JSON.stringify(gateways), a.responseLanguage ?? null],
   );
   return rows[0].id;
 }
@@ -87,13 +107,14 @@ export async function setEnabled(kind: 'skill' | 'agent', id: number, enabled: b
   await getPool().query(`UPDATE ${table} SET enabled = $1, updated_at = NOW() WHERE id = $2 AND tier = 'custom'`, [enabled, id]);
 }
 
-export async function listSkills(): Promise<Array<{ id: number; name: string; description: string; tier: Tier; enabled: boolean; version: number; contentHash: string }>> {
+export async function listSkills(): Promise<SkillRow[]> {
   const { rows } = await getPool().query(
-    `SELECT id, name, description, tier, enabled, version, content_hash FROM skills ORDER BY name`,
+    `SELECT id, name, description, tier, enabled, version, content_hash, agent_types, reference_keys FROM skills ORDER BY name`,
   );
   return rows.map((r: Record<string, unknown>) => ({
     id: r.id as number, name: r.name as string, description: r.description as string,
     tier: r.tier as Tier, enabled: r.enabled as boolean, version: r.version as number, contentHash: r.content_hash as string,
+    agentTypes: (r.agent_types as string[]) ?? ['generic'], referenceKeys: (r.reference_keys as string[]) ?? [],
   }));
 }
 
@@ -101,7 +122,7 @@ export async function listAgentsWithSkills(opts?: { enabledOnly?: boolean }): Pr
   const where = opts?.enabledOnly ? 'WHERE a.enabled = true' : '';
   const { rows } = await getPool().query(
     `SELECT a.id, a.name, a.description, a.persona, a.gateway, a.tier, a.version, a.enabled,
-            a.routing_keywords,
+            a.routing_keywords, a.agent_type, a.gateways, a.response_language,
             COALESCE(json_agg(json_build_object(
               'name', s.name, 'instructions', s.instructions, 'content_hash', s.content_hash,
               'ord', ags.ord, 'tool_allowlist', s.tool_allowlist
@@ -118,6 +139,9 @@ export async function listAgentsWithSkills(opts?: { enabledOnly?: boolean }): Pr
     persona: r.persona as string, gateway: r.gateway as string, tier: r.tier as Tier,
     version: r.version as number, enabled: r.enabled as boolean,
     routingKeywords: (r.routing_keywords as string[]) ?? [],
+    agentType: (r.agent_type as string) ?? 'generic',
+    gateways: (r.gateways as string[]) ?? [],
+    responseLanguage: (r.response_language as string) ?? null,
     skills: ((r.skills as Array<Record<string, unknown>>) ?? []).map((sk) => ({
       name: sk.name as string, instructions: sk.instructions as string,
       contentHash: sk.content_hash as string, ord: sk.ord as number,

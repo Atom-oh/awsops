@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
 
-import { computeSkillHash, upsertSkill, listAgentsWithSkills, writeAudit, isCustomAgentEnabled } from './catalog';
+import { computeSkillHash, upsertSkill, upsertAgent, listSkills, listAgentsWithSkills, writeAudit, isCustomAgentEnabled } from './catalog';
 
 beforeEach(() => query.mockReset());
 
@@ -46,6 +46,61 @@ describe('catalog', () => {
     query.mockResolvedValueOnce({ rows: [] });
     await writeAudit({ actor: 'a@x', action: 'upsert', objectType: 'skill', objectId: '1' });
     expect(query.mock.calls[0][0]).toMatch(/INSERT INTO customization_audit/i);
+  });
+
+  it('upsertSkill persists agent_types + reference_keys (default agent_types=[generic])', async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: 5 }] });
+    await upsertSkill({ name: 's', description: 'd', instructions: 'i', toolAllowlist: [], tier: 'custom' });
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/agent_types/i);
+    expect(sql).toMatch(/reference_keys/i);
+    expect(params).toContain(JSON.stringify(['generic'])); // default applied
+  });
+
+  it('upsertAgent persists agent_type, gateways (defaults to [gateway]) + response_language', async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: 7 }] });
+    await upsertAgent({ name: 'devx', description: 'd', persona: 'p', routingKeywords: ['x'], gateway: 'ops', tier: 'custom' });
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/agent_type/i);
+    expect(sql).toMatch(/gateways/i);
+    expect(sql).toMatch(/response_language/i);
+    expect(params).toContain('generic');               // agent_type default
+    expect(params).toContain(JSON.stringify(['ops']));  // gateways default = [gateway]
+  });
+
+  it('upsertAgent honors an explicit multi-gateway scope + agent_type', async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: 8 }] });
+    await upsertAgent({ name: 'devops', description: 'd', persona: 'p', routingKeywords: [], gateway: 'ops',
+      tier: 'builtin', agentType: 'triage', gateways: ['ops', 'monitoring'] });
+    const [, params] = query.mock.calls[0];
+    expect(params).toContain('triage');
+    expect(params).toContain(JSON.stringify(['ops', 'monitoring']));
+  });
+
+  it('listSkills returns agentTypes + referenceKeys (defaults when null)', async () => {
+    query.mockResolvedValueOnce({ rows: [
+      { id: 1, name: 's1', description: 'd', tier: 'custom', enabled: true, version: 1, content_hash: 'h',
+        agent_types: ['triage'], reference_keys: ['s3://k'] },
+      { id: 2, name: 's2', description: 'd', tier: 'custom', enabled: false, version: 1, content_hash: 'h2',
+        agent_types: null, reference_keys: null },
+    ]});
+    const skills = await listSkills();
+    expect(skills[0].agentTypes).toEqual(['triage']);
+    expect(skills[0].referenceKeys).toEqual(['s3://k']);
+    expect(skills[1].agentTypes).toEqual(['generic']); // null → default
+    expect(skills[1].referenceKeys).toEqual([]);
+  });
+
+  it('listAgentsWithSkills returns agentType/gateways/responseLanguage (defaults when absent)', async () => {
+    query.mockResolvedValueOnce({ rows: [
+      { id: 1, name: 'devops', description: 'd', persona: 'P', gateway: 'ops', tier: 'builtin', version: 1,
+        enabled: true, routing_keywords: [], agent_type: 'generic', gateways: ['ops', 'monitoring'],
+        response_language: 'ko', skills: [] },
+    ]});
+    const agents = await listAgentsWithSkills();
+    expect(agents[0].agentType).toBe('generic');
+    expect(agents[0].gateways).toEqual(['ops', 'monitoring']);
+    expect(agents[0].responseLanguage).toBe('ko');
   });
 });
 
