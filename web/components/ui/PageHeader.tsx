@@ -26,17 +26,17 @@ export default function PageHeader({
   className?: string;
 }) {
   return (
-    <header className={cn('flex items-start justify-between gap-4 px-8 pt-[26px] pb-5 border-b border-ink-100', className)}>
+    <header className={cn('flex items-start justify-between gap-4 px-8 pt-[26px] pb-5 bg-chrome border-b border-chrome-border', className)}>
       <div className="min-w-0">
         <div className="flex items-center gap-2.5">
-          <h1 className="text-[24px] font-semibold tracking-[-0.01em] text-ink-800 leading-tight">{title}</h1>
+          <h1 className="text-[24px] font-semibold tracking-[-0.01em] text-chrome-fg leading-tight">{title}</h1>
           {live && (
             <Badge tone="positive" variant="soft" dot>
               실시간
             </Badge>
           )}
         </div>
-        {subtitle != null && <p className="text-[14px] text-ink-500 mt-1.5 max-w-[680px]">{subtitle}</p>}
+        {subtitle != null && <p className="text-[14px] text-chrome-fg-muted mt-1.5 max-w-[680px]">{subtitle}</p>}
       </div>
       {right != null && <div className="flex items-center gap-3 shrink-0">{right}</div>}
     </header>
