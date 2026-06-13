@@ -41,9 +41,11 @@ describe('EKS [cluster] per-tab KPI/viz', () => {
     render(<EksClusterPage />);
 
     fireEvent.click(screen.getByText('Pods'));
-    await waitFor(() => expect(screen.getByText('p1')).toBeTruthy());
+    // DataTable renders both the desktop table and the mobile card list, so each
+    // cell value appears twice in jsdom → assert via getAllByText.
+    await waitFor(() => expect(screen.getAllByText('p1').length).toBeGreaterThan(0));
     // both pods present initially
-    expect(screen.getByText('p2')).toBeTruthy();
+    expect(screen.getAllByText('p2').length).toBeGreaterThan(0);
 
     // The Pending KPI tile (StatCard eyebrow) shows 1 (pre-filter). 'Pending'
     // also appears as p2's status cell, so scope to the uppercase eyebrow tile.
@@ -59,7 +61,7 @@ describe('EKS [cluster] per-tab KPI/viz', () => {
     fireEvent.change(screen.getByPlaceholderText('검색…'), { target: { value: 'p1' } });
     await waitFor(() => expect(screen.queryByText('p2')).toBeNull());
     // table now shows only p1
-    expect(screen.getByText('p1')).toBeTruthy();
+    expect(screen.getAllByText('p1').length).toBeGreaterThan(0);
 
     // KPI is computed from allRows (pre-filter) → Pending tile still 1, even
     // though p2 (the only Pending pod) is filtered out of the table.
@@ -76,8 +78,8 @@ describe('EKS [cluster] per-tab KPI/viz', () => {
     const { container } = render(<EksClusterPage />);
 
     fireEvent.click(screen.getByText('Events'));
-    await waitFor(() => expect(screen.getByText('New')).toBeTruthy());
-    expect(screen.getByText('Old')).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText('New').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Old').length).toBeGreaterThan(0);
 
     // newest (lastSeenTs 9) must appear before oldest (1), despite server order.
     const text = container.textContent ?? '';
@@ -94,7 +96,7 @@ describe('EKS [cluster] per-tab KPI/viz', () => {
     render(<EksClusterPage />);
 
     fireEvent.click(screen.getByText('Deployments'));
-    await waitFor(() => expect(screen.getByText('ok')).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText('ok').length).toBeGreaterThan(0));
 
     // Degraded KPI present (bad is 1/3 → 1 degraded).
     expect(screen.getByText('Degraded')).toBeTruthy();
