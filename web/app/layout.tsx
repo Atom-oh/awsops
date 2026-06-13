@@ -3,6 +3,7 @@ import ShellGate from '@/components/shell/ShellGate';
 import { LanguageProvider } from '@/components/shell/LanguageProvider';
 
 export const metadata = { title: 'AWSops' };
+export const viewport = { width: 'device-width', initialScale: 1 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
