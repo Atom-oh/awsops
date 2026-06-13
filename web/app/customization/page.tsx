@@ -1,11 +1,13 @@
 'use client';
 import { useEffect, useState } from 'react';
 
-interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string }>; }
-interface SkillRow { id: number; name: string; description: string; tier: string; enabled: boolean; version: number; }
+interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string }>; agentType?: string; gateways?: string[]; }
+interface SkillRow { id: number; name: string; description: string; tier: string; enabled: boolean; version: number; agentTypes?: string[]; }
 interface SpaceState { enabledAgentIds: number[]; enabledSkillIds: number[]; toolAllowlist: string[]; version?: number }
 
 const GATEWAYS = ['network', 'container', 'iac', 'data', 'security', 'monitoring', 'cost', 'ops'];
+// ADR-039 agent-type lifecycle roles (mirrors web/lib/skill-validation.ts AGENT_TYPES).
+const AGENT_TYPES = ['generic', 'on_demand', 'triage', 'rca', 'mitigation', 'evaluation'];
 
 export default function CustomizationPage() {
   const [agents, setAgents] = useState<AgentRow[]>([]);
@@ -13,7 +15,8 @@ export default function CustomizationPage() {
   const [denied, setDenied] = useState(false);
   const [noAurora, setNoAurora] = useState(false);
   const [msg, setMsg] = useState('');
-  const [agentForm, setAgentForm] = useState({ name: '', description: '', persona: '', gateway: 'ops', routingKeywords: '' });
+  const [agentForm, setAgentForm] = useState({ name: '', description: '', persona: '', gateway: 'ops', routingKeywords: '', agentType: 'generic', model: '', responseLanguage: '', gateways: [] as string[] });
+  const [skillForm, setSkillForm] = useState({ name: '', description: '', instructions: '', agentTypes: ['generic'] as string[] });
   const [accountId, setAccountId] = useState('self');
   const [space, setSpace] = useState<SpaceState | null>(null);
   const [allowlistText, setAllowlistText] = useState('');
@@ -36,11 +39,32 @@ export default function CustomizationPage() {
   async function createAgent() {
     const res = await fetch('/api/customization', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'agent', ...agentForm, routingKeywords: agentForm.routingKeywords.split(',').map((s) => s.trim()).filter(Boolean) }),
+      body: JSON.stringify({
+        kind: 'agent', name: agentForm.name, description: agentForm.description, persona: agentForm.persona,
+        gateway: agentForm.gateway, agentType: agentForm.agentType,
+        model: agentForm.model || undefined, responseLanguage: agentForm.responseLanguage || undefined,
+        gateways: agentForm.gateways.length ? agentForm.gateways : undefined,
+        routingKeywords: agentForm.routingKeywords.split(',').map((s) => s.trim()).filter(Boolean),
+      }),
     });
     const d = await res.json();
     setMsg(res.ok ? `Created agent #${d.id} — disabled; enable below` : `Error: ${JSON.stringify(d.detail || d.error)}`);
     if (res.ok) load();
+  }
+  async function createSkill() {
+    const res = await fetch('/api/customization', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'skill', name: skillForm.name, description: skillForm.description, instructions: skillForm.instructions,
+        toolAllowlist: [], agentTypes: skillForm.agentTypes,
+      }),
+    });
+    const d = await res.json();
+    setMsg(res.ok ? `Created skill #${d.id} — disabled; enable below` : `Error: ${JSON.stringify(d.detail || d.error)}`);
+    if (res.ok) load();
+  }
+  function toggleInArray(arr: string[], v: string): string[] {
+    return arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
   }
   async function toggle(kind: 'agent' | 'skill', id: number, enabled: boolean) {
     await fetch('/api/customization', {
@@ -85,7 +109,41 @@ export default function CustomizationPage() {
           {GATEWAYS.map((g) => <option key={g} value={g}>{g}</option>)}
         </select>
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="routing keywords (comma-separated)" value={agentForm.routingKeywords} onChange={(e) => setAgentForm({ ...agentForm, routingKeywords: e.target.value })} />
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-[11px] text-ink-500">agent type</label>
+          <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={agentForm.agentType} onChange={(e) => setAgentForm({ ...agentForm, agentType: e.target.value })}>
+            {AGENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="model (optional)" value={agentForm.model} onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })} />
+          <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="response language (optional)" value={agentForm.responseLanguage} onChange={(e) => setAgentForm({ ...agentForm, responseLanguage: e.target.value })} />
+        </div>
+        <div className="text-[11px] text-ink-500">
+          <span className="mr-2">gateways (multi — defaults to the primary above)</span>
+          {GATEWAYS.map((g) => (
+            <label key={g} className="mr-2 inline-flex items-center gap-1">
+              <input type="checkbox" checked={agentForm.gateways.includes(g)} onChange={() => setAgentForm({ ...agentForm, gateways: toggleInArray(agentForm.gateways, g) })} />
+              {g}
+            </label>
+          ))}
+        </div>
         <button onClick={createAgent} className="rounded bg-claude-500 px-3 py-1 text-[12px] font-medium text-white">Create</button>
+      </section>
+
+      <section className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
+        <h2 className="text-[13px] font-semibold">New Skill</h2>
+        <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="name (kebab-case)" value={skillForm.name} onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} />
+        <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="description (≥100 chars recommended — describes when to use)" value={skillForm.description} onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} />
+        <textarea className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" rows={4} placeholder="instructions (Markdown)" value={skillForm.instructions} onChange={(e) => setSkillForm({ ...skillForm, instructions: e.target.value })} />
+        <div className="text-[11px] text-ink-500">
+          <span className="mr-2">agent types (targeting)</span>
+          {AGENT_TYPES.map((t) => (
+            <label key={t} className="mr-2 inline-flex items-center gap-1">
+              <input type="checkbox" checked={skillForm.agentTypes.includes(t)} onChange={() => setSkillForm({ ...skillForm, agentTypes: toggleInArray(skillForm.agentTypes, t) })} />
+              {t}
+            </label>
+          ))}
+        </div>
+        <button onClick={createSkill} className="rounded bg-claude-500 px-3 py-1 text-[12px] font-medium text-white">Create Skill</button>
       </section>
 
       <section className="space-y-2">
@@ -94,7 +152,7 @@ export default function CustomizationPage() {
           <div key={a.id} className="flex items-center justify-between rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
             <div>
               <span className="font-semibold">{a.name}</span>{' '}
-              <span className="text-ink-400">({a.tier}, gw={a.gateway}, v{a.version}, skills={a.skills.length})</span>
+              <span className="text-ink-400">({a.tier}, {a.agentType || 'generic'}, gw={(a.gateways && a.gateways.length ? a.gateways.join('+') : a.gateway)}, v{a.version}, skills={a.skills.length})</span>
               <div className="text-ink-500">{a.description}</div>
             </div>
             {a.tier === 'custom'
@@ -108,7 +166,7 @@ export default function CustomizationPage() {
         <h2 className="text-[13px] font-semibold">Skills</h2>
         {skills.map((s) => (
           <div key={s.id} className="flex items-center justify-between rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
-            <div><span className="font-semibold">{s.name}</span> <span className="text-ink-400">({s.tier}, v{s.version})</span><div className="text-ink-500">{s.description}</div></div>
+            <div><span className="font-semibold">{s.name}</span> <span className="text-ink-400">({s.tier}, v{s.version}{s.agentTypes && s.agentTypes.length ? `, ${s.agentTypes.join('/')}` : ''})</span><div className="text-ink-500">{s.description}</div></div>
             {s.tier === 'custom' && <button onClick={() => toggle('skill', s.id, s.enabled)} className={`rounded border px-2 py-1 text-[12px] ${s.enabled ? 'border-emerald-300 text-emerald-600' : 'border-ink-100 text-ink-400'}`}>{s.enabled ? 'Enabled' : 'Disabled'}</button>}
           </div>
         ))}
