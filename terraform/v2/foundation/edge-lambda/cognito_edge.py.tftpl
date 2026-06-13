@@ -10,7 +10,11 @@ CONFIG = {
 }
 
 def is_public(uri):
-    return uri.startswith('/_next/static/') or uri == '/api/health'
+    # ADR-022/ADR-039 webhook ingress carve-out: the alert/integration webhook receiver is the single
+    # Cognito-everywhere exception — external alarm sources cannot carry a Cognito cookie, so this exact
+    # path skips edge auth. The route itself verifies HMAC-SHA256 / SNS-subscription and is flag-gated on
+    # INCIDENT_LIFECYCLE_ENABLED (503 when off). Exact-match only — keep tightly bounded.
+    return uri.startswith('/_next/static/') or uri == '/api/health' or uri == '/api/incidents/webhook'
 
 _JWKS = None
 def get_jwks():
