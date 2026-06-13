@@ -113,7 +113,7 @@ export default function CostPage() {
         subtitle="Cost Explorer 기반 이번 달 누적 비용 · 서비스별 분포"
         right={<RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />}
       />
-      <div className="px-8 py-8 flex flex-col gap-6">
+      <div className="px-4 lg:px-8 py-8 flex flex-col gap-6">
         {err && (
           <div className="text-[13px] text-rose-600">
             로드 실패: {err} (Cost Explorer 권한/요금 또는 세션 만료 확인)
@@ -124,7 +124,7 @@ export default function CostPage() {
         {d && (
           <>
             {/* ---- KPI tiles ---- */}
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <StatTile
                 label={`이번 달 누적 (${d.currency})`}
                 value={usd(total)}
