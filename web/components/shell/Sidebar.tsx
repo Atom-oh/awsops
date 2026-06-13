@@ -64,10 +64,11 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   cloudwatch_alarm: Bell,
 };
 
-function NavItem({ href, label, icon: Icon, active, className }: { href: string; label: string; icon: LucideIcon; active: boolean; className?: string }) {
+function NavItem({ href, label, icon: Icon, active, className, onNavigate }: { href: string; label: string; icon: LucideIcon; active: boolean; className?: string; onNavigate?: () => void }) {
   return (
     <Link
       href={href}
+      onClick={onNavigate}
       className={cn(
         'flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium no-underline transition-colors duration-[120ms]',
         active
@@ -82,14 +83,20 @@ function NavItem({ href, label, icon: Icon, active, className }: { href: string;
   );
 }
 
-export default function Sidebar() {
+// `onNavigate` lets a host (e.g. the mobile drawer) close itself when a link is
+// tapped; `className` lets a host add layout classes (e.g. `hidden lg:flex`).
+// With no props passed the desktop sidebar renders identically to before.
+export default function Sidebar({ onNavigate, className }: { onNavigate?: () => void; className?: string } = {}) {
   const path = usePathname();
   const groups = inventoryGroups();
   const { t } = useI18n();
 
   return (
     <aside
-      className="flex h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-chrome-border bg-chrome-muted px-4 pb-4 pt-[22px] backdrop-blur"
+      className={cn(
+        'flex h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-chrome-border bg-chrome-muted px-4 pb-4 pt-[22px] backdrop-blur',
+        className,
+      )}
     >
       {/* Lockup */}
       <div className="mb-5 flex items-center gap-2.5">
@@ -111,6 +118,7 @@ export default function Sidebar() {
               label={t(item.tkey)}
               icon={item.icon}
               active={path === item.href}
+              onNavigate={onNavigate}
             />
           ))}
         </div>
@@ -122,8 +130,8 @@ export default function Sidebar() {
               /* EKS keeps its own route/icon but lives under Compute (user feedback);
                  OpenCost renders as an indented EKS submenu item. */
               <>
-                <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} />
-                <NavItem href="/opencost" label={t('nav.opencost')} icon={PiggyBank} active={path === '/opencost'} className="ml-5" />
+                <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} onNavigate={onNavigate} />
+                <NavItem href="/opencost" label={t('nav.opencost')} icon={PiggyBank} active={path === '/opencost'} className="ml-5" onNavigate={onNavigate} />
               </>
             )}
             {g.types.map((ty) => {
@@ -135,6 +143,7 @@ export default function Sidebar() {
                   label={INVENTORY_TYPES[ty].label}
                   icon={TYPE_ICON[ty] ?? Server}
                   active={path === href}
+                  onNavigate={onNavigate}
                 />
               );
             })}
