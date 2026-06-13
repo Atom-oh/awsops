@@ -1,6 +1,6 @@
 # Design Spec: Custom Agent Platform — Frontier Agents + Integrations Axis (extends ADR-031)
 
-- **Status**: Draft (2026-06-12) — companion to ADR-031; proposes ratification as **ADR-039**.
+- **Status**: Active (2026-06-13) — companion spec to **ADR-039** (`docs/decisions/039-multi-agent-platform-frontier-agents-integrations.md`, Accepted 2026-06-13 via multi-AI co-agent consensus); extends ADR-031. P1 implemented; P2+ backlog.
 - **Supersedes**: `docs/superpowers/archive/2026-05-31-custom-agents-skills-design.md` (the original ADR-031 spec — its catalog/resolver/Agent-Space model is carried forward and extended here).
 - **Owner**: AWSops AI layer.
 - **Decision inputs**: AWS DevOps Agent + Security Agent customization model (the explicit reference); FinOps Foundation framework (forthcoming FinOps agent); multi-AI co-agent decision on the Integrations axis (Option 4, codex+gemini unanimous, kiro concurring on the single-substrate principle).
