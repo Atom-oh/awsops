@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 
 interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string }>; agentType?: string; gateways?: string[]; }
 interface SkillRow { id: number; name: string; description: string; tier: string; enabled: boolean; version: number; agentTypes?: string[]; }
-interface SpaceState { enabledAgentIds: number[]; enabledSkillIds: number[]; toolAllowlist: string[]; version?: number }
+interface SpaceState { enabledAgentIds: number[]; enabledSkillIds: number[]; enabledIntegrationIds: number[]; toolAllowlist: string[]; version?: number }
 interface IntegrationRow { id: number; name: string; kind: string; direction: string; capability: string; enabled: boolean; tier: string; receivePath?: string | null; }
 
 const GATEWAYS = ['network', 'container', 'iac', 'data', 'security', 'monitoring', 'cost', 'ops'];
@@ -37,6 +37,7 @@ export default function CustomizationPage() {
     setAccountId(d.accountId || 'self');
     setSpace(d.space ? {
       enabledAgentIds: d.space.enabledAgentIds || [], enabledSkillIds: d.space.enabledSkillIds || [],
+      enabledIntegrationIds: d.space.enabledIntegrationIds || [],
       toolAllowlist: d.space.toolAllowlist || [], version: d.space.version,
     } : null);
     setAllowlistText((d.space?.toolAllowlist || []).join(', '));
@@ -100,20 +101,27 @@ export default function CustomizationPage() {
   async function saveSpace() {
     const enabledAgentIds = space?.enabledAgentIds ?? [];
     const enabledSkillIds = space?.enabledSkillIds ?? [];
+    const enabledIntegrationIds = space?.enabledIntegrationIds ?? [];
     const toolAllowlist = allowlistText.split(',').map((s) => s.trim()).filter(Boolean);
     const res = await fetch('/api/customization', {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ op: 'space', enabledAgentIds, enabledSkillIds, toolAllowlist }),
+      body: JSON.stringify({ op: 'space', enabledAgentIds, enabledSkillIds, enabledIntegrationIds, toolAllowlist }),
     });
     const data = await res.json();
     setMsg(res.ok ? `Agent Space saved (v${data.version}) for ${accountId}` : `Error: ${JSON.stringify(data.error)}`);
     if (res.ok) load();
   }
   function toggleSpaceAgent(id: number) {
-    const cur = space ?? { enabledAgentIds: [], enabledSkillIds: [], toolAllowlist: [] };
+    const cur = space ?? { enabledAgentIds: [], enabledSkillIds: [], enabledIntegrationIds: [], toolAllowlist: [] };
     const set = new Set(cur.enabledAgentIds);
     if (set.has(id)) set.delete(id); else set.add(id);
     setSpace({ ...cur, enabledAgentIds: [...set] });
+  }
+  function toggleSpaceIntegration(id: number) {
+    const cur = space ?? { enabledAgentIds: [], enabledSkillIds: [], enabledIntegrationIds: [], toolAllowlist: [] };
+    const set = new Set(cur.enabledIntegrationIds);
+    if (set.has(id)) set.delete(id); else set.add(id);
+    setSpace({ ...cur, enabledIntegrationIds: [...set] });
   }
 
   if (denied) return <div className="p-6 text-[13px] text-ink-500">Admin access required (ADR-031).</div>;
@@ -258,6 +266,16 @@ export default function CustomizationPage() {
             </label>
           ))}
           {agents.filter((a) => a.tier === 'custom').length === 0 && <span className="text-ink-400">no custom agents yet</span>}
+        </div>
+        <div className="text-[12px]">
+          <div className="mb-1 font-medium">Enabled integrations (account-scoped)</div>
+          {integrations.map((i) => (
+            <label key={i.id} className="mr-3 inline-flex items-center gap-1">
+              <input type="checkbox" checked={!!space?.enabledIntegrationIds.includes(i.id)} onChange={() => toggleSpaceIntegration(i.id)} />
+              {i.name}
+            </label>
+          ))}
+          {integrations.length === 0 && <span className="text-ink-400">no integrations yet</span>}
         </div>
         <div className="text-[12px]">
           <div className="mb-1 font-medium">Tool allowlist (account cap, comma-separated)</div>

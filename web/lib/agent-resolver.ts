@@ -49,6 +49,9 @@ export interface EgressReadIntegration {
 }
 
 // ADR-033 — bound the integration context injected into the prompt.
+// PARITY NOTE: the incident federation bridge (scripts/v2/incident/agent_bridge.py) does NOT yet inject
+// integration context — that parity is deferred to P4 (federation is flag-off). Chat (here) and federation
+// intentionally diverge on integration context until P4; keep SAFEGUARD_LINE byte-identical across both.
 export const MAX_PROVIDED_CONTEXT_CHARS = 2000;
 
 /** Render enabled egress-READ integrations' provided_context into a single bounded block. */
