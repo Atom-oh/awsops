@@ -72,9 +72,22 @@ describe('catalog', () => {
     query.mockResolvedValueOnce({ rows: [{ id: 8 }] });
     await upsertAgent({ name: 'devops', description: 'd', persona: 'p', routingKeywords: [], gateway: 'ops',
       tier: 'builtin', agentType: 'triage', gateways: ['ops', 'monitoring'] });
-    const [, params] = query.mock.calls[0];
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/WHERE agents\.tier = 'custom'/i); // never clobber a built-in via name collision
     expect(params).toContain('triage');
     expect(params).toContain(JSON.stringify(['ops', 'monitoring']));
+  });
+
+  it('upsertAgent throws on a built-in name collision (WHERE tier=custom matched nothing)', async () => {
+    query.mockResolvedValueOnce({ rows: [] }); // conflict on a builtin row ⇒ no update ⇒ no row returned
+    await expect(upsertAgent({ name: 'devops', description: 'd', persona: 'p', routingKeywords: [], gateway: 'ops', tier: 'custom' }))
+      .rejects.toThrow(/built-in agent/);
+  });
+
+  it('upsertSkill throws on a built-in name collision', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    await expect(upsertSkill({ name: 'builtin-pack', description: 'd', instructions: 'i', toolAllowlist: [], tier: 'custom' }))
+      .rejects.toThrow(/built-in skill/);
   });
 
   it('listSkills returns agentTypes + referenceKeys (defaults when null)', async () => {

@@ -67,10 +67,14 @@ export async function upsertSkill(s: SkillInput): Promise<number> {
            version = skills.version + 1,
            enabled = false,
            updated_at = NOW()
+       WHERE skills.tier = 'custom'
      RETURNING id`,
     [s.name, s.description, s.instructions, JSON.stringify(s.toolAllowlist), s.tier, hash, s.createdBy ?? null,
      JSON.stringify(s.agentTypes ?? ['generic']), JSON.stringify(s.referenceKeys ?? [])],
   );
+  // WHERE tier='custom' ⇒ a name collision with a built-in skill updates nothing and returns no row;
+  // never let a custom upsert clobber/disable a seeded built-in (e.g. a frontier agent's skill).
+  if (rows.length === 0) throw new Error('name conflicts with a built-in skill');
   return rows[0].id;
 }
 
@@ -86,10 +90,15 @@ export async function upsertAgent(a: AgentInput): Promise<number> {
            model = EXCLUDED.model, agent_type = EXCLUDED.agent_type, gateways = EXCLUDED.gateways,
            response_language = EXCLUDED.response_language,
            version = agents.version + 1, enabled = false, updated_at = NOW()
+       WHERE agents.tier = 'custom'
      RETURNING id`,
     [a.name, a.description, a.persona, JSON.stringify(a.routingKeywords), a.gateway, a.model ?? null, a.tier,
      a.createdBy ?? null, a.agentType ?? 'generic', JSON.stringify(gateways), a.responseLanguage ?? null],
   );
+  // WHERE tier='custom' ⇒ a name collision with a built-in agent (e.g. a seeded frontier agent
+  // 'devops'/'security'/'finops' or a gateway agent) updates nothing and returns no row — never let a
+  // custom upsert clobber/disable a built-in.
+  if (rows.length === 0) throw new Error('name conflicts with a built-in agent');
   return rows[0].id;
 }
 

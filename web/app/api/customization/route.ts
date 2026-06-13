@@ -44,25 +44,35 @@ export async function POST(request: Request) {
   if (body.kind === 'skill') {
     const v = validateSkill(body as never);
     if (!v.ok) return json({ error: 'invalid skill', detail: v.errors }, 400);
-    const id = await upsertSkill({
-      name: String(body.name), description: String(body.description), instructions: String(body.instructions),
-      toolAllowlist: (body.toolAllowlist as string[]) ?? [], tier: 'custom', createdBy: g.user!.email,
-      agentTypes: (body.agentTypes as string[]) ?? undefined, referenceKeys: (body.referenceKeys as string[]) ?? undefined,
-    });
+    let id: number;
+    try {
+      id = await upsertSkill({
+        name: String(body.name), description: String(body.description), instructions: String(body.instructions),
+        toolAllowlist: (body.toolAllowlist as string[]) ?? [], tier: 'custom', createdBy: g.user!.email,
+        agentTypes: (body.agentTypes as string[]) ?? undefined, referenceKeys: (body.referenceKeys as string[]) ?? undefined,
+      });
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : 'upsert failed' }, 409); // built-in name collision
+    }
     await writeAudit({ actor: g.user!.email ?? g.user!.sub, action: 'upsert', objectType: 'skill', objectId: String(id) });
     return json({ ok: true, id }, 200);
   }
   if (body.kind === 'agent') {
     const v = validateAgent(body as never);
     if (!v.ok) return json({ error: 'invalid agent', detail: v.errors }, 400);
-    const id = await upsertAgent({
-      name: String(body.name), description: String(body.description), persona: String(body.persona ?? ''),
-      routingKeywords: (body.routingKeywords as string[]) ?? [], gateway: String(body.gateway),
-      model: body.model ? String(body.model) : undefined, tier: 'custom', createdBy: g.user!.email,
-      agentType: body.agentType ? String(body.agentType) : undefined,
-      gateways: (body.gateways as string[]) ?? undefined,
-      responseLanguage: body.responseLanguage ? String(body.responseLanguage) : undefined,
-    });
+    let id: number;
+    try {
+      id = await upsertAgent({
+        name: String(body.name), description: String(body.description), persona: String(body.persona ?? ''),
+        routingKeywords: (body.routingKeywords as string[]) ?? [], gateway: String(body.gateway),
+        model: body.model ? String(body.model) : undefined, tier: 'custom', createdBy: g.user!.email,
+        agentType: body.agentType ? String(body.agentType) : undefined,
+        gateways: (body.gateways as string[]) ?? undefined,
+        responseLanguage: body.responseLanguage ? String(body.responseLanguage) : undefined,
+      });
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : 'upsert failed' }, 409); // built-in name collision
+    }
     await writeAudit({ actor: g.user!.email ?? g.user!.sub, action: 'upsert', objectType: 'agent', objectId: String(id) });
     return json({ ok: true, id }, 200);
   }
