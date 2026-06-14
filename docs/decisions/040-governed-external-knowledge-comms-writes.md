@@ -63,8 +63,11 @@ AWSops를 **"분석은 AWSops, 행동은 사람"** 원칙 아래 유지하되, *
 - **ADR-012** Slack — split by ownership (system notify vs agent governed write), reuses ADR-012 client.
 - **ADR-011 / §11** — egress SSRF/credential custody inherited.
 
+## Implementation / 구현
+- **Slack governed-write vertical slice — implemented (code, flag-OFF) 2026-06-14.** Plan `docs/superpowers/plans/2026-06-14-integrations-readwrite-slack-slice-plan.md` (3-round multi-model plan gate; safety invariant — enabling data-write can never enable AWS-resource mutation — confirmed). 7 tasks: T1 `slack.post_message` action_catalog seed (PG17 itest) · T2 `web/lib/egress-dlp.ts` (DLP/redaction + channel allowlist) · T3 `/api/actions` flag+kill-switch decouple by `external:` prefix + DLP (adversarial invariant tested) · T4 Python executor + `egress_dlp.py` port + executor-side decouple · T5 chat propose-only (no live write tool) · T6 `integrations_write_enabled` flag + dedicated kill-switch + no-AWS-mutation `action-slack-write` role + OR-gated shared infra. **All flag-OFF** (`integrations_write_enabled`=false default → 0 resources). Verified: web vitest 710 + py 52 + migration itest GREEN + terraform validate. Two fully-independent control planes (own flag env / kill-switch / IAM). NOT yet enabled (owner flips the flag + action `enabled=true` + channel allowlist).
+
 ## References / 참고 자료
-- Decision panel: `docs/reviews/2026-06-14-external-write-unfreeze-consensus.md`.
+- Decision panel: `docs/reviews/2026-06-14-external-write-unfreeze-consensus.md`. Keystone principle: **ADR-041**.
 - The reversal this scopes: `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`.
 - Companion spec: `docs/superpowers/specs/2026-06-12-custom-agent-platform-design.md` (§7 WRITE path, §16).
 - Extends **ADR-039**; scoped carve-out of **ADR-029/036/031-P4**; precedent **ADR-034**; consumes **ADR-011/012/023/033**.
