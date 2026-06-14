@@ -4,7 +4,23 @@
 
 Accepted (2026-06-13) / 채택 (2026-06-13) — 멀티AI co-agent 합의(kiro-kimi/glm · codex · gemini): ADR 모순 교차검증(7 리뷰어) + 의사결정 패널(Q1 만장일치 C, Q2 chair 결정, Q3 다수+보수 hedge) + 대안/리스크 패널. **ADR-031을 확장**(대체 아님); 메커니즘은 ADR-036, 페더레이션은 ADR-032 재사용. 구현은 단계적(P1 완료, P2~ backlog). 동반 스펙: `docs/superpowers/specs/2026-06-12-custom-agent-platform-design.md`(객체 모델·스키마·UX·페이징·ADR 정합성 §16).
 
+**Amended (2026-06-14)** — reconciled with the **2026-06-11 multi-AI reversal** (ADR-029/036 ⛔ REVERSED = mutating/execution substrate frozen·do-not-enable; ADR-031 Phase 3 BYO-MCP + Phase 4 mutating tools ⚠️ 폐기; ADR-032/035 ⚠️ DOWNGRADED to read-only), which was synced into this line via the PR #50 merge. Net: ADR-039's **egress READ** + **read-only ingress→triage** paths stand and are compatible; the **READ_WRITE / mutating-gate / BYO-MCP-write** paths are **frozen** (not implementable until a future decision un-reverses the substrate). See **§ Amendment** below. / **개정 (2026-06-14)** — 2026-06-11 reversal과 정합화(아래 § Amendment).
+
 This ADR records the decision; implementation detail lives in the companion spec. / 이 ADR은 결정을 기록하고, 구현 상세는 동반 스펙에 있다.
+
+## Amendment (2026-06-14): reconciliation with the 2026-06-11 reversal / 2026-06-11 reversal 정합화
+
+ADR-039 was authored on the `fix/v2-upgrade-snapshot-id` line on 2026-06-13, which predated the sync of the **2026-06-11 multi-AI reversal** decision. Merging canonical (PR #50) surfaced the conflict. This amendment records the reconciliation — it derives the consequence of the reversal, it does **not** make a new governance decision (re-enabling any frozen path requires its own multi-AI decision).
+
+**Stands (compatible with the reversal — read-only, no writes/autonomy):**
+- **Egress READ Integrations** (observability; ADR-011 re-derivation) — **implemented + LIVE** (P2 management layer + P2-infra inc1 edge carve-out + inc2 live MCP connection). Read-only: `SAFEGUARD_LINE` (immutable read-only boundary) + server-side tool allowlist (`exposed_tools` ceiling) + connection-time SSRF (https + DNS recheck + metadata/private guard + redirect:manual) + per-account credential scoping. The reversal killed *writes/autonomy/mutating-action*, not *observability reads* — so this is in scope.
+- **Read-only ingress → ADR-032 triage** (webhook alarm sources) — ADR-032 is downgraded to **read-only Triage/RCA (recommendation-only)**, so the ingress path stays analysis-only (no autonomous mitigation). Compatible. (The edge carve-out [inc1] is plumbing; activation stays behind `INCIDENT_LIFECYCLE_ENABLED`.)
+
+**Frozen (do-not-enable, per the reversal):**
+- **READ_WRITE capability** + the **`action_catalog` / `write_action_refs` / executor** plumbing + the **mutating gate dependency (ADR-029/036)** — ADR-029/036 are REVERSED (substrate frozen). The `capability` column + write fields **stay as dormant schema** but are **never enabled**; ADR-039 P3 (Notion/Confluence/Jira writes) is **blocked** until a future decision un-freezes the mutating substrate.
+- **Open BYO-MCP write** — ADR-031 Phase 3 (open BYO-MCP) was 폐기. ADR-039's egress-READ Integrations are a **narrower, admin-curated, allowlisted, SSRF-guarded, read-only** re-derivation — distinct from the open/writable BYO-MCP that was abandoned. Arbitrary writable BYO-MCP stays dead.
+
+**Action items:** (1) the companion spec §7 (WRITE path) / §12 (P3) / §16 carry the same "frozen by 2026-06-11 reversal" note; (2) the README/index ADR-039 row flags this (`docs/decisions/CLAUDE.md`); (3) no code change — inc2 is already read-only; the dormant write schema needs no removal (it is never enabled).
 
 ## Context / 컨텍스트
 
