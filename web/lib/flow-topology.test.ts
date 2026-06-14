@@ -6,6 +6,7 @@ import { buildFlowGraph, filterFromEntry, TARGET_CAP } from './flow-topology';
 const ALB_ARN = 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/web/abc';
 const TG_ARN = 'arn:aws:elasticloadbalancing:ap-northeast-2:1:targetgroup/web-tg/def';
 const WAF_ARN = 'arn:aws:wafv2:us-east-1:1:global/webacl/prod/xyz';
+const ALB_ID = `alb:${ALB_ARN}`;
 
 const alb = { resource_id: 'web', region: 'ap-northeast-2', arn: ALB_ARN, dns_name: 'internal-web-123.ap-northeast-2.elb.amazonaws.com', vpc_id: 'vpc-1' };
 const waf = { resource_id: 'prod', region: 'us-east-1', arn: WAF_ARN };
@@ -23,8 +24,8 @@ describe('buildFlowGraph — CF→LB/WAF edges', () => {
     const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'INTERNAL-WEB-123.AP-NORTHEAST-2.ELB.AMAZONAWS.COM' }] };
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb] });
     expect(g.nodes.find((n) => n.id === 'cf:D1')).toBeTruthy();
-    expect(g.nodes.find((n) => n.id === 'alb:web')).toBeTruthy();
-    const e = g.edges.find((x) => x.source === 'cf:D1' && x.target === 'alb:web');
+    expect(g.nodes.find((n) => n.id === ALB_ID)).toBeTruthy();
+    const e = g.edges.find((x) => x.source === 'cf:D1' && x.target === ALB_ID);
     expect(e).toBeTruthy();
     expect(e!.confidence).toBe('observed');
   });
@@ -39,7 +40,7 @@ describe('buildFlowGraph — CF→LB/WAF edges', () => {
     const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.atomai.click', VpcOriginConfig: { VpcOriginId: 'vo_abc' } }] };
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb] });
     // no false CF→ALB edge (DomainName is the public FQDN, not the ALB dns_name)
-    expect(g.edges.find((x) => x.target === 'alb:web')).toBeFalsy();
+    expect(g.edges.find((x) => x.target === ALB_ID)).toBeFalsy();
     // an explicit unresolved-origin node exists, linked from CF
     const origin = g.nodes.find((n) => n.kind === 'origin');
     expect(origin).toBeTruthy();
@@ -50,14 +51,14 @@ describe('buildFlowGraph — CF→LB/WAF edges', () => {
     const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'some-bucket.s3.amazonaws.com' }] };
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb] });
     expect(g.nodes.find((n) => n.kind === 'origin')).toBeTruthy();
-    expect(g.edges.find((x) => x.target === 'alb:web')).toBeFalsy();
+    expect(g.edges.find((x) => x.target === ALB_ID)).toBeFalsy();
   });
 });
 
 describe('buildFlowGraph — ALB→TG→target', () => {
   it('links ALB→TG via load_balancer_arns (matched by arn, not node name)', () => {
     const g = buildFlowGraph({ alb: [alb], tg: [tg] });
-    expect(g.edges.find((x) => x.source === 'alb:web' && x.target === `tg:${TG_ARN}`)).toBeTruthy();
+    expect(g.edges.find((x) => x.source === ALB_ID && x.target === `tg:${TG_ARN}`)).toBeTruthy();
   });
 
   it('fans TG→target out of target_health_descriptions with health in meta (PascalCase)', () => {
@@ -90,9 +91,16 @@ describe('buildFlowGraph — ALB→TG→target', () => {
 });
 
 describe('buildFlowGraph — invariants', () => {
+  it('same-named LBs in different regions stay distinct (ARN-keyed node id)', () => {
+    const albA = { resource_id: 'web', region: 'ap-northeast-2', arn: ALB_ARN, dns_name: 'a.elb.amazonaws.com' };
+    const albB = { resource_id: 'web', region: 'us-east-1', arn: 'arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/app/web/zzz', dns_name: 'b.elb.amazonaws.com' };
+    const g = buildFlowGraph({ alb: [albA, albB] });
+    expect(g.nodes.filter((n) => n.kind === 'alb').length).toBe(2);
+  });
+
   it('no dangling edges; node dedup', () => {
     const g = buildFlowGraph({ alb: [alb, alb], tg: [tg] });
-    expect(g.nodes.filter((n) => n.id === 'alb:web').length).toBe(1);
+    expect(g.nodes.filter((n) => n.id === ALB_ID).length).toBe(1);
     for (const e of g.edges) {
       expect(g.nodes.find((n) => n.id === e.source), e.source).toBeTruthy();
       expect(g.nodes.find((n) => n.id === e.target), e.target).toBeTruthy();
@@ -107,13 +115,13 @@ describe('filterFromEntry', () => {
   it('returns the reachable subtree from an entry node', () => {
     const sub = filterFromEntry(full, 'cf:D1');
     expect(sub.nodes.find((n) => n.id === 'cf:D1')).toBeTruthy();
-    expect(sub.nodes.find((n) => n.id === 'alb:web')).toBeTruthy();
+    expect(sub.nodes.find((n) => n.id === ALB_ID)).toBeTruthy();
     expect(sub.nodes.find((n) => n.id === `tg:${TG_ARN}`)).toBeTruthy();
     expect(sub.nodes.filter((n) => n.kind === 'target').length).toBe(2);
   });
 
   it('an LB entry yields only its downstream (ALB→TG→targets), not the CF above it', () => {
-    const sub = filterFromEntry(full, 'alb:web');
+    const sub = filterFromEntry(full, ALB_ID);
     expect(sub.nodes.find((n) => n.id === 'cf:D1')).toBeFalsy();
     expect(sub.nodes.find((n) => n.id === `tg:${TG_ARN}`)).toBeTruthy();
   });

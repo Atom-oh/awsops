@@ -55,23 +55,27 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   };
 
   // 1) nodes first so edge endpoint checks resolve.
+  // LB node ids are keyed by the globally-unique ARN (resource_id is just the name, which can
+  // collide across regions); the name/dns_name is the display label.
+  const lbId = (kind: 'alb' | 'nlb', r: Row) => `${kind}:${str(r.arn) || str(r.resource_id)}`;
+
   for (const c of input.cloudfront ?? []) addNode(`cf:${str(c.resource_id)}`, 'cloudfront', str(c.name) || str(c.resource_id));
-  for (const a of input.alb ?? []) addNode(`alb:${str(a.resource_id)}`, 'alb', str(a.dns_name) || str(a.resource_id));
-  for (const n of input.nlb ?? []) addNode(`nlb:${str(n.resource_id)}`, 'nlb', str(n.dns_name) || str(n.resource_id));
+  for (const a of input.alb ?? []) addNode(lbId('alb', a), 'alb', str(a.dns_name) || str(a.resource_id));
+  for (const n of input.nlb ?? []) addNode(lbId('nlb', n), 'nlb', str(n.dns_name) || str(n.resource_id));
   for (const w of input.waf ?? []) addNode(`waf:${str(w.resource_id)}`, 'waf', str(w.resource_id));
   for (const t of input.tg ?? []) addNode(`tg:${str(t.resource_id)}`, 'tg', str(t.target_group_name) || str(t.resource_id), { targetType: str(t.target_type) });
 
-  // Indexes for ARN-keyed joins (LB resource_id is a name, joins use arn).
+  // Indexes for joins (LB by dns_name for CF origins, by arn for TG load_balancer_arns).
   const lbByDns = new Map<string, string>();   // lowercased dns_name → node id
   const lbByArn = new Map<string, string>();    // lb arn → node id
   const wafByArn = new Map<string, string>();   // waf arn → node id
   for (const a of input.alb ?? []) {
-    if (a.dns_name) lbByDns.set(str(a.dns_name).toLowerCase(), `alb:${str(a.resource_id)}`);
-    if (a.arn) lbByArn.set(str(a.arn), `alb:${str(a.resource_id)}`);
+    if (a.dns_name) lbByDns.set(str(a.dns_name).toLowerCase(), lbId('alb', a));
+    if (a.arn) lbByArn.set(str(a.arn), lbId('alb', a));
   }
   for (const n of input.nlb ?? []) {
-    if (n.dns_name) lbByDns.set(str(n.dns_name).toLowerCase(), `nlb:${str(n.resource_id)}`);
-    if (n.arn) lbByArn.set(str(n.arn), `nlb:${str(n.resource_id)}`);
+    if (n.dns_name) lbByDns.set(str(n.dns_name).toLowerCase(), lbId('nlb', n));
+    if (n.arn) lbByArn.set(str(n.arn), lbId('nlb', n));
   }
   for (const w of input.waf ?? []) if (w.arn) wafByArn.set(str(w.arn), `waf:${str(w.resource_id)}`);
 
