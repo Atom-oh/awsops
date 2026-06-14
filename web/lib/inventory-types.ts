@@ -77,6 +77,10 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
     { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' },
     { key: 'ip_address_type', label: 'IP type' }, { key: 'created_time', label: 'Created' } ] },
+  target_group: { label: 'Target Groups', group: 'Network', distKey: 'target_type', columns: [
+    { key: 'target_group_name', label: 'Name' }, { key: 'target_type', label: 'Target type' },
+    { key: 'protocol', label: 'Protocol' }, { key: 'port', label: 'Port' },
+    { key: 'vpc_id', label: 'VPC' }, { key: 'health_check_path', label: 'Health path' } ] },
   waf: { label: 'WAF Web ACLs', group: 'Security', distKey: 'scope', columns: [
     { key: 'scope', label: 'Scope' }, { key: 'capacity', label: 'Capacity' },
     { key: 'description', label: 'Description' }, { key: 'managed_by_firewall_manager', label: 'FMS-managed' } ] },
