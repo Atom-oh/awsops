@@ -5,6 +5,8 @@ import { Background, Controls, MiniMap, Position, type Node, type Edge } from '@
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
+import DetailPanel from '@/components/ui/DetailPanel';
+import { INVENTORY_TYPES } from '@/lib/inventory-types';
 import { buildFlowGraph, filterFromEntry, type FlowInput, type FlowKind, type FlowNode } from '@/lib/flow-topology';
 import { layoutFlow } from '@/lib/flow-layout';
 import { useTheme } from '@/lib/use-theme';
@@ -89,6 +91,7 @@ export default function TopologyPage() {
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
   const [cappedTypes, setCappedTypes] = useState<string[]>([]);
   const [entryId, setEntryId] = useState<string>('');
+  const [selected, setSelected] = useState<FlowNode | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -136,7 +139,7 @@ export default function TopologyPage() {
       return {
         id: n.id,
         position: { x: p.x, y: p.y },
-        data: { label: nodeLabel(n) },
+        data: { label: nodeLabel(n), fnode: n },
         // LR layout → handles on left/right so edges flow horizontally (not top/bottom).
         sourcePosition: Position.Right,
         targetPosition: Position.Left,
@@ -155,6 +158,20 @@ export default function TopologyPage() {
     }));
     return { nodes, edges };
   }, [full, entryId, dark]);
+
+  // Detail for the clicked node: resource nodes show their full inventory row (every field —
+  // vpc, subnet, tags …); target/origin nodes synthesize a small detail from their meta.
+  const detail = useMemo(() => {
+    if (!selected) return null;
+    const m = (selected.meta ?? {}) as Record<string, unknown>;
+    if (m.row) {
+      const row = m.row as Record<string, unknown>;
+      return { title: String(row.resource_id ?? selected.label), data: row, spec: m.invType ? INVENTORY_TYPES[m.invType as string] : undefined };
+    }
+    const syn: Record<string, unknown> = { resource_id: String(m.id ?? selected.label), kind: selected.kind };
+    if (selected.kind === 'target') { syn.target_type = m.targetType; syn.health = m.health; syn.port = m.port; if (m.resolved) syn.resolved_as = m.resolved; }
+    return { title: selected.label, data: syn, spec: undefined };
+  }, [selected]);
 
   const onEntry = (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
   const selectCls = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
@@ -197,7 +214,8 @@ export default function TopologyPage() {
                 )}
               </div>
               <div className="h-[640px] w-full rounded-lg border border-ink-100 bg-card">
-                <ReactFlow nodes={nodes} edges={edges} fitView colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}>
+                <ReactFlow nodes={nodes} edges={edges} fitView colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}
+                  onNodeClick={(_, node) => setSelected(((node.data as { fnode?: FlowNode })?.fnode) ?? null)}>
                   <Background />
                   <Controls />
                   <MiniMap pannable zoomable />
@@ -207,6 +225,9 @@ export default function TopologyPage() {
           )
         )}
       </div>
+      {detail && (
+        <DetailPanel title={detail.title} data={detail.data} spec={detail.spec} onClose={() => setSelected(null)} />
+      )}
     </>
   );
 }

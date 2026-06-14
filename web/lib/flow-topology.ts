@@ -71,14 +71,16 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // collide across regions); the name/dns_name is the display label.
   const lbId = (kind: 'alb' | 'nlb', r: Row) => `${kind}:${str(r.arn) || str(r.resource_id)}`;
 
+  // meta.row + meta.invType carry the full source inventory row so the UI can show every
+  // field (vpc, subnet, tags, …) on click — no extra fetch.
   for (const c of input.cloudfront ?? []) {
     const al = aliasesOf(c);
-    addNode(`cf:${str(c.resource_id)}`, 'cloudfront', al[0] || str(c.name) || str(c.resource_id), al.length ? { aliases: al } : undefined);
+    addNode(`cf:${str(c.resource_id)}`, 'cloudfront', al[0] || str(c.name) || str(c.resource_id), { row: c, invType: 'cloudfront', ...(al.length ? { aliases: al } : {}) });
   }
-  for (const a of input.alb ?? []) addNode(lbId('alb', a), 'alb', str(a.dns_name) || str(a.resource_id));
-  for (const n of input.nlb ?? []) addNode(lbId('nlb', n), 'nlb', str(n.dns_name) || str(n.resource_id));
-  for (const w of input.waf ?? []) addNode(`waf:${str(w.resource_id)}`, 'waf', str(w.resource_id));
-  for (const t of input.tg ?? []) addNode(`tg:${str(t.resource_id)}`, 'tg', str(t.target_group_name) || str(t.resource_id), { targetType: str(t.target_type) });
+  for (const a of input.alb ?? []) addNode(lbId('alb', a), 'alb', str(a.dns_name) || str(a.resource_id), { row: a, invType: 'alb' });
+  for (const n of input.nlb ?? []) addNode(lbId('nlb', n), 'nlb', str(n.dns_name) || str(n.resource_id), { row: n, invType: 'nlb' });
+  for (const w of input.waf ?? []) addNode(`waf:${str(w.resource_id)}`, 'waf', str(w.resource_id), { row: w, invType: 'waf' });
+  for (const t of input.tg ?? []) addNode(`tg:${str(t.resource_id)}`, 'tg', str(t.target_group_name) || str(t.resource_id), { targetType: str(t.target_type), row: t, invType: 'target_group' });
 
   // Indexes for joins (LB by dns_name for CF origins, by arn for TG load_balancer_arns).
   const lbByDns = new Map<string, string>();   // lowercased dns_name → node id
@@ -123,7 +125,7 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       cfByAlias.get(recName);                                 // record name == a CF custom-domain alias
     if (!downstream) continue;
     const rid = `r53:${str(r.resource_id) || recName}`;
-    addNode(rid, 'route53', recName || str(r.resource_id), { recordType: str(r.type) });
+    addNode(rid, 'route53', recName || str(r.resource_id), { recordType: str(r.type), row: r, invType: 'route53' });
     addEdge(rid, downstream);
   }
 
@@ -180,6 +182,7 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
         targetType: ttype,
         health: str(health.State) || 'unknown',
         port: target.Port ?? null,
+        id: targetId,
         ...(resolved ? { resolved } : {}),
       });
       addEdge(tgId, nodeId);
