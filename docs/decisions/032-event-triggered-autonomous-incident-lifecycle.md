@@ -2,6 +2,8 @@
 
 ## Status / 상태
 
+> **⚠️ DOWNGRADED (2026-06-11)** — owner decision via 3-AI consensus (kiro/codex/gemini; see `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`). The **autonomous mitigation/action path is abandoned** (it routed through the now-**reversed** ADR-029/036). The read-only **Triage / multi-agent investigation / RCA** value is retained — **recommendation-only, NO mutation routing**. `incident_lifecycle_enabled` stays `false`; if ever enabled it is analysis-only (no mitigation execution, no ADR-029/036 calls). Phase 4 (prevention) is unaffected (recommend-only). Built flag-OFF; frozen.
+
 Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES; codex/gemini/kiro). 라이프사이클 상태머신은 건전; ADR-034/036 관계 추가, P2 백본에 실행 바인딩, look-back/타임아웃 설정값화, Lead 최소권한, 인젝션·알림스톰 통제 보완 (§Consensus Review Addenda 참조).
 
 This ADR records the *control-plane* decision: when agents are triggered, what staged lifecycle they execute, and who authorizes mutations. It deliberately does **not** redefine *what* agents/skills exist or how they are composed — that is ADR-031's *data-plane* concern, which this ADR consumes.
@@ -79,7 +81,7 @@ Lifecycle stages (mirroring the DevOps Agent model) / 라이프사이클 단계 
 1. **Trigger** — webhook (CloudWatch SNS / Alertmanager / Grafana / PagerDuty-style / Generic, via ADR-022) or manual free-text entry. / 웹훅(ADR-022 경유) 또는 수동 자유 텍스트 입력.
 2. **Triage** — ~20-min look-back correlation against active investigations → `New` / `Linked` / `Skipped`; dedup and noise reduction. Reuses ADR-009's correlation engine. / 활성 조사 대비 ~20분 look-back 상관분석 → `New`/`Linked`/`Skipped`; 중복·노이즈 감소. ADR-009 상관분석 엔진 재사용.
 3. **Investigation** — Lead agent (incident commander) plans and delegates to Sub-agents (logs / metrics / code-change / deploy-history) with compacted-context handoff; each returns compressed findings. Sub-agent rosters resolved via ADR-031. / Lead 에이전트(인시던트 커맨더)가 계획을 세우고 Sub-agent(로그/메트릭/코드변경/배포이력)에 압축 컨텍스트로 위임; 각자 압축 결과 반환. Sub-agent 구성은 ADR-031로 해석.
-4. **Root Cause & Mitigation Plan** — RCA + a plan with pre-validate / remediation / post-validate steps; recommendation-only by default, mutating steps gated by ADR-029. / RCA + 사전검증/조치/사후검증 단계 계획; 기본 권고 전용, 변경 단계는 ADR-029 게이트.
+4. **Root Cause & ~~Mitigation Plan~~** — RCA only. ⛔ **The mitigation/remediation half is ABANDONED (2026-06-11 downgrade)** — it routed through the now-reversed ADR-029/036; this stage is **RCA + recommendation text only, no plan execution, no ADR-029/036 calls**. (Original, as history: "a plan with pre-validate/remediation/post-validate steps, recommendation-only, mutating steps gated by ADR-029.") / RCA만. **완화/조치 절반은 폐기(2026-06-11)** — reversed 029/036 경유였음; 본 단계는 RCA+권고 텍스트만, 실행·029/036 호출 없음.
 5. **Proactive Prevention** — analyze investigation history to emit prevention recommendations (observability / testing gaps / code / infra). / 조사 이력 분석으로 예방 권고(옵저버빌리티/테스트 격차/코드/인프라) 생성.
 
 Traceability: every investigation record stores the trigger source, Triage decision, the resolved Agent Space version + agent id + skill content hashes (consistent with ADR-031's traceability requirement), and a per-stage timeline in Aurora.
@@ -90,12 +92,12 @@ Phased scope / 단계별 범위:
 
 - **Phase 1** — Trigger + Triage: promote ADR-009's flow into a durable, correlated lifecycle record (Aurora). Webhook ingress (ADR-022) + look-back correlation + `New`/`Linked`/`Skipped`. Single-agent investigation retained (no Lead/Sub yet). / 트리거 + Triage: ADR-009 플로우를 내구성 있는 상관 라이프사이클 기록(Aurora)으로 승격. 웹훅 인그레스(ADR-022) + look-back 상관 + `New`/`Linked`/`Skipped`. 단일 에이전트 조사 유지(아직 Lead/Sub 없음).
 - **Phase 2** — Lead/Sub multi-agent investigation with compacted-context handoff; Sub-agent roster resolved via ADR-031 Agent Space. / 압축 컨텍스트 위임을 갖춘 Lead/Sub 멀티 에이전트 조사; Sub-agent 구성은 ADR-031 Agent Space로 해석.
-- **Phase 3** — Mitigation Plan generation (pre/remediation/post), recommendation-only, mutating steps gated by ADR-029. / 완화 계획 생성(사전/조치/사후), 권고 전용, 변경 단계 ADR-029 게이트.
+- **Phase 3** — ⛔ **ABANDONED (2026-06-11 downgrade)** — Mitigation Plan generation routed through the reversed ADR-029/036. Not pursued; the lifecycle stops at RCA + recommendation (no mitigation execution). / **폐기(2026-06-11)** — 완화 계획 생성은 reversed 029/036 경유였으므로 미추진; 라이프사이클은 RCA+권고에서 멈춘다.
 - **Phase 4** — Proactive Prevention feedback loop from investigation history. / 조사 이력 기반 사전 예방 피드백 루프.
 
-**Deployment dependency (not just ADR status) / 배포 의존성 (ADR 상태가 아님)**: Phase 1 persists incident state in Aurora, so it is blocked on ADR-030's *implementation progress* — specifically ADR-030 **Phase 1 (Aurora provisioning + schema migration)** must be **deployed**, not merely Accepted. "ADR Accepted" ≠ "infrastructure deployed"; Phase 1 of this ADR cannot start until the Aurora `incident_lifecycle` tables physically exist. (Phases 2–3 additionally require ADR-029 and ADR-031 to advance from Proposed.)
+**Deployment dependency (not just ADR status) / 배포 의존성 (ADR 상태가 아님)**: Phase 1 persists incident state in Aurora, so it is blocked on ADR-030's *implementation progress* — specifically ADR-030 **Phase 1 (Aurora provisioning + schema migration)** must be **deployed**, not merely Accepted. "ADR Accepted" ≠ "infrastructure deployed"; Phase 1 of this ADR cannot start until the Aurora `incident_lifecycle` tables physically exist. (Phases 2–3 depended on ADR-029/031 — both REVERSED 2026-06-11; the mitigation path is abandoned, only read-only Triage/RCA remains.)
 
-**배포 의존성**: Phase 1은 인시던트 상태를 Aurora에 영속하므로 ADR-030의 *구현 진행*에 묶인다 — 구체적으로 ADR-030 **Phase 1(Aurora 프로비저닝 + 스키마 이전)** 이 단지 Accepted가 아니라 **배포 완료**되어야 한다. "ADR Accepted" ≠ "인프라 배포됨"; Aurora `incident_lifecycle` 테이블이 물리적으로 존재하기 전엔 본 ADR Phase 1을 시작할 수 없다. (Phase 2–3은 추가로 ADR-029·031의 Proposed 탈피가 필요.)
+**배포 의존성**: Phase 1은 인시던트 상태를 Aurora에 영속하므로 ADR-030의 *구현 진행*에 묶인다 — 구체적으로 ADR-030 **Phase 1(Aurora 프로비저닝 + 스키마 이전)** 이 단지 Accepted가 아니라 **배포 완료**되어야 한다. "ADR Accepted" ≠ "인프라 배포됨"; Aurora `incident_lifecycle` 테이블이 물리적으로 존재하기 전엔 본 ADR Phase 1을 시작할 수 없다. (Phase 2–3은 ADR-029/031에 의존했으나 둘 다 2026-06-11 REVERSED — mitigation 경로는 폐기, read-only Triage/RCA만 유지.)
 
 ### State machine failure semantics / 상태 머신 실패 시맨틱
 

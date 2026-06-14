@@ -16,6 +16,11 @@ export default function PageHeader({
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
+  /**
+   * Decorative "실시간" dot badge. Use only for genuinely streaming/polling
+   * surfaces — not for one-shot fetch pages (those should show a RefreshButton
+   * staleness stamp in the `right` slot instead).
+   */
   live?: boolean;
   right?: ReactNode;
   className?: string;

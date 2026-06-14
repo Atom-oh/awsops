@@ -202,6 +202,10 @@ resource "aws_ecs_task_definition" "web" {
         { name = "AWS_REGION", value = var.region },
         { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
         { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.main.id },
+        # C02 sign-out: the BFF builds the hosted-UI /logout redirect from these (cookie clear
+        # alone leaves the Cognito session live). APP_DOMAIN matches auth.tf logout_urls.
+        { name = "COGNITO_DOMAIN", value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
+        { name = "APP_DOMAIN", value = var.domain_name },
         { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
         { name = "INV_SYNC_FUNCTION", value = var.steampipe_enabled ? "${var.project}-inv-sync" : "" },
         # P3-D: onboarded-cluster allow-list for the in-cluster (K8s) read routes.
@@ -212,6 +216,8 @@ resource "aws_ecs_task_definition" "web" {
         { name = "SSM_ADMIN_EMAILS_PARAM", value = "/ops/${var.project}/admin_emails" },
         # ADR-031 Phase 2: this account's id, so the BFF can resolve the per-account Agent Space.
         { name = "HOST_ACCOUNT_ID", value = data.aws_caller_identity.current.account_id },
+        # AI Diagnosis (Task 1b): the diagnosis POST route reads process.env.AWS_ACCOUNT_ID.
+        { name = "AWS_ACCOUNT_ID", value = data.aws_caller_identity.current.account_id },
         ], var.workers_enabled ? [
         { name = "JOBS_QUEUE_URL", value = one(aws_sqs_queue.jobs[*].url) }
         ] : [], var.remediation_enabled ? [

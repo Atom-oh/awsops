@@ -10,11 +10,14 @@ CONFIG = {
 }
 
 def is_public(uri):
-    # ADR-022/ADR-039 webhook ingress carve-out: the alert/integration webhook receiver is the single
-    # Cognito-everywhere exception — external alarm sources cannot carry a Cognito cookie, so this exact
-    # path skips edge auth. The route itself verifies HMAC-SHA256 / SNS-subscription and is flag-gated on
-    # INCIDENT_LIFECYCLE_ENABLED (503 when off). Exact-match only — keep tightly bounded.
-    return uri.startswith('/_next/static/') or uri == '/api/health' or uri == '/api/incidents/webhook'
+    # Public (Cognito-everywhere exceptions), tightly bounded — both carve-outs combined on merge:
+    # - /api/auth/signout: an expired token would otherwise trap the user in a 302→Cognito re-auth loop
+    #   so they could never reach the route that clears the stale cookie. It only clears the cookie +
+    #   returns a logout redirect URL (no state mutation), so leaving it open is safe.
+    # - /api/incidents/webhook (ADR-022/ADR-039 ingress carve-out): external alarm sources cannot carry
+    #   a Cognito cookie, so this exact path skips edge auth. The route itself verifies HMAC-SHA256 /
+    #   SNS-subscription and is flag-gated on INCIDENT_LIFECYCLE_ENABLED (503 when off).
+    return uri.startswith('/_next/static/') or uri in ('/api/health', '/api/auth/signout', '/api/incidents/webhook')
 
 _JWKS = None
 def get_jwks():

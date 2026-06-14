@@ -1,10 +1,10 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Background, Controls, MiniMap, type Node, type Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
-import Badge from '@/components/ui/Badge';
+import RefreshButton from '@/components/ui/RefreshButton';
 import { buildTopology, type TopoKind } from '@/lib/topology';
 
 // ReactFlow touches the DOM on mount — load it client-only to avoid SSR mismatch.
@@ -32,16 +32,26 @@ async function fetchType(t: InvType): Promise<Row[]> {
 export default function TopologyPage() {
   const [data, setData] = useState<Record<InvType, Row[]> | null>(null);
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [capturedAt, setCapturedAt] = useState<string | null>(null);
 
-  useEffect(() => {
-    Promise.all(TYPES.map(fetchType))
-      .then((res) => {
-        const out = {} as Record<InvType, Row[]>;
-        TYPES.forEach((t, i) => { out[t] = res[i]; });
-        setData(out);
-      })
-      .catch((e) => setErr(String(e)));
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await Promise.all(TYPES.map(fetchType));
+      const out = {} as Record<InvType, Row[]>;
+      TYPES.forEach((t, i) => { out[t] = res[i]; });
+      setData(out);
+      setErr('');
+      setCapturedAt(new Date().toISOString());
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   const { nodes, edges } = useMemo(() => {
     if (!data) return { nodes: [] as Node[], edges: [] as Edge[] };
@@ -70,7 +80,7 @@ export default function TopologyPage() {
       <PageHeader
         title="Topology"
         subtitle="인벤토리 기반 인프라 토폴로지 (VPC → Subnet → EC2/RDS/ALB)"
-        right={<Badge tone="brand" variant="soft" dot>Inventory</Badge>}
+        right={<RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />}
       />
       <div className="px-8 py-8 flex flex-col gap-4">
         {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}

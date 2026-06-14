@@ -1,5 +1,6 @@
 'use client';
 import { useEffect } from 'react';
+import { useResizablePanel, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import { X } from 'lucide-react';
 import Badge from './Badge';
 import StatePill from './StatePill';
@@ -60,6 +61,9 @@ export default function DetailPanel({
     return () => document.removeEventListener('keydown', onKey);
   }, [data, onClose]);
 
+  // Right-docked panels are user-resizable by default (drag the left edge; persisted).
+  const { width, startResize } = useResizablePanel('awsops_detail_width', 480);
+
   if (!data) return null;
 
   const groups = buildDetailGroups(data, spec);
@@ -75,8 +79,12 @@ export default function DetailPanel({
         role="dialog"
         aria-modal="true"
         aria-label={title ?? '리소스 상세'}
-        className="fixed right-0 top-0 z-50 flex h-full w-[420px] max-w-full flex-col border-l border-ink-100 bg-white shadow-pop"
+        className="fixed right-0 top-0 z-50 flex h-full max-w-full flex-col border-l border-ink-100 bg-white shadow-pop"
+        style={{ width }}
       >
+        <div onMouseDown={startResize} title="드래그하여 폭 조절" aria-label="패널 폭 조절" role="separator" className={RESIZE_GRIP_CLASS}>
+          <div className={RESIZE_GRIP_BAR_CLASS} />
+        </div>
         <header className="flex items-start justify-between gap-2 border-b border-ink-100 px-4 py-3">
           <h2 className="min-w-0 break-words font-mono text-[13px] font-semibold text-ink-800">
             {title ?? '리소스 상세'}

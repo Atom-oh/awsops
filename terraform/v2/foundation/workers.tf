@@ -362,7 +362,12 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
         { name = "AURORA_SECRET_ARN", value = aws_rds_cluster.aurora.master_user_secret[0].secret_arn },
-        { name = "AWS_REGION", value = var.region }
+        { name = "AWS_REGION", value = var.region },
+        # AI Diagnosis (Task 1b): the report worker uploads markdown here (handlers.py reads
+        # ARTIFACT_BUCKET → RuntimeError if unset) and invokes a us.* Bedrock inference profile,
+        # which must be called from a us region → BEDROCK_REGION (report.py default us-east-1).
+        { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.diagnosis_artifacts[0].bucket },
+        { name = "BEDROCK_REGION", value = "us-east-1" }
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -431,6 +436,9 @@ resource "aws_lambda_function" "worker" {
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
       AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      # AI Diagnosis (Task 1b): report worker uploads here + invokes a us.* Bedrock profile.
+      ARTIFACT_BUCKET = aws_s3_bucket.diagnosis_artifacts[0].bucket
+      BEDROCK_REGION  = "us-east-1"
     }
   }
   depends_on = [aws_cloudwatch_log_group.worker_fn, aws_iam_role_policy_attachment.worker_lambda_vpc]
@@ -577,6 +585,158 @@ resource "aws_iam_role_policy" "web_sqs_send" {
       Effect   = "Allow"
       Action   = ["sqs:SendMessage"]
       Resource = aws_sqs_queue.jobs[0].arn
+    }]
+  })
+}
+
+############################################################
+# AI Diagnosis (Task 1b) — artifact bucket + worker read-only IAM + web GetObject.
+# Gated on the SAME flag as the rest of the worker tier (var.workers_enabled → local.we):
+# off → count=0 → No changes / $0. The `report` worker uploads its markdown to this bucket
+# (handlers.py reads ARTIFACT_BUCKET; RuntimeError if unset) and the web BFF reads it back
+# via s3:GetObject on diagnosis/* (web/app/api/diagnosis/[id]/route.ts).
+############################################################
+resource "aws_s3_bucket" "diagnosis_artifacts" {
+  count         = local.we
+  bucket        = "${var.project}-diagnosis-artifacts"
+  force_destroy = true
+}
+
+# Block ALL public access (all four flags).
+resource "aws_s3_bucket_public_access_block" "diagnosis_artifacts" {
+  count                   = local.we
+  bucket                  = aws_s3_bucket.diagnosis_artifacts[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# SSE — AES256 (SSE-S3). No bucket CMK is conventional here; the Aurora CMK is Aurora-scoped.
+resource "aws_s3_bucket_server_side_encryption_configuration" "diagnosis_artifacts" {
+  count  = local.we
+  bucket = aws_s3_bucket.diagnosis_artifacts[0].id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Expire diagnosis/ reports after 90 days (markdown reports are ephemeral artifacts).
+resource "aws_s3_bucket_lifecycle_configuration" "diagnosis_artifacts" {
+  count  = local.we
+  bucket = aws_s3_bucket.diagnosis_artifacts[0].id
+  rule {
+    id     = "expire-diagnosis-reports"
+    status = "Enabled"
+    filter {
+      prefix = "diagnosis/"
+    }
+    expiration {
+      days = 90
+    }
+  }
+}
+
+# Worker task role (Fargate worker + worker Lambda share this role for the diagnosis report job):
+# EXACTLY the read-only data-source actions the report worker calls, plus s3:PutObject scoped to
+# diagnosis/* on the artifact bucket. No wildcards on service actions; no mutating actions.
+resource "aws_iam_role_policy" "worker_diagnosis" {
+  count = local.we
+  name  = "${var.project}-worker-diagnosis-read"
+  role  = aws_iam_role.worker_task[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # report.py invokes a us.anthropic.* Sonnet inference profile (must run from a us region →
+        # BEDROCK_REGION=us-east-1). Scoped to the Claude FM + us cross-region inference profiles.
+        Sid    = "BedrockInvokeReadOnly"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/anthropic.*",
+          "arn:aws:bedrock:*:*:inference-profile/us.anthropic.*",
+        ]
+      },
+      {
+        # The diagnosis data sources (Cost Explorer, CloudWatch, X-Ray, Security Hub, CloudTrail) —
+        # all read-only; each of these APIs requires Resource "*" (no resource-level scoping).
+        Sid    = "DiagnosisDataSourcesReadOnly"
+        Effect = "Allow"
+        Action = [
+          "ce:GetCostAndUsage",
+          "cloudwatch:GetMetricData",
+          "xray:GetServiceGraph",
+          "securityhub:GetFindings",
+          "cloudtrail:LookupEvents",
+        ]
+        Resource = "*"
+      },
+      {
+        # Upload the markdown report — scoped to diagnosis/* on the artifact bucket only.
+        Sid      = "PutDiagnosisArtifact"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${aws_s3_bucket.diagnosis_artifacts[0].arn}/diagnosis/*"
+      }
+    ]
+  })
+}
+
+# The worker LAMBDA path runs as aws_iam_role.worker_lambda (not worker_task). The diagnosis report
+# job can run on either compute path, so grant the same read-only diagnosis actions there too.
+resource "aws_iam_role_policy" "worker_lambda_diagnosis" {
+  count = local.we
+  name  = "${var.project}-worker-lambda-diagnosis-read"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockInvokeReadOnly"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/anthropic.*",
+          "arn:aws:bedrock:*:*:inference-profile/us.anthropic.*",
+        ]
+      },
+      {
+        Sid    = "DiagnosisDataSourcesReadOnly"
+        Effect = "Allow"
+        Action = [
+          "ce:GetCostAndUsage",
+          "cloudwatch:GetMetricData",
+          "xray:GetServiceGraph",
+          "securityhub:GetFindings",
+          "cloudtrail:LookupEvents",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid      = "PutDiagnosisArtifact"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${aws_s3_bucket.diagnosis_artifacts[0].arn}/diagnosis/*"
+      }
+    ]
+  })
+}
+
+# Web BFF task role: read the report back (s3:GetObject on diagnosis/* only). Gated on the worker
+# flag so the web task role is UNTOUCHED when the worker tier is off.
+resource "aws_iam_role_policy" "web_diagnosis_get" {
+  count = local.we
+  name  = "${var.project}-web-diagnosis-get"
+  role  = aws_iam_role.task.id # the web task role (workload.tf)
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["s3:GetObject"]
+      Resource = "${aws_s3_bucket.diagnosis_artifacts[0].arn}/diagnosis/*"
     }]
   })
 }

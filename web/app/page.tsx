@@ -1,7 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
+import RefreshButton from '@/components/ui/RefreshButton';
 import SectionLabel from '@/components/ui/SectionLabel';
 import Card from '@/components/ui/Card';
 import BarDistribution from '@/components/charts/BarDistribution';
@@ -16,7 +17,14 @@ interface Overview {
 }
 interface ByType { type: string; label: string; count: number; [k: string]: unknown }
 interface ByCategory { group: string; count: number; [k: string]: unknown }
-interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number }
+interface Splits {
+  ec2Running: number;
+  ec2Stopped: number;
+  ebsUnencrypted: number;
+  iamUserNoMfa: number;
+  sgOpenIngress: number;
+}
+interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; splits?: Splits }
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost { trend: TrendPoint[] }
 interface JobSlice { name: string; value: number; [k: string]: unknown }
@@ -29,22 +37,32 @@ export default function Home() {
   const [sum, setSum] = useState<Summary | null>(null);
   const [sumErr, setSumErr] = useState('');
   const [cost, setCost] = useState<Cost | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [capturedAt, setCapturedAt] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Three independent fetches — each degrades on its own.
-    fetch('/api/overview')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then(setOv)
-      .catch((e) => setOvErr(String(e)));
-    fetch('/api/inventory/summary')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then(setSum)
-      .catch((e) => setSumErr(String(e)));
-    fetch('/api/cost')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then(setCost)
-      .catch(() => setCost({ trend: [] }));
+  const loadAll = useCallback(async () => {
+    setBusy(true);
+    // Three independent fetches — each degrades on its own (Promise.allSettled
+    // so one failure never blanks the others).
+    await Promise.allSettled([
+      fetch('/api/overview')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((d) => { setOv(d); setOvErr(''); })
+        .catch((e) => setOvErr(String(e))),
+      fetch('/api/inventory/summary')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((d) => { setSum(d); setSumErr(''); })
+        .catch((e) => setSumErr(String(e))),
+      fetch('/api/cost')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then(setCost)
+        .catch(() => setCost({ trend: [] })),
+    ]);
+    setCapturedAt(new Date().toISOString());
+    setBusy(false);
   }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   // type → count lookup from the inventory summary (DASH when summary unavailable).
   const n = (type: string): number | string => {
@@ -69,7 +87,11 @@ export default function Home() {
 
   return (
     <>
-      <PageHeader title="대시보드" live subtitle="실시간 AWS · Kubernetes 운영 현황" />
+      <PageHeader
+        title="대시보드"
+        subtitle="실시간 AWS · Kubernetes 운영 현황"
+        right={<RefreshButton busy={busy} onClick={loadAll} capturedAt={capturedAt} />}
+      />
       <div className="px-8 py-8 flex flex-col gap-6">
         {loading && <div className="text-ink-400">로딩 중…</div>}
         {ovErr && (
@@ -85,7 +107,12 @@ export default function Home() {
         <section className="flex flex-col gap-3">
           <SectionLabel>COMPUTE &amp; CONTAINERS</SectionLabel>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <StatTile label="EC2 인스턴스" value={n('ec2')} variant="accent" />
+            <StatTile
+              label="EC2 인스턴스"
+              value={n('ec2')}
+              variant="accent"
+              hint={sum?.splits ? `${sum.splits.ec2Running} running · ${sum.splits.ec2Stopped} stopped` : undefined}
+            />
             <StatTile label="Lambda 함수" value={n('lambda')} />
             <StatTile label="ECS 클러스터" value={n('ecs_cluster')} />
             <StatTile label="ECR 리포지토리" value={n('ecr')} />
@@ -98,7 +125,12 @@ export default function Home() {
           <SectionLabel>STORAGE &amp; NETWORK</SectionLabel>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <StatTile label="S3 버킷" value={n('s3')} />
-            <StatTile label="EBS 볼륨" value={n('ebs_volume')} />
+            <StatTile
+              label="EBS 볼륨"
+              value={n('ebs_volume')}
+              hint={sum?.splits ? (sum.splits.ebsUnencrypted > 0 ? `미암호화 ${sum.splits.ebsUnencrypted}` : '전체 암호화') : undefined}
+              variant={sum?.splits && sum.splits.ebsUnencrypted > 0 ? 'warn' : 'default'}
+            />
             <StatTile label="RDS 인스턴스" value={n('rds')} />
             <StatTile label="DynamoDB 테이블" value={n('dynamodb')} />
             <StatTile label="VPC" value={n('vpc')} />
@@ -110,7 +142,12 @@ export default function Home() {
           <SectionLabel>SECURITY · OPS · COST</SectionLabel>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <StatTile label="IAM 역할" value={n('iam_role')} />
-            <StatTile label="보안 그룹" value={n('security_group')} />
+            <StatTile
+              label="보안 그룹"
+              value={n('security_group')}
+              hint={sum?.splits ? `인그레스 개방 ${sum.splits.sgOpenIngress}` : undefined}
+              variant={sum?.splits && sum.splits.sgOpenIngress > 0 ? 'warn' : 'default'}
+            />
             <StatTile
               label="작업 (성공/실패)"
               value={jobs ? `${jobs.succeeded} / ${jobs.failed}` : DASH}

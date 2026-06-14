@@ -1,0 +1,60 @@
+"""AWSops v2 — diagnosis_reports CRUD (pg8000). Mirrors workers/db.py conventions."""
+import json
+
+_TERMINAL = ("succeeded", "failed", "partial")
+
+
+def _as_dict(v):
+    """pg8000 may hand back JSONB as a dict already, or as a str — normalize to dict."""
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except (ValueError, TypeError):
+            return {}
+    return {}
+
+
+def list_active_invariants(conn):
+    """Active (admin-promoted) invariants only — the deterministic engine evaluates these against
+    the live 'actual' state. Read-only; params normalized to a dict."""
+    rows = conn.run(
+        "SELECT id, kind, target, params, severity FROM architecture_intent WHERE status='active'"
+    )
+    return [{"id": r[0], "kind": r[1], "target": r[2],
+             "params": _as_dict(r[3]), "severity": r[4]} for r in rows]
+
+
+def get_report_summary(conn, report_id):
+    """Return a report's (parent_report_id, summary-dict) for diff lineage, or (None, {})."""
+    rows = conn.run(
+        "SELECT parent_report_id, summary FROM diagnosis_reports WHERE id=:id", id=report_id
+    )
+    if not rows:
+        return None, {}
+    return rows[0][0], _as_dict(rows[0][1])
+
+
+def create_report(conn, worker_job_id, tier, requested_by):
+    rows = conn.run(
+        "INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status) "
+        "VALUES (:jid, :t, :rb, 'running') RETURNING id",
+        jid=worker_job_id, t=tier, rb=requested_by,
+    )
+    return rows[0][0]
+
+
+def finish_report(conn, report_id, status, sources_used=None, summary=None,
+                  artifact_uri=None, error=None):
+    assert status in _TERMINAL
+    rows = conn.run(
+        "UPDATE diagnosis_reports SET status=:s, sources_used=:su::jsonb, "
+        "summary=:sm::jsonb, artifact_uri=:a, error=:e "
+        "WHERE id=:id AND status='running' RETURNING id",
+        s=status,
+        su=json.dumps(sources_used or []),
+        sm=json.dumps(summary or {}),
+        a=artifact_uri, e=error, id=report_id,
+    )
+    return len(rows)

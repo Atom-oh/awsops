@@ -434,6 +434,16 @@ resource "aws_lambda_function" "agent" {
   timeout          = 60
   memory_size      = 256
   architectures    = ["arm64"]
+
+  environment {
+    variables = {
+      # Same-account access uses the Lambda's own execution role; AssumeRole is
+      # only for *other* onboarded accounts. Lets cross_account.get_role_arn skip
+      # a self-assume of AWSopsReadOnlyRole (which exists only in target accounts,
+      # never the host) — otherwise host-account tool calls fail with AccessDenied.
+      AWSOPS_HOST_ACCOUNT_ID = data.aws_caller_identity.current.account_id
+    }
+  }
 }
 
 # Allow the AgentCore Gateway (via its IAM role) to invoke each agent Lambda.

@@ -95,6 +95,69 @@ export async function getMonthlyCost(months = 6): Promise<MonthlyCostPoint[]> {
   }));
 }
 
+export interface ServiceUsageType { usageType: string; amount: number }
+export interface ServiceCostDetail {
+  service: string;
+  currency: string;
+  trend: CostTrendPoint[] | null;          // null = the trend CE call failed (vs [] = genuinely empty)
+  byUsageType: ServiceUsageType[] | null;  // null = the usage-type CE call failed (vs [] = genuinely empty)
+}
+
+/** Sort rows desc, keep the top-n, and roll any remainder into a single '기타' row (omitted when the rest sums to 0). */
+export function rollupUsageTypes(rows: ServiceUsageType[], n: number): ServiceUsageType[] {
+  const sorted = [...rows].sort((a, b) => b.amount - a.amount);
+  if (sorted.length <= n) return sorted;
+  const head = sorted.slice(0, n);
+  const rest = sorted.slice(n).reduce((s, x) => s + x.amount, 0);
+  return rest > 0 ? [...head, { usageType: '기타', amount: rest }] : head;
+}
+
+/**
+ * Per-service cost drill-down: daily trend (last 30d) + usage-type rollup (last 3 months, top-8 + 기타).
+ * Both legs are filtered to a single SERVICE. Each leg degrades to null independently on CE failure
+ * (null = call failed; [] = genuinely empty) so a half-broken pull still renders the other half.
+ */
+export async function getServiceCostDetail(service: string): Promise<ServiceCostDetail> {
+  const now = new Date();
+  const filter = { Dimensions: { Key: 'SERVICE' as const, Values: [service] } };
+
+  // ① DAILY UnblendedCost, trailing 30 days, no GroupBy → trend.
+  const trendEnd = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10); // tomorrow, exclusive
+  const trendStart = new Date(now.getTime() - 29 * 86_400_000).toISOString().slice(0, 10);
+  const trend = await ceClient().send(new GetCostAndUsageCommand({
+    TimePeriod: { Start: trendStart, End: trendEnd },
+    Granularity: 'DAILY',
+    Metrics: ['UnblendedCost'],
+    Filter: filter,
+  })).then((r) => (r.ResultsByTime ?? []).map((t) => ({
+    date: t.TimePeriod?.Start ?? '',
+    amount: Number(t.Total?.UnblendedCost?.Amount ?? 0),
+  }) as CostTrendPoint)).catch(() => null);
+
+  // ② MONTHLY UnblendedCost, trailing 3 months, grouped by USAGE_TYPE → summed across months → rolled up.
+  const utStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 1)).toISOString().slice(0, 10);
+  const utEnd = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+  const byUsageType = await ceClient().send(new GetCostAndUsageCommand({
+    TimePeriod: { Start: utStart, End: utEnd },
+    Granularity: 'MONTHLY',
+    Metrics: ['UnblendedCost'],
+    Filter: filter,
+    GroupBy: [{ Type: 'DIMENSION', Key: 'USAGE_TYPE' }],
+  })).then((r) => {
+    const sums = new Map<string, number>();
+    for (const t of r.ResultsByTime ?? []) {
+      for (const g of t.Groups ?? []) {
+        const key = g.Keys?.[0] ?? '?';
+        sums.set(key, (sums.get(key) ?? 0) + Number(g.Metrics?.UnblendedCost?.Amount ?? 0));
+      }
+    }
+    const rows = [...sums.entries()].map(([usageType, amount]) => ({ usageType, amount }));
+    return rollupUsageTypes(rows, 8);
+  }).catch(() => null);
+
+  return { service, currency: 'USD', trend, byUsageType };
+}
+
 /** AWS-forecasted remaining UnblendedCost from tomorrow to month-end. null when there is no future window (last day). */
 export async function getCostForecast(): Promise<number | null> {
   const now = new Date();

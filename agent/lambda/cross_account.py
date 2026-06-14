@@ -9,6 +9,7 @@ import time
 import re
 import logging
 import json
+import functools
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -20,8 +21,36 @@ _MAX_CACHE = 50
 _EXTERNAL_ID = os.environ.get('AWSOPS_EXTERNAL_ID', '')
 
 
+@functools.lru_cache(maxsize=1)
+def _host_account_id():
+    """The account this Lambda runs in.
+
+    Prefer AWSOPS_HOST_ACCOUNT_ID (no network call); fall back to STS
+    GetCallerIdentity (always permitted). Cached for the warm container.
+    """
+    env = os.environ.get('AWSOPS_HOST_ACCOUNT_ID', '').strip()
+    if env:
+        return env
+    try:
+        return boto3.client('sts').get_caller_identity()['Account']
+    except Exception as e:  # network / permission edge — fall through to cross-account
+        logger.warning(json.dumps({'event': 'host_account_lookup_failed', 'error': str(e)}))
+        return None
+
+
 def get_role_arn(account_id):
-    """Build role ARN using configurable role name."""
+    """Cross-account read-only role ARN for a *different* account.
+
+    Returns None when account_id is empty or equals the host account this
+    Lambda already runs in — same-account access uses the Lambda's own
+    execution role directly (no AssumeRole). v2 is single-account; a
+    self-assume of AWSopsReadOnlyRole would fail because that role lives only
+    in onboarded *target* accounts, never the host account.
+    """
+    if not account_id:
+        return None
+    if str(account_id).strip() == (_host_account_id() or ''):
+        return None
     role_name = os.environ.get('AWSOPS_ROLE_NAME', 'AWSopsReadOnlyRole')
     return f'arn:aws:iam::{account_id}:role/{role_name}'
 

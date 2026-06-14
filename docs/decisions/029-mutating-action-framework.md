@@ -2,6 +2,8 @@
 
 ## Status / 상태
 
+> **⛔ REVERSED (2026-06-11)** — owner decision via 3-AI consensus (kiro/codex/gemini; see `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`). The mutating-action direction is **abandoned**: AWSops stays a read-only ops dashboard; infra mutation is left to the operator's SSM/Change Manager/IaC/console. The substrate (with ADR-036) was built but shipped flag-OFF and is now **frozen** — `remediation_enabled` stays `false` permanently (**do-not-enable**); the harmless dark code is kept, not deleted. The "Accepted" record below is retained as history.
+
 Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(codex·gemini **REVISE** / kiro ACCEPT-WITH-CHANGES). 6대 통제는 **만장일치로 건전**; stale 본문(메커니즘·CDK·EC2·`data/config.json`)을 **§Consensus Revision (2026-06-09)** 으로 개정 — 실행 substrate는 ADR-036 하이브리드로 위임, v2(Terraform/Fargate/Aurora) 현행화, 기술 정정 후 채택.
 
 This ADR specifies the framework AWSops will adopt **before any write/mutate API is enabled in production**. Implementation is gated on this ADR being Accepted; ADR-010 Phase 3 cannot start until the controls below are in place.

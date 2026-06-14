@@ -13,11 +13,11 @@ Records of major design decisions. Update this index when status/outcome changes
 
 | # | 제목 / Title | 상태 / Status |
 |---|---|---|
-| 001 | Steampipe pg Pool (CLI 배제) | Accepted — v2 호스트 위치는 030이 승계 (pg Pool 결정 유효) |
+| 001 | Steampipe pg Pool (CLI 배제) | Accepted — v2 호스트 위치는 030이 승계 (pg Pool 결정 유효) (030 메커니즘은 037이 정정 — 라이브 Steampipe 없음) |
 | 002 | AI 하이브리드 라우팅 | Accepted — 라우트 4→11 확장 (현황은 011/016/025) |
 | 003 | SCP 차단 컬럼 처리 | Accepted |
 | 004 | Gateway 역할 분리 | Accepted — 게이트웨이 수 7→8 정정 |
-| 005 | VPC Lambda → Steampipe 접근 | Accepted — v2 네트워킹 경로는 030이 승계 |
+| 005 | VPC Lambda → Steampipe 접근 | Accepted — v2 네트워킹 경로는 030이 승계 (030 메커니즘은 037이 정정 — 라이브 Steampipe 없음) |
 | 006 | Cost 가용성 Probe | Accepted |
 | 007 | 리소스 인벤토리 베이스라인 | Accepted |
 | 008 | 멀티 어카운트 지원 | Accepted |
@@ -41,17 +41,17 @@ Records of major design decisions. Update this index when status/outcome changes
 | 026 | i18n LanguageProvider | Accepted (2026-04-22) |
 | 027 | Code Interpreter 세션 격리 | Accepted (2026-04-22) |
 | 028 | CloudFront CACHING_DISABLED | Accepted (2026-04-22) |
-| 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | Accepted (2026-06-09) — 멀티AI 합의(REVISE×2/AWC×1) 반영 개정; 메커니즘은 036 하이브리드로 위임, v2(Terraform/Fargate/Aurora) 현행화·기술 정정, 6대 통제 유지 |
-| 030 | ECS Fargate 워크로드 + Aurora 앱 상태 + 이중 ECR | Accepted (2026-05-27) — **메커니즘(4-컨테이너/Service Connect Steampipe/CDK)은 037이 정제·부분 승계**; Aurora·이중 ECR 의도는 유효 |
-| 031 | 런타임 커스터마이즈 에이전트·스킬 (관리자 구성 Agent Space + BYO-MCP) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); mutating BYO-MCP 거버넌스 경유·revocation fail-closed·BYO-MCP 하드닝·인젝션 가드 보완. **039가 확장**(프런티어 에이전트+Integrations 축; Addendum #6 authoring·`mcp_registrations` 모델 편차는 039 §Post-acceptance) |
-| 032 | 이벤트 트리거 자율 인시던트 라이프사이클 (멀티 에이전트 Lead/Sub) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 034/036 관계·P2 실행 바인딩·look-back 설정값화·Lead 최소권한 보완 |
+| 029 | 변경 작업 프레임워크 (ADR-010 Phase 3 게이트) | **⛔ REVERSED (2026-06-11)** — 3-AI 합의; mutating 방향 폐기, do-not-enable·substrate 동결(flag-OFF). (orig) Accepted (2026-06-09) — 멀티AI 합의(REVISE×2/AWC×1) 반영 개정; 메커니즘은 036 하이브리드로 위임, v2(Terraform/Fargate/Aurora) 현행화·기술 정정, 6대 통제 유지 |
+| 030 | ECS Fargate 워크로드 + Aurora 앱 상태 + 이중 ECR | Accepted (2026-05-27) — **메커니즘(4-컨테이너/Service Connect Steampipe/CDK)은 037이 정제·부분 승계**; Aurora·이중 ECR 의도는 유효. (스키마 카운트는 030 시점 스냅샷 — 현행은 schema.sql(v9)+ULID 마이그레이션) |
+| 031 | 런타임 커스터마이즈 에이전트·스킬 (관리자 구성 Agent Space + BYO-MCP) | **⚠️ PARTIALLY REVERSED (2026-06-11)** — Phase 1(LIVE)·Phase 2(deployed) 유지; **Phase 3(BYO-MCP)·Phase 4(mutating 도구) 폐기**(3-AI 합의). (orig) Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); mutating BYO-MCP 거버넌스 경유·revocation fail-closed·BYO-MCP 하드닝·인젝션 가드 보완 |
+| 032 | 이벤트 트리거 자율 인시던트 라이프사이클 (멀티 에이전트 Lead/Sub) | **⚠️ DOWNGRADED (2026-06-11)** — 3-AI 합의; 자율 mitigation/action 폐기(029/036 reversed), read-only Triage/조사/RCA만 유지(권고전용, 활성화 시 analysis-only). (orig) Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 034/036 관계·P2 실행 바인딩·look-back 설정값화·Lead 최소권한 보완 |
 | 033 | AIOps LLM 비용 최적화 (Haiku 분류·프롬프트 캐싱·응답 캐시·토큰 예산) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 프롬프트 캐싱 범위 정정(게이트웨이 호출 불투명)·sourceDataFingerprint·예산 영속 보완; Phase 2 (Aurora durable budget) 구현, 의미 캐시는 v2 AI 라우트 동반 후속 페이즈로 연기 |
 | 034 | 알림 자동 RCA 라이트백 (OpsCenter/Incident Manager 양방향 보강) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); 피드백루프 차단 메커니즘·observability-write 통제 부분집합·best-effort 보완 |
-| 035 | K8sGPT 하이브리드 (MCP로 AgentCore에 통합하는 인클러스터 K8s 진단, Haiku 4.5) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); Rule 5 강화 + 7~11 추가 |
-| 036 | 변경·조치 실행 substrate (SSM Automation + Change Manager × P2 워커 백본 하이브리드) | Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); `.sync` 사실오류 정정·완료추적·승인주체·per-action IAM·통제 매핑 보완 |
-| 037 | v2 파운데이션 — Terraform + thin-BFF 웹 + 비동기 워커 (CDK 폐기) | Accepted (2026-06-10) — co-agent ADR 일관성 리뷰; 024 전면 승계 + 030 메커니즘 정제(Steampipe 라이브 없음·flag-gated 인벤토리 sync 확정) |
+| 035 | K8sGPT 하이브리드 (MCP로 AgentCore에 통합하는 인클러스터 K8s 진단, Haiku 4.5) | **⚠️ DOWNGRADED (2026-06-11)** — 3-AI 합의; read-only Result-CRD 통합만 유지(GET-only), **H3a(→032/034/029 제안) 배선 폐기**. (orig) Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); Rule 5 강화 + 7~11 추가 |
+| 036 | 변경·조치 실행 substrate (SSM Automation + Change Manager × P2 워커 백본 하이브리드) | **⛔ REVERSED (2026-06-11)** — 3-AI 합의; 029와 함께 실행 substrate 폐기, do-not-enable·동결. (orig) Accepted (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES); `.sync` 사실오류 정정·완료추적·승인주체·per-action IAM·통제 매핑 보완 |
+| 037 | v2 파운데이션 — Terraform + thin-BFF 웹 + 비동기 워커 (CDK 폐기) | Accepted (2026-06-10) — co-agent ADR 일관성 리뷰; 024 전면 승계 + 030 메커니즘 정제(Steampipe 라이브 없음·flag-gated 인벤토리 sync 확정) (029/036은 이 파운데이션 위에 설계됐으나 2026-06-11 REVERSED — 037의 채택 자체는 029/036 reversal에 영향받지 않음) |
 | 038 | 하이브리드 에이전트 라우팅 (정규식+Haiku 분류기) + v2 프롬프트 캐싱 | Accepted (2026-06-10) — 멀티AI 의사결정(A-now/C-at-P4 만장일치) + 스펙 리뷰 8건 반영; Gateway 시맨틱 P4 연기; **활성화 LIVE (2026-06-10): 게이트 hybrid 96.9% (+27.7pp) PASSED·캐싱 GREEN·분류기 타임아웃 3.5s 정정** |
-| 039 | 멀티 에이전트 플랫폼 — 프런티어 에이전트(DevOps/Security/FinOps + N) + Integrations 축 (ADR-031 확장) | Accepted (2026-06-13) — 멀티AI co-agent 합의(7-리뷰어 ADR 모순 교차검증 + 의사결정 패널 Q1만장일치/Q2chair/Q3+hedge + 대안·리스크 패널). 4기둥(Frontier Agents·Skills·Integrations[Option 4 단일 MCP substrate, READ/READ_WRITE, ingress+egress]·Agent Spaces); 페더레이션=032 재사용; mutating gate=029/036; **P1 구현 완료**(commits ee98e14…44302cf, web 559 green), P2~ backlog. 스펙 `docs/superpowers/specs/2026-06-12-custom-agent-platform-design.md` |
+| 039 | 멀티 에이전트 플랫폼 — 프런티어 에이전트(DevOps/Security/FinOps + N) + Integrations 축 (ADR-031 확장) | Accepted (2026-06-13) — 멀티AI co-agent 합의(7-리뷰어 ADR 모순 교차검증 + 의사결정 패널 Q1만장일치/Q2chair/Q3+hedge + 대안·리스크 패널). 4기둥(Frontier Agents·Skills·Integrations[Option 4 단일 MCP substrate, READ/READ_WRITE, ingress+egress]·Agent Spaces); 페더레이션=032 재사용; mutating gate=029/036; **P1·P2 구현 완료 + P2-infra inc1/inc2 배포**(egress READ 라이브 MCP). **⚠️ 2026-06-11 reversal 정합성 필요(머지로 표면화)**: 039는 029/036(mutating gate) + 031 Phase3(BYO-MCP)를 전제하나 이들은 2026-06-11에 REVERSED/폐기됨 → **egress READ-only(inc2)는 reversal과 양립(쓰기·자율 없음, SAFEGUARD+allowlist+SSRF), 그러나 READ_WRITE(P3)·BYO-MCP write는 029/036 동결로 차단**. 039 재검토/개정 필요. 스펙 `docs/superpowers/specs/2026-06-12-custom-agent-platform-design.md` |
 
 ## 새 ADR 추가 / Adding a New ADR
 1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1

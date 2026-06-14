@@ -7,6 +7,7 @@ type Dict = Record<string, string>;
 const MESSAGES: Record<Lang, Dict> = {
   ko: {
     'nav.overview': '개요',
+    'nav.aiDiagnosis': 'AI 진단',
     'nav.assistant': '어시스턴트',
     'nav.eks': 'EKS',
     'nav.jobs': '작업',
@@ -28,6 +29,7 @@ const MESSAGES: Record<Lang, Dict> = {
   },
   en: {
     'nav.overview': 'Overview',
+    'nav.aiDiagnosis': 'AI Diagnosis',
     'nav.assistant': 'Assistant',
     'nav.eks': 'EKS',
     'nav.jobs': 'Jobs',

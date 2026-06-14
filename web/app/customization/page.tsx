@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import PageHeader from '@/components/ui/PageHeader';
 
 interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string }>; agentType?: string; gateways?: string[]; }
 interface SkillRow { id: number; name: string; description: string; tier: string; enabled: boolean; version: number; agentTypes?: string[]; }
@@ -128,8 +129,9 @@ export default function CustomizationPage() {
   if (noAurora) return <div className="p-6 text-[13px] text-ink-500">Aurora is not configured — custom agents are unavailable.</div>;
 
   return (
-    <div className="space-y-6 p-6 text-ink-800">
-      <h1 className="text-lg font-semibold">Custom Agents &amp; Skills</h1>
+    <div className="text-ink-800">
+      <PageHeader title="Custom Agents & Skills" />
+      <div className="space-y-6 p-6">
       {msg && <div className="text-[12px] text-claude-600">{msg}</div>}
 
       <section className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
@@ -286,6 +288,7 @@ export default function CustomizationPage() {
         </div>
         <button onClick={saveSpace} className="rounded bg-claude-500 px-3 py-1 text-[12px] font-medium text-white">Save Agent Space</button>
       </section>
+      </div>
     </div>
   );
 }

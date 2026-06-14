@@ -1,7 +1,7 @@
 import { verifyUser } from '@/lib/auth';
 import { getAllowedClusters } from '@/lib/eks-registry';
 import { listInCluster, type NodeRow, type PodRow, type DeploymentRow, type ServiceRow, type EventRow } from '@/lib/eks-incluster';
-import { aggregateNodeResources } from '@/lib/eks-resources';
+import { aggregateNodeResources, instanceTypeDistribution } from '@/lib/eks-resources';
 import { podStatusCounts, podsByNamespace } from '@/lib/eks-tab-stats';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +19,7 @@ const NS_CAP = 10;
 const empty = (name: string) => ({
   name, reachable: false,
   counts: { nodes: 0, nodesReady: 0, pods: 0, podsRunning: 0, deployments: 0, services: 0 },
-  nodeAgg: [], podStatus: {}, podsByNamespace: [], events: [],
+  nodeAgg: [], instanceTypes: [], podStatus: {}, podsByNamespace: [], events: [],
 });
 
 export async function GET(request: Request) {
@@ -49,6 +49,7 @@ export async function GET(request: Request) {
           services: services.length,
         },
         nodeAgg: aggregateNodeResources(nodes, pods),
+        instanceTypes: instanceTypeDistribution(nodes),
         podStatus: podStatusCounts(pods),
         podsByNamespace: podsByNamespace(pods).slice(0, NS_CAP),
         events: [...events].sort((a, b) => b.lastSeenTs - a.lastSeenTs).slice(0, EVENTS_CAP),
