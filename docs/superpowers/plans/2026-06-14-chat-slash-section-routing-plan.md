@@ -77,5 +77,27 @@ anything under `web/app/opencost/**`, `CommandPalette.tsx`, `Sidebar.tsx`, `next
 - [ ] `npx tsc --noEmit` adds zero new errors vs the 18-error baseline (source files clean).
 - [ ] `npx next build` rc=0.
 
+## P2 gate revisions (codex+gemini consensus — folded in)
+- **R1 parseSlash semantics (MAJOR):** do NOT left-trim the input — a leading space means it is NOT a
+  command (literal). Match `^\/([a-z][a-z-]*)(?:\s([\s\S]*))?$`: group1=key, the separator is exactly
+  ONE whitespace char, group2=body kept **verbatim** (no further trim) so pasted indentation/newlines
+  survive. `/costfoo` (no separator) → literal. Tests: `/cost   foo`→`'  foo'`; `/cost\nfoo`→`'foo'`;
+  `/cost`→`''`; `'  /cost x'`→literal; `/costfoo`→literal.
+- **R2 useChat signature (MAJOR):** `send(prompt, overrideSection?: string | null, switchedFrom?)`;
+  body posts `section: overrideSection ?? null`. Composer may pass `null` (explicit auto) with no TS error.
+- **R3 Enter ownership (MAJOR):** while the SlashMenu is open it OWNS ArrowUp/ArrowDown/Enter/Tab/Esc —
+  `e.preventDefault()` + select/close; Composer must NOT send on an Enter the menu consumed. Implement by
+  routing the input's `onKeyDown` to a menu handler first when open, which returns a "handled" flag.
+- **R4 empty-body slash → chip (MAJOR):** typing `/network` (no body) + Enter sets the target chip,
+  clears the field, and does NOT send; test it. (Selecting from the menu does the same.)
+- **R5 a11y wiring + tests (MAJOR):** the **input** carries `role=combobox`, `aria-expanded`,
+  `aria-controls`(menu id), `aria-activedescendant`(active option id); each option has a stable id.
+  jsdom tests: ArrowDown moves the active option, Enter/Tab selects it, Escape closes,
+  `aria-activedescendant` points at an existing option id.
+- **R6 orphaned presets (MAJOR→resolved):** `PresetChips` shows `AUTO_PRESETS` only; the per-section
+  `presets` arrays in `lib/sections.ts` are intentionally RETAINED as data (no scope creep into that
+  read-only file) — documented as currently-unused, available for a future per-section hint.
+- **R7 (MINOR):** test names match their assertions; the section key stays `string | null`.
+
 ## Rollout
 `make deploy` (web). No migration / worker / terraform.
