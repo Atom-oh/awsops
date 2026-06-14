@@ -30,12 +30,21 @@ are already synced.
   but `tg.load_balancer_arns` and `cloudfront.web_acl_id` are **ARNs**. The builder must index
   ALB/NLB/WAF by their payload **`arn`** field to resolve those edges (CF→ALB domain matching
   uses the `dns_name` payload field, which is fine).
-- **⚠️ VPC-Origin CloudFront (gate-confirmed):** v2's own distribution uses a **VPC Origin** whose
-  origin `DomainName` is the **public FQDN**, not the ALB `dns_name` — so `DomainName == dns_name`
-  will NOT match it. Handle both: (a) custom/S3 origins → match `origins[].DomainName` against
-  `alb.dns_name`; (b) VPC origins → resolve via `origins[].VpcOriginConfig` where present; (c)
-  anything unmatched → render a standalone "external / unresolved origin" node (never force a
-  wrong edge).
+- **VPC-Origin CloudFront (severity corrected: MAJOR/known-limitation, NOT critical):** the
+  **common case works** — S3 origins and custom origins that point at a public ALB by its DNS name
+  match via `origins[].DomainName ↔ alb.dns_name`. The graph is NOT broadly empty. What does NOT
+  resolve is **CF → private (VPC-Origin) LB**: there the origin `DomainName` is the **public FQDN**
+  (verified in `terraform/v2/foundation/edge.tf`: `origin.domain_name = var.domain_name`), and the
+  real link is `origins[].VpcOriginConfig.VpcOriginId` → the `aws_cloudfront_vpc_origin` resource's
+  ARN (= the ALB/NLB ARN). We do **not** sync that resource today, and Steampipe table support for
+  `aws_cloudfront_vpc_origin` is **unverified**. Handling (proportionate):
+  - default: match `origins[].DomainName` against `alb.dns_name` / `nlb.dns_name` (covers normal distros);
+  - VPC-Origin / any unmatched origin → render a labeled **"VPC/unresolved origin"** node, never a
+    false edge (honest degradation);
+  - **CF→private-LB resolution is an optional add** gated on a feasibility check (Task 0b): if
+    Steampipe exposes `aws_cloudfront_vpc_origin` (id → endpoint ARN), sync it and resolve
+    `VpcOriginConfig.VpcOriginId → ARN → match ALB/NLB by payload arn`. If not available, leave the
+    unresolved node and note it for a follow-up. This is **not a blocker** for Spec 1.
 - Web is Next.js 14 thin-BFF, root path, `export default`, standalone build; fetch is `/api/*`.
 - Graph builders are **pure / React-Flow-independent** (see `lib/topology.ts` style: node dedup,
   no dangling edges). Tests are vitest, no React for pure libs.
@@ -66,6 +75,14 @@ are already synced.
       `aws_ec2_target_group_health` (separate table) actually carries `Target.Id` + health state.
 - [ ] Pin the chosen source in Task 1 accordingly. (No commit — investigation only.)
 
+### Task 0b — feasibility check: `aws_cloudfront_vpc_origin` (for CF→private-LB)
+- [ ] Check whether the installed Steampipe AWS plugin exposes `aws_cloudfront_vpc_origin`
+      (`steampipe query "select * from aws_cloudfront_vpc_origin limit 1"`). If yes, note its
+      id→endpoint-ARN columns — this is what resolves a VPC-Origin distribution to its private
+      ALB/NLB. If no, CF→private-LB stays an "unresolved origin" node (follow-up, not a blocker).
+- [ ] Outcome decides whether Task 3 includes the optional VpcOriginConfig→ARN resolution.
+      (No commit — investigation only.)
+
 ### Task 1 — `target_group` Steampipe sync query
 - [ ] In `scripts/v2/steampipe/sync_lambda.py`, add a `target_group` entry from
       `aws_ec2_target_group`: `target_group_arn` (→ resource_id), `target_group_name`, `region`,
@@ -87,9 +104,9 @@ are already synced.
       (PascalCase nested keys): CF→ALB edge when `cloudfront.origins[].DomainName` matches
       `alb.dns_name` (exact + case-insensitive); **ALB indexed by payload `arn`**; CF→WAF via
       `cloudfront.web_acl_id` matched against `waf.arn`; **VPC-origin** distribution whose
-      `DomainName` is a public FQDN (≠ any `dns_name`) and that has `origins[].VpcOriginConfig`
-      → resolve to the ALB if resolvable, else **standalone unresolved-origin node, no false edge**;
-      node dedup.
+      `DomainName` is a public FQDN (≠ any `dns_name`) → **standalone "VPC/unresolved origin" node,
+      no false edge** by default (VpcOriginConfig→ARN resolution only if Task 0b found
+      `aws_cloudfront_vpc_origin`); node dedup.
 - [ ] Implement `web/lib/flow-topology.ts`: `FlowKind`, `FlowNode`, `FlowEdge {…, confidence}`,
       `FlowGraph`, `buildFlowGraph(input)`. Read nested keys as **PascalCase** (`DomainName`,
       `VpcOriginConfig`). Index ALB/NLB/WAF by payload `arn`. Edges default `confidence: 'observed'`.
