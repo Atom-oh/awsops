@@ -31,6 +31,9 @@ export interface FlowGraph { nodes: FlowNode[]; edges: FlowEdge[] }
 export interface FlowInput {
   route53?: Row[]; cloudfront?: Row[]; alb?: Row[]; nlb?: Row[]; tg?: Row[]; waf?: Row[];
   ec2?: Row[]; lambda?: Row[];
+  // ip-target resolution (Spec 2): pod/ENI IP → friendly label + meta. Built live by the page
+  // from EKS pods (and later ECS tasks); the builder stays pure (just a lookup table).
+  ipResolved?: Record<string, { label: string; resolved: 'eks' | 'ecs'; meta?: Record<string, unknown> }>;
 }
 
 /** CloudFront `aliases` jsonb → string[] (PascalCase {Items:[...]} or a plain array). */
@@ -173,17 +176,23 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       const port = target.Port == null ? '' : `:${str(target.Port)}`;
       const nodeId = `target:${str(t.resource_id)}:${targetId}${port}`;
       const ttype = str(t.target_type);
-      // Resolve instance/lambda targets to a friendly name; ip stays raw (Spec 2 = ECS/EKS).
+      // Resolve instance→EC2 name, lambda→function name, ip→EKS/ECS workload (via ipResolved).
       let label = targetId;
       let resolved = '';
+      let extra: Record<string, unknown> = {};
       if (ttype === 'instance' && ec2ById.has(targetId)) { label = ec2ById.get(targetId)!; resolved = 'ec2'; }
       else if (ttype === 'lambda' && lambdaByArn.has(targetId)) { label = lambdaByArn.get(targetId)!; resolved = 'lambda'; }
+      else if (ttype === 'ip' && input.ipResolved?.[targetId]) {
+        const r = input.ipResolved[targetId];
+        label = r.label; resolved = r.resolved; extra = r.meta ?? {};
+      }
       addNode(nodeId, 'target', label, {
         targetType: ttype,
         health: str(health.State) || 'unknown',
         port: target.Port ?? null,
         id: targetId,
         ...(resolved ? { resolved } : {}),
+        ...extra,
       });
       addEdge(tgId, nodeId);
     });

@@ -1,6 +1,7 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
+import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Circle, type LucideIcon } from 'lucide-react';
 import { Background, Controls, MiniMap, Position, type Node, type Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
@@ -19,7 +20,8 @@ type InvType = (typeof TYPES)[number];
 type Row = Record<string, unknown>;
 
 // InvType → FlowInput key (target_group maps to `tg`). ec2/lambda enrich target labels only.
-const FLOW_KEY: Record<InvType, keyof FlowInput> = {
+type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda';
+const FLOW_KEY: Record<InvType, RowKey> = {
   route53: 'route53', cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg', waf: 'waf',
   ec2: 'ec2', lambda: 'lambda',
 };
@@ -55,18 +57,28 @@ function nodeColors(n: FlowNode, dark: boolean): [string, string] {
   return (dark ? KIND_DARK : KIND_LIGHT)[n.kind];
 }
 
-const PREFIX: Record<FlowKind, string> = {
-  route53: 'DNS', cloudfront: 'CF', alb: 'ALB', nlb: 'NLB', tg: 'TG', waf: 'WAF', target: '', origin: '', more: '',
+type IconC = LucideIcon;
+const KIND_ICON: Record<FlowKind, IconC> = {
+  route53: Globe, cloudfront: Cloud, alb: Network, nlb: Network, tg: TargetIcon,
+  waf: Shield, target: Circle, origin: CircleHelp, more: MoreHorizontal,
 };
+// target sub-icon by resolved backend: EKS pod / EC2 / Lambda, else a generic dot.
+const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ec2: Server, lambda: Zap };
 
-function nodeLabel(n: FlowNode): string {
-  if (n.kind === 'target') {
-    const t = n.meta?.targetType ? `${n.meta.targetType} · ` : '';
-    const h = n.meta?.health ? ` (${n.meta.health})` : '';
-    return `${t}${n.label}${h}`;
-  }
-  const p = PREFIX[n.kind];
-  return p ? `${p} · ${n.label}` : n.label;
+function iconFor(n: FlowNode): IconC {
+  if (n.kind === 'target') return RESOLVED_ICON[String(n.meta?.resolved ?? '')] ?? Circle;
+  return KIND_ICON[n.kind];
+}
+
+function nodeLabel(n: FlowNode): ReactNode {
+  const Icon = iconFor(n);
+  const health = n.kind === 'target' && n.meta?.health ? ` (${n.meta.health})` : '';
+  return (
+    <span className="flex items-center gap-1.5">
+      <Icon size={13} className="shrink-0 opacity-80" />
+      <span className="truncate">{n.label}{health}</span>
+    </span>
+  );
 }
 
 const ROW_CAP = 500; // /api/inventory caps limit at 500
@@ -83,6 +95,32 @@ async function fetchType(t: InvType): Promise<{ rows: Row[]; finishedAt: string 
   };
 }
 
+// Resolve ALB/NLB ip targets to EKS workloads: for each connected cluster, map pod IP →
+// "namespace/workload" (Deployment). Best-effort — failures per cluster are skipped.
+async function fetchEksIpMap(): Promise<NonNullable<FlowInput['ipResolved']>> {
+  const map: NonNullable<FlowInput['ipResolved']> = {};
+  try {
+    const list = await fetch('/api/eks').then((r) => (r.ok ? r.json() : null));
+    const clusters: string[] = (list?.rows ?? [])
+      .filter((c: { access?: string }) => c.access === 'connected')
+      .map((c: { name?: string }) => c.name)
+      .filter(Boolean);
+    await Promise.all(clusters.map(async (name) => {
+      try {
+        const r = await fetch(`/api/eks/${name}/incluster?kind=pods`).then((x) => (x.ok ? x.json() : null));
+        for (const p of (r?.rows ?? []) as { podIP?: string; namespace?: string; name?: string; workload?: string }[]) {
+          if (p.podIP) map[p.podIP] = {
+            label: `${p.namespace ?? ''}/${p.workload || p.name || ''}`,
+            resolved: 'eks',
+            meta: { pod: p.name, namespace: p.namespace, cluster: name, workload: p.workload },
+          };
+        }
+      } catch { /* skip this cluster */ }
+    }));
+  } catch { /* no EKS resolution */ }
+  return map;
+}
+
 export default function TopologyPage() {
   const [data, setData] = useState<FlowInput | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
@@ -96,8 +134,8 @@ export default function TopologyPage() {
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const res = await Promise.all(TYPES.map(fetchType));
-      const out: FlowInput = {};
+      const [res, ipResolved] = await Promise.all([Promise.all(TYPES.map(fetchType)), fetchEksIpMap()]);
+      const out: FlowInput = { ipResolved };
       let newest: string | null = null;
       const capped: string[] = [];
       TYPES.forEach((t, i) => {

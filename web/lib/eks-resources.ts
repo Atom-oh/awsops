@@ -14,6 +14,8 @@ export interface PodRow {
   name: string; namespace: string; status: string; node: string; restarts: number; age: string;
   // summed container requests: cpu in cores, memory in MiB, ephemeral-storage in MiB.
   cpuRequest: number; memRequest: number; diskRequest: number;
+  // for topology: pod IP (matches an ALB/NLB target IP) + owning workload (Deployment/etc.).
+  podIP?: string; workload?: string;
 }
 
 /** Parse a K8s CPU quantity to cores: "8"→8, "7910m"→7.91, ""/null→0. */

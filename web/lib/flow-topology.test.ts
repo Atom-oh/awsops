@@ -139,11 +139,21 @@ describe('buildFlowGraph — backend resolution (instance/lambda)', () => {
     expect(g.nodes.find((n) => n.kind === 'target')?.label).toBe('my-fn');
   });
 
-  it('leaves an ip target raw (Spec 2 resolves ECS/EKS)', () => {
+  it('leaves an ip target raw when unresolved', () => {
     const tgIp = { resource_id: 'arn:tg:ip', target_group_name: 'ip', target_type: 'ip',
       target_health_descriptions: [{ Target: { Id: '10.0.1.9' }, TargetHealth: { State: 'healthy' } }] };
     const g = buildFlowGraph({ tg: [tgIp] });
     expect(g.nodes.find((n) => n.kind === 'target')?.label).toBe('10.0.1.9');
+  });
+
+  it('resolves an ip target to an EKS workload via ipResolved', () => {
+    const tgIp = { resource_id: 'arn:tg:ip', target_group_name: 'ip', target_type: 'ip',
+      target_health_descriptions: [{ Target: { Id: '10.0.1.9' }, TargetHealth: { State: 'healthy' } }] };
+    const g = buildFlowGraph({ tg: [tgIp], ipResolved: { '10.0.1.9': { label: 'prod/checkout', resolved: 'eks', meta: { pod: 'checkout-abc', cluster: 'fsi' } } } });
+    const t = g.nodes.find((n) => n.kind === 'target');
+    expect(t?.label).toBe('prod/checkout');
+    expect(t?.meta?.resolved).toBe('eks');
+    expect(t?.meta?.pod).toBe('checkout-abc');
   });
 });
 
