@@ -26,7 +26,7 @@ export default function PageHeader({
   className?: string;
 }) {
   return (
-    <header className={cn('flex items-start justify-between gap-4 px-8 pt-[26px] pb-5 bg-chrome border-b border-chrome-border', className)}>
+    <header className={cn('flex flex-col gap-3 px-8 pt-[26px] pb-5 bg-chrome border-b border-chrome-border lg:flex-row lg:items-start lg:justify-between lg:gap-4', className)}>
       <div className="min-w-0">
         <div className="flex items-center gap-2.5">
           <h1 className="text-[24px] font-semibold tracking-[-0.01em] text-chrome-fg leading-tight">{title}</h1>
