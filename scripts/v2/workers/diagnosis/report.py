@@ -3,6 +3,7 @@ assemble markdown + summary. Read-only. Bedrock model from env (Sonnet for mid t
 import json
 import os
 import re
+import sys
 import boto3
 from botocore.config import Config
 
@@ -133,8 +134,8 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None):
             return
         try:
             on_progress(current, total, section, phase)
-        except Exception:  # noqa: BLE001 — progress is a heartbeat, never fatal to the report
-            pass
+        except Exception as e:  # noqa: BLE001 — progress is a heartbeat, never fatal to the report
+            print(f"progress emit failed (non-fatal): {e}", file=sys.stderr)  # [P4 gemini MINOR] don't fail silently
 
     _emit(0, "데이터 수집", "collect")
     collected = {r["key"]: r for r in src.collect_all(conn)}
