@@ -20,8 +20,21 @@ export default function ChatDrawer() {
   const [open, setOpen] = useState(false);
   const [maximized, setMaximized] = useState(false);
   const [width, setWidth] = useState(DEFAULT_W);
+  // Below lg (1024px) the drawer is fullscreen: the inline width + resize handle are
+  // suppressed. Default false so SSR + first client paint match (no window) → mobile
+  // fullscreen; the effect below syncs to the real viewport on mount.
+  const [isDesktop, setIsDesktop] = useState(false);
   const widthRef = useRef(DEFAULT_W);
   widthRef.current = width;
+
+  // Track the lg breakpoint to gate the desktop-only inline width / resize behavior.
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const sync = () => setIsDesktop(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
 
   // Restore persisted width / maximized, and wire the cross-app "open chat" event.
   useEffect(() => {
@@ -79,10 +92,13 @@ export default function ChatDrawer() {
 
   if (!open) {
     return (
+      // FAB launcher: on mobile it floats ABOVE the fixed BottomTabBar (bottom-20)
+      // so it no longer collides with it; standard bottom-right on desktop (lg:bottom-5).
+      // Opens the chat drawer (fullscreen below lg).
       <button
         onClick={() => setOpen(true)}
         aria-label="AI 어시스턴트 열기"
-        className="fixed bottom-5 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600"
+        className="fixed bottom-20 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600 lg:bottom-5"
       >
         <Sparkles size={20} strokeWidth={2} />
       </button>
@@ -93,17 +109,19 @@ export default function ChatDrawer() {
 
   return (
     <div
-      className="fixed right-0 top-0 z-50 flex h-screen flex-col border-l border-ink-100 bg-paper shadow-pop"
-      style={{ width: totalWidth }}
+      // <lg: fullscreen overlay (inset-0, full width/height). lg+: docked to the right
+      // edge with the persisted/maximized width applied as an inline style.
+      className="fixed inset-0 z-50 flex flex-col border-ink-100 bg-paper shadow-pop lg:inset-y-0 lg:left-auto lg:right-0 lg:h-screen lg:border-l"
+      style={isDesktop ? { width: totalWidth } : undefined}
     >
-      {/* resize grip (hidden while maximized) */}
+      {/* resize grip — desktop only, and hidden while maximized */}
       {!maximized && (
         <div
           onMouseDown={startResize}
           title="드래그하여 폭 조절"
           aria-label="패널 폭 조절"
           role="separator"
-          className="group absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize"
+          className="group absolute left-0 top-0 z-10 hidden h-full w-1.5 cursor-col-resize lg:block"
         >
           <div className="absolute left-0 top-0 h-full w-px bg-ink-100 transition-colors group-hover:w-0.5 group-hover:bg-brand-400" />
         </div>

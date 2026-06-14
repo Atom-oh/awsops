@@ -1,7 +1,7 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, PanelLeft, X } from 'lucide-react';
 import SectionPicker from './SectionPicker';
 import PresetChips from './PresetChips';
 import Composer from './Composer';
@@ -21,6 +21,10 @@ export default function AssistantClient() {
   const params = useSearchParams();
   const wantedThread = params.get('thread');
   const inited = useRef(false);
+  // Below lg the thread rail is a slide-in overlay (toggled from the header),
+  // so the chat area is full-width on a phone. At lg+ the rail is always visible
+  // and this state is irrelevant (the rail uses `lg:flex`).
+  const [mobileThreads, setMobileThreads] = useState(false);
 
   useEffect(() => {
     if (inited.current) return;
@@ -38,20 +42,55 @@ export default function AssistantClient() {
 
   return (
     <div className="flex h-full">
-      {/* thread rail */}
-      <div className="w-72 shrink-0 border-r border-ink-100">
+      {/* thread rail — desktop only (always visible at lg+). */}
+      <div className="hidden w-72 shrink-0 border-r border-ink-100 lg:block">
         <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onNew={chat.newChat} />
       </div>
 
+      {/* thread rail — mobile slide-in overlay (<lg), toggled from the header. */}
+      {mobileThreads && (
+        <div className="fixed inset-0 z-40 lg:hidden">
+          <div className="absolute inset-0 bg-ink-900/30" onClick={() => setMobileThreads(false)} aria-hidden />
+          <div className="absolute inset-y-0 left-0 flex w-72 max-w-[80vw] flex-col border-r border-ink-100 bg-paper shadow-pop">
+            <div className="flex items-center justify-between border-b border-ink-100 px-3 py-2.5">
+              <span className="text-[13px] font-semibold text-ink-800">대화 목록</span>
+              <button
+                onClick={() => setMobileThreads(false)}
+                aria-label="대화 목록 닫기"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-ink-100 hover:text-ink-800"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <ThreadList
+                threads={chat.threads}
+                activeId={chat.threadId}
+                onSelect={(id) => { void chat.selectThread(id); setMobileThreads(false); }}
+                onDelete={chat.removeThread}
+                onNew={() => { chat.newChat(); setMobileThreads(false); }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* conversation */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-ink-100 px-6 py-3.5">
-          <div className="flex items-center gap-2 text-[15px] font-semibold text-ink-800">
-            <Sparkles size={17} className="text-brand-500" />
+        <header className="flex items-center justify-between gap-2 border-b border-ink-100 px-4 py-3.5 lg:px-6">
+          <div className="flex min-w-0 items-center gap-2 text-[15px] font-semibold text-ink-800">
+            <button
+              onClick={() => setMobileThreads(true)}
+              aria-label="대화 목록 열기"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-ink-100 hover:text-ink-800 lg:hidden"
+            >
+              <PanelLeft size={17} />
+            </button>
+            <Sparkles size={17} className="shrink-0 text-brand-500" />
             <span className="truncate">{title}</span>
           </div>
           {activeSec && (
-            <span className="flex items-center gap-1 text-[12px] font-medium" style={{ color: activeSec.color }}>
+            <span className="flex shrink-0 items-center gap-1 text-[12px] font-medium" style={{ color: activeSec.color }}>
               {activeSec.icon} {activeSec.label}
             </span>
           )}
