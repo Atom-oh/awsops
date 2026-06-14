@@ -55,10 +55,8 @@ describe('diagnosis queries', () => {
   });
   it('A5: report SELECTs surface the progress column (live per-section status)', async () => {
     await listReports(10);
-    const [listSql] = query.mock.calls.at(-1) as [string, unknown[]];
-    expect(listSql).toContain('progress');
+    expect(query.mock.calls.at(-1)![0]).toContain('progress');
     await getReport(1);
-    const [getSql] = query.mock.calls.at(-1) as [string, unknown[]];
-    expect(getSql).toContain('progress');
+    expect(query.mock.calls.at(-1)![0]).toContain('progress');
   });
 });
