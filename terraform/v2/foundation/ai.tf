@@ -154,6 +154,34 @@ resource "aws_iam_role_policy" "agentcore_integrations" {
   })
 }
 
+# ---- Notion external-integration connector (M1 gateway target). integrations_enabled-gated.
+# The Notion read MCP Lambda (notion_mcp.py, in local.agent_lambdas) reads this token at
+# runtime. DEFAULT aws/secretsmanager key (no custom CMK) → GetSecretValue needs no
+# kms:Decrypt grant. Value injected out-of-band by admin (no literal token in TF). ----
+resource "aws_secretsmanager_secret" "notion" {
+  count                   = local.integ_count
+  name                    = "ops/${var.project}/integrations/notion"
+  description             = "Notion integration token for the read-only notion-mcp Lambda (ADR-039 read-tier). Value set out-of-band."
+  recovery_window_in_days = 7
+}
+
+# Scoped grant on the agent Lambda EXEC role (not the agentcore runtime role) — the role the
+# Notion Lambda actually runs under. GetSecretValue on the exact notion secret ARN only.
+resource "aws_iam_role_policy" "agent_lambda_notion_secret" {
+  count = local.integ_count
+  name  = "${var.project}-agent-lambda-notion-secret"
+  role  = aws_iam_role.agent_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "NotionSecretRead"
+      Effect   = "Allow"
+      Action   = "secretsmanager:GetSecretValue"
+      Resource = aws_secretsmanager_secret.notion[0].arn
+    }]
+  })
+}
+
 # ---- SSM String params (placeholders; provision.py overwrites the value). Not secrets → String. ----
 resource "aws_ssm_parameter" "agentcore_runtime_arn" {
   count     = local.ac_count
@@ -389,7 +417,10 @@ resource "aws_iam_role_policy" "agent_lambda_read" {
 
 # The slice. key → source file (handler is "<module>.lambda_handler"). cross_account.py is bundled.
 locals {
-  agent_lambdas = var.agentcore_enabled ? {
+  # AWS MCP slice gated on agentcore_enabled; the Notion external-integration connector
+  # is gated on integrations_enabled (one unit with its secret + IAM below). integ_count
+  # requires agentcore_enabled, so aws_iam_role.agent_lambda[0] is always present here.
+  agent_lambdas = merge(var.agentcore_enabled ? {
     "iam-mcp"        = { file = "aws_iam_mcp.py", handler = "aws_iam_mcp.lambda_handler" }
     "flow-monitor"   = { file = "flowmonitor.py", handler = "flowmonitor.lambda_handler" }
     "network-mcp"    = { file = "network_mcp.py", handler = "network_mcp.lambda_handler" }
@@ -406,7 +437,9 @@ locals {
     "iac-mcp"        = { file = "aws_iac_mcp.py", handler = "aws_iac_mcp.lambda_handler" }
     "terraform-mcp"  = { file = "aws_terraform_mcp.py", handler = "aws_terraform_mcp.lambda_handler" }
     "aws-knowledge"  = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
-  } : {}
+    } : {}, local.integ_count > 0 ? {
+    "notion-mcp" = { file = "notion_mcp.py", handler = "notion_mcp.lambda_handler" }
+  } : {})
 }
 
 data "archive_file" "agent" {
