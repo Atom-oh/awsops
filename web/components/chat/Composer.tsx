@@ -1,28 +1,106 @@
 'use client';
 import { useState } from 'react';
-import { ArrowUp } from 'lucide-react';
+import { ArrowUp, X } from 'lucide-react';
+import { parseSlash, matchCommands, SLASH_COMMANDS, type SlashCommand } from '@/lib/slash';
+import SlashMenu from './SlashMenu';
 
-export default function Composer({ disabled, onSend }: { disabled: boolean; onSend: (text: string) => void }) {
+const MENU_ID = 'slash-menu';
+
+// Auto-routing is the default — just type. A leading `/<section>` (skill-like) targets ONE message;
+// the `/` autocomplete menu makes the sections discoverable. Picking a command pins a per-message
+// chip; the next message with no slash returns to auto.
+export default function Composer({
+  disabled, onSend,
+}: {
+  disabled: boolean;
+  onSend: (text: string, section?: string | null) => void;
+}) {
   const [text, setText] = useState('');
-  const send = () => { const t = text.trim(); if (t && !disabled) { onSend(t); setText(''); } };
+  const [target, setTarget] = useState<SlashCommand | null>(null);
+  const [active, setActive] = useState(0);
+
+  // Menu shows while the field is a bare leading-slash fragment (no space yet) and no chip is set.
+  const menuOpen = !target && /^\/[a-z-]*$/.test(text);
+  const commands = menuOpen ? matchCommands(text.slice(1)) : [];
+  const activeIdx = commands.length ? Math.min(active, commands.length - 1) : 0;
+
+  function pick(c: SlashCommand) {
+    setTarget(c);
+    setText('');
+    setActive(0);
+  }
+
+  function submit() {
+    if (disabled) return;
+    if (target) {
+      const body = text.trim();
+      if (!body) return; // chip set but no body yet → wait (R4)
+      onSend(body, target.key === 'auto' ? null : target.key);
+      setText(''); setTarget(null);
+      return;
+    }
+    const { section, prompt } = parseSlash(text);
+    if (section && !prompt.trim()) {
+      // a bare "/network " typed directly (menu already closed by the space) → set the chip, wait
+      const cmd = SLASH_COMMANDS.find((c) => c.key === section);
+      if (cmd) { setTarget(cmd); setText(''); return; }
+    }
+    if (!prompt.trim()) return;
+    onSend(prompt, section);
+    setText('');
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (menuOpen && commands.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => (Math.min(i, commands.length - 1) + 1) % commands.length); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => (Math.min(i, commands.length - 1) - 1 + commands.length) % commands.length); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(commands[activeIdx]); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setText(''); return; }
+    }
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+  }
+
   return (
-    <div className="flex items-center gap-2 border-t border-ink-100 px-3 py-3">
-      <input
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && send()}
-        placeholder="메시지를 입력하세요…"
-        disabled={disabled}
-        className="h-9 flex-1 rounded-lg border border-ink-200 bg-card px-3 text-[13px] text-ink-800 placeholder:text-ink-400 outline-none transition-shadow focus:border-brand-300 focus:shadow-focus disabled:opacity-60"
-      />
-      <button
-        onClick={send}
-        disabled={disabled}
-        aria-label="보내기"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-500 text-white transition-colors hover:bg-brand-600 disabled:opacity-40"
-      >
-        <ArrowUp size={17} strokeWidth={2.4} />
-      </button>
+    <div className="relative border-t border-ink-100 px-3 py-3">
+      <div className="flex items-center gap-2">
+        {target && (
+          <span className="flex shrink-0 items-center gap-1 rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-[12px] font-medium text-brand-700">
+            <span>{target.icon}</span>{target.label}
+            <button
+              type="button"
+              aria-label="섹션 지정 해제"
+              onClick={() => setTarget(null)}
+              className="ml-0.5 text-brand-500 hover:text-brand-700"
+            >
+              <X size={13} strokeWidth={2.5} />
+            </button>
+          </span>
+        )}
+        <input
+          value={text}
+          onChange={(e) => { setText(e.target.value); setActive(0); }}
+          onKeyDown={onKeyDown}
+          placeholder={target ? `${target.label} 영역에 질문…` : '메시지를 입력하세요…  ( / 로 특정 영역 지정 )'}
+          disabled={disabled}
+          role="combobox"
+          aria-expanded={menuOpen}
+          aria-controls={MENU_ID}
+          aria-autocomplete="list"
+          aria-activedescendant={menuOpen && commands.length ? `${MENU_ID}-opt-${activeIdx}` : undefined}
+          className="h-9 flex-1 rounded-lg border border-ink-200 bg-card px-3 text-[13px] text-ink-800 placeholder:text-ink-400 outline-none transition-shadow focus:border-brand-300 focus:shadow-focus disabled:opacity-60"
+        />
+        <button
+          onClick={submit}
+          disabled={disabled}
+          aria-label="보내기"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-500 text-white transition-colors hover:bg-brand-600 disabled:opacity-40"
+        >
+          <ArrowUp size={17} strokeWidth={2.4} />
+        </button>
+      </div>
+      {menuOpen && (
+        <SlashMenu id={MENU_ID} commands={commands} activeIndex={activeIdx} onSelect={pick} onHover={setActive} />
+      )}
     </div>
   );
 }
