@@ -27,11 +27,18 @@ describe('redactEgress', () => {
     expect(JSON.stringify(r.payload)).not.toContain('SflKxwRJSMeKKF2QT4');
   });
 
-  it('catches a base64-ENCODED secret via the long-blob heuristic (the dissent bypass)', () => {
-    const encoded = Buffer.from('AKIAIOSFODNN7EXAMPLE-and-a-secret-payload-here').toString('base64');
+  it('catches a LONG base64 blob (raw dump / long encoded payload)', () => {
+    const encoded = Buffer.from('AKIAIOSFODNN7EXAMPLE-and-a-secret-payload-here').toString('base64'); // 64 chars > 40 floor
     const r = redactEgress({ text: `data: ${encoded}` });
     expect(JSON.stringify(r.payload)).not.toContain(encoded);
     expect(r.redactions).toContain('blob');
+  });
+
+  it('HONEST LIMIT (P4 gate): a SHORT encoded secret (bare AWS key b64 ≈28 chars) is NOT caught — human 4-eyes is the backstop, not this regex', () => {
+    const short = Buffer.from('AKIAIOSFODNN7EXAMPLE').toString('base64'); // 28 chars < 40 floor
+    const r = redactEgress({ text: `data: ${short}` });
+    expect(JSON.stringify(r.payload)).toContain(short); // documents the real best-effort behavior
+    expect(r.redactions).toEqual([]);
   });
 
   it('recurses into ALL string fields (nested blocks/attachments), not just the top text', () => {
