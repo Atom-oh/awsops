@@ -30,6 +30,7 @@ export interface FlowGraph { nodes: FlowNode[]; edges: FlowEdge[] }
 
 export interface FlowInput {
   route53?: Row[]; cloudfront?: Row[]; alb?: Row[]; nlb?: Row[]; tg?: Row[]; waf?: Row[];
+  ec2?: Row[]; lambda?: Row[];
 }
 
 /** CloudFront `aliases` jsonb → string[] (PascalCase {Items:[...]} or a plain array). */
@@ -92,6 +93,13 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
     if (n.arn) lbByArn.set(str(n.arn), lbId('nlb', n));
   }
   for (const w of input.waf ?? []) if (w.arn) wafByArn.set(str(w.arn), `waf:${str(w.resource_id)}`);
+
+  // Backend resolution (Spec 1 slice): instance targets → EC2 name, lambda targets → function name.
+  // (ip targets → ECS task / EKS deployment is Spec 2 — needs ENI/pod-IP data not synced here.)
+  const ec2ById = new Map<string, string>();    // instance-id → EC2 Name (or id)
+  const lambdaByArn = new Map<string, string>(); // function arn → function name
+  for (const e of input.ec2 ?? []) ec2ById.set(str(e.resource_id), str(e.name) || str(e.resource_id));
+  for (const l of input.lambda ?? []) if (l.arn) lambdaByArn.set(str(l.arn), str(l.resource_id) || str(l.arn));
 
   // CloudFront indexes for Route53 alias targets: by distribution domain (d111.cloudfront.net)
   // and by custom-domain alias (the CNAMEs on the distribution).
@@ -162,10 +170,17 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       // include Port: the same instance/IP can be registered on multiple ports — keep them distinct.
       const port = target.Port == null ? '' : `:${str(target.Port)}`;
       const nodeId = `target:${str(t.resource_id)}:${targetId}${port}`;
-      addNode(nodeId, 'target', targetId, {
-        targetType: str(t.target_type),
+      const ttype = str(t.target_type);
+      // Resolve instance/lambda targets to a friendly name; ip stays raw (Spec 2 = ECS/EKS).
+      let label = targetId;
+      let resolved = '';
+      if (ttype === 'instance' && ec2ById.has(targetId)) { label = ec2ById.get(targetId)!; resolved = 'ec2'; }
+      else if (ttype === 'lambda' && lambdaByArn.has(targetId)) { label = lambdaByArn.get(targetId)!; resolved = 'lambda'; }
+      addNode(nodeId, 'target', label, {
+        targetType: ttype,
         health: str(health.State) || 'unknown',
         port: target.Port ?? null,
+        ...(resolved ? { resolved } : {}),
       });
       addEdge(tgId, nodeId);
     });

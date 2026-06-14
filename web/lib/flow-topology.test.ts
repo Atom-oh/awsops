@@ -120,6 +120,33 @@ describe('buildFlowGraph — ALB→TG→target', () => {
   });
 });
 
+describe('buildFlowGraph — backend resolution (instance/lambda)', () => {
+  it('resolves an instance target to its EC2 Name', () => {
+    const tgInst = { resource_id: 'arn:tg:inst', target_group_name: 'inst', target_type: 'instance',
+      target_health_descriptions: [{ Target: { Id: 'i-0abc' }, TargetHealth: { State: 'healthy' } }] };
+    const ec2 = { resource_id: 'i-0abc', name: 'web-server-1' };
+    const g = buildFlowGraph({ tg: [tgInst], ec2: [ec2] });
+    expect(g.nodes.find((n) => n.kind === 'target')?.label).toBe('web-server-1');
+    expect(g.nodes.find((n) => n.kind === 'target')?.meta?.resolved).toBe('ec2');
+  });
+
+  it('resolves a lambda target to its function name', () => {
+    const FN_ARN = 'arn:aws:lambda:ap-northeast-2:1:function:my-fn';
+    const tgFn = { resource_id: 'arn:tg:fn', target_group_name: 'fn', target_type: 'lambda',
+      target_health_descriptions: [{ Target: { Id: FN_ARN }, TargetHealth: { State: 'healthy' } }] };
+    const lam = { resource_id: 'my-fn', arn: FN_ARN };
+    const g = buildFlowGraph({ tg: [tgFn], lambda: [lam] });
+    expect(g.nodes.find((n) => n.kind === 'target')?.label).toBe('my-fn');
+  });
+
+  it('leaves an ip target raw (Spec 2 resolves ECS/EKS)', () => {
+    const tgIp = { resource_id: 'arn:tg:ip', target_group_name: 'ip', target_type: 'ip',
+      target_health_descriptions: [{ Target: { Id: '10.0.1.9' }, TargetHealth: { State: 'healthy' } }] };
+    const g = buildFlowGraph({ tg: [tgIp] });
+    expect(g.nodes.find((n) => n.kind === 'target')?.label).toBe('10.0.1.9');
+  });
+});
+
 describe('buildFlowGraph — invariants', () => {
   it('same-named LBs in different regions stay distinct (ARN-keyed node id)', () => {
     const albA = { resource_id: 'web', region: 'ap-northeast-2', arn: ALB_ARN, dns_name: 'a.elb.amazonaws.com' };
