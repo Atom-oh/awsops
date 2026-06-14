@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { listCatalog, getAction, createPlan, recordAudit } from '@/lib/remediation';
+import { redactEgress, assertChannelAllowed } from '@/lib/egress-dlp';
+import { getEgressWriteAllowlist } from '@/lib/integrations';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,8 +21,18 @@ export async function POST(req: NextRequest) {
   const action = await getAction(String(body?.action ?? ''));
   if (!action) return NextResponse.json({ message: 'unknown action' }, { status: 400 });
   if (!action.enabled) return NextResponse.json({ message: 'action disabled (catalog enabled=false)' }, { status: 409 });
-  const inputs = (body?.inputs && typeof body.inputs === 'object') ? body.inputs : {};
+  let inputs = (body?.inputs && typeof body.inputs === 'object') ? body.inputs : {};
   for (const k of action.requiredInputs) if (!(k in inputs)) return NextResponse.json({ message: `missing input: ${k}` }, { status: 400 });
+  // ADR-040/041 §2 — external DATA-write: enforce the destination (channel) allowlist + DLP-redact the
+  // inputs AT PLAN TIME, so the stored dry-run/preview a human 4-eyes-reviews is already redacted, and a
+  // disallowed destination is rejected before any plan exists. (AWS-resource actions are untouched.)
+  if ((action.targetResourceType ?? '').startsWith('external:')) {
+    const kind = (action.targetResourceType ?? '').split(':')[1] ?? '';
+    const allowlist = await getEgressWriteAllowlist(kind);
+    try { assertChannelAllowed(String((inputs as Record<string, unknown>).channel ?? ''), allowlist); }
+    catch (e) { return NextResponse.json({ message: e instanceof Error ? e.message : 'channel not allowed' }, { status: 400 }); }
+    inputs = redactEgress(inputs).payload as typeof inputs;
+  }
   // Plan-time dry-run + paired rollback are computed here WITHOUT mutation. In this skeleton the
   // dry-run is a contract echo (the live dry-run runs in the SFN DryRunFirst state at execute time).
   const dryRun = { mode: 'plan', action: action.name, inputs, mutates: false };
