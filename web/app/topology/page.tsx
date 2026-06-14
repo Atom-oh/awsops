@@ -5,53 +5,100 @@ import { Background, Controls, MiniMap, type Node, type Edge } from '@xyflow/rea
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
-import { buildTopology, type TopoKind } from '@/lib/topology';
+import { buildFlowGraph, filterFromEntry, type FlowInput, type FlowKind, type FlowNode } from '@/lib/flow-topology';
+import { layoutFlow } from '@/lib/flow-layout';
 import { useTheme } from '@/lib/use-theme';
 
 // ReactFlow touches the DOM on mount — load it client-only to avoid SSR mismatch.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
 
-const TYPES = ['vpc', 'subnet', 'ec2', 'rds', 'alb'] as const;
+const TYPES = ['cloudfront', 'alb', 'nlb', 'target_group', 'waf'] as const;
 type InvType = (typeof TYPES)[number];
 type Row = Record<string, unknown>;
 
-// Column per kind (VPC → Subnet → workloads) + a tint per kind.
-const COL: Record<TopoKind, number> = { vpc: 0, subnet: 1, ec2: 2, rds: 2, alb: 2 };
-const TINT: Record<TopoKind, string> = {
-  vpc: '#E6EEFE', subnet: '#E6F6F2', ec2: '#FEF3E2', rds: '#F1E9FF', alb: '#FDECE8',
-};
-// Dark theme: ReactFlow's dark colorMode flips default node text to light, so a
-// light pastel fill would vanish. Use dark per-kind fills + a brighter colored
-// border + explicit light text so nodes read on the dark canvas.
-const DARK_TINT: Record<TopoKind, string> = {
-  vpc: '#16243E', subnet: '#103029', ec2: '#33260C', rds: '#241A3E', alb: '#331410',
-};
-const DARK_BORDER: Record<TopoKind, string> = {
-  vpc: '#3D6FB5', subnet: '#2C9D8A', ec2: '#C8902F', rds: '#8A5BD0', alb: '#C85A45',
+// InvType → FlowInput key (target_group maps to `tg`).
+const FLOW_KEY: Record<InvType, keyof FlowInput> = {
+  cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg', waf: 'waf',
 };
 
-async function fetchType(t: InvType): Promise<Row[]> {
+// Node fill/border per FlowKind. Light + dark variants (ReactFlow dark colorMode flips default
+// node text to light, so dark nodes get explicit dark fills + light text). Target nodes are
+// colored by health instead (see HEALTH).
+const KIND_LIGHT: Record<FlowKind, [string, string]> = {
+  cloudfront: ['#E6EEFE', '#3D6FB5'], alb: ['#FEF3E2', '#C8902F'], nlb: ['#FEF3E2', '#C8902F'],
+  tg: ['#F1E9FF', '#8A5BD0'], waf: ['#FDECE8', '#C85A45'], target: ['#EBEFF2', '#AFBAC3'],
+  origin: ['#EBEFF2', '#AFBAC3'], more: ['#EBEFF2', '#AFBAC3'],
+};
+const KIND_DARK: Record<FlowKind, [string, string]> = {
+  cloudfront: ['#16243E', '#3D6FB5'], alb: ['#33260C', '#C8902F'], nlb: ['#33260C', '#C8902F'],
+  tg: ['#241A3E', '#8A5BD0'], waf: ['#331410', '#C85A45'], target: ['#1F262D', '#586773'],
+  origin: ['#1F262D', '#586773'], more: ['#1F262D', '#586773'],
+};
+const HEALTH_LIGHT: Record<string, [string, string]> = {
+  healthy: ['#E6F6F2', '#01A88D'], unhealthy: ['#FDECE8', '#D13212'],
+  draining: ['#FEF3E2', '#F59E0B'], initial: ['#FEF3E2', '#F59E0B'],
+};
+const HEALTH_DARK: Record<string, [string, string]> = {
+  healthy: ['#0E2E2A', '#2CC9AE'], unhealthy: ['#3A1712', '#F26B4D'],
+  draining: ['#33260C', '#F5B53C'], initial: ['#33260C', '#F5B53C'],
+};
+
+function nodeColors(n: FlowNode, dark: boolean): [string, string] {
+  if (n.kind === 'target') {
+    const h = String(n.meta?.health ?? 'unknown');
+    const map = dark ? HEALTH_DARK : HEALTH_LIGHT;
+    return map[h] ?? (dark ? KIND_DARK.target : KIND_LIGHT.target);
+  }
+  return (dark ? KIND_DARK : KIND_LIGHT)[n.kind];
+}
+
+const PREFIX: Record<FlowKind, string> = {
+  cloudfront: 'CF', alb: 'ALB', nlb: 'NLB', tg: 'TG', waf: 'WAF', target: '', origin: '', more: '',
+};
+
+function nodeLabel(n: FlowNode): string {
+  if (n.kind === 'target') {
+    const t = n.meta?.targetType ? `${n.meta.targetType} · ` : '';
+    const h = n.meta?.health ? ` (${n.meta.health})` : '';
+    return `${t}${n.label}${h}`;
+  }
+  const p = PREFIX[n.kind];
+  return p ? `${p} · ${n.label}` : n.label;
+}
+
+async function fetchType(t: InvType): Promise<{ rows: Row[]; finishedAt: string | null }> {
   // limit=500 (route caps at 500) so the graph isn't silently truncated at the 100-row default.
   const r = await fetch(`/api/inventory/${t}?limit=500`);
-  if (!r.ok) return [];
+  if (!r.ok) return { rows: [], finishedAt: null };
   const d = await r.json();
   const rows = (d.rows ?? []) as { resource_id: unknown; region: unknown; data?: object }[];
-  return rows.map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data ?? {}) }));
+  return {
+    rows: rows.map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data ?? {}) })),
+    finishedAt: d.run?.finished_at ?? null,
+  };
 }
 
 export default function TopologyPage() {
-  const [data, setData] = useState<Record<InvType, Row[]> | null>(null);
+  const [data, setData] = useState<FlowInput | null>(null);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  const [entryId, setEntryId] = useState<string>('');
 
   const load = useCallback(async () => {
     setBusy(true);
     try {
       const res = await Promise.all(TYPES.map(fetchType));
-      const out = {} as Record<InvType, Row[]>;
-      TYPES.forEach((t, i) => { out[t] = res[i]; });
+      const out: FlowInput = {};
+      let newest: string | null = null;
+      TYPES.forEach((t, i) => {
+        out[FLOW_KEY[t]] = res[i].rows;
+        const f = res[i].finishedAt;
+        if (f && (!newest || f > newest)) newest = f;
+      });
       setData(out);
+      setSyncedAt(newest);
       setErr('');
       setCapturedAt(new Date().toISOString());
     } catch (e) {
@@ -65,53 +112,85 @@ export default function TopologyPage() {
 
   const dark = useTheme() === 'dark';
 
+  const full = useMemo(() => (data ? buildFlowGraph(data) : { nodes: [], edges: [] }), [data]);
+
+  // Entry-point options (CloudFront distributions, then load balancers).
+  const entryOptions = useMemo(() => ({
+    cf: full.nodes.filter((n) => n.kind === 'cloudfront'),
+    lb: full.nodes.filter((n) => n.kind === 'alb' || n.kind === 'nlb'),
+  }), [full]);
+
   const { nodes, edges } = useMemo(() => {
-    if (!data) return { nodes: [] as Node[], edges: [] as Edge[] };
-    const g = buildTopology(data);
-    if (g.nodes.length >= 500) {
-      // surface truncation rather than silently capping
-      console.warn('[topology] hit the 500-row inventory cap — graph may be incomplete');
-    }
-    const yByCol: Record<number, number> = { 0: 0, 1: 0, 2: 0 };
+    const g = filterFromEntry(full, entryId || null);
+    const pos = Object.fromEntries(layoutFlow(g).map((p) => [p.id, p]));
     const nodes: Node[] = g.nodes.map((n) => {
-      const c = COL[n.kind];
-      const y = yByCol[c]++;
+      const [bg, border] = nodeColors(n, dark);
+      const p = pos[n.id] ?? { x: 0, y: 0 };
       return {
         id: n.id,
-        position: { x: c * 300, y: y * 64 },
-        data: { label: `${n.kind.toUpperCase()} · ${n.label}` },
-        style: dark
-          ? { background: DARK_TINT[n.kind], border: `1px solid ${DARK_BORDER[n.kind]}`, color: '#E3E9EE', borderRadius: 8, fontSize: 11, padding: 6, width: 220 }
-          : { background: TINT[n.kind], border: '1px solid #D3DAE0', borderRadius: 8, fontSize: 11, padding: 6, width: 220 },
+        position: { x: p.x, y: p.y },
+        data: { label: nodeLabel(n) },
+        style: {
+          background: bg,
+          border: `${n.kind === 'origin' ? '1px dashed' : '1px solid'} ${border}`,
+          color: dark ? '#E3E9EE' : '#16202A',
+          borderRadius: 8, fontSize: 11, padding: 6, width: 220,
+        },
       };
     });
-    const edges: Edge[] = g.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, animated: false }));
+    const edges: Edge[] = g.edges.map((e) => ({
+      id: e.id, source: e.source, target: e.target, animated: false,
+      // confidence convention: observed = solid, inferred (Spec 2) = dashed.
+      style: e.confidence === 'inferred' ? { strokeDasharray: '4 4' } : undefined,
+    }));
     return { nodes, edges };
-  }, [data, dark]);
+  }, [full, entryId, dark]);
+
+  const onEntry = (kind: 'cf' | 'lb') => (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
+  const selectCls = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
 
   return (
     <>
       <PageHeader
         title="Topology"
-        subtitle="인벤토리 기반 인프라 토폴로지 (VPC → Subnet → EC2/RDS/ALB)"
-        right={<RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />}
+        subtitle="요청 흐름 그래프 (CloudFront → LB → Target Group → 타깃)"
+        right={
+          <div className="flex items-center gap-2">
+            <select className={selectCls} value={entryOptions.cf.some((n) => n.id === entryId) ? entryId : ''} onChange={onEntry('cf')}>
+              <option value="">CloudFront: 전체</option>
+              {entryOptions.cf.map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}
+            </select>
+            <select className={selectCls} value={entryOptions.lb.some((n) => n.id === entryId) ? entryId : ''} onChange={onEntry('lb')}>
+              <option value="">LB: 전체</option>
+              {entryOptions.lb.map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}
+            </select>
+            <RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />
+          </div>
+        }
       />
       <div className="px-8 py-8 flex flex-col gap-4">
         {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
         {!data && !err && <div className="text-ink-400">로딩 중…</div>}
         {data && !err && (
-          nodes.length === 0 ? (
+          full.nodes.length === 0 ? (
             <div className="rounded-md border border-ink-100 bg-ink-50 px-3 py-3 text-[13px] text-ink-400">
-              그래프로 그릴 인벤토리 리소스가 없습니다. (vpc/subnet/ec2/rds/alb sync 확인)
+              그래프로 그릴 리소스가 없습니다. (cloudfront/alb/nlb/target_group sync 확인 — target_group은
+              steampipe 동기화 후 채워집니다.)
             </div>
           ) : (
-            <div className="h-[640px] w-full rounded-lg border border-ink-100 bg-card">
-              <ReactFlow nodes={nodes} edges={edges} fitView colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}>
-                <Background />
-                <Controls />
-                <MiniMap pannable zoomable />
-              </ReactFlow>
-            </div>
+            <>
+              <div className="flex items-center gap-3 text-[12px] text-ink-400">
+                <span>노드 {nodes.length} · 엣지 {edges.length}</span>
+                {syncedAt && <span>인벤토리 동기화: {new Date(syncedAt).toLocaleString()}</span>}
+              </div>
+              <div className="h-[640px] w-full rounded-lg border border-ink-100 bg-card">
+                <ReactFlow nodes={nodes} edges={edges} fitView colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}>
+                  <Background />
+                  <Controls />
+                  <MiniMap pannable zoomable />
+                </ReactFlow>
+              </div>
+            </>
           )
         )}
       </div>
