@@ -36,6 +36,23 @@ def test_finish_report_sets_terminal_and_summary():
     assert kw["s"] == "succeeded"
 
 
+def test_update_progress_writes_jsonb():
+    c = FakeConn(); c.ret = [[123]]
+    n = db.update_progress(c, 123, current=3, total=9, section="네트워크", phase="render")
+    assert n == 1
+    sql, kw = c.calls[0]
+    assert "UPDATE diagnosis_reports" in sql and "progress" in sql
+    assert "status='running'" in sql  # never resurrect a terminal/reaped row
+    assert kw["id"] == 123
+    assert json.loads(kw["p"]) == {"current": 3, "total": 9, "section": "네트워크", "phase": "render"}
+
+
+def test_update_progress_noop_when_no_report_id():
+    c = FakeConn()
+    n = db.update_progress(c, None, current=1, total=9, section="x", phase="render")
+    assert n == 0 and c.calls == []
+
+
 # --- Task 3: sources.py collectors --------------------------------------
 
 from diagnosis import sources
