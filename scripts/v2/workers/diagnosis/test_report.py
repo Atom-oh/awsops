@@ -228,6 +228,22 @@ def test_report_handler_success_uploads_sets_uri_and_closes(monkeypatch):
     assert state["closed"] is True  # CRITICAL: connection always released
 
 
+def test_report_handler_streams_progress_via_callback(monkeypatch):
+    # A4: _report must hand generate() an on_progress that persists via ddb.update_progress(report_id).
+    def gen(conn, account, tier, **kw):
+        kw["on_progress"](2, 9, "네트워크", "render")  # generate would call this per section
+        return ("# md", {"degraded": []}, ["inventory"])
+    _patch_report(monkeypatch, generate=gen)
+    calls = []
+    monkeypatch.setattr(_ddb, "update_progress",
+                        lambda conn, rid, **kw: calls.append((rid, kw)))
+    result, _ = handlers._report(
+        {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 7}, dry_run=False)
+    assert result["status"] == "succeeded"
+    assert calls and calls[0][0] == 7
+    assert calls[0][1] == {"current": 2, "total": 9, "section": "네트워크", "phase": "render"}
+
+
 def test_report_handler_partial_when_a_source_degraded(monkeypatch):
     state = _patch_report(monkeypatch, generate=lambda c, a, t, **_: ("# md", {"degraded": ["cost"]}, ["inventory"]))
     result, _ = handlers._report(

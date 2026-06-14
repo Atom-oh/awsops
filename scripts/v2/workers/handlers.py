@@ -53,7 +53,11 @@ def _report(payload, dry_run):
         if not report_id:
             report_id = ddb.create_report(conn, worker_job_id=None, tier=tier, requested_by=requested_by)
         try:
-            md, summary, sources_used = rpt.generate(conn, account, tier, report_id=report_id)
+            # A4 (V1 parity): stream per-section progress to diagnosis_reports as generate() advances.
+            on_progress = (lambda c, t, s, p: ddb.update_progress(
+                conn, report_id, current=c, total=t, section=s, phase=p))
+            md, summary, sources_used = rpt.generate(
+                conn, account, tier, report_id=report_id, on_progress=on_progress)
             artifact_uri = _upload_markdown(md, report_id)
             status = "partial" if summary.get("degraded") else "succeeded"
             ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,
