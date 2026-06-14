@@ -53,4 +53,12 @@ describe('diagnosis queries', () => {
     expect(sql).toContain("status = 'running'");
     expect(args).toEqual([7, 'enqueue failed']);
   });
+  it('A5: report SELECTs surface the progress column (live per-section status)', async () => {
+    await listReports(10);
+    const [listSql] = query.mock.calls.at(-1) as [string, unknown[]];
+    expect(listSql).toContain('progress');
+    await getReport(1);
+    const [getSql] = query.mock.calls.at(-1) as [string, unknown[]];
+    expect(getSql).toContain('progress');
+  });
 });
