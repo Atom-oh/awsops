@@ -104,7 +104,7 @@ export default function CommandPalette() {
       role="presentation"
     >
       <div
-        className="w-full max-w-[520px] overflow-hidden rounded-lg border border-ink-100 bg-white shadow-pop"
+        className="w-full max-w-[520px] overflow-hidden rounded-lg border border-ink-100 bg-card shadow-pop"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onListKey}
         role="dialog"
