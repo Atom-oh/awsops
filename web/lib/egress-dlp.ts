@@ -22,9 +22,13 @@ const PATTERNS: { re: RegExp; cat: string }[] = [
   },
 ];
 
-// Long opaque base64/hex blob (encoded-secret heuristic). Entropy-gated: only a HIGH-VARIETY run is
-// treated as an encoded secret — a low-variety run (e.g. 'xxxx…') is NOT, so it falls through to the
-// size cap (truncation) instead of being masked. Prevents the base64-encode bypass (panel dissent).
+// Long opaque base64/hex blob heuristic — catches RAW dumps / long encoded payloads. Entropy-gated:
+// only a HIGH-VARIETY run is masked; a low-variety run (e.g. 'xxxx…') falls through to the size cap.
+// HONEST LIMIT (P4 gate): this does NOT catch a SHORT encoded secret — a bare 20-char AWS key base64s
+// to ~28 chars, below the 40-char floor, so it is NOT redacted. The regex is best-effort; the
+// exfiltration backstop is the mandatory human 4-eyes review of the dry-run preview (ADR-040 §2), not
+// this heuristic. (Lowering the floor would false-positive on legit tokens; the design relies on the
+// human gate + propose-only + no raw-secret-read tool, not on perfect regex.)
 const BLOB_RE = /[A-Za-z0-9+/]{40,}={0,2}|[0-9a-fA-F]{40,}/g;
 const VARIETY_MIN = 12;
 

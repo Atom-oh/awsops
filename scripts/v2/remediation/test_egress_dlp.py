@@ -22,11 +22,19 @@ class RedactEgressTest(unittest.TestCase):
         for ip in ("10.0.0.5", "169.254.169.254", "172.16.3.9"):
             self.assertNotIn(ip, s)
 
-    def test_catches_base64_encoded_secret_via_blob(self):
-        enc = base64.b64encode(b"AKIAIOSFODNN7EXAMPLE-and-a-secret-payload-here").decode()
+    def test_catches_long_base64_blob(self):
+        enc = base64.b64encode(b"AKIAIOSFODNN7EXAMPLE-and-a-secret-payload-here").decode()  # 64 chars > 40 floor
         out, cats = dlp.redact_egress({"text": "data: " + enc})
         self.assertNotIn(enc, json.dumps(out))
         self.assertIn("blob", cats)
+
+    def test_honest_limit_short_encoded_secret_not_caught(self):
+        # P4 gate: a bare AWS key base64s to ~28 chars (< 40 floor) → NOT redacted. Regex DLP is
+        # best-effort; the human 4-eyes review of the dry-run preview is the exfiltration backstop.
+        short = base64.b64encode(b"AKIAIOSFODNN7EXAMPLE").decode()  # 28 chars
+        out, cats = dlp.redact_egress({"text": "data: " + short})
+        self.assertIn(short, json.dumps(out))
+        self.assertEqual(cats, [])
 
     def test_recurses_all_string_fields(self):
         out, _ = dlp.redact_egress({"text": "ok", "blocks": [{"text": "leak AKIAIOSFODNN7EXAMPLE"}], "channel": "#ops"})
