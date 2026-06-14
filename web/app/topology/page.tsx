@@ -133,6 +133,22 @@ export default function TopologyPage() {
   const { nodes, edges } = useMemo(() => {
     const g = filterFromEntry(full, entryId || null);
     const pos = Object.fromEntries(layoutFlow(g).map((p) => [p.id, p]));
+
+    // Focus: clicking a node highlights its connected path (up + downstream), dims the rest.
+    const focusId = selected?.id ?? null;
+    let connected: Set<string> | null = null;
+    if (focusId && g.nodes.some((n) => n.id === focusId)) {
+      const adj = new Map<string, string[]>();
+      for (const e of g.edges) {
+        (adj.get(e.source) ?? adj.set(e.source, []).get(e.source)!).push(e.target);
+        (adj.get(e.target) ?? adj.set(e.target, []).get(e.target)!).push(e.source);
+      }
+      connected = new Set([focusId]);
+      const q = [focusId];
+      while (q.length) { const c = q.shift()!; for (const nb of adj.get(c) ?? []) if (!connected.has(nb)) { connected.add(nb); q.push(nb); } }
+    }
+    const dim = (id: string) => connected != null && !connected.has(id);
+
     const nodes: Node[] = g.nodes.map((n) => {
       const [bg, border] = nodeColors(n, dark);
       const p = pos[n.id] ?? { x: 0, y: 0 };
@@ -145,19 +161,25 @@ export default function TopologyPage() {
         targetPosition: Position.Left,
         style: {
           background: bg,
-          border: `${n.kind === 'origin' ? '1px dashed' : '1px solid'} ${border}`,
+          border: `${n.id === focusId ? '2px solid' : n.kind === 'origin' ? '1px dashed' : '1px solid'} ${border}`,
           color: dark ? '#E3E9EE' : '#16202A',
           borderRadius: 8, fontSize: 11, padding: 6, width: 220,
+          opacity: dim(n.id) ? 0.25 : 1,
+          transition: 'opacity .15s',
         },
       };
     });
     const edges: Edge[] = g.edges.map((e) => ({
-      id: e.id, source: e.source, target: e.target, animated: false,
+      id: e.id, source: e.source, target: e.target,
+      animated: connected != null && connected.has(e.source) && connected.has(e.target),
       // confidence convention: observed = solid, inferred (Spec 2) = dashed.
-      style: e.confidence === 'inferred' ? { strokeDasharray: '4 4' } : undefined,
+      style: {
+        ...(e.confidence === 'inferred' ? { strokeDasharray: '4 4' } : {}),
+        opacity: connected != null && (!connected.has(e.source) || !connected.has(e.target)) ? 0.12 : 1,
+      },
     }));
     return { nodes, edges };
-  }, [full, entryId, dark]);
+  }, [full, entryId, dark, selected]);
 
   // Detail for the clicked node: resource nodes show their full inventory row (every field —
   // vpc, subnet, tags …); target/origin nodes synthesize a small detail from their meta.
