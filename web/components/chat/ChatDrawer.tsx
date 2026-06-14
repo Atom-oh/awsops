@@ -92,10 +92,13 @@ export default function ChatDrawer() {
 
   if (!open) {
     return (
+      // FAB launcher is desktop-only (lg+). On mobile, chat is reached via the
+      // Assistant bottom tab (/assistant), so the FAB would only collide with the
+      // fixed BottomTabBar — hide it below lg.
       <button
         onClick={() => setOpen(true)}
         aria-label="AI 어시스턴트 열기"
-        className="fixed bottom-5 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600"
+        className="fixed bottom-5 right-5 z-50 hidden h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600 lg:flex"
       >
         <Sparkles size={20} strokeWidth={2} />
       </button>
