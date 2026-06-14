@@ -2,7 +2,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Sparkles, PanelLeft, X } from 'lucide-react';
-import SectionPicker from './SectionPicker';
 import PresetChips from './PresetChips';
 import Composer from './Composer';
 import MessageList from './MessageList';
@@ -96,12 +95,10 @@ export default function AssistantClient() {
           )}
         </header>
 
-        <SectionPicker pinned={chat.pinned} onPin={chat.setPinned} />
-
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
             {chat.msgs.length === 0
-              ? <PresetChips pinned={chat.pinned} onPick={chat.send} />
+              ? <PresetChips onPick={chat.send} />
               : <MessageList msgs={chat.msgs} onSwitch={chat.resendWith} />}
             <Composer disabled={chat.busy} onSend={chat.send} />
           </div>
