@@ -70,9 +70,17 @@ export async function POST(request: Request) {
   const routeKey = customPick && (await isCustomAgentEnabled(customPick)) ? customPick : gateway;
   // ADR-039 P2: enabled egress-READ integrations contribute tools + bounded context (per-space scoped).
   // ingress + READ_WRITE contribute nothing here (writes go via the mutating gate).
+  // P2-infra inc2: also carry connection details so the resolver can hand agent.py a live-connect list.
+  // allowPrivate = the per-account ADR-011 opt-in (no space ⇒ false). sigv4 service/region threading
+  // (same-account sigv4 integrations) is deferred with the rest of Q3-sigv4=C — api_key/bearer is live.
+  const allowPrivate = space?.allowPrivateDatasource ?? false;
   const egressReadIntegrations = (await getEnabledIntegrations(accountId))
     .filter((i) => i.direction === 'egress' && i.capability === 'read')
-    .map((i) => ({ name: i.name, exposedTools: i.exposedTools, providedContext: i.providedContext }));
+    .map((i) => ({
+      name: i.name, exposedTools: i.exposedTools, providedContext: i.providedContext,
+      endpoint: i.endpoint ?? undefined, transport: i.transport ?? undefined,
+      credentialsRef: i.credentialsRef ?? undefined, allowPrivate,
+    }));
   const spec = resolveAgent(routeKey, customAgents, space, egressReadIntegrations); // server-side enforcement
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).
   const inactiveSection = hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
@@ -123,6 +131,7 @@ export async function POST(request: Request) {
           toolAllowlist: spec.toolAllowlist,
           agentName: spec.agentName, agentVersion: spec.agentVersion, skillHashes: spec.skillHashes,
           accountId, accountAlias,
+          integrations: spec.integrations, // ADR-039 P2-infra inc2: live egress-READ MCP connections
         });
       } catch (e) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));

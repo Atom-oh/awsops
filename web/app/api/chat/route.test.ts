@@ -241,23 +241,37 @@ describe('hybrid routing (ADR-038)', () => {
     expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null, []); // gateway, not the revoked custom
   });
 
-  it('ADR-039: passes ONLY enabled egress-READ integrations to resolveAgent (ingress + READ_WRITE excluded)', async () => {
+  it('ADR-039: passes ONLY enabled egress-READ integrations to resolveAgent, WITH connection details (ingress + READ_WRITE excluded)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     classifyRoute.mockResolvedValue({ primary: 'ops', ranked: [{ key: 'ops', score: 1, active: true }], method: 'regex' });
     getEnabledIntegrations.mockResolvedValue([
-      { name: 'dd', direction: 'egress', capability: 'read', exposedTools: ['datadog_query'], providedContext: { d: 1 } },
+      { name: 'dd', direction: 'egress', capability: 'read', exposedTools: ['datadog_query'], providedContext: { d: 1 },
+        endpoint: 'https://mcp.dd/mcp', transport: 'api_key', credentialsRef: 'arn:dd' },
       { name: 'notion', direction: 'egress', capability: 'read_write', exposedTools: ['notion_write'], providedContext: {} }, // write → excluded
       { name: 'pd', direction: 'ingress', capability: 'read', exposedTools: [], providedContext: {} },                       // ingress → excluded
     ]);
     invokeAgent.mockResolvedValue('ok');
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
-    // 4th arg to resolveAgent = only the egress+read integration, mapped to {name, exposedTools, providedContext}
+    // 4th arg to resolveAgent = only the egress+read integration, now WITH connection details +
+    // allowPrivate (false — no agent_spaces row without AURORA_ENDPOINT). P2-infra inc2 extension.
     expect(resolveAgent).toHaveBeenCalledWith(
       expect.anything(), expect.anything(), null,
-      [{ name: 'dd', exposedTools: ['datadog_query'], providedContext: { d: 1 } }],
+      [{ name: 'dd', exposedTools: ['datadog_query'], providedContext: { d: 1 },
+         endpoint: 'https://mcp.dd/mcp', transport: 'api_key', credentialsRef: 'arn:dd', allowPrivate: false }],
     );
+  });
+
+  it('ADR-039 P2-infra inc2: forwards spec.integrations to invokeAgent', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('security');
+    const integrations = [{ name: 'dd', endpoint: 'https://mcp.dd/mcp', transport: 'api_key', credentialsRef: 'arn:dd', exposedTools: ['datadog_query'], allowPrivate: false }];
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', agentName: 'sec-custom', skillHashes: [], systemPromptOverride: 'X', toolAllowlist: ['datadog_query'], integrations });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ integrations }));
   });
 });
 
