@@ -83,4 +83,25 @@ describe('agentcore', () => {
     expect('accountId' in without).toBe(false);
     expect('accountAlias' in without).toBe(false);
   });
+
+  it('ADR-039: threads integrations into the payload when non-empty, omits otherwise', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue({ response: streamOf('"ok"') });
+    const { invokeAgent } = await import('./agentcore');
+    const integrations = [{ name: 'dd', endpoint: 'https://x/mcp', transport: 'api_key', credentialsRef: 'arn:sec', exposedTools: ['datadog_query'], allowPrivate: false }];
+    await invokeAgent({ gateway: 'security', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36), integrations });
+    const withI = JSON.parse(new TextDecoder().decode((acSend.mock.calls[0][0] as { input: { payload: Uint8Array } }).input.payload));
+    expect(withI.integrations).toEqual(integrations);
+
+    acSend.mockClear();
+    await invokeAgent({ gateway: 'security', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36), integrations: [] });
+    const empty = JSON.parse(new TextDecoder().decode((acSend.mock.calls[0][0] as { input: { payload: Uint8Array } }).input.payload));
+    expect('integrations' in empty).toBe(false);
+
+    acSend.mockClear();
+    await invokeAgent({ gateway: 'security', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36) });
+    const none = JSON.parse(new TextDecoder().decode((acSend.mock.calls[0][0] as { input: { payload: Uint8Array } }).input.payload));
+    expect('integrations' in none).toBe(false);
+  });
 });

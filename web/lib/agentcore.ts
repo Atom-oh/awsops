@@ -1,5 +1,6 @@
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore';
+import type { ResolvedIntegration } from '@/lib/agent-resolver';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 const ARN_PARAM = process.env.SSM_RUNTIME_ARN_PARAM || '/ops/awsops-v2/agentcore/runtime_arn';
@@ -35,6 +36,7 @@ export interface InvokeInput {
   skillHashes?: string[];
   accountId?: string;            // ADR-031 Phase 2: agent.py reads payload.accountId
   accountAlias?: string;
+  integrations?: ResolvedIntegration[]; // ADR-039 P2-infra inc2: live egress-READ MCP connections
 }
 
 async function readResponse(resp: unknown): Promise<string> {
@@ -60,6 +62,7 @@ export async function invokeAgent(input: InvokeInput): Promise<string> {
   if (input.skillHashes) body.skillHashes = input.skillHashes;
   if (input.accountId) body.accountId = input.accountId;
   if (input.accountAlias) body.accountAlias = input.accountAlias;
+  if (input.integrations?.length) body.integrations = input.integrations;
   const payload = new TextEncoder().encode(JSON.stringify(body));
   const cmd = new InvokeAgentRuntimeCommand({
     agentRuntimeArn: arn,
