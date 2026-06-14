@@ -22,6 +22,21 @@ export interface ResolvedAgentSpec {
   agentVersion?: number;
   skillHashes: string[];
   spaceVersion?: number;          // Phase 2 traceability (custom path only; undefined when no space)
+  // ADR-039 P2-infra inc2: connectable egress-READ integrations (custom path only). agent.py uses these
+  // to live-connect external MCP endpoints; credentialsRef is a Secrets Manager ARN (never plaintext).
+  integrations?: ResolvedIntegration[];
+}
+
+// What agent.py needs to live-connect ONE egress-READ integration (the resolver passes only these).
+export interface ResolvedIntegration {
+  name: string;
+  endpoint: string;
+  transport: string;            // sigv4 | api_key | oauth_client_credentials
+  credentialsRef?: string;      // Secrets Manager ARN (runtime fetch); undefined for sigv4
+  exposedTools: string[];
+  allowPrivate: boolean;        // per-account ADR-011 allowPrivateDatasource opt-in (SSRF)
+  sigv4Service?: string;        // sigv4 only
+  sigv4Region?: string;         // sigv4 only
 }
 
 /** Keyword-match an enabled custom agent (does not affect built-in pickGateway). */
@@ -46,6 +61,13 @@ export interface EgressReadIntegration {
   name: string;
   exposedTools: string[];
   providedContext?: Record<string, unknown>;
+  // ADR-039 P2-infra inc2 — connection details (only integrations with endpoint+transport are connectable).
+  endpoint?: string;
+  transport?: string;
+  credentialsRef?: string;
+  allowPrivate?: boolean;
+  sigv4Service?: string;
+  sigv4Region?: string;
 }
 
 // ADR-033 — bound the integration context injected into the prompt.
@@ -93,6 +115,21 @@ export function resolveAgent(
     const integTools = egressReadIntegrations.flatMap((i) => i.exposedTools ?? []);
     const integEnforced = intersectToolAllowlist('__integration__', integTools, space);
     const merged = Array.from(new Set([...skillEnforced, ...integEnforced]));
+    // ADR-039 P2-infra inc2: surface ONLY connectable integrations (endpoint+transport present) for
+    // agent.py to live-connect. Tool/context injection above is independent — a context-only integration
+    // (no endpoint) still contributes tools/context but is not in this connect list.
+    const connectable: ResolvedIntegration[] = egressReadIntegrations
+      .filter((i) => i.endpoint && i.transport)
+      .map((i) => ({
+        name: i.name,
+        endpoint: i.endpoint!,
+        transport: i.transport!,
+        credentialsRef: i.credentialsRef,
+        exposedTools: i.exposedTools ?? [],
+        allowPrivate: i.allowPrivate ?? false,
+        ...(i.sigv4Service ? { sigv4Service: i.sigv4Service } : {}),
+        ...(i.sigv4Region ? { sigv4Region: i.sigv4Region } : {}),
+      }));
     return {
       tier: 'custom',
       gateway: custom.gateway,
@@ -102,6 +139,7 @@ export function resolveAgent(
       agentVersion: custom.version,
       skillHashes: ordered.map((s) => s.contentHash),
       spaceVersion: space?.version, // traceability; undefined when no space
+      integrations: connectable.length ? connectable : undefined,
     };
   }
   // Built-in passthrough — UNCHANGED from Phase 1. Never tool-scoped; space/integrations have no effect.

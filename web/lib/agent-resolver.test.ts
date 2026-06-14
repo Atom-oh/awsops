@@ -162,3 +162,51 @@ describe('resolveAgent — ADR-039 egress-READ integration injection', () => {
     expect(a.systemPromptOverride).toEqual(b.systemPromptOverride);
   });
 });
+
+describe('resolveAgent — ADR-039 P2-infra inc2 connection details (spec.integrations)', () => {
+  const conn = {
+    name: 'dd', exposedTools: ['datadog_query'], providedContext: { d: 1 },
+    endpoint: 'https://mcp.datadoghq.com/mcp', transport: 'api_key',
+    credentialsRef: 'arn:aws:secretsmanager:ap-northeast-2:1:secret:ops/awsops-v2/integrations/dd-xx',
+    allowPrivate: false,
+  };
+
+  it('custom path surfaces connectable integrations with their connection details', () => {
+    const spec = resolveAgent('compliance', [custom], null, [conn]);
+    expect(spec.integrations).toEqual([{
+      name: 'dd', endpoint: conn.endpoint, transport: 'api_key',
+      credentialsRef: conn.credentialsRef, exposedTools: ['datadog_query'], allowPrivate: false,
+    }]);
+  });
+
+  it('threads sigv4Service/sigv4Region + allowPrivate when present', () => {
+    const sig = {
+      name: 'apigw', exposedTools: ['q'], endpoint: 'https://x.execute-api.ap-northeast-2.amazonaws.com/mcp',
+      transport: 'sigv4', sigv4Service: 'execute-api', sigv4Region: 'ap-northeast-2', allowPrivate: true,
+    };
+    const spec = resolveAgent('compliance', [custom], null, [sig]);
+    expect(spec.integrations).toEqual([{
+      name: 'apigw', endpoint: sig.endpoint, transport: 'sigv4', credentialsRef: undefined,
+      exposedTools: ['q'], allowPrivate: true, sigv4Service: 'execute-api', sigv4Region: 'ap-northeast-2',
+    }]);
+  });
+
+  it('an egress-READ integration WITHOUT endpoint/transport still injects tools+context but is NOT in the connect list', () => {
+    const noConn = { name: 'ctx-only', exposedTools: ['t'], providedContext: { topology: 'g' } };
+    const spec = resolveAgent('compliance', [custom], null, [noConn]);
+    expect(spec.toolAllowlist).toContain('t');                      // tools still injected
+    expect(spec.systemPromptOverride).toMatch(/topology/);          // context still injected
+    expect(spec.integrations).toBeUndefined();                      // but nothing connectable
+  });
+
+  it('built-in path never carries integrations', () => {
+    const spec = resolveAgent('security', [], null, [conn]);
+    expect(spec.tier).toBe('builtin');
+    expect(spec.integrations).toBeUndefined();
+  });
+
+  it('no integrations ⇒ spec.integrations undefined', () => {
+    expect(resolveAgent('compliance', [custom], null).integrations).toBeUndefined();
+    expect(resolveAgent('compliance', [custom], null, []).integrations).toBeUndefined();
+  });
+});
