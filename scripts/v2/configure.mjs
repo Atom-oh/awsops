@@ -149,6 +149,11 @@ function buildTfvars(cfg) {
   }
   if (cfg.agentcoreEnabled) {
     lines.push('agentcore_enabled = true');
+    // ADR-039 P2-infra inc2: the egress Integrations layer (scoped Secrets Manager + a dedicated KMS
+    // key for external-MCP credentials) is part of the agent platform and the TF var requires
+    // agentcore_enabled — so emit it whenever AgentCore is on. Keeps a full apply from destroying the
+    // integrations KMS/IAM created by the inc2 targeted apply.
+    lines.push('integrations_enabled = true');
   }
   return lines.join('\n') + '\n';
 }
