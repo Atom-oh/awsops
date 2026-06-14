@@ -115,7 +115,9 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       const target = (thd.Target && typeof thd.Target === 'object') ? (thd.Target as Row) : {};
       const health = (thd.TargetHealth && typeof thd.TargetHealth === 'object') ? (thd.TargetHealth as Row) : {};
       const targetId = str(target.Id) || `unknown-${i}`;
-      const nodeId = `target:${str(t.resource_id)}:${targetId}`;
+      // include Port: the same instance/IP can be registered on multiple ports — keep them distinct.
+      const port = target.Port == null ? '' : `:${str(target.Port)}`;
+      const nodeId = `target:${str(t.resource_id)}:${targetId}${port}`;
       addNode(nodeId, 'target', targetId, {
         targetType: str(t.target_type),
         health: str(health.State) || 'unknown',

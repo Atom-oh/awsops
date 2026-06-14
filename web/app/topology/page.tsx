@@ -66,15 +66,17 @@ function nodeLabel(n: FlowNode): string {
   return p ? `${p} · ${n.label}` : n.label;
 }
 
-async function fetchType(t: InvType): Promise<{ rows: Row[]; finishedAt: string | null }> {
-  // limit=500 (route caps at 500) so the graph isn't silently truncated at the 100-row default.
-  const r = await fetch(`/api/inventory/${t}?limit=500`);
-  if (!r.ok) return { rows: [], finishedAt: null };
+const ROW_CAP = 500; // /api/inventory caps limit at 500
+
+async function fetchType(t: InvType): Promise<{ rows: Row[]; finishedAt: string | null; capped: boolean }> {
+  const r = await fetch(`/api/inventory/${t}?limit=${ROW_CAP}`);
+  if (!r.ok) return { rows: [], finishedAt: null, capped: false };
   const d = await r.json();
   const rows = (d.rows ?? []) as { resource_id: unknown; region: unknown; data?: object }[];
   return {
     rows: rows.map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data ?? {}) })),
     finishedAt: d.run?.finished_at ?? null,
+    capped: rows.length >= ROW_CAP, // hit the cap → more rows exist, surfaced below (no silent truncation)
   };
 }
 
@@ -84,6 +86,7 @@ export default function TopologyPage() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  const [cappedTypes, setCappedTypes] = useState<string[]>([]);
   const [entryId, setEntryId] = useState<string>('');
 
   const load = useCallback(async () => {
@@ -92,13 +95,16 @@ export default function TopologyPage() {
       const res = await Promise.all(TYPES.map(fetchType));
       const out: FlowInput = {};
       let newest: string | null = null;
+      const capped: string[] = [];
       TYPES.forEach((t, i) => {
         out[FLOW_KEY[t]] = res[i].rows;
         const f = res[i].finishedAt;
         if (f && (!newest || f > newest)) newest = f;
+        if (res[i].capped) capped.push(t);
       });
       setData(out);
       setSyncedAt(newest);
+      setCappedTypes(capped);
       setErr('');
       setCapturedAt(new Date().toISOString());
     } catch (e) {
@@ -182,6 +188,9 @@ export default function TopologyPage() {
               <div className="flex items-center gap-3 text-[12px] text-ink-400">
                 <span>노드 {nodes.length} · 엣지 {edges.length}</span>
                 {syncedAt && <span>인벤토리 동기화: {new Date(syncedAt).toLocaleString()}</span>}
+                {cappedTypes.length > 0 && (
+                  <span className="text-warning">⚠ {cappedTypes.join(', ')} {ROW_CAP}개 초과 — 일부만 표시</span>
+                )}
               </div>
               <div className="h-[640px] w-full rounded-lg border border-ink-100 bg-card">
                 <ReactFlow nodes={nodes} edges={edges} fitView colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}>
