@@ -74,14 +74,20 @@ export async function POST(request: Request) {
   // allowPrivate = the per-account ADR-011 opt-in (no space ⇒ false). sigv4 service/region threading
   // (same-account sigv4 integrations) is deferred with the rest of Q3-sigv4=C — api_key/bearer is live.
   const allowPrivate = space?.allowPrivateDatasource ?? false;
-  const egressReadIntegrations = (await getEnabledIntegrations(accountId))
+  const enabledIntegrations = await getEnabledIntegrations(accountId);
+  const egressReadIntegrations = enabledIntegrations
     .filter((i) => i.direction === 'egress' && i.capability === 'read')
     .map((i) => ({
       name: i.name, exposedTools: i.exposedTools, providedContext: i.providedContext,
       endpoint: i.endpoint ?? undefined, transport: i.transport ?? undefined,
       credentialsRef: i.credentialsRef ?? undefined, allowPrivate,
     }));
-  const spec = resolveAgent(routeKey, customAgents, space, egressReadIntegrations); // server-side enforcement
+  // ADR-040/041 — READ_WRITE integrations are surfaced PROPOSE-ONLY (prompt metadata, NOT live tools;
+  // writes go through the human-gated /api/actions path). They never enter the resolver's tool union.
+  const proposableWrites = enabledIntegrations
+    .filter((i) => i.direction === 'egress' && i.capability === 'read_write')
+    .map((i) => ({ name: i.name, writeActionRefs: i.writeActionRefs }));
+  const spec = resolveAgent(routeKey, customAgents, space, egressReadIntegrations, proposableWrites); // server-side enforcement
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).
   const inactiveSection = hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
     ? sectionByKey(spec.gateway)! : null;
