@@ -4,7 +4,6 @@
 import json
 import logging
 import os
-import functools
 from strands import Agent
 try:
     from strands.models import BedrockModel, CacheConfig
@@ -15,6 +14,7 @@ from strands.tools.mcp.mcp_client import MCPClient
 from botocore.credentials import Credentials
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from streamable_http_sigv4 import streamablehttp_client_with_sigv4
+from account_utils import effective_account_id
 import boto3
 
 # Configure logging / 로깅 설정
@@ -397,38 +397,6 @@ def build_conversation(payload):
     return user_input, []
 
 
-@functools.lru_cache(maxsize=1)
-def _host_account_id():
-    """The account this agent runtime executes in.
-
-    Prefer AWSOPS_HOST_ACCOUNT_ID (no network call); fall back to STS
-    GetCallerIdentity (always permitted). Cached for the warm container.
-    """
-    env = os.environ.get('AWSOPS_HOST_ACCOUNT_ID', '').strip()
-    if env:
-        return env
-    try:
-        return boto3.client('sts').get_caller_identity()['Account']
-    except Exception:  # network / permission edge — fall through
-        return None
-
-
-def effective_account_id(account_id):
-    """Cross-account target to act on, or '' for same-account access.
-
-    Returns '' (use the agent's own role — no target_account_id) when account_id
-    is empty, '__all__', or the host account this runtime runs in. v2 is
-    single-account: forcing target_account_id=<host> made tools self-assume the
-    nonexistent host-account AWSopsReadOnlyRole. The tool layer also guards this,
-    so this is defense-in-depth that keeps the redundant param out of the prompt.
-    """
-    if not account_id or account_id == '__all__':
-        return ''
-    if str(account_id).strip() == (_host_account_id() or ''):
-        return ''
-    return account_id
-
-
 def build_account_directive(account_id, account_alias):
     """Build cross-account directive for system prompt. / 시스템 프롬프트용 크로스 어카운트 지시문 생성."""
     if not account_id or account_id == '__all__':
@@ -461,6 +429,9 @@ def handler(payload):
     account_directive = build_account_directive(account_id, account_alias)
 
     # Prefix user input with account context / 사용자 입력에 어카운트 컨텍스트 접두사 추가
+    # (account_id was already blanked for the host account / __all__ by
+    #  effective_account_id, so same-account access intentionally gets no prefix —
+    #  there is no other account to disambiguate against.)
     if account_id and account_id != '__all__':
         user_input = f"[Target Account: {account_alias or account_id} ({account_id})] {user_input}"
 

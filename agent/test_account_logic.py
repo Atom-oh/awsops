@@ -1,53 +1,63 @@
-"""Tests for agent.py account normalization (effective_account_id / _host_account_id).
+"""Tests for agent/account_utils.py (effective_account_id / _host_account_id).
 
-agent.py imports runtime-only deps (strands, bedrock_agentcore) and runs AWS calls
-at import time, so we exec just the two pure functions from source rather than
-importing the whole module.
+These functions live in account_utils.py (not agent.py) precisely so they can be
+imported directly here — agent.py pulls runtime-only deps and runs AWS calls at
+import time, so it isn't importable in a plain test env.
 
 Regression: a chat targeting the host account injected target_account_id=<host>,
-which made the tool layer self-assume the nonexistent host-account AWSopsReadOnlyRole.
-effective_account_id() blanks the host account so the directive is never emitted.
+which made the tool layer self-assume the nonexistent host-account
+AWSopsReadOnlyRole. effective_account_id() blanks the host account so the
+directive is never emitted.
 """
 import os
+import sys
 
 import pytest
 
-_AGENT = os.path.join(os.path.dirname(__file__), "agent.py")
+sys.path.insert(0, os.path.dirname(__file__))
+import account_utils as au  # noqa: E402
+
 HOST = "180294183052"
 
 
-def _load_funcs():
-    """Exec just the _host_account_id..effective_account_id block from agent.py."""
-    with open(_AGENT, encoding="utf-8") as fh:
-        src = fh.read()
-    start = src.index("@functools.lru_cache(maxsize=1)")
-    end = src.index("def build_account_directive(")
-    block = src[start:end]
-    import functools
-    import boto3
-    ns = {"functools": functools, "os": os, "boto3": boto3}
-    exec(compile(block, _AGENT, "exec"), ns)  # noqa: S102 - trusted local source
-    return ns
-
-
 @pytest.fixture
-def funcs(monkeypatch):
-    # Pin host via env so _host_account_id makes no STS call.
+def acct(monkeypatch):
+    # Pin host via env so _host_account_id makes no STS call; clear the lru_cache
+    # so cases don't leak into each other.
     monkeypatch.setenv("AWSOPS_HOST_ACCOUNT_ID", HOST)
-    return _load_funcs()
+    au._host_account_id.cache_clear()
+    yield au
+    au._host_account_id.cache_clear()
 
 
-def test_host_account_blanked(funcs):
+def test_host_account_blanked(acct):
     # host account → '' (same-account: use the agent's own role, no directive)
-    assert funcs["effective_account_id"](HOST) == ""
-    assert funcs["effective_account_id"](f"  {HOST}  ") == ""
+    assert acct.effective_account_id(HOST) == ""
+    assert acct.effective_account_id(f"  {HOST}  ") == ""
 
 
-def test_other_account_passthrough(funcs):
-    assert funcs["effective_account_id"]("222222222222") == "222222222222"
+def test_other_account_passthrough(acct):
+    assert acct.effective_account_id("222222222222") == "222222222222"
+    assert acct.effective_account_id("  222222222222  ") == "222222222222"  # stripped
 
 
-def test_all_and_empty_blanked(funcs):
-    assert funcs["effective_account_id"]("__all__") == ""
-    assert funcs["effective_account_id"]("") == ""
-    assert funcs["effective_account_id"](None) == ""
+def test_all_and_empty_blanked(acct):
+    assert acct.effective_account_id("__all__") == ""
+    assert acct.effective_account_id("") == ""
+    assert acct.effective_account_id(None) == ""
+
+
+def test_host_unresolved_passes_through(monkeypatch):
+    # env unset + STS failure → host is None → real account passes through (degraded)
+    monkeypatch.delenv("AWSOPS_HOST_ACCOUNT_ID", raising=False)
+
+    def _boom(*a, **k):
+        raise RuntimeError("no sts")
+
+    monkeypatch.setattr(au.boto3, "client", _boom)
+    au._host_account_id.cache_clear()
+    # tight oracle: prove the except→None branch fired (not just a non-matching host)
+    assert au._host_account_id() is None
+    assert au.effective_account_id("222222222222") == "222222222222"
+    assert au.effective_account_id("  222222222222  ") == "222222222222"  # strip on degraded path too
+    au._host_account_id.cache_clear()
