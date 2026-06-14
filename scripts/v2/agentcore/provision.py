@@ -201,7 +201,11 @@ def ensure_runtime(ctrl, ac, gw_ids):
                   "networkModeConfig": {"subnets": subnets, "securityGroups": sgs}}
     else:
         netcfg = {"networkMode": "PUBLIC"}
-    env = {"AWS_REGION": region, "GATEWAYS_JSON": gateways_json}
+    # AWSOPS_HOST_ACCOUNT_ID lets agent.account_utils skip the per-cold-start STS
+    # GetCallerIdentity lookup (same value cross_account.py uses on the tool
+    # Lambdas). Account parsed from the role ARN (arn:aws:iam::<account>:role/...).
+    env = {"AWS_REGION": region, "GATEWAYS_JSON": gateways_json,
+           "AWSOPS_HOST_ACCOUNT_ID": ac["role_arn"].split(":")[4]}
     existing = {r.get("agentRuntimeName"): r for r in _list_all(ctrl.list_agent_runtimes)}
     try:
         if RUNTIME_NAME in existing:

@@ -14,6 +14,7 @@ from strands.tools.mcp.mcp_client import MCPClient
 from botocore.credentials import Credentials
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from streamable_http_sigv4 import streamablehttp_client_with_sigv4
+from account_utils import effective_account_id
 import boto3
 
 # Configure logging / 로깅 설정
@@ -421,11 +422,16 @@ def handler(payload):
     gateway_url = GATEWAYS.get(gateway_role, GATEWAYS[DEFAULT_GATEWAY])
 
     # Extract cross-account info / 크로스 어카운트 정보 추출
-    account_id = payload.get('accountId', '')
+    # effective_account_id() blanks the host account → same-account access uses the
+    # agent's own role (no target_account_id directive, no self-assume).
+    account_id = effective_account_id(payload.get('accountId', ''))
     account_alias = payload.get('accountAlias', '')
     account_directive = build_account_directive(account_id, account_alias)
 
     # Prefix user input with account context / 사용자 입력에 어카운트 컨텍스트 접두사 추가
+    # (account_id was already blanked for the host account / __all__ by
+    #  effective_account_id, so same-account access intentionally gets no prefix —
+    #  there is no other account to disambiguate against.)
     if account_id and account_id != '__all__':
         user_input = f"[Target Account: {account_alias or account_id} ({account_id})] {user_input}"
 

@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir \
     aws-requests-auth
 
 COPY streamable_http_sigv4.py .
+COPY account_utils.py .
 COPY agent.py .
 
 EXPOSE 8080

@@ -1,0 +1,106 @@
+"""Tests for cross_account.get_role_arn host-account short-circuit.
+
+Regression: a chat targeting the host account injected target_account_id=<host>,
+and get_role_arn built arn:aws:iam::<host>:role/AWSopsReadOnlyRole and tried to
+AssumeRole it — but that role exists only in onboarded *target* accounts, so STS
+returned AccessDenied. Same-account access must use the Lambda's own role.
+"""
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(__file__))
+import cross_account as ca  # noqa: E402
+
+HOST = "180294183052"
+
+
+@pytest.fixture(autouse=True)
+def _host_env(monkeypatch):
+    # Pin the host account via env so tests make no STS call.
+    monkeypatch.setenv("AWSOPS_HOST_ACCOUNT_ID", HOST)
+    monkeypatch.delenv("AWSOPS_ROLE_NAME", raising=False)
+    ca._host_account_id.cache_clear()
+    yield
+    ca._host_account_id.cache_clear()
+
+
+def test_host_account_returns_none():
+    # querying the host account itself → no cross-account role → use exec role
+    assert ca.get_role_arn(HOST) is None
+    assert ca.get_role_arn(f"  {HOST}  ") is None  # tolerate stray whitespace
+
+
+def test_other_account_builds_arn():
+    assert ca.get_role_arn("222222222222") == "arn:aws:iam::222222222222:role/AWSopsReadOnlyRole"
+
+
+def test_empty_or_none_returns_none():
+    assert ca.get_role_arn(None) is None
+    assert ca.get_role_arn("") is None
+
+
+def test_custom_role_name(monkeypatch):
+    monkeypatch.setenv("AWSOPS_ROLE_NAME", "MyReadRole")
+    assert ca.get_role_arn("222222222222") == "arn:aws:iam::222222222222:role/MyReadRole"
+
+
+def test_host_detected_via_sts_when_env_unset(monkeypatch):
+    # env unset → _host_account_id falls back to STS GetCallerIdentity; the host
+    # short-circuit must still fire (and other accounts still build the ARN).
+    monkeypatch.delenv("AWSOPS_HOST_ACCOUNT_ID", raising=False)
+
+    class _STS:
+        def get_caller_identity(self):
+            return {"Account": HOST}
+
+    monkeypatch.setattr(ca.boto3, "client", lambda *a, **k: _STS())
+    ca._host_account_id.cache_clear()
+    assert ca._host_account_id() == HOST
+    assert ca.get_role_arn(HOST) is None  # host → no assume
+    assert ca.get_role_arn("222222222222") == "arn:aws:iam::222222222222:role/AWSopsReadOnlyRole"
+    ca._host_account_id.cache_clear()
+
+
+def test_host_unresolved_falls_through_to_cross_account(monkeypatch):
+    # env unset + STS fails → host is None → a real account still builds the ARN
+    # (degraded = pre-fix cross-account path; the logged warning is the signal).
+    monkeypatch.delenv("AWSOPS_HOST_ACCOUNT_ID", raising=False)
+
+    def _boom(*a, **k):
+        raise RuntimeError("no sts")
+
+    monkeypatch.setattr(ca.boto3, "client", _boom)
+    ca._host_account_id.cache_clear()
+    assert ca._host_account_id() is None
+    assert ca.get_role_arn("222222222222") == "arn:aws:iam::222222222222:role/AWSopsReadOnlyRole"
+    ca._host_account_id.cache_clear()
+
+
+def test_get_client_host_account_does_not_assume(monkeypatch):
+    # role_arn is None for the host account → get_client must NOT AssumeRole
+    def _boom(*a, **k):
+        raise AssertionError("must not AssumeRole for the host account")
+
+    monkeypatch.setattr(ca, "_assume_role", _boom)
+    monkeypatch.setattr(ca.boto3, "client", lambda *a, **k: ("client", a, k))
+
+    role_arn = ca.get_role_arn(HOST)  # None
+    client = ca.get_client("cloudwatch", "ap-northeast-2", role_arn)
+    assert client[0] == "client"  # plain boto3 client, no creds injected
+
+
+def test_get_client_other_account_does_assume(monkeypatch):
+    seen = {}
+
+    def _fake_assume(role_arn, suffix=None):
+        seen["role_arn"] = role_arn
+        return {"aws_access_key_id": "k", "aws_secret_access_key": "s", "aws_session_token": "t"}
+
+    monkeypatch.setattr(ca, "_assume_role", _fake_assume)
+    monkeypatch.setattr(ca.boto3, "client", lambda *a, **k: ("client", a, k))
+
+    role_arn = ca.get_role_arn("222222222222")
+    ca.get_client("cloudwatch", "ap-northeast-2", role_arn)
+    assert seen["role_arn"] == "arn:aws:iam::222222222222:role/AWSopsReadOnlyRole"
