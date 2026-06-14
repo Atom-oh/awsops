@@ -9,8 +9,15 @@ variable "agentcore_enabled" {
   default     = false
 }
 
+variable "integrations_enabled" {
+  type        = bool
+  description = "ADR-039 P2-infra inc2: grant the AgentCore runtime scoped Secrets Manager + KMS for egress integration credentials. Requires agentcore_enabled. Default false → no-op ($0, plan = No changes). PERSIST in live terraform.tfvars so a later full apply does not destroy these."
+  default     = false
+}
+
 locals {
-  ac_count = var.agentcore_enabled ? 1 : 0
+  ac_count    = var.agentcore_enabled ? 1 : 0
+  integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
 }
 
 # ---- dual-tier ECR for the agent runtime image (mirrors ecr.tf) ----
@@ -96,6 +103,52 @@ resource "aws_iam_role_policy" "agentcore" {
         Effect   = "Allow"
         Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:*"
+      }
+    ]
+  })
+}
+
+# ---- ADR-039 P2-infra inc2: egress integrations — dedicated CMK + scoped runtime grant ----
+# Integration credentials (API keys / OAuth tokens) live in Secrets Manager under
+# ops/${project}/integrations/* encrypted with THIS dedicated key (isolated from the Aurora CMK).
+# All count-gated on integrations_enabled (default false → $0, plan = No changes). The agent.py
+# runtime (assumed-by bedrock-agentcore) reads them at request time by credentials_ref ARN.
+resource "aws_kms_key" "integrations" {
+  count                   = local.integ_count
+  description             = "${var.project} egress integration credential encryption (ADR-039)"
+  deletion_window_in_days = 7
+}
+
+resource "aws_kms_alias" "integrations" {
+  count         = local.integ_count
+  name          = "alias/${var.project}-integrations"
+  target_key_id = aws_kms_key.integrations[0].key_id
+}
+
+# SEPARATE policy (NOT folded into aws_iam_role_policy.agentcore) so a targeted apply is purely
+# additive — 0 change to the existing runtime policy. secretsmanager:GetSecretValue is scoped to the
+# integrations secret NAMESPACE (the random 6-char ARN suffix means a name-prefix wildcard is the
+# correct Secrets Manager scoping — this is NOT an action/resource "*"); kms:Decrypt is scoped to the
+# dedicated key only. NOTE: a sigv4 integration to a specific AWS service (e.g. execute-api:Invoke)
+# needs a per-target grant added when that integration is registered — DEFERRED with Q3-sigv4=C.
+resource "aws_iam_role_policy" "agentcore_integrations" {
+  count = local.integ_count
+  name  = "${var.project}-agentcore-integrations"
+  role  = aws_iam_role.agentcore[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "IntegrationSecretsRead"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:ops/${var.project}/integrations/*"
+      },
+      {
+        Sid      = "IntegrationSecretsKmsDecrypt"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = aws_kms_key.integrations[0].arn
       }
     ]
   })
