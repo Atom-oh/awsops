@@ -469,13 +469,17 @@ resource "aws_lambda_function" "agent" {
   architectures    = ["arm64"]
 
   environment {
-    variables = {
+    variables = merge({
       # Same-account access uses the Lambda's own execution role; AssumeRole is
       # only for *other* onboarded accounts. Lets cross_account.get_role_arn skip
       # a self-assume of AWSopsReadOnlyRole (which exists only in target accounts,
       # never the host) — otherwise host-account tool calls fail with AccessDenied.
       AWSOPS_HOST_ACCOUNT_ID = data.aws_caller_identity.current.account_id
-    }
+      },
+      # Pin the Notion Lambda to the exact TF-created secret name (can't drift from the
+      # Python default if var.project ever changes). notion-mcp exists only when integ_count>0.
+      each.key == "notion-mcp" ? { NOTION_SECRET_NAME = aws_secretsmanager_secret.notion[0].name } : {}
+    )
   }
 }
 
