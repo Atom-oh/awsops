@@ -129,16 +129,10 @@ async def streamablehttp_client_with_sigv4(
 ]:
     """
     Client transport for Streamable HTTP with SigV4 auth.
-
-    This transport enables communication with MCP servers that authenticate using AWS IAM,
-    such as servers behind a Lambda function URL or API Gateway.
-
-    Yields:
-        Tuple containing:
-            - read_stream: Stream for reading messages from the server
-            - write_stream: Stream for sending messages to the server
-            - get_session_id_callback: Function to retrieve the current session ID
     """
+    # ADR-039: Enforce redirect:'manual' for all integrations.
+    def factory(*a, **k):
+        return create_mcp_http_client(*a, **k, follow_redirects=False)
 
     async with streamablehttp_client(
         url=url,
@@ -146,7 +140,40 @@ async def streamablehttp_client_with_sigv4(
         timeout=timeout,
         sse_read_timeout=sse_read_timeout,
         terminate_on_close=terminate_on_close,
-        httpx_client_factory=httpx_client_factory,
+        httpx_client_factory=factory,
         auth=SigV4HTTPXAuth(credentials, service, region),
+    ) as result:
+        yield result
+
+
+@asynccontextmanager
+async def streamablehttp_client_with_headers(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout: float | timedelta = 30,
+    sse_read_timeout: float | timedelta = 60 * 5,
+    terminate_on_close: bool = True,
+) -> AsyncGenerator[
+    tuple[
+        MemoryObjectReceiveStream[SessionMessage | Exception],
+        MemoryObjectSendStream[SessionMessage],
+        GetSessionIdCallback,
+    ],
+    None,
+]:
+    """
+    Client transport for Streamable HTTP with static headers (API Key / Bearer).
+    """
+    # ADR-039: Enforce redirect:'manual' for all integrations.
+    def factory(*a, **k):
+        return create_mcp_http_client(*a, **k, follow_redirects=False)
+
+    async with streamablehttp_client(
+        url=url,
+        headers=headers,
+        timeout=timeout,
+        sse_read_timeout=sse_read_timeout,
+        terminate_on_close=terminate_on_close,
+        httpx_client_factory=factory,
     ) as result:
         yield result

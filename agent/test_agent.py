@@ -158,5 +158,63 @@ class SsrfGuardTest(unittest.TestCase):
             agent._assert_host_allowed("https://nxdomain.local", True, resolver=resolver)
 
 
+class IntegrationHelpersTest(unittest.TestCase):
+    def test_parse_secret(self):
+        self.assertEqual(agent.parse_secret('{"token":"t"}'), {"token": "t"})
+        self.assertEqual(agent.parse_secret('raw-val'), {"_raw": "raw-val"})
+        self.assertEqual(agent.parse_secret(''), {})
+        self.assertEqual(agent.parse_secret(None), {})
+
+    def test_auth_headers(self):
+        # api_key
+        self.assertEqual(agent.auth_headers('api_key', {"header": "X-API", "value": "k"}), {"X-API": "k"})
+        self.assertEqual(agent.auth_headers('api_key', {"api_key": "k"}), {"Authorization": "k"})
+        self.assertEqual(agent.auth_headers('api_key', {"_raw": "k"}), {"Authorization": "k"})
+        with self.assertRaises(ValueError):
+            agent.auth_headers('api_key', {})
+
+        # oauth_client_credentials
+        self.assertEqual(agent.auth_headers('oauth_client_credentials', {"token": "t"}), {"Authorization": "Bearer t"})
+        self.assertEqual(agent.auth_headers('oauth_client_credentials', {"_raw": "t"}), {"Authorization": "Bearer t"})
+        with self.assertRaises(ValueError):
+            agent.auth_headers('oauth_client_credentials', {})
+
+        # sigv4
+        self.assertEqual(agent.auth_headers('sigv4', {}), {})
+
+        # Unknown
+        with self.assertRaises(ValueError):
+            agent.auth_headers('unknown', {})
+
+    def test_sigv4_params(self):
+        # Explicit service required
+        with self.assertRaisesRegex(ValueError, "requires an explicit 'sigv4Service'"):
+            agent.sigv4_params('https://abc.com')
+
+        # Derived region (execute-api)
+        self.assertEqual(
+            agent.sigv4_params('https://abc.execute-api.ap-northeast-2.amazonaws.com/mcp', service='execute-api'),
+            ('execute-api', 'ap-northeast-2')
+        )
+
+        # Derived region (lambda-url)
+        self.assertEqual(
+            agent.sigv4_params('https://abc.lambda-url.us-east-1.on.aws/mcp', service='lambda'),
+            ('lambda', 'us-east-1')
+        )
+
+        # Explicit region override
+        self.assertEqual(
+            agent.sigv4_params('https://abc.execute-api.us-east-1.amazonaws.com/mcp', service='execute-api', region='ap-northeast-2'),
+            ('execute-api', 'ap-northeast-2')
+        )
+
+        # Fallback to GATEWAY_REGION
+        self.assertEqual(
+            agent.sigv4_params('https://abc.com', service='custom'),
+            ('custom', agent.GATEWAY_REGION)
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

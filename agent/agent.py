@@ -407,6 +407,65 @@ def _assert_host_allowed(url, allow_private, resolver=socket.getaddrinfo):
             raise SsrfBlocked(f"SSRF block: host {host} resolved to private IP {ip_str} and private access disabled")
 
 
+def parse_secret(val):
+    """Parse a secret string (JSON or raw) into a dict. / 비밀번호 문자열(JSON 또는 raw)을 dict로 파싱."""
+    if not val:
+        return {}
+    try:
+        parsed = json.loads(val)
+        if isinstance(parsed, dict):
+            return parsed
+        return {"_raw": str(val)}
+    except (ValueError, TypeError):
+        return {"_raw": str(val)}
+
+
+def auth_headers(transport, secret):
+    """Generate auth headers for non-sigv4 transports. / 비-sigv4 전송용 인증 헤더 생성."""
+    if transport == 'api_key':
+        # {"header": "X-API-KEY", "value": "..."} or {"api_key": "..."} -> Authorization: ...
+        header = secret.get("header", "Authorization")
+        val = secret.get("value", secret.get("api_key", secret.get("_raw")))
+        if not val:
+            raise ValueError(f"Integration [api_key] missing value in secret")
+        return {header: val}
+    if transport == 'oauth_client_credentials':
+        # Bearer-style for this increment: {"token": "..."} or raw
+        val = secret.get("token", secret.get("_raw"))
+        if not val:
+            raise ValueError(f"Integration [oauth_client_credentials] missing token in secret")
+        return {"Authorization": f"Bearer {val}"}
+    if transport == 'sigv4':
+        return {}
+    raise ValueError(f"Unknown integration transport: {transport}")
+
+
+def sigv4_params(endpoint, service=None, region=None):
+    """Derive SigV4 service and region from endpoint or explicit params. / 엔드포인트 또는 명시적 파라미터에서 SigV4 서비스 및 리전 도출."""
+    if not service:
+        # We NO LONGER guess the service (e.g. 'execute-api'). It MUST be explicit for integrations
+        # to prevent unsafe reuse of the gateway signer.
+        raise ValueError("Integration [sigv4] transport requires an explicit 'sigv4Service'")
+
+    if not region:
+        # Try to derive from host: <id>.execute-api.<region>.amazonaws.com
+        parsed = urllib.parse.urlparse(endpoint)
+        host = parsed.hostname or ""
+        parts = host.split('.')
+        # execute-api pattern: hostname.execute-api.region.amazonaws.com
+        if 'execute-api' in parts and len(parts) >= 4:
+            region = parts[parts.index('execute-api') + 1]
+        # lambda pattern: id.lambda-url.region.on.aws
+        elif 'lambda-url' in parts and len(parts) >= 3:
+            region = parts[parts.index('lambda-url') + 1]
+        
+        if not region:
+            region = GATEWAY_REGION
+            logging.info(f"SigV4: could not derive region from {host}, falling back to {region}")
+    
+    return service, region
+
+
 def get_aws_credentials():
     """Get current AWS credentials for SigV4 signing. / 현재 AWS 자격 증명을 가져와 SigV4 서명에 사용."""
     session = boto3.Session()
