@@ -126,7 +126,8 @@ resource "aws_iam_role_policy" "steampipe_task" {
         "kafka:Describe*", "kafka:List*",
         "wafv2:List*", "wafv2:Get*",
         "cloudwatch:Describe*",
-        "cloudtrail:Describe*", "cloudtrail:List*", "cloudtrail:GetTrailStatus", "cloudtrail:GetEventSelectors", "cloudtrail:GetInsightSelectors"
+        "cloudtrail:Describe*", "cloudtrail:List*", "cloudtrail:GetTrailStatus", "cloudtrail:GetEventSelectors", "cloudtrail:GetInsightSelectors",
+        "route53:List*", "route53:Get*"
       ]
       Resource = "*"
     }]
