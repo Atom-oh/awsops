@@ -4,6 +4,9 @@
 import json
 import logging
 import os
+import socket
+import ipaddress
+import urllib.parse
 from strands import Agent
 try:
     from strands.models import BedrockModel, CacheConfig
@@ -349,6 +352,59 @@ def _filter_tools(tools, allowlist):
         return tools
     allow = set(allowlist)
     return [t for t in tools if getattr(t, "tool_name", None) in allow]
+
+
+class SsrfBlocked(Exception):
+    """Raised when an integration endpoint is blocked by SSRF guard."""
+    pass
+
+
+def _ip_always_blocked(ip_str):
+    """Returns True if the IP is loopback, link-local (metadata), multicast, or reserved."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return (ip.is_loopback or ip.is_link_local or ip.is_multicast or
+                ip.is_reserved or ip.is_unspecified)
+    except ValueError:
+        return True  # Invalid IP is blocked
+
+
+def _ip_is_private(ip_str):
+    """Returns True if the IP is in a private range (RFC1918/ULA) AND not always blocked."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        # ipaddress.is_private includes link-local/loopback in some versions; we only want
+        # the "opt-in" ranges (RFC1918 + RFC4193 ULA).
+        return ip.is_private and not _ip_always_blocked(ip_str)
+    except ValueError:
+        return False
+
+
+def _assert_host_allowed(url, allow_private, resolver=socket.getaddrinfo):
+    """Assert that the host in the URL is allowed to be connected to."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != 'https':
+        raise SsrfBlocked(f"SSRF block: HTTPS required for integration endpoints, got {parsed.scheme}")
+
+    host = parsed.hostname
+    if not host:
+        raise SsrfBlocked(f"SSRF block: invalid or missing host in URL {url}")
+
+    try:
+        # Resolve all IPs for the host (could be dual-stack or have multiple A records)
+        addr_info = resolver(host, 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise SsrfBlocked(f"SSRF block: could not resolve host {host}: {e}")
+
+    if not addr_info:
+        raise SsrfBlocked(f"SSRF block: could not resolve host {host} (no addresses returned)")
+
+    for family, type, proto, canonname, sockaddr in addr_info:
+        ip_str = sockaddr[0]
+        if _ip_always_blocked(ip_str):
+            raise SsrfBlocked(f"SSRF block: host {host} resolved to always-blocked IP {ip_str}")
+        if _ip_is_private(ip_str) and not allow_private:
+            raise SsrfBlocked(f"SSRF block: host {host} resolved to private IP {ip_str} and private access disabled")
 
 
 def get_aws_credentials():

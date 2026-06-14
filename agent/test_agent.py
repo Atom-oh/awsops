@@ -77,5 +77,86 @@ class FilterToolsTest(unittest.TestCase):
         self.assertEqual(agent._filter_tools(tools, ['zzz']), [])
 
 
+class SsrfGuardTest(unittest.TestCase):
+    def test_ip_always_blocked(self):
+        # Loopback
+        self.assertTrue(agent._ip_always_blocked('127.0.0.1'))
+        self.assertTrue(agent._ip_always_blocked('::1'))
+        # Link-local (Metadata)
+        self.assertTrue(agent._ip_always_blocked('169.254.169.254'))
+        self.assertTrue(agent._ip_always_blocked('fe80::1'))
+        # Multicast
+        self.assertTrue(agent._ip_always_blocked('224.0.0.1'))
+        self.assertTrue(agent._ip_always_blocked('ff02::1'))
+        # Unspecified / Reserved
+        self.assertTrue(agent._ip_always_blocked('0.0.0.0'))
+        self.assertTrue(agent._ip_always_blocked('240.0.0.1'))
+        # Public / Private (not always blocked)
+        self.assertFalse(agent._ip_always_blocked('8.8.8.8'))
+        self.assertFalse(agent._ip_always_blocked('10.0.0.1'))
+        self.assertFalse(agent._ip_always_blocked('192.168.1.1'))
+
+    def test_ip_is_private(self):
+        # RFC1918
+        self.assertTrue(agent._ip_is_private('10.0.0.1'))
+        self.assertTrue(agent._ip_is_private('172.16.0.1'))
+        self.assertTrue(agent._ip_is_private('192.168.1.1'))
+        # ULA
+        self.assertTrue(agent._ip_is_private('fc00::1'))
+        # Public
+        self.assertFalse(agent._ip_is_private('8.8.8.8'))
+        # Metadata / Loopback (always blocked, NOT in the _ip_is_private "opt-in" set)
+        self.assertFalse(agent._ip_is_private('169.254.169.254'))
+        self.assertFalse(agent._ip_is_private('127.0.0.1'))
+
+    def test_assert_host_allowed_basics(self):
+        def resolver(host, port, *a, **k):
+            # map hosts to IPs for testing
+            mapping = {
+                'public.com': ['8.8.8.8'],
+                'private.local': ['10.0.0.1'],
+                'metadata.internal': ['169.254.169.254'],
+                'loopback.local': ['127.0.0.1'],
+                'mixed.com': ['8.8.8.8', '10.0.0.1'],
+                'nxdomain.local': [],
+            }
+            res = mapping.get(host, [])
+            if not res: return []
+            # return format: (family, type, proto, canonname, sockaddr)
+            return [(2, 1, 6, '', (ip, port)) for ip in res]
+
+        # HTTPS required
+        with self.assertRaisesRegex(agent.SsrfBlocked, "HTTPS required"):
+            agent._assert_host_allowed("http://public.com", False, resolver=resolver)
+
+        # Public HTTPS allowed
+        agent._assert_host_allowed("https://public.com", False, resolver=resolver)
+
+        # Private HTTPS blocked by default
+        with self.assertRaisesRegex(agent.SsrfBlocked, "private access disabled"):
+            agent._assert_host_allowed("https://private.local", False, resolver=resolver)
+
+        # Private HTTPS allowed with opt-in
+        agent._assert_host_allowed("https://private.local", True, resolver=resolver)
+
+        # Metadata ALWAYS blocked
+        with self.assertRaisesRegex(agent.SsrfBlocked, "always-blocked"):
+            agent._assert_host_allowed("https://metadata.internal", False, resolver=resolver)
+        with self.assertRaisesRegex(agent.SsrfBlocked, "always-blocked"):
+            agent._assert_host_allowed("https://metadata.internal", True, resolver=resolver)
+
+        # Loopback ALWAYS blocked
+        with self.assertRaisesRegex(agent.SsrfBlocked, "always-blocked"):
+            agent._assert_host_allowed("https://loopback.local", True, resolver=resolver)
+
+        # Mixed resolution (ANY blocked IP = fail)
+        with self.assertRaisesRegex(agent.SsrfBlocked, "private access disabled"):
+            agent._assert_host_allowed("https://mixed.com", False, resolver=resolver)
+        
+        # NXDOMAIN
+        with self.assertRaisesRegex(agent.SsrfBlocked, "could not resolve"):
+            agent._assert_host_allowed("https://nxdomain.local", True, resolver=resolver)
+
+
 if __name__ == '__main__':
     unittest.main()
