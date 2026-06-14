@@ -4,6 +4,8 @@ import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt } from '@/lib/classifier';
 import { sectionByKey } from '@/lib/sections';
 import { getEnabledCustomAgents } from '@/lib/catalog-source';
+import { isCustomAgentEnabled } from '@/lib/catalog';
+import { getEnabledIntegrations } from '@/lib/integrations';
 import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
@@ -61,10 +63,25 @@ export async function POST(request: Request) {
   const customAgents = await getEnabledCustomAgents(accountId);   // [] when Aurora off / no customs
   const space = await getAgentSpace(accountId);                   // null ⇒ Phase-1
   const pinIsValid = !!(body.section && sectionByKey(body.section));
-  const routeKey = (hybridOn && pinIsValid)
-    ? gateway
-    : (pickCustomAgent(prompt, customAgents) ?? gateway);
-  const spec = resolveAgent(routeKey, customAgents, space);       // server-side enforcement
+  // ADR-031/039 fail-closed revocation: pickCustomAgent matches against the 30s-cached enabled
+  // set; re-check the picked custom agent against Aurora (authoritative) before routing to it, so
+  // a just-disabled agent is unusable immediately on every instance (not after the cache TTL).
+  const customPick = (hybridOn && pinIsValid) ? null : pickCustomAgent(prompt, customAgents);
+  const routeKey = customPick && (await isCustomAgentEnabled(customPick)) ? customPick : gateway;
+  // ADR-039 P2: enabled egress-READ integrations contribute tools + bounded context (per-space scoped).
+  // ingress + READ_WRITE contribute nothing here (writes go via the mutating gate).
+  // P2-infra inc2: also carry connection details so the resolver can hand agent.py a live-connect list.
+  // allowPrivate = the per-account ADR-011 opt-in (no space ⇒ false). sigv4 service/region threading
+  // (same-account sigv4 integrations) is deferred with the rest of Q3-sigv4=C — api_key/bearer is live.
+  const allowPrivate = space?.allowPrivateDatasource ?? false;
+  const egressReadIntegrations = (await getEnabledIntegrations(accountId))
+    .filter((i) => i.direction === 'egress' && i.capability === 'read')
+    .map((i) => ({
+      name: i.name, exposedTools: i.exposedTools, providedContext: i.providedContext,
+      endpoint: i.endpoint ?? undefined, transport: i.transport ?? undefined,
+      credentialsRef: i.credentialsRef ?? undefined, allowPrivate,
+    }));
+  const spec = resolveAgent(routeKey, customAgents, space, egressReadIntegrations); // server-side enforcement
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).
   const inactiveSection = hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
     ? sectionByKey(spec.gateway)! : null;
@@ -114,6 +131,7 @@ export async function POST(request: Request) {
           toolAllowlist: spec.toolAllowlist,
           agentName: spec.agentName, agentVersion: spec.agentVersion, skillHashes: spec.skillHashes,
           accountId, accountAlias,
+          integrations: spec.integrations, // ADR-039 P2-infra inc2: live egress-READ MCP connections
         });
       } catch (e) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));

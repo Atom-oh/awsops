@@ -16,7 +16,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { input, select, checkbox, confirm } from '@inquirer/prompts';
@@ -147,10 +147,30 @@ function buildTfvars(cfg) {
   if (cfg.onboardEksClusters && cfg.onboardEksClusters.length > 0) {
     lines.push(`onboard_eks_clusters = ${hclStringList(cfg.onboardEksClusters)}`);
   }
-  if (cfg.agentcoreEnabled) {
-    lines.push('agentcore_enabled = true');
-  }
+  // Feature-flag gates. All default false in TF (absent ⇒ 0 resources/$0), so emit ONLY when enabled.
+  // These were previously hand-added to terraform.tfvars and silently lost on a `make configure`
+  // regenerate (→ a follow-up apply would destroy the gated infra); they are now first-class here.
+  if (cfg.agentcoreEnabled) lines.push('agentcore_enabled         = true');
+  if (cfg.integrationsEnabled) lines.push('integrations_enabled      = true'); // ADR-039 P2-infra inc2 (needs agentcore)
+  if (cfg.workersEnabled) lines.push('workers_enabled           = true');
+  if (cfg.steampipeEnabled) lines.push('steampipe_enabled         = true');
+  if (cfg.hybridRoutingEnabled) lines.push('hybrid_routing_enabled    = true');
+  if (cfg.eksAutoRegisterEnabled) lines.push('eks_auto_register_enabled = true'); // needs workers
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Read a boolean flag from an EXISTING terraform.tfvars (true iff `<name> = true`). Used to pre-select
+ * the current live value when re-running `make configure`, so an already-enabled flag is never silently
+ * dropped (the footgun). A missing file (fresh / OSS install) ⇒ false (the OSS-safe default).
+ */
+function readExistingFlag(name) {
+  try {
+    const txt = readFileSync(TFVARS_PATH, 'utf8');
+    return new RegExp(`^\\s*${name}\\s*=\\s*true\\b`, 'm').test(txt);
+  } catch {
+    return false;
+  }
 }
 
 function buildBackendHcl(cfg) {
@@ -351,12 +371,41 @@ async function main() {
     }
   }
 
-  // AgentCore skeleton (optional). Provisions ECR/IAM/Lambda/SSM; `make agentcore` does the rest.
+  // Feature-flag gates (all default false in TF). Each prompt PRE-SELECTS the current value from an
+  // existing terraform.tfvars, so re-running `make configure` on a live deploy never silently drops an
+  // already-enabled flag (which would destroy the gated infra on the next apply). Fresh install ⇒ false.
   console.log('');
   const agentcoreEnabled = await confirm({
     message: 'Provision the AgentCore skeleton (9 gateways + runtime + slice tools)? You run `make agentcore` after apply.',
-    default: false,
+    default: readExistingFlag('agentcore_enabled'),
   });
+  // ADR-039 P2-infra inc2 — egress Integrations (live external-MCP connect; scoped Secrets Manager +
+  // dedicated KMS). Only meaningful with AgentCore (the TF local is agentcore_enabled && integrations_enabled).
+  const integrationsEnabled = agentcoreEnabled
+    ? await confirm({
+        message: 'Enable egress Integrations (live external-MCP connect; scoped Secrets Manager + dedicated KMS)?',
+        default: readExistingFlag('integrations_enabled'),
+      })
+    : false;
+  const workersEnabled = await confirm({
+    message: 'Enable the async worker backbone (SQS + Step Functions + Lambda/Fargate)? (P2)',
+    default: readExistingFlag('workers_enabled'),
+  });
+  const steampipeEnabled = await confirm({
+    message: 'Enable the Steampipe inventory data layer (warm Fargate + sync Lambda)?',
+    default: readExistingFlag('steampipe_enabled'),
+  });
+  const hybridRoutingEnabled = await confirm({
+    message: 'Enable hybrid chat routing (ADR-038 regex + Haiku classifier)?',
+    default: readExistingFlag('hybrid_routing_enabled'),
+  });
+  // eks_auto_register reuses the workers pg8000 layer → only offered when workers are on.
+  const eksAutoRegisterEnabled = workersEnabled
+    ? await confirm({
+        message: 'Enable EKS CLI auto-register (EventBridge → Lambda → eks_registrations)?',
+        default: readExistingFlag('eks_auto_register_enabled'),
+      })
+    : false;
 
   const cfg = {
     domainName: domainName.trim(),
@@ -368,6 +417,11 @@ async function main() {
     existingPrivateSubnetIds,
     onboardEksClusters,
     agentcoreEnabled,
+    integrationsEnabled,
+    workersEnabled,
+    steampipeEnabled,
+    hybridRoutingEnabled,
+    eksAutoRegisterEnabled,
   };
 
   // Summary
@@ -391,6 +445,11 @@ async function main() {
     `  EKS onboard      : ${cfg.onboardEksClusters.length ? cfg.onboardEksClusters.join(', ') : '(none)'}`,
   );
   console.log(`  AgentCore        : ${cfg.agentcoreEnabled ? 'enabled' : '(disabled)'}`);
+  console.log(`  Integrations     : ${cfg.integrationsEnabled ? 'enabled' : '(disabled)'}`);
+  console.log(`  Workers          : ${cfg.workersEnabled ? 'enabled' : '(disabled)'}`);
+  console.log(`  Steampipe        : ${cfg.steampipeEnabled ? 'enabled' : '(disabled)'}`);
+  console.log(`  Hybrid routing   : ${cfg.hybridRoutingEnabled ? 'enabled' : '(disabled)'}`);
+  console.log(`  EKS auto-register: ${cfg.eksAutoRegisterEnabled ? 'enabled' : '(disabled)'}`);
   console.log('');
   console.log(`  -> ${TFVARS_PATH}`);
   console.log(`  -> ${BACKEND_PATH}`);

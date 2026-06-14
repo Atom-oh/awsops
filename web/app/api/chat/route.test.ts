@@ -6,6 +6,7 @@ const pickGateway = vi.fn();
 const getEnabledCustomAgents = vi.fn();
 const pickCustomAgent = vi.fn();
 const resolveAgent = vi.fn();
+const isCustomAgentEnabled = vi.fn();
 const recordCustomAgentTrace = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/agentcore', () => ({ invokeAgent: (...a: unknown[]) => invokeAgent(...a) }));
@@ -21,6 +22,9 @@ vi.mock('@/lib/agent-resolver', () => ({
   pickCustomAgent: (...a: unknown[]) => pickCustomAgent(...a),
   resolveAgent: (...a: unknown[]) => resolveAgent(...a),
 }));
+vi.mock('@/lib/catalog', () => ({ isCustomAgentEnabled: (...a: unknown[]) => isCustomAgentEnabled(...a) }));
+const getEnabledIntegrations = vi.fn();
+vi.mock('@/lib/integrations', () => ({ getEnabledIntegrations: (...a: unknown[]) => getEnabledIntegrations(...a) }));
 vi.mock('@/lib/trace', () => ({ recordCustomAgentTrace: (...a: unknown[]) => recordCustomAgentTrace(...a) }));
 const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
@@ -51,10 +55,15 @@ beforeEach(() => {
   getEnabledCustomAgents.mockReset();
   pickCustomAgent.mockReset();
   resolveAgent.mockReset();
+  isCustomAgentEnabled.mockReset();
+  getEnabledIntegrations.mockReset();
   recordCustomAgentTrace.mockReset();
   // default to the built-in no-op shape
   getEnabledCustomAgents.mockResolvedValue([]);
   pickCustomAgent.mockReturnValue(null);
+  isCustomAgentEnabled.mockResolvedValue(true); // ADR-039: authoritative re-check passes by default
+  getEnabledIntegrations.mockResolvedValue([]); // ADR-039 P2: no integrations by default
+
   resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
   classifyRoute.mockReset();
   classifyRoute.mockResolvedValue({ primary: 'ops', ranked: [{ key: 'ops', score: 0, active: false }], method: 'regex' });
@@ -186,7 +195,7 @@ describe('hybrid routing (ADR-038)', () => {
     await readStream(res);
     // ...but the pin wins: resolveAgent called with the pinned section, not the custom name.
     // Phase 2: third arg is the per-account space (null here — no AURORA_ENDPOINT ⇒ Phase-1).
-    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null);
+    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null, []);
   });
 
   it('logs a structured misroute candidate when the client reports a chip switch (spec §5)', async () => {
@@ -214,7 +223,55 @@ describe('hybrid routing (ADR-038)', () => {
     const { POST } = await import('./route');
     const res = await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) }));
     await readStream(res);
-    expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything(), null);
+    expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything(), null, []);
+  });
+
+  it('fail-closed revocation: a disabled custom agent is NOT used — falls back to the gateway', async () => {
+    delete process.env.HYBRID_ROUTING_ENABLED;            // hybrid off → gateway = pickGateway
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('security');
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance' }]); // 30s-stale cache still lists it
+    pickCustomAgent.mockReturnValue('compliance');
+    isCustomAgentEnabled.mockResolvedValue(false);        // authoritative Aurora check: revoked
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'security', skill: 'security', agentName: 'security', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) })));
+    expect(isCustomAgentEnabled).toHaveBeenCalledWith('compliance');
+    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null, []); // gateway, not the revoked custom
+  });
+
+  it('ADR-039: passes ONLY enabled egress-READ integrations to resolveAgent, WITH connection details (ingress + READ_WRITE excluded)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({ primary: 'ops', ranked: [{ key: 'ops', score: 1, active: true }], method: 'regex' });
+    getEnabledIntegrations.mockResolvedValue([
+      { name: 'dd', direction: 'egress', capability: 'read', exposedTools: ['datadog_query'], providedContext: { d: 1 },
+        endpoint: 'https://mcp.dd/mcp', transport: 'api_key', credentialsRef: 'arn:dd' },
+      { name: 'notion', direction: 'egress', capability: 'read_write', exposedTools: ['notion_write'], providedContext: {} }, // write → excluded
+      { name: 'pd', direction: 'ingress', capability: 'read', exposedTools: [], providedContext: {} },                       // ingress → excluded
+    ]);
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    // 4th arg to resolveAgent = only the egress+read integration, now WITH connection details +
+    // allowPrivate (false — no agent_spaces row without AURORA_ENDPOINT). P2-infra inc2 extension.
+    expect(resolveAgent).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), null,
+      [{ name: 'dd', exposedTools: ['datadog_query'], providedContext: { d: 1 },
+         endpoint: 'https://mcp.dd/mcp', transport: 'api_key', credentialsRef: 'arn:dd', allowPrivate: false }],
+    );
+  });
+
+  it('ADR-039 P2-infra inc2: forwards spec.integrations to invokeAgent', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('security');
+    const integrations = [{ name: 'dd', endpoint: 'https://mcp.dd/mcp', transport: 'api_key', credentialsRef: 'arn:dd', exposedTools: ['datadog_query'], allowPrivate: false }];
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', agentName: 'sec-custom', skillHashes: [], systemPromptOverride: 'X', toolAllowlist: ['datadog_query'], integrations });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ integrations }));
   });
 });
 
@@ -292,7 +349,7 @@ describe('ADR-031 Phase 2 — per-account space wiring', () => {
     // account resolves to the single-account default ('self') with no HOST_ACCOUNT_ID set.
     expect(getEnabledCustomAgents).toHaveBeenCalledWith('self');
     // no AURORA_ENDPOINT ⇒ getAgentSpace returns null ⇒ resolver gets null (Phase-1 behavior).
-    expect(resolveAgent).toHaveBeenCalledWith('ops', expect.anything(), null);
+    expect(resolveAgent).toHaveBeenCalledWith('ops', expect.anything(), null, []);
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'self' }));
   });
 

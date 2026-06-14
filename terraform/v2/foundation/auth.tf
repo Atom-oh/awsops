@@ -28,6 +28,18 @@ resource "aws_cognito_user_pool_client" "main" {
   allowed_oauth_flows_user_pool_client = true
   callback_urls                        = ["https://${var.domain_name}/_callback"]
   logout_urls                          = ["https://${var.domain_name}/"]
+
+  # Token lifetimes — declared explicitly to match the live deployment (avoids reverting id/access
+  # tokens from 12h to the AWS-default unit when other config touches this client). The edge Lambda
+  # validates the id_token cookie, so a short id-token lifetime would force frequent re-login.
+  access_token_validity  = 12
+  id_token_validity      = 12
+  refresh_token_validity = 30
+  token_validity_units {
+    access_token  = "hours"
+    id_token      = "hours"
+    refresh_token = "days"
+  }
 }
 
 resource "aws_cognito_user" "admin" {

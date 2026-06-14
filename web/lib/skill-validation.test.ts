@@ -1,6 +1,6 @@
 // web/lib/skill-validation.test.ts
 import { describe, it, expect } from 'vitest';
-import { validateSkill, validateAgent, KNOWN_GATEWAYS } from './skill-validation';
+import { validateSkill, validateAgent, KNOWN_GATEWAYS, AGENT_TYPES } from './skill-validation';
 
 describe('skill-validation', () => {
   it('accepts a well-formed skill', () => {
@@ -20,5 +20,24 @@ describe('skill-validation', () => {
     expect(validateAgent({ name: 'a', description: 'd', persona: 'p', gateway: 'nope', routingKeywords: [] }).ok).toBe(false);
     expect(validateAgent({ name: 'compliance', description: 'd', persona: 'p', gateway: 'security', routingKeywords: ['cis'] }).ok).toBe(true);
     expect(KNOWN_GATEWAYS).toContain('security');
+  });
+
+  it('AGENT_TYPES has the 6 lifecycle roles (source of truth shared with the migration CHECK)', () => {
+    expect([...AGENT_TYPES]).toEqual(['generic', 'on_demand', 'triage', 'rca', 'mitigation', 'evaluation']);
+  });
+
+  it('validateAgent: agentType must be in AGENT_TYPES; gateways must each be a known gateway', () => {
+    expect(validateAgent({ name: 'agt', description: 'd', gateway: 'ops', routingKeywords: [], agentType: 'bogus' }).ok).toBe(false);
+    expect(validateAgent({ name: 'agt', description: 'd', gateway: 'ops', routingKeywords: [], agentType: 'triage' }).ok).toBe(true);
+    expect(validateAgent({ name: 'agt', description: 'd', gateway: 'ops', routingKeywords: [], gateways: ['ops', 'nope'] }).ok).toBe(false);
+    expect(validateAgent({ name: 'agt', description: 'd', gateway: 'ops', routingKeywords: [], gateways: ['ops', 'monitoring'] }).ok).toBe(true);
+    // omitted (undefined) optional fields are accepted (defaults applied downstream)
+    expect(validateAgent({ name: 'agt', description: 'd', gateway: 'ops', routingKeywords: [] }).ok).toBe(true);
+  });
+
+  it('validateSkill: agentTypes must each be in AGENT_TYPES; referenceKeys must be string[]', () => {
+    expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], agentTypes: ['rca'] }).ok).toBe(true);
+    expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], agentTypes: ['nope'] }).ok).toBe(false);
+    expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], referenceKeys: [1] as unknown as string[] }).ok).toBe(false);
   });
 });
