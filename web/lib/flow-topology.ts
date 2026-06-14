@@ -1,5 +1,5 @@
 // Pure request-flow graph builder — reactflow-independent. Builds a front-door flow:
-//   CloudFront → ALB/NLB → TargetGroup → target (instance|ip|lambda), + CF→WAF.
+//   Route53 → CloudFront → ALB/NLB → TargetGroup → target (instance|ip|lambda), + CF→WAF.
 // Reads already-synced inventory rows flattened as { resource_id, region, ...data }.
 //
 // IMPORTANT (Steampipe shape): jsonb COLUMN names are snake_case, but NESTED struct keys are
@@ -22,15 +22,26 @@ function arr(v: unknown): Row[] {
   return [];
 }
 
-export type FlowKind = 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'target' | 'waf' | 'origin' | 'more';
+export type FlowKind = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'target' | 'waf' | 'origin' | 'more';
 export type Confidence = 'observed' | 'inferred';
 export interface FlowNode { id: string; kind: FlowKind; label: string; meta?: Record<string, unknown> }
 export interface FlowEdge { id: string; source: string; target: string; confidence: Confidence }
 export interface FlowGraph { nodes: FlowNode[]; edges: FlowEdge[] }
 
 export interface FlowInput {
-  cloudfront?: Row[]; alb?: Row[]; nlb?: Row[]; tg?: Row[]; waf?: Row[];
+  route53?: Row[]; cloudfront?: Row[]; alb?: Row[]; nlb?: Row[]; tg?: Row[]; waf?: Row[];
 }
+
+/** CloudFront `aliases` jsonb → string[] (PascalCase {Items:[...]} or a plain array). */
+function aliasesOf(c: Row): string[] {
+  const a = c.aliases;
+  if (Array.isArray(a)) return a.map(str);
+  if (a && typeof a === 'object' && Array.isArray((a as Row).Items)) return ((a as Row).Items as unknown[]).map(str);
+  return [];
+}
+
+/** Normalize a DNS name for matching (drop trailing dot, lowercase). */
+const dns = (v: unknown): string => str(v).replace(/\.$/, '').toLowerCase();
 
 /** Max targets rendered per target group before collapsing the rest into a "+N more" node. */
 export const TARGET_CAP = 20;
@@ -59,7 +70,10 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // collide across regions); the name/dns_name is the display label.
   const lbId = (kind: 'alb' | 'nlb', r: Row) => `${kind}:${str(r.arn) || str(r.resource_id)}`;
 
-  for (const c of input.cloudfront ?? []) addNode(`cf:${str(c.resource_id)}`, 'cloudfront', str(c.name) || str(c.resource_id));
+  for (const c of input.cloudfront ?? []) {
+    const al = aliasesOf(c);
+    addNode(`cf:${str(c.resource_id)}`, 'cloudfront', al[0] || str(c.name) || str(c.resource_id), al.length ? { aliases: al } : undefined);
+  }
   for (const a of input.alb ?? []) addNode(lbId('alb', a), 'alb', str(a.dns_name) || str(a.resource_id));
   for (const n of input.nlb ?? []) addNode(lbId('nlb', n), 'nlb', str(n.dns_name) || str(n.resource_id));
   for (const w of input.waf ?? []) addNode(`waf:${str(w.resource_id)}`, 'waf', str(w.resource_id));
@@ -79,7 +93,33 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   }
   for (const w of input.waf ?? []) if (w.arn) wafByArn.set(str(w.arn), `waf:${str(w.resource_id)}`);
 
-  // 2) CloudFront → origins (ALB/NLB by DNS, or unresolved origin node) + CF→WAF.
+  // CloudFront indexes for Route53 alias targets: by distribution domain (d111.cloudfront.net)
+  // and by custom-domain alias (the CNAMEs on the distribution).
+  const cfByDomain = new Map<string, string>(); // cloudfront domain_name → cf node id
+  const cfByAlias = new Map<string, string>();  // custom-domain alias → cf node id
+  for (const c of input.cloudfront ?? []) {
+    const cfId = `cf:${str(c.resource_id)}`;
+    if (c.domain_name) cfByDomain.set(dns(c.domain_name), cfId);
+    for (const a of aliasesOf(c)) cfByAlias.set(dns(a), cfId);
+  }
+
+  // 2) Route53 → CloudFront / LB. Records are the true front door (custom domain). Match the
+  // record's alias target (or the record name itself) to a CF distribution domain/alias or an
+  // LB dns_name. Records that resolve to nothing we track are skipped (no orphan DNS clutter).
+  for (const r of input.route53 ?? []) {
+    const aliasT = (r.alias_target && typeof r.alias_target === 'object') ? (r.alias_target as Row) : {};
+    const targetDns = dns(aliasT.DNSName);          // ALIAS records: where the name points
+    const recName = dns(r.resource_id) || dns(r.name);
+    const downstream =
+      cfByDomain.get(targetDns) || lbByDns.get(targetDns) ||  // alias → CF / LB
+      cfByAlias.get(recName);                                 // record name == a CF custom-domain alias
+    if (!downstream) continue;
+    const rid = `r53:${str(r.resource_id) || recName}`;
+    addNode(rid, 'route53', recName || str(r.resource_id), { recordType: str(r.type) });
+    addEdge(rid, downstream);
+  }
+
+  // 3) CloudFront → origins (ALB/NLB by DNS, or unresolved origin node) + CF→WAF.
   for (const c of input.cloudfront ?? []) {
     const cfId = `cf:${str(c.resource_id)}`;
     const wafArn = str(c.web_acl_id);
@@ -99,7 +139,7 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
     });
   }
 
-  // 3) ALB/NLB → TG (via load_balancer_arns) and TG → targets (target_health_descriptions).
+  // 4) ALB/NLB → TG (via load_balancer_arns) and TG → targets (target_health_descriptions).
   for (const t of input.tg ?? []) {
     const tgId = `tg:${str(t.resource_id)}`;
     // load_balancer_arns is an array of plain ARN strings (not objects) → normalize separately.

@@ -36,6 +36,36 @@ describe('buildFlowGraph — CF→LB/WAF edges', () => {
     expect(g.edges.find((x) => x.source === 'cf:D1' && x.target === 'waf:prod')).toBeTruthy();
   });
 
+  it('labels the CF node with its custom domain (aliases) when present', () => {
+    const cf = { resource_id: 'D1', region: 'us-east-1', domain_name: 'd1.cloudfront.net', aliases: { Items: ['app.example.com'] }, origins: [] };
+    const g = buildFlowGraph({ cloudfront: [cf] });
+    expect(g.nodes.find((n) => n.id === 'cf:D1')?.label).toBe('app.example.com');
+  });
+});
+
+describe('buildFlowGraph — Route53 entry', () => {
+  const cf = { resource_id: 'D1', region: 'us-east-1', domain_name: 'd111.cloudfront.net', aliases: { Items: ['app.example.com'] }, origins: [] };
+
+  it('links Route53 ALIAS record → CloudFront when alias_target matches the CF domain', () => {
+    const rec = { resource_id: 'app.example.com A', name: 'app.example.com.', type: 'A', alias_target: { DNSName: 'd111.cloudfront.net.' } };
+    const g = buildFlowGraph({ route53: [rec], cloudfront: [cf] });
+    const r53 = g.nodes.find((n) => n.kind === 'route53');
+    expect(r53).toBeTruthy();
+    expect(g.edges.find((x) => x.source === r53!.id && x.target === 'cf:D1')).toBeTruthy();
+  });
+
+  it('links Route53 → ALB when alias_target matches the LB dns_name', () => {
+    const rec = { resource_id: 'direct.example.com A', name: 'direct.example.com.', type: 'A', alias_target: { DNSName: `${alb.dns_name}.` } };
+    const g = buildFlowGraph({ route53: [rec], alb: [alb] });
+    expect(g.edges.find((x) => x.source.startsWith('r53:') && x.target === ALB_ID)).toBeTruthy();
+  });
+
+  it('skips Route53 records that resolve to nothing tracked (no orphan DNS clutter)', () => {
+    const rec = { resource_id: 'ext.example.com CNAME', name: 'ext.example.com.', type: 'CNAME', alias_target: { DNSName: 'somewhere-external.example.org.' } };
+    const g = buildFlowGraph({ route53: [rec], cloudfront: [cf] });
+    expect(g.nodes.find((n) => n.kind === 'route53')).toBeFalsy();
+  });
+
   it('VPC-origin distribution (public FQDN + VpcOriginConfig) → unresolved origin node, no false LB edge', () => {
     const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.atomai.click', VpcOriginConfig: { VpcOriginId: 'vo_abc' } }] };
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb] });

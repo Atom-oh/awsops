@@ -69,6 +69,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
   cloudfront: { label: 'CloudFront', group: 'Network', stateKey: 'status', distKey: 'price_class', columns: [
     { key: 'domain_name', label: 'Domain' }, { key: 'status', label: 'Status' },
     { key: 'enabled', label: 'Enabled' }, { key: 'price_class', label: 'Price class' } ] },
+  route53: { label: 'Route53 Records', group: 'Network', distKey: 'type', columns: [
+    { key: 'name', label: 'Name' }, { key: 'type', label: 'Type' },
+    { key: 'zone_id', label: 'Zone' }, { key: 'ttl', label: 'TTL' } ] },
   alb: { label: 'App Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', columns: [
     { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
     { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' },

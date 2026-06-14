@@ -163,6 +163,16 @@ QUERIES = {
         "target_group_arn",
         "region",
     ),
+    "route53": (
+        # Front-door entry: alias/A/CNAME records whose alias_target (PascalCase .DNSName) points
+        # at a CloudFront distribution domain or an LB dns_name. record_id = name+type (a name can
+        # hold multiple record types). route53 is global → literal region.
+        "SELECT (name || ' ' || type) AS record_id, name, type, 'global' AS region, account_id, "
+        "zone_id, alias_target, records, ttl "
+        "FROM aws_route53_record WHERE type IN ('A', 'AAAA', 'CNAME') ORDER BY name",
+        "record_id",
+        "region",
+    ),
     "elasticache": (
         # NON-metric detail fields only; v1's ecMetrics CloudWatch JOIN is live/heavy → F5, not stored here.
         "SELECT cache_cluster_id, region, account_id, arn, engine, engine_version, cache_node_type, "

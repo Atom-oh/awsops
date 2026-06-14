@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { Background, Controls, MiniMap, type Node, type Edge } from '@xyflow/react';
+import { Background, Controls, MiniMap, Position, type Node, type Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -12,25 +12,25 @@ import { useTheme } from '@/lib/use-theme';
 // ReactFlow touches the DOM on mount — load it client-only to avoid SSR mismatch.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
 
-const TYPES = ['cloudfront', 'alb', 'nlb', 'target_group', 'waf'] as const;
+const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf'] as const;
 type InvType = (typeof TYPES)[number];
 type Row = Record<string, unknown>;
 
 // InvType → FlowInput key (target_group maps to `tg`).
 const FLOW_KEY: Record<InvType, keyof FlowInput> = {
-  cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg', waf: 'waf',
+  route53: 'route53', cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg', waf: 'waf',
 };
 
 // Node fill/border per FlowKind. Light + dark variants (ReactFlow dark colorMode flips default
 // node text to light, so dark nodes get explicit dark fills + light text). Target nodes are
 // colored by health instead (see HEALTH).
 const KIND_LIGHT: Record<FlowKind, [string, string]> = {
-  cloudfront: ['#E6EEFE', '#3D6FB5'], alb: ['#FEF3E2', '#C8902F'], nlb: ['#FEF3E2', '#C8902F'],
+  route53: ['#E6F6EC', '#2E9E5B'], cloudfront: ['#E6EEFE', '#3D6FB5'], alb: ['#FEF3E2', '#C8902F'], nlb: ['#FEF3E2', '#C8902F'],
   tg: ['#F1E9FF', '#8A5BD0'], waf: ['#FDECE8', '#C85A45'], target: ['#EBEFF2', '#AFBAC3'],
   origin: ['#EBEFF2', '#AFBAC3'], more: ['#EBEFF2', '#AFBAC3'],
 };
 const KIND_DARK: Record<FlowKind, [string, string]> = {
-  cloudfront: ['#16243E', '#3D6FB5'], alb: ['#33260C', '#C8902F'], nlb: ['#33260C', '#C8902F'],
+  route53: ['#0E2E1C', '#2E9E5B'], cloudfront: ['#16243E', '#3D6FB5'], alb: ['#33260C', '#C8902F'], nlb: ['#33260C', '#C8902F'],
   tg: ['#241A3E', '#8A5BD0'], waf: ['#331410', '#C85A45'], target: ['#1F262D', '#586773'],
   origin: ['#1F262D', '#586773'], more: ['#1F262D', '#586773'],
 };
@@ -53,7 +53,7 @@ function nodeColors(n: FlowNode, dark: boolean): [string, string] {
 }
 
 const PREFIX: Record<FlowKind, string> = {
-  cloudfront: 'CF', alb: 'ALB', nlb: 'NLB', tg: 'TG', waf: 'WAF', target: '', origin: '', more: '',
+  route53: 'DNS', cloudfront: 'CF', alb: 'ALB', nlb: 'NLB', tg: 'TG', waf: 'WAF', target: '', origin: '', more: '',
 };
 
 function nodeLabel(n: FlowNode): string {
@@ -136,6 +136,9 @@ export default function TopologyPage() {
         id: n.id,
         position: { x: p.x, y: p.y },
         data: { label: nodeLabel(n) },
+        // LR layout → handles on left/right so edges flow horizontally (not top/bottom).
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
         style: {
           background: bg,
           border: `${n.kind === 'origin' ? '1px dashed' : '1px solid'} ${border}`,
@@ -152,21 +155,21 @@ export default function TopologyPage() {
     return { nodes, edges };
   }, [full, entryId, dark]);
 
-  const onEntry = (kind: 'cf' | 'lb') => (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
+  const onEntry = (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
   const selectCls = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
 
   return (
     <>
       <PageHeader
         title="Topology"
-        subtitle="요청 흐름 그래프 (CloudFront → LB → Target Group → 타깃)"
+        subtitle="요청 흐름 그래프 (Route53 → CloudFront → LB → Target Group → 타깃)"
         right={
           <div className="flex items-center gap-2">
-            <select className={selectCls} value={entryOptions.cf.some((n) => n.id === entryId) ? entryId : ''} onChange={onEntry('cf')}>
+            <select className={selectCls} value={entryOptions.cf.some((n) => n.id === entryId) ? entryId : ''} onChange={onEntry}>
               <option value="">CloudFront: 전체</option>
               {entryOptions.cf.map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}
             </select>
-            <select className={selectCls} value={entryOptions.lb.some((n) => n.id === entryId) ? entryId : ''} onChange={onEntry('lb')}>
+            <select className={selectCls} value={entryOptions.lb.some((n) => n.id === entryId) ? entryId : ''} onChange={onEntry}>
               <option value="">LB: 전체</option>
               {entryOptions.lb.map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}
             </select>
