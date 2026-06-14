@@ -10,7 +10,14 @@
 # flips remediation_enabled, sets the kill-switch true, enables a catalog row, AND a 4-eyes
 # approval passes. Design refs: ADR-029 (6 controls) + ADR-036 (hybrid substrate).
 locals {
-  re              = var.remediation_enabled ? 1 : 0
+  re = var.remediation_enabled ? 1 : 0
+  # ADR-040/041 §4 — the external DATA-write plane. `iw` gates its OWN resources (kill-switch, Slack
+  # role/secret, external IAM). `re_or_iw` gates the SHARED execution infra (SM + executor/resume
+  # Lambdas + audit bucket + SFN role/logs) so the executor EXISTS for Slack while remediation stays
+  # off — AWS-resource safety is NOT infra-existence (it's the flag env + enabled + the prefix split +
+  # the IAM split). Both default false ⇒ re_or_iw=0 ⇒ unchanged.
+  iw              = var.integrations_write_enabled ? 1 : 0
+  re_or_iw        = (var.remediation_enabled || var.integrations_write_enabled) ? 1 : 0
   rem_src         = "${path.module}/../../../scripts/v2/remediation"
   workers_src_re  = "${path.module}/../../../scripts/v2/workers" # reuse db.py/status_updater
   rem_acct        = data.aws_caller_identity.current.account_id
@@ -43,18 +50,18 @@ resource "aws_ssm_parameter" "allow_cross_account" {
 # Step 2: S3 Object-Lock audit bucket (governance mode, 1yr; ADR-029 #6 second synchronous sink).
 ############################################################
 resource "aws_s3_bucket" "remediation_audit" {
-  count               = local.re
+  count               = local.re_or_iw
   bucket              = "${var.project}-remediation-audit-${local.rem_acct}"
   object_lock_enabled = true
   force_destroy       = false
 }
 resource "aws_s3_bucket_versioning" "remediation_audit" {
-  count  = local.re
+  count  = local.re_or_iw
   bucket = aws_s3_bucket.remediation_audit[0].id
   versioning_configuration { status = "Enabled" }
 }
 resource "aws_s3_bucket_object_lock_configuration" "remediation_audit" {
-  count  = local.re
+  count  = local.re_or_iw
   bucket = aws_s3_bucket.remediation_audit[0].id
   rule {
     default_retention {
@@ -64,7 +71,7 @@ resource "aws_s3_bucket_object_lock_configuration" "remediation_audit" {
   }
 }
 resource "aws_s3_bucket_public_access_block" "remediation_audit" {
-  count                   = local.re
+  count                   = local.re_or_iw
   bucket                  = aws_s3_bucket.remediation_audit[0].id
   block_public_acls       = true
   block_public_policy     = true
@@ -176,24 +183,24 @@ resource "aws_ssm_document" "change_template" {
 # Step 7: CloudWatch log groups + remediation SFN role + the SFN itself (the sibling SM; T7 ASL).
 ############################################################
 resource "aws_cloudwatch_log_group" "remediation_sfn" {
-  count             = local.re
+  count             = local.re_or_iw
   name              = "/aws/vendedlogs/states/${var.project}-remediation"
   retention_in_days = 90 # longer than workers: mutation audit
 }
 resource "aws_cloudwatch_log_group" "remediation_lambdas" {
-  count             = local.re
+  count             = local.re_or_iw
   name              = "/aws/lambda/${var.project}-remediation"
   retention_in_days = 90
 }
 
 resource "aws_iam_role" "remediation_sfn" {
-  count = local.re
+  count = local.re_or_iw
   name  = "${var.project}-remediation-sfn"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow",
   Principal = { Service = "states.amazonaws.com" }, Action = "sts:AssumeRole" }] })
 }
 resource "aws_iam_role_policy" "remediation_sfn" {
-  count = local.re
+  count = local.re_or_iw
   name  = "${var.project}-remediation-sfn"
   role  = aws_iam_role.remediation_sfn[0].id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
@@ -212,7 +219,7 @@ resource "aws_iam_role_policy" "remediation_sfn" {
 }
 
 resource "aws_sfn_state_machine" "remediation" {
-  count    = local.re
+  count    = local.re_or_iw
   name     = "${var.project}-remediation"
   role_arn = aws_iam_role.remediation_sfn[0].arn
   type     = "STANDARD"
@@ -242,7 +249,7 @@ resource "aws_sfn_state_machine" "remediation" {
 #   inline STS/SSM/kill-switch policy (it only needs Aurora + STS:AssumeRole on per-action roles).
 ############################################################
 data "archive_file" "remediation_src" {
-  count       = local.re
+  count       = local.re_or_iw
   type        = "zip"
   output_path = "${path.module}/.build/remediation_src.zip"
   source {
@@ -297,17 +304,27 @@ resource "aws_iam_role_policy" "remediation_lambda_extra" {
 }
 
 locals {
-  rem_env = local.re == 1 ? {
-    AURORA_ENDPOINT                      = aws_rds_cluster.aurora.endpoint
-    AURORA_DATABASE                      = aws_rds_cluster.aurora.database_name
-    AURORA_SECRET_ARN                    = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
-    REMEDIATION_ENABLED                  = "true" # the Lambda only EXISTS when the flag is on; the kill-switch is the live gate
+  # ADR-040/041 §4 — base executor env present whenever the executor EXISTS (either plane). The flags
+  # track the VARS (NOT infra-existence — opus R2 CRITICAL-1): REMEDIATION_ENABLED is "false" under
+  # iw-only so the executor's AWS-resource gate fail-closes. iw-gated ARNs use one()/coalesce (null→"").
+  rem_env_base = local.re_or_iw == 1 ? {
+    AURORA_ENDPOINT                = aws_rds_cluster.aurora.endpoint
+    AURORA_DATABASE                = aws_rds_cluster.aurora.database_name
+    AURORA_SECRET_ARN              = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+    REMEDIATION_ENABLED            = tostring(var.remediation_enabled)
+    INTEGRATIONS_WRITE_ENABLED     = tostring(var.integrations_write_enabled)
+    INTEGRATIONS_WRITE_SSM         = coalesce(one(aws_ssm_parameter.integrations_write_enabled[*].name), "")
+    SLACK_SECRET_ARN               = coalesce(one(aws_secretsmanager_secret.slack[*].arn), "")
+    ACTION_ROLE_SLACK_POST_MESSAGE = coalesce(one(aws_iam_role.action_slack_write[*].arn), "")
+    AUDIT_BUCKET                   = aws_s3_bucket.remediation_audit[0].id
+  } : {}
+  # AWS-resource-specific env — ONLY when the (frozen) remediation plane is on.
+  rem_env_aws = local.re == 1 ? {
     MUTATING_ACTIONS_SSM                 = aws_ssm_parameter.mutating_enabled[0].name
     EC2_CREATE_TAGS_DOC                  = aws_ssm_document.ec2_create_tags[0].name
     ASSUME_ROLE_EC2_CREATE_TAGS          = aws_iam_role.automation_ec2_tags[0].arn
     ACTION_ROLE_APP_FEATURE_FLAG_SET     = aws_iam_role.action_app_feature_flag[0].arn
     ACTION_ROLE_OPSCENTER_CREATE_OPSITEM = aws_iam_role.action_opscenter_write[0].arn
-    AUDIT_BUCKET                         = aws_s3_bucket.remediation_audit[0].id
     # NB: REMEDIATION_STATE_MACHINE_ARN is intentionally NOT injected here. These Lambdas resume the
     # parked SM via the per-execution task token (states:SendTaskSuccess/Failure), never by the SM ARN
     # — no source reads this var. Injecting it created a hard graph cycle (SM templatefile → Lambda
@@ -315,10 +332,61 @@ locals {
     # env + the web env. (Plan-as-written defect; removing the unused self-reference breaks the cycle
     # without weakening any control.)
   } : {}
+  rem_env = merge(local.rem_env_base, local.rem_env_aws)
+}
+
+# ===== ADR-040/041 external knowledge/comms DATA-write (Slack) — OWN control plane, ZERO AWS-mutation =====
+# All iw-gated (default off → $0). Requires integrations_enabled (the Slack secret uses the integrations
+# CMK) + workers_enabled (shared executor infra). Enabling these can NEVER enable AWS-resource mutation.
+resource "aws_ssm_parameter" "integrations_write_enabled" {
+  count     = local.iw
+  name      = "/ops/${var.project}/integrations-write/enabled"
+  type      = "String"
+  value     = "false" # operator-toggled live kill-switch — SEPARATE from the AWS mutating-actions switch
+  overwrite = true
+  lifecycle { ignore_changes = [value] }
+}
+
+resource "aws_secretsmanager_secret" "slack" {
+  count       = local.iw
+  name        = "ops/${var.project}/integrations/slack-bot-token"
+  description = "ADR-040 Slack bot token for the governed external-write executor (integrations CMK)."
+  kms_key_id  = aws_kms_key.integrations[0].arn
+}
+
+# Per-action role the executor assumes for a Slack write — ONLY secrets/kms, NO AWS-mutation.
+resource "aws_iam_role" "action_slack_write" {
+  count = local.iw
+  name  = "${var.project}-action-slack-write"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{
+  Effect = "Allow", Principal = { AWS = aws_iam_role.worker_lambda[0].arn }, Action = "sts:AssumeRole" }] })
+}
+
+resource "aws_iam_role_policy" "action_slack_write" {
+  count = local.iw
+  name  = "${var.project}-action-slack-write"
+  role  = aws_iam_role.action_slack_write[0].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Sid = "SlackSecretRead", Effect = "Allow", Action = ["secretsmanager:GetSecretValue"],
+    Resource = aws_secretsmanager_secret.slack[0].arn },
+  { Sid = "SlackSecretKms", Effect = "Allow", Action = ["kms:Decrypt"], Resource = aws_kms_key.integrations[0].arn }] })
+}
+
+# The executor's EXTERNAL slice on the worker_lambda role (iw): ONLY assume the Slack role + read the
+# external kill-switch + audit. The StartSsmAutomation / AWS-action-role assume / PassRole statements
+# stay in remediation_lambda_extra (re-only) → the data-write role carries ZERO AWS-mutation capability.
+resource "aws_iam_role_policy" "remediation_lambda_integrations" {
+  count = local.iw
+  name  = "${var.project}-remediation-lambda-integrations"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Sid = "AssumeSlackRole", Effect = "Allow", Action = ["sts:AssumeRole"], Resource = aws_iam_role.action_slack_write[0].arn },
+    { Sid = "ReadIntegrationsKillSwitch", Effect = "Allow", Action = ["ssm:GetParameter"], Resource = aws_ssm_parameter.integrations_write_enabled[0].arn },
+  { Sid = "AuditBucketIntegrations", Effect = "Allow", Action = ["s3:PutObject"], Resource = "${aws_s3_bucket.remediation_audit[0].arn}/*" }] })
 }
 
 resource "aws_lambda_function" "remediation_executor" {
-  count            = local.re
+  count            = local.re_or_iw
   function_name    = "${var.project}-remediation-executor"
   role             = aws_iam_role.worker_lambda[0].arn
   runtime          = "python3.12"
@@ -338,7 +406,7 @@ resource "aws_lambda_function" "remediation_executor" {
 }
 
 resource "aws_lambda_function" "record_ssm_start" {
-  count            = local.re
+  count            = local.re_or_iw
   function_name    = "${var.project}-remediation-record-ssm-start"
   role             = aws_iam_role.worker_lambda[0].arn
   runtime          = "python3.12"
@@ -358,7 +426,7 @@ resource "aws_lambda_function" "record_ssm_start" {
 }
 
 resource "aws_lambda_function" "approval_notifier" {
-  count            = local.re
+  count            = local.re_or_iw
   function_name    = "${var.project}-remediation-approval-notifier"
   role             = aws_iam_role.worker_lambda[0].arn
   runtime          = "python3.12"

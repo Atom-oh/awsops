@@ -227,6 +227,12 @@ resource "aws_ecs_task_definition" "web" {
         { name = "REMEDIATION_ENABLED", value = "true" },
         { name = "MUTATING_ACTIONS_SSM", value = one(aws_ssm_parameter.mutating_enabled[*].name) },
         { name = "REMEDIATION_STATE_MACHINE_ARN", value = one(aws_sfn_state_machine.remediation[*].arn) }
+        ] : [], var.integrations_write_enabled ? [
+        # ADR-040/041: external DATA-write plane env for the /api/actions execute route — its OWN flag +
+        # kill-switch param (separate from the AWS-resource ones above). The web enqueues to SQS (the
+        # dispatcher owns the SM ARN), so no SM ARN here → no duplicate when both planes are on.
+        { name = "INTEGRATIONS_WRITE_ENABLED", value = "true" },
+        { name = "INTEGRATIONS_WRITE_SSM", value = one(aws_ssm_parameter.integrations_write_enabled[*].name) }
         ] : [], var.incident_lifecycle_enabled ? [
         # ADR-032: the incident ingress/triage routes read INCIDENT_LIFECYCLE_ENABLED FIRST and 503
         # when not "true" (no accept / HMAC / normalize / triage / enqueue). concat(base, []) == base

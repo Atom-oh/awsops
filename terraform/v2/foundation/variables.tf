@@ -119,6 +119,12 @@ variable "remediation_enabled" {
   default     = false
 }
 
+variable "integrations_write_enabled" {
+  type        = bool
+  description = "ADR-040/041 external knowledge/comms DATA-write gate (Slack/Notion/Jira records). Reuses the action_catalog facade + SM + executor but on a FULLY-INDEPENDENT control plane (own flag env, own kill-switch under ops/<project>/integrations-write/enabled, own no-AWS-mutation IAM) so enabling it can NEVER enable AWS-resource mutation (which stays remediation_enabled-frozen). NON-AWS-resource only. false (default) = 0 resources, zero cost, no behavior change. Ships flag-OFF; owner enables (requires agentcore/integrations + workers enabled)."
+  default     = false
+}
+
 variable "hybrid_routing_enabled" {
   type        = bool
   description = "ADR-038 hybrid chat routing gate. false (default) = legacy regex-only routing, no classifier Bedrock calls, no extra IAM. Enable only after the golden-set gate (scripts/v2/routing-accuracy.mjs) passes >=85% and >= +15pp over the regex baseline."
