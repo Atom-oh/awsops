@@ -360,10 +360,22 @@ class SsrfBlocked(Exception):
     pass
 
 
+# Cloud instance-metadata endpoints that MUST be blocked even under the allowPrivate opt-in.
+# IPv4 169.254.169.254 is already link-local; the IPv6 IMDS fd00:ec2::254 lives in fc00::/7 (ULA) so it
+# would otherwise be treated as an opt-in-able private address (P4 gate finding) — block it explicitly.
+_METADATA_IPS = frozenset({
+    ipaddress.ip_address('169.254.169.254'),
+    ipaddress.ip_address('fd00:ec2::254'),
+})
+
+
 def _ip_always_blocked(ip_str):
-    """Returns True if the IP is loopback, link-local (metadata), multicast, or reserved."""
+    """Returns True if the IP is metadata, loopback, link-local, multicast, reserved, or unspecified —
+    i.e. blocked REGARDLESS of the per-account allowPrivate opt-in."""
     try:
         ip = ipaddress.ip_address(ip_str)
+        if ip in _METADATA_IPS:
+            return True
         return (ip.is_loopback or ip.is_link_local or ip.is_multicast or
                 ip.is_reserved or ip.is_unspecified)
     except ValueError:
@@ -382,7 +394,14 @@ def _ip_is_private(ip_str):
 
 
 def _assert_host_allowed(url, allow_private, resolver=socket.getaddrinfo):
-    """Assert that the host in the URL is allowed to be connected to."""
+    """Assert the URL host is connectable: require https, resolve the host, and block any resolved IP
+    that is always-blocked (metadata/loopback/link-local/...) or private-without-the-opt-in.
+
+    KNOWN LIMITATION (P4 gate, accepted — matches ADR-011 / web/lib/ssrf-guard.ts, both resolve-based):
+    this is resolve-and-recheck; the transport re-resolves at connect time, so a DNS-rebinding host
+    could return a safe IP here and a blocked IP at connect. The layered mitigations are redirect:'manual'
+    (set on both integration transports) + the registration-time literal-host guard (ssrf-guard.ts). True
+    IP-pinning (connect to the validated IP with SNI/Host preserved) is deferred to P3 hardening."""
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != 'https':
         raise SsrfBlocked(f"SSRF block: HTTPS required for integration endpoints, got {parsed.scheme}")
@@ -492,6 +511,21 @@ def select_integration_tools(live_tools, exposed_tools):
     if not allow:
         return []
     return [t for t in live_tools if getattr(t, "tool_name", None) in allow]
+
+
+def _dedup_by_tool_name(tools):
+    """Drop duplicate tool_names, keeping the FIRST occurrence (gateway tools precede integration tools
+    in the union, so the gateway wins a collision). Prevents handing Agent(tools=) two same-named tools
+    (P4 gate finding — external integrations could collide with a gateway tool name)."""
+    seen = set()
+    out = []
+    for t in tools:
+        n = getattr(t, "tool_name", None)
+        if n in seen:
+            continue
+        seen.add(n)
+        out.append(t)
+    return out
 
 
 def gather_integration_tools(specs, connect):
@@ -655,7 +689,8 @@ def handler(payload):
                 integrations, lambda spec: _connect_integration(spec, stack))
             # ADR-031/039: enforce the resolver-computed allowlist OUTSIDE the model over BOTH gateway +
             # integration tools BEFORE the prompt tool-list and Agent(tools=) are built (cap is the ceiling).
-            tools = _filter_tools(gateway_tools + integration_tools, tool_allowlist)
+            # Dedup first (gateway precedence) so a name collision never hands Agent two same-named tools.
+            tools = _filter_tools(_dedup_by_tool_name(gateway_tools + integration_tools), tool_allowlist)
             tool_names = [t.tool_name for t in tools]
             logging.info(f"Gateway [{gateway_role}] tools ({len(tools)} = {len(gateway_tools)} gw + {len(integration_tools)} integ, allowlist={'on' if tool_allowlist else 'off'}): {tool_names}")
 

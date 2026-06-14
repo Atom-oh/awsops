@@ -93,6 +93,9 @@ class SsrfGuardTest(unittest.TestCase):
         # Unspecified / Reserved
         self.assertTrue(agent._ip_always_blocked('0.0.0.0'))
         self.assertTrue(agent._ip_always_blocked('240.0.0.1'))
+        # Cloud metadata — ALWAYS blocked even though IPv6 IMDS is ULA (P4 gate fix)
+        self.assertTrue(agent._ip_always_blocked('fd00:ec2::254'))      # AWS IPv6 IMDS (fc00::/7 ULA)
+        self.assertTrue(agent._ip_always_blocked('fd00:ec2:0:0:0:0:0:254'))  # same, expanded form
         # Public / Private (not always blocked)
         self.assertFalse(agent._ip_always_blocked('8.8.8.8'))
         self.assertFalse(agent._ip_always_blocked('10.0.0.1'))
@@ -110,6 +113,7 @@ class SsrfGuardTest(unittest.TestCase):
         # Metadata / Loopback (always blocked, NOT in the _ip_is_private "opt-in" set)
         self.assertFalse(agent._ip_is_private('169.254.169.254'))
         self.assertFalse(agent._ip_is_private('127.0.0.1'))
+        self.assertFalse(agent._ip_is_private('fd00:ec2::254'))  # IPv6 IMDS — metadata, not opt-in-able
 
     def test_assert_host_allowed_basics(self):
         def resolver(host, port, *a, **k):
@@ -270,6 +274,13 @@ class IntegrationToolMergeTest(unittest.TestCase):
         def connect(spec):
             return [] if spec['name'] == 'empty' else [FakeTool('f')]
         self.assertEqual(names(agent.gather_integration_tools(specs, connect)), ['f'])
+
+    def test_dedup_keeps_first_on_collision_gateway_precedence(self):
+        # P4 gate fix: gateway tools precede integration tools → gateway wins a name collision; order kept.
+        gateway = [FakeTool('shared'), FakeTool('gw_only')]
+        integ = [FakeTool('shared'), FakeTool('int_only')]
+        deduped = agent._dedup_by_tool_name(gateway + integ)
+        self.assertEqual(names(deduped), ['shared', 'gw_only', 'int_only'])
 
 
 if __name__ == '__main__':
