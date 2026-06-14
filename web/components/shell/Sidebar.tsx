@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, MessagesSquare, Activity, DollarSign, Sparkles,
-  Box, Gauge, PiggyBank,
+  Box, Gauge,
   Server, Zap, Container, Package,
   Archive, HardDrive, Database, Table, DatabaseZap, Search, Radio,
   Network, Waypoints, BrickWall, Globe, Scale, Split,
@@ -127,12 +127,9 @@ export default function Sidebar({ onNavigate, className }: { onNavigate?: () => 
           <div key={g.group} className="space-y-0.5">
             <SectionLabel className="px-2.5 pb-1 text-[11px] tracking-[0.04em] text-chrome-fg-muted">{g.group}</SectionLabel>
             {g.group === 'Compute' && (
-              /* EKS keeps its own route/icon but lives under Compute (user feedback);
-                 OpenCost renders as an indented EKS submenu item. */
-              <>
-                <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} onNavigate={onNavigate} />
-                <NavItem href="/opencost" label={t('nav.opencost')} icon={PiggyBank} active={path === '/opencost'} className="ml-5" onNavigate={onNavigate} />
-              </>
+              /* EKS keeps its own route/icon but lives under Compute (user feedback).
+                 OpenCost now lives per-cluster on the EKS detail page, not as a nav item. */
+              <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} onNavigate={onNavigate} />
             )}
             {g.types.map((ty) => {
               const href = `/inventory/${ty}`;

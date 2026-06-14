@@ -20,9 +20,8 @@ const ROUTE_TKEY: Record<string, string> = {
 };
 
 // Routes whose label is a literal (no i18n key in lib/i18n.ts).
-const ROUTE_LITERAL: Record<string, string> = {
-  '/opencost': 'OpenCost',
-};
+// (OpenCost moved per-cluster onto the EKS detail page — no longer a standalone route.)
+const ROUTE_LITERAL: Record<string, string> = {};
 
 /**
  * Open the global Cmd-K palette by replaying the exact keydown CommandPalette
