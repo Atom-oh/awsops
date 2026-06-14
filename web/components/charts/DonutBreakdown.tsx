@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import Card from '@/components/ui/Card';
 import { useChartColors } from '@/lib/use-chart-colors';
-import { TOOLTIP_STYLES } from './theme';
+import { tooltipStyles } from './theme';
 
 export interface DonutBreakdownProps {
   title: ReactNode;
@@ -58,7 +58,7 @@ export default function DonutBreakdown({
                 ))}
               </Pie>
               <Tooltip
-                {...TOOLTIP_STYLES}
+                {...tooltipStyles(c)}
                 formatter={(v, n) =>
                   [
                     valuePrefix === '$'

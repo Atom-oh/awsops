@@ -12,7 +12,7 @@ import {
 } from 'recharts';
 import Card from '@/components/ui/Card';
 import { useChartColors } from '@/lib/use-chart-colors';
-import { AXIS_TICK, CHART, TOOLTIP_STYLES } from './theme';
+import { axisTick, tooltipStyles } from './theme';
 
 export interface AreaTrendProps {
   title: ReactNode;
@@ -59,22 +59,22 @@ export default function AreaTrend({
               <stop offset="100%" stopColor={c.lead} stopOpacity={0.02} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="2 4" stroke={CHART.grid} vertical={false} />
+          <CartesianGrid strokeDasharray="2 4" stroke={c.grid} vertical={false} />
           <XAxis
             dataKey={xKey}
-            tick={AXIS_TICK}
+            tick={axisTick(c)}
             tickLine={false}
-            axisLine={{ stroke: CHART.grid }}
+            axisLine={{ stroke: c.grid }}
             minTickGap={24}
           />
           <YAxis
-            tick={AXIS_TICK}
+            tick={axisTick(c)}
             tickLine={false}
             axisLine={false}
             width={56}
             tickFormatter={(v) => fmt(v as number)}
           />
-          <Tooltip {...TOOLTIP_STYLES} formatter={(v) => [fmt(v as number), ''] as [string, string]} />
+          <Tooltip {...tooltipStyles(c)} formatter={(v) => [fmt(v as number), ''] as [string, string]} />
           <Area
             type="monotone"
             dataKey={yKey}

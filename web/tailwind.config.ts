@@ -6,6 +6,9 @@ const config: Config = {
     extend: {
       colors: {
         paper: { DEFAULT: 'var(--paper)', muted: 'var(--paper-muted)' },
+        // card surface — themeable elevated surface (light: #fff, dark: elevated dark).
+        // Replaces literal bg-white on cards; text-white stays #fff for colored buttons.
+        card: 'var(--surface-card)',
         ink: {
           50: 'var(--ink-50)', 100: 'var(--ink-100)', 200: 'var(--ink-200)', 300: 'var(--ink-300)',
           400: 'var(--ink-400)', 500: 'var(--ink-500)', 600: 'var(--ink-600)', 700: 'var(--ink-700)',

@@ -13,7 +13,7 @@ export default function Composer({ disabled, onSend }: { disabled: boolean; onSe
         onKeyDown={(e) => e.key === 'Enter' && send()}
         placeholder="메시지를 입력하세요…"
         disabled={disabled}
-        className="h-9 flex-1 rounded-lg border border-ink-200 bg-white px-3 text-[13px] text-ink-800 placeholder:text-ink-400 outline-none transition-shadow focus:border-brand-300 focus:shadow-focus disabled:opacity-60"
+        className="h-9 flex-1 rounded-lg border border-ink-200 bg-card px-3 text-[13px] text-ink-800 placeholder:text-ink-400 outline-none transition-shadow focus:border-brand-300 focus:shadow-focus disabled:opacity-60"
       />
       <button
         onClick={send}

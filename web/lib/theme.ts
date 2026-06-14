@@ -1,4 +1,4 @@
-export const THEMES = ['teal', 'cobalt', 'teal-console'] as const;
+export const THEMES = ['cobalt', 'teal', 'dark'] as const;
 export type Theme = (typeof THEMES)[number];
 
 export const DEFAULT_THEME: Theme = 'cobalt';
@@ -6,9 +6,9 @@ export const STORAGE_KEY = 'awsops-theme';
 export const THEME_EVENT = 'awsops:themechange';
 
 export const THEME_LABELS: Record<Theme, string> = {
-  teal: 'Teal',
   cobalt: 'Cobalt',
-  'teal-console': 'Console',
+  teal: 'Teal',
+  dark: 'Dark',
 };
 
 export function isTheme(v: unknown): v is Theme {

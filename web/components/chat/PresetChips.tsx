@@ -12,7 +12,7 @@ export default function PresetChips({ pinned, onPick }: { pinned: string | null;
         <button
           key={p}
           onClick={() => onPick(p)}
-          className="rounded-xl border border-ink-100 bg-white px-3.5 py-2.5 text-left text-[13px] text-ink-700 shadow-sm transition-colors hover:border-brand-200 hover:bg-brand-50"
+          className="rounded-xl border border-ink-100 bg-card px-3.5 py-2.5 text-left text-[13px] text-ink-700 shadow-sm transition-colors hover:border-brand-200 hover:bg-brand-50"
         >
           <span className="mr-1.5 text-brand-500">▸</span>{p}
         </button>

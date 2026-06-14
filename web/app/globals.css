@@ -26,9 +26,11 @@
   --negative:#D13212; --negative-surface:#FDECE8; --negative-text:#A32A0F; --negative-border:#F5C3B5;
   --warning:#F59E0B; --warning-surface:#FEF3E2; --warning-text:#B26B05; --warning-border:#FAD9A0;
 
-  /* ===== chart palette (DOM/CSS elements; recharts uses charts/theme.ts hex) ===== */
+  /* ===== chart palette (read at runtime by useChartColors → recharts SVG).
+     Must be concrete hex: getComputedStyle does NOT resolve var() in custom props. ===== */
   --chart-1:#01A88D; --chart-2:#528DF8; --chart-3:#7B26FF; --chart-4:#39C2B0; --chart-5:#7D8A96;
-  --chart-grid:var(--ink-100); --chart-axis:var(--ink-400);
+  --chart-grid:#E7ECEF; --chart-axis:#7D8A96;
+  --chart-tooltip-bg:#16202A; --chart-tooltip-fg:#F4F6F8;
 
   /* ===== aliases — reach for these ===== */
   --surface-page:var(--paper); --surface-sunken:var(--paper-muted); --surface-card:var(--white);
@@ -56,11 +58,49 @@
   --shadow-focus:0 0 0 3px rgba(82,141,248,.26);
 }
 
-/* ===== teal-console theme: brand stays teal (inherited), chrome goes dark ===== */
-[data-theme="teal-console"] {
-  --surface-chrome:#22332F; --surface-chrome-muted:#1B2A27; --chrome-fg:#FFFFFF;
-  --chrome-fg-muted:#9DB3AD; --chrome-border:#2A3D38;
-  --chrome-active-bg:#26403A; --chrome-active-fg:#FFFFFF; --chrome-active-border:var(--brand-500);
+/* ===== dark theme: full VSCode-style dark, cobalt accent =====
+   Neutral ramp is re-tuned so low indices read as dark *surfaces* and high
+   indices as light *text* (bg-ink-50 → near-bg, text-ink-800 → primary text).
+   ink-900 stays near-black: it is used only as modal scrim (bg-ink-900/20-40).
+   bg-ink-800 inverse chips (avatar/badge/code) flip to a light surface; their
+   text-paper companion goes dark → still a readable inverse. */
+[data-theme="dark"] {
+  /* neutrals — surfaces dark (low) → text light (high); 900 pinned for scrims */
+  --ink-50:#1F262D; --ink-100:#29333B; --ink-200:#38444E; --ink-300:#586773;
+  --ink-400:#8696A3; --ink-500:#9FAEBA; --ink-600:#B6C2CC; --ink-700:#CCD5DD;
+  --ink-800:#E3E9EE; --ink-900:#05080B;
+  --paper:#1A2026; --paper-muted:#141A1F; --white:#FFFFFF;
+
+  /* brand ramp — cobalt re-tuned for dark: subtle surfaces dark, text light,
+     solids stay saturated so white labels keep contrast */
+  --brand-50:#0F2747; --brand-100:#143459; --brand-200:#245A9E; --brand-300:#3D78D4;
+  --brand-400:#4A85EE; --brand-500:#528DF8; --brand-600:#2E6BE6; --brand-700:#93BBFA;
+  --brand-800:#1B4196; --brand-900:#15306B;
+  --brand-action:#2E6BE6; --brand-action-hover:#1F54C2;
+
+  /* card / page surfaces — card sits elevated above the page */
+  --surface-card:#232C34;
+
+  /* chrome (sidebar/header) — slightly elevated, cobalt-tinted active */
+  --surface-chrome:#20272E; --surface-chrome-muted:#1A2026; --chrome-fg:#E3E9EE;
+  --chrome-fg-muted:#8696A3; --chrome-border:#29333B;
+  --chrome-active-bg:#16335C; --chrome-active-fg:#FFFFFF; --chrome-active-border:var(--brand-500);
+
+  /* semantic — dark tinted surfaces, lifted text/accent for dark legibility */
+  --positive:#2CC9AE; --positive-surface:#0E2E2A; --positive-text:#5FE3CE; --positive-border:#1C5249;
+  --negative:#F26B4D; --negative-surface:#3A1712; --negative-text:#F5A593; --negative-border:#6E2A1B;
+  --warning:#F5B53C; --warning-surface:#3A2A0E; --warning-text:#F8CE7E; --warning-border:#6E4E12;
+
+  /* charts — cobalt lead, brighter series + tooltip flips to elevated dark */
+  --chart-1:#528DF8; --chart-2:#2CC9AE; --chart-3:#9D5BFF; --chart-4:#39C2B0; --chart-5:#9FAEBA;
+  --chart-grid:#29333B; --chart-axis:#8696A3;
+  --chart-tooltip-bg:#2B3640; --chart-tooltip-fg:#E3E9EE;
+
+  /* elevation — shadows barely register on dark, so deepen them */
+  --shadow-card:0 1px 2px rgba(0,0,0,.40), 0 4px 16px rgba(0,0,0,.50);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.50);
+  --shadow-pop:0 6px 24px rgba(0,0,0,.60);
+  --shadow-focus:0 0 0 3px rgba(82,141,248,.45);
 }
 
 body {

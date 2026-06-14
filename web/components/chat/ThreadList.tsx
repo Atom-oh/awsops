@@ -31,7 +31,7 @@ export default function ThreadList({ threads, activeId, onSelect, onDelete, onNe
               onClick={() => onSelect(t.id)}
               className={
                 'group mb-0.5 flex cursor-pointer items-center justify-between gap-1.5 rounded-md px-2 py-2 transition-colors ' +
-                (active ? 'bg-white shadow-sm' : 'hover:bg-ink-100/70')
+                (active ? 'bg-card shadow-sm' : 'hover:bg-ink-100/70')
               }
             >
               <div className="min-w-0">

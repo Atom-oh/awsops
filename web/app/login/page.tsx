@@ -73,7 +73,7 @@ function LoginForm() {
         {/* card */}
         <form
           onSubmit={onSubmit}
-          className="flex flex-col gap-4 rounded-xl border border-ink-100 bg-white p-7 shadow-card"
+          className="flex flex-col gap-4 rounded-xl border border-ink-100 bg-card p-7 shadow-card"
         >
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold text-ink-800">{t('login.title')}</h1>
@@ -100,7 +100,7 @@ function LoginForm() {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="h-[42px] rounded-md border border-ink-200 bg-white px-3 text-sm text-ink-800 outline-none transition-colors focus:border-brand focus:shadow-focus"
+              className="h-[42px] rounded-md border border-ink-200 bg-card px-3 text-sm text-ink-800 outline-none transition-colors focus:border-brand focus:shadow-focus"
             />
           </label>
 
@@ -112,7 +112,7 @@ function LoginForm() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="h-[42px] rounded-md border border-ink-200 bg-white px-3 text-sm text-ink-800 outline-none transition-colors focus:border-brand focus:shadow-focus"
+              className="h-[42px] rounded-md border border-ink-200 bg-card px-3 text-sm text-ink-800 outline-none transition-colors focus:border-brand focus:shadow-focus"
             />
           </label>
 

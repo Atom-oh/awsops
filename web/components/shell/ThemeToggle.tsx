@@ -4,7 +4,7 @@ import { THEMES, THEME_LABELS, getStoredTheme, setStoredTheme, applyTheme, type 
 import { cn } from '@/lib/cn';
 
 /**
- * ThemeToggle — 3-way segmented control (Teal / Azure / Console) in the sidebar
+ * ThemeToggle — 3-way segmented control (Cobalt / Teal / Dark) in the sidebar
  * footer. Reads the stored theme on mount, writes + applies on change.
  * Uses chrome tokens so it reads correctly on both light and dark chrome.
  */

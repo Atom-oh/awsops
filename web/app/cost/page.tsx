@@ -211,7 +211,7 @@ export default function CostPage() {
             role="dialog"
             aria-modal="true"
             aria-label={`${picked} 비용 상세`}
-            className="fixed right-0 top-0 z-50 flex h-full w-[480px] max-w-full flex-col border-l border-ink-100 bg-white shadow-pop"
+            className="fixed right-0 top-0 z-50 flex h-full w-[480px] max-w-full flex-col border-l border-ink-100 bg-card shadow-pop"
           >
             <header className="flex items-start justify-between gap-2 border-b border-ink-100 px-4 py-3">
               <h2 className="min-w-0 break-words text-[13px] font-semibold text-ink-800">{picked}</h2>

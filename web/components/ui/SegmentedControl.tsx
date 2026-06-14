@@ -26,7 +26,7 @@ export default function SegmentedControl({
   return (
     <div
       role="tablist"
-      className={cn('inline-flex items-center gap-0.5 bg-white border border-ink-100 rounded-md p-0.5', className)}
+      className={cn('inline-flex items-center gap-0.5 bg-card border border-ink-100 rounded-md p-0.5', className)}
     >
       {options.map((o) => {
         const { value: v, label } = normalize(o);

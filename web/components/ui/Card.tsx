@@ -23,7 +23,7 @@ export default function Card({
 }) {
   const hasHeader = title != null || subtitle != null || right != null;
   return (
-    <div className={cn('bg-white border border-ink-100 rounded-lg shadow-card overflow-hidden', className)}>
+    <div className={cn('bg-card border border-ink-100 rounded-lg shadow-card overflow-hidden', className)}>
       {hasHeader && (
         <div className="flex items-start justify-between gap-4 px-4 pt-4 pb-3 border-b border-ink-100">
           <div className="min-w-0">

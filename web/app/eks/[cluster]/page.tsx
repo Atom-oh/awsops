@@ -453,7 +453,7 @@ function DiagnosisDetailPanel({
         role="dialog"
         aria-modal="true"
         aria-label={r.resourceName || '진단 상세'}
-        className="fixed right-0 top-0 z-50 flex h-full w-[420px] max-w-full flex-col border-l border-ink-100 bg-white shadow-pop"
+        className="fixed right-0 top-0 z-50 flex h-full w-[420px] max-w-full flex-col border-l border-ink-100 bg-card shadow-pop"
       >
         <header className="flex items-start justify-between gap-2 border-b border-ink-100 px-4 py-3">
           <h2 className="min-w-0 break-words font-mono text-[13px] font-semibold text-ink-800">

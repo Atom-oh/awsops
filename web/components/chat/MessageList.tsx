@@ -25,7 +25,7 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
               'rounded-lg px-3 py-2.5 ' +
               (me
                 ? 'max-w-[85%] self-end border border-brand-100 bg-brand-50 text-ink-800'
-                : 'max-w-[92%] self-start border border-ink-100 bg-white text-ink-700 shadow-sm')
+                : 'max-w-[92%] self-start border border-ink-100 bg-card text-ink-700 shadow-sm')
             }
           >
             {sec && (

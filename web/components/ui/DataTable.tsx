@@ -82,7 +82,7 @@ function MobileCards({
         <div
           key={i}
           onClick={onRowClick ? () => onRowClick(row) : undefined}
-          className={`rounded-lg border border-ink-100 bg-white p-3 shadow-card${onRowClick ? ' cursor-pointer hover:bg-ink-50' : ''}`}
+          className={`rounded-lg border border-ink-100 bg-card p-3 shadow-card${onRowClick ? ' cursor-pointer hover:bg-ink-50' : ''}`}
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 text-[14px] font-semibold text-ink-800">
@@ -167,7 +167,7 @@ export default function DataTable({
       <Card padded={false} className="hidden lg:block">
         <div className="overflow-x-auto">
           <table className="w-full text-[14px]">
-            <thead className="sticky top-0 z-10 bg-white">
+            <thead className="sticky top-0 z-10 bg-card">
               <tr>
                 {columns.map((c) => {
                   const active = sort?.key === c.key;

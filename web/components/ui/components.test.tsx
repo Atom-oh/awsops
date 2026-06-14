@@ -24,7 +24,7 @@ describe('Button', () => {
   it('applies the secondary variant class', () => {
     const { container } = render(<Button variant="secondary">취소</Button>);
     const cls = container.querySelector('button')!.className;
-    expect(cls).toContain('bg-white');
+    expect(cls).toContain('bg-card');
     expect(cls).toContain('border-ink-100');
   });
 
@@ -132,7 +132,7 @@ describe('Card / SectionLabel / PageHeader', () => {
   it('Card renders children and the card surface classes', () => {
     const { container } = render(<Card>body</Card>);
     const cls = container.firstElementChild!.className;
-    expect(cls).toContain('bg-white');
+    expect(cls).toContain('bg-card');
     expect(cls).toContain('border-ink-100');
     expect(cls).toContain('shadow-card');
     expect(screen.getByText('body')).toBeTruthy();

@@ -12,9 +12,9 @@ afterEach(() => {
 
 describe('theme model', () => {
   it('exposes the three themes and a cobalt default', () => {
-    expect(THEMES).toEqual(['teal', 'cobalt', 'teal-console']);
+    expect(THEMES).toEqual(['cobalt', 'teal', 'dark']);
     expect(DEFAULT_THEME).toBe('cobalt');
-    expect(THEME_LABELS['teal-console']).toBe('Console');
+    expect(THEME_LABELS['dark']).toBe('Dark');
   });
 
   it('isTheme validates membership', () => {
@@ -35,7 +35,7 @@ describe('theme model', () => {
   });
 
   it('applyTheme sets the data-theme attribute on <html>', () => {
-    applyTheme('teal-console');
-    expect(document.documentElement.getAttribute('data-theme')).toBe('teal-console');
+    applyTheme('dark');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
   });
 });

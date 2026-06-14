@@ -6,6 +6,10 @@ export interface ChartColors {
   lead: string;
   leadStrong: string;
   palette: string[];
+  grid: string;
+  axis: string;
+  tooltipBg: string;
+  tooltipFg: string;
 }
 
 // First-paint / SSR fallback = the default (cobalt) theme values.
@@ -13,6 +17,10 @@ const FALLBACK: ChartColors = {
   lead: '#528DF8',
   leadStrong: '#1F54C2',
   palette: ['#528DF8', '#01A88D', '#7B26FF', '#39C2B0', '#7D8A96'],
+  grid: '#E7ECEF',
+  axis: '#7D8A96',
+  tooltipBg: '#16202A',
+  tooltipFg: '#F4F6F8',
 };
 
 function read(): ChartColors {
@@ -29,6 +37,10 @@ function read(): ChartColors {
       v('--chart-4', FALLBACK.palette[3]),
       v('--chart-5', FALLBACK.palette[4]),
     ],
+    grid: v('--chart-grid', FALLBACK.grid),
+    axis: v('--chart-axis', FALLBACK.axis),
+    tooltipBg: v('--chart-tooltip-bg', FALLBACK.tooltipBg),
+    tooltipFg: v('--chart-tooltip-fg', FALLBACK.tooltipFg),
   };
 }
 

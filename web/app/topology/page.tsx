@@ -91,7 +91,7 @@ export default function TopologyPage() {
               그래프로 그릴 인벤토리 리소스가 없습니다. (vpc/subnet/ec2/rds/alb sync 확인)
             </div>
           ) : (
-            <div className="h-[640px] w-full rounded-lg border border-ink-100 bg-white">
+            <div className="h-[640px] w-full rounded-lg border border-ink-100 bg-card">
               <ReactFlow nodes={nodes} edges={edges} fitView proOptions={{ hideAttribution: true }}>
                 <Background />
                 <Controls />
