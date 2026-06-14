@@ -29,7 +29,7 @@ GATEWAY_DESCRIPTIONS = {
     "monitoring": "CloudWatch, CloudTrail (AWS native only)",
     "iac": "CloudFormation, CDK, Terraform",
     "ops": "Steampipe SQL listing/status/docs/inventory",
-    "external-obs": "External Observability (Prometheus/Loki/Tempo/...) — registry built in P3",
+    "external-obs": "External Observability & Integrations (Notion now; Prometheus/Loki/Tempo next)",
 }
 
 
@@ -285,6 +285,18 @@ TARGETS = {
             {"name": "recommend", "description": "Doc recommendations", "inputSchema": {"type": "object", "properties": {"url": _p("string", "URL")}, "required": ["url"]}},
             {"name": "list_regions", "description": "List regions", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "get_regional_availability", "description": "Regional availability", "inputSchema": {"type": "object", "properties": {"resource_type": _p("string", "product/api/cfn")}, "required": ["resource_type"]}},
+        ],
+    },
+    # First concrete external integration (read-only knowledge) on the M1 gateway-target
+    # pattern. Lambda gated on integrations_enabled in ai.tf; provision SKIPs when absent.
+    "notion-mcp-target": {
+        "gateway": "external-obs",
+        "lambda_key": "notion-mcp",
+        "description": "Notion read-only — search, fetch page, query database (3 tools)",
+        "tools": [
+            {"name": "notion_search", "description": "Search Notion pages and databases by text", "inputSchema": {"type": "object", "properties": {"query": _p("string", "Search text"), "page_size": _p("string", "Max results (<=25)")}, "required": ["query"]}},
+            {"name": "notion_fetch_page", "description": "Fetch a Notion page's metadata and (bounded) block content", "inputSchema": {"type": "object", "properties": {"page_id": _p("string", "Page ID"), "page_size": _p("string", "Max blocks (<=25)")}, "required": ["page_id"]}},
+            {"name": "notion_query_database", "description": "Query rows of a Notion database", "inputSchema": {"type": "object", "properties": {"database_id": _p("string", "Database ID"), "page_size": _p("string", "Max rows (<=25)")}, "required": ["database_id"]}},
         ],
     },
 }
