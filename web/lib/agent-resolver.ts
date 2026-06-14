@@ -76,6 +76,24 @@ export interface EgressReadIntegration {
 // intentionally diverge on integration context until P4; keep SAFEGUARD_LINE byte-identical across both.
 export const MAX_PROVIDED_CONTEXT_CHARS = 2000;
 
+// ADR-040/041 — a READ_WRITE integration the resolver may SURFACE as propose-only (NOT a live tool).
+export interface ProposableWriteIntegration {
+  name: string;
+  writeActionRefs: string[];   // action_catalog names the model may PROPOSE (e.g. slack.post_message)
+}
+
+/** Render READ_WRITE integrations as a propose-only prompt block. The model may PROPOSE these writes
+ *  (describe the action + inputs); it can NEVER execute them — a human approves via the actions console
+ *  (4-eyes + kill-switch + DLP). These are deliberately NOT added to the tool allowlist. */
+function renderProposableWrites(items: ProposableWriteIntegration[]): string {
+  const lines = items
+    .filter((i) => (i.writeActionRefs?.length ?? 0) > 0)
+    .map((i) => `- ${i.name}: ${i.writeActionRefs.join(', ')}`);
+  if (lines.length === 0) return '';
+  return '## Proposable write actions (human-gated — PROPOSE only, never execute; a human approves ' +
+    'each via the actions console):\n' + lines.join('\n');
+}
+
 /** Render enabled egress-READ integrations' provided_context into a single bounded block. */
 function renderIntegrationContext(integrations: EgressReadIntegration[]): string {
   const lines = integrations
@@ -97,13 +115,17 @@ export function resolveAgent(
   candidates: AgentWithSkills[],
   space?: AgentSpace | null,
   egressReadIntegrations: EgressReadIntegration[] = [],
+  proposableWrites: ProposableWriteIntegration[] = [],
 ): ResolvedAgentSpec {
   const custom = candidates.find((a) => a.name === routeKey && a.enabled && a.tier === 'custom');
   if (custom) {
     const ordered = [...custom.skills].sort((a, b) => a.ord - b.ord);
     const skillBlock = ordered.map((s) => s.instructions).filter(Boolean).join('\n\n');
     const integrationBlock = renderIntegrationContext(egressReadIntegrations);
-    const systemPromptOverride = [SAFEGUARD_LINE, custom.persona.trim(), skillBlock, integrationBlock]
+    // ADR-040/041: READ_WRITE integrations are surfaced as PROPOSE-ONLY prompt metadata — never as
+    // live tools (writes go through the human-gated /api/actions path), so they do NOT touch toolAllowlist.
+    const proposableBlock = renderProposableWrites(proposableWrites);
+    const systemPromptOverride = [SAFEGUARD_LINE, custom.persona.trim(), skillBlock, integrationBlock, proposableBlock]
       .filter(Boolean).join('\n\n');
     // Phase 2: server-side enforcement (ADR-031 Addendum #5) — OUTSIDE the model.
     // Skill tools: ∩ known catalog ∩ Agent Space cap. Integration tools are EXTERNAL (not gateway-native)

@@ -210,3 +210,25 @@ describe('resolveAgent — ADR-039 P2-infra inc2 connection details (spec.integr
     expect(resolveAgent('compliance', [custom], null, []).integrations).toBeUndefined();
   });
 });
+
+describe('resolveAgent — ADR-040/041 propose-only READ_WRITE', () => {
+  it('surfaces write actions as a propose-only prompt block, NEVER as a live tool', () => {
+    const spec = resolveAgent('compliance', [custom], null, [], [{ name: 'slack', writeActionRefs: ['slack.post_message'] }]);
+    expect(spec.systemPromptOverride).toMatch(/## Proposable write actions/);
+    expect(spec.systemPromptOverride).toMatch(/PROPOSE only, never execute/);
+    expect(spec.systemPromptOverride).toMatch(/slack\.post_message/);
+    expect(spec.toolAllowlist ?? []).not.toContain('slack.post_message'); // never a live tool
+  });
+
+  it('no proposable writes ⇒ prompt unchanged (Phase-2 baseline)', () => {
+    const a = resolveAgent('compliance', [custom], null, []);
+    const b = resolveAgent('compliance', [custom], null, [], []);
+    expect(a.systemPromptOverride).toEqual(b.systemPromptOverride);
+  });
+
+  it('built-in path: proposable writes have no effect (no override)', () => {
+    const spec = resolveAgent('security', [], null, [], [{ name: 'slack', writeActionRefs: ['slack.post_message'] }]);
+    expect(spec.tier).toBe('builtin');
+    expect(spec.systemPromptOverride).toBeUndefined();
+  });
+});

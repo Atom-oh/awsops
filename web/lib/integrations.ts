@@ -115,6 +115,27 @@ export async function setIntegrationEnabled(id: number, enabled: boolean): Promi
  * that account's `enabled_integration_ids`). Returns BOTH directions — the caller (chat route) filters
  * to egress+read. Degrade-safe: [] when Aurora is off or on any error.
  */
+/**
+ * ADR-040/041 — the egress-WRITE destination allowlist for a connector kind (e.g. 'slack' → allowed
+ * Slack channels). Reuses the enabled READ_WRITE egress integration's `source_allowlist` as the
+ * destination allowlist (documented egress-write reuse). [] when Aurora off / none / error → the caller's
+ * assertChannelAllowed treats [] as deny-all (fail-closed).
+ */
+export async function getEgressWriteAllowlist(kind: string): Promise<string[]> {
+  if (!process.env.AURORA_ENDPOINT) return [];
+  try {
+    const { rows } = await getPool().query(
+      `SELECT source_allowlist FROM integrations
+       WHERE kind = $1 AND direction = 'egress' AND capability = 'read_write' AND enabled = true
+       ORDER BY id LIMIT 1`,
+      [kind],
+    );
+    return rows.length ? ((rows[0].source_allowlist as string[]) ?? []) : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function getEnabledIntegrations(accountId = 'self'): Promise<IntegrationRow[]> {
   if (!process.env.AURORA_ENDPOINT) return [];
   try {

@@ -195,7 +195,7 @@ describe('hybrid routing (ADR-038)', () => {
     await readStream(res);
     // ...but the pin wins: resolveAgent called with the pinned section, not the custom name.
     // Phase 2: third arg is the per-account space (null here — no AURORA_ENDPOINT ⇒ Phase-1).
-    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null, []);
+    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null, [], []);
   });
 
   it('logs a structured misroute candidate when the client reports a chip switch (spec §5)', async () => {
@@ -223,7 +223,7 @@ describe('hybrid routing (ADR-038)', () => {
     const { POST } = await import('./route');
     const res = await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) }));
     await readStream(res);
-    expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything(), null, []);
+    expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything(), null, [], []);
   });
 
   it('fail-closed revocation: a disabled custom agent is NOT used — falls back to the gateway', async () => {
@@ -238,7 +238,7 @@ describe('hybrid routing (ADR-038)', () => {
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) })));
     expect(isCustomAgentEnabled).toHaveBeenCalledWith('compliance');
-    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null, []); // gateway, not the revoked custom
+    expect(resolveAgent).toHaveBeenCalledWith('security', expect.anything(), null, [], []); // gateway, not the revoked custom
   });
 
   it('ADR-039: passes ONLY enabled egress-READ integrations to resolveAgent, WITH connection details (ingress + READ_WRITE excluded)', async () => {
@@ -248,18 +248,19 @@ describe('hybrid routing (ADR-038)', () => {
     getEnabledIntegrations.mockResolvedValue([
       { name: 'dd', direction: 'egress', capability: 'read', exposedTools: ['datadog_query'], providedContext: { d: 1 },
         endpoint: 'https://mcp.dd/mcp', transport: 'api_key', credentialsRef: 'arn:dd' },
-      { name: 'notion', direction: 'egress', capability: 'read_write', exposedTools: ['notion_write'], providedContext: {} }, // write → excluded
+      { name: 'notion', direction: 'egress', capability: 'read_write', exposedTools: ['notion_write'], providedContext: {}, writeActionRefs: ['notion.create_page'] }, // write → propose-only (5th arg), NOT tool-injected (4th)
       { name: 'pd', direction: 'ingress', capability: 'read', exposedTools: [], providedContext: {} },                       // ingress → excluded
     ]);
     invokeAgent.mockResolvedValue('ok');
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
-    // 4th arg to resolveAgent = only the egress+read integration, now WITH connection details +
-    // allowPrivate (false — no agent_spaces row without AURORA_ENDPOINT). P2-infra inc2 extension.
+    // 4th arg = ONLY the egress+read integration (with connection details + allowPrivate=false);
+    // 5th arg = the READ_WRITE integration as PROPOSE-ONLY (never tool-injected). ADR-040/041.
     expect(resolveAgent).toHaveBeenCalledWith(
       expect.anything(), expect.anything(), null,
       [{ name: 'dd', exposedTools: ['datadog_query'], providedContext: { d: 1 },
          endpoint: 'https://mcp.dd/mcp', transport: 'api_key', credentialsRef: 'arn:dd', allowPrivate: false }],
+      [{ name: 'notion', writeActionRefs: ['notion.create_page'] }],
     );
   });
 
@@ -349,7 +350,7 @@ describe('ADR-031 Phase 2 — per-account space wiring', () => {
     // account resolves to the single-account default ('self') with no HOST_ACCOUNT_ID set.
     expect(getEnabledCustomAgents).toHaveBeenCalledWith('self');
     // no AURORA_ENDPOINT ⇒ getAgentSpace returns null ⇒ resolver gets null (Phase-1 behavior).
-    expect(resolveAgent).toHaveBeenCalledWith('ops', expect.anything(), null, []);
+    expect(resolveAgent).toHaveBeenCalledWith('ops', expect.anything(), null, [], []);
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'self' }));
   });
 

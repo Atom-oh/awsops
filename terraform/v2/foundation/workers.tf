@@ -404,7 +404,9 @@ resource "aws_lambda_function" "dispatcher" {
     # (this resource only exists when workers are on).
     variables = merge(
       { STATE_MACHINE_ARN = aws_sfn_state_machine.workers[0].arn },
-      var.remediation_enabled ? { REMEDIATION_STATE_MACHINE_ARN = aws_sfn_state_machine.remediation[0].arn } : {},
+      # ADR-040/041: the remediation SM is OR-gated (re_or_iw) so the Slack DATA-write path can dispatch
+      # while remediation_enabled stays false. The dispatcher needs the SM ARN whenever EITHER plane is on.
+      (var.remediation_enabled || var.integrations_write_enabled) ? { REMEDIATION_STATE_MACHINE_ARN = aws_sfn_state_machine.remediation[0].arn } : {},
       # ADR-032: enabling the incident lifecycle adds the sibling incident SM ARN so the dispatcher
       # can route incident_stage jobs to it (dispatcher.py reads INCIDENT_STATE_MACHINE_ARN; empty
       # → the incident branch is inert). merge(base,{}) == base when off → byte-identical dispatcher

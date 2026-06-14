@@ -86,4 +86,12 @@ describe('POST /api/actions (plan; admin-gated; NEVER mutates)', () => {
     expect(createPlan).toHaveBeenCalledWith(expect.objectContaining({ action: 'ec2-create-tags', createdBy: 'admin@x' }));
     expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({ phase: 'plan' }));
   });
+  it('400 external action: channel allowlist fail-closed (no allowlist → deny-all), no plan created', async () => {
+    delete process.env.AURORA_ENDPOINT; // getEgressWriteAllowlist → [] → assertChannelAllowed throws
+    getAction.mockResolvedValue({ name: 'slack.post_message', description: 'd', executorType: 'lambda', targetResourceType: 'external:slack', approvalMode: 'four_eyes', requiredInputs: ['channel', 'text'], enabled: true });
+    const { POST } = await import('./route');
+    const res = await POST(post({ action: 'slack.post_message', inputs: { channel: '#random', text: 'hi' } }));
+    expect(res.status).toBe(400);
+    expect(createPlan).not.toHaveBeenCalled();
+  });
 });
