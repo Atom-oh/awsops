@@ -7,6 +7,7 @@ import os
 import socket
 import ipaddress
 import urllib.parse
+from contextlib import ExitStack
 from strands import Agent
 try:
     from strands.models import BedrockModel, CacheConfig
@@ -16,7 +17,7 @@ except ImportError:  # pre-CacheConfig strands
 from strands.tools.mcp.mcp_client import MCPClient
 from botocore.credentials import Credentials
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
-from streamable_http_sigv4 import streamablehttp_client_with_sigv4
+from streamable_http_sigv4 import streamablehttp_client_with_sigv4, streamablehttp_client_with_headers
 import boto3
 
 # Configure logging / 로깅 설정
@@ -466,6 +467,82 @@ def sigv4_params(endpoint, service=None, region=None):
     return service, region
 
 
+# Short per-integration connect/read timeout — chat maxDuration is 120s; a slow or hung external
+# MCP must not dominate the budget (the default 30s transport timeout is too long for N integrations).
+INTEGRATION_CONNECT_TIMEOUT = 8
+
+_secrets_client = None
+
+
+def _get_secret(ref):
+    """Fetch a SecretString from Secrets Manager (lazy, reused client — boto3 auto-refreshes the
+    runtime role creds across warm starts). / Secrets Manager에서 SecretString 조회(지연 생성·재사용)."""
+    global _secrets_client
+    if _secrets_client is None:
+        _secrets_client = boto3.client('secretsmanager', region_name=GATEWAY_REGION)
+    return _secrets_client.get_secret_value(SecretId=ref).get('SecretString', '')
+
+
+def select_integration_tools(live_tools, exposed_tools):
+    """ADR-039: an egress-READ integration's live tools ∩ its admin ``exposed_tools`` (the ceiling).
+    Empty ``exposed_tools`` ⇒ ``[]`` — a READ integration that exposes nothing contributes nothing
+    (NOT 'all tools'). Output order follows ``live_tools``. The resolver's per-account toolAllowlist
+    is then applied on top in the handler (defense-in-depth)."""
+    allow = set(exposed_tools or [])
+    if not allow:
+        return []
+    return [t for t in live_tools if getattr(t, "tool_name", None) in allow]
+
+
+def gather_integration_tools(specs, connect):
+    """ADR-039 per-integration failure ISOLATION: connect+collect each integration's tools via the
+    injected ``connect(spec)``; a failure (SsrfBlocked / unknown-transport ValueError / connect or
+    list error) drops ONLY that integration — the gateway tools and the other integrations are
+    unaffected — and is logged with the integration name + endpoint. This function NEVER raises, so
+    an integration problem can never trigger the coarse outer Bedrock-direct fallback."""
+    out = []
+    for spec in (specs or []):
+        name = spec.get("name") if isinstance(spec, dict) else None
+        endpoint = spec.get("endpoint") if isinstance(spec, dict) else None
+        try:
+            out.extend(connect(spec))
+        except Exception as e:
+            logging.warning(f"[Agent] integration '{name}' ({endpoint}) dropped: {type(e).__name__}: {e}")
+    return out
+
+
+def _connect_integration(spec, stack):
+    """Open ONE egress-READ integration MCP session (kept live via ``stack`` for the agent run) and
+    return its exposed tools. Raises on SSRF/unknown-transport/connect/list error → the caller
+    (gather_integration_tools) isolates it. Credentials are fetched at runtime from Secrets Manager
+    by reference (the payload carries only the ARN, never plaintext — ADR-039 Q3=B)."""
+    endpoint = spec.get("endpoint")
+    transport = spec.get("transport")
+    allow_private = bool(spec.get("allowPrivate"))
+    exposed = spec.get("exposedTools") or []
+    # Connection-time SSRF (https + DNS resolve-and-recheck + private opt-in) BEFORE any network call.
+    _assert_host_allowed(endpoint, allow_private)
+    if transport == 'sigv4':
+        # service is REQUIRED (sigv4_params raises if absent) — never silently reuse the gateway signer.
+        service, region = sigv4_params(endpoint, spec.get("sigv4Service"), spec.get("sigv4Region"))
+        ak, sk, tok = get_aws_credentials()
+        creds = Credentials(access_key=ak, secret_key=sk, token=tok)
+        client = MCPClient(lambda: streamablehttp_client_with_sigv4(
+            url=endpoint, credentials=creds, service=service, region=region,
+            timeout=INTEGRATION_CONNECT_TIMEOUT))
+    else:
+        secret = parse_secret(_get_secret(spec["credentialsRef"])) if spec.get("credentialsRef") else {}
+        headers = auth_headers(transport, secret)  # ValueError on unknown transport
+        client = MCPClient(lambda: streamablehttp_client_with_headers(
+            url=endpoint, headers=headers, timeout=INTEGRATION_CONNECT_TIMEOUT))
+    stack.enter_context(client)
+    live = get_all_tools(client)
+    selected = select_integration_tools(live, exposed)
+    logging.info(f"[Agent] integration '{spec.get('name')}' [{transport}] tools "
+                 f"({len(selected)}/{len(live)}): {[t.tool_name for t in selected]}")
+    return selected
+
+
 def get_aws_credentials():
     """Get current AWS credentials for SigV4 signing. / 현재 AWS 자격 증명을 가져와 SigV4 서명에 사용."""
     session = boto3.Session()
@@ -560,18 +637,27 @@ def handler(payload):
     if account_id and account_id != '__all__':
         user_input = f"[Target Account: {account_alias or account_id} ({account_id})] {user_input}"
 
-    logging.info(f"Gateway: {gateway_role} -> {gateway_url} (history: {len(history)} messages, account: {account_id or 'default'})")
+    # ADR-039 P2-infra inc2: enabled egress-READ integrations the resolver surfaced (live MCP connect).
+    integrations = payload.get("integrations") or []
+
+    logging.info(f"Gateway: {gateway_role} -> {gateway_url} (history: {len(history)} messages, account: {account_id or 'default'}, integrations: {len(integrations)})")
 
     try:
         mcp_client = MCPClient(lambda: create_gateway_transport(gateway_url))
 
-        with mcp_client:
-            tools = get_all_tools(mcp_client)
-            # ADR-031/039: enforce the resolver-computed allowlist OUTSIDE the model BEFORE the prompt
-            # tool-list and Agent(tools=) are built, so the cap actually takes effect at the runtime.
-            tools = _filter_tools(tools, tool_allowlist)
+        # ExitStack keeps the gateway AND every integration MCP session live during agent(user_input).
+        with ExitStack() as stack:
+            stack.enter_context(mcp_client)
+            gateway_tools = get_all_tools(mcp_client)
+            # ADR-039: live-connect each enabled egress-READ integration. Per-integration failures are
+            # ISOLATED here (gateway tools always survive) — NOT escalated to the Bedrock-direct fallback.
+            integration_tools = gather_integration_tools(
+                integrations, lambda spec: _connect_integration(spec, stack))
+            # ADR-031/039: enforce the resolver-computed allowlist OUTSIDE the model over BOTH gateway +
+            # integration tools BEFORE the prompt tool-list and Agent(tools=) are built (cap is the ceiling).
+            tools = _filter_tools(gateway_tools + integration_tools, tool_allowlist)
             tool_names = [t.tool_name for t in tools]
-            logging.info(f"Gateway [{gateway_role}] MCP tools ({len(tools)}, allowlist={'on' if tool_allowlist else 'off'}): {tool_names}")
+            logging.info(f"Gateway [{gateway_role}] tools ({len(tools)} = {len(gateway_tools)} gw + {len(integration_tools)} integ, allowlist={'on' if tool_allowlist else 'off'}): {tool_names}")
 
             # ADR-031: resolver override (custom agent) OR built-in SKILL_BASE; + dynamic tools + account directive
             if system_prompt_override:

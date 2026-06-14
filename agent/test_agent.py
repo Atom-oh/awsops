@@ -31,8 +31,10 @@ def _install_stubs():
     stub('bedrock_agentcore')
     stub('bedrock_agentcore.runtime',
          BedrockAgentCoreApp=lambda *a, **k: types.SimpleNamespace(entrypoint=lambda f: f))
-    stub('streamable_http_sigv4', streamablehttp_client_with_sigv4=lambda *a, **k: None)
-    stub('boto3')
+    stub('streamable_http_sigv4',
+         streamablehttp_client_with_sigv4=lambda *a, **k: None,
+         streamablehttp_client_with_headers=lambda *a, **k: None)
+    stub('boto3', client=lambda *a, **k: None, Session=lambda *a, **k: None)
 
 
 _install_stubs()
@@ -214,6 +216,60 @@ class IntegrationHelpersTest(unittest.TestCase):
             agent.sigv4_params('https://abc.com', service='custom'),
             ('custom', agent.GATEWAY_REGION)
         )
+
+
+class IntegrationToolMergeTest(unittest.TestCase):
+    """Task 3 — tool ∩ exposed_tools (admin ceiling) + per-integration failure isolation."""
+
+    def test_select_keeps_only_exposed_preserving_order(self):
+        live = [FakeTool('a'), FakeTool('b'), FakeTool('c')]
+        # exposed order must not reorder output — live order is preserved.
+        self.assertEqual(names(agent.select_integration_tools(live, ['c', 'a'])), ['a', 'c'])
+
+    def test_select_empty_exposed_contributes_nothing(self):
+        # Admin ceiling: a READ integration with no exposed_tools contributes NOTHING (not "all").
+        live = [FakeTool('a'), FakeTool('b')]
+        self.assertEqual(agent.select_integration_tools(live, []), [])
+
+    def test_select_tools_not_in_exposed_are_dropped(self):
+        live = [FakeTool('a'), FakeTool('b')]
+        self.assertEqual(names(agent.select_integration_tools(live, ['a', 'nope'])), ['a'])
+
+    def test_select_empty_live_yields_empty(self):
+        self.assertEqual(agent.select_integration_tools([], ['a']), [])
+
+    def test_gather_unions_healthy_integrations(self):
+        specs = [{'name': 'x'}, {'name': 'y'}]
+        def connect(spec):
+            return [FakeTool(spec['name'] + '_t')]
+        self.assertEqual(names(agent.gather_integration_tools(specs, connect)), ['x_t', 'y_t'])
+
+    def test_gather_drops_failed_keeps_others_mixed_result(self):
+        # R2 gate: integration A RAISES, B SUCCEEDS → only B's tools appear, gather NEVER raises.
+        specs = [{'name': 'A', 'endpoint': 'https://a'}, {'name': 'B', 'endpoint': 'https://b'}]
+        def connect(spec):
+            if spec['name'] == 'A':
+                raise agent.SsrfBlocked('A is blocked')
+            return [FakeTool('b_tool')]
+        out = agent.gather_integration_tools(specs, connect)
+        self.assertEqual(names(out), ['b_tool'])
+
+    def test_gather_never_raises_when_all_fail(self):
+        specs = [{'name': 'A'}, {'name': 'B'}]
+        def connect(spec):
+            raise ValueError('boom')
+        self.assertEqual(agent.gather_integration_tools(specs, connect), [])
+
+    def test_gather_empty_and_none_specs(self):
+        self.assertEqual(agent.gather_integration_tools([], lambda s: [FakeTool('x')]), [])
+        self.assertEqual(agent.gather_integration_tools(None, lambda s: [FakeTool('x')]), [])
+
+    def test_gather_integration_whose_exposed_filters_everything(self):
+        # connect returns [] (exposed filtered all out) → that integration contributes [] but others survive.
+        specs = [{'name': 'empty'}, {'name': 'full'}]
+        def connect(spec):
+            return [] if spec['name'] == 'empty' else [FakeTool('f')]
+        self.assertEqual(names(agent.gather_integration_tools(specs, connect)), ['f'])
 
 
 if __name__ == '__main__':
