@@ -6,6 +6,7 @@ import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
 import { buildTopology, type TopoKind } from '@/lib/topology';
+import { useTheme } from '@/lib/use-theme';
 
 // ReactFlow touches the DOM on mount — load it client-only to avoid SSR mismatch.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
@@ -18,6 +19,15 @@ type Row = Record<string, unknown>;
 const COL: Record<TopoKind, number> = { vpc: 0, subnet: 1, ec2: 2, rds: 2, alb: 2 };
 const TINT: Record<TopoKind, string> = {
   vpc: '#E6EEFE', subnet: '#E6F6F2', ec2: '#FEF3E2', rds: '#F1E9FF', alb: '#FDECE8',
+};
+// Dark theme: ReactFlow's dark colorMode flips default node text to light, so a
+// light pastel fill would vanish. Use dark per-kind fills + a brighter colored
+// border + explicit light text so nodes read on the dark canvas.
+const DARK_TINT: Record<TopoKind, string> = {
+  vpc: '#16243E', subnet: '#103029', ec2: '#33260C', rds: '#241A3E', alb: '#331410',
+};
+const DARK_BORDER: Record<TopoKind, string> = {
+  vpc: '#3D6FB5', subnet: '#2C9D8A', ec2: '#C8902F', rds: '#8A5BD0', alb: '#C85A45',
 };
 
 async function fetchType(t: InvType): Promise<Row[]> {
@@ -53,6 +63,8 @@ export default function TopologyPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const dark = useTheme() === 'dark';
+
   const { nodes, edges } = useMemo(() => {
     if (!data) return { nodes: [] as Node[], edges: [] as Edge[] };
     const g = buildTopology(data);
@@ -68,12 +80,14 @@ export default function TopologyPage() {
         id: n.id,
         position: { x: c * 300, y: y * 64 },
         data: { label: `${n.kind.toUpperCase()} · ${n.label}` },
-        style: { background: TINT[n.kind], border: '1px solid #D3DAE0', borderRadius: 8, fontSize: 11, padding: 6, width: 220 },
+        style: dark
+          ? { background: DARK_TINT[n.kind], border: `1px solid ${DARK_BORDER[n.kind]}`, color: '#E3E9EE', borderRadius: 8, fontSize: 11, padding: 6, width: 220 }
+          : { background: TINT[n.kind], border: '1px solid #D3DAE0', borderRadius: 8, fontSize: 11, padding: 6, width: 220 },
       };
     });
     const edges: Edge[] = g.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, animated: false }));
     return { nodes, edges };
-  }, [data]);
+  }, [data, dark]);
 
   return (
     <>
@@ -92,7 +106,7 @@ export default function TopologyPage() {
             </div>
           ) : (
             <div className="h-[640px] w-full rounded-lg border border-ink-100 bg-card">
-              <ReactFlow nodes={nodes} edges={edges} fitView proOptions={{ hideAttribution: true }}>
+              <ReactFlow nodes={nodes} edges={edges} fitView colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}>
                 <Background />
                 <Controls />
                 <MiniMap pannable zoomable />
