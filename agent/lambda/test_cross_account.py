@@ -46,6 +46,38 @@ def test_custom_role_name(monkeypatch):
     assert ca.get_role_arn("222222222222") == "arn:aws:iam::222222222222:role/MyReadRole"
 
 
+def test_host_detected_via_sts_when_env_unset(monkeypatch):
+    # env unset → _host_account_id falls back to STS GetCallerIdentity; the host
+    # short-circuit must still fire (and other accounts still build the ARN).
+    monkeypatch.delenv("AWSOPS_HOST_ACCOUNT_ID", raising=False)
+
+    class _STS:
+        def get_caller_identity(self):
+            return {"Account": HOST}
+
+    monkeypatch.setattr(ca.boto3, "client", lambda *a, **k: _STS())
+    ca._host_account_id.cache_clear()
+    assert ca._host_account_id() == HOST
+    assert ca.get_role_arn(HOST) is None  # host → no assume
+    assert ca.get_role_arn("222222222222") == "arn:aws:iam::222222222222:role/AWSopsReadOnlyRole"
+    ca._host_account_id.cache_clear()
+
+
+def test_host_unresolved_falls_through_to_cross_account(monkeypatch):
+    # env unset + STS fails → host is None → a real account still builds the ARN
+    # (degraded = pre-fix cross-account path; the logged warning is the signal).
+    monkeypatch.delenv("AWSOPS_HOST_ACCOUNT_ID", raising=False)
+
+    def _boom(*a, **k):
+        raise RuntimeError("no sts")
+
+    monkeypatch.setattr(ca.boto3, "client", _boom)
+    ca._host_account_id.cache_clear()
+    assert ca._host_account_id() is None
+    assert ca.get_role_arn("222222222222") == "arn:aws:iam::222222222222:role/AWSopsReadOnlyRole"
+    ca._host_account_id.cache_clear()
+
+
 def test_get_client_host_account_does_not_assume(monkeypatch):
     # role_arn is None for the host account → get_client must NOT AssumeRole
     def _boom(*a, **k):

@@ -119,6 +119,35 @@ def test_gate_passes_only_when_all_three_pass(monkeypatch):
     assert a is not None and a["name"] == "ec2-detach-sg"
 
 
+# ADR-040/041 §4 — the executor-side control plane is decoupled by target_resource_type. An external:
+# DATA-write is gated by the integrations-write plane; enabling one plane can NEVER enable the other.
+_SLACK_ROW = ("slack.post_message", "lambda", "external:slack", "integrations-slack-write",
+              '["channel","text"]', '{"mode":"preview"}', None, "four_eyes", '{"accounts":["self"]}', True)
+
+def test_gate_external_uses_integrations_write_flag(monkeypatch):
+    # REMEDIATION on, INTEGRATIONS_WRITE off → an external action is flag_off (the AWS flag does NOT enable it).
+    monkeypatch.setenv("REMEDIATION_ENABLED", "true")
+    monkeypatch.delenv("INTEGRATIONS_WRITE_ENABLED", raising=False)
+    monkeypatch.setattr(ac, "_ssm", _FakeParam("true"))
+    a, reason = ac.gate(_FakeConn([_SLACK_ROW]), "slack.post_message")
+    assert a is None and reason == "flag_off"
+
+def test_gate_external_flag_does_not_enable_aws(monkeypatch):
+    # ADVERSARIAL: INTEGRATIONS_WRITE on, REMEDIATION off → an AWS-resource action is STILL flag_off.
+    monkeypatch.setenv("INTEGRATIONS_WRITE_ENABLED", "true")
+    monkeypatch.delenv("REMEDIATION_ENABLED", raising=False)
+    monkeypatch.setattr(ac, "_ssm", _FakeParam("true"))
+    a, reason = ac.gate(_FakeConn([_ACTION_ROW]), "ec2-detach-sg")
+    assert a is None and reason == "flag_off"
+
+def test_gate_external_passes_with_its_own_flag(monkeypatch):
+    monkeypatch.setenv("INTEGRATIONS_WRITE_ENABLED", "true")
+    monkeypatch.delenv("REMEDIATION_ENABLED", raising=False)
+    monkeypatch.setattr(ac, "_ssm", _FakeParam("true"))
+    a, reason = ac.gate(_FakeConn([_SLACK_ROW]), "slack.post_message")
+    assert reason is None and a is not None and a["name"] == "slack.post_message"
+
+
 # ---------------------------------------------------------------------------
 # Task 4: remediation_executor.py — dry-run / execute / rollback skeleton.
 # No live AWS / no DB: monkeypatch db.connect, cat.gate, _assume.

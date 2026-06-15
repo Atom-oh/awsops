@@ -32,6 +32,7 @@ resource "aws_cognito_user_pool_client" "main" {
   # USER_PASSWORD_AUTH powers the self-hosted /login form's BFF InitiateAuth call; the Hosted UI
   # authorization-code (PKCE) flow above coexists as the edge dark fallback. No ALLOW_REFRESH_TOKEN_AUTH:
   # the refresh flow is not implemented (least privilege — the BFF discards the RefreshToken immediately).
+  # Token lifetimes are declared explicitly to match the live deployment (id/access = 12h).
   explicit_auth_flows   = ["ALLOW_USER_PASSWORD_AUTH"]
   id_token_validity     = 12
   access_token_validity = 12

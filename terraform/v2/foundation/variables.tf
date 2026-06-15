@@ -119,6 +119,20 @@ variable "remediation_enabled" {
   default     = false
 }
 
+variable "integrations_write_enabled" {
+  type        = bool
+  description = "ADR-040/041 external knowledge/comms DATA-write gate (Slack/Notion/Jira records). Reuses the action_catalog facade + SM + executor but on a FULLY-INDEPENDENT control plane (own flag env, own kill-switch under ops/<project>/integrations-write/enabled, own no-AWS-mutation IAM) so enabling it can NEVER enable AWS-resource mutation (which stays remediation_enabled-frozen). NON-AWS-resource only. false (default) = 0 resources, zero cost, no behavior change. Ships flag-OFF; owner enables (requires agentcore/integrations + workers enabled)."
+  default     = false
+  validation {
+    # The shared executor infra (re_or_iw) reuses workers_enabled resources (worker_lambda role, pg8000
+    # layer, worker task def, status_updater); the Slack secret uses the integrations CMK (agentcore_enabled
+    # && integrations_enabled). Without them, enabling this flag fails plan-time with an index error deep in
+    # remediation.tf — fail LOUDLY here instead (matches rca_writeback_enabled / eks_auto_register_enabled).
+    condition     = !var.integrations_write_enabled || (var.workers_enabled && var.integrations_enabled && var.agentcore_enabled)
+    error_message = "integrations_write_enabled=true requires workers_enabled, integrations_enabled, and agentcore_enabled (the shared executor infra + integrations CMK)."
+  }
+}
+
 variable "hybrid_routing_enabled" {
   type        = bool
   description = "ADR-038 hybrid chat routing gate. false (default) = legacy regex-only routing, no classifier Bedrock calls, no extra IAM. Enable only after the golden-set gate (scripts/v2/routing-accuracy.mjs) passes >=85% and >= +15pp over the regex baseline."

@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { X } from 'lucide-react';
+import { useResizablePanel, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -35,6 +36,9 @@ export default function CostPage() {
   // Monotonic sequence — a slower detail response for service A must not land
   // under service B's panel title (P4 gate: codex; same class as the EKS guards).
   const detailSeqRef = useRef(0);
+  // 차트가 들어가는 패널 — 기본 폭을 넉넉히(640), 좌측 엣지 드래그로 조절·영속.
+  const { width: detailWidth, startResize: startDetailResize } = useResizablePanel('awsops_cost_detail_width', 640);
+
   const openDetail = useCallback(async (service: string) => {
     const seq = ++detailSeqRef.current;
     setPicked(service);
@@ -211,8 +215,12 @@ export default function CostPage() {
             role="dialog"
             aria-modal="true"
             aria-label={`${picked} 비용 상세`}
-            className="fixed right-0 top-0 z-50 flex h-full w-[480px] max-w-full flex-col border-l border-ink-100 bg-card shadow-pop"
+            className="fixed right-0 top-0 z-50 flex h-full max-w-full flex-col border-l border-ink-100 bg-card shadow-pop"
+            style={{ width: detailWidth }}
           >
+            <div onMouseDown={startDetailResize} title="드래그하여 폭 조절" aria-label="패널 폭 조절" role="separator" className={RESIZE_GRIP_CLASS}>
+              <div className={RESIZE_GRIP_BAR_CLASS} />
+            </div>
             <header className="flex items-start justify-between gap-2 border-b border-ink-100 px-4 py-3">
               <h2 className="min-w-0 break-words text-[13px] font-semibold text-ink-800">{picked}</h2>
               <button

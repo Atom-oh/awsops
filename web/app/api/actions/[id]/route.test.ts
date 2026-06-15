@@ -179,3 +179,56 @@ describe('POST /api/actions/[id] cancel + validation', () => {
     expect((await POST(...post(ID, { op: 'execute' }))).status).toBe(404);
   });
 });
+
+// ADR-040/041 §4 — the data-write plane is FULLY decoupled from the AWS-resource plane. The invariant:
+// enabling INTEGRATIONS_WRITE can NEVER enable an AWS-resource action, and vice-versa.
+describe('POST execute — external DATA-write decoupling (ADR-040/041)', () => {
+  const slackAction = { name: 'slack.post_message', executorType: 'lambda', targetResourceType: 'external:slack', enabled: true } as any;
+  const slackPlan = (over = {}) => plannedPlan({ action_name: 'slack.post_message', dry_run: { inputs: { channel: '#ops', text: 'hi' } }, ...over });
+  beforeEach(() => { delete process.env.INTEGRATIONS_WRITE_ENABLED; delete process.env.INTEGRATIONS_WRITE_SSM; });
+
+  it('external action gates on INTEGRATIONS_WRITE_ENABLED (503), NOT REMEDIATION_ENABLED', async () => {
+    getPlan.mockResolvedValue(slackPlan()); getAction.mockResolvedValue(slackAction);
+    const { POST } = await import('./route');
+    const res = await POST(...post(ID, { op: 'execute' }));
+    expect(res.status).toBe(503);
+    expect((await res.json()).message).toMatch(/integrations-write/);
+  });
+
+  it('AWS-resource flag ON does NOT enable an external action (still 503)', async () => {
+    process.env.REMEDIATION_ENABLED = 'true'; process.env.MUTATING_ACTIONS_SSM = 'p';
+    // INTEGRATIONS_WRITE_ENABLED stays off
+    getPlan.mockResolvedValue(slackPlan()); getAction.mockResolvedValue(slackAction);
+    const { POST } = await import('./route');
+    expect((await POST(...post(ID, { op: 'execute' }))).status).toBe(503);
+  });
+
+  it('ADVERSARIAL: external flag ON does NOT enable an AWS-resource action (still 503 on REMEDIATION)', async () => {
+    process.env.INTEGRATIONS_WRITE_ENABLED = 'true'; process.env.INTEGRATIONS_WRITE_SSM = 'pi';
+    // REMEDIATION_ENABLED stays off — an AWS-resource action (no external: prefix) must still be denied
+    getPlan.mockResolvedValue(plannedPlan()); getAction.mockResolvedValue(enabledAction);
+    const { POST } = await import('./route');
+    expect((await POST(...post(ID, { op: 'execute' }))).status).toBe(503);
+  });
+
+  it('external action with its own kill-switch OFF → 403 (separate from the AWS kill-switch)', async () => {
+    process.env.INTEGRATIONS_WRITE_ENABLED = 'true'; process.env.INTEGRATIONS_WRITE_SSM = 'pi';
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'false' } });
+    getPlan.mockResolvedValue(slackPlan()); getAction.mockResolvedValue(slackAction);
+    const { POST } = await import('./route');
+    expect((await POST(...post(ID, { op: 'execute' }))).status).toBe(403);
+  });
+
+  it('external happy path: own flag+kill-switch on, 4-eyes → 202 with lambda executor_type', async () => {
+    process.env.INTEGRATIONS_WRITE_ENABLED = 'true'; process.env.INTEGRATIONS_WRITE_SSM = 'pi';
+    process.env.JOBS_QUEUE_URL = 'https://sqs/q';
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'true' } });
+    getPlan.mockResolvedValue(slackPlan()); getAction.mockResolvedValue(slackAction);
+    setApprovedAndExecuting.mockResolvedValue(true); query.mockResolvedValue({ rowCount: 1 }); sqsSend.mockResolvedValue({});
+    const { POST } = await import('./route');
+    const res = await POST(...post(ID, { op: 'execute' }));
+    expect(res.status).toBe(202);
+    const sent = JSON.parse((sqsSend.mock.calls[0][0] as { input: { MessageBody: string } }).input.MessageBody);
+    expect(sent.executor_type).toBe('lambda');
+  });
+});
