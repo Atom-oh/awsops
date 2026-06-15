@@ -27,6 +27,8 @@ export default function CustomizationPage() {
   const [space, setSpace] = useState<SpaceState | null>(null);
   const [allowlistText, setAllowlistText] = useState('');
   const [integrations, setIntegrations] = useState<IntegrationRow[]>([]);
+  const [credConfigured, setCredConfigured] = useState<string[]>([]); // slugs (=kind) with a stored credential
+  const [credInput, setCredInput] = useState<Record<string, string>>({}); // per-kind token input (never persisted/rendered back)
   const [integForm, setIntegForm] = useState({ direction: 'egress', name: '', kind: 'grafana', endpoint: '', transport: 'api_key', capability: 'read', authMode: 'hmac', sourceAllowlist: '', triggerTarget: 'incident' });
 
   async function load() {
@@ -44,6 +46,8 @@ export default function CustomizationPage() {
     setAllowlistText((d.space?.toolAllowlist || []).join(', '));
     const ir = await fetch('/api/integrations');
     if (ir.ok) setIntegrations((await ir.json()).integrations || []);
+    const cr = await fetch('/api/integrations/credential');
+    if (cr.ok) setCredConfigured((await cr.json()).configured || []);
   }
 
   async function createIntegration() {
@@ -56,6 +60,19 @@ export default function CustomizationPage() {
     setMsg(res.ok ? `Created integration #${d.id} — disabled${d.receivePath ? `; receive URL: ${d.receivePath}` : ''}` : `Error: ${JSON.stringify(d.detail || d.error)}`);
     if (res.ok) load();
   }
+  async function saveCredential(kind: string) {
+    const token = (credInput[kind] || '').trim();
+    if (!token) { setMsg('Enter a token first'); return; }
+    const res = await fetch('/api/integrations/credential', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: kind, secret: { token } }),
+    });
+    setCredInput((m) => ({ ...m, [kind]: '' })); // clear input regardless (never keep the token in state)
+    setMsg(res.ok ? `Credential saved for ${kind}` : `Error: ${(await res.json()).error || res.status}`);
+    const cr = await fetch('/api/integrations/credential');
+    if (cr.ok) setCredConfigured((await cr.json()).configured || []);
+  }
+
   async function toggleIntegration(id: number, enabled: boolean) {
     await fetch('/api/integrations', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: enabled ? 'disable' : 'enable', id }) });
     load();
@@ -237,17 +254,37 @@ export default function CustomizationPage() {
         )}
         <button onClick={createIntegration} className="rounded bg-claude-500 px-3 py-1 text-[12px] font-medium text-white">Register integration</button>
         {integrations.map((i) => (
-          <div key={i.id} className="flex items-center justify-between rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
-            <div>
-              <span className="font-semibold">{i.name}</span>{' '}
-              <span className="text-ink-400">({i.tier}, {i.direction}, {i.kind}, {i.capability})</span>
-              {i.direction === 'ingress' && i.receivePath && <div className="text-ink-500">{i.receivePath}</div>}
+          <div key={i.id} className="space-y-2 rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-semibold">{i.name}</span>{' '}
+                <span className="text-ink-400">({i.tier}, {i.direction}, {i.kind}, {i.capability})</span>
+                {i.direction === 'ingress' && i.receivePath && <div className="text-ink-500">{i.receivePath}</div>}
+              </div>
+              {i.tier === 'custom'
+                ? <button onClick={() => toggleIntegration(i.id, i.enabled)} className={`rounded border px-2 py-1 text-[12px] ${i.enabled ? 'border-emerald-300 text-emerald-600' : 'border-ink-100 text-ink-400'}`}>{i.enabled ? 'Enabled' : 'Disabled'}</button>
+                : <span className="text-ink-400">built-in</span>}
             </div>
-            {i.tier === 'custom'
-              ? <button onClick={() => toggleIntegration(i.id, i.enabled)} className={`rounded border px-2 py-1 text-[12px] ${i.enabled ? 'border-emerald-300 text-emerald-600' : 'border-ink-100 text-ink-400'}`}>{i.enabled ? 'Enabled' : 'Disabled'}</button>
-              : <span className="text-ink-400">built-in</span>}
+            {i.direction === 'egress' && (
+              <div className="flex items-center gap-2 border-t border-ink-100 pt-2">
+                <span className="text-ink-400">credential ({i.kind}):</span>
+                {credConfigured.includes(i.kind)
+                  ? <span className="text-emerald-600">configured ✓</span>
+                  : <span className="text-ink-400">not set ✗</span>}
+                <input
+                  type="password"
+                  autoComplete="off"
+                  placeholder={`${i.kind} token`}
+                  value={credInput[i.kind] || ''}
+                  onChange={(e) => setCredInput((m) => ({ ...m, [i.kind]: e.target.value }))}
+                  className="flex-1 rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]"
+                />
+                <button onClick={() => saveCredential(i.kind)} className="rounded border border-ink-200 px-2 py-1 text-[12px]">Save credential</button>
+              </div>
+            )}
           </div>
         ))}
+        <p className="text-[11px] text-ink-400">Credentials are keyed by integration kind and stored encrypted in Secrets Manager — the token is never displayed back.</p>
         {integrations.length === 0 && <span className="text-[12px] text-ink-400">no integrations yet</span>}
       </section>
 
