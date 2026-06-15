@@ -53,6 +53,24 @@ resource "aws_iam_role" "task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
 }
 
+# Integration credential-write UX: the BFF read-modify-writes the single integrations credentials
+# secret (admin UI). Get + Put scoped to that ONE secret ARN; default key → no kms:Decrypt.
+# integ_count-gated (matches the secret's existence in ai.tf). No CreateSecret, no Principal:*.
+resource "aws_iam_role_policy" "task_integrations_secret" {
+  count = local.integ_count
+  name  = "${var.project}-task-integrations-secret"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "IntegrationsSecretReadWrite"
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
+      Resource = aws_secretsmanager_secret.integrations[0].arn
+    }]
+  })
+}
+
 # F5: read-only CloudWatch metrics + Pricing API for the EC2 page KPI cards
 # (평균 CPU via GetMetricData, 시간당 비용 via Pricing GetProducts). Read-only invariant.
 resource "aws_iam_role_policy" "task_metrics" {
@@ -207,6 +225,7 @@ resource "aws_ecs_task_definition" "web" {
         { name = "COGNITO_DOMAIN", value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
         { name = "APP_DOMAIN", value = var.domain_name },
         { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
+        { name = "INTEGRATIONS_SECRET_NAME", value = "ops/${var.project}/integrations/credentials" },
         { name = "INV_SYNC_FUNCTION", value = var.steampipe_enabled ? "${var.project}-inv-sync" : "" },
         # P3-D: onboarded-cluster allow-list for the in-cluster (K8s) read routes.
         # Static join of the tfvar (no cross-resource ref) — the BFF gates /api/eks/[cluster]/* on this.
