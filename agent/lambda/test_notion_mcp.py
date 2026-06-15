@@ -28,8 +28,9 @@ def _body_of(req):
 class _Base(unittest.TestCase):
     def setUp(self):
         nm._TOKEN = None  # reset warm-container token cache between tests
-        # default: token present
-        self._sec = mock.patch.object(nm, "_get_secret_string", return_value='{"token":"secret_tok"}')
+        # default: single-secret map with this connector's slug ("notion") configured
+        self._sec = mock.patch.object(nm, "_get_secret_string",
+                                      return_value='{"notion":{"token":"secret_tok"},"datadog":{"api_key":"d"}}')
         self._sec.start()
         self.addCleanup(self._sec.stop)
 
@@ -118,11 +119,18 @@ class TestClamp(_Base):
 
 
 class TestErrors(_Base):
-    def test_missing_token(self):
+    def test_missing_secret_not_configured(self):
         with mock.patch.object(nm, "_get_secret_string", return_value="  "):
             out = nm.lambda_handler({"tool_name": "notion_search", "arguments": {"query": "x"}}, None)
         self.assertEqual(out["statusCode"], 400)
-        self.assertIn("token", json.loads(out["body"])["error"].lower())
+        self.assertIn("not configured", json.loads(out["body"])["error"].lower())
+
+    def test_slug_missing_from_map(self):
+        # secret exists but this connector's slug ("notion") is absent → not configured
+        with mock.patch.object(nm, "_get_secret_string", return_value='{"datadog":{"api_key":"d"}}'):
+            out = nm.lambda_handler({"tool_name": "notion_search", "arguments": {"query": "x"}}, None)
+        self.assertEqual(out["statusCode"], 400)
+        self.assertIn("not configured", json.loads(out["body"])["error"].lower())
 
     def test_notion_api_error_mapped(self):
         def boom(req, timeout=None):
@@ -153,7 +161,7 @@ class TestGatewayContract(_Base):
         self.assertEqual(out["statusCode"], 200)
 
     def test_token_cached_across_calls(self):
-        sec = mock.Mock(return_value='{"token":"secret_tok"}')
+        sec = mock.Mock(return_value='{"notion":{"token":"secret_tok"}}')
         with mock.patch.object(nm, "_get_secret_string", sec), \
              mock.patch.object(nm, "_urlopen", side_effect=lambda req, timeout=None: _resp(200, {"results": []})):
             nm.lambda_handler({"tool_name": "notion_search", "arguments": {"query": "a"}}, None)

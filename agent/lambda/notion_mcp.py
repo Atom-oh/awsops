@@ -34,29 +34,41 @@ def _sm():
 
 
 def _get_secret_string():
-    name = os.environ.get("NOTION_SECRET_NAME", "ops/awsops-v2/integrations/notion")
-    return _sm().get_secret_value(SecretId=name).get("SecretString", "")
+    """Read the single integrations credentials secret. ResourceNotFound (no version yet) ⇒ ''."""
+    name = os.environ.get("INTEGRATIONS_SECRET_NAME", "ops/awsops-v2/integrations/credentials")
+    try:
+        return _sm().get_secret_value(SecretId=name).get("SecretString", "")
+    except Exception as e:  # noqa: BLE001
+        if "ResourceNotFound" in type(e).__name__ or "ResourceNotFound" in str(e):
+            return ""
+        raise
 
 
 def _get_token():
-    """Return the Notion token, cached per warm container. Raise on a blank/missing secret.
+    """Return this connector's token, cached per warm container.
 
-    Secret schema: JSON ``{"token": "secret_x"}`` OR a raw token string.
+    The single secret holds a JSON map keyed by integration slug (=kind):
+    ``{"notion": {"token": "secret_x"}, ...}``. This connector extracts ``map[INTEGRATION_SLUG]``
+    (default slug ``notion``). A missing/empty secret or a missing slug ⇒ a clear
+    "credential not configured" error (never an opaque trace).
     """
     global _TOKEN
     if _TOKEN:
         return _TOKEN
+    slug = os.environ.get("INTEGRATION_SLUG", "notion")
     raw = (_get_secret_string() or "").strip()
     if not raw:
-        raise ValueError("Notion token not configured (Secrets Manager value is empty)")
-    token = raw
-    if raw.startswith("{"):
-        try:
-            token = (json.loads(raw).get("token") or "").strip()
-        except (ValueError, AttributeError):
-            token = ""
+        raise ValueError(f"credential not configured for '{slug}' (integrations secret is empty)")
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise ValueError("integrations credentials secret is not valid JSON")
+    entry = data.get(slug) if isinstance(data, dict) else None
+    if not isinstance(entry, dict):
+        raise ValueError(f"credential not configured for '{slug}'")
+    token = (entry.get("token") or "").strip()
     if not token:
-        raise ValueError("Notion token missing from secret (expected {\"token\": ...} or a raw string)")
+        raise ValueError(f"credential for '{slug}' is missing a token")
     _TOKEN = token
     return _TOKEN
 
