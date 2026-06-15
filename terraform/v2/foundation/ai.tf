@@ -154,30 +154,32 @@ resource "aws_iam_role_policy" "agentcore_integrations" {
   })
 }
 
-# ---- Notion external-integration connector (M1 gateway target). integrations_enabled-gated.
-# The Notion read MCP Lambda (notion_mcp.py, in local.agent_lambdas) reads this token at
-# runtime. DEFAULT aws/secretsmanager key (no custom CMK) → GetSecretValue needs no
-# kms:Decrypt grant. Value injected out-of-band by admin (no literal token in TF). ----
-resource "aws_secretsmanager_secret" "notion" {
+# ---- Single integrations credentials secret (DevOps-agent-style credential-write UX).
+# ONE secret holds a JSON map keyed by integration slug (=kind): {"notion":{"token":...}, ...}.
+# The web BFF writes it (PutSecretValue, admin UI); connector Lambdas read map[INTEGRATION_SLUG].
+# DEFAULT aws/secretsmanager key (no custom CMK) → GetSecretValue/PutSecretValue need no
+# kms:Decrypt. TF owns existence only — the VALUE is BFF-managed (no secret_version, no
+# ignore_changes). Clean replacement of the never-deployed per-notion secret. ----
+resource "aws_secretsmanager_secret" "integrations" {
   count                   = local.integ_count
-  name                    = "ops/${var.project}/integrations/notion"
-  description             = "Notion integration token for the read-only notion-mcp Lambda (ADR-039 read-tier). Value set out-of-band."
+  name                    = "ops/${var.project}/integrations/credentials"
+  description             = "Integration credentials map (slug-keyed JSON) for read-tier connectors. Values written by the admin UI."
   recovery_window_in_days = 7
 }
 
 # Scoped grant on the agent Lambda EXEC role (not the agentcore runtime role) — the role the
-# Notion Lambda actually runs under. GetSecretValue on the exact notion secret ARN only.
-resource "aws_iam_role_policy" "agent_lambda_notion_secret" {
+# connector Lambdas run under. GetSecretValue on the exact single secret ARN only.
+resource "aws_iam_role_policy" "agent_lambda_integrations_secret" {
   count = local.integ_count
-  name  = "${var.project}-agent-lambda-notion-secret"
+  name  = "${var.project}-agent-lambda-integrations-secret"
   role  = aws_iam_role.agent_lambda[0].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Sid      = "NotionSecretRead"
+      Sid      = "IntegrationsSecretRead"
       Effect   = "Allow"
       Action   = "secretsmanager:GetSecretValue"
-      Resource = aws_secretsmanager_secret.notion[0].arn
+      Resource = aws_secretsmanager_secret.integrations[0].arn
     }]
   })
 }
@@ -478,7 +480,10 @@ resource "aws_lambda_function" "agent" {
       },
       # Pin the Notion Lambda to the exact TF-created secret name (can't drift from the
       # Python default if var.project ever changes). notion-mcp exists only when integ_count>0.
-      each.key == "notion-mcp" ? { NOTION_SECRET_NAME = aws_secretsmanager_secret.notion[0].name } : {}
+      each.key == "notion-mcp" ? {
+        INTEGRATIONS_SECRET_NAME = aws_secretsmanager_secret.integrations[0].name
+        INTEGRATION_SLUG         = "notion"
+      } : {}
     )
   }
 }
