@@ -1,0 +1,87 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const verifyUser = vi.fn();
+const isAdmin = vi.fn();
+const setIntegrationCredential = vi.fn();
+const getConfiguredSlugs = vi.fn();
+
+vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
+vi.mock('@/lib/integration-credentials', () => ({
+  setIntegrationCredential: (...a: unknown[]) => setIntegrationCredential(...a),
+  getConfiguredSlugs: (...a: unknown[]) => getConfiguredSlugs(...a),
+}));
+
+function req(body: unknown, method = 'PUT') {
+  const init: RequestInit = { method, headers: { 'content-type': 'application/json', cookie: 'awsops_token=t' } };
+  if (method !== 'GET' && method !== 'HEAD') init.body = JSON.stringify(body);
+  return new Request('http://x/api/integrations/credential', init);
+}
+
+beforeEach(() => {
+  for (const m of [verifyUser, isAdmin, setIntegrationCredential, getConfiguredSlugs]) m.mockReset();
+  process.env.AURORA_ENDPOINT = 'aurora.example';
+  verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
+  isAdmin.mockResolvedValue(true);
+  setIntegrationCredential.mockResolvedValue(undefined);
+  getConfiguredSlugs.mockResolvedValue(['notion']);
+});
+
+describe('/api/integrations/credential gate', () => {
+  it('401 unauthenticated', async () => {
+    verifyUser.mockResolvedValue(null);
+    const { PUT } = await import('./route');
+    expect((await PUT(req({ slug: 'notion', secret: { token: 'x' } }))).status).toBe(401);
+  });
+  it('403 non-admin', async () => {
+    isAdmin.mockResolvedValue(false);
+    const { PUT } = await import('./route');
+    expect((await PUT(req({ slug: 'notion', secret: { token: 'x' } }))).status).toBe(403);
+    expect(setIntegrationCredential).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT', () => {
+  it('stores the credential and never echoes the secret', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { PUT } = await import('./route');
+    const resp = await PUT(req({ slug: 'notion', secret: { token: 'supersecret_TOKEN' } }));
+    expect(resp.status).toBe(200);
+    expect(setIntegrationCredential).toHaveBeenCalledWith('notion', { token: 'supersecret_TOKEN' });
+    const text = await resp.text();
+    expect(text).not.toContain('supersecret_TOKEN'); // value not echoed
+    expect(text).not.toContain('secret');             // no secret field in response
+    // never logged
+    for (const spy of [logSpy, errSpy]) {
+      for (const call of spy.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain('supersecret_TOKEN');
+      }
+    }
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('400 on malformed body (no secret object)', async () => {
+    const { PUT } = await import('./route');
+    expect((await PUT(req({ slug: 'notion' }))).status).toBe(400);
+    expect(setIntegrationCredential).not.toHaveBeenCalled();
+  });
+
+  it('400 when the lib rejects an unknown slug', async () => {
+    setIntegrationCredential.mockRejectedValue(new Error('unknown integration slug: evil'));
+    const { PUT } = await import('./route');
+    expect((await PUT(req({ slug: 'evil', secret: { token: 'x' } }))).status).toBe(400);
+  });
+});
+
+describe('GET', () => {
+  it('returns configured slugs only, no values', async () => {
+    getConfiguredSlugs.mockResolvedValue(['notion', 'datadog']);
+    const { GET } = await import('./route');
+    const resp = await GET(req(undefined, 'GET'));
+    expect(resp.status).toBe(200);
+    const body = await resp.json();
+    expect(new Set(body.configured)).toEqual(new Set(['notion', 'datadog']));
+  });
+});

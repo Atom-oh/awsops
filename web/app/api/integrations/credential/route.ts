@@ -1,0 +1,50 @@
+// Admin-gated credential-write route for integrations (DevOps-agent-style).
+// PUT stores one integration's credential in the single Secrets Manager secret (keyed by slug=kind);
+// GET returns which slugs are configured (keys only). SECURITY: never log/echo the credential value.
+import { verifyUser } from '@/lib/auth';
+import { isAdmin } from '@/lib/admin';
+import { setIntegrationCredential, getConfiguredSlugs } from '@/lib/integration-credentials';
+
+export const dynamic = 'force-dynamic';
+
+function json(obj: unknown, status: number) {
+  return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
+}
+
+async function gate(request: Request) {
+  const user = await verifyUser(request.headers.get('cookie'));
+  if (!user) return { resp: json({ error: 'unauthenticated' }, 401) };
+  if (!(await isAdmin(user))) return { resp: json({ error: 'admin access required' }, 403) };
+  if (!process.env.AURORA_ENDPOINT) return { resp: json({ error: 'Aurora not configured' }, 400) };
+  return { user };
+}
+
+export async function GET(request: Request) {
+  const g = await gate(request);
+  if (g.resp) return g.resp;
+  return json({ configured: await getConfiguredSlugs() }, 200);
+}
+
+export async function PUT(request: Request) {
+  const g = await gate(request);
+  if (g.resp) return g.resp;
+  let body: { slug?: unknown; secret?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  const slug = typeof body?.slug === 'string' ? body.slug : '';
+  const secret = body?.secret;
+  if (!slug || !secret || typeof secret !== 'object' || Array.isArray(secret)) {
+    return json({ error: 'slug (string) and secret (object) are required' }, 400);
+  }
+  try {
+    // SECURITY: do not log or echo the credential value — sensitive.
+    await setIntegrationCredential(slug, secret as Record<string, unknown>);
+    return json({ ok: true }, 200);
+  } catch (e) {
+    // Bad slug / size / store failure. The message never contains the credential value.
+    return json({ error: (e as Error).message }, 400);
+  }
+}
