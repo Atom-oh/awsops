@@ -29,10 +29,26 @@ export interface RouteResult {
   primary: string;
   ranked: RankedEntry[];
   method: 'pin' | 'regex' | 'llm' | 'fallback';
+  // ADR-044: cross-domain auto-synthesis signal. `selected` = the active routes the chat
+  // handler may fan out over (≤3); `multiDomain` true ⇒ ≥2 selected ⇒ ADR-025 fan-out+synthesis.
+  // pin/regex/fallback are always single. NOTE: the Agent-Space/active filter later in
+  // chat/route.ts may shrink `selected` — the handler MUST recompute multiDomain after filtering.
+  multiDomain: boolean;
+  selected: RankedEntry[];
 }
 export interface ClassifyOpts {
   llmEnabled?: boolean;
   classify?: (prompt: string) => Promise<{ key: string; score: number }[]>;
+  /** ADR-044: min classifier score for a route to join the multi-domain fan-out set. */
+  minScore?: number;
+}
+
+/** ADR-044 default multi-route inclusion threshold (env-overridable, golden-set-tuned). */
+export const MULTI_ROUTE_MIN_SCORE = Number(process.env.MULTI_ROUTE_MIN_SCORE || 0.3);
+
+/** Active routes (score ≥ minScore), best-first, capped at 3 — the fan-out candidate set (ADR-044). */
+export function selectMultiRoute(ranked: RankedEntry[], minScore = MULTI_ROUTE_MIN_SCORE): RankedEntry[] {
+  return ranked.filter((r) => r.active && r.score >= minScore).slice(0, 3);
 }
 
 /** Catch-all fallback MUST be an active section — inactive 'ops' would block chat (spec §2.3). */
@@ -56,23 +72,32 @@ function entry(key: string, score: number): RankedEntry {
  * → graceful fallback. Never throws; never blocks chat (spec §2, §6).
  */
 export async function classifyRoute(prompt: string, pinned?: string, opts: ClassifyOpts = {}): Promise<RouteResult> {
+  // Single-route result: selected = [the one entry], never multi-domain (ADR-044).
+  const single = (primary: string, ranked: RankedEntry[], method: RouteResult['method']): RouteResult =>
+    ({ primary, ranked, method, multiDomain: false, selected: [ranked[0]] });
+
   if (pinned && sectionByKey(pinned)) {
-    return { primary: pinned, ranked: [entry(pinned, 1)], method: 'pin' };
+    return single(pinned, [entry(pinned, 1)], 'pin');
   }
   const matched = matchedSections(prompt);
   if (matched.length === 1) {
-    return { primary: matched[0], ranked: [entry(matched[0], 1)], method: 'regex' };
+    return single(matched[0], [entry(matched[0], 1)], 'regex');
   }
   if (opts.llmEnabled && opts.classify) {
     try {
       const ranked = (await opts.classify(prompt)).map((r) => entry(r.key, r.score));
-      if (ranked.length > 0) return { primary: ranked[0].key, ranked, method: 'llm' };
+      if (ranked.length > 0) {
+        // ADR-044: ≥2 active routes above threshold ⇒ candidate for cross-domain auto-synthesis.
+        const selected = selectMultiRoute(ranked, opts.minScore);
+        const multiDomain = selected.length >= 2;
+        return { primary: ranked[0].key, ranked, method: 'llm', multiDomain, selected: multiDomain ? selected : [ranked[0]] };
+      }
     } catch { /* classifier must never block chat — fall through */ }
   }
   // LLM off/empty/failed: legacy first-match if any rule hit, else fallback.
   if (matched.length > 0) {
-    return { primary: matched[0], ranked: [entry(matched[0], 1)], method: 'regex' };
+    return single(matched[0], [entry(matched[0], 1)], 'regex');
   }
   const fallbackKey = opts.llmEnabled ? ACTIVE_FALLBACK : 'ops'; // flag off = exact legacy behavior
-  return { primary: fallbackKey, ranked: [entry(fallbackKey, 0)], method: opts.llmEnabled ? 'fallback' : 'regex' };
+  return single(fallbackKey, [entry(fallbackKey, 0)], opts.llmEnabled ? 'fallback' : 'regex');
 }
