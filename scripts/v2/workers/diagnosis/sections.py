@@ -40,3 +40,37 @@ INTENDED_VS_ACTUAL_SECTION = {
               "passed=false 인 항목(드리프트)을 심각도순으로 정리하고 각 항목의 observed 근거를 명시하라. "
               "데이터(verdict)에만 근거하라 — 추측/자동변경 제안 금지. 활성 불변식이 없으면 그렇게 보고하라.",
 }
+
+# Deep-tier catalog: the 8 base SECTIONS + 6 deep-only sections (14; report.generate appends
+# INTENDED_VS_ACTUAL_SECTION → 15 total). Every deep section consumes ALREADY-COLLECTED sources
+# (inventory/cw_metrics/cost/service_map/posture/what_changed) — no new collectors, no new IAM.
+# Read-only diagnosis framing: evidence-required, no mutation / auto-change suggestions.
+_DEEP_ONLY = [
+    {"key": "identity_access", "title": "IAM & 자격 증명 심층",
+     "sources": ["posture", "inventory"],
+     "prompt": "인벤토리(IAM 사용자/역할/정책)와 Security Hub posture를 근거로 자격 증명 위험을 진단하라. "
+               "과다 권한·미사용 자격·관리자 분산·키/MFA 위생 신호를 짚고 각 발견에 근거(소스)를 명시. "
+               "데이터에만 근거하라 — 추측·자동변경 제안 금지. posture 미구독이면 인벤토리 신호만으로 한정 보고."},
+    {"key": "data_protection", "title": "데이터 보호 & 암호화",
+     "sources": ["inventory", "posture"],
+     "prompt": "인벤토리와 posture를 근거로 저장·전송 데이터 보호 상태를 진단하라. 미암호화 리소스(RDS/EBS/S3 등)·"
+               "백업/스냅샷 부재·공개 접근 신호를 짚고 각 발견에 근거를 명시. 데이터에만 근거하라 — 추측·자동변경 제안 금지."},
+    {"key": "network_exposure", "title": "네트워크 보안 / 노출",
+     "sources": ["inventory", "service_map"],
+     "prompt": "인벤토리(SG/서브넷/LB)와 서비스맵을 근거로 외부 노출면을 진단하라. 0.0.0.0/0 인그레스·퍼블릭 서브넷·"
+               "퍼블릭 엔드포인트·과대 노출 신호를 짚고 각 발견에 근거를 명시. 데이터에만 근거하라 — 추측·자동변경 제안 금지."},
+    {"key": "reliability_ha", "title": "신뢰성 & 고가용성",
+     "sources": ["inventory", "cw_metrics"],
+     "prompt": "인벤토리와 CloudWatch 지표를 근거로 신뢰성/HA를 진단하라. 멀티-AZ 미적용·단일 장애점·백업/복구 부재·"
+               "스케일링 부재 신호를 짚고 각 발견에 근거를 명시. 데이터에만 근거하라 — 추측·자동변경 제안 금지."},
+    {"key": "observability_coverage", "title": "관측성 & 알람 커버리지",
+     "sources": ["cw_metrics", "inventory"],
+     "prompt": "CloudWatch 지표/알람과 인벤토리를 근거로 관측성 커버리지를 진단하라. 알람 미설정 고비용/핵심 리소스·"
+               "지표 공백·로그 보존 신호를 짚고 각 발견에 근거를 명시. 데이터에만 근거하라 — 추측·자동변경 제안 금지."},
+    {"key": "cost_optimization", "title": "비용 최적화 심층",
+     "sources": ["cost", "inventory", "cw_metrics"],
+     "prompt": "비용(MTD/서비스별)·인벤토리·CloudWatch 사용률을 근거로 비용 최적화 기회를 진단하라. 유휴/과대 프로비저닝·"
+               "구형 세대·미사용 리소스 신호를 짚고 각 권고에 근거를 명시. 데이터에만 근거하라 — 추측·자동변경(실제 변경) 금지, 권고만."},
+]
+
+DEEP_SECTIONS = list(SECTIONS) + _DEEP_ONLY

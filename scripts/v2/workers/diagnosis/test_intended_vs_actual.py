@@ -111,7 +111,7 @@ def test_generate_weaves_drift_and_renders_verdict_only(monkeypatch):
 
     captured = {}
 
-    def fake_bedrock(prompt, ctx):
+    def fake_bedrock(prompt, ctx, *a, **k):  # variadic: tolerates model_id/max_tokens args
         # the intended-vs-actual section's prompt is the only one mentioning 'verdict'
         if "verdict" in prompt:
             captured["intent_ctx"] = ctx
@@ -142,7 +142,7 @@ def test_generate_computes_diff_when_parent_set(monkeypatch):
              "data": {"edges": [{"from": "internet", "to": "rds-prod"}]}},
         ]
     monkeypatch.setattr(report.src, "collect_all", fake_collect_all)
-    monkeypatch.setattr(report, "_bedrock_render", lambda p, c: "본문")
+    monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "본문")
     active = [{"id": 1, "kind": "private_only", "target": "rds-prod", "params": {}, "severity": "critical"}]
     monkeypatch.setattr(db, "list_active_invariants", lambda conn: active)
     # current report 7 → parent 3; parent 3 had no drift (id=1 passed) → now fails → regression
@@ -159,7 +159,7 @@ def test_generate_no_diff_without_parent(monkeypatch):
     def fake_collect_all(conn):
         return [{"key": "service_map", "ok": True, "degraded": False, "notes": "", "data": {"edges": []}}]
     monkeypatch.setattr(report.src, "collect_all", fake_collect_all)
-    monkeypatch.setattr(report, "_bedrock_render", lambda p, c: "본문")
+    monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "본문")
     monkeypatch.setattr(db, "list_active_invariants", lambda conn: [])
     md, summary, _ = report.generate(FakeConn(), account="1", tier="mid")
     assert "diff" not in summary  # no report_id → no parent lookup
@@ -171,7 +171,7 @@ def test_generate_emits_monotonic_section_progress(monkeypatch):
     def fake_collect_all(conn):
         return [{"key": "service_map", "ok": True, "degraded": False, "notes": "", "data": {"edges": []}}]
     monkeypatch.setattr(report.src, "collect_all", fake_collect_all)
-    monkeypatch.setattr(report, "_bedrock_render", lambda p, c: "본문")
+    monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "본문")
     monkeypatch.setattr(db, "list_active_invariants", lambda conn: [])
 
     events = []
@@ -193,7 +193,7 @@ def test_generate_progress_failure_never_aborts_report(monkeypatch):
     def fake_collect_all(conn):
         return [{"key": "service_map", "ok": True, "degraded": False, "notes": "", "data": {"edges": []}}]
     monkeypatch.setattr(report.src, "collect_all", fake_collect_all)
-    monkeypatch.setattr(report, "_bedrock_render", lambda p, c: "본문")
+    monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "본문")
     monkeypatch.setattr(db, "list_active_invariants", lambda conn: [])
 
     def boom(*a, **k):
@@ -216,7 +216,7 @@ def test_bedrock_render_sets_read_timeout(monkeypatch):
         return _FakeClient()
     monkeypatch.setattr(report.boto3, "client", fake_client)
 
-    out = report._bedrock_render("prompt", "{}")
+    out = report._bedrock_render("prompt", "{}", report.MODEL_ID, 1500)
     assert out == "x"
     assert captured["region"] == "us-east-1"  # us.* profile must stay in a US region
     assert captured["config"] is not None and captured["config"].read_timeout  # idle/read timeout set

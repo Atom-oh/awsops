@@ -169,6 +169,47 @@ def test_cw_metrics_wired_into_compute_and_db_sections():
     assert "cw_metrics" in by_key["database_storage"]["sources"]
 
 
+def test_deep_sections_catalog():
+    # deep = the 8 base sections + 6 deep-only = 14 (report.generate appends intended_vs_actual → 15).
+    base = sections.SECTIONS
+    deep = sections.DEEP_SECTIONS
+    assert len(base) == 8  # base unchanged
+    assert len(deep) == 14
+    assert deep[:8] == base  # deep is a superset that preserves the base order
+    keys = [x["key"] for x in deep]
+    assert len(set(keys)) == 14  # unique
+    known = {"inventory", "cw_metrics", "cost", "service_map", "posture", "what_changed"}
+    for sec in deep:
+        assert sec["key"] and sec["title"] and sec["prompt"]
+        assert isinstance(sec["sources"], list) and sec["sources"]
+        assert set(sec["sources"]) <= known  # reuses existing collectors only (no new sources/IAM)
+    # the 6 deep-only keys are present
+    assert {"identity_access", "data_protection", "network_exposure",
+            "reliability_ha", "observability_coverage", "cost_optimization"} <= set(keys)
+
+
+def test_generate_resolves_tier_catalog_and_model(monkeypatch):
+    # Task 3: tier picks the catalog (mid=9, deep=15) + model (deep may select Opus) + max_tokens.
+    monkeypatch.setattr(report.src, "collect_all",
+                        lambda conn: [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
+    monkeypatch.setattr(report.ddb, "list_active_invariants", lambda conn: [])
+    calls = []
+    monkeypatch.setattr(report, "_bedrock_render",
+                        lambda prompt, ctx, model_id, max_tokens: (calls.append((model_id, max_tokens)) or "본문"))
+
+    calls.clear(); report.generate(object(), account="1", tier="mid")
+    assert len(calls) == 9 and all(m == report._MODEL_SONNET and t == 1500 for m, t in calls)
+
+    calls.clear(); report.generate(object(), account="1", tier="deep", model="opus")
+    assert len(calls) == 15 and all(m == report._MODEL_OPUS and t == 2200 for m, t in calls)
+
+    calls.clear(); report.generate(object(), account="1", tier="deep")  # default model = sonnet
+    assert len(calls) == 15 and all(m == report._MODEL_SONNET for m, t in calls)
+
+    calls.clear(); report.generate(object(), account="1", tier="mid", model="opus")  # pinned
+    assert len(calls) == 9 and all(m == report._MODEL_SONNET for m, t in calls)
+
+
 # --- Task 5: report.py ---------------------------------------------------
 
 from diagnosis import report
@@ -190,7 +231,7 @@ def test_build_markdown_has_toc_and_all_sections():
 def test_render_section_uses_only_its_sources(monkeypatch):
     captured = {}
 
-    def fake_invoke(prompt, context_json):
+    def fake_invoke(prompt, context_json, *a, **k):  # variadic: tolerates model_id/max_tokens args
         captured["context"] = context_json
         return "섹션 본문"
 
@@ -201,11 +242,32 @@ def test_render_section_uses_only_its_sources(monkeypatch):
         "posture": {"key": "posture", "ok": True, "data": {}},
     }
     sec = {"key": "cost_overview", "title": "Cost Overview", "sources": ["cost"], "prompt": "p"}
-    out = report.render_section(sec, collected)
+    out = report.render_section(sec, collected, report.MODEL_ID, 1500)
     assert out["body"] == "섹션 본문"
     # context must include cost but not inventory (section only declares 'cost')
     assert "mtd_by_service" in captured["context"]
     assert "by_type" not in captured["context"]
+
+
+def test_render_section_threads_model_id_and_max_tokens(monkeypatch):
+    # Task 1: render_section/_bedrock_render carry model_id + max_tokens through to invoke_model.
+    captured = {}
+
+    class _FakeClient:
+        def invoke_model(self, modelId, body):
+            captured["modelId"] = modelId
+            captured["body"] = json.loads(body)
+            class _R:
+                def read(self):
+                    return json.dumps({"content": [{"text": "본문"}]}).encode()
+            return {"body": _R()}
+
+    monkeypatch.setattr(report.boto3, "client", lambda *a, **k: _FakeClient())
+    sec = {"key": "x", "title": "X", "sources": [], "prompt": "p"}
+    out = report.render_section(sec, {}, report.MODEL_ID, 1500)
+    assert out["body"] == "본문"
+    assert captured["modelId"] == report.MODEL_ID
+    assert captured["body"]["max_tokens"] == 1500
 
 
 def test_redact_strips_pii():

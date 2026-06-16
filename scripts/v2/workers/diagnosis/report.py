@@ -10,12 +10,27 @@ from botocore.config import Config
 from . import sources as src
 from . import invariants as inv
 from . import db as ddb
-from .sections import SECTIONS, INTENDED_VS_ACTUAL_SECTION
+from .sections import SECTIONS, DEEP_SECTIONS, INTENDED_VS_ACTUAL_SECTION
 
 # Inference-profile id — a BARE id ("anthropic.claude-...") throws ValidationException on
 # Claude 4.x invoke_model. Matches agent/agent.py's us.* profile convention.
 MODEL_ID = os.environ.get("DIAGNOSIS_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
+
+# Tier → model + catalog + per-section token budget. Sonnet is the default (enough for most runs);
+# deep tier alone may select Opus (heavier analysis). Model ids are env-overridable; defaults are the
+# verified us-east-1 cross-region inference profiles (us.* must be invoked from a US region).
+_MODEL_SONNET = os.environ.get("DIAGNOSIS_MODEL_SONNET", MODEL_ID)  # MODEL_ID kept as back-compat alias
+_MODEL_OPUS = os.environ.get("DIAGNOSIS_MODEL_OPUS", "us.anthropic.claude-opus-4-8")
+TIER_CATALOG = {"light": SECTIONS, "mid": SECTIONS, "deep": DEEP_SECTIONS}
+TIER_MAX_TOKENS = {"light": 1500, "mid": 1500, "deep": 2200}
+
+
+def _resolve_tier(tier, model):
+    """(catalog, model_id, max_tokens) for a tier. Only deep may use Opus; others pin Sonnet."""
+    catalog = TIER_CATALOG.get(tier, SECTIONS)
+    model_id = _MODEL_OPUS if (tier == "deep" and model == "opus") else _MODEL_SONNET
+    return catalog, model_id, TIER_MAX_TOKENS.get(tier, 1500)
 
 # A3 (V1 parity): per-section Bedrock idle/read timeout so one hung section can't stall the whole
 # job indefinitely (V1 aborted after 60s with no token). On timeout invoke_model raises →
@@ -54,30 +69,31 @@ _SYSTEM = (
 )
 
 
-def _bedrock_render(prompt, context_json):
+def _bedrock_render(prompt, context_json, model_id, max_tokens):
     # [GATE-FIX R2 MAJOR] A `us.*` inference profile must be invoked from a us region (agent.py pins
     # us-east-1). Use a dedicated BEDROCK_REGION (default us-east-1), NOT the deployment REGION
     # (ap-northeast-2) — else the us.* profile throws. Use apac.* + ap region if you prefer in-region.
+    # model_id + max_tokens are resolved per-tier by generate() (deep may select Opus + a larger cap).
     bedrock_region = os.environ.get("BEDROCK_REGION", "us-east-1")
     client = boto3.client("bedrock-runtime", region_name=bedrock_region, config=_BEDROCK_CONFIG)
     body = {
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1500,
+        "max_tokens": max_tokens,
         "system": _SYSTEM,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": f"{prompt}\n\n<untrusted>\n{context_json}\n</untrusted>"}
         ]}],
     }
-    r = client.invoke_model(modelId=MODEL_ID, body=json.dumps(body))
+    r = client.invoke_model(modelId=model_id, body=json.dumps(body))
     payload = json.loads(r["body"].read())
     return "".join(b.get("text", "") for b in payload.get("content", []))
 
 
-def render_section(section, collected):
+def render_section(section, collected, model_id, max_tokens):
     # Section sees ONLY the sources it declares (least-context).
     ctx = {k: collected[k]["data"] for k in section["sources"] if k in collected}
     ctx_json = _redact(json.dumps(ctx, ensure_ascii=False, default=str))  # [GATE-FIX] redact pre-LLM
-    body = _bedrock_render(section["prompt"], ctx_json)
+    body = _bedrock_render(section["prompt"], ctx_json, model_id, max_tokens)
     return {"key": section["key"], "title": section["title"], "body": body}
 
 
@@ -121,13 +137,15 @@ def _diff_summary(current_drift, parent_summary):
     return {"regressions": regressions, "improvements": improvements}
 
 
-def generate(conn, account, tier="mid", report_id=None, on_progress=None):
+def generate(conn, account, tier="mid", report_id=None, on_progress=None, model="sonnet"):
     """Collect → evaluate active invariants → render each section → markdown + summary.
     Returns (markdown, summary, sources_used). Read-only throughout; the LLM sees verdict-only
     drift, never raw untrusted edge text. `report_id` (optional) enables the parent-report diff.
-    `on_progress(current, total, section, phase)` (optional, A3 / V1 parity) is called as work
-    advances — best-effort (a callback error never aborts the report)."""
-    total = len(SECTIONS) + 1  # + INTENDED_VS_ACTUAL_SECTION; fixed so the UI can show N/total
+    `tier` picks the catalog (mid/light=9, deep=15) and `model` ('sonnet'|'opus', deep-only) the
+    Bedrock model + token budget. `on_progress(current, total, section, phase)` (optional, A3 / V1
+    parity) is called as work advances — best-effort (a callback error never aborts the report)."""
+    base_catalog, model_id, max_tokens = _resolve_tier(tier, model)
+    total = len(base_catalog) + 1  # + INTENDED_VS_ACTUAL_SECTION; fixed so the UI can show N/total
 
     def _emit(current, section, phase):
         if on_progress is None:
@@ -154,11 +172,11 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None):
         "data": {"verdicts": verdicts},
     }
 
-    catalog = list(SECTIONS) + [INTENDED_VS_ACTUAL_SECTION]
+    catalog = list(base_catalog) + [INTENDED_VS_ACTUAL_SECTION]
     rendered = []
     for i, sec in enumerate(catalog):
         _emit(i + 1, sec["title"], "render")  # before the Bedrock call → UI shows the in-flight section
-        rendered.append(render_section(sec, collected))
+        rendered.append(render_section(sec, collected, model_id, max_tokens))
     _emit(total, "리포트 조립", "assemble")
     md = build_markdown(rendered, account, tier)
     summary = {"sections": len(rendered), "sources_used": sources_used,
