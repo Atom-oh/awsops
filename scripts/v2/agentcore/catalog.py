@@ -361,4 +361,16 @@ TARGETS = {
             {"name": "tempo_tag_values", "description": "List values of a tag", "inputSchema": {"type": "object", "properties": {"tag": _p("string", "Tag name")}, "required": ["tag"]}},
         ],
     },
+    # Mimir datasource (v1 family #5 final) — read-only PromQL (Prometheus-compatible, multi-tenant). monitoring.
+    "mimir-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "mimir-mcp",
+        "description": "Mimir read-only — PromQL instant/range, labels, series (4 tools)",
+        "tools": [
+            {"name": "mimir_query", "description": "Instant PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time unix/ISO (default now)")}, "required": ["query"]}},
+            {"name": "mimir_query_range", "description": "Range PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix (default now-1h)"), "end": _p("string", "unix (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
+            {"name": "mimir_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "mimir_series", "description": "Find series matching a selector", "inputSchema": {"type": "object", "properties": {"match": _p("string", "Series selector")}, "required": ["match"]}},
+        ],
+    },
 }
