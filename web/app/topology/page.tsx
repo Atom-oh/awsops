@@ -237,7 +237,7 @@ export default function TopologyPage() {
   const selectCls = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
 
   return (
-    <>
+    <div className="flex h-full flex-col">
       <PageHeader
         title="Topology"
         subtitle="요청 흐름 그래프 (Route53 → CloudFront → LB → Target Group → 타깃)"
@@ -255,7 +255,7 @@ export default function TopologyPage() {
           </div>
         }
       />
-      <div className="px-8 py-8 flex flex-col gap-4">
+      <div className="flex-1 min-h-0 flex flex-col gap-4 px-8 py-6">
         {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
         {!data && !err && <div className="text-ink-400">로딩 중…</div>}
         {data && !err && (
@@ -273,7 +273,7 @@ export default function TopologyPage() {
                   <span className="text-warning">⚠ {cappedTypes.join(', ')} {ROW_CAP}개 초과 — 일부만 표시</span>
                 )}
               </div>
-              <div className="h-[640px] w-full rounded-lg border border-ink-100 bg-card">
+              <div className="flex-1 min-h-0 w-full rounded-lg border border-ink-100 bg-card">
                 <ReactFlow nodes={nodes} edges={edges} fitView colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}
                   onNodeClick={(_, node) => setSelected(((node.data as { fnode?: FlowNode })?.fnode) ?? null)}>
                   <Background />
@@ -288,6 +288,6 @@ export default function TopologyPage() {
       {detail && (
         <DetailPanel title={detail.title} data={detail.data} spec={detail.spec} onClose={() => setSelected(null)} />
       )}
-    </>
+    </div>
   );
 }
