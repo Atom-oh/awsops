@@ -122,6 +122,13 @@ class TestGuards(_Base):
             out = pm.lambda_handler({"tool_name": "prometheus_query", "arguments": {"query": "up", "target_account_id": "222222222222"}}, None)
         self.assertEqual(out["statusCode"], 200)
 
+    def test_redirect_origin_ssrf_returns_400_not_crash(self):
+        # a SsrfBlocked raised from inside http_json (no-redirect handler) is caught by lambda_handler
+        with mock.patch.object(pm, "http_json", side_effect=pm.SsrfBlocked("endpoint blocked: redirect")):
+            out = pm.lambda_handler({"tool_name": "prometheus_query", "arguments": {"query": "up"}}, None)
+        self.assertEqual(out["statusCode"], 400)
+        self.assertIn("blocked", json.loads(out["body"])["error"].lower())
+
     def test_unknown_tool(self):
         out = pm.lambda_handler({"tool_name": "prometheus_write", "arguments": {}}, None)
         self.assertEqual(out["statusCode"], 400)

@@ -87,5 +87,14 @@ class TestHttp(unittest.TestCase):
         self.assertTrue(any(isinstance(h, dh._NoRedirect) for h in dh._opener.handlers))
 
 
+class TestRedirectSsrf(unittest.TestCase):
+    def test_http_json_propagates_ssrf_from_redirect_handler(self):
+        # _NoRedirect.redirect_request raises SsrfBlocked from inside _opener.open; http_json must
+        # let it propagate (not swallow), so the Lambda handler can map it to a clean 400.
+        with mock.patch.object(dh._opener, "open", side_effect=dh.SsrfBlocked("redirect to blocked")):
+            with self.assertRaises(dh.SsrfBlocked):
+                dh.http_json("GET", "http://ch:8123/x")
+
+
 if __name__ == "__main__":
     unittest.main()
