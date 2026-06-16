@@ -54,30 +54,31 @@ _SYSTEM = (
 )
 
 
-def _bedrock_render(prompt, context_json):
+def _bedrock_render(prompt, context_json, model_id, max_tokens):
     # [GATE-FIX R2 MAJOR] A `us.*` inference profile must be invoked from a us region (agent.py pins
     # us-east-1). Use a dedicated BEDROCK_REGION (default us-east-1), NOT the deployment REGION
     # (ap-northeast-2) — else the us.* profile throws. Use apac.* + ap region if you prefer in-region.
+    # model_id + max_tokens are resolved per-tier by generate() (deep may select Opus + a larger cap).
     bedrock_region = os.environ.get("BEDROCK_REGION", "us-east-1")
     client = boto3.client("bedrock-runtime", region_name=bedrock_region, config=_BEDROCK_CONFIG)
     body = {
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1500,
+        "max_tokens": max_tokens,
         "system": _SYSTEM,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": f"{prompt}\n\n<untrusted>\n{context_json}\n</untrusted>"}
         ]}],
     }
-    r = client.invoke_model(modelId=MODEL_ID, body=json.dumps(body))
+    r = client.invoke_model(modelId=model_id, body=json.dumps(body))
     payload = json.loads(r["body"].read())
     return "".join(b.get("text", "") for b in payload.get("content", []))
 
 
-def render_section(section, collected):
+def render_section(section, collected, model_id, max_tokens):
     # Section sees ONLY the sources it declares (least-context).
     ctx = {k: collected[k]["data"] for k in section["sources"] if k in collected}
     ctx_json = _redact(json.dumps(ctx, ensure_ascii=False, default=str))  # [GATE-FIX] redact pre-LLM
-    body = _bedrock_render(section["prompt"], ctx_json)
+    body = _bedrock_render(section["prompt"], ctx_json, model_id, max_tokens)
     return {"key": section["key"], "title": section["title"], "body": body}
 
 
@@ -155,10 +156,11 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None):
     }
 
     catalog = list(SECTIONS) + [INTENDED_VS_ACTUAL_SECTION]
+    model_id, max_tokens = MODEL_ID, 1500  # Task 3 replaces these with tier/model resolution
     rendered = []
     for i, sec in enumerate(catalog):
         _emit(i + 1, sec["title"], "render")  # before the Bedrock call → UI shows the in-flight section
-        rendered.append(render_section(sec, collected))
+        rendered.append(render_section(sec, collected, model_id, max_tokens))
     _emit(total, "리포트 조립", "assemble")
     md = build_markdown(rendered, account, tier)
     summary = {"sections": len(rendered), "sources_used": sources_used,

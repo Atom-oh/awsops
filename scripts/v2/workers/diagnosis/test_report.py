@@ -190,7 +190,7 @@ def test_build_markdown_has_toc_and_all_sections():
 def test_render_section_uses_only_its_sources(monkeypatch):
     captured = {}
 
-    def fake_invoke(prompt, context_json):
+    def fake_invoke(prompt, context_json, *a, **k):  # variadic: tolerates model_id/max_tokens args
         captured["context"] = context_json
         return "섹션 본문"
 
@@ -201,11 +201,32 @@ def test_render_section_uses_only_its_sources(monkeypatch):
         "posture": {"key": "posture", "ok": True, "data": {}},
     }
     sec = {"key": "cost_overview", "title": "Cost Overview", "sources": ["cost"], "prompt": "p"}
-    out = report.render_section(sec, collected)
+    out = report.render_section(sec, collected, report.MODEL_ID, 1500)
     assert out["body"] == "섹션 본문"
     # context must include cost but not inventory (section only declares 'cost')
     assert "mtd_by_service" in captured["context"]
     assert "by_type" not in captured["context"]
+
+
+def test_render_section_threads_model_id_and_max_tokens(monkeypatch):
+    # Task 1: render_section/_bedrock_render carry model_id + max_tokens through to invoke_model.
+    captured = {}
+
+    class _FakeClient:
+        def invoke_model(self, modelId, body):
+            captured["modelId"] = modelId
+            captured["body"] = json.loads(body)
+            class _R:
+                def read(self):
+                    return json.dumps({"content": [{"text": "본문"}]}).encode()
+            return {"body": _R()}
+
+    monkeypatch.setattr(report.boto3, "client", lambda *a, **k: _FakeClient())
+    sec = {"key": "x", "title": "X", "sources": [], "prompt": "p"}
+    out = report.render_section(sec, {}, report.MODEL_ID, 1500)
+    assert out["body"] == "본문"
+    assert captured["modelId"] == report.MODEL_ID
+    assert captured["body"]["max_tokens"] == 1500
 
 
 def test_redact_strips_pii():
