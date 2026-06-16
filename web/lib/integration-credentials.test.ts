@@ -108,6 +108,18 @@ describe('KNOWN_CONNECTOR_SLUGS', () => {
   });
 });
 
+describe('prometheus multi-field credential', () => {
+  it('stores {endpoint,token} under prometheus and merges', async () => {
+    smSend.mockImplementation((cmd: any) =>
+      cmd.kind === 'get' ? getReturn({ clickhouse: { endpoint: 'http://ch:8123' } }) : {});
+    await setIntegrationCredential('prometheus', { endpoint: 'http://prometheus:9090', token: 't' });
+    const put = smSend.mock.calls.find((c) => c[0].kind === 'put')![0];
+    const written = JSON.parse(put.input.SecretString);
+    expect(written.clickhouse).toEqual({ endpoint: 'http://ch:8123' });
+    expect(written.prometheus).toEqual({ endpoint: 'http://prometheus:9090', token: 't' });
+  });
+});
+
 describe('clickhouse multi-field credential', () => {
   it('stores a {endpoint,username,password} object and merges with other slugs', async () => {
     smSend.mockImplementation((cmd: any) =>
