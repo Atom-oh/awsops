@@ -16,8 +16,13 @@ const INTEG_KINDS_INGRESS = ['cloudwatch_sns', 'alertmanager', 'grafana_alert', 
 const INTEG_TRANSPORTS = ['sigv4', 'oauth_client_credentials', 'oauth_3lo', 'api_key'];
 // Curated read connectors (built-in tools that just need a credential — keyed by slug=kind,
 // mirrors KNOWN_CONNECTOR_SLUGS in web/lib/integration-credentials.ts). No endpoint/transport.
-const CONNECTORS = [
-  { slug: 'notion', label: 'Notion', help: 'Create an internal integration at notion.so/my-integrations, share your pages/databases with it, then paste its token (secret_…).' },
+// Curated read connectors. `fields` defines the credential inputs (secret fields are masked/never
+// rendered back). Keys must match what the connector Lambda reads from the single secret.
+const CONNECTORS: Array<{ slug: string; label: string; help: string; fields: Array<{ key: string; label: string; secret?: boolean }> }> = [
+  { slug: 'notion', label: 'Notion', help: 'Create an internal integration at notion.so/my-integrations, share your pages/databases with it, then paste its token (secret_…).',
+    fields: [{ key: 'token', label: 'Integration token', secret: true }] },
+  { slug: 'clickhouse', label: 'ClickHouse', help: 'HTTP endpoint (e.g. http://clickhouse:8123) + user/password. Read-only SQL. In-cluster endpoints need clickhouse_vpc_enabled.',
+    fields: [{ key: 'endpoint', label: 'Endpoint (http://host:8123)' }, { key: 'username', label: 'Username' }, { key: 'password', label: 'Password', secret: true }] },
 ];
 
 export default function CustomizationPage() {
@@ -33,7 +38,7 @@ export default function CustomizationPage() {
   const [allowlistText, setAllowlistText] = useState('');
   const [integrations, setIntegrations] = useState<IntegrationRow[]>([]);
   const [credConfigured, setCredConfigured] = useState<string[]>([]); // slugs (=kind) with a stored credential
-  const [credInput, setCredInput] = useState<Record<string, string>>({}); // per-kind token input (never persisted/rendered back)
+  const [credInput, setCredInput] = useState<Record<string, Record<string, string>>>({}); // slug → field → value (never persisted/rendered back)
   const [integForm, setIntegForm] = useState({ direction: 'egress', name: '', kind: 'grafana', endpoint: '', transport: 'api_key', capability: 'read', authMode: 'hmac', sourceAllowlist: '', triggerTarget: 'incident' });
 
   async function load() {
@@ -65,15 +70,21 @@ export default function CustomizationPage() {
     setMsg(res.ok ? `Created integration #${d.id} — disabled${d.receivePath ? `; receive URL: ${d.receivePath}` : ''}` : `Error: ${JSON.stringify(d.detail || d.error)}`);
     if (res.ok) load();
   }
-  async function saveCredential(kind: string) {
-    const token = (credInput[kind] || '').trim();
-    if (!token) { setMsg('Enter a token first'); return; }
+  async function saveCredential(slug: string) {
+    const conn = CONNECTORS.find((c) => c.slug === slug);
+    const raw = credInput[slug] || {};
+    const secret: Record<string, string> = {};
+    for (const f of conn?.fields ?? []) {
+      const v = (raw[f.key] || '').trim();
+      if (v) secret[f.key] = v;
+    }
+    if (Object.keys(secret).length === 0) { setMsg('Fill in the credential fields first'); return; }
     const res = await fetch('/api/integrations/credential', {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug: kind, secret: { token } }),
+      body: JSON.stringify({ slug, secret }),
     });
-    setCredInput((m) => ({ ...m, [kind]: '' })); // clear input regardless (never keep the token in state)
-    setMsg(res.ok ? `Credential saved for ${kind}` : `Error: ${(await res.json()).error || res.status}`);
+    setCredInput((m) => ({ ...m, [slug]: {} })); // clear inputs regardless (never keep secrets in state)
+    setMsg(res.ok ? `Credential saved for ${slug}` : `Error: ${(await res.json()).error || res.status}`);
     const cr = await fetch('/api/integrations/credential');
     if (cr.ok) setCredConfigured((await cr.json()).configured || []);
   }
@@ -244,15 +255,18 @@ export default function CustomizationPage() {
                   : <span className="text-ink-400">not connected ✗</span>}
               </div>
               <p className="text-[11px] text-ink-400">{c.help}</p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="password"
-                  autoComplete="off"
-                  placeholder={configured ? 'replace token…' : `${c.label} token`}
-                  value={credInput[c.slug] || ''}
-                  onChange={(e) => setCredInput((m) => ({ ...m, [c.slug]: e.target.value }))}
-                  className="flex-1 rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]"
-                />
+              <div className="flex flex-wrap items-center gap-2">
+                {c.fields.map((f) => (
+                  <input
+                    key={f.key}
+                    type={f.secret ? 'password' : 'text'}
+                    autoComplete={f.secret ? 'new-password' : 'off'}
+                    placeholder={configured && f.secret ? `replace ${f.label}…` : f.label}
+                    value={credInput[c.slug]?.[f.key] || ''}
+                    onChange={(e) => setCredInput((m) => ({ ...m, [c.slug]: { ...(m[c.slug] || {}), [f.key]: e.target.value } }))}
+                    className="flex-1 rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]"
+                  />
+                ))}
                 <button onClick={() => saveCredential(c.slug)} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">{configured ? 'Update' : 'Connect'}</button>
               </div>
             </div>

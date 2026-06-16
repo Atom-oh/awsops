@@ -107,3 +107,15 @@ describe('KNOWN_CONNECTOR_SLUGS', () => {
     expect(KNOWN_CONNECTOR_SLUGS).toContain('notion');
   });
 });
+
+describe('clickhouse multi-field credential', () => {
+  it('stores a {endpoint,username,password} object and merges with other slugs', async () => {
+    smSend.mockImplementation((cmd: any) =>
+      cmd.kind === 'get' ? getReturn({ notion: { token: 'n' } }) : {});
+    await setIntegrationCredential('clickhouse', { endpoint: 'http://ch:8123', username: 'u', password: 'p' });
+    const put = smSend.mock.calls.find((c) => c[0].kind === 'put')![0];
+    const written = JSON.parse(put.input.SecretString);
+    expect(written.notion).toEqual({ token: 'n' });            // preserved
+    expect(written.clickhouse).toEqual({ endpoint: 'http://ch:8123', username: 'u', password: 'p' });
+  });
+});

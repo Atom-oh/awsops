@@ -44,3 +44,42 @@ describe('assertEgressEndpointAllowed', () => {
     expect(() => assertEgressEndpointAllowed('https://api.datadoghq.com/api/v1')).not.toThrow();
   });
 });
+
+import { isAlwaysBlockedHost, assertDatasourceEndpointAllowed } from './ssrf-guard';
+
+describe('assertDatasourceEndpointAllowed (datasource — private allowed, always-block only)', () => {
+  it('rejects metadata / loopback / link-local / multicast', () => {
+    for (const u of [
+      'http://169.254.169.254/latest/meta-data/',
+      'http://127.0.0.1:8123',
+      'https://[::1]:8123',
+      'http://[fd00:ec2::254]/',
+      'http://[fe80::1]:8123',
+      'http://224.0.0.1:8123',
+    ]) {
+      expect(() => assertDatasourceEndpointAllowed(u)).toThrow();
+    }
+  });
+  it('allows private RFC1918/ULA and public, over http or https', () => {
+    for (const u of [
+      'http://10.0.0.5:8123',
+      'http://192.168.1.9:8123',
+      'http://172.16.3.4:8123',
+      'http://[fc00::1]:8123',
+      'https://clickhouse.example.com',
+      'http://ch.internal:8123',
+    ]) {
+      expect(() => assertDatasourceEndpointAllowed(u)).not.toThrow();
+    }
+  });
+  it('rejects non-http(s) schemes and invalid URLs', () => {
+    expect(() => assertDatasourceEndpointAllowed('file:///etc/passwd')).toThrow();
+    expect(() => assertDatasourceEndpointAllowed('gopher://10.0.0.1/')).toThrow();
+    expect(() => assertDatasourceEndpointAllowed('not a url')).toThrow();
+  });
+  it('isAlwaysBlockedHost: RFC1918 is NOT always-blocked but metadata is', () => {
+    expect(isAlwaysBlockedHost('10.0.0.1')).toBe(false);
+    expect(isAlwaysBlockedHost('169.254.169.254')).toBe(true);
+    expect(isAlwaysBlockedHost('127.0.0.1')).toBe(true);
+  });
+});

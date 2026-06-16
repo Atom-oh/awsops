@@ -85,3 +85,18 @@ describe('GET', () => {
     expect(new Set(body.configured)).toEqual(new Set(['notion', 'datadog']));
   });
 });
+
+describe('PUT endpoint SSRF (datasource slugs)', () => {
+  it('rejects a metadata/loopback endpoint with 400 and no store', async () => {
+    const { PUT } = await import('./route');
+    const resp = await PUT(req({ slug: 'clickhouse', secret: { endpoint: 'http://169.254.169.254/', username: 'u' } }));
+    expect(resp.status).toBe(400);
+    expect(setIntegrationCredential).not.toHaveBeenCalled();
+  });
+  it('accepts a private (in-cluster) endpoint', async () => {
+    const { PUT } = await import('./route');
+    const resp = await PUT(req({ slug: 'clickhouse', secret: { endpoint: 'http://10.0.0.5:8123', username: 'u', password: 'p' } }));
+    expect(resp.status).toBe(200);
+    expect(setIntegrationCredential).toHaveBeenCalledWith('clickhouse', { endpoint: 'http://10.0.0.5:8123', username: 'u', password: 'p' });
+  });
+});

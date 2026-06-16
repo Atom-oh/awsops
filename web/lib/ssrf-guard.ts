@@ -52,3 +52,46 @@ export function assertEgressEndpointAllowed(urlString: string, opts: { allowPriv
     throw new Error(`endpoint host ${url.hostname} is a private/metadata address; enable allowPrivateDatasource for this account to permit it`);
   }
 }
+
+/** True for a LITERAL ALWAYS-BLOCKED IP — metadata / loopback / link-local / multicast / unspecified /
+ *  broadcast — i.e. blocked even for datasources (which otherwise ALLOW private RFC1918/ULA). Mirrors
+ *  agent.py `_ip_always_blocked`. RFC1918 (10/172.16/192.168) and ULA fc00::/7 are NOT blocked here
+ *  (in-cluster datasources are the intended target); the metadata IPv6 fd00:ec2::254 IS blocked. */
+export function isAlwaysBlockedHost(hostOrIp: string): boolean {
+  const host = hostOrIp.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  const v4 = parseIpv4(host);
+  if (v4) {
+    const [a, b] = v4;
+    return (
+      a === 127 ||                       // loopback
+      (a === 169 && b === 254) ||        // link-local incl. 169.254.169.254 metadata
+      (a >= 224 && a <= 239) ||          // multicast
+      a === 0 ||                         // unspecified/this-network
+      v4.join('.') === '255.255.255.255' // broadcast
+    );
+  }
+  if (host.includes(':')) {
+    if (host === '::1' || host === '0:0:0:0:0:0:0:1' || host === '::') return true; // loopback / unspecified
+    if (host === 'fd00:ec2::254') return true;                                       // IPv6 IMDS metadata
+    if (/^fe[89ab][0-9a-f]*:/.test(host)) return true;                               // fe80::/10 link-local
+    if (/^ff[0-9a-f]{2}:/.test(host)) return true;                                   // ff00::/8 multicast
+    const mapped = /::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(host);
+    if (mapped) return isAlwaysBlockedHost(mapped[1]);
+  }
+  return false;
+}
+
+/** Throw if a user-supplied DATASOURCE endpoint (ClickHouse/Prometheus/Loki/…) is unsafe: only
+ *  http/https schemes; a literal ALWAYS-BLOCKED host (metadata/loopback/link-local/multicast) is
+ *  rejected. Private RFC1918/ULA is ALLOWED (in-cluster datasources). Non-literal hostnames pass the
+ *  registration guard and are re-checked at connection time by the connector Lambda (datasource_http). */
+export function assertDatasourceEndpointAllowed(urlString: string): void {
+  let url: URL;
+  try { url = new URL(urlString); } catch { throw new Error('endpoint must be a valid URL'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`endpoint scheme ${url.protocol} not allowed (http/https only)`);
+  }
+  if (isAlwaysBlockedHost(url.hostname)) {
+    throw new Error(`endpoint host ${url.hostname} is a metadata/loopback/link-local address (blocked)`);
+  }
+}
