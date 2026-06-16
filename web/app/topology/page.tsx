@@ -196,23 +196,28 @@ export default function TopologyPage() {
   }), [full]);
 
   const { nodes, edges } = useMemo(() => {
-    const g = filterFromEntry(full, entryId || null);
-    const pos = Object.fromEntries(layoutFlow(g).map((p) => [p.id, p]));
+    const gFull = filterFromEntry(full, entryId || null);
 
-    // Focus: clicking a node highlights its connected path (up + downstream), dims the rest.
+    // Focus: clicking a node collapses the view to ITS connected path (up + downstream), which is
+    // then re-laid-out and re-centered (fitView via the key below) so the active subgraph fills the
+    // screen — instead of dimming the rest and letting it overflow/clip off one screen.
     const focusId = selected?.id ?? null;
-    let connected: Set<string> | null = null;
-    if (focusId && g.nodes.some((n) => n.id === focusId)) {
+    let g = gFull;
+    if (focusId && gFull.nodes.some((n) => n.id === focusId)) {
       const adj = new Map<string, string[]>();
-      for (const e of g.edges) {
+      for (const e of gFull.edges) {
         (adj.get(e.source) ?? adj.set(e.source, []).get(e.source)!).push(e.target);
         (adj.get(e.target) ?? adj.set(e.target, []).get(e.target)!).push(e.source);
       }
-      connected = new Set([focusId]);
+      const connected = new Set([focusId]);
       const q = [focusId];
       while (q.length) { const c = q.shift()!; for (const nb of adj.get(c) ?? []) if (!connected.has(nb)) { connected.add(nb); q.push(nb); } }
+      g = {
+        nodes: gFull.nodes.filter((n) => connected.has(n.id)),
+        edges: gFull.edges.filter((e) => connected.has(e.source) && connected.has(e.target)),
+      };
     }
-    const dim = (id: string) => connected != null && !connected.has(id);
+    const pos = Object.fromEntries(layoutFlow(g).map((p) => [p.id, p]));
 
     const nodes: Node[] = g.nodes.map((n) => {
       const [bg, border] = nodeColors(n, dark);
@@ -229,22 +234,21 @@ export default function TopologyPage() {
           border: `${n.id === focusId ? '2px solid' : n.kind === 'origin' ? '1px dashed' : '1px solid'} ${border}`,
           color: dark ? '#E3E9EE' : '#16202A',
           borderRadius: 8, fontSize: 11, padding: 6, width: 220,
-          opacity: dim(n.id) ? 0.25 : 1,
-          transition: 'opacity .15s',
         },
       };
     });
     const edges: Edge[] = g.edges.map((e) => ({
       id: e.id, source: e.source, target: e.target,
-      animated: connected != null && connected.has(e.source) && connected.has(e.target),
+      animated: focusId != null, // in focus mode every shown edge is on the active path
       // confidence convention: observed = solid, inferred (Spec 2) = dashed.
-      style: {
-        ...(e.confidence === 'inferred' ? { strokeDasharray: '4 4' } : {}),
-        opacity: connected != null && (!connected.has(e.source) || !connected.has(e.target)) ? 0.12 : 1,
-      },
+      style: e.confidence === 'inferred' ? { strokeDasharray: '4 4' } : {},
     }));
     return { nodes, edges };
   }, [full, entryId, dark, selected]);
+
+  // Re-mount ReactFlow when the entry filter or focus changes so `fitView` re-centers on the
+  // currently-shown (possibly collapsed) subgraph rather than keeping the prior viewport.
+  const flowKey = `${entryId || 'all'}::${selected?.id ?? ''}`;
 
   // Detail for the clicked node: resource nodes show their full inventory row (every field —
   // vpc, subnet, tags …); target/origin nodes synthesize a small detail from their meta.
@@ -351,8 +355,9 @@ export default function TopologyPage() {
                 )}
               </div>
               <div className="flex-1 min-h-0 w-full rounded-lg border border-ink-100 bg-card">
-                <ReactFlow nodes={nodes} edges={edges} fitView colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}
-                  onNodeClick={(_, node) => setSelected(((node.data as { fnode?: FlowNode })?.fnode) ?? null)}>
+                <ReactFlow key={flowKey} nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.2 }} colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}
+                  onNodeClick={(_, node) => setSelected(((node.data as { fnode?: FlowNode })?.fnode) ?? null)}
+                  onPaneClick={() => setSelected(null)}>
                   <Background />
                   <Controls />
                   <MiniMap pannable zoomable />
