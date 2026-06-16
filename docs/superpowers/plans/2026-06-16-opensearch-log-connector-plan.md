@@ -17,31 +17,47 @@
 ## Non-goals
 - Cross-source triage orchestration; S3/Datadog/Dynatrace; any write/ingest. Read-only only.
 
+## P2 consensus gate — round 1 findings & resolutions (panel: kiro opus-4.8 delivered; kimi tool-approval err, glm timeout → 1 substantive reviewer + self-verification against AWS facts)
+- **MAJOR (verified) — IAM uses the `es:` prefix, NOT `opensearch:`.** Amazon OpenSearch *managed* domains have no `opensearch:` IAM namespace; every action is `es:*` (`es:ListDomainNames`, `es:DescribeDomain`, `es:DescribeDomains`, `es:ESHttpGet`, `es:ESHttpPost`). The boto3 client name `opensearch` ≠ the IAM prefix. `terraform validate` won't catch it → runtime AccessDenied on `list_opensearch_domains`. (`opensearch:`/`aoss:` is Serverless only.) **Resolution: Task 3 grants `es:*` for everything.**
+- **MAJOR (verified) — cross-account sigv4 needs Credentials, but `cross_account.py` returns only clients.** SigV4Auth needs a botocore Credentials object; `cross_account` exposes `get_client`/`get_role_arn` only (`_assume_role` is private). **Resolution: add `get_credentials(target_account_id)` to `cross_account.py` (host → `boto3.Session().get_credentials()`; other → Credentials from the assume-role response) + test; `_signed_request` signs with those.** (cross_account.py + its test join Task 1's file scope.)
+- **MAJOR (verified) — ENI policy index error.** `count = var.opensearch_vpc_enabled ? 1 : 0` references `aws_iam_role.agent_lambda[0]` (exists only when `agentcore_enabled`). **Resolution: `count = var.agentcore_enabled && var.opensearch_vpc_enabled ? 1 : 0`.**
+- **MAJOR (verified) — sigv4 signed-bytes must equal sent-bytes; the mocked-seam test is vacuous.** **Resolution: serialize the body to bytes ONCE, sign that exact buffer (`SigV4Auth.add_auth` on an `AWSRequest` with that body + `Content-Type: application/json`), send the SAME buffer with `signed.headers` copied verbatim. Test does NOT mock `_signed_request` — it mocks `urlopen` and asserts the request carries `Authorization` + `X-Amz-Date` and the exact signed body.**
+- **MINOR (verified) — VPC domain endpoint.** `describe_domain` returns the public host under `DomainStatus.Endpoint` but a VPC domain under `DomainStatus.Endpoints["vpc"]`. **Resolution: resolve `Endpoint` else `Endpoints.vpc`; test both.**
+- **MINOR — hardcoded `@timestamp`.** **Resolution: optional `time_field` arg (default `@timestamp`) in the range clause.**
+
 ## Tasks (TDD; per-task commit; `python3 -m unittest` + catalog_check + `terraform validate` green)
 
-### Task 1: OpenSearch read MCP Lambda (TDD)
+### Task 1: OpenSearch read MCP Lambda + cross_account creds accessor (TDD)
 **Files:**
 - Create: `agent/lambda/opensearch_mcp.py`
 - Test: `agent/lambda/test_opensearch_mcp.py`
-- [ ] Failing tests (unittest; mock the HTTP seam `_signed_request` and boto3 `opensearch`/session —
-  no network, stdlib only):
-  - `list_opensearch_domains`: boto3 `list_domain_names` + `describe_domain`; returns name+endpoint+engine.
-  - `search_opensearch_logs(domain, query='ERROR', start='1h')`: resolves the domain endpoint, issues a
-    POST to `https://<endpoint>/<index|_all>/_search`; body has a `bool` with `range` on `@timestamp`
-    (gte=start) + `query_string`=query; `size` clamped (>50 → 50; default e.g. 20); returns hits.
-  - default window: no start → last 1h (assert a `range.@timestamp.gte` is present).
+- Modify: `agent/lambda/cross_account.py`
+- Test: `agent/lambda/test_cross_account.py`
+- [ ] cross_account: add `get_credentials(target_account_id)` → host (target==host or None) returns
+  `boto3.Session().get_credentials()`; a real other account returns a botocore `Credentials` built from
+  the assume-role response (reuse the existing `_assume_role`). Failing test asserts host vs other paths
+  (mock STS; no network). Keep existing get_role_arn behavior.
+- [ ] Failing tests for `opensearch_mcp` (unittest; mock boto3 `opensearch` client + `urlopen`; NO network):
+  - `list_opensearch_domains`: `list_domain_names` + `describe_domain`; returns name+endpoint+engine;
+    endpoint resolves `DomainStatus.Endpoint` ELSE `DomainStatus.Endpoints["vpc"]` (assert both cases).
+  - `search_opensearch_logs(domain, query='ERROR', start='1h')`: POST `https://<endpoint>/<index|_all>/_search`;
+    body = `bool` with `range` on the time field (default `@timestamp`, gte from start) + `query_string`=query;
+    `size` clamped (>50→50; default 20); returns hits.
+  - default window: no start → last 1h (a `range.<time_field>.gte` present); optional `time_field` overrides `@timestamp`.
   - `opensearch_indices(domain)`: GET `/_cat/indices?format=json`.
-  - missing domain (list empty / not found) → structured "no OpenSearch domain" error (no crash).
-  - HTTP non-2xx (e.g. 403) → structured error carrying the status.
-  - `target_account_id` in arguments is popped (cross-account path uses the assumed role; host short-circuit).
-  - sigv4: assert the signer (botocore SigV4Auth, service `es`) is applied before the request is sent.
-- [ ] Implement `agent/lambda/opensearch_mcp.py`: `lambda_handler` (mirror network_mcp dispatch);
-  `_client('opensearch'|'es', region, role_arn)` via `cross_account.get_client`; `_signed_request(method,
-  url, body, region, role_arn)` — build `AWSRequest`, sign with `SigV4Auth(creds, 'es', region)`, send
-  via stdlib `urllib` (timeout); `_search_body(query, start, end, size)`; the 3 tools; `ok()`/`err()`.
-  Bounds: `size` cap + truncate hits. Stdlib + boto3/botocore only.
-- [ ] `cd agent/lambda && python3 -m unittest test_opensearch_mcp` → green.
-- [ ] Commit: `feat(agent-platform): OpenSearch read MCP Lambda — list/search-logs/indices (sigv4, read-only)`.
+  - missing domain → structured "no OpenSearch domain" error; HTTP non-2xx (403) → structured error w/ status.
+  - `target_account_id` popped.
+  - **sigv4 (NOT mocking _signed_request):** mock `urlopen`; assert the sent request has `Authorization`
+    + `X-Amz-Date` headers AND the body bytes equal the exact buffer that was signed (signed==sent).
+- [ ] Implement `opensearch_mcp.py`: `lambda_handler` (mirror network_mcp dispatch, pop `target_account_id`);
+  `_endpoint(domain, role_arn)` (Endpoint else Endpoints.vpc); `_search_body(query, start, end, size, time_field)`;
+  `_signed_request(method, url, body_bytes, region, target_account_id)` — `creds =
+  cross_account.get_credentials(target_account_id)`; `req = AWSRequest(method, url, data=body_bytes,
+  headers={'Content-Type':'application/json','Host':<host>})`; `SigV4Auth(creds, 'es', region).add_auth(req)`;
+  send the SAME `body_bytes` with `dict(req.headers)` via stdlib `urllib` (timeout). 3 tools; `ok()`/`err()`;
+  `size` cap + truncate. Stdlib + boto3/botocore only.
+- [ ] `cd agent/lambda && python3 -m unittest test_opensearch_mcp test_cross_account` → green.
+- [ ] Commit: `feat(agent-platform): OpenSearch read MCP Lambda (sigv4, read-only) + cross_account.get_credentials`.
 
 ### Task 2: register the OpenSearch target on the monitoring gateway
 **Files:**
@@ -60,9 +76,9 @@
   to the `local.agent_lambdas` **base map** (the `var.agentcore_enabled ? {...}` branch — AWS-native,
   NOT integ-gated). `lambda_arns` output auto-includes it.
 - [ ] Grant least-privilege on the agent_lambda role (new `aws_iam_role_policy.agent_lambda_opensearch`,
-  `count = local.ac_count`, OR a statement in `agent_lambda_read`): `es:ESHttpGet` + `es:ESHttpPost` on
-  `arn:aws:es:${var.region}:${acct}:domain/*/*`; `opensearch:ListDomainNames` + `opensearch:DescribeDomain`
-  + `opensearch:DescribeDomains` on `*`. No `Principal:"*"`, no `0.0.0.0/0`.
+  `count = local.ac_count`): **all `es:` prefix** — `es:ESHttpGet` + `es:ESHttpPost` on
+  `arn:aws:es:${var.region}:${acct}:domain/*/*`; `es:ListDomainNames` + `es:DescribeDomain` +
+  `es:DescribeDomains` on `*`. NO `opensearch:` actions (managed domains use `es:`). No `Principal:"*"`.
 - [ ] `terraform -chdir=terraform/v2/foundation fmt` (revert out-of-scope fmt drift) + `validate` → green.
 - [ ] Commit: `feat(agent-platform): provision opensearch-mcp Lambda + scoped es/opensearch IAM (read-only)`.
 
@@ -77,7 +93,8 @@
   `security_group_ids = [aws_security_group.service.id]`. Other Lambdas: no vpc_config (unchanged).
 - [ ] When VPC is on, the lambda role needs ENI perms: add `ec2:CreateNetworkInterface`,
   `ec2:DescribeNetworkInterfaces`, `ec2:DeleteNetworkInterface` (Resource `*`, the AWS-required shape)
-  gated `count = var.opensearch_vpc_enabled ? 1 : 0` (separate policy → off = not present).
+  gated `count = var.agentcore_enabled && var.opensearch_vpc_enabled ? 1 : 0` (compound — the policy
+  references `agent_lambda[0]`, which only exists when agentcore_enabled; separate policy → off = absent).
 - [ ] `terraform -chdir=terraform/v2/foundation fmt` + `validate` → green (validate with the flag both
   default-off and, if feasible, a `-var opensearch_vpc_enabled=true` validate to catch the dynamic block).
 - [ ] Commit: `feat(agent-platform): opensearch_vpc_enabled flag — optional VPC attach for VPC-only domains (off)`.
