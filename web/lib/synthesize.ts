@@ -6,8 +6,8 @@ import { BedrockRuntimeClient, ConverseStreamCommand } from '@aws-sdk/client-bed
 // deterministic concatenation so a synthesis failure can never blank the chat answer.
 
 export interface SynthPart { gateway: string; text: string }
-/** Injectable streamer: (system, user, modelId) → text deltas. */
-export type SynthSend = (system: string, user: string, modelId: string) => AsyncIterable<string>;
+/** Injectable streamer: (system, user, modelId, abortSignal?) → text deltas. */
+export type SynthSend = (system: string, user: string, modelId: string, abortSignal?: AbortSignal) => AsyncIterable<string>;
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 const MODEL_ID = process.env.SYNTHESIS_MODEL_ID || 'global.anthropic.claude-sonnet-4-6';
@@ -24,14 +24,14 @@ const SYSTEM =
 
 let client: BedrockRuntimeClient | null = null;
 
-const bedrockSend: SynthSend = async function* (system, user, modelId) {
+const bedrockSend: SynthSend = async function* (system, user, modelId, abortSignal) {
   if (!client) client = new BedrockRuntimeClient({ region: REGION });
   const res = await client.send(new ConverseStreamCommand({
     modelId,
     system: [{ text: system }],
     messages: [{ role: 'user', content: [{ text: user }] }],
     inferenceConfig: { maxTokens: 4096, temperature: 0.2 },
-  }));
+  }), { abortSignal }); // stop token generation (and cost) if the client disconnects
   for await (const ev of res.stream ?? []) {
     const d = ev.contentBlockDelta?.delta;
     if (d && 'text' in d && d.text) yield d.text;
@@ -58,7 +58,7 @@ function fallbackConcat(parts: SynthPart[]): string {
 export async function* synthesizeStream(
   userPrompt: string,
   parts: SynthPart[],
-  opts: { send?: SynthSend } = {},
+  opts: { send?: SynthSend; abortSignal?: AbortSignal } = {},
 ): AsyncIterable<string> {
   const usable = parts.filter((p) => p.text && p.text.trim().length > 0);
   if (usable.length === 0) return;
@@ -66,12 +66,15 @@ export async function* synthesizeStream(
   const send = opts.send ?? bedrockSend;
   let yielded = false;
   try {
-    for await (const t of send(SYSTEM, buildSynthUser(userPrompt, usable), MODEL_ID)) {
+    for await (const t of send(SYSTEM, buildSynthUser(userPrompt, usable), MODEL_ID, opts.abortSignal)) {
       yielded = true;
       yield t;
     }
   } catch {
     /* fall through to the deterministic fallback below if nothing has streamed yet */
   }
+  // Trade-off (deliberate): if the stream errored/aborted AFTER some text was already emitted, we
+  // keep the partial output rather than appending the concat (which would read as a jarring restart).
+  // The fallback only fires when NOTHING streamed, guaranteeing the answer is never blank.
   if (!yielded) yield fallbackConcat(usable);
 }

@@ -55,6 +55,14 @@ describe('synthesizeStream', () => {
     expect(out).toContain('### data');
   });
 
+  it('threads the abortSignal through to the streamer (cost stop on disconnect)', async () => {
+    const ac = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const send: SynthSend = async function* (_s, _u, _m, signal) { seenSignal = signal; yield 'x'; };
+    await collect(synthesizeStream('q', parts, { send, abortSignal: ac.signal }));
+    expect(seenSignal).toBe(ac.signal);
+  });
+
   it('prompt-injection in a domain answer is wrapped as data (system immutable)', async () => {
     let seenUser = '';
     const evil = [

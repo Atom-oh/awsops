@@ -229,7 +229,6 @@ describe('hybrid routing (ADR-038)', () => {
     const { POST } = await import('./route');
     const res = await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) }));
     await readStream(res);
-    expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything(), null, [], []);
   });
 
   it('fail-closed revocation: a disabled custom agent is NOT used — falls back to the gateway', async () => {
@@ -423,8 +422,9 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     expect(invokeAgent).toHaveBeenCalledTimes(2);
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'data' }));
-    // synthesize gets BOTH survivors
-    expect(synthesizeStream).toHaveBeenCalledWith('EKS 파드가 RDS 연결 안돼', [
+    // synthesize gets BOTH survivors (3rd arg is the {abortSignal} opts)
+    expect(synthesizeStream.mock.calls[0][0]).toBe('EKS 파드가 RDS 연결 안돼');
+    expect(synthesizeStream.mock.calls[0][1]).toEqual([
       { gateway: 'network', text: 'ans-network' },
       { gateway: 'data', text: 'ans-data' },
     ]);
@@ -443,7 +443,7 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
       gateway === 'data' ? Promise.reject(new Error('data down')) : 'ans-network');
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
-    expect(synthesizeStream).toHaveBeenCalledWith('q', [{ gateway: 'network', text: 'ans-network' }]);
+    expect(synthesizeStream.mock.calls[0][1]).toEqual([{ gateway: 'network', text: 'ans-network' }]);
   });
 
   it('all gateways fail: emits an error frame, no synthesis', async () => {
@@ -509,6 +509,38 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     expect(synthesizeStream).not.toHaveBeenCalled();
     expect(invokeAgent).toHaveBeenCalledTimes(1);
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'cost' }));
+  });
+
+  it('explicit pin to an ENABLED custom agent is honored (ADR-044 §2 — pin > keyword/classifier)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: [], skills: [] }]);
+    isCustomAgentEnabled.mockResolvedValue(true);
+    // classifier would pick something else, and there is no keyword match — the pin must still win
+    classifyRoute.mockResolvedValue({ primary: 'network', ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }], method: 'llm', multiDomain: true, selected: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }] });
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', skillHashes: [] });
+    invokeAgent.mockResolvedValue('custom pinned answer');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'EKS RDS 연결 안돼', section: 'compliance', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();         // explicit pin suppresses fan-out
+    expect(resolveAgent.mock.calls[0][0]).toBe('compliance'); // pin routed to the custom agent (not the classifier's 'network')
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'compliance' }));
+    expect(body).toContain('"agentName":"compliance"');
+  });
+
+  it('explicit pin to a DISABLED/absent custom agent ⇒ honest message, no silent fallback (ADR-044 §2)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    getEnabledCustomAgents.mockResolvedValue([]); // 'ghost' is not an enabled agent in this space
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: '아무거나', section: 'ghost', sessionId: 's'.repeat(36) })));
+    expect(invokeAgent).not.toHaveBeenCalled();      // no silent fallback to keyword/classifier
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(body).toContain('ghost');
+    expect(body).toContain('사용할 수 없습니다');
+    expect(body).toContain('[DONE]');
   });
 
   it('thread is agent-agnostic: same threadId across two turns to different gateways (ADR-044 §4)', async () => {

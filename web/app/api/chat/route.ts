@@ -63,12 +63,29 @@ export async function POST(request: Request) {
   const accountAlias = currentAccountAlias();
   const customAgents = await getEnabledCustomAgents(accountId);   // [] when Aurora off / no customs
   const space = await getAgentSpace(accountId);                   // null ⇒ Phase-1
-  const pinIsValid = !!(body.section && sectionByKey(body.section));
+  const pinIsBuiltin = !!(body.section && sectionByKey(body.section));
+  // ADR-044 §2: an explicit pin (picker / pin chip) may target a CUSTOM agent, not only a built-in
+  // section — and it sits ABOVE keyword-matched custom agents and the classifier in the ladder.
+  // A non-built-in `section` is a custom-agent pin attempt (hybrid path only; legacy is unchanged).
+  const customPinTarget = (hybridOn && body.section && !pinIsBuiltin) ? body.section : null;
+  const customPinEnabled = customPinTarget
+    ? (customAgents.some((a) => a.name === customPinTarget) && (await isCustomAgentEnabled(customPinTarget)))
+    : false;
+  // ADR-044 §2: a pin to an agent disabled/absent in this Agent Space gets an HONEST message,
+  // never a silent fallback to keyword/classifier routing.
+  const unavailablePin = !!customPinTarget && !customPinEnabled;
+  const pinIsValid = pinIsBuiltin || customPinEnabled;
   // ADR-031/039 fail-closed revocation: pickCustomAgent matches against the 30s-cached enabled
   // set; re-check the picked custom agent against Aurora (authoritative) before routing to it, so
   // a just-disabled agent is unusable immediately on every instance (not after the cache TTL).
-  const customPick = (hybridOn && pinIsValid) ? null : pickCustomAgent(prompt, customAgents);
-  const routeKey = customPick && (await isCustomAgentEnabled(customPick)) ? customPick : gateway;
+  const customPick = unavailablePin
+    ? null
+    : customPinEnabled
+      ? customPinTarget                                   // explicit custom pin — highest precedence
+      : (hybridOn && pinIsBuiltin) ? null : pickCustomAgent(prompt, customAgents);
+  const routeKey = customPinEnabled
+    ? customPinTarget!
+    : (customPick && (await isCustomAgentEnabled(customPick)) ? customPick : gateway);
   // ADR-039 P2: enabled egress-READ integrations contribute tools + bounded context (per-space scoped).
   // ingress + READ_WRITE contribute nothing here (writes go via the mutating gate).
   // P2-infra inc2: also carry connection details so the resolver can hand agent.py a live-connect list.
@@ -91,13 +108,14 @@ export async function POST(request: Request) {
   const spec = resolveAgent(routeKey, customAgents, space, egressReadIntegrations, proposableWrites); // server-side enforcement
   // ADR-044: cross-domain auto-synthesis (flag MULTI_ROUTE_SYNTHESIS_ENABLED, default OFF ⇒ unchanged
   // single-route path). Only built-in multi-domain fans out — a pinned/picked custom agent stays single.
-  // Recompute multiDomain from the ACTIVE selected set here (gate MAJOR: route.multiDomain could be
-  // stale vs the live section registry); each fan-out gateway gets its OWN built-in invoke input
-  // (gate CRITICAL: never reuse the primary's spec/toolAllowlist across gateways).
+  // `fanGateways` is the ACTIVE subset of route.selected — the FINAL multi-domain decision is
+  // `fanGateways.length >= 2` (gate MAJOR: re-derived from the live `active` flags here, so a stale
+  // route.multiDomain can never force a fan-out over an inactive route). Each fan-out gateway gets
+  // its OWN built-in invoke input (gate CRITICAL: never reuse the primary's spec/toolAllowlist).
   const synthOn = process.env.MULTI_ROUTE_SYNTHESIS_ENABLED === 'true';
   const fanGateways = (route?.selected ?? []).filter((s) => s.active).map((s) => s.key).slice(0, 3);
-  const doFanout = synthOn && hybridOn && !customPick && spec.tier === 'builtin'
-    && route?.multiDomain === true && fanGateways.length >= 2;
+  const doFanout = synthOn && hybridOn && !customPick && !unavailablePin && spec.tier === 'builtin'
+    && fanGateways.length >= 2;
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).
   // Skipped on the fan-out path (every fanGateway is already active-filtered).
   const inactiveSection = !doFanout && hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
@@ -134,6 +152,17 @@ export async function POST(request: Request) {
         ...(spec.tier === 'custom' ? { customAgent: spec.agentName, spaceVersion: spec.spaceVersion } : {}),
       };
       controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(meta)}\n\n`));
+      // ADR-044 §2: an explicit pin to a custom agent disabled/absent in this Agent Space gets an
+      // HONEST message — never a silent fallback to keyword/classifier routing.
+      if (unavailablePin) {
+        const name = String(body.section).slice(0, 40);
+        const guide = `🔒 선택한 에이전트 '${name}'는 이 Agent Space에서 사용할 수 없습니다(비활성화되었거나 존재하지 않음). 다른 에이전트를 선택하거나 자동 라우팅으로 다시 시도해 주세요.`;
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: guide })}\n\n`));
+        record(guide);
+        controller.enqueue(enc.encode('data: [DONE]\n\n'));
+        controller.close();
+        return;
+      }
       // ADR-044 cross-domain auto-synthesis: fan out over the selected built-in gateways, then merge.
       if (doFanout) {
         // gate CRITICAL: each gateway gets its OWN built-in invoke input (no shared primary spec).
@@ -149,13 +178,14 @@ export async function POST(request: Request) {
           return;
         }
         // synthesizeStream: ≥2 survivors → merged stream; exactly 1 → passthrough (no extra Bedrock call).
+        // abortSignal threaded into the Bedrock call so a client disconnect stops token generation (cost).
         let full = '';
-        for await (const t of synthesizeStream(prompt, survivors)) {
+        for await (const t of synthesizeStream(prompt, survivors, { abortSignal: request.signal })) {
           if (request.signal.aborted) break;
           full += t;
           controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: t })}\n\n`));
         }
-        record(full); // store the merged answer + via meta
+        if (!request.signal.aborted) record(full); // don't persist a half-streamed, client-aborted answer
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
         controller.close();
         return;
