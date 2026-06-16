@@ -14,6 +14,11 @@ const AGENT_TYPES = ['generic', 'on_demand', 'triage', 'rca', 'mitigation', 'eva
 const INTEG_KINDS_EGRESS = ['grafana', 'datadog', 'splunk', 'prometheus', 'newrelic', 'notion', 'confluence', 'jira', 'servicenow', 'slack', 'github', 'gitlab', 'custom_mcp'];
 const INTEG_KINDS_INGRESS = ['cloudwatch_sns', 'alertmanager', 'grafana_alert', 'pagerduty', 'datadog_monitor', 'generic_webhook'];
 const INTEG_TRANSPORTS = ['sigv4', 'oauth_client_credentials', 'oauth_3lo', 'api_key'];
+// Curated read connectors (built-in tools that just need a credential — keyed by slug=kind,
+// mirrors KNOWN_CONNECTOR_SLUGS in web/lib/integration-credentials.ts). No endpoint/transport.
+const CONNECTORS = [
+  { slug: 'notion', label: 'Notion', help: 'Create an internal integration at notion.so/my-integrations, share your pages/databases with it, then paste its token (secret_…).' },
+];
 
 export default function CustomizationPage() {
   const [agents, setAgents] = useState<AgentRow[]>([]);
@@ -223,69 +228,83 @@ export default function CustomizationPage() {
         ))}
       </section>
 
-      <section className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
-        <h2 className="text-[13px] font-semibold">Integrations</h2>
-        <div className="flex gap-2 text-[12px]">
-          {['egress', 'ingress'].map((d) => (
-            <button key={d} onClick={() => setIntegForm({ ...integForm, direction: d, kind: d === 'egress' ? 'grafana' : 'pagerduty' })}
-              className={`rounded border px-2 py-1 ${integForm.direction === d ? 'border-brand-500 text-brand-600' : 'border-ink-100 text-ink-400'}`}>{d}</button>
-          ))}
+      <section className="space-y-3 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
+        <div>
+          <h2 className="text-[13px] font-semibold">Connectors</h2>
+          <p className="text-[11px] text-ink-400">Connect a tool by pasting its credential — that&apos;s it. Stored encrypted in Secrets Manager; never displayed back. Then ask the assistant to use it.</p>
         </div>
-        <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="name (kebab-case)" value={integForm.name} onChange={(e) => setIntegForm({ ...integForm, name: e.target.value })} />
-        <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={integForm.kind} onChange={(e) => setIntegForm({ ...integForm, kind: e.target.value })}>
-          {(integForm.direction === 'egress' ? INTEG_KINDS_EGRESS : INTEG_KINDS_INGRESS).map((k) => <option key={k} value={k}>{k}</option>)}
-        </select>
-        {integForm.direction === 'egress' ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="https endpoint" value={integForm.endpoint} onChange={(e) => setIntegForm({ ...integForm, endpoint: e.target.value })} />
-            <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={integForm.transport} onChange={(e) => setIntegForm({ ...integForm, transport: e.target.value })}>
-              {INTEG_TRANSPORTS.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-            <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={integForm.capability} onChange={(e) => setIntegForm({ ...integForm, capability: e.target.value })}>
-              <option value="read">read</option><option value="read_write">read_write</option>
-            </select>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="auth mode (e.g. hmac, vendor_sig)" value={integForm.authMode} onChange={(e) => setIntegForm({ ...integForm, authMode: e.target.value })} />
-            <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="source allowlist (comma IPs)" value={integForm.sourceAllowlist} onChange={(e) => setIntegForm({ ...integForm, sourceAllowlist: e.target.value })} />
-            <span className="text-[11px] text-ink-400">trigger: incident (receive URL generated on create)</span>
-          </div>
-        )}
-        <button onClick={createIntegration} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">Register integration</button>
-        {integrations.map((i) => (
-          <div key={i.id} className="space-y-2 rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="font-semibold">{i.name}</span>{' '}
-                <span className="text-ink-400">({i.tier}, {i.direction}, {i.kind}, {i.capability})</span>
-                {i.direction === 'ingress' && i.receivePath && <div className="text-ink-500">{i.receivePath}</div>}
+        {CONNECTORS.map((c) => {
+          const configured = credConfigured.includes(c.slug);
+          return (
+            <div key={c.slug} className="space-y-1.5 rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold">{c.label}</span>
+                {configured
+                  ? <span className="text-emerald-600">connected ✓</span>
+                  : <span className="text-ink-400">not connected ✗</span>}
               </div>
-              {i.tier === 'custom'
-                ? <button onClick={() => toggleIntegration(i.id, i.enabled)} className={`rounded border px-2 py-1 text-[12px] ${i.enabled ? 'border-emerald-300 text-emerald-600' : 'border-ink-100 text-ink-400'}`}>{i.enabled ? 'Enabled' : 'Disabled'}</button>
-                : <span className="text-ink-400">built-in</span>}
-            </div>
-            {i.direction === 'egress' && (
-              <div className="flex items-center gap-2 border-t border-ink-100 pt-2">
-                <span className="text-ink-400">credential ({i.kind}):</span>
-                {credConfigured.includes(i.kind)
-                  ? <span className="text-emerald-600">configured ✓</span>
-                  : <span className="text-ink-400">not set ✗</span>}
+              <p className="text-[11px] text-ink-400">{c.help}</p>
+              <div className="flex items-center gap-2">
                 <input
                   type="password"
                   autoComplete="off"
-                  placeholder={`${i.kind} token`}
-                  value={credInput[i.kind] || ''}
-                  onChange={(e) => setCredInput((m) => ({ ...m, [i.kind]: e.target.value }))}
+                  placeholder={configured ? 'replace token…' : `${c.label} token`}
+                  value={credInput[c.slug] || ''}
+                  onChange={(e) => setCredInput((m) => ({ ...m, [c.slug]: e.target.value }))}
                   className="flex-1 rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]"
                 />
-                <button onClick={() => saveCredential(i.kind)} className="rounded border border-ink-200 px-2 py-1 text-[12px]">Save credential</button>
+                <button onClick={() => saveCredential(c.slug)} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">{configured ? 'Update' : 'Connect'}</button>
+              </div>
+            </div>
+          );
+        })}
+
+        <details className="mt-2 border-t border-ink-100 pt-2">
+          <summary className="cursor-pointer text-[12px] text-ink-500">Advanced — register a custom integration</summary>
+          <div className="mt-2 space-y-2">
+            <div className="flex gap-2 text-[12px]">
+              {['egress', 'ingress'].map((d) => (
+                <button key={d} onClick={() => setIntegForm({ ...integForm, direction: d, kind: d === 'egress' ? 'grafana' : 'pagerduty' })}
+                  className={`rounded border px-2 py-1 ${integForm.direction === d ? 'border-brand-500 text-brand-600' : 'border-ink-100 text-ink-400'}`}>{d}</button>
+              ))}
+            </div>
+            <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="name (kebab-case)" value={integForm.name} onChange={(e) => setIntegForm({ ...integForm, name: e.target.value })} />
+            <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={integForm.kind} onChange={(e) => setIntegForm({ ...integForm, kind: e.target.value })}>
+              {(integForm.direction === 'egress' ? INTEG_KINDS_EGRESS : INTEG_KINDS_INGRESS).map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+            {integForm.direction === 'egress' ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="https endpoint" value={integForm.endpoint} onChange={(e) => setIntegForm({ ...integForm, endpoint: e.target.value })} />
+                <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={integForm.transport} onChange={(e) => setIntegForm({ ...integForm, transport: e.target.value })}>
+                  {INTEG_TRANSPORTS.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={integForm.capability} onChange={(e) => setIntegForm({ ...integForm, capability: e.target.value })}>
+                  <option value="read">read</option><option value="read_write">read_write</option>
+                </select>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="auth mode (e.g. hmac, vendor_sig)" value={integForm.authMode} onChange={(e) => setIntegForm({ ...integForm, authMode: e.target.value })} />
+                <input className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="source allowlist (comma IPs)" value={integForm.sourceAllowlist} onChange={(e) => setIntegForm({ ...integForm, sourceAllowlist: e.target.value })} />
+                <span className="text-[11px] text-ink-400">trigger: incident (receive URL generated on create)</span>
               </div>
             )}
+            <button onClick={createIntegration} className="rounded border border-ink-200 px-3 py-1 text-[12px] font-medium">Register integration</button>
+            {integrations.map((i) => (
+              <div key={i.id} className="flex items-center justify-between rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
+                <div>
+                  <span className="font-semibold">{i.name}</span>{' '}
+                  <span className="text-ink-400">({i.tier}, {i.direction}, {i.kind}, {i.capability})</span>
+                  {i.direction === 'ingress' && i.receivePath && <div className="text-ink-500">{i.receivePath}</div>}
+                </div>
+                {i.tier === 'custom'
+                  ? <button onClick={() => toggleIntegration(i.id, i.enabled)} className={`rounded border px-2 py-1 text-[12px] ${i.enabled ? 'border-emerald-300 text-emerald-600' : 'border-ink-100 text-ink-400'}`}>{i.enabled ? 'Enabled' : 'Disabled'}</button>
+                  : <span className="text-ink-400">built-in</span>}
+              </div>
+            ))}
+            {integrations.length === 0 && <span className="text-[12px] text-ink-400">no custom integrations yet</span>}
           </div>
-        ))}
-        <p className="text-[11px] text-ink-400">Credentials are keyed by integration kind and stored encrypted in Secrets Manager — the token is never displayed back.</p>
-        {integrations.length === 0 && <span className="text-[12px] text-ink-400">no integrations yet</span>}
+        </details>
       </section>
 
       <section className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
