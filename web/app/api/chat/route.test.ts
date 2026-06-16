@@ -475,6 +475,42 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     expect(body).not.toContain('합성된 답변'); // single path, not the synth output
   });
 
+  it('gate MAJOR: recomputes multiDomain from ACTIVE selected — a stale inactive entry is dropped', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({
+      primary: 'network',
+      ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'container', score: 0.6, active: false }],
+      method: 'llm', multiDomain: true,
+      selected: [{ key: 'network', score: 0.9, active: true }, { key: 'container', score: 0.6, active: false }],
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockResolvedValue('single');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled(); // only network is active ⇒ <2 ⇒ no synthesis
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
+  });
+
+  it('pin wins over fan-out: a pinned route never synthesizes', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({
+      primary: 'cost', ranked: [{ key: 'cost', score: 1, active: true }], method: 'pin',
+      multiDomain: false, selected: [{ key: 'cost', score: 1, active: true }],
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'cost', skill: 'cost', agentName: 'cost', skillHashes: [] });
+    invokeAgent.mockResolvedValue('pinned');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'EKS RDS 연결', section: 'cost', switchedFrom: 'network', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'cost' }));
+  });
+
   it('only one active selected route: no fan-out (single path)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
