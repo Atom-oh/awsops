@@ -20,6 +20,16 @@
 ## Non-goals
 - Loki/Tempo/Mimir (next siblings). No NL→PromQL, no writes, no exemplars/recording rules.
 
+## P2 consensus gate — round 1 findings & resolutions (panel: kiro opus-4.8 / kimi-k2.5 / glm-5)
+- **MAJOR (opus, valid) — bound total SAMPLES, not just series count.** A `query_range` matrix can be
+  ~100 series × ~11k points → tens of MB, blowing the 6 MB Lambda response limit even when series count
+  is capped. **Resolution: Task 1 caps points-per-series AND a global sample budget (truncate `values[]`,
+  set `truncated:true`); a test asserts a many-samples-per-series matrix is truncated under budget.**
+- **kimi's three Task-4 "CRITICAL/MAJOR" (env list / ENI gate / vpc_config missing prometheus) — NOT
+  defects:** these are exactly what Task 4 already prescribes to ADD (kimi read the current ai.tf, where
+  prometheus isn't wired yet, and restated the plan's own steps). No plan change; Task 4 stands.
+- glm: NO BLOCKING.
+
 ## Tasks (TDD; per-task commit; `python3 -m unittest` / vitest / catalog_check / `terraform validate` green)
 
 ### Task 1: Prometheus read-only MCP Lambda (TDD)
@@ -37,7 +47,9 @@
   - envelope `status!='success'` → structured error carrying `data.error`/`errorType`.
   - not connected (load_datasource raises NotConnected) → structured error; SSRF block (assert_host_allowed
     raises) → "endpoint blocked"; HTTP 4xx/5xx → structured error.
-  - `target_account_id` popped; result truncation (a matrix with > cap series is truncated + `truncated:true`).
+  - `target_account_id` popped; result bounding: cap SERIES count AND points-per-series AND a global
+    sample budget — a matrix with many samples-per-series is truncated (`values[]` trimmed) + `truncated:true`
+    (test the many-samples case explicitly, not just the series-count case).
 - [ ] Implement `agent/lambda/prometheus_mcp.py`: `lambda_handler` (mirror clickhouse dispatch);
   `load_datasource('prometheus')` → `assert_host_allowed(endpoint)` → build URL with
   `urllib.parse.urlencode` → `http_json('GET', url, headers=auth_headers(creds))`; `_parse_time`
