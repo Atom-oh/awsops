@@ -173,6 +173,16 @@ QUERIES = {
         "record_id",
         "region",
     ),
+    "ecs_task": (
+        # Backend resolution for ALB/NLB ip targets: an awsvpc task's ENI private IP lives in
+        # attachments[].Details[Name='privateIPv4Address'].Value (PascalCase jsonb); `group` (a SQL
+        # reserved word → quoted) = "service:<name>". Matches a TG ip target → ECS service/task.
+        "SELECT task_arn, region, account_id, cluster_arn, \"group\" AS task_group, last_status, "
+        "launch_type, task_definition_arn, attachments, containers "
+        "FROM aws_ecs_task ORDER BY task_arn",
+        "task_arn",
+        "region",
+    ),
     "elasticache": (
         # NON-metric detail fields only; v1's ecMetrics CloudWatch JOIN is live/heavy → F5, not stored here.
         "SELECT cache_cluster_id, region, account_id, arn, engine, engine_version, cache_node_type, "

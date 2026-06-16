@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { INVENTORY_TYPES, inventoryGroups, isDeprecatedRuntime, DEPRECATED_RUNTIMES } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
-  it('has the 24 wave types (D2 13 + D3 9 + target_group + route53)', () => {
+  it('has the 25 wave types (D2 13 + D3 9 + target_group + route53 + ecs_task)', () => {
     const keys = Object.keys(INVENTORY_TYPES);
     expect(keys).toContain('ec2'); expect(keys).toContain('s3'); expect(keys).toContain('iam_role');
     expect(keys).toContain('cloudfront'); expect(keys).toContain('cloudwatch_alarm'); expect(keys).toContain('msk');
-    expect(keys).toContain('target_group'); expect(keys).toContain('route53');
-    expect(keys.length).toBe(24);
+    expect(keys).toContain('target_group'); expect(keys).toContain('route53'); expect(keys).toContain('ecs_task');
+    expect(keys.length).toBe(25);
   });
   it('every type has a label, group, and >=1 column', () => {
     for (const [k, v] of Object.entries(INVENTORY_TYPES)) {

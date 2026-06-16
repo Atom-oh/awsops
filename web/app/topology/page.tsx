@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Circle, Copy, Sparkles, type LucideIcon } from 'lucide-react';
+import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, type LucideIcon } from 'lucide-react';
 import { Background, Controls, MiniMap, Position, type Node, type Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
@@ -15,15 +15,15 @@ import { useTheme } from '@/lib/use-theme';
 // ReactFlow touches the DOM on mount — load it client-only to avoid SSR mismatch.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
 
-const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda'] as const;
+const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda', 'ecs_task'] as const;
 type InvType = (typeof TYPES)[number];
 type Row = Record<string, unknown>;
 
-// InvType → FlowInput key (target_group maps to `tg`). ec2/lambda enrich target labels only.
-type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda';
+// InvType → FlowInput key (target_group→tg, ecs_task→ecsTask). ec2/lambda/ecs enrich target labels.
+type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda' | 'ecsTask';
 const FLOW_KEY: Record<InvType, RowKey> = {
   route53: 'route53', cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg', waf: 'waf',
-  ec2: 'ec2', lambda: 'lambda',
+  ec2: 'ec2', lambda: 'lambda', ecs_task: 'ecsTask',
 };
 
 // Node fill/border per FlowKind. Light + dark variants (ReactFlow dark colorMode flips default
@@ -63,7 +63,7 @@ const KIND_ICON: Record<FlowKind, IconC> = {
   waf: Shield, target: Circle, origin: CircleHelp, more: MoreHorizontal,
 };
 // target sub-icon by resolved backend: EKS pod / EC2 / Lambda, else a generic dot.
-const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ec2: Server, lambda: Zap };
+const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ecs: Boxes, ec2: Server, lambda: Zap };
 
 function iconFor(n: FlowNode): IconC {
   if (n.kind === 'target') return RESOLVED_ICON[String(n.meta?.resolved ?? '')] ?? Circle;
@@ -79,6 +79,7 @@ function chipsFor(n: FlowNode): string[] {
     case 'target': {
       const r = String(n.meta?.resolved ?? '');
       if (r === 'eks') return ['이 deployment 상태/이벤트 진단', '관련 pod 로그 필터', 'IAM/RBAC 권한 점검'];
+      if (r === 'ecs') return ['이 서비스 task 상태/배포 진단', '컨테이너 로그 필터', 'task role 권한 점검'];
       if (r === 'lambda') return ['이 함수 최근 에러 로그', 'IAM 권한 점검', '동시성/타임아웃 점검'];
       return ['이 인스턴스 로그 필터', '보안그룹 점검', 'IAM 권한 점검'];
     }

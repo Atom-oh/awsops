@@ -146,6 +146,17 @@ describe('buildFlowGraph — backend resolution (instance/lambda)', () => {
     expect(g.nodes.find((n) => n.kind === 'target')?.label).toBe('10.0.1.9');
   });
 
+  it('resolves an ip target to an ECS service via synced ecsTask (attachments PascalCase)', () => {
+    const tgIp = { resource_id: 'arn:tg:ip', target_group_name: 'ip', target_type: 'ip',
+      target_health_descriptions: [{ Target: { Id: '10.20.11.244' }, TargetHealth: { State: 'healthy' } }] };
+    const task = { resource_id: 'arn:aws:ecs:ap-northeast-2:1:task/cl/abc', cluster_arn: 'arn:aws:ecs:ap-northeast-2:1:cluster/prod', task_group: 'service:ai-trader-api',
+      attachments: [{ Type: 'ElasticNetworkInterface', Details: [{ Name: 'privateIPv4Address', Value: '10.20.11.244' }] }] };
+    const g = buildFlowGraph({ tg: [tgIp], ecsTask: [task] });
+    const t = g.nodes.find((n) => n.kind === 'target');
+    expect(t?.label).toBe('ai-trader-api');
+    expect(t?.meta?.resolved).toBe('ecs');
+  });
+
   it('resolves an ip target to an EKS workload via ipResolved', () => {
     const tgIp = { resource_id: 'arn:tg:ip', target_group_name: 'ip', target_type: 'ip',
       target_health_descriptions: [{ Target: { Id: '10.0.1.9' }, TargetHealth: { State: 'healthy' } }] };
