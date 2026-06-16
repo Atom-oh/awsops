@@ -28,6 +28,8 @@ vi.mock('@/lib/integrations', () => ({ getEnabledIntegrations: (...a: unknown[])
 vi.mock('@/lib/trace', () => ({ recordCustomAgentTrace: (...a: unknown[]) => recordCustomAgentTrace(...a) }));
 const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
+const synthesizeStream = vi.fn();
+vi.mock('@/lib/synthesize', () => ({ synthesizeStream: (...a: unknown[]) => synthesizeStream(...a) }));
 
 function req(body: unknown, cookie = 'awsops_token=t') {
   return new Request('http://x/api/chat', {
@@ -70,10 +72,14 @@ beforeEach(() => {
   classifyPrompt.mockReset();
   recordExchange.mockReset();
   recordExchange.mockResolvedValue(undefined);
+  synthesizeStream.mockReset();
+  // default: real-shaped async-generator returning a deterministic merged answer
+  synthesizeStream.mockImplementation(async function* () { yield '합성된 답변'; });
   delete process.env.HYBRID_ROUTING_ENABLED;
+  delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED;
 });
 
-afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; });
+afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED; });
 
 describe('POST /api/chat', () => {
   it('401 when unauthenticated', async () => {
@@ -378,5 +384,112 @@ describe('ADR-031 Phase 2 — per-account space wiring', () => {
     const body = await readStream(await POST(req({ prompt: 'cis check', section: 'security', sessionId: 's'.repeat(36) })));
     expect(body).toContain('"spaceVersion":7');
     expect(recordCustomAgentTrace).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'compliance', spaceVersion: 7 }));
+  });
+});
+
+describe('cross-domain auto-synthesis (ADR-044)', () => {
+  const multiRoute = {
+    primary: 'network',
+    ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }],
+    method: 'llm' as const,
+    multiDomain: true,
+    selected: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }],
+  };
+
+  it('flag OFF: multiDomain route still uses the single path (regression lock)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    // MULTI_ROUTE_SYNTHESIS_ENABLED intentionally unset
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockResolvedValue('single answer');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'EKS 파드가 RDS 연결 안돼', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(body).not.toContain('합성된 답변'); // single path, not the synth output
+  });
+
+  it('flag ON + multiDomain: fans out per-gateway and synthesizes', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockImplementation(async ({ gateway }: { gateway: string }) => `ans-${gateway}`);
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'EKS 파드가 RDS 연결 안돼', sessionId: 's'.repeat(36) })));
+    // gate CRITICAL: one invoke per selected gateway, each with its OWN gateway
+    expect(invokeAgent).toHaveBeenCalledTimes(2);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'data' }));
+    // synthesize gets BOTH survivors
+    expect(synthesizeStream).toHaveBeenCalledWith('EKS 파드가 RDS 연결 안돼', [
+      { gateway: 'network', text: 'ans-network' },
+      { gateway: 'data', text: 'ans-data' },
+    ]);
+    expect(body).toContain('합성된 답변');
+    expect(body).toContain('"via":"multi:network+data"'); // gate MINOR: via in meta
+    expect(body).toContain('[DONE]');
+  });
+
+  it('one gateway fails: synthesize runs over the survivor only', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockImplementation(async ({ gateway }: { gateway: string }) =>
+      gateway === 'data' ? Promise.reject(new Error('data down')) : 'ans-network');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).toHaveBeenCalledWith('q', [{ gateway: 'network', text: 'ans-network' }]);
+  });
+
+  it('all gateways fail: emits an error frame, no synthesis', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockRejectedValue(new Error('all down'));
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(body).toContain('"error"');
+  });
+
+  it('custom-agent pick suppresses fan-out even on a multiDomain route', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
+    pickCustomAgent.mockReturnValue('compliance');
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', skillHashes: [] });
+    invokeAgent.mockResolvedValue('custom answer');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'cis check', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(body).not.toContain('합성된 답변'); // single path, not the synth output
+  });
+
+  it('only one active selected route: no fan-out (single path)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({
+      primary: 'network',
+      ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'container', score: 0.6, active: false }],
+      method: 'llm', multiDomain: false,
+      selected: [{ key: 'network', score: 0.9, active: true }],
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockResolvedValue('single');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
   });
 });

@@ -2,6 +2,7 @@ import { verifyUser } from '@/lib/auth';
 import { invokeAgent, type ChatMsg } from '@/lib/agentcore';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt } from '@/lib/classifier';
+import { synthesizeStream } from '@/lib/synthesize';
 import { sectionByKey } from '@/lib/sections';
 import { getEnabledCustomAgents } from '@/lib/catalog-source';
 import { isCustomAgentEnabled } from '@/lib/catalog';
@@ -88,16 +89,27 @@ export async function POST(request: Request) {
     .filter((i) => i.direction === 'egress' && i.capability === 'read_write')
     .map((i) => ({ name: i.name, writeActionRefs: i.writeActionRefs }));
   const spec = resolveAgent(routeKey, customAgents, space, egressReadIntegrations, proposableWrites); // server-side enforcement
+  // ADR-044: cross-domain auto-synthesis (flag MULTI_ROUTE_SYNTHESIS_ENABLED, default OFF ⇒ unchanged
+  // single-route path). Only built-in multi-domain fans out — a pinned/picked custom agent stays single.
+  // Recompute multiDomain from the ACTIVE selected set here (gate MAJOR: route.multiDomain could be
+  // stale vs the live section registry); each fan-out gateway gets its OWN built-in invoke input
+  // (gate CRITICAL: never reuse the primary's spec/toolAllowlist across gateways).
+  const synthOn = process.env.MULTI_ROUTE_SYNTHESIS_ENABLED === 'true';
+  const fanGateways = (route?.selected ?? []).filter((s) => s.active).map((s) => s.key).slice(0, 3);
+  const doFanout = synthOn && hybridOn && !customPick && spec.tier === 'builtin'
+    && route?.multiDomain === true && fanGateways.length >= 2;
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).
-  const inactiveSection = hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
+  // Skipped on the fan-out path (every fanGateway is already active-filtered).
+  const inactiveSection = !doFanout && hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
     ? sectionByKey(spec.gateway)! : null;
   const messages: ChatMsg[] = [...(Array.isArray(body.messages) ? body.messages : []), { role: 'user', content: prompt }];
   // Thread persistence: adopt a well-formed client threadId, else mint one. Ownership is
   // enforced at write time by chat-store's owner-guarded upsert (forged ids just drop).
   const THREAD_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const threadId = (typeof body.threadId === 'string' && THREAD_RE.test(body.threadId)) ? body.threadId : randomUUID();
+  const via = doFanout ? `multi:${fanGateways.join('+')}` : undefined;
   const exchangeMeta = route
-    ? { ranked: route.ranked, method: route.method, ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}) }
+    ? { ranked: route.ranked, method: route.method, ...(via ? { via, routes: fanGateways } : {}), ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}) }
     : (spec.tier === 'custom' ? { customAgent: spec.agentName } : undefined);
   const record = (assistantContent: string) => {
     recordExchange({
@@ -116,9 +128,38 @@ export async function POST(request: Request) {
       const meta = {
         gateway: spec.gateway, agentName: spec.agentName, tier: spec.tier, skillHashes: spec.skillHashes, threadId,
         ...(route ? { ranked: route.ranked, method: route.method } : {}),
+        // ADR-044: emit via/routes IMMEDIATELY from the attempt list (gate MINOR — never wait for
+        // Promise.allSettled survivors, which would stall the badge/Thinking UX for the whole fan-out).
+        ...(via ? { via, routes: fanGateways } : {}),
         ...(spec.tier === 'custom' ? { customAgent: spec.agentName, spaceVersion: spec.spaceVersion } : {}),
       };
       controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(meta)}\n\n`));
+      // ADR-044 cross-domain auto-synthesis: fan out over the selected built-in gateways, then merge.
+      if (doFanout) {
+        // gate CRITICAL: each gateway gets its OWN built-in invoke input (no shared primary spec).
+        const settled = await Promise.allSettled(
+          fanGateways.map((g) => invokeAgent({ gateway: g, messages, sessionId, accountId, accountAlias })),
+        );
+        const survivors = settled.flatMap((r, i) =>
+          r.status === 'fulfilled' ? [{ gateway: fanGateways[i], text: r.value }] : []);
+        if (survivors.length === 0) {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: 'all routes failed' })}\n\n`));
+          controller.enqueue(enc.encode('data: [DONE]\n\n'));
+          controller.close();
+          return;
+        }
+        // synthesizeStream: ≥2 survivors → merged stream; exactly 1 → passthrough (no extra Bedrock call).
+        let full = '';
+        for await (const t of synthesizeStream(prompt, survivors)) {
+          if (request.signal.aborted) break;
+          full += t;
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: t })}\n\n`));
+        }
+        record(full); // store the merged answer + via meta
+        controller.enqueue(enc.encode('data: [DONE]\n\n'));
+        controller.close();
+        return;
+      }
       if (inactiveSection) {
         const alts = (route?.ranked ?? []).filter((r) => r.active).map((r) => r.key).join(', ');
         const guide = `🔒 ${inactiveSection.label} 에이전트는 P3에서 제공 예정입니다.` +
