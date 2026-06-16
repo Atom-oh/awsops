@@ -20,7 +20,7 @@ const SECRET_NAME =
 
 // Kinds that have a connector Lambda reading this secret (INTEGRATION_SLUG = kind). Extend as
 // connectors are added. An arbitrary key is rejected (no arbitrary secret-key injection).
-export const KNOWN_CONNECTOR_SLUGS = ['notion', 'clickhouse', 'prometheus'] as const;
+export const KNOWN_CONNECTOR_SLUGS = ['notion', 'clickhouse', 'prometheus', 'loki'] as const;
 
 const MAX_SECRET_PAYLOAD_BYTES = 65000; // Secrets Manager limit is 64 KB/version
 const LOCK_KEY = 729153866; // fixed advisory-lock key for the single credentials secret

@@ -108,6 +108,17 @@ describe('KNOWN_CONNECTOR_SLUGS', () => {
   });
 });
 
+describe('loki multi-field credential', () => {
+  it('stores {endpoint,org_id,token} under loki and merges', async () => {
+    smSend.mockImplementation((cmd: any) => cmd.kind === 'get' ? getReturn({ prometheus: { endpoint: 'http://p:9090' } }) : {});
+    await setIntegrationCredential('loki', { endpoint: 'http://loki:3100', org_id: 't7', token: 'k' });
+    const put = smSend.mock.calls.find((c) => c[0].kind === 'put')![0];
+    const w = JSON.parse(put.input.SecretString);
+    expect(w.prometheus).toEqual({ endpoint: 'http://p:9090' });
+    expect(w.loki).toEqual({ endpoint: 'http://loki:3100', org_id: 't7', token: 'k' });
+  });
+});
+
 describe('prometheus multi-field credential', () => {
   it('stores {endpoint,token} under prometheus and merges', async () => {
     smSend.mockImplementation((cmd: any) =>

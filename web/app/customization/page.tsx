@@ -25,6 +25,8 @@ const CONNECTORS: Array<{ slug: string; label: string; help: string; fields: Arr
     fields: [{ key: 'endpoint', label: 'Endpoint (http://host:8123)' }, { key: 'username', label: 'Username' }, { key: 'password', label: 'Password', secret: true }] },
   { slug: 'prometheus', label: 'Prometheus', help: 'HTTP endpoint (e.g. http://prometheus:9090). PromQL, read-only. Auth optional (bearer token or basic). In-cluster endpoints need prometheus_vpc_enabled.',
     fields: [{ key: 'endpoint', label: 'Endpoint (http://host:9090)' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'username', label: 'Username (optional)' }, { key: 'password', label: 'Password (optional)', secret: true }] },
+  { slug: 'loki', label: 'Loki', help: 'HTTP endpoint (e.g. http://loki:3100). LogQL, read-only. Auth optional; org_id sets X-Scope-OrgID for multi-tenant. In-cluster endpoints need loki_vpc_enabled.',
+    fields: [{ key: 'endpoint', label: 'Endpoint (http://host:3100)' }, { key: 'org_id', label: 'Tenant / X-Scope-OrgID (optional)' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'username', label: 'Username (optional)' }, { key: 'password', label: 'Password (optional)', secret: true }] },
 ];
 
 export default function CustomizationPage() {
