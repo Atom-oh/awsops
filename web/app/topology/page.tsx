@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Circle, type LucideIcon } from 'lucide-react';
+import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Circle, Copy, Sparkles, type LucideIcon } from 'lucide-react';
 import { Background, Controls, MiniMap, Position, type Node, type Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
@@ -68,6 +68,24 @@ const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ec2: Server, lambda
 function iconFor(n: FlowNode): IconC {
   if (n.kind === 'target') return RESOLVED_ICON[String(n.meta?.resolved ?? '')] ?? Circle;
   return KIND_ICON[n.kind];
+}
+
+// Preset AI questions per resource kind — route to the read-only section-agent fleet.
+function chipsFor(n: FlowNode): string[] {
+  switch (n.kind) {
+    case 'cloudfront': return ['이 배포가 오리진(ALB)과 TLS로 통신하나?', 'WAF 연결·보안 점검', '캐시/TLS 정책 점검'];
+    case 'alb': case 'nlb': return ['CloudFront→이 LB 통신이 TLS인가?', '리스너/타깃 health 원인', '보안그룹(인바운드) 점검'];
+    case 'tg': return ['unhealthy 타깃 원인 진단', '헬스체크 설정 점검'];
+    case 'target': {
+      const r = String(n.meta?.resolved ?? '');
+      if (r === 'eks') return ['이 deployment 상태/이벤트 진단', '관련 pod 로그 필터', 'IAM/RBAC 권한 점검'];
+      if (r === 'lambda') return ['이 함수 최근 에러 로그', 'IAM 권한 점검', '동시성/타임아웃 점검'];
+      return ['이 인스턴스 로그 필터', '보안그룹 점검', 'IAM 권한 점검'];
+    }
+    case 'waf': return ['이 WAF 룰/연결 점검', '차단 로그 추이'];
+    case 'route53': return ['이 레코드 대상 도달성 점검'];
+    default: return ['이 리소스 보안 점검', '관련 로그 필터'];
+  }
 }
 
 function nodeLabel(n: FlowNode): ReactNode {
@@ -236,6 +254,41 @@ export default function TopologyPage() {
   const onEntry = (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
   const selectCls = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
 
+  // "Ask AI about this resource" bridge → seeds the chat composer (user reviews + sends).
+  const resourceArn = (n: FlowNode): string => {
+    const m = (n.meta ?? {}) as Record<string, unknown>;
+    return String((m.row as Record<string, unknown> | undefined)?.resource_id ?? m.id ?? n.label);
+  };
+  const askAI = (q: string) => {
+    if (!selected) return;
+    const ctx = `[토폴로지 리소스] ${selected.kind} · ${selected.label}\nID/ARN: ${resourceArn(selected)}\n\n질문: ${q}`;
+    window.dispatchEvent(new CustomEvent('awsops:open-chat', { detail: { prompt: ctx } }));
+  };
+  const copyArn = () => { if (selected) navigator.clipboard?.writeText(resourceArn(selected)); };
+
+  const detailActions = selected ? (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={copyArn}
+          className="inline-flex items-center gap-1 rounded-md border border-ink-200 bg-card px-2 py-1 text-[11px] text-ink-600 hover:bg-ink-50">
+          <Copy size={12} /> ARN 복사
+        </button>
+        <button type="button" onClick={() => askAI('')}
+          className="inline-flex items-center gap-1 rounded-md bg-brand-action px-2.5 py-1 text-[11px] font-medium text-white hover:bg-brand-action-hover">
+          <Sparkles size={12} /> AI에 질문
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {chipsFor(selected).map((q) => (
+          <button type="button" key={q} onClick={() => askAI(q)}
+            className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] text-brand-700 hover:bg-brand-100">
+            {q}
+          </button>
+        ))}
+      </div>
+    </div>
+  ) : undefined;
+
   return (
     <div className="flex h-full flex-col">
       <PageHeader
@@ -286,7 +339,7 @@ export default function TopologyPage() {
         )}
       </div>
       {detail && (
-        <DetailPanel title={detail.title} data={detail.data} spec={detail.spec} onClose={() => setSelected(null)} />
+        <DetailPanel title={detail.title} data={detail.data} spec={detail.spec} actions={detailActions} onClose={() => setSelected(null)} />
       )}
     </div>
   );

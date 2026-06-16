@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, type CSSProperties } from 'react';
+import { useEffect, type CSSProperties, type ReactNode } from 'react';
 import { useResizablePanel, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import { X } from 'lucide-react';
 import Badge from './Badge';
@@ -46,11 +46,14 @@ export default function DetailPanel({
   data,
   spec,
   onClose,
+  actions,
 }: {
   title?: string;
   data: Record<string, unknown> | null;
   spec?: InvType;
   onClose: () => void;
+  // optional action slot pinned under the header (e.g. topology "ask AI about this resource").
+  actions?: ReactNode;
 }) {
   useEffect(() => {
     if (!data) return;
@@ -100,6 +103,7 @@ export default function DetailPanel({
             <X size={16} />
           </button>
         </header>
+        {actions && <div className="border-b border-ink-100 px-4 py-3">{actions}</div>}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
           {groups.map((group, gi) => (
             <section key={group.label || gi}>
