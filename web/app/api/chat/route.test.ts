@@ -511,6 +511,26 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'cost' }));
   });
 
+  it('thread is agent-agnostic: same threadId across two turns to different gateways (ADR-044 §4)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    const tid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    invokeAgent.mockResolvedValue('a');
+    const { POST } = await import('./route');
+    // turn 1 → cost
+    classifyRoute.mockResolvedValue({ primary: 'cost', ranked: [{ key: 'cost', score: 1, active: true }], method: 'pin', multiDomain: false, selected: [{ key: 'cost', score: 1, active: true }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'cost', skill: 'cost', agentName: 'cost', skillHashes: [] });
+    await readStream(await POST(req({ prompt: '비용', section: 'cost', threadId: tid, sessionId: 's'.repeat(36) })));
+    // turn 2 → network, SAME thread
+    classifyRoute.mockResolvedValue({ primary: 'network', ranked: [{ key: 'network', score: 1, active: true }], method: 'pin', multiDomain: false, selected: [{ key: 'network', score: 1, active: true }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    await readStream(await POST(req({ prompt: '연결', section: 'network', threadId: tid, sessionId: 's'.repeat(36) })));
+    const calls = recordExchange.mock.calls.map((c) => c[0]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ threadId: tid, gateway: 'cost' });
+    expect(calls[1]).toMatchObject({ threadId: tid, gateway: 'network' }); // same thread, different agent
+  });
+
   it('only one active selected route: no fan-out (single path)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
