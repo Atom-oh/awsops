@@ -33,6 +33,12 @@ variable "prometheus_vpc_enabled" {
   default     = false
 }
 
+variable "loki_vpc_enabled" {
+  type        = bool
+  description = "Attach the loki-mcp Lambda to the private subnets so it can reach an in-cluster Loki endpoint. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0); off = non-VPC. PERSIST in live terraform.tfvars."
+  default     = false
+}
+
 locals {
   ac_count    = var.agentcore_enabled ? 1 : 0
   integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
@@ -231,7 +237,7 @@ resource "aws_iam_role_policy" "agent_lambda_opensearch" {
 # ENI perms for the opensearch-mcp Lambda ONLY when it is VPC-attached (opensearch_vpc_enabled).
 # Compound-gated: references agent_lambda[0], which exists only when agentcore_enabled → guard both.
 resource "aws_iam_role_policy" "agent_lambda_vpc_eni" {
-  count = var.agentcore_enabled && (var.opensearch_vpc_enabled || var.clickhouse_vpc_enabled || var.prometheus_vpc_enabled) ? 1 : 0
+  count = var.agentcore_enabled && (var.opensearch_vpc_enabled || var.clickhouse_vpc_enabled || var.prometheus_vpc_enabled || var.loki_vpc_enabled) ? 1 : 0
   name  = "${var.project}-agent-lambda-vpc-eni"
   role  = aws_iam_role.agent_lambda[0].id
   policy = jsonencode({
@@ -505,6 +511,7 @@ locals {
     "notion-mcp"     = { file = "notion_mcp.py", handler = "notion_mcp.lambda_handler" }
     "clickhouse-mcp" = { file = "clickhouse_mcp.py", handler = "clickhouse_mcp.lambda_handler" }
     "prometheus-mcp" = { file = "prometheus_mcp.py", handler = "prometheus_mcp.lambda_handler" }
+    "loki-mcp"       = { file = "loki_mcp.py", handler = "loki_mcp.lambda_handler" }
   } : {})
 }
 
@@ -545,7 +552,7 @@ resource "aws_lambda_function" "agent" {
       # Connectors that read the single integrations secret get its exact TF-created name (no drift
       # from the Python default). notion-mcp also pins INTEGRATION_SLUG; clickhouse-mcp uses a fixed
       # SLUG in code. Both exist only when integ_count>0 so integrations[0] is safe.
-      contains(["notion-mcp", "clickhouse-mcp", "prometheus-mcp"], each.key) ? merge(
+      contains(["notion-mcp", "clickhouse-mcp", "prometheus-mcp", "loki-mcp"], each.key) ? merge(
         { INTEGRATIONS_SECRET_NAME = aws_secretsmanager_secret.integrations[0].name },
         each.key == "notion-mcp" ? { INTEGRATION_SLUG = "notion" } : {}
       ) : {}
@@ -555,7 +562,7 @@ resource "aws_lambda_function" "agent" {
   # VPC-only OpenSearch domains: attach ONLY the opensearch-mcp Lambda to the private subnets when
   # opensearch_vpc_enabled. Off (default) → no vpc_config → non-VPC (reaches public+IAM domains).
   dynamic "vpc_config" {
-    for_each = ((each.key == "opensearch-mcp" && var.opensearch_vpc_enabled) || (each.key == "clickhouse-mcp" && var.clickhouse_vpc_enabled) || (each.key == "prometheus-mcp" && var.prometheus_vpc_enabled)) ? [1] : []
+    for_each = ((each.key == "opensearch-mcp" && var.opensearch_vpc_enabled) || (each.key == "clickhouse-mcp" && var.clickhouse_vpc_enabled) || (each.key == "prometheus-mcp" && var.prometheus_vpc_enabled) || (each.key == "loki-mcp" && var.loki_vpc_enabled)) ? [1] : []
     content {
       subnet_ids         = local.private_subnet_ids
       security_group_ids = [aws_security_group.service.id]
