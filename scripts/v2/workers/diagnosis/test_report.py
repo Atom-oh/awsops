@@ -111,6 +111,39 @@ def test_throttle_is_loud(monkeypatch):
     assert res["data"] == {"_failed": True}
 
 
+def test_security_hub_not_subscribed_is_quiet(monkeypatch):
+    # Security Hub is opt-in. "Not subscribed" is a known steady state, NOT a failure:
+    # it must NOT degrade the report to 'partial' or leak a scary `_failed` to the LLM.
+    from botocore.exceptions import ClientError
+
+    def not_subscribed(*a, **k):
+        raise ClientError(
+            {"Error": {"Code": "InvalidAccessException",
+                       "Message": "Account 1 is not subscribed to AWS Security Hub"}},
+            "GetFindings")
+
+    monkeypatch.setattr(sources, "_sh_client", not_subscribed)
+    res = sources.collect_posture()
+    assert res["ok"] is True and res["degraded"] is False
+    assert res["data"].get("enabled") is False
+    assert "_failed" not in res["data"]
+    assert res["data"]["findings_by_severity"] == {}
+
+
+def test_security_hub_subscribed_reports_findings(monkeypatch):
+    class _FakeSh:
+        def get_findings(self, **kw):
+            return {"Findings": [
+                {"Severity": {"Label": "HIGH"}}, {"Severity": {"Label": "HIGH"}},
+                {"Severity": {"Label": "LOW"}}, {}]}  # last → UNKNOWN
+
+    monkeypatch.setattr(sources, "_sh_client", lambda: _FakeSh())
+    res = sources.collect_posture()
+    assert res["ok"] is True and res["degraded"] is False
+    assert res["data"]["enabled"] is True
+    assert res["data"]["findings_by_severity"] == {"HIGH": 2, "LOW": 1, "UNKNOWN": 1}
+
+
 def test_cw_metrics_collector_present():
     assert hasattr(sources, "collect_cw_metrics")
 
