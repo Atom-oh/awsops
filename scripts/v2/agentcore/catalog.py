@@ -349,4 +349,16 @@ TARGETS = {
             {"name": "loki_label_values", "description": "List values of a label", "inputSchema": {"type": "object", "properties": {"label": _p("string", "Label name")}, "required": ["label"]}},
         ],
     },
+    # Tempo datasource (v1 family #4) — read-only TraceQL. monitoring gateway.
+    "tempo-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "tempo-mcp",
+        "description": "Tempo read-only — TraceQL search, get trace, tags, tag values (4 tools)",
+        "tools": [
+            {"name": "tempo_search", "description": "Search traces by TraceQL over a time window", "inputSchema": {"type": "object", "properties": {"query": _p("string", "TraceQL"), "start": _p("string", "1h/30m or unix sec (default now-1h)"), "end": _p("string", "unix sec (default now)"), "limit": _p("string", "Max traces")}, "required": ["query"]}},
+            {"name": "tempo_get_trace", "description": "Fetch a full trace by hex trace ID", "inputSchema": {"type": "object", "properties": {"trace_id": _p("string", "Hex trace ID")}, "required": ["trace_id"]}},
+            {"name": "tempo_search_tags", "description": "List searchable tag names", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "tempo_tag_values", "description": "List values of a tag", "inputSchema": {"type": "object", "properties": {"tag": _p("string", "Tag name")}, "required": ["tag"]}},
+        ],
+    },
 }
