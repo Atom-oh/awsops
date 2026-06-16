@@ -184,6 +184,32 @@ resource "aws_iam_role_policy" "agent_lambda_integrations_secret" {
   })
 }
 
+# OpenSearch read connector (opensearch_mcp.py) — AWS-native, read-only. NOTE: Amazon OpenSearch
+# *managed* domains use the es: IAM prefix (NOT opensearch:, which is Serverless/aoss:). Scoped to
+# HTTP read verbs on domain ARNs + list/describe for endpoint resolution.
+resource "aws_iam_role_policy" "agent_lambda_opensearch" {
+  count = local.ac_count
+  name  = "${var.project}-agent-lambda-opensearch"
+  role  = aws_iam_role.agent_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "OpenSearchHttpRead"
+        Effect   = "Allow"
+        Action   = ["es:ESHttpGet", "es:ESHttpPost"]
+        Resource = "arn:aws:es:${var.region}:${data.aws_caller_identity.current.account_id}:domain/*/*"
+      },
+      {
+        Sid      = "OpenSearchDescribe"
+        Effect   = "Allow"
+        Action   = ["es:ListDomainNames", "es:DescribeDomain", "es:DescribeDomains"]
+        Resource = "*"
+      },
+    ]
+  })
+}
+
 # ---- SSM String params (placeholders; provision.py overwrites the value). Not secrets → String. ----
 resource "aws_ssm_parameter" "agentcore_runtime_arn" {
   count     = local.ac_count
@@ -439,6 +465,7 @@ locals {
     "iac-mcp"        = { file = "aws_iac_mcp.py", handler = "aws_iac_mcp.lambda_handler" }
     "terraform-mcp"  = { file = "aws_terraform_mcp.py", handler = "aws_terraform_mcp.lambda_handler" }
     "aws-knowledge"  = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
+    "opensearch-mcp" = { file = "opensearch_mcp.py", handler = "opensearch_mcp.lambda_handler" }
     } : {}, local.integ_count > 0 ? {
     "notion-mcp" = { file = "notion_mcp.py", handler = "notion_mcp.lambda_handler" }
   } : {})
