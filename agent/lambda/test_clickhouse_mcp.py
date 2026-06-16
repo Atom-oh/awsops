@@ -69,6 +69,13 @@ class TestReadOnlyGuard(unittest.TestCase):
                   'SELECT "x\'" , * FROM url(\'http://169.254.169.254/\')']:
             self._bad(s)
 
+    def test_heredoc_dollar_quote_no_desync(self):
+        # ClickHouse $$...$$ / $tag$...$tag$ heredoc strings carrying a stray quote must not desync
+        # the scanner and hide a table function (P4 r4).
+        for s in ["SELECT $$ x ' $$ , * FROM url('http://169.254.169.254/')",
+                  "SELECT $tag$ a ' b $tag$ FROM s3('https://x/y','CSV')"]:
+            self._bad(s)
+
     def test_hash_comment_hidden_verb(self):
         self._bad("SELECT 1 # ok\n; DROP TABLE t")
 

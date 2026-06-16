@@ -78,6 +78,11 @@ def _strip(sql):
                     break
                 idx += 1
             out.append(" ")
+        elif c == "$" and re.match(r"\$[A-Za-z0-9_]*\$", sql[idx:]):  # heredoc/dollar-quoted string
+            delim = re.match(r"\$[A-Za-z0-9_]*\$", sql[idx:]).group(0)  # $$ or $tag$
+            j = sql.find(delim, idx + len(delim))
+            idx = (j + len(delim)) if j != -1 else n
+            out.append(" ")                   # whole heredoc dropped (a ' inside can't desync)
         elif c == "`" or c == '"':            # IDENTIFIER quote → keep inner, drop quote chars
             q = c
             idx += 1
