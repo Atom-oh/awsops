@@ -15,6 +15,12 @@ variable "integrations_enabled" {
   default     = false
 }
 
+variable "opensearch_vpc_enabled" {
+  type        = bool
+  description = "Attach the opensearch-mcp Lambda to the private subnets so it can reach a VPC-only OpenSearch domain. Requires agentcore_enabled. Default false → no-op ($0); off = non-VPC (reaches public-endpoint + IAM domains via sigv4). PERSIST in live terraform.tfvars."
+  default     = false
+}
+
 locals {
   ac_count    = var.agentcore_enabled ? 1 : 0
   integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
@@ -207,6 +213,23 @@ resource "aws_iam_role_policy" "agent_lambda_opensearch" {
         Resource = "*"
       },
     ]
+  })
+}
+
+# ENI perms for the opensearch-mcp Lambda ONLY when it is VPC-attached (opensearch_vpc_enabled).
+# Compound-gated: references agent_lambda[0], which exists only when agentcore_enabled → guard both.
+resource "aws_iam_role_policy" "agent_lambda_vpc_eni" {
+  count = var.agentcore_enabled && var.opensearch_vpc_enabled ? 1 : 0
+  name  = "${var.project}-agent-lambda-vpc-eni"
+  role  = aws_iam_role.agent_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "LambdaVpcEni"
+      Effect   = "Allow"
+      Action   = ["ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DeleteNetworkInterface"]
+      Resource = "*"
+    }]
   })
 }
 
@@ -512,6 +535,16 @@ resource "aws_lambda_function" "agent" {
         INTEGRATION_SLUG         = "notion"
       } : {}
     )
+  }
+
+  # VPC-only OpenSearch domains: attach ONLY the opensearch-mcp Lambda to the private subnets when
+  # opensearch_vpc_enabled. Off (default) → no vpc_config → non-VPC (reaches public+IAM domains).
+  dynamic "vpc_config" {
+    for_each = (each.key == "opensearch-mcp" && var.opensearch_vpc_enabled) ? [1] : []
+    content {
+      subnet_ids         = local.private_subnet_ids
+      security_group_ids = [aws_security_group.service.id]
+    }
   }
 }
 
