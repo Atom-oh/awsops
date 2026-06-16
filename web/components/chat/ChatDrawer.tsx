@@ -53,7 +53,12 @@ export default function ChatDrawer() {
       const wanted = d.threadId as string | undefined;
       if (wanted) void chat.selectThread(wanted); // selectThread only touches refs/setters — closure-safe
       const prompt = d.prompt as string | undefined;
-      if (prompt) setSeed({ text: prompt, n: Date.now() }); // seed the composer (user reviews + sends)
+      if (prompt) {
+        // a seeded question (e.g. topology "ask AI about this resource") = a fresh ask →
+        // start a clean chat so the user isn't looking at the previously-loaded thread.
+        if (!wanted) chat.newChat();
+        setSeed({ text: prompt, n: Date.now() }); // fill the composer; user reviews + sends
+      }
     }
     window.addEventListener('awsops:open-chat', onOpenChat);
     return () => window.removeEventListener('awsops:open-chat', onOpenChat);
