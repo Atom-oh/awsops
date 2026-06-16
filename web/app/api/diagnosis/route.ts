@@ -6,6 +6,7 @@ import {
   linkReportJob,
   reportForIdempotencyKey,
   markReportFailed,
+  type DiagnosisModel,
 } from '@/lib/diagnosis';
 import { enqueueJob } from '@/lib/jobs';
 
@@ -27,7 +28,9 @@ export async function POST(req: Request) {
   } catch {
     /* empty body OK */
   }
-  const tier = body?.tier === 'light' ? 'light' : 'mid'; // deep gated out of MVP
+  const tier = ['light', 'mid', 'deep'].includes(body?.tier) ? body.tier : 'mid';
+  // Only the deep tier may select Opus; every other tier is pinned to Sonnet (cost guard).
+  const model: DiagnosisModel = tier === 'deep' && body?.model === 'opus' ? 'opus' : 'sonnet';
   const account = process.env.AWS_ACCOUNT_ID || '';
   // [PR#37 review MAJOR] fail fast — an empty account would silently reach the LLM context.
   if (!account) {
@@ -41,19 +44,19 @@ export async function POST(req: Request) {
   // [GATE-FIX R2 CRITICAL] Idempotency-FIRST → create the report with NULL fk → enqueue (inserts
   // worker_jobs) → LINK. The FK is only set once worker_jobs(job_id) exists.
   const hour = new Date().toISOString().slice(0, 13);
-  const key = `report:${email}:${tier}:${hour}`;
+  const key = `report:${email}:${tier}:${model}:${hour}`;
 
   const existing = await reportForIdempotencyKey(key);
   if (existing) {
-    return NextResponse.json({ report_id: existing, tier, deduped: true }, { status: 202 });
+    return NextResponse.json({ report_id: existing, tier, model, deduped: true }, { status: 202 });
   }
 
-  const reportId = await createReport(tier, email); // worker_job_id = NULL (FK-safe)
+  const reportId = await createReport(tier, email, model); // worker_job_id = NULL (FK-safe)
   let job: { job_id: string; status: string };
   try {
     job = await enqueueJob(
       'report',
-      { account, tier, requested_by: email, report_id: reportId },
+      { account, tier, model, requested_by: email, report_id: reportId },
       { idempotencyKey: key },
     );
   } catch (e) {
@@ -61,5 +64,5 @@ export async function POST(req: Request) {
     throw e;
   }
   await linkReportJob(reportId, job.job_id); // FK now satisfiable
-  return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier }, { status: 202 });
+  return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier, model }, { status: 202 });
 }
