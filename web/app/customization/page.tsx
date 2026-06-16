@@ -29,6 +29,8 @@ const CONNECTORS: Array<{ slug: string; label: string; help: string; fields: Arr
     fields: [{ key: 'endpoint', label: 'Endpoint (http://host:3100)' }, { key: 'org_id', label: 'Tenant / X-Scope-OrgID (optional)' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'username', label: 'Username (optional)' }, { key: 'password', label: 'Password (optional)', secret: true }] },
   { slug: 'tempo', label: 'Tempo', help: 'HTTP endpoint (e.g. http://tempo:3200). TraceQL, read-only. Auth optional; org_id sets X-Scope-OrgID. In-cluster endpoints need tempo_vpc_enabled.',
     fields: [{ key: 'endpoint', label: 'Endpoint (http://host:3200)' }, { key: 'org_id', label: 'Tenant / X-Scope-OrgID (optional)' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'username', label: 'Username (optional)' }, { key: 'password', label: 'Password (optional)', secret: true }] },
+  { slug: 'mimir', label: 'Mimir', help: 'HTTP endpoint (e.g. http://mimir:8080). PromQL (Prometheus-compatible, multi-tenant), read-only. org_id sets X-Scope-OrgID. In-cluster endpoints need mimir_vpc_enabled.',
+    fields: [{ key: 'endpoint', label: 'Endpoint (http://host:8080)' }, { key: 'org_id', label: 'Tenant / X-Scope-OrgID (optional)' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'username', label: 'Username (optional)' }, { key: 'password', label: 'Password (optional)', secret: true }] },
 ];
 
 export default function CustomizationPage() {

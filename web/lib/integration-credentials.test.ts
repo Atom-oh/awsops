@@ -108,6 +108,17 @@ describe('KNOWN_CONNECTOR_SLUGS', () => {
   });
 });
 
+describe('mimir multi-field credential', () => {
+  it('stores {endpoint,org_id} under mimir and merges', async () => {
+    smSend.mockImplementation((cmd: any) => cmd.kind === 'get' ? getReturn({ tempo: { endpoint: 'http://t:3200' } }) : {});
+    await setIntegrationCredential('mimir', { endpoint: 'http://mimir:8080', org_id: 't1' });
+    const put = smSend.mock.calls.find((c) => c[0].kind === 'put')![0];
+    const w = JSON.parse(put.input.SecretString);
+    expect(w.tempo).toEqual({ endpoint: 'http://t:3200' });
+    expect(w.mimir).toEqual({ endpoint: 'http://mimir:8080', org_id: 't1' });
+  });
+});
+
 describe('tempo multi-field credential', () => {
   it('stores {endpoint,org_id} under tempo and merges', async () => {
     smSend.mockImplementation((cmd: any) => cmd.kind === 'get' ? getReturn({ loki: { endpoint: 'http://loki:3100' } }) : {});
