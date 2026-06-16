@@ -2,6 +2,8 @@
 
 ## Status / 상태
 
+**Superseded by ADR-044 for v2 (2026-06-16)** — the v2 chat path adopts a hybrid model (clear single-domain = single gateway per ADR-038; cross-domain = this ADR's parallel fan-out + `synthesizeResponsesStreaming()` auto-merge). The *mechanism* below is carried forward into v2 under ADR-044; this v1 record (`src/app/api/ai/route.ts`, 11-route router) is retained as history. / **v2는 ADR-044가 승계 (2026-06-16)** — v2 챗은 하이브리드(명확 단일도메인=단일 게이트웨이[ADR-038], 교차도메인=본 ADR 병렬 fan-out+자동합성). 메커니즘은 ADR-044로 v2에 승계; v1 본문은 이력으로 유지.
+
 Accepted (2026-04-22) / 채택됨 (2026-04-22)
 
 ## Context / 컨텍스트

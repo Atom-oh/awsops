@@ -19,10 +19,12 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
 - **AgentCore Runtime** — Strands; reuses `agent/agent.py` as-is. Gateway URLs are
   injected via a `GATEWAYS_JSON` env var (agent.py's documented discovery fallback —
   no awscli-in-image dependency). Runtime name `awsops_v2_agent` (underscores only).
-- **9 section gateways** — `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops,external-obs}-gateway`.
-  These replace v1's 8 gateways (Monitoring is split into AWS-native monitoring +
-  `external-obs`, which is **empty in P1f** — its plugin datasource registry / OTLP /
-  datasource-diag re-home is P3).
+- **8 section gateways** — `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`
+  (ADR-004 canonical count = **8**). **External observability is NOT a 9th gateway** — per
+  **ADR-039** it is the **Integrations axis** (the egress MCP substrate), re-homing what an
+  earlier draft listed as an `external-obs` gateway. `monitoring` covers AWS-native monitoring;
+  the external-obs plugin datasource registry / OTLP / datasource-diag re-home is the Integrations
+  axis (P3).
 - **Memory** — `awsops_v2_memory-*`, `eventExpiryDuration = 365` days.
 - **Code Interpreter** — `awsops_v2_code_interpreter-*` (underscores only).
 
