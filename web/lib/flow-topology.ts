@@ -122,7 +122,8 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   for (const r of input.route53 ?? []) {
     const aliasT = (r.alias_target && typeof r.alias_target === 'object') ? (r.alias_target as Row) : {};
     const targetDns = dns(aliasT.DNSName);          // ALIAS records: where the name points
-    const recName = dns(r.resource_id) || dns(r.name);
+    // clean record name (r.resource_id is the composite "name TYPE"); used for label + alias match.
+    const recName = dns(r.name) || dns(r.resource_id);
     const downstream =
       cfByDomain.get(targetDns) || lbByDns.get(targetDns) ||  // alias → CF / LB
       cfByAlias.get(recName);                                 // record name == a CF custom-domain alias

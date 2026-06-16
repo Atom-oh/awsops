@@ -257,7 +257,11 @@ export default function TopologyPage() {
   // "Ask AI about this resource" bridge → seeds the chat composer (user reviews + sends).
   const resourceArn = (n: FlowNode): string => {
     const m = (n.meta ?? {}) as Record<string, unknown>;
-    return String((m.row as Record<string, unknown> | undefined)?.resource_id ?? m.id ?? n.label);
+    const row = m.row as Record<string, unknown> | undefined;
+    // route53 has no ARN → clean record name; targets (ec2/lambda/ip) → meta.id; everything
+    // else → the real `arn` field (CF/ALB/NLB/TG/WAF all carry one), not the resource_id/name.
+    if (n.kind === 'route53') return String(row?.name ?? n.label).replace(/\.$/, '');
+    return String(row?.arn ?? m.id ?? row?.resource_id ?? n.label);
   };
   const askAI = (q: string) => {
     if (!selected) return;
