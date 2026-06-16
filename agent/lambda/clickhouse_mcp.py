@@ -37,7 +37,7 @@ _DANGER = re.compile(
 # NOT block them). Suffix-tolerant `\w*` so siblings like urlCluster/s3Cluster/remoteSecure/executablePool/
 # clusterAllReplicas/hdfsCluster are ALSO blocked (a name-anchored `\s*\(` would let urlCluster( through).
 _TABLE_FN = re.compile(
-    r"\b(url|file|remote|hdfs|s3|gcs|iceberg|deltaLake|azureBlobStorage|mongodb|mysql|postgresql|"
+    r"\b(url|file|remote|hdfs|s3|gcs|iceberg|hudi|deltaLake|azureBlobStorage|mongodb|mysql|postgresql|"
     r"redis|sqlite|jdbc|odbc|input|cluster|executable)\w*\s*\(",
     re.IGNORECASE,
 )
@@ -49,9 +49,10 @@ def _strip(sql):
     only structure (backticks stripped so `url`(…) normalizes to url(…) and can't evade _TABLE_FN)."""
     s = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)   # /* ... */
     s = re.sub(r"--[^\n]*", " ", s)                        # -- ... EOL
-    s = re.sub(r"'(?:[^'\\]|\\.|'')*'", " ", s)            # '...' (with \' and '')
-    s = re.sub(r'"(?:[^"\\]|\\.)*"', " ", s)               # "..."
-    s = s.replace("`", "")                                 # strip backtick identifier quotes
+    s = re.sub(r"'(?:[^'\\]|\\.|'')*'", " ", s)            # '...' STRING literals (single-quote in ClickHouse)
+    # Double-quote and backtick are IDENTIFIER quotes in ClickHouse (not strings) — strip only the quote
+    # CHARS so the inner name survives the scan (else "url"(…) / `url`(…) evades _TABLE_FN → SSRF).
+    s = s.replace("`", "").replace('"', "")
     return s
 
 

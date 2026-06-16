@@ -57,7 +57,9 @@ class TestReadOnlyGuard(unittest.TestCase):
                   "SELECT * FROM executable('script.sh','CSV','x String')",
                   "SELECT * FROM redis('h:6379','k','x String')",
                   "SELECT * FROM `url`('http://169.254.169.254/')",
-                  "SELECT * FROM url/**/('http://169.254.169.254/')"]:
+                  "SELECT * FROM url/**/('http://169.254.169.254/')",
+                  "SELECT * FROM \"url\"('http://169.254.169.254/')",
+                  "SELECT * FROM hudi('http://169.254.169.254/','CSV')"]:
             self._bad(s)
 
     def test_string_literal_not_false_trigger(self):
