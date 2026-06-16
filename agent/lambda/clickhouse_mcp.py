@@ -33,21 +33,32 @@ _DANGER = re.compile(
     r"\b(INSERT|ALTER|DROP|CREATE|DELETE|TRUNCATE|OPTIMIZE|ATTACH|DETACH|SET|SYSTEM|GRANT|REVOKE|KILL|MOVE|RENAME)\b",
     re.IGNORECASE,
 )
-# ClickHouse table functions = server-side SSRF / cross-datastore reads (readonly=1 does NOT block them).
+# ClickHouse table functions = server-side SSRF / cross-datastore reads / script exec (readonly=1 does
+# NOT block them). Suffix-tolerant `\w*` so siblings like urlCluster/s3Cluster/remoteSecure/executablePool/
+# clusterAllReplicas/hdfsCluster are ALSO blocked (a name-anchored `\s*\(` would let urlCluster( through).
 _TABLE_FN = re.compile(
-    r"\b(url|file|remote|remoteSecure|s3|s3Cluster|gcs|hdfs|input|cluster|mysql|postgresql|jdbc|odbc|"
-    r"mongodb|azureBlobStorage|deltaLake|iceberg|sqlite)\s*\(",
+    r"\b(url|file|remote|hdfs|s3|gcs|iceberg|deltaLake|azureBlobStorage|mongodb|mysql|postgresql|"
+    r"redis|sqlite|jdbc|odbc|input|cluster|executable)\w*\s*\(",
     re.IGNORECASE,
 )
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")  # db.table or table
 
 
 def _strip(sql):
-    """Remove block/line comments and string literals so keyword/table-fn scanning sees only structure."""
+    """Remove block/line comments, string literals, and backticks so keyword/table-fn scanning sees
+    only structure (backticks stripped so `url`(…) normalizes to url(…) and can't evade _TABLE_FN)."""
     s = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)   # /* ... */
     s = re.sub(r"--[^\n]*", " ", s)                        # -- ... EOL
     s = re.sub(r"'(?:[^'\\]|\\.|'')*'", " ", s)            # '...' (with \' and '')
     s = re.sub(r'"(?:[^"\\]|\\.)*"', " ", s)               # "..."
+    s = s.replace("`", "")                                 # strip backtick identifier quotes
     return s
+
+
+def _validate_identifier(name):
+    """Defense-in-depth for the describe table arg: a bare `table` or `db.table` only."""
+    if not _IDENTIFIER.match(name or ""):
+        raise ValueError("invalid table identifier (expected table or db.table)")
 
 
 def _assert_read_only(sql):
@@ -105,6 +116,7 @@ def clickhouse_describe(args):
     table = (args.get("table") or "").strip()
     if not table:
         return err("table required")
+    _validate_identifier(table)  # defense-in-depth (the read-only guard also catches stacked stmts)
     return _run_sql(f"DESCRIBE TABLE {table}", _clamp_rows(args.get("max_rows")))
 
 

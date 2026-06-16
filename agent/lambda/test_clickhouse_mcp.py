@@ -49,6 +49,17 @@ class TestReadOnlyGuard(unittest.TestCase):
                   "SELECT * FROM file('/etc/passwd')"]:
             self._bad(s)
 
+    def test_reject_table_function_siblings_and_obfuscation(self):
+        # P4 gate: urlCluster/s3Cluster/remoteSecure/executable/redis siblings + backtick evasion
+        for s in ["SELECT * FROM urlCluster('c','http://169.254.169.254/','CSV','x String')",
+                  "SELECT * FROM s3Cluster('c','https://x/y','CSV')",
+                  "SELECT * FROM remoteSecure('h','db.t')",
+                  "SELECT * FROM executable('script.sh','CSV','x String')",
+                  "SELECT * FROM redis('h:6379','k','x String')",
+                  "SELECT * FROM `url`('http://169.254.169.254/')",
+                  "SELECT * FROM url/**/('http://169.254.169.254/')"]:
+            self._bad(s)
+
     def test_string_literal_not_false_trigger(self):
         # 'set'/'drop' inside a string literal must not trigger (literals are stripped before scan)
         self._ok("SELECT 'please set the drop value' AS note")
@@ -107,6 +118,12 @@ class TestTools(unittest.TestCase):
             out = ch.lambda_handler({"tool_name": "clickhouse_query", "arguments": {"sql": "SELECT 1"}}, None)
         self.assertEqual(out["statusCode"], 400)
         self.assertIn("403", json.loads(out["body"])["error"])
+
+    def test_describe_rejects_injection(self):
+        with mock.patch.object(ch, "http_json") as hj:
+            out = ch.lambda_handler({"tool_name": "clickhouse_describe", "arguments": {"table": "t; DROP TABLE x"}}, None)
+        self.assertEqual(out["statusCode"], 400)
+        hj.assert_not_called()
 
     def test_target_account_id_popped(self):
         with mock.patch.object(ch, "http_json", return_value=(200, {"data": []})):
