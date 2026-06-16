@@ -22,7 +22,6 @@ export function newSessionId(): string {
 export function useChat() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
-  const [pinned, setPinned] = useState<string | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [showThreads, setShowThreads] = useState(false);
@@ -115,7 +114,7 @@ export function useChat() {
     } catch { /* heartbeat / non-JSON */ }
   }
 
-  async function send(prompt: string, overrideSection?: string, switchedFrom?: string) {
+  async function send(prompt: string, overrideSection?: string | null, switchedFrom?: string) {
     if (busy) return;
     const history = msgs.map((m) => ({ role: m.role, content: m.content }));
     setMsgs((m) => [...m, { role: 'user', content: prompt }, { role: 'assistant', content: '', streaming: true }]);
@@ -126,7 +125,7 @@ export function useChat() {
       const res = await fetch('/api/chat', {
         method: 'POST', signal: ac.signal,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, messages: history, section: overrideSection ?? pinned, switchedFrom, sessionId: sessionRef.current, threadId: threadIdRef.current ?? undefined }),
+        body: JSON.stringify({ prompt, messages: history, section: overrideSection ?? null, switchedFrom, sessionId: sessionRef.current, threadId: threadIdRef.current ?? undefined }),
       });
       if (!res.ok || !res.body) {
         patchLast((m) => ({ ...m, content: res.status === 401 ? '세션이 만료되었습니다. 새로고침해 주세요.' : 'AI 응답을 받지 못했습니다.', streaming: false }));
@@ -166,9 +165,9 @@ export function useChat() {
 
   return {
     // state
-    msgs, busy, pinned, threadId, threads, showThreads,
+    msgs, busy, threadId, threads, showThreads,
     // actions
-    send, selectThread, newChat, refreshThreads, removeThread, toggleThreads, setPinned, resendWith, abort,
+    send, selectThread, newChat, refreshThreads, removeThread, toggleThreads, resendWith, abort,
   };
 }
 

@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import functools
 import socket
 import ipaddress
 import urllib.parse
@@ -638,6 +639,8 @@ def build_conversation(payload):
     return user_input, []
 
 
+# Host-account resolution (_host_account_id / effective_account_id) lives in
+# account_utils.py so it is importable by tests without agent.py's runtime deps.
 def build_account_directive(account_id, account_alias):
     """Build cross-account directive for system prompt. / 시스템 프롬프트용 크로스 어카운트 지시문 생성."""
     if not account_id or account_id == '__all__':

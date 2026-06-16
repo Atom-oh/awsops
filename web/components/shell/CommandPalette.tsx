@@ -6,10 +6,11 @@ import { INVENTORY_TYPES, inventoryGroups } from '@/lib/inventory-types';
 import Input from '@/components/ui/Input';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { cn } from '@/lib/cn';
+import { THEMES, THEME_LABELS, setStoredTheme, applyTheme, type Theme } from '@/lib/theme';
 
-interface Cmd { href: string; label: string; hint: string }
+interface Cmd { label: string; hint: string; href?: string; theme?: Theme }
 
-// All navigable destinations: fixed pages + the 22 inventory types.
+// All navigable destinations: fixed pages + the 22 inventory types + theme actions.
 function buildCommands(): Cmd[] {
   const fixed: Cmd[] = [
     { href: '/', label: 'Overview', hint: '대시보드' },
@@ -17,12 +18,12 @@ function buildCommands(): Cmd[] {
     { href: '/jobs', label: 'Jobs', hint: '비동기 작업' },
     { href: '/cost', label: 'Cost', hint: 'Cost Explorer' },
     { href: '/bedrock', label: 'Bedrock', hint: '토큰 비용' },
-    { href: '/opencost', label: 'OpenCost', hint: 'K8s 비용' },
   ];
   const inv: Cmd[] = inventoryGroups().flatMap((g) =>
     g.types.map((t) => ({ href: `/inventory/${t}`, label: INVENTORY_TYPES[t].label, hint: g.group })),
   );
-  return [...fixed, ...inv];
+  const themes: Cmd[] = THEMES.map((t) => ({ label: `Theme: ${THEME_LABELS[t]}`, hint: '테마', theme: t }));
+  return [...fixed, ...inv, ...themes];
 }
 
 export default function CommandPalette() {
@@ -37,7 +38,7 @@ export default function CommandPalette() {
     const q = query.trim().toLowerCase();
     if (!q) return commands;
     return commands.filter(
-      (c) => c.label.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q) || c.href.toLowerCase().includes(q),
+      (c) => c.label.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q) || (c.href?.toLowerCase().includes(q) ?? false),
     );
   }, [commands, query]);
 
@@ -48,9 +49,14 @@ export default function CommandPalette() {
   }, []);
 
   const go = useCallback(
-    (href: string) => {
+    (cmd: Cmd) => {
       close();
-      router.push(href);
+      if (cmd.theme) {
+        setStoredTheme(cmd.theme);
+        applyTheme(cmd.theme);
+        return;
+      }
+      if (cmd.href) router.push(cmd.href);
     },
     [close, router],
   );
@@ -87,7 +93,7 @@ export default function CommandPalette() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const sel = results[active];
-      if (sel) go(sel.href);
+      if (sel) go(sel);
     }
   }
 
@@ -98,7 +104,7 @@ export default function CommandPalette() {
       role="presentation"
     >
       <div
-        className="w-full max-w-[520px] overflow-hidden rounded-lg border border-ink-100 bg-white shadow-pop"
+        className="w-full max-w-[520px] overflow-hidden rounded-lg border border-ink-100 bg-card shadow-pop"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onListKey}
         role="dialog"
@@ -119,14 +125,14 @@ export default function CommandPalette() {
             <li className="px-4 py-6 text-center text-[13px] text-ink-400">{t('palette.noResults')}</li>
           ) : (
             results.map((c, i) => (
-              <li key={c.href}>
+              <li key={c.label}>
                 <button
                   type="button"
                   onMouseEnter={() => setActive(i)}
-                  onClick={() => go(c.href)}
+                  onClick={() => go(c)}
                   className={cn(
                     'flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-[13px] transition-colors',
-                    i === active ? 'bg-claude-500 text-white' : 'text-ink-800 hover:bg-ink-50',
+                    i === active ? 'bg-brand-500 text-white' : 'text-ink-800 hover:bg-ink-50',
                   )}
                 >
                   <span className="font-medium">{c.label}</span>

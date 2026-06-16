@@ -29,16 +29,16 @@ resource "aws_cognito_user_pool_client" "main" {
   callback_urls                        = ["https://${var.domain_name}/_callback"]
   logout_urls                          = ["https://${var.domain_name}/"]
 
-  # Token lifetimes — declared explicitly to match the live deployment (avoids reverting id/access
-  # tokens from 12h to the AWS-default unit when other config touches this client). The edge Lambda
-  # validates the id_token cookie, so a short id-token lifetime would force frequent re-login.
-  access_token_validity  = 12
-  id_token_validity      = 12
-  refresh_token_validity = 30
+  # USER_PASSWORD_AUTH powers the self-hosted /login form's BFF InitiateAuth call; the Hosted UI
+  # authorization-code (PKCE) flow above coexists as the edge dark fallback. No ALLOW_REFRESH_TOKEN_AUTH:
+  # the refresh flow is not implemented (least privilege — the BFF discards the RefreshToken immediately).
+  # Token lifetimes are declared explicitly to match the live deployment (id/access = 12h).
+  explicit_auth_flows   = ["ALLOW_USER_PASSWORD_AUTH"]
+  id_token_validity     = 12
+  access_token_validity = 12
   token_validity_units {
-    access_token  = "hours"
-    id_token      = "hours"
-    refresh_token = "days"
+    id_token     = "hours"
+    access_token = "hours"
   }
 }
 

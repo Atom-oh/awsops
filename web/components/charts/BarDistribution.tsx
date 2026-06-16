@@ -12,7 +12,8 @@ import {
   YAxis,
 } from 'recharts';
 import Card from '@/components/ui/Card';
-import { AXIS_TICK, CHART, TOOLTIP_STYLES } from './theme';
+import { useChartColors } from '@/lib/use-chart-colors';
+import { axisTick, tooltipStyles } from './theme';
 
 export interface BarDistributionProps {
   title: ReactNode;
@@ -24,8 +25,8 @@ export interface BarDistributionProps {
 }
 
 /**
- * BarDistribution — vertical bars in claude-500, the max bar emphasised in
- * claude-700, dotted ink-100 grid, ink-400 axes, dark inverse tooltip.
+ * BarDistribution — vertical bars in brand-500, the max bar emphasised in
+ * brand-700, dotted ink-100 grid, ink-400 axes, dark inverse tooltip.
  * DESIGN.md §Charts.
  */
 export default function BarDistribution({
@@ -36,6 +37,7 @@ export default function BarDistribution({
   yKey,
   className,
 }: BarDistributionProps) {
+  const c = useChartColors();
   const max = data.reduce((m, d) => {
     const n = Number(d[yKey]);
     return Number.isFinite(n) && n > m ? n : m;
@@ -45,24 +47,24 @@ export default function BarDistribution({
     <Card title={title} right={right} className={className}>
       <ResponsiveContainer width="100%" height={240}>
         <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="2 4" stroke={CHART.grid} vertical={false} />
+          <CartesianGrid strokeDasharray="2 4" stroke={c.grid} vertical={false} />
           <XAxis
             dataKey={xKey}
-            tick={AXIS_TICK}
+            tick={axisTick(c)}
             tickLine={false}
-            axisLine={{ stroke: CHART.grid }}
+            axisLine={{ stroke: c.grid }}
             interval={0}
             angle={-30}
             textAnchor="end"
             height={64}
           />
-          <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-          <Tooltip {...TOOLTIP_STYLES} cursor={{ fill: CHART.grid, opacity: 0.4 }} />
+          <YAxis tick={axisTick(c)} tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+          <Tooltip {...tooltipStyles(c)} cursor={{ fill: c.grid, opacity: 0.4 }} />
           <Bar dataKey={yKey} radius={[4, 4, 0, 0]} maxBarSize={40}>
             {data.map((d, i) => (
               <Cell
                 key={i}
-                fill={Number(d[yKey]) === max ? CHART.leadStrong : CHART.lead}
+                fill={Number(d[yKey]) === max ? c.leadStrong : c.lead}
               />
             ))}
           </Bar>

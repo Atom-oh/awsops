@@ -3,7 +3,9 @@ assemble markdown + summary. Read-only. Bedrock model from env (Sonnet for mid t
 import json
 import os
 import re
+import sys
 import boto3
+from botocore.config import Config
 
 from . import sources as src
 from . import invariants as inv
@@ -14,6 +16,14 @@ from .sections import SECTIONS, INTENDED_VS_ACTUAL_SECTION
 # Claude 4.x invoke_model. Matches agent/agent.py's us.* profile convention.
 MODEL_ID = os.environ.get("DIAGNOSIS_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
+
+# A3 (V1 parity): per-section Bedrock idle/read timeout so one hung section can't stall the whole
+# job indefinitely (V1 aborted after 60s with no token). On timeout invoke_model raises →
+# _report's except → finish_report(failed) → the report surfaces as failed, never eternal "running".
+_BEDROCK_READ_TIMEOUT_S = int(os.environ.get("DIAGNOSIS_BEDROCK_READ_TIMEOUT_S", "90"))
+_BEDROCK_CONFIG = Config(
+    connect_timeout=10, read_timeout=_BEDROCK_READ_TIMEOUT_S, retries={"max_attempts": 2},
+)
 
 # [GATE-FIX CRITICAL] PII/secret redaction BEFORE any Bedrock call (spec §9 mandatory).
 # The account-id pattern uses negative lookarounds so it only matches a STANDALONE 12-digit
@@ -49,7 +59,7 @@ def _bedrock_render(prompt, context_json):
     # us-east-1). Use a dedicated BEDROCK_REGION (default us-east-1), NOT the deployment REGION
     # (ap-northeast-2) — else the us.* profile throws. Use apac.* + ap region if you prefer in-region.
     bedrock_region = os.environ.get("BEDROCK_REGION", "us-east-1")
-    client = boto3.client("bedrock-runtime", region_name=bedrock_region)
+    client = boto3.client("bedrock-runtime", region_name=bedrock_region, config=_BEDROCK_CONFIG)
     body = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 1500,
@@ -111,10 +121,23 @@ def _diff_summary(current_drift, parent_summary):
     return {"regressions": regressions, "improvements": improvements}
 
 
-def generate(conn, account, tier="mid", report_id=None):
+def generate(conn, account, tier="mid", report_id=None, on_progress=None):
     """Collect → evaluate active invariants → render each section → markdown + summary.
     Returns (markdown, summary, sources_used). Read-only throughout; the LLM sees verdict-only
-    drift, never raw untrusted edge text. `report_id` (optional) enables the parent-report diff."""
+    drift, never raw untrusted edge text. `report_id` (optional) enables the parent-report diff.
+    `on_progress(current, total, section, phase)` (optional, A3 / V1 parity) is called as work
+    advances — best-effort (a callback error never aborts the report)."""
+    total = len(SECTIONS) + 1  # + INTENDED_VS_ACTUAL_SECTION; fixed so the UI can show N/total
+
+    def _emit(current, section, phase):
+        if on_progress is None:
+            return
+        try:
+            on_progress(current, total, section, phase)
+        except Exception as e:  # noqa: BLE001 — progress is a heartbeat, never fatal to the report
+            print(f"progress emit failed (non-fatal): {e}", file=sys.stderr)  # [P4 gemini MINOR] don't fail silently
+
+    _emit(0, "데이터 수집", "collect")
     collected = {r["key"]: r for r in src.collect_all(conn)}
     sources_used = [k for k, r in collected.items() if r["ok"]]
     degraded = [k for k, r in collected.items() if r["degraded"]]
@@ -132,7 +155,11 @@ def generate(conn, account, tier="mid", report_id=None):
     }
 
     catalog = list(SECTIONS) + [INTENDED_VS_ACTUAL_SECTION]
-    rendered = [render_section(sec, collected) for sec in catalog]
+    rendered = []
+    for i, sec in enumerate(catalog):
+        _emit(i + 1, sec["title"], "render")  # before the Bedrock call → UI shows the in-flight section
+        rendered.append(render_section(sec, collected))
+    _emit(total, "리포트 조립", "assemble")
     md = build_markdown(rendered, account, tier)
     summary = {"sections": len(rendered), "sources_used": sources_used,
                "degraded": degraded, "drift": drift}

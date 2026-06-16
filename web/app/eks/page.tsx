@@ -212,7 +212,7 @@ export default function EksPage() {
       </div>
 
       {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
-      {notice && <div className="text-[13px] text-claude-700">{notice}</div>}
+      {notice && <div className="text-[13px] text-brand-700">{notice}</div>}
       {!rows && !err && <div className="text-ink-400">로딩 중…</div>}
 
       {guide && (
@@ -247,7 +247,7 @@ export default function EksPage() {
               <Card key={c.name} className="p-4">
                 <div className="flex items-start justify-between gap-2">
                   {c.access === 'connected' ? (
-                    <Link href={`/eks/${encodeURIComponent(c.name)}`} className="font-mono text-[13px] font-semibold text-claude-600 hover:underline">{c.name}</Link>
+                    <Link href={`/eks/${encodeURIComponent(c.name)}`} className="font-mono text-[13px] font-semibold text-brand-600 hover:underline">{c.name}</Link>
                   ) : (
                     <span className="font-mono text-[13px] font-semibold text-ink-700">{c.name}</span>
                   )}

@@ -14,7 +14,7 @@ export default function ThreadList({ threads, activeId, onSelect, onDelete, onNe
         <button
           onClick={onNew}
           aria-label="새 대화"
-          className="flex w-full items-center gap-1.5 rounded-lg border border-claude-200 bg-claude-50 px-3 py-2 text-left text-[13px] font-medium text-claude-700 transition-colors hover:bg-claude-100"
+          className="flex w-full items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-left text-[13px] font-medium text-brand-700 transition-colors hover:bg-brand-100"
         >
           <Plus size={15} /> 새 대화
         </button>
@@ -31,7 +31,7 @@ export default function ThreadList({ threads, activeId, onSelect, onDelete, onNe
               onClick={() => onSelect(t.id)}
               className={
                 'group mb-0.5 flex cursor-pointer items-center justify-between gap-1.5 rounded-md px-2 py-2 transition-colors ' +
-                (active ? 'bg-white shadow-sm' : 'hover:bg-ink-100/70')
+                (active ? 'bg-card shadow-sm' : 'hover:bg-ink-100/70')
               }
             >
               <div className="min-w-0">

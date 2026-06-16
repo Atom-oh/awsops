@@ -18,13 +18,13 @@ describe('Button', () => {
   it('renders children and applies the primary variant class', () => {
     const { container } = render(<Button>저장</Button>);
     expect(screen.getByText('저장')).toBeTruthy();
-    expect(container.querySelector('button')!.className).toContain('bg-claude-500');
+    expect(container.querySelector('button')!.className).toContain('bg-brand-action');
   });
 
   it('applies the secondary variant class', () => {
     const { container } = render(<Button variant="secondary">취소</Button>);
     const cls = container.querySelector('button')!.className;
-    expect(cls).toContain('bg-white');
+    expect(cls).toContain('bg-card');
     expect(cls).toContain('border-ink-100');
   });
 
@@ -67,7 +67,7 @@ describe('StatePill', () => {
 
   it("maps 'Pending' to brand styling", () => {
     const { container } = render(<StatePill value="Pending" />);
-    expect(container.querySelector('span')!.className).toContain('bg-claude-50');
+    expect(container.querySelector('span')!.className).toContain('bg-brand-50');
   });
 
   it("maps 'stopped' to neutral styling", () => {
@@ -83,9 +83,9 @@ describe('Meter', () => {
     expect(screen.getByText('17%')).toBeTruthy();
   });
 
-  it('colors claude in [50,75)', () => {
+  it('colors brand in [50,75)', () => {
     const { container } = render(<Meter value={60} />);
-    expect(container.innerHTML).toContain('bg-claude-500');
+    expect(container.innerHTML).toContain('bg-brand-500');
   });
 
   it('colors rose at or above 75', () => {
@@ -132,7 +132,7 @@ describe('Card / SectionLabel / PageHeader', () => {
   it('Card renders children and the card surface classes', () => {
     const { container } = render(<Card>body</Card>);
     const cls = container.firstElementChild!.className;
-    expect(cls).toContain('bg-white');
+    expect(cls).toContain('bg-card');
     expect(cls).toContain('border-ink-100');
     expect(cls).toContain('shadow-card');
     expect(screen.getByText('body')).toBeTruthy();

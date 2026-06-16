@@ -11,8 +11,8 @@ interface Me {
 
 // Footer identity block: fetches the real signed-in user from /api/me once (the awsops_token
 // cookie is HttpOnly so the client can't read it directly), and wires the sign-out button to
-// POST /api/auth/signout (cookie clear) → hosted-UI logout redirect. While loading or on 401 we
-// keep the previous placeholder shape so the layout never jumps.
+// POST /api/auth/signout (cookie clear) → navigate to the returned redirect (/login). While
+// loading or on 401 we keep the previous placeholder shape so the layout never jumps.
 export default function UserIdentity() {
   const { t } = useI18n();
   const [me, setMe] = useState<Me | null>(null);
@@ -33,10 +33,10 @@ export default function UserIdentity() {
   async function signOut() {
     try {
       const res = await fetch('/api/auth/signout', { method: 'POST' });
-      const { logoutUrl } = await res.json();
-      window.location.href = logoutUrl ?? '/';
+      const { redirect } = await res.json();
+      window.location.href = redirect ?? '/login';
     } catch {
-      window.location.href = '/';
+      window.location.href = '/login';
     }
   }
 

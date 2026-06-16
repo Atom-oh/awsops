@@ -160,7 +160,7 @@ export default function IntentPanel() {
                   <button
                     onClick={() => accept(i)}
                     disabled={busy === i.id}
-                    className="rounded-md bg-claude-500 px-2.5 py-1 text-[12px] font-medium text-white disabled:opacity-50"
+                    className="rounded-md bg-brand-500 px-2.5 py-1 text-[12px] font-medium text-white disabled:opacity-50"
                   >
                     Accept
                   </button>

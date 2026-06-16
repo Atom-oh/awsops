@@ -20,7 +20,7 @@ export default function RefreshButton({
         <RotateCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
         {busy ? '수집 중…' : 'Refresh'}
       </Button>
-      <span className={cn('text-[11px]', stale ? 'text-claude-700' : 'text-ink-400')}>
+      <span className={cn('text-[11px]', stale ? 'text-brand-700' : 'text-ink-400')}>
         {age}
         {stale ? ' (오래됨)' : ''}
       </span>

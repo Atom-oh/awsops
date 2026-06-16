@@ -12,10 +12,19 @@ export interface DiagnosisReport {
   artifact_uri: string | null;
   error: string | null;
   created_at: string;
+  // A3/A5 (V1 parity): live per-section progress written by the worker as generate() advances.
+  progress: DiagnosisProgress;
+}
+
+export interface DiagnosisProgress {
+  current?: number;
+  total?: number;
+  section?: string;
+  phase?: 'collect' | 'render' | 'assemble';
 }
 
 const COLS =
-  'id, worker_job_id, tier, status, requested_by, sources_used, summary, artifact_uri, error, created_at';
+  'id, worker_job_id, tier, status, requested_by, sources_used, summary, artifact_uri, error, created_at, progress';
 
 export async function listReports(limit = 50): Promise<DiagnosisReport[]> {
   const { rows } = await getPool().query(

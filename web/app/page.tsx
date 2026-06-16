@@ -92,7 +92,7 @@ export default function Home() {
         subtitle="실시간 AWS · Kubernetes 운영 현황"
         right={<RefreshButton busy={busy} onClick={loadAll} capturedAt={capturedAt} />}
       />
-      <div className="px-8 py-8 flex flex-col gap-6">
+      <div className="px-4 lg:px-8 py-8 flex flex-col gap-6">
         {loading && <div className="text-ink-400">로딩 중…</div>}
         {ovErr && (
           <div className="text-[13px] text-rose-600">
@@ -106,7 +106,7 @@ export default function Home() {
         {/* ---- KPI group 1: COMPUTE & CONTAINERS ---- */}
         <section className="flex flex-col gap-3">
           <SectionLabel>COMPUTE &amp; CONTAINERS</SectionLabel>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <StatTile
               label="EC2 인스턴스"
               value={n('ec2')}
@@ -123,7 +123,7 @@ export default function Home() {
         {/* ---- KPI group 2: STORAGE & NETWORK ---- */}
         <section className="flex flex-col gap-3">
           <SectionLabel>STORAGE &amp; NETWORK</SectionLabel>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <StatTile label="S3 버킷" value={n('s3')} />
             <StatTile
               label="EBS 볼륨"
@@ -140,7 +140,7 @@ export default function Home() {
         {/* ---- KPI group 3: SECURITY · OPS · COST ---- */}
         <section className="flex flex-col gap-3">
           <SectionLabel>SECURITY · OPS · COST</SectionLabel>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <StatTile label="IAM 역할" value={n('iam_role')} />
             <StatTile
               label="보안 그룹"

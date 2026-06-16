@@ -1,33 +1,30 @@
 /**
- * Chart theme — matches DESIGN.md §"Components catalog → Charts" exactly.
- * lead = claude-500, secondary = ink-400, tertiary/total = ink-800;
- * donut palette cycles claude-500 / ink-400 / ink-800 / claude-700 / claude-200;
- * grid dotted "2 4" in ink-100; axes/labels ink-400; tooltip = dark inverse.
+ * Chart theme helpers. recharts renders colors as SVG/DOM-style props, which
+ * don't accept CSS var(), so the active theme's colors are resolved at runtime
+ * by useChartColors (getComputedStyle on the --chart-* vars) and passed in here.
+ * That keeps charts reactive across the Cobalt / Teal / Dark themes.
  */
-export const CHART = {
-  lead: '#D97757', // claude-500
-  leadStrong: '#8E4830', // claude-700
-  secondary: '#8A8474', // ink-400
-  total: '#1F1E1D', // ink-800
-  grid: '#EDEBE4', // ink-100
-  axis: '#8A8474', // ink-400
-  paper: '#FAF9F5',
-} as const;
+import type { ChartColors } from '@/lib/use-chart-colors';
 
-/** Donut/series palette: claude-500, ink-400, ink-800, claude-700, claude-200. */
-export const PALETTE = ['#D97757', '#8A8474', '#1F1E1D', '#8E4830', '#EEBFAA'] as const;
+/** Axis tick style built from the active theme's resolved chart colors. */
+export function axisTick(c: ChartColors) {
+  return { fill: c.axis, fontSize: 11 } as const;
+}
 
-export const AXIS_TICK = { fill: CHART.axis, fontSize: 11 } as const;
-
-/** Dark inverse tooltip — ink-800 bg, paper text, radius 8. */
-export const TOOLTIP_STYLES = {
-  contentStyle: {
-    background: CHART.total,
-    border: 'none',
-    borderRadius: 8,
-    boxShadow: '0 6px 24px rgba(31,30,29,.18)',
-    padding: '8px 10px',
-  },
-  labelStyle: { color: CHART.paper, fontSize: 11, marginBottom: 2 },
-  itemStyle: { color: CHART.paper, fontSize: 12 },
-} as const;
+/**
+ * recharts <Tooltip> style props — a dark inverse panel on the light themes,
+ * an elevated dark panel on the dark theme. Colors come from the theme.
+ */
+export function tooltipStyles(c: ChartColors) {
+  return {
+    contentStyle: {
+      background: c.tooltipBg,
+      border: 'none',
+      borderRadius: 8,
+      boxShadow: '0 6px 24px rgba(0,0,0,.25)',
+      padding: '8px 10px',
+    },
+    labelStyle: { color: c.tooltipFg, fontSize: 11, marginBottom: 2 },
+    itemStyle: { color: c.tooltipFg, fontSize: 12 },
+  } as const;
+}

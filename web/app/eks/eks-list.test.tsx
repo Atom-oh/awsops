@@ -108,7 +108,8 @@ describe('EKS list page (ADR buildout)', () => {
     render(<EksPage />);
     // node resource bars
     await waitFor(() => expect(screen.getByText('n1')).toBeTruthy());
-    // warning events table
-    await waitFor(() => expect(screen.getByText('BackOff')).toBeTruthy());
+    // warning events table — DataTable renders both desktop table + mobile card
+    // list, so the cell value appears twice in jsdom → assert via getAllByText.
+    await waitFor(() => expect(screen.getAllByText('BackOff').length).toBeGreaterThan(0));
   });
 });

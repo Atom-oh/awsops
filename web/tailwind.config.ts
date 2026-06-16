@@ -5,24 +5,48 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        paper: { DEFAULT: '#FAF9F5', muted: '#F3F1EB' },
+        paper: { DEFAULT: 'var(--paper)', muted: 'var(--paper-muted)' },
+        // card surface — themeable elevated surface (light: #fff, dark: elevated dark).
+        // Replaces literal bg-white on cards; text-white stays #fff for colored buttons.
+        card: 'var(--surface-card)',
         ink: {
-          50: '#F7F6F2', 100: '#EDEBE4', 200: '#D7D3C7', 300: '#B5AFA0', 400: '#8A8474',
-          500: '#5F5A4D', 600: '#3F3B32', 700: '#2B2823', 800: '#1F1E1D', 900: '#14130F',
+          50: 'var(--ink-50)', 100: 'var(--ink-100)', 200: 'var(--ink-200)', 300: 'var(--ink-300)',
+          400: 'var(--ink-400)', 500: 'var(--ink-500)', 600: 'var(--ink-600)', 700: 'var(--ink-700)',
+          800: 'var(--ink-800)', 900: 'var(--ink-900)',
         },
-        claude: {
-          50: '#FBF1EC', 100: '#F5DCCF', 200: '#EEBFAA', 300: '#E69F7F', 400: '#DF8663',
-          500: '#D97757', 600: '#B75E40', 700: '#8E4830', 800: '#653321', 900: '#3D1F14',
+        brand: {
+          50: 'var(--brand-50)', 100: 'var(--brand-100)', 200: 'var(--brand-200)', 300: 'var(--brand-300)',
+          400: 'var(--brand-400)', 500: 'var(--brand-500)', 600: 'var(--brand-600)', 700: 'var(--brand-700)',
+          800: 'var(--brand-800)', 900: 'var(--brand-900)',
+          action: 'var(--brand-action)', 'action-hover': 'var(--brand-action-hover)',
         },
-        emerald: { 50: '#ECFDF5', 200: '#A7F3D0', 500: '#10B981', 700: '#047857' },
-        rose: { 50: '#FFF1F2', 200: '#FECDD3', 500: '#F43F5E', 700: '#BE123C' },
+        chrome: {
+          DEFAULT: 'var(--surface-chrome)', muted: 'var(--surface-chrome-muted)',
+          fg: 'var(--chrome-fg)', 'fg-muted': 'var(--chrome-fg-muted)', border: 'var(--chrome-border)',
+          active: 'var(--chrome-active-bg)', 'active-fg': 'var(--chrome-active-fg)', 'active-border': 'var(--chrome-active-border)',
+        },
+        positive: { DEFAULT: 'var(--positive)', surface: 'var(--positive-surface)', text: 'var(--positive-text)', border: 'var(--positive-border)' },
+        negative: { DEFAULT: 'var(--negative)', surface: 'var(--negative-surface)', text: 'var(--negative-text)', border: 'var(--negative-border)' },
+        warning:  { DEFAULT: 'var(--warning)',  surface: 'var(--warning-surface)',  text: 'var(--warning-text)',  border: 'var(--warning-border)' },
+        // emerald/rose kept as semantic aliases (existing usages) — every shade maps to the
+        // nearest positive/negative var so no class breaks regardless of which shade is used.
+        emerald: {
+          50: 'var(--positive-surface)', 100: 'var(--positive-surface)', 200: 'var(--positive-border)', 300: 'var(--positive-border)',
+          400: 'var(--positive)', 500: 'var(--positive)', 600: 'var(--positive-text)', 700: 'var(--positive-text)',
+          800: 'var(--positive-text)', 900: 'var(--positive-text)',
+        },
+        rose: {
+          50: 'var(--negative-surface)', 100: 'var(--negative-surface)', 200: 'var(--negative-border)', 300: 'var(--negative-border)',
+          400: 'var(--negative)', 500: 'var(--negative)', 600: 'var(--negative-text)', 700: 'var(--negative-text)',
+          800: 'var(--negative-text)', 900: 'var(--negative-text)',
+        },
       },
       borderRadius: { sm: '6px', md: '8px', lg: '12px', xl: '16px' },
       boxShadow: {
-        card: '0 1px 2px rgba(31,30,29,.04), 0 4px 16px rgba(31,30,29,.06)',
-        pop: '0 6px 24px rgba(31,30,29,.18)',
-        sm: '0 1px 2px rgba(31,30,29,.06)',
-        focus: '0 0 0 3px rgba(217,119,87,.22)',
+        card: 'var(--shadow-card)',
+        pop: 'var(--shadow-pop)',
+        sm: 'var(--shadow-sm)',
+        focus: 'var(--shadow-focus)',
       },
       fontFamily: {
         sans: ['ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Pretendard', 'sans-serif'],

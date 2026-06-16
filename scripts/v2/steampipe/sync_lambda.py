@@ -151,6 +151,28 @@ QUERIES = {
         "name",
         "region",
     ),
+    "target_group": (
+        # Request-flow topology: load_balancer_arns links TG->ALB/NLB; target_health_descriptions
+        # (jsonb, hydrated via DescribeTargetHealth) carries each target's id/IP + health state.
+        # Nested jsonb keys are PascalCase (AWS SDK shape): target_health_descriptions[].Target.Id,
+        # .TargetHealth.State — kept as jsonb (not ::text) so the BFF reads them as nested objects.
+        "SELECT target_group_arn, region, account_id, target_group_name, target_type, vpc_id, "
+        "protocol, port, load_balancer_arns, health_check_enabled, health_check_protocol, "
+        "health_check_path, target_health_descriptions "
+        "FROM aws_ec2_target_group ORDER BY target_group_name",
+        "target_group_arn",
+        "region",
+    ),
+    "route53": (
+        # Front-door entry: alias/A/CNAME records whose alias_target (PascalCase .DNSName) points
+        # at a CloudFront distribution domain or an LB dns_name. record_id = name+type (a name can
+        # hold multiple record types). route53 is global → literal region.
+        "SELECT (name || ' ' || type) AS record_id, name, type, 'global' AS region, account_id, "
+        "zone_id, alias_target, records, ttl "
+        "FROM aws_route53_record WHERE type IN ('A', 'AAAA', 'CNAME') ORDER BY name",
+        "record_id",
+        "region",
+    ),
     "elasticache": (
         # NON-metric detail fields only; v1's ecMetrics CloudWatch JOIN is live/heavy → F5, not stored here.
         "SELECT cache_cluster_id, region, account_id, arn, engine, engine_version, cache_node_type, "

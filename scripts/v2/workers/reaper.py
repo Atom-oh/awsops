@@ -49,6 +49,20 @@ def lambda_handler(_event, _ctx):
         out["stale_remediation_rows"] = len(rem)
         for job_id, _exec_id in rem:
             print(f"REMEDIATION stale (resume Lambda should finalize) job_id={job_id}")
+
+        # B2 (V1 stale-guard parity): reconcile diagnosis_reports too — status_updater/worker only
+        # touch worker_jobs, so a worker that dies BEFORE _report's finish_report (KeyError, OOM
+        # exit137, DB-connect fail, hard kill) leaves the report 'running' forever and the UI shows
+        # an eternal "진단중". Fail a running report when its linked worker job failed OR it has gone
+        # stale (no progress heartbeat for RUNNING_STALE_MIN — update_progress advances updated_at).
+        dr = conn.run(
+            "UPDATE diagnosis_reports SET status='failed', "
+            "error='reaped: worker failed or stale (no progress heartbeat)' "
+            "WHERE status='running' AND ("
+            "  worker_job_id IN (SELECT job_id FROM worker_jobs WHERE status='failed') "
+            "  OR updated_at < now() - make_interval(mins => :m)) RETURNING id",
+            m=R)
+        out["reaped_reports"] = len(dr)
         return out
     finally:
         conn.close()

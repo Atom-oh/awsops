@@ -1,5 +1,5 @@
 'use client';
-import { useEffect } from 'react';
+import { useEffect, type CSSProperties } from 'react';
 import { useResizablePanel, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import { X } from 'lucide-react';
 import Badge from './Badge';
@@ -73,16 +73,18 @@ export default function DetailPanel({
       <div
         aria-hidden
         onClick={onClose}
-        className="fixed inset-0 z-40 bg-ink-900/20"
+        className="fixed inset-0 z-40 bg-ink-900/40 lg:bg-ink-900/20"
       />
+      {/* Below lg: fullscreen sheet (inset-0, full width, no left border).
+          lg+: unchanged right-docked panel (420px, border-l). CSS-only switch. */}
       <aside
         role="dialog"
         aria-modal="true"
         aria-label={title ?? '리소스 상세'}
-        className="fixed right-0 top-0 z-50 flex h-full max-w-full flex-col border-l border-ink-100 bg-white shadow-pop"
-        style={{ width }}
+        className="fixed inset-0 z-50 flex h-full w-full max-w-full flex-col bg-card shadow-pop lg:inset-y-0 lg:left-auto lg:right-0 lg:w-[var(--panel-w)] lg:border-l lg:border-ink-100"
+        style={{ ['--panel-w' as string]: `${width}px` } as CSSProperties}
       >
-        <div onMouseDown={startResize} title="드래그하여 폭 조절" aria-label="패널 폭 조절" role="separator" className={RESIZE_GRIP_CLASS}>
+        <div onMouseDown={startResize} title="드래그하여 폭 조절" aria-label="패널 폭 조절" role="separator" className={`${RESIZE_GRIP_CLASS} hidden lg:block`}>
           <div className={RESIZE_GRIP_BAR_CLASS} />
         </div>
         <header className="flex items-start justify-between gap-2 border-b border-ink-100 px-4 py-3">

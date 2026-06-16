@@ -126,7 +126,8 @@ resource "aws_iam_role_policy" "steampipe_task" {
         "kafka:Describe*", "kafka:List*",
         "wafv2:List*", "wafv2:Get*",
         "cloudwatch:Describe*",
-        "cloudtrail:Describe*", "cloudtrail:List*", "cloudtrail:GetTrailStatus", "cloudtrail:GetEventSelectors", "cloudtrail:GetInsightSelectors"
+        "cloudtrail:Describe*", "cloudtrail:List*", "cloudtrail:GetTrailStatus", "cloudtrail:GetEventSelectors", "cloudtrail:GetInsightSelectors",
+        "route53:List*", "route53:Get*"
       ]
       Resource = "*"
     }]
@@ -185,9 +186,15 @@ resource "aws_ecs_service" "steampipe" {
   service_registries { registry_arn = aws_service_discovery_service.steampipe[0].arn }
 }
 resource "aws_cloudwatch_metric_alarm" "steampipe_down" {
-  count               = local.sp
+  count = local.sp
+  # RunningTaskCount is a Container Insights metric (namespace ECS/ContainerInsights),
+  # NOT AWS/ECS — AWS/ECS only carries CPU/MemoryUtilization. Referencing AWS/ECS left
+  # the alarm permanently in INSUFFICIENT_DATA (zero data points). treat_missing_data =
+  # "breaching" makes a missing metric (service scaled to 0 / deleted) count as down,
+  # which is the point of a down-detector; when steampipe_enabled flips off the whole
+  # alarm is destroyed (count=0), so this can't false-fire on intentional disable.
   alarm_name          = "${var.project}-steampipe-down"
-  namespace           = "AWS/ECS"
+  namespace           = "ECS/ContainerInsights"
   metric_name         = "RunningTaskCount"
   dimensions          = { ClusterName = aws_ecs_cluster.main.name, ServiceName = aws_ecs_service.steampipe[0].name }
   statistic           = "Average"
@@ -195,6 +202,7 @@ resource "aws_cloudwatch_metric_alarm" "steampipe_down" {
   threshold           = 1
   period              = 60
   evaluation_periods  = 3
+  treat_missing_data  = "breaching"
 }
 
 # ---- sync Lambda (VPC, pg8000 layer; queries Steampipe + writes Aurora) ----

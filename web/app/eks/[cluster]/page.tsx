@@ -14,6 +14,7 @@ import StatCard from '@/components/ui/StatCard';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { aggregateNodeResources, type NodeRow, type PodRow, type NodeResourceAgg } from '@/lib/eks-resources';
 import { podStatusCounts, deploymentHealth, serviceTypeCounts } from '@/lib/eks-tab-stats';
+import OpencostPanel from './OpencostPanel';
 
 type Row = Record<string, unknown>;
 type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'events' | 'diagnosis';
@@ -249,6 +250,10 @@ export default function EksClusterPage() {
           <SegmentedControl options={TABS} value={tab} onChange={(v) => setTab(v as Tab)} />
         </div>
 
+        {/* Cluster-scoped OpenCost: read-only install status + download guide (collapses when
+            installed, auto-opens the guide when not). Shown on every tab. */}
+        <OpencostPanel cluster={cluster} />
+
         {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
 
         {isDiagnosis ? (
@@ -448,7 +453,7 @@ function DiagnosisDetailPanel({
         role="dialog"
         aria-modal="true"
         aria-label={r.resourceName || '진단 상세'}
-        className="fixed right-0 top-0 z-50 flex h-full w-[420px] max-w-full flex-col border-l border-ink-100 bg-white shadow-pop"
+        className="fixed right-0 top-0 z-50 flex h-full w-[420px] max-w-full flex-col border-l border-ink-100 bg-card shadow-pop"
       >
         <header className="flex items-start justify-between gap-2 border-b border-ink-100 px-4 py-3">
           <h2 className="min-w-0 break-words font-mono text-[13px] font-semibold text-ink-800">
@@ -486,7 +491,7 @@ function DiagnosisDetailPanel({
           </dl>
 
           {/* HYPOTHESIS half — Haiku narration, explicitly labelled UNVERIFIED. */}
-          <div className="mt-5 rounded-md border border-claude-200 bg-claude-50 px-3 py-3">
+          <div className="mt-5 rounded-md border border-brand-200 bg-brand-50 px-3 py-3">
             <div className="mb-1.5">
               <Badge tone="brand" variant="solid">
                 AI hypothesis (Haiku) — verify before acting

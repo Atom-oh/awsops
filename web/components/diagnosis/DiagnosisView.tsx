@@ -3,11 +3,20 @@ import { useEffect, useState, useCallback } from 'react';
 import ReportMarkdown from './ReportMarkdown';
 import IntentPanel from './IntentPanel';
 
+interface DiagnosisProgress {
+  current?: number;
+  total?: number;
+  section?: string;
+  phase?: 'collect' | 'render' | 'assemble';
+}
+
 interface ReportRow {
   id: number;
   tier: string;
   status: string;
   created_at: string;
+  error?: string | null;       // A6: surface failed reports (was hidden → looked stuck)
+  progress?: DiagnosisProgress; // A3/A6: live per-section progress
 }
 
 // Plan-2: intended-vs-actual verdict surfaced in summary.drift; regression diff in summary.diff.
@@ -33,29 +42,58 @@ const SEV_CLASS: Record<string, string> = {
 export default function DiagnosisView() {
   const [tier, setTier] = useState<'light' | 'mid'>('mid');
   const [reports, setReports] = useState<ReportRow[]>([]);
-  const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null } | null>(null);
-  const [running, setRunning] = useState(false);
+  const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress } | null>(null);
+  const [submitting, setSubmitting] = useState(false); // brief: the POST round-trip only
+  const [pollTicks, setPollTicks] = useState(0);        // # of 3s polls a running report has survived
   const [notice, setNotice] = useState<string | null>(null); // [PR#37 review] surface deduped reports
+
+  const POLL_MS = 3000;
+  const LONG_AFTER = 40; // ~2min → show a "taking longer than usual" hint (reaper fails truly-stale rows)
 
   const loadList = useCallback(async () => {
     const r = await fetch('/api/diagnosis');
     if (r.ok) setReports((await r.json()).reports);
   }, []);
 
+  const open = useCallback(async (id: number) => {
+    const r = await fetch(`/api/diagnosis/${id}`);
+    if (r.ok) {
+      const j = await r.json();
+      setActive({
+        id, markdown: j.markdown, summary: (j.report?.summary as ReportSummary) ?? null,
+        status: j.report?.status, error: j.report?.error ?? null, progress: j.report?.progress,
+      });
+    }
+  }, []);
+
   useEffect(() => {
     loadList();
   }, [loadList]);
 
-  const open = async (id: number) => {
-    const r = await fetch(`/api/diagnosis/${id}`);
-    if (r.ok) {
-      const j = await r.json();
-      setActive({ id, markdown: j.markdown, summary: (j.report?.summary as ReportSummary) ?? null });
+  const top = reports[0];
+  const topRunning = top?.status === 'running';
+
+  // Single poll loop: while the newest report is running, refresh the list every 3s. update_progress
+  // advances it; the reaper fails it if the worker dies → it ALWAYS reaches a terminal state, so this
+  // never loops forever (replaces the old inline 3s×100 loop that gave up silently).
+  useEffect(() => {
+    if (!topRunning) return;
+    const t = setTimeout(() => { loadList(); setPollTicks((c) => c + 1); }, POLL_MS);
+    return () => clearTimeout(t);
+  }, [topRunning, reports, loadList]);
+
+  // Auto-open the newest report once it finishes (or on first load) when the user isn't already
+  // viewing something — mirrors V1 showing the latest report. Failed rows render the failed panel
+  // from `view` (no markdown to open).
+  useEffect(() => {
+    if (top && (top.status === 'succeeded' || top.status === 'partial') && active?.id !== top.id && !active) {
+      open(top.id);
     }
-  };
+    if (top && top.status !== 'running') setPollTicks(0);
+  }, [top, active, open]);
 
   const run = async () => {
-    setRunning(true);
+    setSubmitting(true);
     setNotice(null);
     try {
       const r = await fetch('/api/diagnosis', {
@@ -73,20 +111,19 @@ export default function DiagnosisView() {
         await open(posted.report_id);
         return;
       }
-      // Poll the list until a fresh report finishes (simple MVP poll, 3s × 100).
-      for (let i = 0; i < 100; i++) {
-        await new Promise((res) => setTimeout(res, 3000));
-        await loadList();
-        const top = (await (await fetch('/api/diagnosis')).json()).reports[0];
-        if (top && ['succeeded', 'partial', 'failed'].includes(top.status)) {
-          await open(top.id);
-          break;
-        }
-      }
+      setActive(null);  // clear any opened report so the new running one shows its progress
+      await loadList(); // the poll effect takes over while the new report is 'running'
     } finally {
-      setRunning(false);
+      setSubmitting(false);
     }
   };
+
+  // What the main pane shows: an opened report, else the newest report's live state.
+  const view = active ?? (top
+    ? { id: top.id, markdown: null as string | null, summary: null as ReportSummary | null,
+        status: top.status, error: top.error, progress: top.progress }
+    : null);
+  const running = submitting || topRunning;
 
   const download = () => {
     if (!active?.markdown) return;
@@ -112,7 +149,7 @@ export default function DiagnosisView() {
           <button
             onClick={run}
             disabled={running}
-            className="rounded-md bg-claude-500 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded-md bg-brand-500 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
           >
             {running ? '진단 중…' : '진단 실행'}
           </button>
@@ -124,7 +161,12 @@ export default function DiagnosisView() {
                 onClick={() => open(r.id)}
                 className="w-full rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-ink-100"
               >
-                #{r.id} · {r.tier} · <span className="text-ink-400">{r.status}</span>
+                #{r.id} · {r.tier} ·{' '}
+                <span className={r.status === 'failed' ? 'text-red-600' : 'text-ink-400'}>
+                  {r.status === 'running' && r.progress?.total
+                    ? `running ${r.progress.current ?? 0}/${r.progress.total}`
+                    : r.status}
+                </span>
               </button>
             </li>
           ))}
@@ -139,7 +181,7 @@ export default function DiagnosisView() {
         <div className="mb-4">
           <IntentPanel />
         </div>
-        {active?.markdown ? (
+        {view?.markdown ? (
           <>
             <div className="mb-3 flex justify-end">
               <button
@@ -149,13 +191,72 @@ export default function DiagnosisView() {
                 Markdown 다운로드
               </button>
             </div>
-            {active.summary && <ReportInsights summary={active.summary} />}
-            <ReportMarkdown markdown={active.markdown} />
+            {view.summary && <ReportInsights summary={view.summary} />}
+            <ReportMarkdown markdown={view.markdown} />
           </>
+        ) : view?.status === 'running' ? (
+          <ProgressPanel progress={view.progress} stalled={pollTicks >= LONG_AFTER} />
+        ) : view?.status === 'failed' ? (
+          <FailedPanel error={view.error} onRetry={run} disabled={running} />
         ) : (
           <p className="text-sm text-ink-400">리포트를 선택하거나 “진단 실행”을 누르세요.</p>
         )}
       </main>
+    </div>
+  );
+}
+
+// A6 (V1 parity): live per-section progress while a report is running — never a bare spinner, so a
+// stalled run is visible. The reaper (B2) turns a dead worker into a 'failed' row within minutes.
+function ProgressPanel({ progress, stalled }: { progress?: DiagnosisProgress; stalled?: boolean }) {
+  const cur = progress?.current ?? 0;
+  const total = progress?.total ?? 0;
+  const pct = total > 0 ? Math.round((cur / total) * 100) : 0;
+  const phaseLabel =
+    progress?.phase === 'collect' ? '데이터 수집'
+    : progress?.phase === 'assemble' ? '리포트 조립'
+    : '섹션 분석';
+  return (
+    <div className="rounded-md border border-ink-200 bg-paper p-4">
+      <div className="mb-2 flex items-center justify-between text-[13px] text-ink-700">
+        <span className="font-medium">AI 진단 진행 중… {phaseLabel}</span>
+        {total > 0 && <span className="tabular-nums text-ink-500">{cur} / {total}</span>}
+      </div>
+      <div
+        className="h-2 w-full overflow-hidden rounded-full bg-ink-100"
+        role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}
+      >
+        <div className="h-full rounded-full bg-brand-500 transition-all" style={{ width: `${Math.max(pct, 4)}%` }} />
+      </div>
+      {progress?.section && (
+        <div className="mt-2 text-[12px] text-ink-600">
+          현재 섹션: <span className="font-medium text-ink-800">{progress.section}</span>
+        </div>
+      )}
+      {stalled && (
+        <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+          예상보다 오래 걸리고 있습니다. 계속 확인 중이며, 워커 장애 시 자동으로 ‘실패’로 정리됩니다.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A6: surface a failed report (was hidden → the row sat in 'running' and looked stuck) + a retry.
+function FailedPanel({ error, onRetry, disabled }: { error?: string | null; onRetry: () => void; disabled?: boolean }) {
+  return (
+    <div className="rounded-md border border-red-300 bg-red-50 p-4">
+      <div className="mb-1 text-[13px] font-semibold text-red-800">AI 진단 실패</div>
+      <p className="mb-3 break-words text-[12px] text-red-700">
+        {error || '워커가 진단을 완료하지 못했습니다.'}
+      </p>
+      <button
+        onClick={onRetry}
+        disabled={disabled}
+        className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
+      >
+        재시도
+      </button>
     </div>
   );
 }

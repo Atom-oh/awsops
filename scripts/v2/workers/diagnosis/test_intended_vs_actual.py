@@ -163,3 +163,60 @@ def test_generate_no_diff_without_parent(monkeypatch):
     monkeypatch.setattr(db, "list_active_invariants", lambda conn: [])
     md, summary, _ = report.generate(FakeConn(), account="1", tier="mid")
     assert "diff" not in summary  # no report_id → no parent lookup
+
+
+# --- A3: live per-section progress + bedrock idle timeout ----------------
+
+def test_generate_emits_monotonic_section_progress(monkeypatch):
+    def fake_collect_all(conn):
+        return [{"key": "service_map", "ok": True, "degraded": False, "notes": "", "data": {"edges": []}}]
+    monkeypatch.setattr(report.src, "collect_all", fake_collect_all)
+    monkeypatch.setattr(report, "_bedrock_render", lambda p, c: "본문")
+    monkeypatch.setattr(db, "list_active_invariants", lambda conn: [])
+
+    events = []
+    report.generate(FakeConn(), account="1", tier="mid",
+                     on_progress=lambda cur, total, section, phase: events.append((cur, total, section, phase)))
+
+    total_sections = len(sections.SECTIONS) + 1  # + INTENDED_VS_ACTUAL_SECTION
+    renders = [e for e in events if e[3] == "render"]
+    assert len(renders) == total_sections
+    # monotonic 1..N, all carrying the fixed total + a section title
+    assert [e[0] for e in renders] == list(range(1, total_sections + 1))
+    assert all(e[1] == total_sections and e[2] for e in renders)
+    # collect emitted before the first render; assemble after the last
+    assert events[0][3] == "collect"
+    assert events[-1][3] == "assemble"
+
+
+def test_generate_progress_failure_never_aborts_report(monkeypatch):
+    def fake_collect_all(conn):
+        return [{"key": "service_map", "ok": True, "degraded": False, "notes": "", "data": {"edges": []}}]
+    monkeypatch.setattr(report.src, "collect_all", fake_collect_all)
+    monkeypatch.setattr(report, "_bedrock_render", lambda p, c: "본문")
+    monkeypatch.setattr(db, "list_active_invariants", lambda conn: [])
+
+    def boom(*a, **k):
+        raise RuntimeError("db hiccup")
+    md, summary, _ = report.generate(FakeConn(), account="1", tier="mid", on_progress=boom)
+    assert md and "sections" in summary  # progress is best-effort; report still produced
+
+
+def test_bedrock_render_sets_read_timeout(monkeypatch):
+    captured = {}
+
+    class _FakeClient:
+        def invoke_model(self, **kw):
+            import io
+            return {"body": io.BytesIO(json.dumps({"content": [{"text": "x"}]}).encode())}
+
+    def fake_client(name, region_name=None, config=None):
+        captured["region"] = region_name
+        captured["config"] = config
+        return _FakeClient()
+    monkeypatch.setattr(report.boto3, "client", fake_client)
+
+    out = report._bedrock_render("prompt", "{}")
+    assert out == "x"
+    assert captured["region"] == "us-east-1"  # us.* profile must stay in a US region
+    assert captured["config"] is not None and captured["config"].read_timeout  # idle/read timeout set

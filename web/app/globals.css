@@ -3,43 +3,104 @@
 @tailwind utilities;
 
 :root {
-  /* brand (Claude orange) */
-  --claude-50:#FBF1EC; --claude-100:#F5DCCF; --claude-200:#EEBFAA;
-  --claude-300:#E69F7F; --claude-400:#DF8663; --claude-500:#D97757;
-  --claude-600:#B75E40; --claude-700:#8E4830; --claude-800:#653321; --claude-900:#3D1F14;
+  /* ===== shared cool neutrals (replaces warm ink/paper) ===== */
+  --ink-50:#F4F6F8; --ink-100:#E7ECEF; --ink-200:#D3DAE0; --ink-300:#AFBAC3;
+  --ink-400:#7D8A96; --ink-500:#5A6873; --ink-600:#3D4852; --ink-700:#2A333B;
+  --ink-800:#16202A; --ink-900:#0C141C;
+  --paper:#F4F6F8; --paper-muted:#EBEFF2; --white:#FFFFFF;
 
-  /* ink (warm neutral) */
-  --ink-50:#F7F6F2; --ink-100:#EDEBE4; --ink-200:#D7D3C7; --ink-300:#B5AFA0;
-  --ink-400:#8A8474; --ink-500:#5F5A4D; --ink-600:#3F3B32; --ink-700:#2B2823;
-  --ink-800:#1F1E1D; --ink-900:#14130F;
+  /* ===== brand ramp — teal (default; official Bedrock #01A88D) ===== */
+  --brand-50:#E6F6F2; --brand-100:#C4EBE3; --brand-200:#8FD9CC; --brand-300:#54C3B0;
+  --brand-400:#1FB199; --brand-500:#01A88D; --brand-600:#00876F; --brand-700:#0A6B5A;
+  --brand-800:#0C5447; --brand-900:#0A3D34;
+  /* accessible action color for buttons/primary — AA on white */
+  --brand-action:#0A6B5A; --brand-action-hover:#0C5447;
 
-  /* paper surfaces */
-  --paper:#FAF9F5; --paper-muted:#F3F1EB; --white:#FFFFFF;
+  /* ===== chrome (sidebar/header) — light ===== */
+  --surface-chrome:#FFFFFF; --surface-chrome-muted:#F4F6F8;
+  --chrome-fg:var(--ink-800); --chrome-fg-muted:var(--ink-500); --chrome-border:var(--ink-100);
+  --chrome-active-bg:var(--brand-50); --chrome-active-fg:var(--brand-700); --chrome-active-border:var(--brand-500);
 
-  /* semantic accents */
-  --emerald-50:#ECFDF5; --emerald-200:#A7F3D0; --emerald-500:#10B981; --emerald-700:#047857;
-  --rose-50:#FFF1F2; --rose-200:#FECDD3; --rose-500:#F43F5E; --rose-700:#BE123C;
+  /* ===== semantic (shared across themes) ===== */
+  --positive:#01A88D; --positive-surface:#E6F6F2; --positive-text:#00715D; --positive-border:#8FD9CC;
+  --negative:#D13212; --negative-surface:#FDECE8; --negative-text:#A32A0F; --negative-border:#F5C3B5;
+  --warning:#F59E0B; --warning-surface:#FEF3E2; --warning-text:#B26B05; --warning-border:#FAD9A0;
 
-  /* aliases — reach for these */
+  /* ===== chart palette (read at runtime by useChartColors → recharts SVG).
+     Must be concrete hex: getComputedStyle does NOT resolve var() in custom props. ===== */
+  --chart-1:#01A88D; --chart-2:#528DF8; --chart-3:#7B26FF; --chart-4:#39C2B0; --chart-5:#7D8A96;
+  --chart-grid:#E7ECEF; --chart-axis:#7D8A96;
+  --chart-tooltip-bg:#16202A; --chart-tooltip-fg:#F4F6F8;
+
+  /* ===== aliases — reach for these ===== */
   --surface-page:var(--paper); --surface-sunken:var(--paper-muted); --surface-card:var(--white);
   --text-primary:var(--ink-800); --text-secondary:var(--ink-500);
-  --text-muted:var(--ink-400); --text-faint:var(--ink-300); --text-brand:var(--claude-700);
-  --border-subtle:var(--ink-100); --border-default:var(--ink-200); --border-brand:var(--claude-200);
-  --brand:var(--claude-500); --brand-hover:var(--claude-600); --brand-text:var(--claude-700);
-  --brand-subtle:var(--claude-50); --brand-subtle-border:var(--claude-200); --on-brand:var(--white);
-  --positive:var(--emerald-500); --positive-surface:var(--emerald-50); --positive-text:var(--emerald-700); --positive-border:var(--emerald-200);
-  --negative:var(--rose-500); --negative-surface:var(--rose-50); --negative-text:var(--rose-700); --negative-border:var(--rose-200);
+  --text-muted:var(--ink-400); --text-faint:var(--ink-300); --text-brand:var(--brand-700);
+  --border-subtle:var(--ink-100); --border-default:var(--ink-200); --border-brand:var(--brand-200);
+  --brand:var(--brand-500); --brand-hover:var(--brand-600); --brand-subtle:var(--brand-50);
+  --brand-subtle-border:var(--brand-200); --on-brand:var(--white);
+  --positive-alias:var(--positive); --negative-alias:var(--negative);
 
-  /* chart palette */
-  --chart-1:var(--claude-500); --chart-2:var(--ink-400); --chart-3:var(--ink-800);
-  --chart-4:var(--claude-700); --chart-5:var(--claude-200);
-  --chart-grid:var(--ink-100); --chart-axis:var(--ink-400);
+  /* ===== elevation (cool shadows) ===== */
+  --shadow-card:0 1px 2px rgba(16,32,42,.04), 0 4px 16px rgba(16,32,42,.06);
+  --shadow-sm:0 1px 2px rgba(16,32,42,.06);
+  --shadow-pop:0 6px 24px rgba(16,32,42,.18);
+  --shadow-focus:0 0 0 3px rgba(1,168,141,.26);
+}
 
-  /* elevation */
-  --shadow-card:0 1px 2px rgba(31,30,29,.04), 0 4px 16px rgba(31,30,29,.06);
-  --shadow-sm:0 1px 2px rgba(31,30,29,.06);
-  --shadow-pop:0 6px 24px rgba(31,30,29,.18);
-  --shadow-focus:0 0 0 3px rgba(217,119,87,.22);
+/* ===== cobalt theme: brand ramp + chart lead + focus ring ===== */
+[data-theme="cobalt"] {
+  --brand-50:#EAF1FE; --brand-100:#D2E2FD; --brand-200:#A9C7FB; --brand-300:#7FA9F9;
+  --brand-400:#5E96F8; --brand-500:#528DF8; --brand-600:#2E6BE6; --brand-700:#1F54C2;
+  --brand-800:#1B4196; --brand-900:#15306B;
+  --brand-action:#2E6BE6; --brand-action-hover:#1F54C2;
+  --chart-1:#528DF8; --chart-2:#01A88D; --chart-3:#7B26FF; --chart-4:#39C2B0;
+  --shadow-focus:0 0 0 3px rgba(82,141,248,.26);
+}
+
+/* ===== dark theme: full VSCode-style dark, cobalt accent =====
+   Neutral ramp is re-tuned so low indices read as dark *surfaces* and high
+   indices as light *text* (bg-ink-50 → near-bg, text-ink-800 → primary text).
+   ink-900 stays near-black: it is used only as modal scrim (bg-ink-900/20-40).
+   bg-ink-800 inverse chips (avatar/badge/code) flip to a light surface; their
+   text-paper companion goes dark → still a readable inverse. */
+[data-theme="dark"] {
+  /* neutrals — surfaces dark (low) → text light (high); 900 pinned for scrims */
+  --ink-50:#1F262D; --ink-100:#29333B; --ink-200:#38444E; --ink-300:#586773;
+  --ink-400:#8696A3; --ink-500:#9FAEBA; --ink-600:#B6C2CC; --ink-700:#CCD5DD;
+  --ink-800:#E3E9EE; --ink-900:#05080B;
+  --paper:#1A2026; --paper-muted:#141A1F; --white:#FFFFFF;
+
+  /* brand ramp — cobalt re-tuned for dark: subtle surfaces dark, text light,
+     solids stay saturated so white labels keep contrast */
+  --brand-50:#0F2747; --brand-100:#143459; --brand-200:#245A9E; --brand-300:#3D78D4;
+  --brand-400:#4A85EE; --brand-500:#528DF8; --brand-600:#2E6BE6; --brand-700:#93BBFA;
+  --brand-800:#1B4196; --brand-900:#15306B;
+  --brand-action:#2E6BE6; --brand-action-hover:#1F54C2;
+
+  /* card / page surfaces — card sits elevated above the page */
+  --surface-card:#232C34;
+
+  /* chrome (sidebar/header) — slightly elevated, cobalt-tinted active */
+  --surface-chrome:#20272E; --surface-chrome-muted:#1A2026; --chrome-fg:#E3E9EE;
+  --chrome-fg-muted:#8696A3; --chrome-border:#29333B;
+  --chrome-active-bg:#16335C; --chrome-active-fg:#FFFFFF; --chrome-active-border:var(--brand-500);
+
+  /* semantic — dark tinted surfaces, lifted text/accent for dark legibility */
+  --positive:#2CC9AE; --positive-surface:#0E2E2A; --positive-text:#5FE3CE; --positive-border:#1C5249;
+  --negative:#F26B4D; --negative-surface:#3A1712; --negative-text:#F5A593; --negative-border:#6E2A1B;
+  --warning:#F5B53C; --warning-surface:#3A2A0E; --warning-text:#F8CE7E; --warning-border:#6E4E12;
+
+  /* charts — cobalt lead, brighter series + tooltip flips to elevated dark */
+  --chart-1:#528DF8; --chart-2:#2CC9AE; --chart-3:#9D5BFF; --chart-4:#39C2B0; --chart-5:#9FAEBA;
+  --chart-grid:#29333B; --chart-axis:#8696A3;
+  --chart-tooltip-bg:#2B3640; --chart-tooltip-fg:#E3E9EE;
+
+  /* elevation — shadows barely register on dark, so deepen them */
+  --shadow-card:0 1px 2px rgba(0,0,0,.40), 0 4px 16px rgba(0,0,0,.50);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.50);
+  --shadow-pop:0 6px 24px rgba(0,0,0,.60);
+  --shadow-focus:0 0 0 3px rgba(82,141,248,.45);
 }
 
 body {

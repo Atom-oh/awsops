@@ -1,19 +1,25 @@
 import './globals.css';
-import AppShell from '@/components/shell/AppShell';
-import CommandPalette from '@/components/shell/CommandPalette';
-import ChatDrawer from '@/components/chat/ChatDrawer';
+import ShellGate from '@/components/shell/ShellGate';
 import { LanguageProvider } from '@/components/shell/LanguageProvider';
 
 export const metadata = { title: 'AWSops' };
+export const viewport = { width: 'device-width', initialScale: 1 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ko">
+    <html lang="ko" data-theme="cobalt" suppressHydrationWarning>
+      <head>
+        {/* No-flash: set data-theme from localStorage before first paint. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('awsops-theme');if(t==='cobalt'||t==='teal'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();",
+          }}
+        />
+      </head>
       <body className="min-h-screen bg-paper text-ink-800 font-sans antialiased">
         <LanguageProvider>
-          <AppShell>{children}</AppShell>
-          <CommandPalette />
-          <ChatDrawer />
+          <ShellGate>{children}</ShellGate>
         </LanguageProvider>
       </body>
     </html>

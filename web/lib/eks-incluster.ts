@@ -95,11 +95,13 @@ function age(ts?: string): string {
 // minimal K8s shapes (only the fields we read)
 interface K8sList { items?: K8sItem[]; message?: string; kind?: string }
 interface K8sItem {
-  metadata?: { name?: string; namespace?: string; creationTimestamp?: string; labels?: Record<string, string> };
+  metadata?: { name?: string; namespace?: string; creationTimestamp?: string; labels?: Record<string, string>;
+    ownerReferences?: { kind?: string; name?: string }[] };
   status?: {
     conditions?: { type?: string; status?: string }[];
     nodeInfo?: { kubeletVersion?: string };
     phase?: string;
+    podIP?: string;
     containerStatuses?: { restartCount?: number }[];
     readyReplicas?: number;
     availableReplicas?: number;
@@ -176,6 +178,18 @@ export function normalizeNode(it: K8sItem): NodeRow {
   };
 }
 
+/** Owning workload for a pod: Deployment (strip ReplicaSet hash) / StatefulSet / DaemonSet, else label/app. */
+export function podWorkload(it: K8sItem): string {
+  const owner = it.metadata?.ownerReferences?.[0];
+  if (owner?.name) {
+    // ReplicaSet name = <deployment>-<rs-hash> → strip the trailing hash to get the Deployment.
+    if (owner.kind === 'ReplicaSet') return owner.name.replace(/-[a-z0-9]+$/, '');
+    return owner.name;
+  }
+  const l = it.metadata?.labels ?? {};
+  return l['app.kubernetes.io/name'] || l['app'] || it.metadata?.name || '';
+}
+
 export function normalizePod(it: K8sItem): PodRow {
   const restarts = (it.status?.containerStatuses ?? []).reduce((s, c) => s + (c.restartCount ?? 0), 0);
   // Effective pod request = max(sum(app containers), max(init container)) + overhead —
@@ -191,6 +205,8 @@ export function normalizePod(it: K8sItem): PodRow {
     node: it.spec?.nodeName ?? '',
     restarts,
     age: age(it.metadata?.creationTimestamp),
+    podIP: it.status?.podIP ?? '',
+    workload: podWorkload(it),
     cpuRequest: eff(
       app.reduce((s, r) => s + parseCpuCores(r.cpu), 0),
       init.reduce((mx, r) => Math.max(mx, parseCpuCores(r.cpu)), 0),

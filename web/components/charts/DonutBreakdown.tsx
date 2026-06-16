@@ -3,7 +3,8 @@
 import type { ReactNode } from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import Card from '@/components/ui/Card';
-import { PALETTE, TOOLTIP_STYLES } from './theme';
+import { useChartColors } from '@/lib/use-chart-colors';
+import { tooltipStyles } from './theme';
 
 export interface DonutBreakdownProps {
   title: ReactNode;
@@ -18,7 +19,7 @@ export interface DonutBreakdownProps {
 
 /**
  * DonutBreakdown — PieChart innerRadius 55 / outerRadius 80, palette cycling
- * claude-500 / ink-400 / ink-800 / claude-700 / claude-200, a center total
+ * brand-500 / ink-400 / ink-800 / brand-700 / brand-200, a center total
  * label, and a side legend list. DESIGN.md §Charts.
  */
 export default function DonutBreakdown({
@@ -30,6 +31,7 @@ export default function DonutBreakdown({
   valuePrefix = '',
   className,
 }: DonutBreakdownProps) {
+  const c = useChartColors();
   const total = data.reduce((s, d) => s + (Number(d[valueKey]) || 0), 0);
   const fmtTotal =
     valuePrefix === '$'
@@ -52,11 +54,11 @@ export default function DonutBreakdown({
                 stroke="none"
               >
                 {data.map((_, i) => (
-                  <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
+                  <Cell key={i} fill={c.palette[i % c.palette.length]} />
                 ))}
               </Pie>
               <Tooltip
-                {...TOOLTIP_STYLES}
+                {...tooltipStyles(c)}
                 formatter={(v, n) =>
                   [
                     valuePrefix === '$'
@@ -80,7 +82,7 @@ export default function DonutBreakdown({
             <li key={i} className="flex items-center gap-2 text-[12px]">
               <span
                 className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ background: PALETTE[i % PALETTE.length] }}
+                style={{ background: c.palette[i % c.palette.length] }}
               />
               <span className="min-w-0 flex-1 truncate text-ink-600">{String(d[nameKey])}</span>
               <span className="tabular shrink-0 font-medium text-ink-800">

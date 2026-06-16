@@ -45,6 +45,22 @@ def create_report(conn, worker_job_id, tier, requested_by):
     return rows[0][0]
 
 
+def update_progress(conn, report_id, current, total, section, phase="render"):
+    """Live per-section progress (기둥 A / V1 parity). No-op when report_id is None (older enqueue
+    fallback path). Writes ONLY while status='running' so it never resurrects a finished/reaped row.
+    The baseline touch_updated_at() trigger advances updated_at on each write = the reaper heartbeat
+    (기둥 B): a worker that keeps emitting progress looks alive; one that dies goes stale."""
+    if report_id is None:
+        return 0
+    rows = conn.run(
+        "UPDATE diagnosis_reports SET progress=:p::jsonb "
+        "WHERE id=:id AND status='running' RETURNING id",
+        p=json.dumps({"current": current, "total": total, "section": section, "phase": phase}),
+        id=report_id,
+    )
+    return len(rows)
+
+
 def finish_report(conn, report_id, status, sources_used=None, summary=None,
                   artifact_uri=None, error=None):
     assert status in _TERMINAL

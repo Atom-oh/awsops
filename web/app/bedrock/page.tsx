@@ -81,7 +81,7 @@ export default function BedrockPage() {
         subtitle="AWS/Bedrock CloudWatch 메트릭 · 모델별 토큰·비용·캐시"
         right={<RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />}
       />
-      <div className="px-8 py-8 flex flex-col gap-6">
+      <div className="px-4 lg:px-8 py-8 flex flex-col gap-6">
         <div className="overflow-x-auto">
           <SegmentedControl options={RANGES} value={range} onChange={setRange} />
         </div>
@@ -96,7 +96,7 @@ export default function BedrockPage() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                 <StatTile label={`총 비용 (${range})`} value={usd(totalCost)} variant="accent" />
                 <StatTile label="호출 수" value={totalInvocations.toLocaleString()} />
                 <StatTile label="입력 토큰" value={compact(totalInput)} />

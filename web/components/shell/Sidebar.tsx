@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, MessagesSquare, Activity, DollarSign, Sparkles,
-  Box, Gauge, PiggyBank,
+  Box, Gauge,
   Server, Zap, Container, Package,
   Archive, HardDrive, Database, Table, DatabaseZap, Search, Radio,
   Network, Waypoints, BrickWall, Globe, Scale, Split,
@@ -17,6 +17,7 @@ import SectionLabel from '@/components/ui/SectionLabel';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import LanguageToggle from '@/components/shell/LanguageToggle';
 import UserIdentity from '@/components/shell/UserIdentity';
+import ThemeToggle from '@/components/shell/ThemeToggle';
 import { cn } from '@/lib/cn';
 
 // Fixed top-level pages. `tkey` resolves the label via i18n.
@@ -63,39 +64,46 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   cloudwatch_alarm: Bell,
 };
 
-function NavItem({ href, label, icon: Icon, active, className }: { href: string; label: string; icon: LucideIcon; active: boolean; className?: string }) {
+function NavItem({ href, label, icon: Icon, active, className, onNavigate }: { href: string; label: string; icon: LucideIcon; active: boolean; className?: string; onNavigate?: () => void }) {
   return (
     <Link
       href={href}
+      onClick={onNavigate}
       className={cn(
         'flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium no-underline transition-colors duration-[120ms]',
         active
-          ? 'bg-claude-500 text-white shadow-sm'
-          : 'text-ink-500 hover:bg-ink-100 hover:text-ink-800',
+          ? 'bg-chrome-active text-chrome-active-fg shadow-sm'
+          : 'text-chrome-fg-muted hover:bg-chrome-active/40 hover:text-chrome-fg',
         className,
       )}
     >
-      <Icon size={16} strokeWidth={1.7} className={cn('shrink-0', active ? 'text-white' : 'text-ink-400')} />
+      <Icon size={16} strokeWidth={1.7} className={cn('shrink-0', active ? 'text-chrome-active-fg' : 'text-chrome-fg-muted')} />
       <span className="truncate">{label}</span>
     </Link>
   );
 }
 
-export default function Sidebar() {
+// `onNavigate` lets a host (e.g. the mobile drawer) close itself when a link is
+// tapped; `className` lets a host add layout classes (e.g. `hidden lg:flex`).
+// With no props passed the desktop sidebar renders identically to before.
+export default function Sidebar({ onNavigate, className }: { onNavigate?: () => void; className?: string } = {}) {
   const path = usePathname();
   const groups = inventoryGroups();
   const { t } = useI18n();
 
   return (
     <aside
-      className="flex h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-ink-100 bg-paper-muted/60 px-4 pb-4 pt-[22px] backdrop-blur"
+      className={cn(
+        'flex h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-chrome-border bg-chrome-muted px-4 pb-4 pt-[22px] backdrop-blur',
+        className,
+      )}
     >
       {/* Lockup */}
       <div className="mb-5 flex items-center gap-2.5">
         <AwsopsMark size={36} />
         <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-semibold leading-tight text-ink-800">AWSops</div>
-          <div className="text-[10px] text-ink-400">{t('sidebar.tagline')}</div>
+          <div className="text-[15px] font-semibold leading-tight text-chrome-fg">AWSops</div>
+          <div className="text-[10px] text-chrome-fg-muted">{t('sidebar.tagline')}</div>
         </div>
         <LanguageToggle />
       </div>
@@ -110,20 +118,18 @@ export default function Sidebar() {
               label={t(item.tkey)}
               icon={item.icon}
               active={path === item.href}
+              onNavigate={onNavigate}
             />
           ))}
         </div>
 
         {groups.map((g) => (
           <div key={g.group} className="space-y-0.5">
-            <SectionLabel className="px-2.5 pb-1 text-[11px] tracking-[0.04em] text-ink-400">{g.group}</SectionLabel>
+            <SectionLabel className="px-2.5 pb-1 text-[11px] tracking-[0.04em] text-chrome-fg-muted">{g.group}</SectionLabel>
             {g.group === 'Compute' && (
-              /* EKS keeps its own route/icon but lives under Compute (user feedback);
-                 OpenCost renders as an indented EKS submenu item. */
-              <>
-                <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} />
-                <NavItem href="/opencost" label={t('nav.opencost')} icon={PiggyBank} active={path === '/opencost'} className="ml-5" />
-              </>
+              /* EKS keeps its own route/icon but lives under Compute (user feedback).
+                 OpenCost now lives per-cluster on the EKS detail page, not as a nav item. */
+              <NavItem href="/eks" label="EKS" icon={Box} active={path === '/eks' || path.startsWith('/eks/')} onNavigate={onNavigate} />
             )}
             {g.types.map((ty) => {
               const href = `/inventory/${ty}`;
@@ -134,6 +140,7 @@ export default function Sidebar() {
                   label={INVENTORY_TYPES[ty].label}
                   icon={TYPE_ICON[ty] ?? Server}
                   active={path === href}
+                  onNavigate={onNavigate}
                 />
               );
             })}
@@ -142,12 +149,13 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="mt-4 border-t border-ink-100 pt-3">
+      <div className="mt-4 border-t border-chrome-border pt-3">
         <UserIdentity />
-        <div className="mt-2 flex items-center gap-1.5 px-0.5 text-[11px] text-ink-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        <div className="mt-2 flex items-center gap-1.5 px-0.5 text-[11px] text-chrome-fg-muted">
+          <span className="h-1.5 w-1.5 rounded-full bg-positive" />
           <span>{t('sidebar.statusLine', { status: t('sidebar.online') })}</span>
         </div>
+        <ThemeToggle />
       </div>
     </aside>
   );

@@ -34,8 +34,8 @@ function trendTone(trend: string): string {
 /**
  * StatTile (KPI) — white card, radius 12, shadow-card.
  * Eyebrow (xs/uppercase/muted) → value (2xl/600/tabular) → optional trend
- * pill + hint. Variants: accent (claude border + faint AwsopsMark watermark),
- * danger (rose border + rose value), warn (claude-700 value).
+ * pill + hint. Variants: accent (brand border + faint AwsopsMark watermark),
+ * danger (rose border + rose value), warn (brand-700 value).
  *
  * Prop-compatible with the legacy StatCard: `{ label, value, accent? }`.
  */
@@ -50,16 +50,16 @@ export default function StatTile({
 }: StatTileProps) {
   const border =
     variant === 'accent'
-      ? 'border-claude-200'
+      ? 'border-brand-200'
       : variant === 'danger'
         ? 'border-rose-200'
         : 'border-ink-100';
 
   const valueColor =
-    variant === 'danger' ? 'text-rose-700' : variant === 'warn' ? 'text-claude-700' : 'text-ink-800';
+    variant === 'danger' ? 'text-rose-700' : variant === 'warn' ? 'text-brand-700' : 'text-ink-800';
 
   return (
-    <div className={cn('relative overflow-hidden bg-white border rounded-lg shadow-card p-4', border, className)}>
+    <div className={cn('relative overflow-hidden bg-card border rounded-lg shadow-card p-4', border, className)}>
       {variant === 'accent' && (
         <div className="pointer-events-none absolute -top-1 -right-1 opacity-[0.07]">
           <AwsopsMark size={56} />

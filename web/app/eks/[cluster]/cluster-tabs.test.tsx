@@ -9,13 +9,28 @@ beforeEach(() => { vi.unstubAllGlobals(); });
 
 function mockKind(handlers: Record<string, unknown[]>) {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    const kind = new URL(String(url), 'http://x').searchParams.get('kind') ?? '';
+    const u = String(url);
+    // The OpenCost panel (mounted on this page) fetches /api/me + /api/opencost/* — answer
+    // them deterministically so the panel mounts without disturbing the per-tab assertions.
+    if (u.endsWith('/api/me')) return { ok: true, status: 200, json: async () => ({ sub: 'u', groups: [], isAdmin: false }) } as Response;
+    if (u.includes('/api/opencost/')) {
+      if (u.includes('/status')) return { ok: true, status: 200, json: async () => ({ installed: false, ready: false }) } as Response;
+      if (u.includes('/bundle')) return { ok: true, status: 200, json: async () => ({ valuesYaml: '', installSh: '' }) } as Response;
+      return { ok: true, status: 200, json: async () => ({ cluster: 'c1', config: null }) } as Response;
+    }
+    const kind = new URL(u, 'http://x').searchParams.get('kind') ?? '';
     const rows = handlers[kind] ?? [];
     return { ok: true, status: 200, json: async () => ({ kind, rows }) } as Response;
   }));
 }
 
 describe('EKS [cluster] per-tab KPI/viz', () => {
+  it('mounts the per-cluster OpenCost panel', async () => {
+    mockKind({ nodes: [] });
+    render(<EksClusterPage />);
+    await waitFor(() => expect(screen.getByText('OpenCost')).toBeTruthy());
+  });
+
   it('pods tab: KPI counts stay pre-filter while the table filters', async () => {
     mockKind({
       pods: [
@@ -26,9 +41,11 @@ describe('EKS [cluster] per-tab KPI/viz', () => {
     render(<EksClusterPage />);
 
     fireEvent.click(screen.getByText('Pods'));
-    await waitFor(() => expect(screen.getByText('p1')).toBeTruthy());
+    // DataTable renders both the desktop table and the mobile card list, so each
+    // cell value appears twice in jsdom → assert via getAllByText.
+    await waitFor(() => expect(screen.getAllByText('p1').length).toBeGreaterThan(0));
     // both pods present initially
-    expect(screen.getByText('p2')).toBeTruthy();
+    expect(screen.getAllByText('p2').length).toBeGreaterThan(0);
 
     // The Pending KPI tile (StatCard eyebrow) shows 1 (pre-filter). 'Pending'
     // also appears as p2's status cell, so scope to the uppercase eyebrow tile.
@@ -44,7 +61,7 @@ describe('EKS [cluster] per-tab KPI/viz', () => {
     fireEvent.change(screen.getByPlaceholderText('검색…'), { target: { value: 'p1' } });
     await waitFor(() => expect(screen.queryByText('p2')).toBeNull());
     // table now shows only p1
-    expect(screen.getByText('p1')).toBeTruthy();
+    expect(screen.getAllByText('p1').length).toBeGreaterThan(0);
 
     // KPI is computed from allRows (pre-filter) → Pending tile still 1, even
     // though p2 (the only Pending pod) is filtered out of the table.
@@ -61,8 +78,8 @@ describe('EKS [cluster] per-tab KPI/viz', () => {
     const { container } = render(<EksClusterPage />);
 
     fireEvent.click(screen.getByText('Events'));
-    await waitFor(() => expect(screen.getByText('New')).toBeTruthy());
-    expect(screen.getByText('Old')).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText('New').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Old').length).toBeGreaterThan(0);
 
     // newest (lastSeenTs 9) must appear before oldest (1), despite server order.
     const text = container.textContent ?? '';
@@ -79,7 +96,7 @@ describe('EKS [cluster] per-tab KPI/viz', () => {
     render(<EksClusterPage />);
 
     fireEvent.click(screen.getByText('Deployments'));
-    await waitFor(() => expect(screen.getByText('ok')).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText('ok').length).toBeGreaterThan(0));
 
     // Degraded KPI present (bad is 1/3 → 1 degraded).
     expect(screen.getByText('Degraded')).toBeTruthy();

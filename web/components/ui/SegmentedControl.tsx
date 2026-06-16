@@ -9,7 +9,7 @@ function normalize(o: SegOption): { value: string; label: string } {
 
 /**
  * SegmentedControl — pill group on a white track + ink-100 hairline,
- * radius-md, 2px padding. Active segment = solid claude + white + shadow-sm.
+ * radius-md, 2px padding. Active segment = solid brand + white + shadow-sm.
  * Options can be plain strings or { value, label }.
  */
 export default function SegmentedControl({
@@ -26,7 +26,7 @@ export default function SegmentedControl({
   return (
     <div
       role="tablist"
-      className={cn('inline-flex items-center gap-0.5 bg-white border border-ink-100 rounded-md p-0.5', className)}
+      className={cn('inline-flex items-center gap-0.5 bg-card border border-ink-100 rounded-md p-0.5', className)}
     >
       {options.map((o) => {
         const { value: v, label } = normalize(o);
@@ -41,7 +41,7 @@ export default function SegmentedControl({
             className={cn(
               'h-[26px] px-3 rounded-[6px] text-[12px] font-medium whitespace-nowrap',
               'transition-colors duration-[120ms] cursor-pointer',
-              active ? 'bg-claude-500 text-white shadow-sm' : 'text-ink-500 hover:text-ink-800',
+              active ? 'bg-brand-500 text-white shadow-sm' : 'text-ink-500 hover:text-ink-800',
             )}
           >
             {label}

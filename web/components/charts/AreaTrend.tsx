@@ -11,7 +11,8 @@ import {
   YAxis,
 } from 'recharts';
 import Card from '@/components/ui/Card';
-import { AXIS_TICK, CHART, TOOLTIP_STYLES } from './theme';
+import { useChartColors } from '@/lib/use-chart-colors';
+import { axisTick, tooltipStyles } from './theme';
 
 export interface AreaTrendProps {
   title: ReactNode;
@@ -26,9 +27,9 @@ export interface AreaTrendProps {
 }
 
 /**
- * AreaTrend — claude-orange gradient area over a dotted ink-100 grid.
- * Lead series claude-500, fill = vertical gradient #D97757 0.30 → 0.02,
- * axes/labels ink-400, dark inverse tooltip. DESIGN.md §Charts.
+ * AreaTrend — teal gradient area over a dotted ink-100 grid.
+ * Lead series teal (#01A88D), fill = vertical gradient 0.30 → 0.02,
+ * axes/labels ink-400, dark inverse tooltip. AgentCore chart palette.
  */
 export default function AreaTrend({
   title,
@@ -39,6 +40,7 @@ export default function AreaTrend({
   valuePrefix = '',
   className,
 }: AreaTrendProps) {
+  const c = useChartColors();
   const fmt = (v: number | string) => {
     const n = typeof v === 'number' ? v : Number(v);
     if (!Number.isFinite(n)) return String(v);
@@ -53,34 +55,34 @@ export default function AreaTrend({
         <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={CHART.lead} stopOpacity={0.3} />
-              <stop offset="100%" stopColor={CHART.lead} stopOpacity={0.02} />
+              <stop offset="0%" stopColor={c.lead} stopOpacity={0.3} />
+              <stop offset="100%" stopColor={c.lead} stopOpacity={0.02} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="2 4" stroke={CHART.grid} vertical={false} />
+          <CartesianGrid strokeDasharray="2 4" stroke={c.grid} vertical={false} />
           <XAxis
             dataKey={xKey}
-            tick={AXIS_TICK}
+            tick={axisTick(c)}
             tickLine={false}
-            axisLine={{ stroke: CHART.grid }}
+            axisLine={{ stroke: c.grid }}
             minTickGap={24}
           />
           <YAxis
-            tick={AXIS_TICK}
+            tick={axisTick(c)}
             tickLine={false}
             axisLine={false}
             width={56}
             tickFormatter={(v) => fmt(v as number)}
           />
-          <Tooltip {...TOOLTIP_STYLES} formatter={(v) => [fmt(v as number), ''] as [string, string]} />
+          <Tooltip {...tooltipStyles(c)} formatter={(v) => [fmt(v as number), ''] as [string, string]} />
           <Area
             type="monotone"
             dataKey={yKey}
-            stroke={CHART.lead}
+            stroke={c.lead}
             strokeWidth={2}
             fill={`url(#${gid})`}
             dot={false}
-            activeDot={{ r: 4, fill: CHART.lead, strokeWidth: 0 }}
+            activeDot={{ r: 4, fill: c.lead, strokeWidth: 0 }}
           />
         </AreaChart>
       </ResponsiveContainer>

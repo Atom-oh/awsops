@@ -16,7 +16,7 @@ export interface HBarListProps {
 
 /**
  * HBarList — NOT recharts. A simple flex list: label / an ink-100 track with a
- * proportional claude-500 fill / a right-aligned tabular amount. Matches
+ * proportional brand-500 fill / a right-aligned tabular amount. Matches
  * DESIGN.md §6 "서비스별 비용".
  */
 export default function HBarList({
@@ -56,7 +56,7 @@ export default function HBarList({
               </span>
               <span className="h-2 flex-1 overflow-hidden rounded-full bg-ink-100">
                 <span
-                  className="block h-full rounded-full bg-claude-500"
+                  className="block h-full rounded-full bg-brand-500"
                   style={{ width: `${pct}%` }}
                 />
               </span>
