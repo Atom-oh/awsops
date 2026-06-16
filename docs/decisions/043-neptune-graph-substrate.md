@@ -1,4 +1,7 @@
-# ADR-040: Optional Neptune Graph Substrate for Topology + DevOps Agent / 토폴로지·DevOps 에이전트 공용 Neptune 그래프 substrate (옵션)
+# ADR-043: Optional Neptune Graph Substrate for Topology + DevOps Agent / 토폴로지·DevOps 에이전트 공용 Neptune 그래프 substrate (옵션)
+
+<!-- Renumbered 040 → 043 on 2026-06-15 to resolve a merge collision: origin's ADR-040 (governed external knowledge/comms writes) holds 040. Co-agent panel (kiro + Gemini 3.1 Pro) unanimously chose to keep origin's cross-referenced 039/040/041 block intact and renumber leaf ADRs (login → 042, this → 043). -->
+
 
 ## Status / 상태
 

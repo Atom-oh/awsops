@@ -1,4 +1,6 @@
-# ADR-039: v2 In-App Login (Cognito USER_PASSWORD_AUTH) / v2 인앱 로그인 (Cognito USER_PASSWORD_AUTH)
+# ADR-042: v2 In-App Login (Cognito USER_PASSWORD_AUTH) / v2 인앱 로그인 (Cognito USER_PASSWORD_AUTH)
+
+<!-- Renumbered 039 → 042 on 2026-06-15 to resolve a merge collision: origin's ADR-039 (multi-agent platform) holds 039. Co-agent panel (kiro + Gemini 3.1 Pro) unanimously chose Option A — keep origin's cross-referenced 039/040/041 block, renumber leaf ADRs (this login → 042, neptune-graph → 043). -->
 
 ## Status / 상태
 

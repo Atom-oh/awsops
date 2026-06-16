@@ -22,7 +22,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 
 ## 문서 규칙 / Conventions
 - 모든 신규 문서는 **한국어/영어 병기**
-- ADR 번호는 `docs/decisions/` 의 최고 번호 + 1 (현재 038)
+- ADR 번호는 `docs/decisions/` 의 최고 번호 + 1 (현재 043)
 - ADR 파일명: `NNN-kebab-case-title.md`
 - 런북은 `docs/runbooks/CLAUDE.md` 규칙 준수
 
