@@ -12,6 +12,20 @@
   shows the dispatch/bounding/_parse pattern. Single secret + grant + INTEGRATIONS_SECRET_NAME env exist.
 - VPC: extend `loki_vpc_enabled` into the dynamic vpc_config + `agent_lambda_vpc_eni` compound gate.
 
+## P2 consensus gate — round 1 findings & resolutions (kiro opus/kimi/glm)
+- **MAJOR (opus, valid) — add a total-BYTES budget to `_bound`.** Loki log lines are arbitrary-length
+  (multi-KB stack traces / JSON dumps); capping line COUNT (≤5000) doesn't bound payload bytes → can
+  exceed the 6 MB Lambda limit / balloon model context. **Resolution: `_bound` also enforces
+  `MAX_TOTAL_BYTES` (sum `len(line)` across kept values; stop + `truncated:true` when exceeded; truncate
+  an individual oversized line to a cap). Test a result whose lines exceed the byte budget is truncated.**
+- **MINOR (kimi, adopt) — integer ns arithmetic + dual error check.** `_parse_time_ns` uses integer math
+  (`int(time.time()) * 1_000_000_000`, not float `*1e9`) to avoid precision loss; `_get` errors on
+  HTTP `status>=400` OR envelope `status!='success'` (mirror prometheus_mcp `_get`).
+- **kimi's X-Scope-OrgID "merge" + TF compound-gate/vpc_config "missing loki" — NOT defects:** the merge
+  is `{**auth_headers(creds), **(org_id?…)}` (exactly Task 1), and Task 4 already prescribes adding loki to
+  the compound ENI gate + vpc_config (kimi read the pre-implementation ai.tf). No plan change.
+- glm: NO BLOCKING.
+
 ## Tasks (TDD; per-task commit; unittest / vitest / catalog_check / `terraform validate` green)
 
 ### Task 1: Loki read-only MCP Lambda (TDD)
@@ -25,11 +39,15 @@
     (label percent-encoded in the path).
   - `X-Scope-OrgID`: header present == creds has `org_id`; absent otherwise.
   - envelope `status!='success'` → error; not-connected/SSRF/HTTP-4xx → error; `target_account_id` popped.
-  - bounding: a `streams` result with > cap streams / > cap lines-per-stream / > global budget is
-    truncated (`values[]` trimmed) + `truncated:true`.
-- [ ] Implement `loki_mcp.py`: dispatch like prometheus_mcp; `_now_ns()`/`_parse_time_ns` (now / `1h`/`30m`
-  → now-delta in ns / ISO→ns / unix-passthrough); `_headers(creds)` = auth_headers(creds) + optional
-  `X-Scope-OrgID`; `urlencode`; `_bound` (streams+lines+budget); `ok`/`err`. Stdlib + boto3 (reuses datasource_http).
+  - bounding: a `streams` result with > cap streams / > cap lines-per-stream / > global line budget /
+    > total-BYTES budget is truncated (`values[]` trimmed; oversized single line capped) + `truncated:true`
+    (test the byte-budget case explicitly, not just line-count).
+- [ ] Implement `loki_mcp.py`: dispatch like prometheus_mcp; `_parse_time_ns` (now / `1h`/`30m` → now-delta;
+  **integer ns** `int(time.time()) * 1_000_000_000` — no float `*1e9`); `_headers(creds)` =
+  `{**auth_headers(creds), **({'X-Scope-OrgID': creds['org_id']} if creds.get('org_id') else {})}`;
+  `urlencode`; `_get` errors on HTTP `status>=400` OR envelope `status!='success'`; `_bound`
+  (streams + lines/stream + global line budget + `MAX_TOTAL_BYTES`, capping an oversized line); `ok`/`err`.
+  Stdlib + boto3 (reuses datasource_http).
 - [ ] `cd agent/lambda && python3 -m unittest test_loki_mcp` → green.
 - [ ] Commit: `feat(agent-platform): Loki read-only MCP Lambda (LogQL, ns-time, X-Scope-OrgID) on datasource_http`.
 
