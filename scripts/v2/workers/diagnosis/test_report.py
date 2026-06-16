@@ -188,6 +188,28 @@ def test_deep_sections_catalog():
             "reliability_ha", "observability_coverage", "cost_optimization"} <= set(keys)
 
 
+def test_generate_resolves_tier_catalog_and_model(monkeypatch):
+    # Task 3: tier picks the catalog (mid=9, deep=15) + model (deep may select Opus) + max_tokens.
+    monkeypatch.setattr(report.src, "collect_all",
+                        lambda conn: [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
+    monkeypatch.setattr(report.ddb, "list_active_invariants", lambda conn: [])
+    calls = []
+    monkeypatch.setattr(report, "_bedrock_render",
+                        lambda prompt, ctx, model_id, max_tokens: (calls.append((model_id, max_tokens)) or "본문"))
+
+    calls.clear(); report.generate(object(), account="1", tier="mid")
+    assert len(calls) == 9 and all(m == report._MODEL_SONNET and t == 1500 for m, t in calls)
+
+    calls.clear(); report.generate(object(), account="1", tier="deep", model="opus")
+    assert len(calls) == 15 and all(m == report._MODEL_OPUS and t == 2200 for m, t in calls)
+
+    calls.clear(); report.generate(object(), account="1", tier="deep")  # default model = sonnet
+    assert len(calls) == 15 and all(m == report._MODEL_SONNET for m, t in calls)
+
+    calls.clear(); report.generate(object(), account="1", tier="mid", model="opus")  # pinned
+    assert len(calls) == 9 and all(m == report._MODEL_SONNET for m, t in calls)
+
+
 # --- Task 5: report.py ---------------------------------------------------
 
 from diagnosis import report
