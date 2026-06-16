@@ -299,4 +299,16 @@ TARGETS = {
             {"name": "notion_query_database", "description": "Query rows of a Notion database", "inputSchema": {"type": "object", "properties": {"database_id": _p("string", "Database ID"), "page_size": _p("string", "Max rows (<=25)")}, "required": ["database_id"]}},
         ],
     },
+    # AWS-native OpenSearch log query (sigv4 es) — first log source for incident triage. monitoring
+    # gateway, co-located with the CloudWatch log tools so one agent can correlate both.
+    "opensearch-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "opensearch-mcp",
+        "description": "OpenSearch read-only — list domains, time-bounded log search, cat indices (3 tools)",
+        "tools": [
+            {"name": "list_opensearch_domains", "description": "List OpenSearch domains and their endpoints", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "search_opensearch_logs", "description": "Search a domain's logs by time range and query string", "inputSchema": {"type": "object", "properties": {"domain": _p("string", "Domain name"), "query": _p("string", "query_string (e.g. ERROR)"), "start": _p("string", "Window start: 1h/30m/2d or ISO (default now-1h)"), "end": _p("string", "Window end (ISO, optional)"), "index": _p("string", "Index or _all"), "size": _p("string", "Max hits (<=50)"), "time_field": _p("string", "Time field (default @timestamp)")}, "required": ["domain"]}},
+            {"name": "opensearch_indices", "description": "List indices (_cat/indices) of a domain", "inputSchema": {"type": "object", "properties": {"domain": _p("string", "Domain name")}, "required": ["domain"]}},
+        ],
+    },
 }
