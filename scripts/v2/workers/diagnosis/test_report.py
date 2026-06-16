@@ -169,6 +169,25 @@ def test_cw_metrics_wired_into_compute_and_db_sections():
     assert "cw_metrics" in by_key["database_storage"]["sources"]
 
 
+def test_deep_sections_catalog():
+    # deep = the 8 base sections + 6 deep-only = 14 (report.generate appends intended_vs_actual → 15).
+    base = sections.SECTIONS
+    deep = sections.DEEP_SECTIONS
+    assert len(base) == 8  # base unchanged
+    assert len(deep) == 14
+    assert deep[:8] == base  # deep is a superset that preserves the base order
+    keys = [x["key"] for x in deep]
+    assert len(set(keys)) == 14  # unique
+    known = {"inventory", "cw_metrics", "cost", "service_map", "posture", "what_changed"}
+    for sec in deep:
+        assert sec["key"] and sec["title"] and sec["prompt"]
+        assert isinstance(sec["sources"], list) and sec["sources"]
+        assert set(sec["sources"]) <= known  # reuses existing collectors only (no new sources/IAM)
+    # the 6 deep-only keys are present
+    assert {"identity_access", "data_protection", "network_exposure",
+            "reliability_ha", "observability_coverage", "cost_optimization"} <= set(keys)
+
+
 # --- Task 5: report.py ---------------------------------------------------
 
 from diagnosis import report
