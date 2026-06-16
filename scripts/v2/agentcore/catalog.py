@@ -323,4 +323,17 @@ TARGETS = {
             {"name": "clickhouse_describe", "description": "Describe a table's columns", "inputSchema": {"type": "object", "properties": {"table": _p("string", "Table name")}, "required": ["table"]}},
         ],
     },
+    # Prometheus datasource (v1 family #2) — read-only PromQL. monitoring gateway (with CloudWatch +
+    # OpenSearch). User-supplied endpoint via the Connectors UI; SSRF-guarded; read-only by construction.
+    "prometheus-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "prometheus-mcp",
+        "description": "Prometheus read-only — PromQL instant/range query, labels, series (4 tools)",
+        "tools": [
+            {"name": "prometheus_query", "description": "Instant PromQL query at a single time", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time: unix/ISO (default now)")}, "required": ["query"]}},
+            {"name": "prometheus_query_range", "description": "Range PromQL query over a time window", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix/ISO (default now-1h)"), "end": _p("string", "unix/ISO (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
+            {"name": "prometheus_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "prometheus_series", "description": "Find series matching a selector", "inputSchema": {"type": "object", "properties": {"match": _p("string", "Series selector e.g. up{job=\"x\"}")}, "required": ["match"]}},
+        ],
+    },
 }
