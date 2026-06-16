@@ -311,4 +311,16 @@ TARGETS = {
             {"name": "opensearch_indices", "description": "List indices (_cat/indices) of a domain", "inputSchema": {"type": "object", "properties": {"domain": _p("string", "Domain name")}, "required": ["domain"]}},
         ],
     },
+    # First of the v1 datasource family (user-endpoint + SQL). data gateway. Read-only SQL guard +
+    # table-function SSRF block in the Lambda; credential (endpoint+user/pass) via the Connectors UI.
+    "clickhouse-mcp-target": {
+        "gateway": "data",
+        "lambda_key": "clickhouse-mcp",
+        "description": "ClickHouse read-only — SQL query, list tables, describe (3 tools)",
+        "tools": [
+            {"name": "clickhouse_query", "description": "Run a read-only SQL query (SELECT/SHOW/DESCRIBE) against the connected ClickHouse", "inputSchema": {"type": "object", "properties": {"sql": _p("string", "Read-only SQL"), "max_rows": _p("string", "Max rows (<=1000)")}, "required": ["sql"]}},
+            {"name": "clickhouse_tables", "description": "List tables (SHOW TABLES)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "clickhouse_describe", "description": "Describe a table's columns", "inputSchema": {"type": "object", "properties": {"table": _p("string", "Table name")}, "required": ["table"]}},
+        ],
+    },
 }
