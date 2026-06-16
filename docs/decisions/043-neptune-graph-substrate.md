@@ -44,6 +44,13 @@ Neptune 옵션을 켤 경우의 구성 세부:
 - **Cons**: 상시 비용(~$115+/월); 새 DB 티어 + Loader 운영.
 - **위상**: Postgres CTE 불충분이 **입증될 때만** `neptune_enabled` opt-in. 본 ADR이 그 구성을 미리 고정(즉시 구현 아님). (do-not-over-build 준수)
 
+### Substrate: Neo4j (옵션 — Neptune의 대안) — **deferred / 활성화 시 Neptune과 함께 재결정**
+- **형태/비용**: ① **Community self-host**(ECS Fargate/EC2 소형 ~$15–30/월) — 가장 저렴하나 ops/HA/백업 자체 부담 + 단일 인스턴스(Community = 클러스터링 없음) + GPLv3(내부용 OK); ② **AuraDB(managed)** — Aura Pro ~$65/월~, 관리형이나 **별도 벤더·계정 외 egress**.
+- **Pros**: Cypher 1급 + 최대 생태계(APOC/GDS); Neptune보다 저렴할 수 있음.
+- **Cons**: **AWS-native 아님** — VPC/IAM/KMS/백업 통합이 Neptune보다 약함(self-host는 직접 구성, Aura는 외부 벤더 = SSRF/Secrets/egress 거버넌스 필요); read-only 대시보드에 운영 표면 추가.
+- **결정 보류**: 그래프 DB를 켜는 시점에 **Neptune Serverless(AWS-native·무-ops·~$115/월) vs Neo4j(저렴·ops 또는 외부벤더)** 를 비용/운영부담/AWS 통합으로 그때 재결정. 본 ADR은 어느 쪽도 지금 확정하지 않음(둘 다 Postgres 뒤 deferred).
+- **비용 순(개략)**: Postgres 엣지(~$0) < Neo4j Community self-host(~$15–30 + ops) < Neo4j Aura Pro(~$65) < Neptune Serverless(~$115). 저렴할수록 운영/통합 부담↑ — 그래서 단순 최저가가 아니라 **그 시점 운영 여력**으로 판단.
+
 ### Substrate: 상시-on Neptune (기본 인프라) — **기각**
 - read-only 대시보드에 상시 비용 강제 + do-not-over-build 기조 충돌.
 
