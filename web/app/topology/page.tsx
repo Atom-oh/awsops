@@ -70,22 +70,30 @@ function iconFor(n: FlowNode): IconC {
   return KIND_ICON[n.kind];
 }
 
-// Preset AI questions per resource kind — route to the read-only section-agent fleet.
-function chipsFor(n: FlowNode): string[] {
+// Preset AI questions per resource kind. Each pins the RIGHT section-agent (`section`) so the
+// composer routes via `/section` — e.g. SG checks go to `network` (which has describe-security-
+// groups / describe-network-interfaces-by-ip), NOT `security` (IAM-only) which the '보안' keyword
+// would otherwise first-match.
+interface Chip { q: string; section: string }
+function chipsFor(n: FlowNode): Chip[] {
+  const net = (q: string): Chip => ({ q, section: 'network' });
+  const sec = (q: string): Chip => ({ q, section: 'security' });
+  const mon = (q: string): Chip => ({ q, section: 'monitoring' });
+  const con = (q: string): Chip => ({ q, section: 'container' });
   switch (n.kind) {
-    case 'cloudfront': return ['이 배포가 오리진(ALB)과 TLS로 통신하나?', 'WAF 연결·보안 점검', '캐시/TLS 정책 점검'];
-    case 'alb': case 'nlb': return ['CloudFront→이 LB 통신이 TLS인가?', '리스너/타깃 health 원인', '보안그룹(인바운드) 점검'];
-    case 'tg': return ['unhealthy 타깃 원인 진단', '헬스체크 설정 점검'];
+    case 'cloudfront': return [net('이 배포가 오리진과 TLS로 통신하나?'), net('WAF 연결 점검'), net('캐시/TLS 정책 점검')];
+    case 'alb': case 'nlb': return [net('CloudFront→이 LB 통신이 TLS인가?'), net('리스너/타깃 health 원인'), net('이 LB 보안그룹(인바운드) 점검')];
+    case 'tg': return [net('unhealthy 타깃 원인 진단'), net('헬스체크 설정 점검')];
     case 'target': {
       const r = String(n.meta?.resolved ?? '');
-      if (r === 'eks') return ['이 deployment 상태/이벤트 진단', '관련 pod 로그 필터', 'IAM/RBAC 권한 점검'];
-      if (r === 'ecs') return ['이 서비스 task 상태/배포 진단', '컨테이너 로그 필터', 'task role 권한 점검'];
-      if (r === 'lambda') return ['이 함수 최근 에러 로그', 'IAM 권한 점검', '동시성/타임아웃 점검'];
-      return ['이 인스턴스 로그 필터', '보안그룹 점검', 'IAM 권한 점검'];
+      if (r === 'eks') return [con('이 deployment 상태/이벤트 진단'), mon('관련 pod 로그 필터'), sec('IAM/RBAC 권한 점검')];
+      if (r === 'ecs') return [con('이 서비스 task 상태/배포 진단'), mon('컨테이너 로그 필터'), sec('task role 권한 점검')];
+      if (r === 'lambda') return [mon('이 함수 최근 에러 로그'), sec('IAM 권한 점검'), con('동시성/타임아웃 점검')];
+      return [net('이 IP의 보안그룹 점검'), net('이 IP가 속한 인스턴스/ENI 확인'), mon('관련 로그 필터')];
     }
-    case 'waf': return ['이 WAF 룰/연결 점검', '차단 로그 추이'];
-    case 'route53': return ['이 레코드 대상 도달성 점검'];
-    default: return ['이 리소스 보안 점검', '관련 로그 필터'];
+    case 'waf': return [sec('이 WAF 룰 점검'), mon('차단 로그 추이')];
+    case 'route53': return [net('이 레코드 대상 도달성 점검')];
+    default: return [net('이 리소스 네트워크/보안그룹 점검'), mon('관련 로그 필터')];
   }
 }
 
@@ -264,9 +272,20 @@ export default function TopologyPage() {
     if (n.kind === 'route53') return String(row?.name ?? n.label).replace(/\.$/, '');
     return String(row?.arn ?? m.id ?? row?.resource_id ?? n.label);
   };
-  const askAI = (q: string) => {
+  const askAI = (q: string, section?: string) => {
     if (!selected) return;
-    const ctx = `[토폴로지 리소스] ${selected.kind} · ${selected.label}\nID/ARN: ${resourceArn(selected)}\n\n질문: ${q}`;
+    const m = (selected.meta ?? {}) as Record<string, unknown>;
+    const row = (m.row ?? {}) as Record<string, unknown>;
+    // ground the agent with known facts so it doesn't have to guess the target.
+    const facts = [
+      row.vpc_id ? `vpc: ${row.vpc_id}` : '',
+      row.subnet_id ? `subnet: ${row.subnet_id}` : '',
+      row.private_ip_address ? `private_ip: ${row.private_ip_address}` : '',
+      m.cluster ? `cluster: ${m.cluster}` : '',
+    ].filter(Boolean).join(' · ');
+    // pin the section (/network etc.) so routing isn't hijacked by keyword first-match.
+    const prefix = section ? `/${section} ` : '';
+    const ctx = `${prefix}[토폴로지 리소스] ${selected.kind} · ${selected.label}\nID/ARN: ${resourceArn(selected)}${facts ? `\n${facts}` : ''}\n\n질문: ${q}`;
     window.dispatchEvent(new CustomEvent('awsops:open-chat', { detail: { prompt: ctx } }));
   };
   const copyArn = () => { if (selected) navigator.clipboard?.writeText(resourceArn(selected)); };
@@ -284,10 +303,10 @@ export default function TopologyPage() {
         </button>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {chipsFor(selected).map((q) => (
-          <button type="button" key={q} onClick={() => askAI(q)}
+        {chipsFor(selected).map((c) => (
+          <button type="button" key={c.q} onClick={() => askAI(c.q, c.section)}
             className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] text-brand-700 hover:bg-brand-100">
-            {q}
+            {c.q}
           </button>
         ))}
       </div>
