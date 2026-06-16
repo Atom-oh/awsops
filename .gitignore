@@ -121,3 +121,5 @@ graphify-out/
 # AI dev tool scratch dirs
 .serena/
 .headroom/
+tfplan*
+terraform/v2/foundation/tfplan*
