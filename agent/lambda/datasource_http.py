@@ -45,6 +45,14 @@ def _ip_always_blocked(ip_str):
     """Metadata, loopback, link-local, multicast, reserved, unspecified — blocked regardless of private."""
     try:
         ip = ipaddress.ip_address(ip_str)
+        # Normalize embedded IPv4 so ::ffff:169.254.169.254 / ::ffff:127.0.0.1 / 2002::/16 can't
+        # evade the IPv4 metadata/loopback/link-local checks via a dual-stack socket.
+        mapped = getattr(ip, "ipv4_mapped", None)
+        if mapped is not None:
+            ip = mapped
+        sixtofour = getattr(ip, "sixtofour", None)
+        if sixtofour is not None:
+            ip = sixtofour
         if ip in _METADATA_IPS:
             return True
         return ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified

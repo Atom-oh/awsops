@@ -21,6 +21,11 @@ class TestSsrf(unittest.TestCase):
             with self.assertRaises(dh.SsrfBlocked):
                 dh.assert_host_allowed(f"http://host:8123", resolver=_resolver_for(ip))
 
+    def test_ipv4_mapped_ipv6_metadata_blocked(self):
+        for ip in ("::ffff:169.254.169.254", "::ffff:127.0.0.1"):
+            with self.assertRaises(dh.SsrfBlocked):
+                dh.assert_host_allowed("http://host:8123", resolver=_resolver_for(ip))
+
     def test_private_and_public_allowed(self):
         for ip in ("10.0.0.5", "192.168.1.9", "172.16.3.4", "fc00::1", "8.8.8.8"):
             dh.assert_host_allowed("http://ch:8123", resolver=_resolver_for(ip))  # no raise

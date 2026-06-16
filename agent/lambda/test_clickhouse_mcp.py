@@ -62,6 +62,16 @@ class TestReadOnlyGuard(unittest.TestCase):
                   "SELECT * FROM hudi('http://169.254.169.254/','CSV')"]:
             self._bad(s)
 
+    def test_desync_quote_in_identifier_still_blocks_table_fn(self):
+        # a single-quote inside a backtick/double-quote identifier must NOT desync the parser and
+        # let url(...) slip past _TABLE_FN (P4 r3 tokenizer fix)
+        for s in ["SELECT `x'` , * FROM url('http://169.254.169.254/')",
+                  'SELECT "x\'" , * FROM url(\'http://169.254.169.254/\')']:
+            self._bad(s)
+
+    def test_hash_comment_hidden_verb(self):
+        self._bad("SELECT 1 # ok\n; DROP TABLE t")
+
     def test_string_literal_not_false_trigger(self):
         # 'set'/'drop' inside a string literal must not trigger (literals are stripped before scan)
         self._ok("SELECT 'please set the drop value' AS note")

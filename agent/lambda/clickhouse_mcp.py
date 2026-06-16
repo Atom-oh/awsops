@@ -45,15 +45,60 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
 
 def _strip(sql):
-    """Remove block/line comments, string literals, and backticks so keyword/table-fn scanning sees
-    only structure (backticks stripped so `url`(…) normalizes to url(…) and can't evade _TABLE_FN)."""
-    s = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)   # /* ... */
-    s = re.sub(r"--[^\n]*", " ", s)                        # -- ... EOL
-    s = re.sub(r"'(?:[^'\\]|\\.|'')*'", " ", s)            # '...' STRING literals (single-quote in ClickHouse)
-    # Double-quote and backtick are IDENTIFIER quotes in ClickHouse (not strings) — strip only the quote
-    # CHARS so the inner name survives the scan (else "url"(…) / `url`(…) evades _TABLE_FN → SSRF).
-    s = s.replace("`", "").replace('"', "")
-    return s
+    """Single left-to-right tokenizer (NOT sequential regexes — those desync on a quote inside an
+    identifier and can eat a url( token → SSRF). Drops string literals + comments; for IDENTIFIER
+    quotes (` and ") keeps the inner name but removes the quote chars so `url`(…) / "url"(…) still
+    hit _TABLE_FN. Each context is consumed by its own closing rule, so a ' inside `…`/"…" or a
+    --/;/* inside a '…' can never cross-contaminate."""
+    out = []
+    n = len(sql)
+    idx = 0
+    while idx < n:
+        c = sql[idx]
+        two = sql[idx:idx + 2]
+        if two == "/*":                       # block comment
+            j = sql.find("*/", idx + 2)
+            idx = (j + 2) if j != -1 else n
+            out.append(" ")
+        elif two == "--" or c == "#":         # line comment (-- and ClickHouse #)
+            j = sql.find("\n", idx)
+            idx = j if j != -1 else n
+            out.append(" ")
+        elif c == "'":                        # STRING literal → drop contents
+            idx += 1
+            while idx < n:
+                if sql[idx] == "\\":
+                    idx += 2
+                    continue
+                if sql[idx] == "'":
+                    if idx + 1 < n and sql[idx + 1] == "'":  # '' escape
+                        idx += 2
+                        continue
+                    idx += 1
+                    break
+                idx += 1
+            out.append(" ")
+        elif c == "`" or c == '"':            # IDENTIFIER quote → keep inner, drop quote chars
+            q = c
+            idx += 1
+            while idx < n:
+                if sql[idx] == "\\":
+                    out.append(sql[idx:idx + 2])
+                    idx += 2
+                    continue
+                if sql[idx] == q:
+                    if idx + 1 < n and sql[idx + 1] == q:  # doubled-quote escape inside identifier
+                        out.append(sql[idx])
+                        idx += 2
+                        continue
+                    idx += 1
+                    break
+                out.append(sql[idx])
+                idx += 1
+        else:
+            out.append(c)
+            idx += 1
+    return "".join(out)
 
 
 def _validate_identifier(name):
