@@ -11,7 +11,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 | [onboarding.md](onboarding.md) | 신규 팀원 온보딩 |
 | [INSTALL_GUIDE.md](INSTALL_GUIDE.md) | 설치 가이드 (11단계) |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 일반 트러블슈팅 모음 |
-| [decisions/](decisions/) | ADR (Architecture Decision Records), 001~038 |
+| [decisions/](decisions/) | ADR (Architecture Decision Records), 001~043 |
 | [runbooks/](runbooks/) | 운영 시나리오별 대응 가이드 |
 | [reviews/](reviews/) | 코드 리뷰 / 교차 리뷰 결과 |
 | [plans/](plans/) | 기능 설계/기획 문서 |
