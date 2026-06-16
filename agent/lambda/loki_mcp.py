@@ -90,12 +90,14 @@ def _bound(data):
                     break
                 ts, line = (entry + ["", ""])[:2] if isinstance(entry, list) else (None, str(entry))
                 line = str(line)
-                if len(line) > MAX_LINE_BYTES:
-                    line = line[:MAX_LINE_BYTES] + "…[truncated]"
+                enc = line.encode("utf-8")
+                if len(enc) > MAX_LINE_BYTES:
+                    line = enc[:MAX_LINE_BYTES].decode("utf-8", "ignore") + "…[truncated]"
+                    enc = line.encode("utf-8")
                     truncated = True
                 kept.append([ts, line])
                 lines_budget -= 1
-                bytes_budget -= len(line)
+                bytes_budget -= len(enc)
             if len(vals) > len(kept):
                 truncated = True
             s["values"] = kept
@@ -167,7 +169,7 @@ def lambda_handler(event, context):
 
 
 def ok(body):
-    return {"statusCode": 200, "body": json.dumps(body, default=str)}
+    return {"statusCode": 200, "body": json.dumps(body, default=str, ensure_ascii=False)}
 
 
 def err(msg):

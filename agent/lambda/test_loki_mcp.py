@@ -70,6 +70,15 @@ class TestBounding(_Base):
         self.assertLessEqual(len(body["result"]), lm.MAX_STREAMS)
         total_bytes=sum(len(v[1]) for s in body["result"] for v in s.get("values",[]))
         self.assertLessEqual(total_bytes, lm.MAX_TOTAL_BYTES + 4096)  # within budget (+1 oversized-line slack)
+    def test_multibyte_line_bounded_by_bytes(self):
+        # Korean/UTF-8 lines must be budgeted by encoded bytes, not code points
+        big={"status":"success","data":{"resultType":"streams","result":[{"stream":{},"values":[[str(t),"오류"*5000] for t in range(50)]}]}}
+        with mock.patch.object(lm,"http_json",return_value=(200,big)):
+            out=lm.lambda_handler({"tool_name":"loki_query_range","arguments":{"query":"{a=\"b\"}"}}, None)
+        body=json.loads(out["body"]); self.assertTrue(body["truncated"])
+        total=sum(len(v[1].encode("utf-8")) for s in body["result"] for v in s.get("values",[]))
+        self.assertLessEqual(total, lm.MAX_TOTAL_BYTES + lm.MAX_LINE_BYTES)
+
     def test_oversized_single_line_capped(self):
         big={"status":"success","data":{"resultType":"streams","result":[{"stream":{},"values":[["1","Z"*50000]]}]}}
         with mock.patch.object(lm,"http_json",return_value=(200,big)):
