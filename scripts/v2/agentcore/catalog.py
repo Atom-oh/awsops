@@ -336,4 +336,17 @@ TARGETS = {
             {"name": "prometheus_series", "description": "Find series matching a selector", "inputSchema": {"type": "object", "properties": {"match": _p("string", "Series selector e.g. up{job=\"x\"}")}, "required": ["match"]}},
         ],
     },
+    # Loki datasource (v1 family #3) — read-only LogQL. monitoring gateway. User-supplied endpoint via
+    # Connectors UI; SSRF-guarded; ns timestamps + optional X-Scope-OrgID multi-tenant.
+    "loki-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "loki-mcp",
+        "description": "Loki read-only — LogQL range/instant query, labels, label values (4 tools)",
+        "tools": [
+            {"name": "loki_query_range", "description": "Range LogQL query over a time window (logs/metrics)", "inputSchema": {"type": "object", "properties": {"query": _p("string", "LogQL"), "start": _p("string", "1h/30m or unix/ISO (default now-1h)"), "end": _p("string", "unix/ISO (default now)"), "limit": _p("string", "Max entries (default 100)"), "direction": _p("string", "forward|backward (default backward)")}, "required": ["query"]}},
+            {"name": "loki_query", "description": "Instant LogQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "LogQL"), "time": _p("string", "Eval time unix/ISO (default now)"), "limit": _p("string", "Max entries (default 100)")}, "required": ["query"]}},
+            {"name": "loki_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "loki_label_values", "description": "List values of a label", "inputSchema": {"type": "object", "properties": {"label": _p("string", "Label name")}, "required": ["label"]}},
+        ],
+    },
 }
