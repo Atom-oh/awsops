@@ -19,16 +19,9 @@ def is_public(uri):
     # - /api/incidents/webhook (ADR-022/ADR-039 ingress carve-out): external alarm sources cannot carry
     #   a Cognito cookie, so this exact path skips edge auth. The route itself verifies HMAC-SHA256 /
     #   SNS-subscription and is flag-gated on INCIDENT_LIFECYCLE_ENABLED (503 when off).
-    # - /brochure (+ /brochure/* assets): the public marketing brochure (static, read-only, no app data)
-    #   is intentionally shareable without login. Bounded to the /brochure path so nothing else is exposed.
-    return (
-        uri.startswith('/_next/static/')
-        or uri == '/brochure'
-        or uri.startswith('/brochure/')
-        or uri in (
-            '/api/health', '/api/auth/signout', '/login', '/api/auth/login', '/icon.svg',
-            '/api/incidents/webhook')
-    )
+    return uri.startswith('/_next/static/') or uri in (
+        '/api/health', '/api/auth/signout', '/login', '/api/auth/login', '/icon.svg',
+        '/api/incidents/webhook')
 
 _JWKS = None
 def get_jwks():
