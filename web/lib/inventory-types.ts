@@ -95,6 +95,12 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'connection_type', label: 'Conn' }, { key: 'integration_uri', label: 'Target' } ] },
   cloudfront_vpc_origin: { label: 'CloudFront VPC Origins', group: 'Network', stateKey: 'status', distKey: 'status', columns: [
     { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'arn', label: 'Target LB' } ] },
+  apigatewayv2_route: { label: 'API GW Routes', group: 'Network', columns: [
+    { key: 'route_key', label: 'Route' }, { key: 'target', label: 'Integration' },
+    { key: 'authorization_type', label: 'Auth' } ] },
+  alb_listener_rule: { label: 'ALB Listener Rules', group: 'Network', distKey: 'protocol', columns: [
+    { key: 'priority', label: 'Priority' }, { key: 'port', label: 'Port' },
+    { key: 'protocol', label: 'Protocol' }, { key: 'is_default', label: 'Default' } ] },
   waf: { label: 'WAF Web ACLs', group: 'Security', distKey: 'scope', columns: [
     { key: 'scope', label: 'Scope' }, { key: 'capacity', label: 'Capacity' },
     { key: 'description', label: 'Description' }, { key: 'managed_by_firewall_manager', label: 'FMS-managed' } ] },

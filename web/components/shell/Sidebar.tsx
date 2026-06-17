@@ -7,7 +7,7 @@ import {
   Box, Gauge,
   Server, Zap, Container, Package,
   Archive, HardDrive, Database, Table, DatabaseZap, Search, Radio,
-  Network, Waypoints, BrickWall, Globe, Scale, Split, Webhook, Cable, CloudCog,
+  Network, Waypoints, BrickWall, Globe, Scale, Split, Webhook, Cable, CloudCog, Route, ListFilter,
   KeyRound, Users, Shield, FileSearch, Bell,
   Stethoscope, // /ai-diagnosis nav (this branch)
   type LucideIcon,
@@ -60,6 +60,8 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   apigatewayv2_api: Webhook,
   apigatewayv2_integration: Cable,
   cloudfront_vpc_origin: CloudCog,
+  apigatewayv2_route: Route,
+  alb_listener_rule: ListFilter,
   // Security
   iam_role: KeyRound,
   iam_user: Users,

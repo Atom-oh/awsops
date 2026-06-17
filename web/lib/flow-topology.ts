@@ -21,11 +21,13 @@ function arr(v: unknown): Row[] {
   }
   return [];
 }
+// string-array coercion (e.g. listener-rule condition Values)
+const strs = (v: unknown): string[] => (Array.isArray(v) ? v.map(str) : []);
 
 export type FlowKind = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'target' | 'waf' | 'origin' | 'more' | 'apigw' | 'lambda';
 export type Confidence = 'observed' | 'inferred';
 export interface FlowNode { id: string; kind: FlowKind; label: string; meta?: Record<string, unknown> }
-export interface FlowEdge { id: string; source: string; target: string; confidence: Confidence }
+export interface FlowEdge { id: string; source: string; target: string; confidence: Confidence; label?: string }
 export interface FlowGraph { nodes: FlowNode[]; edges: FlowEdge[] }
 
 export interface FlowInput {
@@ -41,6 +43,11 @@ export interface FlowInput {
   // CloudFront VPC origins (SDK-sourced; Steampipe omits VpcOriginConfig). Each row: resource_id =
   // vo_id, arn = backing ALB/NLB ARN, status, distribution_ids[] (which CF distributions use it).
   cloudfront_vpc_origin?: Row[];
+  // L7 routing labels: ALB listener rules (SDK-sourced: load_balancer_arn, port, conditions[],
+  // actions[] → path/host → TG) label the LB→TG edge; API GW routes (route_key + target=
+  // 'integrations/<id>') label the apigw→backend edge.
+  alb_listener_rule?: Row[];
+  apigatewayv2_route?: Row[];
   // ip-target resolution (Spec 2): pod/ENI IP → friendly label + meta. EKS comes live from the
   // page (ipResolved); ECS is derived here from synced ecsTask rows. Builder stays pure.
   ipResolved?: Record<string, { label: string; resolved: 'eks' | 'ecs'; meta?: Record<string, unknown> }>;
@@ -121,12 +128,17 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
     ids.add(id);
     nodes.push({ id, kind, label, ...(meta ? { meta } : {}) });
   };
-  const addEdge = (source: string, target: string, confidence: Confidence = 'observed') => {
+  // label (optional): L7 routing detail on an edge — ALB path/host + port, or API GW route_key.
+  // Edges dedup by source->target, so a 2nd edge between the same pair only adds its label.
+  const addEdge = (source: string, target: string, confidence: Confidence = 'observed', label?: string) => {
     if (!ids.has(source) || !ids.has(target)) return; // both endpoints must be real nodes
     const id = `${source}->${target}`;
-    if (edgeIds.has(id)) return;
+    if (edgeIds.has(id)) {
+      if (label) { const e = edges.find((x) => x.id === id); if (e) e.label = e.label ? `${e.label} | ${label}` : label; }
+      return;
+    }
     edgeIds.add(id);
-    edges.push({ id, source, target, confidence });
+    edges.push({ id, source, target, confidence, ...(label ? { label } : {}) });
   };
 
   // 1) nodes first so edge endpoint checks resolve.
@@ -189,6 +201,39 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       const k = str(d); if (!k) continue;
       (voByDistId.get(k) ?? voByDistId.set(k, []).get(k)!).push(str(v.arn));
     }
+  }
+
+  // L7 ALB rule label: (lbArn|tgArn) → "<path|host> :<port>". Only FORWARD actions (with a TG)
+  // produce a label — a fixed-response/redirect default rule has no TG, so it labels nothing.
+  const ruleLabelByLbTg = new Map<string, string>();
+  for (const r of input.alb_listener_rule ?? []) {
+    const lbArn = str(r.load_balancer_arn); if (!lbArn) continue;
+    const port = str(r.port);
+    const vals: string[] = [];
+    for (const c of arr(r.conditions)) {
+      if (str(c.Field) === 'path-pattern') vals.push(...strs(((c.PathPatternConfig as Row)?.Values) ?? c.Values));
+      else if (str(c.Field) === 'host-header') vals.push(...strs(((c.HostHeaderConfig as Row)?.Values) ?? c.Values));
+    }
+    const routing = vals.length ? vals.join(',') : (r.is_default ? 'default' : '');
+    const label = `${routing || 'rule'}${port ? ` :${port}` : ''}`;
+    const tgArns = new Set<string>();
+    for (const a of arr(r.actions)) {
+      if (a.TargetGroupArn) tgArns.add(str(a.TargetGroupArn));
+      for (const tg of arr((a.ForwardConfig as Row)?.TargetGroups)) if (tg.TargetGroupArn) tgArns.add(str(tg.TargetGroupArn));
+    }
+    for (const tgArn of tgArns) {
+      const key = `${lbArn}|${tgArn}`;
+      ruleLabelByLbTg.set(key, ruleLabelByLbTg.has(key) ? `${ruleLabelByLbTg.get(key)} | ${label}` : label);
+    }
+  }
+
+  // L7 API GW route label: integrationId → route_key(s). route.target = 'integrations/<id>'.
+  const routeKeyByIntegration = new Map<string, string>();
+  for (const r of input.apigatewayv2_route ?? []) {
+    const m = str(r.target).match(/^integrations\/(.+)$/);
+    if (!m) continue;
+    const id = m[1]; const rk = str(r.route_key);
+    if (rk) routeKeyByIntegration.set(id, routeKeyByIntegration.has(id) ? `${routeKeyByIntegration.get(id)} | ${rk}` : rk);
   }
 
   // CloudFront indexes for Route53 alias targets: by distribution domain (d111.cloudfront.net)
@@ -268,6 +313,7 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
     const apiId = str(ig.api_id);
     if (!apigwIds.has(apiId)) continue;
     const apigwNode = `apigw:${apiId}`;
+    const routeKey = routeKeyByIntegration.get(str(ig.resource_id)); // route path(s) → this integration
     const uri = str(ig.integration_uri);
     const lArn = lambdaArnFromIntegration(uri);
     if (lArn) {
@@ -275,13 +321,13 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       const row = lambdaRowByArn.get(lArn);
       addNode(node, 'lambda', row ? str(row.resource_id) || lArn : lArn.split(':function:')[1] || lArn,
         row ? { row, invType: 'lambda' } : { arn: lArn });
-      addEdge(apigwNode, node);
+      addEdge(apigwNode, node, 'observed', routeKey);
       continue;
     }
     if (str(ig.connection_type) === 'VPC_LINK') {
       const derived = lbArnFromListener(uri);
       const id = derived ? lbByArn.get(derived) : undefined;
-      if (id) addEdge(apigwNode, id);
+      if (id) addEdge(apigwNode, id, 'observed', routeKey);
     }
   }
 
@@ -296,7 +342,7 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
           : []);
     for (const lbArn of lbArns) {
       const lbId = lbByArn.get(lbArn);
-      if (lbId) addEdge(lbId, tgId);
+      if (lbId) addEdge(lbId, tgId, 'observed', ruleLabelByLbTg.get(`${lbArn}|${str(t.resource_id)}`));
     }
 
     // GROUP targets by resolved workload: an ASG / EKS replicas / ECS tasks behind a TG are ONE
