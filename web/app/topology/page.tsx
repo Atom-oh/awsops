@@ -129,7 +129,9 @@ async function fetchEksIpMap(): Promise<NonNullable<FlowInput['ipResolved']>> {
   const map: NonNullable<FlowInput['ipResolved']> = {};
   try {
     const list = await fetch('/api/eks').then((r) => (r.ok ? r.json() : null));
-    const clusters: string[] = (list?.rows ?? [])
+    // NOTE: /api/eks returns { clusters: [...] } (matches the EKS page + fleet). Reading `rows` here
+    // silently yielded [] → EKS pod resolution never ran (every EKS ip-target showed as a raw IP).
+    const clusters: string[] = (list?.clusters ?? [])
       .filter((c: { access?: string }) => c.access === 'connected')
       .map((c: { name?: string }) => c.name)
       .filter(Boolean);
