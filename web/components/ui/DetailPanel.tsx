@@ -47,6 +47,7 @@ export default function DetailPanel({
   spec,
   onClose,
   actions,
+  modal = true,
 }: {
   title?: string;
   data: Record<string, unknown> | null;
@@ -54,6 +55,10 @@ export default function DetailPanel({
   onClose: () => void;
   // optional action slot pinned under the header (e.g. topology "ask AI about this resource").
   actions?: ReactNode;
+  // modal=false: on lg the backdrop is transparent + pointer-events-none so the content behind
+  // (e.g. the topology canvas) stays pannable/zoomable while the panel is docked. Mobile (below
+  // lg) is always a fullscreen sheet, so it stays modal there regardless.
+  modal?: boolean;
 }) {
   useEffect(() => {
     if (!data) return;
@@ -76,13 +81,17 @@ export default function DetailPanel({
       <div
         aria-hidden
         onClick={onClose}
-        className="fixed inset-0 z-40 bg-ink-900/40 lg:bg-ink-900/20"
+        className={
+          modal
+            ? 'fixed inset-0 z-40 bg-ink-900/40 lg:bg-ink-900/20'
+            : 'fixed inset-0 z-40 bg-ink-900/40 lg:bg-transparent lg:pointer-events-none'
+        }
       />
       {/* Below lg: fullscreen sheet (inset-0, full width, no left border).
           lg+: unchanged right-docked panel (420px, border-l). CSS-only switch. */}
       <aside
         role="dialog"
-        aria-modal="true"
+        aria-modal={modal}
         aria-label={title ?? '리소스 상세'}
         className="fixed inset-0 z-50 flex h-full w-full max-w-full flex-col bg-card shadow-pop lg:inset-y-0 lg:left-auto lg:right-0 lg:w-[var(--panel-w)] lg:border-l lg:border-ink-100"
         style={{ ['--panel-w' as string]: `${width}px` } as CSSProperties}

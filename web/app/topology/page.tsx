@@ -1,8 +1,8 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, type LucideIcon } from 'lucide-react';
-import { Background, Controls, MiniMap, Position, type Node, type Edge } from '@xyflow/react';
+import { Background, Controls, MiniMap, Position, type Node, type Edge, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -198,9 +198,9 @@ export default function TopologyPage() {
   const { nodes, edges } = useMemo(() => {
     const gFull = filterFromEntry(full, entryId || null);
 
-    // Focus: clicking a node collapses the view to ITS connected path (up + downstream), which is
-    // then re-laid-out and re-centered (fitView via the key below) so the active subgraph fills the
-    // screen — instead of dimming the rest and letting it overflow/clip off one screen.
+    // Focus: clicking a node collapses the view to ITS connected path (up + downstream), then
+    // re-lays-out and re-centers (imperative fitView in the effect below) so the active subgraph
+    // fills the screen — instead of dimming the rest and letting it overflow/clip off one screen.
     const focusId = selected?.id ?? null;
     let g = gFull;
     if (focusId && gFull.nodes.some((n) => n.id === focusId)) {
@@ -217,7 +217,10 @@ export default function TopologyPage() {
         edges: gFull.edges.filter((e) => connected.has(e.source) && connected.has(e.target)),
       };
     }
-    const pos = Object.fromEntries(layoutFlow(g).map((p) => [p.id, p]));
+    // In focus mode lay out top→bottom (TB): the active path is a thin chain that fits the tall,
+    // narrow column left of the docked detail panel far better than a wide LR row. Full graph = LR.
+    const rankdir: 'LR' | 'TB' = focusId ? 'TB' : 'LR';
+    const pos = Object.fromEntries(layoutFlow(g, { rankdir }).map((p) => [p.id, p]));
 
     const nodes: Node[] = g.nodes.map((n) => {
       const [bg, border] = nodeColors(n, dark);
@@ -226,9 +229,10 @@ export default function TopologyPage() {
         id: n.id,
         position: { x: p.x, y: p.y },
         data: { label: nodeLabel(n), fnode: n },
-        // LR layout → handles on left/right so edges flow horizontally (not top/bottom).
-        sourcePosition: Position.Right,
-        targetPosition: Position.Left,
+        // handles must follow rankdir: LR → left/right, TB → top/bottom, or edges leave the wrong
+        // sides and the smoothstep routing loops back ugly.
+        sourcePosition: rankdir === 'TB' ? Position.Bottom : Position.Right,
+        targetPosition: rankdir === 'TB' ? Position.Top : Position.Left,
         style: {
           background: bg,
           border: `${n.id === focusId ? '2px solid' : n.kind === 'origin' ? '1px dashed' : '1px solid'} ${border}`,
@@ -246,9 +250,14 @@ export default function TopologyPage() {
     return { nodes, edges };
   }, [full, entryId, dark, selected]);
 
-  // Re-mount ReactFlow when the entry filter or focus changes so `fitView` re-centers on the
-  // currently-shown (possibly collapsed) subgraph rather than keeping the prior viewport.
-  const flowKey = `${entryId || 'all'}::${selected?.id ?? ''}`;
+  // Re-center imperatively (NOT by remounting — a remount destroys the user's pan/zoom and makes
+  // dragging feel broken). Keep one mounted instance; refit when the entry filter or focus changes.
+  // rAF defers the fit until after the detail panel has docked and the layout has settled.
+  const rfRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => rfRef.current?.fitView({ padding: 0.2, duration: 300, maxZoom: 1.2 }));
+    return () => cancelAnimationFrame(id);
+  }, [entryId, selected?.id]);
 
   // Detail for the clicked node: resource nodes show their full inventory row (every field —
   // vpc, subnet, tags …); target/origin nodes synthesize a small detail from their meta.
@@ -355,7 +364,8 @@ export default function TopologyPage() {
                 )}
               </div>
               <div className="flex-1 min-h-0 w-full rounded-lg border border-ink-100 bg-card">
-                <ReactFlow key={flowKey} nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.2 }} colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}
+                <ReactFlow nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.2 }} colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}
+                  onInit={(inst) => { rfRef.current = inst; }}
                   onNodeClick={(_, node) => setSelected(((node.data as { fnode?: FlowNode })?.fnode) ?? null)}
                   onPaneClick={() => setSelected(null)}>
                   <Background />
@@ -368,7 +378,7 @@ export default function TopologyPage() {
         )}
       </div>
       {detail && (
-        <DetailPanel title={detail.title} data={detail.data} spec={detail.spec} actions={detailActions} onClose={() => setSelected(null)} />
+        <DetailPanel title={detail.title} data={detail.data} spec={detail.spec} actions={detailActions} onClose={() => setSelected(null)} modal={false} />
       )}
     </div>
   );
