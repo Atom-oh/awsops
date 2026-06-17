@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lambda"))
 import datasource_http as dh  # noqa: E402
 import prometheus_mcp  # noqa: E402
 import clickhouse_mcp  # noqa: E402
+import loki_mcp  # noqa: E402
 
 
 class TestHealthTools(unittest.TestCase):
@@ -42,6 +43,17 @@ class TestHealthTools(unittest.TestCase):
         self.assertEqual(resp["statusCode"], 200)
         self.assertTrue(json.loads(resp["body"])["ok"])
         self.assertTrue(hj.call_args[0][1].endswith("/ping"))
+
+    def test_loki_health_probes_ready(self):
+        with mock.patch.object(dh, "assert_host_allowed"), \
+             mock.patch.object(dh, "http_json", return_value=(200, {})) as hj:
+            resp = loki_mcp.lambda_handler(
+                {"tool_name": "loki_health", "arguments": {}, "conn_config": {"endpoint": "http://loki:3100", "authType": "none", "org_id": "t1"}},
+                None,
+            )
+        self.assertEqual(resp["statusCode"], 200)
+        self.assertTrue(json.loads(resp["body"])["ok"])
+        self.assertTrue(hj.call_args[0][1].endswith("/ready"))
 
     def test_health_reports_failure_on_http_error(self):
         with mock.patch.object(prometheus_mcp, "assert_host_allowed"), \

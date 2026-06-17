@@ -86,4 +86,19 @@ describe('assertDatasourceEndpointAllowed (datasource — private allowed, alway
     expect(isAlwaysBlockedHost('169.254.169.254')).toBe(true);
     expect(isAlwaysBlockedHost('127.0.0.1')).toBe(true);
   });
+
+  // Plan-gate round-3 (agy): 0.0.0.0 routes to localhost on Linux — must be blocked. Lock in the
+  // unspecified/broadcast bypass vectors for both families.
+  it('blocks 0.0.0.0/8 unspecified, IPv6 :: unspecified, and broadcast', () => {
+    for (const u of [
+      'http://0.0.0.0:8123',
+      'http://0.1.2.3:8123',     // 0.0.0.0/8
+      'http://[::]:8123',        // IPv6 unspecified
+      'http://255.255.255.255:8123',
+    ]) {
+      expect(() => assertDatasourceEndpointAllowed(u)).toThrow();
+    }
+    expect(isAlwaysBlockedHost('0.0.0.0')).toBe(true);
+    expect(isAlwaysBlockedHost('::')).toBe(true);
+  });
 });
