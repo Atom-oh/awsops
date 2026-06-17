@@ -2,12 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@/lib/auth', () => ({ verifyUser: vi.fn() }));
 vi.mock('@/lib/diagnosis', () => ({
-  listReports: vi.fn(async () => [{ id: 1 }]),
+  listReports: vi.fn(async () => [
+    { id: 1, requested_by: 'u@x.io' },
+    { id: 2, requested_by: 'other@x.io' },
+  ]),
   createReport: vi.fn(async () => 42),
   linkReportJob: vi.fn(async () => undefined),
   reportForIdempotencyKey: vi.fn(async () => null),
   markReportFailed: vi.fn(async () => undefined),
 }));
+vi.mock('@/lib/admin', () => ({ isAdmin: vi.fn(async () => false) }));
 vi.mock('@/lib/jobs', () => ({ enqueueJob: vi.fn(async () => ({ job_id: 'j1', status: 'queued' })) }));
 
 import { verifyUser } from '@/lib/auth';
@@ -46,6 +50,12 @@ describe('GET /api/diagnosis', () => {
     const r = await GET(req());
     expect(r.status).toBe(200);
     expect((await r.json()).reports[0].id).toBe(1);
+  });
+  it('attaches can_edit per report (owner true, others false for a non-admin)', async () => {
+    (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    const reports = (await (await GET(req())).json()).reports;
+    expect(reports.find((r: any) => r.id === 1).can_edit).toBe(true);   // owner
+    expect(reports.find((r: any) => r.id === 2).can_edit).toBe(false);  // someone else's
   });
 });
 
