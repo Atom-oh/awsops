@@ -25,7 +25,8 @@ interface Message {
 // Bedrock pricing (USD per 1M tokens) / Bedrock 가격 (USD / 100만 토큰)
 const TOKEN_PRICING: Record<string, { input: number; output: number }> = {
   'sonnet-4.6': { input: 3, output: 15 },
-  'opus-4.6': { input: 15, output: 75 },
+  'opus-4.8': { input: 15, output: 75 },
+  'haiku-4.5': { input: 1, output: 5 },
 };
 
 function calcTokenCost(model: string, inputTokens: number, outputTokens: number): string {
@@ -41,7 +42,7 @@ export default function AIPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [model, setModel] = useState<'sonnet-4.6' | 'opus-4.6'>('sonnet-4.6');
+  const [model, setModel] = useState<'sonnet-4.6' | 'opus-4.8' | 'haiku-4.5'>('sonnet-4.6');
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [historyData, setHistoryData] = useState<any[]>([]);
@@ -288,7 +289,8 @@ export default function AIPage() {
           <select value={model} onChange={(e) => setModel(e.target.value as any)}
             className="bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-xs text-gray-300 focus:ring-accent-cyan focus:border-accent-cyan">
             <option value="sonnet-4.6">Claude Sonnet 4.6</option>
-            <option value="opus-4.6">Claude Opus 4.6</option>
+            <option value="opus-4.8">Claude Opus 4.8</option>
+            <option value="haiku-4.5">Claude Haiku 4.5</option>
           </select>
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-accent-green/10 text-accent-green border border-accent-green/20">
             <span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse" />

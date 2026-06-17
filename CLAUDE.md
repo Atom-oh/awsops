@@ -1,420 +1,247 @@
-# AWSops 대시보드 v1.8.0 — Claude 컨텍스트
+# AWSops v2 — Claude 컨텍스트
+
+> **브랜치 `feat/v2-architecture-design`.** 이 문서는 **v2 아키텍처**(Terraform · ECS Fargate · Aurora · AgentCore 에이전트 · 비동기 워커)를 기술합니다.
+> v1.8.0(`src/`, CDK/EC2/Steampipe, `/awsops` basePath)은 **레거시 프로덕션 앱으로 그대로 유지**되며 v2와 병렬 존재합니다. v1 규칙(특히 `/awsops` fetch 접두사, Steampipe pg Pool)은 **v2에 적용되지 않습니다.** v1 세부는 `src/**/CLAUDE.md` 참조.
 
 ## 프로젝트 개요
-실시간 AWS/Kubernetes 리소스 모니터링, 네트워크 문제 해결, CIS 컴플라이언스, AI 기반 분석, 외부 데이터소스 연동, AI 종합 진단을 제공하는 운영 대시보드.
-Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
+AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단일 EC2 모놀리식을 **Terraform 기반 MSA**로 재구축합니다: 비공개 엣지(CloudFront VPC Origin → 내부 ALB → Fargate), Cognito Lambda@Edge 인증, Aurora 영속 상태, AgentCore 섹션 에이전트(라이브 AWS 조회), OOM-안전 비동기 워커 티어.
 
-## 아키텍처
-- **프론트엔드**: Next.js 14 (App Router) + Tailwind CSS 다크 테마 + Recharts + React Flow
-- **데이터**: Steampipe 내장 PostgreSQL (포트 9193) — AWS 380+ 테이블, K8s 60+ 테이블, 멀티 어카운트 Aggregator
-- **외부 데이터소스**: Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog (SSRF 방지 + allowlist)
-- **AI 엔진**: Bedrock Sonnet/Opus 4.6 + AgentCore Runtime (Strands) + 8 Gateway (125 MCP 도구) + 19 Lambda
-- **AI 진단**: 15섹션 Bedrock Opus 분석 + DOCX/MD/PDF 내보내기 + 자동 스케줄링
-- **인증**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1) + CloudFront
-- **인프라**: CDK (`infra-cdk/`) → CloudFront (CACHING_DISABLED) → ALB → EC2 (t4g.2xlarge, Private Subnet)
+## 아키텍처 (v2)
+- **IaC**: **Terraform** (CDK 폐기). `terraform/v2/foundation/` 단일 루트, **partial S3 backend**(`backend.hcl`, `awsops-v2-tfstate`, `use_lockfile` — DynamoDB 없음). TF ≥1.15, provider `~>6.0`.
+- **엣지**: CloudFront(TLS) → **VPC Origin `https-only:443`** → **내부 ALB HTTPS:443**(리전 ACM) → HTTP → Fargate `awsops-v2-web:3000`. **공개 ALB 없음.** ALB SG는 CloudFront 관리형 SG `CloudFront-VPCOrigins-Service-SG`에서 443 허용(VPC-CIDR-only는 504).
+- **인증**: Cognito User Pool + **Lambda@Edge**(`us-east-1`, python3.12, viewer-request). **RS256 JWKS 서명 검증** + iss/aud/token_use + OAuth `state` + **PKCE public client**(시크릿 없음). 도메인 `a-ops-v2-auth-*`('aws'는 Cognito 예약어). **로그인 = 자체 `/login` 폼**(ADR-042) — BFF `POST /api/auth/login`가 무서명 공개 `InitiateAuth(USER_PASSWORD_AUTH)` 호출 → `awsops_token` 발급(id_token 12h). 미인증 시 엣지가 `/login`으로 redirect; **Hosted UI PKCE 플로우(`/_callback`)는 다크 폴백으로 보존**. signout은 쿠키 삭제 → `/login`(Hosted UI `/logout` 왕복 없음).
+- **웹**: **Next.js 14 thin-BFF** (`web/`, standalone **arm64**, **루트 경로 — basePath 없음**). 라우트: `/api/health`(공개), `/api/stream`(SSE), `/api/db`(Aurora ping), `/api/jobs`(+`/[id]`, P2 비동기 작업). 무거운 작업은 직접 처리하지 않고 **워커 큐로 enqueue**.
+- **데이터**: **Aurora Serverless v2** (`awsops-v2-aurora`, **PG 17.9**, 0.5–4 ACU, KMS CMK, RDS-관리 master secret). **ADR-030 기반 스키마(베이스라인 v9 동결 — 테이블 수는 `data/schema.sql` 참조)** + P2 `worker_jobs`. 앱은 **node-pg**(`web/lib/db.ts`)로 접근. **flag-gated Steampipe 인벤토리 sync(D1, `steampipe_enabled`) 존재** — 라이브 쿼리는 여전히 AgentCore MCP Lambda 도구가 담당.
+- **AI (AgentCore)**: Bedrock Sonnet 4.6 / **Opus 4.8** / Haiku 4.5 + AgentCore Runtime(Strands, `agent/agent.py` 재사용) + **8 섹션 게이트웨이**(`awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`; 외부 관측성은 **Integrations 축**[ADR-039]이지 9th 게이트웨이가 아님 — ADR-004 게이트웨이 수 **8** 유지) + Memory + Code Interpreter. **설계: 8 섹션 에이전트 + 1 인시던트 오케스트레이터**(v1의 8 Gateway 대체). 현재 read-only 슬라이스 2개 배포(iam-mcp 14도구→security, flow-monitor 1→network); 전체 함대는 P3. **설정 source of truth = SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
+- **비동기 워커(P2)**: web `POST /api/jobs` → `worker_jobs`(queued) + SQS → **ESM(킬스위치)** → dispatcher Lambda(멱등, job_id 기준) → **Step Functions Standard** `$.runtime` Choice → RunLambda(짧음) **또는** `ecs:runTask.sync` Fargate(긺/OOM) → 워커가 직접 running/succeeded 기록 → Catch 시 status_updater Lambda가 failed(SFN은 VPC Aurora 쓰기 불가) → reaper(EventBridge 5분)가 stale 정합화.
+- **EKS 온보딩**: `configure.mjs` 멀티선택 → `eks.tf`가 web task role에 **Access Entry + AmazonEKSViewPolicy**(클러스터 스코프) 부여. kubeconfig 자동등록/조회 UI는 P3.
 
-## 현황 (v1.8.0)
-| 항목 | 수치 |
-|------|------|
-| 페이지 | 43 (login 포함) |
-| 라우트 | 55 |
-| SQL 쿼리 파일 | 26 (event-scaling 추가) |
-| API 라우트 | 19 (event-scaling 추가) |
-| 컴포넌트 | 18 (ReportMarkdown 추가) |
-| MCP 도구 | 125 (8 Gateway, 19 Lambda) |
-| AI 라우트 | 11 (datasource 라우트 추가) |
-| ADR | 30 (001-030, ADR-030 Accepted, ADR-029 Proposed) |
+## 현황 (단계별)
+| 단계 | 내용 | 상태 |
+|------|------|------|
+| P1a | S3 backend + foundation + 비공개 엣지(CloudFront VPC Origin → 내부 ALB → Fargate) | ✅ GREEN |
+| P1b | Cognito + Lambda@Edge 인증 | ✅ |
+| P1c | Aurora Serverless v2 (ADR-030 기반 스키마 — 베이스라인 v9 동결, 테이블 수는 `data/schema.sql` 참조) | ✅ |
+| P1d | web thin-BFF + dual-tier ECR + `make deploy` + RS256 인증 강화 | ✅ |
+| P1e | EKS 온보딩 (Access Entry + View policy) | ✅ |
+| P1f | AgentCore 멱등 provisioner (9 GW + Memory + Interpreter + Runtime) | ✅ |
+| P2 | 비동기 워커 백본 (SQS+SFN+Lambda/Fargate, `worker_jobs`) | ✅ W9 GREEN |
+| **P3** | 에이전트 함대 + 챗 UI + EKS 조회 (read-only). ~~OpenCost 설치 버튼(ADR-029 mutating)~~ → **029 번복으로 폐기** | 🟡 부분 진행 (read-only 부분 deployed; mutating 부분 reversed) |
+| **P4** | 인시던트/ChatOps 라이프사이클 + DevOps Agent 페더레이션 | 🔜 backlog |
 
-## 필수 규칙
+라이브 환경: 계정 `180294183052`, 도메인 `awsops-v2.atomai.click`, mgmt-vpc 재사용(`vpc-06801144309cad7dc`, 10.254.0.0/16).
 
-### 데이터 접근
-- 모든 쿼리는 `src/lib/steampipe.ts`의 **pg Pool**을 통해 실행 — Steampipe CLI 사용 금지
-- 풀 설정: `max: 10, statement_timeout: 120s, batchQuery: 8 sequential`
-- 결과는 node-cache를 통해 5분간 캐싱 (멀티 어카운트: 캐시키에 accountId 접두사)
-- `steampipe query "SQL"` CLI는 660배 느림 — 절대 사용 금지
+## 필수 규칙 (v2)
 
-### 멀티 어카운트
-- `data/config.json`의 `accounts[]` 배열로 계정 관리 — 코드 수정 불필요
-- Steampipe Aggregator 패턴: `aws` = 모든 계정 통합, `aws_123456789012` = 개별 계정
-- `buildSearchPath(accountId)` → `public, aws_{id}, kubernetes, trivy`로 계정별 쿼리 스코핑
-- 모든 페이지: `useAccount()` 훅 → `accountId: currentAccountId` 전달
-- DataTable: `isMultiAccount && data[0].account_id` 감지 시 Account 컬럼 자동 추가
-- Cost 쿼리: `runCostQueriesPerAccount()`로 계정별 실행 후 `account_id` 태깅 병합
-- SQL 쿼리: AWS 테이블 `list` 쿼리에 `account_id` 컬럼 필수 포함
+### 경로 / 웹
+- **루트 경로(`/`)에서 서빙 — basePath 없음.** v2는 전용 도메인을 쓴다. `/awsops/api/*` 접두사 규칙(v1)은 **적용 안 됨** → fetch는 `/api/*`.
+- web은 **thin-BFF**: 무거운/장기/OOM 위험 작업은 직접 실행하지 말고 `POST /api/jobs`로 워커 큐에 넣는다.
+- 모든 컴포넌트 `export default`, 프로덕션 빌드(standalone) 기준.
 
-### Next.js 규칙
-- `basePath: '/awsops'` — `next.config.mjs`에 설정
-- 모든 `fetch()` URL에 `/awsops/api/*` 접두사 필수 (basePath가 fetch에 자동 적용 안 됨)
-- 모든 컴포넌트는 `export default` — `{ X }` 형태 아닌 `import X from '...'`
-- 프로덕션 빌드만 사용 (`npm run build + start`)
+### Terraform 규율
+- 변경은 `terraform/v2/foundation/`에서. **공유 인프라에 `-auto-approve` 금지** — saved-tfplan(`apply tfplan`)이 자동 게이트 통과. 긴 apply(CloudFront, SG)는 **컨트롤러가 실행**(서브에이전트 idle-timeout).
+- 신규 대형 기능은 **count/flag 게이트**로: `agentcore_enabled`, `workers_enabled`, `steampipe_enabled`(인벤토리 sync), `hybrid_routing_enabled`(ADR-038 챗 라우팅) — 모두 기본 false → `plan`=No changes, $0. 토글 전 기본은 비활성.
+- **SG `description`은 불변** — 변경 시 SG replace가 ALB 의존성으로 hang. ingress 변경은 in-place로, description은 그대로.
+- **arm64 필수** (web/agent/worker 이미지 모두 `buildx --platform linux/arm64`).
 
-### Steampipe 쿼리 규칙
-- 컬럼명은 반드시 `information_schema.columns`로 확인 후 쿼리 작성
-- JSONB 중첩 컬럼 주의: MSK는 `provisioned` JSONB, OpenSearch는 `encryption_at_rest_options`
-- `versioning_enabled` (S3), `class` AS alias (RDS), `trivy_scan_vulnerability`, `"group"` (ECS 예약어)
-- 목록 쿼리에서 사용 금지: `mfa_enabled`, `attached_policy_arns`, Lambda `tags` (SCP 차단)
-- SQL에서 `$` 사용 금지 — `conditions::text LIKE '%..%'` 사용
+### 데이터 / 설정
+- 앱 상태는 **Aurora**(node-pg). `data/*.json`(v1 패턴) 아님. 스키마는 `terraform/v2/foundation/data/schema.sql` + `schema_migrations`.
+- ECS `secrets` valueFrom(Aurora secret)는 **실행 역할(execution role)** 권한 필요(task role 아님) — 아니면 `ResourceInitializationError`.
+- AgentCore 설정은 **SSM이 source of truth**(provision.py가 기록 → web BFF 런타임 read). valueFrom 미사용(레이스 회피).
 
-### AI 라우팅 (`src/app/api/ai/route.ts`)
-11단계 우선순위 — 목록/현황 질문은 `aws-data` (Steampipe SQL), 트러블슈팅/진단은 전문 Gateway, 외부 메트릭은 `datasource`로 분류:
+### 컨테이너 / 배포
+- **Next.js standalone을 컨테이너로 배포 시 `HOSTNAME=0.0.0.0`을 런타임 env로 명시**(task def `environment`) — 이미지 ENV로는 부족(ECS가 HOSTNAME을 ENI IP로 덮어써 0.0.0.0/loopback 미바인딩 → healthCheck UNHEALTHY).
+- **Fargate 워커 Dockerfile은 `CMD`(ENTRYPOINT 금지)** — SFN `containerOverrides.command`는 CMD를 대체하지만 exec-form ENTRYPOINT엔 append되어 argv 중복 → argparse 실패.
+- 컨테이너+TG health 경로는 앱(`/api/health`)과 일치해야 함(불일치 시 circuit breaker 루프).
 
-| 우선순위 | 라우트 | 대상 |
-|----------|--------|------|
-| 1 | code | 코드 인터프리터 (Python sandbox) |
-| 2 | network | Network Gateway — Reachability, Flow Logs, TGW, VPN, Firewall |
-| 3 | container | Container Gateway — EKS, ECS, Istio 트러블슈팅 |
-| 4 | iac | IaC Gateway — CDK, CloudFormation, Terraform |
-| 5 | data | Data Gateway — DynamoDB, RDS, ElastiCache, MSK |
-| 6 | security | Security Gateway — IAM, 정책 시뮬레이션 |
-| 7 | monitoring | Monitoring Gateway — CloudWatch, CloudTrail |
-| 8 | cost | Cost Gateway — 비용 분석, 예측, 예산 |
-| 9 | datasource | 외부 데이터소스 — Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog |
-| 10 | aws-data | Steampipe SQL + Bedrock 분석 (목록/현황/구성 분석) |
-| 11 | general | Ops Gateway → Bedrock 폴백 |
-
-- AgentCore 설정은 `data/config.json`에서 읽음 — 계정별 하드코딩 없음
-- AgentCore 응답에서 도구 사용 내역을 키워드 매칭으로 추론하여 UI에 표시
-
-### 테마
-- Navy: 900 (#0a0e1a), 800 (#0f1629), 700 (#151d30), 600 (#1a2540)
-- 강조색: cyan (#00d4ff), green (#00ff88), purple (#a855f7), orange (#f59e0b), red (#ef4444)
-- StatsCard `color` 속성: hex가 아닌 이름('cyan') 사용
+### 운영 주의
+- **동시 세션이 브랜치를 자주 전환**한다(docs-site 배포 등). 작업 전 `git branch --show-current`=`feat/v2-architecture-design` 확인. 미커밋 변경은 외부 reset/checkout에 유실될 수 있으니 **작은 단위로 즉시 커밋**.
 
 ## 주요 파일
 
-### 핵심 라이브러리 (`src/lib/`)
-- `steampipe.ts` — pg 풀 + 배치 쿼리 + 캐시 + Cost 가용성 probe + buildSearchPath + runCostQueriesPerAccount
-- `queries/*.ts` — 25개 SQL 쿼리 파일 (ebs, msk, opensearch, container-cost, eks-container-cost, bedrock 포함)
-- `resource-inventory.ts` — 리소스 인벤토리 스냅샷 (data/inventory/, 추가 쿼리 0건)
-- `cost-snapshot.ts` — Cost 데이터 스냅샷 폴백 (data/cost/)
-- `app-config.ts` — 앱 설정 (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId, accounts[], customerLogo, adminEmails)
-- `agentcore-stats.ts` — AgentCore 호출 통계 (총 호출, 평균 응답시간, 게이트웨이별, 모델별 토큰 사용량)
-- `agentcore-memory.ts` — 대화 이력 영구 저장/검색 (사용자별 분리, data/memory/)
-- `auth-utils.ts` — Cognito JWT에서 사용자 정보 추출 (email, sub)
-- `cache-warmer.ts` — 백그라운드 캐시 프리워밍 (대시보드 23개 쿼리, 4분 주기)
-- `datasource-client.ts` — 외부 데이터소스 HTTP 클라이언트 (7종: Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
-- `datasource-registry.ts` — 데이터소스 타입 레지스트리 (헬스체크 엔드포인트, 쿼리 언어)
-- `datasource-prompts.ts` — 데이터소스 AI 쿼리 생성 프롬프트
-- `report-generator.ts` — 종합 진단 데이터 수집 오케스트레이터
-- `report-prompts.ts` — 15섹션 진단 프롬프트 정의
-- `report-docx.ts` — DOCX 리포트 생성 (A4, TOC, 마크다운 변환)
-- `report-pptx.ts` — PPTX 리포트 생성 (WADD 스타일)
-- `report-scheduler.ts` — 자동 진단 스케줄러 (weekly/biweekly/monthly)
-- `alert-types.ts` — 알림 이벤트 타입 + 소스별 정규화 함수 (CloudWatch, Alertmanager, Grafana, Generic)
-- `alert-correlation.ts` — 알림 상관 분석 엔진 (시간/서비스/리소스 기반 그룹화, 중복 제거, 심각도 에스컬레이션)
-- `alert-diagnosis.ts` — 알림 진단 오케스트레이터 (전략 선택, 컬렉터/데이터소스 병렬 실행, 변경 감지, Bedrock 분석)
-- `alert-knowledge.ts` — 알림 지식 베이스 (진단 기록 저장/유사도 검색/통계)
-- `slack-notification.ts` — Slack 알림 클라이언트 (Block Kit, 채널 라우팅, 스레드 업데이트)
-- `event-scaling.ts` — 이벤트 사전 스케일링 데이터 모델 + JSON 영속화 (data/event-scaling/, ADR-010 Phase 1+2)
-- `event-scaling-prompts.ts` — Bedrock Sonnet 4.6 프롬프트 (다단계 스케일 플랜 생성, PLAN_JSON 마커 파싱)
-- `event-scaling-scripts.ts` — 자원 타입별 안전한 bash 스크립트 생성 (KEDA/HPA/Aurora/MSK/ASG/EBS, 검토 후 수동 실행)
+### Terraform (`terraform/v2/foundation/`)
+- `network.tf` — VPC 신규생성 or 기존 재사용(`create_network` 플래그)
+- `edge.tf` — CloudFront + VPC Origin + 내부 ALB + ACM
+- `auth.tf` + `edge-lambda/cognito_edge.py.tftpl` — Cognito + Lambda@Edge(RS256)
+- `data.tf` + `data/schema.sql` — Aurora Serverless v2 + ADR-030 기반 스키마(베이스라인 v9 동결 — 테이블 수는 `data/schema.sql` 참조)
+- `workload.tf` — ECS 클러스터/서비스/태스크(web)
+- `ecr.tf` — dual-tier ECR(dev-private + prod-public)
+- `ai.tf` — AgentCore ECR + IAM role + agent Lambda 슬라이스 + SSM(전부 `agentcore_enabled` 게이트)
+- `workers.tf` — SQS + ESM + dispatcher/worker/status_updater/reaper Lambda + Step Functions + Fargate 워커(전부 `workers_enabled` 게이트)
+- `eks.tf` — `for_each onboard_eks_clusters` Access Entry + View policy
+- `variables.tf` / `outputs.tf` / `providers.tf` / `backend.tf`
 
-### API 라우트 (`src/app/api/`, 19개)
-- `ai/route.ts` — AI 라우팅 (11 routes, 멀티 라우트, SSE 스트리밍, 도구 추론, datasource 라우트)
-- `steampipe/route.ts` — Steampipe 쿼리 + Cost 가용성 + 인벤토리 (POST/GET/PUT)
-- `auth/route.ts` — 로그아웃 (HttpOnly 쿠키 서버 사이드 삭제)
-- `msk/route.ts` — MSK 브로커 노드 + CloudWatch 메트릭
-- `rds/route.ts` — RDS 인스턴스 CloudWatch 메트릭
-- `elasticache/route.ts` — ElastiCache 노드 CloudWatch 메트릭
-- `opensearch/route.ts` — OpenSearch 도메인 CloudWatch 메트릭
-- `agentcore/route.ts` — AgentCore Runtime/Gateway 상태 (config 기반)
-- `code/route.ts` — 코드 인터프리터
-- `benchmark/route.ts` — CIS 컴플라이언스 벤치마크
-- `container-cost/route.ts` — ECS 컨테이너 비용 (CloudWatch Container Insights + Fargate 가격)
-- `eks-container-cost/route.ts` — EKS 컨테이너 비용 (OpenCost API + Request 기반 폴백)
-- `bedrock-metrics/route.ts` — Bedrock 모델 사용량 메트릭 (CloudWatch + AWSops 앱 토큰 통계)
-- `datasources/route.ts` — 외부 데이터소스 CRUD + 쿼리 실행 + AI 쿼리 생성 (SSRF 방지)
-- `k8s/route.ts` — EKS kubeconfig 등록
-- `report/route.ts` — AI 종합 진단 리포트 생성 + S3 저장 + 스케줄링
-- `alert-webhook/route.ts` — 알림 웹훅 수신 (CloudWatch SNS, Alertmanager, Grafana, Generic) + HMAC 인증 + 상관 분석 트리거
-- `notification/route.ts` — Slack/SNS 알림 발송 (Block Kit, 심각도 채널 라우팅, 마크다운→평문 변환)
-- `event-scaling/route.ts` — 이벤트 사전 스케일링 CRUD + 메트릭 수집 + Bedrock 플랜 생성 + 스크립트 다운로드 (Phase 1+2, 관리자 전용, 실행 없음)
+### 스크립트 (`scripts/v2/`)
+- `configure.mjs` — 대화형 TUI(VPC/도메인/버킷/EKS 선택 → `terraform.tfvars` + `backend.hcl`)
+- `deploy.mjs` — web: login→buildx arm64 push→ECS force-new-deployment→wait stable→smoke `/api/health`
+- `agentcore.mjs` + `agentcore/{catalog.py,provision.py}` — arm64 agent 이미지 빌드/푸시 + 멱등 provisioner(Runtime/9 GW/Target/Memory/Interpreter, SSM 기록)
+- `workers.mjs` + `workers/{db,dispatcher,handlers,reaper,status_updater,worker_lambda,fargate_worker}.py + sfn.asl.json` — P2 워커 백본
 
-### 인프라
-- `infra-cdk/lib/awsops-stack.ts` — CDK 인프라 (VPC, EC2, ALB, CloudFront)
-- `infra-cdk/lib/cognito-stack.ts` — CDK Cognito (User Pool, Lambda@Edge)
-- `agent/agent.py` — Strands Agent 소스 (EC2에서 Docker 빌드 → ECR 푸시 → AgentCore Runtime에서 실행)
-- `agent/lambda/*.py` — 19개 Lambda 소스 + `create_targets.py`
-- ※ EC2에서는 Docker 이미지 **빌드만** 수행. 실행은 AgentCore 관리형 서비스에서 컨테이너로 실행됨.
+### 웹 (`web/`)
+- `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF 라우트
+- `app/security/page.tsx` + `app/api/security/{route,refresh}` — 보안 findings(Public S3·Open SG·Unencrypted EBS·IAM MFA), `inventory_resources`에서 BFF 파생(read-only). `s3_public_access`는 sync_lambda SDK sync로 추가
+- `app/compliance/page.tsx` + `app/api/compliance/{run,runs,runs/[id],benchmarks}` — CIS 벤치마크(Powerpipe Fargate 워커 `compliance` job → `compliance_runs`/`compliance_results` 이력). 둘 다 `steampipe_enabled` 게이트
+- `lib/db.ts` — Aurora node-pg 공유 풀(`getPool`)
+- `app/layout.tsx`, `app/page.tsx`, `Dockerfile`(standalone arm64)
 
-### 설정 파일 (`data/config.json`)
-```json
-{
-  "costEnabled": true,
-  "agentRuntimeArn": "arn:aws:bedrock-agentcore:REGION:ACCOUNT:runtime/RUNTIME_ID",
-  "codeInterpreterName": "awsops_code_interpreter-XXXXX",
-  "memoryId": "awsops_memory-XXXXX",
-  "memoryName": "awsops_memory",
-  "accounts": [
-    { "accountId": "111111111111", "alias": "Host", "connectionName": "aws_111111111111", "region": "ap-northeast-2", "isHost": true, "features": { "costEnabled": true, "eksEnabled": true, "k8sEnabled": true } },
-    { "accountId": "222222222222", "alias": "Staging", "connectionName": "aws_222222222222", "region": "ap-northeast-2", "isHost": false, "features": { "costEnabled": false, "eksEnabled": false, "k8sEnabled": false } }
-  ]
-}
+### 에이전트 (`agent/`, v1 자산 재사용)
+- `agent/agent.py` — Strands Agent(`GATEWAYS_JSON` env로 라우팅, EC2 빌드 불필요)
+- `agent/lambda/*.py` — MCP 도구 Lambda 소스(v2는 P1f에서 iam-mcp/flow-monitor 슬라이스 사용; 전체 함대는 P3)
+
+## 배포 (Makefile)
 ```
-계정별 배포 시 이 파일만 변경 — 코드 수정 불필요. `accounts` 배열은 `scripts/12-setup-multi-account.sh`로 관리.
-
-## 배포 스크립트 (11단계)
-```
-Step 0:  00-deploy-infra.sh              CDK 인프라 (로컬에서 실행)
-Step 1:  01-install-base.sh              Steampipe + Powerpipe
-Step 2:  02-setup-nextjs.sh              Next.js + Steampipe 서비스 + MSP 판별
-Step 3:  03-build-deploy.sh              프로덕션 빌드
-Step 5:  05-setup-cognito.sh             Cognito 인증
-Step 6a: 06a-setup-agentcore-runtime.sh  Runtime (IAM, ECR, Docker, Endpoint)
-Step 6b: 06b-setup-agentcore-gateway.sh  8 Gateway (MCP)
-Step 6c: 06c-setup-agentcore-tools.sh    19 Lambda + 8 Gateway, 125 도구
-Step 6d: 06d-setup-agentcore-interpreter.sh  Code Interpreter
-Step 6e: 06e-setup-agentcore-config.sh   AgentCore 설정 적용 (ARN, Gateway URL)
-Step 6f: 06f-setup-agentcore-memory.sh   Memory Store (대화 이력, 365일 보관)
-Step 7:  07-setup-opencost.sh            Prometheus + OpenCost (EKS 비용 분석)
-Step 8:  08-setup-cloudfront-auth.sh     Lambda@Edge → CloudFront 연동
-Step 9:  09-start-all.sh                 전체 서비스 시작
-Step 10: 10-stop-all.sh                  전체 서비스 중지
-Step 11: 11-verify.sh                    검증 (헬스체크)
-Step 12: 12-setup-multi-account.sh       멀티 어카운트 설정 (선택, Aggregator + 교차 계정 IAM 역할)
+make configure   # 대화형 TUI → terraform.tfvars + backend.hcl (deps 자동 설치)
+terraform -chdir=terraform/v2/foundation init -backend-config=backend.hcl
+terraform -chdir=terraform/v2/foundation plan -out tfplan   # 컨트롤러가 apply tfplan (공유 인프라)
+make deploy      # web: arm64 빌드→ECR push→ECS 롤링→stable 대기→smoke /api/health
+make agentcore   # arm64 agent 이미지 + 멱등 AgentCore provisioner (--smoke로 호출 검증). apply 후 실행
+make workers     # arm64 worker 이미지 push (workers_enabled=true로 apply 후)
 ```
 
-## AgentCore 알려진 이슈
-- Gateway Target: CLI 대신 Python/boto3 사용 (`mcp.lambda` + `credentialProviderConfigurations`)
-- Docker: arm64 필수 (`docker buildx --platform linux/arm64 --load`)
-- Code Interpreter 이름: 하이픈 불가, 언더스코어만
-- Runtime 업데이트 시 `--role-arn` + `--network-configuration` 필수
-- agent.py GATEWAYS: 계정별 Gateway URL로 업데이트 후 Docker 재빌드 필요
-- AgentCore 응답: 최종 텍스트만 반환 → 응답 내용 키워드로 도구 추론
-- Memory 이름: 하이픈 불가, 언더스코어만 (`awsops_memory`). `eventExpiryDuration` 최대 365일.
-- Sign Out: HttpOnly 쿠키는 `document.cookie`로 삭제 불가 → `POST /api/auth`로 서버 사이드 삭제
+## v2 ↔ v1 핵심 차이
+| 항목 | v1 (`src/`) | v2 (`web/` + `terraform/v2/`) |
+|------|-------------|-------------------------------|
+| IaC | CDK | Terraform (partial S3 backend) |
+| 컴퓨트 | 단일 EC2 t4g.2xlarge | ECS Fargate (web/worker 분리) |
+| 데이터 | Steampipe 임베디드 PG + `data/*.json` | Aurora Serverless v2 PG17 (+ AgentCore 라이브 조회) |
+| 경로 | `/awsops` basePath | 루트 `/` (basePath 없음) |
+| 엣지 | CloudFront → 공개 ALB → EC2 | CloudFront VPC Origin → 내부 ALB → Fargate |
+| AI 구성 | 8 Gateway, 11-route 라우터 | 9 섹션 GW + 1 인시던트 오케스트레이터(설계) |
+| 장기 작업 | 인-프로세스 | SQS+SFN+Lambda/Fargate 비동기 워커 |
+| 인증 검증 | exp-only(엣지) | RS256 JWKS + PKCE |
 
-## 새 페이지 추가
-1. `information_schema.columns`로 컬럼명 확인 (JSONB 중첩 구조도 확인)
-2. 쿼리 파일 생성: `src/lib/queries/<service>.ts`
-3. 페이지 생성: `src/app/<service>/page.tsx`
-4. 사이드바 추가: `src/components/layout/Sidebar.tsx`
-5. (선택) 대시보드 카드, CloudWatch 메트릭 API, Resource Inventory 매핑
-6. 빌드 검증 후 문서 업데이트
+## 알려진 이슈 / 학습 (재사용 핵심)
+- **엣지 504→200**: CF→ALB는 TLS end-to-end(VPC Origin `https-only` + origin domain=public FQDN으로 SNI 매칭), ALB는 HTTPS:443 + 리전 ACM, ALB SG는 `CloudFront-VPCOrigins-Service-SG` 443 허용. VPC Origin protocol은 in-place 변경 불가 → `create_before_destroy` + `-replace`.
+- **Aurora 메이저 업그레이드(15→17.9)**: `variables.tf`에 정확 minor(`17.9`) + `allow_major_version_upgrade`+`apply_immediately`로 먼저 apply(업글) → **그 다음** cluster·instance 둘 다 `lifecycle{ignore_changes=[engine_version]}` 추가(향후 마이너 자동업글 흡수). "17"만 핀하면 `aws_rds_cluster`에서 오작동.
+- **SG description 불변**(위 Terraform 규율) / **ECS secrets는 execution-role** / **HOSTNAME=0.0.0.0 런타임 env** / **Fargate 워커 CMD(ENTRYPOINT 금지)**.
+- **AgentCore**: Gateway Target은 boto3(`mcp.lambda`+`credentialProviderConfigurations`); 갓 만든 GW가 READY 전이면 첫 target 생성이 ValidationException → 재실행으로 해소(provisioner 멱등 재실행 가능). Code Interpreter/Memory 이름은 언더스코어만, Memory `eventExpiryDuration`≤365.
+- **SSM 예약어**: `/aws...` 경로는 'aws' prefix라 거부 → `/ops/${project}/...` 사용.
+- **에이전트 cross-account self-assume 함정**: v2는 단일계정인데 챗에서 호스트 계정(`180294183052`)을 고르면 `agent.py`가 `target_account_id=<host>`를 강제 → 도구가 `arn:...:role/AWSopsReadOnlyRole`(v1 *타깃 계정* 전용, 호스트엔 부재)을 self-assume → AccessDenied(에이전트가 "cross-account 차단"으로 **오진**). 수정: `cross_account.get_role_arn()`이 대상=호스트면 `None` 반환(exec 역할 직접 사용) + `agent.py effective_account_id()`가 호스트를 `__all__`처럼 blank(defense-in-depth). 호스트 판별 = `AWSOPS_HOST_ACCOUNT_ID` env → STS `GetCallerIdentity` 폴백(캐시). 진짜 *다른* 계정 assume 경로는 그대로. v1 무영향(별개 함수 `awsops-*-mcp` py3.12 vs v2 `awsops-v2-agent-*` py3.11).
 
-## 자동 동기화 규칙
-
-### CLAUDE.md 작성 기준 (어느 디렉토리에 둘지)
-- **필수**: `src/` 최상위 모듈 (`src/app`, `src/components`, `src/contexts`, `src/hooks`, `src/lib`, `src/types`)
-- **필수**: 자체 규칙·아키텍처·외부 의존성·SSRF/보안 정책 등 부모 문서로 압축 불가능한 복잡 feature 디렉토리
-  - 예: `src/app/api`, `src/app/datasources`, `src/app/ai-diagnosis`, `src/app/alert-settings`, `src/app/accounts`, `src/app/k8s`, `src/app/container-cost`, `src/app/eks-container-cost`, `src/lib/collectors`, `src/lib/queries`, `src/lib/i18n`
-- **불필요**: 부모 모듈 CLAUDE.md의 표 한 줄로 충분히 설명되는 단순 페이지 디렉토리 (`src/app/ec2`, `src/app/s3`, `src/app/iam` 등 대부분의 단일 페이지) — 별도 문서 추가 시 부모 문서와 중복만 발생
-- **불필요**: 단일 책임 컴포넌트 그룹 (`src/components/charts`, `src/components/table` 등) — `src/components/CLAUDE.md`의 컴포넌트 인벤토리만 유지
-
-### 변경 → 업데이트 매트릭스
-- API 엔드포인트 추가/제거 → `src/app/CLAUDE.md` + `src/app/api/CLAUDE.md` (라우트 수/목록 업데이트)
-- 쿼리 파일 변경 → `src/lib/CLAUDE.md`, `src/lib/queries/CLAUDE.md`
-- 컴포넌트 변경 → `src/components/CLAUDE.md`
-- 페이지 추가/제거 → `src/app/CLAUDE.md` 페이지 목록 + 루트 `CLAUDE.md` 현황 표
-- 데이터소스/외부 통합 → `src/app/datasources/CLAUDE.md` + `src/lib/CLAUDE.md`
-- ADR 번호: `docs/decisions/ADR-*.md`에서 가장 높은 번호 + 1
+## ADR
+`docs/decisions/ADR-*.md` (001–044). v2 관련: **038**(하이브리드 에이전트 라우팅 — 정규식 fast-path + Haiku 분류기 + v2 프롬프트 캐싱; **활성화 LIVE 2026-06-10**, 게이트 hybrid 96.9%/+27.7pp PASSED; Gateway 시맨틱은 P4 연기; 033 확장·031 우선순위 통합); **037**(v2 파운데이션 — Terraform + thin-BFF + 비동기 워커; **024 전면 승계 + 030 메커니즘 정제**; Steampipe=라이브 없음·flag-gated 인벤토리 sync 확정; Accepted 2026-06-10); **030**(ECS Fargate + Aurora — Aurora·이중 ECR 의도 유효, 4-컨테이너/Service Connect/CDK 메커니즘은 037이 승계); **029·031·032·033·034·035·036** v2 ADR **전부 멀티AI 합의로 Accepted (2026-06-09)** (029는 통제 사양으로 재구성 — 메커니즘은 036 하이브리드 위임·6대 통제 유지). **009는 032로 대체됨**(상관분석 엔진은 032 Triage로 보존). **024는 037로 v2 승계**(v1 이력 유지). **admin 모델: v2는 SSM+Cognito group**(`web/lib/admin.ts`, ADR-023 v2 노트). **⛔ 고위험 ADR 번복 (2026-06-11, 3-AI 합의 — `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`): 029+036(변경 substrate)·031 Phase 3(BYO-MCP)·Phase 4(mutating 도구) = REVERSED(do-not-enable, flag-OFF 동결, dark 코드 보존); 032·035 = DOWNGRADED(자율 mitigation·H3a 폐기, read-only Triage/RCA·K8s 진단만 유지); 034 유지(KEPT — flag-OFF; 현재 frozen 029/036 substrate role 재사용 탓 활성화 전 자족 role 분리 선행 필요, ADR-034 배너 참조). → AWSops는 read-only ops 대시보드+AI 진단; **AWS-리소스 변경·자율은 영구 동결(do-not-enable)**.** **후속 039–043 (2026-06-13~15): 멀티에이전트 플랫폼(039)·거버넌스된 외부 knowledge/comms write(040)·keystone 재정의(041)·인앱 로그인(042)·Neptune 그래프 옵션(043). **ADR-041이 'read-only'를 재정의**: read-only 제약 = **AWS-리소스 변경+자율**(SSM/infra/autonomous = 영구 동결 유지), **외부 DATA read+write는 아님** → 외부 관측성 read·외부 기록/티켓/메시지 write는 거버넌스(SSRF·Secrets·DLP/redaction·큐레이션·human-gate·flag-OFF) 하 허용(BYO-MCP는 큐레이션 커넥터만, 임의 형태 제외). ⚠️ **ADR-041은 owner 단독 re-scope** — 멀티-AI 패널 검증 결과 **PARTIAL**(2026-06-16): 외부-write 결과는 ADR-040 패널 비준으로 정당하나, "reversal은 애초에 external-endpoint 대상 아님"이라는 사후 재서술은 2026-06-11 합의문(external-endpoint/egress/SSRF를 명시 scope-creep으로 적시)과 충돌 → ADR-041에 'clarification'이 아닌 **owner-override**로 명기(addendum 반영).** **Proposed 잔여 없음.** 신규 ADR 번호 = 최고번호+1(현재 044). ADR 인덱스/정정 노트는 `docs/decisions/CLAUDE.md`.
 
 ---
 
-# AWSops Dashboard v1.8.0 — Claude Context (English)
+# AWSops v2 — Claude Context (English)
 
-## Project Overview
-AWS + Kubernetes operations dashboard with real-time resource monitoring, network troubleshooting, CIS compliance, AI-powered analysis, external datasource integration, and AI comprehensive diagnosis. Built with Steampipe, Next.js 14, and Amazon Bedrock AgentCore.
+> **Branch `feat/v2-architecture-design`.** This document describes the **v2 architecture** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers).
+> v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) **remains the untouched legacy production app**, in parallel with v2. v1 rules (notably the `/awsops` fetch prefix and Steampipe pg Pool) **do NOT apply to v2**. For v1 detail see `src/**/CLAUDE.md`.
 
-## Architecture
-- **Frontend**: Next.js 14 (App Router) + Tailwind CSS dark theme + Recharts + React Flow
-- **Data**: Steampipe embedded PostgreSQL (port 9193) — 380+ AWS tables, 60+ K8s tables, multi-account Aggregator
-- **External Datasources**: Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog (SSRF-protected + allowlist)
-- **AI**: Bedrock Sonnet/Opus 4.6 + AgentCore Runtime (Strands) + 8 Gateways (125 MCP tools) + 19 Lambda
-- **AI Diagnosis**: 15-section Bedrock Opus analysis + DOCX/MD/PDF export + auto-scheduling
-- **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1) + CloudFront
-- **Infra**: CDK → CloudFront (CACHING_DISABLED) → ALB → EC2 (t4g.2xlarge, Private Subnet)
+## Overview
+AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds the v1 single-EC2 monolith as a **Terraform-based MSA**: private edge (CloudFront VPC Origin → internal ALB → Fargate), Cognito Lambda@Edge auth, Aurora durable state, AgentCore section agents (live AWS query), and an OOM-safe async worker tier.
 
-## Stats (v1.8.0)
-| Item | Count |
-|------|-------|
-| Pages | 43 (incl. /login) |
-| Routes | 55 |
-| SQL Query Files | 26 (incl. event-scaling) |
-| API Routes | 19 (incl. event-scaling) |
-| Components | 18 (incl. ReportMarkdown) |
-| MCP Tools | 125 (8 Gateways, 19 Lambda) |
-| AI Routes | 11 (incl. datasource route) |
-| ADRs | 30 (001-030, ADR-030 Accepted, ADR-029 Proposed) |
+## Architecture (v2)
+- **IaC**: **Terraform** (CDK dropped). Single `terraform/v2/foundation/` root; **partial S3 backend** (`backend.hcl`, `awsops-v2-tfstate`, `use_lockfile` — no DynamoDB). TF ≥1.15, provider `~>6.0`.
+- **Edge**: CloudFront(TLS) → **VPC Origin `https-only:443`** → **internal ALB HTTPS:443** (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** ALB SG allows 443 from the CloudFront managed SG `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only → 504).
+- **Auth**: Cognito User Pool + **Lambda@Edge** (`us-east-1`, python3.12, viewer-request). **RS256 JWKS signature verification** + iss/aud/token_use + OAuth `state` + **PKCE public client** (no secret). Domain `a-ops-v2-auth-*` ('aws' is a Cognito reserved word). **Login = self-hosted `/login` form** (ADR-042) — the BFF `POST /api/auth/login` calls the unsigned public `InitiateAuth(USER_PASSWORD_AUTH)` → mints `awsops_token` (id_token 12h). Unauthenticated requests are redirected to `/login` by the edge; the **Hosted UI PKCE flow (`/_callback`) is retained as a dark fallback**. Signout clears the cookie → `/login` (no Hosted UI `/logout` round-trip).
+- **Web**: **Next.js 14 thin-BFF** (`web/`, standalone **arm64**, **root path — no basePath**). Routes: `/api/health` (public), `/api/stream` (SSE), `/api/db` (Aurora ping), `/api/jobs` (+`/[id]`, P2 async jobs). Heavy work is **enqueued** to the worker queue, not run inline.
+- **Data**: **Aurora Serverless v2** (`awsops-v2-aurora`, **PG 17.9**, 0.5–4 ACU, KMS CMK, RDS-managed master secret). **ADR-030-based schema (baseline v9 frozen — table count per `data/schema.sql`)** + P2 `worker_jobs`. App uses **node-pg** (`web/lib/db.ts`). **A flag-gated Steampipe inventory sync (D1, `steampipe_enabled`) exists** — live queries still go through AgentCore MCP Lambda tools.
+- **AI (AgentCore)**: Bedrock Sonnet 4.6 / **Opus 4.8** / Haiku 4.5 + AgentCore Runtime (Strands, reuses `agent/agent.py`) + **8 section gateways** (`awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`; external observability is the **Integrations axis** [ADR-039], not a 9th gateway — ADR-004 keeps the gateway count at **8**) + Memory + Code Interpreter. **Design: 8 section agents + 1 incident orchestrator** (replaces v1's 8 Gateways). Currently 2 read-only slices deployed (iam-mcp 14 tools→security, flow-monitor 1→network); full fleet is P3. **Config source of truth = SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
+- **Async workers (P2)**: web `POST /api/jobs` → `worker_jobs` (queued) + SQS → **ESM (kill-switch)** → dispatcher Lambda (idempotent on job_id) → **Step Functions Standard** Choice on `$.runtime` → RunLambda (short) **or** `ecs:runTask.sync` Fargate (long/OOM) → worker writes running/succeeded itself → on Catch, status_updater Lambda sets failed (SFN can't write VPC Aurora) → reaper (EventBridge 5min) reconciles stale.
+- **EKS onboarding**: `configure.mjs` multi-select → `eks.tf` grants the web task role an **Access Entry + AmazonEKSViewPolicy** (cluster-scoped). kubeconfig auto-registration / query UI is P3.
 
-## Critical Rules
+## Status (by phase)
+| Phase | Scope | State |
+|-------|-------|-------|
+| P1a | S3 backend + foundation + private edge | ✅ GREEN |
+| P1b | Cognito + Lambda@Edge auth | ✅ |
+| P1c | Aurora Serverless v2 (ADR-030-based schema — baseline v9 frozen, table count per `data/schema.sql`) | ✅ |
+| P1d | web thin-BFF + dual-tier ECR + `make deploy` + RS256 hardening | ✅ |
+| P1e | EKS onboarding (Access Entry + View policy) | ✅ |
+| P1f | AgentCore idempotent provisioner (9 GW + Memory + Interpreter + Runtime) | ✅ |
+| P2 | async worker backbone (SQS+SFN+Lambda/Fargate, `worker_jobs`) | ✅ W9 GREEN |
+| **P3** | agent fleet + chat UI + EKS query (read-only). ~~OpenCost install button (ADR-029 mutating)~~ → **dropped (029 reversed)** | 🟡 partial (read-only shipped; mutating parts reversed) |
+| **P4** | incident/ChatOps lifecycle + DevOps Agent federation | 🔜 backlog |
 
-### Data Access
-- ALL queries through `src/lib/steampipe.ts` pg Pool — NOT Steampipe CLI
-- Pool: max 10, 120s timeout, 8 sequential batch. Cache: 5min TTL (node-cache, accountId-prefixed keys)
-- Never use `steampipe query "SQL"` CLI — it's 660x slower
+Live env: account `180294183052`, domain `awsops-v2.atomai.click`, reused mgmt-vpc (`vpc-06801144309cad7dc`, 10.254.0.0/16).
 
-### Multi-Account
-- Accounts managed via `accounts[]` array in `data/config.json` — no code changes
-- Steampipe Aggregator pattern: `aws` = all accounts merged, `aws_123456789012` = single account
-- `buildSearchPath(accountId)` returns `public, aws_{id}, kubernetes, trivy` for per-account query scoping
-- All pages: `useAccount()` hook passes `accountId: currentAccountId` in fetch calls
-- DataTable: auto-adds Account column when `isMultiAccount && data[0].account_id` detected
-- Cost queries: `runCostQueriesPerAccount()` runs per-account then merges with `account_id` tags
-- SQL queries: AWS table `list` queries must include `account_id` column
+## Critical Rules (v2)
 
-### Next.js
-- `basePath: '/awsops'` in `next.config.mjs`
-- ALL `fetch()` URLs must use `/awsops/api/*` prefix (basePath not auto-applied)
-- ALL components use `export default`. Production build only.
+### Path / Web
+- **Served at the root path (`/`) — no basePath.** v2 uses a dedicated domain. The v1 `/awsops/api/*` prefix rule does **not** apply → fetch `/api/*`.
+- web is a **thin-BFF**: never run heavy/long/OOM-risk work inline — enqueue via `POST /api/jobs`.
+- All components `export default`; production standalone build.
 
-### Steampipe Queries
-- Always verify column names via `information_schema.columns` before writing queries
-- Watch JSONB nesting: MSK uses `provisioned` JSONB, OpenSearch uses `encryption_at_rest_options`
-- `versioning_enabled` (S3), `class` AS alias (RDS), `"group"` (ECS reserved word)
-- Avoid SCP-blocked columns in list queries: `mfa_enabled`, `attached_policy_arns`, Lambda `tags`
-- No `$` in SQL — use `conditions::text LIKE '%..%'`
+### Terraform discipline
+- Change under `terraform/v2/foundation/`. **No `-auto-approve` on shared infra** — a saved-tfplan (`apply tfplan`) passes the auto-gate. Long applies (CloudFront, SG) are **run by the controller** (subagent idle-timeout).
+- Gate large new features with count/flags: `agentcore_enabled`, `workers_enabled`, `steampipe_enabled` (inventory sync), `hybrid_routing_enabled` (ADR-038 chat routing) — all default false → `plan` = No changes, $0.
+- **SG `description` is immutable** — changing it forces a SG replace that hangs on the attached ALB. Do ingress changes in-place, keep the description verbatim.
+- **arm64 required** for web/agent/worker images.
 
-### AI Routing (`src/app/api/ai/route.ts`)
-11-route priority. Listing/status → `aws-data` (Steampipe SQL). Troubleshooting → specialized Gateway. External metrics → `datasource`.
+### Data / Config
+- App state lives in **Aurora** (node-pg), not `data/*.json` (the v1 pattern). Schema: `terraform/v2/foundation/data/schema.sql` + `schema_migrations`.
+- ECS `secrets` valueFrom (Aurora secret) needs **execution-role** perms (not the task role), else `ResourceInitializationError`.
+- AgentCore config: **SSM is the source of truth** (provision.py writes → web BFF reads at runtime). No valueFrom (avoids the race).
 
-| Priority | Route | Target |
-|----------|-------|--------|
-| 1 | code | Code Interpreter (Python sandbox) |
-| 2 | network | Network Gateway — Reachability, Flow Logs, TGW, VPN, Firewall |
-| 3 | container | Container Gateway — EKS, ECS, Istio troubleshooting |
-| 4 | iac | IaC Gateway — CDK, CloudFormation, Terraform |
-| 5 | data | Data Gateway — DynamoDB, RDS, ElastiCache, MSK |
-| 6 | security | Security Gateway — IAM, policy simulation |
-| 7 | monitoring | Monitoring Gateway — CloudWatch, CloudTrail |
-| 8 | cost | Cost Gateway — billing, forecast, budget |
-| 9 | datasource | External datasources — Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog |
-| 10 | aws-data | Steampipe SQL + Bedrock analysis (listing/status/config analysis) |
-| 11 | general | Ops Gateway → Bedrock fallback |
+### Container / Deploy
+- **Deploying Next.js standalone in a container: set `HOSTNAME=0.0.0.0` as a runtime env** (task def `environment`) — an image ENV is not enough (ECS overwrites HOSTNAME with the ENI IP → app binds only the ENI IP, not 0.0.0.0/loopback → healthCheck UNHEALTHY).
+- **Fargate worker Dockerfile must use `CMD` (not ENTRYPOINT)** — SFN `containerOverrides.command` replaces CMD but is appended to an exec-form ENTRYPOINT → argv doubles → argparse dies.
+- Container + target-group health path must match the app (`/api/health`) or the circuit breaker loops.
 
-- AgentCore config from `data/config.json` — no hardcoded account ARNs
-- Tool usage inferred from response content keywords and shown in UI
-
-### Theme
-- Navy: 900 (#0a0e1a), 800 (#0f1629), 700 (#151d30), 600 (#1a2540)
-- Accents: cyan (#00d4ff), green (#00ff88), purple (#a855f7), orange (#f59e0b), red (#ef4444)
-- StatsCard `color` prop: use names ('cyan') not hex
+### Operational note
+- **Concurrent sessions switch branches often** (docs-site deploys, etc.). Verify `git branch --show-current` = `feat/v2-architecture-design` before working. Uncommitted changes can be lost to an external reset/checkout — **commit in small units immediately**.
 
 ## Key Files
 
-### Core Libraries (`src/lib/`)
-- `steampipe.ts` — pg Pool + batchQuery + cache + checkCostAvailability + buildSearchPath + runCostQueriesPerAccount
-- `queries/*.ts` — 25 SQL query files (incl. ebs, msk, opensearch, container-cost, eks-container-cost, bedrock)
-- `resource-inventory.ts` — Resource inventory snapshots (data/inventory/, zero extra queries)
-- `cost-snapshot.ts` — Cost data snapshot fallback (data/cost/)
-- `app-config.ts` — App config (costEnabled, agentRuntimeArn, codeInterpreterName, memoryId, accounts[])
-- `agentcore-stats.ts` — AgentCore call stats (total calls, avg time, per-gateway, per-model token usage)
-- `agentcore-memory.ts` — Conversation history persistence/search (per-user, data/memory/)
-- `auth-utils.ts` — Extract Cognito user info from JWT (email, sub)
-- `cache-warmer.ts` — Background cache pre-warming (dashboard 23 queries, 4-min interval)
-- `datasource-client.ts` — External datasource HTTP client (7 platforms: Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
-- `datasource-registry.ts` — Datasource type registry (health endpoints, query languages)
-- `datasource-prompts.ts` — AI query generation prompts per datasource type
-- `report-generator.ts` — Diagnosis report data collection orchestrator
-- `report-prompts.ts` — 15-section diagnosis prompt definitions
-- `report-docx.ts` — DOCX report generation (A4, TOC, markdown conversion)
-- `report-pptx.ts` — PPTX report generation (WADD-style)
-- `report-scheduler.ts` — Auto-diagnosis scheduler (weekly/biweekly/monthly)
-- `alert-types.ts` — Alert event types + per-source normalizers (CloudWatch, Alertmanager, Grafana, Generic)
-- `alert-correlation.ts` — Alert correlation engine (time/service/resource grouping, dedup, severity escalation)
-- `alert-diagnosis.ts` — Alert diagnosis orchestrator (strategy selection, parallel collectors/datasources, change detection, Bedrock analysis)
-- `alert-knowledge.ts` — Alert knowledge base (diagnosis record storage, similarity search, statistics)
-- `slack-notification.ts` — Slack notification client (Block Kit, severity-based channel routing, thread updates)
-- `event-scaling.ts` — Event pre-scaling data model + JSON persistence (data/event-scaling/, ADR-010 Phase 1+2)
-- `event-scaling-prompts.ts` — Bedrock Sonnet 4.6 prompts (multi-phase scaling plan, PLAN_JSON marker extraction)
-- `event-scaling-scripts.ts` — Safe bash script generators per resource type (KEDA/HPA/Aurora/MSK/ASG/EBS, manual review-then-run)
+### Terraform (`terraform/v2/foundation/`)
+- `network.tf` — new VPC or reuse existing (`create_network` flag)
+- `edge.tf` — CloudFront + VPC Origin + internal ALB + ACM
+- `auth.tf` + `edge-lambda/cognito_edge.py.tftpl` — Cognito + Lambda@Edge (RS256)
+- `data.tf` + `data/schema.sql` — Aurora Serverless v2 + ADR-030-based schema (baseline v9 frozen — table count per `data/schema.sql`)
+- `workload.tf` — ECS cluster/service/task (web)
+- `ecr.tf` — dual-tier ECR (dev-private + prod-public)
+- `ai.tf` — AgentCore ECR + IAM role + agent Lambda slice + SSM (all `agentcore_enabled`-gated)
+- `workers.tf` — SQS + ESM + dispatcher/worker/status_updater/reaper Lambda + Step Functions + Fargate worker (all `workers_enabled`-gated)
+- `eks.tf` — `for_each onboard_eks_clusters` Access Entry + View policy
+- `variables.tf` / `outputs.tf` / `providers.tf` / `backend.tf`
 
-### API Routes (`src/app/api/`, 19 routes)
-- `ai/route.ts` — AI routing (11 routes, multi-route, SSE streaming, tool inference, datasource route)
-- `steampipe/route.ts` — Steampipe queries + Cost availability + Inventory (POST/GET/PUT)
-- `auth/route.ts` — Logout (server-side HttpOnly cookie deletion)
-- `msk/route.ts` — MSK broker nodes + CloudWatch metrics
-- `rds/route.ts` — RDS instance CloudWatch metrics
-- `elasticache/route.ts` — ElastiCache node CloudWatch metrics
-- `opensearch/route.ts` — OpenSearch domain CloudWatch metrics
-- `agentcore/route.ts` — AgentCore Runtime/Gateway status (config-based)
-- `code/route.ts` — Code Interpreter
-- `benchmark/route.ts` — CIS compliance benchmark
-- `container-cost/route.ts` — ECS Container Cost (CloudWatch Container Insights + Fargate pricing)
-- `eks-container-cost/route.ts` — EKS Container Cost (OpenCost API + request-based fallback)
-- `bedrock-metrics/route.ts` — Bedrock model usage metrics (CloudWatch + AWSops app token stats)
-- `datasources/route.ts` — External datasource CRUD + query execution + AI query generation (SSRF-protected)
-- `k8s/route.ts` — EKS kubeconfig registration
-- `report/route.ts` — AI diagnosis report generation + S3 storage + scheduling
-- `alert-webhook/route.ts` — Alert webhook receiver (CloudWatch SNS, Alertmanager, Grafana, Generic) + HMAC auth + correlation trigger
-- `notification/route.ts` — Slack/SNS notification dispatch (Block Kit, severity-based channel routing, markdown-to-plaintext)
-- `event-scaling/route.ts` — Event pre-scaling CRUD + metrics collection + Bedrock plan generation + script download (Phase 1+2, admin-only, no execution)
+### Scripts (`scripts/v2/`)
+- `configure.mjs` — interactive TUI (VPC/domain/bucket/EKS → `terraform.tfvars` + `backend.hcl`)
+- `deploy.mjs` — web: login→buildx arm64 push→ECS force-new-deployment→wait stable→smoke `/api/health`
+- `agentcore.mjs` + `agentcore/{catalog.py,provision.py}` — arm64 agent image + idempotent provisioner (Runtime/9 GW/Target/Memory/Interpreter; writes SSM)
+- `workers.mjs` + `workers/{db,dispatcher,handlers,reaper,status_updater,worker_lambda,fargate_worker}.py + sfn.asl.json` — P2 worker backbone
 
-### Infrastructure
-- `infra-cdk/lib/awsops-stack.ts` — CDK infra (VPC, EC2, ALB, CloudFront)
-- `infra-cdk/lib/cognito-stack.ts` — CDK Cognito (User Pool, Lambda@Edge)
-- `agent/agent.py` — Strands Agent source (Docker build on EC2 → ECR push → runs on AgentCore Runtime)
-- Note: EC2 only **builds** the Docker image. Execution happens on AgentCore managed service.
-- `agent/lambda/*.py` — 19 Lambda sources + `create_targets.py`
+### Web (`web/`)
+- `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF routes
+- `app/security/page.tsx` + `app/api/security/{route,refresh}` — security findings (Public S3 · Open SG · Unencrypted EBS · IAM MFA), derived in the BFF from `inventory_resources` (read-only); `s3_public_access` added as a sync_lambda SDK sync
+- `app/compliance/page.tsx` + `app/api/compliance/{run,runs,runs/[id],benchmarks}` — CIS benchmark (Powerpipe Fargate worker `compliance` job → `compliance_runs`/`compliance_results` history). Both gated on `steampipe_enabled`
+- `lib/db.ts` — shared Aurora node-pg pool (`getPool`)
+- `app/layout.tsx`, `app/page.tsx`, `Dockerfile` (standalone arm64)
 
-### Config File (`data/config.json`)
-```json
-{
-  "costEnabled": true,
-  "agentRuntimeArn": "arn:aws:bedrock-agentcore:REGION:ACCOUNT:runtime/RUNTIME_ID",
-  "codeInterpreterName": "awsops_code_interpreter-XXXXX",
-  "memoryId": "awsops_memory-XXXXX",
-  "memoryName": "awsops_memory",
-  "accounts": [
-    { "accountId": "111111111111", "alias": "Host", "connectionName": "aws_111111111111", "region": "ap-northeast-2", "isHost": true, "features": { "costEnabled": true, "eksEnabled": true, "k8sEnabled": true } },
-    { "accountId": "222222222222", "alias": "Staging", "connectionName": "aws_222222222222", "region": "ap-northeast-2", "isHost": false, "features": { "costEnabled": false, "eksEnabled": false, "k8sEnabled": false } }
-  ]
-}
+### Agent (`agent/`, reused v1 assets)
+- `agent/agent.py` — Strands Agent (routes via `GATEWAYS_JSON` env; no EC2 build needed)
+- `agent/lambda/*.py` — MCP tool Lambda sources (v2 uses the iam-mcp/flow-monitor slice in P1f; full fleet is P3)
+
+## Deployment (Makefile)
 ```
-Per-account deployment: only change this file — no code changes needed. `accounts` array managed by `scripts/12-setup-multi-account.sh`.
-
-## Deployment Scripts (11 Steps)
-```
-Step 0:  00-deploy-infra.sh              CDK infrastructure (run locally)
-Step 1:  01-install-base.sh              Steampipe + Powerpipe
-Step 2:  02-setup-nextjs.sh              Next.js + Steampipe service + MSP detection
-Step 3:  03-build-deploy.sh              Production build
-Step 5:  05-setup-cognito.sh             Cognito auth
-Step 6a: 06a-setup-agentcore-runtime.sh  Runtime (IAM, ECR, Docker, Endpoint)
-Step 6b: 06b-setup-agentcore-gateway.sh  8 Gateways (MCP)
-Step 6c: 06c-setup-agentcore-tools.sh    19 Lambda + 8 Gateways, 125 tools
-Step 6d: 06d-setup-agentcore-interpreter.sh  Code Interpreter
-Step 6e: 06e-setup-agentcore-config.sh   AgentCore config apply (ARN, Gateway URL)
-Step 6f: 06f-setup-agentcore-memory.sh   Memory Store (conversation history, 365-day retention)
-Step 7:  07-setup-opencost.sh            Prometheus + OpenCost (EKS cost analysis)
-Step 8:  08-setup-cloudfront-auth.sh     Lambda@Edge → CloudFront integration
-Step 9:  09-start-all.sh                 Start all services
-Step 10: 10-stop-all.sh                  Stop all services
-Step 11: 11-verify.sh                    Verification (health check)
-Step 12: 12-setup-multi-account.sh       Multi-account setup (optional, Aggregator + cross-account IAM role)
+make configure   # interactive TUI → terraform.tfvars + backend.hcl (auto-installs deps)
+terraform -chdir=terraform/v2/foundation init -backend-config=backend.hcl
+terraform -chdir=terraform/v2/foundation plan -out tfplan   # controller runs apply tfplan (shared infra)
+make deploy      # web: arm64 build→ECR push→ECS rolling→wait stable→smoke /api/health
+make agentcore   # arm64 agent image + idempotent AgentCore provisioner (--smoke to invoke). Run after apply
+make workers     # arm64 worker image push (after apply with workers_enabled=true)
 ```
 
-## AgentCore Known Issues
-- Gateway Targets: use Python/boto3 (CLI has inlinePayload issues)
-- Docker: arm64 required (`docker buildx --platform linux/arm64 --load`)
-- Code Interpreter name: underscores only, no hyphens
-- Runtime update requires `--role-arn` + `--network-configuration`
-- agent.py GATEWAYS: update per-account gateway URLs then rebuild Docker
-- AgentCore response: final text only (no tool_call tags) → tools inferred from keywords
-- Memory name: no hyphens, underscores only (`awsops_memory`). `eventExpiryDuration` max 365 days.
-- Sign Out: HttpOnly cookie requires server-side deletion via `POST /api/auth`
+## v2 ↔ v1 key differences
+| Aspect | v1 (`src/`) | v2 (`web/` + `terraform/v2/`) |
+|--------|-------------|-------------------------------|
+| IaC | CDK | Terraform (partial S3 backend) |
+| Compute | single EC2 t4g.2xlarge | ECS Fargate (web/worker split) |
+| Data | embedded Steampipe PG + `data/*.json` | Aurora Serverless v2 PG17 (+ AgentCore live query) |
+| Path | `/awsops` basePath | root `/` (no basePath) |
+| Edge | CloudFront → public ALB → EC2 | CloudFront VPC Origin → internal ALB → Fargate |
+| AI shape | 8 Gateways, 11-route router | 9 section GW + 1 incident orchestrator (design) |
+| Long jobs | in-process | SQS+SFN+Lambda/Fargate async workers |
+| Auth verify | exp-only (edge) | RS256 JWKS + PKCE |
 
-## Adding New Pages
-1. Verify columns via `information_schema.columns` (check JSONB nesting too)
-2. Create query file: `src/lib/queries/<service>.ts`
-3. Create page: `src/app/<service>/page.tsx`
-4. Add to Sidebar: `src/components/layout/Sidebar.tsx`
-5. (Optional) Dashboard card, CloudWatch metrics API, Resource Inventory mapping
-6. Build verification and documentation update
+## Known Issues / Learnings (reuse-critical)
+- **Edge 504→200**: CF→ALB must be TLS end-to-end (VPC Origin `https-only` + origin domain = public FQDN for SNI match), ALB HTTPS:443 + regional ACM, ALB SG allows 443 from `CloudFront-VPCOrigins-Service-SG`. VPC Origin protocol can't change in-place → `create_before_destroy` + `-replace`.
+- **Aurora major upgrade (15→17.9)**: set exact minor (`17.9`) + `allow_major_version_upgrade` + `apply_immediately`, apply first (upgrade) → **then** add `lifecycle{ignore_changes=[engine_version]}` to both cluster and instance (absorbs future minor auto-upgrades). Pinning just "17" misbehaves on `aws_rds_cluster`.
+- **SG description immutable** (see Terraform discipline) / **ECS secrets need execution-role** / **HOSTNAME=0.0.0.0 runtime env** / **Fargate worker CMD (not ENTRYPOINT)**.
+- **AgentCore**: Gateway Targets via boto3 (`mcp.lambda` + `credentialProviderConfigurations`); a just-created GW not yet READY makes the first target create throw ValidationException → resolved by re-running (provisioner is idempotent/re-runnable). Code Interpreter/Memory names underscores-only; Memory `eventExpiryDuration` ≤365.
+- **SSM reserved prefix**: paths starting with `aws...` are rejected → use `/ops/${project}/...`.
+- **Agent cross-account self-assume trap**: v2 is single-account, but selecting the host account (`180294183052`) in chat made `agent.py` force `target_account_id=<host>` → tools self-assumed `arn:...:role/AWSopsReadOnlyRole` (v1 *target-account*-only, absent on the host) → AccessDenied (agent **mis-reported** it as "cross-account blocked"). Fix: `cross_account.get_role_arn()` returns `None` when target==host (use the exec role directly) + `agent.py effective_account_id()` blanks the host like `__all__` (defense-in-depth). Host resolved via `AWSOPS_HOST_ACCOUNT_ID` env → STS `GetCallerIdentity` fallback (cached). The real *other*-account assume path is unchanged. v1 unaffected (separate functions `awsops-*-mcp` py3.12 vs v2 `awsops-v2-agent-*` py3.11).
 
-## Auto-Sync Rules
-
-### Where CLAUDE.md belongs
-- **Required**: top-level modules under `src/` (`src/app`, `src/components`, `src/contexts`, `src/hooks`, `src/lib`, `src/types`)
-- **Required**: complex feature directories whose own rules, architecture, external dependencies, or SSRF/security policies cannot be compressed into the parent doc
-  - Examples: `src/app/api`, `src/app/datasources`, `src/app/ai-diagnosis`, `src/app/alert-settings`, `src/app/accounts`, `src/app/k8s`, `src/app/container-cost`, `src/app/eks-container-cost`, `src/lib/collectors`, `src/lib/queries`, `src/lib/i18n`
-- **Not required**: simple page directories fully described by a single row in the parent module's CLAUDE.md (`src/app/ec2`, `src/app/s3`, `src/app/iam`, etc.) — adding one only duplicates the parent doc
-- **Not required**: single-responsibility component groups (`src/components/charts`, `src/components/table`, etc.) — keep them only in the `src/components/CLAUDE.md` inventory
-
-### Change → update matrix
-- API endpoint added/removed → update `src/app/CLAUDE.md` + `src/app/api/CLAUDE.md` (route count and list)
-- Query file changed → update `src/lib/CLAUDE.md`, `src/lib/queries/CLAUDE.md`
-- Component changed → update `src/components/CLAUDE.md`
-- Page added/removed → update `src/app/CLAUDE.md` page list + the root `CLAUDE.md` stats table
-- Datasource / external integration → update `src/app/datasources/CLAUDE.md` + `src/lib/CLAUDE.md`
-- ADR numbering: highest in `docs/decisions/ADR-*.md` + 1
+## ADR
+`docs/decisions/ADR-*.md` (001–044). v2-relevant: **038** (Hybrid agent routing — regex fast-path + Haiku classifier + v2 prompt caching; **activation LIVE 2026-06-10**, gate hybrid 96.9% / +27.7pp PASSED; AgentCore Gateway semantic search deferred to P4; extends 033, integrates the 031 routing priority); **037** (v2 Foundation — Terraform + thin-BFF + async workers; **supersedes 024 in full + refines 030's mechanism**; fixes the Steampipe stance = no live Steampipe, flag-gated inventory sync only; Accepted 2026-06-10); **030** (ECS Fargate + Aurora — Aurora/dual-ECR *intent* holds; the 4-container/Service-Connect/CDK *mechanism* is superseded by 037); **029·031·032·033·034·035·036** — all v2 ADRs — **Accepted (2026-06-09) via multi-AI consensus** (029 reframed as a substrate-agnostic *controls* spec — mechanism deferred to 036's hybrid, six controls retained). **ADR-009 is superseded by 032** (correlation engine carried into 032's Triage). **024 is superseded by 037 for v2** (kept as v1 history). **Admin model in v2 = SSM + Cognito group** (`web/lib/admin.ts`, ADR-023 v2 note). **⛔ High-risk ADR reversal (2026-06-11, 3-AI consensus — `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`): 029+036 (mutating substrate), 031 Phase 3 (BYO-MCP), Phase 4 (mutating tools) = REVERSED (do-not-enable, flag-OFF frozen, dark code retained); 032 & 035 = DOWNGRADED (autonomous mitigation / H3a wiring dropped; read-only Triage/RCA + K8s diagnosis retained); 034 kept (KEPT — flag-OFF; currently reuses the frozen 029/036 substrate role, so decoupling onto a self-contained role must precede any activation — see the ADR-034 banner). → AWSops is a read-only ops dashboard + AI diagnosis; **AWS-resource mutation + autonomy stay permanently frozen (do-not-enable)**.** **Subsequent 039–043 (2026-06-13~15): multi-agent platform (039), governed external knowledge/comms writes (040), keystone re-scope (041), in-app login (042), Neptune graph option (043). **ADR-041 re-defines "read-only"**: the constraint = **AWS-resource mutation + autonomy** (SSM/infra/autonomous = permanently frozen), **NOT external DATA** → external observability read + external record/ticket/message write are permitted under governance (SSRF · Secrets · DLP/redaction · curation · human-gate · flag-OFF); BYO-MCP only as curated connectors, arbitrary form excluded. ⚠️ **ADR-041 is an owner-solo re-scope** — multi-AI panel review verdict **PARTIAL** (2026-06-16): the external-write *outcome* is legitimate (ratified by the ADR-040 panel), but the retroactive framing "the reversal was never about external-endpoints" contradicts the 2026-06-11 consensus text (which explicitly named external-endpoint/egress/SSRF as scope-creep) → ADR-041 should record this as an **owner-override**, not a "clarification" (addendum applied).** **No Proposed ADRs remain.** New ADR number = highest + 1 (currently 044). ADR index/correction notes: `docs/decisions/CLAUDE.md`.

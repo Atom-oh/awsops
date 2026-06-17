@@ -40,11 +40,9 @@
   --font-main: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
 
-  /* Sizing (overridden by PPTX theme extraction or frontmatter ratio:) */
-  --slide-width:  960px;
-  --slide-height: 540px;
-  --slide-ratio-w: 16;
-  --slide-ratio-h: 9;
+  /* Sizing */
+  --slide-width:  1280px;
+  --slide-height: 720px;
 
   /* Transitions */
   --transition-fast:   150ms ease;
@@ -85,11 +83,11 @@ body {
   justify-content: center;
 }
 
-/* --- Slide Container (aspect ratio enforced via CSS variables) --- */
+/* --- Slide Container (16:9 enforced) --- */
 .slide-deck {
   width: 100vw; height: 100vh;
-  max-width: calc(100vh * var(--slide-ratio-w) / var(--slide-ratio-h));
-  max-height: calc(100vw * var(--slide-ratio-h) / var(--slide-ratio-w));
+  max-width: calc(100vh * 16 / 9);
+  max-height: calc(100vw * 9 / 16);
   margin: auto;
   position: relative;
   overflow: hidden;
@@ -125,23 +123,19 @@ body {
 .slide h1 {
   font-size: 2.4rem; font-weight: 700;
   color: var(--text-primary);
-  margin-top: 0; margin-bottom: .33rem;
+  margin-bottom: .33rem;
   line-height: 1.2;
 }
 .slide h2 {
   font-size: 1.8rem; font-weight: 600;
   color: var(--text-primary);
-  margin-top: .83rem; margin-bottom: .5rem;
+  margin-bottom: .5rem;
 }
 .slide h3 {
   font-size: 1.3rem; font-weight: 600;
   color: var(--text-accent);
-  margin-top: .67rem; margin-bottom: .33rem;
+  margin-bottom: .33rem;
 }
-/* First heading in a container should not have extra top margin */
-.slide-body > h1:first-child,
-.slide-body > h2:first-child,
-.slide-body > h3:first-child { margin-top: 0; }
 .slide p, .slide li {
   font-size: 1.05rem;
   line-height: 1.7;
@@ -410,7 +404,6 @@ body {
 /* --- Lists --- */
 .slide ul, .slide ol {
   padding-left: 1rem;
-  margin-bottom: .5rem;
 }
 .slide ul li, .slide ol li {
   margin-bottom: .25rem;
@@ -479,11 +472,11 @@ body {
   padding: .42rem .58rem;
   text-align: left;
   border-bottom: 1px solid var(--border);
-  font-size: inherit;
 }
 .slide th {
   color: var(--text-accent);
   font-weight: 600;
+  font-size: .85rem;
   text-transform: uppercase;
   letter-spacing: .04em;
 }
@@ -594,16 +587,6 @@ body {
   border-color: var(--accent, #6c5ce7);
   color: #fff;
   box-shadow: 0 0 20px var(--accent-glow, rgba(108, 92, 231, 0.3));
-}
-.agenda-step.done .agenda-dot {
-  background: var(--accent, #6c5ce7);
-  border-color: var(--accent, #6c5ce7);
-  color: #fff;
-  opacity: 0.5;
-}
-.agenda-connector.done {
-  background: var(--accent, #6c5ce7);
-  opacity: 0.5;
 }
 .agenda-step.break .agenda-dot {
   background: var(--yellow, #f1c40f);
@@ -831,8 +814,8 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 /* --- Fullscreen --- */
-.slide-deck:-webkit-full-screen { background: var(--bg-primary); width: 100vw; height: 100vh; max-width: calc(100vh * var(--slide-ratio-w) / var(--slide-ratio-h)); max-height: calc(100vw * var(--slide-ratio-h) / var(--slide-ratio-w)); margin: auto; }
-.slide-deck:fullscreen          { background: var(--bg-primary); width: 100vw; height: 100vh; max-width: calc(100vh * var(--slide-ratio-w) / var(--slide-ratio-h)); max-height: calc(100vw * var(--slide-ratio-h) / var(--slide-ratio-w)); margin: auto; }
+.slide-deck:-webkit-full-screen { background: var(--bg-primary); width: 100vw; height: 100vh; max-width: calc(100vh * 16 / 9); max-height: calc(100vw * 9 / 16); margin: auto; }
+.slide-deck:fullscreen          { background: var(--bg-primary); width: 100vw; height: 100vh; max-width: calc(100vh * 16 / 9); max-height: calc(100vw * 9 / 16); margin: auto; }
 
 /* --- Scrollbar --- */
 ::-webkit-scrollbar { width: 6px; }
@@ -1182,11 +1165,6 @@ input[type="range"]::-webkit-slider-thumb {
   pointer-events: none;
 }
 
-/* Heading-group spacing: consecutive heading+content fragment sections */
-.heading-group + .heading-group {
-  margin-top: 1em;
-}
-
 /* ============================================================
    Slide Transitions
    ============================================================ */
@@ -1519,8 +1497,8 @@ body.sidebar-visible {
 
 body.sidebar-visible .slide-deck {
   width: calc(100vw - 220px);
-  max-width: calc(100vh * var(--slide-ratio-w) / var(--slide-ratio-h));
-  max-height: calc((100vw - 220px) * var(--slide-ratio-h) / var(--slide-ratio-w));
+  max-width: calc(100vh * 16 / 9);
+  max-height: calc((100vw - 220px) * 9 / 16);
   margin-left: 220px;
   margin-right: auto;
 }

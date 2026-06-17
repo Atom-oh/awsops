@@ -1,6 +1,14 @@
 # ADR-030: ECS Fargate Workload + Aurora App State + Dual-Tier ECR
 
-## Status: Accepted (2026-05-27) / 상태: 채택됨 (2026-05-27)
+## Status: Accepted (2026-05-27) — mechanism refined by ADR-037 (2026-06-10) / 상태: 채택됨 (2026-05-27) — 메커니즘은 ADR-037이 정제 (2026-06-10)
+
+> **⚠️ v2 reality note (2026-06-10, co-agent ADR-consistency review)** — The *intent* of this ADR holds: **Aurora replaces the v1 `data/*.json` state layer**, and **dual-tier ECR** (dev-private / prod-public) is the OSS distribution model. But the **mechanism described in the body below was not implemented as written** and is superseded by **[ADR-037](037-v2-terraform-foundation.md)**:
+> - **IaC = Terraform**, not the "CDK refactor" in Consequences (`infra-cdk/lib/...` is v1-only).
+> - **Compute = one thin-BFF web service + a flag-gated async worker tier** (SQS → Step Functions → Lambda/Fargate), NOT the four long-lived containers (`awsops-web`/`awsops-steampipe`/`awsops-alert-poller`/`awsops-jobs`) + Service Connect mesh described here.
+> - **No live Steampipe.** Live AWS queries go through **AgentCore MCP Lambda tools**; the only Steampipe in v2 is a **flag-gated warm inventory-sync** batch (`var.steampipe_enabled`, default off), NOT a Service-Connect daemon at `awsops-steampipe.awsops.local:9193`. **The Supersession note at the bottom of this ADR is therefore factually wrong about Steampipe and is corrected by ADR-037.**
+> - **Config** (`accounts[]`, admin allowlist, AgentCore) lives in **SSM/Aurora**, not a mounted `data/config.json`. (The "`data/config.json` stays as file" row and the ADR-008 reference are v1-only.)
+>
+> **⚠️ v2 현행 정정 (2026-06-10)** — 본 ADR의 *의도*(Aurora가 v1 `data/*.json` 상태 계층 대체, 이중 ECR 배포)는 유효하나, **아래 본문의 메커니즘은 기술된 대로 구현되지 않았고 [ADR-037](037-v2-terraform-foundation.md)이 승계**한다: IaC=Terraform(CDK 아님), 컴퓨트=thin-BFF 웹 1 + flag-gated 비동기 워커 티어(4-컨테이너/Service Connect 아님), **라이브 Steampipe 없음**(AgentCore MCP, Steampipe는 flag-gated 인벤토리 sync 배치만), 설정=SSM/Aurora(`data/config.json` 아님). **하단 Supersession note의 Steampipe 표현은 사실오류이며 037이 정정.**
 
 ## Context / 컨텍스트
 
@@ -102,9 +110,9 @@ Prod images are signed with `cosign` and tagged with the semantic version (`v1.9
 
 Prod 이미지는 `cosign`으로 서명하며 시맨틱 버전(`v1.9.0`, `v1.9.0-arm64`)으로 태깅한다. Public ECR에서 태그 불변성을 강제한다.
 
-ECS launch type: **Fargate** for all four services. Web and jobs run on ARM64 (Graviton) Fargate to match the existing Steampipe binary and the AgentCore Runtime image. Service Connect provides internal DNS (`awsops-steampipe.awsops.local:9193`), removing the need for a separate service-discovery layer.
+ECS launch type: **Fargate** for all four services. Web and jobs run on ARM64 (Graviton) Fargate to match the existing Steampipe binary and the AgentCore Runtime image. ~~Service Connect provides internal DNS (`awsops-steampipe.awsops.local:9193`), removing the need for a separate service-discovery layer.~~ *(2026-06-10 ADR-037 correction: no live Steampipe — inventory sync only; no Service-Connect daemon.)*
 
-ECS launch type: 모든 4개 서비스 **Fargate**. Web과 jobs는 기존 Steampipe 바이너리·AgentCore Runtime 이미지에 맞춰 ARM64(Graviton) Fargate에서 실행. Service Connect가 내부 DNS(`awsops-steampipe.awsops.local:9193`)를 제공하여 별도 서비스 디스커버리 계층이 불필요.
+ECS launch type: 모든 4개 서비스 **Fargate**. Web과 jobs는 기존 Steampipe 바이너리·AgentCore Runtime 이미지에 맞춰 ARM64(Graviton) Fargate에서 실행. ~~Service Connect가 내부 DNS(`awsops-steampipe.awsops.local:9193`)를 제공하여 별도 서비스 디스커버리 계층이 불필요.~~ *(2026-06-10 ADR-037 정정: 라이브 Steampipe 없음 — 인벤토리 sync만; Service-Connect 데몬 없음.)*
 
 ## Consequences / 영향
 
@@ -136,9 +144,15 @@ The ADR is accepted to unblock implementation, with the following items tracked 
 구현 착수를 위해 ADR을 먼저 채택하되, 아래 항목은 Phase 0 사전 작업으로 추적한다:
 
 - **Cost validation**: confirm the +\$50–80/mo estimate against actual workload profile (web concurrency, Steampipe FDW pool size, Aurora ACU floor).
-- **Aurora schema review**: finalize column types and indexes for the 7 tables in the migration table before Phase 1 dual-write begins.
+- **Aurora schema review**: finalize column types and indexes for the 7 tables in the migration table before Phase 1 dual-write begins. *(later replaced by the ULID migration scheme — sequential integers were retired after concurrent-branch collisions, see `migrations/README.md` / 이후 ULID 마이그레이션 체계로 대체 — 순차 정수는 동시 브랜치 충돌로 폐기)*
 - **cosign key custody**: decide between AWS KMS-backed signing (preferred for audit trail) vs. local key file (faster bootstrap). Required before any Public ECR push in Phase 3.
 - **Runbooks**: Aurora failover, Fargate task replacement, Public ECR rollback, cosign key rotation — must exist in `docs/runbooks/` before Phase 3 cutover.
+- **Cache locality vs ADR-017 (added 2026-06-03, co-agent review)**: this split puts the cache-warmer in `awsops-jobs`, a **separate task from `awsops-web`**. ADR-017's warmer only delivers warm hits because it writes into the **process-local `node-cache`** shared with web requests (`src/lib/steampipe.ts`). Across separate Fargate tasks the warmer would warm a cache no web request ever reads. Phase 1 must resolve this — either **externalize the query cache** to a shared store (e.g. ElastiCache/Redis, or the Aurora layer) **or keep the warmer in-process per `awsops-web` task** and drop it from `awsops-jobs`. Until resolved, treat `awsops-jobs` cache-warming as a no-op for the web tier. / **ADR-017 캐시 지역성 (2026-06-03 co-agent 리뷰 추가)**: 이 분리는 캐시 워머를 `awsops-web`과 **별도 태스크인 `awsops-jobs`**에 둔다. ADR-017 워머는 web 요청과 공유되는 **프로세스-로컬 `node-cache`**에 기록해야만 워밍이 효과가 있다. 별도 Fargate 태스크 간에는 워머가 어떤 web 요청도 읽지 않는 캐시를 데우게 된다. Phase 1에서 해결 필요 — **쿼리 캐시를 공유 저장소(ElastiCache/Redis 또는 Aurora)로 외부화**하거나 **워머를 `awsops-web` 태스크 내 인-프로세스로 유지**하고 `awsops-jobs`에서 제거. 해결 전까지 `awsops-jobs` 캐시 워밍은 web 계층에 무효.
+- **PDF Chromium bundling vs ADR-019 (added 2026-06-03, co-agent review)**: ADR-019 generates PDF reports via `puppeteer-core`, which requires a **Chromium binary** to be present (the EC2 host previously supplied one out-of-band). The Fargate `awsops-web` image must explicitly **bundle or provision Chromium** (and its fonts), or server-side PDF export breaks on ephemeral tasks. ADR-019's browser Print-to-PDF path remains as a zero-server-cost fallback. Add Chromium to the `awsops-web` Dockerfile before the web cutover. / **ADR-019 PDF Chromium 번들 (2026-06-03 co-agent 리뷰 추가)**: ADR-019는 `puppeteer-core`로 PDF를 생성하며 **Chromium 바이너리**가 존재해야 한다(기존 EC2 호스트가 대역 외로 공급). Fargate `awsops-web` 이미지가 **Chromium(과 폰트)을 명시적으로 번들/프로비저닝**하지 않으면 ephemeral 태스크에서 서버사이드 PDF가 깨진다. ADR-019의 브라우저 Print-to-PDF 경로는 서버 비용 0 폴백으로 유지. web 커토버 전 `awsops-web` Dockerfile에 Chromium 추가.
+
+### Supersession note / 승계 표기 (2026-06-03)
+
+This ADR establishes the **v2 deployment topology** and therefore supersedes the single-EC2 / local-`data/` assumptions of earlier Accepted ADRs **for v2 deployments**: ADR-001 & ADR-005 (Steampipe on the EC2 host's `localhost:9193` → ~~now a separate `awsops-steampipe` Fargate task reached via Service Connect DNS~~ *(2026-06-10 ADR-037 correction: no live Steampipe — inventory sync only; live queries via AgentCore MCP)*), ADR-024 (EC2/ALB CDK three-stack → ECS/Aurora workload+data stacks; EC2 build host decommissioned), and the `data/*.json` persistence in ADR-006/ADR-007 (cost & inventory snapshots → Aurora). Those ADRs remain Accepted as **v1 history**; their host-coupled assumptions do not apply to v2. / 본 ADR은 **v2 배포 토폴로지**를 확립하므로, **v2 배포에 한해** 이전 Accepted ADR들의 단일-EC2 / 로컬-`data/` 가정을 승계한다: ADR-001·ADR-005(EC2 `localhost:9193` Steampipe → ~~Service Connect DNS로 접근하는 별도 `awsops-steampipe` 태스크~~ *(2026-06-10 ADR-037 정정: 라이브 Steampipe 없음 — 인벤토리 sync만; 라이브 조회는 AgentCore MCP)*), ADR-024(EC2/ALB CDK 3-stack → ECS/Aurora workload+data 스택, EC2 빌드 호스트 폐기), ADR-006/ADR-007의 `data/*.json` 영속화(비용·인벤토리 스냅샷 → Aurora). 해당 ADR들은 **v1 이력**으로 Accepted 유지되며 호스트 결합 가정은 v2에 적용되지 않는다.
 
 ## References / 참고 자료
 

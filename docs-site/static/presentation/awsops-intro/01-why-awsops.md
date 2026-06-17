@@ -31,15 +31,14 @@ Junseok Oh | Solutions Architect | AWS
 
 # Agenda
 
-1. **Why AWSops** — 클라우드 운영의 도전 과제와 8가지 차별점
+1. **Why AWSops** — 클라우드 운영의 도전 과제
 2. **Architecture Deep Dive** — 기술 스택과 AI 에이전트
 3. **Demo & Diagnosis Report** — 실전 시나리오와 종합진단
 
 :::notes
 {timing: 1min}
 총 60분 세션으로 3개 파트로 나누어 진행합니다.
-첫 번째 파트에서는 왜 이런 도구가 필요한지, 그리고 AWSops가 고객 환경에 제공하는 8가지 핵심 차별점을 살펴봅니다.
-두 번째로 어떻게 만들었는지 아키텍처를, 세 번째로 실제로 어떻게 쓰는지 데모와 종합진단을 보여드리겠습니다.
+첫 번째로 왜 이런 도구가 필요한지, 두 번째로 어떻게 만들었는지, 세 번째로 실제로 어떻게 쓰는지를 보여드리겠습니다.
 :::
 
 ---
@@ -61,7 +60,7 @@ Junseok Oh | Solutions Architect | AWS
 
 ### 데이터 사일로
 
-- CloudWatch 메트릭 ≠ Prometheus ≠ 로그 ≠ 트레이스
+- CloudWatch 메트릭 ≠ Prometheus 메트릭 ≠ 로그 ≠ 트레이스
 - **교차 분석 불가** → 근본 원인 파악 지연
 
 :::
@@ -90,7 +89,7 @@ Junseok Oh | Solutions Architect | AWS
 
 {cue: pause}
 
-두 번째는 데이터 사일로입니다. CloudWatch 메트릭, Prometheus 메트릭, 로그, 트레이스가 각각 다른 시스템에 있어서 교차 분석이 어렵습니다.
+두 번째는 데이터 사일로입니다. CloudWatch 메트릭, Prometheus 메트릭, 로그, 트레이스가 각각 다른 시스템에 있어서 교차 분석이 어렵습니다. "CPU가 높아졌는데 어떤 서비스 때문이지?" 라는 질문에 답하려면 여러 도구를 동시에 봐야 합니다.
 
 세 번째, 네 번째도 마찬가지로 반복 작업과 보고서 부담이 큽니다.
 
@@ -98,12 +97,12 @@ Junseok Oh | Solutions Architect | AWS
 여러분도 이런 경험 있으시죠? 특히 FinOps 리포트를 매달 수동으로 만들어 본 경험이 있으신 분?
 
 {cue: transition}
-AWSops는 이 문제들을 한 화면, 하나의 AI 어시스턴트로 동시에 해결합니다.
+AWSops는 이 4가지 문제를 동시에 해결합니다.
 :::
 
 ---
 
-<!-- Slide 4: AWSops Overview — Single Pane of Glass -->
+<!-- Slide 4: AWSops Overview -->
 
 @type: content
 @transition: slide
@@ -120,7 +119,7 @@ AWSops는 이 문제들을 한 화면, 하나의 AI 어시스턴트로 동시에
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
   <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:20px;">
     <div style="color:#00d4ff;font-weight:bold;font-size:18px;margin-bottom:8px;">Steampipe — SQL for Cloud</div>
-    <div style="color:#b0b0b0;line-height:1.6;">AWS API를 PostgreSQL 테이블로 변환<br>CLI 대비 <span style="color:#00ff88;font-weight:bold;">660x</span> 빠른 쿼리 + node-cache 5분 캐싱</div>
+    <div style="color:#b0b0b0;line-height:1.6;">AWS API를 PostgreSQL 테이블로 변환<br>CLI 대비 <span style="color:#00ff88;font-weight:bold;">660x</span> 빠른 쿼리 성능</div>
   </div>
   <div style="display:grid;grid-template-rows:1fr 1fr;gap:12px;">
     <div style="background:rgba(0,212,255,0.05);border:1px solid rgba(0,212,255,0.2);border-radius:8px;padding:12px;text-align:center;">
@@ -138,7 +137,7 @@ AWSops는 이 문제들을 한 화면, 하나의 AI 어시스턴트로 동시에
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
   <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:20px;">
     <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Bedrock AgentCore</div>
-    <div style="color:#b0b0b0;line-height:1.6;">Sonnet 4.6 (빠른 분류·라우팅)<br>Opus 4.8 (심층 진단)<br>Haiku 4.5 (저비용·고빈도)</div>
+    <div style="color:#b0b0b0;line-height:1.6;">Claude Opus 4.8 (심층 분석)<br>Claude Sonnet 4.6 (빠른 분류)<br>AgentCore Runtime + MCP Gateway</div>
   </div>
   <div style="display:grid;grid-template-rows:1fr 1fr;gap:12px;">
     <div style="background:rgba(245,158,11,0.05);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:12px;text-align:center;">
@@ -155,19 +154,19 @@ AWSops는 이 문제들을 한 화면, 하나의 AI 어시스턴트로 동시에
 <div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
   <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#ef4444;font-size:32px;font-weight:bold;">43</div>
+    <div style="color:#ef4444;font-size:32px;font-weight:bold;">36</div>
     <div style="color:#8b95a5;font-size:13px;margin-top:4px;">Pages</div>
     <div style="color:#666;font-size:11px;">EC2, Lambda, ECS, EKS, S3, RDS, VPC...</div>
   </div>
   <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#ef4444;font-size:32px;font-weight:bold;">20</div>
+    <div style="color:#ef4444;font-size:32px;font-weight:bold;">13</div>
     <div style="color:#8b95a5;font-size:13px;margin-top:4px;">API Routes</div>
     <div style="color:#666;font-size:11px;">AI, Steampipe, CloudWatch, Cost...</div>
   </div>
   <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#ef4444;font-size:32px;font-weight:bold;">11</div>
-    <div style="color:#8b95a5;font-size:13px;margin-top:4px;">AI Routes</div>
-    <div style="color:#666;font-size:11px;">code, network, cost, datasource...</div>
+    <div style="color:#ef4444;font-size:32px;font-weight:bold;">6</div>
+    <div style="color:#8b95a5;font-size:13px;margin-top:4px;">AI Agents</div>
+    <div style="color:#666;font-size:11px;">EKS, DB, MSK, Idle, Trace, Incident</div>
   </div>
 </div>
 </div>
@@ -178,263 +177,160 @@ AWSops는 이 문제들을 한 화면, 하나의 AI 어시스턴트로 동시에
 AWSops는 3개 레이어로 구성됩니다.
 
 {cue: pause}
-Data Layer에서는 Steampipe가 AWS 380개 이상, Kubernetes 60개 이상의 테이블을 SQL로 조회합니다. AWS CLI보다 660배 빠르고, 결과는 node-cache로 5분간 캐싱합니다.
+Data Layer에서는 Steampipe가 AWS 380개 이상, Kubernetes 60개 이상의 테이블을 SQL로 조회합니다. AWS CLI보다 660배 빠릅니다.
 
-AI Engine에서는 Bedrock Claude가 8개의 전문 MCP Gateway를 통해 125개의 도구를 사용합니다. 분류·라우팅은 Sonnet 4.6, 심층 진단은 Opus 4.8, 빠르고 저렴한 작업은 Haiku 4.5를 씁니다.
+AI Engine에서는 Bedrock Claude가 8개의 전문 MCP Gateway를 통해 125개의 도구를 사용합니다. 네트워크, 컨테이너, 보안, 비용 등 영역별 전문가 에이전트가 있습니다.
 
-Dashboard는 Next.js 14로 만든 43개 페이지, 20개 API 라우트, 그리고 자연어 질문을 11개 라우트로 분류하는 AI 어시스턴트로 구성됩니다.
+Dashboard는 Next.js 14로 만든 36개 페이지와 13개 API 라우트, 그리고 6개의 자동 수집 AI 에이전트로 구성됩니다.
 
 {cue: transition}
-지금부터 고객 환경에 도입할 때 핵심이 되는 8가지 차별점을 하나씩 보겠습니다.
+구체적인 숫자를 보겠습니다.
 :::
 
 ---
 
-<!-- Slide 5: #1 Open-source / AWS-Native -->
+<!-- Slide 5: By the Numbers -->
 
 @type: content
-@transition: slide
 
-# ① 완전 오픈소스 · AWS-Native (Architecture v1)
-
-::: left
-
-- **오픈소스** — 전체 소스가 공개되어 자사 계정에 그대로 배포하고 내부 요구에 맞게 수정 가능. **벤더 락인 없음**
-- **AWS 매니지드 서비스만으로 구현** — 외부 SaaS 의존 없음
-- 데이터·AI·인증·엣지가 전부 AWS 안에서 끝나 **데이터 거버넌스·컴플라이언스가 단순**
-
-:::
-
-::: right
-
-| 레이어 | AWS 서비스 |
-|--------|-----------|
-| 엣지·인증 | CloudFront + Lambda@Edge + Cognito |
-| 컴퓨트 | EC2 t4g.2xlarge (ARM64 Graviton) + ALB |
-| AI | **Bedrock AgentCore** + Bedrock 모델 |
-| IaC | AWS CDK |
-
-:::
-
-:::notes
-{timing: 3min}
-첫 번째 차별점은 완전 오픈소스이며 AWS 매니지드 서비스만으로 구현됐다는 점입니다.
-
-전체 소스가 공개되어 있어 고객이 그대로 가져다 자사 계정에 배포하고, 내부 요구에 맞게 수정할 수 있습니다. 벤더 락인이 없습니다.
-
-그리고 엣지·인증은 CloudFront + Lambda@Edge + Cognito, 컴퓨트는 ARM64 Graviton 기반 EC2와 ALB, AI는 Bedrock AgentCore, IaC는 CDK — 전부 AWS 매니지드 서비스로만 구성됩니다. Datadog, Grafana Cloud 같은 외부 모니터링 SaaS 비용이 아예 없고, 데이터가 고객 VPC 밖으로 나가지 않아 금융·공공·의료처럼 데이터 주권이 중요한 환경에 적합합니다.
-
-{cue: transition}
-이 모든 데이터를 빠르게 끌어오는 엔진이 Steampipe입니다.
-:::
-
----
-
-<!-- Slide 6: #2 Steampipe + #3 Dashboards -->
-
-@type: content
-@transition: slide
-
-# ② Steampipe — 빠른 데이터 + 로컬 캐싱 · ③ 43 페이지 대시보드
-
-::: left
-
-### Steampipe 데이터 엔진
-
-- 내장 PostgreSQL(:9193)로 **380+ AWS · 60+ K8s 테이블**을 SQL 즉시 조회
-- 모든 쿼리는 **pg Pool**(max 10, 8 sequential batch)을 통해서만 — CLI는 **660x 느려 코드 레벨 금지**(ADR-001)
-- node-cache **5분 캐싱** + 캐시 워머가 핵심 **23개 쿼리를 4분 주기 프리워밍** → 서브초 응답
-
-:::
-
-::: right
-
-### 기본 대시보드 — 43 페이지
-
-- EC2 · Lambda · ECS/ECR · EKS(Pod/Node/Deploy/Svc/Explorer)
-- VPC · CloudFront · WAF · 토폴로지 맵(React Flow)
-- EBS · S3 · RDS · DynamoDB · ElastiCache · MSK · OpenSearch
-- MSK·RDS·ElastiCache·OpenSearch는 **CloudWatch 메트릭 인라인**
-
-:::
-
-:::notes
-{timing: 3min}
-두 번째와 세 번째 차별점은 데이터 엔진과 기본 대시보드입니다.
-
-AWSops의 데이터 엔진은 Steampipe입니다. 내장 PostgreSQL로 AWS API를 SQL처럼 다루며, 380개 이상의 AWS 테이블과 60개 이상의 Kubernetes 테이블을 즉시 조회합니다. 모든 쿼리는 pg Pool을 통해서만 실행하고, Steampipe CLI는 660배 느려서 코드 레벨에서 금지하고 있습니다. 결과는 5분 캐싱하고, 대시보드 핵심 23개 쿼리는 캐시 워머가 4분 주기로 미리 데워서 서브초 응답을 보장합니다.
-
-그 위에 43개 페이지가 EC2부터 EKS, RDS, MSK, OpenSearch까지 AWS·Kubernetes 주요 리소스를 실시간 차트와 React Flow 토폴로지로 보여줍니다.
-
-{cue: transition}
-이 데이터를 AI가 분석해 만드는 것이 종합진단 리포트입니다.
-:::
-
----
-
-<!-- Slide 7: #4 Well-Architected AI Diagnosis -->
-
-@type: content
-@transition: slide
-
-# ④ Well-Architected AI 종합 진단
-
-:::html
-<div style="display:grid;grid-template-columns:1.1fr 1fr;gap:20px;margin-top:8px;">
-  <div style="background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.3);border-radius:12px;padding:20px;">
-    <div style="color:#00d4ff;font-weight:bold;font-size:17px;margin-bottom:10px;">6-Pillar Executive Summary</div>
-    <div style="color:#b0b0b0;font-size:13px;line-height:1.7;">Operational Excellence · Security · Reliability · Performance Efficiency · Cost Optimization · Sustainability<br><span style="color:#8b95a5;">→ 6개 필러 전체 스코어카드</span></div>
-  </div>
-  <div style="background:rgba(0,255,136,0.08);border:1px solid rgba(0,255,136,0.3);border-radius:12px;padding:20px;">
-    <div style="color:#00ff88;font-weight:bold;font-size:17px;margin-bottom:10px;">3-Pillar Deep Dive · 15 섹션</div>
-    <div style="color:#b0b0b0;font-size:13px;line-height:1.7;">Cost Optimization · Security · Reliability를 심층 분석<br><span style="color:#8b95a5;">비용/유휴 리소스, 보안 현황, 네트워크·컴퓨팅·EKS·DB·MSK·스토리지</span></div>
-  </div>
-</div>
-<div style="margin-top:16px;background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.3);border-radius:12px;padding:16px;text-align:center;color:#b0b0b0;font-size:14px;">
-  <span style="color:#a855f7;font-weight:bold;">Claude Opus 4.8</span> 분석 → <span style="color:#fff;">DOCX · Markdown · PDF · PPTX</span> 내보내기 + <span style="color:#fff;">주간/격주/월간 자동 스케줄</span>
-</div>
-:::
-
-:::notes
-{timing: 3min}
-네 번째 차별점은 Well-Architected 관점의 AI 종합 진단입니다.
-
-`/ai-diagnosis` 페이지에서 Bedrock Claude Opus 4.8가 인프라 전반을 자동 분석합니다. 정직하게 범위를 말씀드리면, Executive Summary에서는 6개 Well-Architected 필러 전체에 점수를 매기는 스코어카드를 제공하고, 심층 분석은 Cost·Security·Reliability 3개 필러에 집중해 15개 섹션으로 깊게 파고듭니다. 나머지 3개 필러의 심층 섹션은 로드맵입니다.
-
-결과는 DOCX, Markdown, PDF, PPTX로 내보낼 수 있고, 주간·격주·월간으로 자동 스케줄링됩니다. 수작업 2-3일 걸리던 리포트가 10분으로 줄어듭니다.
-
-{cue: transition}
-운영 도구 자체의 비용과 멀티 어카운트도 핵심입니다.
-:::
-
----
-
-<!-- Slide 8: #5 Cost Efficiency + #6 Multi-Account -->
-
-@type: content
-@transition: slide
-
-# ⑤ 비용 효율(낮은 TCO) · ⑥ 멀티 어카운트
-
-::: left
-
-### 낮은 TCO
-
-- **단일 EC2 t4g.2xlarge(ARM64)** — Steampipe 임베디드 PostgreSQL 동거 → **별도 관리형 DB 비용 없음**
-- **AgentCore 서버리스** — 호출 시에만 과금
-- 작업별 모델 선택 — 분류 **Sonnet 4.6** / 심층 **Opus 4.8** / 저비용 **Haiku 4.5** + 프롬프트 캐싱(ADR-016)
-- 고객 인프라 비용도 절감 — 유휴 리소스 탐지·FinOps 권고
-
-:::
-
-::: right
-
-### 멀티 어카운트(단일 창)
-
-- Steampipe **Aggregator** — `aws` = 전 계정 통합, `aws_<id>` = 개별
-- 상단에서 계정 전환 또는 **전체 통합 조회**
-- 계정 추가/삭제는 `data/config.json`의 `accounts[]`만 수정 — **코드 변경 불필요**(ADR-008)
-- 교차 계정은 **assume-role**
-
-:::
-
-:::notes
-{timing: 3min}
-다섯 번째는 비용 효율입니다. 운영 도구 자체의 비용이 낮도록 설계됐습니다. 단일 ARM64 Graviton EC2에 Steampipe 임베디드 PostgreSQL을 함께 돌려서 별도 관리형 DB 비용이 없고, AgentCore는 서버리스라 호출할 때만 과금됩니다. Bedrock 모델도 작업에 맞게 골라 씁니다 — 분류는 Sonnet 4.6, 심층 진단은 Opus 4.8, 빠르고 저렴한 작업은 Haiku 4.5, 여기에 프롬프트 캐싱까지 적용합니다. 그리고 도구가 고객 인프라의 비용도 절감합니다.
-
-여섯 번째는 멀티 어카운트입니다. Steampipe Aggregator 패턴으로 전 계정을 단일 창에서 보거나 개별 계정으로 전환할 수 있고, 계정 추가·삭제는 config 파일의 accounts 배열만 수정하면 됩니다. 코드 변경이 전혀 필요 없습니다.
-
-{cue: transition}
-관측성과 컨테이너 비용도 한 화면에 들어옵니다.
-:::
-
----
-
-<!-- Slide 9: #7 EKS Cost + #8 Observability + NL Query -->
-
-@type: content
-@transition: slide
-
-# ⑦ EKS 컨테이너 비용 · ⑧ 외부 관측성 통합 + 🆕 자연어 쿼리
-
-::: left
-
-### EKS/ECS 컨테이너 비용
-
-- **OpenCost + Prometheus** — namespace·Pod·노드 단위 **실사용 기반 비용**(CPU·Mem·Storage·GPU)
-- OpenCost 없으면 **Request 기반 폴백**으로 추정
-- ECS는 **CloudWatch Container Insights + Fargate 가격**
-
-:::
-
-::: right
-
-### 외부 관측성 7종 + 자연어 쿼리
-
-- Metrics: Prometheus · Dynatrace · Datadog
-- Logs: Loki · ClickHouse  /  Traces: Tempo · Jaeger
-- `/datasources/explore`에서 **자연어 → PromQL/LogQL/TraceQL/SQL** 자동 생성 (SSRF allowlist, ADR-011)
-
-:::
-
-:::notes
-{timing: 3min}
-일곱 번째는 EKS 컨테이너 비용 추적입니다. OpenCost와 Prometheus로 네임스페이스·Pod·노드 단위의 실사용량 기반 비용을 추적하고, OpenCost가 없으면 Request 기반으로라도 추정합니다. ECS는 CloudWatch Container Insights와 Fargate 가격으로 컨테이너 비용을 산출합니다.
-
-여덟 번째이자, 제가 강조하고 싶은 강점은 외부 관측성 통합과 자연어 쿼리입니다. AWS 데이터에 더해 Prometheus, Dynatrace, Datadog, Loki, ClickHouse, Tempo, Jaeger 7종을 데이터소스로 연동합니다. 그리고 datasources/explore에서 "결제 서비스 5xx 추이 보여줘" 같은 자연어 한 줄을 입력하면 AI가 PromQL, LogQL, TraceQL, SQL로 변환해서 실행합니다. 관측성 도구마다 다른 쿼리 언어를 외울 필요가 없어 운영자 진입장벽을 크게 낮춥니다.
-
-{cue: transition}
-코드에서 확인되는 추가 강점들도 정리했습니다.
-:::
-
----
-
-<!-- Slide 10: Additional strengths from code -->
-
-@type: content
-
-# 코드에서 확인되는 추가 강점
-
-| 강점 | 내용 |
-|------|------|
-| **AI 도구 아키텍처** | 8 역할 기반 AgentCore Gateway · **125 MCP 도구** · 19 Lambda |
-| **멀티 라우트 합성** | 질문을 **11개 라우트** 중 1~3개로 분류해 병렬 호출 후 종합(ADR-002/025) |
-| **알림 파이프라인** | 웹훅(CloudWatch SNS/Alertmanager/Grafana) → 상관 분석 → AI 자동 진단 → Slack(ADR-009) |
-| **이벤트 사전 스케일링** | 과거 메트릭 분석 → Bedrock 다단계 워밍업 플랜·스크립트(ADR-010, 검토-후-실행) |
-| **CIS 컴플라이언스** | Powerpipe로 CIS v1.5~v4.0, **431개 컨트롤** 벤치마크 |
-| **설계 투명성** | **32개 ADR** — 모든 주요 결정이 한국어/영어로 문서화 |
+# AWSops v1.7.0 — By the Numbers
+
+| 항목 | 수치 | 설명 |
+|------|------|------|
+| **Pages** | 36 | 컴퓨팅, 네트워크, 스토리지, 보안, 비용, K8s |
+| **AI Routes** | 18 | 자연어 질문 → 자동 라우팅 → 전문 에이전트 |
+| **MCP Tools** | 125 | 8 Gateway × 19 Lambda |
+| **Auto-Collect Agents** | 6 | EKS/DB/MSK 최적화, 유휴 리소스, 트레이스, 사고 분석 |
+| **SQL Query Files** | 25 | Steampipe 기반 실시간 인벤토리 |
+| **Deploy Scripts** | 12 | CDK + 자동화 — 30분 내 배포 완료 |
 
 :::notes
 {timing: 2min}
-지금까지의 8가지 외에도 코드에서 확인되는 추가 강점들이 있습니다.
+숫자로 보면 더 명확합니다.
 
-AI 도구 아키텍처는 8개 역할 기반 Gateway에 125개 MCP 도구와 19개 Lambda로 구성되고, 분류기가 질문을 11개 라우트 중 1~3개로 분류해 병렬 호출 후 종합합니다. 알림 파이프라인은 웹훅을 받아 상관 분석하고 AI가 자동 진단해서 Slack으로 보냅니다. 이벤트 사전 스케일링은 과거 메트릭을 분석해 Bedrock이 워밍업 플랜과 스크립트를 만들어 주되, 검토 후 수동 실행하는 안전한 방식입니다. CIS는 431개 컨트롤을 벤치마크하고, 32개 ADR로 모든 설계 결정이 문서화돼 있습니다.
+36개 페이지가 AWS의 모든 주요 서비스를 커버합니다. EC2, Lambda, ECS, EKS, RDS, ElastiCache, MSK, OpenSearch, S3, EBS, VPC, CloudFront, WAF, IAM, CloudWatch, CloudTrail, Cost Explorer까지.
+
+AI 라우트가 18개라는 것은, 사용자가 자연어로 질문하면 자동으로 가장 적합한 에이전트로 라우팅된다는 의미입니다. "EKS 비용 최적화해줘"라고 하면 eks-optimize 에이전트가, "장애 원인 분석해줘"라고 하면 incident 에이전트가 자동으로 선택됩니다.
 
 {cue: transition}
-첫 번째 파트를 정리하겠습니다.
+이게 어떤 가치를 만드는지 보겠습니다.
 :::
 
 ---
 
-<!-- Slide 11: Block 1 Key Takeaways -->
+<!-- Slide 6: Value Proposition -->
+
+@type: content
+@transition: slide
+
+# AWSops가 주는 가치
+
+::: left
+
+### For DevOps / SRE
+
+- **Console Hopping 제거** — 한 화면에서 모든 리소스
+- **자연어 트러블슈팅** — "VPC Flow Log 분석해줘"
+- **실시간 인시던트 분석** — Prometheus + Loki + Tempo + CloudWatch 교차 분석
+- K9s 스타일 **터미널 UI** 포함
+
+:::
+
+::: right
+
+### For FinOps / Management
+
+- **자동 비용 최적화** — EKS/RDS/MSK rightsizing
+- **유휴 리소스 스캔** — 미사용 EBS, EIP, 중지된 EC2
+- **종합진단 리포트** — DOCX / MD / PDF 자동 생성 (15 섹션, 6 Pillar)
+- **CIS 컴플라이언스** — v1.5 ~ v4.0 자동 벤치마크
+
+:::
+
+:::notes
+{timing: 3min}
+두 가지 관점에서 가치를 드립니다.
+
+DevOps나 SRE 분들에게는 콘솔 호핑 없이 한 화면에서 모든 리소스를 보고, AI에게 자연어로 질문하면 됩니다. "이 EC2 인스턴스가 왜 느려?"라고 물으면 CloudWatch 메트릭을 확인하고, 네트워크 경로를 분석하고, 관련 로그를 찾아줍니다.
+
+{cue: pause}
+
+FinOps나 Management 분들에게는 자동으로 비용 최적화 기회를 찾아주고, 종합진단 리포트를 DOCX/MD/PDF로 뽑아줍니다. Well-Architected 6 Pillar 기반 15개 섹션을 Opus 모델이 분석해서 보고서를 만들어줍니다. 수작업 2-3일이 10분으로 줄어듭니다.
+
+{cue: transition}
+가장 중요한 차별점을 하나만 꼽자면...
+:::
+
+---
+
+<!-- Slide 7: Key Differentiator -->
+
+@type: content
+@transition: fade
+
+# 핵심 차별점: Zero SaaS Dependency
+
+:::html
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 32px;">
+  <div style="background: rgba(0,212,255,0.1); border: 1px solid rgba(0,212,255,0.3); border-radius: 12px; padding: 24px; text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 12px;">🏠</div>
+    <div style="color: #00d4ff; font-weight: bold; font-size: 18px; margin-bottom: 8px;">고객 VPC 내 실행</div>
+    <div style="color: #8b95a5; font-size: 14px;">EC2 + CloudFront<br>데이터가 밖으로 나가지 않음</div>
+  </div>
+  <div style="background: rgba(0,255,136,0.1); border: 1px solid rgba(0,255,136,0.3); border-radius: 12px; padding: 24px; text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 12px;">🧠</div>
+    <div style="color: #00ff88; font-weight: bold; font-size: 18px; margin-bottom: 8px;">Bedrock 기반 AI</div>
+    <div style="color: #8b95a5; font-size: 14px;">AgentCore + MCP Gateway<br>외부 AI SaaS 불필요</div>
+  </div>
+  <div style="background: rgba(168,85,247,0.1); border: 1px solid rgba(168,85,247,0.3); border-radius: 12px; padding: 24px; text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 12px;">📊</div>
+    <div style="color: #a855f7; font-weight: bold; font-size: 18px; margin-bottom: 8px;">Steampipe SQL</div>
+    <div style="color: #8b95a5; font-size: 14px;">380+ 테이블, 660x 빠른<br>CLI 대비 성능</div>
+  </div>
+</div>
+:::
+
+:::notes
+{timing: 3min}
+가장 중요한 차별점은 Zero SaaS Dependency입니다.
+
+AWSops는 고객의 VPC 안에서 실행됩니다. 모든 데이터가 고객 AWS 계정 안에 머물고, 외부 SaaS로 나가지 않습니다. 금융, 공공, 의료 등 데이터 주권이 중요한 환경에서도 사용할 수 있습니다.
+
+AI도 Bedrock 기반입니다. OpenAI API나 다른 외부 AI 서비스를 사용하지 않고, 고객 계정의 Bedrock에서 Claude 모델을 직접 호출합니다. AgentCore Runtime과 MCP Gateway로 125개의 도구를 안전하게 실행합니다.
+
+데이터 레이어는 Steampipe입니다. AWS CLI를 직접 실행하는 것보다 660배 빠르게 SQL로 AWS 리소스를 조회합니다. 380개 이상의 테이블을 PostgreSQL 프로토콜로 쿼리합니다.
+
+{cue: question}
+Datadog이나 Grafana Cloud 같은 외부 모니터링 SaaS 비용 때문에 고민하셨던 분 계시죠? AWSops는 그 비용 자체가 없습니다.
+
+{cue: transition}
+이제 아키텍처를 자세히 살펴보겠습니다.
+:::
+
+---
+
+<!-- Slide 8: Block 1 Key Takeaways -->
 
 @type: content
 @transition: fade
 
 # Key Takeaways — Why AWSops
 
-- **완전 오픈소스 · AWS-Native** → 벤더 락인 없음, 데이터가 고객 VPC 밖으로 안 나감
-- **Steampipe + 캐싱** → 43 페이지를 서브초 응답 Single Pane of Glass
-- **Well-Architected AI 진단** → 6필러 스코어카드 + 3필러 심층 15섹션, DOCX/PDF/PPTX
-- **낮은 TCO + 멀티 어카운트** → 단일 EC2, 서버리스 AI, config-only 계정 관리
-- **관측성 7종 + 자연어 쿼리** → PromQL/LogQL/TraceQL/SQL 자동 생성
+- **Console Hopping 문제** → 36 페이지 Single Pane of Glass
+- **데이터 사일로** → Steampipe + Prometheus + Loki + Tempo 통합
+- **반복 수작업** → 6개 AI 자동 수집 에이전트
+- **보고서 부담** → 종합진단 DOCX / MD / PDF 자동 생성 (6 Pillar, 15 섹션)
+- **핵심 차별점** → Zero SaaS, 고객 VPC 내 실행, Bedrock AI
 
 :::notes
 {timing: 2min}
 첫 번째 파트를 정리하겠습니다.
 
-AWSops는 완전 오픈소스이며 AWS 매니지드 서비스만으로 구현돼 벤더 락인이 없고 데이터가 고객 VPC를 벗어나지 않습니다. Steampipe와 캐싱으로 43페이지 대시보드를 서브초로 띄우고, Well-Architected AI 진단으로 6필러 스코어카드와 3필러 심층 15섹션 리포트를 만듭니다. 단일 EC2와 서버리스 AI로 TCO가 낮고, 계정 관리는 config 파일만 수정하면 됩니다. 그리고 7종 관측성을 자연어 한 줄로 쿼리합니다.
+AWSops는 클라우드 운영의 4대 도전 과제를 동시에 해결합니다.
+콘솔 호핑 대신 한 화면, 데이터 사일로 대신 통합 데이터소스, 수작업 대신 AI 에이전트, 수동 보고서 대신 자동 종합진단.
+
+그리고 가장 중요한 것은 고객 VPC 안에서 100% 동작한다는 것입니다.
 
 {cue: transition}
-이제 이것을 어떻게 만들었는지, 아키텍처를 자세히 보겠습니다.
+5분 쉬고 아키텍처를 자세히 보겠습니다.
 :::

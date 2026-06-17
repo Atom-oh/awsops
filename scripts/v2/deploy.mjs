@@ -1,0 +1,34 @@
+#!/usr/bin/env node
+// AWSops v2 deploy: build arm64 -> push ECR -> ECS force-new-deployment -> wait stable -> smoke.
+import { execSync } from 'node:child_process';
+
+const REGION = process.env.AWS_REGION || 'ap-northeast-2';
+const CHDIR = 'terraform/v2/foundation';
+const TAG = process.env.IMAGE_TAG || 'web-latest';
+const DOCKER = process.env.DOCKER || 'sudo docker';
+
+const tf = (out) => execSync(`terraform -chdir=${CHDIR} output -raw ${out}`, { encoding: 'utf8' }).trim();
+const sh = (cmd) => execSync(cmd, { stdio: 'inherit', shell: '/bin/bash' });
+
+const repo = tf('ecr_web_uri');
+const registry = repo.split('/')[0];
+const cluster = tf('ecs_cluster_name');
+const service = tf('ecs_service_name');
+const url = tf('public_url');
+
+console.log(`\n[1/5] ECR login -> ${registry}`);
+sh(`aws ecr get-login-password --region ${REGION} | ${DOCKER} login --username AWS --password-stdin ${registry}`);
+
+console.log(`\n[2/5] build + push arm64 -> ${repo}:${TAG}`);
+sh(`${DOCKER} buildx build --platform linux/arm64 -t ${repo}:${TAG} --push web/`);
+
+console.log(`\n[3/5] ECS force-new-deployment -> ${cluster}/${service}`);
+sh(`aws ecs update-service --cluster ${cluster} --service ${service} --force-new-deployment --region ${REGION} >/dev/null`);
+
+console.log(`\n[4/5] wait services-stable (may take a few minutes)`);
+sh(`aws ecs wait services-stable --cluster ${cluster} --services ${service} --region ${REGION}`);
+
+console.log(`\n[5/5] smoke -> ${url}/api/health`);
+sh(`curl -fsS --max-time 15 ${url}/api/health && echo`);
+
+console.log('\n✅ deploy complete');

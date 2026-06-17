@@ -1,6 +1,8 @@
 # ADR-011: External Observability Datasource Integration / 외부 관측 데이터소스 연동
 
-## Status: Accepted (2026-04-22) / 상태: 채택됨 (2026-04-22)
+## Status: Accepted (v1 scope) — superseded by ADR-039 for v2 (2026-06-16) / 상태: 채택됨 (v1 스코프) — v2는 ADR-039가 승계 (2026-06-16)
+
+> **v2 note (2026-06-16):** the **execution mechanism** below is **v1-only**. This ADR chose a native Next.js BFF route (`datasource-client.ts`, `/api/datasources`) over an AgentCore Gateway extension, with tokens in `data/config.json`. For **v2**, ADR-039's Integrations axis **re-derives** this capability onto the **single MCP egress substrate** (`agent.py` live MCP, credentials in **Secrets Manager**, not `data/config.json`); ADR-011's **SSRF defense (DNS-resolve + blocklist + `redirect:'manual'` + opt-in private CIDR) is inherited verbatim**, but the BFF-route/`data/config.json` mechanism does **not** apply to v2. The v1 record is retained as history. / **v2 주의:** 아래 실행 메커니즘은 **v1 전용**. v2는 ADR-039 Integrations 축이 동일 기능을 **단일 MCP egress substrate**(agent.py 라이브 MCP, 자격증명=Secrets Manager)로 재유도하며 **SSRF 방어는 그대로 승계**하되 BFF 라우트/`data/config.json` 메커니즘은 v2에 적용 안 됨.
 
 ## Context / 컨텍스트
 

@@ -1,0 +1,15 @@
+{
+  "sloAccuracy": 0.85,
+  "cases": [
+    { "q": "EC2 인스턴스 목록 보여줘", "route": "aws-data" },
+    { "q": "S3 버킷 몇 개야", "route": "aws-data" },
+    { "q": "이번 달 비용 분석", "route": "cost" },
+    { "q": "savings plan 추천", "route": "cost" },
+    { "q": "보안 그룹 중 0.0.0.0/0 열린 거", "route": "security" },
+    { "q": "IAM 사용자 MFA 확인", "route": "security" },
+    { "q": "reachability analyzer로 경로 확인", "route": "network" },
+    { "q": "flow log 분석", "route": "network" },
+    { "q": "EKS 파드 crashloop 트러블슈팅", "route": "container" },
+    { "q": "VPC 서브넷 리스트", "route": "aws-data" }
+  ]
+}

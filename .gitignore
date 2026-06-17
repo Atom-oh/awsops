@@ -31,6 +31,9 @@ data/
 # CDK schema/seed files (ADR-030) live under infra-cdk/data/ and are source-controlled
 !infra-cdk/data/
 !infra-cdk/data/**
+# v2 foundation schema/seed files (ADR-030) — source-controlled, same as infra-cdk/data/
+!terraform/v2/foundation/data/
+!terraform/v2/foundation/data/**
 
 # logs
 npm-debug.log*
@@ -80,6 +83,7 @@ docs/COMPARISON_VS_FAST.md
 
 # 로컬 설정 (세션 데이터, 공유 불필요) / local settings
 .claude/settings.local.json
+.claude/co-agent.local.json
 
 # CDK 컨텍스트 (계정 종속, 자동 생성) / CDK context (account-specific)
 infra-cdk/cdk.context.json
@@ -91,3 +95,30 @@ data/memory/
 
 # reports (auto-generated)
 reports/
+.superpowers/
+terraform/v2/**/.terraform/*
+terraform/v2/**/terraform.tfvars
+terraform/v2/**/backend.hcl
+terraform/v2/**/*.tfplan
+terraform/v2/**/*.tfstate
+terraform/v2/**/*.tfstate.backup
+terraform/v2/**/tfplan
+terraform/v2/**/.build/
+
+# graphify knowledge-graph output (generated artifact — regenerate with /graphify)
+graphify-out/
+
+# Confidential reference material (Amazon Confidential PDFs) — never commit
+.reference/
+# co-agent consensus pipeline state (skill-managed, local)
+.claude/co-agent-consensus/
+# Claude Code harness-local artifacts (scheduler lock, agent worktrees)
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+# Public RDS CA trust bundle — NOT a key (PR #36: verified TLS for the auto-register write-path)
+!scripts/v2/eks/rds-ca-bundle.pem
+# AI dev tool scratch dirs / MCP tooling local stores
+.serena/
+.headroom/
+tfplan*
+terraform/v2/foundation/tfplan*

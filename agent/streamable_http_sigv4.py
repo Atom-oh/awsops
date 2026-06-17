@@ -108,6 +108,19 @@ class StreamableHTTPTransportWithSigV4(StreamableHTTPTransport):
         self.region = region
 
 
+def _no_redirect_http_client_factory(*args, **kwargs):
+    """ADR-039 redirect:'manual': build the MCP httpx client normally, THEN force follow_redirects=False
+    on the instance. create_mcp_http_client does NOT accept a follow_redirects kwarg — passing it raises
+    TypeError and breaks transport init (regression caught in live verify) — so we set it on the returned
+    client. httpx already defaults to follow_redirects=False; this makes the guarantee explicit + robust."""
+    client = create_mcp_http_client(*args, **kwargs)
+    try:
+        client.follow_redirects = False
+    except Exception:
+        pass  # best-effort: httpx already defaults to no-follow; never let this break transport init
+    return client
+
+
 @asynccontextmanager
 async def streamablehttp_client_with_sigv4(
     url: str,
@@ -128,25 +141,44 @@ async def streamablehttp_client_with_sigv4(
     None,
 ]:
     """
-    Client transport for Streamable HTTP with SigV4 auth.
-
-    This transport enables communication with MCP servers that authenticate using AWS IAM,
-    such as servers behind a Lambda function URL or API Gateway.
-
-    Yields:
-        Tuple containing:
-            - read_stream: Stream for reading messages from the server
-            - write_stream: Stream for sending messages to the server
-            - get_session_id_callback: Function to retrieve the current session ID
+    Client transport for Streamable HTTP with SigV4 auth (+ redirect:'manual').
     """
-
     async with streamablehttp_client(
         url=url,
         headers=headers,
         timeout=timeout,
         sse_read_timeout=sse_read_timeout,
         terminate_on_close=terminate_on_close,
-        httpx_client_factory=httpx_client_factory,
+        httpx_client_factory=_no_redirect_http_client_factory,
         auth=SigV4HTTPXAuth(credentials, service, region),
+    ) as result:
+        yield result
+
+
+@asynccontextmanager
+async def streamablehttp_client_with_headers(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout: float | timedelta = 30,
+    sse_read_timeout: float | timedelta = 60 * 5,
+    terminate_on_close: bool = True,
+) -> AsyncGenerator[
+    tuple[
+        MemoryObjectReceiveStream[SessionMessage | Exception],
+        MemoryObjectSendStream[SessionMessage],
+        GetSessionIdCallback,
+    ],
+    None,
+]:
+    """
+    Client transport for Streamable HTTP with static headers (API Key / Bearer) + redirect:'manual'.
+    """
+    async with streamablehttp_client(
+        url=url,
+        headers=headers,
+        timeout=timeout,
+        sse_read_timeout=sse_read_timeout,
+        terminate_on_close=terminate_on_close,
+        httpx_client_factory=_no_redirect_http_client_factory,
     ) as result:
         yield result

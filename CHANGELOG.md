@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- v2 DB migration framework (`make migrate`) — collision-free **ULID** migration files, advisory-locked,
+  fail-loud (plain INSERT = PK violation, no silent `ON CONFLICT`), **version-stamped** (`app_version`
+  ledger column from each migration's `-- since:` header, else the deploying app version). Cumulative
+  ledger: upgrading from any prior release applies exactly the missing migrations (no version-pair scripts).
+  - `make migrate-status` — offline app version + each migration's declared release.
+  - `scripts/v2/upgrade.sh` (`make upgrade`) — safe release-upgrade wrapper: RDS snapshot → migrate
+    (auto one-time legacy INTEGER→TEXT bootstrap) → idempotency check → `make deploy`. PREVIEW unless `CONFIRM=go`.
+  - See `terraform/v2/foundation/migrations/README.md`.
+
+### Database migrations (since 2.0.0)
+
+- `opencost_config` — read-only OpenCost install config (cluster-scoped helm version/values)
+- `prevention_insights` — ADR-032 Phase 4 cross-incident proactive-prevention tier
+- `eks_registrations` — EKS runtime registration (in-app query onboarding; EventBridge auto-register)
+
 ## [1.9.0] - 2026-05-27
 
 ### Added
@@ -376,6 +393,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+### 추가됨
+
+- v2 DB 마이그레이션 프레임워크 (`make migrate`) — 충돌 없는 **ULID** 마이그레이션 파일, advisory-lock,
+  fail-loud(plain INSERT=PK 위반, silent `ON CONFLICT` 없음), **버전 스탬프**(`app_version` ledger 컬럼 —
+  마이그레이션의 `-- since:` 헤더, 없으면 배포 앱 버전). 누적 ledger: 어느 이전 릴리스에서 올리든 누락된
+  마이그레이션만 정확히 적용(버전쌍 스크립트 불필요).
+  - `make migrate-status` — 오프라인 앱 버전 + 각 마이그레이션의 선언된 릴리스.
+  - `scripts/v2/upgrade.sh` (`make upgrade`) — 안전 릴리스 업그레이드 래퍼: RDS 스냅샷 → migrate
+    (레거시 INTEGER→TEXT 1회 부트스트랩 자동) → 멱등 검증 → `make deploy`. `CONFIRM=go` 아니면 PREVIEW.
+  - `terraform/v2/foundation/migrations/README.md` 참조.
+
+### DB 마이그레이션 (since 2.0.0)
+
+- `opencost_config` — read-only OpenCost 설치 설정(클러스터별 helm 버전/values)
+- `prevention_insights` — ADR-032 Phase 4 교차-인시던트 사전예방 티어
+- `eks_registrations` — EKS 런타임 등록(인앱 조회 온보딩; EventBridge 자동등록)
 
 ## [1.9.0] - 2026-05-27
 

@@ -155,7 +155,7 @@ Next.js API (/awsops/api/ai)  ── route.ts 키워드 분석 (10-route priorit
     │  [Routes 2-8, 10] AgentCore Runtime (서울)
     │                   ┌───────────────────────────────────┐
     │                   │ Strands Agent (arm64)              │
-    │                   │ + Bedrock Sonnet/Opus 4.6         │
+    │                   │ + Bedrock Sonnet 4.6 / Opus 4.8         │
     │                   └──────────────┬────────────────────┘
     │                                  │ gateway 파라미터로 라우팅
     │                                  ▼
@@ -184,7 +184,7 @@ Next.js API (/awsops/api/ai)  ── route.ts 키워드 분석 (10-route priorit
     │            │   컨텍스트로 전달     │
     │            └──────────┬───────────┘
     │                       ▼
-    │            Bedrock Sonnet/Opus 4.6
+    │            Bedrock Sonnet 4.6 / Opus 4.8
     │            (us-east-1)
     │            ┌──────────────────────┐
     │            │ 실제 데이터 기반     │
@@ -465,7 +465,7 @@ Step 8: CloudFront Lambda@Edge 연동      ← 08-setup-cloudfront-auth.sh
 | Lambda (19개) | ap-northeast-2 | MCP 도구: Network, DynamoDB, RDS, ElastiCache, MSK, IAM, CloudWatch, CloudTrail, Cost, CDK, CFn, Terraform, Steampipe, Istio, EKS | Step 6c |
 | AgentCore Code Interpreter | ap-northeast-2 | Python 코드 실행 샌드박스 | Step 6d |
 | ECR | ap-northeast-2 | Agent Docker 이미지 (arm64) | Step 6a |
-| Bedrock (Sonnet/Opus 4.6) | us-east-1 | AI 모델 (cross-region) | Step 6a |
+| Bedrock (Sonnet 4.6 / Opus 4.8) | us-east-1 | AI 모델 (cross-region) | Step 6a |
 | SSM + VPC Endpoints | ap-northeast-2 | EC2 프라이빗 접근 | Step 0 (CDK) |
 | IAM | Global | 권한 관리 (3 roles) | Step 0, 5, 6a, 6c |
 

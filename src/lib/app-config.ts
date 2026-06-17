@@ -103,6 +103,12 @@ export interface SlackConfig {
   threadUpdates?: boolean;               // default true
 }
 
+export interface AiCostConfig {
+  promptCache?: boolean;
+  answerCache?: boolean;
+  budget?: { dailyTokens: number; warnPct?: number; overrideEmails?: string[] };
+}
+
 export interface AppConfig {
   costEnabled: boolean;
   agentRuntimeArn?: string;
@@ -126,6 +132,7 @@ export interface AppConfig {
   departments?: DepartmentConfig[];   // Department-based account filtering / 부서별 계정 필터링
   alertDiagnosis?: AlertDiagnosisConfig;  // Alert-triggered AI diagnosis / 알림 트리거 AI 진단
   slack?: SlackConfig;                    // Slack integration / Slack 연동
+  aiCost?: AiCostConfig;                  // AI cost controls (ADR-033 Phase 1) / AI 비용 제어 — flags default off
 }
 
 // Department → Account mapping / 부서 → 계정 매핑

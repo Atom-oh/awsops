@@ -4,12 +4,22 @@
 import json
 import logging
 import os
+import functools
+import socket
+import ipaddress
+import urllib.parse
+from contextlib import ExitStack
 from strands import Agent
-from strands.models import BedrockModel
+try:
+    from strands.models import BedrockModel, CacheConfig
+except ImportError:  # pre-CacheConfig strands
+    from strands.models import BedrockModel
+    CacheConfig = None
 from strands.tools.mcp.mcp_client import MCPClient
 from botocore.credentials import Credentials
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
-from streamable_http_sigv4 import streamablehttp_client_with_sigv4
+from streamable_http_sigv4 import streamablehttp_client_with_sigv4, streamablehttp_client_with_headers
+from account_utils import effective_account_id
 import boto3
 
 # Configure logging / 로깅 설정
@@ -64,10 +74,28 @@ def _discover_gateways():
 GATEWAYS = _discover_gateways()
 
 # Bedrock Model / Bedrock 모델
-model = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-6",
-    region_name="us-east-1",
-)
+# ADR-038: deterministic tool selection + prompt caching (verified against strands-agents 1.41.0:
+# BedrockConfig exposes temperature / cache_config / cache_tools; cache_prompt is deprecated).
+# Cache params are guarded — an unsupported version degrades to temperature-only (spec §6 no-op rule).
+try:
+    if CacheConfig is None:
+        raise TypeError("CacheConfig unavailable")
+    model = BedrockModel(
+        model_id="global.anthropic.claude-sonnet-4-6",
+        region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
+        temperature=0.0,
+        cache_config=CacheConfig(strategy="auto"),  # auto cachePoint injection (system+messages)
+        cache_tools="default",                      # toolConfig cachePoint, 5m TTL
+    )
+except (TypeError, ValueError) as e:  # older strands: unknown kwarg / CacheConfig missing; or CacheConfig(strategy="auto") rejected (ValueError/pydantic ValidationError)
+    # NOTE: this fires once per cold start only. The production cache-degradation detector is
+    # the cacheReadInputTokens usage check (ADR-038 Task 8) — do not rely on this line alone.
+    print(f"[Agent] prompt caching unavailable ({e}); falling back to temperature-only")
+    model = BedrockModel(
+        model_id="global.anthropic.claude-sonnet-4-6",
+        region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
+        temperature=0.0,
+    )
 
 # ============================================================================
 # Skill Base: Static decision patterns + workflows (rarely changes)
@@ -214,7 +242,22 @@ SKILL_BASE = {
 | API 호출 패턴 분석 | lake_query |
 
 ## Correlation Pattern: metrics (what) + logs (why) + CloudTrail (who)
-- Incident: get_active_alarms → get_metric_data → execute_log_insights_query → lookup_events""",
+- Incident: get_active_alarms → get_metric_data → execute_log_insights_query → lookup_events
+
+## External Datasources (when connected — tools appear in the list above; each uses its own query language):
+| Source | Tools | Query language |
+|---|---|---|
+| Prometheus / Mimir | prometheus_query[_range] / mimir_query[_range], *_labels, *_series | PromQL (e.g. rate(http_requests_total{code=~"5.."}[5m])) |
+| Loki | loki_query_range / loki_query, loki_labels | LogQL (e.g. {app="x"} |= "error") |
+| Tempo | tempo_search, tempo_get_trace | TraceQL (e.g. { status=error && duration>1s }) |
+| ClickHouse | clickhouse_query (read-only SELECT/SHOW/DESCRIBE) | SQL |
+| OpenSearch | search_opensearch_logs | query_string |
+- GENERATE the query in the correct language yourself from the user's natural-language ask.
+- If a "## Datasource schemas (cached)" block is provided below, USE it (real metric/label/table/tag
+  names) to write accurate queries — do NOT guess names.
+- Multi-source incident correlation (e.g. "what spiked at 3:30?"): metrics (Prometheus/Mimir/CloudWatch
+  → WHAT) → logs (Loki/OpenSearch/CloudWatch Logs → WHY) → traces (Tempo → WHERE) → CloudTrail (WHO).
+  Query only the sources that are connected; synthesize across them.""",
 
 
     "cost": """You are AWSops FinOps Specialist. Analyze costs and recommend optimizations.
@@ -314,6 +357,243 @@ def build_skill_prompt(gateway_role, tools):
     return base + tool_section + COMMON_FOOTER
 
 
+def _filter_tools(tools, allowlist):
+    """ADR-031/ADR-039: enforce the resolver-computed tool allowlist OUTSIDE the model.
+
+    Keeps only tools whose ``.tool_name`` is in ``allowlist``, preserving the original
+    tool order. ``None`` or ``[]`` ⇒ no restriction (the resolver omits the key when
+    empty; ``[]`` is NOT deny-all). Unknown names in the allowlist are ignored. A
+    non-empty allowlist that matches nothing yields an empty tool set (the agent then
+    runs tool-less — safe). This is the single point where the per-account / per-skill
+    cap actually takes effect at the runtime (the cap was previously dropped here)."""
+    if not allowlist:
+        return tools
+    allow = set(allowlist)
+    return [t for t in tools if getattr(t, "tool_name", None) in allow]
+
+
+class SsrfBlocked(Exception):
+    """Raised when an integration endpoint is blocked by SSRF guard."""
+    pass
+
+
+# Cloud instance-metadata endpoints that MUST be blocked even under the allowPrivate opt-in.
+# IPv4 169.254.169.254 is already link-local; the IPv6 IMDS fd00:ec2::254 lives in fc00::/7 (ULA) so it
+# would otherwise be treated as an opt-in-able private address (P4 gate finding) — block it explicitly.
+_METADATA_IPS = frozenset({
+    ipaddress.ip_address('169.254.169.254'),
+    ipaddress.ip_address('fd00:ec2::254'),
+})
+
+
+def _ip_always_blocked(ip_str):
+    """Returns True if the IP is metadata, loopback, link-local, multicast, reserved, or unspecified —
+    i.e. blocked REGARDLESS of the per-account allowPrivate opt-in."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        if ip in _METADATA_IPS:
+            return True
+        return (ip.is_loopback or ip.is_link_local or ip.is_multicast or
+                ip.is_reserved or ip.is_unspecified)
+    except ValueError:
+        return True  # Invalid IP is blocked
+
+
+def _ip_is_private(ip_str):
+    """Returns True if the IP is in a private range (RFC1918/ULA) AND not always blocked."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        # ipaddress.is_private includes link-local/loopback in some versions; we only want
+        # the "opt-in" ranges (RFC1918 + RFC4193 ULA).
+        return ip.is_private and not _ip_always_blocked(ip_str)
+    except ValueError:
+        return False
+
+
+def _assert_host_allowed(url, allow_private, resolver=socket.getaddrinfo):
+    """Assert the URL host is connectable: require https, resolve the host, and block any resolved IP
+    that is always-blocked (metadata/loopback/link-local/...) or private-without-the-opt-in.
+
+    KNOWN LIMITATION (P4 gate, accepted — matches ADR-011 / web/lib/ssrf-guard.ts, both resolve-based):
+    this is resolve-and-recheck; the transport re-resolves at connect time, so a DNS-rebinding host
+    could return a safe IP here and a blocked IP at connect. The layered mitigations are redirect:'manual'
+    (set on both integration transports) + the registration-time literal-host guard (ssrf-guard.ts). True
+    IP-pinning (connect to the validated IP with SNI/Host preserved) is deferred to P3 hardening."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != 'https':
+        raise SsrfBlocked(f"SSRF block: HTTPS required for integration endpoints, got {parsed.scheme}")
+
+    host = parsed.hostname
+    if not host:
+        raise SsrfBlocked(f"SSRF block: invalid or missing host in URL {url}")
+
+    try:
+        # Resolve all IPs for the host (could be dual-stack or have multiple A records)
+        addr_info = resolver(host, 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise SsrfBlocked(f"SSRF block: could not resolve host {host}: {e}")
+
+    if not addr_info:
+        raise SsrfBlocked(f"SSRF block: could not resolve host {host} (no addresses returned)")
+
+    for family, type, proto, canonname, sockaddr in addr_info:
+        ip_str = sockaddr[0]
+        if _ip_always_blocked(ip_str):
+            raise SsrfBlocked(f"SSRF block: host {host} resolved to always-blocked IP {ip_str}")
+        if _ip_is_private(ip_str) and not allow_private:
+            raise SsrfBlocked(f"SSRF block: host {host} resolved to private IP {ip_str} and private access disabled")
+
+
+def parse_secret(val):
+    """Parse a secret string (JSON or raw) into a dict. / 비밀번호 문자열(JSON 또는 raw)을 dict로 파싱."""
+    if not val:
+        return {}
+    try:
+        parsed = json.loads(val)
+        if isinstance(parsed, dict):
+            return parsed
+        return {"_raw": str(val)}
+    except (ValueError, TypeError):
+        return {"_raw": str(val)}
+
+
+def auth_headers(transport, secret):
+    """Generate auth headers for non-sigv4 transports. / 비-sigv4 전송용 인증 헤더 생성."""
+    if transport == 'api_key':
+        # {"header": "X-API-KEY", "value": "..."} or {"api_key": "..."} -> Authorization: ...
+        header = secret.get("header", "Authorization")
+        val = secret.get("value", secret.get("api_key", secret.get("_raw")))
+        if not val:
+            raise ValueError(f"Integration [api_key] missing value in secret")
+        return {header: val}
+    if transport == 'oauth_client_credentials':
+        # Bearer-style for this increment: {"token": "..."} or raw
+        val = secret.get("token", secret.get("_raw"))
+        if not val:
+            raise ValueError(f"Integration [oauth_client_credentials] missing token in secret")
+        return {"Authorization": f"Bearer {val}"}
+    if transport == 'sigv4':
+        return {}
+    raise ValueError(f"Unknown integration transport: {transport}")
+
+
+def sigv4_params(endpoint, service=None, region=None):
+    """Derive SigV4 service and region from endpoint or explicit params. / 엔드포인트 또는 명시적 파라미터에서 SigV4 서비스 및 리전 도출."""
+    if not service:
+        # We NO LONGER guess the service (e.g. 'execute-api'). It MUST be explicit for integrations
+        # to prevent unsafe reuse of the gateway signer.
+        raise ValueError("Integration [sigv4] transport requires an explicit 'sigv4Service'")
+
+    if not region:
+        # Try to derive from host: <id>.execute-api.<region>.amazonaws.com
+        parsed = urllib.parse.urlparse(endpoint)
+        host = parsed.hostname or ""
+        parts = host.split('.')
+        # execute-api pattern: hostname.execute-api.region.amazonaws.com
+        if 'execute-api' in parts and len(parts) >= 4:
+            region = parts[parts.index('execute-api') + 1]
+        # lambda pattern: id.lambda-url.region.on.aws
+        elif 'lambda-url' in parts and len(parts) >= 3:
+            region = parts[parts.index('lambda-url') + 1]
+        
+        if not region:
+            region = GATEWAY_REGION
+            logging.info(f"SigV4: could not derive region from {host}, falling back to {region}")
+    
+    return service, region
+
+
+# Short per-integration connect/read timeout — chat maxDuration is 120s; a slow or hung external
+# MCP must not dominate the budget (the default 30s transport timeout is too long for N integrations).
+INTEGRATION_CONNECT_TIMEOUT = 8
+
+_secrets_client = None
+
+
+def _get_secret(ref):
+    """Fetch a SecretString from Secrets Manager (lazy, reused client — boto3 auto-refreshes the
+    runtime role creds across warm starts). / Secrets Manager에서 SecretString 조회(지연 생성·재사용)."""
+    global _secrets_client
+    if _secrets_client is None:
+        _secrets_client = boto3.client('secretsmanager', region_name=GATEWAY_REGION)
+    return _secrets_client.get_secret_value(SecretId=ref).get('SecretString', '')
+
+
+def select_integration_tools(live_tools, exposed_tools):
+    """ADR-039: an egress-READ integration's live tools ∩ its admin ``exposed_tools`` (the ceiling).
+    Empty ``exposed_tools`` ⇒ ``[]`` — a READ integration that exposes nothing contributes nothing
+    (NOT 'all tools'). Output order follows ``live_tools``. The resolver's per-account toolAllowlist
+    is then applied on top in the handler (defense-in-depth)."""
+    allow = set(exposed_tools or [])
+    if not allow:
+        return []
+    return [t for t in live_tools if getattr(t, "tool_name", None) in allow]
+
+
+def _dedup_by_tool_name(tools):
+    """Drop duplicate tool_names, keeping the FIRST occurrence (gateway tools precede integration tools
+    in the union, so the gateway wins a collision). Prevents handing Agent(tools=) two same-named tools
+    (P4 gate finding — external integrations could collide with a gateway tool name)."""
+    seen = set()
+    out = []
+    for t in tools:
+        n = getattr(t, "tool_name", None)
+        if n in seen:
+            continue
+        seen.add(n)
+        out.append(t)
+    return out
+
+
+def gather_integration_tools(specs, connect):
+    """ADR-039 per-integration failure ISOLATION: connect+collect each integration's tools via the
+    injected ``connect(spec)``; a failure (SsrfBlocked / unknown-transport ValueError / connect or
+    list error) drops ONLY that integration — the gateway tools and the other integrations are
+    unaffected — and is logged with the integration name + endpoint. This function NEVER raises, so
+    an integration problem can never trigger the coarse outer Bedrock-direct fallback."""
+    out = []
+    for spec in (specs or []):
+        name = spec.get("name") if isinstance(spec, dict) else None
+        endpoint = spec.get("endpoint") if isinstance(spec, dict) else None
+        try:
+            out.extend(connect(spec))
+        except Exception as e:
+            logging.warning(f"[Agent] integration '{name}' ({endpoint}) dropped: {type(e).__name__}: {e}")
+    return out
+
+
+def _connect_integration(spec, stack):
+    """Open ONE egress-READ integration MCP session (kept live via ``stack`` for the agent run) and
+    return its exposed tools. Raises on SSRF/unknown-transport/connect/list error → the caller
+    (gather_integration_tools) isolates it. Credentials are fetched at runtime from Secrets Manager
+    by reference (the payload carries only the ARN, never plaintext — ADR-039 Q3=B)."""
+    endpoint = spec.get("endpoint")
+    transport = spec.get("transport")
+    allow_private = bool(spec.get("allowPrivate"))
+    exposed = spec.get("exposedTools") or []
+    # Connection-time SSRF (https + DNS resolve-and-recheck + private opt-in) BEFORE any network call.
+    _assert_host_allowed(endpoint, allow_private)
+    if transport == 'sigv4':
+        # service is REQUIRED (sigv4_params raises if absent) — never silently reuse the gateway signer.
+        service, region = sigv4_params(endpoint, spec.get("sigv4Service"), spec.get("sigv4Region"))
+        ak, sk, tok = get_aws_credentials()
+        creds = Credentials(access_key=ak, secret_key=sk, token=tok)
+        client = MCPClient(lambda: streamablehttp_client_with_sigv4(
+            url=endpoint, credentials=creds, service=service, region=region,
+            timeout=INTEGRATION_CONNECT_TIMEOUT))
+    else:
+        secret = parse_secret(_get_secret(spec["credentialsRef"])) if spec.get("credentialsRef") else {}
+        headers = auth_headers(transport, secret)  # ValueError on unknown transport
+        client = MCPClient(lambda: streamablehttp_client_with_headers(
+            url=endpoint, headers=headers, timeout=INTEGRATION_CONNECT_TIMEOUT))
+    stack.enter_context(client)
+    live = get_all_tools(client)
+    selected = select_integration_tools(live, exposed)
+    logging.info(f"[Agent] integration '{spec.get('name')}' [{transport}] tools "
+                 f"({len(selected)}/{len(live)}): {[t.tool_name for t in selected]}")
+    return selected
+
+
 def get_aws_credentials():
     """Get current AWS credentials for SigV4 signing. / 현재 AWS 자격 증명을 가져와 SigV4 서명에 사용."""
     session = boto3.Session()
@@ -374,6 +654,8 @@ def build_conversation(payload):
     return user_input, []
 
 
+# Host-account resolution (_host_account_id / effective_account_id) lives in
+# account_utils.py so it is importable by tests without agent.py's runtime deps.
 def build_account_directive(account_id, account_alias):
     """Build cross-account directive for system prompt. / 시스템 프롬프트용 크로스 어카운트 지시문 생성."""
     if not account_id or account_id == '__all__':
@@ -395,30 +677,63 @@ def handler(payload):
 
     gateway_role = payload.get("gateway", DEFAULT_GATEWAY)
     skill_role = payload.get("skill", gateway_role)  # skill override for SKILL_BASE / SKILL_BASE용 스킬 오버라이드
+    system_prompt_override = payload.get("systemPromptOverride")  # ADR-031: resolver-supplied custom prompt
+    extra_context = payload.get("extraContext")  # bounded BFF-supplied context (e.g. cached datasource schemas)
+    tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
     gateway_url = GATEWAYS.get(gateway_role, GATEWAYS[DEFAULT_GATEWAY])
 
     # Extract cross-account info / 크로스 어카운트 정보 추출
-    account_id = payload.get('accountId', '')
+    # effective_account_id() blanks the host account → same-account access uses the
+    # agent's own role (no target_account_id directive, no self-assume).
+    account_id = effective_account_id(payload.get('accountId', ''))
     account_alias = payload.get('accountAlias', '')
     account_directive = build_account_directive(account_id, account_alias)
 
     # Prefix user input with account context / 사용자 입력에 어카운트 컨텍스트 접두사 추가
+    # (account_id was already blanked for the host account / __all__ by
+    #  effective_account_id, so same-account access intentionally gets no prefix —
+    #  there is no other account to disambiguate against.)
     if account_id and account_id != '__all__':
         user_input = f"[Target Account: {account_alias or account_id} ({account_id})] {user_input}"
 
-    logging.info(f"Gateway: {gateway_role} -> {gateway_url} (history: {len(history)} messages, account: {account_id or 'default'})")
+    # ADR-039 P2-infra inc2: enabled egress-READ integrations the resolver surfaced (live MCP connect).
+    integrations = payload.get("integrations") or []
+
+    logging.info(f"Gateway: {gateway_role} -> {gateway_url} (history: {len(history)} messages, account: {account_id or 'default'}, integrations: {len(integrations)})")
 
     try:
         mcp_client = MCPClient(lambda: create_gateway_transport(gateway_url))
 
-        with mcp_client:
-            tools = get_all_tools(mcp_client)
+        # ExitStack keeps the gateway AND every integration MCP session live during agent(user_input).
+        with ExitStack() as stack:
+            stack.enter_context(mcp_client)
+            gateway_tools = get_all_tools(mcp_client)
+            # ADR-039: live-connect each enabled egress-READ integration. Per-integration failures are
+            # ISOLATED here (gateway tools always survive) — NOT escalated to the Bedrock-direct fallback.
+            integration_tools = gather_integration_tools(
+                integrations, lambda spec: _connect_integration(spec, stack))
+            # ADR-031/039: enforce the resolver-computed allowlist OUTSIDE the model over BOTH gateway +
+            # integration tools BEFORE the prompt tool-list and Agent(tools=) are built (cap is the ceiling).
+            # Dedup first (gateway precedence) so a name collision never hands Agent two same-named tools.
+            tools = _filter_tools(_dedup_by_tool_name(gateway_tools + integration_tools), tool_allowlist)
             tool_names = [t.tool_name for t in tools]
-            logging.info(f"Gateway [{gateway_role}] MCP tools ({len(tools)}): {tool_names}")
+            logging.info(f"Gateway [{gateway_role}] tools ({len(tools)} = {len(gateway_tools)} gw + {len(integration_tools)} integ, allowlist={'on' if tool_allowlist else 'off'}): {tool_names}")
 
-            # Build skill prompt: static patterns + dynamic tool list + account directive
-            # 스킬 프롬프트 구성: 정적 패턴 + 동적 도구 목록 + 어카운트 지시문
-            system_prompt = build_skill_prompt(skill_role, tools) + account_directive
+            # ADR-031: resolver override (custom agent) OR built-in SKILL_BASE; + dynamic tools + account directive
+            if system_prompt_override:
+                tool_lines = []
+                for t in tools:
+                    desc = getattr(t, 'description', '') or ''
+                    short = desc.split('.')[0].strip() if desc else t.tool_name
+                    tool_lines.append(f"- **{t.tool_name}**: {short}")
+                tool_section = f"\n\n## Available Tools ({len(tools)}):\n" + "\n".join(tool_lines)
+                system_prompt = system_prompt_override + tool_section + COMMON_FOOTER + account_directive
+            else:
+                system_prompt = build_skill_prompt(skill_role, tools) + account_directive
+
+            # Cached datasource schemas (and any other BFF-supplied context) reach BOTH branches here.
+            if extra_context:
+                system_prompt = system_prompt + "\n\n" + str(extra_context)[:8000]
 
             agent = Agent(
                 model=model,
@@ -433,7 +748,9 @@ def handler(payload):
     except Exception as e:
         logging.error(f"Gateway MCP error [{gateway_role}]: {e}")
         # Fallback: Bedrock direct with base prompt only / 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출
-        base_prompt = SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY]) + COMMON_FOOTER + account_directive
+        base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
+        if extra_context:
+            base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
         agent = Agent(
             model=model,
             system_prompt=base_prompt,

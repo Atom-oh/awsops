@@ -5,7 +5,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev gcc && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
-    strands-agents \
+    "strands-agents==1.41.0" \
     strands-agents-tools \
     boto3 \
     psycopg2-binary \
@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir \
     aws-requests-auth
 
 COPY streamable_http_sigv4.py .
+COPY account_utils.py .
 COPY agent.py .
 
 EXPOSE 8080

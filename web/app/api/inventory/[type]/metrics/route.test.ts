@@ -1,0 +1,85 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const verifyUser = vi.fn();
+const query = vi.fn();
+const ec2AvgCpu = vi.fn();
+const ec2HourlyCost = vi.fn();
+vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
+vi.mock('@/lib/metrics', () => ({
+  ec2AvgCpu: (...a: unknown[]) => ec2AvgCpu(...a),
+  ec2HourlyCost: (...a: unknown[]) => ec2HourlyCost(...a),
+}));
+
+const req = (cookie = 'awsops_token=t') =>
+  new Request('http://x/api/inventory/ec2/metrics', { headers: { cookie } });
+const ctx = (type = 'ec2') => ({ params: { type } });
+
+beforeEach(() => {
+  verifyUser.mockReset();
+  query.mockReset();
+  ec2AvgCpu.mockReset();
+  ec2HourlyCost.mockReset();
+});
+
+describe('GET /api/inventory/[type]/metrics', () => {
+  it('401 unauth', async () => {
+    verifyUser.mockResolvedValue(null);
+    const { GET } = await import('./route');
+    expect((await GET(req(), ctx())).status).toBe(401);
+  });
+
+  it('ec2 → 2 cards (CPU + cost)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({
+      rows: [
+        { id: 'i-1', state: 'running', type: 't3.micro' },
+        { id: 'i-2', state: 'stopped', type: 't3.micro' },
+        { id: 'i-3', state: 'running', type: 't4g.nano' },
+      ],
+    });
+    ec2AvgCpu.mockResolvedValue(15.4);
+    ec2HourlyCost.mockResolvedValue(0.03);
+    const { GET } = await import('./route');
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(200);
+    const cards = (await res.json()).cards;
+    expect(cards).toHaveLength(2);
+    expect(cards[0].value).toBe('15.4%');
+    expect(cards[1].value).toBe('$0.03');
+    // running ids only
+    expect(ec2AvgCpu).toHaveBeenCalledWith(['i-1', 'i-3']);
+    // counts across all rows
+    expect(ec2HourlyCost).toHaveBeenCalledWith({ 't3.micro': 2, 't4g.nano': 1 });
+  });
+
+  it('ec2 → em-dash cards when metrics null (degrade)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [] });
+    ec2AvgCpu.mockResolvedValue(null);
+    ec2HourlyCost.mockResolvedValue(null);
+    const { GET } = await import('./route');
+    const cards = (await (await GET(req(), ctx())).json()).cards;
+    expect(cards).toHaveLength(2);
+    expect(cards[0].value).toBe('—');
+    expect(cards[1].value).toBe('—');
+  });
+
+  it('non-ec2 (s3) → {cards:[]}', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    const { GET } = await import('./route');
+    const res = await GET(req(), ctx('s3'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).cards).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('degrades to {cards:[]} on error (never blanks page)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockRejectedValue(new Error('aurora down'));
+    const { GET } = await import('./route');
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(200);
+    expect((await res.json()).cards).toEqual([]);
+  });
+});

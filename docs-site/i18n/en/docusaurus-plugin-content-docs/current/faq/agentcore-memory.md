@@ -1,15 +1,39 @@
 ---
 sidebar_position: 5
-title: AgentCore & Memory
-description: Technical FAQ about AgentCore Runtime, Gateway, and Memory Store
+title: AgentCore & Memory FAQ
+description: Technical FAQ about AgentCore Runtime, Gateway, Memory Store, and the live AWS query path
 ---
 
 # AgentCore & Memory Technical FAQ
 
-In-depth questions and answers about the AI engine internals: AgentCore Runtime, Gateway, Memory Store, and stats tracking.
+In-depth questions and answers about the AI engine internals: AgentCore Runtime, Gateway, the live AWS query path, and Memory Store.
 
-<details>
-<summary>What is AgentCore Runtime? How does it relate to Strands Agent?</summary>
+## Why is AgentCore the primary path for live AWS queries?
+
+In AWSops, **live AWS data is queried through AgentCore MCP Lambda tools**. This replaces the legacy app's approach of querying directly via embedded Steampipe.
+
+```mermaid
+flowchart LR
+  USER["User / Chat"] --> AGENT["Strands Agent<br/>(agent.py)"]
+  AGENT -->|"MCP + SigV4"| GW["Section Gateway"]
+  GW -->|"mcp.lambda"| L["Read-only tool Lambda<br/>(boto3 → AWS API)"]
+  L -->|"Live result"| AGENT
+```
+
+### Key points
+
+| Item | Detail |
+|------|--------|
+| **Live queries** | AgentCore MCP Lambda tools (~120, read-only) call AWS APIs directly via boto3 |
+| **Steampipe's role** | **Not** the live query engine. It is only a flag-gated **inventory sync** (`steampipe_enabled`, default OFF) — no local 9193 service, no pg Pool |
+| **Gating** | All of AgentCore is gated by the `agentcore_enabled` Terraform flag (default OFF → `plan` = No changes, $0) |
+| **Read-only** | All tools are read-only (ADR-041 / 2026-06-11 reversal: AWS-resource mutation + autonomy are permanently frozen) |
+
+:::info Steampipe is no longer the live engine
+Live AWS state is always answered by AgentCore tools. When enabled, Steampipe merely warms up on Fargate to sync inventory into Aurora — an auxiliary path, OFF by default.
+:::
+
+## What is AgentCore Runtime? How does it relate to Strands Agent?
 
 AgentCore Runtime and Strands Agent operate at different layers.
 
@@ -20,15 +44,15 @@ flowchart TD
     RT -->|"Runs Docker container"| AGENT["agent.py<br/>(Strands Agent)"]
   end
 
-  subgraph BUILD["Build Process (EC2)"]
-    SRC["agent.py source"] --> DOCKER["Docker Build<br/>(arm64)"]
+  subgraph BUILD["Build (buildx, no EC2 build host)"]
+    SRC["agent.py source"] --> DOCKER["docker buildx<br/>--platform linux/arm64"]
     DOCKER --> ECR["ECR Push"]
   end
 
   ECR -->|"Image reference"| RT
 
-  AGENT -->|"MCP + SigV4"| GW["8 Gateways<br/>(125 tools)"]
-  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8"]
+  AGENT -->|"MCP + SigV4"| GW["8 section gateways<br/>(~120 read-only tools)"]
+  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5"]
 ```
 
 ### AgentCore Runtime
@@ -36,15 +60,15 @@ flowchart TD
 - AWS-managed **serverless container execution environment**
 - Specify a Docker image (ECR) and it automatically runs/scales containers
 - Handles Cold Start management, network configuration, IAM Roles
-- Invoked via `InvokeAgentRuntimeCommand`
+- Invoked via `InvokeAgentRuntime`
 
 ### Strands Agent Framework
 
-- **Python-based AI agent framework** (agent.py)
+- **Python-based AI agent framework** (`agent/agent.py`)
 - Provides tools to the LLM (Bedrock) and feeds tool results back in a loop
-- Connects to Gateways via MCP protocol to access 125 tools
+- Connects to gateways via MCP protocol to use tools
 
-### Relationship Summary
+### Relationship summary
 
 | Item | AgentCore Runtime | Strands Agent |
 |------|------------------|---------------|
@@ -52,14 +76,11 @@ flowchart TD
 | Level | Infrastructure | Application |
 | Managed by | AWS | Developer |
 | Code location | AWS service | `agent/agent.py` |
-| Configuration | CDK/CLI | Python code |
+| Configuration | Terraform / idempotent provisioner | Python code |
 
-</details>
+## How are Gateway and Lambda related? How many gateways are there?
 
-<details>
-<summary>What is the relationship between Gateway and Lambda?</summary>
-
-Gateway is the **MCP protocol router**, and Lambda is the **backend that executes actual AWS APIs**.
+Gateway is the **MCP protocol router**, and Lambda is the **read-only backend that executes actual AWS APIs**.
 
 ```mermaid
 flowchart LR
@@ -69,19 +90,20 @@ flowchart LR
   GW -->|"mcp.lambda"| L3["Lambda 3<br/>TGW route queries"]
 ```
 
-### Gateways (8)
+### There are 8 section gateways (ADR-004)
 
-- Agent calls `list_tools` to discover available tools
-- When Agent selects a tool, Gateway invokes the corresponding Lambda
-- Uses **MCP (Model Context Protocol)** standard
-- Gateway Targets are created with `mcp.lambda` protocol and `credentialProviderConfigurations`
+`network · container · data · security · cost · monitoring · iac · ops` — **8 total**.
 
-### Lambda Functions (19)
+| Item | Detail |
+|------|--------|
+| **Gateway count** | **Fixed at 8** per ADR-004 |
+| **Tool count** | About **120**, all read-only — evolves as the fleet grows (not a fixed number) |
+| **External observability** | **Not** a 9th gateway — split out as the separate **Integrations axis** (ADR-039) |
+| **Protocol** | MCP (Model Context Protocol) standard |
 
-- Each Lambda contains functions that execute specific AWS APIs
-- Example: Network Lambda calls `describe_vpcs`, `describe_flow_logs`, etc.
-- Source code in `agent/lambda/*.py`
-- `agent/lambda/create_targets.py` for batch Gateway Target creation
+- The Agent calls `list_tools` to discover available tools
+- When the Agent selects a tool, the Gateway invokes the corresponding Lambda
+- Gateway Targets are created with the `mcp.lambda` protocol and `credentialProviderConfigurations`
 
 ### Why Lambda?
 
@@ -92,400 +114,107 @@ flowchart LR
 | **Scaling** | Auto-scales on concurrent invocations |
 | **Cost** | Pay only on invocation, no idle cost |
 
-:::caution Gateway Target Creation
-The CLI `--inline-payload` option has JSON parsing issues. Use **Python/boto3** instead.
+:::caution Gateway Target creation
+The CLI `--inline-payload` option has JSON parsing issues — use **Python/boto3** instead. Also, if a just-created gateway is not yet `READY`, the first Target creation may throw `ValidationException`; since the provisioner is idempotent, re-running resolves it.
 :::
 
-</details>
+## Why do I get a "cross-account blocked" error in a single-account setup?
 
-<details>
-<summary>Why is Docker arm64 build required?</summary>
+The AWSops live environment is **single-account** (`180294183052`). Yet selecting the **host account itself** as the target in chat used to make a tool try to self-assume a cross-account role that doesn't exist on the host, causing `AccessDenied` — which the agent then **mis-reported** as "cross-account blocked."
+
+### What went wrong
+
+- `agent.py` forced `target_account_id = <host account>`
+- The tool tried to self-assume `arn:...:role/AWSopsReadOnlyRole`
+- That role exists **only in onboarded *target* accounts**, never on the host → `AccessDenied`
+- The agent misread the cause → "cross-account blocked" message
+
+### The fix (defense-in-depth)
+
+| Location | Behavior |
+|----------|----------|
+| `cross_account.get_role_arn()` | Returns **`None`** when target == host → use the Lambda execution role directly (no AssumeRole) |
+| `agent.py effective_account_id()` | **Blanks** the host account like `__all__` → no prefix is applied for same-account access |
+| Host resolution | `AWSOPS_HOST_ACCOUNT_ID` env → STS `GetCallerIdentity` fallback (cached for the warm container) |
+
+The legitimate path for assuming a *different* account is unchanged.
+
+:::tip When you pick "my account" in a single-account setup
+Selecting the host account now uses the execution role directly without a self-assume, so it works normally. Only selecting a *different* (onboarded) account takes the STS AssumeRole path.
+:::
+
+## Where is AgentCore configuration stored?
+
+**SSM Parameter Store is the source of truth.** The idempotent provisioner (`scripts/v2/agentcore/provision.py`) writes the resource identifiers it creates into SSM, and the web thin-BFF reads them at runtime.
+
+### SSM paths (`/ops/awsops-v2/agentcore/...`)
+
+| Parameter | Value |
+|-----------|-------|
+| `/ops/awsops-v2/agentcore/runtime_arn` | AgentCore Runtime ARN |
+| `/ops/awsops-v2/agentcore/interpreter_id` | Code Interpreter ID |
+| `/ops/awsops-v2/agentcore/memory_id` | Memory Store ID |
+
+### Why SSM? (avoids the valueFrom race)
+
+- The provisioner creates resources **after apply** → records identifiers in SSM
+- The web BFF reads from SSM at runtime (cached)
+- No ECS task-def `secrets` `valueFrom` → avoids the **race condition** between provision time and task start time
+
+:::info SSM reserved prefix
+SSM paths starting with `aws...` are rejected as reserved, so AWSops uses the `/ops/${project}/...` form.
+:::
+
+## Why is a Docker arm64 build required? (There is no EC2 build host)
 
 AgentCore Runtime runs on **AWS Graviton (ARM64)** processors.
 
 ```bash
-# Correct build command
-docker buildx build --platform linux/arm64 --load -t awsops-agent .
+# Correct build command — cross-build for arm64 with buildx
+docker buildx build --platform linux/arm64 -t awsops-agent .
 
 # ECR push
 docker tag awsops-agent:latest $ECR_URI:latest
 docker push $ECR_URI:latest
 ```
 
-### What happens with x86 (amd64) build?
+### What happens with an x86 (amd64) build?
 
-The container won't start or will fail with `exec format error`. Runtime status transitions to `FAILED`.
+The container won't start or fails with `exec format error`. Runtime status transitions to `FAILED`.
 
-### Developing on Apple Silicon Mac
+### There is no dedicated EC2 build instance
 
-Apple Silicon (M1/M2/M3) is native ARM64, so it builds arm64 without `--platform`. However, **Intel Macs** must specify `--platform linux/arm64`.
+Unlike the legacy app, AWSops has **no separate t4g build host.** The web/agent/worker images are all built with `docker buildx --platform linux/arm64`. Apple Silicon (M1/M2/M3) is native ARM64, but amd64 environments such as Intel Macs produce the same arm64 image simply by specifying `--platform linux/arm64`.
 
-### EC2 Build Environment
+## How do I redeploy after modifying agent.py?
 
-AWSops uses `t4g.2xlarge` (Graviton) instances, so builds on EC2 are natively arm64.
-
-</details>
-
-<details>
-<summary>How do I redeploy after modifying agent.py?</summary>
-
-Deployment after modifying agent.py has 3 steps.
+`make agentcore` builds/pushes the arm64 image and runs the idempotent provisioner.
 
 ```mermaid
 flowchart LR
-  EDIT["Edit agent.py"] --> BUILD["Docker Build<br/>(arm64)"]
+  EDIT["Edit agent.py"] --> BUILD["docker buildx<br/>(arm64)"]
   BUILD --> PUSH["ECR Push"]
-  PUSH --> UPDATE["Runtime Update"]
+  PUSH --> PROV["provision.py<br/>(Runtime update)"]
 ```
 
-### Step 1: Docker build and ECR push
+### Procedure
 
 ```bash
-cd agent
-docker buildx build --platform linux/arm64 --load -t awsops-agent .
-docker tag awsops-agent:latest $ECR_URI:latest
-docker push $ECR_URI:latest
+make agentcore          # build/push arm64 agent image + idempotent provisioner
+make agentcore --smoke  # additionally validate with an invocation
 ```
 
-### Step 2: Runtime update
+The provisioner is idempotent, so it is safe to re-run (e.g., when the first Target creation failed because the gateway was not yet ready).
 
-```bash
-aws bedrock-agentcore update-agent-runtime \
-  --agent-runtime-id $RUNTIME_ID \
-  --role-arn $ROLE_ARN \
-  --network-configuration "$NETWORK_CONFIG"
-```
-
-:::warning Required parameters
-`update-agent-runtime` **must** include both `--role-arn` and `--network-configuration`. Omitting them may reset existing settings.
+:::tip Gateway routing is injected via env
+`agent.py` does not hardcode gateway URLs — they are injected via the `GATEWAYS_JSON` environment variable. So a gateway-routing change does not immediately require a Docker rebuild.
 :::
 
-### Step 3: Verify
-
-```bash
-aws bedrock-agentcore get-agent-runtime \
-  --agent-runtime-id $RUNTIME_ID \
-  --query 'status'
-# "READY" means deployment is complete
-```
-
-### When Gateway URLs change
-
-`agent.py` contains a `GATEWAYS` dictionary with per-account Gateway URLs. When deploying to a new account, update these URLs and rebuild Docker.
-
-</details>
-
-<details>
-<summary>How does the Memory Store work?</summary>
-
-AWSops Memory Store uses an **in-memory cache + debounced disk flush** pattern.
-
-```mermaid
-flowchart TD
-  API["AI API response complete"] -->|"saveConversation()"| MEM["In-memory cache<br/>(conversations[])"]
-  MEM -->|"5s debounce"| DISK["data/memory/<br/>conversations.json"]
-
-  SEARCH["Conversation search"] --> MEM
-  MEM -->|"First access"| LOAD["Load from disk"]
-```
-
-### Storage Structure
-
-```typescript
-// src/lib/agentcore-memory.ts
-interface ConversationRecord {
-  id: string;           // Unique ID
-  userId: string;       // Cognito sub (user identifier)
-  timestamp: string;    // ISO 8601
-  route: string;        // Route (network, cost, etc.)
-  gateway: string;      // Gateway name
-  question: string;     // User question
-  summary: string;      // AI response summary
-  usedTools: string[];  // Tools used
-  responseTimeMs: number; // Response time
-  via: string;          // Processing path
-}
-```
-
-### Behavior
-
-| Item | Description |
-|------|-------------|
-| **Max records** | 100 (oldest removed when exceeded) |
-| **Cache** | In-memory — minimizes disk reads |
-| **Flush** | 5-second debounce — only last write hits disk during rapid saves |
-| **File location** | `data/memory/conversations.json` |
-| **Search** | Keyword search across question, summary, route, tool names |
-
-### Why files instead of a database?
-
-- No additional infrastructure needed (EC2 filesystem)
-- A DB is overkill for ~100 records
-- In-memory cache provides sufficient query performance
-- JSON files are easy to backup/migrate
-
-### Difference from AgentCore Memory Store
-
-`memoryId` in `data/config.json` refers to **AgentCore's managed Memory Store**, used by Strands Agent internally for long-term memory. `agentcore-memory.ts` is a **separate store** for displaying conversation history in the AWSops dashboard UI.
-
-</details>
-
-<details>
-<summary>How is conversation history separated by user?</summary>
-
-User ID is extracted from the Cognito JWT and tagged on each conversation.
-
-```mermaid
-flowchart LR
-  REQ["HTTP Request"] -->|"Cookie: id_token"| AUTH["auth-utils.ts<br/>getUserFromRequest()"]
-  AUTH -->|"JWT payload decode"| SUB["{ email, sub }"]
-  SUB -->|"userId = sub"| SAVE["saveConversation()"]
-  SAVE --> MEM["conversations.json"]
-
-  QUERY["Conversation query"] -->|"userId filter"| FILTER["getConversations(<br/>limit, userId)"]
-  FILTER --> RESULT["Only that user's<br/>conversations returned"]
-```
-
-### Authentication Flow
-
-1. **Lambda@Edge** validates JWT at CloudFront (signature, expiration)
-2. Validated requests reach EC2
-3. `auth-utils.ts` `getUserFromRequest()` **only decodes** JWT payload (no re-verification needed)
-4. `sub` (Cognito User Pool unique ID) is used as user identifier
-
-### On save
-
-```typescript
-// src/app/api/ai/route.ts
-const user = getUserFromRequest(request);
-await saveConversation({
-  id: crypto.randomUUID(),
-  userId: user?.sub || 'anonymous',
-  // ... other fields
-});
-```
-
-### On query
-
-```typescript
-// Per-user filtering
-const conversations = await getConversations(20, user?.sub);
-// → Returns only conversations matching userId
-```
-
-### Without Cognito
-
-When Cognito is not configured, `userId` defaults to `'anonymous'`, and all users' conversations are merged.
-
-</details>
-
-<details>
-<summary>How are AgentCore call statistics tracked?</summary>
-
-`agentcore-stats.ts` aggregates all AI calls in-memory and persists them to disk.
-
-### Tracked Fields
-
-```typescript
-// src/lib/agentcore-stats.ts
-interface AgentCoreCallRecord {
-  timestamp: string;
-  route: string;        // Route (network, cost, etc.)
-  gateway: string;      // Gateway
-  responseTimeMs: number;
-  usedTools: string[];  // Tools used
-  success: boolean;
-  via: string;          // Processing path
-  inputTokens?: number;  // Input tokens
-  outputTokens?: number; // Output tokens
-  model?: string;        // Model used
-}
-```
-
-### Aggregated Statistics
-
-| Statistic | Description |
-|-----------|-------------|
-| `totalCalls` | Total call count |
-| `successCalls` / `failedCalls` | Success/failure counts |
-| `avgResponseTimeMs` | **Running average** response time |
-| `callsByGateway` | Calls per gateway |
-| `callsByRoute` | Calls per route |
-| `uniqueToolsUsed` | Unique tools list (max 200) |
-| `tokensByModel` | Input/output tokens and calls per model |
-| `recentCalls` | Last 50 detailed records |
-
-### Performance Optimization
-
-Same **in-memory cache + 5-second debounced flush** pattern as Memory Store:
-
-```
-recordCall() → in-memory update → 5s wait → disk write
-recordCall() → in-memory update → timer reset → 5s wait → disk write
-```
-
-During rapid calls, only the final write hits disk, minimizing I/O overhead.
-
-### UI Access
-
-View real-time statistics on the AgentCore dashboard page (`/awsops/agentcore`).
-
-</details>
-
-<details>
-<summary>How do I monitor token usage and costs?</summary>
-
-AWSops tracks token usage from **2 sources**.
-
-```mermaid
-flowchart TD
-  subgraph APP["AWSops App Tracking"]
-    AI["AI API response"] -->|"recordCall()"| STATS["agentcore-stats.ts<br/>inputTokens, outputTokens"]
-  end
-
-  subgraph CW["CloudWatch Metrics"]
-    BED["Bedrock Service"] -->|"Auto-published"| METRIC["InputTokenCount<br/>OutputTokenCount"]
-  end
-
-  STATS --> UI["Bedrock Monitoring Page"]
-  METRIC --> UI
-```
-
-### 1. AWSops Internal Tracking
-
-The AI API (`/api/ai`) parses the `usage` field from Bedrock responses and passes it to `recordCall()`:
-
-```typescript
-recordCall({
-  inputTokens: usage.inputTokens,
-  outputTokens: usage.outputTokens,
-  model: 'sonnet-4.6',
-  // ...
-});
-```
-
-Aggregated per-model in `tokensByModel`.
-
-### 2. CloudWatch Metrics
-
-Metrics automatically published by the Bedrock service:
-- `InputTokenCount`, `OutputTokenCount`
-- `InvocationCount`, `InvocationLatency`
-- Filterable by model ID and region
-
-### Bedrock Monitoring Page
-
-The `/awsops/bedrock` page displays both sources side by side:
-
-| Item | Account-wide (CloudWatch) | AWSops App Only (Internal) |
-|------|--------------------------|---------------------------|
-| Source | CloudWatch `AWS/Bedrock` | `agentcore-stats.ts` |
-| Scope | All Bedrock calls in account | AWSops dashboard calls only |
-| Use case | Total cost visibility | Dashboard contribution |
-
-:::tip Cost Estimation
-Bedrock token cost = (input tokens x input price) + (output tokens x output price). For Sonnet 4.6: input $3/MTok, output $15/MTok.
-:::
-
-</details>
-
-<details>
-<summary>Why can't I use hyphens in Code Interpreter or Memory names?</summary>
-
-This is due to **naming constraints** in the AgentCore API.
-
-### Affected Resources
-
-| Resource | Incorrect | Correct |
-|----------|-----------|---------|
-| Code Interpreter | `awsops-code-interpreter` | `awsops_code_interpreter` |
-| Memory Store | `awsops-memory` | `awsops_memory` |
-
-### Symptoms
-
-When creating with hyphenated names:
-- `ValidationException` or creation succeeds but invocation fails
-- Error messages may be unclear
-
-### config.json Settings
-
-```json
-{
-  "codeInterpreterName": "awsops_code_interpreter-XXXXX",
-  "memoryId": "awsops_memory-XXXXX",
-  "memoryName": "awsops_memory"
-}
-```
-
-The `-XXXXX` suffix in `codeInterpreterName` and `memoryId` is an **auto-generated suffix** by AWS. The naming constraint applies only to the user-specified portion (`awsops_code_interpreter`, `awsops_memory`).
-
-### Additional Memory Store Constraints
-
-- `eventExpiryDuration`: Maximum 365 days
-- Expired events are automatically deleted
-
-</details>
-
-<details>
-<summary>Why can I deploy to another account by just changing config.json?</summary>
-
-AWSops **does not hardcode account-dependent values** in code — they are loaded at runtime from `data/config.json`.
-
-### config.json Structure
-
-```json
-{
-  "costEnabled": true,
-  "agentRuntimeArn": "arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:runtime/RT_ID",
-  "codeInterpreterName": "awsops_code_interpreter-XXXXX",
-  "memoryId": "awsops_memory-XXXXX",
-  "memoryName": "awsops_memory"
-}
-```
-
-### Loading Mechanism
-
-```typescript
-// src/lib/app-config.ts
-export function getConfig(): AppConfig {
-  // Reads data/config.json and returns it
-  // Uses defaults if file doesn't exist
-}
-
-// src/app/api/ai/route.ts — usage example
-function getAgentRuntimeArn(): string {
-  const config = getConfig();
-  return config.agentRuntimeArn || '';
-}
-```
-
-### Per-Account Deployment Steps
-
-1. Run deployment scripts (Step 0-7) in the new account
-2. Record generated ARNs and names in `data/config.json`
-3. Use immediately — no code changes needed
-
-### Values That Change Per Account
-
-| Item | Description |
-|------|-------------|
-| `agentRuntimeArn` | AgentCore Runtime ARN (account+region+ID) |
-| `codeInterpreterName` | Code Interpreter name (unique per account) |
-| `memoryId` | Memory Store ID (unique per account) |
-| `costEnabled` | Cost Explorer availability (false for MSP) |
-
-### agent.py Gateway URLs
-
-Gateway URLs inside `agent.py` also differ per account. Since these are included in the Docker image, **Docker rebuild is required** when deploying to a new account.
-
-</details>
-
-<details>
-<summary>What is MCP protocol? How does tool discovery work?</summary>
+## What is MCP protocol? How does tool discovery work?
 
 ### MCP (Model Context Protocol)
 
-MCP is a protocol for AI agents to **invoke external tools in a standardized way**. In AWSops, the Strands Agent accesses 125 tools across Gateways via MCP.
+MCP is a protocol for AI agents to **invoke external tools in a standardized way**. In AWSops, the Strands Agent accesses the read-only gateway tools via MCP.
 
 ```mermaid
 flowchart LR
@@ -497,75 +226,28 @@ flowchart LR
   GW -->|"5. Result forwarded"| AGENT
 ```
 
-### SigV4 Signed Communication
+### SigV4 signed communication
 
-Gateway connections require AWS SigV4 signing:
+Gateway connections require AWS SigV4 signing (`agent/streamable_http_sigv4.py`). It uses an MCP StreamableHTTP transport signed with the agent's credentials.
 
-```python
-# agent/agent.py
-def create_gateway_transport(gateway_url):
-    """Create SigV4-signed HTTP transport"""
-    access_key, secret_key, session_token = get_aws_credentials()
-    credentials = Credentials(access_key, secret_key, session_token)
-    return streamablehttp_client_with_sigv4(
-        url=gateway_url,
-        credentials=credentials,
-        service="bedrock-agentcore",
-        region=GATEWAY_REGION,
-    )
-```
+### Tool discovery
 
-### Tool Discovery
+When the Agent connects to a Gateway, it retrieves the full tool list via **pagination**, then provides it to the LLM. The LLM (Bedrock) examines the user's question and **decides which tools to call on its own**, so developers don't need to write tool-selection logic.
 
-When the Agent connects to a Gateway, it retrieves the full tool list via **pagination**:
+## How do I add a new tool (Lambda) to a Gateway?
 
-```python
-# agent/agent.py
-def get_all_tools(client):
-    """Retrieve all tools from MCP client with pagination"""
-    tools = []
-    more = True
-    token = None
-    while more:
-        batch = client.list_tools_sync(pagination_token=token)
-        tools.extend(batch)
-        if batch.pagination_token is None:
-            more = False
-        else:
-            token = batch.pagination_token
-    return tools
-```
-
-### Tool Execution Flow
-
-```python
-# Gateway connection → tool discovery → Agent execution
-mcp_client = MCPClient(lambda: create_gateway_transport(gateway_url))
-with mcp_client:
-    tools = get_all_tools(mcp_client)           # Discover tools
-    agent = Agent(model=model, tools=tools)      # Provide tools to LLM
-    response = agent(user_input)                 # LLM selects/executes tools
-```
-
-The LLM (Bedrock) examines the user's question and **decides which tools to call on its own**. Developers don't need to write tool selection logic.
-
-</details>
-
-<details>
-<summary>How do I add a new tool (Lambda) to a Gateway?</summary>
-
-### Overall Flow
+### Overall flow
 
 ```mermaid
 flowchart LR
   CODE["Write Lambda Function"] --> DEPLOY["Deploy Lambda"]
   DEPLOY --> TARGET["Create Gateway Target<br/>(create_targets.py)"]
-  TARGET --> REBUILD["Rebuild agent.py Docker"]
+  TARGET --> DISCOVER["Agent auto-discovers via list_tools"]
 ```
 
-### Step 1: Write the Lambda Function
+### Step 1: Write the Lambda function
 
-Create a new Python file in the `agent/lambda/` directory:
+Create a Python file in `agent/lambda/` following the MCP handler pattern:
 
 ```python
 # agent/lambda/my_new_mcp.py
@@ -579,50 +261,23 @@ def lambda_handler(event, context):
 
     if t == "my_new_tool":
         client = boto3.client('ec2')
-        result = client.describe_instances(**args)
+        result = client.describe_instances(**args)  # read-only
         return {"statusCode": 200, "body": json.dumps(result, default=str)}
 
     return {"statusCode": 400, "body": "Unknown tool"}
 ```
 
-### Step 2: Create Gateway Target
+### Step 2: Create the Gateway Target
 
-Add the tool schema in `agent/lambda/create_targets.py`:
-
-```python
-# Tool schema format
-tools = [{
-    "name": "my_new_tool",
-    "description": "New tool description",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "param1": {"type": "string", "description": "Parameter description"},
-        },
-        "required": ["param1"]
-    }
-}]
-
-# Create Gateway Target
-create_target(
-    gw_id=find_gateway('ops'),     # Target Gateway
-    name='my-new-target',
-    fn='awsops-my-new-mcp',        # Lambda function name
-    desc='My new tool description',
-    tools=tools
-)
-```
-
-Key configuration:
+Add the tool schema in `agent/lambda/create_targets.py` and create the Target via boto3:
 
 ```python
-# Inside create_targets.py
 client.create_gateway_target(
     gatewayIdentifier=gw_id,
     targetConfiguration={
         'mcp': {'lambda': {
             'lambdaArn': arn,
-            'toolSchema': {'inlinePayload': tools}  # Tool schema
+            'toolSchema': {'inlinePayload': tools}  # {name, description, inputSchema}
         }}
     },
     credentialProviderConfigurations=[
@@ -631,22 +286,17 @@ client.create_gateway_target(
 )
 ```
 
-### Step 3: Docker Rebuild
+### Step 3: Auto-discovery
 
-Once the new tool is added, the Agent automatically discovers it via `list_tools`. Docker rebuild is only needed if agent.py itself was modified.
+Once the new tool is added, the Agent discovers it automatically via `list_tools`. A Docker rebuild is only needed if `agent.py` itself was modified.
 
-:::tip Cross-Account Support
-`create_targets.py` automatically injects a `target_account_id` parameter to all tools. Use `cross_account.py`'s `get_client()` in Lambda to access resources in other accounts via STS AssumeRole.
+:::tip Cross-account support
+`create_targets.py` injects a `target_account_id` parameter into all tools. Use `cross_account.py`'s `get_client()` in Lambda to access resources in a *different* account via STS AssumeRole (when the target is the host, it uses the execution role directly with no self-assume).
 :::
 
-</details>
+## What is the structure of Lambda tool functions?
 
-<details>
-<summary>What is the structure of Lambda tool functions?</summary>
-
-### Lambda Structure Pattern
-
-All 19 Lambda functions follow the same MCP handler pattern:
+All tool Lambdas follow the same MCP handler pattern:
 
 ```python
 # Common pattern (e.g., agent/lambda/aws_cost_mcp.py)
@@ -656,7 +306,7 @@ def lambda_handler(event, context):
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
 
-    # 2. Cross-account support
+    # 2. Cross-account support (role_arn=None when target==host)
     target_account_id = args.pop('target_account_id', None)
     role_arn = get_role_arn(target_account_id) if target_account_id else None
 
@@ -665,111 +315,88 @@ def lambda_handler(event, context):
         ce = get_client('ce', 'us-east-1', role_arn)
         resp = ce.get_cost_and_usage(...)
         return ok(resp)
-    elif t == "get_cost_forecast":
-        ...
     else:
         return err("Unknown tool")
 ```
 
-### 19 Lambda Functions
+### Shared module: `cross_account.py`
 
-| Lambda File | Gateway | Tools | Description |
-|------------|---------|-------|-------------|
-| `network_mcp.py` | Network | 15 | VPC, TGW, VPN, ENI, Firewall |
-| `reachability.py` | Network | 1 | Reachability Analyzer |
-| `flowmonitor.py` | Network | 1 | VPC Flow Logs |
-| `aws_eks_mcp.py` | Container | 9 | EKS, CloudWatch, IAM |
-| `aws_ecs_mcp.py` | Container | 3 | ECS clusters/services/tasks |
-| `aws_istio_mcp.py` | Container | 12 | Istio CRD (VPC Lambda) |
-| `aws_iac_mcp.py` | IaC | 7 | CloudFormation, CDK |
-| `aws_terraform_mcp.py` | IaC | 5 | Terraform Provider/Module |
-| `aws_dynamodb_mcp.py` | Data | 6 | DynamoDB |
-| `aws_rds_mcp.py` | Data | 6 | RDS/Aurora |
-| `aws_valkey_mcp.py` | Data | 6 | ElastiCache |
-| `aws_msk_mcp.py` | Data | 6 | MSK Kafka |
-| `aws_iam_mcp.py` | Security | 14 | IAM |
-| `aws_cloudwatch_mcp.py` | Monitoring | 11 | CloudWatch |
-| `aws_cloudtrail_mcp.py` | Monitoring | 5 | CloudTrail |
-| `aws_cost_mcp.py` | Cost | 9 | Cost Explorer |
-| `aws_knowledge.py` | Ops | 5 | AWS docs |
-| `aws_core_mcp.py` | Ops | 3 | CLI, prompts |
-| VPC Lambda | Ops | 1 | Steampipe SQL |
-
-### Shared Module: `cross_account.py`
-
-STS AssumeRole helper for cross-account access:
-
-```python
-# Cross-account client creation
-client = get_client('ec2', 'ap-northeast-2', role_arn)
-# → STS AssumeRole → create boto3 client with temporary credentials
-# → Credential caching for 50 minutes to optimize repeated calls
-```
+An STS AssumeRole helper for cross-account access. It **caches credentials for 50 minutes** to optimize repeated calls, and returns `None` when the target equals the host account to prevent a self-assume.
 
 ### Rules
 
-- All Lambdas are **read-only** (except Reachability path creation)
-- VPC Lambda (Istio, Steampipe) uses `pg8000` instead of `psycopg2`
+- All Lambdas are **read-only** (with a few exceptions such as reachability path creation)
+- VPC Lambdas (Istio, Steampipe) use `pg8000` instead of `psycopg2`
 - Tool schema format: `{name, description, inputSchema: {type, properties, required}}`
 
-</details>
+## Why can't I use hyphens in Code Interpreter or Memory names?
 
-<details>
-<summary>How do I monitor AgentCore Runtime status?</summary>
+This is due to **naming constraints** in the AgentCore API — names allow **underscores only**.
 
-### Status Query API
+### Affected resources
 
-The `/api/agentcore` API queries Runtime, Gateway, and Code Interpreter status:
+| Resource | Incorrect | Correct |
+|----------|-----------|---------|
+| Code Interpreter | `awsops-code-interpreter` | `awsops_code_interpreter` |
+| Memory Store | `awsops-memory` | `awsops_memory` |
 
-```typescript
-// src/app/api/agentcore/route.ts
-const [runtimeRaw, gatewaysRaw] = await Promise.all([
-  awsCli(['bedrock-agentcore-control', 'get-agent-runtime',
-          '--agent-runtime-id', getRuntimeId()]),
-  awsCli(['bedrock-agentcore-control', 'list-gateways']),
-]);
+### Symptoms
+
+Creating with hyphenated names raises `ValidationException`, or creation succeeds but invocation fails, possibly with an unclear error message.
+
+### Additional Memory Store constraints
+
+- `eventExpiryDuration`: Maximum **365 days**
+- Expired events are automatically deleted
+
+The `-XXXXX` suffix AWS appends is auto-generated; the naming constraint applies only to the user-specified portion (`awsops_code_interpreter`, `awsops_memory`).
+
+## Where is AI conversation history stored, and how is it separated by user?
+
+Conversation history persists in **Aurora** (PostgreSQL 17), not in legacy local JSON files.
+
+```mermaid
+flowchart LR
+  REQ["HTTP Request"] -->|"Cookie: awsops_token"| AUTH["BFF: identify user"]
+  AUTH -->|"JWT payload"| SUB["{ email, sub }"]
+  SUB -->|"userId = sub"| SAVE["Save conversation"]
+  SAVE --> DB["Aurora<br/>(chat threads)"]
+  QUERY["Query conversations"] -->|"userId filter"| DB
 ```
 
-### Runtime Status
+### Behavior
+
+| Item | Detail |
+|------|--------|
+| **Store** | Aurora Serverless v2 (PG 17), node-pg pool (`web/lib/db.ts`) |
+| **User identity** | Cognito JWT `sub` |
+| **UI** | Claude-app-style sidebar — the `/assistant` full page and a resizable drawer share one history |
+| **Rendering** | Streaming + markdown |
+
+### Authentication flow
+
+1. **Lambda@Edge** validates the JWT at CloudFront with RS256 JWKS signature verification
+2. Validated requests reach the ECS Fargate web app
+3. The BFF uses `sub` from the JWT payload as the user identifier
+4. Unauthenticated requests are rejected by the BFF with 401 (fail-closed) — the identifier is always the verified Cognito `sub`
+
+## How do I monitor AgentCore Runtime status?
+
+The web BFF queries Runtime / Gateway / Code Interpreter status. It reads identifiers from SSM, then fetches status via the AgentCore API.
+
+### Runtime status
 
 | Status | Meaning | Action |
 |--------|---------|--------|
 | **READY** | Running normally | - |
 | **CREATING** | Initial creation in progress | Wait a few minutes |
 | **UPDATING** | Updating (Docker image change, etc.) | Wait a few minutes |
-| **FAILED** | Error — container failed to start | Check Docker image/IAM Role/network |
+| **FAILED** | Error — container failed to start | Check Docker image (arm64) / IAM Role / network |
 
-### Dashboard UI
+### Assistant page
 
-Information available on the AgentCore page (`/awsops/agentcore`):
+The AI assistant is available at `/assistant` (full page) and in a resizable drawer you can open anywhere; both share the same Aurora conversation history.
 
-```mermaid
-flowchart TD
-  subgraph STATUS["Real-time Status"]
-    RT["Runtime Status<br/>READY / FAILED"]
-    GW["8 Gateways<br/>Individual status"]
-    CI["Code Interpreter<br/>Status"]
-  end
-
-  subgraph STATS["Call Statistics"]
-    TOTAL["Total Calls"]
-    AVG["Average Response Time"]
-    ROUTE["Per-Route Distribution"]
-    TOOLS["Tools Used"]
-  end
-
-  subgraph HISTORY["Conversation History"]
-    SEARCH["Keyword Search"]
-    LIST["Recent Conversations"]
-  end
-```
-
-### Status Caching
-
-Status query results are **cached for 5 minutes**. Use the refresh button for immediate updates:
-
-```typescript
-const cache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
-```
-
-</details>
+:::tip Routing is hybrid (ADR-038)
+Questions are routed to the appropriate section agent via a regex fast-path + Haiku 4.5 classifier + prompt caching (LIVE, ~59% cache hit). This is not the legacy fixed multi-route Sonnet registry.
+:::

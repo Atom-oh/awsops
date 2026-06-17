@@ -1,149 +1,79 @@
 ---
 sidebar_position: 2
-title: Navigation Guide
-description: AWSops dashboard layout and navigation methods
+title: Layout & Themes
+description: Sidebar navigation, command palette (Cmd-K), themes, and mobile layout
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
 
-# Navigation Guide
+# Layout & Themes
 
-The AWSops dashboard provides sidebar-based navigation. With 37 pages organized into 6 groups, you can quickly find the information you need.
+A page for getting familiar with the AWSops layout — sidebar navigation, the command palette, themes, and the mobile layout.
 
-<Screenshot src="/screenshots/overview/dashboard.png" alt="AWSops dashboard full screen — sidebar, header, and main content area" />
+<Screenshot src="/screenshots/getting-started/command-palette.png" alt="Command palette (Cmd-K)" />
 
-## Screen Layout
+## Features
 
-The screen is divided into 3 main areas.
+### Left Sidebar
 
-### ① Sidebar (Left)
+A fixed area on the left of the screen — the primary way to reach every page.
 
-A fixed navigation area on the left side of the screen.
+- **Header**: the **AWSops** mark and a **한/EN** language toggle
+- **Pinned top items**: **Overview**, **AI Diagnosis**, **Assistant**, **Jobs**, **Cost**, **Bedrock**, **Topology**, **Custom Agents**, **Datasources**
+- **Resource inventory groups**: below those come the **Compute** (EKS, EC2, Lambda, ECS Clusters, ECS Tasks, ECR), **Storage & DB**, **Network**, **Security**, and **Monitoring** groups
+- **Footer**: your signed-in identity and **Sign out**, the region/connection status, and the theme picker
+- The page you are currently viewing is shown with a highlight
 
-- **Top**: AWSops logo + EN/한 language toggle + Sign Out button
-- **Account Selector**: Select account in multi-account mode
-- **Center**: 6 menu groups (Overview, Compute, Network & CDN, Storage & DB, Monitoring, Security)
-- **Bottom**: Cost ON/OFF toggle + version info
-- The current page is indicated with a **cyan highlight** on the left
+### Command Palette (Cmd-K)
 
-### ② Header (Top)
+A search box for jumping anywhere from the keyboard.
 
-The area displayed at the top of each page.
+- Open it from any page with **Cmd-K** (macOS) or **Ctrl-K** (Windows/Linux)
+- Type a page name, resource type, or part of a path to filter
+- Use the **Up/Down arrows** to move, **Enter** to go, and **Esc** to close
+- Beyond navigation, the **Theme: Cobalt / Teal / Dark** entries switch the theme directly
 
-- **Page Name**: Title of the current page
-- **Refresh Button**: Click to refresh data (bypasses cache)
-- **ONLINE Status**: Server connection status indicator (green dot = normal)
+### Themes
 
-### ③ Main Content (Center)
+Pick the app's color scheme from the 3-way theme picker in the bottom-left (sidebar footer).
 
-The area where data for the selected page is displayed.
+| Theme | Description |
+|-------|-------------|
+| **Cobalt** | Default. A light cobalt palette |
+| **Teal** | A light teal palette |
+| **Dark** | A dark mode |
 
-- **Dashboard**: StatsCards, warning status, charts
-- **Service pages**: Resource tables, detail panels, CloudWatch metrics
+- Your choice is saved in the browser and persists across reloads
+- Charts and the **AWSops** mark adapt their colors to the selected theme
 
-## Menu Groups
+<Screenshot src="/screenshots/getting-started/theme-dark.png" alt="Dark theme" />
 
-### Overview (4 pages)
+### Mobile Layout
 
-| Menu | Description |
-|------|-------------|
-| **Dashboard** | Overall resource summary, 20 StatsCards, warning status |
-| **AI Assistant** | AI-based Q&A, infrastructure analysis (multi-datasource correlation supported) |
-| **AgentCore** | AgentCore Runtime/Gateway status, call statistics |
-| **Accounts** | Multi-account management (add/remove/test, admin only) |
+When the screen is narrow (under 1024px), the layout automatically switches to a mobile layout.
 
-### Compute (8 pages)
+- **Top bar**: a hamburger menu, the page title, and a search (command palette) icon
+- **Bottom tab bar**: five tabs — **Overview · Cost · Inventory · Assistant · More**
+- Tapping the **More** tab or the hamburger opens a **slide-in drawer** with the full menu
 
-| Menu | Description |
-|------|-------------|
-| **EC2** | EC2 instance list and details |
-| **Lambda** | Lambda functions, runtime distribution |
-| **ECS** | ECS clusters, services, tasks |
-| **ECR** | ECR repositories, images |
-| **EKS** | EKS cluster overview, nodes, pods (Access Entry status, click filtering, Service Resources tab) |
-| **EKS Explorer** | K9s-style terminal UI (Steampipe-based, read-only) |
-| **ECS Container Cost** | ECS Fargate workload cost analysis (Container Insights + Fargate pricing) |
-| **EKS Container Cost** | EKS Pod cost analysis (OpenCost or request-based fallback) |
+<Screenshot src="/screenshots/getting-started/mobile.png" alt="Mobile layout" />
 
-:::tip EKS Sub-pages
-Click stats cards (Nodes, Pods, Deployments, Services) on the EKS Overview to navigate to detail pages. Click a cluster card to filter to that cluster.
+## How to Use
+
+1. On desktop, click a menu item in the **left sidebar** to open the page you want.
+2. Press **Cmd-K** (or **Ctrl-K**) to open the command palette, type a page name, and press **Enter** to go.
+3. In the sidebar footer's theme picker, click **Cobalt**, **Teal**, or **Dark**.
+4. On mobile, switch between key pages with the bottom tabs, and open the rest from **More**.
+5. From any page, open the chat with the floating **AI assistant button**.
+
+:::tip Fastest way to jump
+When there are many pages, typing part of a name into **Cmd-K** beats scanning the sidebar. Type `Theme:` in the palette to switch themes instantly too.
 :::
 
-### Network & CDN (4 pages)
-
-| Menu | Description |
-|------|-------------|
-| **VPC / Network** | VPC, Subnet, Security Group, TGW, NAT |
-| **CloudFront** | CloudFront distribution status |
-| **WAF** | WAF Web ACLs, rule groups |
-| **Topology** | Infrastructure topology visualization (React Flow) |
-
-### Storage & DB (7 pages)
-
-| Menu | Description |
-|------|-------------|
-| **EBS** | EBS volumes, snapshots, encryption status |
-| **S3** | S3 buckets, TreeMap visualization |
-| **RDS** | RDS instances, CloudWatch metrics |
-| **DynamoDB** | DynamoDB tables |
-| **ElastiCache** | ElastiCache clusters (Redis/Memcached) |
-| **OpenSearch** | OpenSearch domains |
-| **MSK** | MSK Kafka clusters |
-
-### Monitoring (8 pages)
-
-| Menu | Description |
-|------|-------------|
-| **Monitoring** | Integrated CPU, Memory, Network, Disk I/O |
-| **Bedrock** | Bedrock model usage, cost, and token monitoring |
-| **CloudWatch** | CloudWatch alarm status |
-| **CloudTrail** | CloudTrail trails and events |
-| **Cost** | Cost Explorer, cost analysis |
-| **Resource Inventory** | Resource inventory trends |
-| **Datasources** | External datasource management (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog) |
-| **┗ Explore** | Datasource query execution + AI query generation (PromQL, LogQL, TraceQL, SQL) |
-
-### Security (3 pages)
-
-| Menu | Description |
-|------|-------------|
-| **IAM** | IAM users, roles, trust policies |
-| **Security** | Security issues (Public S3, Open SG, CVE) |
-| **CIS Compliance** | CIS Benchmark (v1.5 - v4.0) |
-
-## Cost Toggle
-
-The **Cost: ON/OFF** button at the bottom of the sidebar enables/disables cost-related features.
-
-- **ON**: Show Cost menu, display cost cards on dashboard
-- **OFF**: Hide Cost menu (for MSP environments without Cost Explorer support)
-
-:::tip Cost Explorer Auto-Detection
-The dashboard automatically checks Cost Explorer API availability on startup. In unsupported environments, it automatically switches to OFF.
+:::info Timestamps
+All timestamps shown in the app are in **KST (Asia/Seoul)**.
 :::
 
-## Page Navigation
+## Related Pages
 
-### Navigate from Sidebar
-Click on the desired menu to navigate to that page. The current page is highlighted with a cyan indicator on the left.
-
-### Navigate from Dashboard Cards
-Click each StatsCard on the dashboard to navigate to the detailed page for that service.
-
-Examples:
-- **Click EC2 card** → Navigate to EC2 page
-- **Click Security Issues card** → Navigate to Security page
-- **Click EKS card** → Navigate to EKS page
-
-## Data Refresh
-
-### Auto Refresh
-Data is automatically fetched when the page loads. Data is cached for 5 minutes.
-
-### Manual Refresh
-Click the refresh button in the header to fetch the latest data, bypassing the cache.
-
-## Next Steps
-
-- [AI Assistant Quick Start](../getting-started/ai-assistant) - Using AI features
-- [Dashboard Details](../overview/dashboard) - Learn more about dashboard features
+- [Dashboard](../overview/dashboard) - The overall resource summary and starting point

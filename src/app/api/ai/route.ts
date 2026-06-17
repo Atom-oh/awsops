@@ -23,6 +23,14 @@ import { queryDatasource } from '@/lib/datasource-client';
 import { detectDatasourceTypes, DATASOURCE_TYPES } from '@/lib/datasource-registry';
 import { buildDatasourcePrompt } from '@/lib/datasource-prompts';
 import { getDatasourceSchema } from '@/lib/datasource-schema';
+import { heuristicClassify } from '@/lib/ai-cost/heuristic-classifier';
+import { pickClassifierModel } from '@/lib/ai-cost/model-tier';
+import { cachedSystem } from '@/lib/ai-cost/prompt-cache';
+import { getAnswer, setAnswer, answerCacheKey, sourceDataFingerprint } from '@/lib/ai-cost/answer-cache';
+import { checkBudget, recordSpend, hydrateBudget } from '@/lib/ai-cost/token-budget';
+import { fireAndForgetSpendToAurora, readBudgetTotalFromAurora } from '@/lib/db/token-budget-writer';
+const STEAMPIPE_SCHEMA_VERSION = 'v1'; // bump on Steampipe plugin/schema change to invalidate all cached answers
+// Note: getConfig is already imported at line 16 — reuse it for aiCost flags (Task 9), defaulting to off.
 
 // Service configuration — config 파일에서 읽거나 자동 감지
 // Service config — read from data/config.json or auto-detect
@@ -43,7 +51,8 @@ function getCodeInterpreterName(): string {
 // Seoul region uses global.* prefix for cross-region inference / 서울 리전은 global.* 접두사 사용
 const MODELS: Record<string, string> = {
   'sonnet-4.6': 'global.anthropic.claude-sonnet-4-6',
-  'opus-4.6': 'global.anthropic.claude-opus-4-6-v1',
+  'opus-4.8': 'global.anthropic.claude-opus-4-8',
+  'haiku-4.5': 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
 };
 
 // AWS SDK clients / AWS SDK 클라이언트
@@ -398,17 +407,30 @@ function getSystemPrompt(lang?: string): string {
 // Intent classification / 의도 분류
 // ============================================================================
 async function classifyIntent(messages: Array<{role: string; content: string}>): Promise<{ routes: RouteType[]; inputTokens: number; outputTokens: number }> {
+  const lastText = messages[messages.length - 1]?.content || '';
+  // ADR-033 Phase 1: deterministic pre-filter — a confident single-domain match
+  // skips the Bedrock classification call entirely (zero tokens).
+  const heuristic = heuristicClassify(lastText);
+  if (heuristic && heuristic.confidence === 'high') {
+    const valid = heuristic.routes.filter(r => VALID_ROUTES.includes(r as RouteType)) as RouteType[];
+    if (valid.length > 0) {
+      console.log(`[Intent] Heuristic (no-LLM): ${valid.join(', ')}`);
+      return { routes: valid, inputTokens: 0, outputTokens: 0 };
+    }
+  }
   try {
+    // ADR-033 Phase 1: cache the invariant classification prompt prefix (flag-gated, default off → cachedSystem is a no-op).
+    const promptCacheOn = getConfig().aiCost?.promptCache === true;
     const recentMessages = messages.slice(-10);
     const body = JSON.stringify({
       anthropic_version: 'bedrock-2023-05-31',
       max_tokens: 100,
-      system: CLASSIFICATION_PROMPT,
+      system: cachedSystem(CLASSIFICATION_PROMPT, promptCacheOn),
       messages: recentMessages.map(m => ({ role: m.role, content: m.content })),
     });
 
     const response = await bedrockClient.send(new InvokeModelCommand({
-      modelId: MODELS['sonnet-4.6'],
+      modelId: MODELS[pickClassifierModel(heuristic)],   // Haiku for low-confidence, Sonnet otherwise
       contentType: 'application/json',
       accept: 'application/json',
       body: new TextEncoder().encode(body),
@@ -930,7 +952,9 @@ async function simulateStreaming(
 // Bedrock 스트리밍 헬퍼: 응답 청크를 SSE 이벤트로 전송
 // ============================================================================
 async function streamBedrockToSSE(
-  params: { modelId: string; system: string; messages: Array<{role: string; content: string}>; maxTokens?: number },
+  // ADR-033 Phase 1: `system` may be a plain string or a Bedrock/Anthropic cache-pointed
+  // block array (from cachedSystem). Either is passed straight into the JSON body.
+  params: { modelId: string; system: string | object[]; messages: Array<{role: string; content: string}>; maxTokens?: number },
   send: (event: string, data: any) => void,
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   const body = JSON.stringify({
@@ -984,6 +1008,17 @@ function recordAndSave(p: {
 }): void {
   const callRecord = { timestamp: new Date().toISOString(), route: p.route, gateway: p.gateway, responseTimeMs: p.responseTimeMs, usedTools: p.usedTools, success: p.success, via: p.via, inputTokens: p.inputTokens, outputTokens: p.outputTokens, model: p.model };
   recordCall(callRecord);
+  // ADR-033 Phase 1: record spend toward the per-user daily budget (no-op when
+  // budget is off). `recordAndSave` doesn't receive accountId, so Phase 1 buckets
+  // by 'all'+user. The entry gate (checkBudget) reads the SAME 'all' bucket so the
+  // cap fires regardless of accountId; per-account buckets are a Phase 2 follow-up.
+  const _budget = getConfig().aiCost?.budget;
+  if (_budget && p.userId) {
+    recordSpend('all', p.userId, (p.inputTokens || 0) + (p.outputTokens || 0));
+    // ADR-033 Phase 2: dual-write the same spend to durable Aurora state
+    // (fire-and-forget; failures land in the drift counter, never block).
+    fireAndForgetSpendToAurora('all', p.userId, new Date().toISOString().slice(0, 10), p.inputTokens || 0, p.outputTokens || 0);
+  }
   // ADR-030 Phase 1 dual-write — fire-and-forget Aurora INSERT for the
   // same record. Failures land in the drift counter (queryable via
   // /api/parity); they never block the request. Dynamic import keeps
@@ -1046,6 +1081,27 @@ export async function POST(request: NextRequest) {
 
   // Cognito 사용자 정보 추출 / Extract Cognito user from JWT
   const currentUser = getUserFromRequest(request);
+
+  // ADR-033 Phase 1: soft-cap gate at request entry. Default-off until Task 9's
+  // typed `aiCost.budget` config lands; read structurally (like the sibling
+  // promptCache/answerCache reads) so this compiles before the typed field exists.
+  // Bucket key MUST match the recorder: recordAndSave/recordSpend writes spend
+  // under the 'all' bucket (it has no accountId), so the gate reads 'all' too.
+  // Keying the gate by accountId here would inspect an always-zero bucket and the
+  // cap would never fire for the standard multi-account path (every page sends
+  // accountId). Per-account budgets are a flagged Phase 2 follow-up.
+  const aiCost = getConfig().aiCost;
+  if (aiCost?.budget) {
+    const limits = { dailyTokens: aiCost.budget.dailyTokens, warnPct: aiCost.budget.warnPct ?? 0.8, overrideEmails: aiCost.budget.overrideEmails ?? [] };
+    // ADR-033 Phase 2: seed the in-process cap from durable Aurora state so a
+    // restart doesn't reset it (best-effort; degrades to in-process on failure).
+    // Hydrate uses the SAME 'all' bucket as the gate/recorder so reads line up.
+    await hydrateBudget('all', currentUser.email, readBudgetTotalFromAurora);
+    const b = checkBudget('all', currentUser.email, currentUser.email, limits);
+    if (!b.allowed) {
+      return NextResponse.json({ error: 'Daily AI token budget exceeded. Contact on-call for an override.', code: 'BUDGET_EXCEEDED' }, { status: 429 });
+    }
+  }
 
   // Non-streaming mode: return JSON (backward compatible for test scripts)
   // 비스트리밍 모드: JSON 반환 (테스트 스크립트 하위 호환)
@@ -1275,6 +1331,20 @@ export async function POST(request: NextRequest) {
 
           if (sql && queryResult && !queryResult.error) {
             send('status', { step: 'analyzing', message: STATUS.analyzing(queryResult.rowCount) });
+            // Answer cache (ADR-033): on a fingerprint hit, skip the expensive Bedrock analysis call.
+            const answerCacheOn = getConfig().aiCost?.answerCache === true;
+            let cacheKey: string | undefined;
+            if (answerCacheOn) {
+              const fp = sourceDataFingerprint(queryResult.data, STEAMPIPE_SCHEMA_VERSION);
+              cacheKey = answerCacheKey({ accountId: accountId || 'all', userSub: currentUser.email, route, question: lastMessage, fingerprint: fp });
+              const hit = getAnswer(cacheKey);
+              if (hit) {
+                await simulateStreaming(hit.content, send);
+                send('done', { content: hit.content, model: modelKey || 'sonnet-4.6', via: `${config.display} (cached)`, queriedResources: ['steampipe'], route, usedTools: hit.usedTools || [], inputTokens: 0, outputTokens: 0 });
+                controller.close();
+                return;
+              }
+            }
             const contextData = `\n\n--- LIVE AWS RESOURCE DATA (${queryResult.rowCount} rows) ---\nSQL: ${sql}\n\`\`\`json\n${queryResult.data}\n\`\`\``;
             const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
             bedrockMessages[bedrockMessages.length - 1].content += contextData;
@@ -1288,6 +1358,7 @@ export async function POST(request: NextRequest) {
             const sqlContent = streamResult.content || 'No response';
             const sqlTools = extractUsedTools(sqlContent);
             if (sql) sqlTools.push(`steampipe: ${sql.match(/FROM\s+(\w+)/i)?.[1] || 'query'}`);
+            if (answerCacheOn && cacheKey) setAnswer(cacheKey, accountId || 'all', { content: sqlContent, via: config.display, usedTools: sqlTools });
             const sqlTimeMs = Date.now() - callStartTime;
             recordAndSave({ route, gateway: 'steampipe', responseTimeMs: sqlTimeMs, usedTools: sqlTools, success: true, via: `${config.display} (${queryResult.rowCount} rows)`, question: lastMessage, summary: sqlContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
             send('done', {
@@ -1462,6 +1533,8 @@ async function handleSingleRoute(
   accountId?: string, accountAlias?: string
 ): Promise<{ content: string; via: string; queriedResources: string[]; usedTools?: string[] } | null> {
   const SYSTEM_PROMPT = getSystemPrompt(lang);
+  // ADR-033 Phase 1: prompt-cache the invariant system prefix on direct-invoke bodies (flag-gated, default off).
+  const promptCacheOn = getConfig().aiCost?.promptCache === true;
   const config = ROUTE_REGISTRY[route];
   const lastMessage = messages[messages.length - 1]?.content || '';
 
@@ -1509,7 +1582,7 @@ async function handleSingleRoute(
       const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
       bedrockMessages[bedrockMessages.length - 1].content += contextData;
       const body = JSON.stringify({
-        anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT, messages: bedrockMessages,
+        anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: cachedSystem(SYSTEM_PROMPT, promptCacheOn), messages: bedrockMessages,
       });
       const response = await bedrockClient.send(new InvokeModelCommand({
         modelId, contentType: 'application/json', accept: 'application/json',
@@ -1562,7 +1635,7 @@ async function handleSingleRoute(
     const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
     bedrockMessages[bedrockMessages.length - 1].content += '\n\n' + contextData;
     const body = JSON.stringify({
-      anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT, messages: bedrockMessages,
+      anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: cachedSystem(SYSTEM_PROMPT, promptCacheOn), messages: bedrockMessages,
     });
     const response = await bedrockClient.send(new InvokeModelCommand({
       modelId: MODELS[modelKey || 'sonnet-4.6'], contentType: 'application/json', accept: 'application/json',
@@ -1587,7 +1660,7 @@ async function handleSingleRoute(
       const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
       bedrockMessages[bedrockMessages.length - 1].content += context;
       const body = JSON.stringify({
-        anthropic_version: 'bedrock-2023-05-31', max_tokens: 8192, system: collector.analysisPrompt, messages: bedrockMessages,
+        anthropic_version: 'bedrock-2023-05-31', max_tokens: 8192, system: cachedSystem(collector.analysisPrompt, promptCacheOn), messages: bedrockMessages,
       });
       const response = await bedrockClient.send(new InvokeModelCommand({
         modelId: MODELS[modelKey || 'sonnet-4.6'], contentType: 'application/json', accept: 'application/json',
@@ -1619,12 +1692,14 @@ async function synthesizeResponses(
   question: string, responses: { route: string; content: string; via: string }[], modelKey?: string, lang?: string
 ): Promise<string> {
   const SYSTEM_PROMPT = getSystemPrompt(lang);
+  // ADR-033 Phase 1: prompt-cache the invariant synthesis system prefix (flag-gated, default off).
+  const promptCacheOn = getConfig().aiCost?.promptCache === true;
   const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
   const parts = responses.map(r => `--- ${r.via} ---\n${r.content}`).join('\n\n');
   const body = JSON.stringify({
     anthropic_version: 'bedrock-2023-05-31',
     max_tokens: 4096,
-    system: SYSTEM_PROMPT + `\n\nYou are synthesizing answers from multiple AWS service agents. Combine them into one coherent, well-structured response. Do not repeat information.`,
+    system: cachedSystem(SYSTEM_PROMPT + `\n\nYou are synthesizing answers from multiple AWS service agents. Combine them into one coherent, well-structured response. Do not repeat information.`, promptCacheOn),
     messages: [
       { role: 'user', content: `Question: ${question}\n\nMultiple agents responded:\n\n${parts}\n\nPlease synthesize into one comprehensive answer.` },
     ],
@@ -1646,6 +1721,8 @@ async function synthesizeResponsesStreaming(
   const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
   const parts = responses.map(r => `--- ${r.via} ---\n${r.content}`).join('\n\n');
 
+  // ADR-033 Phase 1: this path uses the Converse API; Converse-side prompt caching is a
+  // Phase-2 follow-up, so the system prefix is intentionally left uncached here.
   const response = await bedrockClient.send(new ConverseStreamCommand({
     modelId,
     system: [{ text: systemPrompt }],

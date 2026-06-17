@@ -35,7 +35,7 @@ function makeRecord(overrides: Partial<AgentCoreCallRecord> = {}): AgentCoreCall
     via: 'bedrock-opus',
     inputTokens: 100,
     outputTokens: 200,
-    model: 'claude-opus-4-7',
+    model: 'claude-opus-4-8',
     ...overrides,
   };
 }
