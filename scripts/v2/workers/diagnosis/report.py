@@ -4,8 +4,12 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone, timedelta
 import boto3
 from botocore.config import Config
+
+# KST as a fixed +9 offset — Korea has no DST, so this needs no `tzdata` package in the slim image.
+_KST = timezone(timedelta(hours=9))
 
 from . import sources as src
 from . import invariants as inv
@@ -101,7 +105,9 @@ def build_markdown(rendered, account, tier):
     toc = "\n".join(f"- [{s['title']}](#{s['key']})" for s in rendered)
     # TOC sits ABOVE the first `## ` section heading (bold label, not a heading) so a
     # reader — and `md.split("##", 1)[0]` — sees the full table of contents first.
+    generated = datetime.now(_KST).strftime("%Y-%m-%d %H:%M")
     parts = [f"# AWS 진단 리포트 — 계정 {account} ({tier})", "",
+             f"> 생성 일시: {generated} (KST)", "",
              "**목차**", "", toc, ""]
     for s in rendered:
         parts += [f"## {s['title']}", "", s["body"], ""]

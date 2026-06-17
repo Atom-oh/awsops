@@ -228,6 +228,11 @@ def test_build_markdown_has_toc_and_all_sections():
     assert "Executive Summary" in md.split("##", 1)[0]
 
 
+def test_build_markdown_has_generation_date():
+    md = report.build_markdown([], account="180294183052", tier="mid")
+    assert "생성 일시:" in md and "(KST)" in md
+
+
 def test_render_section_uses_only_its_sources(monkeypatch):
     captured = {}
 
