@@ -23,6 +23,21 @@ describe('topology_graph migration', () => {
   });
 });
 
+// ADR-043 Step 2 — Task 1: the class-namespace migration (flow|infra) on the graph tables.
+describe('topology_class migration', () => {
+  const file = readdirSync(MIG_DIR).find((f) => f.endsWith('_topology_class.sql'));
+  it('exists', () => { expect(file, 'topology_class migration present').toBeTruthy(); });
+
+  it('adds class to both tables and puts class in the node PK + edge UNIQUE', () => {
+    const sql = readFileSync(join(MIG_DIR, file!), 'utf8');
+    expect(sql).toMatch(/ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS class/);
+    expect(sql).toMatch(/ALTER TABLE topology_edges ADD COLUMN IF NOT EXISTS class/);
+    expect(sql).toMatch(/PRIMARY KEY \(account_id, id, class\)/);                   // node sweep is class-correct
+    expect(sql).toMatch(/UNIQUE \(account_id, source, target, rel, class\)/);       // edge sweep is class-correct
+    expect(sql).toMatch(/topology_edges_class_source_idx/);                         // traversal index
+  });
+});
+
 function mockPool(invRows: unknown[]) {
   const calls: string[] = [];
   const client = {
