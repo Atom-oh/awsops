@@ -1,16 +1,20 @@
-// ADR-043 Step 1 — topology graph rebuild runner (OFF the BFF, per the thin-BFF mandate).
-// Reuses web/lib/graph-store.rebuildGraph (which reuses flow-topology — no rule duplication).
+// ADR-043 — topology graph rebuild runner (OFF the BFF, per the thin-BFF mandate).
+// Rebuilds BOTH materialized graphs (each reuses its single-source builder — no rule duplication):
+//   - flow  (class='flow')  via rebuildGraph      → traffic-flow topology
+//   - infra (class='infra') via rebuildInfraGraph → resource-relationship topology (Step 2)
+// The two classes are key-distinct (class in the node PK + edge UNIQUE), so each mark-sweeps only
+// its own rows.
 //
-//   Run from VPC-with-Aurora context (the ECS task or a bastion), with the Aurora env set:
+//   Run from a VPC-with-Aurora context (the ECS task or a bastion), with the Aurora env set:
 //     cd web && npx tsx ../scripts/v2/graph-rebuild.mjs
 //
-// Production automation (post-inventory-sync trigger via a VPC-resident TS Node Lambda reusing
-// graph-store) is a documented FOLLOW-ON, not part of Step 1. Until then the topology_nodes/edges
-// tables stay empty and /api/graph returns an empty graph (the UI is unaffected — it still builds
-// client-side from inventory).
+// The post-inventory-sync AUTO trigger (a 'graph-rebuild' worker job) invokes this same logic.
 import { getPool } from '../../web/lib/db.ts';
-import { rebuildGraph } from '../../web/lib/graph-store.ts';
+import { rebuildGraph, rebuildInfraGraph } from '../../web/lib/graph-store.ts';
 
-const r = await rebuildGraph(getPool());
-console.log(`[graph-rebuild] materialized ${r.nodes} nodes, ${r.edges} edges`);
+const pool = getPool();
+const flow = await rebuildGraph(pool);
+console.log(`[graph-rebuild] flow: ${flow.nodes} nodes, ${flow.edges} edges`);
+const infra = await rebuildInfraGraph(pool);
+console.log(`[graph-rebuild] infra: ${infra.nodes} nodes, ${infra.edges} edges`);
 process.exit(0);
