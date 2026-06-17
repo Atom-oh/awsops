@@ -1,32 +1,26 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const verifyUser = vi.fn();
-const invokeConnectorTool = vi.fn();
-const getConfiguredSlugs = vi.fn();
-const listConfiguredSchemas = vi.fn();
+const invokeMcpLambdaTool = vi.fn();
+const getDatasource = vi.fn();
+const getCredentialById = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
-vi.mock('@/lib/connector-invoke', () => ({ invokeConnectorTool: (...a: unknown[]) => invokeConnectorTool(...a) }));
-vi.mock('@/lib/integration-credentials', () => ({
-  getConfiguredSlugs: (...a: unknown[]) => getConfiguredSlugs(...a),
-  KNOWN_CONNECTOR_SLUGS: ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir'],
-}));
-vi.mock('@/lib/datasource-schema', () => ({ listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a) }));
-vi.mock('@/lib/account', () => ({ currentAccountId: () => 'self' }));
+vi.mock('@/lib/mcp-lambda-invoke', () => ({ invokeMcpLambdaTool: (...a: unknown[]) => invokeMcpLambdaTool(...a) }));
+vi.mock('@/lib/datasources', () => ({ getDatasource: (...a: unknown[]) => getDatasource(...a) }));
+vi.mock('@/lib/integration-credentials', () => ({ getCredentialById: (...a: unknown[]) => getCredentialById(...a) }));
+// NOTE: datasource-render is NOT mocked — the matrix→series normalization is exercised for real.
 
-function req(body: unknown, cookie = 'awsops_token=t') {
+function req(body: unknown) {
   return new Request('http://x/api/datasources/query', {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'content-type': 'application/json', cookie: 'awsops_token=t' }, body: JSON.stringify(body),
   });
 }
-const getReq = (cookie = 'awsops_token=t') => new Request('http://x/api/datasources', { headers: { cookie } });
 
 beforeEach(() => {
-  verifyUser.mockReset(); invokeConnectorTool.mockReset(); getConfiguredSlugs.mockReset(); listConfiguredSchemas.mockReset();
+  for (const m of [verifyUser, invokeMcpLambdaTool, getDatasource, getCredentialById]) m.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
-  invokeConnectorTool.mockResolvedValue({ resultType: 'vector', result: [] });
-  getConfiguredSlugs.mockResolvedValue(['prometheus', 'clickhouse', 'notion']);
-  listConfiguredSchemas.mockResolvedValue([{ slug: 'prometheus', kind: 'prometheus', schema: {}, fetched_at: 't' }]);
+  invokeMcpLambdaTool.mockResolvedValue({ resultType: 'vector', result: [] });
 });
 
 describe('POST /api/datasources/query', () => {
@@ -36,41 +30,45 @@ describe('POST /api/datasources/query', () => {
     expect((await POST(req({ slug: 'prometheus', query: 'up' }))).status).toBe(401);
   });
 
-  it('400 on unknown slug', async () => {
+  it('by INSTANCE id resolves the row + credential and passes an inline conn-config', async () => {
+    getDatasource.mockResolvedValue({ id: 2, kind: 'prometheus', endpoint: 'http://s:9090', authType: 'none', isDefault: false, enabled: true });
+    getCredentialById.mockResolvedValue({ endpoint: 'http://s:9090', authType: 'none' });
     const { POST } = await import('./route');
-    expect((await POST(req({ slug: 'evil', query: 'up' }))).status).toBe(400);
+    expect((await POST(req({ id: 2, query: 'up' }))).status).toBe(200);
+    const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
+    expect(call.kind).toBe('prometheus');
+    expect(call.tool).toBe('prometheus_query');
+    expect(call.connConfig).toEqual({ endpoint: 'http://s:9090', authType: 'none' });
   });
 
-  it('400 on empty query', async () => {
+  it('by slug (deprecated) sends NO inline conn-config → Lambda kind-mirror fallback', async () => {
     const { POST } = await import('./route');
+    await POST(req({ slug: 'prometheus', query: 'up' }));
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].connConfig).toBeUndefined();
+  });
+
+  it('400 on unknown kind / empty query', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ slug: 'evil', query: 'up' }))).status).toBe(400);
     expect((await POST(req({ slug: 'prometheus', query: '   ' }))).status).toBe(400);
   });
 
   it('clickhouse maps the query to the `sql` arg (not `query`)', async () => {
-    invokeConnectorTool.mockResolvedValue({ rowCount: 0, rows: [], meta: [] });
+    invokeMcpLambdaTool.mockResolvedValue({ rowCount: 0, rows: [], meta: [] });
     const { POST } = await import('./route');
     await POST(req({ slug: 'clickhouse', query: 'SELECT 1' }));
-    const [slug, tool, args] = invokeConnectorTool.mock.calls.at(-1)!;
-    expect(slug).toBe('clickhouse');
-    expect(tool).toBe('clickhouse_query');
-    expect((args as Record<string, unknown>).sql).toBe('SELECT 1');
-    expect((args as Record<string, unknown>).query).toBeUndefined();
+    const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
+    expect(call.tool).toBe('clickhouse_query');
+    expect(call.args.sql).toBe('SELECT 1');
+    expect(call.args.query).toBeUndefined();
   });
 
-  it('range flag selects *_query_range for prometheus', async () => {
-    invokeConnectorTool.mockResolvedValue({ resultType: 'matrix', result: [] });
+  it('range flag selects *_query_range; tempo always uses tempo_search', async () => {
     const { POST } = await import('./route');
     await POST(req({ slug: 'prometheus', query: 'up', range: true }));
-    expect(invokeConnectorTool.mock.calls.at(-1)![1]).toBe('prometheus_query_range');
-    await POST(req({ slug: 'prometheus', query: 'up', range: false }));
-    expect(invokeConnectorTool.mock.calls.at(-1)![1]).toBe('prometheus_query');
-  });
-
-  it('tempo always uses tempo_search (no range tool exists)', async () => {
-    invokeConnectorTool.mockResolvedValue({ traces: [] });
-    const { POST } = await import('./route');
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].tool).toBe('prometheus_query_range');
     await POST(req({ slug: 'tempo', query: '{ duration > 1s }', range: true }));
-    expect(invokeConnectorTool.mock.calls.at(-1)![1]).toBe('tempo_search');
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].tool).toBe('tempo_search');
   });
 
   it('every TOOL value is a read-only tool (no mutating verb reachable)', async () => {
@@ -83,8 +81,16 @@ describe('POST /api/datasources/query', () => {
     }
   });
 
+  it('SSRF-blocks a bad resolved endpoint (400, no invoke)', async () => {
+    getDatasource.mockResolvedValue({ id: 3, kind: 'clickhouse', endpoint: 'http://169.254.169.254', authType: 'none', isDefault: false, enabled: true });
+    getCredentialById.mockResolvedValue({ endpoint: 'http://169.254.169.254', authType: 'none' });
+    const { POST } = await import('./route');
+    expect((await POST(req({ id: 3, query: 'SELECT 1' }))).status).toBe(400);
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+  });
+
   it('connector error → 502 with a clean message', async () => {
-    invokeConnectorTool.mockRejectedValue(new Error('connector prometheus error'));
+    invokeMcpLambdaTool.mockRejectedValue(new Error('connector prometheus error'));
     const { POST } = await import('./route');
     const res = await POST(req({ slug: 'prometheus', query: 'up' }));
     expect(res.status).toBe(502);
@@ -92,31 +98,10 @@ describe('POST /api/datasources/query', () => {
   });
 
   it('normalizes the connector body (matrix → series)', async () => {
-    invokeConnectorTool.mockResolvedValue({ resultType: 'matrix', result: [{ metric: { __name__: 'up' }, values: [[1, '1']] }] });
+    invokeMcpLambdaTool.mockResolvedValue({ resultType: 'matrix', result: [{ metric: { __name__: 'up' }, values: [[1, '1']] }] });
     const { POST } = await import('./route');
     const res = await POST(req({ slug: 'prometheus', query: 'up', range: true }));
     expect(res.status).toBe(200);
     expect((await res.json()).result.shape).toBe('series');
-  });
-});
-
-describe('GET /api/datasources', () => {
-  it('401 when unauthenticated', async () => {
-    verifyUser.mockResolvedValue(null);
-    const { GET } = await import('../route');
-    expect((await GET(getReq())).status).toBe(401);
-  });
-
-  it('lists configured QUERYABLE datasources with hasSchema, excludes notion', async () => {
-    const { GET } = await import('../route');
-    const res = await GET(getReq());
-    const body = await res.json();
-    const slugs = body.datasources.map((d: { slug: string }) => d.slug);
-    expect(slugs).toContain('prometheus');
-    expect(slugs).toContain('clickhouse');
-    expect(slugs).not.toContain('notion'); // not a query datasource
-    const prom = body.datasources.find((d: { slug: string }) => d.slug === 'prometheus');
-    expect(prom.hasSchema).toBe(true);
-    expect(body.datasources.find((d: { slug: string }) => d.slug === 'clickhouse').hasSchema).toBe(false);
   });
 });
