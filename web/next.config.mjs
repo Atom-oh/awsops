@@ -9,5 +9,10 @@ const nextConfig = {
       { source: '/opencost', destination: '/eks', permanent: false },
     ];
   },
+  async rewrites() {
+    // Public marketing brochure served from public/brochure/. Clean URL /brochure → the static index.
+    // (Assets under /brochure/* are served directly by the static handler.)
+    return [{ source: '/brochure', destination: '/brochure/index.html' }];
+  },
 };
 export default nextConfig;
