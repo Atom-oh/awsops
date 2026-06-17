@@ -2,9 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---- mock the SM SDK (mirror integration-credentials.test.ts) ----
 const smSend = vi.fn();
-class ResourceNotFoundException extends Error {
-  name = 'ResourceNotFoundException';
-}
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
   SecretsManagerClient: class {
     send = (...a: unknown[]) => smSend(...a);
