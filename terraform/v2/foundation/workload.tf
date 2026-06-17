@@ -56,6 +56,21 @@ resource "aws_iam_role" "task" {
 # Integration credential-write UX: the BFF read-modify-writes the single integrations credentials
 # secret (admin UI). Get + Put scoped to that ONE secret ARN; default key → no kms:Decrypt.
 # integ_count-gated (matches the secret's existence in ai.tf). No CreateSecret, no Principal:*.
+resource "aws_iam_role_policy" "task_connector_invoke" {
+  count = local.integ_count
+  name  = "${var.project}-task-connector-invoke"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InvokeConnectorLambdas"
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = "arn:aws:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${var.project}-agent-*"
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "task_integrations_secret" {
   count = local.integ_count
   name  = "${var.project}-task-integrations-secret"

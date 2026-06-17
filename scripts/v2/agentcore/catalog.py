@@ -306,6 +306,7 @@ TARGETS = {
         "lambda_key": "opensearch-mcp",
         "description": "OpenSearch read-only — list domains, time-bounded log search, cat indices (3 tools)",
         "tools": [
+            {"name": "opensearch_schema", "description": "Introspect domains + indices (cached)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "list_opensearch_domains", "description": "List OpenSearch domains and their endpoints", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "search_opensearch_logs", "description": "Search a domain's logs by time range and query string", "inputSchema": {"type": "object", "properties": {"domain": _p("string", "Domain name"), "query": _p("string", "query_string (e.g. ERROR)"), "start": _p("string", "Window start: 1h/30m/2d or ISO (default now-1h)"), "end": _p("string", "Window end (ISO, optional)"), "index": _p("string", "Index or _all"), "size": _p("string", "Max hits (<=50)"), "time_field": _p("string", "Time field (default @timestamp)")}, "required": ["domain"]}},
             {"name": "opensearch_indices", "description": "List indices (_cat/indices) of a domain", "inputSchema": {"type": "object", "properties": {"domain": _p("string", "Domain name")}, "required": ["domain"]}},
@@ -318,6 +319,7 @@ TARGETS = {
         "lambda_key": "clickhouse-mcp",
         "description": "ClickHouse read-only — SQL query, list tables, describe (3 tools)",
         "tools": [
+            {"name": "clickhouse_schema", "description": "Introspect tables + columns (cached for query generation)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "clickhouse_query", "description": "Run a read-only SQL query (SELECT/SHOW/DESCRIBE) against the connected ClickHouse", "inputSchema": {"type": "object", "properties": {"sql": _p("string", "Read-only SQL"), "max_rows": _p("string", "Max rows (<=1000)")}, "required": ["sql"]}},
             {"name": "clickhouse_tables", "description": "List tables (SHOW TABLES)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "clickhouse_describe", "description": "Describe a table's columns", "inputSchema": {"type": "object", "properties": {"table": _p("string", "Table name")}, "required": ["table"]}},
@@ -330,6 +332,7 @@ TARGETS = {
         "lambda_key": "prometheus-mcp",
         "description": "Prometheus read-only — PromQL instant/range query, labels, series (4 tools)",
         "tools": [
+            {"name": "prometheus_schema", "description": "Introspect metric + label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "prometheus_query", "description": "Instant PromQL query at a single time", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time: unix/ISO (default now)")}, "required": ["query"]}},
             {"name": "prometheus_query_range", "description": "Range PromQL query over a time window", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix/ISO (default now-1h)"), "end": _p("string", "unix/ISO (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
             {"name": "prometheus_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
@@ -343,6 +346,7 @@ TARGETS = {
         "lambda_key": "loki-mcp",
         "description": "Loki read-only — LogQL range/instant query, labels, label values (4 tools)",
         "tools": [
+            {"name": "loki_schema", "description": "Introspect label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "loki_query_range", "description": "Range LogQL query over a time window (logs/metrics)", "inputSchema": {"type": "object", "properties": {"query": _p("string", "LogQL"), "start": _p("string", "1h/30m or unix/ISO (default now-1h)"), "end": _p("string", "unix/ISO (default now)"), "limit": _p("string", "Max entries (default 100)"), "direction": _p("string", "forward|backward (default backward)")}, "required": ["query"]}},
             {"name": "loki_query", "description": "Instant LogQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "LogQL"), "time": _p("string", "Eval time unix/ISO (default now)"), "limit": _p("string", "Max entries (default 100)")}, "required": ["query"]}},
             {"name": "loki_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
@@ -355,6 +359,7 @@ TARGETS = {
         "lambda_key": "tempo-mcp",
         "description": "Tempo read-only — TraceQL search, get trace, tags, tag values (4 tools)",
         "tools": [
+            {"name": "tempo_schema", "description": "Introspect tag names (cached)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "tempo_search", "description": "Search traces by TraceQL over a time window", "inputSchema": {"type": "object", "properties": {"query": _p("string", "TraceQL"), "start": _p("string", "1h/30m or unix sec (default now-1h)"), "end": _p("string", "unix sec (default now)"), "limit": _p("string", "Max traces")}, "required": ["query"]}},
             {"name": "tempo_get_trace", "description": "Fetch a full trace by hex trace ID", "inputSchema": {"type": "object", "properties": {"trace_id": _p("string", "Hex trace ID")}, "required": ["trace_id"]}},
             {"name": "tempo_search_tags", "description": "List searchable tag names", "inputSchema": {"type": "object", "properties": {}}},
@@ -367,6 +372,7 @@ TARGETS = {
         "lambda_key": "mimir-mcp",
         "description": "Mimir read-only — PromQL instant/range, labels, series (4 tools)",
         "tools": [
+            {"name": "mimir_schema", "description": "Introspect metric + label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "mimir_query", "description": "Instant PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time unix/ISO (default now)")}, "required": ["query"]}},
             {"name": "mimir_query_range", "description": "Range PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix (default now-1h)"), "end": _p("string", "unix (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
             {"name": "mimir_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
