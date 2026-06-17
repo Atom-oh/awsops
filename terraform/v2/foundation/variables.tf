@@ -107,6 +107,12 @@ variable "workers_enabled" {
   default     = false
 }
 
+variable "ai_cost_tracking_enabled" {
+  type        = bool
+  description = "Scheduled awsops-only Bedrock-cost aggregator (Logs Insights /aws/bedrock/invocation-logs -> ai_usage_daily). Requires workers_enabled (reuses the worker role/pg8000 layer/VPC). false (default) = 0 resources, $0, no behavior change."
+  default     = false
+}
+
 variable "worker_image_tag" {
   type        = string
   description = "Worker Fargate image tag in the worker ECR repo."

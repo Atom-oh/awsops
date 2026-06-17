@@ -13,6 +13,8 @@ locals {
   workers_src  = "${path.module}/../../../scripts/v2/workers"
   worker_cname = "worker" # MUST equal the ContainerOverrides Name in sfn.asl.json
   acct         = data.aws_caller_identity.current.account_id
+  # ai-cost aggregator gate — reuses the worker role/pg8000 layer/VPC, so it REQUIRES workers_enabled.
+  act = var.workers_enabled && var.ai_cost_tracking_enabled ? 1 : 0
 }
 
 ############################################################
@@ -66,6 +68,14 @@ data "archive_file" "workers_src" {
   source {
     content  = file("${local.workers_src}/dispatcher.py")
     filename = "dispatcher.py"
+  }
+  source {
+    content  = file("${local.workers_src}/ai_cost_aggregator.py")
+    filename = "ai_cost_aggregator.py"
+  }
+  source {
+    content  = file("${local.workers_src}/ai_cost/aggregate.py")
+    filename = "aggregate.py"
   }
 }
 
@@ -761,4 +771,92 @@ output "dispatcher_esm_uuid" {
 }
 output "worker_ecr_uri" {
   value = one(aws_ecr_repository.worker[*].repository_url)
+}
+
+############################################################
+# ai-cost aggregator — awsops-only Bedrock cost (Logs Insights -> ai_usage_daily).
+# Gated by var.ai_cost_tracking_enabled (local.act also requires workers_enabled, since it reuses
+# the worker IAM role + pg8000 layer + VPC). Default off -> count 0 -> $0, no behavior change.
+############################################################
+resource "aws_cloudwatch_log_group" "ai_cost_aggregator" {
+  count             = local.act
+  name              = "/aws/lambda/${var.project}-ai-cost-aggregator"
+  retention_in_days = 14
+}
+
+# Read-only Bedrock invocation-log access for the (shared) worker role, added only when tracking is on.
+resource "aws_iam_role_policy" "ai_cost_logs_read" {
+  count = local.act
+  name  = "ai-cost-bedrock-logs-read"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "StartBedrockInsightsQuery"
+        Effect   = "Allow"
+        Action   = ["logs:StartQuery"]
+        Resource = "arn:aws:logs:${var.region}:${local.acct}:log-group:/aws/bedrock/invocation-logs:*"
+      },
+      {
+        # GetQueryResults / StopQuery do not support resource-level scoping.
+        Sid      = "ReadBedrockInsightsResults"
+        Effect   = "Allow"
+        Action   = ["logs:GetQueryResults", "logs:StopQuery"]
+        Resource = "*"
+      },
+    ]
+  })
+}
+
+resource "aws_lambda_function" "ai_cost_aggregator" {
+  count            = local.act
+  function_name    = "${var.project}-ai-cost-aggregator"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "ai_cost_aggregator.lambda_handler"
+  filename         = data.archive_file.workers_src[0].output_path
+  source_code_hash = data.archive_file.workers_src[0].output_base64sha256
+  timeout          = 120
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT       = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE       = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN     = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      BEDROCK_LOG_GROUP     = "/aws/bedrock/invocation-logs"
+      AWSOPS_IDENTITY_MATCH = "awsops-v2"
+      LOOKBACK_DAYS         = "3"
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.ai_cost_aggregator, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+resource "aws_cloudwatch_event_rule" "ai_cost_aggregator" {
+  count               = local.act
+  name                = "${var.project}-ai-cost-aggregator"
+  description         = "Aggregate awsops-only Bedrock token usage from invocation logs into ai_usage_daily"
+  schedule_expression = "rate(6 hours)"
+}
+
+resource "aws_cloudwatch_event_target" "ai_cost_aggregator" {
+  count     = local.act
+  rule      = aws_cloudwatch_event_rule.ai_cost_aggregator[0].name
+  target_id = "ai-cost-aggregator"
+  arn       = aws_lambda_function.ai_cost_aggregator[0].arn
+}
+
+resource "aws_lambda_permission" "ai_cost_aggregator_events" {
+  count         = local.act
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ai_cost_aggregator[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.ai_cost_aggregator[0].arn
 }
