@@ -35,6 +35,15 @@ describe('priceUsage', () => {
     expect(totalCost).toBeCloseTo(3, 6);
   });
 
+  it('handles node-pg bigint-as-string token values (SUM(...)::bigint returns strings)', () => {
+    const rows = [
+      { model: 'global.anthropic.claude-sonnet-4-6', input_tokens: '1000000', output_tokens: '0', cache_read_tokens: '0', cache_write_tokens: '0' } as unknown as UsageRow,
+    ];
+    const { models, totalCost } = priceUsage(rows);
+    expect(models[0].inputTokens).toBe(1_000_000);
+    expect(totalCost).toBeCloseTo(3, 6);
+  });
+
   it('empty input → zero', () => {
     expect(priceUsage([])).toEqual({ models: [], totalCost: 0 });
   });

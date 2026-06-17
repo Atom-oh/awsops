@@ -68,13 +68,16 @@ def lambda_handler(_event, _ctx):
     rows = aggregate.parse_rows(_run_insights(int(start_day.timestamp()), int(now.timestamp())))
     conn = db.connect()
     upserted = 0
-    for row in rows:
-        conn.run(
-            _UPSERT,
-            d=row["day"], m=row["model"],
-            i=row["input_tokens"], o=row["output_tokens"],
-            cr=row["cache_read_tokens"], cw=row["cache_write_tokens"],
-        )
-        upserted += 1
+    try:
+        for row in rows:
+            conn.run(
+                _UPSERT,
+                d=row["day"], m=row["model"],
+                i=row["input_tokens"], o=row["output_tokens"],
+                cr=row["cache_read_tokens"], cw=row["cache_write_tokens"],
+            )
+            upserted += 1
+    finally:
+        conn.close()  # db.connect() returns a fresh pg8000 connection each call (matches reaper.py)
     print(f"ai_cost_aggregator: upserted {upserted} day×model rows (lookback {LOOKBACK_DAYS}d)")
     return {"upserted": upserted}

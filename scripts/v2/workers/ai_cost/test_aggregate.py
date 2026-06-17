@@ -21,8 +21,9 @@ def test_build_query_filters_awsops_identity():
 
 
 def _row(day, model, **toks):
-    """Build one Logs-Insights GetQueryResults row (list of {field,value})."""
-    cells = [{"field": "day", "value": day}, {"field": "modelId", "value": model}]
+    """Build one Logs-Insights GetQueryResults row (list of {field,value}).
+    The time bucket comes back under the literal field "bin(1d)" (grouping expr, no alias)."""
+    cells = [{"field": "bin(1d)", "value": day}, {"field": "modelId", "value": model}]
     for k, v in toks.items():
         cells.append({"field": k, "value": str(v)})
     return cells

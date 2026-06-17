@@ -26,7 +26,9 @@ def build_query(match: str = AWSOPS_IDENTITY_MATCH) -> str:
         "    sum(if(ispresent(output.outputTokenCount), output.outputTokenCount, 0)) as output_tokens,\n"
         "    sum(if(ispresent(input.cacheReadInputTokenCount), input.cacheReadInputTokenCount, 0)) as cache_read_tokens,\n"
         "    sum(if(ispresent(input.cacheWriteInputTokenCount), input.cacheWriteInputTokenCount, 0)) as cache_write_tokens\n"
-        "    by bin(1d) as day, modelId"
+        # Do NOT alias the grouping expression (`by bin(1d) as day` is not portable in Logs Insights /
+        # can ParseException) — group by the bare bin; the result column is literally "bin(1d)".
+        "    by bin(1d), modelId"
     )
 
 
@@ -46,7 +48,9 @@ def parse_rows(results) -> list:
     out = []
     for row in results:
         cells = {c.get("field"): c.get("value") for c in row if isinstance(c, dict)}
-        day = cells.get("day")
+        # `stats ... by bin(1d), modelId` returns the time bucket under the literal field "bin(1d)"
+        # (no alias). Accept "day" too for forward-compat / mocks.
+        day = cells.get("bin(1d)") or cells.get("day")
         model = cells.get("modelId")
         if not day or not model:
             continue
