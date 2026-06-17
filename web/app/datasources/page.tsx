@@ -29,6 +29,8 @@ export default function DatasourcesPage() {
   const [result, setResult] = useState<NormalizedResult | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [nl, setNl] = useState('');
+  const [genBusy, setGenBusy] = useState(false);
 
   const ds = list.find((d) => d.slug === slug) ?? null;
   const canRange = ds ? RANGE_KINDS.has(ds.kind) : false;
@@ -60,6 +62,25 @@ export default function DatasourcesPage() {
     }
   }, [slug, query, range, canRange]);
 
+  // STEP 4: natural-language → query. Fills the query box for the user to review; never auto-runs.
+  const generate = useCallback(async () => {
+    if (!ds || !nl.trim()) return;
+    setGenBusy(true); setErr('');
+    try {
+      const r = await fetch('/api/datasources/generate', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ slug: ds.slug, kind: ds.kind, nl }),
+      });
+      const b = await r.json();
+      if (!r.ok) throw new Error(b.error || `오류 ${r.status}`);
+      if (b.query) setQuery(b.query);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'AI 생성 실패');
+    } finally {
+      setGenBusy(false);
+    }
+  }, [ds, nl]);
+
   return (
     <div>
       <PageHeader
@@ -81,6 +102,19 @@ export default function DatasourcesPage() {
                 시간 범위 (range)
               </label>
             )}
+          </div>
+          {/* STEP 4 — natural-language → query (AI generates, user reviews, then runs) */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              value={nl}
+              onChange={(e) => setNl(e.target.value)}
+              placeholder={ds ? '자연어로 설명… 예: "모든 노드의 CPU 사용률"' : '먼저 데이터소스를 선택하세요'}
+              onKeyDown={(e) => { if (e.key === 'Enter') generate(); }}
+              disabled={!ds}
+            />
+            <Button variant="secondary" onClick={generate} disabled={genBusy || !ds || !nl.trim()}>
+              {genBusy ? '생성 중…' : 'AI로 생성'}
+            </Button>
           </div>
           <Input
             icon={<Search size={14} />}
