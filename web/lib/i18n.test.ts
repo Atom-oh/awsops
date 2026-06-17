@@ -30,5 +30,11 @@ describe('keyset parity (regression guard)', () => {
   it('ko and en define the exact same keys', () => {
     expect(Object.keys(MESSAGES.ko).sort()).toEqual(Object.keys(MESSAGES.en).sort());
   });
+
+  it('nav.datasources exists in both ko and en (Explore page)', () => {
+    expect(translate('ko', 'nav.datasources')).toBe('데이터소스');
+    expect(translate('en', 'nav.datasources')).toBe('Datasources');
+  });
+
 });
 
