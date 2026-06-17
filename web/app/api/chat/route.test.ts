@@ -30,6 +30,8 @@ const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
 const listConfiguredSchemas = vi.fn();
 vi.mock('@/lib/datasource-schema', () => ({ listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a) }));
+const listDatasources = vi.fn();
+vi.mock('@/lib/datasources', () => ({ listDatasources: (...a: unknown[]) => listDatasources(...a) }));
 const synthesizeStream = vi.fn();
 vi.mock('@/lib/synthesize', () => ({ synthesizeStream: (...a: unknown[]) => synthesizeStream(...a) }));
 const assistantAnswer = vi.fn();
@@ -81,6 +83,7 @@ beforeEach(() => {
   recordExchange.mockReset();
   recordExchange.mockResolvedValue(undefined);
   listConfiguredSchemas.mockReset(); listConfiguredSchemas.mockResolvedValue([]);
+  listDatasources.mockReset(); listDatasources.mockResolvedValue([]);
   synthesizeStream.mockReset();
   // default: real-shaped async-generator returning a deterministic merged answer
   synthesizeStream.mockImplementation(async function* () { yield '합성된 답변'; });
@@ -417,13 +420,36 @@ describe('datasource schema injection', () => {
     verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'monitoring', skill: 'monitoring', agentName: 'monitoring', skillHashes: [] });
     classifyRoute.mockResolvedValue({ primary: 'monitoring', ranked: [{ key: 'monitoring', score: 1, active: true }], method: 'regex' });
-    listConfiguredSchemas.mockResolvedValue([{ slug: 'prometheus', kind: 'prometheus', schema: { metrics: ['up'], labels: ['job'] }, fetched_at: 't' }]);
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'prometheus', schema: { metrics: ['up'], labels: ['job'] }, fetched_at: 't' }]);
+    listDatasources.mockResolvedValue([{ id: 1, name: 'prod-prom', kind: 'prometheus', endpoint: 'http://p', authType: 'none', isDefault: true, enabled: true }]);
     invokeAgent.mockResolvedValue('ok');
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'what is up' })));
     const arg = invokeAgent.mock.calls.at(-1)![0] as { extraContext?: string };
     expect(arg.extraContext).toContain('Datasource schemas');
-    expect(arg.extraContext).toContain('prometheus');
+    expect(arg.extraContext).toContain('prometheus'); // kind label
+    expect(arg.extraContext).toContain('prod-prom');  // instance name label
+  });
+
+  it('injects ONLY the default instance per kind (no duplicate same-kind instances)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'monitoring', skill: 'monitoring', agentName: 'monitoring', skillHashes: [] });
+    classifyRoute.mockResolvedValue({ primary: 'monitoring', ranked: [{ key: 'monitoring', score: 1, active: true }], method: 'regex' });
+    // two prometheus instances cached; only id=1 is the default
+    listConfiguredSchemas.mockResolvedValue([
+      { integrationId: 1, kind: 'prometheus', schema: { metrics: ['up'] }, fetched_at: 't' },
+      { integrationId: 2, kind: 'prometheus', schema: { metrics: ['down'] }, fetched_at: 't' },
+    ]);
+    listDatasources.mockResolvedValue([
+      { id: 1, name: 'prod-prom', kind: 'prometheus', endpoint: 'http://p1', authType: 'none', isDefault: true, enabled: true },
+      { id: 2, name: 'stg-prom', kind: 'prometheus', endpoint: 'http://p2', authType: 'none', isDefault: false, enabled: true },
+    ]);
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'what is up' })));
+    const ctx = (invokeAgent.mock.calls.at(-1)![0] as { extraContext?: string }).extraContext ?? '';
+    expect(ctx).toContain('prod-prom');     // default injected
+    expect(ctx).not.toContain('stg-prom');  // non-default NOT injected
   });
 });
 
@@ -480,7 +506,8 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     classifyRoute.mockResolvedValue(multiRoute); // selected [network, data] — data is an observability gateway
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
-    listConfiguredSchemas.mockResolvedValue([{ slug: 'prometheus', kind: 'prometheus', schema: { metrics: ['up'] }, fetched_at: 't' }]);
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'prometheus', schema: { metrics: ['up'] }, fetched_at: 't' }]);
+    listDatasources.mockResolvedValue([{ id: 1, name: 'prod-prom', kind: 'prometheus', endpoint: 'http://p', authType: 'none', isDefault: true, enabled: true }]);
     invokeAgent.mockImplementation(async ({ gateway }: { gateway: string }) => `ans-${gateway}`);
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'x', sessionId: 's'.repeat(36) })));
@@ -686,3 +713,47 @@ describe('AWSops Assistant (product help + inactive fallback)', () => {
     expect(body).toContain('🔒'); // explicit choice → honest unavailable message
   });
 });
+
+describe('typewriter delay and progressive status events', () => {
+  it('has no artificial playback delay by default when env is unset', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('Hello World');
+
+    const { POST } = await import('./route');
+    const t0 = Date.now();
+    const res = await POST(req({ prompt: 'hello', sessionId: 's'.repeat(36) }));
+    await readStream(res);
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeLessThan(20);
+  });
+
+  it('emits event: status phase: analyzing frame before content delta and carries no delta key', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('Hello World');
+
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'hello', sessionId: 's'.repeat(36) }));
+    expect(res.status).toBe(200);
+
+    const body = await readStream(res);
+
+    expect(body).toContain('event: status\ndata: {"phase":"analyzing"}');
+
+    const frames = body.split('\n\n').filter(Boolean);
+    const statusFrames = frames.filter(f => f.includes('event: status'));
+    expect(statusFrames.length).toBeGreaterThanOrEqual(1);
+
+    for (const frame of statusFrames) {
+      expect(frame).not.toContain('"delta"');
+    }
+
+    const deltaFrames = frames.filter(f => f.includes('data: {"delta":'));
+    expect(deltaFrames.length).toBeGreaterThan(0);
+    expect(body).toContain('[DONE]');
+  });
+});
+

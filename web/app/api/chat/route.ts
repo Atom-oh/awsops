@@ -13,6 +13,7 @@ import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
 import { currentAccountId, currentAccountAlias } from '@/lib/account';
 import { listConfiguredSchemas } from '@/lib/datasource-schema';
+import { listDatasources } from '@/lib/datasources';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getAgentSpace } from '@/lib/agent-space';
 import { randomUUID } from 'crypto';
@@ -21,7 +22,9 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 120; // long agent calls
 
 const MAX_PROMPT = 50_000;
-const TYPE_DELAY_MS = 12;
+const TYPE_DELAY_MS = Number(process.env.CHAT_TYPEWRITER_MS) || 0;
+const STATUS_TICK_MS = 1500;
+
 
 function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
@@ -31,7 +34,7 @@ function chunk(text: string): string[] {
 }
 
 /** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps). */
-function renderSchemaContext(schemas: { slug: string; kind: string | null; schema: unknown }[]): string {
+function renderSchemaContext(schemas: { label: string; kind: string | null; schema: unknown }[]): string {
   const lines = ['## Datasource schemas (cached) — use these real names when writing queries'];
   const names = (a: unknown, n: number) =>
     (Array.isArray(a) ? a : []).slice(0, n).map((x) => (typeof x === 'string' ? x : (x as { name?: string }).name ?? JSON.stringify(x))).join(', ');
@@ -41,7 +44,7 @@ function renderSchemaContext(schemas: { slug: string; kind: string | null; schem
     for (const [k, n] of [['metrics', 40], ['labels', 40], ['tags', 40], ['tables', 30], ['domains', 10], ['indices', 30]] as const) {
       if (Array.isArray(sc[k]) && (sc[k] as unknown[]).length) parts.push(`${k}: ${names(sc[k], n)}`);
     }
-    lines.push(`- **${s.slug}** (${s.kind ?? ''}): ${parts.join(' | ') || '(empty)'}`);
+    lines.push(`- **${s.label}** (${s.kind ?? ''}): ${parts.join(' | ') || '(empty)'}`);
   }
   return lines.join('\n').slice(0, 6000);
 }
@@ -175,8 +178,15 @@ export async function POST(request: Request) {
   let datasourceSchemaContext: string | undefined;
   if (obs(spec.gateway) || (doFanout && fanGateways.some(obs))) {
     try {
-      const schemas = await listConfiguredSchemas(accountId);
-      if (schemas.length) datasourceSchemaContext = renderSchemaContext(schemas);
+      // Multi-instance: inject ONLY the DEFAULT instance's schema per kind (no duplicate same-kind
+      // instances), labeled by the instance name. The agent gateway path also resolves the default
+      // (via the kind-mirror credential), so chat and the gateway agree on which instance is used.
+      const [schemas, dsRows] = await Promise.all([listConfiguredSchemas(accountId), listDatasources()]);
+      const byId = new Map(schemas.map((s) => [s.integrationId, s.schema]));
+      const entries = dsRows
+        .filter((d) => d.isDefault && byId.has(d.id))
+        .map((d) => ({ label: d.name, kind: d.kind, schema: byId.get(d.id) }));
+      if (entries.length) datasourceSchemaContext = renderSchemaContext(entries);
     } catch { /* schema cache is best-effort; the agent still works (can call discovery tools) without it */ }
   }
 
@@ -216,7 +226,7 @@ export async function POST(request: Request) {
         for (const c of chunk(text)) {
           if (request.signal.aborted) break;
           controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));
-          await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
+          if (TYPE_DELAY_MS) await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
         }
         if (!request.signal.aborted) record(text);
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
@@ -264,6 +274,19 @@ export async function POST(request: Request) {
         return;
       }
       let text: string;
+      const t0 = Date.now();
+      controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'analyzing' }) + '\n\n'));
+      const tick = setInterval(() => {
+        if (!request.signal.aborted) {
+          controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'working', elapsedMs: Date.now() - t0 }) + '\n\n'));
+        }
+      }, STATUS_TICK_MS);
+
+      const onAbort = () => {
+        clearInterval(tick);
+      };
+      request.signal.addEventListener('abort', onAbort);
+
       try {
         text = await invokeAgent({
           gateway: spec.gateway, messages, sessionId,
@@ -279,6 +302,9 @@ export async function POST(request: Request) {
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
         controller.close();
         return;
+      } finally {
+        clearInterval(tick);
+        request.signal.removeEventListener('abort', onAbort);
       }
       // traceability (fire-and-forget) — only custom invocations
       if (spec.tier === 'custom') {
@@ -287,7 +313,7 @@ export async function POST(request: Request) {
       for (const c of chunk(text)) {
         if (request.signal.aborted) break;
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));
-        await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
+        if (TYPE_DELAY_MS) await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
       }
       record(text); // fire-and-forget after the chunk loop, before [DONE] (P2 gate placement)
       controller.enqueue(enc.encode('data: [DONE]\n\n'));
