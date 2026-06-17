@@ -20,6 +20,11 @@ export async function readJsonBounded(request: Request, maxBytes = 65_536): Prom
   const stream = request.body;
   let text: string;
   if (!stream) {
+    // No readable stream. On the undici/App-Router runtime a present body always yields a non-null
+    // stream, so this branch means a bodyless request (Content-Length absent → empty body) — never a
+    // path to materialize an unbounded body. If a Content-Length IS present it was already ≤ maxBytes
+    // (the top guard rejected an over-cap value), so text() materializes at most maxBytes.
+    if (!len) return {};
     text = await request.text();
     if (new TextEncoder().encode(text).byteLength > maxBytes) throw new BodyTooLargeError();
   } else {
