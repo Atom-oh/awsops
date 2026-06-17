@@ -224,6 +224,7 @@ export default function DiagnosisView() {
                   <a
                     key={f}
                     href={`/api/diagnosis/${view!.id}/download?format=${f}`}
+                    download={`awsops-diagnosis-${view!.id}.${f}`}
                     className="rounded-md border border-ink-200 px-3 py-1.5 text-sm hover:bg-ink-100"
                   >
                     {f.toUpperCase()}

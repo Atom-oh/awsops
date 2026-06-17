@@ -9,6 +9,17 @@ def test_to_docx_returns_docx_zip_bytes():
     assert bytes(out[:4]) == b"PK\x03\x04"  # DOCX is a zip (OOXML)
 
 
+def test_to_docx_preserves_content():
+    import io
+    from docx import Document
+
+    doc = Document(io.BytesIO(exporters.to_docx(_SAMPLE)))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "AWS 진단 리포트" in text   # heading rendered
+    assert "본문 문단입니다." in text   # body paragraph rendered
+    assert any(t.rows for t in doc.tables)  # the markdown table became a docx table
+
+
 def test_to_pdf_returns_pdf_bytes():
     import pytest
     pytest.importorskip("playwright")  # playwright is image-only; skip in local/CI without it

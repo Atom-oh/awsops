@@ -23,7 +23,11 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     return NextResponse.json({ message: 'unsupported format' }, { status: 400 });
   }
 
-  const report = await getReport(Number(params.id));
+  const id = Number(params.id);
+  if (!Number.isInteger(id)) {
+    return NextResponse.json({ message: 'invalid report id' }, { status: 400 });
+  }
+  const report = await getReport(id);
   if (!report || !report.artifact_uri) {
     return NextResponse.json({ message: 'not found' }, { status: 404 });
   }

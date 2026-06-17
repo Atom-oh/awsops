@@ -28,8 +28,9 @@ def _is_table_row(line: str) -> bool:
 
 
 def _is_table_separator(line: str) -> bool:
-    # |---|:--:| style row — cells are only dashes/colons/spaces
-    return bool(re.fullmatch(r"\s*\|[\s|:-]+\|\s*", line))
+    # |---|:--:| style row — only dashes/colons/spaces/pipes AND at least one dash (so a data row
+    # like `|  |  |` with no dashes is NOT mistaken for a separator and dropped).
+    return bool(re.fullmatch(r"\s*\|[\s|:-]*-[\s|:-]*\|\s*", line))
 
 
 def _row_cells(line: str):
@@ -126,7 +127,10 @@ def to_pdf(md_text: str) -> bytes:
 
     html = _html(md_text)
     with sync_playwright() as p:
-        # Fargate blocks the user-namespace sandbox chromium uses by default → must disable it.
+        # Fargate blocks the user-namespace sandbox chromium uses by default → --no-sandbox; and the
+        # container runs unprivileged so the setuid sandbox helper can't be used either →
+        # --disable-setuid-sandbox. Safe here: JS is disabled below and the HTML is static, server-
+        # built from already-redacted report data (no untrusted scripts to contain).
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
         try:
             # Static render of LLM-generated HTML over redacted data → no script execution.

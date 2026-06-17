@@ -33,6 +33,10 @@ describe('GET /api/diagnosis/[id]/download', () => {
     expect((await GET(req('7', 'exe'), ctx('7'))).status).toBe(400);
   });
 
+  it('400 on a non-numeric id', async () => {
+    expect((await GET(req('abc', 'pdf'), ctx('abc'))).status).toBe(400);
+  });
+
   it('404 when the report or artifact_uri is missing', async () => {
     (getReport as any).mockResolvedValue(null);
     expect((await GET(req('7', 'pdf'), ctx('7'))).status).toBe(404);
