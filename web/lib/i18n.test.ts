@@ -6,6 +6,11 @@ describe('translate', () => {
     expect(translate('ko', 'sidebar.signOut')).toBe('로그아웃');
     expect(translate('en', 'sidebar.signOut')).toBe('Sign out');
   });
+
+  it('has the Integrations hub nav key in both locales', () => {
+    expect(translate('ko', 'nav.integrations')).toBe('연동');
+    expect(translate('en', 'nav.integrations')).toBe('Integrations');
+  });
   it('falls back to en for a key missing in ko, then to the key itself', () => {
     // every key exists in both today, so simulate via a definitely-absent key
     expect(translate('ko', 'definitely.absent.key')).toBe('definitely.absent.key');
