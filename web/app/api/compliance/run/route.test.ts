@@ -45,6 +45,8 @@ describe('POST /api/compliance/run', () => {
       expect.objectContaining({ benchmark: 'cis_v300', run_id: 42 }),
       expect.anything(),
     );
+    // links the run 1:1 to its worker job
+    expect(query.mock.calls.some((c) => /UPDATE compliance_runs SET worker_job_id/.test(String(c[0])))).toBe(true);
   });
   it('503 when workers unconfigured', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });

@@ -37,9 +37,12 @@ export async function POST(req: Request) {
 
   try {
     const { job_id } = await enqueueJob('compliance', { benchmark, run_id: runId, requested_by: requestedBy }, {});
+    // Link the run 1:1 to its worker job (migration documents worker_job_id → worker_jobs).
+    await getPool().query(`UPDATE compliance_runs SET worker_job_id = $1 WHERE id = $2`, [job_id, runId]);
     return NextResponse.json({ run_id: runId, job_id }, { status: 202 });
   } catch (e) {
     if (e instanceof EnqueueDeliveryError) {
+      await getPool().query(`UPDATE compliance_runs SET worker_job_id = $1 WHERE id = $2`, [e.job_id, runId]).catch(() => {});
       return NextResponse.json({ run_id: runId, job_id: e.job_id, enqueue: 'failed' }, { status: 202 });
     }
     return NextResponse.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });

@@ -131,8 +131,9 @@ def _compliance(payload, dry_run):
         except Exception as e:  # noqa: BLE001 — surface on the run row, then re-raise (SFN Catch → failed)
             print(traceback.format_exc())  # full trace → CloudWatch only
             if run_id is not None:
+                # Defense-in-depth: scrub any Steampipe password before persisting/surfacing the error.
                 conn.run("UPDATE compliance_runs SET status='failed', finished_at=now(), error_message=:e WHERE id=:id",
-                         e=str(e)[:2000], id=run_id)
+                         e=compliance._scrub(str(e))[:2000], id=run_id)
             raise
     finally:
         try:
