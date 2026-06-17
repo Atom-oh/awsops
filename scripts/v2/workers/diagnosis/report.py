@@ -17,15 +17,16 @@ from . import db as ddb
 from .sections import SECTIONS, DEEP_SECTIONS, INTENDED_VS_ACTUAL_SECTION
 
 # Inference-profile id — a BARE id ("anthropic.claude-...") throws ValidationException on
-# Claude 4.x invoke_model. Matches agent/agent.py's us.* profile convention.
-MODEL_ID = os.environ.get("DIAGNOSIS_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+# Claude 4.x invoke_model. Uses global.* profiles invoked from ap-northeast-2 (matches agent/agent.py)
+# so calls are captured by the ap-northeast-2 invocation log for awsops-only cost attribution.
+MODEL_ID = os.environ.get("DIAGNOSIS_MODEL_ID", "global.anthropic.claude-sonnet-4-6")
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 
 # Tier → model + catalog + per-section token budget. Sonnet is the default (enough for most runs);
 # deep tier alone may select Opus (heavier analysis). Model ids are env-overridable; defaults are the
-# verified us-east-1 cross-region inference profiles (us.* must be invoked from a US region).
+# verified global.* inference profiles (invoked from ap-northeast-2 → captured by invocation logging).
 _MODEL_SONNET = os.environ.get("DIAGNOSIS_MODEL_SONNET", MODEL_ID)  # MODEL_ID kept as back-compat alias
-_MODEL_OPUS = os.environ.get("DIAGNOSIS_MODEL_OPUS", "us.anthropic.claude-opus-4-8")
+_MODEL_OPUS = os.environ.get("DIAGNOSIS_MODEL_OPUS", "global.anthropic.claude-opus-4-8")
 # Auto title/tags use a small cheap call (default = the Sonnet id; override to Haiku via env).
 _TITLE_MODEL = os.environ.get("DIAGNOSIS_TITLE_MODEL", _MODEL_SONNET)
 _TITLE_PROMPT = (
@@ -99,11 +100,11 @@ _SYSTEM = (
 
 
 def _bedrock_render(prompt, context_json, model_id, max_tokens):
-    # [GATE-FIX R2 MAJOR] A `us.*` inference profile must be invoked from a us region (agent.py pins
-    # us-east-1). Use a dedicated BEDROCK_REGION (default us-east-1), NOT the deployment REGION
-    # (ap-northeast-2) — else the us.* profile throws. Use apac.* + ap region if you prefer in-region.
+    # global.* inference profiles route worldwide and can be invoked from the home region; we pin
+    # BEDROCK_REGION to ap-northeast-2 (matches agent.py) so calls land in the ap-northeast-2
+    # /aws/bedrock/invocation-logs and are attributable to awsops (caller-role filter) for cost.
     # model_id + max_tokens are resolved per-tier by generate() (deep may select Opus + a larger cap).
-    bedrock_region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    bedrock_region = os.environ.get("BEDROCK_REGION", "ap-northeast-2")
     client = boto3.client("bedrock-runtime", region_name=bedrock_region, config=_BEDROCK_CONFIG)
     body = {
         "anthropic_version": "bedrock-2023-05-31",

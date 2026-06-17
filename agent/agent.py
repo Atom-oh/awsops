@@ -81,8 +81,8 @@ try:
     if CacheConfig is None:
         raise TypeError("CacheConfig unavailable")
     model = BedrockModel(
-        model_id="us.anthropic.claude-sonnet-4-6",
-        region_name="us-east-1",
+        model_id="global.anthropic.claude-sonnet-4-6",
+        region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
         temperature=0.0,
         cache_config=CacheConfig(strategy="auto"),  # auto cachePoint injection (system+messages)
         cache_tools="default",                      # toolConfig cachePoint, 5m TTL
@@ -92,8 +92,8 @@ except (TypeError, ValueError) as e:  # older strands: unknown kwarg / CacheConf
     # the cacheReadInputTokens usage check (ADR-038 Task 8) — do not rely on this line alone.
     print(f"[Agent] prompt caching unavailable ({e}); falling back to temperature-only")
     model = BedrockModel(
-        model_id="us.anthropic.claude-sonnet-4-6",
-        region_name="us-east-1",
+        model_id="global.anthropic.claude-sonnet-4-6",
+        region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
         temperature=0.0,
     )
 

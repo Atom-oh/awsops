@@ -364,10 +364,10 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "AURORA_SECRET_ARN", value = aws_rds_cluster.aurora.master_user_secret[0].secret_arn },
         { name = "AWS_REGION", value = var.region },
         # AI Diagnosis (Task 1b): the report worker uploads markdown here (handlers.py reads
-        # ARTIFACT_BUCKET → RuntimeError if unset) and invokes a us.* Bedrock inference profile,
-        # which must be called from a us region → BEDROCK_REGION (report.py default us-east-1).
+        # ARTIFACT_BUCKET → RuntimeError if unset) and invokes a global.* Bedrock inference profile
+        # from the home region so calls land in the ap-northeast-2 invocation log (awsops cost attribution).
         { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.diagnosis_artifacts[0].bucket },
-        { name = "BEDROCK_REGION", value = "us-east-1" }
+        { name = "BEDROCK_REGION", value = var.region }
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -438,9 +438,9 @@ resource "aws_lambda_function" "worker" {
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
       AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
-      # AI Diagnosis (Task 1b): report worker uploads here + invokes a us.* Bedrock profile.
+      # AI Diagnosis (Task 1b): report worker uploads here + invokes a global.* Bedrock profile from var.region.
       ARTIFACT_BUCKET = aws_s3_bucket.diagnosis_artifacts[0].bucket
-      BEDROCK_REGION  = "us-east-1"
+      BEDROCK_REGION  = var.region
     }
   }
   depends_on = [aws_cloudwatch_log_group.worker_fn, aws_iam_role_policy_attachment.worker_lambda_vpc]
@@ -656,14 +656,14 @@ resource "aws_iam_role_policy" "worker_diagnosis" {
     Version = "2012-10-17"
     Statement = [
       {
-        # report.py invokes a us.anthropic.* Sonnet inference profile (must run from a us region →
-        # BEDROCK_REGION=us-east-1). Scoped to the Claude FM + us cross-region inference profiles.
+        # report.py invokes a global.anthropic.* Sonnet/Opus inference profile from var.region
+        # (BEDROCK_REGION=var.region). Scoped to the Claude FM + global cross-region inference profiles.
         Sid    = "BedrockInvokeReadOnly"
         Effect = "Allow"
         Action = ["bedrock:InvokeModel"]
         Resource = [
           "arn:aws:bedrock:*::foundation-model/anthropic.*",
-          "arn:aws:bedrock:*:*:inference-profile/us.anthropic.*",
+          "arn:aws:bedrock:*:*:inference-profile/global.anthropic.*",
         ]
       },
       {
@@ -706,7 +706,7 @@ resource "aws_iam_role_policy" "worker_lambda_diagnosis" {
         Action = ["bedrock:InvokeModel"]
         Resource = [
           "arn:aws:bedrock:*::foundation-model/anthropic.*",
-          "arn:aws:bedrock:*:*:inference-profile/us.anthropic.*",
+          "arn:aws:bedrock:*:*:inference-profile/global.anthropic.*",
         ]
       },
       {
