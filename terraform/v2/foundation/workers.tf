@@ -514,10 +514,14 @@ resource "aws_sfn_state_machine" "workers" {
   role_arn = aws_iam_role.sfn[0].arn
   type     = "STANDARD"
   definition = templatefile("${local.workers_src}/sfn.asl.json", {
-    worker_fn_arn  = aws_lambda_function.worker[0].arn
-    status_fn_arn  = aws_lambda_function.status_updater[0].arn
-    cluster_arn    = aws_ecs_cluster.main.arn
-    task_def_arn   = aws_ecs_task_definition.worker[0].arn
+    worker_fn_arn = aws_lambda_function.worker[0].arn
+    status_fn_arn = aws_lambda_function.status_updater[0].arn
+    cluster_arn   = aws_ecs_cluster.main.arn
+    # Reference the task def by FAMILY (revision-less) so runTask always uses the latest ACTIVE
+    # revision. Pinning the full ARN (with revision) breaks runTask with "TaskDefinition is inactive"
+    # whenever the task def is replaced (new revision + old deregistered) — e.g. a targeted apply that
+    # bumps the task def without re-templating this SFN. IAM already allows .../awsops-v2-worker:*.
+    task_def_arn   = aws_ecs_task_definition.worker[0].family
     subnets_json   = jsonencode(local.private_subnet_ids)
     sg_id          = aws_security_group.service.id
     container_name = local.worker_cname
