@@ -17,6 +17,7 @@ export default function ChatDrawer() {
   const router = useRouter();
   const path = usePathname();
   const [open, setOpen] = useState(false);
+  const [seed, setSeed] = useState<{ text: string; n: number } | undefined>();
   const [maximized, setMaximized] = useState(false);
   const [width, setWidth] = useState(DEFAULT_W);
   // Below lg (1024px) the drawer is fullscreen: the inline width + resize handle are
@@ -48,8 +49,16 @@ export default function ChatDrawer() {
     }
     function onOpenChat(e: Event) {
       setOpen(true);
-      const wanted = (e as CustomEvent).detail?.threadId as string | undefined;
+      const d = (e as CustomEvent).detail ?? {};
+      const wanted = d.threadId as string | undefined;
       if (wanted) void chat.selectThread(wanted); // selectThread only touches refs/setters — closure-safe
+      const prompt = d.prompt as string | undefined;
+      if (prompt) {
+        // a seeded question (e.g. topology "ask AI about this resource") = a fresh ask →
+        // start a clean chat so the user isn't looking at the previously-loaded thread.
+        if (!wanted) chat.newChat();
+        setSeed({ text: prompt, n: Date.now() }); // fill the composer; user reviews + sends
+      }
     }
     window.addEventListener('awsops:open-chat', onOpenChat);
     return () => window.removeEventListener('awsops:open-chat', onOpenChat);
@@ -155,7 +164,7 @@ export default function ChatDrawer() {
             {chat.msgs.length === 0
               ? <PresetChips onPick={chat.send} />
               : <MessageList msgs={chat.msgs} onSwitch={chat.resendWith} />}
-            <Composer disabled={chat.busy} onSend={chat.send} />
+            <Composer disabled={chat.busy} onSend={chat.send} seed={seed} />
           </div>
         </div>
       </div>

@@ -161,7 +161,12 @@ def collect_service_map():
 
 
 def collect_posture():
-    """Security Hub active findings rollup by severity (CIS/best-practice). No PII."""
+    """Security Hub active findings rollup by severity (CIS/best-practice). No PII.
+
+    Security Hub is opt-in. When the account isn't subscribed, get_findings raises
+    InvalidAccessException — that is a known steady state, NOT a failure. Report it
+    quietly as `enabled: false` so the section narrates "Security Hub 미구독" instead of
+    a scary "_failed" (which otherwise degrades every report to 'partial')."""
     try:
         sh = _sh_client()
         r = sh.get_findings(
@@ -173,7 +178,13 @@ def collect_posture():
         for f in r.get("Findings", []):
             sev = f.get("Severity", {}).get("Label", "UNKNOWN")
             by_sev[sev] = by_sev.get(sev, 0) + 1
-        return _result("posture", data={"findings_by_severity": by_sev})
+        return _result("posture", data={"enabled": True, "findings_by_severity": by_sev})
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "InvalidAccessException":
+            return _result("posture", ok=True, degraded=False,
+                           notes="Security Hub not subscribed in this account/region",
+                           data={"enabled": False, "findings_by_severity": {}})
+        return _classify("posture", e)
     except Exception as e:  # noqa: BLE001
         return _classify("posture", e)
 

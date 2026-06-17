@@ -30,6 +30,14 @@ const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
 const listConfiguredSchemas = vi.fn();
 vi.mock('@/lib/datasource-schema', () => ({ listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a) }));
+const synthesizeStream = vi.fn();
+vi.mock('@/lib/synthesize', () => ({ synthesizeStream: (...a: unknown[]) => synthesizeStream(...a) }));
+const assistantAnswer = vi.fn();
+const isProductHelpIntent = vi.fn();
+vi.mock('@/lib/assistant', () => ({
+  assistantAnswer: (...a: unknown[]) => assistantAnswer(...a),
+  isProductHelpIntent: (...a: unknown[]) => isProductHelpIntent(...a),
+}));
 
 function req(body: unknown, cookie = 'awsops_token=t') {
   return new Request('http://x/api/chat', {
@@ -73,10 +81,18 @@ beforeEach(() => {
   recordExchange.mockReset();
   recordExchange.mockResolvedValue(undefined);
   listConfiguredSchemas.mockReset(); listConfiguredSchemas.mockResolvedValue([]);
+  synthesizeStream.mockReset();
+  // default: real-shaped async-generator returning a deterministic merged answer
+  synthesizeStream.mockImplementation(async function* () { yield '합성된 답변'; });
+  assistantAnswer.mockReset();
+  assistantAnswer.mockResolvedValue('가이드 답변');
+  isProductHelpIntent.mockReset();
+  isProductHelpIntent.mockReturnValue(false); // default off so existing routing is unaffected
   delete process.env.HYBRID_ROUTING_ENABLED;
+  delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED;
 });
 
-afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; });
+afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED; });
 
 describe('POST /api/chat', () => {
   it('401 when unauthenticated', async () => {
@@ -167,20 +183,22 @@ describe('hybrid routing (ADR-038)', () => {
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
   });
 
-  it('flag on: inactive top-1 short-circuits — no agent call, guidance message, meta still emitted', async () => {
+  it('flag on: EXPLICIT pin to an inactive section short-circuits with the honest 🔒 (ADR-044 §2)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
+    // user explicitly pinned /container → method:'pin' (an auto-routed inactive section now degrades
+    // to the AWSops Assistant instead — see the 'AWSops Assistant' suite).
     classifyRoute.mockResolvedValue({
       primary: 'container',
-      ranked: [{ key: 'container', score: 0.9, active: false }, { key: 'network', score: 0.4, active: true }],
-      method: 'llm',
+      ranked: [{ key: 'container', score: 1, active: false }],
+      method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: false }],
     });
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    const res = await POST(req({ prompt: '파드 CrashLoop 원인', sessionId: 's'.repeat(36) }));
+    const res = await POST(req({ prompt: '파드 CrashLoop 원인', section: 'container', sessionId: 's'.repeat(36) }));
     const body = await readStream(res);
     expect(invokeAgent).not.toHaveBeenCalled();
-    expect(body).toContain('"method":"llm"'); // meta ALWAYS emitted (spec §6)
+    expect(assistantAnswer).not.toHaveBeenCalled();
     expect(body).toContain('P3'); // guidance delta mentions availability
     expect(body).toContain('[DONE]');
   });
@@ -226,7 +244,6 @@ describe('hybrid routing (ADR-038)', () => {
     const { POST } = await import('./route');
     const res = await POST(req({ prompt: 'run a CIS benchmark', sessionId: 's'.repeat(36) }));
     await readStream(res);
-    expect(resolveAgent).toHaveBeenCalledWith('compliance', expect.anything(), null, [], []);
   });
 
   it('fail-closed revocation: a disabled custom agent is NOT used — falls back to the gateway', async () => {
@@ -316,13 +333,13 @@ describe('thread persistence', () => {
     expect(recordExchange).not.toHaveBeenCalled();
   });
 
-  it('records the inactive-section guidance exchange too (spec §3)', async () => {
+  it('records the inactive-section 🔒 guidance exchange too (explicit pin, spec §3)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u1' });
-    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 0.9, active: false }], method: 'llm' });
+    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: false }] });
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    await readStream(await POST(req({ prompt: '파드 CrashLoop 원인', sessionId: 's'.repeat(36) })));
+    await readStream(await POST(req({ prompt: '파드 CrashLoop 원인', section: 'container', sessionId: 's'.repeat(36) })));
     expect(invokeAgent).not.toHaveBeenCalled();
     expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({
       userContent: '파드 CrashLoop 원인',
@@ -400,3 +417,247 @@ describe('datasource schema injection', () => {
   });
 });
 
+describe('cross-domain auto-synthesis (ADR-044)', () => {
+  const multiRoute = {
+    primary: 'network',
+    ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }],
+    method: 'llm' as const,
+    multiDomain: true,
+    selected: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }],
+  };
+
+  it('flag OFF: multiDomain route still uses the single path (regression lock)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    // MULTI_ROUTE_SYNTHESIS_ENABLED intentionally unset
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockResolvedValue('single answer');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'EKS 파드가 RDS 연결 안돼', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(body).not.toContain('합성된 답변'); // single path, not the synth output
+  });
+
+  it('flag ON + multiDomain: fans out per-gateway and synthesizes', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockImplementation(async ({ gateway }: { gateway: string }) => `ans-${gateway}`);
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'EKS 파드가 RDS 연결 안돼', sessionId: 's'.repeat(36) })));
+    // gate CRITICAL: one invoke per selected gateway, each with its OWN gateway
+    expect(invokeAgent).toHaveBeenCalledTimes(2);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'data' }));
+    // synthesize gets BOTH survivors (3rd arg is the {abortSignal} opts)
+    expect(synthesizeStream.mock.calls[0][0]).toBe('EKS 파드가 RDS 연결 안돼');
+    expect(synthesizeStream.mock.calls[0][1]).toEqual([
+      { gateway: 'network', text: 'ans-network' },
+      { gateway: 'data', text: 'ans-data' },
+    ]);
+    expect(body).toContain('합성된 답변');
+    expect(body).toContain('"via":"multi:network+data"'); // gate MINOR: via in meta
+    expect(body).toContain('[DONE]');
+  });
+
+  it('one gateway fails: synthesize runs over the survivor only', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockImplementation(async ({ gateway }: { gateway: string }) =>
+      gateway === 'data' ? Promise.reject(new Error('data down')) : 'ans-network');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream.mock.calls[0][1]).toEqual([{ gateway: 'network', text: 'ans-network' }]);
+  });
+
+  it('all gateways fail: emits an error frame, no synthesis', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockRejectedValue(new Error('all down'));
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(body).toContain('"error"');
+  });
+
+  it('custom-agent pick suppresses fan-out even on a multiDomain route', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute);
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: ['cis'], skills: [] }]);
+    pickCustomAgent.mockReturnValue('compliance');
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', skillHashes: [] });
+    invokeAgent.mockResolvedValue('custom answer');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'cis check', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(body).not.toContain('합성된 답변'); // single path, not the synth output
+  });
+
+  it('gate MAJOR: recomputes multiDomain from ACTIVE selected — a stale inactive entry is dropped', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({
+      primary: 'network',
+      ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'container', score: 0.6, active: false }],
+      method: 'llm', multiDomain: true,
+      selected: [{ key: 'network', score: 0.9, active: true }, { key: 'container', score: 0.6, active: false }],
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockResolvedValue('single');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled(); // only network is active ⇒ <2 ⇒ no synthesis
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
+  });
+
+  it('pin wins over fan-out: a pinned route never synthesizes', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({
+      primary: 'cost', ranked: [{ key: 'cost', score: 1, active: true }], method: 'pin',
+      multiDomain: false, selected: [{ key: 'cost', score: 1, active: true }],
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'cost', skill: 'cost', agentName: 'cost', skillHashes: [] });
+    invokeAgent.mockResolvedValue('pinned');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'EKS RDS 연결', section: 'cost', switchedFrom: 'network', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'cost' }));
+  });
+
+  it('explicit pin to an ENABLED custom agent is honored (ADR-044 §2 — pin > keyword/classifier)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    getEnabledCustomAgents.mockResolvedValue([{ name: 'compliance', tier: 'custom', enabled: true, routingKeywords: [], skills: [] }]);
+    isCustomAgentEnabled.mockResolvedValue(true);
+    // classifier would pick something else, and there is no keyword match — the pin must still win
+    classifyRoute.mockResolvedValue({ primary: 'network', ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }], method: 'llm', multiDomain: true, selected: [{ key: 'network', score: 0.9, active: true }, { key: 'data', score: 0.6, active: true }] });
+    resolveAgent.mockReturnValue({ tier: 'custom', gateway: 'security', systemPromptOverride: 'OVR', agentName: 'compliance', skillHashes: [] });
+    invokeAgent.mockResolvedValue('custom pinned answer');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'EKS RDS 연결 안돼', section: 'compliance', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();         // explicit pin suppresses fan-out
+    expect(resolveAgent.mock.calls[0][0]).toBe('compliance'); // pin routed to the custom agent (not the classifier's 'network')
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'compliance' }));
+    expect(body).toContain('"agentName":"compliance"');
+  });
+
+  it('explicit pin to a DISABLED/absent custom agent ⇒ honest message, no silent fallback (ADR-044 §2)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    getEnabledCustomAgents.mockResolvedValue([]); // 'ghost' is not an enabled agent in this space
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: '아무거나', section: 'ghost', sessionId: 's'.repeat(36) })));
+    expect(invokeAgent).not.toHaveBeenCalled();      // no silent fallback to keyword/classifier
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(body).toContain('ghost');
+    expect(body).toContain('사용할 수 없습니다');
+    expect(body).toContain('[DONE]');
+  });
+
+  it('thread is agent-agnostic: same threadId across two turns to different gateways (ADR-044 §4)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    const tid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    invokeAgent.mockResolvedValue('a');
+    const { POST } = await import('./route');
+    // turn 1 → cost
+    classifyRoute.mockResolvedValue({ primary: 'cost', ranked: [{ key: 'cost', score: 1, active: true }], method: 'pin', multiDomain: false, selected: [{ key: 'cost', score: 1, active: true }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'cost', skill: 'cost', agentName: 'cost', skillHashes: [] });
+    await readStream(await POST(req({ prompt: '비용', section: 'cost', threadId: tid, sessionId: 's'.repeat(36) })));
+    // turn 2 → network, SAME thread
+    classifyRoute.mockResolvedValue({ primary: 'network', ranked: [{ key: 'network', score: 1, active: true }], method: 'pin', multiDomain: false, selected: [{ key: 'network', score: 1, active: true }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    await readStream(await POST(req({ prompt: '연결', section: 'network', threadId: tid, sessionId: 's'.repeat(36) })));
+    const calls = recordExchange.mock.calls.map((c) => c[0]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ threadId: tid, gateway: 'cost' });
+    expect(calls[1]).toMatchObject({ threadId: tid, gateway: 'network' }); // same thread, different agent
+  });
+
+  it('only one active selected route: no fan-out (single path)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({
+      primary: 'network',
+      ranked: [{ key: 'network', score: 0.9, active: true }, { key: 'container', score: 0.6, active: false }],
+      method: 'llm', multiDomain: false,
+      selected: [{ key: 'network', score: 0.9, active: true }],
+    });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    invokeAgent.mockResolvedValue('single');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(invokeAgent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AWSops Assistant (product help + inactive fallback)', () => {
+  it('product-help intent → AWSops Assistant, not an AWS section agent', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isProductHelpIntent.mockReturnValue(true);
+    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'observability', score: 0.9, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    assistantAnswer.mockResolvedValue('1) Integrations에서 Prometheus 등록 2) Skill 작성 3) Agent 생성');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'prometheus 분석 agent 만들기 /customization', sessionId: 's'.repeat(36) })));
+    expect(assistantAnswer).toHaveBeenCalledWith('prometheus 분석 agent 만들기 /customization');
+    expect(invokeAgent).not.toHaveBeenCalled();
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(body).toContain('Prometheus'); // single token survives typewriter chunk()
+    expect(body).toContain('"assistant":true');
+    expect(body).toContain('"gateway":"assistant"');
+    expect(body).not.toContain('🔒');
+  });
+
+  it('auto-routed INACTIVE section degrades to the Assistant (no 🔒 dead-end)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isProductHelpIntent.mockReturnValue(false);
+    // classifier auto-routed (method:'regex') to inactive observability
+    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'observability', score: 0.9, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'prometheus p99 추세', sessionId: 's'.repeat(36) })));
+    expect(assistantAnswer).toHaveBeenCalled();
+    expect(body).toContain('답변'); // chunk() splits on spaces
+    expect(body).not.toContain('🔒'); // no dead-end
+    expect(invokeAgent).not.toHaveBeenCalled();
+  });
+
+  it('EXPLICIT pin to an inactive section keeps the honest 🔒 message (not the Assistant)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isProductHelpIntent.mockReturnValue(false);
+    // user pinned /observability → classifyRoute returns method:'pin'
+    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'observability', score: 1, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: '아무거나', section: 'observability', sessionId: 's'.repeat(36) })));
+    expect(assistantAnswer).not.toHaveBeenCalled();
+    expect(body).toContain('🔒'); // explicit choice → honest unavailable message
+  });
+});

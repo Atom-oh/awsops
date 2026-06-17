@@ -80,8 +80,8 @@ export function useChat() {
       }
       const data: { thread: ThreadSummary; messages: ThreadMessage[] } = await res.json();
       setMsgs(data.messages.map((m) => {
-        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string };
-        return { role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: meta.ranked, method: meta.method };
+        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string; via?: string };
+        return { role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: meta.ranked, method: meta.method, via: meta.via };
       }));
       sessionRef.current = data.thread.sessionId;
       localStorage.setItem('awsops_chat_session', data.thread.sessionId);
@@ -108,7 +108,7 @@ export function useChat() {
     try {
       const obj = JSON.parse(data);
       if (isMeta && obj.threadId) setThread(obj.threadId); // server-issued thread (first message mints it)
-      if (isMeta && obj.gateway) patchLast((m) => ({ ...m, gateway: obj.gateway, ranked: obj.ranked, method: obj.method }));
+      if (isMeta && obj.gateway) patchLast((m) => ({ ...m, gateway: obj.gateway, ranked: obj.ranked, method: obj.method, via: obj.via }));
       else if (obj.delta !== undefined) patchLast((m) => ({ ...m, content: m.content + obj.delta }));
       else if (obj.error) patchLast((m) => ({ ...m, content: `⚠️ ${obj.error}`, streaming: false }));
     } catch { /* heartbeat / non-JSON */ }

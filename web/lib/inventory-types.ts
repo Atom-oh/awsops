@@ -28,6 +28,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'status', label: 'Status' }, { key: 'running_tasks_count', label: 'Running' },
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
     { key: 'registered_container_instances_count', label: 'Instances' } ] },
+  ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', columns: [
+    { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
+    { key: 'launch_type', label: 'Launch' }, { key: 'task_definition_arn', label: 'Task def' } ] },
   ecr: { label: 'ECR Repositories', group: 'Compute', distKey: 'image_tag_mutability', columns: [
     { key: 'repository_uri', label: 'URI' }, { key: 'image_tag_mutability', label: 'Tag mutability' },
     { key: 'created_at', label: 'Created' } ] },

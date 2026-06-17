@@ -47,3 +47,33 @@ abandon only the H3a autonomy/remediation wiring.
   account scoping — live), ADR-034, ADR-035's read-only path, all inventory/cost/chat/EKS-read.
 - **Frozen dark code remains** (remediation/incident/writeback/k8sgpt substrates, flag-OFF). A future
   owner can delete it as cleanup or revisit a reversal; nothing runs while the flags are false.
+
+## Addendum (2026-06-14 → 2026-06-16) — external-endpoint clause subsequently narrowed
+
+This 2026-06-11 reversal named three high-risk directions — **mutation, autonomy, and external
+endpoints** ("egress/SSRF/credential custody"). The **external-endpoint** clause was later
+**narrowed (not erased)**:
+
+- **ADR-040 (2026-06-14)** re-ran a multi-AI panel for a *narrow* slice — governed external
+  knowledge/comms **DATA writes** (Slack/Notion/Jira/ServiceNow records, non-AWS-resource only).
+  Verdict: 3 conditional un-freeze / **1 strong dissent (kept-frozen)** / 1 no-verdict. The dissent's
+  data-exfiltration objection was **converted into hard conditions** (DLP/redaction + destination
+  allowlist, non-AWS-only, flag-OFF, deferred impl), not dismissed. This slice has panel quorum.
+- **ADR-041 (2026-06-14, owner-solo)** re-scoped the *principle*: "read-only" binds **AWS-resource
+  mutation + autonomy**, not external DATA integration. A 2026-06-16 multi-AI panel reviewed that
+  re-scope and returned **PARTIAL** — the outcome is legitimate (ADR-040 has quorum) but ADR-041's
+  "this was always the intent" framing contradicts this record's text, so it is corrected to an
+  **owner-override** (see ADR-041 governance addendum).
+
+**Net invariant (unchanged):** **AWS-resource mutation + autonomy stay permanently reversed** (ADR-029/
+036, ADR-031 P4 AWS-mutating tools, ADR-032 autonomous mitigation). Only the *external-DATA-integration*
+reading of the external-endpoint clause was narrowed, under the controls above.
+
+## Governance rule (adopted 2026-06-16)
+
+When a multi-AI consensus **names a feature/direction by name as scope-creep**, any later
+re-introduction — even under a narrowed scope — requires **either** (a) a fresh multi-AI panel on
+the narrowed slice (as ADR-040 did), **or** (b) an explicit, dated **owner-override log entry** with
+rationale (as ADR-041 now records). A re-scope must **not** be framed as a mere "clarification of
+original intent" when it contradicts the documented rationale of the prior consensus. The
+"multi-AI review not required" shortcut does **not** apply to such keystone re-interpretations.

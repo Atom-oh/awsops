@@ -15,6 +15,7 @@ interface ReportRow {
   tier: string;
   status: string;
   created_at: string;
+  model?: string | null;        // deep-tier model (sonnet|opus); shown in the list for deep reports
   error?: string | null;       // A6: surface failed reports (was hidden → looked stuck)
   progress?: DiagnosisProgress; // A3/A6: live per-section progress
 }
@@ -40,7 +41,9 @@ const SEV_CLASS: Record<string, string> = {
 };
 
 export default function DiagnosisView() {
-  const [tier, setTier] = useState<'light' | 'mid'>('mid');
+  const [tier, setTier] = useState<'light' | 'mid' | 'deep'>('mid');
+  const [model, setModel] = useState<'sonnet' | 'opus'>('sonnet'); // deep-tier model choice
+
   const [reports, setReports] = useState<ReportRow[]>([]);
   const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress } | null>(null);
   const [submitting, setSubmitting] = useState(false); // brief: the POST round-trip only
@@ -99,7 +102,7 @@ export default function DiagnosisView() {
       const r = await fetch('/api/diagnosis', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ tier }),
+        body: JSON.stringify(tier === 'deep' ? { tier, model } : { tier }),
       });
       if (!r.ok) return;
       const posted = await r.json();
@@ -140,11 +143,12 @@ export default function DiagnosisView() {
         <div className="flex items-center gap-2">
           <select
             value={tier}
-            onChange={(e) => setTier(e.target.value as 'light' | 'mid')}
+            onChange={(e) => setTier(e.target.value as 'light' | 'mid' | 'deep')}
             className="rounded-md border border-ink-200 px-2 py-1 text-sm"
           >
             <option value="light">Light</option>
             <option value="mid">Mid</option>
+            <option value="deep">Deep (15섹션)</option>
           </select>
           <button
             onClick={run}
@@ -154,6 +158,26 @@ export default function DiagnosisView() {
             {running ? '진단 중…' : '진단 실행'}
           </button>
         </div>
+        {tier === 'deep' && (
+          <fieldset className="rounded-md border border-ink-200 px-2 py-1.5 text-[13px]">
+            <legend className="px-1 text-ink-400">모델</legend>
+            <div className="flex items-center gap-3">
+              {(['sonnet', 'opus'] as const).map((m) => (
+                <label key={m} className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    name="diag-model"
+                    value={m}
+                    checked={model === m}
+                    onChange={() => setModel(m)}
+                  />
+                  <span className="capitalize">{m}</span>
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-ink-400">Opus: 더 깊은 분석, 비용↑</p>
+          </fieldset>
+        )}
         <ul className="space-y-1">
           {reports.map((r) => (
             <li key={r.id}>
@@ -161,7 +185,8 @@ export default function DiagnosisView() {
                 onClick={() => open(r.id)}
                 className="w-full rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-ink-100"
               >
-                #{r.id} · {r.tier} ·{' '}
+                #{r.id} · {r.tier}
+                {r.tier === 'deep' && r.model ? ` · ${r.model}` : ''} ·{' '}
                 <span className={r.status === 'failed' ? 'text-red-600' : 'text-ink-400'}>
                   {r.status === 'running' && r.progress?.total
                     ? `running ${r.progress.current ?? 0}/${r.progress.total}`

@@ -4,7 +4,7 @@
 // built-in), disabled-by-default, audited. NOTE: the integrations table has NO `version` column
 // (unlike skills/agents) — do not reference it. getEnabledIntegrations is per-account-space scoped.
 import { getPool } from '@/lib/db';
-import { writeAudit, type Tier } from '@/lib/catalog';
+import { type Tier } from '@/lib/catalog';
 
 export type Direction = 'egress' | 'ingress';
 export type Capability = 'read' | 'read_write';

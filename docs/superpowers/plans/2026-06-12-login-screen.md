@@ -160,19 +160,19 @@
   `${` 이스케이프 함정 회피) + `terraform validate` + `plan` diff 확인 후 커밋
   (apply는 배포 절차에서)
 
-### Task 9: 문서 갱신 + ADR-039
+### Task 9: 문서 갱신 + ADR-042
 
 **Files:**
-- Create: `docs/decisions/ADR-039-v2-inapp-login.md`
+- Create: `docs/decisions/ADR-042-v2-inapp-login.md`
 - Modify: `docs/decisions/CLAUDE.md` (ADR 인덱스)
 - Modify: `CLAUDE.md`
 - Modify: `docs/superpowers/specs/2026-06-12-login-screen-design.md`
 
-- [ ] **ADR-039 작성** — v2 인앱 로그인(Cognito USER_PASSWORD_AUTH). 맥락(037 Hosted UI+PKCE),
+- [ ] **ADR-042 작성** — v2 인앱 로그인(Cognito USER_PASSWORD_AUTH). 맥락(037 Hosted UI+PKCE),
   결정(자체 `/login` 폼 + 무서명 InitiateAuth + Edge redirect `/login`, `/_callback` 폴백 보존,
   AgentCore teal 테마), 트레이드오프(앱이 비번 처리 · MFA/재설정/페더레이션 UI 부재 ·
   USER_PASSWORD_AUTH · 최소권한으로 REFRESH 미부여 · id_token 12h), 대안(브랜드 랜딩→Hosted UI) 기각.
-  파일명 `ADR-039-v2-inapp-login.md`(번호 = 최고+1; `ls docs/decisions/ADR-*.md`로 038 최고 확인) +
+  파일명 `ADR-042-v2-inapp-login.md`(번호 = 최고+1; `ls docs/decisions/ADR-*.md`로 038 최고 확인) +
   `docs/decisions/CLAUDE.md` 인덱스에 ADR-038 형식 따라 한 줄 추가
 - [ ] CLAUDE.md(국문·영문 두 섹션) 인증 불릿 갱신: 자체 `/login` 폼 +
   BFF `InitiateAuth(USER_PASSWORD_AUTH)` + Edge redirect `/login` + Hosted UI PKCE는

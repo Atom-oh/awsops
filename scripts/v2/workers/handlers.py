@@ -39,6 +39,7 @@ def _report(payload, dry_run):
     uploads the markdown to S3 itself and writes artifact_uri. Read-only AWS data sources."""
     account = str(payload.get("account", ""))
     tier = payload.get("tier", "mid")
+    model = payload.get("model", "sonnet")  # deep-tier may select 'opus'; resolver pins others to sonnet
     requested_by = payload.get("requested_by", "unknown")
     report_id = payload.get("report_id")
     if dry_run:
@@ -57,7 +58,7 @@ def _report(payload, dry_run):
             on_progress = (lambda c, t, s, p: ddb.update_progress(
                 conn, report_id, current=c, total=t, section=s, phase=p))
             md, summary, sources_used = rpt.generate(
-                conn, account, tier, report_id=report_id, on_progress=on_progress)
+                conn, account, tier, report_id=report_id, on_progress=on_progress, model=model)
             artifact_uri = _upload_markdown(md, report_id)
             status = "partial" if summary.get("degraded") else "succeeded"
             ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,

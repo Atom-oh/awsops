@@ -1,8 +1,8 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Circle, type LucideIcon } from 'lucide-react';
-import { Background, Controls, MiniMap, Position, type Node, type Edge } from '@xyflow/react';
+import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, type LucideIcon } from 'lucide-react';
+import { Background, Controls, MiniMap, Position, type Node, type Edge, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -15,15 +15,15 @@ import { useTheme } from '@/lib/use-theme';
 // ReactFlow touches the DOM on mount — load it client-only to avoid SSR mismatch.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
 
-const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda'] as const;
+const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda', 'ecs_task'] as const;
 type InvType = (typeof TYPES)[number];
 type Row = Record<string, unknown>;
 
-// InvType → FlowInput key (target_group maps to `tg`). ec2/lambda enrich target labels only.
-type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda';
+// InvType → FlowInput key (target_group→tg, ecs_task→ecsTask). ec2/lambda/ecs enrich target labels.
+type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda' | 'ecsTask';
 const FLOW_KEY: Record<InvType, RowKey> = {
   route53: 'route53', cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg', waf: 'waf',
-  ec2: 'ec2', lambda: 'lambda',
+  ec2: 'ec2', lambda: 'lambda', ecs_task: 'ecsTask',
 };
 
 // Node fill/border per FlowKind. Light + dark variants (ReactFlow dark colorMode flips default
@@ -63,11 +63,38 @@ const KIND_ICON: Record<FlowKind, IconC> = {
   waf: Shield, target: Circle, origin: CircleHelp, more: MoreHorizontal,
 };
 // target sub-icon by resolved backend: EKS pod / EC2 / Lambda, else a generic dot.
-const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ec2: Server, lambda: Zap };
+const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ecs: Boxes, ec2: Server, lambda: Zap };
 
 function iconFor(n: FlowNode): IconC {
   if (n.kind === 'target') return RESOLVED_ICON[String(n.meta?.resolved ?? '')] ?? Circle;
   return KIND_ICON[n.kind];
+}
+
+// Preset AI questions per resource kind. Each pins the RIGHT section-agent (`section`) so the
+// composer routes via `/section` — e.g. SG checks go to `network` (which has describe-security-
+// groups / describe-network-interfaces-by-ip), NOT `security` (IAM-only) which the '보안' keyword
+// would otherwise first-match.
+interface Chip { q: string; section: string }
+function chipsFor(n: FlowNode): Chip[] {
+  const net = (q: string): Chip => ({ q, section: 'network' });
+  const sec = (q: string): Chip => ({ q, section: 'security' });
+  const mon = (q: string): Chip => ({ q, section: 'monitoring' });
+  const con = (q: string): Chip => ({ q, section: 'container' });
+  switch (n.kind) {
+    case 'cloudfront': return [net('이 배포가 오리진과 TLS로 통신하나?'), net('WAF 연결 점검'), net('캐시/TLS 정책 점검')];
+    case 'alb': case 'nlb': return [net('CloudFront→이 LB 통신이 TLS인가?'), net('리스너/타깃 health 원인'), net('이 LB 보안그룹(인바운드) 점검')];
+    case 'tg': return [net('unhealthy 타깃 원인 진단'), net('헬스체크 설정 점검')];
+    case 'target': {
+      const r = String(n.meta?.resolved ?? '');
+      if (r === 'eks') return [con('이 deployment 상태/이벤트 진단'), mon('관련 pod 로그 필터'), sec('IAM/RBAC 권한 점검')];
+      if (r === 'ecs') return [con('이 서비스 task 상태/배포 진단'), mon('컨테이너 로그 필터'), sec('task role 권한 점검')];
+      if (r === 'lambda') return [mon('이 함수 최근 에러 로그'), sec('IAM 권한 점검'), con('동시성/타임아웃 점검')];
+      return [net('이 IP의 보안그룹 점검'), net('이 IP가 속한 인스턴스/ENI 확인'), mon('관련 로그 필터')];
+    }
+    case 'waf': return [sec('이 WAF 룰 점검'), mon('차단 로그 추이')];
+    case 'route53': return [net('이 레코드 대상 도달성 점검')];
+    default: return [net('이 리소스 네트워크/보안그룹 점검'), mon('관련 로그 필터')];
+  }
 }
 
 function nodeLabel(n: FlowNode): ReactNode {
@@ -169,23 +196,31 @@ export default function TopologyPage() {
   }), [full]);
 
   const { nodes, edges } = useMemo(() => {
-    const g = filterFromEntry(full, entryId || null);
-    const pos = Object.fromEntries(layoutFlow(g).map((p) => [p.id, p]));
+    const gFull = filterFromEntry(full, entryId || null);
 
-    // Focus: clicking a node highlights its connected path (up + downstream), dims the rest.
+    // Focus: clicking a node collapses the view to ITS connected path (up + downstream), then
+    // re-lays-out and re-centers (imperative fitView in the effect below) so the active subgraph
+    // fills the screen — instead of dimming the rest and letting it overflow/clip off one screen.
     const focusId = selected?.id ?? null;
-    let connected: Set<string> | null = null;
-    if (focusId && g.nodes.some((n) => n.id === focusId)) {
+    let g = gFull;
+    if (focusId && gFull.nodes.some((n) => n.id === focusId)) {
       const adj = new Map<string, string[]>();
-      for (const e of g.edges) {
+      for (const e of gFull.edges) {
         (adj.get(e.source) ?? adj.set(e.source, []).get(e.source)!).push(e.target);
         (adj.get(e.target) ?? adj.set(e.target, []).get(e.target)!).push(e.source);
       }
-      connected = new Set([focusId]);
+      const connected = new Set([focusId]);
       const q = [focusId];
       while (q.length) { const c = q.shift()!; for (const nb of adj.get(c) ?? []) if (!connected.has(nb)) { connected.add(nb); q.push(nb); } }
+      g = {
+        nodes: gFull.nodes.filter((n) => connected.has(n.id)),
+        edges: gFull.edges.filter((e) => connected.has(e.source) && connected.has(e.target)),
+      };
     }
-    const dim = (id: string) => connected != null && !connected.has(id);
+    // In focus mode lay out top→bottom (TB): the active path is a thin chain that fits the tall,
+    // narrow column left of the docked detail panel far better than a wide LR row. Full graph = LR.
+    const rankdir: 'LR' | 'TB' = focusId ? 'TB' : 'LR';
+    const pos = Object.fromEntries(layoutFlow(g, { rankdir }).map((p) => [p.id, p]));
 
     const nodes: Node[] = g.nodes.map((n) => {
       const [bg, border] = nodeColors(n, dark);
@@ -194,30 +229,35 @@ export default function TopologyPage() {
         id: n.id,
         position: { x: p.x, y: p.y },
         data: { label: nodeLabel(n), fnode: n },
-        // LR layout → handles on left/right so edges flow horizontally (not top/bottom).
-        sourcePosition: Position.Right,
-        targetPosition: Position.Left,
+        // handles must follow rankdir: LR → left/right, TB → top/bottom, or edges leave the wrong
+        // sides and the smoothstep routing loops back ugly.
+        sourcePosition: rankdir === 'TB' ? Position.Bottom : Position.Right,
+        targetPosition: rankdir === 'TB' ? Position.Top : Position.Left,
         style: {
           background: bg,
           border: `${n.id === focusId ? '2px solid' : n.kind === 'origin' ? '1px dashed' : '1px solid'} ${border}`,
           color: dark ? '#E3E9EE' : '#16202A',
           borderRadius: 8, fontSize: 11, padding: 6, width: 220,
-          opacity: dim(n.id) ? 0.25 : 1,
-          transition: 'opacity .15s',
         },
       };
     });
     const edges: Edge[] = g.edges.map((e) => ({
       id: e.id, source: e.source, target: e.target,
-      animated: connected != null && connected.has(e.source) && connected.has(e.target),
+      animated: focusId != null, // in focus mode every shown edge is on the active path
       // confidence convention: observed = solid, inferred (Spec 2) = dashed.
-      style: {
-        ...(e.confidence === 'inferred' ? { strokeDasharray: '4 4' } : {}),
-        opacity: connected != null && (!connected.has(e.source) || !connected.has(e.target)) ? 0.12 : 1,
-      },
+      style: e.confidence === 'inferred' ? { strokeDasharray: '4 4' } : {},
     }));
     return { nodes, edges };
   }, [full, entryId, dark, selected]);
+
+  // Re-center imperatively (NOT by remounting — a remount destroys the user's pan/zoom and makes
+  // dragging feel broken). Keep one mounted instance; refit when the entry filter or focus changes.
+  // rAF defers the fit until after the detail panel has docked and the layout has settled.
+  const rfRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => rfRef.current?.fitView({ padding: 0.2, duration: 300, maxZoom: 1.2 }));
+    return () => cancelAnimationFrame(id);
+  }, [entryId, selected?.id]);
 
   // Detail for the clicked node: resource nodes show their full inventory row (every field —
   // vpc, subnet, tags …); target/origin nodes synthesize a small detail from their meta.
@@ -236,8 +276,58 @@ export default function TopologyPage() {
   const onEntry = (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
   const selectCls = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
 
+  // "Ask AI about this resource" bridge → seeds the chat composer (user reviews + sends).
+  const resourceArn = (n: FlowNode): string => {
+    const m = (n.meta ?? {}) as Record<string, unknown>;
+    const row = m.row as Record<string, unknown> | undefined;
+    // route53 has no ARN → clean record name; targets (ec2/lambda/ip) → meta.id; everything
+    // else → the real `arn` field (CF/ALB/NLB/TG/WAF all carry one), not the resource_id/name.
+    if (n.kind === 'route53') return String(row?.name ?? n.label).replace(/\.$/, '');
+    return String(row?.arn ?? m.id ?? row?.resource_id ?? n.label);
+  };
+  const askAI = (q: string, section?: string) => {
+    if (!selected) return;
+    const m = (selected.meta ?? {}) as Record<string, unknown>;
+    const row = (m.row ?? {}) as Record<string, unknown>;
+    // ground the agent with known facts so it doesn't have to guess the target.
+    const facts = [
+      row.vpc_id ? `vpc: ${row.vpc_id}` : '',
+      row.subnet_id ? `subnet: ${row.subnet_id}` : '',
+      row.private_ip_address ? `private_ip: ${row.private_ip_address}` : '',
+      m.cluster ? `cluster: ${m.cluster}` : '',
+    ].filter(Boolean).join(' · ');
+    // pin the section (/network etc.) so routing isn't hijacked by keyword first-match.
+    const prefix = section ? `/${section} ` : '';
+    const ctx = `${prefix}[토폴로지 리소스] ${selected.kind} · ${selected.label}\nID/ARN: ${resourceArn(selected)}${facts ? `\n${facts}` : ''}\n\n질문: ${q}`;
+    window.dispatchEvent(new CustomEvent('awsops:open-chat', { detail: { prompt: ctx } }));
+  };
+  const copyArn = () => { if (selected) navigator.clipboard?.writeText(resourceArn(selected)); };
+
+  const detailActions = selected ? (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={copyArn}
+          className="inline-flex items-center gap-1 rounded-md border border-ink-200 bg-card px-2 py-1 text-[11px] text-ink-600 hover:bg-ink-50">
+          <Copy size={12} /> ARN 복사
+        </button>
+        <button type="button" onClick={() => askAI('')}
+          className="inline-flex items-center gap-1 rounded-md bg-brand-action px-2.5 py-1 text-[11px] font-medium text-white hover:bg-brand-action-hover">
+          <Sparkles size={12} /> AI에 질문
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {chipsFor(selected).map((c) => (
+          <button type="button" key={c.q} onClick={() => askAI(c.q, c.section)}
+            className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] text-brand-700 hover:bg-brand-100">
+            {c.q}
+          </button>
+        ))}
+      </div>
+    </div>
+  ) : undefined;
+
   return (
-    <>
+    <div className="flex h-full flex-col">
       <PageHeader
         title="Topology"
         subtitle="요청 흐름 그래프 (Route53 → CloudFront → LB → Target Group → 타깃)"
@@ -255,7 +345,7 @@ export default function TopologyPage() {
           </div>
         }
       />
-      <div className="px-8 py-8 flex flex-col gap-4">
+      <div className="flex-1 min-h-0 flex flex-col gap-4 px-8 py-6">
         {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
         {!data && !err && <div className="text-ink-400">로딩 중…</div>}
         {data && !err && (
@@ -273,9 +363,11 @@ export default function TopologyPage() {
                   <span className="text-warning">⚠ {cappedTypes.join(', ')} {ROW_CAP}개 초과 — 일부만 표시</span>
                 )}
               </div>
-              <div className="h-[640px] w-full rounded-lg border border-ink-100 bg-card">
-                <ReactFlow nodes={nodes} edges={edges} fitView colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}
-                  onNodeClick={(_, node) => setSelected(((node.data as { fnode?: FlowNode })?.fnode) ?? null)}>
+              <div className="flex-1 min-h-0 w-full rounded-lg border border-ink-100 bg-card">
+                <ReactFlow nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.2 }} colorMode={dark ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}
+                  onInit={(inst) => { rfRef.current = inst; }}
+                  onNodeClick={(_, node) => setSelected(((node.data as { fnode?: FlowNode })?.fnode) ?? null)}
+                  onPaneClick={() => setSelected(null)}>
                   <Background />
                   <Controls />
                   <MiniMap pannable zoomable />
@@ -286,8 +378,8 @@ export default function TopologyPage() {
         )}
       </div>
       {detail && (
-        <DetailPanel title={detail.title} data={detail.data} spec={detail.spec} onClose={() => setSelected(null)} />
+        <DetailPanel title={detail.title} data={detail.data} spec={detail.spec} actions={detailActions} onClose={() => setSelected(null)} modal={false} />
       )}
-    </>
+    </div>
   );
 }

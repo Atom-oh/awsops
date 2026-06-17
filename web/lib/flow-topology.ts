@@ -30,10 +30,28 @@ export interface FlowGraph { nodes: FlowNode[]; edges: FlowEdge[] }
 
 export interface FlowInput {
   route53?: Row[]; cloudfront?: Row[]; alb?: Row[]; nlb?: Row[]; tg?: Row[]; waf?: Row[];
-  ec2?: Row[]; lambda?: Row[];
-  // ip-target resolution (Spec 2): pod/ENI IP → friendly label + meta. Built live by the page
-  // from EKS pods (and later ECS tasks); the builder stays pure (just a lookup table).
+  ec2?: Row[]; lambda?: Row[]; ecsTask?: Row[];
+  // ip-target resolution (Spec 2): pod/ENI IP → friendly label + meta. EKS comes live from the
+  // page (ipResolved); ECS is derived here from synced ecsTask rows. Builder stays pure.
   ipResolved?: Record<string, { label: string; resolved: 'eks' | 'ecs'; meta?: Record<string, unknown> }>;
+}
+
+/** ECS task ENI private IP → service/task. attachments[].Details[Name=privateIPv4Address].Value (PascalCase). */
+function ecsIpMap(tasks: Row[]): Map<string, { label: string; resolved: 'ecs'; meta: Record<string, unknown> }> {
+  const map = new Map<string, { label: string; resolved: 'ecs'; meta: Record<string, unknown> }>();
+  for (const t of tasks) {
+    const group = str(t.task_group);
+    const svc = group.startsWith('service:') ? group.slice(8) : group;
+    const taskId = str(t.resource_id).split('/').pop() || str(t.resource_id);
+    for (const att of arr(t.attachments)) {
+      for (const d of arr(att.Details)) {
+        if (str(d.Name) === 'privateIPv4Address' && d.Value) {
+          map.set(str(d.Value), { label: svc || taskId, resolved: 'ecs', meta: { ecsService: svc, task: taskId, cluster: str(t.cluster_arn).split('/').pop() } });
+        }
+      }
+    }
+  }
+  return map;
 }
 
 /** CloudFront `aliases` jsonb → string[] (PascalCase {Items:[...]} or a plain array). */
@@ -105,6 +123,7 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   const lambdaByArn = new Map<string, string>(); // function arn → function name
   for (const e of input.ec2 ?? []) ec2ById.set(str(e.resource_id), str(e.name) || str(e.resource_id));
   for (const l of input.lambda ?? []) if (l.arn) lambdaByArn.set(str(l.arn), str(l.resource_id) || str(l.arn));
+  const ecsByIp = ecsIpMap(input.ecsTask ?? []); // ECS task ENI IP → service (from synced inventory)
 
   // CloudFront indexes for Route53 alias targets: by distribution domain (d111.cloudfront.net)
   // and by custom-domain alias (the CNAMEs on the distribution).
@@ -122,7 +141,8 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   for (const r of input.route53 ?? []) {
     const aliasT = (r.alias_target && typeof r.alias_target === 'object') ? (r.alias_target as Row) : {};
     const targetDns = dns(aliasT.DNSName);          // ALIAS records: where the name points
-    const recName = dns(r.resource_id) || dns(r.name);
+    // clean record name (r.resource_id is the composite "name TYPE"); used for label + alias match.
+    const recName = dns(r.name) || dns(r.resource_id);
     const downstream =
       cfByDomain.get(targetDns) || lbByDns.get(targetDns) ||  // alias → CF / LB
       cfByAlias.get(recName);                                 // record name == a CF custom-domain alias
@@ -182,9 +202,10 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       let extra: Record<string, unknown> = {};
       if (ttype === 'instance' && ec2ById.has(targetId)) { label = ec2ById.get(targetId)!; resolved = 'ec2'; }
       else if (ttype === 'lambda' && lambdaByArn.has(targetId)) { label = lambdaByArn.get(targetId)!; resolved = 'lambda'; }
-      else if (ttype === 'ip' && input.ipResolved?.[targetId]) {
-        const r = input.ipResolved[targetId];
-        label = r.label; resolved = r.resolved; extra = r.meta ?? {};
+      else if (ttype === 'ip') {
+        // EKS (live from page) takes priority, then ECS (synced inventory).
+        const r = input.ipResolved?.[targetId] ?? ecsByIp.get(targetId);
+        if (r) { label = r.label; resolved = r.resolved; extra = r.meta ?? {}; }
       }
       addNode(nodeId, 'target', label, {
         targetType: ttype,

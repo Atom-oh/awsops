@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ArrowUp, X } from 'lucide-react';
 import { parseSlash, matchCommands, SLASH_COMMANDS, type SlashCommand } from '@/lib/slash';
 import SlashMenu from './SlashMenu';
@@ -10,14 +10,22 @@ const MENU_ID = 'slash-menu';
 // the `/` autocomplete menu makes the sections discoverable. Picking a command pins a per-message
 // chip; the next message with no slash returns to auto.
 export default function Composer({
-  disabled, onSend,
+  disabled, onSend, seed,
 }: {
   disabled: boolean;
   onSend: (text: string, section?: string | null) => void;
+  // external seed (e.g. "ask AI about this resource" from the topology) — fills the field for
+  // the user to review/edit before sending. `n` bumps to re-seed the same text.
+  seed?: { text: string; n: number };
 }) {
   const [text, setText] = useState('');
   const [target, setTarget] = useState<SlashCommand | null>(null);
   const [active, setActive] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (seed?.text) { setTarget(null); setText(seed.text); inputRef.current?.focus(); }
+  }, [seed?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Menu shows while the field is a bare leading-slash fragment (no space yet) and no chip is set.
   const menuOpen = !target && /^\/[a-z-]*$/.test(text);
@@ -77,6 +85,7 @@ export default function Composer({
           </span>
         )}
         <input
+          ref={inputRef}
           value={text}
           onChange={(e) => { setText(e.target.value); setActive(0); }}
           onKeyDown={onKeyDown}

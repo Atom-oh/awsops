@@ -4,6 +4,8 @@
 
 Accepted (2026-06-10) / 채택 (2026-06-10) — 멀티AI 의사결정(Kiro·Codex·Gemini **만장일치 A-now / C-at-P4**) + 멀티AI 스펙 리뷰(Verdict REVIEW → 8건 전부 반영, 그중 2건은 코드 검증 결함). 설계 스펙: `docs/superpowers/specs/2026-06-10-hybrid-agent-routing-design.md`.
 
+> **Amended by ADR-044 (2026-06-16)** — the **cross-domain** behavior in §Decision #3 ("Top-1 자동 라우팅 + 2·3위 전환칩") is superseded by ADR-044's hybrid: cross-domain queries now auto-synthesize via the ADR-025 fan-out, and switch chips are demoted to a secondary manual aid. ADR-044 also (a) inserts the **Agent Space active filter** into the priority ladder (§Decision #2), (b) makes a **switch-chip click clear an active picker pin** (deadlock fix), and (c) changes `classifyRoute` to emit a **ranked multi-route set**. The regex/Haiku/prompt-caching decisions here are otherwise unchanged. / **ADR-044가 개정 (2026-06-16)** — 교차도메인 동작(§결정 #3)은 ADR-044 하이브리드로 승계(교차도메인=ADR-025 자동합성, 전환칩=보조). 우선순위 래더에 Agent Space 필터 추가, 전환칩이 picker 핀 해제(데드락 수정), classifier는 랭크된 멀티-라우트 반환. regex/Haiku/캐싱 결정은 불변.
+
 This ADR records the v2 chat **routing accuracy** decision and extends **ADR-033**'s prompt-caching decision into the v2 call path. It also records an explicit **deferral**: AgentCore Gateway semantic tool search is adopted at **P4**, not now.
 
 본 ADR은 v2 챗 **라우팅 정확도** 결정을 기록하고, **ADR-033**의 프롬프트 캐싱 결정을 v2 호출 경로로 확장한다. 또한 명시적 **연기 결정** — AgentCore Gateway 시맨틱 툴 검색은 지금이 아닌 **P4**에서 채택 — 을 기록한다.

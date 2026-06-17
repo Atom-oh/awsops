@@ -6,6 +6,7 @@ export interface RankedChip { key: string; score: number; active: boolean }
 export interface Msg {
   role: 'user' | 'assistant'; content: string; gateway?: string; streaming?: boolean;
   ranked?: RankedChip[]; method?: string; // ADR-038 meta
+  via?: string; // ADR-044 meta: 'multi:network+data' when the answer is a cross-domain synthesis
 }
 
 export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?: (key: string) => void }) {
@@ -14,9 +15,13 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
       {msgs.map((m, i) => {
         const sec = m.gateway ? sectionByKey(m.gateway) : null;
         const me = m.role === 'user';
-        // ADR-038: active alternates (not the gateway actually used), shown once streaming ends.
+        // ADR-044: a cross-domain synthesis answer — the keys merged into this one answer.
+        const viaKeys = (!me && m.via?.startsWith('multi:')) ? m.via.slice(6).split('+').filter(Boolean) : null;
+        const viaSet = new Set(viaKeys ?? []);
+        // ADR-038/044: active alternates the answer did NOT already cover — a SECONDARY manual aid
+        // (cross-domain is handled automatically by synthesis), shown once streaming ends.
         const alts = (!me && !m.streaming && m.ranked)
-          ? m.ranked.filter((r) => r.active && r.key !== m.gateway).slice(0, 2)
+          ? m.ranked.filter((r) => r.active && r.key !== m.gateway && !viaSet.has(r.key)).slice(0, 2)
           : [];
         return (
           <div
@@ -28,7 +33,19 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                 : 'max-w-[92%] self-start border border-ink-100 bg-card text-ink-700 shadow-sm')
             }
           >
-            {sec && (
+            {viaKeys && viaKeys.length > 1 ? (
+              <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[10px] font-semibold text-ink-500" aria-label="통합 분석">
+                {viaKeys.map((k, idx) => {
+                  const s = sectionByKey(k);
+                  return s ? (
+                    <span key={k} className="flex items-center gap-0.5" style={{ color: s.color }}>
+                      {idx > 0 && <span className="text-ink-300">+</span>}{s.icon} {s.label}
+                    </span>
+                  ) : null;
+                })}
+                <span className="ml-1 font-normal text-ink-400">· 통합 분석</span>
+              </div>
+            ) : sec && (
               <div className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold" style={{ color: sec.color }}>
                 <span>{sec.icon}</span> {sec.label}
               </div>
@@ -41,7 +58,10 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
               : <Markdown>{m.content}</Markdown>}
             {m.streaming && <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-brand-500 align-middle" />}
             {alts.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
+              <div className="mt-2">
+                {/* ADR-044: chips are a SECONDARY manual aid (cross-domain is auto-synthesized). */}
+                <div className="mb-1 text-[10px] text-ink-400">다른 도메인으로 더 보기</div>
+                <div className="flex flex-wrap gap-1.5">
                 {alts.map((r) => {
                   const s = sectionByKey(r.key);
                   if (!s) return null;
@@ -57,6 +77,7 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                     </button>
                   );
                 })}
+                </div>
               </div>
             )}
           </div>
