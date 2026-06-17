@@ -319,6 +319,7 @@ def _patch_report(monkeypatch, *, generate):
 
 def test_report_handler_success_uploads_sets_uri_and_closes(monkeypatch):
     state = _patch_report(monkeypatch, generate=lambda c, a, t, **_: ("# md", {"degraded": []}, ["inventory", "cost"]))
+    monkeypatch.setattr(handlers, "_export_artifacts", lambda md, rid: None)  # exports tested separately
     result, artifact = handlers._report(
         {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 7}, dry_run=False)
     assert result["status"] == "succeeded" and result["report_id"] == 7
@@ -326,6 +327,23 @@ def test_report_handler_success_uploads_sets_uri_and_closes(monkeypatch):
     assert state["finish"]["status"] == "succeeded"
     assert state["finish"]["artifact_uri"].startswith("s3://b/diagnosis/7")
     assert state["closed"] is True  # CRITICAL: connection always released
+
+
+def test_report_export_failure_is_isolated(monkeypatch):
+    # A docx/pdf failure (e.g. chromium crash) must NOT fail the report — md is the source of truth.
+    _patch_report(monkeypatch, generate=lambda c, a, t, **_: ("# md", {"degraded": []}, ["inventory"]))
+    from diagnosis import exporters
+    uploaded = []
+    monkeypatch.setattr(handlers, "_upload_bytes", lambda body, key, ct: uploaded.append(key))
+    monkeypatch.setattr(exporters, "to_docx", lambda md: b"PKdocx")
+    def boom(md):
+        raise RuntimeError("chromium crashed")
+    monkeypatch.setattr(exporters, "to_pdf", boom)
+    result, _ = handlers._report(
+        {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 7}, dry_run=False)
+    assert result["status"] == "succeeded"                       # pdf failure isolated
+    assert any(k.endswith("diagnosis/7.docx") for k in uploaded)  # docx still uploaded
+    assert not any(k.endswith("diagnosis/7.pdf") for k in uploaded)  # pdf raised before upload
 
 
 def test_report_handler_streams_progress_via_callback(monkeypatch):
