@@ -169,6 +169,43 @@ async function fetchEksIpMap(): Promise<NonNullable<FlowInput['ipResolved']>> {
   return map;
 }
 
+// ---- VPC / subnet / security-group id → name resolution (for the detail panel) ----
+type NetMaps = { vpc: Map<string, string>; subnet: Map<string, string>; sg: Map<string, string> };
+const emptyNetMaps = (): NetMaps => ({ vpc: new Map(), subnet: new Map(), sg: new Map() });
+
+// inventory row {resource_id, data:{...}} → a human name (Name tag / group_name), else the id.
+function invName(invRow: { resource_id?: unknown; data?: Record<string, unknown> }): string {
+  const d = invRow.data ?? {};
+  const tags = (d.tags ?? {}) as Record<string, unknown>;
+  return String(tags.Name ?? d.group_name ?? d.title ?? d.name ?? invRow.resource_id ?? '');
+}
+// pull ids from the many shapes a row uses: 'sg-x' | {GroupId} | {SubnetId} | {Id} | availability_zones[].SubnetId
+function idsFrom(v: unknown): string[] {
+  if (v == null) return [];
+  return (Array.isArray(v) ? v : [v])
+    .map((x) => {
+      if (typeof x === 'string') return x;
+      const o = (x ?? {}) as Record<string, unknown>;
+      return String(o.GroupId ?? o.group_id ?? o.SubnetId ?? o.subnet_id ?? o.Id ?? '');
+    })
+    .filter(Boolean);
+}
+const withName = (id: string, m: Map<string, string>): string => {
+  const n = m.get(id);
+  return n && n !== id ? `${n} (${id})` : id;
+};
+// resolved VPC/subnet/SG names for a resource row (added alongside the raw ids in the detail panel)
+function networkNames(row: Record<string, unknown>, nm: NetMaps): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const vpcId = String(row.vpc_id ?? '');
+  if (vpcId) out.vpc_name = withName(vpcId, nm.vpc);
+  const subnetIds = [...new Set([...idsFrom(row.subnet_id), ...idsFrom(row.subnet_ids), ...idsFrom(row.subnets), ...idsFrom(row.availability_zones)])];
+  if (subnetIds.length) out.subnet_names = subnetIds.map((id) => withName(id, nm.subnet));
+  const sgIds = [...new Set([...idsFrom(row.security_groups), ...idsFrom(row.security_group_ids), ...idsFrom(row.vpc_security_group_ids)])];
+  if (sgIds.length) out.security_group_names = sgIds.map((id) => withName(id, nm.sg));
+  return out;
+}
+
 export default function TopologyPage() {
   const [data, setData] = useState<FlowInput | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
@@ -179,11 +216,21 @@ export default function TopologyPage() {
   const [entryId, setEntryId] = useState<string>('');
   const [selected, setSelected] = useState<FlowNode | null>(null);
   const [query, setQuery] = useState('');
+  const [netMaps, setNetMaps] = useState<NetMaps>(emptyNetMaps);
 
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const [res, ipResolved] = await Promise.all([Promise.all(TYPES.map(fetchType)), fetchEksIpMap()]);
+      const NET = ['vpc', 'subnet', 'security_group'] as const;
+      const [res, ipResolved, net] = await Promise.all([
+        Promise.all(TYPES.map(fetchType)),
+        fetchEksIpMap(),
+        // VPC/subnet/SG inventory → id→name maps for the detail panel (lookup only, not graph nodes)
+        Promise.all(NET.map((t) => fetch(`/api/inventory/${t}?limit=500`).then((r) => (r.ok ? r.json() : { rows: [] })).catch(() => ({ rows: [] })))),
+      ]);
+      const mk = (rows: { resource_id?: unknown; data?: Record<string, unknown> }[]) =>
+        new Map((rows ?? []).map((r) => [String(r.resource_id), invName(r)]));
+      setNetMaps({ vpc: mk(net[0]?.rows), subnet: mk(net[1]?.rows), sg: mk(net[2]?.rows) });
       const out: FlowInput = { ipResolved };
       let newest: string | null = null;
       const capped: string[] = [];
@@ -296,7 +343,8 @@ export default function TopologyPage() {
     const m = (selected.meta ?? {}) as Record<string, unknown>;
     if (m.row) {
       const row = m.row as Record<string, unknown>;
-      return { title: String(row.resource_id ?? selected.label), data: row, spec: m.invType ? INVENTORY_TYPES[m.invType as string] : undefined };
+      // enrich with resolved VPC/subnet/SG names (added next to the raw ids already in the row)
+      return { title: String(row.resource_id ?? selected.label), data: { ...row, ...networkNames(row, netMaps) }, spec: m.invType ? INVENTORY_TYPES[m.invType as string] : undefined };
     }
     const syn: Record<string, unknown> = { resource_id: String(m.id ?? selected.label), kind: selected.kind };
     if (selected.kind === 'target') {
@@ -308,7 +356,7 @@ export default function TopologyPage() {
       }
     }
     return { title: selected.label, data: syn, spec: undefined };
-  }, [selected]);
+  }, [selected, netMaps]);
 
   const onEntry = (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
   const selectCls = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
