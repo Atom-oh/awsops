@@ -21,11 +21,19 @@ export default function Composer({
   const [text, setText] = useState('');
   const [target, setTarget] = useState<SlashCommand | null>(null);
   const [active, setActive] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (seed?.text) { setTarget(null); setText(seed.text); inputRef.current?.focus(); }
   }, [seed?.n]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-grow the textarea with its content, capped at ~5 lines (then it scrolls).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [text]);
 
   // Menu shows while the field is a bare leading-slash fragment (no space yet) and no chip is set.
   const menuOpen = !target && /^\/[a-z-]*$/.test(text);
@@ -58,19 +66,20 @@ export default function Composer({
     setText('');
   }
 
-  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (menuOpen && commands.length) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => (Math.min(i, commands.length - 1) + 1) % commands.length); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => (Math.min(i, commands.length - 1) - 1 + commands.length) % commands.length); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(commands[activeIdx]); return; }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { e.preventDefault(); pick(commands[activeIdx]); return; }
       if (e.key === 'Escape') { e.preventDefault(); setText(''); return; }
     }
-    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    // Enter sends; Shift+Enter falls through to the textarea's default (inserts a newline).
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
   }
 
   return (
     <div className="relative border-t border-ink-100 px-3 py-3">
-      <div className="flex items-center gap-2">
+      <div className="flex items-end gap-2">
         {target && (
           <span className="flex shrink-0 items-center gap-1 rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-[12px] font-medium text-brand-700">
             <span>{target.icon}</span>{target.label}
@@ -84,19 +93,20 @@ export default function Composer({
             </button>
           </span>
         )}
-        <input
+        <textarea
           ref={inputRef}
           value={text}
+          rows={1}
           onChange={(e) => { setText(e.target.value); setActive(0); }}
           onKeyDown={onKeyDown}
-          placeholder={target ? `${target.label} 영역에 질문…` : '메시지를 입력하세요…  ( / 로 특정 영역 지정 )'}
+          placeholder={target ? `${target.label} 영역에 질문…` : '메시지를 입력하세요…  ( / 로 특정 영역 지정 · Shift+Enter 줄바꿈 )'}
           disabled={disabled}
           role="combobox"
           aria-expanded={menuOpen}
           aria-controls={MENU_ID}
           aria-autocomplete="list"
           aria-activedescendant={menuOpen && commands.length ? `${MENU_ID}-opt-${activeIdx}` : undefined}
-          className="h-9 flex-1 rounded-lg border border-ink-200 bg-card px-3 text-[13px] text-ink-800 placeholder:text-ink-400 outline-none transition-shadow focus:border-brand-300 focus:shadow-focus disabled:opacity-60"
+          className="max-h-[140px] min-h-9 flex-1 resize-none overflow-y-auto rounded-lg border border-ink-200 bg-card px-3 py-2 text-[13px] leading-snug text-ink-800 placeholder:text-ink-400 outline-none transition-shadow focus:border-brand-300 focus:shadow-focus disabled:opacity-60"
         />
         <button
           onClick={submit}

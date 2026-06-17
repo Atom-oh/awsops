@@ -74,3 +74,24 @@ describe('Composer slash targeting', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 });
+
+describe('Composer multiline (Shift+Enter)', () => {
+  it('Shift+Enter does NOT submit and does NOT clear the field (lets a newline through)', () => {
+    const { input, onSend } = setup();
+    fireEvent.change(input, { target: { value: 'line one' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input.value).toBe('line one'); // not cleared → not submitted
+  });
+  it('plain Enter still submits the message', () => {
+    const { input, onSend } = setup();
+    fireEvent.change(input, { target: { value: 'hello there' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0][0]).toBe('hello there');
+  });
+  it('renders a textarea (multiline-capable), not a single-line input', () => {
+    const { input } = setup();
+    expect(input.tagName).toBe('TEXTAREA');
+  });
+});
