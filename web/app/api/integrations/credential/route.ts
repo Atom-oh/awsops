@@ -3,7 +3,7 @@
 // GET returns which slugs are configured (keys only). SECURITY: never log/echo the credential value.
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
-import { setIntegrationCredential, getConfiguredSlugs } from '@/lib/integration-credentials';
+import { setIntegrationCredential, getConfiguredSlugs, getConfiguredIds } from '@/lib/integration-credentials';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
@@ -24,7 +24,20 @@ async function gate(request: Request) {
 export async function GET(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
-  return json({ configured: await getConfiguredSlugs() }, 200);
+  // NARROW downgrade: a Secrets Manager AccessDenied/NotFound (e.g. integrations gated off, task role
+  // has no access) degrades to an empty configured list so the read-only status panel doesn't 500.
+  // Any OTHER failure (PG, malformed secret, …) surfaces as 500 — masking it would hide real breakage.
+  try {
+    const [configured, configuredIds] = await Promise.all([getConfiguredSlugs(), getConfiguredIds()]);
+    return json({ configured, configuredIds }, 200);
+  } catch (e) {
+    const name = (e as { name?: string })?.name || '';
+    if (/AccessDenied|ResourceNotFound|NotFound/i.test(name)) {
+      return json({ configured: [], configuredIds: [] }, 200);
+    }
+    console.error('[credential GET] unexpected error reading configured integrations:', name);
+    return json({ error: 'failed to read configured integrations' }, 500);
+  }
 }
 
 export async function PUT(request: Request) {
