@@ -8,6 +8,7 @@ import os
 import ssl
 import boto3
 import pg8000.native
+from botocore.exceptions import ClientError
 
 # resource_type -> (steampipe SQL, resource_id column, region column). Waves add rows here.
 QUERIES = {
@@ -233,8 +234,78 @@ QUERIES = {
         "name",
         "region",
     ),
+    # L7 origin resolution: a CloudFront execute-api origin (<api_id>.execute-api...) resolves to an
+    # apigw node; its integrations chain to Lambda / (VPC_LINK) ALB-NLB → TG → ECS.
+    "apigatewayv2_api": (
+        "SELECT api_id, name, api_endpoint, protocol_type, region, account_id, tags "
+        "FROM aws_api_gatewayv2_api ORDER BY api_id",
+        "api_id",
+        "region",
+    ),
+    # per-API table (composite key integration_id+api_id); Steampipe materializes the cross-API list.
+    "apigatewayv2_integration": (
+        "SELECT integration_id, api_id, integration_type, integration_uri, connection_type, "
+        "connection_id, region, account_id "
+        "FROM aws_api_gatewayv2_integration ORDER BY api_id, integration_id",
+        "integration_id",
+        "region",
+    ),
 }
-_ALLOWED = set(QUERIES)
+
+
+# ---- SDK-sourced inventory (NOT Steampipe) ---------------------------------------------------
+# Some data Steampipe cannot supply. CloudFront VPC origins: aws_cloudfront_vpc_origin has no
+# Steampipe table AND aws_cloudfront_distribution.origins omits VpcOriginConfig (absent from the
+# pinned cloudfront SDK Origin struct), so neither vo→LB nor distribution→vo is obtainable via SQL.
+# These fetchers return (list[dict] rows, id_col, region_col) — fed through the SAME upsert path.
+def _fetch_cloudfront_vpc_origins():
+    cf = boto3.client("cloudfront", region_name="us-east-1")  # CloudFront is global → us-east-1
+    if not hasattr(cf, "list_vpc_origins"):
+        # botocore too old for the (late-2024) VPC-origins API → degrade gracefully, never crash
+        print("cloudfront_vpc_origin: botocore lacks list_vpc_origins; returning 0 rows")
+        return [], "resource_id", "region"
+    # (b2) vo_id → backing LB ARN + status
+    vos, marker = {}, None
+    while True:
+        resp = cf.list_vpc_origins(**({"Marker": marker} if marker else {}))
+        lst = resp.get("VpcOriginList", {}) or {}
+        for it in lst.get("Items", []) or []:
+            vid = it.get("Id")
+            try:
+                d = cf.get_vpc_origin(Id=vid)["VpcOrigin"]
+                cfg = d.get("VpcOriginEndpointConfig") or {}
+                vos[vid] = {"name": cfg.get("Name"), "arn": cfg.get("Arn"), "status": d.get("Status")}
+            except ClientError as e:
+                print(f"get_vpc_origin {vid} failed: {e}")
+        marker = lst.get("NextMarker")
+        if not marker:
+            break
+    # (b1) vo_id → set(distribution ids) — get_distribution_config DOES expose VpcOriginConfig live
+    dists, marker = {}, None
+    while True:
+        resp = cf.list_distributions(**({"Marker": marker} if marker else {}))
+        dl = resp.get("DistributionList", {}) or {}
+        for it in dl.get("Items", []) or []:
+            did = it.get("Id")
+            try:
+                cfg = cf.get_distribution_config(Id=did)["DistributionConfig"]
+                for o in (cfg.get("Origins", {}) or {}).get("Items", []) or []:
+                    vid = (o.get("VpcOriginConfig") or {}).get("VpcOriginId")
+                    if vid:
+                        dists.setdefault(vid, set()).add(did)
+            except ClientError as e:
+                print(f"get_distribution_config {did} skipped: {e}")  # one bad dist must not blank the type
+        marker = dl.get("NextMarker")
+        if not marker:
+            break
+    rows = [{"resource_id": vid, "region": "global", "vpc_origin_id": vid, "name": v["name"],
+             "arn": v["arn"], "status": v["status"], "distribution_ids": sorted(dists.get(vid, []))}
+            for vid, v in vos.items()]
+    return rows, "resource_id", "region"
+
+
+SDK_SYNCS = {"cloudfront_vpc_origin": _fetch_cloudfront_vpc_origins}
+_ALLOWED = set(QUERIES) | set(SDK_SYNCS)
 _sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
 _lambda = boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
 
@@ -266,7 +337,6 @@ def _steampipe():
 def sync(resource_type):
     if resource_type not in _ALLOWED:
         return {"error": f"unknown type {resource_type}"}
-    sql, id_col, region_col = QUERIES[resource_type]
     adb = _aurora()
     try:
         # advisory lock per type (no Steampipe stampede); skip if busy
@@ -279,15 +349,20 @@ def sync(resource_type):
                     "VALUES (:t,'running',now(),NULL,NULL,NULL) "
                     "ON CONFLICT (resource_type, account_id) DO UPDATE SET status='running', started_at=now(), "
                     "finished_at=NULL, error=NULL", t=resource_type)
-            sdb = _steampipe()
-            try:
-                rows = sdb.run(sql)
-                cols = [c["name"] for c in sdb.columns]
-            finally:
-                sdb.close()  # close even if the Steampipe query throws
+            # SDK-sourced types bypass Steampipe; both paths yield list[dict] rows (recs).
+            if resource_type in SDK_SYNCS:
+                recs, id_col, region_col = SDK_SYNCS[resource_type]()
+            else:
+                sql, id_col, region_col = QUERIES[resource_type]
+                sdb = _steampipe()
+                try:
+                    rows = sdb.run(sql)
+                    cols = [c["name"] for c in sdb.columns]
+                finally:
+                    sdb.close()  # close even if the Steampipe query throws
+                recs = [dict(zip(cols, r)) for r in rows]
             seen = []
-            for r in rows:
-                rec = dict(zip(cols, r))
+            for rec in recs:
                 rid = str(rec.get(id_col))
                 region = str(rec.get(region_col) or "")
                 seen.append((region, rid))
@@ -302,8 +377,8 @@ def sync(resource_type):
                 if (rg, rid) not in seen:
                     adb.run("DELETE FROM inventory_resources WHERE resource_type=:t AND account_id='self' AND region=:rg AND resource_id=:id", t=resource_type, rg=rg, id=rid)
             adb.run("UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), row_count=:n, error=NULL "
-                    "WHERE resource_type=:t AND account_id='self'", t=resource_type, n=len(rows))
-            return {"status": "succeeded", "type": resource_type, "row_count": len(rows)}
+                    "WHERE resource_type=:t AND account_id='self'", t=resource_type, n=len(recs))
+            return {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
         except Exception as e:
             adb.run("UPDATE inventory_sync_runs SET status='failed', finished_at=now(), error=:e "
                     "WHERE resource_type=:t AND account_id='self'", t=resource_type, e=str(e)[:2000])
@@ -317,8 +392,8 @@ def sync(resource_type):
 def lambda_handler(event, ctx):
     rtype = (event or {}).get("type", "all")
     if rtype == "all":
-        for rt in QUERIES:
+        for rt in list(QUERIES) + list(SDK_SYNCS):
             _lambda.invoke(FunctionName=ctx.invoked_function_arn, InvocationType="Event",
                            Payload=json.dumps({"type": rt}).encode())
-        return {"status": "dispatched", "types": list(QUERIES)}
+        return {"status": "dispatched", "types": list(QUERIES) + list(SDK_SYNCS)}
     return sync(rtype)
