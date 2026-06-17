@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { momChangePct, projectMonthEnd, trendPill } from './cost';
+import { momChangePct, momChangePctDaily, daysInMonth, projectMonthEnd, trendPill } from './cost';
 
 describe('momChangePct', () => {
   it('computes a positive change', () => {
@@ -11,6 +11,36 @@ describe('momChangePct', () => {
   it('returns 0 when last month is 0 or missing (no baseline)', () => {
     expect(momChangePct(100, 0)).toBe(0);
     expect(momChangePct(100, NaN)).toBe(0);
+  });
+});
+
+describe('daysInMonth', () => {
+  it('returns days in the previous calendar month', () => {
+    expect(daysInMonth(new Date(2026, 5, 17), -1)).toBe(31);   // June → May = 31
+    expect(daysInMonth(new Date(2024, 2, 1), -1)).toBe(29);    // March 2024 → Feb (leap) = 29
+    expect(daysInMonth(new Date(2026, 2, 1), -1)).toBe(28);    // March 2026 → Feb = 28
+  });
+  it('returns days in the current month at offset 0', () => {
+    expect(daysInMonth(new Date(2026, 5, 17), 0)).toBe(30);    // June = 30
+  });
+});
+
+describe('momChangePctDaily (per-day run-rate — the MoM fix)', () => {
+  // June 17 (day 17), previous month May has 31 days.
+  it('equal daily run-rate ⇒ ~0 even though the month is partial (the bug fix)', () => {
+    // MTD 170 over 17 days = $10/day; May 310 over 31 days = $10/day → 0%.
+    expect(momChangePctDaily(170, 310, new Date(2026, 5, 17))).toBeCloseTo(0);
+    // the OLD partial-vs-full math would have shown a bogus large negative:
+    expect(momChangePct(170, 310)).toBeLessThan(-40);
+  });
+  it('higher daily run-rate ⇒ positive', () => {
+    expect(momChangePctDaily(204, 310, new Date(2026, 5, 17))).toBeCloseTo(20);  // $12/day vs $10/day
+  });
+  it('lower daily run-rate ⇒ negative', () => {
+    expect(momChangePctDaily(136, 310, new Date(2026, 5, 17))).toBeCloseTo(-20); // $8/day vs $10/day
+  });
+  it('returns 0 with no baseline (last month 0)', () => {
+    expect(momChangePctDaily(100, 0, new Date(2026, 5, 17))).toBe(0);
   });
 });
 

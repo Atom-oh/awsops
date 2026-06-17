@@ -10,7 +10,7 @@ import DataTable from '@/components/ui/DataTable';
 import AreaTrend from '@/components/charts/AreaTrend';
 import HBarList from '@/components/charts/HBarList';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
-import { momChangePct, projectMonthEnd, trendPill } from '@/lib/cost';
+import { momChangePctDaily, projectMonthEnd, trendPill } from '@/lib/cost';
 
 interface ServiceCost { service: string; amount: number; [k: string]: unknown }
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
@@ -107,7 +107,10 @@ export default function CostPage() {
   const monthly = d?.monthly ?? [];
   const thisMonth = monthly.length > 0 ? monthly[monthly.length - 1].total : total;
   const lastMonth = monthly.length > 1 ? monthly[monthly.length - 2].total : 0;
-  const mom = momChangePct(thisMonth, lastMonth);
+  // MoM on a PER-DAY run-rate basis: the current month is month-to-date (partial), so comparing it
+  // against the FULL previous month read as a bogus large drop (e.g. -51% on the 17th). Compare
+  // average daily spend instead (이번 달 일평균 vs 전월 일평균).
+  const mom = momChangePctDaily(thisMonth, lastMonth, new Date());
   const monthEndEstimate = d?.forecast != null ? total + d.forecast : projectMonthEnd(total, new Date());
 
   return (
@@ -135,10 +138,10 @@ export default function CostPage() {
                 variant="accent"
               />
               <StatTile
-                label="전월 대비 (MoM)"
+                label="전월 대비 (MoM · 일평균)"
                 value={lastMonth > 0 ? `${mom >= 0 ? '+' : ''}${mom.toFixed(1)}%` : DASH}
                 trend={lastMonth > 0 ? trendPill(mom) : undefined}
-                hint={lastMonth > 0 ? `전월 ${usd(lastMonth)}` : '기준월 부족'}
+                hint={lastMonth > 0 ? `일평균 기준 · 전월 ${usd(lastMonth)}` : '기준월 부족'}
               />
               <StatTile
                 label="예상 월말 비용"
