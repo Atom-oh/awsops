@@ -4,7 +4,7 @@ import { STSClient, AssumeRoleCommand, GetCallerIdentityCommand } from '@aws-sdk
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { getPool } from '@/lib/db';
-import { listAccounts, getAccount, validateAccountId } from '@/lib/accounts';
+import { listAccounts, getAccount, validateAccountId, ensureHostRow } from '@/lib/accounts';
 import { readJsonBounded } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -15,6 +15,7 @@ const err = (message: string, status: number) => Response.json({ status: 'error'
 export async function GET(request: Request) {
   if (!(await verifyUser(request.headers.get('cookie')))) return err('unauthenticated', 401);
   try {
+    await ensureHostRow(); // seed the host row (HOST_ACCOUNT_ID) so the selector + __all__ fan-out always include host
     return Response.json({ accounts: await listAccounts() });
   } catch (e) {
     return err(e instanceof Error ? e.message : String(e), 500);
@@ -31,7 +32,9 @@ export async function POST(request: Request) {
   const alias = String(body?.alias ?? '').trim();
   const region = String(body?.region ?? '').trim() || REGION;
   const externalId = String(body?.externalId ?? '').trim();
-  const roleName = String(body?.roleName ?? '').trim() || 'AWSopsReadOnlyRole';
+  // Hard-pinned to match the host task-role IAM (Resource scoped to .../AWSopsReadOnlyRole).
+  // A custom roleName would fail-closed on assume, so we do not honor body.roleName.
+  const roleName = 'AWSopsReadOnlyRole';
 
   if (!validateAccountId(accountId)) return err('accountId must be 12 digits', 400);
   if (!alias) return err('alias is required', 400);

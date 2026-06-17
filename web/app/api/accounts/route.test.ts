@@ -14,6 +14,7 @@ vi.mock('@/lib/accounts', () => ({
   listAccounts: (...a: unknown[]) => listAccounts(...a),
   getAccount: (...a: unknown[]) => getAccount(...a),
   validateAccountId: (id: string) => /^\d{12}$/.test(id),
+  ensureHostRow: async () => {},
 }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 vi.mock('@/lib/http-body', () => ({ readJsonBounded: (...a: unknown[]) => readJsonBounded(...a) }));

@@ -54,7 +54,11 @@ export async function credsForAccount(accountId: string | null | undefined): Pro
     sessionToken: c.SessionToken,
     expiration: c.Expiration,
   };
-  if (cache.size >= MAX_CACHE) cache.clear();
+  if (cache.size >= MAX_CACHE) {
+    // evict the oldest entry (Map preserves insertion order) — bounded LRU, not a full flush.
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
   cache.set(key, { creds, exp: Date.now() + TTL_MS });
   return creds;
 }
