@@ -8,13 +8,14 @@
 // "MCP Lambda" = the transport mechanism (per-kind `${PROJECT}-agent-${kind}-mcp`). Distinct from the
 // user-facing "Connector" category (an external service). connector-invoke.ts is a thin compat shim.
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
-import { KNOWN_CONNECTOR_SLUGS } from './integration-credentials';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 const PROJECT = process.env.PROJECT || 'awsops-v2';
 
-/** Kinds that have a per-kind connector MCP Lambda (the invoke transport allowlist). */
-export const KNOWN_MCP_LAMBDA_KINDS = KNOWN_CONNECTOR_SLUGS;
+/** Kinds that have a per-kind connector MCP Lambda (the invoke transport allowlist). Kept independent
+ *  of integration-credentials so the invoke transport doesn't pull the Secrets Manager SDK into its
+ *  import graph (mirrors integration-credentials.KNOWN_CONNECTOR_SLUGS). */
+export const KNOWN_MCP_LAMBDA_KINDS = ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir'] as const;
 
 export interface ConnConfig {
   endpoint?: string;
