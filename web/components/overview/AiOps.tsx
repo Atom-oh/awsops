@@ -17,12 +17,21 @@ export function openChat(threadId?: string) {
 
 export default function AiOps() {
   const [threads, setThreads] = useState<Thread[] | null>(null);
+  // awsops-only Bedrock cost (30d). null = loading/unavailable → keep the plain "보기 →" affordance.
+  const [cost, setCost] = useState<number | null>(null);
 
   useEffect(() => {
     fetch('/api/chat/threads')
       .then((r) => (r.ok ? r.json() : { threads: [] }))
       .then((d) => setThreads(Array.isArray(d.threads) ? d.threads : []))
       .catch(() => setThreads([]));
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/ai-usage?range=30d')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setCost(d && typeof d.totalCost === 'number' ? d.totalCost : null))
+      .catch(() => setCost(null));
   }, []);
 
   const active = activeSections().length;
@@ -83,8 +92,13 @@ export default function AiOps() {
           >
             <span>하이브리드 라우팅</span><Badge tone="neutral" variant="soft">게이트 96.9%</Badge>
           </a>
-          <a href="/bedrock" className="flex items-center justify-between text-[12px] text-ink-600 hover:text-brand-700">
-            <span>Bedrock 토큰 비용</span><Badge tone="brand" variant="soft">보기 →</Badge>
+          <a
+            href="/bedrock"
+            title="awsops가 사용한 Bedrock 토큰 비용 (최근 30일, invocation-log 기준)"
+            className="flex items-center justify-between text-[12px] text-ink-600 hover:text-brand-700"
+          >
+            <span>Bedrock 토큰 비용 (30d)</span>
+            <Badge tone="brand" variant="soft">{cost != null ? `$${cost.toFixed(2)}` : '보기 →'}</Badge>
           </a>
         </Card>
       </div>
