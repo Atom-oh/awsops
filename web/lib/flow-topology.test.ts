@@ -176,13 +176,14 @@ describe('buildFlowGraph — ALB→TG→target', () => {
     expect(g.edges.find((x) => x.source === ALB_ID && x.target === `tg:${TG_ARN}`)).toBeTruthy();
   });
 
-  it('fans TG→target out of target_health_descriptions with health in meta (PascalCase)', () => {
+  it('GROUPS a TG\'s unresolved ip targets into one node (member IPs listed + aggregate health)', () => {
     const g = buildFlowGraph({ tg: [tg] });
     const targets = g.nodes.filter((n) => n.kind === 'target');
-    expect(targets.length).toBe(2);
-    const healthy = targets.find((n) => n.label.includes('10.0.1.5'));
-    expect(healthy?.meta?.health).toBe('healthy');
-    expect(g.edges.filter((x) => x.source === `tg:${TG_ARN}` && x.target.startsWith('target:')).length).toBe(2);
+    expect(targets.length).toBe(1); // 2 IPs of one TG → one grouped node (only the IP differs)
+    expect(targets[0].meta?.count).toBe(2);
+    expect(targets[0].meta?.health).toBe('unhealthy'); // any-unhealthy → unhealthy aggregate
+    expect(targets[0].meta?.members).toEqual(['10.0.1.5:3000', '10.0.1.6:3000']);
+    expect(g.edges.filter((x) => x.source === `tg:${TG_ARN}` && x.target.startsWith('target:')).length).toBe(1);
   });
 
   it('TG with empty/garbage targets still yields a node and never throws', () => {
@@ -193,15 +194,42 @@ describe('buildFlowGraph — ALB→TG→target', () => {
     expect(g.nodes.find((n) => n.id === 'tg:arn:tg:bad')).toBeTruthy();
   });
 
-  it('caps targets per TG with a "+N more" node (never silent truncation)', () => {
+  it('collapses 100s of unresolved targets into ONE grouped node (member list display-capped, count accurate)', () => {
+    const n = TARGET_CAP + 5;
     const many = {
-      resource_id: 'arn:tg:big', target_group_name: 'big',
-      target_health_descriptions: Array.from({ length: TARGET_CAP + 5 }, (_, i) => ({ Target: { Id: `10.0.0.${i}` }, TargetHealth: { State: 'healthy' } })),
+      resource_id: 'arn:tg:big', target_group_name: 'big', target_type: 'ip',
+      target_health_descriptions: Array.from({ length: n }, (_, i) => ({ Target: { Id: `10.0.0.${i}` }, TargetHealth: { State: 'healthy' } })),
     };
     const g = buildFlowGraph({ tg: [many] });
-    const targets = g.nodes.filter((n) => n.kind === 'target' && n.id.startsWith('target:arn:tg:big'));
-    expect(targets.length).toBe(TARGET_CAP);
-    expect(g.nodes.find((n) => n.kind === 'more' && n.label.includes('5'))).toBeTruthy();
+    const targets = g.nodes.filter((x) => x.kind === 'target' && x.id.startsWith('target:arn:tg:big'));
+    expect(targets.length).toBe(1); // one grouped node, not N (no per-IP blow-up at 100s of replicas)
+    expect(targets[0].meta?.count).toBe(n);
+    expect((targets[0].meta?.members as string[]).length).toBe(TARGET_CAP); // member list display-capped
+    expect(targets[0].meta?.membersTruncated).toBe(5);
+    expect(targets[0].meta?.health).toBe('healthy');
+    expect(g.nodes.find((x) => x.kind === 'more')).toBeUndefined(); // grouping supersedes the +N more node
+  });
+
+  it('resolved replicas (same EKS workload) collapse into one node with the member IPs', () => {
+    const tgEks = {
+      resource_id: 'arn:tg:eks', target_group_name: 'eks-tg', target_type: 'ip',
+      target_health_descriptions: [
+        { Target: { Id: '10.2.1.1', Port: 8080 }, TargetHealth: { State: 'healthy' } },
+        { Target: { Id: '10.2.1.2', Port: 8080 }, TargetHealth: { State: 'healthy' } },
+        { Target: { Id: '10.2.1.3', Port: 8080 }, TargetHealth: { State: 'healthy' } },
+      ],
+    };
+    const ipResolved = {
+      '10.2.1.1': { label: 'app/api', resolved: 'eks' as const, meta: { service: 'api', namespace: 'app' } },
+      '10.2.1.2': { label: 'app/api', resolved: 'eks' as const, meta: { service: 'api', namespace: 'app' } },
+      '10.2.1.3': { label: 'app/api', resolved: 'eks' as const, meta: { service: 'api', namespace: 'app' } },
+    };
+    const g = buildFlowGraph({ tg: [tgEks], ipResolved });
+    const targets = g.nodes.filter((x) => x.kind === 'target' && x.id.startsWith('target:arn:tg:eks'));
+    expect(targets.length).toBe(1);
+    expect(targets[0].label).toBe('app/api ×3');
+    expect(targets[0].meta?.resolved).toBe('eks');
+    expect(targets[0].meta?.members).toEqual(['10.2.1.1:8080', '10.2.1.2:8080', '10.2.1.3:8080']);
   });
 });
 
@@ -280,7 +308,7 @@ describe('filterFromEntry', () => {
     expect(sub.nodes.find((n) => n.id === 'cf:D1')).toBeTruthy();
     expect(sub.nodes.find((n) => n.id === ALB_ID)).toBeTruthy();
     expect(sub.nodes.find((n) => n.id === `tg:${TG_ARN}`)).toBeTruthy();
-    expect(sub.nodes.filter((n) => n.kind === 'target').length).toBe(2);
+    expect(sub.nodes.filter((n) => n.kind === 'target').length).toBe(1); // 2 IPs → 1 grouped target node
   });
 
   it('an LB entry yields only its downstream (ALB→TG→targets), not the CF above it', () => {

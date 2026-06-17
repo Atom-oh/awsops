@@ -299,41 +299,50 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       if (lbId) addEdge(lbId, tgId);
     }
 
+    // GROUP targets by resolved workload: an ASG / EKS replicas / ECS tasks behind a TG are ONE
+    // workload differing only by IP — collapse them into a single node with the member IPs listed
+    // (scales to 100s of replicas without a per-IP node blow-up). A single target keeps its old
+    // per-target shape (label/id/port) so 1:1 cases render exactly as before.
     const thds = arr(t.target_health_descriptions);
-    const shown = thds.slice(0, TARGET_CAP);
-    shown.forEach((thd, i) => {
+    const ttype = str(t.target_type);
+    interface Grp { key: string; groupLabel: string; resolved: string; meta: Record<string, unknown>; members: { id: string; port: unknown; health: string; label: string }[] }
+    const groups = new Map<string, Grp>();
+    thds.forEach((thd, i) => {
       const target = (thd.Target && typeof thd.Target === 'object') ? (thd.Target as Row) : {};
       const health = (thd.TargetHealth && typeof thd.TargetHealth === 'object') ? (thd.TargetHealth as Row) : {};
       const targetId = str(target.Id) || `unknown-${i}`;
-      // include Port: the same instance/IP can be registered on multiple ports — keep them distinct.
-      const port = target.Port == null ? '' : `:${str(target.Port)}`;
-      const nodeId = `target:${str(t.resource_id)}:${targetId}${port}`;
-      const ttype = str(t.target_type);
-      // Resolve instance→EC2 name, lambda→function name, ip→EKS/ECS workload (via ipResolved).
-      let label = targetId;
-      let resolved = '';
-      let extra: Record<string, unknown> = {};
-      if (ttype === 'instance' && ec2ById.has(targetId)) { label = ec2ById.get(targetId)!; resolved = 'ec2'; }
-      else if (ttype === 'lambda' && lambdaByArn.has(targetId)) { label = lambdaByArn.get(targetId)!; resolved = 'lambda'; }
+      // group key + the per-member label + (for multi) the group label. Resolve instance→EC2,
+      // lambda→function, ip→EKS/ECS workload.
+      let key = 'ip', mlabel = targetId, groupLabel = 'targets', resolved = '', meta: Record<string, unknown> = {};
+      if (ttype === 'instance') { resolved = ec2ById.has(targetId) ? 'ec2' : ''; key = 'ec2'; mlabel = ec2ById.get(targetId) || targetId; groupLabel = 'EC2 instances'; }
+      else if (ttype === 'lambda') { resolved = lambdaByArn.has(targetId) ? 'lambda' : ''; key = `lambda:${targetId}`; mlabel = lambdaByArn.get(targetId) || targetId; groupLabel = mlabel; }
       else if (ttype === 'ip') {
-        // EKS (live from page) takes priority, then ECS (synced inventory).
-        const r = input.ipResolved?.[targetId] ?? ecsByIp.get(targetId);
-        if (r) { label = r.label; resolved = r.resolved; extra = r.meta ?? {}; }
+        const r = input.ipResolved?.[targetId] ?? ecsByIp.get(targetId); // EKS (live) then ECS (synced)
+        if (r) { resolved = r.resolved; key = `${r.resolved}:${r.label}`; mlabel = r.label; groupLabel = r.label; meta = r.meta ?? {}; }
       }
-      addNode(nodeId, 'target', label, {
+      let g = groups.get(key);
+      if (!g) { g = { key, groupLabel, resolved, meta, members: [] }; groups.set(key, g); }
+      g.members.push({ id: targetId, port: target.Port ?? null, health: str(health.State) || 'unknown', label: mlabel });
+    });
+    for (const g of groups.values()) {
+      const total = g.members.length;
+      const healthy = g.members.filter((m) => m.health === 'healthy').length;
+      // aggregate state for the node color: all-healthy → healthy; any unhealthy → unhealthy; else the worst non-healthy.
+      const aggHealth = total === healthy ? 'healthy' : g.members.some((m) => m.health === 'unhealthy') ? 'unhealthy' : (g.members.find((m) => m.health !== 'healthy')?.health || 'unknown');
+      const single = total === 1;
+      const nodeId = `target:${str(t.resource_id)}:${g.key}`;
+      addNode(nodeId, 'target', single ? g.members[0].label : `${g.groupLabel} ×${total}`, {
         targetType: ttype,
-        health: str(health.State) || 'unknown',
-        port: target.Port ?? null,
-        id: targetId,
-        ...(resolved ? { resolved } : {}),
-        ...extra,
+        health: aggHealth,
+        ...(single ? { id: g.members[0].id, port: g.members[0].port }
+                   : { count: total, healthSummary: `${healthy}/${total} healthy`,
+                       // member IP[:port] list (display-capped; count stays accurate)
+                       members: g.members.slice(0, TARGET_CAP).map((m) => (m.port == null ? m.id : `${m.id}:${m.port}`)),
+                       ...(total > TARGET_CAP ? { membersTruncated: total - TARGET_CAP } : {}) }),
+        ...(g.resolved ? { resolved: g.resolved } : {}),
+        ...g.meta,
       });
       addEdge(tgId, nodeId);
-    });
-    if (thds.length > TARGET_CAP) {
-      const moreId = `more:${str(t.resource_id)}`;
-      addNode(moreId, 'more', `+${thds.length - TARGET_CAP} more targets`);
-      addEdge(tgId, moreId);
     }
   }
 

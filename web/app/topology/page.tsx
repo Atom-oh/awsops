@@ -363,6 +363,13 @@ export default function TopologyPage() {
       for (const k of ['cluster', 'namespace', 'service', 'workload', 'ecsService', 'task', 'pod'] as const) {
         if (m[k] != null && m[k] !== '') syn[k] = m[k];
       }
+      // grouped node (ASG/replicas/tasks): show the member count + health summary + the IP list
+      if (m.count != null) {
+        syn.targets = m.count;
+        if (m.healthSummary) syn.health = m.healthSummary;
+        if (Array.isArray(m.members)) syn.member_ips = m.members;
+        if (m.membersTruncated) syn.more_members = m.membersTruncated;
+      }
     }
     return { title: selected.label, data: syn, spec: undefined };
   }, [selected, netMaps]);
