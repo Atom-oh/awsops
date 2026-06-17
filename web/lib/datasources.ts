@@ -6,7 +6,11 @@
 import { getPool } from '@/lib/db';
 import { DATASOURCE_KINDS, isDatasourceKind } from '@/lib/integrations-category';
 import type { AuthType } from '@/lib/datasource-auth';
-import { getCredentialById, mirrorDefaultCredential } from '@/lib/integration-credentials';
+import {
+  getCredentialById,
+  mirrorDefaultCredential,
+  deleteCredentialKeys,
+} from '@/lib/integration-credentials';
 
 export interface DatasourceRow {
   id: number;
@@ -139,4 +143,40 @@ export async function setDefaultDatasource(id: number): Promise<void> {
   if (cred) await mirrorDefaultCredential(kind, cred);
 }
 
-// deleteDatasource (Task 8) is appended below.
+/** Delete a datasource instance. Cascade order: schema-cache rows → credential id key →
+ *  integrations row. A Secrets Manager delete failure is logged, not blocking (orphan reaped later).
+ *  If the deleted row was the default: re-pick a new default of the kind and re-mirror its credential;
+ *  if none remain, clear the kind-mirror key. Idempotent (no-op when the id is gone). */
+export async function deleteDatasource(id: number): Promise<void> {
+  const row = await getDatasource(id);
+  if (!row) return;
+
+  await getPool().query('DELETE FROM datasource_schemas WHERE integration_id = $1', [id]);
+  try {
+    await deleteCredentialKeys([String(id)]);
+  } catch (e) {
+    console.warn('[datasources] credential delete failed (id key); orphan reaped later:', (e as { name?: string })?.name || 'error');
+  }
+  await getPool().query('DELETE FROM integrations WHERE id = $1', [id]);
+
+  if (row.isDefault) {
+    const { rows } = await getPool().query(
+      `SELECT id FROM integrations
+        WHERE kind = $1 AND direction = 'egress' AND capability = 'read'
+        ORDER BY id LIMIT 1`,
+      [row.kind],
+    );
+    if (rows.length) {
+      const newId = rows[0].id as number;
+      await getPool().query('UPDATE integrations SET is_default = true, updated_at = NOW() WHERE id = $1', [newId]);
+      const cred = await getCredentialById(newId, row.kind);
+      if (cred) await mirrorDefaultCredential(row.kind, cred);
+    } else {
+      try {
+        await deleteCredentialKeys([row.kind]); // no instances left → clear the managed mirror
+      } catch (e) {
+        console.warn('[datasources] kind-mirror clear failed:', (e as { name?: string })?.name || 'error');
+      }
+    }
+  }
+}
