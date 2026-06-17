@@ -77,3 +77,28 @@ Neptune 옵션을 켤 경우의 구성 세부:
 **먼저(now): Postgres 엣지테이블** — `web/lib/flow-topology.ts`의 관계 규칙을 공유 모듈로 추출, 동기화 시 `topology_edges`(노드/엣지 + sync 타임스탬프) materialize, recursive CTE + 에이전트 SQL 도구로 멀티홉 질의. 충분성 검증.
 
 **옵션(deferred): Neptune** — `terraform/v2/foundation/neptune.tf`(전부 `neptune_enabled` 게이트): Neptune Serverless(min NCU, VPC, KMS) + **Graph Loader Lambda(Node/TS 런타임**, 공유 도출 모듈 import; Aurora 읽기 → openCypher MERGE by deterministic id → **run-id mark-sweep 프루닝**) + EventBridge(sync 후 트리거) + **VPC-resident openCypher MCP Lambda**(Reader Endpoint, **read-only `neptune-db:ReadDataViaQuery` 롤** — Loader write 롤과 분리) AgentCore Gateway 타깃 + BFF `/api/graph`. Postgres CTE 불충분 입증 시에만 활성화.
+
+## Addendum (2026-06-17) — 그래프 백엔드/엔진 재확인 + UI 아키텍처 결정 (multi-AI 합의)
+
+추가 multi-AI 패널들로 ADR-043의 핵심 가정을 재검증했다. 출처: `/co-agent` 의사결정 패널 — **kiro-cli(Claude·Kimi-K2.5·DeepSeek-3.2·GLM-5) + Antigravity(Gemini 3.1 Pro)** 응답, **Codex(OpenAI)는 환경 문제(bedrock-mantle `openai.gpt-5.5` Engine-not-found, us-east-1/us-east-2 동일)로 전 라운드 불참** — 판정에는 미반영(반대 의견 아님). 코드 변경 없음(결정 기록만).
+
+1. **Neptune vs Neo4j — 5개 모델 패밀리(Claude·Gemini·Kimi·DeepSeek·GLM) 만장일치.**
+   - **지금은 Postgres-first 유지가 정답**(ADR-043 본문 결정 재확인). 수천 노드에선 재귀 CTE가 $0·운영0으로 동일 그래프 질의를 처리 → Neptune의 ~$115+/월 상시비용 + ETL 동기화는 over-build.
+   - **그래프 DB가 필요해지면 Neptune**(AWS-managed·VPC-native·IAM-native `neptune-db:ReadDataViaQuery`).
+   - **Neo4j 정정**: 영구 배제 아님 → **"ECS + EBS 내부 배포(VPC) 한정 조건부 후보"**. Aura(외부 egress = VPC-internal/read-only 격리 위배)는 배제. ECS+EBS는 egress 문제를 해소하고 더 싸지만(~$15–30/월), **stateful 컨테이너 운영 부담**(EBS 단일 AZ, Community 클러스터링 없음 = SPOF, JVM 튜닝, 패치, 자체 auth = IAM-native 아님, GPLv3) 때문에 소규모 팀엔 Neptune보다 무겁다. 단 그래프가 derived·rebuildable·read-only라 backup/SPOF 부담은 primary DB보다 낮아 "최악"은 아니다.
+
+2. **토폴로지 UI 아키텍처 — 현행(클라이언트 빌드) 유지. (kiro + Gemini + chair 만장일치)**
+   - 화면은 진입 시 `/api/inventory`(Steampipe sync rate(15분) 적재) fetch → 브라우저에서 `buildFlowGraph`(순수함수, 수천 노드 ms) 즉석 빌드 → React Flow 렌더. **사람의 수동 rebuild 불필요 — 진입 시마다 신선.**
+   - **서버 materialize 모델(B)로 가지 않는다(지금)**: 인벤토리가 이미 15분 캐시라 그래프를 materialize해도 데이터는 동일하게 15분 stale → **신선도 이득 0인데 파생 테이블 drift + 잡 모니터링 부채만 추가**(SSOT 위반). 클라 빌드가 ms라 성능 이점도 체감 없음.
+
+3. **Materialize cadence (서버 그래프를 쓰게 될 때)**: 분 단위 아님 → **하루 1회**(토폴로지 *구조*는 천천히 변하고 derived·rebuildable). 단 **소비자가 없는 동안은 스케줄을 켜지 않는다**(읽는 곳 없는 테이블 갱신 = 낭비).
+
+4. **전환/활성화 트리거 (이때 서버 그래프 깨움)**:
+   - (가장 확실) **DevOps 에이전트 RCA 소비자 등장** — LLM 컨텍스트에 수천 인벤토리 행을 못 넣으므로, 이미 구현된 **Postgres 재귀-CTE 탐색을 에이전트 전용 도구**(`/api/graph?from=&dir=`, `graph-query.ts`)로 사용.
+   - 규모: 인벤토리 수만 노드↑ / `/api/inventory` 페이로드 과대(브라우저 프레임 드랍).
+   - 다중 백엔드 소비자(RCA·알림·리포트)가 같은 그래프 탐색 → materialize가 캐시로 정당화.
+   - 그래프 탐색이 핵심 SLA 기능으로 격상.
+
+5. **에이전트 RCA 등장 시 = 투트랙(Gemini 제안, 합의)**: **UI는 계속 클라 빌드(A), AI는 서버 CTE 그래프 도구.** 둘 다 동일 `flow-topology` 규칙 공유(중복 0). RCA 호출이 인벤토리 sync보다 잦아지면 그때 daily materialize를 캐시로 배선("N회 빌드 → 1회 빌드 + N회 읽기").
+
+**요약**: read-only 파생 토폴로지 그래프는 — **저장/탐색 = Postgres(현재 충분), 그리기 = React Flow(프론트), UI 갱신 = 진입 시 클라 빌드(현행 유지)**. 전용 그래프 DB(Neptune; 차선 Neo4j-ECS+EBS)와 서버 materialize는 **둘 다 "do-not-enable, 트리거 도달 시"** — Neptune은 `neptune_enabled` 게이트로 이미 dark.
