@@ -28,6 +28,8 @@ vi.mock('@/lib/integrations', () => ({ getEnabledIntegrations: (...a: unknown[])
 vi.mock('@/lib/trace', () => ({ recordCustomAgentTrace: (...a: unknown[]) => recordCustomAgentTrace(...a) }));
 const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
+const listConfiguredSchemas = vi.fn();
+vi.mock('@/lib/datasource-schema', () => ({ listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a) }));
 
 function req(body: unknown, cookie = 'awsops_token=t') {
   return new Request('http://x/api/chat', {
@@ -70,6 +72,7 @@ beforeEach(() => {
   classifyPrompt.mockReset();
   recordExchange.mockReset();
   recordExchange.mockResolvedValue(undefined);
+  listConfiguredSchemas.mockReset(); listConfiguredSchemas.mockResolvedValue([]);
   delete process.env.HYBRID_ROUTING_ENABLED;
 });
 
@@ -380,3 +383,20 @@ describe('ADR-031 Phase 2 — per-account space wiring', () => {
     expect(recordCustomAgentTrace).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'compliance', spaceVersion: 7 }));
   });
 });
+
+
+describe('datasource schema injection', () => {
+  it('injects cached schemas as extraContext for the monitoring gateway', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'monitoring', skill: 'monitoring', agentName: 'monitoring', skillHashes: [] });
+    classifyRoute.mockResolvedValue({ primary: 'monitoring', ranked: [{ key: 'monitoring', score: 1, active: true }], method: 'regex' });
+    listConfiguredSchemas.mockResolvedValue([{ slug: 'prometheus', kind: 'prometheus', schema: { metrics: ['up'], labels: ['job'] }, fetched_at: 't' }]);
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'what is up' })));
+    const arg = invokeAgent.mock.calls.at(-1)![0] as { extraContext?: string };
+    expect(arg.extraContext).toContain('Datasource schemas');
+    expect(arg.extraContext).toContain('prometheus');
+  });
+});
+

@@ -37,6 +37,7 @@ export interface InvokeInput {
   accountId?: string;            // ADR-031 Phase 2: agent.py reads payload.accountId
   accountAlias?: string;
   integrations?: ResolvedIntegration[]; // ADR-039 P2-infra inc2: live egress-READ MCP connections
+  extraContext?: string; // bounded BFF context appended to the agent system prompt (e.g. cached datasource schemas)
 }
 
 async function readResponse(resp: unknown): Promise<string> {
@@ -63,6 +64,7 @@ export async function invokeAgent(input: InvokeInput): Promise<string> {
   if (input.accountId) body.accountId = input.accountId;
   if (input.accountAlias) body.accountAlias = input.accountAlias;
   if (input.integrations?.length) body.integrations = input.integrations;
+  if (input.extraContext) body.extraContext = input.extraContext;
   const payload = new TextEncoder().encode(JSON.stringify(body));
   const cmd = new InvokeAgentRuntimeCommand({
     agentRuntimeArn: arn,

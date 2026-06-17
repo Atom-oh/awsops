@@ -10,6 +10,7 @@ import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
 import { currentAccountId, currentAccountAlias } from '@/lib/account';
+import { listConfiguredSchemas } from '@/lib/datasource-schema';
 import { getAgentSpace } from '@/lib/agent-space';
 import { randomUUID } from 'crypto';
 
@@ -24,6 +25,22 @@ function json(obj: unknown, status: number) {
 }
 function chunk(text: string): string[] {
   return text.match(/\S+\s*|\s+/g) ?? [text];
+}
+
+/** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps). */
+function renderSchemaContext(schemas: { slug: string; kind: string | null; schema: unknown }[]): string {
+  const lines = ['## Datasource schemas (cached) — use these real names when writing queries'];
+  const names = (a: unknown, n: number) =>
+    (Array.isArray(a) ? a : []).slice(0, n).map((x) => (typeof x === 'string' ? x : (x as { name?: string }).name ?? JSON.stringify(x))).join(', ');
+  for (const s of schemas) {
+    const sc = (s.schema || {}) as Record<string, unknown>;
+    const parts: string[] = [];
+    for (const [k, n] of [['metrics', 40], ['labels', 40], ['tags', 40], ['tables', 30], ['domains', 10], ['indices', 30]] as const) {
+      if (Array.isArray(sc[k]) && (sc[k] as unknown[]).length) parts.push(`${k}: ${names(sc[k], n)}`);
+    }
+    lines.push(`- **${s.slug}** (${s.kind ?? ''}): ${parts.join(' | ') || '(empty)'}`);
+  }
+  return lines.join('\n').slice(0, 6000);
 }
 
 export async function POST(request: Request) {
@@ -108,6 +125,15 @@ export async function POST(request: Request) {
     }).catch(() => { /* store is never-throws by contract; belt-and-suspenders (P2 gate) */ });
   };
 
+  // Inject cached datasource schemas (the agent reads the cache) for the observability gateways.
+  let datasourceSchemaContext: string | undefined;
+  if (spec.gateway === 'monitoring' || spec.gateway === 'data') {
+    try {
+      const schemas = await listConfiguredSchemas(accountId);
+      if (schemas.length) datasourceSchemaContext = renderSchemaContext(schemas);
+    } catch { /* schema cache is best-effort; the agent still works (can call discovery tools) without it */ }
+  }
+
   const enc = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -138,6 +164,7 @@ export async function POST(request: Request) {
           agentName: spec.agentName, agentVersion: spec.agentVersion, skillHashes: spec.skillHashes,
           accountId, accountAlias,
           integrations: spec.integrations, // ADR-039 P2-infra inc2: live egress-READ MCP connections
+          extraContext: datasourceSchemaContext, // cached datasource schemas → agent reads the cache
         });
       } catch (e) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));

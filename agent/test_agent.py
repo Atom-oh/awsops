@@ -283,5 +283,14 @@ class IntegrationToolMergeTest(unittest.TestCase):
         self.assertEqual(names(deduped), ['shared', 'gw_only', 'int_only'])
 
 
+
+class TestDatasourceGuidance(unittest.TestCase):
+    def test_monitoring_prompt_names_query_languages(self):
+        mon = agent.SKILL_BASE["monitoring"]
+        for lang in ("PromQL", "LogQL", "TraceQL", "SQL"):
+            self.assertIn(lang, mon)
+        self.assertIn("Datasource schemas", mon)  # tells the agent to use the injected cache
+
+
 if __name__ == '__main__':
     unittest.main()
