@@ -32,6 +32,32 @@ def _upload_markdown(md, report_id):
     return f"s3://{bucket}/{key}"
 
 
+_DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _upload_bytes(body, key, content_type):
+    import boto3
+    bucket = os.environ.get("ARTIFACT_BUCKET")
+    if not bucket:
+        raise RuntimeError("ARTIFACT_BUCKET not set")
+    boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2")).put_object(
+        Bucket=bucket, Key=key, Body=body, ContentType=content_type)
+    return f"s3://{bucket}/{key}"
+
+
+def _export_artifacts(md, report_id):
+    """Best-effort DOCX+PDF next to the report markdown (diagnosis/{id}.docx|pdf). A generation/upload
+    failure (e.g. chromium crash) is logged and SKIPPED — the markdown is the source of truth and the
+    report status must never depend on export success."""
+    import traceback
+    from diagnosis import exporters
+    for ext, ct, fn in (("docx", _DOCX_CT, exporters.to_docx), ("pdf", "application/pdf", exporters.to_pdf)):
+        try:
+            _upload_bytes(fn(md), f"diagnosis/{report_id}.{ext}", ct)
+        except Exception:  # noqa: BLE001 — export is non-fatal
+            print(f"[export] {ext} generation failed (non-fatal):\n{traceback.format_exc()}")
+
+
 def _report(payload, dry_run):
     """AI Diagnosis report. payload: {account, tier, requested_by, report_id}.
     The BFF creates the diagnosis_reports row (running) and passes report_id — this fixes the
@@ -60,6 +86,7 @@ def _report(payload, dry_run):
             md, summary, sources_used = rpt.generate(
                 conn, account, tier, report_id=report_id, on_progress=on_progress, model=model)
             artifact_uri = _upload_markdown(md, report_id)
+            _export_artifacts(md, report_id)  # best-effort DOCX+PDF; never fails the report
             status = "partial" if summary.get("degraded") else "succeeded"
             ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,
                               summary=summary, artifact_uri=artifact_uri)

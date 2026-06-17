@@ -1,7 +1,18 @@
-FROM python:3.12-slim
+# Pinned to bookworm (Debian 12): playwright recognizes it and `install --with-deps` pulls the
+# correct Debian chromium libs. The floating `python:3.12-slim` rolled to Debian trixie (13), which
+# playwright doesn't recognize → it falls back to Ubuntu packages (ttf-unifont/ttf-ubuntu-font-family)
+# absent on Debian → the browser install fails.
+FROM python:3.12-slim-bookworm
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# AI Diagnosis PDF export: the `report` job renders the report markdown to PDF via headless chromium
+# (playwright, in requirements). `--with-deps chromium` pulls chromium + its apt system libraries;
+# fonts-noto-cjk makes Korean render (without a CJK font chromium prints tofu/□). arm64.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-noto-cjk \
+    && python -m playwright install --with-deps chromium \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 COPY db.py handlers.py fargate_worker.py ./
 # ADR-029+036 remediation P2-code executor (Fargate path). Same image; the SFN command selects the
 # module (`python remediation_executor_cli.py --job-id X --action Y`). Docker COPY cannot reach a

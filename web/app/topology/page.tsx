@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, type LucideIcon } from 'lucide-react';
+import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, Search, Database, type LucideIcon } from 'lucide-react';
 import { Background, Controls, MiniMap, Position, type Node, type Edge, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
@@ -67,6 +67,7 @@ const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ecs: Boxes, ec2: Se
 
 function iconFor(n: FlowNode): IconC {
   if (n.kind === 'target') return RESOLVED_ICON[String(n.meta?.resolved ?? '')] ?? Circle;
+  if (n.kind === 'origin' && n.meta?.service === 's3') return Database; // S3 origin, not unknown
   return KIND_ICON[n.kind];
 }
 
@@ -128,24 +129,81 @@ async function fetchEksIpMap(): Promise<NonNullable<FlowInput['ipResolved']>> {
   const map: NonNullable<FlowInput['ipResolved']> = {};
   try {
     const list = await fetch('/api/eks').then((r) => (r.ok ? r.json() : null));
-    const clusters: string[] = (list?.rows ?? [])
+    // NOTE: /api/eks returns { clusters: [...] } (matches the EKS page + fleet). Reading `rows` here
+    // silently yielded [] → EKS pod resolution never ran (every EKS ip-target showed as a raw IP).
+    const clusters: string[] = (list?.clusters ?? [])
       .filter((c: { access?: string }) => c.access === 'connected')
       .map((c: { name?: string }) => c.name)
       .filter(Boolean);
     await Promise.all(clusters.map(async (name) => {
       try {
-        const r = await fetch(`/api/eks/${name}/incluster?kind=pods`).then((x) => (x.ok ? x.json() : null));
-        for (const p of (r?.rows ?? []) as { podIP?: string; namespace?: string; name?: string; workload?: string }[]) {
-          if (p.podIP) map[p.podIP] = {
+        const get = (kind: string) => fetch(`/api/eks/${name}/incluster?kind=${kind}`).then((x) => (x.ok ? x.json() : null));
+        const [eps, pods] = await Promise.all([get('endpoints'), get('pods')]);
+        // pod IP → owning workload (fallback when an IP isn't fronted by a Service)
+        const podByIp = new Map<string, { podIP?: string; namespace?: string; name?: string; workload?: string }>();
+        for (const p of (pods?.rows ?? []) as { podIP?: string; namespace?: string; name?: string; workload?: string }[]) {
+          if (p.podIP) podByIp.set(p.podIP, p);
+        }
+        // Service mapping (preferred): an Endpoints object's name == the Service name; its addresses
+        // are the backing pod IPs. More stable than the pod/workload — a TG ip-target fronts a Service.
+        for (const e of (eps?.rows ?? []) as { name?: string; namespace?: string; ips?: string[] }[]) {
+          for (const ip of e.ips ?? []) {
+            const pod = podByIp.get(ip);
+            map[ip] = {
+              label: `${e.namespace ?? ''}/${e.name ?? ''}`,
+              resolved: 'eks',
+              meta: { cluster: name, namespace: e.namespace, service: e.name, pod: pod?.name, workload: pod?.workload },
+            };
+          }
+        }
+        for (const [ip, p] of podByIp) {
+          if (!map[ip]) map[ip] = {
             label: `${p.namespace ?? ''}/${p.workload || p.name || ''}`,
             resolved: 'eks',
-            meta: { pod: p.name, namespace: p.namespace, cluster: name, workload: p.workload },
+            meta: { cluster: name, namespace: p.namespace, workload: p.workload, pod: p.name },
           };
         }
       } catch { /* skip this cluster */ }
     }));
   } catch { /* no EKS resolution */ }
   return map;
+}
+
+// ---- VPC / subnet / security-group id → name resolution (for the detail panel) ----
+type NetMaps = { vpc: Map<string, string>; subnet: Map<string, string>; sg: Map<string, string> };
+const emptyNetMaps = (): NetMaps => ({ vpc: new Map(), subnet: new Map(), sg: new Map() });
+
+// inventory row {resource_id, data:{...}} → a human name (Name tag / group_name), else the id.
+function invName(invRow: { resource_id?: unknown; data?: Record<string, unknown> }): string {
+  const d = invRow.data ?? {};
+  const tags = (d.tags ?? {}) as Record<string, unknown>;
+  return String(tags.Name ?? d.group_name ?? d.title ?? d.name ?? invRow.resource_id ?? '');
+}
+// pull ids from the many shapes a row uses: 'sg-x' | {GroupId} | {SubnetId} | {Id} | availability_zones[].SubnetId
+function idsFrom(v: unknown): string[] {
+  if (v == null) return [];
+  return (Array.isArray(v) ? v : [v])
+    .map((x) => {
+      if (typeof x === 'string') return x;
+      const o = (x ?? {}) as Record<string, unknown>;
+      return String(o.GroupId ?? o.group_id ?? o.SubnetId ?? o.subnet_id ?? o.Id ?? '');
+    })
+    .filter(Boolean);
+}
+const withName = (id: string, m: Map<string, string>): string => {
+  const n = m.get(id);
+  return n && n !== id ? `${n} (${id})` : id;
+};
+// resolved VPC/subnet/SG names for a resource row (added alongside the raw ids in the detail panel)
+function networkNames(row: Record<string, unknown>, nm: NetMaps): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const vpcId = String(row.vpc_id ?? '');
+  if (vpcId) out.vpc_name = withName(vpcId, nm.vpc);
+  const subnetIds = [...new Set([...idsFrom(row.subnet_id), ...idsFrom(row.subnet_ids), ...idsFrom(row.subnets), ...idsFrom(row.availability_zones)])];
+  if (subnetIds.length) out.subnet_names = subnetIds.map((id) => withName(id, nm.subnet));
+  const sgIds = [...new Set([...idsFrom(row.security_groups), ...idsFrom(row.security_group_ids), ...idsFrom(row.vpc_security_group_ids)])];
+  if (sgIds.length) out.security_group_names = sgIds.map((id) => withName(id, nm.sg));
+  return out;
 }
 
 export default function TopologyPage() {
@@ -157,11 +215,22 @@ export default function TopologyPage() {
   const [cappedTypes, setCappedTypes] = useState<string[]>([]);
   const [entryId, setEntryId] = useState<string>('');
   const [selected, setSelected] = useState<FlowNode | null>(null);
+  const [query, setQuery] = useState('');
+  const [netMaps, setNetMaps] = useState<NetMaps>(emptyNetMaps);
 
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const [res, ipResolved] = await Promise.all([Promise.all(TYPES.map(fetchType)), fetchEksIpMap()]);
+      const NET = ['vpc', 'subnet', 'security_group'] as const;
+      const [res, ipResolved, net] = await Promise.all([
+        Promise.all(TYPES.map(fetchType)),
+        fetchEksIpMap(),
+        // VPC/subnet/SG inventory → id→name maps for the detail panel (lookup only, not graph nodes)
+        Promise.all(NET.map((t) => fetch(`/api/inventory/${t}?limit=500`).then((r) => (r.ok ? r.json() : { rows: [] })).catch(() => ({ rows: [] })))),
+      ]);
+      const mk = (rows: { resource_id?: unknown; data?: Record<string, unknown> }[]) =>
+        new Map((rows ?? []).map((r) => [String(r.resource_id), invName(r)]));
+      setNetMaps({ vpc: mk(net[0]?.rows), subnet: mk(net[1]?.rows), sg: mk(net[2]?.rows) });
       const out: FlowInput = { ipResolved };
       let newest: string | null = null;
       const capped: string[] = [];
@@ -188,6 +257,14 @@ export default function TopologyPage() {
   const dark = useTheme() === 'dark';
 
   const full = useMemo(() => (data ? buildFlowGraph(data) : { nodes: [], edges: [] }), [data]);
+
+  // Resource-name search: match nodes by label or id (case-insensitive); selecting one focuses it
+  // (reuses the focus collapse + re-center). Capped so the dropdown stays usable on big graphs.
+  const searchMatches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [] as FlowNode[];
+    return full.nodes.filter((n) => n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q)).slice(0, 10);
+  }, [full, query]);
 
   // Entry-point options (CloudFront distributions, then load balancers).
   const entryOptions = useMemo(() => ({
@@ -235,7 +312,7 @@ export default function TopologyPage() {
         targetPosition: rankdir === 'TB' ? Position.Top : Position.Left,
         style: {
           background: bg,
-          border: `${n.id === focusId ? '2px solid' : n.kind === 'origin' ? '1px dashed' : '1px solid'} ${border}`,
+          border: `${n.id === focusId ? '2px solid' : n.kind === 'origin' && n.meta?.unresolved ? '1px dashed' : '1px solid'} ${border}`,
           color: dark ? '#E3E9EE' : '#16202A',
           borderRadius: 8, fontSize: 11, padding: 6, width: 220,
         },
@@ -266,12 +343,20 @@ export default function TopologyPage() {
     const m = (selected.meta ?? {}) as Record<string, unknown>;
     if (m.row) {
       const row = m.row as Record<string, unknown>;
-      return { title: String(row.resource_id ?? selected.label), data: row, spec: m.invType ? INVENTORY_TYPES[m.invType as string] : undefined };
+      // enrich with resolved VPC/subnet/SG names (added next to the raw ids already in the row)
+      return { title: String(row.resource_id ?? selected.label), data: { ...row, ...networkNames(row, netMaps) }, spec: m.invType ? INVENTORY_TYPES[m.invType as string] : undefined };
     }
     const syn: Record<string, unknown> = { resource_id: String(m.id ?? selected.label), kind: selected.kind };
-    if (selected.kind === 'target') { syn.target_type = m.targetType; syn.health = m.health; syn.port = m.port; if (m.resolved) syn.resolved_as = m.resolved; }
+    if (selected.kind === 'target') {
+      syn.target_type = m.targetType; syn.health = m.health; syn.port = m.port;
+      if (m.resolved) syn.resolved_as = m.resolved;
+      // EKS/ECS resolution detail (cluster / namespace / service / workload), when present
+      for (const k of ['cluster', 'namespace', 'service', 'workload', 'ecsService', 'task', 'pod'] as const) {
+        if (m[k] != null && m[k] !== '') syn[k] = m[k];
+      }
+    }
     return { title: selected.label, data: syn, spec: undefined };
-  }, [selected]);
+  }, [selected, netMaps]);
 
   const onEntry = (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
   const selectCls = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
@@ -333,6 +418,37 @@ export default function TopologyPage() {
         subtitle="요청 흐름 그래프 (Route53 → CloudFront → LB → Target Group → 타깃)"
         right={
           <div className="flex items-center gap-2">
+            <div className="relative">
+              <div className="flex items-center gap-1 rounded-md border border-ink-200 bg-card px-2 py-1">
+                <Search size={13} className="text-ink-400" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && searchMatches[0]) { setSelected(searchMatches[0]); setQuery(''); }
+                    if (e.key === 'Escape') setQuery('');
+                  }}
+                  placeholder="리소스 이름 검색…"
+                  className="w-44 bg-transparent text-[12px] text-ink-700 outline-none placeholder:text-ink-300"
+                />
+              </div>
+              {searchMatches.length > 0 && (
+                <ul className="absolute right-0 z-20 mt-1 max-h-72 w-72 overflow-auto rounded-md border border-ink-200 bg-card py-1 shadow-pop">
+                  {searchMatches.map((n) => (
+                    <li key={n.id}>
+                      <button
+                        type="button"
+                        onClick={() => { setSelected(n); setQuery(''); }}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-ink-700 hover:bg-ink-50"
+                      >
+                        <span className="truncate">{n.label}</span>
+                        <span className="ml-auto shrink-0 text-[10px] uppercase text-ink-400">{n.kind}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <select className={selectCls} value={entryOptions.cf.some((n) => n.id === entryId) ? entryId : ''} onChange={onEntry}>
               <option value="">CloudFront: 전체</option>
               {entryOptions.cf.map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}

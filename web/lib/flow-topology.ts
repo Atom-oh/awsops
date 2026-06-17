@@ -68,6 +68,14 @@ const dns = (v: unknown): string => str(v).replace(/\.$/, '').toLowerCase();
 /** Max targets rendered per target group before collapsing the rest into a "+N more" node. */
 export const TARGET_CAP = 20;
 
+/** A CloudFront origin domain that is an S3 endpoint → the bucket name, else null.
+ *  Matches virtual-hosted REST + website endpoints: <bucket>.s3.<region>.amazonaws.com,
+ *  <bucket>.s3.amazonaws.com, <bucket>.s3-<region>.amazonaws.com, ...s3-website... */
+function s3Bucket(domain: string): string | null {
+  const m = domain.match(/^(.+?)\.s3[.-][^/]*amazonaws\.com$/i);
+  return m ? m[1] : null;
+}
+
 export function buildFlowGraph(input: FlowInput): FlowGraph {
   const nodes: FlowNode[] = [];
   const edges: FlowEdge[] = [];
@@ -167,7 +175,13 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       // is a feasibility-gated follow-up (aws_cloudfront_vpc_origin not synced).
       const vpc = (o.VpcOriginConfig && typeof o.VpcOriginConfig === 'object') ? ' (VPC origin)' : '';
       const oid = `origin:${str(c.resource_id)}:${domain || i}`;
-      addNode(oid, 'origin', `${domain || 'origin'}${vpc}`, { unresolved: true });
+      // S3 origin → resolve to the bucket (name + S3 icon), not an "unknown" origin node.
+      const bucket = domain ? s3Bucket(domain) : null;
+      if (bucket) {
+        addNode(oid, 'origin', bucket, { service: 's3', bucket, domain });
+      } else {
+        addNode(oid, 'origin', `${domain || 'origin'}${vpc}`, { unresolved: true });
+      }
       addEdge(cfId, oid);
     });
   }

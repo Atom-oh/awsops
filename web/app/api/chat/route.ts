@@ -95,7 +95,6 @@ export async function POST(request: Request) {
   // ADR-044 §2: a pin to an agent disabled/absent in this Agent Space gets an HONEST message,
   // never a silent fallback to keyword/classifier routing.
   const unavailablePin = !!customPinTarget && !customPinEnabled;
-  const pinIsValid = pinIsBuiltin || customPinEnabled;
   // ADR-031/039 fail-closed revocation: pickCustomAgent matches against the 30s-cached enabled
   // set; re-check the picked custom agent against Aurora (authoritative) before routing to it, so
   // a just-disabled agent is unusable immediately on every instance (not after the cache TTL).
