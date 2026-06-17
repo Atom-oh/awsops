@@ -1,6 +1,7 @@
 import { CloudWatchClient, GetMetricDataCommand, ListMetricsCommand } from '@aws-sdk/client-cloudwatch';
 import { PricingClient, GetProductsCommand } from '@aws-sdk/client-pricing';
 import { getModelLabel, getModelPricing, computeCost, RANGE_CONFIGS, type ModelPricing, type CostBreakdown } from './bedrock';
+import { assumedClient } from './aws-assume';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 
@@ -101,9 +102,11 @@ const avg = (v?: number[]) => (v && v.length ? sum(v) / v.length : 0);
  *         (GetMetricData alone can't enumerate dimension values).
  * Step 2: GetMetricData for the 8 metrics × each model; aggregate + price.
  */
-export async function bedrockModelMetrics(range = '24h'): Promise<BedrockMetrics> {
+export async function bedrockModelMetrics(range = '24h', accountId?: string): Promise<BedrockMetrics> {
   const cfg = RANGE_CONFIGS[range] ?? RANGE_CONFIGS['24h'];
-  const lm = await cwClient().send(new ListMetricsCommand({ Namespace: 'AWS/Bedrock', MetricName: 'Invocations' }));
+  // account-scoped CloudWatch client: host (null/self) → task-role creds; target → assumed read-only role.
+  const cw = await assumedClient(accountId, CloudWatchClient, { region: REGION });
+  const lm = await cw.send(new ListMetricsCommand({ Namespace: 'AWS/Bedrock', MetricName: 'Invocations' }));
   const ids = new Set<string>();
   for (const m of lm.Metrics ?? []) {
     for (const d of m.Dimensions ?? []) if (d.Name === 'ModelId' && d.Value) ids.add(d.Value);
@@ -122,7 +125,7 @@ export async function bedrockModelMetrics(range = '24h'): Promise<BedrockMetrics
   if (queries.length > 500) {
     console.warn(`[bedrock] ${models.length} models × ${BEDROCK_METRICS.length} metrics = ${queries.length} queries > 500 cap; metrics truncated`);
   }
-  const r = await cwClient().send(new GetMetricDataCommand({
+  const r = await cw.send(new GetMetricDataCommand({
     StartTime: new Date(Date.now() - cfg.hours * 3600_000), EndTime: new Date(),
     MetricDataQueries: queries.slice(0, 500),
   }));
