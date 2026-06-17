@@ -110,6 +110,25 @@ def get_client(service, region='ap-northeast-2', role_arn=None, session_suffix=N
     return boto3.client(service, region_name=region, **creds)
 
 
+def get_credentials(target_account_id, session_suffix=None):
+    """Return botocore Credentials for sigv4 signing (e.g. OpenSearch _search).
+
+    Host account (target is the host, or None/blank) → the Lambda's own creds via the default
+    provider chain. A real *other* onboarded account → Credentials from the assumed-role response.
+    Mirrors get_role_arn's host short-circuit so the host path is never a self-assume.
+    """
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
+    if role_arn is None:
+        return boto3.Session().get_credentials()
+    from botocore.credentials import Credentials
+    creds = _assume_role(role_arn, session_suffix or 'sigv4')
+    return Credentials(
+        access_key=creds['aws_access_key_id'],
+        secret_key=creds['aws_secret_access_key'],
+        token=creds['aws_session_token'],
+    )
+
+
 def get_resource(service, region='ap-northeast-2', role_arn=None):
     """Create boto3 resource (for DynamoDB), optionally cross-account."""
     if not role_arn:

@@ -20,6 +20,9 @@ describe('isBlockedHost (ADR-011 blocklist)', () => {
     expect(isBlockedHost('fd12:3456::1')).toBe(true);
     expect(isBlockedHost('fe80::1')).toBe(true);
     expect(isBlockedHost('::ffff:169.254.169.254')).toBe(true); // IPv4-mapped
+    expect(isBlockedHost('2002:a9fe:a9fe::')).toBe(true);  // 6to4 → 169.254.169.254 (metadata)
+    expect(isBlockedHost('2002:0a00:0001::')).toBe(true);  // 6to4 → 10.0.0.1 (private, blocked here)
+    expect(isBlockedHost('2002:0808:0808::')).toBe(false); // 6to4 → 8.8.8.8 (public, not blocked)
   });
   it('treats non-literal hostnames as not-blocked (DNS resolution is connection-time)', () => {
     expect(isBlockedHost('grafana.example.com')).toBe(false);
@@ -42,5 +45,45 @@ describe('assertEgressEndpointAllowed', () => {
   });
   it('allows a public https endpoint', () => {
     expect(() => assertEgressEndpointAllowed('https://api.datadoghq.com/api/v1')).not.toThrow();
+  });
+});
+
+import { isAlwaysBlockedHost, assertDatasourceEndpointAllowed } from './ssrf-guard';
+
+describe('assertDatasourceEndpointAllowed (datasource — private allowed, always-block only)', () => {
+  it('rejects metadata / loopback / link-local / multicast', () => {
+    for (const u of [
+      'http://169.254.169.254/latest/meta-data/',
+      'http://127.0.0.1:8123',
+      'https://[::1]:8123',
+      'http://[fd00:ec2::254]/',
+      'http://[fe80::1]:8123',
+      'http://224.0.0.1:8123',
+      'http://[2002:a9fe:a9fe::]:8123', // 6to4 → 169.254.169.254 metadata
+    ]) {
+      expect(() => assertDatasourceEndpointAllowed(u)).toThrow();
+    }
+  });
+  it('allows private RFC1918/ULA and public, over http or https', () => {
+    for (const u of [
+      'http://10.0.0.5:8123',
+      'http://192.168.1.9:8123',
+      'http://172.16.3.4:8123',
+      'http://[fc00::1]:8123',
+      'https://clickhouse.example.com',
+      'http://ch.internal:8123',
+    ]) {
+      expect(() => assertDatasourceEndpointAllowed(u)).not.toThrow();
+    }
+  });
+  it('rejects non-http(s) schemes and invalid URLs', () => {
+    expect(() => assertDatasourceEndpointAllowed('file:///etc/passwd')).toThrow();
+    expect(() => assertDatasourceEndpointAllowed('gopher://10.0.0.1/')).toThrow();
+    expect(() => assertDatasourceEndpointAllowed('not a url')).toThrow();
+  });
+  it('isAlwaysBlockedHost: RFC1918 is NOT always-blocked but metadata is', () => {
+    expect(isAlwaysBlockedHost('10.0.0.1')).toBe(false);
+    expect(isAlwaysBlockedHost('169.254.169.254')).toBe(true);
+    expect(isAlwaysBlockedHost('127.0.0.1')).toBe(true);
   });
 });

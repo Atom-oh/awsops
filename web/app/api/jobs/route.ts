@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { verifyUser } from '@/lib/auth';
 import { enqueueJob, EnqueueDeliveryError } from '@/lib/jobs';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,8 +20,9 @@ export async function POST(req: NextRequest) {
 
   let body: any;
   try {
-    body = await req.json();
-  } catch {
+    body = await readJsonBounded(req); // bound BEFORE parse (OOM guard)
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) return NextResponse.json({ message: 'request body too large' }, { status: 413 });
     return NextResponse.json({ message: 'invalid JSON body' }, { status: 400 });
   }
 

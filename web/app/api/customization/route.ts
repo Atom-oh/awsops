@@ -7,6 +7,7 @@ import {
 } from '@/lib/catalog';
 import { getAgentSpace, upsertAgentSpace } from '@/lib/agent-space';
 import { currentAccountId } from '@/lib/account';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +40,8 @@ export async function POST(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
   let body: Record<string, unknown>;
-  try { body = await request.json(); } catch { return json({ error: 'invalid JSON' }, 400); }
+  try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
+  catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
 
   if (body.kind === 'skill') {
     const v = validateSkill(body as never);
@@ -83,7 +85,8 @@ export async function PUT(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
   let body: Record<string, unknown>;
-  try { body = await request.json(); } catch { return json({ error: 'invalid JSON' }, 400); }
+  try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
+  catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
   const actor = g.user!.email ?? g.user!.sub;
 
   if (body.op === 'enable' || body.op === 'disable') {

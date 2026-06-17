@@ -324,6 +324,7 @@
       <a href="#ai">AI 게이트웨이</a>
       <a href="#architecture">아키텍처</a>
       <a href="#trust">보안</a>
+      <a href="#docs">가이드</a>
       <a href="#start" class="nav-cta">데모 보기</a>
     </div>
   </div>
@@ -597,6 +598,43 @@
         <div><div class="metric"><div class="v num" style="font-size:26px">end-to-end</div><div class="l">TLS 엣지</div></div></div>
         <div><div class="metric"><div class="v num" style="font-size:26px">$0</div><div class="l">플래그 OFF 시 비용</div></div></div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== DETAILED GUIDES ===================== -->
+<section class="sec" id="docs" style="padding-top:0">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">상세 가이드</div>
+      <h2>더 깊이 — <em>가이드 문서</em>.</h2>
+      <p>아키텍처·기능·AI·운영을 더 자세히 다룬 가이드 페이지입니다. 브로셔와 같은 디자인, 같은 도메인에서 이어집니다.</p>
+    </div>
+    <div class="feat-grid">
+      <a class="feat reveal" href="/awsops/brochure/architecture.html">
+        <div class="fic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7L12 12l8.7-5M12 22V12"/></svg></div>
+        <h3>아키텍처 상세 →</h3>
+        <p>비공개 엣지(CloudFront VPC Origin → 내부 ALB → Fargate), Cognito Lambda@Edge, Aurora, AgentCore, 비동기 워커 티어.</p>
+        <span class="tag">architecture.html</span>
+      </a>
+      <a class="feat reveal" href="/awsops/brochure/guide.html">
+        <div class="fic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18M8 13h3"/></svg></div>
+        <h3>기능 가이드 →</h3>
+        <p>대시보드·인벤토리·비용·EKS·토폴로지·AI 진단·챗 어시스턴트·데이터소스 Explore 사용법.</p>
+        <span class="tag">guide.html</span>
+      </a>
+      <a class="feat reveal" href="/awsops/brochure/ai.html">
+        <div class="fic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg></div>
+        <h3>AI &amp; AgentCore →</h3>
+        <p>8 섹션 게이트웨이·하이브리드 라우팅·AI 진단 티어·멀티소스 자연어 쿼리(PromQL/LogQL/SQL).</p>
+        <span class="tag">ai.html</span>
+      </a>
+      <a class="feat reveal" href="/awsops/brochure/operations.html">
+        <div class="fic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2L12 16.8 5.7 21l2.3-7.2-6-4.4h7.6z"/></svg></div>
+        <h3>배포·운영 →</h3>
+        <p>Terraform foundation, make deploy/agentcore/workers, 플래그 게이트($0 OFF), 운영 함정 체크리스트.</p>
+        <span class="tag">operations.html</span>
+      </a>
     </div>
   </div>
 </section>

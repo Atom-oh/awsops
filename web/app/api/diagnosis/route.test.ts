@@ -25,7 +25,11 @@ import { enqueueJob } from '@/lib/jobs';
 import { GET, POST } from './route';
 
 const req = (body?: unknown) =>
-  ({ headers: { get: () => 'cookie' }, json: async () => body } as unknown as Request);
+  new Request('http://x/api/diagnosis', {
+    method: 'POST',
+    headers: { cookie: 'awsops_token=t', 'content-type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
 
 beforeEach(() => {
   vi.clearAllMocks();

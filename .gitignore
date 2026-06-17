@@ -117,6 +117,8 @@ graphify-out/
 .claude/worktrees/
 # Public RDS CA trust bundle — NOT a key (PR #36: verified TLS for the auto-register write-path)
 !scripts/v2/eks/rds-ca-bundle.pem
-# MCP tooling local stores (headroom shared memory, serena cache/memories) — never commit
-.headroom/
+# AI dev tool scratch dirs / MCP tooling local stores
 .serena/
+.headroom/
+tfplan*
+terraform/v2/foundation/tfplan*

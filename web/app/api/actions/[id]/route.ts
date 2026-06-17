@@ -8,6 +8,7 @@ import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { getPlan, getAction, setApprovedAndExecuting, recordAudit } from '@/lib/remediation';
 import { redactEgress } from '@/lib/egress-dlp';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -34,7 +35,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const user = await verifyUser(req.headers.get('cookie'));
   if (!user || !(await isAdmin(user))) return NextResponse.json({ message: 'admin required' }, { status: 403 });
   if (!UUID_RE.test(params.id)) return NextResponse.json({ message: 'invalid plan id' }, { status: 400 });
-  let body: any; try { body = await req.json(); } catch { return NextResponse.json({ message: 'invalid JSON' }, { status: 400 }); }
+  let body: any;
+  try { body = await readJsonBounded(req); }
+  catch (e) { if (e instanceof BodyTooLargeError) return NextResponse.json({ message: 'request body too large' }, { status: 413 }); return NextResponse.json({ message: 'invalid JSON' }, { status: 400 }); }
   const op = body?.op;
   const plan = await getPlan(params.id);
   if (!plan) return NextResponse.json({ message: 'plan not found' }, { status: 404 });
