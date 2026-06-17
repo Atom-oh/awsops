@@ -47,19 +47,25 @@ Conventions (match the existing fleet): unittest-style tests run by `python3 -m 
 - Create: `agent/lambda/reachability_read_mcp.py`
 - Test: `agent/lambda/test_reachability_read_mcp.py`
 - [ ] Failing tests (mock boto3 ec2 with stubbed describe_* responses): one tool `check_reachability`
-      with `{source, destination, port, protocol}`. Cases: (a) allowed path → `reachable: true`;
-      (b) SG ingress on dst missing the port → `reachable: false` + `blocking_component` names the
-      dst SG + `sg-ingress`; (c) NACL deny → `reachable: false` + nacl layer; (d) no route from src
-      subnet toward dst → false + route layer; (e) unknown tool → error; (f) `target_account_id` is
-      popped from arguments.
+      with `{source, destination, port, protocol}`. Cases: (a) allowed via CIDR rule → `reachable: true`;
+      (b) **[P2] allowed via SG-to-SG reference** (dst SG ingress references the src ENI's SG-ID, not a
+      CIDR) → `reachable: true` (must NOT false-negative); (c) SG ingress on dst missing the port →
+      `false` + `blocking_component` names the dst SG + `sg-ingress`; (d) NACL forward deny → `false` +
+      nacl layer; (e) **[P2] NACL stateless RETURN-path deny** (ephemeral 1024-65535 inbound on src
+      subnet denied) → `false` + nacl-return layer; (f) no route src-subnet → dst → `false` + route
+      layer; (g) unknown tool → error; (h) `target_account_id` popped.
 - [ ] Implement: resolve src/dst ENIs (`describe_network_interfaces`; accept instance-id →
-      `describe_instances` → primary ENI, or eni-id, or private-ip). Collect each ENI's SGs, subnet,
-      route table, subnet NACL. Evaluate **statically**: src SG egress permits dst:port/proto, dst SG
-      ingress permits src:port/proto, both subnets' NACLs allow the flow + the stateless return
-      (ephemeral 1024-65535), a route exists src-subnet → dst (local / peering / tgw / nat / igw).
-      Return `{reachable, blocking_component:[{layer, resource, reason}], checked:[...]}`. **Describe
-      only** — no path creation. Document in the module docstring: static SG/NACL/route evaluation,
-      same-account, not AWS Reachability Analyzer (no live packet simulation).
+      `describe_instances` → primary ENI, or eni-id, or private-ip). Collect each ENI's SGs (full rule
+      sets), subnet, route table, subnet NACL. Evaluate **statically**: (1) src SG egress permits
+      dst:port/proto, (2) dst SG ingress permits src:port/proto — **resolving BOTH CIDR (`IpRanges`)
+      AND SG-ID references (`UserIdGroupPairs`)** against the peer ENI's SG-IDs/IPs, and prefix-list
+      refs best-effort; (3) NACLs (stateless) on both subnets allow the FORWARD flow AND the RETURN
+      flow on ephemeral ports (src-subnet inbound 1024-65535 from dst, dst-subnet inbound src:port,
+      etc.); (4) a route exists src-subnet → dst (local / peering / tgw / nat / igw). Return
+      `{reachable, blocking_component:[{layer, resource, reason}], checked:[...], disclaimer}` where
+      **`disclaimer`** states: static SG/NACL/route approximation, same-account, does NOT model TGW
+      route tables/blackholes, instance-level firewalls, or DNS — use AWS Reachability Analyzer for
+      definitive verification. **Describe-only — no path creation.** Same caveat in the module docstring.
 - [ ] IAM note (no code): `ec2:Describe*` is already on the agent read-only exec role — no IAM change.
 - [ ] Run `python3 -m pytest agent/lambda/test_reachability_read_mcp.py` (green).
 - [ ] Commit: `feat(agent): reachability-read MCP (computed ENI<->EC2 connectivity, describe-only)`.
@@ -89,11 +95,15 @@ Conventions (match the existing fleet): unittest-style tests run by `python3 -m 
       `list_service_entries`, `list_authorization_policies`, `list_peer_authentications`. Cases: a CRD
       list parses items → names/namespaces; SSRF/host guard on the cluster endpoint; unknown tool →
       error; no Steampipe/pg8000 import present.
-- [ ] Implement: build an EKS bearer token from a presigned STS `GetCallerIdentity` (k8s-aws-v1.
-      prefix), then HTTPS `GET` the Istio CRD collection endpoints on the cluster API server
-      (`networking.istio.io/v1beta1`, `security.istio.io/v1`). Read-only GET/LIST only. Cluster
-      name/endpoint/CA from env. Reuse the SSRF guard pattern from `datasource_http.py` if importable;
-      else inline an allowlist to the configured cluster endpoint.
+- [ ] Implement: **[P2] reuse the existing `k8s-aws-v1.` presigned-STS token pattern already in
+      `datasource_diag_mcp.py` (`_check_k8s_service_endpoints` — `RequestSigner` →
+      `generate_presigned_url` → `k8s-aws-v1.` + urlsafe-b64)** — do NOT reinvent it. HTTPS `GET` the
+      Istio CRD collection endpoints (`/apis/networking.istio.io/v1beta1/...`, `/apis/security.istio.io/v1/...`)
+      using **stdlib `urllib.request` + an `ssl.SSLContext` loaded from the cluster CA PEM** (agent
+      Lambdas bundle NO `requests`/`kubernetes`). Read-only GET/LIST only. **Accept a `cluster_name`
+      arg and resolve endpoint + CA at runtime via `boto3 eks.describe_cluster`** (role already has
+      `eks:DescribeCluster`) rather than hardcoding env. SSRF: pin the request host to the
+      describe_cluster-returned endpoint only.
 - [ ] Run `python3 -m pytest agent/lambda/test_istio_read_mcp.py` (green).
 - [ ] Commit: `feat(agent): istio-read MCP (read-only Istio CRDs via EKS k8s API, no Steampipe)`.
 
@@ -102,10 +112,28 @@ Conventions (match the existing fleet): unittest-style tests run by `python3 -m 
 - Modify: `terraform/v2/foundation/ai.tf`
 - Modify: `terraform/v2/foundation/eks.tf`
 - [ ] Implement: `catalog.py` — add `istio-read-target` (container, lambda_key `istio-read`, 7 tools).
-      `ai.tf` — add `"istio-read" = {...}` to `local.agent_lambdas` + the EKS env (cluster name/endpoint/
-      CA) on that function. `eks.tf` — add an `aws_eks_access_entry` + `aws_eks_access_policy_association`
-      (AmazonEKSAdminViewPolicy, cluster scope) for the **agent Lambda exec role** (mirroring the `web`
-      task-role entries), gated so it only exists when the istio lambda is present.
+      `ai.tf` — add `"istio-read" = {...}` to `local.agent_lambdas`; **[P2] if cluster endpoints are
+      private-only**, also add `"istio-read"` to the `vpc_config` conditional + the VPC-ENI IAM policy
+      `count` (default public-endpoint → no VPC, gated by an `istio_vpc_enabled` var defaulting false).
+      `eks.tf` — **[P2 concrete]**:
+      ```hcl
+      resource "aws_eks_access_entry" "agent" {
+        count = var.agentcore_enabled ? length(var.onboard_eks_clusters) : 0
+        cluster_name  = var.onboard_eks_clusters[count.index]
+        principal_arn = aws_iam_role.agent_lambda[0].arn
+        type = "STANDARD"
+      }
+      resource "aws_eks_access_policy_association" "agent_view" {
+        count = var.agentcore_enabled ? length(var.onboard_eks_clusters) : 0
+        cluster_name  = var.onboard_eks_clusters[count.index]
+        principal_arn = aws_iam_role.agent_lambda[0].arn
+        policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
+        access_scope { type = "cluster" }
+        depends_on = [aws_eks_access_entry.agent]
+      }
+      ```
+      (use the real agent Lambda role resource name found in `ai.tf`; confirm `eks:DescribeCluster` is
+      on that role's read policy — add if missing.)
 - [ ] Run `terraform -chdir=terraform/v2/foundation validate` + `fmt -check` + `python3 -m pytest agent/lambda/`.
 - [ ] Commit: `feat(agent): wire istio-read (container) target + lambda + agent-role EKS access entry`.
 
