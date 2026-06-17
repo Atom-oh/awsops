@@ -3,14 +3,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const verifyUser = vi.fn();
 const invokeAgent = vi.fn();
 const listConfiguredSchemas = vi.fn();
+const getDatasource = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/agentcore', () => ({ invokeAgent: (...a: unknown[]) => invokeAgent(...a) }));
 vi.mock('@/lib/datasource-schema', () => ({ listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a) }));
 vi.mock('@/lib/account', () => ({ currentAccountId: () => 'self' }));
-vi.mock('@/lib/integration-credentials', () => ({
-  KNOWN_CONNECTOR_SLUGS: ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir'],
-}));
+vi.mock('@/lib/datasources', () => ({ getDatasource: (...a: unknown[]) => getDatasource(...a) }));
 
 function req(body: unknown, cookie = 'awsops_token=t') {
   return new Request('http://x/api/datasources/generate', {
@@ -19,9 +18,25 @@ function req(body: unknown, cookie = 'awsops_token=t') {
 }
 
 beforeEach(() => {
-  verifyUser.mockReset(); invokeAgent.mockReset(); listConfiguredSchemas.mockReset();
+  verifyUser.mockReset(); invokeAgent.mockReset(); listConfiguredSchemas.mockReset(); getDatasource.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
   listConfiguredSchemas.mockResolvedValue([{ slug: 'prometheus', kind: 'prometheus', schema: { metrics: ['up'], labels: ['job'] }, fetched_at: 't' }]);
+});
+
+describe('instance id resolution', () => {
+  it('resolves the kind from the instance id (no connector invoke)', async () => {
+    getDatasource.mockResolvedValue({ id: 2, kind: 'loki', endpoint: 'http://l', authType: 'none', isDefault: false, enabled: true });
+    invokeAgent.mockResolvedValue('```\n{job="x"}\n```');
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 2, nl: 'errors' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).lang).toBe('LogQL');
+  });
+  it('400 when the instance id does not exist', async () => {
+    getDatasource.mockResolvedValue(null);
+    const { POST } = await import('./route');
+    expect((await POST(req({ id: 999, nl: 'x' }))).status).toBe(400);
+  });
 });
 
 describe('POST /api/datasources/generate', () => {

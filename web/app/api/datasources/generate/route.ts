@@ -6,7 +6,8 @@ import { verifyUser } from '@/lib/auth';
 import { invokeAgent } from '@/lib/agentcore';
 import { listConfiguredSchemas } from '@/lib/datasource-schema';
 import { currentAccountId } from '@/lib/account';
-import { KNOWN_CONNECTOR_SLUGS } from '@/lib/integration-credentials';
+import { getDatasource } from '@/lib/datasources';
+import { isDatasourceKind } from '@/lib/integrations-category';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -54,24 +55,33 @@ export async function POST(request: Request) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ error: 'unauthenticated' }, 401);
 
-  let body: { slug?: unknown; kind?: unknown; nl?: unknown };
+  let body: { id?: unknown; slug?: unknown; kind?: unknown; nl?: unknown };
   try { body = (await readJsonBounded(request)) as typeof body; }
   catch (e) {
     if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413);
     return json({ error: 'invalid JSON body' }, 400);
   }
 
-  const slug = typeof body.slug === 'string' ? body.slug : '';
-  if (!(KNOWN_CONNECTOR_SLUGS as readonly string[]).includes(slug)) return json({ error: 'unknown datasource' }, 400);
-  const kind = typeof body.kind === 'string' && body.kind ? body.kind : slug;
-  const lang = LANG[kind] || LANG[slug] || 'query';
+  // Resolve the kind: by instance id (preferred) or by slug/kind (deprecated). This route only drafts a
+  // query via the agent — it never invokes a connector, so no inline conn-config is needed.
+  let kind = '';
+  const id = Number(body.id);
+  if (Number.isInteger(id) && id > 0) {
+    const ds = await getDatasource(id);
+    if (!ds) return json({ error: 'unknown datasource instance' }, 400);
+    kind = ds.kind;
+  } else {
+    kind = typeof body.kind === 'string' && body.kind ? body.kind : (typeof body.slug === 'string' ? body.slug : '');
+  }
+  if (!isDatasourceKind(kind)) return json({ error: 'unknown datasource' }, 400);
+  const lang = LANG[kind] || 'query';
   const nl = typeof body.nl === 'string' ? body.nl.trim().slice(0, MAX_NL) : '';
   if (!nl) return json({ error: 'nl (natural-language request) required' }, 400);
 
   let extraContext = '';
   try {
     const schemas = await listConfiguredSchemas(currentAccountId());
-    const own = schemas.find((s) => s.slug === slug);
+    const own = schemas.find((s) => s.slug === kind); // schema cache still keyed by kind/slug (Task 19 re-keys to id)
     if (own) extraContext = schemaContext(own.schema);
   } catch { /* schema is optional — the model can still generate a best-effort query */ }
 
