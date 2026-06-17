@@ -47,6 +47,7 @@ export default function CustomizationPage() {
   const [integrations, setIntegrations] = useState<IntegrationRow[]>([]);
   const [credConfigured, setCredConfigured] = useState<string[]>([]); // slugs (=kind) with a stored credential
   const [credInput, setCredInput] = useState<Record<string, Record<string, string>>>({}); // slug → field → value (never persisted/rendered back)
+  const [schemaStatus, setSchemaStatus] = useState<Record<string, { fetched_at?: string; summary?: Record<string, number> }>>({}); // cached datasource schema status
   const [integForm, setIntegForm] = useState({ direction: 'egress', name: '', kind: 'grafana', endpoint: '', transport: 'api_key', capability: 'read', authMode: 'hmac', sourceAllowlist: '', triggerTarget: 'incident' });
 
   async function load() {
@@ -66,6 +67,12 @@ export default function CustomizationPage() {
     if (ir.ok) setIntegrations((await ir.json()).integrations || []);
     const cr = await fetch('/api/integrations/credential');
     if (cr.ok) setCredConfigured((await cr.json()).configured || []);
+    const sr = await fetch('/api/integrations/schema');
+    if (sr.ok) {
+      const m: Record<string, { fetched_at?: string; summary?: Record<string, number> }> = {};
+      for (const sc of (await sr.json()).schemas || []) m[sc.slug] = { fetched_at: sc.fetched_at, summary: sc.summary };
+      setSchemaStatus(m);
+    }
   }
 
   async function createIntegration() {
@@ -95,6 +102,21 @@ export default function CustomizationPage() {
     setMsg(res.ok ? `Credential saved for ${slug}` : `Error: ${(await res.json()).error || res.status}`);
     const cr = await fetch('/api/integrations/credential');
     if (cr.ok) setCredConfigured((await cr.json()).configured || []);
+  }
+
+  async function refreshSchema(slug: string) {
+    setMsg(`Refreshing ${slug} schema…`);
+    const res = await fetch('/api/integrations/schema', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ slug }),
+    });
+    const d = await res.json();
+    setMsg(res.ok ? `${slug} schema cached: ${Object.entries(d.summary || {}).map(([k, v]) => `${v} ${k}`).join(', ') || '—'}` : `Error: ${d.error || res.status}`);
+    const sr = await fetch('/api/integrations/schema');
+    if (sr.ok) {
+      const m: Record<string, { fetched_at?: string; summary?: Record<string, number> }> = {};
+      for (const sc of (await sr.json()).schemas || []) m[sc.slug] = { fetched_at: sc.fetched_at, summary: sc.summary };
+      setSchemaStatus(m);
+    }
   }
 
   async function toggleIntegration(id: number, enabled: boolean) {
@@ -277,6 +299,15 @@ export default function CustomizationPage() {
                 ))}
                 <button onClick={() => saveCredential(c.slug)} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">{configured ? 'Update' : 'Connect'}</button>
               </div>
+              {c.fields.some((f) => f.key === 'endpoint') && (
+                <div className="flex items-center gap-2 border-t border-ink-100 pt-1.5 text-[11px]">
+                  <span className="text-ink-400">schema:</span>
+                  {schemaStatus[c.slug]?.fetched_at
+                    ? <span className="text-ink-500">cached · {Object.entries(schemaStatus[c.slug]?.summary || {}).map(([k, v]) => `${v} ${k}`).join(', ') || '—'}</span>
+                    : <span className="text-ink-400">not cached</span>}
+                  <button onClick={() => refreshSchema(c.slug)} disabled={!configured} className="rounded border border-ink-200 px-2 py-0.5 disabled:opacity-40">Refresh schema</button>
+                </div>
+              )}
             </div>
           );
         })}
