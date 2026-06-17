@@ -8,6 +8,7 @@ import {
   markReportFailed,
   type DiagnosisModel,
 } from '@/lib/diagnosis';
+import { isAdmin } from '@/lib/admin';
 import { enqueueJob } from '@/lib/jobs';
 
 export const dynamic = 'force-dynamic';
@@ -15,7 +16,13 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request) {
   const user = await verifyUser(req.headers.get('cookie'));
   if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
-  return NextResponse.json({ reports: await listReports(50) });
+  const reports = await listReports(50);
+  // can_edit per report: compute isAdmin ONCE (async + SSM-backed), then compare requested_by.
+  const admin = await isAdmin(user);
+  const me = user.email ?? user.sub;
+  return NextResponse.json({
+    reports: reports.map((r) => ({ ...r, can_edit: admin || r.requested_by === me })),
+  });
 }
 
 export async function POST(req: Request) {

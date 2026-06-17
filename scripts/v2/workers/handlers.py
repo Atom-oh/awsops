@@ -87,9 +87,14 @@ def _report(payload, dry_run):
                 conn, account, tier, report_id=report_id, on_progress=on_progress, model=model)
             artifact_uri = _upload_markdown(md, report_id)
             _export_artifacts(md, report_id)  # best-effort DOCX+PDF; never fails the report
+            try:  # auto title + suggested tags — best-effort, never fails the report
+                meta = rpt.make_title_and_tags(md)
+            except Exception:  # noqa: BLE001 — defensive (make_title_and_tags already swallows)
+                meta = {"title": None, "tags": []}
             status = "partial" if summary.get("degraded") else "succeeded"
             ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,
-                              summary=summary, artifact_uri=artifact_uri)
+                              summary=summary, artifact_uri=artifact_uri,
+                              title=meta["title"], tags=meta["tags"])
             return {"report_id": report_id, "status": status, "artifact_uri": artifact_uri}, md.encode("utf-8")
         except Exception as e:  # noqa: BLE001
             print(traceback.format_exc())  # full trace → CloudWatch logs only

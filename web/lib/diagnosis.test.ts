@@ -6,7 +6,13 @@ import {
   linkReportJob,
   reportForIdempotencyKey,
   markReportFailed,
+  updateReportMeta,
+  softDeleteReport,
+  canMutateReport,
 } from './diagnosis';
+import { isAdmin } from './admin';
+
+vi.mock('./admin', () => ({ isAdmin: vi.fn() }));
 
 const query = vi.fn(async (sql: string) => {
   if (sql.includes('INSERT INTO diagnosis_reports')) return { rows: [{ id: 7 }] };
@@ -66,5 +72,45 @@ describe('diagnosis queries', () => {
     expect(query.mock.calls.at(-1)![0]).toContain('progress');
     await getReport(1);
     expect(query.mock.calls.at(-1)![0]).toContain('progress');
+  });
+
+  it('soft-delete is honored across list/get/idempotency/parent-lineage', async () => {
+    await listReports(10);
+    expect(query.mock.calls.at(-1)![0]).toContain('deleted_at IS NULL');
+    await getReport(1);
+    expect(query.mock.calls.at(-1)![0]).toContain('deleted_at IS NULL');
+    await reportForIdempotencyKey('k');
+    expect(query.mock.calls.at(-1)![0]).toContain('deleted_at IS NULL');
+    await createReport('mid', 'u@x.io');
+    expect(query.mock.calls.at(-1)![0]).toContain('deleted_at IS NULL'); // parent subquery
+  });
+
+  it('updateReportMeta partial: tags-only does not set title', async () => {
+    await updateReportMeta(7, { tags: ['a', 'b'] });
+    const [sql, args] = query.mock.calls.at(-1) as [string, unknown[]];
+    expect(sql).toContain('tags =');
+    expect(sql).not.toContain('title =');
+    expect(args).toContain(7);
+  });
+  it('updateReportMeta partial: title-only does not set tags', async () => {
+    await updateReportMeta(7, { title: '핵심' });
+    const [sql] = query.mock.calls.at(-1) as [string, unknown[]];
+    expect(sql).toContain('title =');
+    expect(sql).not.toContain('tags =');
+  });
+  it('softDeleteReport sets deleted_at only when not already deleted', async () => {
+    await softDeleteReport(7);
+    const [sql, args] = query.mock.calls.at(-1) as [string, unknown[]];
+    expect(sql).toContain('deleted_at = now()');
+    expect(sql).toContain('deleted_at IS NULL');
+    expect(args).toEqual([7]);
+  });
+
+  it('canMutateReport: owner yes, stranger no, admin yes', async () => {
+    (isAdmin as any).mockResolvedValue(false);
+    expect(await canMutateReport({ email: 'u@x.io', sub: 'u' } as any, { requested_by: 'u@x.io' } as any)).toBe(true);
+    expect(await canMutateReport({ email: 'other@x.io', sub: 'o' } as any, { requested_by: 'u@x.io' } as any)).toBe(false);
+    (isAdmin as any).mockResolvedValue(true);
+    expect(await canMutateReport({ email: 'admin@x.io', sub: 'a' } as any, { requested_by: 'u@x.io' } as any)).toBe(true);
   });
 });

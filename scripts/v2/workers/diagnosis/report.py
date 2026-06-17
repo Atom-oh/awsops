@@ -26,6 +26,13 @@ REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 # verified us-east-1 cross-region inference profiles (us.* must be invoked from a US region).
 _MODEL_SONNET = os.environ.get("DIAGNOSIS_MODEL_SONNET", MODEL_ID)  # MODEL_ID kept as back-compat alias
 _MODEL_OPUS = os.environ.get("DIAGNOSIS_MODEL_OPUS", "us.anthropic.claude-opus-4-8")
+# Auto title/tags use a small cheap call (default = the Sonnet id; override to Haiku via env).
+_TITLE_MODEL = os.environ.get("DIAGNOSIS_TITLE_MODEL", _MODEL_SONNET)
+_TITLE_PROMPT = (
+    "아래 AWS 진단 리포트를 읽고, 가장 중요한 핵심 1가지만 담은 한국어 제목 한 줄(40자 이내)과 "
+    "관련 태그 3~5개를 만들어라. 반드시 JSON 객체만 출력하라(설명 금지): "
+    '{"title": "한 줄 제목", "tags": ["태그1", "태그2"]}'
+)
 TIER_CATALOG = {"light": SECTIONS, "mid": SECTIONS, "deep": DEEP_SECTIONS}
 TIER_MAX_TOKENS = {"light": 1500, "mid": 1500, "deep": 2200}
 
@@ -35,6 +42,24 @@ def _resolve_tier(tier, model):
     catalog = TIER_CATALOG.get(tier, SECTIONS)
     model_id = _MODEL_OPUS if (tier == "deep" and model == "opus") else _MODEL_SONNET
     return catalog, model_id, TIER_MAX_TOKENS.get(tier, 1500)
+
+
+def make_title_and_tags(md):
+    """One cheap LLM call → {'title': str|None, 'tags': [str]}. Best-effort: ANY failure → None/[]
+    (the title is decorative; it must never affect report success)."""
+    try:
+        raw = _bedrock_render(_TITLE_PROMPT, md, _TITLE_MODEL, 300)
+        snippet = raw[raw.find("{"): raw.rfind("}") + 1]  # tolerate ```json fences / filler text
+        data = json.loads(snippet)
+        title = data.get("title")
+        title = title.strip()[:200] if isinstance(title, str) and title.strip() else None
+        raw_tags = data.get("tags")
+        tags = ([str(t).strip()[:40] for t in raw_tags if str(t).strip()][:10]
+                if isinstance(raw_tags, list) else [])
+        return {"title": title, "tags": tags}
+    except Exception as e:  # noqa: BLE001 — title/tags are best-effort, never fatal
+        print(f"make_title_and_tags failed (non-fatal): {e}", file=sys.stderr)
+        return {"title": None, "tags": []}
 
 # A3 (V1 parity): per-section Bedrock idle/read timeout so one hung section can't stall the whole
 # job indefinitely (V1 aborted after 60s with no token). On timeout invoke_model raises →
