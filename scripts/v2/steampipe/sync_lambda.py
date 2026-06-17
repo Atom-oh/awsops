@@ -250,6 +250,16 @@ QUERIES = {
         "integration_id",
         "region",
     ),
+    # API GW routes: route_key (e.g. 'POST /qa') + target ('integrations/<id>') → label apigw edges.
+    # Composite id (api_id/route_id): route_id is per-API → a bare route_id risks a cross-API
+    # (region,resource_id) collision that the stale-delete would wrongly prune.
+    "apigatewayv2_route": (
+        "SELECT (api_id || '/' || route_id) AS route_uid, api_id, route_id, route_key, target, "
+        "authorization_type, region, account_id "
+        "FROM aws_api_gatewayv2_route ORDER BY api_id, route_id",
+        "route_uid",
+        "region",
+    ),
 }
 
 
@@ -280,8 +290,10 @@ def _fetch_cloudfront_vpc_origins():
         marker = lst.get("NextMarker")
         if not marker:
             break
-    # (b1) vo_id → set(distribution ids) — get_distribution_config DOES expose VpcOriginConfig live
-    dists, marker = {}, None
+    # (b1) vo_id → which distribution ORIGINS use it — get_distribution_config exposes VpcOriginConfig
+    # live. Capture (distribution_id, origin domain) per vo so the topology builder links only the
+    # SPECIFIC origin (not every origin on the distribution → no false edge for a co-resident origin).
+    dists, refs, marker = {}, {}, None
     while True:
         resp = cf.list_distributions(**({"Marker": marker} if marker else {}))
         dl = resp.get("DistributionList", {}) or {}
@@ -293,18 +305,57 @@ def _fetch_cloudfront_vpc_origins():
                     vid = (o.get("VpcOriginConfig") or {}).get("VpcOriginId")
                     if vid:
                         dists.setdefault(vid, set()).add(did)
+                        refs.setdefault(vid, []).append({"distribution_id": did, "domain": o.get("DomainName")})
             except ClientError as e:
                 print(f"get_distribution_config {did} skipped: {e}")  # one bad dist must not blank the type
         marker = dl.get("NextMarker")
         if not marker:
             break
     rows = [{"resource_id": vid, "region": "global", "vpc_origin_id": vid, "name": v["name"],
-             "arn": v["arn"], "status": v["status"], "distribution_ids": sorted(dists.get(vid, []))}
+             "arn": v["arn"], "status": v["status"], "distribution_ids": sorted(dists.get(vid, [])),
+             "origin_refs": refs.get(vid, [])}
             for vid, v in vos.items()]
     return rows, "resource_id", "region"
 
 
-SDK_SYNCS = {"cloudfront_vpc_origin": _fetch_cloudfront_vpc_origins}
+def _fetch_alb_listener_rules():
+    # ALB listener rules carry the L7 path/host → TG routing. The Steampipe table
+    # aws_ec2_load_balancer_listener_rule requires a listener_arn qualifier (unusable for a bulk
+    # SELECT), so source via boto3 elbv2 (regional client) like the cloudfront fetcher. One row per
+    # RULE: conditions (path-pattern/host-header) + actions (forward TG) + the listener port.
+    region = os.environ.get("AWS_REGION", "ap-northeast-2")
+    elb = boto3.client("elbv2", region_name=region)
+    rows = []
+    lb_marker = None
+    while True:
+        kw = {"Marker": lb_marker} if lb_marker else {}
+        lbs = elb.describe_load_balancers(**kw)
+        for lb in lbs.get("LoadBalancers", []) or []:
+            if lb.get("Type") != "application":
+                continue  # only ALBs carry L7 listener rules; NLBs forward by port only
+            lb_arn = lb.get("LoadBalancerArn")
+            try:
+                for ln in elb.describe_listeners(LoadBalancerArn=lb_arn).get("Listeners", []) or []:
+                    ln_arn, port, proto = ln.get("ListenerArn"), ln.get("Port"), ln.get("Protocol")
+                    for rule in elb.describe_rules(ListenerArn=ln_arn).get("Rules", []) or []:
+                        rows.append({
+                            "resource_id": rule.get("RuleArn"), "region": region, "arn": rule.get("RuleArn"),
+                            "listener_arn": ln_arn, "load_balancer_arn": lb_arn, "port": port, "protocol": proto,
+                            "priority": rule.get("Priority"), "is_default": rule.get("IsDefault", False),
+                            "conditions": rule.get("Conditions", []), "actions": rule.get("Actions", []),
+                        })
+            except ClientError as e:
+                print(f"alb_listener_rule {lb_arn} skipped: {e}")  # one bad LB must not blank the type
+        lb_marker = lbs.get("NextMarker")
+        if not lb_marker:
+            break
+    return rows, "resource_id", "region"
+
+
+SDK_SYNCS = {
+    "cloudfront_vpc_origin": _fetch_cloudfront_vpc_origins,
+    "alb_listener_rule": _fetch_alb_listener_rules,
+}
 _ALLOWED = set(QUERIES) | set(SDK_SYNCS)
 _sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
 _lambda = boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))

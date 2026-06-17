@@ -4,12 +4,14 @@ const verifyUser = vi.fn();
 const isAdmin = vi.fn();
 const setIntegrationCredential = vi.fn();
 const getConfiguredSlugs = vi.fn();
+const getConfiguredIds = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/integration-credentials', () => ({
   setIntegrationCredential: (...a: unknown[]) => setIntegrationCredential(...a),
   getConfiguredSlugs: (...a: unknown[]) => getConfiguredSlugs(...a),
+  getConfiguredIds: (...a: unknown[]) => getConfiguredIds(...a),
 }));
 
 function req(body: unknown, method = 'PUT') {
@@ -19,12 +21,13 @@ function req(body: unknown, method = 'PUT') {
 }
 
 beforeEach(() => {
-  for (const m of [verifyUser, isAdmin, setIntegrationCredential, getConfiguredSlugs]) m.mockReset();
+  for (const m of [verifyUser, isAdmin, setIntegrationCredential, getConfiguredSlugs, getConfiguredIds]) m.mockReset();
   process.env.AURORA_ENDPOINT = 'aurora.example';
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
   isAdmin.mockResolvedValue(true);
   setIntegrationCredential.mockResolvedValue(undefined);
   getConfiguredSlugs.mockResolvedValue(['notion']);
+  getConfiguredIds.mockResolvedValue([]);
 });
 
 describe('/api/integrations/credential gate', () => {
@@ -83,13 +86,32 @@ describe('PUT', () => {
 });
 
 describe('GET', () => {
-  it('returns configured slugs only, no values', async () => {
+  it('returns configured slugs + instance ids, no values', async () => {
     getConfiguredSlugs.mockResolvedValue(['notion', 'datadog']);
+    getConfiguredIds.mockResolvedValue(['11', '12']);
     const { GET } = await import('./route');
     const resp = await GET(req(undefined, 'GET'));
     expect(resp.status).toBe(200);
     const body = await resp.json();
     expect(new Set(body.configured)).toEqual(new Set(['notion', 'datadog']));
+    expect(new Set(body.configuredIds)).toEqual(new Set(['11', '12']));
+  });
+
+  it('NARROW downgrade: Secrets Manager AccessDenied → 200 empty (not 500)', async () => {
+    getConfiguredSlugs.mockRejectedValue(Object.assign(new Error('denied'), { name: 'AccessDeniedException' }));
+    const { GET } = await import('./route');
+    const resp = await GET(req(undefined, 'GET'));
+    expect(resp.status).toBe(200);
+    expect((await resp.json()).configured).toEqual([]);
+  });
+
+  it('a NON-Secrets-Manager error (e.g. PG) surfaces as 500 — not masked', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getConfiguredSlugs.mockRejectedValue(Object.assign(new Error('connection refused'), { name: 'PgConnError' }));
+    const { GET } = await import('./route');
+    const resp = await GET(req(undefined, 'GET'));
+    expect(resp.status).toBe(500);
+    errSpy.mockRestore();
   });
 });
 

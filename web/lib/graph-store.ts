@@ -92,6 +92,9 @@ export async function rebuildGraph(pool: Pool, runId: string = randomUUID()): Pr
   }
   const g = buildFlowGraph(input);
   const kindOf = new Map(g.nodes.map((n) => [n.id, n.kind]));
+  // NOTE: FlowEdge.label (L7 ALB path/host:port + API GW route_key) is intentionally NOT persisted —
+  // the materialized graph is a TRAVERSAL structure (topology_edges has no label column); the L7
+  // labels are a LIVE-only display feature rendered client-side on /topology from buildFlowGraph.
   const edges: GEdge[] = g.edges.map((e) => ({
     source: e.source, target: e.target,
     rel: relFor(kindOf.get(e.source), kindOf.get(e.target)), confidence: e.confidence,

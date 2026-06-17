@@ -19,8 +19,10 @@ from datasource_http import (
     SsrfBlocked,
     assert_host_allowed,
     auth_headers,
+    health,
     http_json,
     load_datasource,
+    set_request_conn,
 )
 
 SLUG = "prometheus"
@@ -148,16 +150,23 @@ def prometheus_schema(args):
                "truncated": len(metrics) > 500 or len(labels) > 200})
 
 
+def prometheus_health(args):
+    """Connectivity probe for the pre-save Test / status badge: GET /-/healthy."""
+    return ok(health(_ds(), "/-/healthy"))
+
+
 _TOOLS = {
     "prometheus_query": prometheus_query,
     "prometheus_query_range": prometheus_query_range,
     "prometheus_labels": prometheus_labels,
     "prometheus_series": prometheus_series, "prometheus_schema": prometheus_schema,
+    "prometheus_health": prometheus_health,
 }
 
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
+    set_request_conn(params.get("conn_config"))  # inline conn-config (BFF) > slug map
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
     if isinstance(args, dict):

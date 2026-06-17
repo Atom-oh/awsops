@@ -1,8 +1,10 @@
 // web/lib/integration-validation.test.ts
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import {
   validateIntegration, INTEGRATION_KINDS_EGRESS, INTEGRATION_KINDS_INGRESS, INTEGRATION_TRANSPORTS,
 } from './integration-validation';
+import { DATASOURCE_KINDS } from './integrations-category';
 
 const egress = { name: 'grafana-ro', kind: 'grafana', direction: 'egress', capability: 'read', endpoint: 'https://g.example/api', transport: 'api_key' };
 const ingress = { name: 'pd-in', kind: 'pagerduty', direction: 'ingress', authMode: 'vendor_sig', triggerTarget: 'incident' };
@@ -45,5 +47,38 @@ describe('integration-validation', () => {
     expect(validateIntegration({ ...egress, credentialsRef: '' }).ok).toBe(false);
     expect(validateIntegration({ ...egress, credentialsRef: 'arn:aws:secretsmanager:ap-northeast-2:1:secret:x' }).ok).toBe(true);
     expect(validateIntegration({ ...egress, credentialsRef: undefined }).ok).toBe(true); // optional
+  });
+});
+
+// LOCKSTEP: the datasource kinds must agree across THREE source-of-truth surfaces —
+// integrations-category.ts DATASOURCE_KINDS, this module's INTEGRATION_KINDS_EGRESS, and the
+// migration's integrations_kind_check egress branch. Drift would let the DB CHECK reject a kind the
+// API accepts (or vice versa).
+describe('datasource-kind lockstep (category ↔ validation ↔ migration CHECK)', () => {
+  const MIGRATION = new URL(
+    '../../terraform/v2/foundation/migrations/01KVB3MDTRVQW4MMC4GBVS6PPR_datasource_instances_additive.sql',
+    import.meta.url,
+  );
+  const sql = readFileSync(MIGRATION, 'utf8');
+
+  it('every DATASOURCE_KIND is in INTEGRATION_KINDS_EGRESS', () => {
+    for (const k of DATASOURCE_KINDS) {
+      expect(INTEGRATION_KINDS_EGRESS as readonly string[]).toContain(k);
+    }
+  });
+
+  it('the 4 added kinds are present in INTEGRATION_KINDS_EGRESS', () => {
+    for (const k of ['clickhouse', 'mimir', 'loki', 'tempo']) {
+      expect(INTEGRATION_KINDS_EGRESS as readonly string[]).toContain(k);
+    }
+  });
+
+  it("the migration's kind CHECK lists every datasource kind in the egress branch", () => {
+    const egressBranch = sql.slice(sql.indexOf("direction = 'egress'"));
+    for (const k of DATASOURCE_KINDS) {
+      expect(egressBranch).toContain(`'${k}'`);
+    }
+    // and it must keep the ingress branch (re-adding the constraint must not drop webhooks)
+    expect(sql).toContain("direction = 'ingress'");
   });
 });

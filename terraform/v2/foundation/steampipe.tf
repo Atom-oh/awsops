@@ -269,7 +269,10 @@ resource "aws_iam_role_policy" "inv_sync" {
       { Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = aws_lambda_function.inv_sync[0].arn },
       # SDK-sourced cloudfront_vpc_origin sync (Steampipe omits VpcOriginConfig): read-only CloudFront
       # list/get for VPC origins + per-distribution config. Read-only; no mutation.
-      { Effect = "Allow", Action = ["cloudfront:ListVpcOrigins", "cloudfront:GetVpcOrigin", "cloudfront:ListDistributions", "cloudfront:GetDistributionConfig"], Resource = "*" }
+      { Effect = "Allow", Action = ["cloudfront:ListVpcOrigins", "cloudfront:GetVpcOrigin", "cloudfront:ListDistributions", "cloudfront:GetDistributionConfig"], Resource = "*" },
+      # SDK-sourced alb_listener_rule sync (Steampipe rule table needs a per-listener qualifier):
+      # read-only ELBv2 describe for LBs/listeners/rules. Read-only; no mutation.
+      { Effect = "Allow", Action = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules"], Resource = "*" }
     ]
   })
 }

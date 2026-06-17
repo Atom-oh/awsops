@@ -19,6 +19,51 @@ const tg = {
   ],
 };
 
+describe('buildFlowGraph — L7 routing labels (ALB rules + API GW routes)', () => {
+  const albTg = { resource_id: TG_ARN, target_group_name: 'web-tg', target_type: 'ip', load_balancer_arns: [ALB_ARN], target_health_descriptions: [] };
+  const FE_TG = 'arn:aws:elasticloadbalancing:ap-northeast-2:1:targetgroup/fe/xyz';
+  const feTg = { resource_id: FE_TG, target_group_name: 'fe-tg', target_type: 'ip', load_balancer_arns: [ALB_ARN], target_health_descriptions: [] };
+
+  it('labels the ALB→TG edge with the listener rule path + port (forward action)', () => {
+    const rules = [
+      { resource_id: 'r1', load_balancer_arn: ALB_ARN, port: 443, conditions: [{ Field: 'path-pattern', PathPatternConfig: { Values: ['/api/*'] } }], actions: [{ Type: 'forward', TargetGroupArn: TG_ARN }] },
+      { resource_id: 'r2', load_balancer_arn: ALB_ARN, port: 443, is_default: true, conditions: [], actions: [{ Type: 'forward', TargetGroupArn: FE_TG }] },
+    ];
+    const g = buildFlowGraph({ alb: [alb], tg: [albTg, feTg], alb_listener_rule: rules });
+    const apiEdge = g.edges.find((e) => e.source === ALB_ID && e.target === `tg:${TG_ARN}`);
+    expect(apiEdge?.label).toContain('/api/*');
+    expect(apiEdge?.label).toContain(':443');
+    const feEdge = g.edges.find((e) => e.source === ALB_ID && e.target === `tg:${FE_TG}`);
+    expect(feEdge?.label).toContain('default'); // empty-conditions forward default → 'default :443'
+  });
+
+  it('labels with the host-header for host-routed ALBs', () => {
+    const rules = [{ resource_id: 'r1', load_balancer_arn: ALB_ARN, port: 443, conditions: [{ Field: 'host-header', HostHeaderConfig: { Values: ['atlantis.atomai.click'] } }], actions: [{ Type: 'forward', TargetGroupArn: TG_ARN }] }];
+    const g = buildFlowGraph({ alb: [alb], tg: [albTg], alb_listener_rule: rules });
+    expect(g.edges.find((e) => e.target === `tg:${TG_ARN}`)?.label).toContain('atlantis.atomai.click');
+  });
+
+  it('does NOT label when the default rule is a fixed-response (no forward target)', () => {
+    const rules = [{ resource_id: 'r1', load_balancer_arn: ALB_ARN, port: 443, is_default: true, conditions: [], actions: [{ Type: 'fixed-response', FixedResponseConfig: { StatusCode: '503' } }] }];
+    const g = buildFlowGraph({ alb: [alb], tg: [albTg], alb_listener_rule: rules });
+    // the LB→TG edge exists via load_balancer_arns but carries NO label (no TG in the rule's actions)
+    const e = g.edges.find((x) => x.source === ALB_ID && x.target === `tg:${TG_ARN}`);
+    expect(e).toBeTruthy();
+    expect(e?.label).toBeUndefined();
+  });
+
+  it('labels the API GW→Lambda edge with the route_key (path)', () => {
+    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'z6ktgdg69k.execute-api.ap-northeast-2.amazonaws.com' }] };
+    const apigw = { resource_id: 'z6ktgdg69k', name: 'ttobak-api', api_endpoint: 'https://z6ktgdg69k.execute-api.ap-northeast-2.amazonaws.com', protocol_type: 'HTTP' };
+    const integrations = [{ resource_id: 'i1', api_id: 'z6ktgdg69k', integration_type: 'AWS_PROXY', connection_type: 'INTERNET', integration_uri: 'arn:aws:lambda:ap-northeast-2:1:function:ttobak-api' }];
+    const lambda = [{ resource_id: 'ttobak-api', arn: 'arn:aws:lambda:ap-northeast-2:1:function:ttobak-api' }];
+    const routes = [{ resource_id: 'rt1', api_id: 'z6ktgdg69k', route_key: 'ANY /api/{proxy+}', target: 'integrations/i1' }];
+    const g = buildFlowGraph({ cloudfront: [cf], apigatewayv2_api: [apigw], apigatewayv2_integration: integrations, lambda, apigatewayv2_route: routes });
+    const e = g.edges.find((x) => x.source === 'apigw:z6ktgdg69k' && x.target === 'lambda:arn:aws:lambda:ap-northeast-2:1:function:ttobak-api');
+    expect(e?.label).toBe('ANY /api/{proxy+}');
+  });
+});
+
 describe('buildFlowGraph — API Gateway origins (CF→APIGW→Lambda/LB)', () => {
   const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'z6ktgdg69k.execute-api.ap-northeast-2.amazonaws.com' }] };
   const apigw = { resource_id: 'z6ktgdg69k', region: 'ap-northeast-2', name: 'ttobak-api', api_endpoint: 'https://z6ktgdg69k.execute-api.ap-northeast-2.amazonaws.com', protocol_type: 'HTTP' };
@@ -56,17 +101,28 @@ describe('buildFlowGraph — API Gateway origins (CF→APIGW→Lambda/LB)', () =
 });
 
 describe('buildFlowGraph — CloudFront VPC origins (CF→internal ALB/NLB)', () => {
-  it('resolves a Deployed VPC origin to its backing LB via distribution_ids membership (no unresolved node)', () => {
+  it('resolves a Deployed VPC origin to its backing LB by (distribution,domain) (no unresolved node)', () => {
     const cf = { resource_id: 'E2', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.atomai.click' }] };
-    const vo = [{ resource_id: 'vo_6O65', region: 'global', status: 'Deployed', arn: ALB_ARN, distribution_ids: ['E2'] }];
+    const vo = [{ resource_id: 'vo_6O65', region: 'global', status: 'Deployed', arn: ALB_ARN, origin_refs: [{ distribution_id: 'E2', domain: 'awsops-v2.atomai.click' }] }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], cloudfront_vpc_origin: vo });
     expect(g.edges.find((e) => e.source === 'cf:E2' && e.target === ALB_ID)).toBeTruthy();
     expect(g.nodes.find((n) => n.kind === 'origin')).toBeUndefined();
   });
 
+  it('does NOT mislink a co-resident external origin on a VPC-origin distribution', () => {
+    const cf = { resource_id: 'E2', region: 'us-east-1', origins: [
+      { Id: 'o1', DomainName: 'awsops-v2.atomai.click' },   // the VPC origin → ALB
+      { Id: 'o2', DomainName: 'cdn.partner.com' },           // an external custom origin → must NOT link to the LB
+    ] };
+    const vo = [{ resource_id: 'vo_6O65', region: 'global', status: 'Deployed', arn: ALB_ARN, origin_refs: [{ distribution_id: 'E2', domain: 'awsops-v2.atomai.click' }] }];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], cloudfront_vpc_origin: vo });
+    expect(g.edges.find((e) => e.source === 'cf:E2' && e.target === ALB_ID)).toBeTruthy();           // VPC origin linked
+    expect(g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('cdn.partner.com'))).toBeTruthy(); // external = unresolved node, no false edge
+  });
+
   it('a Failed VPC origin is NOT resolved — falls through to the honest unresolved origin node', () => {
     const cf = { resource_id: 'E2', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.atomai.click' }] };
-    const vo = [{ resource_id: 'vo_bad', region: 'global', status: 'Failed', arn: ALB_ARN, distribution_ids: ['E2'] }];
+    const vo = [{ resource_id: 'vo_bad', region: 'global', status: 'Failed', arn: ALB_ARN, origin_refs: [{ distribution_id: 'E2', domain: 'awsops-v2.atomai.click' }] }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], cloudfront_vpc_origin: vo });
     expect(g.edges.find((e) => e.source === 'cf:E2' && e.target === ALB_ID)).toBeUndefined();
     expect(g.nodes.find((n) => n.kind === 'origin')).toBeTruthy();

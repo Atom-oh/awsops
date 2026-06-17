@@ -20,8 +20,10 @@ from datasource_http import (
     SsrfBlocked,
     assert_host_allowed,
     auth_headers,
+    health,
     http_json,
     load_datasource,
+    set_request_conn,
 )
 
 SLUG = "clickhouse"
@@ -193,15 +195,22 @@ def clickhouse_schema(args):
     return ok({"tables": tables, "truncated": len(names) >= MAX_SCHEMA_TABLES})
 
 
+def clickhouse_health(args):
+    """Connectivity probe for the pre-save Test / status badge: GET /ping."""
+    return ok(health(load_datasource(SLUG), "/ping"))
+
+
 _TOOLS = {
     "clickhouse_query": clickhouse_query,
     "clickhouse_tables": clickhouse_tables,
     "clickhouse_describe": clickhouse_describe, "clickhouse_schema": clickhouse_schema,
+    "clickhouse_health": clickhouse_health,
 }
 
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
+    set_request_conn(params.get("conn_config"))  # inline conn-config (BFF) > slug map
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
     if isinstance(args, dict):

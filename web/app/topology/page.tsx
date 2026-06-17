@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, Search, Database, Webhook, type LucideIcon } from 'lucide-react';
+import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, Search, Webhook, Archive, type LucideIcon } from 'lucide-react';
 import { Background, Controls, MiniMap, Position, type Node, type Edge, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
@@ -16,7 +16,7 @@ import { useTheme } from '@/lib/use-theme';
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
 
 const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda', 'ecs_task', 's3',
-  'apigatewayv2_api', 'apigatewayv2_integration', 'cloudfront_vpc_origin'] as const;
+  'apigatewayv2_api', 'apigatewayv2_integration', 'cloudfront_vpc_origin', 'apigatewayv2_route', 'alb_listener_rule'] as const;
 type InvType = (typeof TYPES)[number];
 type Row = Record<string, unknown>;
 
@@ -24,12 +24,13 @@ type Row = Record<string, unknown>;
 // s3 resolves CloudFront S3 origins; apigatewayv2_* resolve execute-api origins → API GW → Lambda/LB;
 // cloudfront_vpc_origin resolves CloudFront VPC origins → internal ALB/NLB.
 type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda' | 'ecsTask' | 's3'
-  | 'apigatewayv2_api' | 'apigatewayv2_integration' | 'cloudfront_vpc_origin';
+  | 'apigatewayv2_api' | 'apigatewayv2_integration' | 'cloudfront_vpc_origin' | 'apigatewayv2_route' | 'alb_listener_rule';
 const FLOW_KEY: Record<InvType, RowKey> = {
   route53: 'route53', cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg', waf: 'waf',
   ec2: 'ec2', lambda: 'lambda', ecs_task: 'ecsTask', s3: 's3',
   apigatewayv2_api: 'apigatewayv2_api', apigatewayv2_integration: 'apigatewayv2_integration',
   cloudfront_vpc_origin: 'cloudfront_vpc_origin',
+  apigatewayv2_route: 'apigatewayv2_route', alb_listener_rule: 'alb_listener_rule',
 };
 
 // Node fill/border per FlowKind. Light + dark variants (ReactFlow dark colorMode flips default
@@ -76,7 +77,7 @@ const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ecs: Boxes, ec2: Se
 
 function iconFor(n: FlowNode): IconC {
   if (n.kind === 'target') return RESOLVED_ICON[String(n.meta?.resolved ?? '')] ?? Circle;
-  if (n.kind === 'origin' && n.meta?.service === 's3') return Database; // S3 origin, not unknown
+  if (n.kind === 'origin' && n.meta?.service === 's3') return Archive; // S3 origin = bucket (matches Sidebar s3 icon)
   return KIND_ICON[n.kind];
 }
 
@@ -330,6 +331,8 @@ export default function TopologyPage() {
     const edges: Edge[] = g.edges.map((e) => ({
       id: e.id, source: e.source, target: e.target,
       animated: focusId != null, // in focus mode every shown edge is on the active path
+      // L7 routing detail (ALB path/host :port, API GW route_key) shown as the edge label.
+      ...(e.label ? { label: e.label, labelStyle: { fontSize: 9, fill: '#586773' } } : {}),
       // confidence convention: observed = solid, inferred (Spec 2) = dashed.
       style: e.confidence === 'inferred' ? { strokeDasharray: '4 4' } : {},
     }));
