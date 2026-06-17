@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { traversalSql, downstream, upstream, blastRadius } from './graph-query';
+import { traversalSql, downstream, upstream, blastRadius, FANOUT_CAP, MAX_DEPTH } from './graph-query';
 
 describe('graph-query traversal SQL', () => {
   it('uses the PG17 CYCLE clause (no manual visited array)', () => {
@@ -13,17 +13,36 @@ describe('graph-query traversal SQL', () => {
     expect(u).toContain('e.target = w.node');
     expect(u).toContain('SELECT e.source');
   });
-  it('bounds depth', () => {
-    expect(traversalSql('down')).toMatch(/w\.depth < \d+/);
+  it('is class-scoped ($2) and depth-bounded ($3)', () => {
+    const d = traversalSql('down');
+    expect(d).toContain('e.class = $2');
+    expect(d).toContain('w.depth < $3');
+  });
+  it('caps per-hop fan-out via a LATERAL LIMIT (hub guard, not total breadth)', () => {
+    const d = traversalSql('down');
+    expect(d).toContain('JOIN LATERAL');
+    expect(d).toContain(`LIMIT ${FANOUT_CAP}`);
+  });
+  it('does not expand from a default security group unless it is the start node', () => {
+    const d = traversalSql('down');
+    expect(d).toContain("(n.meta ->> 'default') = 'true'");
+    expect(d).toContain('w.depth = 0 OR NOT EXISTS');
   });
 });
 
 describe('graph-query functions', () => {
-  it('downstream queries WITH RECURSIVE bound to the id', async () => {
+  it('downstream defaults to class=flow + MAX_DEPTH', async () => {
     const query = vi.fn(() => Promise.resolve({ rows: [{ id: 'x', depth: 1 }] }));
     const r = await downstream({ query } as never, 'cf:D1');
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('WITH RECURSIVE'), ['cf:D1']);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('WITH RECURSIVE'), ['cf:D1', 'flow', MAX_DEPTH]);
     expect(r[0].id).toBe('x');
+  });
+  it('passes class + clamped depth from opts', async () => {
+    const query = vi.fn(() => Promise.resolve({ rows: [] }));
+    await downstream({ query } as never, 'alb:lb', { cls: 'infra', depth: 2 });
+    expect(query).toHaveBeenCalledWith(expect.anything(), ['alb:lb', 'infra', 2]);
+    await downstream({ query } as never, 'alb:lb', { cls: 'infra', depth: 999 });
+    expect(query).toHaveBeenCalledWith(expect.anything(), ['alb:lb', 'infra', MAX_DEPTH]); // clamped
   });
   it('blastRadius is the upstream traversal', () => {
     expect(blastRadius).toBe(upstream);
