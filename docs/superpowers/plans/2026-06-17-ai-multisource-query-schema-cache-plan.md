@@ -14,6 +14,17 @@
   (NOT systemPromptOverride). `web/lib/agent-resolver.ts renderIntegrationContext` is the CUSTOM path.
 - Single secret + INTEGRATIONS_SECRET_NAME wired; web task role lacks lambda:InvokeFunction.
 
+## P2 consensus gate — round 1 findings & resolutions (kiro opus; glm NO BLOCKING; kimi no-output)
+- **MAJOR (opus, valid) — schema injection must traverse `web/lib/agentcore.ts`.** The chat route → runtime
+  channel is `invokeAgent()`; its `InvokeInput` + body assembly has NO `extraContext`, and agent.py reads
+  only systemPromptOverride/toolAllowlist/etc. → the injected block is dropped. **Resolution: Task 5 ALSO
+  edits `web/lib/agentcore.ts` (add `extraContext?: string` to `InvokeInput` + `if (input.extraContext) body.extraContext = …`),
+  and agent.py appends `payload.get("extraContext")` to `system_prompt` AFTER the if/else so it reaches BOTH
+  the built-in and override branches (no-op when absent).**
+- **MINOR (opus, valid) — accountId server-derived.** **Resolution: Task 3 refresh route derives
+  `accountId` from `currentAccountId()` server-side (NEVER the request body), identical to the chat route,
+  so the `(account_id, slug)` write/read PK aligns.**
+
 ## Tasks (TDD; per-task commit; itest/unittest/vitest/catalog_check/`terraform validate` green)
 
 ### Task 1: Aurora datasource_schemas table + web lib
@@ -43,7 +54,8 @@
 - [ ] `connector-invoke.ts`: `invokeConnectorTool(slug, toolName, args)` → `LambdaClient.invoke`
   `FunctionName=${project}-agent-${slug}-mcp` (project/region from env), parse the `{statusCode,body}` →
   return parsed body or throw on error. Lazy client (mirror lib/admin.ts). Allowlist slug ∈ KNOWN_CONNECTOR_SLUGS.
-- [ ] `route.ts`: `POST {slug}` (isAdmin) → `invokeConnectorTool(slug, '${slug}_schema', {})` → `upsertSchema`;
+- [ ] `route.ts`: `POST {slug}` (isAdmin) → `accountId = currentAccountId()` (server-side, NOT request body)
+  → `invokeConnectorTool(slug, '${slug}_schema', {})` → `upsertSchema(accountId, …)`;
   returns `{ok, fetched_at, summary}` (counts only — NEVER raw credential/values). `GET` (isAdmin) →
   `listConfiguredSchemas` summaries (slug, kind, fetched_at, counts). Bad slug → 400.
 - [ ] Failing tests (mock connector-invoke + datasource-schema): admin-gate 403; POST invokes the right
@@ -60,12 +72,15 @@
 - [ ] Commit: `feat(integrations): Connectors UI — Refresh schema button + cached-schema status`.
 
 ### Task 5: agent query-language guidance + cached-schema injection (default chat)
-**Files:** Modify `agent/agent.py`; Test `agent/test_agent.py` (or a new test); Modify the chat route (`web/app/api/.../route.ts` that builds the agent payload) + `web/lib/agent-resolver.ts` if needed
+**Files:** Modify `agent/agent.py`; Test `agent/test_agent.py` (or a new test); Modify `web/lib/agentcore.ts`
+(add `extraContext` to `InvokeInput` + body); Modify the chat route (`web/app/api/chat/route.ts`) that builds the payload
 - [ ] agent.py: extend the `monitoring` (and `data`) SKILL_BASE prompt with a **datasource query guide**
   (port v1 datasource-prompts): tool→query-language map (PromQL/LogQL/TraceQL/SQL), WHEN to use each,
   and a multi-source **incident correlation** pattern (metrics→logs→traces→SQL); instruct it to use the
   provided "## Datasource schemas" block. Handler appends an optional payload `extraContext` (bounded)
-  to the system prompt (no behavior change when absent).
+  to `system_prompt` **AFTER the if/else** (so it reaches BOTH the built-in `build_skill_prompt` path and
+  the `systemPromptOverride` path); no-op when absent. Also add `extraContext?: string` to
+  `web/lib/agentcore.ts InvokeInput` + `if (input.extraContext) body.extraContext = input.extraContext`.
 - [ ] Chat route: when building the default-chat payload for monitoring/data, read
   `listConfiguredSchemas(accountId)` and pass a bounded `extraContext` = "## Datasource schemas (cached)\n…"
   (counts + names, NOT full dumps; cap bytes). No agent→Aurora.
