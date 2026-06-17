@@ -15,7 +15,7 @@ import { buildInfraGraph, type Row } from './infra-topology';
 // Exclude 'ipResolved' (a Record, not a Row[]) so input[key] narrows to Row[] for the push below.
 const TYPE_TO_KEY: Record<string, Exclude<keyof FlowInput, 'ipResolved'>> = {
   route53: 'route53', cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg',
-  waf: 'waf', ec2: 'ec2', lambda: 'lambda', ecs_task: 'ecsTask',
+  waf: 'waf', ec2: 'ec2', lambda: 'lambda', ecs_task: 'ecsTask', s3: 's3',
 };
 const TYPES = Object.keys(TYPE_TO_KEY);
 const FLOW_LOCK = 0x746f706f;   // 'topo' — flow rebuilds serialize on this key

@@ -15,15 +15,16 @@ import { useTheme } from '@/lib/use-theme';
 // ReactFlow touches the DOM on mount — load it client-only to avoid SSR mismatch.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
 
-const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda', 'ecs_task'] as const;
+const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda', 'ecs_task', 's3'] as const;
 type InvType = (typeof TYPES)[number];
 type Row = Record<string, unknown>;
 
 // InvType → FlowInput key (target_group→tg, ecs_task→ecsTask). ec2/lambda/ecs enrich target labels.
-type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda' | 'ecsTask';
+// s3 resolves CloudFront S3 origins to the real bucket resource (full row + ARN).
+type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda' | 'ecsTask' | 's3';
 const FLOW_KEY: Record<InvType, RowKey> = {
   route53: 'route53', cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg', waf: 'waf',
-  ec2: 'ec2', lambda: 'lambda', ecs_task: 'ecsTask',
+  ec2: 'ec2', lambda: 'lambda', ecs_task: 'ecsTask', s3: 's3',
 };
 
 // Node fill/border per FlowKind. Light + dark variants (ReactFlow dark colorMode flips default

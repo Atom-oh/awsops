@@ -42,12 +42,25 @@ describe('buildFlowGraph — CF→LB/WAF edges', () => {
     expect(g.nodes.find((n) => n.id === 'cf:D1')?.label).toBe('app.example.com');
   });
 
-  it('resolves an S3 REST-endpoint origin to its bucket (name + service=s3, not unresolved)', () => {
+  it('resolves an S3 origin to the REAL synced bucket row (invType=s3 + row.arn from inventory)', () => {
     const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'my-site-180294183052.s3.ap-northeast-2.amazonaws.com' }] };
-    const g = buildFlowGraph({ cloudfront: [cf] });
+    const s3 = [{ resource_type: 's3', resource_id: 'my-site-180294183052', region: 'ap-northeast-2', arn: 'arn:aws:s3:::my-site-180294183052', creation_date: '2024-01-01' }];
+    const g = buildFlowGraph({ cloudfront: [cf], s3 });
     const o = g.nodes.find((n) => n.kind === 'origin');
     expect(o?.label).toBe('my-site-180294183052');
     expect(o?.meta?.service).toBe('s3');
+    expect(o?.meta?.invType).toBe('s3');
+    expect((o?.meta?.row as { arn?: string })?.arn).toBe('arn:aws:s3:::my-site-180294183052');
+    expect(o?.meta?.unresolved).toBeUndefined();
+  });
+
+  it('synthesizes a valid S3 ARN when the bucket is not in synced inventory (graceful fallback)', () => {
+    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'unsynced-bucket.s3.amazonaws.com' }] };
+    const g = buildFlowGraph({ cloudfront: [cf] }); // no s3 input
+    const o = g.nodes.find((n) => n.kind === 'origin');
+    expect(o?.meta?.invType).toBe('s3');
+    // partition-only S3 ARN form — no region/account segments
+    expect((o?.meta?.row as { arn?: string })?.arn).toBe('arn:aws:s3:::unsynced-bucket');
     expect(o?.meta?.unresolved).toBeUndefined();
   });
 
@@ -95,7 +108,8 @@ describe('buildFlowGraph — Route53 entry', () => {
   });
 
   it('plain origin matching nothing → unresolved origin node (no throw, no false edge)', () => {
-    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'some-bucket.s3.amazonaws.com' }] };
+    // a true non-S3, non-LB custom origin (an *.s3*.amazonaws.com domain would resolve to a bucket)
+    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'cdn.example.com' }] };
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb] });
     expect(g.nodes.find((n) => n.kind === 'origin')).toBeTruthy();
     expect(g.edges.find((x) => x.target === ALB_ID)).toBeFalsy();

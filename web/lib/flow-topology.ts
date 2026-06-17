@@ -31,6 +31,9 @@ export interface FlowGraph { nodes: FlowNode[]; edges: FlowEdge[] }
 export interface FlowInput {
   route53?: Row[]; cloudfront?: Row[]; alb?: Row[]; nlb?: Row[]; tg?: Row[]; waf?: Row[];
   ec2?: Row[]; lambda?: Row[]; ecsTask?: Row[];
+  // s3 buckets (resource_id = bucket name, carries arn) — lets a CloudFront S3 origin resolve to
+  // the REAL bucket resource (full row + ARN) instead of a synthesized placeholder.
+  s3?: Row[];
   // ip-target resolution (Spec 2): pod/ENI IP → friendly label + meta. EKS comes live from the
   // page (ipResolved); ECS is derived here from synced ecsTask rows. Builder stays pure.
   ipResolved?: Record<string, { label: string; resolved: 'eks' | 'ecs'; meta?: Record<string, unknown> }>;
@@ -132,6 +135,11 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   for (const e of input.ec2 ?? []) ec2ById.set(str(e.resource_id), str(e.name) || str(e.resource_id));
   for (const l of input.lambda ?? []) if (l.arn) lambdaByArn.set(str(l.arn), str(l.resource_id) || str(l.arn));
   const ecsByIp = ecsIpMap(input.ecsTask ?? []); // ECS task ENI IP → service (from synced inventory)
+  // S3 buckets by NAME (resource_id) — join key for resolving CloudFront S3 origins to the real
+  // bucket row. Bucket names are globally unique, so this is region-agnostic (a us-east-1 bucket
+  // fronted by an ap-northeast-2 app still matches). Depends on the s3 inventory pk being 'name'.
+  const s3ByName = new Map<string, Row>();
+  for (const b of input.s3 ?? []) s3ByName.set(str(b.resource_id), b);
 
   // CloudFront indexes for Route53 alias targets: by distribution domain (d111.cloudfront.net)
   // and by custom-domain alias (the CNAMEs on the distribution).
@@ -175,10 +183,15 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       // is a feasibility-gated follow-up (aws_cloudfront_vpc_origin not synced).
       const vpc = (o.VpcOriginConfig && typeof o.VpcOriginConfig === 'object') ? ' (VPC origin)' : '';
       const oid = `origin:${str(c.resource_id)}:${domain || i}`;
-      // S3 origin → resolve to the bucket (name + S3 icon), not an "unknown" origin node.
+      // S3 origin → resolve to the REAL bucket resource (full row + ARN), not a placeholder.
+      // Join the synced s3 inventory by bucket name; if the bucket isn't synced (e.g. >cap, or a
+      // not-yet-synced cross-region bucket), synthesize a minimal row with the canonical S3 ARN
+      // (arn:aws:s3:::<bucket> — partition-only, no region/account) so ARN copy / Ask-AI still work.
+      // Keep service:'s3' in BOTH branches (the Database/S3 icon is keyed on meta.service).
       const bucket = domain ? s3Bucket(domain) : null;
       if (bucket) {
-        addNode(oid, 'origin', bucket, { service: 's3', bucket, domain });
+        const row = s3ByName.get(bucket) ?? { resource_id: bucket, name: bucket, arn: `arn:aws:s3:::${bucket}` };
+        addNode(oid, 'origin', bucket, { service: 's3', bucket, domain, invType: 's3', row });
       } else {
         addNode(oid, 'origin', `${domain || 'origin'}${vpc}`, { unresolved: true });
       }
