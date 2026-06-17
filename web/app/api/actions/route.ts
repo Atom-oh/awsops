@@ -5,6 +5,7 @@ import { isAdmin } from '@/lib/admin';
 import { listCatalog, getAction, createPlan, recordAudit } from '@/lib/remediation';
 import { redactEgress, assertChannelAllowed } from '@/lib/egress-dlp';
 import { getEgressWriteAllowlist } from '@/lib/integrations';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await verifyUser(req.headers.get('cookie'));
   if (!user || !(await isAdmin(user))) return NextResponse.json({ message: 'admin required' }, { status: 403 });
-  let body: any; try { body = await req.json(); } catch { return NextResponse.json({ message: 'invalid JSON' }, { status: 400 }); }
+  let body: any;
+  try { body = await readJsonBounded(req); }
+  catch (e) { if (e instanceof BodyTooLargeError) return NextResponse.json({ message: 'request body too large' }, { status: 413 }); return NextResponse.json({ message: 'invalid JSON' }, { status: 400 }); }
   const action = await getAction(String(body?.action ?? ''));
   if (!action) return NextResponse.json({ message: 'unknown action' }, { status: 400 });
   if (!action.enabled) return NextResponse.json({ message: 'action disabled (catalog enabled=false)' }, { status: 409 });

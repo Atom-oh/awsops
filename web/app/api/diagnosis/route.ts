@@ -9,6 +9,7 @@ import {
   type DiagnosisModel,
 } from '@/lib/diagnosis';
 import { enqueueJob } from '@/lib/jobs';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,9 +25,10 @@ export async function POST(req: Request) {
 
   let body: any = {};
   try {
-    body = await req.json();
-  } catch {
-    /* empty body OK */
+    body = await readJsonBounded(req); // bound BEFORE parse (OOM guard)
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) return NextResponse.json({ message: 'request body too large' }, { status: 413 });
+    /* empty/invalid body OK — defaults apply */
   }
   const tier = ['light', 'mid', 'deep'].includes(body?.tier) ? body.tier : 'mid';
   // Only the deep tier may select Opus; every other tier is pinned to Sonnet (cost guard).

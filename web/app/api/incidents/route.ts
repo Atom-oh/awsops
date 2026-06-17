@@ -16,6 +16,7 @@ import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { listIncidents, triageAndCreateOrLink, enqueueInitialStage } from '@/lib/incident';
 import type { AlertEvent, AlertSeverity } from '@/lib/incident-normalize';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +40,8 @@ export async function POST(req: NextRequest) {
   }
 
   let body: any;
-  try { body = await req.json(); } catch { return NextResponse.json({ message: 'invalid JSON' }, { status: 400 }); }
+  try { body = await readJsonBounded(req); }
+  catch (e) { if (e instanceof BodyTooLargeError) return NextResponse.json({ message: 'request body too large' }, { status: 413 }); return NextResponse.json({ message: 'invalid JSON' }, { status: 400 }); }
 
   const text = String(body?.text ?? body?.title ?? body?.message ?? '').trim();
   if (!text) return NextResponse.json({ message: 'free-text (text|title|message) required' }, { status: 400 });

@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import { initiateAuth, sessionCookie, safeNext } from '@/lib/login';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 // Thin BFF adapter over lib/login.ts for the v2 in-app /login form. All auth logic lives in
 // the lib (unsigned Cognito InitiateAuth + cookie/redirect helpers); this route only parses
@@ -23,8 +24,9 @@ function jsonError(code: string, status: number): Response {
 export async function POST(req: Request): Promise<Response> {
   let body: unknown;
   try {
-    body = await req.json();
-  } catch {
+    body = await readJsonBounded(req); // bound BEFORE parse (OOM guard); credentials are tiny
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) return jsonError('invalid_request', 413);
     return jsonError('invalid_request', 400);
   }
 
