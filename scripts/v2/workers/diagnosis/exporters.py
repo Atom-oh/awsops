@@ -93,3 +93,45 @@ def to_docx(markdown: str) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# A4 print CSS. System font only (Noto Sans CJK KR is installed in the worker image) — NO external
+# @import / Google-Fonts URL, since the Fargate worker runs in a private subnet (an external font
+# fetch would hang until timeout and Korean would render as tofu anyway).
+_PDF_CSS = """
+@page { size: A4; margin: 18mm 16mm; }
+* { font-family: 'Noto Sans CJK KR', 'Noto Sans', sans-serif; }
+body { font-size: 11pt; line-height: 1.55; color: #1a1a1a; }
+h1 { font-size: 20pt; } h2 { font-size: 15pt; margin-top: 1.2em; } h3 { font-size: 12.5pt; }
+blockquote { color: #555; border-left: 3px solid #ccc; margin: 0 0 1em; padding: .2em .8em; }
+table { border-collapse: collapse; width: 100%; margin: .6em 0; }
+th, td { border: 1px solid #bbb; padding: 5px 8px; font-size: 10pt; text-align: left; }
+code, pre { font-family: monospace; background: #f4f4f4; }
+"""
+
+
+def _html(md_text: str) -> str:
+    import markdown as _md
+
+    body = _md.markdown(md_text, extensions=["tables", "fenced_code"])
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<style>{_PDF_CSS}</style></head><body>{body}</body></html>"
+    )
+
+
+def to_pdf(md_text: str) -> bytes:
+    """markdown→HTML→headless chromium→PDF bytes. playwright is imported lazily (image-only dep)."""
+    from playwright.sync_api import sync_playwright
+
+    html = _html(md_text)
+    with sync_playwright() as p:
+        # Fargate blocks the user-namespace sandbox chromium uses by default → must disable it.
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+        try:
+            # Static render of LLM-generated HTML over redacted data → no script execution.
+            page = browser.new_page(java_script_enabled=False)
+            page.set_content(html, wait_until="load")
+            return page.pdf(format="A4", print_background=True)
+        finally:
+            browser.close()
