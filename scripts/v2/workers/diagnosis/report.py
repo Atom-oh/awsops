@@ -118,11 +118,20 @@ def _bedrock_render(prompt, context_json, model_id, max_tokens):
     return "".join(b.get("text", "") for b in payload.get("content", []))
 
 
+def _balance_code_fences(text):
+    """Close an unclosed ``` fence so a section is self-contained. A section truncated by max_tokens
+    can stop mid-fence; concatenated, that open fence swallows EVERY following section into one code
+    block (the report's markdown stops rendering past it). An odd fence count → append a closing ```."""
+    if text.count("```") % 2 == 1:
+        return text.rstrip() + "\n```"
+    return text
+
+
 def render_section(section, collected, model_id, max_tokens):
     # Section sees ONLY the sources it declares (least-context).
     ctx = {k: collected[k]["data"] for k in section["sources"] if k in collected}
     ctx_json = _redact(json.dumps(ctx, ensure_ascii=False, default=str))  # [GATE-FIX] redact pre-LLM
-    body = _bedrock_render(section["prompt"], ctx_json, model_id, max_tokens)
+    body = _balance_code_fences(_bedrock_render(section["prompt"], ctx_json, model_id, max_tokens))
     return {"key": section["key"], "title": section["title"], "body": body}
 
 

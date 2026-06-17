@@ -254,6 +254,22 @@ def test_render_section_uses_only_its_sources(monkeypatch):
     assert "by_type" not in captured["context"]
 
 
+def test_render_section_closes_unclosed_code_fence(monkeypatch):
+    # A section truncated by max_tokens can leave an open ``` fence. Unbalanced, it bleeds into every
+    # following section when bodies are concatenated → the whole rest renders as one code block.
+    monkeypatch.setattr(report, "_bedrock_render",
+                        lambda *a, **k: "위험 매트릭스:\n```\nCRITICAL  보안\nMEDIUM  Cloud")  # cut mid-fence
+    out = report.render_section({"key": "x", "title": "X", "sources": [], "prompt": "p"}, {}, report.MODEL_ID, 100)
+    assert out["body"].count("```") % 2 == 0          # balanced
+    assert out["body"].rstrip().endswith("```")        # closed at section end
+
+
+def test_render_section_leaves_balanced_fences_untouched(monkeypatch):
+    monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "```\ncode\n```\n본문")
+    out = report.render_section({"key": "x", "title": "X", "sources": [], "prompt": "p"}, {}, report.MODEL_ID, 100)
+    assert out["body"] == "```\ncode\n```\n본문"        # unchanged
+
+
 def test_render_section_threads_model_id_and_max_tokens(monkeypatch):
     # Task 1: render_section/_bedrock_render carry model_id + max_tokens through to invoke_model.
     captured = {}
