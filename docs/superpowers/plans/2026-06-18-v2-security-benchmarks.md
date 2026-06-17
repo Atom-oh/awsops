@@ -27,7 +27,7 @@
 
 # Phase A — Security Findings (`/security`)
 
-## Task A1: `security-findings` lib — finding derivation SQL + static metadata
+### Task 1: [A1] `security-findings` lib — finding derivation SQL + static metadata
 
 Pure module: the SQL that derives findings from `inventory_resources` and the static severity/remediation metadata. No I/O — unit-testable in isolation. Keep the open-SG cidr regex anchored to the cidr key (IPv4 `0.0.0.0/0` + IPv6 `::/0`, both Steampipe key casings), reusing the pattern already in `inventory/summary/route.ts`.
 
@@ -161,7 +161,7 @@ git commit -m "feat(security): finding derivation SQL + static metadata lib"
 
 ---
 
-## Task A2: `GET /api/security` route
+### Task 2: [A2] `GET /api/security` route
 
 Reads counts + per-check finding lists from Aurora using A1's SQL. Auth-gated. Returns `{ enabled:false }` when no security inventory has been synced (proxy for flag-off / not-yet-synced), else `{ enabled:true, summary, findings }`.
 
@@ -284,7 +284,7 @@ git commit -m "feat(security): GET /api/security findings route"
 
 ---
 
-## Task A3: `POST /api/security/refresh` route
+### Task 3: [A3] `POST /api/security/refresh` route
 
 Invokes the inventory sync Lambda for the security-relevant types so the page can force a refresh. Mirrors the existing inventory `/refresh` (the web task role already has `lambda:InvokeFunction` on the sync Lambda via `task_inv_sync_invoke`).
 
@@ -387,7 +387,7 @@ git commit -m "feat(security): POST /api/security/refresh re-sync route"
 
 ---
 
-## Task A4: `s3_public_access` inventory sync (SDK, denial-safe) + IAM
+### Task 4: [A4] `s3_public_access` inventory sync (SDK, denial-safe) + IAM
 
 Add a denial-safe SDK sync producing per-bucket public-access flags. Must NOT touch the existing `s3` sync (the public-access calls can be denied per-bucket and would fail the whole `aws_s3_bucket` query — that's why `s3` omits them).
 
@@ -475,7 +475,7 @@ git commit -m "feat(security): denial-safe s3_public_access inventory sync + IAM
 
 ---
 
-## Task A5: `/security` page + nav wiring
+### Task 5: [A5] `/security` page + nav wiring
 
 Port the v1 `/security` UI to v2 conventions: tabbed table (Public S3 / IAM MFA / Open SG / Unencrypted EBS), StatsCards, severity distribution chart (theme-reactive), per-row detail slide-in with remediation, Refresh button, flag-off notice.
 
@@ -556,7 +556,7 @@ git commit -m "feat(security): /security findings page + nav wiring"
 
 # Phase B — CIS Compliance benchmark (`/compliance`)
 
-## Task B1: Aurora migration — `compliance_runs` + `compliance_results`
+### Task 6: [B1] Aurora migration — `compliance_runs` + `compliance_results`
 
 **Files:**
 - Create: `terraform/v2/foundation/migrations/<NEW_ULID>_compliance.sql`
@@ -625,7 +625,7 @@ git commit -m "feat(compliance): compliance_runs + compliance_results migration"
 
 ---
 
-## Task B2: worker `_compliance` handler + DB helpers + REGISTRY
+### Task 7: [B2] worker `_compliance` handler + DB helpers + REGISTRY
 
 Add the Powerpipe-running handler and its Aurora persistence, and register the job type. Mirror the `_report` handler's connection discipline (always `conn.close()` in `finally`; on failure write `status='failed'` + re-raise).
 
@@ -827,7 +827,7 @@ git commit -m "feat(compliance): _compliance Fargate handler + Powerpipe parse/p
 
 ---
 
-## Task B3: worker image — bake Powerpipe + aws_compliance mod
+### Task 8: [B3] worker image — bake Powerpipe + aws_compliance mod
 
 **Files:**
 - Modify: `scripts/v2/workers/Dockerfile`
@@ -872,7 +872,7 @@ git commit -m "feat(compliance): bake Powerpipe + aws_compliance mod into worker
 
 ---
 
-## Task B4: Terraform — worker Steampipe reachability + env + secret read
+### Task 9: [B4] Terraform — worker Steampipe reachability + env + secret read
 
 **Files:**
 - Modify: `terraform/v2/foundation/steampipe.tf` (Steampipe SG :9193 ingress from the worker task SG)
@@ -910,7 +910,7 @@ git commit -m "feat(compliance): worker reaches Steampipe :9193 + steampipe secr
 
 ---
 
-## Task B5: compliance BFF routes (`run`, `runs`, `runs/[id]`, `benchmarks`)
+### Task 10: [B5] compliance BFF routes (`run`, `runs`, `runs/[id]`, `benchmarks`)
 
 **Files:**
 - Create: `web/app/api/compliance/run/route.ts`, `web/app/api/compliance/runs/route.ts`, `web/app/api/compliance/runs/[id]/route.ts`, `web/app/api/compliance/benchmarks/route.ts`
@@ -1023,7 +1023,7 @@ git commit -m "feat(compliance): run/runs/runs[id]/benchmarks BFF routes + jobs 
 
 ---
 
-## Task B6: `/compliance` page + nav wiring
+### Task 11: [B6] `/compliance` page + nav wiring
 
 Port v1 `/compliance` UI to v2: benchmark selector + Run button → `POST /api/compliance/run`; poll `GET /api/compliance/runs/[id]` every 5s while `running`; render pass-rate StatsCards, status pie, alarms-by-section bar, section cards with pass% bars, control detail slide-in. Color thresholds green≥80/orange≥50/red.
 
@@ -1081,7 +1081,7 @@ git commit -m "feat(compliance): /compliance page + nav wiring"
 
 ---
 
-## Task B7: docs — update CLAUDE.md surfaces + ADR note
+### Task 12: [B7] docs — update CLAUDE.md surfaces + ADR note
 
 **Files:**
 - Modify: `web/` or root `CLAUDE.md` page/route counts if they're tracked; add the two pages + routes.
@@ -1106,3 +1106,93 @@ git commit -m "docs(security): record /security + /compliance surfaces"
 - **Placeholders:** Implementer notes flag the two genuinely environment-dependent lookups (the inventory-sync env var name in A3; the Powerpipe arm64 asset URL + SDK_SYNCS contract in B3/A4) with exact verification steps rather than vague TODOs — these require reading a file/release page the author can't fully pin blind. All code steps include real code.
 - **Type/name consistency:** `CheckKey`/`Finding`/`FINDING_SQL`/`rowToFinding`/`CHECK_META` are defined in A1 and consumed verbatim in A2; `compliance.parse_powerpipe_json`/`run_powerpipe`/`steampipe_db_url`/`persist`/`ALLOWED` defined in B2 and used by `_compliance`; `compliance_runs`/`compliance_results` columns match between B1 migration, B2 persist, and B5 routes.
 - **Flag-gating:** every new surface degrades gracefully when `steampipe_enabled` is OFF (A2 disabled state, `_compliance` fails fast, terraform refs guarded).
+
+---
+
+# P2 Gate Corrections (AUTHORITATIVE — overrides task bodies where they conflict)
+
+The plan passed a multi-model consensus gate (kiro Opus 4.8 / Kimi K2.5 / GLM-5; codex+agy timed out — not counted). All findings below were **verified against the real repo** before acceptance; `unsupported`/misread findings were dropped. Where a corrected instruction conflicts with a task body above, THIS section wins. No CRITICAL/MAJOR remain open after these corrections.
+
+## C1 — [Task 3 / A3] Inventory-sync invoke uses `INV_SYNC_FUNCTION` + reuse `triggerSync`
+**Verified:** `web/lib/inventory.ts:25` exports `triggerSync(type)` reading `process.env.INV_SYNC_FUNCTION` (set in `terraform/v2/foundation/workload.tf:246`). The plan's `INVENTORY_SYNC_FUNCTION` name is wrong → the route would 503 in prod while tests pass.
+**Correction:** `web/app/api/security/refresh/route.ts` must NOT reimplement the Lambda client. Instead:
+```ts
+import { verifyUser } from '@/lib/auth';
+import { triggerSync } from '@/lib/inventory';
+
+export const dynamic = 'force-dynamic';
+const TYPES = ['s3_public_access', 'security_group', 'ebs_volume', 'iam_user'] as const;
+
+export async function POST(request: Request) {
+  if (!(await verifyUser(request.headers.get('cookie'))))
+    return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
+  if (!process.env.INV_SYNC_FUNCTION)
+    return Response.json({ status: 'unconfigured', message: 'inventory sync disabled' }, { status: 503 });
+  await Promise.all(TYPES.map((t) => triggerSync(t).catch(() => null))); // fire-and-forget; never fail the refresh
+  return Response.json({ status: 'refreshing', types: TYPES }, { status: 202 });
+}
+```
+Test: mock `@/lib/inventory`'s `triggerSync` (not `@aws-sdk/client-lambda`); assert 401 unauth, 503 when `INV_SYNC_FUNCTION` unset, 202 + `triggerSync` called 4× when set. `task_inv_sync_invoke` (steampipe.tf:330) already grants the web task role `lambda:InvokeFunction` on the inv_sync function — no IAM change.
+
+## C2 — [Task 4 / A4] SDK_SYNCS contract: no-arg fetcher returning `(rows, id_col, region_col)`
+**Verified:** `scripts/v2/steampipe/sync_lambda.py:405` unpacks `recs, id_col, region_col = SDK_SYNCS[resource_type]()` — fetchers take **no args** and return `(rows: list[dict], id_col: str, region_col: str)` where each row is a dict whose keys include the id_col and region_col plus the columns to store. The plan's `(region, resource_id, data)` tuple shape is wrong.
+**Correction:** name the producer `_fetch_s3_public_access()` (no args), returning `(rows, "name", "region")` where each row dict = `{"name": <bucket>, "region": <region>, "bucket_policy_is_public": bool|None, "block_public_acls": bool|None, "block_public_policy": bool|None, "restrict_public_buckets": bool|None, "ignore_public_acls": bool|None}`. Register `"s3_public_access": _fetch_s3_public_access` in `SDK_SYNCS`. Per-bucket `get_public_access_block`/`get_bucket_policy_status` wrapped in try/except `ClientError` (AccessDenied / NoSuchPublicAccessBlock) → emit the row with `None` flags rather than failing the whole sync. Update the test to unpack `rows, id_col, region_col = sync_lambda._fetch_s3_public_access(...)` and index dict rows by `row["name"]`. (Inject the boto3 client via a default-arg or module-level seam so the test can pass a fake.)
+
+## C3 — [Task 9 / B4] NO Steampipe SG ingress change needed
+**Verified:** the Fargate worker task reuses `aws_security_group.service` (`workers.tf:444/473/499`, C8 comment line 7), and `steampipe.tf:64` ingress already allows `aws_security_group.service` on 9193. **Delete Task 9 Step 1–2 (SG identification + ingress add).** No `steampipe.tf` SG change. Task 9 reduces to: add worker-task env + secret-read IAM (C8 below). This removes the SG-description-immutability risk entirely.
+
+## C8b — [Task 9 / B4] Worker task: Steampipe env + secret read, guarded for `steampipe_enabled`
+**Verified:** worker task role grants only the Aurora secret (`workers.tf:228`); `aws_secretsmanager_secret.steampipe[0]` is count-gated on `steampipe_enabled`.
+**Correction:** in `workers.tf` Fargate worker `container_definitions.environment`, add (guard the optional ref so a steampipe-OFF plan still validates):
+```hcl
+{ name = "STEAMPIPE_HOST",       value = "steampipe.${var.project}.internal" },
+{ name = "STEAMPIPE_SECRET_ARN", value = try(aws_secretsmanager_secret.steampipe[0].arn, "") },
+```
+and add a statement to `aws_iam_role_policy.worker_task` allowing `secretsmanager:GetSecretValue` on `try(aws_secretsmanager_secret.steampipe[0].arn, ...)` — use a `for`/conditional or a separate `count = local.sp`-gated `aws_iam_role_policy` resource so the policy only references the steampipe secret when it exists. (`_compliance` fails fast with a clear error when STEAMPIPE_SECRET_ARN is empty.)
+
+## C4 — [Task 4 / A4] S3 IAM goes on the inv_sync Lambda role
+**Verified:** the SDK syncs run in the **sync Lambda** whose role is `aws_iam_role_policy.inv_sync` (`steampipe.tf:258`), which currently grants only cloudfront + elb actions (NOT S3). The `steampipe_task` role (S3 perms at line 114) is the Fargate FDW role, not the Lambda.
+**Correction:** add to `aws_iam_role_policy.inv_sync` a statement: `Action = ["s3:ListAllMyBuckets","s3:GetBucketPolicyStatus","s3:GetBucketPublicAccessBlock","s3:GetBucketLocation"], Resource = "*"` (read-only; these list/describe APIs don't support resource scoping, consistent with the existing cloudfront/elb statements).
+
+## C5 — [Task 8 / B3] Powerpipe needs a mod workspace before `mod install`
+**Verified:** `powerpipe mod install <url>` installs a *dependency* into the current mod; an empty dir has no `mod.pp` workspace, so install + `benchmark run aws_compliance.benchmark.*` cannot resolve.
+**Correction:** in the Dockerfile, before installing the dependency, create a workspace mod:
+```dockerfile
+RUN mkdir -p /app/powerpipe && cd /app/powerpipe \
+    && printf 'mod "local" {\n  title = "awsops compliance runner"\n}\n' > mod.pp \
+    && powerpipe mod install github.com/turbot/steampipe-mod-aws-compliance
+```
+(If `mod install` still fails at build, fall back to `git clone --depth 1 https://github.com/turbot/steampipe-mod-aws-compliance .powerpipe/mods/github.com/turbot/steampipe-mod-aws-compliance@latest` per Powerpipe's mod layout, then verify `powerpipe benchmark list --mod-location /app/powerpipe` shows `aws_compliance.benchmark.cis_v300`.) Keep `ENV POWERPIPE_MOD_DIR=/app/powerpipe` and CMD unchanged.
+
+## C6 — [Task 10 / B5] Implement GET /api/compliance/benchmarks (do not just describe it)
+Add an explicit step creating `web/app/api/compliance/benchmarks/route.ts`:
+```ts
+import { verifyUser } from '@/lib/auth';
+export const dynamic = 'force-dynamic';
+const BENCHMARKS = [
+  { id: 'cis_v400', name: 'CIS AWS v4.0.0', description: 'CIS AWS Foundations Benchmark v4.0.0' },
+  { id: 'cis_v300', name: 'CIS AWS v3.0.0', description: 'CIS AWS Foundations Benchmark v3.0.0' },
+  { id: 'cis_v200', name: 'CIS AWS v2.0.0', description: 'CIS AWS Foundations Benchmark v2.0.0' },
+  { id: 'cis_v150', name: 'CIS AWS v1.5.0', description: 'CIS AWS Foundations Benchmark v1.5.0' },
+];
+export async function GET(request: Request) {
+  if (!(await verifyUser(request.headers.get('cookie'))))
+    return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
+  return Response.json({ benchmarks: BENCHMARKS });
+}
+```
+
+## C7 — [Task 7 / B2] SECURITY: scrub the Steampipe password from Powerpipe errors
+**Issue:** `run_powerpipe` raises `RuntimeError(proc.stderr[...])` and `_compliance` persists `str(e)` to `compliance_runs.error` (surfaced via `GET /api/compliance/runs/[id]`). A connection error can echo `POWERPIPE_DATABASE=postgres://steampipe:<password>@...` → password leak.
+**Correction:** in `run_powerpipe`, before raising, scrub: `safe = re.sub(r'(postgres://[^:]+:)[^@]+(@)', r'\1***\2', proc.stderr)[:2000]`. Persist/return only `safe`. Never log the raw `db_url`.
+
+## C9 — [Task 7 / B2] Count at control level (v1 parity), not per-result
+**Issue:** counting each leaf `results[]` entry as a control makes `total_controls`/`pass_rate` resource-level, mislabeled.
+**Correction:** in `parse_powerpipe_json`, prefer the group rollups when present — sum `groups[].summary.control.{total,ok,alarm,info,skip,error}` recursively (v1 did `g.summary.control.*`); fall back to leaf-result counts only when no `summary.control` exists. `pass_rate = ok / (ok+alarm+info+skip+error) * 100` over the control totals. Keep `compliance_results` rows at the leaf-result granularity (for the control detail list), but compute the run-level totals from control summaries. Update the Task 7 test fixture/assertions accordingly.
+
+## Accepted-as-is (verified non-issues / minor, documented)
+- **pg8000 param style** (`conn.run("... :name", name=val)`) in `compliance.persist` is CORRECT — matches `scripts/v2/workers/db.py` and `sync_lambda.py` usage. No change.
+- **`touch_updated_at()`** exists in baseline `schema.sql` — the Task 6 trigger guard is valid.
+- **Track-A data path confirmed:** `inventory_resources` already stores `security_group.ip_permissions`, `iam_user.mfa_enabled`, `ebs_volume.encrypted` (sync_lambda.py QUERIES); the `s3` query deliberately omits public-access fields → the new `s3_public_access` type is justified.
+- **[Task 2 / A2]** `enabled:false` from a presence probe conflates "not yet synced" with "steampipe OFF" and a partial sync reads as enabled with empty checks — ACCEPTABLE for v1-parity; document in the route comment. (MINOR)
+- **[Task 4]** AccessDenied buckets emit `None` flags and are treated as non-public by `FINDING_SQL.public_s3` (`='true'/'false'`) — ACCEPTABLE; the row is still stored so the inventory viewer shows it. (MINOR)
