@@ -53,12 +53,12 @@ function sanitizeMeta(body: any): { title?: string | null; tags?: string[] } | n
   }
   if ('tags' in body) {
     if (!Array.isArray(body.tags)) return null;
-    const tags = body.tags
-      .filter((t: unknown) => typeof t === 'string')
-      .map((t: string) => clean(t).slice(0, MAX_TAG_LEN))
-      .filter((t: string) => t.length > 0);
     if (body.tags.length > MAX_TAGS) return null;
-    out.tags = Array.from(new Set(tags)).slice(0, MAX_TAGS);
+    const tags = (body.tags as unknown[])
+      .filter((t): t is string => typeof t === 'string')
+      .map((t) => clean(t).slice(0, MAX_TAG_LEN))
+      .filter((t) => t.length > 0);
+    out.tags = Array.from(new Set<string>(tags)).slice(0, MAX_TAGS);
   }
   if (!('title' in out) && !('tags' in out)) return null; // nothing to update
   return out;
