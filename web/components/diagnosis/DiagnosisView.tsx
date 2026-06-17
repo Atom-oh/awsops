@@ -40,6 +40,18 @@ const SEV_CLASS: Record<string, string> = {
   info: 'border-ink-200 bg-ink-100 text-ink-600',
 };
 
+// Safe date formatting — tests (and legacy rows) may carry an unparseable value; fall back to raw.
+function fmtDate(ds?: string) {
+  if (!ds) return '';
+  const d = new Date(ds);
+  return isNaN(d.getTime()) ? ds : d.toLocaleString('ko-KR');
+}
+function fmtDay(ds?: string) {
+  if (!ds) return '';
+  const d = new Date(ds);
+  return isNaN(d.getTime()) ? ds : d.toLocaleDateString('ko-KR');
+}
+
 export default function DiagnosisView() {
   const [tier, setTier] = useState<'light' | 'mid' | 'deep'>('mid');
   const [model, setModel] = useState<'sonnet' | 'opus'>('sonnet'); // deep-tier model choice
@@ -128,14 +140,8 @@ export default function DiagnosisView() {
     : null);
   const running = submitting || topRunning;
 
-  const download = () => {
-    if (!active?.markdown) return;
-    const blob = new Blob([active.markdown], { type: 'text/markdown' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `awsops-diagnosis-${active.id}.md`;
-    a.click();
-  };
+  // Generation date of the opened report (the view object omits created_at → look it up on the row).
+  const createdAt = reports.find((r) => r.id === view?.id)?.created_at;
 
   return (
     <div className="flex gap-6">
@@ -192,6 +198,7 @@ export default function DiagnosisView() {
                     ? `running ${r.progress.current ?? 0}/${r.progress.total}`
                     : r.status}
                 </span>
+                {r.created_at ? <span className="ml-1 text-ink-300">· {fmtDay(r.created_at)}</span> : null}
               </button>
             </li>
           ))}
@@ -208,13 +215,21 @@ export default function DiagnosisView() {
         </div>
         {view?.markdown ? (
           <>
-            <div className="mb-3 flex justify-end">
-              <button
-                onClick={download}
-                className="rounded-md border border-ink-200 px-3 py-1.5 text-sm"
-              >
-                Markdown 다운로드
-              </button>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              {createdAt ? (
+                <span className="text-[12px] text-ink-400">생성 일시: {fmtDate(createdAt)}</span>
+              ) : <span />}
+              <div className="flex gap-2">
+                {(['md', 'docx', 'pdf'] as const).map((f) => (
+                  <a
+                    key={f}
+                    href={`/api/diagnosis/${view!.id}/download?format=${f}`}
+                    className="rounded-md border border-ink-200 px-3 py-1.5 text-sm hover:bg-ink-100"
+                  >
+                    {f.toUpperCase()}
+                  </a>
+                ))}
+              </div>
             </div>
             {view.summary && <ReportInsights summary={view.summary} />}
             <ReportMarkdown markdown={view.markdown} />

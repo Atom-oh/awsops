@@ -105,3 +105,15 @@ describe('DiagnosisView — deep tier + model selection', () => {
     expect(row.textContent).toMatch(/opus/);
   });
 });
+
+describe('DiagnosisView — export menu + generation date', () => {
+  it('renders MD/DOCX/PDF download links + the generation date for an opened report', async () => {
+    mockList([{ id: 12, tier: 'mid', status: 'succeeded', created_at: '2026-06-17T00:00:00Z', progress: {} }]);
+    render(<DiagnosisView />);
+    fireEvent.click(await screen.findByRole('button', { name: /#12/ }));
+    await screen.findByText(/생성 일시/);
+    expect(screen.getByRole('link', { name: /^MD$/ }).getAttribute('href')).toBe('/api/diagnosis/12/download?format=md');
+    expect(screen.getByRole('link', { name: /^DOCX$/ }).getAttribute('href')).toBe('/api/diagnosis/12/download?format=docx');
+    expect(screen.getByRole('link', { name: /^PDF$/ }).getAttribute('href')).toBe('/api/diagnosis/12/download?format=pdf');
+  });
+});
