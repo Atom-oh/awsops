@@ -3,6 +3,7 @@ import { invokeAgent, type ChatMsg } from '@/lib/agentcore';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt } from '@/lib/classifier';
 import { synthesizeStream } from '@/lib/synthesize';
+import { assistantAnswer, isProductHelpIntent } from '@/lib/assistant';
 import { sectionByKey } from '@/lib/sections';
 import { getEnabledCustomAgents } from '@/lib/catalog-source';
 import { isCustomAgentEnabled } from '@/lib/catalog';
@@ -120,21 +121,32 @@ export async function POST(request: Request) {
   // Skipped on the fan-out path (every fanGateway is already active-filtered).
   const inactiveSection = !doFanout && hybridOn && spec.tier === 'builtin' && sectionByKey(spec.gateway)?.active === false
     ? sectionByKey(spec.gateway)! : null;
+  // AWSops Assistant (product/how-to): no AWS-domain agent can answer "how do I use /customization,
+  // build a custom agent, add a Prometheus integration". Fires on a product-help intent (above
+  // keyword/classifier, below an explicit pin), OR as the graceful fallback for an AUTO-routed
+  // inactive section (instead of the 🔒 dead-end). An EXPLICIT pin to an inactive section keeps 🔒.
+  const explicitPin = pinIsBuiltin || customPinEnabled || unavailablePin;
+  const inactiveWasPinned = inactiveSection != null && route?.method === 'pin';
+  const useAssistant = hybridOn && !unavailablePin
+    && ((!explicitPin && isProductHelpIntent(prompt)) || (inactiveSection != null && !inactiveWasPinned));
   const messages: ChatMsg[] = [...(Array.isArray(body.messages) ? body.messages : []), { role: 'user', content: prompt }];
   // Thread persistence: adopt a well-formed client threadId, else mint one. Ownership is
   // enforced at write time by chat-store's owner-guarded upsert (forged ids just drop).
   const THREAD_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const threadId = (typeof body.threadId === 'string' && THREAD_RE.test(body.threadId)) ? body.threadId : randomUUID();
   const via = doFanout ? `multi:${fanGateways.join('+')}` : undefined;
-  const exchangeMeta = route
-    ? { ranked: route.ranked, method: route.method, ...(via ? { via, routes: fanGateways } : {}), ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}) }
-    : (spec.tier === 'custom' ? { customAgent: spec.agentName } : undefined);
+  const recordGateway = useAssistant ? 'assistant' : spec.gateway;
+  const exchangeMeta = useAssistant
+    ? { assistant: true }
+    : route
+      ? { ranked: route.ranked, method: route.method, ...(via ? { via, routes: fanGateways } : {}), ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}) }
+      : (spec.tier === 'custom' ? { customAgent: spec.agentName } : undefined);
   const record = (assistantContent: string) => {
     recordExchange({
       threadId, userSub: user.sub, sessionId,
       promptTitle: prompt.slice(0, 40),
       userContent: prompt, assistantContent,
-      gateway: spec.gateway, meta: exchangeMeta,
+      gateway: recordGateway, meta: exchangeMeta,
     }).catch(() => { /* store is never-throws by contract; belt-and-suspenders (P2 gate) */ });
   };
 
@@ -144,12 +156,16 @@ export async function POST(request: Request) {
       controller.enqueue(enc.encode(': heartbeat\n\n')); // open immediately (CloudFront/ALB keepalive)
       // meta is ALWAYS emitted, on every path incl. inactive/fallback (spec §6).
       const meta = {
-        gateway: spec.gateway, agentName: spec.agentName, tier: spec.tier, skillHashes: spec.skillHashes, threadId,
-        ...(route ? { ranked: route.ranked, method: route.method } : {}),
+        gateway: useAssistant ? 'assistant' : spec.gateway,
+        agentName: useAssistant ? 'AWSops Assistant' : spec.agentName,
+        tier: spec.tier, skillHashes: spec.skillHashes, threadId,
+        ...(useAssistant ? { assistant: true } : {}),
+        // chips/via are suppressed on the assistant path (no section hand-off for a product answer).
+        ...(route && !useAssistant ? { ranked: route.ranked, method: route.method } : {}),
         // ADR-044: emit via/routes IMMEDIATELY from the attempt list (gate MINOR — never wait for
         // Promise.allSettled survivors, which would stall the badge/Thinking UX for the whole fan-out).
         ...(via ? { via, routes: fanGateways } : {}),
-        ...(spec.tier === 'custom' ? { customAgent: spec.agentName, spaceVersion: spec.spaceVersion } : {}),
+        ...(!useAssistant && spec.tier === 'custom' ? { customAgent: spec.agentName, spaceVersion: spec.spaceVersion } : {}),
       };
       controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(meta)}\n\n`));
       // ADR-044 §2: an explicit pin to a custom agent disabled/absent in this Agent Space gets an
@@ -159,6 +175,20 @@ export async function POST(request: Request) {
         const guide = `🔒 선택한 에이전트 '${name}'는 이 Agent Space에서 사용할 수 없습니다(비활성화되었거나 존재하지 않음). 다른 에이전트를 선택하거나 자동 라우팅으로 다시 시도해 주세요.`;
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: guide })}\n\n`));
         record(guide);
+        controller.enqueue(enc.encode('data: [DONE]\n\n'));
+        controller.close();
+        return;
+      }
+      // AWSops Assistant: product/how-to answer grounded in the KB (Bedrock-direct), OR the graceful
+      // fallback for an auto-routed inactive section — instead of the 🔒 dead-end.
+      if (useAssistant) {
+        const text = await assistantAnswer(prompt); // Haiku, KB-grounded, never throws
+        for (const c of chunk(text)) {
+          if (request.signal.aborted) break;
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));
+          await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
+        }
+        if (!request.signal.aborted) record(text);
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
         controller.close();
         return;

@@ -76,6 +76,15 @@ The Agent Space active filter is inserted explicitly (the panel found ADR-038's 
 - Single-route hybrid is already LIVE (`hybrid_routing_enabled`, ADR-038, gate PASSED 96.9%).
 - **Multi-route fan-out + synthesis re-activation** ships behind a sub-flag and must pass a multi-domain golden-set (set-overlap scoring, per ADR-025 §Consequences) before activation. Until then, multi-domain queries degrade to the current single-route + chips behavior (no regression).
 
+## Addendum (2026-06-17) — AWSops Assistant (product-help) + inactive-route graceful degrade
+
+A live gap surfaced: a product/how-to question (e.g. *"prometheus 분석 agent를 만들려는데 skill을 설계해줘 — /customization 어떻게?"*) was keyword-routed to the inactive `observability` section and dead-ended on the `🔒 P3` message. Two root causes: (1) **auto-routing to an inactive section dead-ended** instead of degrading; (2) **no agent carries AWSops product/self knowledge** — all section agents are AWS-domain specialists with live AWS tools, none can explain how to *use AWSops itself*.
+
+**Decision:** add a BFF-level **AWSops Assistant** path to the routing ladder:
+- A bounded **product KB** (`web/lib/awsops-kb.ts`) is injected as context into a **Bedrock-direct** answer (`web/lib/assistant.ts`). Model = **Haiku via `ConverseCommand` (non-stream)** — deliberately matching the web task role's Bedrock IAM (workload.tf grants `bedrock:InvokeModel` on Haiku only; **not** `InvokeModelWithResponseStream`, **not** Sonnet). The buffered answer is typewriter-streamed like the single-agent path. (NB: ADR-044's Sonnet `synthesize` will need the IAM widened before its flag is enabled — tracked.)
+- **Ladder placement:** explicit pin > **product-help intent** (`isProductHelpIntent`, tight AWSops-noun regex) > custom keyword > classifier. An **auto-routed inactive section degrades to the Assistant** (not 🔒); an **explicit pin to an inactive section keeps the honest 🔒** (user chose it). KB-grounded, injection-contained (`<awsops_docs>`/`<user_query>` tags), never-throws (deterministic guide fallback).
+- This is a **product-help** path, distinct from the §5 trio (chat cross-domain / incident / integration). Ships ON (bug fix; additive — active-section routing untouched).
+
 ## Consequences / 결과
 
 ### Positive / 긍정적

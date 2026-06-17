@@ -30,6 +30,12 @@ const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
 const synthesizeStream = vi.fn();
 vi.mock('@/lib/synthesize', () => ({ synthesizeStream: (...a: unknown[]) => synthesizeStream(...a) }));
+const assistantAnswer = vi.fn();
+const isProductHelpIntent = vi.fn();
+vi.mock('@/lib/assistant', () => ({
+  assistantAnswer: (...a: unknown[]) => assistantAnswer(...a),
+  isProductHelpIntent: (...a: unknown[]) => isProductHelpIntent(...a),
+}));
 
 function req(body: unknown, cookie = 'awsops_token=t') {
   return new Request('http://x/api/chat', {
@@ -75,6 +81,10 @@ beforeEach(() => {
   synthesizeStream.mockReset();
   // default: real-shaped async-generator returning a deterministic merged answer
   synthesizeStream.mockImplementation(async function* () { yield '합성된 답변'; });
+  assistantAnswer.mockReset();
+  assistantAnswer.mockResolvedValue('가이드 답변');
+  isProductHelpIntent.mockReset();
+  isProductHelpIntent.mockReturnValue(false); // default off so existing routing is unaffected
   delete process.env.HYBRID_ROUTING_ENABLED;
   delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED;
 });
@@ -170,20 +180,22 @@ describe('hybrid routing (ADR-038)', () => {
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
   });
 
-  it('flag on: inactive top-1 short-circuits — no agent call, guidance message, meta still emitted', async () => {
+  it('flag on: EXPLICIT pin to an inactive section short-circuits with the honest 🔒 (ADR-044 §2)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
+    // user explicitly pinned /container → method:'pin' (an auto-routed inactive section now degrades
+    // to the AWSops Assistant instead — see the 'AWSops Assistant' suite).
     classifyRoute.mockResolvedValue({
       primary: 'container',
-      ranked: [{ key: 'container', score: 0.9, active: false }, { key: 'network', score: 0.4, active: true }],
-      method: 'llm',
+      ranked: [{ key: 'container', score: 1, active: false }],
+      method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: false }],
     });
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    const res = await POST(req({ prompt: '파드 CrashLoop 원인', sessionId: 's'.repeat(36) }));
+    const res = await POST(req({ prompt: '파드 CrashLoop 원인', section: 'container', sessionId: 's'.repeat(36) }));
     const body = await readStream(res);
     expect(invokeAgent).not.toHaveBeenCalled();
-    expect(body).toContain('"method":"llm"'); // meta ALWAYS emitted (spec §6)
+    expect(assistantAnswer).not.toHaveBeenCalled();
     expect(body).toContain('P3'); // guidance delta mentions availability
     expect(body).toContain('[DONE]');
   });
@@ -318,13 +330,13 @@ describe('thread persistence', () => {
     expect(recordExchange).not.toHaveBeenCalled();
   });
 
-  it('records the inactive-section guidance exchange too (spec §3)', async () => {
+  it('records the inactive-section 🔒 guidance exchange too (explicit pin, spec §3)', async () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u1' });
-    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 0.9, active: false }], method: 'llm' });
+    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: false }] });
     resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    await readStream(await POST(req({ prompt: '파드 CrashLoop 원인', sessionId: 's'.repeat(36) })));
+    await readStream(await POST(req({ prompt: '파드 CrashLoop 원인', section: 'container', sessionId: 's'.repeat(36) })));
     expect(invokeAgent).not.toHaveBeenCalled();
     expect(recordExchange).toHaveBeenCalledWith(expect.objectContaining({
       userContent: '파드 CrashLoop 원인',
@@ -579,5 +591,54 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     await readStream(await POST(req({ prompt: 'q', sessionId: 's'.repeat(36) })));
     expect(synthesizeStream).not.toHaveBeenCalled();
     expect(invokeAgent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AWSops Assistant (product help + inactive fallback)', () => {
+  it('product-help intent → AWSops Assistant, not an AWS section agent', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isProductHelpIntent.mockReturnValue(true);
+    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'observability', score: 0.9, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    assistantAnswer.mockResolvedValue('1) Integrations에서 Prometheus 등록 2) Skill 작성 3) Agent 생성');
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'prometheus 분석 agent 만들기 /customization', sessionId: 's'.repeat(36) })));
+    expect(assistantAnswer).toHaveBeenCalledWith('prometheus 분석 agent 만들기 /customization');
+    expect(invokeAgent).not.toHaveBeenCalled();
+    expect(synthesizeStream).not.toHaveBeenCalled();
+    expect(body).toContain('Prometheus'); // single token survives typewriter chunk()
+    expect(body).toContain('"assistant":true');
+    expect(body).toContain('"gateway":"assistant"');
+    expect(body).not.toContain('🔒');
+  });
+
+  it('auto-routed INACTIVE section degrades to the Assistant (no 🔒 dead-end)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isProductHelpIntent.mockReturnValue(false);
+    // classifier auto-routed (method:'regex') to inactive observability
+    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'observability', score: 0.9, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: 'prometheus p99 추세', sessionId: 's'.repeat(36) })));
+    expect(assistantAnswer).toHaveBeenCalled();
+    expect(body).toContain('답변'); // chunk() splits on spaces
+    expect(body).not.toContain('🔒'); // no dead-end
+    expect(invokeAgent).not.toHaveBeenCalled();
+  });
+
+  it('EXPLICIT pin to an inactive section keeps the honest 🔒 message (not the Assistant)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isProductHelpIntent.mockReturnValue(false);
+    // user pinned /observability → classifyRoute returns method:'pin'
+    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'observability', score: 1, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    const { POST } = await import('./route');
+    const body = await readStream(await POST(req({ prompt: '아무거나', section: 'observability', sessionId: 's'.repeat(36) })));
+    expect(assistantAnswer).not.toHaveBeenCalled();
+    expect(body).toContain('🔒'); // explicit choice → honest unavailable message
   });
 });
