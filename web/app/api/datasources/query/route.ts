@@ -6,6 +6,7 @@ import { verifyUser } from '@/lib/auth';
 import { invokeConnectorTool } from '@/lib/connector-invoke';
 import { KNOWN_CONNECTOR_SLUGS } from '@/lib/integration-credentials';
 import { normalizeResult } from '@/lib/datasource-render';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,7 +36,11 @@ export async function POST(request: Request) {
   if (!user) return json({ error: 'unauthenticated' }, 401);
 
   let body: { slug?: unknown; query?: unknown; range?: unknown };
-  try { body = await request.json(); } catch { return json({ error: 'invalid JSON body' }, 400); }
+  try { body = (await readJsonBounded(request)) as typeof body; }
+  catch (e) {
+    if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413);
+    return json({ error: 'invalid JSON body' }, 400);
+  }
 
   const slug = typeof body.slug === 'string' ? body.slug : '';
   if (!(KNOWN_CONNECTOR_SLUGS as readonly string[]).includes(slug)) return json({ error: 'unknown datasource' }, 400);
