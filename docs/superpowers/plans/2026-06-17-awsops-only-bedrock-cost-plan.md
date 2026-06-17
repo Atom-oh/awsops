@@ -48,7 +48,7 @@ in a request handler are a defect — enqueue.* This plan moves the heavy log sc
 
 ### Task 1: Aurora migration — ai_usage_daily
 **Files:**
-- Create: `terraform/v2/foundation/migrations/01KV0AI_COST_DAILY_ai_usage_daily.sql`
+- Create: `terraform/v2/foundation/migrations/01KVEBZ1R01MH35A9DDH0VR9JB_ai_usage_daily.sql`
 
 - [ ] Add migration (real ULID filename per project rule `migrations/<ULID>_ai_usage_daily.sql`, NOT a schema.sql append): `CREATE TABLE IF NOT EXISTS ai_usage_daily (day DATE NOT NULL, model TEXT NOT NULL, input_tokens BIGINT NOT NULL DEFAULT 0, output_tokens BIGINT NOT NULL DEFAULT 0, cache_read_tokens BIGINT NOT NULL DEFAULT 0, cache_write_tokens BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (day, model));` + `CREATE INDEX IF NOT EXISTS idx_ai_usage_day ON ai_usage_daily (day DESC);`. Apply path: the migration runner (`make migrate` / the ULID migrations dir already wired in this repo) picks up new `migrations/*.sql` and records them in `schema_migrations` — verify the file is discovered (matches the existing ULID-migration glob), no manual seed needed.
 
