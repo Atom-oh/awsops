@@ -31,6 +31,7 @@ const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
   { href: '/bedrock', tkey: 'nav.bedrock', icon: Gauge },
   { href: '/topology', tkey: 'nav.topology', icon: Network },
   { href: '/security', tkey: 'nav.security', icon: Shield },
+  { href: '/compliance', tkey: 'nav.compliance', icon: FileSearch },
   { href: '/customization', tkey: 'nav.customAgents', icon: Sparkles },
   { href: '/datasources', tkey: 'nav.datasources', icon: SearchCode },
 ];

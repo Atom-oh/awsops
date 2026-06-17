@@ -1,17 +1,17 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+export async function GET(req: Request) {
   if (!(await verifyUser(req.headers.get('cookie')))) {
     return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
   }
   try {
     const r = await getPool().query(
       `SELECT id, worker_job_id, benchmark, status, requested_by, pass_rate,
-              total_controls, ok, alarm, info, skip, error, started_at, finished_at
+              total_controls, ok, alarm, info, skip, error, error_message, started_at, finished_at
        FROM compliance_runs ORDER BY started_at DESC LIMIT 50`,
     );
     return NextResponse.json({ runs: r.rows });

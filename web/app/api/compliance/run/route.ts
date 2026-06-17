@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { enqueueJob, EnqueueDeliveryError } from '@/lib/jobs';
@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 // crafted benchmark string can never reach the Powerpipe argv.
 const ALLOWED = new Set(['cis_v150', 'cis_v200', 'cis_v300', 'cis_v400']);
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   const user = await verifyUser(req.headers.get('cookie'));
   if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
   if (!process.env.JOBS_QUEUE_URL) {

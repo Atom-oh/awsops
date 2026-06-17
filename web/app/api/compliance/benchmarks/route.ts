@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -11,7 +11,7 @@ const BENCHMARKS = [
   { id: 'cis_v150', name: 'CIS AWS v1.5.0', description: 'CIS Amazon Web Services Foundations Benchmark v1.5.0' },
 ];
 
-export async function GET(req: NextRequest) {
+export async function GET(req: Request) {
   if (!(await verifyUser(req.headers.get('cookie')))) {
     return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
   }

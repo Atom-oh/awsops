@@ -1,10 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: Request, { params }: { params: { id: string } }) {
   if (!(await verifyUser(req.headers.get('cookie')))) {
     return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
   }
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const pool = getPool();
     const runR = await pool.query(
       `SELECT id, worker_job_id, benchmark, status, requested_by, pass_rate,
-              total_controls, ok, alarm, info, skip, error, started_at, finished_at
+              total_controls, ok, alarm, info, skip, error, error_message, started_at, finished_at
        FROM compliance_runs WHERE id = $1`,
       [id],
     );

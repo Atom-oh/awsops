@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS compliance_runs (
   status         TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','succeeded','failed')),
   requested_by   TEXT NOT NULL,
   pass_rate      NUMERIC,
-  total_controls INT, ok INT, alarm INT, info INT, skip INT, error INT,
-  error          TEXT,
+  total_controls INT, ok INT, alarm INT, info INT, skip INT, error INT,  -- error = controls in 'error' status
+  error_message  TEXT,                                                   -- run failure message (distinct from the count)
   started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at    TIMESTAMPTZ,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
