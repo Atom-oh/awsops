@@ -72,8 +72,8 @@ describe('POST /api/datasources/query', () => {
   });
 
   it('every TOOL value is a read-only tool (no mutating verb reachable)', async () => {
-    const mod = await import('./route');
-    const tools = Object.values(mod.TOOL).flatMap((t) => [t.instant, t.range].filter(Boolean) as string[]);
+    const { TOOL } = await import('@/lib/datasource-query-tools');
+    const tools = Object.values(TOOL).flatMap((t) => [t.instant, t.range].filter(Boolean) as string[]);
     expect(tools.length).toBeGreaterThan(0);
     for (const name of tools) {
       expect(name).toMatch(/_(query|query_range|search)$/);

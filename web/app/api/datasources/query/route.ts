@@ -11,23 +11,11 @@ import { isDatasourceKind } from '@/lib/integrations-category';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { normalizeResult } from '@/lib/datasource-render';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
+import { TOOL } from '@/lib/datasource-query-tools';
 
 export const dynamic = 'force-dynamic';
 
 const MAX_QUERY = 8_000;
-const CLICKHOUSE_MAX_ROWS = 500;
-
-interface ToolSpec { instant: string; range?: string; arg: 'query' | 'sql'; extra?: Record<string, unknown> }
-
-export const TOOL: Record<string, ToolSpec> = {
-  prometheus: { instant: 'prometheus_query', range: 'prometheus_query_range', arg: 'query' },
-  mimir: { instant: 'mimir_query', range: 'mimir_query_range', arg: 'query' },
-  loki: { instant: 'loki_query', range: 'loki_query_range', arg: 'query' },
-  tempo: { instant: 'tempo_search', arg: 'query' },
-  clickhouse: { instant: 'clickhouse_query', arg: 'sql', extra: { max_rows: CLICKHOUSE_MAX_ROWS } },
-};
-
-export const QUERYABLE_KINDS = Object.keys(TOOL);
 
 function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
