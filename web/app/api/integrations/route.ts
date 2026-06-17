@@ -11,6 +11,7 @@ import { writeAudit } from '@/lib/catalog';
 import { validateIntegration } from '@/lib/integration-validation';
 import { assertEgressEndpointAllowed } from '@/lib/ssrf-guard';
 import { upsertIntegration, listIntegrations, setIntegrationEnabled } from '@/lib/integrations';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,7 +45,8 @@ export async function POST(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
   let body: Record<string, unknown>;
-  try { body = await request.json(); } catch { return json({ error: 'invalid JSON' }, 400); }
+  try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
+  catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
 
   const v = validateIntegration(body as never);
   if (!v.ok) return json({ error: 'invalid integration', detail: v.errors }, 400);
@@ -91,7 +93,8 @@ export async function PUT(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
   let body: Record<string, unknown>;
-  try { body = await request.json(); } catch { return json({ error: 'invalid JSON' }, 400); }
+  try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
+  catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
   if (body.op === 'enable' || body.op === 'disable') {
     await setIntegrationEnabled(Number(body.id), body.op === 'enable'); // custom-only at the SQL level
     await writeAudit({ actor: g.user!.email ?? g.user!.sub, action: String(body.op), objectType: 'integration', objectId: String(body.id) });

@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>기능 가이드 — AWSops</title>
+<meta name="description" content="AWSops 기능/사용 가이드: 대시보드·인벤토리·비용·EKS·토폴로지·AI 진단·챗 어시스턴트·데이터소스 Explore." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+<style>
+  :root{
+    /* brand — Claude orange */
+    --claude-50:#FBF1EC; --claude-100:#F5DCCF; --claude-200:#EEBFAA; --claude-300:#E69F7F;
+    --claude-400:#DF8663; --claude-500:#D97757; --claude-600:#B75E40; --claude-700:#8E4830;
+    /* ink — warm neutral */
+    --ink-50:#F7F6F2; --ink-100:#EDEBE4; --ink-200:#D7D3C7; --ink-300:#B5AFA0;
+    --ink-400:#8A8474; --ink-500:#5F5A4D; --ink-600:#3F3B32; --ink-700:#2B2823; --ink-800:#1F1E1D; --ink-900:#14130F;
+    /* paper */
+    --paper:#FAF9F5; --paper-muted:#F3F1EB; --white:#FFFFFF;
+    /* semantic */
+    --emerald-500:#10B981; --emerald-700:#047857; --rose-500:#F43F5E; --rose-700:#BE123C;
+
+    --bg:var(--paper); --surface:var(--white); --sunken:var(--paper-muted);
+    /* --text-3 darkened from ink-400(#8A8474, ~3.2:1) to meet WCAG AA on paper */
+    --text:var(--ink-800); --text-2:var(--ink-500); --text-3:#6B665A;
+    --line:var(--ink-100); --line-2:var(--ink-200);
+    --brand:var(--claude-500); --brand-ink:var(--claude-700);
+
+    --serif:"Fraunces",Georgia,serif;
+    --sans:"Pretendard Variable",Pretendard,-apple-system,system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,monospace;
+
+    --shadow-card:0 1px 2px rgba(31,30,29,.04), 0 8px 28px rgba(31,30,29,.06);
+    --shadow-pop:0 10px 40px rgba(31,30,29,.14);
+    --maxw:1180px;
+    --r:16px;
+  }
+
+  *{box-sizing:border-box}
+  /* keyboard focus — visible on the warm paper bg */
+  :focus-visible{outline:2px solid var(--brand); outline-offset:3px; border-radius:4px}
+  a:focus-visible, .btn:focus-visible, .nav-cta:focus-visible{outline-offset:4px}
+  /* skip link */
+  .skip-link{position:absolute; left:12px; top:-48px; z-index:200; background:var(--ink-900); color:var(--paper);
+    padding:10px 16px; border-radius:10px; font-size:14px; font-weight:600; transition:top .18s}
+  .skip-link:focus{top:12px}
+  .sr-only{position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0}
+  html{scroll-behavior:smooth; -webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--sans); font-size:17px; line-height:1.6;
+    font-feature-settings:"ss01","cv01"; -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility; overflow-x:hidden;
+  }
+  /* warm paper grain */
+  body::before{
+    content:""; position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.5;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.035'/%3E%3C/svg%3E");
+  }
+  .num{font-variant-numeric:tabular-nums lining-nums}
+  a{color:inherit; text-decoration:none}
+  img,svg{display:block}
+
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 24px; position:relative; z-index:1}
+  section{position:relative; z-index:1}
+
+  /* ---------- nav ---------- */
+  .nav{
+    position:sticky; top:0; z-index:50;
+    backdrop-filter:saturate(1.4) blur(10px);
+    background:color-mix(in srgb, var(--paper) 78%, transparent);
+    border-bottom:1px solid var(--line);
+  }
+  .nav-in{display:flex; align-items:center; gap:24px; height:64px}
+  .brand{display:flex; align-items:center; gap:11px; font-weight:600; letter-spacing:-.01em}
+  .brand .mark{width:30px; height:30px}
+  .brand b{font-family:var(--serif); font-weight:600; font-size:20px; letter-spacing:-.02em}
+  .brand .mono{font-family:var(--mono); font-size:11px; color:var(--text-3); padding:2px 7px; border:1px solid var(--line-2); border-radius:99px; letter-spacing:0}
+  .nav-links{margin-left:auto; display:flex; gap:28px; align-items:center}
+  .nav-links a{font-size:14.5px; color:var(--text-2); transition:color .2s}
+  .nav-links a:hover{color:var(--brand-ink)}
+  .nav-cta{
+    font-size:14px; font-weight:600; color:var(--white)!important; background:var(--ink-800);
+    padding:9px 16px; border-radius:99px; transition:transform .2s, background .2s;
+  }
+  .nav-cta:hover{background:var(--claude-600); transform:translateY(-1px)}
+  @media (max-width:880px){ .nav-links a:not(.nav-cta){display:none} }
+
+  /* ---------- hero ---------- */
+  .hero{padding:88px 0 64px; overflow:hidden}
+  .hero-grid{display:grid; grid-template-columns:1.15fr .85fr; gap:48px; align-items:center}
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12.5px;
+    letter-spacing:.04em; color:var(--brand-ink); background:var(--claude-50);
+    border:1px solid var(--claude-100); padding:6px 13px; border-radius:99px; margin-bottom:26px;
+  }
+  .eyebrow .dot{width:7px; height:7px; border-radius:99px; background:var(--brand); box-shadow:0 0 0 0 rgba(217,119,87,.5); animation:pulse 2.4s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(217,119,87,.45)}70%{box-shadow:0 0 0 9px rgba(217,119,87,0)}100%{box-shadow:0 0 0 0 rgba(217,119,87,0)}}
+  h1.hero-title{
+    font-family:var(--sans); font-weight:800; font-size:clamp(34px,5.4vw,60px); line-height:1.04;
+    letter-spacing:-.035em; margin:0 0 22px;
+  }
+  h1.hero-title em{font-family:var(--serif); font-style:italic; font-weight:500; color:var(--brand-ink); letter-spacing:-.01em}
+  .hero-sub{font-size:clamp(16px,1.6vw,18.5px); color:var(--text-2); max-width:36ch; margin:0 0 30px}
+  .hero-actions{display:flex; flex-wrap:wrap; gap:14px; align-items:center}
+  .btn{font-weight:600; font-size:15px; padding:13px 22px; border-radius:99px; transition:transform .2s, box-shadow .2s, background .2s; cursor:pointer; border:1px solid transparent}
+  .btn-primary{background:var(--brand); color:var(--white); box-shadow:0 6px 20px rgba(217,119,87,.28)}
+  .btn-primary:hover{background:var(--claude-600); transform:translateY(-2px); box-shadow:0 10px 28px rgba(217,119,87,.34)}
+  .btn-ghost{background:var(--surface); color:var(--text); border-color:var(--line-2)}
+  .btn-ghost:hover{border-color:var(--ink-400); transform:translateY(-2px)}
+
+  /* hero metrics rail */
+  .metrics{display:flex; flex-wrap:wrap; gap:10px; margin-top:38px; padding-top:30px; border-top:1px solid var(--line)}
+  .metric{flex:1 1 120px}
+  .metric .v{font-family:var(--serif); font-weight:600; font-size:30px; letter-spacing:-.02em; line-height:1}
+  .metric .v small{font-size:16px; color:var(--brand-ink)}
+  .metric .l{font-size:12.5px; color:var(--text-3); margin-top:6px; letter-spacing:.01em}
+
+  /* hero figure — neural graph */
+  .hero-fig{position:relative; background:var(--surface); border:1px solid var(--line); border-radius:24px; padding:28px; box-shadow:var(--shadow-card); overflow:hidden}
+  .hero-fig .cap{font-family:var(--mono); font-size:11px; color:var(--text-3); letter-spacing:.05em; text-transform:uppercase; margin-bottom:6px}
+  .hero-fig .cap2{font-size:14.5px; color:var(--text-2); margin-bottom:18px}
+  .glyph{width:100%; height:auto}
+
+  /* ---------- section heads ---------- */
+  .sec{padding:78px 0}
+  .sec-head{max-width:62ch; margin-bottom:44px}
+  .kicker{font-family:var(--mono); font-size:12.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--brand-ink); margin-bottom:14px}
+  h2{font-family:var(--sans); font-weight:800; font-size:clamp(26px,3.4vw,38px); letter-spacing:-.03em; line-height:1.1; margin:0 0 16px}
+  h2 em{font-family:var(--serif); font-style:italic; font-weight:500; color:var(--brand-ink)}
+  .sec-head p{font-size:17px; color:var(--text-2); margin:0}
+
+  /* ---------- pillars ---------- */
+  .pillars{display:grid; grid-template-columns:repeat(3,1fr); gap:20px}
+  .pillar{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:30px; box-shadow:var(--shadow-card); transition:transform .3s, box-shadow .3s; position:relative; overflow:hidden}
+  .pillar:hover{transform:translateY(-4px); box-shadow:var(--shadow-pop)}
+  .pillar .pn{font-family:var(--serif); font-size:14px; color:var(--brand); font-weight:600}
+  .pillar .ic{width:42px; height:42px; border-radius:11px; background:var(--claude-50); border:1px solid var(--claude-100); display:grid; place-items:center; margin:8px 0 18px; color:var(--brand-ink)}
+  .pillar h3{font-size:20px; font-weight:700; letter-spacing:-.02em; margin:0 0 10px}
+  .pillar p{font-size:15px; color:var(--text-2); margin:0}
+
+  /* ---------- features ---------- */
+  .feat-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:var(--r); overflow:hidden}
+  .feat{background:var(--surface); padding:28px; transition:background .25s}
+  .feat:hover{background:var(--ink-50)}
+  .feat .fic{color:var(--brand-ink); margin-bottom:14px}
+  .feat h3{font-size:16.5px; font-weight:700; letter-spacing:-.01em; margin:0 0 8px}
+  .feat p{font-size:14px; color:var(--text-2); margin:0; line-height:1.55}
+  .feat .tag{font-family:var(--mono); font-size:11px; color:var(--text-3); margin-top:12px; display:block}
+
+  /* ---------- gateways table ---------- */
+  .gw-wrap{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow-card); overflow:hidden}
+  table.gw{width:100%; border-collapse:collapse}
+  table.gw th, table.gw td{text-align:left; padding:15px 20px; border-bottom:1px solid var(--line); font-size:14.5px}
+  table.gw thead th{font-family:var(--mono); font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-3); font-weight:500; background:var(--sunken)}
+  table.gw tbody tr{transition:background .2s}
+  table.gw tbody tr:hover{background:var(--claude-50)}
+  table.gw td.gname{font-weight:600; white-space:nowrap}
+  table.gw td.gtools{font-family:var(--mono); color:var(--brand-ink); font-weight:600; text-align:right; width:64px}
+  table.gw td.gcap{color:var(--text-2)}
+  .gw-foot{display:flex; flex-wrap:wrap; gap:8px; padding:18px 20px; background:var(--sunken); font-size:13px; color:var(--text-2)}
+  .pill{display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:12px; padding:5px 11px; border-radius:99px; background:var(--surface); border:1px solid var(--line-2)}
+  .pill.orange{background:var(--claude-50); border-color:var(--claude-100); color:var(--brand-ink)}
+
+  /* ---------- architecture diagram ---------- */
+  .arch{background:linear-gradient(180deg, var(--sunken), var(--paper)); border-top:1px solid var(--line); border-bottom:1px solid var(--line)}
+  .arch-legend{display:flex; flex-wrap:wrap; gap:16px; margin-bottom:28px; font-size:13px; color:var(--text-2)}
+  .arch-legend span{display:inline-flex; align-items:center; gap:7px}
+  .lg{width:13px; height:13px; border-radius:4px; border:1px solid}
+  .lg.edge{background:var(--claude-50); border-color:var(--claude-200)}
+  .lg.compute{background:#EAF3FF; border-color:#BBD7F5}
+  .lg.data{background:#EAF7F1; border-color:#B7E2CC}
+  .lg.ai{background:#F3EEFB; border-color:#D8C8F0}
+  .lg.obs{background:var(--ink-50); border-color:var(--line-2)}
+
+  .diagram{display:grid; gap:18px; grid-template-columns:repeat(5,1fr); align-items:stretch}
+  .lane{display:flex; flex-direction:column; gap:14px; min-width:0; position:relative}
+  /* desktop/tablet flow connectors between lanes (sit in the grid gap) */
+  @media (min-width:641px){
+    .lane:not(:last-child)::after{
+      content:"→"; position:absolute; right:-15px; top:46px; transform:translateY(-50%);
+      color:var(--brand); font-size:18px; font-weight:700; opacity:.7; z-index:2;
+    }
+  }
+  .lane-title{font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-3); padding-bottom:8px; border-bottom:1px dashed var(--line-2); margin-bottom:2px}
+  .node{
+    background:var(--surface); border:1px solid var(--line-2); border-radius:13px; padding:14px 15px;
+    box-shadow:var(--shadow-card); position:relative; transition:transform .25s, box-shadow .25s;
+  }
+  .node:hover{transform:translateY(-3px); box-shadow:var(--shadow-pop)}
+  .node .nt{font-weight:700; font-size:14px; letter-spacing:-.01em; display:flex; align-items:center; gap:8px}
+  .node .nd{font-size:12.5px; color:var(--text-2); margin-top:5px; line-height:1.45}
+  .node .meta{font-family:var(--mono); font-size:10.5px; color:var(--text-3); margin-top:8px; letter-spacing:.02em}
+  .node.edge{border-color:var(--claude-200); background:linear-gradient(180deg,var(--claude-50),var(--surface))}
+  .node.compute{border-color:#BBD7F5}
+  .node.data{border-color:#B7E2CC}
+  .node.ai{border-color:#D8C8F0}
+  .node.obs{border-style:dashed; background:var(--ink-50)}
+  .node .badge{font-family:var(--mono); font-size:9.5px; padding:2px 7px; border-radius:99px; background:var(--ink-800); color:var(--white); letter-spacing:.03em}
+  .node .badge.ro{background:var(--emerald-700)}
+  .chip-row{display:flex; flex-wrap:wrap; gap:5px; margin-top:9px}
+  .chip{font-family:var(--mono); font-size:10px; padding:2px 7px; border-radius:6px; background:var(--sunken); border:1px solid var(--line); color:var(--text-2)}
+  .flowline{display:none}
+  .arch-note{margin-top:24px; font-size:13px; color:var(--text-3); display:flex; flex-wrap:wrap; gap:18px}
+  .arch-note b{color:var(--text-2); font-weight:600}
+  .arch-dl{margin-top:26px}
+  /* exported architecture SVG */
+  .arch-figure{margin:0; background:var(--surface); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow-card); padding:14px; overflow:hidden}
+  .arch-figure img{display:block; width:100%; height:auto}
+  .arch-rot-hint{display:none}
+  @media (max-width:640px){
+    .arch-figure{position:relative; padding:0; aspect-ratio:871 / 1411}
+    .arch-figure img{position:absolute; top:50%; left:50%; max-width:none; width:calc((100vw - 36px) * 1411 / 871); height:auto; transform:translate(-50%,-50%) rotate(90deg)}
+    .arch-rot-hint{display:block; font-size:12.5px; color:var(--text-3); text-align:center; margin-top:12px}
+  }
+
+  /* ---------- security / stack ---------- */
+  .split{display:grid; grid-template-columns:1fr 1fr; gap:48px; align-items:start}
+  .checklist{list-style:none; padding:0; margin:0}
+  .checklist li{display:flex; gap:13px; padding:14px 0; border-bottom:1px solid var(--line)}
+  .checklist li:last-child{border-bottom:0}
+  .checklist .ci{flex:none; width:22px; height:22px; border-radius:99px; background:var(--claude-50); border:1px solid var(--claude-200); color:var(--brand-ink); display:grid; place-items:center; margin-top:2px}
+  .checklist h4{margin:0 0 3px; font-size:15.5px; font-weight:700; letter-spacing:-.01em}
+  .checklist p{margin:0; font-size:13.5px; color:var(--text-2)}
+  .stack{display:flex; flex-wrap:wrap; gap:9px}
+  .stack .s{font-family:var(--mono); font-size:13px; padding:9px 14px; border-radius:10px; background:var(--surface); border:1px solid var(--line-2); color:var(--text); transition:transform .2s, border-color .2s}
+  .stack .s:hover{transform:translateY(-2px); border-color:var(--brand)}
+  .stack .s b{color:var(--brand-ink)}
+  .stack-card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:30px; box-shadow:var(--shadow-card)}
+
+  /* ---------- closing CTA ---------- */
+  .cta{margin:40px auto 0}
+  .cta-box{background:var(--ink-900); color:var(--ink-50); border-radius:28px; padding:clamp(36px,5vw,64px); text-align:center; position:relative; overflow:hidden}
+  .cta-box::after{content:""; position:absolute; inset:0; background:radial-gradient(600px 300px at 50% -10%, rgba(217,119,87,.28), transparent 70%); pointer-events:none}
+  .cta-box h2{color:var(--paper); position:relative; text-align:center; max-width:20ch; margin:0 auto 16px}
+  .cta-box h2 em{color:var(--claude-300)}
+  .cta-box p{color:var(--ink-200); max-width:48ch; margin:0 auto 28px; position:relative}
+  .cta-box .btn-primary{position:relative}
+  .cta-box .btn-ghost{background:transparent; color:var(--paper); border-color:rgba(247,246,242,.25)}
+  .cta-box .btn-ghost:hover{border-color:var(--paper)}
+
+  /* ---------- footer ---------- */
+  footer{border-top:1px solid var(--line); padding:40px 0; margin-top:80px}
+  .foot-in{display:flex; flex-direction:column; gap:10px; align-items:center; justify-content:center; text-align:center; font-size:13px; color:var(--text-3)}
+  .foot-in .mono{font-family:var(--mono)}
+
+  /* reveal */
+  .reveal{opacity:0; transform:translateY(18px); transition:opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1; transform:none}
+  @media (prefers-reduced-motion:reduce){.reveal{opacity:1; transform:none; transition:none} .eyebrow .dot{animation:none} *{scroll-behavior:auto!important}}
+
+  /* ============ RESPONSIVE — tablet ============ */
+  @media (max-width:1024px){
+    .hero-grid{grid-template-columns:1fr; gap:36px}
+    .hero{padding:64px 0 48px}
+    .pillars{grid-template-columns:repeat(2,1fr)}
+    .pillars .pillar:nth-child(3){grid-column:1 / -1}
+    .feat-grid{grid-template-columns:repeat(2,1fr)}
+    .split{grid-template-columns:1fr; gap:36px}
+    /* diagram → 2 lanes of flow, vertical-ish */
+    .diagram{grid-template-columns:repeat(2,1fr); gap:16px}
+    .diagram .lane:last-child{grid-column:1 / -1}
+  }
+
+  /* ============ RESPONSIVE — mobile ============ */
+  @media (max-width:640px){
+    body{font-size:16px}
+    .wrap{padding:0 18px}
+    .sec{padding:54px 0}
+    .hero{padding:44px 0 36px}
+    .metrics{gap:18px 10px}
+    .metric{flex:1 1 40%}
+    .pillars{grid-template-columns:1fr}
+    .pillars .pillar:nth-child(3){grid-column:auto}
+    .feat-grid{grid-template-columns:1fr}
+    .diagram{grid-template-columns:1fr; gap:12px}
+    .diagram .lane:last-child{grid-column:auto}
+    .lane{flex-direction:column}
+    /* stacked flow arrows between lanes on mobile */
+    .lane:not(:last-child)::after{content:"↓"; display:block; text-align:center; color:var(--brand); font-size:20px; margin-top:2px}
+    /* responsive table → stacked cards (keep capability text, don't hide meaning) */
+    table.gw thead{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0)}
+    table.gw, table.gw tbody, table.gw tr{display:block; width:100%}
+    table.gw tr{border-bottom:1px solid var(--line); padding:14px 16px; position:relative}
+    table.gw tr:last-child{border-bottom:0}
+    table.gw td{display:block; border:0; padding:0; width:auto}
+    table.gw td.gname{font-size:15px; padding-right:48px}
+    table.gw td.gtools{position:absolute; top:14px; right:16px; width:auto; text-align:right}
+    table.gw td.gcap{font-size:13px; color:var(--text-2); margin-top:5px}
+    .hero .hero-actions .btn{flex:1 1 100%; text-align:center}
+    .cta-box{border-radius:20px}
+  }
+  @media (max-width:380px){ .metric{flex:1 1 100%} }
+</style>
+
+<style>
+  /* ---------- guide-page prose (complements the brochure component CSS) ---------- */
+  .nav-links a[aria-current="page"]{color:var(--brand-ink); font-weight:600}
+  .doc{padding:54px 0 8px}
+  .crumb{font-family:var(--mono); font-size:12px; color:var(--text-3); letter-spacing:.03em; margin-bottom:18px}
+  .crumb a{color:var(--text-3)} .crumb a:hover{color:var(--brand-ink)}
+  .doc-hero{max-width:64ch; margin-bottom:30px}
+  .doc-hero h1{font-family:var(--sans); font-weight:800; font-size:clamp(30px,4.6vw,46px); letter-spacing:-.035em; line-height:1.06; margin:0 0 16px}
+  .doc-hero h1 em{font-family:var(--serif); font-style:italic; font-weight:500; color:var(--brand-ink); letter-spacing:-.01em}
+  .doc-hero .lead{font-size:18px; color:var(--text-2); margin:0}
+  .doc-sec{padding:30px 0; border-top:1px solid var(--line)}
+  .doc-sec:first-of-type{border-top:0}
+  .doc-sec h2{font-size:clamp(22px,3vw,30px); margin:0 0 14px}
+  .doc-sec h3{font-family:var(--sans); font-weight:700; font-size:18px; letter-spacing:-.01em; margin:26px 0 8px}
+  .doc-sec p{font-size:16px; color:var(--text-2); margin:0 0 14px; max-width:74ch}
+  .doc-sec ul,.doc-sec ol{margin:0 0 16px; padding-left:22px; color:var(--text-2); font-size:15.5px; max-width:74ch}
+  .doc-sec li{margin:7px 0}
+  .doc-sec strong{color:var(--text); font-weight:700}
+  .doc-sec a:not(.btn){color:var(--brand-ink); text-decoration:underline; text-underline-offset:2px; text-decoration-color:var(--claude-200)}
+  code{font-family:var(--mono); font-size:.88em; background:var(--sunken); border:1px solid var(--line); border-radius:6px; padding:1px 6px; color:var(--brand-ink)}
+  .codeblock{font-family:var(--mono); font-size:13px; line-height:1.7; background:var(--ink-900); color:#E9E6DF; border-radius:12px; padding:18px 20px; overflow-x:auto; margin:0 0 18px; box-shadow:var(--shadow-card)}
+  .codeblock .c{color:#8A8474} /* comment */
+  .callout{display:flex; gap:13px; background:var(--surface); border:1px solid var(--line); border-left:3px solid var(--brand); border-radius:12px; padding:16px 18px; margin:0 0 18px; box-shadow:var(--shadow-card)}
+  .callout.warn{border-left-color:var(--rose-500)} .callout.ok{border-left-color:var(--emerald-500)}
+  .callout .ci{flex:none; color:var(--brand-ink); margin-top:1px} .callout.warn .ci{color:var(--rose-700)} .callout.ok .ci{color:var(--emerald-700)}
+  .callout p{margin:0; font-size:14.5px; color:var(--text-2)} .callout b{color:var(--text)}
+  .kv{display:grid; grid-template-columns:max-content 1fr; gap:0; background:var(--surface); border:1px solid var(--line); border-radius:var(--r); overflow:hidden; box-shadow:var(--shadow-card); margin:0 0 18px}
+  .kv dt{font-family:var(--mono); font-size:12.5px; color:var(--brand-ink); padding:13px 16px; border-bottom:1px solid var(--line); background:var(--sunken); white-space:nowrap}
+  .kv dd{margin:0; font-size:14.5px; color:var(--text-2); padding:13px 16px; border-bottom:1px solid var(--line)}
+  .kv dt:last-of-type,.kv dd:last-child{border-bottom:0}
+  @media (max-width:640px){ .kv{grid-template-columns:1fr} .kv dt{border-bottom:0; padding-bottom:4px} .kv dd{padding-top:4px} }
+  .steps{counter-reset:step; list-style:none; padding:0; margin:0 0 18px}
+  .steps li{position:relative; padding:4px 0 14px 42px; border-left:1.5px solid var(--line-2); margin-left:13px}
+  .steps li:last-child{border-left-color:transparent}
+  .steps li::before{counter-increment:step; content:counter(step); position:absolute; left:-13px; top:0; width:26px; height:26px; border-radius:99px; background:var(--claude-50); border:1px solid var(--claude-200); color:var(--brand-ink); font-family:var(--mono); font-size:12px; font-weight:600; display:grid; place-items:center}
+  .next-cards{display:grid; grid-template-columns:repeat(2,1fr); gap:16px; margin:36px 0 0}
+  @media (max-width:640px){ .next-cards{grid-template-columns:1fr} }
+  .next-card{display:block; background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:22px; box-shadow:var(--shadow-card); transition:transform .25s,box-shadow .25s}
+  .next-card:hover{transform:translateY(-3px); box-shadow:var(--shadow-pop)}
+  .next-card .nk{font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-3)}
+  .next-card h4{font-size:17px; font-weight:700; letter-spacing:-.01em; margin:7px 0 5px} .next-card p{font-size:13.5px; color:var(--text-2); margin:0}
+</style>
+
+</head>
+<body>
+<a href="#main" class="skip-link">본문으로 건너뛰기</a>
+<nav class="nav"><div class="wrap nav-in">
+    <a class="brand" href="index.html" aria-label="AWSops"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#14130F"/><g stroke="#5F5A4D" stroke-width="1.8"><line x1="9" y1="23" x2="16" y2="12"/><line x1="16" y1="12" x2="24" y2="20"/><line x1="9" y1="23" x2="24" y2="20"/></g><circle cx="9" cy="23" r="3.2" fill="#FAF9F5"/><circle cx="24" cy="20" r="3.2" fill="#FAF9F5"/><circle cx="16" cy="12" r="5.4" fill="#D9775733"/><circle cx="16" cy="12" r="3.6" fill="#D97757"/></svg><b>AWSops</b><span class="mono">ops dashboard</span></a>
+    <div class="nav-links">
+      <a href="index.html">홈</a>
+      <a href="architecture.html">아키텍처</a>
+      <a href="guide.html" aria-current="page">기능 가이드</a>
+      <a href="ai.html">AI & AgentCore</a>
+      <a href="operations.html">배포·운영</a>
+      <a href="https://github.com/Atom-oh/awsops" class="nav-cta">GitHub →</a>
+    </div>
+  </div></nav>
+<main id="main" class="wrap doc">
+<header class="doc-hero reveal">
+  <div class="crumb"><a href="index.html">홈</a> · 기능 가이드</div>
+  <h1>AWSops로 무엇을 <em>할 수 있나</em></h1>
+  <p class="lead">43개 운영 페이지, 전부 읽기 전용. 라이브 모니터링부터 토폴로지 그래프, AI 진단 리포트, 자연어 데이터소스 탐색까지 — 운영 의사결정에 필요한 컨텍스트를 한 곳에서 봅니다.</p>
+</header>
+
+<section class="doc-sec reveal">
+  <h2>둘러보기 & 네비게이션</h2>
+  <p>AWSops는 <strong>43개 운영 페이지</strong>로 구성된 읽기 전용 대시보드입니다. 리소스 모니터링, 인벤토리, 비용, EKS, 토폴로지, AI 진단, 어시스턴트, 데이터소스 탐색까지 운영 관점에서 자주 필요한 화면을 모았습니다.</p>
+  <div class="callout"><span class="ci">◆</span><p><b>전부 읽기 전용입니다.</b> AWSops는 AWS 리소스를 변경하지 않습니다. 진단과 분석은 제공하되, 실제 조치(remediation)는 운영자의 몫으로 남깁니다.</p></div>
+  <div class="stack">
+    <span class="s"><b>로그인</b> 인앱 로그인</span>
+    <span class="s"><b>테마</b> teal / Cobalt / dark console</span>
+    <span class="s"><b>화면</b> 모바일 반응형</span>
+    <span class="s"><b>계정</b> 멀티계정 전환·통합 뷰</span>
+  </div>
+</section>
+
+<section class="doc-sec reveal">
+  <h2>리소스 모니터링 & 인벤토리</h2>
+  <h3>라이브 리소스 모니터링</h3>
+  <p>주요 AWS 서비스의 상태를 라이브 차트로 봅니다. 지원 대상:</p>
+  <div class="stack">
+    <span class="s">EC2</span><span class="s">Lambda</span><span class="s">ECS/ECR</span>
+    <span class="s">EKS</span><span class="s">VPC</span><span class="s">CloudFront</span>
+    <span class="s">WAF</span><span class="s">EBS</span><span class="s">S3</span>
+    <span class="s">RDS</span><span class="s">DynamoDB</span><span class="s">MSK</span><span class="s">OpenSearch</span>
+  </div>
+  <p>EKS는 파드 · 노드 · 디플로이먼트 · 서비스 수준까지 들여다봅니다.</p>
+
+  <h3>인벤토리</h3>
+  <p>플래그로 켜는 Steampipe 동기화가 인벤토리를 Aurora에 적재합니다. 약 <strong>22개 리소스 유형</strong>을 레지스트리 기반의 제너릭 <code>/inventory/[type]</code> 페이지로 일관되게 탐색하며, 페이지마다 미니 대시보드(KPI · 도넛 · 필터)를 제공합니다.</p>
+  <dl class="kv">
+    <dt>동기화</dt><dd>flag-gated Steampipe → Aurora</dd>
+    <dt>유형 수</dt><dd>약 22종 리소스</dd>
+    <dt>페이지</dt><dd>레지스트리 구동 <code>/inventory/[type]</code></dd>
+    <dt>미니 대시보드</dt><dd>KPI + 도넛 + 필터</dd>
+  </dl>
+</section>
+
+<section class="doc-sec reveal">
+  <h2>비용 & FinOps</h2>
+  <p>비용을 여러 각도에서 분해합니다. Cost Explorer 데이터, 컨테이너 비용, 리소스 인벤토리 추세, 서비스별 드릴다운을 한 흐름에서 다룹니다.</p>
+  <div class="feat-grid">
+    <div class="feat"><h3>Cost Explorer</h3><p>계정·서비스 단위 비용 추세를 차트로 확인합니다.</p><span class="tag">비용</span></div>
+    <div class="feat"><h3>컨테이너 비용</h3><p>Fargate 가격 기반, EKS는 OpenCost로 산출합니다.</p><span class="tag">컨테이너</span></div>
+    <div class="feat"><h3>인벤토리 추세</h3><p>리소스 인벤토리 변화를 비용 관점에서 봅니다.</p><span class="tag">추세</span></div>
+    <div class="feat"><h3>서비스 드릴다운</h3><p>서비스별로 비용을 파고들어 분석합니다.</p><span class="tag">드릴다운</span></div>
+  </div>
+</section>
+
+<section class="doc-sec reveal">
+  <h2>EKS — 온보딩 + 인클러스터 조회</h2>
+  <p>클러스터를 온보딩하면 웹 BFF에서 직접 인클러스터 리소스를 읽습니다.</p>
+  <ol class="steps">
+    <li>클러스터에 <strong>Access Entry + AmazonEKSViewPolicy</strong>를 부여해 온보딩합니다.</li>
+    <li>태스크 롤의 <strong>presigned-STS 토큰</strong>으로 BFF가 인클러스터에 직접 접속합니다.</li>
+    <li>노드 · 파드 · 디플로이먼트 · 서비스를 읽기 전용으로 조회합니다.</li>
+  </ol>
+  <div class="callout"><span class="ci">◆</span><p><b>K8sGPT 스타일 진단 레이어(ADR-035)</b>도 읽기 전용으로 제공됩니다. 클러스터 상태를 진단하되 변경하지 않습니다.</p></div>
+</section>
+
+<section class="doc-sec reveal">
+  <h2>토폴로지 그래프</h2>
+  <p>React Flow 기반 맵으로 리소스 연결을 시각화합니다. <code>CloudFront → Load Balancer → Target Group → DB</code> 흐름을 그래프로 그리고, 재귀 CTE 탐색으로 다운스트림 · 업스트림 · 블래스트 반경(blast-radius)을 따라갑니다.</p>
+  <div class="codeblock">CloudFront → Load Balancer → Target Group → DB   <span class="c"># 리소스 연결 그래프</span></div>
+  <p>상세 패널에서 <strong>"이 리소스에 대해 AI에게 물어보기"</strong> 브릿지로 어시스턴트로 바로 넘어갈 수 있습니다.</p>
+  <div class="stack">
+    <span class="s"><b>다운스트림</b> 하위 의존</span>
+    <span class="s"><b>업스트림</b> 상위 의존</span>
+    <span class="s"><b>블래스트 반경</b> 영향 범위</span>
+  </div>
+</section>
+
+<section class="doc-sec reveal">
+  <h2>AI 진단 리포트</h2>
+  <p>Amazon Bedrock 기반 <strong>15개 섹션</strong> 리포트를 생성합니다(기본 8개 섹션 + deep 전용 6개 섹션). 모든 진단은 읽기 전용이며, 조치는 운영자가 수행합니다.</p>
+  <dl class="kv">
+    <dt>섹션</dt><dd>15개 (base 8 + deep-only 6)</dd>
+    <dt>Deep 티어</dt><dd>Sonnet 기본, Opus 선택</dd>
+    <dt>내보내기</dt><dd>DOCX / Markdown / PDF</dd>
+    <dt>자동 진단</dt><dd>알람 트리거 자동 진단</dd>
+    <dt>알림</dt><dd>Slack 통지</dd>
+    <dt>용량 분석</dt><dd>이벤트 대비 읽기 전용 분석</dd>
+  </dl>
+  <div class="callout ok"><span class="ci">◆</span><p><b>진단은 읽기 전용입니다.</b> 리포트는 원인과 영향 분석을 제공하고, 실제 조치(remediation)는 운영자에게 남깁니다.</p></div>
+</section>
+
+<section class="doc-sec reveal">
+  <h2>AI 어시스턴트 (챗)</h2>
+  <p>하이브리드 라우팅(정규식 fast-path + Haiku 분류기 + 프롬프트 캐싱)으로 질문을 처리합니다. 분류기가 <strong>1–3개 게이트웨이</strong>를 반환하면 병렬로 조회한 뒤 종합해 답합니다.</p>
+  <div class="pillars">
+    <article class="pillar"><div class="pn">01</div><h3>하이브리드 라우팅</h3><p>정규식 fast-path + Haiku 분류기 + 프롬프트 캐싱으로 1–3개 게이트웨이를 선택합니다.</p></article>
+    <article class="pillar"><div class="pn">02</div><h3>병렬 조회·종합</h3><p>선택된 게이트웨이를 병렬로 질의한 뒤 결과를 합쳐 답변합니다.</p></article>
+    <article class="pillar"><div class="pn">03</div><h3>스트리밍 & 영속</h3><p>SSE 스트리밍 응답, Aurora 기반 스레드 영속, <code>/assistant</code> 전체 페이지를 제공합니다.</p></article>
+  </div>
+  <p>분석 작업에는 <strong>Python Code Interpreter</strong>를 활용할 수 있습니다.</p>
+</section>
+
+<section class="doc-sec reveal">
+  <h2>데이터소스 Explore</h2>
+  <p><code>/datasources</code>에서 연결된 데이터소스를 선택해 네이티브 언어로 직접 질의하거나, 자연어로 설명하면 AI가 쿼리를 생성합니다. 결과는 차트 또는 테이블로 렌더링되며, 전 과정이 읽기 전용입니다.</p>
+  <div class="stack">
+    <span class="s"><b>PromQL</b> 메트릭</span>
+    <span class="s"><b>LogQL</b> 로그</span>
+    <span class="s"><b>TraceQL</b> 트레이스</span>
+    <span class="s"><b>SQL</b> 관계형</span>
+  </div>
+  <p><span class="pill">네이티브 쿼리</span> <span class="pill orange">자연어 → 쿼리 생성</span> <span class="chip">차트/테이블 렌더</span></p>
+</section>
+
+<section class="doc-sec reveal">
+  <h2>컴플라이언스 & 멀티계정</h2>
+  <h3>CIS 컴플라이언스</h3>
+  <p>Powerpipe 벤치마크로 <strong>CIS v1.5–v4.0</strong>를 평가합니다. <strong>400개 이상의 통제(control)</strong>를 점검합니다.</p>
+  <dl class="kv">
+    <dt>벤치마크</dt><dd>Powerpipe</dd>
+    <dt>표준</dt><dd>CIS v1.5–v4.0</dd>
+    <dt>통제 수</dt><dd>400+</dd>
+  </dl>
+  <h3>멀티계정</h3>
+  <p>계정 간 전환하거나, 통합 롤업(roll-up) 뷰로 여러 계정을 한눈에 봅니다.</p>
+</section>
+
+<div class="next-cards">
+  <a class="next-card" href="architecture.html"><span class="nk">아키텍처</span><h4>어떻게 만들어졌나</h4><p>비공개 엣지, Aurora 영속 상태, OOM-안전 비동기 워커 티어의 구조를 봅니다.</p></a>
+  <a class="next-card" href="ai.html"><span class="nk">AI</span><h4>진단과 어시스턴트의 내부</h4><p>섹션 게이트웨이, 하이브리드 라우팅, Bedrock 리포트의 동작 원리를 설명합니다.</p></a>
+  <a class="next-card" href="operations.html"><span class="nk">운영</span><h4>읽기 전용 운영 원칙</h4><p>거버넌스와 안전장치, 멀티계정 운영 방식을 정리합니다.</p></a>
+</div>
+</main>
+
+<footer>
+  <div class="wrap foot-in">
+    <div class="brand" style="gap:9px"><svg class="mark" style="width:24px;height:24px" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#14130F"/><g stroke="#5F5A4D" stroke-width="1.8"><line x1="9" y1="23" x2="16" y2="12"/><line x1="16" y1="12" x2="24" y2="20"/><line x1="9" y1="23" x2="24" y2="20"/></g><circle cx="9" cy="23" r="3.2" fill="#FAF9F5"/><circle cx="24" cy="20" r="3.2" fill="#FAF9F5"/><circle cx="16" cy="12" r="5.4" fill="#D9775733"/><circle cx="16" cy="12" r="3.6" fill="#D97757"/></svg>
+      <span>AWSops — AWS · Kubernetes 운영 대시보드</span>
+    </div>
+    <div class="mono">Terraform · ECS Fargate · Aurora · Bedrock AgentCore · read-only ops + AI diagnosis</div>
+  </div>
+</footer>
+<script>
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.querySelectorAll('svg animate, svg animateTransform').forEach(a=>a.remove());
+  }
+  const io=new IntersectionObserver((entries)=>{entries.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12, rootMargin:'0px 0px -8% 0px'});
+  document.querySelectorAll('.reveal:not(.in)').forEach((el)=>io.observe(el));
+</script>
+</body></html>

@@ -12,6 +12,8 @@ import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
 import { currentAccountId, currentAccountAlias } from '@/lib/account';
+import { listConfiguredSchemas } from '@/lib/datasource-schema';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getAgentSpace } from '@/lib/agent-space';
 import { randomUUID } from 'crypto';
 
@@ -28,14 +30,32 @@ function chunk(text: string): string[] {
   return text.match(/\S+\s*|\s+/g) ?? [text];
 }
 
+/** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps). */
+function renderSchemaContext(schemas: { slug: string; kind: string | null; schema: unknown }[]): string {
+  const lines = ['## Datasource schemas (cached) — use these real names when writing queries'];
+  const names = (a: unknown, n: number) =>
+    (Array.isArray(a) ? a : []).slice(0, n).map((x) => (typeof x === 'string' ? x : (x as { name?: string }).name ?? JSON.stringify(x))).join(', ');
+  for (const s of schemas) {
+    const sc = (s.schema || {}) as Record<string, unknown>;
+    const parts: string[] = [];
+    for (const [k, n] of [['metrics', 40], ['labels', 40], ['tags', 40], ['tables', 30], ['domains', 10], ['indices', 30]] as const) {
+      if (Array.isArray(sc[k]) && (sc[k] as unknown[]).length) parts.push(`${k}: ${names(sc[k], n)}`);
+    }
+    lines.push(`- **${s.slug}** (${s.kind ?? ''}): ${parts.join(' | ') || '(empty)'}`);
+  }
+  return lines.join('\n').slice(0, 6000);
+}
+
 export async function POST(request: Request) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
 
   let body: { prompt?: string; messages?: ChatMsg[]; section?: string; switchedFrom?: string; sessionId?: string; threadId?: string };
   try {
-    body = await request.json();
-  } catch {
+    // bound BEFORE parse (App-Router has no default body cap → OOM guard); 512KB covers prompt + thread history
+    body = (await readJsonBounded(request, 512_000)) as typeof body;
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) return json({ status: 'error', message: 'request body too large' }, 413);
     return json({ status: 'error', message: 'invalid JSON' }, 400);
   }
   const prompt = typeof body.prompt === 'string' ? body.prompt : '';
@@ -149,6 +169,17 @@ export async function POST(request: Request) {
     }).catch(() => { /* store is never-throws by contract; belt-and-suspenders (P2 gate) */ });
   };
 
+  // Inject cached datasource schemas (the agent reads the cache) for the observability gateways —
+  // for the single-route spec AND any monitoring/data gateway in a fan-out.
+  const obs = (g: string) => g === 'monitoring' || g === 'data';
+  let datasourceSchemaContext: string | undefined;
+  if (obs(spec.gateway) || (doFanout && fanGateways.some(obs))) {
+    try {
+      const schemas = await listConfiguredSchemas(accountId);
+      if (schemas.length) datasourceSchemaContext = renderSchemaContext(schemas);
+    } catch { /* schema cache is best-effort; the agent still works (can call discovery tools) without it */ }
+  }
+
   const enc = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -196,7 +227,10 @@ export async function POST(request: Request) {
       if (doFanout) {
         // gate CRITICAL: each gateway gets its OWN built-in invoke input (no shared primary spec).
         const settled = await Promise.allSettled(
-          fanGateways.map((g) => invokeAgent({ gateway: g, messages, sessionId, accountId, accountAlias })),
+          fanGateways.map((g) => invokeAgent({
+            gateway: g, messages, sessionId, accountId, accountAlias,
+            extraContext: obs(g) ? datasourceSchemaContext : undefined, // cached schema reaches fanned monitoring/data agents too
+          })),
         );
         const survivors = settled.flatMap((r, i) =>
           r.status === 'fulfilled' ? [{ gateway: fanGateways[i], text: r.value }] : []);
@@ -238,6 +272,7 @@ export async function POST(request: Request) {
           agentName: spec.agentName, agentVersion: spec.agentVersion, skillHashes: spec.skillHashes,
           accountId, accountAlias,
           integrations: spec.integrations, // ADR-039 P2-infra inc2: live egress-READ MCP connections
+          extraContext: datasourceSchemaContext, // cached datasource schemas → agent reads the cache
         });
       } catch (e) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));

@@ -15,6 +15,42 @@ variable "integrations_enabled" {
   default     = false
 }
 
+variable "opensearch_vpc_enabled" {
+  type        = bool
+  description = "Attach the opensearch-mcp Lambda to the private subnets so it can reach a VPC-only OpenSearch domain. Requires agentcore_enabled. Default false → no-op ($0); off = non-VPC (reaches public-endpoint + IAM domains via sigv4). PERSIST in live terraform.tfvars."
+  default     = false
+}
+
+variable "clickhouse_vpc_enabled" {
+  type        = bool
+  description = "Attach the clickhouse-mcp Lambda to the private subnets so it can reach an in-VPC ClickHouse endpoint. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0); off = non-VPC (reaches a public-auth endpoint). PERSIST in live terraform.tfvars."
+  default     = false
+}
+
+variable "prometheus_vpc_enabled" {
+  type        = bool
+  description = "Attach the prometheus-mcp Lambda to the private subnets so it can reach an in-cluster Prometheus endpoint. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0); off = non-VPC. PERSIST in live terraform.tfvars."
+  default     = false
+}
+
+variable "loki_vpc_enabled" {
+  type        = bool
+  description = "Attach the loki-mcp Lambda to the private subnets so it can reach an in-cluster Loki endpoint. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0); off = non-VPC. PERSIST in live terraform.tfvars."
+  default     = false
+}
+
+variable "tempo_vpc_enabled" {
+  type        = bool
+  description = "Attach the tempo-mcp Lambda to the private subnets so it can reach an in-cluster Tempo endpoint. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0); off = non-VPC. PERSIST in live terraform.tfvars."
+  default     = false
+}
+
+variable "mimir_vpc_enabled" {
+  type        = bool
+  description = "Attach the mimir-mcp Lambda to the private subnets so it can reach an in-cluster Mimir endpoint. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0); off = non-VPC. PERSIST in live terraform.tfvars."
+  default     = false
+}
+
 locals {
   ac_count    = var.agentcore_enabled ? 1 : 0
   integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
@@ -151,6 +187,79 @@ resource "aws_iam_role_policy" "agentcore_integrations" {
         Resource = aws_kms_key.integrations[0].arn
       }
     ]
+  })
+}
+
+# ---- Single integrations credentials secret (DevOps-agent-style credential-write UX).
+# ONE secret holds a JSON map keyed by integration slug (=kind): {"notion":{"token":...}, ...}.
+# The web BFF writes it (PutSecretValue, admin UI); connector Lambdas read map[INTEGRATION_SLUG].
+# DEFAULT aws/secretsmanager key (no custom CMK) → GetSecretValue/PutSecretValue need no
+# kms:Decrypt. TF owns existence only — the VALUE is BFF-managed (no secret_version, no
+# ignore_changes). Clean replacement of the never-deployed per-notion secret. ----
+resource "aws_secretsmanager_secret" "integrations" {
+  count                   = local.integ_count
+  name                    = "ops/${var.project}/integrations/credentials"
+  description             = "Integration credentials map (slug-keyed JSON) for read-tier connectors. Values written by the admin UI."
+  recovery_window_in_days = 7
+}
+
+# Scoped grant on the agent Lambda EXEC role (not the agentcore runtime role) — the role the
+# connector Lambdas run under. GetSecretValue on the exact single secret ARN only.
+resource "aws_iam_role_policy" "agent_lambda_integrations_secret" {
+  count = local.integ_count
+  name  = "${var.project}-agent-lambda-integrations-secret"
+  role  = aws_iam_role.agent_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "IntegrationsSecretRead"
+      Effect   = "Allow"
+      Action   = "secretsmanager:GetSecretValue"
+      Resource = aws_secretsmanager_secret.integrations[0].arn
+    }]
+  })
+}
+
+# OpenSearch read connector (opensearch_mcp.py) — AWS-native, read-only. NOTE: Amazon OpenSearch
+# *managed* domains use the es: IAM prefix (NOT opensearch:, which is Serverless/aoss:). Scoped to
+# HTTP read verbs on domain ARNs + list/describe for endpoint resolution.
+resource "aws_iam_role_policy" "agent_lambda_opensearch" {
+  count = local.ac_count
+  name  = "${var.project}-agent-lambda-opensearch"
+  role  = aws_iam_role.agent_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "OpenSearchHttpRead"
+        Effect   = "Allow"
+        Action   = ["es:ESHttpGet", "es:ESHttpPost"]
+        Resource = "arn:aws:es:${var.region}:${data.aws_caller_identity.current.account_id}:domain/*/*"
+      },
+      {
+        Sid      = "OpenSearchDescribe"
+        Effect   = "Allow"
+        Action   = ["es:ListDomainNames", "es:DescribeDomain", "es:DescribeDomains"]
+        Resource = "*"
+      },
+    ]
+  })
+}
+
+# ENI perms for the opensearch-mcp Lambda ONLY when it is VPC-attached (opensearch_vpc_enabled).
+# Compound-gated: references agent_lambda[0], which exists only when agentcore_enabled → guard both.
+resource "aws_iam_role_policy" "agent_lambda_vpc_eni" {
+  count = var.agentcore_enabled && (var.opensearch_vpc_enabled || var.clickhouse_vpc_enabled || var.prometheus_vpc_enabled || var.loki_vpc_enabled || var.tempo_vpc_enabled || var.mimir_vpc_enabled) ? 1 : 0
+  name  = "${var.project}-agent-lambda-vpc-eni"
+  role  = aws_iam_role.agent_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "LambdaVpcEni"
+      Effect   = "Allow"
+      Action   = ["ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DeleteNetworkInterface"]
+      Resource = "*"
+    }]
   })
 }
 
@@ -389,7 +498,10 @@ resource "aws_iam_role_policy" "agent_lambda_read" {
 
 # The slice. key → source file (handler is "<module>.lambda_handler"). cross_account.py is bundled.
 locals {
-  agent_lambdas = var.agentcore_enabled ? {
+  # AWS MCP slice gated on agentcore_enabled; the Notion external-integration connector
+  # is gated on integrations_enabled (one unit with its secret + IAM below). integ_count
+  # requires agentcore_enabled, so aws_iam_role.agent_lambda[0] is always present here.
+  agent_lambdas = merge(var.agentcore_enabled ? {
     "iam-mcp"        = { file = "aws_iam_mcp.py", handler = "aws_iam_mcp.lambda_handler" }
     "flow-monitor"   = { file = "flowmonitor.py", handler = "flowmonitor.lambda_handler" }
     "network-mcp"    = { file = "network_mcp.py", handler = "network_mcp.lambda_handler" }
@@ -406,7 +518,15 @@ locals {
     "iac-mcp"        = { file = "aws_iac_mcp.py", handler = "aws_iac_mcp.lambda_handler" }
     "terraform-mcp"  = { file = "aws_terraform_mcp.py", handler = "aws_terraform_mcp.lambda_handler" }
     "aws-knowledge"  = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
-  } : {}
+    "opensearch-mcp" = { file = "opensearch_mcp.py", handler = "opensearch_mcp.lambda_handler" }
+    } : {}, local.integ_count > 0 ? {
+    "notion-mcp"     = { file = "notion_mcp.py", handler = "notion_mcp.lambda_handler" }
+    "clickhouse-mcp" = { file = "clickhouse_mcp.py", handler = "clickhouse_mcp.lambda_handler" }
+    "prometheus-mcp" = { file = "prometheus_mcp.py", handler = "prometheus_mcp.lambda_handler" }
+    "loki-mcp"       = { file = "loki_mcp.py", handler = "loki_mcp.lambda_handler" }
+    "tempo-mcp"      = { file = "tempo_mcp.py", handler = "tempo_mcp.lambda_handler" }
+    "mimir-mcp"      = { file = "mimir_mcp.py", handler = "mimir_mcp.lambda_handler" }
+  } : {})
 }
 
 data "archive_file" "agent" {
@@ -436,12 +556,30 @@ resource "aws_lambda_function" "agent" {
   architectures    = ["arm64"]
 
   environment {
-    variables = {
+    variables = merge({
       # Same-account access uses the Lambda's own execution role; AssumeRole is
       # only for *other* onboarded accounts. Lets cross_account.get_role_arn skip
       # a self-assume of AWSopsReadOnlyRole (which exists only in target accounts,
       # never the host) — otherwise host-account tool calls fail with AccessDenied.
       AWSOPS_HOST_ACCOUNT_ID = data.aws_caller_identity.current.account_id
+      },
+      # Connectors that read the single integrations secret get its exact TF-created name (no drift
+      # from the Python default). notion-mcp also pins INTEGRATION_SLUG; clickhouse-mcp uses a fixed
+      # SLUG in code. Both exist only when integ_count>0 so integrations[0] is safe.
+      contains(["notion-mcp", "clickhouse-mcp", "prometheus-mcp", "loki-mcp", "tempo-mcp", "mimir-mcp"], each.key) ? merge(
+        { INTEGRATIONS_SECRET_NAME = aws_secretsmanager_secret.integrations[0].name },
+        each.key == "notion-mcp" ? { INTEGRATION_SLUG = "notion" } : {}
+      ) : {}
+    )
+  }
+
+  # VPC-only OpenSearch domains: attach ONLY the opensearch-mcp Lambda to the private subnets when
+  # opensearch_vpc_enabled. Off (default) → no vpc_config → non-VPC (reaches public+IAM domains).
+  dynamic "vpc_config" {
+    for_each = ((each.key == "opensearch-mcp" && var.opensearch_vpc_enabled) || (each.key == "clickhouse-mcp" && var.clickhouse_vpc_enabled) || (each.key == "prometheus-mcp" && var.prometheus_vpc_enabled) || (each.key == "loki-mcp" && var.loki_vpc_enabled) || (each.key == "tempo-mcp" && var.tempo_vpc_enabled) || (each.key == "mimir-mcp" && var.mimir_vpc_enabled)) ? [1] : []
+    content {
+      subnet_ids         = local.private_subnet_ids
+      security_group_ids = [aws_security_group.service.id]
     }
   }
 }

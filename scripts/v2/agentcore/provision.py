@@ -116,7 +116,9 @@ def ensure_targets(ctrl, ac, gw_ids):
             continue
         lambda_arn = ac["lambda_arns"].get(spec["lambda_key"])
         if not lambda_arn:
-            log(f"target:{tname}", "ERR", f"lambda {spec['lambda_key']} not in tf output")
+            # Flag-gated targets (e.g. notion-mcp when integrations_enabled=false) have no Lambda
+            # in the tf output. That is expected, not an error — SKIP so `make agentcore` exits 0.
+            log(f"target:{tname}", "SKIP", f"lambda {spec['lambda_key']} not in tf output (flag off?)")
             continue
         tools = _inject_account(spec["tools"])
         cfg = {"mcp": {"lambda": {"lambdaArn": lambda_arn, "toolSchema": {"inlinePayload": tools}}}}

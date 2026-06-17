@@ -104,3 +104,34 @@ def test_get_client_other_account_does_assume(monkeypatch):
     role_arn = ca.get_role_arn("222222222222")
     ca.get_client("cloudwatch", "ap-northeast-2", role_arn)
     assert seen["role_arn"] == "arn:aws:iam::222222222222:role/AWSopsReadOnlyRole"
+
+
+# ---- get_credentials (sigv4 signing creds for OpenSearch) ----
+def test_get_credentials_host_uses_session_not_assume(monkeypatch):
+    # Host account → default provider chain (the Lambda's own creds), never a self-assume.
+    sentinel = object()
+
+    class _Sess:
+        def get_credentials(self):
+            return sentinel
+
+    monkeypatch.setattr(ca.boto3, "Session", lambda: _Sess())
+
+    def _boom(*a, **k):
+        raise AssertionError("_assume_role must not be called for the host account")
+
+    monkeypatch.setattr(ca, "_assume_role", _boom)
+    assert ca.get_credentials(HOST) is sentinel
+    assert ca.get_credentials(None) is sentinel
+
+
+def test_get_credentials_other_builds_credentials(monkeypatch):
+    monkeypatch.setattr(ca, "_assume_role", lambda role_arn, suffix=None: {
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "secretkey",
+        "aws_session_token": "tok",
+    })
+    c = ca.get_credentials("222222222222")
+    assert c.access_key == "AKIAEXAMPLE"
+    assert c.secret_key == "secretkey"
+    assert c.token == "tok"

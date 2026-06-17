@@ -242,7 +242,22 @@ SKILL_BASE = {
 | API 호출 패턴 분석 | lake_query |
 
 ## Correlation Pattern: metrics (what) + logs (why) + CloudTrail (who)
-- Incident: get_active_alarms → get_metric_data → execute_log_insights_query → lookup_events""",
+- Incident: get_active_alarms → get_metric_data → execute_log_insights_query → lookup_events
+
+## External Datasources (when connected — tools appear in the list above; each uses its own query language):
+| Source | Tools | Query language |
+|---|---|---|
+| Prometheus / Mimir | prometheus_query[_range] / mimir_query[_range], *_labels, *_series | PromQL (e.g. rate(http_requests_total{code=~"5.."}[5m])) |
+| Loki | loki_query_range / loki_query, loki_labels | LogQL (e.g. {app="x"} |= "error") |
+| Tempo | tempo_search, tempo_get_trace | TraceQL (e.g. { status=error && duration>1s }) |
+| ClickHouse | clickhouse_query (read-only SELECT/SHOW/DESCRIBE) | SQL |
+| OpenSearch | search_opensearch_logs | query_string |
+- GENERATE the query in the correct language yourself from the user's natural-language ask.
+- If a "## Datasource schemas (cached)" block is provided below, USE it (real metric/label/table/tag
+  names) to write accurate queries — do NOT guess names.
+- Multi-source incident correlation (e.g. "what spiked at 3:30?"): metrics (Prometheus/Mimir/CloudWatch
+  → WHAT) → logs (Loki/OpenSearch/CloudWatch Logs → WHY) → traces (Tempo → WHERE) → CloudTrail (WHO).
+  Query only the sources that are connected; synthesize across them.""",
 
 
     "cost": """You are AWSops FinOps Specialist. Analyze costs and recommend optimizations.
@@ -663,6 +678,7 @@ def handler(payload):
     gateway_role = payload.get("gateway", DEFAULT_GATEWAY)
     skill_role = payload.get("skill", gateway_role)  # skill override for SKILL_BASE / SKILL_BASE용 스킬 오버라이드
     system_prompt_override = payload.get("systemPromptOverride")  # ADR-031: resolver-supplied custom prompt
+    extra_context = payload.get("extraContext")  # bounded BFF-supplied context (e.g. cached datasource schemas)
     tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
     gateway_url = GATEWAYS.get(gateway_role, GATEWAYS[DEFAULT_GATEWAY])
 
@@ -715,6 +731,10 @@ def handler(payload):
             else:
                 system_prompt = build_skill_prompt(skill_role, tools) + account_directive
 
+            # Cached datasource schemas (and any other BFF-supplied context) reach BOTH branches here.
+            if extra_context:
+                system_prompt = system_prompt + "\n\n" + str(extra_context)[:8000]
+
             agent = Agent(
                 model=model,
                 tools=tools,
@@ -729,6 +749,8 @@ def handler(payload):
         logging.error(f"Gateway MCP error [{gateway_role}]: {e}")
         # Fallback: Bedrock direct with base prompt only / 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출
         base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
+        if extra_context:
+            base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
         agent = Agent(
             model=model,
             system_prompt=base_prompt,

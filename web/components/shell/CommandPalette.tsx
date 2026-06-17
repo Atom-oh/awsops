@@ -18,6 +18,7 @@ function buildCommands(): Cmd[] {
     { href: '/jobs', label: 'Jobs', hint: '비동기 작업' },
     { href: '/cost', label: 'Cost', hint: 'Cost Explorer' },
     { href: '/bedrock', label: 'Bedrock', hint: '토큰 비용' },
+    { href: '/datasources', label: 'Datasources', hint: 'PromQL/LogQL/SQL 탐색' },
   ];
   const inv: Cmd[] = inventoryGroups().flatMap((g) =>
     g.types.map((t) => ({ href: `/inventory/${t}`, label: INVENTORY_TYPES[t].label, hint: g.group })),

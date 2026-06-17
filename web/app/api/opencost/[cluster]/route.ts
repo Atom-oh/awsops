@@ -2,6 +2,7 @@ import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { isClusterOnboarded } from '@/lib/opencost-allowlist';
 import { getOpencostConfig, upsertOpencostConfig } from '@/lib/opencost-config';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +25,9 @@ export async function PUT(request: Request, { params }: { params: { cluster: str
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
   if (!(await isAdmin(user))) return json({ status: 'error', message: 'admin only' }, 403);
   if (!isClusterOnboarded(params.cluster)) return json({ status: 'error', message: 'unknown cluster' }, 404);
-  const body = (await request.json().catch(() => ({}))) as { chartVersion?: string | null; config?: Record<string, unknown> };
+  let body: { chartVersion?: string | null; config?: Record<string, unknown> } = {};
+  try { body = (await readJsonBounded(request)) as typeof body; } // bound BEFORE parse (OOM guard)
+  catch (e) { if (e instanceof BodyTooLargeError) return json({ status: 'error', message: 'request body too large' }, 413); /* tolerate empty/invalid body */ }
   const ok = await upsertOpencostConfig({
     cluster: params.cluster,
     chartVersion: body.chartVersion ?? null,

@@ -24,6 +24,16 @@ function parseIpv4(host: string): [number, number, number, number] | null {
   return o;
 }
 
+/** Decode a 6to4 IPv6 literal (2002:WWXX:YYZZ::/16) to its embedded IPv4 WW.XX.YY.ZZ, else null.
+ *  Mirrors datasource_http `_ip_always_blocked`'s `sixtofour` normalization so a 6to4-wrapped
+ *  metadata/loopback target (e.g. 2002:a9fe:a9fe:: = 169.254.169.254) can't evade the IPv4 checks. */
+function sixToFour(host: string): string | null {
+  const m = /^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})(?::|$)/i.exec(host);
+  if (!m) return null;
+  const h1 = parseInt(m[1], 16), h2 = parseInt(m[2], 16);
+  return `${(h1 >> 8) & 255}.${h1 & 255}.${(h2 >> 8) & 255}.${h2 & 255}`;
+}
+
 /** True for a LITERAL private/link-local/loopback/metadata IP (v4 or v6). Non-literal hostnames → false
  *  (their resolution is deferred to connection time, P2-infra). */
 export function isBlockedHost(hostOrIp: string): boolean {
@@ -38,6 +48,8 @@ export function isBlockedHost(hostOrIp: string): boolean {
     // IPv4-mapped IPv6 (::ffff:a.b.c.d)
     const mapped = /::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(host);
     if (mapped) return isBlockedHost(mapped[1]);
+    const s2 = sixToFour(host);
+    if (s2) return isBlockedHost(s2);                                 // 6to4 (2002::/16) → embedded IPv4
   }
   return false;
 }
@@ -50,5 +62,50 @@ export function assertEgressEndpointAllowed(urlString: string, opts: { allowPriv
   if (url.protocol !== 'https:') throw new Error('endpoint must use https');
   if (isBlockedHost(url.hostname) && !opts.allowPrivate) {
     throw new Error(`endpoint host ${url.hostname} is a private/metadata address; enable allowPrivateDatasource for this account to permit it`);
+  }
+}
+
+/** True for a LITERAL ALWAYS-BLOCKED IP — metadata / loopback / link-local / multicast / unspecified /
+ *  broadcast — i.e. blocked even for datasources (which otherwise ALLOW private RFC1918/ULA). Mirrors
+ *  agent.py `_ip_always_blocked`. RFC1918 (10/172.16/192.168) and ULA fc00::/7 are NOT blocked here
+ *  (in-cluster datasources are the intended target); the metadata IPv6 fd00:ec2::254 IS blocked. */
+export function isAlwaysBlockedHost(hostOrIp: string): boolean {
+  const host = hostOrIp.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  const v4 = parseIpv4(host);
+  if (v4) {
+    const [a, b] = v4;
+    return (
+      a === 127 ||                       // loopback
+      (a === 169 && b === 254) ||        // link-local incl. 169.254.169.254 metadata
+      (a >= 224 && a <= 239) ||          // multicast
+      a === 0 ||                         // unspecified/this-network
+      v4.join('.') === '255.255.255.255' // broadcast
+    );
+  }
+  if (host.includes(':')) {
+    if (host === '::1' || host === '0:0:0:0:0:0:0:1' || host === '::') return true; // loopback / unspecified
+    if (host === 'fd00:ec2::254') return true;                                       // IPv6 IMDS metadata
+    if (/^fe[89ab][0-9a-f]*:/.test(host)) return true;                               // fe80::/10 link-local
+    if (/^ff[0-9a-f]{2}:/.test(host)) return true;                                   // ff00::/8 multicast
+    const mapped = /::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(host);
+    if (mapped) return isAlwaysBlockedHost(mapped[1]);
+    const s2 = sixToFour(host);
+    if (s2) return isAlwaysBlockedHost(s2);                           // 6to4 (2002::/16) → embedded IPv4
+  }
+  return false;
+}
+
+/** Throw if a user-supplied DATASOURCE endpoint (ClickHouse/Prometheus/Loki/…) is unsafe: only
+ *  http/https schemes; a literal ALWAYS-BLOCKED host (metadata/loopback/link-local/multicast) is
+ *  rejected. Private RFC1918/ULA is ALLOWED (in-cluster datasources). Non-literal hostnames pass the
+ *  registration guard and are re-checked at connection time by the connector Lambda (datasource_http). */
+export function assertDatasourceEndpointAllowed(urlString: string): void {
+  let url: URL;
+  try { url = new URL(urlString); } catch { throw new Error('endpoint must be a valid URL'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`endpoint scheme ${url.protocol} not allowed (http/https only)`);
+  }
+  if (isAlwaysBlockedHost(url.hostname)) {
+    throw new Error(`endpoint host ${url.hostname} is a metadata/loopback/link-local address (blocked)`);
   }
 }

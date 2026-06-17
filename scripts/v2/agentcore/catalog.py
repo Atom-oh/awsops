@@ -29,7 +29,7 @@ GATEWAY_DESCRIPTIONS = {
     "monitoring": "CloudWatch, CloudTrail (AWS native only)",
     "iac": "CloudFormation, CDK, Terraform",
     "ops": "Steampipe SQL listing/status/docs/inventory",
-    "external-obs": "External Observability (Prometheus/Loki/Tempo/...) — registry built in P3",
+    "external-obs": "External Observability & Integrations (Notion now; Prometheus/Loki/Tempo next)",
 }
 
 
@@ -285,6 +285,98 @@ TARGETS = {
             {"name": "recommend", "description": "Doc recommendations", "inputSchema": {"type": "object", "properties": {"url": _p("string", "URL")}, "required": ["url"]}},
             {"name": "list_regions", "description": "List regions", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "get_regional_availability", "description": "Regional availability", "inputSchema": {"type": "object", "properties": {"resource_type": _p("string", "product/api/cfn")}, "required": ["resource_type"]}},
+        ],
+    },
+    # First concrete external integration (read-only knowledge) on the M1 gateway-target
+    # pattern. Lambda gated on integrations_enabled in ai.tf; provision SKIPs when absent.
+    "notion-mcp-target": {
+        "gateway": "external-obs",
+        "lambda_key": "notion-mcp",
+        "description": "Notion read-only — search, fetch page, query database (3 tools)",
+        "tools": [
+            {"name": "notion_search", "description": "Search Notion pages and databases by text", "inputSchema": {"type": "object", "properties": {"query": _p("string", "Search text"), "page_size": _p("string", "Max results (<=25)")}, "required": ["query"]}},
+            {"name": "notion_fetch_page", "description": "Fetch a Notion page's metadata and (bounded) block content", "inputSchema": {"type": "object", "properties": {"page_id": _p("string", "Page ID"), "page_size": _p("string", "Max blocks (<=25)")}, "required": ["page_id"]}},
+            {"name": "notion_query_database", "description": "Query rows of a Notion database", "inputSchema": {"type": "object", "properties": {"database_id": _p("string", "Database ID"), "page_size": _p("string", "Max rows (<=25)")}, "required": ["database_id"]}},
+        ],
+    },
+    # AWS-native OpenSearch log query (sigv4 es) — first log source for incident triage. monitoring
+    # gateway, co-located with the CloudWatch log tools so one agent can correlate both.
+    "opensearch-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "opensearch-mcp",
+        "description": "OpenSearch read-only — list domains, time-bounded log search, cat indices (3 tools)",
+        "tools": [
+            {"name": "opensearch_schema", "description": "Introspect domains + indices (cached)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "list_opensearch_domains", "description": "List OpenSearch domains and their endpoints", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "search_opensearch_logs", "description": "Search a domain's logs by time range and query string", "inputSchema": {"type": "object", "properties": {"domain": _p("string", "Domain name"), "query": _p("string", "query_string (e.g. ERROR)"), "start": _p("string", "Window start: 1h/30m/2d or ISO (default now-1h)"), "end": _p("string", "Window end (ISO, optional)"), "index": _p("string", "Index or _all"), "size": _p("string", "Max hits (<=50)"), "time_field": _p("string", "Time field (default @timestamp)")}, "required": ["domain"]}},
+            {"name": "opensearch_indices", "description": "List indices (_cat/indices) of a domain", "inputSchema": {"type": "object", "properties": {"domain": _p("string", "Domain name")}, "required": ["domain"]}},
+        ],
+    },
+    # First of the v1 datasource family (user-endpoint + SQL). data gateway. Read-only SQL guard +
+    # table-function SSRF block in the Lambda; credential (endpoint+user/pass) via the Connectors UI.
+    "clickhouse-mcp-target": {
+        "gateway": "data",
+        "lambda_key": "clickhouse-mcp",
+        "description": "ClickHouse read-only — SQL query, list tables, describe (3 tools)",
+        "tools": [
+            {"name": "clickhouse_schema", "description": "Introspect tables + columns (cached for query generation)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "clickhouse_query", "description": "Run a read-only SQL query (SELECT/SHOW/DESCRIBE) against the connected ClickHouse", "inputSchema": {"type": "object", "properties": {"sql": _p("string", "Read-only SQL"), "max_rows": _p("string", "Max rows (<=1000)")}, "required": ["sql"]}},
+            {"name": "clickhouse_tables", "description": "List tables (SHOW TABLES)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "clickhouse_describe", "description": "Describe a table's columns", "inputSchema": {"type": "object", "properties": {"table": _p("string", "Table name")}, "required": ["table"]}},
+        ],
+    },
+    # Prometheus datasource (v1 family #2) — read-only PromQL. monitoring gateway (with CloudWatch +
+    # OpenSearch). User-supplied endpoint via the Connectors UI; SSRF-guarded; read-only by construction.
+    "prometheus-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "prometheus-mcp",
+        "description": "Prometheus read-only — PromQL instant/range query, labels, series (4 tools)",
+        "tools": [
+            {"name": "prometheus_schema", "description": "Introspect metric + label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "prometheus_query", "description": "Instant PromQL query at a single time", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time: unix/ISO (default now)")}, "required": ["query"]}},
+            {"name": "prometheus_query_range", "description": "Range PromQL query over a time window", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix/ISO (default now-1h)"), "end": _p("string", "unix/ISO (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
+            {"name": "prometheus_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "prometheus_series", "description": "Find series matching a selector", "inputSchema": {"type": "object", "properties": {"match": _p("string", "Series selector e.g. up{job=\"x\"}")}, "required": ["match"]}},
+        ],
+    },
+    # Loki datasource (v1 family #3) — read-only LogQL. monitoring gateway. User-supplied endpoint via
+    # Connectors UI; SSRF-guarded; ns timestamps + optional X-Scope-OrgID multi-tenant.
+    "loki-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "loki-mcp",
+        "description": "Loki read-only — LogQL range/instant query, labels, label values (4 tools)",
+        "tools": [
+            {"name": "loki_schema", "description": "Introspect label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "loki_query_range", "description": "Range LogQL query over a time window (logs/metrics)", "inputSchema": {"type": "object", "properties": {"query": _p("string", "LogQL"), "start": _p("string", "1h/30m or unix/ISO (default now-1h)"), "end": _p("string", "unix/ISO (default now)"), "limit": _p("string", "Max entries (default 100)"), "direction": _p("string", "forward|backward (default backward)")}, "required": ["query"]}},
+            {"name": "loki_query", "description": "Instant LogQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "LogQL"), "time": _p("string", "Eval time unix/ISO (default now)"), "limit": _p("string", "Max entries (default 100)")}, "required": ["query"]}},
+            {"name": "loki_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "loki_label_values", "description": "List values of a label", "inputSchema": {"type": "object", "properties": {"label": _p("string", "Label name")}, "required": ["label"]}},
+        ],
+    },
+    # Tempo datasource (v1 family #4) — read-only TraceQL. monitoring gateway.
+    "tempo-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "tempo-mcp",
+        "description": "Tempo read-only — TraceQL search, get trace, tags, tag values (4 tools)",
+        "tools": [
+            {"name": "tempo_schema", "description": "Introspect tag names (cached)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "tempo_search", "description": "Search traces by TraceQL over a time window", "inputSchema": {"type": "object", "properties": {"query": _p("string", "TraceQL"), "start": _p("string", "1h/30m or unix sec (default now-1h)"), "end": _p("string", "unix sec (default now)"), "limit": _p("string", "Max traces")}, "required": ["query"]}},
+            {"name": "tempo_get_trace", "description": "Fetch a full trace by hex trace ID", "inputSchema": {"type": "object", "properties": {"trace_id": _p("string", "Hex trace ID")}, "required": ["trace_id"]}},
+            {"name": "tempo_search_tags", "description": "List searchable tag names", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "tempo_tag_values", "description": "List values of a tag", "inputSchema": {"type": "object", "properties": {"tag": _p("string", "Tag name")}, "required": ["tag"]}},
+        ],
+    },
+    # Mimir datasource (v1 family #5 final) — read-only PromQL (Prometheus-compatible, multi-tenant). monitoring.
+    "mimir-mcp-target": {
+        "gateway": "monitoring",
+        "lambda_key": "mimir-mcp",
+        "description": "Mimir read-only — PromQL instant/range, labels, series (4 tools)",
+        "tools": [
+            {"name": "mimir_schema", "description": "Introspect metric + label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "mimir_query", "description": "Instant PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time unix/ISO (default now)")}, "required": ["query"]}},
+            {"name": "mimir_query_range", "description": "Range PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix (default now-1h)"), "end": _p("string", "unix (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
+            {"name": "mimir_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "mimir_series", "description": "Find series matching a selector", "inputSchema": {"type": "object", "properties": {"match": _p("string", "Series selector")}, "required": ["match"]}},
         ],
     },
 }
