@@ -42,7 +42,10 @@ export function traversalSql(dir: 'down' | 'up'): string {
            GROUP BY node ORDER BY min(depth), node`;
 }
 
-const clampDepth = (d?: number): number => Math.min(MAX_DEPTH, Math.max(1, Math.floor(d ?? MAX_DEPTH)));
+const clampDepth = (d?: number): number => {
+  const n = Math.floor(d ?? MAX_DEPTH);
+  return Number.isFinite(n) ? Math.min(MAX_DEPTH, Math.max(1, n)) : MAX_DEPTH; // NaN/Infinity → MAX_DEPTH
+};
 
 export async function downstream(pool: Pool, id: string, opts?: { cls?: string; depth?: number }): Promise<GraphReach[]> {
   const r = await pool.query(traversalSql('down'), [id, opts?.cls ?? 'flow', clampDepth(opts?.depth)]);

@@ -290,8 +290,10 @@ def _fetch_cloudfront_vpc_origins():
         marker = lst.get("NextMarker")
         if not marker:
             break
-    # (b1) vo_id → set(distribution ids) — get_distribution_config DOES expose VpcOriginConfig live
-    dists, marker = {}, None
+    # (b1) vo_id → which distribution ORIGINS use it — get_distribution_config exposes VpcOriginConfig
+    # live. Capture (distribution_id, origin domain) per vo so the topology builder links only the
+    # SPECIFIC origin (not every origin on the distribution → no false edge for a co-resident origin).
+    dists, refs, marker = {}, {}, None
     while True:
         resp = cf.list_distributions(**({"Marker": marker} if marker else {}))
         dl = resp.get("DistributionList", {}) or {}
@@ -303,13 +305,15 @@ def _fetch_cloudfront_vpc_origins():
                     vid = (o.get("VpcOriginConfig") or {}).get("VpcOriginId")
                     if vid:
                         dists.setdefault(vid, set()).add(did)
+                        refs.setdefault(vid, []).append({"distribution_id": did, "domain": o.get("DomainName")})
             except ClientError as e:
                 print(f"get_distribution_config {did} skipped: {e}")  # one bad dist must not blank the type
         marker = dl.get("NextMarker")
         if not marker:
             break
     rows = [{"resource_id": vid, "region": "global", "vpc_origin_id": vid, "name": v["name"],
-             "arn": v["arn"], "status": v["status"], "distribution_ids": sorted(dists.get(vid, []))}
+             "arn": v["arn"], "status": v["status"], "distribution_ids": sorted(dists.get(vid, [])),
+             "origin_refs": refs.get(vid, [])}
             for vid, v in vos.items()]
     return rows, "resource_id", "region"
 

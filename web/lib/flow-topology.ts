@@ -194,12 +194,14 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // falls through to the honest unresolved-origin node (no misleading solid edge). NOTE: VpcOriginConfig
   // is intentionally NOT read from the Steampipe origins jsonb (the SDK omits it); the join is the
   // SDK-sourced distribution_ids membership keyed on the distribution id (= cloudfront resource_id).
-  const voByDistId = new Map<string, string[]>();
+  // keyed by (distribution id | origin domain) so ONLY the actual VPC-origin origin links to the LB —
+  // a co-resident external/custom origin on the same distribution does NOT get a false CF→LB edge.
+  const voByDistDomain = new Map<string, string[]>();
   for (const v of input.cloudfront_vpc_origin ?? []) {
     if (str(v.status) !== 'Deployed' || !v.arn) continue;
-    for (const d of Array.isArray(v.distribution_ids) ? v.distribution_ids : []) {
-      const k = str(d); if (!k) continue;
-      (voByDistId.get(k) ?? voByDistId.set(k, []).get(k)!).push(str(v.arn));
+    for (const ref of arr(v.origin_refs)) {
+      const k = `${str(ref.distribution_id)}|${str(ref.domain)}`;
+      (voByDistDomain.get(k) ?? voByDistDomain.set(k, []).get(k)!).push(str(v.arn));
     }
   }
 
@@ -228,11 +230,12 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   }
 
   // L7 API GW route label: integrationId → route_key(s). route.target = 'integrations/<id>'.
+  // keyed by api_id:integration_id — integration ids are API-scoped, so a bare id can collide across APIs.
   const routeKeyByIntegration = new Map<string, string>();
   for (const r of input.apigatewayv2_route ?? []) {
     const m = str(r.target).match(/^integrations\/(.+)$/);
     if (!m) continue;
-    const id = m[1]; const rk = str(r.route_key);
+    const id = `${str(r.api_id)}:${m[1]}`; const rk = str(r.route_key);
     if (rk) routeKeyByIntegration.set(id, routeKeyByIntegration.has(id) ? `${routeKeyByIntegration.get(id)} | ${rk}` : rk);
   }
 
@@ -277,11 +280,11 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       // through so the origin is still represented as an honest unresolved node, not dropped).
       const apiId = executeApiId(domain);
       if (apiId && apigwIds.has(apiId)) { addEdge(cfId, `apigw:${apiId}`); return; }
-      // CloudFront VPC origin: resolve at the distribution level via the SDK-sourced
-      // cloudfront_vpc_origin (distribution_ids → LB arn). An unmatched, non-S3 origin on a
-      // distribution that uses a VPC origin → CF→LB edge into the already-rendered ALB/NLB.
-      const voArns = voByDistId.get(str(c.resource_id));
-      if (voArns && !s3Bucket(domain)) {
+      // CloudFront VPC origin: this specific origin (distribution id + its domain) → backing ALB/NLB
+      // via the SDK-sourced cloudfront_vpc_origin. Domain-scoped so a co-resident external origin
+      // on the same distribution is NOT mislinked.
+      const voArns = voByDistDomain.get(`${str(c.resource_id)}|${domain}`);
+      if (voArns) {
         let linked = false;
         for (const arn of voArns) { const id = lbByArn.get(arn); if (id) { addEdge(cfId, id); linked = true; } }
         if (linked) return;
@@ -313,7 +316,7 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
     const apiId = str(ig.api_id);
     if (!apigwIds.has(apiId)) continue;
     const apigwNode = `apigw:${apiId}`;
-    const routeKey = routeKeyByIntegration.get(str(ig.resource_id)); // route path(s) → this integration
+    const routeKey = routeKeyByIntegration.get(`${apiId}:${str(ig.resource_id)}`); // route path(s) → this integration
     const uri = str(ig.integration_uri);
     const lArn = lambdaArnFromIntegration(uri);
     if (lArn) {
@@ -364,7 +367,8 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       else if (ttype === 'lambda') { resolved = lambdaByArn.has(targetId) ? 'lambda' : ''; key = `lambda:${targetId}`; mlabel = lambdaByArn.get(targetId) || targetId; groupLabel = mlabel; }
       else if (ttype === 'ip') {
         const r = input.ipResolved?.[targetId] ?? ecsByIp.get(targetId); // EKS (live) then ECS (synced)
-        if (r) { resolved = r.resolved; key = `${r.resolved}:${r.label}`; mlabel = r.label; groupLabel = r.label; meta = r.meta ?? {}; }
+        // group key includes cluster so same-named workloads in different clusters don't merge
+        if (r) { resolved = r.resolved; key = `${r.resolved}:${str(r.meta?.cluster ?? '')}/${r.label}`; mlabel = r.label; groupLabel = r.label; meta = r.meta ?? {}; }
       }
       let g = groups.get(key);
       if (!g) { g = { key, groupLabel, resolved, meta, members: [] }; groups.set(key, g); }
