@@ -241,6 +241,8 @@ resource "aws_ecs_task_definition" "web" {
         { name = "APP_DOMAIN", value = var.domain_name },
         { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
         { name = "INTEGRATIONS_SECRET_NAME", value = "ops/${var.project}/integrations/credentials" },
+        { name = "PROJECT", value = var.project }, # connector-invoke builds ${PROJECT}-agent-<slug>-mcp; must match the IAM resource
+
         { name = "INV_SYNC_FUNCTION", value = var.steampipe_enabled ? "${var.project}-inv-sync" : "" },
         # P3-D: onboarded-cluster allow-list for the in-cluster (K8s) read routes.
         # Static join of the tfvar (no cross-resource ref) — the BFF gates /api/eks/[cluster]/* on this.
