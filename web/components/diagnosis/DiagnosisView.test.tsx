@@ -117,3 +117,66 @@ describe('DiagnosisView — export menu + generation date', () => {
     expect(screen.getByRole('link', { name: /^PDF$/ }).getAttribute('href')).toBe('/api/diagnosis/12/download?format=pdf');
   });
 });
+
+describe('DiagnosisView — title / tags / soft delete', () => {
+  function mockMeta(rows: Array<Record<string, unknown>>, calls: any[]) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      const path = url.replace(/^https?:\/\/[^/]+/, '');
+      if (method === 'GET' && path === '/api/diagnosis') return resp({ reports: rows });
+      if (method === 'GET' && path.startsWith('/api/diagnosis/')) {
+        const id = Number(path.split('/').pop());
+        return resp({ report: rows.find((x) => (x as { id: number }).id === id), markdown: '# ok' });
+      }
+      if ((method === 'PATCH' || method === 'DELETE') && path.startsWith('/api/diagnosis/')) {
+        calls.push({ method, path, body: init?.body ? JSON.parse(String(init.body)) : null });
+        return resp({ ok: true });
+      }
+      return resp({}, 404);
+    }));
+  }
+
+  it('shows the title as the list primary line', async () => {
+    mockMeta([{ id: 3, tier: 'mid', status: 'succeeded', created_at: 't', title: '핵심 리스크: 보안 형상', tags: [], can_edit: false, progress: {} }], []);
+    render(<DiagnosisView />);
+    expect((await screen.findAllByText('핵심 리스크: 보안 형상')).length).toBeGreaterThan(0);
+  });
+
+  it('owner: delete control → confirm → DELETE', async () => {
+    vi.stubGlobal('confirm', () => true);
+    const calls: any[] = [];
+    mockMeta([{ id: 3, tier: 'mid', status: 'succeeded', created_at: 't', title: 't', tags: [], can_edit: true, progress: {} }], calls);
+    render(<DiagnosisView />);
+    fireEvent.click(await screen.findByRole('button', { name: /리포트 삭제/ }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/diagnosis/3')).toBe(true));
+  });
+
+  it('owner: edit title (PATCH) and add a tag (PATCH)', async () => {
+    const calls: any[] = [];
+    mockMeta([{ id: 3, tier: 'mid', status: 'succeeded', created_at: 't', title: 'old', tags: [], can_edit: true, progress: {} }], calls);
+    render(<DiagnosisView />);
+    fireEvent.click(await screen.findByRole('button', { name: /제목 수정/ }));
+    fireEvent.change(screen.getByLabelText('제목'), { target: { value: '새 제목' } });
+    fireEvent.click(screen.getByRole('button', { name: '저장' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PATCH' && c.body.title === '새 제목')).toBe(true));
+    const tagInput = screen.getByLabelText('태그 추가');
+    fireEvent.change(tagInput, { target: { value: '보안' } });
+    fireEvent.keyDown(tagInput, { key: 'Enter' });
+    await waitFor(() => expect(calls.some((c) => c.method === 'PATCH' && Array.isArray(c.body.tags) && c.body.tags.includes('보안'))).toBe(true));
+  });
+
+  it('non-owner: no edit/delete controls', async () => {
+    mockMeta([{ id: 3, tier: 'mid', status: 'succeeded', created_at: 't', title: 'read only', tags: ['x'], can_edit: false, progress: {} }], []);
+    render(<DiagnosisView />);
+    await screen.findByText('read only', { selector: 'h2' });
+    expect(screen.queryByRole('button', { name: /리포트 삭제/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /제목 수정/ })).toBeNull();
+  });
+
+  it('renders a title with markup as escaped text (no XSS)', async () => {
+    mockMeta([{ id: 3, tier: 'mid', status: 'succeeded', created_at: 't', title: '<script>alert(1)</script>', tags: [], can_edit: false, progress: {} }], []);
+    const { container } = render(<DiagnosisView />);
+    expect((await screen.findAllByText('<script>alert(1)</script>')).length).toBeGreaterThan(0);
+    expect(container.querySelector('script')).toBeNull();
+  });
+});

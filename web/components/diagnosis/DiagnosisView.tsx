@@ -16,6 +16,9 @@ interface ReportRow {
   status: string;
   created_at: string;
   model?: string | null;        // deep-tier model (sonnet|opus); shown in the list for deep reports
+  title?: string | null;        // LLM auto key-insight title (editable)
+  tags?: string[];              // auto-suggested + manual
+  can_edit?: boolean;           // owner or admin (BFF-computed) → show edit/delete controls
   error?: string | null;       // A6: surface failed reports (was hidden → looked stuck)
   progress?: DiagnosisProgress; // A3/A6: live per-section progress
 }
@@ -57,7 +60,9 @@ export default function DiagnosisView() {
   const [model, setModel] = useState<'sonnet' | 'opus'>('sonnet'); // deep-tier model choice
 
   const [reports, setReports] = useState<ReportRow[]>([]);
-  const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress } | null>(null);
+  const [active, setActive] = useState<{ id: number; markdown: string | null; summary: ReportSummary | null; status?: string; error?: string | null; progress?: DiagnosisProgress; title?: string | null; tags?: string[]; can_edit?: boolean } | null>(null);
+  const [titleDraft, setTitleDraft] = useState<string | null>(null); // non-null while editing the title
+  const [tagDraft, setTagDraft] = useState('');
   const [submitting, setSubmitting] = useState(false); // brief: the POST round-trip only
   const [pollTicks, setPollTicks] = useState(0);        // # of 3s polls a running report has survived
   const [notice, setNotice] = useState<string | null>(null); // [PR#37 review] surface deduped reports
@@ -77,9 +82,31 @@ export default function DiagnosisView() {
       setActive({
         id, markdown: j.markdown, summary: (j.report?.summary as ReportSummary) ?? null,
         status: j.report?.status, error: j.report?.error ?? null, progress: j.report?.progress,
+        title: j.report?.title ?? null, tags: j.report?.tags ?? [], can_edit: j.report?.can_edit ?? false,
       });
     }
   }, []);
+
+  // Soft-delete a report (owner/admin). Confirm → DELETE → reload; clear the pane if it was open.
+  const del = useCallback(async (id: number) => {
+    if (!window.confirm('이 리포트를 삭제할까요? (목록에서 숨겨집니다)')) return;
+    const r = await fetch(`/api/diagnosis/${id}`, { method: 'DELETE' });
+    if (r.ok) {
+      setActive((a) => (a?.id === id ? null : a));
+      await loadList();
+    }
+  }, [loadList]);
+
+  // Persist title/tags (owner/admin) and reflect locally + in the list.
+  const patchMeta = useCallback(async (id: number, meta: { title?: string | null; tags?: string[] }) => {
+    const r = await fetch(`/api/diagnosis/${id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(meta),
+    });
+    if (r.ok) {
+      setActive((a) => (a && a.id === id ? { ...a, ...meta } : a));
+      await loadList();
+    }
+  }, [loadList]);
 
   useEffect(() => {
     loadList();
@@ -136,7 +163,8 @@ export default function DiagnosisView() {
   // What the main pane shows: an opened report, else the newest report's live state.
   const view = active ?? (top
     ? { id: top.id, markdown: null as string | null, summary: null as ReportSummary | null,
-        status: top.status, error: top.error, progress: top.progress }
+        status: top.status, error: top.error, progress: top.progress,
+        title: top.title ?? null, tags: top.tags ?? [], can_edit: top.can_edit ?? false }
     : null);
   const running = submitting || topRunning;
 
@@ -186,20 +214,36 @@ export default function DiagnosisView() {
         )}
         <ul className="space-y-1">
           {reports.map((r) => (
-            <li key={r.id}>
+            <li key={r.id} className="flex items-center gap-1">
               <button
                 onClick={() => open(r.id)}
-                className="w-full rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-ink-100"
+                className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left hover:bg-ink-100"
               >
-                #{r.id} · {r.tier}
-                {r.tier === 'deep' && r.model ? ` · ${r.model}` : ''} ·{' '}
-                <span className={r.status === 'failed' ? 'text-red-600' : 'text-ink-400'}>
-                  {r.status === 'running' && r.progress?.total
-                    ? `running ${r.progress.current ?? 0}/${r.progress.total}`
-                    : r.status}
-                </span>
-                {r.created_at ? <span className="ml-1 text-ink-300">· {fmtDay(r.created_at)}</span> : null}
+                {/* title leads (auto key-insight); falls back to id·tier when absent */}
+                <div className="truncate text-[13px] font-medium text-ink-800">
+                  {r.title || `#${r.id} · ${r.tier}`}
+                </div>
+                <div className="text-[11px] text-ink-400">
+                  #{r.id} · {r.tier}
+                  {r.tier === 'deep' && r.model ? ` · ${r.model}` : ''} ·{' '}
+                  <span className={r.status === 'failed' ? 'text-red-600' : ''}>
+                    {r.status === 'running' && r.progress?.total
+                      ? `running ${r.progress.current ?? 0}/${r.progress.total}`
+                      : r.status}
+                  </span>
+                  {r.created_at ? ` · ${fmtDay(r.created_at)}` : ''}
+                </div>
               </button>
+              {r.can_edit ? (
+                <button
+                  onClick={() => del(r.id)}
+                  aria-label="리포트 삭제"
+                  title="삭제"
+                  className="shrink-0 rounded-md px-2 py-1 text-ink-300 hover:bg-red-50 hover:text-red-600"
+                >
+                  🗑
+                </button>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -215,6 +259,59 @@ export default function DiagnosisView() {
         </div>
         {view?.markdown ? (
           <>
+            {/* Title — editable inline by owner/admin; read-only otherwise. Plain text (React-escaped). */}
+            {view.can_edit ? (
+              titleDraft !== null ? (
+                <div className="mb-2 flex items-center gap-2">
+                  <input
+                    value={titleDraft}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    maxLength={200}
+                    aria-label="제목"
+                    className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-base"
+                  />
+                  <button
+                    onClick={async () => { await patchMeta(view!.id, { title: titleDraft!.trim() || null }); setTitleDraft(null); }}
+                    className="rounded-md bg-brand-500 px-3 py-1 text-sm font-medium text-white"
+                  >저장</button>
+                  <button onClick={() => setTitleDraft(null)} className="rounded-md border border-ink-200 px-3 py-1 text-sm">취소</button>
+                </div>
+              ) : (
+                <h2 className="mb-2 flex items-center gap-2 text-lg font-semibold text-ink-800">
+                  <span className="min-w-0 break-words">{view.title || '(제목 없음)'}</span>
+                  <button onClick={() => setTitleDraft(view!.title ?? '')} aria-label="제목 수정" title="제목 수정" className="shrink-0 text-ink-300 hover:text-brand-600">✏️</button>
+                </h2>
+              )
+            ) : view.title ? (
+              <h2 className="mb-2 text-lg font-semibold text-ink-800">{view.title}</h2>
+            ) : null}
+            {/* Tags — chips; owner/admin can add (Enter) / remove (×). */}
+            <div className="mb-3 flex flex-wrap items-center gap-1">
+              {(view.tags ?? []).map((t) => (
+                <span key={t} className="inline-flex items-center gap-1 rounded-full bg-ink-100 px-2 py-0.5 text-[12px] text-ink-700">
+                  {t}
+                  {view.can_edit ? (
+                    <button onClick={() => patchMeta(view!.id, { tags: (view!.tags ?? []).filter((x) => x !== t) })} aria-label={`태그 ${t} 삭제`} className="text-ink-400 hover:text-red-600">×</button>
+                  ) : null}
+                </span>
+              ))}
+              {view.can_edit ? (
+                <input
+                  value={tagDraft}
+                  onChange={(e) => setTagDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && tagDraft.trim()) {
+                      const next = Array.from(new Set([...(view!.tags ?? []), tagDraft.trim()]));
+                      patchMeta(view!.id, { tags: next });
+                      setTagDraft('');
+                    }
+                  }}
+                  placeholder="태그 추가"
+                  aria-label="태그 추가"
+                  className="w-24 rounded-md border border-ink-200 px-2 py-0.5 text-[12px]"
+                />
+              ) : null}
+            </div>
             <div className="mb-3 flex items-center justify-between gap-2">
               {createdAt ? (
                 <span className="text-[12px] text-ink-400">생성 일시: {fmtDate(createdAt)}</span>
