@@ -94,5 +94,17 @@
 - [ ] Update `docs/decisions/CLAUDE.md` ADR-043 note + `CLAUDE.md` Key Files (infra graph = Step 2).
 - [ ] Commit: `docs(topology): record ADR-043 Step 2 (resource-relationship infra graph)`
 
+### Task 9 — flow-topology: reflect LBs/TGs wired via listener PATH RULES (owner add-on)
+> Today flow-topology links LB→TG only via `tg.load_balancer_arns` (no listener/rule inventory).
+> A TG associated ONLY through a path/host listener rule can be missed when AWS doesn't populate
+> `load_balancer_arns` for it. Fix: sync listeners + rules and build LB→TG edges from forward actions.
+- [ ] `scripts/v2/steampipe/sync_lambda.py`: add a listener-rule inventory type — verify the Steampipe
+      table (`aws_ec2_load_balancer_listener` default_actions + a rules source); capture
+      `load_balancer_arn`, `target_group_arns` (forward), `conditions` (path/host patterns).
+- [ ] `web/lib/flow-topology.ts`: in addition to `load_balancer_arns`, add LB→TG edges from listener
+      rules (label with the path/host pattern; confidence 'observed'). De-dupe vs the existing edge.
+- [ ] `web/lib/flow-topology.test.ts`: a TG reachable only via a path rule still gets an LB→TG edge.
+- [ ] Commit: `feat(topology): link LB→TG via listener path/host rules (not just load_balancer_arns)`
+
 ## Out of scope (per spec)
 Cross-account / peering / TGW; app-dependency edges; live (non-materialized) fallback.

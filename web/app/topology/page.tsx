@@ -388,6 +388,12 @@ export default function TopologyPage() {
   };
   const copyArn = () => { if (selected) navigator.clipboard?.writeText(resourceArn(selected)); };
 
+  // resource-relationship graph link — only for network-placed resource types (have vpc/subnet/sg).
+  const NET_CAPABLE = new Set(['alb', 'nlb', 'target_group', 'ec2', 'lambda', 'ecs_task']);
+  const sm = (selected?.meta ?? {}) as Record<string, unknown>;
+  const smRow = (sm.row ?? {}) as Record<string, unknown>;
+  const rgId = sm.invType && NET_CAPABLE.has(String(sm.invType)) && smRow.resource_id
+    ? `${sm.invType}:${smRow.resource_id}` : null;
   const detailActions = selected ? (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
@@ -399,6 +405,12 @@ export default function TopologyPage() {
           className="inline-flex items-center gap-1 rounded-md bg-brand-action px-2.5 py-1 text-[11px] font-medium text-white hover:bg-brand-action-hover">
           <Sparkles size={12} /> AI에 질문
         </button>
+        {rgId && (
+          <a href={`/topology/resource/${encodeURIComponent(rgId)}`}
+            className="inline-flex items-center gap-1 rounded-md border border-ink-200 bg-card px-2 py-1 text-[11px] text-ink-600 hover:bg-ink-50">
+            <Network size={12} /> 관계 그래프
+          </a>
+        )}
       </div>
       <div className="flex flex-wrap gap-1.5">
         {chipsFor(selected).map((c) => (
