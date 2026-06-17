@@ -20,22 +20,32 @@ describe('GET /api/graph', () => {
     expect(r.status).toBe(401);
   });
 
-  it('returns the materialized graph shape', async () => {
+  it('returns the materialized graph shape, class-scoped (default flow)', async () => {
     const r = await GET(new Request('http://x/api/graph'));
     const j = await r.json();
     expect(j).toHaveProperty('nodes');
     expect(j).toHaveProperty('edges');
-    expect(j).toHaveProperty('captured_at');
+    expect(j.class).toBe('flow');
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['flow']);
   });
 
-  it('?from=&dir=up runs the upstream traversal', async () => {
-    query.mockResolvedValue({ rows: [{ id: 'y', depth: 1 }] });
-    const r = await GET(new Request('http://x/api/graph?from=cf:D1&dir=up'));
+  it('honors ?class=infra for the full graph', async () => {
+    const r = await GET(new Request('http://x/api/graph?class=infra'));
     const j = await r.json();
-    expect(j.from).toBe('cf:D1');
-    expect(j.dir).toBe('up');
-    expect(j.reach[0].id).toBe('y');
-    // the traversal SQL was issued with the node id
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('WITH RECURSIVE'), ['cf:D1']);
+    expect(j.class).toBe('infra');
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['infra']);
+  });
+
+  it('?from= returns the per-resource subgraph and runs the class+depth traversal', async () => {
+    const r = await GET(new Request('http://x/api/graph?from=alb:lb&class=infra&depth=2'));
+    const j = await r.json();
+    expect(j.from).toBe('alb:lb');
+    expect(j.class).toBe('infra');
+    expect(j.depth).toBe(2);
+    expect(j).toHaveProperty('nodes');
+    expect(j).toHaveProperty('edges');
+    expect(j).toHaveProperty('capped');
+    // traversal issued with [id, class, depth]
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('WITH RECURSIVE'), ['alb:lb', 'infra', 2]);
   });
 });
