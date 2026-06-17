@@ -2,8 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  SearchCode,
-  LayoutDashboard, MessagesSquare, Activity, DollarSign, Sparkles,
+  LayoutDashboard, MessagesSquare, Activity, DollarSign,
   Box, Gauge,
   Server, Zap, Container, Package,
   Archive, HardDrive, Database, Table, DatabaseZap, Search, Radio,
@@ -33,8 +32,7 @@ const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
   { href: '/topology', tkey: 'nav.topology', icon: Network },
   { href: '/security', tkey: 'nav.security', icon: Shield },
   { href: '/compliance', tkey: 'nav.compliance', icon: FileSearch },
-  { href: '/customization', tkey: 'nav.customAgents', icon: Sparkles },
-  { href: '/datasources', tkey: 'nav.datasources', icon: SearchCode },
+  { href: '/integrations', tkey: 'nav.integrations', icon: Cable },
 ];
 
 // One distinct lucide icon per inventory type (keyed by the registry slug).

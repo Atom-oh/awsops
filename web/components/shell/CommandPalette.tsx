@@ -18,7 +18,7 @@ function buildCommands(): Cmd[] {
     { href: '/jobs', label: 'Jobs', hint: '비동기 작업' },
     { href: '/cost', label: 'Cost', hint: 'Cost Explorer' },
     { href: '/bedrock', label: 'Bedrock', hint: '토큰 비용' },
-    { href: '/datasources', label: 'Datasources', hint: 'PromQL/LogQL/SQL 탐색' },
+    { href: '/integrations', label: 'Integrations', hint: '데이터소스 · 커넥터 · 스킬' },
     { href: '/security', label: 'Security', hint: '보안 점검' },
     { href: '/compliance', label: 'Compliance', hint: 'CIS 벤치마크' },
   ];
