@@ -345,8 +345,8 @@ resource "aws_ecs_task_definition" "worker" {
   family                   = "${var.project}-worker"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "256"
-  memory                   = "512"                           # low on purpose: --oom path OOM-kills; noop-heavy still succeeds
+  cpu                      = "1024"
+  memory                   = "4096"                          # headroom for the report job's headless chromium PDF render; the --oom proof still OOM-kills (infinite alloc) at this higher ceiling
   execution_role_arn       = aws_iam_role.execution.arn      # reuse: ECR pull + awslogs
   task_role_arn            = aws_iam_role.worker_task[0].arn # SM + KMS for db.py creds
   runtime_platform {
