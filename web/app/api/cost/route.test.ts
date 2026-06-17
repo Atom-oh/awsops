@@ -68,3 +68,32 @@ describe('GET /api/cost', () => {
     expect((await GET(req())).status).toBe(500);
   });
 });
+
+describe('GET /api/cost — account scoping', () => {
+  const reqU = (url: string, cookie = 'awsops_token=t') => new Request(url, { headers: { cookie } });
+  beforeEach(() => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    getMtdCost.mockResolvedValue({ total: 1, currency: 'USD', byService: [] });
+    getCostTrend.mockResolvedValue([]);
+  });
+  it('default → host (cost fns called with undefined account)', async () => {
+    const { GET } = await import('./route');
+    const res = await GET(reqU('http://x/api/cost'));
+    expect(res.status).toBe(200);
+    expect(getMtdCost).toHaveBeenCalledWith(undefined);
+    expect((await res.json()).account).toBe('self');
+  });
+  it('?account=<id> → that account', async () => {
+    const { GET } = await import('./route');
+    const res = await GET(reqU('http://x/api/cost?account=210987654321'));
+    expect(getMtdCost).toHaveBeenCalledWith('210987654321');
+    expect(getMonthlyCost).toHaveBeenCalledWith(6, '210987654321');
+    expect((await res.json()).account).toBe('210987654321');
+  });
+  it('?account=__all__ → 400 (client aggregates)', async () => {
+    const { GET } = await import('./route');
+    const res = await GET(reqU('http://x/api/cost?account=__all__'));
+    expect(res.status).toBe(400);
+    expect(getMtdCost).not.toHaveBeenCalled();
+  });
+});

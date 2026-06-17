@@ -102,6 +102,7 @@ fan-out concurrency-bounded; no secrets in env, no `0.0.0.0/0`, no `Principal:"*
 - Modify: `web/lib/aws.ts`
 - Modify: `web/app/api/cost/route.ts`
 - Test: `web/app/api/cost/route.test.ts`
+- Modify: `web/app/cost/page.tsx`
 
 - [ ] Write/extend `route.test.ts` FIRST: `?account=<id>` → that account's cost via assumedClient; no/`self` → host. **SINGLE-account route — no server-side `__all__` fan-out** (client aggregates, same as Task 9).
 - [ ] Cost fns (`getMtdCost`/`getCostTrend`/…) accept an optional `accountId` and build the Cost Explorer client via `assumedClient(accountId, CostExplorerClient, { region: 'us-east-1' })` — **CE is global → ALWAYS region us-east-1 regardless of the account's region; account scoping comes from the assumed role, not the region** (matches cross_account.py). `cost/route.ts` reads `?account` (default host). `cost/page.tsx`: "All accounts" → client fetches per enabled account in parallel + aggregates totals/byService in the browser.
