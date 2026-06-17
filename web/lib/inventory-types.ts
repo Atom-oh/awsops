@@ -87,6 +87,14 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'target_group_name', label: 'Name' }, { key: 'target_type', label: 'Target type' },
     { key: 'protocol', label: 'Protocol' }, { key: 'port', label: 'Port' },
     { key: 'vpc_id', label: 'VPC' }, { key: 'health_check_path', label: 'Health path' } ] },
+  apigatewayv2_api: { label: 'API Gateway (HTTP)', group: 'Network', distKey: 'protocol_type', columns: [
+    { key: 'name', label: 'Name' }, { key: 'api_endpoint', label: 'Endpoint' },
+    { key: 'protocol_type', label: 'Protocol' } ] },
+  apigatewayv2_integration: { label: 'API GW Integrations', group: 'Network', distKey: 'integration_type', columns: [
+    { key: 'api_id', label: 'API' }, { key: 'integration_type', label: 'Type' },
+    { key: 'connection_type', label: 'Conn' }, { key: 'integration_uri', label: 'Target' } ] },
+  cloudfront_vpc_origin: { label: 'CloudFront VPC Origins', group: 'Network', stateKey: 'status', distKey: 'status', columns: [
+    { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'arn', label: 'Target LB' } ] },
   waf: { label: 'WAF Web ACLs', group: 'Security', distKey: 'scope', columns: [
     { key: 'scope', label: 'Scope' }, { key: 'capacity', label: 'Capacity' },
     { key: 'description', label: 'Description' }, { key: 'managed_by_firewall_manager', label: 'FMS-managed' } ] },
