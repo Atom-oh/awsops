@@ -1,161 +1,138 @@
 ---
 sidebar_position: 1
+title: General FAQ
+description: Answers to the most common questions — what AWSops is, how it is deployed, how you log in, whether it changes your infrastructure, and where data is stored.
 ---
 
 # General FAQ
 
 Common questions and answers about the AWSops dashboard.
 
-<details>
-<summary>What is AWSops?</summary>
+## What is AWSops?
 
-AWSops is a real-time operations dashboard for AWS and Kubernetes environments. Key features include:
+AWSops is a **real-time, read-only operations dashboard + AI diagnosis** tool for AWS and Kubernetes environments. Key features include:
 
-- **Resource Monitoring**: Status of major AWS services including EC2, Lambda, ECS, EKS, RDS, S3
-- **Network Visualization**: VPC, subnet, Security Group, Transit Gateway topology
-- **Security Analysis**: CIS compliance, CVE vulnerability scanning, IAM analysis
-- **Cost Management**: Cost Explorer, container cost analysis
-- **AI Assistant**: Natural language queries for AWS resource analysis and troubleshooting
+- **Resource monitoring**: status of major AWS services including EC2, Lambda, ECS, EKS, RDS, S3
+- **Network / topology visualization**: VPC, subnets, Security Groups, plus the resource graph from CloudFront → LB → Target Group → DB
+- **Security analysis**: IAM permission analysis, compliance, vulnerability checks
+- **Cost management**: Cost Explorer-based cost analysis and dashboards
+- **AI assistant**: natural-language queries for AWS resource analysis and troubleshooting (streaming + domain routing + persistent conversations)
+- **AI Diagnosis**: worker-generated, read-only diagnosis reports (base 8 sections / deep 15 sections, with DOCX/PDF export)
 
-Built on Steampipe, Next.js 14, and Amazon Bedrock AgentCore.
+The platform is a **Terraform-based MSA** — live AWS queries go through **Amazon Bedrock AgentCore MCP tools**, and app state is persisted in **Aurora Serverless v2 (PostgreSQL 17)**.
 
-</details>
+:::info
+AWSops is a **read-only** operations tool. It queries, visualizes, and diagnoses your infrastructure, but it does not change AWS resources. See "Does AWSops change my infrastructure?" below for details.
+:::
 
-<details>
-<summary>Which AWS services are supported?</summary>
+## How is it deployed and how does it work?
 
-AWSops accesses over 380 AWS tables through the Steampipe AWS plugin. Major supported services:
+AWSops is a microservice architecture provisioned with **Terraform** (`terraform/v2/foundation/`, partial S3 backend). The core layers are:
 
-**Compute**
-- EC2 instances, Auto Scaling
-- Lambda functions
-- ECS clusters/services/tasks
-- EKS clusters/nodes/Pods
+| Layer | Composition |
+|-------|-------------|
+| **IaC** | Terraform (S3 partial backend, `use_lockfile`). CDK is dropped |
+| **Edge** | CloudFront (TLS) → VPC Origin (`https-only:443`) → internal ALB HTTPS:443 (regional ACM) → Fargate. **No public ALB** |
+| **Compute** | ECS Fargate (arm64). web is a Next.js 14 thin-BFF served at the **root path (`/`)** |
+| **Data** | Aurora Serverless v2 (PostgreSQL 17), accessed via node-pg |
+| **AI** | AgentCore Runtime + MCP Lambda tools across 8 section gateways (live query) |
+| **Async workers** | SQS → ESM (kill-switch) → dispatcher Lambda → Step Functions → Lambda or Fargate |
 
-**Storage & Database**
-- S3 buckets
-- EBS volumes/snapshots
-- RDS instances
-- DynamoDB tables
-- ElastiCache (Valkey/Redis/Memcached)
-- OpenSearch domains
-- MSK clusters
+Heavy, long, or OOM-risk work is never run inline by web — it is sent to the **async worker tier**: `POST /api/jobs` → enqueue into `worker_jobs` → SQS → idempotent dispatcher Lambda → Step Functions routes short jobs to RunLambda and long/OOM-risk jobs to `ecs:runTask.sync` Fargate. Failures are recorded by a status_updater Lambda, and a reaper (EventBridge, every 5 min) reconciles stale jobs.
 
-**Network**
-- VPC, subnets, Security Groups
-- Transit Gateway, VPN
-- ELB/ALB/NLB
-- CloudFront, WAF
+:::tip
+The edge is **end-to-end TLS**. CloudFront connects to the internal ALB over TLS, and the ALB SG allows 443 only from the CloudFront managed SG `CloudFront-VPCOrigins-Service-SG`. There is no X-Custom-Secret header and no managed prefix list.
+:::
 
-**Security & Monitoring**
-- IAM users/roles/policies
-- CloudTrail, CloudWatch
-- CIS compliance
+## Does AWSops change my infrastructure?
 
-</details>
+**No.** AWSops is a **read-only operations dashboard + AI diagnosis** tool. **AWS-resource mutation and autonomy are permanently frozen (do-not-enable).** No screen and no AI feature will stop an EC2 instance, modify a security group, or alter your infrastructure.
 
-<details>
-<summary>What are the system requirements?</summary>
+The AI assistant and diagnosis **query** live data to analyze and diagnose it — they perform no mutation. All ~120 AgentCore MCP tools are read-only.
 
-**Server Requirements**
-- EC2: t4g.2xlarge or higher recommended (ARM64)
-- Memory: 16GB or more
-- Storage: 50GB or more
+The only "write" permitted, under governance, is **external data records** — for example, leaving a report, ticket, or message in an external system. This works only under the following guards:
 
-**Required Software**
-- Steampipe + AWS/Kubernetes/Trivy plugins
-- Node.js 20+
-- Docker (for AgentCore builds)
+- SSRF guard (metadata/IMDS blocked, destination allowlist)
+- secrets managed in Secrets Manager
+- DLP / redaction
+- human-gate (human approval)
+- flag-OFF by default
 
-**Network**
-- Private Subnet deployment recommended
-- Access via ALB + CloudFront
-- Steampipe accessible only locally (127.0.0.1:9193)
+:::info
+External "writes" are **data records** (tickets, messages, reports), **not AWS-resource changes**. No path grants permission to change the AWS infrastructure itself.
+:::
 
-**Client**
-- Modern web browser (Chrome, Firefox, Safari, Edge)
-- Minimum resolution: 1280x720
+## How do I log in?
 
-</details>
+AWSops uses a **self-hosted login form** (`/login`).
 
-<details>
-<summary>Where is data stored?</summary>
+1. When you open AWSops, unauthenticated users are redirected to `/login` by the edge (Lambda@Edge).
+2. Entering your email/password on the `/login` form triggers the BFF call `POST /api/auth/login`.
+3. The BFF authenticates via the public Cognito `InitiateAuth (USER_PASSWORD_AUTH)` and mints an `awsops_token` cookie (id_token, valid 12 hours).
+4. Every subsequent request is verified by Lambda@Edge with **full RS256 JWKS signature verification** (including iss/aud/token_use).
 
-**Real-time Data (5-minute cache)**
-- Steampipe embedded PostgreSQL (port 9193) queries AWS/K8s APIs in real-time
-- Results cached in memory for 5 minutes via node-cache
-- Cache can be invalidated using the refresh button
+Auth is handled by a Cognito User Pool + Lambda@Edge (`us-east-1`). The Hosted UI PKCE flow is retained only as a dark fallback.
 
-**Persistent Data**
-- `data/inventory/`: Resource inventory snapshots (JSON)
-- `data/cost/`: Cost data snapshots (fallback for MSP environments)
-- `data/memory/`: AI conversation history (per-user, 365-day retention)
-- `data/config.json`: App settings (AgentCore ARN, etc.)
+**Admin privileges** are gated server-side and fail-closed — only members of the Cognito `admins` group or users on the SSM admin-email allowlist can access admin features.
 
-**No External Storage**
-- No separate database installation required (uses Steampipe embedded PostgreSQL)
-- All data stored within the EC2 instance
+## Where is data stored?
 
-</details>
+AWSops stores state in **managed AWS services**, not in JSON files on an EC2 instance.
 
-<details>
-<summary>Are there any costs?</summary>
+| Store | Contents |
+|-------|----------|
+| **Aurora Serverless v2 (PostgreSQL 17)** | app state: `worker_jobs` (async jobs), chat threads, AI diagnosis reports, datasource schema cache |
+| **SSM Parameter Store** | source of truth for AgentCore config (`/ops/awsops-v2/agentcore/...` — runtime ARN, interpreter id, memory id, etc.) |
+| **S3** | AI diagnosis report exports (DOCX/PDF) |
 
-**Free**
-- Steampipe and plugins
-- Powerpipe (CIS benchmarks)
-- Next.js application
+Live AWS resource data is **not stored** — AgentCore MCP tools fetch it at query time. (Steampipe is used only as a flag-gated **inventory sync** (`steampipe_enabled`, default OFF), not as the live query engine.)
 
-**AWS Usage-Based Charges**
-- EC2 instance cost (~$0.27/hour for t4g.2xlarge)
-- ALB cost
-- CloudFront cost
+:::tip
+The app accesses Aurora via **node-pg** (the shared pool in `web/lib/db.ts`). The v1 `data/*.json` file pattern is no longer used.
+:::
 
-**AI Features (Optional)**
-- Amazon Bedrock: Token-based pricing by model usage
-- AgentCore Runtime: Execution time-based pricing
-- Lambda: Invocation count and execution time-based
+## How does AWSops query live AWS data?
 
-**Cost Optimization Tips**
-- No Bedrock/AgentCore costs when AI features are disabled
-- Spot instances available (non-production environments)
-- Stop instances when not in use
+Live AWS / Kubernetes data is queried through **AgentCore MCP Lambda tools**. About 120 read-only tools are distributed across **8 section gateways** (network · container · data · security · cost · monitoring · iac · ops).
 
-</details>
+- All tools are read-only.
+- The gateway count stays at **8** (ADR-004). External observability is a separate "Integrations axis," not a 9th gateway.
+- It no longer relies on a local Steampipe service (127.0.0.1:9193) or direct access to 380 tables.
 
-<details>
-<summary>Does it support multiple AWS accounts?</summary>
+## Can it query external observability data (Prometheus / Loki / Tempo / ClickHouse / Datadog)?
 
-**Single Account Mode (Default)**
-- Only queries the account associated with the IAM Role attached to the EC2 instance
+**Yes — through the read-only datasource platform.** You can connect external observability backends as connectors and query metrics, logs, and traces.
 
-**Multi-Account Mode (Configuration Required)**
-Multiple accounts are supported through Steampipe's AWS plugin configuration:
+Supported targets (examples): Prometheus, Loki, Tempo, ClickHouse, Mimir, and others.
 
-```hcl
-# ~/.steampipe/config/aws.spc
-connection "aws_prod" {
-  plugin  = "aws"
-  profile = "production"
-  regions = ["ap-northeast-2"]
-}
+Components:
 
-connection "aws_dev" {
-  plugin  = "aws"
-  profile = "development"
-  regions = ["ap-northeast-2"]
-}
+- **Connector Lambdas** — query external backends read-only
+- **Aurora schema cache** — caches connector schemas
+- **`/datasources` Explore page** — browse directly in the UI
+- **NL→query chat injection** — the AI assistant turns natural-language questions into datasource queries
 
-connection "aws" {
-  plugin      = "aws"
-  type        = "aggregator"
-  connections = ["aws_*"]
-}
-```
+:::info
+Connector input is **SSRF-guarded and size-bounded** (`readJsonBounded` before parse, metadata/IMDS blocked). The datasource platform only **reads** external data; it does not change AWS resources.
+:::
 
-Using an aggregator connection allows you to query data from multiple accounts in an integrated view.
+## Does it support theming and mobile?
 
-**Organizations Integration**
-When using AWS Organizations, you can access member accounts through Cross-Account Roles.
+**Theming — a 3-theme runtime picker**
 
-</details>
+- **Cobalt** (default)
+- **Teal**
+- **Dark**
+
+The theme is stored in localStorage and applied with no flash on refresh, and the charts and the mark (logo) recolor in response to the theme. The **Cmd-K command palette** is available everywhere for quick navigation.
+
+**Mobile — responsive layout**
+
+- Top bar + 5 bottom tabs + hamburger drawer
+- Tables convert to cards
+- Chat goes fullscreen
+- Grid reflow and a detail sheet
+
+## Does it support multiple AWS accounts?
+
+The AWSops live environment runs on a single account (`180294183052`). Live AWS queries are performed by the AgentCore MCP tools using the execution role; queries against a genuinely different account go only through a dedicated cross-account assume path. (Selecting the host account as the target uses the execution role directly, so no unnecessary self-assume occurs.) All access is read-only.

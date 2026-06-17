@@ -53,6 +53,19 @@ const sidebars: SidebarsConfig = {
         'observability/datasources',
       ],
     },
+    {
+      type: 'category',
+      label: 'FAQ',
+      items: [
+        'faq/general',
+        'faq/troubleshooting',
+        'faq/ai-assistant',
+        'faq/architecture',
+        'faq/agentcore-memory',
+        'faq/datasource-development',
+        'faq/decisions',
+      ],
+    },
   ],
 };
 

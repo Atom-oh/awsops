@@ -1,1235 +1,204 @@
 ---
 sidebar_position: 4
-title: 아키텍처 Deep Dive
-description: AWSops 내부 아키텍처에 대한 심화 질문과 답변
+title: 아키텍처 심화 FAQ
+description: AWSops 내부 아키텍처(엣지·비동기 워커·데이터·AI 라우팅·인증)에 대한 SRE/아키텍트용 심화 질문과 답변
 ---
 
-# 아키텍처 Deep Dive
+# 아키텍처 심화 FAQ
 
-AWSops 내부 동작 원리에 대한 심화 기술 FAQ입니다.
+AWSops의 내부 동작 원리에 대한 심화 기술 FAQ입니다. SRE·아키텍트 관점에서 엣지 경로, 비동기 워커 백본, 데이터 계층, AI 라우팅, 인증, 운영상의 학습을 다룹니다.
 
-<details>
-<summary>네트워크 비용(networkCost)은 어떻게 산출되나요?</summary>
+:::info 읽기 전용 운영 대시보드
+AWSops는 **읽기 전용(read-only) 운영 대시보드 + AI 진단** 도구입니다. **AWS 리소스 변경과 자율 실행(autonomy)은 영구 동결**되어 있습니다. 외부 관측성 데이터 읽기와 거버넌스된 외부 기록/티켓/메시지 쓰기(데이터 레코드)는 허용되지만, AWS 리소스 자체를 바꾸지는 않습니다.
+:::
 
-네트워크 비용 산출 방식은 **ECS**와 **EKS**에서 다릅니다.
+## 엣지(CloudFront → VPC Origin → 내부 ALB → Fargate)는 어떻게 구성되나요?
+
+AWSops는 **공개 ALB가 없습니다.** 모든 트래픽은 CloudFront에서 출발해 VPC Origin을 통해 사설 서브넷의 내부 ALB로만 들어갑니다.
 
 ```mermaid
 flowchart LR
-  subgraph ECS["ECS Container Cost"]
-    CW["CloudWatch<br/>Container Insights"] --> FARE[Fargate Pricing]
-    FARE --> ECOST["CPU + Memory<br/>(네트워크 미포함)"]
-  end
-  subgraph EKS["EKS Container Cost"]
-    OC[OpenCost API] -->|"5 components"| FULL["CPU + RAM +<br/>Network + PV + GPU"]
-    FB["Steampipe<br/>kubernetes_pod"] -->|fallback| EST["CPU + Memory<br/>(네트워크 미포함)"]
-  end
+  USER["사용자"] -->|"HTTPS (TLS)"| CF["CloudFront"]
+  CF -->|"VPC Origin<br/>https-only:443"| ALB["내부 ALB<br/>HTTPS:443 (리전 ACM)"]
+  ALB -->|"HTTP"| FARGATE["Fargate<br/>awsops-v2-web:3000"]
 ```
 
-### ECS 컨테이너: 네트워크 비용 미포함
+### 경로 상세
 
-ECS 컨테이너 비용(`/api/container-cost`)은 **CPU + Memory**만 계산합니다:
-
-```
-CPU 비용 = (CPU Units / 1024) × $0.04048/시간 × 시간
-Memory 비용 = (Memory MB / 1024) × $0.004445/시간 × 시간
-총 비용 = CPU 비용 + Memory 비용
-```
-
-CloudWatch Container Insights에서 `CpuUtilized`, `MemoryUtilized` 메트릭을 수집하고, Fargate 가격을 적용합니다. 네트워크 전송량(`NetworkRxBytes`/`NetworkTxBytes`)은 수집하지만 비용 계산에는 반영하지 않습니다.
-
-### EKS 컨테이너: OpenCost 모드에서만 네트워크 비용 포함
-
-**OpenCost 모드** (`data/config.json`에 `opencostEndpoint` 설정 시):
-
-```typescript
-// src/app/api/eks-container-cost/route.ts
-const res = await fetch(
-  `${opencostEndpoint}/allocation/compute?window=${window}&aggregate=namespace,pod`
-);
-
-// OpenCost가 반환하는 5가지 비용 항목
-const cpuCost = (alloc.cpuCost || 0) * scale;
-const memCost = (alloc.ramCost || 0) * scale;
-const networkCost = (alloc.networkCost || 0) * scale;   // 네트워크 비용
-const pvCost = (alloc.pvCost || 0) * scale;              // PV(EBS) 비용
-const gpuCost = (alloc.gpuCost || 0) * scale;            // GPU 비용
-```
-
-**네트워크 비용 산출 원리 (OpenCost 내부)**:
-
-1. **CNI 기반 트래픽 추적**: OpenCost는 Kubernetes CNI(Container Network Interface)를 통해 Pod별 네트워크 트래픽을 추적합니다
-2. **Cross-AZ 전송만 과금**: 같은 AZ 내 전송은 무료, Cross-AZ 전송에만 AWS 데이터 전송 요금 적용
-3. **일일 비용 스케일링**: OpenCost는 조회 윈도우(예: 1시간) 동안의 비용을 반환하므로, 24시간으로 스케일링합니다:
-
-```typescript
-const minutes = alloc.minutes || 60;
-const scale = (24 * 60) / minutes;  // 1시간 데이터를 24시간으로 환산
-const networkCostDaily = (alloc.networkCost || 0) * scale;
-```
-
-**Request-based 폴백 모드** (OpenCost 미설치 시):
-
-네트워크 비용을 계산하지 않습니다. CPU/Memory 요청량 기반으로만 비용을 추정합니다.
-
-### UI 표시
-
-네트워크 비용 컬럼은 OpenCost 모드에서만 표시됩니다:
-
-```typescript
-// src/app/eks-container-cost/page.tsx
-...(data?.dataSource === 'opencost' ? [
-  { key: 'networkCostDaily', label: 'Network' },
-  { key: 'pvCostDaily', label: 'Storage' },
-  { key: 'gpuCostDaily', label: 'GPU' },
-] : []),
-```
-
-</details>
-
-<details>
-<summary>OpenCost로 Pod 비용은 어떻게 산출하나요?</summary>
-
-EKS Pod 비용 산출에는 두 가지 모드가 있습니다.
-
-### 모드 1: OpenCost API (권장)
-
-OpenCost는 Prometheus 메트릭을 기반으로 **실제 사용량** 기반 비용을 계산합니다.
-
-**데이터 흐름**:
-
-```mermaid
-flowchart TD
-  P[Prometheus] -->|메트릭 수집| OC[OpenCost Engine]
-  OC -->|"/allocation/compute"| API[AWSops API]
-  API -->|"5 costs × scale"| UI[Dashboard UI]
-
-  SP[Steampipe] -->|"kubernetes_pod<br/>kubernetes_node"| FB[Request-based<br/>Fallback]
-  FB -->|"CPU+Memory only"| UI
-
-  API -.->|"OpenCost 불가 시"| FB
-```
-
-**API 호출**:
-```typescript
-// src/app/api/eks-container-cost/route.ts
-const res = await fetch(
-  `${opencostEndpoint}/allocation/compute?window=1d&aggregate=namespace,pod`
-);
-```
-
-**5가지 비용 항목**:
-
-| 항목 | 설명 | 산출 기준 |
-|------|------|----------|
-| `cpuCost` | CPU 사용 비용 | 실제 CPU 사용량 × AWS 가격 |
-| `ramCost` | 메모리 사용 비용 | 실제 메모리 사용량 × AWS 가격 |
-| `networkCost` | 네트워크 전송 비용 | Cross-AZ 전송량 × 데이터 전송 가격 |
-| `pvCost` | PersistentVolume 비용 | PVC → EBS 볼륨 매핑 |
-| `gpuCost` | GPU 사용 비용 | GPU 할당 시간 × GPU 가격 |
-
-**효율성 지표**: OpenCost는 CPU/Memory 효율성도 제공합니다:
-```typescript
-cpuEfficiency: alloc.cpuEfficiency,    // 실제 사용량 / 요청량
-ramEfficiency: alloc.ramEfficiency,    // 실제 사용량 / 요청량
-```
-
-### 모드 2: Request-based 추정 (폴백)
-
-OpenCost가 설치되지 않은 환경에서 Steampipe의 `kubernetes_pod`, `kubernetes_node` 테이블로 비용을 추정합니다.
-
-**핵심 알고리즘: 50% CPU + 50% Memory 가중치**
-
-```typescript
-// src/app/api/eks-container-cost/route.ts
-// 1. Pod의 resource requests 파싱
-const cpuReq = parseCpu(container.requests?.cpu);      // "500m" → 0.5
-const memReqMB = parseMemoryMB(container.requests?.memory); // "512Mi" → 512
-
-// 2. 노드 대비 비율 계산
-const cpuRatio = cpuReq / node.allocCpu;     // Pod CPU / Node CPU
-const memRatio = memReqMB / node.allocMemMB; // Pod Memory / Node Memory
-
-// 3. 노드 비용을 50:50으로 분배
-const cpuCostDaily = cpuRatio * node.hourlyRate * 24 * 0.5;
-const memCostDaily = memRatio * node.hourlyRate * 24 * 0.5;
-const totalCostDaily = cpuCostDaily + memCostDaily;
-```
-
-**EC2 가격표** (ap-northeast-2 온디맨드):
-```typescript
-const EC2_PRICING: Record<string, number> = {
-  'm5.large': 0.118, 'm5.xlarge': 0.236,
-  'm6g.large': 0.0998, 'c5.xlarge': 0.196,
-  'r5.large': 0.152, 't3.large': 0.104,
-  // ... 인스턴스 타입별 시간당 가격
-};
-const DEFAULT_HOURLY_RATE = 0.236; // 매칭 실패 시 m5.xlarge 기준
-```
-
-### 두 모드 비교
-
-| 항목 | OpenCost | Request-based |
-|------|----------|---------------|
-| CPU | 실제 사용량 기반 | 요청량 비율 기반 |
-| Memory | 실제 사용량 기반 | 요청량 비율 기반 |
-| Network | Cross-AZ 전송 추적 | **미포함** |
-| Storage | PVC → EBS 매핑 | **미포함** |
-| GPU | GPU 시간 추적 | **미포함** |
-| 정확도 | 높음 (실측치) | 추정치 (요청 기반) |
-| 필수 설치 | Prometheus + OpenCost | 없음 (Steampipe만) |
-
-### OpenCost 설치
-
-```bash
-# scripts/07-setup-opencost.sh 실행
-bash scripts/07-setup-opencost.sh
-
-# 설치 내용: Metrics Server → Prometheus → OpenCost
-# 설치 후 data/config.json에 엔드포인트 추가:
-# { "opencostEndpoint": "http://localhost:9003" }
-```
-
-</details>
-
-<details>
-<summary>Agent 간 통신 구조와 FTTT 개선 방법은?</summary>
-
-### 전체 통신 흐름
-
-```mermaid
-flowchart TD
-  FE["Frontend<br/>(ai/page.tsx)"] -->|"POST /api/ai<br/>SSE Stream"| API["Next.js API<br/>(route.ts)"]
-
-  API -->|"1️⃣ 의도 분류"| BED["Bedrock Sonnet<br/>~1-2s"]
-  BED -->|route 결정| API
-
-  API -->|"route=code"| CI["Code Interpreter<br/>Python Sandbox"]
-  API -->|"route=aws-data"| SQL["Steampipe SQL<br/>+ Bedrock 분석"]
-  API -->|"기타 routes"| AC["AgentCore Runtime<br/>InvokeAgentRuntimeCommand"]
-
-  AC -->|"JSON payload"| AG["agent.py<br/>(Strands Agent)"]
-  AG -->|"MCP + SigV4"| GW["Gateway<br/>(8개, 125 도구)"]
-  GW -->|"mcp.lambda"| LM["Lambda<br/>(19개 함수)"]
-```
-
-### 각 단계별 통신 방식
-
-**1단계: Frontend → Next.js API (SSE)**
-```typescript
-// Frontend: fetch with ReadableStream
-const res = await fetch('/awsops/api/ai', {
-  method: 'POST',
-  body: JSON.stringify({ messages, stream: true }),
-});
-
-// API: SSE 이벤트 전송
-send('status', { step: 'classifying', message: '질문 분석 중...' });
-send('status', { step: 'agentcore', message: '도구 실행 중...' });
-send('done', { content, usedTools, route });
-```
-
-**2단계: API → AgentCore Runtime (AWS SDK)**
-```typescript
-// 90초 타임아웃, JSON payload에 gateway 이름 포함
-const command = new InvokeAgentRuntimeCommand({
-  agentRuntimeArn: config.agentRuntimeArn,
-  payload: JSON.stringify({ messages: recentMessages, gateway }),
-});
-const response = await agentCoreClient.send(command);
-```
-
-**3단계: AgentCore → Gateway (MCP + SigV4)**
-```python
-# agent.py: SigV4 서명된 HTTP로 Gateway 연결
-def create_gateway_transport(gateway_url):
-    return streamablehttp_client_with_sigv4(
-        url=gateway_url,
-        credentials=credentials,
-        service="bedrock-agentcore",
-        region=GATEWAY_REGION,
-    )
-
-# MCP 프로토콜로 도구 목록 조회 후 실행
-mcp_client = MCPClient(lambda: create_gateway_transport(url))
-tools = get_all_tools(mcp_client)  # list_tools with pagination
-agent = Agent(model=model, tools=tools)
-response = agent(user_input)
-```
-
-**4단계: Gateway → Lambda (MCP Lambda Protocol)**
-Gateway는 `mcp.lambda` 프로토콜로 Lambda를 호출합니다. Lambda 함수는 실제 AWS API를 실행하고 결과를 반환합니다.
-
-### FTTT (Time To First Token) 구성 요소
-
-FTTT는 사용자가 질문 후 **첫 번째 응답 텍스트가 화면에 표시되기까지**의 시간입니다.
-
-| 단계 | 소요 시간 | 설명 |
+| 구간 | 프로토콜 | 비고 |
 |------|----------|------|
-| 의도 분류 | 1-2초 | Bedrock Sonnet으로 라우트 결정 |
-| AgentCore Cold Start | 10-30초 | 컨테이너 최초 시작 (Warm 시 0초) |
-| 도구 디스커버리 | 1-3초 | `list_tools_sync()` 페이지네이션 |
-| 모델 추론 | 2-5초 | Strands Agent의 LLM 호출 |
-| 도구 실행 | 2-30초 | Lambda 함수 실행 (API 호출 포함) |
-| **총 FTTT (Cold)** | **~15-60초** | |
-| **총 FTTT (Warm)** | **~5-15초** | |
+| 사용자 → CloudFront | HTTPS (TLS) | 퍼블릭 엣지 |
+| CloudFront → VPC Origin | `https-only` 443 | VPC 내부로 진입, 공개 노출 없음 |
+| VPC Origin → 내부 ALB | HTTPS 443 | 리전 ACM 인증서 |
+| 내부 ALB → Fargate | HTTP | 사설 네트워크 내부 |
 
-### FTTT 개선 방법
+### 504 → 200 학습 (TLS end-to-end + SG)
 
-**1. Cold Start 제거 (가장 큰 효과)**
-```bash
-# AgentCore Runtime에 최소 인스턴스 설정
-# 항상 1개 이상의 Warm 컨테이너 유지
-aws bedrock-agentcore update-agent-runtime \
-  --agent-runtime-id $RUNTIME_ID \
-  --min-instances 1
-```
+초기 구성에서 엣지가 **504**를 반환하는 두 가지 함정이 있었습니다:
 
-**2. 의도 분류 캐싱**
-```typescript
-// 유사한 질문 패턴에 대해 분류 결과 캐시
-// 예: "EC2 목록" → 항상 "aws-data" 라우트
-const classificationCache = new Map<string, string[]>();
-```
+1. **TLS end-to-end 불일치** — CloudFront → ALB 구간이 TLS로 끝까지 연결되어야 합니다. VPC Origin은 `https-only`로 두고, **origin domain을 공개 FQDN으로** 지정해 SNI가 ALB의 리전 ACM 인증서와 매칭되도록 해야 합니다.
+2. **보안 그룹(SG) 소스** — ALB SG는 VPC CIDR이 아니라 **CloudFront 관리형 SG `CloudFront-VPCOrigins-Service-SG`** 에서 443을 허용해야 합니다. VPC-CIDR-only로 두면 504가 발생합니다.
 
-**3. Gateway 도구 목록 캐싱**
-```python
-# agent.py에서 list_tools 결과를 메모리 캐시
-# 매 요청마다 도구 목록을 재조회하지 않음
-TOOL_CACHE: dict[str, list] = {}
-TOOL_CACHE_TTL = 300  # 5분
-```
-
-**4. 멀티 라우트 병렬 실행 (이미 구현됨)**
-```typescript
-// 여러 라우트가 분류된 경우 동시 실행
-// 예: ["security", "cost"] → 두 Gateway 동시 호출
-const results = await Promise.all(
-  routes.map(route => invokeAgentCore(messages, route))
-);
-```
-
-**5. Keepalive로 CloudFront 타임아웃 방지 (이미 구현됨)**
-```typescript
-// 15초마다 SSE 이벤트 전송 → CloudFront 60초 타임아웃 방지
-const keepaliveInterval = setInterval(() => {
-  send('status', { message: `도구 실행 중... (${count * 15}s)` });
-}, 15000);
-```
-
-**6. 3가지 스트리밍 모드 (구현 완료)**
-
-AWSops는 경로별로 최적화된 3가지 스트리밍 모드를 제공합니다:
-
-| 모드 | 적용 경로 | 방식 | 지연 |
-|------|----------|------|------|
-| **Real Streaming** | 멀티 라우트 합성 | `ConverseStreamCommand` (Bedrock Converse API) | 토큰 단위 즉시 전송 |
-| **Simulated Streaming** | 단일 Gateway 응답 | `simulateStreaming()` (50자/15ms 청킹) | 타이핑 효과 |
-| **Direct Streaming** | Bedrock Direct (aws-data) | `InvokeModelWithResponseStreamCommand` | 토큰 단위 즉시 전송 |
-
-```typescript
-// 멀티 라우트 합성: Converse Stream API로 실시간 스트리밍
-async function synthesizeResponsesStreaming(results, send) {
-  const command = new ConverseStreamCommand({
-    modelId: 'anthropic.claude-sonnet-4-6-20250514-v1:0',
-    messages: [{ role: 'user', content: [{ text: synthesisPrompt }] }],
-  });
-  const response = await bedrockClient.send(command);
-  for await (const event of response.stream) {
-    if (event.contentBlockDelta?.delta?.text) {
-      send('chunk', { delta: event.contentBlockDelta.delta.text });
-    }
-  }
-}
-
-// 단일 Gateway 응답: 타이핑 효과 시뮬레이션
-async function simulateStreaming(content, send) {
-  const CHUNK_SIZE = 50, CHUNK_DELAY_MS = 15;
-  for (let i = 0; i < content.length; i += CHUNK_SIZE) {
-    send('chunk', { delta: content.slice(i, i + CHUNK_SIZE) });
-    await new Promise(r => setTimeout(r, CHUNK_DELAY_MS));
-  }
-}
-```
-
-:::info 왜 3가지 모드인가?
-- **AgentCore Gateway**는 전체 응답을 한 번에 반환하므로 simulateStreaming으로 타이핑 효과 제공
-- **멀티 라우트 합성**은 여러 Gateway 결과를 Bedrock이 통합하므로 Converse API의 네이티브 스트리밍 활용
-- **Bedrock Direct**는 원래부터 토큰 스트리밍을 지원
+:::tip X-Custom-Secret / managed-prefix-list 없음
+현재 엣지는 헤더 비밀값(`X-Custom-Secret`)이나 managed-prefix-list 기반 차단을 쓰지 않습니다. 접근 제어는 **VPC Origin + CloudFront 관리형 SG** 조합으로만 이루어집니다.
 :::
 
-</details>
+### VPC Origin 프로토콜은 in-place 변경 불가
 
-<details>
-<summary>AlertManager로 Agent를 자동 트리거하려면 어떻게 하나요?</summary>
+VPC Origin의 프로토콜(`https-only` 등)은 **in-place로 변경되지 않습니다.** Terraform에서 바꾸려면 `create_before_destroy` 라이프사이클 + `-replace`로 새 오리진을 만들고 교체해야 합니다. 그대로 in-place 변경을 시도하면 적용이 hang됩니다.
 
-### 현재 상태
+## 비동기 워커 백본은 어떻게 동작하나요? (OOM-안전)
 
-현재 AWSops에서 AlertManager는 **비활성화** 상태입니다:
-
-```bash
-# scripts/07-setup-opencost.sh
-helm install prometheus prometheus-community/prometheus \
-  --set alertmanager.enabled=false   # ← 명시적 비활성화
-```
-
-Prometheus는 OpenCost의 메트릭 수집용으로만 설치되어 있습니다.
-
-단, **CloudWatch 알람 도구**는 이미 존재합니다:
-- `get_active_alarms`: ALARM 상태인 알람 조회
-- `get_alarm_history`: 알람 상태 변경 이력
-- `get_recommended_metric_alarms`: 권장 알람 설정
-
-### 구현 방법 1: AlertManager Webhook (Prometheus 기반)
-
-**Step 1. AlertManager 활성화**
-
-`scripts/07-setup-opencost.sh` 수정:
-```bash
-helm upgrade prometheus prometheus-community/prometheus \
-  --set alertmanager.enabled=true
-```
-
-**Step 2. 웹훅 API 엔드포인트 생성**
-
-```typescript
-// src/app/api/alert-webhook/route.ts (신규 생성)
-import { NextRequest, NextResponse } from 'next/server';
-
-interface AlertManagerPayload {
-  alerts: Array<{
-    status: 'firing' | 'resolved';
-    labels: Record<string, string>;
-    annotations: Record<string, string>;
-    startsAt: string;
-    endsAt: string;
-  }>;
-}
-
-export async function POST(request: NextRequest) {
-  const payload: AlertManagerPayload = await request.json();
-
-  // AlertManager 형식 → AI 메시지 변환
-  const alertSummary = payload.alerts.map(alert => {
-    const severity = alert.labels.severity || 'warning';
-    const name = alert.labels.alertname;
-    const description = alert.annotations.description || '';
-    return `[${severity.toUpperCase()}] ${name}: ${description}`;
-  }).join('\n');
-
-  const aiMessage = {
-    messages: [{
-      role: 'user',
-      content: `다음 알림이 발생했습니다. 원인을 분석하고 해결 방법을 제안해주세요:\n\n${alertSummary}`
-    }],
-    stream: false,
-  };
-
-  // 내부 AI API 호출
-  const aiResponse = await fetch(`http://localhost:3000/awsops/api/ai`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(aiMessage),
-  });
-
-  const analysis = await aiResponse.json();
-
-  // 분석 결과 저장 또는 알림 전송 (Slack, SNS 등)
-  console.log('AI Analysis:', analysis);
-
-  return NextResponse.json({ status: 'processed', analysis });
-}
-```
-
-**Step 3. AlertManager 설정**
-
-```yaml
-# alertmanager-config.yaml
-global:
-  resolve_timeout: 5m
-
-route:
-  receiver: 'awsops-ai'
-  group_wait: 30s
-  group_interval: 5m
-  repeat_interval: 1h
-
-receivers:
-  - name: 'awsops-ai'
-    webhook_configs:
-      - url: 'http://<EC2-Private-IP>:3000/awsops/api/alert-webhook'
-        send_resolved: true
-```
-
-**Step 4. Prometheus 알림 규칙 정의**
-
-```yaml
-# prometheus-rules.yaml
-groups:
-  - name: kubernetes
-    rules:
-      - alert: PodCrashLooping
-        expr: rate(kube_pod_container_status_restarts_total[15m]) > 0
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is crash looping"
-
-      - alert: HighCPUUsage
-        expr: sum(rate(container_cpu_usage_seconds_total[5m])) by (pod) > 0.9
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          description: "Pod {{ $labels.pod }} CPU usage > 90% for 10 minutes"
-```
-
-### 구현 방법 2: CloudWatch Alarms → SNS → Lambda (AWS 네이티브)
-
-Prometheus 대신 AWS 서비스만으로 구현하는 방법입니다:
-
-```mermaid
-flowchart LR
-  subgraph M1["방법 1: AlertManager"]
-    PR[Prometheus] -->|PromQL rules| AM[AlertManager]
-    AM -->|webhook POST| WH["/api/alert-webhook"]
-  end
-
-  subgraph M2["방법 2: CloudWatch"]
-    CWA[CloudWatch Alarm] --> SNS[SNS Topic]
-    SNS --> LM[Lambda]
-    LM -->|POST| WH2["/api/alert-webhook"]
-  end
-
-  WH --> AI["AI Agent<br/>분석 & 대응"]
-  WH2 --> AI
-```
-
-**Lambda 함수 (Python)**:
-```python
-import json
-import urllib3
-
-def handler(event, context):
-    # SNS 메시지 파싱
-    sns_message = json.loads(event['Records'][0]['Sns']['Message'])
-    alarm_name = sns_message['AlarmName']
-    reason = sns_message['NewStateReason']
-
-    # AWSops AI API 호출
-    http = urllib3.PoolManager()
-    response = http.request('POST',
-        'http://<EC2-IP>:3000/awsops/api/alert-webhook',
-        body=json.dumps({
-            'alerts': [{
-                'status': 'firing',
-                'labels': {'alertname': alarm_name, 'severity': 'critical'},
-                'annotations': {'description': reason},
-            }]
-        }),
-        headers={'Content-Type': 'application/json'}
-    )
-    return {'statusCode': 200}
-```
-
-### 두 방법 비교
-
-| 항목 | AlertManager | CloudWatch + SNS |
-|------|-------------|-----------------|
-| 메트릭 소스 | Prometheus (K8s 중심) | CloudWatch (AWS 전체) |
-| 알림 규칙 | PromQL | CloudWatch Metric Math |
-| 추가 설치 | AlertManager 활성화 | Lambda 1개 생성 |
-| 적합 환경 | EKS Pod/Node 모니터링 | AWS 서비스 전반 모니터링 |
-| 비용 | 무료 (오픈소스) | Lambda/SNS 호출 비용 |
-
-:::tip 권장 구성
-EKS 클러스터 모니터링이 주 목적이면 **AlertManager**, AWS 서비스 전체를 커버하려면 **CloudWatch + SNS**를 사용하세요. 두 방법을 동시에 사용하면 Kubernetes와 AWS 양쪽 알림을 모두 AI Agent로 분석할 수 있습니다.
-:::
-
-</details>
-
-<details>
-<summary>Steampipe pg Pool이 CLI보다 660배 빠른 이유는?</summary>
-
-### CLI vs pg Pool 비교
-
-```mermaid
-flowchart LR
-  subgraph CLI["steampipe query (CLI)"]
-    SPAWN["프로세스 생성"] --> FDW["FDW 플러그인<br/>초기화"]
-    FDW --> EXEC1["SQL 실행"]
-    EXEC1 --> EXIT["프로세스 종료"]
-  end
-
-  subgraph POOL["pg Pool (runQuery)"]
-    CONN["기존 커넥션<br/>재사용"] --> EXEC2["SQL 실행"]
-  end
-```
-
-### 벤치마크
-
-| 방식 | `SELECT COUNT(*) FROM aws_ec2_instance` | 비고 |
-|------|----------------------------------------|------|
-| `steampipe query "SQL"` CLI | ~3,300ms | 매번 프로세스 생성 + FDW 초기화 |
-| pg Pool `runQuery()` | ~5ms (캐시 히트), ~200ms (캐시 미스) | 커넥션 풀 재사용 |
-| **성능 차이** | **~660배** (캐시 히트 기준) | |
-
-### CLI가 느린 이유
-
-1. **프로세스 생성 오버헤드**: 매번 `steampipe` 바이너리를 실행
-2. **FDW 초기화**: Foreign Data Wrapper 플러그인을 매번 로드
-3. **커넥션 설정**: 매번 PostgreSQL 커넥션을 새로 생성
-4. **결과 직렬화**: JSON/텍스트로 변환 후 stdout에 출력
-
-### pg Pool이 빠른 이유
-
-```typescript
-// src/lib/steampipe.ts
-const pool = new Pool({
-  host: '127.0.0.1',
-  port: 9193,
-  max: 10,                    // 커넥션 10개 유지
-  idleTimeoutMillis: 30000,   // 유휴 30초 후 반환
-  connectionTimeoutMillis: 15000, // 15초 내 연결 실패 시 에러
-  statement_timeout: 30000,   // 30초 쿼리 타임아웃
-});
-```
-
-1. **커넥션 재사용**: 10개 커넥션을 Pool에서 관리, 매번 새로 만들지 않음
-2. **node-cache**: 동일 쿼리 결과를 5분간 메모리 캐시 (키: `sp:{accountId}:{SQL}`)
-3. **Steampipe 서비스 모드**: `steampipe service start`로 FDW가 항상 로드된 상태
-4. **바이너리 오버헤드 없음**: Node.js 프로세스 내에서 직접 PostgreSQL 프로토콜 통신
-
-### 배치 쿼리
-
-대시보드 홈에서 20개 이상의 쿼리를 실행할 때는 `batchQuery()`를 사용합니다:
-
-```typescript
-// 8개씩 병렬 실행 (풀 10개 중 2개는 다른 요청용으로 예비)
-const results = await batchQuery(queries);  // BATCH_SIZE = 8
-```
-
-</details>
-
-<details>
-<summary>Steampipe가 죽으면 대시보드는 어떻게 되나요?</summary>
-
-Steampipe 프로세스가 중단되면 pg Pool 연결이 실패합니다. 각 계층별 동작은 다음과 같습니다.
-
-### 장애 전파 흐름
+웹은 **thin-BFF**입니다. 무겁거나 긴, 또는 OOM 위험이 있는 작업은 인라인으로 실행하지 않고 **워커 큐로 enqueue**합니다. 진단 리포트 생성, DOCX/PDF 내보내기, 인벤토리 sync 같은 작업이 여기에 해당합니다.
 
 ```mermaid
 flowchart TD
-  SP["Steampipe 프로세스 중단"] -->|"port 9193 연결 불가"| POOL["pg Pool 연결 실패"]
-
-  POOL -->|"runQuery() catch"| ERR["{ rows: [], error: message }"]
-  ERR --> DASH["대시보드: 빈 데이터 표시"]
-  ERR --> AI_SQL["AI aws-data 라우트: 데이터 없음 안내"]
-
-  SP -->|"영향 없음"| AC["AgentCore Gateway"]
-  AC --> LAMBDA["Lambda (AWS API 직접 호출)"]
+  WEB["POST /api/jobs"] -->|"worker_jobs=queued"| SQS["SQS"]
+  SQS -->|"ESM (킬스위치)"| DISP["dispatcher Lambda<br/>(job_id 멱등)"]
+  DISP --> SFN["Step Functions Standard"]
+  SFN -->|"$.runtime Choice"| RTLAMBDA["RunLambda<br/>(짧은 작업)"]
+  SFN -->|"$.runtime Choice"| RTECS["ecs:runTask.sync<br/>Fargate (긴/OOM)"]
+  RTLAMBDA -->|"running→succeeded"| AURORA["Aurora<br/>(워커가 직접 기록)"]
+  RTECS -->|"running→succeeded"| AURORA
+  SFN -.->|"Catch"| SU["status_updater Lambda<br/>(failed 기록)"]
+  REAPER["reaper (EventBridge 5분)"] -.->|"stale 정합화"| AURORA
 ```
 
-### 계층별 영향
+### 단계별 동작
 
-| 계층 | Steampipe 중단 시 | 설명 |
-|------|-------------------|------|
-| **대시보드 페이지** | 빈 데이터 표시 | `runQuery()`가 `{ rows: [], error }` 반환, UI는 빈 테이블 렌더링 |
-| **AI aws-data 라우트** | "데이터를 조회할 수 없습니다" 안내 | Steampipe SQL 실행 실패 → Bedrock이 에러 상황 설명 |
-| **AI Gateway 라우트** | **정상 동작** | AgentCore → Lambda는 AWS API를 직접 호출 (Steampipe 무관) |
-| **캐시된 데이터** | 5분간 정상 표시 | node-cache TTL 내 캐시 히트 시 Steampipe 접근 안 함 |
-| **Cost 데이터** | 스냅샷 폴백 | `data/cost/` 디렉토리의 최근 JSON 파일로 대체 (최대 180일 보관) |
+1. **enqueue** — web `POST /api/jobs`가 `worker_jobs`에 `queued`로 행을 쓰고 SQS에 메시지를 넣습니다.
+2. **ESM(킬스위치)** — Event Source Mapping이 SQS → dispatcher Lambda를 연결합니다. ESM은 비활성화로 즉시 처리를 멈출 수 있는 **킬스위치** 역할을 합니다.
+3. **dispatcher (멱등)** — `job_id`를 기준으로 멱등합니다. Step Functions 실행 이름을 `job_id`로 설정하므로 중복 enqueue가 같은 실행으로 수렴합니다.
+4. **Step Functions `$.runtime` Choice** — 입력의 `runtime` 값으로 분기합니다:
+   - `lambda` → **RunLambda** (짧은 작업)
+   - `fargate` → **`ecs:runTask.sync`** (긴 작업 또는 OOM 위험 작업)
+5. **워커가 상태를 직접 기록** — 워커가 `running`을 claim하고 완료 시 `succeeded`를 **Aurora에 직접** 씁니다.
+6. **실패 처리** — Catch 시 **status_updater Lambda**가 `failed`로 기록합니다. (Step Functions는 VPC 내부 Aurora에 직접 쓸 수 없어 별도 Lambda가 필요합니다.)
+7. **reaper** — EventBridge 5분 주기로 stale(예: 워커가 죽어 `running`에 멈춘) 잡을 정합화하는 느린 backstop입니다.
 
-### 에러 처리 방식
+### 왜 OOM-안전한가?
 
-```typescript
-// src/lib/steampipe.ts — runQuery()
-try {
-  const result = await pool.query(sql);
-  return { rows: result.rows };
-} catch (error) {
-  // 절대 throw하지 않음 → 호출자에게 안전한 빈 결과 반환
-  return { rows: [], error: error.message };
-}
-```
+무겁고 메모리 사용량이 큰 작업(대용량 리포트 렌더링, chromium PDF 생성 등)을 web 프로세스가 아니라 **격리된 Fargate 태스크**에서 돌립니다. 워커가 OOM으로 죽어도 web 서비스는 영향을 받지 않으며, `ecs:runTask.sync`의 TimeoutSeconds가 runaway 태스크를 종료시켜 Catch가 `failed`를 기록합니다.
 
-모든 쿼리는 try/catch로 감싸져 있어 **Steampipe 장애가 Next.js 서버 크래시로 이어지지 않습니다**.
-
-### 복구 방법
-
-```bash
-# 1. Steampipe 서비스 상태 확인
-steampipe service status
-
-# 2. 재시작
-steampipe service restart --force
-
-# 3. Next.js에서 풀 리셋 (관리자 API 또는 서버 재시작)
-# resetPool()이 호출되면 15번까지 재연결 시도 (1초 간격)
-```
-
-### 좀비 커넥션 자동 정리
-
-Steampipe FDW의 느린 API 호출이 누적되면 커넥션 풀이 고갈될 수 있습니다. 이를 방지하기 위해 2분마다 좀비 커넥션을 자동 정리합니다:
-
-```typescript
-// 5분 이상 실행 중인 SELECT 쿼리를 자동 종료
-// client_addr IS NOT NULL (FDW 내부 커넥션은 제외)
-pg_terminate_backend(pid)
-```
-
-</details>
-
-<details>
-<summary>pg Pool의 캐시 동작 원리는?</summary>
-
-AWSops는 **node-cache** 기반 인메모리 캐시를 사용하여 Steampipe 쿼리 결과를 5분간 보관합니다.
-
-### 캐시 흐름
-
-```mermaid
-flowchart TD
-  REQ["API 요청"] --> CHECK{"캐시에<br/>결과 있음?"}
-  CHECK -->|"히트"| RET["캐시 결과 반환<br/>(~0ms)"]
-  CHECK -->|"미스"| QUERY["Steampipe SQL 실행<br/>(100~500ms)"]
-  QUERY --> SAVE["캐시에 저장<br/>(TTL: 5분)"]
-  SAVE --> RET2["결과 반환"]
-
-  WARM["Cache Warmer<br/>(4분 주기)"] -->|"주요 쿼리 사전 실행"| SAVE
-```
-
-### 캐시 키 구조
-
-```
-sp:{accountId}:{SQL문}
-```
-
-- **멀티 어카운트**: 계정별로 분리 (`sp:111111111111:SELECT...`)
-- **단일 어카운트**: `sp:__all__:SELECT...`
-- **Cost 가용성**: `cost:available:{accountId}` (TTL: 1시간)
-
-### 설정값
-
-| 항목 | 값 | 설명 |
-|------|---|------|
-| 기본 TTL | 300초 (5분) | 일반 쿼리 캐시 수명 |
-| Cost 가용성 TTL | 3,600초 (1시간) | `checkCostAvailability` 결과 |
-| 체크 주기 | 60초 | 만료 키 정리 간격 |
-| Cache Warmer 주기 | 240초 (4분) | TTL(5분) 만료 전 갱신 |
-
-### 캐시 무효화
-
-| 방법 | 트리거 | 동작 |
-|------|-------|------|
-| **새로고침 버튼** | UI에서 사용자 클릭 | `bustCache: true` → 캐시 무시 후 재조회 |
-| **clearCache()** | 관리자 API | `cache.flushAll()` 전체 삭제 |
-| **resetPool()** | 풀 재생성 시 | 캐시 + 커넥션 풀 동시 초기화 |
-| **자연 만료** | TTL 경과 | 60초마다 만료 키 자동 정리 |
-
-### Cache Warmer (사전 캐시)
-
-서버 시작 5초 후부터 4분 주기로 주요 대시보드 쿼리를 백그라운드 실행하여 캐시를 미리 채웁니다:
-
-```typescript
-// src/lib/cache-warmer.ts
-// 워밍 대상: EC2, S3, RDS, Lambda, VPC, IAM, ECS, DynamoDB 등 약 22개 쿼리
-// CloudWatch 모니터링 쿼리는 제외 (FDW 느린 API로 좀비 커넥션 유발)
-```
-
-- 멀티 어카운트: 최대 3개 계정까지 순차적으로 워밍
-- `isWarming` 플래그로 중복 실행 방지
-
-</details>
-
-<details>
-<summary>batchQuery 실행 시 AWS API 비용이 발생하나요?</summary>
-
-### 핵심 답변
-
-**캐시 히트 시 비용 0원, 캐시 미스 시에만 AWS API 호출 발생**합니다.
-
-### 비용 발생 구조
-
-```mermaid
-flowchart LR
-  BQ["batchQuery()<br/>8개 병렬"] --> CACHE{"캐시<br/>히트?"}
-  CACHE -->|"히트"| FREE["비용 없음<br/>(메모리에서 반환)"]
-  CACHE -->|"미스"| SP["Steampipe FDW"]
-  SP -->|"AWS API 호출"| AWS["AWS API<br/>(대부분 무료)"]
-```
-
-### AWS API 호출 비용
-
-Steampipe FDW는 캐시 미스 시 **실제 AWS API**를 호출합니다. 대부분의 `Describe`/`List` API는 무료입니다:
-
-| API 유형 | 비용 | 예시 |
-|----------|------|------|
-| EC2 Describe* | 무료 | `DescribeInstances`, `DescribeVpcs` |
-| S3 List* | $0.005/1,000건 | `ListBuckets` |
-| IAM List/Get* | 무료 | `ListUsers`, `ListRoles` |
-| CloudWatch GetMetricData | $0.01/1,000건 | 메트릭 조회 |
-| Cost Explorer GetCostAndUsage | $0.01/건 | 비용 데이터 |
-| CloudTrail LookupEvents | 무료 (최근 90일) | 이벤트 조회 |
-
-### 실제 비용 시나리오
-
-**대시보드 홈 로드 (약 22개 쿼리)**:
-
-| 상황 | API 호출 | 예상 비용 |
-|------|----------|----------|
-| 캐시 히트 (5분 이내 재방문) | 0건 | $0 |
-| 캐시 미스 (첫 로드) | ~22건 Describe/List | ~$0 (대부분 무료 API) |
-| Cache Warmer 1시간 (15회) | ~330건 | ~$0 |
-
-**비용이 발생하는 주요 API**:
-
-| API | 단가 | 월 예상 (4분 주기 워밍) |
-|-----|------|----------------------|
-| Cost Explorer | $0.01/건 | ~$3.24 (6건/시간 × 24시간 × 30일 × $0.01) |
-| CloudWatch GetMetricData | $0.01/1,000건 | ~$0.01 미만 |
-| S3 ListBuckets | $0.005/1,000건 | ~$0.01 미만 |
-
-### 비용 최적화 설계
-
-1. **5분 캐시**: 같은 페이지 재방문 시 API 호출 제로
-2. **Cache Warmer**: 사용자 요청 전에 미리 캐시 → 대부분의 요청이 캐시 히트
-3. **Cost 가용성 1시간 캐시**: `checkCostAvailability()`는 1시간에 1번만 probe
-4. **배치 사이즈 8**: 풀의 10개 커넥션 중 8개만 사용, 2개는 실시간 요청용 예비
-5. **CloudWatch 쿼리 워밍 제외**: 느린 FDW API로 좀비 커넥션 유발 → 사용자 요청 시에만 실행
-
-:::info Cost Explorer 비용 절감
-Cost Explorer API는 가장 비용이 높은 API입니다. `checkCostAvailability()`는 전용 10초 타임아웃으로 빠르게 판별하고, MSP 환경에서는 `costEnabled: false` 설정으로 API 호출 자체를 차단합니다.
+:::tip Fargate 워커는 CMD를 써야 합니다 (ENTRYPOINT 금지)
+Fargate 워커 Dockerfile은 반드시 **`CMD`** 를 사용해야 합니다. Step Functions의 `containerOverrides.command`는 CMD를 **대체**하지만 exec-form **ENTRYPOINT에는 append**됩니다. ENTRYPOINT를 쓰면 argv가 중복되어 argparse가 실패합니다.
 :::
 
-</details>
+## 데이터 계층은 무엇인가요? (Aurora Serverless v2)
 
-<details>
-<summary>AI 의도 분류(Intent Classification)는 어떻게 동작하나요?</summary>
+앱 상태는 EC2의 로컬 `data/*.json` 파일이 아니라 **Aurora Serverless v2(PostgreSQL 17)** 에 저장됩니다. 웹은 **node-pg**(`web/lib/db.ts`의 공유 풀 `getPool`)로 접근합니다.
 
-### Route Registry 패턴
+| 항목 | 값 |
+|------|-----|
+| 엔진 | Aurora Serverless v2, **PostgreSQL 17** (정확 마이너 핀, 예: `17.9`) |
+| 용량 | **0.5 – 4 ACU** (`aurora_min_acu` / `aurora_max_acu`) |
+| 암호화 | KMS CMK |
+| 시크릿 | RDS 관리형 master secret |
+| 마이그레이션 | `schema_migrations` 테이블 + ULID 기반 마이그레이션 파일 |
 
-AWSops의 AI 라우팅은 **Route Registry**를 단일 소스로 사용합니다.
+### Aurora에 저장되는 것
 
-```typescript
-// src/app/api/ai/route.ts
-const ROUTE_REGISTRY: Record<string, RouteConfig> = {
-  code:      { handler: 'code', display: 'Code Interpreter', tools: [...], examples: [...] },
-  network:   { gateway: 'network', display: 'Network Gateway (17 tools)', tools: [...] },
-  container: { gateway: 'container', display: 'Container Gateway (24 tools)', tools: [...] },
-  iac:       { gateway: 'iac', tools: [...] },
-  data:      { gateway: 'data', tools: [...] },
-  security:  { gateway: 'security', tools: [...] },
-  monitoring:{ gateway: 'monitoring', tools: [...] },
-  cost:      { gateway: 'cost', tools: [...] },
-  'aws-data':{ handler: 'sql', display: 'Steampipe + Bedrock', tools: [...] },
-  general:   { gateway: 'ops', tools: [...] },
-};
-```
+- `worker_jobs` — 비동기 잡 상태
+- 챗 스레드 — 대화 영속(Claude-app 스타일 사이드바)
+- AI 진단 리포트 — 제목·태그·소프트삭제(`deleted_at`) 포함
+- 데이터소스 스키마 캐시 — 커넥터 스키마
 
-### 분류 흐름
+:::info node-pg 한 가지 패턴, v1의 Steampipe pg Pool 아님
+AWSops는 (v1의) Steampipe pg Pool(포트 9193, node-cache, cache-warmer, batchQuery 등)을 쓰지 않습니다. 라이브 AWS 조회는 아래의 AgentCore MCP 도구가, 영속 상태는 Aurora가 담당합니다.
+:::
+
+## 라이브 AWS 조회는 어떻게 하나요? (AgentCore vs Steampipe)
+
+AWSops의 라이브 AWS 데이터는 **AgentCore MCP Lambda 도구**가 담당합니다. 약 **120개의 읽기 전용 도구**가 **8개 섹션 게이트웨이**(network / container / data / security / cost / monitoring / iac / ops)에 걸쳐 배포됩니다.
+
+| 구분 | 역할 |
+|------|------|
+| **AgentCore MCP 도구 (라이브)** | 실시간 AWS API 조회 — 챗·진단·페이지의 라이브 데이터 소스 |
+| **Steampipe (flag-gated)** | `steampipe_enabled`(기본 OFF) 인벤토리 sync **전용**. 라이브 쿼리 엔진이 아니며, 로컬 9193 서비스도 아님 |
+
+:::info 게이트웨이 수는 8개입니다 (ADR-004)
+외부 관측성(Observability)은 별도의 **Integrations 축**(ADR-039)이며 9번째 게이트웨이가 아닙니다. ADR-004에 따라 게이트웨이 수는 **8**로 유지됩니다.
+:::
+
+## AI 라우팅은 어떻게 동작하나요? (ADR-038 하이브리드)
+
+AI 라우팅은 **ADR-038 하이브리드** 방식으로 LIVE입니다. v1의 Sonnet 단일 분류기 11/18-route 레지스트리를 대체합니다.
 
 ```mermaid
 flowchart TD
-  Q["사용자 질문"] --> SONNET["Bedrock Sonnet<br/>의도 분류 (1-2초)"]
-  SONNET -->|"route 결정"| ROUTES["['network', 'security']<br/>(멀티 라우트 가능)"]
-
-  ROUTES -->|"각 route"| REG["Route Registry<br/>handler/gateway 매핑"]
-  REG -->|"handler='code'"| CODE["Code Interpreter"]
-  REG -->|"handler='sql'"| SQL["Steampipe + Bedrock"]
-  REG -->|"gateway='network'"| AC["AgentCore Runtime"]
+  Q["사용자 질문"] --> REGEX{"정규식<br/>fast-path 매칭?"}
+  REGEX -->|"매칭"| ROUTE["섹션 라우트 즉시 결정<br/>(LLM 호출 없음)"]
+  REGEX -->|"미매칭"| HAIKU["Haiku 4.5 분류기<br/>(프롬프트 캐싱)"]
+  HAIKU --> ROUTE
+  ROUTE --> AGENT["섹션 에이전트<br/>(AgentCore Runtime → 8 GW)"]
 ```
 
-### 분류 우선순위
+### 3가지 핵심 메커니즘
 
-Sonnet이 질문을 분석할 때 Route Registry의 `tools`와 `examples`를 참고합니다:
+1. **정규식 fast-path** — 명확한 키워드 패턴은 LLM 호출 없이 즉시 라우팅 → 지연 절감.
+2. **Haiku 4.5 분류기** — fast-path로 못 잡은 질문만 가벼운 Haiku 모델이 분류.
+3. **프롬프트 캐싱** — 분류 프롬프트를 캐시(약 59% 히트)해 토큰·지연을 줄임.
 
-| 우선순위 | 라우트 | 판단 기준 |
-|----------|--------|----------|
-| 1 | code | "코드 실행", "Python", "계산", "시각화" |
-| 2 | network | "연결 안 됨", "VPC", "Security Group", "TGW" |
-| 3 | container | "Pod", "EKS", "ECS", "Istio" |
-| 4~8 | iac~cost | 각 도메인 키워드 |
-| 9 | aws-data | "목록", "몇 개", "상태", "현황" (리스팅/조회) |
-| 10 | general | 위에 해당하지 않는 질문 |
+### AI 어시스턴트 동작
 
-### 멀티 라우트
+- **스트리밍 + 도메인 라우팅 + 마크다운 렌더링**
+- 대화는 **Aurora에 영속** — Claude-app 스타일 사이드바, `/assistant` 전체 페이지와 리사이즈 가능한 드로어가 **하나의 히스토리**를 공유.
 
-하나의 질문이 여러 라우트에 해당하면 **동시 실행**:
+:::tip 분류기 타임아웃 학습
+글로벌 cross-region 추론 프로파일에서 분류기 타임아웃을 **1초로 두면 안 됩니다** — cold/지연 시 실패합니다. 충분한 여유(예: 3.5초)를 둬야 합니다.
+:::
 
-```typescript
-// 예: "보안 그룹 점검하고 비용 영향도 분석해줘" → ["security", "cost"]
-const results = await Promise.all(
-  routes.map(route => invokeHandler(messages, route))
-);
-// 결과를 합쳐서 하나의 응답으로 반환
-```
+## 인증 흐름은 어떻게 되나요? (RS256 + 인앱 로그인)
 
-</details>
-
-<details>
-<summary>Cognito + Lambda@Edge 인증 흐름은 어떻게 되나요?</summary>
-
-### 전체 흐름
+인증은 **Cognito + Lambda@Edge**로, 엣지에서 **RS256 JWKS 서명을 완전 검증**합니다(v1의 만료-only 검증과 다름). 경로는 루트(`/`)이며 `/awsops` basePath가 **없습니다.**
 
 ```mermaid
 flowchart LR
   USER["사용자"] -->|"HTTPS"| CF["CloudFront"]
-  CF -->|"Lambda@Edge<br/>(Viewer Request)"| EDGE["JWT 검증<br/>(Python 3.12)"]
-
-  EDGE -->|"유효한 토큰"| ALB["ALB → EC2"]
-  EDGE -->|"토큰 없음/만료"| LOGIN["커스텀 로그인 페이지<br/>/awsops/login"]
-  LOGIN -->|"POST /api/auth"| AUTH["Cognito InitiateAuth<br/>(USER_PASSWORD_AUTH)"]
-  AUTH -->|"HttpOnly 쿠키 설정"| CF
+  CF -->|"Lambda@Edge<br/>(Viewer Request, us-east-1)"| EDGE["RS256 JWKS<br/>서명 검증"]
+  EDGE -->|"유효한 토큰"| ALB["내부 ALB → Fargate"]
+  EDGE -->|"미인증"| LOGIN["자체 로그인 폼<br/>/login"]
+  LOGIN -->|"POST /api/auth/login"| AUTH["Cognito InitiateAuth<br/>(USER_PASSWORD_AUTH)"]
+  AUTH -->|"awsops_token 쿠키<br/>(id_token 12h)"| CF
 ```
 
-### 각 단계 상세
+### 단계별 상세
 
-**1. Lambda@Edge (us-east-1)**
-- CloudFront의 **Viewer Request** 이벤트에 연결
-- 모든 요청에서 `awsops_token` 쿠키의 JWT를 검증
-- JWT 서명, 만료 시간, issuer 확인
-- 유효하면 요청을 Origin(EC2)으로 전달
-- 무효하면 커스텀 로그인 페이지(`/awsops/login`)로 리다이렉트
+**1. Lambda@Edge (us-east-1, python3.12, Viewer Request)**
+- 모든 요청에서 `awsops_token` 쿠키의 JWT를 **RS256 JWKS로 서명 검증** + `iss`/`aud`/`token_use` 확인.
+- 미인증이면 자체 **`/login`** 폼으로 redirect.
 
-**2. Cognito User Pool**
-- 사용자 관리 (사용자 생성, 로그인)
-- 커스텀 로그인 페이지가 `POST /api/auth` → **InitiateAuth (`USER_PASSWORD_AUTH`)** 로 자격 증명 검증
-- Cognito Hosted UI는 사용하지 않음
+**2. 인앱 로그인 (ADR-042)**
+- 로그인 = **자체 `/login` 폼**. BFF `POST /api/auth/login`이 **무서명 공개 `InitiateAuth(USER_PASSWORD_AUTH)`** 를 호출(SDK 미사용) → `awsops_token` 쿠키 발급(id_token 12시간).
+- **Hosted UI PKCE 플로우(`/_callback`)는 다크 폴백**으로만 보존.
+- signout은 쿠키 삭제 → `/login`(Hosted UI `/logout` 왕복 없음).
 
-**3. EC2에서 사용자 식별**
+**3. 관리자(admin) 게이트 (서버 사이드, fail-closed)**
+- admin = **Cognito `admins` 그룹** 또는 **SSM admin-email allowlist**(`web/lib/admin.ts`). 둘 중 하나라도 해당하면 admin.
+- 판정은 서버 사이드에서, **fail-closed**(불확실하면 거부)로 수행.
 
-```typescript
-// src/lib/auth-utils.ts
-export function getUserFromRequest(request: NextRequest): UserInfo {
-  // awsops_token 쿠키에서 JWT payload만 디코딩
-  // 서명 재검증 불필요 (Lambda@Edge에서 이미 검증됨)
-  const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-  return {
-    email: payload.email || payload['cognito:username'],
-    sub: payload.sub,  // Cognito 고유 사용자 ID
-  };
-}
-```
+## 운영상 알아야 할 Terraform/인프라 학습은?
 
-### HttpOnly 쿠키 방식
+SRE 관점에서 반복적으로 발목을 잡았던 두 가지입니다.
 
-| 항목 | 설명 |
-|------|------|
-| **쿠키 이름** | `awsops_token` |
-| **HttpOnly** | `true` — JavaScript에서 접근 불가 (XSS 방어) |
-| **Secure** | `true` — HTTPS에서만 전송 |
-| **로그아웃** | `POST /api/auth` — 서버 사이드에서 쿠키 삭제 |
+### Aurora 메이저 업그레이드 (15 → 17.x)
 
-### 왜 HttpOnly 쿠키?
+순서가 중요합니다:
 
-- `document.cookie`로 토큰 탈취 불가 (XSS 방어)
-- 브라우저가 자동으로 쿠키를 전송하므로 클라이언트 코드에서 토큰 관리 불필요
-- 단점: `document.cookie`로 삭제할 수 없어 로그아웃은 서버 사이드 API 필요
+1. `variables.tf`에 **정확한 마이너 버전**(예: `17.9`) + `allow_major_version_upgrade = true` + `apply_immediately = true`를 설정하고 **먼저 apply**(업그레이드 수행).
+2. **그 다음** cluster와 instance **둘 다**에 `lifecycle { ignore_changes = [engine_version] }`를 추가 → 향후 마이너 자동 업그레이드(17.x → 17.y)를 Terraform 드리프트로 떠오르지 않게 흡수.
 
-</details>
-
-<details>
-<summary>Prometheus가 설치되어 있는데 다른 용도로도 활용할 수 있나요?</summary>
-
-### 현재 설치 상태
-
-`scripts/07-setup-opencost.sh`로 설치된 Prometheus 구성:
-
-```bash
-helm install prometheus prometheus-community/prometheus \
-  --namespace opencost \
-  --set server.persistentVolume.enabled=false \
-  --set alertmanager.enabled=false \          # AlertManager 비활성화
-  --set prometheus-node-exporter.enabled=true \  # Node 메트릭 수집
-  --set prometheus-pushgateway.enabled=false
-```
-
-| 컴포넌트 | 상태 | 설명 |
-|---------|------|------|
-| Prometheus Server | 활성 | 메트릭 수집/저장/쿼리 |
-| Node Exporter | 활성 | 노드 CPU/메모리/디스크/네트워크 |
-| AlertManager | **비활성** | 알림 라우팅 (활성화 가능) |
-| PushGateway | 비활성 | 배치잡 메트릭 (필요 시 활성화) |
-
-### 이미 수집 중인 메트릭
-
-OpenCost + Node Exporter로 이미 풍부한 메트릭이 수집되고 있습니다:
-
-| 메트릭 소스 | 수집 항목 |
-|------------|----------|
-| **kube-state-metrics** | Pod 상태, Deployment 상태, Node 조건, 리소스 요청/제한 |
-| **Node Exporter** | CPU 사용률, 메모리, 디스크 I/O, 네트워크 트래픽 |
-| **kubelet/cAdvisor** | 컨테이너별 CPU/메모리 사용량 |
-| **OpenCost** | Pod/Namespace별 비용 할당 |
-
-### 추가 활용 방법
-
-**1. PromQL 직접 쿼리 (즉시 가능)**
-
-```bash
-# Prometheus 포트 포워딩
-kubectl port-forward -n opencost svc/prometheus-server 9090:80
-
-# PromQL 예시
-# 노드별 CPU 사용률
-100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
-
-# Pod 메모리 사용량 Top 10
-topk(10, container_memory_working_set_bytes{container!=""})
-
-# 5분간 OOMKill 발생한 Pod
-kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}
-```
-
-**2. Grafana 연동 (추가 설치 필요)**
-
-```bash
-helm install grafana grafana/grafana \
-  --namespace opencost \
-  --set datasources."datasources\.yaml".apiVersion=1 \
-  --set datasources."datasources\.yaml".datasources[0].name=Prometheus \
-  --set datasources."datasources\.yaml".datasources[0].type=prometheus \
-  --set datasources."datasources\.yaml".datasources[0].url=http://prometheus-server.opencost:80
-```
-
-**3. 커스텀 메트릭 수집**
-
-애플리케이션에서 `/metrics` 엔드포인트를 노출하면 Prometheus가 자동으로 수집합니다 (ServiceMonitor 또는 annotations 방식).
-
-**4. AWSops 대시보드 확장**
-
-Prometheus HTTP API를 호출하는 Next.js API 라우트를 추가하면 AWSops 대시보드에서 Prometheus 메트릭을 직접 표시할 수 있습니다:
-
-```typescript
-// 예: /api/prometheus/route.ts
-const res = await fetch(
-  `http://prometheus-server.opencost:80/api/v1/query?query=${encodeURIComponent(promql)}`
-);
-```
-
-:::tip
-Prometheus는 기본적으로 15일간 메트릭을 보관합니다. 장기 보관이 필요하면 `--storage.tsdb.retention.time=30d` 설정을 추가하세요.
+:::tip "17"만 핀하면 안 됩니다
+마이너 없이 메이저만(`"17"`) 핀하면 `aws_rds_cluster`에서 오작동합니다. 항상 검증된 정확 마이너를 쓰세요.
 :::
 
-</details>
+### 보안 그룹(SG) description은 불변
 
-<details>
-<summary>시스템 문제 시 자동으로 알림을 받으려면 어떻게 하나요?</summary>
+SG의 `description`은 **불변**으로 취급해야 합니다. 변경하면 SG가 replace되는데, ALB가 그 SG에 의존하므로 적용이 hang됩니다. ingress 규칙은 **in-place로** 변경하되 description은 그대로 두세요.
 
-AWSops 환경에서 자동 알림을 구성하는 3가지 방법입니다.
-
-### 방법 비교
-
-```mermaid
-flowchart TD
-  subgraph M1["방법 1: AlertManager + AI"]
-    PR[Prometheus] -->|"PromQL 규칙"| AM[AlertManager]
-    AM -->|"webhook"| WH["/api/alert-webhook"]
-    WH --> AI["AI Agent 분석"]
-  end
-
-  subgraph M2["방법 2: CloudWatch + SNS"]
-    CWA[CloudWatch Alarm] --> SNS[SNS Topic]
-    SNS --> LM[Lambda]
-    LM -->|"POST"| WH2["/api/alert-webhook"]
-    WH2 --> AI
-  end
-
-  subgraph M3["방법 3: AWSops 스케줄러"]
-    CRON["cron / EventBridge"] -->|"주기적 호출"| AIAPI["/api/ai"]
-    AIAPI -->|"'시스템 상태 점검해줘'"| AI
-  end
-```
-
-### 방법 1: AlertManager (EKS 모니터링)
-
-현재 비활성화된 AlertManager를 활성화하면 Kubernetes 이벤트를 감지합니다:
-
-```bash
-# AlertManager 활성화
-helm upgrade prometheus prometheus-community/prometheus \
-  -n opencost --set alertmanager.enabled=true
-```
-
-**실용적인 트리거 시나리오:**
-
-| 알림 | PromQL 규칙 | 심각도 |
-|------|------------|--------|
-| Pod 크래시 루프 | `rate(kube_pod_container_status_restarts_total[15m]) > 0` | critical |
-| 노드 CPU 90%+ | `node_cpu_utilization > 0.9` (10분 지속) | warning |
-| PVC 용량 85%+ | `kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes > 0.85` | warning |
-| Pod Pending 5분+ | `kube_pod_status_phase{phase="Pending"} == 1` (5분 지속) | warning |
-| OOMKill 발생 | `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}` | critical |
-
-### 방법 2: CloudWatch Alarms (AWS 서비스 전체)
-
-AWS 관리형 서비스(EC2, RDS, ALB 등)는 CloudWatch Alarm으로 감지:
-
-```bash
-# EC2 CPU 알람 예시
-aws cloudwatch put-metric-alarm \
-  --alarm-name "AWSops-EC2-HighCPU" \
-  --metric-name CPUUtilization \
-  --namespace AWS/EC2 \
-  --statistic Average \
-  --period 300 \
-  --threshold 90 \
-  --comparison-operator GreaterThanThreshold \
-  --evaluation-periods 2 \
-  --alarm-actions $SNS_TOPIC_ARN
-```
-
-### 방법 3: 주기적 AI 헬스체크 (가장 간단)
-
-EventBridge 스케줄로 AI 어시스턴트에 주기적으로 점검을 요청:
-
-```bash
-# 매 시간 시스템 점검 (EventBridge → Lambda → AWSops AI API)
-"시스템 전체 상태를 점검해줘.
- EC2, RDS, EKS 클러스터 상태를 확인하고
- 이상이 있으면 요약해줘."
-```
-
-AI가 Steampipe로 리소스 상태를 조회하고, 이상을 감지하면 리포트를 생성합니다.
-
-:::tip 권장 구성
-**방법 1 + 방법 2** 조합을 권장합니다. EKS는 AlertManager로, AWS 서비스는 CloudWatch Alarm으로 감지하고, 두 경로 모두 AWSops AI로 분석 결과를 받으세요.
+:::info 기타 반복 학습
+- **ECS `secrets` valueFrom**(Aurora secret)은 **실행 역할(execution role)** 권한이 필요합니다(task role 아님). 아니면 `ResourceInitializationError`.
+- **`HOSTNAME=0.0.0.0`을 런타임 env**로 명시해야 합니다(task def `environment`). 이미지 ENV만으로는 ECS가 HOSTNAME을 ENI IP로 덮어써 healthCheck가 UNHEALTHY가 됩니다.
+- **arm64 필수** — web/agent/worker 이미지 모두 `buildx --platform linux/arm64`.
+- 컨테이너 + 타깃그룹 health 경로는 앱(`/api/health`)과 일치해야 합니다. 불일치 시 circuit breaker가 루프합니다.
 :::
-
-</details>
-
-<details>
-<summary>Slack으로 자동 장애 리포트를 받을 수 있나요?</summary>
-
-### 아키텍처
-
-```mermaid
-flowchart LR
-  subgraph DETECT["장애 감지"]
-    AM[AlertManager]
-    CW[CloudWatch Alarm]
-  end
-
-  subgraph ANALYZE["AI 분석"]
-    WH["/api/alert-webhook"] --> AI["AI Agent"]
-    AI -->|"원인 분석 + 해결책"| REPORT["분석 리포트"]
-  end
-
-  subgraph NOTIFY["알림 전송"]
-    REPORT --> SLACK["Slack<br/>Incoming Webhook"]
-    AM -->|"직접 연동도 가능"| SLACK
-  end
-
-  AM -->|webhook| WH
-  CW -->|SNS → Lambda| WH
-```
-
-### 방법 1: AlertManager → Slack 직접 연동 (빠른 알림)
-
-AlertManager가 Slack으로 직접 알림을 보냅니다 (AI 분석 없이 즉시):
-
-```yaml
-# alertmanager-config.yaml
-receivers:
-  - name: 'slack-alerts'
-    slack_configs:
-      - api_url: 'https://hooks.slack.com/services/T.../B.../xxx'
-        channel: '#ops-alerts'
-        title: '{{ .GroupLabels.alertname }}'
-        text: >-
-          *심각도:* {{ .CommonLabels.severity }}
-          *설명:* {{ .CommonAnnotations.description }}
-          *시작:* {{ .StartsAt }}
-        send_resolved: true
-
-route:
-  receiver: 'slack-alerts'
-  group_wait: 30s
-  group_interval: 5m
-```
-
-### 방법 2: AI 분석 리포트 → Slack (심화 분석)
-
-AWSops AI가 원인을 분석한 후 Slack으로 리포트를 전송합니다:
-
-```typescript
-// src/app/api/alert-webhook/route.ts (신규)
-export async function POST(request: NextRequest) {
-  const payload = await request.json();
-
-  // 1. AI에게 분석 요청
-  const aiResponse = await fetch('http://localhost:3000/awsops/api/ai', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      messages: [{
-        role: 'user',
-        content: `다음 알림을 분석하고 원인과 해결 방법을 제시해줘:\n${alertSummary}`
-      }],
-      stream: false,
-    }),
-  });
-
-  // 2. Slack으로 리포트 전송
-  await fetch(SLACK_WEBHOOK_URL, {
-    method: 'POST',
-    body: JSON.stringify({
-      blocks: [
-        { type: 'header', text: { type: 'plain_text', text: '🚨 AWSops 장애 리포트' }},
-        { type: 'section', text: { type: 'mrkdwn', text: `*알림:* ${alertName}` }},
-        { type: 'section', text: { type: 'mrkdwn', text: `*AI 분석:*\n${aiAnalysis}` }},
-        { type: 'section', text: { type: 'mrkdwn', text: `*권장 조치:*\n${recommendations}` }},
-      ],
-    }),
-  });
-}
-```
-
-### 방법 3: CloudWatch → SNS → Slack (Lambda 사용)
-
-AWS 서비스 알림을 Slack으로 보내는 CloudWatch 경로:
-
-```python
-# alert-to-slack-lambda.py
-import json, urllib3
-
-SLACK_WEBHOOK = 'https://hooks.slack.com/services/T.../B.../xxx'
-AWSOPS_WEBHOOK = 'http://<EC2-IP>:3000/awsops/api/alert-webhook'
-
-def handler(event, context):
-    sns_message = json.loads(event['Records'][0]['Sns']['Message'])
-
-    # AWSops AI 분석 요청
-    http = urllib3.PoolManager()
-    ai_response = http.request('POST', AWSOPS_WEBHOOK,
-        body=json.dumps({'alerts': [{'labels': {'alertname': sns_message['AlarmName']}}]}))
-
-    # Slack 전송
-    http.request('POST', SLACK_WEBHOOK,
-        body=json.dumps({'text': f"*{sns_message['AlarmName']}*\n{ai_response.data.decode()}"}))
-```
-
-### Slack Incoming Webhook 설정
-
-1. [Slack API](https://api.slack.com/apps) → 앱 생성
-2. **Incoming Webhooks** 활성화
-3. 워크스페이스에 설치, 채널 선택
-4. Webhook URL 복사 → AlertManager 설정 또는 Lambda 환경변수에 저장
-
-### 3가지 방법 비교
-
-| 항목 | AlertManager 직접 | AI 분석 리포트 | CloudWatch + SNS |
-|------|-------------------|---------------|-----------------|
-| 알림 속도 | 즉시 (30초 이내) | 1-2분 (AI 분석 포함) | 1분 이내 |
-| 분석 깊이 | 알림 내용만 | 원인 분석 + 해결책 | 알림 내용 + AI 분석 |
-| 대상 | EKS/K8s 이벤트 | 모든 소스 | AWS 서비스 |
-| 추가 구성 | AlertManager 활성화 | webhook API 구현 | Lambda 생성 |
-
-:::tip 권장 구성
-**AlertManager 직접 + AI 분석 리포트** 조합이 가장 효과적입니다:
-- 즉시 알림: AlertManager → Slack (빠른 인지)
-- 심화 분석: AlertManager → AI webhook → Slack (원인 분석 + 해결책)
-- 두 메시지가 같은 Slack 채널에 도착하면 즉시 인지 + 분석을 동시에 받을 수 있습니다.
-:::
-
-</details>
