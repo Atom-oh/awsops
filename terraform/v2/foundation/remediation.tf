@@ -229,10 +229,12 @@ resource "aws_sfn_state_machine" "remediation" {
     approval_fn_arn   = aws_lambda_function.approval_notifier[0].arn
     status_fn_arn     = aws_lambda_function.status_updater[0].arn
     cluster_arn       = aws_ecs_cluster.main.arn
-    task_def_arn      = aws_ecs_task_definition.worker[0].arn
-    subnets_json      = jsonencode(local.private_subnet_ids)
-    sg_id             = aws_security_group.service.id
-    container_name    = local.worker_cname_re
+    # FAMILY (revision-less) — same fix as workers.tf: pinning the revisioned ARN breaks runTask with
+    # "TaskDefinition is inactive" when the shared worker task def is replaced. IAM allows worker:*.
+    task_def_arn   = aws_ecs_task_definition.worker[0].family
+    subnets_json   = jsonencode(local.private_subnet_ids)
+    sg_id          = aws_security_group.service.id
+    container_name = local.worker_cname_re
   })
   logging_configuration {
     log_destination        = "${aws_cloudwatch_log_group.remediation_sfn[0].arn}:*"
