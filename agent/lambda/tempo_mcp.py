@@ -14,7 +14,8 @@ import time
 from urllib.parse import quote, urlencode
 
 from datasource_http import (
-    NotConnected, SsrfBlocked, assert_host_allowed, auth_headers, http_json, load_datasource,
+    NotConnected, SsrfBlocked, assert_host_allowed, auth_headers, health, http_json, load_datasource,
+    set_request_conn,
 )
 
 SLUG = "tempo"
@@ -122,8 +123,17 @@ _TOOLS = {
 }
 
 
+def tempo_health(args):
+    """Connectivity probe for the pre-save Test / status badge: GET /ready."""
+    return ok(health(load_datasource(SLUG), "/ready"))
+
+
+_TOOLS["tempo_health"] = tempo_health
+
+
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
+    set_request_conn(params.get("conn_config"))  # inline conn-config (BFF) > slug map
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
     if isinstance(args, dict):
