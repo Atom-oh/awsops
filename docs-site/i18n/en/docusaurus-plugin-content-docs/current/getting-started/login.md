@@ -1,87 +1,47 @@
 ---
 sidebar_position: 1
-title: Login Guide
-description: AWSops dashboard login and authentication methods
+title: Sign In
+description: How to sign in to AWSops with email and password
 ---
 
-# Login Guide
+import Screenshot from '@site/src/components/Screenshot';
 
-The AWSops dashboard uses Amazon Cognito-based authentication. You can log in with the email and password provided by your administrator.
+# Sign In
 
-## Login Procedure
+A page for signing in to AWSops with your email and password.
 
-### 1. Access the Dashboard
+<Screenshot src="/screenshots/getting-started/login.png" alt="Sign-in screen" />
 
-Open your browser and navigate to the dashboard URL:
-```
-https://your-domain.com/awsops/
-```
+## Features
+### Sign-in form
+- **Email**: Enter the email address you were issued.
+- **Password**: Enter your password.
+- **Stay signed in**: When checked, your session persists even after you close and reopen the browser. Uncheck it on shared computers.
+- **Sign in →**: The button that attempts sign-in with the credentials you entered.
 
-### 2. Authentication Screen
+### Automatic redirect
+- If you open any page while signed out, you are automatically redirected to the **Sign In** screen.
+- After a successful sign-in, you go straight to the dashboard (or the page you were originally headed to).
 
-When CloudFront Lambda@Edge detects an unauthenticated request, it automatically redirects to the Cognito login page.
+### Error messages
+- Invalid email/password, an account that requires an additional challenge, or a temporary service error are shown as an **inline alert** inside the form.
 
-### 3. Enter Credentials
+## How to Use
+1. Open AWSops in your browser. If you are not signed in, the **Sign In** screen appears.
+2. Enter your **Email** and **Password**.
+3. Leave **Stay signed in** checked to keep your session.
+4. Click the **Sign in →** button.
+5. Once authenticated, you are taken to the dashboard.
+6. To sign out, click the **sign-out icon** next to your account at the bottom of the left sidebar. Your session is cleared and you return to the **Sign In** screen.
 
-- **Email**: The email address registered by your administrator
-- **Password**: Your configured password
-
-:::tip First Login
-On your first login, you must change the temporary password to a new one. The password must meet these requirements:
-- At least 8 characters
-- Include uppercase, lowercase, numbers, and special characters
+## Tips
+:::tip Stay signed in
+Checking **Stay signed in** means you don't have to sign in again next time. On shared or public devices, uncheck it and always sign out when you're done.
 :::
 
-### 4. Login Complete
-
-Once authenticated, you will be redirected to the main dashboard page.
-
-## Sign Out
-
-Sign out using the button located at the top of the sidebar.
-
-### Sign Out Location
-1. Find the **AWSops** logo at the top of the left sidebar
-2. Click the **sign out icon** (door icon) to the right of the logo
-
-### Sign Out Behavior
-- Clicking sends a `POST /api/auth` request to the server
-- HttpOnly cookies are securely deleted server-side
-- You are automatically redirected to the login page
-
-:::info HttpOnly Cookies
-For security, authentication tokens are stored in HttpOnly cookies. These cookies cannot be accessed via JavaScript, protecting against XSS attacks. This is why sign out uses server-side cookie deletion.
+:::info When sign-in fails
+An inline alert appears at the top of the form. Double-check your email and password; if it keeps failing, try again shortly or contact your administrator.
 :::
 
-## Session Management
-
-### Session Duration
-- Default session duration follows Cognito settings
-- When the session expires, you are automatically redirected to the login page
-
-### Multiple Devices
-- You can log in from multiple devices with the same account
-- Each device has independent session management
-
-## Troubleshooting
-
-### Cannot Log In
-
-| Symptom | Solution |
-|---------|----------|
-| Password error | Request password reset |
-| Account locked | Contact your administrator |
-| Page won't load | Clear browser cache and retry |
-
-### Still Logged In After Sign Out
-
-1. Clear browser cookies
-2. Test in incognito/private mode
-3. Test in a different browser
-
-## Next Steps
-
-Once you've successfully logged in, check out these guides:
-
-- [Navigation Guide](../getting-started/navigation) - Understanding the UI layout
-- [AI Assistant Quick Start](../getting-started/ai-assistant) - Using AI features
+## Related Pages
+- [Layout & Themes](./navigation) - Understanding the sidebar, command palette, and themes

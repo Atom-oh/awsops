@@ -1,182 +1,76 @@
 ---
 sidebar_position: 1
 title: Dashboard
-description: AWSops main dashboard detailed guide
+description: The main dashboard for AWS and Kubernetes operations at a glance
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
-import ArchitectureFlow from '@site/src/components/diagrams/ArchitectureFlow';
 
 # Dashboard
 
-The Dashboard is the main page of AWSops, providing an at-a-glance view of your entire AWS and Kubernetes infrastructure.
+A page for viewing your AWS and Kubernetes operations at a glance and moving straight into the AI assistant.
 
 <Screenshot src="/screenshots/overview/dashboard.png" alt="Dashboard" />
 
-## System Architecture
+## Features
 
-<ArchitectureFlow />
+### AI Operations
 
-### Infrastructure
+The **AI Operations** row at the top of the page gives you direct entry points into the AI features.
 
-| Component | Configuration |
-|-----------|---------------|
-| **VPC** | 10.254.0.0/16, 2 AZs, NAT Gateway, Public + Private Subnets |
-| **EC2** | t4g.2xlarge (ARM64 Graviton), 100GB GP3 EBS, Private Subnet |
-| **ALB** | Internet-facing, port 80 (VSCode) / 3000 (Dashboard) |
-| **CloudFront** | CACHING_DISABLED, Custom Header validation blocks direct ALB access |
-| **Cognito** | Lambda@Edge (us-east-1) JWT validation, HttpOnly cookie auth |
+- **AI Assistant card**: Shows a badge with the active agent count; click **Start chat** to open the chat drawer.
+- **Recent AI conversations**: Lists your past conversations — click an item to reopen it.
+- **AI analysis** status card: Summarizes the current analysis environment, including the **EKS diagnosis**/**K8sGPT** gate, incident auto-analysis, and hybrid routing accuracy.
 
-### Data Layer
+### KPI tiles
 
-- **Steampipe PostgreSQL** (port 9193): 380+ AWS tables, 60+ K8s tables
-- **Cache**: node-cache 5min TTL, 5 sequential batch queries
-- **AI Engine**: Bedrock AgentCore Runtime (Strands) + 8 Gateways (125 MCP tools)
+Key resource metrics are organized into three groups.
 
-## Screen Layout
+| Group | Metrics |
+|-------|---------|
+| **COMPUTE & CONTAINERS** | EC2 (running/stopped hint), Lambda, ECS, ECR, EKS |
+| **STORAGE & NETWORK** | S3, EBS (unencrypted volume count), RDS, DynamoDB, VPC |
+| **SECURITY · OPS · COST** | IAM roles, Security Groups (open-ingress count), job success/fail, CloudWatch alarms, this-month cost (USD) |
 
-The dashboard consists of the following sections:
+- Tiles are highlighted in **warning/danger** colors when there are unencrypted volumes, 0.0.0.0/0 open ingress, or failed jobs.
+- This-month cost is shown as a USD amount.
 
-1. **Compute & Containers** - Computing resource summary
-2. **Network & Storage** - Network and storage summary
-3. **Security, Monitoring & Cost** - Security, monitoring, and cost summary
-4. **Active Warnings** - Real-time alerts
-5. **Charts** - Resource distribution and status charts
+### Charts
 
-## StatsCards
+| Chart | Content |
+|-------|---------|
+| **Resource distribution** | Counts of the top resource types (bar) |
+| **Resources by category** | Share per category with total (donut) |
+| **Job status** | Share of succeeded, failed, running, and queued jobs (donut) |
+| **Daily cost trend** | Cost trend by date (area) |
 
-### Compute & Containers (6 cards)
+## How to use
 
-| Card | Display | Details |
-|------|---------|---------|
-| **EC2** | Total instance count | running / stopped count |
-| **Lambda** | Total function count | Runtime count, long timeout functions |
-| **AgentCore** | 8 GW | 125 tools, 19 Lambda, Multi-route |
-| **ECR** | Total repository count | Scan enabled, immutable tags count |
-| **EKS** | Total node count | Ready nodes, pods, deployments count |
-| **CloudFront** | Total distribution count | Enabled, HTTP allowed count |
+1. The dashboard opens automatically after you sign in; you can also reach it via **Overview > Dashboard** in the sidebar.
+2. In the **AI Operations** row, click **Start chat** to begin a conversation, or reopen a previous one from **Recent AI conversations**.
+3. Check any tiles highlighted in warning/danger colors in the KPI section.
+4. Review the charts for resource composition, job status, and cost trend.
+5. Use the **Refresh** button in the header to reload all data. The last-updated time is shown alongside it.
 
-### Network & Storage (9 cards)
-
-| Card | Display | Details |
-|------|---------|---------|
-| **VPCs** | VPC count | Subnets, NAT Gateway, TGW count |
-| **WAF** | Web ACL count | Rule groups, IP sets count |
-| **EBS** | Volume count | Total capacity (GB), unencrypted volumes |
-| **S3 Buckets** | Bucket count | public/private breakdown |
-| **RDS** | Instance count | Total storage (GB), Multi-AZ count |
-| **DynamoDB** | Table count | On-demand status |
-| **ElastiCache** | Cluster count | Redis/Memcached breakdown, node count |
-| **OpenSearch** | Domain count | VPC domains, encryption status |
-| **MSK** | Cluster count | Active cluster count |
-
-### Security, Monitoring & Cost (6 cards)
-
-| Card | Display | Details |
-|------|---------|---------|
-| **Security Issues** | Total issue count | Public S3, Open SG, Unencrypted EBS |
-| **IAM Users** | User count | Roles, groups, no MFA count |
-| **CW Alarms** | Alarm count | Metrics, log groups count |
-| **CloudTrail** | Trail count | Active, multi-region, validated count |
-| **CIS Compliance** | Compliance rate (%) | Alarm, skip, error count |
-| **Monthly Cost** | Monthly cost ($) | Daily average, month-over-month change |
-
-## Card Click Navigation
-
-Click each StatsCard to navigate to the detailed page for that service.
-
-| Card | Destination |
-|------|-------------|
-| EC2 | `/ec2` |
-| Lambda | `/lambda` |
-| AgentCore | `/agentcore` |
-| EKS | `/k8s` |
-| S3 Buckets | `/s3` |
-| RDS | `/rds` |
-| Security Issues | `/security` |
-| CIS Compliance | `/compliance` |
-| Monthly Cost | `/cost` (when Cost Explorer is available) |
-
-:::tip Environments Without Cost Explorer
-In environments where Cost Explorer is not supported (e.g., MSP accounts), clicking the Monthly Cost card navigates to `/inventory` (Resource Inventory) instead.
+:::tip Keeping data fresh
+The **Refresh** button shows the time data was last loaded (KST) and adds an **(outdated)** marker after 30 minutes. If highlighted tiles appear or the timestamp looks stale, refresh once.
 :::
 
-## Active Warnings
-
-Displays alerts detected in real-time.
-
-| Warning Type | Description | Severity |
-|--------------|-------------|----------|
-| **Public S3 Buckets** | Publicly accessible S3 buckets | Error (red) |
-| **IAM users without MFA** | IAM users without MFA enabled | Warning (orange) |
-| **CloudWatch Alarms** | Active CloudWatch alarms | Error (red) |
-| **Open Security Groups** | Security groups with 0.0.0.0/0 inbound | Warning (orange) |
-| **K8s Warning events** | Kubernetes warning events | Warning (orange) |
-
-Click a warning to navigate to the detailed page for that service.
-
-## Charts
-
-### Resource Distribution (Bar Chart)
-
-Displays resource counts by type as a bar graph.
-
-- EC2, Lambda, S3, RDS, ECS Tasks, DynamoDB, K8s Pods
-
-### EC2 Instance Types (Pie Chart)
-
-Displays EC2 instance type distribution as a pie chart.
-
-- Top 8 types: t3.micro, t3.small, m5.large, etc.
-
-### K8s Pod Status (Pie Chart)
-
-Displays Kubernetes pod status distribution as a pie chart.
-
-- Running, Pending, Failed, Succeeded
-
-### Recent K8s Events
-
-Displays recent Kubernetes Warning events.
-
-- Namespace, Pod name, Reason, Message
-
-## Data Refresh
-
-### Auto Load
-Data is automatically fetched when accessing the page.
-
-### Manual Refresh
-Click the refresh button in the header to fetch the latest data, bypassing the cache.
-
-### Cache
-- Data is cached for 5 minutes
-- Data loading begins after Cost availability check
-
-## Cost Availability Auto-Detection
-
-The dashboard automatically checks Cost Explorer API availability on load.
-
-1. Calls `/api/steampipe?action=cost-check` API
-2. Includes/excludes cost-related queries based on response
-3. Displays "N/A" if Cost Explorer is not supported
-
-## Inventory Snapshot
-
-Resource inventory snapshots are automatically saved when dashboard data is fetched.
-
-- Location: `data/inventory/`
-- Purpose: Trend analysis on the Resource Inventory page
-
-:::info AI Analysis
-If you need more detailed analysis of information shown on the dashboard, ask the AI Assistant.
-
-Examples:
-- "Security Issues shows 3 Open SGs - tell me which security groups they are"
-- "There are many stopped EC2 instances - analyze if they can be terminated for cost savings"
+:::info When data looks empty
+KPI tiles show **—** until the summaries arrive. When there is no job or cost data, the chart areas display **No job data** or **No cost data** instead.
 :::
 
-## Next Steps
+## AI analysis tips
 
-- [AI Assistant Details](../overview/ai-assistant) - Analyze dashboard data with AI
-- [AgentCore Details](../overview/agentcore) - Understand AgentCore architecture
+You can ask the AI assistant about anything you notice on the dashboard.
+
+- "List the Security Groups that have open ingress."
+- "Show the unencrypted EBS volumes and which instances they're attached to."
+- "Analyze the main driver behind this month's cost increase."
+- "Diagnose what the recent failed jobs were and why they failed."
+
+## Related pages
+
+- [AI Assistant](./assistant) - Analyze dashboard data with the AI assistant
+- [Resource Inventory](../resources/inventory) - See detailed resource lists by type
+- [Cost Explorer](../cost/cost-explorer) - Analyze cost trends and breakdowns

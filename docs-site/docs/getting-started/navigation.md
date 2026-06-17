@@ -1,186 +1,79 @@
 ---
 sidebar_position: 2
-title: 네비게이션 가이드
-description: AWSops 대시보드 화면 구성 및 네비게이션 방법
+title: 화면 구성과 테마
+description: 사이드바 내비게이션, 명령 팔레트(Cmd-K), 테마, 모바일 레이아웃
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
 
-# 네비게이션 가이드
+# 화면 구성과 테마
 
-AWSops 대시보드는 사이드바 기반 네비게이션을 제공합니다. 37개의 페이지가 6개 그룹으로 구성되어 있어 원하는 정보를 빠르게 찾을 수 있습니다.
+사이드바 내비게이션, 명령 팔레트, 테마, 모바일 레이아웃 등 AWSops의 화면 구성을 익힐 수 있는 페이지입니다.
 
-<Screenshot src="/screenshots/overview/dashboard.png" alt="AWSops 대시보드 전체 화면 — 사이드바, 헤더, 메인 콘텐츠 영역" />
+<Screenshot src="/screenshots/getting-started/command-palette.png" alt="명령 팔레트 (Cmd-K)" />
 
-## 화면 구성
+## 주요 기능
 
-화면은 크게 3개 영역으로 나뉩니다.
+### 왼쪽 사이드바
 
-### ① 사이드바 (왼쪽)
+화면 왼쪽의 고정 영역으로, 모든 페이지로 이동하는 기본 내비게이션입니다.
 
-화면 왼쪽에 고정된 네비게이션 영역입니다.
+- **헤더**: **AWSops** 마크와 **한/EN** 언어 전환 토글
+- **상단 고정 메뉴**: **개요(Overview)**, **AI 진단**, **어시스턴트(Assistant)**, **작업(Jobs)**, **비용(Cost)**, **Bedrock**, **토폴로지(Topology)**, **커스텀 에이전트(Custom Agents)**, **데이터소스(Datasources)**
+- **리소스 인벤토리 그룹**: 그 아래로 **Compute**(EKS, EC2, Lambda, ECS Clusters, ECS Tasks, ECR), **Storage & DB**, **Network**, **Security**, **Monitoring** 그룹이 이어집니다
+- **푸터**: 로그인한 사용자 정보와 **로그아웃(Sign out)**, 리전/연결 상태, 그리고 테마 선택기
+- 현재 보고 있는 페이지는 하이라이트로 표시됩니다
 
-- **상단**: AWSops 로고 + EN/한 언어 전환 + Sign Out 버튼
-- **Account Selector**: 멀티 어카운트 모드에서 계정 선택
-- **중앙**: 6개 메뉴 그룹 (Overview, Compute, Network & CDN, Storage & DB, Monitoring, Security)
-- **하단**: Cost ON/OFF 토글 + 버전 정보
-- 현재 페이지는 왼쪽에 **청록색(cyan) 하이라이트**로 표시됩니다
+### 명령 팔레트 (Cmd-K)
 
-### ② 헤더 (상단)
+키보드만으로 어디든 빠르게 이동하는 검색창입니다.
 
-각 페이지 상단에 표시되는 영역입니다.
+- **Cmd-K**(macOS) 또는 **Ctrl-K**(Windows/Linux)로 어느 페이지에서나 엽니다
+- 페이지 이름, 리소스 종류, 경로 일부를 입력해 필터링합니다
+- **위/아래 화살표**로 항목을 이동하고 **Enter**로 실행, **Esc**로 닫습니다
+- 페이지 이동뿐 아니라 **Theme: Cobalt / Teal / Dark** 항목으로 테마도 바로 전환할 수 있습니다
 
-- **페이지 이름**: 현재 보고 있는 페이지 제목
-- **새로고침 버튼**: 클릭 시 데이터 새로고침 (캐시 무시)
-- **ONLINE 상태**: 서버 연결 상태 표시 (녹색 점 = 정상)
+### 테마
 
-### ③ 메인 콘텐츠 (중앙)
+오른쪽 아래(사이드바 푸터)의 3종 테마 선택기에서 화면 색상을 고릅니다.
 
-선택한 페이지의 데이터가 표시되는 영역입니다.
-
-- **대시보드**: StatsCard, 경고 현황, 차트
-- **서비스 페이지**: 리소스 테이블, 상세 패널, CloudWatch 메트릭
-
-## 메뉴 그룹
-
-### Overview (4개 페이지)
-
-| 메뉴 | 설명 |
+| 테마 | 설명 |
 |------|------|
-| **Dashboard** | 전체 리소스 요약, 20개 StatsCard, 경고 현황 |
-| **AI Assistant** | AI 기반 질의응답, 자연어로 인프라 분석 (멀티 데이터소스 상관 분석 지원) |
-| **AgentCore** | AgentCore Runtime/Gateway 상태, 호출 통계 |
-| **Accounts** | 멀티 어카운트 관리 (추가/삭제/테스트, 관리자 전용) |
+| **Cobalt** | 기본값. 밝은 코발트 계열 |
+| **Teal** | 밝은 틸 계열 |
+| **Dark** | 어두운 다크 모드 |
 
-### Compute (8개 페이지)
+- 선택한 테마는 브라우저에 저장되어 새로고침 후에도 유지됩니다
+- 차트와 **AWSops** 마크 색상도 선택한 테마에 맞춰 함께 바뀝니다
 
-| 메뉴 | 설명 |
-|------|------|
-| **EC2** | EC2 인스턴스 목록 및 상세 정보 |
-| **Lambda** | Lambda 함수, 런타임 분포 |
-| **ECS** | ECS 클러스터, 서비스, 태스크 |
-| **ECR** | ECR 리포지토리, 이미지 |
-| **EKS** | EKS 클러스터 개요, 노드, Pod 요약 (Access Entry 상태, 클릭 필터링, Service Resources 탭) |
-| **EKS Explorer** | K9s 스타일 터미널 UI (Steampipe 기반 읽기 전용) |
-| **ECS Container Cost** | ECS Fargate 워크로드별 비용 분석 (Container Insights + Fargate 가격) |
-| **EKS Container Cost** | EKS Pod별 비용 분석 (OpenCost 또는 Request 기반 폴백) |
+<Screenshot src="/screenshots/getting-started/theme-dark.png" alt="Dark 테마" />
 
-:::tip EKS 서브페이지
-EKS Overview에서 통계 카드(Nodes, Pods, Deployments, Services)를 클릭하면 각 상세 페이지로 이동합니다. 클러스터 카드를 클릭하면 해당 클러스터만 필터링됩니다.
+### 모바일 레이아웃
+
+화면 폭이 좁아지면(1024px 미만) 자동으로 모바일 레이아웃으로 전환됩니다.
+
+- **상단 바**: 햄버거 메뉴, 페이지 제목, 검색(명령 팔레트) 아이콘
+- **하단 탭 바**: **Overview · Cost · Inventory · Assistant · More**의 5개 탭
+- **More** 탭이나 햄버거를 누르면 전체 메뉴가 담긴 **슬라이드 드로어**가 열립니다
+
+<Screenshot src="/screenshots/getting-started/mobile.png" alt="모바일 레이아웃" />
+
+## 사용 방법
+
+1. 데스크톱에서는 **왼쪽 사이드바**의 메뉴를 클릭해 원하는 페이지로 이동합니다.
+2. **Cmd-K**(또는 **Ctrl-K**)를 눌러 명령 팔레트를 열고, 페이지 이름을 입력한 뒤 **Enter**로 이동합니다.
+3. 사이드바 푸터의 테마 선택기에서 **Cobalt / Teal / Dark** 중 하나를 클릭합니다.
+4. 모바일에서는 하단 탭으로 주요 페이지를 오가고, **More**로 나머지 메뉴를 엽니다.
+5. 어느 페이지에서나 떠 있는 **AI 어시스턴트 플로팅 버튼**으로 채팅 창을 열 수 있습니다.
+
+:::tip 가장 빠른 이동
+페이지가 많을 때는 사이드바를 훑기보다 **Cmd-K**로 이름 일부만 입력하는 편이 빠릅니다. 팔레트에서 `Theme:`를 입력하면 테마도 즉시 바꿀 수 있습니다.
 :::
 
-### Network & CDN (4개 페이지)
-
-| 메뉴 | 설명 |
-|------|------|
-| **VPC / Network** | VPC, Subnet, Security Group, TGW, NAT |
-| **CloudFront** | CloudFront 배포 현황 |
-| **WAF** | WAF Web ACL, 규칙 그룹 |
-| **Topology** | 인프라 토폴로지 시각화 (React Flow) |
-
-### Storage & DB (7개 페이지)
-
-| 메뉴 | 설명 |
-|------|------|
-| **EBS** | EBS 볼륨, 스냅샷, 암호화 상태 |
-| **S3** | S3 버킷, TreeMap 시각화 |
-| **RDS** | RDS 인스턴스, CloudWatch 메트릭 |
-| **DynamoDB** | DynamoDB 테이블 |
-| **ElastiCache** | ElastiCache 클러스터 (Redis/Memcached) |
-| **OpenSearch** | OpenSearch 도메인 |
-| **MSK** | MSK Kafka 클러스터 |
-
-### Monitoring (8개 페이지)
-
-| 메뉴 | 설명 |
-|------|------|
-| **Monitoring** | CPU, Memory, Network, Disk I/O 통합 |
-| **Bedrock** | Bedrock 모델 사용량, 비용, 토큰 모니터링 |
-| **CloudWatch** | CloudWatch 알람 현황 |
-| **CloudTrail** | CloudTrail 트레일 및 이벤트 |
-| **Cost** | Cost Explorer, 비용 분석 |
-| **Resource Inventory** | 리소스 인벤토리 추이 |
-| **Datasources** | 외부 데이터소스 관리 (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog) |
-| **┗ Explore** | 데이터소스 쿼리 실행 + AI 쿼리 생성 (PromQL, LogQL, TraceQL, SQL) |
-
-### Security (3개 페이지)
-
-| 메뉴 | 설명 |
-|------|------|
-| **IAM** | IAM 사용자, 역할, 트러스트 정책 |
-| **Security** | 보안 이슈 (Public S3, Open SG, CVE) |
-| **CIS Compliance** | CIS Benchmark (v1.5 ~ v4.0) |
-
-## 멀티 어카운트 동작 (전역 규칙)
-
-`data/config.json`의 `accounts[]` 배열에 둘 이상의 계정이 등록되면 AWSops는 **멀티 어카운트 모드**로 동작합니다. 이 동작은 거의 모든 페이지에 공통 적용되므로 개별 가이드에서는 별도로 반복하지 않습니다.
-
-### 사이드바 AccountSelector
-사이드바 상단에 드롭다운이 나타나며 다음 항목을 선택할 수 있습니다:
-- **All Accounts** — Steampipe Aggregator(`aws`) 사용, 모든 계정 데이터 통합 조회
-- **개별 계정** — `aws_{accountId}` connection 사용, 단일 계정으로 스코프
-
-선택은 URL 쿼리스트링 또는 쿠키로 페이지 간 유지됩니다.
-
-### useAccount() 훅
-모든 페이지 컴포넌트는 다음과 같이 현재 선택된 계정을 읽고 fetch에 첨부합니다:
-```tsx
-const { currentAccountId, isMultiAccount } = useAccountContext();
-// ...
-fetch('/awsops/api/steampipe', {
-  method: 'POST',
-  body: JSON.stringify({ accountId: currentAccountId, queries: {...} }),
-});
-```
-
-서버 측 `buildSearchPath(accountId)`가 `public, aws_{id}, kubernetes, trivy` 순으로 PostgreSQL `search_path`를 구성해 쿼리를 해당 계정으로 한정합니다.
-
-### DataTable Account 컬럼 자동 추가
-`DataTable` 컴포넌트는 `isMultiAccount && data[0]?.account_id`가 true이면 첫 번째 컬럼으로 **Account**를 자동 삽입하고, 값을 `AccountBadge`(별칭 + 컬러 도트)로 렌더링합니다. 페이지마다 별도 처리할 필요가 없습니다.
-
-이를 정상 동작시키려면 모든 AWS 테이블 `list` 쿼리에 **`account_id` 컬럼이 반드시 포함**되어야 합니다 (CLAUDE.md 데이터 접근 규칙 참고).
-
-### Cost 쿼리의 특수 처리
-Cost Explorer API는 계정별로 호출해야 하므로 `runCostQueriesPerAccount()`가 계정마다 별도 실행한 뒤 응답에 `account_id`를 태깅해 병합합니다. 단일 계정 모드에서는 이 분기를 우회합니다.
-
-### 페이지별 예외
-- **외부 데이터소스** (`/datasources`, `/datasources/explore`) — 글로벌 리소스라서 AccountSelector 영향을 받지 않습니다.
-- **AgentCore / Bedrock 모니터링** — Host 계정 기준 메트릭만 표시.
-- **이벤트 사전 스케일링** — 등록 시 `accountId`를 명시 지정. 미지정 이벤트는 모든 계정에서 조회됨.
-
-## Cost 토글
-
-사이드바 하단의 **Cost: ON/OFF** 버튼으로 비용 관련 기능을 활성화/비활성화할 수 있습니다.
-
-- **ON**: Cost 메뉴 표시, 대시보드에 비용 카드 표시
-- **OFF**: Cost 메뉴 숨김 (MSP 환경 등 Cost Explorer 미지원 시)
-
-:::tip Cost Explorer 자동 감지
-대시보드는 시작 시 Cost Explorer API 가용성을 자동으로 확인합니다. 사용 불가능한 환경에서는 자동으로 OFF 상태가 됩니다.
+:::info 표시 시각 안내
+앱에 표시되는 모든 시각은 **KST(Asia/Seoul)** 기준입니다.
 :::
 
-## 페이지 이동
+## 관련 페이지
 
-### 사이드바에서 이동
-원하는 메뉴를 클릭하면 해당 페이지로 이동합니다. 현재 페이지는 왼쪽에 청록색(cyan) 강조 표시됩니다.
-
-### 대시보드 카드에서 이동
-대시보드의 각 StatsCard를 클릭하면 해당 서비스의 상세 페이지로 이동합니다.
-
-예시:
-- **EC2 카드 클릭** → EC2 페이지로 이동
-- **Security Issues 카드 클릭** → Security 페이지로 이동
-- **EKS 카드 클릭** → EKS 페이지로 이동
-
-## 데이터 새로고침
-
-### 자동 새로고침
-페이지 로드 시 자동으로 최신 데이터를 조회합니다. 데이터는 5분간 캐시됩니다.
-
-### 수동 새로고침
-헤더의 새로고침 버튼을 클릭하면 캐시를 무시하고 최신 데이터를 조회합니다.
-
-## 다음 단계
-
-- [AI 어시스턴트 빠른 시작](../getting-started/ai-assistant) - AI 기능 활용하기
-- [대시보드 상세](../overview/dashboard) - 대시보드 기능 자세히 알아보기
+- [대시보드](../overview/dashboard) - 전체 리소스 요약과 시작 지점
