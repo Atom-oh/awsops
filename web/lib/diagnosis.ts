@@ -1,4 +1,6 @@
 import { getPool } from './db';
+import { isAdmin } from './admin';
+import type { User } from './auth';
 
 export type DiagnosisTier = 'light' | 'mid' | 'deep';
 // Bedrock model for the report. Only the deep tier may select 'opus'; light/mid are always 'sonnet'.
@@ -16,6 +18,12 @@ export interface DiagnosisReport {
   created_at: string;
   // Bedrock model used (NULL on legacy rows → render as 'sonnet'). Display metadata only.
   model: string | null;
+  // LLM auto key-insight title (editable) + tags (auto-suggested + manual); soft-delete timestamp.
+  title: string | null;
+  tags: string[];
+  deleted_at: string | null;
+  // BFF-enriched: may the current user edit/delete this report (owner or admin)? Not a DB column.
+  can_edit?: boolean;
   // A3/A5 (V1 parity): live per-section progress written by the worker as generate() advances.
   progress: DiagnosisProgress;
 }
@@ -28,19 +36,20 @@ export interface DiagnosisProgress {
 }
 
 const COLS =
-  'id, worker_job_id, tier, status, requested_by, sources_used, summary, artifact_uri, error, created_at, model, progress';
+  'id, worker_job_id, tier, status, requested_by, sources_used, summary, artifact_uri, error, created_at, model, title, tags, deleted_at, progress';
 
 export async function listReports(limit = 50): Promise<DiagnosisReport[]> {
   const { rows } = await getPool().query(
-    `SELECT ${COLS} FROM diagnosis_reports ORDER BY created_at DESC LIMIT $1`,
+    `SELECT ${COLS} FROM diagnosis_reports WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1`,
     [limit],
   );
   return rows as DiagnosisReport[];
 }
 
 export async function getReport(id: number): Promise<DiagnosisReport | null> {
+  // Filters soft-deleted → a deleted report is 404 on GET/download/PATCH/DELETE.
   const { rows } = await getPool().query(
-    `SELECT ${COLS} FROM diagnosis_reports WHERE id = $1`,
+    `SELECT ${COLS} FROM diagnosis_reports WHERE id = $1 AND deleted_at IS NULL`,
     [id],
   );
   return (rows[0] as DiagnosisReport) ?? null;
@@ -61,7 +70,7 @@ export async function createReport(
     `INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status, parent_report_id, model)
      VALUES (NULL, $1, $2, 'running',
        (SELECT id FROM diagnosis_reports
-         WHERE tier = $1 AND status = 'succeeded'
+         WHERE tier = $1 AND status = 'succeeded' AND deleted_at IS NULL
          ORDER BY created_at DESC LIMIT 1),
        $3)
      RETURNING id`,
@@ -82,7 +91,7 @@ export async function linkReportJob(reportId: number, workerJobId: string): Prom
 export async function reportForIdempotencyKey(key: string): Promise<number | null> {
   const { rows } = await getPool().query(
     `SELECT r.id FROM diagnosis_reports r JOIN worker_jobs j ON j.job_id = r.worker_job_id
-     WHERE j.idempotency_key = $1 ORDER BY r.id DESC LIMIT 1`,
+     WHERE j.idempotency_key = $1 AND r.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1`,
     [key],
   );
   return rows[0]?.id ?? null;
@@ -94,4 +103,44 @@ export async function markReportFailed(reportId: number, msg: string): Promise<v
     `UPDATE diagnosis_reports SET status = 'failed', error = $2 WHERE id = $1 AND status = 'running'`,
     [reportId, msg],
   );
+}
+
+// Partial metadata update — only sets the columns provided (tags-only must not clobber title).
+export async function updateReportMeta(
+  id: number,
+  meta: { title?: string | null; tags?: string[] },
+): Promise<void> {
+  const sets: string[] = [];
+  const args: unknown[] = [];
+  if (meta.title !== undefined) {
+    args.push(meta.title);
+    sets.push(`title = $${args.length}`);
+  }
+  if (meta.tags !== undefined) {
+    args.push(meta.tags);
+    sets.push(`tags = $${args.length}`);
+  }
+  if (sets.length === 0) return;
+  args.push(id);
+  await getPool().query(
+    `UPDATE diagnosis_reports SET ${sets.join(', ')} WHERE id = $${args.length} AND deleted_at IS NULL`,
+    args,
+  );
+}
+
+// Soft delete — hide from the list (recoverable; S3 retained). Idempotent (re-delete = no-op).
+export async function softDeleteReport(id: number): Promise<void> {
+  await getPool().query(
+    `UPDATE diagnosis_reports SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+    [id],
+  );
+}
+
+// Edit/delete gate: report owner (requested_by) OR an admin. Fail-closed (server-side enforced).
+export async function canMutateReport(
+  user: Pick<User, 'email' | 'sub' | 'groups'>,
+  report: Pick<DiagnosisReport, 'requested_by'>,
+): Promise<boolean> {
+  if (await isAdmin(user)) return true;
+  return report.requested_by === (user.email ?? user.sub);
 }
