@@ -78,10 +78,12 @@ export async function POST(request: Request) {
   const nl = typeof body.nl === 'string' ? body.nl.trim().slice(0, MAX_NL) : '';
   if (!nl) return json({ error: 'nl (natural-language request) required' }, 400);
 
+  const hasId = Number.isInteger(id) && id > 0;
   let extraContext = '';
   try {
     const schemas = await listConfiguredSchemas(currentAccountId());
-    const own = schemas.find((s) => s.slug === kind); // schema cache still keyed by kind/slug (Task 19 re-keys to id)
+    // Prefer this instance's cached schema (keyed by integration_id); else best-effort by kind.
+    const own = (hasId && schemas.find((s) => s.integrationId === id)) || schemas.find((s) => s.kind === kind);
     if (own) extraContext = schemaContext(own.schema);
   } catch { /* schema is optional — the model can still generate a best-effort query */ }
 

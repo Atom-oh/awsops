@@ -1,12 +1,16 @@
-// Admin schema refresh/read for datasource connectors. POST introspects a connector (invokes its
-// <slug>_schema tool) and caches the result in Aurora; GET returns cached summaries. The agent reads
-// the cache via the chat route (not here). accountId is server-derived (never the request body).
+// Admin schema refresh/read for datasource INSTANCES. POST introspects an instance (resolves its
+// row + credential, invokes the connector's <kind>_schema tool with an inline conn-config) and caches
+// the result in Aurora keyed by integration_id; GET returns cached summaries. The agent reads the
+// cache via the chat route (not here). accountId is server-derived (never the request body).
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { currentAccountId } from '@/lib/account';
-import { invokeConnectorTool } from '@/lib/connector-invoke';
+import { invokeMcpLambdaTool, type ConnConfig } from '@/lib/mcp-lambda-invoke';
 import { upsertSchema, listConfiguredSchemas } from '@/lib/datasource-schema';
-import { KNOWN_CONNECTOR_SLUGS } from '@/lib/integration-credentials';
+import { getDatasource } from '@/lib/datasources';
+import { getCredentialById } from '@/lib/integration-credentials';
+import { isDatasourceKind } from '@/lib/integrations-category';
+import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -36,21 +40,30 @@ function summarize(schema: unknown): Record<string, number> {
 export async function POST(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
-  let body: { slug?: unknown };
+  let body: { id?: unknown };
   try { body = (await readJsonBounded(request)) as typeof body; } // bound BEFORE parse (OOM guard)
   catch (e) {
     if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413);
     return json({ error: 'invalid JSON body' }, 400);
   }
-  const slug = typeof body?.slug === 'string' ? body.slug : '';
-  if (!slug || !(KNOWN_CONNECTOR_SLUGS as readonly string[]).includes(slug)) {
-    return json({ error: 'valid connector slug required' }, 400);
+  const id = Number(body?.id);
+  if (!Number.isInteger(id) || id <= 0) return json({ error: 'valid datasource id required' }, 400);
+
+  const ds = await getDatasource(id);
+  if (!ds || !isDatasourceKind(ds.kind)) return json({ error: 'unknown datasource instance' }, 400);
+
+  const cred = await getCredentialById(id, ds.kind);
+  const connConfig = cred ? (cred as ConnConfig) : undefined;
+  if (connConfig?.endpoint) {
+    try { assertDatasourceEndpointAllowed(connConfig.endpoint); }
+    catch (e) { return json({ error: (e as Error).message }, 400); }
   }
+
   const accountId = currentAccountId(); // server-side; never the request body
   try {
-    const schema = await invokeConnectorTool(slug, `${slug}_schema`, {});
-    await upsertSchema(accountId, slug, slug, schema);
-    return json({ ok: true, slug, summary: summarize(schema) }, 200);
+    const schema = await invokeMcpLambdaTool({ kind: ds.kind, tool: `${ds.kind}_schema`, connConfig });
+    await upsertSchema(accountId, id, ds.kind, schema);
+    return json({ ok: true, id, kind: ds.kind, summary: summarize(schema) }, 200);
   } catch (e) {
     return json({ error: (e as Error).message }, 400);
   }
@@ -60,5 +73,5 @@ export async function GET(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
   const rows = await listConfiguredSchemas(currentAccountId());
-  return json({ schemas: rows.map((r) => ({ slug: r.slug, kind: r.kind, fetched_at: r.fetched_at, summary: summarize(r.schema) })) }, 200);
+  return json({ schemas: rows.map((r) => ({ integrationId: r.integrationId, kind: r.kind, fetched_at: r.fetched_at, summary: summarize(r.schema) })) }, 200);
 }
