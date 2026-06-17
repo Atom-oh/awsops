@@ -151,5 +151,18 @@ class TestTools(unittest.TestCase):
         self.assertEqual(out["statusCode"], 200)
 
 
+
+class TestSchema(unittest.TestCase):
+    def setUp(self):
+        self._ld=mock.patch.object(ch,"load_datasource",return_value=DS); self._ld.start(); self.addCleanup(self._ld.stop)
+        self._ah=mock.patch.object(ch,"assert_host_allowed",return_value=None); self._ah.start(); self.addCleanup(self._ah.stop)
+    def test_schema_tables_columns(self):
+        seq=[(200,{"data":[{"name":"events"}]}),(200,{"data":[{"name":"ts","type":"DateTime"},{"name":"msg","type":"String"}]})]
+        with mock.patch.object(ch,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
+            out=ch.lambda_handler({"tool_name":"clickhouse_schema","arguments":{}},None)
+        b=json.loads(out["body"]); self.assertEqual(b["tables"][0]["name"],"events")
+        self.assertEqual([c["name"] for c in b["tables"][0]["columns"]],["ts","msg"])
+
+
 if __name__ == "__main__":
     unittest.main()

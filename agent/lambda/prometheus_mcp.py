@@ -131,11 +131,28 @@ def prometheus_series(args):
     return ok({"series": series[:MAX_SERIES], "truncated": len(series) > MAX_SERIES})
 
 
+def prometheus_schema(args):
+    creds = _ds()
+    base = "/api/v1"
+    try:
+        labels = _get(creds, f"{base}/labels", {})
+    except _ApiError:
+        labels = []
+    try:
+        metrics = _get(creds, f"{base}/label/__name__/values", {})
+    except _ApiError:
+        metrics = []
+    labels = labels if isinstance(labels, list) else []
+    metrics = metrics if isinstance(metrics, list) else []
+    return ok({"metrics": metrics[:500], "labels": labels[:200],
+               "truncated": len(metrics) > 500 or len(labels) > 200})
+
+
 _TOOLS = {
     "prometheus_query": prometheus_query,
     "prometheus_query_range": prometheus_query_range,
     "prometheus_labels": prometheus_labels,
-    "prometheus_series": prometheus_series,
+    "prometheus_series": prometheus_series, "prometheus_schema": prometheus_schema,
 }
 
 

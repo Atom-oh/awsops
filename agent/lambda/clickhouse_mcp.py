@@ -171,10 +171,32 @@ def clickhouse_describe(args):
     return _run_sql(f"DESCRIBE TABLE {table}", _clamp_rows(args.get("max_rows")))
 
 
+MAX_SCHEMA_TABLES = 100
+MAX_SCHEMA_COLS = 200
+
+
+def clickhouse_schema(args):
+    tbls = _run_sql("SHOW TABLES", MAX_SCHEMA_TABLES)
+    if tbls["statusCode"] != 200:
+        return tbls
+    rows = json.loads(tbls["body"]).get("rows", [])
+    names = [list(r.values())[0] for r in rows if isinstance(r, dict) and r][:MAX_SCHEMA_TABLES]
+    tables = []
+    for n in names:
+        if not _IDENTIFIER.match(str(n)):
+            continue
+        d = _run_sql(f"DESCRIBE TABLE {n}", MAX_SCHEMA_COLS)
+        if d["statusCode"] != 200:
+            continue
+        cols = json.loads(d["body"]).get("rows", [])[:MAX_SCHEMA_COLS]
+        tables.append({"name": n, "columns": [{"name": c.get("name"), "type": c.get("type")} for c in cols if isinstance(c, dict)]})
+    return ok({"tables": tables, "truncated": len(names) >= MAX_SCHEMA_TABLES})
+
+
 _TOOLS = {
     "clickhouse_query": clickhouse_query,
     "clickhouse_tables": clickhouse_tables,
-    "clickhouse_describe": clickhouse_describe,
+    "clickhouse_describe": clickhouse_describe, "clickhouse_schema": clickhouse_schema,
 }
 
 

@@ -159,5 +159,15 @@ class TestDispatch(_Base):
         self.assertEqual(out["statusCode"], 200)
 
 
+
+class TestSchema(_Base):
+    def test_schema_domains_indices(self):
+        def fake_urlopen(req, timeout=None): return _fake_resp(200,[{"index":"logs-2026"},{"index":"app-2026"}])
+        with mock.patch.object(om,"get_client",return_value=_FakeOS()), \
+             mock.patch("opensearch_mcp.urllib.request.urlopen",side_effect=fake_urlopen):
+            out=om.lambda_handler({"tool_name":"opensearch_schema","arguments":{}},None)
+        b=json.loads(out["body"]); self.assertEqual(b["domains"][0]["name"],"logs"); self.assertIn("logs-2026",b["domains"][0]["indices"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -67,4 +67,15 @@ class TestGuards(_Base):
     def test_unknown_tool(self):
         self.assertEqual(mm.lambda_handler({"tool_name":"mimir_push","arguments":{}},None)["statusCode"],400)
 
+
+class TestSchema(_Base):
+    def test_schema_metrics_labels(self):
+        seq=[(200,{"status":"success","data":["job","instance"]}),(200,{"status":"success","data":["up","http_requests_total"]})]
+        with mock.patch.object(mm,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
+            out=mm.lambda_handler({"tool_name":"mimir_schema","arguments":{}},None)
+        import json as _j; b=_j.loads(out["body"])
+        self.assertEqual(out["statusCode"],200)
+        self.assertIn("metrics",b); self.assertIn("labels",b)
+
+
 if __name__=="__main__": unittest.main()

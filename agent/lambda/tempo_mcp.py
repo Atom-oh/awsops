@@ -109,9 +109,16 @@ def tempo_tag_values(args):
     return ok(data if isinstance(data, dict) else {"values": data})
 
 
+def tempo_schema(args):
+    data = _get(_ds(), "/api/search/tags")
+    tags = data.get("tagNames") if isinstance(data, dict) else data
+    tags = tags if isinstance(tags, list) else []
+    return ok({"tags": tags[:200], "truncated": len(tags) > 200})
+
+
 _TOOLS = {
     "tempo_search": tempo_search, "tempo_get_trace": tempo_get_trace,
-    "tempo_search_tags": tempo_search_tags, "tempo_tag_values": tempo_tag_values,
+    "tempo_search_tags": tempo_search_tags, "tempo_tag_values": tempo_tag_values, "tempo_schema": tempo_schema,
 }
 
 

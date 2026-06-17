@@ -99,4 +99,12 @@ class TestGuards(_Base):
     def test_unknown_tool(self):
         self.assertEqual(lm.lambda_handler({"tool_name":"loki_push","arguments":{}},None)["statusCode"],400)
 
+
+class TestSchema(_Base):
+    def test_schema_labels(self):
+        with mock.patch.object(lm,"http_json",return_value=(200,{"status":"success","data":["app","job"]})):
+            out=lm.lambda_handler({"tool_name":"loki_schema","arguments":{}},None)
+        import json as _j; self.assertEqual(_j.loads(out["body"])["labels"],["app","job"])
+
+
 if __name__=="__main__": unittest.main()

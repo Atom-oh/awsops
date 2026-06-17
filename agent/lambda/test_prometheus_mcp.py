@@ -134,5 +134,16 @@ class TestGuards(_Base):
         self.assertEqual(out["statusCode"], 400)
 
 
+
+class TestSchema(_Base):
+    def test_schema_metrics_labels(self):
+        seq=[(200,{"status":"success","data":["job","instance"]}),(200,{"status":"success","data":["up","http_requests_total"]})]
+        with mock.patch.object(pm,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
+            out=pm.lambda_handler({"tool_name":"prometheus_schema","arguments":{}},None)
+        import json as _j; b=_j.loads(out["body"])
+        self.assertEqual(out["statusCode"],200)
+        self.assertIn("metrics",b); self.assertIn("labels",b)
+
+
 if __name__ == "__main__":
     unittest.main()

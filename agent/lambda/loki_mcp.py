@@ -145,9 +145,19 @@ def loki_label_values(args):
     return ok({"values": values[:1000], "truncated": len(values) > 1000})
 
 
+def loki_schema(args):
+    creds = _ds()
+    try:
+        labels = _get(creds, "/loki/api/v1/labels", {})
+    except _ApiError:
+        labels = []
+    labels = labels if isinstance(labels, list) else []
+    return ok({"labels": labels[:200], "truncated": len(labels) > 200})
+
+
 _TOOLS = {
     "loki_query_range": loki_query_range, "loki_query": loki_query,
-    "loki_labels": loki_labels, "loki_label_values": loki_label_values,
+    "loki_labels": loki_labels, "loki_label_values": loki_label_values, "loki_schema": loki_schema,
 }
 
 

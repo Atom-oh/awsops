@@ -132,10 +132,28 @@ def opensearch_indices(args, region, target_account_id):
     return ok({"domain": domain, "indices": data})
 
 
+def opensearch_schema(args, region, target_account_id):
+    """Normalized schema for caching: each domain's endpoint + its indices (bounded)."""
+    role_arn = get_role_arn(target_account_id) if target_account_id else None
+    c = get_client("opensearch", region, role_arn)
+    names = [d["DomainName"] for d in c.list_domain_names().get("DomainNames", [])][:20]
+    domains = []
+    for n in names:
+        try:
+            endpoint = _resolve_endpoint(n, region, role_arn)
+            status, data = _signed_request("GET", f"{endpoint}/_cat/indices?format=json", b"", region, target_account_id)
+            idx = [i.get("index") for i in data][:100] if status < 400 and isinstance(data, list) else []
+            domains.append({"name": n, "indices": idx, "truncated": len(idx) >= 100})
+        except Exception as e:  # noqa: BLE001
+            domains.append({"name": n, "error": str(e)[:120]})
+    return ok({"domains": domains})
+
+
 _TOOLS = {
     "list_opensearch_domains": list_opensearch_domains,
     "search_opensearch_logs": search_opensearch_logs,
     "opensearch_indices": opensearch_indices,
+    "opensearch_schema": opensearch_schema,
 }
 
 

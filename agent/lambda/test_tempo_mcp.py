@@ -88,4 +88,12 @@ class TestGuards(_Base):
     def test_unknown_tool(self):
         self.assertEqual(tm.lambda_handler({"tool_name":"tempo_write","arguments":{}},None)["statusCode"],400)
 
+
+class TestSchema(_Base):
+    def test_schema_tags(self):
+        with mock.patch.object(tm,"http_json",return_value=(200,{"tagNames":["service.name","http.status"]})):
+            out=tm.lambda_handler({"tool_name":"tempo_schema","arguments":{}},None)
+        import json as _j; self.assertEqual(_j.loads(out["body"])["tags"],["service.name","http.status"])
+
+
 if __name__=="__main__": unittest.main()

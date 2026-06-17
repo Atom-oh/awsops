@@ -116,8 +116,25 @@ def mimir_series(args):
     return ok({"series": series[:MAX_SERIES], "truncated": len(series) > MAX_SERIES})
 
 
+def mimir_schema(args):
+    creds = _ds()
+    base = BASE
+    try:
+        labels = _get(creds, f"{base}/labels", {})
+    except _ApiError:
+        labels = []
+    try:
+        metrics = _get(creds, f"{base}/label/__name__/values", {})
+    except _ApiError:
+        metrics = []
+    labels = labels if isinstance(labels, list) else []
+    metrics = metrics if isinstance(metrics, list) else []
+    return ok({"metrics": metrics[:500], "labels": labels[:200],
+               "truncated": len(metrics) > 500 or len(labels) > 200})
+
+
 _TOOLS = {"mimir_query": mimir_query, "mimir_query_range": mimir_query_range,
-          "mimir_labels": mimir_labels, "mimir_series": mimir_series}
+          "mimir_labels": mimir_labels, "mimir_series": mimir_series, "mimir_schema": mimir_schema}
 
 
 def lambda_handler(event, context):
