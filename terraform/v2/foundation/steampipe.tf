@@ -263,7 +263,10 @@ resource "aws_iam_role_policy" "inv_sync" {
       { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.steampipe[0].arn, aws_rds_cluster.aurora.master_user_secret[0].secret_arn] },
       { Effect = "Allow", Action = ["kms:Decrypt"], Resource = aws_kms_key.aurora.arn },
       # self-invoke for type=all fan-out (async InvocationType=Event per type)
-      { Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = aws_lambda_function.inv_sync[0].arn }
+      { Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = aws_lambda_function.inv_sync[0].arn },
+      # SDK-sourced cloudfront_vpc_origin sync (Steampipe omits VpcOriginConfig): read-only CloudFront
+      # list/get for VPC origins + per-distribution config. Read-only; no mutation.
+      { Effect = "Allow", Action = ["cloudfront:ListVpcOrigins", "cloudfront:GetVpcOrigin", "cloudfront:ListDistributions", "cloudfront:GetDistributionConfig"], Resource = "*" }
     ]
   })
 }

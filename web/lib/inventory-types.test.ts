@@ -2,12 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { INVENTORY_TYPES, inventoryGroups, isDeprecatedRuntime, DEPRECATED_RUNTIMES } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
-  it('has the 25 wave types (D2 13 + D3 9 + target_group + route53 + ecs_task)', () => {
+  it('has the 28 wave types (25 + apigatewayv2_api/_integration + cloudfront_vpc_origin)', () => {
     const keys = Object.keys(INVENTORY_TYPES);
     expect(keys).toContain('ec2'); expect(keys).toContain('s3'); expect(keys).toContain('iam_role');
     expect(keys).toContain('cloudfront'); expect(keys).toContain('cloudwatch_alarm'); expect(keys).toContain('msk');
     expect(keys).toContain('target_group'); expect(keys).toContain('route53'); expect(keys).toContain('ecs_task');
-    expect(keys.length).toBe(25);
+    // L7 resolution types (CF→APIGW→Lambda/LB, CF VPC origin→ALB/NLB)
+    expect(keys).toContain('apigatewayv2_api'); expect(keys).toContain('apigatewayv2_integration'); expect(keys).toContain('cloudfront_vpc_origin');
+    expect(keys.length).toBe(28);
   });
   it('every type has a label, group, and >=1 column', () => {
     for (const [k, v] of Object.entries(INVENTORY_TYPES)) {

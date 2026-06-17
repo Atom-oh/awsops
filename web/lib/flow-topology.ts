@@ -22,7 +22,7 @@ function arr(v: unknown): Row[] {
   return [];
 }
 
-export type FlowKind = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'target' | 'waf' | 'origin' | 'more';
+export type FlowKind = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'target' | 'waf' | 'origin' | 'more' | 'apigw' | 'lambda';
 export type Confidence = 'observed' | 'inferred';
 export interface FlowNode { id: string; kind: FlowKind; label: string; meta?: Record<string, unknown> }
 export interface FlowEdge { id: string; source: string; target: string; confidence: Confidence }
@@ -34,6 +34,13 @@ export interface FlowInput {
   // s3 buckets (resource_id = bucket name, carries arn) — lets a CloudFront S3 origin resolve to
   // the REAL bucket resource (full row + ARN) instead of a synthesized placeholder.
   s3?: Row[];
+  // API Gateway v2 (HTTP API) — resource_id = api_id. A CloudFront execute-api origin resolves to
+  // an apigw node; its integrations chain to Lambda (synced) and/or VPC_LINK→ALB/NLB→TG→ECS.
+  apigatewayv2_api?: Row[];
+  apigatewayv2_integration?: Row[];
+  // CloudFront VPC origins (SDK-sourced; Steampipe omits VpcOriginConfig). Each row: resource_id =
+  // vo_id, arn = backing ALB/NLB ARN, status, distribution_ids[] (which CF distributions use it).
+  cloudfront_vpc_origin?: Row[];
   // ip-target resolution (Spec 2): pod/ENI IP → friendly label + meta. EKS comes live from the
   // page (ipResolved); ECS is derived here from synced ecsTask rows. Builder stays pure.
   ipResolved?: Record<string, { label: string; resolved: 'eks' | 'ecs'; meta?: Record<string, unknown> }>;
@@ -79,6 +86,30 @@ function s3Bucket(domain: string): string | null {
   return m ? m[1] : null;
 }
 
+/** A CloudFront origin DomainName that is an API Gateway execute-api host → the api id, else null. */
+function executeApiId(domain: string): string | null {
+  const m = domain.match(/^([a-z0-9]+)\.execute-api\.[^.]+\.amazonaws\.com$/i);
+  return m ? m[1] : null;
+}
+
+/** API GW integration_uri → the UNVERSIONED Lambda function ARN (strips a :alias/:version qualifier
+ *  and the arn:aws:apigateway:..:lambda:path/.../functions/<fnArn>/invocations wrapper), else null. */
+function lambdaArnFromIntegration(uri: string): string | null {
+  let a = uri;
+  const wrapped = uri.match(/\/functions\/(arn:aws:lambda:[^/]+)\/invocations/i);
+  if (wrapped) a = wrapped[1];
+  if (!/^arn:aws:lambda:/i.test(a)) return null;
+  const parts = a.split(':'); // arn:aws:lambda:<region>:<acct>:function:<name>[:<qualifier>]
+  return parts.length > 7 ? parts.slice(0, 7).join(':') : a;
+}
+
+/** An ELBv2 LISTENER arn → the load-balancer arn (':listener/'→':loadbalancer/', drop the listener
+ *  id segment), else null. Guarded: only transforms a real listener ARN (never an arbitrary uri). */
+function lbArnFromListener(uri: string): string | null {
+  if (!/^arn:aws:elasticloadbalancing:[^:]*:[^:]*:listener\/(app|net)\/[^/]+\/[^/]+\/[^/]+$/i.test(uri)) return null;
+  return uri.replace(':listener/', ':loadbalancer/').replace(/\/[^/]+$/, '');
+}
+
 export function buildFlowGraph(input: FlowInput): FlowGraph {
   const nodes: FlowNode[] = [];
   const edges: FlowEdge[] = [];
@@ -113,6 +144,7 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   for (const n of input.nlb ?? []) addNode(lbId('nlb', n), 'nlb', str(n.dns_name) || str(n.resource_id), { row: n, invType: 'nlb' });
   for (const w of input.waf ?? []) addNode(`waf:${str(w.resource_id)}`, 'waf', str(w.resource_id), { row: w, invType: 'waf' });
   for (const t of input.tg ?? []) addNode(`tg:${str(t.resource_id)}`, 'tg', str(t.target_group_name) || str(t.resource_id), { targetType: str(t.target_type), row: t, invType: 'target_group' });
+  for (const a of input.apigatewayv2_api ?? []) addNode(`apigw:${str(a.resource_id)}`, 'apigw', str(a.name) || str(a.resource_id), { row: a, invType: 'apigatewayv2_api' });
 
   // Indexes for joins (LB by dns_name for CF origins, by arn for TG load_balancer_arns).
   const lbByDns = new Map<string, string>();   // lowercased dns_name → node id
@@ -140,6 +172,24 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // fronted by an ap-northeast-2 app still matches). Depends on the s3 inventory pk being 'name'.
   const s3ByName = new Map<string, Row>();
   for (const b of input.s3 ?? []) s3ByName.set(str(b.resource_id), b);
+  // API Gateway nodes that actually exist (api_id) — an execute-api origin links only when synced.
+  const apigwIds = new Set<string>();
+  for (const a of input.apigatewayv2_api ?? []) apigwIds.add(str(a.resource_id));
+  // Lambda row by UNVERSIONED arn — to lazily create the lambda nodes an apigw integration references.
+  const lambdaRowByArn = new Map<string, Row>();
+  for (const l of input.lambda ?? []) if (l.arn) lambdaRowByArn.set(str(l.arn), l);
+  // CloudFront VPC origins: distribution id → backing LB arn(s). DEPLOYED only — a Failed VPC origin
+  // falls through to the honest unresolved-origin node (no misleading solid edge). NOTE: VpcOriginConfig
+  // is intentionally NOT read from the Steampipe origins jsonb (the SDK omits it); the join is the
+  // SDK-sourced distribution_ids membership keyed on the distribution id (= cloudfront resource_id).
+  const voByDistId = new Map<string, string[]>();
+  for (const v of input.cloudfront_vpc_origin ?? []) {
+    if (str(v.status) !== 'Deployed' || !v.arn) continue;
+    for (const d of Array.isArray(v.distribution_ids) ? v.distribution_ids : []) {
+      const k = str(d); if (!k) continue;
+      (voByDistId.get(k) ?? voByDistId.set(k, []).get(k)!).push(str(v.arn));
+    }
+  }
 
   // CloudFront indexes for Route53 alias targets: by distribution domain (d111.cloudfront.net)
   // and by custom-domain alias (the CNAMEs on the distribution).
@@ -178,9 +228,20 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       const domain = str(o.DomainName);
       const lbId = lbByDns.get(domain.toLowerCase());
       if (lbId) { addEdge(cfId, lbId); return; }
-      // VPC origin (private LB, DomainName is the public FQDN) or any unmatched origin →
-      // honest unresolved-origin node, never a false LB edge. VpcOriginConfig→ARN resolution
-      // is a feasibility-gated follow-up (aws_cloudfront_vpc_origin not synced).
+      // API Gateway execute-api origin → apigw node (ONLY when the api is synced; otherwise fall
+      // through so the origin is still represented as an honest unresolved node, not dropped).
+      const apiId = executeApiId(domain);
+      if (apiId && apigwIds.has(apiId)) { addEdge(cfId, `apigw:${apiId}`); return; }
+      // CloudFront VPC origin: resolve at the distribution level via the SDK-sourced
+      // cloudfront_vpc_origin (distribution_ids → LB arn). An unmatched, non-S3 origin on a
+      // distribution that uses a VPC origin → CF→LB edge into the already-rendered ALB/NLB.
+      const voArns = voByDistId.get(str(c.resource_id));
+      if (voArns && !s3Bucket(domain)) {
+        let linked = false;
+        for (const arn of voArns) { const id = lbByArn.get(arn); if (id) { addEdge(cfId, id); linked = true; } }
+        if (linked) return;
+      }
+      // Otherwise: honest unresolved-origin node, never a false LB edge.
       const vpc = (o.VpcOriginConfig && typeof o.VpcOriginConfig === 'object') ? ' (VPC origin)' : '';
       const oid = `origin:${str(c.resource_id)}:${domain || i}`;
       // S3 origin → resolve to the REAL bucket resource (full row + ARN), not a placeholder.
@@ -197,6 +258,31 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       }
       addEdge(cfId, oid);
     });
+  }
+
+  // 3b) API Gateway → backend. AWS_PROXY integration_uri → Lambda node (created lazily — only the
+  // Lambdas an apigw actually fronts). VPC_LINK (private) integration whose integration_uri is an
+  // ELBv2 listener ARN → the existing ALB/NLB node (so apigw→ALB→TG→ECS chains). connection_type is
+  // the authoritative VPC_LINK signal; the listener→LB transform is guarded to a real listener ARN.
+  for (const ig of input.apigatewayv2_integration ?? []) {
+    const apiId = str(ig.api_id);
+    if (!apigwIds.has(apiId)) continue;
+    const apigwNode = `apigw:${apiId}`;
+    const uri = str(ig.integration_uri);
+    const lArn = lambdaArnFromIntegration(uri);
+    if (lArn) {
+      const node = `lambda:${lArn}`;
+      const row = lambdaRowByArn.get(lArn);
+      addNode(node, 'lambda', row ? str(row.resource_id) || lArn : lArn.split(':function:')[1] || lArn,
+        row ? { row, invType: 'lambda' } : { arn: lArn });
+      addEdge(apigwNode, node);
+      continue;
+    }
+    if (str(ig.connection_type) === 'VPC_LINK') {
+      const derived = lbArnFromListener(uri);
+      const id = derived ? lbByArn.get(derived) : undefined;
+      if (id) addEdge(apigwNode, id);
+    }
   }
 
   // 4) ALB/NLB → TG (via load_balancer_arns) and TG → targets (target_health_descriptions).

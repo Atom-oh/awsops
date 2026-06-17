@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, Search, Database, type LucideIcon } from 'lucide-react';
+import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, Search, Database, Webhook, type LucideIcon } from 'lucide-react';
 import { Background, Controls, MiniMap, Position, type Node, type Edge, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
@@ -15,16 +15,21 @@ import { useTheme } from '@/lib/use-theme';
 // ReactFlow touches the DOM on mount — load it client-only to avoid SSR mismatch.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
 
-const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda', 'ecs_task', 's3'] as const;
+const TYPES = ['route53', 'cloudfront', 'alb', 'nlb', 'target_group', 'waf', 'ec2', 'lambda', 'ecs_task', 's3',
+  'apigatewayv2_api', 'apigatewayv2_integration', 'cloudfront_vpc_origin'] as const;
 type InvType = (typeof TYPES)[number];
 type Row = Record<string, unknown>;
 
 // InvType → FlowInput key (target_group→tg, ecs_task→ecsTask). ec2/lambda/ecs enrich target labels.
-// s3 resolves CloudFront S3 origins to the real bucket resource (full row + ARN).
-type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda' | 'ecsTask' | 's3';
+// s3 resolves CloudFront S3 origins; apigatewayv2_* resolve execute-api origins → API GW → Lambda/LB;
+// cloudfront_vpc_origin resolves CloudFront VPC origins → internal ALB/NLB.
+type RowKey = 'route53' | 'cloudfront' | 'alb' | 'nlb' | 'tg' | 'waf' | 'ec2' | 'lambda' | 'ecsTask' | 's3'
+  | 'apigatewayv2_api' | 'apigatewayv2_integration' | 'cloudfront_vpc_origin';
 const FLOW_KEY: Record<InvType, RowKey> = {
   route53: 'route53', cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg', waf: 'waf',
   ec2: 'ec2', lambda: 'lambda', ecs_task: 'ecsTask', s3: 's3',
+  apigatewayv2_api: 'apigatewayv2_api', apigatewayv2_integration: 'apigatewayv2_integration',
+  cloudfront_vpc_origin: 'cloudfront_vpc_origin',
 };
 
 // Node fill/border per FlowKind. Light + dark variants (ReactFlow dark colorMode flips default
@@ -34,11 +39,13 @@ const KIND_LIGHT: Record<FlowKind, [string, string]> = {
   route53: ['#E6F6EC', '#2E9E5B'], cloudfront: ['#E6EEFE', '#3D6FB5'], alb: ['#FEF3E2', '#C8902F'], nlb: ['#FEF3E2', '#C8902F'],
   tg: ['#F1E9FF', '#8A5BD0'], waf: ['#FDECE8', '#C85A45'], target: ['#EBEFF2', '#AFBAC3'],
   origin: ['#EBEFF2', '#AFBAC3'], more: ['#EBEFF2', '#AFBAC3'],
+  apigw: ['#E6EEFE', '#3D6FB5'], lambda: ['#FEF3E2', '#C8902F'],
 };
 const KIND_DARK: Record<FlowKind, [string, string]> = {
   route53: ['#0E2E1C', '#2E9E5B'], cloudfront: ['#16243E', '#3D6FB5'], alb: ['#33260C', '#C8902F'], nlb: ['#33260C', '#C8902F'],
   tg: ['#241A3E', '#8A5BD0'], waf: ['#331410', '#C85A45'], target: ['#1F262D', '#586773'],
   origin: ['#1F262D', '#586773'], more: ['#1F262D', '#586773'],
+  apigw: ['#16243E', '#3D6FB5'], lambda: ['#33260C', '#C8902F'],
 };
 const HEALTH_LIGHT: Record<string, [string, string]> = {
   healthy: ['#E6F6F2', '#01A88D'], unhealthy: ['#FDECE8', '#D13212'],
@@ -62,6 +69,7 @@ type IconC = LucideIcon;
 const KIND_ICON: Record<FlowKind, IconC> = {
   route53: Globe, cloudfront: Cloud, alb: Network, nlb: Network, tg: TargetIcon,
   waf: Shield, target: Circle, origin: CircleHelp, more: MoreHorizontal,
+  apigw: Webhook, lambda: Zap,
 };
 // target sub-icon by resolved backend: EKS pod / EC2 / Lambda, else a generic dot.
 const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ecs: Boxes, ec2: Server, lambda: Zap };
