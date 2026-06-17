@@ -21,14 +21,14 @@ describe('invokeMcpLambdaTool', () => {
       kind: 'prometheus',
       tool: 'prometheus_query',
       args: { query: 'up' },
-      connConfig: { endpoint: 'http://p:9090', authType: 'none', creds: {} },
+      connConfig: { endpoint: 'http://p:9090', authType: 'bearer', token: 't' },
     });
     const input = send.mock.calls[0][0].input;
     expect(input.FunctionName).toBe('awsops-v2-agent-prometheus-mcp');
     const payload = JSON.parse(Buffer.from(input.Payload).toString('utf8'));
     expect(payload.tool_name).toBe('prometheus_query');
     expect(payload.arguments).toEqual({ query: 'up' });
-    expect(payload.conn_config).toEqual({ endpoint: 'http://p:9090', authType: 'none', creds: {} });
+    expect(payload.conn_config).toEqual({ endpoint: 'http://p:9090', authType: 'bearer', token: 't' }); // FLAT blob
   });
 
   it('omits conn_config when none is given (Lambda falls back to its slug/env map)', async () => {

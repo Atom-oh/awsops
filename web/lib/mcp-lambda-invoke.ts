@@ -17,11 +17,18 @@ const PROJECT = process.env.PROJECT || 'awsops-v2';
  *  import graph (mirrors integration-credentials.KNOWN_CONNECTOR_SLUGS). */
 export const KNOWN_MCP_LAMBDA_KINDS = ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir'] as const;
 
+// The connection config is the FLAT secret blob the routes resolve (getCredentialById) and the
+// connector Lambda reads verbatim (creds.get("authType"), creds.get("username"), …) — NOT nested.
 export interface ConnConfig {
   endpoint?: string;
   authType?: string;
-  creds?: Record<string, unknown>;
+  username?: string;
+  password?: string;
+  token?: string;
+  headerName?: string;
+  headerValue?: string;
   org_id?: string;
+  [field: string]: unknown;
 }
 
 let lc: LambdaClient | null = null;
