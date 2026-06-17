@@ -41,6 +41,23 @@ describe('buildFlowGraph — CF→LB/WAF edges', () => {
     const g = buildFlowGraph({ cloudfront: [cf] });
     expect(g.nodes.find((n) => n.id === 'cf:D1')?.label).toBe('app.example.com');
   });
+
+  it('resolves an S3 REST-endpoint origin to its bucket (name + service=s3, not unresolved)', () => {
+    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'my-site-180294183052.s3.ap-northeast-2.amazonaws.com' }] };
+    const g = buildFlowGraph({ cloudfront: [cf] });
+    const o = g.nodes.find((n) => n.kind === 'origin');
+    expect(o?.label).toBe('my-site-180294183052');
+    expect(o?.meta?.service).toBe('s3');
+    expect(o?.meta?.unresolved).toBeUndefined();
+  });
+
+  it('keeps a non-S3 unmatched origin as an unresolved origin node', () => {
+    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'example.com' }] };
+    const g = buildFlowGraph({ cloudfront: [cf] });
+    const o = g.nodes.find((n) => n.kind === 'origin');
+    expect(o?.meta?.unresolved).toBe(true);
+    expect(o?.meta?.service).toBeUndefined();
+  });
 });
 
 describe('buildFlowGraph — Route53 entry', () => {
