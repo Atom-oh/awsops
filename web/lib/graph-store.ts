@@ -16,6 +16,9 @@ import { buildInfraGraph, type Row } from './infra-topology';
 const TYPE_TO_KEY: Record<string, Exclude<keyof FlowInput, 'ipResolved'>> = {
   route53: 'route53', cloudfront: 'cloudfront', alb: 'alb', nlb: 'nlb', target_group: 'tg',
   waf: 'waf', ec2: 'ec2', lambda: 'lambda', ecs_task: 'ecsTask', s3: 's3',
+  // L7 origin resolution: API Gateway (→Lambda/VPC-Link→LB) + CloudFront VPC origins (→ALB/NLB).
+  apigatewayv2_api: 'apigatewayv2_api', apigatewayv2_integration: 'apigatewayv2_integration',
+  cloudfront_vpc_origin: 'cloudfront_vpc_origin',
 };
 const TYPES = Object.keys(TYPE_TO_KEY);
 const FLOW_LOCK = 0x746f706f;   // 'topo' — flow rebuilds serialize on this key
