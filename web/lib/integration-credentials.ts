@@ -76,7 +76,21 @@ export async function setIntegrationCredential(
   }
 }
 
-/** Slugs that currently have a stored credential — KEYS ONLY (never values). */
+/** Slugs that currently have a stored credential — KEYS ONLY (never values).
+ *  Best-effort: when the integrations secret is absent or unreadable — e.g. the integrations
+ *  feature is gated off, so the task role has no access and Secrets Manager returns
+ *  AccessDenied (not ResourceNotFound) — treat it as "none configured" so the read-only
+ *  list/explore surfaces (/api/datasources, /customization) degrade to an empty state instead
+ *  of 500-ing the page. The admin write path (setIntegrationCredential) stays strict and still
+ *  surfaces errors. SECURITY: log only the error name, never the secret contents. */
 export async function getConfiguredSlugs(): Promise<string[]> {
-  return Object.keys(await readMap());
+  try {
+    return Object.keys(await readMap());
+  } catch (e) {
+    console.warn(
+      '[integration-credentials] getConfiguredSlugs read failed; treating as none configured:',
+      (e as { name?: string })?.name || 'unknown error',
+    );
+    return [];
+  }
 }

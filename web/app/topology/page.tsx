@@ -368,7 +368,9 @@ export default function TopologyPage() {
   }, [selected, netMaps]);
 
   const onEntry = (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
-  const selectCls = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
+  // max-w bounds the select so a long CloudFront/LB option label can't blow the toolbar width out
+  // and crush the PageHeader title/subtitle (which would wrap the subtitle one char per line).
+  const selectCls = 'max-w-[170px] rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
 
   // "Ask AI about this resource" bridge → seeds the chat composer (user reviews + sends).
   const resourceArn = (n: FlowNode): string => {
@@ -438,7 +440,7 @@ export default function TopologyPage() {
         title="Topology"
         subtitle="요청 흐름 그래프 (Route53 → CloudFront → LB → Target Group → 타깃)"
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <div className="relative">
               <div className="flex items-center gap-1 rounded-md border border-ink-200 bg-card px-2 py-1">
                 <Search size={13} className="text-ink-400" />
