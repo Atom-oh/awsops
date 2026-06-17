@@ -13,7 +13,22 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && python -m playwright install --with-deps chromium \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-COPY db.py handlers.py fargate_worker.py ./
+# CIS compliance (`compliance` job): Powerpipe runs the aws_compliance benchmark against the warm
+# Steampipe FDW (POWERPIPE_DATABASE → steampipe.<project>.internal:9193). Bake the binary + the
+# upstream mod at build time so there's NO GitHub egress at run time, and the mod context resolves.
+# `powerpipe mod install` needs a mod workspace (mod.pp) → `powerpipe mod init` first (correction C5).
+# arm64 image. Powerpipe only QUERIES Steampipe — read-only; no AWS mutation.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl tar git ca-certificates \
+    && curl -fsSL https://powerpipe.io/install/powerpipe.sh | sh \
+    && mkdir -p /app/powerpipe \
+    && cd /app/powerpipe \
+    && powerpipe mod init \
+    && powerpipe mod install github.com/turbot/steampipe-mod-aws-compliance \
+    && powerpipe --version \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+ENV POWERPIPE_MOD_DIR=/app/powerpipe
+COPY db.py handlers.py fargate_worker.py compliance.py ./
 # ADR-029+036 remediation P2-code executor (Fargate path). Same image; the SFN command selects the
 # module (`python remediation_executor_cli.py --job-id X --action Y`). Docker COPY cannot reach a
 # parent of the build context (scripts/v2/workers/), so workers.mjs does a pre-build `cp` of these 3

@@ -237,6 +237,24 @@ resource "aws_iam_role_policy" "worker_task" {
   })
 }
 
+# CIS compliance (`compliance` job): the Fargate worker reads the Steampipe FDW password at runtime
+# (boto3 → task role) to build POWERPIPE_DATABASE. Gated on BOTH workers AND steampipe being enabled
+# so the steampipe secret is only referenced when it exists. The secret uses the default
+# aws/secretsmanager key → no extra KMS grant needed (see steampipe.tf).
+resource "aws_iam_role_policy" "worker_task_steampipe_secret" {
+  count = local.we * local.sp
+  name  = "${var.project}-worker-task-steampipe-secret"
+  role  = aws_iam_role.worker_task[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = aws_secretsmanager_secret.steampipe[0].arn
+    }]
+  })
+}
+
 # ---- Step Functions role (C5 + .sync managed-rule perms) ----
 resource "aws_iam_role" "sfn" {
   count = local.we
@@ -377,7 +395,14 @@ resource "aws_ecs_task_definition" "worker" {
         # ARTIFACT_BUCKET → RuntimeError if unset) and invokes a global.* Bedrock inference profile
         # from the home region so calls land in the ap-northeast-2 invocation log (awsops cost attribution).
         { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.diagnosis_artifacts[0].bucket },
-        { name = "BEDROCK_REGION", value = var.region }
+        { name = "BEDROCK_REGION", value = var.region },
+        # CIS compliance (`compliance` job): the Fargate worker reuses aws_security_group.service,
+        # and steampipe.tf already allows that SG into the Steampipe FDW on :9193 — no SG change.
+        # Powerpipe connects via POWERPIPE_DATABASE built from these (the worker reads the secret at
+        # runtime via boto3 → task role, not execution role). Empty when steampipe disabled →
+        # _compliance fails fast with a clear error.
+        { name = "STEAMPIPE_HOST", value = "steampipe.${var.project}.internal" },
+        { name = "STEAMPIPE_SECRET_ARN", value = try(aws_secretsmanager_secret.steampipe[0].arn, "") }
       ]
       logConfiguration = {
         logDriver = "awslogs"

@@ -352,9 +352,51 @@ def _fetch_alb_listener_rules():
     return rows, "resource_id", "region"
 
 
+def _fetch_s3_public_access(s3=None):
+    """Per-bucket S3 public-access flags (denial-safe), for the /security Public-S3 finding.
+    Steampipe's aws_s3_bucket public-access columns trigger per-bucket GetBucketPolicyStatus/
+    GetPublicAccessBlock, and ONE denied bucket fails the WHOLE table query — so source via boto3
+    and tolerate per-bucket AccessDenied. STRICTLY READ-ONLY (List/Get only).
+    NoSuchPublicAccessBlock => no PAB configured => blocks are effectively False (a real signal);
+    AccessDenied => genuinely unknown => leave None (FINDING_SQL treats None as non-public)."""
+    s3 = s3 or boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
+    rows = []
+    for b in s3.list_buckets().get("Buckets", []) or []:
+        name = b["Name"]
+        try:
+            loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
+            region = loc or "us-east-1"  # null LocationConstraint => us-east-1
+        except ClientError:
+            region = ""
+        rec = {"name": name, "region": region, "bucket_policy_is_public": None,
+               "block_public_acls": None, "block_public_policy": None,
+               "restrict_public_buckets": None, "ignore_public_acls": None}
+        try:
+            cfg = s3.get_public_access_block(Bucket=name).get("PublicAccessBlockConfiguration", {})
+            rec["block_public_acls"] = cfg.get("BlockPublicAcls")
+            rec["block_public_policy"] = cfg.get("BlockPublicPolicy")
+            rec["restrict_public_buckets"] = cfg.get("RestrictPublicBuckets")
+            rec["ignore_public_acls"] = cfg.get("IgnorePublicAcls")
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchPublicAccessBlock":
+                rec["block_public_acls"] = False
+                rec["block_public_policy"] = False
+                rec["restrict_public_buckets"] = False
+                rec["ignore_public_acls"] = False
+            # else AccessDenied / other → leave None (unknown)
+        try:
+            rec["bucket_policy_is_public"] = (
+                s3.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {}).get("IsPublic"))
+        except ClientError:
+            pass  # AccessDenied / NoSuchBucketPolicy → leave None
+        rows.append(rec)
+    return rows, "name", "region"
+
+
 SDK_SYNCS = {
     "cloudfront_vpc_origin": _fetch_cloudfront_vpc_origins,
     "alb_listener_rule": _fetch_alb_listener_rules,
+    "s3_public_access": _fetch_s3_public_access,
 }
 _ALLOWED = set(QUERIES) | set(SDK_SYNCS)
 _sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))

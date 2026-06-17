@@ -7,7 +7,7 @@ import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 export const dynamic = 'force-dynamic';
 
 // Mirror scripts/v2/workers/handlers.py REGISTRY. The dispatcher Lambda re-validates server-side.
-const ALLOWED = new Set(['noop', 'noop-heavy', 'report']);
+const ALLOWED = new Set(['noop', 'noop-heavy', 'report', 'compliance']);
 
 export async function POST(req: NextRequest) {
   const queueUrl = process.env.JOBS_QUEUE_URL;
