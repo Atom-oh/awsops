@@ -114,4 +114,29 @@ export async function updateDatasource(
   }
 }
 
-// setDefaultDatasource (Task 7) and deleteDatasource (Task 8) are appended below.
+/** Make `id` the default for its kind: unset other defaults of the kind then set this one (two
+ *  statements in a transaction — avoids a transient two-defaults unique-index violation). After
+ *  commit, mirror the default's credential under the plain kind key (agent gateway no-inline path). */
+export async function setDefaultDatasource(id: number): Promise<void> {
+  const c = await getPool().connect();
+  let kind: string;
+  try {
+    await c.query('BEGIN');
+    const { rows } = await c.query('SELECT kind FROM integrations WHERE id = $1', [id]);
+    if (!rows.length) throw new Error('datasource not found');
+    kind = rows[0].kind as string;
+    await c.query('UPDATE integrations SET is_default = false WHERE kind = $1 AND is_default', [kind]);
+    await c.query('UPDATE integrations SET is_default = true, updated_at = NOW() WHERE id = $1', [id]);
+    await c.query('COMMIT');
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+  // Secrets Manager write happens on its own connection/lock — after the DB commit.
+  const cred = await getCredentialById(id, kind);
+  if (cred) await mirrorDefaultCredential(kind, cred);
+}
+
+// deleteDatasource (Task 8) is appended below.
