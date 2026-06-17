@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { rebuildGraph } from './graph-store';
+import { rebuildGraph, rebuildInfraGraph } from './graph-store';
 
 // ADR-043 Step 1 — Task 1: the topology_graph migration exists and declares the expected shape.
 const MIG_DIR = join(process.cwd(), '..', 'terraform', 'v2', 'foundation', 'migrations');
@@ -40,15 +40,16 @@ describe('topology_class migration', () => {
 
 function mockPool(invRows: unknown[]) {
   const calls: string[] = [];
+  const params: unknown[][] = [];
   const client = {
-    query: vi.fn((sql: string) => { calls.push(String(sql)); return Promise.resolve({ rows: [] }); }),
+    query: vi.fn((sql: string, p?: unknown[]) => { calls.push(String(sql)); if (p) params.push(p); return Promise.resolve({ rows: [] }); }),
     release: vi.fn(),
   };
   const pool = {
     query: vi.fn(() => Promise.resolve({ rows: invRows })), // inventory SELECT
     connect: vi.fn(() => Promise.resolve(client)),
   };
-  return { pool, client, calls };
+  return { pool, client, calls, params };
 }
 
 describe('rebuildGraph', () => {
@@ -62,13 +63,21 @@ describe('rebuildGraph', () => {
     const res = await rebuildGraph(pool as never, 'RUN1');
     expect(calls[0]).toContain('BEGIN');
     expect(calls.some((s) => s.includes('pg_advisory_xact_lock'))).toBe(true);
-    expect(calls.some((s) => s.includes('INSERT INTO topology_nodes') && s.includes('ON CONFLICT'))).toBe(true);
-    expect(calls.some((s) => s.includes('INSERT INTO topology_edges') && s.includes('ON CONFLICT'))).toBe(true);
-    expect(calls.some((s) => s.includes('DELETE FROM topology_edges') && s.includes('run_id <> $1'))).toBe(true);
-    expect(calls.some((s) => s.includes('DELETE FROM topology_nodes') && s.includes('run_id <> $1'))).toBe(true);
+    expect(calls.some((s) => s.includes('INSERT INTO topology_nodes') && s.includes('ON CONFLICT (account_id, id, class)'))).toBe(true);
+    expect(calls.some((s) => s.includes('INSERT INTO topology_edges') && s.includes('ON CONFLICT (account_id, source, target, rel, class)'))).toBe(true);
+    // class-scoped mark-sweep (class = $1 AND run_id <> $2) — never wipes the other class's rows
+    expect(calls.some((s) => s.includes('DELETE FROM topology_edges') && s.includes('class = $1') && s.includes('run_id <> $2'))).toBe(true);
+    expect(calls.some((s) => s.includes('DELETE FROM topology_nodes') && s.includes('class = $1') && s.includes('run_id <> $2'))).toBe(true);
     expect(calls.at(-1)).toContain('COMMIT');
     expect(res.nodes).toBeGreaterThan(0);
     expect(res.edges).toBeGreaterThan(0);
+  });
+
+  it("writes class='flow'", async () => {
+    const { pool, params } = mockPool(inv);
+    await rebuildGraph(pool as never, 'RUN1');
+    expect(params.some((p) => p.includes('flow'))).toBe(true);
+    expect(params.some((p) => p.includes('infra'))).toBe(false);
   });
 
   it('preserves the last-good graph on an empty/failed inventory read (NO sweep)', async () => {
@@ -91,5 +100,29 @@ describe('rebuildGraph', () => {
     await expect(rebuildGraph(pool as never, 'RUN2')).rejects.toThrow('boom');
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('ROLLBACK'));
     expect(client.release).toHaveBeenCalled();
+  });
+});
+
+describe('rebuildInfraGraph', () => {
+  const inv = [
+    { resource_type: 'vpc', resource_id: 'vpc-1', region: 'r', data: { tags: { Name: 'mgmt-vpc' } } },
+    { resource_type: 'security_group', resource_id: 'sg-1', region: 'r', data: { group_name: 'web-sg' } },
+    { resource_type: 'alb', resource_id: 'my-lb', region: 'r', data: { vpc_id: 'vpc-1', security_groups: [{ GroupId: 'sg-1' }] } },
+  ];
+
+  it("upserts class='infra' with the class-scoped sweep (never wipes flow rows)", async () => {
+    const { pool, calls, params } = mockPool(inv);
+    const res = await rebuildInfraGraph(pool as never, 'RUNI');
+    expect(params.some((p) => p.includes('infra'))).toBe(true);
+    expect(params.some((p) => p.includes('flow'))).toBe(false);
+    expect(calls.some((s) => s.includes('DELETE FROM topology_edges') && s.includes('class = $1') && s.includes('run_id <> $2'))).toBe(true);
+    expect(res.edges).toBeGreaterThan(0);
+  });
+
+  it('preserves the last-good infra graph on an empty/failed inventory (NO sweep)', async () => {
+    const { pool, calls } = mockPool([]);
+    const res = await rebuildInfraGraph(pool as never, 'RUNI2');
+    expect(res.nodes).toBe(0);
+    expect(calls.some((s) => s.includes('DELETE FROM topology_'))).toBe(false);
   });
 });
