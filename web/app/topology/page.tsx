@@ -137,12 +137,30 @@ async function fetchEksIpMap(): Promise<NonNullable<FlowInput['ipResolved']>> {
       .filter(Boolean);
     await Promise.all(clusters.map(async (name) => {
       try {
-        const r = await fetch(`/api/eks/${name}/incluster?kind=pods`).then((x) => (x.ok ? x.json() : null));
-        for (const p of (r?.rows ?? []) as { podIP?: string; namespace?: string; name?: string; workload?: string }[]) {
-          if (p.podIP) map[p.podIP] = {
+        const get = (kind: string) => fetch(`/api/eks/${name}/incluster?kind=${kind}`).then((x) => (x.ok ? x.json() : null));
+        const [eps, pods] = await Promise.all([get('endpoints'), get('pods')]);
+        // pod IP → owning workload (fallback when an IP isn't fronted by a Service)
+        const podByIp = new Map<string, { podIP?: string; namespace?: string; name?: string; workload?: string }>();
+        for (const p of (pods?.rows ?? []) as { podIP?: string; namespace?: string; name?: string; workload?: string }[]) {
+          if (p.podIP) podByIp.set(p.podIP, p);
+        }
+        // Service mapping (preferred): an Endpoints object's name == the Service name; its addresses
+        // are the backing pod IPs. More stable than the pod/workload — a TG ip-target fronts a Service.
+        for (const e of (eps?.rows ?? []) as { name?: string; namespace?: string; ips?: string[] }[]) {
+          for (const ip of e.ips ?? []) {
+            const pod = podByIp.get(ip);
+            map[ip] = {
+              label: `${e.namespace ?? ''}/${e.name ?? ''}`,
+              resolved: 'eks',
+              meta: { cluster: name, namespace: e.namespace, service: e.name, pod: pod?.name, workload: pod?.workload },
+            };
+          }
+        }
+        for (const [ip, p] of podByIp) {
+          if (!map[ip]) map[ip] = {
             label: `${p.namespace ?? ''}/${p.workload || p.name || ''}`,
             resolved: 'eks',
-            meta: { pod: p.name, namespace: p.namespace, cluster: name, workload: p.workload },
+            meta: { cluster: name, namespace: p.namespace, workload: p.workload, pod: p.name },
           };
         }
       } catch { /* skip this cluster */ }
@@ -281,7 +299,14 @@ export default function TopologyPage() {
       return { title: String(row.resource_id ?? selected.label), data: row, spec: m.invType ? INVENTORY_TYPES[m.invType as string] : undefined };
     }
     const syn: Record<string, unknown> = { resource_id: String(m.id ?? selected.label), kind: selected.kind };
-    if (selected.kind === 'target') { syn.target_type = m.targetType; syn.health = m.health; syn.port = m.port; if (m.resolved) syn.resolved_as = m.resolved; }
+    if (selected.kind === 'target') {
+      syn.target_type = m.targetType; syn.health = m.health; syn.port = m.port;
+      if (m.resolved) syn.resolved_as = m.resolved;
+      // EKS/ECS resolution detail (cluster / namespace / service / workload), when present
+      for (const k of ['cluster', 'namespace', 'service', 'workload', 'ecsService', 'task', 'pod'] as const) {
+        if (m[k] != null && m[k] !== '') syn[k] = m[k];
+      }
+    }
     return { title: selected.label, data: syn, spec: undefined };
   }, [selected]);
 

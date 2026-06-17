@@ -17,7 +17,21 @@ import {
   normalizeService,
   normalizeNamespace,
   normalizeEvent,
+  normalizeEndpoint,
 } from './eks-incluster';
+
+describe('normalizeEndpoint', () => {
+  it('flattens subsets[].addresses[].ip into the bucket of pod IPs backing the Service', () => {
+    const r = normalizeEndpoint({
+      metadata: { name: 'argocd-server', namespace: 'argocd' },
+      subsets: [{ addresses: [{ ip: '10.2.37.47' }, { ip: '10.2.37.48' }] }, { addresses: [{ ip: '10.2.40.9' }] }],
+    });
+    expect(r).toEqual({ name: 'argocd-server', namespace: 'argocd', ips: ['10.2.37.47', '10.2.37.48', '10.2.40.9'] });
+  });
+  it('handles a headless/empty Endpoints object', () => {
+    expect(normalizeEndpoint({ metadata: { name: 'svc', namespace: 'ns' } })).toEqual({ name: 'svc', namespace: 'ns', ips: [] });
+  });
+});
 
 describe('eksToken', () => {
   it('produces a k8s-aws-v1. token whose payload is an STS presigned URL signing x-k8s-aws-id', async () => {

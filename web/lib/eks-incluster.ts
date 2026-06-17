@@ -53,7 +53,7 @@ export async function clusterConn(cluster: string): Promise<ClusterConn> {
 }
 
 // ── in-cluster list + normalize ────────────────────────────────────────────
-export type Kind = 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces' | 'events';
+export type Kind = 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces' | 'events' | 'endpoints';
 
 const KIND_PATH: Record<Kind, string> = {
   nodes: '/api/v1/nodes',
@@ -65,6 +65,7 @@ const KIND_PATH: Record<Kind, string> = {
   // count/lastTimestamp to deprecatedCount/series, so the core endpoint is what
   // preserves the fields our normalizeEvent fallbacks read.
   events: '/api/v1/events?fieldSelector=type=Warning', // Warning만 (v1 parity, read-only GET; 미인코딩 '='가 k8s 표준형 — PR #36)
+  endpoints: '/api/v1/endpoints', // service↔podIP mapping for topology target resolution (read-only GET)
 };
 
 export function isKind(k: string): k is Kind {
@@ -74,7 +75,8 @@ export function isKind(k: string): k is Kind {
     k === 'deployments' ||
     k === 'services' ||
     k === 'namespaces' ||
-    k === 'events'
+    k === 'events' ||
+    k === 'endpoints'
   );
 }
 
@@ -119,6 +121,9 @@ interface K8sItem {
     initContainers?: { resources?: { requests?: Record<string, string> } }[];
     overhead?: Record<string, string>;
   };
+  // core /api/v1 Endpoints: subsets[].addresses[].ip = the pod IPs backing the Service
+  // (the Endpoints object name == the Service name). Read by normalizeEndpoint.
+  subsets?: { addresses?: { ip?: string }[] }[];
   // core /api/v1 Event fields (read by normalizeEvent)
   involvedObject?: { kind?: string; name?: string };
   reason?: string;
@@ -134,11 +139,18 @@ interface K8sItem {
 export interface DeploymentRow { name: string; namespace: string; ready: string; upToDate: number; available: number; age: string }
 export interface ServiceRow { name: string; namespace: string; type: string; clusterIP: string; ports: string; age: string }
 export interface NamespaceRow { name: string; status: string; age: string }
+/** A Service's backing pod IPs. name == the Service name (Endpoints object name). */
+export interface EndpointRow { name: string; namespace: string; ips: string[] }
 export interface EventRow {
   kind: string; object: string; reason: string; message: string;
   count: number; lastSeen: string; lastSeenTs: number;
 }
-export type InClusterRow = NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow | EventRow;
+export type InClusterRow = NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow | EventRow | EndpointRow;
+
+export function normalizeEndpoint(it: K8sItem): EndpointRow {
+  const ips = (it.subsets ?? []).flatMap((s) => (s.addresses ?? []).map((a) => a.ip ?? '').filter(Boolean));
+  return { name: it.metadata?.name ?? '', namespace: it.metadata?.namespace ?? '', ips };
+}
 
 function nodeRoles(labels: Record<string, string> = {}): string {
   const roles = Object.keys(labels)
@@ -288,6 +300,7 @@ const NORMALIZERS: Record<Kind, (it: K8sItem) => InClusterRow> = {
   services: normalizeService,
   namespaces: normalizeNamespace,
   events: normalizeEvent,
+  endpoints: normalizeEndpoint,
 };
 
 /** HTTPS GET against the cluster K8s API, verifying TLS with the cluster CA. */
