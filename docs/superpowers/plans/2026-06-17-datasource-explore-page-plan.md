@@ -43,7 +43,7 @@ Add `{ href: '/datasources', tkey: 'nav.datasources', icon: SearchCode }` to `Si
 - Create: `web/lib/datasource-render.ts`
 - Test: `web/lib/datasource-render.test.ts`
 
-Pure `normalizeResult(kind, tool, body): NormalizedResult` where `NormalizedResult = { shape: 'series'|'table'|'logs'|'traces'|'empty'; columns?: {key,label}[]; rows?: Record<string,unknown>[]; series?: Record<string,unknown>[]; seriesXKey?: string; seriesYKey?: string; truncated?: boolean; note?: string }`. prometheus/mimir matrix → first series `series:[{t,value}]` + a `rows` table of all series `{metric, points}`, carry `truncated`. prometheus/mimir vector → table `{metric, value, timestamp}`. loki streams → logs table `{timestamp, line, labels}` (flatten present rows), shape `logs`. tempo `{traces}` → table `{traceID, rootServiceName, rootTraceName, durationMs}`, shape `traces`. clickhouse `{meta,data}` → columns from `meta[].name`, rows = `data`. empty/missing/malformed → `shape:'empty'` with a `note` (never throw).
+Pure `normalizeResult(kind, tool, body): NormalizedResult` where `NormalizedResult = { shape: 'series'|'table'|'logs'|'traces'|'empty'; columns?: {key,label}[]; rows?: Record<string,unknown>[]; series?: Record<string,unknown>[]; seriesXKey?: string; seriesYKey?: string; truncated?: boolean; note?: string }`. prometheus/mimir matrix → first series `series:[{t,value}]` + a `rows` table of all series `{metric, points}`, carry `truncated`. prometheus/mimir vector → table `{metric, value, timestamp}`. loki streams → logs table `{timestamp, line, labels}` (flatten present rows), shape `logs`. tempo `{traces}` → table `{traceID, rootServiceName, rootTraceName, durationMs}`, shape `traces`. clickhouse `{rowCount, rows, meta}` → columns from `meta[].name` (fallback to keys of `rows[0]`), rows = `body.rows` (NOT `body.data`). empty/missing/malformed → `shape:'empty'` with a `note` (never throw).
 
 - [ ] Test one per kind incl. empty + truncated + malformed (missing keys) + multi-series matrix (first chosen, table lists all).
 - [ ] Implement the normalizer to green.
@@ -55,7 +55,17 @@ Pure `normalizeResult(kind, tool, body): NormalizedResult` where `NormalizedResu
 - Create: `web/app/api/datasources/query/route.ts`
 - Test: `web/app/api/datasources/query/route.test.ts`
 
-`GET /api/datasources` (authenticated): `getConfiguredSlugs()` ∩ QUERYABLE → `[{slug, kind, hasSchema}]` (hasSchema via `listConfiguredSchemas(currentAccountId())`). Never credentials. `POST /api/datasources/query` (authenticated): body `{slug, query, range?}`. Validate slug ∈ KNOWN, query non-empty ≤8 KB. kind==slug for these. Pick tool from a const `TOOL` map (read tools only). Build args: clickhouse `{sql:query, max_rows}`, others `{query}` (+ `range` chooses `*_query_range`). `invokeConnectorTool(slug, tool, args)` → `normalizeResult(kind, tool, body)` → return. Errors → 502 `{error}` (message only).
+`GET /api/datasources` (authenticated): `getConfiguredSlugs()` ∩ QUERYABLE → `[{slug, kind, hasSchema}]` (hasSchema via `listConfiguredSchemas(currentAccountId())`). Never credentials. `POST /api/datasources/query` (authenticated): body `{slug, query, range?}`. Validate slug ∈ KNOWN, query non-empty ≤8 KB. kind==slug for these. Tool resolution = an **explicit per-kind `TOOL` map** (NO formula — tempo has no `*_query`/`*_query_range`), all read-only tools + per-kind arg key:
+```
+TOOL = {
+  prometheus: { instant:'prometheus_query', range:'prometheus_query_range', arg:'query' },
+  mimir:      { instant:'mimir_query',        range:'mimir_query_range',        arg:'query' },
+  loki:       { instant:'loki_query',          range:'loki_query_range',          arg:'query' },
+  tempo:      { instant:'tempo_search',        /* no range */                     arg:'query' },
+  clickhouse: { instant:'clickhouse_query',    /* no range */                     arg:'sql', extra:{ max_rows } },
+}
+```
+`range` selects `.range` only when present (else `.instant`). Args = `{ [t.arg]: query, ...t.extra }`. `invokeConnectorTool(slug, tool, args)` → `normalizeResult(kind, tool, body)` → return. Errors → 502 `{error}` (message only).
 
 - [ ] Test: unauthenticated→401; unknown slug→400; empty query→400; clickhouse maps to `{sql}` not `{query}`; range flag selects `_query_range`; every `TOOL` value is a read tool (no mutate); invoke error → 502 clean message; normalized passthrough. Mock connector-invoke/auth/integration-credentials/datasource-schema.
 - [ ] Implement both routes to green.
