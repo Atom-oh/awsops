@@ -7,6 +7,7 @@ import { currentAccountId } from '@/lib/account';
 import { invokeConnectorTool } from '@/lib/connector-invoke';
 import { upsertSchema, listConfiguredSchemas } from '@/lib/datasource-schema';
 import { KNOWN_CONNECTOR_SLUGS } from '@/lib/integration-credentials';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,7 +37,11 @@ export async function POST(request: Request) {
   const g = await gate(request);
   if (g.resp) return g.resp;
   let body: { slug?: unknown };
-  try { body = await request.json(); } catch { return json({ error: 'invalid JSON body' }, 400); }
+  try { body = (await readJsonBounded(request)) as typeof body; } // bound BEFORE parse (OOM guard)
+  catch (e) {
+    if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413);
+    return json({ error: 'invalid JSON body' }, 400);
+  }
   const slug = typeof body?.slug === 'string' ? body.slug : '';
   if (!slug || !(KNOWN_CONNECTOR_SLUGS as readonly string[]).includes(slug)) {
     return json({ error: 'valid connector slug required' }, 400);

@@ -26,6 +26,12 @@ class TestSsrf(unittest.TestCase):
             with self.assertRaises(dh.SsrfBlocked):
                 dh.assert_host_allowed("http://host:8123", resolver=_resolver_for(ip))
 
+    def test_6to4_ipv6_metadata_blocked(self):
+        # 6to4 (2002::/16) embeds an IPv4; must not evade the metadata/loopback checks.
+        for ip in ("2002:a9fe:a9fe::", "2002:7f00:0001::"):  # 169.254.169.254 / 127.0.0.1
+            with self.assertRaises(dh.SsrfBlocked):
+                dh.assert_host_allowed("http://host:8123", resolver=_resolver_for(ip))
+
     def test_private_and_public_allowed(self):
         for ip in ("10.0.0.5", "192.168.1.9", "172.16.3.4", "fc00::1", "8.8.8.8"):
             dh.assert_host_allowed("http://ch:8123", resolver=_resolver_for(ip))  # no raise

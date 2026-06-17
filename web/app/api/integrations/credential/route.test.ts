@@ -42,6 +42,13 @@ describe('/api/integrations/credential gate', () => {
 });
 
 describe('PUT', () => {
+  it('413 on an oversized body (bounded before parse — OOM guard)', async () => {
+    const { PUT } = await import('./route');
+    const huge = { slug: 'notion', secret: { token: 'x'.repeat(70_000) } }; // > readJsonBounded default cap
+    const resp = await PUT(req(huge));
+    expect(resp.status).toBe(413);
+    expect(setIntegrationCredential).not.toHaveBeenCalled();
+  });
   it('stores the credential and never echoes the secret', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

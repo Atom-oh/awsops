@@ -5,6 +5,7 @@ import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { setIntegrationCredential, getConfiguredSlugs } from '@/lib/integration-credentials';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,8 +32,9 @@ export async function PUT(request: Request) {
   if (g.resp) return g.resp;
   let body: { slug?: unknown; secret?: unknown };
   try {
-    body = await request.json();
-  } catch {
+    body = (await readJsonBounded(request)) as typeof body; // bound BEFORE parse (OOM guard) — small creds payload
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413);
     return json({ error: 'invalid JSON body' }, 400);
   }
   const slug = typeof body?.slug === 'string' ? body.slug : '';

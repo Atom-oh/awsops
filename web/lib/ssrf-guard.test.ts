@@ -20,6 +20,9 @@ describe('isBlockedHost (ADR-011 blocklist)', () => {
     expect(isBlockedHost('fd12:3456::1')).toBe(true);
     expect(isBlockedHost('fe80::1')).toBe(true);
     expect(isBlockedHost('::ffff:169.254.169.254')).toBe(true); // IPv4-mapped
+    expect(isBlockedHost('2002:a9fe:a9fe::')).toBe(true);  // 6to4 → 169.254.169.254 (metadata)
+    expect(isBlockedHost('2002:0a00:0001::')).toBe(true);  // 6to4 → 10.0.0.1 (private, blocked here)
+    expect(isBlockedHost('2002:0808:0808::')).toBe(false); // 6to4 → 8.8.8.8 (public, not blocked)
   });
   it('treats non-literal hostnames as not-blocked (DNS resolution is connection-time)', () => {
     expect(isBlockedHost('grafana.example.com')).toBe(false);
@@ -56,6 +59,7 @@ describe('assertDatasourceEndpointAllowed (datasource — private allowed, alway
       'http://[fd00:ec2::254]/',
       'http://[fe80::1]:8123',
       'http://224.0.0.1:8123',
+      'http://[2002:a9fe:a9fe::]:8123', // 6to4 → 169.254.169.254 metadata
     ]) {
       expect(() => assertDatasourceEndpointAllowed(u)).toThrow();
     }

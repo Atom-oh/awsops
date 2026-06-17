@@ -24,6 +24,16 @@ function parseIpv4(host: string): [number, number, number, number] | null {
   return o;
 }
 
+/** Decode a 6to4 IPv6 literal (2002:WWXX:YYZZ::/16) to its embedded IPv4 WW.XX.YY.ZZ, else null.
+ *  Mirrors datasource_http `_ip_always_blocked`'s `sixtofour` normalization so a 6to4-wrapped
+ *  metadata/loopback target (e.g. 2002:a9fe:a9fe:: = 169.254.169.254) can't evade the IPv4 checks. */
+function sixToFour(host: string): string | null {
+  const m = /^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})(?::|$)/i.exec(host);
+  if (!m) return null;
+  const h1 = parseInt(m[1], 16), h2 = parseInt(m[2], 16);
+  return `${(h1 >> 8) & 255}.${h1 & 255}.${(h2 >> 8) & 255}.${h2 & 255}`;
+}
+
 /** True for a LITERAL private/link-local/loopback/metadata IP (v4 or v6). Non-literal hostnames → false
  *  (their resolution is deferred to connection time, P2-infra). */
 export function isBlockedHost(hostOrIp: string): boolean {
@@ -38,6 +48,8 @@ export function isBlockedHost(hostOrIp: string): boolean {
     // IPv4-mapped IPv6 (::ffff:a.b.c.d)
     const mapped = /::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(host);
     if (mapped) return isBlockedHost(mapped[1]);
+    const s2 = sixToFour(host);
+    if (s2) return isBlockedHost(s2);                                 // 6to4 (2002::/16) → embedded IPv4
   }
   return false;
 }
@@ -77,6 +89,8 @@ export function isAlwaysBlockedHost(hostOrIp: string): boolean {
     if (/^ff[0-9a-f]{2}:/.test(host)) return true;                                   // ff00::/8 multicast
     const mapped = /::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(host);
     if (mapped) return isAlwaysBlockedHost(mapped[1]);
+    const s2 = sixToFour(host);
+    if (s2) return isAlwaysBlockedHost(s2);                           // 6to4 (2002::/16) → embedded IPv4
   }
   return false;
 }

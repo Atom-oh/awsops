@@ -13,6 +13,7 @@ import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
 import { currentAccountId, currentAccountAlias } from '@/lib/account';
 import { listConfiguredSchemas } from '@/lib/datasource-schema';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getAgentSpace } from '@/lib/agent-space';
 import { randomUUID } from 'crypto';
 
@@ -51,8 +52,10 @@ export async function POST(request: Request) {
 
   let body: { prompt?: string; messages?: ChatMsg[]; section?: string; switchedFrom?: string; sessionId?: string; threadId?: string };
   try {
-    body = await request.json();
-  } catch {
+    // bound BEFORE parse (App-Router has no default body cap → OOM guard); 512KB covers prompt + thread history
+    body = (await readJsonBounded(request, 512_000)) as typeof body;
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) return json({ status: 'error', message: 'request body too large' }, 413);
     return json({ status: 'error', message: 'invalid JSON' }, 400);
   }
   const prompt = typeof body.prompt === 'string' ? body.prompt : '';
@@ -167,9 +170,11 @@ export async function POST(request: Request) {
     }).catch(() => { /* store is never-throws by contract; belt-and-suspenders (P2 gate) */ });
   };
 
-  // Inject cached datasource schemas (the agent reads the cache) for the observability gateways.
+  // Inject cached datasource schemas (the agent reads the cache) for the observability gateways —
+  // for the single-route spec AND any monitoring/data gateway in a fan-out.
+  const obs = (g: string) => g === 'monitoring' || g === 'data';
   let datasourceSchemaContext: string | undefined;
-  if (spec.gateway === 'monitoring' || spec.gateway === 'data') {
+  if (obs(spec.gateway) || (doFanout && fanGateways.some(obs))) {
     try {
       const schemas = await listConfiguredSchemas(accountId);
       if (schemas.length) datasourceSchemaContext = renderSchemaContext(schemas);
@@ -223,7 +228,10 @@ export async function POST(request: Request) {
       if (doFanout) {
         // gate CRITICAL: each gateway gets its OWN built-in invoke input (no shared primary spec).
         const settled = await Promise.allSettled(
-          fanGateways.map((g) => invokeAgent({ gateway: g, messages, sessionId, accountId, accountAlias })),
+          fanGateways.map((g) => invokeAgent({
+            gateway: g, messages, sessionId, accountId, accountAlias,
+            extraContext: obs(g) ? datasourceSchemaContext : undefined, // cached schema reaches fanned monitoring/data agents too
+          })),
         );
         const survivors = settled.flatMap((r, i) =>
           r.status === 'fulfilled' ? [{ gateway: fanGateways[i], text: r.value }] : []);

@@ -402,6 +402,16 @@ describe('ADR-031 Phase 2 — per-account space wiring', () => {
 });
 
 
+describe('request body bound (OOM guard)', () => {
+  it('413 on an oversized body before parse', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
+    const { POST } = await import('./route');
+    const resp = await POST(req({ prompt: 'x'.repeat(600_000) })); // > 512KB chat cap
+    expect(resp.status).toBe(413);
+    expect(invokeAgent).not.toHaveBeenCalled();
+  });
+});
+
 describe('datasource schema injection', () => {
   it('injects cached schemas as extraContext for the monitoring gateway', async () => {
     verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
@@ -462,6 +472,21 @@ describe('cross-domain auto-synthesis (ADR-044)', () => {
     expect(body).toContain('합성된 답변');
     expect(body).toContain('"via":"multi:network+data"'); // gate MINOR: via in meta
     expect(body).toContain('[DONE]');
+  });
+
+  it('threads cached datasource schema into the monitoring/data fan-out invokes only', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    process.env.MULTI_ROUTE_SYNTHESIS_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue(multiRoute); // selected [network, data] — data is an observability gateway
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'network', skill: 'network', agentName: 'network', skillHashes: [] });
+    listConfiguredSchemas.mockResolvedValue([{ slug: 'prometheus', kind: 'prometheus', schema: { metrics: ['up'] }, fetched_at: 't' }]);
+    invokeAgent.mockImplementation(async ({ gateway }: { gateway: string }) => `ans-${gateway}`);
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'x', sessionId: 's'.repeat(36) })));
+    const calls = invokeAgent.mock.calls.map((c) => c[0] as { gateway: string; extraContext?: string });
+    expect(calls.find((c) => c.gateway === 'data')!.extraContext).toContain('prometheus'); // obs gateway gets the cache
+    expect(calls.find((c) => c.gateway === 'network')!.extraContext).toBeUndefined();        // non-obs does not
   });
 
   it('one gateway fails: synthesize runs over the survivor only', async () => {
