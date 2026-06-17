@@ -270,6 +270,9 @@ resource "aws_iam_role_policy" "inv_sync" {
       # SDK-sourced cloudfront_vpc_origin sync (Steampipe omits VpcOriginConfig): read-only CloudFront
       # list/get for VPC origins + per-distribution config. Read-only; no mutation.
       { Effect = "Allow", Action = ["cloudfront:ListVpcOrigins", "cloudfront:GetVpcOrigin", "cloudfront:ListDistributions", "cloudfront:GetDistributionConfig"], Resource = "*" },
+      # SDK-sourced s3_public_access sync (Steampipe aws_s3_bucket public-access columns fail the whole
+      # query on one denied bucket): read-only per-bucket public-access flags. Read-only; no mutation.
+      { Effect = "Allow", Action = ["s3:ListAllMyBuckets", "s3:GetBucketLocation", "s3:GetBucketPolicyStatus", "s3:GetBucketPublicAccessBlock"], Resource = "*" },
       # SDK-sourced alb_listener_rule sync (Steampipe rule table needs a per-listener qualifier):
       # read-only ELBv2 describe for LBs/listeners/rules. Read-only; no mutation.
       { Effect = "Allow", Action = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules"], Resource = "*" }
