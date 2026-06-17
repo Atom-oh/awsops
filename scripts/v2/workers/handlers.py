@@ -108,11 +108,45 @@ def _report(payload, dry_run):
             pass
 
 
+def _compliance(payload, dry_run):
+    """CIS benchmark via Powerpipe (Fargate). payload: {benchmark, run_id, requested_by}.
+    The BFF pre-creates the compliance_runs row (run_id) — same pattern as _report (fixes the
+    worker_job_id linkage + the UI race). Read-only: Powerpipe only QUERIES the Steampipe FDW."""
+    import compliance
+    benchmark = str(payload.get("benchmark", ""))
+    run_id = payload.get("run_id")
+    if dry_run:
+        return {"dry_run": True, "would_run": benchmark}, None
+    if benchmark not in compliance.ALLOWED:
+        raise ValueError(f"benchmark not allowed: {benchmark!r}")
+    import traceback
+    import db as wdb
+    conn = wdb.connect()
+    try:  # always release the pg8000 connection (Aurora pool exhaustion guard, per _report)
+        try:
+            doc = compliance.run_powerpipe(benchmark, compliance.steampipe_db_url())
+            totals, controls = compliance.parse_powerpipe_json(doc)
+            compliance.persist(conn, run_id, totals, controls)
+            return {"run_id": run_id, "benchmark": benchmark, **totals}, None
+        except Exception as e:  # noqa: BLE001 — surface on the run row, then re-raise (SFN Catch → failed)
+            print(traceback.format_exc())  # full trace → CloudWatch only
+            if run_id is not None:
+                conn.run("UPDATE compliance_runs SET status='failed', finished_at=now(), error=:e WHERE id=:id",
+                         e=str(e)[:2000], id=run_id)
+            raise
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # type -> (handler, runtime). runtime drives SFN routing (lambda<15min / fargate long+heavy).
 REGISTRY = {
     "noop":       (_noop, "lambda"),
     "noop-heavy": (_noop, "fargate"),
     "report":     (_report, "fargate"),
+    "compliance": (_compliance, "fargate"),
 }
 
 
