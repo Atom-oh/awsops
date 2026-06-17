@@ -310,6 +310,7 @@ def _patch_report(monkeypatch, *, generate):
     monkeypatch.setattr(_wdb, "connect", lambda: FakeConn())
     monkeypatch.setattr(_rpt, "generate", generate)
     monkeypatch.setattr(handlers, "_upload_markdown", lambda md, rid: f"s3://b/diagnosis/{rid}.md")
+    monkeypatch.setattr(_rpt, "make_title_and_tags", lambda md: {"title": None, "tags": []})  # no real LLM call
 
     def _finish(conn, rid, **kw):
         state["finish"] = {"rid": rid, **kw}
@@ -344,6 +345,53 @@ def test_report_export_failure_is_isolated(monkeypatch):
     assert result["status"] == "succeeded"                       # pdf failure isolated
     assert any(k.endswith("diagnosis/7.docx") for k in uploaded)  # docx still uploaded
     assert not any(k.endswith("diagnosis/7.pdf") for k in uploaded)  # pdf raised before upload
+
+
+def test_make_title_and_tags_parses_fenced_json(monkeypatch):
+    monkeypatch.setattr(report, "_bedrock_render",
+                        lambda *a, **k: '```json\n{"title": "보안 형상 진단 불가가 최대 리스크", "tags": ["보안", "비용"]}\n```')
+    out = report.make_title_and_tags("# md")
+    assert out["title"] == "보안 형상 진단 불가가 최대 리스크"
+    assert out["tags"] == ["보안", "비용"]
+
+
+def test_make_title_and_tags_bad_output_is_none(monkeypatch):
+    monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "sorry, no json here")
+    out = report.make_title_and_tags("# md")
+    assert out == {"title": None, "tags": []}
+
+
+def test_make_title_and_tags_swallows_llm_error(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("bedrock down")
+    monkeypatch.setattr(report, "_bedrock_render", boom)
+    assert report.make_title_and_tags("# md") == {"title": None, "tags": []}
+
+
+def test_finish_report_conditionally_sets_title_tags():
+    c = FakeConn(); c.ret = [[7]]
+    db.finish_report(c, 7, status="succeeded", title="제목", tags=["a", "b"])
+    sql, kw = c.calls[0]
+    assert "title=" in sql and "tags=" in sql
+    assert kw["t2"] == "제목" and kw["tg"] == ["a", "b"]
+    # failure path passes neither → must NOT clobber title/tags
+    c2 = FakeConn(); c2.ret = [[7]]
+    db.finish_report(c2, 7, status="failed", error="boom")
+    sql2, _ = c2.calls[0]
+    assert "title=" not in sql2 and "tags=" not in sql2
+
+
+def test_report_title_failure_is_isolated(monkeypatch):
+    # A title/tag LLM failure must NOT fail the report.
+    state = _patch_report(monkeypatch, generate=lambda c, a, t, **_: ("# md", {"degraded": []}, ["inventory"]))
+    monkeypatch.setattr(handlers, "_export_artifacts", lambda md, rid: None)
+    def boom(md):
+        raise RuntimeError("title model down")
+    monkeypatch.setattr(_rpt, "make_title_and_tags", boom)
+    result, _ = handlers._report(
+        {"account": "1", "tier": "mid", "requested_by": "u", "report_id": 7}, dry_run=False)
+    assert result["status"] == "succeeded"
+    assert state["finish"]["status"] == "succeeded"
 
 
 def test_report_handler_streams_progress_via_callback(monkeypatch):

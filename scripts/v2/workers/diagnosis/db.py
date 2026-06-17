@@ -62,15 +62,20 @@ def update_progress(conn, report_id, current, total, section, phase="render"):
 
 
 def finish_report(conn, report_id, status, sources_used=None, summary=None,
-                  artifact_uri=None, error=None):
+                  artifact_uri=None, error=None, title=None, tags=None):
     assert status in _TERMINAL
+    # title/tags are set ONLY when provided — the failure path (status='failed', no title/tags) must
+    # not clobber an auto-title, and pg won't accept None into the NOT NULL tags column.
+    sets = ["status=:s", "sources_used=:su::jsonb", "summary=:sm::jsonb", "artifact_uri=:a", "error=:e"]
+    kw = {"s": status, "su": json.dumps(sources_used or []), "sm": json.dumps(summary or {}),
+          "a": artifact_uri, "e": error, "id": report_id}
+    if title is not None:
+        sets.append("title=:t2"); kw["t2"] = title
+    if tags is not None:
+        sets.append("tags=:tg"); kw["tg"] = tags
     rows = conn.run(
-        "UPDATE diagnosis_reports SET status=:s, sources_used=:su::jsonb, "
-        "summary=:sm::jsonb, artifact_uri=:a, error=:e "
-        "WHERE id=:id AND status='running' RETURNING id",
-        s=status,
-        su=json.dumps(sources_used or []),
-        sm=json.dumps(summary or {}),
-        a=artifact_uri, e=error, id=report_id,
+        "UPDATE diagnosis_reports SET " + ", ".join(sets)
+        + " WHERE id=:id AND status='running' RETURNING id",
+        **kw,
     )
     return len(rows)
