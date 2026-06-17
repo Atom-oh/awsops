@@ -15,6 +15,7 @@ import base64
 import ipaddress
 import json
 import os
+import re
 import socket
 import urllib.error
 import urllib.request
@@ -82,14 +83,72 @@ def assert_host_allowed(endpoint, resolver=socket.getaddrinfo):
             raise SsrfBlocked(f"endpoint blocked: {host} resolved to blocked IP {ip_str}")
 
 
+_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+_FORBIDDEN_HEADERS = frozenset({"host", "content-length", "authorization"})
+
+
+def _safe_custom_header(name, value):
+    """Block header-injection: invalid/forbidden name or control chars (CR/LF) in name or value."""
+    if not name or not _HEADER_NAME_RE.match(name) or name.lower() in _FORBIDDEN_HEADERS:
+        return False
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value)):
+        return False
+    return True
+
+
 def auth_headers(creds):
-    """Basic (username[/password]) or Bearer (token) or none. Never logged."""
-    if creds.get("username"):
-        raw = f"{creds['username']}:{creds.get('password', '')}".encode()
-        return {"Authorization": "Basic " + base64.b64encode(raw).decode()}
-    if creds.get("token"):
-        return {"Authorization": f"Bearer {creds['token']}"}
-    return {}
+    """Build auth headers. Honors an explicit `authType` (none/basic/bearer/custom_header) when present
+    (the BFF inline conn-config); otherwise INFERS from filled fields (legacy slug-map shape). Always
+    adds X-Scope-OrgID when org_id is set. Never logged."""
+    h = {}
+    at = creds.get("authType")
+    if at == "basic" or (at is None and creds.get("username")):
+        if creds.get("username"):
+            raw = f"{creds['username']}:{creds.get('password', '')}".encode()
+            h["Authorization"] = "Basic " + base64.b64encode(raw).decode()
+    elif at == "bearer" or (at is None and creds.get("token")):
+        if creds.get("token"):
+            h["Authorization"] = f"Bearer {creds['token']}"
+    elif at == "custom_header":
+        name, value = creds.get("headerName"), creds.get("headerValue", "")
+        if name:
+            if not _safe_custom_header(name, value):
+                raise SsrfBlocked("unsafe custom auth header rejected")
+            h[name] = value
+    if creds.get("org_id"):
+        h["X-Scope-OrgID"] = creds["org_id"]
+    return h
+
+
+# Request-scoped inline connection config (set per lambda_handler invocation). When present it takes
+# precedence over the slug credential map — this is how the BFF drives multi-instance + the pre-save
+# Test. Reset on every invocation (warm Lambdas reuse the module). Must contain an `endpoint`.
+_REQUEST_CONN = None
+
+
+def set_request_conn(conn):
+    """Stash (or clear) the request's inline conn-config. Call at the top of every lambda_handler."""
+    global _REQUEST_CONN
+    _REQUEST_CONN = conn if isinstance(conn, dict) and conn.get("endpoint") else None
+
+
+def health(creds, path):
+    """Lightweight connectivity probe: GET endpoint+path with auth, SSRF-guarded. {ok, latency_ms, error?}."""
+    import time as _t
+    endpoint = (creds or {}).get("endpoint")
+    if not endpoint:
+        return {"ok": False, "error": "no endpoint configured"}
+    url = endpoint.rstrip("/") + path
+    t0 = _t.time()
+    try:
+        assert_host_allowed(url)
+        status, _ = http_json("GET", url, headers=auth_headers(creds))
+        latency = int((_t.time() - t0) * 1000)
+        if status >= 400:
+            return {"ok": False, "latency_ms": latency, "error": f"HTTP {status}"}
+        return {"ok": True, "latency_ms": latency}
+    except (SsrfBlocked, urllib.error.URLError, OSError) as e:
+        return {"ok": False, "latency_ms": int((_t.time() - t0) * 1000), "error": str(e)[:200]}
 
 
 def _sm():
@@ -117,6 +176,9 @@ def _load_secret_map():
 
 
 def load_datasource(slug):
+    # Inline conn-config (BFF multi-instance / pre-save Test) takes precedence over the slug map.
+    if _REQUEST_CONN is not None:
+        return _REQUEST_CONN
     creds = _load_secret_map().get(slug)
     if not isinstance(creds, dict) or not creds.get("endpoint"):
         raise NotConnected(f"{slug} not connected (no endpoint configured in the Connectors UI)")
