@@ -14,24 +14,9 @@ const AGENT_TYPES = ['generic', 'on_demand', 'triage', 'rca', 'mitigation', 'eva
 const INTEG_KINDS_EGRESS = ['grafana', 'datadog', 'splunk', 'prometheus', 'newrelic', 'notion', 'confluence', 'jira', 'servicenow', 'slack', 'github', 'gitlab', 'custom_mcp'];
 const INTEG_KINDS_INGRESS = ['cloudwatch_sns', 'alertmanager', 'grafana_alert', 'pagerduty', 'datadog_monitor', 'generic_webhook'];
 const INTEG_TRANSPORTS = ['sigv4', 'oauth_client_credentials', 'oauth_3lo', 'api_key'];
-// Curated read connectors (built-in tools that just need a credential — keyed by slug=kind,
-// mirrors KNOWN_CONNECTOR_SLUGS in web/lib/integration-credentials.ts). No endpoint/transport.
-// Curated read connectors. `fields` defines the credential inputs (secret fields are masked/never
-// rendered back). Keys must match what the connector Lambda reads from the single secret.
-const CONNECTORS: Array<{ slug: string; label: string; help: string; fields: Array<{ key: string; label: string; secret?: boolean }> }> = [
-  { slug: 'notion', label: 'Notion', help: 'Create an internal integration at notion.so/my-integrations, share your pages/databases with it, then paste its token (secret_…).',
-    fields: [{ key: 'token', label: 'Integration token', secret: true }] },
-  { slug: 'clickhouse', label: 'ClickHouse', help: 'HTTP endpoint (e.g. http://clickhouse:8123) + user/password. Read-only SQL. In-cluster endpoints need clickhouse_vpc_enabled.',
-    fields: [{ key: 'endpoint', label: 'Endpoint (http://host:8123)' }, { key: 'username', label: 'Username' }, { key: 'password', label: 'Password', secret: true }] },
-  { slug: 'prometheus', label: 'Prometheus', help: 'HTTP endpoint (e.g. http://prometheus:9090). PromQL, read-only. Auth optional (bearer token or basic). In-cluster endpoints need prometheus_vpc_enabled.',
-    fields: [{ key: 'endpoint', label: 'Endpoint (http://host:9090)' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'username', label: 'Username (optional)' }, { key: 'password', label: 'Password (optional)', secret: true }] },
-  { slug: 'loki', label: 'Loki', help: 'HTTP endpoint (e.g. http://loki:3100). LogQL, read-only. Auth optional; org_id sets X-Scope-OrgID for multi-tenant. In-cluster endpoints need loki_vpc_enabled.',
-    fields: [{ key: 'endpoint', label: 'Endpoint (http://host:3100)' }, { key: 'org_id', label: 'Tenant / X-Scope-OrgID (optional)' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'username', label: 'Username (optional)' }, { key: 'password', label: 'Password (optional)', secret: true }] },
-  { slug: 'tempo', label: 'Tempo', help: 'HTTP endpoint (e.g. http://tempo:3200). TraceQL, read-only. Auth optional; org_id sets X-Scope-OrgID. In-cluster endpoints need tempo_vpc_enabled.',
-    fields: [{ key: 'endpoint', label: 'Endpoint (http://host:3200)' }, { key: 'org_id', label: 'Tenant / X-Scope-OrgID (optional)' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'username', label: 'Username (optional)' }, { key: 'password', label: 'Password (optional)', secret: true }] },
-  { slug: 'mimir', label: 'Mimir', help: 'HTTP endpoint (e.g. http://mimir:8080). PromQL (Prometheus-compatible, multi-tenant), read-only. org_id sets X-Scope-OrgID. In-cluster endpoints need mimir_vpc_enabled.',
-    fields: [{ key: 'endpoint', label: 'Endpoint (http://host:8080)' }, { key: 'org_id', label: 'Tenant / X-Scope-OrgID (optional)' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'username', label: 'Username (optional)' }, { key: 'password', label: 'Password (optional)', secret: true }] },
-];
+// NOTE: curated read connectors (Prometheus/Loki/…/Notion credential cards) moved to the Integrations
+// hub (/integrations) — Datasources tab + Connectors tab. This page keeps Agents/Skills/Agent-Space +
+// the advanced custom-integration registration.
 
 export default function CustomizationPage() {
   const [agents, setAgents] = useState<AgentRow[]>([]);
@@ -45,9 +30,6 @@ export default function CustomizationPage() {
   const [space, setSpace] = useState<SpaceState | null>(null);
   const [allowlistText, setAllowlistText] = useState('');
   const [integrations, setIntegrations] = useState<IntegrationRow[]>([]);
-  const [credConfigured, setCredConfigured] = useState<string[]>([]); // slugs (=kind) with a stored credential
-  const [credInput, setCredInput] = useState<Record<string, Record<string, string>>>({}); // slug → field → value (never persisted/rendered back)
-  const [schemaStatus, setSchemaStatus] = useState<Record<string, { fetched_at?: string; summary?: Record<string, number> }>>({}); // cached datasource schema status
   const [integForm, setIntegForm] = useState({ direction: 'egress', name: '', kind: 'grafana', endpoint: '', transport: 'api_key', capability: 'read', authMode: 'hmac', sourceAllowlist: '', triggerTarget: 'incident' });
 
   async function load() {
@@ -65,14 +47,6 @@ export default function CustomizationPage() {
     setAllowlistText((d.space?.toolAllowlist || []).join(', '));
     const ir = await fetch('/api/integrations');
     if (ir.ok) setIntegrations((await ir.json()).integrations || []);
-    const cr = await fetch('/api/integrations/credential');
-    if (cr.ok) setCredConfigured((await cr.json()).configured || []);
-    const sr = await fetch('/api/integrations/schema');
-    if (sr.ok) {
-      const m: Record<string, { fetched_at?: string; summary?: Record<string, number> }> = {};
-      for (const sc of (await sr.json()).schemas || []) m[sc.slug] = { fetched_at: sc.fetched_at, summary: sc.summary };
-      setSchemaStatus(m);
-    }
   }
 
   async function createIntegration() {
@@ -85,40 +59,6 @@ export default function CustomizationPage() {
     setMsg(res.ok ? `Created integration #${d.id} — disabled${d.receivePath ? `; receive URL: ${d.receivePath}` : ''}` : `Error: ${JSON.stringify(d.detail || d.error)}`);
     if (res.ok) load();
   }
-  async function saveCredential(slug: string) {
-    const conn = CONNECTORS.find((c) => c.slug === slug);
-    const raw = credInput[slug] || {};
-    const secret: Record<string, string> = {};
-    for (const f of conn?.fields ?? []) {
-      const v = (raw[f.key] || '').trim();
-      if (v) secret[f.key] = v;
-    }
-    if (Object.keys(secret).length === 0) { setMsg('Fill in the credential fields first'); return; }
-    const res = await fetch('/api/integrations/credential', {
-      method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug, secret }),
-    });
-    setCredInput((m) => ({ ...m, [slug]: {} })); // clear inputs regardless (never keep secrets in state)
-    setMsg(res.ok ? `Credential saved for ${slug}` : `Error: ${(await res.json()).error || res.status}`);
-    const cr = await fetch('/api/integrations/credential');
-    if (cr.ok) setCredConfigured((await cr.json()).configured || []);
-  }
-
-  async function refreshSchema(slug: string) {
-    setMsg(`Refreshing ${slug} schema…`);
-    const res = await fetch('/api/integrations/schema', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ slug }),
-    });
-    const d = await res.json();
-    setMsg(res.ok ? `${slug} schema cached: ${Object.entries(d.summary || {}).map(([k, v]) => `${v} ${k}`).join(', ') || '—'}` : `Error: ${d.error || res.status}`);
-    const sr = await fetch('/api/integrations/schema');
-    if (sr.ok) {
-      const m: Record<string, { fetched_at?: string; summary?: Record<string, number> }> = {};
-      for (const sc of (await sr.json()).schemas || []) m[sc.slug] = { fetched_at: sc.fetched_at, summary: sc.summary };
-      setSchemaStatus(m);
-    }
-  }
-
   async function toggleIntegration(id: number, enabled: boolean) {
     await fetch('/api/integrations', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: enabled ? 'disable' : 'enable', id }) });
     load();
@@ -271,46 +211,12 @@ export default function CustomizationPage() {
 
       <section className="space-y-3 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
         <div>
-          <h2 className="text-[13px] font-semibold">Connectors</h2>
-          <p className="text-[11px] text-ink-400">Connect a tool by pasting its credential — that&apos;s it. Stored encrypted in Secrets Manager; never displayed back. Then ask the assistant to use it.</p>
+          <h2 className="text-[13px] font-semibold">Integrations (advanced)</h2>
+          <p className="text-[11px] text-ink-400">
+            데이터소스(Prometheus·Loki·…)와 커넥터(Notion)는 이제 <a href="/integrations" className="text-brand-600 underline">연동 허브</a>에서 관리합니다.
+            아래는 고급 — 임의 egress/ingress 통합 등록입니다.
+          </p>
         </div>
-        {CONNECTORS.map((c) => {
-          const configured = credConfigured.includes(c.slug);
-          return (
-            <div key={c.slug} className="space-y-1.5 rounded border border-ink-100 bg-paper px-3 py-2 text-[12px]">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold">{c.label}</span>
-                {configured
-                  ? <span className="text-emerald-600">connected ✓</span>
-                  : <span className="text-ink-400">not connected ✗</span>}
-              </div>
-              <p className="text-[11px] text-ink-400">{c.help}</p>
-              <div className="flex flex-wrap items-center gap-2">
-                {c.fields.map((f) => (
-                  <input
-                    key={f.key}
-                    type={f.secret ? 'password' : 'text'}
-                    autoComplete={f.secret ? 'new-password' : 'off'}
-                    placeholder={configured && f.secret ? `replace ${f.label}…` : f.label}
-                    value={credInput[c.slug]?.[f.key] || ''}
-                    onChange={(e) => setCredInput((m) => ({ ...m, [c.slug]: { ...(m[c.slug] || {}), [f.key]: e.target.value } }))}
-                    className="flex-1 rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]"
-                  />
-                ))}
-                <button onClick={() => saveCredential(c.slug)} className="rounded bg-brand-500 px-3 py-1 text-[12px] font-medium text-white">{configured ? 'Update' : 'Connect'}</button>
-              </div>
-              {c.fields.some((f) => f.key === 'endpoint') && (
-                <div className="flex items-center gap-2 border-t border-ink-100 pt-1.5 text-[11px]">
-                  <span className="text-ink-400">schema:</span>
-                  {schemaStatus[c.slug]?.fetched_at
-                    ? <span className="text-ink-500">cached · {Object.entries(schemaStatus[c.slug]?.summary || {}).map(([k, v]) => `${v} ${k}`).join(', ') || '—'}</span>
-                    : <span className="text-ink-400">not cached</span>}
-                  <button onClick={() => refreshSchema(c.slug)} disabled={!configured} className="rounded border border-ink-200 px-2 py-0.5 disabled:opacity-40">Refresh schema</button>
-                </div>
-              )}
-            </div>
-          );
-        })}
 
         <details className="mt-2 border-t border-ink-100 pt-2">
           <summary className="cursor-pointer text-[12px] text-ink-500">Advanced — register a custom integration</summary>
