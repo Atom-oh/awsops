@@ -67,18 +67,25 @@ export default function AiOps() {
           ))}
         </Card>
 
-        {/* AI analysis surfaces — honest about what is live vs gated */}
+        {/* AI analysis surfaces — every row navigates (v1 parity), honest about live vs gated */}
         <Card className="p-4 flex flex-col gap-2">
           <div className="text-[13px] font-semibold text-ink-800">AI 분석</div>
           <a href="/eks" className="flex items-center justify-between text-[12px] text-ink-600 hover:text-brand-700">
             <span>EKS 진단 (K8sGPT)</span><Badge tone="neutral" variant="soft">게이트 OFF</Badge>
           </a>
-          <div className="flex items-center justify-between text-[12px] text-ink-600">
+          <a href="/ai-diagnosis" className="flex items-center justify-between text-[12px] text-ink-600 hover:text-brand-700">
             <span>인시던트 자동 분석</span><Badge tone="neutral" variant="soft">분석-전용 대기</Badge>
-          </div>
-          <div className="flex items-center justify-between text-[12px] text-ink-600">
-            <span>하이브리드 라우팅 정확도</span><Badge tone="positive" variant="soft">96.9%</Badge>
-          </div>
+          </a>
+          <a
+            href="/bedrock"
+            title="ADR-038 게이트 벤치마크 — 라이브 측정은 후속(Bedrock invocation-log 텔레메트리)"
+            className="flex items-center justify-between text-[12px] text-ink-600 hover:text-brand-700"
+          >
+            <span>하이브리드 라우팅</span><Badge tone="neutral" variant="soft">게이트 96.9%</Badge>
+          </a>
+          <a href="/bedrock" className="flex items-center justify-between text-[12px] text-ink-600 hover:text-brand-700">
+            <span>Bedrock 토큰 비용</span><Badge tone="brand" variant="soft">보기 →</Badge>
+          </a>
         </Card>
       </div>
     </section>
