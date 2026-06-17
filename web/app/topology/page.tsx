@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, type LucideIcon } from 'lucide-react';
+import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, Search, Database, type LucideIcon } from 'lucide-react';
 import { Background, Controls, MiniMap, Position, type Node, type Edge, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import PageHeader from '@/components/ui/PageHeader';
@@ -67,6 +67,7 @@ const RESOLVED_ICON: Record<string, IconC> = { eks: Hexagon, ecs: Boxes, ec2: Se
 
 function iconFor(n: FlowNode): IconC {
   if (n.kind === 'target') return RESOLVED_ICON[String(n.meta?.resolved ?? '')] ?? Circle;
+  if (n.kind === 'origin' && n.meta?.service === 's3') return Database; // S3 origin, not unknown
   return KIND_ICON[n.kind];
 }
 
@@ -157,6 +158,7 @@ export default function TopologyPage() {
   const [cappedTypes, setCappedTypes] = useState<string[]>([]);
   const [entryId, setEntryId] = useState<string>('');
   const [selected, setSelected] = useState<FlowNode | null>(null);
+  const [query, setQuery] = useState('');
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -188,6 +190,14 @@ export default function TopologyPage() {
   const dark = useTheme() === 'dark';
 
   const full = useMemo(() => (data ? buildFlowGraph(data) : { nodes: [], edges: [] }), [data]);
+
+  // Resource-name search: match nodes by label or id (case-insensitive); selecting one focuses it
+  // (reuses the focus collapse + re-center). Capped so the dropdown stays usable on big graphs.
+  const searchMatches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [] as FlowNode[];
+    return full.nodes.filter((n) => n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q)).slice(0, 10);
+  }, [full, query]);
 
   // Entry-point options (CloudFront distributions, then load balancers).
   const entryOptions = useMemo(() => ({
@@ -235,7 +245,7 @@ export default function TopologyPage() {
         targetPosition: rankdir === 'TB' ? Position.Top : Position.Left,
         style: {
           background: bg,
-          border: `${n.id === focusId ? '2px solid' : n.kind === 'origin' ? '1px dashed' : '1px solid'} ${border}`,
+          border: `${n.id === focusId ? '2px solid' : n.kind === 'origin' && n.meta?.unresolved ? '1px dashed' : '1px solid'} ${border}`,
           color: dark ? '#E3E9EE' : '#16202A',
           borderRadius: 8, fontSize: 11, padding: 6, width: 220,
         },
@@ -333,6 +343,37 @@ export default function TopologyPage() {
         subtitle="요청 흐름 그래프 (Route53 → CloudFront → LB → Target Group → 타깃)"
         right={
           <div className="flex items-center gap-2">
+            <div className="relative">
+              <div className="flex items-center gap-1 rounded-md border border-ink-200 bg-card px-2 py-1">
+                <Search size={13} className="text-ink-400" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && searchMatches[0]) { setSelected(searchMatches[0]); setQuery(''); }
+                    if (e.key === 'Escape') setQuery('');
+                  }}
+                  placeholder="리소스 이름 검색…"
+                  className="w-44 bg-transparent text-[12px] text-ink-700 outline-none placeholder:text-ink-300"
+                />
+              </div>
+              {searchMatches.length > 0 && (
+                <ul className="absolute right-0 z-20 mt-1 max-h-72 w-72 overflow-auto rounded-md border border-ink-200 bg-card py-1 shadow-pop">
+                  {searchMatches.map((n) => (
+                    <li key={n.id}>
+                      <button
+                        type="button"
+                        onClick={() => { setSelected(n); setQuery(''); }}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-ink-700 hover:bg-ink-50"
+                      >
+                        <span className="truncate">{n.label}</span>
+                        <span className="ml-auto shrink-0 text-[10px] uppercase text-ink-400">{n.kind}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <select className={selectCls} value={entryOptions.cf.some((n) => n.id === entryId) ? entryId : ''} onChange={onEntry}>
               <option value="">CloudFront: 전체</option>
               {entryOptions.cf.map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}
