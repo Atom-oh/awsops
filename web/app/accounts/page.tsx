@@ -1,0 +1,122 @@
+'use client';
+import { useCallback, useEffect, useState } from 'react';
+import PageHeader from '@/components/ui/PageHeader';
+import Card from '@/components/ui/Card';
+import Badge from '@/components/ui/Badge';
+
+// Admin-only multi-account registration. The /api/accounts route is the real admin gate
+// (403 → denied here). Cross-account reads assume AWSopsReadOnlyRole in each target using its
+// ExternalId (a confused-deputy guard, not a secret). See the onboarding guide below.
+
+interface Account {
+  accountId: string; alias: string; region: string; isHost: boolean;
+  externalId: string | null; enabled: boolean; status: string;
+}
+
+const statusTone = (s: string): 'positive' | 'negative' | 'neutral' =>
+  s === 'verified' ? 'positive' : s === 'error' ? 'negative' : 'neutral';
+
+export default function AccountsPage() {
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [denied, setDenied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [form, setForm] = useState({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '' });
+
+  const load = useCallback(async () => {
+    const r = await fetch('/api/accounts');
+    if (r.status === 401 || r.status === 403) { setDenied(true); return; }
+    const d = await r.json().catch(() => ({ accounts: [] }));
+    setAccounts(Array.isArray(d.accounts) ? d.accounts : []);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    setBusy(true); setMsg('');
+    try {
+      const r = await fetch('/api/accounts', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(form),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(`실패: ${d.message || r.status}`); return; }
+      setMsg('등록·검증 완료'); setForm({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '' });
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const remove = async (id: string) => {
+    if (!confirm(`${id} 계정을 제거할까요?`)) return;
+    const r = await fetch(`/api/accounts?accountId=${id}`, { method: 'DELETE' });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); setMsg(`삭제 실패: ${d.message || r.status}`); return; }
+    await load();
+  };
+
+  if (denied) {
+    return (
+      <div className="p-6">
+        <PageHeader title="계정 관리" subtitle="Multi-account registration" />
+        <Card className="p-6 text-[13px] text-ink-500">관리자만 접근할 수 있습니다 (Cognito ADMIN_GROUP 또는 SSM allowlist).</Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 flex flex-col gap-4">
+      <PageHeader title="계정 관리" subtitle="연결된 AWS 계정 (크로스계정 read-only via AWSopsReadOnlyRole)" />
+
+      <Card className="p-4">
+        <div className="text-[13px] font-semibold text-ink-800 mb-3">등록된 계정</div>
+        {accounts === null && <div className="text-[12px] text-ink-400">로딩 중…</div>}
+        {accounts !== null && accounts.length === 0 && <div className="text-[12px] text-ink-400">등록된 계정이 없습니다.</div>}
+        {accounts && accounts.length > 0 && (
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="text-left text-ink-400">
+                <th className="py-1">Alias</th><th>Account ID</th><th>Region</th><th>상태</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {accounts.map((a) => (
+                <tr key={a.accountId} className="border-t border-ink-100">
+                  <td className="py-1.5">{a.alias}{a.isHost && <span className="ml-1 text-ink-400">(host)</span>}</td>
+                  <td className="font-mono">{a.accountId}</td>
+                  <td>{a.region}</td>
+                  <td><Badge tone={statusTone(a.status)} variant="soft">{a.status}</Badge></td>
+                  <td className="text-right">
+                    {!a.isHost && (
+                      <button onClick={() => remove(a.accountId)} className="text-[11px] text-negative-600 hover:underline">제거</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card className="p-4 flex flex-col gap-2">
+        <div className="text-[13px] font-semibold text-ink-800">계정 추가</div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <input className="border border-ink-200 rounded px-2 py-1 text-[12px] font-mono" placeholder="Account ID (12 digits)" value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value.trim() })} />
+          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Alias" value={form.alias} onChange={(e) => setForm({ ...form, alias: e.target.value })} />
+          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value.trim() })} />
+          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="ExternalId" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={add} disabled={busy} className="self-start rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+            {busy ? '검증 중…' : '추가 + 검증'}
+          </button>
+          {msg && <span className="text-[12px] text-ink-500">{msg}</span>}
+        </div>
+      </Card>
+
+      <Card className="p-4 text-[12px] text-ink-600 flex flex-col gap-1">
+        <div className="text-[13px] font-semibold text-ink-800 mb-1">타깃 계정 온보딩</div>
+        <p>각 타깃 계정에 <code>AWSopsReadOnlyRole</code>을 배포해야 합니다 (호스트 web task role만 신뢰 + ExternalId 조건 + ReadOnlyAccess).</p>
+        <p>CloudFormation 템플릿: <code>infra/cfn/awsops-target-account-role.yaml</code> — 배포 가이드는 <code>docs/runbooks/onboard-target-account.md</code> 참조.</p>
+        <p className="text-ink-400">배포 후 위 폼에 Account ID·Alias·Region·ExternalId를 입력하면 assume를 검증(상태=verified)한 뒤 등록합니다. ExternalId는 confused-deputy 가드이며 비밀이 아닙니다.</p>
+      </Card>
+    </div>
+  );
+}

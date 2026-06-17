@@ -107,6 +107,22 @@ resource "aws_iam_role_policy" "task_metrics" {
   })
 }
 
+# Multi-account: the web task role assumes the read-only role in each registered TARGET account
+# (web/lib/aws-assume.ts, with ExternalId). Scoped to the role NAME (target accounts are dynamic);
+# read-only assume — grants nothing in the target beyond that role's ReadOnlyAccess.
+resource "aws_iam_role_policy" "task_assume_readonly" {
+  name = "${var.project}-task-assume-readonly"
+  role = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sts:AssumeRole"]
+      Resource = "arn:aws:iam::*:role/AWSopsReadOnlyRole"
+    }]
+  })
+}
+
 # ADR-031 Phase 1: admin gate (always-on — unlike AgentCore, the admin gate is not feature-flagged).
 # Comma-separated admin-email allowlist; managed out-of-band (ignore drift). Empty/blank = cognito:groups-only.
 resource "aws_ssm_parameter" "admin_emails" {

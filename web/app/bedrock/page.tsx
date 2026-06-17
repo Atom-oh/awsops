@@ -8,6 +8,7 @@ import SegmentedControl from '@/components/ui/SegmentedControl';
 import AreaTrend from '@/components/charts/AreaTrend';
 import BarDistribution from '@/components/charts/BarDistribution';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
 
 interface CostBreakdown { inputCost: number; outputCost: number; cacheReadCost: number; cacheWriteCost: number; total: number; cacheSavings: number }
 interface ModelMetric {
@@ -21,12 +22,68 @@ const DASH = '—';
 const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const compact = (n: number) => n.toLocaleString(undefined, { notation: 'compact', maximumFractionDigits: 1 });
 
+const FANOUT = 6; // bounded parallel per-account fetches for "All accounts"
+const EMPTY = (range: string): BedrockData => ({ range, models: [], totalCost: 0, series: [] });
+
+async function fetchBedrock(range: string, accountId: string): Promise<BedrockData> {
+  const p = accountParam(accountId);
+  const r = await fetch(`/api/bedrock-metrics?range=${range}${p ? `&${p}` : ''}`);
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json();
+}
+
+/** Merge per-account BedrockData: sum per modelId (tokens/invocations/cost), invocation-weighted latency. */
+function mergeBedrock(parts: BedrockData[]): BedrockData {
+  const byModel = new Map<string, ModelMetric>();
+  const lat = new Map<string, { lat: number; inv: number }>();
+  let totalCost = 0;
+  const seriesByT = new Map<string, number>();
+  for (const p of parts) {
+    totalCost += p.totalCost ?? 0;
+    for (const m of p.models ?? []) {
+      const la = lat.get(m.modelId) ?? { lat: 0, inv: 0 };
+      la.lat += (m.avgLatencyMs || 0) * (m.invocations || 0); la.inv += m.invocations || 0;
+      lat.set(m.modelId, la);
+      const e = byModel.get(m.modelId);
+      if (!e) { byModel.set(m.modelId, { ...m, cost: { ...m.cost } }); continue; }
+      e.invocations += m.invocations; e.inputTokens += m.inputTokens; e.outputTokens += m.outputTokens;
+      e.cacheReadTokens += m.cacheReadTokens; e.cacheWriteTokens += m.cacheWriteTokens;
+      e.clientErrors += m.clientErrors; e.serverErrors += m.serverErrors;
+      e.cost = {
+        inputCost: e.cost.inputCost + m.cost.inputCost, outputCost: e.cost.outputCost + m.cost.outputCost,
+        cacheReadCost: e.cost.cacheReadCost + m.cost.cacheReadCost, cacheWriteCost: e.cost.cacheWriteCost + m.cost.cacheWriteCost,
+        total: e.cost.total + m.cost.total, cacheSavings: e.cost.cacheSavings + m.cost.cacheSavings,
+      };
+    }
+    for (const s of p.series ?? []) seriesByT.set(s.t, (seriesByT.get(s.t) ?? 0) + s.tokens);
+  }
+  for (const [id, e] of byModel) { const la = lat.get(id)!; e.avgLatencyMs = la.inv ? la.lat / la.inv : 0; }
+  const series = [...seriesByT.entries()].map(([t, tokens]) => ({ t, tokens })).sort((a, b) => (a.t < b.t ? -1 : 1));
+  return { range: parts[0]?.range ?? '', models: [...byModel.values()], totalCost, series };
+}
+
+/** Client-side fan-out: fetch every enabled account in bounded parallel + aggregate (thin-BFF). */
+async function loadAllAccounts(range: string): Promise<BedrockData> {
+  const ar = await fetch('/api/accounts');
+  const accts: Array<{ accountId: string; isHost: boolean; enabled: boolean }> =
+    ar.ok ? ((await ar.json().catch(() => ({ accounts: [] }))).accounts ?? []) : [];
+  const ids = accts.filter((a) => a.enabled).map((a) => (a.isHost ? 'self' : a.accountId));
+  if (!ids.length) return await fetchBedrock(range, 'self');
+  const parts: BedrockData[] = [];
+  for (let i = 0; i < ids.length; i += FANOUT) {
+    const chunk = await Promise.all(ids.slice(i, i + FANOUT).map((id) => fetchBedrock(range, id).catch(() => EMPTY(range))));
+    parts.push(...chunk);
+  }
+  return mergeBedrock(parts);
+}
+
 export default function BedrockPage() {
   const [range, setRange] = useState('24h');
   const [d, setD] = useState<BedrockData | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  const [active] = useActiveAccount(); // 'self' (host) | <accountId> | '__all__'
 
   // Closes over the current `range`; the range-switch useEffect re-fires this on
   // change, and the RefreshButton re-runs it for the same range on demand.
@@ -39,11 +96,8 @@ export default function BedrockPage() {
     setErr('');
     setBusy(true);
     try {
-      const r = await fetch(`/api/bedrock-metrics?range=${range}`);
-      if (seq !== loadSeqRef.current) return; // superseded (range switched or re-refreshed)
-      if (!r.ok) throw new Error(String(r.status));
-      const body = await r.json();
-      if (seq !== loadSeqRef.current) return;
+      const body = active === ALL_ACCOUNTS ? await loadAllAccounts(range) : await fetchBedrock(range, active);
+      if (seq !== loadSeqRef.current) return; // superseded (range/account switched or re-refreshed)
       setD(body);
       setCapturedAt(new Date().toISOString());
     } catch (e) {
@@ -51,7 +105,7 @@ export default function BedrockPage() {
     } finally {
       if (seq === loadSeqRef.current) setBusy(false);
     }
-  }, [range]);
+  }, [range, active]);
 
   useEffect(() => { load(); }, [load]);
 

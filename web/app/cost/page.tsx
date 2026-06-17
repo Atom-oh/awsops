@@ -11,6 +11,7 @@ import AreaTrend from '@/components/charts/AreaTrend';
 import HBarList from '@/components/charts/HBarList';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { momChangePctDaily, projectMonthEnd, trendPill } from '@/lib/cost';
+import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
 
 interface ServiceCost { service: string; amount: number; [k: string]: unknown }
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
@@ -22,11 +23,53 @@ interface ServiceDetail { service: string; currency: string; trend: TrendPoint[]
 const DASH = '—';
 const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+const FANOUT = 6;
+async function fetchCost(accountId: string): Promise<Cost> {
+  const p = accountParam(accountId);
+  const r = await fetch(`/api/cost${p ? `?${p}` : ''}`);
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json();
+}
+/** Merge per-account Cost: sum total, byService (by service), trend (by date), monthly (by month), forecast. */
+function mergeCost(parts: Cost[]): Cost {
+  const svc = new Map<string, number>(); const tr = new Map<string, number>();
+  const mo = new Map<string, number>(); let total = 0; let forecast = 0; let hasForecast = false;
+  for (const p of parts) {
+    total += p.total ?? 0;
+    if (typeof p.forecast === 'number') { forecast += p.forecast; hasForecast = true; }
+    for (const s of p.byService ?? []) svc.set(s.service, (svc.get(s.service) ?? 0) + s.amount);
+    for (const t of p.trend ?? []) tr.set(t.date, (tr.get(t.date) ?? 0) + t.amount);
+    for (const m of p.monthly ?? []) mo.set(m.month, (mo.get(m.month) ?? 0) + m.total);
+  }
+  return {
+    total, currency: parts[0]?.currency ?? 'USD',
+    byService: [...svc.entries()].map(([service, amount]) => ({ service, amount })).sort((a, b) => b.amount - a.amount),
+    trend: [...tr.entries()].map(([date, amount]) => ({ date, amount })).sort((a, b) => (a.date < b.date ? -1 : 1)),
+    monthly: [...mo.entries()].map(([month, total]) => ({ month, total })).sort((a, b) => (a.month < b.month ? -1 : 1)),
+    forecast: hasForecast ? forecast : null,
+  };
+}
+async function loadAllAccountsCost(): Promise<Cost> {
+  const ar = await fetch('/api/accounts');
+  const accts: Array<{ accountId: string; isHost: boolean; enabled: boolean }> =
+    ar.ok ? ((await ar.json().catch(() => ({ accounts: [] }))).accounts ?? []) : [];
+  const ids = accts.filter((a) => a.enabled).map((a) => (a.isHost ? 'self' : a.accountId));
+  if (!ids.length) return await fetchCost('self');
+  const parts: Cost[] = [];
+  for (let i = 0; i < ids.length; i += FANOUT) {
+    const chunk = await Promise.all(ids.slice(i, i + FANOUT).map((id) =>
+      fetchCost(id).catch(() => ({ total: 0, currency: 'USD', byService: [] } as Cost))));
+    parts.push(...chunk);
+  }
+  return mergeCost(parts);
+}
+
 export default function CostPage() {
   const [d, setD] = useState<Cost | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  const [active] = useActiveAccount();
 
   // Service drill-down panel: name selected (open) + lazily-fetched detail + its loading state.
   const [picked, setPicked] = useState<string | null>(null);
@@ -69,9 +112,8 @@ export default function CostPage() {
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const r = await fetch('/api/cost');
-      if (!r.ok) throw new Error(String(r.status));
-      setD(await r.json());
+      const data = active === ALL_ACCOUNTS ? await loadAllAccountsCost() : await fetchCost(active);
+      setD(data);
       setErr('');
       setCapturedAt(new Date().toISOString());
     } catch (e) {
@@ -79,7 +121,7 @@ export default function CostPage() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [active]);
 
   useEffect(() => { load(); }, [load]);
 
