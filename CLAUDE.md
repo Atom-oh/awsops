@@ -79,6 +79,8 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 
 ### 웹 (`web/`)
 - `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF 라우트
+- `app/security/page.tsx` + `app/api/security/{route,refresh}` — 보안 findings(Public S3·Open SG·Unencrypted EBS·IAM MFA), `inventory_resources`에서 BFF 파생(read-only). `s3_public_access`는 sync_lambda SDK sync로 추가
+- `app/compliance/page.tsx` + `app/api/compliance/{run,runs,runs/[id],benchmarks}` — CIS 벤치마크(Powerpipe Fargate 워커 `compliance` job → `compliance_runs`/`compliance_results` 이력). 둘 다 `steampipe_enabled` 게이트
 - `lib/db.ts` — Aurora node-pg 공유 풀(`getPool`)
 - `app/layout.tsx`, `app/page.tsx`, `Dockerfile`(standalone arm64)
 
@@ -202,6 +204,8 @@ Live env: account `180294183052`, domain `awsops-v2.atomai.click`, reused mgmt-v
 
 ### Web (`web/`)
 - `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF routes
+- `app/security/page.tsx` + `app/api/security/{route,refresh}` — security findings (Public S3 · Open SG · Unencrypted EBS · IAM MFA), derived in the BFF from `inventory_resources` (read-only); `s3_public_access` added as a sync_lambda SDK sync
+- `app/compliance/page.tsx` + `app/api/compliance/{run,runs,runs/[id],benchmarks}` — CIS benchmark (Powerpipe Fargate worker `compliance` job → `compliance_runs`/`compliance_results` history). Both gated on `steampipe_enabled`
 - `lib/db.ts` — shared Aurora node-pg pool (`getPool`)
 - `app/layout.tsx`, `app/page.tsx`, `Dockerfile` (standalone arm64)
 
