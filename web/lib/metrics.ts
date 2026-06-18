@@ -89,7 +89,7 @@ export async function rdsMetrics(instanceIds: string[], accountId?: string): Pro
         const id = chunk[Number(mm[2])];
         const v = res.Values?.[0];
         if (def && id && typeof v === 'number') {
-          (byInstance[id] as Record<string, number | null>)[def.field] = Math.round(v * 100) / 100;
+          (byInstance[id] as unknown as Record<string, number | null>)[def.field] = Math.round(v * 100) / 100;
         }
       }
     }
