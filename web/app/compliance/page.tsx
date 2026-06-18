@@ -96,6 +96,7 @@ export default function CompliancePage() {
     }
     const body = (await r.json().catch(() => ({}))) as { run?: Run; results?: Result[] };
     if (id === latestRunIdRef.current && body.run) {
+      setErr(''); // a successful load clears any stale "조회 실패" banner from a prior transient error
       setRun(body.run);
       setResults(body.results ?? []);
     }
