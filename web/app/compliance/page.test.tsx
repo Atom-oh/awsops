@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('@/components/charts/DonutBreakdown', () => ({ default: () => null }));
 
@@ -9,9 +9,12 @@ import CompliancePage from './page';
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('CompliancePage', () => {
+  // Match the LONGEST registered key contained in the URL so `/api/compliance/runs/7` resolves to
+  // the run-detail entry, not the `/api/compliance/runs` list entry (substring of the former).
   function routedFetch(map: Record<string, unknown>) {
+    const keys = Object.keys(map).sort((a, b) => b.length - a.length);
     return vi.fn((url: string) => {
-      const key = Object.keys(map).find((k) => String(url).includes(k));
+      const key = keys.find((k) => String(url).includes(k));
       return Promise.resolve({ ok: true, json: async () => (key ? map[key] : {}) });
     });
   }
@@ -37,5 +40,26 @@ describe('CompliancePage', () => {
     await waitFor(() => expect(screen.getByText('Recent runs')).toBeTruthy());
     expect(screen.getByText('succeeded')).toBeTruthy();
     expect(screen.getByText('82%')).toBeTruthy();
+  });
+
+  it('clicking a recent run loads its saved results via /runs/[id] (no re-run)', async () => {
+    vi.stubGlobal('fetch', routedFetch({
+      '/api/compliance/benchmarks': { benchmarks: [{ id: 'cis_v300', name: 'CIS AWS v3.0.0', description: '' }] },
+      '/api/compliance/runs': { runs: [
+        { id: 9, benchmark: 'cis_v300', status: 'succeeded', pass_rate: 75, started_at: '2026-06-18T00:00:00Z' },
+      ] },
+      // longest key → matched for /api/compliance/runs/9
+      '/api/compliance/runs/': {
+        run: { id: 9, benchmark: 'cis_v300', status: 'succeeded', pass_rate: 75, total_controls: 4, ok: 3, alarm: 1, info: 0, skip: 0, error: 0 },
+        results: [{ control_id: '1.1', title: 'MFA', section: '1 IAM', status: 'alarm', reason: 'no mfa', resource: 'arn:user/b', region: 'us-east-1', severity: 'high' }],
+      },
+    }));
+    render(<CompliancePage />);
+    await waitFor(() => expect(screen.getByText('cis_v300')).toBeTruthy());
+    fireEvent.click(screen.getByText('cis_v300'));
+    // run-detail loaded: the unique pass-rate stat (75.0%) + the control row (1.1 appears in both
+    // the desktop table and the mobile card, hence getAllByText).
+    await waitFor(() => expect(screen.getByText('75.0%')).toBeTruthy());
+    expect(screen.getAllByText('1.1').length).toBeGreaterThan(0);
   });
 });

@@ -38,8 +38,6 @@ function passVariant(rate: number): StatTileVariant {
 export default function CompliancePage() {
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [benchmark, setBenchmark] = useState('cis_v300');
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- WIP: setter used (run_id capture); reader pending
-  const [runId, setRunId] = useState<number | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [results, setResults] = useState<Result[]>([]);
   const [busy, setBusy] = useState(false);
@@ -47,6 +45,9 @@ export default function CompliancePage() {
   const [selected, setSelected] = useState<Result | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The run id the UI is currently tracking. poll() applies a response only when it still matches —
+  // so a stale timer (from a prior run/view) can't overwrite the run the user just switched to.
+  const latestRunIdRef = useRef<number | null>(null);
 
   // Run history list (saved compliance_runs). Best-effort — never blocks the page.
   const loadHistory = useCallback(async () => {
@@ -80,10 +81,12 @@ export default function CompliancePage() {
     try {
       const r = await fetch(`/api/compliance/runs/${id}`);
       const body = (await r.json()) as { run?: Run; results?: Result[] };
+      if (id !== latestRunIdRef.current) return; // superseded by a newer run/view — drop this response
       if (body.run) {
         setRun(body.run);
         setResults(body.results ?? []);
         if (body.run.status === 'running') {
+          setBusy(true); // a running run (incl. a viewed one) keeps Run disabled → no duplicate job
           pollRef.current = setTimeout(() => void poll(id), 5000);
         } else {
           setBusy(false);
@@ -91,14 +94,16 @@ export default function CompliancePage() {
         }
       }
     } catch {
-      setBusy(false);
+      if (id === latestRunIdRef.current) setBusy(false);
     }
   }, [loadHistory]);
 
-  // View a past run's saved results (no re-run); poll() handles terminal vs still-running.
+  // View a past run's saved results (no re-run). Cancel any in-flight poll timer + claim the active
+  // id so a prior run's pending poll can't overwrite this view. poll() handles terminal vs running.
   const viewRun = useCallback((id: number) => {
     setErr('');
-    setRunId(id);
+    if (pollRef.current) clearTimeout(pollRef.current);
+    latestRunIdRef.current = id;
     void poll(id);
   }, [poll]);
 
@@ -122,7 +127,8 @@ export default function CompliancePage() {
         return;
       }
       const { run_id } = (await r.json()) as { run_id: number };
-      setRunId(run_id);
+      if (pollRef.current) clearTimeout(pollRef.current);
+      latestRunIdRef.current = run_id;
       void poll(run_id);
     } catch {
       setErr('벤치마크 실행을 시작하지 못했습니다.');
