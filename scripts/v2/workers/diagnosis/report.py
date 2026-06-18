@@ -5,6 +5,7 @@ import os
 import re
 import sys
 from datetime import datetime, timezone, timedelta
+import threading
 import boto3
 from botocore.config import Config
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -105,13 +106,31 @@ _SYSTEM = (
 )
 
 
+# Bedrock clients are thread-safe for invoke calls, but creating one through boto3's shared default
+# Session is NOT — concurrent section rendering (ADR-045) could race during creation. Create one client
+# per region under a lock (double-checked) and reuse it across threads.
+_bedrock_lock = threading.Lock()
+_bedrock_clients: dict = {}
+
+
+def _get_bedrock_client(region):
+    client = _bedrock_clients.get(region)
+    if client is None:
+        with _bedrock_lock:
+            client = _bedrock_clients.get(region)
+            if client is None:
+                client = boto3.client("bedrock-runtime", region_name=region, config=_BEDROCK_CONFIG)
+                _bedrock_clients[region] = client
+    return client
+
+
 def _bedrock_render(prompt, context_json, model_id, max_tokens):
     # global.* inference profiles route worldwide and can be invoked from the home region; we pin
     # BEDROCK_REGION to ap-northeast-2 (matches agent.py) so calls land in the ap-northeast-2
     # /aws/bedrock/invocation-logs and are attributable to awsops (caller-role filter) for cost.
     # model_id + max_tokens are resolved per-tier by generate() (deep may select Opus + a larger cap).
     bedrock_region = os.environ.get("BEDROCK_REGION", "ap-northeast-2")
-    client = boto3.client("bedrock-runtime", region_name=bedrock_region, config=_BEDROCK_CONFIG)
+    client = _get_bedrock_client(bedrock_region)  # thread-safe shared client (ADR-045 concurrent render)
     body = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": max_tokens,
