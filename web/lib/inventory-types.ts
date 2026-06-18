@@ -380,4 +380,38 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
     { kind: 'countWhere', label: '정책차단 해제', col: 'block_public_policy', eq: 'false', tone: 'danger' },
     { kind: 'countWhere', label: '공개버킷 미제한', col: 'restrict_public_buckets', eq: 'false', tone: 'danger' },
   ],
+  cloudtrail: [
+    { kind: 'countWhere', label: '로깅 중', col: 'is_logging', eq: 'true', tone: 'accent' },
+    { kind: 'countWhere', label: '로깅 꺼짐', col: 'is_logging', eq: 'false', tone: 'danger' },
+    { kind: 'countWhere', label: '검증 비활성', col: 'log_file_validation_enabled', eq: 'false', tone: 'danger' },
+    { kind: 'countWhere', label: '멀티리전', col: 'is_multi_region_trail', eq: 'true', tone: 'accent' },
+  ],
 };
+
+// ───────────────────────────────────────────────────────────────────────────
+// Layout archetypes — each inventory page composes its sections to match the
+// resource's nature, so pages read distinctly (vs one identical template):
+//   risk      → danger-verdict hero on top, table-first (security posture)
+//   chart     → distribution/utilization donut prominent up top, table below
+//   capacity  → donut-left + table-right side-by-side (engine/type/size)
+//   directory → compact KPIs, table-dominant scanning, donut as a small aside
+// ───────────────────────────────────────────────────────────────────────────
+export type Archetype = 'risk' | 'chart' | 'capacity' | 'directory';
+
+const LAYOUTS: Record<string, Archetype> = {
+  // risk — types with genuine danger signals → lead with the verdict
+  iam_user: 'risk', s3_public_access: 'risk', cloudtrail: 'risk',
+  // chart — state/utilization distribution is the story
+  ec2: 'chart', lambda: 'chart', ecs_cluster: 'chart', cloudwatch_alarm: 'chart',
+  // capacity — engine/type/size; donut beside the table
+  rds: 'capacity', ebs_volume: 'capacity', dynamodb: 'capacity', elasticache: 'capacity',
+  opensearch: 'capacity', msk: 'capacity', s3: 'capacity', ecr: 'capacity',
+  // directory — listing/scanning, table-dominant (default for the rest)
+  vpc: 'directory', subnet: 'directory', security_group: 'directory', waf: 'directory',
+  alb: 'directory', nlb: 'directory', target_group: 'directory', alb_listener_rule: 'directory',
+  apigatewayv2_api: 'directory', apigatewayv2_integration: 'directory', apigatewayv2_route: 'directory',
+  cloudfront: 'directory', cloudfront_vpc_origin: 'directory', route53: 'directory', ecs_task: 'directory',
+};
+
+/** The layout archetype for an inventory type (unmapped → 'directory', a safe table-lead default). */
+export const layoutOf = (type: string): Archetype => LAYOUTS[type] ?? 'directory';
