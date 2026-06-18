@@ -70,7 +70,7 @@ describe('auth + validation', () => {
 describe('SQL generation (the ClickHouse fix)', () => {
   it('uses the cached schema block and read-only SQL lang for a clickhouse instance', async () => {
     getDatasource.mockResolvedValue({ id: 2, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
-    listConfiguredSchemas.mockResolvedValue([{ integrationId: 2, kind: 'clickhouse', schema: { __block: 'otel_traces(ServiceName String)' }, fetched_at: 't' }]);
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 2, kind: 'clickhouse', schema: { __block: 'otel_traces(ServiceName String)' }, fetched_at: new Date().toISOString() }]);
     generateQuery.mockResolvedValue('SELECT ServiceName FROM otel_traces');
     const { POST } = await import('./route');
     const res = await POST(req({ id: 2, nl: 'api gateway가 보내는 서비스는' }));
@@ -78,7 +78,7 @@ describe('SQL generation (the ClickHouse fix)', () => {
     expect(await res.json()).toEqual({ query: 'SELECT ServiceName FROM otel_traces', lang: 'read-only SQL' });
     const g = lastGen();
     expect(g).toMatchObject({ lang: 'read-only SQL', isSql: true, schemaBlock: 'otel_traces(ServiceName String)' });
-    expect(invokeMcpLambdaTool).not.toHaveBeenCalled(); // cache hit → no on-demand introspect
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled(); // FRESH cache hit → no introspect (sync or background)
   });
 
   it('on-demand introspects + caches when no schema is cached yet', async () => {
@@ -145,6 +145,34 @@ describe('Prometheus metric relevance', () => {
     const schemaArg = renderSchemaForPrompt.mock.calls.at(-1)![0] as { metrics: string[] };
     expect(schemaArg.metrics[0]).toBe('kube_pod_container_resource_requests');
     expect(lastGen()).toMatchObject({ lang: 'PromQL', isSql: false });
+  });
+});
+
+describe('lazy refresh (TTL) [P2]', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 25)); // let the fire-and-forget refresh run
+
+  it('refreshes in the background on a STALE cache hit (serves cached now)', async () => {
+    getDatasource.mockResolvedValue({ id: 11, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 11, kind: 'prometheus', schema: { __block: 'CACHED', metrics: ['up'] }, fetched_at: '2020-01-01T00:00:00Z' }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom', authType: 'none' });
+    invokeMcpLambdaTool.mockResolvedValue({ __block: 'FRESH', metrics: ['up'] });
+    generateQuery.mockResolvedValue('up');
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 11, nl: 'is it up' }));
+    expect(res.status).toBe(200);
+    expect(lastGen().schemaBlock).toBe('CACHED'); // served the cached copy immediately
+    await flush();
+    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({ tool: 'prometheus_schema' })); // background refresh fired
+  });
+
+  it('does NOT refresh on a FRESH cache hit', async () => {
+    getDatasource.mockResolvedValue({ id: 12, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 12, kind: 'prometheus', schema: { __block: 'CACHED', metrics: ['up'] }, fetched_at: new Date().toISOString() }]);
+    generateQuery.mockResolvedValue('up');
+    const { POST } = await import('./route');
+    await POST(req({ id: 12, nl: 'is it up' }));
+    await flush();
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled(); // fresh → no introspect
   });
 });
 

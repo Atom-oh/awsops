@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
-import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery } from './datasource-schema';
+import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale } from './datasource-schema';
 
 beforeEach(() => { query.mockReset().mockResolvedValue({ rows: [] }); });
 
@@ -126,5 +126,18 @@ describe('prioritizeSchemaForQuery (Prometheus relevance ordering)', () => {
     expect(orig.metrics).toEqual(metrics); // original not mutated
     expect(prioritizeSchemaForQuery(null, 'pod')).toBeNull();
     expect(prioritizeSchemaForQuery({ tables: [{ name: 't' }] }, 'pod')).toEqual({ tables: [{ name: 't' }] });
+  });
+});
+
+describe('isSchemaStale (lazy-refresh TTL)', () => {
+  const now = Date.parse('2026-06-18T12:00:00Z');
+  it('stale when missing / unparseable / older than TTL; fresh when recent', () => {
+    expect(isSchemaStale(undefined, now)).toBe(true);
+    expect(isSchemaStale('not-a-date', now)).toBe(true);
+    expect(isSchemaStale('2026-06-18T00:00:00Z', now)).toBe(true);  // 12h old > 6h default TTL
+    expect(isSchemaStale('2026-06-18T11:30:00Z', now)).toBe(false); // 30m old < 6h
+  });
+  it('respects a custom TTL', () => {
+    expect(isSchemaStale('2026-06-18T11:00:00Z', now, 30 * 60 * 1000)).toBe(true); // 1h old > 30m TTL
   });
 });
