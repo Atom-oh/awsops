@@ -11,6 +11,7 @@
 - `scripts/v2/workers/diagnosis/test_sources.py`
 - `scripts/v2/workers/diagnosis/report.py`
 - `scripts/v2/workers/diagnosis/test_report.py`
+- `scripts/v2/workers/diagnosis/test_intended_vs_actual.py`
 
 ## Out of scope
 New collectors / AWS APIs / IAM; LLM prompt rewrites; section/tier changes; web; terraform.
@@ -77,6 +78,11 @@ New collectors / AWS APIs / IAM; LLM prompt rewrites; section/tier changes; web;
 - [ ] Run `python3 -m pytest scripts/v2/workers/diagnosis/test_report.py -q`.
 - [ ] Commit: `feat(diagnosis): append a data-coverage note (which collectors had data) to the report`.
 
-### Task 4: full diagnosis test sweep
+### Task 4: fix the stale `_bedrock_render` region test + full sweep
+- Modify: `scripts/v2/workers/diagnosis/test_intended_vs_actual.py`
+- [ ] Pre-existing failure (NOT caused by this change — confirmed by stashing our diff): the test
+      asserts `_bedrock_render` region == `us-east-1`, but the code migrated `us.*` → `global.*`
+      inference profiles invoked from `ap-northeast-2` (report.py:20/107, matches `agent/agent.py`).
+      Update the assertion + comment to `ap-northeast-2` (global.* profile, regional invoke).
 - [ ] Run `python3 -m pytest scripts/v2/workers/diagnosis/ -q` — all green (existing + new).
-- [ ] (no commit — verification only)
+- [ ] Commit: `test(diagnosis): _bedrock_render region assertion ap-northeast-2 (global.* migration; was stale us-east-1)`.

@@ -218,5 +218,5 @@ def test_bedrock_render_sets_read_timeout(monkeypatch):
 
     out = report._bedrock_render("prompt", "{}", report.MODEL_ID, 1500)
     assert out == "x"
-    assert captured["region"] == "us-east-1"  # us.* profile must stay in a US region
+    assert captured["region"] == "ap-northeast-2"  # global.* profile invoked from caller region (matches agent.py)
     assert captured["config"] is not None and captured["config"].read_timeout  # idle/read timeout set
