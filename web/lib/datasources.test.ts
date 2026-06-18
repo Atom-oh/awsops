@@ -12,7 +12,7 @@ vi.mock('@/lib/integration-credentials', () => ({
 }));
 
 import {
-  createDatasource, listDatasources, getDatasource, updateDatasource, getDefaultDatasource,
+  createDatasource, listDatasources, getDatasource, updateDatasource, getDefaultDatasource, resolveConnConfig,
 } from './datasources';
 
 beforeEach(() => {
@@ -33,6 +33,13 @@ describe('createDatasource', () => {
     expect(sql).toMatch(/enabled/);
     // is_default derived as "first of kind" via NOT EXISTS
     expect(sql).toMatch(/NOT EXISTS/i);
+  });
+
+  it('coerces a node-pg string BIGSERIAL id to a number (else the credential write breaks)', async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: '42' }] }); // node-pg returns BIGINT as a STRING
+    const id = await createDatasource({ name: 'p', kind: 'prometheus', endpoint: 'http://p:9090', authType: 'none' });
+    expect(id).toBe(42);
+    expect(typeof id).toBe('number'); // not the string '42' — assertPositiveId would have thrown
   });
 
   it('rejects a non-datasource kind with no DB call', async () => {
@@ -93,5 +100,20 @@ describe('getDatasource', () => {
     expect(await getDatasource(4)).toMatchObject({ id: 4, kind: 'clickhouse', authType: 'basic' });
     query.mockResolvedValueOnce({ rows: [] });
     expect(await getDatasource(404)).toBeNull();
+  });
+});
+
+describe('resolveConnConfig', () => {
+  const row = { id: 1, name: 'p', kind: 'prometheus', endpoint: 'http://p:9090', authType: 'none' as const, isDefault: true, enabled: true };
+
+  it('uses the ROW endpoint + authType when no SM credential exists (auth=none heal path)', async () => {
+    getCredentialById.mockResolvedValueOnce(null); // no stored cred (auth=none, or never written)
+    expect(await resolveConnConfig(row)).toEqual({ endpoint: 'http://p:9090', authType: 'none' });
+  });
+
+  it('overlays the SM credential over the row so auth material reaches the connector', async () => {
+    getCredentialById.mockResolvedValueOnce({ endpoint: 'http://p:9090', authType: 'basic', username: 'u', password: 'pw' });
+    expect(await resolveConnConfig({ ...row, authType: 'basic' as const }))
+      .toMatchObject({ endpoint: 'http://p:9090', authType: 'basic', username: 'u', password: 'pw' });
   });
 });

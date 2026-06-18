@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const verifyUser = vi.fn(); const isAdmin = vi.fn();
 const invokeMcpLambdaTool = vi.fn(); const upsertSchema = vi.fn(); const listConfiguredSchemas = vi.fn();
-const getDatasource = vi.fn(); const getCredentialById = vi.fn();
+const getDatasource = vi.fn(); const resolveConnConfig = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/account', () => ({ currentAccountId: () => 'acct-1' }));
@@ -11,8 +11,10 @@ vi.mock('@/lib/datasource-schema', () => ({
   upsertSchema: (...a: unknown[]) => upsertSchema(...a),
   listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a),
 }));
-vi.mock('@/lib/datasources', () => ({ getDatasource: (...a: unknown[]) => getDatasource(...a) }));
-vi.mock('@/lib/integration-credentials', () => ({ getCredentialById: (...a: unknown[]) => getCredentialById(...a) }));
+vi.mock('@/lib/datasources', () => ({
+  getDatasource: (...a: unknown[]) => getDatasource(...a),
+  resolveConnConfig: (...a: unknown[]) => resolveConnConfig(...a),
+}));
 
 function req(body: unknown, method = 'POST') {
   const init: RequestInit = { method, headers: { 'content-type': 'application/json', cookie: 'awsops_token=t' } };
@@ -20,10 +22,10 @@ function req(body: unknown, method = 'POST') {
   return new Request('http://x/api/integrations/schema', init);
 }
 beforeEach(() => {
-  for (const m of [verifyUser, isAdmin, invokeMcpLambdaTool, upsertSchema, listConfiguredSchemas, getDatasource, getCredentialById]) m.mockReset();
+  for (const m of [verifyUser, isAdmin, invokeMcpLambdaTool, upsertSchema, listConfiguredSchemas, getDatasource, resolveConnConfig]) m.mockReset();
   process.env.AURORA_ENDPOINT = 'aurora'; verifyUser.mockResolvedValue({ email: 'a@x' }); isAdmin.mockResolvedValue(true);
   getDatasource.mockResolvedValue({ id: 5, name: 'p', kind: 'prometheus', endpoint: 'http://10.0.0.5:9090', authType: 'none', isDefault: true, enabled: true });
-  getCredentialById.mockResolvedValue({ endpoint: 'http://10.0.0.5:9090', authType: 'none' });
+  resolveConnConfig.mockResolvedValue({ endpoint: 'http://10.0.0.5:9090', authType: 'none' });
 });
 
 describe('/api/integrations/schema', () => {
@@ -56,7 +58,7 @@ describe('/api/integrations/schema', () => {
 
   it('SSRF-blocks a bad resolved endpoint (400, no invoke)', async () => {
     getDatasource.mockResolvedValue({ id: 6, kind: 'clickhouse', endpoint: 'http://169.254.169.254', authType: 'none', isDefault: false, enabled: true });
-    getCredentialById.mockResolvedValue({ endpoint: 'http://169.254.169.254', authType: 'none' });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://169.254.169.254', authType: 'none' });
     const { POST } = await import('./route');
     expect((await POST(req({ id: 6 }))).status).toBe(400);
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
