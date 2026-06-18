@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { INVENTORY_TYPES, inventoryGroups, isDeprecatedRuntime, DEPRECATED_RUNTIMES } from './inventory-types';
+import {
+  INVENTORY_TYPES, inventoryGroups, isDeprecatedRuntime, DEPRECATED_RUNTIMES,
+  navTree, overviewGroups, groupBySlug, groupForPath, RESERVED_NAV_SLUGS,
+} from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
   it('has the 31 wave types (28 + apigatewayv2_route + alb_listener_rule + s3_public_access)', () => {
@@ -70,5 +73,87 @@ describe('isDeprecatedRuntime (Lambda EOL signal)', () => {
     expect(isDeprecatedRuntime(undefined)).toBe(false);
     expect(isDeprecatedRuntime(42)).toBe(false);
     expect(isDeprecatedRuntime('custom')).toBe(false);
+  });
+});
+
+describe('navTree (sidebar IA hierarchy)', () => {
+  const tree = navTree();
+  const find = (slug: string) => tree.find((g) => g.slug === slug)!;
+  const invTypesOf = (slug: string) => {
+    const g = find(slug);
+    return [
+      ...g.items.filter((l) => l.kind === 'inventory').map((l) => l.type!),
+      ...g.subgroups.flatMap((s) => s.items.map((l) => l.type!)),
+    ];
+  };
+
+  it('returns the 5 groups in GROUP_ORDER', () => {
+    expect(tree.map((g) => g.slug)).toEqual(['compute', 'storage', 'network', 'security', 'monitoring']);
+  });
+
+  it('places every inventory type exactly once (no drop, no dup) — 31 total', () => {
+    const placed = tree.flatMap((g) => invTypesOf(g.slug));
+    expect(new Set(placed).size).toBe(placed.length); // no duplicates
+    expect(new Set(placed)).toEqual(new Set(Object.keys(INVENTORY_TYPES)));
+    expect(placed.length).toBe(31);
+  });
+
+  it('Compute injects EKS as a feature leaf first, then ec2/lambda/ecr, with an ECS subgroup', () => {
+    const c = find('compute');
+    expect(c.items[0]).toMatchObject({ kind: 'feature', href: '/eks', labelKey: 'nav.eks' });
+    expect(c.items.filter((l) => l.kind === 'inventory').map((l) => l.type)).toEqual(['ec2', 'lambda', 'ecr']);
+    const ecs = c.subgroups.find((s) => s.key === 'ecs')!;
+    expect(ecs.items.map((l) => l.type)).toEqual(['ecs_cluster', 'ecs_task']);
+  });
+
+  it('Network nests Load Balancing + API Gateway and excludes them from direct items', () => {
+    const n = find('network');
+    expect(n.subgroups.find((s) => s.key === 'loadBalancing')!.items.map((l) => l.type))
+      .toEqual(['alb', 'nlb', 'target_group', 'alb_listener_rule']);
+    expect(n.subgroups.find((s) => s.key === 'apiGateway')!.items.map((l) => l.type))
+      .toEqual(['apigatewayv2_api', 'apigatewayv2_integration', 'apigatewayv2_route']);
+    const direct = n.items.filter((l) => l.kind === 'inventory').map((l) => l.type);
+    expect(direct).toEqual(['vpc', 'subnet', 'security_group', 'route53', 'cloudfront', 'cloudfront_vpc_origin']);
+  });
+
+  it('Monitoring is a singleton (flat, no overview href)', () => {
+    const m = find('monitoring');
+    expect(m.singleton).toBe(true);
+    expect(m.href).toBeUndefined();
+  });
+
+  it('non-singleton groups expose /inventory/g/<slug> overview hrefs', () => {
+    for (const g of tree.filter((x) => !x.singleton)) expect(g.href).toBe(`/inventory/g/${g.slug}`);
+  });
+
+  it('splitKeys pin split→group: sgOpenIngress→Network, iamUserNoMfa→Security, EBS→Storage', () => {
+    expect(find('network').splitKeys).toContain('sgOpenIngress');
+    expect(find('security').splitKeys).toContain('iamUserNoMfa');
+    expect(find('storage').splitKeys).toContain('ebsUnencrypted');
+    expect(find('compute').splitKeys).toEqual(['ec2Running', 'ec2Stopped']);
+  });
+});
+
+describe('overview helpers + path resolver', () => {
+  it('overviewGroups excludes singletons (4 groups)', () => {
+    expect(overviewGroups().map((g) => g.slug)).toEqual(['compute', 'storage', 'network', 'security']);
+  });
+  it('groupBySlug resolves overview groups, null for singleton/unknown', () => {
+    expect(groupBySlug('network')?.slug).toBe('network');
+    expect(groupBySlug('monitoring')).toBeNull(); // singleton has no overview
+    expect(groupBySlug('nope')).toBeNull();
+  });
+  it('groupForPath maps inventory/feature/overview/subgroup paths to their group', () => {
+    expect(groupForPath('/inventory/ec2')).toEqual({ slug: 'compute' });
+    expect(groupForPath('/eks')).toEqual({ slug: 'compute' });
+    expect(groupForPath('/eks/my-cluster')).toEqual({ slug: 'compute' });
+    expect(groupForPath('/inventory/g/network')).toEqual({ slug: 'network' });
+    expect(groupForPath('/inventory/alb')).toEqual({ slug: 'network', subgroupKey: 'loadBalancing' });
+    expect(groupForPath('/inventory/apigatewayv2_route')).toEqual({ slug: 'network', subgroupKey: 'apiGateway' });
+    expect(groupForPath('/inventory/cloudwatch_alarm')).toEqual({ slug: 'monitoring' });
+    expect(groupForPath('/nonexistent')).toBeNull();
+  });
+  it('no inventory type slug collides with a reserved nav slug (incl. the g segment)', () => {
+    for (const key of Object.keys(INVENTORY_TYPES)) expect(RESERVED_NAV_SLUGS).not.toContain(key);
   });
 });
