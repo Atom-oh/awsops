@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
+import SchedulePanel from './SchedulePanel';
 import ReportMarkdown from './ReportMarkdown';
 import IntentPanel from './IntentPanel';
 
@@ -212,6 +213,7 @@ export default function DiagnosisView() {
             <p className="mt-1 text-[11px] text-ink-400">Opus: 더 깊은 분석, 비용↑</p>
           </fieldset>
         )}
+        <SchedulePanel />
         <ul className="space-y-1">
           {reports.map((r) => (
             <li key={r.id} className="flex items-center gap-1">
