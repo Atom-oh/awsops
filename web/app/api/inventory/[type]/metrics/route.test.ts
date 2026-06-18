@@ -4,11 +4,13 @@ const verifyUser = vi.fn();
 const query = vi.fn();
 const ec2AvgCpu = vi.fn();
 const ec2HourlyCost = vi.fn();
+const rdsMetrics = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 vi.mock('@/lib/metrics', () => ({
   ec2AvgCpu: (...a: unknown[]) => ec2AvgCpu(...a),
   ec2HourlyCost: (...a: unknown[]) => ec2HourlyCost(...a),
+  rdsMetrics: (...a: unknown[]) => rdsMetrics(...a),
 }));
 
 const req = (cookie = 'awsops_token=t') =>
@@ -20,6 +22,7 @@ beforeEach(() => {
   query.mockReset();
   ec2AvgCpu.mockReset();
   ec2HourlyCost.mockReset();
+  rdsMetrics.mockReset();
 });
 
 describe('GET /api/inventory/[type]/metrics', () => {
@@ -65,13 +68,42 @@ describe('GET /api/inventory/[type]/metrics', () => {
     expect(cards[1].value).toBe('—');
   });
 
-  it('non-ec2 (s3) → {cards:[]}', async () => {
+  it('non-ec2/non-rds (s3) → {cards:[]}', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     const { GET } = await import('./route');
     const res = await GET(req(), ctx('s3'));
     expect(res.status).toBe(200);
     expect((await res.json()).cards).toEqual([]);
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it('rds → CPU / connections / free-storage cards', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [{ id: 'db-1' }, { id: 'db-2' }] });
+    rdsMetrics.mockResolvedValue({
+      byInstance: {
+        'db-1': { cpu: 40, connections: 5, freeStorage: 5_000_000_000, freeableMemory: null, readIops: null, writeIops: null, netIn: null, netOut: null },
+        'db-2': { cpu: 60, connections: 7, freeStorage: 8_000_000_000, freeableMemory: null, readIops: null, writeIops: null, netIn: null, netOut: null },
+      },
+      avgCpu: 50,
+    });
+    const { GET } = await import('./route');
+    const res = await GET(req(), ctx('rds'));
+    expect(res.status).toBe(200);
+    const cards = (await res.json()).cards as { label: string; value: string | number }[];
+    expect(rdsMetrics).toHaveBeenCalledWith(['db-1', 'db-2']);
+    expect(cards[0].value).toBe('50%'); // avg CPU
+    expect(cards.find((c) => c.label.includes('커넥션'))?.value).toBe(12); // 5 + 7
+    expect(cards.find((c) => c.label.includes('스토리지'))?.value).toBe('5GB'); // min(5, 8) GB
+  });
+
+  it('rds → em-dash cards when metrics null (degrade)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query.mockResolvedValue({ rows: [] });
+    rdsMetrics.mockResolvedValue({ byInstance: {}, avgCpu: null });
+    const { GET } = await import('./route');
+    const cards = (await (await GET(req(), ctx('rds'))).json()).cards as { value: string | number }[];
+    expect(cards[0].value).toBe('—');
   });
 
   it('degrades to {cards:[]} on error (never blanks page)', async () => {
