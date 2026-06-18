@@ -3,12 +3,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const verifyUser = vi.fn();
 const invokeMcpLambdaTool = vi.fn();
 const getDatasource = vi.fn();
-const getCredentialById = vi.fn();
+const resolveConnConfig = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/mcp-lambda-invoke', () => ({ invokeMcpLambdaTool: (...a: unknown[]) => invokeMcpLambdaTool(...a) }));
-vi.mock('@/lib/datasources', () => ({ getDatasource: (...a: unknown[]) => getDatasource(...a) }));
-vi.mock('@/lib/integration-credentials', () => ({ getCredentialById: (...a: unknown[]) => getCredentialById(...a) }));
+vi.mock('@/lib/datasources', () => ({
+  getDatasource: (...a: unknown[]) => getDatasource(...a),
+  resolveConnConfig: (...a: unknown[]) => resolveConnConfig(...a),
+}));
 // NOTE: datasource-render is NOT mocked — the matrix→series normalization is exercised for real.
 
 function req(body: unknown) {
@@ -18,7 +20,7 @@ function req(body: unknown) {
 }
 
 beforeEach(() => {
-  for (const m of [verifyUser, invokeMcpLambdaTool, getDatasource, getCredentialById]) m.mockReset();
+  for (const m of [verifyUser, invokeMcpLambdaTool, getDatasource, resolveConnConfig]) m.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
   invokeMcpLambdaTool.mockResolvedValue({ resultType: 'vector', result: [] });
 });
@@ -32,7 +34,7 @@ describe('POST /api/datasources/query', () => {
 
   it('by INSTANCE id resolves the row + credential and passes an inline conn-config', async () => {
     getDatasource.mockResolvedValue({ id: 2, kind: 'prometheus', endpoint: 'http://s:9090', authType: 'none', isDefault: false, enabled: true });
-    getCredentialById.mockResolvedValue({ endpoint: 'http://s:9090', authType: 'none' });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://s:9090', authType: 'none' });
     const { POST } = await import('./route');
     expect((await POST(req({ id: 2, query: 'up' }))).status).toBe(200);
     const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
@@ -83,7 +85,7 @@ describe('POST /api/datasources/query', () => {
 
   it('SSRF-blocks a bad resolved endpoint (400, no invoke)', async () => {
     getDatasource.mockResolvedValue({ id: 3, kind: 'clickhouse', endpoint: 'http://169.254.169.254', authType: 'none', isDefault: false, enabled: true });
-    getCredentialById.mockResolvedValue({ endpoint: 'http://169.254.169.254', authType: 'none' });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://169.254.169.254', authType: 'none' });
     const { POST } = await import('./route');
     expect((await POST(req({ id: 3, query: 'SELECT 1' }))).status).toBe(400);
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled();

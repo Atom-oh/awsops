@@ -6,6 +6,7 @@
 import { getPool } from '@/lib/db';
 import { DATASOURCE_KINDS, isDatasourceKind } from '@/lib/integrations-category';
 import type { AuthType } from '@/lib/datasource-auth';
+import type { ConnConfig } from '@/lib/mcp-lambda-invoke';
 import {
   getCredentialById,
   mirrorDefaultCredential,
@@ -62,7 +63,10 @@ export async function createDatasource(i: CreateDatasourceInput): Promise<number
        RETURNING id`,
       [i.name, i.kind, i.endpoint, i.authType],
     );
-    return rows[0].id as number;
+    // node-pg returns BIGSERIAL as a STRING — coerce so callers get a real number. (The credential
+    // write keys on String(id) and assertPositiveId requires an integer; a string id silently threw,
+    // leaving the row with NO credential → the connector reported "not connected".)
+    return Number(rows[0].id);
   } catch (e) {
     if ((e as { code?: string })?.code === '23505') throw new Error('duplicate datasource name');
     throw e;
@@ -82,6 +86,20 @@ export async function listDatasources(): Promise<DatasourceRow[]> {
 export async function getDatasource(id: number): Promise<DatasourceRow | null> {
   const { rows } = await getPool().query(`SELECT ${SELECT_COLS} FROM integrations WHERE id = $1`, [id]);
   return rows.length ? mapRow(rows[0]) : null;
+}
+
+/** Build the inline connector conn-config for an instance. The integrations ROW is authoritative for
+ *  endpoint + authType — so an auth=none instance (or one whose Secrets Manager credential was never
+ *  written) still resolves a usable endpoint — overlaid with the SM credential (auth material / org_id).
+ *  Without the row fallback, a no-auth datasource has no SM cred → connConfig is empty → the connector
+ *  Lambda falls back to the (often empty) kind-mirror and reports "not connected". */
+export async function resolveConnConfig(ds: DatasourceRow): Promise<ConnConfig> {
+  const cred = await getCredentialById(ds.id, ds.kind);
+  return {
+    ...(ds.endpoint ? { endpoint: ds.endpoint } : {}),
+    ...(ds.authType ? { authType: ds.authType } : {}),
+    ...(cred ?? {}),
+  } as ConnConfig;
 }
 
 export async function getDefaultDatasource(kind: string): Promise<DatasourceRow | null> {
