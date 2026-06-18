@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
-import { upsertSchema, getSchema, listConfiguredSchemas } from './datasource-schema';
+import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt } from './datasource-schema';
 
 beforeEach(() => { query.mockReset().mockResolvedValue({ rows: [] }); });
 
@@ -36,5 +36,44 @@ describe('datasource-schema (keyed by integration_id)', () => {
     expect((await getSchema('a', 5))!.version).toBe('2.48.0'); // version-aware DSL input
     query.mockResolvedValueOnce({ rows: [{ integration_id: 6, kind: 'loki', schema: { labels: ['app'] }, fetched_at: 't' }] });
     expect((await getSchema('a', 6))!.version).toBeNull();
+  });
+});
+
+describe('renderSchemaForPrompt', () => {
+  it('emits SQL tables WITH columns and types (not just names) — the core ClickHouse fix', () => {
+    const schema = {
+      version: '24.8.1',
+      tables: [
+        { name: 'otel_traces', columns: [{ name: 'ServiceName', type: 'String' }, { name: 'SpanName', type: 'String' }, { name: 'Duration', type: 'UInt64' }] },
+        { name: 'otel_logs', columns: [{ name: 'Body', type: 'String' }] },
+      ],
+    };
+    const out = renderSchemaForPrompt(schema, 'clickhouse');
+    expect(out).toContain('otel_traces(ServiceName String, SpanName String, Duration UInt64)');
+    expect(out).toContain('otel_logs(Body String)');
+  });
+
+  it('renders metric/label datasources as name lists (no tables)', () => {
+    const out = renderSchemaForPrompt({ metrics: ['up', 'node_cpu_seconds_total'], labels: ['job', 'instance'] }, 'prometheus');
+    expect(out).toContain('metrics: up, node_cpu_seconds_total');
+    expect(out).toContain('labels: job, instance');
+    expect(out).not.toContain('('); // no SQL table parens
+  });
+
+  it('bounds tables, columns, and total size so a huge schema never blows the prompt', () => {
+    const tables = Array.from({ length: 100 }, (_, i) => ({
+      name: `t${i}`,
+      columns: Array.from({ length: 200 }, (_, c) => ({ name: `c${c}`, type: 'String' })),
+    }));
+    const out = renderSchemaForPrompt({ tables }, 'clickhouse');
+    expect(out.length).toBeLessThanOrEqual(6000);
+    expect(out).toMatch(/\+\d+ more tables/); // truncation is disclosed, never silent
+  });
+
+  it('is defensive against malformed/empty schema (returns empty string, never throws)', () => {
+    expect(renderSchemaForPrompt(null)).toBe('');
+    expect(renderSchemaForPrompt('not-an-object')).toBe('');
+    expect(renderSchemaForPrompt({ tables: [{ noName: true }, null, 'x'] })).toBe('');
+    expect(renderSchemaForPrompt({})).toBe('');
   });
 });
