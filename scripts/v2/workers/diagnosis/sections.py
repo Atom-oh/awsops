@@ -33,13 +33,15 @@ _PRICING = (
 
 SECTIONS = [
     {"key": "executive_summary", "title": "Executive Summary",
-     "sources": ["inventory", "cost", "posture", "what_changed"],
+     "sources": ["inventory", "cost", "posture", "what_changed", "cw_metrics", "service_map"],
      "prompt": (
          "당신은 6대 Well-Architected 기둥에 정통한 수석 클라우드 아키텍트다. 아래 계정 데이터로 경영진용 요약을 작성하라.\n"
          "### 인프라 건강 점수 (0~100)\n"
-         "6대 기둥을 가중 합산해 점수를 산출하라 — 운영 우수성 15 / 보안 20 / 신뢰성 20 / 성능 15 / 비용 20 / 지속가능성 10. "
+         "6대 기둥을 가중 합산해 점수를 산출하라 — 운영 우수성 15 / 보안 20 / 신뢰성 20 / 성능 15 / 비용 20 / 지속가능성 10 "
+         "(성능=CloudWatch 지표, 신뢰성=서비스맵/인벤토리, 운영 우수성=최근 변경 신호를 근거로). "
          "각 기둥의 점수와 근거를 표(| 기둥 | 가중 | 점수 | 근거 |)로 제시하라. 신호가 없는 기둥(예: 지속가능성 — v2는 탄소 데이터 없음)은 "
-         "점수를 날조하지 말고 '데이터 부족'으로 명시하고 가중에서 제외하라. 점수 해석: 90+ 우수 / 70-89 양호 / 50-69 보통 / 50 미만 즉시 조치.\n"
+         "점수를 날조하지 말고 '데이터 부족'으로 명시하고 가중에서 제외하되, 제외한 가중치는 나머지 기둥에 비례 재정규화하여 100점 만점을 유지하라. "
+         "점수 해석: 90+ 우수 / 70-89 양호 / 50-69 보통 / 50 미만 즉시 조치.\n"
          "### 핵심 리스크 Top 3\n"
          "가장 큰 리스크 3가지를 심각도·우선순위와 함께 한 문장씩.\n"
          "### 즉시 조치 (Quick Wins)\n"
@@ -78,7 +80,7 @@ SECTIONS = [
          "당신은 AWS 관리형 DB·스토리지에 정통한 수석 DBA/스토리지 아키텍트다. "
          "RDS/DynamoDB/S3/EBS/ElastiCache/OpenSearch 인벤토리·사용률·비용으로 데이터 계층을 진단하라.\n"
          "### HA & 보안\n표(| 리소스 | Multi-AZ | 암호화 | 백업보존 | 자동 마이너 업글 | 상태 |): 미암호화·퍼블릭 접근·백업<7일은 [Critical]/[Warning].\n"
-         "### 스토리지 최적화\n표(| 항목 | AS-IS | TO-BE | 예상 절감/월 | 공수 | 우선순위 |): gp2→gp3·미연결 볼륨·노후 스냅샷. " + _PRICING + _RULES)},
+         "### 스토리지 최적화\n표(| 항목 | AS-IS | TO-BE | 예상 절감/월 | 공수 | 우선순위 |): gp2→gp3·미연결 볼륨·노후 스냅샷(노후 기준 예: 90일+ 미사용/미참조). " + _PRICING + _RULES)},
 
     {"key": "cost_overview", "title": "Cost Overview",
      "sources": ["cost"],
@@ -95,14 +97,14 @@ SECTIONS = [
          "이벤트가 없으면 '데이터 불가(최근 변경 없음 또는 CloudTrail 비활성)'로 명시하라. " + _RULES)},
 
     {"key": "recommendations", "title": "Recommendations",
-     "sources": ["inventory", "cost", "posture", "service_map", "what_changed"],
+     "sources": ["inventory", "cost", "posture", "service_map", "what_changed", "cw_metrics"],
      "prompt": (
          "당신은 모든 발견을 종합하는 전략 클라우드 어드바이저다. 위 모든 섹션 데이터로 우선순위가 매겨진 read-only 로드맵을 작성하라.\n"
          "### 즉시 — Quick Wins (이번 주)\n표(| # | 조치 | 기둥 | 예상 효과 | 공수 Low | 우선순위 P1 |).\n"
          "### 단기 (1~3개월)\n표(| # | 조치 | 기둥 | 예상 효과/절감 | 공수 | 우선순위 |).\n"
          "### 중기 (3~6개월)\n표(| # | 조치 | 기둥 | 예상 효과/절감 | 공수 | 우선순위 |).\n"
          "### 우선순위 매트릭스 (영향×공수)\n High임팩트·Low공수=먼저 / High·High=계획 / Low·Low=빠른정리 / Low·High=후순위.\n"
-         "### 예상 절감 총괄\n비용 데이터가 뒷받침되면 월/연 절감 추정을 제시(없으면 '가격 데이터 없음'). 자동 실행/변경 제안 금지. " + _RULES)},
+         "### 예상 절감 총괄\n비용 데이터가 뒷받침되면 월/연 절감 추정을 제시(없으면 '가격 데이터 없음'). 자동 실행/변경 제안 금지. " + _PRICING + _RULES)},
 ]
 
 # Plan 2 — intended-vs-actual drift section. Kept SEPARATE from the base SECTIONS and appended by
@@ -111,9 +113,12 @@ SECTIONS = [
 INTENDED_VS_ACTUAL_SECTION = {
     "key": "intended_vs_actual", "title": "Intended vs Actual",
     "sources": ["intended_vs_actual"],
-    "prompt": "아래는 운영자가 확정한 불변식(intended)을 실제 상태(actual)와 비교한 '판정(verdict)' 목록이다. "
-              "passed=false 인 항목(드리프트)을 심각도순으로 정리하고 각 항목의 observed 근거를 명시하라. "
-              "데이터(verdict)에만 근거하라 — 추측/자동변경 제안 금지. 활성 불변식이 없으면 그렇게 보고하라.",
+    "prompt": (
+        "당신은 아키텍처 검증·드리프트 분석에 정통한 수석 아키텍트다. 아래는 운영자가 확정한 불변식(intended)을 "
+        "실제 상태(actual)와 비교한 '판정(verdict)' 목록이다. passed=false 인 항목(드리프트)을 심각도 "
+        "[Critical]/[Warning]/[Info]와 함께 표(| 불변식 | 심각도 | observed | 권고 |)로 정리하고 각 항목의 observed 근거를 명시하라. "
+        "활성 불변식이 없으면 '데이터 불가(활성 불변식 없음)'로 보고하라. "
+        "데이터(verdict)에만 근거하라 — 추측/날조 금지. AWS 리소스 변경·자동 실행을 제안하지 마라(읽기 전용 진단 — 권고만)."),
 }
 
 # Deep-tier catalog: the 8 base SECTIONS + 6 deep-only sections (14; report.generate appends
@@ -124,7 +129,7 @@ _DEEP_ONLY = [
      "sources": ["posture", "inventory"],
      "prompt": (
          "당신은 IAM 최소권한·자격 증명 위생에 정통한 수석 보안 엔지니어다. 인벤토리(IAM 사용자/역할/정책)·Security Hub posture로 진단하라.\n"
-         "### IAM 평가\n표(| 발견 | 수 | 심각도 | 우선순위 |): 루트 키·MFA 미설정·90일+ 액세스키·과다권한(Admin/PowerUser)·미사용 자격(90일+). "
+         "### IAM 평가\n표(| 발견 | 수 | 심각도 | 우선순위 |): 루트 키·MFA 미설정·90일+ 액세스키·과다권한(Admin/PowerUser 역할·인라인 정책·와일드카드 Action)·미사용 자격(90일+). "
          "posture 미구독이면 인벤토리 신호만으로 한정 보고하고 명시하라. " + _RULES)},
 
     {"key": "data_protection", "title": "데이터 보호 & 암호화",
