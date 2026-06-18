@@ -214,6 +214,30 @@ def test_generate_resolves_tier_catalog_and_model(monkeypatch):
     assert len(calls) == 9 and all(m == report._MODEL_SONNET for m, t in calls)
 
 
+def test_generate_parallel_preserves_order_and_isolates_section_failure(monkeypatch):
+    # ADR-045: sections render concurrently. Order MUST be preserved (reassembled by index) and a single
+    # failing section MUST degrade in place (loud) WITHOUT sinking the whole report.
+    from diagnosis import sections as S
+    monkeypatch.setattr(report.src, "collect_all",
+                        lambda conn: [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
+    monkeypatch.setattr(report.ddb, "list_active_invariants", lambda conn: [])
+
+    def fake_render(section, collected, model_id, max_tokens):
+        if section["key"] == "cost_overview":
+            raise RuntimeError("boom")  # one section blows up
+        return {"key": section["key"], "title": section["title"], "body": f"BODY::{section['key']}"}
+    monkeypatch.setattr(report, "render_section", fake_render)
+
+    md = report.generate(object(), account="1", tier="deep")[0]  # (markdown, summary, sources); must NOT raise
+    keys = [s["key"] for s in S.DEEP_SECTIONS] + ["intended_vs_actual"]
+    assert "degraded" in md  # cost_overview degraded note is present (loud)
+    succ = [k for k in keys if k != "cost_overview"]
+    for k in succ:
+        assert f"BODY::{k}" in md, f"missing section {k}"
+    positions = [md.find(f"BODY::{k}") for k in succ]
+    assert positions == sorted(positions), "section order not preserved under parallel render"
+
+
 # --- Task 5: report.py ---------------------------------------------------
 
 from diagnosis import report

@@ -7,9 +7,15 @@ import sys
 from datetime import datetime, timezone, timedelta
 import boto3
 from botocore.config import Config
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # KST as a fixed +9 offset — Korea has no DST, so this needs no `tzdata` package in the slim image.
 _KST = timezone(timedelta(hours=9))
+
+# ADR-045: render sections concurrently (bounded) so deep-tier wall-clock ≈ slowest section, not the
+# sum of ~15 sequential Bedrock calls. Bounded to stay under Bedrock per-model TPM/RPM (botocore retry
+# in _BEDROCK_CONFIG already backs off on throttling); env-overridable.
+_RENDER_CONCURRENCY = max(1, int(os.environ.get("DIAGNOSIS_RENDER_CONCURRENCY", "4")))
 
 from . import sources as src
 from . import invariants as inv
@@ -237,10 +243,27 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None, model=
     }
 
     catalog = list(base_catalog) + [INTENDED_VS_ACTUAL_SECTION]
-    rendered = []
-    for i, sec in enumerate(catalog):
-        _emit(i + 1, sec["title"], "render")  # before the Bedrock call → UI shows the in-flight section
-        rendered.append(render_section(sec, collected, model_id, max_tokens))
+
+    # ADR-045: render sections concurrently (bounded). Each section keeps its own Bedrock read/connect
+    # timeout; a single section that fails degrades to a visible error body (loud, not silent) WITHOUT
+    # sinking the whole report; results reassembled in catalog order. Progress is emitted on completion.
+    def _render_one(i, sec):
+        try:
+            return i, render_section(sec, collected, model_id, max_tokens)
+        except Exception as e:  # noqa: BLE001 — one section must never fail the whole report
+            print(f"diagnosis: section '{sec.get('key')}' render failed (degraded): {e}", file=sys.stderr)
+            return i, {"key": sec.get("key"), "title": sec["title"],
+                       "body": f"_이 섹션 생성에 실패했습니다 (degraded): {e}_"}
+
+    rendered_by_idx, done = {}, 0
+    with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(catalog))) as ex:
+        futures = [ex.submit(_render_one, i, sec) for i, sec in enumerate(catalog)]
+        for fut in as_completed(futures):
+            i, result = fut.result()
+            rendered_by_idx[i] = result
+            done += 1
+            _emit(done, result["title"], "render")  # progress as each section completes
+    rendered = [rendered_by_idx[i] for i in range(len(catalog))]
     _emit(total, "리포트 조립", "assemble")
     md = build_markdown(rendered, account, tier, collected)
     summary = {"sections": len(rendered), "sources_used": sources_used,
