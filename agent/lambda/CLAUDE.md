@@ -10,13 +10,15 @@ AgentCore 게이트웨이 MCP 도구용 19개 Lambda 함수 + 1개 공유 모듈
 
 ### Network Gateway (17 tools)
 - `network_mcp.py` — VPC, TGW, VPN, ENI, Network Firewall (15 tools)
-- `reachability.py` — Reachability Analyzer (1 tool)
+- `reachability.py` — Reachability Analyzer (1 tool) — ⚠️ v1, **dark in v2** (creates a network-insights path = mutation)
+- `reachability_read_mcp.py` [v2 read-only] — computed ENI↔EC2 connectivity, describe-only, static SG/NACL/route (1 tool: `check_reachability`)
 - `flowmonitor.py` — VPC Flow Logs 조회/분석 (1 tool)
 
 ### Container Gateway (24 tools)
 - `aws_eks_mcp.py` — EKS clusters, CloudWatch, IAM, troubleshooting (9 tools)
 - `aws_ecs_mcp.py` — ECS clusters/services/tasks, troubleshooting (3 tools)
-- `aws_istio_mcp.py` [VPC] — Istio CRDs via Steampipe K8s tables (12 tools)
+- `aws_istio_mcp.py` [VPC] — Istio CRDs via Steampipe K8s tables (12 tools) — ⚠️ v1, **dark in v2** (needs live Steampipe, ADR-037)
+- `istio_read_mcp.py` [v2 read-only] — Istio CRDs via the EKS k8s API (presigned-STS token, stdlib urllib/ssl; 7 tools: mesh_overview + 6 CRD lists)
 
 ### IaC Gateway (12 tools)
 - `aws_iac_mcp.py` — CloudFormation/CDK validation, troubleshooting, docs (7 tools)
@@ -42,7 +44,8 @@ AgentCore 게이트웨이 MCP 도구용 19개 Lambda 함수 + 1개 공유 모듈
 
 ### Ops Gateway (9 tools)
 - `aws_knowledge.py` — AWS Knowledge MCP 프록시 (Proxy to AWS Knowledge MCP, 5 tools)
-- `aws_core_mcp.py` — 프롬프트 이해, AWS CLI 실행 (Prompt understanding, AWS CLI execution, 3 tools)
+- `aws_core_mcp.py` — 프롬프트 이해, AWS CLI 실행 (3 tools) — ⚠️ `call_aws` arbitrary-CLI is a mutation vector; **dark in v2**
+- `core_helpers_mcp.py` [v2 read-only] — prompt_understanding + suggest_aws_commands only (2 static tools; no `call_aws`)
 - `steampipe-query` — Steampipe SQL 쿼리 (1 tool, VPC Lambda)
 
 ## 규칙 / Rules
@@ -52,7 +55,7 @@ AgentCore 게이트웨이 MCP 도구용 19개 Lambda 함수 + 1개 공유 모듈
   (`credentialProviderConfigurations: GATEWAY_IAM_ROLE` required for all targets)
 - VPC Lambda: psycopg2 대신 pg8000 사용 (steampipe-query, istio-mcp)
   (VPC Lambda: pg8000, not psycopg2)
-- 모든 Lambda는 읽기 전용 — 도달성 경로 생성 외 쓰기 작업 없음
-  (All Lambda read-only — no write operations except reachability path creation)
+- 모든 Lambda는 읽기 전용 — **v2는 예외 없음** (v1의 "도달성 경로 생성" 쓰기 예외는 v2에서 dark; `reachability_read_mcp.py`가 describe-only로 대체)
+  (All Lambda read-only — **no exceptions in v2**; the v1 reachability path-creation write is dark, replaced by describe-only `reachability_read_mcp.py`)
 - 도구 스키마 형식: `inlinePayload: [{name, description, inputSchema: {type, properties, required}}]`
   (Tool schema format)
