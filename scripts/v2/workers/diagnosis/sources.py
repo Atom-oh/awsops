@@ -95,7 +95,7 @@ def collect_cw_metrics(conn):
         try:
             rows = conn.run(
                 "SELECT resource_id FROM inventory_resources "
-                "WHERE resource_type IN ('ec2_instance','aws_ec2_instance','instance') LIMIT 50"
+                "WHERE resource_type = 'ec2' AND account_id = 'self' LIMIT 50"
             )
             instance_ids = [r[0] for r in rows if r and r[0]]
         except Exception:  # noqa: BLE001 — inventory shape varies; tolerate
