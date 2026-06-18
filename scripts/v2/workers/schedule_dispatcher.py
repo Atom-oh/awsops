@@ -44,13 +44,17 @@ def _coerce_config(config):
     return config if isinstance(config, dict) else {}
 
 
-def _create_report(conn, tier, requested_by):
-    """Pre-create a visible 'running' diagnosis_reports row (mirrors diagnosis/db.create_report) so the
-    scheduled run is tracked in the UI and a failure before _report runs is not invisible."""
+def _create_report(conn, tier, requested_by, model):
+    """Pre-create a visible 'running' diagnosis_reports row mirroring the BFF createReport — including
+    `model` (UI metadata) and `parent_report_id` (diff lineage = most-recent SUCCEEDED report of the same
+    tier) — so a scheduled run is tracked, shows its model, supports regression diff, and a pre-_report
+    failure is not invisible."""
     rows = conn.run(
-        "INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status) "
-        "VALUES (NULL, :t, :rb, 'running') RETURNING id",
-        t=tier, rb=requested_by,
+        "INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status, parent_report_id, model) "
+        "VALUES (NULL, :t, :rb, 'running', "
+        "  (SELECT id FROM diagnosis_reports WHERE tier = :t AND status = 'succeeded' AND deleted_at IS NULL "
+        "   ORDER BY created_at DESC LIMIT 1), :m) RETURNING id",
+        t=tier, rb=requested_by, m=model,
     )
     return rows[0][0]
 
@@ -59,12 +63,14 @@ def _enqueue_report(conn, user_sub, config):
     cfg = _coerce_config(config)
     account = cfg.get("account") or HOST_ACCOUNT
     tier = cfg.get("tier", "mid")
-    report_id = _create_report(conn, tier, user_sub)  # visible 'running' row first
+    # only the deep tier may select opus; light/mid are pinned to sonnet (matches the BFF/worker resolver).
+    model = "opus" if (tier == "deep" and cfg.get("model") == "opus") else "sonnet"
+    report_id = _create_report(conn, tier, user_sub, model)  # visible 'running' row first
     job_id = str(uuid.uuid4())
     payload = {
         "account": account,
         "tier": tier,
-        "model": cfg.get("model"),
+        "model": model,
         "requested_by": user_sub,
         "report_id": report_id,  # _report uses this → no duplicate self-created row
         "scheduled": True,

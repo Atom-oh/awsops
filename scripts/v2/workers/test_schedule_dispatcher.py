@@ -57,6 +57,7 @@ def test_enqueues_a_linked_report_per_due_schedule(monkeypatch):
     assert sum(s.startswith("INSERT INTO diagnosis_reports") for s in conn.sql_log) == 2
     assert [t for _, t, _ in inserted] == ["report", "report"]
     assert inserted[0][2]["tier"] == "deep" and inserted[0][2]["requested_by"] == "u1"
+    assert inserted[0][2]["model"] == "opus" and inserted[1][2]["model"] == "sonnet"  # deep+opus→opus, mid→sonnet
     assert inserted[0][2]["report_id"] == 1 and inserted[0][2]["scheduled"] is True
     # the report is linked to the job (UPDATE ... SET worker_job_id ...)
     assert any("UPDATE diagnosis_reports SET worker_job_id" in s for s in conn.sql_log)
