@@ -452,3 +452,31 @@ def test_report_handler_dry_run_does_no_work(monkeypatch):
     monkeypatch.setattr(_wdb, "connect", lambda: (_ for _ in ()).throw(AssertionError("connect on dry_run")))
     result, artifact = handlers._report({"account": "1", "tier": "mid"}, dry_run=True)
     assert result["dry_run"] is True and artifact is None
+
+
+# ── data-coverage note (so a thin report is self-explaining) ──────────────────
+def _coll(key, ok=True, degraded=False, notes="", data=None):
+    return {"key": key, "ok": ok, "degraded": degraded, "notes": notes, "data": data or {}}
+
+
+def test_coverage_note_lists_collector_status():
+    collected = {
+        "inventory": _coll("inventory", data={"by_type": {"ec2": 1}}),          # ok (has data)
+        "cost": _coll("cost", ok=False, degraded=True, notes="AccessDenied", data={"_failed": True}),
+        "service_map": _coll("service_map", data={"edges": [], "service_count": 0}),  # ok but empty
+    }
+    note = report._coverage_note(collected)
+    assert "데이터 커버리지" in note
+    assert "inventory" in note
+    assert "cost" in note and "AccessDenied" in note          # degraded reason surfaced
+    assert "service_map" in note and "empty" in note.lower()  # ran ok but no signal
+
+
+def test_build_markdown_appends_coverage_note_optional():
+    rendered = [{"key": "executive_summary", "title": "Executive Summary", "body": "x"}]
+    collected = {"inventory": _coll("inventory", data={"by_type": {}})}  # ok but empty
+    md = report.build_markdown(rendered, "123", "mid", collected)
+    assert "데이터 커버리지" in md and "Executive Summary" in md
+    # backward-compatible: collected is optional
+    md2 = report.build_markdown(rendered, "123", "mid")
+    assert "Executive Summary" in md2 and "데이터 커버리지" not in md2
