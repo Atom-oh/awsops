@@ -1,7 +1,23 @@
 import io
 import json
 
+import pytest
+
 from diagnosis import sources as src
+
+
+@pytest.fixture(autouse=True)
+def _enable_ds(monkeypatch):
+    # collect_datasources is flag-gated (default OFF); enable it for the behavior tests below.
+    monkeypatch.setenv("DIAG_DATASOURCES_ENABLED", "true")
+
+
+def test_disabled_by_default(monkeypatch):
+    # flag OFF → no connector fan-out, explicit "disabled" result (no AccessDenied/silent degrade).
+    monkeypatch.delenv("DIAG_DATASOURCES_ENABLED", raising=False)
+    fake = _patch_lambda(monkeypatch, FakeLambda())
+    out = src.collect_datasources(FakeConn([(5, "p", "prometheus", True)], {5: {"metrics": ["errors_total"]}}))
+    assert fake.calls == [] and out["data"]["queried"] == 0 and "disabled" in (out.get("notes") or "")
 
 
 class FakeConn:

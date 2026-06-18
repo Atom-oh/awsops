@@ -262,7 +262,7 @@ def _ds_schema(conn, integration_id):
     acct = os.environ.get("HOST_ACCOUNT_ID") or os.environ.get("AWS_ACCOUNT_ID") or "self"
     rows = conn.run(
         "SELECT schema FROM datasource_schemas WHERE account_id IN (:acct, 'self') AND integration_id=:iid "
-        "ORDER BY fetched_at DESC LIMIT 1",
+        "ORDER BY (account_id = :acct) DESC, fetched_at DESC LIMIT 1",  # exact account wins over 'self'
         acct=acct, iid=integration_id,
     )
     if not rows:
@@ -361,7 +361,15 @@ def _summarize_result(body):
 def collect_datasources(conn):
     """Schema-driven, multi-instance, credential-blind external-observability signals for diagnosis.
     Reads ONLY non-secret integrations columns + the cached schema; invokes connectors credential-blind
-    (instance_id only). Bounded (instances/queries/deadline/bytes). NEVER raises."""
+    (instance_id only). Bounded (instances/queries/deadline/bytes). NEVER raises.
+
+    FLAG-GATED (CLAUDE.md: gate new features, default OFF → $0): runs only when DIAG_DATASOURCES_ENABLED
+    is set. The terraform var `datasource_diagnosis_enabled` wires this env AND the worker
+    lambda:InvokeFunction IAM together (ADR-039/041 governed external egress), so the connector fan-out
+    can never be live without its IAM — no silent AccessDenied degrade."""
+    if os.environ.get("DIAG_DATASOURCES_ENABLED") != "true":
+        return _result("datasources_obs", data={"instances": [], "queried": 0},
+                       notes="datasource diagnosis disabled (datasource_diagnosis_enabled flag off)")
     try:
         rows = conn.run(
             "SELECT id, name, kind, is_default FROM integrations "
