@@ -59,12 +59,11 @@ export async function POST(request: Request) {
   const args: Record<string, unknown> = { [spec.arg]: query, ...(spec.extra ?? {}) };
 
   // Range mode: absent/false = instant; true = legacy 1h range (connector default);
-  // { window, step } = explicit time range — validated here, start/end computed from the request clock.
+  // { window, step } = explicit time range. An object range is validated regardless of kind (so a bad
+  // window/step is a 400, not a silent instant); start/end are computed from the request clock.
   let tool = spec.instant;
   const r = body.range;
-  if (spec.range && r === true) {
-    tool = spec.range; // back-compat: connector applies its 1h / 60s default
-  } else if (spec.range && r && typeof r === 'object') {
+  if (r && typeof r === 'object') {
     const window = Number((r as { window?: unknown }).window);
     const step = Number((r as { step?: unknown }).step);
     if (!Number.isInteger(window) || window < 60 || window > 86400) {
@@ -73,11 +72,15 @@ export async function POST(request: Request) {
     if (!Number.isInteger(step) || step < 1 || step > 86400) {
       return json({ error: 'range.step must be an integer in [1, 86400] seconds' }, 400);
     }
-    const nowSec = Math.floor(Date.now() / 1000);
-    tool = spec.range;
-    args.start = String(nowSec - window);
-    args.end = String(nowSec);
-    args.step = String(step);
+    if (spec.range) { // kind has a range tool; otherwise the validated window is ignored (instant)
+      const nowSec = Math.floor(Date.now() / 1000);
+      tool = spec.range;
+      args.start = String(nowSec - window);
+      args.end = String(nowSec);
+      args.step = String(step);
+    }
+  } else if (r === true && spec.range) {
+    tool = spec.range; // back-compat: connector applies its 1h / 60s default
   }
 
   try {

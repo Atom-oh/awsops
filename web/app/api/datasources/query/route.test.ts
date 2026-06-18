@@ -129,6 +129,13 @@ describe('POST /api/datasources/query', () => {
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
   });
 
+  it('range object with non-integer window or step → 400', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300.5, step: 2 } }))).status).toBe(400);
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300, step: 1.5 } }))).status).toBe(400);
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+  });
+
   it('range:false and absent range → instant tool', async () => {
     const { POST } = await import('./route');
     await POST(req({ slug: 'prometheus', query: 'up', range: false }));
