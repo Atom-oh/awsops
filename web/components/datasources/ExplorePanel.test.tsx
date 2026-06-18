@@ -125,8 +125,9 @@ describe('ExplorePanel', () => {
     expect(order).toEqual(['m2', 'm1', 'm0']); // sorted desc by value (m2=3, m1=2, m0=1)
   });
 
-  it('instant result with non-numeric value rows shows no bar (fail-closed)', async () => {
-    mockApi(INSTANCES, { shape: 'table', columns: [{ key: 'metric', label: 'metric' }, { key: 'value', label: 'value' }], rows: [{ metric: 'a', value: '' }, { metric: 'b', value: 'x' }] });
+  it('instant result with a null value (normalizer output for NaN/+Inf) shows no bar (fail-closed)', async () => {
+    // datasource-render's finiteOrNull emits null for non-finite samples; one null row must suppress the bar
+    mockApi(INSTANCES, { shape: 'table', columns: [{ key: 'metric', label: 'metric' }, { key: 'value', label: 'value' }], rows: [{ metric: 'a', value: null }, { metric: 'b', value: 5 }] });
     render(<ExplorePanel instanceId={1} />);
     await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
     fireEvent.change(screen.getByPlaceholderText(/PromQL/), { target: { value: 'up' } });
