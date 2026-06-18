@@ -32,10 +32,14 @@ describe('collapsible inventory groups', () => {
     expect(src).toMatch(/\bnavTree\(\)/);
     expect(src).toMatch(/\bgroupForPath\b/);
   });
-  it('renders a chevron toggle button with aria-expanded/aria-controls', () => {
+  it('renders a chevron toggle button with aria-expanded + conditional aria-controls', () => {
     expect(src).toContain('aria-expanded={open}');
-    expect(src).toContain('aria-controls={panelId}');
+    expect(src).toContain('aria-controls={open ? panelId : undefined}'); // no dangling ref when unmounted
     expect(src).toMatch(/type="button"/);
+  });
+  it('only the owner instance persists (drawer passes persist=false)', () => {
+    expect(src).toContain('persist = true');
+    expect(src).toContain('if (!persist || !hydrated) return');
   });
   it('unmounts collapsed panels (so links leave the tab order)', () => {
     expect(src).toContain('{open && (');

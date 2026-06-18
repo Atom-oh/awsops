@@ -7,7 +7,7 @@ import SectionLabel from '@/components/ui/SectionLabel';
 import StatTile from '@/components/ui/StatTile';
 import Card from '@/components/ui/Card';
 import { useI18n } from '@/components/shell/LanguageProvider';
-import { groupBySlug, ATTENTION_SPLITS, type NavLeaf, type SplitKey } from '@/lib/inventory-types';
+import { groupBySlug, ATTENTION_SPLITS, type NavLeaf } from '@/lib/inventory-types';
 
 interface ByType { type: string; label: string; count: number; [k: string]: unknown }
 interface Splits { ec2Running: number; ec2Stopped: number; ebsUnencrypted: number; iamUserNoMfa: number; sgOpenIngress: number }
@@ -75,8 +75,8 @@ export default function GroupOverviewClient({ slug }: { slug: string }) {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <StatTile
               label={t('overview.status')}
-              value={attention === 0 ? t('overview.healthy') : t('overview.attention', { n: attention })}
-              variant={attention === 0 ? 'accent' : 'danger'}
+              value={!sum ? DASH : attention === 0 ? t('overview.healthy') : t('overview.attention', { n: attention })}
+              variant={!sum ? 'default' : attention === 0 ? 'accent' : 'danger'}
             />
             {node.splitKeys.map((k) => (
               <StatTile
