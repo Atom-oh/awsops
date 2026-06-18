@@ -6,6 +6,7 @@ import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
 import DataTable from '@/components/ui/DataTable';
 import AreaTrend from '@/components/charts/AreaTrend';
+import HBarList from '@/components/charts/HBarList';
 import type { NormalizedResult } from '@/lib/datasource-render';
 
 // A datasource INSTANCE (the hub model): identified by bigint id, with a user-given name.
@@ -156,12 +157,21 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
         </div>
         {err && <p className="text-[13px] text-rose-600">{err}</p>}
       </Card>
-      {result && <ResultView result={result} />}
+      {result && <ResultView result={result} kind={ds?.kind} />}
     </div>
   );
 }
 
-function ResultView({ result }: { result: NormalizedResult }) {
+function ResultView({ result, kind }: { result: NormalizedResult; kind?: string }) {
+  // Instant prom/mimir vector (metric/value rows) → a ranked bar above the table. Gated by kind so
+  // an arbitrary ClickHouse table with a `value` column doesn't render a spurious bar (panel finding).
+  const barRows =
+    result.shape === 'table' &&
+    (kind === 'prometheus' || kind === 'mimir') &&
+    result.rows && result.rows.length > 0 && result.rows.length <= 30 &&
+    result.rows.every((r) => Number.isFinite(Number((r as Record<string, unknown>).value)))
+      ? [...result.rows].sort((a, b) => Number((b as Record<string, unknown>).value) - Number((a as Record<string, unknown>).value))
+      : null;
   return (
     <div className="space-y-3">
       {result.truncated && (
@@ -175,6 +185,9 @@ function ResultView({ result }: { result: NormalizedResult }) {
       )}
       {result.shape === 'series' && result.rows && result.columns && (
         <DataTable columns={result.columns} rows={result.rows} />
+      )}
+      {barRows && (
+        <HBarList title="상위 결과" data={barRows} labelKey="metric" valueKey="value" />
       )}
       {(result.shape === 'table' || result.shape === 'logs' || result.shape === 'traces') && result.columns && result.rows && (
         <DataTable columns={result.columns} rows={result.rows} />
