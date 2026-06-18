@@ -32,6 +32,12 @@ _UPSERT = (
     "updated_at = now()"
 )
 
+# Self-heal: rows written before modelId normalization were keyed by the full inference-profile ARN
+# (which contains '/'); normalize_model() now stores canonical ids that never contain '/'. Delete the
+# stale ARN-keyed rows each run so the read path (/api/ai-usage GROUP BY model) never double-counts an
+# ARN-key row + a bare-key row as two models. Safe: canonical model ids contain no '/'.
+_CLEANUP_LEGACY = "DELETE FROM ai_usage_daily WHERE model LIKE '%/%'"
+
 
 def _run_insights(start_epoch: int, end_epoch: int):
     """StartQuery → poll GetQueryResults with backoff → StopQuery on timeout. Returns results (list)."""
@@ -69,6 +75,7 @@ def lambda_handler(_event, _ctx):
     conn = db.connect()
     upserted = 0
     try:
+        conn.run(_CLEANUP_LEGACY)  # drop stale pre-normalization ARN-keyed rows (canonical ids have no '/')
         for row in rows:
             conn.run(
                 _UPSERT,
