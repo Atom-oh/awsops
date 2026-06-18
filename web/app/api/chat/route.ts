@@ -12,7 +12,7 @@ import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
 import { currentAccountId, currentAccountAlias } from '@/lib/account';
-import { listConfiguredSchemas } from '@/lib/datasource-schema';
+import { listConfiguredSchemas, renderSchemaForPrompt } from '@/lib/datasource-schema';
 import { listDatasources } from '@/lib/datasources';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getAgentSpace } from '@/lib/agent-space';
@@ -33,21 +33,18 @@ function chunk(text: string): string[] {
   return text.match(/\S+\s*|\s+/g) ?? [text];
 }
 
-/** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps). */
+/** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps).
+ *  Uses the shared renderer so SQL datasources (ClickHouse) get their COLUMNS — not just table names —
+ *  exactly like the Explore "AI로 생성" path. */
 function renderSchemaContext(schemas: { label: string; kind: string | null; schema: unknown; version?: string | null }[]): string {
   const lines = ['## Datasource schemas (cached) — use these real names AND the server version when writing queries'];
-  const names = (a: unknown, n: number) =>
-    (Array.isArray(a) ? a : []).slice(0, n).map((x) => (typeof x === 'string' ? x : (x as { name?: string }).name ?? JSON.stringify(x))).join(', ');
   for (const s of schemas) {
-    const sc = (s.schema || {}) as Record<string, unknown>;
-    const parts: string[] = [];
-    for (const [k, n] of [['metrics', 40], ['labels', 40], ['tags', 40], ['tables', 30], ['domains', 10], ['indices', 30]] as const) {
-      if (Array.isArray(sc[k]) && (sc[k] as unknown[]).length) parts.push(`${k}: ${names(sc[k], n)}`);
-    }
+    const body = renderSchemaForPrompt(s.schema, s.kind);
     const ver = s.version ? ` v${s.version}` : ''; // version informs version-specific DSL/syntax
-    lines.push(`- **${s.label}** (${s.kind ?? ''}${ver}): ${parts.join(' | ') || '(empty)'}`);
+    const indented = body ? '\n' + body.split('\n').map((l) => `  ${l}`).join('\n') : ' (empty)';
+    lines.push(`- **${s.label}** (${s.kind ?? ''}${ver}):${indented}`);
   }
-  return lines.join('\n').slice(0, 6000);
+  return lines.join('\n').slice(0, 7000);
 }
 
 export async function POST(request: Request) {
