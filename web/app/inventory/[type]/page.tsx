@@ -16,6 +16,10 @@ import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/
 type Row = Record<string, unknown>;
 
 // Lifecycle values treated as degraded → render their KPI tile in the danger variant.
+// Fetch up to the route's max so highlight/RiskHero verdicts cover the full set for
+// almost all accounts; >ROW_LIMIT resources → `capped` flags the verdict as a sample.
+const ROW_LIMIT = 500;
+
 const BAD_STATES = new Set([
   'stopped', 'stopping', 'failed', 'crashloopbackoff', 'alarm', 'impaired',
   'inactive', 'deleting', 'deleted', 'error', 'unhealthy', 'terminated',
@@ -53,7 +57,7 @@ export default function InventoryTypePage() {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`/api/inventory/${type}`);
+      const r = await fetch(`/api/inventory/${type}?limit=${ROW_LIMIT}`);
       if (!r.ok) throw new Error(String(r.status));
       const d = await r.json();
       setRows((d.rows as Row[]).map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data as object) })));
@@ -179,7 +183,7 @@ export default function InventoryTypePage() {
             {arch === 'risk' ? (
               /* Security posture: verdict hero → table → compact donut. */
               <>
-                <RiskHero label={spec.label} total={allRows.length} cards={highlightCards} />
+                <RiskHero label={spec.label} total={allRows.length} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
                 {metricCards.length > 0 && (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                     {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />)}

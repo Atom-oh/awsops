@@ -217,7 +217,7 @@ export default function Sidebar({ onNavigate, className, persist = true }: { onN
         <div className="flex items-center gap-0.5">
           <Link
             href={g.href!}
-            onClick={onNavigate}
+            onClick={() => { setExpanded((p) => { const n = new Set(p); n.add(gId(g.slug)); return n; }); onNavigate?.(); }}
             aria-current={headerActive ? 'page' : undefined}
             className={cn(
               'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium no-underline transition-colors duration-[120ms]',
