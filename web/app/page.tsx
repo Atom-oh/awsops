@@ -111,12 +111,13 @@ export default function Home() {
               label="EC2 인스턴스"
               value={n('ec2')}
               variant="accent"
+              href="/inventory/ec2"
               hint={sum?.splits ? `${sum.splits.ec2Running} running · ${sum.splits.ec2Stopped} stopped` : undefined}
             />
-            <StatTile label="Lambda 함수" value={n('lambda')} />
-            <StatTile label="ECS 클러스터" value={n('ecs_cluster')} />
-            <StatTile label="ECR 리포지토리" value={n('ecr')} />
-            <StatTile label="EKS 클러스터" value={ov ? ov.clusterCount ?? DASH : DASH} />
+            <StatTile label="Lambda 함수" value={n('lambda')} href="/inventory/lambda" />
+            <StatTile label="ECS 클러스터" value={n('ecs_cluster')} href="/inventory/ecs_cluster" />
+            <StatTile label="ECR 리포지토리" value={n('ecr')} href="/inventory/ecr" />
+            <StatTile label="EKS 클러스터" value={ov ? ov.clusterCount ?? DASH : DASH} href="/eks" />
           </div>
         </section>
 
@@ -124,16 +125,17 @@ export default function Home() {
         <section className="flex flex-col gap-3">
           <SectionLabel>STORAGE &amp; NETWORK</SectionLabel>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <StatTile label="S3 버킷" value={n('s3')} />
+            <StatTile label="S3 버킷" value={n('s3')} href="/inventory/s3" />
             <StatTile
               label="EBS 볼륨"
               value={n('ebs_volume')}
+              href="/inventory/ebs_volume"
               hint={sum?.splits ? (sum.splits.ebsUnencrypted > 0 ? `미암호화 ${sum.splits.ebsUnencrypted}` : '전체 암호화') : undefined}
               variant={sum?.splits && sum.splits.ebsUnencrypted > 0 ? 'warn' : 'default'}
             />
-            <StatTile label="RDS 인스턴스" value={n('rds')} />
-            <StatTile label="DynamoDB 테이블" value={n('dynamodb')} />
-            <StatTile label="VPC" value={n('vpc')} />
+            <StatTile label="RDS 인스턴스" value={n('rds')} href="/inventory/rds" />
+            <StatTile label="DynamoDB 테이블" value={n('dynamodb')} href="/inventory/dynamodb" />
+            <StatTile label="VPC" value={n('vpc')} href="/inventory/vpc" />
           </div>
         </section>
 
@@ -141,23 +143,26 @@ export default function Home() {
         <section className="flex flex-col gap-3">
           <SectionLabel>SECURITY · OPS · COST</SectionLabel>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <StatTile label="IAM 역할" value={n('iam_role')} />
+            <StatTile label="IAM 역할" value={n('iam_role')} href="/inventory/iam_role" />
             <StatTile
               label="보안 그룹"
               value={n('security_group')}
+              href="/inventory/security_group"
               hint={sum?.splits ? `인그레스 개방 ${sum.splits.sgOpenIngress}` : undefined}
               variant={sum?.splits && sum.splits.sgOpenIngress > 0 ? 'warn' : 'default'}
             />
             <StatTile
               label="작업 (성공/실패)"
               value={jobs ? `${jobs.succeeded} / ${jobs.failed}` : DASH}
+              href="/jobs"
               variant={jobs && jobs.failed > 0 ? 'danger' : 'default'}
               hint={jobs ? `${jobs.queued + jobs.running} 대기·실행 중` : undefined}
             />
-            <StatTile label="CloudWatch 알람" value={n('cloudwatch_alarm')} />
+            <StatTile label="CloudWatch 알람" value={n('cloudwatch_alarm')} href="/inventory/cloudwatch_alarm" />
             <StatTile
               label="이번 달 비용 (USD)"
               value={ov ? (ov.mtdCost == null ? DASH : `$${ov.mtdCost.toFixed(2)}`) : DASH}
+              href="/cost"
               variant="accent"
             />
           </div>

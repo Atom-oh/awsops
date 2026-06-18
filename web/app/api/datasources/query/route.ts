@@ -5,8 +5,7 @@
 // SECURITY: TOOL holds ONLY read tools; the resolved endpoint is SSRF-guarded before invoke.
 import { verifyUser } from '@/lib/auth';
 import { invokeMcpLambdaTool, type ConnConfig } from '@/lib/mcp-lambda-invoke';
-import { getDatasource } from '@/lib/datasources';
-import { getCredentialById } from '@/lib/integration-credentials';
+import { getDatasource, resolveConnConfig } from '@/lib/datasources';
 import { isDatasourceKind } from '@/lib/integrations-category';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { normalizeResult } from '@/lib/datasource-render';
@@ -40,8 +39,7 @@ export async function POST(request: Request) {
     const ds = await getDatasource(id);
     if (!ds || !isDatasourceKind(ds.kind)) return json({ error: 'unknown datasource instance' }, 400);
     kind = ds.kind;
-    const cred = await getCredentialById(id, kind);
-    if (cred) connConfig = cred as ConnConfig;
+    connConfig = await resolveConnConfig(ds); // row endpoint (authoritative) + SM cred — works even for auth=none
   } else {
     kind = typeof body.slug === 'string' ? body.slug : '';
   }

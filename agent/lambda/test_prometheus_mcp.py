@@ -136,13 +136,39 @@ class TestGuards(_Base):
 
 
 class TestSchema(_Base):
-    def test_schema_metrics_labels(self):
-        seq=[(200,{"status":"success","data":["job","instance"]}),(200,{"status":"success","data":["up","http_requests_total"]})]
+    def test_schema_metrics_labels_and_version(self):
+        # schema now probes buildinfo FIRST, then labels, then metrics.
+        seq=[(200,{"status":"success","data":{"version":"2.48.0"}}),  # buildinfo
+             (200,{"status":"success","data":["job","instance"]}),     # labels
+             (200,{"status":"success","data":["up","http_requests_total"]})]  # metrics
         with mock.patch.object(pm,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
             out=pm.lambda_handler({"tool_name":"prometheus_schema","arguments":{}},None)
-        import json as _j; b=_j.loads(out["body"])
+        b=json.loads(out["body"])
         self.assertEqual(out["statusCode"],200)
         self.assertIn("metrics",b); self.assertIn("labels",b)
+        self.assertEqual(b["version"],"2.48.0")  # captured for version-aware DSL
+
+    def test_schema_buildinfo_down_still_returns_names(self):
+        # version is best-effort: a buildinfo error → version null, names still returned.
+        seq=[(500,{"raw":"nope"}),  # buildinfo fails
+             (200,{"status":"success","data":["job"]}),
+             (200,{"status":"success","data":["up"]})]
+        with mock.patch.object(pm,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
+            out=pm.lambda_handler({"tool_name":"prometheus_schema","arguments":{}},None)
+        b=json.loads(out["body"])
+        self.assertEqual(out["statusCode"],200)
+        self.assertIsNone(b["version"])
+        self.assertIn("up", b["metrics"])
+
+
+class TestInstanceId(_Base):
+    def test_instance_id_resolves_per_instance_credential_blind(self):
+        # worker path: only an instance_id in arguments → connector resolves per-instance creds itself.
+        with mock.patch.object(pm, "http_json", return_value=(200, {"status":"success","data":{"resultType":"vector","result":[]}})):
+            pm.load_datasource.reset_mock()
+            out = pm.lambda_handler({"tool_name":"prometheus_query","arguments":{"query":"up","instance_id":7}}, None)
+        self.assertEqual(out["statusCode"], 200)
+        pm.load_datasource.assert_any_call(pm.SLUG, instance_id=7)  # credential-blind per-instance resolve
 
 
 if __name__ == "__main__":

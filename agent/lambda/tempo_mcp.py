@@ -111,10 +111,16 @@ def tempo_tag_values(args):
 
 
 def tempo_schema(args):
-    data = _get(_ds(), "/api/search/tags")
+    creds = _ds()
+    try:  # best-effort server version for version-aware TraceQL
+        bi = _get(creds, "/api/status/buildinfo")
+        version = bi.get("version") if isinstance(bi, dict) else None
+    except _ApiError:
+        version = None
+    data = _get(creds, "/api/search/tags")
     tags = data.get("tagNames") if isinstance(data, dict) else data
     tags = tags if isinstance(tags, list) else []
-    return ok({"tags": tags[:200], "truncated": len(tags) > 200})
+    return ok({"version": version, "tags": tags[:200], "truncated": len(tags) > 200})
 
 
 _TOOLS = {
@@ -133,20 +139,31 @@ _TOOLS["tempo_health"] = tempo_health
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
-    set_request_conn(params.get("conn_config"))  # inline conn-config (BFF) > slug map
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    inst = args.get("instance_id") if isinstance(args, dict) else None
+    conn = params.get("conn_config")
     if isinstance(args, dict):
         args.pop("target_account_id", None)
-    fn = _TOOLS.get(t)
-    if fn is None:
-        return err(f"unknown tool: {t}")
+        args.pop("instance_id", None)        # routing arg, not a tool arg
     try:
+        # BFF inline conn (trusted) > per-instance secret (credential-blind worker) > kind-mirror default.
+        if conn:
+            set_request_conn(conn)
+        elif inst is not None:
+            set_request_conn(load_datasource(SLUG, instance_id=inst))
+        else:
+            set_request_conn(None)
+        fn = _TOOLS.get(t)
+        if fn is None:
+            return err(f"unknown tool: {t}")
         return fn(args)
     except (NotConnected, SsrfBlocked, _ApiError) as e:
         return err(str(e))
     except Exception as e:  # noqa: BLE001
         return err(f"tempo error: {e}")
+    finally:
+        set_request_conn(None)  # guaranteed reset — no warm-container bleed
 
 
 def ok(body):

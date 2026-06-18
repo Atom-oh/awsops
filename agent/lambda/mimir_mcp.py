@@ -120,6 +120,11 @@ def mimir_series(args):
 def mimir_schema(args):
     creds = _ds()
     base = BASE
+    try:  # best-effort server version for version-aware PromQL
+        bi = _get(creds, f"{base}/status/buildinfo", {})
+        version = bi.get("version") if isinstance(bi, dict) else None
+    except _ApiError:
+        version = None
     try:
         labels = _get(creds, f"{base}/labels", {})
     except _ApiError:
@@ -130,7 +135,7 @@ def mimir_schema(args):
         metrics = []
     labels = labels if isinstance(labels, list) else []
     metrics = metrics if isinstance(metrics, list) else []
-    return ok({"metrics": metrics[:500], "labels": labels[:200],
+    return ok({"version": version, "metrics": metrics[:500], "labels": labels[:200],
                "truncated": len(metrics) > 500 or len(labels) > 200})
 
 
@@ -148,20 +153,31 @@ _TOOLS["mimir_health"] = mimir_health
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
-    set_request_conn(params.get("conn_config"))  # inline conn-config (BFF) > slug map
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    inst = args.get("instance_id") if isinstance(args, dict) else None
+    conn = params.get("conn_config")
     if isinstance(args, dict):
         args.pop("target_account_id", None)
-    fn = _TOOLS.get(t)
-    if fn is None:
-        return err(f"unknown tool: {t}")
+        args.pop("instance_id", None)        # routing arg, not a tool arg
     try:
+        # BFF inline conn (trusted) > per-instance secret (credential-blind worker) > kind-mirror default.
+        if conn:
+            set_request_conn(conn)
+        elif inst is not None:
+            set_request_conn(load_datasource(SLUG, instance_id=inst))
+        else:
+            set_request_conn(None)
+        fn = _TOOLS.get(t)
+        if fn is None:
+            return err(f"unknown tool: {t}")
         return fn(args)
     except (NotConnected, SsrfBlocked, _ApiError) as e:
         return err(str(e))
     except Exception as e:  # noqa: BLE001
         return err(f"mimir error: {e}")
+    finally:
+        set_request_conn(None)  # guaranteed reset — no warm-container bleed
 
 
 def ok(body):

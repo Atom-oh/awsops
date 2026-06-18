@@ -1,76 +1,84 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 783a161dd331 · generated-at: 2026-06-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e19df89b6da9 · generated-at: 2026-06-18 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+
 > You are Gemini, an external reviewer — project context below.
 
-# AWSops v2 — Reviewer Context
+# AWSops — Reviewer Context
 
-Branch `feat/v2-architecture-design`. Reviews on this branch target **v2** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers). v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) is the **untouched legacy app** — its rules do NOT apply to v2.
+Branch `feat/v2-architecture-design`. Reviews on this branch target **v2** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers). v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) is the **untouched legacy production app** — v1 rules do NOT apply to v2. A diff under `web/`, `terraform/v2/`, `agent/`, or `scripts/v2/` is v2; a diff under `src/` is v1.
 
-## ⛔ Product posture (read-only; 2026-06-11 high-risk ADR reversal)
-v2 is a **read-only ops dashboard + AI diagnosis.** A mutating/autonomous tier was prototyped behind disabled flags then **REVERSED (3-AI consensus — `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`)**:
-- **REVERSED / do-not-enable / frozen flag-OFF:** ADR-029+036 (mutation/remediation substrate), ADR-031 Phase 3 (BYO-MCP), Phase 4 (mutating tools).
-- **DOWNGRADED to read-only:** ADR-032 (keep Triage/RCA, drop autonomous mitigation), ADR-035 (keep read-only K8sGPT Result read, drop H3a→032/034/029 wiring).
-- **KEEP/LIVE:** ADR-031 Phase 1/2 (Agent Space), inventory/cost/chat/EKS-read.
-- **KEPT (decision retained, flag-OFF):** ADR-034 RCA write-back — currently coupled to the frozen 029/036 substrate role; requires decoupling before any activation.
-**🚩 Flag any PR that enables mutation/autonomy/BYO-MCP** — sets `remediation_enabled=true`, routes an agent to a mutating/SSM-Automation action, opens external MCP egress, or wires K8sGPT findings into incident/remediation. Infra mutation belongs to the operator's SSM/Change Manager/IaC, NOT AWSops. The frozen dark substrate ($0/flag-OFF) is intentional — do not suggest enabling it.
+## ⛔ Product posture (READ-ONLY; 2026-06-11 high-risk ADR reversal)
+v2 is a **read-only ops dashboard + AI diagnosis.** A mutating/autonomous tier was prototyped behind disabled flags, then **REVERSED** (3-AI consensus, `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`):
+- **REVERSED / do-not-enable / frozen flag-OFF:** ADR-029+036 (AWS-resource mutation/remediation substrate), ADR-031 Phase 3 (BYO-MCP), Phase 4 (mutating tools).
+- **DOWNGRADED to read-only:** ADR-032 (keep Triage/RCA, drop autonomous mitigation), ADR-035 (keep read-only K8sGPT result read, drop autonomous wiring).
+- **KEPT (flag-OFF):** ADR-034 RCA write-back — still coupled to frozen 029/036 substrate role; needs role decoupling before any activation.
+- **ADR-041 re-scope (owner-override, panel verdict PARTIAL):** "read-only" = **AWS-resource mutation + autonomy are permanently frozen**; external DATA read + governed external write (knowledge/ticket/message, ADR-040: SSRF defense, Secrets Manager, DLP/redaction, human-gate, flag-OFF) are NOT covered by the freeze.
+- **🚩 Flag any PR that enables mutation/autonomy/BYO-MCP** — e.g. sets `remediation_enabled=true`, flips a frozen flag, or wires the dark substrate live. The dark code exists intentionally (built-then-reversed); enabling it is the regression, not its presence.
 
-## Stack
-- **IaC**: Terraform (CDK dropped — see ADR-037, which supersedes the ADR-024 CDK split). Root `terraform/v2/foundation/`; partial S3 backend (`backend.hcl`, `awsops-v2-tfstate`, `use_lockfile`, no DynamoDB). TF ≥1.15, provider `~>6.0`.
-- **Web**: Next.js 14 thin-BFF (`web/`, standalone arm64, **root path — no basePath**). Routes `/api/{health,stream,db,jobs,chat}` (+ `/api/jobs/[id]`). node-pg to Aurora via `web/lib/db.ts`.
-- **Data**: Aurora Serverless v2 (PG 17.9). ADR-030-based schema (baseline `data/schema.sql` frozen at v9 — table count per schema.sql) + ULID migrations via `make migrate`; includes `worker_jobs`. **No *live* Steampipe in v2** — live AWS queries go through AgentCore MCP Lambda tools; the only Steampipe is a **flag-gated warm inventory-sync** batch (`var.steampipe_enabled`, default off, `steampipe.tf` → Aurora), NOT a Service-Connect daemon (ADR-037 §Decision #4).
-- **AI**: Bedrock Sonnet 4.6 / Opus 4.8 / Haiku 4.5 + AgentCore (9 section gateways + 1 incident orchestrator design; reuses `agent/agent.py`). Config source of truth = SSM `/ops/awsops-v2/agentcore/*`. (Opus is 4.8, no `-v1` suffix; any "Opus 4.6"/"17-route" text is stale v1.)
-- **Chat routing (ADR-038, LIVE)**: `web/lib/route.ts`+`classifier.ts` — regex fast-path → Haiku 4.5 classifier fallback over 9 sections; priority `explicit pin > custom agent (ADR-031) > classifier > active fallback`; never routes to an inactive section. Prompt caching + temperature=0 on `agent.py` `BedrockModel` (strands-agents 1.41.0). Gated by `hybrid_routing_enabled`. AgentCore Gateway semantic tool search is deferred to P4.
-- **Async workers**: web `/api/jobs` → SQS → ESM → dispatcher Lambda → Step Functions → RunLambda or Fargate (`ecs:runTask.sync`) → status_updater on Catch → reaper. Files in `terraform/v2/foundation/workers.tf` + `scripts/v2/workers/`. Used for read-only/heavy async work (e.g. inventory sync). *(It once hosted the ADR-036 mutation control-plane — **reversed 2026-06-11**, frozen flag-OFF; see the Product-posture section above.)*
+## Stack / runtime
+- **Web:** Next.js 14 thin-BFF (`web/`), standalone **arm64**, served at **root `/` — no basePath**. Routes `web/app/api/{health,stream,db,jobs}/route.ts` (+ `jobs/[id]`). Heavy/long/OOM work is **enqueued via `POST /api/jobs`**, never run inline. Fetch is `/api/*` (NOT `/awsops/api/*` — that v1 prefix is gone in v2).
+- **Data:** Aurora Serverless v2 (PG 17.9) via **node-pg** (`web/lib/db.ts`, shared `getPool`). App state lives in Aurora, **not `data/*.json`** (that is the v1 pattern). Schema = `terraform/v2/foundation/data/schema.sql` + collision-free ULID migrations (`migrations/<ULID>_*.sql`, never append to schema.sql).
+- **IaC:** Terraform (CDK dropped). Single root `terraform/v2/foundation/`, partial S3 backend (`backend.hcl`, no DynamoDB), TF ≥1.15, provider `~>6.0`.
+- **Edge:** CloudFront(TLS) → VPC Origin `https-only:443` → internal ALB HTTPS:443 (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** ALB SG allows 443 from CloudFront managed SG `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only → 504).
+- **AI:** Bedrock **Sonnet 4.6 / Opus 4.8 / Haiku 4.5** + AgentCore (Strands, reuses `agent/agent.py`; routes via `GATEWAYS_JSON`). Live AWS queries go through **AgentCore MCP Lambda tools** (`agent/lambda/*.py`), never inline in the BFF. Config source-of-truth = **SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}` (read at runtime; no ECS `valueFrom` to avoid a race).
+- **Chat routing (ADR-038, LIVE):** regex fast-path → Haiku classifier fallback; prompt caching + temperature=0. Gated by `hybrid_routing_enabled`.
+- **Async workers (P2):** `POST /api/jobs` → `worker_jobs` (queued) + SQS → ESM (kill-switch) → dispatcher Lambda (idempotent on job_id) → Step Functions → RunLambda (short) **or** `ecs:runTask.sync` Fargate (long/OOM) → worker writes running/succeeded itself → status_updater on Catch sets failed (SFN can't write VPC Aurora) → reaper (EventBridge 5min) reconciles stale. Files: `terraform/v2/foundation/workers.tf`, `scripts/v2/workers/`.
 
-## Build · Test · Lint
+## Build · Test · Lint (copy-paste; do not invent)
 ```bash
-make configure                                                  # TUI → terraform.tfvars + backend.hcl
+# v2 web (cwd = web/) — package.json scripts: dev / build / start / test (no lint script)
+cd web && npm ci && npm run build       # next build (standalone)
+cd web && npx vitest run                 # web test suite (vitest); ~94 *.test.ts(x)
+
+# Terraform (controller runs apply on shared infra; agents do NOT auto-approve)
 terraform -chdir=terraform/v2/foundation init -backend-config=backend.hcl
 terraform -chdir=terraform/v2/foundation validate
-terraform -chdir=terraform/v2/foundation plan -out tfplan       # apply via saved plan only
-make deploy        # web: arm64 build → ECR push → ECS rolling → smoke /api/health
-cd web && npm run build                                         # Next.js standalone build
-```
-No unit-test harness for web; verification = clean `terraform validate`/`plan` and a clean web build. A diff that doesn't `validate`/build must not be approved.
+terraform -chdir=terraform/v2/foundation plan -out tfplan   # controller runs `apply tfplan`
 
-## Architectural boundaries (what may import what)
-- **web is a thin-BFF**: heavy/long/OOM-risk work must be **enqueued** via `POST /api/jobs`, never run inline in a request handler. A handler doing heavy compute/long AWS calls inline is a defect.
-- App state lives in **Aurora via node-pg** (`web/lib/db.ts` `getPool`), not in `data/*.json` (the v1 pattern). Schema changes go through `terraform/v2/foundation/data/schema.sql` + `schema_migrations`.
-- AgentCore config is read from **SSM** at runtime — never hardcode runtime/memory/interpreter ARNs or account IDs.
-- Admin authority in v2 = **Cognito `ADMIN_GROUP` group OR an SSM-parameter email allowlist** (`web/lib/admin.ts`, fail-closed), NOT `data/config.json` `adminEmails` (that's v1; ADR-023 v2 note). References to "the ADR-023 adminEmails gate" mean this v2 gate.
-- Mutating actions (ADR-029 controls + ADR-036 hybrid substrate) — **REVERSED 2026-06-11, do-not-enable, frozen flag-OFF** (`remediation_enabled` stays false). The dark substrate exists (built then reversed) but the direction is abandoned; AWSops does not execute infra mutation. If a PR revives/enables it, flag it.
-- Terraform: all infra under `terraform/v2/foundation/`. Large features must be **flag-gated** (`agentcore_enabled`, `workers_enabled`, `steampipe_enabled`, `hybrid_routing_enabled` — all default false → `plan` = No changes).
+# Makefile (run after terraform apply where noted)
+make configure   # interactive TUI → terraform.tfvars + backend.hcl
+make migrate     # apply pending ULID migrations (advisory-locked; DRY_RUN=1 to preview)
+make deploy      # migrate → buildx arm64 → ECR push → ECS roll → wait stable → smoke /api/health
+make agentcore   # arm64 agent image + idempotent AgentCore provisioner (--smoke to invoke)
+make workers     # arm64 worker image push (after apply with workers_enabled=true)
+```
+Note: the repo-root `package.json` (`build`/`lint`/`test`) belongs to the **v1** app; the **v2** web app lives under `web/` and has no `lint` script. `next build` fails on app-level type errors but `*.test.ts(x)` type noise is non-blocking.
+
+## BANNED PATTERNS (enforce in review)
+- **AWS security:** no `0.0.0.0/0` ingress; no IAM `Principal: "*"` / wildcard-action without a scoped condition; **no secrets in env/code/IaC** (use Secrets Manager / SSM).
+- **No AWS-resource mutation or autonomy** — permanently frozen (see Product posture). Flag any PR that revives it.
+- **SG `description` is immutable** — changing it forces a SG replace that hangs on the attached ALB. Do ingress changes in-place; keep the description verbatim.
+- **arm64 required** for web/agent/worker images (`buildx --platform linux/arm64`).
+- **`HOSTNAME=0.0.0.0` must be a runtime env** (task def `environment`) for Next standalone — an image ENV is insufficient (ECS overwrites it with the ENI IP → health check UNHEALTHY).
+- **Fargate worker Dockerfiles use `CMD`, not exec-form `ENTRYPOINT`** — SFN `containerOverrides.command` is appended to ENTRYPOINT → argv doubles → argparse dies.
+- **ECS `secrets` valueFrom needs execution-role perms** (not the task role) — else `ResourceInitializationError`.
+- **No `-auto-approve` on shared infra** — a saved `tfplan` (`apply tfplan`) passes the gate; long applies are run by the controller.
+- **Flag-gate large new features** (`agentcore_enabled`, `workers_enabled`, `steampipe_enabled`, `hybrid_routing_enabled` — all default false → `plan` = No changes, $0).
 
 ## Naming / conventions
-- Components `export default`. Web served at **root `/`** — fetch `/api/*` (NOT `/awsops/api/*`; that v1 rule is gone in v2).
-- **arm64** for all images (web/agent/worker): `buildx --platform linux/arm64`.
-- Resource names `awsops-v2-*`; AgentCore gateways `awsops-v2-{key}-gateway`; SSM under `/ops/awsops-v2/...` (an `aws...` prefix is SSM-reserved and rejected).
-
-## Security rules
-- Edge auth = Cognito + Lambda@Edge with **RS256 JWKS verification** + iss/aud/token_use + OAuth `state` + PKCE public client (no client secret). A change that weakens edge verification to decode-only/exp-only is a security regression.
-- `/api/health` is the only intentionally public route; everything else sits behind edge auth. New public bypasses are defects unless justified.
-- ECS `secrets` valueFrom (Aurora secret) must be on the **execution role**, not the task role.
-- Mutating-action executors get **per-action IAM roles** (SSM `AutomationAssumeRole` per runbook / per-action task role for P2 code) — never a shared broad worker role; 4-eyes/approver ≠ requester where required.
-- Never commit secrets, account IDs, tfvars, or `backend.hcl` values.
+- Components `export default`. Resource names `awsops-v2-*`; AgentCore gateways `awsops-v2-{key}-gateway`; SSM under `/ops/awsops-v2/...` (an `aws...` prefix is SSM-reserved and rejected).
+- Admin authority in v2 = **Cognito admin group OR an SSM-parameter email allowlist** (`web/lib/admin.ts`, fail-closed), NOT `data/config.json` `adminEmails` (that is v1; ADR-023 v2 note).
+- Edge auth = Cognito + Lambda@Edge **RS256 JWKS verification** + iss/aud/token_use + OAuth `state` + PKCE public client (no client secret). In-app login = self-hosted `/login` + `POST /api/auth/login` (unsigned public Cognito `InitiateAuth USER_PASSWORD_AUTH`; ADR-042); Hosted-UI PKCE `/_callback` is a retained dark fallback. `/api/health` is the only intentionally public route.
 
 ## Review checklist
-1. `terraform validate` + clean `plan`; web builds. New infra is flag-gated (`agentcore_enabled`/`workers_enabled`/`steampipe_enabled`/`hybrid_routing_enabled`).
-2. No `-auto-approve` on shared infra; applies go through a saved tfplan.
-3. SG `description` unchanged (it's immutable → forces a replace that hangs on the ALB); ingress edits in-place.
-4. Next.js standalone containers set `HOSTNAME=0.0.0.0` as a **runtime env** (task def), not just an image ENV.
-5. Fargate worker Dockerfiles use `CMD` (not exec-form ENTRYPOINT) so SFN `containerOverrides.command` doesn't double argv.
-6. web stays thin-BFF (heavy work enqueued); Aurora access via `getPool`; AgentCore ARNs from SSM; admin via `web/lib/admin.ts`.
-7. Auth verification stays RS256 JWKS; no new public routes; secrets on execution role; no mutation/remediation path is enabled (029/036 reversed — flag any PR that turns it on); nothing sensitive committed.
+1. **Posture:** no mutation/autonomy/BYO-MCP enabled (029/036 reversed; flag any PR that turns it on). External write, if any, must satisfy ADR-040 governance (SSRF, Secrets Manager, DLP/redaction, human-gate, flag-OFF).
+2. **Edge/auth:** RS256 JWKS verification intact (no decode-only / exp-only regression); no new public route bypass; secrets on execution role; nothing sensitive committed.
+3. **Thin-BFF:** heavy/long/OOM work enqueued via `/api/jobs`, not inline; Aurora via `getPool`; AgentCore ARNs from SSM; admin via `web/lib/admin.ts`.
+4. **Terraform:** changes under `terraform/v2/foundation/`; large features flag-gated; SG description unchanged; no `0.0.0.0/0`, no `Principal:*`; no `-auto-approve` baked in.
+5. **Containers:** arm64; `HOSTNAME=0.0.0.0` runtime env; Fargate worker `CMD`; container + TG health path = `/api/health`.
+6. **v2 vs v1:** fetch `/api/*` (no `/awsops` prefix); state in Aurora not `data/*.json`; new tables as ULID migration files.
+7. **Gateway count:** doctrine vs as-built mismatch — see below; flag either way.
+
+## Gateway count — flag either way (NOT a false-positive)
+CLAUDE.md is **internally inconsistent**: the doctrine text says **8 section gateways** (network/container/data/security/cost/monitoring/iac/ops) with external observability as the **Integrations axis** (ADR-039), not a 9th gateway. But the as-built code (`scripts/v2/agentcore/catalog.py`, `provision.py`) declares and provisions **9** — the 8 above plus `external-obs`. Present this **accurately as "doctrine 8 / as-built 9"** and flag whichever side a diff contradicts. Do NOT silently treat either number as correct.
 
 ## Known false-positives (do NOT flag)
-- Fetch to `/api/...` without an `/awsops` prefix is correct in v2 (basePath was dropped).
-- `agentcore_enabled`/`workers_enabled`/`steampipe_enabled`/`hybrid_routing_enabled` defaulting to false (so `plan` = No changes) is intentional, not dead config.
-- The chat classifier calling Bedrock Haiku for routing (ADR-038) is intentional in v2 — it reverses ADR-016's v1 "Sonnet-only router" rule (regex-first, golden-set-gated). Not a regression.
-- A flag-gated Steampipe Fargate+Lambda inventory-sync (default off) is the *only* sanctioned Steampipe in v2 — it is a batch loader into Aurora, not a live-query service; not a contradiction of "no live Steampipe".
-- Exact Aurora minor `17.9` + `lifecycle{ignore_changes=[engine_version]}` on cluster AND instance is deliberate (absorbs minor auto-upgrades) — not a drift bug.
+- **Model ids:** Opus is **4.8**, Sonnet is **4.6** (no `-v1` suffix). Any "Opus 4.6" / "17-route router" text is stale v1 — the current code is correct.
+- **Dark code is intentional:** ADRs use a supersession/reversal model; a "reversed/frozen but code present" slice (e.g. mutation substrate in `workers.tf`, ADR-031 Phase 3/4) is deliberately retained dark code, NOT dead code. The regression is *enabling* it, not its presence.
+- Fetch to `/api/...` without an `/awsops` prefix is correct in v2 (basePath dropped).
+- `agentcore_enabled` / `workers_enabled` / `steampipe_enabled` / `hybrid_routing_enabled` defaulting false (so `plan` = No changes) is intentional, not dead config.
+- Chat classifier calling Bedrock Haiku for routing (ADR-038) is intentional in v2 — it supersedes v1's "Sonnet-only router" rule; regex-first, golden-set-gated.
+- Flag-gated Steampipe Fargate+Lambda inventory sync (default off) is the *only* sanctioned Steampipe in v2 — a batch loader into Aurora, not a live-query service; not a contradiction of "no live Steampipe" (live queries go through AgentCore MCP tools).
+- Exact Aurora minor `17.9` + `lifecycle{ignore_changes=[engine_version]}` on cluster AND instance is deliberate (absorbs minor auto-upgrades), not a drift bug.
 - `CloudFront-VPCOrigins-Service-SG` 443 ingress on the ALB SG is required (VPC-CIDR-only causes 504).
 - SFN `.sync` briefly showing RUNNING after the worker wrote `succeeded` is expected (task-stop polling lag); the `worker_jobs` ledger is the source of truth.
-- ADR-030's body describing 4 containers / Service-Connect Steampipe / CDK is **historical** — ADR-037 is the authoritative v2 topology. Don't review v2 against ADR-030's mechanism.
-- The flag-OFF remediation/incident-mitigation/BYO-MCP/K8sGPT-H3a substrate code that does nothing is **intentional** (REVERSED 2026-06-11, frozen, $0) — not dead code; do not suggest deleting OR enabling it. ADR docs 029/036 carry a ⛔ REVERSED banner; 032/035 a ⚠️ DOWNGRADED banner — that is the current decision, not stale text.
-
-## Note
-The repo also contains v1 (`src/`, `infra-cdk/`, Steampipe, `/awsops`). If a diff is purely under `src/`/`infra-cdk/`, review it against v1 conventions (pg Pool, `account_id` columns, `/awsops` prefix) instead — but this branch's work is v2.
+- web `package.json` having no `lint` script (only dev/build/start/test) is expected; lint lives in the v1 root package.

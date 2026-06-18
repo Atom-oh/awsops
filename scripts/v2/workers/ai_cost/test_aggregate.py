@@ -64,3 +64,48 @@ def test_parse_rows_empty():
 def test_parse_rows_skips_rows_without_day_or_model():
     results = [[{"field": "modelId", "value": "x"}], [{"field": "day", "value": "2026-06-17 00:00:00.000"}]]
     assert A.parse_rows(results) == []
+
+
+def test_normalize_model_strips_arn_to_canonical_id():
+    # SDK worker logs the full inference-profile ARN; AgentCore logs the bare id — both collapse.
+    assert A.normalize_model(
+        "arn:aws:bedrock:ap-northeast-2:180294183052:inference-profile/global.anthropic.claude-opus-4-8"
+    ) == "global.anthropic.claude-opus-4-8"
+    assert A.normalize_model("global.anthropic.claude-sonnet-4-6") == "global.anthropic.claude-sonnet-4-6"
+    # foundation-model ARNs reduce the same way (after the last '/')
+    assert A.normalize_model(
+        "arn:aws:bedrock:us-east-1:1:foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+    ) == "anthropic.claude-3-haiku-20240307-v1:0"
+    assert A.normalize_model(None) is None
+    # bare ids (no '/') pass through unchanged; a pathological trailing slash keeps the original (no empty key)
+    assert A.normalize_model("anthropic.claude-opus-4-8") == "anthropic.claude-opus-4-8"
+    assert A.normalize_model("foo/") == "foo/"
+
+
+def test_parse_rows_merges_arn_and_bare_modelid_same_day():
+    # The SAME model logged as full-ARN (worker) and bare-id (AgentCore) on the same day must sum
+    # into ONE row — not two rows, and not an UPSERT overwrite that drops one side.
+    results = [
+        _row("2026-06-17 00:00:00.000",
+             "arn:aws:bedrock:ap-northeast-2:1:inference-profile/global.anthropic.claude-sonnet-4-6",
+             input_tokens=100, output_tokens=10, cache_read_tokens=5),
+        _row("2026-06-17 00:00:00.000", "global.anthropic.claude-sonnet-4-6",
+             input_tokens=4, output_tokens=501),
+    ]
+    rows = A.parse_rows(results)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["model"] == "global.anthropic.claude-sonnet-4-6"
+    assert r["input_tokens"] == 104
+    assert r["output_tokens"] == 511
+    assert r["cache_read_tokens"] == 5
+
+
+def test_parse_rows_keeps_distinct_models_and_days_separate():
+    results = [
+        _row("2026-06-17 00:00:00.000", "global.anthropic.claude-opus-4-8", input_tokens=10),
+        _row("2026-06-17 00:00:00.000", "global.anthropic.claude-sonnet-4-6", input_tokens=20),
+        _row("2026-06-16 00:00:00.000", "global.anthropic.claude-opus-4-8", input_tokens=30),
+    ]
+    rows = A.parse_rows(results)
+    assert len(rows) == 3

@@ -156,12 +156,23 @@ class TestSchema(unittest.TestCase):
     def setUp(self):
         self._ld=mock.patch.object(ch,"load_datasource",return_value=DS); self._ld.start(); self.addCleanup(self._ld.stop)
         self._ah=mock.patch.object(ch,"assert_host_allowed",return_value=None); self._ah.start(); self.addCleanup(self._ah.stop)
-    def test_schema_tables_columns(self):
-        seq=[(200,{"data":[{"name":"events"}]}),(200,{"data":[{"name":"ts","type":"DateTime"},{"name":"msg","type":"String"}]})]
+    def test_schema_tables_columns_and_version(self):
+        # schema now probes SELECT version() FIRST, then SHOW TABLES, then DESCRIBE per table.
+        seq=[(200,{"data":[{"v":"24.3.1"}]}),                       # SELECT version()
+             (200,{"data":[{"name":"events"}]}),                    # SHOW TABLES
+             (200,{"data":[{"name":"ts","type":"DateTime"},{"name":"msg","type":"String"}]})]  # DESCRIBE
         with mock.patch.object(ch,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
             out=ch.lambda_handler({"tool_name":"clickhouse_schema","arguments":{}},None)
         b=json.loads(out["body"]); self.assertEqual(b["tables"][0]["name"],"events")
         self.assertEqual([c["name"] for c in b["tables"][0]["columns"]],["ts","msg"])
+        self.assertEqual(b["version"],"24.3.1")  # captured for version-aware SQL
+
+    def test_instance_id_resolves_per_instance_credential_blind(self):
+        ch.load_datasource.reset_mock()
+        with mock.patch.object(ch,"http_json",return_value=(200,{"data":[],"rows":0})):
+            out=ch.lambda_handler({"tool_name":"clickhouse_query","arguments":{"sql":"SELECT 1","instance_id":7}},None)
+        self.assertEqual(out["statusCode"],200)
+        ch.load_datasource.assert_any_call(ch.SLUG, instance_id=7)
 
 
 if __name__ == "__main__":

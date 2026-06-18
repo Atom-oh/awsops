@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
+import IntegrationIcon from '@/components/datasources/IntegrationIcon';
 
 // Connectors tab: external SERVICE integrations (Notion now; Slack/Jira later) — distinct from
 // observability Datasources and from Skills. Read + GOVERNED write (write is propose-only / flag-OFF
@@ -52,7 +53,7 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
         {CONNECTORS.map((c) => (
           <Card key={c.slug} className="p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-medium text-ink-800">{c.label}</span>
+              <span className="inline-flex items-center gap-2 font-medium text-ink-800"><IntegrationIcon kind={c.slug} /> {c.label}</span>
               <span className={`text-[12px] ${configured.has(c.slug) ? 'text-emerald-600' : 'text-ink-400'}`}>
                 {configured.has(c.slug) ? '● connected' : '○ not connected'}
               </span>

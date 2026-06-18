@@ -34,8 +34,8 @@ function chunk(text: string): string[] {
 }
 
 /** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps). */
-function renderSchemaContext(schemas: { label: string; kind: string | null; schema: unknown }[]): string {
-  const lines = ['## Datasource schemas (cached) — use these real names when writing queries'];
+function renderSchemaContext(schemas: { label: string; kind: string | null; schema: unknown; version?: string | null }[]): string {
+  const lines = ['## Datasource schemas (cached) — use these real names AND the server version when writing queries'];
   const names = (a: unknown, n: number) =>
     (Array.isArray(a) ? a : []).slice(0, n).map((x) => (typeof x === 'string' ? x : (x as { name?: string }).name ?? JSON.stringify(x))).join(', ');
   for (const s of schemas) {
@@ -44,7 +44,8 @@ function renderSchemaContext(schemas: { label: string; kind: string | null; sche
     for (const [k, n] of [['metrics', 40], ['labels', 40], ['tags', 40], ['tables', 30], ['domains', 10], ['indices', 30]] as const) {
       if (Array.isArray(sc[k]) && (sc[k] as unknown[]).length) parts.push(`${k}: ${names(sc[k], n)}`);
     }
-    lines.push(`- **${s.label}** (${s.kind ?? ''}): ${parts.join(' | ') || '(empty)'}`);
+    const ver = s.version ? ` v${s.version}` : ''; // version informs version-specific DSL/syntax
+    lines.push(`- **${s.label}** (${s.kind ?? ''}${ver}): ${parts.join(' | ') || '(empty)'}`);
   }
   return lines.join('\n').slice(0, 6000);
 }
@@ -182,10 +183,10 @@ export async function POST(request: Request) {
       // instances), labeled by the instance name. The agent gateway path also resolves the default
       // (via the kind-mirror credential), so chat and the gateway agree on which instance is used.
       const [schemas, dsRows] = await Promise.all([listConfiguredSchemas(accountId), listDatasources()]);
-      const byId = new Map(schemas.map((s) => [s.integrationId, s.schema]));
+      const byId = new Map(schemas.map((s) => [s.integrationId, s]));
       const entries = dsRows
         .filter((d) => d.isDefault && byId.has(d.id))
-        .map((d) => ({ label: d.name, kind: d.kind, schema: byId.get(d.id) }));
+        .map((d) => { const s = byId.get(d.id)!; return { label: d.name, kind: d.kind, schema: s.schema, version: s.version }; });
       if (entries.length) datasourceSchemaContext = renderSchemaContext(entries);
     } catch { /* schema cache is best-effort; the agent still works (can call discovery tools) without it */ }
   }
