@@ -45,7 +45,19 @@ export default function CompliancePage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [selected, setSelected] = useState<Result | null>(null);
+  const [runs, setRuns] = useState<Run[]>([]);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Run history list (saved compliance_runs). Best-effort — never blocks the page.
+  const loadHistory = useCallback(async () => {
+    try {
+      const r = await fetch('/api/compliance/runs');
+      const b = (await r.json()) as { runs?: Run[] };
+      setRuns(b.runs ?? []);
+    } catch {
+      /* history is best-effort */
+    }
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -62,6 +74,8 @@ export default function CompliancePage() {
     })();
   }, []);
 
+  useEffect(() => { void loadHistory(); }, [loadHistory]);
+
   const poll = useCallback(async (id: number) => {
     try {
       const r = await fetch(`/api/compliance/runs/${id}`);
@@ -73,12 +87,20 @@ export default function CompliancePage() {
           pollRef.current = setTimeout(() => void poll(id), 5000);
         } else {
           setBusy(false);
+          void loadHistory(); // refresh the saved-runs list when a run reaches a terminal state
         }
       }
     } catch {
       setBusy(false);
     }
-  }, []);
+  }, [loadHistory]);
+
+  // View a past run's saved results (no re-run); poll() handles terminal vs still-running.
+  const viewRun = useCallback((id: number) => {
+    setErr('');
+    setRunId(id);
+    void poll(id);
+  }, [poll]);
 
   useEffect(() => () => { if (pollRef.current) clearTimeout(pollRef.current); }, []);
 
@@ -169,6 +191,29 @@ export default function CompliancePage() {
         )}
 
         {busy && !run && <Card className="text-[14px] text-ink-500">벤치마크 실행 중… (수 분 소요될 수 있습니다)</Card>}
+
+        {runs.length > 0 && (
+          <Card className="mb-4">
+            <div className="mb-2 text-[13px] font-semibold text-ink-700">Recent runs</div>
+            <div className="flex flex-col divide-y divide-ink-100">
+              {runs.map((h) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => viewRun(h.id)}
+                  className={`flex items-center justify-between gap-3 py-2 text-left text-[13px] hover:bg-ink-50 ${run?.id === h.id ? 'text-brand-700' : 'text-ink-700'}`}
+                >
+                  <span className="font-medium">{h.benchmark}</span>
+                  <span className="flex items-center gap-3 text-ink-500">
+                    <span>{h.status}</span>
+                    <span className="tabular w-12 text-right">{h.pass_rate != null ? `${Number(h.pass_rate).toFixed(0)}%` : '—'}</span>
+                    <span className="tabular hidden sm:inline">{h.started_at ? new Date(h.started_at).toLocaleString('ko-KR') : ''}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
 
         {run && (
           <>
