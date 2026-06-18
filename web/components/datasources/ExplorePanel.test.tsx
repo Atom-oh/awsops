@@ -99,4 +99,60 @@ describe('ExplorePanel', () => {
     await waitFor(() => expect(qbodies.length).toBe(1));
     expect(JSON.parse(qbodies[0]).range).toMatchObject({ window: 3600 });
   });
+
+  // --- Part 2 / Task 3: instant ranked bar chart (gated to prom/mimir vector) ---
+  function mockApi(instances: unknown[], resultPayload: unknown) {
+    global.fetch = vi.fn(async (url: string) => ({
+      ok: true, status: 200,
+      json: async () => (url === '/api/datasources' ? { datasources: instances } : { result: resultPayload }),
+    })) as unknown as typeof fetch;
+  }
+  const promInstant = (n: number) => ({
+    shape: 'table',
+    columns: [{ key: 'metric', label: 'metric' }, { key: 'value', label: 'value' }, { key: 'timestamp', label: 'timestamp' }],
+    rows: Array.from({ length: n }, (_, i) => ({ metric: `m${i}`, value: i + 1, timestamp: 't' })),
+  });
+
+  it('instant prometheus result (≤30 numeric rows) renders the ranked bar (상위 결과)', async () => {
+    mockApi(INSTANCES, promInstant(3));
+    render(<ExplorePanel instanceId={1} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/PromQL/), { target: { value: 'topk(3, up)' } });
+    fireEvent.click(screen.getByRole('button', { name: '실행' }));
+    await waitFor(() => expect(screen.getByText('상위 결과')).toBeTruthy());
+  });
+
+  it('instant result with >30 rows shows no bar (table only)', async () => {
+    mockApi(INSTANCES, promInstant(31));
+    render(<ExplorePanel instanceId={1} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/PromQL/), { target: { value: 'up' } });
+    fireEvent.click(screen.getByRole('button', { name: '실행' }));
+    await waitFor(() => expect(screen.getAllByRole('row').length).toBeGreaterThan(1)); // table rendered
+    expect(screen.queryByText('상위 결과')).toBeNull();
+  });
+
+  it('a ClickHouse table with a numeric value column shows no bar', async () => {
+    mockApi([{ id: 9, name: 'ch', kind: 'clickhouse' }], {
+      shape: 'table',
+      columns: [{ key: 'metric', label: 'metric' }, { key: 'value', label: 'value' }],
+      rows: [{ metric: 'x', value: 5 }],
+    });
+    render(<ExplorePanel instanceId={9} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/SQL/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/SQL/), { target: { value: 'select 1' } });
+    fireEvent.click(screen.getByRole('button', { name: '실행' }));
+    await waitFor(() => expect(screen.getAllByRole('row').length).toBeGreaterThan(1));
+    expect(screen.queryByText('상위 결과')).toBeNull();
+  });
+
+  it('a range (series) result renders AreaTrend, not the bar', async () => {
+    mockApi(INSTANCES, { shape: 'series', series: [{ t: 1, value: 2 }], seriesXKey: 't', seriesYKey: 'value' });
+    render(<ExplorePanel instanceId={1} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/PromQL/), { target: { value: 'up' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '범위' }), { target: { value: '3600' } });
+    await waitFor(() => expect(screen.getByText('시계열')).toBeTruthy());
+    expect(screen.queryByText('상위 결과')).toBeNull();
+  });
 });
