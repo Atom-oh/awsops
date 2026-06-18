@@ -37,7 +37,7 @@ vector, HBarList prop mapping, Korean labels).
 - Test: `web/app/integrations/datasources/[id]/page.test.tsx`
 
 - [ ] Failing test: a range-capable kind renders a `범위` dropdown with Korean presets
-      `즉시 | 5분 | 15분 | 1시간 | 6시간 | 24시간` (default 즉시); selecting `5분` posts
+      `즉시 | 5m | 15m | 1h | 6h | 24h` (default 즉시); selecting `5m` posts
       `range: {window: 300, step: max(1, round(300/250))}`; `즉시` posts `range: false`; a
       non-range kind (tempo/clickhouse) renders no control.
 - [ ] Failing test: changing the dropdown re-runs an existing query (one extra POST); editing the

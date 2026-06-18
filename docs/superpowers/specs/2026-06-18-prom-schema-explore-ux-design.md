@@ -43,7 +43,7 @@ and gives a useful visualization in both modes (a ranked bar for instant, a tren
 
 Replace the `range` boolean checkbox with a single **range dropdown** (`범위`), shown only for
 `RANGE_KINDS` (prometheus/mimir/loki). Korean labels for codebase consistency:
-`즉시 | 5분 | 15분 | 1시간 | 6시간 | 24시간` → window seconds `0 | 300 | 900 | 3600 | 21600 | 86400`
+`즉시 | 5m | 15m | 1h | 6h | 24h` → window seconds `0 | 300 | 900 | 3600 | 21600 | 86400` (owner decision: short duration units read better than Korean 분/시간; `즉시` kept for the instant option)
 (`0` = Instant, default).
 
 - Instant (`0`) → instant tool (today's behaviour), request `range: false`.
@@ -81,7 +81,11 @@ Thread the selected `kind` into `ResultView` (the panel already has `ds.kind`).
 
 ## Error handling
 - Out-of-bounds window/step → `400` at the route before any connector invoke.
-- A non-numeric `value` row degrades to the table-only path (bar gate fails closed).
+- The normalizer emits `null` for non-finite samples (NaN/+Inf) — a `null` or **negative** `value`
+  row degrades to the table-only path. The bar gate requires `typeof === 'number' && Number.isFinite && >= 0`;
+  HBarList is positive-only, so legitimate negative PromQL instant values are shown in the table only (by design).
+- Range request density is bounded server-side: `ceil(window/step) ≤ 5000` points (400 otherwise) so a
+  direct API caller can't request a huge series; the UI's `autoStep` keeps it ~250.
 
 ## Testing
 - `web/app/api/datasources/query/route.test.ts`: `{window,step}` → range tool with computed

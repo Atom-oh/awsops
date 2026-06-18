@@ -136,6 +136,14 @@ describe('POST /api/datasources/query', () => {
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
   });
 
+  it('range object too dense (ceil(window/step) > 5000) → 400, even with in-bounds window/step', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 86400, step: 1 } }))).status).toBe(400); // 86400 points
+    // a sane density (≈250 points, what the UI sends) is accepted
+    await POST(req({ slug: 'prometheus', query: 'up', range: { window: 3600, step: 14 } }));
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].tool).toBe('prometheus_query_range');
+  });
+
   it('range:false and absent range → instant tool', async () => {
     const { POST } = await import('./route');
     await POST(req({ slug: 'prometheus', query: 'up', range: false }));

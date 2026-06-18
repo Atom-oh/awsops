@@ -72,6 +72,12 @@ export async function POST(request: Request) {
     if (!Number.isInteger(step) || step < 1 || step > 86400) {
       return json({ error: 'range.step must be an integer in [1, 86400] seconds' }, 400);
     }
+    // window/step are bounded independently; also cap the resulting point count so a direct API caller
+    // can't request a huge series (e.g. {window:86400, step:1} = 86400 points). The UI's autoStep keeps
+    // this ~250; this bound guards the non-UI path from cost/DoS before the connector/upstream is hit.
+    if (Math.ceil(window / step) > 5000) {
+      return json({ error: 'range too dense: ceil(window / step) must be ≤ 5000 points' }, 400);
+    }
     if (spec.range) { // kind has a range tool; otherwise the validated window is ignored (instant)
       const nowSec = Math.floor(Date.now() / 1000);
       tool = spec.range;
