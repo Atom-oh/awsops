@@ -22,6 +22,17 @@ _NUM = {"tcp": "6", "udp": "17", "icmp": "1"}
 _EPHEMERAL = 49152  # representative high port for the stateless NACL return-path check
 
 
+def _proto_num(p):
+    """Normalize a protocol token to its IANA number string. SG rules use names ('tcp') OR numbers
+    ('6'); NACL rules use numbers — normalizing both sides makes the comparison form-agnostic."""
+    return _NUM.get(str(p), str(p))
+
+
+def _proto_eq(rule_proto, want):
+    rp = str(rule_proto)
+    return rp == "-1" or _proto_num(rp) == _proto_num(want)
+
+
 def _cidr_contains(cidr, ip):
     try:
         return ipaddress.ip_address(ip) in ipaddress.ip_network(cidr, strict=False)
@@ -60,7 +71,7 @@ def _norm_eni(eni):
 
 def _proto_port_match(rule, proto, port):
     rp = str(rule.get("IpProtocol", "-1"))
-    if rp not in ("-1", proto, _NUM.get(proto, "")):
+    if not _proto_eq(rp, proto):
         return False
     if rp == "-1":
         return True
@@ -88,12 +99,11 @@ def _sg_side_allows(sgs, proto, port, peer_ip, peer_sg_ids, egress):
 
 def _nacl_allows(nacl, proto, port, peer_ip, egress):
     """Evaluate a (stateless) NACL: first matching rule by RuleNumber wins."""
-    pnum = _NUM.get(proto, "-1")
     for e in sorted(nacl.get("Entries", []), key=lambda x: x.get("RuleNumber", 0)):
         if bool(e.get("Egress")) != egress:
             continue
         ep = str(e.get("Protocol", "-1"))
-        if ep != "-1" and ep != pnum:
+        if not _proto_eq(ep, proto):
             continue
         pr = e.get("PortRange")
         if ep != "-1" and pr and not (pr.get("From", 0) <= port <= pr.get("To", 65535)):
