@@ -21,3 +21,35 @@ describe('nav fold-in to the Integrations hub', () => {
     expect(src).not.toContain("href: '/datasources'");
   });
 });
+
+// Accordion contract — behaviour (navTree shaping, path resolution) is unit-tested in
+// lib/inventory-types.test.ts; here we lock the Sidebar's structural contract at the
+// source level (rendering Sidebar pulls AccountSelector/providers → too heavy for jsdom).
+describe('collapsible inventory groups', () => {
+  const src = read('./Sidebar.tsx');
+  it('drives the grouped nav from navTree() (not the flat inventoryGroups)', () => {
+    expect(src).toContain("from '@/lib/inventory-types'");
+    expect(src).toMatch(/\bnavTree\(\)/);
+    expect(src).toMatch(/\bgroupForPath\b/);
+  });
+  it('renders a chevron toggle button with aria-expanded + conditional aria-controls', () => {
+    expect(src).toContain('aria-expanded={open}');
+    expect(src).toContain('aria-controls={open ? panelId : undefined}'); // no dangling ref when unmounted
+    expect(src).toMatch(/type="button"/);
+  });
+  it('only the owner instance persists (drawer passes persist=false)', () => {
+    expect(src).toContain('persist = true');
+    expect(src).toContain('if (!persist || !hydrated) return');
+  });
+  it('unmounts collapsed panels (so links leave the tab order)', () => {
+    expect(src).toContain('{open && (');
+    expect(src).toContain('{subOpen && (');
+  });
+  it('persists expand state under a namespaced localStorage key', () => {
+    expect(src).toContain("'awsops:nav:expanded'");
+  });
+  it('keeps the FIXED feature list pinned and untouched (still /integrations)', () => {
+    const fixed = src.slice(src.indexOf('const FIXED'), src.indexOf('];', src.indexOf('const FIXED')));
+    expect(fixed).toContain("'/integrations'");
+  });
+});

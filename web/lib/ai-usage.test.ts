@@ -47,4 +47,16 @@ describe('priceUsage', () => {
   it('empty input → zero', () => {
     expect(priceUsage([])).toEqual({ models: [], totalCost: 0 });
   });
+
+  it('collapses ARN-key + bare-key rows for the same model (no double-count, order-independent)', () => {
+    const rows: UsageRow[] = [
+      // legacy full-ARN row (worker) + bare-id row (AgentCore) for the SAME model + day-range
+      { model: 'arn:aws:bedrock:ap-northeast-2:1:inference-profile/global.anthropic.claude-opus-4-8', input_tokens: 0, output_tokens: 1_000_000, cache_read_tokens: 0, cache_write_tokens: 0 },
+      { model: 'global.anthropic.claude-opus-4-8', input_tokens: 0, output_tokens: 1_000_000, cache_read_tokens: 0, cache_write_tokens: 0 },
+    ];
+    const { models, totalCost } = priceUsage(rows);
+    expect(models).toHaveLength(1); // merged into one canonical model
+    expect(models[0].outputTokens).toBe(2_000_000);
+    expect(totalCost).toBeCloseTo(150, 5); // 2M output × $75/M — counted once, not 4× double-counted
+  });
 });

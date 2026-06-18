@@ -38,6 +38,7 @@ function passVariant(rate: number): StatTileVariant {
 export default function CompliancePage() {
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [benchmark, setBenchmark] = useState('cis_v300');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- WIP: setter used (run_id capture); reader pending
   const [runId, setRunId] = useState<number | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [results, setResults] = useState<Result[]>([]);
