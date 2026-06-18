@@ -10,7 +10,8 @@ import StatTile from '@/components/ui/StatTile';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Input from '@/components/ui/Input';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
-import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights } from '@/lib/inventory-types';
+import RiskHero from '@/components/inventory/RiskHero';
+import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
 
 type Row = Record<string, unknown>;
 
@@ -140,6 +141,27 @@ export default function InventoryTypePage() {
     (key && spec.columns.find((c) => c.key === key)?.label) || key || '';
   const distLabel = colLabel(spec.distKey);
   const stateOptions = ['전체', ...stateCounts.map((s) => s.name)];
+  const arch = layoutOf(type);
+
+  // Composable section blocks — arranged per archetype in the render below.
+  const kpiRow = (
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" />
+      {highlightCards.length > 0
+        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} />)
+        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} />)}
+      {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />)}
+    </div>
+  );
+  const donut = spec.distKey && distData.length > 0
+    ? <DonutBreakdown title={`${distLabel} 분포`} data={distData} nameKey="name" valueKey="value" />
+    : null;
+  const tableBlock = (
+    <div className="flex flex-col gap-3">
+      <Filters query={query} onQuery={setQuery} stateOptions={spec.stateKey ? stateOptions : undefined} stateFilter={stateFilter} onState={setStateFilter} />
+      <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
+    </div>
+  );
 
   return (
     <>
@@ -154,52 +176,41 @@ export default function InventoryTypePage() {
 
         {rows && (
           <>
-            {/* ---- KPI tiles (from FULL rows) ---- */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" />
-              {highlightCards.length > 0
-                ? highlightCards.map((h) => (
-                    <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} />
-                  ))
-                : stateCounts.slice(0, 4).map((s) => (
-                    <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} />
-                  ))}
-              {metricCards.map((c) => (
-                <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />
-              ))}
-            </div>
-
-            {/* ---- Distribution donut (left) + table (right); table full-width if no distKey ---- */}
-            {spec.distKey && distData.length > 0 ? (
-              <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-6 items-start">
-                <DonutBreakdown
-                  title={`${distLabel} 분포`}
-                  data={distData}
-                  nameKey="name"
-                  valueKey="value"
-                />
-                <div className="flex flex-col gap-3">
-                  <Filters
-                    query={query}
-                    onQuery={setQuery}
-                    stateOptions={spec.stateKey ? stateOptions : undefined}
-                    stateFilter={stateFilter}
-                    onState={setStateFilter}
-                  />
-                  <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
+            {arch === 'risk' ? (
+              /* Security posture: verdict hero → table → compact donut. */
+              <>
+                <RiskHero label={spec.label} total={allRows.length} cards={highlightCards} />
+                {metricCards.length > 0 && (
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />)}
+                  </div>
+                )}
+                {tableBlock}
+                {donut && <div className="lg:max-w-md">{donut}</div>}
+              </>
+            ) : arch === 'chart' && donut ? (
+              /* Utilization/state: KPIs → prominent full-width distribution → table. */
+              <>
+                {kpiRow}
+                {donut}
+                {tableBlock}
+              </>
+            ) : arch === 'capacity' && donut ? (
+              /* Engine/type/size: KPIs → donut beside the table. */
+              <>
+                {kpiRow}
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-6 items-start">
+                  {donut}
+                  {tableBlock}
                 </div>
-              </div>
+              </>
             ) : (
-              <div className="flex flex-col gap-3">
-                <Filters
-                  query={query}
-                  onQuery={setQuery}
-                  stateOptions={spec.stateKey ? stateOptions : undefined}
-                  stateFilter={stateFilter}
-                  onState={setStateFilter}
-                />
-                <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
-              </div>
+              /* directory (+ any archetype without a distribution): scan-first. */
+              <>
+                {kpiRow}
+                {tableBlock}
+                {donut && <div className="lg:max-w-sm">{donut}</div>}
+              </>
             )}
           </>
         )}

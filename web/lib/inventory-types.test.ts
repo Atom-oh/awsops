@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   INVENTORY_TYPES, inventoryGroups, isDeprecatedRuntime, DEPRECATED_RUNTIMES,
   navTree, overviewGroups, groupBySlug, groupForPath, RESERVED_NAV_SLUGS,
-  computeHighlights, HIGHLIGHTS,
+  computeHighlights, HIGHLIGHTS, layoutOf,
 } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
@@ -194,6 +194,31 @@ describe('computeHighlights (per-type highlight cards)', () => {
       expect(spec, `HIGHLIGHTS[${type}] has a registered type`).toBeTruthy();
       const cols = new Set(spec.columns.map((c) => c.key));
       for (const h of hls) expect(cols.has(h.col) || VIRTUAL.has(h.col), `${type}.${h.col}`).toBe(true);
+    }
+  });
+});
+
+describe('layout archetypes', () => {
+  it('maps key types to the right archetype', () => {
+    expect(layoutOf('iam_user')).toBe('risk');
+    expect(layoutOf('s3_public_access')).toBe('risk');
+    expect(layoutOf('cloudtrail')).toBe('risk');
+    expect(layoutOf('ec2')).toBe('chart');
+    expect(layoutOf('rds')).toBe('capacity');
+    expect(layoutOf('vpc')).toBe('directory');
+  });
+  it('every inventory type resolves to a valid archetype', () => {
+    const valid = new Set(['risk', 'chart', 'capacity', 'directory']);
+    for (const t of Object.keys(INVENTORY_TYPES)) expect(valid.has(layoutOf(t)), t).toBe(true);
+  });
+  it('unmapped types default to directory', () => {
+    expect(layoutOf('nonexistent_type')).toBe('directory');
+  });
+  it('every risk-archetype type has a danger highlight (so the hero shows a real verdict)', () => {
+    for (const t of Object.keys(INVENTORY_TYPES)) {
+      if (layoutOf(t) !== 'risk') continue;
+      const hl = HIGHLIGHTS[t] ?? [];
+      expect(hl.some((h) => h.tone === 'danger'), `${t} risk hero needs a danger highlight`).toBe(true);
     }
   });
 });
