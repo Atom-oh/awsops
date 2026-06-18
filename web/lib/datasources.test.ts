@@ -111,9 +111,12 @@ describe('resolveConnConfig', () => {
     expect(await resolveConnConfig(row)).toEqual({ endpoint: 'http://p:9090', authType: 'none' });
   });
 
-  it('overlays the SM credential over the row so auth material reaches the connector', async () => {
-    getCredentialById.mockResolvedValueOnce({ endpoint: 'http://p:9090', authType: 'basic', username: 'u', password: 'pw' });
-    expect(await resolveConnConfig({ ...row, authType: 'basic' as const }))
-      .toMatchObject({ endpoint: 'http://p:9090', authType: 'basic', username: 'u', password: 'pw' });
+  it('takes auth material from the SM credential but keeps the ROW authoritative for endpoint+authType', async () => {
+    // cred carries a DIFFERENT (stale) endpoint + authType — the row must win so a stale secret can't
+    // redirect the query; only the auth material (username/password) is taken from the cred.
+    getCredentialById.mockResolvedValueOnce({ endpoint: 'http://STALE:9090', authType: 'bearer', username: 'u', password: 'pw' });
+    const cc = await resolveConnConfig({ ...row, endpoint: 'http://p:9090', authType: 'basic' as const });
+    expect(cc).toMatchObject({ endpoint: 'http://p:9090', authType: 'basic', username: 'u', password: 'pw' });
+    expect(cc.endpoint).not.toBe('http://STALE:9090'); // row endpoint wins over the stale secret
   });
 });

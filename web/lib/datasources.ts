@@ -95,10 +95,13 @@ export async function getDatasource(id: number): Promise<DatasourceRow | null> {
  *  Lambda falls back to the (often empty) kind-mirror and reports "not connected". */
 export async function resolveConnConfig(ds: DatasourceRow): Promise<ConnConfig> {
   const cred = await getCredentialById(ds.id, ds.kind);
+  // Spread the SM cred FIRST (auth material / org_id), then FORCE the row's endpoint + authType on top
+  // so the ROW stays authoritative (a stale/partial secret blob can't redirect the query to a different
+  // endpoint). The endpoint is re-checked by the SSRF guard at the call site regardless.
   return {
+    ...(cred ?? {}),
     ...(ds.endpoint ? { endpoint: ds.endpoint } : {}),
     ...(ds.authType ? { authType: ds.authType } : {}),
-    ...(cred ?? {}),
   } as ConnConfig;
 }
 

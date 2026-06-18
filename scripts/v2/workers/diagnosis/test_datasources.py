@@ -46,7 +46,7 @@ def test_invoke_is_credential_blind(monkeypatch):
     conn = FakeConn([(5, "prod-prom", "prometheus", True)],
                     {5: {"version": "2.48.0", "metrics": ["http_requests_total", "node_cpu_seconds_total"]}})
     out = src.collect_datasources(conn)
-    assert out["key"] == "datasources" and out["ok"]
+    assert out["key"] == "datasources_obs" and out["ok"]
     assert fake.calls, "connector should have been invoked"
     for c in fake.calls:
         assert c["fn"] == "awsops-v2-agent-prometheus-mcp"
@@ -103,13 +103,33 @@ def test_summarize_and_byte_cap(monkeypatch):
 def test_db_failure_degrades_not_raises(monkeypatch):
     conn = FakeConn([], raise_on="FROM integrations")
     out = src.collect_datasources(conn)
-    assert out["key"] == "datasources" and out["degraded"] and not out["ok"]
+    assert out["key"] == "datasources_obs" and out["degraded"] and not out["ok"]
 
 
 # empty: no datasources configured → ok, empty, explicit note.
 def test_no_datasources(monkeypatch):
     out = src.collect_datasources(FakeConn([]))
     assert out["ok"] and out["data"]["queried"] == 0
+
+
+# M3: summarize must handle the REAL connector envelopes (prom/loki spread `result` as a top-level LIST),
+# not just the synthetic {result:{series}} shape — else summaries are silently empty.
+def test_summarize_handles_real_prometheus_envelope(monkeypatch):
+    _patch_lambda(monkeypatch, FakeLambda(body={"resultType": "vector", "truncated": False,
+                                                "result": [{"metric": {"job": "api"}, "value": [0, "3"]}]}))
+    conn = FakeConn([(5, "p", "prometheus", True)], {5: {"metrics": ["http_requests_total"]}})
+    out = src.collect_datasources(conn)
+    summ = out["data"]["findings"][0]["results"][0]["summary"]
+    assert summ.get("count") == 1 and summ.get("resultType") == "vector"  # real envelope summarized, not empty
+
+
+# M3: Tempo returns `traces` (not `result`) — must still summarize.
+def test_summarize_handles_tempo_traces_envelope(monkeypatch):
+    _patch_lambda(monkeypatch, FakeLambda(body={"traces": [{"traceID": "abc"}, {"traceID": "def"}]}))
+    conn = FakeConn([(5, "t", "tempo", True)], {5: {"labels": ["service.name"]}})
+    out = src.collect_datasources(conn)
+    summ = out["data"]["findings"][0]["results"][0]["summary"]
+    assert summ.get("count") == 2 and summ.get("source") == "traces"
 
 
 # consensus gate finding: a crafted/poisoned ClickHouse table name must NOT reach the SQL (identifier-validated).

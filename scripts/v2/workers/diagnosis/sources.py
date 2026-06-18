@@ -7,6 +7,7 @@ X-Ray service map (actual traffic flow), CloudTrail what-changed. NO raw log lin
 import os
 import re
 import json
+import logging
 import time as _time
 import boto3
 from botocore.exceptions import ClientError
@@ -254,13 +255,24 @@ def _invoke_connector(kind, tool, instance_id, arguments=None):
 
 
 def _ds_schema(conn, integration_id):
-    """Cached introspected schema for one instance, keyed by integration_id (one row per instance in
-    the single-account model — so this does NOT depend on the BFF's account-key convention)."""
+    """Cached introspected schema for one instance. Scoped to the BFF's account-key convention
+    (host account ∪ 'self') per spec §8 — NOT integration_id alone — so a cross-tenant row can't be
+    read. If the instance is configured but no row matches the account scope, emit a key-mismatch
+    smell (a schema cached under a different account key)."""
+    acct = os.environ.get("HOST_ACCOUNT_ID") or os.environ.get("AWS_ACCOUNT_ID") or "self"
     rows = conn.run(
-        "SELECT schema FROM datasource_schemas WHERE integration_id=:iid ORDER BY fetched_at DESC LIMIT 1",
-        iid=integration_id,
+        "SELECT schema FROM datasource_schemas WHERE account_id IN (:acct, 'self') AND integration_id=:iid "
+        "ORDER BY fetched_at DESC LIMIT 1",
+        acct=acct, iid=integration_id,
     )
     if not rows:
+        try:  # spec §8 key-mismatch smell: a schema exists for this instance under a DIFFERENT account
+            other = conn.run("SELECT account_id FROM datasource_schemas WHERE integration_id=:iid LIMIT 1", iid=integration_id)
+            if other:
+                logging.warning("[diagnosis] datasource %s schema cached under account %r, not in (%r,'self') — key mismatch",
+                                integration_id, other[0][0], acct)
+        except Exception:  # noqa: BLE001 — the smell check must never break collection
+            pass
         return None
     s = rows[0][0]
     if isinstance(s, str):
@@ -304,18 +316,31 @@ def _plan_queries(kind, schema):
 
 
 def _summarize_result(body):
-    """Compact a connector result to a tiny shape (shape/count/sample/value) — never raw series."""
+    """Compact a connector result to a tiny shape (count/sample, never raw series). Handles the ACTUAL
+    connector envelopes: Prometheus/Mimir/Loki spread `result` as a list at the top level (+resultType),
+    Tempo returns `traces`, ClickHouse returns `rows`; some shapes nest under `result:{series|...}`."""
     out = {}
-    res = body.get("result", body) if isinstance(body, dict) else {}
-    if isinstance(res, dict):
-        if "shape" in res:
-            out["shape"] = res.get("shape")
-        series = res.get("series") or res.get("rows") or res.get("data")
-        if isinstance(series, list):
-            out["count"] = len(series)
-            out["sample"] = series[:3]
-        elif "value" in res:
-            out["value"] = res.get("value")
+    if not isinstance(body, dict):
+        return out
+    # top-level list-bearing key (prom/loki `result`, tempo `traces`, clickhouse `rows`, generic `data`/`series`)
+    for key in ("result", "traces", "rows", "data", "series"):
+        v = body.get(key)
+        if isinstance(v, list):
+            out["source"], out["count"], out["sample"] = key, len(v), v[:3]
+            break
+    # nested {result:{series|rows|data|value}} (and the synthetic test envelope)
+    if "count" not in out:
+        res = body.get("result")
+        if isinstance(res, dict):
+            series = res.get("series") or res.get("rows") or res.get("data")
+            if isinstance(series, list):
+                out["count"], out["sample"] = len(series), series[:3]
+            elif "value" in res:
+                out["value"] = res.get("value")
+            if "shape" in res:
+                out["shape"] = res.get("shape")
+    if "resultType" in body:
+        out["resultType"] = body.get("resultType")
     return out
 
 
@@ -331,7 +356,7 @@ def collect_datasources(conn):
             "ORDER BY kind, is_default DESC, id"
         )
     except Exception as e:  # noqa: BLE001
-        return _classify("datasources", e)
+        return _classify("datasources_obs", e)
 
     by_kind = {}
     for r in rows or []:
@@ -341,7 +366,7 @@ def collect_datasources(conn):
         instances.extend(lst[:_DS_MAX_INSTANCES_PER_KIND])  # default-first (ORDER BY is_default DESC)
 
     if not instances:
-        return _result("datasources", data={"instances": [], "queried": 0},
+        return _result("datasources_obs", data={"instances": [], "queried": 0},
                        notes="no connected observability datasources")
 
     deadline = _time.time() + _DS_DEADLINE_S
@@ -383,7 +408,7 @@ def collect_datasources(conn):
             for rr in f.get("results", []):
                 rr.pop("summary", None)
         data["_truncated"] = True
-    return _result("datasources", data=data, notes="; ".join(notes)[:300])
+    return _result("datasources_obs", data=data, notes="; ".join(notes)[:300])
 
 
 # Ordered registry of native collectors. `conn` is passed only to DB-backed ones.
