@@ -184,6 +184,16 @@ class TestBlocked(_Base):
         self.assertFalse(body["reachable"])
         self.assertTrue(any(b["layer"] == "route" for b in body["blocking_component"]))
 
+    def test_more_specific_blackhole_overrides_broad_active(self):
+        # longest-prefix-match: a /24 blackhole to dst overrides the broader /16 active local route
+        self.scn["rts"]["subnet-a"] = {"RouteTableId": "rtb-a", "Routes": [
+            {"DestinationCidrBlock": "10.0.0.0/16", "State": "active", "GatewayId": "local"},
+            {"DestinationCidrBlock": "10.0.2.0/24", "State": "blackhole"},
+        ]}
+        out, body = self._call()
+        self.assertFalse(body["reachable"])
+        self.assertTrue(any(b["layer"] == "route" for b in body["blocking_component"]))
+
 
 class TestGuards(_Base):
     def test_unknown_tool(self):
@@ -193,6 +203,10 @@ class TestGuards(_Base):
     def test_target_account_id_popped(self):
         out, body = self._call(target_account_id="123456789012")
         self.assertEqual(out["statusCode"], 200)
+
+    def test_non_integer_port_400(self):
+        out = rr.lambda_handler({"tool_name": "check_reachability", "arguments": {"source": "10.0.1.10", "destination": "10.0.2.20", "port": "abc"}}, None)
+        self.assertEqual(out["statusCode"], 400)
 
     def test_no_mutating_boto3_calls_in_source(self):
         # the mutating APIs may appear in the docstring (explaining what was dropped) but must never

@@ -25,6 +25,7 @@ _K8S = {
     "/api/v1/namespaces": {"items": [
         {"metadata": {"name": "bookinfo", "labels": {"istio-injection": "enabled"}}},
         {"metadata": {"name": "kube-system", "labels": {}}},
+        {"metadata": {"name": "legacy", "labels": {"istio-injection": "disabled"}}},  # explicit opt-out
     ]},
 }
 
@@ -66,6 +67,7 @@ class TestOverview(_Base):
         self.assertEqual(body["counts"]["destinationrules"], 1)
         self.assertIn("bookinfo", body["injected_namespaces"])
         self.assertNotIn("kube-system", body["injected_namespaces"])
+        self.assertNotIn("legacy", body["injected_namespaces"])  # istio-injection: disabled → not injected
 
 
 class TestGuards(_Base):
@@ -80,6 +82,10 @@ class TestGuards(_Base):
     def test_target_account_id_popped(self):
         out, body = self._call("list_istio_gateways", target_account_id="123456789012")
         self.assertEqual(out["statusCode"], 200)
+
+    def test_invalid_namespace_400(self):
+        out = im.lambda_handler({"tool_name": "list_virtual_services", "arguments": {"cluster_name": "c1", "namespace": "Bad/NS"}}, None)
+        self.assertEqual(out["statusCode"], 400)
 
 
 class TestNoSteampipe(unittest.TestCase):

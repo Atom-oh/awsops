@@ -19,7 +19,8 @@ import json
 from cross_account import get_client, get_role_arn
 
 _NUM = {"tcp": "6", "udp": "17", "icmp": "1"}
-_EPHEMERAL = 49152  # representative high port for the stateless NACL return-path check
+_EPHEMERAL = 49152  # one representative port in the 1024-65535 ephemeral range; the stateless NACL
+# return-path is checked at this single port (approximation — see the response disclaimer)
 
 
 def _proto_num(p):
@@ -117,13 +118,23 @@ def _nacl_allows(nacl, proto, port, peer_ip, egress):
 
 
 def _route_exists(rt, dst_ip):
+    # AWS routing is longest-prefix-match: the MOST SPECIFIC matching route wins. A more-specific
+    # blackhole (e.g. a /24 to a deleted peering) overrides a broader active route (local /16), so
+    # we can't just return True on any active match — pick the longest-prefix match and check ITS state.
+    best_len, best_state = -1, None
     for r in rt.get("Routes", []):
-        if r.get("State") == "blackhole":
-            continue
         cidr = r.get("DestinationCidrBlock")
-        if cidr and _cidr_contains(cidr, dst_ip):
-            return True
-    return False
+        if not cidr or not _cidr_contains(cidr, dst_ip):
+            continue
+        try:
+            plen = int(cidr.split("/")[1])
+        except (IndexError, ValueError):
+            continue
+        if plen > best_len:
+            best_len, best_state = plen, r.get("State")
+    if best_len < 0:
+        return False
+    return best_state != "blackhole"
 
 
 def _nacl_for(ec2, subnet):
@@ -199,9 +210,11 @@ def check_reachability(ec2, source, destination, port, proto):
         "blocking_component": blocking,
         "checked": checked,
         "disclaimer": (
-            "Static SG/NACL/route approximation (same-account). Does NOT model Transit Gateway route "
-            "tables/blackholes, instance-level firewalls, prefix-list contents, or DNS. Use AWS "
-            "Reachability Analyzer for a definitive packet-level verdict."
+            "Static SG/NACL/route approximation (same-account). Route uses longest-prefix-match incl. "
+            "blackholes, but does NOT model Transit Gateway route tables, the destination return route, "
+            "instance-level firewalls, prefix-list contents, or DNS; the NACL return-path is checked at "
+            "a single representative ephemeral port. Use AWS Reachability Analyzer for a definitive "
+            "packet-level verdict."
         ),
     }
 
@@ -220,7 +233,10 @@ def lambda_handler(event, context):
     destination = args.get("destination")
     if not source or not destination:
         return {"statusCode": 400, "body": json.dumps({"error": "source and destination are required"})}
-    port = int(args.get("port", 443))
+    try:
+        port = int(args.get("port", 443))  # catalog declares port as a string → validate
+    except (TypeError, ValueError):
+        return {"statusCode": 400, "body": json.dumps({"error": f"port must be an integer, got {args.get('port')!r}"})}
     proto = str(args.get("protocol", "tcp")).lower()
     region = args.get("region", "ap-northeast-2")
 

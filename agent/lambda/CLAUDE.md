@@ -1,20 +1,21 @@
 # Lambda 모듈 / Lambda Module
 
 ## 역할 / Role
-AgentCore 게이트웨이 MCP 도구용 19개 Lambda 함수 + 1개 공유 모듈. 각 Lambda는 특정 AWS 서비스 작업을 구현.
-(19 Lambda functions + 1 shared module for AgentCore Gateway MCP tools.)
+AgentCore 게이트웨이 MCP 도구용 Lambda 함수 + 공유 모듈. 각 Lambda는 특정 AWS 서비스 작업을 구현.
+(Lambda functions + shared modules for AgentCore Gateway MCP tools. +3 v2 read-only sources added
+2026-06-18: core_helpers / reachability_read / istio_read — see the per-gateway lists below.)
 
 ## 주요 파일 / Key Files
 - `create_targets.py` — 8개 게이트웨이에 걸쳐 20개 게이트웨이 타겟 생성 (Creates all 20 Gateway Targets across 8 Gateways, Python/boto3)
 - `cross_account.py` — 크로스 어카운트 STS AssumeRole 헬퍼 (credential 캐싱 50분, ExternalId, 감사 로그) (Cross-account credential helper with caching, audit logging)
 
-### Network Gateway (17 tools)
+### Network Gateway (17 v1 + reachability-read 1 = 18)
 - `network_mcp.py` — VPC, TGW, VPN, ENI, Network Firewall (15 tools)
 - `reachability.py` — Reachability Analyzer (1 tool) — ⚠️ v1, **dark in v2** (creates a network-insights path = mutation)
 - `reachability_read_mcp.py` [v2 read-only] — computed ENI↔EC2 connectivity, describe-only, static SG/NACL/route (1 tool: `check_reachability`)
 - `flowmonitor.py` — VPC Flow Logs 조회/분석 (1 tool)
 
-### Container Gateway (24 tools)
+### Container Gateway (24 v1 + istio-read 7 = 31)
 - `aws_eks_mcp.py` — EKS clusters, CloudWatch, IAM, troubleshooting (9 tools)
 - `aws_ecs_mcp.py` — ECS clusters/services/tasks, troubleshooting (3 tools)
 - `aws_istio_mcp.py` [VPC] — Istio CRDs via Steampipe K8s tables (12 tools) — ⚠️ v1, **dark in v2** (needs live Steampipe, ADR-037)
@@ -42,7 +43,7 @@ AgentCore 게이트웨이 MCP 도구용 19개 Lambda 함수 + 1개 공유 모듈
 - `aws_cost_mcp.py` — Cost Explorer, Pricing, Budgets (9 tools)
 - `aws_finops_mcp.py` — Compute Optimizer, RI/SP Recommendations, Cost Optimization Hub, Trusted Advisor (5 tools)
 
-### Ops Gateway (9 tools)
+### Ops Gateway (9 v1 + core-helpers 2 = 11)
 - `aws_knowledge.py` — AWS Knowledge MCP 프록시 (Proxy to AWS Knowledge MCP, 5 tools)
 - `aws_core_mcp.py` — 프롬프트 이해, AWS CLI 실행 (3 tools) — ⚠️ `call_aws` arbitrary-CLI is a mutation vector; **dark in v2**
 - `core_helpers_mcp.py` [v2 read-only] — prompt_understanding + suggest_aws_commands only (2 static tools; no `call_aws`)

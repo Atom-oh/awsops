@@ -27,7 +27,7 @@ PROMPT_UNDERSTANDING = """# AWS Solution Design Guide
 - Data: Redshift, Athena, Glue, Kinesis
 - Frontend: Amplify, CloudFront, AppSync, API Gateway
 - Security: Cognito, IAM, KMS, WAF
-- DevOps: CDK, CloudFormation, CodePipeline
+- DevOps: Terraform, CloudFormation, CodePipeline
 - Monitoring: CloudWatch, X-Ray, CloudTrail
 
 ## Design Principles
@@ -35,7 +35,7 @@ PROMPT_UNDERSTANDING = """# AWS Solution Design Guide
 - Pay-per-use pricing models
 - Built-in security (encryption at rest/transit, least privilege)
 - Multi-AZ for high availability
-- Infrastructure as Code (CDK preferred)
+- Infrastructure as Code (Terraform preferred)
 
 ## Available MCP Tools (read-only)
 - search_documentation: Search AWS docs

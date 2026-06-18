@@ -115,7 +115,8 @@ def _mesh_overview(session):
         ns = _k8s_get(endpoint, "/api/v1/namespaces", token, ctx)
         for n in ns.get("items", []):
             labels = n.get("metadata", {}).get("labels", {}) or {}
-            if "istio-injection" in labels or labels.get("istio.io/rev"):
+            # match value, not mere presence — `istio-injection: disabled` is an explicit opt-OUT
+            if labels.get("istio-injection") == "enabled" or labels.get("istio.io/rev"):
                 injected.append(n["metadata"]["name"])
     except Exception:
         pass
@@ -144,5 +145,7 @@ def lambda_handler(event, context):
         gv, plural = _CRDS[tool_name]
         items = _list_crd(session, gv, plural, args.get("namespace"))
         return {"statusCode": 200, "body": json.dumps({plural: items})}
+    except ValueError as e:
+        return {"statusCode": 400, "body": json.dumps({"error": str(e)})}  # bad input (e.g. namespace)
     except Exception as e:
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
