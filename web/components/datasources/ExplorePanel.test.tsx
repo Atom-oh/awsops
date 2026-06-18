@@ -48,9 +48,11 @@ describe('ExplorePanel', () => {
     });
   });
 
-  it('when scoped to an instanceId, hides the picker', async () => {
+  it('when scoped to an instanceId, shows the picker preselected to that instance (no dead-end)', async () => {
     render(<ExplorePanel instanceId={1} />);
     await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
-    expect(screen.queryByRole('combobox')).toBeNull();
+    const sel = screen.getByRole('combobox') as HTMLSelectElement;
+    expect(sel).toBeTruthy();
+    await waitFor(() => expect(sel.value).toBe('1')); // preselected to the scoped instance id (numeric, not "select…")
   });
 });

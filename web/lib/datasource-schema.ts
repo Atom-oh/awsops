@@ -17,7 +17,9 @@ export interface CachedSchema {
 
 function mapRow(r: Record<string, unknown>): CachedSchema {
   return {
-    integrationId: r.integration_id as number,
+    // BIGINT integration_id comes back from node-pg as a STRING — coerce so it matches the numeric
+    // datasource id (chat injection keys schemas by integrationId and looks them up by datasource id).
+    integrationId: Number(r.integration_id),
     kind: (r.kind as string) ?? null,
     schema: r.schema,
     fetched_at: r.fetched_at as string,

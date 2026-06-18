@@ -95,7 +95,9 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
   return (
     <div className="space-y-4">
       <Card className="p-4 space-y-3">
-        {!instanceId && (
+        {/* Always show the picker (preselected to the scoped instance) — never a dead-end if the
+            scoped id isn't in the list yet. */}
+        {(
           <div className="flex flex-wrap items-center gap-2">
             <select className={selectCls} value={selId} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); }}>
               <option value="">데이터소스 선택…</option>
