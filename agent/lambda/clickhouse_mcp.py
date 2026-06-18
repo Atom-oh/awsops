@@ -32,7 +32,10 @@ MAX_ROWS_CAP = 1000
 
 _READ_VERBS = ("SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXISTS")
 _DANGER = re.compile(
-    r"\b(INSERT|ALTER|DROP|CREATE|DELETE|TRUNCATE|OPTIMIZE|ATTACH|DETACH|SET|SYSTEM|GRANT|REVOKE|KILL|MOVE|RENAME)\b",
+    r"\b(?:INSERT|ALTER|DROP|CREATE|DELETE|TRUNCATE|OPTIMIZE|ATTACH|DETACH|SET|GRANT|REVOKE|KILL|MOVE|RENAME)\b"
+    # SYSTEM the admin COMMAND (SYSTEM RELOAD/STOP/…), but NOT a `system.<table>` reference — the latter is
+    # a read of the system database (e.g. SELECT … FROM system.tables for schema introspection).
+    r"|\bSYSTEM\b(?!\s*\.)",
     re.IGNORECASE,
 )
 # ClickHouse table functions = server-side SSRF / cross-datastore reads / script exec (readonly=1 does
@@ -187,14 +190,31 @@ def clickhouse_schema(args):
                 version = list(vrows[0].values())[0]
     except Exception:  # noqa: BLE001 — version is best-effort, never fail the schema fetch
         version = None
-    tbls = _run_sql("SHOW TABLES", MAX_SCHEMA_TABLES)
-    if tbls["statusCode"] != 200:
-        return tbls
-    rows = json.loads(tbls["body"]).get("rows", [])
-    names = [list(r.values())[0] for r in rows if isinstance(r, dict) and r][:MAX_SCHEMA_TABLES]
+    # Enumerate user tables across ALL non-system databases. `SHOW TABLES` only lists the CURRENT database
+    # (usually `default`, which is often empty); real data frequently lives in a named DB (e.g. `otel`), so
+    # default-only introspection returned 0 tables and the model never saw the schema. system.tables gives
+    # (database, name) for every DB; we DESCRIBE each as `db.table` so the model gets fully-qualified names.
+    names: list[str] = []
+    st = _run_sql(
+        "SELECT database, name FROM system.tables "
+        "WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') "
+        "ORDER BY database, name",
+        MAX_SCHEMA_TABLES,
+    )
+    if st["statusCode"] == 200:
+        for r in json.loads(st["body"]).get("rows", []):
+            if isinstance(r, dict) and r.get("database") and r.get("name"):
+                names.append(f"{r['database']}.{r['name']}")
+    else:
+        # Fallback to current-database SHOW TABLES if system.tables is unavailable (e.g. restricted grants).
+        tbls = _run_sql("SHOW TABLES", MAX_SCHEMA_TABLES)
+        if tbls["statusCode"] != 200:
+            return tbls
+        names = [list(r.values())[0] for r in json.loads(tbls["body"]).get("rows", []) if isinstance(r, dict) and r]
+    names = names[:MAX_SCHEMA_TABLES]
     tables = []
     for n in names:
-        if not _IDENTIFIER.match(str(n)):
+        if not _IDENTIFIER.match(str(n)):  # `db.table` or `table` only (defense-in-depth)
             continue
         d = _run_sql(f"DESCRIBE TABLE {n}", MAX_SCHEMA_COLS)
         if d["statusCode"] != 200:

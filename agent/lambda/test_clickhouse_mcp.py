@@ -32,6 +32,15 @@ class TestReadOnlyGuard(unittest.TestCase):
                   "RENAME TABLE a TO b", "SYSTEM RELOAD", "SET max_threads=1"]:
             self._bad(s)
 
+    def test_allow_system_database_read(self):
+        # `system.<table>` is a READ of the system database (schema introspection), NOT the SYSTEM admin
+        # command — the \bSYSTEM\b danger token used to false-reject these. Must be allowed now.
+        for s in ["SELECT database, name FROM system.tables",
+                  "SELECT name, type FROM system.columns WHERE database = 'otel'",
+                  "SELECT * FROM system.databases"]:
+            self._ok(s)
+        self._bad("SYSTEM STOP MERGES")  # the command is still blocked (first-token + danger)
+
     def test_reject_stacked(self):
         self._bad("SELECT 1; DROP TABLE t")
         self._bad("SELECT/**/1 ;  INSERT INTO t VALUES (1)")
@@ -156,16 +165,28 @@ class TestSchema(unittest.TestCase):
     def setUp(self):
         self._ld=mock.patch.object(ch,"load_datasource",return_value=DS); self._ld.start(); self.addCleanup(self._ld.stop)
         self._ah=mock.patch.object(ch,"assert_host_allowed",return_value=None); self._ah.start(); self.addCleanup(self._ah.stop)
-    def test_schema_tables_columns_and_version(self):
-        # schema now probes SELECT version() FIRST, then SHOW TABLES, then DESCRIBE per table.
-        seq=[(200,{"data":[{"v":"24.3.1"}]}),                       # SELECT version()
-             (200,{"data":[{"name":"events"}]}),                    # SHOW TABLES
-             (200,{"data":[{"name":"ts","type":"DateTime"},{"name":"msg","type":"String"}]})]  # DESCRIBE
+    def test_schema_enumerates_across_databases(self):
+        # schema probes SELECT version() FIRST, then system.tables (ALL non-system DBs), then DESCRIBE
+        # each as db.table — so tables in a NON-default DB (e.g. `otel`) are captured (the prior
+        # SHOW-TABLES-only path saw the empty `default` DB and returned 0 tables).
+        seq=[(200,{"data":[{"v":"24.3.1"}]}),                                       # SELECT version()
+             (200,{"data":[{"database":"otel","name":"otel_traces"}]}),             # system.tables
+             (200,{"data":[{"name":"ServiceName","type":"String"},{"name":"Duration","type":"UInt64"}]})]  # DESCRIBE otel.otel_traces
+        with mock.patch.object(ch,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
+            out=ch.lambda_handler({"tool_name":"clickhouse_schema","arguments":{}},None)
+        b=json.loads(out["body"]); self.assertEqual(b["tables"][0]["name"],"otel.otel_traces")  # DB-qualified
+        self.assertEqual([c["name"] for c in b["tables"][0]["columns"]],["ServiceName","Duration"])
+        self.assertEqual(b["version"],"24.3.1")  # captured for version-aware SQL
+
+    def test_schema_falls_back_to_show_tables_when_system_tables_unavailable(self):
+        # If system.tables can't be read (restricted grants → non-200), fall back to current-DB SHOW TABLES.
+        seq=[(200,{"data":[{"v":"24.3.1"}]}),               # version()
+             (403,{"raw":"Not enough privileges"}),         # system.tables denied
+             (200,{"data":[{"name":"events"}]}),            # SHOW TABLES (fallback)
+             (200,{"data":[{"name":"ts","type":"DateTime"}]})]  # DESCRIBE events
         with mock.patch.object(ch,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
             out=ch.lambda_handler({"tool_name":"clickhouse_schema","arguments":{}},None)
         b=json.loads(out["body"]); self.assertEqual(b["tables"][0]["name"],"events")
-        self.assertEqual([c["name"] for c in b["tables"][0]["columns"]],["ts","msg"])
-        self.assertEqual(b["version"],"24.3.1")  # captured for version-aware SQL
 
     def test_instance_id_resolves_per_instance_credential_blind(self):
         ch.load_datasource.reset_mock()
