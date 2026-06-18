@@ -178,6 +178,15 @@ MAX_SCHEMA_COLS = 200
 
 
 def clickhouse_schema(args):
+    version = None
+    try:  # best-effort server version for version-aware SQL (dialect differs across ClickHouse releases)
+        vr = _run_sql("SELECT version() AS v", 1)
+        if vr["statusCode"] == 200:
+            vrows = json.loads(vr["body"]).get("rows", [])
+            if vrows and isinstance(vrows[0], dict) and vrows[0]:
+                version = list(vrows[0].values())[0]
+    except Exception:  # noqa: BLE001 — version is best-effort, never fail the schema fetch
+        version = None
     tbls = _run_sql("SHOW TABLES", MAX_SCHEMA_TABLES)
     if tbls["statusCode"] != 200:
         return tbls
@@ -192,7 +201,7 @@ def clickhouse_schema(args):
             continue
         cols = json.loads(d["body"]).get("rows", [])[:MAX_SCHEMA_COLS]
         tables.append({"name": n, "columns": [{"name": c.get("name"), "type": c.get("type")} for c in cols if isinstance(c, dict)]})
-    return ok({"tables": tables, "truncated": len(names) >= MAX_SCHEMA_TABLES})
+    return ok({"version": version, "tables": tables, "truncated": len(names) >= MAX_SCHEMA_TABLES})
 
 
 def clickhouse_health(args):
@@ -210,24 +219,31 @@ _TOOLS = {
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
-    set_request_conn(params.get("conn_config"))  # inline conn-config (BFF) > slug map
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    inst = args.get("instance_id") if isinstance(args, dict) else None
+    conn = params.get("conn_config")
     if isinstance(args, dict):
         args.pop("target_account_id", None)  # ClickHouse is account-agnostic (HTTP endpoint)
-    fn = _TOOLS.get(t)
-    if fn is None:
-        return err(f"unknown tool: {t}")
+        args.pop("instance_id", None)        # routing arg, not a tool arg
     try:
+        # BFF inline conn (trusted) > per-instance secret (credential-blind worker) > kind-mirror default.
+        if conn:
+            set_request_conn(conn)
+        elif inst is not None:
+            set_request_conn(load_datasource(SLUG, instance_id=inst))
+        else:
+            set_request_conn(None)
+        fn = _TOOLS.get(t)
+        if fn is None:
+            return err(f"unknown tool: {t}")
         return fn(args)
-    except ValueError as e:
-        return err(str(e))
-    except NotConnected as e:
-        return err(str(e))
-    except SsrfBlocked as e:
+    except (ValueError, NotConnected, SsrfBlocked) as e:
         return err(str(e))
     except Exception as e:  # noqa: BLE001 — never leak a stack trace (or credentials) to the gateway
         return err(f"clickhouse error: {e}")
+    finally:
+        set_request_conn(None)  # guaranteed reset — no warm-container bleed
 
 
 def ok(body):
