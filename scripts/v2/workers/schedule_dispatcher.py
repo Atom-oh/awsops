@@ -33,26 +33,63 @@ _CLAIM_SQL = (
 )
 
 
+def _coerce_config(config):
+    """pg8000 usually returns JSONB as a dict, but tolerate a JSON string (and anything else) so a row can
+    never throw AFTER the claim already advanced next_run_at (that would silently drop the scheduled run)."""
+    if isinstance(config, str):
+        try:
+            return json.loads(config)
+        except (ValueError, TypeError):
+            return {}
+    return config if isinstance(config, dict) else {}
+
+
+def _create_report(conn, tier, requested_by):
+    """Pre-create a visible 'running' diagnosis_reports row (mirrors diagnosis/db.create_report) so the
+    scheduled run is tracked in the UI and a failure before _report runs is not invisible."""
+    rows = conn.run(
+        "INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status) "
+        "VALUES (NULL, :t, :rb, 'running') RETURNING id",
+        t=tier, rb=requested_by,
+    )
+    return rows[0][0]
+
+
 def _enqueue_report(conn, user_sub, config):
-    cfg = config or {}
+    cfg = _coerce_config(config)
     account = cfg.get("account") or HOST_ACCOUNT
+    tier = cfg.get("tier", "mid")
+    report_id = _create_report(conn, tier, user_sub)  # visible 'running' row first
     job_id = str(uuid.uuid4())
     payload = {
         "account": account,
-        "tier": cfg.get("tier", "mid"),
+        "tier": tier,
         "model": cfg.get("model"),
         "requested_by": user_sub,
+        "report_id": report_id,  # _report uses this → no duplicate self-created row
         "scheduled": True,
     }
-    db.insert_job(conn, job_id, "report", payload)  # durable ledger row (source of truth)
-    _sqs.send_message(
-        QueueUrl=QUEUE_URL,
-        MessageBody=json.dumps({"job_id": job_id, "type": "report", "payload": payload, "dry_run": False}),
-    )
+    db.insert_job(conn, job_id, "report", payload)  # durable ledger row (FK target for the link)
+    conn.run("UPDATE diagnosis_reports SET worker_job_id = :jid WHERE id = :rid", jid=job_id, rid=report_id)
+    try:
+        _sqs.send_message(
+            QueueUrl=QUEUE_URL,
+            MessageBody=json.dumps({"job_id": job_id, "type": "report", "payload": payload, "dry_run": False}),
+        )
+    except Exception:
+        # Ledger row + report exist but no SFN trigger — mark the report failed (mirrors the BFF's
+        # EnqueueDeliveryError handling) so it never appears stuck 'running'. Re-raise → counted as failed.
+        conn.run(
+            "UPDATE diagnosis_reports SET status = 'failed', error = 'enqueue delivery failed' WHERE id = :rid",
+            rid=report_id,
+        )
+        raise
     return job_id
 
 
 def lambda_handler(_event, _ctx):
+    if not QUEUE_URL:
+        raise RuntimeError("JOBS_QUEUE_URL is required for schedule_dispatcher")  # fail loud, not silent no-op
     conn = db.connect()
     try:
         due = conn.run(_CLAIM_SQL)  # atomic claim+advance

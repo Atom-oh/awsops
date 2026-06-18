@@ -52,7 +52,7 @@ function mapRow(r: Row): DiagnosisSchedule {
 export async function readSchedule(userSub: string): Promise<DiagnosisSchedule | null> {
   const { rows } = await getPool().query<Row>(
     `SELECT schedule_type, enabled, next_run_at, last_run_at, config
-       FROM report_schedules WHERE user_sub = $1 ORDER BY updated_at DESC LIMIT 1`,
+       FROM report_schedules WHERE user_sub = $1 ORDER BY enabled DESC, updated_at DESC LIMIT 1`,
     [userSub],
   );
   return rows.length ? mapRow(rows[0]) : null;
@@ -65,6 +65,14 @@ export async function upsertSchedule(
 ): Promise<DiagnosisSchedule> {
   const nextRunAt = computeNextRun(input.scheduleType, input.nowISO ?? new Date().toISOString());
   const config = { tier: input.tier ?? 'mid', model: input.model ?? null };
+  // One active schedule per user. The table's conflict key is (user_sub, schedule_type), so changing
+  // frequency (e.g. weekly→monthly) would INSERT a new row and leave the previous one enabled — the
+  // dispatcher (WHERE enabled) would then fire BOTH, and readSchedule (LIMIT 1) would hide the leak.
+  // Disable every other-frequency row for this user before upserting the chosen one.
+  await getPool().query(
+    `UPDATE report_schedules SET enabled = false WHERE user_sub = $1 AND schedule_type <> $2`,
+    [userSub, input.scheduleType],
+  );
   const { rows } = await getPool().query<Row>(
     `INSERT INTO report_schedules (user_sub, schedule_type, enabled, next_run_at, config)
      VALUES ($1, $2, $3, $4, $5::jsonb)

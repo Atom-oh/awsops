@@ -158,4 +158,13 @@ describe('rdsMetrics', () => {
     const { rdsMetrics } = await import('./metrics');
     expect(await rdsMetrics(['db-1'])).toEqual({ byInstance: {}, avgCpu: null });
   });
+
+  it('batches >62 instances into multiple GetMetricData calls (no silent truncation)', async () => {
+    cwSend.mockResolvedValue({ MetricDataResults: [{ Id: 'cpu_i0', Values: [10] }] });
+    const { rdsMetrics } = await import('./metrics');
+    const ids = Array.from({ length: 63 }, (_, i) => `db-${i}`);
+    const r = await rdsMetrics(ids);
+    expect(cwSend).toHaveBeenCalledTimes(2);       // 63 → chunk(62) + chunk(1)
+    expect(Object.keys(r.byInstance)).toHaveLength(63); // every instance represented
+  });
 });

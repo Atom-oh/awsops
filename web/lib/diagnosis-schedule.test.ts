@@ -36,14 +36,19 @@ describe('upsertSchedule', () => {
       rows: [{ schedule_type: 'weekly', enabled: true, next_run_at: '2026-06-25T00:00:00.000Z', last_run_at: null, config: { tier: 'mid', model: null } }],
     });
     const s = await upsertSchedule('u1', { scheduleType: 'weekly', enabled: true, tier: 'mid', nowISO: '2026-06-18T00:00:00.000Z' });
-    const [sql, params] = queryMock.mock.calls[0];
-    expect(sql).toMatch(/INSERT INTO report_schedules/);
-    expect(sql).toMatch(/ON CONFLICT \(user_sub, schedule_type\)/);
+    // disable-others UPDATE runs first (no cross-frequency double-fire)
+    const disable = queryMock.mock.calls.find((c) => /UPDATE report_schedules SET enabled = false/.test(c[0] as string));
+    expect(disable).toBeTruthy();
+    expect(disable![1]).toEqual(['u1', 'weekly']);
+    // then the upsert
+    const insert = queryMock.mock.calls.find((c) => /INSERT INTO report_schedules/.test(c[0] as string))!;
+    expect(insert[0]).toMatch(/ON CONFLICT \(user_sub, schedule_type\)/);
+    const params = insert[1] as unknown[];
     expect(params[0]).toBe('u1');
     expect(params[1]).toBe('weekly');
     expect(params[2]).toBe(true);
     expect(params[3]).toBe('2026-06-25T00:00:00.000Z'); // recomputed next_run_at
-    expect(JSON.parse(params[4])).toEqual({ tier: 'mid', model: null });
+    expect(JSON.parse(params[4] as string)).toEqual({ tier: 'mid', model: null });
     expect(s.scheduleType).toBe('weekly');
   });
 
@@ -52,8 +57,14 @@ describe('upsertSchedule', () => {
       rows: [{ schedule_type: 'monthly', enabled: false, next_run_at: '2026-07-18T00:00:00.000Z', last_run_at: null, config: { tier: 'mid', model: null } }],
     });
     await upsertSchedule('u1', { scheduleType: 'monthly', enabled: false, nowISO: '2026-06-18T00:00:00.000Z' });
-    const params = queryMock.mock.calls[0][1];
-    expect(params[2]).toBe(false);
-    expect(params[3]).toBe('2026-07-18T00:00:00.000Z'); // next_run_at present even when disabled
+    const insert = (queryMock.mock.calls.find((c) => /INSERT INTO report_schedules/.test(c[0] as string))!)[1] as unknown[];
+    expect(insert[2]).toBe(false);
+    expect(insert[3]).toBe('2026-07-18T00:00:00.000Z'); // next_run_at present even when disabled
+  });
+
+  it('disables other-frequency rows even when the target is the only one (idempotent)', async () => {
+    queryMock.mockResolvedValue({ rows: [{ schedule_type: 'weekly', enabled: true, next_run_at: '2026-06-25T00:00:00.000Z', last_run_at: null, config: {} }] });
+    await upsertSchedule('u1', { scheduleType: 'weekly', enabled: true });
+    expect(queryMock.mock.calls.some((c) => /UPDATE report_schedules SET enabled = false/.test(c[0] as string) && (c[1] as unknown[])[1] === 'weekly')).toBe(true);
   });
 });

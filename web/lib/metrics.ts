@@ -63,7 +63,7 @@ const emptyRds = (): RdsInstanceMetrics => ({
  * truncation). Degrades to an empty result on any CloudWatch error (never throws).
  */
 export async function rdsMetrics(instanceIds: string[], accountId?: string): Promise<RdsMetrics> {
-  const ids = instanceIds.slice(0, 100);
+  const ids = instanceIds; // no silent cap — the 62/call chunk loop below covers any fleet size
   if (!ids.length) return { byInstance: {}, avgCpu: null };
   const byInstance: Record<string, RdsInstanceMetrics> = {};
   try {

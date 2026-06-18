@@ -61,7 +61,8 @@ function queryOnlyPrompt(lang: string): string {
     `You translate a natural-language request into a single ${lang} query.`,
     `Output ONLY the query inside one fenced code block — no explanation, no prose, no multiple queries.`,
     LANG_GUIDE[lang] || '',
-    `Use ONLY names present in the provided datasource schema. If NO schema is provided, do NOT invent real metric/table/label names — write a generic ${lang} skeleton with obvious placeholder names the user can replace, since the schema must be refreshed first.`,
+    `The metric/label/table names shown in the examples above are ILLUSTRATIVE syntax only — never copy them into the output.`,
+    `Use ONLY names present in the provided datasource schema. If NO schema is provided, do NOT invent real metric/table/label names — write a generic ${lang} skeleton with obvious placeholder names (e.g. <metric_name>) the user can replace, since the schema must be refreshed first.`,
   ].filter(Boolean).join(' ');
 }
 
