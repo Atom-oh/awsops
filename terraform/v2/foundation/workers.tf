@@ -792,6 +792,15 @@ resource "aws_iam_role_policy" "worker_task_datasource_invoke" {
   count = local.dsd
   name  = "${var.project}-worker-datasource-invoke"
   role  = aws_iam_role.worker_task[0].id
+  # Fail LOUD (CLAUDE.md: no silent caps) if the flag is set but the connector Lambdas it grants
+  # InvokeFunction on won't exist — agentcore_enabled + integrations_enabled create the
+  # ${var.project}-agent-*-mcp functions. Without this the worker would silently degrade on AccessDenied.
+  lifecycle {
+    precondition {
+      condition     = var.agentcore_enabled && var.integrations_enabled
+      error_message = "datasource_diagnosis_enabled requires agentcore_enabled AND integrations_enabled (they create the ${var.project}-agent-*-mcp connector Lambdas this grants lambda:InvokeFunction on)."
+    }
+  }
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{

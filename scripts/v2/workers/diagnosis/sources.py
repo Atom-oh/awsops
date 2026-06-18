@@ -255,10 +255,12 @@ def _invoke_connector(kind, tool, instance_id, arguments=None):
 
 
 def _ds_schema(conn, integration_id):
-    """Cached introspected schema for one instance. Scoped to the BFF's account-key convention
-    (host account ∪ 'self') per spec §8 — NOT integration_id alone — so a cross-tenant row can't be
-    read. If the instance is configured but no row matches the account scope, emit a key-mismatch
-    smell (a schema cached under a different account key)."""
+    """Cached introspected schema for one instance. PREFERS the BFF's account-key convention
+    (host account ∪ 'self', exact-account first) per spec §8, then FALLS BACK to integration_id alone
+    so a worker/BFF account-key mismatch doesn't blank the collector. This is a PREFERENCE, NOT an
+    enforced cross-tenant boundary — it is safe ONLY because `integrations` is single-account (the
+    table has no account_id, so one integration_id = exactly one instance); the fallback logs a
+    key-mismatch smell. (If this ever becomes multi-tenant, remove the fallback and enforce isolation upstream.)"""
     acct = os.environ.get("HOST_ACCOUNT_ID") or os.environ.get("AWS_ACCOUNT_ID") or "self"
     rows = conn.run(
         "SELECT schema FROM datasource_schemas WHERE account_id IN (:acct, 'self') AND integration_id=:iid "
