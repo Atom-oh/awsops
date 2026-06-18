@@ -11,6 +11,8 @@ class SlideFramework {
     this.onSlideChange = options.onSlideChange || null;
     this.footer = options.footer || null;
     this.logoSrc = options.logoSrc || null;
+    // Logo shown on dark slides (white/light logo). Falls back to logoSrc when unset.
+    this.logoDarkSrc = options.logoDarkSrc || null;
     this.presenterNotes = options.presenterNotes || {};
     this.presenterView = null;
     this.slideActions = {};  // { slideIndex: { up: fn, down: fn } }
@@ -295,7 +297,19 @@ class SlideFramework {
     const footer = deck.querySelector('.slide-footer');
     // Hide framework logo/footer when the current slide already contains an <img>
     const hide = slide.querySelector('img') !== null;
-    if (logo) logo.style.display = hide ? 'none' : '';
+    if (logo) {
+      logo.style.display = hide ? 'none' : '';
+      // Per-slide adaptive logo: dark slides show the light/white logo, light slides
+      // show the default (dark) logo. A slide is "dark" when it (or the deck) carries
+      // the theme-dark class. Only swaps when a distinct dark logo was supplied.
+      if (this.logoDarkSrc) {
+        const deckDark = (this.getDeck() || document.body).classList.contains('theme-dark');
+        const slideDark = slide.classList.contains('theme-dark') ||
+          (deckDark && !slide.classList.contains('theme-light'));
+        const want = slideDark ? this.logoDarkSrc : this.logoSrc;
+        if (want && logo.getAttribute('src') !== want) logo.src = want;
+      }
+    }
     if (footer) footer.style.display = hide ? 'none' : '';
     const slideNum = deck.querySelector('.slide-number');
     if (slideNum) slideNum.style.display = hide ? 'none' : '';
@@ -375,12 +389,16 @@ class SlideFramework {
         case 'next':
           e.preventDefault();
           if (this.overviewMode) return;
-          this.next();
+          if (!this.revealNextFragment()) {
+            this.next();
+          }
           break;
         case 'prev':
           e.preventDefault();
           if (this.overviewMode) return;
-          this.prev();
+          if (!this.revealPrevFragment()) {
+            this.prev();
+          }
           break;
         case 'down':
           e.preventDefault();
@@ -451,7 +469,11 @@ class SlideFramework {
     deck.addEventListener('touchend', (e) => {
       const dx = e.changedTouches[0].clientX - startX;
       if (Math.abs(dx) > 50) {
-        dx < 0 ? this.next() : this.prev();
+        if (dx < 0) {
+          if (!this.revealNextFragment()) this.next();
+        } else {
+          if (!this.revealPrevFragment()) this.prev();
+        }
       }
     }, { passive: true });
   }
@@ -574,14 +596,25 @@ class SlideFramework {
       return false;
     }
 
-    // Try tabs
+    // Try tabs — detect .tab-bar container first, then fall back to any .tab-btn group
     const tabBar = slide.querySelector('.tab-bar');
-    if (tabBar) {
-      const tabs = Array.from(tabBar.querySelectorAll('.tab-btn'));
-      const activeIdx = tabs.findIndex(t => t.classList.contains('active'));
-      const nextIdx = Math.max(0, Math.min(activeIdx + direction, tabs.length - 1));
+    const tabBtns = tabBar
+      ? Array.from(tabBar.querySelectorAll('.tab-btn'))
+      : Array.from(slide.querySelectorAll('.tab-btn'));
+    if (tabBtns.length > 1) {
+      // Detect active tab: .active class OR visually highlighted (inline background)
+      let activeIdx = tabBtns.findIndex(t => t.classList.contains('active'));
+      if (activeIdx < 0) {
+        // Self-contained tabs use inline style instead of .active class
+        activeIdx = tabBtns.findIndex(t => {
+          const bg = (t.style.background || t.style.backgroundColor || '').toLowerCase();
+          return bg.includes('#00d4ff') || bg.includes('var(--accent');
+        });
+      }
+      if (activeIdx < 0) activeIdx = 0;
+      const nextIdx = Math.max(0, Math.min(activeIdx + direction, tabBtns.length - 1));
       if (nextIdx !== activeIdx) {
-        tabs[nextIdx].click();
+        tabBtns[nextIdx].click();
         return true;
       }
       return false;
