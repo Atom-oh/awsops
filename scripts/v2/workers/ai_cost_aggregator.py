@@ -31,10 +31,11 @@ _UPSERT = (
     "cache_read_tokens = EXCLUDED.cache_read_tokens, cache_write_tokens = EXCLUDED.cache_write_tokens, "
     "updated_at = now()"
 )
-# NOTE: legacy rows keyed by the full inference-profile ARN (pre-normalization) are cleaned up ONCE by
-# the migration `…_merge_legacy_modelid.sql` (merges them into the canonical key, summing tokens). The
-# recurring aggregator below does NOT mutate legacy rows — normalize_model() guarantees every NEW row is
-# canonical, so no slash-keyed rows are ever created going forward (no ongoing cleanup needed).
+# NOTE: normalize_model() guarantees every NEW row is keyed by the canonical id (no '/'), so the
+# aggregator never creates slash-keyed rows going forward. Any pre-normalization ARN-keyed rows left in
+# the table are HARMLESS: the read path (web/lib/ai-usage.ts priceUsage) collapses rows by canonical
+# model at read time, so an ARN-key + bare-key pair can never double-count regardless of deploy order.
+# Hence no cleanup DELETE/migration here — read-path normalization is the order-independent guarantee.
 
 
 def _run_insights(start_epoch: int, end_epoch: int):
