@@ -130,6 +130,139 @@ export function inventoryGroups(): { group: string; types: string[] }[] {
   })).filter((g) => g.types.length > 0);
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Nav tree (sidebar IA) — collapsible groups + 2-level subgroups + per-group
+// overview pages. ADDITIVE over inventoryGroups(): that stays the flat source
+// for CommandPalette + mobile-tabs; navTree() is the sidebar's hierarchy.
+// ───────────────────────────────────────────────────────────────────────────
+
+// summary.splits keys (see app/api/inventory/summary/route.ts) shown on overviews.
+export type SplitKey = 'ec2Running' | 'ec2Stopped' | 'ebsUnencrypted' | 'iamUserNoMfa' | 'sgOpenIngress';
+// Splits representing something needing attention — drive the overview verdict.
+export const ATTENTION_SPLITS: SplitKey[] = ['ec2Stopped', 'ebsUnencrypted', 'sgOpenIngress', 'iamUserNoMfa'];
+
+interface SubgroupMeta { key: string; labelKey: string; types: string[] }
+interface GroupMeta {
+  slug: string;            // url segment + i18n suffix
+  labelKey: string;        // i18n key (Security → "Security Resources")
+  singleton?: boolean;     // true → flat render, no overview page
+  splitKeys: SplitKey[];   // summary.splits shown on the overview status band
+  order: string[];         // explicit order for direct inventory items (not in a subgroup)
+  injected?: { key: string; href: string; labelKey: string }[]; // non-inventory feature links (EKS) placed first
+  subgroups?: SubgroupMeta[];
+}
+
+// Keyed by the INVENTORY_TYPES `.group` display name. GROUP_ORDER drives sidebar order.
+// Single bridge: slug ↔ display-group ↔ labelKey ↔ ordering ↔ singleton ↔ splitKeys.
+// split→group mapping is pinned here (security_group ∈ Network → sgOpenIngress is Network's).
+const GROUPS: Record<string, GroupMeta> = {
+  'Compute': {
+    slug: 'compute', labelKey: 'group.compute', splitKeys: ['ec2Running', 'ec2Stopped'],
+    injected: [{ key: 'eks', href: '/eks', labelKey: 'nav.eks' }],
+    order: ['ec2', 'lambda', 'ecr'],
+    subgroups: [{ key: 'ecs', labelKey: 'group.compute.ecs', types: ['ecs_cluster', 'ecs_task'] }],
+  },
+  'Storage & DB': {
+    slug: 'storage', labelKey: 'group.storage', splitKeys: ['ebsUnencrypted'],
+    order: ['s3', 'ebs_volume', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'msk'],
+  },
+  'Network': {
+    slug: 'network', labelKey: 'group.network', splitKeys: ['sgOpenIngress'],
+    order: ['vpc', 'subnet', 'security_group', 'route53', 'cloudfront', 'cloudfront_vpc_origin'],
+    subgroups: [
+      { key: 'loadBalancing', labelKey: 'group.network.loadBalancing', types: ['alb', 'nlb', 'target_group', 'alb_listener_rule'] },
+      { key: 'apiGateway', labelKey: 'group.network.apiGateway', types: ['apigatewayv2_api', 'apigatewayv2_integration', 'apigatewayv2_route'] },
+    ],
+  },
+  'Security': {
+    slug: 'security', labelKey: 'group.security', splitKeys: ['iamUserNoMfa'],
+    order: ['iam_role', 'iam_user', 'waf', 'cloudtrail', 's3_public_access'],
+  },
+  'Monitoring': {
+    slug: 'monitoring', labelKey: 'group.monitoring', singleton: true, splitKeys: [],
+    order: ['cloudwatch_alarm'],
+  },
+};
+
+// Slugs reserved by group overview routes — no inventory type may collide (incl. the 'g' segment).
+export const RESERVED_NAV_SLUGS: string[] = ['g', ...Object.values(GROUPS).map((m) => m.slug)];
+
+export type NavLeafKind = 'inventory' | 'feature';
+export interface NavLeaf {
+  key: string;
+  kind: NavLeafKind;
+  type?: string;        // inventory slug (kind === 'inventory')
+  href: string;
+  label?: string;       // literal (inventory: INVENTORY_TYPES[type].label)
+  labelKey?: string;    // i18n key (feature links, e.g. EKS)
+}
+export interface NavSubgroupNode { key: string; labelKey: string; items: NavLeaf[] }
+export interface NavGroupNode {
+  group: string; slug: string; labelKey: string;
+  singleton: boolean; href?: string; splitKeys: SplitKey[];
+  items: NavLeaf[]; subgroups: NavSubgroupNode[];
+}
+
+function invLeaf(type: string): NavLeaf {
+  return { key: type, kind: 'inventory', type, href: `/inventory/${type}`, label: INVENTORY_TYPES[type]?.label ?? type };
+}
+// Order `types` by `order` (known first, in that order); append any leftover so a
+// newly-registered type is never silently dropped from the sidebar.
+function ordered(types: string[], order: string[]): string[] {
+  const present = new Set(types);
+  const head = order.filter((t) => present.has(t));
+  const tail = types.filter((t) => !order.includes(t));
+  return [...head, ...tail];
+}
+
+/** Sidebar hierarchy: collapsible groups (GROUP_ORDER) + 2-level subgroups + injected feature links. */
+export function navTree(): NavGroupNode[] {
+  return inventoryGroups().map(({ group, types }) => {
+    const meta: GroupMeta = GROUPS[group] ?? {
+      slug: group.toLowerCase().replace(/[^a-z0-9]+/g, '-'), labelKey: group, splitKeys: [], order: [],
+    };
+    const subgroupMeta = meta.subgroups ?? [];
+    const subMembers = new Set(subgroupMeta.flatMap((s) => s.types));
+    const directTypes = ordered(types.filter((t) => !subMembers.has(t)), meta.order);
+    const injected: NavLeaf[] = (meta.injected ?? []).map((f) => ({ key: f.key, kind: 'feature', href: f.href, labelKey: f.labelKey }));
+    const items: NavLeaf[] = [...injected, ...directTypes.map(invLeaf)];
+    const subgroups: NavSubgroupNode[] = subgroupMeta
+      .map((s) => ({ key: s.key, labelKey: s.labelKey, items: ordered(types.filter((t) => s.types.includes(t)), s.types).map(invLeaf) }))
+      .filter((s) => s.items.length > 0);
+    const singleton = !!meta.singleton;
+    return {
+      group, slug: meta.slug, labelKey: meta.labelKey, singleton,
+      href: singleton ? undefined : `/inventory/g/${meta.slug}`,
+      splitKeys: meta.splitKeys, items, subgroups,
+    };
+  });
+}
+
+/** Non-singleton groups that own an overview page (server route validation + Cmd-K). */
+export function overviewGroups(): NavGroupNode[] {
+  return navTree().filter((g) => !g.singleton);
+}
+
+/** Resolve a slug to its overview group node, or null if unknown/singleton (→ notFound). */
+export function groupBySlug(slug: string): NavGroupNode | null {
+  return overviewGroups().find((g) => g.slug === slug) ?? null;
+}
+
+/** Map an active pathname to its owning group/subgroup — drives 2-level auto-expand. */
+export function groupForPath(path: string): { slug: string; subgroupKey?: string } | null {
+  for (const g of navTree()) {
+    if (g.href && (path === g.href || path.startsWith(`${g.href}/`))) return { slug: g.slug };
+    for (const leaf of g.items) {
+      if (leaf.kind === 'feature' && (path === leaf.href || path.startsWith(`${leaf.href}/`))) return { slug: g.slug };
+      if (leaf.kind === 'inventory' && leaf.href === path) return { slug: g.slug };
+    }
+    for (const s of g.subgroups) {
+      if (s.items.some((l) => l.href === path)) return { slug: g.slug, subgroupKey: s.key };
+    }
+  }
+  return null;
+}
+
 // Lambda runtimes past AWS end-of-support. Static list (no date math / API call) —
 // ported from v1 src/app/lambda/page.tsx. Surfaced as an EOL badge in the inventory table.
 export const DEPRECATED_RUNTIMES = [
