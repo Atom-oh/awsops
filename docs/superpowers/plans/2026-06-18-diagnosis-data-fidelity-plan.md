@@ -15,6 +15,15 @@
 ## Out of scope
 New collectors / AWS APIs / IAM; LLM prompt rewrites; section/tier changes; web; terraform.
 
+## [P2 gate] mandatory conventions (agy+kiro)
+- **pg8000 uses NAMED placeholders** `:name` with kwargs (`conn.run(sql, name=val)`), NOT positional
+  `$1` (would raise a parse error) — see `db.py:32`, `sources.py:260`. Parameterize the resource_type
+  (`:rtype`); never string-interpolate it (SQL-injection-safe).
+- **`_redact` is INSUFFICIENT for raw resource `data`** — Lambda `environment`, `user_data`, IAM
+  `policy`/inline policies, and `*password*`/`*secret*`/`*token*` fields can carry plaintext secrets.
+  The collector MUST field-filter BEFORE the data leaves it (denylist + long-value truncation), not
+  rely on post-hoc `_redact`. (pg8000 returns JSONB as dict; the dict/str handling is harmless defense.)
+
 ---
 
 ### Task 1: fix `collect_cw_metrics` instance lookup (resource_type + account scope)
@@ -33,18 +42,25 @@ New collectors / AWS APIs / IAM; LLM prompt rewrites; section/tier changes; web;
 ### Task 2: `collect_inventory` returns bounded resource DETAIL, not just counts (keystone)
 - Modify: `scripts/v2/workers/diagnosis/sources.py`
 - Test: `scripts/v2/workers/diagnosis/test_sources.py`
-- [ ] Failing tests: with a fake conn returning typed rows (incl. a `data` JSONB per resource — test
-      both dict and JSON-string forms, since pg8000 may hand back text): (a) result has
-      `resources[<type>]` with `{resource_id, region, data}` entries, not only `by_type`; (b) the SQL
-      scopes `account_id = 'self'`; (c) per-type cap `DIAG_INV_PER_TYPE` honored; (d) the global byte
-      cap `DIAG_INV_MAX_BYTES` truncates + sets `truncated: true` for an oversized account; (e) on a
-      query error it still degrades (never raises) and keeps `by_type`/`resources` keys present.
-- [ ] Implement: keep the `by_type` count query (add `WHERE account_id='self'`). Add a detail pass:
-      for each type in `by_type`, `SELECT resource_id, region, data FROM inventory_resources WHERE
-      account_id='self' AND resource_type=$1 LIMIT <DIAG_INV_PER_TYPE>` (default 15); parse `data` with
-      `json.loads` if it's a str; accumulate into `resources[type]` until the serialized size would
-      exceed `DIAG_INV_MAX_BYTES` (default 24000), then stop + set `truncated`. Return
-      `{by_type, resources, truncated}`. Pre-LLM `_redact` (report.py) still handles PII — unchanged.
+- [ ] Failing tests: with a fake conn returning typed rows (incl. a `data` JSONB per resource — accept
+      dict and JSON-string forms): (a) result has `resources[<type>]` with `{resource_id, region, data}`
+      entries, not only `by_type`; (b) the SQL scopes `account_id = 'self'` and parameterizes the type
+      via a NAMED placeholder (`:rtype`), no `$1`, no interpolation; (c) per-type cap `DIAG_INV_PER_TYPE`
+      honored; (d) global byte cap `DIAG_INV_MAX_BYTES` truncates + sets `truncated: true`;
+      (e) **[P2-MAJOR] sensitive fields are stripped** — a Lambda `data` carrying `environment`
+      (+ `user_data`, `policy`, `*password*`/`*secret*`/`*token*`) has those keys removed before it
+      enters `resources`, and a string value >500 chars is truncated; (f) on query error it degrades
+      (never raises) keeping `by_type`/`resources` keys.
+- [ ] Implement: keep the `by_type` count query (add `WHERE account_id='self'`). Add a detail pass —
+      for each type in `by_type`: `conn.run("SELECT resource_id, region, data FROM inventory_resources
+      WHERE account_id='self' AND resource_type = :rtype LIMIT <DIAG_INV_PER_TYPE>", rtype=t)` (default
+      15); parse `data` via `json.loads` if str; run each `data` through a `_safe_data()` helper that
+      **drops denylisted keys** (`environment`, `env`, `variables`, `user_data`, `policy`,
+      `policy_document`, `inline_policies`, and any key matching `password|secret|token|credential`,
+      case-insensitive) and **truncates string values >500 chars** (append `…(truncated)`); accumulate
+      into `resources[type]` until serialized size would exceed `DIAG_INV_MAX_BYTES` (default 24000),
+      then stop + set `truncated`. Return `{by_type, resources, truncated}`. (`_redact` in report.py
+      remains the second layer, unchanged.)
 - [ ] Run `python3 -m pytest scripts/v2/workers/diagnosis/test_sources.py -q`.
 - [ ] Commit: `feat(diagnosis): collect_inventory feeds real resource detail (region+data, bounded) not just counts`.
 

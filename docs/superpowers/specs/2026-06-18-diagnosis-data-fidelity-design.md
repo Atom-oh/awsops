@@ -41,7 +41,13 @@ than mysteriously generic. Read-only throughout (no new AWS mutation, no new IAM
   Enforce a global byte cap `DIAG_INV_MAX_BYTES` (default ~24KB) — once exceeded, stop adding detail
   and note truncation (so a 5000-resource account can't blow the context/token budget).
 - Result shape: `{by_type:{...}, resources:{<type>:[{resource_id,region,data},…]}, truncated:bool}`.
-  PII is handled by the existing pre-LLM `_redact` in report.py (unchanged); detail is bounded.
+- **[P2 gate] Field-filter sensitive data AT THE COLLECTOR** (not just post-hoc `_redact`, which
+  misses custom secrets): a `_safe_data()` helper drops denylisted keys (`environment`, `env`,
+  `variables`, `user_data`, `policy`, `policy_document`, `inline_policies`, + any
+  `password|secret|token|credential` key) and truncates string values >500 chars, before the row
+  enters the result. `_redact` (report.py) remains the second layer.
+- **[P2 gate] pg8000 named params**: `conn.run("… resource_type = :rtype …", rtype=t)` — NOT `$1`,
+  never string-interpolate the type (injection-safe).
 
 ### 2. `collect_cw_metrics(conn)` — fix the instance lookup
 - `resource_type = 'ec2'` (was the never-matching `('ec2_instance','aws_ec2_instance','instance')`),
