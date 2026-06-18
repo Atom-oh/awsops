@@ -62,7 +62,7 @@ describe('ExplorePanel', () => {
     await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
     const rangeSel = screen.getByRole('combobox', { name: '범위' }) as HTMLSelectElement;
     expect(rangeSel.value).toBe('0'); // 즉시 (instant) default
-    for (const label of ['즉시', '5분', '15분', '1시간', '6시간', '24시간']) {
+    for (const label of ['즉시', '5m', '15m', '1h', '6h', '24h']) {
       expect(screen.getByRole('option', { name: label })).toBeTruthy();
     }
   });
@@ -127,6 +127,16 @@ describe('ExplorePanel', () => {
 
   it('instant result with non-numeric value rows shows no bar (fail-closed)', async () => {
     mockApi(INSTANCES, { shape: 'table', columns: [{ key: 'metric', label: 'metric' }, { key: 'value', label: 'value' }], rows: [{ metric: 'a', value: '' }, { metric: 'b', value: 'x' }] });
+    render(<ExplorePanel instanceId={1} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/PromQL/), { target: { value: 'up' } });
+    fireEvent.click(screen.getByRole('button', { name: '실행' }));
+    await waitFor(() => expect(screen.getAllByRole('row').length).toBeGreaterThan(1));
+    expect(screen.queryByText('상위 결과')).toBeNull();
+  });
+
+  it('instant result with a negative value shows no bar (>= 0 gate)', async () => {
+    mockApi(INSTANCES, { shape: 'table', columns: [{ key: 'metric', label: 'metric' }, { key: 'value', label: 'value' }, { key: 'timestamp', label: 'timestamp' }], rows: [{ metric: 'a', value: 5, timestamp: 't' }, { metric: 'b', value: -3, timestamp: 't' }] });
     render(<ExplorePanel instanceId={1} />);
     await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
     fireEvent.change(screen.getByPlaceholderText(/PromQL/), { target: { value: 'up' } });

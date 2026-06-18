@@ -31,7 +31,7 @@ const selectCls = 'rounded-md border border-ink-200 bg-card px-2.5 py-1.5 text-[
 
 // Explore range presets: label → window seconds (0 = instant snapshot). Step auto-derived for ~250 points.
 const RANGE_PRESETS: ReadonlyArray<readonly [string, number]> = [
-  ['즉시', 0], ['5분', 300], ['15분', 900], ['1시간', 3600], ['6시간', 21600], ['24시간', 86400],
+  ['즉시', 0], ['5m', 300], ['15m', 900], ['1h', 3600], ['6h', 21600], ['24h', 86400],
 ];
 const autoStep = (w: number) => Math.max(1, Math.round(w / 250));
 
@@ -43,6 +43,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
   const [query, setQuery] = useState('');
   const [rangeWindow, setRangeWindow] = useState(0); // 0 = instant; else range window in seconds
   const [result, setResult] = useState<NormalizedResult | null>(null);
+  const [resultKind, setResultKind] = useState<string | undefined>(undefined); // kind captured AT QUERY TIME (stale-response guard)
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [nl, setNl] = useState('');
@@ -71,6 +72,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
     if (selId === '' || !query.trim()) return;
     const w = windowOverride ?? rangeWindow;
     const range = canRange && w > 0 ? { window: w, step: autoStep(w) } : false;
+    const queriedKind = list.find((d) => d.id === selId)?.kind; // bind kind to THIS query, not the live selection
     setBusy(true); setErr(''); setResult(null);
     try {
       const r = await fetch('/api/datasources/query', {
@@ -79,11 +81,12 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
       });
       const b = await r.json();
       if (!r.ok) throw new Error(b.error || `오류 ${r.status}`);
+      setResultKind(queriedKind);
       setResult(b.result as NormalizedResult);
     } catch (e) {
       setErr(e instanceof Error ? e.message : '쿼리 실패');
     } finally { setBusy(false); }
-  }, [selId, query, rangeWindow, canRange]);
+  }, [selId, query, rangeWindow, canRange, list]);
 
   // NL → query (AI drafts, user reviews, then runs). Never auto-runs.
   const generate = useCallback(async () => {
@@ -109,7 +112,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
             scoped id isn't in the list yet. */}
         {(
           <div className="flex flex-wrap items-center gap-2">
-            <select aria-label="데이터소스" className={selectCls} value={selId} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); }}>
+            <select aria-label="데이터소스" className={selectCls} value={selId} disabled={busy} onChange={(e) => { setSelId(e.target.value ? Number(e.target.value) : ''); setResult(null); setErr(''); }}>
               <option value="">데이터소스 선택…</option>
               {list.map((d) => (
                 <option key={d.id} value={d.id}>{d.name} ({d.kind}){d.isDefault ? ' · 기본' : ''}</option>
@@ -158,7 +161,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
         </div>
         {err && <p className="text-[13px] text-rose-600">{err}</p>}
       </Card>
-      {result && <ResultView result={result} kind={ds?.kind} />}
+      {result && <ResultView result={result} kind={resultKind} />}
     </div>
   );
 }
@@ -170,7 +173,9 @@ function ResultView({ result, kind }: { result: NormalizedResult; kind?: string 
     result.shape === 'table' &&
     (kind === 'prometheus' || kind === 'mimir') &&
     result.rows && result.rows.length > 0 && result.rows.length <= 30 &&
-    result.rows.every((r) => typeof (r as Record<string, unknown>).value === 'number' && Number.isFinite((r as Record<string, unknown>).value as number))
+    // normalizer coerces values to numbers (non-numeric → 0); require finite AND non-negative
+    // (HBarList is positive-only — a negative series would render a misleading ~2% bar).
+    result.rows.every((r) => { const v = (r as Record<string, unknown>).value; return typeof v === 'number' && Number.isFinite(v) && v >= 0; })
       ? [...result.rows].sort((a, b) => Number((b as Record<string, unknown>).value) - Number((a as Record<string, unknown>).value))
       : null;
   return (
