@@ -127,6 +127,20 @@ export default function CompliancePage() {
     }
   }, [fetchRun, loadHistory]);
 
+  // Adopt a still-running run whenever the history list changes (covers a refresh / new tab landing
+  // while a heavy compliance job is already in flight): track it as the active job so Run stays
+  // disabled → no duplicate enqueue. Only when nothing is already tracked.
+  useEffect(() => {
+    if (activeJobIdRef.current !== null) return;
+    const running = runs.find((x) => x.status === 'running');
+    if (!running) return;
+    latestRunIdRef.current = running.id;
+    activeJobIdRef.current = running.id;
+    setBusy(true);
+    if (pollRef.current) clearTimeout(pollRef.current);
+    void pollActive(running.id);
+  }, [runs, pollActive]);
+
   // View a past run's saved results — one-shot, no re-run. Does NOT touch the live job's timer or
   // busy gate, so a running benchmark keeps being tracked (Run stays disabled) while you browse.
   const viewRun = useCallback((id: number) => {

@@ -70,17 +70,15 @@ describe('CompliancePage', () => {
     expect(fetchMock.mock.calls.every((c) => (c[1]?.method ?? 'GET') !== 'POST')).toBe(true);
   });
 
-  it('opening a still-running saved run adopts it (Run disabled → no duplicate job)', async () => {
-    const runningRun = { id: 5, benchmark: 'cis_v300', status: 'running', pass_rate: null, total_controls: null, ok: null, alarm: null, info: null, skip: null, error: null, started_at: '2026-06-18T02:00:00Z' };
+  it('adopts a running run on mount (refresh/new-tab) → Run disabled without any click', async () => {
+    const runningRun = { id: 8, benchmark: 'cis_v300', status: 'running', pass_rate: null, total_controls: null, ok: null, alarm: null, info: null, skip: null, error: null, started_at: '2026-06-18T03:00:00Z' };
     vi.stubGlobal('fetch', routedFetch({
       '/api/compliance/benchmarks': { benchmarks: [{ id: 'cis_v300', name: 'CIS AWS v3.0.0', description: '' }] },
       '/api/compliance/runs': { runs: [runningRun] },
       '/api/compliance/runs/': { run: runningRun, results: [] },
     }));
     render(<CompliancePage />);
-    await waitFor(() => expect(screen.getByText('cis_v300')).toBeTruthy());
-    fireEvent.click(screen.getByText('cis_v300'));
-    // adopted as the active job → the Run button flips to its busy label ('실행 중…') and is disabled
+    // no click — the in-flight run is adopted from the history list, so Run is already busy/disabled
     await waitFor(() => expect(screen.getByText('실행 중…')).toBeTruthy());
   });
 });
