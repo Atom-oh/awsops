@@ -107,4 +107,18 @@ class TestSchema(_Base):
         import json as _j; self.assertEqual(_j.loads(out["body"])["labels"],["app","job"])
 
 
+class TestSchemaVersion(_Base):
+    def test_schema_version_and_instance_id(self):
+        seq=[(200,{"status":"success","data":{"version":"3.0.0"}}),(200,{"status":"success","data":["app","level"]})]
+        with mock.patch.object(lm,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
+            out=lm.lambda_handler({"tool_name":"loki_schema","arguments":{}},None)
+        b=json.loads(out["body"]); self.assertEqual(b["version"],"3.0.0"); self.assertIn("app",b["labels"])
+
+    def test_instance_id_credential_blind(self):
+        lm.load_datasource.reset_mock()
+        with mock.patch.object(lm,"http_json",return_value=(200,{"status":"success","data":["app"]})):
+            out=lm.lambda_handler({"tool_name":"loki_labels","arguments":{"instance_id":7}},None)
+        self.assertEqual(out["statusCode"],200); lm.load_datasource.assert_any_call(lm.SLUG, instance_id=7)
+
+
 if __name__=="__main__": unittest.main()
