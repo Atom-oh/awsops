@@ -119,7 +119,8 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
               <select
                 aria-label="범위"
                 className={selectCls}
-                value={rangeWindow}
+                value={String(rangeWindow)}
+                disabled={busy}
                 onChange={(e) => { const w = Number(e.target.value); setRangeWindow(w); run(w); }}
               >
                 {RANGE_PRESETS.map(([label, sec]) => (
@@ -169,7 +170,7 @@ function ResultView({ result, kind }: { result: NormalizedResult; kind?: string 
     result.shape === 'table' &&
     (kind === 'prometheus' || kind === 'mimir') &&
     result.rows && result.rows.length > 0 && result.rows.length <= 30 &&
-    result.rows.every((r) => Number.isFinite(Number((r as Record<string, unknown>).value)))
+    result.rows.every((r) => typeof (r as Record<string, unknown>).value === 'number' && Number.isFinite((r as Record<string, unknown>).value as number))
       ? [...result.rows].sort((a, b) => Number((b as Record<string, unknown>).value) - Number((a as Record<string, unknown>).value))
       : null;
   return (

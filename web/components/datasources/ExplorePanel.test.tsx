@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import ExplorePanel from './ExplorePanel';
 
 const INSTANCES = [
@@ -120,6 +120,19 @@ describe('ExplorePanel', () => {
     fireEvent.change(screen.getByPlaceholderText(/PromQL/), { target: { value: 'topk(3, up)' } });
     fireEvent.click(screen.getByRole('button', { name: '실행' }));
     await waitFor(() => expect(screen.getByText('상위 결과')).toBeTruthy());
+    const card = screen.getByText('상위 결과').closest('.bg-card') as HTMLElement;
+    const order = within(card).getAllByTitle(/^m\d+$/).map((e) => e.getAttribute('title'));
+    expect(order).toEqual(['m2', 'm1', 'm0']); // sorted desc by value (m2=3, m1=2, m0=1)
+  });
+
+  it('instant result with non-numeric value rows shows no bar (fail-closed)', async () => {
+    mockApi(INSTANCES, { shape: 'table', columns: [{ key: 'metric', label: 'metric' }, { key: 'value', label: 'value' }], rows: [{ metric: 'a', value: '' }, { metric: 'b', value: 'x' }] });
+    render(<ExplorePanel instanceId={1} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/PromQL/), { target: { value: 'up' } });
+    fireEvent.click(screen.getByRole('button', { name: '실행' }));
+    await waitFor(() => expect(screen.getAllByRole('row').length).toBeGreaterThan(1));
+    expect(screen.queryByText('상위 결과')).toBeNull();
   });
 
   it('instant result with >30 rows shows no bar (table only)', async () => {

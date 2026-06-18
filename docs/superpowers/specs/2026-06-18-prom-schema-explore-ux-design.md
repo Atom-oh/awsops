@@ -49,9 +49,11 @@ Replace the `range` boolean checkbox with a single **range dropdown** (`범위`)
 - Instant (`0`) → instant tool (today's behaviour), request `range: false`.
 - A window `w>0` → range tool, request `range: { window: w, step: autoStep(w) }`.
 - **Auto step**: `autoStep(w) = max(1, Math.round(w / 250))` (~250 points).
-- **Auto re-run**: changing the dropdown re-runs the current query when a query string is
-  present. Implemented with a `useEffect` keyed on the **window value only** (NOT `query`, so it
-  never fires on keystrokes) plus a mounted-ref guard so it does not fire on initial render.
+- **Auto re-run**: changing the dropdown re-runs the current query when a query string is present.
+  Implemented in the select's `onChange` — it sets the window state and calls `run(w)` with the new
+  window as an explicit override. `onChange` fires only on a user dropdown change, never on keystrokes
+  or initial render, so this needs no `useEffect`/mounted-ref guard (simpler and equivalent). The
+  range `<select>` is disabled while a query is in flight to avoid a concurrent-run result race.
 
 ### Query route — `web/app/api/datasources/query/route.ts`
 
