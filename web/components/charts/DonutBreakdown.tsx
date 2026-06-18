@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import { Cell, Pie, PieChart, Tooltip } from 'recharts';
 import Card from '@/components/ui/Card';
 import { useChartColors } from '@/lib/use-chart-colors';
 import { tooltipStyles } from './theme';
@@ -41,35 +41,36 @@ export default function DonutBreakdown({
   return (
     <Card title={title} right={right} className={className}>
       <div className="flex items-center gap-4">
+        {/* Fixed-size PieChart (the wrapper is a fixed 170 square) — NOT ResponsiveContainer,
+            which measured the parent as width(-1)/height(-1) on narrow/SSR layout passes and
+            made the donut vanish. Fixed dims always render. */}
         <div className="relative shrink-0" style={{ width: 170, height: 170 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={data}
-                dataKey={valueKey}
-                nameKey={nameKey}
-                innerRadius={55}
-                outerRadius={80}
-                paddingAngle={2}
-                stroke="none"
-              >
-                {data.map((_, i) => (
-                  <Cell key={i} fill={c.palette[i % c.palette.length]} />
-                ))}
-              </Pie>
-              <Tooltip
-                {...tooltipStyles(c)}
-                formatter={(v, n) =>
-                  [
-                    valuePrefix === '$'
-                      ? `$${Math.round(Number(v)).toLocaleString()}`
-                      : Number(v).toLocaleString(),
-                    n as string,
-                  ] as [string, string]
-                }
-              />
-            </PieChart>
-          </ResponsiveContainer>
+          <PieChart width={170} height={170}>
+            <Pie
+              data={data}
+              dataKey={valueKey}
+              nameKey={nameKey}
+              innerRadius={55}
+              outerRadius={80}
+              paddingAngle={2}
+              stroke="none"
+            >
+              {data.map((_, i) => (
+                <Cell key={i} fill={c.palette[i % c.palette.length]} />
+              ))}
+            </Pie>
+            <Tooltip
+              {...tooltipStyles(c)}
+              formatter={(v, n) =>
+                [
+                  valuePrefix === '$'
+                    ? `$${Math.round(Number(v)).toLocaleString()}`
+                    : Number(v).toLocaleString(),
+                  n as string,
+                ] as [string, string]
+              }
+            />
+          </PieChart>
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
             <div className="tabular text-[20px] font-semibold leading-none text-ink-800">
               {fmtTotal}

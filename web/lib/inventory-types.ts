@@ -278,3 +278,106 @@ export function isDeprecatedRuntime(runtime: unknown): boolean {
   if (typeof runtime !== 'string') return false;
   return DEPRECATED_SET.has(runtime.trim().toLowerCase());
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Per-type highlight cards — tailored top KPIs so each inventory page reads
+// distinctly (vs the old identical total + top-4-state template). Derived ONLY
+// from already-synced row columns (no new AWS calls). Types without an entry
+// fall back to the generic state-count tiles.
+// ───────────────────────────────────────────────────────────────────────────
+export type Highlight =
+  | { kind: 'countWhere'; label: string; col: string; eq: string; tone?: 'accent' | 'danger' }
+  | { kind: 'countTruthy'; label: string; col: string; tone?: 'accent' | 'danger' }
+  | { kind: 'distinct'; label: string; col: string }
+  | { kind: 'sum'; label: string; col: string; suffix?: string }
+  | { kind: 'deprecatedRuntime'; label: string; col: string };
+
+export interface HighlightCard { label: string; value: string | number; variant: 'default' | 'accent' | 'danger' }
+
+const FALSY = new Set(['', 'false', 'null', 'undefined', '0', 'none', 'no', 'disabled']);
+const sv = (v: unknown): string => (v == null ? '' : String(v));
+
+/** Compute highlight cards from the full row set. Pure — unit-tested. */
+export function computeHighlights(rows: Array<Record<string, unknown>>, highlights: Highlight[]): HighlightCard[] {
+  const tone = (t: 'accent' | 'danger' | undefined, n: number): HighlightCard['variant'] =>
+    t === 'danger' ? (n > 0 ? 'danger' : 'default') : t === 'accent' ? 'accent' : 'default';
+  return highlights.map((h) => {
+    switch (h.kind) {
+      case 'countWhere': {
+        const n = rows.filter((r) => sv(r[h.col]).trim().toLowerCase() === h.eq.toLowerCase()).length;
+        return { label: h.label, value: n, variant: tone(h.tone, n) };
+      }
+      case 'countTruthy': {
+        const n = rows.filter((r) => !FALSY.has(sv(r[h.col]).trim().toLowerCase())).length;
+        return { label: h.label, value: n, variant: tone(h.tone, n) };
+      }
+      case 'distinct': {
+        const set = new Set(rows.map((r) => sv(r[h.col]).trim()).filter((x) => x !== ''));
+        return { label: h.label, value: set.size, variant: 'default' };
+      }
+      case 'sum': {
+        const total = rows.reduce((acc, r) => acc + (Number(r[h.col]) || 0), 0);
+        return { label: h.label, value: `${Math.round(total).toLocaleString()}${h.suffix ?? ''}`, variant: 'default' };
+      }
+      case 'deprecatedRuntime': {
+        const n = rows.filter((r) => isDeprecatedRuntime(r[h.col])).length;
+        return { label: h.label, value: n, variant: n > 0 ? 'danger' : 'default' };
+      }
+    }
+  });
+}
+
+// High-value types first (synced columns only). EKS is a feature route (/eks), not an inventory type.
+export const HIGHLIGHTS: Record<string, Highlight[]> = {
+  ec2: [
+    { kind: 'countWhere', label: '실행 중', col: 'instance_state', eq: 'running', tone: 'accent' },
+    { kind: 'countWhere', label: '중지됨', col: 'instance_state', eq: 'stopped', tone: 'danger' },
+    { kind: 'countTruthy', label: '퍼블릭 IP', col: 'public_ip_address' },
+    { kind: 'distinct', label: '타입 종류', col: 'instance_type' },
+  ],
+  rds: [
+    { kind: 'countWhere', label: '가용', col: 'status', eq: 'available', tone: 'accent' },
+    { kind: 'countWhere', label: 'Multi-AZ', col: 'multi_az', eq: 'true', tone: 'accent' },
+    { kind: 'countWhere', label: '퍼블릭 노출', col: 'publicly_accessible', eq: 'true', tone: 'danger' },
+    { kind: 'distinct', label: '엔진 종류', col: 'engine' },
+  ],
+  lambda: [
+    { kind: 'countWhere', label: '활성', col: 'state', eq: 'active', tone: 'accent' },
+    { kind: 'deprecatedRuntime', label: 'EOL 런타임', col: 'runtime' },
+    { kind: 'distinct', label: '런타임 종류', col: 'runtime' },
+  ],
+  ebs_volume: [
+    { kind: 'countWhere', label: '사용 중', col: 'state', eq: 'in-use', tone: 'accent' },
+    { kind: 'countWhere', label: '미암호화', col: 'encrypted', eq: 'false', tone: 'danger' },
+    { kind: 'sum', label: '총 용량', col: 'size', suffix: ' GB' },
+    { kind: 'distinct', label: '타입 종류', col: 'volume_type' },
+  ],
+  alb: [
+    { kind: 'countWhere', label: '활성', col: 'state_code', eq: 'active', tone: 'accent' },
+    { kind: 'countWhere', label: '인터넷 노출', col: 'scheme', eq: 'internet-facing' },
+    { kind: 'countWhere', label: '내부', col: 'scheme', eq: 'internal' },
+  ],
+  nlb: [
+    { kind: 'countWhere', label: '활성', col: 'state_code', eq: 'active', tone: 'accent' },
+    { kind: 'countWhere', label: '인터넷 노출', col: 'scheme', eq: 'internet-facing' },
+    { kind: 'countWhere', label: '내부', col: 'scheme', eq: 'internal' },
+  ],
+  iam_user: [
+    { kind: 'countWhere', label: 'MFA 미설정', col: 'mfa_enabled', eq: 'false', tone: 'danger' },
+    { kind: 'countWhere', label: 'MFA 설정', col: 'mfa_enabled', eq: 'true', tone: 'accent' },
+  ],
+  cloudwatch_alarm: [
+    { kind: 'countWhere', label: 'ALARM', col: 'state_value', eq: 'alarm', tone: 'danger' },
+    { kind: 'countWhere', label: 'OK', col: 'state_value', eq: 'ok', tone: 'accent' },
+    { kind: 'countWhere', label: '액션 비활성', col: 'actions_enabled', eq: 'false' },
+    { kind: 'distinct', label: '네임스페이스', col: 'namespace' },
+  ],
+  s3: [
+    { kind: 'distinct', label: '리전 수', col: 'region' },
+  ],
+  s3_public_access: [
+    { kind: 'countWhere', label: '정책 공개', col: 'bucket_policy_is_public', eq: 'true', tone: 'danger' },
+    { kind: 'countWhere', label: '정책차단 해제', col: 'block_public_policy', eq: 'false', tone: 'danger' },
+    { kind: 'countWhere', label: '공개버킷 미제한', col: 'restrict_public_buckets', eq: 'false', tone: 'danger' },
+  ],
+};
