@@ -725,6 +725,8 @@ resource "aws_iam_role_policy" "worker_diagnosis" {
         Effect = "Allow"
         Action = [
           "ce:GetCostAndUsage",
+          "ce:GetReservationCoverage",
+          "ce:GetSavingsPlansCoverage",
           "cloudwatch:GetMetricData",
           "xray:GetServiceGraph",
           "securityhub:GetFindings",
@@ -766,6 +768,8 @@ resource "aws_iam_role_policy" "worker_lambda_diagnosis" {
         Effect = "Allow"
         Action = [
           "ce:GetCostAndUsage",
+          "ce:GetReservationCoverage",
+          "ce:GetSavingsPlansCoverage",
           "cloudwatch:GetMetricData",
           "xray:GetServiceGraph",
           "securityhub:GetFindings",

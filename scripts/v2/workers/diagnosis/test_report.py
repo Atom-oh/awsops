@@ -178,9 +178,11 @@ def test_deep_sections_catalog():
     assert deep[:8] == base  # deep is a superset that preserves the base order
     keys = [x["key"] for x in deep]
     assert len(set(keys)) == 14  # unique
-    # 6 AWS-native collectors + datasources_obs (external observability — the ONE intentional new source,
-    # gated on the worker lambda:InvokeFunction IAM [plan A1]; fail-soft until applied).
-    known = {"inventory", "cw_metrics", "cost", "service_map", "posture", "what_changed", "datasources_obs"}
+    # AWS-native collectors + datasources_obs (external observability) + idle/commitment (WS-A2 FinOps:
+    # idle = DB-derived waste from inventory_resources [no new IAM]; commitment = RI/SP coverage
+    # [ce:GetReservationCoverage / ce:GetSavingsPlansCoverage]). All read-only.
+    known = {"inventory", "cw_metrics", "cost", "service_map", "posture", "what_changed",
+             "datasources_obs", "idle", "commitment"}
     for sec in deep:
         assert sec["key"] and sec["title"] and sec["prompt"]
         assert isinstance(sec["sources"], list) and sec["sources"]
@@ -452,3 +454,31 @@ def test_report_handler_dry_run_does_no_work(monkeypatch):
     monkeypatch.setattr(_wdb, "connect", lambda: (_ for _ in ()).throw(AssertionError("connect on dry_run")))
     result, artifact = handlers._report({"account": "1", "tier": "mid"}, dry_run=True)
     assert result["dry_run"] is True and artifact is None
+
+
+# ── data-coverage note (so a thin report is self-explaining) ──────────────────
+def _coll(key, ok=True, degraded=False, notes="", data=None):
+    return {"key": key, "ok": ok, "degraded": degraded, "notes": notes, "data": data or {}}
+
+
+def test_coverage_note_lists_collector_status():
+    collected = {
+        "inventory": _coll("inventory", data={"by_type": {"ec2": 1}}),          # ok (has data)
+        "cost": _coll("cost", ok=False, degraded=True, notes="AccessDenied", data={"_failed": True}),
+        "service_map": _coll("service_map", data={"edges": [], "service_count": 0}),  # ok but empty
+    }
+    note = report._coverage_note(collected)
+    assert "데이터 커버리지" in note
+    assert "inventory" in note
+    assert "cost" in note and "AccessDenied" in note          # degraded reason surfaced
+    assert "service_map" in note and "empty" in note.lower()  # ran ok but no signal
+
+
+def test_build_markdown_appends_coverage_note_optional():
+    rendered = [{"key": "executive_summary", "title": "Executive Summary", "body": "x"}]
+    collected = {"inventory": _coll("inventory", data={"by_type": {}})}  # ok but empty
+    md = report.build_markdown(rendered, "123", "mid", collected)
+    assert "데이터 커버리지" in md and "Executive Summary" in md
+    # backward-compatible: collected is optional
+    md2 = report.build_markdown(rendered, "123", "mid")
+    assert "Executive Summary" in md2 and "데이터 커버리지" not in md2

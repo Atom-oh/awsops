@@ -136,7 +136,28 @@ def render_section(section, collected, model_id, max_tokens):
     return {"key": section["key"], "title": section["title"], "body": body}
 
 
-def build_markdown(rendered, account, tier):
+def _is_empty(data):
+    """A collector ran ok but produced no signal (empty inventory, no X-Ray edges, posture off, …)."""
+    return (not data) or all(not v for v in data.values())
+
+
+def _coverage_note(collected):
+    """Render which collectors actually had data — so a thin/generic report is self-explaining
+    (ok | empty | degraded(reason)) instead of mysteriously vague."""
+    lines = ["## 데이터 커버리지 (Data coverage)", "",
+             "이 리포트가 근거로 삼은 수집기 상태 — `empty`/`degraded`는 해당 영역 진단이 빈약할 수 있음을 뜻합니다.", ""]
+    for key, r in collected.items():
+        if r.get("degraded"):
+            status = f"degraded — {r.get('notes') or 'collection failed'}"
+        elif _is_empty(r.get("data")):
+            status = "empty (no data returned)"
+        else:
+            status = "ok"
+        lines.append(f"- `{key}`: {status}")
+    return "\n".join(lines)
+
+
+def build_markdown(rendered, account, tier, collected=None):
     toc = "\n".join(f"- [{s['title']}](#{s['key']})" for s in rendered)
     # TOC sits ABOVE the first `## ` section heading (bold label, not a heading) so a
     # reader — and `md.split("##", 1)[0]` — sees the full table of contents first.
@@ -146,6 +167,8 @@ def build_markdown(rendered, account, tier):
              "**목차**", "", toc, ""]
     for s in rendered:
         parts += [f"## {s['title']}", "", s["body"], ""]
+    if collected:
+        parts += [_coverage_note(collected), ""]
     return "\n".join(parts)
 
 
@@ -219,7 +242,7 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None, model=
         _emit(i + 1, sec["title"], "render")  # before the Bedrock call → UI shows the in-flight section
         rendered.append(render_section(sec, collected, model_id, max_tokens))
     _emit(total, "리포트 조립", "assemble")
-    md = build_markdown(rendered, account, tier)
+    md = build_markdown(rendered, account, tier, collected)
     summary = {"sections": len(rendered), "sources_used": sources_used,
                "degraded": degraded, "drift": drift}
 
