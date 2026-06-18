@@ -106,4 +106,43 @@ describe('POST /api/datasources/query', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).result.shape).toBe('series');
   });
+
+  // --- Part 2: range {window, step} args + validation + back-compat ---
+  it('range object {window,step} → range tool with computed start/end/step strings', async () => {
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300, step: 2 } }));
+    const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
+    expect(call.tool).toBe('prometheus_query_range');
+    expect(call.args.query).toBe('up');
+    expect(typeof call.args.start).toBe('string');
+    expect(typeof call.args.step).toBe('string');
+    expect(Number(call.args.end) - Number(call.args.start)).toBe(300);
+    expect(call.args.step).toBe('2');
+  });
+
+  it('range object with out-of-bounds window or step → 400 and no invoke', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 30, step: 2 } }))).status).toBe(400); // window < 60
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 999999, step: 2 } }))).status).toBe(400); // window > 86400
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300, step: 0 } }))).status).toBe(400); // step < 1
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300, step: 99999999 } }))).status).toBe(400); // step > 86400
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+  });
+
+  it('range:false and absent range → instant tool', async () => {
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'prometheus', query: 'up', range: false }));
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].tool).toBe('prometheus_query');
+    await POST(req({ slug: 'prometheus', query: 'up' }));
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].tool).toBe('prometheus_query');
+  });
+
+  it('legacy range:true → range tool with NO start/step args (1h connector default)', async () => {
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'prometheus', query: 'up', range: true }));
+    const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
+    expect(call.tool).toBe('prometheus_query_range');
+    expect(call.args.start).toBeUndefined();
+    expect(call.args.step).toBeUndefined();
+  });
 });
