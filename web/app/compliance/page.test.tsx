@@ -50,7 +50,7 @@ describe('CompliancePage', () => {
       ] },
       // longest key → matched for /api/compliance/runs/9
       '/api/compliance/runs/': {
-        run: { id: 9, benchmark: 'cis_v300', status: 'succeeded', pass_rate: 75, total_controls: 4, ok: 3, alarm: 1, info: 0, skip: 0, error: 0 },
+        run: { id: 9, benchmark: 'cis_v300', status: 'succeeded', pass_rate: 75, total_controls: 4, ok: 3, alarm: 1, info: 0, skip: 0, error: 0, started_at: '2026-06-18T01:23:45Z' },
         results: [{ control_id: '1.1', title: 'MFA', section: '1 IAM', status: 'alarm', reason: 'no mfa', resource: 'arn:user/b', region: 'us-east-1', severity: 'high' }],
       },
     }));
@@ -61,5 +61,7 @@ describe('CompliancePage', () => {
     // the desktop table and the mobile card, hence getAllByText).
     await waitFor(() => expect(screen.getByText('75.0%')).toBeTruthy());
     expect(screen.getAllByText('1.1').length).toBeGreaterThan(0);
+    // execution time identifies which run is shown (v1 parity)
+    expect(screen.getByText(/^실행 /)).toBeTruthy();
   });
 });

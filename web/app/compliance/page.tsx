@@ -45,9 +45,11 @@ export default function CompliancePage() {
   const [selected, setSelected] = useState<Result | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // The run id the UI is currently tracking. poll() applies a response only when it still matches —
-  // so a stale timer (from a prior run/view) can't overwrite the run the user just switched to.
+  // latestRunIdRef = the run currently DISPLAYED; activeJobIdRef = the just-started running job.
+  // Keeping them separate means viewing a past run never cancels the live job's poll loop or its
+  // busy gate — the running benchmark stays tracked (Run disabled) while you browse history.
   const latestRunIdRef = useRef<number | null>(null);
+  const activeJobIdRef = useRef<number | null>(null);
 
   // Run history list (saved compliance_runs). Best-effort — never blocks the page.
   const loadHistory = useCallback(async () => {
@@ -77,41 +79,56 @@ export default function CompliancePage() {
 
   useEffect(() => { void loadHistory(); }, [loadHistory]);
 
-  const poll = useCallback(async (id: number) => {
+  // Fetch one run's detail. Updates the displayed run/results only while it's still the shown run
+  // (stale-guard). Surfaces non-OK responses so the UI never silently sticks. Returns the run.
+  const fetchRun = useCallback(async (id: number): Promise<Run | null> => {
+    let r: Response;
     try {
-      const r = await fetch(`/api/compliance/runs/${id}`);
-      const body = (await r.json()) as { run?: Run; results?: Result[] };
-      if (id !== latestRunIdRef.current) return; // superseded by a newer run/view — drop this response
-      if (body.run) {
-        setRun(body.run);
-        setResults(body.results ?? []);
-        if (body.run.status === 'running') {
-          setBusy(true); // a running run (incl. a viewed one) keeps Run disabled → no duplicate job
-          pollRef.current = setTimeout(() => void poll(id), 5000);
-        } else {
-          setBusy(false);
-          void loadHistory(); // refresh the saved-runs list when a run reaches a terminal state
-        }
-      }
+      r = await fetch(`/api/compliance/runs/${id}`);
     } catch {
-      if (id === latestRunIdRef.current) setBusy(false);
+      if (id === latestRunIdRef.current) setErr('run 조회 중 오류가 발생했습니다.');
+      return null;
     }
-  }, [loadHistory]);
+    if (!r.ok) {
+      if (id === latestRunIdRef.current) setErr(`run 조회 실패 (${r.status})`);
+      return null;
+    }
+    const body = (await r.json().catch(() => ({}))) as { run?: Run; results?: Result[] };
+    if (id === latestRunIdRef.current && body.run) {
+      setRun(body.run);
+      setResults(body.results ?? []);
+    }
+    return body.run ?? null;
+  }, []);
 
-  // View a past run's saved results (no re-run). Cancel any in-flight poll timer + claim the active
-  // id so a prior run's pending poll can't overwrite this view. poll() handles terminal vs running.
+  // Poll loop for the ACTIVE (just-started) job — owns the recurring timer + the busy gate.
+  const pollActive = useCallback(async (id: number) => {
+    const r = await fetchRun(id);
+    if (id !== activeJobIdRef.current) return; // a newer job started — this loop is obsolete
+    if (r && r.status === 'running') {
+      pollRef.current = setTimeout(() => void pollActive(id), 5000);
+    } else {
+      setBusy(false);                // terminal (or fetch error) → re-enable Run
+      activeJobIdRef.current = null;
+      void loadHistory();            // refresh the saved-runs list
+    }
+  }, [fetchRun, loadHistory]);
+
+  // View a past run's saved results — one-shot, no re-run. Does NOT touch the live job's timer or
+  // busy gate, so a running benchmark keeps being tracked (Run stays disabled) while you browse.
   const viewRun = useCallback((id: number) => {
     setErr('');
-    if (pollRef.current) clearTimeout(pollRef.current);
-    latestRunIdRef.current = id;
-    void poll(id);
-  }, [poll]);
+    setSelected(null);           // drop stale control-detail from the previously shown run
+    latestRunIdRef.current = id; // switch the display; the live job's poll won't overwrite it
+    void fetchRun(id);
+  }, [fetchRun]);
 
   useEffect(() => () => { if (pollRef.current) clearTimeout(pollRef.current); }, []);
 
   const runBenchmark = useCallback(async () => {
     setErr('');
     setBusy(true);
+    setSelected(null);
     setRun(null);
     setResults([]);
     try {
@@ -128,13 +145,14 @@ export default function CompliancePage() {
       }
       const { run_id } = (await r.json()) as { run_id: number };
       if (pollRef.current) clearTimeout(pollRef.current);
-      latestRunIdRef.current = run_id;
-      void poll(run_id);
+      activeJobIdRef.current = run_id; // the live job
+      latestRunIdRef.current = run_id; // and the displayed run
+      void pollActive(run_id);
     } catch {
       setErr('벤치마크 실행을 시작하지 못했습니다.');
       setBusy(false);
     }
-  }, [benchmark, poll]);
+  }, [benchmark, pollActive]);
 
   // Per-section pass% (client-side rollup over the leaf results).
   const sections = useMemo(() => {
@@ -209,11 +227,14 @@ export default function CompliancePage() {
                   onClick={() => viewRun(h.id)}
                   className={`flex items-center justify-between gap-3 py-2 text-left text-[13px] hover:bg-ink-50 ${run?.id === h.id ? 'text-brand-700' : 'text-ink-700'}`}
                 >
-                  <span className="font-medium">{h.benchmark}</span>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="font-medium">{h.benchmark}</span>
+                    {/* execution time distinguishes repeated runs of the same benchmark (v1 parity) */}
+                    <span className="tabular-nums truncate text-ink-400">{h.started_at ? new Date(h.started_at).toLocaleString('ko-KR') : ''}</span>
+                  </span>
                   <span className="flex items-center gap-3 text-ink-500">
                     <span>{h.status}</span>
-                    <span className="tabular w-12 text-right">{h.pass_rate != null ? `${Number(h.pass_rate).toFixed(0)}%` : '—'}</span>
-                    <span className="tabular hidden sm:inline">{h.started_at ? new Date(h.started_at).toLocaleString('ko-KR') : ''}</span>
+                    <span className="tabular-nums w-12 text-right">{h.pass_rate != null ? `${Number(h.pass_rate).toFixed(0)}%` : '—'}</span>
                   </span>
                 </button>
               ))}
@@ -223,6 +244,18 @@ export default function CompliancePage() {
 
         {run && (
           <>
+            {/* identify WHICH run is shown — benchmark + execution time (v1 parity), so repeated
+                runs of the same benchmark are distinguishable, not duplicated-looking. */}
+            <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px]">
+              <span className="font-semibold text-ink-800">{run.benchmark}</span>
+              {run.started_at && (
+                <span className="tabular-nums text-ink-500">
+                  실행 {new Date(run.started_at).toLocaleString('ko-KR')}
+                  {run.finished_at ? ` · 완료 ${new Date(run.finished_at).toLocaleString('ko-KR')}` : ''}
+                </span>
+              )}
+              <span className="text-ink-400">#{run.id}</span>
+            </div>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
               <StatTile
                 label="Pass Rate"
