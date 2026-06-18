@@ -102,7 +102,7 @@ export default function StatTile({
     return (
       <Link
         href={href}
-        aria-label={`${eyebrow ?? label} 상세 보기`}
+        aria-label={`${eyebrow ?? label}: ${value}${hint != null && typeof hint === 'string' ? ` (${hint})` : ''} — 상세 보기`}
         className="block rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
       >
         {inner}
