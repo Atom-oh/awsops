@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
-import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt } from './datasource-schema';
+import { upsertSchema, getSchema, listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery } from './datasource-schema';
 
 beforeEach(() => { query.mockReset().mockResolvedValue({ rows: [] }); });
 
@@ -94,5 +94,37 @@ describe('renderSchemaForPrompt', () => {
   it('renders OpenSearch domains WITH their nested indices, not domain names only [5]', () => {
     const out = renderSchemaForPrompt({ domains: [{ name: 'logs-domain', indices: ['app-2026.06', 'app-2026.05'] }] }, 'opensearch');
     expect(out).toBe('logs-domain: app-2026.06, app-2026.05');
+  });
+});
+
+describe('prioritizeSchemaForQuery (Prometheus relevance ordering)', () => {
+  // Prometheus returns metrics alphabetically; the relevant ones are deep in the list and get dropped by
+  // the render cap. Prioritizing by the NL query floats them to the front so they survive.
+  const metrics = ['ALERTS', 'aggregator_discovery_total', 'alertmanager_alerts', 'apiserver_request_total',
+    'container_memory_working_set_bytes', 'kube_pod_container_resource_limits', 'kube_pod_container_resource_requests', 'kube_pod_status_phase'];
+
+  it('floats metrics matching the NL query to the front (a "pod resource" query) [prom]', () => {
+    const out = prioritizeSchemaForQuery({ metrics }, 'pod resource조회') as { metrics: string[] };
+    // kube_pod_container_resource_* match BOTH "pod" and "resource" → score 2 → first
+    expect(out.metrics.slice(0, 2).sort()).toEqual(['kube_pod_container_resource_limits', 'kube_pod_container_resource_requests']);
+    expect(out.metrics.indexOf('kube_pod_status_phase')).toBeLessThan(out.metrics.indexOf('aggregator_discovery_total')); // "pod"=1 beats 0
+  });
+
+  it('adapts to the query terms — "memory usage" floats container_memory*', () => {
+    const out = prioritizeSchemaForQuery({ metrics }, 'memory usage') as { metrics: string[] };
+    expect(out.metrics[0]).toBe('container_memory_working_set_bytes');
+  });
+
+  it('leaves order unchanged when nothing matches or no usable terms (Korean-only / short)', () => {
+    expect((prioritizeSchemaForQuery({ metrics }, '조회') as { metrics: string[] }).metrics).toEqual(metrics);
+    expect((prioritizeSchemaForQuery({ metrics }, 'xyz123notamatch') as { metrics: string[] }).metrics).toEqual(metrics);
+  });
+
+  it('is a stable, non-mutating pass-through for non-metric / malformed schemas', () => {
+    const orig = { metrics };
+    prioritizeSchemaForQuery(orig, 'pod');
+    expect(orig.metrics).toEqual(metrics); // original not mutated
+    expect(prioritizeSchemaForQuery(null, 'pod')).toBeNull();
+    expect(prioritizeSchemaForQuery({ tables: [{ name: 't' }] }, 'pod')).toEqual({ tables: [{ name: 't' }] });
   });
 });

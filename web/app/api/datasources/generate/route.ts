@@ -8,7 +8,7 @@
 // a strict translate-to-query prompt + the schema (real table/COLUMN names) injected as data.
 import { verifyUser } from '@/lib/auth';
 import { generateQuery } from '@/lib/datasource-querygen';
-import { listConfiguredSchemas, renderSchemaForPrompt, upsertSchema } from '@/lib/datasource-schema';
+import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, upsertSchema } from '@/lib/datasource-schema';
 import { currentAccountId } from '@/lib/account';
 import { getDatasource, resolveConnConfig, type DatasourceRow } from '@/lib/datasources';
 import { invokeMcpLambdaTool } from '@/lib/mcp-lambda-invoke';
@@ -56,13 +56,16 @@ async function cacheSchemaBestEffort(accountId: string, id: number, kind: string
  *  if it has no cache (connect-time warm never ran / failed), introspect ON DEMAND and self-heal. The
  *  same-kind match is reserved for the deprecated slug/kind path. Best-effort — generation still
  *  proceeds schema-less (the model is told as much). */
-async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: boolean, kind: string): Promise<string> {
+async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: boolean, kind: string, nl: string): Promise<string> {
   const accountId = currentAccountId();
+  // Float NL-relevant metric/label names to the front so they survive the render cap (Prometheus/Mimir
+  // return hundreds of metrics alphabetically; the relevant ones would otherwise be dropped).
+  const render = (schema: unknown, k: string | null) => renderSchemaForPrompt(prioritizeSchemaForQuery(schema, nl), k);
   try {
     const schemas = await listConfiguredSchemas(accountId);
     const own = hasId ? schemas.find((s) => s.integrationId === id) : schemas.find((s) => s.kind === kind);
     if (own?.schema) {
-      const block = renderSchemaForPrompt(own.schema, own.kind);
+      const block = render(own.schema, own.kind);
       if (block) return block;
     }
   } catch { /* cache is optional */ }
@@ -73,7 +76,7 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
       if (connConfig?.endpoint) assertDatasourceEndpointAllowed(connConfig.endpoint); // defense-in-depth (connector guards too)
       const schema = await invokeMcpLambdaTool({ kind, tool: `${kind}_schema`, connConfig });
       await cacheSchemaBestEffort(accountId, id, kind, schema);
-      return renderSchemaForPrompt(schema, kind);
+      return render(schema, kind);
     } catch { /* introspect best-effort; proceed schema-less */ }
   }
   return '';
@@ -109,7 +112,7 @@ export async function POST(request: Request) {
   const nl = typeof body.nl === 'string' ? body.nl.trim().slice(0, MAX_NL) : '';
   if (!nl) return json({ error: 'nl (natural-language request) required' }, 400);
 
-  const schemaBlock = await resolveSchemaBlock(ds, id, hasId, kind);
+  const schemaBlock = await resolveSchemaBlock(ds, id, hasId, kind, nl);
 
   try {
     const query = await generateQuery({ nl, lang, schemaBlock, isSql });
