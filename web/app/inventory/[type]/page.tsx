@@ -10,7 +10,7 @@ import StatTile from '@/components/ui/StatTile';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Input from '@/components/ui/Input';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
-import { INVENTORY_TYPES } from '@/lib/inventory-types';
+import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights } from '@/lib/inventory-types';
 
 type Row = Record<string, unknown>;
 
@@ -90,6 +90,13 @@ export default function InventoryTypePage() {
     [allRows, spec?.stateKey],
   );
 
+  // Per-type highlight cards (tailored top KPIs from synced columns). Empty → fall
+  // back to the generic state tiles, so unconfigured types render as before.
+  const highlightCards = useMemo(
+    () => (HIGHLIGHTS[type] ? computeHighlights(allRows, HIGHLIGHTS[type]) : []),
+    [allRows, type],
+  );
+
   // Distribution donut — top 6 + 기타, from the FULL row set.
   const distData = useMemo(() => {
     if (!spec?.distKey) return [];
@@ -150,9 +157,13 @@ export default function InventoryTypePage() {
             {/* ---- KPI tiles (from FULL rows) ---- */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" />
-              {stateCounts.slice(0, 4).map((s) => (
-                <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} />
-              ))}
+              {highlightCards.length > 0
+                ? highlightCards.map((h) => (
+                    <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} />
+                  ))
+                : stateCounts.slice(0, 4).map((s) => (
+                    <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} />
+                  ))}
               {metricCards.map((c) => (
                 <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />
               ))}

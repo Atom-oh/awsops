@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   INVENTORY_TYPES, inventoryGroups, isDeprecatedRuntime, DEPRECATED_RUNTIMES,
   navTree, overviewGroups, groupBySlug, groupForPath, RESERVED_NAV_SLUGS,
+  computeHighlights, HIGHLIGHTS,
 } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
@@ -155,5 +156,44 @@ describe('overview helpers + path resolver', () => {
   });
   it('no inventory type slug collides with a reserved nav slug (incl. the g segment)', () => {
     for (const key of Object.keys(INVENTORY_TYPES)) expect(RESERVED_NAV_SLUGS).not.toContain(key);
+  });
+});
+
+describe('computeHighlights (per-type highlight cards)', () => {
+  it('countWhere is case-insensitive; danger tone only when count > 0', () => {
+    const rows = [{ s: 'Running' }, { s: 'running' }, { s: 'stopped' }];
+    const [run, stop] = computeHighlights(rows, [
+      { kind: 'countWhere', label: 'run', col: 's', eq: 'running', tone: 'accent' },
+      { kind: 'countWhere', label: 'stop', col: 's', eq: 'stopped', tone: 'danger' },
+    ]);
+    expect(run).toEqual({ label: 'run', value: 2, variant: 'accent' });
+    expect(stop).toEqual({ label: 'stop', value: 1, variant: 'danger' });
+    const [none] = computeHighlights(rows, [{ kind: 'countWhere', label: 'x', col: 's', eq: 'zzz', tone: 'danger' }]);
+    expect(none).toEqual({ label: 'x', value: 0, variant: 'default' }); // danger + 0 → not red
+  });
+  it('countTruthy counts non-empty / non-false values', () => {
+    const rows = [{ ip: '1.2.3.4' }, { ip: '' }, { ip: null }, { ip: '5.6.7.8' }, { ip: 'false' }];
+    expect(computeHighlights(rows, [{ kind: 'countTruthy', label: 'pub', col: 'ip' }])[0].value).toBe(2);
+  });
+  it('distinct counts unique non-empty values', () => {
+    const rows = [{ e: 'mysql' }, { e: 'mysql' }, { e: 'postgres' }, { e: '' }];
+    expect(computeHighlights(rows, [{ kind: 'distinct', label: 'engines', col: 'e' }])[0].value).toBe(2);
+  });
+  it('sum totals a numeric column with suffix', () => {
+    const rows = [{ size: 100 }, { size: 50 }, { size: '20' }];
+    expect(computeHighlights(rows, [{ kind: 'sum', label: 't', col: 'size', suffix: ' GB' }])[0].value).toBe('170 GB');
+  });
+  it('deprecatedRuntime counts EOL Lambda runtimes (danger when > 0)', () => {
+    const rows = [{ r: 'python3.7' }, { r: 'nodejs20.x' }, { r: 'go1.x' }];
+    expect(computeHighlights(rows, [{ kind: 'deprecatedRuntime', label: 'eol', col: 'r' }])[0]).toEqual({ label: 'eol', value: 2, variant: 'danger' });
+  });
+  it('every HIGHLIGHTS entry references a real column (or region/resource_id) for its type', () => {
+    const VIRTUAL = new Set(['region', 'resource_id']);
+    for (const [type, hls] of Object.entries(HIGHLIGHTS)) {
+      const spec = INVENTORY_TYPES[type];
+      expect(spec, `HIGHLIGHTS[${type}] has a registered type`).toBeTruthy();
+      const cols = new Set(spec.columns.map((c) => c.key));
+      for (const h of hls) expect(cols.has(h.col) || VIRTUAL.has(h.col), `${type}.${h.col}`).toBe(true);
+    }
   });
 });
