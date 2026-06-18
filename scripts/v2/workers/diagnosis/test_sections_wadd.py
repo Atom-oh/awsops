@@ -4,7 +4,8 @@ from diagnosis import sections
 
 # Collector result keys that exist in sources.collect_all (+ the synthetic intended_vs_actual). Sections
 # must declare ONLY these — no new collectors / AWS APIs (the concurrent data branch owns the collectors).
-VALID_SOURCES = {"inventory", "cw_metrics", "cost", "service_map", "datasources_obs", "posture", "what_changed"}
+VALID_SOURCES = {"inventory", "cw_metrics", "cost", "service_map", "datasources_obs", "posture",
+                 "what_changed", "idle", "commitment"}
 WADD = sections.DEEP_SECTIONS  # 8 base + 6 deep-only
 
 

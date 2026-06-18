@@ -178,9 +178,11 @@ def test_deep_sections_catalog():
     assert deep[:8] == base  # deep is a superset that preserves the base order
     keys = [x["key"] for x in deep]
     assert len(set(keys)) == 14  # unique
-    # 6 AWS-native collectors + datasources_obs (external observability — the ONE intentional new source,
-    # gated on the worker lambda:InvokeFunction IAM [plan A1]; fail-soft until applied).
-    known = {"inventory", "cw_metrics", "cost", "service_map", "posture", "what_changed", "datasources_obs"}
+    # AWS-native collectors + datasources_obs (external observability) + idle/commitment (WS-A2 FinOps:
+    # idle = DB-derived waste from inventory_resources [no new IAM]; commitment = RI/SP coverage
+    # [ce:GetReservationCoverage / ce:GetSavingsPlansCoverage]). All read-only.
+    known = {"inventory", "cw_metrics", "cost", "service_map", "posture", "what_changed",
+             "datasources_obs", "idle", "commitment"}
     for sec in deep:
         assert sec["key"] and sec["title"] and sec["prompt"]
         assert isinstance(sec["sources"], list) and sec["sources"]

@@ -208,22 +208,110 @@ def collect_cw_metrics(conn):
 
 
 def collect_cost():
-    """Cost Explorer MTD by service (aggregated $; no PII). Read-only GetCostAndUsage."""
+    """Cost Explorer (read-only GetCostAndUsage; aggregated $, no PII): MTD by service + a 3-month total
+    trend (MoM) + top usage-type drivers (surfaces data-transfer / NAT / storage spend v1 broke out)."""
     try:
         ce = _ce_client()
         import datetime as dt
         today = dt.date.today()
-        start = today.replace(day=1).isoformat()
+        month_start = today.replace(day=1)
         end = (today + dt.timedelta(days=1)).isoformat()
+        # current month by service
         r = ce.get_cost_and_usage(
-            TimePeriod={"Start": start, "End": end}, Granularity="MONTHLY",
+            TimePeriod={"Start": month_start.isoformat(), "End": end}, Granularity="MONTHLY",
             Metrics=["UnblendedCost"], GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
         )
         groups = r.get("ResultsByTime", [{}])[0].get("Groups", [])
-        by_service = {g["Keys"][0]: float(g["Metrics"]["UnblendedCost"]["Amount"]) for g in groups}
-        return _result("cost", data={"mtd_by_service": by_service})
+        by_service = {g["Keys"][0]: round(float(g["Metrics"]["UnblendedCost"]["Amount"]), 2) for g in groups}
+        # 3-month total trend (MoM)
+        trend_start = (month_start - dt.timedelta(days=62)).replace(day=1)
+        rt = ce.get_cost_and_usage(
+            TimePeriod={"Start": trend_start.isoformat(), "End": end}, Granularity="MONTHLY",
+            Metrics=["UnblendedCost"],
+        )
+        monthly = [{"month": p["TimePeriod"]["Start"],
+                    "total": round(float(p["Total"]["UnblendedCost"]["Amount"]), 2)}
+                   for p in rt.get("ResultsByTime", [])]
+        # top usage-type drivers (current month) — DataTransfer/NatGateway/storage signals
+        ru = ce.get_cost_and_usage(
+            TimePeriod={"Start": month_start.isoformat(), "End": end}, Granularity="MONTHLY",
+            Metrics=["UnblendedCost"], GroupBy=[{"Type": "DIMENSION", "Key": "USAGE_TYPE"}],
+        )
+        ug = ru.get("ResultsByTime", [{}])[0].get("Groups", [])
+        by_usage = {g["Keys"][0]: round(float(g["Metrics"]["UnblendedCost"]["Amount"]), 2) for g in ug}
+        top_usage = dict(sorted(by_usage.items(), key=lambda kv: kv[1], reverse=True)[:15])
+        return _result("cost", data={"mtd_by_service": by_service, "monthly_totals": monthly,
+                                     "top_usage_types": top_usage})
     except Exception as e:  # noqa: BLE001
         return _classify("cost", e)
+
+
+# EBS $/GB-month heuristics (ap-northeast-2 approx) — used ONLY to estimate recoverable idle waste.
+_EBS_GB_PRICE = {"gp3": 0.0912, "gp2": 0.114, "io1": 0.125, "io2": 0.125, "st1": 0.045, "sc1": 0.025}
+
+
+def collect_idle(conn):
+    """DB-derived waste from inventory_resources (no live AWS call): unattached EBS volumes (state
+    'available') with a recoverable-$/month estimate + stopped EC2 (EBS still billed). EIP/snapshots are
+    not synced → reported as a data gap (the prompt then says '데이터 불가'). Degrades, never raises."""
+    try:
+        unattached, gb, est = 0, 0.0, 0.0
+        for row in conn.run("SELECT data FROM inventory_resources WHERE account_id='self' "
+                            "AND resource_type='ebs_volume' LIMIT 2000"):
+            d = row[0]
+            if isinstance(d, str):
+                try:
+                    d = json.loads(d)
+                except (ValueError, TypeError):
+                    d = {}
+            d = d or {}
+            if d.get("state") == "available":
+                size = float(d.get("size") or 0)
+                unattached += 1
+                gb += size
+                est += size * _EBS_GB_PRICE.get(d.get("volume_type"), 0.10)
+        stopped = 0
+        for row in conn.run("SELECT data FROM inventory_resources WHERE account_id='self' "
+                            "AND resource_type='ec2' LIMIT 2000"):
+            d = row[0]
+            if isinstance(d, str):
+                try:
+                    d = json.loads(d)
+                except (ValueError, TypeError):
+                    d = {}
+            if (d or {}).get("instance_state") == "stopped":
+                stopped += 1
+        return _result("idle", data={
+            "unattached_ebs": {"count": unattached, "gb": round(gb, 1), "est_monthly_usd": round(est, 2)},
+            "stopped_ec2": {"count": stopped},
+            "note": "EIP/스냅샷은 인벤토리 미동기화 — 해당 항목은 데이터 불가",
+        })
+    except Exception as e:  # noqa: BLE001
+        return _classify("idle", e)
+
+
+def collect_commitment():
+    """RI / Savings Plans coverage % over the last 30 days. Read-only ce:GetReservationCoverage +
+    ce:GetSavingsPlansCoverage. Each call degrades to None independently (unauthorized/none → quiet)."""
+    try:
+        ce = _ce_client()
+        import datetime as dt
+        end = dt.date.today()
+        tp = {"Start": (end - dt.timedelta(days=30)).isoformat(), "End": end.isoformat()}
+        ri = sp = None
+        try:
+            tot = ce.get_reservation_coverage(TimePeriod=tp).get("Total", {}).get("CoverageHours", {})
+            ri = round(float(tot.get("CoverageHoursPercentage", 0)), 1) if tot else None
+        except Exception:  # noqa: BLE001 — unauthorized/none → leave None
+            ri = None
+        try:
+            cov = (ce.get_savings_plans_coverage(TimePeriod=tp).get("SavingsPlansCoverages") or [{}])[0].get("Coverage", {})
+            sp = round(float(cov.get("CoveragePercentage", 0)), 1) if cov else None
+        except Exception:  # noqa: BLE001
+            sp = None
+        return _result("commitment", data={"ri_coverage_pct": ri, "sp_coverage_pct": sp})
+    except Exception as e:  # noqa: BLE001
+        return _classify("commitment", e)
 
 
 def collect_service_map():
@@ -512,6 +600,8 @@ def collect_all(conn):
         collect_inventory(conn),
         collect_cw_metrics(conn),
         collect_cost(),
+        collect_idle(conn),        # DB-derived waste (unattached EBS / stopped EC2) — FinOps
+        collect_commitment(),      # RI / Savings Plans coverage — FinOps
         collect_service_map(),
         collect_datasources(conn),  # external observability (schema-driven, credential-blind)
         collect_posture(),

@@ -26,9 +26,13 @@ _RULES = (
 )
 # Pricing heuristics for the cost-bearing sections (rough guidance only; exact $ from the cost data).
 _PRICING = (
-    "참고 가격 휴리스틱(개략치 — 정확 절감액은 제공된 cost 데이터를 우선 사용하고, 비용 데이터가 없으면 "
-    "'가격 데이터 없음'으로 명시): Graviton(arm64)은 동급 x86 대비 ~20%↓, gp3는 gp2 대비 ~20%↓, "
-    "RDS Multi-AZ는 비용 약 2배(운영 필수), Savings Plans/RI 최대 ~60-72%↓, Spot 최대 ~90%↓. "
+    "참고 가격 휴리스틱(ap-northeast-2 개략치 — 정확 절감액은 제공된 cost 데이터(서비스별·usage-type·월추이)를 "
+    "우선 사용하고, 비용 데이터가 없으면 '가격 데이터 없음'으로 명시): "
+    "EBS gp2 $0.114/GB·gp3 $0.0912/GB(gp3 ~20%↓), 스냅샷 $0.05/GB, 미연결 EIP ~$3.6/월, "
+    "NAT GW $0.045/hr + $0.045/GB, Inter-AZ 전송 $0.01/GB(왕복 $0.02), 인터넷 egress 첫 10TB $0.126/GB, "
+    "S3 Standard $0.025 / S3-IA $0.0138 / Glacier-IR $0.005 / Deep Archive $0.002 (per GB·월), "
+    "VPC Gateway Endpoint(S3/DynamoDB) 데이터 처리 무료, "
+    "Graviton(arm64) 동급 x86 대비 ~20%↓, RDS Multi-AZ 비용 약 2배(운영 필수), SP/RI 최대 ~60-72%↓, Spot 최대 ~90%↓. "
 )
 
 SECTIONS = [
@@ -37,8 +41,11 @@ SECTIONS = [
      "prompt": (
          "당신은 6대 Well-Architected 기둥에 정통한 수석 클라우드 아키텍트다. 아래 계정 데이터로 경영진용 요약을 작성하라.\n"
          "### 인프라 건강 점수 (0~100)\n"
-         "6대 기둥을 가중 합산해 점수를 산출하라 — 운영 우수성 15 / 보안 20 / 신뢰성 20 / 성능 15 / 비용 20 / 지속가능성 10 "
-         "(성능=CloudWatch 지표, 신뢰성=서비스맵/인벤토리, 운영 우수성=최근 변경 신호를 근거로). "
+         "6대 기둥을 가중 합산해 점수를 산출하라(세부 가중): "
+         "운영 우수성 15(모니터링/알람 8 + 변경관리 7) / 보안 20(공개노출 7 + 암호화 7 + IAM 6) / "
+         "신뢰성 20(네트워크 7 + 데이터계층 7 + 컴퓨트 6) / 성능 15(컴퓨트 라이트사이징 8 + DB 7) / "
+         "비용 20(효율 8 + 스토리지 6 + 유휴위생 6) / 지속가능성 10(Graviton 채택 5 + 효율 자원 5). "
+         "(성능=CloudWatch 지표, 신뢰성=서비스맵/인벤토리, 비용=cost/idle/commitment, 운영 우수성=최근 변경 신호를 근거로). "
          "각 기둥의 점수와 근거를 표(| 기둥 | 가중 | 점수 | 근거 |)로 제시하라. 신호가 없는 기둥(예: 지속가능성 — v2는 탄소 데이터 없음)은 "
          "점수를 날조하지 말고 '데이터 부족'으로 명시하고 가중에서 제외하되, 제외한 가중치는 나머지 기둥에 비례 재정규화하여 100점 만점을 유지하라. "
          "점수 해석: 90+ 우수 / 70-89 양호 / 50-69 보통 / 50 미만 즉시 조치.\n"
@@ -85,8 +92,9 @@ SECTIONS = [
     {"key": "cost_overview", "title": "Cost Overview",
      "sources": ["cost"],
      "prompt": (
-         "당신은 AWS 비용 관리에 정통한 수석 FinOps 분석가다. Cost Explorer MTD 서비스별 비용으로 지출 구조를 진단하라.\n"
-         "### 비용 총괄\n표(| 서비스 | 월비용($) | 비중% |): 상위 비용 서비스.\n"
+         "당신은 AWS 비용 관리에 정통한 수석 FinOps 분석가다. Cost Explorer 데이터(MTD 서비스별 + 3개월 총추이 monthly_totals + 상위 usage-type)로 지출 구조를 진단하라.\n"
+         "### 비용 총괄 & 추이\n표(| 서비스 | 월비용($) | 비중% |) 상위 서비스 + 표(| 월 | 총비용($) | MoM% | 추세 |)로 3개월 추이. 총지출 MoM +15%↑ 또는 상위 서비스 +20%↑는 [Warning].\n"
+         "### 비용 동인 (Usage-Type)\n상위 usage-type(top_usage_types)을 분석해 숨은 동인을 짚어라 — DataTransfer/NatGateway/스토리지 등. 표(| usage-type | 월비용($) | 비고 |).\n"
          "### 집중 리스크 & 절감 후보\n단일 서비스가 총비용 40%↑이면 [Warning]. 절감 후보를 우선순위·예상효과와 함께(실행은 권고만). " + _PRICING + _RULES)},
 
     {"key": "recent_changes", "title": "Recent Changes",
@@ -158,11 +166,12 @@ _DEEP_ONLY = [
          "### 커버리지\n표(| 리소스 | 알람 | 지표 | 로그 | 갭 | 심각도 |): 알람 미설정 핵심/고비용 리소스·지표 공백·로그 보존 미설정. " + _RULES)},
 
     {"key": "cost_optimization", "title": "비용 최적화 심층",
-     "sources": ["cost", "inventory", "cw_metrics"],
+     "sources": ["cost", "inventory", "cw_metrics", "idle", "commitment"],
      "prompt": (
-         "당신은 AWS 비용 최적화에 정통한 FinOps 엔지니어다. 비용(MTD/서비스별)·인벤토리·CloudWatch 사용률로 절감 기회를 진단하라.\n"
-         "### 최적화 기회\n표(| 조치 | 대상 | 예상 절감/월 | 공수 | 우선순위 |): 유휴/과대프로비저닝·구형 세대·미사용(미연결 EBS/EIP)·"
-         "커밋(SP/RI) 미적용·Graviton 전환. " + _PRICING + _RULES)},
+         "당신은 AWS 비용 최적화에 정통한 FinOps 엔지니어다. 비용·인벤토리·CloudWatch 사용률·유휴(idle)·약정 커버리지(commitment)로 절감 기회를 진단하라.\n"
+         "### 유휴 리소스 회수 (Idle & Waste)\n표(| 항목 | 수량 | 예상 회수/월($) |): 미연결 EBS(idle.unattached_ebs — est_monthly_usd를 회수 추정으로)·중지 EC2(idle.stopped_ec2, EBS는 계속 과금). idle.note의 미동기화 항목(EIP/스냅샷)은 '데이터 불가'.\n"
+         "### 약정 커버리지 (RI/SP)\nRI 커버리지(commitment.ri_coverage_pct)·SP 커버리지(commitment.sp_coverage_pct)를 보고. 70% 미만이면 [Warning] + 약정 확대 권고. 값이 None이면 '데이터 불가'.\n"
+         "### 최적화 기회\n표(| 조치 | 대상 | 예상 절감/월 | 공수 | 우선순위 |): 과대프로비저닝(CPU<10%)·구형 세대(m4/c4/r4)·gp2→gp3·Graviton 전환. " + _PRICING + _RULES)},
 ]
 
 DEEP_SECTIONS = list(SECTIONS) + _DEEP_ONLY
