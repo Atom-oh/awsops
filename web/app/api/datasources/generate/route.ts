@@ -28,14 +28,39 @@ function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
 }
 
-/** Resolve a prompt-ready schema block: cached schema first (per-instance, else any of this kind); if
- *  the connect-time warm never ran / failed, introspect ON DEMAND for an instance and self-heal the
- *  cache. Best-effort throughout — generation still proceeds schema-less (the model is told as much). */
+/** Trim an introspected schema so it fits under the cache size limit — used as a fallback so a large
+ *  warehouse (>256KB schema) is still cached (bounded), instead of re-introspecting on EVERY request. */
+function trimSchemaForCache(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+  const s = schema as Record<string, unknown>;
+  if (!Array.isArray(s.tables)) return schema;
+  const tables = (s.tables as unknown[]).slice(0, 50).map((t) =>
+    t && typeof t === 'object' && Array.isArray((t as { columns?: unknown }).columns)
+      ? { ...(t as object), columns: ((t as { columns: unknown[] }).columns).slice(0, 80) }
+      : t,
+  );
+  return { ...s, tables, truncated: true };
+}
+
+/** Cache the introspected schema; on a size-limit failure, persist a trimmed copy so subsequent requests
+ *  hit the cache instead of re-running the full (100+ DESCRIBE) introspect. All best-effort. */
+async function cacheSchemaBestEffort(accountId: string, id: number, kind: string, schema: unknown): Promise<void> {
+  try { await upsertSchema(accountId, id, kind, schema); return; }
+  catch { /* likely over the size limit — fall through to a bounded write */ }
+  try { await upsertSchema(accountId, id, kind, trimSchemaForCache(schema)); }
+  catch { /* give up; manual Refresh remains */ }
+}
+
+/** Resolve a prompt-ready schema block. When an instance id is given, use ONLY that instance's cached
+ *  schema (never a same-kind SIBLING's — that would generate SQL against the wrong instance's tables);
+ *  if it has no cache (connect-time warm never ran / failed), introspect ON DEMAND and self-heal. The
+ *  same-kind match is reserved for the deprecated slug/kind path. Best-effort — generation still
+ *  proceeds schema-less (the model is told as much). */
 async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: boolean, kind: string): Promise<string> {
   const accountId = currentAccountId();
   try {
     const schemas = await listConfiguredSchemas(accountId);
-    const own = (hasId ? schemas.find((s) => s.integrationId === id) : undefined) || schemas.find((s) => s.kind === kind);
+    const own = hasId ? schemas.find((s) => s.integrationId === id) : schemas.find((s) => s.kind === kind);
     if (own?.schema) {
       const block = renderSchemaForPrompt(own.schema, own.kind);
       if (block) return block;
@@ -47,7 +72,7 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
       const connConfig = await resolveConnConfig(ds);
       if (connConfig?.endpoint) assertDatasourceEndpointAllowed(connConfig.endpoint); // defense-in-depth (connector guards too)
       const schema = await invokeMcpLambdaTool({ kind, tool: `${kind}_schema`, connConfig });
-      try { await upsertSchema(accountId, id, kind, schema); } catch { /* cache write best-effort */ }
+      await cacheSchemaBestEffort(accountId, id, kind, schema);
       return renderSchemaForPrompt(schema, kind);
     } catch { /* introspect best-effort; proceed schema-less */ }
   }

@@ -69,33 +69,41 @@ export async function listConfiguredSchemas(accountId: string): Promise<CachedSc
 }
 
 // --- Prompt rendering -------------------------------------------------------
-// Bounds so a rich introspected schema (ClickHouse allows up to 100 tables × 200 cols) never blows the
-// model prompt. Tuned to fit comfortably inside the agent's 8000-char extraContext budget.
+// Bounds so a rich introspected schema (ClickHouse allows up to 100 tables × 200 cols, OpenSearch many
+// indices) never blows the model prompt. The per-line/column caps matter because a column TYPE can be a
+// deeply-nested ClickHouse type string (Tuple/Map/Array(Nested(...))) thousands of chars long.
 const PROMPT_MAX_TABLES = 40;
 const PROMPT_MAX_COLS = 60;
-const PROMPT_MAX_CHARS = 6000;
+const PROMPT_MAX_COL_CHARS = 80;    // one `name type` cell
+const PROMPT_MAX_LINE_CHARS = 1200; // one table/domain line, regardless of column count
+const PROMPT_MAX_CHARS = 6000;      // default total; callers (chat) may pass a smaller per-datasource budget
+
+const clamp = (str: string, max: number) => (str.length > max ? `${str.slice(0, max - 1)}…` : str);
 
 /**
  * Render a cached datasource schema into a compact, prompt-ready block.
  *
- * For SQL datasources (the introspected schema carries `tables: [{name, columns: [{name, type}]}]`),
- * it emits `table(col type, col type, …)` — so the model sees the COLUMNS, not just table names, which
- * is what it needs to write a real query (the previous renderer dropped columns → the model couldn't
- * write a correct ClickHouse query). For metric/label/tag datasources (Prometheus/Loki/Tempo) it emits
- * `key: name, name, …` (names are all those carry). Bounded by tables, columns, and total chars.
+ * - SQL datasources (`tables: [{name, columns: [{name, type}]}]`) → `table(col type, col type, …)` so the
+ *   model sees the COLUMNS, not just table names (the previous renderer dropped columns, so the model
+ *   couldn't write a correct ClickHouse query).
+ * - OpenSearch (`domains: [{name, indices: […]}]`) → `domain: idx, idx, …` so the data gateway gets index names.
+ * - metric/label/tag datasources (Prometheus/Loki/Tempo) → `key: name, name, …` (names are all those carry).
+ *
+ * Bounded by tables/columns/domains, per-line and per-column length, and a total `maxChars` budget;
+ * truncation is always disclosed (`… (+N more …)`), never a silent slice. `_kind` is reserved for
+ * future kind-specific shaping (rendering is currently shape-driven, not kind-driven).
  */
-export function renderSchemaForPrompt(schema: unknown, _kind?: string | null): string {
+export function renderSchemaForPrompt(schema: unknown, _kind?: string | null, maxChars: number = PROMPT_MAX_CHARS): string {
   const s = (schema && typeof schema === 'object' && !Array.isArray(schema)) ? (schema as Record<string, unknown>) : {};
   const lines: string[] = [];
-  let budget = PROMPT_MAX_CHARS; // running char budget so truncation is explicit, never a blind slice()
+  let budget = Math.max(80, maxChars); // running char budget so truncation is explicit, never a blind slice()
 
   // SQL datasources: tables WITH columns + types (the part the model actually needs for SQL).
   if (Array.isArray(s.tables) && s.tables.length) {
     const tables = s.tables as unknown[];
-    const considered = tables.slice(0, PROMPT_MAX_TABLES);
     let emitted = 0;
     let budgetBroke = false;
-    for (const t of considered) {
+    for (const t of tables.slice(0, PROMPT_MAX_TABLES)) {
       if (!t || typeof t !== 'object') continue;
       const tt = t as { name?: unknown; columns?: unknown };
       const name = typeof tt.name === 'string' ? tt.name : '';
@@ -103,15 +111,15 @@ export function renderSchemaForPrompt(schema: unknown, _kind?: string | null): s
       const cols = Array.isArray(tt.columns) ? (tt.columns as unknown[]).slice(0, PROMPT_MAX_COLS) : [];
       const colStr = cols
         .map((c) => {
-          if (typeof c === 'string') return c;
+          if (typeof c === 'string') return clamp(c, PROMPT_MAX_COL_CHARS);
           const cc = (c || {}) as { name?: unknown; type?: unknown };
           const cn = typeof cc.name === 'string' ? cc.name : '';
           const ct = typeof cc.type === 'string' ? cc.type : '';
-          return cn ? (ct ? `${cn} ${ct}` : cn) : '';
+          return cn ? clamp(ct ? `${cn} ${ct}` : cn, PROMPT_MAX_COL_CHARS) : '';
         })
         .filter(Boolean)
         .join(', ');
-      const line = colStr ? `${name}(${colStr})` : name;
+      const line = clamp(colStr ? `${name}(${colStr})` : name, PROMPT_MAX_LINE_CHARS);
       // Reserve ~60 chars for the truncation-disclosure line; stop cleanly rather than slice mid-table.
       if (lines.length && line.length + 1 > budget - 60) { budgetBroke = true; break; }
       lines.push(line);
@@ -121,20 +129,42 @@ export function renderSchemaForPrompt(schema: unknown, _kind?: string | null): s
     // Disclose truncation ONLY when a real limit (MAX_TABLES cap or char budget) dropped content —
     // a silent cap would read to the model as "these are all the tables" when they are not. (When the
     // whole `tables` array was malformed, emitted === 0 and we disclose nothing.)
-    const limitHit = tables.length > PROMPT_MAX_TABLES || budgetBroke;
-    if (emitted > 0 && limitHit) {
+    if (emitted > 0 && (tables.length > PROMPT_MAX_TABLES || budgetBroke)) {
       lines.push(`… (+${tables.length - emitted} more tables — refine the request or query system.tables)`);
     }
   }
 
-  // metric/label/tag/domain/index datasources: names only (that's all they carry).
   const names = (a: unknown, n: number) =>
     (Array.isArray(a) ? a : [])
       .slice(0, n)
       .map((x) => (typeof x === 'string' ? x : ((x as { name?: string })?.name ?? '')))
       .filter(Boolean)
       .join(', ');
-  for (const [k, n] of [['metrics', 80], ['labels', 80], ['tags', 80], ['domains', 20], ['indices', 60]] as const) {
+
+  // OpenSearch domains carry nested indices — render `domain: idx, idx` so the data gateway sees index names.
+  if (Array.isArray(s.domains) && s.domains.length) {
+    const domains = s.domains as unknown[];
+    let emitted = 0;
+    let budgetBroke = false;
+    for (const d of domains.slice(0, PROMPT_MAX_TABLES)) {
+      if (!d || typeof d !== 'object') continue;
+      const dd = d as { name?: unknown; indices?: unknown };
+      const dn = typeof dd.name === 'string' ? dd.name : '';
+      if (!dn) continue;
+      const idx = names(dd.indices, PROMPT_MAX_COLS);
+      const line = clamp(idx ? `${dn}: ${idx}` : dn, PROMPT_MAX_LINE_CHARS);
+      if (lines.length && line.length + 1 > budget - 40) { budgetBroke = true; break; }
+      lines.push(line);
+      budget -= line.length + 1;
+      emitted += 1;
+    }
+    if (emitted > 0 && (domains.length > PROMPT_MAX_TABLES || budgetBroke)) {
+      lines.push(`… (+${domains.length - emitted} more domains)`);
+    }
+  }
+
+  // metric/label/tag/index datasources: names only (that's all they carry). (`domains` handled above.)
+  for (const [k, n] of [['metrics', 80], ['labels', 80], ['tags', 80], ['indices', 60]] as const) {
     if (Array.isArray(s[k]) && (s[k] as unknown[]).length) {
       const line = `${k}: ${names(s[k], n)}`;
       if (line.length + 1 > budget) continue;

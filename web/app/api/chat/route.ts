@@ -35,16 +35,25 @@ function chunk(text: string): string[] {
 
 /** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps).
  *  Uses the shared renderer so SQL datasources (ClickHouse) get their COLUMNS — not just table names —
- *  exactly like the Explore "AI로 생성" path. */
+ *  and OpenSearch domains get their indices, exactly like the Explore "AI로 생성" path. Each datasource
+ *  gets a GUARANTEED share of the total budget (so a big ClickHouse schema can't crowd out Prometheus),
+ *  and dropped datasources are disclosed instead of silently sliced off. */
+const SCHEMA_CTX_TOTAL = 7000; // fits inside the agent's 8000-char extraContext budget with headroom
+const SCHEMA_CTX_MAX_DATASOURCES = 12;
 function renderSchemaContext(schemas: { label: string; kind: string | null; schema: unknown; version?: string | null }[]): string {
-  const lines = ['## Datasource schemas (cached) — use these real names AND the server version when writing queries'];
-  for (const s of schemas) {
-    const body = renderSchemaForPrompt(s.schema, s.kind);
+  const header = '## Datasource schemas (cached) — use these real names AND the server version when writing queries';
+  const lines = [header];
+  const shown = schemas.slice(0, SCHEMA_CTX_MAX_DATASOURCES);
+  const perEntry = Math.max(500, Math.floor((SCHEMA_CTX_TOTAL - header.length) / Math.max(1, shown.length)));
+  for (const s of shown) {
     const ver = s.version ? ` v${s.version}` : ''; // version informs version-specific DSL/syntax
+    const labelLine = `- **${s.label}** (${s.kind ?? ''}${ver}):`;
+    const body = renderSchemaForPrompt(s.schema, s.kind, perEntry - labelLine.length - 8); // leave room for the label + indentation
     const indented = body ? '\n' + body.split('\n').map((l) => `  ${l}`).join('\n') : ' (empty)';
-    lines.push(`- **${s.label}** (${s.kind ?? ''}${ver}):${indented}`);
+    lines.push(`${labelLine}${indented}`);
   }
-  return lines.join('\n').slice(0, 7000);
+  if (schemas.length > shown.length) lines.push(`… (+${schemas.length - shown.length} more datasource(s) omitted)`);
+  return lines.join('\n');
 }
 
 export async function POST(request: Request) {
