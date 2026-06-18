@@ -37,7 +37,7 @@ _PRICING = (
 
 SECTIONS = [
     {"key": "executive_summary", "title": "Executive Summary",
-     "sources": ["inventory", "cost", "posture", "what_changed", "cw_metrics", "service_map"],
+     "sources": ["inventory", "cost", "posture", "what_changed", "cw_metrics", "service_map", "idle", "commitment"],
      "prompt": (
          "당신은 6대 Well-Architected 기둥에 정통한 수석 클라우드 아키텍트다. 아래 계정 데이터로 경영진용 요약을 작성하라.\n"
          "### 인프라 건강 점수 (0~100)\n"
@@ -93,7 +93,8 @@ SECTIONS = [
      "sources": ["cost"],
      "prompt": (
          "당신은 AWS 비용 관리에 정통한 수석 FinOps 분석가다. Cost Explorer 데이터(MTD 서비스별 + 3개월 총추이 monthly_totals + 상위 usage-type)로 지출 구조를 진단하라.\n"
-         "### 비용 총괄 & 추이\n표(| 서비스 | 월비용($) | 비중% |) 상위 서비스 + 표(| 월 | 총비용($) | MoM% | 추세 |)로 3개월 추이. 총지출 MoM +15%↑ 또는 상위 서비스 +20%↑는 [Warning].\n"
+         "### 비용 총괄 & 추이\n표(| 서비스 | 월비용($) | 비중% |) 상위 서비스(현재월) + 표(| 월 | 총비용($) | MoM% | 추세 |)로 3개월 총지출 추이. "
+         "총지출 MoM +15%↑는 [Warning](서비스별 월비교 데이터는 미수집 — 추이는 총지출 기준, 집중도는 현재월 비중으로 판단).\n"
          "### 비용 동인 (Usage-Type)\n상위 usage-type(top_usage_types)을 분석해 숨은 동인을 짚어라 — DataTransfer/NatGateway/스토리지 등. 표(| usage-type | 월비용($) | 비고 |).\n"
          "### 집중 리스크 & 절감 후보\n단일 서비스가 총비용 40%↑이면 [Warning]. 절감 후보를 우선순위·예상효과와 함께(실행은 권고만). " + _PRICING + _RULES)},
 
@@ -105,7 +106,7 @@ SECTIONS = [
          "이벤트가 없으면 '데이터 불가(최근 변경 없음 또는 CloudTrail 비활성)'로 명시하라. " + _RULES)},
 
     {"key": "recommendations", "title": "Recommendations",
-     "sources": ["inventory", "cost", "posture", "service_map", "what_changed", "cw_metrics"],
+     "sources": ["inventory", "cost", "posture", "service_map", "what_changed", "cw_metrics", "idle", "commitment"],
      "prompt": (
          "당신은 모든 발견을 종합하는 전략 클라우드 어드바이저다. 위 모든 섹션 데이터로 우선순위가 매겨진 read-only 로드맵을 작성하라.\n"
          "### 즉시 — Quick Wins (이번 주)\n표(| # | 조치 | 기둥 | 예상 효과 | 공수 Low | 우선순위 P1 |).\n"

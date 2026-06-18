@@ -207,23 +207,37 @@ def collect_cw_metrics(conn):
         return _classify("cw_metrics", e)
 
 
+def _ce_grouped(ce, time_period, group_key):
+    """ALL groups for a grouped GetCostAndUsage, paginated (NextPageToken) so high-cost SERVICE/USAGE_TYPE
+    entries are never dropped by single-page truncation. Returns {key: rounded $} for the period."""
+    out, token = {}, None
+    while True:
+        kwargs = {"TimePeriod": time_period, "Granularity": "MONTHLY", "Metrics": ["UnblendedCost"],
+                  "GroupBy": [{"Type": "DIMENSION", "Key": group_key}]}
+        if token:
+            kwargs["NextPageToken"] = token
+        r = ce.get_cost_and_usage(**kwargs)
+        for g in r.get("ResultsByTime", [{}])[0].get("Groups", []):
+            out[g["Keys"][0]] = out.get(g["Keys"][0], 0.0) + float(g["Metrics"]["UnblendedCost"]["Amount"])
+        token = r.get("NextPageToken")
+        if not token:
+            break
+    return {k: round(v, 2) for k, v in out.items()}
+
+
 def collect_cost():
     """Cost Explorer (read-only GetCostAndUsage; aggregated $, no PII): MTD by service + a 3-month total
-    trend (MoM) + top usage-type drivers (surfaces data-transfer / NAT / storage spend v1 broke out)."""
+    trend (MoM) + top usage-type drivers (surfaces data-transfer / NAT / storage spend v1 broke out).
+    Grouped calls are paginated (no single-page truncation)."""
     try:
         ce = _ce_client()
         import datetime as dt
         today = dt.date.today()
         month_start = today.replace(day=1)
         end = (today + dt.timedelta(days=1)).isoformat()
-        # current month by service
-        r = ce.get_cost_and_usage(
-            TimePeriod={"Start": month_start.isoformat(), "End": end}, Granularity="MONTHLY",
-            Metrics=["UnblendedCost"], GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
-        )
-        groups = r.get("ResultsByTime", [{}])[0].get("Groups", [])
-        by_service = {g["Keys"][0]: round(float(g["Metrics"]["UnblendedCost"]["Amount"]), 2) for g in groups}
-        # 3-month total trend (MoM)
+        month_tp = {"Start": month_start.isoformat(), "End": end}
+        by_service = _ce_grouped(ce, month_tp, "SERVICE")  # paginated
+        # 3-month total trend (MoM) — ungrouped, small (1 row/month)
         trend_start = (month_start - dt.timedelta(days=62)).replace(day=1)
         rt = ce.get_cost_and_usage(
             TimePeriod={"Start": trend_start.isoformat(), "End": end}, Granularity="MONTHLY",
@@ -232,13 +246,7 @@ def collect_cost():
         monthly = [{"month": p["TimePeriod"]["Start"],
                     "total": round(float(p["Total"]["UnblendedCost"]["Amount"]), 2)}
                    for p in rt.get("ResultsByTime", [])]
-        # top usage-type drivers (current month) — DataTransfer/NatGateway/storage signals
-        ru = ce.get_cost_and_usage(
-            TimePeriod={"Start": month_start.isoformat(), "End": end}, Granularity="MONTHLY",
-            Metrics=["UnblendedCost"], GroupBy=[{"Type": "DIMENSION", "Key": "USAGE_TYPE"}],
-        )
-        ug = ru.get("ResultsByTime", [{}])[0].get("Groups", [])
-        by_usage = {g["Keys"][0]: round(float(g["Metrics"]["UnblendedCost"]["Amount"]), 2) for g in ug}
+        by_usage = _ce_grouped(ce, month_tp, "USAGE_TYPE")  # paginated → accurate top-N
         top_usage = dict(sorted(by_usage.items(), key=lambda kv: kv[1], reverse=True)[:15])
         return _result("cost", data={"mtd_by_service": by_service, "monthly_totals": monthly,
                                      "top_usage_types": top_usage})
@@ -246,44 +254,27 @@ def collect_cost():
         return _classify("cost", e)
 
 
-# EBS $/GB-month heuristics (ap-northeast-2 approx) — used ONLY to estimate recoverable idle waste.
-_EBS_GB_PRICE = {"gp3": 0.0912, "gp2": 0.114, "io1": 0.125, "io2": 0.125, "st1": 0.045, "sc1": 0.025}
-
-
 def collect_idle(conn):
-    """DB-derived waste from inventory_resources (no live AWS call): unattached EBS volumes (state
-    'available') with a recoverable-$/month estimate + stopped EC2 (EBS still billed). EIP/snapshots are
-    not synced → reported as a data gap (the prompt then says '데이터 불가'). Degrades, never raises."""
+    """DB-derived waste from inventory_resources (no live AWS call, no row cap — aggregated in SQL):
+    unattached EBS volumes (state 'available') with a recoverable-$/month estimate (type-weighted price
+    heuristics) + stopped EC2 (EBS still billed). EIP/snapshots are not synced → reported as a data gap
+    (the prompt then says '데이터 불가'). Degrades, never raises."""
     try:
-        unattached, gb, est = 0, 0.0, 0.0
-        for row in conn.run("SELECT data FROM inventory_resources WHERE account_id='self' "
-                            "AND resource_type='ebs_volume' LIMIT 2000"):
-            d = row[0]
-            if isinstance(d, str):
-                try:
-                    d = json.loads(d)
-                except (ValueError, TypeError):
-                    d = {}
-            d = d or {}
-            if d.get("state") == "available":
-                size = float(d.get("size") or 0)
-                unattached += 1
-                gb += size
-                est += size * _EBS_GB_PRICE.get(d.get("volume_type"), 0.10)
-        stopped = 0
-        for row in conn.run("SELECT data FROM inventory_resources WHERE account_id='self' "
-                            "AND resource_type='ec2' LIMIT 2000"):
-            d = row[0]
-            if isinstance(d, str):
-                try:
-                    d = json.loads(d)
-                except (ValueError, TypeError):
-                    d = {}
-            if (d or {}).get("instance_state") == "stopped":
-                stopped += 1
+        ebs = conn.run(
+            "SELECT count(*), coalesce(sum((data->>'size')::numeric), 0), "
+            "coalesce(sum((data->>'size')::numeric * CASE data->>'volume_type' "
+            "  WHEN 'gp3' THEN 0.0912 WHEN 'gp2' THEN 0.114 WHEN 'io1' THEN 0.125 WHEN 'io2' THEN 0.125 "
+            "  WHEN 'st1' THEN 0.045 WHEN 'sc1' THEN 0.025 ELSE 0.10 END), 0) "
+            "FROM inventory_resources WHERE account_id='self' AND resource_type='ebs_volume' "
+            "AND data->>'state' = 'available'")
+        row = ebs[0] if ebs else (0, 0, 0)
+        stopped = conn.run(
+            "SELECT count(*) FROM inventory_resources WHERE account_id='self' "
+            "AND resource_type='ec2' AND data->>'instance_state' = 'stopped'")
         return _result("idle", data={
-            "unattached_ebs": {"count": unattached, "gb": round(gb, 1), "est_monthly_usd": round(est, 2)},
-            "stopped_ec2": {"count": stopped},
+            "unattached_ebs": {"count": int(row[0]), "gb": round(float(row[1]), 1),
+                               "est_monthly_usd": round(float(row[2]), 2)},
+            "stopped_ec2": {"count": int(stopped[0][0]) if stopped else 0},
             "note": "EIP/스냅샷은 인벤토리 미동기화 — 해당 항목은 데이터 불가",
         })
     except Exception as e:  # noqa: BLE001

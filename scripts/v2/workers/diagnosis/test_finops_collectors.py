@@ -3,47 +3,39 @@ New file so it does not touch the concurrent data-branch's test_sources.py. No l
 from diagnosis import sources
 
 
-class FakeConn:
-    def __init__(self, by_type):
-        self.by_type = by_type  # {resource_type: [data_dict_or_json_str, ...]}
+class FakeAggConn:
+    """idle() now aggregates in SQL — return one aggregate row per query."""
+    def __init__(self, ebs_agg, stopped):
+        self.ebs_agg = ebs_agg  # (count, gb, est_usd)
+        self.stopped = stopped
 
     def run(self, sql, **_kw):
-        for t, rows in self.by_type.items():
-            if f"resource_type='{t}'" in sql:
-                return [[d] for d in rows]
+        if "resource_type='ebs_volume'" in sql:
+            return [list(self.ebs_agg)]
+        if "resource_type='ec2'" in sql:
+            return [[self.stopped]]
         return []
 
 
-def test_collect_idle_unattached_ebs_and_stopped_ec2():
-    conn = FakeConn({
-        "ebs_volume": [
-            {"state": "available", "size": 100, "volume_type": "gp3"},   # unattached
-            {"state": "in-use", "size": 50, "volume_type": "gp2"},       # attached → ignored
-            '{"state": "available", "size": 10, "volume_type": "gp2"}',  # JSON-string form tolerated
-        ],
-        "ec2": [{"instance_state": "stopped"}, {"instance_state": "running"}],
-    })
-    r = sources.collect_idle(conn)
-    assert r["ok"] is True
-    ebs = r["data"]["unattached_ebs"]
-    assert ebs["count"] == 2 and ebs["gb"] == 110.0
-    assert ebs["est_monthly_usd"] == 10.26  # 100*0.0912 + 10*0.114
-    assert r["data"]["stopped_ec2"]["count"] == 1
+def test_collect_idle_maps_sql_aggregates():
+    d = sources.collect_idle(FakeAggConn((2, 110.0, 10.26), 1))["data"]
+    assert d["unattached_ebs"] == {"count": 2, "gb": 110.0, "est_monthly_usd": 10.26}
+    assert d["stopped_ec2"]["count"] == 1
+    assert "데이터 불가" in d["note"]  # EIP/snapshots honestly flagged
 
 
 def test_collect_idle_degrades_on_db_error():
     class Boom:
         def run(self, *a, **k):
             raise RuntimeError("db down")
-    r = sources.collect_idle(Boom())
-    assert r["degraded"] is True  # never raises
+    assert sources.collect_idle(Boom())["degraded"] is True  # never raises
 
 
 class FakeCE:
     def __init__(self):
         self.calls = []
 
-    def get_cost_and_usage(self, TimePeriod, Granularity, Metrics, GroupBy=None):  # noqa: N803
+    def get_cost_and_usage(self, TimePeriod, Granularity, Metrics, GroupBy=None, **_kw):  # noqa: N803
         key = GroupBy[0]["Key"] if GroupBy else None
         self.calls.append(key)
         if key == "SERVICE":
@@ -65,6 +57,21 @@ class FakeCE:
         return {"SavingsPlansCoverages": [{"Coverage": {"CoveragePercentage": "30.0"}}]}
 
 
+class PagedCE(FakeCE):
+    """USAGE_TYPE returns two pages — verifies _ce_grouped follows NextPageToken (no truncation)."""
+    def get_cost_and_usage(self, TimePeriod, Granularity, Metrics, GroupBy=None, NextPageToken=None, **_kw):  # noqa: N803
+        key = GroupBy[0]["Key"] if GroupBy else None
+        if key == "USAGE_TYPE" and not NextPageToken:
+            self.calls.append(key)
+            return {"NextPageToken": "p2", "ResultsByTime": [{"Groups": [
+                {"Keys": ["NatGateway-Bytes"], "Metrics": {"UnblendedCost": {"Amount": "40"}}}]}]}
+        if key == "USAGE_TYPE":
+            self.calls.append("USAGE_TYPE#2")
+            return {"ResultsByTime": [{"Groups": [
+                {"Keys": ["DataTransfer-Out"], "Metrics": {"UnblendedCost": {"Amount": "60"}}}]}]}
+        return super().get_cost_and_usage(TimePeriod, Granularity, Metrics, GroupBy)
+
+
 def test_collect_cost_adds_mom_trend_and_usage_types(monkeypatch):
     fake = FakeCE()
     monkeypatch.setattr(sources, "_ce_client", lambda: fake)
@@ -72,7 +79,16 @@ def test_collect_cost_adds_mom_trend_and_usage_types(monkeypatch):
     assert d["mtd_by_service"]["EC2"] == 123.46
     assert [m["total"] for m in d["monthly_totals"]] == [100.0, 200.0]
     assert d["top_usage_types"]["DataTransfer-Out"] == 60.0  # sorted desc
-    assert {"SERVICE", "USAGE_TYPE", None} <= set(fake.calls)  # 3 distinct CE calls
+    assert set(fake.calls) == {"SERVICE", "USAGE_TYPE", None}  # exactly 3 distinct CE calls
+
+
+def test_collect_cost_paginates_usage_types(monkeypatch):
+    paged = PagedCE()
+    monkeypatch.setattr(sources, "_ce_client", lambda: paged)
+    d = sources.collect_cost()["data"]
+    # both pages aggregated → neither driver dropped by single-page truncation
+    assert d["top_usage_types"] == {"DataTransfer-Out": 60.0, "NatGateway-Bytes": 40.0}
+    assert "USAGE_TYPE#2" in paged.calls  # second page was fetched
 
 
 def test_collect_commitment_coverage(monkeypatch):
