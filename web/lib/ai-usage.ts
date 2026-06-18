@@ -34,10 +34,13 @@ const n = (v: unknown): number => {
 /**
  * Canonical modelId = the segment after the last '/'. Bedrock logs modelId inconsistently — the SDK
  * worker logs the full inference-profile ARN (".../inference-profile/global.anthropic.claude-opus-4-8")
- * while AgentCore logs the bare id ("global.anthropic.claude-opus-4-8"). The aggregator normalizes on
- * write, but normalizing again HERE (the read path) makes correctness order-independent: any leftover
- * ARN-keyed row collapses into its bare-key sibling at read time, so the total can never double-count
- * regardless of what's in ai_usage_daily or the order the aggregator ran in.
+ * while AgentCore logs the bare id ("global.anthropic.claude-opus-4-8"). The aggregator already
+ * normalizes on write (normalize_model in aggregate.py), so steady-state ai_usage_daily holds exactly
+ * ONE canonical row per (day, model) — collapsing here is then a harmless no-op that just keeps labels
+ * clean. It also correctly merges genuinely-distinct usage if both an ARN-key and a bare-key row exist
+ * for DIFFERENT underlying calls. CAVEAT: this is a SUM, so it does NOT defend against a stale ARN row
+ * that duplicates the SAME usage already in a canonical row (a one-off pre-normalization transition
+ * artifact) — those were cleaned once at rollout; the durable guarantee is the write-side normalization.
  */
 const canonicalModel = (m: string): string => m.slice(m.lastIndexOf('/') + 1) || m;
 
