@@ -68,6 +68,18 @@ export async function listConfiguredSchemas(accountId: string): Promise<CachedSc
   return rows.map(mapRow);
 }
 
+// --- Staleness / lazy refresh ----------------------------------------------
+// On a cache HIT older than this TTL, the read path refreshes the schema in the BACKGROUND (serves the
+// cached copy now; the next lookup is fresh). The daily refresh worker is the floor for unused datasources.
+export const SCHEMA_TTL_MS = Number(process.env.DATASOURCE_SCHEMA_TTL_MS) || 6 * 60 * 60 * 1000; // 6h
+
+/** True if a cached schema is missing/unparseable or older than the TTL → should be refreshed. */
+export function isSchemaStale(fetchedAt: string | null | undefined, now: number = Date.now(), ttlMs: number = SCHEMA_TTL_MS): boolean {
+  if (!fetchedAt) return true;
+  const t = Date.parse(fetchedAt);
+  return Number.isNaN(t) || now - t > ttlMs;
+}
+
 // --- Query-relevance prioritization ----------------------------------------
 /**
  * Reorder a schema's metric / label / tag name lists so entries RELEVANT to the natural-language query

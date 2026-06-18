@@ -8,7 +8,7 @@
 // a strict translate-to-query prompt + the schema (real table/COLUMN names) injected as data.
 import { verifyUser } from '@/lib/auth';
 import { generateQuery } from '@/lib/datasource-querygen';
-import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, upsertSchema } from '@/lib/datasource-schema';
+import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, upsertSchema } from '@/lib/datasource-schema';
 import { currentAccountId } from '@/lib/account';
 import { getDatasource, resolveConnConfig, type DatasourceRow } from '@/lib/datasources';
 import { invokeMcpLambdaTool } from '@/lib/mcp-lambda-invoke';
@@ -56,6 +56,25 @@ async function cacheSchemaBestEffort(accountId: string, id: number, kind: string
  *  if it has no cache (connect-time warm never ran / failed), introspect ON DEMAND and self-heal. The
  *  same-kind match is reserved for the deprecated slug/kind path. Best-effort — generation still
  *  proceeds schema-less (the model is told as much). */
+/** Live-introspect the instance's schema (resolve conn-config, SSRF-guard, invoke <kind>_schema) and
+ *  cache it. Returns the introspected schema. */
+async function introspectAndCache(accountId: string, ds: DatasourceRow, id: number, kind: string): Promise<unknown> {
+  const connConfig = await resolveConnConfig(ds);
+  if (connConfig?.endpoint) assertDatasourceEndpointAllowed(connConfig.endpoint); // defense-in-depth (connector guards too)
+  const schema = await invokeMcpLambdaTool({ kind, tool: `${kind}_schema`, connConfig });
+  await cacheSchemaBestEffort(accountId, id, kind, schema);
+  return schema;
+}
+
+// Dedupe concurrent background refreshes per instance (the web tier is long-lived Fargate, so a
+// fire-and-forget refresh completes after the response).
+const refreshing = new Set<number>();
+function refreshInBackground(accountId: string, ds: DatasourceRow, id: number, kind: string): void {
+  if (refreshing.has(id)) return;
+  refreshing.add(id);
+  void introspectAndCache(accountId, ds, id, kind).catch(() => {}).finally(() => refreshing.delete(id));
+}
+
 async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: boolean, kind: string, nl: string): Promise<string> {
   const accountId = currentAccountId();
   // Float NL-relevant metric/label names to the front so they survive the render cap (Prometheus/Mimir
@@ -66,17 +85,17 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
     const own = hasId ? schemas.find((s) => s.integrationId === id) : schemas.find((s) => s.kind === kind);
     if (own?.schema) {
       const block = render(own.schema, own.kind);
-      if (block) return block;
+      if (block) {
+        // Lazy refresh: cache hit but stale → refresh in the background (next lookup is fresh), serve now.
+        if (hasId && ds && isSchemaStale(own.fetched_at)) refreshInBackground(accountId, ds, id, kind);
+        return block;
+      }
     }
   } catch { /* cache is optional */ }
 
   if (hasId && ds) {
     try {
-      const connConfig = await resolveConnConfig(ds);
-      if (connConfig?.endpoint) assertDatasourceEndpointAllowed(connConfig.endpoint); // defense-in-depth (connector guards too)
-      const schema = await invokeMcpLambdaTool({ kind, tool: `${kind}_schema`, connConfig });
-      await cacheSchemaBestEffort(accountId, id, kind, schema);
-      return render(schema, kind);
+      return render(await introspectAndCache(accountId, ds, id, kind), kind); // cache miss → introspect now
     } catch { /* introspect best-effort; proceed schema-less */ }
   }
   return '';
