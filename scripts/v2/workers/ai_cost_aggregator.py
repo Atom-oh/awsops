@@ -31,14 +31,10 @@ _UPSERT = (
     "cache_read_tokens = EXCLUDED.cache_read_tokens, cache_write_tokens = EXCLUDED.cache_write_tokens, "
     "updated_at = now()"
 )
-
-# Self-heal: rows written before modelId normalization were keyed by the full inference-profile ARN
-# (which contains '/'); normalize_model() now stores canonical ids that never contain '/'. Delete the
-# stale ARN-keyed rows so the read path (/api/ai-usage GROUP BY model) never double-counts an ARN-key
-# row + a bare-key row as two models. SCOPED to the re-queried lookback window (`day >= :start`) and run
-# only when the Insights query returned rows — so it deletes ONLY rows that are about to be re-inserted
-# as canonical, never wiping older history we won't re-derive, and never wiping on an empty/failed query.
-_CLEANUP_LEGACY = "DELETE FROM ai_usage_daily WHERE model LIKE '%/%' AND day >= :start"
+# NOTE: legacy rows keyed by the full inference-profile ARN (pre-normalization) are cleaned up ONCE by
+# the migration `…_merge_legacy_modelid.sql` (merges them into the canonical key, summing tokens). The
+# recurring aggregator below does NOT mutate legacy rows — normalize_model() guarantees every NEW row is
+# canonical, so no slash-keyed rows are ever created going forward (no ongoing cleanup needed).
 
 
 def _run_insights(start_epoch: int, end_epoch: int):
@@ -77,11 +73,6 @@ def lambda_handler(_event, _ctx):
     conn = db.connect()
     upserted = 0
     try:
-        if rows:
-            # window-scoped self-heal: drop stale ARN-keyed rows ONLY for days we just re-queried (they
-            # get re-inserted as canonical below). Skipped when rows is empty so a failed Insights query
-            # never wipes data.
-            conn.run(_CLEANUP_LEGACY, start=start_day.strftime("%Y-%m-%d"))
         for row in rows:
             conn.run(
                 _UPSERT,
