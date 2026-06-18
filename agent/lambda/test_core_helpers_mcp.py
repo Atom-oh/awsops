@@ -52,3 +52,17 @@ class TestNoCallAws(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCatalogWiring(unittest.TestCase):
+    def test_core_helpers_target_registered(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "v2", "agentcore"))
+        import catalog
+        t = catalog.TARGETS.get("core-helpers-target")
+        self.assertIsNotNone(t, "core-helpers-target missing from catalog.TARGETS")
+        self.assertEqual(t["gateway"], "ops")
+        self.assertEqual(t["lambda_key"], "core-helpers")
+        names = [tool["name"] for tool in t["tools"]]
+        self.assertIn("prompt_understanding", names)
+        self.assertIn("suggest_aws_commands", names)
+        self.assertNotIn("call_aws", names)

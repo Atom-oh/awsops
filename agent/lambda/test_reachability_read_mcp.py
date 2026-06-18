@@ -176,3 +176,14 @@ class TestGuards(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCatalogWiring(unittest.TestCase):
+    def test_reachability_target_registered(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "v2", "agentcore"))
+        import catalog
+        t = catalog.TARGETS.get("reachability-read-target")
+        self.assertIsNotNone(t, "reachability-read-target missing from catalog.TARGETS")
+        self.assertEqual(t["gateway"], "network")
+        self.assertEqual(t["lambda_key"], "reachability-read")
+        self.assertEqual([x["name"] for x in t["tools"]], ["check_reachability"])

@@ -502,23 +502,26 @@ locals {
   # is gated on integrations_enabled (one unit with its secret + IAM below). integ_count
   # requires agentcore_enabled, so aws_iam_role.agent_lambda[0] is always present here.
   agent_lambdas = merge(var.agentcore_enabled ? {
-    "iam-mcp"        = { file = "aws_iam_mcp.py", handler = "aws_iam_mcp.lambda_handler" }
-    "flow-monitor"   = { file = "flowmonitor.py", handler = "flowmonitor.lambda_handler" }
-    "network-mcp"    = { file = "network_mcp.py", handler = "network_mcp.lambda_handler" }
-    "eks-mcp"        = { file = "aws_eks_mcp.py", handler = "aws_eks_mcp.lambda_handler" }
-    "ecs-mcp"        = { file = "aws_ecs_mcp.py", handler = "aws_ecs_mcp.lambda_handler" }
-    "rds-mcp"        = { file = "aws_rds_mcp.py", handler = "aws_rds_mcp.lambda_handler" }
-    "dynamodb-mcp"   = { file = "aws_dynamodb_mcp.py", handler = "aws_dynamodb_mcp.lambda_handler" }
-    "msk-mcp"        = { file = "aws_msk_mcp.py", handler = "aws_msk_mcp.lambda_handler" }
-    "valkey-mcp"     = { file = "aws_valkey_mcp.py", handler = "aws_valkey_mcp.lambda_handler" }
-    "cost-mcp"       = { file = "aws_cost_mcp.py", handler = "aws_cost_mcp.lambda_handler" }
-    "finops-mcp"     = { file = "aws_finops_mcp.py", handler = "aws_finops_mcp.lambda_handler" }
-    "cloudwatch-mcp" = { file = "aws_cloudwatch_mcp.py", handler = "aws_cloudwatch_mcp.lambda_handler" }
-    "cloudtrail-mcp" = { file = "aws_cloudtrail_mcp.py", handler = "aws_cloudtrail_mcp.lambda_handler" }
-    "iac-mcp"        = { file = "aws_iac_mcp.py", handler = "aws_iac_mcp.lambda_handler" }
-    "terraform-mcp"  = { file = "aws_terraform_mcp.py", handler = "aws_terraform_mcp.lambda_handler" }
-    "aws-knowledge"  = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
-    "opensearch-mcp" = { file = "opensearch_mcp.py", handler = "opensearch_mcp.lambda_handler" }
+    "iam-mcp"      = { file = "aws_iam_mcp.py", handler = "aws_iam_mcp.lambda_handler" }
+    "flow-monitor" = { file = "flowmonitor.py", handler = "flowmonitor.lambda_handler" }
+    # Read-only MCP additions (2026-06-18) — static helpers + computed reachability (describe-only).
+    "core-helpers"      = { file = "core_helpers_mcp.py", handler = "core_helpers_mcp.lambda_handler" }
+    "reachability-read" = { file = "reachability_read_mcp.py", handler = "reachability_read_mcp.lambda_handler" }
+    "network-mcp"       = { file = "network_mcp.py", handler = "network_mcp.lambda_handler" }
+    "eks-mcp"           = { file = "aws_eks_mcp.py", handler = "aws_eks_mcp.lambda_handler" }
+    "ecs-mcp"           = { file = "aws_ecs_mcp.py", handler = "aws_ecs_mcp.lambda_handler" }
+    "rds-mcp"           = { file = "aws_rds_mcp.py", handler = "aws_rds_mcp.lambda_handler" }
+    "dynamodb-mcp"      = { file = "aws_dynamodb_mcp.py", handler = "aws_dynamodb_mcp.lambda_handler" }
+    "msk-mcp"           = { file = "aws_msk_mcp.py", handler = "aws_msk_mcp.lambda_handler" }
+    "valkey-mcp"        = { file = "aws_valkey_mcp.py", handler = "aws_valkey_mcp.lambda_handler" }
+    "cost-mcp"          = { file = "aws_cost_mcp.py", handler = "aws_cost_mcp.lambda_handler" }
+    "finops-mcp"        = { file = "aws_finops_mcp.py", handler = "aws_finops_mcp.lambda_handler" }
+    "cloudwatch-mcp"    = { file = "aws_cloudwatch_mcp.py", handler = "aws_cloudwatch_mcp.lambda_handler" }
+    "cloudtrail-mcp"    = { file = "aws_cloudtrail_mcp.py", handler = "aws_cloudtrail_mcp.lambda_handler" }
+    "iac-mcp"           = { file = "aws_iac_mcp.py", handler = "aws_iac_mcp.lambda_handler" }
+    "terraform-mcp"     = { file = "aws_terraform_mcp.py", handler = "aws_terraform_mcp.lambda_handler" }
+    "aws-knowledge"     = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
+    "opensearch-mcp"    = { file = "opensearch_mcp.py", handler = "opensearch_mcp.lambda_handler" }
     } : {}, local.integ_count > 0 ? {
     "notion-mcp"     = { file = "notion_mcp.py", handler = "notion_mcp.lambda_handler" }
     "clickhouse-mcp" = { file = "clickhouse_mcp.py", handler = "clickhouse_mcp.lambda_handler" }

@@ -71,6 +71,24 @@ TARGETS = {
             {"name": "query_flow_logs", "description": "Query flow logs", "inputSchema": {"type": "object", "properties": {"vpc_id": _p("string", "VPC ID")}, "required": ["vpc_id"]}},
         ],
     },
+    # ===== Read-only MCP additions (2026-06-18): core-helpers (ops) + reachability-read (network) =====
+    "core-helpers-target": {
+        "gateway": "ops",
+        "lambda_key": "core-helpers",
+        "description": "Prompt understanding + AWS CLI suggestions — static, read-only (2 tools; no call_aws)",
+        "tools": [
+            {"name": "prompt_understanding", "description": "AWS solution-design guide (static)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "suggest_aws_commands", "description": "Suggest read-only AWS CLI commands for a query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "Natural-language query")}, "required": ["query"]}},
+        ],
+    },
+    "reachability-read-target": {
+        "gateway": "network",
+        "lambda_key": "reachability-read",
+        "description": "Computed ENI<->EC2 connectivity, describe-only — static SG/NACL/route (1 tool)",
+        "tools": [
+            {"name": "check_reachability", "description": "Static SG/NACL/route reachability from a source to a destination (describe-only; not AWS Reachability Analyzer)", "inputSchema": {"type": "object", "properties": {"source": _p("string", "instance-id / eni-id / private-ip"), "destination": _p("string", "instance-id / eni-id / private-ip"), "port": _p("string", "Destination port"), "protocol": _p("string", "tcp/udp (default tcp)")}, "required": ["source", "destination", "port"]}},
+        ],
+    },
     # ===== AF1: +14 read-only targets, tool schemas verbatim from agent/lambda/create_targets.py =====
     "network-mcp-target": {
         "gateway": "network",
