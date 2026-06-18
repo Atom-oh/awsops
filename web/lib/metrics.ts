@@ -24,6 +24,83 @@ export async function ec2AvgCpu(instanceIds: string[]): Promise<number | null> {
   return Math.round((latest.reduce((a, b) => a + b, 0) / latest.length) * 10) / 10;
 }
 
+// ── RDS per-instance CloudWatch metrics (v1 parity) ─────────────────────────
+export interface RdsInstanceMetrics {
+  cpu: number | null;            // CPUUtilization (%)
+  freeableMemory: number | null; // bytes
+  connections: number | null;    // DatabaseConnections (count)
+  readIops: number | null;       // ReadIOPS (ops/s)
+  writeIops: number | null;      // WriteIOPS (ops/s)
+  freeStorage: number | null;    // FreeStorageSpace (bytes)
+  netIn: number | null;          // NetworkReceiveThroughput (bytes/s)
+  netOut: number | null;         // NetworkTransmitThroughput (bytes/s)
+}
+export interface RdsMetrics {
+  byInstance: Record<string, RdsInstanceMetrics>;
+  avgCpu: number | null; // fleet average CPU across instances reporting a datapoint
+}
+
+const RDS_METRICS = [
+  { key: 'cpu', field: 'cpu', name: 'CPUUtilization' },
+  { key: 'mem', field: 'freeableMemory', name: 'FreeableMemory' },
+  { key: 'conn', field: 'connections', name: 'DatabaseConnections' },
+  { key: 'rio', field: 'readIops', name: 'ReadIOPS' },
+  { key: 'wio', field: 'writeIops', name: 'WriteIOPS' },
+  { key: 'storage', field: 'freeStorage', name: 'FreeStorageSpace' },
+  { key: 'netin', field: 'netIn', name: 'NetworkReceiveThroughput' },
+  { key: 'netout', field: 'netOut', name: 'NetworkTransmitThroughput' },
+] as const;
+
+const emptyRds = (): RdsInstanceMetrics => ({
+  cpu: null, freeableMemory: null, connections: null, readIops: null,
+  writeIops: null, freeStorage: null, netIn: null, netOut: null,
+});
+
+/**
+ * Per-instance RDS CloudWatch metrics — the 8 series v1 rendered (latest 1h Average over a ~3h window).
+ * Read-only, live-fetch (not persisted), multi-account via `assumedClient` (host/self → task-role creds).
+ * Batches ≤62 instances per GetMetricData call (8 metrics × 62 = 496 < the 500 query/call cap — no silent
+ * truncation). Degrades to an empty result on any CloudWatch error (never throws).
+ */
+export async function rdsMetrics(instanceIds: string[], accountId?: string): Promise<RdsMetrics> {
+  const ids = instanceIds; // no silent cap — the 62/call chunk loop below covers any fleet size
+  if (!ids.length) return { byInstance: {}, avgCpu: null };
+  const byInstance: Record<string, RdsInstanceMetrics> = {};
+  try {
+    const client = await assumedClient(accountId, CloudWatchClient, { region: REGION });
+    const CHUNK = 62; // 8 metrics × 62 = 496 ≤ 500 GetMetricData queries/call
+    for (let c = 0; c < ids.length; c += CHUNK) {
+      const chunk = ids.slice(c, c + CHUNK);
+      for (const id of chunk) byInstance[id] ??= emptyRds();
+      const queries = chunk.flatMap((id, i) =>
+        RDS_METRICS.map((m) => ({
+          Id: `${m.key}_i${i}`, ReturnData: true,
+          MetricStat: { Metric: { Namespace: 'AWS/RDS', MetricName: m.name, Dimensions: [{ Name: 'DBInstanceIdentifier', Value: id }] }, Period: 3600, Stat: 'Average' },
+        })),
+      );
+      const r = await client.send(new GetMetricDataCommand({
+        StartTime: new Date(Date.now() - 3 * 3600_000), EndTime: new Date(),
+        MetricDataQueries: queries,
+      }));
+      for (const res of r.MetricDataResults ?? []) {
+        const mm = (res.Id ?? '').match(/^(\w+?)_i(\d+)$/);
+        if (!mm) continue;
+        const def = RDS_METRICS.find((m) => m.key === mm[1]);
+        const id = chunk[Number(mm[2])];
+        const v = res.Values?.[0];
+        if (def && id && typeof v === 'number') {
+          (byInstance[id] as Record<string, number | null>)[def.field] = Math.round(v * 100) / 100;
+        }
+      }
+    }
+  } catch {
+    return { byInstance: {}, avgCpu: null };
+  }
+  const cpus = Object.values(byInstance).map((m) => m.cpu).filter((v): v is number => typeof v === 'number');
+  const avgCpu = cpus.length ? Math.round((cpus.reduce((a, b) => a + b, 0) / cpus.length) * 10) / 10 : null;
+  return { byInstance, avgCpu };
+}
+
 let pricing: PricingClient | null = null;
 // Pricing API is reached via us-east-1 only.
 const priceClient = () => (pricing ??= new PricingClient({ region: 'us-east-1' }));

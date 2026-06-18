@@ -32,6 +32,9 @@ locals {
     HOST_ACCOUNT_ID          = local.acct
     PROJECT                  = var.project
   } : {}
+  # scheduled auto-diagnosis dispatcher gate — reuses the worker role/pg8000 layer/VPC + the jobs queue,
+  # so it REQUIRES workers_enabled. Default false → 0 resources, $0, no scheduled runs.
+  sched = var.workers_enabled && var.diagnosis_schedule_enabled ? 1 : 0
 }
 
 ############################################################
@@ -949,4 +952,100 @@ resource "aws_lambda_permission" "ai_cost_aggregator_events" {
   function_name = aws_lambda_function.ai_cost_aggregator[0].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.ai_cost_aggregator[0].arn
+}
+
+############################################################
+# Scheduled auto-diagnosis dispatcher (v1 report-scheduler parity).
+# Hourly EventBridge -> Lambda that scans report_schedules for due rows and enqueues a `report` job each
+# (the diagnosis is read-only). Reuses the shared worker role + pg8000 layer + VPC (Aurora reachability);
+# adds ONLY sqs:SendMessage to the jobs queue. All count-gated on local.sched (workers_enabled &&
+# diagnosis_schedule_enabled). Default off -> 0 resources, $0, no scheduled runs.
+############################################################
+resource "aws_cloudwatch_log_group" "schedule_dispatcher" {
+  count             = local.sched
+  name              = "/aws/lambda/${var.project}-schedule-dispatcher"
+  retention_in_days = 14
+}
+
+# Dedicated code bundle (db.py + schedule_dispatcher.py) so enabling this does NOT change the shared
+# workers_src archive hash → existing worker Lambdas stay byte-identical (strict no-op when off).
+data "archive_file" "schedule_dispatcher_src" {
+  count       = local.sched
+  type        = "zip"
+  output_path = "${path.module}/.build/schedule_dispatcher.zip"
+  source {
+    content  = file("${local.workers_src}/db.py")
+    filename = "db.py"
+  }
+  source {
+    content  = file("${local.workers_src}/schedule_dispatcher.py")
+    filename = "schedule_dispatcher.py"
+  }
+}
+
+# The dispatcher enqueues jobs (db.insert_job + SQS) — grant the shared worker role SendMessage, only when on.
+resource "aws_iam_role_policy" "schedule_dispatcher_sqs" {
+  count = local.sched
+  name  = "schedule-dispatcher-enqueue"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "EnqueueDiagnosisJob"
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = aws_sqs_queue.jobs[0].arn
+    }]
+  })
+}
+
+resource "aws_lambda_function" "schedule_dispatcher" {
+  count            = local.sched
+  function_name    = "${var.project}-schedule-dispatcher"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "schedule_dispatcher.lambda_handler"
+  filename         = data.archive_file.schedule_dispatcher_src[0].output_path
+  source_code_hash = data.archive_file.schedule_dispatcher_src[0].output_base64sha256
+  timeout          = 120
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AWS_ACCOUNT_ID    = local.acct
+      JOBS_QUEUE_URL    = aws_sqs_queue.jobs[0].url
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.schedule_dispatcher, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+resource "aws_cloudwatch_event_rule" "schedule_dispatcher" {
+  count               = local.sched
+  name                = "${var.project}-schedule-dispatcher"
+  description         = "Scan report_schedules for due rows and enqueue AI-diagnosis report jobs"
+  schedule_expression = "rate(1 hour)"
+}
+
+resource "aws_cloudwatch_event_target" "schedule_dispatcher" {
+  count     = local.sched
+  rule      = aws_cloudwatch_event_rule.schedule_dispatcher[0].name
+  target_id = "schedule-dispatcher"
+  arn       = aws_lambda_function.schedule_dispatcher[0].arn
+}
+
+resource "aws_lambda_permission" "schedule_dispatcher_events" {
+  count         = local.sched
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.schedule_dispatcher[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.schedule_dispatcher[0].arn
 }

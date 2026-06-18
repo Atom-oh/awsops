@@ -80,3 +80,41 @@ describe('POST /api/datasources/generate', () => {
     expect(arg.extraContext).toContain('up'); // the cached metric name is in context
   });
 });
+
+describe('language-aware NL→query prompt (WS-D)', () => {
+  const prompt = () =>
+    (invokeAgent.mock.calls.at(-1)![0] as { systemPromptOverride?: string }).systemPromptOverride ?? '';
+
+  it('prometheus prompt carries PromQL syntax guidance', async () => {
+    invokeAgent.mockResolvedValue('```\nup\n```');
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'prometheus', kind: 'prometheus', nl: 'cpu' }));
+    expect(prompt()).toMatch(/rate\(/);
+    expect(prompt()).toMatch(/\[5m\]/);
+    expect(prompt()).toMatch(/sum by/);
+  });
+
+  it('loki prompt carries LogQL guidance', async () => {
+    invokeAgent.mockResolvedValue('```\n{}\n```');
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'loki', kind: 'loki', nl: 'errors' }));
+    expect(prompt()).toMatch(/count_over_time/);
+    expect(prompt()).toMatch(/\|~/);
+  });
+
+  it('clickhouse prompt keeps the read-only SELECT rule', async () => {
+    invokeAgent.mockResolvedValue('```\nSELECT 1\n```');
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'clickhouse', kind: 'clickhouse', nl: 'rows' }));
+    expect(prompt()).toMatch(/SELECT/);
+    expect(prompt()).toMatch(/read-only/i);
+  });
+
+  it('instructs not to invent names when no schema is available', async () => {
+    invokeAgent.mockResolvedValue('```\nup\n```');
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'prometheus', kind: 'prometheus', nl: 'cpu' }));
+    expect(prompt()).toMatch(/do NOT invent/i);
+    expect(prompt()).toMatch(/refresh/i);
+  });
+});

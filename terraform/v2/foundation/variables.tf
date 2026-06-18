@@ -119,6 +119,12 @@ variable "datasource_diagnosis_enabled" {
   default     = false
 }
 
+variable "diagnosis_schedule_enabled" {
+  type        = bool
+  description = "Scheduled auto-diagnosis dispatcher (v1 report-scheduler parity): hourly EventBridge -> Lambda scans report_schedules for due rows and enqueues read-only AI-diagnosis report jobs. Requires workers_enabled (reuses the worker role/pg8000 layer/VPC + jobs queue; adds only sqs:SendMessage). false (default) = 0 resources, $0, no scheduled runs."
+  default     = false
+}
+
 variable "worker_image_tag" {
   type        = string
   description = "Worker Fargate image tag in the worker ECR repo."

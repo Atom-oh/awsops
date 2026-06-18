@@ -35,12 +35,36 @@ function schemaContext(schema: unknown): string {
   return parts.length ? `## Datasource schema (cached — use these real names)\n${parts.join('\n')}` : '';
 }
 
+// Per-language syntax guidance + canonical examples. The model was previously given only the language NAME,
+// so it free-associated PromQL/LogQL grammar and hallucinated metric names → wrong, nonsensical queries.
+// Examples use <angle-bracket> placeholders, never real metric/label names, so the model copies the
+// SHAPE (rate/sum-by/window) and fills names strictly from the injected schema (no name hallucination).
+const LANG_GUIDE: Record<string, string> = {
+  PromQL: [
+    'PromQL: use `rate(<counter_metric>[5m])` for counters, `sum by (<label>)(...)` to aggregate,',
+    '`histogram_quantile(0.99, sum by (le)(rate(<histogram_metric>_bucket[5m])))` for percentiles,',
+    '`100 - avg(rate(<cpu_idle_metric>[5m]))*100` for CPU%.',
+    'Counters need a range window like `[5m]` inside rate()/increase(); take metric names from the schema `metrics:` list and label names from `labels:`.',
+  ].join(' '),
+  LogQL: [
+    'LogQL: always begin with a stream selector `{<label>="<value>"}` (labels from the schema `labels:` list),',
+    'then line filters `|= "x"` / `|~ "(?i)error"`; aggregate with `count_over_time({<label>="<value>"} |~ "(?i)error" [5m])`',
+    'or `sum by (<label>)(count_over_time({<label>="<value>"}[5m]))`.',
+  ].join(' '),
+  TraceQL: [
+    'TraceQL: filter spans with `{ status = error }` or `{ duration > 500ms && resource.<attribute> = "<value>" }`;',
+    'take attribute/tag names from the schema when provided.',
+  ].join(' '),
+  'read-only SQL': 'The query MUST be read-only — it must START with SELECT, WITH, SHOW, or DESCRIBE; use table/column names from the schema `tables:` list.',
+};
+
 function queryOnlyPrompt(lang: string): string {
   return [
     `You translate a natural-language request into a single ${lang} query.`,
-    `Output ONLY the query inside one fenced code block. No explanation, no prose, no multiple queries.`,
-    `Use ONLY names present in the provided datasource schema when one is given.`,
-    lang.includes('SQL') ? `The query MUST be read-only (SELECT/SHOW/DESCRIBE only).` : '',
+    `Output ONLY the query inside one fenced code block — no explanation, no prose, no multiple queries.`,
+    LANG_GUIDE[lang] || '',
+    `The metric/label/table names shown in the examples above are ILLUSTRATIVE syntax only — never copy them into the output.`,
+    `Use ONLY names present in the provided datasource schema. If NO schema is provided, do NOT invent real metric/table/label names — write a generic ${lang} skeleton with obvious placeholder names (e.g. <metric_name>) the user can replace, since the schema must be refreshed first.`,
   ].filter(Boolean).join(' ');
 }
 
