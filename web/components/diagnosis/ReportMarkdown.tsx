@@ -53,11 +53,13 @@ function ReportMarkdownImpl({ markdown }: { markdown: string }) {
             </div>
           ),
           thead: ({ children }) => <thead className="bg-paper-muted">{children}</thead>,
-          th: ({ children }) => (
-            <th className="whitespace-nowrap border-b border-ink-200 px-3 py-2 text-left font-semibold text-ink-800">{children}</th>
+          // Pass `style` through: remark-gfm sets style.textAlign for column alignment (`|:--:|`, `|--:|`);
+          // the inline style overrides the default `text-left` class (e.g. right-aligned cost numbers).
+          th: ({ children, style }) => (
+            <th style={style} className="whitespace-nowrap border-b border-ink-200 px-3 py-2 text-left font-semibold text-ink-800">{children}</th>
           ),
           tr: ({ children }) => <tr className="transition-colors even:bg-paper-muted/40 hover:bg-brand-50/50">{children}</tr>,
-          td: ({ children }) => <td className="border-b border-ink-100 px-3 py-1.5 align-top text-ink-700">{children}</td>,
+          td: ({ children, style }) => <td style={style} className="border-b border-ink-100 px-3 py-1.5 align-top text-ink-700">{children}</td>,
           blockquote: ({ children }) => (
             <blockquote className="my-3 rounded-r border-l-[3px] border-brand-300 bg-brand-50/40 py-1.5 pl-3 text-ink-600">{children}</blockquote>
           ),
