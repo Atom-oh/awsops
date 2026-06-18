@@ -15,7 +15,9 @@ describe('CompliancePage', () => {
     const keys = Object.keys(map).sort((a, b) => b.length - a.length);
     return vi.fn((url: string) => {
       const key = keys.find((k) => String(url).includes(k));
-      return Promise.resolve({ ok: true, json: async () => (key ? map[key] : {}) });
+      // Unmapped URL → 404 (not a silent success) so an endpoint typo fails the test.
+      if (!key) return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => map[key] });
     });
   }
 
@@ -54,6 +56,7 @@ describe('CompliancePage', () => {
         results: [{ control_id: '1.1', title: 'MFA', section: '1 IAM', status: 'alarm', reason: 'no mfa', resource: 'arn:user/b', region: 'us-east-1', severity: 'high' }],
       },
     }));
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     render(<CompliancePage />);
     await waitFor(() => expect(screen.getByText('cis_v300')).toBeTruthy());
     fireEvent.click(screen.getByText('cis_v300'));
@@ -63,5 +66,7 @@ describe('CompliancePage', () => {
     expect(screen.getAllByText('1.1').length).toBeGreaterThan(0);
     // execution time identifies which run is shown (v1 parity)
     expect(screen.getByText(/^실행 /)).toBeTruthy();
+    // viewing a saved run must NOT start a new benchmark (no POST /api/compliance/run)
+    expect(fetchMock.mock.calls.every((c) => (c[1]?.method ?? 'GET') !== 'POST')).toBe(true);
   });
 });

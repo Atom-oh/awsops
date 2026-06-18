@@ -80,35 +80,47 @@ export default function CompliancePage() {
   useEffect(() => { void loadHistory(); }, [loadHistory]);
 
   // Fetch one run's detail. Updates the displayed run/results only while it's still the shown run
-  // (stale-guard). Surfaces non-OK responses so the UI never silently sticks. Returns the run.
-  const fetchRun = useCallback(async (id: number): Promise<Run | null> => {
+  // (stale-guard). Returns {ok} so callers can tell a TRANSIENT fetch failure (retry) apart from a
+  // real terminal/missing run (stop) — a failed poll must never be mistaken for "job finished".
+  const fetchRun = useCallback(async (id: number): Promise<{ ok: boolean; run: Run | null }> => {
     let r: Response;
     try {
       r = await fetch(`/api/compliance/runs/${id}`);
     } catch {
       if (id === latestRunIdRef.current) setErr('run 조회 중 오류가 발생했습니다.');
-      return null;
+      return { ok: false, run: null };
     }
     if (!r.ok) {
       if (id === latestRunIdRef.current) setErr(`run 조회 실패 (${r.status})`);
-      return null;
+      return { ok: false, run: null };
     }
     const body = (await r.json().catch(() => ({}))) as { run?: Run; results?: Result[] };
     if (id === latestRunIdRef.current && body.run) {
       setRun(body.run);
       setResults(body.results ?? []);
     }
-    return body.run ?? null;
+    return { ok: true, run: body.run ?? null };
   }, []);
 
   // Poll loop for the ACTIVE (just-started) job — owns the recurring timer + the busy gate.
-  const pollActive = useCallback(async (id: number) => {
-    const r = await fetchRun(id);
+  // A transient fetch error is RETRIED (≤3) — it must not re-enable Run on a still-running job.
+  const pollActive = useCallback(async (id: number, errs = 0) => {
+    const { ok, run } = await fetchRun(id);
     if (id !== activeJobIdRef.current) return; // a newer job started — this loop is obsolete
-    if (r && r.status === 'running') {
-      pollRef.current = setTimeout(() => void pollActive(id), 5000);
+    if (!ok) {
+      if (errs >= 3) { // give up after repeated failures; surface it, stop tracking
+        setErr('실행 상태 조회에 반복 실패했습니다.');
+        setBusy(false);
+        activeJobIdRef.current = null;
+        return;
+      }
+      pollRef.current = setTimeout(() => void pollActive(id, errs + 1), 5000); // retry; keep busy
+      return;
+    }
+    if (run && run.status === 'running') {
+      pollRef.current = setTimeout(() => void pollActive(id, 0), 5000);
     } else {
-      setBusy(false);                // terminal (or fetch error) → re-enable Run
+      setBusy(false);                // genuinely terminal (or run gone) → re-enable Run
       activeJobIdRef.current = null;
       void loadHistory();            // refresh the saved-runs list
     }
