@@ -25,6 +25,8 @@ HTTP_TIMEOUT = 12
 
 _SM = None
 _SECRET_CACHE = None
+_SECRET_CACHE_AT = 0.0
+_SECRET_TTL = 60.0  # bound stale creds in a warm (long-lived worker) container
 
 
 class NotConnected(Exception):
@@ -160,8 +162,10 @@ def _sm():
 
 
 def _load_secret_map():
-    global _SECRET_CACHE
-    if _SECRET_CACHE is not None:
+    global _SECRET_CACHE, _SECRET_CACHE_AT
+    import time as _t
+    now = _t.time()
+    if _SECRET_CACHE is not None and (now - _SECRET_CACHE_AT) < _SECRET_TTL:
         return _SECRET_CACHE
     name = os.environ.get("INTEGRATIONS_SECRET_NAME", "ops/awsops-v2/integrations/credentials")
     try:
@@ -171,15 +175,26 @@ def _load_secret_map():
             raw = ""
         else:
             raise
-    _SECRET_CACHE = json.loads(raw) if raw else {}
-    return _SECRET_CACHE if isinstance(_SECRET_CACHE, dict) else {}
+    parsed = json.loads(raw) if raw else {}
+    _SECRET_CACHE = parsed if isinstance(parsed, dict) else {}
+    _SECRET_CACHE_AT = now
+    return _SECRET_CACHE
 
 
-def load_datasource(slug):
-    # Inline conn-config (BFF multi-instance / pre-save Test) takes precedence over the slug map.
+def load_datasource(slug, instance_id=None):
+    """Resolve a datasource's connection blob. Precedence:
+       1. the request-scoped inline conn-config (`_REQUEST_CONN`) — the trusted BFF path only;
+       2. the per-instance secret key `map[str(instance_id)]` — the credential-blind worker path,
+          where the caller sends ONLY an instance_id and the connector reads the secret server-side;
+       3. the `map[slug]` kind-mirror (the default instance) as the fallback.
+    `instance_id` is a pure argument (no module-global), so warm-container reuse cannot bleed one
+    invocation's instance into the next."""
     if _REQUEST_CONN is not None:
         return _REQUEST_CONN
-    creds = _load_secret_map().get(slug)
+    m = _load_secret_map()
+    creds = m.get(str(instance_id)) if instance_id is not None else None
+    if not (isinstance(creds, dict) and creds.get("endpoint")):
+        creds = m.get(slug)  # kind-mirror (default instance) fallback
     if not isinstance(creds, dict) or not creds.get("endpoint"):
         raise NotConnected(f"{slug} not connected (no endpoint configured in the Connectors UI)")
     return creds

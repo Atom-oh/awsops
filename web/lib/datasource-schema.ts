@@ -12,14 +12,28 @@ export interface CachedSchema {
   integrationId: number;
   kind: string | null;
   schema: unknown;
+  version: string | null; // captured server version (e.g. "2.48.0") for version-aware query generation
   fetched_at: string;
+}
+
+/** Pull the best-effort server version out of the introspected schema JSON (connectors store it under
+ *  `schema.version`; null when the connector couldn't fetch buildinfo). */
+function schemaVersion(schema: unknown): string | null {
+  if (schema && typeof schema === 'object' && !Array.isArray(schema)) {
+    const v = (schema as Record<string, unknown>).version;
+    if (typeof v === 'string' && v) return v;
+  }
+  return null;
 }
 
 function mapRow(r: Record<string, unknown>): CachedSchema {
   return {
-    integrationId: r.integration_id as number,
+    // BIGINT integration_id comes back from node-pg as a STRING — coerce so it matches the numeric
+    // datasource id (chat injection keys schemas by integrationId and looks them up by datasource id).
+    integrationId: Number(r.integration_id),
     kind: (r.kind as string) ?? null,
     schema: r.schema,
+    version: schemaVersion(r.schema),
     fetched_at: r.fetched_at as string,
   };
 }

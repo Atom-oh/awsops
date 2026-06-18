@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
+import IntegrationIcon from '@/components/datasources/IntegrationIcon';
 import DatasourceForm, { type DatasourceFormValue } from './DatasourceForm';
 
 interface Instance {
@@ -73,7 +74,9 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
             )}
             {list.map((i) => (
               <tr key={i.id} className="border-b border-ink-50">
-                <td className="px-3 py-2 font-medium text-ink-800">{i.name}</td>
+                <td className="px-3 py-2 font-medium text-ink-800">
+                  <span className="inline-flex items-center gap-2"><IntegrationIcon kind={i.kind} /> {i.name}</span>
+                </td>
                 <td className="px-3 py-2 text-ink-600">{i.kind}</td>
                 <td className="px-3 py-2 text-ink-500">{i.authType ?? 'none'}</td>
                 <td className="px-3 py-2">

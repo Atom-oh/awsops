@@ -5,12 +5,30 @@ Sources: Aurora inventory, CloudWatch metrics, Cost Explorer, Security Hub/Confi
 X-Ray service map (actual traffic flow), CloudTrail what-changed. NO raw log lines.
 """
 import os
+import re
+import json
+import time as _time
 import boto3
 from botocore.exceptions import ClientError
 
 import db as wdb  # noqa: F401 — worker db (parent dir, flat /app layout); reserved for future DB seams
 
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
+PROJECT = os.environ.get("PROJECT", "awsops-v2")
+
+# Datasource (external observability) collector bounds — schema-driven, credential-blind, read-only.
+_DS_KINDS = ("prometheus", "mimir", "loki", "tempo", "clickhouse")
+_DS_MAX_INSTANCES_PER_KIND = int(os.environ.get("DIAG_DS_MAX_INSTANCES_PER_KIND", "1"))  # default: is_default only
+_DS_MAX_QUERIES_PER_INSTANCE = int(os.environ.get("DIAG_DS_MAX_QUERIES", "3"))
+_DS_DEADLINE_S = float(os.environ.get("DIAG_DS_DEADLINE_S", "8"))
+_DS_MAX_BYTES = 8000  # structural summarize-before-LLM hard cap on the collector's data blob
+# Signal-bearing series we care about for intended-vs-actual (GENERIC patterns; the actual NAMES
+# always come from the cached schema — we never hardcode a metric name).
+_SIGNAL_RE = re.compile(r"(error|fail|5xx|request|latenc|duration|cpu|mem|saturat|throttl|drop)", re.I)
+_COUNTERISH_RE = re.compile(r"(total|count|errors?|requests?)$", re.I)
+# A bare SQL identifier — table names come from the datasource's own introspection, but we still
+# validate before interpolating (a poisoned schema cache / crafted table name must not inject SQL).
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _THROTTLE_CODES = (
     "Throttling", "ThrottlingException", "TooManyRequestsException", "RequestLimitExceeded",
@@ -210,6 +228,164 @@ def collect_what_changed():
         return _classify("what_changed", e)
 
 
+# ── External observability datasources (multi-instance, schema-driven, credential-blind) ───────────
+def _lambda_client():
+    return boto3.client("lambda", region_name=REGION)
+
+
+def _invoke_connector(kind, tool, instance_id, arguments=None):
+    """Credential-blind connector invoke: send ONLY {tool_name, arguments{instance_id,...}} — the
+    connector resolves the per-instance secret SERVER-SIDE. We NEVER send conn_config/credentials.
+    Returns (statusCode, body_dict)."""
+    payload = {"tool_name": tool, "arguments": dict(arguments or {}, instance_id=instance_id)}
+    r = _lambda_client().invoke(
+        FunctionName=f"{PROJECT}-agent-{kind}-mcp",
+        Payload=json.dumps(payload).encode("utf-8"),
+    )
+    raw = r["Payload"].read()
+    out = json.loads(raw) if raw else {}
+    body = out.get("body")
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except (ValueError, TypeError):
+            body = {"raw": body[:300]}
+    return out.get("statusCode", 0), (body if isinstance(body, dict) else {})
+
+
+def _ds_schema(conn, integration_id):
+    """Cached introspected schema for one instance, keyed by integration_id (one row per instance in
+    the single-account model — so this does NOT depend on the BFF's account-key convention)."""
+    rows = conn.run(
+        "SELECT schema FROM datasource_schemas WHERE integration_id=:iid ORDER BY fetched_at DESC LIMIT 1",
+        iid=integration_id,
+    )
+    if not rows:
+        return None
+    s = rows[0][0]
+    if isinstance(s, str):
+        try:
+            s = json.loads(s)
+        except (ValueError, TypeError):
+            return None
+    return s if isinstance(s, dict) else None
+
+
+def _plan_queries(kind, schema):
+    """Derive ≤N narrow, AGGREGATED queries from the CACHED schema names (never hardcoded names).
+    version (schema['version']) informs syntax only where a query is known to diverge. Returns
+    [(tool, arguments, label)]."""
+    plan = []
+    if kind in ("prometheus", "mimir"):
+        metrics = [m for m in (schema.get("metrics") or []) if isinstance(m, str)]
+        picked = [m for m in metrics if _SIGNAL_RE.search(m)][:_DS_MAX_QUERIES_PER_INSTANCE]
+        tool = "prometheus_query" if kind == "prometheus" else "mimir_query"
+        for m in picked:
+            expr = f"topk(5, sum by (job)(rate({m}[5m])))" if _COUNTERISH_RE.search(m) else f"topk(5, {m})"
+            plan.append((tool, {"query": expr}, m))
+    elif kind == "loki":
+        labels = [l for l in (schema.get("labels") or []) if isinstance(l, str)]
+        sel = next((l for l in labels if l in ("app", "namespace", "job", "service_name", "container")),
+                   labels[0] if labels else None)
+        if sel:
+            q = '{%s=~".+"} |~ `(?i)(error|exception|fatal)`' % sel
+            plan.append(("loki_query_range", {"query": f"count_over_time({q}[5m])"}, "error_logs"))
+    elif kind == "tempo":
+        plan.append(("tempo_search", {"query": "{ status = error }", "limit": 20}, "error_traces"))
+    elif kind == "clickhouse":
+        tables = schema.get("tables") or []
+        names = [t.get("name") if isinstance(t, dict) else t for t in tables]
+        # identifier-validate before interpolating — skip any name that isn't a bare identifier (no
+        # SQL injection via a crafted/poisoned table name; clickhouse can't bind identifiers).
+        safe = [x for x in names if isinstance(x, str) and _IDENT_RE.match(x)]
+        for n in safe[:_DS_MAX_QUERIES_PER_INSTANCE]:
+            plan.append(("clickhouse_query", {"sql": f"SELECT count() AS c FROM {n}"}, n))
+    return plan[:_DS_MAX_QUERIES_PER_INSTANCE]
+
+
+def _summarize_result(body):
+    """Compact a connector result to a tiny shape (shape/count/sample/value) — never raw series."""
+    out = {}
+    res = body.get("result", body) if isinstance(body, dict) else {}
+    if isinstance(res, dict):
+        if "shape" in res:
+            out["shape"] = res.get("shape")
+        series = res.get("series") or res.get("rows") or res.get("data")
+        if isinstance(series, list):
+            out["count"] = len(series)
+            out["sample"] = series[:3]
+        elif "value" in res:
+            out["value"] = res.get("value")
+    return out
+
+
+def collect_datasources(conn):
+    """Schema-driven, multi-instance, credential-blind external-observability signals for diagnosis.
+    Reads ONLY non-secret integrations columns + the cached schema; invokes connectors credential-blind
+    (instance_id only). Bounded (instances/queries/deadline/bytes). NEVER raises."""
+    try:
+        rows = conn.run(
+            "SELECT id, name, kind, is_default FROM integrations "
+            "WHERE direction='egress' AND capability='read' AND enabled=true "
+            "AND kind IN ('prometheus','mimir','loki','tempo','clickhouse') "
+            "ORDER BY kind, is_default DESC, id"
+        )
+    except Exception as e:  # noqa: BLE001
+        return _classify("datasources", e)
+
+    by_kind = {}
+    for r in rows or []:
+        by_kind.setdefault(r[2], []).append(r)
+    instances = []
+    for _kind, lst in by_kind.items():
+        instances.extend(lst[:_DS_MAX_INSTANCES_PER_KIND])  # default-first (ORDER BY is_default DESC)
+
+    if not instances:
+        return _result("datasources", data={"instances": [], "queried": 0},
+                       notes="no connected observability datasources")
+
+    deadline = _time.time() + _DS_DEADLINE_S
+    findings, notes = [], []
+    for (iid, name, kind, is_default) in instances:
+        if _time.time() > deadline:
+            notes.append("time-budget exceeded; remaining datasources skipped")
+            break
+        schema = _ds_schema(conn, iid)
+        if not schema:
+            notes.append(f"{name} ({kind}): no cached schema — run Refresh schema")
+            continue
+        plan = _plan_queries(kind, schema)
+        if not plan:
+            notes.append(f"{name} ({kind}): schema has no signal-bearing series")
+            continue
+        results = []
+        for (tool, args, label) in plan:
+            if _time.time() > deadline:
+                notes.append(f"{name}: time-budget exceeded mid-instance")
+                break
+            try:
+                status, body = _invoke_connector(kind, tool, iid, args)
+                if status and status >= 400:
+                    results.append({"label": label, "error": (body.get("error") or f"HTTP {status}")})
+                else:
+                    results.append({"label": label, "summary": _summarize_result(body)})
+            except Exception as e:  # noqa: BLE001 — per-query isolation; one bad query never sinks the rest
+                results.append({"label": label, "error": type(e).__name__})
+        findings.append({"name": name, "kind": kind, "version": schema.get("version"),
+                         "is_default": bool(is_default), "results": results})
+
+    data = {"instances": [{"name": f["name"], "kind": f["kind"]} for f in findings],
+            "queried": len(findings), "findings": findings}
+    if notes:
+        data["notes"] = notes
+    if len(json.dumps(data)) > _DS_MAX_BYTES:  # summarize-before-LLM hard cap: shed samples if oversized
+        for f in findings:
+            for rr in f.get("results", []):
+                rr.pop("summary", None)
+        data["_truncated"] = True
+    return _result("datasources", data=data, notes="; ".join(notes)[:300])
+
+
 # Ordered registry of native collectors. `conn` is passed only to DB-backed ones.
 def collect_all(conn):
     return [
@@ -217,6 +393,7 @@ def collect_all(conn):
         collect_cw_metrics(conn),
         collect_cost(),
         collect_service_map(),
+        collect_datasources(conn),  # external observability (schema-driven, credential-blind)
         collect_posture(),
         collect_what_changed(),
     ]

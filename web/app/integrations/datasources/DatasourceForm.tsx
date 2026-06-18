@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
+import IntegrationIcon from '@/components/datasources/IntegrationIcon';
 
 // v1-parity Add/Edit form: multiple instances per type, a name, an explicit auth method (optional auth),
 // and a Test-before-save probe. POSTs (create) / PATCHes (update) /api/datasources/manage.
@@ -86,9 +87,12 @@ export default function DatasourceForm({
 
       <div>
         <label className={labelCls}>Type</label>
-        <select className={selectCls} value={kind} disabled={editing} onChange={(e) => setKind(e.target.value)} aria-label="Type">
-          {DATASOURCE_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-        </select>
+        <div className="flex items-center gap-2">
+          <IntegrationIcon kind={kind} size={20} />
+          <select className={selectCls} value={kind} disabled={editing} onChange={(e) => setKind(e.target.value)} aria-label="Type">
+            {DATASOURCE_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+          </select>
+        </div>
       </div>
 
       <div>
