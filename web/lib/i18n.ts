@@ -47,7 +47,7 @@ const MESSAGES: Record<Lang, Dict> = {
     'split.ebsUnencrypted': '미암호화 EBS',
     'split.iamUserNoMfa': 'MFA 미설정 사용자',
     'split.sgOpenIngress': '오픈 SG',
-  'sidebar.tagline': '클라우드 운영',
+    'sidebar.tagline': '클라우드 운영',
     'sidebar.expand': '펼치기',
     'sidebar.collapse': '접기',
     'sidebar.admin': '관리자',
