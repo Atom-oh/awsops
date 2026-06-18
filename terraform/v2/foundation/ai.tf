@@ -51,6 +51,12 @@ variable "mimir_vpc_enabled" {
   default     = false
 }
 
+variable "istio_vpc_enabled" {
+  type        = bool
+  description = "Attach the istio-read Lambda to the private subnets so it can reach a PRIVATE-ONLY EKS API endpoint. Requires agentcore_enabled. Default false → no-op ($0); off = non-VPC (reaches a public/public+private cluster endpoint). PERSIST in live terraform.tfvars."
+  default     = false
+}
+
 locals {
   ac_count    = var.agentcore_enabled ? 1 : 0
   integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
@@ -249,7 +255,7 @@ resource "aws_iam_role_policy" "agent_lambda_opensearch" {
 # ENI perms for the opensearch-mcp Lambda ONLY when it is VPC-attached (opensearch_vpc_enabled).
 # Compound-gated: references agent_lambda[0], which exists only when agentcore_enabled → guard both.
 resource "aws_iam_role_policy" "agent_lambda_vpc_eni" {
-  count = var.agentcore_enabled && (var.opensearch_vpc_enabled || var.clickhouse_vpc_enabled || var.prometheus_vpc_enabled || var.loki_vpc_enabled || var.tempo_vpc_enabled || var.mimir_vpc_enabled) ? 1 : 0
+  count = var.agentcore_enabled && (var.opensearch_vpc_enabled || var.clickhouse_vpc_enabled || var.prometheus_vpc_enabled || var.loki_vpc_enabled || var.tempo_vpc_enabled || var.mimir_vpc_enabled || var.istio_vpc_enabled) ? 1 : 0
   name  = "${var.project}-agent-lambda-vpc-eni"
   role  = aws_iam_role.agent_lambda[0].id
   policy = jsonencode({
@@ -519,6 +525,9 @@ locals {
     "terraform-mcp"  = { file = "aws_terraform_mcp.py", handler = "aws_terraform_mcp.lambda_handler" }
     "aws-knowledge"  = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
     "opensearch-mcp" = { file = "opensearch_mcp.py", handler = "opensearch_mcp.lambda_handler" }
+    "core-helpers"      = { file = "core_helpers_mcp.py", handler = "core_helpers_mcp.lambda_handler" }
+    "reachability-read" = { file = "reachability_read_mcp.py", handler = "reachability_read_mcp.lambda_handler" }
+    "istio-read"        = { file = "istio_read_mcp.py", handler = "istio_read_mcp.lambda_handler" }
     } : {}, local.integ_count > 0 ? {
     "notion-mcp"     = { file = "notion_mcp.py", handler = "notion_mcp.lambda_handler" }
     "clickhouse-mcp" = { file = "clickhouse_mcp.py", handler = "clickhouse_mcp.lambda_handler" }
@@ -540,6 +549,17 @@ data "archive_file" "agent" {
   source {
     content  = file("${path.module}/../../../agent/lambda/cross_account.py")
     filename = "cross_account.py"
+  }
+  # The datasource-family connectors (clickhouse/prometheus/loki/tempo/mimir) import the shared
+  # `datasource_http` helper (credential load, SSRF host guard, auth headers, no-redirect HTTP, inline
+  # conn-config + health probe). Bundle it into ONLY those ZIPs — without it the Lambda dies at import
+  # time (Runtime.ImportModuleError: No module named 'datasource_http').
+  dynamic "source" {
+    for_each = contains(["clickhouse_mcp.py", "prometheus_mcp.py", "loki_mcp.py", "tempo_mcp.py", "mimir_mcp.py"], each.value.file) ? [1] : []
+    content {
+      content  = file("${path.module}/../../../agent/lambda/datasource_http.py")
+      filename = "datasource_http.py"
+    }
   }
 }
 
@@ -573,10 +593,10 @@ resource "aws_lambda_function" "agent" {
     )
   }
 
-  # VPC-only OpenSearch domains: attach ONLY the opensearch-mcp Lambda to the private subnets when
-  # opensearch_vpc_enabled. Off (default) → no vpc_config → non-VPC (reaches public+IAM domains).
+  # VPC-only OpenSearch domains: attach ONLY the opensearch-mcp/istio-read Lambda to the private subnets when
+  # opensearch_vpc_enabled/istio_vpc_enabled. Off (default) → no vpc_config → non-VPC (reaches public+IAM domains).
   dynamic "vpc_config" {
-    for_each = ((each.key == "opensearch-mcp" && var.opensearch_vpc_enabled) || (each.key == "clickhouse-mcp" && var.clickhouse_vpc_enabled) || (each.key == "prometheus-mcp" && var.prometheus_vpc_enabled) || (each.key == "loki-mcp" && var.loki_vpc_enabled) || (each.key == "tempo-mcp" && var.tempo_vpc_enabled) || (each.key == "mimir-mcp" && var.mimir_vpc_enabled)) ? [1] : []
+    for_each = ((each.key == "opensearch-mcp" && var.opensearch_vpc_enabled) || (each.key == "clickhouse-mcp" && var.clickhouse_vpc_enabled) || (each.key == "prometheus-mcp" && var.prometheus_vpc_enabled) || (each.key == "loki-mcp" && var.loki_vpc_enabled) || (each.key == "tempo-mcp" && var.tempo_vpc_enabled) || (each.key == "mimir-mcp" && var.mimir_vpc_enabled) || (each.key == "istio-read" && var.istio_vpc_enabled)) ? [1] : []
     content {
       subnet_ids         = local.private_subnet_ids
       security_group_ids = [aws_security_group.service.id]
