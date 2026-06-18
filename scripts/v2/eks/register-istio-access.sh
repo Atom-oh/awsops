@@ -48,9 +48,15 @@ for C in "$@"; do
     echo "  ERROR creating access entry on ${C}: $err" >&2
     exit 1
   fi
-  aws eks associate-access-policy --cluster-name "$C" --principal-arn "$ROLE_ARN" \
-    --policy-arn "$POLICY" --access-scope type=cluster >/dev/null
-  echo "  View policy associated (cluster scope, least-privilege — no Secret/node read)"
+  # associate-access-policy is an upsert (idempotent), but guard it so a failure here surfaces clearly
+  # instead of leaving an access-entry-without-policy partial state under `set -e`.
+  if aerr=$(aws eks associate-access-policy --cluster-name "$C" --principal-arn "$ROLE_ARN" \
+      --policy-arn "$POLICY" --access-scope type=cluster 2>&1); then
+    echo "  View policy associated (cluster scope, least-privilege — no Secret/node read)"
+  else
+    echo "  ERROR associating View policy on ${C} (entry exists but policy NOT attached): $aerr" >&2
+    exit 1
+  fi
 done
 echo "Done. istio-read can now LIST Istio CRDs on: $*"
 echo "To revoke: aws eks delete-access-entry --cluster-name <c> --principal-arn $ROLE_ARN"

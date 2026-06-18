@@ -86,7 +86,7 @@ TARGETS = {
         "lambda_key": "reachability-read",
         "description": "Computed ENI<->EC2 connectivity, describe-only — static SG/NACL/route (1 tool)",
         "tools": [
-            {"name": "check_reachability", "description": "Static SG/NACL/route reachability from a source to a destination (describe-only; not AWS Reachability Analyzer)", "inputSchema": {"type": "object", "properties": {"source": _p("string", "instance-id / eni-id / private-ip"), "destination": _p("string", "instance-id / eni-id / private-ip"), "port": _p("string", "Destination port"), "protocol": _p("string", "tcp/udp (default tcp)")}, "required": ["source", "destination", "port"]}},
+            {"name": "check_reachability", "description": "Static SG/NACL/route reachability from a source to a destination (describe-only; not AWS Reachability Analyzer)", "inputSchema": {"type": "object", "properties": {"source": _p("string", "instance-id / eni-id / private-ip"), "destination": _p("string", "instance-id / eni-id / private-ip"), "port": _p("integer", "Destination port"), "protocol": _p("string", "tcp/udp (default tcp)")}, "required": ["source", "destination", "port"]}},
         ],
     },
     "istio-read-target": {

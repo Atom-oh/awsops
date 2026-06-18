@@ -55,11 +55,21 @@ def _resolve_eni(ec2, ident):
         return None
     if ident.startswith("eni-"):
         nis = ec2.describe_network_interfaces(NetworkInterfaceIds=[ident]).get("NetworkInterfaces", [])
-    else:
-        nis = ec2.describe_network_interfaces(
-            Filters=[{"Name": "addresses.private-ip-address", "Values": [ident]}]
-        ).get("NetworkInterfaces", [])
-    return _norm_eni(nis[0]) if nis else None
+        return _norm_eni(nis[0]) if nis else None
+    # private-IP path: the same IP can exist in multiple VPCs, and the filter also matches SECONDARY
+    # IPs — so (a) reject an ambiguous multi-match (caller must use an eni-id/instance-id or it would
+    # silently evaluate the wrong resource), and (b) evaluate the ACTUAL queried IP, not the ENI's
+    # primary (a queried secondary IP must drive the SG/NACL/route eval).
+    nis = ec2.describe_network_interfaces(
+        Filters=[{"Name": "addresses.private-ip-address", "Values": [ident]}]
+    ).get("NetworkInterfaces", [])
+    if not nis:
+        return None
+    if len(nis) > 1:
+        raise ValueError(f"private IP {ident} matches {len(nis)} ENIs (likely multiple VPCs) — pass an eni-id or instance-id to disambiguate")
+    eni = _norm_eni(nis[0])
+    eni["ip"] = ident  # use the queried address (may be a secondary IP), not the ENI primary
+    return eni
 
 
 def _norm_eni(eni):
@@ -241,5 +251,8 @@ def lambda_handler(event, context):
     region = args.get("region", "ap-northeast-2")
 
     ec2 = get_client("ec2", region, role_arn)
-    result = check_reachability(ec2, source, destination, port, proto)
+    try:
+        result = check_reachability(ec2, source, destination, port, proto)
+    except ValueError as e:
+        return {"statusCode": 400, "body": json.dumps({"error": str(e)})}  # e.g. ambiguous private IP
     return {"statusCode": 200, "body": json.dumps(result, default=str)}

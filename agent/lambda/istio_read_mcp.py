@@ -9,7 +9,9 @@ Python stdlib (urllib + ssl) — no pg8000, no Steampipe, no third-party k8s cli
 
 GET/LIST only. The cluster endpoint + CA are resolved at runtime via eks.describe_cluster(cluster_name)
 (the role already has eks:DescribeCluster + an EKS Access Entry); the request host is therefore pinned
-to the AWS-returned endpoint (no SSRF surface from caller input).
+to the AWS-returned endpoint (no SSRF surface from caller input). The operator registers the access
+entry with AmazonEKSViewPolicy (View, NOT AdminView — least privilege: no cluster-wide Secret/node
+read; istio-read only LISTs namespaced Istio CRDs + namespaces) — see register-istio-access.sh.
 
 Istio-read MCP — Steampipe 대신 EKS k8s API로 Istio CRD를 읽기 전용 조회(ADR-037 준수).
 """
@@ -77,9 +79,10 @@ def _eks_session(region, role_arn, cluster_name):
 
 
 def _k8s_get(endpoint, path, token, ctx):
-    """HTTPS GET against the cluster API server. Read-only."""
+    """HTTPS GET against the cluster API server. Read-only. 6s per call so mesh_overview's ~8 sequential
+    GETs stay well under the 60s Lambda timeout even if some hang."""
     req = Request(endpoint + path, headers={"Authorization": f"Bearer {token}"})
-    resp = urlopen(req, timeout=10, context=ctx)  # noqa: S310 — host pinned to AWS-returned endpoint
+    resp = urlopen(req, timeout=6, context=ctx)  # noqa: S310 — host pinned to AWS-returned endpoint
     return json.loads(resp.read())
 
 

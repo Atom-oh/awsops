@@ -208,6 +208,15 @@ class TestGuards(_Base):
         out = rr.lambda_handler({"tool_name": "check_reachability", "arguments": {"source": "10.0.1.10", "destination": "10.0.2.20", "port": "abc"}}, None)
         self.assertEqual(out["statusCode"], 400)
 
+    def test_ambiguous_private_ip_400(self):
+        # same private IP on two ENIs (e.g. different VPCs) → must 400, not silently pick one
+        self.scn["enis"].append({
+            "NetworkInterfaceId": "eni-dup", "PrivateIpAddress": "10.0.1.10", "SubnetId": "subnet-x",
+            "VpcId": "vpc-2", "Groups": [{"GroupId": "sg-x"}],
+        })
+        out = rr.lambda_handler({"tool_name": "check_reachability", "arguments": {"source": "10.0.1.10", "destination": "10.0.2.20", "port": 5432}}, None)
+        self.assertEqual(out["statusCode"], 400)
+
     def test_no_mutating_boto3_calls_in_source(self):
         # the mutating APIs may appear in the docstring (explaining what was dropped) but must never
         # be CALLED — assert the call form `<api>(` is absent.
