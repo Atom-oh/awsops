@@ -266,13 +266,18 @@ def _ds_schema(conn, integration_id):
         acct=acct, iid=integration_id,
     )
     if not rows:
-        try:  # spec §8 key-mismatch smell: a schema exists for this instance under a DIFFERENT account
-            other = conn.run("SELECT account_id FROM datasource_schemas WHERE integration_id=:iid LIMIT 1", iid=integration_id)
-            if other:
-                logging.warning("[diagnosis] datasource %s schema cached under account %r, not in (%r,'self') — key mismatch",
-                                integration_id, other[0][0], acct)
-        except Exception:  # noqa: BLE001 — the smell check must never break collection
-            pass
+        # Account-scope miss → fall back to integration_id alone. integrations is single-account
+        # (the table has no account_id), so a given integration_id maps to ONE instance — this avoids a
+        # functional regression when the worker's account env differs from the BFF's write key, while
+        # still PREFERRING the account match above. Log the key-mismatch smell (spec §8).
+        rows = conn.run(
+            "SELECT schema FROM datasource_schemas WHERE integration_id=:iid ORDER BY fetched_at DESC LIMIT 1",
+            iid=integration_id,
+        )
+        if rows:
+            logging.warning("[diagnosis] datasource %s schema not under account (%r,'self') — using "
+                            "integration_id fallback (BFF/worker account-key mismatch)", integration_id, acct)
+    if not rows:
         return None
     s = rows[0][0]
     if isinstance(s, str):
@@ -316,9 +321,12 @@ def _plan_queries(kind, schema):
 
 
 def _summarize_result(body):
-    """Compact a connector result to a tiny shape (count/sample, never raw series). Handles the ACTUAL
-    connector envelopes: Prometheus/Mimir/Loki spread `result` as a list at the top level (+resultType),
-    Tempo returns `traces`, ClickHouse returns `rows`; some shapes nest under `result:{series|...}`."""
+    """Compact a connector result to NON-PII SIGNAL ONLY — count, result type, source key, and metric
+    LABEL NAMES (keys, never values). Critically: NEVER emit raw samples. Loki `result` is raw log
+    lines, Tempo `traces` are trace payloads, ClickHouse `rows` are raw row values; sampling any of
+    those leaks PII into the Bedrock context (module docstring 'NO raw log lines' + DLP / ADR-040/041).
+    Handles the ACTUAL envelopes: prom/loki/clickhouse spread a top-level list (+resultType), Tempo
+    returns `traces`; some shapes nest under `result:{series|...}`."""
     out = {}
     if not isinstance(body, dict):
         return out
@@ -326,17 +334,23 @@ def _summarize_result(body):
     for key in ("result", "traces", "rows", "data", "series"):
         v = body.get(key)
         if isinstance(v, list):
-            out["source"], out["count"], out["sample"] = key, len(v), v[:3]
+            out["source"], out["count"] = key, len(v)
+            # non-PII metadata only: the union of metric LABEL NAMES (keys), NEVER their values
+            names = set()
+            for item in v[:50]:
+                m = item.get("metric") if isinstance(item, dict) else None
+                if isinstance(m, dict):
+                    names.update(str(k) for k in m.keys())
+            if names:
+                out["labels"] = sorted(names)[:25]
             break
-    # nested {result:{series|rows|data|value}} (and the synthetic test envelope)
+    # nested {result:{series|rows|data}} (synthetic/aggregated shapes) — count + shape only, NO samples
     if "count" not in out:
         res = body.get("result")
         if isinstance(res, dict):
             series = res.get("series") or res.get("rows") or res.get("data")
             if isinstance(series, list):
-                out["count"], out["sample"] = len(series), series[:3]
-            elif "value" in res:
-                out["value"] = res.get("value")
+                out["count"] = len(series)
             if "shape" in res:
                 out["shape"] = res.get("shape")
     if "resultType" in body:

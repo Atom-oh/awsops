@@ -111,6 +111,13 @@ describe('resolveConnConfig', () => {
     expect(await resolveConnConfig(row)).toEqual({ endpoint: 'http://p:9090', authType: 'none' });
   });
 
+  it('resolves the credential by id ONLY — no kind-mirror fallback (no default-cred leak to another instance)', async () => {
+    getCredentialById.mockResolvedValueOnce(null);
+    await resolveConnConfig(row);
+    expect(getCredentialById).toHaveBeenCalledWith(1);           // id only
+    expect(getCredentialById).not.toHaveBeenCalledWith(1, 'prometheus'); // never the kind fallback
+  });
+
   it('takes auth material from the SM credential but keeps the ROW authoritative for endpoint+authType', async () => {
     // cred carries a DIFFERENT (stale) endpoint + authType — the row must win so a stale secret can't
     // redirect the query; only the auth material (username/password) is taken from the cred.

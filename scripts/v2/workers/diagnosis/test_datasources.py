@@ -90,6 +90,20 @@ def test_no_cache_row_skipped_with_note(monkeypatch):
     assert any("Refresh schema" in n for n in out["data"].get("notes", []))
 
 
+# PII/DLP (consensus gate CRITICAL): raw log lines / row values / trace payloads must NEVER reach the
+# summary — only counts + label NAMES. A Loki `result` of raw log lines must not leak into the report.
+def test_summary_never_leaks_raw_samples(monkeypatch):
+    secret_line = "2026-06-18 ERROR user=alice@corp.com card=4111111111111111 failed login from 10.1.2.3"
+    _patch_lambda(monkeypatch, FakeLambda(body={"resultType": "streams", "result": [
+        {"stream": {"app": "auth"}, "values": [["1718000000", secret_line]]}]}))
+    conn = FakeConn([(5, "lk", "loki", True)], {5: {"labels": ["app", "namespace"]}})
+    out = src.collect_datasources(conn)
+    blob = json.dumps(out["data"])
+    assert secret_line not in blob and "4111111111111111" not in blob and "alice@corp.com" not in blob
+    summ = out["data"]["findings"][0]["results"][0]["summary"]
+    assert summ.get("count") == 1 and "sample" not in summ              # count kept, raw sample dropped
+
+
 # A4/A5 — summarize-before-LLM: compact shape, and the data blob stays under the byte cap.
 def test_summarize_and_byte_cap(monkeypatch):
     big = {"result": {"shape": "matrix", "series": [{"v": i} for i in range(1000)]}}

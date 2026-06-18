@@ -94,7 +94,11 @@ export async function getDatasource(id: number): Promise<DatasourceRow | null> {
  *  Without the row fallback, a no-auth datasource has no SM cred → connConfig is empty → the connector
  *  Lambda falls back to the (often empty) kind-mirror and reports "not connected". */
 export async function resolveConnConfig(ds: DatasourceRow): Promise<ConnConfig> {
-  const cred = await getCredentialById(ds.id, ds.kind);
+  // ID-ONLY credential resolution — deliberately NO kind-mirror fallback. The kind mirror holds the
+  // DEFAULT instance's credential; blending it with THIS instance's endpoint (below) would send the
+  // default's auth material to a different target (credential leak). A no-auth instance, or one whose
+  // id-keyed secret was never written, simply resolves with no auth (the row endpoint still works).
+  const cred = await getCredentialById(ds.id);
   // Spread the SM cred FIRST (auth material / org_id), then FORCE the row's endpoint + authType on top
   // so the ROW stays authoritative (a stale/partial secret blob can't redirect the query to a different
   // endpoint). The endpoint is re-checked by the SSRF guard at the call site regardless.
