@@ -76,4 +76,23 @@ describe('renderSchemaForPrompt', () => {
     expect(renderSchemaForPrompt({ tables: [{ noName: true }, null, 'x'] })).toBe('');
     expect(renderSchemaForPrompt({})).toBe('');
   });
+
+  it('hard-caps a single column/table line so one pathological nested type cannot blow the budget [3]', () => {
+    const hugeType = `Tuple(${'a UInt64, '.repeat(3000)})`; // ~30KB type string
+    const out = renderSchemaForPrompt({ tables: [{ name: 'big', columns: [{ name: 'col', type: hugeType }] }] });
+    expect(out.length).toBeLessThanOrEqual(1300); // PROMPT_MAX_LINE_CHARS + slack, NOT 30KB
+    expect(out.startsWith('big(')).toBe(true);
+  });
+
+  it('respects a caller-supplied maxChars budget [6/7/14]', () => {
+    const tables = Array.from({ length: 20 }, (_, i) => ({ name: `t${i}`, columns: [{ name: 'c', type: 'String' }] }));
+    const out = renderSchemaForPrompt({ tables }, 'clickhouse', 300);
+    expect(out.length).toBeLessThanOrEqual(380); // ~300 budget + one disclosure line
+    expect(out).toMatch(/more tables/);
+  });
+
+  it('renders OpenSearch domains WITH their nested indices, not domain names only [5]', () => {
+    const out = renderSchemaForPrompt({ domains: [{ name: 'logs-domain', indices: ['app-2026.06', 'app-2026.05'] }] }, 'opensearch');
+    expect(out).toBe('logs-domain: app-2026.06, app-2026.05');
+  });
 });

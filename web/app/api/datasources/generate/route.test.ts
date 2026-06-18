@@ -88,6 +88,32 @@ describe('SQL generation (the ClickHouse fix)', () => {
     expect(lastGen().schemaBlock).toBe('logs(Body String)');
   });
 
+  it('does NOT use a same-kind SIBLING instance schema for a specific id — introspects THIS instance [10]', async () => {
+    getDatasource.mockResolvedValue({ id: 5, kind: 'clickhouse', endpoint: 'http://ch-b', authType: 'none' });
+    // a DIFFERENT clickhouse instance (99) is cached, but instance 5 is not
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 99, kind: 'clickhouse', schema: { __block: 'SIBLING(x String)' }, fetched_at: 't' }]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch-b', authType: 'none' });
+    invokeMcpLambdaTool.mockResolvedValue({ __block: 'OWN(y String)' });
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 5, nl: 'tables' }));
+    expect(res.status).toBe(200);
+    expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({ tool: 'clickhouse_schema' }));
+    expect(lastGen().schemaBlock).toBe('OWN(y String)'); // this instance, NOT the sibling
+  });
+
+  it('falls back to a trimmed cache write when the full schema exceeds the size limit [4]', async () => {
+    getDatasource.mockResolvedValue({ id: 7, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
+    listConfiguredSchemas.mockResolvedValue([]);
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch', authType: 'none' });
+    invokeMcpLambdaTool.mockResolvedValue({ __block: 'X(c String)', tables: [{ name: 'X', columns: [] }] });
+    upsertSchema.mockRejectedValueOnce(new Error('introspected schema exceeds size limit')); // full write fails
+    upsertSchema.mockResolvedValueOnce(undefined); // trimmed write succeeds
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 7, nl: 'tables' }));
+    expect(res.status).toBe(200); // generation still proceeds
+    expect(upsertSchema).toHaveBeenCalledTimes(2); // full (failed) → trimmed fallback
+  });
+
   it('502 when the generator throws (e.g. prose-not-SQL guard or Bedrock failure)', async () => {
     getDatasource.mockResolvedValue({ id: 2, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
     generateQuery.mockRejectedValue(new Error('could not generate a valid read-only query'));
