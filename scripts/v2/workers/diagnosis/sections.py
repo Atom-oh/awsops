@@ -10,7 +10,7 @@ SECTIONS = [
      "sources": ["posture", "inventory"],
      "prompt": "Security Hub 심각도 분포와 인벤토리를 근거로 보안 포스처를 진단하라. 퍼블릭 노출/미암호화/과다권한 신호를 짚고, 각 발견에 근거(소스)를 명시."},
     {"key": "network_architecture", "title": "Network Architecture",
-     "sources": ["service_map", "inventory"],
+     "sources": ["service_map", "inventory", "datasources_obs"],
      "prompt": "X-Ray 서비스맵 엣지(호출량/에러율)와 VPC/SG 인벤토리로 네트워크/트래픽 흐름을 진단하라. 비정상 에러율 엣지와 의심스러운 통신 경로를 지적."},
     {"key": "compute_infrastructure", "title": "Compute Infrastructure",
      "sources": ["inventory", "cw_metrics", "cost"],
@@ -60,7 +60,7 @@ _DEEP_ONLY = [
      "prompt": "인벤토리(SG/서브넷/LB)와 서비스맵을 근거로 외부 노출면을 진단하라. 0.0.0.0/0 인그레스·퍼블릭 서브넷·"
                "퍼블릭 엔드포인트·과대 노출 신호를 짚고 각 발견에 근거를 명시. 데이터에만 근거하라 — 추측·자동변경 제안 금지."},
     {"key": "reliability_ha", "title": "신뢰성 & 고가용성",
-     "sources": ["inventory", "cw_metrics"],
+     "sources": ["inventory", "cw_metrics", "datasources_obs"],
      "prompt": "인벤토리와 CloudWatch 지표를 근거로 신뢰성/HA를 진단하라. 멀티-AZ 미적용·단일 장애점·백업/복구 부재·"
                "스케일링 부재 신호를 짚고 각 발견에 근거를 명시. 데이터에만 근거하라 — 추측·자동변경 제안 금지."},
     {"key": "observability_coverage", "title": "관측성 & 알람 커버리지",

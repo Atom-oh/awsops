@@ -1,7 +1,23 @@
 import io
 import json
 
+import pytest
+
 from diagnosis import sources as src
+
+
+@pytest.fixture(autouse=True)
+def _enable_ds(monkeypatch):
+    # collect_datasources is flag-gated (default OFF); enable it for the behavior tests below.
+    monkeypatch.setenv("DIAG_DATASOURCES_ENABLED", "true")
+
+
+def test_disabled_by_default(monkeypatch):
+    # flag OFF → no connector fan-out, explicit "disabled" result (no AccessDenied/silent degrade).
+    monkeypatch.delenv("DIAG_DATASOURCES_ENABLED", raising=False)
+    fake = _patch_lambda(monkeypatch, FakeLambda())
+    out = src.collect_datasources(FakeConn([(5, "p", "prometheus", True)], {5: {"metrics": ["errors_total"]}}))
+    assert fake.calls == [] and out["data"]["queried"] == 0 and "disabled" in (out.get("notes") or "")
 
 
 class FakeConn:
@@ -46,7 +62,7 @@ def test_invoke_is_credential_blind(monkeypatch):
     conn = FakeConn([(5, "prod-prom", "prometheus", True)],
                     {5: {"version": "2.48.0", "metrics": ["http_requests_total", "node_cpu_seconds_total"]}})
     out = src.collect_datasources(conn)
-    assert out["key"] == "datasources" and out["ok"]
+    assert out["key"] == "datasources_obs" and out["ok"]
     assert fake.calls, "connector should have been invoked"
     for c in fake.calls:
         assert c["fn"] == "awsops-v2-agent-prometheus-mcp"
@@ -90,6 +106,20 @@ def test_no_cache_row_skipped_with_note(monkeypatch):
     assert any("Refresh schema" in n for n in out["data"].get("notes", []))
 
 
+# PII/DLP (consensus gate CRITICAL): raw log lines / row values / trace payloads must NEVER reach the
+# summary — only counts + label NAMES. A Loki `result` of raw log lines must not leak into the report.
+def test_summary_never_leaks_raw_samples(monkeypatch):
+    secret_line = "2026-06-18 ERROR user=alice@corp.com card=4111111111111111 failed login from 10.1.2.3"
+    _patch_lambda(monkeypatch, FakeLambda(body={"resultType": "streams", "result": [
+        {"stream": {"app": "auth"}, "values": [["1718000000", secret_line]]}]}))
+    conn = FakeConn([(5, "lk", "loki", True)], {5: {"labels": ["app", "namespace"]}})
+    out = src.collect_datasources(conn)
+    blob = json.dumps(out["data"])
+    assert secret_line not in blob and "4111111111111111" not in blob and "alice@corp.com" not in blob
+    summ = out["data"]["findings"][0]["results"][0]["summary"]
+    assert summ.get("count") == 1 and "sample" not in summ              # count kept, raw sample dropped
+
+
 # A4/A5 — summarize-before-LLM: compact shape, and the data blob stays under the byte cap.
 def test_summarize_and_byte_cap(monkeypatch):
     big = {"result": {"shape": "matrix", "series": [{"v": i} for i in range(1000)]}}
@@ -103,13 +133,33 @@ def test_summarize_and_byte_cap(monkeypatch):
 def test_db_failure_degrades_not_raises(monkeypatch):
     conn = FakeConn([], raise_on="FROM integrations")
     out = src.collect_datasources(conn)
-    assert out["key"] == "datasources" and out["degraded"] and not out["ok"]
+    assert out["key"] == "datasources_obs" and out["degraded"] and not out["ok"]
 
 
 # empty: no datasources configured → ok, empty, explicit note.
 def test_no_datasources(monkeypatch):
     out = src.collect_datasources(FakeConn([]))
     assert out["ok"] and out["data"]["queried"] == 0
+
+
+# M3: summarize must handle the REAL connector envelopes (prom/loki spread `result` as a top-level LIST),
+# not just the synthetic {result:{series}} shape — else summaries are silently empty.
+def test_summarize_handles_real_prometheus_envelope(monkeypatch):
+    _patch_lambda(monkeypatch, FakeLambda(body={"resultType": "vector", "truncated": False,
+                                                "result": [{"metric": {"job": "api"}, "value": [0, "3"]}]}))
+    conn = FakeConn([(5, "p", "prometheus", True)], {5: {"metrics": ["http_requests_total"]}})
+    out = src.collect_datasources(conn)
+    summ = out["data"]["findings"][0]["results"][0]["summary"]
+    assert summ.get("count") == 1 and summ.get("resultType") == "vector"  # real envelope summarized, not empty
+
+
+# M3: Tempo returns `traces` (not `result`) — must still summarize.
+def test_summarize_handles_tempo_traces_envelope(monkeypatch):
+    _patch_lambda(monkeypatch, FakeLambda(body={"traces": [{"traceID": "abc"}, {"traceID": "def"}]}))
+    conn = FakeConn([(5, "t", "tempo", True)], {5: {"labels": ["service.name"]}})
+    out = src.collect_datasources(conn)
+    summ = out["data"]["findings"][0]["results"][0]["summary"]
+    assert summ.get("count") == 2 and summ.get("source") == "traces"
 
 
 # consensus gate finding: a crafted/poisoned ClickHouse table name must NOT reach the SQL (identifier-validated).

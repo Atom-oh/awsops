@@ -15,6 +15,23 @@ locals {
   acct         = data.aws_caller_identity.current.account_id
   # ai-cost aggregator gate — reuses the worker role/pg8000 layer/VPC, so it REQUIRES workers_enabled.
   act = var.workers_enabled && var.ai_cost_tracking_enabled ? 1 : 0
+  # datasource-diagnosis egress gate (ADR-039/041) — requires workers_enabled. Grants the worker role
+  # lambda:InvokeFunction on the 5 connector Lambdas + sets the enabling env. Default false → 0/$0.
+  dsd = var.workers_enabled && var.datasource_diagnosis_enabled ? 1 : 0
+  ds_connector_arns = [for k in ["prometheus", "loki", "tempo", "mimir", "clickhouse"] :
+  "arn:aws:lambda:${var.region}:${local.acct}:function:${var.project}-agent-${k}-mcp"]
+  # env that turns collect_datasources on (only when the gate is set) — kept as a list/map fragment so
+  # it's concat/merge-appended to the worker task def + Lambda envs below.
+  ds_env_list = local.dsd == 1 ? [
+    { name = "DIAG_DATASOURCES_ENABLED", value = "true" },
+    { name = "HOST_ACCOUNT_ID", value = local.acct },
+    { name = "PROJECT", value = var.project },
+  ] : []
+  ds_env_map = local.dsd == 1 ? {
+    DIAG_DATASOURCES_ENABLED = "true"
+    HOST_ACCOUNT_ID          = local.acct
+    PROJECT                  = var.project
+  } : {}
 }
 
 ############################################################
@@ -386,7 +403,7 @@ resource "aws_ecs_task_definition" "worker" {
       name      = local.worker_cname
       image     = "${aws_ecr_repository.worker[0].repository_url}:${var.worker_image_tag}"
       essential = true
-      environment = [
+      environment = concat([
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
         { name = "AURORA_SECRET_ARN", value = aws_rds_cluster.aurora.master_user_secret[0].secret_arn },
@@ -403,7 +420,7 @@ resource "aws_ecs_task_definition" "worker" {
         # _compliance fails fast with a clear error.
         { name = "STEAMPIPE_HOST", value = "steampipe.${var.project}.internal" },
         { name = "STEAMPIPE_SECRET_ARN", value = try(aws_secretsmanager_secret.steampipe[0].arn, "") }
-      ]
+      ], local.ds_env_list) # + gated DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT when datasource_diagnosis_enabled
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -469,14 +486,14 @@ resource "aws_lambda_function" "worker" {
     security_group_ids = [aws_security_group.service.id]
   }
   environment {
-    variables = {
+    variables = merge({
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
       AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
       # AI Diagnosis (Task 1b): report worker uploads here + invokes a global.* Bedrock profile from var.region.
       ARTIFACT_BUCKET = aws_s3_bucket.diagnosis_artifacts[0].bucket
       BEDROCK_REGION  = var.region
-    }
+    }, local.ds_env_map) # + gated DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT when datasource_diagnosis_enabled
   }
   depends_on = [aws_cloudwatch_log_group.worker_fn, aws_iam_role_policy_attachment.worker_lambda_vpc]
 }
@@ -763,6 +780,50 @@ resource "aws_iam_role_policy" "worker_lambda_diagnosis" {
         Resource = "${aws_s3_bucket.diagnosis_artifacts[0].arn}/diagnosis/*"
       }
     ]
+  })
+}
+
+# Datasource-diagnosis connector invoke (ADR-039/041 governed external egress) — GATED on
+# datasource_diagnosis_enabled (default false → not created → $0). Scoped to the 5 named connector
+# Lambda ARNs only (NO function:* wildcard). Granted to BOTH diagnosis compute roles (Fargate task +
+# worker Lambda), matching the worker_diagnosis / worker_lambda_diagnosis split above. The matching
+# DIAG_DATASOURCES_ENABLED env is set on the same gate, so IAM and activation move together.
+resource "aws_iam_role_policy" "worker_task_datasource_invoke" {
+  count = local.dsd
+  name  = "${var.project}-worker-datasource-invoke"
+  role  = aws_iam_role.worker_task[0].id
+  # Fail LOUD (CLAUDE.md: no silent caps) if the flag is set but the connector Lambdas it grants
+  # InvokeFunction on won't exist — agentcore_enabled + integrations_enabled create the
+  # ${var.project}-agent-*-mcp functions. Without this the worker would silently degrade on AccessDenied.
+  lifecycle {
+    precondition {
+      condition     = var.agentcore_enabled && var.integrations_enabled
+      error_message = "datasource_diagnosis_enabled requires agentcore_enabled AND integrations_enabled (they create the ${var.project}-agent-*-mcp connector Lambdas this grants lambda:InvokeFunction on)."
+    }
+  }
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InvokeDatasourceConnectors"
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = local.ds_connector_arns
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "worker_lambda_datasource_invoke" {
+  count = local.dsd
+  name  = "${var.project}-worker-lambda-datasource-invoke"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InvokeDatasourceConnectors"
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = local.ds_connector_arns
+    }]
   })
 }
 

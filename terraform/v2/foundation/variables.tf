@@ -113,6 +113,12 @@ variable "ai_cost_tracking_enabled" {
   default     = false
 }
 
+variable "datasource_diagnosis_enabled" {
+  type        = bool
+  description = "AI-diagnosis external-observability collector gate (ADR-039/041 governed egress). When true (requires workers_enabled), grants the worker role lambda:InvokeFunction on the 5 connector Lambdas and sets DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT on the worker so collect_datasources can fan out. false (default) = 0 resources/IAM, $0, collector stays disabled (no AccessDenied degrade)."
+  default     = false
+}
+
 variable "worker_image_tag" {
   type        = string
   description = "Worker Fargate image tag in the worker ECR repo."

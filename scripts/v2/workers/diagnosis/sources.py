@@ -7,6 +7,7 @@ X-Ray service map (actual traffic flow), CloudTrail what-changed. NO raw log lin
 import os
 import re
 import json
+import logging
 import time as _time
 import boto3
 from botocore.exceptions import ClientError
@@ -254,12 +255,30 @@ def _invoke_connector(kind, tool, instance_id, arguments=None):
 
 
 def _ds_schema(conn, integration_id):
-    """Cached introspected schema for one instance, keyed by integration_id (one row per instance in
-    the single-account model — so this does NOT depend on the BFF's account-key convention)."""
+    """Cached introspected schema for one instance. PREFERS the BFF's account-key convention
+    (host account ∪ 'self', exact-account first) per spec §8, then FALLS BACK to integration_id alone
+    so a worker/BFF account-key mismatch doesn't blank the collector. This is a PREFERENCE, NOT an
+    enforced cross-tenant boundary — it is safe ONLY because `integrations` is single-account (the
+    table has no account_id, so one integration_id = exactly one instance); the fallback logs a
+    key-mismatch smell. (If this ever becomes multi-tenant, remove the fallback and enforce isolation upstream.)"""
+    acct = os.environ.get("HOST_ACCOUNT_ID") or os.environ.get("AWS_ACCOUNT_ID") or "self"
     rows = conn.run(
-        "SELECT schema FROM datasource_schemas WHERE integration_id=:iid ORDER BY fetched_at DESC LIMIT 1",
-        iid=integration_id,
+        "SELECT schema FROM datasource_schemas WHERE account_id IN (:acct, 'self') AND integration_id=:iid "
+        "ORDER BY (account_id = :acct) DESC, fetched_at DESC LIMIT 1",  # exact account wins over 'self'
+        acct=acct, iid=integration_id,
     )
+    if not rows:
+        # Account-scope miss → fall back to integration_id alone. integrations is single-account
+        # (the table has no account_id), so a given integration_id maps to ONE instance — this avoids a
+        # functional regression when the worker's account env differs from the BFF's write key, while
+        # still PREFERRING the account match above. Log the key-mismatch smell (spec §8).
+        rows = conn.run(
+            "SELECT schema FROM datasource_schemas WHERE integration_id=:iid ORDER BY fetched_at DESC LIMIT 1",
+            iid=integration_id,
+        )
+        if rows:
+            logging.warning("[diagnosis] datasource %s schema not under account (%r,'self') — using "
+                            "integration_id fallback (BFF/worker account-key mismatch)", integration_id, acct)
     if not rows:
         return None
     s = rows[0][0]
@@ -304,25 +323,55 @@ def _plan_queries(kind, schema):
 
 
 def _summarize_result(body):
-    """Compact a connector result to a tiny shape (shape/count/sample/value) — never raw series."""
+    """Compact a connector result to NON-PII SIGNAL ONLY — count, result type, source key, and metric
+    LABEL NAMES (keys, never values). Critically: NEVER emit raw samples. Loki `result` is raw log
+    lines, Tempo `traces` are trace payloads, ClickHouse `rows` are raw row values; sampling any of
+    those leaks PII into the Bedrock context (module docstring 'NO raw log lines' + DLP / ADR-040/041).
+    Handles the ACTUAL envelopes: prom/loki/clickhouse spread a top-level list (+resultType), Tempo
+    returns `traces`; some shapes nest under `result:{series|...}`."""
     out = {}
-    res = body.get("result", body) if isinstance(body, dict) else {}
-    if isinstance(res, dict):
-        if "shape" in res:
-            out["shape"] = res.get("shape")
-        series = res.get("series") or res.get("rows") or res.get("data")
-        if isinstance(series, list):
-            out["count"] = len(series)
-            out["sample"] = series[:3]
-        elif "value" in res:
-            out["value"] = res.get("value")
+    if not isinstance(body, dict):
+        return out
+    # top-level list-bearing key (prom/loki `result`, tempo `traces`, clickhouse `rows`, generic `data`/`series`)
+    for key in ("result", "traces", "rows", "data", "series"):
+        v = body.get(key)
+        if isinstance(v, list):
+            out["source"], out["count"] = key, len(v)
+            # non-PII metadata only: the union of metric LABEL NAMES (keys), NEVER their values
+            names = set()
+            for item in v[:50]:
+                m = item.get("metric") if isinstance(item, dict) else None
+                if isinstance(m, dict):
+                    names.update(str(k) for k in m.keys())
+            if names:
+                out["labels"] = sorted(names)[:25]
+            break
+    # nested {result:{series|rows|data}} (synthetic/aggregated shapes) — count + shape only, NO samples
+    if "count" not in out:
+        res = body.get("result")
+        if isinstance(res, dict):
+            series = res.get("series") or res.get("rows") or res.get("data")
+            if isinstance(series, list):
+                out["count"] = len(series)
+            if "shape" in res:
+                out["shape"] = res.get("shape")
+    if "resultType" in body:
+        out["resultType"] = body.get("resultType")
     return out
 
 
 def collect_datasources(conn):
     """Schema-driven, multi-instance, credential-blind external-observability signals for diagnosis.
     Reads ONLY non-secret integrations columns + the cached schema; invokes connectors credential-blind
-    (instance_id only). Bounded (instances/queries/deadline/bytes). NEVER raises."""
+    (instance_id only). Bounded (instances/queries/deadline/bytes). NEVER raises.
+
+    FLAG-GATED (CLAUDE.md: gate new features, default OFF → $0): runs only when DIAG_DATASOURCES_ENABLED
+    is set. The terraform var `datasource_diagnosis_enabled` wires this env AND the worker
+    lambda:InvokeFunction IAM together (ADR-039/041 governed external egress), so the connector fan-out
+    can never be live without its IAM — no silent AccessDenied degrade."""
+    if os.environ.get("DIAG_DATASOURCES_ENABLED") != "true":
+        return _result("datasources_obs", data={"instances": [], "queried": 0},
+                       notes="datasource diagnosis disabled (datasource_diagnosis_enabled flag off)")
     try:
         rows = conn.run(
             "SELECT id, name, kind, is_default FROM integrations "
@@ -331,7 +380,7 @@ def collect_datasources(conn):
             "ORDER BY kind, is_default DESC, id"
         )
     except Exception as e:  # noqa: BLE001
-        return _classify("datasources", e)
+        return _classify("datasources_obs", e)
 
     by_kind = {}
     for r in rows or []:
@@ -341,7 +390,7 @@ def collect_datasources(conn):
         instances.extend(lst[:_DS_MAX_INSTANCES_PER_KIND])  # default-first (ORDER BY is_default DESC)
 
     if not instances:
-        return _result("datasources", data={"instances": [], "queried": 0},
+        return _result("datasources_obs", data={"instances": [], "queried": 0},
                        notes="no connected observability datasources")
 
     deadline = _time.time() + _DS_DEADLINE_S
@@ -383,7 +432,7 @@ def collect_datasources(conn):
             for rr in f.get("results", []):
                 rr.pop("summary", None)
         data["_truncated"] = True
-    return _result("datasources", data=data, notes="; ".join(notes)[:300])
+    return _result("datasources_obs", data=data, notes="; ".join(notes)[:300])
 
 
 # Ordered registry of native collectors. `conn` is passed only to DB-backed ones.
