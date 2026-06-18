@@ -34,6 +34,7 @@ vector, HBarList prop mapping, Korean labels).
 **Files:**
 - Modify: `web/components/datasources/ExplorePanel.tsx`
 - Test: `web/components/datasources/ExplorePanel.test.tsx`
+- Test: `web/app/integrations/datasources/[id]/page.test.tsx`
 
 - [ ] Failing test: a range-capable kind renders a `범위` dropdown with Korean presets
       `즉시 | 5분 | 15분 | 1시간 | 6시간 | 24시간` (default 즉시); selecting `5분` posts
