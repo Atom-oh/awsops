@@ -34,7 +34,9 @@ const SELECT_COLS =
 
 function mapRow(r: Record<string, unknown>): DatasourceRow {
   return {
-    id: r.id as number,
+    // node-pg returns BIGINT (BIGSERIAL id) as a STRING — coerce to number so the API contract is
+    // numeric and UI/route comparisons (instanceId === id, schema byId.has) don't string/number-mismatch.
+    id: Number(r.id),
     name: r.name as string,
     kind: r.kind as string,
     endpoint: (r.endpoint as string) ?? null,
