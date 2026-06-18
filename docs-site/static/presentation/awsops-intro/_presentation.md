@@ -2,6 +2,7 @@
 title: "AWSops — AI-Powered AWS Operations Dashboard"
 slug: awsops-intro
 language: ko
+ratio: "16:9"
 level: 300
 duration: 60
 quiz: false
