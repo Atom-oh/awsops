@@ -53,7 +53,9 @@ export default function MobileNav({ open, onClose }: { open: boolean; onClose: (
         role="dialog"
         aria-modal="true"
       >
-        <Sidebar onNavigate={onClose} className="w-full max-w-none border-r-0" />
+        {/* persist=false: the always-mounted desktop Sidebar owns the shared
+            localStorage key; this drawer instance reads but never writes it. */}
+        <Sidebar onNavigate={onClose} persist={false} className="w-full max-w-none border-r-0" />
       </div>
     </div>
   );

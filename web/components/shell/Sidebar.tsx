@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -119,31 +119,37 @@ function NavItem({ href, label, icon: Icon, active, className, onNavigate }: { h
 
 // `onNavigate` lets a host (e.g. the mobile drawer) close itself when a *navigation*
 // link is tapped; chevron toggles never call it (the drawer stays open while you
-// expand). `className` lets a host add layout classes. No props = the desktop sidebar.
-export default function Sidebar({ onNavigate, className }: { onNavigate?: () => void; className?: string } = {}) {
+// expand). `className` lets a host add layout classes. `persist` marks the single
+// owner instance allowed to write the shared localStorage key — AppShell mounts the
+// desktop Sidebar (owner) AND the drawer's Sidebar simultaneously, so only one must
+// write or the hidden instance clobbers the other's stored state. No props = owner.
+export default function Sidebar({ onNavigate, className, persist = true }: { onNavigate?: () => void; className?: string; persist?: boolean } = {}) {
   const path = usePathname();
   const tree = navTree();
   const { t } = useI18n();
 
   const [expanded, setExpanded] = useState<Set<string>>(() => seedFromPath(path));
-  const firstWrite = useRef(true);
+  const [hydrated, setHydrated] = useState(false);
 
-  // Hydrate persisted expand state after mount (union with the active seed).
+  // Hydrate persisted expand state after mount (union with the active seed). Every
+  // instance reads so both sidebars reflect remembered state; only the owner writes.
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const ids = JSON.parse(raw) as string[];
-      if (Array.isArray(ids)) setExpanded((prev) => new Set([...prev, ...ids.filter((x) => typeof x === 'string')]));
+      if (raw) {
+        const ids = JSON.parse(raw) as string[];
+        if (Array.isArray(ids)) setExpanded((prev) => new Set([...prev, ...ids.filter((x) => typeof x === 'string')]));
+      }
     } catch { /* corrupt/unavailable → keep the seed */ }
+    setHydrated(true);
   }, []);
 
-  // Persist on change (skip the very first commit so we don't clobber stored state
-  // before the hydrate effect above has merged it in).
+  // Persist on change — owner only, and only after hydration (so we never write the
+  // un-merged seed back over stored state, even on a rapid pre-hydrate toggle).
   useEffect(() => {
-    if (firstWrite.current) { firstWrite.current = false; return; }
+    if (!persist || !hydrated) return;
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify([...expanded])); } catch { /* ignore */ }
-  }, [expanded]);
+  }, [expanded, persist, hydrated]);
 
   // Navigating into a group (or its subgroup) re-seeds it open — manual collapse
   // persists until the next navigation into that group.
@@ -221,8 +227,8 @@ export default function Sidebar({ onNavigate, className }: { onNavigate?: () => 
             type="button"
             onClick={() => toggle(gId(g.slug))}
             aria-expanded={open}
-            aria-controls={panelId}
-            aria-label={`${open ? 'Collapse' : 'Expand'} ${label}`}
+            aria-controls={open ? panelId : undefined}
+            aria-label={`${open ? t('sidebar.collapse') : t('sidebar.expand')} ${label}`}
             className="shrink-0 rounded-md p-1.5 text-chrome-fg-muted transition-colors hover:bg-chrome-active/40 hover:text-chrome-fg"
           >
             <ChevronRight size={15} strokeWidth={2} className={cn('transition-transform duration-150', open && 'rotate-90')} />
@@ -243,7 +249,7 @@ export default function Sidebar({ onNavigate, className }: { onNavigate?: () => 
                     type="button"
                     onClick={() => toggle(sId(sg.key))}
                     aria-expanded={subOpen}
-                    aria-controls={subPanelId}
+                    aria-controls={subOpen ? subPanelId : undefined}
                     className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-[6px] text-[11px] font-semibold uppercase tracking-[0.04em] text-chrome-fg-muted transition-colors hover:bg-chrome-active/40 hover:text-chrome-fg"
                   >
                     <ChevronRight size={13} strokeWidth={2.2} className={cn('shrink-0 transition-transform duration-150', subOpen && 'rotate-90')} />
