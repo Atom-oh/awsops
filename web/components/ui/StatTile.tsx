@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import AwsopsMark from './AwsopsMark';
 import { cn } from '@/lib/cn';
 
@@ -22,6 +23,8 @@ export interface StatTileProps {
   hint?: ReactNode;
   variant?: StatTileVariant;
   className?: string;
+  /** When set, the tile becomes a navigation link (v1-parity: click a KPI → its page). */
+  href?: string;
 }
 
 function trendTone(trend: string): string {
@@ -47,6 +50,7 @@ export default function StatTile({
   hint,
   variant = 'default',
   className,
+  href,
 }: StatTileProps) {
   const border =
     variant === 'accent'
@@ -58,8 +62,15 @@ export default function StatTile({
   const valueColor =
     variant === 'danger' ? 'text-rose-700' : variant === 'warn' ? 'text-brand-700' : 'text-ink-800';
 
-  return (
-    <div className={cn('relative overflow-hidden bg-card border rounded-lg shadow-card p-4', border, className)}>
+  const inner = (
+    <div
+      className={cn(
+        'relative overflow-hidden bg-card border rounded-lg shadow-card p-4',
+        border,
+        href && 'h-full transition hover:shadow-md hover:border-brand-300',
+        className,
+      )}
+    >
       {variant === 'accent' && (
         <div className="pointer-events-none absolute -top-1 -right-1 opacity-[0.07]">
           <AwsopsMark size={56} />
@@ -86,4 +97,17 @@ export default function StatTile({
       )}
     </div>
   );
+
+  if (href) {
+    return (
+      <Link
+        href={href}
+        aria-label={`${eyebrow ?? label} 상세 보기`}
+        className="block rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+      >
+        {inner}
+      </Link>
+    );
+  }
+  return inner;
 }
