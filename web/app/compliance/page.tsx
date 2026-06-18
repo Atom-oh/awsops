@@ -110,7 +110,7 @@ export default function CompliancePage() {
     if (id !== activeJobIdRef.current) return; // a newer job started — this loop is obsolete
     if (!ok) {
       if (errs >= 3) { // give up after repeated failures; surface it, stop tracking
-        setErr('실행 상태 조회에 반복 실패했습니다.');
+        if (id === latestRunIdRef.current) setErr('실행 상태 조회에 반복 실패했습니다.'); // only for the shown run
         setBusy(false);
         activeJobIdRef.current = null;
         return;
@@ -133,8 +133,18 @@ export default function CompliancePage() {
     setErr('');
     setSelected(null);           // drop stale control-detail from the previously shown run
     latestRunIdRef.current = id; // switch the display; the live job's poll won't overwrite it
-    void fetchRun(id);
-  }, [fetchRun]);
+    void (async () => {
+      const { run } = await fetchRun(id);
+      // If the opened row is itself still running and nothing else is being tracked, adopt it as the
+      // active job: disable Run (no duplicate heavy job) + auto-refresh until it reaches terminal.
+      if (run?.status === 'running' && id === latestRunIdRef.current && activeJobIdRef.current === null) {
+        if (pollRef.current) clearTimeout(pollRef.current);
+        activeJobIdRef.current = id;
+        setBusy(true);
+        void pollActive(id);
+      }
+    })();
+  }, [fetchRun, pollActive]);
 
   useEffect(() => () => { if (pollRef.current) clearTimeout(pollRef.current); }, []);
 
