@@ -178,3 +178,60 @@ substrate; new connector kinds; AWS-resource SQL console.
 - [ ] `cd web && npx vitest run` (web) + `python3 -m pytest scripts/v2/workers -q` (workers) +
       `terraform -chdir=terraform/v2/foundation validate`. All green.
 - [ ] Commit any test-only fixups: `test: full sweep green for v1-parity restoration`.
+
+---
+
+## P2 gate resolutions (4-model panel: kiro opus-4.8 + kimi-k2.5 + glm-5 + agy Gemini-3.1-Pro-High)
+
+Verified against origin code; applied to the tasks above.
+
+**Routing change (owner guidance):** WS-A (Tasks 5–7) is built **on top of PR #67 `fix/v2-diagnosis-data`**
+(its data-fidelity work is P4-passed + MERGEABLE) and pushed to update **PR #67** — not this branch. WS-B/C/D ship
+on `feat/v2-parity`. WS-A worktree bases off `origin/fix/v2-diagnosis-data` so the WADD prompts consume the real
+inventory detail #67 now feeds.
+
+**WS-C**
+- Task 1: signature is `rdsMetrics(instanceIds, accountId?)` mirroring **`bedrockModelMetrics(range, accountId?)`**
+  (it uses `assumedClient(accountId, …)`); `ec2AvgCpu` has NO accountId — do not copy it for the multi-account path.
+- Task 1: **batch instanceIds ≤ 62 per `GetMetricData`** (8 metrics × 63 > the 500 metric-query limit); chunk + merge.
+- Task 3: `web/components/ui/DetailPanel.tsx` IS the inventory detail panel (confirmed) — but it is **currently
+  no-fetch** (renders the already-held row). Add a `useEffect` that fetches per-instance RDS metrics when
+  `row.resource_type==='rds'` on open; degrade to a "메트릭 불가" note on CW denial.
+
+**WS-D**
+- Task 4: `generate/route.ts` and `queryOnlyPrompt` **still exist** on origin (only `datasource-querygen.ts` was
+  deleted). Improving `queryOnlyPrompt` (passed as `systemPromptOverride` to `invokeAgent`) is correct and does NOT
+  revert #63's agent routing. Put the schema-empty clause in the system prompt for ALL langs.
+- DROPPED (unsupported): "modifying route.ts collides with #63" (factually wrong); "redact metric names in the
+  query-gen prompt" (generation needs the real cached names; no new PII surface).
+- FLAGGED (not in scope): the dominant latency is routing a one-shot translate through the full monitoring agent —
+  the fix (direct lightweight Bedrock for generation) reverts #63 → needs the #63 owner.
+
+**WS-A** (now on the #67 branch)
+- Task 5: each section prompt MUST include an explicit **"데이터 부족 시 '데이터 불가' 명시"** clause; tests assert it.
+- Task 5: pricing tokens (Graviton/gp3) are **heuristics** — prompt must say "prefer the provided cost data; if
+  cost data is unavailable, state '가격 데이터 없음' rather than asserting stale benchmarks."
+- Task 6: health-score rubric must be **honest about data-less pillars** — e.g. Sustainability has no v2 signal →
+  instruct "해당 pillar 데이터 없음 → 점수 생략/명시" (do not fabricate). Test asserts ≥1 pillar has a data-gap clause.
+- Task 5/§3.4: make the **pillar→section map explicit**: Security→security_posture, Reliability→network/db,
+  Performance/Cost→compute/cost, **Operational-Excellence→recent_changes (observability)**, **Sustainability→a
+  legacy-generation note** (or omit honestly). Keep catalog KEYS + the `total = len(catalog)+1` UI contract stable.
+- Task 7: report.py change goes through a **new helper** (e.g. `_synthesis_block`) called from `build_markdown`, to
+  minimize collision with #67's coverage-note edit; `merge-tree` dry-run before pushing to #67.
+
+**WS-B**
+- Task 8: `report_schedules` has **no account_id column** (singleton per `user_sub`+`schedule_type`); tier/model go
+  in the **`config` JSONB**. `next_run_at` is `TIMESTAMPTZ` → `computeNextRun` returns **UTC**; KST is display-only.
+  Scope reads/writes by `user_sub` (user isolation); no cross-account param.
+- Task 9: route MUST NOT run a diagnosis inline (thin-BFF) — only read/upsert the schedule row; test user_sub isolation.
+- Task 10: **enqueue is a DB+SQS dual-write** — replicate the web `enqueueJob` (INSERT `worker_jobs` + `sqs.send_message`
+  to the jobs queue); a DB-only write never fires SFN. **Idempotency = atomic advance-first**:
+  `UPDATE report_schedules SET last_run_at=now(), next_run_at=<computed> WHERE id=ANY(:due) AND next_run_at<=now() RETURNING *`,
+  then enqueue only the RETURNING rows (a concurrent fire claims 0 rows → no double-enqueue). Per-row enqueue failure
+  is logged, does not block others. (A missed run on crash-after-advance is acceptable for read-only diagnosis.)
+- Task 11: **clone the `reaper` Lambda pattern** — `vpc_config` (Aurora reachable), `AURORA_SECRET_ARN` env + the
+  worker role's `secretsmanager:GetSecretValue`, the pg8000 layer, an `aws_cloudwatch_event_rule` (hourly) +
+  `aws_cloudwatch_event_target` + **`aws_lambda_permission` for `events.amazonaws.com`**, plus `sqs:SendMessage` to
+  the jobs queue. ALL `count`-gated on **`diagnosis_schedule_enabled`** (declare in `variables.tf`, default false) →
+  `plan` no-op verified.
+- Task 12: mount the panel as a **section/card inside `DiagnosisView`** (not a separate route); test it's on the page.
