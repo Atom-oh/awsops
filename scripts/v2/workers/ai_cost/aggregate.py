@@ -49,7 +49,9 @@ def normalize_model(model):
     (bedrock.ts) strips the cross-region prefix (us./eu./ap./global.) on read for pricing/labels."""
     if not model:
         return model
-    return model.rsplit("/", 1)[-1]
+    # rsplit keeps the original if there's no '/'; `or model` guards a pathological trailing-slash
+    # ("foo/" → "") from producing an empty key.
+    return model.rsplit("/", 1)[-1] or model
 
 
 def parse_rows(results) -> list:
