@@ -38,6 +38,12 @@ export async function GET(request: Request, { params }: { params: { type: string
 
     if (params.type === 'rds') {
       // resource_id = DBInstanceIdentifier (sync_lambda). Metrics are a live CloudWatch read (not stored).
+      // ?id=<DBInstanceIdentifier> → that one instance's 8 series (for the detail panel); else fleet KPI cards.
+      const instanceId = new URL(request.url).searchParams.get('id');
+      if (instanceId) {
+        const one = await rdsMetrics([instanceId]);
+        return Response.json({ instance: one.byInstance[instanceId] ?? null });
+      }
       const r = await getPool().query<{ id: string | null }>(
         `SELECT resource_id AS id FROM inventory_resources WHERE resource_type = 'rds' AND account_id = 'self'`,
       );

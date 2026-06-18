@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import DetailPanel from './DetailPanel';
 import { INVENTORY_TYPES } from '@/lib/inventory-types';
@@ -66,5 +66,40 @@ describe('DetailPanel', () => {
     expect(screen.queryByText('instance_type')).toBeNull();
     // state key rendered as a StatePill (the value text is present)
     expect(screen.getByText('running')).toBeTruthy();
+  });
+});
+
+describe('DetailPanel — RDS live metrics (v1 parity)', () => {
+  const METRICS = {
+    cpu: 42, connections: 5, freeableMemory: 1_000_000_000, freeStorage: 5_000_000_000,
+    readIops: 10, writeIops: 3, netIn: 2048, netOut: 4096,
+  };
+  let fetchMock: ReturnType<typeof vi.fn>;
+  const setFetch = (impl: (url: string) => { ok: boolean; status: number; json: () => Promise<unknown> }) => {
+    fetchMock = vi.fn(async (url: string) => impl(url));
+    global.fetch = fetchMock as unknown as typeof fetch;
+  };
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('fetches and renders the 8-metric CloudWatch table for an rds row', async () => {
+    setFetch(() => ({ ok: true, status: 200, json: async () => ({ instance: METRICS }) }));
+    render(<DetailPanel title="db-1" data={{ resource_id: 'db-1', engine: 'postgres' }} resourceType="rds" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText('인스턴스 메트릭 (CloudWatch)')).toBeTruthy());
+    expect(screen.getByText('42%')).toBeTruthy();       // CPU
+    expect(screen.getByText('5.0 GB')).toBeTruthy();    // freeStorage 5e9
+    expect(fetchMock).toHaveBeenCalledWith('/api/inventory/rds/metrics?id=db-1');
+  });
+
+  it('renders neither the metrics section nor a fetch for a non-rds row', () => {
+    setFetch(() => ({ ok: true, status: 200, json: async () => ({}) }));
+    render(<DetailPanel title="i-1" data={{ resource_id: 'i-1' }} resourceType="ec2" onClose={() => {}} />);
+    expect(screen.queryByText('인스턴스 메트릭 (CloudWatch)')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('shows "메트릭 불가" when the metrics fetch fails (graceful degrade)', async () => {
+    setFetch(() => ({ ok: false, status: 403, json: async () => ({}) }));
+    render(<DetailPanel title="db-1" data={{ resource_id: 'db-1' }} resourceType="rds" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText('메트릭 불가')).toBeTruthy());
   });
 });

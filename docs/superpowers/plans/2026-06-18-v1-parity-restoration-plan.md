@@ -41,7 +41,10 @@ substrate; new connector kinds; AWS-resource SQL console.
 
 **Files:**
 - Modify: `web/components/ui/DetailPanel.tsx`
-- Test: `web/components/ui/DetailPanel.test.tsx`
+- Modify: `web/components/ui/detailpanel.test.tsx`
+- Modify: `web/app/inventory/[type]/page.tsx`
+- Modify: `web/app/api/inventory/[type]/metrics/route.ts`
+- Modify: `web/app/api/inventory/[type]/metrics/route.test.ts`
 
 - [ ] Failing test: opening a `resource_type='rds'` row renders an "Instance Metrics" table with the 8 metric
       labels and live values (mock the fetch); a non-rds row renders no metrics table; a CW-degraded fetch shows a

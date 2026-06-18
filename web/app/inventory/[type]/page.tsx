@@ -223,6 +223,7 @@ export default function InventoryTypePage() {
         title={selected?.resource_id as string | undefined}
         data={selected}
         spec={spec}
+        resourceType={type}
         onClose={() => setSelected(null)}
       />
     </>

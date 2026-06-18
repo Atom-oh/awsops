@@ -106,6 +106,21 @@ describe('GET /api/inventory/[type]/metrics', () => {
     expect(cards[0].value).toBe('—');
   });
 
+  it('rds ?id=<db> → single-instance 8-metric object (no fleet query)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    rdsMetrics.mockResolvedValue({
+      byInstance: { 'db-1': { cpu: 33, connections: 4, freeStorage: 9_000_000_000, freeableMemory: 2_000_000_000, readIops: 1, writeIops: 2, netIn: 10, netOut: 20 } },
+      avgCpu: 33,
+    });
+    const { GET } = await import('./route');
+    const r = new Request('http://x/api/inventory/rds/metrics?id=db-1', { headers: { cookie: 'awsops_token=t' } });
+    const body = await (await GET(r, ctx('rds'))).json();
+    expect(rdsMetrics).toHaveBeenCalledWith(['db-1']);
+    expect(body.instance.cpu).toBe(33);
+    expect(body.instance.connections).toBe(4);
+    expect(query).not.toHaveBeenCalled(); // per-instance path skips the fleet inventory query
+  });
+
   it('degrades to {cards:[]} on error (never blanks page)', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockRejectedValue(new Error('aurora down'));
