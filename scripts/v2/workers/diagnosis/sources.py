@@ -26,6 +26,9 @@ _DS_MAX_BYTES = 8000  # structural summarize-before-LLM hard cap on the collecto
 # always come from the cached schema — we never hardcode a metric name).
 _SIGNAL_RE = re.compile(r"(error|fail|5xx|request|latenc|duration|cpu|mem|saturat|throttl|drop)", re.I)
 _COUNTERISH_RE = re.compile(r"(total|count|errors?|requests?)$", re.I)
+# A bare SQL identifier — table names come from the datasource's own introspection, but we still
+# validate before interpolating (a poisoned schema cache / crafted table name must not inject SQL).
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _THROTTLE_CODES = (
     "Throttling", "ThrottlingException", "TooManyRequestsException", "RequestLimitExceeded",
@@ -292,7 +295,10 @@ def _plan_queries(kind, schema):
     elif kind == "clickhouse":
         tables = schema.get("tables") or []
         names = [t.get("name") if isinstance(t, dict) else t for t in tables]
-        for n in [x for x in names if isinstance(x, str)][:_DS_MAX_QUERIES_PER_INSTANCE]:
+        # identifier-validate before interpolating — skip any name that isn't a bare identifier (no
+        # SQL injection via a crafted/poisoned table name; clickhouse can't bind identifiers).
+        safe = [x for x in names if isinstance(x, str) and _IDENT_RE.match(x)]
+        for n in safe[:_DS_MAX_QUERIES_PER_INSTANCE]:
             plan.append(("clickhouse_query", {"sql": f"SELECT count() AS c FROM {n}"}, n))
     return plan[:_DS_MAX_QUERIES_PER_INSTANCE]
 
