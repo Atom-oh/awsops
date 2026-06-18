@@ -93,3 +93,17 @@ class TestNoSteampipe(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCatalogWiring(unittest.TestCase):
+    def test_istio_target_registered(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "v2", "agentcore"))
+        import catalog
+        t = catalog.TARGETS.get("istio-read-target")
+        self.assertIsNotNone(t, "istio-read-target missing from catalog.TARGETS")
+        self.assertEqual(t["gateway"], "container")
+        self.assertEqual(t["lambda_key"], "istio-read")
+        names = [x["name"] for x in t["tools"]]
+        self.assertIn("mesh_overview", names)
+        self.assertIn("list_virtual_services", names)
+        self.assertEqual(len(t["tools"]), 7)

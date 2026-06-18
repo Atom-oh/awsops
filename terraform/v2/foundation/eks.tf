@@ -31,11 +31,33 @@ resource "aws_eks_access_policy_association" "web_view" {
   cluster_name  = each.value
   principal_arn = aws_iam_role.task.arn
   # Keep in sync with scripts/v2/eks/auto_register.py _READONLY_POLICY_SUFFIXES (PR #36 r5).
-  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
+  policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
   access_scope {
     type = "cluster"
   }
   depends_on = [aws_eks_access_entry.web]
+}
+
+# ── istio-read MCP (2026-06-18): the agent Lambda exec role needs its OWN cluster Access Entry to
+#    read Istio CRDs via the k8s API (bearer token from presigned STS). Same AdminView read policy as
+#    the web task role; same allow-list discipline applies (the istio-read Lambda only LISTs Istio
+#    CRDs + namespaces — GET/LIST only). Gated on agentcore_enabled (agent_lambda[0] exists only then).
+resource "aws_eks_access_entry" "agent" {
+  for_each      = var.agentcore_enabled ? toset(var.onboard_eks_clusters) : toset([])
+  cluster_name  = each.value
+  principal_arn = aws_iam_role.agent_lambda[0].arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "agent_view" {
+  for_each      = var.agentcore_enabled ? toset(var.onboard_eks_clusters) : toset([])
+  cluster_name  = each.value
+  principal_arn = aws_iam_role.agent_lambda[0].arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
+  access_scope {
+    type = "cluster"
+  }
+  depends_on = [aws_eks_access_entry.agent]
 }
 
 # IAM the web task role needs to discover clusters + build a kubeconfig (P3 consumes this).
