@@ -18,7 +18,7 @@ AgentCore 게이트웨이 MCP 도구용 19개 Lambda 함수 + 1개 공유 모듈
 - `aws_eks_mcp.py` — EKS clusters, CloudWatch, IAM, troubleshooting (9 tools)
 - `aws_ecs_mcp.py` — ECS clusters/services/tasks, troubleshooting (3 tools)
 - `aws_istio_mcp.py` [VPC] — Istio CRDs via Steampipe K8s tables (12 tools) — ⚠️ v1, **dark in v2** (needs live Steampipe, ADR-037)
-- `istio_read_mcp.py` [v2 read-only] — Istio CRDs via the EKS k8s API (presigned-STS token, stdlib urllib/ssl; 7 tools: mesh_overview + 6 CRD lists)
+- `istio_read_mcp.py` [v2 read-only] — Istio CRDs via the EKS k8s API (presigned-STS token, stdlib urllib/ssl; 7 tools: mesh_overview + 6 CRD lists). Needs an EKS Access Entry for the agent Lambda role — registered out-of-band by the cluster owner via `scripts/v2/eks/register-istio-access.sh` (docs/runbooks/istio-agent-eks-access.md), NOT terraform.
 
 ### IaC Gateway (12 tools)
 - `aws_iac_mcp.py` — CloudFormation/CDK validation, troubleshooting, docs (7 tools)

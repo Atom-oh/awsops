@@ -31,3 +31,9 @@ output "ecr_public_uri" { value = aws_ecrpublic_repository.web.repository_uri }
 
 output "ecs_cluster_name" { value = aws_ecs_cluster.main.name }
 output "ecs_service_name" { value = aws_ecs_service.web.name }
+
+# Principal the operator registers on an EKS cluster (out-of-band CLI) so the istio-read MCP can read
+# Istio CRDs via the k8s API. null when agentcore is off. See scripts/v2/eks/register-istio-access.sh.
+output "agent_lambda_role_arn" {
+  value = var.agentcore_enabled ? aws_iam_role.agent_lambda[0].arn : null
+}

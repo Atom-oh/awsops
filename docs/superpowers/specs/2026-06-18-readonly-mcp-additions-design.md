@@ -57,7 +57,10 @@ No Steampipe, no pg8000.
 
 **IAM (the heaviest part of this design):** the agent Lambda execution role needs an **EKS Access
 Entry + AmazonEKSAdminViewPolicy** (cluster-scoped; AdminView not View — listing Istio CRDs needs the
-broader read role), mirroring the web task role's grant in `eks.tf`. The k8s bearer token is built
+broader read role). **This entry is NOT terraform-managed** (owner decision 2026-06-18): the cluster
+owner registers it out-of-band via `scripts/v2/eks/register-istio-access.sh` (read-only stance —
+AWSops never mutates a cluster, and the apply principal may lack `eks:CreateAccessEntry`). terraform
+only emits `output.agent_lambda_role_arn` for the operator to register. The k8s bearer token is built
 from a presigned STS `GetCallerIdentity` — **reuse the existing `k8s-aws-v1.` pattern already in
 `datasource_diag_mcp.py` (`_check_k8s_service_endpoints`)** — over stdlib `urllib`+`ssl` (agent Lambdas
 bundle no `requests`/`kubernetes`). Resolve endpoint+CA at runtime via `describe_cluster(cluster_name)`

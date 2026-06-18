@@ -38,27 +38,14 @@ resource "aws_eks_access_policy_association" "web_view" {
   depends_on = [aws_eks_access_entry.web]
 }
 
-# ── istio-read MCP (2026-06-18): the agent Lambda exec role needs its OWN cluster Access Entry to
-#    read Istio CRDs via the k8s API (bearer token from presigned STS). Same AdminView read policy as
-#    the web task role; same allow-list discipline applies (the istio-read Lambda only LISTs Istio
-#    CRDs + namespaces — GET/LIST only). Gated on agentcore_enabled (agent_lambda[0] exists only then).
-resource "aws_eks_access_entry" "agent" {
-  for_each      = var.agentcore_enabled ? toset(var.onboard_eks_clusters) : toset([])
-  cluster_name  = each.value
-  principal_arn = aws_iam_role.agent_lambda[0].arn
-  type          = "STANDARD"
-}
-
-resource "aws_eks_access_policy_association" "agent_view" {
-  for_each      = var.agentcore_enabled ? toset(var.onboard_eks_clusters) : toset([])
-  cluster_name  = each.value
-  principal_arn = aws_iam_role.agent_lambda[0].arn
-  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
-  access_scope {
-    type = "cluster"
-  }
-  depends_on = [aws_eks_access_entry.agent]
-}
+# ── istio-read MCP (2026-06-18): the agent Lambda exec role needs an EKS Access Entry to read Istio
+#    CRDs via the k8s API. We DELIBERATELY do NOT create it in terraform — granting a principal k8s
+#    access is the CLUSTER OWNER's call, and the apply principal may lack eks:CreateAccessEntry on
+#    third-party clusters. Instead the operator (who holds cluster perms) runs
+#    scripts/v2/eks/register-istio-access.sh (docs/runbooks/istio-agent-eks-access.md), which
+#    registers `output.agent_lambda_role_arn` with AmazonEKSAdminViewPolicy. Mirrors the v2 stance:
+#    AWSops never mutates a cluster; the operator grants access out-of-band. The web task-role entry
+#    above stays terraform-managed (AWSops owns that identity).
 
 # IAM the web task role needs to discover clusters + build a kubeconfig (P3 consumes this).
 resource "aws_iam_role_policy" "task_eks" {
