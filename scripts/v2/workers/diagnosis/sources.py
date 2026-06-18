@@ -23,9 +23,17 @@ DIAG_INV_MAX_BYTES = int(os.environ.get("DIAG_INV_MAX_BYTES", "24000"))  # globa
 _MAX_STR = 500  # truncate any string value longer than this
 # Drop these from resource `data` BEFORE it reaches the report — they can carry plaintext secrets that
 # the generic report._redact would NOT catch (Lambda env vars, user-data scripts, IAM policy docs).
-_SENSITIVE_KEYS = {"environment", "env", "variables", "user_data", "policy", "policy_document",
-                   "inline_policies", "assume_role_policy"}
-_SENSITIVE_RE = re.compile(r"password|secret|token|credential", re.IGNORECASE)
+# Compared against a NORMALIZED key (lowercased, separators stripped) so 'UserData'/'user_data'/
+# 'User-Data' all match — case/separator-insensitive (agy P4: CamelCase keys bypassed otherwise).
+_SENSITIVE_KEYS = {"environment", "env", "variables", "userdata", "policy", "policydocument",
+                   "inlinepolicies", "assumerolepolicy"}
+# Substring match on the normalized key — 'pass' catches password/passwd/db_pass; broad on purpose
+# (a rare benign key is safer dropped than a secret leaked into an LLM-bound, stored report).
+_SENSITIVE_RE = re.compile(r"pass|pwd|secret|token|credential|apikey|accesskey|privatekey|sshkey")
+
+
+def _norm_key(k):
+    return re.sub(r"[\s_\-]", "", str(k).lower())
 
 
 def _safe_data(v):
@@ -36,7 +44,8 @@ def _safe_data(v):
     if isinstance(v, dict):
         out = {}
         for k, val in v.items():
-            if k in _SENSITIVE_KEYS or _SENSITIVE_RE.search(str(k)):
+            kn = _norm_key(k)
+            if kn in _SENSITIVE_KEYS or _SENSITIVE_RE.search(kn):
                 continue
             out[k] = _safe_data(val)
         return out

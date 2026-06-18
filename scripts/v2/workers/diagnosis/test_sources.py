@@ -137,3 +137,16 @@ class TestInventoryDetail:
         out = src.collect_inventory(conn)
         assert out["data"]["by_type"] == {"ec2": 5}
         assert out["data"]["resources"] == {}
+
+    def test_strips_camelcase_and_varied_secret_keys(self):
+        # P4 hardening: case/separator-insensitive + broader secret patterns
+        detail = {"ec2": [["i-1", "r", {
+            "Environment": {"X": "y"}, "UserData": "#!/bin/bash\nexport TOKEN=abc",
+            "db_pass": "p1", "adminPwd": "p2", "apiKey": "k", "AccessKey": "ak",
+            "sessionToken": "t", "instance_state": "running",  # benign — kept
+        }]]}
+        out = src.collect_inventory(_inv_conn(detail, counts=[["ec2", 1]]))
+        data = out["data"]["resources"]["ec2"][0]["data"]
+        for leaked in ("Environment", "UserData", "db_pass", "adminPwd", "apiKey", "AccessKey", "sessionToken"):
+            assert leaked not in data, f"{leaked} not stripped"
+        assert data["instance_state"] == "running"  # benign field preserved
