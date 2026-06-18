@@ -1,120 +1,61 @@
-# Plan — Schema-aware PromQL generation + Explore range UX
+# Plan — Explore range UX (Part 2)
 
 Spec: `docs/superpowers/specs/2026-06-18-prom-schema-explore-ux-design.md`
-Branch: `consensus/prom-schema-explore-ux` (worktree off `feat/v2-architecture-design`)
+Branch: `consensus/prom-schema-explore-ux` (worktree off `feat/v2-architecture-design` @ `4a0d72d`)
 
-TDD throughout: write the failing test first, minimal code to green, then refactor.
-One commit per task, explicit paths only. Read-only; no AWS-resource mutation.
+Part 1 (schema-aware generation) is owned by a concurrent session — OUT OF SCOPE here.
+TDD throughout: failing test first, minimal code to green, refactor. One commit per task,
+explicit paths only. Read-only; no AWS-resource mutation. Panel findings already folded in
+(range:false back-compat, step upper bound, dropdown-change-only re-run, bar gated to prom/mimir
+vector, HBarList prop mapping, Korean labels).
 
 **Test commands**
-- web: `npm --prefix web run test` (vitest) — scoped: `npm --prefix web exec vitest run <file>`
-- agent: `python3 -m pytest agent/lambda/test_prometheus_mcp.py agent/lambda/test_mimir_mcp.py -q`
-- structure: `bash tests/run-all.sh`
+- web scoped: `npm --prefix web exec vitest run <file>`
+- web all: `npm --prefix web run test`
 
 ---
 
-### Task 1: Connector `prometheus_metric_meta` tool
-
-**Files:**
-- Modify: `agent/lambda/prometheus_mcp.py`
-- Test: `agent/lambda/test_prometheus_mcp.py`
-
-- [ ] Write failing test: `prometheus_metric_meta({"metrics":[...]})` calls `/api/v1/metadata`
-      once and `/api/v1/labels?match[]={__name__="<m>"}` per metric (mock `_get`); returns
-      `{ "<m>": {"type": "<t|null>", "labels": [names...]} }`, label **names only**, bounded to
-      ≤12 metrics, a per-metric `_ApiError` is skipped (not fatal), empty `metrics` → `{}`.
-- [ ] Implement `prometheus_metric_meta(args)`: parse+cap metrics; one metadata fetch → type map;
-      per-metric labels via `match[]` selector; assemble; tolerate per-metric errors.
-- [ ] Register `"prometheus_metric_meta"` in `_TOOLS`.
-- [ ] Green; refactor any shared metadata/label parsing into a small helper.
-
-### Task 2: Connector `mimir_metric_meta` tool (mirror)
-
-**Files:**
-- Modify: `agent/lambda/mimir_mcp.py`
-- Test: `agent/lambda/test_mimir_mcp.py`
-
-- [ ] Write failing test mirroring Task 1 against the Mimir connector (same Prometheus HTTP API).
-- [ ] Implement `mimir_metric_meta` (reuse the Prometheus shape; share a helper if the connectors
-      already share one, else mirror) and register in the Mimir `_TOOLS`.
-- [ ] Green.
-
-### Task 3: Schema `metricMeta` — render, prioritize, and pure merge/select helpers
-
-**Files:**
-- Modify: `web/lib/datasource-schema.ts`
-- Test: `web/lib/datasource-schema.test.ts`
-
-- [ ] Failing test for `renderSchemaForPrompt`: when `metricMeta` present, emit
-      `metric{label,label,…} [type]` lines (relevant-first), drop the redundant global `labels:`
-      line; when absent, behaviour is unchanged (flat `metrics:`/`labels:` fallback); bounds,
-      per-line clamp, and explicit truncation disclosure still hold with enriched metrics.
-- [ ] Failing test for `prioritizeSchemaForQuery`: enriched (metricMeta) metrics relevant to the
-      NL float to the front so they survive the render cap; non-mutating when nothing matches.
-- [ ] Failing test for pure helpers `mergeMetricMeta(schema, metaMap)` (additive, size-safe) and
-      `selectMetricsForMeta(prioritizedSchema, k)` (top-K NL-scored metric names, ≤k, score>0 only;
-      empty when nothing scored).
-- [ ] Implement the renderer branch, prioritizer handling, and the two pure helpers; green; refactor.
-
-### Task 4: Generate route — lazy meta fetch + cache-back wiring
-
-**Files:**
-- Modify: `web/app/api/datasources/generate/route.ts`
-- Test: `web/app/api/datasources/generate/route.test.ts`
-
-- [ ] Failing test: for `kind ∈ {prometheus,mimir}` with a cached schema, the route selects the
-      NL-relevant top-K metrics, invokes `${kind}_metric_meta` once (mock connector), merges the
-      returned meta, writes back via the cache, and the rendered schema block contains
-      `metric{labels}`; metrics already having `metricMeta` are NOT re-fetched.
-- [ ] Failing test: meta fetch failure / no endpoint / non-prom-mimir kind → falls back to current
-      behaviour, generation still proceeds (no throw).
-- [ ] Implement the lazy branch in `resolveSchemaBlock` using the Task 3 helpers; keep connector
-      invoke + cache write in the route, selection/merge in the pure helpers; green; refactor.
-
-### Task 5: Querygen prompt — PromQL aggregation rule
-
-**Files:**
-- Modify: `web/lib/datasource-querygen.ts`
-- Test: `web/lib/datasource-querygen.test.ts`
-
-- [ ] Failing test: `buildQueryGenSystem('PromQL', …)` includes the topk/`sum by`/`rate`/
-      `histogram_quantile` + "labels only from the metric's listed labels, never invent" rule;
-      `buildQueryGenSystem('read-only SQL', …)` does NOT include it (no cross-kind leakage).
-- [ ] Implement the PromQL-gated instruction; green.
-
-### Task 6: Query route — `{window, step}` range args + validation + back-compat
+### Task 1: Query route — `{window, step}` range args + validation + back-compat
 
 **Files:**
 - Modify: `web/app/api/datasources/query/route.ts`
 - Test: `web/app/api/datasources/query/route.test.ts`
 
-- [ ] Failing test: body `range:{window,step}` → range tool invoked with `start`/`step` args;
-      window bounds (1..86400s) and step bounds (≥1) validated → 400 on violation; absent range →
-      instant tool; legacy `range:true` → range tool with the 1h default (back-compat).
-- [ ] Implement range-arg parse+validate+pass-through; green.
+- [ ] Failing test: body `range: {window, step}` (range-capable kind) → range tool invoked with
+      args `{query, start, end, step}` where `end - start === window` and `step` is passed through
+      as a string; `window` outside `[60,86400]` or `step` outside `[1,86400]` → `400` (no invoke).
+- [ ] Failing test: `range:false` and absent range → instant tool; legacy `range:true` → range
+      tool with NO `start`/`step` args (connector 1h/60s default) — exact current behaviour preserved.
+- [ ] Implement: parse `body.range` into instant | legacy-true | `{window,step}`; validate bounds;
+      compute `nowSec/start/end` with `Date.now()`; pass string args to the range tool. Green; refactor.
 
-### Task 7: ExplorePanel — range dropdown + auto re-run
+### Task 2: ExplorePanel — range dropdown + auto re-run
 
 **Files:**
 - Modify: `web/components/datasources/ExplorePanel.tsx`
 - Test: `web/components/datasources/ExplorePanel.test.tsx`
 
-- [ ] Failing test: range-capable kind renders a `범위` dropdown `Instant|5m|15m|1h|6h|24h`
-      (default Instant); selecting a window posts `{window, step}` with auto step
-      `max(1, round(windowSec/250))`; changing the dropdown re-runs when a query is present;
-      Instant posts no range; non-range kinds (tempo/clickhouse) show no control.
-- [ ] Implement: replace the `range` checkbox with the select; compute step; auto-rerun effect
-      guarded on a non-empty query; green; refactor.
+- [ ] Failing test: a range-capable kind renders a `범위` dropdown with Korean presets
+      `즉시 | 5분 | 15분 | 1시간 | 6시간 | 24시간` (default 즉시); selecting `5분` posts
+      `range: {window: 300, step: max(1, round(300/250))}`; `즉시` posts `range: false`; a
+      non-range kind (tempo/clickhouse) renders no control.
+- [ ] Failing test: changing the dropdown re-runs an existing query (one extra POST); editing the
+      query text does NOT auto-run; no auto-run on initial mount.
+- [ ] Implement: replace the checkbox with a `<select>` holding the window seconds; `autoStep`
+      helper; `run()` sends `range:false` (instant) or `{window,step}`; `useEffect` keyed on the
+      window value only + mounted-ref guard to re-run when a query is present. Green; refactor.
 
-### Task 8: Instant ranked bar chart (reuse `HBarList`)
+### Task 3: Instant ranked bar chart (reuse `HBarList`, gated to prom/mimir vector)
 
 **Files:**
 - Modify: `web/components/datasources/ExplorePanel.tsx`
 - Test: `web/components/datasources/ExplorePanel.test.tsx`
 - Modify: `web/components/charts/HBarList.tsx`
 
-- [ ] Failing test: an instant result (`shape:'table'`) with ≤30 numeric `value` rows renders a
-      ranked horizontal bar (HBarList) above the table (desc by value); >30 rows → table only;
-      a range result (`shape:'series'`) still renders AreaTrend (unchanged).
-- [ ] Implement the `ResultView` instant-ranking branch deriving `{label,value}` from rows; adapt
-      `HBarList` props only if required; green; refactor.
+- [ ] Failing test: an instant prom/mimir result (`shape:'table'`, rows with numeric `value`,
+      ≤30 rows) renders an `HBarList` (desc by value, `labelKey="metric"`, `valueKey="value"`)
+      above the DataTable; >30 rows → no bar; a ClickHouse `shape:'table'` with a `value` column →
+      no bar; a range result (`shape:'series'`) → AreaTrend unchanged.
+- [ ] Implement: thread `kind` into `ResultView`; gate the bar on
+      `kind ∈ {prometheus,mimir} && shape==='table' && rows≤30 && every value numeric`; sort a
+      COPY of rows desc by `value` before passing to `HBarList`. Green; refactor.
