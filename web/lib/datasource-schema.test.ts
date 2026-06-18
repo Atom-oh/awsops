@@ -31,4 +31,10 @@ describe('datasource-schema (keyed by integration_id)', () => {
     expect(query.mock.calls[0][1]).toEqual(['acct']);
     expect(rows[0]).toMatchObject({ integrationId: 3, kind: 'tempo' });
   });
+  it('surfaces the captured server version from schema.version (null when absent/non-string)', async () => {
+    query.mockResolvedValueOnce({ rows: [{ integration_id: 5, kind: 'prometheus', schema: { version: '2.48.0', metrics: ['up'] }, fetched_at: 't' }] });
+    expect((await getSchema('a', 5))!.version).toBe('2.48.0'); // version-aware DSL input
+    query.mockResolvedValueOnce({ rows: [{ integration_id: 6, kind: 'loki', schema: { labels: ['app'] }, fetched_at: 't' }] });
+    expect((await getSchema('a', 6))!.version).toBeNull();
+  });
 });
