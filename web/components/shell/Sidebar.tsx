@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -124,8 +124,12 @@ function NavItem({ href, label, icon: Icon, active, className, onNavigate }: { h
 // desktop Sidebar (owner) AND the drawer's Sidebar simultaneously, so only one must
 // write or the hidden instance clobbers the other's stored state. No props = owner.
 export default function Sidebar({ onNavigate, className, persist = true }: { onNavigate?: () => void; className?: string; persist?: boolean } = {}) {
-  const path = usePathname();
+  const path = usePathname() || '/'; // defensive: usePathname is string in app-router, but guard null/empty
   const tree = navTree();
+  // Instance-scoped id prefix — AppShell mounts the desktop Sidebar AND the mobile
+  // drawer's Sidebar simultaneously, so panel ids must be unique per instance or the
+  // active group's id would duplicate in the DOM (invalid HTML + ambiguous aria-controls).
+  const uid = useId();
   const { t } = useI18n();
 
   const [expanded, setExpanded] = useState<Set<string>>(() => seedFromPath(path));
@@ -203,7 +207,7 @@ export default function Sidebar({ onNavigate, className, persist = true }: { onN
     }
 
     const open = expanded.has(gId(g.slug));
-    const panelId = `nav-panel-${g.slug}`;
+    const panelId = `${uid}-panel-${g.slug}`;
     const GIcon = GROUP_ICON[g.slug] ?? Server;
     const headerActive = path === g.href;
 
@@ -241,7 +245,7 @@ export default function Sidebar({ onNavigate, className, persist = true }: { onN
             {g.items.map((leaf) => renderLeaf(leaf))}
             {g.subgroups.map((sg) => {
               const subOpen = expanded.has(sId(sg.key));
-              const subPanelId = `nav-subpanel-${sg.key}`;
+              const subPanelId = `${uid}-sub-${sg.key}`;
               const subLabel = t(sg.labelKey);
               return (
                 <div key={sg.key} className="space-y-0.5">
