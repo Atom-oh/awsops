@@ -17,6 +17,33 @@ import db as wdb  # noqa: F401 — worker db (parent dir, flat /app layout); res
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 PROJECT = os.environ.get("PROJECT", "awsops-v2")
 
+# Inventory detail bounds (keep the LLM context + token budget bounded).
+DIAG_INV_PER_TYPE = int(os.environ.get("DIAG_INV_PER_TYPE", "15"))   # max resources sampled per type
+DIAG_INV_MAX_BYTES = int(os.environ.get("DIAG_INV_MAX_BYTES", "24000"))  # global cap on serialized detail
+_MAX_STR = 500  # truncate any string value longer than this
+# Drop these from resource `data` BEFORE it reaches the report — they can carry plaintext secrets that
+# the generic report._redact would NOT catch (Lambda env vars, user-data scripts, IAM policy docs).
+_SENSITIVE_KEYS = {"environment", "env", "variables", "user_data", "policy", "policy_document",
+                   "inline_policies", "assume_role_policy"}
+_SENSITIVE_RE = re.compile(r"password|secret|token|credential", re.IGNORECASE)
+
+
+def _safe_data(v):
+    """Recursively drop secret-bearing keys + truncate long strings/lists. Defense-in-depth BEFORE
+    report._redact (which only catches ARNs/emails/IPs/keys, not custom secrets)."""
+    if isinstance(v, str):
+        return v[:_MAX_STR] + "…(truncated)" if len(v) > _MAX_STR else v
+    if isinstance(v, dict):
+        out = {}
+        for k, val in v.items():
+            if k in _SENSITIVE_KEYS or _SENSITIVE_RE.search(str(k)):
+                continue
+            out[k] = _safe_data(val)
+        return out
+    if isinstance(v, list):
+        return [_safe_data(x) for x in v[:20]]  # bound list length too
+    return v
+
 # Datasource (external observability) collector bounds — schema-driven, credential-blind, read-only.
 _DS_KINDS = ("prometheus", "mimir", "loki", "tempo", "clickhouse")
 _DS_MAX_INSTANCES_PER_KIND = int(os.environ.get("DIAG_DS_MAX_INSTANCES_PER_KIND", "1"))  # default: is_default only
@@ -76,14 +103,49 @@ def _sh_client():
 
 
 def collect_inventory(conn):
-    """Aurora inventory_resources counts by type (already synced; no live AWS call)."""
+    """Aurora inventory_resources (already synced; no live AWS call): counts by type PLUS a bounded,
+    secret-filtered sample of real resource detail (region + data JSONB) so the LLM can reason about
+    the actual account, not just totals. account_id='self' scope matches the web inventory."""
     try:
         rows = conn.run(
-            "SELECT resource_type, count(*) FROM inventory_resources GROUP BY resource_type ORDER BY 2 DESC"
+            "SELECT resource_type, count(*) FROM inventory_resources "
+            "WHERE account_id='self' GROUP BY resource_type ORDER BY 2 DESC"
         )
-        return _result("inventory", data={"by_type": {r[0]: int(r[1]) for r in rows}})
+        by_type = {r[0]: int(r[1]) for r in rows}
     except Exception as e:  # noqa: BLE001 — degrade, never raise
         return _classify("inventory", e)
+
+    resources, truncated, size = {}, False, 0
+    for rtype in by_type:
+        try:
+            drows = conn.run(
+                "SELECT resource_id, region, data FROM inventory_resources "
+                "WHERE account_id='self' AND resource_type = :rtype "
+                f"ORDER BY resource_id LIMIT {DIAG_INV_PER_TYPE}",
+                rtype=rtype,
+            )
+        except Exception:  # noqa: BLE001 — one type degrading must not lose the rest
+            continue
+        items = []
+        for r in drows:
+            rid, region, data = r[0], r[1], r[2]
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except (ValueError, TypeError):
+                    data = {"raw": data[:_MAX_STR]}
+            entry = {"resource_id": rid, "region": region, "data": _safe_data(data)}
+            esz = len(json.dumps(entry, ensure_ascii=False, default=str))
+            if size + esz > DIAG_INV_MAX_BYTES:
+                truncated = True
+                break
+            items.append(entry)
+            size += esz
+        if items:
+            resources[rtype] = items
+        if truncated:
+            break
+    return _result("inventory", data={"by_type": by_type, "resources": resources, "truncated": truncated})
 
 
 def collect_cw_metrics(conn):
