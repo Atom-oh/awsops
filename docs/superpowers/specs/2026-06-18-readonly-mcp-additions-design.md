@@ -56,8 +56,11 @@ the read ones): `mesh_overview`, `list_virtual_services`, `list_destination_rule
 No Steampipe, no pg8000.
 
 **IAM (the heaviest part of this design):** the agent Lambda execution role needs an **EKS Access
-Entry + AmazonEKSAdminViewPolicy** (cluster-scoped; AdminView not View — listing Istio CRDs needs the
-broader read role). **This entry is NOT terraform-managed** (owner decision 2026-06-18): the cluster
+Entry + AmazonEKSViewPolicy** (cluster-scoped; **View, not AdminView** — least privilege: `view` reads
+namespaced resources + namespaces but NOT Secrets/nodes, so the AI-agent principal never gains
+cluster-wide Secret read. istio-read only LISTs namespaced Istio CRDs + namespaces; Istio aggregates
+its CRD read into `view`, with an istio-reader ClusterRole as the fallback — see the runbook).
+**This entry is NOT terraform-managed** (owner decision 2026-06-18): the cluster
 owner registers it out-of-band via `scripts/v2/eks/register-istio-access.sh` (read-only stance —
 AWSops never mutates a cluster, and the apply principal may lack `eks:CreateAccessEntry`). terraform
 only emits `output.agent_lambda_role_arn` for the operator to register. The k8s bearer token is built

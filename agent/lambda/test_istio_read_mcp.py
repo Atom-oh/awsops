@@ -91,10 +91,6 @@ class TestNoSteampipe(unittest.TestCase):
             self.assertNotIn(banned, src, f"istio-read must not use {banned} (ADR-037: no live Steampipe)")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCatalogWiring(unittest.TestCase):
     def test_istio_target_registered(self):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "v2", "agentcore"))
@@ -107,3 +103,7 @@ class TestCatalogWiring(unittest.TestCase):
         self.assertIn("mesh_overview", names)
         self.assertIn("list_virtual_services", names)
         self.assertEqual(len(t["tools"]), 7)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -583,8 +583,9 @@ resource "aws_lambda_function" "agent" {
     )
   }
 
-  # VPC-only OpenSearch domains: attach ONLY the opensearch-mcp Lambda to the private subnets when
-  # opensearch_vpc_enabled. Off (default) → no vpc_config → non-VPC (reaches public+IAM domains).
+  # Per-Lambda VPC opt-in: attach a connector to the private subnets ONLY when its <name>_vpc_enabled
+  # flag is set (opensearch/clickhouse/prometheus/loki/tempo/mimir for VPC-only datasources;
+  # istio-read for a private-only EKS API endpoint). Off (default) → no vpc_config → non-VPC.
   dynamic "vpc_config" {
     for_each = ((each.key == "opensearch-mcp" && var.opensearch_vpc_enabled) || (each.key == "clickhouse-mcp" && var.clickhouse_vpc_enabled) || (each.key == "prometheus-mcp" && var.prometheus_vpc_enabled) || (each.key == "loki-mcp" && var.loki_vpc_enabled) || (each.key == "tempo-mcp" && var.tempo_vpc_enabled) || (each.key == "mimir-mcp" && var.mimir_vpc_enabled) || (each.key == "istio-read" && var.istio_vpc_enabled)) ? [1] : []
     content {

@@ -48,7 +48,9 @@ def _resolve_eni(ec2, ident):
             for inst in res.get("Instances", []):
                 nis = inst.get("NetworkInterfaces", [])
                 if nis:
-                    return _norm_eni(nis[0])
+                    # primary ENI = Attachment.DeviceIndex 0 (multi-ENI hosts), fall back to first
+                    primary = next((n for n in nis if n.get("Attachment", {}).get("DeviceIndex") == 0), nis[0])
+                    return _norm_eni(primary)
         return None
     if ident.startswith("eni-"):
         nis = ec2.describe_network_interfaces(NetworkInterfaceIds=[ident]).get("NetworkInterfaces", [])
@@ -130,10 +132,20 @@ def _nacl_for(ec2, subnet):
     return nacls[0] if nacls else None
 
 
-def _rt_for(ec2, subnet):
+def _rt_for(ec2, subnet, vpc):
+    # explicit subnet association first
     r = ec2.describe_route_tables(Filters=[{"Name": "association.subnet-id", "Values": [subnet]}])
     rts = r.get("RouteTables", [])
-    return rts[0] if rts else None
+    if rts:
+        return rts[0]
+    # subnets with NO explicit association use the VPC main route table — fall back to it, else a
+    # subnet on the main RT is wrongly reported as "no route" (a very common configuration).
+    m = ec2.describe_route_tables(Filters=[
+        {"Name": "vpc-id", "Values": [vpc]},
+        {"Name": "association.main", "Values": ["true"]},
+    ])
+    mrts = m.get("RouteTables", [])
+    return mrts[0] if mrts else None
 
 
 def check_reachability(ec2, source, destination, port, proto):
@@ -176,7 +188,7 @@ def check_reachability(ec2, source, destination, port, proto):
 
     # 4) route from src subnet toward dst
     checked.append("route")
-    src_rt = _rt_for(ec2, src["subnet"])
+    src_rt = _rt_for(ec2, src["subnet"], src["vpc"])
     if not src_rt or not _route_exists(src_rt, dst["ip"]):
         blocking.append({"layer": "route", "resource": (src_rt or {}).get("RouteTableId", src["subnet"]), "reason": f"no active route from {src['subnet']} toward {dst['ip']}"})
 

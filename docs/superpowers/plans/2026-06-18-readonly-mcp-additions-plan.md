@@ -115,25 +115,13 @@ Conventions (match the existing fleet): unittest-style tests run by `python3 -m 
       `ai.tf` — add `"istio-read" = {...}` to `local.agent_lambdas`; **[P2] if cluster endpoints are
       private-only**, also add `"istio-read"` to the `vpc_config` conditional + the VPC-ENI IAM policy
       `count` (default public-endpoint → no VPC, gated by an `istio_vpc_enabled` var defaulting false).
-      `eks.tf` — **[P2 concrete]**:
-      ```hcl
-      resource "aws_eks_access_entry" "agent" {
-        count = var.agentcore_enabled ? length(var.onboard_eks_clusters) : 0
-        cluster_name  = var.onboard_eks_clusters[count.index]
-        principal_arn = aws_iam_role.agent_lambda[0].arn
-        type = "STANDARD"
-      }
-      resource "aws_eks_access_policy_association" "agent_view" {
-        count = var.agentcore_enabled ? length(var.onboard_eks_clusters) : 0
-        cluster_name  = var.onboard_eks_clusters[count.index]
-        principal_arn = aws_iam_role.agent_lambda[0].arn
-        policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
-        access_scope { type = "cluster" }
-        depends_on = [aws_eks_access_entry.agent]
-      }
-      ```
-      (use the real agent Lambda role resource name found in `ai.tf`; confirm `eks:DescribeCluster` is
-      on that role's read policy — add if missing.)
+      **[REVISED — owner decision 2026-06-18] The EKS access entry is NOT terraform-managed.** Granting
+      a principal k8s access is the cluster owner's call (read-only stance; the apply principal may lack
+      `eks:CreateAccessEntry` on third-party clusters). Instead: `eks.tf` only removes any agent
+      access-entry resource; `outputs.tf` emits `agent_lambda_role_arn`; and the operator registers the
+      entry out-of-band via `scripts/v2/eks/register-istio-access.sh` (**`AmazonEKSViewPolicy`** — least
+      privilege, no Secret/node read — NOT AdminView) + `docs/runbooks/istio-agent-eks-access.md`.
+      (Confirm `eks:DescribeCluster` is on the agent role's read policy — it is, via ContainerRead.)
 - [ ] Run `terraform -chdir=terraform/v2/foundation validate` + `fmt -check` + `python3 -m pytest agent/lambda/`.
 - [ ] Commit: `feat(agent): wire istio-read (container) target + lambda + agent-role EKS access entry`.
 

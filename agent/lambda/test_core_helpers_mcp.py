@@ -35,6 +35,23 @@ class TestSuggest(unittest.TestCase):
         )
         self.assertEqual(out["statusCode"], 200)
 
+    def test_no_mutating_verbs_suggested(self):
+        # read-only invariant: suggestions must never include a mutating CLI verb, for any query
+        mutating = ("start-instances", "stop-instances", "terminate", "run-instances", "lambda invoke",
+                    "delete", "create-", "put-", "modify-", "reboot")
+        for q in ["ec2 instance", "start ec2 instance", "stop the instances", "invoke lambda", "delete s3 bucket"]:
+            out = ch.lambda_handler({"tool_name": "suggest_aws_commands", "arguments": {"query": q}}, None)
+            for s in json.loads(out["body"])["suggestions"]:
+                for verb in mutating:
+                    self.assertNotIn(verb, s, f"mutating verb '{verb}' suggested for query '{q}': {s}")
+
+    def test_keyword_narrows_match(self):
+        # "ec2 instance" returns describe-instances, not a flood of unrelated ec2 commands
+        out = ch.lambda_handler({"tool_name": "suggest_aws_commands", "arguments": {"query": "ec2 instance"}}, None)
+        sugg = json.loads(out["body"])["suggestions"]
+        self.assertIn("aws ec2 describe-instances", sugg)
+        self.assertNotIn("aws ec2 describe-route-tables", sugg)  # 'route table' kw absent → not matched
+
 
 class TestNoCallAws(unittest.TestCase):
     def test_call_aws_is_not_a_tool(self):
@@ -50,10 +67,6 @@ class TestNoCallAws(unittest.TestCase):
         self.assertEqual(out["statusCode"], 400)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCatalogWiring(unittest.TestCase):
     def test_core_helpers_target_registered(self):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "v2", "agentcore"))
@@ -66,3 +79,7 @@ class TestCatalogWiring(unittest.TestCase):
         self.assertIn("prompt_understanding", names)
         self.assertIn("suggest_aws_commands", names)
         self.assertNotIn("call_aws", names)
+
+
+if __name__ == "__main__":
+    unittest.main()

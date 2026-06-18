@@ -43,11 +43,14 @@ class FakeEc2:
         return {"NetworkAcls": []}
 
     def describe_route_tables(self, **kw):
-        for f in kw.get("Filters", []):
-            if f["Name"] == "association.subnet-id":
-                sn = f["Values"][0]
-                rt = self.scn["rts"].get(sn)
-                return {"RouteTables": [rt] if rt else []}
+        names = {f["Name"]: f["Values"] for f in kw.get("Filters", [])}
+        if "association.subnet-id" in names:
+            rt = self.scn["rts"].get(names["association.subnet-id"][0])
+            return {"RouteTables": [rt] if rt else []}
+        # main route-table fallback query (vpc-id + association.main=true)
+        if names.get("association.main") == ["true"]:
+            mrt = self.scn.get("main_rt")
+            return {"RouteTables": [mrt] if mrt else []}
         return {"RouteTables": []}
 
 
@@ -117,6 +120,31 @@ class TestReachable(_Base):
         self.assertEqual(out["statusCode"], 200)
         self.assertTrue(body["reachable"], body)
 
+    def test_main_route_table_fallback(self):
+        # src subnet has NO explicit RT association → must fall back to the VPC main RT, not "no route"
+        self.scn["rts"].pop("subnet-a")
+        self.scn["main_rt"] = {"RouteTableId": "rtb-main", "Routes": [
+            {"DestinationCidrBlock": "10.0.0.0/16", "State": "active", "GatewayId": "local"}
+        ]}
+        out, body = self._call()
+        self.assertTrue(body["reachable"], body)
+        self.assertFalse(any(b["layer"] == "route" for b in body["blocking_component"]))
+
+    def test_instance_primary_eni_by_device_index(self):
+        # multi-ENI instance: resolver must pick DeviceIndex 0, not NetworkInterfaces[0]
+        self.scn["enis"][0] = {
+            "NetworkInterfaceId": "eni-secondary", "PrivateIpAddress": "10.9.9.9", "SubnetId": "subnet-z",
+            "VpcId": "vpc-1", "Groups": [{"GroupId": "sg-none"}], "_instance": "i-src",
+            "Attachment": {"DeviceIndex": 1},
+        }
+        self.scn["enis"].append({
+            "NetworkInterfaceId": "eni-src", "PrivateIpAddress": "10.0.1.10", "SubnetId": "subnet-a",
+            "VpcId": "vpc-1", "Groups": [{"GroupId": "sg-src"}], "_instance": "i-src",
+            "Attachment": {"DeviceIndex": 0},
+        })
+        out, body = self._call(source="i-src")
+        self.assertEqual(body["source"]["id"], "eni-src")  # primary, not the DeviceIndex-1 secondary
+
 
 class TestBlocked(_Base):
     def test_sg_ingress_missing_port(self):
@@ -174,10 +202,6 @@ class TestGuards(_Base):
             self.assertNotIn(banned, src, f"reachability-read must not call {banned}")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCatalogWiring(unittest.TestCase):
     def test_reachability_target_registered(self):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "v2", "agentcore"))
@@ -187,3 +211,7 @@ class TestCatalogWiring(unittest.TestCase):
         self.assertEqual(t["gateway"], "network")
         self.assertEqual(t["lambda_key"], "reachability-read")
         self.assertEqual([x["name"] for x in t["tools"]], ["check_reachability"])
+
+
+if __name__ == "__main__":
+    unittest.main()

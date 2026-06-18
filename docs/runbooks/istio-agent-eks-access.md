@@ -8,7 +8,14 @@ entry — the *agent Lambda role* is a different principal and gets `401/403` un
 AWSops does **not** create this entry in terraform on purpose: granting a principal k8s access is the
 **cluster owner's** decision, and the terraform apply principal may not hold `eks:CreateAccessEntry` on
 third-party clusters. So an operator with cluster permissions registers it out-of-band (read-only
-`AmazonEKSAdminViewPolicy`, cluster scope). This mirrors the v2 stance: AWSops never mutates a cluster.
+**`AmazonEKSViewPolicy`**, cluster scope). This mirrors the v2 stance: AWSops never mutates a cluster.
+
+**Why View, not AdminView (least privilege):** `view` grants read on namespaced resources + namespaces
+but **not Secrets** and **not cluster-scoped resources** (nodes, etc.) — so an automated AI-agent
+principal never gains cluster-wide Secret read. istio-read only LISTs namespaced Istio CRDs +
+namespaces, so `view` suffices. Istio's standard install aggregates its CRD read into `view` (rbac
+`aggregate-to-view`); if a cluster lacks that, apply a minimal istio-reader ClusterRole (Notes) — do
+NOT widen to AdminView.
 
 ## Prerequisites
 - `agentcore_enabled = true` and the foundation applied (the agent Lambda role exists).
@@ -22,7 +29,7 @@ ROLE_ARN=arn:aws:iam::<acct>:role/awsops-v2-agent-lambda \
   scripts/v2/eks/register-istio-access.sh <cluster-name>
 ```
 The script reads `terraform output -raw agent_lambda_role_arn`, then runs
-`aws eks create-access-entry` + `aws eks associate-access-policy` (AdminView, `type=cluster`).
+`aws eks create-access-entry` + `aws eks associate-access-policy` (ViewPolicy, `type=cluster`).
 
 ## Verify
 ```bash
@@ -37,7 +44,18 @@ aws eks delete-access-entry --cluster-name <cluster-name> \
 ```
 
 ## Notes
-- AdminView (not View): listing cluster-scoped CRDs needs `AmazonEKSAdminViewPolicy`. istio-read only
-  GET/LISTs Istio CRDs + namespaces — it never writes.
+- istio-read only GET/LISTs Istio CRDs + namespaces — it never writes.
+- **If `view` doesn't surface Istio CRDs** (cluster without Istio's view-aggregation), apply a minimal
+  reader instead of widening to AdminView:
+  ```yaml
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: ClusterRole
+  metadata: { name: istio-reader-awsops, labels: { rbac.authorization.k8s.io/aggregate-to-view: "true" } }
+  rules:
+    - apiGroups: ["networking.istio.io", "security.istio.io"]
+      resources: ["*"]
+      verbs: ["get", "list", "watch"]
+  ```
+  (The aggregate-to-view label folds it into the `view` role the access policy already grants.)
 - Private-only cluster endpoint? Set `istio_vpc_enabled = true` (attaches the Lambda to the private
   subnets) before the agent can reach the API server.
