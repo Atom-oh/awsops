@@ -72,6 +72,25 @@ class TestLoad(unittest.TestCase):
             with self.assertRaises(dh.NotConnected):
                 dh.load_datasource("clickhouse")
 
+    def test_load_datasource_instance_id_pure_arg(self):
+        # per-instance id key wins; falls back to the kind-mirror when the id key is absent/blank.
+        m = {"5": {"endpoint": "http://prom-a:9090"}, "prometheus": {"endpoint": "http://prom-default:9090"}}
+        with mock.patch.object(dh, "_load_secret_map", return_value=m):
+            self.assertEqual(dh.load_datasource("prometheus", instance_id=5)["endpoint"], "http://prom-a:9090")
+            self.assertEqual(dh.load_datasource("prometheus")["endpoint"], "http://prom-default:9090")  # kind mirror
+            self.assertEqual(dh.load_datasource("prometheus", instance_id=999)["endpoint"], "http://prom-default:9090")  # missing id → mirror
+
+    def test_warm_container_no_bleed(self):
+        # an inline conn set on one invocation must not bleed into a later instance_id invocation.
+        m = {"5": {"endpoint": "http://prom-a:9090"}, "prometheus": {"endpoint": "http://prom-default:9090"}}
+        dh.set_request_conn({"endpoint": "http://inline:9090"})
+        try:
+            self.assertEqual(dh.load_datasource("prometheus")["endpoint"], "http://inline:9090")  # inline wins
+        finally:
+            dh.set_request_conn(None)  # connector handler does this in a finally
+        with mock.patch.object(dh, "_load_secret_map", return_value=m):
+            self.assertEqual(dh.load_datasource("prometheus", instance_id=5)["endpoint"], "http://prom-a:9090")  # no bleed
+
 
 class TestHttp(unittest.TestCase):
     def test_no_redirect_follow(self):
