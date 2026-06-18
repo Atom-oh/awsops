@@ -110,3 +110,16 @@ def test_db_failure_degrades_not_raises(monkeypatch):
 def test_no_datasources(monkeypatch):
     out = src.collect_datasources(FakeConn([]))
     assert out["ok"] and out["data"]["queried"] == 0
+
+
+# consensus gate finding: a crafted/poisoned ClickHouse table name must NOT reach the SQL (identifier-validated).
+def test_clickhouse_table_name_is_identifier_validated(monkeypatch):
+    fake = _patch_lambda(monkeypatch, FakeLambda(body={"result": {"rows": [{"c": 1}]}}))
+    conn = FakeConn(
+        [(5, "ch", "clickhouse", True)],
+        {5: {"tables": [{"name": "events"}, {"name": "x) UNION SELECT password FROM users--"}, {"name": "ok_table"}]}},
+    )
+    src.collect_datasources(conn)
+    sqls = [c["payload"]["arguments"]["sql"] for c in fake.calls]
+    assert all("UNION" not in s and "--" not in s for s in sqls)          # injection name dropped
+    assert any("events" in s for s in sqls) and any("ok_table" in s for s in sqls)  # bare identifiers kept
