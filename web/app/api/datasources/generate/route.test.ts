@@ -13,7 +13,8 @@ const assertDatasourceEndpointAllowed = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/datasource-querygen', () => ({ generateQuery: (...a: unknown[]) => generateQuery(...a) }));
-vi.mock('@/lib/datasource-schema', () => ({
+vi.mock('@/lib/datasource-schema', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/datasource-schema')>()), // keep the REAL prioritizeSchemaForQuery
   listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a),
   upsertSchema: (...a: unknown[]) => upsertSchema(...a),
   renderSchemaForPrompt: (...a: unknown[]) => renderSchemaForPrompt(...a),
@@ -37,8 +38,14 @@ beforeEach(() => {
   for (const m of [verifyUser, generateQuery, listConfiguredSchemas, upsertSchema, renderSchemaForPrompt, getDatasource, resolveConnConfig, invokeMcpLambdaTool, assertDatasourceEndpointAllowed]) m.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
   listConfiguredSchemas.mockResolvedValue([]);
-  // pass-through renderer: schema objects carry a `__block` string for assertion convenience
-  renderSchemaForPrompt.mockImplementation((s: unknown) => (s && typeof s === 'object' && '__block' in (s as object) ? (s as { __block: string }).__block : ''));
+  // pass-through renderer: `__block` for assertion convenience; metric/table arrays → a non-empty marker
+  renderSchemaForPrompt.mockImplementation((s: unknown) => {
+    const o = (s || {}) as { __block?: string; metrics?: unknown[]; tables?: unknown[] };
+    if (typeof o.__block === 'string') return o.__block;
+    if (Array.isArray(o.metrics) && o.metrics.length) return `M:${o.metrics.join(',')}`;
+    if (Array.isArray(o.tables) && o.tables.length) return 'T';
+    return '';
+  });
   generateQuery.mockResolvedValue('SELECT 1');
 });
 
@@ -121,6 +128,23 @@ describe('SQL generation (the ClickHouse fix)', () => {
     const res = await POST(req({ id: 2, nl: 'whatever' }));
     expect(res.status).toBe(502);
     expect((await res.json()).error).toMatch(/read-only query/);
+  });
+});
+
+describe('Prometheus metric relevance', () => {
+  it('floats NL-relevant metrics to the front before rendering (so the cap keeps them)', async () => {
+    getDatasource.mockResolvedValue({ id: 1, kind: 'prometheus', endpoint: 'http://prom', authType: 'none' });
+    // relevant metric is LAST (alphabetical), would be dropped by the render cap without prioritization
+    const metrics = ['ALERTS', 'aggregator_total', 'alertmanager_alerts', 'kube_pod_container_resource_requests'];
+    listConfiguredSchemas.mockResolvedValue([{ integrationId: 1, kind: 'prometheus', schema: { metrics }, fetched_at: 't' }]);
+    generateQuery.mockResolvedValue('kube_pod_container_resource_requests');
+    const { POST } = await import('./route');
+    const res = await POST(req({ id: 1, nl: 'pod resource조회' }));
+    expect(res.status).toBe(200);
+    // renderSchemaForPrompt received the REAL-prioritized schema → pod/resource metric is now first
+    const schemaArg = renderSchemaForPrompt.mock.calls.at(-1)![0] as { metrics: string[] };
+    expect(schemaArg.metrics[0]).toBe('kube_pod_container_resource_requests');
+    expect(lastGen()).toMatchObject({ lang: 'PromQL', isSql: false });
   });
 });
 

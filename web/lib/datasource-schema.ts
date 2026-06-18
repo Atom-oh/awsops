@@ -68,6 +68,36 @@ export async function listConfiguredSchemas(accountId: string): Promise<CachedSc
   return rows.map(mapRow);
 }
 
+// --- Query-relevance prioritization ----------------------------------------
+/**
+ * Reorder a schema's metric / label / tag name lists so entries RELEVANT to the natural-language query
+ * come FIRST — so they survive `renderSchemaForPrompt`'s per-key cap. Prometheus/Mimir return hundreds
+ * of metrics in alphabetical order; without this the cap keeps only the first ~80 (`a…`/`ALERTS`/…) and
+ * drops the metrics the user actually asked about (a "pod resource" query needs `kube_pod_*`, not
+ * `aggregator_*`). Score = number of distinct NL tokens that appear as a substring of the name; the sort
+ * is stable, so equal-scored names keep their original (alphabetical) order, and a query that matches
+ * nothing leaves the order unchanged (same as before). Non-array / non-metric schemas pass through.
+ */
+export function prioritizeSchemaForQuery(schema: unknown, nl: string): unknown {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+  const terms = Array.from(
+    new Set((nl || '').toLowerCase().split(/[^a-z0-9_]+/).filter((t) => t.length >= 3)),
+  );
+  if (!terms.length) return schema;
+  const s = schema as Record<string, unknown>;
+  const nameOf = (x: unknown) => (typeof x === 'string' ? x : ((x as { name?: string })?.name ?? '')).toLowerCase();
+  const reorder = (arr: unknown[]) =>
+    arr
+      .map((x, i) => ({ x, i, sc: terms.reduce((n, t) => n + (nameOf(x).includes(t) ? 1 : 0), 0) }))
+      .sort((a, b) => b.sc - a.sc || a.i - b.i) // score desc, stable on ties
+      .map((e) => e.x);
+  const out: Record<string, unknown> = { ...s };
+  for (const k of ['metrics', 'labels', 'tags'] as const) {
+    if (Array.isArray(s[k]) && (s[k] as unknown[]).length) out[k] = reorder(s[k] as unknown[]);
+  }
+  return out;
+}
+
 // --- Prompt rendering -------------------------------------------------------
 // Bounds so a rich introspected schema (ClickHouse allows up to 100 tables × 200 cols, OpenSearch many
 // indices) never blows the model prompt. The per-line/column caps matter because a column TYPE can be a
