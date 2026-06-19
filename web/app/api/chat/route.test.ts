@@ -9,7 +9,17 @@ const resolveAgent = vi.fn();
 const isCustomAgentEnabled = vi.fn();
 const recordCustomAgentTrace = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
-vi.mock('@/lib/agentcore', () => ({ invokeAgent: (...a: unknown[]) => invokeAgent(...a) }));
+// invokeAgentStream (single-route path) delegates to the invokeAgent mock so existing tests —
+// which set invokeAgent.mockResolvedValue/mockRejectedValue and assert its call args/count —
+// keep working: the stream yields the resolved answer as one delta (the route reassembles it).
+async function* invokeAgentStreamImpl(...a: unknown[]): AsyncGenerator<string> {
+  const text = await invokeAgent(...a);
+  if (text) yield text as string;
+}
+vi.mock('@/lib/agentcore', () => ({
+  invokeAgent: (...a: unknown[]) => invokeAgent(...a),
+  invokeAgentStream: (...a: unknown[]) => invokeAgentStreamImpl(...a),
+}));
 const classifyRoute = vi.fn();
 vi.mock('@/lib/route', () => ({
   pickGateway: (...a: unknown[]) => pickGateway(...a),

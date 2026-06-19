@@ -668,12 +668,30 @@ You MUST include "target_account_id": "{account_id}" in EVERY tool call's argume
 This is a non-negotiable requirement for cross-account access."""
 
 
+async def _stream_text(agent, user_input):
+    """Yield assistant text deltas from a Strands agent run as ``{"delta": str}`` chunks.
+
+    Strands' ``stream_async`` yields a stream of event dicts; the incremental assistant
+    text arrives under the ``"data"`` key. Tool-use / lifecycle events carry no ``"data"``
+    and are skipped here (the agent loop still runs them — we just don't surface them as
+    visible deltas). AgentCore Runtime JSON-encodes each yielded dict into an SSE
+    ``data:`` frame, so embedded newlines are escaped and stay frame-safe."""
+    async for event in agent.stream_async(user_input):
+        if "data" in event:
+            yield {"delta": event["data"]}
+
+
 # Main handler / 메인 핸들러
+# Streaming entrypoint: yields ``{"delta": str}`` chunks → AgentCore Runtime streams them
+# back as SSE (text/event-stream). The web BFF forwards each delta to the browser, so the
+# user sees real incremental tokens (the previous version buffered the full answer and the
+# BFF faked a typewriter). callback_handler=None disables Strands' default stdout printer.
 @app.entrypoint
-def handler(payload):
+async def handler(payload):
     user_input, history = build_conversation(payload)
     if not user_input:
-        return "No input provided."
+        yield {"delta": "No input provided."}
+        return
 
     gateway_role = payload.get("gateway", DEFAULT_GATEWAY)
     skill_role = payload.get("skill", gateway_role)  # skill override for SKILL_BASE / SKILL_BASE용 스킬 오버라이드
@@ -701,10 +719,15 @@ def handler(payload):
 
     logging.info(f"Gateway: {gateway_role} -> {gateway_url} (history: {len(history)} messages, account: {account_id or 'default'}, integrations: {len(integrations)})")
 
+    # `started` guards the fallback: once we have streamed even one delta to the client we must
+    # NOT re-run the Bedrock-direct fallback — that would duplicate the partial answer. The fallback
+    # therefore only fires on a failure BEFORE the first token (i.e. MCP connect / tool discovery),
+    # which is exactly what the original try/except guarded against.
+    started = False
     try:
         mcp_client = MCPClient(lambda: create_gateway_transport(gateway_url))
 
-        # ExitStack keeps the gateway AND every integration MCP session live during agent(user_input).
+        # ExitStack keeps the gateway AND every integration MCP session live for the whole stream.
         with ExitStack() as stack:
             stack.enter_context(mcp_client)
             gateway_tools = get_all_tools(mcp_client)
@@ -740,24 +763,34 @@ def handler(payload):
                 tools=tools,
                 system_prompt=system_prompt,
                 messages=history if history else None,
+                callback_handler=None,
             )
 
-            response = agent(user_input)
-            return response.message['content'][0]['text']
+            async for chunk in _stream_text(agent, user_input):
+                started = True
+                yield chunk
+        return
 
     except Exception as e:
         logging.error(f"Gateway MCP error [{gateway_role}]: {e}")
-        # Fallback: Bedrock direct with base prompt only / 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출
-        base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
-        if extra_context:
-            base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
-        agent = Agent(
-            model=model,
-            system_prompt=base_prompt,
-            messages=history if history else None,
-        )
-        response = agent(user_input)
-        return response.message['content'][0]['text']
+        if started:
+            # We already streamed a partial answer; re-running would duplicate it. End gracefully.
+            yield {"delta": "\n\n_[연결이 중단되어 응답이 일부만 전달되었습니다.]_"}
+            return
+
+    # Fallback: Bedrock direct with base prompt only (reached only on a pre-stream gateway failure).
+    # 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출 (스트림 시작 전 게이트웨이 실패 시에만 도달).
+    base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
+    if extra_context:
+        base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
+    agent = Agent(
+        model=model,
+        system_prompt=base_prompt,
+        messages=history if history else None,
+        callback_handler=None,
+    )
+    async for chunk in _stream_text(agent, user_input):
+        yield chunk
 
 
 if __name__ == "__main__":

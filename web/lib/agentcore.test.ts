@@ -21,6 +21,26 @@ function streamOf(s: string) {
   return { transformToString: async () => s };
 }
 
+/** Mock an SSE (text/event-stream) runtime response. Each frame is a `data: <payload>` line;
+ *  `splitAt` lets a test slice the byte stream mid-frame to exercise the line buffer. */
+function eventStreamOf(frames: string[], splitAt?: number) {
+  const enc = new TextEncoder();
+  const bytes = enc.encode(frames.map((f) => `data: ${f}\n\n`).join(''));
+  const chunks = splitAt != null ? [bytes.slice(0, splitAt), bytes.slice(splitAt)] : [bytes];
+  return {
+    contentType: 'text/event-stream',
+    response: {
+      transformToWebStream: () =>
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            for (const ch of chunks) c.enqueue(ch);
+            c.close();
+          },
+        }),
+    },
+  };
+}
+
 describe('agentcore', () => {
   it('caches the runtime ARN (SSM hit once)', async () => {
     vi.resetModules();
@@ -103,5 +123,64 @@ describe('agentcore', () => {
     await invokeAgent({ gateway: 'security', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36) });
     const none = JSON.parse(new TextDecoder().decode((acSend.mock.calls[0][0] as { input: { payload: Uint8Array } }).input.payload));
     expect('integrations' in none).toBe(false);
+  });
+
+  // --- real streaming (SSE) ---
+  it('invokeAgentStream yields SSE deltas incrementally', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue(eventStreamOf([
+      JSON.stringify({ delta: '이번 ' }), JSON.stringify({ delta: '달 비용은 ' }), JSON.stringify({ delta: '$4,210' }),
+    ]));
+    const { invokeAgentStream } = await import('./agentcore');
+    const out: string[] = [];
+    for await (const d of invokeAgentStream({ gateway: 'cost', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36) })) out.push(d);
+    expect(out).toEqual(['이번 ', '달 비용은 ', '$4,210']);
+  });
+
+  it('invokeAgent collects SSE deltas into the full answer (buffered consumer)', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue(eventStreamOf([
+      JSON.stringify({ delta: 'a' }), JSON.stringify({ delta: 'b' }), JSON.stringify({ delta: 'c' }),
+    ]));
+    const { invokeAgent } = await import('./agentcore');
+    const text = await invokeAgent({ gateway: 'cost', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36) });
+    expect(text).toBe('abc');
+  });
+
+  it('buffers SSE frames split across stream chunks', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    // split mid-frame so a `data:` line spans two reads → exercises the line buffer
+    acSend.mockResolvedValue(eventStreamOf([JSON.stringify({ delta: 'hello ' }), JSON.stringify({ delta: 'world' })], 9));
+    const { invokeAgentStream } = await import('./agentcore');
+    const out: string[] = [];
+    for await (const d of invokeAgentStream({ gateway: 'ops', messages: [{ role: 'user', content: 'x' }], sessionId: 's'.repeat(36) })) out.push(d);
+    expect(out.join('')).toBe('hello world');
+  });
+
+  it('tolerates a raw Strands event shape ({data}) and skips non-text frames', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue(eventStreamOf([
+      JSON.stringify({ data: 'hi' }),                 // raw strands event → text
+      JSON.stringify({ current_tool_use: { name: 'x' } }), // non-text event → skipped
+      JSON.stringify({ delta: ' there' }),
+    ]));
+    const { invokeAgentStream } = await import('./agentcore');
+    const out: string[] = [];
+    for await (const d of invokeAgentStream({ gateway: 'ops', messages: [{ role: 'user', content: 'x' }], sessionId: 's'.repeat(36) })) out.push(d);
+    expect(out.join('')).toBe('hi there');
+  });
+
+  it('backward-compat: a legacy buffered JSON answer streams as one delta', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue({ response: streamOf(JSON.stringify('legacy answer')) }); // no contentType
+    const { invokeAgentStream } = await import('./agentcore');
+    const out: string[] = [];
+    for await (const d of invokeAgentStream({ gateway: 'ops', messages: [{ role: 'user', content: 'x' }], sessionId: 's'.repeat(36) })) out.push(d);
+    expect(out).toEqual(['legacy answer']);
   });
 });
