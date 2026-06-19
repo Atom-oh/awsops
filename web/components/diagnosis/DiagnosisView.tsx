@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import SchedulePanel from './SchedulePanel';
+import SubscribersPanel from './SubscribersPanel';
 import ReportMarkdown from './ReportMarkdown';
 import IntentPanel from './IntentPanel';
 
@@ -67,6 +68,7 @@ export default function DiagnosisView() {
   const [submitting, setSubmitting] = useState(false); // brief: the POST round-trip only
   const [pollTicks, setPollTicks] = useState(0);        // # of 3s polls a running report has survived
   const [notice, setNotice] = useState<string | null>(null); // [PR#37 review] surface deduped reports
+  const [deepLinkId, setDeepLinkId] = useState<number | null>(null); // honoring an emailed ?report= link
 
   const POLL_MS = 3000;
   const LONG_AFTER = 40; // ~2min → show a "taking longer than usual" hint (reaper fails truly-stale rows)
@@ -113,6 +115,21 @@ export default function DiagnosisView() {
     loadList();
   }, [loadList]);
 
+  // Deep link: /ai-diagnosis?report=ID (scheduled-report emails link here) auto-opens that report.
+  // open(id) is async, so we set deepLinkId synchronously to suppress the newest-report auto-open below
+  // until this resolves — otherwise loadList() could populate `top` and hijack the emailed target. On
+  // failure (bad/deleted id), deepLinkId clears → the newest-report fallback resumes. Runs once on mount.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const raw = new URLSearchParams(window.location.search).get('report');
+    if (raw && /^\d+$/.test(raw)) {
+      const id = Number(raw);
+      setDeepLinkId(id);
+      Promise.resolve(open(id)).finally(() => setDeepLinkId(null));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const top = reports[0];
   const topRunning = top?.status === 'running';
 
@@ -129,11 +146,13 @@ export default function DiagnosisView() {
   // viewing something — mirrors V1 showing the latest report. Failed rows render the failed panel
   // from `view` (no markdown to open).
   useEffect(() => {
-    if (top && (top.status === 'succeeded' || top.status === 'partial') && active?.id !== top.id && !active) {
+    // Suppress the newest-report auto-open while an emailed deep link is still being honored.
+    const deepLinkPending = deepLinkId !== null && !active;
+    if (!deepLinkPending && top && (top.status === 'succeeded' || top.status === 'partial') && active?.id !== top.id && !active) {
       open(top.id);
     }
     if (top && top.status !== 'running') setPollTicks(0);
-  }, [top, active, open]);
+  }, [top, active, open, deepLinkId]);
 
   const run = async () => {
     setSubmitting(true);
@@ -214,6 +233,7 @@ export default function DiagnosisView() {
           </fieldset>
         )}
         <SchedulePanel />
+        <SubscribersPanel />
         <ul className="space-y-1">
           {reports.map((r) => (
             <li key={r.id} className="flex items-center gap-1">

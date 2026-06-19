@@ -423,7 +423,7 @@ resource "aws_ecs_task_definition" "worker" {
         # _compliance fails fast with a clear error.
         { name = "STEAMPIPE_HOST", value = "steampipe.${var.project}.internal" },
         { name = "STEAMPIPE_SECRET_ARN", value = try(aws_secretsmanager_secret.steampipe[0].arn, "") }
-      ], local.ds_env_list) # + gated DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT when datasource_diagnosis_enabled
+      ], local.ds_env_list, local.notify_worker_env_list) # + gated datasource env; + gated DIAGNOSIS_SNS_TOPIC_ARN/APP_DOMAIN when diagnosis_notify_enabled
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -496,7 +496,8 @@ resource "aws_lambda_function" "worker" {
       # AI Diagnosis (Task 1b): report worker uploads here + invokes a global.* Bedrock profile from var.region.
       ARTIFACT_BUCKET = aws_s3_bucket.diagnosis_artifacts[0].bucket
       BEDROCK_REGION  = var.region
-    }, local.ds_env_map) # + gated DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT when datasource_diagnosis_enabled
+      # + gated DIAGNOSIS_SNS_TOPIC_ARN/APP_DOMAIN (notify) — empty map when diagnosis_notify_enabled=false → no env diff.
+    }, local.notify_worker_env_map, local.ds_env_map) # + gated DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT when datasource_diagnosis_enabled
   }
   depends_on = [aws_cloudwatch_log_group.worker_fn, aws_iam_role_policy_attachment.worker_lambda_vpc]
 }
