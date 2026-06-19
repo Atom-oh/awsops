@@ -104,19 +104,27 @@ async function* streamDeltas(resp: unknown): AsyncGenerator<string> {
   const reader = webStream.getReader();
   const dec = new TextDecoder();
   let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const d = lineToDelta(buf.slice(0, nl));
-      buf = buf.slice(nl + 1);
-      if (d) yield d;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const d = lineToDelta(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+        if (d) yield d;
+      }
     }
+    buf += dec.decode(); // flush any multibyte remainder held by the decoder
+    const tail = lineToDelta(buf); // flush a trailing line that had no newline
+    if (tail) yield tail;
+  } finally {
+    // If the consumer stops early (client abort → the for-await calls .return() here), cancel the
+    // upstream body so AgentCore stops generating into the void (no wasted Bedrock tokens). A no-op
+    // once the reader has already drained.
+    await reader.cancel().catch(() => {});
   }
-  const tail = lineToDelta(buf); // flush any trailing line without a newline
-  if (tail) yield tail;
 }
 
 function buildCommand(input: InvokeInput, arn: string): InvokeAgentRuntimeCommand {

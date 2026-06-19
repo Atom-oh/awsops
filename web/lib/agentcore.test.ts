@@ -174,6 +174,34 @@ describe('agentcore', () => {
     expect(out.join('')).toBe('hi there');
   });
 
+  it('cancels the upstream reader when the consumer stops early (client abort)', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    let cancelled = false;
+    const enc = new TextEncoder();
+    const frames = [JSON.stringify({ delta: 'a' }), JSON.stringify({ delta: 'b' }), JSON.stringify({ delta: 'c' })];
+    acSend.mockResolvedValue({
+      contentType: 'text/event-stream',
+      response: {
+        transformToWebStream: () =>
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              for (const f of frames) c.enqueue(enc.encode(`data: ${f}\n\n`));
+              c.close();
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+      },
+    });
+    const { invokeAgentStream } = await import('./agentcore');
+    for await (const _d of invokeAgentStream({ gateway: 'ops', messages: [{ role: 'user', content: 'x' }], sessionId: 's'.repeat(36) })) {
+      break; // stop after the first delta → streamDeltas' finally must cancel the upstream body
+    }
+    expect(cancelled).toBe(true);
+  });
+
   it('backward-compat: a legacy buffered JSON answer streams as one delta', async () => {
     vi.resetModules();
     ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
