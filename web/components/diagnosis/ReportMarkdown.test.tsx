@@ -43,4 +43,12 @@ describe('ReportMarkdown — diagnosis report renderer', () => {
     expect(screen.getByText('첫째 항목')).toBeTruthy();
     expect(screen.getAllByRole('listitem').length).toBeGreaterThanOrEqual(2);
   });
+
+  it('collapses a doubled heading prefix (## ### X → ### X, no literal ###)', () => {
+    // The section LLM sometimes emits `## ### 보안 점수`, which CommonMark renders as an h2 whose text
+    // is literally "### 보안 점수". normalizeHeadings must collapse it to a real h3.
+    render(<ReportMarkdown markdown={'## ### 보안 점수 (0~100)\n\n본문입니다.'} />);
+    expect(screen.getByRole('heading', { level: 3, name: /보안 점수 \(0~100\)/ })).toBeTruthy();
+    expect(screen.queryByText(/### 보안 점수/)).toBeNull(); // no literal ### on screen
+  });
 });

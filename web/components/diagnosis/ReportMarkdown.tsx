@@ -10,6 +10,14 @@ import remarkGfm from 'remark-gfm';
  * and zebra/hover data tables — mapped onto the app's light paper/ink + brand tokens. react-markdown +
  * remark-gfm (GFM tables/strikethrough/task-lists), XSS-safe (no rehype-raw).
  */
+// The section LLM sometimes prefixes a prescribed `### X` subsection with its own `## `, producing
+// `## ### X` — which CommonMark parses as an h2 whose TEXT is literally "### X" (so "###" shows on
+// screen). Collapse any doubled heading prefix to the inner one (`## ### X` → `### X`). Applied at
+// render so EXISTING stored reports are fixed too, not only freshly generated ones.
+function normalizeHeadings(md: string): string {
+  return md.replace(/^(#{1,6})[ \t]+(#{1,6}[ \t])/gm, '$2');
+}
+
 function ReportMarkdownImpl({ markdown }: { markdown: string }) {
   return (
     <article className="report-markdown max-w-none text-[13.5px] leading-relaxed text-ink-700 [overflow-wrap:anywhere]">
@@ -68,7 +76,7 @@ function ReportMarkdownImpl({ markdown }: { markdown: string }) {
           img: ({ src, alt }) => <img src={typeof src === 'string' ? src : undefined} alt={alt ?? ''} className="my-2 max-w-full rounded-md border border-ink-100" />,
         }}
       >
-        {markdown}
+        {normalizeHeadings(markdown)}
       </ReactMarkdown>
     </article>
   );

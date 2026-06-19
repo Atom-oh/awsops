@@ -153,11 +153,18 @@ def _balance_code_fences(text):
     return text
 
 
+def _normalize_headings(text):
+    """The section LLM sometimes prefixes a prescribed `### X` subsection with its own `## `, yielding
+    `## ### X` — which CommonMark renders as an h2 whose TEXT is literally "### X" (the "###" shows on
+    screen). Collapse any doubled heading prefix to the inner one (`## ### X` → `### X`)."""
+    return re.sub(r"^#{1,6}[ \t]+(#{1,6}[ \t])", r"\1", text, flags=re.M)
+
+
 def render_section(section, collected, model_id, max_tokens):
     # Section sees ONLY the sources it declares (least-context).
     ctx = {k: collected[k]["data"] for k in section["sources"] if k in collected}
     ctx_json = _redact(json.dumps(ctx, ensure_ascii=False, default=str))  # [GATE-FIX] redact pre-LLM
-    body = _balance_code_fences(_bedrock_render(section["prompt"], ctx_json, model_id, max_tokens))
+    body = _normalize_headings(_balance_code_fences(_bedrock_render(section["prompt"], ctx_json, model_id, max_tokens)))
     return {"key": section["key"], "title": section["title"], "body": body}
 
 

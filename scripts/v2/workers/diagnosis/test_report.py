@@ -506,3 +506,12 @@ def test_build_markdown_appends_coverage_note_optional():
     # backward-compatible: collected is optional
     md2 = report.build_markdown(rendered, "123", "mid")
     assert "Executive Summary" in md2 and "데이터 커버리지" not in md2
+
+
+def test_normalize_headings_collapses_doubled_prefix():
+    # LLM emits `## ### X`; must collapse to `### X` (else CommonMark shows literal "###").
+    assert report._normalize_headings("## ### 보안 점수 (0~100)\n본문") == "### 보안 점수 (0~100)\n본문"
+    assert report._normalize_headings("#### ## 비용\nx") == "## 비용\nx"
+    # single, well-formed headings are untouched
+    assert report._normalize_headings("## Security Posture") == "## Security Posture"
+    assert report._normalize_headings("### 공개 노출") == "### 공개 노출"
