@@ -21,6 +21,10 @@ export interface NormalizedResult {
 const cols = (keys: string[]): Column[] => keys.map((k) => ({ key: k, label: k }));
 const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
 const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+// Like `num` but PRESERVES non-finite samples as null (Prometheus "NaN"/"+Inf"/malformed). The instant
+// table uses this for the value so a non-numeric sample stays distinguishable downstream (the Explore
+// ranked-bar gate fail-closes on a non-number), instead of being silently coerced to a misleading 0.
+const finiteOrNull = (v: unknown): number | null => { const n = Number(v); return Number.isFinite(n) ? n : null; };
 
 /** Prometheus metric object → "name{label="v",...}" for display. */
 function labelStr(metric: unknown): string {
@@ -55,7 +59,7 @@ function prom(body: Record<string, unknown>): NormalizedResult {
   const rows = result.map((e) => {
     const eo = e as Record<string, unknown>;
     const val = Array.isArray(eo.value) ? (eo.value as unknown[]) : [];
-    return { metric: labelStr(eo.metric), value: num(val[1]), timestamp: new Date(num(val[0]) * 1000).toISOString() };
+    return { metric: labelStr(eo.metric), value: finiteOrNull(val[1]), timestamp: new Date(num(val[0]) * 1000).toISOString() };
   });
   return { shape: 'table', rows, columns: cols(['metric', 'value', 'timestamp']), truncated };
 }
