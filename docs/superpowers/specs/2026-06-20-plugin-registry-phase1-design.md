@@ -1,6 +1,9 @@
 # Plugin Platform — Phase 1: 내부 capability 척추 (설계)
 
-> Status: Draft (brainstorm → spec). Branch `feat/v2-architecture-design`.
+> ⚠️ **SUPERSEDED (2026-06-20)** by `2026-06-20-devops-rca-incident-orchestrator-stage3-design.md`.
+> 멀티-AI 패널 만장일치 PIVOT-TO-RCA-AGENT: 이 레지스트리의 주 소비자(현 enumerate형 진단)가 RCA 에이전트의 EoG 컨트롤러로 아키텍처적으로 대체됨 → 지금 짓는 건 throwaway 위험. 플러그인/manifest 추상화는 **두 실제 소비자(RCA 에이전트 + 8게이트웨이)에서 나중에 추출**. 이 문서는 그 추출 시점의 참고로 보존. 근거: `docs/brainstorm/devops-rca-vs-plugin-registry-brief.md`.
+
+> Status: Draft (brainstorm → spec) — **SUPERSEDED**. Branch `feat/v2-architecture-design`.
 > 멀티-AI 패널(kimi·glm·agy, 2026-06-20) PROCEED-WITH-AMENDMENTS 반영. 결정 브리프: `docs/brainstorm/plugin-platform-decision-brief.md`.
 
 ## 1. 목적과 1차 가치 (왜)
