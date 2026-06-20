@@ -33,9 +33,11 @@ MAX_ROWS_CAP = 1000
 _READ_VERBS = ("SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXISTS")
 _DANGER = re.compile(
     r"\b(?:INSERT|ALTER|DROP|CREATE|DELETE|TRUNCATE|OPTIMIZE|ATTACH|DETACH|SET|GRANT|REVOKE|KILL|MOVE|RENAME)\b"
-    # SYSTEM the admin COMMAND (SYSTEM RELOAD/STOP/…), but NOT a `system.<table>` reference — the latter is
-    # a read of the system database (e.g. SELECT … FROM system.tables for schema introspection).
-    r"|\bSYSTEM\b(?!\s*\.)",
+    # SYSTEM stays blocked — the admin COMMAND (SYSTEM RELOAD/STOP/…) AND general `system.*` reads
+    # (system.users/grants/query_log expose sensitive metadata) — EXCEPT the three schema-introspection
+    # tables (system.tables/columns/databases) that clickhouse_schema needs. So `clickhouse_query` cannot
+    # widen the read surface to all of system.* while cross-DB introspection still works.
+    r"|\bSYSTEM\b(?!\s*\.(?:tables|columns|databases)\b)",
     re.IGNORECASE,
 )
 # ClickHouse table functions = server-side SSRF / cross-datastore reads / script exec (readonly=1 does

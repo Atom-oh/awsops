@@ -32,14 +32,17 @@ class TestReadOnlyGuard(unittest.TestCase):
                   "RENAME TABLE a TO b", "SYSTEM RELOAD", "SET max_threads=1"]:
             self._bad(s)
 
-    def test_allow_system_database_read(self):
-        # `system.<table>` is a READ of the system database (schema introspection), NOT the SYSTEM admin
-        # command — the \bSYSTEM\b danger token used to false-reject these. Must be allowed now.
+    def test_allow_system_schema_tables_only(self):
+        # Only the three schema-introspection tables are allowed (clickhouse_schema needs them). The
+        # SYSTEM admin command AND sensitive system.* reads (users/grants/query_log) stay BLOCKED, so the
+        # general clickhouse_query tool cannot widen the read surface to all of system.*.
         for s in ["SELECT database, name FROM system.tables",
                   "SELECT name, type FROM system.columns WHERE database = 'otel'",
                   "SELECT * FROM system.databases"]:
             self._ok(s)
-        self._bad("SYSTEM STOP MERGES")  # the command is still blocked (first-token + danger)
+        for s in ["SYSTEM STOP MERGES", "SELECT * FROM system.users",
+                  "SELECT name FROM system.grants", "SELECT query FROM system.query_log"]:
+            self._bad(s)
 
     def test_reject_stacked(self):
         self._bad("SELECT 1; DROP TABLE t")
