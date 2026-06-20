@@ -292,5 +292,36 @@ class TestDatasourceGuidance(unittest.TestCase):
         self.assertIn("Datasource schemas", mon)  # tells the agent to use the injected cache
 
 
+class TestAntiHallucinationFooter(unittest.TestCase):
+    """The data agent once fabricated a non-existent 'Infra 에이전트'. The footer must give the real
+    roster + forbid inventing agents, and tell the agent to be honest when it lacks a tool."""
+
+    def test_footer_forbids_inventing_agents(self):
+        f = agent.COMMON_FOOTER.lower()
+        self.assertTrue("invent" in f or "make up" in f or "지어내" in agent.COMMON_FOOTER,
+                        "footer must forbid inventing agent names")
+
+    def test_footer_lists_real_section_roster(self):
+        f = agent.COMMON_FOOTER.lower()
+        for section in ("network", "data", "security", "cost", "monitoring", "ops"):
+            self.assertIn(section, f)
+        # the fabricated name must NOT be presented as a real agent
+        self.assertNotIn("infra agent", f)
+
+    def test_footer_tells_agent_to_be_honest_when_lacking_a_tool(self):
+        f = agent.COMMON_FOOTER.lower()
+        self.assertIn("tool", f)
+
+
+class TestOpsTopologyPrompt(unittest.TestCase):
+    """Ops gateway is the inventory_read MCP home — its prompt must route topology/unused asks
+    to the new tools instead of refusing or punting."""
+
+    def test_ops_prompt_mentions_inventory_tools(self):
+        ops = agent.SKILL_BASE["ops"]
+        for tool in ("find_unused_resources", "get_topology", "query_inventory"):
+            self.assertIn(tool, ops)
+
+
 if __name__ == '__main__':
     unittest.main()
