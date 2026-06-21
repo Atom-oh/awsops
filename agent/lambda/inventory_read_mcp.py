@@ -12,15 +12,16 @@ Tools (all read-only — SELECT only; no AWS mutation, no arbitrary SQL):
   - get_topology          : CF→LB→TG→target chain from the materialized graph
   - inventory_summary     : counts by type + sync freshness
 
-VPC Lambda → pg8000 (NOT psycopg2), per agent/lambda/CLAUDE.md. DB access is lazy + injectable so
-the pure detection logic (detect_unused) is unit-testable with fixtures (no DB, no boto3).
+Aurora access uses the **RDS Data API** (boto3 `rds-data`, bundled in the Lambda runtime) — no VPC
+attachment and no pg8000 packaging needed (the agent Lambdas are zipped from raw .py with no pip
+deps). The cluster's HttpEndpoint must be enabled (terraform). DB access is lazy + injectable so the
+pure detection logic (detect_unused) is unit-testable with fixtures (no DB, no boto3).
 
 인벤토리-읽기 MCP 람다 — v2의 ops `run_steampipe_query` 등가물. Aurora에 동기화된 토폴로지/인벤토리를
-읽어 미사용 리소스·토폴로지 질의에 답한다. 전부 읽기 전용(SELECT만).
+RDS Data API로 읽어 미사용 리소스·토폴로지 질의에 답한다. 전부 읽기 전용(SELECT만).
 """
 import json
 import os
-import ssl
 
 
 # ── Resource types the topology/unused detection reads (mirrors graph-store TYPE_TO_KEY) ──────────
@@ -129,7 +130,7 @@ def build_topology_chain(by_type, root=None):
             continue
         for origin in (cf.get("origins") or []):
             domain = origin.get("DomainName") if isinstance(origin, dict) else None
-            lb = albs.get(domain)
+            lb = albs.get(domain) if domain else None  # null domain must not match a null-dns LB
             node = {"cloudfront": cf.get("id"), "origin": domain, "loadBalancer": lb.get("name") if lb else None,
                     "targetGroups": [{"name": t.get("target_group_name"),
                                       "healthy": sum(1 for s in _states(t) if s == "healthy"),
@@ -139,67 +140,80 @@ def build_topology_chain(by_type, root=None):
     return chains
 
 
-# ── Aurora access (lazy; VPC Lambda uses pg8000 + RDS-managed master secret) ──────────────────────
-_secret_cache = {}
-_get_secret_override = None  # tests may inject
+# ── Aurora access via the RDS Data API (lazy + injectable; boto3 is in the Lambda runtime) ─────────
+_execute_override = None  # tests may inject a fake (sql, params) -> [row-dict]
 
 
-def _get_secret():
-    if _get_secret_override:
-        return _get_secret_override()
+def _execute(sql, params=None):
+    """Run read-only SQL through the RDS Data API; return rows as dicts (formatRecordsAs=JSON)."""
+    if _execute_override:
+        return _execute_override(sql, params)
     import boto3  # lazy: keep pure logic importable without boto3
-    arn = os.environ["AURORA_SECRET_ARN"]
-    if arn not in _secret_cache:
-        sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
-        _secret_cache[arn] = json.loads(sm.get_secret_value(SecretId=arn)["SecretString"])
-    return _secret_cache[arn]
+    client = boto3.client("rds-data", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
+    kwargs = {
+        "resourceArn": os.environ["AURORA_CLUSTER_ARN"],
+        "secretArn": os.environ["AURORA_SECRET_ARN"],
+        "database": os.environ.get("AURORA_DATABASE", "awsops"),
+        "sql": sql,
+        "formatRecordsAs": "JSON",
+    }
+    if params:
+        kwargs["parameters"] = params
+    resp = client.execute_statement(**kwargs)
+    return json.loads(resp.get("formattedRecords") or "[]")
 
 
-def _connect():
-    import pg8000.native  # lazy
-    sec = _get_secret()
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return pg8000.native.Connection(
-        user=sec["username"], password=sec["password"],
-        host=os.environ["AURORA_ENDPOINT"], database=os.environ.get("AURORA_DATABASE", "awsops"),
-        ssl_context=ctx,
-    )
+def _coerce(d):
+    return d if isinstance(d, dict) else (json.loads(d) if isinstance(d, str) and d else {})
 
 
-def _fetch_by_type(types, limit_per_type=2000):
-    """Read inventory_resources.data grouped by resource_type. Returns {type: [data, ...]}."""
-    conn = _connect()
-    try:
-        out = {}
-        rows = conn.run(
-            "SELECT resource_type, data FROM inventory_resources "
-            "WHERE resource_type = ANY(:types) AND account_id = 'self'",
-            types=list(types),
-        )
-        for rtype, data in rows:
-            d = data if isinstance(data, dict) else json.loads(data)
-            out.setdefault(rtype, []).append(d)
-        return out
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+# Per-type field projection: the RDS Data API has a hard 1 MB response cap, and the raw `data`
+# JSONB (esp. cloudfront cache_behaviors) is large. So we SELECT only the keys the detector/topology
+# logic actually reads — keeping each response well under the cap on large accounts. Keys are
+# constants (never user input); the resource_type is always a bound Data API parameter.
+PROJECTIONS = {
+    "target_group": ["target_group_arn", "target_group_name", "load_balancer_arns", "target_health_descriptions"],
+    "alb": ["name", "dns_name", "arn"],
+    "nlb": ["name", "dns_name", "arn"],
+    "cloudfront": ["id", "domain_name", "enabled", "origins", "aliases"],
+    "ebs": ["volume_id", "state", "size", "volume_type"],
+}
+
+
+def _projected_select(rtype):
+    keys = PROJECTIONS.get(rtype)
+    if not keys:
+        return "data"
+    pairs = ",".join("'" + k + "', data->'" + k + "'" for k in keys)  # keys are module constants
+    return "jsonb_build_object(" + pairs + ")"
+
+
+def _fetch_by_type(types):
+    """Read inventory_resources grouped by resource_type. Returns {type: [data, ...]}.
+
+    `types` are trusted internal constants — restricted to TOPOLOGY_TYPES. One bounded, field-
+    projected query per type (1 MB Data API cap), with the type bound as a parameter (never inlined)."""
+    out = {}
+    for t in [t for t in types if t in set(TOPOLOGY_TYPES)]:
+        rows = _execute(
+            "SELECT " + _projected_select(t) + " AS data FROM inventory_resources "
+            "WHERE account_id = 'self' AND resource_type = :rt",
+            params=[{"name": "rt", "value": {"stringValue": t}}])
+        out[t] = [_coerce(r.get("data")) for r in rows]
+    return out
+
+
+def _fetch_one_type(rtype, limit):
+    rows = _execute("SELECT data FROM inventory_resources WHERE account_id = 'self' "
+                    "AND resource_type = :rt LIMIT " + str(int(limit)),
+                    params=[{"name": "rt", "value": {"stringValue": rtype}}])
+    return [_coerce(r.get("data")) for r in rows]
 
 
 def _sync_freshness():
-    conn = _connect()
-    try:
-        rows = conn.run("SELECT resource_type, status, finished_at, row_count FROM inventory_sync_runs "
-                        "WHERE account_id = 'self' ORDER BY resource_type")
-        return [{"resource_type": r[0], "status": r[1], "finished_at": str(r[2]), "row_count": r[3]} for r in rows]
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    rows = _execute("SELECT resource_type, status, finished_at, row_count FROM inventory_sync_runs "
+                    "WHERE account_id = 'self' ORDER BY resource_type")
+    return rows
 
 
 # ── Tool dispatch ─────────────────────────────────────────────────────────────────────────────────
@@ -232,8 +246,11 @@ def lambda_handler(event, context):
         rtype = arguments.get("resource_type") if isinstance(arguments, dict) else None
         if not rtype:
             return {"statusCode": 400, "body": json.dumps({"error": "resource_type required"})}
-        limit = int(arguments.get("limit", 200)) if isinstance(arguments, dict) else 200
-        rows = _fetch_by_type([rtype]).get(rtype, [])[:limit]
+        try:
+            limit = min(int(arguments.get("limit", 200)), 500) if isinstance(arguments, dict) else 200
+        except (TypeError, ValueError):
+            limit = 200  # a hallucinated non-numeric limit must not 500
+        rows = _fetch_one_type(rtype, limit)
         return _ok({"resource_type": rtype, "count": len(rows), "resources": rows})
 
     if tool_name == "inventory_summary":

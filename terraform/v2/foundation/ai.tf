@@ -226,6 +226,39 @@ resource "aws_iam_role_policy" "agent_lambda_integrations_secret" {
   })
 }
 
+# inventory-read MCP (inventory_read_mcp.py) — reads the synced Aurora inventory via the RDS Data
+# API (read-only SELECT). Scoped to ExecuteStatement on the cluster + GetSecretValue on the
+# RDS-managed master secret + Decrypt on the secret's CMK. Additive (own resource) so a targeted
+# apply leaves the runtime policy untouched.
+resource "aws_iam_role_policy" "agent_lambda_inventory" {
+  count = local.ac_count
+  name  = "${var.project}-agent-lambda-inventory"
+  role  = aws_iam_role.agent_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "AuroraDataApiRead"
+        Effect   = "Allow"
+        Action   = ["rds-data:ExecuteStatement"]
+        Resource = aws_rds_cluster.aurora.arn
+      },
+      {
+        Sid      = "AuroraMasterSecretRead"
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      },
+      {
+        Sid      = "AuroraSecretKmsDecrypt"
+        Effect   = "Allow"
+        Action   = "kms:Decrypt"
+        Resource = aws_kms_key.aurora.arn
+      },
+    ]
+  })
+}
+
 # OpenSearch read connector (opensearch_mcp.py) — AWS-native, read-only. NOTE: Amazon OpenSearch
 # *managed* domains use the es: IAM prefix (NOT opensearch:, which is Serverless/aoss:). Scoped to
 # HTTP read verbs on domain ARNs + list/describe for endpoint resolution.
@@ -528,6 +561,8 @@ locals {
     "core-helpers"      = { file = "core_helpers_mcp.py", handler = "core_helpers_mcp.lambda_handler" }
     "reachability-read" = { file = "reachability_read_mcp.py", handler = "reachability_read_mcp.lambda_handler" }
     "istio-read"        = { file = "istio_read_mcp.py", handler = "istio_read_mcp.lambda_handler" }
+    # ops inventory_read: reads the synced Aurora topology/inventory via the RDS Data API (read-only)
+    "inventory-read"    = { file = "inventory_read_mcp.py", handler = "inventory_read_mcp.lambda_handler" }
     } : {}, local.integ_count > 0 ? {
     "notion-mcp"     = { file = "notion_mcp.py", handler = "notion_mcp.lambda_handler" }
     "clickhouse-mcp" = { file = "clickhouse_mcp.py", handler = "clickhouse_mcp.lambda_handler" }
@@ -589,7 +624,14 @@ resource "aws_lambda_function" "agent" {
       contains(["notion-mcp", "clickhouse-mcp", "prometheus-mcp", "loki-mcp", "tempo-mcp", "mimir-mcp"], each.key) ? merge(
         { INTEGRATIONS_SECRET_NAME = aws_secretsmanager_secret.integrations[0].name },
         each.key == "notion-mcp" ? { INTEGRATION_SLUG = "notion" } : {}
-      ) : {}
+      ) : {},
+      # inventory-read reads the synced Aurora inventory via the RDS Data API (no VPC, no pg8000) —
+      # needs the cluster ARN, the RDS-managed master secret ARN, and the DB name.
+      each.key == "inventory-read" ? {
+        AURORA_CLUSTER_ARN = aws_rds_cluster.aurora.arn
+        AURORA_SECRET_ARN  = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+        AURORA_DATABASE    = aws_rds_cluster.aurora.database_name
+      } : {}
     )
   }
 

@@ -53,6 +53,9 @@ resource "aws_rds_cluster" "aurora" {
   database_name                 = "awsops"
   master_username               = "awsops_admin"
   manage_master_user_password   = true
+  # RDS Data API (HTTP endpoint): lets the read-only inventory-read MCP Lambda query the synced
+  # inventory without a VPC attachment or pg8000 bundling. In-place enable (no reboot/replace).
+  enable_http_endpoint          = true
   master_user_secret_kms_key_id = aws_kms_key.aurora.key_id
   storage_encrypted             = true
   kms_key_id                    = aws_kms_key.aurora.arn

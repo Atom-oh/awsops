@@ -111,5 +111,87 @@ class TestEmptyInputSafe(unittest.TestCase):
         self.assertEqual(inv.detect_unused({}), [])
 
 
+class TestHandlerWithInjectedDataApi(unittest.TestCase):
+    """Handler dispatch + RDS Data API integration, with _execute injected (no real AWS)."""
+
+    def tearDown(self):
+        inv._execute_override = None
+
+    def test_find_unused_resources_returns_findings_and_note(self):
+        def fake(sql, params=None):
+            self.assertIn("inventory_resources", sql)
+            return [{"resource_type": "target_group", "data": _tg("lonely-tg", [], [])}]
+        inv._execute_override = fake
+        out = inv.lambda_handler({"tool_name": "find_unused_resources"}, None)
+        self.assertEqual(out["statusCode"], 200)
+        import json as _j
+        body = _j.loads(out["body"])
+        self.assertGreaterEqual(body["count"], 1)
+        self.assertTrue(any(f["name"] == "lonely-tg" for f in body["findings"]))
+        self.assertIn("note", body)
+
+    def test_query_inventory_binds_resource_type_as_parameter(self):
+        seen = {}
+        def fake(sql, params=None):
+            seen["sql"], seen["params"] = sql, params
+            return [{"data": {"name": "x"}}]
+        inv._execute_override = fake
+        out = inv.lambda_handler({"tool_name": "query_inventory", "arguments": {"resource_type": "alb"}}, None)
+        self.assertEqual(out["statusCode"], 200)
+        # user input must be a bound Data API parameter, never inlined into SQL
+        self.assertEqual(seen["params"], [{"name": "rt", "value": {"stringValue": "alb"}}])
+        self.assertNotIn("alb", seen["sql"])
+
+    def test_query_inventory_requires_resource_type(self):
+        out = inv.lambda_handler({"tool_name": "query_inventory", "arguments": {}}, None)
+        self.assertEqual(out["statusCode"], 400)
+
+    def test_unknown_tool_is_400(self):
+        out = inv.lambda_handler({"tool_name": "delete_everything"}, None)
+        self.assertEqual(out["statusCode"], 400)
+
+    def test_fetch_by_type_ignores_non_allowlisted_types(self):
+        # guards against any non-allowlisted (potentially malicious) resource_type reaching SQL
+        calls = []
+        def fake(sql, params=None):
+            calls.append((sql, params))
+            return []
+        inv._execute_override = fake
+        inv._fetch_by_type(["target_group", "'; DROP TABLE x; --"])
+        self.assertEqual(len(calls), 1)  # only the allowlisted type is queried
+        self.assertNotIn("DROP", calls[0][0])
+        self.assertEqual(calls[0][1][0]["value"]["stringValue"], "target_group")
+
+    def test_fetch_by_type_projects_fields_to_avoid_1mb_data_api_limit(self):
+        # Must NOT SELECT the full `data` column (RDS Data API hard 1MB cap) — project only the
+        # keys the detector reads, one bounded query per type with the type bound as a parameter.
+        calls = []
+        def fake(sql, params=None):
+            calls.append((sql, params))
+            return []
+        inv._execute_override = fake
+        inv._fetch_by_type(["target_group", "cloudfront"])
+        self.assertEqual(len(calls), 2)  # one projected query per type
+        for sql, params in calls:
+            self.assertIn("jsonb_build_object", sql)        # projected, not full-column
+            self.assertNotIn("SELECT data ", sql)
+            self.assertEqual(params[0]["name"], "rt")
+        self.assertEqual({p[0]["value"]["stringValue"] for _, p in calls}, {"target_group", "cloudfront"})
+
+    def test_query_inventory_non_numeric_limit_does_not_500(self):
+        inv._execute_override = lambda sql, params=None: [{"data": {"name": "x"}}]
+        out = inv.lambda_handler({"tool_name": "query_inventory",
+                                  "arguments": {"resource_type": "alb", "limit": "oops"}}, None)
+        self.assertEqual(out["statusCode"], 200)
+
+    def test_build_topology_chain_skips_null_origin_domain(self):
+        # a null origin DomainName must not match a load balancer with a null dns_name
+        chains = inv.build_topology_chain({
+            "cloudfront": [{"id": "E1", "origins": [{"DomainName": None}]}],
+            "alb": [{"name": "x", "dns_name": None, "arn": "a"}],
+        })
+        self.assertTrue(all(c["loadBalancer"] is None for c in chains))
+
+
 if __name__ == "__main__":
     unittest.main()
