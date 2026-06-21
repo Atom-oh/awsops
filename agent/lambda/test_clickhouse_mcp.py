@@ -32,16 +32,16 @@ class TestReadOnlyGuard(unittest.TestCase):
                   "RENAME TABLE a TO b", "SYSTEM RELOAD", "SET max_threads=1"]:
             self._bad(s)
 
-    def test_allow_system_schema_tables_only(self):
-        # Only the three schema-introspection tables are allowed (clickhouse_schema needs them). The
-        # SYSTEM admin command AND sensitive system.* reads (users/grants/query_log) stay BLOCKED, so the
-        # general clickhouse_query tool cannot widen the read surface to all of system.*.
-        for s in ["SELECT database, name FROM system.tables",
-                  "SELECT name, type FROM system.columns WHERE database = 'otel'",
-                  "SELECT * FROM system.databases"]:
-            self._ok(s)
-        for s in ["SYSTEM STOP MERGES", "SELECT * FROM system.users",
-                  "SELECT name FROM system.grants", "SELECT query FROM system.query_log"]:
+    def test_block_all_system_for_user_queries(self):
+        # The general (user) read-only guard blocks ALL system.* — including system.tables, because its
+        # create_table_query/engine_full columns can carry plaintext engine credentials (MySQL/Kafka/S3).
+        # Cross-DB schema introspection reaches system.tables via _run_sql(trusted=True), not this guard.
+        for s in ["SELECT database, name FROM system.tables",        # blocked even for the benign columns
+                  "SELECT create_table_query FROM system.tables",    # the credential-exposure case (C1)
+                  "SELECT engine_full FROM system.tables",
+                  "SELECT * FROM system.columns", "SELECT * FROM system.databases",
+                  "SELECT * FROM system.users", "SELECT query FROM system.query_log",
+                  "SYSTEM STOP MERGES"]:
             self._bad(s)
 
     def test_reject_stacked(self):

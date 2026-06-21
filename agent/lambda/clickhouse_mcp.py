@@ -32,12 +32,11 @@ MAX_ROWS_CAP = 1000
 
 _READ_VERBS = ("SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXISTS")
 _DANGER = re.compile(
-    r"\b(?:INSERT|ALTER|DROP|CREATE|DELETE|TRUNCATE|OPTIMIZE|ATTACH|DETACH|SET|GRANT|REVOKE|KILL|MOVE|RENAME)\b"
-    # SYSTEM stays blocked — the admin COMMAND (SYSTEM RELOAD/STOP/…) AND general `system.*` reads
-    # (system.users/grants/query_log expose sensitive metadata) — EXCEPT the three schema-introspection
-    # tables (system.tables/columns/databases) that clickhouse_schema needs. So `clickhouse_query` cannot
-    # widen the read surface to all of system.* while cross-DB introspection still works.
-    r"|\bSYSTEM\b(?!\s*\.(?:tables|columns|databases)\b)",
+    # SYSTEM blocked for ALL user queries — the admin command AND every system.* read. system.tables/.*
+    # expose create_table_query/engine_full (plaintext creds for MySQL/Kafka/S3 engine tables) and
+    # users/grants/query_log, so the general clickhouse_query tool must never reach system.*. Cross-DB
+    # schema introspection reads system.tables via _run_sql(trusted=True), which bypasses this guard.
+    r"\b(INSERT|ALTER|DROP|CREATE|DELETE|TRUNCATE|OPTIMIZE|ATTACH|DETACH|SET|SYSTEM|GRANT|REVOKE|KILL|MOVE|RENAME)\b",
     re.IGNORECASE,
 )
 # ClickHouse table functions = server-side SSRF / cross-datastore reads / script exec (readonly=1 does
@@ -141,8 +140,12 @@ def _clamp_rows(v):
     return max(1, min(MAX_ROWS_CAP, n))
 
 
-def _run_sql(sql, max_rows):
-    _assert_read_only(sql)
+def _run_sql(sql, max_rows, trusted=False):
+    # user-supplied SQL MUST pass the read-only guard. `trusted=True` is ONLY for the connector's own
+    # hardcoded introspection SQL (e.g. SELECT database,name FROM system.tables) — never user input —
+    # so the shared guard can keep blocking ALL system.* for the general clickhouse_query tool.
+    if not trusted:
+        _assert_read_only(sql)
     ds = load_datasource(SLUG)
     assert_host_allowed(ds["endpoint"])
     base = ds["endpoint"].rstrip("/")
@@ -198,10 +201,14 @@ def clickhouse_schema(args):
     # (database, name) for every DB; we DESCRIBE each as `db.table` so the model gets fully-qualified names.
     names: list[str] = []
     st = _run_sql(
+        # ONLY database+name — never create_table_query/engine_full/as_select (those can carry plaintext
+        # engine credentials). trusted=True: connector-internal hardcoded SQL, bypasses the user guard
+        # that (correctly) blocks all system.* for the general clickhouse_query tool.
         "SELECT database, name FROM system.tables "
         "WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') "
         "ORDER BY database, name",
         MAX_SCHEMA_TABLES,
+        trusted=True,
     )
     if st["statusCode"] == 200:
         for r in json.loads(st["body"]).get("rows", []):
