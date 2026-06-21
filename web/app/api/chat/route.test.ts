@@ -29,7 +29,10 @@ vi.mock('@/lib/trace', () => ({ recordCustomAgentTrace: (...a: unknown[]) => rec
 const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
 const listConfiguredSchemas = vi.fn();
-vi.mock('@/lib/datasource-schema', () => ({ listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a) }));
+vi.mock('@/lib/datasource-schema', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/datasource-schema')>()), // keep the real renderSchemaForPrompt
+  listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a),
+}));
 const listDatasources = vi.fn();
 vi.mock('@/lib/datasources', () => ({ listDatasources: (...a: unknown[]) => listDatasources(...a) }));
 const synthesizeStream = vi.fn();

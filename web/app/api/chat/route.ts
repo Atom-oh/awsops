@@ -12,7 +12,7 @@ import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
 import { currentAccountId, currentAccountAlias } from '@/lib/account';
-import { listConfiguredSchemas } from '@/lib/datasource-schema';
+import { listConfiguredSchemas, renderSchemaForPrompt } from '@/lib/datasource-schema';
 import { listDatasources } from '@/lib/datasources';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getAgentSpace } from '@/lib/agent-space';
@@ -33,21 +33,29 @@ function chunk(text: string): string[] {
   return text.match(/\S+\s*|\s+/g) ?? [text];
 }
 
-/** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps). */
+/** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps).
+ *  Uses the shared renderer so SQL datasources (ClickHouse) get their COLUMNS — not just table names —
+ *  and OpenSearch domains get their indices, exactly like the Explore "AI로 생성" path. Each datasource
+ *  gets a GUARANTEED share of the total budget (so a big ClickHouse schema can't crowd out Prometheus),
+ *  and dropped datasources are disclosed instead of silently sliced off. */
+const SCHEMA_CTX_TOTAL = 7000; // fits inside the agent's 8000-char extraContext budget with headroom
+const SCHEMA_CTX_MAX_DATASOURCES = 12;
 function renderSchemaContext(schemas: { label: string; kind: string | null; schema: unknown; version?: string | null }[]): string {
-  const lines = ['## Datasource schemas (cached) — use these real names AND the server version when writing queries'];
-  const names = (a: unknown, n: number) =>
-    (Array.isArray(a) ? a : []).slice(0, n).map((x) => (typeof x === 'string' ? x : (x as { name?: string }).name ?? JSON.stringify(x))).join(', ');
-  for (const s of schemas) {
-    const sc = (s.schema || {}) as Record<string, unknown>;
-    const parts: string[] = [];
-    for (const [k, n] of [['metrics', 40], ['labels', 40], ['tags', 40], ['tables', 30], ['domains', 10], ['indices', 30]] as const) {
-      if (Array.isArray(sc[k]) && (sc[k] as unknown[]).length) parts.push(`${k}: ${names(sc[k], n)}`);
-    }
+  const header = '## Datasource schemas (cached) — use these real names AND the server version when writing queries';
+  const lines = [header];
+  const shown = schemas.slice(0, SCHEMA_CTX_MAX_DATASOURCES);
+  const perEntry = Math.max(500, Math.floor((SCHEMA_CTX_TOTAL - header.length) / Math.max(1, shown.length)));
+  for (const s of shown) {
     const ver = s.version ? ` v${s.version}` : ''; // version informs version-specific DSL/syntax
-    lines.push(`- **${s.label}** (${s.kind ?? ''}${ver}): ${parts.join(' | ') || '(empty)'}`);
+    const labelLine = `- **${s.label}** (${s.kind ?? ''}${ver}):`;
+    const body = renderSchemaForPrompt(s.schema, s.kind, perEntry - labelLine.length - 8); // leave room for the label + indentation
+    const indented = body ? '\n' + body.split('\n').map((l) => `  ${l}`).join('\n') : ' (empty)';
+    lines.push(`${labelLine}${indented}`);
   }
-  return lines.join('\n').slice(0, 6000);
+  if (schemas.length > shown.length) lines.push(`… (+${schemas.length - shown.length} more datasource(s) omitted)`);
+  // Absolute backstop: per-entry budgeting doesn't account for per-line indentation, so cap the joined
+  // block at SCHEMA_CTX_TOTAL (well within the agent's 8000-char extraContext budget).
+  return lines.join('\n').slice(0, SCHEMA_CTX_TOTAL);
 }
 
 export async function POST(request: Request) {
