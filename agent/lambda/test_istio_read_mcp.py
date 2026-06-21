@@ -25,6 +25,7 @@ _K8S = {
     "/api/v1/namespaces": {"items": [
         {"metadata": {"name": "bookinfo", "labels": {"istio-injection": "enabled"}}},
         {"metadata": {"name": "kube-system", "labels": {}}},
+        {"metadata": {"name": "legacy", "labels": {"istio-injection": "disabled"}}},  # explicit opt-out
     ]},
 }
 
@@ -66,6 +67,7 @@ class TestOverview(_Base):
         self.assertEqual(body["counts"]["destinationrules"], 1)
         self.assertIn("bookinfo", body["injected_namespaces"])
         self.assertNotIn("kube-system", body["injected_namespaces"])
+        self.assertNotIn("legacy", body["injected_namespaces"])  # istio-injection: disabled → not injected
 
 
 class TestGuards(_Base):
@@ -81,6 +83,10 @@ class TestGuards(_Base):
         out, body = self._call("list_istio_gateways", target_account_id="123456789012")
         self.assertEqual(out["statusCode"], 200)
 
+    def test_invalid_namespace_400(self):
+        out = im.lambda_handler({"tool_name": "list_virtual_services", "arguments": {"cluster_name": "c1", "namespace": "Bad/NS"}}, None)
+        self.assertEqual(out["statusCode"], 400)
+
 
 class TestNoSteampipe(unittest.TestCase):
     def test_source_has_no_steampipe_or_pg8000(self):
@@ -89,10 +95,6 @@ class TestNoSteampipe(unittest.TestCase):
         src = open(os.path.join(os.path.dirname(__file__), "istio_read_mcp.py")).read()
         for banned in ("import pg8000", "pg8000.connect", "STEAMPIPE_HOST", ":9193/"):
             self.assertNotIn(banned, src, f"istio-read must not use {banned} (ADR-037: no live Steampipe)")
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestCatalogWiring(unittest.TestCase):
@@ -107,3 +109,7 @@ class TestCatalogWiring(unittest.TestCase):
         self.assertIn("mesh_overview", names)
         self.assertIn("list_virtual_services", names)
         self.assertEqual(len(t["tools"]), 7)
+
+
+if __name__ == "__main__":
+    unittest.main()

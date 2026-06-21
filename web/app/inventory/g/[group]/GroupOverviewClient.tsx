@@ -36,10 +36,10 @@ export default function GroupOverviewClient({ slug }: { slug: string }) {
       if (!r.ok) throw new Error(String(r.status));
       setSum(await r.json());
       setErr('');
+      setCapturedAt(new Date().toISOString()); // only stamp on success (not on 401/500)
     } catch (e) {
       setErr(String(e));
     }
-    setCapturedAt(new Date().toISOString());
     setBusy(false);
   }, []);
   useEffect(() => { load(); }, [load]);

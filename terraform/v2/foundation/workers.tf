@@ -15,6 +15,26 @@ locals {
   acct         = data.aws_caller_identity.current.account_id
   # ai-cost aggregator gate — reuses the worker role/pg8000 layer/VPC, so it REQUIRES workers_enabled.
   act = var.workers_enabled && var.ai_cost_tracking_enabled ? 1 : 0
+  # datasource-diagnosis egress gate (ADR-039/041) — requires workers_enabled. Grants the worker role
+  # lambda:InvokeFunction on the 5 connector Lambdas + sets the enabling env. Default false → 0/$0.
+  dsd = var.workers_enabled && var.datasource_diagnosis_enabled ? 1 : 0
+  ds_connector_arns = [for k in ["prometheus", "loki", "tempo", "mimir", "clickhouse"] :
+  "arn:aws:lambda:${var.region}:${local.acct}:function:${var.project}-agent-${k}-mcp"]
+  # env that turns collect_datasources on (only when the gate is set) — kept as a list/map fragment so
+  # it's concat/merge-appended to the worker task def + Lambda envs below.
+  ds_env_list = local.dsd == 1 ? [
+    { name = "DIAG_DATASOURCES_ENABLED", value = "true" },
+    { name = "HOST_ACCOUNT_ID", value = local.acct },
+    { name = "PROJECT", value = var.project },
+  ] : []
+  ds_env_map = local.dsd == 1 ? {
+    DIAG_DATASOURCES_ENABLED = "true"
+    HOST_ACCOUNT_ID          = local.acct
+    PROJECT                  = var.project
+  } : {}
+  # scheduled auto-diagnosis dispatcher gate — reuses the worker role/pg8000 layer/VPC + the jobs queue,
+  # so it REQUIRES workers_enabled. Default false → 0 resources, $0, no scheduled runs.
+  sched = var.workers_enabled && var.diagnosis_schedule_enabled ? 1 : 0
 }
 
 ############################################################
@@ -386,7 +406,7 @@ resource "aws_ecs_task_definition" "worker" {
       name      = local.worker_cname
       image     = "${aws_ecr_repository.worker[0].repository_url}:${var.worker_image_tag}"
       essential = true
-      environment = [
+      environment = concat([
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
         { name = "AURORA_SECRET_ARN", value = aws_rds_cluster.aurora.master_user_secret[0].secret_arn },
@@ -403,7 +423,7 @@ resource "aws_ecs_task_definition" "worker" {
         # _compliance fails fast with a clear error.
         { name = "STEAMPIPE_HOST", value = "steampipe.${var.project}.internal" },
         { name = "STEAMPIPE_SECRET_ARN", value = try(aws_secretsmanager_secret.steampipe[0].arn, "") }
-      ]
+      ], local.ds_env_list, local.notify_worker_env_list) # + gated datasource env; + gated DIAGNOSIS_SNS_TOPIC_ARN/APP_DOMAIN when diagnosis_notify_enabled
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -469,14 +489,15 @@ resource "aws_lambda_function" "worker" {
     security_group_ids = [aws_security_group.service.id]
   }
   environment {
-    variables = {
+    variables = merge({
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
       AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
       # AI Diagnosis (Task 1b): report worker uploads here + invokes a global.* Bedrock profile from var.region.
       ARTIFACT_BUCKET = aws_s3_bucket.diagnosis_artifacts[0].bucket
       BEDROCK_REGION  = var.region
-    }
+      # + gated DIAGNOSIS_SNS_TOPIC_ARN/APP_DOMAIN (notify) — empty map when diagnosis_notify_enabled=false → no env diff.
+    }, local.notify_worker_env_map, local.ds_env_map) # + gated DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT when datasource_diagnosis_enabled
   }
   depends_on = [aws_cloudwatch_log_group.worker_fn, aws_iam_role_policy_attachment.worker_lambda_vpc]
 }
@@ -708,6 +729,8 @@ resource "aws_iam_role_policy" "worker_diagnosis" {
         Effect = "Allow"
         Action = [
           "ce:GetCostAndUsage",
+          "ce:GetReservationCoverage",
+          "ce:GetSavingsPlansCoverage",
           "cloudwatch:GetMetricData",
           "xray:GetServiceGraph",
           "securityhub:GetFindings",
@@ -749,6 +772,8 @@ resource "aws_iam_role_policy" "worker_lambda_diagnosis" {
         Effect = "Allow"
         Action = [
           "ce:GetCostAndUsage",
+          "ce:GetReservationCoverage",
+          "ce:GetSavingsPlansCoverage",
           "cloudwatch:GetMetricData",
           "xray:GetServiceGraph",
           "securityhub:GetFindings",
@@ -763,6 +788,50 @@ resource "aws_iam_role_policy" "worker_lambda_diagnosis" {
         Resource = "${aws_s3_bucket.diagnosis_artifacts[0].arn}/diagnosis/*"
       }
     ]
+  })
+}
+
+# Datasource-diagnosis connector invoke (ADR-039/041 governed external egress) — GATED on
+# datasource_diagnosis_enabled (default false → not created → $0). Scoped to the 5 named connector
+# Lambda ARNs only (NO function:* wildcard). Granted to BOTH diagnosis compute roles (Fargate task +
+# worker Lambda), matching the worker_diagnosis / worker_lambda_diagnosis split above. The matching
+# DIAG_DATASOURCES_ENABLED env is set on the same gate, so IAM and activation move together.
+resource "aws_iam_role_policy" "worker_task_datasource_invoke" {
+  count = local.dsd
+  name  = "${var.project}-worker-datasource-invoke"
+  role  = aws_iam_role.worker_task[0].id
+  # Fail LOUD (CLAUDE.md: no silent caps) if the flag is set but the connector Lambdas it grants
+  # InvokeFunction on won't exist — agentcore_enabled + integrations_enabled create the
+  # ${var.project}-agent-*-mcp functions. Without this the worker would silently degrade on AccessDenied.
+  lifecycle {
+    precondition {
+      condition     = var.agentcore_enabled && var.integrations_enabled
+      error_message = "datasource_diagnosis_enabled requires agentcore_enabled AND integrations_enabled (they create the ${var.project}-agent-*-mcp connector Lambdas this grants lambda:InvokeFunction on)."
+    }
+  }
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InvokeDatasourceConnectors"
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = local.ds_connector_arns
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "worker_lambda_datasource_invoke" {
+  count = local.dsd
+  name  = "${var.project}-worker-lambda-datasource-invoke"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InvokeDatasourceConnectors"
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = local.ds_connector_arns
+    }]
   })
 }
 
@@ -884,4 +953,100 @@ resource "aws_lambda_permission" "ai_cost_aggregator_events" {
   function_name = aws_lambda_function.ai_cost_aggregator[0].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.ai_cost_aggregator[0].arn
+}
+
+############################################################
+# Scheduled auto-diagnosis dispatcher (v1 report-scheduler parity).
+# Hourly EventBridge -> Lambda that scans report_schedules for due rows and enqueues a `report` job each
+# (the diagnosis is read-only). Reuses the shared worker role + pg8000 layer + VPC (Aurora reachability);
+# adds ONLY sqs:SendMessage to the jobs queue. All count-gated on local.sched (workers_enabled &&
+# diagnosis_schedule_enabled). Default off -> 0 resources, $0, no scheduled runs.
+############################################################
+resource "aws_cloudwatch_log_group" "schedule_dispatcher" {
+  count             = local.sched
+  name              = "/aws/lambda/${var.project}-schedule-dispatcher"
+  retention_in_days = 14
+}
+
+# Dedicated code bundle (db.py + schedule_dispatcher.py) so enabling this does NOT change the shared
+# workers_src archive hash → existing worker Lambdas stay byte-identical (strict no-op when off).
+data "archive_file" "schedule_dispatcher_src" {
+  count       = local.sched
+  type        = "zip"
+  output_path = "${path.module}/.build/schedule_dispatcher.zip"
+  source {
+    content  = file("${local.workers_src}/db.py")
+    filename = "db.py"
+  }
+  source {
+    content  = file("${local.workers_src}/schedule_dispatcher.py")
+    filename = "schedule_dispatcher.py"
+  }
+}
+
+# The dispatcher enqueues jobs (db.insert_job + SQS) — grant the shared worker role SendMessage, only when on.
+resource "aws_iam_role_policy" "schedule_dispatcher_sqs" {
+  count = local.sched
+  name  = "schedule-dispatcher-enqueue"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "EnqueueDiagnosisJob"
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = aws_sqs_queue.jobs[0].arn
+    }]
+  })
+}
+
+resource "aws_lambda_function" "schedule_dispatcher" {
+  count            = local.sched
+  function_name    = "${var.project}-schedule-dispatcher"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "schedule_dispatcher.lambda_handler"
+  filename         = data.archive_file.schedule_dispatcher_src[0].output_path
+  source_code_hash = data.archive_file.schedule_dispatcher_src[0].output_base64sha256
+  timeout          = 120
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AWS_ACCOUNT_ID    = local.acct
+      JOBS_QUEUE_URL    = aws_sqs_queue.jobs[0].url
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.schedule_dispatcher, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+resource "aws_cloudwatch_event_rule" "schedule_dispatcher" {
+  count               = local.sched
+  name                = "${var.project}-schedule-dispatcher"
+  description         = "Scan report_schedules for due rows and enqueue AI-diagnosis report jobs"
+  schedule_expression = "rate(1 hour)"
+}
+
+resource "aws_cloudwatch_event_target" "schedule_dispatcher" {
+  count     = local.sched
+  rule      = aws_cloudwatch_event_rule.schedule_dispatcher[0].name
+  target_id = "schedule-dispatcher"
+  arn       = aws_lambda_function.schedule_dispatcher[0].arn
+}
+
+resource "aws_lambda_permission" "schedule_dispatcher_events" {
+  count         = local.sched
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.schedule_dispatcher[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.schedule_dispatcher[0].arn
 }

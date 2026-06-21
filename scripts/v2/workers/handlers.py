@@ -95,6 +95,16 @@ def _report(payload, dry_run):
             ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,
                               summary=summary, artifact_uri=artifact_uri,
                               title=meta["title"], tags=meta["tags"])
+            # V1 parity: email the mailing list for SCHEDULED runs only (manual runs are viewed in-app).
+            # Best-effort + flag-gated by the topic env (empty when diagnosis_notify_enabled=false → no-op).
+            if payload.get("scheduled"):
+                topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
+                if topic:
+                    from diagnosis import notify
+                    domain = os.environ.get("APP_DOMAIN", "")
+                    url = f"https://{domain}/ai-diagnosis?report={report_id}" if domain else ""
+                    notify.publish_report(topic, meta.get("title"), md, url,
+                                          region=os.environ.get("AWS_REGION"))
             return {"report_id": report_id, "status": status, "artifact_uri": artifact_uri}, md.encode("utf-8")
         except Exception as e:  # noqa: BLE001
             print(traceback.format_exc())  # full trace → CloudWatch logs only

@@ -31,6 +31,12 @@ _UPSERT = (
     "cache_read_tokens = EXCLUDED.cache_read_tokens, cache_write_tokens = EXCLUDED.cache_write_tokens, "
     "updated_at = now()"
 )
+# NOTE: normalize_model() keys every NEW row by the canonical id (no '/'), so the aggregator never
+# creates slash-keyed rows going forward — steady state is exactly one canonical row per (day, model).
+# Pre-normalization ARN-keyed rows were a one-off transition artifact, cleaned once at rollout (the live
+# table has none). We deliberately do NOT run a recurring cleanup DELETE here: every windowed/blanket
+# variant had a deploy-order or data-loss edge. The read path (ai-usage.ts) additionally collapses by
+# canonical model for clean labels, but the DURABLE correctness guarantee is this write-side normalization.
 
 
 def _run_insights(start_epoch: int, end_epoch: int):

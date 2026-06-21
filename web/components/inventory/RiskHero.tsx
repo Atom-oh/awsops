@@ -4,27 +4,37 @@ import type { HighlightCard } from '@/lib/inventory-types';
 
 /**
  * RiskHero — the lead band for security-posture inventory types (IAM users,
- * S3 public access, CloudTrail). A left accent bar (emerald when clean, rose
- * when there are issues) + a verdict ("정상" / "주의 N건") + the highlight
- * counts as larger cards, danger ones tinted rose. Replaces the generic KPI
- * row for `risk` archetype pages so the security story leads.
+ * S3 public access, CloudTrail). A left accent bar + a verdict + the highlight
+ * counts as larger cards, danger ones tinted rose. Replaces the generic KPI row
+ * for `risk` archetype pages so the security story leads.
+ *
+ * `capped` = the row fetch hit its limit, so the set may be partial. An all-clear
+ * ("정상") is only asserted when the FULL set was seen; a clean *sample* shows the
+ * neutral "표본 검사" instead (never a false account-wide safety claim), and issue
+ * counts are shown as a lower bound ("주의 N건+").
  */
-export default function RiskHero({ label, total, cards }: { label: string; total: number; cards: HighlightCard[] }) {
+export default function RiskHero({ label, total, cards, capped = false }: { label: string; total: number; cards: HighlightCard[]; capped?: boolean }) {
   const issues = cards
     .filter((c) => c.variant === 'danger' && typeof c.value === 'number')
     .reduce((s, c) => s + (c.value as number), 0);
-  const ok = issues === 0;
+  const hasIssues = issues > 0;
+  const verdict = hasIssues ? `주의 ${issues.toLocaleString()}건${capped ? '+' : ''}` : capped ? '표본 검사' : '정상';
+  const accentBar = hasIssues ? 'border-l-rose-400' : capped ? 'border-l-amber-400' : 'border-l-emerald-400';
+  const verdictColor = hasIssues ? 'text-rose-600' : capped ? 'text-amber-600' : 'text-emerald-600';
+  const sub = hasIssues
+    ? '아래 위험 항목 확인'
+    : capped
+      ? `표본 ${total.toLocaleString()}건 기준 · 전체가 아닐 수 있어요`
+      : '위험 신호 없음';
 
   return (
-    <Card className={cn('border-l-4', ok ? 'border-l-emerald-400' : 'border-l-rose-400')}>
+    <Card className={cn('border-l-4', accentBar)}>
       <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="shrink-0">
           <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{label} · 보안 상태</div>
-          <div className={cn('mt-1 text-[24px] font-semibold leading-none', ok ? 'text-emerald-600' : 'text-rose-600')}>
-            {ok ? '정상' : `주의 ${issues.toLocaleString()}건`}
-          </div>
+          <div className={cn('mt-1 text-[24px] font-semibold leading-none', verdictColor)}>{verdict}</div>
           <div className="mt-1.5 text-[12px] text-ink-400">
-            총 {total.toLocaleString()}개 · {ok ? '위험 신호 없음' : '아래 위험 항목 확인'}
+            총 {total.toLocaleString()}개{capped ? '+' : ''} · {sub}
           </div>
         </div>
         <div className="grid min-w-0 flex-1 grid-cols-2 gap-3 sm:grid-cols-3 lg:max-w-2xl lg:grid-cols-4">

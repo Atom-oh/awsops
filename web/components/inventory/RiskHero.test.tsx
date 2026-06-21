@@ -22,4 +22,19 @@ describe('RiskHero', () => {
     ]} />);
     expect(screen.getByText('주의 3건')).toBeTruthy();
   });
+
+  it('does NOT assert 정상 on a capped (partial) clean set — shows 표본 검사', () => {
+    render(<RiskHero label="S3 Public" total={500} capped cards={[
+      { label: '정책 공개', value: 0, variant: 'danger' },
+    ]} />);
+    expect(screen.queryByText('정상')).toBeNull();
+    expect(screen.getByText('표본 검사')).toBeTruthy();
+  });
+
+  it('shows 주의 N건+ (lower bound) when capped with issues', () => {
+    render(<RiskHero label="IAM Users" total={500} capped cards={[
+      { label: 'MFA 미설정', value: 3, variant: 'danger' },
+    ]} />);
+    expect(screen.getByText('주의 3건+')).toBeTruthy();
+  });
 });

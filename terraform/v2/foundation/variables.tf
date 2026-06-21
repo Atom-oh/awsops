@@ -113,6 +113,24 @@ variable "ai_cost_tracking_enabled" {
   default     = false
 }
 
+variable "datasource_diagnosis_enabled" {
+  type        = bool
+  description = "AI-diagnosis external-observability collector gate (ADR-039/041 governed egress). When true (requires workers_enabled), grants the worker role lambda:InvokeFunction on the 5 connector Lambdas and sets DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT on the worker so collect_datasources can fan out. false (default) = 0 resources/IAM, $0, collector stays disabled (no AccessDenied degrade)."
+  default     = false
+}
+
+variable "diagnosis_schedule_enabled" {
+  type        = bool
+  description = "Scheduled auto-diagnosis dispatcher (v1 report-scheduler parity): hourly EventBridge -> Lambda scans report_schedules for due rows and enqueues read-only AI-diagnosis report jobs. Requires workers_enabled (reuses the worker role/pg8000 layer/VPC + jobs queue; adds only sqs:SendMessage). false (default) = 0 resources, $0, no scheduled runs."
+  default     = false
+}
+
+variable "diagnosis_notify_enabled" {
+  type        = bool
+  description = "Email the scheduled-diagnosis mailing list (v1 report-scheduler parity): provisions one SNS topic; the worker publishes a summary+link to it when a SCHEDULED report finishes, and the web BFF manages its email subscriptions (/api/diagnosis/subscribers, admin-only). Governed external-comms write (ADR-040/041), IAM-scoped to the single topic ARN — NOT AWS-resource mutation. Worker publish needs workers_enabled. false (default) = 0 resources/IAM, $0, no topic, app treats it as disabled."
+  default     = false
+}
+
 variable "worker_image_tag" {
   type        = string
   description = "Worker Fargate image tag in the worker ECR repo."

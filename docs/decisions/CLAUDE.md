@@ -57,9 +57,10 @@ Records of major design decisions. Update this index when status/outcome changes
 | 042 | v2 인앱 로그인 (Cognito USER_PASSWORD_AUTH) | Accepted (2026-06-12) — **번호 정합: 039→042 (co-agent 패널 Option A 만장일치, 2026-06-15)**. 병합 시 origin이 039(멀티에이전트)/040/041을 선점·교차참조하여, leaf인 본 로그인 ADR을 042로 재배정(파일 `042-v2-inapp-login.md`). 자체 `/login` 폼 + 무서명 공개 `InitiateAuth(USER_PASSWORD_AUTH)`가 Hosted UI를 주 경로에서 대체; 엣지 RS256 검증기·`awsops_token` 쿠키 계약 불변(037 기반·020 정제); 최소권한(REFRESH 미부여)·id_token 12h·Hosted UI PKCE는 다크 폴백·signout은 쿠키 삭제→`/login` |
 | 043 | Neptune 그래프 substrate (옵션) — 토폴로지·DevOps 에이전트 공용 | Accepted (2026-06-?) — **번호 정합: 040→043 (co-agent 패널 Option A, 2026-06-15)**. 동시 세션이 040으로 생성했으나 origin 040(외부쓰기 거버넌스)과 충돌하여 leaf로서 043 재배정(파일 `043-neptune-graph-substrate.md`). Postgres-first·Neptune deferred 옵션. 상세는 ADR 파일 참조 **(+2026-06-17 addendum: 5-패밀리 합의로 Postgres-first 재확인; Neo4j는 ECS+EBS 내부배포 한정 조건부 후보[Aura 배제]; 토폴로지 UI=현행 클라 빌드 유지[서버 materialize는 트리거 시]; materialize cadence=daily·소비자 등장 시 배선; 에이전트 RCA 시 투트랙)** |
 | 044 | v2 챗 멀티-도메인 라우팅 — 하이브리드(단일 라우트 + ADR-025 교차도메인 자동합성) + Thread/Agent 바인딩 | Accepted (2026-06-16) — 멀티-AI 모순 패널(kiro-cli/Opus + antigravity/Gemini-3.1; codex 불가) → owner 결정. **A1**(025↔038 챗 라우팅 정반대·미결) + **A2**(thread↔agent 바인딩 미정의 + picker핀/전환칩 데드락) 정합화. **v2에 대해 ADR-025 승계** + **ADR-038 개정**(우선순위 래더에 Agent Space 필터, 전환칩이 picker 핀 해제, classifier 멀티-라우트 반환). 하이브리드: 명확질의=단일 게이트웨이, 교차도메인=자동합성(전환칩=보조). 멀티-에이전트 3모델 경계 명시(챗=025/044, 인시던트=032, 외부통합=039) |
+| 045 | AI 진단 지연 — Bedrock 섹션 병렬 렌더 + 스트리밍 (SDK 교체 없음) | Accepted (2026-06-18) — 진단 워커는 이미 raw boto3 `invoke_model` 직접 Bedrock 호출(Strands 아님 — Strands는 챗 에이전트 전용)이라 SDK가 지연 레버 아님. Anthropic SDK 직결/`AnthropicBedrock` 래퍼 **기각**(전자=IAM/VPC/레지던시/비용귀속 상실, 후자=동일 엔드포인트 얇은 래퍼로 속도 이득無). 채택: deep 15섹션의 **순차 렌더→동시성 제한 병렬화**(벽시계 합→최대치) + **스트리밍**(체감 first-token↓), `global.*`는 비용귀속 위해 유지. read-only, 진단 렌더 오케스트레이션만 변경. 구현은 후속 |
 
 ## 새 ADR 추가 / Adding a New ADR
-1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1 (현재 최고 번호 = **044**)
+1. 번호: `ls docs/decisions/*.md | tail -1` 로 최신 번호 확인 후 +1 (현재 최고 번호 = **045**)
 2. `.template.md` 를 복사하여 시작
 3. Status 는 `Proposed` 로 시작 — 결정 확정 시 `Accepted (YYYY-MM-DD)` 로 변경
 4. 이 인덱스에 한 줄 추가

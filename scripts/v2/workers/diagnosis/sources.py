@@ -7,6 +7,7 @@ X-Ray service map (actual traffic flow), CloudTrail what-changed. NO raw log lin
 import os
 import re
 import json
+import logging
 import time as _time
 import boto3
 from botocore.exceptions import ClientError
@@ -15,6 +16,42 @@ import db as wdb  # noqa: F401 — worker db (parent dir, flat /app layout); res
 
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 PROJECT = os.environ.get("PROJECT", "awsops-v2")
+
+# Inventory detail bounds (keep the LLM context + token budget bounded).
+DIAG_INV_PER_TYPE = int(os.environ.get("DIAG_INV_PER_TYPE", "15"))   # max resources sampled per type
+DIAG_INV_MAX_BYTES = int(os.environ.get("DIAG_INV_MAX_BYTES", "24000"))  # global cap on serialized detail
+_MAX_STR = 500  # truncate any string value longer than this
+# Drop these from resource `data` BEFORE it reaches the report — they can carry plaintext secrets that
+# the generic report._redact would NOT catch (Lambda env vars, user-data scripts, IAM policy docs).
+# Compared against a NORMALIZED key (lowercased, separators stripped) so 'UserData'/'user_data'/
+# 'User-Data' all match — case/separator-insensitive (agy P4: CamelCase keys bypassed otherwise).
+_SENSITIVE_KEYS = {"environment", "env", "variables", "userdata", "policy", "policydocument",
+                   "inlinepolicies", "assumerolepolicy"}
+# Substring match on the normalized key — 'pass' catches password/passwd/db_pass; broad on purpose
+# (a rare benign key is safer dropped than a secret leaked into an LLM-bound, stored report).
+_SENSITIVE_RE = re.compile(r"pass|pwd|secret|token|credential|apikey|accesskey|privatekey|sshkey")
+
+
+def _norm_key(k):
+    return re.sub(r"[\s_\-]", "", str(k).lower())
+
+
+def _safe_data(v):
+    """Recursively drop secret-bearing keys + truncate long strings/lists. Defense-in-depth BEFORE
+    report._redact (which only catches ARNs/emails/IPs/keys, not custom secrets)."""
+    if isinstance(v, str):
+        return v[:_MAX_STR] + "…(truncated)" if len(v) > _MAX_STR else v
+    if isinstance(v, dict):
+        out = {}
+        for k, val in v.items():
+            kn = _norm_key(k)
+            if kn in _SENSITIVE_KEYS or _SENSITIVE_RE.search(kn):
+                continue
+            out[k] = _safe_data(val)
+        return out
+    if isinstance(v, list):
+        return [_safe_data(x) for x in v[:20]]  # bound list length too
+    return v
 
 # Datasource (external observability) collector bounds — schema-driven, credential-blind, read-only.
 _DS_KINDS = ("prometheus", "mimir", "loki", "tempo", "clickhouse")
@@ -75,14 +112,49 @@ def _sh_client():
 
 
 def collect_inventory(conn):
-    """Aurora inventory_resources counts by type (already synced; no live AWS call)."""
+    """Aurora inventory_resources (already synced; no live AWS call): counts by type PLUS a bounded,
+    secret-filtered sample of real resource detail (region + data JSONB) so the LLM can reason about
+    the actual account, not just totals. account_id='self' scope matches the web inventory."""
     try:
         rows = conn.run(
-            "SELECT resource_type, count(*) FROM inventory_resources GROUP BY resource_type ORDER BY 2 DESC"
+            "SELECT resource_type, count(*) FROM inventory_resources "
+            "WHERE account_id='self' GROUP BY resource_type ORDER BY 2 DESC"
         )
-        return _result("inventory", data={"by_type": {r[0]: int(r[1]) for r in rows}})
+        by_type = {r[0]: int(r[1]) for r in rows}
     except Exception as e:  # noqa: BLE001 — degrade, never raise
         return _classify("inventory", e)
+
+    resources, truncated, size = {}, False, 0
+    for rtype in by_type:
+        try:
+            drows = conn.run(
+                "SELECT resource_id, region, data FROM inventory_resources "
+                "WHERE account_id='self' AND resource_type = :rtype "
+                f"ORDER BY resource_id LIMIT {DIAG_INV_PER_TYPE}",
+                rtype=rtype,
+            )
+        except Exception:  # noqa: BLE001 — one type degrading must not lose the rest
+            continue
+        items = []
+        for r in drows:
+            rid, region, data = r[0], r[1], r[2]
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except (ValueError, TypeError):
+                    data = {"raw": data[:_MAX_STR]}
+            entry = {"resource_id": rid, "region": region, "data": _safe_data(data)}
+            esz = len(json.dumps(entry, ensure_ascii=False, default=str))
+            if size + esz > DIAG_INV_MAX_BYTES:
+                truncated = True
+                break
+            items.append(entry)
+            size += esz
+        if items:
+            resources[rtype] = items
+        if truncated:
+            break
+    return _result("inventory", data={"by_type": by_type, "resources": resources, "truncated": truncated})
 
 
 def collect_cw_metrics(conn):
@@ -94,7 +166,7 @@ def collect_cw_metrics(conn):
         try:
             rows = conn.run(
                 "SELECT resource_id FROM inventory_resources "
-                "WHERE resource_type IN ('ec2_instance','aws_ec2_instance','instance') LIMIT 50"
+                "WHERE resource_type = 'ec2' AND account_id = 'self' LIMIT 50"
             )
             instance_ids = [r[0] for r in rows if r and r[0]]
         except Exception:  # noqa: BLE001 — inventory shape varies; tolerate
@@ -135,23 +207,102 @@ def collect_cw_metrics(conn):
         return _classify("cw_metrics", e)
 
 
+def _ce_grouped(ce, time_period, group_key):
+    """ALL groups for a grouped GetCostAndUsage, paginated (NextPageToken) so high-cost SERVICE/USAGE_TYPE
+    entries are never dropped by single-page truncation. Returns {key: rounded $} for the period."""
+    out, token = {}, None
+    while True:
+        kwargs = {"TimePeriod": time_period, "Granularity": "MONTHLY", "Metrics": ["UnblendedCost"],
+                  "GroupBy": [{"Type": "DIMENSION", "Key": group_key}]}
+        if token:
+            kwargs["NextPageToken"] = token
+        r = ce.get_cost_and_usage(**kwargs)
+        for g in r.get("ResultsByTime", [{}])[0].get("Groups", []):
+            out[g["Keys"][0]] = out.get(g["Keys"][0], 0.0) + float(g["Metrics"]["UnblendedCost"]["Amount"])
+        token = r.get("NextPageToken")
+        if not token:
+            break
+    return {k: round(v, 2) for k, v in out.items()}
+
+
 def collect_cost():
-    """Cost Explorer MTD by service (aggregated $; no PII). Read-only GetCostAndUsage."""
+    """Cost Explorer (read-only GetCostAndUsage; aggregated $, no PII): MTD by service + a 3-month total
+    trend (MoM) + top usage-type drivers (surfaces data-transfer / NAT / storage spend v1 broke out).
+    Grouped calls are paginated (no single-page truncation)."""
     try:
         ce = _ce_client()
         import datetime as dt
         today = dt.date.today()
-        start = today.replace(day=1).isoformat()
+        month_start = today.replace(day=1)
         end = (today + dt.timedelta(days=1)).isoformat()
-        r = ce.get_cost_and_usage(
-            TimePeriod={"Start": start, "End": end}, Granularity="MONTHLY",
-            Metrics=["UnblendedCost"], GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
+        month_tp = {"Start": month_start.isoformat(), "End": end}
+        by_service = _ce_grouped(ce, month_tp, "SERVICE")  # paginated
+        # 3-month total trend (MoM) — ungrouped, small (1 row/month)
+        trend_start = (month_start - dt.timedelta(days=62)).replace(day=1)
+        rt = ce.get_cost_and_usage(
+            TimePeriod={"Start": trend_start.isoformat(), "End": end}, Granularity="MONTHLY",
+            Metrics=["UnblendedCost"],
         )
-        groups = r.get("ResultsByTime", [{}])[0].get("Groups", [])
-        by_service = {g["Keys"][0]: float(g["Metrics"]["UnblendedCost"]["Amount"]) for g in groups}
-        return _result("cost", data={"mtd_by_service": by_service})
+        monthly = [{"month": p["TimePeriod"]["Start"],
+                    "total": round(float(p["Total"]["UnblendedCost"]["Amount"]), 2)}
+                   for p in rt.get("ResultsByTime", [])]
+        by_usage = _ce_grouped(ce, month_tp, "USAGE_TYPE")  # paginated → accurate top-N
+        top_usage = dict(sorted(by_usage.items(), key=lambda kv: kv[1], reverse=True)[:15])
+        return _result("cost", data={"mtd_by_service": by_service, "monthly_totals": monthly,
+                                     "top_usage_types": top_usage})
     except Exception as e:  # noqa: BLE001
         return _classify("cost", e)
+
+
+def collect_idle(conn):
+    """DB-derived waste from inventory_resources (no live AWS call, no row cap — aggregated in SQL):
+    unattached EBS volumes (state 'available') with a recoverable-$/month estimate (type-weighted price
+    heuristics) + stopped EC2 (EBS still billed). EIP/snapshots are not synced → reported as a data gap
+    (the prompt then says '데이터 불가'). Degrades, never raises."""
+    try:
+        ebs = conn.run(
+            "SELECT count(*), coalesce(sum((data->>'size')::numeric), 0), "
+            "coalesce(sum((data->>'size')::numeric * CASE data->>'volume_type' "
+            "  WHEN 'gp3' THEN 0.0912 WHEN 'gp2' THEN 0.114 WHEN 'io1' THEN 0.125 WHEN 'io2' THEN 0.125 "
+            "  WHEN 'st1' THEN 0.045 WHEN 'sc1' THEN 0.025 ELSE 0.10 END), 0) "
+            "FROM inventory_resources WHERE account_id='self' AND resource_type='ebs_volume' "
+            "AND data->>'state' = 'available'")
+        row = ebs[0] if ebs else (0, 0, 0)
+        stopped = conn.run(
+            "SELECT count(*) FROM inventory_resources WHERE account_id='self' "
+            "AND resource_type='ec2' AND data->>'instance_state' = 'stopped'")
+        return _result("idle", data={
+            "unattached_ebs": {"count": int(row[0]), "gb": round(float(row[1]), 1),
+                               "est_monthly_usd": round(float(row[2]), 2)},
+            "stopped_ec2": {"count": int(stopped[0][0]) if stopped else 0},
+            "note": "EIP/스냅샷은 인벤토리 미동기화 — 해당 항목은 데이터 불가",
+        })
+    except Exception as e:  # noqa: BLE001
+        return _classify("idle", e)
+
+
+def collect_commitment():
+    """RI / Savings Plans coverage % over the last 30 days. Read-only ce:GetReservationCoverage +
+    ce:GetSavingsPlansCoverage. Each call degrades to None independently (unauthorized/none → quiet)."""
+    try:
+        ce = _ce_client()
+        import datetime as dt
+        end = dt.date.today()
+        tp = {"Start": (end - dt.timedelta(days=30)).isoformat(), "End": end.isoformat()}
+        ri = sp = None
+        try:
+            tot = ce.get_reservation_coverage(TimePeriod=tp).get("Total", {}).get("CoverageHours", {})
+            ri = round(float(tot.get("CoverageHoursPercentage", 0)), 1) if tot else None
+        except Exception:  # noqa: BLE001 — unauthorized/none → leave None
+            ri = None
+        try:
+            cov = (ce.get_savings_plans_coverage(TimePeriod=tp).get("SavingsPlansCoverages") or [{}])[0].get("Coverage", {})
+            sp = round(float(cov.get("CoveragePercentage", 0)), 1) if cov else None
+        except Exception:  # noqa: BLE001
+            sp = None
+        return _result("commitment", data={"ri_coverage_pct": ri, "sp_coverage_pct": sp})
+    except Exception as e:  # noqa: BLE001
+        return _classify("commitment", e)
 
 
 def collect_service_map():
@@ -254,12 +405,30 @@ def _invoke_connector(kind, tool, instance_id, arguments=None):
 
 
 def _ds_schema(conn, integration_id):
-    """Cached introspected schema for one instance, keyed by integration_id (one row per instance in
-    the single-account model — so this does NOT depend on the BFF's account-key convention)."""
+    """Cached introspected schema for one instance. PREFERS the BFF's account-key convention
+    (host account ∪ 'self', exact-account first) per spec §8, then FALLS BACK to integration_id alone
+    so a worker/BFF account-key mismatch doesn't blank the collector. This is a PREFERENCE, NOT an
+    enforced cross-tenant boundary — it is safe ONLY because `integrations` is single-account (the
+    table has no account_id, so one integration_id = exactly one instance); the fallback logs a
+    key-mismatch smell. (If this ever becomes multi-tenant, remove the fallback and enforce isolation upstream.)"""
+    acct = os.environ.get("HOST_ACCOUNT_ID") or os.environ.get("AWS_ACCOUNT_ID") or "self"
     rows = conn.run(
-        "SELECT schema FROM datasource_schemas WHERE integration_id=:iid ORDER BY fetched_at DESC LIMIT 1",
-        iid=integration_id,
+        "SELECT schema FROM datasource_schemas WHERE account_id IN (:acct, 'self') AND integration_id=:iid "
+        "ORDER BY (account_id = :acct) DESC, fetched_at DESC LIMIT 1",  # exact account wins over 'self'
+        acct=acct, iid=integration_id,
     )
+    if not rows:
+        # Account-scope miss → fall back to integration_id alone. integrations is single-account
+        # (the table has no account_id), so a given integration_id maps to ONE instance — this avoids a
+        # functional regression when the worker's account env differs from the BFF's write key, while
+        # still PREFERRING the account match above. Log the key-mismatch smell (spec §8).
+        rows = conn.run(
+            "SELECT schema FROM datasource_schemas WHERE integration_id=:iid ORDER BY fetched_at DESC LIMIT 1",
+            iid=integration_id,
+        )
+        if rows:
+            logging.warning("[diagnosis] datasource %s schema not under account (%r,'self') — using "
+                            "integration_id fallback (BFF/worker account-key mismatch)", integration_id, acct)
     if not rows:
         return None
     s = rows[0][0]
@@ -304,25 +473,55 @@ def _plan_queries(kind, schema):
 
 
 def _summarize_result(body):
-    """Compact a connector result to a tiny shape (shape/count/sample/value) — never raw series."""
+    """Compact a connector result to NON-PII SIGNAL ONLY — count, result type, source key, and metric
+    LABEL NAMES (keys, never values). Critically: NEVER emit raw samples. Loki `result` is raw log
+    lines, Tempo `traces` are trace payloads, ClickHouse `rows` are raw row values; sampling any of
+    those leaks PII into the Bedrock context (module docstring 'NO raw log lines' + DLP / ADR-040/041).
+    Handles the ACTUAL envelopes: prom/loki/clickhouse spread a top-level list (+resultType), Tempo
+    returns `traces`; some shapes nest under `result:{series|...}`."""
     out = {}
-    res = body.get("result", body) if isinstance(body, dict) else {}
-    if isinstance(res, dict):
-        if "shape" in res:
-            out["shape"] = res.get("shape")
-        series = res.get("series") or res.get("rows") or res.get("data")
-        if isinstance(series, list):
-            out["count"] = len(series)
-            out["sample"] = series[:3]
-        elif "value" in res:
-            out["value"] = res.get("value")
+    if not isinstance(body, dict):
+        return out
+    # top-level list-bearing key (prom/loki `result`, tempo `traces`, clickhouse `rows`, generic `data`/`series`)
+    for key in ("result", "traces", "rows", "data", "series"):
+        v = body.get(key)
+        if isinstance(v, list):
+            out["source"], out["count"] = key, len(v)
+            # non-PII metadata only: the union of metric LABEL NAMES (keys), NEVER their values
+            names = set()
+            for item in v[:50]:
+                m = item.get("metric") if isinstance(item, dict) else None
+                if isinstance(m, dict):
+                    names.update(str(k) for k in m.keys())
+            if names:
+                out["labels"] = sorted(names)[:25]
+            break
+    # nested {result:{series|rows|data}} (synthetic/aggregated shapes) — count + shape only, NO samples
+    if "count" not in out:
+        res = body.get("result")
+        if isinstance(res, dict):
+            series = res.get("series") or res.get("rows") or res.get("data")
+            if isinstance(series, list):
+                out["count"] = len(series)
+            if "shape" in res:
+                out["shape"] = res.get("shape")
+    if "resultType" in body:
+        out["resultType"] = body.get("resultType")
     return out
 
 
 def collect_datasources(conn):
     """Schema-driven, multi-instance, credential-blind external-observability signals for diagnosis.
     Reads ONLY non-secret integrations columns + the cached schema; invokes connectors credential-blind
-    (instance_id only). Bounded (instances/queries/deadline/bytes). NEVER raises."""
+    (instance_id only). Bounded (instances/queries/deadline/bytes). NEVER raises.
+
+    FLAG-GATED (CLAUDE.md: gate new features, default OFF → $0): runs only when DIAG_DATASOURCES_ENABLED
+    is set. The terraform var `datasource_diagnosis_enabled` wires this env AND the worker
+    lambda:InvokeFunction IAM together (ADR-039/041 governed external egress), so the connector fan-out
+    can never be live without its IAM — no silent AccessDenied degrade."""
+    if os.environ.get("DIAG_DATASOURCES_ENABLED") != "true":
+        return _result("datasources_obs", data={"instances": [], "queried": 0},
+                       notes="datasource diagnosis disabled (datasource_diagnosis_enabled flag off)")
     try:
         rows = conn.run(
             "SELECT id, name, kind, is_default FROM integrations "
@@ -331,7 +530,7 @@ def collect_datasources(conn):
             "ORDER BY kind, is_default DESC, id"
         )
     except Exception as e:  # noqa: BLE001
-        return _classify("datasources", e)
+        return _classify("datasources_obs", e)
 
     by_kind = {}
     for r in rows or []:
@@ -341,7 +540,7 @@ def collect_datasources(conn):
         instances.extend(lst[:_DS_MAX_INSTANCES_PER_KIND])  # default-first (ORDER BY is_default DESC)
 
     if not instances:
-        return _result("datasources", data={"instances": [], "queried": 0},
+        return _result("datasources_obs", data={"instances": [], "queried": 0},
                        notes="no connected observability datasources")
 
     deadline = _time.time() + _DS_DEADLINE_S
@@ -383,7 +582,7 @@ def collect_datasources(conn):
             for rr in f.get("results", []):
                 rr.pop("summary", None)
         data["_truncated"] = True
-    return _result("datasources", data=data, notes="; ".join(notes)[:300])
+    return _result("datasources_obs", data=data, notes="; ".join(notes)[:300])
 
 
 # Ordered registry of native collectors. `conn` is passed only to DB-backed ones.
@@ -392,6 +591,8 @@ def collect_all(conn):
         collect_inventory(conn),
         collect_cw_metrics(conn),
         collect_cost(),
+        collect_idle(conn),        # DB-derived waste (unattached EBS / stopped EC2) — FinOps
+        collect_commitment(),      # RI / Savings Plans coverage — FinOps
         collect_service_map(),
         collect_datasources(conn),  # external observability (schema-driven, credential-blind)
         collect_posture(),

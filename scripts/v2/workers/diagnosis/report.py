@@ -5,11 +5,18 @@ import os
 import re
 import sys
 from datetime import datetime, timezone, timedelta
+import threading
 import boto3
 from botocore.config import Config
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # KST as a fixed +9 offset — Korea has no DST, so this needs no `tzdata` package in the slim image.
 _KST = timezone(timedelta(hours=9))
+
+# ADR-045: render sections concurrently (bounded) so deep-tier wall-clock ≈ slowest section, not the
+# sum of ~15 sequential Bedrock calls. Bounded to stay under Bedrock per-model TPM/RPM (botocore retry
+# in _BEDROCK_CONFIG already backs off on throttling); env-overridable.
+_RENDER_CONCURRENCY = max(1, int(os.environ.get("DIAGNOSIS_RENDER_CONCURRENCY", "4")))
 
 from . import sources as src
 from . import invariants as inv
@@ -99,13 +106,31 @@ _SYSTEM = (
 )
 
 
+# Bedrock clients are thread-safe for invoke calls, but creating one through boto3's shared default
+# Session is NOT — concurrent section rendering (ADR-045) could race during creation. Create one client
+# per region under a lock (double-checked) and reuse it across threads.
+_bedrock_lock = threading.Lock()
+_bedrock_clients: dict = {}
+
+
+def _get_bedrock_client(region):
+    client = _bedrock_clients.get(region)
+    if client is None:
+        with _bedrock_lock:
+            client = _bedrock_clients.get(region)
+            if client is None:
+                client = boto3.client("bedrock-runtime", region_name=region, config=_BEDROCK_CONFIG)
+                _bedrock_clients[region] = client
+    return client
+
+
 def _bedrock_render(prompt, context_json, model_id, max_tokens):
     # global.* inference profiles route worldwide and can be invoked from the home region; we pin
     # BEDROCK_REGION to ap-northeast-2 (matches agent.py) so calls land in the ap-northeast-2
     # /aws/bedrock/invocation-logs and are attributable to awsops (caller-role filter) for cost.
     # model_id + max_tokens are resolved per-tier by generate() (deep may select Opus + a larger cap).
     bedrock_region = os.environ.get("BEDROCK_REGION", "ap-northeast-2")
-    client = boto3.client("bedrock-runtime", region_name=bedrock_region, config=_BEDROCK_CONFIG)
+    client = _get_bedrock_client(bedrock_region)  # thread-safe shared client (ADR-045 concurrent render)
     body = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": max_tokens,
@@ -128,15 +153,43 @@ def _balance_code_fences(text):
     return text
 
 
+def _normalize_headings(text):
+    """The section LLM sometimes prefixes a prescribed `### X` subsection with its own `## `, yielding
+    `## ### X` — which CommonMark renders as an h2 whose TEXT is literally "### X" (the "###" shows on
+    screen). Collapse any doubled heading prefix to the inner one (`## ### X` → `### X`)."""
+    return re.sub(r"^#{1,6}[ \t]+(#{1,6}[ \t])", r"\1", text, flags=re.M)
+
+
 def render_section(section, collected, model_id, max_tokens):
     # Section sees ONLY the sources it declares (least-context).
     ctx = {k: collected[k]["data"] for k in section["sources"] if k in collected}
     ctx_json = _redact(json.dumps(ctx, ensure_ascii=False, default=str))  # [GATE-FIX] redact pre-LLM
-    body = _balance_code_fences(_bedrock_render(section["prompt"], ctx_json, model_id, max_tokens))
+    body = _normalize_headings(_balance_code_fences(_bedrock_render(section["prompt"], ctx_json, model_id, max_tokens)))
     return {"key": section["key"], "title": section["title"], "body": body}
 
 
-def build_markdown(rendered, account, tier):
+def _is_empty(data):
+    """A collector ran ok but produced no signal (empty inventory, no X-Ray edges, posture off, …)."""
+    return (not data) or all(not v for v in data.values())
+
+
+def _coverage_note(collected):
+    """Render which collectors actually had data — so a thin/generic report is self-explaining
+    (ok | empty | degraded(reason)) instead of mysteriously vague."""
+    lines = ["## 데이터 커버리지 (Data coverage)", "",
+             "이 리포트가 근거로 삼은 수집기 상태 — `empty`/`degraded`는 해당 영역 진단이 빈약할 수 있음을 뜻합니다.", ""]
+    for key, r in collected.items():
+        if r.get("degraded"):
+            status = f"degraded — {r.get('notes') or 'collection failed'}"
+        elif _is_empty(r.get("data")):
+            status = "empty (no data returned)"
+        else:
+            status = "ok"
+        lines.append(f"- `{key}`: {status}")
+    return "\n".join(lines)
+
+
+def build_markdown(rendered, account, tier, collected=None):
     toc = "\n".join(f"- [{s['title']}](#{s['key']})" for s in rendered)
     # TOC sits ABOVE the first `## ` section heading (bold label, not a heading) so a
     # reader — and `md.split("##", 1)[0]` — sees the full table of contents first.
@@ -146,6 +199,8 @@ def build_markdown(rendered, account, tier):
              "**목차**", "", toc, ""]
     for s in rendered:
         parts += [f"## {s['title']}", "", s["body"], ""]
+    if collected:
+        parts += [_coverage_note(collected), ""]
     return "\n".join(parts)
 
 
@@ -214,12 +269,29 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None, model=
     }
 
     catalog = list(base_catalog) + [INTENDED_VS_ACTUAL_SECTION]
-    rendered = []
-    for i, sec in enumerate(catalog):
-        _emit(i + 1, sec["title"], "render")  # before the Bedrock call → UI shows the in-flight section
-        rendered.append(render_section(sec, collected, model_id, max_tokens))
+
+    # ADR-045: render sections concurrently (bounded). Each section keeps its own Bedrock read/connect
+    # timeout; a single section that fails degrades to a visible error body (loud, not silent) WITHOUT
+    # sinking the whole report; results reassembled in catalog order. Progress is emitted on completion.
+    def _render_one(i, sec):
+        try:
+            return i, render_section(sec, collected, model_id, max_tokens)
+        except Exception as e:  # noqa: BLE001 — one section must never fail the whole report
+            print(f"diagnosis: section '{sec.get('key')}' render failed (degraded): {e}", file=sys.stderr)
+            return i, {"key": sec.get("key"), "title": sec["title"],
+                       "body": f"_이 섹션 생성에 실패했습니다 (degraded): {e}_"}
+
+    rendered_by_idx, done = {}, 0
+    with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(catalog))) as ex:
+        futures = [ex.submit(_render_one, i, sec) for i, sec in enumerate(catalog)]
+        for fut in as_completed(futures):
+            i, result = fut.result()
+            rendered_by_idx[i] = result
+            done += 1
+            _emit(done, result["title"], "render")  # progress as each section completes
+    rendered = [rendered_by_idx[i] for i in range(len(catalog))]
     _emit(total, "리포트 조립", "assemble")
-    md = build_markdown(rendered, account, tier)
+    md = build_markdown(rendered, account, tier, collected)
     summary = {"sections": len(rendered), "sources_used": sources_used,
                "degraded": degraded, "drift": drift}
 

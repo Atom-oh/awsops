@@ -1,18 +1,12 @@
-// POST /api/datasources/generate — natural-language → datasource query (Explore "AI로 생성").
-// Authenticated. Drafts a query string for the user to REVIEW then run — it NEVER executes anything.
-//
-// Bedrock-DIRECT (web/lib/datasource-querygen) — NOT the AgentCore monitoring gateway. Routing this
-// through the section agent appended the 24-tool list + COMMON_FOOTER ("respond in markdown") after the
-// thin "output a query" instruction and bound the tools, so the agent answered in PROSE instead of
-// emitting SQL (then the prose was rejected by the read-only guard on run). Here: no tools, no footer,
-// a strict translate-to-query prompt + the schema (real table/COLUMN names) injected as data.
+// POST /api/datasources/generate — natural-language → datasource query (v1 explore parity).
+// Authenticated. Calls the monitoring agent with a QUERY-ONLY prompt + the connector's cached schema,
+// and returns the generated query string for the user to REVIEW then run. It never executes anything.
+import { randomUUID } from 'crypto';
 import { verifyUser } from '@/lib/auth';
-import { generateQuery } from '@/lib/datasource-querygen';
-import { listConfiguredSchemas, renderSchemaForPrompt, prioritizeSchemaForQuery, isSchemaStale, upsertSchema } from '@/lib/datasource-schema';
+import { invokeAgent } from '@/lib/agentcore';
+import { listConfiguredSchemas } from '@/lib/datasource-schema';
 import { currentAccountId } from '@/lib/account';
-import { getDatasource, resolveConnConfig, type DatasourceRow } from '@/lib/datasources';
-import { invokeMcpLambdaTool } from '@/lib/mcp-lambda-invoke';
-import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
+import { getDatasource } from '@/lib/datasources';
 import { isDatasourceKind } from '@/lib/integrations-category';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
@@ -23,82 +17,62 @@ const LANG: Record<string, string> = {
   prometheus: 'PromQL', mimir: 'PromQL', loki: 'LogQL', tempo: 'TraceQL', clickhouse: 'read-only SQL',
 };
 const MAX_NL = 4_000;
+const MAX_QUERY = 8_000;
 
 function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
 }
 
-/** Trim an introspected schema so it fits under the cache size limit — used as a fallback so a large
- *  warehouse (>256KB schema) is still cached (bounded), instead of re-introspecting on EVERY request. */
-function trimSchemaForCache(schema: unknown): unknown {
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
-  const s = schema as Record<string, unknown>;
-  if (!Array.isArray(s.tables)) return schema;
-  const tables = (s.tables as unknown[]).slice(0, 50).map((t) =>
-    t && typeof t === 'object' && Array.isArray((t as { columns?: unknown }).columns)
-      ? { ...(t as object), columns: ((t as { columns: unknown[] }).columns).slice(0, 80) }
-      : t,
-  );
-  return { ...s, tables, truncated: true };
-}
-
-/** Cache the introspected schema; on a size-limit failure, persist a trimmed copy so subsequent requests
- *  hit the cache instead of re-running the full (100+ DESCRIBE) introspect. All best-effort. */
-async function cacheSchemaBestEffort(accountId: string, id: number, kind: string, schema: unknown): Promise<void> {
-  try { await upsertSchema(accountId, id, kind, schema); return; }
-  catch { /* likely over the size limit — fall through to a bounded write */ }
-  try { await upsertSchema(accountId, id, kind, trimSchemaForCache(schema)); }
-  catch { /* give up; manual Refresh remains */ }
-}
-
-/** Resolve a prompt-ready schema block. When an instance id is given, use ONLY that instance's cached
- *  schema (never a same-kind SIBLING's — that would generate SQL against the wrong instance's tables);
- *  if it has no cache (connect-time warm never ran / failed), introspect ON DEMAND and self-heal. The
- *  same-kind match is reserved for the deprecated slug/kind path. Best-effort — generation still
- *  proceeds schema-less (the model is told as much). */
-/** Live-introspect the instance's schema (resolve conn-config, SSRF-guard, invoke <kind>_schema) and
- *  cache it. Returns the introspected schema. */
-async function introspectAndCache(accountId: string, ds: DatasourceRow, id: number, kind: string): Promise<unknown> {
-  const connConfig = await resolveConnConfig(ds);
-  if (connConfig?.endpoint) assertDatasourceEndpointAllowed(connConfig.endpoint); // defense-in-depth (connector guards too)
-  const schema = await invokeMcpLambdaTool({ kind, tool: `${kind}_schema`, connConfig });
-  await cacheSchemaBestEffort(accountId, id, kind, schema);
-  return schema;
-}
-
-// Dedupe concurrent background refreshes per instance (the web tier is long-lived Fargate, so a
-// fire-and-forget refresh completes after the response).
-const refreshing = new Set<number>();
-function refreshInBackground(accountId: string, ds: DatasourceRow, id: number, kind: string): void {
-  if (refreshing.has(id)) return;
-  refreshing.add(id);
-  void introspectAndCache(accountId, ds, id, kind).catch(() => {}).finally(() => refreshing.delete(id));
-}
-
-async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: boolean, kind: string, nl: string): Promise<string> {
-  const accountId = currentAccountId();
-  // Float NL-relevant metric/label names to the front so they survive the render cap (Prometheus/Mimir
-  // return hundreds of metrics alphabetically; the relevant ones would otherwise be dropped).
-  const render = (schema: unknown, k: string | null) => renderSchemaForPrompt(prioritizeSchemaForQuery(schema, nl), k);
-  try {
-    const schemas = await listConfiguredSchemas(accountId);
-    const own = hasId ? schemas.find((s) => s.integrationId === id) : schemas.find((s) => s.kind === kind);
-    if (own?.schema) {
-      const block = render(own.schema, own.kind);
-      if (block) {
-        // Lazy refresh: cache hit but stale → refresh in the background (next lookup is fresh), serve now.
-        if (hasId && ds && isSchemaStale(own.fetched_at)) refreshInBackground(accountId, ds, id, kind);
-        return block;
-      }
-    }
-  } catch { /* cache is optional */ }
-
-  if (hasId && ds) {
-    try {
-      return render(await introspectAndCache(accountId, ds, id, kind), kind); // cache miss → introspect now
-    } catch { /* introspect best-effort; proceed schema-less */ }
+/** Compact schema block (real names only) so the model writes a query against the actual datasource. */
+function schemaContext(schema: unknown): string {
+  const s = (schema || {}) as Record<string, unknown>;
+  const names = (a: unknown, n: number) =>
+    (Array.isArray(a) ? a : []).slice(0, n).map((x) => (typeof x === 'string' ? x : (x as { name?: string }).name ?? '')).filter(Boolean).join(', ');
+  const parts: string[] = [];
+  for (const [k, n] of [['metrics', 60], ['labels', 60], ['tags', 60], ['tables', 40], ['domains', 10], ['indices', 40]] as const) {
+    if (Array.isArray(s[k]) && (s[k] as unknown[]).length) parts.push(`${k}: ${names(s[k], n)}`);
   }
-  return '';
+  return parts.length ? `## Datasource schema (cached — use these real names)\n${parts.join('\n')}` : '';
+}
+
+// Per-language syntax guidance + canonical examples. The model was previously given only the language NAME,
+// so it free-associated PromQL/LogQL grammar and hallucinated metric names → wrong, nonsensical queries.
+// Examples use <angle-bracket> placeholders, never real metric/label names, so the model copies the
+// SHAPE (rate/sum-by/window) and fills names strictly from the injected schema (no name hallucination).
+const LANG_GUIDE: Record<string, string> = {
+  PromQL: [
+    'PromQL: use `rate(<counter_metric>[5m])` for counters, `sum by (<label>)(...)` to aggregate,',
+    '`histogram_quantile(0.99, sum by (le)(rate(<histogram_metric>_bucket[5m])))` for percentiles,',
+    '`100 - avg(rate(<cpu_idle_metric>[5m]))*100` for CPU%.',
+    'Counters need a range window like `[5m]` inside rate()/increase(); take metric names from the schema `metrics:` list and label names from `labels:`.',
+  ].join(' '),
+  LogQL: [
+    'LogQL: always begin with a stream selector `{<label>="<value>"}` (labels from the schema `labels:` list),',
+    'then line filters `|= "x"` / `|~ "(?i)error"`; aggregate with `count_over_time({<label>="<value>"} |~ "(?i)error" [5m])`',
+    'or `sum by (<label>)(count_over_time({<label>="<value>"}[5m]))`.',
+  ].join(' '),
+  TraceQL: [
+    'TraceQL: filter spans with `{ status = error }` or `{ duration > 500ms && resource.<attribute> = "<value>" }`;',
+    'take attribute/tag names from the schema when provided.',
+  ].join(' '),
+  'read-only SQL': 'The query MUST be read-only — it must START with SELECT, WITH, SHOW, or DESCRIBE; use table/column names from the schema `tables:` list.',
+};
+
+function queryOnlyPrompt(lang: string): string {
+  return [
+    `You translate a natural-language request into a single ${lang} query.`,
+    `Output ONLY the query inside one fenced code block — no explanation, no prose, no multiple queries.`,
+    LANG_GUIDE[lang] || '',
+    `The metric/label/table names shown in the examples above are ILLUSTRATIVE syntax only — never copy them into the output.`,
+    `Use ONLY names present in the provided datasource schema. If NO schema is provided, do NOT invent real metric/table/label names — write a generic ${lang} skeleton with obvious placeholder names (e.g. <metric_name>) the user can replace, since the schema must be refreshed first.`,
+  ].filter(Boolean).join(' ');
+}
+
+/** First fenced code block, else the trimmed whole text. */
+function extractQuery(text: string): string {
+  const m = text.match(/```[\w-]*\n?([\s\S]*?)```/);
+  const q = (m ? m[1] : text).trim();
+  return q.slice(0, MAX_QUERY);
 }
 
 export async function POST(request: Request) {
@@ -112,30 +86,40 @@ export async function POST(request: Request) {
     return json({ error: 'invalid JSON body' }, 400);
   }
 
-  // Resolve the kind: by instance id (preferred) or by slug/kind (deprecated).
+  // Resolve the kind: by instance id (preferred) or by slug/kind (deprecated). This route only drafts a
+  // query via the agent — it never invokes a connector, so no inline conn-config is needed.
   let kind = '';
-  let ds: DatasourceRow | null = null;
   const id = Number(body.id);
-  const hasId = Number.isInteger(id) && id > 0;
-  if (hasId) {
-    ds = await getDatasource(id);
+  if (Number.isInteger(id) && id > 0) {
+    const ds = await getDatasource(id);
     if (!ds) return json({ error: 'unknown datasource instance' }, 400);
     kind = ds.kind;
   } else {
     kind = typeof body.kind === 'string' && body.kind ? body.kind : (typeof body.slug === 'string' ? body.slug : '');
   }
   if (!isDatasourceKind(kind)) return json({ error: 'unknown datasource' }, 400);
-
   const lang = LANG[kind] || 'query';
-  const isSql = /SQL/i.test(lang);
   const nl = typeof body.nl === 'string' ? body.nl.trim().slice(0, MAX_NL) : '';
   if (!nl) return json({ error: 'nl (natural-language request) required' }, 400);
 
-  const schemaBlock = await resolveSchemaBlock(ds, id, hasId, kind, nl);
+  const hasId = Number.isInteger(id) && id > 0;
+  let extraContext = '';
+  try {
+    const schemas = await listConfiguredSchemas(currentAccountId());
+    // Prefer this instance's cached schema (keyed by integration_id); else best-effort by kind.
+    const own = (hasId && schemas.find((s) => s.integrationId === id)) || schemas.find((s) => s.kind === kind);
+    if (own) extraContext = schemaContext(own.schema);
+  } catch { /* schema is optional — the model can still generate a best-effort query */ }
 
   try {
-    const query = await generateQuery({ nl, lang, schemaBlock, isSql });
-    return json({ query, lang }, 200);
+    const text = await invokeAgent({
+      gateway: 'monitoring',
+      messages: [{ role: 'user', content: nl }],
+      systemPromptOverride: queryOnlyPrompt(lang),
+      extraContext: extraContext || undefined,
+      sessionId: `datasrc-gen-${randomUUID()}`, // ≥33 chars
+    });
+    return json({ query: extractQuery(String(text ?? '')), lang }, 200);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : 'generation failed' }, 502);
   }

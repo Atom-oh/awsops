@@ -41,6 +41,12 @@ describe('collapsible inventory groups', () => {
     expect(src).toContain('persist = true');
     expect(src).toContain('if (!persist || !hydrated) return');
   });
+  it('scopes accordion panel ids per instance via useId (dual-mounted sidebars must not collide)', () => {
+    expect(src).toMatch(/\buseId\b/);
+    expect(src).toContain('${uid}-panel-'); // group panel id is instance-scoped
+    expect(src).toContain('${uid}-sub-');   // subgroup panel id is instance-scoped
+    expect(src).not.toContain('`nav-panel-'); // no static (collision-prone) id
+  });
   it('unmounts collapsed panels (so links leave the tab order)', () => {
     expect(src).toContain('{open && (');
     expect(src).toContain('{subOpen && (');

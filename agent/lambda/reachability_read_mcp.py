@@ -19,7 +19,19 @@ import json
 from cross_account import get_client, get_role_arn
 
 _NUM = {"tcp": "6", "udp": "17", "icmp": "1"}
-_EPHEMERAL = 49152  # representative high port for the stateless NACL return-path check
+_EPHEMERAL = 49152  # one representative port in the 1024-65535 ephemeral range; the stateless NACL
+# return-path is checked at this single port (approximation — see the response disclaimer)
+
+
+def _proto_num(p):
+    """Normalize a protocol token to its IANA number string. SG rules use names ('tcp') OR numbers
+    ('6'); NACL rules use numbers — normalizing both sides makes the comparison form-agnostic."""
+    return _NUM.get(str(p), str(p))
+
+
+def _proto_eq(rule_proto, want):
+    rp = str(rule_proto)
+    return rp == "-1" or _proto_num(rp) == _proto_num(want)
 
 
 def _cidr_contains(cidr, ip):
@@ -37,15 +49,27 @@ def _resolve_eni(ec2, ident):
             for inst in res.get("Instances", []):
                 nis = inst.get("NetworkInterfaces", [])
                 if nis:
-                    return _norm_eni(nis[0])
+                    # primary ENI = Attachment.DeviceIndex 0 (multi-ENI hosts), fall back to first
+                    primary = next((n for n in nis if n.get("Attachment", {}).get("DeviceIndex") == 0), nis[0])
+                    return _norm_eni(primary)
         return None
     if ident.startswith("eni-"):
         nis = ec2.describe_network_interfaces(NetworkInterfaceIds=[ident]).get("NetworkInterfaces", [])
-    else:
-        nis = ec2.describe_network_interfaces(
-            Filters=[{"Name": "addresses.private-ip-address", "Values": [ident]}]
-        ).get("NetworkInterfaces", [])
-    return _norm_eni(nis[0]) if nis else None
+        return _norm_eni(nis[0]) if nis else None
+    # private-IP path: the same IP can exist in multiple VPCs, and the filter also matches SECONDARY
+    # IPs — so (a) reject an ambiguous multi-match (caller must use an eni-id/instance-id or it would
+    # silently evaluate the wrong resource), and (b) evaluate the ACTUAL queried IP, not the ENI's
+    # primary (a queried secondary IP must drive the SG/NACL/route eval).
+    nis = ec2.describe_network_interfaces(
+        Filters=[{"Name": "addresses.private-ip-address", "Values": [ident]}]
+    ).get("NetworkInterfaces", [])
+    if not nis:
+        return None
+    if len(nis) > 1:
+        raise ValueError(f"private IP {ident} matches {len(nis)} ENIs (likely multiple VPCs) — pass an eni-id or instance-id to disambiguate")
+    eni = _norm_eni(nis[0])
+    eni["ip"] = ident  # use the queried address (may be a secondary IP), not the ENI primary
+    return eni
 
 
 def _norm_eni(eni):
@@ -60,7 +84,7 @@ def _norm_eni(eni):
 
 def _proto_port_match(rule, proto, port):
     rp = str(rule.get("IpProtocol", "-1"))
-    if rp not in ("-1", proto, _NUM.get(proto, "")):
+    if not _proto_eq(rp, proto):
         return False
     if rp == "-1":
         return True
@@ -88,12 +112,11 @@ def _sg_side_allows(sgs, proto, port, peer_ip, peer_sg_ids, egress):
 
 def _nacl_allows(nacl, proto, port, peer_ip, egress):
     """Evaluate a (stateless) NACL: first matching rule by RuleNumber wins."""
-    pnum = _NUM.get(proto, "-1")
     for e in sorted(nacl.get("Entries", []), key=lambda x: x.get("RuleNumber", 0)):
         if bool(e.get("Egress")) != egress:
             continue
         ep = str(e.get("Protocol", "-1"))
-        if ep != "-1" and ep != pnum:
+        if not _proto_eq(ep, proto):
             continue
         pr = e.get("PortRange")
         if ep != "-1" and pr and not (pr.get("From", 0) <= port <= pr.get("To", 65535)):
@@ -105,13 +128,23 @@ def _nacl_allows(nacl, proto, port, peer_ip, egress):
 
 
 def _route_exists(rt, dst_ip):
+    # AWS routing is longest-prefix-match: the MOST SPECIFIC matching route wins. A more-specific
+    # blackhole (e.g. a /24 to a deleted peering) overrides a broader active route (local /16), so
+    # we can't just return True on any active match — pick the longest-prefix match and check ITS state.
+    best_len, best_state = -1, None
     for r in rt.get("Routes", []):
-        if r.get("State") == "blackhole":
-            continue
         cidr = r.get("DestinationCidrBlock")
-        if cidr and _cidr_contains(cidr, dst_ip):
-            return True
-    return False
+        if not cidr or not _cidr_contains(cidr, dst_ip):
+            continue
+        try:
+            plen = int(cidr.split("/")[1])
+        except (IndexError, ValueError):
+            continue
+        if plen > best_len:
+            best_len, best_state = plen, r.get("State")
+    if best_len < 0:
+        return False
+    return best_state != "blackhole"
 
 
 def _nacl_for(ec2, subnet):
@@ -120,10 +153,20 @@ def _nacl_for(ec2, subnet):
     return nacls[0] if nacls else None
 
 
-def _rt_for(ec2, subnet):
+def _rt_for(ec2, subnet, vpc):
+    # explicit subnet association first
     r = ec2.describe_route_tables(Filters=[{"Name": "association.subnet-id", "Values": [subnet]}])
     rts = r.get("RouteTables", [])
-    return rts[0] if rts else None
+    if rts:
+        return rts[0]
+    # subnets with NO explicit association use the VPC main route table — fall back to it, else a
+    # subnet on the main RT is wrongly reported as "no route" (a very common configuration).
+    m = ec2.describe_route_tables(Filters=[
+        {"Name": "vpc-id", "Values": [vpc]},
+        {"Name": "association.main", "Values": ["true"]},
+    ])
+    mrts = m.get("RouteTables", [])
+    return mrts[0] if mrts else None
 
 
 def check_reachability(ec2, source, destination, port, proto):
@@ -166,7 +209,7 @@ def check_reachability(ec2, source, destination, port, proto):
 
     # 4) route from src subnet toward dst
     checked.append("route")
-    src_rt = _rt_for(ec2, src["subnet"])
+    src_rt = _rt_for(ec2, src["subnet"], src["vpc"])
     if not src_rt or not _route_exists(src_rt, dst["ip"]):
         blocking.append({"layer": "route", "resource": (src_rt or {}).get("RouteTableId", src["subnet"]), "reason": f"no active route from {src['subnet']} toward {dst['ip']}"})
 
@@ -177,9 +220,11 @@ def check_reachability(ec2, source, destination, port, proto):
         "blocking_component": blocking,
         "checked": checked,
         "disclaimer": (
-            "Static SG/NACL/route approximation (same-account). Does NOT model Transit Gateway route "
-            "tables/blackholes, instance-level firewalls, prefix-list contents, or DNS. Use AWS "
-            "Reachability Analyzer for a definitive packet-level verdict."
+            "Static SG/NACL/route approximation (same-account). Route uses longest-prefix-match incl. "
+            "blackholes, but does NOT model Transit Gateway route tables, the destination return route, "
+            "instance-level firewalls, prefix-list contents, or DNS; the NACL return-path is checked at "
+            "a single representative ephemeral port. Use AWS Reachability Analyzer for a definitive "
+            "packet-level verdict."
         ),
     }
 
@@ -198,10 +243,16 @@ def lambda_handler(event, context):
     destination = args.get("destination")
     if not source or not destination:
         return {"statusCode": 400, "body": json.dumps({"error": "source and destination are required"})}
-    port = int(args.get("port", 443))
+    try:
+        port = int(args.get("port", 443))  # catalog declares port as a string → validate
+    except (TypeError, ValueError):
+        return {"statusCode": 400, "body": json.dumps({"error": f"port must be an integer, got {args.get('port')!r}"})}
     proto = str(args.get("protocol", "tcp")).lower()
     region = args.get("region", "ap-northeast-2")
 
     ec2 = get_client("ec2", region, role_arn)
-    result = check_reachability(ec2, source, destination, port, proto)
+    try:
+        result = check_reachability(ec2, source, destination, port, proto)
+    except ValueError as e:
+        return {"statusCode": 400, "body": json.dumps({"error": str(e)})}  # e.g. ambiguous private IP
     return {"statusCode": 200, "body": json.dumps(result, default=str)}

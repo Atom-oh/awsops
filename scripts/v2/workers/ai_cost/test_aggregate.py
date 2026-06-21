@@ -77,6 +77,9 @@ def test_normalize_model_strips_arn_to_canonical_id():
         "arn:aws:bedrock:us-east-1:1:foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
     ) == "anthropic.claude-3-haiku-20240307-v1:0"
     assert A.normalize_model(None) is None
+    # bare ids (no '/') pass through unchanged; a pathological trailing slash keeps the original (no empty key)
+    assert A.normalize_model("anthropic.claude-opus-4-8") == "anthropic.claude-opus-4-8"
+    assert A.normalize_model("foo/") == "foo/"
 
 
 def test_parse_rows_merges_arn_and_bare_modelid_same_day():

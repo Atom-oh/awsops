@@ -124,3 +124,47 @@ describe('bedrockModelMetrics', () => {
     expect(cwSend).toHaveBeenCalledTimes(1); // only ListMetrics
   });
 });
+
+describe('rdsMetrics', () => {
+  it('parses 8 AWS/RDS series per instance and averages CPU', async () => {
+    cwSend.mockResolvedValueOnce({
+      MetricDataResults: [
+        { Id: 'cpu_i0', Values: [42] }, { Id: 'mem_i0', Values: [1_000_000] }, { Id: 'conn_i0', Values: [5] },
+        { Id: 'rio_i0', Values: [10] }, { Id: 'wio_i0', Values: [3] }, { Id: 'storage_i0', Values: [5_000_000_000] },
+        { Id: 'netin_i0', Values: [100] }, { Id: 'netout_i0', Values: [200] },
+        { Id: 'cpu_i1', Values: [58] },
+      ],
+    });
+    const { rdsMetrics } = await import('./metrics');
+    const r = await rdsMetrics(['db-1', 'db-2']);
+    expect(r.byInstance['db-1']).toMatchObject({
+      cpu: 42, freeableMemory: 1_000_000, connections: 5, readIops: 10, writeIops: 3,
+      freeStorage: 5_000_000_000, netIn: 100, netOut: 200,
+    });
+    // db-2 reported only CPU → the other 7 stay null (graceful partial).
+    expect(r.byInstance['db-2'].cpu).toBe(58);
+    expect(r.byInstance['db-2'].connections).toBeNull();
+    expect(r.avgCpu).toBe(50); // (42 + 58) / 2
+  });
+
+  it('returns empty without a CloudWatch call for an empty instance list', async () => {
+    const { rdsMetrics } = await import('./metrics');
+    expect(await rdsMetrics([])).toEqual({ byInstance: {}, avgCpu: null });
+    expect(cwSend).not.toHaveBeenCalled();
+  });
+
+  it('degrades to empty (never throws) when CloudWatch denies', async () => {
+    cwSend.mockRejectedValueOnce(new Error('AccessDenied'));
+    const { rdsMetrics } = await import('./metrics');
+    expect(await rdsMetrics(['db-1'])).toEqual({ byInstance: {}, avgCpu: null });
+  });
+
+  it('batches >62 instances into multiple GetMetricData calls (no silent truncation)', async () => {
+    cwSend.mockResolvedValue({ MetricDataResults: [{ Id: 'cpu_i0', Values: [10] }] });
+    const { rdsMetrics } = await import('./metrics');
+    const ids = Array.from({ length: 63 }, (_, i) => `db-${i}`);
+    const r = await rdsMetrics(ids);
+    expect(cwSend).toHaveBeenCalledTimes(2);       // 63 → chunk(62) + chunk(1)
+    expect(Object.keys(r.byInstance)).toHaveLength(63); // every instance represented
+  });
+});

@@ -9,17 +9,24 @@ Python stdlib (urllib + ssl) — no pg8000, no Steampipe, no third-party k8s cli
 
 GET/LIST only. The cluster endpoint + CA are resolved at runtime via eks.describe_cluster(cluster_name)
 (the role already has eks:DescribeCluster + an EKS Access Entry); the request host is therefore pinned
-to the AWS-returned endpoint (no SSRF surface from caller input).
+to the AWS-returned endpoint (no SSRF surface from caller input). The operator registers the access
+entry with AmazonEKSViewPolicy (View, NOT AdminView — least privilege: no cluster-wide Secret/node
+read; istio-read only LISTs namespaced Istio CRDs + namespaces) — see register-istio-access.sh.
 
 Istio-read MCP — Steampipe 대신 EKS k8s API로 Istio CRD를 읽기 전용 조회(ADR-037 준수).
 """
 import base64
 import json
+import os
+import re
 import ssl
 import tempfile
 from urllib.request import Request, urlopen
 
 from cross_account import get_client, get_role_arn
+
+# DNS-1123 label (k8s namespace name): lowercase alphanumerics + hyphens, <=63 chars.
+_NS_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
 # tool_name -> (apiGroup/version, plural CRD name)
 _CRDS = {
@@ -64,14 +71,18 @@ def _eks_session(region, role_arn, cluster_name):
     ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
     ca_file.write(base64.b64decode(ca_data))
     ca_file.close()
-    ctx = ssl.create_default_context(cafile=ca_file.name)
+    try:
+        ctx = ssl.create_default_context(cafile=ca_file.name)  # reads the PEM immediately
+    finally:
+        os.unlink(ca_file.name)  # no /tmp leak across warm Lambda invocations
     return endpoint, token, ctx
 
 
 def _k8s_get(endpoint, path, token, ctx):
-    """HTTPS GET against the cluster API server. Read-only."""
+    """HTTPS GET against the cluster API server. Read-only. 6s per call so mesh_overview's ~8 sequential
+    GETs stay well under the 60s Lambda timeout even if some hang."""
     req = Request(endpoint + path, headers={"Authorization": f"Bearer {token}"})
-    resp = urlopen(req, timeout=10, context=ctx)  # noqa: S310 — host pinned to AWS-returned endpoint
+    resp = urlopen(req, timeout=6, context=ctx)  # noqa: S310 — host pinned to AWS-returned endpoint
     return json.loads(resp.read())
 
 
@@ -85,7 +96,12 @@ def _items(data):
 
 def _list_crd(session, group_version, plural, namespace=None):
     endpoint, token, ctx = session
-    path = f"/apis/{group_version}/" + (f"namespaces/{namespace}/{plural}" if namespace else plural)
+    if namespace:
+        if not _NS_RE.match(namespace):
+            raise ValueError(f"invalid namespace (must be a DNS-1123 label): {namespace!r}")
+        path = f"/apis/{group_version}/namespaces/{namespace}/{plural}"
+    else:
+        path = f"/apis/{group_version}/{plural}"
     return _items(_k8s_get(endpoint, path, token, ctx))
 
 
@@ -102,7 +118,8 @@ def _mesh_overview(session):
         ns = _k8s_get(endpoint, "/api/v1/namespaces", token, ctx)
         for n in ns.get("items", []):
             labels = n.get("metadata", {}).get("labels", {}) or {}
-            if "istio-injection" in labels or labels.get("istio.io/rev"):
+            # match value, not mere presence — `istio-injection: disabled` is an explicit opt-OUT
+            if labels.get("istio-injection") == "enabled" or labels.get("istio.io/rev"):
                 injected.append(n["metadata"]["name"])
     except Exception:
         pass
@@ -131,5 +148,7 @@ def lambda_handler(event, context):
         gv, plural = _CRDS[tool_name]
         items = _list_crd(session, gv, plural, args.get("namespace"))
         return {"statusCode": 200, "body": json.dumps({plural: items})}
+    except ValueError as e:
+        return {"statusCode": 400, "body": json.dumps({"error": str(e)})}  # bad input (e.g. namespace)
     except Exception as e:
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}

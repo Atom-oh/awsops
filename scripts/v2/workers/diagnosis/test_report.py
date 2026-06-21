@@ -178,11 +178,15 @@ def test_deep_sections_catalog():
     assert deep[:8] == base  # deep is a superset that preserves the base order
     keys = [x["key"] for x in deep]
     assert len(set(keys)) == 14  # unique
-    known = {"inventory", "cw_metrics", "cost", "service_map", "posture", "what_changed"}
+    # AWS-native collectors + datasources_obs (external observability) + idle/commitment (WS-A2 FinOps:
+    # idle = DB-derived waste from inventory_resources [no new IAM]; commitment = RI/SP coverage
+    # [ce:GetReservationCoverage / ce:GetSavingsPlansCoverage]). All read-only.
+    known = {"inventory", "cw_metrics", "cost", "service_map", "posture", "what_changed",
+             "datasources_obs", "idle", "commitment"}
     for sec in deep:
         assert sec["key"] and sec["title"] and sec["prompt"]
         assert isinstance(sec["sources"], list) and sec["sources"]
-        assert set(sec["sources"]) <= known  # reuses existing collectors only (no new sources/IAM)
+        assert set(sec["sources"]) <= known  # only known collectors (guards against ACCIDENTAL new sources)
     # the 6 deep-only keys are present
     assert {"identity_access", "data_protection", "network_exposure",
             "reliability_ha", "observability_coverage", "cost_optimization"} <= set(keys)
@@ -208,6 +212,30 @@ def test_generate_resolves_tier_catalog_and_model(monkeypatch):
 
     calls.clear(); report.generate(object(), account="1", tier="mid", model="opus")  # pinned
     assert len(calls) == 9 and all(m == report._MODEL_SONNET for m, t in calls)
+
+
+def test_generate_parallel_preserves_order_and_isolates_section_failure(monkeypatch):
+    # ADR-045: sections render concurrently. Order MUST be preserved (reassembled by index) and a single
+    # failing section MUST degrade in place (loud) WITHOUT sinking the whole report.
+    from diagnosis import sections as S
+    monkeypatch.setattr(report.src, "collect_all",
+                        lambda conn: [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
+    monkeypatch.setattr(report.ddb, "list_active_invariants", lambda conn: [])
+
+    def fake_render(section, collected, model_id, max_tokens):
+        if section["key"] == "cost_overview":
+            raise RuntimeError("boom")  # one section blows up
+        return {"key": section["key"], "title": section["title"], "body": f"BODY::{section['key']}"}
+    monkeypatch.setattr(report, "render_section", fake_render)
+
+    md = report.generate(object(), account="1", tier="deep")[0]  # (markdown, summary, sources); must NOT raise
+    keys = [s["key"] for s in S.DEEP_SECTIONS] + ["intended_vs_actual"]
+    assert "degraded" in md  # cost_overview degraded note is present (loud)
+    succ = [k for k in keys if k != "cost_overview"]
+    for k in succ:
+        assert f"BODY::{k}" in md, f"missing section {k}"
+    positions = [md.find(f"BODY::{k}") for k in succ]
+    assert positions == sorted(positions), "section order not preserved under parallel render"
 
 
 # --- Task 5: report.py ---------------------------------------------------
@@ -450,3 +478,40 @@ def test_report_handler_dry_run_does_no_work(monkeypatch):
     monkeypatch.setattr(_wdb, "connect", lambda: (_ for _ in ()).throw(AssertionError("connect on dry_run")))
     result, artifact = handlers._report({"account": "1", "tier": "mid"}, dry_run=True)
     assert result["dry_run"] is True and artifact is None
+
+
+# ── data-coverage note (so a thin report is self-explaining) ──────────────────
+def _coll(key, ok=True, degraded=False, notes="", data=None):
+    return {"key": key, "ok": ok, "degraded": degraded, "notes": notes, "data": data or {}}
+
+
+def test_coverage_note_lists_collector_status():
+    collected = {
+        "inventory": _coll("inventory", data={"by_type": {"ec2": 1}}),          # ok (has data)
+        "cost": _coll("cost", ok=False, degraded=True, notes="AccessDenied", data={"_failed": True}),
+        "service_map": _coll("service_map", data={"edges": [], "service_count": 0}),  # ok but empty
+    }
+    note = report._coverage_note(collected)
+    assert "데이터 커버리지" in note
+    assert "inventory" in note
+    assert "cost" in note and "AccessDenied" in note          # degraded reason surfaced
+    assert "service_map" in note and "empty" in note.lower()  # ran ok but no signal
+
+
+def test_build_markdown_appends_coverage_note_optional():
+    rendered = [{"key": "executive_summary", "title": "Executive Summary", "body": "x"}]
+    collected = {"inventory": _coll("inventory", data={"by_type": {}})}  # ok but empty
+    md = report.build_markdown(rendered, "123", "mid", collected)
+    assert "데이터 커버리지" in md and "Executive Summary" in md
+    # backward-compatible: collected is optional
+    md2 = report.build_markdown(rendered, "123", "mid")
+    assert "Executive Summary" in md2 and "데이터 커버리지" not in md2
+
+
+def test_normalize_headings_collapses_doubled_prefix():
+    # LLM emits `## ### X`; must collapse to `### X` (else CommonMark shows literal "###").
+    assert report._normalize_headings("## ### 보안 점수 (0~100)\n본문") == "### 보안 점수 (0~100)\n본문"
+    assert report._normalize_headings("#### ## 비용\nx") == "## 비용\nx"
+    # single, well-formed headings are untouched
+    assert report._normalize_headings("## Security Posture") == "## Security Posture"
+    assert report._normalize_headings("### 공개 노출") == "### 공개 노출"

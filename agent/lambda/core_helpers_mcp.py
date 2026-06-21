@@ -27,7 +27,7 @@ PROMPT_UNDERSTANDING = """# AWS Solution Design Guide
 - Data: Redshift, Athena, Glue, Kinesis
 - Frontend: Amplify, CloudFront, AppSync, API Gateway
 - Security: Cognito, IAM, KMS, WAF
-- DevOps: CDK, CloudFormation, CodePipeline
+- DevOps: Terraform, CloudFormation, CodePipeline
 - Monitoring: CloudWatch, X-Ray, CloudTrail
 
 ## Design Principles
@@ -35,7 +35,7 @@ PROMPT_UNDERSTANDING = """# AWS Solution Design Guide
 - Pay-per-use pricing models
 - Built-in security (encryption at rest/transit, least privilege)
 - Multi-AZ for high availability
-- Infrastructure as Code (CDK preferred)
+- Infrastructure as Code (Terraform preferred)
 
 ## Available MCP Tools (read-only)
 - search_documentation: Search AWS docs
@@ -52,17 +52,16 @@ def suggest_aws_commands(query):
     """Suggest AWS CLI commands based on a natural-language query (static pattern match)."""
     suggestions = []
     q = query.lower()
+    # READ-ONLY only — no mutating verbs (start/stop/invoke/delete/...). This module advertises itself
+    # as read-only, so suggesting a mutating command would contradict that even though it never executes.
     patterns = [
         ("ec2", "instance", "aws ec2 describe-instances"),
-        ("ec2", "start", "aws ec2 start-instances --instance-ids <id>"),
-        ("ec2", "stop", "aws ec2 stop-instances --instance-ids <id>"),
         ("s3", "bucket", "aws s3api list-buckets"),
         ("s3", "object", "aws s3api list-objects-v2 --bucket <name>"),
         ("vpc", "", "aws ec2 describe-vpcs"),
         ("subnet", "", "aws ec2 describe-subnets"),
         ("security group", "", "aws ec2 describe-security-groups"),
         ("lambda", "function", "aws lambda list-functions"),
-        ("lambda", "invoke", "aws lambda invoke --function-name <name> /tmp/out.json"),
         ("iam", "role", "aws iam list-roles"),
         ("iam", "user", "aws iam list-users"),
         ("iam", "policy", "aws iam list-policies --scope Local"),
@@ -79,8 +78,10 @@ def suggest_aws_commands(query):
         ("target group", "", "aws elbv2 describe-target-groups"),
         ("cost", "", "aws ce get-cost-and-usage --time-period Start=2024-01-01,End=2024-02-01 --granularity MONTHLY --metrics BlendedCost"),
     ]
+    # Match only when the service term is present AND (no keyword, or the keyword is also present) — so
+    # the keyword genuinely narrows (e.g. "ec2 instances" → describe-instances, not every ec2 command).
     for svc, kw, cmd in patterns:
-        if svc in q or (kw and kw in q):
+        if svc in q and (not kw or kw in q):
             suggestions.append(cmd)
     if not suggestions:
         suggestions = [
