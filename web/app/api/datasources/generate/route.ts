@@ -93,11 +93,11 @@ async function resolveSchemaBlock(ds: DatasourceRow | null, id: number, hasId: b
     }
   } catch { /* cache is optional */ }
 
-  if (hasId && ds) {
-    try {
-      return render(await introspectAndCache(accountId, ds, id, kind), kind); // cache miss → introspect now
-    } catch { /* introspect best-effort; proceed schema-less */ }
-  }
+  // Cache miss → do NOT block the read path with a heavy introspect (version() + system.tables + up to
+  // 100×DESCRIBE + an Aurora write would violate thin-BFF and let any authed read trigger heavy work).
+  // Warm the cache in the BACKGROUND so the NEXT lookup is grounded; serve schema-less now (the model
+  // writes a best-effort query and the connector's read-only guard backstops it on run).
+  if (hasId && ds) refreshInBackground(accountId, ds, id, kind);
   return '';
 }
 

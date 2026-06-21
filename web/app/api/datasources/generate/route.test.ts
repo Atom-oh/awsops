@@ -81,7 +81,9 @@ describe('SQL generation (the ClickHouse fix)', () => {
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled(); // FRESH cache hit → no introspect (sync or background)
   });
 
-  it('on-demand introspects + caches when no schema is cached yet', async () => {
+  const flush = () => new Promise((r) => setTimeout(r, 30)); // let the fire-and-forget cache-warm run
+
+  it('on cache miss, serves schema-less now + warms the cache in the BACKGROUND (thin-BFF: no inline introspect)', async () => {
     getDatasource.mockResolvedValue({ id: 5, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([]); // connect-time warm never ran / failed
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch', authType: 'none' });
@@ -89,26 +91,29 @@ describe('SQL generation (the ClickHouse fix)', () => {
     const { POST } = await import('./route');
     const res = await POST(req({ id: 5, nl: 'recent logs' }));
     expect(res.status).toBe(200);
+    expect(lastGen().schemaBlock).toBe(''); // schema-less THIS request — the read path does NOT block on introspect
+    await flush();
     expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({ kind: 'clickhouse', tool: 'clickhouse_schema' }));
     expect(assertDatasourceEndpointAllowed).toHaveBeenCalledWith('http://ch'); // SSRF guard before introspect
-    expect(upsertSchema).toHaveBeenCalled(); // self-heal the cache
-    expect(lastGen().schemaBlock).toBe('logs(Body String)');
+    expect(upsertSchema).toHaveBeenCalled(); // cache warmed for next time
   });
 
-  it('does NOT use a same-kind SIBLING instance schema for a specific id — introspects THIS instance [10]', async () => {
-    getDatasource.mockResolvedValue({ id: 5, kind: 'clickhouse', endpoint: 'http://ch-b', authType: 'none' });
-    // a DIFFERENT clickhouse instance (99) is cached, but instance 5 is not
+  it('on miss, warms THIS instance in the background — never a same-kind SIBLING schema [10]', async () => {
+    getDatasource.mockResolvedValue({ id: 6, kind: 'clickhouse', endpoint: 'http://ch-b', authType: 'none' });
+    // a DIFFERENT clickhouse instance (99) is cached, but instance 6 is not
     listConfiguredSchemas.mockResolvedValue([{ integrationId: 99, kind: 'clickhouse', schema: { __block: 'SIBLING(x String)' }, fetched_at: 't' }]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch-b', authType: 'none' });
     invokeMcpLambdaTool.mockResolvedValue({ __block: 'OWN(y String)' });
     const { POST } = await import('./route');
-    const res = await POST(req({ id: 5, nl: 'tables' }));
+    const res = await POST(req({ id: 6, nl: 'tables' }));
     expect(res.status).toBe(200);
+    expect(lastGen().schemaBlock).toBe(''); // NOT the sibling's 'SIBLING(…)' — a sibling is never used for a specific id
+    await flush();
+    expect(resolveConnConfig).toHaveBeenCalled(); // background warm resolved THIS instance's conn-config
     expect(invokeMcpLambdaTool).toHaveBeenCalledWith(expect.objectContaining({ tool: 'clickhouse_schema' }));
-    expect(lastGen().schemaBlock).toBe('OWN(y String)'); // this instance, NOT the sibling
   });
 
-  it('falls back to a trimmed cache write when the full schema exceeds the size limit [4]', async () => {
+  it('background cache-warm falls back to a trimmed write when the schema exceeds the size limit [4]', async () => {
     getDatasource.mockResolvedValue({ id: 7, kind: 'clickhouse', endpoint: 'http://ch', authType: 'none' });
     listConfiguredSchemas.mockResolvedValue([]);
     resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch', authType: 'none' });
@@ -117,7 +122,8 @@ describe('SQL generation (the ClickHouse fix)', () => {
     upsertSchema.mockResolvedValueOnce(undefined); // trimmed write succeeds
     const { POST } = await import('./route');
     const res = await POST(req({ id: 7, nl: 'tables' }));
-    expect(res.status).toBe(200); // generation still proceeds
+    expect(res.status).toBe(200);
+    await flush();
     expect(upsertSchema).toHaveBeenCalledTimes(2); // full (failed) → trimmed fallback
   });
 

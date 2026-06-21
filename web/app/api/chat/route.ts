@@ -53,7 +53,9 @@ function renderSchemaContext(schemas: { label: string; kind: string | null; sche
     lines.push(`${labelLine}${indented}`);
   }
   if (schemas.length > shown.length) lines.push(`… (+${schemas.length - shown.length} more datasource(s) omitted)`);
-  return lines.join('\n');
+  // Absolute backstop: per-entry budgeting doesn't account for per-line indentation, so cap the joined
+  // block at SCHEMA_CTX_TOTAL (well within the agent's 8000-char extraContext budget).
+  return lines.join('\n').slice(0, SCHEMA_CTX_TOTAL);
 }
 
 export async function POST(request: Request) {
