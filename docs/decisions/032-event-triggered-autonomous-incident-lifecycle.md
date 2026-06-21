@@ -2,6 +2,8 @@
 
 ## Status / 상태
 
+> **➡️ INVESTIGATION MECHANISM SUPERSEDED BY [ADR-046](046-devops-rca-incident-orchestrator-eog.md) (2026-06-20)** — the multi-agent **Lead/Sub ReAct** investigation orchestration is replaced by the **EoG pattern** (deterministic controller + LLM local reasoning) in ADR-046. **RETAINED here**: the staged lifecycle state machine, Triage, the incident data model (`incidents`/`incident_stages`/`incident_findings`/`incident_links`), the read-only posture, `incident_lifecycle_enabled` flag-OFF, and the ADR-022 webhook PUSH ingress. The abandoned autonomous-mitigation tier stays abandoned. / 032의 Lead/Sub ReAct 조사 메커니즘은 ADR-046 EoG로 승계; 라이프사이클·triage·데이터모델·read-only·flag·webhook은 유지.
+
 > **⚠️ DOWNGRADED (2026-06-11)** — owner decision via 3-AI consensus (kiro/codex/gemini; see `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`). The **autonomous mitigation/action path is abandoned** (it routed through the now-**reversed** ADR-029/036). The read-only **Triage / multi-agent investigation / RCA** value is retained — **recommendation-only, NO mutation routing**. `incident_lifecycle_enabled` stays `false`; if ever enabled it is analysis-only (no mitigation execution, no ADR-029/036 calls). Phase 4 (prevention) is unaffected (recommend-only). Built flag-OFF; frozen.
 
 Accepted (2026-06-09) / 채택 (2026-06-09) — 멀티AI 합의 리뷰(ACCEPT-WITH-CHANGES; codex/gemini/kiro). 라이프사이클 상태머신은 건전; ADR-034/036 관계 추가, P2 백본에 실행 바인딩, look-back/타임아웃 설정값화, Lead 최소권한, 인젝션·알림스톰 통제 보완 (§Consensus Review Addenda 참조).
