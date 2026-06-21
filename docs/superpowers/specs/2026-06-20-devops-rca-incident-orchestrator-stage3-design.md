@@ -1,5 +1,7 @@
 # DevOps RCA — Incident Orchestrator, Stage 3 첫 슬라이스 (설계)
 
+> **➡️ AUTHORITATIVE RECORD = [ADR-046](../../decisions/046-devops-rca-incident-orchestrator-eog.md) (2026-06-20).** 이 스펙은 설계 디테일이고, 결정의 단일 소스는 ADR-046. **두 가지 owner 정정 반영**: (1) **D1 정정** — 오케스트레이터는 기존 connector를 직접 wrap하는 게 아니라 **AgentCore "+1"로서 8 섹션 게이트웨이 fabric 위에서 오케스트레이션**(기존 MCP+SigV4 재사용; bounded 툴 = 게이트웨이 페더레이션된 기존 MCP 툴의 큐레이션 서브셋, 게이트웨이 우회 아님; 결정론 컨트롤러가 노드별로 여러 게이트웨이 가로질러 호출·취합). (2) **첫 인시던트 진입** — k8sgpt pod 실패가 아니라 **등록된 알림-소스 integration(AlertManager/Slack/Datadog/generic)의 webhook 알림**(기존 `/api/incidents/webhook`+`normalizeAlert`); 1차 슬라이스는 AlertManager(기존 `normalizeAlertmanager`)로 end-to-end 증명, 등록은 다른 소스로 일반화. k8sgpt는 rules-detect 소스 중 하나.
+
 > Status: Draft (brainstorm → spec). Branch `feat/v2-architecture-design`.
 > 멀티-AI 패널 만장일치 PIVOT-TO-RCA-AGENT (2026-06-20, kimi·glm·agy). 결정 브리프: `docs/brainstorm/devops-rca-vs-plugin-registry-brief.md`. 원천 비전: owner Notion "AWSOps 구현 사전지식 + ADR" (자체 ADR-001~010, Proposed).
 > 이 스펙은 `2026-06-20-plugin-registry-phase1-design.md`(플러그인 레지스트리)를 **supersede**한다 — 레지스트리는 "두 실제 소비자에서 나중에 추출"로 격하.
