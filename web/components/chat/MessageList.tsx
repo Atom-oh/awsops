@@ -7,6 +7,7 @@ export interface Msg {
   role: 'user' | 'assistant'; content: string; gateway?: string; streaming?: boolean;
   ranked?: RankedChip[]; method?: string; // ADR-038 meta
   via?: string; // ADR-044 meta: 'multi:network+data' when the answer is a cross-domain synthesis
+  status?: { phase: string; elapsedMs?: number };
 }
 
 export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?: (key: string) => void }) {
@@ -54,9 +55,17 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                 rendering Markdown per token re-parses the whole tree (O(n²)) and flashes
                 half-built tables. Switch to Markdown once the stream settles. */}
             {me || m.streaming
-              ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>
+              ? (m.streaming && !m.content
+                ? (m.status
+                  ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink-500">
+                      {m.status.phase === 'working' && m.status.elapsedMs !== undefined
+                        ? `🔎 분석 중… ${Math.floor(m.status.elapsedMs / 1000)}초`
+                        : '🔎 분석 중…'}
+                    </div>
+                  : null)
+                : <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>)
               : <Markdown>{m.content}</Markdown>}
-            {m.streaming && <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-brand-500 align-middle" />}
+            {m.streaming && (!m.content && m.status ? null : <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-brand-500 align-middle" />)}
             {alts.length > 0 && (
               <div className="mt-2">
                 {/* ADR-044: chips are a SECONDARY manual aid (cross-domain is auto-synthesized). */}
