@@ -50,7 +50,7 @@ opus-4.8   → global.anthropic.claude-opus-4-8
 haiku-4.5  → global.anthropic.claude-haiku-4-5-20251001-v1:0
 ```
 
-- **지연 민감 경로 = Sonnet**: 챗 스트리밍·라우터 분류·NL→쿼리. / Latency-sensitive (chat stream, router classify, NL→query) = Sonnet.
+- **지연 민감 경로 = Sonnet**: 챗 스트리밍·NL→쿼리. (**라우터 분류기는 Haiku 4.5** — ADR-003/038, Sonnet 아님.) / Latency-sensitive (chat stream, NL→query) = Sonnet; the **router classifier is Haiku 4.5** (ADR-003/038), not Sonnet.
 - **깊이 민감 경로 = Opus**: 종합 진단 리포트(다분 백그라운드 잡, 산출물 품질이 결과물). deep 티어는 Sonnet 기본 + Opus 선택(cost-gate). / Depth-sensitive (comprehensive report) = Opus; deep tier is Sonnet-default with opt-in Opus behind a cost gate.
 - `global.*`는 **awsops-only 비용 귀속**(`ai_usage_daily`, Bedrock invocation-log)에 필요하므로 유지한다. / `global.*` retained for awsops-only cost attribution.
 

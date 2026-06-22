@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Accepted (2026-06-22) — consolidated. consolidates: 011, 031(P3 BYO-MCP), 039, 040, 041.
+Accepted (2026-06-22) — consolidated. consolidates: 011, 031(P3 BYO-MCP), 039, 040, 041. **단, ADR-041 keystone 재정의는 owner-override이며 멀티-AI 패널 verdict = PARTIAL (2026-06-16)** — 외부-write 결과는 ADR-040 패널이 비준했으나 "reversal은 external-endpoint 대상 아님"이라는 사후 재서술은 2026-06-11 합의문과 충돌(이 한정자는 §References가 아니라 Status에 명시). / The ADR-041 re-scope is an owner-override; multi-AI panel verdict = PARTIAL (2026-06-16).
 
 이 ADR은 외부 데이터 통합에 관한 흩어진 결정 4건을 단일 keystone으로 통합한다 — 011(외부 관측 데이터소스 연동), 039(Integrations 축/egress substrate), 040(거버넌스된 외부 knowledge/comms write), 041(keystone 재정의: read-only=리소스 한정). 단일 Status를 가지며, 이전 4개 ADR의 개별 Status·amendment·addendum은 본 문서의 결정으로 대체된다.
 
