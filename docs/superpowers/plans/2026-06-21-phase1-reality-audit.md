@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 문서(ADR/reference/architecture) ↔ 코드/terraform/state ↔ 배포 현실의 3자 대조로 단일 **감사 리포트**를 만들어, BASELINE(Phase 2)을 먹일 검증된 진실 + V1→V2 미구현/오구현 목록을 확정한다.
+**Goal:** 문서(ADR/reference/architecture) ↔ 코드/terraform/state ↔ 배포 현실의 3자 대조로 단일 **감사 리포트**를 만들어, BASELINE(Phase 2)을 먹일 검증된 진실 + V1→V2 미구현/오구현 목록 + **ADR 3분류·병합 클러스터(옵션 Y: 새 통합 ADR 001~N 후보)**를 확정한다.
 
 **Architecture:** 컴포넌트별 병렬 서브에이전트(Explore/general)가 각 lane을 정적 대조 → 구조화 finding 반환 → chair(메인 세션)가 인용을 실제 코드로 교차검증 → 단일 리포트에 누적 커밋. 라이브 프로빙은 read-only 경로만(public + best-effort authed). 코드 변경 없음.
 
@@ -196,35 +196,40 @@ git commit -m "docs(audit): B8 AI diagnosis/chat drift + live probe findings"
 
 ---
 
-### Task 10: ADR 001~046 라벨 대조
+### Task 10: ADR 001~046 라벨 대조 + 3분류 + 병합 클러스터 (옵션 Y 입력)
 
 **Files:**
 - Modify: `docs/reviews/2026-06-21-docs-reality-audit.md` (§A)
-- 참조(read): `docs/decisions/CLAUDE.md`(인덱스), `docs/decisions/0*.md`(Status 헤더), `terraform/v2/foundation/variables.tf`(flag).
+- 참조(read): `docs/decisions/CLAUDE.md`(인덱스), `docs/decisions/0*.md`(Status+본문), `terraform/v2/foundation/variables.tf`(flag).
 
 **Interfaces:**
 - Consumes: Task 1–9 컴포넌트 finding(라벨 근거).
-- Produces: 46개 ADR 각각 `LIVE/GATED-OFF/FROZEN/SUPERSEDED/v1-only` 단일 라벨 + BASELINE 행선지(§1/§2/제외).
+- Produces: (1) 46개 ADR 단일 라벨(`LIVE/GATED-OFF/FROZEN/SUPERSEDED/v1-only`); (2) **분류** `진짜결정 / 브레인스토밍-오분류 / 중복·승계·번복`; (3) **병합 클러스터 = 새 ADR 001~N 후보 목록**(클러스터→통합ADR 제목 + 구성 LEGACY 번호) — Phase 2 consolidation이 그대로 실행.
 
-- [ ] **Step 1: 서브에이전트 dispatch — ADR별 단일 라벨 1차 분류**
+- [ ] **Step 1: 서브에이전트 dispatch — 라벨 + 3분류 + 클러스터 제안**
 
 ```
-역할: docs/decisions/의 ADR 001~046 각각의 *현행* 상태를 단일 라벨로 환원.
-입력: 인덱스 CLAUDE.md Status 칼럼 + 각 ADR Status 헤더 + (관련 시) terraform flag default/description.
-출력 표: ADR# | 제목 | 단일라벨 | 근거(file:line) | BASELINE행선지.
-번복 체인은 *현재 net 상태*만 — 과정 서술 금지. 029/036=FROZEN, 031-P3=폐기 등 코드 flag로 확인.
+역할: docs/decisions/ ADR 001~046 각각의 *현행* 상태를 단일 라벨로 환원하고, 결정 성격을 분류하고,
+유사 결정을 병합 클러스터로 묶는다.
+입력: 인덱스 CLAUDE.md + 각 ADR Status 헤더+본문 + (관련 시) terraform flag default/description.
+출력 1 — 라벨표: ADR# | 제목 | 단일라벨 | 분류(진짜결정/브레인스토밍/중복) | 근거(file:line).
+   · 브레인스토밍 판정 기준 = '결정(Decision)'이 모호/탐색적이거나, 본문이 옵션 나열·미결로 끝나거나,
+     Status가 Proposed로 표류했거나, 실제 코드/flag로 구현 흔적이 없는 것.
+출력 2 — 병합 클러스터: 클러스터명(통합 ADR 제목 후보) | 구성 LEGACY ADR 번호들 | 한 줄 net 결정.
+   예: "AWS 변경·자율 FROZEN" ← 029,031P4,032,035,036 / "AI 라우팅" ← 002,025,038,044.
+번복 체인은 *현재 net 상태*만 — 과정 서술 금지. 추측 금지(UNVERIFIED 표시).
 ```
 
-- [ ] **Step 2: chair 검증 — frozen 항목이 terraform과 일치하는지 확정**
+- [ ] **Step 2: chair 검증 — frozen 항목이 terraform과 일치 + 클러스터 net 결정 타당성**
 
 Run: `grep -n "do-not-enable\|permanently\|REVERSED\|DOWNGRADED" terraform/v2/foundation/variables.tf`
-Expected: 029/036(remediation), 032(incident_lifecycle), 035(k8sgpt) 등 FROZEN/analysis-only 라벨이 flag description과 정확히 일치.
+Expected: 029/036(remediation)·032(incident_lifecycle)·035(k8sgpt) 등 FROZEN/analysis-only 라벨이 flag description과 정확히 일치. 각 클러스터의 net 결정이 §A~§D finding과 모순 없는지 chair가 확인.
 
-- [ ] **Step 3: §A에 46행 표 append + 커밋**
+- [ ] **Step 3: §A에 라벨표 + 3분류 + 클러스터(새 ADR 후보) append + 커밋**
 
 ```bash
 git add docs/reviews/2026-06-21-docs-reality-audit.md
-git commit -m "docs(audit): A ADR 001-046 single-label reconciliation"
+git commit -m "docs(audit): A ADR 001-046 labels + 3-way classification + merge clusters (Y input)"
 ```
 
 ---

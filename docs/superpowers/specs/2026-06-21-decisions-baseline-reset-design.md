@@ -50,13 +50,17 @@
 - 근거 깊이 = **정적 대조 + 라이브 프로빙**(read-only 경로만; mutating/POST 호출 금지).
 - **컴포넌트별 병렬 서브에이전트 fan-out**: 엣지·인증·데이터·web-BFF·agentcore·워커·eks + V1→V2 기능 패리티.
 - **불일치 해소 프로토콜(C10):** 서브에이전트 간 상충(예: "X LIVE" ↔ "미배포")은 chair가 코드/state 재확인 후 판정, 미해결은 owner 게이트로. **Phase1.5 자동 대조:** terraform `*_enabled` default ↔ 문서 LIVE 주장 grep 대조.
-- 산출 = **단일 감사 리포트** `docs/reviews/2026-06-21-docs-reality-audit.md`: Drift 맵 + V1→V2 갭(미구현/오구현) + 6기둥 태그 + 우선순위(P0~P3). **보안·제품 invariant > 배포 현실** — invariant 위반 배포는 P0 드리프트(codex C5 단서).
-- **게이트:** owner 검토·승인 후 Phase 2/3.
+- **ADR 3분류 + 병합 클러스터(옵션 Y 입력):** 46개를 `진짜결정 / 브레인스토밍-오분류 / 중복·승계·번복`로 분류하고, 진짜 결정들을 토픽 클러스터로 묶어 "새 ADR 후보 목록"(클러스터→통합 ADR 제목, 구성 LEGACY 번호)을 제안. Phase 2 consolidation이 이를 그대로 실행.
+- 산출 = **단일 감사 리포트** `docs/reviews/2026-06-21-docs-reality-audit.md`: Drift 맵 + V1→V2 갭(미구현/오구현) + ADR 분류·클러스터 + 6기둥 태그 + 우선순위(P0~P3). **보안·제품 invariant > 배포 현실** — invariant 위반 배포는 P0 드리프트.
+- **게이트:** owner 검토·승인(특히 병합 클러스터 구성) 후 Phase 2/3.
 
-### Phase 2 — 정리 (BASELINE + docs IA 재정비, 코드 변경 없음)
-Phase 1 확정 진실로:
+### Phase 2 — 통합·정리 (consolidate + docs IA 재정비, 코드 변경 없음)
+Phase 1 확정 진실 + ADR 3분류/클러스터로 (**옵션 Y: 진짜 결정을 소수 새 ADR로 물리 병합**):
 - **`docs/decisions/BASELINE.md`** 작성 (구조 §4).
-- **옛 ADR 001~046 + .template.md → `docs/history/decisions-archive/`**(`git mv`) — **`decisions/` 바깥**(C4: 컨텍스트 생성기가 `decisions/**` 읽음). 각 파일 상단에 "Superseded — 현행: BASELINE §X" 배너 추가(C3, 본문 불변) + `decisions-archive/README.md`에 ADR→BASELINE 매핑. **폴백:** 그래도 archive가 AI context에 계속 끌려오면 원문을 working tree에서 제거하고 git tag로 보존(git history=기록).
+- **진짜 결정 → 새 통합 ADR `001~N` 작성** (`docs/decisions/`): Phase 1이 식별한 클러스터(예: 029+031P4+032+035+036→"AWS변경·자율 FROZEN"; 002+025+038+044→"AI 라우팅")를 토픽별 1개 ADR로 병합. **번호 새로 001부터 재시작**, single Status, 판정가능 등급(C9). 각 ADR 하단에 `consolidates: LEGACY-0xx,...` 명시.
+- **브레인스토밍-오분류 ADR → `docs/history/brainstorm/`** 로 재분류 이동(결정이 아니므로 archive 아님).
+- **옛 46개 전부 → `docs/history/decisions-archive/`**(`git mv`), **`LEGACY-0xx-*.md`로 리네임**(새 001~N과 프로즈 참조 충돌 제거), **본문 불변** + 상단에 "Superseded — 현행: ADR-0xx / BASELINE §X" 배너(C3). `MAPPING.md`에 **old LEGACY → new ADR / brainstorm / dropped** 매핑.
+- **코드 참조(`ADR-029` 등) 일괄 renumber 안 함** — LEGACY-archive에서 계속 resolve(역사 맥락 정확). 새 작업만 새 번호. (폴백: archive가 AI context에 계속 누수 시 working tree 제거 + git tag.)
 - **docs/ IA 재정비** (§5).
 - **에이전트 컨텍스트 전체 동기화(C6):** 루트 `CLAUDE.md` + `docs/CLAUDE.md` + `docs/decisions/CLAUDE.md` + **`AGENTS.md` + `GEMINI.md`** — 모두 "현행 진실=BASELINE+reference만 읽고, history/archive는 명시 요청 없이는 읽지 말라"로. 일부만 고치면 시스템프롬프트↔BASELINE 인지 부조화.
 - **stale 설계문서 현행화/폐기:** architecture.md(v1) → reference/README.md(v2 개요) 재작성; reference/README.md:62 등 번복 잔재 제거.
@@ -65,16 +69,18 @@ Phase 1 확정 진실로:
 ### Phase 3 — 갭 백로그
 Phase 1 미구현/오구현 → 6기둥 매핑 + 우선순위 백로그(`docs/plans/` active). 코드 수정은 별도 승인 후.
 
-## 4. `BASELINE.md` 구조
+## 4. `BASELINE.md` 구조 + 새 ADR과의 관계
 
-AI와 모든 에이전트 컨텍스트가 **이것만** 현행 진실로 읽는다. 한/영 병기. **범위 = v2 현행 진실; v1(CDK/EC2/Steampipe, 여전히 프로덕션)은 명시 제외(C8)** — v1 패치가 "현행 진실 위반"으로 오독되지 않게.
+**역할 분리(중복 금지):** BASELINE = "읽기 시작점" = 북극성 + 불변식 + 동결/게이트 register + **결정 인덱스**. 새 통합 ADR 001~N = 각 결정의 *상세 + why*. BASELINE은 ADR 내용을 복붙하지 않고 한 줄+링크로 인덱스만. (두 출처 모순 방지는 §6 anti-drift로.)
+
+AI와 모든 에이전트 컨텍스트가 **BASELINE을 먼저, 필요 시 링크된 ADR을** 읽는다. 한/영 병기. **범위 = v2 현행 진실; v1(CDK/EC2/Steampipe, 여전히 프로덕션)은 명시 제외(C8).**
 
 | 섹션 | 내용 | 규칙 |
 |---|---|---|
 | **§0 북극성** | 위 2장 그대로 (aspiration 포함) | 고정. owner 승인 시만 변경. |
-| **§1 살아있는 결정** | 현행 동작 토픽별 한 줄씩 + 6기둥 태그 | 줄 끝 `(why: ADR-0xx)` 포인터만. 번복 체인·조건부 조항 금지. |
-| **§2 게이트/동결** | OFF인 것. **2-티어 명시**(아래) | "동결"과 "거버넌스 게이트" 구분. |
-| **§3 불변식/용어** | read-only 정의, 6기둥 매핑, flag 규율, **BASELINE 크기 예산(C7)** | 결정론적 판정 기준. |
+| **§1 불변식/용어** | read-only 정의, 6기둥 매핑, flag 규율, **크기 예산(C7)** | 결정론적 판정 기준. |
+| **§2 게이트/동결 register** | OFF인 것. **2-티어 명시**(아래) | "동결"과 "거버넌스 게이트" 구분. terraform flag와 일치. |
+| **§3 결정 인덱스** | 새 통합 ADR 001~N 목록 — 토픽·한 줄 요약·6기둥 태그·`→ ADR-0xx` 링크 | 인덱스만(상세는 ADR). 번복 체인 금지. |
 
 §2 2-티어 예시:
 - `[게이트] 외부 DATA write(Slack/Notion/Jira) — OFF (integrations_write_enabled). 독립 control plane·no-AWS-mutation IAM·거버넌스. (why: ADR-040/041)`
@@ -96,7 +102,8 @@ docs/
 │
 │   ── 현행 진실 ──
 ├── decisions/
-│   ├── BASELINE.md            # 단일 결정 진실 (이 디렉토리엔 BASELINE+CLAUDE만)
+│   ├── BASELINE.md            # 읽기 시작점(북극성+불변식+동결register+결정인덱스)
+│   ├── 001..NNN-*.md          # 통합된 새 ADR(진짜 결정만, 토픽별 병합, single Status)
 │   └── CLAUDE.md              # 짧은 포인터
 ├── reference/                 # 현행 설계, 컴포넌트당 1파일 (superpowers/reference 승격)
 │   ├── README.md              # v2 시스템 개요 (낡은 architecture.md 대체)
@@ -112,8 +119,8 @@ docs/
 │
 │   ── 역사/과정 (보존, 명시 요청 없인 안 읽음) ──
 ├── history/
-│   ├── decisions-archive/    # 옛 ADR 001-046 + template (동결, forward 배너) + README 매핑
-│   └── specs/  plans/  reviews/  brainstorm/  archive/
+│   ├── decisions-archive/    # 옛 46개 → LEGACY-0xx-*.md (동결, forward 배너) + MAPPING.md
+│   └── specs/  plans/  reviews/  brainstorm/  archive/   # brainstorm/ = 오분류 ADR 재분류 포함
 │
 │   ── 기타 ──
 └── brochure/                  # (유지, 마케팅 소스)
@@ -138,11 +145,11 @@ docs/
 - 멀티-AI 패널 교차검증(BASELINE 확정 전).
 
 ## 8. 비목표 (YAGNI)
-- ADR 재번호(001 재작성) **안 함**.
-- ADR 본문 재작성·삭제 **안 함** — forward 배너 1줄만 추가, 나머지 동결.
+- **옛 ADR(LEGACY) 본문 재작성·삭제 안 함** — 새 통합 ADR은 *별도 작성*, 옛 원본은 forward 배너 1줄만 추가 후 그대로 동결(provenance 보존). 병합은 새 파일에서.
+- **코드의 `ADR-0xx` 참조 일괄 renumber 안 함** — LEGACY-archive resolve. (옵션 Y는 *새* 결정 레지스터만 새 번호.)
 - freeze→roadmap softening **안 함**(별도 owner-override 제품 결정, 범위 밖).
-- 새 거버넌스 메커니즘 **안 함** — 기존 결정의 표현/구조/위치만 정리.
-- Phase 1/2 코드 변경 **없음**. 코드 수정은 Phase 3 별도 승인.
+- 새 거버넌스 메커니즘 **안 함** — 기존 결정의 표현/구조/위치/병합만 정리.
+- Phase 1/2 코드 변경 **없음**(문서만). 코드 수정은 Phase 3 별도 승인.
 
 ## 9. 검증
 - BASELINE 자체 무모순: §1 어느 줄도 §2와 충돌 없음; §2가 인용 출처(terraform·ADR)와 모순 없음(특히 frozen 항목이 `variables.tf` "permanently"와 일치).
