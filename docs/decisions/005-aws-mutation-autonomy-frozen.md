@@ -4,9 +4,9 @@
 
 **Accepted (2026-06-22) — consolidated.** consolidates: **029** (변경 작업 프레임워크 / mutating-action framework), **036** (변경·조치 실행 substrate / remediation-execution substrate), **031 Phase 4** (ADR-029 게이트 경유 mutating 도구 / mutating tools via the ADR-029 gate).
 
-이 ADR은 위 셋의 단일 현행 결정이다. 옛 029/036/031-P4 본문(메커니즘·합의 이력·번복 체인)은 `docs/history/decisions-archive/`로 이관되며, **현행 결정은 본 문서뿐**이다. 한 가지 사실만 기록한다: **AWS-리소스 변경 + 자율 조치는 영구 동결**이다.
+이 ADR은 위 셋의 단일 현행 결정이다. 옛 029/036/031-P4 본문(메커니즘·합의 이력·번복 체인)은 git tag `adr-legacy-2026-06-22`로 보존되며(매핑 `docs/history/ADR-MAPPING.md`), **현행 결정은 본 문서뿐**이다. 한 가지 사실만 기록한다: **AWS-리소스 변경 + 자율 조치는 동결(do-not-enable)**이다 — 명시적 새 ADR + 멀티-AI 패널 + owner-override 전까지(§Decision 3).
 
-This ADR is the single current decision superseding all three. Their historical bodies (mechanism, consensus chains, reversal trail) move to `docs/history/decisions-archive/`; the current decision lives **only here**. It records one fact: **AWS-resource mutation + autonomous action is permanently frozen.**
+This ADR is the single current decision superseding all three. Their historical bodies (mechanism, consensus chains, reversal trail) are preserved in git tag `adr-legacy-2026-06-22` (mapped in `docs/history/ADR-MAPPING.md`); the current decision lives **only here**. It records one fact: **AWS-resource mutation + autonomous action is frozen (do-not-enable)** — until an explicit new ADR + multi-AI panel + owner-override (§Decision 3).
 
 ## Context / 컨텍스트
 
@@ -14,7 +14,7 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드 + AI 진단 도구다. **
 
 과거에 AWSops가 고객 인프라를 변경(이벤트 기반 사전 스케일링 Phase 3, 원클릭 자동 조치, 자율 인시던트 mitigation)하도록 확장하려는 일련의 결정(029 변경 프레임워크, 036 실행 substrate, 031-P4 mutating 도구)이 있었다. 6대 통제(Action Catalog·per-action IAM·2단계 plan→execute 멱등·필수 dry-run·4-eyes 승인·페어 롤백·3중 감사·킬스위치)와 함께 설계·구현되었고, **flag-OFF로 출하**되었다.
 
-**2026-06-11, owner는 3-AI 합의(kiro/codex/gemini)로 이 방향 전체를 번복했다** (`docs/history/decisions-archive/` 내 029/036/031 원문 + `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`). 근거: 외부 변경/자율은 소규모 팀이 안전하게 유지할 수 없는 blast-radius이며, AWSops의 가치 명제(read-only 진단)에 불필요하다. 인프라 변경은 운영자의 SSM/Change Manager/IaC/콘솔에 맡긴다.
+**2026-06-11, owner는 3-AI 합의(kiro/codex/gemini)로 이 방향 전체를 번복했다** (git tag `adr-legacy-2026-06-22`의 029/036/031 원문 + `docs/history/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`). 근거: 외부 변경/자율은 소규모 팀이 안전하게 유지할 수 없는 blast-radius이며, AWSops의 가치 명제(read-only 진단)에 불필요하다. 인프라 변경은 운영자의 SSM/Change Manager/IaC/콘솔에 맡긴다.
 
 AWSops is a read-only AWS/Kubernetes ops dashboard + AI diagnosis tool. A past line of decisions (029/036/031-P4) would have let it mutate customer infrastructure (event pre-scaling Phase 3, one-click remediation, autonomous incident mitigation). The full control framework was built and **shipped flag-OFF**. On **2026-06-11 the owner reversed the entire direction** via 3-AI consensus: external mutation/autonomy is blast-radius a small team cannot safely own and is unnecessary to the read-only-diagnosis value proposition. Infrastructure mutation stays with the operator's SSM/Change Manager/IaC/console.
 
@@ -22,7 +22,7 @@ AWSops is a read-only AWS/Kubernetes ops dashboard + AI diagnosis tool. A past l
 
 ## Decision / 결정
 
-**AWS-리소스 변경 + 자율 조치는 영구 동결한다 (do-not-enable).**
+**AWS-리소스 변경 + 자율 조치는 동결한다 (do-not-enable).**
 
 1. **게이트 플래그는 영구 OFF.** `remediation_enabled` (그리고 AWS-리소스 변경/자율을 활성화하는 모든 후속 플래그)는 default=`false`이며 **켜지 않는다**. 이를 켜는 PR은 regression으로 취급한다. 이는 "아직 안 켠 로드맵"이 **아니다** — **금지(frozen)**다. "frozen"="건드리지 마라"이지 "gated"="조건 충족하면 켜봐"가 아니다 (라이브 패널 C1, 6-AI 권고).
 
@@ -36,7 +36,7 @@ AWSops is a read-only AWS/Kubernetes ops dashboard + AI diagnosis tool. A past l
 
 4. **외부 DATA write는 본 동결의 대상이 아니다 (별개).** Slack/Notion/Jira 기록·메시지·티켓 등 **비-AWS-리소스 외부 데이터 write**는 ADR-007(거버넌스된 외부 데이터 통합)이 별도 control plane(`integrations_write_enabled` 등 자체 플래그 + 전용 킬스위치 + no-AWS-mutation IAM)으로 다룬다. 이미 LIVE인 외부-comms write 인스턴스(예: `diagnosis_notify_enabled` SNS 이메일, 단일 토픽 스코프)가 존재한다. 029/036의 6대 통제 facade 및 lambda executor 분기는 이 외부 DATA write에 **재사용**될 수 있으나(공유 P2 SFN spine, 별도 엔진 아님), 그것은 본 ADR이 동결하는 **AWS-리소스 변경**과 무관하다.
 
-**AWS-resource mutation + autonomous action is permanently frozen (do-not-enable).** (1) `remediation_enabled` and any successor flag that enables AWS-resource mutation/autonomy stay default-`false` and **are not turned on** — a PR flipping one is a regression; this is *frozen* ("do not touch"), not *gated* ("meet the conditions and try"). (2) The flag-OFF substrate (the six controls + dark executor code) is **retained, not deleted** — harmless with no active path. (3) **Re-activation requires** a new ADR explicitly reversing the 2026-06-11 reversal **and** a multi-AI panel **and** a dated owner-override; no silent toggle/comment-softening/"clarification". (4) **External DATA write is out of scope** — governed separately by ADR-007 on its own control plane; the six-control facade may be *reused* there (shared P2 spine, not a second engine) but that is unrelated to the frozen AWS-resource mutation.
+**AWS-resource mutation + autonomous action is frozen (do-not-enable).** (1) `remediation_enabled` and any successor flag that enables AWS-resource mutation/autonomy stay default-`false` and **are not turned on** — a PR flipping one is a regression; this is *frozen* ("do not touch"), not *gated* ("meet the conditions and try"). (2) The flag-OFF substrate (the six controls + dark executor code) is **retained, not deleted** — harmless with no active path. (3) **Re-activation requires** a new ADR explicitly reversing the 2026-06-11 reversal **and** a multi-AI panel **and** a dated owner-override; no silent toggle/comment-softening/"clarification". (4) **External DATA write is out of scope** — governed separately by ADR-007 on its own control plane; the six-control facade may be *reused* there (shared P2 spine, not a second engine) but that is unrelated to the frozen AWS-resource mutation.
 
 ## Consequences / 영향
 

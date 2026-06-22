@@ -17,7 +17,7 @@ AWSops는 알림(CloudWatch SNS / Alertmanager / Grafana / Generic)이나 수동
 - **034** — RCA 출력을 OpsCenter/Incident Manager에 양방향 라이트백(외부 관측 메타데이터 write).
 - **035** — K8sGPT를 인클러스터 진단 센서로 AgentCore에 MCP 통합. 원안엔 finding → 인시던트 → 라이트백 → remediation 제안(H3a) 배선 포함.
 
-**2026-06-11 3-AI 합의 reversal**(`docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`)에서 mutating substrate(구 029/036)가 REVERSED·do-not-enable·flag-OFF 동결되었다. 그 결과 032의 자율 mitigation 단계, 034의 라이트백 실행 경로(구 036 substrate 상속), 035의 H3a remediation 배선이 모두 의존하던 기반이 사라졌다. 본 ADR은 이 정리된 상태를 **단일 진실 출처**로 고정한다.
+**2026-06-11 3-AI 합의 reversal**(`docs/history/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`)에서 mutating substrate(구 029/036)가 REVERSED·do-not-enable·flag-OFF 동결되었다. 그 결과 032의 자율 mitigation 단계, 034의 라이트백 실행 경로(구 036 substrate 상속), 035의 H3a remediation 배선이 모두 의존하던 기반이 사라졌다. 본 ADR은 이 정리된 상태를 **단일 진실 출처**로 고정한다.
 
 The incident-diagnosis surface accumulated across four ADRs (009, 032, 034, 035). The 2026-06-11 3-AI consensus reversal froze the mutating substrate (former 029/036) as do-not-enable / flag-OFF. That removed the foundation under 032's autonomous-mitigation stage, 034's write-back execution path, and 035's H3a remediation wiring. This ADR fixes the resulting state as a single source of truth.
 
