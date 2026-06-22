@@ -108,7 +108,7 @@ memory id in SSM (not `PENDING`), `lambda_arns = [iam-mcp, flow-monitor]`.
 - Full Lambda tool fleet
 - `section = routing`
 - Right-docking chat UI
-- An OpenCost install button (an ADR-029 mutating action running on the P2 worker backbone)
+- An OpenCost install **bundle generator** — a read-only, out-of-band worker job that produces an install bundle for the **user** to apply; it performs **no AWS-resource mutation** (AWS change/autonomy is FROZEN — see [ADR-005](../../decisions/005-aws-mutation-autonomy-frozen.md) / BASELINE §2)
 
 ## Source / 출처
 
