@@ -3,27 +3,31 @@
 프로젝트 문서의 목적별 분류. 각 디렉토리의 자체 CLAUDE.md 를 참고.
 Project documentation organized by purpose. Each subdirectory has its own CLAUDE.md.
 
-## 구조 / Structure
+## 구조 / Structure — 현행 진실 vs 역사 분리
 
+**현행 진실 (CURRENT — 항상 정확히 유지):**
 | 디렉토리 / Directory | 용도 / Purpose |
 |---|---|
-| [architecture.md](architecture.md) | 시스템 아키텍처 (단일 파일) |
-| [onboarding.md](onboarding.md) | 신규 팀원 온보딩 |
-| [INSTALL_GUIDE.md](INSTALL_GUIDE.md) | 설치 가이드 (11단계) |
-| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 일반 트러블슈팅 모음 |
-| [decisions/](decisions/) | ADR (Architecture Decision Records), 001~045 |
+| [decisions/BASELINE.md](decisions/BASELINE.md) | **결정의 단일 현행 진실** (북극성+불변식+동결register+14 ADR 인덱스) — 여기부터 |
+| [decisions/](decisions/) | 통합 ADR `0NN-*.md`(현행 결정 상세) + BASELINE + CLAUDE |
+| [reference/](reference/) | v2 컴포넌트별 현행 설계 (README=개요, 01~07) / current design, one file per component |
+
+**운영 가이드 (OPERATOR):**
+| [guides/](guides/) | install · onboarding · troubleshooting · ai-testing |
 | [runbooks/](runbooks/) | 운영 시나리오별 대응 가이드 |
-| [reviews/](reviews/) | 코드 리뷰 / 교차 리뷰 결과 |
-| [plans/](plans/) | 기능 설계/기획 문서 |
-| [superpowers/reference/](superpowers/reference/) | v2 컴포넌트별 현행 설계 레퍼런스 (컴포넌트당 단일 출처) / current v2 design, one file per component |
-| [superpowers/archive/](superpowers/archive/) | v2 설계문서 실행 이력 (reference/로 대체됨) / archived v2 specs+plans, superseded by reference/ |
-| AI_TEST_*.md | AI 어시스턴트 테스트 질문셋 |
-| TEST-COVERAGE-PLAN.md | 테스트 커버리지 계획 |
+
+**진행 중 (ACTIVE):**
+| [specs/](specs/) · [plans/](plans/) | 진행 중 설계/계획. 완료(LIVE+reference 증류) 시 history로 sweep |
+
+**역사 (HISTORY — 보존, 명시 요청 없이는 읽지 않음):**
+| [history/](history/) | 옛 specs/plans/reviews/brainstorm/archive + `ADR-MAPPING.md`(옛 ADR↔새 ADR) + architecture-v1.md |
+| (옛 ADR 본문) | 트리에 없음 — git tag `adr-legacy-2026-06-22` (복원: `git show <tag>:docs/decisions/0NN-*.md`) |
 
 ## 문서 규칙 / Conventions
 - 모든 신규 문서는 **한국어/영어 병기**
-- ADR 번호는 `docs/decisions/` 의 최고 번호 + 1 (현재 045)
+- **결정은 BASELINE이 단일 진실** — 새 ADR = `decisions/` 최고번호+1(현재 **014**), single Status, **같은 PR에서 BASELINE §3 갱신 필수**(anti-drift)
 - ADR 파일명: `NNN-kebab-case-title.md`
+- 현행 진실(decisions/BASELINE+reference)과 history를 섞지 않는다. 옛 ADR 본문/history는 명시 요청 시에만 읽는다.
 - 런북은 `docs/runbooks/CLAUDE.md` 규칙 준수
 
 ## 문서 관련 스킬 / Related Skills
