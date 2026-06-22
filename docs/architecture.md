@@ -1,5 +1,7 @@
 # Architecture
 
+> ⚠️ **v1 (레거시) 문서.** v1.8.0(EC2/CDK/Steampipe/`/awsops` basePath) 기준 — v2(Terraform/Fargate/Aurora/root path)와 다릅니다. **현행 v2 = `CLAUDE.md` + `docs/superpowers/reference/`.** / **v1 (legacy) doc** — current v2 is in `CLAUDE.md` + `docs/superpowers/reference/`.
+
 ## System Overview
 AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing real-time resource monitoring, network troubleshooting, CIS compliance scanning, AI-powered analysis, external datasource integration (Prometheus/Loki/Tempo/ClickHouse/Jaeger/Dynatrace/Datadog), and AI comprehensive diagnosis. Data is sourced from Steampipe's embedded PostgreSQL, rendered via a Next.js 14 frontend, and augmented with Amazon Bedrock AgentCore for intelligent analysis.
 

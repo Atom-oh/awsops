@@ -1,5 +1,7 @@
 # AWSops Developer Onboarding
 
+> ⚠️ **v1 (레거시) 온보딩.** v1.8.0 기준 — v2 온보딩/현행은 `CLAUDE.md` 참조. / **v1 (legacy)** — for v2 see `CLAUDE.md`.
+
 ## Prerequisites
 
 - **Node.js** 18+ (LTS recommended)

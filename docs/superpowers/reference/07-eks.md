@@ -54,7 +54,7 @@
 ## Learnings & gotchas / 학습·함정
 
 **EN**
-- **OpenCost install is excluded → P3.** In v2 it becomes a UI button = an **ADR-029 mutating action** on the P2 worker backbone (SQS + Step Functions / ECS one-shot), **not a raw Lambda**.
+- **OpenCost = read-only out-of-band install bundle.** The UI generates a bundle the operator runs themselves; AWS-resource mutation stays **FROZEN (ADR-005, do-not-enable)** — NOT an in-app mutating action.
 - **Multi-account is excluded** — host account only for P1e.
 - **The web code consumes the `onboarded_eks_clusters` output in P3, not here.** P1e provisions access + exposes connection info; kubeconfig build and queries are downstream.
 - `for_each` over the empty default list creates zero resources, so merging `eks.tf` is a safe no-op until a cluster is selected in tfvars.

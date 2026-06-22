@@ -6,7 +6,7 @@
 request travels a **private edge** (CloudFront → VPC Origin `https-only:443` → internal ALB
 HTTPS:443 → Fargate web — no internet-facing load balancer anywhere on the path), with Cognito
 Lambda@Edge auth terminating at the edge. **Aurora Serverless v2** holds durable application state
-(the ADR-030 7-table schema + `worker_jobs`), AgentCore **section agents** answer per-domain AI
+(schema per `data/schema.sql`, baseline v9), AgentCore **section agents** answer per-domain AI
 questions over live AWS data, and an **OOM-safe async worker tier** (SQS → Step Functions →
 Lambda/Fargate) lifts heavy, long-running, or memory-hungry work off the request path so the web
 container stays thin and fast to roll.
@@ -14,7 +14,7 @@ container stays thin and fast to roll.
 **KO** — AWSops v2는 v1 단일 EC2 모놀리식을 **Terraform 기반 MSA**로 재구축한다. 모든 요청은
 **비공개 엣지**(CloudFront → VPC Origin `https-only:443` → 내부 ALB HTTPS:443 → Fargate web —
 경로상 인터넷 노출 LB 없음)를 거치고, Cognito Lambda@Edge 인증은 엣지에서 종료된다. **Aurora
-Serverless v2**가 앱 상태(ADR-030 7-테이블 + `worker_jobs`)를 보관하고, AgentCore **섹션
+Serverless v2**가 앱 상태(스키마는 `data/schema.sql`, 베이스라인 v9)를 보관하고, AgentCore **섹션
 에이전트**가 도메인별 AI 질의에 라이브 AWS 데이터로 답하며, **OOM-안전 비동기 워커 티어**(SQS →
 Step Functions → Lambda/Fargate)가 무겁고 오래 걸리거나 메모리가 큰 작업을 요청 경로에서 떼어내
 web 컨테이너를 얇고 빠르게 유지한다.
@@ -54,12 +54,12 @@ flowchart LR
 
 - **P1a** ✅ — S3 backend + foundation + private edge (CloudFront VPC Origin → internal ALB → Fargate)
 - **P1b** ✅ — Cognito + Lambda@Edge auth
-- **P1c** ✅ — Aurora Serverless v2 (7-table schema)
+- **P1c** ✅ — Aurora Serverless v2 (schema per `terraform/v2/foundation/data/schema.sql`, baseline v9)
 - **P1d** ✅ — web thin-BFF + dual-tier ECR + `make deploy` + RS256 auth hardening
 - **P1e** ✅ — EKS onboarding (Access Entry + View policy)
 - **P1f** ✅ — AgentCore idempotent provisioner (9 gateways + Memory + Interpreter + Runtime)
 - **P2** ✅ (W9 GREEN) — async worker backbone (SQS + Step Functions + Lambda/Fargate, `worker_jobs`)
-- **P3** 🔜 — 9+1 agents (full Lambda fleet, section = routing) + right-docking chat UI + OpenCost install button (ADR-029 mutating action on the P2 backbone)
+- **P3** 🔜 — 9+1 agents (full Lambda fleet, section = routing) + right-docking chat UI + OpenCost read-only out-of-band install bundle (AWS-resource mutation FROZEN, ADR-005)
 - **P4** 🔜 — incident / ChatOps lifecycle + DevOps Agent federation
 
 ## Execution history / 실행 이력

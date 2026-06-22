@@ -14,9 +14,11 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 | [decisions/](decisions/) | **결정 단일 진실 = `BASELINE.md`** + 통합 ADR 001~014 + `ADR-MAPPING.md` (옛 ADR 001~046 본문은 git tag `adr-legacy-2026-06-22`) |
 | [runbooks/](runbooks/) | 운영 시나리오별 대응 가이드 |
 | [reviews/](reviews/) | 코드 리뷰 / 교차 리뷰 결과 |
-| [plans/](plans/) | 기능 설계/기획 문서 |
+| [plans/](plans/) | 구 기획 문서(legacy) — 현행 plan은 `superpowers/plans/` |
 | [superpowers/reference/](superpowers/reference/) | v2 컴포넌트별 현행 설계 레퍼런스 (컴포넌트당 단일 출처) / current v2 design, one file per component |
-| [superpowers/archive/](superpowers/archive/) | v2 설계문서 실행 이력 (reference/로 대체됨) / archived v2 specs+plans, superseded by reference/ |
+| [superpowers/specs/](superpowers/specs/) | 설계 spec(brainstorming 산출) / design specs |
+| [superpowers/plans/](superpowers/plans/) | 구현 계획(writing-plans 산출) / implementation plans |
+| [superpowers/archive/](superpowers/archive/) | v2 설계문서 실행 이력 / archived v2 design docs |
 | AI_TEST_*.md | AI 어시스턴트 테스트 질문셋 |
 | TEST-COVERAGE-PLAN.md | 테스트 커버리지 계획 |
 
