@@ -181,4 +181,3 @@ Panel (codex-gpt5.5 · gemini · kiro-opus4.8 · kiro-glm5; 4/5 quorum, kimi los
 - **Seams built, not shipped live:** external-obs Plane-B adapter interface + gateway target design; managed Bedrock KB; full consultant interview + delta re-interview; DOCX/PPTX/PDF; scheduling UI.
 
 **Security controls (mandatory in slice 1):** all interview/operator free-text treated as **untrusted data** (fenced, never instructions); only schema-validated, **admin-promoted** invariants drive deterministic checks (LLM never activates/fabricates); PII/secret redaction before any Bedrock call; read-only at the IAM layer; per-source row/byte/time caps; idempotent report jobs deduped on `(tier, requested_by, window)`; `unconfigured` vs `throttled/failed` distinguished (no false all-clear); deep admin-gated + cooldown.
-
