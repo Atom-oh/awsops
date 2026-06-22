@@ -29,8 +29,10 @@ export function parseFrame(frame: string): {
   if (data === '[DONE]') return { kind: 'done' };
   try {
     const obj = JSON.parse(data);
-    if (isMeta) return { kind: 'meta', ...obj };
-    if (isStatus) return { kind: 'status', ...obj };
+    // spread obj FIRST so a server payload field named `kind`/`delta`/`error` can never
+    // override the classifier's discriminant (fail-closed).
+    if (isMeta) return { ...obj, kind: 'meta' };
+    if (isStatus) return { ...obj, kind: 'status' };
     if (obj.delta !== undefined) return { kind: 'delta', delta: obj.delta };
     if (obj.error) return { kind: 'error', error: obj.error };
   } catch {
@@ -138,7 +140,7 @@ export function useChat() {
         patchLast((m) => ({ ...m, gateway: parsed.gateway, ranked: parsed.ranked, method: parsed.method, via: parsed.via }));
       }
     } else if (parsed.kind === 'status') {
-      patchLast((m) => ({ ...m, status: { phase: parsed.phase!, elapsedMs: parsed.elapsedMs } }));
+      patchLast((m) => ({ ...m, status: { phase: parsed.phase ?? 'analyzing', elapsedMs: parsed.elapsedMs } }));
     } else if (parsed.kind === 'delta') {
       patchLast((m) => ({ ...m, content: m.content + parsed.delta!, status: undefined }));
     } else if (parsed.kind === 'error') {

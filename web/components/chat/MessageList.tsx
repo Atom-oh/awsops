@@ -59,7 +59,7 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                 ? (m.status
                   ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink-500">
                       {m.status.phase === 'working' && m.status.elapsedMs !== undefined
-                        ? `🔎 분석 중… ${Math.round(m.status.elapsedMs / 1000)}초`
+                        ? `🔎 분석 중… ${Math.floor(m.status.elapsedMs / 1000)}초`
                         : '🔎 분석 중…'}
                     </div>
                   : null)

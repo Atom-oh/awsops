@@ -40,7 +40,8 @@ describe('useChat hook and parseFrame', () => {
         read: vi.fn()
           .mockReturnValueOnce(p1)
           .mockReturnValueOnce(p2)
-          .mockReturnValueOnce(p3),
+          .mockReturnValueOnce(p3)
+          .mockResolvedValue({ done: true }),
       }),
     };
 
@@ -53,7 +54,7 @@ describe('useChat hook and parseFrame', () => {
 
     const { result } = renderHook(() => useChat());
 
-    let sendPromise: Promise<any>;
+    let sendPromise!: Promise<any>;
     act(() => {
       sendPromise = result.current.send('test prompt');
     });
