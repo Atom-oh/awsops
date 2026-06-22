@@ -1,5 +1,14 @@
 # Plan — Datasource · Connector · Skill Integrations Hub (v3, post plan-gate r2)
 
+> ⚠️ **ARCHIVED — historical planning artifact, NOT a live spec.** Salvaged (PR #73) from a pruned worktree
+> for reference only. The datasource-connector work this planned has since **shipped** (datasource connectors
+> + Explore page, PR #57); the **shipped code — not this doc — is the source of truth.** Design decisions here
+> may be superseded or contain known issues flagged in the PR #73 review: backfill `ALTER … SET NOT NULL`
+> aborting on unmapped (non-5-kind) `datasource_schemas` rows; credential-lifecycle wording that must follow
+> the unified-mirror model (kind key = managed default mirror, never blind-deleted on save); `name = slug`
+> backfill mapping; and the Task-13 `.internal`-suffix SSRF block (should block resolved metadata/loopback/
+> link-local IPs, not the suffix). **Do not implement from this doc without reconciling against the shipped code.**
+
 **Spec:** `docs/superpowers/specs/2026-06-18-datasource-connector-skill-design.md`
 **Base:** current HEAD of `feat/v2-architecture-design`.
 **Method:** TDD + Tidy. Each task = failing test → minimal code → refactor → ONE commit (explicit paths).
