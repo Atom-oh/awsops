@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e19df89b6da9 · generated-at: 2026-06-18 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 11b228af08dd · generated-at: 2026-06-22 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are Gemini, an external reviewer — project context below.
 
@@ -6,12 +6,11 @@
 
 Branch `feat/v2-architecture-design`. Reviews on this branch target **v2** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers). v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) is the **untouched legacy production app** — v1 rules do NOT apply to v2. A diff under `web/`, `terraform/v2/`, `agent/`, or `scripts/v2/` is v2; a diff under `src/` is v1.
 
-## ⛔ Product posture (READ-ONLY; 2026-06-11 high-risk ADR reversal)
-v2 is a **read-only ops dashboard + AI diagnosis.** A mutating/autonomous tier was prototyped behind disabled flags, then **REVERSED** (3-AI consensus, `docs/reviews/2026-06-11-high-risk-adr-reversal-consensus.md`):
-- **REVERSED / do-not-enable / frozen flag-OFF:** ADR-029+036 (AWS-resource mutation/remediation substrate), ADR-031 Phase 3 (BYO-MCP), Phase 4 (mutating tools).
-- **DOWNGRADED to read-only:** ADR-032 (keep Triage/RCA, drop autonomous mitigation), ADR-035 (keep read-only K8sGPT result read, drop autonomous wiring).
-- **KEPT (flag-OFF):** ADR-034 RCA write-back — still coupled to frozen 029/036 substrate role; needs role decoupling before any activation.
-- **ADR-041 re-scope (owner-override, panel verdict PARTIAL):** "read-only" = **AWS-resource mutation + autonomy are permanently frozen**; external DATA read + governed external write (knowledge/ticket/message, ADR-040: SSRF defense, Secrets Manager, DLP/redaction, human-gate, flag-OFF) are NOT covered by the freeze.
+## ⛔ Product posture (current truth = `docs/decisions/BASELINE.md`)
+v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *proposal* (read-only).** North star: operate AWS resources per the Well-Architected 6 pillars, safely.
+- **FROZEN (do-not-enable, ADR-005):** AWS-resource mutation + autonomy (remediation substrate, BYO-MCP, mutating tools). Unfreezing needs a NEW ADR + multi-AI panel + dated owner-override — never a silent/doc-cleanup reinterpretation. Frozen substrate is retained **dark code** (regression = *enabling* it, not its presence).
+- **GATED analysis-only (ADR-006):** incident lifecycle / RCA write-back / K8sGPT — read-only triage/RCA, no autonomous mitigation; flags default OFF (rca_writeback needs role decoupling first).
+- **External DATA is NOT the freeze (ADR-007, keystone):** external observability read + governed external write (Slack/Notion/Jira — SSRF · Secrets · DLP/redaction · human-gate · flag-OFF) are allowed; BYO-MCP only as curated connectors. `diagnosis_notify` (SNS) is already LIVE; broad `integrations_write_enabled` stays GATED-OFF.
 - **🚩 Flag any PR that enables mutation/autonomy/BYO-MCP** — e.g. sets `remediation_enabled=true`, flips a frozen flag, or wires the dark substrate live. The dark code exists intentionally (built-then-reversed); enabling it is the regression, not its presence.
 
 ## Stack / runtime
@@ -57,23 +56,23 @@ Note: the repo-root `package.json` (`build`/`lint`/`test`) belongs to the **v1**
 ## Naming / conventions
 - Components `export default`. Resource names `awsops-v2-*`; AgentCore gateways `awsops-v2-{key}-gateway`; SSM under `/ops/awsops-v2/...` (an `aws...` prefix is SSM-reserved and rejected).
 - Admin authority in v2 = **Cognito admin group OR an SSM-parameter email allowlist** (`web/lib/admin.ts`, fail-closed), NOT `data/config.json` `adminEmails` (that is v1; ADR-023 v2 note).
-- Edge auth = Cognito + Lambda@Edge **RS256 JWKS verification** + iss/aud/token_use + OAuth `state` + PKCE public client (no client secret). In-app login = self-hosted `/login` + `POST /api/auth/login` (unsigned public Cognito `InitiateAuth USER_PASSWORD_AUTH`; ADR-042); Hosted-UI PKCE `/_callback` is a retained dark fallback. `/api/health` is the only intentionally public route.
+- Edge auth = Cognito + Lambda@Edge **RS256 JWKS verification** + iss/aud/token_use + OAuth `state` + PKCE public client (no client secret). In-app login = self-hosted `/login` + `POST /api/auth/login` (unsigned public Cognito `InitiateAuth USER_PASSWORD_AUTH`; ADR-042); Hosted-UI PKCE `/_callback` is a retained dark fallback. Public (unauthenticated) routes per ADR-002: `/api/health`, `/login`, `/api/auth/login`, `/api/auth/signout`, `/icon.svg`, `/_next/static/*`, `/api/incidents/webhook`.
 
 ## Review checklist
-1. **Posture:** no mutation/autonomy/BYO-MCP enabled (029/036 reversed; flag any PR that turns it on). External write, if any, must satisfy ADR-040 governance (SSRF, Secrets Manager, DLP/redaction, human-gate, flag-OFF).
+1. **Posture:** no mutation/autonomy/BYO-MCP enabled (ADR-005 frozen, do-not-enable; flag any PR that turns it on). External write, if any, must satisfy ADR-007 governance (SSRF, Secrets Manager, DLP/redaction, human-gate, flag-OFF). Current truth = `docs/decisions/BASELINE.md`.
 2. **Edge/auth:** RS256 JWKS verification intact (no decode-only / exp-only regression); no new public route bypass; secrets on execution role; nothing sensitive committed.
 3. **Thin-BFF:** heavy/long/OOM work enqueued via `/api/jobs`, not inline; Aurora via `getPool`; AgentCore ARNs from SSM; admin via `web/lib/admin.ts`.
 4. **Terraform:** changes under `terraform/v2/foundation/`; large features flag-gated; SG description unchanged; no `0.0.0.0/0`, no `Principal:*`; no `-auto-approve` baked in.
 5. **Containers:** arm64; `HOSTNAME=0.0.0.0` runtime env; Fargate worker `CMD`; container + TG health path = `/api/health`.
 6. **v2 vs v1:** fetch `/api/*` (no `/awsops` prefix); state in Aurora not `data/*.json`; new tables as ULID migration files.
-7. **Gateway count:** doctrine vs as-built mismatch — see below; flag either way.
+7. **Gateway count:** 9 provisioned / 8 agent routes (ADR-004, RESOLVED) — different axes, not a contradiction.
 
-## Gateway count — flag either way (NOT a false-positive)
-CLAUDE.md is **internally inconsistent**: the doctrine text says **8 section gateways** (network/container/data/security/cost/monitoring/iac/ops) with external observability as the **Integrations axis** (ADR-039), not a 9th gateway. But the as-built code (`scripts/v2/agentcore/catalog.py`, `provision.py`) declares and provisions **9** — the 8 above plus `external-obs`. Present this **accurately as "doctrine 8 / as-built 9"** and flag whichever side a diff contradicts. Do NOT silently treat either number as correct.
+## Gateway count — RESOLVED (ADR-004)
+AgentCore gateways (ADR-004, RESOLVED): **9 gateways are provisioned** (8 sections network/container/data/security/cost/monitoring/iac/ops + `external-obs`) and **agent.py routes 8 section agents**. State it as **"9 provisioned / 8 agent routes"** — different axes, not a contradiction.
 
 ## Known false-positives (do NOT flag)
 - **Model ids:** Opus is **4.8**, Sonnet is **4.6** (no `-v1` suffix). Any "Opus 4.6" / "17-route router" text is stale v1 — the current code is correct.
-- **Dark code is intentional:** ADRs use a supersession/reversal model; a "reversed/frozen but code present" slice (e.g. mutation substrate in `workers.tf`, ADR-031 Phase 3/4) is deliberately retained dark code, NOT dead code. The regression is *enabling* it, not its presence.
+- **Dark code is intentional:** a "frozen but code present" slice (e.g. mutation substrate in `workers.tf`, ADR-005 frozen tier) is deliberately retained dark code, NOT dead code. The regression is *enabling* it, not its presence.
 - Fetch to `/api/...` without an `/awsops` prefix is correct in v2 (basePath dropped).
 - `agentcore_enabled` / `workers_enabled` / `steampipe_enabled` / `hybrid_routing_enabled` defaulting false (so `plan` = No changes) is intentional, not dead config.
 - Chat classifier calling Bedrock Haiku for routing (ADR-038) is intentional in v2 — it supersedes v1's "Sonnet-only router" rule; regex-first, golden-set-gated.
