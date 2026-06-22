@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e19df89b6da9 · generated-at: 2026-06-18 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 11b228af08dd · generated-at: 2026-06-22 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are Gemini, an external reviewer — project context below.
 
@@ -59,7 +59,7 @@ Note: the repo-root `package.json` (`build`/`lint`/`test`) belongs to the **v1**
 - Edge auth = Cognito + Lambda@Edge **RS256 JWKS verification** + iss/aud/token_use + OAuth `state` + PKCE public client (no client secret). In-app login = self-hosted `/login` + `POST /api/auth/login` (unsigned public Cognito `InitiateAuth USER_PASSWORD_AUTH`; ADR-042); Hosted-UI PKCE `/_callback` is a retained dark fallback. `/api/health` is the only intentionally public route.
 
 ## Review checklist
-1. **Posture:** no mutation/autonomy/BYO-MCP enabled (029/036 reversed; flag any PR that turns it on). External write, if any, must satisfy ADR-040 governance (SSRF, Secrets Manager, DLP/redaction, human-gate, flag-OFF).
+1. **Posture:** no mutation/autonomy/BYO-MCP enabled (ADR-005 frozen, do-not-enable; flag any PR that turns it on). External write, if any, must satisfy ADR-007 governance (SSRF, Secrets Manager, DLP/redaction, human-gate, flag-OFF). Current truth = `docs/decisions/BASELINE.md`.
 2. **Edge/auth:** RS256 JWKS verification intact (no decode-only / exp-only regression); no new public route bypass; secrets on execution role; nothing sensitive committed.
 3. **Thin-BFF:** heavy/long/OOM work enqueued via `/api/jobs`, not inline; Aurora via `getPool`; AgentCore ARNs from SSM; admin via `web/lib/admin.ts`.
 4. **Terraform:** changes under `terraform/v2/foundation/`; large features flag-gated; SG description unchanged; no `0.0.0.0/0`, no `Principal:*`; no `-auto-approve` baked in.
@@ -72,7 +72,7 @@ AgentCore gateways (ADR-004, RESOLVED): **9 gateways are provisioned** (8 sectio
 
 ## Known false-positives (do NOT flag)
 - **Model ids:** Opus is **4.8**, Sonnet is **4.6** (no `-v1` suffix). Any "Opus 4.6" / "17-route router" text is stale v1 — the current code is correct.
-- **Dark code is intentional:** ADRs use a supersession/reversal model; a "reversed/frozen but code present" slice (e.g. mutation substrate in `workers.tf`, ADR-031 Phase 3/4) is deliberately retained dark code, NOT dead code. The regression is *enabling* it, not its presence.
+- **Dark code is intentional:** a "frozen but code present" slice (e.g. mutation substrate in `workers.tf`, ADR-005 frozen tier) is deliberately retained dark code, NOT dead code. The regression is *enabling* it, not its presence.
 - Fetch to `/api/...` without an `/awsops` prefix is correct in v2 (basePath dropped).
 - `agentcore_enabled` / `workers_enabled` / `steampipe_enabled` / `hybrid_routing_enabled` defaulting false (so `plan` = No changes) is intentional, not dead config.
 - Chat classifier calling Bedrock Haiku for routing (ADR-038) is intentional in v2 — it supersedes v1's "Sonnet-only router" rule; regex-first, golden-set-gated.
