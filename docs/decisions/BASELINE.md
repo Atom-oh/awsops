@@ -66,4 +66,24 @@
 ---
 
 ## §3 결정 인덱스 (Decision Index)
-_(Task 14에서 통합 ADR 작성 후 채움 — 각 ADR 한 줄 + `→ 0NN` 링크 + 6기둥 태그)_
+
+> 통합 ADR 14개. 상세·근거는 각 ADR. (옛 46개 → `../history/ADR-MAPPING.md`, 본문은 git tag `adr-legacy-2026-06-22`.)
+
+| ADR | 토픽 | 한 줄 | 6기둥 |
+|---|---|---|---|
+| [001](001-v2-foundation.md) | v2 파운데이션 | Terraform MSA·비공개 엣지·Aurora·thin-BFF·이중 ECR (CDK·라이브 Steampipe 폐기) | 운영우수성·안정성·비용 |
+| [002](002-auth-and-login.md) | 인증·로그인 | Cognito+Lambda@Edge RS256 + 인앱 `/login`(USER_PASSWORD_AUTH), Hosted UI 다크폴백 | 보안 |
+| [003](003-ai-agent-routing.md) | AI 에이전트 라우팅 | 하이브리드(정규식+Haiku 분류기) + 교차도메인 자동합성 (LIVE) | 운영우수성 |
+| [004](004-agentcore-gateways-runtime.md) | AgentCore 게이트웨이·런타임 | **9 게이트웨이 프로비저닝 / 8 섹션 에이전트 라우트** + Memory + Code Interpreter | 운영우수성 |
+| [005](005-aws-mutation-autonomy-frozen.md) | AWS 변경·자율 **FROZEN** | do-not-enable; 재활성화=새 ADR+패널+owner-override | 보안·운영우수성 |
+| [006](006-incident-analysis-only.md) | 인시던트 **ANALYSIS-ONLY** (GATED) | read-only triage/RCA만, 자율 mitigation 폐기 | 안정성·운영우수성 |
+| [007](007-external-data-integration-governance.md) | 외부 데이터 통합 거버넌스 (keystone) | read-only=리소스 한정; 외부 read LIVE·write 2-티어 거버넌스 | 보안·운영우수성 |
+| [008](008-ai-diagnosis-pipeline.md) | AI 진단 파이프라인 | raw boto3 Bedrock·15섹션 병렬렌더·포맷·비용캐싱 (스트리밍 후속) | 운영우수성·비용 |
+| [009](009-async-worker-backbone.md) | 비동기 워커 백본 | SQS+SFN+Lambda/Fargate, read-only job(noop/report/compliance) | 안정성·운영우수성 |
+| [010](010-inventory-resource-model.md) | 인벤토리·리소스 모델 | 타입 레지스트리 + flag-gated Steampipe sync→Aurora (ECS service 갭) | 안정성·비용 |
+| [011](011-multi-account.md) | 멀티 어카운트 | STS AssumeRole(AWSopsReadOnlyRole+ExternalId), read-only fan-out | 보안 |
+| [012](012-cost-finops.md) | Cost / FinOps | Cost Explorer probe + FinOps MCP + Bedrock 비용 귀속 | 비용최적화 |
+| [013](013-alerting-notification.md) | 알림·통지 | 웹훅 HMAC + SNS 통지(diagnosis_notify LIVE) + 리포트 다운로드 | 운영우수성 |
+| [014](014-cross-cutting-cache-i18n-cdn.md) | 횡단: 캐시·i18n·CDN | 프리워밍·i18n(ko/en)·CloudFront CACHING_DISABLED | 성능효율성 |
+
+새 ADR 추가: 최고번호+1, single Status, **같은 PR에서 이 §3(또는 §2) 갱신 필수**(anti-drift, §1).
