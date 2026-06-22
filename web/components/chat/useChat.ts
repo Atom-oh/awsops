@@ -9,6 +9,37 @@ export function newSessionId(): string {
   return s.length >= 33 ? s : s.padEnd(36, '0');
 }
 
+export function parseFrame(frame: string): {
+  kind: 'meta' | 'status' | 'delta' | 'error' | 'done' | 'ignore';
+  threadId?: string;
+  gateway?: string;
+  ranked?: any;
+  method?: string;
+  via?: string;
+  phase?: string;
+  elapsedMs?: number;
+  delta?: string;
+  error?: string;
+} {
+  const isMeta = frame.startsWith('event: meta');
+  const isStatus = frame.startsWith('event: status');
+  const line = frame.split('\n').find((l) => l.startsWith('data:'));
+  if (!line) return { kind: 'ignore' };
+  const data = line.slice(5).trim();
+  if (data === '[DONE]') return { kind: 'done' };
+  try {
+    const obj = JSON.parse(data);
+    if (isMeta) return { kind: 'meta', ...obj };
+    if (isStatus) return { kind: 'status', ...obj };
+    if (obj.delta !== undefined) return { kind: 'delta', delta: obj.delta };
+    if (obj.error) return { kind: 'error', error: obj.error };
+  } catch {
+    // heartbeat / non-JSON
+  }
+  return { kind: 'ignore' };
+}
+
+
 /**
  * Shared chat engine for the drawer (ChatDrawer) and the /assistant page.
  * Owns conversation state, SSE streaming, and thread CRUD against the same
@@ -100,18 +131,19 @@ export function useChat() {
   }
 
   function handleFrame(frame: string) {
-    const isMeta = frame.startsWith('event: meta');
-    const line = frame.split('\n').find((l) => l.startsWith('data:'));
-    if (!line) return;
-    const data = line.slice(5).trim();
-    if (data === '[DONE]') return;
-    try {
-      const obj = JSON.parse(data);
-      if (isMeta && obj.threadId) setThread(obj.threadId); // server-issued thread (first message mints it)
-      if (isMeta && obj.gateway) patchLast((m) => ({ ...m, gateway: obj.gateway, ranked: obj.ranked, method: obj.method, via: obj.via }));
-      else if (obj.delta !== undefined) patchLast((m) => ({ ...m, content: m.content + obj.delta }));
-      else if (obj.error) patchLast((m) => ({ ...m, content: `⚠️ ${obj.error}`, streaming: false }));
-    } catch { /* heartbeat / non-JSON */ }
+    const parsed = parseFrame(frame);
+    if (parsed.kind === 'meta') {
+      if (parsed.threadId) setThread(parsed.threadId);
+      if (parsed.gateway) {
+        patchLast((m) => ({ ...m, gateway: parsed.gateway, ranked: parsed.ranked, method: parsed.method, via: parsed.via }));
+      }
+    } else if (parsed.kind === 'status') {
+      patchLast((m) => ({ ...m, status: { phase: parsed.phase!, elapsedMs: parsed.elapsedMs } }));
+    } else if (parsed.kind === 'delta') {
+      patchLast((m) => ({ ...m, content: m.content + parsed.delta!, status: undefined }));
+    } else if (parsed.kind === 'error') {
+      patchLast((m) => ({ ...m, content: `⚠️ ${parsed.error!}`, status: undefined, streaming: false }));
+    }
   }
 
   async function send(prompt: string, overrideSection?: string | null, switchedFrom?: string) {
@@ -143,9 +175,9 @@ export function useChat() {
         for (const f of frames) handleFrame(f);
       }
     } catch {
-      patchLast((m) => ({ ...m, streaming: false }));
+      patchLast((m) => ({ ...m, streaming: false, status: undefined }));
     } finally {
-      patchLast((m) => ({ ...m, streaming: false }));
+      patchLast((m) => ({ ...m, streaming: false, status: undefined }));
       setBusy(false);
       if (showThreadsRef.current) void refreshThreads(); // new title/order shows up immediately
     }
