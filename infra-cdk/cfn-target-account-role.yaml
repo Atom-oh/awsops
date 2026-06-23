@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWSops Multi-Account Support - Target Account IAM Role.
+  Deploy this stack in each target (non-host) AWS account to enable
+  cross-account monitoring from the AWSops dashboard.
+
+Parameters:
+  HostAccountId:
+    Type: String
+    AllowedPattern: '^\d{12}$'
+    ConstraintDescription: Must be a 12-digit AWS Account ID
+    Description: AWS Account ID of the host account (where AWSops EC2 runs)
+
+  RoleName:
+    Type: String
+    Default: 'AWSopsReadOnlyRole'
+    AllowedPattern: '^[\w+=,.@-]+$'
+    Description: IAM role name to create in this account
+
+  ExternalId:
+    Type: String
+    MinLength: 8
+    MaxLength: 128
+    AllowedPattern: '^[a-zA-Z0-9+=,.@:/-]+$'
+    ConstraintDescription: ExternalId is REQUIRED (min 8 chars). Use a unique value per deployment for confused deputy protection.
+    Description: >
+      REQUIRED. External ID for STS AssumeRole confused deputy protection.
+      Use a unique random string (e.g. UUID). Set matching AWSOPS_EXTERNAL_ID env var on Lambda functions.
+
+Resources:
+  AWSopsReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Read-only role for AWSops dashboard cross-account monitoring
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${HostAccountId}:root'
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'sts:ExternalId': !Ref ExternalId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      Tags:
+        - Key: Application
+          Value: AWSops
+        - Key: Purpose
+          Value: CrossAccountMonitoring
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # Additional permissions not included in ReadOnlyAccess
+  AWSopsAdditionalPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: AWSopsAdditionalReadAccess
+      Roles:
+        - !Ref AWSopsReadOnlyRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Cost Explorer (not in ReadOnlyAccess) — service-level actions, account-scoped
+          - Sid: CostExplorerAccess
+            Effect: Allow
+            Action:
+              - 'ce:GetCostAndUsage'
+              - 'ce:GetCostForecast'
+              - 'ce:GetDimensionValues'
+              - 'ce:GetTags'
+              - 'ce:GetReservationUtilization'
+              - 'ce:GetSavingsPlansUtilization'
+            Resource: !Sub 'arn:aws:ce::${AWS::AccountId}:*'
+          # Budgets — account-scoped
+          - Sid: BudgetsAccess
+            Effect: Allow
+            Action:
+              - 'budgets:ViewBudget'
+              - 'budgets:DescribeBudget*'
+            Resource: !Sub 'arn:aws:budgets::${AWS::AccountId}:*'
+          # Pricing (global service, requires *)
+          - Sid: PricingAccess
+            Effect: Allow
+            Action:
+              - 'pricing:GetProducts'
+              - 'pricing:DescribeServices'
+              - 'pricing:GetAttributeValues'
+            Resource: '*'
+          # CloudWatch Logs Insights — account-scoped
+          - Sid: CloudWatchLogsInsights
+            Effect: Allow
+            Action:
+              - 'logs:StartQuery'
+              - 'logs:GetQueryResults'
+              - 'logs:StopQuery'
+            Resource: !Sub 'arn:aws:logs:*:${AWS::AccountId}:log-group:*'
+          # IAM policy simulation — account-scoped
+          - Sid: IAMPolicySimulation
+            Effect: Allow
+            Action:
+              - 'iam:SimulatePrincipalPolicy'
+              - 'iam:SimulateCustomPolicy'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:*'
+          # Network reachability analysis — account-scoped
+          - Sid: ReachabilityAnalysis
+            Effect: Allow
+            Action:
+              - 'ec2:CreateNetworkInsightsPath'
+              - 'ec2:StartNetworkInsightsAnalysis'
+              - 'ec2:DeleteNetworkInsightsPath'
+              - 'ec2:DeleteNetworkInsightsAnalysis'
+            Resource: !Sub 'arn:aws:ec2:*:${AWS::AccountId}:*'
+
+Outputs:
+  RoleArn:
+    Description: ARN of the cross-account role for Steampipe and Lambda
+    Value: !GetAtt AWSopsReadOnlyRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RoleArn'
+
+  RoleName:
+    Description: Role name
+    Value: !Ref AWSopsReadOnlyRole
+
+  SteampipeProfile:
+    Description: AWS CLI profile config to add on AWSops EC2 (~/.aws/config)
+    Value: !Sub |
+      [profile awsops-${AWS::AccountId}]
+      role_arn = ${AWSopsReadOnlyRole.Arn}
+      credential_source = Ec2InstanceMetadata
+      region = ap-northeast-2
+
+  TestCommand:
+    Description: Test command to verify cross-account access from AWSops EC2
+    Value: !Sub >-
+      aws sts assume-role
+      --role-arn ${AWSopsReadOnlyRole.Arn}
+      --role-session-name awsops-test
+      --query 'Credentials.AccessKeyId'
+      --output text
