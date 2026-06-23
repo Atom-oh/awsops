@@ -185,14 +185,18 @@ class TestMetricMeta(_Base):
         b = json.loads(out["body"])
         
         self.assertIn("metadata", cap[0])
-        self.assertEqual(len(cap), 4) # metadata + 3 metrics
-        
+        self.assertEqual(len(cap), 6) # per-metric: 3 metrics × (metadata?metric= + labels)
+
         self.assertIn("up", b)
         self.assertEqual(b["up"]["type"], "gauge")
         self.assertEqual(b["up"]["labels"], ["instance", "job"])
-        
-        self.assertNotIn("http_requests", b) # Skipped due to error
-        
+
+        # failed label fetch surfaces an error entry (not silently dropped); type still resolved
+        self.assertIn("http_requests", b)
+        self.assertEqual(b["http_requests"]["type"], "counter")
+        self.assertEqual(b["http_requests"]["labels"], [])
+        self.assertIn("error", b["http_requests"])
+
         self.assertIn("unknown", b)
         self.assertIsNone(b["unknown"]["type"])
         self.assertEqual(b["unknown"]["labels"], [])
@@ -208,7 +212,7 @@ class TestMetricMeta(_Base):
         
         b = json.loads(out["body"])
         self.assertEqual(len(b), 12)
-        self.assertEqual(m.call_count, 13) # 1 metadata + 12 labels
+        self.assertEqual(m.call_count, 24) # per-metric: 12 × (metadata?metric= + labels)
 
 
 
