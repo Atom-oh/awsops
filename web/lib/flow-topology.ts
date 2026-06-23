@@ -7,8 +7,9 @@
 // .TargetHealth.State. alb/nlb resource_id is the LB *name*, so joins that use ARNs
 // (tg.load_balancer_arns, cloudfront.web_acl_id) must index by the payload `arn` field.
 //
-// Edges carry `confidence`: Spec 1 emits only 'observed' (solid). 'inferred' (dashed) is
-// reserved for Spec 2's env→RDS edges — the renderer keys stroke style off this field.
+// Edges carry `confidence`: directly-observed links are 'observed' (solid). 'inferred' (dashed) is
+// used for DERIVED links — Spec 2's env→RDS edges AND Route53-alias-chain-resolved CF→LB edges —
+// the renderer keys stroke style off this field.
 
 type Row = Record<string, unknown>;
 const str = (v: unknown): string => (v == null ? '' : String(v));
@@ -252,16 +253,25 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // Route53 alias map: record name → its alias_target DNSName (both normalized). Lets a CloudFront
   // CUSTOM-domain origin (not a raw *.elb.amazonaws.com) be resolved to the LB it ultimately points
   // at — the gap that left grafana-internal.atomai.click-style origins target-less.
-  // Normalize a DNS name AND strip a leading `dualstack.` — Route53 ELB ALIAS targets carry a
-  // `dualstack.` prefix that the LB's bare dns_name lacks, so it must be removed to match.
-  const bareDns = (v: unknown): string => dns(v).replace(/^dualstack\./, '');
-  // Drop AMBIGUOUS names (same name → conflicting targets, e.g. split-horizon public/private zones)
-  // so resolution is DETERMINISTIC regardless of input order — never an order-dependent edge.
-  // NOTE: the synced route53 row has no private-zone flag (only zone_id), so a public/private split
-  // can't be distinguished here; the ambiguity-drop below + the internet-facing reachability guard
-  // cover the split-horizon cases that matter (conflicting or unreachable targets).
+  // Normalize a DNS name AND strip a leading `dualstack.` — but ONLY when the result is an ELB host
+  // (the `dualstack.` prefix is an ELB ALIAS convention; a literal `dualstack.`-prefixed non-ELB
+  // hostname must not be mangled, which would break a later chain-hop lookup).
+  // ELB hosts come in two shapes: ALB `<name>.<region>.elb.amazonaws.com` (region BEFORE elb) and
+  // NLB `<name>.elb.<region>.amazonaws.com` (region AFTER elb) — accept both.
+  const isElbHost = (h: string): boolean => /\.elb\.(?:[a-z0-9-]+\.)?amazonaws\.com$/i.test(h);
+  const bareDns = (v: unknown): string => {
+    const d = dns(v);
+    const stripped = d.replace(/^dualstack\./, '');
+    return stripped !== d && isElbHost(stripped) ? stripped : d;
+  };
+  // Build name → alias_target, but ONLY from PUBLIC-zone records (private_zone === false). A standard
+  // CloudFront custom origin resolves its origin over PUBLIC DNS, so a private-zone record can't back
+  // a reachable CF→LB edge; private_zone===true (private) or undefined (visibility unknown — e.g. an
+  // older sync before the private_zone column) is skipped → the origin stays honestly unresolved.
+  // Also drop AMBIGUOUS names (same name → conflicting targets) so resolution is DETERMINISTIC.
   const r53Targets = new Map<string, Set<string>>();
   for (const r of input.route53 ?? []) {
+    if (r.private_zone !== false) continue; // public-only (skips private + unknown)
     const name = dns(r.name) || dns(r.resource_id);
     const aliasT = (r.alias_target && typeof r.alias_target === 'object') ? (r.alias_target as Row) : {};
     // ALIAS records carry alias_target.DNSName; CNAME/other records carry the target in `records[]`

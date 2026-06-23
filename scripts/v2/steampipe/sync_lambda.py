@@ -168,9 +168,13 @@ QUERIES = {
         # Front-door entry: alias/A/CNAME records whose alias_target (PascalCase .DNSName) points
         # at a CloudFront distribution domain or an LB dns_name. record_id = name+type (a name can
         # hold multiple record types). route53 is global → literal region.
-        "SELECT (name || ' ' || type) AS record_id, name, type, 'global' AS region, account_id, "
-        "zone_id, alias_target, records, ttl "
-        "FROM aws_route53_record WHERE type IN ('A', 'AAAA', 'CNAME') ORDER BY name",
+        # private_zone (LEFT JOIN aws_route53_zone on zone_id) lets the topology builder resolve ONLY
+        # PUBLIC-zone records to a real CF→LB edge — a standard CloudFront custom origin resolves its
+        # origin over public DNS, so a private-zone record can't back a reachable edge.
+        "SELECT (r.name || ' ' || r.type) AS record_id, r.name, r.type, 'global' AS region, r.account_id, "
+        "r.zone_id, r.alias_target, r.records, r.ttl, z.private_zone "
+        "FROM aws_route53_record r LEFT JOIN aws_route53_zone z ON z.id = r.zone_id "
+        "WHERE r.type IN ('A', 'AAAA', 'CNAME') ORDER BY r.name",
         "record_id",
         "region",
     ),

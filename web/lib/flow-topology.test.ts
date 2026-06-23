@@ -190,11 +190,32 @@ describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', (
   it('links CF→LB when the origin custom domain Route53-aliases to a synced internet-facing LB', () => {
     const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
     const alb = { resource_id: 'web-alb', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/web-alb/1', dns_name: 'web-123.ap-northeast-2.elb.amazonaws.com' };
-    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'web-123.ap-northeast-2.elb.amazonaws.com.' } }];
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', private_zone: false, alias_target: { DNSName: 'web-123.ap-northeast-2.elb.amazonaws.com.' } }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
     expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
     // resolved to a real LB → no leftover unresolved origin node for svc.atomai.click
     expect(g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('svc.atomai.click'))).toBeFalsy();
+  });
+
+  // PUBLIC-only: a record that exists ONLY in a PRIVATE hosted zone must NOT back a CF→LB edge
+  // (a standard custom origin resolves over public DNS) — no false edge.
+  it('does NOT resolve a private-zone record to a CF→LB edge', () => {
+    const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
+    const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'priv-lb.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', private_zone: true, alias_target: { DNSName: 'priv-lb.ap-northeast-2.elb.amazonaws.com.' } }];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
+    expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(false);
+    // not resolvable (private) → plain unresolved, no resolvedTarget surfaced
+    expect(g.nodes.find((n) => n.kind === 'origin')?.meta?.resolvedTarget).toBeUndefined();
+  });
+
+  // UNKNOWN visibility (no private_zone field, e.g. pre-resync data) → conservative: no edge.
+  it('does NOT resolve a record with unknown visibility (no private_zone field)', () => {
+    const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
+    const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'lb-u.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'lb-u.ap-northeast-2.elb.amazonaws.com.' } }];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
+    expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(false);
   });
 
   // chain: origin → r53 record → another r53 record → internet-facing LB (2 hops).
@@ -202,8 +223,8 @@ describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', (
     const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'edge.atomai.click' }] };
     const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'lb-1.ap-northeast-2.elb.amazonaws.com' };
     const r53 = [
-      { resource_id: 'edge.atomai.click A', name: 'edge.atomai.click.', type: 'A', alias_target: { DNSName: 'svc.atomai.click.' } },
-      { resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'lb-1.ap-northeast-2.elb.amazonaws.com.' } },
+      { resource_id: 'edge.atomai.click A', name: 'edge.atomai.click.', type: 'A', private_zone: false, alias_target: { DNSName: 'svc.atomai.click.' } },
+      { resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', private_zone: false, alias_target: { DNSName: 'lb-1.ap-northeast-2.elb.amazonaws.com.' } },
     ];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
     expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
@@ -214,7 +235,7 @@ describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', (
   it('does NOT draw a CF→LB edge to an internal-scheme LB (unreachable) — surfaces it instead', () => {
     const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
     const alb = { resource_id: 'int-alb', region: 'ap-northeast-2', scheme: 'internal', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/int-alb/1', dns_name: 'internal-x.ap-northeast-2.elb.amazonaws.com' };
-    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'internal-x.ap-northeast-2.elb.amazonaws.com.' } }];
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', private_zone: false, alias_target: { DNSName: 'internal-x.ap-northeast-2.elb.amazonaws.com.' } }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
     expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(false);
     const o = g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('svc.atomai.click'));
@@ -227,8 +248,8 @@ describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', (
     const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
     const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'lb-1.ap-northeast-2.elb.amazonaws.com' };
     const r53 = [
-      { resource_id: 'svc A pub', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'lb-1.ap-northeast-2.elb.amazonaws.com.' } },
-      { resource_id: 'svc A priv', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'other-lb.ap-northeast-2.elb.amazonaws.com.' } },
+      { resource_id: 'svc A pub', name: 'svc.atomai.click.', type: 'A', private_zone: false, alias_target: { DNSName: 'lb-1.ap-northeast-2.elb.amazonaws.com.' } },
+      { resource_id: 'svc A priv', name: 'svc.atomai.click.', type: 'A', private_zone: false, alias_target: { DNSName: 'other-lb.ap-northeast-2.elb.amazonaws.com.' } },
     ];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
     expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(false); // ambiguous → no edge
@@ -239,7 +260,7 @@ describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', (
   it('matches a synced LB when the Route53 alias target has a dualstack. prefix', () => {
     const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
     const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'demo3-1097511911.ap-northeast-2.elb.amazonaws.com' };
-    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'dualstack.demo3-1097511911.ap-northeast-2.elb.amazonaws.com.' } }];
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', private_zone: false, alias_target: { DNSName: 'dualstack.demo3-1097511911.ap-northeast-2.elb.amazonaws.com.' } }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
     expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
   });
@@ -248,7 +269,7 @@ describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', (
   it('resolves a CNAME record (records[]) to a synced internet-facing LB', () => {
     const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
     const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'cn-lb.ap-northeast-2.elb.amazonaws.com' };
-    const r53 = [{ resource_id: 'svc.atomai.click CNAME', name: 'svc.atomai.click.', type: 'CNAME', records: ['cn-lb.ap-northeast-2.elb.amazonaws.com'] }];
+    const r53 = [{ resource_id: 'svc.atomai.click CNAME', name: 'svc.atomai.click.', type: 'CNAME', private_zone: false, records: ['cn-lb.ap-northeast-2.elb.amazonaws.com'] }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
     expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
   });
@@ -257,7 +278,7 @@ describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', (
   // ELB → honest unresolved origin node, but its label/meta surfaces the resolved target.
   it('surfaces the resolved target on an unresolved node when the alias points to a non-synced ELB (cross-region)', () => {
     const cf = { resource_id: 'D2', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'grafana-internal.atomai.click' }] };
-    const r53 = [{ resource_id: 'grafana-internal.atomai.click A', name: 'grafana-internal.atomai.click.', type: 'A', alias_target: { DNSName: 'k8s-monitori-grafanan-xyz.elb.us-east-1.amazonaws.com.' } }];
+    const r53 = [{ resource_id: 'grafana-internal.atomai.click A', name: 'grafana-internal.atomai.click.', type: 'A', private_zone: false, alias_target: { DNSName: 'k8s-monitori-grafanan-xyz.elb.us-east-1.amazonaws.com.' } }];
     const g = buildFlowGraph({ cloudfront: [cf], route53: r53 }); // the target LB is NOT synced
     const o = g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('grafana-internal.atomai.click'));
     expect(o).toBeTruthy();
