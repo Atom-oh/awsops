@@ -100,7 +100,7 @@ interface K8sItem {
   metadata?: { name?: string; namespace?: string; creationTimestamp?: string; labels?: Record<string, string>;
     ownerReferences?: { kind?: string; name?: string }[] };
   status?: {
-    conditions?: { type?: string; status?: string }[];
+    conditions?: { type?: string; status?: string; reason?: string; message?: string }[];
     nodeInfo?: { kubeletVersion?: string };
     phase?: string;
     podIP?: string;
@@ -120,6 +120,7 @@ interface K8sItem {
     containers?: { resources?: { requests?: Record<string, string> } }[];
     initContainers?: { resources?: { requests?: Record<string, string> } }[];
     overhead?: Record<string, string>;
+    taints?: { key?: string; value?: string; effect?: string }[];
   };
   // core /api/v1 Endpoints: subsets[].addresses[].ip = the pod IPs backing the Service
   // (the Endpoints object name == the Service name). Read by normalizeEndpoint.
@@ -173,6 +174,17 @@ export function normalizeNode(it: K8sItem): NodeRow {
   const ready = it.status?.conditions?.find((c) => c.type === 'Ready');
   const cap = it.status?.capacity ?? {};
   const alloc = it.status?.allocatable ?? {};
+  const taints = (it.spec?.taints ?? []).map((t) => ({
+    key: t.key ?? '',
+    value: t.value ?? '',
+    effect: t.effect ?? '',
+  }));
+  const conditions = (it.status?.conditions ?? []).map((c) => ({
+    type: c.type ?? '',
+    status: c.status ?? '',
+    reason: c.reason ?? '',
+    message: c.message ?? '',
+  }));
   return {
     name: it.metadata?.name ?? '',
     status: ready?.status === 'True' ? 'Ready' : 'NotReady',
@@ -187,6 +199,9 @@ export function normalizeNode(it: K8sItem): NodeRow {
     memAllocatable: parseMem(alloc.memory),
     diskCapacity: parseMem(cap['ephemeral-storage']),
     diskAllocatable: parseMem(alloc['ephemeral-storage']),
+    ...(Object.keys(labels).length ? { labels } : {}),
+    ...(taints.length ? { taints } : {}),
+    ...(conditions.length ? { conditions } : {}),
   };
 }
 
