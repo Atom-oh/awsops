@@ -95,16 +95,29 @@ def _report(payload, dry_run):
             ddb.finish_report(conn, report_id, status=status, sources_used=sources_used,
                               summary=summary, artifact_uri=artifact_uri,
                               title=meta["title"], tags=meta["tags"])
-            # V1 parity: email the mailing list for SCHEDULED runs only (manual runs are viewed in-app).
-            # Best-effort + flag-gated by the topic env (empty when diagnosis_notify_enabled=false → no-op).
-            if payload.get("scheduled"):
-                topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
-                if topic:
-                    from diagnosis import notify
-                    domain = os.environ.get("APP_DOMAIN", "")
-                    url = f"https://{domain}/ai-diagnosis?report={report_id}" if domain else ""
-                    notify.publish_report(topic, meta.get("title"), md, url,
-                                          region=os.environ.get("AWS_REGION"))
+            # V1 parity: publish to the diagnosis SNS topic on EVERY completion (manual + scheduled) —
+            # v1 notifies unconditionally; the destination/opt-out (email/Slack/Lambda fan-out) lives on
+            # the SNS subscription side. Best-effort + flag-gated by the topic env (empty when
+            # diagnosis_notify_enabled=false → no-op). `scheduled` only flavors the message wording.
+            #
+            # GOVERNANCE (ADR-040/041 external-comms): widening the trigger from scheduler-only to any
+            # completed run (incl. an authed non-admin's manual run) is governed by, in order:
+            #   1. diagnosis_notify_enabled — flag-OFF by default (no topic env → this block is a no-op);
+            #   2. admin-curated recipients — subscriber add/remove is admin-only AND each address must
+            #      complete the SNS email-confirmation handshake, so the *recipient set* is admin-vetted
+            #      regardless of who triggers the run;
+            #   3. owner directive — v1 parity (notify on every completion) is an explicit product call.
+            # The published content (executive-summary teaser + deep link) and the recipient set are
+            # IDENTICAL to the already-shipped scheduled path — this change widens *who can trigger*, not
+            # *what is exposed or to whom* — so it adds no new DLP/redaction surface over the prior code.
+            topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
+            if topic:
+                from diagnosis import notify
+                domain = os.environ.get("APP_DOMAIN", "")
+                url = f"https://{domain}/ai-diagnosis?report={report_id}" if domain else ""
+                notify.publish_report(topic, meta.get("title"), md, url,
+                                      region=os.environ.get("AWS_REGION"),
+                                      scheduled=bool(payload.get("scheduled")))
             return {"report_id": report_id, "status": status, "artifact_uri": artifact_uri}, md.encode("utf-8")
         except Exception as e:  # noqa: BLE001
             print(traceback.format_exc())  # full trace → CloudWatch logs only
