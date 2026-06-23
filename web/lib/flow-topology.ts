@@ -198,7 +198,13 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // keyed by (distribution id | origin domain) so ONLY the actual VPC-origin origin links to the LB —
   // a co-resident external/custom origin on the same distribution does NOT get a false CF→LB edge.
   const voByDistDomain = new Map<string, string[]>();
+  // ALL-status VPC-origin (dist|domain) keys — used ONLY to DETECT that an origin is a VPC origin
+  // (so it's excluded from public Route53 resolution). Deployed-only would let a Deploying/Failed
+  // VPC origin slip into the public path; detection must be status-agnostic. Edge LINKING still uses
+  // voByDistDomain (Deployed + arn only).
+  const vpcOriginKeys = new Set<string>();
   for (const v of input.cloudfront_vpc_origin ?? []) {
+    for (const ref of arr(v.origin_refs)) vpcOriginKeys.add(`${str(ref.distribution_id)}|${str(ref.domain)}`);
     if (str(v.status) !== 'Deployed' || !v.arn) continue;
     for (const ref of arr(v.origin_refs)) {
       const k = `${str(ref.distribution_id)}|${str(ref.domain)}`;
@@ -357,7 +363,8 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       // A VPC origin is ANY origin with VpcOriginConfig (Steampipe path) OR a matched cloudfront_vpc_origin
       // (SDK path) — both are private, NOT reached via public DNS. Detect via EITHER so a non-Deployed or
       // SDK-omitted VPC origin can't slip into public Route53 resolution.
-      const isVpcOrigin = !!voArns || (!!o.VpcOriginConfig && typeof o.VpcOriginConfig === 'object');
+      const isVpcOrigin = vpcOriginKeys.has(`${str(c.resource_id)}|${domain}`)
+        || (!!o.VpcOriginConfig && typeof o.VpcOriginConfig === 'object');
       // Custom-domain origin → resolve via the Route53 alias chain. Lands on a SYNCED LB → draw the
       // real CF→LB edge (A). Lands on a non-synced (e.g. cross-region) ELB → fall through to an
       // unresolved node but surface the resolved target so the chain is still legible (C).
