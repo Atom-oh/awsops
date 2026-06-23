@@ -18,6 +18,10 @@ RUN pip install --no-cache-dir \
 COPY streamable_http_sigv4.py .
 COPY account_utils.py .
 COPY agent.py .
+# ADR-006 RCA (EoG) — read-only orchestrator reached via payload mode=="rca".
+# Inert unless RCA_ORCHESTRATOR_ENABLED=true is set on the runtime (default off).
+COPY rca_orchestrator.py .
+COPY rca/ ./rca/
 
 EXPOSE 8080
 
