@@ -249,7 +249,7 @@ git commit -m "docs(v2-ref): EKS onboarding reference (P1e)"
       W --> Q[SQS] --> WK[async workers SFN+Lambda/Fargate]
       W --> AC[AgentCore SSM-configured]
     ```
-  - **Component table**: | Component | Reference | Governing ADRs | Key files | Status | — one row per `01`–`07` with relative links (e.g. `[Edge](01-edge-network.md)`), the ADR numbers from each doc's Decisions section, the primary `.tf`/dir, and status (P1a–P2 ✅, P3/P4 🔜).
+  - **Component table**: | Component | Reference | Governing ADRs | Key files | Status | — one row per `01`–`07` with relative links (e.g. `[Edge](../reference/01-edge-network.md)`), the ADR numbers from each doc's Decisions section, the primary `.tf`/dir, and status (P1a–P2 ✅, P3/P4 🔜).
   - **Phase status**: P1a–P1f ✅, P2 ✅ (W9 GREEN), P3 🔜 (9+1 agents + right-dock UI + OpenCost button), P4 🔜 (incident/ChatOps + DevOps Agent federation).
   - Pointer: "Execution history for each phase lives in `../archive/` (see its README)."
 

@@ -64,7 +64,7 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
 
 - **ADR-030** — Aurora replaces the v1 `data/*.json` state layer (NOT Steampipe).
   Defines the Phase 1 7-table schema and the ECS Fargate + Aurora split.
-  See [`../../decisions/030-ecs-fargate-aurora-split.md`](../../decisions/030-ecs-fargate-aurora-split.md).
+  See [`../../decisions/001-v2-foundation.md`](../../decisions/001-v2-foundation.md).
 
 ## Key files / 핵심 파일
 

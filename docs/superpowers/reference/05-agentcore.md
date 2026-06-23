@@ -57,13 +57,13 @@ Terraform; `provision.py` overwrites with real values.
 
 - **ADR-031** — runtime-customizable agents & skills (Aurora catalog + resolver +
   registry-agnostic `agent.py`; built-in vs custom tiers; per-account Agent Spaces;
-  BYO-MCP). [`../../decisions/031-runtime-customizable-agents-skills.md`](../../decisions/031-runtime-customizable-agents-skills.md)
+  BYO-MCP). [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
 - **ADR-004** — gateway role split (note the **2026-06-03 correction: 7 → 8 gateways**;
-  v2 further splits monitoring → 9). [`../../decisions/004-gateway-role-split.md`](../../decisions/004-gateway-role-split.md)
+  v2 further splits monitoring → 9). [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
 - **ADR-002 / ADR-025** — AI hybrid routing & multi-route parallel synthesis (the
   classifier picks built-in routes + enabled custom agents).
-  [`../../decisions/002-ai-hybrid-routing.md`](../../decisions/002-ai-hybrid-routing.md),
-  [`../../decisions/025-multi-route-parallel-synthesis.md`](../../decisions/025-multi-route-parallel-synthesis.md)
+  [`../../decisions/003-ai-agent-routing.md`](../../decisions/003-ai-agent-routing.md),
+  [`../../decisions/003-ai-agent-routing.md`](../../decisions/003-ai-agent-routing.md)
 
 ## Key files / 핵심 파일
 
