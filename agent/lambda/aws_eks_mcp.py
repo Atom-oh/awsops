@@ -85,7 +85,7 @@ def lambda_handler(event, context):
         elif t == "list_k8s_resources":
             return {"statusCode": 200, "body": json.dumps({
                 "message": "K8s resource listing requires kubectl/API access on EC2.",
-                "suggestion": "Use SSM: aws ssm send-command --parameters 'commands=[\"kubectl get {} -n {} --context arn:aws:eks:ap-northeast-2:111122223333:cluster/{}\"]'".format(
+                "suggestion": "Use SSM: aws ssm send-command --parameters 'commands=[\"kubectl get {} -n {} --context arn:aws:eks:ap-northeast-2:123456789012:cluster/{}\"]'".format(
                     args.get('kind', 'pods'), args.get('namespace', 'default'), args.get('cluster_name', ''))})}
 
         # Get pod logs (requires kubectl on EC2) / 파드 로그 조회 (EC2에서 kubectl 필요)
