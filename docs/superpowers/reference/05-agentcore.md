@@ -20,7 +20,9 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
   injected via a `GATEWAYS_JSON` env var (agent.py's documented discovery fallback —
   no awscli-in-image dependency). Runtime name `awsops_v2_agent` (underscores only).
 - **8 section gateways** — `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway`
-  (ADR-004 canonical count = **8**). **External observability is NOT a 9th gateway** — per
+  (ADR-004 canonical count = **8 section gateways**; the provisioner/`catalog.py` still creates a
+  9th `external-obs` gateway slot, so the deployed skeleton is **9 provisioned / 8 section-agent
+  routes**). **External observability is NOT a doctrinal section gateway** — per
   **ADR-039** it is the **Integrations axis** (the egress MCP substrate), re-homing what an
   earlier draft listed as an `external-obs` gateway. `monitoring` covers AWS-native monitoring;
   the external-obs plugin datasource registry / OTLP / datasource-diag re-home is the Integrations

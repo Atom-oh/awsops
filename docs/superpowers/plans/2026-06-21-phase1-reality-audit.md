@@ -1,5 +1,7 @@
 # Phase 1 — 현실 감사 (Reality Audit) Implementation Plan
 
+> **✅ EXECUTED (2026-06-21).** Output landed: `docs/reviews/2026-06-21-docs-reality-audit.md`. The `- [ ]` checkboxes below are historical planning artifacts, not open work.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 문서(ADR/reference/architecture) ↔ 코드/terraform/state ↔ 배포 현실의 3자 대조로 단일 **감사 리포트**를 만들어, BASELINE(Phase 2)을 먹일 검증된 진실 + V1→V2 미구현/오구현 목록 + **ADR 3분류·병합 클러스터(옵션 Y: 새 통합 ADR 001~N 후보)**를 확정한다.
