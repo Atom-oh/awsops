@@ -298,15 +298,17 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // a known Route53 record. The terminal may be a synced LB dns_name (→ real CF→LB edge) or a
   // non-synced (e.g. cross-region) ELB host (→ surfaced as the unresolved origin's resolved target).
   const resolveViaR53 = (domain: string): string | null => {
-    let cur = domain, target: string | null = null, hops = 0;
+    let cur = domain, hops = 0;
     const seen = new Set<string>();
-    while (hops < 4 && r53AliasByName.has(cur) && !seen.has(cur)) {
+    while (r53AliasByName.has(cur)) {
+      // cycle (A→B→A) or hop-limit exhaustion → the terminal is untrustworthy; return null rather
+      // than a mid-chain record name (which would surface as a misleading resolved target).
+      if (hops >= 4 || seen.has(cur)) return null;
       seen.add(cur);
       cur = r53AliasByName.get(cur)!;
-      target = cur;
       hops++;
     }
-    return target;
+    return cur === domain ? null : cur; // terminated outside the map; null if nothing resolved
   };
 
   // 2) Route53 → CloudFront / LB. Records are the true front door (custom domain). Match the
@@ -348,12 +350,16 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
         let linked = false;
         for (const arn of voArns) { const id = lbByArn.get(arn); if (id) { addEdge(cfId, id); linked = true; } }
         if (linked) return;
+        // Known VPC origin but backing LB not synced: it is NOT reached via public DNS, so do NOT
+        // fall through to the Route53 public-resolution path below (that would draw a misleading
+        // public CF→LB edge) — leave it as the honest unresolved VPC-origin node.
       }
       // Custom-domain origin → resolve via the Route53 alias chain. Lands on a SYNCED LB → draw the
       // real CF→LB edge (A). Lands on a non-synced (e.g. cross-region) ELB → fall through to an
       // unresolved node but surface the resolved target so the chain is still legible (C).
+      // Skipped for VPC origins (voArns) — those aren't public-DNS paths.
       let resolvedTarget: string | null = null;
-      if (domain) {
+      if (domain && !voArns) {
         const term = resolveViaR53(dns(domain));
         if (term) {
           const lid = lbByDns.get(term);
