@@ -51,10 +51,10 @@ viewer ──TLS──> CloudFront ──TLS (https-only:443)──> VPC Origin
 
 ## Decisions (ADRs) / 결정
 
-- [ADR-030 — ECS Fargate + Aurora split](../../decisions/030-ecs-fargate-aurora-split.md):
+- [ADR-001 — v2 foundation](../../decisions/001-v2-foundation.md):
   adopts the v2 topology — web on **ECS Fargate** (ARM64) behind an internal ALB, replacing the
   v1 single-EC2 host. This reference covers the edge/ALB/network half of that topology.
-- [ADR-028 — CloudFront CachingDisabled](../../decisions/028-cloudfront-caching-disabled.md):
+- [ADR-014 — cross-cutting cache / i18n / CDN](../../decisions/014-cross-cutting-cache-i18n-cdn.md):
   the default cache behavior runs with `CACHING_DISABLED` so dynamic dashboard responses and
   SSE streams are never cached/buffered at the edge.
 
@@ -93,7 +93,7 @@ The 504 → 200 root cause (reuse-critical — re-read before changing the edge)
    name** (e.g. `*-alb-origin-tls`) + a `terraform apply -replace` so Terraform stands up the new
    `https-only` origin, repoints the distribution, then deletes the old one.
 
-Also: SSE must not buffer at the edge — keep `CACHING_DISABLED` on the dynamic behavior (ADR-028)
+Also: SSE must not buffer at the edge — keep `CACHING_DISABLED` on the dynamic behavior (ADR-014)
 and ensure origin read timeout exceeds the event interval. The real app (P1d) must emit an SSE
 heartbeat at least every ~20s.
 

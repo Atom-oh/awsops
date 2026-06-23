@@ -34,7 +34,7 @@ web POST /api/jobs
 **EN** — `POST /api/jobs` writes the durable ledger row first (source of truth), then best-effort
 SQS send. The dispatcher Lambda runs outside the VPC (reaches SQS/SFN APIs directly), validates
 the job type against the `handlers.py` registry (read/compute only — mutate/unknown rejected per
-ADR-029 §6), and calls `StartExecution(name=job_id)` — the execution name gives transport-level
+ADR-005), and calls `StartExecution(name=job_id)` — the execution name gives transport-level
 idempotency (`ExecutionAlreadyExists` is treated as success). Step Functions Standard routes on
 `$.runtime`: a `RunLambda` state for short jobs, or `ecs:runTask.sync` Fargate for long/OOM-risk
 jobs. The worker claims `running` and writes `succeeded` itself. Because SFN cannot issue SQL to
@@ -45,7 +45,7 @@ $0 idle).**
 
 **KO** — `POST /api/jobs`는 내구성 있는 ledger 행을 먼저 쓰고(권위), 그 다음 best-effort SQS send.
 디스패처 Lambda는 VPC 밖에서 동작(SQS/SFN API 직접 접근)하고 `handlers.py` 레지스트리로 타입을
-검증(read/compute만 — mutate/unknown 거부, ADR-029 §6)한 뒤 `StartExecution(name=job_id)` 호출 —
+검증(read/compute만 — mutate/unknown 거부, ADR-005)한 뒤 `StartExecution(name=job_id)` 호출 —
 실행명이 transport 멱등을 제공(`ExecutionAlreadyExists`는 성공 처리). Step Functions Standard가
 `$.runtime`으로 라우팅: 짧은 잡은 `RunLambda`, 길거나 OOM 위험인 잡은 `ecs:runTask.sync` Fargate.
 워커가 직접 `running`을 claim하고 `succeeded`를 쓴다. SFN은 VPC-only Aurora에 직접 SQL을 못 쓰므로
@@ -55,13 +55,13 @@ $0 idle).**
 
 ## Decisions (ADRs) / 결정
 
-- **[ADR-029 — Mutating-action framework](../../decisions/029-mutating-action-framework.md)** — workers
+- **[ADR-005 — AWS mutation & autonomy (FROZEN)](../../decisions/005-aws-mutation-autonomy-frozen.md)** — workers
   are the execution surface for the gated mutating operations. P2 implements the *safety hooks* only
   (idempotency token, kill-switch, mutate/unknown-type guard, dry-run pass-through); approval workflow,
   first-class rollback, and the mutate-action registry are deferred to P3+ (no mutate ops exist yet).
   / 워커는 게이트된 mutate 작업의 실행 표면. P2는 안전 훅(멱등 토큰·킬스위치·mutate/unknown 타입
   가드·dry-run 통과)만 구현; 승인 워크플로·1급 롤백·mutate-action 레지스트리는 P3+로 연기.
-- **[ADR-030 — ECS/Fargate + Aurora split](../../decisions/030-ecs-fargate-aurora-split.md)** — the job
+- **[ADR-001 — v2 foundation (ECS/Fargate + Aurora split)](../../decisions/001-v2-foundation.md)** — the job
   ledger is the Aurora `worker_jobs` table (an infra table orthogonal to the 7 app-state tables); the
   worker_jobs row, not the SFN execution status, is the source of truth.
   / 잡 ledger는 Aurora `worker_jobs` 테이블(7개 app-state 테이블과 직교하는 인프라 테이블); 권위는
