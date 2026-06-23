@@ -376,13 +376,14 @@ TARGETS = {
     "prometheus-mcp-target": {
         "gateway": "monitoring",
         "lambda_key": "prometheus-mcp",
-        "description": "Prometheus read-only — PromQL instant/range query, labels, series (4 tools)",
+        "description": "Prometheus read-only — PromQL instant/range query, labels, series, metric metadata (6 tools)",
         "tools": [
             {"name": "prometheus_schema", "description": "Introspect metric + label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "prometheus_query", "description": "Instant PromQL query at a single time", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time: unix/ISO (default now)")}, "required": ["query"]}},
             {"name": "prometheus_query_range", "description": "Range PromQL query over a time window", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix/ISO (default now-1h)"), "end": _p("string", "unix/ISO (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
             {"name": "prometheus_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "prometheus_series", "description": "Find series matching a selector", "inputSchema": {"type": "object", "properties": {"match": _p("string", "Series selector e.g. up{job=\"x\"}")}, "required": ["match"]}},
+            {"name": "prometheus_metric_meta", "description": "Per-metric type (metadata) + label names for the given metrics (read-only)", "inputSchema": {"type": "object", "properties": {"metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric names (max 12)"}}, "required": ["metrics"]}},
         ],
     },
     # Loki datasource (v1 family #3) — read-only LogQL. monitoring gateway. User-supplied endpoint via
@@ -416,13 +417,14 @@ TARGETS = {
     "mimir-mcp-target": {
         "gateway": "monitoring",
         "lambda_key": "mimir-mcp",
-        "description": "Mimir read-only — PromQL instant/range, labels, series (4 tools)",
+        "description": "Mimir read-only — PromQL instant/range, labels, series, metric metadata (6 tools)",
         "tools": [
             {"name": "mimir_schema", "description": "Introspect metric + label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "mimir_query", "description": "Instant PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time unix/ISO (default now)")}, "required": ["query"]}},
             {"name": "mimir_query_range", "description": "Range PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix (default now-1h)"), "end": _p("string", "unix (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
             {"name": "mimir_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "mimir_series", "description": "Find series matching a selector", "inputSchema": {"type": "object", "properties": {"match": _p("string", "Series selector")}, "required": ["match"]}},
+            {"name": "mimir_metric_meta", "description": "Per-metric type (metadata) + label names for the given metrics (read-only)", "inputSchema": {"type": "object", "properties": {"metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric names (max 12)"}}, "required": ["metrics"]}},
         ],
     },
 }

@@ -20,7 +20,7 @@ import tempo_mcp  # noqa: E402
 import mimir_mcp  # noqa: E402
 
 MUTATING = re.compile(r"(create|update|delete|insert|drop|alter|write|put|post|remove|exec|mutat|set_)", re.I)
-READ_OK = re.compile(r"(query|search|labels?|series|values?|tables?|describe|schema|fetch|get|health|ready|range|tags?|trace)", re.I)
+READ_OK = re.compile(r"(query|search|labels?|series|values?|tables?|describe|schema|fetch|get|health|ready|range|tags?|trace|meta)", re.I)
 
 
 class TestReadOnlyTools(unittest.TestCase):

@@ -160,12 +160,47 @@ def prometheus_health(args):
     return ok(health(_ds(), "/-/healthy"))
 
 
+def prometheus_metric_meta(args):
+    metrics = args.get("metrics")
+    if not isinstance(metrics, list):
+        metrics = []
+    # Validate metric names (Prometheus name grammar) before building a `match[]` selector — drops
+    # malformed/injection-y inputs (e.g. embedded `"`/`\`) rather than forming a bad selector.
+    metrics = [m for m in (str(x).strip() for x in metrics) if m and re.match(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$", m)][:12]
+    if not metrics:
+        return ok({})
+
+    creds = _ds()
+    base = "/api/v1"
+    out = {}
+    for m in metrics:
+        # Per-metric scope (metadata?metric=<m>) — never download the server-wide metadata map.
+        entry = {"type": None, "labels": []}
+        try:
+            meta_resp = _get(creds, f"{base}/metadata", {"metric": m})
+            meta = meta_resp if isinstance(meta_resp, dict) else {}
+            v = meta.get(m)
+            entry["type"] = v[0].get("type") if isinstance(v, list) and v and isinstance(v[0], dict) else None
+            labels_data = _get(creds, f"{base}/labels", {"match[]": f'{{__name__="{m}"}}'})
+            labels = [lb for lb in (labels_data if isinstance(labels_data, list) else []) if lb != "__name__"]
+            if len(labels) > 200:  # bound high-cardinality label sets (mirrors *_labels [:N] convention)
+                entry["labels"], entry["labels_truncated"] = labels[:200], True
+            else:
+                entry["labels"] = labels
+        except _ApiError as e:
+            entry["error"] = str(e)[:200]
+        out[m] = entry
+
+    return ok(out)
+
+
 _TOOLS = {
     "prometheus_query": prometheus_query,
     "prometheus_query_range": prometheus_query_range,
     "prometheus_labels": prometheus_labels,
     "prometheus_series": prometheus_series, "prometheus_schema": prometheus_schema,
     "prometheus_health": prometheus_health,
+    "prometheus_metric_meta": prometheus_metric_meta,
 }
 
 
