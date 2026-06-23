@@ -120,7 +120,7 @@ The CLI `--inline-payload` option has JSON parsing issues — use **Python/boto3
 
 ## Why do I get a "cross-account blocked" error in a single-account setup?
 
-The AWSops live environment is **single-account** (`180294183052`). Yet selecting the **host account itself** as the target in chat used to make a tool try to self-assume a cross-account role that doesn't exist on the host, causing `AccessDenied` — which the agent then **mis-reported** as "cross-account blocked."
+The AWSops live environment is **single-account** (`123456789012`). Yet selecting the **host account itself** as the target in chat used to make a tool try to self-assume a cross-account role that doesn't exist on the host, causing `AccessDenied` — which the agent then **mis-reported** as "cross-account blocked."
 
 ### What went wrong
 

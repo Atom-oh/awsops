@@ -696,6 +696,14 @@ async def _stream_text(agent, user_input):
 # BFF faked a typewriter). callback_handler=None disables Strands' default stdout printer.
 @app.entrypoint
 async def handler(payload):
+    # ADR-006 RCA (EoG) — a second, read-only execution path distinct from chat. The
+    # deterministic controller returns a structured dict (NOT a token stream), so it
+    # short-circuits before build_conversation / the no-input guard. Flag-gated inside
+    # handle_rca (RCA_ORCHESTRATOR_ENABLED); returns {"disabled": True} when off.
+    if payload.get("mode") == "rca":
+        from rca_orchestrator import handle_rca
+        return handle_rca(payload)
+
     user_input, history = build_conversation(payload)
     if not user_input:
         yield {"delta": "No input provided."}

@@ -5,9 +5,9 @@
 
 ## Context / 컨텍스트
 
-여러 AWS 계정을 운영하는 조직은 계정별 별도 인스턴스 배포 없이, 단일 AWSops에서 통합 대시보드와 계정별 뷰가 필요하다. v2는 단일 계정 호스트(`180294183052`)에서 ECS Fargate로 동작하며, 대상 계정의 리소스를 **read-only**로만 조회한다(AWS-리소스 변경·자율은 영구 동결 — 프로젝트 read-only 원칙). 계정 추가/제거는 코드 변경 없이 런타임 구성으로 처리되어야 하고, 단일 계정 동작은 그대로 호환되어야 한다.
+여러 AWS 계정을 운영하는 조직은 계정별 별도 인스턴스 배포 없이, 단일 AWSops에서 통합 대시보드와 계정별 뷰가 필요하다. v2는 단일 계정 호스트(`123456789012`)에서 ECS Fargate로 동작하며, 대상 계정의 리소스를 **read-only**로만 조회한다(AWS-리소스 변경·자율은 영구 동결 — 프로젝트 read-only 원칙). 계정 추가/제거는 코드 변경 없이 런타임 구성으로 처리되어야 하고, 단일 계정 동작은 그대로 호환되어야 한다.
 
-Organizations running multiple AWS accounts need a unified dashboard and per-account views from a single AWSops, without per-account deployments. v2 runs on a single host account (`180294183052`) on ECS Fargate and only queries target-account resources **read-only** (AWS-resource mutation and autonomy stay permanently frozen — the project's read-only principle). Adding/removing accounts must be a runtime config operation with no code change, and single-account operation must remain backwards compatible.
+Organizations running multiple AWS accounts need a unified dashboard and per-account views from a single AWSops, without per-account deployments. v2 runs on a single host account (`123456789012`) on ECS Fargate and only queries target-account resources **read-only** (AWS-resource mutation and autonomy stay permanently frozen — the project's read-only principle). Adding/removing accounts must be a runtime config operation with no code change, and single-account operation must remain backwards compatible.
 
 ## Decision / 결정
 

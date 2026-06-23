@@ -859,7 +859,7 @@ Start dev (`npm run dev`) and for each theme (Teal default, then switch to Azure
 
 Run: `make deploy`
 (What it does: ECR login → arm64 buildx build & push of the `web` image → ECS force-new-deployment → wait stable → smoke `GET /api/health`. No terraform apply, no DB migrate.)
-Expected: deployment reaches steady state; health smoke returns 200. Verify the live site at `https://awsops-v2.atomai.click` shows the teal theme and the picker works.
+Expected: deployment reaches steady state; health smoke returns 200. Verify the live site at `https://awsops-v2.example.com` shows the teal theme and the picker works.
 
 ---
 

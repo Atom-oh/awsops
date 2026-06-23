@@ -3,10 +3,10 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as dns from 'dns';
 
-// VPC内 default resolver does not know atomai.click — fall back to public DNS.
+// VPC内 default resolver does not know example.com — fall back to public DNS.
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
-const BASE_URL = process.env.AWSOPS_CAPTURE_URL || 'https://awsops.atomai.click/awsops';
+const BASE_URL = process.env.AWSOPS_CAPTURE_URL || 'https://awsops.example.com/awsops';
 const LOGIN_EMAIL = process.env.AWSOPS_LOGIN_EMAIL || 'admin@awsops.local';
 const LOGIN_PASSWORD = process.env.AWSOPS_LOGIN_PASSWORD || '!234Qwer';
 const OUTPUT_DIR = path.join(__dirname, '..', 'static', 'screenshots');

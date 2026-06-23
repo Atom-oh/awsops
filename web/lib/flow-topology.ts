@@ -258,7 +258,7 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
 
   // Route53 alias map: record name → its alias_target DNSName (both normalized). Lets a CloudFront
   // CUSTOM-domain origin (not a raw *.elb.amazonaws.com) be resolved to the LB it ultimately points
-  // at — the gap that left grafana-internal.atomai.click-style origins target-less.
+  // at — the gap that left grafana-internal.example.com-style origins target-less.
   // Normalize a DNS name AND strip a leading `dualstack.` — but ONLY when the result is an ELB host
   // (the `dualstack.` prefix is an ELB ALIAS convention; a literal `dualstack.`-prefixed non-ELB
   // hostname must not be mangled, which would break a later chain-hop lookup).

@@ -36,7 +36,7 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
   for in-VPC schema migration from the deploy host.
 - **Backups**: 7-day retention. `deletion_protection = false` + `skip_final_snapshot = true`
   (dev-only — flip both for prod).
-- **Schema**: the **ADR-030 7-table schema** + a P2 `worker_jobs` table, applied via
+- **Schema**: the **ADR-030 baseline schema** (Phase-1 7-table baseline, **frozen**; expanded since via ULID `migrations/*` — current table count per `schema.sql`, incl. incident/k8s/integrations/topology/ai_usage/accounts) + a P2 `worker_jobs` table, applied via
   `psql` from an in-VPC deploy host. Tracked by a `schema_migrations` table.
   Idempotent (`CREATE TABLE IF NOT EXISTS` throughout).
 - **App access**: **node-pg** (`web/lib/db.ts`). No *live* Steampipe in v2 — live AWS
@@ -64,7 +64,7 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
 
 - **ADR-030** — Aurora replaces the v1 `data/*.json` state layer (NOT Steampipe).
   Defines the Phase 1 7-table schema and the ECS Fargate + Aurora split.
-  See [`../../decisions/030-ecs-fargate-aurora-split.md`](../../decisions/030-ecs-fargate-aurora-split.md).
+  See [`../../decisions/001-v2-foundation.md`](../../decisions/001-v2-foundation.md).
 
 ## Key files / 핵심 파일
 

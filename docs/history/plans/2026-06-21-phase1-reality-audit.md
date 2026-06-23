@@ -1,5 +1,7 @@
 # Phase 1 — 현실 감사 (Reality Audit) Implementation Plan
 
+> **✅ EXECUTED (2026-06-21).** Output landed: `docs/reviews/2026-06-21-docs-reality-audit.md`. The `- [ ]` checkboxes below are historical planning artifacts, not open work.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 문서(ADR/reference/architecture) ↔ 코드/terraform/state ↔ 배포 현실의 3자 대조로 단일 **감사 리포트**를 만들어, BASELINE(Phase 2)을 먹일 검증된 진실 + V1→V2 미구현/오구현 목록 + **ADR 3분류·병합 클러스터(옵션 Y: 새 통합 ADR 001~N 후보)**를 확정한다.
@@ -184,7 +186,7 @@ git commit -m "docs(audit): C V1->V2 functional gap (미구현/오구현) findin
 
 - [ ] **Step 2: 라이브 프로빙 — public read-only 경로**
 
-Run: `curl -fsS -o /dev/null -w "%{http_code}\n" https://awsops-v2.atomai.click/api/health`
+Run: `curl -fsS -o /dev/null -w "%{http_code}\n" https://awsops-v2.example.com/api/health`
 Expected: `200`. (authed 경로는 토큰 필요 → 가능하면 playwright MCP 로그인 후 read-only 페이지 스냅샷, 불가 시 'NEEDS-MANUAL-PROBE'로 기록하고 정적 결과로 대체.)
 
 - [ ] **Step 3: §B8 append + 커밋**

@@ -93,13 +93,13 @@ describe('getAgentSpace (degrade-safe)', () => {
   it('maps a present row into AgentSpace, incl. integration + flag columns (nullish-safe)', async () => {
     process.env.AURORA_ENDPOINT = 'aurora.example';
     query.mockResolvedValueOnce({ rows: [{
-      account_id: '180294183052', enabled_agent_ids: [1, 2], enabled_skill_ids: null,
+      account_id: '123456789012', enabled_agent_ids: [1, 2], enabled_skill_ids: null,
       enabled_integration_ids: [7], tool_allowlist: ['a'],
       allow_private_datasource: true, non_admin_authoring: null, version: 3,
     }] });
-    const sp = await getAgentSpace('180294183052');
+    const sp = await getAgentSpace('123456789012');
     expect(sp).toEqual({
-      accountId: '180294183052', enabledAgentIds: [1, 2], enabledSkillIds: [],
+      accountId: '123456789012', enabledAgentIds: [1, 2], enabledSkillIds: [],
       enabledIntegrationIds: [7], toolAllowlist: ['a'],
       allowPrivateDatasource: true, nonAdminAuthoring: false, version: 3,
     });

@@ -135,4 +135,4 @@ The theme is stored in localStorage and applied with no flash on refresh, and th
 
 ## Does it support multiple AWS accounts?
 
-The AWSops live environment runs on a single account (`180294183052`). Live AWS queries are performed by the AgentCore MCP tools using the execution role; queries against a genuinely different account go only through a dedicated cross-account assume path. (Selecting the host account as the target uses the execution role directly, so no unnecessary self-assume occurs.) All access is read-only.
+The AWSops live environment runs on a single account (`123456789012`). Live AWS queries are performed by the AgentCore MCP tools using the execution role; queries against a genuinely different account go only through a dedicated cross-account assume path. (Selecting the host account as the target uses the execution role directly, so no unnecessary self-assume occurs.) All access is read-only.

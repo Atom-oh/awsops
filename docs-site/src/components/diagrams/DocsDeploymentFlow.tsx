@@ -64,7 +64,7 @@ export default function DocsDeploymentFlow(): React.ReactElement {
       { label: 'web/ source', sub: 'Docusaurus', color: THEME.cyan },
       { label: 'npm run build', sub: 'Static generation', color: THEME.orange },
       { label: 'GitHub Pages', sub: 'gh-pages branch', color: THEME.green },
-      { label: 'Site URL', sub: 'atomai.click/awsops/', color: THEME.text },
+      { label: 'Site URL', sub: 'example.com/awsops/', color: THEME.text },
     ];
 
     for (let i = 0; i < mainBoxes.length; i++) {

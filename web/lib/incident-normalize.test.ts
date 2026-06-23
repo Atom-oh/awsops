@@ -21,7 +21,7 @@ const cloudwatchSns = {
     NewStateReason: 'CPU > 90',
     StateChangeTime: '2026-06-10T00:00:00Z',
     Region: 'ap-northeast-2',
-    AWSAccountId: '180294183052',
+    AWSAccountId: '123456789012',
     AlarmDescription: 'cpu alarm',
     Trigger: {
       MetricName: 'CPUUtilization',

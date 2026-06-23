@@ -750,4 +750,4 @@ git branch --show-current   # = feat/v2-architecture-design 확인
 make deploy                  # arm64 build → ECR → ECS rolling → /api/health smoke
 ```
 
-- [ ] **Step 3: 라이브 확인** — `https://awsops-v2.atomai.click/eks` 카드/노드 바/차트/이벤트, `/eks/mall-apne2-az-a` 탭별 KPI.
+- [ ] **Step 3: 라이브 확인** — `https://awsops-v2.example.com/eks` 카드/노드 바/차트/이벤트, `/eks/mall-apne2-az-a` 탭별 KPI.

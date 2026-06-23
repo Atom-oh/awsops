@@ -195,12 +195,12 @@ async function main() {
 
   const domainName = await input({
     message: 'Public domain name (CloudFront FQDN):',
-    default: 'v2.atomai.click',
+    default: 'v2.example.com',
   });
 
   const hostedZoneName = await input({
     message: 'Route53 hosted zone name:',
-    default: 'atomai.click',
+    default: 'example.com',
   });
 
   const stateBucket = await input({

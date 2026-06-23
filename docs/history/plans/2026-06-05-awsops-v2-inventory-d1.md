@@ -10,7 +10,7 @@
 
 **Spec delta (from the 3-AI review, folded in):** sync runs in a **Python Lambda**, not the BFF (thin-BFF + BFF-memory concerns) → the BFF has no `lib/steampipe.ts`; the Lambda owns the Steampipe pg connection. One sync implementation serves both refresh and schedule. Everything else matches the revised spec (per-resource rows, `ec2:Describe*` IAM, Fargate Spot, healthCheck, awslogs+alarm, `inventory_sync_runs`, latest-only).
 
-**Constraints:** branch `feat/v2-architecture-design`. NO `git add -A`. All gated by `var.steampipe_enabled` (default false → $0). T1–T10 = $0 AWS; T11 = real infra (controller, pause for go-ahead). AWS acct 180294183052 / ap-northeast-2; terraform `~/.local/bin/terraform`; docker needs `sudo`.
+**Constraints:** branch `feat/v2-architecture-design`. NO `git add -A`. All gated by `var.steampipe_enabled` (default false → $0). T1–T10 = $0 AWS; T11 = real infra (controller, pause for go-ahead). AWS acct 123456789012 / ap-northeast-2; terraform `~/.local/bin/terraform`; docker needs `sudo`.
 
 ---
 

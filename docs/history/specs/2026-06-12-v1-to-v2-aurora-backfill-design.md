@@ -16,7 +16,7 @@ v1 keeps its durable application state as flat JSON files on the EC2 instance's 
 
 The v2 Aurora baseline schema (`terraform/v2/foundation/data/schema.sql`) already defines the ADR-030 app-state tables that map 1:1 to the v1 JSON stores, and v1 already grew a runtime **dual-write** layer (`src/lib/db/*-writer.ts`) that encodes the exact JSON→Aurora mapping. What is **missing** is a one-time **backfill runner** that reads existing historical v1 JSON and bulk-loads it into Aurora.
 
-**Goal:** a standalone, idempotent Node ESM backfill runner for the four high-value history stores, with unit + integration tests and an operator runbook, suitable to drop into a guide. Running it against production is explicitly out of scope (the deliverable is the tool); the v1 source, if needed, is instance `i-0a35c902f44f23adf`.
+**Goal:** a standalone, idempotent Node ESM backfill runner for the four high-value history stores, with unit + integration tests and an operator runbook, suitable to drop into a guide. Running it against production is explicitly out of scope (the deliverable is the tool); the v1 source, if needed, is instance `i-0123456789abcdef0`.
 
 ### In scope — 4 high-value stores
 
@@ -39,7 +39,7 @@ Mirror the existing `migrate.mjs` / `migrate-core.mjs` split (logic vs. orchestr
 - `scripts/v2/backfill-core.mjs` — **pure functions**, no DB, no fs side effects: directory/file classification (`classifyInventoryDir`, skip rules) and the four record→row mappers (`mapInventory`, `mapCost`, `mapAlert`, `mapScaling`). This is the unit-tested core and the single source of the JSON→column contract.
 - `scripts/v2/backfill-core.test.mjs` — unit tests via the built-in `node --test` runner (no vitest config needed for a repo-root mjs; `web/` keeps vitest for TS).
 - `scripts/v2/backfill-v1.itest.mjs` — integration harness: spins a disposable PG17 container, loads `schema.sql`, runs a real backfill against fixtures, asserts, tears down. Skips gracefully when docker is unavailable.
-- `docs/runbooks/v1-to-v2-aurora-backfill.md` — bilingual operator runbook (pull `data/` off `i-0a35c902f44f23adf`, dry-run, run, verify, re-run).
+- `docs/runbooks/v1-to-v2-aurora-backfill.md` — bilingual operator runbook (pull `data/` off `i-0123456789abcdef0`, dry-run, run, verify, re-run).
 
 **Module style:** `import pg from 'pg'` (resolved from repo-root `node_modules`, as `migrate.mjs` does). ESM. `set`-free Node, `die()` helper, `--help`.
 
@@ -166,7 +166,7 @@ Flow:
 
 `docs/runbooks/v1-to-v2-aurora-backfill.md` (bilingual, per `docs/` convention), covering:
 1. **Prerequisites** — host with network reach to Aurora:5432; creds via `terraform output` or `AURORA_SECRET_ARN`/`AURORA_ENDPOINT`; `node` + repo `pg`.
-2. **Pull v1 data** — copy `data/` off `i-0a35c902f44f23adf` (SSM Run Command / `aws ssm start-session` + `tar`), into a local `--data-dir`. (Read-only on the v1 box.)
+2. **Pull v1 data** — copy `data/` off `i-0123456789abcdef0` (SSM Run Command / `aws ssm start-session` + `tar`), into a local `--data-dir`. (Read-only on the v1 box.)
 3. **Dry-run** — `node scripts/v2/backfill-v1.mjs --data-dir ./v1-data --dry-run` and read the counts.
 4. **Run** — drop `--dry-run`; capture the summary report.
 5. **Verify** — `SELECT count(*)` per table + a spot-check query; re-run to confirm idempotency.

@@ -157,7 +157,7 @@ class TestGatewayContract(_Base):
         with mock.patch.object(nm, "_urlopen", side_effect=fake_urlopen):
             # gateway injects target_account_id into arguments — must be popped, no cross-account call
             out = nm.lambda_handler({"tool_name": "notion_search",
-                                     "arguments": {"query": "x", "target_account_id": "180294183052"}}, None)
+                                     "arguments": {"query": "x", "target_account_id": "123456789012"}}, None)
         self.assertEqual(out["statusCode"], 200)
 
     def test_token_cached_across_calls(self):

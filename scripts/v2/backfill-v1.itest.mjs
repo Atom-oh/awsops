@@ -36,14 +36,14 @@ function buildFixture({ corrupt }) {
     writeFileSync(join(root, p), typeof o === 'string' ? o : JSON.stringify(o));
   };
   // inventory: multi-account + aws→aggregate + single-account root + .prev_ (skip)
-  W('inventory/180294183052/2026-06-01.json', { date: '2026-06-01', timestamp: '2026-06-01T09:00:00Z', resources: { 'EC2 Instances': 2, 'S3 Buckets': 1 } });
+  W('inventory/123456789012/2026-06-01.json', { date: '2026-06-01', timestamp: '2026-06-01T09:00:00Z', resources: { 'EC2 Instances': 2, 'S3 Buckets': 1 } });
   // Root date file on the SAME day as the account dir: must bucket under 'aggregate'
-  // (NOT --account-id) so the cross-account aggregate can't clobber 180294183052's rows.
+  // (NOT --account-id) so the cross-account aggregate can't clobber 123456789012's rows.
   W('inventory/2026-06-01.json', { date: '2026-06-01', timestamp: '2026-06-01T00:00:00Z', resources: { 'EC2 Instances': 99 } });
   W('inventory/aws/2026-06-02.json', { date: '2026-06-02', resources: { Total: 5 } });
   W('inventory/.prev_aws.json', { date: 'x', resources: {} });
   // cost
-  W('cost/180294183052/2026-06-01.json', { date: '2026-06-01', timestamp: '2026-06-01T09:00:00Z', monthlyCost: [{ svc: 'EC2', cost: 10 }], dailyCost: [], serviceCost: [] });
+  W('cost/123456789012/2026-06-01.json', { date: '2026-06-01', timestamp: '2026-06-01T09:00:00Z', monthlyCost: [{ svc: 'EC2', cost: 10 }], dailyCost: [], serviceCost: [] });
   // alert: valid + summary (skip)
   W('alert-diagnosis/2026-06/inc-1.json', { incidentId: 'inc-1', timestamp: '2026-06-01T00:00:00Z', severity: 'critical', affectedServices: ['api'], affectedResources: ['i-1'], rootCause: 'rc', rootCauseCategory: 'cat', confidence: 'high', diagnosisMarkdown: '# md', investigationSources: [], processingTimeMs: 1200, alertCount: 1, labels: {} });
   W('alert-diagnosis/2026-06/summary.json', { month: '2026-06' });
@@ -90,8 +90,8 @@ async function main() {
   console.log('\n[a] clean run #1');
   const r1 = runBackfill(DSN, cleanFix);
   check('exit 0', r1.code === 0);
-  check('inventory_snapshots = 4 (180294183052×2 + aggregate×2)', (await count('inventory_snapshots')) === 4);
-  check('  fan-out: 180294183052 has 2 rows (same-day root did NOT clobber)', (await count("inventory_snapshots WHERE account_id='180294183052'")) === 2);
+  check('inventory_snapshots = 4 (123456789012×2 + aggregate×2)', (await count('inventory_snapshots')) === 4);
+  check('  fan-out: 123456789012 has 2 rows (same-day root did NOT clobber)', (await count("inventory_snapshots WHERE account_id='123456789012'")) === 2);
   check('  multi-account root + aws → aggregate (2 rows)', (await count("inventory_snapshots WHERE account_id='aggregate'")) === 2);
   check('  no leak to default account (self=0)', (await count("inventory_snapshots WHERE account_id='self'")) === 0);
   check('cost_snapshots = 1', (await count('cost_snapshots')) === 1);

@@ -11,7 +11,7 @@ import {
 
 test('isDateFile accepts YYYY-MM-DD.json, rejects everything else', () => {
   assert.ok(isDateFile('2026-06-01.json'));
-  assert.ok(!isDateFile('.prev_180294183052.json'));
+  assert.ok(!isDateFile('.prev_123456789012.json'));
   assert.ok(!isDateFile('latest.json'));
   assert.ok(!isDateFile('2026-06-01.txt'));
   assert.ok(!isDateFile('2026-6-1.json')); // not zero-padded
@@ -33,20 +33,20 @@ test('isAlertRecordFile skips summaries', () => {
 
 test('normalizeAccount maps aws→aggregate, leaves others', () => {
   assert.equal(normalizeAccount('aws'), 'aggregate');
-  assert.equal(normalizeAccount('180294183052'), '180294183052');
+  assert.equal(normalizeAccount('123456789012'), '123456789012');
   assert.equal(normalizeAccount('self'), 'self');
 });
 
 test('partitionAccountDir splits account dirs vs root date files, skips junk', () => {
   const entries = [
-    { name: '180294183052', isDirectory: true },
+    { name: '123456789012', isDirectory: true },
     { name: 'aws', isDirectory: true },
     { name: '2026-06-01.json', isDirectory: false },
-    { name: '.prev_180294183052.json', isDirectory: false },
+    { name: '.prev_123456789012.json', isDirectory: false },
     { name: 'latest.json', isDirectory: false },
   ];
   const { accountDirs, rootDateFiles } = partitionAccountDir(entries);
-  assert.deepEqual(accountDirs, ['180294183052', 'aws']);
+  assert.deepEqual(accountDirs, ['123456789012', 'aws']);
   assert.deepEqual(rootDateFiles, ['2026-06-01.json']);
 });
 
@@ -64,9 +64,9 @@ test('partitionAccountDir on a pure single-account dir', () => {
 test('mapInventory fans out one row per label + correct payload', () => {
   const r = mapInventory(
     { date: '2026-06-01', timestamp: '2026-06-01T09:30:00Z', resources: { 'EC2 Instances': 12, 'S3 Buckets': 3 } },
-    '180294183052',
+    '123456789012',
   );
-  assert.equal(r.account, '180294183052');
+  assert.equal(r.account, '123456789012');
   assert.equal(r.rows.length, 2);
   assert.deepEqual(r.rows.map((x) => x.resourceType), ['EC2 Instances', 'S3 Buckets']);
   assert.equal(r.rows[0].resourceCount, 12);

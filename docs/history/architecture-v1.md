@@ -123,9 +123,9 @@ Route priority in `src/app/api/ai/route.ts` (11 routes):
 10. AWS resource keywords → Steampipe + Bedrock Direct
 11. General questions → Ops Gateway (fallback → Bedrock Direct)
 
-## Alert-Triggered AI Diagnosis (Implemented — ADR-009)
+## Alert-Triggered AI Diagnosis (Implemented — ADR-008)
 
-Multi-stage AI diagnosis pipeline that automatically receives alerts from external systems (CloudWatch Alarms via SNS, Prometheus Alertmanager webhook, Grafana webhook, SQS queue), correlates related alerts into incidents, investigates root cause using existing collectors (7 types), datasources (7 platforms), and AgentCore gateways (125 MCP tools), then delivers analysis to Slack (Block Kit) and SNS email. Includes knowledge base for past incident reference, change detection (CloudTrail + K8s rollouts), and severity-based channel routing. See [ADR-009](decisions/009-alert-triggered-ai-diagnosis.md) for the full design.
+Multi-stage AI diagnosis pipeline that automatically receives alerts from external systems (CloudWatch Alarms via SNS, Prometheus Alertmanager webhook, Grafana webhook, SQS queue), correlates related alerts into incidents, investigates root cause using existing collectors (7 types), datasources (7 platforms), and AgentCore gateways (125 MCP tools), then delivers analysis to Slack (Block Kit) and SNS email. Includes knowledge base for past incident reference, change detection (CloudTrail + K8s rollouts), and severity-based channel routing. See [ADR-008](decisions/008-ai-diagnosis-pipeline.md) for the full design.
 
 Key pipeline stages:
 1. **Ingestion** -- Webhook endpoint normalizes 5 alert source formats into unified `AlertEvent`
@@ -141,7 +141,7 @@ Key pipeline stages:
 
 v2 rebuilds the v1 single-EC2 monolith as a **Terraform-based MSA** (CDK dropped): private edge (CloudFront VPC Origin → internal ALB → Fargate `awsops-v2-web`), Cognito **Lambda@Edge RS256/PKCE** auth, **Aurora Serverless v2 (PG 17)** durable state (replaces `data/*.json`), Next.js 14 **thin-BFF** at the root path, dual-tier ECR, **AgentCore** (8 section gateways + external observability via the Integrations axis [ADR-039, not a 9th gateway; ADR-004 count = 8] + Memory + Code Interpreter; runtime-customizable Agent Space — ADR-031 **Phase 1/2 LIVE**), an OOM-safe **async worker tier** (SQS+SFN+Lambda/Fargate, ADR-030/P2), and inventory via a warm Steampipe Fargate → Aurora sync (22 resource types) + read-only EKS in-cluster views.
 
-**Posture: read-only ops dashboard + AI diagnosis.** A mutating/autonomous tier was built flag-OFF and then **REVERSED (2026-06-11, 3-AI consensus — see [reviews/2026-06-11-high-risk-adr-reversal-consensus.md](reviews/2026-06-11-high-risk-adr-reversal-consensus.md))**: ADR-029+036 (mutation/remediation substrate) and ADR-031 Phase 3 (BYO-MCP) / Phase 4 (mutating tools) are **reversed (do-not-enable, frozen flag-OFF)**; ADR-032 (autonomous incident) and ADR-035 (K8sGPT) are **downgraded to read-only** (autonomous mitigation / H3a wiring dropped). Infra mutation stays with the operator's SSM/Change Manager/IaC. See [ADR-030](decisions/030-ecs-fargate-aurora-split.md), [ADR-037](decisions/037-v2-terraform-foundation.md).
+**Posture: read-only ops dashboard + AI diagnosis.** A mutating/autonomous tier was built flag-OFF and then **REVERSED (2026-06-11, 3-AI consensus — see [reviews/2026-06-11-high-risk-adr-reversal-consensus.md](reviews/2026-06-11-high-risk-adr-reversal-consensus.md))**: ADR-029+036 (mutation/remediation substrate) and ADR-031 Phase 3 (BYO-MCP) / Phase 4 (mutating tools) are **reversed (do-not-enable, frozen flag-OFF)**; ADR-032 (autonomous incident) and ADR-035 (K8sGPT) are **downgraded to read-only** (autonomous mitigation / H3a wiring dropped). Infra mutation stays with the operator's SSM/Change Manager/IaC. See [ADR-001](decisions/001-v2-foundation.md).
 
 ## Event-Driven Pre-Scaling (Implemented — ADR-010 Phase 1+2)
 

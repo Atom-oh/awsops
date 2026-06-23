@@ -11,7 +11,7 @@ import {
   belongsToTopic,
 } from '@/lib/diagnosis-notify';
 
-// Mailing list for scheduled-diagnosis email (v1 parity). thin-BFF: quick SNS control-plane calls only,
+// Mailing list for diagnosis-completion email (v1 parity — manual + scheduled). thin-BFF: quick SNS control-plane calls only,
 // no heavy work. Read (list) = any authed user; mutate (subscribe/unsubscribe) = admin only.
 export const dynamic = 'force-dynamic';
 
