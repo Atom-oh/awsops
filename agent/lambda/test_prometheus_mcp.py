@@ -161,6 +161,57 @@ class TestSchema(_Base):
         self.assertIn("up", b["metrics"])
 
 
+class TestMetricMeta(_Base):
+    def test_metric_meta(self):
+        cap = []
+        def fake(method, url, headers=None, body=None, timeout=None):
+            cap.append(url)
+            import urllib.parse
+            url_decoded = urllib.parse.unquote(url)
+            if "metadata" in url_decoded:
+                return 200, {"status": "success", "data": {"up": [{"type": "gauge"}], "http_requests": [{"type": "counter"}]}}
+            elif 'up"' in url_decoded:
+                return 200, {"status": "success", "data": ["instance", "job"]}
+            elif 'http_requests"' in url_decoded:
+                return 500, {"raw": "fail"} # skipped
+            elif 'unknown"' in url_decoded:
+                return 200, {"status": "success", "data": []}
+            return 200, {"status": "success", "data": []}
+            
+        with mock.patch.object(pm, "http_json", side_effect=fake):
+            out = pm.lambda_handler({"tool_name": "prometheus_metric_meta", "arguments": {"metrics": ["up", "http_requests", "unknown"]}}, None)
+        
+        self.assertEqual(out["statusCode"], 200)
+        b = json.loads(out["body"])
+        
+        self.assertIn("metadata", cap[0])
+        self.assertEqual(len(cap), 4) # metadata + 3 metrics
+        
+        self.assertIn("up", b)
+        self.assertEqual(b["up"]["type"], "gauge")
+        self.assertEqual(b["up"]["labels"], ["instance", "job"])
+        
+        self.assertNotIn("http_requests", b) # Skipped due to error
+        
+        self.assertIn("unknown", b)
+        self.assertIsNone(b["unknown"]["type"])
+        self.assertEqual(b["unknown"]["labels"], [])
+
+    def test_empty_metrics(self):
+        out = pm.lambda_handler({"tool_name": "prometheus_metric_meta", "arguments": {"metrics": []}}, None)
+        self.assertEqual(json.loads(out["body"]), {})
+
+    def test_metrics_cap(self):
+        cap = []
+        with mock.patch.object(pm, "http_json", return_value=(200, {"status": "success", "data": {}})) as m:
+            out = pm.lambda_handler({"tool_name": "prometheus_metric_meta", "arguments": {"metrics": [str(i) for i in range(20)]}}, None)
+        
+        b = json.loads(out["body"])
+        self.assertEqual(len(b), 12)
+        self.assertEqual(m.call_count, 13) # 1 metadata + 12 labels
+
+
+
 class TestInstanceId(_Base):
     def test_instance_id_resolves_per_instance_credential_blind(self):
         # worker path: only an instance_id in arguments → connector resolves per-instance creds itself.

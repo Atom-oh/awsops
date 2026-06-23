@@ -139,8 +139,40 @@ def mimir_schema(args):
                "truncated": len(metrics) > 500 or len(labels) > 200})
 
 
+def mimir_metric_meta(args):
+    metrics = args.get("metrics")
+    if not isinstance(metrics, list):
+        metrics = []
+    metrics = [str(m).strip() for m in metrics if str(m).strip()][:12]
+    if not metrics:
+        return ok({})
+
+    creds = _ds()
+    base = BASE
+    try:
+        meta_resp = _get(creds, f"{base}/metadata", {})
+        meta = meta_resp if isinstance(meta_resp, dict) else {}
+        meta_types = {k: v[0].get("type") if isinstance(v, list) and v and isinstance(v[0], dict) else None for k, v in meta.items()}
+    except _ApiError:
+        meta_types = {}
+
+    out = {}
+    for m in metrics:
+        try:
+            labels_data = _get(creds, f"{base}/labels", {"match[]": f'{{__name__="{m}"}}'})
+            out[m] = {
+                "type": meta_types.get(m),
+                "labels": labels_data if isinstance(labels_data, list) else []
+            }
+        except _ApiError:
+            pass
+
+    return ok(out)
+
+
 _TOOLS = {"mimir_query": mimir_query, "mimir_query_range": mimir_query_range,
-          "mimir_labels": mimir_labels, "mimir_series": mimir_series, "mimir_schema": mimir_schema}
+          "mimir_labels": mimir_labels, "mimir_series": mimir_series, "mimir_schema": mimir_schema,
+          "mimir_metric_meta": mimir_metric_meta}
 
 
 def mimir_health(args):

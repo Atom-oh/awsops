@@ -160,12 +160,44 @@ def prometheus_health(args):
     return ok(health(_ds(), "/-/healthy"))
 
 
+def prometheus_metric_meta(args):
+    metrics = args.get("metrics")
+    if not isinstance(metrics, list):
+        metrics = []
+    metrics = [str(m).strip() for m in metrics if str(m).strip()][:12]
+    if not metrics:
+        return ok({})
+
+    creds = _ds()
+    base = "/api/v1"
+    try:
+        meta_resp = _get(creds, f"{base}/metadata", {})
+        meta = meta_resp if isinstance(meta_resp, dict) else {}
+        meta_types = {k: v[0].get("type") if isinstance(v, list) and v and isinstance(v[0], dict) else None for k, v in meta.items()}
+    except _ApiError:
+        meta_types = {}
+
+    out = {}
+    for m in metrics:
+        try:
+            labels_data = _get(creds, f"{base}/labels", {"match[]": f'{{__name__="{m}"}}'})
+            out[m] = {
+                "type": meta_types.get(m),
+                "labels": labels_data if isinstance(labels_data, list) else []
+            }
+        except _ApiError:
+            pass
+
+    return ok(out)
+
+
 _TOOLS = {
     "prometheus_query": prometheus_query,
     "prometheus_query_range": prometheus_query_range,
     "prometheus_labels": prometheus_labels,
     "prometheus_series": prometheus_series, "prometheus_schema": prometheus_schema,
     "prometheus_health": prometheus_health,
+    "prometheus_metric_meta": prometheus_metric_meta,
 }
 
 
