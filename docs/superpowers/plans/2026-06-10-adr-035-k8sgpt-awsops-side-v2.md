@@ -876,7 +876,7 @@ ON CONFLICT (version) DO NOTHING;
 - [ ] **Step 2: apply migration v7** — run `data/schema.sql` against Aurora (the same mechanism prior migrations used; idempotent). Verify `SELECT version, description FROM schema_migrations ORDER BY version` ends at **7** and `k8s_findings` / `k8s_scan_runs` exist and are EMPTY.
 - [ ] **Step 3: verify the route is dark + reads nothing from the cluster (flag off)** — with the deployed web (K8SGPT_ENABLED absent), as an admin:
   ```
-  curl -s -H "Cookie: awsops_token=<id>" https://awsops-v2.atomai.click/api/eks/fsi-demo-cluster/k8sgpt
+  curl -s -H "Cookie: awsops_token=<id>" https://awsops-v2.example.com/api/eks/fsi-demo-cluster/k8sgpt
   ```
   Expected: `503 {"enabled":false,...}`. Confirm via CloudWatch/logs that **NO `DescribeCluster`, NO STS presign, NO `InvokeAgentRuntime`** fired (the route short-circuits before `getDiagnosis` touches the cluster). Confirm `k8s_findings` is still EMPTY (no scan persisted).
 - [ ] **Step 4: confirm NO cluster write at any point** — review `web/lib/eks-incluster.ts` (`grep -n "method:"` → only `'GET'`) and confirm `k8sgpt.tf` provisions no resource targeting the EKS cluster (only the budget alarm). AWSops issues ONLY HTTP GET; the operator install + RBAC are out-of-band (runbook).

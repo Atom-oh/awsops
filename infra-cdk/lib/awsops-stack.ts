@@ -686,7 +686,7 @@ export class AwsopsStack extends cdk.Stack {
     let hostedZone: route53.IHostedZone | undefined;
 
     if (customDomain) {
-      // Derive hosted zone name from domain (e.g., 'awsops.atomai.click' → 'atomai.click')
+      // Derive hosted zone name from domain (e.g., 'awsops.example.com' → 'example.com')
       const zoneName = hostedZoneNameCtx || customDomain.split('.').slice(-2).join('.');
       hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
         domainName: zoneName,

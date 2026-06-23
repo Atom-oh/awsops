@@ -731,7 +731,7 @@ cd /home/atomoh/awsops && make deploy
 ```
 Expected: buildx arm64 push → force-new-deployment → services-stable → `/api/health` 200.
 
-- [ ] **Step 3: E2E in the browser** (`https://awsops-v2.atomai.click`, after Cognito login):
+- [ ] **Step 3: E2E in the browser** (`https://awsops-v2.example.com`, after Cognito login):
 1. **Overview** — cards populated: Jobs 성공=5 / 실패=1 (the real worker_jobs), EKS 클러스터 count, 이번 달 비용 (or "—" if CE lag).
 2. Nav → **EKS** lists clusters (name/status/version/endpoint); **Jobs** shows the 6 jobs; **Cost** shows MTD total + by-service.
 3. Chat drawer (✦) still works on every page.

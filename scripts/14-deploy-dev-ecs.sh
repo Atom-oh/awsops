@@ -5,7 +5,7 @@
 #   - AwsopsDevEcsStack already provisioned via:
 #       cd infra-cdk && npx cdk deploy AwsopsDevEcsStack \
 #         -c enableDevEcs=true \
-#         -c devDomain=awsops-dev.atomai.click
+#         -c devDomain=awsops-dev.example.com
 #   - Docker with buildx (arm64 builder configured)
 #   - AWS CLI v2 with credentials for the dev region (default ap-northeast-2)
 #

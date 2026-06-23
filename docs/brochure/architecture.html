@@ -367,7 +367,7 @@
     <dt>IaC</dt><dd>Terraform (TF ≥1.15, AWS provider ~&gt;6.0)</dd>
     <dt>상태 백엔드</dt><dd>S3 partial backend · <code>use_lockfile</code> · DynamoDB 없음</dd>
     <dt>라이브 계정</dt><dd><code>123456789012</code></dd>
-    <dt>도메인</dt><dd><code>awsops-v2.atomai.click</code></dd>
+    <dt>도메인</dt><dd><code>awsops-v2.example.com</code></dd>
     <dt>네트워크</dt><dd>관리 VPC 재사용 (<code>10.254.0.0/16</code>)</dd>
   </dl>
   <div class="callout"><span class="ci">◆</span><p><b>설계 원칙.</b> 무겁고 길거나 OOM 위험이 있는 작업은 웹에서 직접 실행하지 않고 비동기 워커 큐로 위임합니다. 웹은 얇은 BFF 계층으로만 동작합니다.</p></div>

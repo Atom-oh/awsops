@@ -1034,7 +1034,7 @@ aws ecs run-task --cluster $CLUSTER --task-definition awsops-v2-worker --launch-
 # wait for the task to OOM (exit 137), then:
 sleep 90
 aws ecs describe-tasks --cluster $CLUSTER --tasks <task-arn> --region $REGION --query 'tasks[0].containers[0].[exitCode,reason]' --output text   # expect 137 / OutOfMemory
-curl -sS -o /dev/null -w "%{http_code}\n" https://awsops-v2.atomai.click/api/health   # MUST be 200 (web unaffected)
+curl -sS -o /dev/null -w "%{http_code}\n" https://awsops-v2.example.com/api/health   # MUST be 200 (web unaffected)
 aws ecs describe-services --cluster $CLUSTER --services awsops-v2-web --region $REGION --query 'services[0].[runningCount,desiredCount]' --output text  # 1/1
 ```
 Expected: worker task exitCode=137 (OutOfMemory), **web /api/health=200 + web 1/1 running** → OOM isolation proven. (Optionally drive the OOM via SFN by adding `--oom` to a job type; the direct run-task is the cleanest proof.)

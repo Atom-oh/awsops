@@ -1294,7 +1294,7 @@ Expected: the Fargate worker dispatches via `handlers.REGISTRY` (already generic
 
 - [ ] **Step 3: Trigger a report from the UI and verify**
 
-1. Open `https://awsops-v2.atomai.click/ai-diagnosis`, pick `mid`, click 진단 실행.
+1. Open `https://awsops-v2.example.com/ai-diagnosis`, pick `mid`, click 진단 실행.
 2. Watch `worker_jobs` and `diagnosis_reports`:
 
 ```bash

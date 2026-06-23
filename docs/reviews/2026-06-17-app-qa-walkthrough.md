@@ -1,6 +1,6 @@
 # AWSops 라이브 QA 워크스루 — 2026-06-17
 
-- 대상: `https://awsops-v2.atomai.click` (계정 `123456789012`, ap-northeast-2, Cobalt 기본 테마)
+- 대상: `https://awsops-v2.example.com` (계정 `123456789012`, ap-northeast-2, Cobalt 기본 테마)
 - 계정: `admin@awsops.local` (관리자 — Cognito admins 그룹/SSM allowlist 확인됨)
 - 도구: Playwright (뷰포트 1440×900)
 - 범위: 전 페이지 기능+시각 검증 + 가이드용 스크린샷
@@ -39,7 +39,7 @@
 - 대시보드/리포트/어시스턴트에 **실제 비용 수치**($16,547.88, 서비스별 금액), **계정 ID `123456789012`**(AI 진단 리포트 본문), 리소스 개수, 보안 카운트 노출.
 - 어시스턴트 대화 목록에 데모 리소스명/IP(fsi-demo-monitor-nlb, mgmt-vpc-VSCode-Serv, 10.2.40.11 등).
 - Cost 드릴다운에 EC2 인스턴스 타입별 사용량(BoxUsage:g5e/m6i 등).
-- 데모/워크숍 계정(atomai.click·fsi-demo)으로 보이나, 공개 가이드 게시 전 사용자 검토 권장.
+- 데모/워크숍 계정(example.com·fsi-demo)으로 보이나, 공개 가이드 게시 전 사용자 검토 권장.
 
 ## 종합 판정
 

@@ -23,7 +23,7 @@ const infra = new AwsopsStack(app, 'AwsopsStack', {
 // Custom domain (optional): cdk deploy -c customDomain=awsops.example.com
 const customDomain = app.node.tryGetContext('customDomain') as string | undefined;
 // Dev environment domain (ADR-030 ECS Fargate; default off):
-//   cdk deploy AwsopsDevEcsStack -c enableDevEcs=true -c devDomain=awsops-dev.atomai.click
+//   cdk deploy AwsopsDevEcsStack -c enableDevEcs=true -c devDomain=awsops-dev.example.com
 const devDomain = app.node.tryGetContext('devDomain') as string | undefined;
 
 // Cognito authentication stack: User Pool, Lambda@Edge, CloudFront integration.
@@ -65,11 +65,11 @@ if (app.node.tryGetContext('enableAurora') === 'true') {
 // CloudFront. Default off so existing EC2 prod stays untouched:
 //   cdk deploy AwsopsDevEcsStack \
 //     -c enableDevEcs=true \
-//     -c devDomain=awsops-dev.atomai.click \
+//     -c devDomain=awsops-dev.example.com \
 //     -c cloudFrontPrefixListId=pl-22a6434b
 if (app.node.tryGetContext('enableDevEcs') === 'true') {
   if (!devDomain) {
-    throw new Error('enableDevEcs requires `devDomain` context (e.g. -c devDomain=awsops-dev.atomai.click)');
+    throw new Error('enableDevEcs requires `devDomain` context (e.g. -c devDomain=awsops-dev.example.com)');
   }
   const prefixListId =
     (app.node.tryGetContext('cloudFrontPrefixListId') as string | undefined) || 'pl-22a6434b';

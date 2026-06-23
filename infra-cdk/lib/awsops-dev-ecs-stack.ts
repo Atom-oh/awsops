@@ -33,7 +33,7 @@ export interface AwsopsDevEcsStackProps extends cdk.StackProps {
    * Custom domain to attach to the dev CloudFront distribution. ACM cert is
    * provisioned in us-east-1, Route53 A record alias to CloudFront added.
    * Hosted zone is inferred as the parent of the domain
-   * (`awsops-dev.atomai.click` → `atomai.click`).
+   * (`awsops-dev.example.com` → `example.com`).
    */
   customDomain: string;
 
@@ -407,7 +407,7 @@ export class AwsopsDevEcsStack extends cdk.Stack {
     // The DevServiceSgId output below exposes the ID for that step.
 
     // -------------------------------------------------------
-    // ACM cert + Route53 + CloudFront for awsops-dev.atomai.click
+    // ACM cert + Route53 + CloudFront for awsops-dev.example.com
     // -------------------------------------------------------
     const zoneName = hostedZoneName || customDomain.split('.').slice(-2).join('.');
     const hostedZone = route53.HostedZone.fromLookup(this, 'DevZone', {

@@ -186,7 +186,7 @@ git commit -m "docs(audit): C V1->V2 functional gap (미구현/오구현) findin
 
 - [ ] **Step 2: 라이브 프로빙 — public read-only 경로**
 
-Run: `curl -fsS -o /dev/null -w "%{http_code}\n" https://awsops-v2.atomai.click/api/health`
+Run: `curl -fsS -o /dev/null -w "%{http_code}\n" https://awsops-v2.example.com/api/health`
 Expected: `200`. (authed 경로는 토큰 필요 → 가능하면 playwright MCP 로그인 후 read-only 페이지 스냅샷, 불가 시 'NEEDS-MANUAL-PROBE'로 기록하고 정적 결과로 대체.)
 
 - [ ] **Step 3: §B8 append + 커밋**

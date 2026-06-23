@@ -38,9 +38,9 @@ describe('buildFlowGraph — L7 routing labels (ALB rules + API GW routes)', () 
   });
 
   it('labels with the host-header for host-routed ALBs', () => {
-    const rules = [{ resource_id: 'r1', load_balancer_arn: ALB_ARN, port: 443, conditions: [{ Field: 'host-header', HostHeaderConfig: { Values: ['atlantis.atomai.click'] } }], actions: [{ Type: 'forward', TargetGroupArn: TG_ARN }] }];
+    const rules = [{ resource_id: 'r1', load_balancer_arn: ALB_ARN, port: 443, conditions: [{ Field: 'host-header', HostHeaderConfig: { Values: ['atlantis.example.com'] } }], actions: [{ Type: 'forward', TargetGroupArn: TG_ARN }] }];
     const g = buildFlowGraph({ alb: [alb], tg: [albTg], alb_listener_rule: rules });
-    expect(g.edges.find((e) => e.target === `tg:${TG_ARN}`)?.label).toContain('atlantis.atomai.click');
+    expect(g.edges.find((e) => e.target === `tg:${TG_ARN}`)?.label).toContain('atlantis.example.com');
   });
 
   it('does NOT label when the default rule is a fixed-response (no forward target)', () => {
@@ -102,8 +102,8 @@ describe('buildFlowGraph — API Gateway origins (CF→APIGW→Lambda/LB)', () =
 
 describe('buildFlowGraph — CloudFront VPC origins (CF→internal ALB/NLB)', () => {
   it('resolves a Deployed VPC origin to its backing LB by (distribution,domain) (no unresolved node)', () => {
-    const cf = { resource_id: 'E2', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.atomai.click' }] };
-    const vo = [{ resource_id: 'vo_6O65', region: 'global', status: 'Deployed', arn: ALB_ARN, origin_refs: [{ distribution_id: 'E2', domain: 'awsops-v2.atomai.click' }] }];
+    const cf = { resource_id: 'E2', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.example.com' }] };
+    const vo = [{ resource_id: 'vo_6O65', region: 'global', status: 'Deployed', arn: ALB_ARN, origin_refs: [{ distribution_id: 'E2', domain: 'awsops-v2.example.com' }] }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], cloudfront_vpc_origin: vo });
     expect(g.edges.find((e) => e.source === 'cf:E2' && e.target === ALB_ID)).toBeTruthy();
     expect(g.nodes.find((n) => n.kind === 'origin')).toBeUndefined();
@@ -111,18 +111,18 @@ describe('buildFlowGraph — CloudFront VPC origins (CF→internal ALB/NLB)', ()
 
   it('does NOT mislink a co-resident external origin on a VPC-origin distribution', () => {
     const cf = { resource_id: 'E2', region: 'us-east-1', origins: [
-      { Id: 'o1', DomainName: 'awsops-v2.atomai.click' },   // the VPC origin → ALB
+      { Id: 'o1', DomainName: 'awsops-v2.example.com' },   // the VPC origin → ALB
       { Id: 'o2', DomainName: 'cdn.partner.com' },           // an external custom origin → must NOT link to the LB
     ] };
-    const vo = [{ resource_id: 'vo_6O65', region: 'global', status: 'Deployed', arn: ALB_ARN, origin_refs: [{ distribution_id: 'E2', domain: 'awsops-v2.atomai.click' }] }];
+    const vo = [{ resource_id: 'vo_6O65', region: 'global', status: 'Deployed', arn: ALB_ARN, origin_refs: [{ distribution_id: 'E2', domain: 'awsops-v2.example.com' }] }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], cloudfront_vpc_origin: vo });
     expect(g.edges.find((e) => e.source === 'cf:E2' && e.target === ALB_ID)).toBeTruthy();           // VPC origin linked
     expect(g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('cdn.partner.com'))).toBeTruthy(); // external = unresolved node, no false edge
   });
 
   it('a Failed VPC origin is NOT resolved — falls through to the honest unresolved origin node', () => {
-    const cf = { resource_id: 'E2', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.atomai.click' }] };
-    const vo = [{ resource_id: 'vo_bad', region: 'global', status: 'Failed', arn: ALB_ARN, origin_refs: [{ distribution_id: 'E2', domain: 'awsops-v2.atomai.click' }] }];
+    const cf = { resource_id: 'E2', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.example.com' }] };
+    const vo = [{ resource_id: 'vo_bad', region: 'global', status: 'Failed', arn: ALB_ARN, origin_refs: [{ distribution_id: 'E2', domain: 'awsops-v2.example.com' }] }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], cloudfront_vpc_origin: vo });
     expect(g.edges.find((e) => e.source === 'cf:E2' && e.target === ALB_ID)).toBeUndefined();
     expect(g.nodes.find((n) => n.kind === 'origin')).toBeTruthy();
@@ -353,7 +353,7 @@ describe('buildFlowGraph — Route53 entry', () => {
   });
 
   it('VPC-origin distribution (public FQDN + VpcOriginConfig) → unresolved origin node, no false LB edge', () => {
-    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.atomai.click', VpcOriginConfig: { VpcOriginId: 'vo_abc' } }] };
+    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'awsops-v2.example.com', VpcOriginConfig: { VpcOriginId: 'vo_abc' } }] };
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb] });
     // no false CF→ALB edge (DomainName is the public FQDN, not the ALB dns_name)
     expect(g.edges.find((x) => x.target === ALB_ID)).toBeFalsy();

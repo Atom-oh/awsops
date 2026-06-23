@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use checkbox (`- [ ]`).
 
-**Goal:** Put Cognito Hosted-UI authentication in front of the v2 edge — unauthenticated requests to `https://awsops-v2.atomai.click/` get 302-redirected to Cognito login; after login a JWT cookie (`awsops_token`) is set and the dashboard loads. Implemented in Terraform (Cognito) + a Python Lambda@Edge (us-east-1) attached to the CloudFront distribution's viewer-request.
+**Goal:** Put Cognito Hosted-UI authentication in front of the v2 edge — unauthenticated requests to `https://awsops-v2.example.com/` get 302-redirected to Cognito login; after login a JWT cookie (`awsops_token`) is set and the dashboard loads. Implemented in Terraform (Cognito) + a Python Lambda@Edge (us-east-1) attached to the CloudFront distribution's viewer-request.
 
 **Architecture:** Ports v1's working auth (`scripts/05-setup-cognito.sh`, ADR-020) to Terraform + **root paths** (v2 dropped the `/awsops` basePath). Cognito User Pool + App Client (with secret) + Hosted-UI domain live in `ap-northeast-2`. The Lambda@Edge function (`python3.12`, **us-east-1**, no env vars → config inlined via `templatefile`) runs on viewer-request: passes the `/_callback` OAuth exchange, validates the `awsops_token` cookie's JWT `exp`, else redirects to the Cognito Hosted-UI `/login`.
 
 **Tech Stack:** Terraform `>= 1.15`, AWS provider `~> 6.0` (+ `hashicorp/archive` for zipping the function), Cognito, Lambda@Edge (python3.12, us-east-1 via the `aws.use1` alias already in `providers.tf`), CloudFront.
 
-**Builds on P1a:** the `foundation` module (`terraform/v2/foundation/`) with the CloudFront distribution `aws_cloudfront_distribution.main` + `data.aws_route53_zone.main` + the `aws.use1` provider alias. Domain `awsops-v2.atomai.click`.
+**Builds on P1a:** the `foundation` module (`terraform/v2/foundation/`) with the CloudFront distribution `aws_cloudfront_distribution.main` + `data.aws_route53_zone.main` + the `aws.use1` provider alias. Domain `awsops-v2.example.com`.
 
 ---
 
@@ -356,7 +356,7 @@ Expected: distribution updated. **Lambda@Edge replication + CloudFront deploy ta
 
 ```bash
 for i in $(seq 1 20); do
-  loc=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" --max-time 15 https://awsops-v2.atomai.click/)
+  loc=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" --max-time 15 https://awsops-v2.example.com/)
   echo "attempt $i: $loc"; echo "$loc" | grep -q '302' && echo "$loc" | grep -qi 'amazoncognito.com/login' && break; sleep 30
 done
 ```
@@ -376,9 +376,9 @@ git commit -m "feat(v2-p1b): attach Cognito Lambda@Edge to CloudFront viewer-req
 **Files:** none (verification + VERIFY note)
 
 - [ ] **Step 1: browser login flow**
-  1. Open `https://awsops-v2.atomai.click/` → should redirect to the Cognito Hosted UI login.
+  1. Open `https://awsops-v2.example.com/` → should redirect to the Cognito Hosted UI login.
   2. Log in with `admin_email` / `admin_password`.
-  3. Cognito redirects to `https://awsops-v2.atomai.click/_callback?code=...` → the Lambda exchanges the code, sets `awsops_token`, redirects to `/`.
+  3. Cognito redirects to `https://awsops-v2.example.com/_callback?code=...` → the Lambda exchanges the code, sets `awsops_token`, redirects to `/`.
   4. The spine page (`AWSops v2 spine — ok (root)`) loads (now authenticated).
 
 - [ ] **Step 2: confirm cookie gating**

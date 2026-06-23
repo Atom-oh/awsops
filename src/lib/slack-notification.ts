@@ -149,7 +149,7 @@ function buildAlertBlocks(incident: Incident, result: DiagnosisResult): unknown[
   });
 
   // Actions
-  const dashboardBase = 'https://awsops.atomai.click/awsops';
+  const dashboardBase = 'https://awsops.example.com/awsops';
   blocks.push({
     type: 'actions',
     elements: [

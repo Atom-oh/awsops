@@ -18,7 +18,7 @@ export interface CognitoStackProps extends cdk.StackProps {
   customDomain?: string;
 
   /**
-   * Additional callback domains (e.g., 'awsops-dev.atomai.click' for the ADR-030
+   * Additional callback domains (e.g., 'awsops-dev.example.com' for the ADR-030
    * ECS Fargate dev environment). Each entry gets its own /awsops/_callback and
    * /awsops/ URL registered on the App Client so the same User Pool serves
    * prod + dev. Strictly additive — does not affect the primary callback.

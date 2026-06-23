@@ -73,7 +73,7 @@ Also relevant: `terraform/v2/foundation/workload.tf` (internal ALB, HTTPS:443 li
 
 ## Status / 상태
 
-**P1a ✅ GREEN.** `https://awsops-v2.atomai.click` → HTTP **200** + SSE streaming at **1 event/s**,
+**P1a ✅ GREEN.** `https://awsops-v2.example.com` → HTTP **200** + SSE streaming at **1 event/s**,
 in account `123456789012` (mgmt-vpc reuse). The negative test confirms the ALB is `internal` and
 unreachable directly from outside the VPC.
 

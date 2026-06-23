@@ -10,12 +10,12 @@ variable "project" {
 
 variable "domain_name" {
   type        = string
-  description = "Public FQDN served by CloudFront, e.g. v2.atomai.click"
+  description = "Public FQDN served by CloudFront, e.g. v2.example.com"
 }
 
 variable "hosted_zone_name" {
   type        = string
-  description = "Route53 public hosted zone, e.g. atomai.click"
+  description = "Route53 public hosted zone, e.g. example.com"
 }
 
 variable "vpc_cidr" {

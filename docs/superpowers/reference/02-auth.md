@@ -8,8 +8,8 @@ v2는 **Cognito Hosted-UI 인증을 CloudFront 엣지 앞단에 배치**하여 �
 
 ## Current design / 현행 설계
 
-- **Cognito User Pool** `ap-northeast-2_TCDdvRYGm` — `username_attributes = ["email"]`, MFA off, password policy min-8 / upper / lower / number, **symbols NOT required** (Cognito onboarding quirk).
-- **App client** `366vspb0glc607k7i8nkol3for` — **public client, no secret** (`generate_secret = false`); OAuth `code` flow with PKCE, scopes `openid email profile`. Callback `https://<domain>/_callback`, logout `https://<domain>/`.
+- **Cognito User Pool** `ap-northeast-2_EXAMPLE01` — `username_attributes = ["email"]`, MFA off, password policy min-8 / upper / lower / number, **symbols NOT required** (Cognito onboarding quirk).
+- **App client** `EXAMPLECLIENTID0123456789` — **public client, no secret** (`generate_secret = false`); OAuth `code` flow with PKCE, scopes `openid email profile`. Callback `https://<domain>/_callback`, logout `https://<domain>/`.
 - **Hosted-UI domain** `a-ops-v2-auth-123456789012` → `https://a-ops-v2-auth-123456789012.auth.ap-northeast-2.amazoncognito.com`.
 - **Lambda@Edge** `awsops-v2-cognito-auth` — `python3.12`, **`us-east-1`** (the only region Lambda@Edge permits), 128 MB / 5 s, attached to the CloudFront distribution at the **`viewer-request`** event (fires before cache lookup).
   - Verifies the ID token via **pure-python RS256** (RSASSA-PKCS1-v1_5 + SHA-256) against Cognito's **JWKS** (`/.well-known/jwks.json`, cached in a module global) — no extra deps, stays under the 1 MB viewer-request limit.

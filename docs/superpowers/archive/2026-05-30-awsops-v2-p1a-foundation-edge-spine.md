@@ -18,15 +18,15 @@
 
 - VPC/ECS/CloudFront/ACM/Route53/S3/ECR/IAM을 생성할 수 있는 **호스트 계정**의 admin 수준 AWS 자격 증명.
 - Terraform `>= 1.15`, Docker + `buildx` 로컬 설치.
-- 상위 도메인(`atomai.click`)의 Route53 **public hosted zone**이 존재해야 함. 확인:
+- 상위 도메인(`example.com`)의 Route53 **public hosted zone**이 존재해야 함. 확인:
   ```bash
-  aws route53 list-hosted-zones-by-name --dns-name atomai.click \
+  aws route53 list-hosted-zones-by-name --dns-name example.com \
     --query "HostedZones[0].{Name:Name,Id:Id}" --output table
   ```
-  기대값: `atomai.click.` 와 `/hostedzone/ZXXXX` Id가 표시되는 행.
-- v2 서브도메인은 **`v2.atomai.click`** (v1 `awsops.*` 및 dev `awsops-dev.atomai.click`와 구분). 아직 resolve되면 안 됨:
+  기대값: `example.com.` 와 `/hostedzone/ZXXXX` Id가 표시되는 행.
+- v2 서브도메인은 **`v2.example.com`** (v1 `awsops.*` 및 dev `awsops-dev.example.com`와 구분). 아직 resolve되면 안 됨:
   ```bash
-  dig +short v2.atomai.click
+  dig +short v2.example.com
   ```
   기대값: 빈 출력.
 - 리전: `ap-northeast-2` (주). CloudFront ACM 인증서는 `us-east-1`.
@@ -250,12 +250,12 @@ variable "project" {
 
 variable "domain_name" {
   type        = string
-  description = "Public FQDN served by CloudFront, e.g. v2.atomai.click"
+  description = "Public FQDN served by CloudFront, e.g. v2.example.com"
 }
 
 variable "hosted_zone_name" {
   type        = string
-  description = "Route53 public hosted zone, e.g. atomai.click"
+  description = "Route53 public hosted zone, e.g. example.com"
 }
 
 variable "vpc_cidr" {
@@ -280,8 +280,8 @@ variable "image_tag" {
 
 `terraform.tfvars.example`:
 ```hcl
-domain_name      = "v2.atomai.click"
-hosted_zone_name = "atomai.click"
+domain_name      = "v2.example.com"
+hosted_zone_name = "example.com"
 # vpc_cidr       = "10.20.0.0/16"   # 오버라이드하려면 주석 해제
 ```
 
@@ -1003,7 +1003,7 @@ output "ecr_uri" {
 
 실행 (apply 후 CloudFront + DNS 전파에 수 분 소요 가능):
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://v2.atomai.click/awsops/healthz
+curl -s -o /dev/null -w "%{http_code}\n" https://v2.example.com/awsops/healthz
 ```
 기대값: `200`. `502`/`503`이면 VPC origin → internal ALB 경로 실패 — Task 7 참조.
 
@@ -1024,7 +1024,7 @@ git commit -m "feat(v2-p1a): private edge — CloudFront VPC Origin to internal 
 
 실행:
 ```bash
-curl -s https://v2.atomai.click/awsops/healthz; echo
+curl -s https://v2.example.com/awsops/healthz; echo
 ```
 기대값: `ok`.
 
@@ -1032,7 +1032,7 @@ curl -s https://v2.atomai.click/awsops/healthz; echo
 
 실행:
 ```bash
-curl -N -s https://v2.atomai.click/awsops/api/stream
+curl -N -s https://v2.example.com/awsops/api/stream
 ```
 기대값: 10줄이 **초당 1개씩** 도착(`data: tick 1` … `data: tick 10`), 이어서 `data: done`. 10줄이 약 10초 후 한꺼번에 오면 CloudFront/ALB가 버퍼링 중 — 기록할 것; ADR-021 SSE를 막으므로 P1d에서 실제 앱 출시 전 해결해야 함.
 
@@ -1040,7 +1040,7 @@ curl -N -s https://v2.atomai.click/awsops/api/stream
 
 실행:
 ```bash
-curl -N -s -w "\nTTFB=%{time_starttransfer}s TOTAL=%{time_total}s\n" https://v2.atomai.click/awsops/api/stream | tail -3
+curl -N -s -w "\nTTFB=%{time_starttransfer}s TOTAL=%{time_total}s\n" https://v2.example.com/awsops/api/stream | tail -3
 ```
 기대값: `TTFB` < 2s, `TOTAL` ≈ 10s (연결이 전체 시간 동안 열려 스트리밍됨 = CloudFront origin read-timeout으로 조기 절단되지 않음을 증명).
 
@@ -1071,7 +1071,7 @@ curl -s -m 5 -o /dev/null -w "%{http_code}\n" "http://$ALB_DNS/awsops/healthz" |
 ```markdown
 # P1a 검증 (실제 값 기입)
 - 날짜:
-- `https://v2.atomai.click/awsops/healthz` -> 200: [yes/no]
+- `https://v2.example.com/awsops/healthz` -> 200: [yes/no]
 - SSE 점진 스트리밍(1/s): [yes/no]
 - TTFB: __s, total: __s
 - ALB scheme internal + 노트북 unreachable: [yes/no]
@@ -1102,7 +1102,7 @@ git commit -m "test(v2-p1a): verify private edge serves health + SSE end-to-end"
 terraform destroy            # 'yes' 입력
 terraform apply              # 처음부터 재구축
 ```
-기대값: destroy는 foundation 리소스를 모두 제거(원격 상태 백엔드는 별도 모듈이라 유지), 재-apply는 재생성, CloudFront 재전파 후 `curl https://v2.atomai.click/awsops/healthz`가 다시 `ok` 반환.
+기대값: destroy는 foundation 리소스를 모두 제거(원격 상태 백엔드는 별도 모듈이라 유지), 재-apply는 재생성, CloudFront 재전파 후 `curl https://v2.example.com/awsops/healthz`가 다시 `ok` 반환.
 
 - [ ] **Step 3: 최종 커밋 (계획 완료 마커)**
 
@@ -1119,7 +1119,7 @@ git commit --allow-empty -m "chore(v2-p1a): foundation spine complete — edge v
 - ALB SG = VPC 소스, prefix-list 아님 (스펙 §2.1 "완전 사설") → Task 5 Step 2 (좁히기는 후속 작업으로 문서화). ✓
 - SSE-over-VPC-Origin 검증 (스펙 §2.1, §9-P1 완료기준, §11 위험) → Task 7. ✓
 - Terraform 원격 상태 + 멀티 모듈 레이아웃 (스펙 §8) → Task 1~2. ✓
-- 새 도메인, v1과 병렬 (스펙 §1, §8 완전 분리 병렬) → `v2.atomai.click`, 별도 VPC `10.20.0.0/16`. ✓
+- 새 도메인, v1과 병렬 (스펙 §1, §8 완전 분리 병렬) → `v2.example.com`, 별도 VPC `10.20.0.0/16`. ✓
 - Steampipe 사이드카 / web 컨테이너 상세 → **P1d로 연기** (실제 이미지); P1a는 spine 대역. 목표/범위밖에 문서화. ✓
 - Aurora, Cognito, CI/CD, make configure, EKS 모듈, AgentCore provisioner → **명시적으로 P1b~P1f로 연기** (스코프 체크). ✓
 
