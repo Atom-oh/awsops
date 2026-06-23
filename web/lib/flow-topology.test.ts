@@ -183,6 +183,53 @@ describe('buildFlowGraph — CF→LB/WAF edges', () => {
   });
 });
 
+describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', () => {
+  // A: a CloudFront custom-domain origin that Route53-aliases to a SYNCED LB → real CF→LB edge.
+  it('links CF→LB when the origin custom domain Route53-aliases to a synced LB dns_name', () => {
+    const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
+    const alb = { resource_id: 'web-alb', region: 'ap-northeast-2', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/web-alb/1', dns_name: 'internal-web-123.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'internal-web-123.ap-northeast-2.elb.amazonaws.com.' } }];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
+    expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
+    // resolved to a real LB → no leftover unresolved origin node for svc.atomai.click
+    expect(g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('svc.atomai.click'))).toBeFalsy();
+  });
+
+  // 1-hop chain: origin → r53 record → another r53 record → LB.
+  it('follows a 1-hop Route53 alias chain to a synced LB', () => {
+    const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'edge.atomai.click' }] };
+    const alb = { resource_id: 'a', region: 'ap-northeast-2', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'lb-1.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [
+      { resource_id: 'edge.atomai.click A', name: 'edge.atomai.click.', type: 'A', alias_target: { DNSName: 'svc.atomai.click.' } },
+      { resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'lb-1.ap-northeast-2.elb.amazonaws.com.' } },
+    ];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
+    expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
+  });
+
+  // C: a CloudFront custom-domain origin whose Route53 alias points at a NON-synced (e.g. cross-region)
+  // ELB → honest unresolved origin node, but its label/meta surfaces the resolved target.
+  it('surfaces the resolved target on an unresolved node when the alias points to a non-synced ELB (cross-region)', () => {
+    const cf = { resource_id: 'D2', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'grafana-internal.atomai.click' }] };
+    const r53 = [{ resource_id: 'grafana-internal.atomai.click A', name: 'grafana-internal.atomai.click.', type: 'A', alias_target: { DNSName: 'k8s-monitori-grafanan-xyz.elb.us-east-1.amazonaws.com.' } }];
+    const g = buildFlowGraph({ cloudfront: [cf], route53: r53 }); // the target LB is NOT synced
+    const o = g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('grafana-internal.atomai.click'));
+    expect(o).toBeTruthy();
+    expect(o!.meta?.unresolved).toBe(true);
+    expect(o!.meta?.resolvedTarget).toBe('k8s-monitori-grafanan-xyz.elb.us-east-1.amazonaws.com');
+    expect(String(o!.label)).toContain('k8s-monitori-grafanan-xyz.elb.us-east-1.amazonaws.com'); // "→ target" surfaced
+  });
+
+  // a custom origin with NO Route53 record stays a plain unresolved node (no resolvedTarget).
+  it('leaves a custom origin with no Route53 record as a plain unresolved node', () => {
+    const cf = { resource_id: 'D3', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'cdn.partner.com' }] };
+    const g = buildFlowGraph({ cloudfront: [cf], route53: [] });
+    const o = g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('cdn.partner.com'));
+    expect(o?.meta?.unresolved).toBe(true);
+    expect(o?.meta?.resolvedTarget).toBeUndefined();
+  });
+});
+
 describe('buildFlowGraph — Route53 entry', () => {
   const cf = { resource_id: 'D1', region: 'us-east-1', domain_name: 'd111.cloudfront.net', aliases: { Items: ['app.example.com'] }, origins: [] };
 

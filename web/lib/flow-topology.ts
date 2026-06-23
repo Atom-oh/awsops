@@ -249,6 +249,31 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
     for (const a of aliasesOf(c)) cfByAlias.set(dns(a), cfId);
   }
 
+  // Route53 alias map: record name → its alias_target DNSName (both normalized). Lets a CloudFront
+  // CUSTOM-domain origin (not a raw *.elb.amazonaws.com) be resolved to the LB it ultimately points
+  // at — the gap that left grafana-internal.atomai.click-style origins target-less.
+  const r53AliasByName = new Map<string, string>();
+  for (const r of input.route53 ?? []) {
+    const name = dns(r.name) || dns(r.resource_id);
+    const aliasT = (r.alias_target && typeof r.alias_target === 'object') ? (r.alias_target as Row) : {};
+    const target = dns(aliasT.DNSName);
+    if (name && target && name !== target) r53AliasByName.set(name, target);
+  }
+  // Follow the alias chain (≤4 hops, cycle-guarded) → TERMINAL DNS name, or null if the domain isn't
+  // a known Route53 record. The terminal may be a synced LB dns_name (→ real CF→LB edge) or a
+  // non-synced (e.g. cross-region) ELB host (→ surfaced as the unresolved origin's resolved target).
+  const resolveViaR53 = (domain: string): string | null => {
+    let cur = domain, target: string | null = null, hops = 0;
+    const seen = new Set<string>();
+    while (hops < 4 && r53AliasByName.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      cur = r53AliasByName.get(cur)!;
+      target = cur;
+      hops++;
+    }
+    return target;
+  };
+
   // 2) Route53 → CloudFront / LB. Records are the true front door (custom domain). Match the
   // record's alias target (or the record name itself) to a CF distribution domain/alias or an
   // LB dns_name. Records that resolve to nothing we track are skipped (no orphan DNS clutter).
@@ -289,6 +314,18 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
         for (const arn of voArns) { const id = lbByArn.get(arn); if (id) { addEdge(cfId, id); linked = true; } }
         if (linked) return;
       }
+      // Custom-domain origin → resolve via the Route53 alias chain. Lands on a SYNCED LB → draw the
+      // real CF→LB edge (A). Lands on a non-synced (e.g. cross-region) ELB → fall through to an
+      // unresolved node but surface the resolved target so the chain is still legible (C).
+      let resolvedTarget: string | null = null;
+      if (domain) {
+        const term = resolveViaR53(domain.toLowerCase());
+        if (term) {
+          const lid = lbByDns.get(term);
+          if (lid) { addEdge(cfId, lid); return; }
+          resolvedTarget = term;
+        }
+      }
       // Otherwise: honest unresolved-origin node, never a false LB edge.
       const vpc = (o.VpcOriginConfig && typeof o.VpcOriginConfig === 'object') ? ' (VPC origin)' : '';
       const oid = `origin:${str(c.resource_id)}:${domain || i}`;
@@ -302,7 +339,8 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
         const row = s3ByName.get(bucket) ?? { resource_id: bucket, name: bucket, arn: `arn:aws:s3:::${bucket}` };
         addNode(oid, 'origin', bucket, { service: 's3', bucket, domain, invType: 's3', row });
       } else {
-        addNode(oid, 'origin', `${domain || 'origin'}${vpc}`, { unresolved: true });
+        const label = resolvedTarget ? `${domain} → ${resolvedTarget}` : `${domain || 'origin'}${vpc}`;
+        addNode(oid, 'origin', label, { unresolved: true, ...(resolvedTarget ? { resolvedTarget } : {}) });
       }
       addEdge(cfId, oid);
     });
