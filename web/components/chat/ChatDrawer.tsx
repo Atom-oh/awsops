@@ -106,7 +106,9 @@ export default function ChatDrawer() {
       <button
         onClick={() => setOpen(true)}
         aria-label="AI 어시스턴트 열기"
-        className="fixed bottom-20 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600 lg:bottom-5"
+        // lg: shift left of any open right-docked DetailPanel (--detail-panel-w, 0 when none)
+        // so the FAB never sits on top of the panel. Mobile keeps right-5 (panel is fullscreen there).
+        className="fixed bottom-20 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-[colors,right] hover:bg-brand-600 lg:bottom-5 lg:right-[calc(1.25rem+var(--detail-panel-w,0px))]"
       >
         <Sparkles size={20} strokeWidth={2} />
       </button>
@@ -119,7 +121,9 @@ export default function ChatDrawer() {
     <div
       // <lg: fullscreen overlay (inset-0, full width/height). lg+: docked to the right
       // edge with the persisted/maximized width applied as an inline style.
-      className="fixed inset-0 z-50 flex flex-col border-ink-100 bg-paper shadow-pop lg:inset-y-0 lg:left-auto lg:right-0 lg:h-screen lg:border-l"
+      // lg: dock immediately left of any open right-docked DetailPanel (--detail-panel-w,
+      // 0 when none → flush right edge) so the two panels sit side-by-side instead of overlapping.
+      className="fixed inset-0 z-50 flex flex-col border-ink-100 bg-paper shadow-pop lg:inset-y-0 lg:left-auto lg:right-[var(--detail-panel-w,0px)] lg:h-screen lg:border-l"
       style={isDesktop ? { width: totalWidth } : undefined}
     >
       {/* resize grip — desktop only, and hidden while maximized */}

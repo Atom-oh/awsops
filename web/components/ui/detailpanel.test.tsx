@@ -69,6 +69,28 @@ describe('DetailPanel', () => {
   });
 });
 
+describe('DetailPanel — chat-overlap coordination (--detail-panel-w)', () => {
+  const W = () => document.documentElement.style.getPropertyValue('--detail-panel-w');
+
+  it('publishes the docked width to the root CSS var while open', () => {
+    render(<DetailPanel title="x" data={MOCK} onClose={() => {}} />);
+    // default useResizablePanel width = 480 → chat offsets left by this much
+    expect(W()).toBe('480px');
+  });
+
+  it('clears the var to 0 on unmount so the chat returns to the right edge', () => {
+    const { unmount } = render(<DetailPanel title="x" data={MOCK} onClose={() => {}} />);
+    expect(W()).toBe('480px');
+    unmount();
+    expect(W()).toBe('0px');
+  });
+
+  it('keeps the var at 0 when there is no data (panel closed)', () => {
+    render(<DetailPanel title="x" data={null} onClose={() => {}} />);
+    expect(W()).toBe('0px');
+  });
+});
+
 describe('DetailPanel — RDS live metrics (v1 parity)', () => {
   const METRICS = {
     cpu: 42, connections: 5, freeableMemory: 1_000_000_000, freeStorage: 5_000_000_000,
