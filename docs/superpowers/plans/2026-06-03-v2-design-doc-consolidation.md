@@ -54,10 +54,10 @@ Expected: no output (all sections present, all cited paths exist). Glob-y paths 
 - [ ] **Step 1: Read sources** — the P1a plan + CLAUDE.md edge/known-issues + skim the four `.tf` files for real resource/variable names.
 
 - [ ] **Step 2: Write `01-edge-network.md`** using the template. Must include:
-  - **Current design**: CloudFront (TLS) → **VPC Origin `https-only:443`** → **internal ALB HTTPS:443** (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. No public ALB. ALB SG allows 443 from the CloudFront managed SG `CloudFront-VPCOrigins-Service-SG` (data lookup by name + vpc-id). VPC is new-or-reuse via `create_network` flag (live: reused mgmt-vpc `vpc-06801144309cad7dc`, 10.254.0.0/16; new-VPC default 10.30.0.0/16). Partial S3 backend (`awsops-v2-tfstate`, `use_lockfile`, no DynamoDB), TF ≥1.15, provider `~>6.0`.
+  - **Current design**: CloudFront (TLS) → **VPC Origin `https-only:443`** → **internal ALB HTTPS:443** (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. No public ALB. ALB SG allows 443 from the CloudFront managed SG `CloudFront-VPCOrigins-Service-SG` (data lookup by name + vpc-id). VPC is new-or-reuse via `create_network` flag (live: reused mgmt-vpc `vpc-0123456789abcdef0`, 10.254.0.0/16; new-VPC default 10.30.0.0/16). Partial S3 backend (`awsops-v2-tfstate`, `use_lockfile`, no DynamoDB), TF ≥1.15, provider `~>6.0`.
   - **Decisions**: ADR-030 (ECS Fargate + Aurora; v2 topology), ADR-028 (CloudFront `CACHING_DISABLED`).
   - **Key files**: `terraform/v2/foundation/edge.tf`, `network.tf`, `providers.tf`, `backend.tf`; `backend.hcl` (generated).
-  - **Status**: P1a ✅ GREEN — `https://awsops-v2.atomai.click` → HTTP 200, SSE 1/s, account `180294183052`.
+  - **Status**: P1a ✅ GREEN — `https://awsops-v2.atomai.click` → HTTP 200, SSE 1/s, account `123456789012`.
   - **Learnings & gotchas**: 504→200 root cause — CF→ALB must be TLS end-to-end (VPC Origin `https-only` + origin `domain_name` = public FQDN to drive SNI match; ALB needs HTTPS:443 + regional ACM validated via the CloudFront cert's Route53 CNAMEs); ALB SG **must** allow 443 from `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only → persistent 504); VPC Origin protocol can't update in-place while attached → `create_before_destroy` + distinct name + `-replace`.
   - **Source**: archived `2026-05-30-awsops-v2-p1a-foundation-edge-spine.md`.
 
@@ -80,7 +80,7 @@ git commit -m "docs(v2-ref): edge & networking reference (P1a)"
 - [ ] **Step 1: Read sources.**
 
 - [ ] **Step 2: Write `02-auth.md`** using the template. Must include:
-  - **Current design**: Cognito User Pool (`ap-northeast-2_TCDdvRYGm`) + app client (`366vspb0glc607k7i8nkol3for`, **PKCE public client, no secret**) + hosted domain `a-ops-v2-auth-180294183052`. **Lambda@Edge** `awsops-v2-cognito-auth` (`us-east-1`, python3.12, viewer-request) does **RS256 JWKS signature verification** + iss/aud/token_use + OAuth `state` + PKCE. Admin `admin@awsops.local` (in gitignored tfvars).
+  - **Current design**: Cognito User Pool (`ap-northeast-2_TCDdvRYGm`) + app client (`366vspb0glc607k7i8nkol3for`, **PKCE public client, no secret**) + hosted domain `a-ops-v2-auth-123456789012`. **Lambda@Edge** `awsops-v2-cognito-auth` (`us-east-1`, python3.12, viewer-request) does **RS256 JWKS signature verification** + iss/aud/token_use + OAuth `state` + PKCE. Admin `admin@awsops.local` (in gitignored tfvars).
   - **Decisions**: ADR-020 (Cognito + Lambda@Edge) — note its 2026-06-03 correction: v2 hardened from exp-only to full RS256.
   - **Key files**: `terraform/v2/foundation/auth.tf`, `terraform/v2/foundation/edge-lambda/cognito_edge.py.tftpl`.
   - **Status**: P1b + P1d ✅ — browser login e2e verified (Cognito → web via state/PKCE; forged token → 302).

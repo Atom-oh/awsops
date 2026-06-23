@@ -878,7 +878,7 @@ EKS 페이지도 read-only입니다. 클러스터 안의 nodes, pods, deployment
 
 세 번째로 `make deploy`는 먼저 ULID 마이그레이션을 돌리고, arm64 이미지를 빌드해 ECR에 푸시한 뒤 ECS 롤링 배포를 하고, 마지막으로 `/api/health` 스모크로 검증합니다.
 
-마지막으로 AgentCore와 워커는 flag-gated입니다. `make agentcore`, `make workers`로 활성화하며, 기본은 꺼져 있어 비용이 0입니다. 라이브 환경은 단일 계정 180294183052, 도메인 awsops-v2.atomai.click입니다.
+마지막으로 AgentCore와 워커는 flag-gated입니다. `make agentcore`, `make workers`로 활성화하며, 기본은 꺼져 있어 비용이 0입니다. 라이브 환경은 단일 계정 123456789012, 도메인 awsops-v2.atomai.click입니다.
 
 {cue: transition}
 마무리하겠습니다.

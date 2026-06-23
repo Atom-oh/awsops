@@ -40,7 +40,7 @@ viewer ──TLS──> CloudFront ──TLS (https-only:443)──> VPC Origin
   reuses an existing VPC (`existing_vpc_id` + `existing_private_subnet_ids`, no `ec2:Create*`,
   no new NAT cost). Downstream resources reference `local.vpc_id` / `local.private_subnet_ids`
   / `local.vpc_cidr` to absorb the branch.
-  Live: reused mgmt-vpc `vpc-06801144309cad7dc`, `10.254.0.0/16`.
+  Live: reused mgmt-vpc `vpc-0123456789abcdef0`, `10.254.0.0/16`.
 - **Remote state:** partial S3 backend (`backend "s3" {}`), bucket `awsops-v2-tfstate`, key
   `foundation/terraform.tfstate`, `use_lockfile = true` (S3-native locking, **no DynamoDB**),
   `encrypt = true`. Injected at init via `backend.hcl`.
@@ -74,7 +74,7 @@ Also relevant: `terraform/v2/foundation/workload.tf` (internal ALB, HTTPS:443 li
 ## Status / 상태
 
 **P1a ✅ GREEN.** `https://awsops-v2.atomai.click` → HTTP **200** + SSE streaming at **1 event/s**,
-in account `180294183052` (mgmt-vpc reuse). The negative test confirms the ALB is `internal` and
+in account `123456789012` (mgmt-vpc reuse). The negative test confirms the ALB is `internal` and
 unreachable directly from outside the VPC.
 
 ## Learnings & gotchas / 학습·함정

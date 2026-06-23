@@ -31,5 +31,5 @@ The real Next.js app must send an SSE heartbeat (`: keepalive\n\n`) at least eve
 - Unauthenticated `https://awsops-v2.atomai.click/` → **302 → Cognito Hosted UI login** ✓
 - Login as `admin@awsops.local` → `/_callback` exchanges code↔token → sets `awsops_token` cookie → redirects `/` → **authenticated spine page `AWSops v2 spine — ok (root)` loads** ✓ (confirmed in browser)
 - `/_callback` with no code → 400 ✓
-- Cognito: pool `ap-northeast-2_TCDdvRYGm`, Hosted-UI domain `a-ops-v2-auth-180294183052` (no 'aws' — reserved word), Lambda@Edge `awsops-v2-cognito-auth:1` (us-east-1) on viewer-request of both cache behaviors.
+- Cognito: pool `ap-northeast-2_TCDdvRYGm`, Hosted-UI domain `a-ops-v2-auth-123456789012` (no 'aws' — reserved word), Lambda@Edge `awsops-v2-cognito-auth:1` (us-east-1) on viewer-request of both cache behaviors.
 - ⚠️ **TODO before P1d real data:** verify JWT RS256 signature against Cognito JWKS (`/<poolId>/.well-known/jwks.json`) — currently `exp`-only (ported v1 behavior).

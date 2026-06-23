@@ -153,14 +153,14 @@ describe('buildFlowGraph — CF→LB/WAF edges', () => {
   });
 
   it('resolves an S3 origin to the REAL synced bucket row (invType=s3 + row.arn from inventory)', () => {
-    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'my-site-180294183052.s3.ap-northeast-2.amazonaws.com' }] };
-    const s3 = [{ resource_type: 's3', resource_id: 'my-site-180294183052', region: 'ap-northeast-2', arn: 'arn:aws:s3:::my-site-180294183052', creation_date: '2024-01-01' }];
+    const cf = { resource_id: 'D1', region: 'us-east-1', origins: [{ Id: 'o1', DomainName: 'my-site-123456789012.s3.ap-northeast-2.amazonaws.com' }] };
+    const s3 = [{ resource_type: 's3', resource_id: 'my-site-123456789012', region: 'ap-northeast-2', arn: 'arn:aws:s3:::my-site-123456789012', creation_date: '2024-01-01' }];
     const g = buildFlowGraph({ cloudfront: [cf], s3 });
     const o = g.nodes.find((n) => n.kind === 'origin');
-    expect(o?.label).toBe('my-site-180294183052');
+    expect(o?.label).toBe('my-site-123456789012');
     expect(o?.meta?.service).toBe('s3');
     expect(o?.meta?.invType).toBe('s3');
-    expect((o?.meta?.row as { arn?: string })?.arn).toBe('arn:aws:s3:::my-site-180294183052');
+    expect((o?.meta?.row as { arn?: string })?.arn).toBe('arn:aws:s3:::my-site-123456789012');
     expect(o?.meta?.unresolved).toBeUndefined();
   });
 

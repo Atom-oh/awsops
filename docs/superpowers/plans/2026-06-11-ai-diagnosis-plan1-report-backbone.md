@@ -496,7 +496,7 @@ def test_build_markdown_has_toc_and_all_sections():
         {"key": "executive_summary", "title": "Executive Summary", "body": "요약 본문"},
         {"key": "security_posture", "title": "Security Posture", "body": "보안 본문"},
     ]
-    md = report.build_markdown(rendered, account="180294183052", tier="mid")
+    md = report.build_markdown(rendered, account="123456789012", tier="mid")
     assert md.startswith("# AWS 진단 리포트") or md.startswith("# AWSops")
     assert "## Executive Summary" in md and "## Security Posture" in md
     assert "요약 본문" in md and "보안 본문" in md

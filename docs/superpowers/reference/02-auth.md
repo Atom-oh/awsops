@@ -10,7 +10,7 @@ v2는 **Cognito Hosted-UI 인증을 CloudFront 엣지 앞단에 배치**하여 �
 
 - **Cognito User Pool** `ap-northeast-2_TCDdvRYGm` — `username_attributes = ["email"]`, MFA off, password policy min-8 / upper / lower / number, **symbols NOT required** (Cognito onboarding quirk).
 - **App client** `366vspb0glc607k7i8nkol3for` — **public client, no secret** (`generate_secret = false`); OAuth `code` flow with PKCE, scopes `openid email profile`. Callback `https://<domain>/_callback`, logout `https://<domain>/`.
-- **Hosted-UI domain** `a-ops-v2-auth-180294183052` → `https://a-ops-v2-auth-180294183052.auth.ap-northeast-2.amazoncognito.com`.
+- **Hosted-UI domain** `a-ops-v2-auth-123456789012` → `https://a-ops-v2-auth-123456789012.auth.ap-northeast-2.amazoncognito.com`.
 - **Lambda@Edge** `awsops-v2-cognito-auth` — `python3.12`, **`us-east-1`** (the only region Lambda@Edge permits), 128 MB / 5 s, attached to the CloudFront distribution at the **`viewer-request`** event (fires before cache lookup).
   - Verifies the ID token via **pure-python RS256** (RSASSA-PKCS1-v1_5 + SHA-256) against Cognito's **JWKS** (`/.well-known/jwks.json`, cached in a module global) — no extra deps, stays under the 1 MB viewer-request limit.
   - Validates claims: `iss`, `aud` (= client id), `token_use == 'id'`, `exp`/`iat`/`nbf`.
@@ -39,7 +39,7 @@ v2는 **Cognito Hosted-UI 인증을 CloudFront 엣지 앞단에 배치**하여 �
 
 ## Learnings & gotchas / 학습·함정
 
-- **`aws` is a Cognito reserved word** — a domain prefix containing `aws` is rejected, so the Hosted-UI domain dropped the prefix → `a-ops-v2-auth-180294183052`.
+- **`aws` is a Cognito reserved word** — a domain prefix containing `aws` is rejected, so the Hosted-UI domain dropped the prefix → `a-ops-v2-auth-123456789012`.
 - **Exp-only edge auth is insecure** — a base64 decode + `exp` check does NOT verify the signature. A decode-only app trusting an exp-only edge would accept a **forged/altered JWT**. v2 fixes this with **JWKS RS256 verification** (pure-python, no dependencies, safely under the 1 MB Lambda@Edge viewer-request size limit).
 - **The Cognito app client was REPLACED, not edited, when moving to PKCE** — the old secret client was destroyed and a new public client (`generate_secret = false`) created (hence the new client id). Admin credentials were unchanged.
 - **No client secret in edge code** — the public client authenticates the token exchange with the PKCE `code_verifier`; the HMAC `state_key` (for the signed `awsops_flow` cookie) is the only secret rendered into the function, injected at apply via `random_password`.

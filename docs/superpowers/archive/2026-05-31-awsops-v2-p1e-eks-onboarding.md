@@ -217,7 +217,7 @@ cd /home/atomoh/awsops
 aws eks list-access-entries --cluster-name fsi-demo-cluster --region ap-northeast-2 \
   --query "accessEntries[?contains(@, 'awsops-v2-task')]" --output text
 aws eks list-associated-access-policies --cluster-name fsi-demo-cluster \
-  --principal-arn arn:aws:iam::180294183052:role/awsops-v2-task --region ap-northeast-2 \
+  --principal-arn arn:aws:iam::123456789012:role/awsops-v2-task --region ap-northeast-2 \
   --query 'associatedAccessPolicies[].policyArn' --output text
 terraform -chdir=terraform/v2/foundation output onboarded_eks_clusters
 ```
