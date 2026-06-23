@@ -7,8 +7,9 @@
 // .TargetHealth.State. alb/nlb resource_id is the LB *name*, so joins that use ARNs
 // (tg.load_balancer_arns, cloudfront.web_acl_id) must index by the payload `arn` field.
 //
-// Edges carry `confidence`: Spec 1 emits only 'observed' (solid). 'inferred' (dashed) is
-// reserved for Spec 2's env→RDS edges — the renderer keys stroke style off this field.
+// Edges carry `confidence`: directly-observed links are 'observed' (solid). 'inferred' (dashed) is
+// used for DERIVED links — Spec 2's env→RDS edges AND Route53-alias-chain-resolved CF→LB edges —
+// the renderer keys stroke style off this field.
 
 type Row = Record<string, unknown>;
 const str = (v: unknown): string => (v == null ? '' : String(v));
@@ -197,7 +198,13 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // keyed by (distribution id | origin domain) so ONLY the actual VPC-origin origin links to the LB —
   // a co-resident external/custom origin on the same distribution does NOT get a false CF→LB edge.
   const voByDistDomain = new Map<string, string[]>();
+  // ALL-status VPC-origin (dist|domain) keys — used ONLY to DETECT that an origin is a VPC origin
+  // (so it's excluded from public Route53 resolution). Deployed-only would let a Deploying/Failed
+  // VPC origin slip into the public path; detection must be status-agnostic. Edge LINKING still uses
+  // voByDistDomain (Deployed + arn only).
+  const vpcOriginKeys = new Set<string>();
   for (const v of input.cloudfront_vpc_origin ?? []) {
+    for (const ref of arr(v.origin_refs)) vpcOriginKeys.add(`${str(ref.distribution_id)}|${str(ref.domain)}`);
     if (str(v.status) !== 'Deployed' || !v.arn) continue;
     for (const ref of arr(v.origin_refs)) {
       const k = `${str(ref.distribution_id)}|${str(ref.domain)}`;
@@ -249,6 +256,67 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
     for (const a of aliasesOf(c)) cfByAlias.set(dns(a), cfId);
   }
 
+  // Route53 alias map: record name → its alias_target DNSName (both normalized). Lets a CloudFront
+  // CUSTOM-domain origin (not a raw *.elb.amazonaws.com) be resolved to the LB it ultimately points
+  // at — the gap that left grafana-internal.atomai.click-style origins target-less.
+  // Normalize a DNS name AND strip a leading `dualstack.` — but ONLY when the result is an ELB host
+  // (the `dualstack.` prefix is an ELB ALIAS convention; a literal `dualstack.`-prefixed non-ELB
+  // hostname must not be mangled, which would break a later chain-hop lookup).
+  // ELB hosts come in two shapes: ALB `<name>.<region>.elb.amazonaws.com` (region BEFORE elb) and
+  // NLB `<name>.elb.<region>.amazonaws.com` (region AFTER elb) — accept both.
+  const isElbHost = (h: string): boolean => /\.elb\.(?:[a-z0-9-]+\.)?amazonaws\.com$/i.test(h);
+  const bareDns = (v: unknown): string => {
+    const d = dns(v);
+    const stripped = d.replace(/^dualstack\./, '');
+    return stripped !== d && isElbHost(stripped) ? stripped : d;
+  };
+  // Build name → alias_target, but ONLY from PUBLIC-zone records (private_zone === false). A standard
+  // CloudFront custom origin resolves its origin over PUBLIC DNS, so a private-zone record can't back
+  // a reachable CF→LB edge; private_zone===true (private) or undefined (visibility unknown — e.g. an
+  // older sync before the private_zone column) is skipped → the origin stays honestly unresolved.
+  // Also drop AMBIGUOUS names (same name → conflicting targets) so resolution is DETERMINISTIC.
+  const r53Targets = new Map<string, Set<string>>();
+  for (const r of input.route53 ?? []) {
+    if (r.private_zone !== false) continue; // public-only (skips private + unknown)
+    const name = dns(r.name) || dns(r.resource_id);
+    const aliasT = (r.alias_target && typeof r.alias_target === 'object') ? (r.alias_target as Row) : {};
+    // ALIAS records carry alias_target.DNSName; CNAME/other records carry the target in `records[]`
+    // (string values, or {Value} objects defensively).
+    let target = bareDns(aliasT.DNSName);
+    if (!target) {
+      const recs = arr(r.records);
+      const first = recs.length ? (typeof recs[0] === 'string' ? recs[0] : str((recs[0] as Row).Value)) : '';
+      target = bareDns(first);
+    }
+    if (name && target && name !== target) (r53Targets.get(name) ?? r53Targets.set(name, new Set()).get(name)!).add(target);
+  }
+  const r53AliasByName = new Map<string, string>();
+  for (const [name, targets] of r53Targets) if (targets.size === 1) r53AliasByName.set(name, [...targets][0]);
+
+  // LB dns_names that are internet-facing. A STANDARD (non-VPC) CloudFront custom origin reaches its
+  // origin over the public internet, so a Route53-resolved CF→LB edge is only honest for these — an
+  // internal LB is unreachable from a standard custom origin (the VPC-origin path returned earlier).
+  const internetFacingLbDns = new Set<string>();
+  for (const lb of [...(input.alb ?? []), ...(input.nlb ?? [])]) {
+    if (lb.dns_name && str(lb.scheme).toLowerCase() === 'internet-facing') internetFacingLbDns.add(str(lb.dns_name).toLowerCase());
+  }
+  // Follow the alias chain (≤4 hops, cycle-guarded) → TERMINAL DNS name, or null if the domain isn't
+  // a known Route53 record. The terminal may be a synced LB dns_name (→ real CF→LB edge) or a
+  // non-synced (e.g. cross-region) ELB host (→ surfaced as the unresolved origin's resolved target).
+  const resolveViaR53 = (domain: string): string | null => {
+    let cur = domain, hops = 0;
+    const seen = new Set<string>();
+    while (r53AliasByName.has(cur)) {
+      // cycle (A→B→A) or hop-limit exhaustion → the terminal is untrustworthy; return null rather
+      // than a mid-chain record name (which would surface as a misleading resolved target).
+      if (hops >= 4 || seen.has(cur)) return null;
+      seen.add(cur);
+      cur = r53AliasByName.get(cur)!;
+      hops++;
+    }
+    return cur === domain ? null : cur; // terminated outside the map; null if nothing resolved
+  };
+
   // 2) Route53 → CloudFront / LB. Records are the true front door (custom domain). Match the
   // record's alias target (or the record name itself) to a CF distribution domain/alias or an
   // LB dns_name. Records that resolve to nothing we track are skipped (no orphan DNS clutter).
@@ -288,6 +356,29 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
         let linked = false;
         for (const arn of voArns) { const id = lbByArn.get(arn); if (id) { addEdge(cfId, id); linked = true; } }
         if (linked) return;
+        // Known VPC origin but backing LB not synced: it is NOT reached via public DNS, so do NOT
+        // fall through to the Route53 public-resolution path below (that would draw a misleading
+        // public CF→LB edge) — leave it as the honest unresolved VPC-origin node.
+      }
+      // A VPC origin is ANY origin with VpcOriginConfig (Steampipe path) OR a matched cloudfront_vpc_origin
+      // (SDK path) — both are private, NOT reached via public DNS. Detect via EITHER so a non-Deployed or
+      // SDK-omitted VPC origin can't slip into public Route53 resolution.
+      const isVpcOrigin = vpcOriginKeys.has(`${str(c.resource_id)}|${domain}`)
+        || (!!o.VpcOriginConfig && typeof o.VpcOriginConfig === 'object');
+      // Custom-domain origin → resolve via the Route53 alias chain. Lands on a SYNCED LB → draw the
+      // real CF→LB edge (A). Lands on a non-synced (e.g. cross-region) ELB → fall through to an
+      // unresolved node but surface the resolved target so the chain is still legible (C).
+      // Skipped for VPC origins — those aren't public-DNS paths.
+      let resolvedTarget: string | null = null;
+      if (domain && !isVpcOrigin) {
+        const term = resolveViaR53(dns(domain));
+        if (term) {
+          const lid = lbByDns.get(term);
+          // Draw the edge ONLY to a synced, internet-facing LB (a standard custom origin can't reach
+          // an internal LB). DNS-chain-derived → 'inferred' (dashed). Otherwise surface the target.
+          if (lid && internetFacingLbDns.has(term)) { addEdge(cfId, lid, 'inferred'); return; }
+          resolvedTarget = term;
+        }
       }
       // Otherwise: honest unresolved-origin node, never a false LB edge.
       const vpc = (o.VpcOriginConfig && typeof o.VpcOriginConfig === 'object') ? ' (VPC origin)' : '';
@@ -302,7 +393,8 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
         const row = s3ByName.get(bucket) ?? { resource_id: bucket, name: bucket, arn: `arn:aws:s3:::${bucket}` };
         addNode(oid, 'origin', bucket, { service: 's3', bucket, domain, invType: 's3', row });
       } else {
-        addNode(oid, 'origin', `${domain || 'origin'}${vpc}`, { unresolved: true });
+        const label = resolvedTarget ? `${domain} → ${resolvedTarget}` : `${domain || 'origin'}${vpc}`;
+        addNode(oid, 'origin', label, { unresolved: true, ...(resolvedTarget ? { resolvedTarget } : {}) });
       }
       addEdge(cfId, oid);
     });

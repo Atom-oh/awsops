@@ -166,11 +166,25 @@ QUERIES = {
     ),
     "route53": (
         # Front-door entry: alias/A/CNAME records whose alias_target (PascalCase .DNSName) points
-        # at a CloudFront distribution domain or an LB dns_name. record_id = name+type (a name can
-        # hold multiple record types). route53 is global → literal region.
-        "SELECT (name || ' ' || type) AS record_id, name, type, 'global' AS region, account_id, "
-        "zone_id, alias_target, records, ttl "
-        "FROM aws_route53_record WHERE type IN ('A', 'AAAA', 'CNAME') ORDER BY name",
+        # at a CloudFront distribution domain or an LB dns_name.
+        # record_id is ZONE- and ROUTING-POLICY-SCOPED (zone_id + name + type + set_identifier): a
+        # name+type can exist in BOTH a public and a private hosted zone (split-horizon) AND across
+        # multiple weighted/latency/failover/geo/multivalue records (distinguished only by
+        # set_identifier). Keying on less would collide → records overwrite each other on upsert,
+        # leaving a single row → the topology builder's public/private + ambiguity guards operate on
+        # incomplete data → resolution becomes input-order-dependent. The full key keeps every record
+        # a distinct row. private_zone (LEFT JOIN aws_route53_zone) marks public vs private so the
+        # builder resolves ONLY public-zone records to a real CF→LB edge (standard custom origins use
+        # public DNS).
+        "SELECT (r.zone_id || ' ' || r.name || ' ' || r.type || ' ' || COALESCE(r.set_identifier, '')) AS record_id, "
+        "r.name, r.type, 'global' AS region, r.account_id, r.zone_id, r.set_identifier, "
+        "r.alias_target, r.records, r.ttl, z.private_zone "
+        # join-key normalized: aws_route53_zone.id and aws_route53_record.zone_id may differ by a
+        # '/hostedzone/' prefix depending on FDW shape; strip it on both sides so the join can't
+        # silently miss (which would NULL every private_zone → builder skips all → zero edges).
+        "FROM aws_route53_record r LEFT JOIN aws_route53_zone z "
+        "ON replace(z.id, '/hostedzone/', '') = replace(r.zone_id, '/hostedzone/', '') "
+        "WHERE r.type IN ('A', 'AAAA', 'CNAME') ORDER BY r.name, r.set_identifier",
         "record_id",
         "region",
     ),
