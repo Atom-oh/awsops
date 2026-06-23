@@ -9,7 +9,7 @@ reconnects "the topology data we built in Aurora" to AgentCore — the bridge th
 Tools (all read-only — SELECT only; no AWS mutation, no arbitrary SQL):
   - find_unused_resources : orphan TGs, empty CloudFront origins, dead/idle LBs, unattached EBS …
   - query_inventory       : list/filter synced resources by type
-  - get_topology          : CF→LB→TG→target chain from the materialized graph
+  - get_topology          : topology_nodes/edges graph (nodes+edges, matches /api/graph contract)
   - inventory_summary     : counts by type + sync freshness
 
 Aurora access uses the **RDS Data API** (boto3 `rds-data`, bundled in the Lambda runtime) — no VPC
@@ -118,7 +118,7 @@ def detect_unused(by_type):
 
 
 def build_topology_chain(by_type, root=None):
-    """Trace CF→LB→TG→target chains from synced inventory (for get_topology)."""
+    """Trace CF→LB→TG→target chains from raw inventory rows (legacy chain-builder; topology_nodes/edges is the canonical path)."""
     albs = {lb.get("dns_name"): lb for lb in (by_type.get("alb") or []) + (by_type.get("nlb") or [])}
     tgs_by_lb = {}
     for tg in by_type.get("target_group") or []:
@@ -138,6 +138,55 @@ def build_topology_chain(by_type, root=None):
                                      for t in (tgs_by_lb.get(lb.get("arn"), []) if lb else [])]}
             chains.append(node)
     return chains
+
+
+def _fetch_topology_graph(resource_id=None, cls="flow", limit=500):
+    """Read the materialized topology graph from topology_nodes/edges (ADR-043).
+
+    Matches the /api/graph contract:
+      nodes = [{id, kind, label, meta}]
+      edges = [{source, target, rel, confidence}]
+
+    If resource_id is given, scopes to that node + its 1-hop neighbourhood (filtered in Python
+    after the full-graph fetch so we avoid RDS Data API array-binding complexity).
+    JSONB `meta` is returned as a dict by formatRecordsAs=JSON; _parse_meta handles the rare
+    string case defensively.
+    """
+    node_rows = _execute(
+        "SELECT id, kind, label, meta FROM topology_nodes "
+        "WHERE account_id = 'self' AND class = :cls LIMIT " + str(int(min(limit, 1000))),
+        params=[{"name": "cls", "value": {"stringValue": cls}}])
+    edge_rows = _execute(
+        "SELECT source, target, rel, confidence FROM topology_edges "
+        "WHERE account_id = 'self' AND class = :cls",
+        params=[{"name": "cls", "value": {"stringValue": cls}}])
+
+    def _parse_meta(m):
+        if isinstance(m, dict):
+            return m
+        if isinstance(m, str) and m:
+            try:
+                return json.loads(m)
+            except Exception:
+                return {}
+        return {}
+
+    nodes = [{"id": r["id"], "kind": r["kind"], "label": r["label"],
+              "meta": _parse_meta(r.get("meta"))} for r in node_rows if r.get("id")]
+    edges = [{"source": r["source"], "target": r["target"],
+              "rel": r["rel"], "confidence": r["confidence"]}
+             for r in edge_rows if r.get("source") and r.get("target")]
+
+    if resource_id:
+        neighbor_ids = {resource_id}
+        for e in edges:
+            if e["source"] == resource_id or e["target"] == resource_id:
+                neighbor_ids.add(e["source"])
+                neighbor_ids.add(e["target"])
+        nodes = [n for n in nodes if n["id"] in neighbor_ids]
+        edges = [e for e in edges if e["source"] in neighbor_ids and e["target"] in neighbor_ids]
+
+    return nodes, edges
 
 
 # ── Aurora access via the RDS Data API (lazy + injectable; boto3 is in the Lambda runtime) ─────────
@@ -238,9 +287,19 @@ def lambda_handler(event, context):
         return _ok({"findings": findings, "count": len(findings), "note": COVERAGE_NOTE})
 
     if tool_name == "get_topology":
-        root = arguments.get("resource_id") if isinstance(arguments, dict) else None
-        by_type = _fetch_by_type(["cloudfront", "alb", "nlb", "target_group"])
-        return _ok({"chains": build_topology_chain(by_type, root), "note": COVERAGE_NOTE})
+        resource_id = arguments.get("resource_id") if isinstance(arguments, dict) else None
+        cls = (arguments.get("class") or "flow") if isinstance(arguments, dict) else "flow"
+        if cls not in ("flow", "infra"):
+            cls = "flow"
+        nodes, edges = _fetch_topology_graph(resource_id=resource_id, cls=cls)
+        result = {"class": cls, "nodes": nodes, "edges": edges,
+                  "node_count": len(nodes), "edge_count": len(edges), "note": COVERAGE_NOTE}
+        if resource_id:
+            result["from"] = resource_id
+        if not nodes:
+            result["warning"] = ("Graph not materialized yet — run scripts/v2/graph-rebuild.mjs "
+                                 "(or the post-sync worker job) to populate topology_nodes/edges.")
+        return _ok(result)
 
     if tool_name == "query_inventory":
         rtype = arguments.get("resource_type") if isinstance(arguments, dict) else None

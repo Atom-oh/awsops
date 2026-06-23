@@ -184,6 +184,85 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
                                   "arguments": {"resource_type": "alb", "limit": "oops"}}, None)
         self.assertEqual(out["statusCode"], 200)
 
+    def test_get_topology_reads_topology_tables_not_inventory(self):
+        """get_topology must query topology_nodes/edges, returning the /api/graph node+edge contract."""
+        calls = []
+        def fake(sql, params=None):
+            calls.append(sql)
+            if "topology_nodes" in sql:
+                return [{"id": "cf:E1", "kind": "cloudfront", "label": "my-cf", "meta": {"id": "E1"}}]
+            if "topology_edges" in sql:
+                return [{"source": "cf:E1", "target": "alb:arn-1", "rel": "ORIGIN", "confidence": "observed"}]
+            return []
+        inv._execute_override = fake
+        out = inv.lambda_handler({"tool_name": "get_topology"}, None)
+        self.assertEqual(out["statusCode"], 200)
+        import json as _j
+        body = _j.loads(out["body"])
+        # /api/graph contract: nodes + edges, NOT "chains"
+        self.assertIn("nodes", body)
+        self.assertIn("edges", body)
+        self.assertNotIn("chains", body)
+        self.assertEqual(body["class"], "flow")
+        self.assertEqual(body["node_count"], 1)
+        self.assertEqual(body["edge_count"], 1)
+        self.assertTrue(any("topology_nodes" in c for c in calls), "must query topology_nodes")
+        self.assertTrue(any("topology_edges" in c for c in calls), "must query topology_edges")
+        # must NOT query inventory_resources for get_topology
+        self.assertFalse(any("inventory_resources" in c for c in calls), "must not fall back to raw inventory")
+
+    def test_get_topology_with_resource_id_scopes_to_neighbourhood(self):
+        """resource_id must filter to the requested node + its 1-hop neighbours only."""
+        def fake(sql, params=None):
+            if "topology_nodes" in sql:
+                return [
+                    {"id": "cf:E1", "kind": "cloudfront", "label": "my-cf", "meta": {}},
+                    {"id": "alb:arn-1", "kind": "alb", "label": "my-alb", "meta": {}},
+                    {"id": "tg:arn-2", "kind": "tg", "label": "my-tg", "meta": {}},
+                    {"id": "tg:arn-99", "kind": "tg", "label": "unrelated", "meta": {}},
+                ]
+            if "topology_edges" in sql:
+                return [
+                    {"source": "cf:E1", "target": "alb:arn-1", "rel": "ORIGIN", "confidence": "observed"},
+                    {"source": "alb:arn-1", "target": "tg:arn-2", "rel": "TARGETS", "confidence": "observed"},
+                ]
+            return []
+        inv._execute_override = fake
+        import json as _j
+        out = inv.lambda_handler({"tool_name": "get_topology", "arguments": {"resource_id": "alb:arn-1"}}, None)
+        body = _j.loads(out["body"])
+        ids = {n["id"] for n in body["nodes"]}
+        self.assertIn("alb:arn-1", ids)
+        self.assertIn("cf:E1", ids)     # 1-hop upstream
+        self.assertIn("tg:arn-2", ids)  # 1-hop downstream
+        self.assertNotIn("tg:arn-99", ids)  # unconnected → excluded
+        self.assertEqual(body["from"], "alb:arn-1")
+
+    def test_get_topology_empty_graph_returns_warning(self):
+        """Empty topology_nodes → warning with actionable hint (graph not materialized)."""
+        inv._execute_override = lambda sql, params=None: []
+        import json as _j
+        out = inv.lambda_handler({"tool_name": "get_topology"}, None)
+        self.assertEqual(out["statusCode"], 200)
+        body = _j.loads(out["body"])
+        self.assertEqual(body["nodes"], [])
+        self.assertEqual(body["edges"], [])
+        self.assertIn("warning", body)
+        self.assertIn("graph-rebuild", body["warning"])
+
+    def test_get_topology_class_infra_forwarded(self):
+        """class='infra' must be passed as the :cls parameter to both topology queries."""
+        seen_cls = []
+        def fake(sql, params=None):
+            for p in (params or []):
+                if p["name"] == "cls":
+                    seen_cls.append(p["value"]["stringValue"])
+            return []
+        inv._execute_override = fake
+        inv.lambda_handler({"tool_name": "get_topology", "arguments": {"class": "infra"}}, None)
+        self.assertTrue(all(c == "infra" for c in seen_cls), f"expected all cls='infra', got {seen_cls}")
+        self.assertEqual(len(seen_cls), 2, "must issue two queries (nodes + edges)")
+
     def test_build_topology_chain_skips_null_origin_domain(self):
         # a null origin DomainName must not match a load balancer with a null dns_name
         chains = inv.build_topology_chain({
