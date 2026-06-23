@@ -234,6 +234,25 @@ describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', (
     expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(false); // ambiguous → no edge
   });
 
+  // dualstack: an ELB ALIAS target carries a `dualstack.` prefix that the bare LB dns_name lacks —
+  // must be stripped so the synced LB still matches (otherwise the LB is missed → unresolved).
+  it('matches a synced LB when the Route53 alias target has a dualstack. prefix', () => {
+    const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
+    const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'demo3-1097511911.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'dualstack.demo3-1097511911.ap-northeast-2.elb.amazonaws.com.' } }];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
+    expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
+  });
+
+  // CNAME: a record with no alias_target carries its target in `records` — follow it too.
+  it('resolves a CNAME record (records[]) to a synced internet-facing LB', () => {
+    const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
+    const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'cn-lb.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [{ resource_id: 'svc.atomai.click CNAME', name: 'svc.atomai.click.', type: 'CNAME', records: ['cn-lb.ap-northeast-2.elb.amazonaws.com'] }];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
+    expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
+  });
+
   // C: a CloudFront custom-domain origin whose Route53 alias points at a NON-synced (e.g. cross-region)
   // ELB → honest unresolved origin node, but its label/meta surfaces the resolved target.
   it('surfaces the resolved target on an unresolved node when the alias points to a non-synced ELB (cross-region)', () => {

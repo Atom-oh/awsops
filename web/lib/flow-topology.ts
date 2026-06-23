@@ -252,13 +252,26 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // Route53 alias map: record name → its alias_target DNSName (both normalized). Lets a CloudFront
   // CUSTOM-domain origin (not a raw *.elb.amazonaws.com) be resolved to the LB it ultimately points
   // at — the gap that left grafana-internal.atomai.click-style origins target-less.
+  // Normalize a DNS name AND strip a leading `dualstack.` — Route53 ELB ALIAS targets carry a
+  // `dualstack.` prefix that the LB's bare dns_name lacks, so it must be removed to match.
+  const bareDns = (v: unknown): string => dns(v).replace(/^dualstack\./, '');
   // Drop AMBIGUOUS names (same name → conflicting targets, e.g. split-horizon public/private zones)
   // so resolution is DETERMINISTIC regardless of input order — never an order-dependent edge.
+  // NOTE: the synced route53 row has no private-zone flag (only zone_id), so a public/private split
+  // can't be distinguished here; the ambiguity-drop below + the internet-facing reachability guard
+  // cover the split-horizon cases that matter (conflicting or unreachable targets).
   const r53Targets = new Map<string, Set<string>>();
   for (const r of input.route53 ?? []) {
     const name = dns(r.name) || dns(r.resource_id);
     const aliasT = (r.alias_target && typeof r.alias_target === 'object') ? (r.alias_target as Row) : {};
-    const target = dns(aliasT.DNSName);
+    // ALIAS records carry alias_target.DNSName; CNAME/other records carry the target in `records[]`
+    // (string values, or {Value} objects defensively).
+    let target = bareDns(aliasT.DNSName);
+    if (!target) {
+      const recs = arr(r.records);
+      const first = recs.length ? (typeof recs[0] === 'string' ? recs[0] : str((recs[0] as Row).Value)) : '';
+      target = bareDns(first);
+    }
     if (name && target && name !== target) (r53Targets.get(name) ?? r53Targets.set(name, new Set()).get(name)!).add(target);
   }
   const r53AliasByName = new Map<string, string>();
