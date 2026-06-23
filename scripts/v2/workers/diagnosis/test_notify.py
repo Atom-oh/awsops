@@ -47,6 +47,17 @@ def test_build_message_ascii_subject_and_link_in_body():
     assert "핵심 요약" in body
 
 
+def test_build_message_footer_varies_by_trigger():
+    # scheduled run → "자동 진단 스케줄" footer; manual run → "진단 완료 시" footer (and NOT the schedule one)
+    _, sched = notify.build_message("주간 진단", MD, "https://x/ai-diagnosis?report=1", scheduled=True)
+    _, manual = notify.build_message("수동 진단", MD, "https://x/ai-diagnosis?report=2", scheduled=False)
+    assert "자동 진단 스케줄" in sched
+    assert "진단 완료 시" in manual and "자동 진단 스케줄" not in manual
+    # default (no scheduled kwarg) is the manual wording — manual runs are the parity-widened path
+    _, dflt = notify.build_message("기본", MD, "https://x/ai-diagnosis?report=3")
+    assert "진단 완료 시" in dflt and "자동 진단 스케줄" not in dflt
+
+
 def test_publish_report_noop_without_topic():
     assert notify.publish_report("", "t", MD, "url") is None
 

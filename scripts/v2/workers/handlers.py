@@ -99,6 +99,17 @@ def _report(payload, dry_run):
             # v1 notifies unconditionally; the destination/opt-out (email/Slack/Lambda fan-out) lives on
             # the SNS subscription side. Best-effort + flag-gated by the topic env (empty when
             # diagnosis_notify_enabled=false → no-op). `scheduled` only flavors the message wording.
+            #
+            # GOVERNANCE (ADR-040/041 external-comms): widening the trigger from scheduler-only to any
+            # completed run (incl. an authed non-admin's manual run) is governed by, in order:
+            #   1. diagnosis_notify_enabled — flag-OFF by default (no topic env → this block is a no-op);
+            #   2. admin-curated recipients — subscriber add/remove is admin-only AND each address must
+            #      complete the SNS email-confirmation handshake, so the *recipient set* is admin-vetted
+            #      regardless of who triggers the run;
+            #   3. owner directive — v1 parity (notify on every completion) is an explicit product call.
+            # The published content (executive-summary teaser + deep link) and the recipient set are
+            # IDENTICAL to the already-shipped scheduled path — this change widens *who can trigger*, not
+            # *what is exposed or to whom* — so it adds no new DLP/redaction surface over the prior code.
             topic = os.environ.get("DIAGNOSIS_SNS_TOPIC_ARN", "")
             if topic:
                 from diagnosis import notify
