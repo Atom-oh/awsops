@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 
-// Mailing list for scheduled-diagnosis email (v1 report-scheduler parity). Reads/writes
+// Mailing list for diagnosis-completion email (v1 parity — manual + scheduled). Reads/writes
 // /api/diagnosis/subscribers (SNS topic email subscriptions). Visible only when the feature is enabled
 // (Terraform diagnosis_notify_enabled → topic ARN present). Add/remove controls are admin-only (canManage);
 // non-admins see the read-only list. A new address is "확인 대기" until the recipient confirms the SNS email.
@@ -83,7 +83,7 @@ export default function SubscribersPanel() {
     <fieldset className="rounded-md border border-ink-200 px-2 py-1.5 text-[13px]">
       <legend className="px-1 text-ink-400">진단 결과 메일링 ({subs.length})</legend>
       {subs.length === 0 ? (
-        <p className="text-[12px] text-ink-400">구독자가 없습니다. 예약 진단 완료 시 등록된 메일로 요약이 발송됩니다.</p>
+        <p className="text-[12px] text-ink-400">구독자가 없습니다. 진단 완료 시 등록된 메일로 요약이 발송됩니다.</p>
       ) : (
         <ul className="space-y-1">
           {subs.map((s) => (
