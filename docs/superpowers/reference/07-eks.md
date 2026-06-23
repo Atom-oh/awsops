@@ -61,7 +61,7 @@
 - The correct CA attribute is `data.aws_eks_cluster.onboard[*].certificate_authority[0].data`.
 
 **KO**
-- **OpenCost 설치는 제외 → P3.** v2에서는 UI 버튼 = P2 워커 백본(SQS + Step Functions / ECS one-shot) 위의 **ADR-029 변경 액션**이며, **raw Lambda가 아니다.**
+- **OpenCost = read-only out-of-band 설치 번들.** UI가 번들을 생성하고 운영자가 직접 실행; AWS-리소스 변경은 **FROZEN (ADR-005, do-not-enable)** — 인앱 변경 액션 아님.
 - **멀티 계정 제외** — P1e는 호스트 계정 전용.
 - **웹 코드는 P3에서 `onboarded_eks_clusters` output을 소비**한다. P1e는 접근 권한 부여 + 연결 정보 노출까지만 담당하고, kubeconfig 생성·조회는 후속 단계다.
 - 빈 기본 목록에 대한 `for_each`는 리소스를 생성하지 않으므로 `eks.tf` 병합은 안전한 no-op이다.

@@ -40,7 +40,9 @@ flowchart LR
 
 ## Components / 컴포넌트
 
-| Component | Reference | Governing ADRs | Key files | Status |
+> ⚠️ 아래 **Governing ADRs는 옛(pre-reset) 번호**입니다. 현행 결정 진실 = [`../../decisions/BASELINE.md`](../../decisions/BASELINE.md) + 통합 ADR 001–014; 옛↔새 매핑은 [`../../decisions/ADR-MAPPING.md`](../../decisions/ADR-MAPPING.md). 옛 ADR 본문은 git tag `adr-legacy-2026-06-22`.
+
+| Component | Reference | Governing ADRs (legacy #) | Key files | Status |
 |---|---|---|---|---|
 | Edge & Networking | [Edge & Networking](01-edge-network.md) | ADR-030, ADR-028 | `terraform/v2/foundation/edge.tf` (+ `network.tf`, `workload.tf`) | P1a ✅ GREEN |
 | Auth & Identity | [Auth & Identity](02-auth.md) | ADR-020 | `terraform/v2/foundation/auth.tf` (+ `edge-lambda/cognito_edge.py.tftpl`) | P1b + P1d ✅ |
