@@ -1,5 +1,7 @@
 # AWSops 대시보드 - 설치 가이드 / AWSops Dashboard - Installation Guide
 
+> ⚠️ **v1 (레거시) 설치 가이드.** v1.8.0(EC2/CDK/Steampipe) 기준 — v2 배포는 `CLAUDE.md`의 `make configure/deploy` 흐름 참조. / **v1 (legacy) install** — v2 deploy is in `CLAUDE.md`.
+
 ## 아키텍처 개요 / Architecture Overview
 
 ```
