@@ -27,12 +27,12 @@ One-time, **idempotent** load of v1's four high-value history stores into v2's A
 
 ## 2. v1 데이터 가져오기 / Pull the v1 data (read-only)
 
-v1 인스턴스 `i-0a35c902f44f23adf`의 `data/`를 로컬로 복사한다(읽기 전용 — v1은 건드리지 않는다).
-Copy `data/` off the v1 instance `i-0a35c902f44f23adf` (read-only — v1 is untouched).
+v1 인스턴스 `i-0123456789abcdef0`의 `data/`를 로컬로 복사한다(읽기 전용 — v1은 건드리지 않는다).
+Copy `data/` off the v1 instance `i-0123456789abcdef0` (read-only — v1 is untouched).
 
 ```bash
 # SSM 세션 또는 Run Command로 tar 후 내려받기 / tar via SSM then download
-INSTANCE=i-0a35c902f44f23adf
+INSTANCE=i-0123456789abcdef0
 # (옵션 A) SSM Run Command → S3
 aws ssm send-command --instance-ids "$INSTANCE" \
   --document-name AWS-RunShellScript \
@@ -52,7 +52,7 @@ Verify what would load, with no DB connection.
 ```bash
 node scripts/v2/backfill-v1.mjs --data-dir ./v1-data --dry-run
 # 단일계정 레이아웃(루트 날짜파일)의 기본 계정 id 지정 / set the account id for the single-account layout:
-node scripts/v2/backfill-v1.mjs --data-dir ./v1-data --account-id 180294183052 --dry-run
+node scripts/v2/backfill-v1.mjs --data-dir ./v1-data --account-id 123456789012 --dry-run
 ```
 
 출력의 `would-write / skipped / errored` 카운트를 확인한다. `errored > 0`이면 종료코드 1.
@@ -62,7 +62,7 @@ Read the `would-write / skipped / errored` counts. `errored > 0` ⇒ exit code 1
 
 ```bash
 # Secrets Manager 경로(권장) — creds 자동 해석 / Secrets Manager path (preferred)
-node scripts/v2/backfill-v1.mjs --data-dir ./v1-data --account-id 180294183052
+node scripts/v2/backfill-v1.mjs --data-dir ./v1-data --account-id 123456789012
 
 # 특정 소스만 / a single source
 node scripts/v2/backfill-v1.mjs --data-dir ./v1-data --only cost

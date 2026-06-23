@@ -246,9 +246,9 @@ describe('eks-access', () => {
   });
 
   it('getTaskRoleArn converts an assumed-role ARN to the IAM role ARN', async () => {
-    stsSend.mockResolvedValue({ Arn: 'arn:aws:sts::180294183052:assumed-role/awsops-v2-task/abc123' });
+    stsSend.mockResolvedValue({ Arn: 'arn:aws:sts::123456789012:assumed-role/awsops-v2-task/abc123' });
     const { getTaskRoleArn } = await import('./eks-access');
-    expect(await getTaskRoleArn()).toBe('arn:aws:iam::180294183052:role/awsops-v2-task');
+    expect(await getTaskRoleArn()).toBe('arn:aws:iam::123456789012:role/awsops-v2-task');
   });
 
   it('getTaskRoleArn passes a plain role ARN through and caches it', async () => {

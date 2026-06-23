@@ -69,7 +69,7 @@ def test_parse_rows_skips_rows_without_day_or_model():
 def test_normalize_model_strips_arn_to_canonical_id():
     # SDK worker logs the full inference-profile ARN; AgentCore logs the bare id — both collapse.
     assert A.normalize_model(
-        "arn:aws:bedrock:ap-northeast-2:180294183052:inference-profile/global.anthropic.claude-opus-4-8"
+        "arn:aws:bedrock:ap-northeast-2:123456789012:inference-profile/global.anthropic.claude-opus-4-8"
     ) == "global.anthropic.claude-opus-4-8"
     assert A.normalize_model("global.anthropic.claude-sonnet-4-6") == "global.anthropic.claude-sonnet-4-6"
     # foundation-model ARNs reduce the same way (after the last '/')

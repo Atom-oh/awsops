@@ -1178,7 +1178,7 @@ cd /home/atomoh/awsops && make deploy
 ```
 Expected: buildx arm64 push → ECS force-new-deployment → services-stable → `/api/health` 200.
 
-- [ ] **Step 3: E2E in the browser** (`https://awsops-v2.atomai.click`)
+- [ ] **Step 3: E2E in the browser** (`https://awsops-v2.example.com`)
 
 Verify manually:
 1. Log in (Cognito). Click the ✦ FAB → drawer opens with Auto preset chips.

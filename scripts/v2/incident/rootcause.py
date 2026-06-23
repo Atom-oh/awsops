@@ -10,6 +10,7 @@ SAFETY: read-only over findings + a single bounded UPDATE of incidents.rca + sta
 AWS resources; the analysis is recommend-only and the prompt rides the SAFEGUARD boundary.
 """
 import json
+import hashlib
 import os
 import re
 
@@ -84,12 +85,88 @@ def _gather_findings(conn, incident_id):
     return out
 
 
+def _first(values):
+    if isinstance(values, str):
+        try:
+            values = json.loads(values)
+        except (ValueError, TypeError):
+            values = [values]
+    for value in values or []:
+        if value:
+            return value
+    return None
+
+
+def _load_failing_entity(conn, incident_id):
+    rows = conn.run(
+        "SELECT id, services, resources FROM incidents WHERE id = :iid",
+        iid=incident_id)
+    if not rows:
+        return None
+    row = rows[0]
+    return _first(row[1]) or _first(row[2])
+
+
+def _parse_orchestrator_rca(content):
+    result = json.loads(content) if isinstance(content, str) else content
+    return (result or {}).get("rca") or {}
+
+
+def _rca_stage_idempotency_key(incident_id):
+    return hashlib.sha256(f"{incident_id}:rca".encode("utf-8")).hexdigest()
+
+
+def _run_orchestrator(conn, event, incident_id):
+    idem = _rca_stage_idempotency_key(incident_id)
+    failing_entity = _load_failing_entity(conn, incident_id)
+    content = agent_bridge.invoke(
+        gateway="ops",
+        messages=[{"role": "user", "content": "Run root-cause analysis."}],
+        session_id=_session_id(incident_id),
+        mode="rca",
+        incident_id=incident_id,
+        failing_entity=failing_entity)
+    rca = _parse_orchestrator_rca(content)
+
+    inserted = conn.run(
+        "INSERT INTO incident_stages "
+        "(incident_id, stage, stage_idempotency_key, job_id, status, detail) "
+        "VALUES (:iid, 'root_cause', :ik, :jid, 'succeeded', :detail::jsonb) "
+        "ON CONFLICT (incident_id, stage_idempotency_key) DO NOTHING "
+        "RETURNING id",
+        iid=incident_id, ik=idem, jid=event.get("job_id"),
+        detail=json.dumps({"source": "rca-orchestrator"}))
+    if not inserted:
+        rows = conn.run("SELECT rca FROM incidents WHERE id = :iid", iid=incident_id)
+        existing = rows[0][0] if rows else {}
+        if isinstance(existing, str):
+            try:
+                existing = json.loads(existing)
+            except (ValueError, TypeError):
+                existing = {}
+        return {"incident_id": incident_id, "rca": existing or {}}
+
+    conn.run(
+        "INSERT INTO incident_findings "
+        "(incident_id, sub_agent, findings) "
+        "VALUES (:iid, 'rca-orchestrator', :f::jsonb)",
+        iid=incident_id, f=json.dumps(rca))
+    conn.run(
+        "UPDATE incidents SET rca = :rca::jsonb, status = 'root_cause' "
+        "WHERE id = :iid AND status NOT IN ('resolved','stalled','skipped')",
+        rca=json.dumps(rca), iid=incident_id)
+    return {"incident_id": incident_id, "rca": rca}
+
+
 def lambda_handler(event, _ctx):
     """SM RootCause Task. Input: {job_id, incident_id, attempt?}. Persists incidents.rca and
     advances incidents.status='root_cause'. Returns {incident_id, rca}."""
     incident_id = event["incident_id"]
     conn = db.connect()
     try:
+        if os.environ.get("RCA_ORCHESTRATOR_ENABLED") == "true":
+            return _run_orchestrator(conn, event, incident_id)
+
         findings = _gather_findings(conn, incident_id)
         block = json.dumps({"findings": findings})
         isolated = {"block": "\n".join([

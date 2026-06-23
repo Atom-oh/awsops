@@ -69,12 +69,12 @@ describe('integrations catalog', () => {
         receive_path: null, inbound_auth_ref: null, source_allowlist: [], trigger_target: null,
         tier: 'custom', enabled: true },
     ]});
-    const out = await getEnabledIntegrations('180294183052');
+    const out = await getEnabledIntegrations('123456789012');
     const [sql, params] = query.mock.calls[0];
     expect(sql).toMatch(/i\.enabled = true/i);
     expect(sql).toMatch(/agent_spaces/i);
     expect(sql).toMatch(/enabled_integration_ids/i);
-    expect(params).toEqual(['180294183052']);
+    expect(params).toEqual(['123456789012']);
     expect(out[0].exposedTools).toEqual(['grafana_query']);
   });
 

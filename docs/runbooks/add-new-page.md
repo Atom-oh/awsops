@@ -1,5 +1,7 @@
 # 런북: 새 대시보드 페이지 추가 / Runbook: Add New Dashboard Page
 
+> **⚠️ Mixed v1/v2.** Steps referencing the `/awsops/api/*` basePath + Steampipe are **v1-only**. In **v2** there is no basePath (fetch `/api/*`) and data comes from Aurora/AgentCore, not Steampipe.
+
 ## 단계 / Steps
 
 ### 1. Steampipe 테이블 컬럼 확인 / Verify Table Columns

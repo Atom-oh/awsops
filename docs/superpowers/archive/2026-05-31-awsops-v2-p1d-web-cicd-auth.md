@@ -1034,7 +1034,7 @@ Expected: login → build/push arm64 → ECS force-deploy → `services-stable` 
 
 - [ ] **Step 2: edge + SSE + DB verification (CloudFront path)**
 ```bash
-URL=https://awsops-v2.atomai.click
+URL=https://awsops-v2.example.com
 echo "health (public, no auth):"; curl -fsS $URL/api/health; echo
 echo "root without cookie -> 302 to Cognito:"; curl -s -o /dev/null -w '%{http_code}\n' $URL/
 echo "SSE (public? no — needs auth); checking it streams a heartbeat directly from a target is done via ECS exec/logs"
@@ -1046,7 +1046,7 @@ Expected: `/api/health` → 200 JSON; `/` (no cookie) → `302` (login redirect)
 # Forged token: valid-looking header/payload with future exp, garbage signature.
 H=$(printf '{"alg":"RS256","kid":"forged"}' | base64 | tr '+/' '-_' | tr -d '=')
 P=$(printf '{"token_use":"id","exp":9999999999}' | base64 | tr '+/' '-_' | tr -d '=')
-curl -s -o /dev/null -w '%{http_code}\n' --cookie "awsops_token=$H.$P.Zm9yZ2Vk" https://awsops-v2.atomai.click/
+curl -s -o /dev/null -w '%{http_code}\n' --cookie "awsops_token=$H.$P.Zm9yZ2Vk" https://awsops-v2.example.com/
 ```
 Expected: `302` (forged token rejected → redirected to login). A pre-D4 build would have returned `200`.
 
