@@ -204,7 +204,7 @@ class TestMetricMeta(_Base):
     def test_metrics_cap(self):
         cap = []
         with mock.patch.object(pm, "http_json", return_value=(200, {"status": "success", "data": {}})) as m:
-            out = pm.lambda_handler({"tool_name": "prometheus_metric_meta", "arguments": {"metrics": [str(i) for i in range(20)]}}, None)
+            out = pm.lambda_handler({"tool_name": "prometheus_metric_meta", "arguments": {"metrics": [f"m{i}" for i in range(20)]}}, None)
         
         b = json.loads(out["body"])
         self.assertEqual(len(b), 12)

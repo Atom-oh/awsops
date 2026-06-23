@@ -85,6 +85,7 @@ class TestSchema(_Base):
         mm.load_datasource.reset_mock()
         with mock.patch.object(mm,"http_json",return_value=(200,{"status":"success","data":{"resultType":"vector","result":[]}})):
             out=mm.lambda_handler({"tool_name":"mimir_query","arguments":{"query":"up","instance_id":7}},None)
+        self.assertEqual(out["statusCode"],200)
         mm.load_datasource.assert_any_call(mm.SLUG, instance_id=7)
 
 
@@ -131,7 +132,7 @@ class TestMetricMeta(_Base):
     def test_metrics_cap(self):
         cap = []
         with mock.patch.object(mm, "http_json", return_value=(200, {"status": "success", "data": {}})) as m:
-            out = mm.lambda_handler({"tool_name": "mimir_metric_meta", "arguments": {"metrics": [str(i) for i in range(20)]}}, None)
+            out = mm.lambda_handler({"tool_name": "mimir_metric_meta", "arguments": {"metrics": [f"m{i}" for i in range(20)]}}, None)
         
         b = json.loads(out["body"])
         self.assertEqual(len(b), 12)

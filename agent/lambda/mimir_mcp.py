@@ -143,7 +143,9 @@ def mimir_metric_meta(args):
     metrics = args.get("metrics")
     if not isinstance(metrics, list):
         metrics = []
-    metrics = [str(m).strip() for m in metrics if str(m).strip()][:12]
+    # Validate metric names (Prometheus name grammar) before building a `match[]` selector — drops
+    # malformed/injection-y inputs (e.g. embedded `"`/`\`) rather than forming a bad selector.
+    metrics = [m for m in (str(x).strip() for x in metrics) if m and re.match(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$", m)][:12]
     if not metrics:
         return ok({})
 
