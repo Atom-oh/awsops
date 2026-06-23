@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useResizablePanel } from './useResizablePanel';
+import { useResizablePanel, usePublishDockedWidth } from './useResizablePanel';
 
 beforeEach(() => localStorage.clear());
 
@@ -50,5 +50,29 @@ describe('useResizablePanel', () => {
     });
     expect(result.current.width).toBe(380);
     act(() => { window.dispatchEvent(new MouseEvent('mouseup')); });
+  });
+});
+
+describe('usePublishDockedWidth (chat-overlap coordinator)', () => {
+  const W = () => document.documentElement.style.getPropertyValue('--detail-panel-w');
+
+  it('publishes the width to --detail-panel-w while open, 0 when closed', () => {
+    const { rerender } = renderHook(({ o, w }) => usePublishDockedWidth(o, w), {
+      initialProps: { o: true, w: 480 },
+    });
+    expect(W()).toBe('480px');
+    rerender({ o: false, w: 480 });
+    expect(W()).toBe('0px');
+  });
+
+  it('tracks width changes while open and resets to 0 on unmount', () => {
+    const { rerender, unmount } = renderHook(({ o, w }) => usePublishDockedWidth(o, w), {
+      initialProps: { o: true, w: 420 },
+    });
+    expect(W()).toBe('420px');
+    rerender({ o: true, w: 640 });
+    expect(W()).toBe('640px');
+    unmount();
+    expect(W()).toBe('0px');
   });
 });
