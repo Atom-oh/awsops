@@ -23,7 +23,7 @@ provisioner** 하나로 대체하고, 모든 설정을 SSM으로 전달한다.
   (ADR-004 canonical count = **8 section gateways**; the provisioner/`catalog.py` still creates a
   9th `external-obs` gateway slot, so the deployed skeleton is **9 provisioned / 8 section-agent
   routes**). **External observability is NOT a doctrinal section gateway** — per
-  **ADR-039** it is the **Integrations axis** (the egress MCP substrate), re-homing what an
+  **ADR-004** it is the **Integrations axis** (the egress MCP substrate), re-homing what an
   earlier draft listed as an `external-obs` gateway. `monitoring` covers AWS-native monitoring;
   the external-obs plugin datasource registry / OTLP / datasource-diag re-home is the Integrations
   axis (P3).
@@ -57,14 +57,13 @@ Terraform; `provision.py` overwrites with real values.
 
 ## Decisions (ADRs) / 결정
 
-- **ADR-031** — runtime-customizable agents & skills (Aurora catalog + resolver +
-  registry-agnostic `agent.py`; built-in vs custom tiers; per-account Agent Spaces;
-  BYO-MCP). [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
-- **ADR-004** — gateway role split (note the **2026-06-03 correction: 7 → 8 gateways**;
-  v2 further splits monitoring → 9). [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
-- **ADR-002 / ADR-025** — AI hybrid routing & multi-route parallel synthesis (the
+- **ADR-004** — AgentCore gateways & runtime, incl. runtime-customizable agents & skills
+  (Aurora catalog + resolver + registry-agnostic `agent.py`; built-in vs custom tiers;
+  per-account Agent Spaces; BYO-MCP). [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
+- **ADR-004** — gateway role split (note the **2026-06-03 correction: 7 → 8 gateways**).
+  [`../../decisions/004-agentcore-gateways-runtime.md`](../../decisions/004-agentcore-gateways-runtime.md)
+- **ADR-003** — AI agent routing (hybrid routing & multi-route parallel synthesis; the
   classifier picks built-in routes + enabled custom agents).
-  [`../../decisions/003-ai-agent-routing.md`](../../decisions/003-ai-agent-routing.md),
   [`../../decisions/003-ai-agent-routing.md`](../../decisions/003-ai-agent-routing.md)
 
 ## Key files / 핵심 파일

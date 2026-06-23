@@ -92,5 +92,5 @@ nohup npm run start > /tmp/awsops-server.log 2>&1 &
 - `src/app/api/alert-webhook/route.ts` — 웹훅 수신 + GET 상태
 
 ## 참고 / Reference
-- ADR-009: `docs/decisions/009-alert-triggered-ai-diagnosis.md`
-- ADR-013: `docs/decisions/013-auto-collect-investigation-agents.md`
+- ADR-008 — AI 진단 파이프라인 / AI diagnosis pipeline (구 009 알림 트리거 진단 + 013 자동 수집 조사): `docs/decisions/008-ai-diagnosis-pipeline.md`
+- ADR-013 — 알림·통보 / alerting & notification (알림 수신·웹훅·SNS): `docs/decisions/013-alerting-notification.md`
