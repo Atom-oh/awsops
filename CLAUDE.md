@@ -69,13 +69,21 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 - `ai.tf` — AgentCore ECR + IAM role + agent Lambda 슬라이스 + SSM(전부 `agentcore_enabled` 게이트)
 - `workers.tf` — SQS + ESM + dispatcher/worker/status_updater/reaper Lambda + Step Functions + Fargate 워커(전부 `workers_enabled` 게이트)
 - `eks.tf` — `for_each onboard_eks_clusters` Access Entry + View policy
+- `steampipe.tf` — D1 인벤토리 데이터층: warm Steampipe Fargate(FDW) + sync Lambda→Aurora (`steampipe_enabled` 게이트)
+- `notify.tf` — 진단 완료 이메일 알림 SNS 토픽 + 구독 IAM (`diagnosis_notify_enabled` 게이트)
+- `incidents.tf` — 인시던트 라이프사이클 webhook/상태 (`incident_lifecycle_enabled` 게이트, ADR-032)
+- `k8sgpt.tf` — K8sGPT 진단층 Bedrock 예산/리소스 (`k8sgpt_enabled` 게이트, ADR-035)
+- `writeback.tf` — RCA 결과 write-back 경로 (`rca_writeback_enabled` 게이트)
+- `remediation.tf` — 리메디에이션 substrate (`remediation_enabled`·`integrations_write_enabled` 게이트 — **ADR-005 FROZEN, do-not-enable**)
 - `variables.tf` / `outputs.tf` / `providers.tf` / `backend.tf`
 
 ### 스크립트 (`scripts/v2/`)
 - `configure.mjs` — 대화형 TUI(VPC/도메인/버킷/EKS 선택 → `terraform.tfvars` + `backend.hcl`)
 - `deploy.mjs` — web: login→buildx arm64 push→ECS force-new-deployment→wait stable→smoke `/api/health`
 - `agentcore.mjs` + `agentcore/{catalog.py,provision.py}` — arm64 agent 이미지 빌드/푸시 + 멱등 provisioner(Runtime/9 GW/Target/Memory/Interpreter, SSM 기록)
-- `workers.mjs` + `workers/{db,dispatcher,handlers,reaper,status_updater,worker_lambda,fargate_worker}.py + sfn.asl.json` — P2 워커 백본
+- `workers.mjs` + `workers/{db,dispatcher,handlers,reaper,status_updater,worker_lambda,fargate_worker}.py + sfn.asl.json` — P2 워커 백본 (진단 `report` job + `schedule_dispatcher.py` + `diagnosis/notify.py` 포함)
+- `migrate.mjs` / `migrate-core.mjs` / `backfill-*.mjs` / `upgrade.sh` — ULID 마이그레이션 · v1→v2 Aurora 백필 · Aurora 메이저 업글
+- `steampipe/` · `eks/` · `incident/` · `remediation/` — 게이트된 서브시스템 도우미(인벤토리 sync · EKS 접근 · 인시던트 · 리메디에이션[**ADR-005 FROZEN**])
 
 ### 웹 (`web/`)
 - `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF 라우트
@@ -197,13 +205,21 @@ Live env: account `180294183052`, domain `awsops-v2.atomai.click`, reused mgmt-v
 - `ai.tf` — AgentCore ECR + IAM role + agent Lambda slice + SSM (all `agentcore_enabled`-gated)
 - `workers.tf` — SQS + ESM + dispatcher/worker/status_updater/reaper Lambda + Step Functions + Fargate worker (all `workers_enabled`-gated)
 - `eks.tf` — `for_each onboard_eks_clusters` Access Entry + View policy
+- `steampipe.tf` — D1 inventory data layer: warm Steampipe Fargate (FDW) + sync Lambda→Aurora (`steampipe_enabled`-gated)
+- `notify.tf` — diagnosis-completion email SNS topic + subscription IAM (`diagnosis_notify_enabled`-gated)
+- `incidents.tf` — incident-lifecycle webhook/status (`incident_lifecycle_enabled`-gated, ADR-032)
+- `k8sgpt.tf` — K8sGPT diagnosis layer Bedrock budget/resources (`k8sgpt_enabled`-gated, ADR-035)
+- `writeback.tf` — RCA result write-back path (`rca_writeback_enabled`-gated)
+- `remediation.tf` — remediation substrate (`remediation_enabled` / `integrations_write_enabled`-gated — **ADR-005 FROZEN, do-not-enable**)
 - `variables.tf` / `outputs.tf` / `providers.tf` / `backend.tf`
 
 ### Scripts (`scripts/v2/`)
 - `configure.mjs` — interactive TUI (VPC/domain/bucket/EKS → `terraform.tfvars` + `backend.hcl`)
 - `deploy.mjs` — web: login→buildx arm64 push→ECS force-new-deployment→wait stable→smoke `/api/health`
 - `agentcore.mjs` + `agentcore/{catalog.py,provision.py}` — arm64 agent image + idempotent provisioner (Runtime/9 GW/Target/Memory/Interpreter; writes SSM)
-- `workers.mjs` + `workers/{db,dispatcher,handlers,reaper,status_updater,worker_lambda,fargate_worker}.py + sfn.asl.json` — P2 worker backbone
+- `workers.mjs` + `workers/{db,dispatcher,handlers,reaper,status_updater,worker_lambda,fargate_worker}.py + sfn.asl.json` — P2 worker backbone (incl. the diagnosis `report` job + `schedule_dispatcher.py` + `diagnosis/notify.py`)
+- `migrate.mjs` / `migrate-core.mjs` / `backfill-*.mjs` / `upgrade.sh` — ULID migrations · v1→v2 Aurora backfill · Aurora major upgrade
+- `steampipe/` · `eks/` · `incident/` · `remediation/` — gated subsystem helpers (inventory sync · EKS access · incident · remediation [**ADR-005 FROZEN**])
 
 ### Web (`web/`)
 - `app/api/{health,stream,db,jobs}/route.ts`, `app/api/jobs/[id]/route.ts` — thin-BFF routes
