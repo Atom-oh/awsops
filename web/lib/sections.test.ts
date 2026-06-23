@@ -8,7 +8,7 @@ describe('sections', () => {
     ]);
   });
   it('marks network/security + data/cost/monitoring + ops active (ops = inventory_read MCP home)', () => {
-    expect(activeSections().map((s) => s.key).sort()).toEqual(['cost', 'data', 'monitoring', 'network', 'ops', 'security']);
+    expect(activeSections().map((s) => s.key).sort()).toEqual(['cost', 'data', 'monitoring', 'network', 'observability', 'ops', 'security']);
   });
   it('every section has label, icon, color, and >=3 presets', () => {
     for (const s of SECTIONS) {

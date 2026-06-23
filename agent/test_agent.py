@@ -286,10 +286,21 @@ class IntegrationToolMergeTest(unittest.TestCase):
 
 class TestDatasourceGuidance(unittest.TestCase):
     def test_monitoring_prompt_names_query_languages(self):
+        # Prometheus & ClickHouse moved to the Observability section; monitoring keeps the
+        # still-here datasources (Mimir→PromQL, Loki→LogQL, Tempo→TraceQL).
         mon = agent.SKILL_BASE["monitoring"]
-        for lang in ("PromQL", "LogQL", "TraceQL", "SQL"):
+        for lang in ("PromQL", "LogQL", "TraceQL"):
             self.assertIn(lang, mon)
         self.assertIn("Datasource schemas", mon)  # tells the agent to use the injected cache
+
+    def test_observability_prompt_covers_prometheus_and_clickhouse(self):
+        obs = agent.SKILL_BASE["observability"]
+        for token in ("Prometheus", "PromQL", "ClickHouse", "SQL"):
+            self.assertIn(token, obs)
+        self.assertIn("Datasource schemas", obs)  # uses the injected schema cache
+
+    def test_observability_aliases_to_external_obs_gateway(self):
+        self.assertEqual(agent._GATEWAY_ALIAS.get("observability"), "external-obs")
 
 
 class TestAntiHallucinationFooter(unittest.TestCase):

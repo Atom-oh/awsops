@@ -32,6 +32,10 @@ app = BedrockAgentCoreApp()
 # Gateway URLs — 시작 시 AWS CLI로 자동 감지, 환경변수 폴백
 # Gateway URLs — auto-detect via AWS CLI at startup, env var fallback
 DEFAULT_GATEWAY = "ops"
+# ADR-004: the web chat section key 'observability' routes to the provisioned 'external-obs'
+# gateway (external-obs becomes a routed section once it bears connector tools — Prometheus,
+# ClickHouse). Keeps the readable chat key while matching the deployed gateway short-name.
+_GATEWAY_ALIAS = {"observability": "external-obs"}
 GATEWAY_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 SERVICE = "bedrock-agentcore"
 
@@ -245,12 +249,12 @@ SKILL_BASE = {
 - Incident: get_active_alarms → get_metric_data → execute_log_insights_query → lookup_events
 
 ## External Datasources (when connected — tools appear in the list above; each uses its own query language):
+## NOTE: Prometheus & ClickHouse are owned by the **Observability** section now — route those there.
 | Source | Tools | Query language |
 |---|---|---|
-| Prometheus / Mimir | prometheus_query[_range] / mimir_query[_range], *_labels, *_series | PromQL (e.g. rate(http_requests_total{code=~"5.."}[5m])) |
+| Mimir | mimir_query[_range], *_labels, *_series | PromQL (e.g. rate(http_requests_total{code=~"5.."}[5m])) |
 | Loki | loki_query_range / loki_query, loki_labels | LogQL (e.g. {app="x"} |= "error") |
 | Tempo | tempo_search, tempo_get_trace | TraceQL (e.g. { status=error && duration>1s }) |
-| ClickHouse | clickhouse_query (read-only SELECT/SHOW/DESCRIBE) | SQL |
 | OpenSearch | search_opensearch_logs | query_string |
 - GENERATE the query in the correct language yourself from the user's natural-language ask.
 - If a "## Datasource schemas (cached)" block is provided below, USE it (real metric/label/table/tag
@@ -258,6 +262,23 @@ SKILL_BASE = {
 - Multi-source incident correlation (e.g. "what spiked at 3:30?"): metrics (Prometheus/Mimir/CloudWatch
   → WHAT) → logs (Loki/OpenSearch/CloudWatch Logs → WHY) → traces (Tempo → WHERE) → CloudTrail (WHO).
   Query only the sources that are connected; synthesize across them.""",
+
+
+    "observability": """You are AWSops Observability Specialist. Answer questions over EXTERNAL observability datasources — currently **Prometheus** (metrics) and **ClickHouse** (analytics / otel traces·logs) — by GENERATING the correct query language yourself and calling the read-only connector tools. Read-only by construction.
+
+## Datasources (tools appear in the list above only when the datasource is connected):
+| Source | Tools | Query language |
+|---|---|---|
+| Prometheus | prometheus_query / prometheus_query_range, prometheus_labels, prometheus_series, prometheus_metric_metadata | PromQL (e.g. `rate(http_requests_total{code=~"5.."}[5m])`) |
+| ClickHouse | clickhouse_query (read-only SELECT/SHOW/DESCRIBE), list tables, describe | SQL |
+
+## Rules:
+- GENERATE the query in the correct language yourself from the user's natural-language ask — never ask the user to write PromQL/SQL.
+- If a "## Datasource schemas (cached)" block is provided below, USE it (real metric/label/table/column names) to write accurate queries — do NOT guess names.
+- ALWAYS call a connector tool for real data; never answer metric/analytics questions from memory.
+- p99 / latency / error-rate / throughput → Prometheus PromQL (`histogram_quantile`, `rate`, `sum by`). Otel traces·logs·events stored in ClickHouse → SQL.
+- Loki (logs) / Tempo (traces) / Mimir are NOT connected yet — say so if asked rather than guessing.
+- For cross-source correlation, query each connected source and synthesize.""",
 
 
     "cost": """You are AWSops FinOps Specialist. Analyze costs and recommend optimizations.
@@ -701,8 +722,13 @@ async def handler(payload):
     # short-circuits before build_conversation / the no-input guard. Flag-gated inside
     # handle_rca (RCA_ORCHESTRATOR_ENABLED); returns {"disabled": True} when off.
     if payload.get("mode") == "rca":
+        # NOTE: `handler` is an async generator (it `yield`s deltas), so a bare `return <value>`
+        # is a SyntaxError. Emit the structured RCA dict as a single event, then end the stream.
+        # (RCA is flag-OFF/backlog — the runtime streaming contract for this dict is owned by the
+        # RCA orchestrator and should be verified there before it goes live.)
         from rca_orchestrator import handle_rca
-        return handle_rca(payload)
+        yield handle_rca(payload)
+        return
 
     user_input, history = build_conversation(payload)
     if not user_input:
@@ -714,7 +740,7 @@ async def handler(payload):
     system_prompt_override = payload.get("systemPromptOverride")  # ADR-031: resolver-supplied custom prompt
     extra_context = payload.get("extraContext")  # bounded BFF-supplied context (e.g. cached datasource schemas)
     tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
-    gateway_url = GATEWAYS.get(gateway_role, GATEWAYS[DEFAULT_GATEWAY])
+    gateway_url = GATEWAYS.get(_GATEWAY_ALIAS.get(gateway_role, gateway_role), GATEWAYS[DEFAULT_GATEWAY])
 
     # Extract cross-account info / 크로스 어카운트 정보 추출
     # effective_account_id() blanks the host account → same-account access uses the

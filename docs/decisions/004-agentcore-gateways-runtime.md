@@ -26,13 +26,17 @@ v2 context: Terraform · ECS Fargate · Aurora · a shared AgentCore Runtime (St
 
 Split the single 29-tool gateway into **role-based section gateways** sharing **one AgentCore Runtime**. Routing selects the appropriate gateway via a payload parameter; fewer tools per gateway raises tool-selection accuracy.
 
-**게이트웨이 수 — net 확정 (P0 해소, 8↔9 모순 종결):**
+**게이트웨이 수 — net 확정 (9 프로비저닝 / 9 라우트):**
 
-> **9개 게이트웨이가 프로비저닝된다** (`{network, container, data, security, cost, monitoring, iac, ops}` 8개 섹션 + **external-obs** 1개 = 9; `catalog.py`/`provision.py` 기준). **`agent.py` 라우팅은 8개 섹션 에이전트를 대상으로 한다** (`agent.py` 라우트 = 8). 즉 **net = 9 게이트웨이 프로비저닝 / 8 에이전트 라우트.**
+> **9개 게이트웨이가 프로비저닝된다** (`{network, container, data, security, cost, monitoring, iac, ops}` 8개 섹션 + **external-obs** 1개 = 9; `catalog.py`/`provision.py` 기준). **`agent.py` 라우팅도 9개를 대상으로 한다** — external-obs가 커넥터 도구(Prometheus·ClickHouse)를 갖추면서 라우팅 가능한 Observability 섹션으로 승격됨. 즉 **net = 9 게이트웨이 프로비저닝 / 9 에이전트 라우트.**
 >
-> external-obs(외부 관측성)는 **Integrations 축**(§3)의 일부로 프로비저닝되는 9번째 게이트웨이이며, `agent.py`의 8-섹션 라우팅 테이블에는 포함되지 않는다. "정식 섹션 게이트웨이 수"를 셀 때는 8, "프로비저닝되는 게이트웨이 수"를 셀 때는 9다. 두 숫자는 모순이 아니라 서로 다른 축의 카운트다.
+> external-obs(외부 관측성)는 **Integrations 축**(§3)의 일부로, 외부 데이터소스 커넥터(현재 Prometheus·ClickHouse; Loki/Tempo/Mimir/Datadog은 추후)를 호스팅하는 라우팅 섹션이다. 챗 섹션 키는 `observability`이며 `agent.py`에서 `external-obs` 게이트웨이로 별칭 매핑된다.
+>
+> **개정 (2026-06-24, owner 결정):** 직전까지의 "8 라우트"는 external-obs에 등록된 도구가 없어 라우팅해도 응답할 수 없던 **부트스트랩 상태**였다(번복이 아니라 설계의 완성). external-obs에 Prometheus·ClickHouse 커넥터가 착륙하면서, 종합 판단(메트릭·트레이스·인벤토리·AWS 네이티브 교차)을 위해 라우팅에 포함한다. `BASELINE.md` §3 동시 갱신.
 
-> **9 gateways are provisioned** (the 8 section gateways `{network, container, data, security, cost, monitoring, iac, ops}` + **external-obs** = 9; per `catalog.py` / `provision.py`). **`agent.py` routing targets 8 section agents** (8 routes in `agent.py`). Therefore **net = 9 gateways provisioned / 8 agent routes.** external-obs is the 9th provisioned gateway belonging to the **Integrations axis** (§3); it is not in `agent.py`'s 8-section routing table. Count "section gateways" = 8; count "provisioned gateways" = 9. The two numbers are different-axis counts, not a contradiction.
+> **9 gateways are provisioned** (the 8 section gateways `{network, container, data, security, cost, monitoring, iac, ops}` + **external-obs** = 9; per `catalog.py` / `provision.py`). **`agent.py` routing also targets 9** — external-obs is promoted to a routable Observability section once it bears connector tools (Prometheus, ClickHouse). Therefore **net = 9 gateways provisioned / 9 agent routes.** external-obs belongs to the **Integrations axis** (§3) and hosts the external-datasource connectors (Prometheus + ClickHouse now; Loki/Tempo/Mimir/Datadog later). The chat section key is `observability`, aliased to the `external-obs` gateway in `agent.py`.
+>
+> **Amendment (2026-06-24, owner decision):** the prior "8 routes" was a **bootstrap state** — external-obs had no registered tools, so routing to it could not answer (this is the completion of the design, not a reversal). With Prometheus + ClickHouse connectors landed on external-obs, it joins routing to enable cross-domain judgment (metrics·traces·inventory·AWS-native). `BASELINE.md` §3 updated in the same change.
 
 ### §2 런타임 커스터마이즈 substrate (ADR-031 P1/P2 · ADR-039 P1/P2) / runtime-customization substrate
 
@@ -99,7 +103,7 @@ The single source of truth for AgentCore config is **SSM** (`/ops/awsops-v2/agen
 ## Consequences / 결과
 
 ### Positive / 긍정적
-- 섹션 게이트웨이로 도구 선택 정확도 향상; 9 프로비저닝 / 8 라우트 카운트가 명시되어 "EXACTLY 8" 오독·external-obs 부정이 제거됨(P0 해소). / Higher tool accuracy; the explicit 9-provisioned / 8-routed count removes the "EXACTLY 8" misread and the external-obs denial (P0 resolved).
+- 섹션 게이트웨이로 도구 선택 정확도 향상; 9 프로비저닝 / 9 라우트(external-obs 승격, 2026-06-24)로 external-obs가 종합 판단 경로에 포함됨. / Higher tool accuracy; 9 provisioned / 9 routed (external-obs promoted, 2026-06-24) brings external-obs into the cross-domain judgment path.
 - 사용자별 메모리 격리 + 빠른 로컬 UI 읽기 + 365일 회상; AgentCore 불가 시에도 동작. / Per-user memory isolation + fast local UI reads + 365-day recall; works even when AgentCore is unavailable.
 - 임시 세션 코드 실행이 사용자 간 변수 누수를 구조적으로 제거하고 호스트 유지보수가 없음. / Ephemeral code sessions remove cross-user leaks and require no host maintenance.
 - 데이터 기반 런타임 커스터마이즈(계정별, 재빌드 없음); 단일 강화 egress substrate(SSRF 차단 승계). / Data-driven runtime customization (per-account, no rebuild); one hardened egress substrate (SSRF defense inherited).
