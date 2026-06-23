@@ -146,6 +146,30 @@ def ensure_targets(ctrl, ac, gw_ids):
             log(f"target:{tname}", "ERR", str(e)[:140])
 
 
+def prune_moved_targets(ctrl, gw_ids):
+    """Idempotent reconcile: delete a target that the catalog has MOVED to a different gateway —
+    a KNOWN target name still living on a gateway it is no longer assigned to. Prevents the
+    split-brain after a catalog gateway reassignment (e.g. prometheus/clickhouse → external-obs),
+    where ensure_targets creates the target on its new home but the stale copy lingers on the old
+    gateway (exposing a tool the old gateway's prompt no longer documents). Runs AFTER ensure_targets
+    so the new target exists before the old one is removed. Targets whose name is NOT in the catalog
+    are manual/experimental — never auto-deleted, only logged."""
+    desired = {tname: spec["gateway"] for tname, spec in catalog.TARGETS.items()}
+    for gw_key, gw_id in gw_ids.items():
+        for t in _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id):
+            name = t.get("name")
+            home = desired.get(name)
+            if home is None:
+                log(f"prune:{name}", "KEEP", f"not in catalog (manual?) on {gw_key}")
+                continue
+            if home != gw_key:
+                try:
+                    ctrl.delete_gateway_target(gatewayIdentifier=gw_id, targetId=t["targetId"])
+                    log(f"prune:{name}", "DELETED", f"orphan on {gw_key} (moved → {home})")
+                except ClientError as e:
+                    log(f"prune:{name}", "ERR", str(e)[:140])
+
+
 def ensure_memory(ctrl):
     # ListMemories items carry id/arn/status but NOT name; resolve name via get_memory.
     for m in _list_all(ctrl.list_memories):
@@ -271,6 +295,7 @@ def main():
     print(f"\n=== AWSops v2 AgentCore provisioner (region={region}) ===")
     gw_ids = ensure_gateways(ctrl, ac)
     ensure_targets(ctrl, ac, gw_ids)
+    prune_moved_targets(ctrl, gw_ids)  # remove split-brain orphans after a catalog gateway move
     memory_id = ensure_memory(ctrl)
     interpreter_id = ensure_interpreter(ctrl)
     runtime_arn = ensure_runtime(ctrl, ac, gw_ids)
