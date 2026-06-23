@@ -74,4 +74,4 @@ curl -s http://localhost:3000/awsops/api/steampipe?action=cache-status >/dev/nul
 - `src/app/api/steampipe/route.ts` — `action=cache-status` 엔드포인트
 
 ## 참고 / Reference
-- ADR-017: `docs/decisions/017-cache-warmer-prewarming-strategy.md`
+- ADR-014: `docs/decisions/014-cross-cutting-cache-i18n-cdn.md`
