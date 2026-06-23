@@ -179,7 +179,11 @@ QUERIES = {
         "SELECT (r.zone_id || ' ' || r.name || ' ' || r.type || ' ' || COALESCE(r.set_identifier, '')) AS record_id, "
         "r.name, r.type, 'global' AS region, r.account_id, r.zone_id, r.set_identifier, "
         "r.alias_target, r.records, r.ttl, z.private_zone "
-        "FROM aws_route53_record r LEFT JOIN aws_route53_zone z ON z.id = r.zone_id "
+        # join-key normalized: aws_route53_zone.id and aws_route53_record.zone_id may differ by a
+        # '/hostedzone/' prefix depending on FDW shape; strip it on both sides so the join can't
+        # silently miss (which would NULL every private_zone → builder skips all → zero edges).
+        "FROM aws_route53_record r LEFT JOIN aws_route53_zone z "
+        "ON replace(z.id, '/hostedzone/', '') = replace(r.zone_id, '/hostedzone/', '') "
         "WHERE r.type IN ('A', 'AAAA', 'CNAME') ORDER BY r.name, r.set_identifier",
         "record_id",
         "region",

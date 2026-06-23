@@ -220,6 +220,16 @@ describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', (
     expect(g.edges.some((e) => e.source === 'cf:E2' && e.target === `alb:${alb.arn}`)).toBe(false);
   });
 
+  // VpcOriginConfig path: a VPC origin detected only by the origin's VpcOriginConfig (no matched
+  // cloudfront_vpc_origin row) must also be excluded from public Route53 resolution.
+  it('does NOT draw a public Route53 edge for a VpcOriginConfig origin (no voArns)', () => {
+    const cf = { resource_id: 'E3', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click', VpcOriginConfig: { VpcOriginId: 'vo-x' } }] };
+    const alb = { resource_id: 'pub', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/pub/1', dns_name: 'pub.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', private_zone: false, alias_target: { DNSName: 'pub.ap-northeast-2.elb.amazonaws.com.' } }];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 }); // no cloudfront_vpc_origin
+    expect(g.edges.some((e) => e.source === 'cf:E3' && e.target === `alb:${alb.arn}`)).toBe(false);
+  });
+
   // UNKNOWN visibility (no private_zone field, e.g. pre-resync data) → conservative: no edge.
   it('does NOT resolve a record with unknown visibility (no private_zone field)', () => {
     const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };

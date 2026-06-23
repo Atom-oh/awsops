@@ -354,12 +354,16 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
         // fall through to the Route53 public-resolution path below (that would draw a misleading
         // public CF→LB edge) — leave it as the honest unresolved VPC-origin node.
       }
+      // A VPC origin is ANY origin with VpcOriginConfig (Steampipe path) OR a matched cloudfront_vpc_origin
+      // (SDK path) — both are private, NOT reached via public DNS. Detect via EITHER so a non-Deployed or
+      // SDK-omitted VPC origin can't slip into public Route53 resolution.
+      const isVpcOrigin = !!voArns || (!!o.VpcOriginConfig && typeof o.VpcOriginConfig === 'object');
       // Custom-domain origin → resolve via the Route53 alias chain. Lands on a SYNCED LB → draw the
       // real CF→LB edge (A). Lands on a non-synced (e.g. cross-region) ELB → fall through to an
       // unresolved node but surface the resolved target so the chain is still legible (C).
-      // Skipped for VPC origins (voArns) — those aren't public-DNS paths.
+      // Skipped for VPC origins — those aren't public-DNS paths.
       let resolvedTarget: string | null = null;
-      if (domain && !voArns) {
+      if (domain && !isVpcOrigin) {
         const term = resolveViaR53(dns(domain));
         if (term) {
           const lid = lbByDns.get(term);
