@@ -67,9 +67,3 @@ The incident-diagnosis surface accumulated across four ADRs (009, 032, 034, 035)
 ### 6 Pillars (Well-Architected — 안정성 · 운영 우수성) / Reliability · Operational Excellence
 - **안정성 / Reliability**: read-only 자세 + 자율 조치 제거로 진단이 인프라를 변경할 수 없음 → 진단 파이프라인 자체가 장애를 유발하지 않는다. P2 백본 바인딩으로 at-least-once + 멱등 키 + 워치독(stalled 전이)이 멈춘 인시던트를 복구. 모든 경로 default-OFF라 미검증 자동화가 프로덕션에 흘러들지 않음.
 - **운영 우수성 / Operational Excellence**: MTTR 단축(상관분석된 RCA 권고를 응답자가 일하는 곳에 전달), 단계별 타임라인 영속(사후 포렌식), 예방 권고 피드백 루프, 결정적 데이터 우선(LLM 가설은 보조). 알림 상관으로 N개 증상 대신 단일 인시던트 진단 → 알림 피로 감소.
-
----
-
-**작성 완료 / Done:**
-- 경로: `docs/decisions/006-incident-analysis-only.md`
-- 3줄 요약: (1) 인시던트 라이프사이클은 read-only Triage/조사/RCA만(권고 전용, mutation 라우팅 금지) — 자율 조치는 ADR-005로 폐기. (2) `incident_lifecycle_enabled`/`rca_writeback_enabled`/`k8sgpt_enabled` 전부 default false(GATED); rca_writeback은 frozen role 상속이라 자족 role 분리 선행. (3) 009·032·034·035를 통합, K8sGPT는 GET-only, single Status (Accepted 2026-06-22).

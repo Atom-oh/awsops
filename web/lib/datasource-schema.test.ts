@@ -66,7 +66,7 @@ describe('renderSchemaForPrompt', () => {
       columns: Array.from({ length: 200 }, (_, c) => ({ name: `c${c}`, type: 'String' })),
     }));
     const out = renderSchemaForPrompt({ tables }, 'clickhouse');
-    expect(out.length).toBeLessThanOrEqual(6000);
+    expect(out.length).toBeLessThanOrEqual(6200); // ~PROMPT_MAX_CHARS (6000) + the short disclosure line
     expect(out).toMatch(/\+\d+ more tables/); // truncation is disclosed, never silent
   });
 

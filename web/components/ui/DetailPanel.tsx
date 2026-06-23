@@ -104,6 +104,7 @@ export default function DetailPanel({
   resourceType,
   onClose,
   actions,
+  children,
   modal = true,
 }: {
   title?: string;
@@ -113,6 +114,8 @@ export default function DetailPanel({
   onClose: () => void;
   // optional action slot pinned under the header (e.g. topology "ask AI about this resource").
   actions?: ReactNode;
+  // optional extra detail sections rendered after the field list.
+  children?: ReactNode;
   // modal=false: on lg the backdrop is transparent + pointer-events-none so the content behind
   // (e.g. the topology canvas) stays pannable/zoomable while the panel is docked. Mobile (below
   // lg) is always a fullscreen sheet, so it stays modal there regardless.
@@ -191,6 +194,7 @@ export default function DetailPanel({
             </section>
           ))}
           {rdsInstanceId && <RdsMetricsSection instanceId={rdsInstanceId} />}
+          {children}
         </div>
       </aside>
     </>

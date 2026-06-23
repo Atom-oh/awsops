@@ -97,6 +97,37 @@ describe('normalizers', () => {
     });
   });
 
+  it('node: preserves labels, taints, and conditions for the node drilldown detail', () => {
+    const row = normalizeNode({
+      metadata: {
+        name: 'ip-10-0-1-5',
+        labels: {
+          'node.kubernetes.io/instance-type': 'm6g.large',
+          'topology.kubernetes.io/zone': 'ap-northeast-2a',
+        },
+      },
+      spec: {
+        taints: [{ key: 'dedicated', value: 'observability', effect: 'NoSchedule' }],
+      },
+      status: {
+        conditions: [
+          { type: 'MemoryPressure', status: 'False', reason: 'KubeletHasSufficientMemory' },
+          { type: 'Ready', status: 'True', reason: 'KubeletReady', message: 'kubelet is posting ready status' },
+        ],
+      },
+    });
+
+    expect(row.labels).toEqual({
+      'node.kubernetes.io/instance-type': 'm6g.large',
+      'topology.kubernetes.io/zone': 'ap-northeast-2a',
+    });
+    expect(row.taints).toEqual([{ key: 'dedicated', value: 'observability', effect: 'NoSchedule' }]);
+    expect(row.conditions).toEqual([
+      { type: 'MemoryPressure', status: 'False', reason: 'KubeletHasSufficientMemory', message: '' },
+      { type: 'Ready', status: 'True', reason: 'KubeletReady', message: 'kubelet is posting ready status' },
+    ]);
+  });
+
   it('node: missing Ready condition → NotReady, no labels at all → generic worker', () => {
     const row = normalizeNode({ metadata: { name: 'n', labels: {} }, status: { conditions: [] } });
     expect(row.status).toBe('NotReady');

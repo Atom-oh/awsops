@@ -1,5 +1,14 @@
 # Multi-account Phase 2 — implementation design (inventory · topology · EKS)
 
+> ⚠️ **ARCHIVED — historical planning artifact, NOT a live spec.** Salvaged (PR #73) from a pruned worktree
+> for reference only; the **shipped code, not this doc, is the source of truth.** Phase 1 (accounts registry +
+> STS AssumeRole + `/accounts` + global selector + per-account bedrock/cost) is LIVE. Known issue flagged in
+> the PR #73 review: Prereq #2 leans on the **v1 legacy `scripts/12-setup-multi-account.sh`** (writes
+> `data/config.json` / `~/.steampipe`, restarts local EC2 Steampipe) — this **violates the v2 boundary**
+> (Terraform/Fargate/Aurora + `scripts/v2/steampipe/aws.spc`); the aggregation prereq must be re-expressed via
+> the v2 sync-Lambda path. Also confirm `__all__` authz intent + strict `account` param validation before any
+> Phase-2 implementation. **Do not implement from this doc without reconciling against the v2 architecture.**
+
 > Status: **READY TO IMPLEMENT once a target account is registered** (owner gate, AskUserQuestion 2026-06-18).
 > Phase 1 (accounts registry + STS AssumeRole + `/accounts` + global selector + bedrock/cost per-account) is LIVE.
 > Grounding: parallel Explore map `wf_ddefd2d1-8b6`. File:line refs are from feat/v2 @ 2318b72.

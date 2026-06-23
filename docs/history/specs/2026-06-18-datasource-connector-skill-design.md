@@ -1,5 +1,14 @@
 # Datasource · Connector · Skill — Integrations Hub Design
 
+> ⚠️ **ARCHIVED — historical design artifact, NOT a live spec.** Salvaged (PR #73) from a pruned worktree for
+> reference only. This feature has since **shipped** (datasource connectors + Explore page, PR #57); the
+> **shipped code — not this doc — is the source of truth.** Known issues flagged in the PR #73 review:
+> §4/§6 credential-lifecycle ("delete the legacy kind entry" on save) is **stale/superseded** — the unified
+> model keeps the kind key as a managed default mirror (never blind-deleted), since the AgentCore/`agent.py`
+> no-inline gateway path resolves credentials by kind; and §4's "default per kind, scoped per account" wording
+> contradicts the global `(kind) WHERE is_default` index (resolution is global). **Do not implement from this
+> doc without reconciling against the shipped code.**
+
 **Date:** 2026-06-18
 **Branch:** `feat/v2-architecture-design`
 **Status:** Approved (brainstorm) → consensus plan/implement

@@ -3,12 +3,29 @@
 // eks-incluster.ts (server) imports from here; 'use client' pages import from here too,
 // so the browser bundle never pulls in the server STS/HTTPS code.
 
+export interface NodeCondition {
+  type: string;
+  status: string;
+  reason: string;
+  message: string;
+}
+
+export interface NodeTaint {
+  key: string;
+  value: string;
+  effect: string;
+}
+
 export interface NodeRow {
   name: string; status: string; roles: string; version: string; instanceType: string; zone: string; age: string;
   // capacity/allocatable: cpu in cores, memory in MiB (0 when the API didn't report it).
   cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number;
   // ephemeral-storage capacity/allocatable in MiB (0 when the API didn't report it).
   diskCapacity: number; diskAllocatable: number;
+  // Detail-only metadata for node drilldowns. Secrets are never included here.
+  labels?: Record<string, string>;
+  taints?: NodeTaint[];
+  conditions?: NodeCondition[];
 }
 export interface PodRow {
   name: string; namespace: string; status: string; node: string; restarts: number; age: string;

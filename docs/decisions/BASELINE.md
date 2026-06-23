@@ -57,7 +57,7 @@
 | **GATED** | K8sGPT 인클러스터 진단 | `k8sgpt_enabled` | GET-only(Result CRD read), 클러스터 write 없음, 오퍼레이터는 out-of-band 설치 | ADR-006 |
 | **GATED(거버넌스)** | 외부 knowledge/comms write — 광역(Slack/Notion/Jira) | `integrations_write_enabled` | 독립 control plane · no-AWS-mutation IAM · SSRF/Secrets/DLP/human-gate. BYO-MCP(임의) 제외, 큐레이션 커넥터만 | ADR-007 |
 | **GATED** | 외부 관측성 진단 수집 | `datasource_diagnosis_enabled` | governed egress collector(read), SSRF 방어 | ADR-007/ADR-008 |
-| **옵션(deferred)** | Neptune/그래프 substrate | — | Postgres-first 확정, 그래프 substrate는 후속 옵션 | ADR-? (043 계열) |
+| **옵션(deferred)** | Neptune/그래프 substrate | — | Postgres-first 확정, 그래프 substrate는 후속 옵션 | legacy ADR-043 (deferred — MAPPING 참조) |
 
 > **주의 (2-티어 정밀):** 외부 DATA write 티어가 일률 OFF는 아니다 — `diagnosis_notify_enabled`(SNS 이메일, IAM 단일 토픽 스코프, NOT AWS-리소스 변경)는 **이미 LIVE**(거버넌스 충족). 광역 `integrations_write_enabled`만 OFF. (ADR-007/ADR-013)
 

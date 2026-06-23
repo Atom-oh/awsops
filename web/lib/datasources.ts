@@ -92,7 +92,9 @@ export async function getDatasource(id: number): Promise<DatasourceRow | null> {
  *  endpoint + authType — so an auth=none instance (or one whose Secrets Manager credential was never
  *  written) still resolves a usable endpoint — overlaid with the SM credential (auth material / org_id).
  *  Without the row fallback, a no-auth datasource has no SM cred → connConfig is empty → the connector
- *  Lambda falls back to the (often empty) kind-mirror and reports "not connected". */
+ *  Lambda falls back to the (often empty) kind-mirror and reports "not connected".
+ *  Callers: the /api/datasources/query route (run) and the /api/datasources/generate route's
+ *  background schema introspect (cache warm). Exported here — see PR #70 review (false-positive). */
 export async function resolveConnConfig(ds: DatasourceRow): Promise<ConnConfig> {
   // ID-ONLY credential resolution — deliberately NO kind-mirror fallback. The kind mirror holds the
   // DEFAULT instance's credential; blending it with THIS instance's endpoint (below) would send the

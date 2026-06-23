@@ -1,5 +1,5 @@
 import { verifyUser } from '@/lib/auth';
-import { invokeAgent, invokeAgentStream, type ChatMsg } from '@/lib/agentcore';
+import { invokeAgent, type ChatMsg } from '@/lib/agentcore';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt } from '@/lib/classifier';
 import { synthesizeStream } from '@/lib/synthesize';
@@ -53,7 +53,9 @@ function renderSchemaContext(schemas: { label: string; kind: string | null; sche
     lines.push(`${labelLine}${indented}`);
   }
   if (schemas.length > shown.length) lines.push(`… (+${schemas.length - shown.length} more datasource(s) omitted)`);
-  return lines.join('\n');
+  // Absolute backstop: per-entry budgeting doesn't account for per-line indentation, so cap the joined
+  // block at SCHEMA_CTX_TOTAL (well within the agent's 8000-char extraContext budget).
+  return lines.join('\n').slice(0, SCHEMA_CTX_TOTAL);
 }
 
 export async function POST(request: Request) {
@@ -280,16 +282,11 @@ export async function POST(request: Request) {
         controller.close();
         return;
       }
-      let text = '';
+      let text: string;
       const t0 = Date.now();
       controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'analyzing' }) + '\n\n'));
-      // Status ticks bridge the gap before the FIRST token; once real deltas flow they stop
-      // (the streamed text itself is the progress signal). The agent does real token streaming
-      // now — the BFF forwards each delta verbatim instead of faking a typewriter on a buffered
-      // answer (lib/agentcore invokeAgentStream → SSE passthrough).
-      let streaming = false;
       const tick = setInterval(() => {
-        if (!request.signal.aborted && !streaming) {
+        if (!request.signal.aborted) {
           controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'working', elapsedMs: Date.now() - t0 }) + '\n\n'));
         }
       }, STATUS_TICK_MS);
@@ -300,7 +297,7 @@ export async function POST(request: Request) {
       request.signal.addEventListener('abort', onAbort);
 
       try {
-        for await (const delta of invokeAgentStream({
+        text = await invokeAgent({
           gateway: spec.gateway, messages, sessionId,
           systemPromptOverride: spec.systemPromptOverride,
           toolAllowlist: spec.toolAllowlist,
@@ -308,12 +305,7 @@ export async function POST(request: Request) {
           accountId, accountAlias,
           integrations: spec.integrations, // ADR-039 P2-infra inc2: live egress-READ MCP connections
           extraContext: datasourceSchemaContext, // cached datasource schemas → agent reads the cache
-        })) {
-          if (request.signal.aborted) break;
-          if (!streaming) { streaming = true; clearInterval(tick); } // first token → silence status ticks
-          text += delta;
-          controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta })}\n\n`));
-        }
+        });
       } catch (e) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
@@ -327,7 +319,12 @@ export async function POST(request: Request) {
       if (spec.tier === 'custom') {
         void recordCustomAgentTrace({ gateway: spec.gateway, userSub: user.sub, agentName: spec.agentName, agentVersion: spec.agentVersion, tier: spec.tier, skillHashes: spec.skillHashes, spaceVersion: spec.spaceVersion });
       }
-      if (!request.signal.aborted) record(text); // fire-and-forget, before [DONE] (P2 gate placement)
+      for (const c of chunk(text)) {
+        if (request.signal.aborted) break;
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));
+        if (TYPE_DELAY_MS) await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
+      }
+      record(text); // fire-and-forget after the chunk loop, before [DONE] (P2 gate placement)
       controller.enqueue(enc.encode('data: [DONE]\n\n'));
       controller.close();
     },

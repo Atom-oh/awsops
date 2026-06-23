@@ -53,3 +53,54 @@ describe('MessageList switch chips (ADR-038)', () => {
     expect(screen.queryByRole('button', { name: /Data로 다시/ })).toBeNull();
   });
 });
+
+describe('MessageList streaming status (UX changes)', () => {
+  it('renders analyzing status text when streaming with empty content and analyzing status', () => {
+    const msgs: Msg[] = [{
+      role: 'assistant',
+      content: '',
+      streaming: true,
+      status: { phase: 'analyzing' }
+    }];
+    render(<MessageList msgs={msgs} />);
+    expect(screen.getByText(/분석 중/)).toBeTruthy();
+    expect(screen.queryByText(/초/)).toBeNull();
+  });
+
+  it('renders elapsed time status text when streaming with empty content and working status', () => {
+    const msgs: Msg[] = [{
+      role: 'assistant',
+      content: '',
+      streaming: true,
+      status: { phase: 'working', elapsedMs: 4000 }
+    }];
+    render(<MessageList msgs={msgs} />);
+    expect(screen.getByText(/분석 중… 4초/)).toBeTruthy();
+  });
+
+  it('renders content and no status text when content has arrived', () => {
+    const msgs: Msg[] = [{
+      role: 'assistant',
+      content: 'real content',
+      streaming: true,
+      status: { phase: 'working', elapsedMs: 4000 }
+    }];
+    render(<MessageList msgs={msgs} />);
+    expect(screen.getByText('real content')).toBeTruthy();
+    expect(screen.queryByText(/분석 중/)).toBeNull();
+  });
+
+  it('renders neither status nor cursor when streaming is false', () => {
+    const msgs: Msg[] = [{
+      role: 'assistant',
+      content: 'finished answer',
+      streaming: false,
+      status: { phase: 'working', elapsedMs: 4000 }
+    }];
+    const { container } = render(<MessageList msgs={msgs} />);
+    expect(screen.getByText('finished answer')).toBeTruthy();
+    expect(screen.queryByText(/분석 중/)).toBeNull();
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+  });
+});
+

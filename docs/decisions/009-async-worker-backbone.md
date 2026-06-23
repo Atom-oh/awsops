@@ -77,7 +77,7 @@ The *mutating* branch of this execution substrate is owned by ADR-005 and stays 
 
 ## References / 참조
 
-- 컴포넌트 현행 출처: `docs/superpowers/reference/06-workers.md`
+- 컴포넌트 현행 출처: `docs/reference/06-workers.md`
 - 코드: `scripts/v2/workers/{db,dispatcher,handlers,reaper,status_updater,worker_lambda,fargate_worker}.py` + `sfn.asl.json`, `terraform/v2/foundation/workers.tf`
 - 현실 감사: `docs/reviews/2026-06-21-docs-reality-audit.md` §B6 (worker-01~19)
 - 동결 substrate: ADR-005 (mutating 분기, FROZEN)

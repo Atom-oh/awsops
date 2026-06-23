@@ -144,7 +144,6 @@ export function renderSchemaForPrompt(schema: unknown, _kind?: string | null, ma
   if (Array.isArray(s.tables) && s.tables.length) {
     const tables = s.tables as unknown[];
     let emitted = 0;
-    let budgetBroke = false;
     for (const t of tables.slice(0, PROMPT_MAX_TABLES)) {
       if (!t || typeof t !== 'object') continue;
       const tt = t as { name?: unknown; columns?: unknown };
@@ -161,18 +160,23 @@ export function renderSchemaForPrompt(schema: unknown, _kind?: string | null, ma
         })
         .filter(Boolean)
         .join(', ');
-      const line = clamp(colStr ? `${name}(${colStr})` : name, PROMPT_MAX_LINE_CHARS);
-      // Reserve ~60 chars for the truncation-disclosure line; stop cleanly rather than slice mid-table.
-      if (lines.length && line.length + 1 > budget - 60) { budgetBroke = true; break; }
+      // Clamp each line to the AVAILABLE budget (reserve ~60 for the disclosure line) so even the FIRST
+      // table line respects the caller's maxChars — not just the per-line cap. (Fixes a first-line that
+      // could otherwise emit up to PROMPT_MAX_LINE_CHARS and blow a small per-datasource chat budget.)
+      const cap = Math.min(PROMPT_MAX_LINE_CHARS, budget - 60);
+      if (cap < 12) break; // out of budget
+      const line = clamp(colStr ? `${name}(${colStr})` : name, cap);
       lines.push(line);
       budget -= line.length + 1;
       emitted += 1;
+      if (line.length >= cap) break; // hit the budget cap → stop (remaining tables disclosed below)
     }
-    // Disclose truncation ONLY when a real limit (MAX_TABLES cap or char budget) dropped content —
-    // a silent cap would read to the model as "these are all the tables" when they are not. (When the
-    // whole `tables` array was malformed, emitted === 0 and we disclose nothing.)
-    if (emitted > 0 && (tables.length > PROMPT_MAX_TABLES || budgetBroke)) {
-      lines.push(`… (+${tables.length - emitted} more tables — refine the request or query system.tables)`);
+    // Disclose ONLY when tables were actually DROPPED (more remain than emitted) — not when the last
+    // line was merely clamped to budget (that line's own `…` already discloses), which avoids a
+    // misleading "+0 more tables". Silent omission would read as "these are all the tables".
+    const omitted = tables.length - emitted;
+    if (emitted > 0 && omitted > 0) {
+      lines.push(`… (+${omitted} more tables — refine the request or query system.tables)`);
     }
   }
 
@@ -208,8 +212,11 @@ export function renderSchemaForPrompt(schema: unknown, _kind?: string | null, ma
   // metric/label/tag/index datasources: names only (that's all they carry). (`domains` handled above.)
   for (const [k, n] of [['metrics', 80], ['labels', 80], ['tags', 80], ['indices', 60]] as const) {
     if (Array.isArray(s[k]) && (s[k] as unknown[]).length) {
-      const line = `${k}: ${names(s[k], n)}`;
-      if (line.length + 1 > budget) continue;
+      if (budget < 16) break; // out of room — stop (don't silently skip an individual key out of order)
+      const full = `${k}: ${names(s[k], n)}`;
+      // TRUNCATE to fit (the `…` discloses it) rather than silently dropping the whole line — the docstring
+      // promises truncation is always disclosed, never a silent slice.
+      const line = full.length + 1 > budget ? clamp(full, budget - 1) : full;
       lines.push(line);
       budget -= line.length + 1;
     }

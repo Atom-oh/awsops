@@ -56,7 +56,7 @@ Note: the repo-root `package.json` (`build`/`lint`/`test`) belongs to the **v1**
 ## Naming / conventions
 - Components `export default`. Resource names `awsops-v2-*`; AgentCore gateways `awsops-v2-{key}-gateway`; SSM under `/ops/awsops-v2/...` (an `aws...` prefix is SSM-reserved and rejected).
 - Admin authority in v2 = **Cognito admin group OR an SSM-parameter email allowlist** (`web/lib/admin.ts`, fail-closed), NOT `data/config.json` `adminEmails` (that is v1; ADR-023 v2 note).
-- Edge auth = Cognito + Lambda@Edge **RS256 JWKS verification** + iss/aud/token_use + OAuth `state` + PKCE public client (no client secret). In-app login = self-hosted `/login` + `POST /api/auth/login` (unsigned public Cognito `InitiateAuth USER_PASSWORD_AUTH`; ADR-042); Hosted-UI PKCE `/_callback` is a retained dark fallback. `/api/health` is the only intentionally public route.
+- Edge auth = Cognito + Lambda@Edge **RS256 JWKS verification** + iss/aud/token_use + OAuth `state` + PKCE public client (no client secret). In-app login = self-hosted `/login` + `POST /api/auth/login` (unsigned public Cognito `InitiateAuth USER_PASSWORD_AUTH`; ADR-042); Hosted-UI PKCE `/_callback` is a retained dark fallback. Public (unauthenticated) routes per ADR-002: `/api/health`, `/login`, `/api/auth/login`, `/api/auth/signout`, `/icon.svg`, `/_next/static/*`, `/api/incidents/webhook`.
 
 ## Review checklist
 1. **Posture:** no mutation/autonomy/BYO-MCP enabled (ADR-005 frozen, do-not-enable; flag any PR that turns it on). External write, if any, must satisfy ADR-007 governance (SSRF, Secrets Manager, DLP/redaction, human-gate, flag-OFF). Current truth = `docs/decisions/BASELINE.md`.
@@ -65,9 +65,9 @@ Note: the repo-root `package.json` (`build`/`lint`/`test`) belongs to the **v1**
 4. **Terraform:** changes under `terraform/v2/foundation/`; large features flag-gated; SG description unchanged; no `0.0.0.0/0`, no `Principal:*`; no `-auto-approve` baked in.
 5. **Containers:** arm64; `HOSTNAME=0.0.0.0` runtime env; Fargate worker `CMD`; container + TG health path = `/api/health`.
 6. **v2 vs v1:** fetch `/api/*` (no `/awsops` prefix); state in Aurora not `data/*.json`; new tables as ULID migration files.
-7. **Gateway count:** doctrine vs as-built mismatch — see below; flag either way.
+7. **Gateway count:** 9 provisioned / 8 agent routes (ADR-004, RESOLVED) — different axes, not a contradiction.
 
-## Gateway count — flag either way (NOT a false-positive)
+## Gateway count — RESOLVED (ADR-004)
 AgentCore gateways (ADR-004, RESOLVED): **9 gateways are provisioned** (8 sections network/container/data/security/cost/monitoring/iac/ops + `external-obs`) and **agent.py routes 8 section agents**. State it as **"9 provisioned / 8 agent routes"** — different axes, not a contradiction.
 
 ## Known false-positives (do NOT flag)

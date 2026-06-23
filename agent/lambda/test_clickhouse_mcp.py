@@ -32,14 +32,17 @@ class TestReadOnlyGuard(unittest.TestCase):
                   "RENAME TABLE a TO b", "SYSTEM RELOAD", "SET max_threads=1"]:
             self._bad(s)
 
-    def test_allow_system_database_read(self):
-        # `system.<table>` is a READ of the system database (schema introspection), NOT the SYSTEM admin
-        # command — the \bSYSTEM\b danger token used to false-reject these. Must be allowed now.
-        for s in ["SELECT database, name FROM system.tables",
-                  "SELECT name, type FROM system.columns WHERE database = 'otel'",
-                  "SELECT * FROM system.databases"]:
-            self._ok(s)
-        self._bad("SYSTEM STOP MERGES")  # the command is still blocked (first-token + danger)
+    def test_block_all_system_for_user_queries(self):
+        # The general (user) read-only guard blocks ALL system.* — including system.tables, because its
+        # create_table_query/engine_full columns can carry plaintext engine credentials (MySQL/Kafka/S3).
+        # Cross-DB schema introspection reaches system.tables via _run_sql(trusted=True), not this guard.
+        for s in ["SELECT database, name FROM system.tables",        # blocked even for the benign columns
+                  "SELECT create_table_query FROM system.tables",    # the credential-exposure case (C1)
+                  "SELECT engine_full FROM system.tables",
+                  "SELECT * FROM system.columns", "SELECT * FROM system.databases",
+                  "SELECT * FROM system.users", "SELECT query FROM system.query_log",
+                  "SYSTEM STOP MERGES"]:
+            self._bad(s)
 
     def test_reject_stacked(self):
         self._bad("SELECT 1; DROP TABLE t")
