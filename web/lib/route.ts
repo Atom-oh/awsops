@@ -10,6 +10,9 @@ const RULES: { key: string; re: RegExp }[] = [
   { key: 'cost', re: /\$\d/i },
   { key: 'monitoring', re: /알람|지표|로그변경|cloudwatch|cloudtrail|alarm|metric|who changed|audit/i },
   { key: 'iac', re: /드리프트|스택|terraform|cloudformation|\bcdk\b|drift|stack|iac/i },
+  // ops = inventory_read MCP home: topology, unused/orphan resources, and the load-balancer /
+  // target-group / CloudFront *listing* tools live here (network only does connectivity).
+  { key: 'ops', re: /미사용|안 ?쓰는|놀고 ?있는|orphan|고아|unused|인벤토리|inventory|리소스 ?(현황|목록|정리)|정리하|leftover|미연결|unattached|미할당|토폴로지|topology|origin|\btg\b|로드 ?밸런서|load ?balancer|\belb\b|\balb\b|\bnlb\b|타겟 ?그룹|대상 ?그룹|target ?group|cloudfront|클라우드프론트|리스너|listener/i },
   { key: 'observability', re: /레이턴시|트레이스|p99|latency|trace|loki|tempo|prometheus|jaeger|grafana/i },
 ];
 

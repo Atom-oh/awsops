@@ -19,6 +19,14 @@ describe('isProductHelpIntent', () => {
 });
 
 describe('assistantAnswer', () => {
+  it('does NOT punt the user to a section / slash command — the main chat auto-routes', async () => {
+    let seenSystem = '';
+    const send: AssistantSend = async (system) => { seenSystem = system; return 'ok'; };
+    await assistantAnswer('how do I create a custom agent?', { send });
+    // the old v1-style "say which section agent to ask" punt must be gone
+    expect(seenSystem).not.toMatch(/section agent.*to ask/i);
+    expect(seenSystem.toLowerCase()).toContain('automatically');
+  });
   it('grounds the answer in the KB (system carries the docs; user is tagged)', async () => {
     let seenSystem = ''; let seenUser = '';
     const send: AssistantSend = async (system, user) => { seenSystem = system; seenUser = user; return '단계: 1) Integration 등록 ...'; };

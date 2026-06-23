@@ -157,25 +157,25 @@ SKILL_BASE = {
 - ALWAYS call tools for real-time data — never answer from memory""",
 
 
-    "ops": """You are AWSops Operations Assistant. Query AWS resources and provide operational guidance.
+    "ops": """You are AWSops Operations Assistant. Answer resource-inventory, topology, and unused-resource questions over the synced Aurora inventory (read-only).
 
 ## Decision Patterns:
 | User asks about... | Tool chain |
 |---|---|
-| 리소스 현황, 목록, 상태 | run_steampipe_query (SQL) |
+| 미사용/고아 리소스, 정리 후보 (빈 origin, 등록 없는 TG, dead LB) | find_unused_resources |
+| 전체 토폴로지, CF→LB→TG→타깃 체인 | get_topology |
+| 리소스 현황/목록 (특정 타입: alb·nlb·target_group·cloudfront·ec2·ebs…) | query_inventory |
+| 동기화 신선도 / 타입별 카운트 | inventory_summary |
 | AWS 문서, 기능 설명 | search_documentation → read_documentation |
 | 리전 가용성 | get_regional_availability |
-| 아키텍처 추천 | recommend |
-| CLI 명령 | suggest_aws_commands or call_aws |
+| AWS CLI 명령 제안 (읽기 전용) | suggest_aws_commands |
 
-## Steampipe SQL Rules:
-- Do NOT add LIMIT unless explicitly asked
-- Tags: tags ->> 'Name' AS name (single quotes only)
-- EC2: instance_state (not state), placement_availability_zone (not availability_zone)
-- RDS: class AS instance_class (not db_instance_class)
-- S3: versioning_enabled (not versioning)
-- Avoid: mfa_enabled, attached_policy_arns, Lambda tags (SCP blocks)
-- No $ in SQL — use conditions::text LIKE '%..%'""",
+## Rules:
+- ALWAYS call a tool for real data — never answer inventory/topology questions from memory.
+- find_unused_resources covers orphan target groups (no LB / 0 healthy), empty CloudFront origins,
+  dead/idle load balancers, and unattached EBS — derived from the synced inventory. State the data's
+  freshness (it reflects the latest inventory sync; use inventory_summary to check).
+- ELB listeners, Elastic IPs, and detached ENIs are NOT synced yet — say so if asked rather than guessing.""",
 
 
     "data": """You are AWSops Data & Analytics Specialist. Manage and troubleshoot AWS databases and streaming.
@@ -334,6 +334,14 @@ COMMON_FOOTER = """
 ## Multi-Account Rules
 - If [Target Account: XXXX], MUST pass target_account_id='XXXX' to EVERY tool call.
 - This is mandatory.
+
+## Honesty & routing (do NOT hallucinate)
+- The AWSops section agents are EXACTLY these 8: network, container, data, security, cost,
+  monitoring, iac, ops. NEVER invent or name an agent that is not in this list.
+- NEVER tell the user to type a slash command or "go to / switch to" another section — the main
+  chat routes to the right section automatically. Just answer.
+- If you lack a tool for the request, say so honestly and answer with what you have; do not
+  fabricate tools, agents, or results.
 
 Format responses in markdown. Respond in the user's language."""
 
@@ -668,9 +676,26 @@ You MUST include "target_account_id": "{account_id}" in EVERY tool call's argume
 This is a non-negotiable requirement for cross-account access."""
 
 
+async def _stream_text(agent, user_input):
+    """Yield assistant text deltas from a Strands agent run as ``{"delta": str}`` chunks.
+
+    Strands' ``stream_async`` yields a stream of event dicts; the incremental assistant
+    text arrives under the ``"data"`` key. Tool-use / lifecycle events carry no ``"data"``
+    and are skipped here (the agent loop still runs them — we just don't surface them as
+    visible deltas). AgentCore Runtime JSON-encodes each yielded dict into an SSE
+    ``data:`` frame, so embedded newlines are escaped and stay frame-safe."""
+    async for event in agent.stream_async(user_input):
+        if "data" in event:
+            yield {"delta": event["data"]}
+
+
 # Main handler / 메인 핸들러
+# Streaming entrypoint: yields ``{"delta": str}`` chunks → AgentCore Runtime streams them
+# back as SSE (text/event-stream). The web BFF forwards each delta to the browser, so the
+# user sees real incremental tokens (the previous version buffered the full answer and the
+# BFF faked a typewriter). callback_handler=None disables Strands' default stdout printer.
 @app.entrypoint
-def handler(payload):
+async def handler(payload):
     # ADR-006 RCA (EoG) — a second, read-only execution path distinct from chat. The
     # deterministic controller returns a structured dict (NOT a token stream), so it
     # short-circuits before build_conversation / the no-input guard. Flag-gated inside
@@ -681,7 +706,8 @@ def handler(payload):
 
     user_input, history = build_conversation(payload)
     if not user_input:
-        return "No input provided."
+        yield {"delta": "No input provided."}
+        return
 
     gateway_role = payload.get("gateway", DEFAULT_GATEWAY)
     skill_role = payload.get("skill", gateway_role)  # skill override for SKILL_BASE / SKILL_BASE용 스킬 오버라이드
@@ -709,10 +735,15 @@ def handler(payload):
 
     logging.info(f"Gateway: {gateway_role} -> {gateway_url} (history: {len(history)} messages, account: {account_id or 'default'}, integrations: {len(integrations)})")
 
+    # `started` guards the fallback: once we have streamed even one delta to the client we must
+    # NOT re-run the Bedrock-direct fallback — that would duplicate the partial answer. The fallback
+    # therefore only fires on a failure BEFORE the first token (i.e. MCP connect / tool discovery),
+    # which is exactly what the original try/except guarded against.
+    started = False
     try:
         mcp_client = MCPClient(lambda: create_gateway_transport(gateway_url))
 
-        # ExitStack keeps the gateway AND every integration MCP session live during agent(user_input).
+        # ExitStack keeps the gateway AND every integration MCP session live for the whole stream.
         with ExitStack() as stack:
             stack.enter_context(mcp_client)
             gateway_tools = get_all_tools(mcp_client)
@@ -748,24 +779,34 @@ def handler(payload):
                 tools=tools,
                 system_prompt=system_prompt,
                 messages=history if history else None,
+                callback_handler=None,
             )
 
-            response = agent(user_input)
-            return response.message['content'][0]['text']
+            async for chunk in _stream_text(agent, user_input):
+                started = True
+                yield chunk
+        return
 
     except Exception as e:
         logging.error(f"Gateway MCP error [{gateway_role}]: {e}")
-        # Fallback: Bedrock direct with base prompt only / 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출
-        base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
-        if extra_context:
-            base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
-        agent = Agent(
-            model=model,
-            system_prompt=base_prompt,
-            messages=history if history else None,
-        )
-        response = agent(user_input)
-        return response.message['content'][0]['text']
+        if started:
+            # We already streamed a partial answer; re-running would duplicate it. End gracefully.
+            yield {"delta": "\n\n_[연결이 중단되어 응답이 일부만 전달되었습니다.]_"}
+            return
+
+    # Fallback: Bedrock direct with base prompt only (reached only on a pre-stream gateway failure).
+    # 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출 (스트림 시작 전 게이트웨이 실패 시에만 도달).
+    base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
+    if extra_context:
+        base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
+    agent = Agent(
+        model=model,
+        system_prompt=base_prompt,
+        messages=history if history else None,
+        callback_handler=None,
+    )
+    async for chunk in _stream_text(agent, user_input):
+        yield chunk
 
 
 if __name__ == "__main__":

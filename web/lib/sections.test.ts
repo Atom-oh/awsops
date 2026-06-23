@@ -7,8 +7,8 @@ describe('sections', () => {
       'network', 'container', 'data', 'security', 'cost', 'monitoring', 'iac', 'ops', 'observability',
     ]);
   });
-  it('marks network/security + data/cost/monitoring active (Wave-1 fleet activation)', () => {
-    expect(activeSections().map((s) => s.key).sort()).toEqual(['cost', 'data', 'monitoring', 'network', 'security']);
+  it('marks network/security + data/cost/monitoring + ops active (ops = inventory_read MCP home)', () => {
+    expect(activeSections().map((s) => s.key).sort()).toEqual(['cost', 'data', 'monitoring', 'network', 'ops', 'security']);
   });
   it('every section has label, icon, color, and >=3 presets', () => {
     for (const s of SECTIONS) {

@@ -120,5 +120,7 @@ graphify-out/
 # AI dev tool scratch dirs / MCP tooling local stores
 .serena/
 .headroom/
+# Kiro CLI local machine settings (co-agent panel artifact); .kiro/AGENT.md, rules.md, docs/, steering/ stay tracked
+.kiro/settings/
 tfplan*
 terraform/v2/foundation/tfplan*

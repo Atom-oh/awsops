@@ -51,10 +51,83 @@ async function readResponse(resp: unknown): Promise<string> {
   }
 }
 
-/** Invoke the AgentCore runtime with the chosen gateway + thread. Returns final text. */
-export async function invokeAgent(input: InvokeInput): Promise<string> {
-  const arn = await getRuntimeArn();
-  if (!ac) ac = new BedrockAgentCoreClient({ region: REGION });
+/** True when the runtime answered with a streamed SSE body (the streaming agent.py entrypoint)
+ *  rather than a buffered JSON string (the legacy entrypoint). Lets one consumer handle both, so
+ *  the agent image and the web image can deploy in any order without a broken window. */
+function isEventStream(resp: unknown): boolean {
+  const ct = (resp as { contentType?: string }).contentType || '';
+  return ct.includes('text/event-stream');
+}
+
+/** Extract the assistant text from one SSE `data:` payload. The streaming agent.py yields
+ *  `{"delta": str}` dicts (AgentCore JSON-encodes them); we also tolerate a raw Strands event
+ *  (`{"data": str}`), a bare JSON string, or raw text — and treat non-text events (tool use,
+ *  lifecycle) as empty. */
+function extractDelta(data: string): string {
+  try {
+    const o = JSON.parse(data);
+    if (o && typeof o === 'object') {
+      if (typeof (o as { delta?: unknown }).delta === 'string') return (o as { delta: string }).delta;
+      if (typeof (o as { data?: unknown }).data === 'string') return (o as { data: string }).data;
+      return '';
+    }
+    return typeof o === 'string' ? o : '';
+  } catch {
+    return data;
+  }
+}
+
+/** Map one SSE line to a delta string (or '' to skip non-data / control lines). */
+function lineToDelta(line: string): string {
+  if (!line.startsWith('data:')) return ''; // skip `event:`/`id:`/comment(`:`)/blank lines
+  const payload = line.slice(5).trim();
+  if (!payload || payload === '[DONE]') return '';
+  return extractDelta(payload);
+}
+
+/** Iterate the runtime response as a stream of assistant text deltas. Falls back to a single
+ *  buffered chunk when the body isn't an SSE web stream (legacy JSON entrypoint, or a mock). */
+async function* streamDeltas(resp: unknown): AsyncGenerator<string> {
+  const body = (resp as {
+    response?: {
+      transformToWebStream?: () => ReadableStream<Uint8Array>;
+      transformToString?: () => Promise<string>;
+    };
+  }).response;
+  const webStream = body?.transformToWebStream?.();
+  if (!isEventStream(resp) || !webStream) {
+    // Legacy buffered JSON (old agent image) or non-stream mock → yield the whole answer once.
+    const full = await readResponse(resp);
+    if (full) yield full;
+    return;
+  }
+  const reader = webStream.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const d = lineToDelta(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+        if (d) yield d;
+      }
+    }
+    buf += dec.decode(); // flush any multibyte remainder held by the decoder
+    const tail = lineToDelta(buf); // flush a trailing line that had no newline
+    if (tail) yield tail;
+  } finally {
+    // If the consumer stops early (client abort → the for-await calls .return() here), cancel the
+    // upstream body so AgentCore stops generating into the void (no wasted Bedrock tokens). A no-op
+    // once the reader has already drained.
+    await reader.cancel().catch(() => {});
+  }
+}
+
+function buildCommand(input: InvokeInput, arn: string): InvokeAgentRuntimeCommand {
   const body: Record<string, unknown> = { gateway: input.gateway, messages: input.messages };
   if (input.systemPromptOverride) body.systemPromptOverride = input.systemPromptOverride;
   if (input.toolAllowlist) body.toolAllowlist = input.toolAllowlist;
@@ -65,17 +138,43 @@ export async function invokeAgent(input: InvokeInput): Promise<string> {
   if (input.accountAlias) body.accountAlias = input.accountAlias;
   if (input.integrations?.length) body.integrations = input.integrations;
   if (input.extraContext) body.extraContext = input.extraContext;
-  const payload = new TextEncoder().encode(JSON.stringify(body));
-  const cmd = new InvokeAgentRuntimeCommand({
+  return new InvokeAgentRuntimeCommand({
     agentRuntimeArn: arn,
     qualifier: 'DEFAULT',
     runtimeSessionId: input.sessionId,
-    payload,
+    payload: new TextEncoder().encode(JSON.stringify(body)),
   });
+}
+
+/** Send the invoke command, retrying once on a transient send error. The body is NOT consumed
+ *  here, so the retry is safe for both the buffered and the streaming consumer. */
+async function send(input: InvokeInput): Promise<unknown> {
+  const arn = await getRuntimeArn();
+  if (!ac) ac = new BedrockAgentCoreClient({ region: REGION });
+  const cmd = buildCommand(input, arn);
   try {
-    return await readResponse(await ac.send(cmd));
+    return await ac.send(cmd);
   } catch {
     await new Promise((r) => setTimeout(r, 500));
-    return await readResponse(await ac.send(cmd));
+    return await ac.send(cmd);
   }
+}
+
+/** Invoke the AgentCore runtime, buffering the full answer. Used by fan-out synthesis and k8sgpt
+ *  (which need the complete text). Consumes an SSE stream into a string when present; otherwise
+ *  reads the legacy buffered JSON. */
+export async function invokeAgent(input: InvokeInput): Promise<string> {
+  const resp = await send(input);
+  if (!isEventStream(resp)) return readResponse(resp);
+  let full = '';
+  for await (const d of streamDeltas(resp)) full += d;
+  return full;
+}
+
+/** Invoke the AgentCore runtime and yield assistant text deltas as they arrive (real token
+ *  streaming). Used by the single-route chat path. Transparently degrades to a one-shot yield
+ *  against a legacy buffered agent image. */
+export async function* invokeAgentStream(input: InvokeInput): AsyncGenerator<string> {
+  const resp = await send(input);
+  yield* streamDeltas(resp);
 }
