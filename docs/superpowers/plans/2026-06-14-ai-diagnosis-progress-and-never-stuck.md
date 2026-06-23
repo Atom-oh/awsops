@@ -7,7 +7,7 @@
 
 ## Problem (evidence-backed RCA)
 
-`https://awsops-v2.atomai.click/ai-diagnosis` shows "진단중" forever. Confirmed root cause:
+`https://awsops-v2.example.com/ai-diagnosis` shows "진단중" forever. Confirmed root cause:
 
 1. **PRIMARY (stale worker image):** the deployed `awsops-v2-worker:worker-latest` image was last
    pushed **2026-06-03**; the `report` handler was added **2026-06-11** (`fd43e26`). The live

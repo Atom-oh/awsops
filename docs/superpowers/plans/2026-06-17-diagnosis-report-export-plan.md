@@ -30,7 +30,7 @@ diagnosis collectors/sections, the deep-tier resolver. No DB columns (artifact k
 ### Task 1: Generation date in the markdown header
 - Modify: `scripts/v2/workers/diagnosis/report.py`
 - Test: `scripts/v2/workers/diagnosis/test_report.py`
-- [ ] Failing test: `report.build_markdown([], "180294183052", "mid")` output contains `생성 일시:`.
+- [ ] Failing test: `report.build_markdown([], "123456789012", "mid")` output contains `생성 일시:`.
 - [ ] Implement: in `build_markdown`, prepend a header line
       `> 생성 일시: {now} (KST)` where `now = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M")`
       (fixed +9 offset — no `tzdata` dependency). Import `datetime, timezone, timedelta`.

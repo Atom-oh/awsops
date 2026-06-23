@@ -8,13 +8,13 @@ beforeEach(() => {
 
 describe('currentAccountId', () => {
   it("returns HOST_ACCOUNT_ID when set", () => {
-    process.env.HOST_ACCOUNT_ID = '180294183052';
-    expect(currentAccountId()).toBe('180294183052');
+    process.env.HOST_ACCOUNT_ID = '123456789012';
+    expect(currentAccountId()).toBe('123456789012');
   });
 
   it("trims surrounding whitespace", () => {
-    process.env.HOST_ACCOUNT_ID = '  180294183052  ';
-    expect(currentAccountId()).toBe('180294183052');
+    process.env.HOST_ACCOUNT_ID = '  123456789012  ';
+    expect(currentAccountId()).toBe('123456789012');
   });
 
   it("falls back to 'self' when unset (Phase-1 single-account convention)", () => {

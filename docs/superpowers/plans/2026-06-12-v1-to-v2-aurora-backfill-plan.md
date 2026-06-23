@@ -71,7 +71,7 @@ No app/web/terraform changes — the four target tables already exist in `terraf
 **Files:**
 - Create: `docs/runbooks/v1-to-v2-aurora-backfill.md`
 
-- [ ] Bilingual runbook: prerequisites; pull `data/` off `i-0a35c902f44f23adf` (SSM Run Command / session + tar, read-only); dry-run; run (creds via terraform output or env, **never echo DSN**); verification queries; idempotent re-run; fidelity notes — alert `source` default + `fingerprint=NULL` ⇒ **excluded from the fingerprint partial index** (invisible to fingerprint dedup); **`--account-id` must match the id v1 dual-write used** (else rows fork; optional pre-run distinct-account check); no read-cutover, no source deletion.
+- [ ] Bilingual runbook: prerequisites; pull `data/` off `i-0123456789abcdef0` (SSM Run Command / session + tar, read-only); dry-run; run (creds via terraform output or env, **never echo DSN**); verification queries; idempotent re-run; fidelity notes — alert `source` default + `fingerprint=NULL` ⇒ **excluded from the fingerprint partial index** (invisible to fingerprint dedup); **`--account-id` must match the id v1 dual-write used** (else rows fork; optional pre-run distinct-account check); no read-cutover, no source deletion.
 - [ ] Commit `docs(v2-backfill): operator runbook`.
 
 ## Acceptance criteria

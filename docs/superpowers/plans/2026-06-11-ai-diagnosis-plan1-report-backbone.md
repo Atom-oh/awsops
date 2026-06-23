@@ -496,7 +496,7 @@ def test_build_markdown_has_toc_and_all_sections():
         {"key": "executive_summary", "title": "Executive Summary", "body": "요약 본문"},
         {"key": "security_posture", "title": "Security Posture", "body": "보안 본문"},
     ]
-    md = report.build_markdown(rendered, account="180294183052", tier="mid")
+    md = report.build_markdown(rendered, account="123456789012", tier="mid")
     assert md.startswith("# AWS 진단 리포트") or md.startswith("# AWSops")
     assert "## Executive Summary" in md and "## Security Posture" in md
     assert "요약 본문" in md and "보안 본문" in md
@@ -1294,7 +1294,7 @@ Expected: the Fargate worker dispatches via `handlers.REGISTRY` (already generic
 
 - [ ] **Step 3: Trigger a report from the UI and verify**
 
-1. Open `https://awsops-v2.atomai.click/ai-diagnosis`, pick `mid`, click 진단 실행.
+1. Open `https://awsops-v2.example.com/ai-diagnosis`, pick `mid`, click 진단 실행.
 2. Watch `worker_jobs` and `diagnosis_reports`:
 
 ```bash

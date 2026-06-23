@@ -1,5 +1,7 @@
 # Phase 2 — 통합·정리 (BASELINE + 통합 ADR + docs IA) Implementation Plan
 
+> **✅ EXECUTED (2026-06-22).** Outputs landed: `docs/decisions/BASELINE.md` + consolidated ADRs `001-014` + `ADR-MAPPING.md`. The `- [ ]` checkboxes below are historical planning artifacts.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use `- [ ]`.
 
 **Goal:** Phase 1 감사 리포트(`docs/reviews/2026-06-21-docs-reality-audit.md`)의 확정 진실로, 단일 `BASELINE.md` + 소수 통합 ADR(001~N) + LEGACY archive + 현행/역사 분리 docs IA를 구축한다. 코드 변경 0(문서만).

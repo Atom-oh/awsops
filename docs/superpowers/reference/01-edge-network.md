@@ -30,17 +30,17 @@ viewer ──TLS──> CloudFront ──TLS (https-only:443)──> VPC Origin
 - **Internal ALB only — no public ALB.** `aws_lb.internal` is `internal = true` with an
   **HTTPS:443 listener** backed by a **regional ACM certificate** (validated via the
   CloudFront cert's existing Route53 CNAMEs). The ALB forwards to a `target_type = "ip"`
-  target group on the Fargate container port (`3000`), health check path `/awsops/healthz`.
+  target group on the Fargate container port (`3000`), health check path `/api/health`.
 - **ALB security group** allows **443 only from the CloudFront managed SG
   `CloudFront-VPCOrigins-Service-SG`**, looked up via a `data "aws_security_group"` with two
   filters: `group-name` + `vpc-id` (= `local.vpc_id`). The earlier broad VPC-CIDR :443 rule was
   dropped — a VPC-CIDR-only rule causes a persistent 504.
 - **VPC: new-or-reuse via `create_network`.** `true` (default) builds a new VPC
-  (`10.30.0.0/16` default), 2 public + 2 private subnets, IGW, NAT, route tables. `false`
+  (`10.20.0.0/16` default), 2 public + 2 private subnets, IGW, NAT, route tables. `false`
   reuses an existing VPC (`existing_vpc_id` + `existing_private_subnet_ids`, no `ec2:Create*`,
   no new NAT cost). Downstream resources reference `local.vpc_id` / `local.private_subnet_ids`
   / `local.vpc_cidr` to absorb the branch.
-  Live: reused mgmt-vpc `vpc-06801144309cad7dc`, `10.254.0.0/16`.
+  Live: reused mgmt-vpc `vpc-0123456789abcdef0`, `10.254.0.0/16`.
 - **Remote state:** partial S3 backend (`backend "s3" {}`), bucket `awsops-v2-tfstate`, key
   `foundation/terraform.tfstate`, `use_lockfile = true` (S3-native locking, **no DynamoDB**),
   `encrypt = true`. Injected at init via `backend.hcl`.
@@ -51,10 +51,10 @@ viewer ──TLS──> CloudFront ──TLS (https-only:443)──> VPC Origin
 
 ## Decisions (ADRs) / 결정
 
-- [ADR-030 — ECS Fargate + Aurora split](../../decisions/030-ecs-fargate-aurora-split.md):
+- [ADR-001 — v2 foundation (ECS Fargate + Aurora split)](../../decisions/001-v2-foundation.md):
   adopts the v2 topology — web on **ECS Fargate** (ARM64) behind an internal ALB, replacing the
   v1 single-EC2 host. This reference covers the edge/ALB/network half of that topology.
-- [ADR-028 — CloudFront CachingDisabled](../../decisions/028-cloudfront-caching-disabled.md):
+- [ADR-014 — cross-cutting (CloudFront CachingDisabled)](../../decisions/014-cross-cutting-cache-i18n-cdn.md):
   the default cache behavior runs with `CACHING_DISABLED` so dynamic dashboard responses and
   SSE streams are never cached/buffered at the edge.
 
@@ -73,8 +73,8 @@ Also relevant: `terraform/v2/foundation/workload.tf` (internal ALB, HTTPS:443 li
 
 ## Status / 상태
 
-**P1a ✅ GREEN.** `https://awsops-v2.atomai.click` → HTTP **200** + SSE streaming at **1 event/s**,
-in account `180294183052` (mgmt-vpc reuse). The negative test confirms the ALB is `internal` and
+**P1a ✅ GREEN.** `https://awsops-v2.example.com` → HTTP **200** + SSE streaming at **1 event/s**,
+in account `123456789012` (mgmt-vpc reuse). The negative test confirms the ALB is `internal` and
 unreachable directly from outside the VPC.
 
 ## Learnings & gotchas / 학습·함정

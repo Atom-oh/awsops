@@ -1,5 +1,7 @@
 # Runbook: 새 버전 배포 / Deploy New Version
 
+> **⚠️ v1 (legacy EC2).** This runbook targets the v1 single-EC2 app. For **v2** deploy with `make deploy` (arm64 → ECR → ECS rolling → `/api/health` smoke) — see root `CLAUDE.md`.
+
 코드 변경사항을 운영 EC2에 안전하게 배포.
 Safely deploy code changes to the production EC2 instance.
 

@@ -36,7 +36,7 @@ AWSops가 어떻게 만들어졌는지 레이어별로 자세히 보겠습니다
 <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px;">
   <div style="background:rgba(0,212,255,0.12);border:1px solid rgba(0,212,255,0.4);border-radius:8px;padding:14px 18px;text-align:center;">
     <span style="color:#00d4ff;font-weight:bold;font-size:18px;">Browser</span>
-    <span style="color:#8b95a5;font-size:13px;margin-left:10px;">awsops-v2.atomai.click</span>
+    <span style="color:#8b95a5;font-size:13px;margin-left:10px;">awsops-v2.example.com</span>
   </div>
   <div style="text-align:center;color:#666;font-size:20px;">↓ TLS</div>
   <div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:14px 18px;text-align:center;">

@@ -1,5 +1,7 @@
 # RCA Incident Orchestrator — Stage 3 (first slice) Implementation Plan
 
+> **⚠️ STATUS (2026-06-23): NOT implemented on this branch.** The `agent/rca/*`, `agent/rca_orchestrator.py`, and `payload.mode == "rca"` structures below live on the **unmerged** branch `feat/v2-rca-orchestrator` (worktree `~/awsops-rca`, P4-passed), pending rebase onto the canonical line + merge. Decision of record: **ADR-006 (incident-analysis-only)**. Read-only; S4 autonomy frozen.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` or `superpowers:executing-plans`. Steps use checkbox (`- [ ]`) syntax. **Implementer = Codex** (isolated worktree, per-task). Decision record: **"DevOps RCA Incident Orchestrator — EoG"** (currently `docs/decisions/046-*.md`; a concurrent session is renumbering ADRs — reference the decision **by title**, not number).
 
 **Goal:** Light up a read-only, alert-triggered RCA path: a registered alert-source integration → existing `/api/incidents/webhook` → EoG orchestrator (AgentCore "+1" over the existing section gateways) produces a 1-hop root-cause analysis written to `incidents.rca`, shown at `/incidents/[id]`.

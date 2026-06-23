@@ -109,7 +109,9 @@ conditions::text LIKE '%"type":"Ready"%' AND conditions::text LIKE '%"status":"T
 
 ---
 
-### 5. Next.js basePath 이슈
+### 5. Next.js basePath 이슈 (v1 전용 / v1-only)
+
+> **v2는 basePath가 없다** — 전용 도메인에서 루트 `/`로 서빙, fetch는 `/api/*`. 아래는 v1 한정.
 
 `basePath: '/awsops'` 설정 시:
 - `<Link href="/ec2">` → `/awsops/ec2` (자동 추가 ✅)

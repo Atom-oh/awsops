@@ -71,10 +71,10 @@ describe('agentcore', () => {
     const { invokeAgent } = await import('./agentcore');
     await invokeAgent({
       gateway: 'cost', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36),
-      accountId: '180294183052', accountAlias: 'prod',
+      accountId: '123456789012', accountAlias: 'prod',
     });
     const withAcct = JSON.parse(new TextDecoder().decode((acSend.mock.calls[0][0] as { input: { payload: Uint8Array } }).input.payload));
-    expect(withAcct.accountId).toBe('180294183052');
+    expect(withAcct.accountId).toBe('123456789012');
     expect(withAcct.accountAlias).toBe('prod');
 
     acSend.mockClear();
