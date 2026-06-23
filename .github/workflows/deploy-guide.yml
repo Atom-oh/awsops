@@ -35,7 +35,7 @@ jobs:
       - run: npm run build
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-          SITE_URL: ${{ vars.SITE_URL || 'https://www.example.com' }}
+          SITE_URL: ${{ vars.SITE_URL || 'https://www.atomai.click' }}
           BASE_URL: ${{ vars.BASE_URL || '/awsops/' }}
 
       # Canary: fail loudly if the customer overview page is missing from the
