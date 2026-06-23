@@ -29,7 +29,7 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 | **P3** | 에이전트 함대 + 챗 UI + EKS 조회 (read-only). ~~OpenCost 설치 버튼(ADR-029 mutating)~~ → **029 번복으로 폐기** | 🟡 부분 진행 (read-only 부분 deployed; mutating 부분 reversed) |
 | **P4** | 인시던트/ChatOps 라이프사이클 + DevOps Agent 페더레이션 | 🔜 backlog |
 
-라이브 환경: 계정 `123456789012`, 도메인 `awsops-v2.example.com`, mgmt-vpc 재사용(`vpc-0123456789abcdef0`, 10.254.0.0/16).
+라이브 환경(**아래 식별자는 예시/sanitized — 실제 값은 gitignored tfvars/런타임 STS**): 계정 `123456789012`, 도메인 `awsops-v2.example.com`, mgmt-vpc 재사용(`vpc-0123456789abcdef0`, 10.254.0.0/16).
 
 ## 필수 규칙 (v2)
 
@@ -157,7 +157,7 @@ AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds the v1 si
 | **P3** | agent fleet + chat UI + EKS query (read-only). ~~OpenCost install button (ADR-029 mutating)~~ → **dropped (029 reversed)** | 🟡 partial (read-only shipped; mutating parts reversed) |
 | **P4** | incident/ChatOps lifecycle + DevOps Agent federation | 🔜 backlog |
 
-Live env: account `123456789012`, domain `awsops-v2.example.com`, reused mgmt-vpc (`vpc-0123456789abcdef0`, 10.254.0.0/16).
+Live env (**identifiers below are examples/sanitized — real values come from gitignored tfvars / runtime STS**): account `123456789012`, domain `awsops-v2.example.com`, reused mgmt-vpc (`vpc-0123456789abcdef0`, 10.254.0.0/16).
 
 ## Critical Rules (v2)
 

@@ -554,7 +554,7 @@ export async function PUT(request: NextRequest) {
         const currentConfig = getConfig();
         const hostAccount = (currentConfig.accounts || []).find((a: AccountConfig) => a.isHost);
         const region = hostAccount?.region || process.env.AWS_REGION || 'ap-northeast-2';
-        const accountId = hostAccount?.accountId || '123456789012';
+        const accountId = hostAccount?.accountId || '180294183052';
         const snsClient = new SNSClient({ region });
         const sqsClient = new SQSClient({ region });
 

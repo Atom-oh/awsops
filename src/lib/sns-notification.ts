@@ -200,7 +200,7 @@ export async function notifyReportCompleted(opts: {
   // Use short dashboard download URLs instead of raw S3 presigned URLs
   // (presigned URLs are too long and get truncated in email clients)
   // 대시보드 다운로드 URL 사용 (S3 presigned URL은 너무 길어서 이메일에서 잘림)
-  const base = dashboardBaseUrl || 'https://awsops.example.com/awsops';
+  const base = dashboardBaseUrl || 'https://awsops.atomai.click/awsops';
   lines.push(`── Download ──`);
   lines.push(`[Download DOCX] ${base}/api/report?id=${reportId}&action=download-docx`);
   lines.push(`[Download Markdown] ${base}/api/report?id=${reportId}&action=download-md`);
@@ -284,7 +284,7 @@ export async function notifyAlertDiagnosis(opts: {
     lines.push(``);
   }
 
-  lines.push(`대시보드에서 전체 진단 결과 확인: https://awsops.example.com/awsops/alert-settings`);
+  lines.push(`대시보드에서 전체 진단 결과 확인: https://awsops.atomai.click/awsops/alert-settings`);
 
   return publishNotification(subject, lines.join('\n'));
 }

@@ -102,8 +102,8 @@ if [ "$CI_ID" != "NONE" ]; then
 fi
 
 # 계정 ID 확인 (이미 올바른 경우 스킵) / Verify account ID
-if grep -q "111122223333\|444455556666" "$ROUTE_FILE"; then
-    sed -i "s|111122223333|${ACCOUNT_ID}|g; s|444455556666|${ACCOUNT_ID}|g" "$ROUTE_FILE"
+if grep -q "605134447633\|730335239360" "$ROUTE_FILE"; then
+    sed -i "s|605134447633|${ACCOUNT_ID}|g; s|730335239360|${ACCOUNT_ID}|g" "$ROUTE_FILE"
     echo "  ✓ 계정 ID 업데이트 / Account ID updated to ${ACCOUNT_ID}"
 else
     echo "  ✓ 계정 ID 이미 올바름 / Account ID already correct"
