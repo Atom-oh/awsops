@@ -184,27 +184,54 @@ describe('buildFlowGraph — CF→LB/WAF edges', () => {
 });
 
 describe('buildFlowGraph — custom-domain origin resolved via Route53 alias', () => {
-  // A: a CloudFront custom-domain origin that Route53-aliases to a SYNCED LB → real CF→LB edge.
-  it('links CF→LB when the origin custom domain Route53-aliases to a synced LB dns_name', () => {
+  // A: a CloudFront custom-domain origin that Route53-aliases to a SYNCED, internet-facing LB →
+  // real CF→LB edge. (A standard CF custom origin reaches the origin over the public internet, so
+  // the edge is only drawn when the LB is internet-facing — see the internal-scheme test below.)
+  it('links CF→LB when the origin custom domain Route53-aliases to a synced internet-facing LB', () => {
     const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
-    const alb = { resource_id: 'web-alb', region: 'ap-northeast-2', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/web-alb/1', dns_name: 'internal-web-123.ap-northeast-2.elb.amazonaws.com' };
-    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'internal-web-123.ap-northeast-2.elb.amazonaws.com.' } }];
+    const alb = { resource_id: 'web-alb', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/web-alb/1', dns_name: 'web-123.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'web-123.ap-northeast-2.elb.amazonaws.com.' } }];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
     expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
     // resolved to a real LB → no leftover unresolved origin node for svc.atomai.click
     expect(g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('svc.atomai.click'))).toBeFalsy();
   });
 
-  // 1-hop chain: origin → r53 record → another r53 record → LB.
-  it('follows a 1-hop Route53 alias chain to a synced LB', () => {
+  // chain: origin → r53 record → another r53 record → internet-facing LB (2 hops).
+  it('follows a Route53 alias chain (2 hops) to a synced internet-facing LB', () => {
     const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'edge.atomai.click' }] };
-    const alb = { resource_id: 'a', region: 'ap-northeast-2', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'lb-1.ap-northeast-2.elb.amazonaws.com' };
+    const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'lb-1.ap-northeast-2.elb.amazonaws.com' };
     const r53 = [
       { resource_id: 'edge.atomai.click A', name: 'edge.atomai.click.', type: 'A', alias_target: { DNSName: 'svc.atomai.click.' } },
       { resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'lb-1.ap-northeast-2.elb.amazonaws.com.' } },
     ];
     const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
     expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(true);
+  });
+
+  // reachability: a standard CF custom origin CANNOT reach an INTERNAL LB → no false edge; surface
+  // the resolved target on an unresolved node instead.
+  it('does NOT draw a CF→LB edge to an internal-scheme LB (unreachable) — surfaces it instead', () => {
+    const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
+    const alb = { resource_id: 'int-alb', region: 'ap-northeast-2', scheme: 'internal', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/int-alb/1', dns_name: 'internal-x.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [{ resource_id: 'svc.atomai.click A', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'internal-x.ap-northeast-2.elb.amazonaws.com.' } }];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
+    expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(false);
+    const o = g.nodes.find((n) => n.kind === 'origin' && String(n.label).includes('svc.atomai.click'));
+    expect(o?.meta?.resolvedTarget).toBe('internal-x.ap-northeast-2.elb.amazonaws.com');
+  });
+
+  // determinism: a record name with CONFLICTING alias targets (e.g. split-horizon public/private)
+  // is ambiguous → not resolved (no order-dependent edge). Must be deterministic regardless of input order.
+  it('does not resolve a record name with conflicting alias targets (deterministic)', () => {
+    const cf = { resource_id: 'D1', region: 'ap-northeast-2', origins: [{ Id: 'o1', DomainName: 'svc.atomai.click' }] };
+    const alb = { resource_id: 'a', region: 'ap-northeast-2', scheme: 'internet-facing', arn: 'arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/a/1', dns_name: 'lb-1.ap-northeast-2.elb.amazonaws.com' };
+    const r53 = [
+      { resource_id: 'svc A pub', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'lb-1.ap-northeast-2.elb.amazonaws.com.' } },
+      { resource_id: 'svc A priv', name: 'svc.atomai.click.', type: 'A', alias_target: { DNSName: 'other-lb.ap-northeast-2.elb.amazonaws.com.' } },
+    ];
+    const g = buildFlowGraph({ cloudfront: [cf], alb: [alb], route53: r53 });
+    expect(g.edges.some((e) => e.source === 'cf:D1' && e.target === `alb:${alb.arn}`)).toBe(false); // ambiguous → no edge
   });
 
   // C: a CloudFront custom-domain origin whose Route53 alias points at a NON-synced (e.g. cross-region)

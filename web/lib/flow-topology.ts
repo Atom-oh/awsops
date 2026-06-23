@@ -252,12 +252,24 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
   // Route53 alias map: record name → its alias_target DNSName (both normalized). Lets a CloudFront
   // CUSTOM-domain origin (not a raw *.elb.amazonaws.com) be resolved to the LB it ultimately points
   // at — the gap that left grafana-internal.atomai.click-style origins target-less.
-  const r53AliasByName = new Map<string, string>();
+  // Drop AMBIGUOUS names (same name → conflicting targets, e.g. split-horizon public/private zones)
+  // so resolution is DETERMINISTIC regardless of input order — never an order-dependent edge.
+  const r53Targets = new Map<string, Set<string>>();
   for (const r of input.route53 ?? []) {
     const name = dns(r.name) || dns(r.resource_id);
     const aliasT = (r.alias_target && typeof r.alias_target === 'object') ? (r.alias_target as Row) : {};
     const target = dns(aliasT.DNSName);
-    if (name && target && name !== target) r53AliasByName.set(name, target);
+    if (name && target && name !== target) (r53Targets.get(name) ?? r53Targets.set(name, new Set()).get(name)!).add(target);
+  }
+  const r53AliasByName = new Map<string, string>();
+  for (const [name, targets] of r53Targets) if (targets.size === 1) r53AliasByName.set(name, [...targets][0]);
+
+  // LB dns_names that are internet-facing. A STANDARD (non-VPC) CloudFront custom origin reaches its
+  // origin over the public internet, so a Route53-resolved CF→LB edge is only honest for these — an
+  // internal LB is unreachable from a standard custom origin (the VPC-origin path returned earlier).
+  const internetFacingLbDns = new Set<string>();
+  for (const lb of [...(input.alb ?? []), ...(input.nlb ?? [])]) {
+    if (lb.dns_name && str(lb.scheme).toLowerCase() === 'internet-facing') internetFacingLbDns.add(str(lb.dns_name).toLowerCase());
   }
   // Follow the alias chain (≤4 hops, cycle-guarded) → TERMINAL DNS name, or null if the domain isn't
   // a known Route53 record. The terminal may be a synced LB dns_name (→ real CF→LB edge) or a
@@ -319,10 +331,12 @@ export function buildFlowGraph(input: FlowInput): FlowGraph {
       // unresolved node but surface the resolved target so the chain is still legible (C).
       let resolvedTarget: string | null = null;
       if (domain) {
-        const term = resolveViaR53(domain.toLowerCase());
+        const term = resolveViaR53(dns(domain));
         if (term) {
           const lid = lbByDns.get(term);
-          if (lid) { addEdge(cfId, lid); return; }
+          // Draw the edge ONLY to a synced, internet-facing LB (a standard custom origin can't reach
+          // an internal LB). DNS-chain-derived → 'inferred' (dashed). Otherwise surface the target.
+          if (lid && internetFacingLbDns.has(term)) { addEdge(cfId, lid, 'inferred'); return; }
           resolvedTarget = term;
         }
       }
