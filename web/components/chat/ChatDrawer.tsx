@@ -117,7 +117,7 @@ export default function ChatDrawer() {
         aria-label="AI 어시스턴트 열기"
         // lg: shift left of any open right-docked DetailPanel (--detail-panel-w, 0 when none)
         // so the FAB never sits on top of the panel. Mobile keeps right-5 (panel is fullscreen there).
-        className="fixed bottom-20 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-[background-color,right] hover:bg-brand-600 lg:bottom-5 lg:right-[calc(1.25rem+var(--detail-panel-w,0px))]"
+        className="fixed bottom-20 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600 lg:bottom-5 lg:right-[calc(1.25rem+var(--detail-panel-w,0px))]"
       >
         <Sparkles size={20} strokeWidth={2} />
       </button>
@@ -125,10 +125,12 @@ export default function ChatDrawer() {
   }
 
   // Cap to the span left of the detail panel (--detail-panel-w, 0 when none) so the drawer
-  // never overflows past the screen's left edge when both are open.
+  // never overflows past the screen's left edge — but floored at MIN_W so a wide detail panel
+  // can never collapse the chat below its minimum (the detail panel is itself resizable, so the
+  // user yields space from that side rather than losing the chat).
   const totalWidth = maximized
-    ? 'calc(96vw - var(--detail-panel-w, 0px))'
-    : `min(${width + (chat.showThreads ? THREADS_W : 0)}px, calc(100vw - var(--detail-panel-w, 0px) - 56px))`;
+    ? `max(${MIN_W}px, calc(96vw - var(--detail-panel-w, 0px)))`
+    : `max(${MIN_W}px, min(${width + (chat.showThreads ? THREADS_W : 0)}px, calc(100vw - var(--detail-panel-w, 0px) - 56px)))`;
 
   return (
     <div
