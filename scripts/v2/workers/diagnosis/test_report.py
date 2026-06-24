@@ -538,9 +538,18 @@ def test_coverage_note_datasource_none_connected():
 
 
 def test_coverage_note_datasource_used():
-    note = _cov({"data": {"instances": [{"name": "prod-prom", "kind": "prometheus"}], "queried": 1},
+    note = _cov({"data": {"instances": [{"name": "prod-prom", "kind": "prometheus"}], "queried": 1,
+                          "findings": [{"name": "prod-prom", "results": [{"label": "oom_kills:l", "summary": {"count": 2}}]}]},
                  "degraded": False, "notes": ""})
     assert "사용" in note and "prod-prom" in note
+
+
+def test_coverage_note_datasource_unavailable_only_not_marked_used():
+    # M4: an instance with ONLY unavailable signals (empty results) must NOT read as "사용"
+    note = _cov({"data": {"instances": [{"name": "p", "kind": "prometheus"}], "queried": 1,
+                          "findings": [{"name": "p", "results": []}]},
+                 "degraded": False, "notes": ""})
+    assert "사용" not in note and "unavailable" in note
 
 
 def test_coverage_note_datasource_unavailable_reason():

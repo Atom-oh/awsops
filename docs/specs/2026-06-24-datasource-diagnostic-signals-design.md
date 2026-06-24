@@ -101,7 +101,7 @@ CREATE INDEX IF NOT EXISTS dds_instance_idx ON datasource_diag_signals (account_
 
 ## 7. 진단 통합 + 활용 여부 (Diagnosis Integration & Utilization)
 
-- `collect_datasources(conn)` 개편: 기존 제네릭 `_plan_queries` 경로 제거 → `datasource_diag_signals`에서 `status='ready'` 행을 읽어 저장된 query 실행. 기존 fan-out·deadline·byte-cap·**PII redaction**(원시 샘플/라벨 값 미반출) 그대로 재사용. `meta.threshold`로 **결정론 플래그**(임계 초과 namespace/pod/node만 강조).
+- `collect_datasources(conn)` 개편: prom/mimir는 `datasource_diag_signals`의 `status='ready'` 행을 읽어 저장된 query 실행. **(구현 결정)** 제네릭 `_plan_queries`는 **제거하지 않고 유지** — loki/tempo/clickhouse는 계속 제네릭, prom/mimir도 신호 미빌드 시 제네릭으로 폴백(인덱스 파이프라인 decoupling; `test_no_signal_rows_falls_back_to_generic_planner`). 기존 fan-out·deadline·byte-cap·**PII redaction**(원시 샘플/라벨 값 미반출) 그대로 재사용. `meta.threshold`로 **결정론 플래그**(임계 초과 namespace/pod/node만 강조).
 - 리포트:
   - 신규 섹션 `external_obs_signals`("외부 관측성 신호") — `sections.py`에 추가, sources=`["datasources_obs"]`. 신호별 상위 N + 플래그를 서술. 데이터 없으면 "데이터 불가"(환각 금지 규칙 준수).
   - **커버리지 노트 개선**(`report.py:_coverage_note`): `datasources_obs`에 한해 `empty` 분기에서도 `notes`를 출력 → `사용(신호 N, 인스턴스 M)` / `비활성(게이트 OFF)` / `연결 없음` / `unavailable(metric X 없음)`를 명시. 현재의 "empty 뭉뚱그림" 해소 = "활용 여부 체크".

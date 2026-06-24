@@ -28,11 +28,19 @@ def _enqueue_index(conn, integration_id):
     job_id = str(uuid.uuid4())
     payload = {"integration_id": integration_id}
     db.insert_job(conn, job_id, "datasource_index", payload)  # durable ledger row
-    _sqs.send_message(
-        QueueUrl=QUEUE_URL,
-        MessageBody=json.dumps({"job_id": job_id, "type": "datasource_index",
-                                "payload": payload, "dry_run": False}),
-    )
+    try:
+        _sqs.send_message(
+            QueueUrl=QUEUE_URL,
+            MessageBody=json.dumps({"job_id": job_id, "type": "datasource_index",
+                                    "payload": payload, "dry_run": False}),
+        )
+    except Exception:
+        # SQS delivery failed → drop the orphan ledger row so it doesn't linger 'queued' until the reaper.
+        try:
+            conn.run("DELETE FROM worker_jobs WHERE job_id=:id AND status='queued'", id=job_id)
+        except Exception:  # noqa: BLE001
+            pass
+        raise
     return job_id
 
 

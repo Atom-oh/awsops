@@ -62,6 +62,11 @@ def run(payload, conn):
     """Rebuild signals for payload['integration_id'] if its schema hash changed. Never raises."""
     import db as wdb
     iid = payload.get("integration_id")
+    # Gate: only build when the datasource-diagnosis feature is enabled (same DIAG_DATASOURCES_ENABLED the
+    # collector checks; wired to the worker lambda via terraform local.ds_env_map). Keeps the always-on
+    # enqueue path (BFF add/refresh + REGISTRY) a no-op when datasource_diagnosis_enabled=false.
+    if os.environ.get("DIAG_DATASOURCES_ENABLED") != "true":
+        return {"integration_id": iid, "disabled": True}
     try:
         kind, schema = _read_cached_schema(conn, iid)
         if kind is None and schema is None:
@@ -77,8 +82,17 @@ def run(payload, conn):
         if wdb.read_signal_schema_version(conn, iid) == version:
             return {"integration_id": iid, "skipped": True, "schema_version": version}
         rows = _cat.build_signals(kind, schema)          # present-but-empty metrics → all unavailable
-        wdb.upsert_diag_signals(conn, iid, rows, version)
-        wdb.sweep_diag_signals(conn, iid, [r["signal_key"] for r in rows])
+        # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
+        # while others stay stale — the next run would read a new-version row, judge "unchanged", and
+        # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
+        conn.run("BEGIN")
+        try:
+            wdb.upsert_diag_signals(conn, iid, rows, version)
+            wdb.sweep_diag_signals(conn, iid, [r["signal_key"] for r in rows])
+            conn.run("COMMIT")
+        except Exception:
+            conn.run("ROLLBACK")
+            raise
         return {"integration_id": iid, "built": len(rows),
                 "ready": sum(1 for r in rows if r["status"] == "ready"), "schema_version": version}
     except Exception as e:  # noqa: BLE001 — never sink the dispatcher; surface on the job result

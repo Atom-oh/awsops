@@ -8,7 +8,13 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pytest  # noqa: E402
 import datasource_index as dsi  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _enable(monkeypatch):
+    monkeypatch.setenv("DIAG_DATASOURCES_ENABLED", "true")  # M2: run() is gated on this
 
 PROM_METRICS = [
     "container_cpu_cfs_throttled_periods_total", "container_cpu_cfs_periods_total",
@@ -162,3 +168,12 @@ class TestAccountKeyFallback:
         out = dsi.run({"integration_id": 7}, c)
         assert out.get("built") == 8 and out.get("no_schema") is not True   # fallback found the schema
         assert len(c.inserts) == 8
+
+
+def test_gate_off_no_build(monkeypatch):
+    """M2: with the feature gate off, run() no-ops (no write) even though the job was enqueued."""
+    monkeypatch.delenv("DIAG_DATASOURCES_ENABLED", raising=False)
+    c = FakeConn(existing_version="STALE")
+    out = dsi.run({"integration_id": 7}, c)
+    assert out.get("disabled") is True
+    assert c.inserts == [] and c.deletes == []

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS datasource_diag_signals (
   integration_id  bigint      NOT NULL,
   signal_key      text        NOT NULL,                    -- 'container_cpu_throttling', 'oom_kills', …
   title           text        NOT NULL,                    -- human label (Explore button / report)
-  status          text        NOT NULL,                    -- 'ready' | 'unavailable'
+  status          text        NOT NULL CHECK (status IN ('ready', 'unavailable')),  -- guard bad writes
   query           jsonb,                                   -- ready: {tool, queries:[{expr,label}]}
   missing_metrics jsonb,                                   -- unavailable: ["metric_a", …] (utilization reason)
   meta            jsonb       NOT NULL DEFAULT '{}'::jsonb, -- {pillar, threshold, kind, unit}

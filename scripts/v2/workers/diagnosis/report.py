@@ -203,9 +203,15 @@ def _datasource_utilization(r):
     queried = data.get("queried") or 0
     if not queried:
         return f"연결된 datasource/빌드된 신호 없음{(' — ' + notes) if notes else ''}"
+    # M4: an instance whose signals are ALL unavailable produces a finding with empty results — it must
+    # not read as "사용". Count instances that actually executed ≥1 signal query (have results).
+    findings = data.get("findings") or []
+    used = sum(1 for f in findings if f.get("results"))
     names = ", ".join(i.get("name", "?") for i in (data.get("instances") or []))
     extra = ("; " + "; ".join(data["notes"])) if data.get("notes") else ""
-    return f"사용 — {queried}개 인스턴스({names}){extra}"
+    if used == 0:
+        return f"연결됨({queried}개) — 실행 가능한 신호 없음(전부 unavailable){extra}"
+    return f"사용 — {used}/{queried}개 인스턴스 신호 실행({names}){extra}"
 
 
 def build_markdown(rendered, account, tier, collected=None):
