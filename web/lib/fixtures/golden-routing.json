@@ -45,7 +45,7 @@
     { "q": "p99 레이턴시가 튀어요", "expect": ["observability"] },
     { "q": "prometheus 타겟이 down이야", "expect": ["observability"] },
     { "q": "promql로 5xx 에러율 추세 보여줘", "expect": ["observability"] },
-    { "q": "clickhouse에서 최근 1시간 느린 트레이스 top 10", "expect": ["observability"] },
+    { "q": "clickhouse에서 최근 1시간 가장 느린 쿼리 top 10", "expect": ["observability"] },
     { "q": "grafana 대시보드에서 본 trace 이상해", "expect": ["monitoring"] },
     { "q": "요청 추적 tempo에서 끊김", "expect": ["monitoring"] },
     { "q": "loki 로그 쿼리 도와줘", "expect": ["monitoring"] },
