@@ -702,11 +702,11 @@ describe('AWSops Assistant (product help + inactive fallback)', () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     isProductHelpIntent.mockReturnValue(false);
-    // classifier auto-routed (method:'regex') to inactive observability
-    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'observability', score: 0.9, active: false }] });
-    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    // classifier auto-routed (method:'regex') to an inactive section (container)
+    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'container', score: 0.9, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    const body = await readStream(await POST(req({ prompt: 'prometheus p99 추세', sessionId: 's'.repeat(36) })));
+    const body = await readStream(await POST(req({ prompt: '파드 CrashLoop 원인', sessionId: 's'.repeat(36) })));
     expect(assistantAnswer).toHaveBeenCalled();
     expect(body).toContain('답변'); // chunk() splits on spaces
     expect(body).not.toContain('🔒'); // no dead-end
@@ -717,11 +717,11 @@ describe('AWSops Assistant (product help + inactive fallback)', () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     isProductHelpIntent.mockReturnValue(false);
-    // user pinned /observability → classifyRoute returns method:'pin'
-    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'observability', score: 1, active: false }] });
-    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    // user pinned an inactive section (/container) → classifyRoute returns method:'pin'
+    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    const body = await readStream(await POST(req({ prompt: '아무거나', section: 'observability', sessionId: 's'.repeat(36) })));
+    const body = await readStream(await POST(req({ prompt: '아무거나', section: 'container', sessionId: 's'.repeat(36) })));
     expect(assistantAnswer).not.toHaveBeenCalled();
     expect(body).toContain('🔒'); // explicit choice → honest unavailable message
   });
