@@ -301,5 +301,130 @@ class DriveAnthropicLoopTest(unittest.TestCase):
         self.assertTrue(any(r.get("is_error") for r in results))
 
 
+# ── run_anthropic_loop wiring (stubbed agent + anthropic) — Task 3 ────────────
+import sys
+
+
+class _FakeMCPClient:
+    def __init__(self, transport_factory):
+        self._tf = transport_factory
+        self.tool_calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def call_tool_sync(self, name, arguments=None):
+        self.tool_calls.append((name, arguments))
+        return types.SimpleNamespace(content=[types.SimpleNamespace(text=f"out:{name}")])
+
+
+class _CapturingBedrock:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        # one end_turn turn so the loop completes with a single delta
+        self.messages = _FakeMessages([(["hi"], _final("end_turn", [_text("hi")]))])
+        _CapturingBedrock.instances.append(self)
+
+
+def _install_agent_stub(gateway_tools, *, footer="FOOTER", skill_prompt="SKILLPROMPT"):
+    m = types.ModuleType("agent")
+    m.DEFAULT_GATEWAY = "ops"
+    m.GATEWAYS = {"ops": "https://gw/ops/mcp"}
+    m.COMMON_FOOTER = footer
+    m.MCPClient = _FakeMCPClient
+    m._resolve_gateway_key = lambda role, gws: role if role in gws else "ops"
+    m.create_gateway_transport = lambda url: ("transport", url)
+    m.get_all_tools = lambda client: list(gateway_tools)
+    m._dedup_by_tool_name = lambda tools: tools
+
+    def _filter(tools, allow):
+        if not allow:
+            return tools
+        s = set(allow)
+        return [t for t in tools if getattr(t, "tool_name", None) in s]
+    m._filter_tools = _filter
+    m.build_skill_prompt = lambda role, tools: skill_prompt  # real impl already includes the footer
+    m.build_account_directive = lambda aid, alias: (f"\nACCT:{aid}" if aid and aid != "__all__" else "")
+    m.effective_account_id = lambda aid: "" if (not aid or aid == "__all__") else aid
+
+    def _bc(payload):
+        msgs = payload.get("messages") or []
+        if msgs:
+            hist = [{"role": x.get("role", "user"), "content": [{"text": x.get("content", "")}]}
+                    for x in msgs[:-1]]
+            return msgs[-1].get("content", ""), hist
+        return payload.get("prompt", ""), []
+    m.build_conversation = _bc
+    sys.modules["agent"] = m
+    return m
+
+
+class RunAnthropicLoopTest(unittest.TestCase):
+    def setUp(self):
+        self._saved = {k: sys.modules.get(k) for k in ("agent", "anthropic")}
+        _CapturingBedrock.instances = []
+        anth = types.ModuleType("anthropic")
+        anth.AsyncAnthropicBedrock = _CapturingBedrock
+        sys.modules["anthropic"] = anth
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+    def test_no_input_yields_single_delta(self):
+        _install_agent_stub([])
+        out = run(al.run_anthropic_loop({"messages": [{"role": "user", "content": ""}]}))
+        self.assertEqual(out, [{"delta": "No input provided."}])
+
+    def test_constructs_bedrock_client_in_home_region_with_model(self):
+        _install_agent_stub([FakeTool("list_vpcs", "List VPCs")])
+        out = run(al.run_anthropic_loop({"messages": [{"role": "user", "content": "hello"}]}))
+        self.assertEqual(out, [{"delta": "hi"}])
+        self.assertEqual(_CapturingBedrock.instances[-1].kwargs, {"aws_region": "ap-northeast-2"})
+        call0 = _CapturingBedrock.instances[-1].messages.calls[0]
+        self.assertEqual(call0["model"], al.MODEL_ID)
+        self.assertEqual(call0["max_tokens"], al.MAX_OUTPUT_TOKENS)
+
+    def test_allowlist_applied_before_conversion(self):
+        _install_agent_stub([FakeTool("keep", "k"), FakeTool("drop", "d")])
+        run(al.run_anthropic_loop({"messages": [{"role": "user", "content": "x"}],
+                                   "toolAllowlist": ["keep"]}))
+        tools = _CapturingBedrock.instances[-1].messages.calls[0]["tools"]
+        self.assertEqual([t["name"] for t in tools], ["keep"])
+
+    def test_builtin_prompt_does_not_double_footer(self):
+        _install_agent_stub([FakeTool("t")], footer="FOOTER", skill_prompt="SKILLPROMPT")
+        run(al.run_anthropic_loop({"messages": [{"role": "user", "content": "x"}]}))
+        sys_text = _CapturingBedrock.instances[-1].messages.calls[0]["system"][0]["text"]
+        self.assertIn("SKILLPROMPT", sys_text)
+        self.assertNotIn("FOOTER", sys_text)  # build_skill_prompt already owns the footer
+
+    def test_override_prompt_appends_footer_once(self):
+        _install_agent_stub([FakeTool("t")], footer="FOOTER")
+        run(al.run_anthropic_loop({"messages": [{"role": "user", "content": "x"}],
+                                   "systemPromptOverride": "CUSTOM"}))
+        sys_text = _CapturingBedrock.instances[-1].messages.calls[0]["system"][0]["text"]
+        self.assertIn("CUSTOM", sys_text)
+        self.assertEqual(sys_text.count("FOOTER"), 1)
+
+    def test_account_directive_prefixes_user_input(self):
+        _install_agent_stub([FakeTool("t")])
+        run(al.run_anthropic_loop({"messages": [{"role": "user", "content": "list"}],
+                                   "accountId": "999999999999", "accountAlias": "prod"}))
+        msgs = _CapturingBedrock.instances[-1].messages.calls[0]["messages"]
+        last_text = msgs[-1]["content"][-1]["text"]
+        self.assertIn("Target Account: prod (999999999999)", last_text)
+        sys_text = _CapturingBedrock.instances[-1].messages.calls[0]["system"][0]["text"]
+        self.assertIn("ACCT:999999999999", sys_text)
+
+
 if __name__ == "__main__":
     unittest.main()

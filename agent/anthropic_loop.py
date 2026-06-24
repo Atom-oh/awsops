@@ -193,3 +193,110 @@ async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks,
         logger.error("anthropic loop error (started=%s): %s", started, e, exc_info=True)
         yield {"delta": _INTERRUPTED_DELTA if started else _FAILED_DELTA}
         return
+
+
+def _normalize_tool_result(res):
+    """Normalize a Strands ``call_tool_sync`` result to text for a ``tool_result`` block.
+    The result typically carries ``.content`` = a list of blocks with ``.text`` (or dict ``{'text':…}``).
+    Defensive across shapes; exact shape is environment-verified at runtime."""
+    if isinstance(res, str):
+        return res
+    content = getattr(res, "content", None)
+    if content is None and isinstance(res, dict):
+        content = res.get("content")
+    if content is None:
+        return str(res)
+    parts = []
+    for b in content:
+        txt = _block_attr(b, "text", None)
+        parts.append(txt if txt is not None else str(b))
+    joined = "\n".join(p for p in parts if p)
+    return joined or str(res)
+
+
+async def run_anthropic_loop(payload):
+    """Thin wiring for the dark path (minimal slice): reuse agent.py's MCP/prompt plumbing, connect
+    the gateway MCP, and drive ``drive_anthropic_loop`` on an ``AsyncAnthropicBedrock`` client.
+
+    Mirrors ``agent.handler`` for input parsing, gateway resolution, the tool allowlist/dedup ceiling,
+    and the system-prompt construction (override vs built-in — no doubled COMMON_FOOTER). Heavy imports
+    (``agent``, ``anthropic``) are lazy here so the rest of this module stays import-light for tests.
+    ``integrations`` and ``mode=='rca'`` are intentionally NOT handled here — the handler routes those
+    to the Strands path (minimal-slice boundary)."""
+    import agent  # lazy: agent.py is the entrypoint module (already loaded at runtime)
+    from anthropic import AsyncAnthropicBedrock  # lazy: only the dark path needs the SDK
+
+    user_input, history = agent.build_conversation(payload)
+    if not user_input:
+        yield {"delta": "No input provided."}
+        return
+
+    gateway_role = payload.get("gateway", agent.DEFAULT_GATEWAY)
+    skill_role = payload.get("skill", gateway_role)
+    system_prompt_override = payload.get("systemPromptOverride")
+    extra_context = payload.get("extraContext")
+    tool_allowlist = payload.get("toolAllowlist")
+    gateway_key = agent._resolve_gateway_key(gateway_role, agent.GATEWAYS)
+    gateway_url = agent.GATEWAYS.get(gateway_key)
+
+    # Cross-account directive (effective_account_id blanks the host / __all__ → same-account, no prefix).
+    account_id = agent.effective_account_id(payload.get("accountId", ""))
+    account_alias = payload.get("accountAlias", "")
+    account_directive = agent.build_account_directive(account_id, account_alias)
+    if account_id and account_id != "__all__":
+        user_input = f"[Target Account: {account_alias or account_id} ({account_id})] {user_input}"
+
+    logger.info("anthropic_loop gateway=%s key=%s account=%s history=%d",
+                gateway_role, gateway_key, account_id or "default", len(history))
+
+    started = False
+    try:
+        from contextlib import ExitStack
+        mcp_client = agent.MCPClient(lambda: agent.create_gateway_transport(gateway_url))
+        with ExitStack() as stack:
+            stack.enter_context(mcp_client)
+            gateway_tools = agent.get_all_tools(mcp_client)
+            # Same ceiling/order as the Strands path: dedup (gateway precedence) THEN allowlist,
+            # applied to the MCP tool objects BEFORE schema conversion.
+            tools = agent._filter_tools(agent._dedup_by_tool_name(gateway_tools), tool_allowlist)
+
+            if system_prompt_override:
+                tool_lines = []
+                for t in tools:
+                    desc = getattr(t, "description", "") or ""
+                    short = desc.split(".")[0].strip() if desc else t.tool_name
+                    tool_lines.append(f"- **{t.tool_name}**: {short}")
+                tool_section = f"\n\n## Available Tools ({len(tools)}):\n" + "\n".join(tool_lines)
+                system_text = system_prompt_override + tool_section + agent.COMMON_FOOTER + account_directive
+            else:
+                # build_skill_prompt ALREADY appends COMMON_FOOTER — do NOT add it again.
+                system_text = agent.build_skill_prompt(skill_role, tools) + account_directive
+            if extra_context:
+                system_text = system_text + "\n\n" + str(extra_context)[:EXTRA_CONTEXT_CAP]
+
+            anthropic_tools = mcp_tools_to_anthropic(tools)
+            system_blocks = [{"type": "text", "text": system_text}]
+            apply_cache_control(system_blocks, anthropic_tools)
+
+            # Bedrock client (no API key — uses the runtime role); same home region as the Strands path.
+            aclient = AsyncAnthropicBedrock(aws_region=BEDROCK_REGION)
+
+            def mcp_call(name, inp):
+                # Repo call shape (agent/rca/tools.py): call_tool_sync(name, arguments=...).
+                return _normalize_tool_result(mcp_client.call_tool_sync(name, arguments=inp or {}))
+
+            messages = build_anthropic_messages(history, user_input)
+            async for chunk in drive_anthropic_loop(
+                    aclient=aclient, mcp_call=mcp_call, model=MODEL_ID,
+                    system_blocks=system_blocks, anthropic_tools=anthropic_tools,
+                    messages=messages, max_rounds=MAX_TOOL_ROUNDS, max_tokens=MAX_OUTPUT_TOKENS):
+                started = True
+                yield chunk
+        return
+    except Exception as e:
+        # drive_anthropic_loop fail-softs internally, so this only catches PRE-stream setup errors
+        # (MCP connect, tool discovery, client construction). No Strands re-run (D5).
+        logger.error("run_anthropic_loop setup error (started=%s): %s", started, e, exc_info=True)
+        if not started:
+            yield {"delta": _FAILED_DELTA}
+        return
