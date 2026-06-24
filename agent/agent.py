@@ -269,8 +269,8 @@ SKILL_BASE = {
 ## Datasources (tools appear in the list above only when the datasource is connected):
 | Source | Tools | Query language |
 |---|---|---|
-| Prometheus | prometheus_query / prometheus_query_range, prometheus_labels, prometheus_series, prometheus_metric_metadata | PromQL (e.g. `rate(http_requests_total{code=~"5.."}[5m])`) |
-| ClickHouse | clickhouse_query (read-only SELECT/SHOW/DESCRIBE), list tables, describe | SQL |
+| Prometheus | prometheus_query / prometheus_query_range, prometheus_labels, prometheus_series, prometheus_metric_meta, prometheus_schema | PromQL (e.g. `rate(http_requests_total{code=~"5.."}[5m])`) |
+| ClickHouse | clickhouse_query (read-only SELECT/SHOW/DESCRIBE), clickhouse_tables, clickhouse_describe, clickhouse_schema | SQL |
 
 ## Rules:
 - GENERATE the query in the correct language yourself from the user's natural-language ask — never ask the user to write PromQL/SQL.
