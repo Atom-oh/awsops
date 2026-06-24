@@ -76,8 +76,8 @@
 - Modify: `scripts/v2/workers/handlers.py`
 - Create: `scripts/v2/workers/insight/test_job.py`
 
-- [ ] **test-first**: `run(payload, conn)` — collect_all(주입된 수집기 stub)→synthesize(stub)→`insert_insight`; 일부 수집기 실패해도 진행(부분), 전부 실패=status failed; never-raise. handler `_insight(payload, dry_run)` connect/close.
-- [ ] `job.py run()` + `handlers.py` `_insight` + `REGISTRY["insight"]=(_insight,"lambda")`.
+- [ ] **test-first**: `AI_INSIGHTS_ENABLED!=true`→`run` no-op(disabled, write 없음); enabled 시 collect_all(주입 stub)→synthesize(stub)→`insert_insight`; 일부 수집기 실패=부분 진행, 전부 실패=status failed; never-raise. handler `_insight(payload, dry_run)` connect/close.
+- [ ] `job.py run()` (맨 앞 **`if os.environ.get('AI_INSIGHTS_ENABLED') != 'true': return {'disabled': True}`** — 런타임 하드 게이트, 항상-등록 REGISTRY/enqueue 경로 no-op) + `handlers.py` `_insight` + `REGISTRY["insight"]=(_insight,"lambda")`.
 - [ ] GREEN.
 
 ### Task 8: insight_dispatcher (TDD)
@@ -95,9 +95,10 @@
 **Files:**
 - Modify: `terraform/v2/foundation/variables.tf`
 - Modify: `terraform/v2/foundation/workers.tf`
+- Modify: `terraform/v2/foundation/workload.tf`
 
 - [ ] `variables.tf`: `variable "ai_insights_enabled"`(bool, default false, 설명 "OFF→$0", workers_enabled 동반 validation — 기존 패턴 참고).
-- [ ] `workers.tf`: `local.aii = var.workers_enabled && var.ai_insights_enabled ? 1 : 0`(모든 신규 6리소스 `count=local.aii` 일관); insight_dispatcher lambda + `aws_cloudwatch_event_rule`(rate(6 hours)) + target + `aws_lambda_permission`; 워커 role IAM **추가**: `cloudwatch:DescribeAlarms`·`cloudwatch:GetMetricData`·`ce:GetCostAndUsage`·**`eks:DescribeCluster`**(k8s endpoint/CA 조회). **bedrock:InvokeModel·sqs:SendMessage는 워커 role에 이미 존재**(report 잡)→재추가 안 함(확인만). 워커 lambda+task env에 **`ONBOARD_EKS_CLUSTERS`**(onboard_eks_clusters 콤마조인, 기본 빈값→k8s skip) + 게이트 env 추가. `workers_src` 아카이브에 **`insight/` 패키지 구조 보존**(`filename="insight/<x>.py"` + `insight/__init__.py`; flatten 금지 — `from insight.x import`가 깨짐) + `insight_dispatcher.py`. 전부 `local.aii` 게이트. EKS access-entry는 out-of-band(주석).
+- [ ] `workers.tf`: `local.aii = var.workers_enabled && var.ai_insights_enabled ? 1 : 0`(모든 신규 6리소스 `count=local.aii` 일관); insight_dispatcher lambda + `aws_cloudwatch_event_rule`(rate(6 hours)) + target + `aws_lambda_permission`; 워커 role IAM **추가**: `cloudwatch:DescribeAlarms`·`cloudwatch:GetMetricData`·`ce:GetCostAndUsage`·**`eks:DescribeCluster`**(k8s endpoint/CA 조회). **bedrock:InvokeModel은 워커 role에 이미 존재**(report 잡)→확인만. **`sqs:SendMessage`는 기존 정책이 다른 게이트(local.sched/dsd)에 묶여 있어** ai_insights 단독 활성 시 부재할 수 있음 → `local.aii` 게이트 **전용 SendMessage 정책 추가**(jobs 큐 ARN). 워커 lambda+task env에 **`ONBOARD_EKS_CLUSTERS`**(onboard_eks_clusters 콤마조인, 기본 빈값→k8s skip) + **`AI_INSIGHTS_ENABLED`(local.aii?"true":"false")**(런타임 게이트) 추가; **workload.tf 웹 task env에도 `AI_INSIGHTS_ENABLED`** 추가(BFF refresh fail-closed용). `workers_src` 아카이브에 **`insight/` 패키지 구조 보존**(`filename="insight/<x>.py"` + `insight/__init__.py`; flatten 금지 — `from insight.x import`가 깨짐) + `insight_dispatcher.py`. 전부 `local.aii` 게이트. EKS access-entry는 out-of-band(주석).
 - [ ] `terraform -chdir=terraform/v2/foundation validate`; 게이트 OFF→`plan` no-op(apply는 컨트롤러).
 
 ### Task 10: BFF — /api/insights (read + refresh) (TDD)
@@ -109,7 +110,7 @@
 - Create: `web/lib/insights.test.ts`
 - Create: `web/app/api/insights/route.test.ts`
 
-- [ ] **test-first**: `GET /api/insights`(verifyUser) → 최신 행; `POST /api/insights/refresh`(verifyUser + **isAdmin**, `web/lib/admin.ts`) → `enqueueJob('insight',…)`(웹 role은 이미 SendMessage 보유), 최근 running insight 잡 있으면 202 재사용; DB read만.
+- [ ] **test-first**: `GET /api/insights`(verifyUser) → 최신 행; `POST /api/insights/refresh`(verifyUser + **isAdmin**) → **`AI_INSIGHTS_ENABLED!=='true'`면 503 fail-closed**; 아니면 `enqueueJob('insight',…)`, 최근 **queued∪running** insight 잡 있으면 202 재사용(중복 Bedrock 잡 방지); DB read만.
 - [ ] `insights.ts`(getLatestInsight + enqueueInsightRefresh) + 두 route.
 - [ ] 관련 `npm test` GREEN.
 
