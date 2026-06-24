@@ -260,6 +260,8 @@ resource "aws_ecs_task_definition" "web" {
         { name = "PROJECT", value = var.project }, # connector-invoke builds ${PROJECT}-agent-<slug>-mcp; must match the IAM resource
 
         { name = "INV_SYNC_FUNCTION", value = var.steampipe_enabled ? "${var.project}-inv-sync" : "" },
+        # AI Insights: the BFF /api/insights/refresh fail-closes when this != "true" (runtime gate).
+        { name = "AI_INSIGHTS_ENABLED", value = var.ai_insights_enabled ? "true" : "false" },
         # P3-D: onboarded-cluster allow-list for the in-cluster (K8s) read routes.
         # Static join of the tfvar (no cross-resource ref) — the BFF gates /api/eks/[cluster]/* on this.
         { name = "ONBOARDED_EKS_CLUSTERS", value = join(",", var.onboard_eks_clusters) },

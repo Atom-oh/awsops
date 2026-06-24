@@ -37,3 +37,9 @@ output "ecs_service_name" { value = aws_ecs_service.web.name }
 output "agent_lambda_role_arn" {
   value = var.agentcore_enabled ? aws_iam_role.agent_lambda[0].arn : null
 }
+
+# Principal the operator registers on an EKS cluster (out-of-band) so the AI-Insights k8s_events
+# collector can LIST core/v1 Events. null when workers are off. See register-insight-access.sh.
+output "worker_lambda_role_arn" {
+  value = var.workers_enabled ? aws_iam_role.worker_lambda[0].arn : null
+}
