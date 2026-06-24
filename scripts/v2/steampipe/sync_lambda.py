@@ -515,7 +515,8 @@ def sync(resource_type):
                 recs, id_col, region_col = SDK_SYNCS[resource_type]()
             else:
                 sql, id_col, region_col = QUERIES[resource_type]
-                sql = _inject_account(sql, _caller_account())  # literal owner_id for FDW pushdown
+                if "{account_id}" in sql:  # only templated queries need the (STS) account literal
+                    sql = _inject_account(sql, _caller_account())  # literal owner_id for FDW pushdown
                 sdb = _steampipe()
                 try:
                     rows = sdb.run(sql)
