@@ -40,6 +40,8 @@ interface FleetCluster {
 interface Fleet { clusters: FleetCluster[] }
 
 const DASH = '—';
+// Section gateways per ADR-004 (8). Named so the AgentCore tile isn't a bare magic literal.
+const SECTION_GATEWAYS = 8;
 
 export default function Home() {
   const [ov, setOv] = useState<Overview | null>(null);
@@ -128,11 +130,12 @@ export default function Home() {
     .slice(0, 8);
   const hasFleet = clusters.length > 0;
 
-  // Security-issue rollup — mirrors the /security finding contract (public S3 + open
-  // ingress + unencrypted EBS + IAM without MFA) so the tile can't false-negative on a
-  // high-severity public bucket.
+  // Security-issue rollup across the four /security findings (public S3 + open ingress +
+  // unencrypted EBS + IAM without MFA). The public-S3 count is produced by the summary
+  // route using the SAME shared PUBLIC_S3_WHERE predicate as the /security page, so this
+  // home tile stays consistent with /security (incl. Block-Public-Access-off buckets).
   const sp = sum?.splits;
-  const secIssues = sp ? sp.sgOpenIngress + sp.ebsUnencrypted + sp.iamUserNoMfa + (sp.s3Public ?? 0) : null;
+  const secIssues = sp ? sp.sgOpenIngress + sp.ebsUnencrypted + sp.iamUserNoMfa + sp.s3Public : null;
 
   // Cost daily average (MTD ÷ elapsed days) for the cost tile subline.
   const dailyAvg =
@@ -161,7 +164,7 @@ export default function Home() {
         {/* ---- KPI group 1: COMPUTE & CONTAINERS ---- */}
         <section className="flex flex-col gap-3">
           <SectionLabel>COMPUTE &amp; CONTAINERS</SectionLabel>
-          <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <StatTile
               label="EC2 인스턴스"
               value={n('ec2')}
@@ -171,7 +174,7 @@ export default function Home() {
             />
             <StatTile label="Lambda 함수" value={n('lambda')} href="/inventory/lambda" />
             <StatTile label="ECS 클러스터" value={n('ecs_cluster')} href="/inventory/ecs_cluster" />
-            <StatTile label="AgentCore" value="8 GW" href="/assistant" hint="섹션 게이트웨이 · 어시스턴트" />
+            <StatTile label="AgentCore" value={`${SECTION_GATEWAYS} GW`} href="/assistant" hint="섹션 게이트웨이 · 어시스턴트" />
             <StatTile label="ECR 리포지토리" value={n('ecr')} href="/inventory/ecr" />
             <StatTile
               label="EKS 클러스터"

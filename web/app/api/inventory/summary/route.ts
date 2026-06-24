@@ -1,6 +1,7 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { INVENTORY_TYPES } from '@/lib/inventory-types';
+import { PUBLIC_S3_WHERE } from '@/lib/security-findings';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,8 @@ interface Splits {
   s3Public: number;
 }
 
-// Derived KPI sublines (C06): single round-trip UNION ALL over the synced JSONB.
+// Derived KPI sublines: one UNION-ALL round-trip over the synced JSONB (the EC2-type
+// donut adds a second small aggregation query below; both degrade independently).
 // SG ingress-open match is anchored to the cidr field key (description text can't
 // false-trigger) and covers IPv6 ::/0; both Steampipe key casings matched.
 const SPLITS_SQL = `
@@ -26,7 +28,7 @@ const SPLITS_SQL = `
   UNION ALL SELECT 'sg_open_ingress', count(*)::int FROM inventory_resources
     WHERE account_id='self' AND resource_type='security_group'
     AND (data->'ip_permissions')::text ~ '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"'
-  UNION ALL SELECT 's3_public', count(*)::int FROM inventory_resources WHERE account_id='self' AND resource_type='s3_public_access' AND (data->>'bucket_policy_is_public')='true'
+  UNION ALL SELECT 's3_public', count(*)::int FROM inventory_resources WHERE account_id='self' AND resource_type='s3_public_access' AND ${PUBLIC_S3_WHERE}
 `;
 
 /** Aggregate inventory counts: per resource_type (desc) and rolled up per category group. */
