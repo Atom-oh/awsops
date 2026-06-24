@@ -274,6 +274,17 @@ QUERIES = {
         "route_uid",
         "region",
     ),
+    # ---- v1-parity inventory additions (g-01 / g-02; read-only) ----
+    "ecs_service": (
+        # g-01: ECS service desired/running/pending counts + launch type. Like ecs_task, the
+        # Steampipe table hydrates per-cluster automatically, so a bare bulk SELECT is fine.
+        "SELECT service_name, region, account_id, arn, cluster_arn, status, desired_count, "
+        "running_count, pending_count, launch_type, task_definition, scheduling_strategy, "
+        "created_at, tags "
+        "FROM aws_ecs_service ORDER BY service_name",
+        "service_name",
+        "region",
+    ),
 }
 
 
