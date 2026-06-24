@@ -11,7 +11,10 @@ def test_ecs_service_registered():
     assert "aws_ecs_service" in sql
     for col in ("desired_count", "running_count", "pending_count", "launch_type", "status"):
         assert col in sql, col
-    assert id_col == "service_name"
+    assert "service_name" in sql  # selected for display, but NOT the id (see below)
+    # id MUST be the ARN: ECS service names are unique only within a cluster, so two clusters
+    # in one account/region can share a service name and would collide on service_name.
+    assert id_col == "arn"
     assert region_col == "region"
 
 

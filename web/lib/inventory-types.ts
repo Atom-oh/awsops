@@ -29,7 +29,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
     { key: 'registered_container_instances_count', label: 'Instances' } ] },
   ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', columns: [
-    { key: 'status', label: 'Status' }, { key: 'desired_count', label: 'Desired' },
+    { key: 'service_name', label: 'Service' }, { key: 'status', label: 'Status' }, { key: 'desired_count', label: 'Desired' },
     { key: 'running_count', label: 'Running' }, { key: 'pending_count', label: 'Pending' },
     { key: 'launch_type', label: 'Launch' }, { key: 'cluster_arn', label: 'Cluster' } ] },
   ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', columns: [

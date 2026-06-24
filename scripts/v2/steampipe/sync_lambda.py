@@ -282,7 +282,9 @@ QUERIES = {
         "running_count, pending_count, launch_type, task_definition, scheduling_strategy, "
         "created_at, tags "
         "FROM aws_ecs_service ORDER BY service_name",
-        "service_name",
+        # id = arn: service_name is unique only within a cluster, so two clusters in one
+        # account/region can share a name and would overwrite each other on upsert.
+        "arn",
         "region",
     ),
     "ebs_snapshot": (
