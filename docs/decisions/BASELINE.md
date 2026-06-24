@@ -57,7 +57,7 @@
 | **GATED** | K8sGPT 인클러스터 진단 | `k8sgpt_enabled` | GET-only(Result CRD read), 클러스터 write 없음, 오퍼레이터는 out-of-band 설치 | ADR-006 |
 | **GATED(거버넌스)** | 외부 knowledge/comms write — 광역(Slack/Notion/Jira) | `integrations_write_enabled` | 독립 control plane · no-AWS-mutation IAM · SSRF/Secrets/DLP/human-gate. BYO-MCP(임의) 제외, 큐레이션 커넥터만 | ADR-007 |
 | **GATED** | 외부 관측성 진단 수집 | `datasource_diagnosis_enabled` | governed egress collector(read), SSRF 방어 | ADR-007/ADR-008 |
-| **GATED(실험)** | 챗 에이전트 루프 — `AsyncAnthropicBedrock` 커스텀 루프(다크) | `ANTHROPIC_AGENT_LOOP_ENABLED` | default OFF·dark. read-only·additive; Bedrock 경유(IAM/VPC/레지던시/비용귀속 보존, API키 無, 동일 global.* 프로파일+홈리전), 기존 게이트웨이 MCP 재사용(BYO-MCP 아님). 레버=도구 루프 디버깅성(지연 아님) | ADR-008/ADR-003 |
+| **GATED(실험)** | 챗 에이전트 루프 — `AsyncAnthropicBedrock` 커스텀 루프(다크) | `ANTHROPIC_AGENT_LOOP_ENABLED` (+ per-request `payload.agentLoop` 오버라이드) | default OFF·dark. read-only·additive; Bedrock 경유(IAM/VPC/레지던시/비용귀속 보존, API키 無, 동일 global.* 프로파일+홈리전), 기존 게이트웨이 MCP 재사용(BYO-MCP 아님). 레버=도구 루프 디버깅성(지연 아님). **per-request `payload.agentLoop`('anthropic'\|'strands')가 env를 오버라이드** — BFF는 client-controlled `agentLoop`를 forward하지 않음(서버측 설정만; 불변식 유지 필수) | ADR-008/ADR-003 |
 | **옵션(deferred)** | Neptune/그래프 substrate | — | Postgres-first 확정, 그래프 substrate는 후속 옵션 | legacy ADR-043 (deferred — MAPPING 참조) |
 
 > **주의 (2-티어 정밀):** 외부 DATA write 티어가 일률 OFF는 아니다 — `diagnosis_notify_enabled`(SNS 이메일, IAM 단일 토픽 스코프, NOT AWS-리소스 변경)는 **이미 LIVE**(거버넌스 충족). 광역 `integrations_write_enabled`만 OFF. (ADR-007/ADR-013)

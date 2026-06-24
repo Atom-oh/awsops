@@ -14,8 +14,10 @@ without `anthropic`/`strands`/network. The heavy imports (`agent`, `anthropic`) 
 lazy, inside `run_anthropic_loop`.
 """
 import asyncio
+import inspect
 import logging
 import os
+import sys
 
 # Same model + home region as the Strands path → invocation-log cost attribution intact.
 MODEL_ID = "global.anthropic.claude-sonnet-4-6"
@@ -60,6 +62,9 @@ def mcp_tools_to_anthropic(tools):
     out = []
     for t in tools:
         name = getattr(t, "tool_name", None) or (t.get("name") if isinstance(t, dict) else None)
+        if not name:  # Bedrock rejects a tool with name=None; gateway tools always have a name
+            logger.warning("skipping tool with no name in mcp_tools_to_anthropic")
+            continue
         spec = getattr(t, "tool_spec", None)
         desc = getattr(t, "description", "") or (spec.get("description") if isinstance(spec, dict) else "") or ""
         out.append({"name": name, "description": desc, "input_schema": _input_schema(t)})
@@ -127,7 +132,9 @@ def _assistant_content(final):
     for b in getattr(final, "content", None) or []:
         t = _block_attr(b, "type")
         if t == "text":
-            out.append({"type": "text", "text": _block_attr(b, "text", "") or ""})
+            txt = _block_attr(b, "text", "") or ""
+            if txt.strip():  # Anthropic rejects empty text blocks in INPUT → drop them (P4 CI: API 400)
+                out.append({"type": "text", "text": txt})
         elif t == "tool_use":
             out.append({"type": "tool_use", "id": _block_attr(b, "id"),
                         "name": _block_attr(b, "name"), "input": _block_attr(b, "input") or {}})
@@ -224,6 +231,22 @@ def _normalize_tool_result(res):
     return joined or str(res)
 
 
+async def _aclose(client):
+    """Best-effort close of the Anthropic client's HTTP connection pool (avoids socket/FD leak across
+    requests). Handles both async (``aclose``/awaitable ``close``) and sync ``close`` across SDK versions."""
+    for name in ("aclose", "close"):
+        fn = getattr(client, name, None)
+        if fn is None:
+            continue
+        try:
+            res = fn()
+            if inspect.isawaitable(res):
+                await res
+        except Exception as e:  # closing must never break the response
+            logger.warning("anthropic client close failed: %s", e)
+        return
+
+
 async def run_anthropic_loop(payload):
     """Thin wiring for the dark path (minimal slice): reuse agent.py's MCP/prompt plumbing, connect
     the gateway MCP, and drive ``drive_anthropic_loop`` on an ``AsyncAnthropicBedrock`` client.
@@ -233,7 +256,13 @@ async def run_anthropic_loop(payload):
     (``agent``, ``anthropic``) are lazy here so the rest of this module stays import-light for tests.
     ``integrations`` and ``mode=='rca'`` are intentionally NOT handled here — the handler routes those
     to the Strands path (minimal-slice boundary)."""
-    import agent  # lazy: agent.py is the entrypoint module (already loaded at runtime)
+    # agent.py runs as __main__ (Dockerfile CMD ["python","agent.py"]); reuse that already-initialized
+    # module rather than `import agent`, which would load a SECOND instance and re-run gateway discovery
+    # (AWS CLI subprocess) + BedrockModel construction. Falls back to a real import when run as a module
+    # (e.g. tests, where __main__ is the test runner — picks up a stubbed `agent` from sys.modules).
+    agent = sys.modules.get("__main__")
+    if not hasattr(agent, "create_gateway_transport"):
+        import agent  # noqa: F811 — module-import fallback
     from anthropic import AsyncAnthropicBedrock  # lazy: only the dark path needs the SDK
 
     user_input, history = agent.build_conversation(payload)
@@ -290,20 +319,22 @@ async def run_anthropic_loop(payload):
 
             # Bedrock client (no API key — uses the runtime role); same home region as the Strands path.
             aclient = AsyncAnthropicBedrock(aws_region=BEDROCK_REGION)
+            try:
+                def mcp_call(name, inp):
+                    # Repo call shape (agent/rca/tools.py): call_tool_sync(name, arguments=...).
+                    return _normalize_tool_result(mcp_client.call_tool_sync(name, arguments=inp or {}))
 
-            def mcp_call(name, inp):
-                # Repo call shape (agent/rca/tools.py): call_tool_sync(name, arguments=...).
-                return _normalize_tool_result(mcp_client.call_tool_sync(name, arguments=inp or {}))
-
-            messages = build_anthropic_messages(history, user_input)
-            allowed_tool_names = {t["name"] for t in anthropic_tools}  # execution-time ceiling
-            async for chunk in drive_anthropic_loop(
-                    aclient=aclient, mcp_call=mcp_call, model=MODEL_ID,
-                    system_blocks=system_blocks, anthropic_tools=anthropic_tools,
-                    messages=messages, max_rounds=MAX_TOOL_ROUNDS, max_tokens=MAX_OUTPUT_TOKENS,
-                    allowed_tool_names=allowed_tool_names):
-                started = True
-                yield chunk
+                messages = build_anthropic_messages(history, user_input)
+                allowed_tool_names = {t["name"] for t in anthropic_tools}  # execution-time ceiling
+                async for chunk in drive_anthropic_loop(
+                        aclient=aclient, mcp_call=mcp_call, model=MODEL_ID,
+                        system_blocks=system_blocks, anthropic_tools=anthropic_tools,
+                        messages=messages, max_rounds=MAX_TOOL_ROUNDS, max_tokens=MAX_OUTPUT_TOKENS,
+                        allowed_tool_names=allowed_tool_names):
+                    started = True
+                    yield chunk
+            finally:
+                await _aclose(aclient)  # release the HTTP connection pool (no socket/FD leak)
         return
     except Exception as e:
         # drive_anthropic_loop fail-softs internally, so this only catches PRE-stream setup errors

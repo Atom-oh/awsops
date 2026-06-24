@@ -300,6 +300,16 @@ class DriveAnthropicLoopTest(unittest.TestCase):
                    for blk in m["content"] if isinstance(blk, dict) and blk.get("type") == "tool_result"]
         self.assertTrue(any(r.get("is_error") for r in results))
 
+    def test_assistant_content_drops_empty_text_blocks(self):
+        # P4 CI gate (kiro-opus): Anthropic rejects empty text blocks in input → a tool_use turn with
+        # an empty/whitespace text block would 400 on the next round. _assistant_content must drop them.
+        final = _final("tool_use", [_text("  "), _text("real"), _tooluse("t", "x", {})])
+        out = al._assistant_content(final)
+        self.assertEqual(out, [
+            {"type": "text", "text": "real"},
+            {"type": "tool_use", "id": "t", "name": "x", "input": {}},
+        ])
+
     def test_temperature_zero_passed_to_stream(self):
         # P4 gate (kiro-opus MAJOR): parity with the Strands BedrockModel temperature=0.0 (ADR-038).
         client = _FakeClient([(["x"], _final("end_turn", [_text("x")]))])
@@ -359,9 +369,13 @@ class _CapturingBedrock:
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+        self.closed = False
         # one end_turn turn so the loop completes with a single delta
         self.messages = _FakeMessages([(["hi"], _final("end_turn", [_text("hi")]))])
         _CapturingBedrock.instances.append(self)
+
+    async def aclose(self):
+        self.closed = True
 
 
 def _install_agent_stub(gateway_tools, *, footer="FOOTER", skill_prompt="SKILLPROMPT"):
@@ -447,6 +461,12 @@ class RunAnthropicLoopTest(unittest.TestCase):
         sys_text = _CapturingBedrock.instances[-1].messages.calls[0]["system"][0]["text"]
         self.assertIn("CUSTOM", sys_text)
         self.assertEqual(sys_text.count("FOOTER"), 1)
+
+    def test_client_closed_after_run(self):
+        # P4 CI gate (codex): the AsyncAnthropicBedrock HTTP pool must be closed (no FD/socket leak).
+        _install_agent_stub([FakeTool("t")])
+        run(al.run_anthropic_loop({"messages": [{"role": "user", "content": "x"}]}))
+        self.assertTrue(_CapturingBedrock.instances[-1].closed)
 
     def test_account_directive_prefixes_user_input(self):
         _install_agent_stub([FakeTool("t")])
