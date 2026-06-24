@@ -181,6 +181,7 @@ export async function deleteDatasource(id: number): Promise<void> {
   if (!row) return;
 
   await getPool().query('DELETE FROM datasource_schemas WHERE integration_id = $1', [id]);
+  await getPool().query('DELETE FROM datasource_diag_signals WHERE integration_id = $1', [id]); // sweep pre-built signals
   try {
     await deleteCredentialKeys([String(id)]);
   } catch (e) {

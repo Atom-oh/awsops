@@ -137,3 +137,28 @@ def test_e2e_index_to_collect_to_coverage(monkeypatch):
     # 3) coverage note reports the datasource as used
     note = rpt._coverage_note({"datasources_obs": out})
     assert "사용" in note and "prod-prom" in note
+
+
+class TestAccountKeyFallback:
+    """M1: a BFF/worker HOST_ACCOUNT_ID mismatch must NOT blank the build — integration_id fallback."""
+    def test_schema_found_via_integration_id_when_account_scope_misses(self):
+        class MismatchConn:
+            def __init__(self):
+                self.inserts, self.deletes = [], []
+            def run(self, sql, **p):
+                if "FROM datasource_schemas" in sql:
+                    # account-scoped query misses (BFF wrote under a different account key); fallback hits
+                    if "account_id IN" in sql:
+                        return []
+                    return [["prometheus", json.dumps({"metrics": PROM_METRICS})]]
+                if "SELECT schema_version FROM datasource_diag_signals" in sql:
+                    return []
+                if sql.strip().startswith("INSERT INTO datasource_diag_signals"):
+                    self.inserts.append(p); return []
+                if sql.strip().startswith("DELETE FROM datasource_diag_signals"):
+                    self.deletes.append(p); return []
+                return []
+        c = MismatchConn()
+        out = dsi.run({"integration_id": 7}, c)
+        assert out.get("built") == 8 and out.get("no_schema") is not True   # fallback found the schema
+        assert len(c.inserts) == 8

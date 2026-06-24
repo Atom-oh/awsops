@@ -30,6 +30,17 @@ def _read_cached_schema(conn, integration_id):
         "ORDER BY (account_id = :acct) DESC, fetched_at DESC LIMIT 1",
         acct=acct, iid=integration_id)
     if not rows:
+        # Account-scope miss → fall back to integration_id alone (mirrors sources.py:_ds_schema). This
+        # is safe ONLY because `integrations` is single-account (one integration_id = one instance), and
+        # it prevents a BFF/worker HOST_ACCOUNT_ID mismatch from blanking the build (signals never built).
+        rows = conn.run(
+            "SELECT kind, schema FROM datasource_schemas WHERE integration_id=:iid "
+            "ORDER BY fetched_at DESC LIMIT 1",
+            iid=integration_id)
+        if rows:
+            logging.warning("[datasource_index] integration %s schema not under (%r,'self') — using "
+                            "integration_id fallback (BFF/worker account-key mismatch)", integration_id, acct)
+    if not rows:
         return None, None
     kind, schema = rows[0][0], rows[0][1]
     if isinstance(schema, str):
