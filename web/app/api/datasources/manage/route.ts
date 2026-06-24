@@ -11,6 +11,7 @@ import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 import { invokeMcpLambdaTool, type ConnConfig } from '@/lib/mcp-lambda-invoke';
 import { upsertSchema } from '@/lib/datasource-schema';
+import { enqueueDatasourceIndex } from '@/lib/diag-signals';
 import { currentAccountId } from '@/lib/account';
 
 export const dynamic = 'force-dynamic';
@@ -29,6 +30,7 @@ function warmSchemaCache(id: number, kind: string, connConfig: ConnConfig): void
     try {
       const schema = await invokeMcpLambdaTool({ kind, tool: `${kind}_schema`, connConfig });
       await upsertSchema(currentAccountId(), id, kind, schema);
+      await enqueueDatasourceIndex(id, kind);  // rebuild pre-built diagnostic signals (prom/mimir; best-effort)
     } catch (e) {
       console.warn('[datasources] connect-time introspect failed (manual Refresh remains):', (e as { name?: string })?.name || 'error');
     }
