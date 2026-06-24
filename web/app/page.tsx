@@ -74,10 +74,11 @@ export default function Home() {
     setCapturedAt(new Date().toISOString());
     setBusy(false);
 
-    // EKS fleet is a LIVE K8s read (list nodes/pods/events per cluster) — deliberately
-    // kept OUT of the busy-gated set + bounded by a client timeout so a slow/stuck K8s API
-    // can never hang the home spinner (thin-BFF: the home page must not hard-couple to live
-    // cluster latency). The K8s charts fill in when it resolves, or stay empty on timeout.
+    // EKS fleet is a LIVE K8s read (nodes/pods/events per cluster). Kept OUT of the
+    // busy-gated set so it never blocks the spinner, and bounded on BOTH ends: the client
+    // AbortController (6s) drops the request here, while the server-side k8sGet timeout
+    // (K8S_REQUEST_TIMEOUT_MS in eks-incluster) closes the actual K8s socket so a slow/stuck
+    // API can't occupy the web task (thin-BFF). The charts fill in on resolve, else stay empty.
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 6000);
     fetch('/api/eks/fleet', { signal: ctl.signal })
