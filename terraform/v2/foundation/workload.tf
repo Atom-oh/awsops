@@ -260,8 +260,6 @@ resource "aws_ecs_task_definition" "web" {
         { name = "PROJECT", value = var.project }, # connector-invoke builds ${PROJECT}-agent-<slug>-mcp; must match the IAM resource
 
         { name = "INV_SYNC_FUNCTION", value = var.steampipe_enabled ? "${var.project}-inv-sync" : "" },
-        # AI Insights: the BFF /api/insights/refresh fail-closes when this != "true" (runtime gate).
-        { name = "AI_INSIGHTS_ENABLED", value = var.ai_insights_enabled ? "true" : "false" },
         # P3-D: onboarded-cluster allow-list for the in-cluster (K8s) read routes.
         # Static join of the tfvar (no cross-resource ref) — the BFF gates /api/eks/[cluster]/* on this.
         { name = "ONBOARDED_EKS_CLUSTERS", value = join(",", var.onboard_eks_clusters) },
@@ -327,6 +325,10 @@ resource "aws_ecs_task_definition" "web" {
         # routes do not enqueue datasource_index jobs; the worker has the same DIAG_DATASOURCES_ENABLED
         # hard gate, so activation and egress permissions move together.
         { name = "DATASOURCE_DIAGNOSIS_ENABLED", value = "true" },
+        ] : [], var.ai_insights_enabled ? [
+        # AI Insights gate: omit the env when off → concat(base, []) == base (no web task-def diff/redeploy).
+        # The BFF /api/insights(+refresh) read AI_INSIGHTS_ENABLED and no-op/hide when it's absent.
+        { name = "AI_INSIGHTS_ENABLED", value = "true" },
         ] : [],
         # Scheduled-diagnosis mailing list (gated): empty list when diagnosis_notify_enabled=false →
         # concat(base, []) == base → byte-identical web task def (no redeploy when off).

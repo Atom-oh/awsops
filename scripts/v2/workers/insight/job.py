@@ -14,24 +14,30 @@ def run(payload, conn):
     """Return a small result dict. Never raises."""
     if os.environ.get("AI_INSIGHTS_ENABLED") != "true":
         return {"disabled": True}
+    import db as wdb
     fns = [k8s_events.collect_k8s_events, cw_anomalies.collect_cw_anomalies, cost_anomalies.collect_cost_anomalies]
     signals, failures = [], 0
     for fn in fns:
         try:
-            signals.append(fn())
+            sig = fn()
         except Exception as e:  # noqa: BLE001 — collectors are defensive; this guards stubs/regressions
-            logging.warning("[insight.job] collector %s failed: %s", getattr(fn, "__name__", fn), e)
+            logging.warning("[insight.job] collector %s raised: %s", getattr(fn, "__name__", fn), e)
             failures += 1
-    try:
-        if failures == len(fns):
-            import db as wdb
-            wdb.insert_insight(conn, "failed", [], {}, model=None, error="all collectors failed")
-            return {"status": "failed"}
-        result = generate.synthesize(signals)
-        sources_used = {s.get("source"): len(s.get("items") or []) for s in signals}
-        import db as wdb
-        wdb.insert_insight(conn, result["status"], result["insights"], sources_used, model=result.get("model"))
-        return {"status": result["status"], "count": len(result["insights"])}
-    except Exception as e:  # noqa: BLE001 — store/synth failure must not crash the worker
-        logging.warning("[insight.job] run failed: %s", e)
-        return {"error": str(e)[:300]}
+            continue
+        signals.append(sig)
+        # M2: a collector that never-raised but reported its own failure (ok=False) is a REAL failure —
+        # otherwise an all-graceful-skip run would store a false "특이사항 없음 / succeeded".
+        if not sig.get("ok", True):
+            failures += 1
+
+    # M1: store/synthesize failures must RAISE so the worker backbone (worker_lambda.finish_job) marks
+    # the job 'failed' — never let a swallowed exception leave a 'succeeded' ledger row with no insert.
+    if failures == len(fns):
+        wdb.insert_insight(conn, "failed", [], {}, model=None, error="all insight collectors failed")
+        return {"status": "failed"}
+    result = generate.synthesize(signals)
+    # M2: if any collector failed (ok=False) the synthesis ran on partial data → never report 'succeeded'.
+    status = "partial" if (failures > 0 and result["status"] == "succeeded") else result["status"]
+    sources_used = {s.get("source"): len(s.get("items") or []) for s in signals}
+    wdb.insert_insight(conn, status, result["insights"], sources_used, model=result.get("model"))
+    return {"status": status, "count": len(result["insights"])}

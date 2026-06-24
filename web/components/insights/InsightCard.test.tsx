@@ -29,6 +29,12 @@ describe('InsightCard', () => {
     expect(screen.getByText('30분 전')).toBeTruthy();
   });
 
+  it('renders nothing when the feature is disabled (enabled:false)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ enabled: false, insight: null }) })));
+    const { container } = render(<InsightCard />);
+    await waitFor(() => expect(container.querySelector('[data-testid="ai-insight-card"]')).toBeNull());
+  });
+
   it('shows empty-state CTA when no insights', async () => {
     vi.stubGlobal('fetch', mockFetch(null));
     render(<InsightCard />);

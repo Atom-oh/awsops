@@ -3,6 +3,7 @@
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { enqueueInsightRefresh } from '@/lib/insights';
+import { EnqueueDeliveryError } from '@/lib/jobs';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +20,8 @@ export async function POST(request: Request) {
     if (result === 'disabled') return json({ error: 'ai insights disabled' }, 503);
     return json({ status: result }, 202);  // queued | deduped
   } catch (e) {
+    // m4: ledger row already written but SQS delivery failed → the reaper recovers; mirror /api/jobs (202).
+    if (e instanceof EnqueueDeliveryError) return json({ status: 'queued', delivery: 'deferred' }, 202);
     console.error('[insights] refresh enqueue failed:', e);
     return json({ error: 'failed to enqueue refresh' }, 500);
   }

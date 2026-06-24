@@ -11,8 +11,11 @@ function json(obj: unknown, status: number) {
 export async function GET(request: Request) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ error: 'unauthenticated' }, 401);
+  // Flag OFF → no-op: skip the DB query entirely (avoids 500 on an unmigrated env) and tell the client
+  // the feature is disabled so the card hides itself (v2 "default false → no behavior change").
+  if (process.env.AI_INSIGHTS_ENABLED !== 'true') return json({ enabled: false, insight: null }, 200);
   try {
-    return json({ insight: await getLatestInsight() }, 200);
+    return json({ enabled: true, insight: await getLatestInsight() }, 200);
   } catch (e) {
     console.error('[insights] read failed:', e);
     return json({ error: 'failed to load insights' }, 500);

@@ -25,13 +25,18 @@ function ago(ts: string | null): string {
 export default function InsightCard() {
   const [data, setData] = useState<Latest | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [enabled, setEnabled] = useState(true);   // hide entirely when the feature flag is off (M3)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
   const load = useCallback(async () => {
     try {
       const r = await fetch('/api/insights');
-      if (r.ok) setData((await r.json()).insight);
+      if (r.ok) {
+        const body = await r.json();
+        setEnabled(body.enabled !== false);
+        setData(body.insight);
+      }
     } catch { /* best-effort */ } finally { setLoaded(true); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -47,6 +52,7 @@ export default function InsightCard() {
     } catch { setMsg('새로고침 실패'); } finally { setBusy(false); }
   }, []);
 
+  if (loaded && !enabled) return null;   // feature off → render nothing (no-op on the dashboard)
   const insights = data?.insights ?? [];
   return (
     <section className="rounded-xl border border-ink-200 bg-card p-4" data-testid="ai-insight-card">

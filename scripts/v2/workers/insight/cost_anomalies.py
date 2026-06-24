@@ -5,6 +5,7 @@ BOTH the percentage jump and the absolute $ jump exceed the thresholds (suppress
 noise like KMS/SNS). Bounded, never raises. `ce` is injectable for tests.
 """
 import datetime
+from datetime import timezone
 import logging
 import os
 
@@ -31,9 +32,9 @@ def collect_cost_anomalies(ce=None):
     """Return {source:'cost', items:[{severity,title,detail,refs}], notes}. Never raises."""
     ce = ce or _ce_client()
     try:
-        today = datetime.date.today() if hasattr(datetime.date, "today") else None
+        today = datetime.datetime.now(timezone.utc).date()
         # End is exclusive in Cost Explorer; request the last LOOKBACK_DAYS days, DAILY, grouped by SERVICE.
-        end = (today or datetime.date(2026, 1, 1)) + datetime.timedelta(days=1)
+        end = today + datetime.timedelta(days=1)
         start = end - datetime.timedelta(days=LOOKBACK_DAYS + 1)
         resp = ce.get_cost_and_usage(
             TimePeriod={"Start": start.isoformat(), "End": end.isoformat()},
@@ -42,11 +43,11 @@ def collect_cost_anomalies(ce=None):
         )
     except Exception as e:  # noqa: BLE001 — read failure must never sink the insight run
         logging.warning("[insight.cost] get_cost_and_usage failed: %s", e)
-        return {"source": "cost", "items": [], "notes": f"cost explorer error: {type(e).__name__}"}
+        return {"source": "cost", "items": [], "notes": f"cost explorer error: {type(e).__name__}", "ok": False}
 
     days = resp.get("ResultsByTime") or []
     if len(days) < 2:
-        return {"source": "cost", "items": [], "notes": "insufficient history for day-over-day"}
+        return {"source": "cost", "items": [], "notes": "insufficient history for day-over-day", "ok": True}
 
     prev = {g["Keys"][0]: _amount(g) for g in (days[-2].get("Groups") or [])}
     curr = {g["Keys"][0]: _amount(g) for g in (days[-1].get("Groups") or [])}
@@ -69,4 +70,4 @@ def collect_cost_anomalies(ce=None):
             "refs": {"service": svc},
         })
     items.sort(key=lambda i: 0 if i["severity"] == "critical" else 1)
-    return {"source": "cost", "items": items[:_MAX_ITEMS], "notes": ""}
+    return {"source": "cost", "items": items[:_MAX_ITEMS], "notes": "", "ok": True}

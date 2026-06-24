@@ -10,11 +10,15 @@ PII: the event `message` free-text is NEVER exported (it can carry tokens/paths)
 metadata — reason, involvedObject kind/name/namespace, cluster, count — is emitted. Never raises.
 """
 import base64
+import datetime
 import json
 import logging
 import os
 import ssl
+from datetime import timezone
 from urllib.request import Request, urlopen
+
+_WINDOW_S = 3600  # only surface Warning events seen within the last hour (avoid stale events)
 
 # Notable Warning reasons (cadvisor/kubelet/scheduler). OOM is critical; the rest warning.
 _CRITICAL_REASONS = {"OOMKilling", "OOMKilled"}
@@ -30,14 +34,29 @@ def _clusters():
     return [c.strip() for c in (os.environ.get("ONBOARD_EKS_CLUSTERS") or "").split(",") if c.strip()]
 
 
-def _parse_events(cluster, events):
-    """Aggregate notable Warning events into non-PII items, keyed by (reason, kind, namespace)."""
+def _is_recent(e, now=None):
+    """True if the event's last-seen time is within _WINDOW_S (or no timestamp → keep, conservative)."""
+    ts = e.get("lastTimestamp") or e.get("eventTime") or (e.get("series") or {}).get("lastObservedTime")
+    if not ts:
+        return True
+    try:
+        dt = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        now = now or datetime.datetime.now(timezone.utc)
+        return (now - dt).total_seconds() <= _WINDOW_S
+    except (ValueError, TypeError):
+        return True
+
+
+def _parse_events(cluster, events, now=None):
+    """Aggregate notable, RECENT Warning events into non-PII items, keyed by (reason, kind, namespace)."""
     agg = {}
     for e in events or []:
         if not isinstance(e, dict) or e.get("type") != "Warning":
             continue
         reason = e.get("reason")
         if reason not in _NOTABLE_REASONS:
+            continue
+        if not _is_recent(e, now):
             continue
         obj = e.get("involvedObject") or {}
         kind, name, ns = obj.get("kind"), obj.get("name"), obj.get("namespace")
@@ -89,7 +108,8 @@ def collect_k8s_events(clusters=None, getter=None):
     """Return {source:'k8s', items:[...], notes}. Never raises; per-cluster errors skip gracefully."""
     clusters = clusters if clusters is not None else _clusters()
     if not clusters:
-        return {"source": "k8s", "items": [], "notes": "no onboarded clusters (ONBOARD_EKS_CLUSTERS empty)"}
+        # not an error — the feature simply has no clusters to read (k8s signal absent, not failed)
+        return {"source": "k8s", "items": [], "notes": "no onboarded clusters (ONBOARD_EKS_CLUSTERS empty)", "ok": True}
     getter = getter or _default_getter
     items, skipped = [], []
     for c in clusters:
@@ -100,4 +120,7 @@ def collect_k8s_events(clusters=None, getter=None):
             skipped.append(c)
     items.sort(key=lambda i: 0 if i["severity"] == "critical" else 1)
     notes = (f"skipped clusters: {', '.join(skipped)}" if skipped else "")
-    return {"source": "k8s", "items": items[:_MAX_TOTAL], "notes": notes}
+    # ok=False only when EVERY configured cluster failed to read (total k8s blackout) → counts as a
+    # collector failure for the job's degraded/failed status (M2); a partial skip is still ok.
+    ok = len(skipped) < len(clusters)
+    return {"source": "k8s", "items": items[:_MAX_TOTAL], "notes": notes, "ok": ok}

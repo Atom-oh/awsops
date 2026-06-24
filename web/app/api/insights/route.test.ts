@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const verifyUser = vi.fn();
 const isAdmin = vi.fn();
@@ -15,19 +15,31 @@ import { GET } from './route';
 import { POST } from './refresh/route';
 
 function req() { return new Request('http://x/api/insights', { headers: { cookie: 'c' } }); }
-beforeEach(() => { verifyUser.mockReset(); isAdmin.mockReset(); getLatestInsight.mockReset(); enqueueInsightRefresh.mockReset(); });
+beforeEach(() => { delete process.env.AI_INSIGHTS_ENABLED; verifyUser.mockReset(); isAdmin.mockReset(); getLatestInsight.mockReset(); enqueueInsightRefresh.mockReset(); });
+afterEach(() => { delete process.env.AI_INSIGHTS_ENABLED; });
 
 describe('GET /api/insights', () => {
   it('401 unauthenticated', async () => {
     verifyUser.mockResolvedValue(null);
     expect((await GET(req())).status).toBe(401);
   });
-  it('returns latest insight', async () => {
+  it('flag OFF → enabled:false, no DB query (no-op)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    const res = await GET(req());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.enabled).toBe(false);
+    expect(getLatestInsight).not.toHaveBeenCalled();
+  });
+  it('flag ON → returns latest insight', async () => {
+    process.env.AI_INSIGHTS_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     getLatestInsight.mockResolvedValue({ status: 'succeeded', insights: [] });
     const res = await GET(req());
     expect(res.status).toBe(200);
-    expect((await res.json()).insight.status).toBe('succeeded');
+    const body = await res.json();
+    expect(body.enabled).toBe(true);
+    expect(body.insight.status).toBe('succeeded');
   });
 });
 

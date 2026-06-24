@@ -47,5 +47,5 @@ def collect_cw_anomalies(cw_client=None):
                 break
     except Exception as e:  # noqa: BLE001
         logging.warning("[insight.cw] describe_alarms failed: %s", e)
-        return {"source": "cloudwatch", "items": [], "notes": f"cloudwatch error: {type(e).__name__}"}
-    return {"source": "cloudwatch", "items": items[:_MAX_ITEMS], "notes": ""}
+        return {"source": "cloudwatch", "items": [], "notes": f"cloudwatch error: {type(e).__name__}", "ok": False}
+    return {"source": "cloudwatch", "items": items[:_MAX_ITEMS], "notes": "", "ok": True}

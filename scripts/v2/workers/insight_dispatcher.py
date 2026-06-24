@@ -30,13 +30,15 @@ def lambda_handler(_event, _ctx):
                 MessageBody=json.dumps({"job_id": job_id, "type": "insight",
                                         "payload": payload, "dry_run": False}),
             )
-        except Exception as exc:  # noqa: BLE001 — drop the orphan 'queued' row, don't leave it for the reaper
+        except Exception as exc:  # noqa: BLE001 — drop the orphan 'queued' row, then RE-RAISE
             print(f"insight_dispatcher: enqueue failed: {exc}")
             try:
                 conn.run("DELETE FROM worker_jobs WHERE job_id=:id AND status='queued'", id=job_id)
             except Exception:  # noqa: BLE001
                 pass
-            return {"enqueued": 0}
+            # M4: re-raise so EventBridge/Lambda retries the schedule — otherwise the 6h refresh is
+            # silently lost (a swallowed return would look like a successful no-op invocation).
+            raise
         print("insight_dispatcher: enqueued 1")
         return {"enqueued": 1}
     finally:

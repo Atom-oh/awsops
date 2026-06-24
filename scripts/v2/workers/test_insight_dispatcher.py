@@ -54,8 +54,10 @@ def test_missing_queue_url_fails_loud(monkeypatch):
         pass
 
 
-def test_sqs_failure_cleans_orphan_row(monkeypatch):
+def test_sqs_failure_cleans_orphan_row_and_reraises(monkeypatch):
     conn, inserted = _wire(monkeypatch, fail=True)
-    out = idi.lambda_handler({}, None)
-    assert out == {"enqueued": 0}
+    # M4: cleanup the orphan 'queued' row, then RE-RAISE so EventBridge retries (no silent loss)
+    import pytest
+    with pytest.raises(Exception):
+        idi.lambda_handler({}, None)
     assert any("DELETE FROM worker_jobs" in s for s in conn.sql_log)  # orphan ledger row cleaned

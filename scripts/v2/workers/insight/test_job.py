@@ -47,17 +47,37 @@ class TestHappy:
 
 
 class TestDegraded:
-    def test_partial_collector_failure_still_proceeds(self, monkeypatch):
+    def test_partial_collector_raise_downgrades_to_partial(self, monkeypatch):
         def boom():
             raise RuntimeError("k8s down")
         _stub(monkeypatch, k8s=boom,
-              cost=lambda ce=None: {"source": "cost", "items": [{"severity": "warning", "title": "EC2"}], "notes": ""},
+              cost=lambda ce=None: {"source": "cost", "items": [{"severity": "warning", "title": "EC2"}], "notes": "", "ok": True},
               synth=lambda signals, **kw: {"status": "succeeded", "model": "bedrock", "insights": [{"severity": "warning", "title": "x"}]})
         c = FakeConn()
         out = job.run({}, c)
-        assert out["status"] == "succeeded" and len(c.inserts) == 1   # one collector failed, run continued
+        # M2: one collector failed → must NOT report 'succeeded'; downgraded to 'partial'
+        assert out["status"] == "partial" and c.inserts[0]["st"] == "partial"
 
-    def test_all_collectors_fail_marks_failed(self, monkeypatch):
+    def test_collector_ok_false_counts_as_failure(self, monkeypatch):
+        # M2: a never-raising collector that reported ok=False (graceful skip) is a real failure
+        _stub(monkeypatch,
+              cost=lambda ce=None: {"source": "cost", "items": [], "notes": "cost explorer error: X", "ok": False},
+              synth=lambda signals, **kw: {"status": "succeeded", "model": "bedrock", "insights": []})
+        c = FakeConn()
+        out = job.run({}, c)
+        assert out["status"] == "partial"   # not a false 'succeeded' all-clear
+
+    def test_all_collectors_ok_false_marks_failed(self, monkeypatch):
+        # M2: total blackout via graceful-skip (no exceptions) → 'failed', not 'succeeded'
+        _stub(monkeypatch,
+              k8s=lambda: {"source": "k8s", "items": [], "notes": "skipped", "ok": False},
+              cw=lambda cw_client=None: {"source": "cloudwatch", "items": [], "notes": "err", "ok": False},
+              cost=lambda ce=None: {"source": "cost", "items": [], "notes": "err", "ok": False})
+        c = FakeConn()
+        out = job.run({}, c)
+        assert out["status"] == "failed" and c.inserts[0]["st"] == "failed"
+
+    def test_all_collectors_raise_marks_failed(self, monkeypatch):
         def boom(*a, **k):
             raise RuntimeError("egress down")
         _stub(monkeypatch, k8s=boom, cw=boom, cost=boom)
@@ -65,10 +85,13 @@ class TestDegraded:
         out = job.run({}, c)
         assert out["status"] == "failed" and c.inserts[0]["st"] == "failed"
 
-    def test_never_raises_on_store_error(self, monkeypatch):
+    def test_store_error_raises_so_backbone_marks_failed(self, monkeypatch):
+        # M1: a store/synthesize failure must PROPAGATE (worker_lambda then finishes the job 'failed'),
+        # never be swallowed into a no-op return while the ledger says 'succeeded'.
         _stub(monkeypatch, synth=lambda signals, **kw: {"status": "succeeded", "model": None, "insights": []})
         class BadConn:
             def run(self, sql, **p):
                 raise RuntimeError("db down")
-        out = job.run({}, BadConn())
-        assert "error" in out or out.get("status")   # surfaced, not raised
+        import pytest
+        with pytest.raises(Exception):
+            job.run({}, BadConn())
