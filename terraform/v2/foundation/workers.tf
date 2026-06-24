@@ -97,6 +97,16 @@ data "archive_file" "workers_src" {
     content  = file("${local.workers_src}/ai_cost/aggregate.py")
     filename = "aggregate.py"
   }
+  # datasource_index handler (REGISTRY 'datasource_index', lambda runtime) + its catalog. Flattened —
+  # datasource_index.py falls back to `import signal_catalog` when the diagnosis package isn't bundled.
+  source {
+    content  = file("${local.workers_src}/datasource_index.py")
+    filename = "datasource_index.py"
+  }
+  source {
+    content  = file("${local.workers_src}/diagnosis/signal_catalog.py")
+    filename = "signal_catalog.py"
+  }
 }
 
 # pg8000 (pure-Python; works on any arch incl. arm64 Lambda). Rebuilt only when requirements change.
@@ -1049,4 +1059,96 @@ resource "aws_lambda_permission" "schedule_dispatcher_events" {
   function_name = aws_lambda_function.schedule_dispatcher[0].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.schedule_dispatcher[0].arn
+}
+
+############################################################
+# datasource_index dispatcher — daily EventBridge -> Lambda that enqueues a `datasource_index` job per
+# enabled Prometheus/Mimir instance (rebuilds pre-built diagnostic signals on schema change). Reuses the
+# shared worker role + pg8000 layer + VPC; adds ONLY sqs:SendMessage. Gated on local.dsd (workers_enabled
+# && datasource_diagnosis_enabled) — same gate as the diagnosis egress. Default off -> 0 resources, $0.
+############################################################
+resource "aws_cloudwatch_log_group" "dsindex_dispatcher" {
+  count             = local.dsd
+  name              = "/aws/lambda/${var.project}-datasource-index-dispatcher"
+  retention_in_days = 14
+}
+
+data "archive_file" "dsindex_dispatcher_src" {
+  count       = local.dsd
+  type        = "zip"
+  output_path = "${path.module}/.build/dsindex_dispatcher.zip"
+  source {
+    content  = file("${local.workers_src}/db.py")
+    filename = "db.py"
+  }
+  source {
+    content  = file("${local.workers_src}/datasource_index_dispatcher.py")
+    filename = "datasource_index_dispatcher.py"
+  }
+}
+
+resource "aws_iam_role_policy" "dsindex_dispatcher_sqs" {
+  count = local.dsd
+  name  = "dsindex-dispatcher-enqueue"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "EnqueueDatasourceIndexJob"
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = aws_sqs_queue.jobs[0].arn
+    }]
+  })
+}
+
+resource "aws_lambda_function" "dsindex_dispatcher" {
+  count            = local.dsd
+  function_name    = "${var.project}-datasource-index-dispatcher"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "datasource_index_dispatcher.lambda_handler"
+  filename         = data.archive_file.dsindex_dispatcher_src[0].output_path
+  source_code_hash = data.archive_file.dsindex_dispatcher_src[0].output_base64sha256
+  timeout          = 120
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AWS_ACCOUNT_ID    = local.acct
+      JOBS_QUEUE_URL    = aws_sqs_queue.jobs[0].url
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.dsindex_dispatcher, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+resource "aws_cloudwatch_event_rule" "dsindex_dispatcher" {
+  count               = local.dsd
+  name                = "${var.project}-datasource-index-dispatcher"
+  description         = "Daily: enqueue a datasource_index job per enabled Prometheus/Mimir instance"
+  schedule_expression = "rate(24 hours)"
+}
+
+resource "aws_cloudwatch_event_target" "dsindex_dispatcher" {
+  count     = local.dsd
+  rule      = aws_cloudwatch_event_rule.dsindex_dispatcher[0].name
+  target_id = "datasource-index-dispatcher"
+  arn       = aws_lambda_function.dsindex_dispatcher[0].arn
+}
+
+resource "aws_lambda_permission" "dsindex_dispatcher_events" {
+  count         = local.dsd
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.dsindex_dispatcher[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.dsindex_dispatcher[0].arn
 }

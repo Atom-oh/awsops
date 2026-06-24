@@ -13,7 +13,10 @@ import json
 import logging
 import os
 
-from diagnosis import signal_catalog as _cat  # catalog lives beside the diagnosis connectors
+try:  # fargate/tests: package path; lambda worker zip flattens it to signal_catalog.py
+    from diagnosis import signal_catalog as _cat
+except ImportError:  # noqa: F401
+    import signal_catalog as _cat  # flattened in the worker_src lambda bundle
 
 _KINDS = ("prometheus", "mimir")
 
