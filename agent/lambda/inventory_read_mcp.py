@@ -8,7 +8,7 @@ reconnects "the topology data we built in Aurora" to AgentCore — the bridge th
 
 Tools (all read-only — SELECT only; no AWS mutation, no arbitrary SQL):
   - find_unused_resources : orphan TGs, empty CloudFront origins, dead/idle LBs, unattached EBS …
-  - query_inventory       : list/filter synced resources by type
+  - query_inventory       : list/filter synced resources by type, including ecs_service
   - get_topology          : topology_nodes/edges graph (nodes+edges, matches /api/graph contract)
   - inventory_summary     : counts by type + sync freshness
 

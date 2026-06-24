@@ -6,17 +6,18 @@ import {
 } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
-  it('has the 31 wave types (28 + apigatewayv2_route + alb_listener_rule + s3_public_access)', () => {
+  it('has the 32 wave types (31 + ecs_service)', () => {
     const keys = Object.keys(INVENTORY_TYPES);
     expect(keys).toContain('ec2'); expect(keys).toContain('s3'); expect(keys).toContain('iam_role');
     expect(keys).toContain('cloudfront'); expect(keys).toContain('cloudwatch_alarm'); expect(keys).toContain('msk');
     expect(keys).toContain('target_group'); expect(keys).toContain('route53'); expect(keys).toContain('ecs_task');
+    expect(keys).toContain('ecs_service');
     // L7 resolution + routing types
     expect(keys).toContain('apigatewayv2_api'); expect(keys).toContain('apigatewayv2_integration'); expect(keys).toContain('cloudfront_vpc_origin');
     expect(keys).toContain('apigatewayv2_route'); expect(keys).toContain('alb_listener_rule');
     // security findings source (denial-safe S3 public-access sync)
     expect(keys).toContain('s3_public_access');
-    expect(keys.length).toBe(31);
+    expect(keys.length).toBe(32);
   });
   it('every type has a label, group, and >=1 column', () => {
     for (const [k, v] of Object.entries(INVENTORY_TYPES)) {
@@ -92,11 +93,11 @@ describe('navTree (sidebar IA hierarchy)', () => {
     expect(tree.map((g) => g.slug)).toEqual(['compute', 'storage', 'network', 'security', 'monitoring']);
   });
 
-  it('places every inventory type exactly once (no drop, no dup) — 31 total', () => {
+  it('places every inventory type exactly once (no drop, no dup) — 32 total', () => {
     const placed = tree.flatMap((g) => invTypesOf(g.slug));
     expect(new Set(placed).size).toBe(placed.length); // no duplicates
     expect(new Set(placed)).toEqual(new Set(Object.keys(INVENTORY_TYPES)));
-    expect(placed.length).toBe(31);
+    expect(placed.length).toBe(32);
   });
 
   it('Compute injects EKS as a feature leaf first, then ec2/lambda/ecr, with an ECS subgroup', () => {
@@ -104,7 +105,7 @@ describe('navTree (sidebar IA hierarchy)', () => {
     expect(c.items[0]).toMatchObject({ kind: 'feature', href: '/eks', labelKey: 'nav.eks' });
     expect(c.items.filter((l) => l.kind === 'inventory').map((l) => l.type)).toEqual(['ec2', 'lambda', 'ecr']);
     const ecs = c.subgroups.find((s) => s.key === 'ecs')!;
-    expect(ecs.items.map((l) => l.type)).toEqual(['ecs_cluster', 'ecs_task']);
+    expect(ecs.items.map((l) => l.type)).toEqual(['ecs_cluster', 'ecs_service', 'ecs_task']);
   });
 
   it('Network nests Load Balancing + API Gateway and excludes them from direct items', () => {
@@ -204,6 +205,7 @@ describe('layout archetypes', () => {
     expect(layoutOf('s3_public_access')).toBe('risk');
     expect(layoutOf('cloudtrail')).toBe('risk');
     expect(layoutOf('ec2')).toBe('chart');
+    expect(layoutOf('ecs_service')).toBe('chart');
     expect(layoutOf('rds')).toBe('capacity');
     expect(layoutOf('vpc')).toBe('directory');
   });

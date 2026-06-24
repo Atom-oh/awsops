@@ -142,6 +142,21 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         self.assertEqual(seen["params"], [{"name": "rt", "value": {"stringValue": "alb"}}])
         self.assertNotIn("alb", seen["sql"])
 
+    def test_query_inventory_returns_ecs_service_rows(self):
+        seen = {}
+        def fake(sql, params=None):
+            seen["sql"], seen["params"] = sql, params
+            return [{"data": {"service_name": "api", "desired_count": 2, "running_count": 1}}]
+        inv._execute_override = fake
+        import json as _j
+        out = inv.lambda_handler({"tool_name": "query_inventory", "arguments": {"resource_type": "ecs_service"}}, None)
+        self.assertEqual(out["statusCode"], 200)
+        body = _j.loads(out["body"])
+        self.assertEqual(body["resource_type"], "ecs_service")
+        self.assertEqual(body["resources"][0]["service_name"], "api")
+        self.assertEqual(seen["params"], [{"name": "rt", "value": {"stringValue": "ecs_service"}}])
+        self.assertNotIn("ecs_service", seen["sql"])
+
     def test_query_inventory_requires_resource_type(self):
         out = inv.lambda_handler({"tool_name": "query_inventory", "arguments": {}}, None)
         self.assertEqual(out["statusCode"], 400)
@@ -270,6 +285,16 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
             "alb": [{"name": "x", "dns_name": None, "arn": "a"}],
         })
         self.assertTrue(all(c["loadBalancer"] is None for c in chains))
+
+
+class TestCatalogWiring(unittest.TestCase):
+    def test_inventory_read_catalog_advertises_ecs_service(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "v2", "agentcore"))
+        import catalog
+        t = catalog.TARGETS.get("inventory-read-target")
+        self.assertIsNotNone(t, "inventory-read-target missing from catalog.TARGETS")
+        tool = next(x for x in t["tools"] if x["name"] == "query_inventory")
+        self.assertIn("ecs_service", tool["description"])
 
 
 if __name__ == "__main__":
