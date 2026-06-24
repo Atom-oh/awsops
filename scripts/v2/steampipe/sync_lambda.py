@@ -121,6 +121,16 @@ QUERIES = {
         "cluster_name",
         "region",
     ),
+    "ecs_service": (
+        # v1 parity: ECS service inventory (desired/running/pending + launch type). Read-only
+        # aws_ecs_service describe/list data, materialized into Aurora like other inventory types.
+        "SELECT service_arn, service_name, cluster_arn, region, account_id, status, "
+        "desired_count, running_count, pending_count, launch_type, scheduling_strategy, "
+        "task_definition, created_at, tags "
+        "FROM aws_ecs_service ORDER BY service_name",
+        "service_arn",
+        "region",
+    ),
     "ecr": (
         "SELECT repository_name, region, account_id, arn, registry_id, repository_uri, "
         "image_tag_mutability, image_scanning_configuration, encryption_configuration, lifecycle_policy, "

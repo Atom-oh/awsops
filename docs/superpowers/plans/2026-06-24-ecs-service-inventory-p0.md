@@ -180,7 +180,7 @@ def test_ecs_service_query_registered_readonly():
 Run:
 
 ```bash
-python -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py
+python3 -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py
 ```
 
 Expected: fails with `KeyError: 'ecs_service'`.
@@ -207,7 +207,7 @@ In `scripts/v2/steampipe/sync_lambda.py`, add this `QUERIES` entry after `ecs_cl
 Run:
 
 ```bash
-python -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py
+python3 -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py
 ```
 
 Expected: pass.
@@ -265,7 +265,7 @@ class TestCatalogWiring(unittest.TestCase):
 Run:
 
 ```bash
-python -m pytest agent/lambda/test_inventory_read_mcp.py
+python3 -m pytest agent/lambda/test_inventory_read_mcp.py
 ```
 
 Expected: catalog test fails because the description does not advertise `ecs_service`.
@@ -292,7 +292,7 @@ In `scripts/v2/agentcore/catalog.py`, update the `query_inventory` description:
 Run:
 
 ```bash
-python -m pytest agent/lambda/test_inventory_read_mcp.py
+python3 -m pytest agent/lambda/test_inventory_read_mcp.py
 ```
 
 Expected: pass.
@@ -313,7 +313,7 @@ git commit -m "feat(agent): advertise ecs service inventory"
 
 ```bash
 cd web && npx vitest run lib/inventory-types.test.ts
-python -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py agent/lambda/test_inventory_read_mcp.py
+python3 -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py agent/lambda/test_inventory_read_mcp.py
 ```
 
 Expected: all pass.
