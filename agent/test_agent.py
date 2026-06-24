@@ -302,6 +302,18 @@ class TestDatasourceGuidance(unittest.TestCase):
     def test_observability_aliases_to_external_obs_gateway(self):
         self.assertEqual(agent._GATEWAY_ALIAS.get("observability"), "external-obs")
 
+    def test_resolve_gateway_key_handles_discovery_and_env_spellings(self):
+        # Discovery path: v2 gateway `awsops-v2-external-obs-gateway` → key `v2-external-obs`.
+        disc = {"network": "u", "ops": "u", "v2-external-obs": "u"}
+        self.assertEqual(agent._resolve_gateway_key("observability", disc), "v2-external-obs")
+        # Env fallback path: GATEWAYS_JSON uses the canonical `external-obs`.
+        env = {"network": "u", "ops": "u", "external-obs": "u"}
+        self.assertEqual(agent._resolve_gateway_key("observability", env), "external-obs")
+        # The 8 sections pass through unchanged (no alias, key present).
+        self.assertEqual(agent._resolve_gateway_key("network", disc), "network")
+        # Unknown / unprovisioned → DEFAULT_GATEWAY (never a hard crash).
+        self.assertEqual(agent._resolve_gateway_key("observability", {"ops": "u"}), agent.DEFAULT_GATEWAY)
+
 
 class TestAntiHallucinationFooter(unittest.TestCase):
     """The data agent once fabricated a non-existent 'Infra 에이전트'. The footer must give the real

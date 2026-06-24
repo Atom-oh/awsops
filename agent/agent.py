@@ -36,6 +36,22 @@ DEFAULT_GATEWAY = "ops"
 # gateway (external-obs becomes a routed section once it bears connector tools — Prometheus,
 # ClickHouse). Keeps the readable chat key while matching the deployed gateway short-name.
 _GATEWAY_ALIAS = {"observability": "external-obs"}
+
+
+def _resolve_gateway_key(role, gateways):
+    """Map a chat/section role to an actual key in the runtime GATEWAYS map.
+
+    BUGFIX: `_discover_gateways` derives keys via name.replace("awsops-","").replace("-gateway","").
+    v2 gateways are named `awsops-v2-<x>-gateway`, so discovery yields `v2-<x>` (e.g.
+    `v2-external-obs`), while the GATEWAYS_JSON env fallback uses the canonical `<x>`
+    (`external-obs`). The `observability`→`external-obs` alias only matched the env path; on the
+    (primary) discovery path `external-obs` was absent → silent fallback to `ops`. Resolve against
+    BOTH spellings so observability lands on its real gateway regardless of discovery-vs-env."""
+    key = _GATEWAY_ALIAS.get(role, role)
+    for candidate in (key, f"v2-{key}"):
+        if candidate in gateways:
+            return candidate
+    return DEFAULT_GATEWAY
 GATEWAY_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 SERVICE = "bedrock-agentcore"
 
@@ -740,7 +756,8 @@ async def handler(payload):
     system_prompt_override = payload.get("systemPromptOverride")  # ADR-031: resolver-supplied custom prompt
     extra_context = payload.get("extraContext")  # bounded BFF-supplied context (e.g. cached datasource schemas)
     tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
-    gateway_url = GATEWAYS.get(_GATEWAY_ALIAS.get(gateway_role, gateway_role), GATEWAYS[DEFAULT_GATEWAY])
+    gateway_key = _resolve_gateway_key(gateway_role, GATEWAYS)
+    gateway_url = GATEWAYS.get(gateway_key, GATEWAYS[DEFAULT_GATEWAY])
 
     # Extract cross-account info / 크로스 어카운트 정보 추출
     # effective_account_id() blanks the host account → same-account access uses the
