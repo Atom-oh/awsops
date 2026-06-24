@@ -10,6 +10,9 @@ import { parseCpuCores, parseMem, type NodeRow, type PodRow } from './eks-resour
 export type { NodeRow, PodRow } from './eks-resources';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
+// Per-request K8s API-server timeout (thin-BFF: bound how long a single in-cluster read
+// can occupy the web task when the API server is slow/unreachable).
+const K8S_REQUEST_TIMEOUT_MS = 4000;
 
 /**
  * Replicate `aws eks get-token`: presign an STS GetCallerIdentity GET with the
@@ -348,6 +351,10 @@ function k8sGet(endpoint: string, path: string, token: string, caPem: Buffer): P
       },
     );
     r.on('error', reject);
+    // Server-side bound: a slow/stuck K8s API must not occupy the web task indefinitely
+    // (thin-BFF). On timeout, destroy the socket → 'error' rejects this read; callers
+    // (e.g. /api/eks/fleet) degrade that cluster to empty rather than hanging the request.
+    r.setTimeout(K8S_REQUEST_TIMEOUT_MS, () => r.destroy(new Error('k8s request timeout')));
     r.end();
   });
 }

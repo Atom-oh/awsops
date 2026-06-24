@@ -1,6 +1,7 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { INVENTORY_TYPES } from '@/lib/inventory-types';
+import { PUBLIC_S3_WHERE } from '@/lib/security-findings';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,9 +13,11 @@ interface Splits {
   ebsUnencrypted: number;
   iamUserNoMfa: number;
   sgOpenIngress: number;
+  s3Public: number;
 }
 
-// Derived KPI sublines (C06): single round-trip UNION ALL over the synced JSONB.
+// Derived KPI sublines: one UNION-ALL round-trip over the synced JSONB (the EC2-type
+// donut adds a second small aggregation query below; both degrade independently).
 // SG ingress-open match is anchored to the cidr field key (description text can't
 // false-trigger) and covers IPv6 ::/0; both Steampipe key casings matched.
 const SPLITS_SQL = `
@@ -25,6 +28,7 @@ const SPLITS_SQL = `
   UNION ALL SELECT 'sg_open_ingress', count(*)::int FROM inventory_resources
     WHERE account_id='self' AND resource_type='security_group'
     AND (data->'ip_permissions')::text ~ '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"'
+  UNION ALL SELECT 's3_public', count(*)::int FROM inventory_resources WHERE account_id='self' AND resource_type='s3_public_access' AND ${PUBLIC_S3_WHERE}
 `;
 
 /** Aggregate inventory counts: per resource_type (desc) and rolled up per category group. */
@@ -63,6 +67,7 @@ export async function GET(request: Request) {
       ebsUnencrypted: 0,
       iamUserNoMfa: 0,
       sgOpenIngress: 0,
+      s3Public: 0,
     };
     const SPLIT_KEY: Record<string, keyof Splits> = {
       ec2_running: 'ec2Running',
@@ -70,6 +75,7 @@ export async function GET(request: Request) {
       ebs_unencrypted: 'ebsUnencrypted',
       iam_user_no_mfa: 'iamUserNoMfa',
       sg_open_ingress: 'sgOpenIngress',
+      s3_public: 's3Public',
     };
     try {
       const sr = await pool.query<{ k: string; n: number }>(SPLITS_SQL);
@@ -81,7 +87,20 @@ export async function GET(request: Request) {
       // splits omitted/zeros — byType already computed, don't fail the response.
     }
 
-    return Response.json({ byType, byCategory, total, splits });
+    // EC2 instance-type distribution for the landing donut (degrade to [] on failure).
+    let ec2Types: { name: string; count: number }[] = [];
+    try {
+      const er = await pool.query<{ t: string; n: number }>(
+        `SELECT COALESCE(NULLIF(data->>'instance_type',''),'unknown') AS t, count(*)::int AS n
+         FROM inventory_resources WHERE account_id='self' AND resource_type='ec2'
+         GROUP BY 1 ORDER BY n DESC LIMIT 10`,
+      );
+      ec2Types = er.rows.map((row) => ({ name: row.t, count: Number(row.n) }));
+    } catch {
+      // donut omitted — byType already computed, don't fail the response.
+    }
+
+    return Response.json({ byType, byCategory, total, splits, ec2Types });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
