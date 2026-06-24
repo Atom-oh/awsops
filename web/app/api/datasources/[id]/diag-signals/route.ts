@@ -17,6 +17,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
   try {
     return json(await getDiagSignals(id), 200);
   } catch (e) {
-    return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    console.error('[diag-signals] read failed:', e);  // detail to server logs only
+    return json({ error: 'failed to load diagnostic signals' }, 500);  // generic to client (no internal leak)
   }
 }

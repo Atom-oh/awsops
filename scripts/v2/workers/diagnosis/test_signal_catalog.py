@@ -57,7 +57,7 @@ class TestMissingMetrics:
         s = by["container_cpu_throttling"]
         assert s["status"] == "unavailable"
         assert "container_cpu_cfs_throttled_periods_total" in s["missing_metrics"]
-        assert s.get("query") in (None, {}, {"tool": "prometheus_query", "queries": []}) or s["status"] == "unavailable"
+        assert s.get("query") is None  # unavailable signals carry no runnable query
 
     def test_network_pps_needs_both_packets_and_drop(self):
         metrics = [m for m in ALL_METRICS if "drop_total" not in m]  # drop metric missing
