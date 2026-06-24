@@ -285,6 +285,17 @@ QUERIES = {
         "service_name",
         "region",
     ),
+    "ebs_snapshot": (
+        # g-02: account-owned EBS snapshots. The `owner_id = (caller account)` predicate is
+        # MANDATORY — it pushes OwnerIds=self down to DescribeSnapshots. Without it Steampipe
+        # returns every public AWS snapshot (hundreds of thousands → API throttle / OOM).
+        "SELECT snapshot_id, region, account_id, arn, volume_id, volume_size, state, progress, "
+        "encrypted, start_time, description, owner_id, tags "
+        "FROM aws_ebs_snapshot WHERE owner_id = (SELECT account_id FROM aws_caller_identity) "
+        "ORDER BY start_time DESC",
+        "snapshot_id",
+        "region",
+    ),
 }
 
 

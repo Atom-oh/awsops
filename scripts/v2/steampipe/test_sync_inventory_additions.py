@@ -13,3 +13,18 @@ def test_ecs_service_registered():
         assert col in sql, col
     assert id_col == "service_name"
     assert region_col == "region"
+
+
+def test_ebs_snapshot_registered_with_owner_pushdown():
+    assert "ebs_snapshot" in sync_lambda.QUERIES
+    assert "ebs_snapshot" in sync_lambda._ALLOWED
+    sql, id_col, region_col = sync_lambda.QUERIES["ebs_snapshot"]
+    assert "aws_ebs_snapshot" in sql
+    # owner-id pushdown guard: OwnerIds=self must be pushed to DescribeSnapshots, else
+    # Steampipe fetches every public AWS snapshot (hundreds of thousands → throttle/OOM).
+    assert "owner_id" in sql
+    assert "aws_caller_identity" in sql
+    for col in ("volume_id", "volume_size", "state", "encrypted", "start_time"):
+        assert col in sql, col
+    assert id_col == "snapshot_id"
+    assert region_col == "region"
