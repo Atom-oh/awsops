@@ -1,0 +1,94 @@
+"""Tests for the datasource_diag_signals helpers in db.py (pg8000 conn.run pattern).
+
+A FakeConn records (sql, params) and returns canned rows so the helpers are exercised without Aurora.
+"""
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db  # noqa: E402
+
+
+class FakeConn:
+    def __init__(self, returns=None):
+        self.calls = []
+        self._returns = returns or []
+    def run(self, sql, **params):
+        self.calls.append((sql, params))
+        return self._returns.pop(0) if self._returns else []
+
+
+READY = {"signal_key": "oom_kills", "title": "OOM Kill", "status": "ready",
+         "query": {"tool": "prometheus_query", "queries": [{"label": "x", "expr": "up"}]},
+         "missing_metrics": None, "meta": {"pillar": "reliability", "threshold": 0}}
+UNAVAIL = {"signal_key": "node_disk_usage", "title": "노드 디스크", "status": "unavailable",
+           "query": None, "missing_metrics": ["node_filesystem_avail_bytes"],
+           "meta": {"pillar": "reliability"}}
+
+
+class TestUpsert:
+    def test_upsert_binds_params_and_jsonb_casts(self):
+        c = FakeConn()
+        db.upsert_diag_signals(c, 42, [READY, UNAVAIL], "abc123")
+        assert len(c.calls) == 2
+        for sql, p in c.calls:
+            assert "INSERT INTO datasource_diag_signals" in sql
+            assert "::jsonb" in sql                       # query/missing_metrics/meta cast
+            assert p["iid"] == 42 and p["sv"] == "abc123"
+            assert p["sk"] in ("oom_kills", "node_disk_usage")
+            # user/structured fields are bound, never inlined
+            assert "oom_kills" not in sql and "node_disk_usage" not in sql
+        # jsonb payloads are json-encoded strings
+        ready_call = next(p for _, p in c.calls if p["sk"] == "oom_kills")
+        assert json.loads(ready_call["q"])["tool"] == "prometheus_query"
+
+    def test_upsert_empty_rows_is_noop(self):
+        c = FakeConn()
+        db.upsert_diag_signals(c, 1, [], "v")
+        assert c.calls == []
+
+
+class TestReadSchemaVersion:
+    def test_returns_value_when_rows_present(self):
+        c = FakeConn(returns=[[["abc123"]]])
+        assert db.read_signal_schema_version(c, 7) == "abc123"
+        sql, p = c.calls[0]
+        assert "schema_version" in sql and p["iid"] == 7
+
+    def test_returns_none_when_absent(self):
+        c = FakeConn(returns=[[]])
+        assert db.read_signal_schema_version(c, 7) is None
+
+
+class TestList:
+    def test_list_returns_parsed_rows(self):
+        c = FakeConn(returns=[[
+            ["oom_kills", "OOM Kill", "ready",
+             json.dumps({"tool": "prometheus_query", "queries": [{"label": "x", "expr": "up"}]}),
+             None, json.dumps({"pillar": "reliability", "threshold": 0})],
+            ["node_disk_usage", "노드 디스크", "unavailable",
+             None, json.dumps(["node_filesystem_avail_bytes"]), json.dumps({"pillar": "reliability"})],
+        ]])
+        rows = db.list_diag_signals(c, 9)
+        by = {r["signal_key"]: r for r in rows}
+        assert by["oom_kills"]["status"] == "ready"
+        assert by["oom_kills"]["query"]["tool"] == "prometheus_query"
+        assert by["node_disk_usage"]["missing_metrics"] == ["node_filesystem_avail_bytes"]
+        assert "WHERE account_id" in c.calls[0][0] and c.calls[0][1]["iid"] == 9
+
+
+class TestSweep:
+    def test_sweep_deletes_keys_not_kept_bound(self):
+        c = FakeConn()
+        db.sweep_diag_signals(c, 5, ["oom_kills", "cpu_saturation"])
+        sql, p = c.calls[0]
+        assert "DELETE FROM datasource_diag_signals" in sql
+        assert p["iid"] == 5 and p["keep"] == ["oom_kills", "cpu_saturation"]
+        assert "oom_kills" not in sql  # bound, not inlined
+
+    def test_sweep_empty_keep_deletes_all_for_instance(self):
+        c = FakeConn()
+        db.sweep_diag_signals(c, 5, [])
+        sql, p = c.calls[0]
+        assert "DELETE FROM datasource_diag_signals" in sql and p["iid"] == 5
