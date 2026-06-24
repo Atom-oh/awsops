@@ -117,3 +117,79 @@ def apply_cache_control(system_blocks, anthropic_tools):
         system_blocks[-1]["cache_control"] = {"type": "ephemeral"}
     if anthropic_tools:
         anthropic_tools[-1]["cache_control"] = {"type": "ephemeral"}
+
+
+def _assistant_content(final):
+    """Rebuild a serializable assistant turn (text + tool_use blocks) from a final message,
+    so it can be appended to ``messages`` before the tool_result turn. Handles dict/object blocks."""
+    out = []
+    for b in getattr(final, "content", None) or []:
+        t = _block_attr(b, "type")
+        if t == "text":
+            out.append({"type": "text", "text": _block_attr(b, "text", "") or ""})
+        elif t == "tool_use":
+            out.append({"type": "tool_use", "id": _block_attr(b, "id"),
+                        "name": _block_attr(b, "name"), "input": _block_attr(b, "input") or {}})
+    return out
+
+
+# Fail-soft deltas (mirrors agent.handler's wording for the post-stream case).
+_INTERRUPTED_DELTA = "\n\n_[연결이 중단되어 응답이 일부만 전달되었습니다.]_"
+_FAILED_DELTA = "_[에이전트 루프 오류로 응답을 생성하지 못했습니다.]_"
+
+
+async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks,
+                               anthropic_tools, messages, max_rounds, max_tokens):
+    """The agentic loop, with all external effects injected so it is unit-testable with fakes:
+
+      - ``aclient``: AsyncAnthropicBedrock-like; ``aclient.messages.stream(**kwargs)`` returns an
+        async context manager exposing ``.text_stream`` (async iterator of str) and
+        ``await .get_final_message()`` (→ object with ``.stop_reason`` and ``.content``).
+      - ``mcp_call(name, input)``: a SYNC callable that runs ONE tool and returns its result.
+        Called off the event loop via ``asyncio.to_thread`` so a blocking MCP call never stalls
+        streaming. A per-tool exception becomes an ``is_error`` tool_result (one bad tool does not
+        abort the turn).
+
+    Yields ``{"delta": str}``. On ``stop_reason == 'tool_use'`` it runs the tools, appends the
+    assistant turn + a ``tool_result`` user turn, and loops. The model is offered tools only while
+    ``rounds < max_rounds``; at the cap it makes one final TOOL-LESS synthesis turn and stops —
+    never an unbounded loop. Errors are fail-soft (D5): no re-run, no exception escapes.
+    """
+    started = False
+    try:
+        msgs = list(messages)
+        rounds = 0
+        while True:
+            offer_tools = bool(anthropic_tools) and rounds < max_rounds
+            kwargs = {"model": model, "max_tokens": max_tokens,
+                      "system": system_blocks, "messages": msgs}
+            if offer_tools:
+                kwargs["tools"] = anthropic_tools
+            async with aclient.messages.stream(**kwargs) as stream:
+                async for text in stream.text_stream:
+                    if text:
+                        started = True
+                        yield {"delta": text}
+                final = await stream.get_final_message()
+
+            if not offer_tools or _block_attr(final, "stop_reason") != "tool_use":
+                return  # normal completion (or the capped final synthesis turn)
+
+            tool_uses = extract_tool_uses(getattr(final, "content", None) or [])
+            if not tool_uses:
+                return
+            msgs.append({"role": "assistant", "content": _assistant_content(final)})
+            results = []
+            for tu in tool_uses:
+                try:
+                    res = await asyncio.to_thread(mcp_call, tu["name"], tu["input"])
+                    results.append(tool_result_block(tu["id"], res))
+                except Exception as e:  # one tool failing must not abort the turn
+                    logger.warning("tool %s failed: %s", tu.get("name"), e)
+                    results.append(tool_result_block(tu["id"], f"tool error: {e}", is_error=True))
+            msgs.append({"role": "user", "content": results})
+            rounds += 1
+    except Exception as e:
+        logger.error("anthropic loop error (started=%s): %s", started, e, exc_info=True)
+        yield {"delta": _INTERRUPTED_DELTA if started else _FAILED_DELTA}
+        return

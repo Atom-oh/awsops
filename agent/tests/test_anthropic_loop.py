@@ -158,5 +158,148 @@ class ApplyCacheControlTest(unittest.TestCase):
         al.apply_cache_control([], [])  # must not raise
 
 
+# ── Fakes for the injected agentic loop (Task 2) ─────────────────────────────
+class _FakeStreamCtx:
+    def __init__(self, chunks, final):
+        self._chunks, self._final = chunks, final
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    @property
+    def text_stream(self):
+        async def _gen():
+            for c in self._chunks:
+                yield c
+        return _gen()
+
+    async def get_final_message(self):
+        return self._final
+
+
+class _FakeMessages:
+    def __init__(self, script, raise_on=None):
+        self._script = list(script)
+        self.calls = []
+        self._raise_on = raise_on
+
+    def stream(self, **kwargs):
+        idx = len(self.calls)
+        self.calls.append(kwargs)
+        if self._raise_on is not None and idx == self._raise_on:
+            raise RuntimeError("boom-stream")
+        chunks, final = self._script[idx]  # IndexError past the script ⇒ simulated later failure
+        return _FakeStreamCtx(chunks, final)
+
+
+class _FakeClient:
+    def __init__(self, script, raise_on=None):
+        self.messages = _FakeMessages(script, raise_on)
+
+
+class _Recorder:
+    def __init__(self, result="ok"):
+        self.calls = []
+        self.result = result
+
+    def __call__(self, name, inp):
+        self.calls.append((name, inp))
+        return self.result
+
+
+def _final(stop_reason, content):
+    return types.SimpleNamespace(stop_reason=stop_reason, content=content)
+
+
+def _tooluse(id, name, inp):
+    return {"type": "tool_use", "id": id, "name": name, "input": inp}
+
+
+def _text(t):
+    return {"type": "text", "text": t}
+
+
+def _drive(client, mcp_call, *, tools, max_rounds=8, max_tokens=al.MAX_OUTPUT_TOKENS,
+           system=None, messages=None):
+    return run(al.drive_anthropic_loop(
+        aclient=client, mcp_call=mcp_call, model=al.MODEL_ID,
+        system_blocks=system if system is not None else [_text("sys")],
+        anthropic_tools=tools,
+        messages=messages if messages is not None else [{"role": "user", "content": [_text("q")]}],
+        max_rounds=max_rounds, max_tokens=max_tokens))
+
+
+class DriveAnthropicLoopTest(unittest.TestCase):
+    def test_happy_path_streams_runs_tool_and_feeds_result(self):
+        client = _FakeClient([
+            (["Let me check. "], _final("tool_use", [_tooluse("tu1", "list_vpcs", {"region": "x"})])),
+            (["3 VPCs."], _final("end_turn", [_text("3 VPCs.")])),
+        ])
+        rec = _Recorder("vpc-a,vpc-b,vpc-c")
+        deltas = _drive(client, rec, tools=[{"name": "list_vpcs", "input_schema": {}}])
+        self.assertEqual(deltas, [{"delta": "Let me check. "}, {"delta": "3 VPCs."}])
+        # tool ran exactly once with the model-supplied input
+        self.assertEqual(rec.calls, [("list_vpcs", {"region": "x"})])
+        # max_tokens passed on the first call
+        self.assertEqual(client.messages.calls[0]["max_tokens"], al.MAX_OUTPUT_TOKENS)
+        self.assertIn("tools", client.messages.calls[0])
+        # the tool_result was fed back on the 2nd model turn
+        second_msgs = client.messages.calls[1]["messages"]
+        results = [blk for m in second_msgs if m["role"] == "user"
+                   for blk in m["content"] if isinstance(blk, dict) and blk.get("type") == "tool_result"]
+        self.assertTrue(any(r["tool_use_id"] == "tu1" for r in results))
+
+    def test_max_rounds_cap_forces_final_toolless_turn(self):
+        # every turn asks for a tool; cap=2 ⇒ 3 stream calls (2 tool rounds + 1 tool-less synthesis)
+        always_tool = ([], _final("tool_use", [_tooluse("t", "list_vpcs", {})]))
+        client = _FakeClient([always_tool, always_tool, (["final answer"], _final("end_turn", [_text("final answer")]))])
+        rec = _Recorder()
+        deltas = _drive(client, rec, tools=[{"name": "list_vpcs"}], max_rounds=2)
+        self.assertEqual(len(rec.calls), 2)                 # exactly max_rounds tool calls
+        self.assertEqual(len(client.messages.calls), 3)     # bounded — no infinite loop
+        self.assertNotIn("tools", client.messages.calls[2])  # final synthesis turn offers no tools
+        self.assertIn({"delta": "final answer"}, deltas)
+
+    def test_output_contract_is_delta_str(self):
+        client = _FakeClient([(["hello ", "world"], _final("end_turn", [_text("hello world")]))])
+        deltas = _drive(client, _Recorder(), tools=[])
+        for d in deltas:
+            self.assertEqual(list(d.keys()), ["delta"])
+            self.assertIsInstance(d["delta"], str)
+
+    def test_no_tools_single_turn(self):
+        client = _FakeClient([(["just text"], _final("end_turn", [_text("just text")]))])
+        deltas = _drive(client, _Recorder(), tools=[])
+        self.assertEqual(deltas, [{"delta": "just text"}])
+        self.assertEqual(len(client.messages.calls), 1)
+
+    def test_failsoft_before_first_delta(self):
+        client = _FakeClient([(["unused"], _final("end_turn", [_text("x")]))], raise_on=0)
+        deltas = _drive(client, _Recorder(), tools=[])
+        self.assertEqual(deltas, [{"delta": al._FAILED_DELTA}])
+
+    def test_failsoft_after_first_delta(self):
+        # one tool round streams "partial ", then the 2nd model turn errors (script exhausted)
+        client = _FakeClient([(["partial "], _final("tool_use", [_tooluse("t", "list_vpcs", {})]))])
+        deltas = _drive(client, _Recorder(), tools=[{"name": "list_vpcs"}])
+        self.assertEqual(deltas, [{"delta": "partial "}, {"delta": al._INTERRUPTED_DELTA}])
+
+    def test_tool_error_becomes_is_error_result_not_fatal(self):
+        def boom(name, inp):
+            raise ValueError("tool exploded")
+        client = _FakeClient([
+            (["trying "], _final("tool_use", [_tooluse("tu1", "list_vpcs", {})])),
+            (["recovered"], _final("end_turn", [_text("recovered")])),
+        ])
+        deltas = _drive(client, boom, tools=[{"name": "list_vpcs"}])
+        self.assertEqual(deltas, [{"delta": "trying "}, {"delta": "recovered"}])  # not fatal
+        results = [blk for m in client.messages.calls[1]["messages"] if m["role"] == "user"
+                   for blk in m["content"] if isinstance(blk, dict) and blk.get("type") == "tool_result"]
+        self.assertTrue(any(r.get("is_error") for r in results))
+
+
 if __name__ == "__main__":
     unittest.main()
