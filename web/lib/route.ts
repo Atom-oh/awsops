@@ -8,12 +8,17 @@ const RULES: { key: string; re: RegExp }[] = [
   { key: 'container', re: /파드|컨테이너|eks|ecs|kubernetes|k8s|pod|istio|namespace|sidecar/i },
   { key: 'data', re: /쿼리|데이터베이스|rds|aurora|dynamo|elasticache|redis|msk|kafka|database|slow query|throttl/i },
   { key: 'cost', re: /\$\d/i },
-  { key: 'monitoring', re: /알람|지표|로그변경|cloudwatch|cloudtrail|alarm|metric|who changed|audit/i },
+  // monitoring owns CloudWatch/CloudTrail AND the still-here datasource connectors (Loki logs,
+  // Tempo traces, Mimir long-term metrics, OpenSearch) — route those keywords here, where the tools are.
+  { key: 'monitoring', re: /알람|지표|로그변경|cloudwatch|cloudtrail|alarm|metric|who changed|audit|loki|tempo|mimir|opensearch|trace|트레이스|grafana/i },
   { key: 'iac', re: /드리프트|스택|terraform|cloudformation|\bcdk\b|drift|stack|iac/i },
   // ops = inventory_read MCP home: topology, unused/orphan resources, and the load-balancer /
   // target-group / CloudFront *listing* tools live here (network only does connectivity).
   { key: 'ops', re: /미사용|안 ?쓰는|놀고 ?있는|orphan|고아|unused|인벤토리|inventory|리소스 ?(현황|목록|정리)|정리하|leftover|미연결|unattached|미할당|토폴로지|topology|origin|\btg\b|로드 ?밸런서|load ?balancer|\belb\b|\balb\b|\bnlb\b|타겟 ?그룹|대상 ?그룹|target ?group|cloudfront|클라우드프론트|리스너|listener/i },
-  { key: 'observability', re: /레이턴시|트레이스|p99|에러율|error ?rate|latency|trace|promql|prometheus|clickhouse|클릭하우스|메트릭|metric|loki|tempo|mimir|grafana/i },
+  // observability = the connectors actually moved here: Prometheus (PromQL) + ClickHouse (SQL/otel).
+  // Match only EXPLICIT datasource identifiers; ambiguous generic terms (metric/latency/p99) are left to
+  // the LLM classifier so they don't steal CloudWatch's 'metric'. Loki/Tempo/Mimir stay on monitoring.
+  { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스/i },
 ];
 
 /** Choose the agent gateway. A valid pin always wins; otherwise keyword-match; else 'ops'. */

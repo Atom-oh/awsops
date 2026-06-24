@@ -155,14 +155,26 @@ def prune_moved_targets(ctrl, gw_ids):
     so the new target exists before the old one is removed. Targets whose name is NOT in the catalog
     are manual/experimental — never auto-deleted, only logged."""
     desired = {tname: spec["gateway"] for tname, spec in catalog.TARGETS.items()}
+    # Snapshot every provisioned gateway's targets once.
+    by_gw = {gw_key: _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id)
+             for gw_key, gw_id in gw_ids.items()}
+    # SAFETY (review #86 M1): a name is safe to prune off an OLD gateway ONLY if it is confirmed
+    # live on its DESIRED home gateway. If the new home target wasn't created — flag-OFF (lambda
+    # SKIPped) or a create that ERRed (e.g. GW-not-READY ValidationException) — we must NOT delete
+    # the last copy, or the tool vanishes from every gateway. Preserve the old copy until the move
+    # actually lands (next idempotent run completes it).
+    safe = {name for name, home in desired.items()
+            if any(t.get("name") == name for t in by_gw.get(home, []))}
     for gw_key, gw_id in gw_ids.items():
-        for t in _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id):
+        for t in by_gw[gw_key]:
             name = t.get("name")
             home = desired.get(name)
             if home is None:
                 log(f"prune:{name}", "KEEP", f"not in catalog (manual?) on {gw_key}")
-                continue
-            if home != gw_key:
+            elif home != gw_key:
+                if name not in safe:
+                    log(f"prune:{name}", "KEEP", f"home {home} has no live target yet — keeping {gw_key} copy")
+                    continue
                 try:
                     ctrl.delete_gateway_target(gatewayIdentifier=gw_id, targetId=t["targetId"])
                     log(f"prune:{name}", "DELETED", f"orphan on {gw_key} (moved → {home})")

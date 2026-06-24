@@ -95,6 +95,27 @@ class TestPruneMovedTargets(unittest.TestCase):
         self.assertIn(("prune:hand-rolled-target", "KEEP"),
                       {(r[0], r[1]) for r in provision.report})
 
+    def test_preserves_old_copy_when_new_home_target_is_missing(self):
+        # M1 (review #86): flag-OFF / create-failed → external-obs has NO prometheus target.
+        # Prune MUST NOT delete the stale monitoring copy (else the tool vanishes everywhere).
+        per_gw = {
+            "gw-mon": [{"name": "prometheus-mcp-target", "targetId": "t-mon-prom"}],
+            "gw-obs": [],  # new home was SKIPped (integrations_enabled=false) — no target landed
+        }
+        gw_ids = {"monitoring": "gw-mon", "external-obs": "gw-obs"}
+        ctrl = mock.Mock()
+
+        def fake_list_all(_fn, gatewayIdentifier=None, **_kw):
+            return per_gw.get(gatewayIdentifier, [])
+
+        with mock.patch.object(provision.catalog, "TARGETS", _MOVED_CATALOG), \
+             mock.patch.object(provision, "_list_all", side_effect=fake_list_all):
+            provision.prune_moved_targets(ctrl, gw_ids)
+
+        ctrl.delete_gateway_target.assert_not_called()  # last copy preserved
+        self.assertIn(("prune:prometheus-mcp-target", "KEEP"),
+                      {(r[0], r[1]) for r in provision.report})
+
 
 if __name__ == "__main__":
     unittest.main()

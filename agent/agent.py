@@ -275,9 +275,9 @@ SKILL_BASE = {
 ## Rules:
 - GENERATE the query in the correct language yourself from the user's natural-language ask — never ask the user to write PromQL/SQL.
 - If a "## Datasource schemas (cached)" block is provided below, USE it (real metric/label/table/column names) to write accurate queries — do NOT guess names.
-- ALWAYS call a connector tool for real data; never answer metric/analytics questions from memory.
+- If a Prometheus/ClickHouse connector tool is present, ALWAYS call it for real data (never answer from memory). If NO connector tool is available (none configured for this account), say so honestly — do NOT fabricate metrics or rows.
 - p99 / latency / error-rate / throughput → Prometheus PromQL (`histogram_quantile`, `rate`, `sum by`). Otel traces·logs·events stored in ClickHouse → SQL.
-- Loki (logs) / Tempo (traces) / Mimir are NOT connected yet — say so if asked rather than guessing.
+- Logs (Loki), distributed traces (Tempo) and long-term metrics (Mimir) live on the **Monitoring** section, not here — defer those there.
 - For cross-source correlation, query each connected source and synthesize.""",
 
 
