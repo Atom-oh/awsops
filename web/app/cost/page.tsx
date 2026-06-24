@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { X } from 'lucide-react';
-import { useResizablePanel, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
+import { useResizablePanel, usePublishDockedWidth, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -81,6 +81,8 @@ export default function CostPage() {
   const detailSeqRef = useRef(0);
   // 차트가 들어가는 패널 — 기본 폭을 넉넉히(640), 좌측 엣지 드래그로 조절·영속.
   const { width: detailWidth, startResize: startDetailResize } = useResizablePanel('awsops_cost_detail_width', 640);
+  // Coordinate the drill-down panel with the global chat so they don't overlap.
+  usePublishDockedWidth(!!picked, detailWidth);
 
   const openDetail = useCallback(async (service: string) => {
     const seq = ++detailSeqRef.current;

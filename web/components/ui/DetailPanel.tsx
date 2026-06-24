@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { useResizablePanel, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
+import { useResizablePanel, usePublishDockedWidth, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import { X } from 'lucide-react';
 import Badge from './Badge';
 import StatePill from './StatePill';
@@ -133,14 +133,8 @@ export default function DetailPanel({
   // Right-docked panels are user-resizable by default (drag the left edge; persisted).
   const { width, startResize } = useResizablePanel('awsops_detail_width', 480);
 
-  // Publish the docked width to a root CSS var so the globally-mounted chat (ShellGate's
-  // ChatDrawer/FAB, also right-edge anchored) can offset left and not overlap this panel.
-  // 0 when closed → chat returns to its default right edge. lg-only consumers; harmless below.
-  useEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty('--detail-panel-w', data ? `${width}px` : '0px');
-    return () => { root.style.setProperty('--detail-panel-w', '0px'); };
-  }, [data, width]);
+  // Coordinate with the global chat so the two right-docked surfaces never overlap.
+  usePublishDockedWidth(!!data, width);
 
   if (!data) return null;
 
