@@ -18,12 +18,14 @@ def _cw_client():
 
 def _item(a, composite=False):
     dims = [d.get("Name") for d in (a.get("Dimensions") or []) if d.get("Name")]  # NAMES only (no values)
+    ns = a.get("Namespace") or ("composite" if composite else None)
+    # spec §5: alarm name·namespace·dimension NAMES only. StateReason is NOT exported — it embeds
+    # datapoint/threshold VALUES (e.g. "[85.0] > threshold (80.0)") which the value-redaction rule forbids.
     return {
         "severity": "warning",
         "title": f"CloudWatch 알람: {a.get('AlarmName', '?')}",
-        "detail": (a.get("StateReason") or "in ALARM")[:200],
-        "refs": {"alarm": a.get("AlarmName"), "namespace": a.get("Namespace") or ("composite" if composite else None),
-                 "dimensions": dims},
+        "detail": f"ALARM 상태{f' ({ns})' if ns else ''}",
+        "refs": {"alarm": a.get("AlarmName"), "namespace": ns, "dimensions": dims},
     }
 
 

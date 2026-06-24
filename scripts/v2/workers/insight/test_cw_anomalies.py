@@ -39,6 +39,13 @@ class TestAlarms:
         assert it["refs"]["namespace"] == "AWS/RDS"
         assert "DBInstanceIdentifier" in (it["refs"].get("dimensions") or [])
 
+    def test_state_reason_values_not_exported(self):
+        c = FakeCW([{"MetricAlarms": [_alarm("a", reason="Threshold Crossed: [85.0] > threshold (80.0)")],
+                     "CompositeAlarms": []}])
+        it = cw.collect_cw_anomalies(cw_client=c)["items"][0]
+        blob = str(it)
+        assert "85.0" not in blob and "80.0" not in blob   # datapoint/threshold values redacted (spec §5)
+
     def test_paginates_bounded(self):
         c = FakeCW([{"MetricAlarms": [_alarm("a1")], "CompositeAlarms": [], "NextToken": "t"},
                     {"MetricAlarms": [_alarm("a2")], "CompositeAlarms": []}])

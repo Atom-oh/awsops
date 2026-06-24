@@ -5,11 +5,14 @@ import insight_dispatcher as idi
 
 
 class FakeConn:
-    def __init__(self):
+    def __init__(self, recent=False):
         self.sql_log = []
         self.closed = False
+        self.recent = recent
     def run(self, sql, **_kw):
         self.sql_log.append(sql)
+        if "SELECT 1 FROM worker_jobs" in sql:
+            return [[1]] if self.recent else []
         return []
     def close(self):
         self.closed = True
@@ -25,8 +28,8 @@ class FakeSqs:
         self.sent.append(json.loads(MessageBody))
 
 
-def _wire(monkeypatch, fail=False):
-    conn = FakeConn()
+def _wire(monkeypatch, fail=False, recent=False):
+    conn = FakeConn(recent=recent)
     inserted = []
     monkeypatch.setattr(idi, "QUEUE_URL", "https://sqs.example/jobs")
     monkeypatch.setattr(idi.db, "connect", lambda: conn)
@@ -42,6 +45,13 @@ def test_enqueues_single_insight_job(monkeypatch):
     assert len(inserted) == 1 and inserted[0][0] == "insight"
     assert idi._sqs.sent and idi._sqs.sent[0]["type"] == "insight"
     assert conn.closed
+
+
+def test_dedup_skips_when_recent_insight_job_exists(monkeypatch):
+    conn, inserted = _wire(monkeypatch, recent=True)
+    out = idi.lambda_handler({}, None)
+    assert out == {"enqueued": 0, "deduped": True}
+    assert inserted == [] and idi._sqs.sent == []   # no duplicate Bedrock job
 
 
 def test_missing_queue_url_fails_loud(monkeypatch):

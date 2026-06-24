@@ -1,4 +1,4 @@
-"""EventBridge-scheduled (daily). Enqueues a single `insight` job so the AI-Insights panel is
+"""EventBridge-scheduled (every 6 hours). Enqueues a single `insight` job so the AI-Insights panel is
 periodically refreshed without an Explore/dashboard visit. Mirrors schedule_dispatcher /
 datasource_index_dispatcher: db.insert_job (ledger) + an SQS message identical to the BFF's enqueueJob
 → the existing dispatcher→SFN→Lambda path runs the `insight` handler (itself runtime-gated on
@@ -21,6 +21,14 @@ def lambda_handler(_event, _ctx):
         raise RuntimeError("JOBS_QUEUE_URL is required for insight_dispatcher")  # fail loud
     conn = db.connect()
     try:
+        # M2: EventBridge/Lambda is at-least-once — dedup against a recently enqueued/running insight job
+        # so a duplicate fire/retry doesn't trigger a second Bedrock run (mirrors the BFF refresh guard).
+        recent = conn.run(
+            "SELECT 1 FROM worker_jobs WHERE type='insight' AND status IN ('queued','running') "
+            "AND created_at > now() - interval '30 minutes' LIMIT 1")
+        if recent:
+            print("insight_dispatcher: recent insight job exists — skipping (dedup)")
+            return {"enqueued": 0, "deduped": True}
         job_id = str(uuid.uuid4())
         payload = {"scheduled": True}
         db.insert_job(conn, job_id, "insight", payload)

@@ -68,13 +68,17 @@ def _parse_events(cluster, events, now=None):
         if key not in agg:
             agg[key] = {
                 "severity": "critical" if reason in _CRITICAL_REASONS else "warning",
-                "title": f"K8s {reason}: {kind}/{name} ({ns})",
-                "detail": f"{cluster}: {reason} on {kind} in namespace {ns}",  # NO message free-text (PII)
-                "refs": {"cluster": cluster, "namespace": ns, "kind": kind, "name": name,
-                         "reason": reason, "count": 0},
+                # refs key on (reason, kind, namespace) — an aggregate over potentially many objects, so
+                # NO single `name` (would mislabel the group + leak `None` when absent). count carries scale.
+                "refs": {"cluster": cluster, "namespace": ns, "kind": kind, "reason": reason, "count": 0},
             }
         agg[key]["refs"]["count"] += cnt
-    items = list(agg.values())
+    items = []
+    for v in agg.values():
+        r = v["refs"]
+        v["title"] = f"K8s {r['reason']}: {r['kind']} in {r['namespace']} (×{r['count']})"
+        v["detail"] = f"{r['cluster']}: {r['reason']} on {r['kind']} in namespace {r['namespace']}"  # no message (PII)
+        items.append(v)
     items.sort(key=lambda i: (0 if i["severity"] == "critical" else 1, -i["refs"]["count"]))
     return items[:_MAX_PER_CLUSTER]
 

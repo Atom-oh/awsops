@@ -69,3 +69,13 @@ class TestDefensive:
 
     def test_thresholds_are_named_constants(self):
         assert ca.SPIKE_PCT == 50 and ca.SPIKE_ABS_USD == 10 and ca.LOOKBACK_DAYS == 7
+
+    def test_request_excludes_todays_partial_bucket(self):
+        # MAJOR fix: CE End is exclusive and must equal TODAY (UTC) so the last compared bucket is
+        # yesterday (complete), never today (partial/lagged → would suppress every spike).
+        import datetime
+        from datetime import timezone
+        ce = FakeCE([_day("2026-06-22", []), _day("2026-06-23", [])])
+        ca.collect_cost_anomalies(ce=ce)
+        end = ce.calls[0]["TimePeriod"]["End"]
+        assert end == datetime.datetime.now(timezone.utc).date().isoformat()

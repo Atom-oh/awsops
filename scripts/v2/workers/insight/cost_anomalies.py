@@ -33,8 +33,10 @@ def collect_cost_anomalies(ce=None):
     ce = ce or _ce_client()
     try:
         today = datetime.datetime.now(timezone.utc).date()
-        # End is exclusive in Cost Explorer; request the last LOOKBACK_DAYS days, DAILY, grouped by SERVICE.
-        end = today + datetime.timedelta(days=1)
+        # End is EXCLUSIVE in Cost Explorer. Use end=today so the last bucket is YESTERDAY (a completed
+        # day), not today (partial/lagged → would make delta negative and silently suppress every spike).
+        # days[-1]=yesterday, days[-2]=day-before — both complete → a real day-over-day comparison.
+        end = today
         start = end - datetime.timedelta(days=LOOKBACK_DAYS + 1)
         resp = ce.get_cost_and_usage(
             TimePeriod={"Start": start.isoformat(), "End": end.isoformat()},

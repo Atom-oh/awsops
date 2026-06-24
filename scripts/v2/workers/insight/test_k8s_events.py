@@ -38,8 +38,14 @@ class TestParse:
         items = k8e._parse_events("c1", [_ev("OOMKilling", "Pod", "api", "prod", msg="secret-token=abc")])
         blob = str(items)
         assert "secret-token" not in blob and "abc" not in blob   # message redacted entirely
+        # aggregate refs carry NO single object name (group over reason×kind×namespace)
         assert items[0]["refs"] == {"cluster": "c1", "namespace": "prod", "kind": "Pod",
-                                    "name": "api", "reason": "OOMKilling", "count": 1}
+                                    "reason": "OOMKilling", "count": 1}
+        assert "name" not in items[0]["refs"]
+
+    def test_aggregate_with_missing_name_does_not_leak_none(self):
+        items = k8e._parse_events("c", [_ev("Failed", "Pod", None, "prod"), _ev("Failed", "Pod", None, "prod")])
+        assert "None" not in items[0]["title"] and items[0]["refs"]["count"] == 2
 
     def test_oom_is_critical_others_warning(self):
         items = k8e._parse_events("c", [_ev("OOMKilling", "Pod", "a", "p"),

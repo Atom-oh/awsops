@@ -100,25 +100,6 @@ def insert_insight(conn, status, insights, sources_used, model=None, error=None)
     )
 
 
-def get_latest_insight(conn, account_id="self"):
-    """Most-recent insight row for the account (jsonb parsed), or None."""
-    rows = conn.run(
-        f"SELECT {','.join(_INSIGHT_COLS)} FROM ai_insights "
-        "WHERE account_id=:acct ORDER BY generated_at DESC LIMIT 1",
-        acct=account_id)
-    if not rows:
-        return None
-    d = dict(zip(_INSIGHT_COLS, rows[0]))
-    for k in ("insights", "sources_used"):
-        v = d.get(k)
-        if isinstance(v, str):
-            try:
-                d[k] = json.loads(v)
-            except (ValueError, TypeError):
-                pass
-    return d
-
-
 # ── datasource_diag_signals (pre-built Prometheus/Mimir diagnostic signals) ──────────────────────
 _DDS_COLS = ["signal_key", "title", "status", "query", "missing_metrics", "meta"]
 

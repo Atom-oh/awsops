@@ -1207,7 +1207,7 @@ resource "aws_iam_role_policy" "insight_reads" {
       {
         Sid      = "InsightReadOnly"
         Effect   = "Allow"
-        Action   = ["cloudwatch:DescribeAlarms", "cloudwatch:GetMetricData", "ce:GetCostAndUsage", "eks:DescribeCluster"]
+        Action   = ["cloudwatch:DescribeAlarms", "ce:GetCostAndUsage", "eks:DescribeCluster"]
         Resource = "*" # these read-only describe/get APIs do not support resource-level scoping
       },
       {
@@ -1270,7 +1270,7 @@ resource "aws_lambda_function" "insight_dispatcher" {
 resource "aws_cloudwatch_event_rule" "insight_dispatcher" {
   count               = local.aii
   name                = "${var.project}-insight-dispatcher"
-  description         = "Daily: enqueue an AI Insights generation job"
+  description         = "Every 6 hours: enqueue an AI Insights generation job"
   schedule_expression = "rate(6 hours)"
 }
 
