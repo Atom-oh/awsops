@@ -64,6 +64,22 @@ API_COUNT=$(find src/app/api -name 'route.ts' 2>/dev/null | wc -l)
 QUERY_COUNT=$(find src/lib/queries -name '*.ts' -not -name 'CLAUDE.md' 2>/dev/null | wc -l)
 [ "$QUERY_COUNT" -ge 20 ] && pass "Query files: $QUERY_COUNT (expected >= 20)" || fail "Query files: $QUERY_COUNT (expected >= 20)"
 
+# ── Agent Python Tests ──
+# Run the AgentCore agent unittests (pure helpers, the Anthropic dark-path loop, account logic,
+# connector freeze guards). These previously ran only by hand; wire them into the gate so the
+# anthropic_loop golden tests actually block a regression.
+echo "# Agent Python tests"
+if command -v python3 &>/dev/null; then
+  if ( cd agent && python3 -m unittest discover -s . -p 'test_*.py' \
+                && python3 -m unittest discover -s tests -p 'test_*.py' ) >/dev/null 2>&1; then
+    pass "Agent Python unittests passed"
+  else
+    fail "Agent Python unittests failed"
+  fi
+else
+  echo "# SKIP: python3 not available"
+fi
+
 # ── Vitest Unit Tests (alert modules) ──
 echo "# Vitest unit tests"
 if command -v npx &>/dev/null && [ -f "vitest.config.ts" ]; then
