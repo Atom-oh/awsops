@@ -1,5 +1,10 @@
 # Plan — Dashboard Parity Gaps g-01 / g-02 / g-03 (read-only)
 
+> **머지 시점 정정 (2026-06-24)**: g-01(`ecs_service`)은 동시 세션이 base(`feat/v2-architecture-design`)에
+> 먼저 구현·머지했다(cluster+service 합성 키 `service_key` 방식 — 본 계획의 ARN 키와 동일한 충돌을 다르게 해결).
+> 충돌 해소 시 **base의 ecs_service를 채택**하고 본 브랜치의 ecs_service 중복은 제거했다. 따라서 이 브랜치의
+> 순수 net-new는 **g-02(`ebs_snapshot`) + g-03(CVE 결정 문서)**이다. 아래 Task 1·2(g-01)는 이력 보존용이다.
+
 > 원천 / Source: `docs/reviews/2026-06-24-v1-v2-gap-audit.md` + `docs/plans/2026-06-22-phase3-gap-backlog.md`.
 > Scope: 우선순위순 read-only 대시보드 갭 — g-01 (P0 ECS service inventory), g-02 (P1 EBS snapshot inventory), g-03 (P1 container CVE scanner **decision-only**).
 > Constraints: **read-only only**. AWS resource mutation/autonomy = ADR-005 FROZEN — out of scope. Edits path-scoped to v2 (`web/`, `scripts/v2/`, `docs/`). v1 `src/` untouched. Branch `feat/v2-dashboard-gaps` (isolated worktree).

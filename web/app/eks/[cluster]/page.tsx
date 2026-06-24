@@ -5,6 +5,7 @@ import { Search, X } from 'lucide-react';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import DetailPanel from '@/components/ui/DetailPanel';
 import PageHeader from '@/components/ui/PageHeader';
+import { usePublishDockedWidth } from '@/lib/useResizablePanel';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Input from '@/components/ui/Input';
 import Badge from '@/components/ui/Badge';
@@ -569,6 +570,9 @@ function DiagnosisDetailPanel({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // Coordinate this fixed 420px panel with the global chat so they don't overlap.
+  usePublishDockedWidth(!!finding, 420);
 
   const r = finding.analyzer_result;
   const facts: { label: string; value: string }[] = [

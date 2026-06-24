@@ -510,6 +510,37 @@ def _summarize_result(body):
     return out
 
 
+def _signal_plan(conn, iid):
+    """Pre-built diagnostic-signal plan for a prom/mimir instance from datasource_diag_signals.
+
+    Returns (plan, unavailable, version, sig_meta) when signal rows EXIST for the instance, else None
+    (→ caller falls back to the generic schema-driven planner). `plan` is [(tool, {query}, label)] over
+    every READY signal's queries (reusing the generic execution/redaction loop). `sig_meta` carries the
+    intent (key/pillar/threshold/title) so the report can flag deterministically; `unavailable` lists
+    (signal_key, missing_metrics) for the utilization note."""
+    try:
+        import db as _wdb
+        rows = _wdb.list_diag_signals(conn, iid)
+    except Exception:  # noqa: BLE001 — table absent / read error → use the generic planner
+        return None
+    if not rows:
+        return None  # signals not materialized yet → generic fallback
+    plan, unavail, sig_meta = [], [], []
+    for r in rows:
+        if r.get("status") == "ready" and isinstance(r.get("query"), dict):
+            tool = r["query"].get("tool")
+            for q in (r["query"].get("queries") or []):
+                expr = q.get("expr")
+                if tool and expr:
+                    plan.append((tool, {"query": expr}, f"{r['signal_key']}:{q.get('label', 'q')}"))
+            m = r.get("meta") or {}
+            sig_meta.append({"key": r["signal_key"], "title": r.get("title"),
+                             "pillar": m.get("pillar"), "threshold": m.get("threshold")})
+        elif r.get("status") == "unavailable":
+            unavail.append((r["signal_key"], r.get("missing_metrics") or []))
+    return plan, unavail, None, sig_meta
+
+
 def collect_datasources(conn):
     """Schema-driven, multi-instance, credential-blind external-observability signals for diagnosis.
     Reads ONLY non-secret integrations columns + the cached schema; invokes connectors credential-blind
@@ -549,14 +580,28 @@ def collect_datasources(conn):
         if _time.time() > deadline:
             notes.append("time-budget exceeded; remaining datasources skipped")
             break
-        schema = _ds_schema(conn, iid)
-        if not schema:
-            notes.append(f"{name} ({kind}): no cached schema — run Refresh schema")
-            continue
-        plan = _plan_queries(kind, schema)
-        if not plan:
-            notes.append(f"{name} ({kind}): schema has no signal-bearing series")
-            continue
+        # Prom/Mimir: PREFER pre-built diagnostic signals (datasource_index); fall back to the generic
+        # schema-driven planner when signals aren't materialized yet (decouples from the index pipeline).
+        sig = _signal_plan(conn, iid) if kind in ("prometheus", "mimir") else None
+        if sig is not None:
+            plan, unavail, version, sig_meta = sig
+            for key, miss in unavail:
+                notes.append(f"{name} ({kind}): signal '{key}' unavailable — metric(s) {', '.join(miss)} 없음")
+            if not plan:
+                notes.append(f"{name} ({kind}): no ready diagnostic signals (run Refresh schema / re-index)")
+                findings.append({"name": name, "kind": kind, "version": version, "source": "signals",
+                                 "is_default": bool(is_default), "results": [], "signals": sig_meta})
+                continue
+        else:
+            schema = _ds_schema(conn, iid)
+            if not schema:
+                notes.append(f"{name} ({kind}): no cached schema — run Refresh schema")
+                continue
+            plan = _plan_queries(kind, schema)
+            version, sig_meta = schema.get("version"), None
+            if not plan:
+                notes.append(f"{name} ({kind}): schema has no signal-bearing series")
+                continue
         results = []
         for (tool, args, label) in plan:
             if _time.time() > deadline:
@@ -570,8 +615,11 @@ def collect_datasources(conn):
                     results.append({"label": label, "summary": _summarize_result(body)})
             except Exception as e:  # noqa: BLE001 — per-query isolation; one bad query never sinks the rest
                 results.append({"label": label, "error": type(e).__name__})
-        findings.append({"name": name, "kind": kind, "version": schema.get("version"),
-                         "is_default": bool(is_default), "results": results})
+        finding = {"name": name, "kind": kind, "version": version,
+                   "is_default": bool(is_default), "results": results}
+        if sig_meta is not None:
+            finding["source"], finding["signals"] = "signals", sig_meta
+        findings.append(finding)
 
     data = {"instances": [{"name": f["name"], "kind": f["kind"]} for f in findings],
             "queried": len(findings), "findings": findings}

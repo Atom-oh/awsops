@@ -179,7 +179,9 @@ def _coverage_note(collected):
     lines = ["## 데이터 커버리지 (Data coverage)", "",
              "이 리포트가 근거로 삼은 수집기 상태 — `empty`/`degraded`는 해당 영역 진단이 빈약할 수 있음을 뜻합니다.", ""]
     for key, r in collected.items():
-        if r.get("degraded"):
+        if key == "datasources_obs":
+            status = _datasource_utilization(r)            # 외부 datasource 활용 여부 (사용/비활성/없음/unavailable)
+        elif r.get("degraded"):
             status = f"degraded — {r.get('notes') or 'collection failed'}"
         elif _is_empty(r.get("data")):
             status = "empty (no data returned)"
@@ -187,6 +189,29 @@ def _coverage_note(collected):
             status = "ok"
         lines.append(f"- `{key}`: {status}")
     return "\n".join(lines)
+
+
+def _datasource_utilization(r):
+    """External-datasource utilization for the coverage note — makes "활용 여부" explicit instead of
+    the opaque "empty": used(N instances) / disabled(gate off) / none-connected / unavailable(reason)."""
+    data = r.get("data") or {}
+    notes = r.get("notes") or ""
+    if r.get("degraded"):
+        return f"degraded — {notes or 'collection failed'}"
+    if "disabled" in notes:
+        return "비활성 (datasource_diagnosis_enabled OFF — 외부 datasource 미활용)"
+    queried = data.get("queried") or 0
+    if not queried:
+        return f"연결된 datasource/빌드된 신호 없음{(' — ' + notes) if notes else ''}"
+    # M4: an instance whose signals are ALL unavailable produces a finding with empty results — it must
+    # not read as "사용". Count instances that actually executed ≥1 signal query (have results).
+    findings = data.get("findings") or []
+    used = sum(1 for f in findings if f.get("results"))
+    names = ", ".join(i.get("name", "?") for i in (data.get("instances") or []))
+    extra = ("; " + "; ".join(data["notes"])) if data.get("notes") else ""
+    if used == 0:
+        return f"연결됨({queried}개) — 실행 가능한 신호 없음(전부 unavailable){extra}"
+    return f"사용 — {used}/{queried}개 인스턴스 신호 실행({names}){extra}"
 
 
 def build_markdown(rendered, account, tier, collected=None):

@@ -6,7 +6,7 @@ import {
 } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
-  it('has the 33 wave types (28 + apigatewayv2_route + alb_listener_rule + s3_public_access + ecs_service + ebs_snapshot)', () => {
+  it('has the 33 wave types (31 + ecs_service + ebs_snapshot)', () => {
     const keys = Object.keys(INVENTORY_TYPES);
     expect(keys).toContain('ec2'); expect(keys).toContain('s3'); expect(keys).toContain('iam_role');
     expect(keys).toContain('cloudfront'); expect(keys).toContain('cloudwatch_alarm'); expect(keys).toContain('msk');
@@ -206,6 +206,7 @@ describe('layout archetypes', () => {
     expect(layoutOf('s3_public_access')).toBe('risk');
     expect(layoutOf('cloudtrail')).toBe('risk');
     expect(layoutOf('ec2')).toBe('chart');
+    expect(layoutOf('ecs_service')).toBe('chart');
     expect(layoutOf('rds')).toBe('capacity');
     expect(layoutOf('vpc')).toBe('directory');
   });

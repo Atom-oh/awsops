@@ -11,7 +11,7 @@ WADD = sections.DEEP_SECTIONS  # 8 base + 6 deep-only
 
 def test_catalog_shape_stable():
     assert len(sections.SECTIONS) == 8
-    assert len(sections.DEEP_SECTIONS) == 14
+    assert len(sections.DEEP_SECTIONS) == 15
     assert sections.INTENDED_VS_ACTUAL_SECTION["key"] == "intended_vs_actual"
 
 
@@ -68,3 +68,9 @@ def test_all_six_pillars_have_a_section_or_proxy():
     keys = {s["key"] for s in WADD}
     for pillar, secs in pillar_to_keys.items():
         assert any(k in keys for k in secs), pillar
+
+
+def test_external_obs_signals_section_present():
+    s = next((x for x in sections.DEEP_SECTIONS if x["key"] == "external_obs_signals"), None)
+    assert s is not None, "external_obs_signals section must exist"
+    assert s["sources"] == ["datasources_obs"]

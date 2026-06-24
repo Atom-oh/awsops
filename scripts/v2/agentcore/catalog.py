@@ -29,7 +29,7 @@ GATEWAY_DESCRIPTIONS = {
     "monitoring": "CloudWatch, CloudTrail (AWS native only)",
     "iac": "CloudFormation, CDK, Terraform",
     "ops": "Steampipe SQL listing/status/docs/inventory",
-    "external-obs": "External Observability & Integrations (Notion now; Prometheus/Loki/Tempo next)",
+    "external-obs": "External Observability & Integrations — routed (Prometheus + ClickHouse + Notion; Loki/Tempo/Mimir next)",
 }
 
 
@@ -91,7 +91,7 @@ TARGETS = {
         "tools": [
             {"name": "find_unused_resources", "description": "Find unused/orphaned resources from the synced inventory: orphan target groups (no LB / 0 healthy), empty CloudFront origins, dead/idle load balancers, unattached EBS volumes", "inputSchema": {"type": "object", "properties": {"category": _p("string", "Optional category filter, e.g. 'TargetGroup' or 'CloudFront'")}}},
             {"name": "get_topology", "description": "Return the materialized topology graph (nodes + edges) from Aurora topology_nodes/edges — matches the /api/graph contract. class='flow' (default) for traffic-path graph (CF→LB→TG→target); class='infra' for resource-relationship graph. Optionally scope to a node's 1-hop neighbourhood via resource_id.", "inputSchema": {"type": "object", "properties": {"resource_id": _p("string", "Optional node id (e.g. CloudFront id, ALB ARN) to scope to its 1-hop neighbourhood"), "class": _p("string", "Graph class: 'flow' (traffic path, default) or 'infra' (resource relationships)")}}},
-            {"name": "query_inventory", "description": "List synced resources of one type (alb, nlb, target_group, cloudfront, ec2, ebs, security_group, route53, lambda, ecs_task, s3)", "inputSchema": {"type": "object", "properties": {"resource_type": _p("string", "Resource type to list"), "limit": _p("integer", "Max rows (default 200, cap 500)")}, "required": ["resource_type"]}},
+            {"name": "query_inventory", "description": "List synced resources of one type (alb, nlb, target_group, cloudfront, ec2, ebs, security_group, route53, lambda, ecs_task, ecs_service, s3)", "inputSchema": {"type": "object", "properties": {"resource_type": _p("string", "Resource type to list"), "limit": _p("integer", "Max rows (default 200, cap 500)")}, "required": ["resource_type"]}},
             {"name": "inventory_summary", "description": "Per-type counts + last-sync freshness (inventory_sync_runs)", "inputSchema": {"type": "object", "properties": {}}},
         ],
     },
@@ -361,7 +361,7 @@ TARGETS = {
     # First of the v1 datasource family (user-endpoint + SQL). data gateway. Read-only SQL guard +
     # table-function SSRF block in the Lambda; credential (endpoint+user/pass) via the Connectors UI.
     "clickhouse-mcp-target": {
-        "gateway": "data",
+        "gateway": "external-obs",
         "lambda_key": "clickhouse-mcp",
         "description": "ClickHouse read-only — SQL query, list tables, describe (3 tools)",
         "tools": [
@@ -374,7 +374,7 @@ TARGETS = {
     # Prometheus datasource (v1 family #2) — read-only PromQL. monitoring gateway (with CloudWatch +
     # OpenSearch). User-supplied endpoint via the Connectors UI; SSRF-guarded; read-only by construction.
     "prometheus-mcp-target": {
-        "gateway": "monitoring",
+        "gateway": "external-obs",
         "lambda_key": "prometheus-mcp",
         "description": "Prometheus read-only — PromQL instant/range query, labels, series, metric metadata (6 tools)",
         "tools": [

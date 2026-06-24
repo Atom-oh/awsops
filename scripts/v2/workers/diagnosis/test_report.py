@@ -170,14 +170,14 @@ def test_cw_metrics_wired_into_compute_and_db_sections():
 
 
 def test_deep_sections_catalog():
-    # deep = the 8 base sections + 6 deep-only = 14 (report.generate appends intended_vs_actual → 15).
+    # deep = the 8 base + 7 deep-only = 15 (report.generate appends intended_vs_actual → 16).
     base = sections.SECTIONS
     deep = sections.DEEP_SECTIONS
     assert len(base) == 8  # base unchanged
-    assert len(deep) == 14
+    assert len(deep) == 15
     assert deep[:8] == base  # deep is a superset that preserves the base order
     keys = [x["key"] for x in deep]
-    assert len(set(keys)) == 14  # unique
+    assert len(set(keys)) == 15  # unique
     # AWS-native collectors + datasources_obs (external observability) + idle/commitment (WS-A2 FinOps:
     # idle = DB-derived waste from inventory_resources [no new IAM]; commitment = RI/SP coverage
     # [ce:GetReservationCoverage / ce:GetSavingsPlansCoverage]). All read-only.
@@ -193,7 +193,7 @@ def test_deep_sections_catalog():
 
 
 def test_generate_resolves_tier_catalog_and_model(monkeypatch):
-    # Task 3: tier picks the catalog (mid=9, deep=15) + model (deep may select Opus) + max_tokens.
+    # Task 3: tier picks the catalog (mid=9, deep=16) + model (deep may select Opus) + max_tokens.
     monkeypatch.setattr(report.src, "collect_all",
                         lambda conn: [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
     monkeypatch.setattr(report.ddb, "list_active_invariants", lambda conn: [])
@@ -205,10 +205,10 @@ def test_generate_resolves_tier_catalog_and_model(monkeypatch):
     assert len(calls) == 9 and all(m == report._MODEL_SONNET and t == 1500 for m, t in calls)
 
     calls.clear(); report.generate(object(), account="1", tier="deep", model="opus")
-    assert len(calls) == 15 and all(m == report._MODEL_OPUS and t == 2200 for m, t in calls)
+    assert len(calls) == 16 and all(m == report._MODEL_OPUS and t == 2200 for m, t in calls)
 
     calls.clear(); report.generate(object(), account="1", tier="deep")  # default model = sonnet
-    assert len(calls) == 15 and all(m == report._MODEL_SONNET for m, t in calls)
+    assert len(calls) == 16 and all(m == report._MODEL_SONNET for m, t in calls)
 
     calls.clear(); report.generate(object(), account="1", tier="mid", model="opus")  # pinned
     assert len(calls) == 9 and all(m == report._MODEL_SONNET for m, t in calls)
@@ -515,3 +515,47 @@ def test_normalize_headings_collapses_doubled_prefix():
     # single, well-formed headings are untouched
     assert report._normalize_headings("## Security Posture") == "## Security Posture"
     assert report._normalize_headings("### 공개 노출") == "### 공개 노출"
+
+
+# ── Task 6: datasource utilization surfaced in the coverage note (not opaque "empty") ────────────
+from diagnosis import report as _rpt
+
+
+def _cov(ds_result):
+    return _rpt._coverage_note({"datasources_obs": ds_result})
+
+
+def test_coverage_note_datasource_disabled():
+    note = _cov({"data": {"instances": [], "queried": 0}, "degraded": False,
+                 "notes": "datasource diagnosis disabled (datasource_diagnosis_enabled flag off)"})
+    assert "비활성" in note
+
+
+def test_coverage_note_datasource_none_connected():
+    note = _cov({"data": {"instances": [], "queried": 0}, "degraded": False,
+                 "notes": "no connected observability datasources"})
+    assert "없음" in note
+
+
+def test_coverage_note_datasource_used():
+    note = _cov({"data": {"instances": [{"name": "prod-prom", "kind": "prometheus"}], "queried": 1,
+                          "findings": [{"name": "prod-prom", "results": [{"label": "oom_kills:l", "summary": {"count": 2}}]}]},
+                 "degraded": False, "notes": ""})
+    assert "사용" in note and "prod-prom" in note
+
+
+def test_coverage_note_datasource_unavailable_only_not_marked_used():
+    # M4: an instance with ONLY unavailable signals (empty results) must NOT read as "사용"
+    note = _cov({"data": {"instances": [{"name": "p", "kind": "prometheus"}], "queried": 1,
+                          "findings": [{"name": "p", "results": []}]},
+                 "degraded": False, "notes": ""})
+    assert "사용" not in note and "unavailable" in note
+
+
+def test_coverage_note_datasource_unavailable_reason():
+    note = _cov({"data": {"instances": [{"name": "p", "kind": "prometheus"}], "queried": 1,
+                          "notes": ["p (prometheus): signal 'oom_kills' unavailable — metric(s) X 없음"]},
+                 "degraded": False, "notes": ""})
+    assert "사용" not in note
+    assert "실행 가능한 신호 없음" in note
+    assert "oom_kills" in note

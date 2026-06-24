@@ -41,13 +41,20 @@ export const CHECK_META: Record<CheckKey, { label: string; severity: Finding['se
 // open_sg: the cidr predicate is anchored to the cidr KEY (so a description containing 0.0.0.0/0
 // cannot false-trigger) and covers IPv4 0.0.0.0/0 + IPv6 ::/0 in both Steampipe key casings —
 // same regex as web/app/api/inventory/summary/route.ts.
+// The authoritative "this bucket is publicly exposed" predicate — a bucket is a HIGH
+// finding if its policy is public OR either Block-Public-Access guard is off. Shared so
+// the home security-issue rollup (api/inventory/summary) can't drift narrower than the
+// /security page and false-negative on a BPA-disabled bucket.
+export const PUBLIC_S3_WHERE =
+  "( (data->>'bucket_policy_is_public')='true'"
+  + " OR (data->>'block_public_acls')='false'"
+  + " OR (data->>'block_public_policy')='false' )";
+
 export const FINDING_SQL: Record<CheckKey, string> = {
   public_s3: `SELECT resource_id, region, data AS detail
     FROM inventory_resources
     WHERE account_id='self' AND resource_type='s3_public_access'
-      AND ( (data->>'bucket_policy_is_public')='true'
-         OR (data->>'block_public_acls')='false'
-         OR (data->>'block_public_policy')='false' )
+      AND ${PUBLIC_S3_WHERE}
     ORDER BY resource_id`,
   open_sg: `SELECT resource_id, region, data AS detail
     FROM inventory_resources

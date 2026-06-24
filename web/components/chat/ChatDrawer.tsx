@@ -12,6 +12,14 @@ const THREADS_W = 240;
 const DEFAULT_W = 420;
 const MIN_W = 360;
 
+// The detail panel (if open) docks to the chat's right via --detail-panel-w, so the
+// drawer's usable span is the viewport minus that width — resize/clamp must subtract it.
+function detailPanelW(): number {
+  if (typeof window === 'undefined') return 0;
+  const n = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--detail-panel-w'));
+  return Number.isFinite(n) ? n : 0;
+}
+
 export default function ChatDrawer() {
   const chat = useChat();
   const router = useRouter();
@@ -75,7 +83,8 @@ export default function ChatDrawer() {
     setMaximized(false);
     try { localStorage.setItem('awsops_chat_maximized', '0'); } catch {}
     const onMove = (ev: MouseEvent) => {
-      const w = Math.min(Math.max(window.innerWidth - ev.clientX, MIN_W), Math.max(MIN_W, window.innerWidth - 60));
+      const avail = window.innerWidth - detailPanelW(); // drawer's right edge sits left of the detail panel
+      const w = Math.min(Math.max(avail - ev.clientX, MIN_W), Math.max(MIN_W, avail - 60));
       setWidth(w);
     };
     const onUp = () => {
@@ -106,20 +115,30 @@ export default function ChatDrawer() {
       <button
         onClick={() => setOpen(true)}
         aria-label="AI 어시스턴트 열기"
-        className="fixed bottom-20 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600 lg:bottom-5"
+        // lg: shift left of any open right-docked DetailPanel (--detail-panel-w, 0 when none)
+        // so the FAB never sits on top of the panel. Mobile keeps right-5 (panel is fullscreen there).
+        className="fixed bottom-20 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600 lg:bottom-5 lg:right-[calc(1.25rem+var(--detail-panel-w,0px))]"
       >
         <Sparkles size={20} strokeWidth={2} />
       </button>
     );
   }
 
-  const totalWidth = maximized ? '96vw' : `${width + (chat.showThreads ? THREADS_W : 0)}px`;
+  // Cap to the span left of the detail panel (--detail-panel-w, 0 when none) so the drawer
+  // never overflows past the screen's left edge — but floored at MIN_W so a wide detail panel
+  // can never collapse the chat below its minimum (the detail panel is itself resizable, so the
+  // user yields space from that side rather than losing the chat).
+  const totalWidth = maximized
+    ? `max(${MIN_W}px, calc(96vw - var(--detail-panel-w, 0px)))`
+    : `max(${MIN_W}px, min(${width + (chat.showThreads ? THREADS_W : 0)}px, calc(100vw - var(--detail-panel-w, 0px) - 56px)))`;
 
   return (
     <div
       // <lg: fullscreen overlay (inset-0, full width/height). lg+: docked to the right
       // edge with the persisted/maximized width applied as an inline style.
-      className="fixed inset-0 z-50 flex flex-col border-ink-100 bg-paper shadow-pop lg:inset-y-0 lg:left-auto lg:right-0 lg:h-screen lg:border-l"
+      // lg: dock immediately left of any open right-docked DetailPanel (--detail-panel-w,
+      // 0 when none → flush right edge) so the two panels sit side-by-side instead of overlapping.
+      className="fixed inset-0 z-50 flex flex-col border-ink-100 bg-paper shadow-pop lg:inset-y-0 lg:left-auto lg:right-[var(--detail-panel-w,0px)] lg:h-screen lg:border-l"
       style={isDesktop ? { width: totalWidth } : undefined}
     >
       {/* resize grip — desktop only, and hidden while maximized */}

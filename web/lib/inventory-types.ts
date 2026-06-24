@@ -29,9 +29,16 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
     { key: 'registered_container_instances_count', label: 'Instances' } ] },
   ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', columns: [
-    { key: 'service_name', label: 'Service' }, { key: 'status', label: 'Status' }, { key: 'desired_count', label: 'Desired' },
-    { key: 'running_count', label: 'Running' }, { key: 'pending_count', label: 'Pending' },
-    { key: 'launch_type', label: 'Launch' }, { key: 'cluster_arn', label: 'Cluster' } ] },
+    { key: 'service_name', label: 'Service' }, { key: 'status', label: 'Status' },
+    { key: 'desired_count', label: 'Desired' }, { key: 'running_count', label: 'Running' },
+    { key: 'pending_count', label: 'Pending' }, { key: 'launch_type', label: 'Launch' },
+    { key: 'scheduling_strategy', label: 'Strategy' }, { key: 'cluster_arn', label: 'Cluster' },
+    { key: 'task_definition', label: 'Task def' }, { key: 'created_at', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'service_name', 'region', 'status'] },
+      { label: 'Capacity', keys: ['desired_count', 'running_count', 'pending_count', 'launch_type', 'scheduling_strategy'] },
+      { label: 'Runtime', keys: ['cluster_arn', 'task_definition', 'created_at'] },
+    ] },
   ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', columns: [
     { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
     { key: 'launch_type', label: 'Launch' }, { key: 'task_definition_arn', label: 'Task def' } ] },
@@ -359,7 +366,7 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
     { kind: 'sum', label: 'Desired', col: 'desired_count' },
     { kind: 'sum', label: 'Running', col: 'running_count' },
     { kind: 'sum', label: 'Pending', col: 'pending_count' },
-    { kind: 'distinct', label: '런치타입', col: 'launch_type' },
+    { kind: 'distinct', label: 'Clusters', col: 'cluster_arn' },
   ],
   ebs_volume: [
     { kind: 'countWhere', label: '사용 중', col: 'state', eq: 'in-use', tone: 'accent' },

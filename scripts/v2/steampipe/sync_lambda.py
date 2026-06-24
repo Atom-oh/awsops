@@ -122,6 +122,19 @@ QUERIES = {
         "cluster_name",
         "region",
     ),
+    "ecs_service": (
+        # v1 parity: ECS service inventory (desired/running/pending + launch type). Read-only
+        # aws_ecs_service describe/list data, materialized into Aurora like other inventory types.
+        # Key by cluster+service instead of a service ARN column: aws_ecs_service exposes v1-parity
+        # fields directly, and legacy short ARNs can collide for same-named services in different clusters.
+        "SELECT (cluster_arn || '/' || service_name) AS service_key, "
+        "service_name, cluster_arn, region, account_id, status, "
+        "desired_count, running_count, pending_count, launch_type, scheduling_strategy, "
+        "task_definition, created_at, tags "
+        "FROM aws_ecs_service ORDER BY cluster_arn, service_name",
+        "service_key",
+        "region",
+    ),
     "ecr": (
         "SELECT repository_name, region, account_id, arn, registry_id, repository_uri, "
         "image_tag_mutability, image_scanning_configuration, encryption_configuration, lifecycle_policy, "
@@ -275,19 +288,8 @@ QUERIES = {
         "route_uid",
         "region",
     ),
-    # ---- v1-parity inventory additions (g-01 / g-02; read-only) ----
-    "ecs_service": (
-        # g-01: ECS service desired/running/pending counts + launch type. Like ecs_task, the
-        # Steampipe table hydrates per-cluster automatically, so a bare bulk SELECT is fine.
-        "SELECT service_name, region, account_id, arn, cluster_arn, status, desired_count, "
-        "running_count, pending_count, launch_type, task_definition, scheduling_strategy, "
-        "created_at, tags "
-        "FROM aws_ecs_service ORDER BY service_name",
-        # id = arn: service_name is unique only within a cluster, so two clusters in one
-        # account/region can share a name and would overwrite each other on upsert.
-        "arn",
-        "region",
-    ),
+    # ---- v1-parity inventory addition (g-02; read-only). ecs_service (g-01) is defined above,
+    # owned by the concurrent merge (keyed by cluster+service). ----
     "ebs_snapshot": (
         # g-02: account-owned EBS snapshots. The `owner_id = (caller account)` predicate is
         # MANDATORY — it pushes OwnerIds=self down to DescribeSnapshots. Without it Steampipe
