@@ -42,13 +42,18 @@ def _resolve_gateway_key(role, gateways):
     """Map a chat/section role to an actual key in the runtime GATEWAYS map.
 
     BUGFIX: `_discover_gateways` derives keys via name.replace("awsops-","").replace("-gateway","").
-    v2 gateways are named `awsops-v2-<x>-gateway`, so discovery yields `v2-<x>` (e.g.
-    `v2-external-obs`), while the GATEWAYS_JSON env fallback uses the canonical `<x>`
-    (`external-obs`). The `observability`→`external-obs` alias only matched the env path; on the
-    (primary) discovery path `external-obs` was absent → silent fallback to `ops`. Resolve against
-    BOTH spellings so observability lands on its real gateway regardless of discovery-vs-env."""
+    While v1 and v2 gateways COEXIST, v2 gateways are named `awsops-v2-<x>-gateway`, so discovery
+    yields `v2-<x>` (e.g. `v2-external-obs`), whereas the GATEWAYS_JSON env fallback uses the
+    canonical `<x>` (`external-obs`). The `observability`→`external-obs` alias only matched the env
+    spelling; on the (primary) discovery path `external-obs` was absent → silent fallback to `ops`.
+
+    We try the CANONICAL key first, then the `v2-`-prefixed transition spelling. This is
+    forward-compatible: once v2 merges to main and the gateways are renamed to `awsops-<x>-gateway`
+    (v1 retired, the `v2` name dropped), discovery yields the canonical `<x>` and the first branch
+    matches — the `v2-` fallback becomes dead code. **REMOVE the `v2-` candidate at the v2→main
+    cutover** (it is a coexistence shim, not permanent behavior)."""
     key = _GATEWAY_ALIAS.get(role, role)
-    for candidate in (key, f"v2-{key}"):
+    for candidate in (key, f"v2-{key}"):  # canonical first; `v2-` = transition shim (drop at v2→main)
         if candidate in gateways:
             return candidate
     return DEFAULT_GATEWAY
