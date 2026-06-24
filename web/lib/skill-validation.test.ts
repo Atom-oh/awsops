@@ -20,6 +20,9 @@ describe('skill-validation', () => {
     expect(validateAgent({ name: 'a', description: 'd', persona: 'p', gateway: 'nope', routingKeywords: [] }).ok).toBe(false);
     expect(validateAgent({ name: 'compliance', description: 'd', persona: 'p', gateway: 'security', routingKeywords: ['cis'] }).ok).toBe(true);
     expect(KNOWN_GATEWAYS).toContain('security');
+    // ADR-004: observability is now a routed section → custom agents may target it.
+    expect(KNOWN_GATEWAYS).toContain('observability');
+    expect(validateAgent({ name: 'obs', description: 'd', persona: 'p', gateway: 'observability', routingKeywords: ['promql'] }).ok).toBe(true);
   });
 
   it('AGENT_TYPES has the 6 lifecycle roles (source of truth shared with the migration CHECK)', () => {
