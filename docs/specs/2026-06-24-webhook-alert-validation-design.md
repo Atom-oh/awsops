@@ -1,7 +1,7 @@
 # Design — Webhook Alert Validation (LLM true/false-alert gate) + 2-stage SNS
 
 작성일 / Date: 2026-06-24
-상태 / Status: **Design rev3 — rev2 closed the 14 rev1 blockers; rev3 folds in codex closure's 3 deeper MAJORs (stage CHECK, connector packaging, CloudWatch severity-mapping conflict), all code-verified**
+상태 / Status: **Design rev4 — rev3 closed 2/3 closure MAJORs; rev4 resolves the last (CloudWatch suppression-severity: SNS payload carries no alarm tag → fail-safe escalate + operator opt-in via integration allowlist or AlarmArn ListTagsForResource), code-verified**
 범위 / Scope: v2 (`web/`, `scripts/v2/incident/`, `terraform/v2/foundation/`)
 거버넌스 / Posture: **신호는 read-only (ADR-006 analysis-only)**. SNS publish는 **거버넌스 외부 쓰기 (ADR-007)** — 토픽 ARN 한정 IAM. AWS resource mutation/autonomy = ADR-005 FROZEN(비범위).
 
@@ -110,9 +110,13 @@ groups:
 - 출력 = 엄격 JSON 스키마 `{verdict, confidence, propagation, evidence[], rationale, suggested_checks}`. 스키마 불일치 → **uncertain로 에스컬레이트**.
 
 ### 6.4 억제 안전모델 (CRITICAL, 만장일치)
-**suppression severity ≠ trigger/display severity**[codex closure-MAJOR, verified]: `normalizeCloudWatch`는 `ALARM`을 무조건 `critical`로 매핑한다[verified] — 이걸 그대로 never-suppress 기준에 쓰면 **모든 CloudWatch 알림이 항상 에스컬레이트되어 억제가 무의미**해진다. 따라서 별도 `suppression_severity(trigger_event)`를 정의한다:
-- **운영자가 명시 선언한 critical만** never-suppress: Alertmanager `labels.severity=='critical'`(§5.1 예시처럼) **또는** CloudWatch 알람의 명시 태그(예 `awsops:severity=critical`, 알람 tags/dimension).
-- 그 외(태그 없는 CloudWatch ALARM 포함) → suppression_severity='warning'(억제 적격). CloudWatch state→critical 자동매핑은 운영자 severity 선언이 아니다.
+**suppression severity ≠ trigger/display severity**[codex closure-MAJOR, verified]: `normalizeCloudWatch`는 `ALARM`을 무조건 `critical`로 매핑한다[verified] — 이걸 그대로 never-suppress 기준에 쓰면 **모든 CloudWatch 알림이 항상 에스컬레이트되어 억제가 무의미**해진다. 별도 `suppression_severity(trigger_event)`를 **소스별·fail-safe**로 정의한다:
+- **Alertmanager / generic (주 노이즈원)**: payload의 `labels.severity`를 그대로 사용(§5.1 예시처럼 운영자가 규칙에 선언). `critical`→escalate(절대 억제 금지), `warning|info`→억제 적격. **조회 불필요**(payload 내장).
+- **CloudWatch**: SNS payload에는 운영자 severity가 없다 — `ALARM→critical` 자동매핑은 선언이 아니고, **알람 태그는 SNS 메시지에 포함되지 않는다**[codex closure-MAJOR, verified]. 따라서 **기본값 = `critical`(escalate, fail-safe; 억제 안 함)**. 억제 적격은 운영자가 **명시 opt-in** 할 때만:
+  - (a) `cloudwatch_sns` 통합의 **suppression-eligibility allowlist**(알람 이름/네임스페이스 패턴), 또는
+  - (b) `cloudwatch:ListTagsForResource(AlarmArn)`로 조회한 `awsops:severity` 태그 — **`AlarmArn`을 정규화 이벤트에 캡처**(현재 미캡처[verified]) + scoped IAM + TTL 캐시. **조회 실패 OR 태그 부재 → fail-safe로 `critical`(escalate)**.
+  - 이렇게 하면 Alertmanager(주 노이즈원)는 즉시 억제 가능하고, CloudWatch는 운영자 opt-in + fail-safe로만 억제된다.
+- 결정: never-suppress 가드는 위 `suppression_severity=='critical'`에 적용(운영자 명시 critical + CloudWatch 미opt-in 기본 둘 다 보호).
 
 억제는 **모든 조건 충족 시에만**:
 - `verdict=="false_positive"` AND `confidence>=threshold(SSM, 기본 0.8)` AND
@@ -140,7 +144,7 @@ groups:
 - **시크릿**: 마스킹/one-time reveal·회전·SSM/SM·무로깅.
 
 ## 9. 데이터 모델 (additive 마이그레이션 1개)
-- **신규 `incidents.trigger_event jsonb`**(또는 `incident_events` 테이블) — triage가 격리 정규화 알림(startsAt/labels/metric/account/resources)을 저장[verified: 현재 미저장 — CRITICAL 해소].
+- **신규 `incidents.trigger_event jsonb`**(또는 `incident_events` 테이블) — triage가 격리 정규화 알림(startsAt/labels/metric/account/resources, **CloudWatch는 `AlarmArn` 포함** — §6.4 태그 조회용, 현재 정규화기 미캡처[verified])을 저장[verified: 현재 미저장 — CRITICAL 해소].
 - `incidents.validation jsonb` + `status` CHECK에 `validated`/`false_positive` 추가 + **GIN 인덱스**(validation verdict 조회)[glm].
 - **`incident_stages.stage` CHECK에 `'alert_validation'` 추가**[codex closure-MAJOR, verified: 현재 CHECK=`triage|investigation|root_cause|mitigation_plan|prevention`만 → 신규 스테이지 행 INSERT가 CHECK 위반]. (status CHECK는 변경 불필요.)
 - 알림 멱등: `incident_notifications(incident_id, stage, status, ...)` UNIQUE(incident_id, stage).
