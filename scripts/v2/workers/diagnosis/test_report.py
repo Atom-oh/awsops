@@ -556,4 +556,6 @@ def test_coverage_note_datasource_unavailable_reason():
     note = _cov({"data": {"instances": [{"name": "p", "kind": "prometheus"}], "queried": 1,
                           "notes": ["p (prometheus): signal 'oom_kills' unavailable — metric(s) X 없음"]},
                  "degraded": False, "notes": ""})
+    assert "사용" not in note
+    assert "실행 가능한 신호 없음" in note
     assert "oom_kills" in note

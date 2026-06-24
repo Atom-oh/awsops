@@ -117,6 +117,10 @@ variable "datasource_diagnosis_enabled" {
   type        = bool
   description = "AI-diagnosis external-observability collector gate (ADR-039/041 governed egress). When true (requires workers_enabled), grants the worker role lambda:InvokeFunction on the 5 connector Lambdas and sets DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT on the worker so collect_datasources can fan out. false (default) = 0 resources/IAM, $0, collector stays disabled (no AccessDenied degrade)."
   default     = false
+  validation {
+    condition     = !var.datasource_diagnosis_enabled || (var.workers_enabled && var.agentcore_enabled && var.integrations_enabled)
+    error_message = "datasource_diagnosis_enabled=true requires workers_enabled, agentcore_enabled, and integrations_enabled."
+  }
 }
 
 variable "diagnosis_schedule_enabled" {

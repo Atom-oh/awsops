@@ -320,9 +320,15 @@ resource "aws_ecs_task_definition" "web" {
         { name = "K8SGPT_ENABLED", value = "true" },
         { name = "K8SGPT_STALE_MINUTES", value = "5" },
         { name = "K8SGPT_NARRATION_MODEL", value = "global.anthropic.claude-haiku-4-5-20251001-v1:0" },
+        ] : [], var.datasource_diagnosis_enabled ? [
+        # External datasource diagnosis enqueue gate. False/default omits the env so add/schema-refresh
+        # routes do not enqueue datasource_index jobs; the worker has the same DIAG_DATASOURCES_ENABLED
+        # hard gate, so activation and egress permissions move together.
+        { name = "DATASOURCE_DIAGNOSIS_ENABLED", value = "true" },
+        ] : [],
         # Scheduled-diagnosis mailing list (gated): empty list when diagnosis_notify_enabled=false →
         # concat(base, []) == base → byte-identical web task def (no redeploy when off).
-      ] : [], local.notify_web_env_list)
+      local.notify_web_env_list)
       secrets = [
         { name = "AURORA_USER", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:username::" },
         { name = "AURORA_PASSWORD", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:password::" }

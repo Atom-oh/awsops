@@ -120,12 +120,20 @@ def upsert_diag_signals(conn, integration_id, rows, schema_version):
 
 
 def read_signal_schema_version(conn, integration_id):
-    """The schema_version any existing signal row for this instance was built at (or None)."""
+    """Return a stable schema_version only when all existing rows agree.
+
+    Mixed versions can happen after a historical partial rebuild; treating one arbitrary row as current
+    would make datasource_index skip forever with stale/missing signals.
+    """
     rows = conn.run(
-        "SELECT schema_version FROM datasource_diag_signals "
-        "WHERE account_id='self' AND integration_id=:iid LIMIT 1",
+        "SELECT COUNT(DISTINCT schema_version), MIN(schema_version) "
+        "FROM datasource_diag_signals "
+        "WHERE account_id='self' AND integration_id=:iid",
         iid=integration_id)
-    return rows[0][0] if rows else None
+    if not rows:
+        return None
+    distinct, version = rows[0]
+    return version if distinct == 1 and version else None
 
 
 def list_diag_signals(conn, integration_id):

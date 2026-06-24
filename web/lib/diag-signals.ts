@@ -46,6 +46,7 @@ export async function getDiagSignals(integrationId: number): Promise<DiagSignals
 /** Ask the worker to (re)build signals for one instance (after add / schema refresh). Prom/Mimir only;
  *  best-effort — a worker-queue hiccup must never fail the datasource write that triggered it. */
 export async function enqueueDatasourceIndex(integrationId: number, kind?: string): Promise<void> {
+  if (process.env.DATASOURCE_DIAGNOSIS_ENABLED !== 'true') return;
   if (kind && kind !== 'prometheus' && kind !== 'mimir') return;  // v1 scope
   try {
     await enqueueJob('datasource_index', { integration_id: integrationId });

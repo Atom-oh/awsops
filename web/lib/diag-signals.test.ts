@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const query = vi.fn();
 const enqueueJob = vi.fn();
@@ -7,7 +7,12 @@ vi.mock('@/lib/jobs', () => ({ enqueueJob: (...a: unknown[]) => enqueueJob(...a)
 
 import { getDiagSignals, enqueueDatasourceIndex } from './diag-signals';
 
-beforeEach(() => { query.mockReset().mockResolvedValue({ rows: [] }); enqueueJob.mockReset().mockResolvedValue({ job_id: 'j', status: 'queued' }); });
+beforeEach(() => {
+  delete process.env.DATASOURCE_DIAGNOSIS_ENABLED;
+  query.mockReset().mockResolvedValue({ rows: [] });
+  enqueueJob.mockReset().mockResolvedValue({ job_id: 'j', status: 'queued' });
+});
+afterEach(() => { delete process.env.DATASOURCE_DIAGNOSIS_ENABLED; });
 
 describe('getDiagSignals', () => {
   it('splits ready vs unavailable, scoped by integration_id, parses jsonb', async () => {
@@ -39,7 +44,12 @@ describe('getDiagSignals', () => {
 });
 
 describe('enqueueDatasourceIndex', () => {
-  it('enqueues a datasource_index job for prometheus', async () => {
+  it('skips when datasource diagnosis is disabled', async () => {
+    await enqueueDatasourceIndex(5, 'prometheus');
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+  it('enqueues a datasource_index job for prometheus when enabled', async () => {
+    process.env.DATASOURCE_DIAGNOSIS_ENABLED = 'true';
     await enqueueDatasourceIndex(5, 'prometheus');
     expect(enqueueJob).toHaveBeenCalledWith('datasource_index', { integration_id: 5 });
   });
@@ -48,6 +58,7 @@ describe('enqueueDatasourceIndex', () => {
     expect(enqueueJob).not.toHaveBeenCalled();
   });
   it('swallows enqueue failure (never blocks the caller)', async () => {
+    process.env.DATASOURCE_DIAGNOSIS_ENABLED = 'true';
     enqueueJob.mockRejectedValueOnce(new Error('queue down'));
     await expect(enqueueDatasourceIndex(5, 'mimir')).resolves.toBeUndefined();
   });

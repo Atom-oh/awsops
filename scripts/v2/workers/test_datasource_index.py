@@ -38,8 +38,8 @@ class FakeConn:
             if not self.schema_present:
                 return []
             return [[self.kind, json.dumps({"metrics": self.metrics, "version": "2.50"})]]
-        if "SELECT schema_version FROM datasource_diag_signals" in sql:
-            return [[self.existing_version]] if self.existing_version is not None else []
+        if "COUNT(DISTINCT schema_version)" in sql:
+            return [[1, self.existing_version]] if self.existing_version is not None else [[0, None]]
         if sql.strip().startswith("INSERT INTO datasource_diag_signals"):
             self.inserts.append(p); return []
         if sql.strip().startswith("DELETE FROM datasource_diag_signals"):
@@ -157,8 +157,8 @@ class TestAccountKeyFallback:
                     if "account_id IN" in sql:
                         return []
                     return [["prometheus", json.dumps({"metrics": PROM_METRICS})]]
-                if "SELECT schema_version FROM datasource_diag_signals" in sql:
-                    return []
+                if "COUNT(DISTINCT schema_version)" in sql:
+                    return [[0, None]]
                 if sql.strip().startswith("INSERT INTO datasource_diag_signals"):
                     self.inserts.append(p); return []
                 if sql.strip().startswith("DELETE FROM datasource_diag_signals"):

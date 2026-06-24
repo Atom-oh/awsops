@@ -51,13 +51,17 @@ class TestUpsert:
 
 class TestReadSchemaVersion:
     def test_returns_value_when_rows_present(self):
-        c = FakeConn(returns=[[["abc123"]]])
+        c = FakeConn(returns=[[[1, "abc123"]]])
         assert db.read_signal_schema_version(c, 7) == "abc123"
         sql, p = c.calls[0]
-        assert "schema_version" in sql and p["iid"] == 7
+        assert "COUNT(DISTINCT schema_version)" in sql and p["iid"] == 7
 
     def test_returns_none_when_absent(self):
-        c = FakeConn(returns=[[]])
+        c = FakeConn(returns=[[[0, None]]])
+        assert db.read_signal_schema_version(c, 7) is None
+
+    def test_returns_none_when_versions_are_mixed(self):
+        c = FakeConn(returns=[[[2, "newest"]]])
         assert db.read_signal_schema_version(c, 7) is None
 
 
