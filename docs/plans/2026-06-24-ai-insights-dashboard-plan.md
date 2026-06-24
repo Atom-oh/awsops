@@ -24,7 +24,7 @@
 - Create: `scripts/v2/workers/insight/test_cost_anomalies.py`
 
 - [ ] **test-first**: 일별·서비스별 day-over-day 급증(임계 % + 절대액) 탐지; 정상=빈 items; CE 에러=never-raise(notes); 비민감 집계값만(PII 없음).
-- [ ] `collect_cost_anomalies(ce=None)` — `ce.get_cost_and_usage`(GroupBy SERVICE, 최근 N일) → 서비스별 전일 대비 급증 item `{severity,title,detail,refs}`. ce 주입 가능.
+- [ ] `collect_cost_anomalies(ce=None)` — `ce.get_cost_and_usage`(GroupBy SERVICE, 최근 `LOOKBACK_DAYS=7`일, DAILY) → 서비스별 전일 대비 급증 item. **명시 임계 상수**: `SPIKE_PCT=50`(전일 대비 +50%↑) AND `SPIKE_ABS_USD=10`(절대 증가≥$10) 동시 충족 시 flag(noise 억제); severity는 증가폭으로(>$100 critical·그외 warning). ce 주입 가능, 집계값만(PII 없음).
 - [ ] `python3 -m pytest scripts/v2/workers/insight/test_cost_anomalies.py` GREEN.
 
 ### Task 3: CloudWatch anomaly collector (TDD)
@@ -42,9 +42,11 @@
 **Files:**
 - Create: `scripts/v2/workers/insight/k8s_events.py`
 - Create: `scripts/v2/workers/insight/test_k8s_events.py`
+- Create: `scripts/v2/eks/register-insight-access.sh`
 
-- [ ] **test-first**: parse/aggregate — Warning 이벤트 리스트(`/api/v1/events`)에서 주목 reason(OOMKilling/OOMKilled·FailedScheduling·BackOff·CrashLoopBackOff·Failed·Unhealthy·FailedMount·Evicted·NodeNotReady) 필터 + reason×involvedObject 집계 → items; message redaction(PII 방어); 시간창·건수 bounded; HTTP/토큰 에러=graceful skip(notes, never-raise).
-- [ ] `collect_k8s_events(clusters=None, getter=None)` — 클러스터 목록(env `ONBOARD_EKS_CLUSTERS` 콤마분리)별 `_k8s_session`(presigned-STS, istio_read_mcp 패턴 복제) + `_k8s_get('/api/v1/events')`. `getter` 주입 가능(테스트는 raw event JSON fixture로 순수 parse 검증). access-entry 미등록/HTTP 4xx=skip.
+- [ ] **test-first**: parse/aggregate — Warning 이벤트(`/api/v1/events`)에서 주목 reason(OOMKilling/OOMKilled·FailedScheduling·BackOff·CrashLoopBackOff·Failed·Unhealthy·FailedMount·Evicted·NodeNotReady) 필터 + (reason × involvedObject.kind × namespace) 집계 → items. **PII redaction 규칙(명시)**: `message` 자유텍스트는 **반출 안 함**(reason+count로 대체); refs는 `{cluster, namespace, kind, name}`만(label/annotation 제외); name이 비어있으면 생략. 시간창(기본 1h)·건수(클러스터당 ≤50) bounded; HTTP/토큰/4xx(access-entry 미등록)=graceful skip(notes, never-raise).
+- [ ] `collect_k8s_events(clusters=None, getter=None)` — 클러스터 목록(env `ONBOARD_EKS_CLUSTERS` 콤마분리)별 `_k8s_session`(presigned-STS, istio_read_mcp 패턴 복제; `eks.describe_cluster`로 endpoint/CA) + `_k8s_get('/api/v1/events?...')`. `getter` 주입(테스트는 raw event JSON fixture로 순수 parse 검증).
+- [ ] `register-insight-access.sh`: 워커 role에 EKS Access Entry + AmazonEKSViewPolicy 부여(`register-istio-access.sh` 미러). 운영자 out-of-band 실행 — 미실행 시 k8s_events는 graceful skip(인사이트는 CW/Cost로 계속).
 - [ ] GREEN.
 
 ### Task 5: insight synthesis + deterministic fallback (TDD)
@@ -63,7 +65,7 @@
 - Modify: `scripts/v2/workers/db.py`
 - Create: `scripts/v2/workers/insight/test_insight_db.py`
 
-- [ ] **test-first**: `insert_insight(conn, status, insights, sources_used, model, error)` 바인드+::jsonb; `get_latest_insight(conn)` → 최신 행 파싱. 멱등/파라미터화.
+- [ ] **test-first**: `insert_insight(conn, status, insights, sources_used, model, error)` 바인드+::jsonb; `get_latest_insight(conn, account_id='self')` → 최신 행 파싱. 멱등/파라미터화.
 - [ ] `db.py`에 두 헬퍼 추가.
 - [ ] GREEN.
 
@@ -84,7 +86,7 @@
 - Create: `scripts/v2/workers/insight_dispatcher.py`
 - Create: `scripts/v2/workers/test_insight_dispatcher.py`
 
-- [ ] **test-first**: `lambda_handler`가 `insight` 잡 1건 enqueue(db.insert_job + SQS, schedule_dispatcher 패턴); QUEUE_URL 미설정=fail-loud; SQS 실패 시 orphan ledger row 정리.
+- [ ] **test-first**: `lambda_handler`가 `insight` 잡 1건 enqueue(db.insert_job + SQS, schedule_dispatcher 패턴); QUEUE_URL 미설정=fail-loud; SQS 전송 실패 시 `conn.run("DELETE FROM worker_jobs WHERE job_id=:id AND status='queued'")`로 orphan ledger row 정리 후 재-raise.
 - [ ] 구현.
 - [ ] GREEN.
 
@@ -95,7 +97,7 @@
 - Modify: `terraform/v2/foundation/workers.tf`
 
 - [ ] `variables.tf`: `variable "ai_insights_enabled"`(bool, default false, 설명 "OFF→$0", workers_enabled 동반 validation — 기존 패턴 참고).
-- [ ] `workers.tf`: `local.aii = var.workers_enabled && var.ai_insights_enabled ? 1 : 0`; insight_dispatcher lambda + `aws_cloudwatch_event_rule`(rate(6 hours)) + target + permission; worker role IAM 추가(`cloudwatch:DescribeAlarms`,`cloudwatch:GetMetricData`,`ce:GetCostAndUsage`); `workers_src` 아카이브에 insight/*.py(flatten) + insight_dispatcher.py 추가; 전부 `local.aii` 게이트. (EKS 이벤트 access-entry는 out-of-band 운영 — terraform 아님; 주석 명시.)
+- [ ] `workers.tf`: `local.aii = var.workers_enabled && var.ai_insights_enabled ? 1 : 0`(모든 신규 6리소스 `count=local.aii` 일관); insight_dispatcher lambda + `aws_cloudwatch_event_rule`(rate(6 hours)) + target + `aws_lambda_permission`; 워커 role IAM **추가**: `cloudwatch:DescribeAlarms`·`cloudwatch:GetMetricData`·`ce:GetCostAndUsage`·**`eks:DescribeCluster`**(k8s endpoint/CA 조회). **bedrock:InvokeModel·sqs:SendMessage는 워커 role에 이미 존재**(report 잡)→재추가 안 함(확인만). 워커 lambda+task env에 **`ONBOARD_EKS_CLUSTERS`**(onboard_eks_clusters 콤마조인, 기본 빈값→k8s skip) + 게이트 env 추가. `workers_src` 아카이브에 **`insight/` 패키지 구조 보존**(`filename="insight/<x>.py"` + `insight/__init__.py`; flatten 금지 — `from insight.x import`가 깨짐) + `insight_dispatcher.py`. 전부 `local.aii` 게이트. EKS access-entry는 out-of-band(주석).
 - [ ] `terraform -chdir=terraform/v2/foundation validate`; 게이트 OFF→`plan` no-op(apply는 컨트롤러).
 
 ### Task 10: BFF — /api/insights (read + refresh) (TDD)
@@ -107,7 +109,7 @@
 - Create: `web/lib/insights.test.ts`
 - Create: `web/app/api/insights/route.test.ts`
 
-- [ ] **test-first**: `GET /api/insights`(auth) → 최신 행; `POST /api/insights/refresh`(admin) → enqueue, 최근 running 잡 있으면 202 재사용; DB read만(egress 없음).
+- [ ] **test-first**: `GET /api/insights`(verifyUser) → 최신 행; `POST /api/insights/refresh`(verifyUser + **isAdmin**, `web/lib/admin.ts`) → `enqueueJob('insight',…)`(웹 role은 이미 SendMessage 보유), 최근 running insight 잡 있으면 202 재사용; DB read만.
 - [ ] `insights.ts`(getLatestInsight + enqueueInsightRefresh) + 두 route.
 - [ ] 관련 `npm test` GREEN.
 
