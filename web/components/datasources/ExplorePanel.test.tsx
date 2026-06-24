@@ -48,6 +48,43 @@ describe('ExplorePanel', () => {
     });
   });
 
+  it('keeps generated ClickHouse SQL multiline instead of collapsing clause boundaries', async () => {
+    const generated = [
+      'SELECT hostname, cpu_usage, timestamp',
+      'FROM cpu_metrics',
+      'WHERE cpu_usage < 20',
+      'ORDER BY timestamp DESC',
+      'LIMIT 100',
+    ].join('\n');
+    const calls: { url: string; body?: string }[] = [];
+    global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body as string });
+      if (url === '/api/datasources') {
+        return { ok: true, status: 200, json: async () => ({ datasources: [{ id: 9, name: 'mall-click', kind: 'clickhouse', isDefault: true }] }) };
+      }
+      if (url === '/api/datasources/generate') {
+        return { ok: true, status: 200, json: async () => ({ query: generated, lang: 'read-only SQL' }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ result: { shape: 'empty' } }) };
+    }) as unknown as typeof fetch;
+
+    render(<ExplorePanel instanceId={9} />);
+    const queryBox = await screen.findByPlaceholderText(/SQL/) as HTMLTextAreaElement;
+    expect(queryBox.tagName).toBe('TEXTAREA');
+
+    fireEvent.change(screen.getByPlaceholderText(/자연어/), { target: { value: '저사용 cpu 리소스' } });
+    fireEvent.click(screen.getByRole('button', { name: 'AI로 생성' }));
+
+    await waitFor(() => expect(queryBox.value).toBe(generated));
+    fireEvent.click(screen.getByRole('button', { name: '실행' }));
+
+    await waitFor(() => {
+      const runCall = calls.find((c) => c.url === '/api/datasources/query');
+      expect(runCall).toBeTruthy();
+      expect(JSON.parse(runCall!.body!)).toMatchObject({ id: 9, query: generated });
+    });
+  });
+
   it('when scoped to an instanceId, shows the picker preselected to that instance (no dead-end)', async () => {
     render(<ExplorePanel instanceId={1} />);
     await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());

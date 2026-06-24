@@ -1,6 +1,5 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
-import DiagSignalChips from './DiagSignalChips';
 import { Search } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
@@ -9,6 +8,7 @@ import DataTable from '@/components/ui/DataTable';
 import AreaTrend from '@/components/charts/AreaTrend';
 import HBarList from '@/components/charts/HBarList';
 import type { NormalizedResult } from '@/lib/datasource-render';
+import { cn } from '@/lib/cn';
 
 // A datasource INSTANCE (the hub model): identified by bigint id, with a user-given name.
 export interface DatasourceInstance {
@@ -52,6 +52,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
 
   const ds = list.find((d) => d.id === selId) ?? null;
   const canRange = ds ? RANGE_KINDS.has(ds.kind) : false;
+  const queryIsMultiline = ds?.kind === 'clickhouse';
 
   useEffect(() => {
     (async () => {
@@ -69,9 +70,8 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
   }, [instanceId]);
 
   // `windowOverride` lets the range dropdown re-run immediately with its new value (state is async).
-  const run = useCallback(async (windowOverride?: number, queryOverride?: string) => {
-    const q = queryOverride ?? query;  // a quick-query chip can run its expr without waiting on setQuery
-    if (selId === '' || !q.trim()) return;
+  const run = useCallback(async (windowOverride?: number) => {
+    if (selId === '' || !query.trim()) return;
     const w = windowOverride ?? rangeWindow;
     const range = canRange && w > 0 ? { window: w, step: autoStep(w) } : false;
     const queriedKind = list.find((d) => d.id === selId)?.kind; // bind kind to THIS query, not the live selection
@@ -79,7 +79,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
     try {
       const r = await fetch('/api/datasources/query', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: selId, query: q, range }),
+        body: JSON.stringify({ id: selId, query, range }),
       });
       const b = await r.json();
       if (!r.ok) throw new Error(b.error || `오류 ${r.status}`);
@@ -147,19 +147,35 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
             {genBusy ? '생성 중…' : 'AI로 생성'}
           </Button>
         </div>
-        <Input
-          icon={<Search size={14} />}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={ds ? PH[ds.kind] ?? '쿼리를 입력하세요' : '먼저 데이터소스를 선택하세요'}
-          onKeyDown={(e) => { if (e.key === 'Enter') run(); }}
-          disabled={!ds}
-        />
-        <DiagSignalChips
-          instanceId={selId === '' ? undefined : selId}
-          kind={ds?.kind}
-          onPick={(expr) => { setQuery(expr); run(undefined, expr); }}
-        />
+        <div className="relative w-full">
+          <span className="pointer-events-none absolute left-2.5 top-2.5 inline-flex text-ink-400">
+            <Search size={14} />
+          </span>
+          <textarea
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={ds ? PH[ds.kind] ?? '쿼리를 입력하세요' : '먼저 데이터소스를 선택하세요'}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault();
+                run();
+                return;
+              }
+              if (!queryIsMultiline && e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                run();
+              }
+            }}
+            disabled={!ds}
+            rows={queryIsMultiline ? 4 : 2}
+            className={cn(
+              'min-h-[54px] w-full resize-y rounded-md border border-ink-100 bg-card py-2 pl-8 pr-3',
+              'font-mono text-[13px] leading-relaxed text-ink-800 placeholder:text-ink-400',
+              'outline-none transition-colors duration-[120ms] focus:border-brand-500 focus:shadow-focus',
+              'disabled:cursor-not-allowed disabled:opacity-60',
+            )}
+          />
+        </div>
         <div className="flex items-center gap-2">
           <Button onClick={() => run()} disabled={busy || !ds || !query.trim()}>{busy ? '실행 중…' : '실행'}</Button>
           {list.length === 0 && (
