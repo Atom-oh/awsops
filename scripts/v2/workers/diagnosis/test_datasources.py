@@ -173,3 +173,63 @@ def test_clickhouse_table_name_is_identifier_validated(monkeypatch):
     sqls = [c["payload"]["arguments"]["sql"] for c in fake.calls]
     assert all("UNION" not in s and "--" not in s for s in sqls)          # injection name dropped
     assert any("events" in s for s in sqls) and any("ok_table" in s for s in sqls)  # bare identifiers kept
+
+
+# ── Task 5: pre-built signal path (datasource_diag_signals) ──────────────────────────────────────
+import json as _json
+
+
+class SignalConn(FakeConn):
+    """FakeConn that also serves datasource_diag_signals rows (the pre-built signal path)."""
+    def __init__(self, instances, signal_rows):
+        super().__init__(instances, {})
+        self._signal_rows = signal_rows
+    def run(self, sql, **kw):
+        if "FROM datasource_diag_signals" in sql:
+            return self._signal_rows
+        return super().run(sql, **kw)
+
+
+def _ready_row(key, exprs):
+    q = {"tool": "prometheus_query", "queries": [{"label": f"l{i}", "expr": e} for i, e in enumerate(exprs)]}
+    return [key, key, "ready", _json.dumps(q), None, _json.dumps({"pillar": "performance", "threshold": 0.25})]
+
+
+def _unavail_row(key, missing):
+    return [key, key, "unavailable", None, _json.dumps(missing), _json.dumps({"pillar": "reliability"})]
+
+
+def test_prebuilt_signals_executed_when_present(monkeypatch):
+    fake = _patch_lambda(monkeypatch, FakeLambda())
+    conn = SignalConn([(5, "prod-prom", "prometheus", True)],
+                      [_ready_row("network_pps", ["rate(node_network_receive_packets_total[5m])",
+                                                  "rate(node_network_receive_drop_total[5m])"])])
+    out = src.collect_datasources(conn)
+    assert out["ok"]
+    # both stored queries of the multi-query signal were invoked, credential-blind (instance_id only)
+    exprs = [c["payload"]["arguments"].get("query") for c in fake.calls]
+    assert any("receive_packets_total" in (e or "") for e in exprs)
+    assert any("receive_drop_total" in (e or "") for e in exprs)
+    for c in fake.calls:
+        assert c["payload"]["arguments"]["instance_id"] == 5
+        assert "conn_config" not in c["payload"]
+    f = out["data"]["findings"][0]
+    assert f.get("source") == "signals" and f["signals"][0]["key"] == "network_pps"
+
+
+def test_unavailable_signal_surfaces_reason_note(monkeypatch):
+    _patch_lambda(monkeypatch, FakeLambda())
+    conn = SignalConn([(5, "p", "prometheus", True)],
+                      [_unavail_row("oom_kills", ["kube_pod_container_status_last_terminated_reason"])])
+    out = src.collect_datasources(conn)
+    notes = (out.get("notes") or "") + _json.dumps(out["data"].get("notes") or [])
+    assert "oom_kills" in notes and "없음" in notes
+
+
+def test_no_signal_rows_falls_back_to_generic_planner(monkeypatch):
+    # rows empty → generic schema-driven planner still runs (decoupled from the index pipeline)
+    fake = _patch_lambda(monkeypatch, FakeLambda())
+    conn = SignalConn([(5, "p", "prometheus", True)], [])
+    conn.schemas = {5: {"metrics": ["http_requests_total"]}}
+    src.collect_datasources(conn)
+    assert fake.calls, "generic planner should run when no signals are materialized"

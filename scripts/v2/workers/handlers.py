@@ -165,12 +165,31 @@ def _compliance(payload, dry_run):
             pass
 
 
+def _datasource_index(payload, dry_run):
+    """(Re)build pre-computed diagnostic signals for one datasource (Prometheus/Mimir). Short + read-only
+    (reads the cached schema, writes datasource_diag_signals) → lambda runtime. payload: {integration_id}."""
+    iid = payload.get("integration_id")
+    if dry_run:
+        return {"dry_run": True, "would_index": iid}, None
+    import db as wdb
+    import datasource_index as dsi
+    conn = wdb.connect()
+    try:
+        return dsi.run(payload, conn), None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # type -> (handler, runtime). runtime drives SFN routing (lambda<15min / fargate long+heavy).
 REGISTRY = {
-    "noop":       (_noop, "lambda"),
-    "noop-heavy": (_noop, "fargate"),
-    "report":     (_report, "fargate"),
-    "compliance": (_compliance, "fargate"),
+    "noop":             (_noop, "lambda"),
+    "noop-heavy":       (_noop, "fargate"),
+    "report":           (_report, "fargate"),
+    "compliance":       (_compliance, "fargate"),
+    "datasource_index": (_datasource_index, "lambda"),
 }
 
 

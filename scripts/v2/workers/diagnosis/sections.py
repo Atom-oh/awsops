@@ -166,6 +166,19 @@ _DEEP_ONLY = [
          "당신은 운영 우수성(관측성)에 정통한 SRE다. CloudWatch 지표/알람·인벤토리로 관측성 커버리지를 진단하라.\n"
          "### 커버리지\n표(| 리소스 | 알람 | 지표 | 로그 | 갭 | 심각도 |): 알람 미설정 핵심/고비용 리소스·지표 공백·로그 보존 미설정. " + _RULES)},
 
+    {"key": "external_obs_signals", "title": "외부 관측성 신호 (Prometheus/Mimir)",
+     "sources": ["datasources_obs"],
+     "prompt": (
+         "당신은 Kubernetes·노드 관측성에 정통한 수석 SRE다. 외부 datasource(Prometheus/Mimir)에서 "
+         "미리 빌드된 진단 신호 결과(datasources_obs.findings[].results — 각 신호는 label `signal_key:query`로 "
+         "식별; datasources_obs.findings[].signals에 신호별 pillar·threshold·title)로 컨테이너/노드 상태를 진단하라.\n"
+         "### 신호 요약\n표(| 신호 | 인스턴스 | 관측치(상위) | 임계 | 판정 | 심각도 |): "
+         "container_cpu_throttling·oom_kills·node_memory_pressure·node_disk_usage·network_pps·"
+         "pod_right_sizing·cpu_saturation·pod_restarts 중 결과가 있는 것만. threshold 초과는 [Critical], 근접은 [Warning].\n"
+         "### 권고\n표(| 조치 | 대상 | 우선순위 | 공수 |): P1/P2/P3 · Low/Med/High. "
+         "datasources_obs가 비활성/연결없음/unavailable(metric 없음)이면 해당 신호는 '데이터 불가'로 명시하고 "
+         "추측하지 말 것. 모든 조치는 운영자 검토용 권고만(자동 변경 금지). " + _RULES)},
+
     {"key": "cost_optimization", "title": "비용 최적화 심층",
      "sources": ["cost", "inventory", "cw_metrics", "idle", "commitment"],
      "prompt": (

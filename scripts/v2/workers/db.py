@@ -84,3 +84,78 @@ def set_manual_intervention(conn, job_id, error):
         "WHERE job_id=:id AND status NOT IN ('succeeded','failed','canceled','manual_intervention') RETURNING job_id",
         e=error, id=job_id)
     return len(rows)
+
+
+# ── datasource_diag_signals (pre-built Prometheus/Mimir diagnostic signals) ──────────────────────
+_DDS_COLS = ["signal_key", "title", "status", "query", "missing_metrics", "meta"]
+
+
+def _maybe_json(v):
+    """pg8000 may return jsonb as a parsed object OR a string depending on type adaptation — normalize."""
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except (ValueError, TypeError):
+            return v
+    return v
+
+
+def upsert_diag_signals(conn, integration_id, rows, schema_version):
+    """Idempotent upsert of built signal rows for one instance. jsonb fields are bound + cast (never
+    inlined). Caller sweeps stale keys via sweep_diag_signals. No-op on empty rows."""
+    for r in rows or []:
+        conn.run(
+            "INSERT INTO datasource_diag_signals "
+            "(account_id, integration_id, signal_key, title, status, query, missing_metrics, meta, schema_version, built_at) "
+            "VALUES ('self', :iid, :sk, :ti, :st, :q::jsonb, :mm::jsonb, :me::jsonb, :sv, now()) "
+            "ON CONFLICT (account_id, integration_id, signal_key) DO UPDATE SET "
+            "title=EXCLUDED.title, status=EXCLUDED.status, query=EXCLUDED.query, "
+            "missing_metrics=EXCLUDED.missing_metrics, meta=EXCLUDED.meta, "
+            "schema_version=EXCLUDED.schema_version, built_at=now()",
+            iid=integration_id, sk=r["signal_key"], ti=r["title"], st=r["status"],
+            q=(json.dumps(r["query"]) if r.get("query") is not None else None),
+            mm=(json.dumps(r["missing_metrics"]) if r.get("missing_metrics") is not None else None),
+            me=json.dumps(r.get("meta") or {}), sv=schema_version,
+        )
+
+
+def read_signal_schema_version(conn, integration_id):
+    """Return a stable schema_version only when all existing rows agree.
+
+    Mixed versions can happen after a historical partial rebuild; treating one arbitrary row as current
+    would make datasource_index skip forever with stale/missing signals.
+    """
+    rows = conn.run(
+        "SELECT COUNT(DISTINCT schema_version), MIN(schema_version) "
+        "FROM datasource_diag_signals "
+        "WHERE account_id='self' AND integration_id=:iid",
+        iid=integration_id)
+    if not rows:
+        return None
+    distinct, version = rows[0]
+    return version if distinct == 1 and version else None
+
+
+def list_diag_signals(conn, integration_id):
+    """All signal rows for one instance (ready + unavailable), jsonb fields parsed."""
+    rows = conn.run(
+        f"SELECT {','.join(_DDS_COLS)} FROM datasource_diag_signals "
+        "WHERE account_id='self' AND integration_id=:iid ORDER BY signal_key",
+        iid=integration_id)
+    out = []
+    for row in rows:
+        d = dict(zip(_DDS_COLS, row))
+        d["query"] = _maybe_json(d["query"])
+        d["missing_metrics"] = _maybe_json(d["missing_metrics"])
+        d["meta"] = _maybe_json(d["meta"])
+        out.append(d)
+    return out
+
+
+def sweep_diag_signals(conn, integration_id, keep_keys):
+    """Delete this instance's signal rows whose key is NOT in keep_keys (mark-sweep after a rebuild).
+    Empty keep_keys → delete all rows for the instance."""
+    conn.run(
+        "DELETE FROM datasource_diag_signals "
+        "WHERE account_id='self' AND integration_id=:iid AND signal_key <> ALL(:keep)",
+        iid=integration_id, keep=list(keep_keys or []))
