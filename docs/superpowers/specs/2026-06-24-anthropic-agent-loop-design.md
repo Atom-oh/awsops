@@ -50,6 +50,16 @@ changing the BFF contract, or changing any infrastructure/Terraform.
 | D4 | Golden tests | **Contract/behavior unit tests** with Bedrock mocked (CI-safe, deterministic). No live dual-run in this increment. |
 | D5 | Error semantics | A runtime error in the dark path does **NOT** silently re-run via Strands (that would mask the bugs we want to surface). Fail-soft with a delta + log; Strands↔Anthropic is a **routing-time** choice only. |
 
+### Governance — reconciled with ADR-008 (amended 2026-06-24)
+ADR-008 rejected the `AnthropicBedrock` wrapper, but **scoped to the diagnosis worker's single-shot
+per-section calls** (latency rationale). The chat agent loop is a **distinct surface**: this
+experiment is permitted behind `ANTHROPIC_AGENT_LOOP_ENABLED` (default OFF, dark) with a
+**debuggability** lever (not latency), and going through the Bedrock client **preserves
+IAM/VPC/residency/cost-attribution** (the very guarantees ADR-008 cared about). It is **not BYO-MCP
+and not ADR-005**: no AWS-resource mutation, no autonomy, no new external endpoint — it reuses the
+existing `awsops-v2-*` gateway MCP over the same SigV4 transport. ADR-008 §6 + BASELINE §2/§3 were
+updated in the same change set.
+
 ## 3. Base-state facts (verified against `f337a5c`)
 
 The handler drifted from older snapshots; the design targets the **current** `agent/agent.py`:
@@ -99,7 +109,10 @@ def build_anthropic_messages(history, user_input) -> list[dict]:
     Anthropic messages ([{role, content:[{type:'text', text}]}])."""
 
 def extract_tool_uses(content_blocks) -> list[dict]:
-    """Pull tool_use blocks {id, name, input} from a completed assistant turn."""
+    """Pull tool_use blocks {id, name, input} from a completed assistant turn.
+    Handles BOTH dict-shaped blocks (test fakes) AND the Anthropic SDK's typed
+    content-block objects (getattr fallback) — a dict-only extractor would pass
+    tests yet fail the real tool loop."""
 
 def tool_result_block(tool_use_id, mcp_result, is_error=False) -> dict:
     """{type:'tool_result', tool_use_id, content:[...], is_error}."""
@@ -123,19 +136,23 @@ async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks,
 async def run_anthropic_loop(payload) -> AsyncIterator[dict]:
     """Thin wiring: lazy-import agent + anthropic; build_conversation; resolve gateway;
     connect gateway MCPClient (ExitStack); get_all_tools → _dedup_by_tool_name → _filter_tools
-    (toolAllowlist); build system prompt (override|SKILL_BASE) + COMMON_FOOTER + account directive
-    + bounded extra_context; convert tools; construct AsyncAnthropicBedrock(aws_region='ap-northeast-2');
-    delegate to drive_anthropic_loop. Fail-soft per D5."""
+    (toolAllowlist); build the system prompt mirroring `agent.handler` EXACTLY — override path:
+    `systemPromptOverride + tool_section + COMMON_FOOTER + account_directive`; built-in path:
+    `build_skill_prompt(skill_role, tools) + account_directive` (build_skill_prompt ALREADY appends
+    COMMON_FOOTER — do NOT add it a second time); then bounded extra_context (≤8000). Convert tools;
+    construct AsyncAnthropicBedrock(aws_region='ap-northeast-2'); delegate to drive_anthropic_loop.
+    Fail-soft per D5."""
 ```
 
 ### 4.4 Tool dispatch detail
 - Allowlist/dedup applied to MCP tool objects **before** schema conversion → identical ceiling &
   order to the Strands path (`_filter_tools(_dedup_by_tool_name(gateway_tools), toolAllowlist)`).
-- Tool execution uses `mcp_client.call_tool_sync(tool_use_id, name, input)`. Strands' `MCPClient`
-  runs its own background event-loop thread, so the call is blocking-but-thread-safe; the loop
-  wraps it in `asyncio.to_thread(...)` so the async handler's event loop is not blocked. *(Exact
-  `call_tool_sync` signature / result shape re-verified against strands-agents 1.41.0 at impl time;
-  result content is normalized to text for the `tool_result` block.)*
+- Tool execution uses `mcp_client.call_tool_sync(name, arguments=input or {})` — the repo's
+  established call shape (`agent/rca/tools.py`). The Anthropic `tool_use.id` is **NOT** a positional
+  argument to `call_tool_sync`; it is carried only into the matching `tool_result` block. Strands'
+  `MCPClient` runs its own background event-loop thread, so the call is blocking-but-thread-safe;
+  the loop wraps it in `asyncio.to_thread(...)` so the async handler's event loop is not blocked.
+  The MCP result content is normalized to text for the `tool_result` block.
 - The account directive is appended to the system prompt and, when `account_id` is a real
   non-host/`__all__` value, the `[Target Account …]` prefix is added to `user_input` — both reuse
   the existing `agent.build_account_directive` + the handler's prefix rule.
@@ -148,6 +165,9 @@ async def run_anthropic_loop(payload) -> AsyncIterator[dict]:
   region-appropriate profile id and record the deviation in the spec/PR.
 - Text deltas come from the stream's text events → `yield {"delta": text}`.
 - `temperature=0.0` (parity with the Strands `BedrockModel`).
+- **`max_tokens` is REQUIRED** by the Anthropic Messages API — define a `MAX_OUTPUT_TOKENS`
+  constant (e.g. 4096) and pass it to every `messages.stream(...)` call. Omitting it fails the
+  first model call before any delta (the dark path would only ever fail-soft).
 - Prompt caching via `cache_control:{"type":"ephemeral"}` on the last system block + last tool
   (see `apply_cache_control`).
 
@@ -183,15 +203,20 @@ New `agent/tests/test_anthropic_loop.py` (stdlib `unittest`, no network):
 2. `mcp_tools_to_anthropic` — `inputSchema` → `input_schema`; empty/missing schema default.
 3. `build_anthropic_messages` — history + last → Anthropic format; empty/edge input.
 4. allowlist + dedup applied **before** conversion (same ceiling/order as Strands).
-5. `extract_tool_uses` / `tool_result_block` round-trip shapes.
+5. `extract_tool_uses` / `tool_result_block` round-trip shapes — fakes cover BOTH dict-shaped
+   blocks AND object-shaped (getattr) blocks like the real SDK returns.
 6. `drive_anthropic_loop` with a **scripted fake aclient** (emits text deltas, then a `tool_use`,
    then a final answer) + **fake `mcp_call`**: asserts the `{"delta": …}` sequence, that the tool
    ran once, and that a `tool_result` was fed back.
 7. **max-rounds cap**: fake aclient that keeps requesting tools → loop stops at `MAX_TOOL_ROUNDS`
    with a final synthesis, never infinite.
 8. Output-contract: every yielded item is `{"delta": str}`.
-9. Fail-soft: an exception before the first delta yields exactly one fail-soft delta (no crash,
-   no Strands re-run).
+9. Fail-soft (pre-first-delta): an exception before the first delta yields exactly one fail-soft
+   delta (no crash, no Strands re-run).
+10. Fail-soft (post-first-delta, `started=True`): an error after the first delta (e.g. during tool
+   execution or a later stream turn) yields a bounded interruption delta and stops — it does not
+   raise and does not re-run the model (mirrors `agent.handler`'s `started` guard).
+11. `max_tokens` is passed to the stream call (the fake client asserts it received a positive int).
 
 **Wire Python agent tests into the gate**: add an "Agent Python tests" section to
 `tests/run-all.sh` that runs the agent unittests (`python3 -m unittest` discovery over `agent/`),

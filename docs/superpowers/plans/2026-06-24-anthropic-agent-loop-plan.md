@@ -28,7 +28,7 @@ sessions own them).
   - [ ] `should_use_anthropic_loop` truth table: env `ANTHROPIC_AGENT_LOOP_ENABLED` ∈ {unset,"true","false"} × `payload.agentLoop` ∈ {absent,"anthropic","strands"} (override wins).
   - [ ] `mcp_tools_to_anthropic`: a fake tool whose `.tool_spec={"name","description","inputSchema":{...}}` → `{name, description, input_schema}`; missing/empty schema → `{"type":"object","properties":{}}`.
   - [ ] `build_anthropic_messages`: history `[{role,content:[{text}]}]` + `user_input` → `[{role,content:[{type:"text",text}]}]`; empty history; empty input.
-  - [ ] `extract_tool_uses`: assistant content blocks → list of `{id,name,input}` (only `tool_use` blocks).
+  - [ ] `extract_tool_uses`: assistant content blocks → list of `{id,name,input}` (only `tool_use` blocks); fakes cover BOTH dict-shaped AND object-shaped (getattr) blocks like the real SDK returns.
   - [ ] `tool_result_block`: `(id, result, is_error)` → `{type:"tool_result",tool_use_id,content,is_error}`.
   - [ ] `apply_cache_control`: marks last system block + last tool with `cache_control={"type":"ephemeral"}`; no-op on empty lists.
 - [ ] Implement `agent/anthropic_loop.py` with stdlib-only top-level imports, `MAX_TOOL_ROUNDS=8`, and the six pure helpers above. Make tests pass.
@@ -44,9 +44,11 @@ sessions own them).
   - [ ] Happy path: yields `{"delta": str}` in order; the tool runs exactly once; a `tool_result` is appended before the next model turn; final answer streamed.
   - [ ] `MAX_TOOL_ROUNDS` cap: a fake client that always asks for a tool → loop stops at the cap with one final tool-less synthesis turn; never infinite; emits a bounded number of rounds.
   - [ ] Output contract: every yielded item is a dict with a single `"delta"` str key.
-  - [ ] Fail-soft: an exception raised before the first delta yields exactly one fail-soft `{"delta": …}` and stops (no exception escapes, no re-run).
-- [ ] Implement `async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks, anthropic_tools, messages, max_rounds)`:
-  - [ ] Stream a model turn; forward text deltas as `{"delta": text}`.
+  - [ ] Fail-soft (pre-first-delta): an exception before the first delta yields exactly one fail-soft `{"delta": …}` and stops (no exception escapes, no re-run).
+  - [ ] Fail-soft (post-first-delta, `started=True`): an error after the first delta yields a bounded interruption delta and stops — does NOT raise, does NOT re-run the model.
+  - [ ] `max_tokens` is passed to the stream call — the fake client asserts it received a positive int (Anthropic Messages API requires it; omitting it fails the first call).
+- [ ] Implement `async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks, anthropic_tools, messages, max_rounds, max_tokens)`:
+  - [ ] Stream a model turn (passing `max_tokens=MAX_OUTPUT_TOKENS`); forward text deltas as `{"delta": text}`.
   - [ ] On `stop_reason=="tool_use"`: extract tool_uses; run each via `await asyncio.to_thread(mcp_call, name, input)`; append assistant turn + a user turn of `tool_result` blocks; loop.
   - [ ] Stop when `stop_reason!="tool_use"` or rounds hit `max_rounds` (final tool-less synthesis turn at the cap).
   - [ ] Wrap the whole generator body so a pre-first-delta error yields the fail-soft delta (track a `started` flag mirroring `agent.handler`).
@@ -60,10 +62,10 @@ sessions own them).
 - [ ] Write a failing test that installs `sys.modules` stubs (mirroring `agent/test_agent.py`) for `anthropic` (an `AsyncAnthropicBedrock` capturing ctor kwargs) and reuses agent stubs, then asserts `run_anthropic_loop`:
   - [ ] Constructs `AsyncAnthropicBedrock(aws_region="ap-northeast-2")` and uses model `global.anthropic.claude-sonnet-4-6`, `temperature=0.0`.
   - [ ] Applies `_dedup_by_tool_name` + `_filter_tools(toolAllowlist)` to gateway tools **before** schema conversion (same ceiling/order as Strands).
-  - [ ] Builds system prompt from `systemPromptOverride` when present else `build_skill_prompt`, then `COMMON_FOOTER` + account directive + bounded `extraContext` (≤8000 chars).
+  - [ ] Builds the system prompt mirroring `agent.handler` EXACTLY: override path = `systemPromptOverride + tool_section + COMMON_FOOTER + account_directive`; built-in path = `build_skill_prompt(skill_role, tools) + account_directive` (build_skill_prompt ALREADY appends COMMON_FOOTER — assert it is NOT doubled); then bounded `extraContext` (≤8000 chars).
   - [ ] No-input payload → single `{"delta": "No input provided."}`.
-- [ ] Implement `async def run_anthropic_loop(payload)`: lazy `import agent` + `from anthropic import AsyncAnthropicBedrock`; `build_conversation`; resolve gateway via `agent._resolve_gateway_key`/`GATEWAYS.get`; open `MCPClient` in an `ExitStack`; `get_all_tools` → dedup → filter; build system prompt; `mcp_tools_to_anthropic`; define `mcp_call` closing over the live `mcp_client.call_tool_sync`; delegate to `drive_anthropic_loop`. Fail-soft on pre-stream error.
-- [ ] Re-verify `call_tool_sync` signature + result shape against installed `strands-agents==1.41.0` (note exact form in a code comment); normalize tool result to text.
+- [ ] Implement `async def run_anthropic_loop(payload)`: lazy `import agent` + `from anthropic import AsyncAnthropicBedrock`; `build_conversation`; resolve gateway via `agent._resolve_gateway_key`/`GATEWAYS.get`; open `MCPClient` in an `ExitStack`; `get_all_tools` → dedup → filter; build system prompt (mirror handler; no doubled footer); `mcp_tools_to_anthropic`; define `mcp_call(name, input)` calling `mcp_client.call_tool_sync(name, arguments=input or {})` (the repo's call shape, `agent/rca/tools.py`); delegate to `drive_anthropic_loop` with `max_tokens=MAX_OUTPUT_TOKENS`. Fail-soft on pre-stream error.
+- [ ] Confirm against installed `strands-agents==1.41.0` that `call_tool_sync(name, arguments=…)` is correct (matches `agent/rca/tools.py`); the Anthropic `tool_use.id` goes ONLY into the `tool_result` block, never as a positional arg. Normalize the MCP result content to text.
 - [ ] Run unittest → green. Commit: `feat(agent): run_anthropic_loop wiring (gateway MCP + AsyncAnthropicBedrock) + test`.
 
 ### Task 4: Route the handler to the dark path

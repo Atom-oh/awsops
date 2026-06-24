@@ -57,6 +57,7 @@
 | **GATED** | K8sGPT 인클러스터 진단 | `k8sgpt_enabled` | GET-only(Result CRD read), 클러스터 write 없음, 오퍼레이터는 out-of-band 설치 | ADR-006 |
 | **GATED(거버넌스)** | 외부 knowledge/comms write — 광역(Slack/Notion/Jira) | `integrations_write_enabled` | 독립 control plane · no-AWS-mutation IAM · SSRF/Secrets/DLP/human-gate. BYO-MCP(임의) 제외, 큐레이션 커넥터만 | ADR-007 |
 | **GATED** | 외부 관측성 진단 수집 | `datasource_diagnosis_enabled` | governed egress collector(read), SSRF 방어 | ADR-007/ADR-008 |
+| **GATED(실험)** | 챗 에이전트 루프 — `AsyncAnthropicBedrock` 커스텀 루프(다크) | `ANTHROPIC_AGENT_LOOP_ENABLED` | default OFF·dark. read-only·additive; Bedrock 경유(IAM/VPC/레지던시/비용귀속 보존, API키 無, 동일 global.* 프로파일+홈리전), 기존 게이트웨이 MCP 재사용(BYO-MCP 아님). 레버=도구 루프 디버깅성(지연 아님) | ADR-008/ADR-003 |
 | **옵션(deferred)** | Neptune/그래프 substrate | — | Postgres-first 확정, 그래프 substrate는 후속 옵션 | legacy ADR-043 (deferred — MAPPING 참조) |
 
 > **주의 (2-티어 정밀):** 외부 DATA write 티어가 일률 OFF는 아니다 — `diagnosis_notify_enabled`(SNS 이메일, IAM 단일 토픽 스코프, NOT AWS-리소스 변경)는 **이미 LIVE**(거버넌스 충족). 광역 `integrations_write_enabled`만 OFF. (ADR-007/ADR-013)
@@ -78,7 +79,7 @@
 | [005](005-aws-mutation-autonomy-frozen.md) | AWS 변경·자율 **FROZEN** | do-not-enable; 재활성화=새 ADR+패널+owner-override | 보안·운영우수성 |
 | [006](006-incident-analysis-only.md) | 인시던트 **ANALYSIS-ONLY** (GATED) | read-only triage/RCA만, 자율 mitigation 폐기 | 안정성·운영우수성 |
 | [007](007-external-data-integration-governance.md) | 외부 데이터 통합 거버넌스 (keystone) | read-only=리소스 한정; 외부 read LIVE·write 2-티어 거버넌스 | 보안·운영우수성 |
-| [008](008-ai-diagnosis-pipeline.md) | AI 진단 파이프라인 | raw boto3 Bedrock·15섹션 병렬렌더·포맷·비용캐싱 (스트리밍 후속) | 운영우수성·비용 |
+| [008](008-ai-diagnosis-pipeline.md) | AI 진단 파이프라인 | raw boto3 Bedrock·15섹션 병렬렌더·포맷·비용캐싱 (스트리밍 후속); 챗 루프 `AsyncAnthropicBedrock` 실험=flag-gated dark(`ANTHROPIC_AGENT_LOOP_ENABLED`) | 운영우수성·비용 |
 | [009](009-async-worker-backbone.md) | 비동기 워커 백본 | SQS+SFN+Lambda/Fargate, read-only job(noop/report/compliance) | 안정성·운영우수성 |
 | [010](010-inventory-resource-model.md) | 인벤토리·리소스 모델 | 타입 레지스트리 + flag-gated Steampipe sync→Aurora (ECS service 갭) | 안정성·비용 |
 | [011](011-multi-account.md) | 멀티 어카운트 | STS AssumeRole(AWSopsReadOnlyRole+ExternalId), read-only fan-out | 보안 |
