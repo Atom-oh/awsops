@@ -30,7 +30,7 @@ Task 1 → 2 → 3 → 4 → 5(needs 3) → 6 → 7 → 8 → 9(precede/accompan
 
 - [ ] **test-first**: (a) 전 메트릭 존재+kind=prometheus → 8 신호 ready, `query.tool=="prometheus_query"`; kind=mimir → `"mimir_query"`. (b) 멀티쿼리 신호(network_pps, pod_right_sizing)는 `query.queries`가 리스트. (c) 일부 메트릭 부재 → `unavailable` + 정확한 `missing_metrics`. (d) 빈 metrics → 전부 unavailable, never raise.
 - [ ] `CATALOG`(8 신호) 각 항목 `{key,title,pillar,required_metrics[],queries:[{expr,label}],threshold,unit}`. **PromQL 수정**:
-  - `pod_right_sizing`: 2쿼리 — usage `(quantile_over_time(0.95, sum by(namespace,pod)(container_memory_working_set_bytes)[1h:5m]))`, requests `sum by(namespace,pod)(kube_pod_container_resource_requests{resource="memory"})`. (서브쿼리 괄호 필수.)
+  - `pod_right_sizing`: 2쿼리 — usage `quantile_over_time(0.95, (sum by(namespace,pod)(container_memory_working_set_bytes))[1h:5m])` (서브쿼리 내부 괄호 `(sum …)[1h:5m]` 필수), requests `sum by(namespace,pod)(kube_pod_container_resource_requests{resource="memory"})`.
   - `oom_kills`: `max_over_time(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[1h])` (gauge → 윈도 max).
   - `network_pps`: 2쿼리 — pps `rate(node_network_receive_packets_total[5m])`, drop `rate(node_network_receive_drop_total[5m])`; required_metrics에 **두 메트릭 모두**.
   - `node_disk_usage`: `node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}` (실제 `|`, 마크다운 이스케이프 아님).
