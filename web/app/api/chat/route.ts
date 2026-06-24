@@ -182,8 +182,10 @@ export async function POST(request: Request) {
   };
 
   // Inject cached datasource schemas (the agent reads the cache) for the observability gateways —
-  // for the single-route spec AND any monitoring/data gateway in a fan-out.
-  const obs = (g: string) => g === 'monitoring' || g === 'data';
+  // for the single-route spec AND any matching gateway in a fan-out. 'observability' owns the
+  // Prometheus/ClickHouse connectors (routed to external-obs); monitoring/data kept for any
+  // datasource connectors still hosted there (Loki/Tempo/Mimir/OpenSearch — deferred).
+  const obs = (g: string) => g === 'observability' || g === 'monitoring' || g === 'data';
   let datasourceSchemaContext: string | undefined;
   if (obs(spec.gateway) || (doFanout && fanGateways.some(obs))) {
     try {

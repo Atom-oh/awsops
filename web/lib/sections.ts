@@ -58,11 +58,11 @@ export const SECTIONS: Section[] = [
     '전체 토폴로지 (CF→LB→TG)',
     '태그 누락 리소스',
   ] },
-  { key: 'observability', label: 'Observability', icon: '🔭', color: '#0E7490', active: false, presets: [
-    '서비스 p99 레이턴시',
-    '에러율 급증 분석',
-    '최근 로그 에러 패턴 (Loki)',
-    '트레이스로 느린 구간 (Tempo)',
+  { key: 'observability', label: 'Observability', icon: '🔭', color: '#0E7490', active: true, presets: [
+    '서비스 p99 레이턴시 (Prometheus)',
+    '에러율 급증 구간 분석 (PromQL)',
+    'ClickHouse로 느린 트레이스 Top N',
+    '메트릭 라벨/시리즈 탐색',
   ] },
 ];
 

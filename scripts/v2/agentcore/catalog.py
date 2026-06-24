@@ -29,7 +29,7 @@ GATEWAY_DESCRIPTIONS = {
     "monitoring": "CloudWatch, CloudTrail (AWS native only)",
     "iac": "CloudFormation, CDK, Terraform",
     "ops": "Steampipe SQL listing/status/docs/inventory",
-    "external-obs": "External Observability & Integrations (Notion now; Prometheus/Loki/Tempo next)",
+    "external-obs": "External Observability & Integrations — routed (Prometheus + ClickHouse + Notion; Loki/Tempo/Mimir next)",
 }
 
 
@@ -361,7 +361,7 @@ TARGETS = {
     # First of the v1 datasource family (user-endpoint + SQL). data gateway. Read-only SQL guard +
     # table-function SSRF block in the Lambda; credential (endpoint+user/pass) via the Connectors UI.
     "clickhouse-mcp-target": {
-        "gateway": "data",
+        "gateway": "external-obs",
         "lambda_key": "clickhouse-mcp",
         "description": "ClickHouse read-only — SQL query, list tables, describe (3 tools)",
         "tools": [
@@ -374,7 +374,7 @@ TARGETS = {
     # Prometheus datasource (v1 family #2) — read-only PromQL. monitoring gateway (with CloudWatch +
     # OpenSearch). User-supplied endpoint via the Connectors UI; SSRF-guarded; read-only by construction.
     "prometheus-mcp-target": {
-        "gateway": "monitoring",
+        "gateway": "external-obs",
         "lambda_key": "prometheus-mcp",
         "description": "Prometheus read-only — PromQL instant/range query, labels, series, metric metadata (6 tools)",
         "tools": [
