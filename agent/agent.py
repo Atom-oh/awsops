@@ -53,7 +53,12 @@ def _resolve_gateway_key(role, gateways):
     matches — the `v2-` fallback becomes dead code. **REMOVE the `v2-` candidate at the v2→main
     cutover** (it is a coexistence shim, not permanent behavior)."""
     key = _GATEWAY_ALIAS.get(role, role)
-    for candidate in (key, f"v2-{key}"):  # canonical first; `v2-` = transition shim (drop at v2→main)
+    # canonical first; `v2-` = transition shim (drop at v2→main). The DEFAULT_GATEWAY fallback is
+    # resolved the SAME tolerant way — under v2-only discovery the default is `v2-ops`, not `ops`,
+    # so a hard `GATEWAYS[DEFAULT_GATEWAY]` would KeyError. Returning DEFAULT_GATEWAY as the last
+    # resort yields None at the call site (GATEWAYS.get), which the MCP try-block degrades to a
+    # tool-less Bedrock-direct answer — never a crash outside the try.
+    for candidate in (key, f"v2-{key}", DEFAULT_GATEWAY, f"v2-{DEFAULT_GATEWAY}"):
         if candidate in gateways:
             return candidate
     return DEFAULT_GATEWAY
@@ -762,7 +767,11 @@ async def handler(payload):
     extra_context = payload.get("extraContext")  # bounded BFF-supplied context (e.g. cached datasource schemas)
     tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
     gateway_key = _resolve_gateway_key(gateway_role, GATEWAYS)
-    gateway_url = GATEWAYS.get(gateway_key, GATEWAYS[DEFAULT_GATEWAY])
+    # NO eager `GATEWAYS[DEFAULT_GATEWAY]` default — that index is always evaluated and KeyErrors
+    # (outside the try → no MCP fallback) when `ops` is absent (v2-only discovery = `v2-ops`).
+    # _resolve_gateway_key already returns a present key when possible; a None here is handled by
+    # the MCP try below (tool-less fallback).
+    gateway_url = GATEWAYS.get(gateway_key)
 
     # Extract cross-account info / 크로스 어카운트 정보 추출
     # effective_account_id() blanks the host account → same-account access uses the

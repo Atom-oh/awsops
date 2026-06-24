@@ -314,6 +314,21 @@ class TestDatasourceGuidance(unittest.TestCase):
         # Unknown / unprovisioned → DEFAULT_GATEWAY (never a hard crash).
         self.assertEqual(agent._resolve_gateway_key("observability", {"ops": "u"}), agent.DEFAULT_GATEWAY)
 
+    def test_resolve_gateway_key_v2_only_discovery_no_keyerror(self):
+        # v2-ONLY discovery (v1 retired, not yet renamed): DEFAULT_GATEWAY 'ops' is absent,
+        # the key is 'v2-ops'. The resolver must return a PRESENT key (v2-external-obs / v2-ops),
+        # not a bare 'ops' that the call site would KeyError on.
+        v2only = {"v2-network": "u", "v2-ops": "u", "v2-external-obs": "u"}
+        self.assertEqual(agent._resolve_gateway_key("observability", v2only), "v2-external-obs")
+        self.assertEqual(agent._resolve_gateway_key("network", v2only), "v2-network")
+        # an unmatched role falls back to the v2-spelled default (never raises, never returns absent 'ops')
+        self.assertEqual(agent._resolve_gateway_key("nope", v2only), "v2-ops")
+
+    def test_resolve_gateway_key_empty_map_returns_default_not_crash(self):
+        # Degenerate (no gateways discovered): returns DEFAULT_GATEWAY; call site GATEWAYS.get → None
+        # → MCP try-block degrades to a tool-less answer (no crash outside the try).
+        self.assertEqual(agent._resolve_gateway_key("observability", {}), agent.DEFAULT_GATEWAY)
+
 
 class TestAntiHallucinationFooter(unittest.TestCase):
     """The data agent once fabricated a non-existent 'Infra 에이전트'. The footer must give the real
