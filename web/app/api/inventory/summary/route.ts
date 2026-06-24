@@ -12,6 +12,7 @@ interface Splits {
   ebsUnencrypted: number;
   iamUserNoMfa: number;
   sgOpenIngress: number;
+  s3Public: number;
 }
 
 // Derived KPI sublines (C06): single round-trip UNION ALL over the synced JSONB.
@@ -25,6 +26,7 @@ const SPLITS_SQL = `
   UNION ALL SELECT 'sg_open_ingress', count(*)::int FROM inventory_resources
     WHERE account_id='self' AND resource_type='security_group'
     AND (data->'ip_permissions')::text ~ '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"'
+  UNION ALL SELECT 's3_public', count(*)::int FROM inventory_resources WHERE account_id='self' AND resource_type='s3_public_access' AND (data->>'bucket_policy_is_public')='true'
 `;
 
 /** Aggregate inventory counts: per resource_type (desc) and rolled up per category group. */
@@ -63,6 +65,7 @@ export async function GET(request: Request) {
       ebsUnencrypted: 0,
       iamUserNoMfa: 0,
       sgOpenIngress: 0,
+      s3Public: 0,
     };
     const SPLIT_KEY: Record<string, keyof Splits> = {
       ec2_running: 'ec2Running',
@@ -70,6 +73,7 @@ export async function GET(request: Request) {
       ebs_unencrypted: 'ebsUnencrypted',
       iam_user_no_mfa: 'iamUserNoMfa',
       sg_open_ingress: 'sgOpenIngress',
+      s3_public: 's3Public',
     };
     try {
       const sr = await pool.query<{ k: string; n: number }>(SPLITS_SQL);

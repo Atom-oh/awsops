@@ -23,6 +23,7 @@ interface Splits {
   ebsUnencrypted: number;
   iamUserNoMfa: number;
   sgOpenIngress: number;
+  s3Public: number;
 }
 interface Ec2Type { name: string; count: number; [k: string]: unknown }
 interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; splits?: Splits; ec2Types?: Ec2Type[] }
@@ -52,8 +53,8 @@ export default function Home() {
 
   const loadAll = useCallback(async () => {
     setBusy(true);
-    // Independent fetches — each degrades on its own (allSettled so one failure
-    // never blanks the others).
+    // Core summaries (Aurora-backed, fast) gate the refresh spinner. Each degrades on its
+    // own (allSettled) so one failure never blanks the others.
     await Promise.allSettled([
       fetch('/api/overview')
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
@@ -67,13 +68,21 @@ export default function Home() {
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then(setCost)
         .catch(() => setCost({ trend: [] })),
-      fetch('/api/eks/fleet')
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then(setFleet)
-        .catch(() => setFleet({ clusters: [] })),
     ]);
     setCapturedAt(new Date().toISOString());
     setBusy(false);
+
+    // EKS fleet is a LIVE K8s read (list nodes/pods/events per cluster) — deliberately
+    // kept OUT of the busy-gated set + bounded by a client timeout so a slow/stuck K8s API
+    // can never hang the home spinner (thin-BFF: the home page must not hard-couple to live
+    // cluster latency). The K8s charts fill in when it resolves, or stay empty on timeout.
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 6000);
+    fetch('/api/eks/fleet', { signal: ctl.signal })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then(setFleet)
+      .catch(() => setFleet({ clusters: [] }))
+      .finally(() => clearTimeout(t));
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -119,9 +128,11 @@ export default function Home() {
     .slice(0, 8);
   const hasFleet = clusters.length > 0;
 
-  // Security-issue rollup (open ingress + unencrypted EBS + IAM without MFA).
+  // Security-issue rollup — mirrors the /security finding contract (public S3 + open
+  // ingress + unencrypted EBS + IAM without MFA) so the tile can't false-negative on a
+  // high-severity public bucket.
   const sp = sum?.splits;
-  const secIssues = sp ? sp.sgOpenIngress + sp.ebsUnencrypted + sp.iamUserNoMfa : null;
+  const secIssues = sp ? sp.sgOpenIngress + sp.ebsUnencrypted + sp.iamUserNoMfa + (sp.s3Public ?? 0) : null;
 
   // Cost daily average (MTD ÷ elapsed days) for the cost tile subline.
   const dailyAvg =
@@ -203,7 +214,7 @@ export default function Home() {
               value={secIssues == null ? DASH : secIssues}
               href="/security"
               variant={secIssues && secIssues > 0 ? 'danger' : 'default'}
-              hint={secIssues != null ? (secIssues > 0 ? '개방 SG · 미암호화 · MFA 미설정' : '✓ 이상 없음') : undefined}
+              hint={secIssues != null ? (secIssues > 0 ? '공개 S3 · 개방 SG · 미암호화 · MFA 미설정' : '✓ 이상 없음') : undefined}
             />
             <StatTile label="IAM 역할" value={n('iam_role')} href="/inventory/iam_role" />
             <StatTile

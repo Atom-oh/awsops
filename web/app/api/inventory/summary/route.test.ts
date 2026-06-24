@@ -26,6 +26,7 @@ describe('GET /api/inventory/summary', () => {
         { k: 'ebs_unencrypted', n: 2 },
         { k: 'iam_user_no_mfa', n: 3 },
         { k: 'sg_open_ingress', n: 1 },
+        { k: 's3_public', n: 1 },
       ] });
     const { GET } = await import('./route');
     const res = await GET(req());
@@ -46,6 +47,7 @@ describe('GET /api/inventory/summary', () => {
       ebsUnencrypted: 2,
       iamUserNoMfa: 3,
       sgOpenIngress: 1,
+      s3Public: 1,
     });
   });
   it('splits failure degrades to zeros without failing byType', async () => {
@@ -65,6 +67,7 @@ describe('GET /api/inventory/summary', () => {
       ebsUnencrypted: 0,
       iamUserNoMfa: 0,
       sgOpenIngress: 0,
+      s3Public: 0,
     });
   });
   it('500 on byType db error', async () => {
