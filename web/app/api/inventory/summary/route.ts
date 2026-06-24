@@ -81,7 +81,20 @@ export async function GET(request: Request) {
       // splits omitted/zeros — byType already computed, don't fail the response.
     }
 
-    return Response.json({ byType, byCategory, total, splits });
+    // EC2 instance-type distribution for the landing donut (degrade to [] on failure).
+    let ec2Types: { name: string; count: number }[] = [];
+    try {
+      const er = await pool.query<{ t: string; n: number }>(
+        `SELECT COALESCE(NULLIF(data->>'instance_type',''),'unknown') AS t, count(*)::int AS n
+         FROM inventory_resources WHERE account_id='self' AND resource_type='ec2'
+         GROUP BY 1 ORDER BY n DESC LIMIT 10`,
+      );
+      ec2Types = er.rows.map((row) => ({ name: row.t, count: Number(row.n) }));
+    } catch {
+      // donut omitted — byType already computed, don't fail the response.
+    }
+
+    return Response.json({ byType, byCategory, total, splits, ec2Types });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
