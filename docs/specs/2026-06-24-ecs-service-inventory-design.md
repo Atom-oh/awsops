@@ -37,18 +37,18 @@ The implementation reuses the existing D1 inventory path:
 `/api/inventory/[type]` and page `/inventory/[type]` already validate against `INVENTORY_TYPES`, so
 the new page appears by catalog registration alone.
 
-`service_arn` is the resource id. This avoids collisions where multiple clusters in the same region have
-services with the same `service_name`.
+`service_key` (`cluster_arn || '/' || service_name`) is the resource id. This avoids depending on a
+non-v1 `service_arn` column and prevents same-named services in different clusters from colliding, including
+legacy short-ARN accounts.
 
 ## Data Shape / 데이터
 
 The sync query should select only read-only service fields:
 
-- `service_arn`, `service_name`, `cluster_arn`, `region`, `account_id`
+- `service_key`, `service_name`, `cluster_arn`, `region`, `account_id`
 - `status`, `desired_count`, `running_count`, `pending_count`
-- `launch_type`, `platform_version`, `scheduling_strategy`
-- `task_definition`, `deployment_controller`
-- `created_at`, `enable_execute_command`, `tags`
+- `launch_type`, `scheduling_strategy`
+- `task_definition`, `created_at`, `tags`
 
 The inventory page columns prioritize operational scan fields: service name, status, desired/running/pending,
 launch type, scheduling strategy, cluster ARN, task definition, and created time.
@@ -77,11 +77,11 @@ Focused verification:
 Manual command set after implementation:
 
 ```bash
-cd web && npx vitest run web/lib/inventory-types.test.ts
-python -m pytest agent/lambda/test_inventory_read_mcp.py
+(cd web && npx vitest run lib/inventory-types.test.ts)
+python3 -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py agent/lambda/test_inventory_read_mcp.py
 ```
 
-Broader `cd web && npm run build` and `cd web && npx vitest run` should be run before PR if time permits.
+Broader `(cd web && npm run build)` and `(cd web && npx vitest run)` should be run before PR if time permits.
 
 ## Out Of Scope / 제외
 

@@ -67,7 +67,7 @@ expect(layoutOf('ecs_service')).toBe('chart');
 Run:
 
 ```bash
-cd web && npx vitest run lib/inventory-types.test.ts
+(cd web && npx vitest run lib/inventory-types.test.ts)
 ```
 
 Expected: fails because `ecs_service` is not registered and count/placement/layout do not match.
@@ -118,7 +118,7 @@ Add layout:
 Run:
 
 ```bash
-cd web && npx vitest run lib/inventory-types.test.ts
+(cd web && npx vitest run lib/inventory-types.test.ts)
 ```
 
 Expected: pass.
@@ -165,14 +165,16 @@ def test_ecs_service_query_registered_readonly():
     mod = load_sync_lambda()
     sql, id_col, region_col = mod.QUERIES["ecs_service"]
     assert "FROM aws_ecs_service" in sql
-    assert id_col == "service_arn"
+    assert "(cluster_arn || '/' || service_name) AS service_key" in sql
+    assert id_col == "service_key"
     assert region_col == "region"
     for col in [
-        "service_arn", "service_name", "cluster_arn", "status",
+        "service_name", "cluster_arn", "status",
         "desired_count", "running_count", "pending_count",
         "launch_type", "scheduling_strategy", "task_definition", "created_at",
     ]:
         assert col in sql
+    assert "service_arn" not in sql
 ```
 
 - [ ] **Step 2: Run the test to verify failure**
@@ -193,11 +195,12 @@ In `scripts/v2/steampipe/sync_lambda.py`, add this `QUERIES` entry after `ecs_cl
     "ecs_service": (
         # v1 parity: ECS service inventory (desired/running/pending + launch type). Read-only
         # aws_ecs_service describe/list data, materialized into Aurora like other inventory types.
-        "SELECT service_arn, service_name, cluster_arn, region, account_id, status, "
+        "SELECT (cluster_arn || '/' || service_name) AS service_key, "
+        "service_name, cluster_arn, region, account_id, status, "
         "desired_count, running_count, pending_count, launch_type, scheduling_strategy, "
         "task_definition, created_at, tags "
-        "FROM aws_ecs_service ORDER BY service_name",
-        "service_arn",
+        "FROM aws_ecs_service ORDER BY cluster_arn, service_name",
+        "service_key",
         "region",
     ),
 ```
@@ -312,7 +315,7 @@ git commit -m "feat(agent): advertise ecs service inventory"
 - [ ] **Step 1: Run focused tests**
 
 ```bash
-cd web && npx vitest run lib/inventory-types.test.ts
+(cd web && npx vitest run lib/inventory-types.test.ts)
 python3 -m pytest scripts/v2/steampipe/test_sync_lambda_queries.py agent/lambda/test_inventory_read_mcp.py
 ```
 
@@ -321,8 +324,8 @@ Expected: all pass.
 - [ ] **Step 2: Run broader build/test checks if dependencies are present**
 
 ```bash
-cd web && npm run build
-cd web && npx vitest run
+(cd web && npm run build)
+(cd web && npx vitest run)
 ```
 
 Expected: build and tests pass. If pre-existing type/test noise appears, capture the exact failure and do not hide it.

@@ -124,11 +124,14 @@ QUERIES = {
     "ecs_service": (
         # v1 parity: ECS service inventory (desired/running/pending + launch type). Read-only
         # aws_ecs_service describe/list data, materialized into Aurora like other inventory types.
-        "SELECT service_arn, service_name, cluster_arn, region, account_id, status, "
+        # Key by cluster+service instead of a service ARN column: aws_ecs_service exposes v1-parity
+        # fields directly, and legacy short ARNs can collide for same-named services in different clusters.
+        "SELECT (cluster_arn || '/' || service_name) AS service_key, "
+        "service_name, cluster_arn, region, account_id, status, "
         "desired_count, running_count, pending_count, launch_type, scheduling_strategy, "
         "task_definition, created_at, tags "
-        "FROM aws_ecs_service ORDER BY service_name",
-        "service_arn",
+        "FROM aws_ecs_service ORDER BY cluster_arn, service_name",
+        "service_key",
         "region",
     ),
     "ecr": (

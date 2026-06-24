@@ -22,11 +22,13 @@ def test_ecs_service_query_registered_readonly():
     mod = load_sync_lambda()
     sql, id_col, region_col = mod.QUERIES["ecs_service"]
     assert "FROM aws_ecs_service" in sql
-    assert id_col == "service_arn"
+    assert "(cluster_arn || '/' || service_name) AS service_key" in sql
+    assert id_col == "service_key"
     assert region_col == "region"
     for col in [
-        "service_arn", "service_name", "cluster_arn", "status",
+        "service_name", "cluster_arn", "status",
         "desired_count", "running_count", "pending_count",
         "launch_type", "scheduling_strategy", "task_definition", "created_at",
     ]:
         assert col in sql
+    assert "service_arn" not in sql
