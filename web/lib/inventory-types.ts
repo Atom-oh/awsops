@@ -28,6 +28,17 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'status', label: 'Status' }, { key: 'running_tasks_count', label: 'Running' },
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
     { key: 'registered_container_instances_count', label: 'Instances' } ] },
+  ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', columns: [
+    { key: 'service_name', label: 'Service' }, { key: 'status', label: 'Status' },
+    { key: 'desired_count', label: 'Desired' }, { key: 'running_count', label: 'Running' },
+    { key: 'pending_count', label: 'Pending' }, { key: 'launch_type', label: 'Launch' },
+    { key: 'scheduling_strategy', label: 'Strategy' }, { key: 'cluster_arn', label: 'Cluster' },
+    { key: 'task_definition', label: 'Task def' }, { key: 'created_at', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'service_name', 'region', 'status'] },
+      { label: 'Capacity', keys: ['desired_count', 'running_count', 'pending_count', 'launch_type', 'scheduling_strategy'] },
+      { label: 'Runtime', keys: ['cluster_arn', 'task_definition', 'created_at'] },
+    ] },
   ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', columns: [
     { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
     { key: 'launch_type', label: 'Launch' }, { key: 'task_definition_arn', label: 'Task def' } ] },
@@ -160,7 +171,7 @@ const GROUPS: Record<string, GroupMeta> = {
     slug: 'compute', labelKey: 'group.compute', splitKeys: ['ec2Running', 'ec2Stopped'],
     injected: [{ key: 'eks', href: '/eks', labelKey: 'nav.eks' }],
     order: ['ec2', 'lambda', 'ecr'],
-    subgroups: [{ key: 'ecs', labelKey: 'group.compute.ecs', types: ['ecs_cluster', 'ecs_task'] }],
+    subgroups: [{ key: 'ecs', labelKey: 'group.compute.ecs', types: ['ecs_cluster', 'ecs_service', 'ecs_task'] }],
   },
   'Storage & DB': {
     slug: 'storage', labelKey: 'group.storage', splitKeys: ['ebsUnencrypted'],
@@ -346,6 +357,12 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
     { kind: 'deprecatedRuntime', label: 'EOL 런타임', col: 'runtime' },
     { kind: 'distinct', label: '런타임 종류', col: 'runtime' },
   ],
+  ecs_service: [
+    { kind: 'sum', label: 'Desired', col: 'desired_count' },
+    { kind: 'sum', label: 'Running', col: 'running_count' },
+    { kind: 'sum', label: 'Pending', col: 'pending_count' },
+    { kind: 'distinct', label: 'Clusters', col: 'cluster_arn' },
+  ],
   ebs_volume: [
     { kind: 'countWhere', label: '사용 중', col: 'state', eq: 'in-use', tone: 'accent' },
     { kind: 'countWhere', label: '미암호화', col: 'encrypted', eq: 'false', tone: 'danger' },
@@ -402,7 +419,7 @@ const LAYOUTS: Record<string, Archetype> = {
   // risk — types with genuine danger signals → lead with the verdict
   iam_user: 'risk', s3_public_access: 'risk', cloudtrail: 'risk',
   // chart — state/utilization distribution is the story
-  ec2: 'chart', lambda: 'chart', ecs_cluster: 'chart', cloudwatch_alarm: 'chart',
+  ec2: 'chart', lambda: 'chart', ecs_cluster: 'chart', ecs_service: 'chart', cloudwatch_alarm: 'chart',
   // capacity — engine/type/size; donut beside the table
   rds: 'capacity', ebs_volume: 'capacity', dynamodb: 'capacity', elasticache: 'capacity',
   opensearch: 'capacity', msk: 'capacity', s3: 'capacity', ecr: 'capacity',
