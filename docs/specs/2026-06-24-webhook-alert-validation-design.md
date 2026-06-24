@@ -1,7 +1,7 @@
 # Design — Webhook Alert Validation (LLM true/false-alert gate) + 2-stage SNS
 
 작성일 / Date: 2026-06-24
-상태 / Status: **Design rev2 — hardened after codex-weighted multi-model consensus gate (codex FAIL + kimi FAIL + glm FAIL + agy MAJOR → all findings folded in & code-verified)**
+상태 / Status: **Design rev3 — rev2 closed the 14 rev1 blockers; rev3 folds in codex closure's 3 deeper MAJORs (stage CHECK, connector packaging, CloudWatch severity-mapping conflict), all code-verified**
 범위 / Scope: v2 (`web/`, `scripts/v2/incident/`, `terraform/v2/foundation/`)
 거버넌스 / Posture: **신호는 read-only (ADR-006 analysis-only)**. SNS publish는 **거버넌스 외부 쓰기 (ADR-007)** — 토픽 ARN 한정 IAM. AWS resource mutation/autonomy = ADR-005 FROZEN(비범위).
 
@@ -99,6 +99,7 @@ groups:
 
 ### 6.2 신호 수집 (병렬·deadline·캡·쿼리 안전)
 - 수집기: 메트릭/로그/트레이스/ClickHouse는 **`_invoke_connector` 재사용(credential-blind)**[verified] — incident Lambda 역할에 **gated `lambda:InvokeFunction`(5 connector Lambda)** 추가 필요[verified: 현재 미보유]. topology는 **Aurora 직접 쿼리**(in-VPC, 저지연)[verified: 테이블 존재].
+- **패키징**[codex closure-MAJOR, verified]: 현재 incident Lambda zip은 `db.py`+`incident/*.py`만 포함하고 `diagnosis/sources.py`는 **미포함**(`incidents.tf` archive). → `_invoke_connector`(+ 결과 compaction 헬퍼)를 **공유 모듈**(예 `scripts/v2/workers/connector_invoke.py`)로 추출해 diagnosis 워커와 incident Lambda **둘 다 패키징**(또는 incident archive에 sources.py 추가). 코드 중복 금지, 단일 출처 유지.
 - **지연 예산**[codex/glm/kimi/agy 만장일치]: 총 validation deadline(SSM, 기본 ~25s) + 신호별 timeout(기본 5s) + 병렬 + top-N/range/cardinality 캡. deadline 초과·실패·0신호 → **uncertain**(절대 false_positive 아님). SNS#1 지연은 webhook timeout이 아니라 Lambda 예산에 종속(비동기).
 - **쿼리 인젝션/비용 DoS 방지**[codex]: 고정 쿼리 템플릿 + alert label/identifier 검증(정규식 화이트리스트) + range/regex/cardinality 캡. **alert 텍스트가 엔드포인트/쿼리 본문을 고르지 못함.**
 - **계정 스코핑**[codex/kimi/glm]: `trigger_event.account_id`로 모든 신호 스코프(CW account, topology `account_id` 필터, datasource instance). 호스트/기본 데이터로 드리프트 금지.
@@ -109,9 +110,13 @@ groups:
 - 출력 = 엄격 JSON 스키마 `{verdict, confidence, propagation, evidence[], rationale, suggested_checks}`. 스키마 불일치 → **uncertain로 에스컬레이트**.
 
 ### 6.4 억제 안전모델 (CRITICAL, 만장일치)
+**suppression severity ≠ trigger/display severity**[codex closure-MAJOR, verified]: `normalizeCloudWatch`는 `ALARM`을 무조건 `critical`로 매핑한다[verified] — 이걸 그대로 never-suppress 기준에 쓰면 **모든 CloudWatch 알림이 항상 에스컬레이트되어 억제가 무의미**해진다. 따라서 별도 `suppression_severity(trigger_event)`를 정의한다:
+- **운영자가 명시 선언한 critical만** never-suppress: Alertmanager `labels.severity=='critical'`(§5.1 예시처럼) **또는** CloudWatch 알람의 명시 태그(예 `awsops:severity=critical`, 알람 tags/dimension).
+- 그 외(태그 없는 CloudWatch ALARM 포함) → suppression_severity='warning'(억제 적격). CloudWatch state→critical 자동매핑은 운영자 severity 선언이 아니다.
+
 억제는 **모든 조건 충족 시에만**:
 - `verdict=="false_positive"` AND `confidence>=threshold(SSM, 기본 0.8)` AND
-- `severity != 'critical'`(**critical은 verdict 무관 항상 에스컬레이트**)[codex/glm/agy/kimi] AND
+- `suppression_severity != 'critical'`(**명시 critical은 verdict 무관 항상 에스컬레이트**)[codex/glm/agy/kimi] AND
 - **결정론적 자가회복 증거**(메트릭이 임계 아래로 복귀) AND **≥2 독립 신호 corroboration**[codex] AND
 - 신호 결손/실패 없음(있으면 uncertain).
 추가 가드: **shadow 모드 우선**(SSM `alert_suppression_enforce=false` → verdict 기록만, 억제 미집행)[codex]; verdict는 **항상 기록**(감사); **관측 메트릭**(verdict별 카운트, severity별 suppressed, latency, degraded)[glm].
@@ -137,6 +142,7 @@ groups:
 ## 9. 데이터 모델 (additive 마이그레이션 1개)
 - **신규 `incidents.trigger_event jsonb`**(또는 `incident_events` 테이블) — triage가 격리 정규화 알림(startsAt/labels/metric/account/resources)을 저장[verified: 현재 미저장 — CRITICAL 해소].
 - `incidents.validation jsonb` + `status` CHECK에 `validated`/`false_positive` 추가 + **GIN 인덱스**(validation verdict 조회)[glm].
+- **`incident_stages.stage` CHECK에 `'alert_validation'` 추가**[codex closure-MAJOR, verified: 현재 CHECK=`triage|investigation|root_cause|mitigation_plan|prevention`만 → 신규 스테이지 행 INSERT가 CHECK 위반]. (status CHECK는 변경 불필요.)
 - 알림 멱등: `incident_notifications(incident_id, stage, status, ...)` UNIQUE(incident_id, stage).
 - ingress kind는 **기존** `INTEGRATION_KINDS_INGRESS`에 이미 존재(추가 불필요)[verified].
 - 규칙: `migrations/<ULID>_alert_validation.sql`(schema.sql append 아님).
@@ -159,7 +165,7 @@ groups:
 ## 13. 구현 분해 — **독립 리뷰 PR 4개** (만장일치)
 순서·독립 테스트 가능:
 1. **W1 — 인그레스 인증 하드닝**(보안 핵심, 단독): SNS 서명검증+TopicArn allowlist + Alertmanager bearer + envelope-first + SSRF-safe confirm. *(owner가 원하면 별도 spec으로 분리 가능 — codex/kimi)*
-2. **W2 — 트리거 이벤트 영속 + AlertValidation**: trigger_event persist(triage) + 수집기(connector invoke IAM) + Haiku(bedrock IAM) + **억제 안전모델** + SM splice + 마이그레이션.
+2. **W2 — 트리거 이벤트 영속 + AlertValidation**: trigger_event persist(triage) + 수집기(connector invoke IAM + **공유 헬퍼 추출/패키징**) + Haiku(bedrock IAM) + **억제 안전모델(suppression_severity 매핑 포함)** + SM splice + 마이그레이션(**`incident_stages.stage` CHECK에 `alert_validation` 추가** + `incidents.validation`/status/GIN).
 3. **W3 — SNS 알림**: 토픽 + SNS#1/#2 + 멱등 + job terminalization + ADR-007 IAM.
 4. **W4 — Integrations UX + 가이드**: ingress 등록 + 소스별 가이드 + URL/시크릿 마스킹.
 
