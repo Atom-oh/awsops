@@ -6,18 +6,18 @@ import {
 } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
-  it('has the 32 wave types (31 + ecs_service)', () => {
+  it('has the 33 wave types (31 + ecs_service + ebs_snapshot)', () => {
     const keys = Object.keys(INVENTORY_TYPES);
     expect(keys).toContain('ec2'); expect(keys).toContain('s3'); expect(keys).toContain('iam_role');
     expect(keys).toContain('cloudfront'); expect(keys).toContain('cloudwatch_alarm'); expect(keys).toContain('msk');
     expect(keys).toContain('target_group'); expect(keys).toContain('route53'); expect(keys).toContain('ecs_task');
-    expect(keys).toContain('ecs_service');
+    expect(keys).toContain('ecs_service'); expect(keys).toContain('ebs_snapshot');
     // L7 resolution + routing types
     expect(keys).toContain('apigatewayv2_api'); expect(keys).toContain('apigatewayv2_integration'); expect(keys).toContain('cloudfront_vpc_origin');
     expect(keys).toContain('apigatewayv2_route'); expect(keys).toContain('alb_listener_rule');
     // security findings source (denial-safe S3 public-access sync)
     expect(keys).toContain('s3_public_access');
-    expect(keys.length).toBe(32);
+    expect(keys.length).toBe(33);
   });
   it('every type has a label, group, and >=1 column', () => {
     for (const [k, v] of Object.entries(INVENTORY_TYPES)) {
@@ -31,6 +31,7 @@ describe('INVENTORY_TYPES registry', () => {
     expect(g.find((x) => x.group === 'Compute')?.types).toContain('ec2');
     expect(g.find((x) => x.group === 'Network')?.types).toContain('vpc');
     expect(g.find((x) => x.group === 'Monitoring')?.types).toContain('cloudwatch_alarm');
+    expect(g.find((x) => x.group === 'Storage & DB')?.types).toContain('ebs_snapshot');
   });
   it('stateKey/distKey (when present) reference a column key, resource_id, region, or a non-empty data field', () => {
     const VIRTUAL = new Set(['resource_id', 'region']);
@@ -93,11 +94,11 @@ describe('navTree (sidebar IA hierarchy)', () => {
     expect(tree.map((g) => g.slug)).toEqual(['compute', 'storage', 'network', 'security', 'monitoring']);
   });
 
-  it('places every inventory type exactly once (no drop, no dup) — 32 total', () => {
+  it('places every inventory type exactly once (no drop, no dup) — 33 total', () => {
     const placed = tree.flatMap((g) => invTypesOf(g.slug));
     expect(new Set(placed).size).toBe(placed.length); // no duplicates
     expect(new Set(placed)).toEqual(new Set(Object.keys(INVENTORY_TYPES)));
-    expect(placed.length).toBe(32);
+    expect(placed.length).toBe(33);
   });
 
   it('Compute injects EKS as a feature leaf first, then ec2/lambda/ecr, with an ECS subgroup', () => {

@@ -5,6 +5,7 @@ Env: STEAMPIPE_HOST, STEAMPIPE_SECRET_ARN (db password), AURORA_ENDPOINT, AURORA
 AURORA_SECRET_ARN, AWS_REGION."""
 import json
 import os
+import re
 import ssl
 import boto3
 import pg8000.native
@@ -287,6 +288,23 @@ QUERIES = {
         "route_uid",
         "region",
     ),
+    # ---- v1-parity inventory addition (g-02; read-only). ecs_service (g-01) is defined above,
+    # owned by the concurrent merge (keyed by cluster+service). ----
+    "ebs_snapshot": (
+        # g-02: account-owned EBS snapshots. The `owner_id = (caller account)` predicate is
+        # MANDATORY — it pushes OwnerIds=self down to DescribeSnapshots. Without it Steampipe
+        # returns every public AWS snapshot (hundreds of thousands → API throttle / OOM).
+        "SELECT snapshot_id, region, account_id, arn, volume_id, volume_size, state, progress, "
+        "encrypted, start_time, description, owner_id, tags "
+        # owner_id MUST be a LITERAL constant so Steampipe pushes OwnerIds=self down to
+        # DescribeSnapshots. A subquery/bound-param qual is NOT pushed down by the FDW (it is
+        # evaluated post-fetch) → every public AWS snapshot would be pulled. sync() renders the
+        # {account_id} placeholder to the caller account (12-digit, validated) before running.
+        "FROM aws_ebs_snapshot WHERE owner_id = '{account_id}' "
+        "ORDER BY start_time DESC",
+        "snapshot_id",
+        "region",
+    ),
 }
 
 
@@ -454,6 +472,31 @@ def _steampipe():
                                     port=9193, ssl_context=_ssl_ctx())
 
 
+_ACCT_RE = re.compile(r"^\d{12}$")
+_ACCOUNT_CACHE = {}
+
+
+def _caller_account():
+    """Caller's 12-digit AWS account id (cached). Used to inject a literal owner_id qual so
+    Steampipe can push OwnerIds=self down to APIs like DescribeSnapshots."""
+    if "id" not in _ACCOUNT_CACHE:
+        _ACCOUNT_CACHE["id"] = boto3.client(
+            "sts", region_name=os.environ.get("AWS_REGION", "ap-northeast-2")
+        ).get_caller_identity()["Account"]
+    return _ACCOUNT_CACHE["id"]
+
+
+def _inject_account(sql, account_id):
+    """Render a {account_id} placeholder to a LITERAL account id (validated 12-digit). A literal
+    is required for Steampipe qual pushdown — a subquery or bound param is evaluated post-fetch
+    by the FDW and is NOT pushed down to the AWS API."""
+    if "{account_id}" not in sql:
+        return sql
+    if not _ACCT_RE.match(str(account_id)):
+        raise ValueError(f"refusing to inject non-account-id literal: {account_id!r}")
+    return sql.format(account_id=account_id)
+
+
 def sync(resource_type):
     if resource_type not in _ALLOWED:
         return {"error": f"unknown type {resource_type}"}
@@ -474,6 +517,8 @@ def sync(resource_type):
                 recs, id_col, region_col = SDK_SYNCS[resource_type]()
             else:
                 sql, id_col, region_col = QUERIES[resource_type]
+                if "{account_id}" in sql:  # only templated queries need the (STS) account literal
+                    sql = _inject_account(sql, _caller_account())  # literal owner_id for FDW pushdown
                 sdb = _steampipe()
                 try:
                     rows = sdb.run(sql)
