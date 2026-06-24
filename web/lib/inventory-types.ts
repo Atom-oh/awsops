@@ -44,6 +44,11 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'name', label: 'Name' }, { key: 'volume_type', label: 'Type' }, { key: 'size', label: 'Size(GB)' },
     { key: 'state', label: 'State' }, { key: 'encrypted', label: 'Encrypted' }, { key: 'iops', label: 'IOPS' },
     { key: 'availability_zone', label: 'AZ' }, { key: 'create_time', label: 'Created' } ] },
+  ebs_snapshot: { label: 'EBS Snapshots', group: 'Storage & DB', stateKey: 'state', distKey: 'state', columns: [
+    { key: 'volume_id', label: 'Volume' }, { key: 'volume_size', label: 'Size(GB)' },
+    { key: 'state', label: 'State' }, { key: 'progress', label: 'Progress' },
+    { key: 'encrypted', label: 'Encrypted' }, { key: 'start_time', label: 'Started' },
+    { key: 'description', label: 'Description' } ] },
   rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'class', label: 'Class' }, { key: 'status', label: 'Status' }, { key: 'multi_az', label: 'Multi-AZ' },
@@ -168,7 +173,7 @@ const GROUPS: Record<string, GroupMeta> = {
   },
   'Storage & DB': {
     slug: 'storage', labelKey: 'group.storage', splitKeys: ['ebsUnencrypted'],
-    order: ['s3', 'ebs_volume', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'msk'],
+    order: ['s3', 'ebs_volume', 'ebs_snapshot', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'msk'],
   },
   'Network': {
     slug: 'network', labelKey: 'group.network', splitKeys: ['sgOpenIngress'],
@@ -362,6 +367,12 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
     { kind: 'sum', label: '총 용량', col: 'size', suffix: ' GB' },
     { kind: 'distinct', label: '타입 종류', col: 'volume_type' },
   ],
+  ebs_snapshot: [
+    { kind: 'sum', label: '총 용량', col: 'volume_size', suffix: ' GB' },
+    { kind: 'countWhere', label: '완료', col: 'state', eq: 'completed', tone: 'accent' },
+    { kind: 'countWhere', label: '미암호화', col: 'encrypted', eq: 'false', tone: 'danger' },
+    { kind: 'distinct', label: '볼륨 수', col: 'volume_id' },
+  ],
   alb: [
     { kind: 'countWhere', label: '활성', col: 'state_code', eq: 'active', tone: 'accent' },
     { kind: 'countWhere', label: '인터넷 노출', col: 'scheme', eq: 'internet-facing' },
@@ -414,7 +425,7 @@ const LAYOUTS: Record<string, Archetype> = {
   // chart — state/utilization distribution is the story
   ec2: 'chart', lambda: 'chart', ecs_cluster: 'chart', ecs_service: 'chart', cloudwatch_alarm: 'chart',
   // capacity — engine/type/size; donut beside the table
-  rds: 'capacity', ebs_volume: 'capacity', dynamodb: 'capacity', elasticache: 'capacity',
+  rds: 'capacity', ebs_volume: 'capacity', ebs_snapshot: 'capacity', dynamodb: 'capacity', elasticache: 'capacity',
   opensearch: 'capacity', msk: 'capacity', s3: 'capacity', ecr: 'capacity',
   // directory — listing/scanning, table-dominant (default for the rest)
   vpc: 'directory', subnet: 'directory', security_group: 'directory', waf: 'directory',
