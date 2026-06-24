@@ -223,13 +223,13 @@ def _text(t):
 
 
 def _drive(client, mcp_call, *, tools, max_rounds=8, max_tokens=al.MAX_OUTPUT_TOKENS,
-           system=None, messages=None):
+           system=None, messages=None, allowed=None):
     return run(al.drive_anthropic_loop(
         aclient=client, mcp_call=mcp_call, model=al.MODEL_ID,
         system_blocks=system if system is not None else [_text("sys")],
         anthropic_tools=tools,
         messages=messages if messages is not None else [{"role": "user", "content": [_text("q")]}],
-        max_rounds=max_rounds, max_tokens=max_tokens))
+        max_rounds=max_rounds, max_tokens=max_tokens, allowed_tool_names=allowed))
 
 
 class DriveAnthropicLoopTest(unittest.TestCase):
@@ -299,6 +299,39 @@ class DriveAnthropicLoopTest(unittest.TestCase):
         results = [blk for m in client.messages.calls[1]["messages"] if m["role"] == "user"
                    for blk in m["content"] if isinstance(blk, dict) and blk.get("type") == "tool_result"]
         self.assertTrue(any(r.get("is_error") for r in results))
+
+    def test_temperature_zero_passed_to_stream(self):
+        # P4 gate (kiro-opus MAJOR): parity with the Strands BedrockModel temperature=0.0 (ADR-038).
+        client = _FakeClient([(["x"], _final("end_turn", [_text("x")]))])
+        _drive(client, _Recorder(), tools=[])
+        self.assertEqual(client.messages.calls[0]["temperature"], al.MODEL_TEMPERATURE)
+        self.assertEqual(al.MODEL_TEMPERATURE, 0.0)
+
+    def test_multiple_tool_uses_in_one_turn_all_run(self):
+        client = _FakeClient([
+            ([], _final("tool_use", [_tooluse("a", "list_vpcs", {}), _tooluse("b", "get_topology", {})])),
+            (["done"], _final("end_turn", [_text("done")])),
+        ])
+        rec = _Recorder()
+        _drive(client, rec, tools=[{"name": "list_vpcs"}, {"name": "get_topology"}])
+        self.assertEqual([c[0] for c in rec.calls], ["list_vpcs", "get_topology"])
+        results = [blk for m in client.messages.calls[1]["messages"] if m["role"] == "user"
+                   for blk in m["content"] if isinstance(blk, dict) and blk.get("type") == "tool_result"]
+        self.assertEqual({r["tool_use_id"] for r in results}, {"a", "b"})
+
+    def test_execution_time_allowlist_refuses_unlisted_tool(self):
+        # P4 gate (codex, defense-in-depth): model output is not a security boundary — a tool the
+        # model names that is NOT in the allowed set must be refused at execution, never run.
+        client = _FakeClient([
+            ([], _final("tool_use", [_tooluse("x", "delete_everything", {})])),
+            (["ok"], _final("end_turn", [_text("ok")])),
+        ])
+        rec = _Recorder()
+        _drive(client, rec, tools=[{"name": "list_vpcs"}], allowed={"list_vpcs"})
+        self.assertEqual(rec.calls, [])  # never executed
+        results = [blk for m in client.messages.calls[1]["messages"] if m["role"] == "user"
+                   for blk in m["content"] if isinstance(blk, dict) and blk.get("type") == "tool_result"]
+        self.assertTrue(any(r.get("is_error") and "not permitted" in r["content"][0]["text"] for r in results))
 
 
 # ── run_anthropic_loop wiring (stubbed agent + anthropic) — Task 3 ────────────

@@ -22,6 +22,7 @@ MODEL_ID = "global.anthropic.claude-sonnet-4-6"
 BEDROCK_REGION = "ap-northeast-2"
 MAX_TOOL_ROUNDS = 8          # hard cap on tool-call rounds (runaway-loop backstop)
 MAX_OUTPUT_TOKENS = 4096     # Anthropic Messages API REQUIRES max_tokens on every call
+MODEL_TEMPERATURE = 0.0      # parity with the Strands BedrockModel — deterministic tool selection (ADR-038)
 EXTRA_CONTEXT_CAP = 8000     # bound BFF-supplied context (parity with agent.handler)
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,8 @@ _FAILED_DELTA = "_[에이전트 루프 오류로 응답을 생성하지 못했�
 
 
 async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks,
-                               anthropic_tools, messages, max_rounds, max_tokens):
+                               anthropic_tools, messages, max_rounds, max_tokens,
+                               allowed_tool_names=None):
     """The agentic loop, with all external effects injected so it is unit-testable with fakes:
 
       - ``aclient``: AsyncAnthropicBedrock-like; ``aclient.messages.stream(**kwargs)`` returns an
@@ -162,6 +164,7 @@ async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks,
         while True:
             offer_tools = bool(anthropic_tools) and rounds < max_rounds
             kwargs = {"model": model, "max_tokens": max_tokens,
+                      "temperature": MODEL_TEMPERATURE,
                       "system": system_blocks, "messages": msgs}
             if offer_tools:
                 kwargs["tools"] = anthropic_tools
@@ -181,6 +184,13 @@ async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks,
             msgs.append({"role": "assistant", "content": _assistant_content(final)})
             results = []
             for tu in tool_uses:
+                # Defense-in-depth (ADR-031/039): the allowlist is enforced OUTSIDE the model. The model
+                # output is NOT a security boundary — refuse to EXECUTE any tool the model names that is
+                # not in the allowed set, even if it hallucinated a gateway tool we did not expose.
+                if allowed_tool_names is not None and tu["name"] not in allowed_tool_names:
+                    logger.warning("tool %s not in allowlist — refused at execution time", tu.get("name"))
+                    results.append(tool_result_block(tu["id"], f"tool not permitted: {tu['name']}", is_error=True))
+                    continue
                 try:
                     res = await asyncio.to_thread(mcp_call, tu["name"], tu["input"])
                     results.append(tool_result_block(tu["id"], res))
@@ -286,10 +296,12 @@ async def run_anthropic_loop(payload):
                 return _normalize_tool_result(mcp_client.call_tool_sync(name, arguments=inp or {}))
 
             messages = build_anthropic_messages(history, user_input)
+            allowed_tool_names = {t["name"] for t in anthropic_tools}  # execution-time ceiling
             async for chunk in drive_anthropic_loop(
                     aclient=aclient, mcp_call=mcp_call, model=MODEL_ID,
                     system_blocks=system_blocks, anthropic_tools=anthropic_tools,
-                    messages=messages, max_rounds=MAX_TOOL_ROUNDS, max_tokens=MAX_OUTPUT_TOKENS):
+                    messages=messages, max_rounds=MAX_TOOL_ROUNDS, max_tokens=MAX_OUTPUT_TOKENS,
+                    allowed_tool_names=allowed_tool_names):
                 started = True
                 yield chunk
         return
