@@ -35,6 +35,19 @@ locals {
   # scheduled auto-diagnosis dispatcher gate — reuses the worker role/pg8000 layer/VPC + the jobs queue,
   # so it REQUIRES workers_enabled. Default false → 0 resources, $0, no scheduled runs.
   sched = var.workers_enabled && var.diagnosis_schedule_enabled ? 1 : 0
+
+  # AI Insights gate — requires workers_enabled. Grants the worker role read-only CloudWatch/Cost/EKS
+  # describe + SendMessage, wires the runtime flag + cluster list, and creates the daily dispatcher.
+  # Default false → 0 resources, $0. (EKS event access-entry is out-of-band: register-insight-access.sh.)
+  aii = var.workers_enabled && var.ai_insights_enabled ? 1 : 0
+  insight_env_list = local.aii == 1 ? [
+    { name = "AI_INSIGHTS_ENABLED", value = "true" },
+    { name = "ONBOARD_EKS_CLUSTERS", value = join(",", var.onboard_eks_clusters) },
+  ] : []
+  insight_env_map = local.aii == 1 ? {
+    AI_INSIGHTS_ENABLED  = "true"
+    ONBOARD_EKS_CLUSTERS = join(",", var.onboard_eks_clusters)
+  } : {}
 }
 
 ############################################################
@@ -106,6 +119,32 @@ data "archive_file" "workers_src" {
   source {
     content  = file("${local.workers_src}/diagnosis/signal_catalog.py")
     filename = "signal_catalog.py"
+  }
+  # AI Insights: the `insight` REGISTRY handler (job.py) + collectors. The `insight/` package structure
+  # is PRESERVED in the zip (NOT flattened) so `from insight.x import …` resolves at runtime.
+  source {
+    content  = file("${local.workers_src}/insight/__init__.py")
+    filename = "insight/__init__.py"
+  }
+  source {
+    content  = file("${local.workers_src}/insight/job.py")
+    filename = "insight/job.py"
+  }
+  source {
+    content  = file("${local.workers_src}/insight/cost_anomalies.py")
+    filename = "insight/cost_anomalies.py"
+  }
+  source {
+    content  = file("${local.workers_src}/insight/cw_anomalies.py")
+    filename = "insight/cw_anomalies.py"
+  }
+  source {
+    content  = file("${local.workers_src}/insight/k8s_events.py")
+    filename = "insight/k8s_events.py"
+  }
+  source {
+    content  = file("${local.workers_src}/insight/generate.py")
+    filename = "insight/generate.py"
   }
 }
 
@@ -433,7 +472,7 @@ resource "aws_ecs_task_definition" "worker" {
         # _compliance fails fast with a clear error.
         { name = "STEAMPIPE_HOST", value = "steampipe.${var.project}.internal" },
         { name = "STEAMPIPE_SECRET_ARN", value = try(aws_secretsmanager_secret.steampipe[0].arn, "") }
-      ], local.ds_env_list, local.notify_worker_env_list) # + gated datasource env; + gated DIAGNOSIS_SNS_TOPIC_ARN/APP_DOMAIN when diagnosis_notify_enabled
+      ], local.ds_env_list, local.notify_worker_env_list, local.insight_env_list) # + gated datasource env; + AI_INSIGHTS_ENABLED/ONBOARD_EKS_CLUSTERS when ai_insights_enabled
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -507,7 +546,7 @@ resource "aws_lambda_function" "worker" {
       ARTIFACT_BUCKET = aws_s3_bucket.diagnosis_artifacts[0].bucket
       BEDROCK_REGION  = var.region
       # + gated DIAGNOSIS_SNS_TOPIC_ARN/APP_DOMAIN (notify) — empty map when diagnosis_notify_enabled=false → no env diff.
-    }, local.notify_worker_env_map, local.ds_env_map) # + gated DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT when datasource_diagnosis_enabled
+    }, local.notify_worker_env_map, local.ds_env_map, local.insight_env_map) # + gated datasource env; + AI_INSIGHTS_ENABLED/ONBOARD_EKS_CLUSTERS when ai_insights_enabled
   }
   depends_on = [aws_cloudwatch_log_group.worker_fn, aws_iam_role_policy_attachment.worker_lambda_vpc]
 }
@@ -1151,4 +1190,102 @@ resource "aws_lambda_permission" "dsindex_dispatcher_events" {
   function_name = aws_lambda_function.dsindex_dispatcher[0].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.dsindex_dispatcher[0].arn
+}
+
+############################################################
+# AI Insights — read-only IAM (CloudWatch/Cost/EKS describe + SendMessage) + daily insight_dispatcher.
+# All count-gated on local.aii (workers_enabled && ai_insights_enabled). Default off → 0 resources, $0.
+# The `insight` job runs on the shared worker Lambda (REGISTRY); the dispatcher only enqueues it.
+############################################################
+resource "aws_iam_role_policy" "insight_reads" {
+  count = local.aii
+  name  = "ai-insights-reads"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "InsightReadOnly"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:DescribeAlarms", "ce:GetCostAndUsage", "eks:DescribeCluster"]
+        Resource = "*" # these read-only describe/get APIs do not support resource-level scoping
+      },
+      {
+        Sid      = "InsightEnqueue"
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.jobs[0].arn
+      },
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "insight_dispatcher" {
+  count             = local.aii
+  name              = "/aws/lambda/${var.project}-insight-dispatcher"
+  retention_in_days = 14
+}
+
+data "archive_file" "insight_dispatcher_src" {
+  count       = local.aii
+  type        = "zip"
+  output_path = "${path.module}/.build/insight_dispatcher.zip"
+  source {
+    content  = file("${local.workers_src}/db.py")
+    filename = "db.py"
+  }
+  source {
+    content  = file("${local.workers_src}/insight_dispatcher.py")
+    filename = "insight_dispatcher.py"
+  }
+}
+
+resource "aws_lambda_function" "insight_dispatcher" {
+  count            = local.aii
+  function_name    = "${var.project}-insight-dispatcher"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "insight_dispatcher.lambda_handler"
+  filename         = data.archive_file.insight_dispatcher_src[0].output_path
+  source_code_hash = data.archive_file.insight_dispatcher_src[0].output_base64sha256
+  timeout          = 60
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
+      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      JOBS_QUEUE_URL    = aws_sqs_queue.jobs[0].url
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.insight_dispatcher, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+resource "aws_cloudwatch_event_rule" "insight_dispatcher" {
+  count               = local.aii
+  name                = "${var.project}-insight-dispatcher"
+  description         = "Every 6 hours: enqueue an AI Insights generation job"
+  schedule_expression = "rate(6 hours)"
+}
+
+resource "aws_cloudwatch_event_target" "insight_dispatcher" {
+  count     = local.aii
+  rule      = aws_cloudwatch_event_rule.insight_dispatcher[0].name
+  target_id = "insight-dispatcher"
+  arn       = aws_lambda_function.insight_dispatcher[0].arn
+}
+
+resource "aws_lambda_permission" "insight_dispatcher_events" {
+  count         = local.aii
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.insight_dispatcher[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.insight_dispatcher[0].arn
 }

@@ -756,6 +756,17 @@ async def handler(payload):
         yield handle_rca(payload)
         return
 
+    # Flag-gated dark path (ADR-008 amended 2026-06-24, BASELINE §2): a custom Anthropic-SDK-on-
+    # Bedrock loop that replaces ONLY the Strands agent loop (lever = tool-loop debuggability).
+    # Default OFF (ANTHROPIC_AGENT_LOOP_ENABLED); per-request override via payload.agentLoop.
+    # Minimal slice — integrations (egress MCP) still route to the Strands path below.
+    from anthropic_loop import should_use_anthropic_loop
+    if should_use_anthropic_loop(payload) and not payload.get("integrations"):
+        from anthropic_loop import run_anthropic_loop
+        async for chunk in run_anthropic_loop(payload):
+            yield chunk
+        return
+
     user_input, history = build_conversation(payload)
     if not user_input:
         yield {"delta": "No input provided."}

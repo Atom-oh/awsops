@@ -64,6 +64,28 @@ API_COUNT=$(find src/app/api -name 'route.ts' 2>/dev/null | wc -l)
 QUERY_COUNT=$(find src/lib/queries -name '*.ts' -not -name 'CLAUDE.md' 2>/dev/null | wc -l)
 [ "$QUERY_COUNT" -ge 20 ] && pass "Query files: $QUERY_COUNT (expected >= 20)" || fail "Query files: $QUERY_COUNT (expected >= 20)"
 
+# ── Agent Python Tests ──
+# Run the AgentCore agent unittests (pure helpers, the Anthropic dark-path loop, account logic,
+# connector freeze guards). These previously ran only by hand; wire them into the gate so the
+# anthropic_loop golden tests actually block a regression.
+echo "# Agent Python tests"
+if command -v python3 &>/dev/null; then
+  agent_ok=1
+  # unittest-style suites (NO pytest dependency): handler/dark-path routing + tests/ (incl. the
+  # anthropic_loop golden tests). Root pattern is test_agent.py — NOT test_*.py — so the pytest-style
+  # test_account_logic.py is not swept into unittest discovery (it would ModuleNotFoundError without pytest).
+  ( cd agent && python3 -m unittest discover -s . -p 'test_agent.py' \
+             && python3 -m unittest discover -s tests -p 'test_*.py' ) >/dev/null 2>&1 || agent_ok=0
+  # test_account_logic.py is pytest-style (pytest is an undeclared dep) — run it only when pytest is
+  # importable; skip (don't fail the gate) where it isn't, but surface real failures when it is.
+  if python3 -c "import pytest" >/dev/null 2>&1; then
+    ( cd agent && python3 -m pytest -q test_account_logic.py ) >/dev/null 2>&1 || agent_ok=0
+  fi
+  [ "$agent_ok" -eq 1 ] && pass "Agent Python unittests passed" || fail "Agent Python unittests failed"
+else
+  echo "# SKIP: python3 not available"
+fi
+
 # ── Vitest Unit Tests (alert modules) ──
 echo "# Vitest unit tests"
 if command -v npx &>/dev/null && [ -f "vitest.config.ts" ]; then

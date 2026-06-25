@@ -5,6 +5,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
 import SectionLabel from '@/components/ui/SectionLabel';
 import Card from '@/components/ui/Card';
+import InsightCard from '@/components/insights/InsightCard';
 import BarDistribution from '@/components/charts/BarDistribution';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import AreaTrend from '@/components/charts/AreaTrend';
@@ -158,6 +159,9 @@ export default function Home() {
             운영 요약 로드 실패: {ovErr} (세션 만료면 새로고침)
           </div>
         )}
+
+        {/* ---- AI INSIGHTS (operational anomalies — K8s/CloudWatch/cost, worker-synthesized) ---- */}
+        <InsightCard />
 
         {/* ---- AI OPERATIONS (v1-parity: chat + analysis entry points) ---- */}
         <AiOps />

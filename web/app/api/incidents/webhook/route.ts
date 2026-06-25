@@ -16,10 +16,16 @@
 //     in the worker/SM tier, not the web tier (thin-BFF rule).
 //   - The HMAC secret(s) come from SSM (read once, cached), NOT app-config.
 import { NextResponse } from 'next/server';
-import { createHmac, timingSafeEqual } from 'crypto';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
-import { normalizeAlert, detectAlertSource, isolatePayload, bearsSelfWritebackMarker, type AlertSource } from '@/lib/incident-normalize';
+import { normalizeAlert, isolatePayload, bearsSelfWritebackMarker } from '@/lib/incident-normalize';
 import { triageAndCreateOrLink, enqueueInitialStage } from '@/lib/incident';
+import { verifySnsMessage } from '@/lib/sns-verify';
+import { classifyEnvelope, isTopicAllowed, verifyBearer, verifyHmac, resolveSourceHint } from '@/lib/incident-ingress-auth';
+import { readTextBounded, BodyTooLargeError } from '@/lib/http-body';
+import { getPool } from '@/lib/db';
+
+// Cap the inbound webhook body before parse — alert payloads are small; large bodies are DoS.
+const MAX_BODY_BYTES = 512 * 1024;
 
 export const dynamic = 'force-dynamic';
 
@@ -54,31 +60,7 @@ function extractClientIp(request: Request): string {
   return ips.length >= 2 ? ips[ips.length - 2] : ips[0] || 'unknown';
 }
 
-// --- HMAC-SHA256 verify (PORTED): accepts active OR standby secret (ADR-022 rotation) ---
-function verifySignature(body: string, signature: string, secrets: Array<string | undefined>): { ok: boolean; matched?: 'active' | 'standby' } {
-  const sig = signature.replace(/^sha256=/, '');
-  let sigBuf: Buffer;
-  try {
-    sigBuf = Buffer.from(sig, 'hex');
-  } catch {
-    return { ok: false };
-  }
-  const labels: Array<'active' | 'standby'> = ['active', 'standby'];
-  for (let i = 0; i < secrets.length; i++) {
-    const s = secrets[i];
-    if (!s) continue;
-    try {
-      const expected = createHmac('sha256', s).update(body).digest('hex');
-      const expectedBuf = Buffer.from(expected, 'hex');
-      if (sigBuf.length === expectedBuf.length && timingSafeEqual(sigBuf, expectedBuf)) {
-        return { ok: true, matched: labels[i] };
-      }
-    } catch {
-      // try the next secret
-    }
-  }
-  return { ok: false };
-}
+// HMAC verify (ADR-022 active/standby) now lives in @/lib/incident-ingress-auth as verifyHmac.
 
 // --- HMAC secret(s) from SSM (read once, cached) — NOT app-config ---
 const TTL_MS = 5 * 60 * 1000;
@@ -108,21 +90,46 @@ async function hmacSecrets(): Promise<Array<string | undefined>> {
   return [active, standby];
 }
 
-// --- SNS subscription confirmation (PORTED): only fetch a genuine AWS SNS URL ---
+// Bearer token(s) for Alertmanager (Authorization: Bearer …). Active/standby like HMAC; absent
+// param → undefined → degrade-safe (the direct path falls back to HMAC).
+async function bearerSecrets(): Promise<Array<string | undefined>> {
+  const [active, standby] = await Promise.all([
+    readSsm(process.env.SSM_INCIDENT_BEARER_PARAM),
+    readSsm(process.env.SSM_INCIDENT_BEARER_STANDBY_PARAM),
+  ]);
+  return [active, standby];
+}
+
+// --- SNS subscription confirmation: only reached AFTER signature + TopicArn allowlist pass.
+// Re-check the SubscribeURL host immediately before fetch + bounded timeout (SSRF/hang guard). ---
 const SNS_URL_PATTERN = /^https:\/\/sns\.[a-z0-9-]+\.amazonaws\.com\//;
 
 async function confirmSnsSubscription(body: Record<string, unknown>): Promise<NextResponse> {
   const subscribeUrl = body.SubscribeURL;
   if (typeof subscribeUrl === 'string' && SNS_URL_PATTERN.test(subscribeUrl)) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
-      await fetch(subscribeUrl);
-      console.log(`[IncidentWebhook] SNS subscription confirmed: ${body.TopicArn}`);
+      const res = await fetch(subscribeUrl, { signal: ctrl.signal });
+      if (!res.ok) throw new Error('confirm http error'); // non-2xx → fall to 400 so SNS retries
+      console.log('[IncidentWebhook] SNS subscription confirmed'); // never log TopicArn/URL
       return NextResponse.json({ status: 'subscription_confirmed' });
-    } catch (err) {
-      console.error('[IncidentWebhook] SNS subscription confirmation failed:', err);
+    } catch {
+      console.error('[IncidentWebhook] SNS subscription confirmation failed');
+    } finally {
+      clearTimeout(timer);
     }
   }
   return NextResponse.json({ error: 'Invalid subscription URL' }, { status: 400 });
+}
+
+// TopicArn allowlist source of truth: the source_allowlist JSONB of enabled ingress cloudwatch_sns
+// integrations. (W4 populates these rows; until then the SNS path is correctly 401 fail-closed.)
+async function topicAllowlistRows(): Promise<Array<{ source_allowlist?: unknown }>> {
+  const r = await getPool().query(
+    "SELECT source_allowlist FROM integrations WHERE direction = 'ingress' AND kind = 'cloudwatch_sns' AND enabled = true",
+  );
+  return r.rows as Array<{ source_allowlist?: unknown }>;
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -137,37 +144,53 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
   }
 
-  // 3 — parse body
+  // 3 — bounded raw-body read (OOM/DoS guard) + parse. HMAC needs the exact raw bytes.
   let rawBody: string;
   let body: Record<string, unknown>;
   try {
-    rawBody = await request.text();
+    rawBody = await readTextBounded(request, MAX_BODY_BYTES);
     body = JSON.parse(rawBody);
-  } catch {
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) {
+      return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
+    }
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  // 4 — SNS subscription confirmation (no HMAC / no triage)
-  if (body.Type === 'SubscriptionConfirmation') {
-    return confirmSnsSubscription(body);
+  // 4 — envelope-first auth (auth NEVER trusts headers / x-alert-source — no scheme impersonation).
+  //     SNS envelopes → signature + TopicArn allowlist; direct POSTs → HMAC (bearer added in Task 4).
+  const INVALID_AUTH = () => NextResponse.json({ error: 'Invalid authentication' }, { status: 401 });
+  if (classifyEnvelope(body) === 'sns') {
+    const verified = await verifySnsMessage(body);
+    const topicArn = typeof body.TopicArn === 'string' ? body.TopicArn : undefined;
+    if (!verified.ok || !(await isTopicAllowed(topicArn, topicAllowlistRows))) {
+      return INVALID_AUTH();
+    }
+    if (body.Type === 'SubscriptionConfirmation') return confirmSnsSubscription(body);
+    if (body.Type === 'UnsubscribeConfirmation') {
+      return NextResponse.json({ status: 'unsubscribe_ack' }, { status: 200 });
+    }
+    // Notification → fall through to the SAME shared post-auth pipeline as the direct path.
+  } else {
+    // Direct POST: bearer (Alertmanager) first, then HMAC (custom senders). Degrade-safe: an absent
+    // bearer secret yields {ok:false} and falls through to HMAC.
+    const authz = request.headers.get('authorization');
+    const bearer = authz ? verifyBearer(authz, await bearerSecrets()) : { ok: false };
+    if (!bearer.ok) {
+      const signature = request.headers.get('x-webhook-signature') ||
+        request.headers.get('x-hub-signature-256') ||
+        request.headers.get('x-alertmanager-signature') || '';
+      const result = verifyHmac(rawBody, signature, await hmacSecrets());
+      if (!signature || !result.ok) return INVALID_AUTH();
+      if (result.matched === 'standby') {
+        console.log('[IncidentWebhook] HMAC matched standby secret (ADR-022 rotation; promote+retire)');
+      }
+    }
   }
 
-  // 5 — HMAC verify (ADR-022). Required: an active or standby secret must match.
-  const signature = request.headers.get('x-webhook-signature') ||
-    request.headers.get('x-hub-signature-256') ||
-    request.headers.get('x-alertmanager-signature') || '';
-  const result = verifySignature(rawBody, signature, await hmacSecrets());
-  if (!signature || !result.ok) {
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
-  }
-  if (result.matched === 'standby') {
-    console.log('[IncidentWebhook] HMAC matched standby secret (ADR-022 rotation; promote+retire)');
-  }
-
-  // 6 — detect source + normalize → typed AlertEvent[]
-  const sourceHint = request.headers.get('x-alert-source') as AlertSource | null;
-  const detectedSource = sourceHint || detectAlertSource(body);
-  const alerts = normalizeAlert(body, detectedSource);
+  // 5 — resolve source (POST-auth; never the trusted header for auth) + normalize → AlertEvent[]
+  const source = resolveSourceHint(body, request.headers.get('x-alert-source'));
+  const alerts = normalizeAlert(body, source);
   if (alerts.length === 0) {
     return NextResponse.json({ error: 'No valid alerts found in payload' }, { status: 400 });
   }
@@ -202,7 +225,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   return NextResponse.json({
     status: 'accepted',
-    source: detectedSource,
+    source,
     alertsReceived: alerts.length,
     new: newCount,
     linked: linkedCount,

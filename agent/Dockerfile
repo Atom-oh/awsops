@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir \
     boto3 \
     psycopg2-binary \
     "bedrock-agentcore<=0.1.5" \
+    "anthropic[bedrock]==0.111.0" \
     mcp \
     httpx \
     httpx-sse \
@@ -18,6 +19,8 @@ RUN pip install --no-cache-dir \
 COPY streamable_http_sigv4.py .
 COPY account_utils.py .
 COPY agent.py .
+# Dark-path agent loop (flag-gated, default OFF) — see ADR-008 (amended) / BASELINE §2.
+COPY anthropic_loop.py .
 # ADR-006 RCA (EoG) — read-only orchestrator reached via payload mode=="rca".
 # Inert unless RCA_ORCHESTRATOR_ENABLED=true is set on the runtime (default off).
 COPY rca_orchestrator.py .

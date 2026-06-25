@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
+import DiagSignalChips from './DiagSignalChips';
 import { Search } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
@@ -70,8 +71,9 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
   }, [instanceId]);
 
   // `windowOverride` lets the range dropdown re-run immediately with its new value (state is async).
-  const run = useCallback(async (windowOverride?: number) => {
-    if (selId === '' || !query.trim()) return;
+  const run = useCallback(async (windowOverride?: number, queryOverride?: string) => {
+    const q = queryOverride ?? query;  // a quick-query chip can run its expr without waiting on setQuery
+    if (selId === '' || !q.trim()) return;
     const w = windowOverride ?? rangeWindow;
     const range = canRange && w > 0 ? { window: w, step: autoStep(w) } : false;
     const queriedKind = list.find((d) => d.id === selId)?.kind; // bind kind to THIS query, not the live selection
@@ -79,7 +81,7 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
     try {
       const r = await fetch('/api/datasources/query', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: selId, query, range }),
+        body: JSON.stringify({ id: selId, query: q, range }),
       });
       const b = await r.json();
       if (!r.ok) throw new Error(b.error || `오류 ${r.status}`);
@@ -176,6 +178,11 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
             )}
           />
         </div>
+        <DiagSignalChips
+          instanceId={selId === '' ? undefined : selId}
+          kind={ds?.kind}
+          onPick={(expr) => { setQuery(expr); run(undefined, expr); }}
+        />
         <div className="flex items-center gap-2">
           <Button onClick={() => run()} disabled={busy || !ds || !query.trim()}>{busy ? '실행 중…' : '실행'}</Button>
           {list.length === 0 && (

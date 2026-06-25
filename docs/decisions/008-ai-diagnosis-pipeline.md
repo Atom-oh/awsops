@@ -2,7 +2,7 @@
 
 ## Status / 상태
 
-Accepted (2026-06-22) — consolidated / 채택 (2026-06-22) — 통합
+Accepted (2026-06-22; amended 2026-06-24) — consolidated / 채택 (2026-06-22; 2026-06-24 개정) — 통합
 
 > **Consolidates / 통합 대상**: ADR-013 (자동 수집 조사 에이전트), ADR-016 (Bedrock 모델 선택 전략), ADR-019 (진단 리포트 포맷 매트릭스), ADR-021 (AI 응답 SSE 스트리밍), ADR-033 (AIOps LLM 비용 최적화), ADR-045 (AI 진단 지연 — 병렬 렌더 + 스트리밍).
 >
@@ -74,9 +74,13 @@ Long-running AI flows (chat) use SSE (`text/event-stream` + `ReadableStream`) to
 
 ### 6. deep 티어 지연 — 병렬 렌더(구현) + 스트리밍(후속) (구 ADR-045) / Deep-tier latency — parallel render (done) + streaming (follow-up)
 
-진단 워커는 **boto3 `bedrock-runtime` 직접 호출을 유지**한다. Anthropic SDK 직결 API(IAM/VPC/레지던시/비용귀속 상실)와 `AnthropicBedrock` 래퍼(동일 엔드포인트 얇은 래퍼, 속도 이득 無)는 **모두 기각**됐다 — 단발 섹션 호출에서 SDK는 지연 레버가 아니다.
+진단 워커(단발 섹션 호출)는 **boto3 `bedrock-runtime` 직접 호출을 유지**한다 — 여기서는 Anthropic SDK 직결 API(IAM/VPC/레지던시/비용귀속 상실)도, `AnthropicBedrock` 래퍼(동일 엔드포인트, 단발 호출 속도 이득 無 → 지연 레버 아님)도 채택하지 않는다. **이 판단은 단발 진단 호출에 한정된다.**
 
-The diagnosis worker keeps the **boto3 `bedrock-runtime` direct call**. Both the Anthropic SDK direct-to-API path (loses IAM/VPC/residency/cost-attribution) and the `AnthropicBedrock` wrapper (thin wrapper over the same endpoint, no speed gain) were **rejected** — the SDK is not the latency lever for single-shot per-section calls.
+별개 표면인 **멀티턴 챗 에이전트 루프**(AgentCore Runtime, `agent/agent.py`)에는 `ANTHROPIC_AGENT_LOOP_ENABLED`(default OFF·dark) 게이트 하에 **`AsyncAnthropicBedrock`(Bedrock 클라이언트) 기반 커스텀 루프**가 실험으로 허용된다 — 레버는 지연이 아니라 **도구 루프 디버깅성**(Strands 에이전트 루프의 불투명성 제거)이며, **Bedrock 경유라 IAM/VPC/레지던시/비용귀속·invocation-log 귀속이 보존**된다(API 키 없음, 동일 `global.*` 프로파일 + 홈리전). read-only·additive·flag-gated이고 기존 게이트웨이 MCP를 재사용한다(신규 BYO-MCP 아님). 라우팅/런타임 거버넌스는 ADR-003/004 범위.
+
+The diagnosis worker (single-shot per-section calls) keeps the **boto3 `bedrock-runtime` direct call** — there, neither the Anthropic SDK direct-to-API path (loses IAM/VPC/residency/cost-attribution) nor the `AnthropicBedrock` wrapper (same endpoint, no single-shot speed gain → not a latency lever) is adopted. **This judgment is scoped to single-shot diagnosis calls.**
+
+For the distinct surface of the **multi-turn chat agent loop** (AgentCore Runtime, `agent/agent.py`), a custom **`AsyncAnthropicBedrock` (Bedrock-client) loop** is permitted as an experiment behind `ANTHROPIC_AGENT_LOOP_ENABLED` (default OFF, dark): the lever is **tool-loop debuggability** (removing the opacity of the Strands agent loop), not latency, and going **through Bedrock preserves IAM/VPC/residency/cost-attribution + invocation-log attribution** (no API key, same `global.*` profile + home region). Read-only, additive, flag-gated; it reuses the existing gateway MCP (not a new BYO-MCP). Routing/runtime governance stays in scope of ADR-003/004.
 
 우선순위순 지연 최적화:
 1. **섹션 렌더 병렬화 — 구현됨.** 동시성 제한 풀(Bedrock TPM/RPM 아래 유지)로 벽시계를 15콜의 합 → 최장 섹션 수준으로 단축. 섹션별 타임아웃 격리·`partial` degrade 계약 보존. / **Parallel per-section rendering — implemented.** Bounded-concurrency pool; wall-clock from sum → ~max; per-section timeout isolation and `partial` degrade preserved.

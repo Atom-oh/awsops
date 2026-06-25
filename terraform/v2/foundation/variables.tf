@@ -135,6 +135,16 @@ variable "diagnosis_notify_enabled" {
   default     = false
 }
 
+variable "ai_insights_enabled" {
+  type        = bool
+  description = "AI Insights dashboard panel: a daily worker collects K8s events + CloudWatch alarms + cost anomalies (all read-only) and an LLM synthesizes 3-5 prioritized admin bullets, cached in ai_insights and shown on the Overview dashboard with manual refresh. Requires workers_enabled (reuses worker role/pg8000/VPC + jobs queue; adds read-only cloudwatch:DescribeAlarms/GetMetricData, ce:GetCostAndUsage, eks:DescribeCluster, sqs:SendMessage). K8s events also need the worker role's EKS access entry, registered out-of-band (scripts/v2/eks/register-insight-access.sh). false (default) = 0 resources/IAM, $0, runtime fail-closed (AI_INSIGHTS_ENABLED unset)."
+  default     = false
+  validation {
+    condition     = !var.ai_insights_enabled || var.workers_enabled
+    error_message = "ai_insights_enabled requires workers_enabled (reuses the worker role/pg8000 layer/VPC + jobs queue)."
+  }
+}
+
 variable "worker_image_tag" {
   type        = string
   description = "Worker Fargate image tag in the worker ECR repo."
