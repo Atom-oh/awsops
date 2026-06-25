@@ -156,6 +156,7 @@ def _datasource_signals(conn, deadline_start):
     seen = set()
     for r in rows or []:
         if _remaining(deadline_start) <= 0:
+            failures = True  # deadline exhausted mid-collection → fail-closed (partial data → escalate)
             break
         iid, kind = r[0], r[1]
         if kind in seen or kind not in _PROBE:

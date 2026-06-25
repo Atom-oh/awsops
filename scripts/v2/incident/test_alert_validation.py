@@ -160,3 +160,17 @@ def test_handler_escalate_path_records_validating(monkeypatch):
     assert r["decision"] == "escalate"
     upd = [c for c in conn.calls if "update incidents set validation" in " ".join(c[0].split()).lower()]
     assert upd and upd[0][1]["s"] == "validating"
+
+
+def test_datasource_deadline_exhaustion_is_failclosed(monkeypatch):
+    # If the global deadline is exhausted mid datasource-collection, fail-closed (failures=True)
+    # so the suppression gate escalates rather than acting on partial signals.
+    monkeypatch.setattr(av, "_remaining", lambda start: -1.0)
+
+    class _C:
+        def run(self, sql, **p):
+            return [[1, "tempo"]]  # one discovered datasource instance
+
+    out, failures = av._datasource_signals(_C(), 0.0)
+    assert failures is True
+    assert out == []
