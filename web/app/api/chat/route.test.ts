@@ -138,6 +138,20 @@ describe('POST /api/chat', () => {
     expect(body).toContain('[DONE]');
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'cost' }));
   });
+  it('does NOT forward a client-supplied agentLoop to the agent (dark-path loop is server-side only)', async () => {
+    // ADR-008/BASELINE §2 invariant: the env flag (ANTHROPIC_AGENT_LOOP_ENABLED) + a server-side
+    // payload.agentLoop pick the loop — the BFF must never let a client request flip it. The route
+    // builds an explicit InvokeInput (no body spread), so agentLoop can't leak; lock that here.
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'x', section: 'ops', sessionId: 's'.repeat(36), agentLoop: 'anthropic' }));
+    expect(res.status).toBe(200);
+    await readStream(res);
+    const input = invokeAgent.mock.calls[0][0] as Record<string, unknown>;
+    expect(input).not.toHaveProperty('agentLoop');
+  });
   it('emits an error frame when invoke fails', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     pickGateway.mockReturnValue('ops');
