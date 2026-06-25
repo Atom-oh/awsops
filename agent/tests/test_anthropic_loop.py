@@ -109,6 +109,18 @@ class BuildAnthropicMessagesTest(unittest.TestCase):
         msgs = al.build_anthropic_messages([], "only message")
         self.assertEqual(msgs, [{"role": "user", "content": [{"type": "text", "text": "only message"}]}])
 
+    def test_drops_empty_history_turn(self):
+        # P4 CI (M1): an empty/whitespace history turn must NOT become an empty text block (→ 400).
+        history = [
+            {"role": "user", "content": [{"text": "   "}]},      # empty → dropped
+            {"role": "assistant", "content": [{"text": "hi"}]},
+        ]
+        msgs = al.build_anthropic_messages(history, "q")
+        self.assertEqual(msgs, [
+            {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "user", "content": [{"type": "text", "text": "q"}]},
+        ])
+
 
 # ── extract_tool_uses (dict AND object blocks) ───────────────────────────────
 class ExtractToolUsesTest(unittest.TestCase):
@@ -142,6 +154,13 @@ class ToolResultBlockTest(unittest.TestCase):
     def test_error_flag(self):
         b = al.tool_result_block("tu_2", "boom", is_error=True)
         self.assertTrue(b["is_error"])
+
+    def test_caps_long_result(self):
+        # P4 CI (m2): a large tool result must be bounded so it can't blow up per-round context.
+        big = "x" * (al.TOOL_RESULT_CHAR_CAP + 500)
+        txt = al.tool_result_block("t", big)["content"][0]["text"]
+        self.assertLessEqual(len(txt), al.TOOL_RESULT_CHAR_CAP + 60)  # cap + short truncation marker
+        self.assertIn("truncated", txt)
 
 
 # ── apply_cache_control ───────────────────────────────────────────────────────

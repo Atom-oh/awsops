@@ -26,6 +26,7 @@ MAX_TOOL_ROUNDS = 8          # hard cap on tool-call rounds (runaway-loop backst
 MAX_OUTPUT_TOKENS = 4096     # Anthropic Messages API REQUIRES max_tokens on every call
 MODEL_TEMPERATURE = 0.0      # parity with the Strands BedrockModel — deterministic tool selection (ADR-038)
 EXTRA_CONTEXT_CAP = 8000     # bound BFF-supplied context (parity with agent.handler)
+TOOL_RESULT_CHAR_CAP = 24000 # bound a single tool result fed back (avoid per-round context/token blowup)
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,8 @@ def build_anthropic_messages(history, user_input):
     for m in history or []:
         role = m.get("role", "user")
         text = "".join(part.get("text", "") for part in (m.get("content") or []) if isinstance(part, dict))
+        if not text.strip():  # skip empty turns — Anthropic rejects empty text blocks in input (→ 400)
+            continue
         msgs.append({"role": role, "content": [{"type": "text", "text": text}]})
     msgs.append({"role": "user", "content": [{"type": "text", "text": user_input}]})
     return msgs
@@ -105,11 +108,15 @@ def extract_tool_uses(content_blocks):
 
 
 def tool_result_block(tool_use_id, result, is_error=False):
-    """A ``tool_result`` content block carrying the (text-normalized) MCP result."""
+    """A ``tool_result`` content block carrying the (text-normalized) MCP result, bounded to
+    ``TOOL_RESULT_CHAR_CAP`` so a large gateway response can't blow up per-round context/token/cost."""
+    text = result if isinstance(result, str) else str(result)
+    if len(text) > TOOL_RESULT_CHAR_CAP:
+        text = text[:TOOL_RESULT_CHAR_CAP] + f"\n…[truncated {len(text) - TOOL_RESULT_CHAR_CAP} chars]"
     block = {
         "type": "tool_result",
         "tool_use_id": tool_use_id,
-        "content": [{"type": "text", "text": result if isinstance(result, str) else str(result)}],
+        "content": [{"type": "text", "text": text}],
     }
     if is_error:
         block["is_error"] = True
