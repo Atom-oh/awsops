@@ -19,6 +19,8 @@
 - `web/lib/sns-verify.test.ts`
 - `web/lib/incident-ingress-auth.ts`
 - `web/lib/incident-ingress-auth.test.ts`
+- `web/lib/http-body.ts`           (add `readTextBounded`; `readJsonBounded` delegates — DRY)
+- `web/lib/http-body.test.ts`
 - `web/app/api/incidents/webhook/route.ts`
 - `web/app/api/incidents/webhook/route.test.ts`
 - `docs/plans/2026-06-25-alert-validation-w1-ingress-auth-plan.md`

@@ -1,9 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { readJsonBounded, BodyTooLargeError } from './http-body';
+import { readJsonBounded, readTextBounded, BodyTooLargeError } from './http-body';
 
 function jsonReq(body: string) {
   return new Request('http://x/', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
 }
+
+describe('readTextBounded', () => {
+  it('returns the raw text verbatim under the cap (no parse)', async () => {
+    const raw = '{not strictly json but raw}';
+    expect(await readTextBounded(jsonReq(raw))).toBe(raw);
+  });
+  it('rejects via Content-Length before reading', async () => {
+    await expect(readTextBounded(jsonReq('x'.repeat(2000)), 100)).rejects.toBeInstanceOf(BodyTooLargeError);
+  });
+  it('rejects via the streamed byte cap when Content-Length is absent', async () => {
+    const stream = new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode('x'.repeat(120))); c.close(); },
+    });
+    const req = new Request('http://x/', { method: 'POST', body: stream, duplex: 'half' } as RequestInit & { duplex: 'half' });
+    await expect(readTextBounded(req, 10)).rejects.toBeInstanceOf(BodyTooLargeError);
+  });
+});
 
 describe('readJsonBounded', () => {
   it('parses a small valid JSON body', async () => {
