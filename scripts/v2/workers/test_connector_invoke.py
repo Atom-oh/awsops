@@ -53,6 +53,36 @@ def test_summarize_handles_nondict_and_traces():
     assert s["count"] == 3 and s["source"] == "traces"
 
 
+class _RawLambda:
+    """Returns an arbitrary invoke() response (incl. FunctionError / missing statusCode)."""
+    def __init__(self, resp):
+        self._resp = resp
+
+    def invoke(self, **kw):
+        out = dict(self._resp)
+        out["Payload"] = _FakePayload(out.get("Payload", b""))
+        return out
+
+
+def test_function_error_is_a_failure_not_zero(monkeypatch):
+    # A Lambda FunctionError means the tool did NOT run. It must map to a failing status (>=400),
+    # never to 0 (which both callers read as success: `status >= 400` False / `status and ...` falsy).
+    fake = _RawLambda({"FunctionError": "Unhandled",
+                       "Payload": json.dumps({"errorMessage": "boom"}).encode()})
+    monkeypatch.setattr(ci, "_lambda_client", lambda: fake)
+    status, body = ci.invoke_connector("loki", "loki_query_range", "i", {"query": "x"})
+    assert status >= 400 and isinstance(body, dict)
+
+
+def test_missing_statuscode_is_a_failure(monkeypatch):
+    # A malformed envelope with no statusCode previously defaulted to 0 (read as success). Treat
+    # missing/non-int statusCode as a failure so the >=400 gate catches it.
+    fake = _RawLambda({"Payload": json.dumps({"body": json.dumps({"result": []})}).encode()})
+    monkeypatch.setattr(ci, "_lambda_client", lambda: fake)
+    status, _body = ci.invoke_connector("prometheus", "prometheus_query", "i", {"query": "up"})
+    assert status >= 400
+
+
 def test_str_body_is_json_parsed(monkeypatch):
     # body delivered as a JSON string is parsed to a dict (connector envelope shape)
     fake = _FakeLambda(200, {"result": []})

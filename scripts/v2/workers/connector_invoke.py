@@ -31,6 +31,11 @@ def invoke_connector(kind, tool, instance_id, arguments=None):
         FunctionName=f"{PROJECT}-agent-{kind}-mcp",
         Payload=json.dumps(payload).encode("utf-8"),
     )
+    # A Lambda FunctionError (unhandled exception / init failure) means the tool did NOT run — map
+    # to a failing status so callers' `status >= 400` gate catches it. NEVER fall through to a 0,
+    # which both callers read as success (`status >= 400` False; `if status and ...` falsy).
+    if r.get("FunctionError"):
+        return 502, {}
     raw = r["Payload"].read()
     out = json.loads(raw) if raw else {}
     body = out.get("body")
@@ -39,7 +44,13 @@ def invoke_connector(kind, tool, instance_id, arguments=None):
             body = json.loads(body)
         except (ValueError, TypeError):
             body = {"raw": body[:300]}
-    return out.get("statusCode", 0), (body if isinstance(body, dict) else {})
+    body = body if isinstance(body, dict) else {}
+    # A well-formed connector envelope always carries an int statusCode. A missing/non-int one is a
+    # malformed response → treat as failure (502), not 0 (the old default that slipped past the gate).
+    status = out.get("statusCode")
+    if not isinstance(status, int):
+        return 502, body
+    return status, body
 
 
 def summarize_result(body):

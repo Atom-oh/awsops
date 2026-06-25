@@ -48,6 +48,15 @@ def test_decide_no_snapshot_escalates():
     assert av.decide(FP, None, 9, False, threshold=0.85, enforce=True) == "escalate"
 
 
+def test_decide_escalates_on_nonfinite_or_oob_confidence():
+    # M3 defense-in-depth: NaN < threshold is False, so a non-finite confidence would otherwise
+    # slip past the gate. The safety core must fail-closed on anything not finite-in-[0,1].
+    nan, inf = float("nan"), float("inf")
+    assert av.decide({"verdict": "false_positive", "confidence": nan}, _snap(), 3, False, threshold=0.85, enforce=True) == "escalate"
+    assert av.decide({"verdict": "false_positive", "confidence": inf}, _snap(), 3, False, threshold=0.85, enforce=True) == "escalate"
+    assert av.decide({"verdict": "false_positive", "confidence": 999}, _snap(), 3, False, threshold=0.85, enforce=True) == "escalate"
+
+
 def test_suppression_severity_uses_normalized_severity_failclosed_on_unknown():
     assert av.suppression_severity(_snap(severity="critical")) == "critical"
     assert av.suppression_severity(_snap(severity="warning")) == "warning"
@@ -93,6 +102,57 @@ def test_haiku_fail_closed_on_garbage_or_bad_verdict(monkeypatch):
     assert av._haiku_verdict("p")["verdict"] == "uncertain"
     monkeypatch.setattr(av, "_bedrock", lambda: _FakeBedrock(text='{"verdict":"YES_DROP_IT","confidence":1}'))
     assert av._haiku_verdict("p")["verdict"] == "uncertain"
+
+
+def test_haiku_fail_closed_on_nonfinite_or_oob_confidence(monkeypatch):
+    # M3: json.loads accepts NaN/Infinity; a false_positive with a non-finite or out-of-[0,1]
+    # confidence must fail closed to 'uncertain' (never trusted as a high-confidence suppression).
+    for bad in ("NaN", "Infinity", "-Infinity", "999", "-0.5"):
+        monkeypatch.setattr(av, "_bedrock",
+                            lambda b=bad: _FakeBedrock(text='{"verdict":"false_positive","confidence":%s}' % b))
+        assert av._haiku_verdict("p")["verdict"] == "uncertain"
+
+
+class _FakeCW:
+    def __init__(self, values):
+        self._values = values
+
+    def get_metric_data(self, **kw):
+        return {"MetricDataResults": [{"Values": list(self._values)}]}
+
+
+def test_cloudwatch_zero_datapoints_is_not_a_signal(monkeypatch):
+    # M2: an empty metric window (datapoints=0) is ABSENT corroboration, not a signal — counting
+    # it could satisfy the >=2-signal suppression gate with empty data.
+    snap = _snap(metric={"name": "CPUUtilization", "namespace": "AWS/EC2", "threshold": 90})
+    monkeypatch.setattr(av.boto3, "client", lambda *a, **k: _FakeCW([]))
+    sig, failed = av._cloudwatch_signal(snap)
+    assert sig is None and failed is False                # absent, NOT a failure
+    monkeypatch.setattr(av.boto3, "client", lambda *a, **k: _FakeCW([1.0, 2.0]))
+    sig, failed = av._cloudwatch_signal(snap)
+    assert sig is not None and sig["datapoints"] == 2 and failed is False
+
+
+def test_datasource_empty_summary_not_counted_failed_invoke_is_failure(monkeypatch):
+    # M2: empty/unrecognized result is NOT corroboration; a failing invoke (incl. FunctionError →
+    # 502 from connector_invoke) IS a signal failure → fail-closed escalate.
+    monkeypatch.setattr(av, "_remaining", lambda start: 100.0)
+
+    class _C:
+        def run(self, sql, **p):
+            return [[1, "loki"]]   # one discovered datasource instance
+
+    monkeypatch.setattr(av.connector_invoke, "invoke_connector", lambda *a, **k: (200, {}))
+    out, failures = av._datasource_signals(_C(), 0.0)
+    assert out == [] and failures is False                # empty summary → absent, not a failure
+
+    monkeypatch.setattr(av.connector_invoke, "invoke_connector", lambda *a, **k: (502, {}))
+    out, failures = av._datasource_signals(_C(), 0.0)
+    assert out == [] and failures is True                 # 502 (FunctionError/missing status) → failure
+
+    monkeypatch.setattr(av.connector_invoke, "invoke_connector", lambda *a, **k: (200, {"result": [1, 2]}))
+    out, failures = av._datasource_signals(_C(), 0.0)
+    assert len(out) == 1 and failures is False            # grounded result → counted
 
 
 def test_prompt_redacts_pii_and_excludes_rawpayload():

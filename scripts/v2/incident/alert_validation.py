@@ -12,6 +12,7 @@ SUPPRESSION SAFETY (never silently drop a real incident):
   Missing snapshot / <2 signals / any signal failure / model error → verdict uncertain → escalate.
 """
 import json
+import math
 import os
 import re
 import time
@@ -53,6 +54,19 @@ def _redact(text):
     return text
 
 
+def _finite01(x):
+    """Return x as a float iff it is finite AND in [0,1], else None. json.loads accepts NaN/Infinity,
+    and NaN compares False against any threshold — so an unvalidated confidence would silently slip
+    past the suppression gate. Everything not finite-in-[0,1] is untrustworthy → reject (fail closed)."""
+    try:
+        c = float(x)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(c) or not (0.0 <= c <= 1.0):
+        return None
+    return c
+
+
 # ── verdict routing (PURE — the safety-critical core, exhaustively unit-tested) ────────────────
 def decide(verdict, snapshot, signal_count, has_failures, *, threshold=CONF_THRESHOLD, enforce=ENFORCE):
     """Return 'suppress' or 'escalate'. fail-closed: anything short of ALL suppress conditions escalates."""
@@ -62,7 +76,8 @@ def decide(verdict, snapshot, signal_count, has_failures, *, threshold=CONF_THRE
         return "escalate"
     if (verdict or {}).get("verdict") != "false_positive":
         return "escalate"
-    if float((verdict or {}).get("confidence") or 0.0) < threshold:
+    conf = _finite01((verdict or {}).get("confidence"))   # non-finite / out-of-[0,1] → None → escalate
+    if conf is None or conf < threshold:
         return "escalate"
     if suppression_severity(snapshot) == "critical":     # NEVER suppress an operator-critical alert
         return "escalate"
@@ -131,6 +146,10 @@ def _cloudwatch_signal(snapshot):
                 "Period": 60, "Stat": "Average"}, "ReturnData": True}],
             StartTime=start, EndTime=end)
         vals = (r.get("MetricDataResults") or [{}])[0].get("Values") or []
+        if not vals:
+            # No datapoints in the window → ABSENT corroboration (not a failure). Counting a
+            # zero-datapoint result as a signal could satisfy the >=2-signal gate on empty data.
+            return None, False
         # Emit the RAW last value + threshold + comparator — do NOT compute a directional
         # "recovered" boolean: it inverts for LessThanThreshold alarms (e.g. FreeStorageSpace,
         # HealthyHostCount), where below-threshold means STILL FAILING. Haiku reasons with the
@@ -168,7 +187,11 @@ def _datasource_signals(conn, deadline_start):
             if status >= 400:
                 failures = True
                 continue
-            out.append({"source": kind, **connector_invoke.summarize_result(body)})
+            summary = connector_invoke.summarize_result(body)
+            # Only count a GROUNDED signal: an empty summary ({} — no recognizable count/result
+            # shape) is not corroboration. Don't count it AND don't treat it as a failure (absent).
+            if summary:
+                out.append({"source": kind, **summary})
         except Exception:
             failures = True
     return out, failures
@@ -239,7 +262,10 @@ def _haiku_verdict(prompt):
         v = json.loads(raw)
         if v.get("verdict") not in _VERDICTS:
             return {"verdict": "uncertain", "confidence": 0.0, "reason": "bad_verdict"}
-        return {"verdict": v["verdict"], "confidence": float(v.get("confidence") or 0.0),
+        conf = _finite01(v.get("confidence"))             # NaN/Infinity/out-of-[0,1] → untrusted
+        if conf is None:
+            return {"verdict": "uncertain", "confidence": 0.0, "reason": "bad_confidence"}
+        return {"verdict": v["verdict"], "confidence": conf,
                 "propagation": bool(v.get("propagation")), "rationale": str(v.get("rationale") or "")[:500]}
     except Exception as e:
         return {"verdict": "uncertain", "confidence": 0.0, "reason": "model_error:" + type(e).__name__}
