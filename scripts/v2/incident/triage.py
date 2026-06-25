@@ -136,6 +136,11 @@ def _build_trigger_snapshot(p):
     web/lib/incident.ts buildTriggerSnapshot — descriptive/normalized fields only (NOT rawPayload)."""
     labels = p.get("labels") or {}
     ann = p.get("annotations") or {}
+    # nullish (not falsy) lockstep with web buildTriggerSnapshot: only a MISSING account_id falls
+    # back to accountId; an explicit "" is preserved on both tiers.
+    account = labels.get("account_id")
+    if account is None:
+        account = ann.get("accountId")
     return {
         "id": p.get("id"),
         "severity": p.get("severity"),
@@ -146,7 +151,7 @@ def _build_trigger_snapshot(p):
         "labels": labels,
         "metric": p.get("metric"),
         "timestamp": p.get("timestamp"),
-        "account": labels.get("account_id") or ann.get("accountId"),
+        "account": account,
         "alarmArn": p.get("alarmArn"),
     }
 
