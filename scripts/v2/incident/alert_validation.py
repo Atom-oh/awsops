@@ -71,10 +71,15 @@ def decide(verdict, snapshot, signal_count, has_failures, *, threshold=CONF_THRE
     return "suppress"
 
 
+_KNOWN_SEVERITIES = ("critical", "warning", "info")
+
+
 def suppression_severity(snapshot):
     """Use the already-normalized severity (no re-derivation → no drift). CloudWatch ALARM normalizes
-    to 'critical' (→ always escalate in W2); Alertmanager warning/info stay suppression-eligible."""
-    return (snapshot or {}).get("severity") or "warning"
+    to 'critical' (→ always escalate in W2); Alertmanager warning/info stay suppression-eligible.
+    FAIL-CLOSED: any missing/unknown severity → 'critical' (never silently suppression-eligible)."""
+    sev = (snapshot or {}).get("severity")
+    return sev if sev in _KNOWN_SEVERITIES else "critical"
 
 
 # ── signal collection (best-effort, bounded by a GLOBAL wall-clock deadline; never raises) ─────
@@ -92,9 +97,22 @@ def _topology_signal(conn, snapshot):
             "SELECT count(*) FROM topology_edges WHERE account_id = :a "
             "AND (source = ANY(:r) OR target = ANY(:r))",
             a=acct, r=resources)
-        return {"source": "topology", "blast_radius": int(rows[0][0]) if rows else 0}, False
+        br = int(rows[0][0]) if rows else 0
+        # Only count topology as a corroborating signal when it actually has blast radius — a
+        # zero-edge match (or a resource-id/node-id format mismatch) is NOT corroboration.
+        if br <= 0:
+            return None, False
+        return {"source": "topology", "blast_radius": br}, False
     except Exception:
         return None, True  # query failed = a signal failure (fail-closed → escalate)
+
+
+def _boto_cfg():
+    try:
+        from botocore.config import Config
+        return Config(connect_timeout=5, read_timeout=PER_CALL_TIMEOUT_S, retries={"max_attempts": 1})
+    except Exception:
+        return None
 
 
 def _cloudwatch_signal(snapshot):
@@ -103,7 +121,7 @@ def _cloudwatch_signal(snapshot):
     if not name or not namespace:
         return None, False  # no metric to probe — absent (not a failure)
     try:
-        cw = boto3.client("cloudwatch", region_name=REGION)
+        cw = boto3.client("cloudwatch", region_name=REGION, config=_boto_cfg())
         import datetime as _dt
         end = _dt.datetime.now(_dt.timezone.utc)
         start = end - _dt.timedelta(minutes=15)
@@ -113,10 +131,13 @@ def _cloudwatch_signal(snapshot):
                 "Period": 60, "Stat": "Average"}, "ReturnData": True}],
             StartTime=start, EndTime=end)
         vals = (r.get("MetricDataResults") or [{}])[0].get("Values") or []
-        # recovered = the most-recent datapoint is back below the alarm threshold (if known)
-        thr = metric.get("threshold")
-        recovered = bool(vals) and thr is not None and float(vals[-1]) < float(thr)
-        return {"source": "cloudwatch", "datapoints": len(vals), "recovered": recovered}, False
+        # Emit the RAW last value + threshold + comparator — do NOT compute a directional
+        # "recovered" boolean: it inverts for LessThanThreshold alarms (e.g. FreeStorageSpace,
+        # HealthyHostCount), where below-threshold means STILL FAILING. Haiku reasons with the
+        # comparator in context instead.
+        return {"source": "cloudwatch", "datapoints": len(vals),
+                "last_value": (float(vals[-1]) if vals else None),
+                "threshold": metric.get("threshold"), "comparator": metric.get("comparator")}, False
     except Exception:
         return None, True
 
@@ -180,11 +201,15 @@ def _bedrock():
 
 
 def _build_prompt(snapshot, signals):
+    m = snapshot.get("metric") or {}
     safe = {
         "source": snapshot.get("source"), "alertName": snapshot.get("alertName"),
         "severity": snapshot.get("severity"), "services": (snapshot.get("services") or [])[:20],
         "resources": (snapshot.get("resources") or [])[:20],
         "labels": {k: str(v)[:120] for k, v in list((snapshot.get("labels") or {}).items())[:20]},
+        # metric name/threshold/comparator give Haiku the context to read the CloudWatch signal
+        # correctly (esp. the comparator — LessThan vs GreaterThan). Dimensions are omitted (in resources).
+        "metric": {"name": m.get("name"), "threshold": m.get("threshold"), "comparator": m.get("comparator")},
         "timestamp": snapshot.get("timestamp"),
     }
     block = _redact(json.dumps(safe, ensure_ascii=False, default=str))

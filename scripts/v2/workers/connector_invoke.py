@@ -11,10 +11,15 @@ import boto3
 
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 PROJECT = os.environ.get("PROJECT", "awsops-v2")
+# Bound a single connector invoke so one hung connector can't blow a caller's wall-clock budget
+# (diagnosis has its own deadline; the incident AlertValidation deadline is ~25s). 1 retry only.
+_TIMEOUT_S = float(os.environ.get("CONNECTOR_INVOKE_TIMEOUT_S", "10"))
 
 
 def _lambda_client():
-    return boto3.client("lambda", region_name=REGION)
+    from botocore.config import Config
+    return boto3.client("lambda", region_name=REGION,
+                        config=Config(connect_timeout=5, read_timeout=_TIMEOUT_S, retries={"max_attempts": 1}))
 
 
 def invoke_connector(kind, tool, instance_id, arguments=None):

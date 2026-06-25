@@ -48,10 +48,14 @@ def test_decide_no_snapshot_escalates():
     assert av.decide(FP, None, 9, False, threshold=0.85, enforce=True) == "escalate"
 
 
-def test_suppression_severity_uses_normalized_severity():
+def test_suppression_severity_uses_normalized_severity_failclosed_on_unknown():
     assert av.suppression_severity(_snap(severity="critical")) == "critical"
     assert av.suppression_severity(_snap(severity="warning")) == "warning"
-    assert av.suppression_severity(None) == "warning"
+    assert av.suppression_severity(_snap(severity="info")) == "info"
+    # fail-closed: missing / empty / unknown severity → 'critical' (never silently suppressible)
+    assert av.suppression_severity(None) == "critical"
+    assert av.suppression_severity(_snap(severity="")) == "critical"
+    assert av.suppression_severity(_snap(severity="page")) == "critical"
 
 
 # ── _haiku_verdict fail-closed + prompt isolation ──────────────────────────────────────────────
