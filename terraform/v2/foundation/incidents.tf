@@ -262,6 +262,16 @@ resource "aws_iam_role_policy" "incident_lambda" {
         ]
       },
       {
+        # W2 AlertValidation: read-only CloudWatch corroboration (_cloudwatch_signal). GetMetricData
+        # has NO resource-level scoping (the API requires Resource "*") — it is a read-only metric-data
+        # query, never a mutation. Without it the CW signal path AccessDenies → (None, True) → the
+        # >=2-signal/failures gate force-escalates EVERY metric-backed alert, making the signal dead.
+        Sid      = "ReadCloudWatchMetricsForAlertValidation"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:GetMetricData"]
+        Resource = "*"
+      },
+      {
         # The Lambdas derive SSM paths from PROJECT (/ops/<project>/incident/*) and read the
         # AgentCore runtime-ARN param. Scoped to exactly those parameter ARNs.
         Sid    = "ReadIncidentAndRuntimeParams"
