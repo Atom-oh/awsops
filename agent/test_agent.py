@@ -7,6 +7,7 @@ time, none of which are available locally. We stub those modules in sys.modules 
 importing agent, so the pure helper `_filter_tools` can be imported and tested in
 isolation. This keeps the change within Task 2's file scope (agent.py + test_agent.py).
 """
+import asyncio
 import sys
 import types
 import unittest
@@ -359,6 +360,77 @@ class TestOpsTopologyPrompt(unittest.TestCase):
         ops = agent.SKILL_BASE["ops"]
         for tool in ("find_unused_resources", "get_topology", "query_inventory"):
             self.assertIn(tool, ops)
+
+
+class HandlerRoutingTest(unittest.TestCase):
+    """Task 4: handler routes to the flag-gated Anthropic dark path only when enabled AND no
+    integrations; rca mode wins; otherwise the Strands path. Stubs anthropic_loop + rca_orchestrator
+    in sys.modules (handler imports them lazily at call time)."""
+
+    def setUp(self):
+        self._saved = {k: sys.modules.get(k) for k in ("anthropic_loop", "rca_orchestrator")}
+        self.calls = {"run": 0, "rca": 0}
+
+        al = types.ModuleType("anthropic_loop")
+        al._use = True
+
+        def _should(payload):
+            return al._use
+
+        async def _run(payload):
+            self.calls["run"] += 1
+            yield {"delta": "ANTHROPIC_PATH"}
+
+        al.should_use_anthropic_loop = _should
+        al.run_anthropic_loop = _run
+        sys.modules["anthropic_loop"] = al
+        self._al = al
+
+        rca = types.ModuleType("rca_orchestrator")
+
+        def _handle(payload):
+            self.calls["rca"] += 1
+            return {"rca": "RESULT"}
+
+        rca.handle_rca = _handle
+        sys.modules["rca_orchestrator"] = rca
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+    def _drain(self, payload):
+        async def _c():
+            return [x async for x in agent.handler(payload)]
+        return asyncio.run(_c())
+
+    def test_delegates_to_anthropic_when_enabled_and_no_integrations(self):
+        self._al._use = True
+        out = self._drain({"messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(out, [{"delta": "ANTHROPIC_PATH"}])
+        self.assertEqual(self.calls["run"], 1)
+
+    def test_skips_anthropic_when_integrations_present(self):
+        self._al._use = True  # enabled, but integrations present ⇒ Strands path (minimal slice)
+        out = self._drain({"integrations": [{"name": "x"}]})  # no input ⇒ clean "No input provided."
+        self.assertEqual(self.calls["run"], 0)
+        self.assertEqual(out, [{"delta": "No input provided."}])
+
+    def test_skips_anthropic_when_disabled(self):
+        self._al._use = False
+        out = self._drain({})
+        self.assertEqual(self.calls["run"], 0)
+        self.assertEqual(out, [{"delta": "No input provided."}])
+
+    def test_rca_mode_wins_over_anthropic(self):
+        self._al._use = True
+        out = self._drain({"mode": "rca", "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(self.calls["rca"], 1)
+        self.assertEqual(self.calls["run"], 0)
+        self.assertEqual(out, [{"rca": "RESULT"}])
 
 
 if __name__ == '__main__':
