@@ -21,6 +21,7 @@ scripts/v2/workers/connector_invoke.py(+test), scripts/v2/workers/diagnosis/sour
 - Create: `scripts/v2/workers/connector_invoke.py`
 - Create: `scripts/v2/workers/test_connector_invoke.py`
 - Modify: `scripts/v2/workers/diagnosis/sources.py`
+- Modify: `scripts/v2/workers/diagnosis/test_datasources.py`
 
 - [ ] Test: `invoke_connector(kind, tool, instance_id, arguments)` builds the credential-blind payload `{tool_name, arguments{instance_id,...}}`, resolves `{PROJECT}-agent-{kind}-mcp`, parses `{statusCode, body}` (str body → json.loads, else {}); `summarize_result(body)` returns NON-PII signal-only (label NAMES/count/resultType, never raw values). (mock boto3 lambda client.)
 - [ ] Impl: move `_invoke_connector`/`_summarize_result` (sources.py) into `connector_invoke.py` as public `invoke_connector`/`summarize_result`; `diagnosis/sources.py` imports + rebinds `_invoke_connector = invoke_connector`, `_summarize_result = summarize_result` (no behavior change).

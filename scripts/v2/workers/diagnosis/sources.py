@@ -17,6 +17,10 @@ import db as wdb  # noqa: F401 — worker db (parent dir, flat /app layout); res
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 PROJECT = os.environ.get("PROJECT", "awsops-v2")
 
+# Credential-blind connector invoke + non-PII summary live in a shared module (DRY) so the incident
+# AlertValidation Lambda reuses the SAME implementation. flat import (parent /app layout).
+from connector_invoke import invoke_connector as _invoke_connector, summarize_result as _summarize_result  # noqa: E402,F401
+
 # Inventory detail bounds (keep the LLM context + token budget bounded).
 DIAG_INV_PER_TYPE = int(os.environ.get("DIAG_INV_PER_TYPE", "15"))   # max resources sampled per type
 DIAG_INV_MAX_BYTES = int(os.environ.get("DIAG_INV_MAX_BYTES", "24000"))  # global cap on serialized detail
@@ -380,28 +384,8 @@ def collect_what_changed():
 
 
 # ── External observability datasources (multi-instance, schema-driven, credential-blind) ───────────
-def _lambda_client():
-    return boto3.client("lambda", region_name=REGION)
-
-
-def _invoke_connector(kind, tool, instance_id, arguments=None):
-    """Credential-blind connector invoke: send ONLY {tool_name, arguments{instance_id,...}} — the
-    connector resolves the per-instance secret SERVER-SIDE. We NEVER send conn_config/credentials.
-    Returns (statusCode, body_dict)."""
-    payload = {"tool_name": tool, "arguments": dict(arguments or {}, instance_id=instance_id)}
-    r = _lambda_client().invoke(
-        FunctionName=f"{PROJECT}-agent-{kind}-mcp",
-        Payload=json.dumps(payload).encode("utf-8"),
-    )
-    raw = r["Payload"].read()
-    out = json.loads(raw) if raw else {}
-    body = out.get("body")
-    if isinstance(body, str):
-        try:
-            body = json.loads(body)
-        except (ValueError, TypeError):
-            body = {"raw": body[:300]}
-    return out.get("statusCode", 0), (body if isinstance(body, dict) else {})
+# _invoke_connector / _summarize_result now live in connector_invoke.py (shared, DRY) — imported
+# + rebound at the top of this module.
 
 
 def _ds_schema(conn, integration_id):
@@ -470,44 +454,6 @@ def _plan_queries(kind, schema):
         for n in safe[:_DS_MAX_QUERIES_PER_INSTANCE]:
             plan.append(("clickhouse_query", {"sql": f"SELECT count() AS c FROM {n}"}, n))
     return plan[:_DS_MAX_QUERIES_PER_INSTANCE]
-
-
-def _summarize_result(body):
-    """Compact a connector result to NON-PII SIGNAL ONLY — count, result type, source key, and metric
-    LABEL NAMES (keys, never values). Critically: NEVER emit raw samples. Loki `result` is raw log
-    lines, Tempo `traces` are trace payloads, ClickHouse `rows` are raw row values; sampling any of
-    those leaks PII into the Bedrock context (module docstring 'NO raw log lines' + DLP / ADR-040/041).
-    Handles the ACTUAL envelopes: prom/loki/clickhouse spread a top-level list (+resultType), Tempo
-    returns `traces`; some shapes nest under `result:{series|...}`."""
-    out = {}
-    if not isinstance(body, dict):
-        return out
-    # top-level list-bearing key (prom/loki `result`, tempo `traces`, clickhouse `rows`, generic `data`/`series`)
-    for key in ("result", "traces", "rows", "data", "series"):
-        v = body.get(key)
-        if isinstance(v, list):
-            out["source"], out["count"] = key, len(v)
-            # non-PII metadata only: the union of metric LABEL NAMES (keys), NEVER their values
-            names = set()
-            for item in v[:50]:
-                m = item.get("metric") if isinstance(item, dict) else None
-                if isinstance(m, dict):
-                    names.update(str(k) for k in m.keys())
-            if names:
-                out["labels"] = sorted(names)[:25]
-            break
-    # nested {result:{series|rows|data}} (synthetic/aggregated shapes) — count + shape only, NO samples
-    if "count" not in out:
-        res = body.get("result")
-        if isinstance(res, dict):
-            series = res.get("series") or res.get("rows") or res.get("data")
-            if isinstance(series, list):
-                out["count"] = len(series)
-            if "shape" in res:
-                out["shape"] = res.get("shape")
-    if "resultType" in body:
-        out["resultType"] = body.get("resultType")
-    return out
 
 
 def _signal_plan(conn, iid):
