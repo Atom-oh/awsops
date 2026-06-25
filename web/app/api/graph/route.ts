@@ -13,7 +13,14 @@ export async function GET(request: Request) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
   const url = new URL(request.url);
-  const cls = url.searchParams.get('class') === 'infra' ? 'infra' : 'flow';
+  // Explicit allow-list (flow|infra|trace) — reject unknown rather than silently serving the WRONG
+  // layer (a ternary fell back to 'flow' for any unknown value, so ?class=trace returned flow).
+  const raw = url.searchParams.get('class') ?? 'flow';
+  const ALLOWED = ['flow', 'infra', 'trace'];
+  if (!ALLOWED.includes(raw)) {
+    return Response.json({ status: 'error', message: `unknown class: ${raw}` }, { status: 400 });
+  }
+  const cls = raw;
   const from = url.searchParams.get('from');
   const depthRaw = Number(url.searchParams.get('depth'));
   const depth = Number.isFinite(depthRaw) && depthRaw > 0 ? depthRaw : 2;

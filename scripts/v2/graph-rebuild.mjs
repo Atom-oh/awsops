@@ -10,11 +10,17 @@
 //
 // The post-inventory-sync AUTO trigger (a 'graph-rebuild' worker job) invokes this same logic.
 import { getPool } from '../../web/lib/db.ts';
-import { rebuildGraph, rebuildInfraGraph } from '../../web/lib/graph-store.ts';
+import { rebuildGraph, rebuildInfraGraph, rebuildTraceGraph } from '../../web/lib/graph-store.ts';
+import { ClickHouseOtelTraceSource } from '../../web/lib/trace-source.ts';
 
 const pool = getPool();
 const flow = await rebuildGraph(pool);
 console.log(`[graph-rebuild] flow: ${flow.nodes} nodes, ${flow.edges} edges`);
 const infra = await rebuildInfraGraph(pool);
 console.log(`[graph-rebuild] infra: ${infra.nodes} nodes, ${infra.edges} edges`);
+// Step 3 — trace-level (application) graph. Dormant until the otel pipeline lands spans: the default
+// ClickHouse-otel source reports available()=false with no default clickhouse instance → empty layer,
+// no code change later (the next rebuild populates it once spans exist).
+const trace = await rebuildTraceGraph(pool, new ClickHouseOtelTraceSource());
+console.log(`[graph-rebuild] trace: ${trace.nodes} nodes, ${trace.edges} edges`);
 process.exit(0);

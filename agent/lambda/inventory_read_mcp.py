@@ -289,7 +289,7 @@ def lambda_handler(event, context):
     if tool_name == "get_topology":
         resource_id = arguments.get("resource_id") if isinstance(arguments, dict) else None
         cls = (arguments.get("class") or "flow") if isinstance(arguments, dict) else "flow"
-        if cls not in ("flow", "infra"):
+        if cls not in ("flow", "infra", "trace"):
             cls = "flow"
         nodes, edges = _fetch_topology_graph(resource_id=resource_id, cls=cls)
         result = {"class": cls, "nodes": nodes, "edges": edges,
