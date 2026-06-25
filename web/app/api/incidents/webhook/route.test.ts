@@ -211,6 +211,47 @@ describe('POST /api/incidents/webhook — rate limit + SNS confirm', () => {
   });
 });
 
+describe('POST /api/incidents/webhook — direct path: bearer (Alertmanager) + HMAC + reject SNS-shaped', () => {
+  it('accepts a valid Bearer token (Alertmanager) → 202', async () => {
+    process.env.SSM_INCIDENT_BEARER_PARAM = '/ops/awsops-v2/incident/webhook-bearer';
+    // ssmSend default returns ACTIVE_SECRET; use it as the bearer token.
+    triageAndCreateOrLink.mockResolvedValue({ decision: 'New', incidentId: 'inc-b' });
+    enqueueInitialStage.mockResolvedValue({ jobId: 'j' });
+    const { POST } = await import('./route');
+    const res = await POST(post(ALERT, { authorization: `Bearer ${ACTIVE_SECRET}`, 'x-forwarded-for': '10.2.0.1, 198.51.100.7' }));
+    expect(res.status).toBe(202);
+    expect(triageAndCreateOrLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an SNS-shaped body on the direct path (no scheme impersonation) → 401', async () => {
+    // Type:Notification ⇒ classified as SNS ⇒ must pass SNS verify (default mocked false) ⇒ 401,
+    // even with a Bearer header. The bearer/HMAC path can never accept an SNS-shaped payload.
+    verifySnsMessage.mockResolvedValue({ ok: false });
+    const body = JSON.stringify({ Type: 'Notification', TopicArn: 'arn:x', Message: '{}' });
+    const { POST } = await import('./route');
+    const res = await POST(post(body, { authorization: 'Bearer anything', 'x-forwarded-for': '10.2.0.2, 198.51.100.7' }));
+    expect(res.status).toBe(401);
+    expect(triageAndCreateOrLink).not.toHaveBeenCalled();
+  });
+
+  it('degrades to HMAC when no bearer param is configured → 202', async () => {
+    delete process.env.SSM_INCIDENT_BEARER_PARAM;
+    triageAndCreateOrLink.mockResolvedValue({ decision: 'New', incidentId: 'inc-h' });
+    enqueueInitialStage.mockResolvedValue({ jobId: 'j' });
+    const { POST } = await import('./route');
+    const res = await POST(post(ALERT, { 'x-webhook-signature': sign(ALERT), 'x-forwarded-for': '10.2.0.3, 198.51.100.7' }));
+    expect(res.status).toBe(202);
+  });
+
+  it('neither bearer nor HMAC → 401', async () => {
+    delete process.env.SSM_INCIDENT_BEARER_PARAM;
+    const { POST } = await import('./route');
+    const res = await POST(post(ALERT, { 'x-forwarded-for': '10.2.0.4, 198.51.100.7' }));
+    expect(res.status).toBe(401);
+    expect(triageAndCreateOrLink).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/incidents/webhook — body size cap (DoS guard)', () => {
   it('413 on an over-cap body before parse/triage', async () => {
     const huge = JSON.stringify({ pad: 'x'.repeat(600 * 1024) });

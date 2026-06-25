@@ -58,6 +58,8 @@ Pure verifier for AWS SNS HTTP(S) messages (Notification / SubscriptionConfirmat
 ### Task 3: Route — body cap + SNS path + single shared post-auth pipeline
 
 **Files:**
+- Modify: `web/lib/http-body.ts`
+- Modify: `web/lib/http-body.test.ts`
 - Modify: `web/app/api/incidents/webhook/route.ts`
 - Modify: `web/app/api/incidents/webhook/route.test.ts`
 

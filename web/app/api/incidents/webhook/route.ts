@@ -20,7 +20,7 @@ import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { normalizeAlert, isolatePayload, bearsSelfWritebackMarker } from '@/lib/incident-normalize';
 import { triageAndCreateOrLink, enqueueInitialStage } from '@/lib/incident';
 import { verifySnsMessage } from '@/lib/sns-verify';
-import { classifyEnvelope, isTopicAllowed, verifyHmac, resolveSourceHint } from '@/lib/incident-ingress-auth';
+import { classifyEnvelope, isTopicAllowed, verifyBearer, verifyHmac, resolveSourceHint } from '@/lib/incident-ingress-auth';
 import { readTextBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getPool } from '@/lib/db';
 
@@ -86,6 +86,16 @@ async function hmacSecrets(): Promise<Array<string | undefined>> {
   const [active, standby] = await Promise.all([
     readSsm(process.env.SSM_INCIDENT_HMAC_SECRET_PARAM),
     readSsm(process.env.SSM_INCIDENT_HMAC_STANDBY_PARAM),
+  ]);
+  return [active, standby];
+}
+
+// Bearer token(s) for Alertmanager (Authorization: Bearer …). Active/standby like HMAC; absent
+// param → undefined → degrade-safe (the direct path falls back to HMAC).
+async function bearerSecrets(): Promise<Array<string | undefined>> {
+  const [active, standby] = await Promise.all([
+    readSsm(process.env.SSM_INCIDENT_BEARER_PARAM),
+    readSsm(process.env.SSM_INCIDENT_BEARER_STANDBY_PARAM),
   ]);
   return [active, standby];
 }
@@ -161,13 +171,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
     // Notification → fall through to the SAME shared post-auth pipeline as the direct path.
   } else {
-    const signature = request.headers.get('x-webhook-signature') ||
-      request.headers.get('x-hub-signature-256') ||
-      request.headers.get('x-alertmanager-signature') || '';
-    const result = verifyHmac(rawBody, signature, await hmacSecrets());
-    if (!signature || !result.ok) return INVALID_AUTH();
-    if (result.matched === 'standby') {
-      console.log('[IncidentWebhook] HMAC matched standby secret (ADR-022 rotation; promote+retire)');
+    // Direct POST: bearer (Alertmanager) first, then HMAC (custom senders). Degrade-safe: an absent
+    // bearer secret yields {ok:false} and falls through to HMAC.
+    const authz = request.headers.get('authorization');
+    const bearer = authz ? verifyBearer(authz, await bearerSecrets()) : { ok: false };
+    if (!bearer.ok) {
+      const signature = request.headers.get('x-webhook-signature') ||
+        request.headers.get('x-hub-signature-256') ||
+        request.headers.get('x-alertmanager-signature') || '';
+      const result = verifyHmac(rawBody, signature, await hmacSecrets());
+      if (!signature || !result.ok) return INVALID_AUTH();
+      if (result.matched === 'standby') {
+        console.log('[IncidentWebhook] HMAC matched standby secret (ADR-022 rotation; promote+retire)');
+      }
     }
   }
 
