@@ -183,6 +183,23 @@ def _datasource_index(payload, dry_run):
             pass
 
 
+def _insight(payload, dry_run):
+    """AI Insights generation (K8s/CloudWatch/cost → LLM bullets → ai_insights). Short + read-only →
+    lambda runtime. Runtime-gated on AI_INSIGHTS_ENABLED inside insight.job.run."""
+    if dry_run:
+        return {"dry_run": True, "would_generate_insight": True}, None
+    import db as wdb
+    from insight import job as ijob
+    conn = wdb.connect()
+    try:
+        return ijob.run(payload, conn), None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # type -> (handler, runtime). runtime drives SFN routing (lambda<15min / fargate long+heavy).
 REGISTRY = {
     "noop":             (_noop, "lambda"),
@@ -190,6 +207,7 @@ REGISTRY = {
     "report":           (_report, "fargate"),
     "compliance":       (_compliance, "fargate"),
     "datasource_index": (_datasource_index, "lambda"),
+    "insight":          (_insight, "lambda"),
 }
 
 
