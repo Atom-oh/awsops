@@ -958,3 +958,40 @@ class TestTriggerEventSnapshot(unittest.TestCase):
         conn = _FakeConnNew(fail_trigger=True)
         r = self._run(conn)
         self.assertEqual(r["decision"], "New")  # snapshot best-effort; triage still succeeds
+
+
+# ---------------------------------------------------------------------------
+# W2b: AlertValidation SM ASL splice (TriageDecision New → AlertValidation → verdict Choice)
+# ---------------------------------------------------------------------------
+
+class TestAlertValidationAslSplice(unittest.TestCase):
+    def setUp(self):
+        with open(os.path.join(HERE, "incident.asl.json")) as f:
+            self.S = json.load(f)["States"]
+
+    def test_triage_new_routes_to_alert_validation(self):
+        # New is the TriageDecision Default; Skipped/Linked still terminate at Done.
+        self.assertEqual(self.S["TriageDecision"]["Default"], "AlertValidation")
+        choices = {c["StringEquals"]: c["Next"] for c in self.S["TriageDecision"]["Choices"]}
+        self.assertEqual(choices.get("Skipped"), "Done")
+        self.assertEqual(choices.get("Linked"), "Done")
+
+    def test_alert_validation_task_preserves_state_via_resultpath(self):
+        av = self.S["AlertValidation"]
+        self.assertEqual(av["Type"], "Task")
+        self.assertEqual(av["ResultPath"], "$.validation")  # job_id/incident_id survive for Lead
+        self.assertEqual(av["Next"], "ValidationDecision")
+        self.assertTrue(any(c.get("Next") == "StageFailed" for c in av["Catch"]))
+
+    def test_verdict_choice_routes_suppress_to_succeed_else_lead(self):
+        vd = self.S["ValidationDecision"]
+        self.assertEqual(vd["Type"], "Choice")
+        self.assertEqual(vd["Default"], "Lead")
+        sup = [c for c in vd["Choices"] if c["Variable"] == "$.validation.decision" and c["StringEquals"] == "suppress"]
+        self.assertEqual(len(sup), 1)
+        self.assertEqual(sup[0]["Next"], "Suppressed")
+        self.assertEqual(self.S["Suppressed"]["Type"], "Succeed")
+
+    def test_lead_chain_unchanged(self):
+        self.assertEqual(self.S["Lead"]["Type"], "Task")
+        self.assertTrue(any(c.get("Next") == "StageFailed" for c in self.S["Lead"]["Catch"]))
