@@ -39,6 +39,7 @@ export function isSnsCertUrlSafe(url: string): boolean {
   if (u.protocol !== 'https:') return false;
   if (u.username || u.password) return false;
   if (!SNS_HOST_PATTERN.test(url)) return false;
+  // AWS SNS signing-cert path; tolerate an optional query string (presigned variants).
   if (!/\/SimpleNotificationService-[A-Za-z0-9]+\.pem$/.test(u.pathname)) return false;
   return true;
 }
@@ -67,18 +68,28 @@ const ALG: Record<string, string> = { '1': 'RSA-SHA1', '2': 'RSA-SHA256' };
 const DEFAULT_WINDOW_MS = 15 * 60_000;
 const CERT_TTL_MS = 60 * 60_000;
 const CERT_MAX_BYTES = 16 * 1024;
+const CERT_CACHE_MAX = 256;
 const certCache = new Map<string, { pem: string; exp: number }>();
 
-async function defaultFetchCert(url: string): Promise<string> {
+// Fetch an SNS signing cert with SSRF + DoS guards: HTTP-error and oversize bodies are NEVER
+// cached, and ONLY a body that parses as an X509Certificate is cached (so an attacker spraying
+// random /SimpleNotificationService-*.pem paths cannot fill the cache with 404/HTML). The cache
+// is size-bounded. Exported for testing.
+export async function fetchSnsCert(url: string): Promise<string> {
   const cached = certCache.get(url);
   if (cached && cached.exp > Date.now()) return cached.pem;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
     const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error('cert http error');
+    const lenHdr = Number(res.headers?.get?.('content-length') ?? '');
+    if (Number.isFinite(lenHdr) && lenHdr > CERT_MAX_BYTES) throw new Error('cert too large');
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length > CERT_MAX_BYTES) throw new Error('cert too large');
     const pem = buf.toString('utf8');
+    new X509Certificate(pem); // throws unless it is a real cert — never cache non-certs
+    if (certCache.size >= CERT_CACHE_MAX) certCache.clear(); // bound memory (coarse eviction)
     certCache.set(url, { pem, exp: Date.now() + CERT_TTL_MS });
     return pem;
   } finally {
@@ -97,7 +108,7 @@ export interface VerifyOpts {
 export async function verifySnsMessage(m: SnsMessage, opts: VerifyOpts = {}): Promise<{ ok: boolean; reason?: string }> {
   const now = opts.now ?? Date.now();
   const windowMs = opts.freshnessMs ?? DEFAULT_WINDOW_MS;
-  const fetchCert = opts.fetchCert ?? defaultFetchCert;
+  const fetchCert = opts.fetchCert ?? fetchSnsCert;
   const validateCertFn = opts.validateCertFn ?? validateCert;
 
   const alg = ALG[String(m.SignatureVersion)];

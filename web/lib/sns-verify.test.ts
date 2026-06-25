@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { generateKeyPairSync, sign, createPublicKey } from 'crypto';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'fs';
@@ -10,6 +10,7 @@ import {
   checkFreshness,
   validateCert,
   verifySnsMessage,
+  fetchSnsCert,
 } from './sns-verify';
 
 // A node-generated RSA keypair lets us sign canonical strings and verify with the public key,
@@ -108,6 +109,40 @@ describe('verifySnsMessage (signature + freshness + url, cert stubbed)', () => {
   it('rejects SignatureVersion not in {1,2}', async () => {
     const r = await verifySnsMessage(signMsg(notification({ SignatureVersion: '9' })), { now: NOW, fetchCert: fetchPub, validateCertFn: okCert });
     expect(r.ok).toBe(false);
+  });
+});
+
+describe('fetchSnsCert (DoS/SSRF guards: res.ok + cert-parse-before-cache)', () => {
+  const BASE = 'https://sns.ap-northeast-2.amazonaws.com/SimpleNotificationService-';
+  let certPem = '';
+  let haveOpenssl = true;
+  beforeAll(() => {
+    try {
+      const d = mkdtempSync(join(tmpdir(), 'snsfetch-'));
+      execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', join(d, 'k.pem'),
+        '-out', join(d, 'c.pem'), '-days', '2', '-nodes', '-subj', '/O=Amazon/CN=sns.amazonaws.com'], { stdio: 'ignore' });
+      certPem = readFileSync(join(d, 'c.pem'), 'utf8');
+      rmSync(d, { recursive: true, force: true });
+    } catch { haveOpenssl = false; }
+  });
+  it('returns a valid cert and caches it (second call does not re-fetch)', async () => {
+    if (!haveOpenssl) return;
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(certPem, { status: 200 }));
+    const u = `${BASE}cache.pem`;
+    expect(await fetchSnsCert(u)).toContain('BEGIN CERTIFICATE');
+    await fetchSnsCert(u);
+    expect(spy).toHaveBeenCalledTimes(1); // served from cache
+    spy.mockRestore();
+  });
+  it('throws on an HTTP error (404) — never cached', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('not found', { status: 404 }));
+    await expect(fetchSnsCert(`${BASE}e404.pem`)).rejects.toBeTruthy();
+    spy.mockRestore();
+  });
+  it('throws on a non-certificate body (e.g. HTML/404 page returned with 200)', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('<html>nope</html>', { status: 200 }));
+    await expect(fetchSnsCert(`${BASE}html.pem`)).rejects.toBeTruthy();
+    spy.mockRestore();
   });
 });
 

@@ -110,7 +110,8 @@ async function confirmSnsSubscription(body: Record<string, unknown>): Promise<Ne
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
-      await fetch(subscribeUrl, { signal: ctrl.signal });
+      const res = await fetch(subscribeUrl, { signal: ctrl.signal });
+      if (!res.ok) throw new Error('confirm http error'); // non-2xx → fall to 400 so SNS retries
       console.log('[IncidentWebhook] SNS subscription confirmed'); // never log TopicArn/URL
       return NextResponse.json({ status: 'subscription_confirmed' });
     } catch {
