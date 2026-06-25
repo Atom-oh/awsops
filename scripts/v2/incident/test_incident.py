@@ -893,3 +893,68 @@ class TestDispatcherIncidentBranch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ---------------------------------------------------------------------------
+# W2a: trigger_event snapshot persistence on the New path (degrade-safe)
+# ---------------------------------------------------------------------------
+
+from unittest import mock  # noqa: E402
+
+
+class _FakeConnNew:
+    """conn whose dedup INSERT WINS (returns an id) so lambda_handler takes the New path."""
+    def __init__(self, fail_trigger=False):
+        self.calls = []
+        self.fail_trigger = fail_trigger
+
+    def run(self, sql, **params):
+        self.calls.append((sql, params))
+        s = " ".join(sql.split()).lower()
+        if "insert into incidents" in s and "returning id" in s:
+            return [[params.get("id")]]               # New win
+        if "insert into incident_stages" in s and "returning id" in s:
+            return [["stage-1"]]
+        if "update incidents set trigger_event" in s:
+            if self.fail_trigger:
+                raise Exception('column "trigger_event" does not exist')
+            return []
+        return []
+
+    def close(self):
+        pass
+
+
+class TestTriggerEventSnapshot(unittest.TestCase):
+    def _payload(self):
+        return {"id": "a1", "severity": "critical", "source": "cloudwatch", "alertName": "HighCPU",
+                "services": ["api"], "resources": ["i-1"], "labels": {"account_id": "123456789012"},
+                "metric": {"name": "CPUUtilization"}, "timestamp": "2026-06-25T00:00:00Z",
+                "alarmArn": "arn:aws:cloudwatch:ap-northeast-2:123456789012:alarm:HighCPU"}
+
+    def _run(self, conn):
+        caps = {"min_severity": "warning", "fanout_max": 5, "stage_timeout_s": 600}
+        with mock.patch.object(triage.db, "connect", return_value=conn), \
+             mock.patch.object(triage, "_ssm_client", return_value=None), \
+             mock.patch.object(triage.lifecycle, "read_caps", return_value=caps), \
+             mock.patch.object(triage.lifecycle, "checkpoint", return_value=None), \
+             mock.patch.object(triage.lifecycle, "transition_stage", return_value=None):
+            return triage.lambda_handler(
+                {"job_id": "00000000-0000-0000-0000-000000000001", "payload": self._payload()}, None)
+
+    def test_new_writes_trigger_event_snapshot(self):
+        conn = _FakeConnNew()
+        r = self._run(conn)
+        self.assertEqual(r["decision"], "New")
+        te = [c for c in conn.calls if "trigger_event" in " ".join(c[0].split()).lower()]
+        self.assertEqual(len(te), 1)
+        snap = json.loads(te[0][1]["te"])
+        self.assertEqual(snap["source"], "cloudwatch")
+        self.assertEqual(snap["account"], "123456789012")
+        self.assertEqual(snap["alarmArn"], "arn:aws:cloudwatch:ap-northeast-2:123456789012:alarm:HighCPU")
+        self.assertEqual(snap["services"], ["api"])
+
+    def test_trigger_event_failure_is_degrade_safe(self):
+        conn = _FakeConnNew(fail_trigger=True)
+        r = self._run(conn)
+        self.assertEqual(r["decision"], "New")  # snapshot best-effort; triage still succeeds

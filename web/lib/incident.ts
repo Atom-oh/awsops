@@ -33,6 +33,27 @@ function severityRank(s: AlertSeverity): number {
   return s === 'critical' ? 3 : s === 'warning' ? 2 : 1;
 }
 
+/** Isolated, bounded snapshot of the triggering alert, persisted on the New path for the W2
+ *  AlertValidation stage to load by incident_id. Descriptive/normalized fields only — NOT the
+ *  raw rawPayload (which bypasses isolatePayload's caps/defang). */
+export function buildTriggerSnapshot(event: AlertEvent): Record<string, unknown> {
+  const labels = event.labels ?? {};
+  const annotations = (event.annotations ?? {}) as Record<string, string>;
+  return {
+    id: event.id,
+    severity: event.severity,
+    source: event.source,
+    alertName: event.alertName,
+    services: event.services ?? [],
+    resources: event.resources ?? [],
+    labels,
+    metric: event.metric ?? null,
+    timestamp: event.timestamp,
+    account: labels.account_id ?? annotations.accountId ?? null,
+    alarmArn: event.alarmArn ?? null,
+  };
+}
+
 export type TriageDecision = 'New' | 'Linked' | 'Skipped' | 'disabled';
 export interface TriageResult {
   decision: TriageDecision;
@@ -79,6 +100,12 @@ export async function triageAndCreateOrLink(event: AlertEvent): Promise<TriageRe
       [incidentId, key]);
     return { decision: 'Linked', incidentId };
   }
+  // Persist the isolated trigger snapshot for W2 AlertValidation (New path only). Degrade-safe:
+  // tolerates the trigger_event column being absent on pre-migration substrate.
+  try {
+    await getPool().query(`UPDATE incidents SET trigger_event = $1::jsonb WHERE id = $2`,
+      [JSON.stringify(buildTriggerSnapshot(event)), id]);
+  } catch { /* column absent (migration not yet applied) — snapshot is best-effort */ }
   return { decision: 'New', incidentId: id };
 }
 

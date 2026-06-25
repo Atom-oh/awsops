@@ -243,3 +243,21 @@ describe('bearsSelfWritebackMarker — ADR-034 feedback-loop breaker (ALWAYS-ON 
     expect(bearsSelfWritebackMarker({ ...clean, rawPayload: { source: 'not-AWSops-AIOps' } })).toBe(false);
   });
 });
+
+describe('normalizeCloudWatch — AlarmArn capture (W2a)', () => {
+  const cw = (msg: Record<string, unknown>) =>
+    normalizeAlert(
+      { Type: 'Notification', TopicArn: 'arn:aws:sns:ap-northeast-2:123456789012:topic', Message: JSON.stringify(msg) },
+      'cloudwatch',
+    );
+  it('captures AlarmArn from the SNS Message (NOT the TopicArn)', () => {
+    const arn = 'arn:aws:cloudwatch:ap-northeast-2:123456789012:alarm:HighCPU';
+    const [ev] = cw({ AlarmName: 'HighCPU', AlarmArn: arn, NewStateValue: 'ALARM', Region: 'ap-northeast-2', AWSAccountId: '123456789012', Trigger: { MetricName: 'CPUUtilization', Namespace: 'AWS/EC2' } });
+    expect(ev.alarmArn).toBe(arn);
+    expect(ev.alarmArn).not.toBe('arn:aws:sns:ap-northeast-2:123456789012:topic');
+  });
+  it('alarmArn is undefined when the Message carries no AlarmArn', () => {
+    const [ev] = cw({ AlarmName: 'X', NewStateValue: 'ALARM' });
+    expect(ev.alarmArn).toBeUndefined();
+  });
+});
