@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 11b228af08dd · generated-at: 2026-06-22 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 22dc16d1ceca · generated-at: 2026-06-24 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are Gemini, an external reviewer — project context below.
 
@@ -19,14 +19,18 @@ v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *pro
 - **IaC:** Terraform (CDK dropped). Single root `terraform/v2/foundation/`, partial S3 backend (`backend.hcl`, no DynamoDB), TF ≥1.15, provider `~>6.0`.
 - **Edge:** CloudFront(TLS) → VPC Origin `https-only:443` → internal ALB HTTPS:443 (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** ALB SG allows 443 from CloudFront managed SG `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only → 504).
 - **AI:** Bedrock **Sonnet 4.6 / Opus 4.8 / Haiku 4.5** + AgentCore (Strands, reuses `agent/agent.py`; routes via `GATEWAYS_JSON`). Live AWS queries go through **AgentCore MCP Lambda tools** (`agent/lambda/*.py`), never inline in the BFF. Config source-of-truth = **SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}` (read at runtime; no ECS `valueFrom` to avoid a race).
-- **Chat routing (ADR-038, LIVE):** regex fast-path → Haiku classifier fallback; prompt caching + temperature=0. Gated by `hybrid_routing_enabled`.
+- **Chat routing (ADR-038, LIVE):** regex fast-path (`web/lib/route.ts`, **first-match-wins ordered RULES**) → Haiku classifier fallback (`web/lib/classifier.ts`); prompt caching + temperature=0. Gated by `hybrid_routing_enabled`. **9 routed sections** incl `observability` (external-obs: Prometheus + ClickHouse) — see Gateway section.
+- **Datasource connectors:** the v2 datasource family (`agent/lambda/{clickhouse,prometheus,loki,tempo,mimir,opensearch}_mcp.py`) all import the shared `datasource_http.py`; that file **must be bundled into each Lambda zip** (ai.tf `dynamic source`) or the Lambda dies with `Runtime.ImportModuleError: No module named 'datasource_http'`.
 - **Async workers (P2):** `POST /api/jobs` → `worker_jobs` (queued) + SQS → ESM (kill-switch) → dispatcher Lambda (idempotent on job_id) → Step Functions → RunLambda (short) **or** `ecs:runTask.sync` Fargate (long/OOM) → worker writes running/succeeded itself → status_updater on Catch sets failed (SFN can't write VPC Aurora) → reaper (EventBridge 5min) reconciles stale. Files: `terraform/v2/foundation/workers.tf`, `scripts/v2/workers/`.
 
 ## Build · Test · Lint (copy-paste; do not invent)
 ```bash
 # v2 web (cwd = web/) — package.json scripts: dev / build / start / test (no lint script)
 cd web && npm ci && npm run build       # next build (standalone)
-cd web && npx vitest run                 # web test suite (vitest); ~94 *.test.ts(x)
+cd web && npx vitest run                 # web test suite (vitest)
+
+# agent (Python) — MCP Lambda sources + Strands entrypoint
+cd agent && python3 -m pytest test_agent.py -q
 
 # Terraform (controller runs apply on shared infra; agents do NOT auto-approve)
 terraform -chdir=terraform/v2/foundation init -backend-config=backend.hcl
@@ -34,13 +38,12 @@ terraform -chdir=terraform/v2/foundation validate
 terraform -chdir=terraform/v2/foundation plan -out tfplan   # controller runs `apply tfplan`
 
 # Makefile (run after terraform apply where noted)
-make configure   # interactive TUI → terraform.tfvars + backend.hcl
 make migrate     # apply pending ULID migrations (advisory-locked; DRY_RUN=1 to preview)
 make deploy      # migrate → buildx arm64 → ECR push → ECS roll → wait stable → smoke /api/health
-make agentcore   # arm64 agent image + idempotent AgentCore provisioner (--smoke to invoke)
+make agentcore   # arm64 agent image + idempotent AgentCore provisioner (builds the agent image; does NOT deploy the MCP Lambdas — those are terraform)
 make workers     # arm64 worker image push (after apply with workers_enabled=true)
 ```
-Note: the repo-root `package.json` (`build`/`lint`/`test`) belongs to the **v1** app; the **v2** web app lives under `web/` and has no `lint` script. `next build` fails on app-level type errors but `*.test.ts(x)` type noise is non-blocking.
+Note: the repo-root `package.json` belongs to the **v1** app; the **v2** web app lives under `web/` and has no `lint` script. `next build` fails on app-level type errors but `*.test.ts(x)` type noise is non-blocking. **MCP Lambda code (`agent/lambda/*.py`) ships via `terraform apply`, not `make agentcore`** — a stale Lambda after a code change usually means apply wasn't run.
 
 ## BANNED PATTERNS (enforce in review)
 - **AWS security:** no `0.0.0.0/0` ingress; no IAM `Principal: "*"` / wildcard-action without a scoped condition; **no secrets in env/code/IaC** (use Secrets Manager / SSM).
@@ -65,18 +68,20 @@ Note: the repo-root `package.json` (`build`/`lint`/`test`) belongs to the **v1**
 4. **Terraform:** changes under `terraform/v2/foundation/`; large features flag-gated; SG description unchanged; no `0.0.0.0/0`, no `Principal:*`; no `-auto-approve` baked in.
 5. **Containers:** arm64; `HOSTNAME=0.0.0.0` runtime env; Fargate worker `CMD`; container + TG health path = `/api/health`.
 6. **v2 vs v1:** fetch `/api/*` (no `/awsops` prefix); state in Aurora not `data/*.json`; new tables as ULID migration files.
-7. **Gateway count:** 9 provisioned / 8 agent routes (ADR-004, RESOLVED) — different axes, not a contradiction.
+7. **Routing:** golden-routing fixture labels must match `route.ts` RULES order (first-match-wins — a generic keyword like `쿼리`/`metric` can be stolen by an earlier `data`/`monitoring` rule); the `observability` chat key must resolve to a real gateway at runtime (see Gateway section).
 
-## Gateway count — RESOLVED (ADR-004)
-AgentCore gateways (ADR-004, RESOLVED): **9 gateways are provisioned** (8 sections network/container/data/security/cost/monitoring/iac/ops + `external-obs`) and **agent.py routes 8 section agents**. State it as **"9 provisioned / 8 agent routes"** — different axes, not a contradiction.
+## Gateway routing & count (ADR-004, amended 2026-06-24)
+**9 gateways provisioned / 9 agent routes.** The 8 section gateways (network/container/data/security/cost/monitoring/iac/ops) + **`external-obs`** (the Integrations axis, ADR-039) which is now a **routed** section hosting the external-observability connectors **Prometheus + ClickHouse** (Loki/Tempo/Mimir stay on `monitoring` for now). The chat section key is **`observability`**, aliased to the `external-obs` gateway in `agent.py` (`_GATEWAY_ALIAS`).
+- **Runtime key gotcha:** `_discover_gateways` derives a gateway's short key via `name.replace("awsops-","").replace("-gateway","")`. While v1 and v2 gateways coexist, a v2 gateway `awsops-v2-external-obs-gateway` yields key **`v2-external-obs`**, not `external-obs`. `_resolve_gateway_key` therefore tries the canonical key AND a `v2-`-prefixed variant (and resolves DEFAULT_GATEWAY the same tolerant way — never a bare `GATEWAYS[DEFAULT_GATEWAY]` eager index, which KeyErrors when `ops` is absent under v2-only discovery). The `v2-` fallback is a coexistence shim to drop at the v2→main cutover.
 
 ## Known false-positives (do NOT flag)
 - **Model ids:** Opus is **4.8**, Sonnet is **4.6** (no `-v1` suffix). Any "Opus 4.6" / "17-route router" text is stale v1 — the current code is correct.
-- **Dark code is intentional:** a "frozen but code present" slice (e.g. mutation substrate in `workers.tf`, ADR-005 frozen tier) is deliberately retained dark code, NOT dead code. The regression is *enabling* it, not its presence.
+- **Dark code is intentional:** a "frozen but code present" slice (e.g. mutation substrate in `remediation.tf`/`workers.tf`, ADR-005 frozen tier) is deliberately retained dark code, NOT dead code. The regression is *enabling* it, not its presence.
 - Fetch to `/api/...` without an `/awsops` prefix is correct in v2 (basePath dropped).
 - `agentcore_enabled` / `workers_enabled` / `steampipe_enabled` / `hybrid_routing_enabled` defaulting false (so `plan` = No changes) is intentional, not dead config.
-- Chat classifier calling Bedrock Haiku for routing (ADR-038) is intentional in v2 — it supersedes v1's "Sonnet-only router" rule; regex-first, golden-set-gated.
-- Flag-gated Steampipe Fargate+Lambda inventory sync (default off) is the *only* sanctioned Steampipe in v2 — a batch loader into Aurora, not a live-query service; not a contradiction of "no live Steampipe" (live queries go through AgentCore MCP tools).
+- Chat classifier calling Bedrock Haiku for routing (ADR-038) is intentional in v2 — it supersedes v1's "Sonnet-only router" rule; regex-first, golden-set-gated. The golden `golden-routing.test.ts` baseline is **informational, not a gate** (it only asserts a 0.3–0.85 band); per-case regex misses for LLM-routed ambiguous queries are expected.
+- The `observability` chat key NOT being a literal `agent.py` GATEWAYS key is fine — `_GATEWAY_ALIAS` maps it to `external-obs`/`v2-external-obs` and `SKILL_BASE["observability"]` supplies the persona; there is no silent `ops` fallback.
+- Flag-gated Steampipe Fargate+Lambda inventory sync (default off) is the *only* sanctioned Steampipe in v2 — a batch loader into Aurora, not a live-query service (live queries go through AgentCore MCP tools).
 - Exact Aurora minor `17.9` + `lifecycle{ignore_changes=[engine_version]}` on cluster AND instance is deliberate (absorbs minor auto-upgrades), not a drift bug.
 - `CloudFront-VPCOrigins-Service-SG` 443 ingress on the ALB SG is required (VPC-CIDR-only causes 504).
 - SFN `.sync` briefly showing RUNNING after the worker wrote `succeeded` is expected (task-stop polling lag); the `worker_jobs` ledger is the source of truth.
