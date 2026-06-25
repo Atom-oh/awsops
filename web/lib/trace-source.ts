@@ -84,7 +84,10 @@ export function mapOtelRow(row: OtelTracesRow): TraceSpan {
   if (dbSystem) out.dbSystem = dbSystem;
   const dbName = span['db.name'];
   if (dbName) out.dbName = dbName;
-  const dbHost = span['server.address'] || span['net.peer.name'] || span['db.connection_string'];
+  // host-only attrs ONLY — never span['db.connection_string']: OTel allows a full DSN there
+  // (`user:password@host`), and dbHost is persisted to node meta.host + exposed via /api/graph and
+  // the get_topology MCP tool → a credential would leak into the topology layer (C2).
+  const dbHost = span['server.address'] || span['net.peer.name'];
   if (dbHost) out.dbHost = dbHost;
   const peer = span['peer.service'];
   if (peer) out.peerService = peer;
@@ -134,7 +137,10 @@ export class ClickHouseOtelTraceSource implements TraceSource {
       result = await invokeMcpLambdaTool({
         kind: 'clickhouse',
         tool: 'clickhouse_query',
-        args: { sql },
+        // Pass max_rows: without it, clickhouse_mcp clamps results to DEFAULT_MAX_ROWS=100, so the
+        // SQL `LIMIT ${cap}` was moot (only 100 spans ever returned → severely incomplete graph). The
+        // tool hard-caps at MAX_ROWS_CAP=1000, which TRACE_SPAN_CAP is pinned to (M1).
+        args: { sql, max_rows: Math.max(1, Math.floor(cap)) },
         connConfig: r.connConfig,
       });
     } catch {

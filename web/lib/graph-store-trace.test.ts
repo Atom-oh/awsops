@@ -63,20 +63,28 @@ describe('rebuildTraceGraph aggregation', () => {
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('COMMIT'));
   });
 
-  it('confidence reflects span counts (string)', async () => {
-    // two checkout→orders call edges should aggregate to count 2
+  it('confidence is normalized to (0,1] by the max edge count (spec contract, M3)', async () => {
+    // checkout→orders twice (calls count 2), orders→postgres once (queries count 1).
+    // max edge count = 2 → calls normalizes to "1", queries to "0.5"; every confidence ∈ (0,1].
     const dup: TraceSpan[] = [
       span({ traceId: 'a', spanId: 'p1', service: 'checkout' }),
       span({ traceId: 'a', spanId: 'c1', parentSpanId: 'p1', service: 'orders' }),
       span({ traceId: 'b', spanId: 'p2', service: 'checkout' }),
       span({ traceId: 'b', spanId: 'c2', parentSpanId: 'p2', service: 'orders' }),
+      span({ traceId: 'b', spanId: 'q2', parentSpanId: 'c2', service: 'orders', dbSystem: 'postgresql', dbHost: 'aurora.rds', dbName: 'orders' }),
     ];
     const { pool, params } = mockPool();
     await rebuildTraceGraph(pool as never, new FakeTraceSource(dup, true), 'RUNT2');
-    // confidence is a string; the calls edge between checkout/orders carries count "2"
-    const edgeParams = params.filter((p) => p.includes('calls'));
-    expect(edgeParams.length).toBeGreaterThan(0);
-    expect(edgeParams.some((p) => p.map(String).includes('2'))).toBe(true);
+    // edge upsert params = [source, target, rel, confidence, runId, class]; confidence is index 3.
+    const callsEdge = params.find((p) => p.includes('calls'));
+    const queriesEdge = params.find((p) => p.includes('queries'));
+    expect(callsEdge?.[3]).toBe('1');     // max count (2) → 1
+    expect(queriesEdge?.[3]).toBe('0.5'); // 1 / 2
+    for (const p of params.filter((x) => x.includes('calls') || x.includes('queries'))) {
+      const conf = Number(p[3]);
+      expect(conf).toBeGreaterThan(0);
+      expect(conf).toBeLessThanOrEqual(1);
+    }
   });
 });
 
@@ -131,5 +139,13 @@ describe('resolveInfraRef (bridge-ref matcher, pure)', () => {
     expect(resolveInfraRef('some-other-db.example.com', infraNodes)).toBeUndefined();
     expect(resolveInfraRef(undefined, infraNodes)).toBeUndefined();
     expect(resolveInfraRef('aurora', [])).toBeUndefined();
+  });
+
+  it('does NOT match production infra nodes — they carry meta {invType, resourceId}, no host (M2: bridge dormant)', () => {
+    // infra-topology emits nodes with meta { invType, resourceId } and NO host, so the cross-class
+    // bridge cannot fire in production until infra nodes are given a host. This pins the known
+    // dormant state honestly (rather than implying the bridge works via a fabricated {meta:{host}}).
+    const prodInfra = [{ id: 'rds:db-1', kind: 'rds', meta: { invType: 'rds', resourceId: 'db-1' } }];
+    expect(resolveInfraRef('awsops-v2-aurora.cluster-xyz.rds.amazonaws.com', prodInfra)).toBeUndefined();
   });
 });

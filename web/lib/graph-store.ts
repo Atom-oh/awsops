@@ -28,7 +28,10 @@ const TRACE_LOCK = 0x74726163;  // 'trac' — trace rebuilds use a DISTINCT key 
 const NET_TYPES = ['vpc', 'subnet', 'security_group'];
 // Trace-layer aggregation bounds — cap top-N nodes/edges; drops are logged (no silent truncation).
 const TRACE_WINDOW_MINS = 60;
-const TRACE_SPAN_CAP = 20000;
+// Pinned to clickhouse_mcp's MAX_ROWS_CAP (1000): the adapter passes max_rows=cap and the shared
+// ClickHouse tool hard-caps result rows at 1000, so a larger LIMIT would be a fiction the tool
+// silently truncates. Widening the shared cap for a dormant layer isn't justified (M1).
+const TRACE_SPAN_CAP = 1000;
 const TRACE_NODE_CAP = 200;
 const TRACE_EDGE_CAP = 500;
 
@@ -215,8 +218,16 @@ export async function rebuildTraceGraph(
     // service → db (queries): a DB-client span carries db.system
     if (s.dbSystem) {
       const hostOrName = s.dbHost || s.dbName || 'unknown';
-      const id = dbId(s.dbSystem, hostOrName);
+      // Key the node on host AND dbName when both exist: two logical DBs on one Aurora/RDS host
+      // (same host, different db.name) are DISTINCT nodes — keying on host alone collapsed them into
+      // one node and merged their `queries` edge counts (F1), which also skewed the confidence norm.
+      const idKey = s.dbHost && s.dbName ? `${s.dbHost}/${s.dbName}` : hostOrName;
+      const id = dbId(s.dbSystem, idKey);
       if (!nodes.has(id)) {
+        // infra_ref bridge is best-effort and currently DORMANT in production: infra-topology nodes
+        // carry meta { invType, resourceId } and NO meta.host, so resolveInfraRef can never match
+        // until infra-topology populates host on RDS/Aurora nodes.
+        // TODO(trace-topology, M2): emit meta.host on infra RDS/Aurora nodes to activate this bridge.
         const infra_ref = resolveInfraRef(s.dbHost, infraNodes);
         const meta: Record<string, unknown> = { system: s.dbSystem, host: s.dbHost ?? null };
         if (s.dbName) meta.dbName = s.dbName;
@@ -273,6 +284,14 @@ export async function rebuildTraceGraph(
   const keep = new Set(nodeList.map((n) => n.id));
   edgeList = edgeList.filter((e) => keep.has(e.source) && keep.has(e.target));
 
-  const edges: GEdge[] = edgeList.map((e) => ({ source: e.source, target: e.target, rel: e.rel, confidence: String(e.n) }));
+  // confidence ∈ (0,1] per the trace-topology spec: normalize the raw edge span-count by the max
+  // emitted count (max-edge normalization — needs no total-span knowledge). Emitted as a decimal
+  // string ("0.5"); NOTE this makes the shared `confidence` column polymorphic vs flow/infra's
+  // 'observed' keyword, so consumers must tolerate both a keyword and a numeric string (M3).
+  const maxN = edgeList.reduce((m, e) => Math.max(m, e.n), 0);
+  const edges: GEdge[] = edgeList.map((e) => ({
+    source: e.source, target: e.target, rel: e.rel,
+    confidence: maxN > 0 ? String(e.n / maxN) : '0',
+  }));
   return writeGraph(pool, 'trace', TRACE_LOCK, nodeList, edges, runId, true);
 }
