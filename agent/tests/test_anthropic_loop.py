@@ -224,8 +224,8 @@ class _Recorder:
         self.calls = []
         self.result = result
 
-    def __call__(self, name, inp):
-        self.calls.append((name, inp))
+    def __call__(self, tool_use_id, name, inp):
+        self.calls.append((tool_use_id, name, inp))
         return self.result
 
 
@@ -261,7 +261,7 @@ class DriveAnthropicLoopTest(unittest.TestCase):
         deltas = _drive(client, rec, tools=[{"name": "list_vpcs", "input_schema": {}}])
         self.assertEqual(deltas, [{"delta": "Let me check. "}, {"delta": "3 VPCs."}])
         # tool ran exactly once with the model-supplied input
-        self.assertEqual(rec.calls, [("list_vpcs", {"region": "x"})])
+        self.assertEqual(rec.calls, [("tu1", "list_vpcs", {"region": "x"})])
         # max_tokens passed on the first call
         self.assertEqual(client.messages.calls[0]["max_tokens"], al.MAX_OUTPUT_TOKENS)
         self.assertIn("tools", client.messages.calls[0])
@@ -307,7 +307,7 @@ class DriveAnthropicLoopTest(unittest.TestCase):
         self.assertEqual(deltas, [{"delta": "partial "}, {"delta": al._INTERRUPTED_DELTA}])
 
     def test_tool_error_becomes_is_error_result_not_fatal(self):
-        def boom(name, inp):
+        def boom(tool_use_id, name, inp):
             raise ValueError("tool exploded")
         client = _FakeClient([
             (["trying "], _final("tool_use", [_tooluse("tu1", "list_vpcs", {})])),
@@ -343,7 +343,8 @@ class DriveAnthropicLoopTest(unittest.TestCase):
         ])
         rec = _Recorder()
         _drive(client, rec, tools=[{"name": "list_vpcs"}, {"name": "get_topology"}])
-        self.assertEqual([c[0] for c in rec.calls], ["list_vpcs", "get_topology"])
+        self.assertEqual([c[0] for c in rec.calls], ["a", "b"])           # tool_use_ids forwarded
+        self.assertEqual([c[1] for c in rec.calls], ["list_vpcs", "get_topology"])  # names
         results = [blk for m in client.messages.calls[1]["messages"] if m["role"] == "user"
                    for blk in m["content"] if isinstance(blk, dict) and blk.get("type") == "tool_result"]
         self.assertEqual({r["tool_use_id"] for r in results}, {"a", "b"})
@@ -378,8 +379,10 @@ class _FakeMCPClient:
     def __exit__(self, *a):
         return False
 
-    def call_tool_sync(self, name, arguments=None):
-        self.tool_calls.append((name, arguments))
+    def call_tool_sync(self, tool_use_id, name, arguments=None):
+        # Real Strands MCPClient signature: (tool_use_id, name, arguments=...). The first positional
+        # is tool_use_id, NOT name — matching this to reality is exactly what caught the live bug.
+        self.tool_calls.append((tool_use_id, name, arguments))
         return types.SimpleNamespace(content=[types.SimpleNamespace(text=f"out:{name}")])
 
 

@@ -206,7 +206,7 @@ async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks,
                     results.append(tool_result_block(tu["id"], f"tool not permitted: {tu['name']}", is_error=True))
                     continue
                 try:
-                    res = await asyncio.to_thread(mcp_call, tu["name"], tu["input"])
+                    res = await asyncio.to_thread(mcp_call, tu["id"], tu["name"], tu["input"])
                     results.append(tool_result_block(tu["id"], res))
                 except Exception as e:  # one tool failing must not abort the turn
                     logger.warning("tool %s failed: %s", tu.get("name"), e)
@@ -327,9 +327,12 @@ async def run_anthropic_loop(payload):
             # Bedrock client (no API key — uses the runtime role); same home region as the Strands path.
             aclient = AsyncAnthropicBedrock(aws_region=BEDROCK_REGION)
             try:
-                def mcp_call(name, inp):
-                    # Repo call shape (agent/rca/tools.py): call_tool_sync(name, arguments=...).
-                    return _normalize_tool_result(mcp_client.call_tool_sync(name, arguments=inp or {}))
+                def mcp_call(tool_use_id, name, inp):
+                    # Strands MCPClient.call_tool_sync(tool_use_id, name, arguments=...): the FIRST
+                    # positional is tool_use_id, NOT name (verified live — agent/rca/tools.py wraps a
+                    # DIFFERENT client whose signature is (name, arguments=), which misled an earlier fix).
+                    return _normalize_tool_result(
+                        mcp_client.call_tool_sync(tool_use_id, name, arguments=inp or {}))
 
                 messages = build_anthropic_messages(history, user_input)
                 allowed_tool_names = {t["name"] for t in anthropic_tools}  # execution-time ceiling
