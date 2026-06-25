@@ -12,7 +12,7 @@
 - 마이그레이션: stage/status CHECK는 inline-unnamed(auto `incident_stages_stage_check`/`incidents_status_check`); DROP IF EXISTS + superset ADD(기존 값 전부 포함). nullable JSONB(NOT NULL/DEFAULT 없이, rca/mitigation_plan 선례). migrations/ 파일 schema_migrations INSERT 금지·작성후 불변(sha256). `-- since: 2.4.0`. GIN `jsonb_path_ops`.
 
 ## File scope
-web/lib/incident-normalize.ts(+test), web/lib/incident.ts(+test), scripts/v2/incident/triage.py, scripts/v2/incident/test_incident.py, terraform/v2/foundation/migrations/<ULID>_incident_validation_stage.sql, scripts/v2/incident/test_w2_migration.py, this plan.
+web/lib/incident-normalize.ts(+test), web/lib/incident.ts(+test), scripts/v2/incident/triage.py, scripts/v2/incident/test_incident.py, terraform/v2/foundation/migrations/01KVYC5ZYXG6SKQRECWCWQ05ZH_incident_validation_stage.sql, scripts/v2/incident/test_w2_migration.py, this plan.
 
 ### Task 1: Capture CloudWatch AlarmArn (web, test-first)
 
@@ -44,7 +44,7 @@ Snapshot = `{ id, severity, source, services[], resources[], labels, metric, tim
 ### Task 3: Migration — trigger_event/validation cols + stage/status CHECK + GIN (test-first)
 
 **Files:**
-- Create: `terraform/v2/foundation/migrations/<ULID>_incident_validation_stage.sql`
+- Create: `terraform/v2/foundation/migrations/01KVYC5ZYXG6SKQRECWCWQ05ZH_incident_validation_stage.sql`
 - Create: `scripts/v2/incident/test_w2_migration.py`
 
 - [ ] Test: read the migration; assert `ADD COLUMN IF NOT EXISTS trigger_event JSONB`, `... validation JSONB`, stage CHECK superset incl. `'alert_validation'` + all 5 existing, status CHECK superset incl. `'validating'`,`'false_positive'` + all 9 existing, a `USING GIN (validation jsonb_path_ops)` index; assert NO `schema_migrations` and NO `ON CONFLICT`.
