@@ -243,7 +243,11 @@ def ensure_runtime(ctrl, ac, gw_ids):
     # GetCallerIdentity lookup (same value cross_account.py uses on the tool
     # Lambdas). Account parsed from the role ARN (arn:aws:iam::<account>:role/...).
     env = {"AWS_REGION": region, "GATEWAYS_JSON": gateways_json,
-           "AWSOPS_HOST_ACCOUNT_ID": ac["role_arn"].split(":")[4]}
+           "AWSOPS_HOST_ACCOUNT_ID": ac["role_arn"].split(":")[4],
+           # Dark-path chat loop (ADR-008 amended / BASELINE §2) — default OFF. Set explicitly on the
+           # runtime so it survives re-provisioning and is toggleable via the normal deploy path:
+           # `ANTHROPIC_AGENT_LOOP_ENABLED=true make agentcore`.
+           "ANTHROPIC_AGENT_LOOP_ENABLED": os.environ.get("ANTHROPIC_AGENT_LOOP_ENABLED", "false")}
     existing = {r.get("agentRuntimeName"): r for r in _list_all(ctrl.list_agent_runtimes)}
     try:
         if RUNTIME_NAME in existing:
