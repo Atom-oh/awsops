@@ -138,6 +138,16 @@ data "archive_file" "incident_src" {
     content  = file("${local.inc_src}/incident_watchdog.py")
     filename = "incident_watchdog.py"
   }
+  # W2 AlertValidation stage + the shared credential-blind connector-invoke helper (reused from the
+  # diagnosis worker; flat /app layout so `import connector_invoke` resolves).
+  source {
+    content  = file("${local.inc_src}/alert_validation.py")
+    filename = "alert_validation.py"
+  }
+  source {
+    content  = file("${local.workers_src_il}/connector_invoke.py")
+    filename = "connector_invoke.py"
+  }
   # ADR-034 write-back stage sources — added ONLY when rca_writeback_enabled, so the ADR-032 GREEN
   # archive (lifecycle on, write-back off) stays byte-identical and the incident Lambdas are not
   # forced to re-package. writeback.py imports writeback_render + slack_thread (incident slice) and
@@ -230,6 +240,38 @@ resource "aws_iam_role_policy" "incident_lambda" {
         Resource = "arn:aws:bedrock-agentcore:${var.region}:${local.inc_acct}:runtime/${var.project}*"
       },
       {
+        # W2 AlertValidation: direct Bedrock Haiku classification. Least-privilege — ONLY the Haiku
+        # global.* cross-region inference profile + its anthropic foundation models. No wildcard model.
+        Sid    = "InvokeHaikuForAlertValidation"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
+        Resource = [
+          "arn:aws:bedrock:*:${local.inc_acct}:inference-profile/global.anthropic.claude-haiku-*",
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-*",
+        ]
+      },
+      {
+        # W2 AlertValidation: best-effort read-only datasource-connector signals (credential-blind).
+        # Scoped to exactly the 5 connector function ARNs (no function:* wildcard).
+        Sid    = "InvokeDatasourceConnectors"
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction"]
+        Resource = [
+          for k in ["prometheus", "mimir", "loki", "tempo", "clickhouse"] :
+          "arn:aws:lambda:${var.region}:${local.inc_acct}:function:${var.project}-agent-${k}-mcp"
+        ]
+      },
+      {
+        # W2 AlertValidation: read-only CloudWatch corroboration (_cloudwatch_signal). GetMetricData
+        # has NO resource-level scoping (the API requires Resource "*") — it is a read-only metric-data
+        # query, never a mutation. Without it the CW signal path AccessDenies → (None, True) → the
+        # >=2-signal/failures gate force-escalates EVERY metric-backed alert, making the signal dead.
+        Sid      = "ReadCloudWatchMetricsForAlertValidation"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:GetMetricData"]
+        Resource = "*"
+      },
+      {
         # The Lambdas derive SSM paths from PROJECT (/ops/<project>/incident/*) and read the
         # AgentCore runtime-ARN param. Scoped to exactly those parameter ARNs.
         Sid    = "ReadIncidentAndRuntimeParams"
@@ -312,6 +354,7 @@ resource "aws_iam_role_policy" "incident_sfn" {
       # empty list when off), so the OFF SM-role policy is byte-identical to the ADR-032 GREEN policy.
       Resource = concat([
         aws_lambda_function.incident_triage[0].arn,
+        aws_lambda_function.incident_alert_validation[0].arn,
         aws_lambda_function.incident_lead[0].arn,
         aws_lambda_function.incident_subagent[0].arn,
         aws_lambda_function.incident_rootcause[0].arn,
@@ -361,6 +404,13 @@ locals {
     INCIDENT_MAX_CONCURRENT_PARAM     = aws_ssm_parameter.incident_max_concurrent[0].name
     INCIDENT_FANOUT_MAX_PARAM         = aws_ssm_parameter.incident_fanout_max[0].name
     INCIDENT_MIN_SEVERITY_PARAM       = aws_ssm_parameter.incident_min_severity[0].name
+    # W2 AlertValidation tunables (env defaults; alert_validation.py reads these). enforce defaults
+    # to "false" = SHADOW mode (verdict recorded, never enforced) — flipping to "true" is a
+    # deliberate operator safety decision.
+    ALERT_VALIDATION_MODEL_ID           = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    ALERT_VALIDATION_DEADLINE_S         = "25"
+    ALERT_SUPPRESS_CONFIDENCE_THRESHOLD = "0.85"
+    ALERT_SUPPRESSION_ENFORCE           = "false"
     # AgentCore runtime-ARN SSM param (read-only Sub-agent consult bridge). agent_bridge.py reads
     # SSM_RUNTIME_ARN_PARAM; AGENTCORE_RUNTIME_ARN_PARAM is the plan-named alias (same value).
     SSM_RUNTIME_ARN_PARAM       = local.inc_runtime_arn_param
@@ -396,6 +446,28 @@ resource "aws_lambda_function" "incident_triage" {
   source_code_hash = data.archive_file.incident_src[0].output_base64sha256
   timeout          = 600
   memory_size      = 256
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment { variables = local.inc_env }
+  depends_on = [aws_cloudwatch_log_group.incident_lambdas, aws_iam_role_policy_attachment.incident_lambda_vpc]
+}
+
+# W2 AlertValidation stage Lambda — Haiku true/false-alert gate (read-only). 512MB for the
+# bounded signal fan-out + a single Haiku classification. Same role/layer/VPC as the other stages.
+resource "aws_lambda_function" "incident_alert_validation" {
+  count            = local.il
+  function_name    = "${var.project}-incident-alert-validation"
+  role             = aws_iam_role.incident_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "alert_validation.lambda_handler"
+  filename         = data.archive_file.incident_src[0].output_path
+  source_code_hash = data.archive_file.incident_src[0].output_base64sha256
+  timeout          = 120
+  memory_size      = 512
   layers           = [aws_lambda_layer_version.pg8000[0].arn]
   vpc_config {
     subnet_ids         = local.private_subnet_ids
@@ -568,6 +640,7 @@ locals {
   # consumed), so render an empty string. This keeps the OFF plan valid.
   incident_def_off = local.il == 1 ? templatefile("${local.inc_src}/incident.asl.json", {
     triage_fn_arn                = aws_lambda_function.incident_triage[0].arn
+    alert_validation_fn_arn      = aws_lambda_function.incident_alert_validation[0].arn
     lead_fn_arn                  = aws_lambda_function.incident_lead[0].arn
     subagent_fn_arn              = aws_lambda_function.incident_subagent[0].arn
     rootcause_fn_arn             = aws_lambda_function.incident_rootcause[0].arn

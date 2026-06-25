@@ -25,7 +25,36 @@
         { "Variable": "$.decision", "StringEquals": "Skipped", "Next": "Done" },
         { "Variable": "$.decision", "StringEquals": "Linked", "Next": "Done" }
       ],
+      "Default": "AlertValidation"
+    },
+    "AlertValidation": {
+      "Type": "Task",
+      "Resource": "${alert_validation_fn_arn}",
+      "TimeoutSeconds": 120,
+      "Comment": "W2 Haiku true/false-alert gate (read-only). Returns {verdict, confidence, decision}. ResultPath isolates the output so top-level job_id + incident_id survive for Lead and the failure path. NO mutation.",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.errorInfo", "Next": "StageFailed" }
+      ],
+      "ResultPath": "$.validation",
+      "Next": "ValidationDecision"
+    },
+    "ValidationDecision": {
+      "Type": "Choice",
+      "Comment": "Only a high-confidence false_positive (under the suppression-safety gate, enforce-mode) suppresses; everything else (incl. uncertain, shadow mode, critical) escalates to the Lead.",
+      "Choices": [
+        { "Variable": "$.validation.decision", "StringEquals": "suppress", "Next": "Suppressed" }
+      ],
       "Default": "Lead"
+    },
+    "Suppressed": {
+      "Type": "Succeed",
+      "Comment": "Validated false_positive — suppressed (no investigation/RCA). Read-only outcome; the verdict is already recorded in incidents.validation."
     },
     "Lead": {
       "Type": "Task",

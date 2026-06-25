@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+import connector_invoke as _ci  # credential-blind invoke moved here (shared, DRY)
 from diagnosis import sources as src
 
 
@@ -52,7 +53,7 @@ class FakeLambda:
 
 
 def _patch_lambda(monkeypatch, fake):
-    monkeypatch.setattr(src, "_lambda_client", lambda: fake)
+    monkeypatch.setattr(_ci, "_lambda_client", lambda: fake)
     return fake
 
 
