@@ -1,0 +1,51 @@
+name: Claude Code Review
+
+# HYBRID review (the strong Claude voice). This runs the OFFICIAL anthropics/claude-code-action as a
+# full AGENTIC Claude reviewer on Amazon Bedrock — it explores the checked-out repo with tools
+# (git/grep/read), so it gets the real diff AND base context on its own (no diff piping). It posts its
+# own review. The custom multi-model panel (pr-review.yml: Codex + Kiro) stays for cross-family
+# diversity + the fail-closed merge gate. Two complementary checks.
+#
+# Auth: Bedrock via the SAME ambient EKS Pod Identity SigV4 the panel runner already uses
+# (awsops-claude-arm) — no aws-actions/configure-aws-credentials / OIDC needed.
+# Same-repo guard: only PRs from this repo (collaborators), never forks — matches pr-review.yml.
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  claude-review:
+    name: Claude Code Review
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: awsops-claude-arm
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      AWS_REGION: us-east-1   # us. geo Opus on-demand, matches pr-review.yml
+    steps:
+      # full history so the agent can `git diff` base..head and read base files for context
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          use_bedrock: "true"
+          # Opus 4.8 us. geo inference profile (same id pr-review.yml uses for the chair).
+          claude_args: |
+            --model us.anthropic.claude-opus-4-8
+          # `prompt` makes the action run automatically (no @claude mention needed).
+          prompt: |
+            Review this pull request as a senior engineer: bugs, security risks, logic errors,
+            and violations of this repo's conventions (read CLAUDE.md / AGENTS.md).
+            Inspect the actual changed files with your tools, and read the BASE files they touch
+            for context before flagging anything as missing. NOTE: the live DB schema is the frozen
+            baseline `terraform/v2/foundation/data/schema.sql` PLUS every
+            `terraform/v2/foundation/migrations/*.sql` (applied by `make migrate`) — a column/CHECK
+            absent from schema.sql is NOT missing if a migration adds it.
+            Post concise findings grouped CRITICAL / MAJOR / MINOR. 한국어+영문 기술용어 혼용 가능.
