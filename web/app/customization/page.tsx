@@ -1,15 +1,93 @@
 'use client';
 import { useEffect, useState } from 'react';
 import PageHeader from '@/components/ui/PageHeader';
+import { AGENT_TYPES as KNOWN_AGENT_TYPES, KNOWN_GATEWAYS } from '@/lib/skill-validation';
 
 interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string }>; agentType?: string; gateways?: string[]; }
 interface SkillRow { id: number; name: string; description: string; tier: string; enabled: boolean; version: number; agentTypes?: string[]; }
 interface SpaceState { enabledAgentIds: number[]; enabledSkillIds: number[]; enabledIntegrationIds: number[]; toolAllowlist: string[]; version?: number }
 interface IntegrationRow { id: number; name: string; kind: string; direction: string; capability: string; enabled: boolean; tier: string; receivePath?: string | null; }
 
-const GATEWAYS = ['network', 'container', 'iac', 'data', 'security', 'monitoring', 'cost', 'ops'];
-// ADR-039 agent-type lifecycle roles (mirrors web/lib/skill-validation.ts AGENT_TYPES).
-const AGENT_TYPES = ['generic', 'on_demand', 'triage', 'rca', 'mitigation', 'evaluation'];
+const GATEWAYS = [...KNOWN_GATEWAYS];
+const AGENT_TYPES = [...KNOWN_AGENT_TYPES];
+const WORKSHOP_STEPS = [
+  {
+    title: 'Agent Space',
+    body: '계정, 외부 관측성 소스, webhook 진입점을 하나의 운영 공간으로 묶습니다.',
+    tasks: ['Configure secondary cloud source', 'Connect to Agent'],
+  },
+  {
+    title: 'Agent',
+    body: 'Form 또는 Chat으로 조사 페르소나, routingKeywords, gateway 범위를 초안화합니다.',
+    tasks: ['Form', 'Chat'],
+  },
+  {
+    title: 'Skill',
+    body: '팀 런북을 SKILL.md 절차로 등록하고 관련 agent type에만 적용합니다.',
+    tasks: ['Create skill', 'Create skill with Chat', 'Upload skill', 'Import from repository'],
+  },
+  {
+    title: 'MCP / Webhook',
+    body: '외부 이벤트와 observability 읽기 도구를 연결하되, 조사는 read-only로 시작합니다.',
+    tasks: ['Ensure data schema matches DevOps Agent requirements', 'Configure webhook authentication', 'Generate URL and credentials'],
+  },
+  {
+    title: 'Knowledge',
+    body: '항상 포함되는 지침, 선택 로드되는 skill, 기억/학습 자산의 차이를 구분합니다.',
+    tasks: ['Instructions', 'Skills', 'Memories'],
+  },
+] as const;
+const AGENT_PATHS = [
+  ['Form', '이 페이지의 New Agent 폼으로 이름, persona, gateway, routingKeywords를 직접 작성합니다. 생성 후 기본값은 disabled입니다.'],
+  ['Chat', '대화로 agent 초안을 만들 때의 콘솔 흐름입니다. v2에서는 초안 작성만 의미하며 AWS 리소스 변경이나 자율 실행을 켜지 않습니다.'],
+] as const;
+const SKILL_PATHS = [
+  ['Create skill', '폼에서 SKILL.md instructions를 직접 작성합니다. description은 언제 이 skill을 쓸지 검색 가능한 증상/서비스/메트릭으로 씁니다.'],
+  ['Create skill with Chat', '콘솔의 chat-assisted 작성 경로입니다. 초안을 만든 뒤 사람이 검토하고 disabled 상태로 저장하는 흐름으로 설명합니다.'],
+  ['Upload skill', 'SKILL.md와 references/를 zip으로 올리는 콘솔 경로입니다. 실행 스크립트가 아니라 참조 문서와 절차만 다룹니다.'],
+  ['Import from repository', 'GitHub 디렉터리에서 skill을 가져오는 콘솔 경로입니다. v2에서는 curated/validation-only 흐름으로만 안내합니다.'],
+] as const;
+const KNOWLEDGE_ASSETS = [
+  ['Instructions', '항상 시스템 컨텍스트에 들어가는 전역 행동 규칙입니다. 예: 증거 우선, read-only 진단, 출력 형식.'],
+  ['Skills', '관련 사건/질문에서 선택적으로 로드되는 조사 절차입니다. 예: RDS performance investigation.'],
+  ['Memories', '세션에서 학습한 운영 맥락입니다. 현재 안내에서는 읽기/참조 개념으로만 다루고 자동 조치는 연결하지 않습니다.'],
+] as const;
+const WEBHOOK_SCHEMA = `{
+  eventType: 'incident';
+  incidentId: string;
+  action: 'created' | 'updated' | 'closed' | 'resolved';
+  priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'MINIMAL';
+  title: string;
+  description?: string;
+  timestamp?: string;
+  service?: string;
+  data?: object;
+}`;
+const WEBHOOK_STEPS = [
+  'Ensure data schema matches DevOps Agent requirements',
+  'Configure webhook authentication',
+  'Generate URL and credentials',
+] as const;
+const SKILL_TEMPLATE = `---
+name: rds-performance-investigation
+description: RDS 성능 이슈, 연결 고갈, 슬로우 쿼리, 복제 지연 조사 절차
+---
+
+# RDS Performance Investigation
+
+## 1. 알람과 영향 범위
+- DatabaseConnections, ReadLatency, WriteLatency, FreeStorageSpace 확인
+- 영향 받은 DB, 애플리케이션, 시간 범위 기록
+
+## 2. 근거 수집
+- 지난 1시간 연결 수와 max_connections 근접 여부 확인
+- Performance Insights에서 상위 SQL과 wait event 확인
+- 최근 배포, 파라미터 변경, 스케일 이벤트 대조
+
+## 3. 출력 형식
+1. 현재 상태: healthy / degraded / critical
+2. 근본 원인 가설과 메트릭 근거
+3. 우선순위별 remediation proposal`;
 // ADR-039 P2 — integration kinds (mirror web/lib/integration-validation.ts).
 const INTEG_KINDS_EGRESS = ['grafana', 'datadog', 'splunk', 'prometheus', 'newrelic', 'notion', 'confluence', 'jira', 'servicenow', 'slack', 'github', 'gitlab', 'custom_mcp'];
 const INTEG_KINDS_INGRESS = ['cloudwatch_sns', 'alertmanager', 'grafana_alert', 'pagerduty', 'datadog_monitor', 'generic_webhook'];
@@ -137,11 +215,112 @@ export default function CustomizationPage() {
       <div className="space-y-6 p-6">
       {msg && <div className="text-[12px] text-brand-600">{msg}</div>}
 
+      <section className="space-y-5 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
+        <div className="space-y-1">
+          <h2 className="text-[15px] font-semibold">DevOps Agent Workshop Guide</h2>
+          <p className="max-w-5xl text-[12px] leading-5 text-ink-500">
+            Customization은 Agent Space에 들어갈 조사 절차(Skill), 조사 페르소나(Agent), 외부 읽기 데이터 소스를 준비하는 곳입니다.
+            현재 v2 동작 범위는 read-only 진단과 remediation proposal이며, AWS 리소스 변경이나 자율 실행은 활성화하지 않습니다.
+          </p>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
+          <aside className="rounded-md border border-ink-100 bg-paper p-4">
+            <h3 className="text-[13px] font-semibold">Workshop flow</h3>
+            <ol className="mt-4 space-y-4">
+              {WORKSHOP_STEPS.map((step, idx) => (
+                <li key={step.title} className="relative grid grid-cols-[28px_minmax(0,1fr)] gap-2">
+                  {idx < WORKSHOP_STEPS.length - 1 && <span className="absolute left-[11px] top-7 h-[calc(100%+8px)] w-px bg-ink-100" aria-hidden="true" />}
+                  <span className="relative z-10 flex h-6 w-6 items-center justify-center rounded-full border border-brand-300 bg-paper text-[11px] font-semibold text-brand-600">
+                    {idx + 1}
+                  </span>
+                  <div className="min-w-0 space-y-1">
+                    <div className="text-[12px] font-semibold text-ink-800">{step.title}</div>
+                    <p className="text-[11px] leading-4 text-ink-500">{step.body}</p>
+                    <div className="flex flex-wrap gap-1">
+                      {step.tasks.map((task) => (
+                        <span key={task} className="rounded border border-ink-100 bg-paper-muted px-1.5 py-0.5 text-[10px] text-ink-500">
+                          {task}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </aside>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3 rounded-md border border-ink-100 bg-paper p-4">
+              <h3 className="text-[13px] font-semibold">Agent 등록 방식</h3>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {AGENT_PATHS.map(([title, body]) => (
+                  <div key={title} className="rounded-md border border-ink-100 bg-paper-muted/60 p-3">
+                    <div className="text-[12px] font-semibold text-ink-800">{title}</div>
+                    <p className="mt-1 text-[11px] leading-4 text-ink-500">{body}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-ink-100 bg-paper p-4">
+              <h3 className="text-[13px] font-semibold">Skill 등록 방식</h3>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {SKILL_PATHS.map(([title, body]) => (
+                  <div key={title} className="rounded-md border border-ink-100 bg-paper-muted/60 p-3">
+                    <div className="text-[12px] font-semibold text-ink-800">{title}</div>
+                    <p className="mt-1 text-[11px] leading-4 text-ink-500">{body}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-ink-100 bg-paper p-4">
+              <h3 className="text-[13px] font-semibold">Configure Agent Space Webhook</h3>
+              <ol className="space-y-2 text-[12px] leading-5 text-ink-500">
+                {WEBHOOK_STEPS.map((step, idx) => (
+                  <li key={step} className="flex gap-2">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-50 text-[10px] font-semibold text-brand-600">{idx + 1}</span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+              <pre className="max-h-[220px] overflow-auto rounded-md bg-ink-900 p-3 text-[11px] leading-5 text-white">
+                {WEBHOOK_SCHEMA}
+              </pre>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-ink-100 bg-paper p-4">
+              <h3 className="text-[13px] font-semibold">Knowledge assets</h3>
+              <div className="space-y-2">
+                {KNOWLEDGE_ASSETS.map(([title, body]) => (
+                  <div key={title} className="rounded-md border border-ink-100 bg-paper-muted/60 p-3">
+                    <div className="text-[12px] font-semibold text-ink-800">{title}</div>
+                    <p className="mt-1 text-[11px] leading-4 text-ink-500">{body}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] leading-4 text-ink-500">
+                외부 observability는 <a href="/integrations" className="text-brand-600 underline">Integrations hub</a>에서 먼저 연결한 뒤,
+                Agent Space에서 필요한 read-only 도구만 허용합니다.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <details className="rounded-md border border-ink-100 bg-paper p-3">
+          <summary className="cursor-pointer text-[12px] font-medium text-ink-700">SKILL.md inline 예시 보기</summary>
+          <pre className="mt-3 max-h-[320px] overflow-auto rounded-md bg-ink-900 p-3 text-[11px] leading-5 text-white">
+            {SKILL_TEMPLATE}
+          </pre>
+        </details>
+      </section>
+
       <section className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted/60 p-4">
         <h2 className="text-[13px] font-semibold">New Agent</h2>
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="name (kebab-case)" value={agentForm.name} onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })} />
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="description" value={agentForm.description} onChange={(e) => setAgentForm({ ...agentForm, description: e.target.value })} />
-        <textarea className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="persona (system prompt)" value={agentForm.persona} onChange={(e) => setAgentForm({ ...agentForm, persona: e.target.value })} />
+        <textarea className="min-h-[220px] w-full resize-y rounded border border-ink-100 bg-paper px-2 py-1 text-[12px] leading-5" rows={9} placeholder="persona (system prompt)" value={agentForm.persona} onChange={(e) => setAgentForm({ ...agentForm, persona: e.target.value })} />
         <select className="rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" value={agentForm.gateway} onChange={(e) => setAgentForm({ ...agentForm, gateway: e.target.value })}>
           {GATEWAYS.map((g) => <option key={g} value={g}>{g}</option>)}
         </select>
@@ -170,7 +349,7 @@ export default function CustomizationPage() {
         <h2 className="text-[13px] font-semibold">New Skill</h2>
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="name (kebab-case)" value={skillForm.name} onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} />
         <input className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" placeholder="description (≥100 chars recommended — describes when to use)" value={skillForm.description} onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} />
-        <textarea className="w-full rounded border border-ink-100 bg-paper px-2 py-1 text-[12px]" rows={4} placeholder="instructions (Markdown)" value={skillForm.instructions} onChange={(e) => setSkillForm({ ...skillForm, instructions: e.target.value })} />
+        <textarea className="min-h-[360px] w-full resize-y rounded border border-ink-100 bg-paper px-2 py-1 font-mono text-[12px] leading-5" rows={16} placeholder="instructions (Markdown)" value={skillForm.instructions} onChange={(e) => setSkillForm({ ...skillForm, instructions: e.target.value })} />
         <div className="text-[11px] text-ink-500">
           <span className="mr-2">agent types (targeting)</span>
           {AGENT_TYPES.map((t) => (
