@@ -296,11 +296,11 @@ QUERIES = {
         # returns every public AWS snapshot (hundreds of thousands → API throttle / OOM).
         "SELECT snapshot_id, region, account_id, arn, volume_id, volume_size, state, progress, "
         "encrypted, start_time, description, owner_id, tags "
-        # owner_id MUST be a LITERAL constant so Steampipe pushes OwnerIds=self down to
-        # DescribeSnapshots. A subquery/bound-param qual is NOT pushed down by the FDW (it is
-        # evaluated post-fetch) → every public AWS snapshot would be pulled. sync() renders the
-        # {account_id} placeholder to the caller account (12-digit, validated) before running.
-        "FROM aws_ebs_snapshot WHERE owner_id = '{account_id}' "
+        # owner_id MUST be LITERAL constants so Steampipe pushes OwnerIds down to DescribeSnapshots.
+        # Under the multi-account aggregator a single host literal would miss every TARGET account's
+        # snapshots, so sync() renders {owner_ids} to the validated IN-list of ALL enabled accounts
+        # (host caller id + target 12-digit ids). A bound-param/subquery qual is NOT pushed down.
+        "FROM aws_ebs_snapshot WHERE owner_id IN ({owner_ids}) "
         "ORDER BY start_time DESC",
         "snapshot_id",
         "region",
@@ -486,6 +486,24 @@ def _caller_account():
     return _ACCOUNT_CACHE["id"]
 
 
+def _rec_account(rec):
+    """The account a synced row belongs to. Under the multi-account aggregator each row carries its
+    own `account_id` (the aws plugin column); SDK syncs / host rows without one fall back to 'self'."""
+    aid = rec.get("account_id")
+    return str(aid) if aid else "self"
+
+
+def _owner_ids_in(adb):
+    """Comma-joined quoted IN-list of every enabled account's real owner id (host caller id + target
+    12-digit ids) for the {owner_ids} pushdown. Excludes the 'self' sentinel and any non-account-id."""
+    ids = {_caller_account()}  # host's real 12-digit id (the 'self' row maps to this)
+    for row in adb.run("SELECT account_id FROM accounts WHERE enabled = true AND account_id <> 'self'"):
+        aid = str(row[0])
+        if _ACCT_RE.match(aid):
+            ids.add(aid)
+    return ",".join("'%s'" % i for i in sorted(ids))
+
+
 def _inject_account(sql, account_id):
     """Render a {account_id} placeholder to a LITERAL account id (validated 12-digit). A literal
     is required for Steampipe qual pushdown — a subquery or bound param is evaluated post-fetch
@@ -517,8 +535,10 @@ def sync(resource_type):
                 recs, id_col, region_col = SDK_SYNCS[resource_type]()
             else:
                 sql, id_col, region_col = QUERIES[resource_type]
-                if "{account_id}" in sql:  # only templated queries need the (STS) account literal
-                    sql = _inject_account(sql, _caller_account())  # literal owner_id for FDW pushdown
+                if "{owner_ids}" in sql:  # multi-account OwnerIds pushdown (all enabled accounts)
+                    sql = sql.replace("{owner_ids}", _owner_ids_in(adb))
+                if "{account_id}" in sql:  # legacy single-account literal pushdown
+                    sql = _inject_account(sql, _caller_account())
                 sdb = _steampipe()
                 try:
                     rows = sdb.run(sql)
@@ -526,21 +546,23 @@ def sync(resource_type):
                 finally:
                     sdb.close()  # close even if the Steampipe query throws
                 recs = [dict(zip(cols, r)) for r in rows]
-            seen = []
+            seen = set()
             for rec in recs:
                 rid = str(rec.get(id_col))
                 region = str(rec.get(region_col) or "")
-                seen.append((region, rid))
+                acct = _rec_account(rec)  # the row's real account (aggregator fan-out), not a literal 'self'
+                seen.add((acct, region, rid))
                 adb.run("INSERT INTO inventory_resources (resource_type, account_id, region, resource_id, data, captured_at) "
-                        "VALUES (:t,'self',:rg,:id,:d::jsonb,now()) "
+                        "VALUES (:t,:acct,:rg,:id,:d::jsonb,now()) "
                         "ON CONFLICT (resource_type, account_id, region, resource_id) "
                         "DO UPDATE SET data=:d::jsonb, captured_at=now()",
-                        t=resource_type, rg=region, id=rid, d=json.dumps(rec, default=str))
-            # delete stale rows of this type not in the latest run
-            existing = adb.run("SELECT region, resource_id FROM inventory_resources WHERE resource_type=:t AND account_id='self'", t=resource_type)
-            for rg, rid in existing:
-                if (rg, rid) not in seen:
-                    adb.run("DELETE FROM inventory_resources WHERE resource_type=:t AND account_id='self' AND region=:rg AND resource_id=:id", t=resource_type, rg=rg, id=rid)
+                        t=resource_type, acct=acct, rg=region, id=rid, d=json.dumps(rec, default=str))
+            # delete stale rows of this type (across ALL accounts) not in the latest run
+            existing = adb.run("SELECT account_id, region, resource_id FROM inventory_resources WHERE resource_type=:t", t=resource_type)
+            for acct, rg, rid in existing:
+                if (str(acct), str(rg), str(rid)) not in seen:
+                    adb.run("DELETE FROM inventory_resources WHERE resource_type=:t AND account_id=:acct AND region=:rg AND resource_id=:id",
+                            t=resource_type, acct=acct, rg=rg, id=rid)
             adb.run("UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), row_count=:n, error=NULL "
                     "WHERE resource_type=:t AND account_id='self'", t=resource_type, n=len(recs))
             return {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
