@@ -34,7 +34,9 @@ jobs:
       # 심볼·컬럼·import, migrations/*.sql)을 읽어 "없음" 오탐을 피한다. PR head 는 미체크아웃(코드 미실행).
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.ref }}
+          # Pin to the immutable base SHA (not base.ref branch tip): deterministic base context, and
+          # no window where a moved/unprotected base injects unreviewed code into this trusted job.
+          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Verify CLIs present (runner image)
         run: |
