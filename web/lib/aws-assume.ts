@@ -29,19 +29,20 @@ export async function credsForAccount(accountId: string | null | undefined): Pro
   const acct = await getAccount(accountId);
   if (!acct) throw new Error(`aws-assume: unknown account ${accountId}`);
   if (acct.isHost) return null;
-  if (!acct.externalId) throw new Error(`aws-assume: account ${accountId} has no ExternalId (required)`);
+  // ExternalId is OPTIONAL (ADR-011 amended 2026-06-26): 1st-party accounts whose target trust
+  // policy pins this task-role ARN omit it; 3rd-party supply it (and the trust enforces it).
 
   const arn = `arn:aws:iam::${accountId}:role/${acct.roleName}`;
   if (!ARN_RE.test(arn)) throw new Error(`aws-assume: invalid role ARN ${arn}`);
 
-  const key = `${arn}|${acct.externalId}`;
+  const key = `${arn}|${acct.externalId ?? ''}`; // empty segment when no ExternalId — distinct from a value
   const hit = cache.get(key);
   if (hit && hit.exp > Date.now()) return hit.creds;
 
   const out = await sts().send(new AssumeRoleCommand({
     RoleArn: arn,
     RoleSessionName: 'awsops-web',
-    ExternalId: acct.externalId,
+    ...(acct.externalId ? { ExternalId: acct.externalId } : {}),
     DurationSeconds: 3600,
   }));
   const c = out.Credentials;
