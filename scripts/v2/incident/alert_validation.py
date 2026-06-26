@@ -302,11 +302,18 @@ def _record(conn, incident_id, verdict, decision):
 
 
 # ── tunables (LIVE SSM read at handler entry; degrade-safe → env/default fallback) ──────────────
-# Suffix -> (key, default, kind). Mirrors lifecycle.read_caps. Path = /ops/<PROJECT>/incident/<suffix>.
+# A live deadline beyond the SM AlertValidation task TimeoutSeconds just pushes work toward the
+# Lambda/SM timeout, defeating the bounded-budget intent → cap it.
+_MAX_DEADLINE_S = 120.0
+# Suffix -> (key, default, kind, lo_exclusive, hi_inclusive). Mirrors lifecycle.read_caps; bounds apply
+# to 'float' only. Path = /ops/<PROJECT>/incident/<suffix>. Bounds are fail-SAFE: a live value outside
+# the range falls back to the default rather than loosening a safety gate. confidence-threshold is
+# (0,1] — a 0/negative threshold would suppress arbitrarily-low-confidence verdicts (a false-negative:
+# real incidents never paged); deadline is (0, MAX].
 _TUNABLE_PARAMS = {
-    "validation-deadline-s": ("deadline_s", DEADLINE_S, "float"),
-    "suppress-confidence-threshold": ("confidence_threshold", CONF_THRESHOLD, "float"),
-    "suppression-enforce": ("enforce", ENFORCE, "bool"),
+    "validation-deadline-s": ("deadline_s", DEADLINE_S, "float", 0.0, _MAX_DEADLINE_S),
+    "suppress-confidence-threshold": ("confidence_threshold", CONF_THRESHOLD, "float", 0.0, 1.0),
+    "suppression-enforce": ("enforce", ENFORCE, "bool", None, None),
 }
 
 
@@ -314,12 +321,25 @@ def _ssm():
     return boto3.client("ssm", region_name=REGION, config=_boto_cfg())
 
 
+def _bounded_float(raw, default, lo, hi):
+    """Coerce raw→float; return default unless finite AND lo < v <= hi (fail-safe out-of-range → default)."""
+    try:
+        v = float(str(raw).strip())
+    except (ValueError, TypeError):
+        return default
+    return v if (math.isfinite(v) and lo < v <= hi) else default
+
+
+def _default_tunables():
+    return {spec[0]: spec[1] for spec in _TUNABLE_PARAMS.values()}
+
+
 def read_tunables(ssm):
     """Live-read the 3 AlertValidation knobs from SSM via the given boto3 ssm client (degrade-safe:
-    a missing/invalid param falls back to its env/default). Keeping ALERT_SUPPRESSION_ENFORCE in SSM
-    lets an operator flip shadow→enforce without a Terraform redeploy (FF-A). Mirrors lifecycle.read_caps."""
+    a missing/invalid/out-of-range param falls back to its env/default). Keeping ALERT_SUPPRESSION_ENFORCE
+    in SSM lets an operator flip shadow→enforce without a Terraform redeploy (FF-A). Mirrors lifecycle.read_caps."""
     out = {}
-    for suffix, (key, default, kind) in _TUNABLE_PARAMS.items():
+    for suffix, (key, default, kind, lo, hi) in _TUNABLE_PARAMS.items():
         raw = None
         try:
             resp = ssm.get_parameter(Name=f"/ops/{PROJECT}/incident/{suffix}")
@@ -328,13 +348,8 @@ def read_tunables(ssm):
             raw = None  # ParameterNotFound / client error → default
         if raw is None:
             out[key] = default
-            continue
-        if kind == "float":
-            try:
-                v = float(str(raw).strip())
-            except (ValueError, TypeError):
-                v = None
-            out[key] = v if (v is not None and math.isfinite(v)) else default
+        elif kind == "float":
+            out[key] = _bounded_float(raw, default, lo, hi)
         elif kind == "bool":
             out[key] = str(raw).strip().lower() == "true"   # anything but 'true' = shadow (fail-safe)
         else:
@@ -346,7 +361,10 @@ def lambda_handler(event, _ctx):
     incident_id = event.get("incident_id")
     conn = db.connect()
     try:
-        tun = read_tunables(_ssm())
+        try:
+            tun = read_tunables(_ssm())   # degrade-safe: client build OR read failure → module defaults
+        except Exception:
+            tun = _default_tunables()
         snapshot = _load_trigger(conn, incident_id)
         if not snapshot:
             verdict = {"verdict": "uncertain", "confidence": 0.0, "reason": "no_snapshot"}

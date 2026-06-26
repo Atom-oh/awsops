@@ -253,6 +253,29 @@ def test_read_tunables_coercion_and_degrade_safe():
         and t3["enforce"] is False
 
 
+def test_read_tunables_clamps_out_of_range_to_default():
+    # FF-A re-review MAJOR: confidence-threshold must be (0,1] — 0/negative would suppress
+    # arbitrarily-low-confidence verdicts (false-negative); >1 abnormal. Out-of-range → default.
+    for bad in ("0", "-0.2", "1.5", "Infinity"):
+        assert av.read_tunables(_FakeSSM({"suppress-confidence-threshold": bad}))["confidence_threshold"] \
+            == av.CONF_THRESHOLD
+    # deadline must be (0, MAX]; 0/negative/oversized → default
+    for bad in ("0", "-5", "100000"):
+        assert av.read_tunables(_FakeSSM({"validation-deadline-s": bad}))["deadline_s"] == av.DEADLINE_S
+    # in-range values are honored
+    t = av.read_tunables(_FakeSSM({"suppress-confidence-threshold": "0.5", "validation-deadline-s": "10"}))
+    assert t["confidence_threshold"] == 0.5 and t["deadline_s"] == 10.0
+
+
+def test_handler_degrades_to_defaults_when_ssm_unavailable(monkeypatch):
+    # FF-A re-review suggestion: _ssm() build / read failure must NOT crash the handler (the
+    # outer try/except in lambda_handler falls back to module defaults). Real verdict → escalate.
+    conn = _patch_handler(monkeypatch, _snap(), {"signals": [1, 2], "failures": False, "count": 2},
+                          {"verdict": "real", "confidence": 0.9})
+    monkeypatch.setattr(av, "_ssm", lambda: (_ for _ in ()).throw(RuntimeError("no creds")))
+    assert av.lambda_handler({"incident_id": "inc-degrade"}, None)["decision"] == "escalate"
+
+
 def test_handler_live_ssm_enforce_drives_suppression(monkeypatch):
     # FF-A safety knob: SSM enforce='true' flips shadow→enforce WITHOUT redeploy. Same suppressible
     # inputs suppress when SSM says enforce, and escalate (shadow) when it doesn't.
