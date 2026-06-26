@@ -53,3 +53,20 @@ describe('account region helpers', () => {
     expect(query.mock.calls[0][1]).toEqual(['210987654321', 'us-east-1']);
   });
 });
+
+describe('listScanScope', () => {
+  it('all_regions → ["*"]; explicit set → that set; all_regions=false + empty → skipped', async () => {
+    query.mockResolvedValueOnce({
+      rows: [
+        { account_id: 'self', all_regions: true, regions: [] },
+        { account_id: '210987654321', all_regions: false, regions: ['us-east-1', 'eu-west-1'] },
+        { account_id: '310987654321', all_regions: false, regions: [] }, // not all-regions, no enabled → skip
+      ],
+    });
+    const { listScanScope } = await import('./account-regions');
+    expect(await listScanScope()).toEqual([
+      { accountId: 'self', regions: ['*'] },
+      { accountId: '210987654321', regions: ['us-east-1', 'eu-west-1'] },
+    ]);
+  });
+});
