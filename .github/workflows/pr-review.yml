@@ -29,7 +29,11 @@ jobs:
       AWS_REGION: us-east-1
     steps:
       # 보안(M1): pull_request_target 는 시크릿/쓰기권한 컨텍스트 → base(신뢰됨) 체크아웃.
+      # base.ref tip 을 명시 체크아웃 → 패널/의장이 diff 가 얹히는 BASE 파일(스택드 PR 의 base
+      # 심볼·컬럼·import, migrations/*.sql)을 읽어 "없음" 오탐을 피한다. PR head 는 미체크아웃(코드 미실행).
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Verify CLIs present (runner image)
         run: |
@@ -68,6 +72,19 @@ jobs:
           cat <<'PROMPT_EOF' > /tmp/panel-prompt.txt
           Review the diff provided via stdin for bugs, security risks, logic errors,
           and convention violations (read CLAUDE.md / AGENTS.md for this repo's conventions).
+
+          BASE CONTEXT (critical — avoids false "missing X" findings): the repository BASE branch is
+          checked out in your current working directory and you CAN read files (read/grep tools). The
+          diff is a PATCH applied ON TOP of this base — it may be a STACKED PR whose base already
+          contains the imports, helpers, DB columns, IAM statements, or migrations the diff relies on.
+          Before reporting that ANY symbol / import / function / DB column / IAM permission / migration
+          is missing or undefined, OPEN the relevant base file(s) and confirm. Do NOT flag a missing
+          definition you have not verified by reading the base.
+          DB SCHEMA: the live schema = the frozen baseline `terraform/v2/foundation/data/schema.sql`
+          PLUS every `terraform/v2/foundation/migrations/*.sql` (applied by `make migrate` before
+          deploy). A column / CHECK / table absent from schema.sql is NOT missing if a migration under
+          migrations/ adds it — grep migrations/ before flagging any schema gap.
+
           Output concise findings grouped CRITICAL/MAJOR/MINOR.
           DO NOT output a VERDICT line — that is the chair's job.
           한국어+영문 기술용어 혼용 가능.
