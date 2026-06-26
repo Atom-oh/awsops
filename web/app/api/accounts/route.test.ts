@@ -7,6 +7,7 @@ const getAccount = vi.fn();
 const query = vi.fn();
 const readJsonBounded = vi.fn();
 const send = vi.fn();
+const upsertAccountRegion = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
@@ -18,6 +19,7 @@ vi.mock('@/lib/accounts', () => ({
 }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 vi.mock('@/lib/http-body', () => ({ readJsonBounded: (...a: unknown[]) => readJsonBounded(...a) }));
+vi.mock('@/lib/account-regions', () => ({ upsertAccountRegion: (...a: unknown[]) => upsertAccountRegion(...a) }));
 vi.mock('@aws-sdk/client-sts', () => ({
   STSClient: vi.fn(() => ({ send })),
   AssumeRoleCommand: vi.fn((i: unknown) => ({ cmd: 'assume', i })),
@@ -32,7 +34,7 @@ const validBody = { accountId: TARGET, alias: 'Prod', region: 'ap-northeast-2', 
 beforeEach(() => {
   vi.resetModules();
   verifyUser.mockReset(); isAdmin.mockReset(); listAccounts.mockReset();
-  getAccount.mockReset(); query.mockReset(); readJsonBounded.mockReset(); send.mockReset();
+  getAccount.mockReset(); query.mockReset(); readJsonBounded.mockReset(); send.mockReset(); upsertAccountRegion.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@b.c', groups: ['admins'] });
   isAdmin.mockResolvedValue(true);
   listAccounts.mockResolvedValue([]);
@@ -96,6 +98,7 @@ describe('POST /api/accounts', () => {
     expect(query).toHaveBeenCalledTimes(1);
     const sql = String(query.mock.calls[0][0]).toLowerCase();
     expect(sql).toContain('insert into accounts');
+    expect(upsertAccountRegion).toHaveBeenCalledWith(TARGET, 'ap-northeast-2');
   });
 });
 

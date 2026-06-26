@@ -4,7 +4,7 @@ const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 vi.mock('@/lib/account', () => ({ currentAccountId: () => '123456789012' }));
 
-import { validateAccountId, listAccounts, getAccount, getHostAccount, isMultiAccount } from './accounts';
+import { validateAccountId, listAccounts, getAccount, getHostAccount, isMultiAccount, ensureHostRow } from './accounts';
 
 const row = (over: Record<string, unknown> = {}) => ({
   account_id: '210987654321', alias: 'Prod', region: 'ap-northeast-2', is_host: false,
@@ -57,5 +57,16 @@ describe('isMultiAccount', () => {
     expect(await isMultiAccount()).toBe(true);
     query.mockResolvedValue({ rows: [{ n: '1' }] });
     expect(await isMultiAccount()).toBe(false);
+  });
+});
+
+describe('ensureHostRow', () => {
+  it('seeds both the host account and its deployment region target', async () => {
+    await ensureHostRow();
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(String(query.mock.calls[0][0])).toContain('INSERT INTO accounts');
+    expect(String(query.mock.calls[1][0])).toContain('INSERT INTO account_regions');
+    expect(query.mock.calls[1][1]).toEqual(['123456789012', 'ap-northeast-2']);
   });
 });

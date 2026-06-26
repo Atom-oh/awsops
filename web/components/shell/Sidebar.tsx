@@ -20,7 +20,7 @@ import { useI18n } from '@/components/shell/LanguageProvider';
 import LanguageToggle from '@/components/shell/LanguageToggle';
 import UserIdentity from '@/components/shell/UserIdentity';
 import ThemeToggle from '@/components/shell/ThemeToggle';
-import AccountSelector from '@/components/shell/AccountSelector';
+import ScopeSelector from '@/components/shell/ScopeSelector';
 import { cn } from '@/lib/cn';
 
 // Fixed top-level pages. `tkey` resolves the label via i18n.
@@ -290,9 +290,9 @@ export default function Sidebar({ onNavigate, className, persist = true }: { onN
         <LanguageToggle />
       </div>
 
-      {/* Active-account selector (multi-account; renders only when >1 account) + admin link */}
+      {/* Active account/region scope selector + admin link */}
       <div className="mb-4 space-y-1">
-        <AccountSelector />
+        <ScopeSelector />
         <Link href="/accounts" className="block px-0.5 text-[10px] text-chrome-fg-muted hover:text-chrome-fg">계정 관리 →</Link>
       </div>
 

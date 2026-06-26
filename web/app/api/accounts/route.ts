@@ -5,6 +5,7 @@ import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { getPool } from '@/lib/db';
 import { listAccounts, getAccount, validateAccountId, ensureHostRow } from '@/lib/accounts';
+import { upsertAccountRegion } from '@/lib/account-regions';
 import { readJsonBounded } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -75,6 +76,7 @@ export async function POST(request: Request) {
          external_id = EXCLUDED.external_id, status = 'verified', last_verified_at = now()`,
       [accountId, alias, region, roleName, externalId],
     );
+    await upsertAccountRegion(accountId, region);
   } catch (e) {
     return err(`insert failed: ${e instanceof Error ? e.message : String(e)}`, 500);
   }
