@@ -2,7 +2,10 @@
 
 - **Date**: 2026-06-26
 - **Branch**: `feat/v2-externalid-optional-region-fanout` (off `feat/v2-architecture-design`)
-- **Status**: Draft for review
+- **Status**: Draft, revised after multi-AI panel review (codex / agy / kiro). Verified
+  corrections folded in: schema CHECK-constraint migration + ADR-011 governance (Gap 1);
+  account-id connection naming, region-sentinel semantics, Aurora-boot env + fallback,
+  sync_lambda account scoping, and dropping the BFF→ECS regen mutation (Gap 2).
 
 ## Context & motivation
 
@@ -45,7 +48,9 @@ already-merged region model.
     guard (line ~42).
   - Pass `ExternalId` to the verification `AssumeRoleCommand` **only when
     non-empty**.
-  - Persist `NULL` (not `''`) into `accounts.external_id` when empty.
+  - Coerce empty → `NULL` **explicitly** (`externalId || null`) before the INSERT —
+    an empty string would persist `''` (not `NULL`), still satisfy the CHECK below,
+    and later be sent as a blank `ExternalId`. [agy]
 - **`web/lib/aws-assume.ts`**
   - Replace `if (!acct.externalId) throw …` (line ~32) with a conditional:
     include `ExternalId` in the `AssumeRoleCommand` only when present; otherwise
@@ -58,6 +63,25 @@ already-merged region model.
   required marker / client-side block). Helper text: *"Optional — required only
   if the target role's trust policy enforces `sts:ExternalId` (recommended for
   3rd-party / shared accounts)."*
+
+### Schema constraint + governance (CORRECTED after panel review)
+
+- **A migration IS required** (the original spec was wrong to claim none). The
+  `accounts` table has `CONSTRAINT external_id_required_for_target CHECK (is_host OR
+  external_id IS NOT NULL)` (`migrations/01KVGR8ER0Y8RX3TG07B9G86C5_accounts.sql:21`).
+  Persisting `NULL` for a target account violates it. Add an idempotent ULID-named
+  migration that **drops/replaces** this constraint (drop it outright, or replace with
+  a softer documentation-only check). [codex]
+- **ADR-011 update is mandatory in the same PR.** `docs/decisions/011-multi-account.md`
+  states *"ExternalId required (confused-deputy mitigation — mandatory, not optional)."*
+  Making it optional is a **security-posture decision**, not a code tweak: it requires
+  amending ADR-011 + the `BASELINE.md` register in the same PR (anti-drift rule), and
+  the no-ExternalId path must be explicitly labeled **1st-party only**. [codex, kiro]
+- **1st-party safety condition**: omitting ExternalId is safe only when the target
+  role's trust policy pins the **exact AWSops task-role ARN** (not account root / org /
+  wildcard). Document this; provide/keep a CFN trust-policy variant that omits the
+  `sts:ExternalId` condition for 1st-party onboarding and one that includes it for
+  3rd-party. [kiro]
 
 ### Behavior
 
@@ -106,31 +130,58 @@ from Aurora — the same mechanism class v1 used (Steampipe connection config), 
       GROUP BY a.account_id, a.alias, a.role_name, a.external_id, a.is_host;
      ```
   3. Render `/home/steampipe/.steampipe/config/aws.spc`:
-     - One connection per account:
-       `connection "aws_<sanitized>" { plugin = "aws@0.142.0"; regions = [<enabled regions, or ["*"] if none>]; ` then for **non-host**: `role_arn = "arn:aws:iam::<acct>:role/<role_name>"` and, only when set, `external_id = "<value>"` `}`.
+     - One connection per account, **named `aws_<account_id>`** (not the alias —
+       aliases aren't unique and can sanitize to collisions/empty). The 12-digit
+       account id is already a valid, unique connection-name suffix. [codex, agy, kiro]
+       `connection "aws_<account_id>" { plugin = "aws@0.142.0"; regions = [<regions, see below>]; ` then for **non-host**: `role_arn = "arn:aws:iam::<acct>:role/<role_name>"` and, only when set, `external_id = "<value>"` `}`.
        Host account uses the task role's default chain (no `role_arn`).
-       Connection name sanitized to `^aws_[a-z0-9_]+$`.
+     - **HCL-escape every rendered value** (`external_id`, `role_name`, region ids) —
+       render via a quoting helper, never raw string-concat. [codex]
+     - **Region semantics** (the naive `["*"]`-when-empty fallback is backwards — it
+       would make "disable all regions" scan *everything*). Use an explicit model:
+       a per-account `all_regions` flag (or sentinel row) means `regions = ["*"]`;
+       otherwise `regions = [<enabled account_regions>]`; an account with an empty
+       enabled set is **skipped** (no connection), not expanded to `*`. v1 "all-region"
+       parity = setting `all_regions` (the default for a freshly-added account). [codex]
      - Aggregator so existing `aws.*` queries transparently span every account +
        region: `connection "aws" { type = "aggregator"; connections = ["aws_*"] }`.
   4. `exec steampipe service start --database-listen network --database-port 9193 --foreground`.
-- **`terraform/v2/foundation/steampipe.tf`** — steampipe task role gains, all
-  `steampipe_enabled`-gated:
-  - read on the Aurora secret (the sync Lambda already has this; the steampipe
-    task does not — add);
-  - `sts:AssumeRole` on `arn:aws:iam::*:role/<role_name>` (scoped to the role-name
-    pattern) for cross-account connections;
-  - (Aurora reachability already satisfied — task is in the VPC.)
-- **Regen trigger** — on account/region add/remove, the BFF
-  (`/api/accounts`, `/api/accounts/regions`) calls
-  `ecs update-service --force-new-deployment` on the steampipe service so the
-  entrypoint regenerates. Requires `ecs:UpdateService` on the steampipe service
-  ARN for the web task role (gated). *Fallback if we want to avoid web→ECS
-  coupling: regeneration is eventual — it happens on the next task restart/deploy;
-  immediacy is the only thing lost.*
-- **`scripts/v2/steampipe/sync_lambda.py`** — no SQL change. The aggregator spans
-  accounts + regions; rows already carry `region` / `account_id`. Note: result
-  volume grows ≈ (#accounts × #regions); acceptable, and bounded by
-  `steampipe_enabled`.
+- **Boot failure mode** — if Aurora is unreachable at container start, bounded
+  retry/backoff, then fail-closed with a clear log + (optionally) the CloudWatch alarm
+  the steampipe service already has. Do **not** silently start with an empty/stale
+  config. [codex, kiro]
+- **`terraform/v2/foundation/steampipe.tf`** — all `steampipe_enabled`-gated. The
+  task today has only `AWS_REGION` env + `STEAMPIPE_DATABASE_PASSWORD` secret (its own
+  DB password), so the entrypoint cannot reach Aurora yet. Add:
+  - **Task-def env/secrets for Aurora**: `AURORA_ENDPOINT`, `AURORA_DATABASE`, and the
+    Aurora secret. Prefer injecting the secret via the task def `secrets`/`valueFrom`
+    (resolved by the **execution role**) over `boto3`/awscli in the container. [codex, agy]
+  - **`sts:AssumeRole` scoped to `arn:aws:iam::*:role/AWSopsReadOnlyRole`** (the role
+    name is hardcoded in `route.ts`), not a wildcard role name. [codex, agy]
+  - **Aurora SG ingress 5432 from the steampipe task SG** — VPC membership alone does
+    not open DB ingress; add the rule (in-place, immutable SG description). [agy]
+- **Regen trigger** — **do NOT** call `ecs:UpdateService --force-new-deployment` from
+  the web BFF: that is live control-plane mutation from the app runtime and violates
+  the v2 read-only / ADR-005 posture. [codex] Instead regenerate **eventually** — the
+  entrypoint re-reads Aurora on the next task restart/deploy — or via a
+  controller/admin-operated path **outside** the BFF (e.g. the existing reaper/sync
+  cadence triggering a restart, or a manual `make` target). Immediacy is the only thing
+  lost; new regions appear on next steampipe task cycle.
+- **`scripts/v2/steampipe/sync_lambda.py`** — **SQL change IS required** (the original
+  spec was wrong to say none). Today the sync hardcodes `account_id='self'` for the
+  run-ledger upsert and the stale-delete (`sync_lambda.py:511,540,543,545,549`). Under
+  multi-account aggregator fan-out this (a) never prunes stale target-account rows and
+  (b) mis-keys the per-type sync run. Rework to key the run ledger + stale-delete by the
+  **real per-row `account_id`** returned by each connection (the `inventory_resources`
+  PK already includes `account_id`, so inserts are collision-safe — only the
+  bookkeeping/delete scoping is broken). [codex]
+  - **Per-account pushdown queries**: the `ebs_snapshot` query injects
+    `_caller_account()` into `owner_id = '{account_id}'`; under an aggregator this
+    filters every connection by the host account and misses target snapshots. Make
+    account-scoped pushdowns per-connection/per-account (or drop the literal pushdown).
+    [codex]
+  - Result volume grows ≈ (#accounts × #regions) — acceptable, bounded by
+    `steampipe_enabled`.
 
 ### Tests
 
@@ -139,14 +190,21 @@ from Aurora — the same mechanism class v1 used (Steampipe connection config), 
   - non-host **with** `external_id`;
   - non-host **without** `external_id` (line omitted);
   - multi-region list rendering;
-  - empty-regions → `["*"]` (parity fallback);
-  - alias sanitization → valid connection name.
+  - `all_regions` flag → `["*"]`; empty enabled set → connection **skipped**;
+  - connection name = `aws_<account_id>` (no alias collision);
+  - HCL escaping of values.
+- Migration test: drop/replace of `external_id_required_for_target` (idempotent).
+- `sync_lambda` tests: run-ledger + stale-delete keyed by **real account_id**;
+  cross-account resource-id collision is isolated by PK; `ebs_snapshot` pushdown
+  per-account.
+- Boot-failure test: Aurora unreachable → bounded retry then fail-closed.
 
-### Dependency
+### Dependency & migrations (CORRECTED)
 
-- Builds on `account_regions`, already in `feat` (PR #109). **No new schema
-  migration** — `accounts.external_id` is already nullable, and Gap 2 only reads
-  existing tables.
+- Builds on `account_regions`, already in `feat` (PR #109).
+- **A migration IS needed** — drop/replace `external_id_required_for_target` (Gap 1).
+  If the `all_regions` model uses a new column/sentinel, that is a second idempotent
+  ULID migration (Gap 2).
 
 ---
 
