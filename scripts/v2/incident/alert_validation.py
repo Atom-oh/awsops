@@ -24,6 +24,9 @@ import db                 # workers/db.py
 
 MODEL_ID = os.environ.get("ALERT_VALIDATION_MODEL_ID", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
+PROJECT = os.environ.get("PROJECT", "awsops-v2")  # SSM tunable path: /ops/<PROJECT>/incident/<suffix>
+# Env values are the degrade-safe FALLBACKS. The live values come from SSM (read_tunables) at handler
+# entry, so the safety knob ALERT_SUPPRESSION_ENFORCE can flip shadow→enforce without a redeploy (FF-A).
 DEADLINE_S = float(os.environ.get("ALERT_VALIDATION_DEADLINE_S", "25"))
 CONF_THRESHOLD = float(os.environ.get("ALERT_SUPPRESS_CONFIDENCE_THRESHOLD", "0.85"))
 ENFORCE = os.environ.get("ALERT_SUPPRESSION_ENFORCE", "false").lower() == "true"
@@ -98,8 +101,8 @@ def suppression_severity(snapshot):
 
 
 # ── signal collection (best-effort, bounded by a GLOBAL wall-clock deadline; never raises) ─────
-def _remaining(start):
-    return DEADLINE_S - (time.monotonic() - start)
+def _remaining(start, deadline_s):
+    return deadline_s - (time.monotonic() - start)
 
 
 def _topology_signal(conn, snapshot):
@@ -161,7 +164,7 @@ def _cloudwatch_signal(snapshot):
         return None, True
 
 
-def _datasource_signals(conn, deadline_start):
+def _datasource_signals(conn, deadline_start, deadline_s=DEADLINE_S):
     """Best-effort: probe each enabled default datasource instance once (signal-only summary)."""
     out, failures = [], False
     try:
@@ -174,7 +177,7 @@ def _datasource_signals(conn, deadline_start):
         return out, False  # discovery unavailable (e.g. integrations off) — absent, not a failure
     seen = set()
     for r in rows or []:
-        if _remaining(deadline_start) <= 0:
+        if _remaining(deadline_start, deadline_s) <= 0:
             failures = True  # deadline exhausted mid-collection → fail-closed (partial data → escalate)
             break
         iid, kind = r[0], r[1]
@@ -197,18 +200,18 @@ def _datasource_signals(conn, deadline_start):
     return out, failures
 
 
-def collect_signals(conn, snapshot):
+def collect_signals(conn, snapshot, deadline_s=DEADLINE_S):
     start = time.monotonic()
     signals, failures = [], False
     for fn in (lambda: _topology_signal(conn, snapshot), lambda: _cloudwatch_signal(snapshot)):
-        if _remaining(start) <= 0:
+        if _remaining(start, deadline_s) <= 0:
             failures = True
             break
         sig, failed = fn()
         if sig is not None:
             signals.append(sig)
         failures = failures or failed
-    ds, ds_failed = _datasource_signals(conn, start)
+    ds, ds_failed = _datasource_signals(conn, start, deadline_s)
     signals.extend(ds)
     failures = failures or ds_failed
     return {"signals": signals, "failures": failures, "count": len(signals)}
@@ -298,16 +301,58 @@ def _record(conn, incident_id, verdict, decision):
         pass
 
 
+# ── tunables (LIVE SSM read at handler entry; degrade-safe → env/default fallback) ──────────────
+# Suffix -> (key, default, kind). Mirrors lifecycle.read_caps. Path = /ops/<PROJECT>/incident/<suffix>.
+_TUNABLE_PARAMS = {
+    "validation-deadline-s": ("deadline_s", DEADLINE_S, "float"),
+    "suppress-confidence-threshold": ("confidence_threshold", CONF_THRESHOLD, "float"),
+    "suppression-enforce": ("enforce", ENFORCE, "bool"),
+}
+
+
+def _ssm():
+    return boto3.client("ssm", region_name=REGION, config=_boto_cfg())
+
+
+def read_tunables(ssm):
+    """Live-read the 3 AlertValidation knobs from SSM via the given boto3 ssm client (degrade-safe:
+    a missing/invalid param falls back to its env/default). Keeping ALERT_SUPPRESSION_ENFORCE in SSM
+    lets an operator flip shadow→enforce without a Terraform redeploy (FF-A). Mirrors lifecycle.read_caps."""
+    out = {}
+    for suffix, (key, default, kind) in _TUNABLE_PARAMS.items():
+        raw = None
+        try:
+            resp = ssm.get_parameter(Name=f"/ops/{PROJECT}/incident/{suffix}")
+            raw = (resp.get("Parameter") or {}).get("Value")
+        except Exception:
+            raw = None  # ParameterNotFound / client error → default
+        if raw is None:
+            out[key] = default
+            continue
+        if kind == "float":
+            try:
+                v = float(str(raw).strip())
+            except (ValueError, TypeError):
+                v = None
+            out[key] = v if (v is not None and math.isfinite(v)) else default
+        elif kind == "bool":
+            out[key] = str(raw).strip().lower() == "true"   # anything but 'true' = shadow (fail-safe)
+        else:
+            out[key] = raw
+    return out
+
+
 def lambda_handler(event, _ctx):
     incident_id = event.get("incident_id")
     conn = db.connect()
     try:
+        tun = read_tunables(_ssm())
         snapshot = _load_trigger(conn, incident_id)
         if not snapshot:
             verdict = {"verdict": "uncertain", "confidence": 0.0, "reason": "no_snapshot"}
             _record(conn, incident_id, verdict, "escalate")
             return {"verdict": "uncertain", "confidence": 0.0, "decision": "escalate"}
-        bundle = collect_signals(conn, snapshot)
+        bundle = collect_signals(conn, snapshot, deadline_s=tun["deadline_s"])
         if bundle["count"] < 2 or bundle["failures"]:
             # insufficient / degraded corroboration → uncertain → escalate (skip the model; fail-closed)
             verdict = {"verdict": "uncertain", "confidence": 0.0, "reason": "insufficient_signals",
@@ -315,7 +360,8 @@ def lambda_handler(event, _ctx):
             _record(conn, incident_id, verdict, "escalate")
             return {"verdict": "uncertain", "confidence": 0.0, "decision": "escalate"}
         verdict = _haiku_verdict(_build_prompt(snapshot, bundle["signals"]))
-        decision = decide(verdict, snapshot, bundle["count"], bundle["failures"])
+        decision = decide(verdict, snapshot, bundle["count"], bundle["failures"],
+                          threshold=tun["confidence_threshold"], enforce=tun["enforce"])
         _record(conn, incident_id, verdict, decision)
         return {"verdict": verdict["verdict"], "confidence": verdict.get("confidence", 0.0), "decision": decision}
     finally:

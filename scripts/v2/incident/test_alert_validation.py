@@ -136,7 +136,7 @@ def test_cloudwatch_zero_datapoints_is_not_a_signal(monkeypatch):
 def test_datasource_empty_summary_not_counted_failed_invoke_is_failure(monkeypatch):
     # M2: empty/unrecognized result is NOT corroboration; a failing invoke (incl. FunctionError →
     # 502 from connector_invoke) IS a signal failure → fail-closed escalate.
-    monkeypatch.setattr(av, "_remaining", lambda start: 100.0)
+    monkeypatch.setattr(av, "_remaining", lambda start, deadline_s=0.0: 100.0)
 
     class _C:
         def run(self, sql, **p):
@@ -183,8 +183,12 @@ class _FakeConn:
 def _patch_handler(monkeypatch, snapshot, bundle, verdict):
     conn = _FakeConn(snapshot)
     monkeypatch.setattr(av.db, "connect", lambda: conn)
-    monkeypatch.setattr(av, "collect_signals", lambda c, s: bundle)
+    monkeypatch.setattr(av, "collect_signals", lambda c, s, **kw: bundle)
     monkeypatch.setattr(av, "_haiku_verdict", lambda prompt: verdict)
+    monkeypatch.setattr(av, "_ssm", lambda: None)  # no real AWS
+    monkeypatch.setattr(av, "read_tunables",
+                        lambda ssm: {"deadline_s": av.DEADLINE_S, "confidence_threshold": av.CONF_THRESHOLD,
+                                     "enforce": av.ENFORCE})
     return conn
 
 
@@ -203,7 +207,7 @@ def test_handler_insufficient_signals_skips_model_and_escalates(monkeypatch):
 
 def test_handler_suppress_path_records_false_positive(monkeypatch):
     monkeypatch.setattr(av, "ENFORCE", True, raising=False)
-    monkeypatch.setattr(av, "decide", lambda v, s, c, f: "suppress")  # exercised separately above
+    monkeypatch.setattr(av, "decide", lambda v, s, c, f, **kw: "suppress")  # exercised separately above
     conn = _patch_handler(monkeypatch, _snap(), {"signals": [1, 2], "failures": False, "count": 2}, FP)
     r = av.lambda_handler({"incident_id": "inc-3"}, None)
     assert r["decision"] == "suppress"
@@ -222,10 +226,62 @@ def test_handler_escalate_path_records_validating(monkeypatch):
     assert upd and upd[0][1]["s"] == "validating"
 
 
+class _FakeSSM:
+    def __init__(self, values):       # {suffix: value-string}
+        self._v = values
+
+    def get_parameter(self, Name):
+        for suffix, val in self._v.items():
+            if Name.endswith(suffix):
+                return {"Parameter": {"Value": val}}
+        raise RuntimeError("ParameterNotFound: " + Name)
+
+
+def test_read_tunables_coercion_and_degrade_safe():
+    # FF-A: live values coerced (float deadline/threshold, bool enforce)
+    t = av.read_tunables(_FakeSSM({"validation-deadline-s": "40", "suppress-confidence-threshold": "0.9",
+                                   "suppression-enforce": "true"}))
+    assert t["deadline_s"] == 40.0 and t["confidence_threshold"] == 0.9 and t["enforce"] is True
+    # missing params → env/module defaults (degrade-safe, like read_caps)
+    t2 = av.read_tunables(_FakeSSM({}))
+    assert t2["deadline_s"] == av.DEADLINE_S and t2["confidence_threshold"] == av.CONF_THRESHOLD \
+        and t2["enforce"] == av.ENFORCE
+    # garbage / non-finite float → default; any non-'true' enforce → False (fail-safe to shadow)
+    t3 = av.read_tunables(_FakeSSM({"validation-deadline-s": "NaN", "suppress-confidence-threshold": "xyz",
+                                    "suppression-enforce": "FALSE"}))
+    assert t3["deadline_s"] == av.DEADLINE_S and t3["confidence_threshold"] == av.CONF_THRESHOLD \
+        and t3["enforce"] is False
+
+
+def test_handler_live_ssm_enforce_drives_suppression(monkeypatch):
+    # FF-A safety knob: SSM enforce='true' flips shadow→enforce WITHOUT redeploy. Same suppressible
+    # inputs suppress when SSM says enforce, and escalate (shadow) when it doesn't.
+    conn = _patch_handler(monkeypatch, _snap(severity="warning"),
+                          {"signals": [1, 2], "failures": False, "count": 2}, FP)
+    monkeypatch.setattr(av, "read_tunables",
+                        lambda ssm: {"deadline_s": 25.0, "confidence_threshold": 0.85, "enforce": True})
+    assert av.lambda_handler({"incident_id": "inc-live-on"}, None)["decision"] == "suppress"
+
+    conn = _patch_handler(monkeypatch, _snap(severity="warning"),
+                          {"signals": [1, 2], "failures": False, "count": 2}, FP)
+    monkeypatch.setattr(av, "read_tunables",
+                        lambda ssm: {"deadline_s": 25.0, "confidence_threshold": 0.85, "enforce": False})
+    assert av.lambda_handler({"incident_id": "inc-live-off"}, None)["decision"] == "escalate"
+
+
+def test_handler_live_ssm_threshold_gates_suppression(monkeypatch):
+    # A live threshold above the verdict confidence (FP=0.95) escalates even with enforce=true.
+    conn = _patch_handler(monkeypatch, _snap(severity="warning"),
+                          {"signals": [1, 2], "failures": False, "count": 2}, FP)
+    monkeypatch.setattr(av, "read_tunables",
+                        lambda ssm: {"deadline_s": 25.0, "confidence_threshold": 0.99, "enforce": True})
+    assert av.lambda_handler({"incident_id": "inc-thr"}, None)["decision"] == "escalate"
+
+
 def test_datasource_deadline_exhaustion_is_failclosed(monkeypatch):
     # If the global deadline is exhausted mid datasource-collection, fail-closed (failures=True)
     # so the suppression gate escalates rather than acting on partial signals.
-    monkeypatch.setattr(av, "_remaining", lambda start: -1.0)
+    monkeypatch.setattr(av, "_remaining", lambda start, deadline_s=0.0: -1.0)
 
     class _C:
         def run(self, sql, **p):

@@ -83,6 +83,37 @@ resource "aws_ssm_parameter" "incident_min_severity" {
   lifecycle { ignore_changes = [value] }
 }
 
+# W2b AlertValidation tunables (FF-A). alert_validation.read_tunables live-reads these each run
+# (degrade-safe → env/default fallback). Kept in SSM (not env literals) so the SAFETY KNOB
+# suppression-enforce can flip shadow→enforce and back WITHOUT a Terraform redeploy — same convention
+# as the incident caps + prevention knobs (PR #36 review). Operator-tunable; ignore drift.
+resource "aws_ssm_parameter" "incident_validation_deadline" {
+  count       = local.il
+  name        = "/ops/${var.project}/incident/validation-deadline-s"
+  description = "W2b AlertValidation: global signal-collection wall-clock deadline (seconds). Operator-tunable; ignore drift."
+  type        = "String"
+  value       = "25"
+  lifecycle { ignore_changes = [value] }
+}
+
+resource "aws_ssm_parameter" "incident_suppress_confidence_threshold" {
+  count       = local.il
+  name        = "/ops/${var.project}/incident/suppress-confidence-threshold"
+  description = "W2b AlertValidation: min false_positive confidence to suppress (0..1). Operator-tunable; ignore drift."
+  type        = "String"
+  value       = "0.85"
+  lifecycle { ignore_changes = [value] }
+}
+
+resource "aws_ssm_parameter" "incident_suppression_enforce" {
+  count       = local.il
+  name        = "/ops/${var.project}/incident/suppression-enforce"
+  description = "W2b AlertValidation SAFETY KNOB: 'true' enforces suppression, anything else = shadow (record only). Live-toggleable without redeploy. Operator-tunable; ignore drift."
+  type        = "String"
+  value       = "false"
+  lifecycle { ignore_changes = [value] }
+}
+
 ############################################################
 # Step 2: Lambda packaging (one zip: shared workers/db.py + all incident/*.py) + the two IAM roles.
 ############################################################
@@ -287,6 +318,10 @@ resource "aws_iam_role_policy" "incident_lambda" {
           # env-baked copies went stale until the next apply, defeating ignore_changes tunability).
           aws_ssm_parameter.incident_prevention_window_days[0].arn,
           aws_ssm_parameter.incident_prevention_threshold[0].arn,
+          # W2b AlertValidation tunables (FF-A) — live-read by alert_validation.read_tunables.
+          aws_ssm_parameter.incident_validation_deadline[0].arn,
+          aws_ssm_parameter.incident_suppress_confidence_threshold[0].arn,
+          aws_ssm_parameter.incident_suppression_enforce[0].arn,
           "arn:aws:ssm:${var.region}:${local.inc_acct}:parameter${local.inc_runtime_arn_param}",
         ]
       }
@@ -404,13 +439,18 @@ locals {
     INCIDENT_MAX_CONCURRENT_PARAM     = aws_ssm_parameter.incident_max_concurrent[0].name
     INCIDENT_FANOUT_MAX_PARAM         = aws_ssm_parameter.incident_fanout_max[0].name
     INCIDENT_MIN_SEVERITY_PARAM       = aws_ssm_parameter.incident_min_severity[0].name
-    # W2 AlertValidation tunables (env defaults; alert_validation.py reads these). enforce defaults
-    # to "false" = SHADOW mode (verdict recorded, never enforced) — flipping to "true" is a
-    # deliberate operator safety decision.
-    ALERT_VALIDATION_MODEL_ID           = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-    ALERT_VALIDATION_DEADLINE_S         = "25"
-    ALERT_SUPPRESS_CONFIDENCE_THRESHOLD = "0.85"
-    ALERT_SUPPRESSION_ENFORCE           = "false"
+    # W2 AlertValidation. Model id is an env literal. The 3 operator knobs are LIVE-read from SSM by
+    # alert_validation.read_tunables (FF-A); the literal values below remain as degrade-safe FALLBACKS
+    # (SSM read failure / flag-off first run), and the *_PARAM names document the contract (matches the
+    # INCIDENT_*_PARAM convention). enforce defaults to "false" = SHADOW (verdict recorded, never
+    # enforced) — flipping to "true" in SSM is a deliberate operator safety decision, no redeploy.
+    ALERT_VALIDATION_MODEL_ID                 = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    ALERT_VALIDATION_DEADLINE_S               = "25"
+    ALERT_SUPPRESS_CONFIDENCE_THRESHOLD       = "0.85"
+    ALERT_SUPPRESSION_ENFORCE                 = "false"
+    ALERT_VALIDATION_DEADLINE_S_PARAM         = aws_ssm_parameter.incident_validation_deadline[0].name
+    ALERT_SUPPRESS_CONFIDENCE_THRESHOLD_PARAM = aws_ssm_parameter.incident_suppress_confidence_threshold[0].name
+    ALERT_SUPPRESSION_ENFORCE_PARAM           = aws_ssm_parameter.incident_suppression_enforce[0].name
     # AgentCore runtime-ARN SSM param (read-only Sub-agent consult bridge). agent_bridge.py reads
     # SSM_RUNTIME_ARN_PARAM; AGENTCORE_RUNTIME_ARN_PARAM is the plan-named alias (same value).
     SSM_RUNTIME_ARN_PARAM       = local.inc_runtime_arn_param
