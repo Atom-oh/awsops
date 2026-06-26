@@ -12,9 +12,9 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 - **인증**: Cognito User Pool + **Lambda@Edge**(`us-east-1`, python3.12, viewer-request). **RS256 JWKS 서명 검증** + iss/aud/token_use + OAuth `state` + **PKCE public client**(시크릿 없음). 도메인 `a-ops-v2-auth-*`('aws'는 Cognito 예약어). **로그인 = 자체 `/login` 폼**(ADR-042) — BFF `POST /api/auth/login`가 무서명 공개 `InitiateAuth(USER_PASSWORD_AUTH)` 호출 → `awsops_token` 발급(id_token 12h). 미인증 시 엣지가 `/login`으로 redirect; **Hosted UI PKCE 플로우(`/_callback`)는 다크 폴백으로 보존**. signout은 쿠키 삭제 → `/login`(Hosted UI `/logout` 왕복 없음).
 - **웹**: **Next.js 14 thin-BFF** (`web/`, standalone **arm64**, **루트 경로 — basePath 없음**). 라우트: `/api/health`(공개), `/api/stream`(SSE), `/api/db`(Aurora ping), `/api/jobs`(+`/[id]`, P2 비동기 작업). 무거운 작업은 직접 처리하지 않고 **워커 큐로 enqueue**.
 - **데이터**: **Aurora Serverless v2** (`awsops-v2-aurora`, **PG 17.9**, 0.5–4 ACU, KMS CMK, RDS-관리 master secret). **ADR-030 기반 스키마(베이스라인 v9 동결 — 테이블 수는 `data/schema.sql` 참조)** + P2 `worker_jobs`. 앱은 **node-pg**(`web/lib/db.ts`)로 접근. **flag-gated Steampipe 인벤토리 sync(D1, `steampipe_enabled`) 존재** — 라이브 쿼리는 여전히 AgentCore MCP Lambda 도구가 담당.
-- **AI (AgentCore)**: Bedrock Sonnet 4.6 / **Opus 4.8** / Haiku 4.5 + AgentCore Runtime(Strands, `agent/agent.py` 재사용) + **9 섹션 게이트웨이**(8 AWS 도메인 `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway` + **external-obs**; external-obs는 외부 관측성 커넥터[Prometheus·ClickHouse]를 호스팅하는 라우팅 섹션 — **ADR-004 개정 2026-06-24: 9 프로비저닝 / 9 라우트**, 챗 키 `observability`는 external-obs로 별칭. Loki/Tempo/Mimir는 monitoring 잔류) + Memory + Code Interpreter. **설계: 9 섹션 에이전트 + 1 인시던트 오케스트레이터**. 현재 read-only 슬라이스 2개 배포(iam-mcp 14도구→security, flow-monitor 1→network); 전체 함대는 P3. **설정 source of truth = SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
+- **AI (AgentCore)**: Bedrock Sonnet 4.6 / **Opus 4.8** / Haiku 4.5 + AgentCore Runtime(Strands, `agent/agent.py` 재사용) + **9 섹션 게이트웨이**(8 AWS 도메인 `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway` + **external-obs**; external-obs는 외부 관측성 커넥터[Prometheus·ClickHouse]를 호스팅하는 라우팅 섹션 — **ADR-004 개정 2026-06-24: 9 프로비저닝 / 9 라우트**, 챗 키 `observability`는 external-obs로 별칭. Loki/Tempo/Mimir는 monitoring 잔류) + Memory + Code Interpreter. **설계: 9 섹션 에이전트 + 1 인시던트 오케스트레이터**. 현재 read-only 슬라이스 2개 배포(iam-mcp 14도구 → security, flow-monitor 1 → network). 전체 함대(~27개 슬라이스: 21개는 `agentcore_enabled`, 6개는 `integrations_enabled` 게이트, 둘 다 기본 false)는 `ai.tf` `local.agent_lambdas`에 정의되어 있지만 각 플래그가 활성화되기 전에는 live가 아님(P3). **설정 source of truth = SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
 - **비동기 워커(P2)**: web `POST /api/jobs` → `worker_jobs`(queued) + SQS → **ESM(킬스위치)** → dispatcher Lambda(멱등, job_id 기준) → **Step Functions Standard** `$.runtime` Choice → RunLambda(짧음) **또는** `ecs:runTask.sync` Fargate(긺/OOM) → 워커가 직접 running/succeeded 기록 → Catch 시 status_updater Lambda가 failed(SFN은 VPC Aurora 쓰기 불가) → reaper(EventBridge 5분)가 stale 정합화.
-- **EKS 온보딩**: `configure.mjs` 멀티선택 → `eks.tf`가 web task role에 **Access Entry + AmazonEKSViewPolicy**(클러스터 스코프) 부여. kubeconfig 자동등록/조회 UI는 P3.
+- **EKS 온보딩**: `configure.mjs` 멀티선택 → `eks.tf`가 web task role에 **Access Entry + AmazonEKSAdminViewPolicy**(클러스터 스코프) 부여. kubeconfig 자동등록/조회 UI는 P3.
 
 ## 현황 (단계별)
 | 단계 | 내용 | 상태 |
@@ -23,7 +23,7 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 | P1b | Cognito + Lambda@Edge 인증 | ✅ |
 | P1c | Aurora Serverless v2 (ADR-030 기반 스키마 — 베이스라인 v9 동결, 테이블 수는 `data/schema.sql` 참조) | ✅ |
 | P1d | web thin-BFF + dual-tier ECR + `make deploy` + RS256 인증 강화 | ✅ |
-| P1e | EKS 온보딩 (Access Entry + View policy) | ✅ |
+| P1e | EKS 온보딩 (Access Entry + AdminView policy) | ✅ |
 | P1f | AgentCore 멱등 provisioner (9 GW + Memory + Interpreter + Runtime) | ✅ |
 | P2 | 비동기 워커 백본 (SQS+SFN+Lambda/Fargate, `worker_jobs`) | ✅ W9 GREEN |
 | **P3** | 에이전트 함대 + 챗 UI + EKS 조회 (read-only). ~~OpenCost 설치 버튼(ADR-029 mutating)~~ → **029 번복으로 폐기** | 🟡 부분 진행 (read-only 부분 deployed; mutating 부분 reversed) |
@@ -66,9 +66,9 @@ AWSops는 실시간 AWS/Kubernetes 운영 대시보드입니다. v2는 v1의 단
 - `data.tf` + `data/schema.sql` — Aurora Serverless v2 + ADR-030 기반 스키마(베이스라인 v9 동결 — 테이블 수는 `data/schema.sql` 참조)
 - `workload.tf` — ECS 클러스터/서비스/태스크(web)
 - `ecr.tf` — dual-tier ECR(dev-private + prod-public)
-- `ai.tf` — AgentCore ECR + IAM role + agent Lambda 슬라이스 + SSM(전부 `agentcore_enabled` 게이트)
+- `ai.tf` — AgentCore ECR + IAM role + agent Lambda 슬라이스 + SSM(21개 `agentcore_enabled` + 6개 `integrations_enabled` 게이트)
 - `workers.tf` — SQS + ESM + dispatcher/worker/status_updater/reaper Lambda + Step Functions + Fargate 워커(전부 `workers_enabled` 게이트)
-- `eks.tf` — `for_each onboard_eks_clusters` Access Entry + View policy
+- `eks.tf` — `for_each onboard_eks_clusters` Access Entry + AdminView policy
 - `steampipe.tf` — D1 인벤토리 데이터층: warm Steampipe Fargate(FDW) + sync Lambda→Aurora (`steampipe_enabled` 게이트)
 - `notify.tf` — 진단 완료 이메일 알림 SNS 토픽 + 구독 IAM (`diagnosis_notify_enabled` 게이트)
 - `incidents.tf` — 인시던트 라이프사이클 webhook/상태 (`incident_lifecycle_enabled` 게이트, ADR-032)
@@ -148,9 +148,9 @@ AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds the v1 si
 - **Auth**: Cognito User Pool + **Lambda@Edge** (`us-east-1`, python3.12, viewer-request). **RS256 JWKS signature verification** + iss/aud/token_use + OAuth `state` + **PKCE public client** (no secret). Domain `a-ops-v2-auth-*` ('aws' is a Cognito reserved word). **Login = self-hosted `/login` form** (ADR-042) — the BFF `POST /api/auth/login` calls the unsigned public `InitiateAuth(USER_PASSWORD_AUTH)` → mints `awsops_token` (id_token 12h). Unauthenticated requests are redirected to `/login` by the edge; the **Hosted UI PKCE flow (`/_callback`) is retained as a dark fallback**. Signout clears the cookie → `/login` (no Hosted UI `/logout` round-trip).
 - **Web**: **Next.js 14 thin-BFF** (`web/`, standalone **arm64**, **root path — no basePath**). Routes: `/api/health` (public), `/api/stream` (SSE), `/api/db` (Aurora ping), `/api/jobs` (+`/[id]`, P2 async jobs). Heavy work is **enqueued** to the worker queue, not run inline.
 - **Data**: **Aurora Serverless v2** (`awsops-v2-aurora`, **PG 17.9**, 0.5–4 ACU, KMS CMK, RDS-managed master secret). **ADR-030-based schema (baseline v9 frozen — table count per `data/schema.sql`)** + P2 `worker_jobs`. App uses **node-pg** (`web/lib/db.ts`). **A flag-gated Steampipe inventory sync (D1, `steampipe_enabled`) exists** — live queries still go through AgentCore MCP Lambda tools.
-- **AI (AgentCore)**: Bedrock Sonnet 4.6 / **Opus 4.8** / Haiku 4.5 + AgentCore Runtime (Strands, reuses `agent/agent.py`) + **9 section gateways** (8 AWS-domain `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway` + **external-obs**; external-obs is a routed section hosting the external-observability connectors [Prometheus·ClickHouse] — **ADR-004 amended 2026-06-24: 9 provisioned / 9 routed**, chat key `observability` aliases to external-obs. Loki/Tempo/Mimir stay on monitoring) + Memory + Code Interpreter. **Design: 9 section agents + 1 incident orchestrator**. Currently 2 read-only slices deployed (iam-mcp 14 tools→security, flow-monitor 1→network); full fleet is P3. **Config source of truth = SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
+- **AI (AgentCore)**: Bedrock Sonnet 4.6 / **Opus 4.8** / Haiku 4.5 + AgentCore Runtime (Strands, reuses `agent/agent.py`) + **9 section gateways** (8 AWS-domain `awsops-v2-{network,container,data,security,cost,monitoring,iac,ops}-gateway` + **external-obs**; external-obs is a routed section hosting the external-observability connectors [Prometheus·ClickHouse] — **ADR-004 amended 2026-06-24: 9 provisioned / 9 routed**, chat key `observability` aliases to external-obs. Loki/Tempo/Mimir stay on monitoring) + Memory + Code Interpreter. **Design: 9 section agents + 1 incident orchestrator**. Currently 2 read-only slices deployed (iam-mcp 14 tools → security, flow-monitor 1 → network). The full fleet (~27 slices: 21 gated on `agentcore_enabled`, 6 on `integrations_enabled`, both default false) is defined in `ai.tf` `local.agent_lambdas` but not live until the respective flags are enabled (P3). **Config source of truth = SSM** `/ops/awsops-v2/agentcore/{runtime_arn,interpreter_id,memory_id}`.
 - **Async workers (P2)**: web `POST /api/jobs` → `worker_jobs` (queued) + SQS → **ESM (kill-switch)** → dispatcher Lambda (idempotent on job_id) → **Step Functions Standard** Choice on `$.runtime` → RunLambda (short) **or** `ecs:runTask.sync` Fargate (long/OOM) → worker writes running/succeeded itself → on Catch, status_updater Lambda sets failed (SFN can't write VPC Aurora) → reaper (EventBridge 5min) reconciles stale.
-- **EKS onboarding**: `configure.mjs` multi-select → `eks.tf` grants the web task role an **Access Entry + AmazonEKSViewPolicy** (cluster-scoped). kubeconfig auto-registration / query UI is P3.
+- **EKS onboarding**: `configure.mjs` multi-select → `eks.tf` grants the web task role an **Access Entry + AmazonEKSAdminViewPolicy** (cluster-scoped). kubeconfig auto-registration / query UI is P3.
 
 ## Status (by phase)
 | Phase | Scope | State |
@@ -159,7 +159,7 @@ AWSops is a real-time AWS/Kubernetes operations dashboard. v2 rebuilds the v1 si
 | P1b | Cognito + Lambda@Edge auth | ✅ |
 | P1c | Aurora Serverless v2 (ADR-030-based schema — baseline v9 frozen, table count per `data/schema.sql`) | ✅ |
 | P1d | web thin-BFF + dual-tier ECR + `make deploy` + RS256 hardening | ✅ |
-| P1e | EKS onboarding (Access Entry + View policy) | ✅ |
+| P1e | EKS onboarding (Access Entry + AdminView policy) | ✅ |
 | P1f | AgentCore idempotent provisioner (9 GW + Memory + Interpreter + Runtime) | ✅ |
 | P2 | async worker backbone (SQS+SFN+Lambda/Fargate, `worker_jobs`) | ✅ W9 GREEN |
 | **P3** | agent fleet + chat UI + EKS query (read-only). ~~OpenCost install button (ADR-029 mutating)~~ → **dropped (029 reversed)** | 🟡 partial (read-only shipped; mutating parts reversed) |
@@ -202,9 +202,9 @@ Live env (**identifiers below are examples/sanitized — real values come from g
 - `data.tf` + `data/schema.sql` — Aurora Serverless v2 + ADR-030-based schema (baseline v9 frozen — table count per `data/schema.sql`)
 - `workload.tf` — ECS cluster/service/task (web)
 - `ecr.tf` — dual-tier ECR (dev-private + prod-public)
-- `ai.tf` — AgentCore ECR + IAM role + agent Lambda slice + SSM (all `agentcore_enabled`-gated)
+- `ai.tf` — AgentCore ECR + IAM role + agent Lambda slice + SSM (21 `agentcore_enabled`- + 6 `integrations_enabled`-gated)
 - `workers.tf` — SQS + ESM + dispatcher/worker/status_updater/reaper Lambda + Step Functions + Fargate worker (all `workers_enabled`-gated)
-- `eks.tf` — `for_each onboard_eks_clusters` Access Entry + View policy
+- `eks.tf` — `for_each onboard_eks_clusters` Access Entry + AdminView policy
 - `steampipe.tf` — D1 inventory data layer: warm Steampipe Fargate (FDW) + sync Lambda→Aurora (`steampipe_enabled`-gated)
 - `notify.tf` — diagnosis-completion email SNS topic + subscription IAM (`diagnosis_notify_enabled`-gated)
 - `incidents.tf` — incident-lifecycle webhook/status (`incident_lifecycle_enabled`-gated, ADR-032)
