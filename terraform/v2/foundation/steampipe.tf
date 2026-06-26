@@ -27,8 +27,10 @@ resource "aws_iam_role_policy" "execution_steampipe_secret" {
   name  = "${var.project}-exec-steampipe-secret"
   role  = aws_iam_role.execution.id
   policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_secretsmanager_secret.steampipe[0].arn }]
+    Version = "2012-10-17"
+    # the steampipe task def resolves BOTH secrets via the execution role (valueFrom): its own DB
+    # password + the Aurora master creds the boot-time aws.spc generator needs.
+    Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.steampipe[0].arn, aws_rds_cluster.aurora.master_user_secret[0].secret_arn] }]
   })
 }
 
@@ -133,6 +135,14 @@ resource "aws_iam_role_policy" "steampipe_task" {
         "route53:List*", "route53:Get*"
       ]
       Resource = "*"
+      },
+      # Cross-account read-only fan-out: the aws.spc connections assume each target account's
+      # AWSopsReadOnlyRole (1st-party: no ExternalId; 3rd-party: trust enforces it). Scoped to the
+      # role NAME (route.ts hard-pins it) — never an arbitrary role.
+      {
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = "arn:aws:iam::*:role/AWSopsReadOnlyRole"
     }]
   })
 }
@@ -156,8 +166,17 @@ resource "aws_ecs_task_definition" "steampipe" {
     image        = "${aws_ecr_repository.steampipe[0].repository_url}:${var.steampipe_image_tag}"
     essential    = true
     portMappings = [{ containerPort = 9193, protocol = "tcp" }]
-    environment  = [{ name = "AWS_REGION", value = var.region }]
-    secrets      = [{ name = "STEAMPIPE_DATABASE_PASSWORD", valueFrom = aws_secretsmanager_secret.steampipe[0].arn }]
+    environment = [
+      { name = "AWS_REGION", value = var.region },
+      # boot-time aws.spc generator reaches Aurora to read accounts ⋈ account_regions
+      { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
+      { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
+    ]
+    secrets = [
+      { name = "STEAMPIPE_DATABASE_PASSWORD", valueFrom = aws_secretsmanager_secret.steampipe[0].arn },
+      # Aurora master creds (JSON) injected by the EXECUTION role — the entrypoint parses AURORA_SECRET
+      { name = "AURORA_SECRET", valueFrom = aws_rds_cluster.aurora.master_user_secret[0].secret_arn },
+    ]
     healthCheck = {
       command     = ["CMD-SHELL", "steampipe query \"select 1\" >/dev/null 2>&1 || exit 1"]
       interval    = 30
