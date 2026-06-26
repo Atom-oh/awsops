@@ -152,7 +152,7 @@ export default function AccountsPage() {
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px] font-mono" placeholder="Account ID (12 digits)" value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value.trim() })} />
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Alias" value={form.alias} onChange={(e) => setForm({ ...form, alias: e.target.value })} />
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value.trim() })} />
-          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="ExternalId" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
+          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="ExternalId (optional, 1st-party)" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
         </div>
         <div className="flex items-center gap-3">
           <button onClick={add} disabled={busy} className="self-start rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
@@ -164,9 +164,9 @@ export default function AccountsPage() {
 
       <Card className="p-4 text-[12px] text-ink-600 flex flex-col gap-1">
         <div className="text-[13px] font-semibold text-ink-800 mb-1">타깃 계정 온보딩</div>
-        <p>각 타깃 계정에 <code>AWSopsReadOnlyRole</code>을 배포해야 합니다 (호스트 web task role만 신뢰 + ExternalId 조건 + ReadOnlyAccess).</p>
+        <p>각 타깃 계정에 <code>AWSopsReadOnlyRole</code>을 배포해야 합니다 (호스트 web task role만 신뢰 + ReadOnlyAccess). <strong>1st-party</strong>(같은 조직, trust가 호스트 task-role ARN을 정확히 핀)는 ExternalId를 생략할 수 있고, <strong>3rd-party/공유</strong> 계정은 ExternalId 조건이 필요합니다 (ADR-011).</p>
         <p>CloudFormation 템플릿: <code>infra/cfn/awsops-target-account-role.yaml</code> — 배포 가이드는 <code>docs/runbooks/onboard-target-account.md</code> 참조.</p>
-        <p className="text-ink-400">배포 후 위 폼에 Account ID·Alias·Region·ExternalId를 입력하면 assume를 검증(상태=verified)한 뒤 등록합니다. ExternalId는 confused-deputy 가드이며 비밀이 아닙니다.</p>
+        <p className="text-ink-400">배포 후 위 폼에 Account ID·Alias·Region을 입력하면 assume를 검증(상태=verified)한 뒤 등록합니다. ExternalId는 선택(1st-party는 생략 가능)이며 confused-deputy 가드일 뿐 비밀이 아닙니다.</p>
       </Card>
     </div>
   );
