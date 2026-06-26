@@ -36,6 +36,20 @@ describe('GET /api/graph', () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['infra']);
   });
 
+  it('honors ?class=trace (the third materialized layer)', async () => {
+    const r = await GET(new Request('http://x/api/graph?class=trace'));
+    const j = await r.json();
+    expect(r.status).toBe(200);
+    expect(j.class).toBe('trace');
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['trace']);
+  });
+
+  it('400 on an unknown class (no silent fall-back to flow)', async () => {
+    const r = await GET(new Request('http://x/api/graph?class=bogus'));
+    expect(r.status).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('?from= returns the per-resource subgraph and runs the class+depth traversal', async () => {
     const r = await GET(new Request('http://x/api/graph?from=alb:lb&class=infra&depth=2'));
     const j = await r.json();

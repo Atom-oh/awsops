@@ -289,8 +289,12 @@ def lambda_handler(event, context):
     if tool_name == "get_topology":
         resource_id = arguments.get("resource_id") if isinstance(arguments, dict) else None
         cls = (arguments.get("class") or "flow") if isinstance(arguments, dict) else "flow"
-        if cls not in ("flow", "infra"):
-            cls = "flow"
+        if cls not in ("flow", "infra", "trace"):
+            # Reject unknown class (400) — do NOT silently coerce to 'flow'. The /api/graph BFF returns
+            # 400 for the same input; a direct-MCP caller must get an error, not the WRONG layer's data
+            # (plan T7b: both read paths reject identically) (M4).
+            return {"statusCode": 400, "body": json.dumps(
+                {"error": "invalid class: " + str(cls) + " (expected flow|infra|trace)"})}
         nodes, edges = _fetch_topology_graph(resource_id=resource_id, cls=cls)
         result = {"class": cls, "nodes": nodes, "edges": edges,
                   "node_count": len(nodes), "edge_count": len(edges), "note": COVERAGE_NOTE}

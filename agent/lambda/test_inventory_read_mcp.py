@@ -278,6 +278,25 @@ class TestHandlerWithInjectedDataApi(unittest.TestCase):
         self.assertTrue(all(c == "infra" for c in seen_cls), f"expected all cls='infra', got {seen_cls}")
         self.assertEqual(len(seen_cls), 2, "must issue two queries (nodes + edges)")
 
+    def test_get_topology_class_trace_preserved(self):
+        """class='trace' (the third materialized layer) must be preserved, NOT silently → flow."""
+        import json as _j
+        inv._execute_override = lambda sql, params=None: []
+        out = inv.lambda_handler({"tool_name": "get_topology", "arguments": {"class": "trace"}}, None)
+        self.assertEqual(out["statusCode"], 200)
+        body = _j.loads(out["body"])
+        self.assertEqual(body["class"], "trace")
+
+    def test_get_topology_unknown_class_is_400(self):
+        """Unknown class must be REJECTED (400), not silently coerced to flow — matches the
+        /api/graph BFF (plan T7b: both read paths reject identically) (M4)."""
+        import json as _j
+        inv._execute_override = lambda sql, params=None: []
+        out = inv.lambda_handler({"tool_name": "get_topology", "arguments": {"class": "bogus"}}, None)
+        self.assertEqual(out["statusCode"], 400)
+        body = _j.loads(out["body"])
+        self.assertIn("invalid class", body["error"])
+
     def test_build_topology_chain_skips_null_origin_domain(self):
         # a null origin DomainName must not match a load balancer with a null dns_name
         chains = inv.build_topology_chain({
