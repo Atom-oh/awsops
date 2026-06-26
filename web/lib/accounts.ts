@@ -61,12 +61,19 @@ export async function isMultiAccount(): Promise<boolean> {
 export async function ensureHostRow(): Promise<void> {
   const id = currentAccountId();
   if (!id || id === 'self') return;
+  const region = process.env.AWS_REGION || 'ap-northeast-2';
   try {
     await getPool().query(
       `INSERT INTO accounts (account_id, alias, region, is_host, status, last_verified_at)
        VALUES ($1, $2, $3, true, 'verified', now())
        ON CONFLICT (account_id) DO NOTHING`,
-      [id, 'Host account', process.env.AWS_REGION || 'ap-northeast-2'],
+      [id, 'Host account', region],
+    );
+    await getPool().query(
+      `INSERT INTO account_regions (account_id, region, enabled, updated_at)
+       VALUES ($1, $2, true, now())
+       ON CONFLICT (account_id, region) DO UPDATE SET enabled = true, updated_at = now()`,
+      [id, region],
     );
   } catch {
     /* seeding is best-effort; the BFF degrades to single-account if the table is absent */

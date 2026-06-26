@@ -12,22 +12,27 @@ interface Account {
   accountId: string; alias: string; region: string; isHost: boolean;
   externalId: string | null; enabled: boolean; status: string;
 }
+interface AccountRegion { accountId: string; region: string; enabled: boolean }
 
 const statusTone = (s: string): 'positive' | 'negative' | 'neutral' =>
   s === 'verified' ? 'positive' : s === 'error' ? 'negative' : 'neutral';
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [regions, setRegions] = useState<AccountRegion[]>([]);
   const [denied, setDenied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [form, setForm] = useState({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '' });
+  const [regionForm, setRegionForm] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
-    const r = await fetch('/api/accounts');
+    const [r, rr] = await Promise.all([fetch('/api/accounts'), fetch('/api/accounts/regions')]);
     if (r.status === 401 || r.status === 403) { setDenied(true); return; }
     const d = await r.json().catch(() => ({ accounts: [] }));
     setAccounts(Array.isArray(d.accounts) ? d.accounts : []);
+    const rd = rr.ok ? await rr.json().catch(() => ({ regions: [] })) : { regions: [] };
+    setRegions(Array.isArray(rd.regions) ? rd.regions : []);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -52,6 +57,27 @@ export default function AccountsPage() {
     await load();
   };
 
+  const addRegion = async (accountId: string) => {
+    const region = (regionForm[accountId] || '').trim();
+    if (!region) return;
+    setBusy(true); setMsg('');
+    try {
+      const r = await fetch('/api/accounts/regions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accountId, region }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(`리전 추가 실패: ${d.message || r.status}`); return; }
+      setMsg('리전 추가 완료');
+      setRegionForm((prev) => ({ ...prev, [accountId]: '' }));
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const regionsFor = (accountId: string) =>
+    regions.filter((r) => r.enabled && (r.accountId === accountId || (accountId === 'self' && r.accountId === 'self'))).map((r) => r.region);
+
   if (denied) {
     return (
       <div className="p-6">
@@ -73,7 +99,7 @@ export default function AccountsPage() {
           <table className="w-full text-[12px]">
             <thead>
               <tr className="text-left text-ink-400">
-                <th className="py-1">Alias</th><th>Account ID</th><th>Region</th><th>상태</th><th></th>
+                <th className="py-1">Alias</th><th>Account ID</th><th>Regions</th><th>상태</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -81,12 +107,35 @@ export default function AccountsPage() {
                 <tr key={a.accountId} className="border-t border-ink-100">
                   <td className="py-1.5">{a.alias}{a.isHost && <span className="ml-1 text-ink-400">(host)</span>}</td>
                   <td className="font-mono">{a.accountId}</td>
-                  <td>{a.region}</td>
+                  <td>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {(regionsFor(a.isHost ? 'self' : a.accountId).length ? regionsFor(a.isHost ? 'self' : a.accountId) : [a.region]).map((region) => (
+                        <span key={region} className="rounded border border-ink-100 px-1.5 py-0.5 font-mono text-[10px] text-ink-600">{region}</span>
+                      ))}
+                    </div>
+                  </td>
                   <td><Badge tone={statusTone(a.status)} variant="soft">{a.status}</Badge></td>
                   <td className="text-right">
-                    {!a.isHost && (
-                      <button onClick={() => remove(a.accountId)} className="text-[11px] text-negative-600 hover:underline">제거</button>
-                    )}
+                    <div className="flex justify-end gap-1">
+                      <input
+                        aria-label={`${a.alias} 추가 리전`}
+                        className="w-28 rounded border border-ink-200 px-1.5 py-1 text-[11px]"
+                        placeholder="us-east-1"
+                        value={regionForm[a.accountId] || ''}
+                        onChange={(e) => setRegionForm({ ...regionForm, [a.accountId]: e.target.value.trim() })}
+                      />
+                      <button
+                        aria-label={`${a.alias} 리전 추가`}
+                        onClick={() => addRegion(a.accountId)}
+                        disabled={busy}
+                        className="rounded border border-ink-200 px-2 py-1 text-[11px] text-ink-600 hover:bg-ink-50 disabled:opacity-50"
+                      >
+                        리전 추가
+                      </button>
+                      {!a.isHost && (
+                        <button onClick={() => remove(a.accountId)} className="text-[11px] text-negative-600 hover:underline">제거</button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

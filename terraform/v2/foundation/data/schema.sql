@@ -239,6 +239,18 @@ CREATE TABLE IF NOT EXISTS inventory_resources (
 );
 CREATE INDEX IF NOT EXISTS idx_inventory_type ON inventory_resources(resource_type, account_id);
 
+-- Enabled regional scan targets per account. Account trust metadata is managed by
+-- the additive accounts migration; this baseline keeps the shape idempotent.
+CREATE TABLE IF NOT EXISTS account_regions (
+  account_id  TEXT        NOT NULL,
+  region      TEXT        NOT NULL CHECK (region ~ '^[a-z]{2}-[a-z]+-[0-9]+$'),
+  enabled     BOOLEAN     NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, region)
+);
+CREATE INDEX IF NOT EXISTS idx_account_regions_enabled ON account_regions(account_id, enabled);
+
 -- sync run status (freshness + error surface; one row per (type,account)).
 CREATE TABLE IF NOT EXISTS inventory_sync_runs (
   resource_type TEXT        NOT NULL,

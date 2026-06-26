@@ -27,6 +27,12 @@ describe('nav fold-in to the Integrations hub', () => {
 // source level (rendering Sidebar pulls AccountSelector/providers → too heavy for jsdom).
 describe('collapsible inventory groups', () => {
   const src = read('./Sidebar.tsx');
+  it('mounts the account/region ScopeSelector in the sidebar', () => {
+    expect(src).toContain("from '@/components/shell/ScopeSelector'");
+    expect(src).toContain('<ScopeSelector />');
+    expect(src).not.toContain("from '@/components/shell/AccountSelector'");
+  });
+
   it('drives the grouped nav from navTree() (not the flat inventoryGroups)', () => {
     expect(src).toContain("from '@/lib/inventory-types'");
     expect(src).toMatch(/\bnavTree\(\)/);
