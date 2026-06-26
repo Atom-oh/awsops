@@ -1,8 +1,8 @@
 name: AI Code Review
 
-# PR마다 멀티 AI 패널(Codex + Kiro(opus))이 리뷰하고 Claude Opus 4.8 의장이
+# PR마다 멀티 AI 패널(Codex + Kiro x3)이 리뷰하고 Claude Opus 4.8 의장이
 # 종합해 코멘트로 게시(fail-closed VERDICT). 공유 actions-runner-claude 이미지 사용.
-# (kiro-kimi/kiro-glm 은 헤드리스에서 stdin diff 소비 실패로 빈 응답 → 토큰만 소모해 제외; run-panel.sh 참조)
+# (kiro-cli 는 headless chat 에서 STDIN 을 안 읽음 → diff 를 프롬프트에 임베드해 전달; run-panel.sh 참조)
 #   - pull_request_target base-ref 체크아웃(M1): PR head 코드 미실행, diff 는 데이터로만
 #   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO/ANTIGRAVITY)
 #   - 리전: us-east-1 (Claude us. geo / codex gpt-5.5 bedrock-mantle In-Region)

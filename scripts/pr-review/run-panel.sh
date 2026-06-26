@@ -11,12 +11,17 @@ SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 T="${PANEL_TIMEOUT:-300}"
 RETRIES="${PANEL_RETRIES:-2}"
 PROMPT="$(cat "$PROMPT_FILE")"
-# Panel = codex (GPT-5.5) + kiro-opus (Claude Opus 4.8) → Claude chair. kiro-kimi (Kimi K2.5) and
-# kiro-glm (GLM-5) were dropped: headlessly they consistently failed to consume the stdin diff and
-# returned EMPTY (#102/#104 reviews noted "effective panel = codex + kiro-opus"), so they burned
-# model-runs + retries without ever contributing to the verdict. Re-add a model here only once it
-# reliably produces a usable review headless.
-KIRO_MODELS=("claude-opus-4.8:kiro-opus")
+# ROOT CAUSE (verified by direct test): `kiro-cli chat` IGNORES stdin in headless mode. The panel
+# piped the diff via `< "$DIFF"`, so NO kiro model (opus/kimi/glm) ever received it — they all
+# returned NO_DIFF and were scored empty (this, not the models, is why #102/#104 saw "effective
+# panel = codex only"). Fix: deliver the diff IN the kiro prompt arg (codex DOES read stdin → keeps
+# the redirect). With the diff delivered, all three kiro models produce real reviews, so the full
+# cross-family panel is restored.
+KIRO_PROMPT="$PROMPT
+
+=== DIFF UNDER REVIEW (this is the patch to review) ===
+$(cat "$DIFF")"
+KIRO_MODELS=("claude-opus-4.8:kiro-opus" "kimi-k2.5:kiro-kimi" "glm-5:kiro-glm")
 
 # 한 패널을 최대 $RETRIES 회 실행 — 슬롯이 비면 재시도(transient). 백그라운드로 호출.
 #   try_panel <slot> <err> <cmd...>   (stdin=$DIFF, stdout=slot, stderr=err)
@@ -43,8 +48,8 @@ for entry in "${KIRO_MODELS[@]}"; do
   m="${entry%%:*}"; tag="${entry##*:}"
   if command -v kiro-cli >/dev/null 2>&1; then
     ( try_panel "$SLOT/$tag.md" "$SLOT/$tag.err" \
-        timeout "$T" kiro-cli chat "$PROMPT" --model "$m" \
-        --no-interactive --trust-tools=read,grep --wrap never ) &
+        timeout "$T" kiro-cli chat "$KIRO_PROMPT" --model "$m" \
+        --no-interactive --trust-tools=fs_read ) &
   else echo "[skip] $tag (binary absent)" >&2; : > "$SLOT/$tag.md"; fi
 done
 
