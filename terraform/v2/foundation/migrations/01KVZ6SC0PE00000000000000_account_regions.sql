@@ -11,6 +11,20 @@ CREATE TABLE IF NOT EXISTS account_regions (
   PRIMARY KEY (account_id, region)
 );
 
+-- schema.sql's baseline creates account_regions WITHOUT this FK (the `accounts` table is
+-- migration-managed and absent from the baseline, so the baseline cannot reference it). On a
+-- schema.sql-first install the CREATE above is therefore a no-op and the FK is missing — add it
+-- idempotently here. The accounts migration (smaller ULID) has already run, so `accounts` exists,
+-- and the constraint name matches the inline FK above so the migration-only path is a no-op.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'account_regions_account_id_fkey') THEN
+    ALTER TABLE account_regions
+      ADD CONSTRAINT account_regions_account_id_fkey
+      FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_account_regions_enabled ON account_regions(account_id, enabled);
 
 INSERT INTO account_regions (account_id, region, enabled)

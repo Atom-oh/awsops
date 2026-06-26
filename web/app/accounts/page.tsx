@@ -75,8 +75,10 @@ export default function AccountsPage() {
     } finally { setBusy(false); }
   };
 
+  // account_regions is keyed by the concrete account id (the host included — its real 12-digit id,
+  // not the 'self' alias), so match on it directly.
   const regionsFor = (accountId: string) =>
-    regions.filter((r) => r.enabled && (r.accountId === accountId || (accountId === 'self' && r.accountId === 'self'))).map((r) => r.region);
+    regions.filter((r) => r.enabled && r.accountId === accountId).map((r) => r.region);
 
   if (denied) {
     return (
@@ -109,7 +111,7 @@ export default function AccountsPage() {
                   <td className="font-mono">{a.accountId}</td>
                   <td>
                     <div className="flex flex-wrap items-center gap-1">
-                      {(regionsFor(a.isHost ? 'self' : a.accountId).length ? regionsFor(a.isHost ? 'self' : a.accountId) : [a.region]).map((region) => (
+                      {(regionsFor(a.accountId).length ? regionsFor(a.accountId) : [a.region]).map((region) => (
                         <span key={region} className="rounded border border-ink-100 px-1.5 py-0.5 font-mono text-[10px] text-ink-600">{region}</span>
                       ))}
                     </div>

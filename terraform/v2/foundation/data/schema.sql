@@ -240,7 +240,10 @@ CREATE TABLE IF NOT EXISTS inventory_resources (
 CREATE INDEX IF NOT EXISTS idx_inventory_type ON inventory_resources(resource_type, account_id);
 
 -- Enabled regional scan targets per account. Account trust metadata is managed by
--- the additive accounts migration; this baseline keeps the shape idempotent.
+-- the additive accounts migration; this baseline keeps the shape idempotent. The
+-- account_id FK to accounts(account_id) is intentionally OMITTED here (the `accounts`
+-- table does not exist in this baseline) and is added idempotently by the
+-- account_regions migration once `accounts` has been created.
 CREATE TABLE IF NOT EXISTS account_regions (
   account_id  TEXT        NOT NULL,
   region      TEXT        NOT NULL CHECK (region ~ '^[a-z]{2}-[a-z]+-[0-9]+$'),
