@@ -11,12 +11,14 @@ SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 T="${PANEL_TIMEOUT:-300}"
 RETRIES="${PANEL_RETRIES:-2}"
 PROMPT="$(cat "$PROMPT_FILE")"
-# ROOT CAUSE (verified by direct test): `kiro-cli chat` IGNORES stdin in headless mode. The panel
-# piped the diff via `< "$DIFF"`, so NO kiro model (opus/kimi/glm) ever received it — they all
-# returned NO_DIFF and were scored empty (this, not the models, is why #102/#104 saw "effective
-# panel = codex only"). Fix: deliver the diff IN the kiro prompt arg (codex DOES read stdin → keeps
-# the redirect). With the diff delivered, all three kiro models produce real reviews, so the full
-# cross-family panel is restored.
+# ROOT CAUSE (verified by direct test on the installed kiro-cli 2.9.0): headless `kiro-cli chat`
+# does NOT read STDIN — not even with the EXACT documented pipe pattern (`cat diff | kiro-cli chat
+# --no-interactive "..."`, no extra flags) → it still answers NO_DIFF. The kiro docs say stdin
+# piping works, but this build doesn't honor it. The panel piped the diff via `< "$DIFF"`, so NO
+# kiro model (opus/kimi/glm) ever received it — all returned NO_DIFF and were scored empty (this,
+# not the models, is why #102/#104 ran "codex only"; codex DOES read stdin). Version-robust fix:
+# deliver the diff IN the prompt arg (the positional INPUT is always read). The stdin redirect is
+# kept (harmless) so a runner with a build that DOES read stdin gets it both ways.
 KIRO_PROMPT="$PROMPT
 
 === DIFF UNDER REVIEW (this is the patch to review) ===
@@ -49,7 +51,7 @@ for entry in "${KIRO_MODELS[@]}"; do
   if command -v kiro-cli >/dev/null 2>&1; then
     ( try_panel "$SLOT/$tag.md" "$SLOT/$tag.err" \
         timeout "$T" kiro-cli chat "$KIRO_PROMPT" --model "$m" \
-        --no-interactive --trust-tools=fs_read ) &
+        --no-interactive --trust-tools=read,grep,fs_read ) &
   else echo "[skip] $tag (binary absent)" >&2; : > "$SLOT/$tag.md"; fi
 done
 
