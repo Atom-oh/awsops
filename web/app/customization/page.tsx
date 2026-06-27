@@ -52,16 +52,21 @@ const KNOWLEDGE_ASSETS = [
   ['Skills', '관련 사건/질문에서 선택적으로 로드되는 조사 절차입니다. 예: RDS performance investigation.'],
   ['Memories', '세션에서 학습한 운영 맥락입니다. 현재 안내에서는 읽기/참조 개념으로만 다루고 자동 조치는 연결하지 않습니다.'],
 ] as const;
+// Mirrors the actual generic-webhook contract the ingress route normalizes
+// (web/lib/incident-normalize.ts → normalizeGeneric): severity critical|warning|info,
+// status firing|resolved. Keeping this in sync prevents operators from misconfiguring
+// severity/status. Ingress is flag-gated (INCIDENT_LIFECYCLE_ENABLED, default off).
 const WEBHOOK_SCHEMA = `{
-  eventType: 'incident';
-  incidentId: string;
-  action: 'created' | 'updated' | 'closed' | 'resolved';
-  priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'MINIMAL';
-  title: string;
-  description?: string;
-  timestamp?: string;
-  service?: string;
-  data?: object;
+  title: string;                              // alert name
+  severity: 'critical' | 'warning' | 'info';
+  status: 'firing' | 'resolved';
+  message?: string;                           // or "description"
+  timestamp?: string;                         // ISO 8601
+  labels?: {                                  // service/resource hints
+    service?: string; namespace?: string;
+    instance?: string; pod?: string; node?: string;
+  };
+  annotations?: { summary?: string };
 }`;
 const WEBHOOK_STEPS = [
   'Ensure data schema matches DevOps Agent requirements',
@@ -288,6 +293,10 @@ export default function CustomizationPage() {
               <pre className="max-h-[220px] overflow-auto rounded-md bg-ink-900 p-3 text-[11px] leading-5 text-white">
                 {WEBHOOK_SCHEMA}
               </pre>
+              <p className="text-[11px] leading-4 text-ink-400">
+                Generic webhook contract (normalized by the ingress route). Incident ingress is
+                gated by <code>INCIDENT_LIFECYCLE_ENABLED</code> and is off by default.
+              </p>
             </div>
 
             <div className="space-y-3 rounded-md border border-ink-100 bg-paper p-4">
