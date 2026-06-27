@@ -36,10 +36,12 @@ def test_ecs_service_query_registered_readonly():
 
 # ── Task 9: multi-account scoping ──
 
-def test_rec_account_uses_row_account_else_self():
+def test_rec_account_maps_host_to_self_and_keeps_targets():
     mod = load_sync_lambda()
-    assert mod._rec_account({"account_id": "210987654321"}) == "210987654321"
-    assert mod._rec_account({"account_id": None}) == "self"   # host / SDK rows without account_id
+    mod._ACCOUNT_CACHE["id"] = "111111111111"  # host's real 12-digit id (bypass STS)
+    assert mod._rec_account({"account_id": "210987654321"}) == "210987654321"  # target kept verbatim
+    assert mod._rec_account({"account_id": "111111111111"}) == "self"          # host real id → 'self' sentinel
+    assert mod._rec_account({"account_id": None}) == "self"                    # SDK / host rows w/o column
     assert mod._rec_account({}) == "self"
 
 

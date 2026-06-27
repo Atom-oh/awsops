@@ -488,9 +488,13 @@ def _caller_account():
 
 def _rec_account(rec):
     """The account a synced row belongs to. Under the multi-account aggregator each row carries its
-    own `account_id` (the aws plugin column); SDK syncs / host rows without one fall back to 'self'."""
+    own `account_id` (the aws plugin column). The HOST's real 12-digit id maps back to the 'self'
+    sentinel the rest of the app uses (accounts host row, SDK syncs, readers), so host inventory is
+    not fractured. SDK syncs / rows without the column are host-scoped → 'self'."""
     aid = rec.get("account_id")
-    return str(aid) if aid else "self"
+    if not aid:
+        return "self"
+    return "self" if str(aid) == _caller_account() else str(aid)
 
 
 def _owner_ids_in(adb):
@@ -546,6 +550,11 @@ def sync(resource_type):
                 finally:
                     sdb.close()  # close even if the Steampipe query throws
                 recs = [dict(zip(cols, r)) for r in rows]
+            # EBS snapshots: the OwnerIds IN-list can surface snapshots SHARED into a connection but
+            # owned by another enabled account; keep only those the connection actually OWNS
+            # (owner_id == account_id) so each snapshot is attributed once, to its true owner.
+            if resource_type == "ebs_snapshot":
+                recs = [r for r in recs if str(r.get("owner_id")) == str(r.get("account_id"))]
             seen = set()
             for rec in recs:
                 rid = str(rec.get(id_col))
