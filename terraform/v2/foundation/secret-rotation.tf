@@ -6,12 +6,12 @@
 # Gated; default false -> 0 resources / $0. Worker/sync LAMBDAS are unaffected (they fetch the
 # secret per invocation), so only valueFrom-at-start services need this.
 #
-# POSTURE (M4 — conscious, owner-approved 2026-06-29): this triggers an automatic, ungated
-# `ecs:UpdateService --force-new-deployment` on the host's OWN web service. That is operational
-# SELF-HEALING of a stateless first-party service after a credential rotation — it is NOT AWS-
-# resource mutation of managed/customer infra and NOT the ADR-005 remediation/autonomy substrate
-# (which stays frozen). Blast radius: one rolling restart of one service, IAM scoped to that service
-# ARN, default-off. The owner chose this (EventBridge auto-redeploy) over an app-side re-fetch.
+# POSTURE — ratified by ADR-015 (operational self-healing; see docs/decisions/015-* + BASELINE §2).
+# This triggers an automatic `ecs:UpdateService --force-new-deployment` on the host's OWN web service
+# to recover from Aurora master-secret rotation. ADR-015 scopes this as a category DISTINCT from the
+# ADR-005 frozen mutation/autonomy substrate (which stays frozen): own-service-only, force-new-
+# deployment-only, IAM scoped to one service ARN, secret-id fail-closed, default-off. NOT AWS-resource
+# mutation of managed/customer infra. (The governance record is the ADR, not this comment.)
 
 variable "secret_rotation_redeploy_enabled" {
   type        = bool
