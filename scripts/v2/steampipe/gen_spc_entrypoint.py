@@ -29,6 +29,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from spc_render import render_spc  # noqa: E402
 
 SPC_PATH = os.environ.get("AWS_SPC_PATH", "/home/steampipe/.steampipe/config/aws.spc")
+
+# Read Aurora credentials once at startup and immediately REMOVE them from the process
+# environment. This prevents the master DB credentials from appearing in /proc/1/environ
+# (readable by any process with the same UID, e.g. a compromised Steampipe child). The parsed
+# creds dict lives only in Python heap memory — not in the process environment table (M2
+# partial mitigation; full fix = dedicated steampipe_reader Postgres role, follow-up PR).
+# _steampipe_env() also strips AURORA_SECRET from the subprocess env as a defence-in-depth.
+_AURORA_CREDS: dict = json.loads(os.environ.pop("AURORA_SECRET", "{}") or "{}")
 # Scope watchdog interval. Re-querying Aurora every 5 min keeps the hot Steampipe config in sync
 # with account/region mutations without requiring a full task replacement. Low enough to catch
 # changes within a single sync-lambda cycle; high enough to avoid Aurora connection spam.
@@ -46,7 +54,7 @@ QUERY = (
 
 
 def _connect():
-    creds = json.loads(os.environ["AURORA_SECRET"])
+    creds = _AURORA_CREDS  # module-level cache; AURORA_SECRET was popped from os.environ at startup
     # In-VPC TLS: no RDS CA bundle in this image (mirrors sync_lambda._ssl_ctx). The DB password
     # IS transmitted over this connection; CERT_NONE means in-VPC MITM protection relies on VPC
     # network controls, not certificate verification.
@@ -129,9 +137,14 @@ def _scope_watchdog(
 
 
 def main() -> None:
-    # Pre-flight env check: config errors should fail fast with a clear signal, not spend the
-    # entire retry budget (~22 s) before reporting "Aurora unreachable" (addresses MINOR-5).
-    for var in ("AURORA_SECRET", "AURORA_ENDPOINT", "AURORA_DATABASE"):
+    # Pre-flight config check: fail fast with a clear signal rather than spending the
+    # retry budget (~22 s) before reporting "Aurora unreachable" (addresses MINOR-5).
+    # AURORA_SECRET was already popped from os.environ into _AURORA_CREDS at module load.
+    if not _AURORA_CREDS.get("username") or not _AURORA_CREDS.get("password"):
+        print("[gen-spc] FATAL: AURORA_SECRET env var was not set or contains invalid JSON "
+              "(required: {username, password})", file=sys.stderr)
+        sys.exit(1)
+    for var in ("AURORA_ENDPOINT", "AURORA_DATABASE"):
         if not os.environ.get(var):
             print(f"[gen-spc] FATAL: required env var '{var}' is not set (config error)",
                   file=sys.stderr)
@@ -191,6 +204,10 @@ def main() -> None:
     ).start()
 
     # Supervisor loop: wait for the child process and restart on unexpected exit.
+    # Backoff state prevents a hot-restart loop if steampipe crashes immediately at start
+    # (e.g. bad config, port conflict), which would otherwise spin the CPU and flood logs.
+    rapid_restart_count = 0
+    last_restart_time = 0.0
     while not stop.is_set():
         with proc_lock:
             current = proc_ref[0]
@@ -200,9 +217,19 @@ def main() -> None:
         # Watchdog-initiated restarts terminate the old proc; the new proc is already in proc_ref.
         with proc_lock:
             if proc_ref[0] is current:
-                # Unexpected exit — restart.
-                print(f"[gen-spc] steampipe exited unexpectedly (code {code}) — restarting",
-                      file=sys.stderr)
+                # Unexpected exit — apply exponential backoff for rapid crashes.
+                elapsed = time.time() - last_restart_time
+                if elapsed < 30:
+                    rapid_restart_count += 1
+                    delay = min(2 ** rapid_restart_count, 60)
+                    print(f"[gen-spc] steampipe exited (code {code}) — backoff {delay}s "
+                          f"(rapid restart #{rapid_restart_count})", file=sys.stderr)
+                    time.sleep(delay)
+                else:
+                    rapid_restart_count = 0
+                    print(f"[gen-spc] steampipe exited unexpectedly (code {code}) — restarting",
+                          file=sys.stderr)
+                last_restart_time = time.time()
                 proc_ref[0] = _start_steampipe()
 
 

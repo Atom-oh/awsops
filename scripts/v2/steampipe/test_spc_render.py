@@ -89,9 +89,10 @@ import gen_spc_entrypoint  # noqa: E402
 
 
 def test_steampipe_env_strips_aurora_secret():
-    """AURORA_SECRET must NOT appear in the env passed to the Steampipe subprocess (M1).
-    Steampipe is the network-listening process — if compromised, it must not hold master
-    DB credentials."""
+    """AURORA_SECRET must NOT appear in the env passed to the Steampipe subprocess (M1/M2).
+    Steampipe is the network-listening process — it must never hold master DB credentials.
+    AURORA_SECRET is also popped from os.environ at module startup; this test verifies that
+    _steampipe_env() strips it even if it somehow re-appears in the process environment."""
     with mock.patch.dict(os.environ, {
         "AURORA_SECRET": '{"username":"u","password":"p"}',
         "AURORA_ENDPOINT": "aurora.host",
@@ -100,6 +101,16 @@ def test_steampipe_env_strips_aurora_secret():
         env = gen_spc_entrypoint._steampipe_env()
     assert "AURORA_SECRET" not in env, "master DB creds must not reach the Steampipe subprocess"
     assert "AURORA_ENDPOINT" in env  # non-sensitive env is forwarded normally
+
+
+def test_aurora_secret_removed_from_process_env():
+    """AURORA_SECRET must be removed from the process environment at module load (M2 blast-radius).
+    If the Steampipe subprocess is compromised, /proc/1/environ must not expose master creds."""
+    # The module pops AURORA_SECRET from os.environ at import time; it should not be present now.
+    assert "AURORA_SECRET" not in os.environ, (
+        "AURORA_SECRET must be popped from process env at startup — "
+        "do not leave master DB creds visible in /proc/1/environ"
+    )
 
 
 def test_steampipe_env_forwards_non_sensitive_vars():

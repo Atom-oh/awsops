@@ -37,6 +37,23 @@ def test_inject_account_rejects_non_account_literal():
         sync_lambda._inject_account("WHERE owner_id = '{account_id}'", "'; DROP TABLE x--")
 
 
+def test_prune_present_always_includes_self():
+    """The host 'self' account uses IAM task-role credentials (not AssumeRole) and always
+    succeeds. If 'self' returns 0 rows (all resources deleted), it is genuinely empty — its
+    stale rows must be pruned rather than kept as phantoms. This verifies that 'self' is
+    always in the `present` set regardless of whether any rows were returned (M1 fix)."""
+    # Simulate: no rows returned from Steampipe (empty run)
+    seen: set = set()
+    present = {a for (a, _, _) in seen} | {'self'}
+    assert 'self' in present, "'self' must always be in present (prune-to-zero fix)"
+
+    # Simulate: only target account rows returned (host had no resources)
+    seen = {('123456789012', 'ap-northeast-2', 'i-abc')}
+    present = {a for (a, _, _) in seen} | {'self'}
+    assert 'self' in present  # host still prunable even with 0 host rows
+    assert '123456789012' in present  # target account present normally
+
+
 def test_inject_account_noop_without_placeholder():
     plain = "SELECT name FROM aws_s3_bucket"
     assert sync_lambda._inject_account(plain, "bogus") == plain

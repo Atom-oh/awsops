@@ -576,7 +576,12 @@ def sync(resource_type):
             # errors (e.g. a transient AssumeRole failure), so an account that contributed 0 rows is
             # NOT necessarily empty; pruning it would silently purge its last-good inventory. So we
             # never prune an account absent from `seen` (M5).
-            present = {a for (a, _, _) in seen}
+            #
+            # Exception: the host 'self' connection uses IAM task-role credentials (not AssumeRole)
+            # and therefore always succeeds. Zero rows from 'self' is a genuine empty result, not a
+            # connection failure — always include it in `present` so deleted host resources are
+            # pruned rather than persisting as phantoms forever (prune-to-zero fix, M1).
+            present = {a for (a, _, _) in seen} | {'self'}
             existing = adb.run("SELECT account_id, region, resource_id FROM inventory_resources WHERE resource_type=:t", t=resource_type)
             for acct, rg, rid in existing:
                 if str(acct) in present and (str(acct), str(rg), str(rid)) not in seen:
