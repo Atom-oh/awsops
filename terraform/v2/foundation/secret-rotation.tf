@@ -57,7 +57,9 @@ resource "aws_iam_role_policy" "secret_rotation_redeploy" {
   role  = aws_iam_role.secret_rotation_redeploy[0].id
   policy = jsonencode({
     Version = "2012-10-17"
-    # Scoped to the specific web service ARN — force-new-deployment only, no other ECS mutation.
+    # Scoped to the web service ARN only — force-new-deployment, no other ECS mutation. NOTE: this
+    # MUST stay in lockstep with local.srr_services (single service today). If srr_services grows
+    # (e.g. steampipe), extend this Resource to those service ARNs or the extra ones get AccessDenied.
     Statement = [{
       Effect   = "Allow"
       Action   = ["ecs:UpdateService", "ecs:DescribeServices"]

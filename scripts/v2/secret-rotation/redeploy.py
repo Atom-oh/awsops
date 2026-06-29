@@ -29,10 +29,17 @@ def handler(event, context):
     services = [s for s in os.environ.get("SERVICES", "").split(",") if s]
     want = os.environ.get("AURORA_SECRET_ARN", "")
     got = _event_secret_id(event)
-    # Confirm this is the Aurora master secret (the rule matches RotationSucceeded broadly). If the
-    # event carries an id that ISN'T ours, skip; if the id is absent, fall through (don't risk
-    # missing the rotation we exist to handle).
-    if got and want and got not in want and want not in got:
+    # FAIL-CLOSED: the rule matches RotationSucceeded broadly (across accounts/secrets), so redeploy
+    # ONLY when we positively confirm this is the Aurora master secret. The Aurora RDS-managed
+    # rotation event carries the id in additionalEventData.SecretId; if we can't identify the secret,
+    # or it isn't ours, SKIP (never restart prod web on an unrelated secret's rotation). A WARN log
+    # surfaces the unparsed shape so the field path can be corrected.
+    if not got:
+        import sys
+        print(f"[secret-rotation-redeploy] WARN: rotated secret id not found in event detail keys "
+              f"{list((event.get('detail') or {}).keys())} — SKIPPING (fail-closed)", file=sys.stderr)
+        return {"skipped": "unidentified-secret"}
+    if want and got not in want and want not in got:
         print(f"[secret-rotation-redeploy] ignoring rotation of {got} (not the Aurora master secret)")
         return {"skipped": got}
     ecs = boto3.client("ecs")
