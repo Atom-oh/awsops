@@ -1,4 +1,7 @@
--- v1 all-region parity: a per-account flag meaning "scan every region" (Steampipe regions=["*"]).
--- A '*' value is invalid for account_regions.region (CHECK rejects it), so the flag lives on accounts.
--- Default true → a freshly-registered account scans all regions, matching v1 Steampipe regions=["*"].
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS all_regions boolean NOT NULL DEFAULT true;
+-- Per-account flag meaning "scan every region" (Steampipe regions=["*"]). A '*' value is invalid
+-- for account_regions.region (CHECK rejects it), so the flag lives on accounts.
+-- DEFAULT false (M1): adding this column must NOT flip accounts that already chose explicit regions
+-- (PR #108/#109 selector) into unbounded all-region scans, and there is no all_regions toggle UI yet.
+-- false → listScanScope() uses the account's explicit enabled account_regions; opt into all-region
+-- scanning explicitly (set all_regions=true) once a toggle ships.
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS all_regions boolean NOT NULL DEFAULT false;

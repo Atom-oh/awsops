@@ -12,8 +12,11 @@ PLUGIN = "aws@0.142.0"
 
 
 def _hcl(s) -> str:
-    """Quote + escape a string for HCL (backslash first, then double-quote)."""
-    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    """Quote + escape a string for HCL. json.dumps gives a valid double-quoted literal with full
+    escaping (backslash, quote, AND control chars like newline/tab) — HCL string escaping is
+    JSON-compatible, so a stray newline/control char in e.g. external_id can't break aws.spc."""
+    import json
+    return json.dumps(str(s))
 
 
 def _regions_list(regions) -> str:

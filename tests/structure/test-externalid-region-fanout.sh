@@ -4,7 +4,8 @@
 cd "$(dirname "$0")/../.."
 
 pass() { echo "ok - $1"; }
-fail() { echo "not ok - $1"; }
+FAILS=0
+fail() { echo "not ok - $1"; FAILS=$((FAILS+1)); }
 
 echo "# externalId-optional + region-fanout structure"
 
@@ -16,3 +17,5 @@ if grep -rqlE "DROP CONSTRAINT IF EXISTS external_id_required_for_target" "$MIG"
 else
   fail "migration drops external_id_required_for_target"
 fi
+
+[ "$FAILS" -eq 0 ] || exit 1

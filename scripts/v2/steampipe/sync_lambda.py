@@ -529,6 +529,11 @@ def sync(resource_type):
         if not got[0][0]:
             return {"status": "busy", "type": resource_type}
         try:
+            # NOTE (M4): inventory_sync_runs is a JOB-LEVEL ledger — one row per resource_type keyed
+            # under the host 'self' sentinel, tracking the aggregator run's status/row_count. It is
+            # intentionally NOT per-account: a single aggregator run covers every connected account at
+            # once. Per-account freshness is the captured_at on each inventory_resources row (which IS
+            # keyed by real account_id), so no per-account state is lost.
             # mark running INSIDE the try so a throw here records 'failed' and the finally still unlocks
             adb.run("INSERT INTO inventory_sync_runs (resource_type, status, started_at, finished_at, row_count, error) "
                     "VALUES (:t,'running',now(),NULL,NULL,NULL) "
@@ -566,10 +571,15 @@ def sync(resource_type):
                         "ON CONFLICT (resource_type, account_id, region, resource_id) "
                         "DO UPDATE SET data=:d::jsonb, captured_at=now()",
                         t=resource_type, acct=acct, rg=region, id=rid, d=json.dumps(rec, default=str))
-            # delete stale rows of this type (across ALL accounts) not in the latest run
+            # Delete stale rows of this type — but ONLY within accounts that actually contributed
+            # rows in THIS run. A Steampipe aggregator returns PARTIAL results when one connection
+            # errors (e.g. a transient AssumeRole failure), so an account that contributed 0 rows is
+            # NOT necessarily empty; pruning it would silently purge its last-good inventory. So we
+            # never prune an account absent from `seen` (M5).
+            present = {a for (a, _, _) in seen}
             existing = adb.run("SELECT account_id, region, resource_id FROM inventory_resources WHERE resource_type=:t", t=resource_type)
             for acct, rg, rid in existing:
-                if (str(acct), str(rg), str(rid)) not in seen:
+                if str(acct) in present and (str(acct), str(rg), str(rid)) not in seen:
                     adb.run("DELETE FROM inventory_resources WHERE resource_type=:t AND account_id=:acct AND region=:rg AND resource_id=:id",
                             t=resource_type, acct=acct, rg=rg, id=rid)
             adb.run("UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), row_count=:n, error=NULL "

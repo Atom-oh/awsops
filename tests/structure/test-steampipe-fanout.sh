@@ -4,7 +4,8 @@
 cd "$(dirname "$0")/../.."
 
 pass() { echo "ok - $1"; }
-fail() { echo "not ok - $1"; }
+FAILS=0
+fail() { echo "not ok - $1"; FAILS=$((FAILS+1)); }
 
 echo "# Steampipe fan-out terraform wiring"
 
@@ -28,3 +29,5 @@ grep -Eq 'sts:AssumeRole' "$SP" && grep -Eq 'role/AWSopsReadOnlyRole' "$SP" \
 grep -q 'aws_security_group.steampipe' "$DT" \
   && pass "Aurora SG ingress from the steampipe SG" \
   || fail "Aurora SG ingress from the steampipe SG"
+
+[ "$FAILS" -eq 0 ] || exit 1

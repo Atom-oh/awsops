@@ -18,7 +18,7 @@
 - Modify: `docs/decisions/011-multi-account.md`
 - Modify: `docs/decisions/BASELINE.md`
 
-- [ ] Modify `docs/decisions/011-multi-account.md`: state ExternalId is OPTIONAL for 1st-party accounts whose target trust policy **pins the exact AWSops task-role ARN** (never account-root/org/wildcard); REQUIRED for 3rd-party/shared/wildcard principals. Keep the confused-deputy rationale. Include both trust-policy variants inline (no CFN onboarding template exists in-repo, so the ADR is the canonical guidance) and state the 1st/3rd-party distinction is **administrative (trust-policy-enforced), not code-enforced**.
+- [ ] Modify `docs/decisions/011-multi-account.md`: state ExternalId is OPTIONAL for 1st-party accounts whose target trust policy **pins the exact AWSops task-role ARN** (never account-root/org/wildcard); REQUIRED for 3rd-party/shared/wildcard principals. Keep the confused-deputy rationale. Include both trust-policy variants inline (the in-repo CFN template (infra/cfn/awsops-target-account-role.yaml) is updated to make ExternalId optional + trust both host task roles) and state the 1st/3rd-party distinction is **administrative (trust-policy-enforced), not code-enforced**.
 - [ ] Modify `docs/decisions/BASELINE.md`: update the ExternalId line in the invariant/register to match (anti-drift).
 - [ ] Doc-only task (`test_required:false`): verify both files mention "1st-party", "optional", and "pins … task-role ARN", and stay internally consistent.
 
@@ -75,10 +75,10 @@
 > `region ~ '^[a-z]{2}-[a-z]+-[0-9]+$'`. Use a boolean **`all_regions` column on
 > `accounts`** (NOT a sentinel region row), which needs a migration.
 
-- [ ] Create migration `…_accounts_all_regions.sql`: `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS all_regions boolean NOT NULL DEFAULT true;` (idempotent); reflect in `data/schema.sql`.
+- [ ] Create migration `…_accounts_all_regions.sql`: `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS all_regions boolean NOT NULL DEFAULT false;` (M1: do not flip existing explicit-region accounts) (idempotent); reflect in `data/schema.sql`.
 - [ ] Add failing tests in `web/lib/account-regions.test.ts`: `listScanScope()` returns `["*"]` when `accounts.all_regions` is true, the explicit enabled `account_regions` set when false, and **skips** an account with `all_regions=false` and an empty enabled set (not `["*"]`).
 - [ ] Run `npm test -- lib/account-regions.test.ts --run`; confirm failure.
-- [ ] Modify `web/lib/account-regions.ts`: add `listScanScope()` reading the `all_regions` flag; a freshly-registered account defaults to `all_regions=true`.
+- [ ] Modify `web/lib/account-regions.ts`: add `listScanScope()` reading the `all_regions` flag; all_regions defaults to false (explicit opt-in); existing explicit account_regions selections are preserved.
 - [ ] Re-run; confirm pass.
 
 ### Task 7: Steampipe render_spc + entrypoint + Dockerfile

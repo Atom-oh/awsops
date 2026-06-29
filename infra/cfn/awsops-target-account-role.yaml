@@ -1,43 +1,56 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   AWSops cross-account read-only role. Deploy this in each TARGET account you want AWSops to read
-  (cost, Bedrock metrics, inventory, etc.). The host AWSops web task role assumes this role via STS
-  with an ExternalId (confused-deputy guard). Read-only only (ReadOnlyAccess) — AWSops never mutates
-  target-account resources.
+  (cost, Bedrock metrics, inventory, etc.). The host AWSops task roles assume this role via STS.
+  ExternalId is OPTIONAL (ADR-011 amended 2026-06-26): omit it for 1st-party accounts — trust is
+  pinned to the exact host task-role ARNs; supply it for 3rd-party/shared accounts. Read-only only
+  (ReadOnlyAccess) — AWSops never mutates target-account resources.
 
 Parameters:
-  HostTaskRoleArn:
-    Type: String
-    Description: ARN of the AWSops host web ECS task role (the ONLY principal allowed to assume this role).
-    AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
+  HostTaskRoleArns:
+    Type: CommaDelimitedList
+    Description: >
+      ARNs of the host AWSops task roles allowed to assume this role — BOTH the web task role
+      (registration/verify) AND the steampipe task role (inventory fan-out), e.g.
+      arn:aws:iam::<host>:role/awsops-v2-task,arn:aws:iam::<host>:role/awsops-v2-steampipe-task
   ExternalId:
     Type: String
-    Description: Shared ExternalId (confused-deputy guard). Use the same value you register in AWSops /accounts.
-    MinLength: 8
+    Default: ''
+    Description: >
+      OPTIONAL shared ExternalId (confused-deputy guard). Leave EMPTY for 1st-party accounts — trust
+      is already pinned to the host task-role ARNs above. REQUIRED for 3rd-party/shared accounts:
+      set the same value you register in AWSops /accounts.
     NoEcho: true
   RoleName:
     Type: String
     Default: AWSopsReadOnlyRole
     Description: Role name AWSops expects (keep the default unless you override role_name in /accounts).
 
+Conditions:
+  HasExternalId: !Not [!Equals [!Ref ExternalId, '']]
+
 Resources:
   AWSopsReadOnlyRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Ref RoleName
-      Description: AWSops cross-account read-only access (assumed by the host web task role).
+      Description: AWSops cross-account read-only access (assumed by the host web + steampipe task roles).
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              # ONLY the host web task role — NOT the host account root (least privilege).
-              AWS: !Ref HostTaskRoleArn
+              # ONLY the host task roles (web + steampipe) — NOT the host account root (least privilege).
+              AWS: !Ref HostTaskRoleArns
             Action: 'sts:AssumeRole'
-            Condition:
-              StringEquals:
-                'sts:ExternalId': !Ref ExternalId
+            # 1st-party (no ExternalId): the exact-ARN principal pin IS the confused-deputy guard.
+            # 3rd-party: add the ExternalId StringEquals condition.
+            Condition: !If
+              - HasExternalId
+              - StringEquals:
+                  'sts:ExternalId': !Ref ExternalId
+              - !Ref 'AWS::NoValue'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/ReadOnlyAccess
 

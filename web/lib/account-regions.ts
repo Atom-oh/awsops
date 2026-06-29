@@ -54,8 +54,9 @@ export interface AccountScanScope {
 
 /**
  * Per-enabled-account scan scope for the inventory fan-out. `accounts.all_regions` → `["*"]`;
- * otherwise the account's enabled `account_regions`. An account that is NOT all-regions and has
- * NO enabled regions is **skipped** (never expanded to `["*"]`).
+ * otherwise the account's explicit enabled `account_regions`. An account that is NOT all-regions
+ * and has NO enabled regions is **skipped** (never expanded to `["*"]`). `all_regions` defaults to
+ * false (M1) so existing explicit-region selections are preserved; it is an explicit opt-in.
  */
 export async function listScanScope(): Promise<AccountScanScope[]> {
   const { rows } = await getPool().query(
