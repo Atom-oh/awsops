@@ -14,8 +14,16 @@ RUN steampipe plugin install "ghcr.io/turbot/steampipe/plugins/turbot/aws:0.142.
  && cp -a "$P/ghcr.io/turbot/steampipe/plugins/turbot/aws@0.142.0" "$P/hub.steampipe.io/plugins/turbot/aws@0.142.0" \
  && sed -i 's#ghcr.io/turbot/steampipe/plugins/turbot/aws#hub.steampipe.io/plugins/turbot/aws#g' "$P/versions.json" \
  && rm -rf "$P/ghcr.io"
-# aws.spc = version-pinned connection (plugin = "aws@0.142.0") + default cred chain (Fargate task role)
-COPY --chown=steampipe:0 aws.spc /home/steampipe/.steampipe/config/aws.spc
+# Boot-time aws.spc generator: query Aurora (accounts ⋈ account_regions / all_regions) → render a
+# per-account/region connection config + aggregator. Needs python3 + pg8000.
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pip \
+ && (pip3 install --no-cache-dir --break-system-packages pg8000==1.31.2 || pip3 install --no-cache-dir pg8000==1.31.2) \
+ && rm -rf /var/lib/apt/lists/*
+COPY --chown=steampipe:0 spc_render.py gen_spc_entrypoint.py /app/
+USER steampipe
 EXPOSE 9193
-# network listener so the in-VPC sync Lambda can reach it; password via env STEAMPIPE_DATABASE_PASSWORD
-ENTRYPOINT ["steampipe", "service", "start", "--database-listen", "network", "--database-port", "9193", "--foreground"]
+# Entrypoint generates aws.spc from Aurora, then exec's `steampipe service start` (network listener
+# so the in-VPC sync Lambda can reach it; password via env STEAMPIPE_DATABASE_PASSWORD).
+ENTRYPOINT ["python3", "/app/gen_spc_entrypoint.py"]

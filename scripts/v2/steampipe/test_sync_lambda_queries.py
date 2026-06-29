@@ -32,3 +32,36 @@ def test_ecs_service_query_registered_readonly():
     ]:
         assert col in sql
     assert "service_arn" not in sql
+
+
+# ── Task 9: multi-account scoping ──
+
+def test_rec_account_maps_host_to_self_and_keeps_targets():
+    mod = load_sync_lambda()
+    mod._ACCOUNT_CACHE["id"] = "111111111111"  # host's real 12-digit id (bypass STS)
+    assert mod._rec_account({"account_id": "210987654321"}) == "210987654321"  # target kept verbatim
+    assert mod._rec_account({"account_id": "111111111111"}) == "self"          # host real id → 'self' sentinel
+    assert mod._rec_account({"account_id": None}) == "self"                    # SDK / host rows w/o column
+    assert mod._rec_account({}) == "self"
+
+
+def test_ebs_snapshot_pushdown_is_multi_account_in_list():
+    mod = load_sync_lambda()
+    sql, id_col, region_col = mod.QUERIES["ebs_snapshot"]
+    # no longer a single host literal; an OwnerIds IN-list rendered from enabled accounts
+    assert "owner_id IN ({owner_ids})" in sql
+    assert "= '{account_id}'" not in sql
+
+
+def test_owner_ids_in_includes_host_and_targets_validated():
+    mod = load_sync_lambda()
+    mod._ACCOUNT_CACHE["id"] = "111111111111"  # bypass STS (host caller)
+
+    class FakeAdb:
+        def run(self, *a, **k):
+            return [("210987654321",), ("310987654321",), ("self",), ("bad",)]
+
+    clause = mod._owner_ids_in(FakeAdb())
+    assert "'111111111111'" in clause   # host real id
+    assert "'210987654321'" in clause and "'310987654321'" in clause
+    assert "'self'" not in clause and "'bad'" not in clause   # non-12-digit excluded

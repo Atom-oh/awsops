@@ -12,11 +12,10 @@ def test_ebs_snapshot_registered_with_literal_owner_pushdown():
     assert "ebs_snapshot" in sync_lambda._ALLOWED
     sql, id_col, region_col = sync_lambda.QUERIES["ebs_snapshot"]
     assert "aws_ebs_snapshot" in sql
-    # The owner_id qual MUST be a LITERAL constant for Steampipe to push OwnerIds=self down to
-    # DescribeSnapshots. A subquery/bound-param qual is evaluated by the FDW at execution time
-    # and does NOT push down → Steampipe would fetch every public AWS snapshot (throttle/OOM).
-    # So the query carries a {account_id} placeholder that sync() renders to a literal.
-    assert "owner_id = '{account_id}'" in sql
+    # owner_id MUST be LITERAL constants for OwnerIds pushdown to DescribeSnapshots. Under the
+    # multi-account aggregator a single host literal would miss target accounts, so the query
+    # carries an {owner_ids} placeholder sync() renders to the IN-list of all enabled accounts.
+    assert "owner_id IN ({owner_ids})" in sql
     assert "aws_caller_identity" not in sql  # subquery form removed (would not push down)
     for col in ("volume_id", "volume_size", "state", "encrypted", "start_time"):
         assert col in sql, col
@@ -25,8 +24,8 @@ def test_ebs_snapshot_registered_with_literal_owner_pushdown():
 
 
 def test_inject_account_embeds_literal():
-    sql = sync_lambda.QUERIES["ebs_snapshot"][0]
-    rendered = sync_lambda._inject_account(sql, "123456789012")
+    # _inject_account still renders a validated single-account literal for any {account_id} template.
+    rendered = sync_lambda._inject_account("WHERE owner_id = '{account_id}'", "123456789012")
     assert "owner_id = '123456789012'" in rendered
     assert "{account_id}" not in rendered
 
