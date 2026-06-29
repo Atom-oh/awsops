@@ -33,14 +33,20 @@ export async function POST(request: Request) {
   const alias = String(body?.alias ?? '').trim();
   const region = String(body?.region ?? '').trim() || REGION;
   const externalId = String(body?.externalId ?? '').trim();
+  const firstParty = body?.firstParty === true;
   // Hard-pinned to match the host task-role IAM (Resource scoped to .../AWSopsReadOnlyRole).
   // A custom roleName would fail-closed on assume, so we do not honor body.roleName.
   const roleName = 'AWSopsReadOnlyRole';
 
   if (!validateAccountId(accountId)) return err('accountId must be 12 digits', 400);
   if (!alias) return err('alias is required', 400);
-  // ExternalId is OPTIONAL (ADR-011 amended 2026-06-26): omit it for 1st-party accounts whose
-  // target trust policy pins this task-role ARN; supply it for 3rd-party (trust enforces it).
+  // ExternalId is OPTIONAL only as an EXPLICIT per-account choice (ADR-011 amended 2026-06-26):
+  // omitting it requires firstParty=true, asserting the target trust pins THIS task-role ARN
+  // (not account-root/org/wildcard). Without an ExternalId AND without that explicit confirmation
+  // we refuse — so 3rd-party accounts are never silently onboarded without the confused-deputy guard.
+  if (!externalId && !firstParty) {
+    return err('externalId required — or set firstParty=true to confirm a 1st-party account whose target trust pins the AWSops task-role ARN', 400);
+  }
 
   // Test-assume the target role, then confirm the assumed identity IS the submitted account.
   try {

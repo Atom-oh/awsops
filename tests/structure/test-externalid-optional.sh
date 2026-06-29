@@ -1,5 +1,5 @@
 #!/bin/bash
-# Static checks for the externalId-optional + region-fanout feature.
+# Static checks for the externalId-optional feature (Gap 1).
 # (DB-behavior + terraform-apply are verified at deploy; these are runnable structure asserts.)
 cd "$(dirname "$0")/../.."
 
@@ -7,7 +7,7 @@ pass() { echo "ok - $1"; }
 FAILS=0
 fail() { echo "not ok - $1"; FAILS=$((FAILS+1)); }
 
-echo "# externalId-optional + region-fanout structure"
+echo "# externalId-optional structure"
 
 MIG=terraform/v2/foundation/migrations
 

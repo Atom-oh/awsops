@@ -77,8 +77,14 @@ describe('POST /api/accounts', () => {
     expect((await POST(req('POST'))).status).toBe(400);
     expect(query).not.toHaveBeenCalled();
   });
-  it('200 without externalId (1st-party) → inserts external_id NULL, assume omits ExternalId', async () => {
+  it('400 without externalId AND without firstParty (no silent confused-deputy bypass)', async () => {
     readJsonBounded.mockResolvedValue({ accountId: TARGET, alias: 'Prod', region: 'ap-northeast-2' });
+    const { POST } = await import('./route');
+    expect((await POST(req('POST'))).status).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+  });
+  it('200 without externalId when firstParty=true → inserts external_id NULL, assume omits ExternalId', async () => {
+    readJsonBounded.mockResolvedValue({ accountId: TARGET, alias: 'Prod', region: 'ap-northeast-2', firstParty: true });
     const sts = await import('@aws-sdk/client-sts');
     const { POST } = await import('./route');
     const res = await POST(req('POST'));

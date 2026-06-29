@@ -7,7 +7,7 @@ Description: >
   (ReadOnlyAccess) — AWSops never mutates target-account resources.
 
 Parameters:
-  HostWebTaskRoleArn:
+  HostTaskRoleArn:
     Type: String
     Description: ARN of the AWSops host WEB task role (registration/verify + read), e.g. arn:aws:iam::<host>:role/awsops-v2-task
     AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
@@ -44,7 +44,7 @@ Resources:
               # ONLY the host web task role, ARN-validated — NOT account root (least privilege).
               # (The steampipe task role is added by the multi-account inventory fan-out PR, which
               # also grants it the source-side sts:AssumeRole — kept together there for consistency.)
-              AWS: !Ref HostWebTaskRoleArn
+              AWS: !Ref HostTaskRoleArn
             Action: 'sts:AssumeRole'
             # 1st-party (no ExternalId): the exact-ARN principal pin IS the confused-deputy guard.
             # 3rd-party: add the ExternalId StringEquals condition.

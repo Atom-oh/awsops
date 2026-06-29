@@ -23,7 +23,7 @@ export default function AccountsPage() {
   const [denied, setDenied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
-  const [form, setForm] = useState({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '' });
+  const [form, setForm] = useState({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '', firstParty: false });
   const [regionForm, setRegionForm] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
@@ -45,7 +45,7 @@ export default function AccountsPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setMsg(`실패: ${d.message || r.status}`); return; }
-      setMsg('등록·검증 완료'); setForm({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '' });
+      setMsg('등록·검증 완료'); setForm({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '', firstParty: false });
       await load();
     } finally { setBusy(false); }
   };
@@ -154,6 +154,10 @@ export default function AccountsPage() {
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value.trim() })} />
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="ExternalId (optional, 1st-party)" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
         </div>
+        <label className="flex items-center gap-2 text-[11px] text-ink-500">
+          <input type="checkbox" checked={form.firstParty} onChange={(e) => setForm({ ...form, firstParty: e.target.checked })} />
+          1st-party 계정 (ExternalId 생략) — 대상 trust가 호스트 task-role ARN을 정확히 핀할 때만. 3rd-party는 ExternalId 필수.
+        </label>
         <div className="flex items-center gap-3">
           <button onClick={add} disabled={busy} className="self-start rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
             {busy ? '검증 중…' : '추가 + 검증'}
