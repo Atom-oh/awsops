@@ -12,9 +12,29 @@ import os
 import boto3
 
 
+def _event_secret_id(event):
+    """The rotated secret's id/ARN — the field path varies across event shapes, so try each."""
+    d = event.get("detail", {}) or {}
+    for path in (("additionalEventData", "SecretId"), ("serviceEventDetails", "secretId"), ("requestParameters", "secretId")):
+        v = d
+        for k in path:
+            v = v.get(k) if isinstance(v, dict) else None
+        if v:
+            return str(v)
+    return None
+
+
 def handler(event, context):
     cluster = os.environ["CLUSTER"]
     services = [s for s in os.environ.get("SERVICES", "").split(",") if s]
+    want = os.environ.get("AURORA_SECRET_ARN", "")
+    got = _event_secret_id(event)
+    # Confirm this is the Aurora master secret (the rule matches RotationSucceeded broadly). If the
+    # event carries an id that ISN'T ours, skip; if the id is absent, fall through (don't risk
+    # missing the rotation we exist to handle).
+    if got and want and got not in want and want not in got:
+        print(f"[secret-rotation-redeploy] ignoring rotation of {got} (not the Aurora master secret)")
+        return {"skipped": got}
     ecs = boto3.client("ecs")
     redeployed = []
     for svc in services:

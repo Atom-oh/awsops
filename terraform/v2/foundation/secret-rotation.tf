@@ -5,6 +5,13 @@
 # EventBridge(Secrets Manager RotationSucceeded) -> Lambda -> ecs:UpdateService force-new-deployment.
 # Gated; default false -> 0 resources / $0. Worker/sync LAMBDAS are unaffected (they fetch the
 # secret per invocation), so only valueFrom-at-start services need this.
+#
+# POSTURE (M4 — conscious, owner-approved 2026-06-29): this triggers an automatic, ungated
+# `ecs:UpdateService --force-new-deployment` on the host's OWN web service. That is operational
+# SELF-HEALING of a stateless first-party service after a credential rotation — it is NOT AWS-
+# resource mutation of managed/customer infra and NOT the ADR-005 remediation/autonomy substrate
+# (which stays frozen). Blast radius: one rolling restart of one service, IAM scoped to that service
+# ARN, default-off. The owner chose this (EventBridge auto-redeploy) over an app-side re-fetch.
 
 variable "secret_rotation_redeploy_enabled" {
   type        = bool
@@ -64,6 +71,7 @@ resource "aws_lambda_function" "secret_rotation_redeploy" {
   function_name    = "${var.project}-secret-rotation-redeploy"
   role             = aws_iam_role.secret_rotation_redeploy[0].arn
   runtime          = "python3.12"
+  architectures    = ["arm64"] # repo convention (all v2 Lambdas are arm64)
   handler          = "redeploy.handler"
   filename         = data.archive_file.secret_rotation_redeploy[0].output_path
   source_code_hash = data.archive_file.secret_rotation_redeploy[0].output_base64sha256
@@ -73,23 +81,33 @@ resource "aws_lambda_function" "secret_rotation_redeploy" {
     variables = {
       CLUSTER  = aws_ecs_cluster.main.name
       SERVICES = local.srr_services
+      # the handler re-checks the rotated secret id against this before redeploying, so the
+      # EventBridge rule can match RotationSucceeded broadly (M2 — secret-id event path varies).
+      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
     }
   }
 }
 
-# Secrets Manager RotationSucceeded for the Aurora master secret (via CloudTrail). Both detail-types
-# are matched for robustness; additionalEventData.SecretId scopes it to the Aurora secret only.
+# Secrets Manager RotationSucceeded → redeploy. We match the event BROADLY (any RotationSucceeded)
+# and let the Lambda confirm the secret id == AURORA_SECRET_ARN, because the secret id arrives under
+# different keys across event shapes (additionalEventData.SecretId / serviceEventDetails.secretId /
+# requestParameters.secretId) — over-constraining the pattern risks a silent miss (M2).
+#
+# ⚠️ DEPENDENCY (M1): EventBridge only receives `RotationSucceeded` when a CloudTrail trail logging
+# management events exists in this account+region (Secrets Manager has NO native non-CloudTrail
+# rotation event). The org/account is expected to have one (the v2 agent reads CloudTrail). If no
+# trail exists, this rule never fires and the rotation outage recurs — create/verify a trail before
+# enabling. Not auto-created here (a trail is shared account-wide infra, owned elsewhere).
 resource "aws_cloudwatch_event_rule" "aurora_secret_rotated" {
   count       = local.srr
   name        = "${var.project}-aurora-secret-rotated"
-  description = "Aurora master secret rotation -> redeploy valueFrom-at-start services"
+  description = "Secrets Manager RotationSucceeded -> redeploy valueFrom-at-start services (Lambda filters by secret id)"
   event_pattern = jsonencode({
     source        = ["aws.secretsmanager"]
     "detail-type" = ["AWS Service Event via CloudTrail", "AWS API Call via CloudTrail"]
     detail = {
-      eventSource         = ["secretsmanager.amazonaws.com"]
-      eventName           = ["RotationSucceeded"]
-      additionalEventData = { SecretId = [aws_rds_cluster.aurora.master_user_secret[0].secret_arn] }
+      eventSource = ["secretsmanager.amazonaws.com"]
+      eventName   = ["RotationSucceeded"]
     }
   })
 }
