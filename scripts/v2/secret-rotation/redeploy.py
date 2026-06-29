@@ -8,8 +8,17 @@ start fresh tasks that re-read the rotated secret. Read-only toward AWS resource
 rolling restart of the named services.
 """
 import os
+import re
 
 import boto3
+
+
+def _secret_key(arn_or_name):
+    """Canonical secret key: the name after ':secret:' with the SM random `-XXXXXX` suffix stripped.
+    Lets us compare an event id (ARN or name, with/without suffix) to AURORA_SECRET_ARN exactly,
+    without substring false-matches."""
+    name = str(arn_or_name).split(":secret:")[-1]
+    return re.sub(r"-[A-Za-z0-9]{6}$", "", name)
 
 
 def _event_secret_id(event):
@@ -27,19 +36,21 @@ def _event_secret_id(event):
 def handler(event, context):
     cluster = os.environ["CLUSTER"]
     services = [s for s in os.environ.get("SERVICES", "").split(",") if s]
-    want = os.environ.get("AURORA_SECRET_ARN", "")
+    import sys
+    want = os.environ.get("AURORA_SECRET_ARN", "").strip()
     got = _event_secret_id(event)
-    # FAIL-CLOSED: the rule matches RotationSucceeded broadly (across accounts/secrets), so redeploy
-    # ONLY when we positively confirm this is the Aurora master secret. The Aurora RDS-managed
-    # rotation event carries the id in additionalEventData.SecretId; if we can't identify the secret,
-    # or it isn't ours, SKIP (never restart prod web on an unrelated secret's rotation). A WARN log
-    # surfaces the unparsed shape so the field path can be corrected.
+    # FAIL-CLOSED: redeploy ONLY when we positively confirm this is the Aurora master secret (the rule
+    # matches RotationSucceeded broadly across accounts/secrets). Skip — never restart prod web — if
+    # the target secret is unconfigured, the event id is missing, or it doesn't match EXACTLY (by
+    # canonical key; no substring matching). Each skip logs WARN so a wrong event shape is visible.
+    if not want:
+        print("[secret-rotation-redeploy] WARN: AURORA_SECRET_ARN unset — SKIPPING (fail-closed)", file=sys.stderr)
+        return {"skipped": "no-target-configured"}
     if not got:
-        import sys
-        print(f"[secret-rotation-redeploy] WARN: rotated secret id not found in event detail keys "
+        print(f"[secret-rotation-redeploy] WARN: rotated secret id not in event detail keys "
               f"{list((event.get('detail') or {}).keys())} — SKIPPING (fail-closed)", file=sys.stderr)
         return {"skipped": "unidentified-secret"}
-    if want and got not in want and want not in got:
+    if _secret_key(got) != _secret_key(want):
         print(f"[secret-rotation-redeploy] ignoring rotation of {got} (not the Aurora master secret)")
         return {"skipped": got}
     ecs = boto3.client("ecs")

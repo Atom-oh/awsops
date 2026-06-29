@@ -57,9 +57,11 @@ resource "aws_iam_role_policy" "secret_rotation_redeploy" {
   role  = aws_iam_role.secret_rotation_redeploy[0].id
   policy = jsonencode({
     Version = "2012-10-17"
-    # Scoped to the web service ARN only — force-new-deployment, no other ECS mutation. NOTE: this
-    # MUST stay in lockstep with local.srr_services (single service today). If srr_services grows
-    # (e.g. steampipe), extend this Resource to those service ARNs or the extra ones get AccessDenied.
+    # Scoped to the web service ARN only. NOTE: this grants full ecs:UpdateService on that ONE
+    # service — there is no IAM condition key to restrict it to forceNewDeployment, so
+    # "force-new-deployment-only" is enforced by the LAMBDA's behavior, not by IAM. The remaining
+    # control is the tight resource scope (one own service) + the Lambda being the only caller.
+    # MUST stay in lockstep with local.srr_services (single service today); extend Resource if it grows.
     Statement = [{
       Effect   = "Allow"
       Action   = ["ecs:UpdateService", "ecs:DescribeServices"]
