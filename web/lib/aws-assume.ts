@@ -1,7 +1,8 @@
 // Cross-account credential helper for the web BFF. Mirrors agent/lambda/cross_account.py:
-// STS AssumeRole of the target account's AWSopsReadOnlyRole with a REQUIRED ExternalId
-// (confused-deputy guard), ARN-validated, 50-min in-memory cache. Host/self → the task role's
-// own creds (null). Read-only; never persists creds.
+// STS AssumeRole of the target account's AWSopsReadOnlyRole. ExternalId is OPTIONAL (ADR-011
+// amended 2026-06-26): 1st-party accounts (trust pins this task-role ARN) omit it; 3rd-party
+// supply it. ARN-validated, 50-min in-memory cache. Host/self → the task role's own creds (null).
+// Read-only; never persists creds.
 import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts';
 import { getAccount } from '@/lib/accounts';
 import { currentAccountId } from '@/lib/account';

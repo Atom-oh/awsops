@@ -164,7 +164,7 @@ export default function AccountsPage() {
 
       <Card className="p-4 text-[12px] text-ink-600 flex flex-col gap-1">
         <div className="text-[13px] font-semibold text-ink-800 mb-1">타깃 계정 온보딩</div>
-        <p>각 타깃 계정에 <code>AWSopsReadOnlyRole</code>을 배포해야 합니다 (호스트 web·steampipe task role 신뢰 + ReadOnlyAccess). <strong>1st-party</strong>(같은 조직, trust가 호스트 task-role ARN을 정확히 핀)는 ExternalId를 생략할 수 있고, <strong>3rd-party/공유</strong> 계정은 ExternalId 조건이 필요합니다 (ADR-011).</p>
+        <p>각 타깃 계정에 <code>AWSopsReadOnlyRole</code>을 배포해야 합니다 (호스트 web task role 신뢰 + ReadOnlyAccess). <strong>1st-party</strong>(같은 조직, trust가 호스트 task-role ARN을 정확히 핀)는 ExternalId를 생략할 수 있고, <strong>3rd-party/공유</strong> 계정은 ExternalId 조건이 필요합니다 (ADR-011).</p>
         <p>CloudFormation 템플릿: <code>infra/cfn/awsops-target-account-role.yaml</code> — 배포 가이드는 <code>docs/runbooks/onboard-target-account.md</code> 참조.</p>
         <p className="text-ink-400">배포 후 위 폼에 Account ID·Alias·Region을 입력하면 assume를 검증(상태=verified)한 뒤 등록합니다. ExternalId는 선택(1st-party는 생략 가능)이며 confused-deputy 가드일 뿐 비밀이 아닙니다.</p>
       </Card>

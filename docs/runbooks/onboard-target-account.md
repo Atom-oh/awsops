@@ -7,9 +7,8 @@ guard) is **optional for 1st-party accounts** and **required for 3rd-party/share
 
 ## Prerequisites
 - Admin access to AWSops (`/accounts` is gated by Cognito `ADMIN_GROUP` or the SSM email allowlist).
-- The **host task role ARNs** — BOTH `awsops-v2-task` (web, registration/verify) AND
-  `awsops-v2-steampipe-task` (inventory fan-out). The role that registers and the role that runs
-  inventory differ, so both must be trusted.
+- The **host web task role ARN** — `awsops-v2-task` (the role that registers/verifies + reads).
+  (When the multi-account inventory fan-out ships, the steampipe task role is added then.)
 - **3rd-party only**: a chosen **ExternalId** string (≥8 chars), same value in the CFN and `/accounts`.
   1st-party (same-org) accounts can omit it.
 
@@ -22,7 +21,6 @@ guard) is **optional for 1st-party accounts** and **required for 3rd-party/share
      --capabilities CAPABILITY_NAMED_IAM \
      --parameter-overrides \
        HostWebTaskRoleArn=arn:aws:iam::<host>:role/awsops-v2-task \
-       HostSteampipeTaskRoleArn=arn:aws:iam::<host>:role/awsops-v2-steampipe-task \
        ExternalId=<YOUR_EXTERNAL_ID>   # OMIT this line for 1st-party (no-ExternalId) onboarding
    ```
    The stack outputs `RoleArn` (`arn:aws:iam::<target>:role/AWSopsReadOnlyRole`).
