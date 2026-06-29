@@ -54,16 +54,22 @@ def fetch_rows():
 
 
 def main():
+    # Bounded retry budget (~2+4+8+8 ≈ 22s) is kept WELL under the ECS healthcheck startPeriod
+    # (120s) so a transient Aurora delay can't exhaust the grace window and trigger a restart loop
+    # (M5). No sleep after the final attempt.
     last = None
-    for attempt in range(1, 7):  # bounded retry: ~2,4,8,16,30,30s
+    attempts = 4
+    rows = None
+    for attempt in range(1, attempts + 1):
         try:
             rows = fetch_rows()
             break
         except Exception as e:  # noqa: BLE001
             last = e
-            print(f"[gen-spc] Aurora unreachable (attempt {attempt}/6): {e}", file=sys.stderr)
-            time.sleep(min(2 ** attempt, 30))
-    else:
+            print(f"[gen-spc] Aurora unreachable (attempt {attempt}/{attempts}): {e}", file=sys.stderr)
+            if attempt < attempts:
+                time.sleep(min(2 ** attempt, 8))
+    if rows is None:
         print(f"[gen-spc] FATAL: Aurora unreachable — failing closed: {last}", file=sys.stderr)
         sys.exit(1)
 

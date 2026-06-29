@@ -70,3 +70,14 @@ def test_hcl_escaping_of_values():
          "external_id": 'a"b\\c', "all_regions": False, "regions": ["us-east-1"]},
     ])
     assert 'external_id = "a\\"b\\\\c"' in spc
+
+
+def test_host_included_even_when_flag_false_and_no_regions():
+    # C1 regression guard: ensureHostRow may seed the host without account_regions; the host must
+    # still scan all regions (not be skipped), else the whole inventory empties.
+    spc = render_spc([
+        {"account_id": "123456789012", "is_host": True, "role_name": "AWSopsReadOnlyRole",
+         "external_id": None, "all_regions": False, "regions": []},
+    ])
+    assert 'connection "aws_123456789012"' in spc
+    assert 'regions = ["*"]' in spc

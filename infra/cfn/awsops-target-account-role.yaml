@@ -7,12 +7,14 @@ Description: >
   (ReadOnlyAccess) — AWSops never mutates target-account resources.
 
 Parameters:
-  HostTaskRoleArns:
-    Type: CommaDelimitedList
-    Description: >
-      ARNs of the host AWSops task roles allowed to assume this role — BOTH the web task role
-      (registration/verify) AND the steampipe task role (inventory fan-out), e.g.
-      arn:aws:iam::<host>:role/awsops-v2-task,arn:aws:iam::<host>:role/awsops-v2-steampipe-task
+  HostWebTaskRoleArn:
+    Type: String
+    Description: ARN of the AWSops host WEB task role (registration/verify), e.g. arn:aws:iam::<host>:role/awsops-v2-task
+    AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
+  HostSteampipeTaskRoleArn:
+    Type: String
+    Description: ARN of the AWSops host STEAMPIPE task role (inventory fan-out), e.g. arn:aws:iam::<host>:role/awsops-v2-steampipe-task
+    AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
   ExternalId:
     Type: String
     Default: ''
@@ -41,8 +43,10 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              # ONLY the host task roles (web + steampipe) — NOT the host account root (least privilege).
-              AWS: !Ref HostTaskRoleArns
+              # ONLY the two host task roles (web + steampipe), each ARN-validated — NOT account root.
+              AWS:
+                - !Ref HostWebTaskRoleArn
+                - !Ref HostSteampipeTaskRoleArn
             Action: 'sts:AssumeRole'
             # 1st-party (no ExternalId): the exact-ARN principal pin IS the confused-deputy guard.
             # 3rd-party: add the ExternalId StringEquals condition.

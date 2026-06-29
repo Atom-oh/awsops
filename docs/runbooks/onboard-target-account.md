@@ -21,7 +21,8 @@ guard) is **optional for 1st-party accounts** and **required for 3rd-party/share
      --stack-name awsops-readonly-role \
      --capabilities CAPABILITY_NAMED_IAM \
      --parameter-overrides \
-       HostTaskRoleArns="arn:aws:iam::<host>:role/awsops-v2-task,arn:aws:iam::<host>:role/awsops-v2-steampipe-task" \
+       HostWebTaskRoleArn=arn:aws:iam::<host>:role/awsops-v2-task \
+       HostSteampipeTaskRoleArn=arn:aws:iam::<host>:role/awsops-v2-steampipe-task \
        ExternalId=<YOUR_EXTERNAL_ID>   # OMIT this line for 1st-party (no-ExternalId) onboarding
    ```
    The stack outputs `RoleArn` (`arn:aws:iam::<target>:role/AWSopsReadOnlyRole`).

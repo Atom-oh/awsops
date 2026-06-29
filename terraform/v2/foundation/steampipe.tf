@@ -182,7 +182,7 @@ resource "aws_ecs_task_definition" "steampipe" {
       interval    = 30
       timeout     = 10
       retries     = 3
-      startPeriod = 90
+      startPeriod = 120
     }
     logConfiguration = {
       logDriver = "awslogs"

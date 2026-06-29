@@ -213,9 +213,14 @@ from Aurora — the same mechanism class v1 used (Steampipe connection config), 
 - Entirely read-only; no AWS-resource mutation (ADR-005 untouched). Broadening
   regions only increases inventory reads. Cost: more Steampipe queries; bounded by
   the `steampipe_enabled` gate (live = true).
-- Backward compatible: an account with no `account_regions` rows falls back to
-  `["*"]` (or its host default), so existing single-region behavior is a strict
-  subset.
+- Region semantics (corrected): the **host** always scans all regions (`["*"]`); a
+  **target** with `all_regions=false` and no enabled `account_regions` is **skipped**
+  (NOT expanded to `["*"]`). `all_regions` defaults to false so existing explicit-region
+  selections are preserved.
+- **Out of scope / follow-up**: readers (`web/lib/inventory.ts`, `security-findings.ts`,
+  topology) still query `account_id='self'`, so TARGET-account inventory is written but
+  not yet surfaced in the UI — a separate reader PR makes it visible. The SDK syncs
+  (`s3_public_access`, `alb_listener_rule`, `cloudfront_vpc_origin`) remain host/single-region.
 - ExternalId change is backward compatible: existing accounts keep their stored
   ExternalId and continue to send it.
 

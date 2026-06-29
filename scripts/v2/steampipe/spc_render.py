@@ -27,12 +27,14 @@ def render_spc(rows) -> str:
     """rows: list of {account_id, is_host, role_name, external_id, all_regions, regions[]}."""
     blocks = []
     for r in rows:
-        if r.get("all_regions"):
+        # The HOST always scans all regions (v1 parity) regardless of the flag — it has no
+        # account_regions rows, and skipping it would empty the whole inventory (C1).
+        if r.get("all_regions") or r.get("is_host"):
             regions = ["*"]
         else:
             regions = [x for x in (r.get("regions") or []) if x]
             if not regions:
-                continue  # not all-regions and nothing enabled → skip this account
+                continue  # target that is not all-regions and has nothing enabled → skip
         name = "aws_" + str(r["account_id"])
         lines = [
             f'connection "{name}" {{',
