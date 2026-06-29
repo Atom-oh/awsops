@@ -23,7 +23,7 @@ SPC_PATH = os.environ.get("AWS_SPC_PATH", "/home/steampipe/.steampipe/config/aws
 # Mirrors lib/account-regions.ts listScanScope(): one row per enabled account with its scan scope.
 QUERY = (
     "SELECT a.account_id, a.is_host, a.role_name, a.external_id, a.all_regions, "
-    "COALESCE(array_agg(r.region) FILTER (WHERE r.enabled), '{}') AS regions "
+    "COALESCE(array_agg(r.region ORDER BY r.region) FILTER (WHERE r.enabled), '{}') AS regions "
     "FROM accounts a LEFT JOIN account_regions r ON r.account_id = a.account_id "
     "WHERE a.enabled = true "
     "GROUP BY a.account_id, a.is_host, a.role_name, a.external_id, a.all_regions "
@@ -33,6 +33,8 @@ QUERY = (
 
 def _connect():
     creds = json.loads(os.environ["AURORA_SECRET"])
+    # CERT_NONE mirrors sync_lambda._ssl_ctx (in-VPC Aurora, no RDS CA bundle in this image);
+    # the boot generator only reads accounts metadata, never secrets in transit.
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE

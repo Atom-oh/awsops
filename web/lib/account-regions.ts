@@ -63,7 +63,7 @@ export async function listScanScope(): Promise<AccountScanScope[]> {
     `SELECT a.account_id,
             a.all_regions,
             a.is_host,
-            COALESCE(array_agg(r.region) FILTER (WHERE r.enabled), '{}') AS regions
+            COALESCE(array_agg(r.region ORDER BY r.region) FILTER (WHERE r.enabled), '{}') AS regions
        FROM accounts a
        LEFT JOIN account_regions r ON r.account_id = a.account_id
       WHERE a.enabled = true

@@ -17,8 +17,8 @@ def test_host_only_no_role_arn_no_external_id():
          "external_id": None, "all_regions": True, "regions": []},
     ])
     assert 'connection "aws_123456789012"' in spc
-    assert "role_arn" not in spc        # host uses the task role's default chain
-    assert "external_id" not in spc
+    assert "assume_role_arn" not in spc        # host uses the task role's default chain
+    assert "assume_role_external_id" not in spc
     assert 'regions = ["*"]' in spc
 
 
@@ -27,8 +27,8 @@ def test_non_host_with_external_id():
         {"account_id": "210987654321", "is_host": False, "role_name": "AWSopsReadOnlyRole",
          "external_id": "ext-1", "all_regions": False, "regions": ["us-east-1", "eu-west-1"]},
     ])
-    assert 'role_arn = "arn:aws:iam::210987654321:role/AWSopsReadOnlyRole"' in spc
-    assert 'external_id = "ext-1"' in spc
+    assert 'assume_role_arn = "arn:aws:iam::210987654321:role/AWSopsReadOnlyRole"' in spc
+    assert 'assume_role_external_id = "ext-1"' in spc
     assert 'regions = ["us-east-1", "eu-west-1"]' in spc
 
 
@@ -37,8 +37,8 @@ def test_non_host_without_external_id_omits_line():
         {"account_id": "210987654321", "is_host": False, "role_name": "AWSopsReadOnlyRole",
          "external_id": None, "all_regions": True, "regions": []},
     ])
-    assert "role_arn" in spc
-    assert "external_id" not in spc
+    assert "assume_role_arn" in spc
+    assert "assume_role_external_id" not in spc
 
 
 def test_empty_regions_not_all_is_skipped():
@@ -69,7 +69,7 @@ def test_hcl_escaping_of_values():
         {"account_id": "210987654321", "is_host": False, "role_name": "AWSopsReadOnlyRole",
          "external_id": 'a"b\\c', "all_regions": False, "regions": ["us-east-1"]},
     ])
-    assert 'external_id = "a\\"b\\\\c"' in spc
+    assert 'assume_role_external_id = "a\\"b\\\\c"' in spc
 
 
 def test_host_included_even_when_flag_false_and_no_regions():
