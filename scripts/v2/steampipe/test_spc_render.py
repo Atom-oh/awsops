@@ -2,6 +2,7 @@
 import os
 import sys
 import re
+import unittest.mock as mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 from spc_render import render_spc  # noqa: E402
@@ -81,3 +82,35 @@ def test_host_included_even_when_flag_false_and_no_regions():
     ])
     assert 'connection "aws_123456789012"' in spc
     assert 'regions = ["*"]' in spc
+
+
+# --- Supervisor / blast-radius tests (gen_spc_entrypoint) ---
+import gen_spc_entrypoint  # noqa: E402
+
+
+def test_steampipe_env_strips_aurora_secret():
+    """AURORA_SECRET must NOT appear in the env passed to the Steampipe subprocess (M1).
+    Steampipe is the network-listening process — if compromised, it must not hold master
+    DB credentials."""
+    with mock.patch.dict(os.environ, {
+        "AURORA_SECRET": '{"username":"u","password":"p"}',
+        "AURORA_ENDPOINT": "aurora.host",
+        "AURORA_DATABASE": "awsops",
+    }):
+        env = gen_spc_entrypoint._steampipe_env()
+    assert "AURORA_SECRET" not in env, "master DB creds must not reach the Steampipe subprocess"
+    assert "AURORA_ENDPOINT" in env  # non-sensitive env is forwarded normally
+
+
+def test_steampipe_env_forwards_non_sensitive_vars():
+    """Non-sensitive env vars (AURORA_ENDPOINT, AURORA_DATABASE, AWS_REGION) are forwarded."""
+    with mock.patch.dict(os.environ, {
+        "AURORA_SECRET": '{"username":"u","password":"p"}',
+        "AURORA_ENDPOINT": "aurora.cluster.example.com",
+        "AURORA_DATABASE": "awsops",
+        "AWS_REGION": "ap-northeast-2",
+    }):
+        env = gen_spc_entrypoint._steampipe_env()
+    assert env["AURORA_ENDPOINT"] == "aurora.cluster.example.com"
+    assert env["AWS_REGION"] == "ap-northeast-2"
+    assert "AURORA_SECRET" not in env
