@@ -62,16 +62,19 @@ export async function listScanScope(): Promise<AccountScanScope[]> {
   const { rows } = await getPool().query(
     `SELECT a.account_id,
             a.all_regions,
+            a.is_host,
             COALESCE(array_agg(r.region) FILTER (WHERE r.enabled), '{}') AS regions
        FROM accounts a
        LEFT JOIN account_regions r ON r.account_id = a.account_id
       WHERE a.enabled = true
-      GROUP BY a.account_id, a.all_regions
+      GROUP BY a.account_id, a.all_regions, a.is_host
       ORDER BY a.account_id ASC`,
   );
   const out: AccountScanScope[] = [];
   for (const r of rows) {
-    if (r.all_regions) { out.push({ accountId: r.account_id, regions: ['*'] }); continue; }
+    // The host always scans all regions (v1 parity) regardless of the flag — mirrors render_spc,
+    // so an un-backfilled host row can never empty the inventory.
+    if (r.all_regions || r.is_host) { out.push({ accountId: r.account_id, regions: ['*'] }); continue; }
     const regions = ((r.regions as string[]) || []).filter(Boolean);
     if (regions.length === 0) continue; // not all-regions and nothing enabled → skip
     out.push({ accountId: r.account_id, regions });

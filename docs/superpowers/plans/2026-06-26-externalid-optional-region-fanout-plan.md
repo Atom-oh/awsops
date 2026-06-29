@@ -26,11 +26,10 @@
 
 **Files:**
 - Create: `terraform/v2/foundation/migrations/01KW2EXTIDOPT0000000000000_externalid_optional.sql`
-- Modify: `terraform/v2/foundation/data/schema.sql`
 - Test: `web/lib/accounts.test.ts`
 
 - [ ] Add a failing assertion (in `web/lib/accounts.test.ts` or a SQL-shape test) that a target account row with `external_id IS NULL` is accepted (constraint gone).
-- [ ] Create the migration: `ALTER TABLE accounts DROP CONSTRAINT IF EXISTS external_id_required_for_target;` (idempotent); reflect the drop in `data/schema.sql`.
+- [ ] Create the migration: `ALTER TABLE accounts DROP CONSTRAINT IF EXISTS external_id_required_for_target;` (idempotent); (accounts is migration-defined — schema.sql baseline intentionally omits it, see its line ~244 note, so no baseline change).
 - [ ] Confirm the test passes.
 
 ### Task 3: Accounts BFF — ExternalId optional
@@ -67,7 +66,6 @@
 
 **Files:**
 - Create: `terraform/v2/foundation/migrations/01KW2ALLRGN00000000000000_accounts_all_regions.sql`
-- Modify: `terraform/v2/foundation/data/schema.sql`
 - Modify: `web/lib/account-regions.ts`
 - Test: `web/lib/account-regions.test.ts`
 
@@ -75,7 +73,7 @@
 > `region ~ '^[a-z]{2}-[a-z]+-[0-9]+$'`. Use a boolean **`all_regions` column on
 > `accounts`** (NOT a sentinel region row), which needs a migration.
 
-- [ ] Create migration `…_accounts_all_regions.sql`: `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS all_regions boolean NOT NULL DEFAULT false;` (M1: do not flip existing explicit-region accounts) (idempotent); reflect in `data/schema.sql`.
+- [ ] Create migration `…_accounts_all_regions.sql`: `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS all_regions boolean NOT NULL DEFAULT false;` (M1: do not flip existing explicit-region accounts) (idempotent); accounts is migration-defined (not in schema.sql baseline by design) so no baseline change.
 - [ ] Add failing tests in `web/lib/account-regions.test.ts`: `listScanScope()` returns `["*"]` when `accounts.all_regions` is true, the explicit enabled `account_regions` set when false, and **skips** an account with `all_regions=false` and an empty enabled set (not `["*"]`).
 - [ ] Run `npm test -- lib/account-regions.test.ts --run`; confirm failure.
 - [ ] Modify `web/lib/account-regions.ts`: add `listScanScope()` reading the `all_regions` flag; all_regions defaults to false (explicit opt-in); existing explicit account_regions selections are preserved.
