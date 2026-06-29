@@ -39,7 +39,8 @@ export async function POST(request: Request) {
 
   if (!validateAccountId(accountId)) return err('accountId must be 12 digits', 400);
   if (!alias) return err('alias is required', 400);
-  if (!externalId) return err('externalId is required (confused-deputy guard)', 400);
+  // ExternalId is OPTIONAL (ADR-011 amended 2026-06-26): omit it for 1st-party accounts whose
+  // target trust policy pins this task-role ARN; supply it for 3rd-party (trust enforces it).
 
   // Test-assume the target role, then confirm the assumed identity IS the submitted account.
   try {
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
     const assumed = await sts.send(new AssumeRoleCommand({
       RoleArn: `arn:aws:iam::${accountId}:role/${roleName}`,
       RoleSessionName: 'awsops-verify',
-      ExternalId: externalId,
+      ...(externalId ? { ExternalId: externalId } : {}),
       DurationSeconds: 900,
     }));
     const c = assumed.Credentials;
@@ -74,7 +75,7 @@ export async function POST(request: Request) {
        ON CONFLICT (account_id) DO UPDATE SET
          alias = EXCLUDED.alias, region = EXCLUDED.region, role_name = EXCLUDED.role_name,
          external_id = EXCLUDED.external_id, status = 'verified', last_verified_at = now()`,
-      [accountId, alias, region, roleName, externalId],
+      [accountId, alias, region, roleName, externalId || null],
     );
     await upsertAccountRegion(accountId, region);
   } catch (e) {

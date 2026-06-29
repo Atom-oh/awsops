@@ -36,11 +36,23 @@ describe('credsForAccount', () => {
     expect(input.ExternalId).toBe('ext-1');
   });
 
-  it('target missing ExternalId → throws (never a silent unscoped assume)', async () => {
+  it('target without ExternalId (1st-party) → AssumeRole omits ExternalId, still assumes', async () => {
     getAccount.mockResolvedValue(acct({ externalId: null }));
     const { credsForAccount } = await import('./aws-assume');
-    await expect(credsForAccount(TARGET)).rejects.toThrow();
-    expect(send).not.toHaveBeenCalled();
+    const c = await credsForAccount(TARGET);
+    expect(c).toMatchObject({ accessKeyId: 'AKIA', secretAccessKey: 'sk', sessionToken: 'tok' });
+    expect(send).toHaveBeenCalledTimes(1);
+    const input = (send.mock.calls[0][0] as { input: Record<string, unknown> }).input;
+    expect(input.RoleArn).toBe(`arn:aws:iam::${TARGET}:role/AWSopsReadOnlyRole`);
+    expect('ExternalId' in input).toBe(false);
+  });
+
+  it('no-ExternalId and with-ExternalId have distinct cache keys', async () => {
+    getAccount.mockResolvedValueOnce(acct({ externalId: null })).mockResolvedValueOnce(acct({ externalId: 'ext-1' }));
+    const { credsForAccount } = await import('./aws-assume');
+    await credsForAccount(TARGET);
+    await credsForAccount(TARGET);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it('caches within TTL (one AssumeRole for repeated calls)', async () => {
