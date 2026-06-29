@@ -25,8 +25,10 @@ guard) is **optional for 1st-party accounts** and **required for 3rd-party/share
    ```
    The stack outputs `RoleArn` (`arn:aws:iam::<target>:role/AWSopsReadOnlyRole`).
 2. In AWSops, open **계정 관리 (`/accounts`)** as an admin → **계정 추가** → enter the target Account ID,
-   an Alias, the Region, and the **ExternalId if you set one** (leave blank for 1st-party). AWSops
-   assumes the role and confirms `GetCallerIdentity.Account` matches the submitted ID
+   an Alias, the Region, and the ExternalId. **For 1st-party (no-ExternalId) onboarding: leave
+   ExternalId blank AND tick the "1st-party 계정 (ExternalId 생략)" checkbox** — registration is
+   rejected (400) if ExternalId is empty and that box is unchecked, so omission is an explicit
+   choice. AWSops assumes the role and confirms `GetCallerIdentity.Account` matches the submitted ID
    (status → `verified`) before saving.
 3. Use the **global account selector** (sidebar) to switch the active account, or pick **All accounts**
    to aggregate cost / Bedrock across every enabled account (the dashboard aggregates client-side).
