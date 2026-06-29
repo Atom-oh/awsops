@@ -23,7 +23,7 @@ export default function AccountsPage() {
   const [denied, setDenied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
-  const [form, setForm] = useState({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '' });
+  const [form, setForm] = useState({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '', firstParty: false });
   const [regionForm, setRegionForm] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
@@ -45,7 +45,7 @@ export default function AccountsPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setMsg(`실패: ${d.message || r.status}`); return; }
-      setMsg('등록·검증 완료'); setForm({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '' });
+      setMsg('등록·검증 완료'); setForm({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '', firstParty: false });
       await load();
     } finally { setBusy(false); }
   };
@@ -152,8 +152,12 @@ export default function AccountsPage() {
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px] font-mono" placeholder="Account ID (12 digits)" value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value.trim() })} />
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Alias" value={form.alias} onChange={(e) => setForm({ ...form, alias: e.target.value })} />
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value.trim() })} />
-          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="ExternalId" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
+          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="ExternalId (optional, 1st-party)" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
         </div>
+        <label className="flex items-center gap-2 text-[11px] text-ink-500">
+          <input type="checkbox" checked={form.firstParty} onChange={(e) => setForm({ ...form, firstParty: e.target.checked })} />
+          1st-party 계정 (ExternalId 생략) — 대상 trust가 호스트 task-role ARN을 정확히 핀할 때만. 3rd-party는 ExternalId 필수.
+        </label>
         <div className="flex items-center gap-3">
           <button onClick={add} disabled={busy} className="self-start rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
             {busy ? '검증 중…' : '추가 + 검증'}
@@ -164,9 +168,9 @@ export default function AccountsPage() {
 
       <Card className="p-4 text-[12px] text-ink-600 flex flex-col gap-1">
         <div className="text-[13px] font-semibold text-ink-800 mb-1">타깃 계정 온보딩</div>
-        <p>각 타깃 계정에 <code>AWSopsReadOnlyRole</code>을 배포해야 합니다 (호스트 web task role만 신뢰 + ExternalId 조건 + ReadOnlyAccess).</p>
+        <p>각 타깃 계정에 <code>AWSopsReadOnlyRole</code>을 배포해야 합니다 (호스트 web task role 신뢰 + ReadOnlyAccess). <strong>1st-party</strong>(같은 조직, trust가 호스트 task-role ARN을 정확히 핀)는 ExternalId를 생략할 수 있고, <strong>3rd-party/공유</strong> 계정은 ExternalId 조건이 필요합니다 (ADR-011).</p>
         <p>CloudFormation 템플릿: <code>infra/cfn/awsops-target-account-role.yaml</code> — 배포 가이드는 <code>docs/runbooks/onboard-target-account.md</code> 참조.</p>
-        <p className="text-ink-400">배포 후 위 폼에 Account ID·Alias·Region·ExternalId를 입력하면 assume를 검증(상태=verified)한 뒤 등록합니다. ExternalId는 confused-deputy 가드이며 비밀이 아닙니다.</p>
+        <p className="text-ink-400">배포 후 위 폼에 Account ID·Alias·Region을 입력하면 assume를 검증(상태=verified)한 뒤 등록합니다. ExternalId는 선택(1st-party는 생략 가능)이며 confused-deputy 가드일 뿐 비밀이 아닙니다.</p>
       </Card>
     </div>
   );

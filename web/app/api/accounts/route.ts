@@ -33,13 +33,20 @@ export async function POST(request: Request) {
   const alias = String(body?.alias ?? '').trim();
   const region = String(body?.region ?? '').trim() || REGION;
   const externalId = String(body?.externalId ?? '').trim();
+  const firstParty = body?.firstParty === true;
   // Hard-pinned to match the host task-role IAM (Resource scoped to .../AWSopsReadOnlyRole).
   // A custom roleName would fail-closed on assume, so we do not honor body.roleName.
   const roleName = 'AWSopsReadOnlyRole';
 
   if (!validateAccountId(accountId)) return err('accountId must be 12 digits', 400);
   if (!alias) return err('alias is required', 400);
-  if (!externalId) return err('externalId is required (confused-deputy guard)', 400);
+  // ExternalId is OPTIONAL only as an EXPLICIT per-account choice (ADR-011 amended 2026-06-26):
+  // omitting it requires firstParty=true, asserting the target trust pins THIS task-role ARN
+  // (not account-root/org/wildcard). Without an ExternalId AND without that explicit confirmation
+  // we refuse — so 3rd-party accounts are never silently onboarded without the confused-deputy guard.
+  if (!externalId && !firstParty) {
+    return err('externalId required — or set firstParty=true to confirm a 1st-party account whose target trust pins the AWSops task-role ARN', 400);
+  }
 
   // Test-assume the target role, then confirm the assumed identity IS the submitted account.
   try {
@@ -47,7 +54,7 @@ export async function POST(request: Request) {
     const assumed = await sts.send(new AssumeRoleCommand({
       RoleArn: `arn:aws:iam::${accountId}:role/${roleName}`,
       RoleSessionName: 'awsops-verify',
-      ExternalId: externalId,
+      ...(externalId ? { ExternalId: externalId } : {}),
       DurationSeconds: 900,
     }));
     const c = assumed.Credentials;
@@ -74,7 +81,7 @@ export async function POST(request: Request) {
        ON CONFLICT (account_id) DO UPDATE SET
          alias = EXCLUDED.alias, region = EXCLUDED.region, role_name = EXCLUDED.role_name,
          external_id = EXCLUDED.external_id, status = 'verified', last_verified_at = now()`,
-      [accountId, alias, region, roleName, externalId],
+      [accountId, alias, region, roleName, externalId || null],
     );
     await upsertAccountRegion(accountId, region);
   } catch (e) {
