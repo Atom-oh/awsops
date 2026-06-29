@@ -571,16 +571,30 @@ def sync(resource_type):
                         "ON CONFLICT (resource_type, account_id, region, resource_id) "
                         "DO UPDATE SET data=:d::jsonb, captured_at=now()",
                         t=resource_type, acct=acct, rg=region, id=rid, d=json.dumps(rec, default=str))
-            # Delete stale rows of this type — but ONLY within accounts that actually contributed
-            # rows in THIS run. A Steampipe aggregator returns PARTIAL results when one connection
-            # errors (e.g. a transient AssumeRole failure), so an account that contributed 0 rows is
-            # NOT necessarily empty; pruning it would silently purge its last-good inventory. So we
-            # never prune an account absent from `seen` (M5).
+            # ---- Stale-prune: two phases ----
             #
-            # Exception: the host 'self' connection uses IAM task-role credentials (not AssumeRole)
-            # and therefore always succeeds. Zero rows from 'self' is a genuine empty result, not a
-            # connection failure — always include it in `present` so deleted host resources are
-            # pruned rather than persisting as phantoms forever (prune-to-zero fix, M1).
+            # Phase 1 — disabled/removed-account orphans: delete ALL rows for accounts that are
+            # no longer in scan scope (disabled or removed from the `accounts` table). Once an
+            # account is out of scope, the aggregator never queries it, so `seen`/`present` can
+            # never contain it — its rows would persist as phantoms forever without this pass.
+            # This is the correct cleanup path for account disable/removal from the UI (M1 fix).
+            # 'self' is excluded here because it is always enabled (host row) and is handled by
+            # phase 2 below.
+            adb.run(
+                "DELETE FROM inventory_resources "
+                "WHERE resource_type = :t "
+                "AND account_id != 'self' "
+                "AND account_id NOT IN ("
+                "  SELECT account_id FROM accounts WHERE enabled = true"
+                ")",
+                t=resource_type,
+            )
+            # Phase 2 — row-level stale within enabled/in-scope accounts: delete individual rows
+            # that were NOT returned in this run, but ONLY for accounts that DID contribute rows
+            # (`present`). An account with 0 rows from the aggregator may have suffered a transient
+            # AssumeRole failure — pruning it would silently discard its last-good inventory (M5).
+            # Exception: host 'self' uses IAM task-role creds (not AssumeRole), always succeeds;
+            # 0 host rows = genuinely empty → always include 'self' in present.
             present = {a for (a, _, _) in seen} | {'self'}
             existing = adb.run("SELECT account_id, region, resource_id FROM inventory_resources WHERE resource_type=:t", t=resource_type)
             for acct, rg, rid in existing:
