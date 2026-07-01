@@ -362,8 +362,11 @@ Step 3: Build + Deploy                   ← 03-build-deploy.sh
   │     ├─ npm run build (production)
   │     └─ npm run start (port 3000)
   │
+  ├── (선택 / optional) Step 4: EKS 접근 설정   ← 04-setup-eks-access.sh
+  │     └─ kubectl 설치 + EKS 클러스터 탐색 + kubeconfig + Access Entry(API mode) + Steampipe k8s 플러그인
+  │
   ▼
-Step 9: 검증 (46항목)                    ← 11-verify.sh
+Step 11: 검증 (46항목)                   ← 11-verify.sh
   │     ├─ Services (2)
   │     ├─ Queries (18 테이블)
   │     ├─ Pages (20 페이지)
@@ -419,17 +422,31 @@ Step 6: AgentCore AI                     ← 06-setup-agentcore.sh (래퍼)
   │         ├─ targetConfiguration: mcp.lambda (※2)
   │         └─ credentialProviderConfigurations: GATEWAY_IAM_ROLE
   │
-  └─ Step 6d: Code Interpreter           ← 06d-setup-agentcore-interpreter.sh
-        └─ Code Interpreter (awsops_code_interpreter)
-            ├─ 이름: 언더스코어만 허용 ([a-zA-Z][a-zA-Z0-9_])
-            └─ networkConfiguration: {"networkMode":"PUBLIC"}
+  ├─ Step 6d: Code Interpreter           ← 06d-setup-agentcore-interpreter.sh
+  │     └─ Code Interpreter (awsops_code_interpreter)
+  │         ├─ 이름: 언더스코어만 허용 ([a-zA-Z][a-zA-Z0-9_])
+  │         └─ networkConfiguration: {"networkMode":"PUBLIC"}
+  │
+  ├─ Step 6e: Config 주입                 ← 06e-setup-agentcore-config.sh
+  │     └─ route.ts(AGENT_RUNTIME_ARN, CODE_INTERPRETER_ID, ACCOUNT_ID) + agent.py(7 Gateway URL) 자동 설정
+  │         사전조건: 6a/6b/6d 완료, Step 3 이후 재빌드(npm run build) 필요
+  │
+  └─ Step 6f: Memory Store                ← 06f-setup-agentcore-memory.sh
+        └─ AgentCore Memory(awsops_memory — 하이픈 불가, 언더스코어만) 생성, AI 대화 이력 영구 저장
+  │
+  ▼
+Step 7: Prometheus + OpenCost            ← 07-setup-opencost.sh (+ -interactive)
+  │     └─ EKS 클러스터에 Metrics Server + Prometheus + OpenCost 설치 (K8s 비용 분석; OpenCost는 Prometheus 메트릭 필요)
   │
   ▼
 Step 8: CloudFront Lambda@Edge 연동      ← 08-setup-cloudfront-auth.sh
-        ├─ CloudFront distribution 자동 감지
-        ├─ Lambda@Edge ARN 자동 감지 (최신 published version)
-        ├─ /awsops* behavior에 viewer-request 연결
-        └─ 배포 대기 + 302 리다이렉트 검증
+  │     ├─ CloudFront distribution 자동 감지
+  │     ├─ Lambda@Edge ARN 자동 감지 (최신 published version)
+  │     ├─ /awsops* behavior에 viewer-request 연결
+  │     └─ 배포 대기 + 302 리다이렉트 검증
+  │
+  ├── (선택 / optional) Step 12: Multi-Account Setup   ← 12-setup-multi-account.sh
+  │     └─ Target 계정 Steampipe 연결(.spc) + Aggregator 연결 + data/config.json accounts[] 갱신 + Steampipe 재시작 + 크로스어카운트 연결 검증
 
   ※2 Gateway Target API 주의사항:
       - CLI가 아닌 Python/boto3 사용 (CLI는 inlinePayload 이슈)

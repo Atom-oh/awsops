@@ -1,6 +1,6 @@
 # Datasource Diagnostic Signals — 구현 계획 (Implementation Plan, rev2)
 
-> Source spec: `docs/specs/2026-06-24-datasource-diagnostic-signals-design.md`
+> Source spec: `docs/superpowers/specs/2026-06-24-datasource-diagnostic-signals-design.md`
 > 브랜치: `feat/v2-datasource-diag-signals` · base: `origin/feat/v2-architecture-design`
 > 방식: TDD (test-first) + Tidy-First, 태스크당 1 커밋. 게이트: `datasource_diagnosis_enabled`(기본 OFF→$0).
 > rev2: P2 멀티모델 게이트 findings 반영 — id=BIGINT, kind→tool, multi-query PromQL 수정, 워커는 스키마 **캐시 read**(재introspect 아님), 안정 해시(sha256+catalog-version), dispatcher 추가, 테스트파일 충돌 해소, 구체 파일경로, 크로스태스크 의존.

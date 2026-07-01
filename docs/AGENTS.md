@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 5ae1ecbe08a9 · generated-at: 2026-06-18 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b094a2862d3c · generated-at: 2026-07-01 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are Codex, an external reviewer — project context below.
 
@@ -7,21 +7,21 @@
 Project documentation, organized by purpose. This directory is a documentation index; subdirectories each carry their own context file.
 
 ### Layout (what lives where)
-- `architecture.md` — system architecture (single file).
+- `history/architecture-v1.md` — v1-only architecture (archived; renamed from the old `architecture.md`). v2's current architecture lives in `reference/`, not here.
 - `onboarding.md` — new-teammate onboarding.
 - `INSTALL_GUIDE.md` / `TROUBLESHOOTING.md` — install steps / general troubleshooting.
-- `decisions/` — ADRs (Architecture Decision Records).
+- `decisions/` — **`BASELINE.md` is the single current-truth for decisions**, plus 14 consolidated ADRs and `ADR-MAPPING.md` (old ADRs 001–046 live only in git tag `adr-legacy-2026-06-22`).
 - `runbooks/` — per-scenario operational response guides.
 - `reviews/` — code-review / cross-review outputs.
-- `plans/` — feature design/planning docs.
-- `superpowers/reference/` — current per-component design reference; **one file per component is the single source of truth**.
-- `superpowers/archive/` — historical specs/plans, **superseded by `reference/`** (do not treat as current).
+- `reference/` — current per-component v2 design reference (7 files + README); **one file per component is the single source of truth**. (The old `superpowers/reference/` was a stale orphan left after this moved out — it has been deleted.)
+- `superpowers/plans/` / `superpowers/specs/` — planning/design docs. **Single canonical location as of 2026-07-01** (the top-level `docs/plans/` and `docs/specs/` were consolidated here) — flag a new PR that recreates a top-level `docs/plans/` or `docs/specs/` file.
+- `superpowers/archive/` — historical specs/plans, superseded by `reference/` (do not treat as current).
 
 ### Conventions a reviewer must enforce
 - **All new docs are bilingual** (Korean + English).
-- **ADR filename format:** `NNN-kebab-case-title.md`. New ADR number = highest existing number + 1 (monotonic; no gaps, no reuse).
+- **ADR filename format:** `NNN-kebab-case-title.md`. New ADR number = highest existing number + 1 (monotonic; no gaps, no reuse), and **BASELINE.md must be updated in the same PR**.
 - Runbooks must follow `docs/runbooks/CLAUDE.md` rules.
-- Design content belongs in `superpowers/reference/` (one component = one file). When updating a component's design, edit its reference file rather than adding parallel/duplicate docs or reviving archived ones.
+- Design content belongs in `reference/` (one component = one file). When updating a component's design, edit its reference file rather than adding parallel/duplicate docs or reviving archived ones.
 
 ### Boundaries / gotchas
 - `reference/` is authoritative; `archive/` is dead history — flag any change that edits archive as if current, or that splits a component's design across multiple reference files.

@@ -1,7 +1,7 @@
 # ECS Service Inventory P0 Design
 
 > Date: 2026-06-24
-> Scope: v2 P0 gap `g-01` from `docs/plans/2026-06-22-phase3-gap-backlog.md`
+> Scope: v2 P0 gap `g-01` from `docs/superpowers/plans/2026-06-22-phase3-gap-backlog.md`
 > Posture: read-only inventory parity. No AWS resource mutation, autonomy, or arbitrary AWS CLI execution.
 
 ## Goal / 목표

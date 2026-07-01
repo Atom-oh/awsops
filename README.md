@@ -128,16 +128,22 @@ Application runtime configuration — AgentCore ARNs, multi-account list, and fe
 
 ```
 awsops/
-  src/app/         # 43 pages + 20 API routes (Next.js App Router)
-  src/components/   # 18 shared components (charts, tables, K8s, layout)
-  src/lib/          # steampipe pg Pool, 26 query files, collectors, datasource clients
-  src/contexts/     # multi-account state
-  agent/            # Strands Agent source + 19 Lambda (built on EC2 -> ECR -> AgentCore)
+  src/app/          # v1: 43 pages + 20 API routes (Next.js App Router)
+  src/components/   # v1: 18 shared components (charts, tables, K8s, layout)
+  src/lib/          # v1: steampipe pg Pool, 26 query files, collectors, datasource clients
+  src/contexts/     # v1: multi-account state
+  web/              # v2 rebuild frontend (Next.js 14 BFF: app/, components/, lib/, public/)
+  agent/            # Strands Agent source + Lambda (v1 built on EC2 -> ECR -> AgentCore; v2 reuses agent.py)
   powerpipe/        # CIS Benchmark mod
-  infra-cdk/        # CDK (VPC/EC2/ALB/CloudFront, Cognito/Lambda@Edge)
-  terraform/v2/     # v2 rewrite (in progress)
-  scripts/          # 17 install and operations scripts (00-12)
-  docs/             # guides, runbooks, 31 ADRs
+  infra-cdk/        # v1 CDK (VPC/EC2/ALB/CloudFront, Cognito/Lambda@Edge)
+  infra/            # CloudFormation templates (infra/cfn/)
+  terraform/v2/     # v2 rebuild (Terraform: ECS Fargate + Aurora + AgentCore) — substantially built, see docs/reference/
+  scripts/          # v1: 17 install/ops scripts (00-12); scripts/v2/: agentcore, eks, incident, remediation, steampipe, workers
+  tools/            # prompts/ and helper scripts
+  tests/            # vitest suites (unit, structure, hooks, fixtures)
+  docs/             # guides, runbooks, decisions/ (BASELINE.md + 14 consolidated ADRs)
+  docs-site/        # Docusaurus site (docs/, i18n/, whatsnew/, static/)
+  public/           # v1 Next.js static assets (logos/)
 ```
 
 ## Testing
@@ -150,7 +156,7 @@ npm run test:coverage  # coverage report
 
 ## API Documentation
 
-The 20 API routes live under `src/app/api/`. Key routes: `ai` (11-route AI classifier), `steampipe` (queries, cost availability, inventory), `report` (AI diagnosis), `alert-webhook`, `notification`, `event-scaling`, plus per-service CloudWatch metric routes (`msk`, `rds`, `elasticache`, `opensearch`). See [docs/architecture.md](docs/architecture.md) for details.
+The 20 API routes live under `src/app/api/`. Key routes: `ai` (11-route AI classifier), `steampipe` (queries, cost availability, inventory), `report` (AI diagnosis), `alert-webhook`, `notification`, `event-scaling`, plus per-service CloudWatch metric routes (`msk`, `rds`, `elasticache`, `opensearch`). See [docs/history/architecture-v1.md](docs/history/architecture-v1.md) for details (archived v1 architecture; the v2 rebuild's current design lives in [docs/reference/](docs/reference/)).
 
 ## Contributing
 
@@ -284,16 +290,22 @@ bash scripts/12-setup-multi-account.sh # 선택: 멀티 어카운트 aggregator 
 
 ```
 awsops/
-  src/app/         # 43 페이지 + 20 API 라우트 (Next.js App Router)
-  src/components/   # 18 공유 컴포넌트 (차트, 테이블, K8s, 레이아웃)
-  src/lib/          # steampipe pg Pool, 26 쿼리 파일, 컬렉터, 데이터소스 클라이언트
-  src/contexts/     # 멀티 어카운트 상태
-  agent/            # Strands Agent 소스 + 19 Lambda (EC2에서 빌드 -> ECR -> AgentCore)
+  src/app/          # v1: 43 페이지 + 20 API 라우트 (Next.js App Router)
+  src/components/   # v1: 18 공유 컴포넌트 (차트, 테이블, K8s, 레이아웃)
+  src/lib/          # v1: steampipe pg Pool, 26 쿼리 파일, 컬렉터, 데이터소스 클라이언트
+  src/contexts/     # v1: 멀티 어카운트 상태
+  web/              # v2 재구축 프론트엔드 (Next.js 14 BFF: app/, components/, lib/, public/)
+  agent/            # Strands Agent 소스 + Lambda (v1은 EC2에서 빌드 -> ECR -> AgentCore; v2는 agent.py 재사용)
   powerpipe/        # CIS Benchmark mod
-  infra-cdk/        # CDK (VPC/EC2/ALB/CloudFront, Cognito/Lambda@Edge)
-  terraform/v2/     # v2 재설계 (진행 중)
-  scripts/          # 17 설치 및 운영 스크립트 (00-12)
-  docs/             # 가이드, 런북, 31 ADR
+  infra-cdk/        # v1 CDK (VPC/EC2/ALB/CloudFront, Cognito/Lambda@Edge)
+  infra/            # CloudFormation 템플릿 (infra/cfn/)
+  terraform/v2/     # v2 재구축 (Terraform: ECS Fargate + Aurora + AgentCore) — 상당 부분 구축됨, docs/reference/ 참조
+  scripts/          # v1: 17 설치/운영 스크립트 (00-12); scripts/v2/: agentcore, eks, incident, remediation, steampipe, workers
+  tools/            # 프롬프트 및 헬퍼 스크립트
+  tests/            # vitest 스위트 (unit, structure, hooks, fixtures)
+  docs/             # 가이드, 런북, decisions/ (BASELINE.md + 통합 ADR 14개)
+  docs-site/        # Docusaurus 사이트 (docs/, i18n/, whatsnew/, static/)
+  public/           # v1 Next.js 정적 자산 (logos/)
 ```
 
 ## 테스트
@@ -306,7 +318,7 @@ npm run test:coverage  # 커버리지 리포트
 
 ## API 문서
 
-20개 API 라우트가 `src/app/api/`에 있습니다. 주요 라우트: `ai`(11-route AI 분류기), `steampipe`(쿼리, 비용 가용성, 인벤토리), `report`(AI 진단), `alert-webhook`, `notification`, `event-scaling`, 그리고 서비스별 CloudWatch 메트릭 라우트(`msk`, `rds`, `elasticache`, `opensearch`). 자세한 내용은 [docs/architecture.md](docs/architecture.md)를 참고하세요.
+20개 API 라우트가 `src/app/api/`에 있습니다. 주요 라우트: `ai`(11-route AI 분류기), `steampipe`(쿼리, 비용 가용성, 인벤토리), `report`(AI 진단), `alert-webhook`, `notification`, `event-scaling`, 그리고 서비스별 CloudWatch 메트릭 라우트(`msk`, `rds`, `elasticache`, `opensearch`). 자세한 내용은 [docs/history/architecture-v1.md](docs/history/architecture-v1.md)를 참고하세요(v1 아카이브; v2 재구축의 현행 설계는 [docs/reference/](docs/reference/) 참조).
 
 ## 기여 방법
 

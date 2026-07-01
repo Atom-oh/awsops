@@ -104,7 +104,7 @@ git add -A docs/decisions docs/history/ADR-MAPPING.md && git commit -m "docs(adr
 **Files:** Create `docs/decisions/BASELINE.md`.
 **Interfaces:** Consumes spec §2(북극성), Phase1 §D(flag register). Produces §0/§1/§2; §3는 T14에서 채움.
 
-- [ ] **Step 1: §0 북극성** — spec `docs/specs/2026-06-21-...-design.md` §2 전문(목표 WA6기둥/가치/핵심설계4축/실행위상=점진실행·FROZEN, aspiration) 복사.
+- [ ] **Step 1: §0 북극성** — spec `docs/superpowers/specs/2026-06-21-decisions-baseline-reset-design.md` §2 전문(목표 WA6기둥/가치/핵심설계4축/실행위상=점진실행·FROZEN, aspiration) 복사.
 - [ ] **Step 2: §1 불변식/용어** — read-only 정의(AWS-리소스 변경+자율=동결; 외부 DATA는 거버넌스 하 허용), 6기둥 매핑 규칙, flag 규율, 크기예산(C7: index이지 소설 아님), **범위=v2; v1(CDK/EC2/Steampipe)은 명시 제외(C8)**.
 - [ ] **Step 3: §2 게이트/동결 register** — Phase1 §D OFF 표 그대로:
   - `[FROZEN] AWS 리소스 변경 — remediation_enabled. 재활성화=새 ADR+패널+owner-override. (LEGACY 029/036)`
