@@ -9,6 +9,7 @@ rolling restart of the named services.
 """
 import os
 import re
+import sys
 
 import boto3
 
@@ -36,7 +37,6 @@ def _event_secret_id(event):
 def handler(event, context):
     cluster = os.environ["CLUSTER"]
     services = [s for s in os.environ.get("SERVICES", "").split(",") if s]
-    import sys
     want = os.environ.get("AURORA_SECRET_ARN", "").strip()
     got = _event_secret_id(event)
     # FAIL-CLOSED: redeploy ONLY when we positively confirm this is the Aurora master secret (the rule

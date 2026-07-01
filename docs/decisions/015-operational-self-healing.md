@@ -1,7 +1,11 @@
 # ADR-015: 운영 자가치유 — 호스트 자기 서비스 재배포 / Operational Self-Healing — Redeploying AWSops' Own Service
 
 ## Status / 상태
-**Accepted (2026-06-29).** Scopes a category distinct from ADR-005; does **not** unfreeze it.
+**Accepted — explicit, dated owner-override exception to the ADR-005 autonomy freeze (not a routine scoping clarification).**
+
+- **Owner sign-off:** 오준석(Junseok Oh), 2026-07-01. This ADR is ratified as a deliberate, narrow exception the owner has personally authorized — per `docs/decisions/CLAUDE.md` / root `CLAUDE.md`'s rule that unfreezing ADR-005 always requires a new ADR + multi-AI panel review + a dated owner-override, never a self-scoping reinterpretation.
+- **Panel record:** PR #114's multi-AI review (Claude chair · codex · kiro-opus · kiro-kimi, 2026-06-29) flagged the original "distinct category" framing as risking an owner-solo re-scope (echoing the legacy ADR-041 PARTIAL precedent) rather than a clearly-marked exception. This revision addresses that by naming the exception explicitly instead of implying it needs no sign-off.
+- **Scope of the exception, precisely:** ADR-005 itself is unchanged and remains FROZEN for everything else — the mutation/autonomy substrate (`remediation_enabled`, BYO-MCP, mutating tools) stays do-not-enable. The ONLY carve-out this ADR grants is the narrow, gated, fail-closed self-redeploy described below.
 
 ## Context / 컨텍스트
 
@@ -48,6 +52,6 @@ stays FROZEN). ADR-005 is unchanged; this ADR does not relax it.
 ## 6 Pillars (보안 중심) / 6 Pillars (security-focused)
 - **Security**: 자기 서비스 한정 + force-new-deployment-only + IAM 1 ARN 스코프 + secret-id 검증 fail-closed + default-off. 관리/고객 리소스 변경 없음. ADR-005 frozen substrate 불가침.
 - **Reliability**: RDS 회전↔valueFrom-at-start 불일치로 인한 ~주간 outage 자동 복구.
-- **Operational Excellence**: owner-override(2026-06-29) + 멀티-AI 패널 리뷰 + 본 ADR 기록으로 거버넌스 충족.
+- **Operational Excellence**: 명시적 owner-override(오준석, 2026-07-01) + 멀티-AI 패널 리뷰(PR #114, 2026-06-29) + 본 ADR 기록으로 ADR-005 예외 거버넌스 요건(새 ADR+패널+날짜박힌 owner-override) 충족.
 - **Cost**: default-off=$0; 켜도 회전당 짧은 롤링 1회.
 - **Performance/Sustainability**: 무중단 롤링, 상시 자원 0.

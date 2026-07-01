@@ -23,7 +23,8 @@ locals {
   srr = var.secret_rotation_redeploy_enabled ? 1 : 0
   # services that inject the Aurora master secret at task start (web today; steampipe joins when
   # the multi-account inventory fan-out PR lands and gives the steampipe task AURORA_SECRET).
-  srr_services = aws_ecs_service.web.name
+  # Modeled as a list from the start so adding a service is a one-line append, not a type change.
+  srr_services = [aws_ecs_service.web.name]
 }
 
 data "archive_file" "secret_rotation_redeploy" {
@@ -64,10 +65,16 @@ resource "aws_iam_role_policy" "secret_rotation_redeploy" {
     # MUST stay in lockstep with local.srr_services (single service today); extend Resource if it grows.
     Statement = [{
       Effect   = "Allow"
-      Action   = ["ecs:UpdateService", "ecs:DescribeServices"]
-      Resource = aws_ecs_service.web.id
+      Action   = ["ecs:UpdateService"] # DescribeServices dropped — redeploy.py never calls it
+      Resource = aws_ecs_service.web.arn
     }]
   })
+}
+
+resource "aws_cloudwatch_log_group" "secret_rotation_redeploy" {
+  count             = local.srr
+  name              = "/aws/lambda/${var.project}-secret-rotation-redeploy"
+  retention_in_days = 30
 }
 
 resource "aws_lambda_function" "secret_rotation_redeploy" {
@@ -81,10 +88,11 @@ resource "aws_lambda_function" "secret_rotation_redeploy" {
   source_code_hash = data.archive_file.secret_rotation_redeploy[0].output_base64sha256
   timeout          = 30
   memory_size      = 128
+  depends_on       = [aws_cloudwatch_log_group.secret_rotation_redeploy]
   environment {
     variables = {
       CLUSTER  = aws_ecs_cluster.main.name
-      SERVICES = local.srr_services
+      SERVICES = join(",", local.srr_services)
       # the handler re-checks the rotated secret id against this before redeploying, so the
       # EventBridge rule can match RotationSucceeded broadly (M2 — secret-id event path varies).
       AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
@@ -129,4 +137,36 @@ resource "aws_lambda_permission" "secret_rotation_redeploy_events" {
   function_name = aws_lambda_function.secret_rotation_redeploy[0].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.aurora_secret_rotated[0].arn
+}
+
+# M3 — the redeploy.py fail-closed skip paths (unset target, unidentified secret, non-matching
+# secret) return normally and only log a WARN; without this, a wrong event-shape assumption fails
+# silently and the exact outage this Lambda exists to prevent could recur with zero signal. This
+# turns every WARN line into a countable metric + a visible (not yet subscribed — wire an
+# alarm_actions SNS/OpsGenie/etc. target per your alerting stack before relying on it) alarm.
+resource "aws_cloudwatch_log_metric_filter" "secret_rotation_redeploy_skip" {
+  count          = local.srr
+  name           = "${var.project}-secret-rotation-redeploy-skip"
+  log_group_name = aws_cloudwatch_log_group.secret_rotation_redeploy[0].name
+  pattern        = "\"[secret-rotation-redeploy] WARN\""
+  metric_transformation {
+    name      = "SecretRotationRedeploySkipped"
+    namespace = "${var.project}/secret-rotation-redeploy"
+    value     = "1"
+    unit      = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "secret_rotation_redeploy_skip" {
+  count               = local.srr
+  alarm_name          = "${var.project}-secret-rotation-redeploy-skip"
+  alarm_description   = "redeploy.py hit a fail-closed skip path (unset target / unidentified secret) — the event-shape assumption may be wrong and the rotation outage this Lambda guards against could go unfixed. Wire alarm_actions before relying on this."
+  namespace           = "${var.project}/secret-rotation-redeploy"
+  metric_name         = "SecretRotationRedeploySkipped"
+  statistic           = "Sum"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  period              = 300
+  evaluation_periods  = 1
+  treat_missing_data  = "notBreaching"
 }
