@@ -192,10 +192,18 @@ resource "aws_ecs_task_definition" "steampipe" {
       { name = "STEAMPIPE_DATABASE_PASSWORD", valueFrom = aws_secretsmanager_secret.steampipe[0].arn },
     ]
     healthCheck = {
-      command     = ["CMD-SHELL", "steampipe query \"select 1\" >/dev/null 2>&1 || exit 1"]
-      interval    = 30
-      timeout     = 10
-      retries     = 3
+      command = ["CMD-SHELL", "steampipe query \"select 1\" >/dev/null 2>&1 || exit 1"]
+      interval = 30
+      timeout  = 10
+      # retries=5 (150s consecutive-failure tolerance) — NOT just the initial startup case.
+      # startPeriod (below) only covers the FIRST health-check window after task launch; it does
+      # NOT apply to a mid-life restart triggered by the scope watchdog (account/region change) or
+      # a crash-recovery restart (gen_spc_entrypoint.py's supervisor loop). Such a restart's
+      # worst-case downtime is terminate-wait(<=30s) + service-stop --force(<=30s) + Steampipe
+      # embedded-PG reinit (~10-30s) - up to ~90s - which the prior retries=3 (90s) window left with
+      # no margin, risking ECS treating the task as UNHEALTHY mid-restart and cycling it (the
+      # "circuit breaker loop" CLAUDE.md warns about) (M-B fix).
+      retries     = 5
       startPeriod = 120
     }
     logConfiguration = {

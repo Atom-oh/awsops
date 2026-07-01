@@ -149,6 +149,27 @@ def test_start_steampipe_never_receives_a_password_env():
     assert "env" not in kwargs, "no explicit env override — nothing sensitive to strip"
 
 
+def test_stop_steampipe_service_runs_the_canonical_stop_command():
+    """M-A: restarting must explicitly run `steampipe service stop --force` (not rely solely on
+    terminate()/kill() of our own Popen handle), since `service start --foreground` manages an
+    embedded PostgreSQL + on-disk service-state lock that our process-level kill does not
+    guarantee is released before the next `service start`."""
+    import gen_spc_entrypoint
+    with mock.patch("subprocess.run") as run:
+        gen_spc_entrypoint._stop_steampipe_service()
+    args, kwargs = run.call_args
+    assert args[0] == ["steampipe", "service", "stop", "--force"]
+    assert kwargs.get("timeout") == 30
+
+
+def test_stop_steampipe_service_is_best_effort_on_failure():
+    """A failing/timed-out `service stop` must not raise — the caller always proceeds to attempt
+    `_start_steampipe()` regardless, which fails closed via the existing crash-restart path."""
+    import gen_spc_entrypoint
+    with mock.patch("subprocess.run", side_effect=Exception("boom")):
+        gen_spc_entrypoint._stop_steampipe_service()  # must not raise
+
+
 def test_signal_handler_does_not_deadlock_when_caller_holds_proc_lock():
     """Regression test for M3: the signal handler must not touch proc_lock at all. Simulate the
     worst case — the SAME thread already holds proc_lock (as the main supervisor loop does mid-

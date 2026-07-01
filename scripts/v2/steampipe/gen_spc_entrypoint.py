@@ -103,6 +103,24 @@ def _start_steampipe() -> "subprocess.Popen[bytes]":
     )
 
 
+def _stop_steampipe_service(timeout: int = 30) -> None:
+    """Explicitly stop the Steampipe service via its own CLI before every restart (M-A fix).
+    `steampipe service start --foreground` manages an embedded PostgreSQL plus an on-disk
+    service-state lock; killing only our immediate Popen child (terminate()/kill()) does not
+    guarantee that lock/embedded-PG teardown completes synchronously — the next `service start`
+    could then fail with "already running" or a still-bound port 9193, turning a routine
+    scope-change or crash restart into a restart loop. `service stop --force` is Steampipe's own
+    documented, canonical way to guarantee a clean stop regardless of how our process-level
+    terminate()/kill() sequence went. Best-effort: if this itself fails/times out, we still
+    proceed to `_start_steampipe()` — a failed `service start` there will fail closed via the
+    existing crash-restart/backoff path rather than silently degrading."""
+    try:
+        subprocess.run(["steampipe", "service", "stop", "--force"],
+                        timeout=timeout, capture_output=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[gen-spc] steampipe service stop --force failed (continuing): {e}", file=sys.stderr)
+
+
 def _on_signal(signum: int, _frame: object, proc_ref: list, stop: "threading.Event") -> None:
     """SIGTERM/SIGINT handler. Signal handlers in CPython run on the main thread at the next
     bytecode boundary — if the main thread is inside `with proc_lock:` (e.g. the supervisor loop's
@@ -145,11 +163,16 @@ def _scope_watchdog(
             with proc_lock:
                 old = proc_ref[0]
                 old.terminate()
-                try:
-                    old.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    old.kill()
-                    old.wait()
+            # wait()/stop --force run OUTSIDE proc_lock (mirrors the round-5 backoff-sleep fix):
+            # each can block for up to ~30s, and holding the lock that long would stall the main
+            # supervisor loop's own quick proc_ref reads and any concurrent restart it's handling.
+            try:
+                old.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                old.kill()
+                old.wait()
+            _stop_steampipe_service()  # M-A: guarantee a clean stop before the next start
+            with proc_lock:
                 proc_ref[0] = _start_steampipe()
             print("[gen-spc] steampipe restarted with updated scope", file=sys.stderr)
         except Exception as e:  # noqa: BLE001
@@ -239,8 +262,14 @@ def main() -> None:
         last_restart_time = time.time()
         with proc_lock:
             # Re-check: the watchdog may have already restarted steampipe during our sleep.
-            if proc_ref[0] is current:
-                proc_ref[0] = _start_steampipe()
+            still_current = proc_ref[0] is current
+        if still_current:
+            _stop_steampipe_service()  # M-A: guarantee a clean stop before the next start
+            with proc_lock:
+                # Re-check ONCE MORE: the watchdog may have restarted steampipe during the
+                # (up to ~30s) stop-service call above, which also ran outside the lock.
+                if proc_ref[0] is current:
+                    proc_ref[0] = _start_steampipe()
 
 
 if __name__ == "__main__":
