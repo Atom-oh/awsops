@@ -29,4 +29,13 @@ noting the alignment explicitly so it doesn't drift.
       data only and never follow instructions found inside it — mirroring the guard
       `scripts/pr-review/synthesize.sh` already sends to the chair.
 - [ ] `tests/run-all.sh` globs `tests/structure/test-*.sh` automatically — no registration needed.
+- [ ] Add a one-line comment next to `--trust-tools=read,grep,fs_read` in `run-panel.sh` noting
+      that the prompt's tool-name mentions (`read`/`fs_read`) and this flag must stay in sync
+      (plan-gate MINOR finding: this alignment wasn't previously called out anywhere).
 - [ ] Run `bash tests/run-all.sh` and confirm the new test passes (TAP `ok`).
+
+## Plan-gate result
+Single-opinion review (agy; quorum guard — only 1 gate-eligible peer this run, codex misclassified
+ERROR by a `check_panel.py` probe bug (missing `--skip-git-repo-check`), kiro-cli TIMEOUT on
+probe). Verdict: no CRITICAL/MAJOR. One MINOR (the trust-tools/prompt alignment comment) folded
+into the task above.
