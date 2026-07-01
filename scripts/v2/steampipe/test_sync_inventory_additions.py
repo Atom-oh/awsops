@@ -37,21 +37,70 @@ def test_inject_account_rejects_non_account_literal():
         sync_lambda._inject_account("WHERE owner_id = '{account_id}'", "'; DROP TABLE x--")
 
 
-def test_prune_present_always_includes_self():
-    """The host 'self' account uses IAM task-role credentials (not AssumeRole) and always
-    succeeds. If 'self' returns 0 rows (all resources deleted), it is genuinely empty — its
-    stale rows must be pruned rather than kept as phantoms. This verifies that 'self' is
-    always in the `present` set regardless of whether any rows were returned (phase-2 M1 fix)."""
-    # Simulate: no rows returned from Steampipe (empty run)
-    seen: set = set()
-    present = {a for (a, _, _) in seen} | {'self'}
-    assert 'self' in present, "'self' must always be in present (prune-to-zero fix)"
+def test_prune_present_includes_self_when_host_contributed_rows():
+    """When the host contributed rows this run, 'self' is trivially in `present` — no probe
+    needed (mirrors sync()'s phase-2 `present = {a for (a,_,_) in seen}`)."""
+    seen = {('self', 'ap-northeast-2', 'i-abc'), ('123456789012', 'ap-northeast-2', 'i-def')}
+    present = {a for (a, _, _) in seen}
+    assert 'self' in present
+    assert '123456789012' in present
 
-    # Simulate: only target account rows returned (host had no resources)
-    seen = {('123456789012', 'ap-northeast-2', 'i-abc')}
-    present = {a for (a, _, _) in seen} | {'self'}
-    assert 'self' in present  # host still prunable even with 0 host rows
-    assert '123456789012' in present  # target account present normally
+
+def test_host_probe_symmetric_with_target_probe_via_real_account_reachable(monkeypatch):
+    """M-2 (round 8): host ('self') protection is no longer an unconditional `| {'self'}` — an
+    aggregator-backed (QUERIES) type with 0 host rows this run must probe the host's OWN
+    Steampipe connection (aws_<host_real_id>, via _caller_account()) exactly like a target
+    account, using the REAL _account_reachable function (not a hand-simulated duplicate — this
+    directly exercises the same call sync() makes: _account_reachable(_caller_account()))."""
+    mod = sync_lambda
+    mod._ACCOUNT_CACHE["id"] = "111111111111"  # host's real 12-digit id
+    queried_schemas = []
+
+    class FakeConn:
+        def run(self, sql):
+            queried_schemas.append(sql)
+            return [("111111111111",)]  # reachable
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    assert mod._account_reachable(mod._caller_account()) is True
+    assert "aws_111111111111.aws_caller_identity" in queried_schemas[0]
+
+
+def test_host_probe_unreachable_protects_last_good_inventory(monkeypatch):
+    """An UNREACHABLE host connection must return False from the real probe — sync()'s phase-2
+    `if resource_type in SDK_SYNCS or _account_reachable(_caller_account())` then evaluates
+    False for an aggregator-backed type, so 'self' is NOT added to `present`, protecting the
+    host's last-good inventory instead of force-pruning it to zero (the M-2 fix)."""
+    mod = sync_lambda
+    mod._ACCOUNT_CACHE["id"] = "111111111111"
+
+    class FakeConn:
+        def run(self, sql):
+            raise Exception("transient connection failure")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    assert mod._account_reachable(mod._caller_account()) is False
+
+
+def test_sdk_synced_types_short_circuit_the_host_probe_entirely():
+    """SDK-sourced types (cloudfront_vpc_origin, s3_public_access, alb_listener_rule) never go
+    through Steampipe: reaching sync()'s phase-2 code already means the direct SDK call
+    succeeded, so 0 host rows is the SDK's own definitive "genuinely empty" signal — a Steampipe
+    probe would be a category error. Verify the actual SDK_SYNCS registry contains real type
+    names sync() would short-circuit on (`resource_type in SDK_SYNCS`, evaluated BEFORE
+    _account_reachable via `or` short-circuit)."""
+    mod = sync_lambda
+    assert "cloudfront_vpc_origin" in mod.SDK_SYNCS
+    assert "s3_public_access" in mod.SDK_SYNCS
+    assert "alb_listener_rule" in mod.SDK_SYNCS
+    # An aggregator-backed type must NOT be in SDK_SYNCS (else it would wrongly skip the probe).
+    assert "ec2" not in mod.SDK_SYNCS
 
 
 def test_disabled_account_cleanup_sql_excludes_self_and_targets_disabled():

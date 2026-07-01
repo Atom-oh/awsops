@@ -529,10 +529,19 @@ def _owner_ids_in(adb):
 
 
 def _enabled_target_accounts(adb):
-    """Enabled non-host account ids, for the M2 reachability probe. Host is excluded (see
-    _rec_account: it always maps to 'self', which phase-2 prune already always includes)."""
+    """Target account ids actually IN SCAN SCOPE (not merely `enabled`), for the M2 reachability
+    probe. Host is excluded (see _rec_account: it always maps to 'self', handled separately by
+    the M-2 host probe). Mirrors PHASE1_PRUNE_SQL's exact in-scope condition — an account that is
+    enabled but out of scope (all_regions=false, zero enabled account_regions rows) already has
+    NO rendered aws.spc connection (spc_render.py skips it) and was already fully swept by
+    phase-1; probing it here would always fail/no-op, wasting a round-trip every sync (M-7 fix,
+    round 8)."""
     rows = adb.run(
-        "SELECT account_id FROM accounts WHERE enabled = true AND account_id <> 'self' AND account_id <> :host",
+        "SELECT a.account_id FROM accounts a "
+        "WHERE a.enabled = true AND a.account_id <> 'self' AND a.account_id <> :host "
+        "AND (a.all_regions = true OR EXISTS ("
+        "  SELECT 1 FROM account_regions r WHERE r.account_id = a.account_id AND r.enabled = true"
+        "))",
         host=_caller_account(),
     )
     return [str(r[0]) for r in rows]
@@ -650,18 +659,32 @@ def sync(resource_type):
             # Phase 2 — row-level stale within enabled/in-scope accounts: delete individual rows
             # that were NOT returned in this run, but ONLY for accounts that DID contribute rows
             # (`present`). An account with 0 rows from the aggregator may have suffered a transient
-            # AssumeRole failure — pruning it would silently discard its last-good inventory (M5).
-            # Exception: host 'self' uses IAM task-role creds (not AssumeRole), always succeeds;
-            # 0 host rows = genuinely empty → always include 'self' in present.
-            present = {a for (a, _, _) in seen} | {'self'}
-            # M2: an enabled TARGET account that contributed 0 rows this run is ambiguous under
-            # the M5 guard above — it might be genuinely empty (e.g. all its EC2 instances were
-            # terminated) or its aggregator connection might be transiently failing. Aggregator-
-            # backed (QUERIES) types only — SDK_SYNCS are host-only and never populate target rows.
-            # Positively probe each such account via its OWN Steampipe connection (data path, not
-            # an independent IAM trust check — see _account_reachable): reachable + 0 rows =
-            # genuinely empty (include in present so its stale rows get pruned); unreachable =
-            # protect its last-good inventory (leave excluded, same as before this fix).
+            # connection failure — pruning it would silently discard its last-good inventory (M5).
+            present = {a for (a, _, _) in seen}
+            # M-2 (round 8): host ('self') protection must be SYMMETRIC with target accounts, not
+            # an unconditional `| {'self'}`. An earlier version force-included 'self' on the
+            # reasoning "host uses IAM task-role creds (not AssumeRole), always succeeds" — but
+            # that only rules out an AUTH failure, not a transient failure of the Steampipe
+            # connection's QUERY itself (e.g. an AWS API throttle/blip on this specific run). The
+            # aggregator returns PARTIAL results on a single-connection failure without raising, so
+            # a host-connection hiccup this run would otherwise force-prune the host's last-good
+            # inventory to zero — the exact M5 data-loss class, applied asymmetrically to 'self'.
+            # SDK_SYNCS types don't go through Steampipe at all: reaching this point already means
+            # the direct SDK call succeeded (a failure would have raised above, short-circuiting
+            # before this section), so 0 rows there is the SDK's own definitive "genuinely empty"
+            # signal — no probe needed. Aggregator-backed (QUERIES) types: probe the host's OWN
+            # connection (aws_<host_real_id>, via _caller_account()) exactly like a target account.
+            if 'self' not in present:
+                if resource_type in SDK_SYNCS or _account_reachable(_caller_account()):
+                    present.add('self')
+            # M2 (round 6): an enabled TARGET account that contributed 0 rows this run is
+            # ambiguous under the M5 guard above — it might be genuinely empty (e.g. all its EC2
+            # instances were terminated) or its aggregator connection might be transiently
+            # failing. Aggregator-backed (QUERIES) types only — SDK_SYNCS are host-only and never
+            # populate target rows. Positively probe each such account via its OWN Steampipe
+            # connection (data path, not an independent IAM trust check — see _account_reachable):
+            # reachable + 0 rows = genuinely empty (include in present so its stale rows get
+            # pruned); unreachable = protect its last-good inventory (leave excluded).
             if resource_type not in SDK_SYNCS:
                 for acct_id in _enabled_target_accounts(adb):
                     if acct_id not in present and _account_reachable(acct_id):

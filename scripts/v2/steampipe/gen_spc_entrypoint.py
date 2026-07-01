@@ -141,10 +141,48 @@ def _on_signal(signum: int, _frame: object, proc_ref: list, stop: "threading.Eve
     sys.exit(0)
 
 
+def _restart_steampipe(proc_ref: list, restart_lock: threading.Lock, old: "subprocess.Popen[bytes]") -> None:
+    """The FULL restart sequence — terminate the old process, guarantee a clean service stop, and
+    start a new one — run under `restart_lock` from start to finish (M-1 fix, round 8).
+
+    `steampipe service stop --force` (M-A, round 7) is a GLOBAL/singleton operation on the
+    embedded-PG service, not scoped to a specific Popen handle. Round 7 ran it OUTSIDE any lock in
+    both the watchdog and the supervisor-loop restart paths (mirroring the round-5 backoff-sleep
+    fix, which correctly keeps an UNBOUNDED exponential-backoff sleep off the lock). But
+    stop-then-start is a BOUNDED, always-necessary sequence, and having TWO independent call sites
+    invoke the global stop/start without mutual exclusion between them created a new race: if the
+    watchdog starts a fresh process (procD) while the supervisor loop's OWN (already-decided,
+    stale) restart sequence is mid-flight, the supervisor's `_stop_steampipe_service()` call would
+    indiscriminately kill procD too, right after it was started — an unnecessary extra restart
+    cycle stacking on top of the intended one. A single lock serializing the ENTIRE
+    terminate->wait->stop->start sequence (used by both call sites) makes only one such sequence
+    possible at a time globally, so neither path's stop-force call can ever land on a process the
+    OTHER path just started.
+
+    The `proc_ref[0] is not old` guard right after acquiring the lock closes a second, subtler
+    race: Python's Popen caches `returncode` after a successful `wait()`, so calling
+    terminate()/wait() again on an ALREADY-reaped `old` (from a caller that lost the race to
+    acquire the lock first) is a safe no-op — but WITHOUT this guard, that stale caller would
+    still fall through to `_stop_steampipe_service()` + `_start_steampipe()`, clobbering whatever
+    the FIRST caller just started. The guard makes a losing caller a true no-op: the desired new
+    state (whatever the winner produced) is already in place."""
+    with restart_lock:
+        if proc_ref[0] is not old:
+            return  # someone else already restarted while we waited for the lock — nothing to do
+        old.terminate()
+        try:
+            old.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            old.kill()
+            old.wait()
+        _stop_steampipe_service()
+        proc_ref[0] = _start_steampipe()
+
+
 def _scope_watchdog(
     initial_spc: str,
     proc_ref: list,
-    proc_lock: threading.Lock,
+    restart_lock: threading.Lock,
     stop: threading.Event,
 ) -> None:
     """Background thread: re-query Aurora every SCOPE_WATCH_INTERVAL seconds. If the rendered
@@ -160,20 +198,8 @@ def _scope_watchdog(
                   file=sys.stderr)
             write_spc(new_spc)
             current = new_spc
-            with proc_lock:
-                old = proc_ref[0]
-                old.terminate()
-            # wait()/stop --force run OUTSIDE proc_lock (mirrors the round-5 backoff-sleep fix):
-            # each can block for up to ~30s, and holding the lock that long would stall the main
-            # supervisor loop's own quick proc_ref reads and any concurrent restart it's handling.
-            try:
-                old.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                old.kill()
-                old.wait()
-            _stop_steampipe_service()  # M-A: guarantee a clean stop before the next start
-            with proc_lock:
-                proc_ref[0] = _start_steampipe()
+            old = proc_ref[0]
+            _restart_steampipe(proc_ref, restart_lock, old)
             print("[gen-spc] steampipe restarted with updated scope", file=sys.stderr)
         except Exception as e:  # noqa: BLE001
             print(f"[gen-spc] scope watchdog error (non-fatal): {e}", file=sys.stderr)
@@ -181,7 +207,7 @@ def _scope_watchdog(
 
 def main() -> None:
     # Pre-flight config check: fail fast with a clear signal rather than spending the
-    # retry budget (~22 s) before reporting "Aurora unreachable" (addresses MINOR-5).
+    # retry budget (~14 s) before reporting "Aurora unreachable" (addresses MINOR-5).
     for var in ("AURORA_ENDPOINT", "AURORA_DATABASE"):
         if not os.environ.get(var):
             print(f"[gen-spc] FATAL: required env var '{var}' is not set (config error)",
@@ -214,7 +240,7 @@ def main() -> None:
     print(f"[gen-spc] wrote {SPC_PATH} for {len(rows)} enabled account(s)", file=sys.stderr)
 
     # Start Steampipe (no Aurora credential in its env at all — M1).
-    proc_lock = threading.Lock()
+    restart_lock = threading.Lock()
     proc_ref = [_start_steampipe()]
     stop = threading.Event()
 
@@ -225,7 +251,7 @@ def main() -> None:
     # Start scope watchdog (daemon — exits with the supervisor).
     threading.Thread(
         target=_scope_watchdog,
-        args=(spc, proc_ref, proc_lock, stop),
+        args=(spc, proc_ref, restart_lock, stop),
         daemon=True,
     ).start()
 
@@ -235,19 +261,17 @@ def main() -> None:
     rapid_restart_count = 0
     last_restart_time = 0.0
     while not stop.is_set():
-        with proc_lock:
-            current = proc_ref[0]
+        current = proc_ref[0]  # a single list-index read is atomic under the GIL; no lock needed
         code = current.wait()
         if stop.is_set():
             break
-        # Watchdog-initiated restarts terminate the old proc; the new proc is already in proc_ref.
-        with proc_lock:
-            unexpected = proc_ref[0] is current
-        if not unexpected:
+        if proc_ref[0] is not current:
+            # The watchdog already replaced it (this exit was its terminate(), not a crash).
             continue
-        # Unexpected exit — apply exponential backoff for rapid crashes. The sleep runs OUTSIDE
-        # proc_lock (unlike an earlier version of this loop) so a concurrent watchdog-initiated
-        # scope-change restart is never blocked behind our up-to-60s backoff.
+        # Unexpected exit — apply exponential backoff for rapid crashes. This sleep runs BEFORE
+        # acquiring restart_lock: it is UNBOUNDED/growing (up to 60s per rapid crash), unlike the
+        # bounded terminate->wait->stop->start sequence in _restart_steampipe, which DOES need to
+        # hold restart_lock for its whole duration (M-1 fix) — see that function's docstring.
         elapsed = time.time() - last_restart_time
         if elapsed < 30:
             rapid_restart_count += 1
@@ -260,16 +284,10 @@ def main() -> None:
             print(f"[gen-spc] steampipe exited unexpectedly (code {code}) — restarting",
                   file=sys.stderr)
         last_restart_time = time.time()
-        with proc_lock:
-            # Re-check: the watchdog may have already restarted steampipe during our sleep.
-            still_current = proc_ref[0] is current
-        if still_current:
-            _stop_steampipe_service()  # M-A: guarantee a clean stop before the next start
-            with proc_lock:
-                # Re-check ONCE MORE: the watchdog may have restarted steampipe during the
-                # (up to ~30s) stop-service call above, which also ran outside the lock.
-                if proc_ref[0] is current:
-                    proc_ref[0] = _start_steampipe()
+        # _restart_steampipe's own `proc_ref[0] is not old` guard (checked under restart_lock)
+        # handles the case where the watchdog raced in and already restarted during our backoff
+        # sleep above — no separate re-check needed here.
+        _restart_steampipe(proc_ref, restart_lock, current)
 
 
 if __name__ == "__main__":

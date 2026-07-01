@@ -170,6 +170,72 @@ def test_stop_steampipe_service_is_best_effort_on_failure():
         gen_spc_entrypoint._stop_steampipe_service()  # must not raise
 
 
+def test_restart_steampipe_performs_full_sequence_when_old_still_current():
+    """M-1 (round 8) happy path: when `old` still matches `proc_ref[0]` at lock-acquisition time
+    (the normal, non-racing case), _restart_steampipe must terminate/wait, stop-service, and
+    start a fresh process, updating proc_ref[0]."""
+    import threading
+    import gen_spc_entrypoint
+
+    class FakeProc:
+        def __init__(self, name):
+            self.name = name
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+    old = FakeProc("old")
+    new = FakeProc("new")
+    proc_ref = [old]
+    restart_lock = threading.Lock()
+
+    with mock.patch.object(gen_spc_entrypoint, "_stop_steampipe_service") as stop_svc, \
+         mock.patch.object(gen_spc_entrypoint, "_start_steampipe", return_value=new) as start:
+        gen_spc_entrypoint._restart_steampipe(proc_ref, restart_lock, old)
+
+    assert old.terminated is True
+    stop_svc.assert_called_once()
+    start.assert_called_once()
+    assert proc_ref[0] is new
+
+
+def test_restart_steampipe_is_a_noop_when_old_already_replaced():
+    """M-1 (round 8) regression test — THE race fix: if `proc_ref[0]` no longer matches `old` by
+    the time the lock is acquired (another restart already won the race and replaced it),
+    _restart_steampipe must be a complete no-op: it must NOT call terminate()/stop_service/
+    start_steampipe again, which would otherwise clobber whatever the winning caller just
+    started. This is the exact scenario the round-7 CI review flagged: two independent restart
+    paths racing to call the GLOBAL `steampipe service stop --force`, with a stale caller killing
+    a freshly-started process."""
+    import threading
+    import gen_spc_entrypoint
+
+    class FakeProc:
+        def __init__(self):
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+
+    stale_old = FakeProc()  # what THIS caller thinks is the current process
+    already_started_by_someone_else = FakeProc()
+    proc_ref = [already_started_by_someone_else]  # ...but proc_ref[0] has already moved on
+    restart_lock = threading.Lock()
+
+    with mock.patch.object(gen_spc_entrypoint, "_stop_steampipe_service") as stop_svc, \
+         mock.patch.object(gen_spc_entrypoint, "_start_steampipe") as start:
+        gen_spc_entrypoint._restart_steampipe(proc_ref, restart_lock, stale_old)
+
+    assert stale_old.terminated is False, "a stale caller must not terminate a process it doesn't own"
+    stop_svc.assert_not_called()
+    start.assert_not_called()
+    assert proc_ref[0] is already_started_by_someone_else, "the winning caller's process must survive untouched"
+
+
 def test_signal_handler_does_not_deadlock_when_caller_holds_proc_lock():
     """Regression test for M3: the signal handler must not touch proc_lock at all. Simulate the
     worst case — the SAME thread already holds proc_lock (as the main supervisor loop does mid-

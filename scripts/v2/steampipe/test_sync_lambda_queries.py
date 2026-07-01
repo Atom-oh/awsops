@@ -69,16 +69,26 @@ def test_owner_ids_in_includes_host_and_targets_validated():
 
 def test_enabled_target_accounts_excludes_host_and_self():
     """M2: _enabled_target_accounts must return only real TARGET account ids (never 'self' or the
-    host's own 12-digit id) — those are handled separately by phase-2's always-present 'self'."""
+    host's own 12-digit id) — those are handled separately by phase-2's host probe. Also (M-7,
+    round 8): the query must filter to accounts actually IN SCAN SCOPE (all_regions OR an enabled
+    account_regions row) — not merely `enabled`, else a zero-region account (already swept by
+    phase-1, with no rendered aws.spc connection to probe) would be probed every sync for nothing."""
     mod = load_sync_lambda()
     mod._ACCOUNT_CACHE["id"] = "111111111111"  # host caller id
+    seen_sql = []
 
     class FakeAdb:
         def run(self, sql, **params):
+            seen_sql.append(sql)
             assert params.get("host") == "111111111111"
             return [("210987654321",), ("310987654321",)]
 
     assert mod._enabled_target_accounts(FakeAdb()) == ["210987654321", "310987654321"]
+    assert "a.all_regions = true" in seen_sql[0], "must accept all_regions accounts as in-scope"
+    assert "EXISTS" in seen_sql[0] and "account_regions" in seen_sql[0], (
+        "must filter to accounts with >=1 enabled account_regions row — a bare enabled=true "
+        "check would probe zero-region accounts that already have no rendered connection (M-7)"
+    )
 
 
 def test_account_reachable_true_when_its_own_steampipe_connection_answers(monkeypatch):
