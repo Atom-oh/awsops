@@ -15,11 +15,14 @@ RUN steampipe plugin install "ghcr.io/turbot/steampipe/plugins/turbot/aws:0.142.
  && sed -i 's#ghcr.io/turbot/steampipe/plugins/turbot/aws#hub.steampipe.io/plugins/turbot/aws#g' "$P/versions.json" \
  && rm -rf "$P/ghcr.io"
 # Boot-time aws.spc generator: query Aurora (accounts ⋈ account_regions / all_regions) → render a
-# per-account/region connection config + aggregator. Needs python3 + pg8000.
+# per-account/region connection config + aggregator, then supervise `steampipe service start`.
+# Needs python3 + pg8000 (Aurora connection) + boto3 (rds.generate_db_auth_token — IAM database
+# auth as the least-privilege steampipe_reader role; M1 — no Aurora secret is ever used).
 USER root
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip \
- && (pip3 install --no-cache-dir --break-system-packages pg8000==1.31.2 || pip3 install --no-cache-dir pg8000==1.31.2) \
+ && (pip3 install --no-cache-dir --break-system-packages pg8000==1.31.2 boto3==1.34.162 \
+     || pip3 install --no-cache-dir pg8000==1.31.2 boto3==1.34.162) \
  && rm -rf /var/lib/apt/lists/*
 COPY --chown=steampipe:0 spc_render.py gen_spc_entrypoint.py /app/
 USER steampipe

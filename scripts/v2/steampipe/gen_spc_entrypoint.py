@@ -5,16 +5,17 @@ Reads the enabled accounts + their scan scope from Aurora (account_regions / all
 the multi-account/region connection config via spc_render, writes it, then starts `steampipe
 service start` as a child process (Python stays alive as the ECS PID-1 supervisor).
 
-Aurora creds arrive as AURORA_SECRET env (task-def `secrets`/valueFrom, execution role) — no
-in-container SecretsManager call is needed. AURORA_SECRET is NEVER forwarded to the Steampipe
-subprocess; only the Python supervisor holds it, reducing blast radius if the network listener
-(Steampipe, port 9193) is compromised (MAJOR 1 mitigation — M1).
+Aurora auth uses IAM database authentication (M1 fix): the task role has `rds-db:connect` scoped
+to the dedicated least-privilege `steampipe_reader` Postgres role (SELECT-only on accounts/
+account_regions — see the steampipe_reader migration), and this entrypoint generates a fresh
+short-lived signed token per connection via boto3 `generate_db_auth_token`. NO Aurora secret of
+any kind (master or otherwise) is ever granted to this task or held in its environment/heap — the
+network-listening Steampipe process (port 9193) cannot leak a DB credential it never has.
 
 On Aurora-unreachable: bounded retry, then fail-closed (exit non-zero) — never start with an
 empty/stale config. A background watchdog re-queries Aurora every SCOPE_WATCH_INTERVAL seconds and
 restarts Steampipe when account/region scope changes (MAJOR 3 fix — M3).
 """
-import json
 import os
 import signal
 import ssl
@@ -23,20 +24,14 @@ import sys
 import threading
 import time
 
+import boto3
 import pg8000.native
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from spc_render import render_spc  # noqa: E402
 
 SPC_PATH = os.environ.get("AWS_SPC_PATH", "/home/steampipe/.steampipe/config/aws.spc")
-
-# Read Aurora credentials once at startup and immediately REMOVE them from the process
-# environment. This prevents the master DB credentials from appearing in /proc/1/environ
-# (readable by any process with the same UID, e.g. a compromised Steampipe child). The parsed
-# creds dict lives only in Python heap memory — not in the process environment table (M2
-# partial mitigation; full fix = dedicated steampipe_reader Postgres role, follow-up PR).
-# _steampipe_env() also strips AURORA_SECRET from the subprocess env as a defence-in-depth.
-_AURORA_CREDS: dict = json.loads(os.environ.pop("AURORA_SECRET", "{}") or "{}")
+AURORA_USER = os.environ.get("AURORA_USER", "steampipe_reader")
 # Scope watchdog interval. Re-querying Aurora every 5 min keeps the hot Steampipe config in sync
 # with account/region mutations without requiring a full task replacement. Low enough to catch
 # changes within a single sync-lambda cycle; high enough to avoid Aurora connection spam.
@@ -53,17 +48,28 @@ QUERY = (
 )
 
 
+def _generate_auth_token() -> str:
+    """A fresh short-lived (15 min) IAM-signed token, used as the Postgres password for
+    AURORA_USER. Generated from the TASK role's credentials (ECS metadata endpoint) — no
+    Aurora secret is read or stored anywhere (M1 fix)."""
+    client = boto3.client("rds", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
+    return client.generate_db_auth_token(
+        DBHostname=os.environ["AURORA_ENDPOINT"], Port=5432, DBUsername=AURORA_USER,
+    )
+
+
 def _connect():
-    creds = _AURORA_CREDS  # module-level cache; AURORA_SECRET was popped from os.environ at startup
-    # In-VPC TLS: no RDS CA bundle in this image (mirrors sync_lambda._ssl_ctx). The DB password
-    # IS transmitted over this connection; CERT_NONE means in-VPC MITM protection relies on VPC
-    # network controls, not certificate verification.
-    # TODO: add RDS CA bundle to the image and switch to VERIFY_FULL (M2 follow-up).
+    # IAM database auth REQUIRES TLS. No RDS CA bundle in this image (mirrors sync_lambda._ssl_ctx'
+    # in-VPC posture): CERT_NONE means MITM protection relies on VPC network controls, not
+    # certificate verification. The token is short-lived and scoped to steampipe_reader (SELECT-
+    # only, two tables) — unlike the master secret this replaced, a leaked token is low-value and
+    # self-expires in 15 minutes.
+    # TODO: add RDS CA bundle to the image and switch to VERIFY_FULL.
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return pg8000.native.Connection(
-        user=creds["username"], password=creds["password"],
+        user=AURORA_USER, password=_generate_auth_token(),
         host=os.environ["AURORA_ENDPOINT"], database=os.environ["AURORA_DATABASE"],
         port=5432, ssl_context=ctx,
     )
@@ -85,22 +91,36 @@ def write_spc(spc: str) -> None:
         f.write(spc)
 
 
-def _steampipe_env() -> dict:
-    """Environment for the Steampipe subprocess. AURORA_SECRET is intentionally excluded (M1):
-    the network-listening Steampipe process must not hold master DB credentials."""
-    env = os.environ.copy()
-    env.pop("AURORA_SECRET", None)
-    return env
-
-
 def _start_steampipe() -> "subprocess.Popen[bytes]":
+    # No Aurora credential of any kind is ever in this process's environment (M1) — Steampipe
+    # inherits the parent env unchanged; the only DB-adjacent secret it needs is its OWN network-
+    # listener auth password (STEAMPIPE_DATABASE_PASSWORD), which is legitimately its concern.
     return subprocess.Popen(
         ["steampipe", "service", "start",
          "--database-listen", "network",
          "--database-port", "9193",
          "--foreground"],
-        env=_steampipe_env(),
     )
+
+
+def _on_signal(signum: int, _frame: object, proc_ref: list, stop: "threading.Event") -> None:
+    """SIGTERM/SIGINT handler. Signal handlers in CPython run on the main thread at the next
+    bytecode boundary — if the main thread is inside `with proc_lock:` (e.g. the supervisor loop's
+    restart block) when the signal arrives, and this handler tried to re-acquire `proc_lock`, the
+    SAME thread would try to lock a plain (non-reentrant) threading.Lock it already holds — a
+    guaranteed self-deadlock (M3 fix). So this handler intentionally touches NO lock: it only
+    sets `stop` and sends SIGTERM directly to whatever proc_ref currently holds. Reading/using
+    proc_ref[0] without the lock is safe — a single list-index read/terminate() is atomic under
+    the GIL, and worst case (a race with the watchdog's restart) we signal the process being
+    replaced, which is being torn down anyway. sys.exit(0) then unwinds the main thread, running
+    any `with proc_lock:` __exit__ blocks normally (exception unwinding still releases locks)."""
+    print(f"[gen-spc] signal {signum} — forwarding to steampipe and exiting", file=sys.stderr)
+    stop.set()
+    try:
+        proc_ref[0].terminate()
+    except Exception:  # noqa: BLE001 — best-effort; we're exiting regardless
+        pass
+    sys.exit(0)
 
 
 def _scope_watchdog(
@@ -139,11 +159,6 @@ def _scope_watchdog(
 def main() -> None:
     # Pre-flight config check: fail fast with a clear signal rather than spending the
     # retry budget (~22 s) before reporting "Aurora unreachable" (addresses MINOR-5).
-    # AURORA_SECRET was already popped from os.environ into _AURORA_CREDS at module load.
-    if not _AURORA_CREDS.get("username") or not _AURORA_CREDS.get("password"):
-        print("[gen-spc] FATAL: AURORA_SECRET env var was not set or contains invalid JSON "
-              "(required: {username, password})", file=sys.stderr)
-        sys.exit(1)
     for var in ("AURORA_ENDPOINT", "AURORA_DATABASE"):
         if not os.environ.get(var):
             print(f"[gen-spc] FATAL: required env var '{var}' is not set (config error)",
@@ -174,27 +189,14 @@ def main() -> None:
     write_spc(spc)
     print(f"[gen-spc] wrote {SPC_PATH} for {len(rows)} enabled account(s)", file=sys.stderr)
 
-    # Start Steampipe (WITHOUT AURORA_SECRET in its env — M1 blast-radius reduction).
+    # Start Steampipe (no Aurora credential in its env at all — M1).
     proc_lock = threading.Lock()
     proc_ref = [_start_steampipe()]
     stop = threading.Event()
 
-    # Signal handler: forward ECS SIGTERM/SIGINT to Steampipe, then exit cleanly.
-    def _on_signal(signum: int, _frame: object) -> None:
-        print(f"[gen-spc] signal {signum} — stopping steampipe and exiting", file=sys.stderr)
-        stop.set()
-        with proc_lock:
-            p = proc_ref[0]
-        p.terminate()
-        try:
-            p.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            p.kill()
-            p.wait()
-        sys.exit(0)
-
-    signal.signal(signal.SIGTERM, _on_signal)
-    signal.signal(signal.SIGINT, _on_signal)
+    # Signal handler is lock-free (M3) — see _on_signal's docstring for why.
+    signal.signal(signal.SIGTERM, lambda signum, frame: _on_signal(signum, frame, proc_ref, stop))
+    signal.signal(signal.SIGINT, lambda signum, frame: _on_signal(signum, frame, proc_ref, stop))
 
     # Start scope watchdog (daemon — exits with the supervisor).
     threading.Thread(

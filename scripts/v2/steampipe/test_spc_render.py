@@ -88,40 +88,69 @@ def test_host_included_even_when_flag_false_and_no_regions():
 import gen_spc_entrypoint  # noqa: E402
 
 
-def test_steampipe_env_strips_aurora_secret():
-    """AURORA_SECRET must NOT appear in the env passed to the Steampipe subprocess (M1/M2).
-    Steampipe is the network-listening process — it must never hold master DB credentials.
-    AURORA_SECRET is also popped from os.environ at module startup; this test verifies that
-    _steampipe_env() strips it even if it somehow re-appears in the process environment."""
+def test_no_aurora_secret_anywhere(tmp_path=None):
+    """M1: no Aurora secret (master or otherwise) is read/expected by this module at all — the
+    entrypoint uses IAM database auth exclusively. Static guard against reintroducing AURORA_SECRET."""
+    import inspect
+    src = inspect.getsource(gen_spc_entrypoint)
+    assert "AURORA_SECRET" not in src, "gen_spc_entrypoint must not reference any Aurora secret"
+    assert "AURORA_SECRET" not in os.environ
+
+
+def test_generate_auth_token_uses_iam_auth_not_a_secret():
+    """_generate_auth_token must call boto3 rds.generate_db_auth_token (IAM auth) with the
+    dedicated steampipe_reader user — never read a password/secret from anywhere (M1 fix)."""
+    fake_client = mock.MagicMock()
+    fake_client.generate_db_auth_token.return_value = "signed-iam-token"
     with mock.patch.dict(os.environ, {
-        "AURORA_SECRET": '{"username":"u","password":"p"}',
-        "AURORA_ENDPOINT": "aurora.host",
-        "AURORA_DATABASE": "awsops",
-    }):
-        env = gen_spc_entrypoint._steampipe_env()
-    assert "AURORA_SECRET" not in env, "master DB creds must not reach the Steampipe subprocess"
-    assert "AURORA_ENDPOINT" in env  # non-sensitive env is forwarded normally
-
-
-def test_aurora_secret_removed_from_process_env():
-    """AURORA_SECRET must be removed from the process environment at module load (M2 blast-radius).
-    If the Steampipe subprocess is compromised, /proc/1/environ must not expose master creds."""
-    # The module pops AURORA_SECRET from os.environ at import time; it should not be present now.
-    assert "AURORA_SECRET" not in os.environ, (
-        "AURORA_SECRET must be popped from process env at startup — "
-        "do not leave master DB creds visible in /proc/1/environ"
-    )
-
-
-def test_steampipe_env_forwards_non_sensitive_vars():
-    """Non-sensitive env vars (AURORA_ENDPOINT, AURORA_DATABASE, AWS_REGION) are forwarded."""
-    with mock.patch.dict(os.environ, {
-        "AURORA_SECRET": '{"username":"u","password":"p"}',
         "AURORA_ENDPOINT": "aurora.cluster.example.com",
         "AURORA_DATABASE": "awsops",
         "AWS_REGION": "ap-northeast-2",
-    }):
-        env = gen_spc_entrypoint._steampipe_env()
-    assert env["AURORA_ENDPOINT"] == "aurora.cluster.example.com"
-    assert env["AWS_REGION"] == "ap-northeast-2"
-    assert "AURORA_SECRET" not in env
+    }), mock.patch("boto3.client", return_value=fake_client) as boto_client:
+        token = gen_spc_entrypoint._generate_auth_token()
+    assert token == "signed-iam-token"
+    boto_client.assert_called_once_with("rds", region_name="ap-northeast-2")
+    fake_client.generate_db_auth_token.assert_called_once_with(
+        DBHostname="aurora.cluster.example.com", Port=5432,
+        DBUsername=gen_spc_entrypoint.AURORA_USER,
+    )
+
+
+def test_start_steampipe_never_receives_a_password_env():
+    """The Steampipe subprocess inherits the parent env unchanged (no explicit env= override that
+    could carry a password/secret) — confirms M1's blast-radius elimination at the Popen call site."""
+    with mock.patch("subprocess.Popen") as popen:
+        gen_spc_entrypoint._start_steampipe()
+    _, kwargs = popen.call_args
+    assert "env" not in kwargs, "no explicit env override — nothing sensitive to strip"
+
+
+def test_signal_handler_does_not_deadlock_when_caller_holds_proc_lock():
+    """Regression test for M3: the signal handler must not touch proc_lock at all. Simulate the
+    worst case — the SAME thread already holds proc_lock (as the main supervisor loop does mid-
+    restart) — and confirm the handler still completes (via SystemExit) instead of self-deadlocking
+    on a non-reentrant threading.Lock."""
+    import threading
+    import pytest
+
+    class FakeProc:
+        def __init__(self):
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+
+    fake = FakeProc()
+    proc_ref = [fake]
+    proc_lock = threading.Lock()
+    stop = threading.Event()
+
+    proc_lock.acquire()  # simulate: this thread already holds proc_lock (mid-restart window)
+    try:
+        with pytest.raises(SystemExit):
+            gen_spc_entrypoint._on_signal(15, None, proc_ref, stop)
+    finally:
+        proc_lock.release()
+
+    assert stop.is_set()
+    assert fake.terminated

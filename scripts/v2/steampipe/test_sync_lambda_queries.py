@@ -65,3 +65,67 @@ def test_owner_ids_in_includes_host_and_targets_validated():
     assert "'111111111111'" in clause   # host real id
     assert "'210987654321'" in clause and "'310987654321'" in clause
     assert "'self'" not in clause and "'bad'" not in clause   # non-12-digit excluded
+
+
+def test_enabled_target_accounts_excludes_host_and_self():
+    """M2: _enabled_target_accounts must return only real TARGET accounts (never 'self' or the
+    host's own 12-digit id) — those are handled separately by phase-2's always-present 'self'."""
+    mod = load_sync_lambda()
+    mod._ACCOUNT_CACHE["id"] = "111111111111"  # host caller id
+
+    class FakeAdb:
+        def run(self, sql, **params):
+            assert params.get("host") == "111111111111"
+            return [("210987654321", "AWSopsReadOnlyRole", "ext-1"), ("310987654321", "AWSopsReadOnlyRole", None)]
+
+    targets = mod._enabled_target_accounts(FakeAdb())
+    assert targets == {
+        "210987654321": ("AWSopsReadOnlyRole", "ext-1"),
+        "310987654321": ("AWSopsReadOnlyRole", None),
+    }
+
+
+def test_account_reachable_true_on_successful_assume_role(monkeypatch):
+    """M2: a successful AssumeRole (with ExternalId when present) means the account is reachable
+    — 0 rows from it this run is treated as genuinely empty, not a connection failure."""
+    mod = load_sync_lambda()
+    calls = []
+
+    class FakeSts:
+        def assume_role(self, **kwargs):
+            calls.append(kwargs)
+            return {"Credentials": {}}
+
+    monkeypatch.setattr(mod.boto3, "client", lambda *a, **k: FakeSts())
+    assert mod._account_reachable("210987654321", "AWSopsReadOnlyRole", "ext-1") is True
+    assert calls[0]["RoleArn"] == "arn:aws:iam::210987654321:role/AWSopsReadOnlyRole"
+    assert calls[0]["ExternalId"] == "ext-1"
+
+
+def test_account_reachable_false_on_assume_role_failure(monkeypatch):
+    """M2: a failing AssumeRole means the account is NOT reachable — its 0-row result this run
+    must not be treated as genuinely empty, protecting last-good inventory (unchanged behavior)."""
+    mod = load_sync_lambda()
+
+    class FakeSts:
+        def assume_role(self, **kwargs):
+            raise mod.ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "AssumeRole")
+
+    monkeypatch.setattr(mod.boto3, "client", lambda *a, **k: FakeSts())
+    assert mod._account_reachable("999999999999", "AWSopsReadOnlyRole", None) is False
+
+
+def test_account_reachable_omits_external_id_when_absent(monkeypatch):
+    """1st-party accounts have no ExternalId — the AssumeRole call must omit the kwarg entirely
+    rather than pass None (which botocore would reject)."""
+    mod = load_sync_lambda()
+    calls = []
+
+    class FakeSts:
+        def assume_role(self, **kwargs):
+            calls.append(kwargs)
+            return {"Credentials": {}}
+
+    monkeypatch.setattr(mod.boto3, "client", lambda *a, **k: FakeSts())
+    mod._account_reachable("210987654321", "AWSopsReadOnlyRole", None)
+    assert "ExternalId" not in calls[0]

@@ -22,15 +22,18 @@ resource "aws_secretsmanager_secret_version" "steampipe" {
 # The shared execution_secrets policy only covers the Aurora secret; grant the Steampipe secret
 # too or the Steampipe task fails ResourceInitializationError on start. Gated so it stays plan-clean
 # when disabled. No kms grant needed — the secret uses the default aws/secretsmanager key.
+#
+# NOTE (M1): this grants ONLY the Steampipe network-listener's own DB password secret — NOT the
+# Aurora master secret. The boot-time aws.spc generator authenticates to Aurora via IAM database
+# auth (rds-db:connect, granted on the TASK role below) as the dedicated least-privilege
+# `steampipe_reader` role, so the master secret is never exposed to this task at all.
 resource "aws_iam_role_policy" "execution_steampipe_secret" {
   count = local.sp
   name  = "${var.project}-exec-steampipe-secret"
   role  = aws_iam_role.execution.id
   policy = jsonencode({
     Version = "2012-10-17"
-    # the steampipe task def resolves BOTH secrets via the execution role (valueFrom): its own DB
-    # password + the Aurora master creds the boot-time aws.spc generator needs.
-    Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.steampipe[0].arn, aws_rds_cluster.aurora.master_user_secret[0].secret_arn] }]
+    Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.steampipe[0].arn] }]
   })
 }
 
@@ -143,6 +146,15 @@ resource "aws_iam_role_policy" "steampipe_task" {
         Effect   = "Allow"
         Action   = ["sts:AssumeRole"]
         Resource = "arn:aws:iam::*:role/AWSopsReadOnlyRole"
+      },
+      # M1: IAM database auth — generate a short-lived signed token to connect to Aurora as the
+      # dedicated least-privilege `steampipe_reader` role (SELECT-only on accounts/account_regions;
+      # see the steampipe_reader migration). Scoped to this cluster's resource id + that exact
+      # dbuser — the master secret is never granted to this task.
+      {
+        Effect   = "Allow"
+        Action   = ["rds-db:connect"]
+        Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.aurora.cluster_resource_id}/steampipe_reader"
     }]
   })
 }
@@ -168,14 +180,16 @@ resource "aws_ecs_task_definition" "steampipe" {
     portMappings = [{ containerPort = 9193, protocol = "tcp" }]
     environment = [
       { name = "AWS_REGION", value = var.region },
-      # boot-time aws.spc generator reaches Aurora to read accounts ⋈ account_regions
+      # boot-time aws.spc generator reaches Aurora to read accounts ⋈ account_regions via IAM
+      # database auth (M1): AURORA_USER is a dedicated least-privilege role name — not a secret —
+      # the entrypoint calls rds:generate-db-auth-token (task role, rds-db:connect above) for a
+      # short-lived signed password. No Aurora secret of any kind is granted to this task.
       { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
       { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
+      { name = "AURORA_USER", value = "steampipe_reader" },
     ]
     secrets = [
       { name = "STEAMPIPE_DATABASE_PASSWORD", valueFrom = aws_secretsmanager_secret.steampipe[0].arn },
-      # Aurora master creds (JSON) injected by the EXECUTION role — the entrypoint parses AURORA_SECRET
-      { name = "AURORA_SECRET", valueFrom = aws_rds_cluster.aurora.master_user_secret[0].secret_arn },
     ]
     healthCheck = {
       command     = ["CMD-SHELL", "steampipe query \"select 1\" >/dev/null 2>&1 || exit 1"]
@@ -294,7 +308,13 @@ resource "aws_iam_role_policy" "inv_sync" {
       { Effect = "Allow", Action = ["s3:ListAllMyBuckets", "s3:GetBucketLocation", "s3:GetBucketPolicyStatus", "s3:GetBucketPublicAccessBlock"], Resource = "*" },
       # SDK-sourced alb_listener_rule sync (Steampipe rule table needs a per-listener qualifier):
       # read-only ELBv2 describe for LBs/listeners/rules. Read-only; no mutation.
-      { Effect = "Allow", Action = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules"], Resource = "*" }
+      { Effect = "Allow", Action = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules"], Resource = "*" },
+      # M2 reachability probe: before pruning a target account's stale inventory rows because the
+      # aggregator returned 0 rows for it this run, AssumeRole-probe it to distinguish "genuinely
+      # empty" (prune) from "AssumeRole/connection failing" (protect last-good inventory). Scoped
+      # to the role NAME (accounts.ts hard-pins it) — same pattern as steampipe_task above. This
+      # probe is read-only STS and is never used to fetch or touch any account data.
+      { Effect = "Allow", Action = ["sts:AssumeRole"], Resource = "arn:aws:iam::*:role/AWSopsReadOnlyRole" }
     ]
   })
 }
