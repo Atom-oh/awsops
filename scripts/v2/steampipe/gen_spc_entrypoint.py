@@ -32,6 +32,9 @@ from spc_render import render_spc  # noqa: E402
 
 SPC_PATH = os.environ.get("AWS_SPC_PATH", "/home/steampipe/.steampipe/config/aws.spc")
 AURORA_USER = os.environ.get("AURORA_USER", "steampipe_reader")
+# RDS global CA truststore bundle, baked into the image at build time (see Dockerfile) — enables
+# certificate-verified TLS (VERIFY_FULL) on the Aurora connection (M3 fix).
+RDS_CA_BUNDLE = os.environ.get("RDS_CA_BUNDLE", "/app/rds-ca-bundle.pem")
 # Scope watchdog interval. Re-querying Aurora every 5 min keeps the hot Steampipe config in sync
 # with account/region mutations without requiring a full task replacement. Low enough to catch
 # changes within a single sync-lambda cycle; high enough to avoid Aurora connection spam.
@@ -59,15 +62,12 @@ def _generate_auth_token() -> str:
 
 
 def _connect():
-    # IAM database auth REQUIRES TLS. No RDS CA bundle in this image (mirrors sync_lambda._ssl_ctx'
-    # in-VPC posture): CERT_NONE means MITM protection relies on VPC network controls, not
-    # certificate verification. The token is short-lived and scoped to steampipe_reader (SELECT-
-    # only, two tables) — unlike the master secret this replaced, a leaked token is low-value and
-    # self-expires in 15 minutes.
-    # TODO: add RDS CA bundle to the image and switch to VERIFY_FULL.
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    # IAM database auth over a certificate-VERIFIED TLS channel (M3 fix, round 5): the RDS global
+    # CA bundle is baked into the image at build time, so ssl.create_default_context(cafile=...)
+    # defaults to check_hostname=True + verify_mode=CERT_REQUIRED (VERIFY_FULL) — a genuine
+    # improvement over the earlier CERT_NONE, which relied on VPC network controls alone for MITM
+    # protection on a credential-bearing connection.
+    ctx = ssl.create_default_context(cafile=RDS_CA_BUNDLE)
     return pg8000.native.Connection(
         user=AURORA_USER, password=_generate_auth_token(),
         host=os.environ["AURORA_ENDPOINT"], database=os.environ["AURORA_DATABASE"],
@@ -219,20 +219,27 @@ def main() -> None:
             break
         # Watchdog-initiated restarts terminate the old proc; the new proc is already in proc_ref.
         with proc_lock:
+            unexpected = proc_ref[0] is current
+        if not unexpected:
+            continue
+        # Unexpected exit — apply exponential backoff for rapid crashes. The sleep runs OUTSIDE
+        # proc_lock (unlike an earlier version of this loop) so a concurrent watchdog-initiated
+        # scope-change restart is never blocked behind our up-to-60s backoff.
+        elapsed = time.time() - last_restart_time
+        if elapsed < 30:
+            rapid_restart_count += 1
+            delay = min(2 ** rapid_restart_count, 60)
+            print(f"[gen-spc] steampipe exited (code {code}) — backoff {delay}s "
+                  f"(rapid restart #{rapid_restart_count})", file=sys.stderr)
+            time.sleep(delay)
+        else:
+            rapid_restart_count = 0
+            print(f"[gen-spc] steampipe exited unexpectedly (code {code}) — restarting",
+                  file=sys.stderr)
+        last_restart_time = time.time()
+        with proc_lock:
+            # Re-check: the watchdog may have already restarted steampipe during our sleep.
             if proc_ref[0] is current:
-                # Unexpected exit — apply exponential backoff for rapid crashes.
-                elapsed = time.time() - last_restart_time
-                if elapsed < 30:
-                    rapid_restart_count += 1
-                    delay = min(2 ** rapid_restart_count, 60)
-                    print(f"[gen-spc] steampipe exited (code {code}) — backoff {delay}s "
-                          f"(rapid restart #{rapid_restart_count})", file=sys.stderr)
-                    time.sleep(delay)
-                else:
-                    rapid_restart_count = 0
-                    print(f"[gen-spc] steampipe exited unexpectedly (code {code}) — restarting",
-                          file=sys.stderr)
-                last_restart_time = time.time()
                 proc_ref[0] = _start_steampipe()
 
 

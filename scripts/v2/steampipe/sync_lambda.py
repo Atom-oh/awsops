@@ -509,34 +509,43 @@ def _owner_ids_in(adb):
 
 
 def _enabled_target_accounts(adb):
-    """Enabled non-host accounts with their trust info (role_name, external_id), for the M2
-    reachability probe. Host is excluded (see _rec_account: it always maps to 'self', which
-    phase-2 prune already always includes)."""
+    """Enabled non-host account ids, for the M2 reachability probe. Host is excluded (see
+    _rec_account: it always maps to 'self', which phase-2 prune already always includes)."""
     rows = adb.run(
-        "SELECT account_id, role_name, external_id FROM accounts "
-        "WHERE enabled = true AND account_id <> 'self' AND account_id <> :host",
+        "SELECT account_id FROM accounts WHERE enabled = true AND account_id <> 'self' AND account_id <> :host",
         host=_caller_account(),
     )
-    return {str(r[0]): (str(r[1]), r[2]) for r in rows}
+    return [str(r[0]) for r in rows]
 
 
-def _account_reachable(account_id, role_name, external_id):
-    """Best-effort STS probe: True if AssumeRole into the account's configured role succeeds.
+def _account_reachable(account_id):
+    """Direct DATA-PATH probe (M1 fix, round 5): query the account's OWN Steampipe connection
+    (aws_<account_id>, the exact schema the aggregator itself fans out to — see spc_render.py)
+    for a single row from aws_caller_identity.
+
+    An earlier version of this probe used an INDEPENDENT sts:AssumeRole call from this Lambda's
+    own task role. That only proved the IAM TRUST POLICY was intact — NOT that Steampipe's
+    aggregator actually queried this account successfully THIS run. If a single aggregator
+    connection silently returns 0 rows this run (e.g. a transient plugin-level throttle or
+    per-region error that doesn't propagate as a connection-level exception), the old probe would
+    still report "reachable" (trust policy fine) and the account would be wrongly promoted into
+    `present` → its last-good inventory gets pruned — reintroducing exactly the data-loss scenario
+    M5 exists to prevent. Querying the SAME per-account schema the aggregator uses is the only
+    signal that proves this account was actually live and queryable right now.
+
     Used ONLY to decide whether a target account that contributed 0 rows this run is genuinely
     empty (safe to prune) vs unreachable (protect its last-good inventory, per M5) — never used
-    to fetch or touch any account data (M2 fix)."""
-    try:
-        kwargs = {
-            "RoleArn": f"arn:aws:iam::{account_id}:role/{role_name}",
-            "RoleSessionName": "inv-sync-reachability-probe",
-            "DurationSeconds": 900,
-        }
-        if external_id:
-            kwargs["ExternalId"] = external_id
-        boto3.client("sts").assume_role(**kwargs)
-        return True
-    except ClientError:
+    to fetch or touch any real account data beyond the caller-identity check."""
+    if not _ACCT_RE.match(str(account_id)):
         return False
+    conn = _steampipe()
+    try:
+        rows = conn.run(f"SELECT account_id FROM aws_{account_id}.aws_caller_identity LIMIT 1")
+        return len(rows) > 0
+    except Exception:
+        return False
+    finally:
+        conn.close()
 
 
 def _inject_account(sql, account_id):
@@ -629,14 +638,15 @@ def sync(resource_type):
             present = {a for (a, _, _) in seen} | {'self'}
             # M2: an enabled TARGET account that contributed 0 rows this run is ambiguous under
             # the M5 guard above — it might be genuinely empty (e.g. all its EC2 instances were
-            # terminated) or its AssumeRole might be transiently failing. Aggregator-backed
-            # (QUERIES) types only — SDK_SYNCS are host-only and never populate target rows.
-            # Positively probe each such account via AssumeRole: reachable + 0 rows = genuinely
-            # empty (include in present so its stale rows get pruned); unreachable = protect its
-            # last-good inventory (leave excluded, same as before this fix).
+            # terminated) or its aggregator connection might be transiently failing. Aggregator-
+            # backed (QUERIES) types only — SDK_SYNCS are host-only and never populate target rows.
+            # Positively probe each such account via its OWN Steampipe connection (data path, not
+            # an independent IAM trust check — see _account_reachable): reachable + 0 rows =
+            # genuinely empty (include in present so its stale rows get pruned); unreachable =
+            # protect its last-good inventory (leave excluded, same as before this fix).
             if resource_type not in SDK_SYNCS:
-                for acct_id, (role_name, ext_id) in _enabled_target_accounts(adb).items():
-                    if acct_id not in present and _account_reachable(acct_id, role_name, ext_id):
+                for acct_id in _enabled_target_accounts(adb):
+                    if acct_id not in present and _account_reachable(acct_id):
                         present.add(acct_id)
             existing = adb.run("SELECT account_id, region, resource_id FROM inventory_resources WHERE resource_type=:t", t=resource_type)
             for acct, rg, rid in existing:

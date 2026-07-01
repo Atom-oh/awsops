@@ -20,10 +20,18 @@ RUN steampipe plugin install "ghcr.io/turbot/steampipe/plugins/turbot/aws:0.142.
 # auth as the least-privilege steampipe_reader role; M1 — no Aurora secret is ever used).
 USER root
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-pip \
+ && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
  && (pip3 install --no-cache-dir --break-system-packages pg8000==1.31.2 boto3==1.34.162 \
      || pip3 install --no-cache-dir pg8000==1.31.2 boto3==1.34.162) \
  && rm -rf /var/lib/apt/lists/*
+# RDS global CA truststore bundle (AWS's own published PEM, covers all regions): enables TLS
+# VERIFY_FULL on the boot generator's Aurora connection instead of CERT_NONE (M3 fix). Fetched at
+# build time — this image already requires network access at build (aws plugin from ghcr.io
+# above), so this adds no new build-time constraint. World-readable: the entrypoint runs as the
+# non-root `steampipe` user.
+RUN mkdir -p /app \
+ && python3 -c "import urllib.request; urllib.request.urlretrieve('https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem', '/app/rds-ca-bundle.pem')" \
+ && chmod 0644 /app/rds-ca-bundle.pem
 COPY --chown=steampipe:0 spc_render.py gen_spc_entrypoint.py /app/
 USER steampipe
 EXPOSE 9193

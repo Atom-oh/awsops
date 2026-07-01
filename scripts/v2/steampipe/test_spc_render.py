@@ -73,6 +73,25 @@ def test_hcl_escaping_of_values():
     assert 'assume_role_external_id = "a\\"b\\\\c"' in spc
 
 
+def test_hcl_escapes_dollar_and_percent_template_markers():
+    """M2 regression: a literal ${...} or %{...} in operator-supplied external_id must NOT be
+    interpreted by Steampipe's HCL2 parser as an interpolation/template directive — it must render
+    as HCL2's own doubling-escape ($$/%%) so the parser treats it as a literal $ / %. Unescaped,
+    this either crashes aws.spc parsing (fail-closed) or evaluates an unintended expression."""
+    spc = render_spc([
+        {"account_id": "210987654321", "is_host": False, "role_name": "AWSopsReadOnlyRole",
+         "external_id": "${aws_caller_identity}", "all_regions": False, "regions": ["us-east-1"]},
+    ])
+    assert 'assume_role_external_id = "$${aws_caller_identity}"' in spc
+    assert "${aws_caller_identity}" not in spc.replace("$${aws_caller_identity}", "")  # no bare ${...} survives
+
+    spc2 = render_spc([
+        {"account_id": "310987654321", "is_host": False, "role_name": "AWSopsReadOnlyRole",
+         "external_id": "50%{template}", "all_regions": False, "regions": ["us-east-1"]},
+    ])
+    assert 'assume_role_external_id = "50%%{template}"' in spc2
+
+
 def test_host_included_even_when_flag_false_and_no_regions():
     # C1 regression guard: ensureHostRow may seed the host without account_regions; the host must
     # still scan all regions (not be skipped), else the whole inventory empties.

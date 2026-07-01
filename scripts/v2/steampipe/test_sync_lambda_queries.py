@@ -68,7 +68,7 @@ def test_owner_ids_in_includes_host_and_targets_validated():
 
 
 def test_enabled_target_accounts_excludes_host_and_self():
-    """M2: _enabled_target_accounts must return only real TARGET accounts (never 'self' or the
+    """M2: _enabled_target_accounts must return only real TARGET account ids (never 'self' or the
     host's own 12-digit id) — those are handled separately by phase-2's always-present 'self'."""
     mod = load_sync_lambda()
     mod._ACCOUNT_CACHE["id"] = "111111111111"  # host caller id
@@ -76,56 +76,73 @@ def test_enabled_target_accounts_excludes_host_and_self():
     class FakeAdb:
         def run(self, sql, **params):
             assert params.get("host") == "111111111111"
-            return [("210987654321", "AWSopsReadOnlyRole", "ext-1"), ("310987654321", "AWSopsReadOnlyRole", None)]
+            return [("210987654321",), ("310987654321",)]
 
-    targets = mod._enabled_target_accounts(FakeAdb())
-    assert targets == {
-        "210987654321": ("AWSopsReadOnlyRole", "ext-1"),
-        "310987654321": ("AWSopsReadOnlyRole", None),
-    }
+    assert mod._enabled_target_accounts(FakeAdb()) == ["210987654321", "310987654321"]
 
 
-def test_account_reachable_true_on_successful_assume_role(monkeypatch):
-    """M2: a successful AssumeRole (with ExternalId when present) means the account is reachable
-    — 0 rows from it this run is treated as genuinely empty, not a connection failure."""
+def test_account_reachable_true_when_its_own_steampipe_connection_answers(monkeypatch):
+    """M2 (round 5): _account_reachable must query the account's OWN Steampipe connection
+    (aws_<account_id>.aws_caller_identity) — the SAME data path the aggregator uses — not an
+    independent sts:AssumeRole (which only proves the IAM trust policy, not that Steampipe
+    actually queried the account this run; see the round-5 rewrite comment on _account_reachable
+    for the exact data-loss scenario that motivated this)."""
     mod = load_sync_lambda()
-    calls = []
+    queries = []
 
-    class FakeSts:
-        def assume_role(self, **kwargs):
-            calls.append(kwargs)
-            return {"Credentials": {}}
+    class FakeConn:
+        def run(self, sql):
+            queries.append(sql)
+            return [("210987654321",)]
 
-    monkeypatch.setattr(mod.boto3, "client", lambda *a, **k: FakeSts())
-    assert mod._account_reachable("210987654321", "AWSopsReadOnlyRole", "ext-1") is True
-    assert calls[0]["RoleArn"] == "arn:aws:iam::210987654321:role/AWSopsReadOnlyRole"
-    assert calls[0]["ExternalId"] == "ext-1"
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    assert mod._account_reachable("210987654321") is True
+    assert "aws_210987654321.aws_caller_identity" in queries[0]
 
 
-def test_account_reachable_false_on_assume_role_failure(monkeypatch):
-    """M2: a failing AssumeRole means the account is NOT reachable — its 0-row result this run
-    must not be treated as genuinely empty, protecting last-good inventory (unchanged behavior)."""
+def test_account_reachable_false_when_connection_query_fails(monkeypatch):
+    """A failing per-connection query means the account is NOT reachable — its 0-row result this
+    run must not be treated as genuinely empty, protecting last-good inventory."""
     mod = load_sync_lambda()
 
-    class FakeSts:
-        def assume_role(self, **kwargs):
-            raise mod.ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "AssumeRole")
+    class FakeConn:
+        def run(self, sql):
+            raise Exception("connection refused / plugin error")
 
-    monkeypatch.setattr(mod.boto3, "client", lambda *a, **k: FakeSts())
-    assert mod._account_reachable("999999999999", "AWSopsReadOnlyRole", None) is False
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    assert mod._account_reachable("999999999999") is False
 
 
-def test_account_reachable_omits_external_id_when_absent(monkeypatch):
-    """1st-party accounts have no ExternalId — the AssumeRole call must omit the kwarg entirely
-    rather than pass None (which botocore would reject)."""
+def test_account_reachable_rejects_non_account_id_without_connecting(monkeypatch):
+    """Defense in depth (mirrors _inject_account's validation): a non-12-digit value must never
+    reach SQL string interpolation — reject before ever calling _steampipe()."""
     mod = load_sync_lambda()
-    calls = []
 
-    class FakeSts:
-        def assume_role(self, **kwargs):
-            calls.append(kwargs)
-            return {"Credentials": {}}
+    def _boom():
+        raise AssertionError("must not connect for an invalid account id")
 
-    monkeypatch.setattr(mod.boto3, "client", lambda *a, **k: FakeSts())
-    mod._account_reachable("210987654321", "AWSopsReadOnlyRole", None)
-    assert "ExternalId" not in calls[0]
+    monkeypatch.setattr(mod, "_steampipe", _boom)
+    assert mod._account_reachable("'; DROP TABLE x--") is False
+
+
+def test_account_reachable_closes_connection_even_on_failure(monkeypatch):
+    """The probe connection must always be closed, success or failure."""
+    mod = load_sync_lambda()
+    closed = []
+
+    class FakeConn:
+        def run(self, sql):
+            raise Exception("boom")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(mod, "_steampipe", lambda: FakeConn())
+    mod._account_reachable("210987654321")
+    assert closed == [True]

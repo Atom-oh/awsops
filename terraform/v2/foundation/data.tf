@@ -71,8 +71,10 @@ resource "aws_rds_cluster" "aurora" {
   # IAM database authentication: lets the Steampipe boot-time generator connect as a dedicated
   # least-privilege `steampipe_reader` role via a short-lived STS-signed auth token (rds-db:connect)
   # instead of the Aurora master secret — the network-listening Steampipe task never holds a DB
-  # password (M1 fix). In-place enable, no reboot/replace.
-  iam_database_authentication_enabled = true
+  # password (M1 fix). In-place enable, no reboot/replace. Gated on steampipe_enabled (not a bare
+  # `true`) so `steampipe_enabled=false` stays plan-clean — this is the ONLY consumer of IAM DB
+  # auth on this cluster today.
+  iam_database_authentication_enabled = var.steampipe_enabled
   master_user_secret_kms_key_id = aws_kms_key.aurora.key_id
   storage_encrypted             = true
   kms_key_id                    = aws_kms_key.aurora.arn

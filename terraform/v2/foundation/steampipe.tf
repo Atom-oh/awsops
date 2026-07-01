@@ -308,13 +308,13 @@ resource "aws_iam_role_policy" "inv_sync" {
       { Effect = "Allow", Action = ["s3:ListAllMyBuckets", "s3:GetBucketLocation", "s3:GetBucketPolicyStatus", "s3:GetBucketPublicAccessBlock"], Resource = "*" },
       # SDK-sourced alb_listener_rule sync (Steampipe rule table needs a per-listener qualifier):
       # read-only ELBv2 describe for LBs/listeners/rules. Read-only; no mutation.
-      { Effect = "Allow", Action = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules"], Resource = "*" },
-      # M2 reachability probe: before pruning a target account's stale inventory rows because the
-      # aggregator returned 0 rows for it this run, AssumeRole-probe it to distinguish "genuinely
-      # empty" (prune) from "AssumeRole/connection failing" (protect last-good inventory). Scoped
-      # to the role NAME (accounts.ts hard-pins it) — same pattern as steampipe_task above. This
-      # probe is read-only STS and is never used to fetch or touch any account data.
-      { Effect = "Allow", Action = ["sts:AssumeRole"], Resource = "arn:aws:iam::*:role/AWSopsReadOnlyRole" }
+      { Effect = "Allow", Action = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules"], Resource = "*" }
+      # NOTE (M2, round 5): the "0-row account" reachability probe queries the account's OWN
+      # Steampipe connection directly (data path) instead of doing an independent sts:AssumeRole
+      # from this Lambda — an AssumeRole only proves the IAM trust policy is intact, not that the
+      # aggregator actually queried the account this run. No extra IAM permission is needed here;
+      # Steampipe's own task role (steampipe_task, above) already holds the AssumeRole this
+      # Lambda's probe rides on.
     ]
   })
 }

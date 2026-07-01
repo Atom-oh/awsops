@@ -12,11 +12,16 @@ PLUGIN = "aws@0.142.0"
 
 
 def _hcl(s) -> str:
-    """Quote + escape a string for HCL. json.dumps gives a valid double-quoted literal with full
-    escaping (backslash, quote, AND control chars like newline/tab) — HCL string escaping is
-    JSON-compatible, so a stray newline/control char in e.g. external_id can't break aws.spc."""
+    """Quote + escape a string for HCL. First neutralize HCL2's template-interpolation markers:
+    a literal `$` or `%` must become `$$` / `%%` (HCL2's own doubling-escape convention) BEFORE
+    quoting — otherwise operator-supplied text containing `${...}` or `%{...}` (e.g. a 3rd-party
+    account's external_id) would be parsed by Steampipe as an interpolation/template directive,
+    not a literal string, either crashing aws.spc parsing (fail-closed) or evaluating unintended
+    expressions (M2 fix). Then json.dumps gives a valid double-quoted literal with full escaping
+    (backslash, quote, AND control chars like newline/tab) — HCL string escaping is JSON-compatible."""
     import json
-    return json.dumps(str(s))
+    escaped = str(s).replace("$", "$$").replace("%", "%%")
+    return json.dumps(escaped)
 
 
 def _regions_list(regions) -> str:
