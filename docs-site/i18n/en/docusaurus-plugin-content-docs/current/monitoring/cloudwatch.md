@@ -41,7 +41,7 @@ Click on an alarm row to view details in the slide panel:
 
 ## How to Use
 
-1. **Filter by State**: Click StatsCards at the top to filter by alarm state
+1. **Check State**: The StatsCards at the top show OK/ALARM/INSUFFICIENT_DATA counts at a glance (click-to-filter is not implemented yet — the cards are display-only)
 2. **Check Namespace**: Identify services with many alarms from the bar chart
 3. **View Details**: Click an alarm row to view configuration and actions
 4. **Refresh**: Click the button in the top right to fetch latest state
