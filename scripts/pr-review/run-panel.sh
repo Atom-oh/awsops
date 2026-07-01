@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # 패널 병렬 fan-out. 인자: <diff> <prompt> <workdir>
-# diff 는 각 CLI 의 stdin 으로 `< "$DIFF"` 직접 리다이렉트(파일이라 TTY 아님 → no-hang),
-# timeout 백스톱 + 비대화형 플래그로 멈춤 방지. 슬롯이 비면 최대 PANEL_RETRIES 회 재시도
-# (gpt-5.5/bedrock-mantle 등 transient 흡수). 매 시도마다 $DIFF 를 다시 연다.
+# diff 전달은 CLI 별로 다름 — codex 는 stdin(`< "$DIFF"`, 파일이라 TTY 아님 → no-hang)을 그대로 읽지만,
+# kiro-cli 는 stdin 을 안 읽고 큰 diff 를 argv 에 직접 넣으면 커널 MAX_ARG_STRLEN(128KiB)에 걸려
+# "Argument list too long"로 죽는다(아래 KIRO_PROMPT 코멘트 참조) → kiro 에게는 diff 파일 경로만 주고
+# 자기 신뢰 도구(read/fs_read)로 읽게 한다. timeout 백스톱 + 비대화형 플래그로 멈춤 방지. 슬롯이 비면
+# 최대 PANEL_RETRIES 회 재시도(gpt-5.5/bedrock-mantle 등 transient 흡수). 매 시도마다 $DIFF 를 다시 연다.
 set -uo pipefail
 DIFF="$1"; PROMPT_FILE="$2"; WORK="$3"
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
@@ -11,18 +13,30 @@ SLOT="$WORK/slot"; RESP="$WORK/responded.txt"; : > "$RESP"
 T="${PANEL_TIMEOUT:-300}"
 RETRIES="${PANEL_RETRIES:-2}"
 PROMPT="$(cat "$PROMPT_FILE")"
-# ROOT CAUSE (verified by direct test on the installed kiro-cli 2.9.0): headless `kiro-cli chat`
+# ROOT CAUSE #1 (verified by direct test on the installed kiro-cli 2.9.0): headless `kiro-cli chat`
 # does NOT read STDIN — not even with the EXACT documented pipe pattern (`cat diff | kiro-cli chat
 # --no-interactive "..."`, no extra flags) → it still answers NO_DIFF. The kiro docs say stdin
-# piping works, but this build doesn't honor it. The panel piped the diff via `< "$DIFF"`, so NO
-# kiro model (opus/kimi/glm) ever received it — all returned NO_DIFF and were scored empty (this,
-# not the models, is why #102/#104 ran "codex only"; codex DOES read stdin). Version-robust fix:
-# deliver the diff IN the prompt arg (the positional INPUT is always read). The stdin redirect is
-# kept (harmless) so a runner with a build that DOES read stdin gets it both ways.
+# piping works, but this build doesn't honor it. codex DOES read stdin — its invocation below is
+# unaffected and still uses `< "$DIFF"`.
+#
+# ROOT CAUSE #2 (found chasing round-8 "no diff" reports on PR #113): the fix for #1 — embedding
+# the diff text directly in the CLI positional argument — hits the Linux kernel's per-argv-string
+# cap (MAX_ARG_STRLEN, 128KiB) once the diff crosses roughly 105-131KB: `timeout` dies with
+# "Argument list too long" and the slot stays empty, indistinguishable from a model that silently
+# ignored the diff. This is separate from (and much smaller than) ARG_MAX/`getconf ARG_MAX`
+# (2.5MB total argv+envp) — a 3000-line truncated diff can still exceed it on its own.
+#
+# FIX: never put the diff bytes in argv. Point kiro at the diff FILE ($DIFF, already an absolute
+# path) and tell it to read the file with its own trusted tool (already in --trust-tools below).
+# This bounds the prompt to a small constant regardless of diff size and was verified end-to-end
+# against the real PR #113 diff (85KB, via claude-opus-4.8/kiro-cli): it read the full file and
+# produced a correct, thorough review — the argv-embedded design could never do that above ~105KB.
 KIRO_PROMPT="$PROMPT
 
-=== DIFF UNDER REVIEW (this is the patch to review) ===
-$(cat "$DIFF")"
+=== DIFF UNDER REVIEW ===
+The diff to review is saved at this file path: $DIFF
+Read the ENTIRE file with your file-read tool (read or fs_read) BEFORE reviewing. Do not wait for
+or rely on STDIN — it will not contain the diff."
 KIRO_MODELS=("claude-opus-4.8:kiro-opus" "kimi-k2.5:kiro-kimi" "glm-5:kiro-glm")
 
 # 한 패널을 최대 $RETRIES 회 실행 — 슬롯이 비면 재시도(transient). 백그라운드로 호출.

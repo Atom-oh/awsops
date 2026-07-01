@@ -2,7 +2,8 @@ name: AI Code Review
 
 # PR마다 멀티 AI 패널(Codex + Kiro x3)이 리뷰하고 Claude Opus 4.8 의장이
 # 종합해 코멘트로 게시(fail-closed VERDICT). 공유 actions-runner-claude 이미지 사용.
-# (kiro-cli 는 headless chat 에서 STDIN 을 안 읽음 → diff 를 프롬프트에 임베드해 전달; run-panel.sh 참조)
+# (kiro-cli 는 headless chat 에서 STDIN 을 안 읽음 → diff 파일 경로를 프롬프트로 주고 자기 신뢰 도구로
+#  읽게 전달; 대형 diff 를 argv 에 직접 넣으면 커널 argv 길이 한도에 걸림 — run-panel.sh 참조)
 #   - pull_request_target base-ref 체크아웃(M1): PR head 코드 미실행, diff 는 데이터로만
 #   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO/ANTIGRAVITY)
 #   - 리전: us-east-1 (Claude us. geo / codex gpt-5.5 bedrock-mantle In-Region)
@@ -73,8 +74,10 @@ jobs:
           MAX_LINES=3000
           head -"$MAX_LINES" /tmp/pr-diff.txt > /tmp/pr-diff-truncated.txt
           cat <<'PROMPT_EOF' > /tmp/panel-prompt.txt
-          Review the diff provided via stdin for bugs, security risks, logic errors,
-          and convention violations (read CLAUDE.md / AGENTS.md for this repo's conventions).
+          Review the code diff for bugs, security risks, logic errors, and convention violations
+          (read CLAUDE.md / AGENTS.md for this repo's conventions). The diff is delivered either
+          via stdin or as a file path mentioned later in this prompt — if a file path is given,
+          read that file with your file-read tool before reviewing.
 
           BASE CONTEXT (critical — avoids false "missing X" findings): the repository BASE branch is
           checked out in your current working directory and you CAN read files (read/grep tools). The
