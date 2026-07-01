@@ -55,23 +55,36 @@ def test_prune_present_always_includes_self():
 
 
 def test_disabled_account_cleanup_sql_excludes_self_and_targets_disabled():
-    """Phase-1 prune deletes rows for disabled/removed accounts via a NOT IN subquery.
-    Verify the SQL shape: scope to resource_type, exclude 'self' (handled by phase 2),
-    and delete accounts NOT in the currently-enabled set (M1 fix for orphan inventory)."""
-    # The actual SQL run by sync() (phase 1):
-    phase1_sql = (
-        "DELETE FROM inventory_resources "
-        "WHERE resource_type = :t "
-        "AND account_id != 'self' "
-        "AND account_id NOT IN ("
-        "  SELECT account_id FROM accounts WHERE enabled = true"
-        ")"
-    )
-    # Assert structural properties (no DB needed — pure string checks):
+    """Phase-1 prune deletes rows for accounts no longer in SCAN SCOPE via a NOT IN subquery.
+    This asserts on sync_lambda.PHASE1_PRUNE_SQL — the ACTUAL constant sync() executes (not a
+    hand-copied duplicate) — so a future edit to the real query can't silently drift out of sync
+    with this test (F3 fix, round 6). Verify the SQL shape: scope to resource_type, exclude 'self'
+    (handled by phase 2), and delete accounts NOT in the currently in-scope set."""
+    phase1_sql = sync_lambda.PHASE1_PRUNE_SQL
     assert "account_id != 'self'" in phase1_sql, "phase 1 must not touch 'self' rows"
-    assert "NOT IN" in phase1_sql, "phase 1 must exclude enabled accounts from deletion"
-    assert "WHERE enabled = true" in phase1_sql, "phase 1 must scope to enabled accounts"
+    assert "NOT IN" in phase1_sql, "phase 1 must exclude in-scope accounts from deletion"
+    assert "a.enabled = true" in phase1_sql, "phase 1 must require enabled=true"
     assert "resource_type = :t" in phase1_sql, "phase 1 must scope to current resource type"
+
+
+def test_disabled_account_cleanup_sql_also_excludes_enabled_but_zero_scope_accounts():
+    """F1 regression (round 6): an ENABLED account with all_regions=false and ZERO enabled
+    account_regions rows is SKIPPED by render_spc (spc_render.py) — no aws_<id> connection is
+    ever rendered for it. A bare `enabled = true` check would leave such an account's stale rows
+    as PERMANENT phantoms: phase 1 wouldn't touch it (still enabled), and phase 2's reachability
+    probe can never succeed for it either (there is no per-account schema to query). The in-scope
+    subquery must therefore ALSO require all_regions OR an enabled account_regions row —
+    mirroring render_spc's/listScanScope's own skip condition exactly."""
+    phase1_sql = sync_lambda.PHASE1_PRUNE_SQL
+    assert "a.all_regions = true" in phase1_sql, "must accept all_regions accounts as in-scope"
+    assert "EXISTS" in phase1_sql and "account_regions" in phase1_sql, (
+        "must accept accounts with >=1 enabled account_regions row as in-scope — "
+        "a bare enabled=true check would leave an enabled-but-zero-region account "
+        "as a permanent phantom (F1)"
+    )
+    assert "r.enabled = true" in phase1_sql, "the account_regions EXISTS check must require enabled=true"
+
+
 
 
 def test_inject_account_noop_without_placeholder():

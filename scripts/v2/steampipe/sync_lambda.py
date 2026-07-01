@@ -475,6 +475,26 @@ def _steampipe():
 _ACCT_RE = re.compile(r"^\d{12}$")
 _ACCOUNT_CACHE = {}
 
+# Phase-1 stale-prune (see sync()): a module-level constant, not inlined at the call site, so
+# tests can assert on the ACTUAL production SQL string rather than a hand-copied duplicate that
+# could silently drift out of sync with a future edit (round-6 fix for the F3 test-tautology
+# finding). "In scope" mirrors render_spc's skip condition / listScanScope(): enabled AND
+# (all_regions OR >=1 enabled account_regions row) — NOT a bare `enabled = true`, which would
+# leave an enabled-but-zero-region account's rows as undeletable phantoms forever (F1).
+PHASE1_PRUNE_SQL = (
+    "DELETE FROM inventory_resources "
+    "WHERE resource_type = :t "
+    "AND account_id != 'self' "
+    "AND account_id NOT IN ("
+    "  SELECT a.account_id FROM accounts a"
+    "  WHERE a.enabled = true"
+    "  AND (a.all_regions = true OR EXISTS ("
+    "    SELECT 1 FROM account_regions r"
+    "    WHERE r.account_id = a.account_id AND r.enabled = true"
+    "  ))"
+    ")"
+)
+
 
 def _caller_account():
     """Caller's 12-digit AWS account id (cached). Used to inject a literal owner_id qual so
@@ -613,22 +633,20 @@ def sync(resource_type):
                         t=resource_type, acct=acct, rg=region, id=rid, d=json.dumps(rec, default=str))
             # ---- Stale-prune: two phases ----
             #
-            # Phase 1 — disabled/removed-account orphans: delete ALL rows for accounts that are
-            # no longer in scan scope (disabled or removed from the `accounts` table). Once an
-            # account is out of scope, the aggregator never queries it, so `seen`/`present` can
-            # never contain it — its rows would persist as phantoms forever without this pass.
-            # This is the correct cleanup path for account disable/removal from the UI (M1 fix).
-            # 'self' is excluded here because it is always enabled (host row) and is handled by
-            # phase 2 below.
-            adb.run(
-                "DELETE FROM inventory_resources "
-                "WHERE resource_type = :t "
-                "AND account_id != 'self' "
-                "AND account_id NOT IN ("
-                "  SELECT account_id FROM accounts WHERE enabled = true"
-                ")",
-                t=resource_type,
-            )
+            # Phase 1 — out-of-scope-account orphans: delete ALL rows for accounts no longer in
+            # SCAN SCOPE. "In scope" mirrors render_spc's own skip condition (spc_render.py) /
+            # listScanScope() (web/lib/account-regions.ts): enabled AND (all_regions OR at least
+            # one enabled account_regions row). A naive `enabled = true` check is NOT sufficient —
+            # an account can be enabled with all_regions=false and zero enabled regions (e.g. the
+            # operator disabled every region without disabling the account). render_spc SKIPS that
+            # account entirely (no aws_<id> connection is ever rendered), so it can never appear in
+            # `seen`, AND phase-2's reachability probe can never succeed for it either (there is no
+            # per-account schema to query) — without this exact-scope check, such an account's
+            # stale rows would persist as UNDELETABLE phantoms forever (round-6 fix; this is the
+            # same phantom-inventory class rounds 3-5 fixed, reached through a different door).
+            # 'self' is excluded here — the host always scans all regions regardless of the flag
+            # (C1 host-parity guard) and is handled by phase 2 below.
+            adb.run(PHASE1_PRUNE_SQL, t=resource_type)
             # Phase 2 — row-level stale within enabled/in-scope accounts: delete individual rows
             # that were NOT returned in this run, but ONLY for accounts that DID contribute rows
             # (`present`). An account with 0 rows from the aggregator may have suffered a transient

@@ -29,8 +29,19 @@ RUN apt-get update \
 # build time — this image already requires network access at build (aws plugin from ghcr.io
 # above), so this adds no new build-time constraint. World-readable: the entrypoint runs as the
 # non-root `steampipe` user.
+#
+# Integrity check (F2): verify the download is a genuine, non-empty PEM bundle (starts with the
+# PEM header, contains multiple certificates) rather than a truncated/corrupted response or an
+# HTML error page silently written to the file. A hardcoded sha256 pin was deliberately NOT used
+# here: AWS periodically rotates this bundle as CAs expire/renew, so a static hash would break
+# every rebuild after the next rotation — a fail-loud content sanity-check is the safer trade-off.
 RUN mkdir -p /app \
  && python3 -c "import urllib.request; urllib.request.urlretrieve('https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem', '/app/rds-ca-bundle.pem')" \
+ && python3 -c "\
+d = open('/app/rds-ca-bundle.pem', 'rb').read(); \
+assert d.startswith(b'-----BEGIN CERTIFICATE-----'), 'RDS CA bundle: missing PEM header — corrupt/truncated download'; \
+assert d.count(b'-----BEGIN CERTIFICATE-----') >= 5, 'RDS CA bundle: too few certificates — corrupt/truncated download'; \
+assert len(d) > 4096, 'RDS CA bundle: suspiciously small — corrupt/truncated download'" \
  && chmod 0644 /app/rds-ca-bundle.pem
 COPY --chown=steampipe:0 spc_render.py gen_spc_entrypoint.py /app/
 USER steampipe
