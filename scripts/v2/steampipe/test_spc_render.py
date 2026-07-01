@@ -85,13 +85,16 @@ def test_host_included_even_when_flag_false_and_no_regions():
 
 
 # --- Supervisor / blast-radius tests (gen_spc_entrypoint) ---
-import gen_spc_entrypoint  # noqa: E402
+# NOTE: gen_spc_entrypoint imports boto3 + pg8000.native. Import it LOCALLY inside each test below
+# (not at module level) so a CI environment missing those deps only fails these specific tests —
+# not the pure render_spc tests above, which have no such dependency and must always collect/run.
 
 
-def test_no_aurora_secret_anywhere(tmp_path=None):
+def test_no_aurora_secret_anywhere():
     """M1: no Aurora secret (master or otherwise) is read/expected by this module at all — the
     entrypoint uses IAM database auth exclusively. Static guard against reintroducing AURORA_SECRET."""
     import inspect
+    import gen_spc_entrypoint
     src = inspect.getsource(gen_spc_entrypoint)
     assert "AURORA_SECRET" not in src, "gen_spc_entrypoint must not reference any Aurora secret"
     assert "AURORA_SECRET" not in os.environ
@@ -100,6 +103,7 @@ def test_no_aurora_secret_anywhere(tmp_path=None):
 def test_generate_auth_token_uses_iam_auth_not_a_secret():
     """_generate_auth_token must call boto3 rds.generate_db_auth_token (IAM auth) with the
     dedicated steampipe_reader user — never read a password/secret from anywhere (M1 fix)."""
+    import gen_spc_entrypoint
     fake_client = mock.MagicMock()
     fake_client.generate_db_auth_token.return_value = "signed-iam-token"
     with mock.patch.dict(os.environ, {
@@ -119,6 +123,7 @@ def test_generate_auth_token_uses_iam_auth_not_a_secret():
 def test_start_steampipe_never_receives_a_password_env():
     """The Steampipe subprocess inherits the parent env unchanged (no explicit env= override that
     could carry a password/secret) — confirms M1's blast-radius elimination at the Popen call site."""
+    import gen_spc_entrypoint
     with mock.patch("subprocess.Popen") as popen:
         gen_spc_entrypoint._start_steampipe()
     _, kwargs = popen.call_args
@@ -132,6 +137,7 @@ def test_signal_handler_does_not_deadlock_when_caller_holds_proc_lock():
     on a non-reentrant threading.Lock."""
     import threading
     import pytest
+    import gen_spc_entrypoint
 
     class FakeProc:
         def __init__(self):

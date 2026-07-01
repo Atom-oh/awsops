@@ -165,8 +165,9 @@ def main() -> None:
                   file=sys.stderr)
             sys.exit(1)
 
-    # Bounded retry budget (~2+4+8+8 ≈ 22 s) stays well under the ECS healthcheck startPeriod
-    # (120 s) so a transient Aurora delay can't exhaust the grace window and trigger a loop.
+    # Bounded retry budget (~2+4+8 ≈ 14 s — sleeps happen only between attempts, none after the
+    # last) stays well under the ECS healthcheck startPeriod (120 s) so a transient Aurora delay
+    # can't exhaust the grace window and trigger a loop.
     last = None
     rows = None
     attempts = 4
