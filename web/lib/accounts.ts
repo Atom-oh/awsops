@@ -64,8 +64,8 @@ export async function ensureHostRow(): Promise<void> {
   const region = process.env.AWS_REGION || 'ap-northeast-2';
   try {
     await getPool().query(
-      `INSERT INTO accounts (account_id, alias, region, is_host, status, last_verified_at)
-       VALUES ($1, $2, $3, true, 'verified', now())
+      `INSERT INTO accounts (account_id, alias, region, is_host, all_regions, status, last_verified_at)
+       VALUES ($1, $2, $3, true, true, 'verified', now())
        ON CONFLICT (account_id) DO NOTHING`,
       [id, 'Host account', region],
     );

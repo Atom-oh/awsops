@@ -296,11 +296,11 @@ QUERIES = {
         # returns every public AWS snapshot (hundreds of thousands → API throttle / OOM).
         "SELECT snapshot_id, region, account_id, arn, volume_id, volume_size, state, progress, "
         "encrypted, start_time, description, owner_id, tags "
-        # owner_id MUST be a LITERAL constant so Steampipe pushes OwnerIds=self down to
-        # DescribeSnapshots. A subquery/bound-param qual is NOT pushed down by the FDW (it is
-        # evaluated post-fetch) → every public AWS snapshot would be pulled. sync() renders the
-        # {account_id} placeholder to the caller account (12-digit, validated) before running.
-        "FROM aws_ebs_snapshot WHERE owner_id = '{account_id}' "
+        # owner_id MUST be LITERAL constants so Steampipe pushes OwnerIds down to DescribeSnapshots.
+        # Under the multi-account aggregator a single host literal would miss every TARGET account's
+        # snapshots, so sync() renders {owner_ids} to the validated IN-list of ALL enabled accounts
+        # (host caller id + target 12-digit ids). A bound-param/subquery qual is NOT pushed down.
+        "FROM aws_ebs_snapshot WHERE owner_id IN ({owner_ids}) "
         "ORDER BY start_time DESC",
         "snapshot_id",
         "region",
@@ -475,6 +475,26 @@ def _steampipe():
 _ACCT_RE = re.compile(r"^\d{12}$")
 _ACCOUNT_CACHE = {}
 
+# Phase-1 stale-prune (see sync()): a module-level constant, not inlined at the call site, so
+# tests can assert on the ACTUAL production SQL string rather than a hand-copied duplicate that
+# could silently drift out of sync with a future edit (round-6 fix for the F3 test-tautology
+# finding). "In scope" mirrors render_spc's skip condition / listScanScope(): enabled AND
+# (all_regions OR >=1 enabled account_regions row) — NOT a bare `enabled = true`, which would
+# leave an enabled-but-zero-region account's rows as undeletable phantoms forever (F1).
+PHASE1_PRUNE_SQL = (
+    "DELETE FROM inventory_resources "
+    "WHERE resource_type = :t "
+    "AND account_id != 'self' "
+    "AND account_id NOT IN ("
+    "  SELECT a.account_id FROM accounts a"
+    "  WHERE a.enabled = true"
+    "  AND (a.all_regions = true OR EXISTS ("
+    "    SELECT 1 FROM account_regions r"
+    "    WHERE r.account_id = a.account_id AND r.enabled = true"
+    "  ))"
+    ")"
+)
+
 
 def _caller_account():
     """Caller's 12-digit AWS account id (cached). Used to inject a literal owner_id qual so
@@ -484,6 +504,77 @@ def _caller_account():
             "sts", region_name=os.environ.get("AWS_REGION", "ap-northeast-2")
         ).get_caller_identity()["Account"]
     return _ACCOUNT_CACHE["id"]
+
+
+def _rec_account(rec):
+    """The account a synced row belongs to. Under the multi-account aggregator each row carries its
+    own `account_id` (the aws plugin column). The HOST's real 12-digit id maps back to the 'self'
+    sentinel the rest of the app uses (accounts host row, SDK syncs, readers), so host inventory is
+    not fractured. SDK syncs / rows without the column are host-scoped → 'self'."""
+    aid = rec.get("account_id")
+    if not aid:
+        return "self"
+    return "self" if str(aid) == _caller_account() else str(aid)
+
+
+def _owner_ids_in(adb):
+    """Comma-joined quoted IN-list of every enabled account's real owner id (host caller id + target
+    12-digit ids) for the {owner_ids} pushdown. Excludes the 'self' sentinel and any non-account-id."""
+    ids = {_caller_account()}  # host's real 12-digit id (the 'self' row maps to this)
+    for row in adb.run("SELECT account_id FROM accounts WHERE enabled = true AND account_id <> 'self'"):
+        aid = str(row[0])
+        if _ACCT_RE.match(aid):
+            ids.add(aid)
+    return ",".join("'%s'" % i for i in sorted(ids))
+
+
+def _enabled_target_accounts(adb):
+    """Target account ids actually IN SCAN SCOPE (not merely `enabled`), for the M2 reachability
+    probe. Host is excluded (see _rec_account: it always maps to 'self', handled separately by
+    the M-2 host probe). Mirrors PHASE1_PRUNE_SQL's exact in-scope condition — an account that is
+    enabled but out of scope (all_regions=false, zero enabled account_regions rows) already has
+    NO rendered aws.spc connection (spc_render.py skips it) and was already fully swept by
+    phase-1; probing it here would always fail/no-op, wasting a round-trip every sync (M-7 fix,
+    round 8)."""
+    rows = adb.run(
+        "SELECT a.account_id FROM accounts a "
+        "WHERE a.enabled = true AND a.account_id <> 'self' AND a.account_id <> :host "
+        "AND (a.all_regions = true OR EXISTS ("
+        "  SELECT 1 FROM account_regions r WHERE r.account_id = a.account_id AND r.enabled = true"
+        "))",
+        host=_caller_account(),
+    )
+    return [str(r[0]) for r in rows]
+
+
+def _account_reachable(account_id):
+    """Direct DATA-PATH probe (M1 fix, round 5): query the account's OWN Steampipe connection
+    (aws_<account_id>, the exact schema the aggregator itself fans out to — see spc_render.py)
+    for a single row from aws_caller_identity.
+
+    An earlier version of this probe used an INDEPENDENT sts:AssumeRole call from this Lambda's
+    own task role. That only proved the IAM TRUST POLICY was intact — NOT that Steampipe's
+    aggregator actually queried this account successfully THIS run. If a single aggregator
+    connection silently returns 0 rows this run (e.g. a transient plugin-level throttle or
+    per-region error that doesn't propagate as a connection-level exception), the old probe would
+    still report "reachable" (trust policy fine) and the account would be wrongly promoted into
+    `present` → its last-good inventory gets pruned — reintroducing exactly the data-loss scenario
+    M5 exists to prevent. Querying the SAME per-account schema the aggregator uses is the only
+    signal that proves this account was actually live and queryable right now.
+
+    Used ONLY to decide whether a target account that contributed 0 rows this run is genuinely
+    empty (safe to prune) vs unreachable (protect its last-good inventory, per M5) — never used
+    to fetch or touch any real account data beyond the caller-identity check."""
+    if not _ACCT_RE.match(str(account_id)):
+        return False
+    conn = _steampipe()
+    try:
+        rows = conn.run(f"SELECT account_id FROM aws_{account_id}.aws_caller_identity LIMIT 1")
+        return len(rows) > 0
+    except Exception:
+        return False
+    finally:
+        conn.close()
 
 
 def _inject_account(sql, account_id):
@@ -507,6 +598,11 @@ def sync(resource_type):
         if not got[0][0]:
             return {"status": "busy", "type": resource_type}
         try:
+            # NOTE (M4): inventory_sync_runs is a JOB-LEVEL ledger — one row per resource_type keyed
+            # under the host 'self' sentinel, tracking the aggregator run's status/row_count. It is
+            # intentionally NOT per-account: a single aggregator run covers every connected account at
+            # once. Per-account freshness is the captured_at on each inventory_resources row (which IS
+            # keyed by real account_id), so no per-account state is lost.
             # mark running INSIDE the try so a throw here records 'failed' and the finally still unlocks
             adb.run("INSERT INTO inventory_sync_runs (resource_type, status, started_at, finished_at, row_count, error) "
                     "VALUES (:t,'running',now(),NULL,NULL,NULL) "
@@ -517,8 +613,10 @@ def sync(resource_type):
                 recs, id_col, region_col = SDK_SYNCS[resource_type]()
             else:
                 sql, id_col, region_col = QUERIES[resource_type]
-                if "{account_id}" in sql:  # only templated queries need the (STS) account literal
-                    sql = _inject_account(sql, _caller_account())  # literal owner_id for FDW pushdown
+                if "{owner_ids}" in sql:  # multi-account OwnerIds pushdown (all enabled accounts)
+                    sql = sql.replace("{owner_ids}", _owner_ids_in(adb))
+                if "{account_id}" in sql:  # legacy single-account literal pushdown
+                    sql = _inject_account(sql, _caller_account())
                 sdb = _steampipe()
                 try:
                     rows = sdb.run(sql)
@@ -526,21 +624,76 @@ def sync(resource_type):
                 finally:
                     sdb.close()  # close even if the Steampipe query throws
                 recs = [dict(zip(cols, r)) for r in rows]
-            seen = []
+            # EBS snapshots: the OwnerIds IN-list can surface snapshots SHARED into a connection but
+            # owned by another enabled account; keep only those the connection actually OWNS
+            # (owner_id == account_id) so each snapshot is attributed once, to its true owner.
+            if resource_type == "ebs_snapshot":
+                recs = [r for r in recs if str(r.get("owner_id")) == str(r.get("account_id"))]
+            seen = set()
             for rec in recs:
                 rid = str(rec.get(id_col))
                 region = str(rec.get(region_col) or "")
-                seen.append((region, rid))
+                acct = _rec_account(rec)  # the row's real account (aggregator fan-out), not a literal 'self'
+                seen.add((acct, region, rid))
                 adb.run("INSERT INTO inventory_resources (resource_type, account_id, region, resource_id, data, captured_at) "
-                        "VALUES (:t,'self',:rg,:id,:d::jsonb,now()) "
+                        "VALUES (:t,:acct,:rg,:id,:d::jsonb,now()) "
                         "ON CONFLICT (resource_type, account_id, region, resource_id) "
                         "DO UPDATE SET data=:d::jsonb, captured_at=now()",
-                        t=resource_type, rg=region, id=rid, d=json.dumps(rec, default=str))
-            # delete stale rows of this type not in the latest run
-            existing = adb.run("SELECT region, resource_id FROM inventory_resources WHERE resource_type=:t AND account_id='self'", t=resource_type)
-            for rg, rid in existing:
-                if (rg, rid) not in seen:
-                    adb.run("DELETE FROM inventory_resources WHERE resource_type=:t AND account_id='self' AND region=:rg AND resource_id=:id", t=resource_type, rg=rg, id=rid)
+                        t=resource_type, acct=acct, rg=region, id=rid, d=json.dumps(rec, default=str))
+            # ---- Stale-prune: two phases ----
+            #
+            # Phase 1 — out-of-scope-account orphans: delete ALL rows for accounts no longer in
+            # SCAN SCOPE. "In scope" mirrors render_spc's own skip condition (spc_render.py) /
+            # listScanScope() (web/lib/account-regions.ts): enabled AND (all_regions OR at least
+            # one enabled account_regions row). A naive `enabled = true` check is NOT sufficient —
+            # an account can be enabled with all_regions=false and zero enabled regions (e.g. the
+            # operator disabled every region without disabling the account). render_spc SKIPS that
+            # account entirely (no aws_<id> connection is ever rendered), so it can never appear in
+            # `seen`, AND phase-2's reachability probe can never succeed for it either (there is no
+            # per-account schema to query) — without this exact-scope check, such an account's
+            # stale rows would persist as UNDELETABLE phantoms forever (round-6 fix; this is the
+            # same phantom-inventory class rounds 3-5 fixed, reached through a different door).
+            # 'self' is excluded here — the host always scans all regions regardless of the flag
+            # (C1 host-parity guard) and is handled by phase 2 below.
+            adb.run(PHASE1_PRUNE_SQL, t=resource_type)
+            # Phase 2 — row-level stale within enabled/in-scope accounts: delete individual rows
+            # that were NOT returned in this run, but ONLY for accounts that DID contribute rows
+            # (`present`). An account with 0 rows from the aggregator may have suffered a transient
+            # connection failure — pruning it would silently discard its last-good inventory (M5).
+            present = {a for (a, _, _) in seen}
+            # M-2 (round 8): host ('self') protection must be SYMMETRIC with target accounts, not
+            # an unconditional `| {'self'}`. An earlier version force-included 'self' on the
+            # reasoning "host uses IAM task-role creds (not AssumeRole), always succeeds" — but
+            # that only rules out an AUTH failure, not a transient failure of the Steampipe
+            # connection's QUERY itself (e.g. an AWS API throttle/blip on this specific run). The
+            # aggregator returns PARTIAL results on a single-connection failure without raising, so
+            # a host-connection hiccup this run would otherwise force-prune the host's last-good
+            # inventory to zero — the exact M5 data-loss class, applied asymmetrically to 'self'.
+            # SDK_SYNCS types don't go through Steampipe at all: reaching this point already means
+            # the direct SDK call succeeded (a failure would have raised above, short-circuiting
+            # before this section), so 0 rows there is the SDK's own definitive "genuinely empty"
+            # signal — no probe needed. Aggregator-backed (QUERIES) types: probe the host's OWN
+            # connection (aws_<host_real_id>, via _caller_account()) exactly like a target account.
+            if 'self' not in present:
+                if resource_type in SDK_SYNCS or _account_reachable(_caller_account()):
+                    present.add('self')
+            # M2 (round 6): an enabled TARGET account that contributed 0 rows this run is
+            # ambiguous under the M5 guard above — it might be genuinely empty (e.g. all its EC2
+            # instances were terminated) or its aggregator connection might be transiently
+            # failing. Aggregator-backed (QUERIES) types only — SDK_SYNCS are host-only and never
+            # populate target rows. Positively probe each such account via its OWN Steampipe
+            # connection (data path, not an independent IAM trust check — see _account_reachable):
+            # reachable + 0 rows = genuinely empty (include in present so its stale rows get
+            # pruned); unreachable = protect its last-good inventory (leave excluded).
+            if resource_type not in SDK_SYNCS:
+                for acct_id in _enabled_target_accounts(adb):
+                    if acct_id not in present and _account_reachable(acct_id):
+                        present.add(acct_id)
+            existing = adb.run("SELECT account_id, region, resource_id FROM inventory_resources WHERE resource_type=:t", t=resource_type)
+            for acct, rg, rid in existing:
+                if str(acct) in present and (str(acct), str(rg), str(rid)) not in seen:
+                    adb.run("DELETE FROM inventory_resources WHERE resource_type=:t AND account_id=:acct AND region=:rg AND resource_id=:id",
+                            t=resource_type, acct=acct, rg=rg, id=rid)
             adb.run("UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), row_count=:n, error=NULL "
                     "WHERE resource_type=:t AND account_id='self'", t=resource_type, n=len(recs))
             return {"status": "succeeded", "type": resource_type, "row_count": len(recs)}

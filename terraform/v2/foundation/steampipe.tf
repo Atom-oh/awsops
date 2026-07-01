@@ -22,13 +22,18 @@ resource "aws_secretsmanager_secret_version" "steampipe" {
 # The shared execution_secrets policy only covers the Aurora secret; grant the Steampipe secret
 # too or the Steampipe task fails ResourceInitializationError on start. Gated so it stays plan-clean
 # when disabled. No kms grant needed — the secret uses the default aws/secretsmanager key.
+#
+# NOTE (M1): this grants ONLY the Steampipe network-listener's own DB password secret — NOT the
+# Aurora master secret. The boot-time aws.spc generator authenticates to Aurora via IAM database
+# auth (rds-db:connect, granted on the TASK role below) as the dedicated least-privilege
+# `steampipe_reader` role, so the master secret is never exposed to this task at all.
 resource "aws_iam_role_policy" "execution_steampipe_secret" {
   count = local.sp
   name  = "${var.project}-exec-steampipe-secret"
   role  = aws_iam_role.execution.id
   policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_secretsmanager_secret.steampipe[0].arn }]
+    Version = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.steampipe[0].arn] }]
   })
 }
 
@@ -133,6 +138,23 @@ resource "aws_iam_role_policy" "steampipe_task" {
         "route53:List*", "route53:Get*"
       ]
       Resource = "*"
+      },
+      # Cross-account read-only fan-out: the aws.spc connections assume each target account's
+      # AWSopsReadOnlyRole (1st-party: no ExternalId; 3rd-party: trust enforces it). Scoped to the
+      # role NAME (route.ts hard-pins it) — never an arbitrary role.
+      {
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = "arn:aws:iam::*:role/AWSopsReadOnlyRole"
+      },
+      # M1: IAM database auth — generate a short-lived signed token to connect to Aurora as the
+      # dedicated least-privilege `steampipe_reader` role (SELECT-only on accounts/account_regions;
+      # see the steampipe_reader migration). Scoped to this cluster's resource id + that exact
+      # dbuser — the master secret is never granted to this task.
+      {
+        Effect   = "Allow"
+        Action   = ["rds-db:connect"]
+        Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.aurora.cluster_resource_id}/steampipe_reader"
     }]
   })
 }
@@ -156,14 +178,33 @@ resource "aws_ecs_task_definition" "steampipe" {
     image        = "${aws_ecr_repository.steampipe[0].repository_url}:${var.steampipe_image_tag}"
     essential    = true
     portMappings = [{ containerPort = 9193, protocol = "tcp" }]
-    environment  = [{ name = "AWS_REGION", value = var.region }]
-    secrets      = [{ name = "STEAMPIPE_DATABASE_PASSWORD", valueFrom = aws_secretsmanager_secret.steampipe[0].arn }]
+    environment = [
+      { name = "AWS_REGION", value = var.region },
+      # boot-time aws.spc generator reaches Aurora to read accounts ⋈ account_regions via IAM
+      # database auth (M1): AURORA_USER is a dedicated least-privilege role name — not a secret —
+      # the entrypoint calls rds:generate-db-auth-token (task role, rds-db:connect above) for a
+      # short-lived signed password. No Aurora secret of any kind is granted to this task.
+      { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
+      { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
+      { name = "AURORA_USER", value = "steampipe_reader" },
+    ]
+    secrets = [
+      { name = "STEAMPIPE_DATABASE_PASSWORD", valueFrom = aws_secretsmanager_secret.steampipe[0].arn },
+    ]
     healthCheck = {
-      command     = ["CMD-SHELL", "steampipe query \"select 1\" >/dev/null 2>&1 || exit 1"]
-      interval    = 30
-      timeout     = 10
-      retries     = 3
-      startPeriod = 90
+      command = ["CMD-SHELL", "steampipe query \"select 1\" >/dev/null 2>&1 || exit 1"]
+      interval = 30
+      timeout  = 10
+      # retries=5 (150s consecutive-failure tolerance) — NOT just the initial startup case.
+      # startPeriod (below) only covers the FIRST health-check window after task launch; it does
+      # NOT apply to a mid-life restart triggered by the scope watchdog (account/region change) or
+      # a crash-recovery restart (gen_spc_entrypoint.py's supervisor loop). Such a restart's
+      # worst-case downtime is terminate-wait(<=30s) + service-stop --force(<=30s) + Steampipe
+      # embedded-PG reinit (~10-30s) - up to ~90s - which the prior retries=3 (90s) window left with
+      # no margin, risking ECS treating the task as UNHEALTHY mid-restart and cycling it (the
+      # "circuit breaker loop" CLAUDE.md warns about) (M-B fix).
+      retries     = 5
+      startPeriod = 120
     }
     logConfiguration = {
       logDriver = "awslogs"
@@ -276,6 +317,12 @@ resource "aws_iam_role_policy" "inv_sync" {
       # SDK-sourced alb_listener_rule sync (Steampipe rule table needs a per-listener qualifier):
       # read-only ELBv2 describe for LBs/listeners/rules. Read-only; no mutation.
       { Effect = "Allow", Action = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules"], Resource = "*" }
+      # NOTE (M2, round 5): the "0-row account" reachability probe queries the account's OWN
+      # Steampipe connection directly (data path) instead of doing an independent sts:AssumeRole
+      # from this Lambda — an AssumeRole only proves the IAM trust policy is intact, not that the
+      # aggregator actually queried the account this run. No extra IAM permission is needed here;
+      # Steampipe's own task role (steampipe_task, above) already holds the AssumeRole this
+      # Lambda's probe rides on.
     ]
   })
 }
