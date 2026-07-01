@@ -1,5 +1,19 @@
 # ADR-015: 운영 자가치유 — 호스트 자기 서비스 재배포 / Operational Self-Healing — Redeploying AWSops' Own Service
 
+> **번호 확인 (반복 리뷰 이슈 방지):** `015`는 현행 통합 ADR 스킴(001–014 존재)에서 정상적인 다음 번호다.
+> **레거시**(pre-reset) `015-finops-mcp-lambda.md`("FinOps MCP Lambda")는 현재 트리에 없고 `git tag
+> adr-legacy-2026-06-22`에만 보존되어 있으며, `ADR-MAPPING.md`상 신규 **ADR-012**(cost-finops)로
+> 이관됐다. 리뷰어가 옛 스킴을 근거로 "015 번호 충돌, 045+로 재번호"를 다시 제기한다면 이 각주와
+> `ADR-MAPPING.md` L23을 근거로 반박할 것 — 재번호는 불필요하고 오히려 현행 컨벤션을 깨뜬다.
+>
+> **Numbering note (to preempt a recurring review false-positive):** `015` is the correct next
+> number in the current consolidated ADR scheme (001–014 exist). A **legacy** (pre-reset)
+> `015-finops-mcp-lambda.md` ("FinOps MCP Lambda") exists only in git tag
+> `adr-legacy-2026-06-22`, not in this tree, and was migrated to the new **ADR-012** (cost-finops)
+> per `ADR-MAPPING.md`. If a reviewer re-raises "ADR-015 collision, renumber to 045+" based on the
+> old scheme, cite this note + `ADR-MAPPING.md` L23 — renumbering is unnecessary and would break
+> the actual current convention.
+
 ## Status / 상태
 **Accepted — explicit, dated owner-override exception to the ADR-005 autonomy freeze (not a routine scoping clarification).**
 
@@ -23,7 +37,7 @@ autonomy-freeze violation?
 **운영 자가치유(operational self-healing)를 ADR-005의 frozen substrate와 구별되는 별개 카테고리로 명확화한다.** AWSops는 자신의 **호스트 서비스에 한해** 배포 수준 복구(`ecs:UpdateService` force-new-deployment)를 자율 수행할 수 있다. 단 모두 충족:
 
 - **default-off 플래그**(`secret_rotation_redeploy_enabled`) — 기본 0 리소스/$0.
-- **IAM은 호스트 자기 서비스 ARN으로 스코프** — `force-new-deployment`만, 다른 ECS/리소스 변경 없음.
+- **IAM은 호스트 자기 서비스 ARN 1개로 스코프.** ⚠️ IAM에는 `force-new-deployment`만 허용하는 condition key가 없어, 부여된 권한은 해당 서비스에 대한 **`ecs:UpdateService` 전체**(desiredCount/네트워크 설정 등 포함)다. "force-new-deployment만 실행한다"는 보장은 **Lambda 코드 동작으로만** 성립하며 IAM이 강제하지 않는다 — 남는 통제는 좁은 리소스 스코프(자기 서비스 1개) + Lambda가 유일한 호출자라는 점.
 - **트리거 검증** — 자기(Aurora 마스터) 비밀 회전 이벤트로 제한(Lambda가 secret id 대조, **fail-closed**: 미식별 시 미실행).
 - task definition/리소스 스펙은 **불변**(새 태스크가 회전된 시크릿을 다시 읽을 뿐).
 
@@ -32,7 +46,10 @@ autonomy-freeze violation?
 Establish **operational self-healing** as a category DISTINCT from ADR-005's frozen substrate.
 AWSops MAY autonomously perform deployment-level recovery (`ecs:UpdateService` force-new-deployment)
 **on its own host services only**, all of: default-off flag (`secret_rotation_redeploy_enabled`);
-IAM scoped to the host's own service ARN (force-new-deployment only); trigger restricted to a
+IAM scoped to one host-owned service ARN — ⚠️ there is no IAM condition key limiting the grant to
+force-new-deployment, so the actual permission is full `ecs:UpdateService` on that one service;
+"force-new-deployment only" is enforced by the Lambda's code, not by IAM, and the remaining
+control is the narrow resource scope plus the Lambda being the only caller; trigger restricted to a
 verified own-secret (Aurora master) rotation event (the Lambda matches the secret id, **fail-closed**
 when unidentified); no task-definition/resource change. This is **not** AWS-resource mutation of
 managed/customer infra and **not** the ADR-005 remediation/autonomy substrate (`remediation_enabled`
@@ -50,7 +67,7 @@ stays FROZEN). ADR-005 is unchanged; this ADR does not relax it.
 - IAM은 단일 서비스 스코프 — `srr_services` 다중화 시 IAM 동시 확장 필요(주석 명시).
 
 ## 6 Pillars (보안 중심) / 6 Pillars (security-focused)
-- **Security**: 자기 서비스 한정 + force-new-deployment-only + IAM 1 ARN 스코프 + secret-id 검증 fail-closed + default-off. 관리/고객 리소스 변경 없음. ADR-005 frozen substrate 불가침.
+- **Security**: 자기 서비스 한정 + IAM 1 ARN 스코프(⚠️ force-new-deployment 제한은 IAM이 아니라 Lambda 코드가 강제) + secret-id 검증 fail-closed(exact match 우선, lossy 정규화는 fallback) + default-off. 관리/고객 리소스 변경 없음. ADR-005 frozen substrate 불가침.
 - **Reliability**: RDS 회전↔valueFrom-at-start 불일치로 인한 ~주간 outage 자동 복구.
 - **Operational Excellence**: 명시적 owner-override(오준석, 2026-07-01) + 멀티-AI 패널 리뷰(PR #114, 2026-06-29) + 본 ADR 기록으로 ADR-005 예외 거버넌스 요건(새 ADR+패널+날짜박힌 owner-override) 충족.
 - **Cost**: default-off=$0; 켜도 회전당 짧은 롤링 1회.

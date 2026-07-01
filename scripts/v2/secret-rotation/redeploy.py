@@ -15,11 +15,22 @@ import boto3
 
 
 def _secret_key(arn_or_name):
-    """Canonical secret key: the name after ':secret:' with the SM random `-XXXXXX` suffix stripped.
-    Lets us compare an event id (ARN or name, with/without suffix) to AURORA_SECRET_ARN exactly,
-    without substring false-matches."""
+    """Fallback secret key ONLY for when the event doesn't carry a full ARN: the name after
+    ':secret:' with the SM random `-XXXXXX` suffix stripped. This is lossy on purpose (it drops
+    account/region/the real suffix), so callers must try an exact string match first — see
+    _matches_target — and use this only as a last resort for a bare-name event field."""
     name = str(arn_or_name).split(":secret:")[-1]
     return re.sub(r"-[A-Za-z0-9]{6}$", "", name)
+
+
+def _matches_target(got, want):
+    """True iff `got` (the event's secret id) identifies the same secret as `want`
+    (AURORA_SECRET_ARN). Tries an EXACT match first (both full ARNs — the common, unambiguous
+    case) before falling back to the lossy name-only comparison, so two different secrets that
+    happen to share a truncated base name can't collide when the event carries a full ARN."""
+    if got == want:
+        return True
+    return _secret_key(got) == _secret_key(want)
 
 
 def _event_secret_id(event):
@@ -50,14 +61,22 @@ def handler(event, context):
         print(f"[secret-rotation-redeploy] WARN: rotated secret id not in event detail keys "
               f"{list((event.get('detail') or {}).keys())} — SKIPPING (fail-closed)", file=sys.stderr)
         return {"skipped": "unidentified-secret"}
-    if _secret_key(got) != _secret_key(want):
+    if not _matches_target(got, want):
         print(f"[secret-rotation-redeploy] ignoring rotation of {got} (not the Aurora master secret)")
         return {"skipped": got}
     ecs = boto3.client("ecs")
     redeployed = []
+    failed = {}
     for svc in services:
-        ecs.update_service(cluster=cluster, service=svc, forceNewDeployment=True)
-        redeployed.append(svc)
+        try:
+            ecs.update_service(cluster=cluster, service=svc, forceNewDeployment=True)
+            redeployed.append(svc)
+        except Exception as e:  # noqa: BLE001 - one service's failure must not abort the rest
+            failed[svc] = str(e)
+            print(f"[secret-rotation-redeploy] WARN: update_service failed for {svc}: {e}", file=sys.stderr)
     print(f"[secret-rotation-redeploy] forced new deployment on: {redeployed} "
           f"(trigger: {event.get('detail', {}).get('eventName')})")
-    return {"redeployed": redeployed}
+    result = {"redeployed": redeployed}
+    if failed:
+        result["failed"] = failed
+    return result

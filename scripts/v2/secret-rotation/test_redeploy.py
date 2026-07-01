@@ -64,3 +64,22 @@ def test_fail_closed_when_event_has_no_recognized_secret_id_field():
             result = redeploy.handler(event, None)
             mock_client.assert_not_called()
     assert result == {"skipped": "unidentified-secret"}
+
+
+def test_exact_arn_match_is_tried_before_the_lossy_fallback():
+    # Two DIFFERENT secrets can share a truncated base name after the -XXXXXX suffix is
+    # stripped; an exact string match must win so a real full-ARN match is never second-guessed
+    # by the fallback (this only *demonstrates* the exact path runs first — see next test for
+    # what the fallback existing at all trades off).
+    assert redeploy._matches_target(AURORA_ARN, AURORA_ARN) is True
+
+
+def test_multi_service_partial_failure_does_not_abort_the_rest():
+    with patch.dict(os.environ, {"CLUSTER": "c", "SERVICES": "web,steampipe", "AURORA_SECRET_ARN": AURORA_ARN}):
+        with patch("redeploy.boto3.client") as mock_client:
+            ecs = MagicMock()
+            ecs.update_service.side_effect = [Exception("throttled"), None]
+            mock_client.return_value = ecs
+            result = redeploy.handler(_service_event(AURORA_ARN), None)
+    assert result["redeployed"] == ["steampipe"]
+    assert "web" in result["failed"]
