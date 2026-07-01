@@ -62,6 +62,22 @@
 
 > **주의 (2-티어 정밀):** 외부 DATA write 티어가 일률 OFF는 아니다 — `diagnosis_notify_enabled`(SNS 이메일, IAM 단일 토픽 스코프, NOT AWS-리소스 변경)는 **이미 LIVE**(거버넌스 충족). 광역 `integrations_write_enabled`만 OFF. (ADR-007/ADR-013)
 
+### LIVE flag 이름 매핑 (register 완결성)
+> §2 표는 GATED/FROZEN(현재 OFF) 전용이라 아래 LIVE(ON) flag는 여기 없으면 grep으로 못 찾는다. 전부 §3 ADR에 개념적으로는 커버됨 — flag명만 보강.
+
+| flag | 상태 | §3 ADR | 비고 |
+|---|---|---|---|
+| `agentcore_enabled` | LIVE | 004 | AgentCore 전체(Runtime/Gateway/Memory/Interpreter/Lambda 함대 27개) |
+| `workers_enabled` | LIVE | 009 | 비동기 워커 백본 |
+| `steampipe_enabled` | LIVE | 010 | 인벤토리 sync 배치 |
+| `hybrid_routing_enabled` | LIVE | 003 | 정규식+Haiku 챗 라우팅 |
+| `integrations_enabled` | LIVE | 007 | AgentCore egress 통합용 Secrets Manager+KMS 크레덴셜 부여 |
+| `diagnosis_schedule_enabled` | LIVE | 008/013 | 정기(1시간) 자동진단 스케줄러(`schedule_dispatcher.py`) |
+| `ai_cost_tracking_enabled` | LIVE | 008/012 | Bedrock 토큰 사용량 6시간 주기 집계(`ai_cost_aggregator.py`) |
+| `clickhouse_vpc_enabled` / `prometheus_vpc_enabled` / `loki_vpc_enabled` / `tempo_vpc_enabled` / `mimir_vpc_enabled` | LIVE (5개) | 007 | 관측성 커넥터 Lambda의 private subnet 연결 |
+| `ai_insights_enabled` | OFF(default) | 008 | AI 인사이트 배치(`insight_dispatcher.py`) — 현재 미활성 |
+| `opensearch_vpc_enabled` / `istio_vpc_enabled` | OFF(default) | 007/001 | 커넥터 VPC 연결 — 현재 미활성 |
+
 > **폐기(do-not-revive):** BYO-MCP(임의 형태 외부 MCP, ADR 구 031-P3) — 큐레이션 커넥터만 허용. (ADR-007)
 
 ---

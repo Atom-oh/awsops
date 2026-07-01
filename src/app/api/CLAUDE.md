@@ -4,9 +4,10 @@
 Next.js App Router 기반 서버 API. 브라우저가 호출하는 모든 동적 엔드포인트는 이 디렉토리 아래의 `route.ts` 파일로 구현된다.
 (All dynamic server endpoints live here as `route.ts` files under Next.js App Router.)
 
-## 엔드포인트 매트릭스 / Endpoint Matrix (19개)
+## 엔드포인트 매트릭스 / Endpoint Matrix (20개)
 | 경로 | Method | 설명 |
 |------|--------|------|
+| `parity/route.ts` | GET | ADR-030 dual-write parity 체크 — JSON vs Aurora 카운트 비교(memory/stats/inventory/cost/event-scaling/alert-diagnosis) |
 | `ai/route.ts` | POST (SSE) | 11-라우트 AI 라우터: code → network → container → iac → data → security → monitoring → cost → datasource → aws-data → general |
 | `steampipe/route.ts` | POST/GET/PUT | Steampipe SQL 실행 · Cost 가용성 probe · Inventory |
 | `auth/route.ts` | POST | 로그아웃 (HttpOnly Cognito 쿠키 서버 사이드 삭제) |

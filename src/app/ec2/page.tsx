@@ -147,7 +147,7 @@ export default function EC2Page() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatsCard label={t('ec2.runningInstances')} value={running} icon={Server} color="green" />
         <StatsCard label={t('ec2.stoppedInstances')} value={stopped} icon={Server} color="red" />
-        <StatsCard label={t('ec2.totalInstances')} value={totalVcpus} icon={Server} color="cyan" />
+        <StatsCard label={t('ec2.totalVcpus')} value={totalVcpus} icon={Server} color="cyan" />
         <StatsCard label={t('ec2.instanceType')} value={typeData.length} icon={Server} color="purple" />
       </div>
 

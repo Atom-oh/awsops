@@ -28,8 +28,8 @@ IAM(Identity and Access Management) 페이지에서는 AWS 계정의 사용자, 
 - **Custom Policies**: 고객 관리형 정책 수
 - **MFA Not Enabled**: MFA가 활성화되지 않은 사용자 수
 
-:::tip MFA 보안 권고
-MFA가 활성화되지 않은 사용자가 있으면 상단에 경고 배너가 표시됩니다. 모든 IAM 사용자에게 MFA를 활성화하는 것을 권장합니다.
+:::caution 알려진 제약 — MFA 카운트는 항상 0
+`summary` 쿼리(`src/lib/queries/iam.ts`)는 **"0 AS mfa_not_enabled"로 하드코딩**되어 있어 실제 MFA 미설정 인원을 집계하지 않습니다. 아래 경고 배너와 MFA 파이차트도 이 값에 의존하므로 현재는 각각 "표시 안 됨"과 "100% 활성화"로만 보입니다. 의도적 회피입니다 — `mfa_enabled`는 Steampipe **hydrate 컬럼**(`iam:ListMFADevices` 호출 필요)이라, 조직 SCP가 해당 API를 차단하는 환경에서 쿼리에 포함하면 **테이블 레벨이 아니라 컬럼 hydrate 에러**가 나서 `ignore_error_codes`로 못 막고 전체 쿼리가 실패합니다(`docs/decisions/010-inventory-resource-model.md` 참조). v1은 이 리스크를 피하려고 값을 아예 비워뒀습니다. v2(`web/lib/inventory-types.ts`, 배치로 미리 동기화된 `inventory_resources.mfa_enabled`)는 같은 컬럼을 라이브 요청이 아니라 사전 동기화 스냅샷에서 읽어 이 제약을 실제로 해소했습니다.
 :::
 
 ### MFA 상태 차트
@@ -38,6 +38,8 @@ MFA가 활성화되지 않은 사용자가 있으면 상단에 경고 배너가 
 
 - **녹색**: MFA 활성화된 사용자
 - **빨간색**: MFA 미활성화 사용자
+
+위 "알려진 제약" 참조 — `mfa_not_enabled`가 항상 0이므로 이 차트는 현재 항상 100% 녹색(전체 활성화)으로 표시됩니다.
 
 ## IAM 사용자 목록
 
@@ -114,7 +116,7 @@ MFA가 활성화되지 않은 사용자가 있으면 상단에 경고 배너가 
 | `roleDetail` | 클릭 시 동적 SQL — 트러스트 정책 + 인스턴스 프로파일 포함 |
 
 :::info SCP 차단 컬럼 회피
-`mfa_enabled`, `attached_policy_arns`는 목록 쿼리에서 제외됩니다 (조직 SCP가 `ListMFADevices`, `ListAttachedUserPolicies`를 차단하는 환경 대응). MFA 통계는 별도 `summary` 쿼리에서 집계합니다.
+`mfa_enabled`, `attached_policy_arns`는 목록 쿼리에서 제외됩니다 (조직 SCP가 `ListMFADevices`, `ListAttachedUserPolicies`를 차단하는 환경 대응). `summary` 쿼리도 같은 이유로 `mfa_enabled`를 참조하지 않고 **0으로 하드코딩**되어 있습니다 — "요약 통계"의 "알려진 제약" 참조.
 :::
 
 ## 관련 페이지

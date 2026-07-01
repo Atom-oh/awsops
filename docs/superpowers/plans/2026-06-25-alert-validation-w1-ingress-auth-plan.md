@@ -1,6 +1,6 @@
 # Plan — W1 Ingress Auth Hardening (alert validation) — rev2
 
-> 원천 / Source: `docs/specs/2026-06-24-webhook-alert-validation-design.md` (rev4, codex-PASS) §4/§4.1/§5/§8/§10.
+> 원천 / Source: `docs/superpowers/specs/2026-06-24-webhook-alert-validation-design.md` (rev4, codex-PASS) §4/§4.1/§5/§8/§10.
 > rev2: codex-가중 P2 게이트(codex+kimi+glm+opus+agy 전원 FAIL) 반영 — **TopicArn allowlist는 `source_allowlist` JSONB**(endpoint 아님)[verified], **replay/Timestamp 신선도**, **인증서 issuer/유효기간 검증**, **body 크기 캡(413)**, **단일 shared post-auth 파이프라인**(feedback-loop/isolate 보존), **verifyBearer length-guard**, **UnsubscribeConfirmation**, 로깅 위생, generic 401.
 > Scope: **W1 only** — 인그레스 인증 하드닝(standalone PR). AlertValidation(W2)·SNS(W3)·Integrations UX/source_allowlist 등록(W4)은 별도.
 > Posture: read-only 인증; AWS mutation 없음(ADR-005). `incident_lifecycle_enabled` 런타임 게이트 하(503). 시크릿 부재 → degrade-safe.
@@ -23,7 +23,7 @@
 - `web/lib/http-body.test.ts`
 - `web/app/api/incidents/webhook/route.ts`
 - `web/app/api/incidents/webhook/route.test.ts`
-- `docs/plans/2026-06-25-alert-validation-w1-ingress-auth-plan.md`
+- `docs/superpowers/plans/2026-06-25-alert-validation-w1-ingress-auth-plan.md`
 
 ### Task 1: SNS message verification — signature + freshness + cert validity (lib)
 

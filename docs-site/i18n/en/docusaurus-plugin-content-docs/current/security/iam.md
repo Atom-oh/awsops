@@ -21,8 +21,8 @@ At the top of the page, you can view the IAM resource status:
 - **Custom Policies**: Number of customer-managed policies
 - **MFA Not Enabled**: Number of users without MFA enabled
 
-:::tip MFA Security Recommendation
-A warning banner appears at the top if there are users without MFA enabled. We recommend enabling MFA for all IAM users.
+:::caution Known limitation — the MFA count is always 0
+The `summary` query (`src/lib/queries/iam.ts`) **hardcodes `0 AS mfa_not_enabled`** — it never actually aggregates MFA status. The warning banner and the pie chart below both depend on this value, so today they always render as "no warning" and "100% enabled" respectively. This is deliberate, not an oversight: `mfa_enabled` is a Steampipe **hydrate column** (it requires an `iam:ListMFADevices` call), so in an org where an SCP blocks that API, including it in a query causes a **column-hydrate error** (not a table-level error) that `ignore_error_codes` cannot suppress — the whole query fails. v1 left the value blank to avoid that risk. v2 (`web/lib/inventory-types.ts`, reading `inventory_resources.mfa_enabled` from a pre-synced batch snapshot rather than a live per-request call) actually resolves this the right way.
 :::
 
 ### MFA Status Chart
@@ -31,6 +31,8 @@ A pie chart visualizes the MFA enablement status:
 
 - **Green**: Users with MFA enabled
 - **Red**: Users without MFA enabled
+
+See "Known limitation" above — since `mfa_not_enabled` is always 0, this chart currently always renders as 100% green (fully enabled).
 
 ## IAM Users List
 

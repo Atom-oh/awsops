@@ -1,6 +1,6 @@
 # AI Insights Dashboard — 구현 계획 (Implementation Plan)
 
-> Source spec: `docs/specs/2026-06-24-ai-insights-dashboard-design.md`
+> Source spec: `docs/superpowers/specs/2026-06-24-ai-insights-dashboard-design.md`
 > 브랜치: `feat/v2-ai-insights` · base: `origin/feat/v2-architecture-design`
 > 방식: TDD (test-first) + Tidy-First, 태스크당 1 커밋. 게이트: `ai_insights_enabled`(신규, 기본 false→$0).
 > 패턴: k8s API = `agent/lambda/istio_read_mcp.py`의 presigned-STS `k8s-aws-v1.` 토큰; CE = `diagnosis/sources.py` get_cost_and_usage; dispatcher/worker = `schedule_dispatcher`/`handlers.REGISTRY`.

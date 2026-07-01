@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 22dc16d1ceca · generated-at: 2026-06-24 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 971bec4a2b45 · generated-at: 2026-07-01 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are Codex, an external reviewer — project context below.
 
@@ -14,7 +14,7 @@ v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *pro
 - **🚩 Flag any PR that enables mutation/autonomy/BYO-MCP** — e.g. sets `remediation_enabled=true`, flips a frozen flag, or wires the dark substrate live. The dark code exists intentionally (built-then-reversed); enabling it is the regression, not its presence.
 
 ## Stack / runtime
-- **Web:** Next.js 14 thin-BFF (`web/`), standalone **arm64**, served at **root `/` — no basePath**. Routes `web/app/api/{health,stream,db,jobs}/route.ts` (+ `jobs/[id]`). Heavy/long/OOM work is **enqueued via `POST /api/jobs`**, never run inline. Fetch is `/api/*` (NOT `/awsops/api/*` — that v1 prefix is gone in v2).
+- **Web:** Next.js 14 BFF (`web/`), standalone **arm64**, served at **root `/` — no basePath**. Started as a 4-route thin-BFF (`web/app/api/{health,stream,db,jobs}/route.ts` + `jobs/[id]`) and has since grown per-domain to **~25 `/api/*` routes / 16 pages** (customization, integrations, eks, cost, datasources, chat, incidents, ...) — a new domain page+route is the established pattern, not an anomaly to flag. Heavy/long/OOM work is still **enqueued via `POST /api/jobs`**, never run inline. Fetch is `/api/*` (NOT `/awsops/api/*` — that v1 prefix is gone in v2).
 - **Data:** Aurora Serverless v2 (PG 17.9) via **node-pg** (`web/lib/db.ts`, shared `getPool`). App state lives in Aurora, **not `data/*.json`** (that is the v1 pattern). Schema = `terraform/v2/foundation/data/schema.sql` + collision-free ULID migrations (`migrations/<ULID>_*.sql`, never append to schema.sql).
 - **IaC:** Terraform (CDK dropped). Single root `terraform/v2/foundation/`, partial S3 backend (`backend.hcl`, no DynamoDB), TF ≥1.15, provider `~>6.0`.
 - **Edge:** CloudFront(TLS) → VPC Origin `https-only:443` → internal ALB HTTPS:443 (regional ACM) → HTTP → Fargate `awsops-v2-web:3000`. **No public ALB.** ALB SG allows 443 from CloudFront managed SG `CloudFront-VPCOrigins-Service-SG` (VPC-CIDR-only → 504).

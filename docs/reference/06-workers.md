@@ -4,13 +4,21 @@
 
 **EN** — A managed async backbone that lifts heavy, long-running, or OOM-prone work off the
 web request path. The web tier stays a thin BFF; a worker can OOM, hang, or crash without
-affecting web availability. P2 ships the backbone + a synthetic proof workload — real heavy
-ops (reports, AI synthesis, large scans, mutating actions) land on top of it in P3+.
+affecting web availability. P2 shipped the backbone + a synthetic proof workload
+(`noop`/`noop-heavy`) — **real read-only heavy ops have since landed on top of it**: `report`
+(full AI diagnosis report generation), `compliance` (CIS benchmark via Powerpipe),
+`datasource_index`, and `insight` are all live registered handlers today, each with its own
+EventBridge-scheduled dispatcher Lambda (see Key files). Mutating actions remain deferred
+(ADR-005 FROZEN) — the "real ops land in P3+" framing applies to *mutation*, not to heavy
+read-only work, which is already here.
 
 **KO** — 무겁거나 오래 걸리거나 OOM 위험이 있는 작업을 web 요청 경로에서 떼어내는 관리형 비동기
 백본. web은 thin BFF로 유지되고, 워커가 OOM·행·크래시로 죽어도 web 가용성은 무영향. P2는 백본 +
-합성 증명 워크로드만 제공하고, 실제 무거운 ops(리포트·AI 합성·대용량 스캔·mutate 작업)는 P3+에서
-이 위에 올린다.
+합성 증명 워크로드(`noop`/`noop-heavy`)를 제공했고, **그 위에 실제 read-only heavy op이 이미
+올라와 있다**: `report`(AI 진단 리포트 전체 생성), `compliance`(Powerpipe CIS 벤치마크),
+`datasource_index`, `insight`가 전부 현재 등록된 실제 핸들러이며, 각각 EventBridge 스케줄 디스패처
+Lambda를 갖는다(Key files 참조). mutate 작업만 계속 연기된 상태(ADR-005 FROZEN) — "실제 ops는
+P3+에서"라는 서술은 *mutation*에만 해당하고, 무거운 read-only 작업은 이미 여기 있다.
 
 ## Current design / 현행 설계
 
@@ -71,15 +79,19 @@ $0 idle).**
 
 | File / 파일 | Role / 역할 |
 |---|---|
-| `terraform/v2/foundation/workers.tf` | All P2 infra, gated on `var.workers_enabled` (SQS+DLQ, S3 results, SFN Standard, 4 Lambdas, Fargate task def, ECR, IAM, reaper schedule, kill-switch ESM, web SQS grant) |
+| `terraform/v2/foundation/workers.tf` | All P2+ infra, gated on `var.workers_enabled` (SQS+DLQ, S3 results, SFN Standard, **8 Lambdas** — the 4 core ones below plus 4 scheduled dispatchers, Fargate task def, ECR, IAM, reaper schedule, kill-switch ESM, web SQS grant) |
 | `scripts/v2/workers/db.py` | Shared Aurora access (pg8000) + `worker_jobs` CRUD with conditional, terminal-immutable transitions |
-| `scripts/v2/workers/dispatcher.py` | SQS-triggered: type guard + `StartExecution` (`ExecutionAlreadyExists`=ok) + `ReportBatchItemFailures` |
-| `scripts/v2/workers/handlers.py` | Job-type registry (read/compute only; `noop`→lambda, `noop-heavy`→fargate) |
+| `scripts/v2/workers/dispatcher.py` | SQS-triggered: type guard + `StartExecution` (`ExecutionAlreadyExists`=ok) + `ReportBatchItemFailures`. Also branches `incident_stage` jobs to the sibling incident state machine (dropped when `incident_lifecycle_enabled` is off, the default) |
+| `scripts/v2/workers/handlers.py` | Job-type registry — **6 entries, not 2**: `noop`→lambda, `noop-heavy`→fargate (the original proof workload), plus the now-live `report`→fargate (AI diagnosis report), `compliance`→fargate (CIS/Powerpipe), `datasource_index`→lambda, `insight`→lambda |
 | `scripts/v2/workers/worker_lambda.py` | SFN-invoked short worker: claim running → run handler → succeeded/failed |
 | `scripts/v2/workers/status_updater.py` | SFN Catch-invoked: set `failed`+error conditionally (the SFN→VPC-Aurora bridge) |
 | `scripts/v2/workers/reaper.py` | EventBridge-scheduled stale-job reconciliation (running→failed; queued→failed when ESM enabled) |
 | `scripts/v2/workers/fargate_worker.py` | Fargate entrypoint `--job-id [--oom]`; long task / OOM demo |
 | `scripts/v2/workers/sfn.asl.json` | Step Functions ASL (Choice lambda/fargate, Retry, Catch→status_updater); Terraform `templatefile` vars |
+| `scripts/v2/workers/schedule_dispatcher.py` | EventBridge-scheduled (hourly) — scans `report_schedules`, enqueues `report` jobs. Gated `diagnosis_schedule_enabled` |
+| `scripts/v2/workers/ai_cost_aggregator.py` | EventBridge-scheduled (6h) — Bedrock token usage → `ai_usage_daily`. Gated `ai_cost_tracking_enabled` |
+| `scripts/v2/workers/datasource_index_dispatcher.py` | EventBridge-scheduled (24h) — enqueues `datasource_index` jobs |
+| `scripts/v2/workers/insight_dispatcher.py` | EventBridge-scheduled (6h) — enqueues `insight` jobs. Gated `ai_insights_enabled` |
 | `web/app/api/jobs/route.ts` | `POST` enqueue (ledger insert + SQS send; `ON CONFLICT` idempotency dedup) |
 | `web/app/api/jobs/[id]/route.ts` | `GET` job status/result by id |
 | `web/lib/db.ts` | Shared `getPool()` (node-postgres) used by jobs routes |
@@ -97,6 +109,11 @@ $0 idle).**
 5. Idempotency: duplicate `job_id` / `idempotency_key` → single job.
 
 **Outputs:** `jobs_queue_url`, `workers_state_machine_arn`, `dispatcher_esm_uuid`, `worker_ecr_uri`.
+
+**Since W9:** the registry grew from the 2 synthetic types verified above to 6 — `report`,
+`compliance`, `datasource_index`, and `insight` are live production job types with their own
+scheduled dispatcher Lambdas (see Key files). These reuse the same verified backbone (kill-switch,
+idempotency, OOM isolation) rather than introducing a new path.
 
 ## Learnings & gotchas / 학습·함정
 

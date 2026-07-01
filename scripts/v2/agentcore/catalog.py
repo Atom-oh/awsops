@@ -7,9 +7,9 @@ these short keys (not the gateway names) are what payload.gateway selects. 'exte
 is the NEW §4 #7 split, left EMPTY in P1f (plugin datasource registry + OTLP + datasource-diag
 re-home are P3).
 
-TARGETS: the representative read-only slice proving every provisioner code path:
-  - iam-mcp (14 tools, cross-account, largest schema) -> security gateway
-  - flow-monitor (1 tool, single-tool, proves for_each>=2) -> network gateway
+TARGETS: grew from the original 2-entry provisioner smoke slice (iam-mcp, flow-monitor)
+into the near-full read-only fleet — see the dict below for the current count/coverage.
+provision.py provisions every entry unconditionally (no subsetting).
 Schemas are copied verbatim from agent/lambda/create_targets.py. provision.py injects
 target_account_id into every tool inputSchema (cross-account), exactly like v1.
 """

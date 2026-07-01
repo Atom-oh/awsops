@@ -34,6 +34,8 @@
 - `event-scaling.ts` — 이벤트 사전 스케일링 데이터 모델 + JSON 영속화 (data/event-scaling/, ADR-010 Phase 1+2)
 - `event-scaling-prompts.ts` — Bedrock Sonnet 4.6 프롬프트 (다단계 워밍업 플랜 생성, PLAN_JSON 마커 파싱)
 - `event-scaling-scripts.ts` — 자원 타입별 안전한 bash 스크립트 생성 (KEDA/HPA/Aurora/MSK/ASG/EBS, 검토-후-실행)
+- `db/*.ts` — ADR-030(+033 P2) dual-write shadow 레이어: JSON이 여전히 read source-of-truth인 동안 Aurora에 fire-and-forget 미러 write(`agentcore-memory-writer`, `agentcore-stats-writer`, `alert-diagnosis-writer`, `cost-writer`, `event-scaling-writer`, `inventory-writer`, `token-budget-writer`) + `drift.ts`(write 성공/실패 계측, 7일 parity gate가 참조)
+- `ai-cost/*.ts` — ADR-033 AI 비용 절감 레이어: `heuristic-classifier.ts`(LLM 없는 결정론적 라우팅 사전필터, 단일 도메인 매칭 시만 확정) → `model-tier.ts`(신뢰도 기반 모델/synthesis 정책) · `prompt-cache.ts`(Bedrock invariant 시스템 프리픽스 캐싱 — **AgentCore gateway 호출엔 적용 안 됨**) · `answer-cache.ts`(exact-match 답변 캐시, Steampipe 5분 TTL과 정합) · `token-budget.ts`(in-process 계정+유저별 일일 토큰 카운터, 프로세스 재시작 시 초기화 — 영속화는 `db/token-budget-writer.ts`가 Aurora로)
 
 ## 규칙
 - 모든 DB 접근은 `steampipe.ts`의 `runQuery()` 또는 `batchQuery()`를 통해 수행 (pg Pool `max: 10`, `BATCH_SIZE: 8`, statement_timeout 120s, node-cache TTL 300s)
@@ -82,6 +84,8 @@ Core libraries: Steampipe database connection, SQL query definitions, inventory,
 - `event-scaling.ts` — Event pre-scaling data model + JSON persistence (data/event-scaling/, ADR-010 Phase 1+2)
 - `event-scaling-prompts.ts` — Bedrock Sonnet 4.6 prompts (multi-phase warmup plan, PLAN_JSON marker extraction)
 - `event-scaling-scripts.ts` — Safe bash script generators per resource type (KEDA/HPA/Aurora/MSK/ASG/EBS, review-then-run)
+- `db/*.ts` — ADR-030 (+033 P2) dual-write shadow layer: mirrors writes into Aurora fire-and-forget while JSON stays the read source of truth (`agentcore-memory-writer`, `agentcore-stats-writer`, `alert-diagnosis-writer`, `cost-writer`, `event-scaling-writer`, `inventory-writer`, `token-budget-writer`) + `drift.ts` (write success/failure instrumentation the 7-day parity gate reads)
+- `ai-cost/*.ts` — ADR-033 AI cost-reduction layer: `heuristic-classifier.ts` (LLM-free deterministic routing pre-filter, only confident on a single-domain match) → `model-tier.ts` (confidence-based model/synthesis policy) · `prompt-cache.ts` (Bedrock invariant system-prefix caching — **does not apply to AgentCore gateway calls**) · `answer-cache.ts` (exact-match answer cache, bounded by the Steampipe 5-min TTL) · `token-budget.ts` (in-process per-account/user daily token counter, resets on process restart — durable persistence is `db/token-budget-writer.ts` → Aurora)
 
 ## Rules
 - ALL database access through `runQuery()` or `batchQuery()` in steampipe.ts (pg Pool `max: 10`, `BATCH_SIZE: 8`, 120s statement timeout, 300s node-cache TTL)

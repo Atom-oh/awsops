@@ -4,6 +4,8 @@ const verifyUser = vi.fn();
 const isAdmin = vi.fn();
 const upsertSkill = vi.fn();
 const upsertAgent = vi.fn();
+const attachSkill = vi.fn();
+const setEnabled = vi.fn();
 const writeAudit = vi.fn();
 const getAgentSpace = vi.fn();
 const upsertAgentSpace = vi.fn();
@@ -12,7 +14,8 @@ vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/catalog', () => ({
   upsertSkill: (...a: unknown[]) => upsertSkill(...a),
   upsertAgent: (...a: unknown[]) => upsertAgent(...a),
-  attachSkill: vi.fn(), setEnabled: vi.fn(),
+  attachSkill: (...a: unknown[]) => attachSkill(...a),
+  setEnabled: (...a: unknown[]) => setEnabled(...a),
   listAgentsWithSkills: vi.fn(async () => []), listSkills: vi.fn(async () => []),
   writeAudit: (...a: unknown[]) => writeAudit(...a),
 }));
@@ -32,7 +35,8 @@ function getReq(cookie = 'awsops_token=t') {
   return new Request('http://x/api/customization', { method: 'GET', headers: { cookie } });
 }
 beforeEach(() => {
-  verifyUser.mockReset(); isAdmin.mockReset(); upsertSkill.mockReset(); upsertAgent.mockReset(); writeAudit.mockReset();
+  verifyUser.mockReset(); isAdmin.mockReset(); upsertSkill.mockReset(); upsertAgent.mockReset();
+  attachSkill.mockReset(); setEnabled.mockReset(); writeAudit.mockReset();
   getAgentSpace.mockReset(); upsertAgentSpace.mockReset();
   verifyUser.mockResolvedValue({ sub: 'a', email: 'admin@x', groups: ['admins'] });
   isAdmin.mockResolvedValue(true);
@@ -63,6 +67,31 @@ describe('POST /api/customization', () => {
     expect(upsertSkill).toHaveBeenCalledWith(expect.objectContaining({ tier: 'custom', createdBy: 'admin@x' }));
     expect(writeAudit).toHaveBeenCalled();
   });
+  it('400 invalid agent', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(req({ kind: 'agent', name: 'Bad Name', description: 'd', gateway: 'ops' }));
+    expect(res.status).toBe(400);
+    expect(upsertAgent).not.toHaveBeenCalled();
+  });
+  it('creates a valid agent (disabled-by-default) + audits', async () => {
+    upsertAgent.mockResolvedValue(9);
+    const { POST } = await import('./route');
+    const res = await POST(req({ kind: 'agent', name: 'rds-investigator', description: 'd', persona: 'p', gateway: 'data', routingKeywords: ['rds'] }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, id: 9 });
+    expect(upsertAgent).toHaveBeenCalledWith(expect.objectContaining({ tier: 'custom', createdBy: 'admin@x', gateway: 'data' }));
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ objectType: 'agent', objectId: '9' }));
+  });
+  it('409 on built-in name collision', async () => {
+    upsertAgent.mockRejectedValue(new Error('name collides with a built-in'));
+    const { POST } = await import('./route');
+    const res = await POST(req({ kind: 'agent', name: 'iam-mcp', description: 'd', gateway: 'security', routingKeywords: [] }));
+    expect(res.status).toBe(409);
+  });
+  it('400 unknown kind', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ kind: 'bogus' }))).status).toBe(400);
+  });
 });
 
 describe('GET /api/customization', () => {
@@ -88,6 +117,57 @@ describe('GET /api/customization', () => {
     const { GET } = await import('./route');
     const body = await (await GET(getReq())).json();
     expect(body.space.version).toBe(3);
+  });
+});
+
+describe('PUT /api/customization (op:enable/disable)', () => {
+  it('403 non-admin', async () => {
+    isAdmin.mockResolvedValue(false);
+    const { PUT } = await import('./route');
+    expect((await PUT(putReq({ op: 'enable', kind: 'agent', id: 1 }))).status).toBe(403);
+    expect(setEnabled).not.toHaveBeenCalled();
+  });
+  it('400 when kind is neither skill nor agent', async () => {
+    const { PUT } = await import('./route');
+    expect((await PUT(putReq({ op: 'enable', kind: 'bogus', id: 1 }))).status).toBe(400);
+    expect(setEnabled).not.toHaveBeenCalled();
+  });
+  it('enables a custom agent + audits', async () => {
+    const { PUT } = await import('./route');
+    const res = await PUT(putReq({ op: 'enable', kind: 'agent', id: 3 }));
+    expect(res.status).toBe(200);
+    expect(setEnabled).toHaveBeenCalledWith('agent', 3, true);
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'enable', objectType: 'agent', objectId: '3' }));
+  });
+  it('disables a custom skill + audits', async () => {
+    const { PUT } = await import('./route');
+    const res = await PUT(putReq({ op: 'disable', kind: 'skill', id: 4 }));
+    expect(res.status).toBe(200);
+    expect(setEnabled).toHaveBeenCalledWith('skill', 4, false);
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'disable', objectType: 'skill', objectId: '4' }));
+  });
+});
+
+describe('PUT /api/customization (op:attach)', () => {
+  it('attaches a skill to an agent + audits', async () => {
+    const { PUT } = await import('./route');
+    const res = await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2, ord: 5 }));
+    expect(res.status).toBe(200);
+    expect(attachSkill).toHaveBeenCalledWith(1, 2, 5);
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'attach', objectType: 'agent_skill', objectId: '1:2' }));
+  });
+  it('403 non-admin', async () => {
+    isAdmin.mockResolvedValue(false);
+    const { PUT } = await import('./route');
+    expect((await PUT(putReq({ op: 'attach', agentId: 1, skillId: 2 }))).status).toBe(403);
+    expect(attachSkill).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/customization (unknown op)', () => {
+  it('400 unknown op', async () => {
+    const { PUT } = await import('./route');
+    expect((await PUT(putReq({ op: 'bogus' }))).status).toBe(400);
   });
 });
 

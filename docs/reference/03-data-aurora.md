@@ -69,7 +69,10 @@ loads inventory into Aurora — not a Service-Connect live-query daemon. (See AD
 ## Key files / 핵심 파일
 
 - `terraform/v2/foundation/data.tf` — KMS key + alias, DB subnet group, SG,
-  Aurora cluster + writer instance, RDS-managed master secret.
+  Aurora cluster + writer instance, RDS-managed master secret. Also sets
+  `enable_http_endpoint = true` on the cluster (the **RDS Data API**), so the
+  read-only `inventory-read` MCP Lambda can query synced inventory over HTTPS
+  without a VPC attachment — the only non-node-pg access path to Aurora.
 - `terraform/v2/foundation/data/schema.sql` — ADR-001 7-table schema + `schema_migrations`
   + P2 `worker_jobs` (idempotent).
 - The root `.gitignore` `data/` rule has a `!terraform/v2/foundation/data/` carve-out,

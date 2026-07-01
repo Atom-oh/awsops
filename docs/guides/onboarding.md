@@ -78,7 +78,7 @@ Quick deploy: `bash scripts/03-build-deploy.sh`
 
 ## Getting Help
 
-- **Architecture**: `docs/architecture.md`
+- **Architecture**: `docs/history/architecture-v1.md` (v1 archive); v2 current design is `docs/reference/`
 - **Troubleshooting**: `docs/TROUBLESHOOTING.md`
-- **ADRs**: `docs/decisions/` (8 architecture decisions documented)
+- **ADRs**: `docs/decisions/` (BASELINE.md = current truth; 14 consolidated ADRs)
 - **Runbooks**: `docs/runbooks/` (start-services, add-new-page)
