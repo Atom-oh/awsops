@@ -58,6 +58,7 @@
 | **GATED(거버넌스)** | 외부 knowledge/comms write — 광역(Slack/Notion/Jira) | `integrations_write_enabled` | 독립 control plane · no-AWS-mutation IAM · SSRF/Secrets/DLP/human-gate. BYO-MCP(임의) 제외, 큐레이션 커넥터만 | ADR-007 |
 | **GATED** | 외부 관측성 진단 수집 | `datasource_diagnosis_enabled` | governed egress collector(read), SSRF 방어 | ADR-007/ADR-008 |
 | **GATED(실험)** | 챗 에이전트 루프 — `AsyncAnthropicBedrock` 커스텀 루프(다크) | `ANTHROPIC_AGENT_LOOP_ENABLED` (+ per-request `payload.agentLoop` 오버라이드) | default OFF·dark. read-only·additive; Bedrock 경유(IAM/VPC/레지던시/비용귀속 보존, API키 無, 동일 global.* 프로파일+홈리전), 기존 게이트웨이 MCP 재사용(BYO-MCP 아님). 레버=도구 루프 디버깅성(지연 아님). **per-request `payload.agentLoop`('anthropic'\|'strands')가 env를 오버라이드** — BFF는 client-controlled `agentLoop`를 forward하지 않음(서버측 설정만; 불변식 유지 필수) | ADR-008/ADR-003 |
+| **GATED(owner-override 예외)** | 운영 자가치유: 호스트 자기 서비스 재배포(Aurora secret 회전 복구) | `secret_rotation_redeploy_enabled` | **ADR-005 freeze에 대한 명시적·날짜박힌 owner-override 예외**(오준석, 2026-07-01, PR #114 멀티-AI 패널 리뷰 거쳐 ratify — self-scoping 재해석이 아님). EventBridge(RotationSucceeded)→Lambda→`ecs:UpdateService` force-new-deployment **자기 web 서비스 한정**. IAM 1 ARN·secret-id fail-closed·default-off. ADR-005의 나머지(remediation/BYO-MCP/mutating tools)는 그대로 FROZEN — 이 예외는 이 좁은 케이스 하나만. CloudTrail trail 의존 | ADR-015 |
 | **옵션(deferred)** | Neptune/그래프 substrate | — | Postgres-first 확정, 그래프 substrate는 후속 옵션 | legacy ADR-043 (deferred — MAPPING 참조) |
 
 > **주의 (2-티어 정밀):** 외부 DATA write 티어가 일률 OFF는 아니다 — `diagnosis_notify_enabled`(SNS 이메일, IAM 단일 토픽 스코프, NOT AWS-리소스 변경)는 **이미 LIVE**(거버넌스 충족). 광역 `integrations_write_enabled`만 OFF. (ADR-007/ADR-013)
@@ -86,5 +87,6 @@
 | [012](012-cost-finops.md) | Cost / FinOps | Cost Explorer probe + FinOps MCP + Bedrock 비용 귀속 | 비용최적화 |
 | [013](013-alerting-notification.md) | 알림·통지 | 웹훅 HMAC + SNS 통지(diagnosis_notify LIVE) + 리포트 다운로드 | 운영우수성 |
 | [014](014-cross-cutting-cache-i18n-cdn.md) | 횡단: 캐시·i18n·CDN | 프리워밍·i18n(ko/en)·CloudFront CACHING_DISABLED | 성능효율성 |
+| [015](015-operational-self-healing.md) | 운영 자가치유 | 호스트 자기 서비스 force-new-deployment 자율 복구(Aurora secret 회전), default-off·IAM 1 ARN·secret-id fail-closed; **ADR-005 불완화**(별개 범주) | 안정성·보안 |
 
 새 ADR 추가: 최고번호+1, single Status, **같은 PR에서 이 §3(또는 §2) 갱신 필수**(anti-drift, §1).
