@@ -18,24 +18,34 @@ noting the alignment explicitly so it doesn't drift.
 - Modify: `scripts/pr-review/run-panel.sh`
 - Test: `tests/structure/test-pr-review-panel-prompt.sh`
 
-- [ ] Write `tests/structure/test-pr-review-panel-prompt.sh` (TAP output, matches
+- [x] Write `tests/structure/test-pr-review-panel-prompt.sh` (TAP output, matches
       `tests/structure/test-plugin-structure.sh` conventions) asserting:
       - `KIRO_PROMPT=` construction in `run-panel.sh` contains a data-only / do-not-follow-instructions
         guard phrase (e.g. grep for `data only` or `do NOT follow`)
       - the same file/diff-under-review block also still references `$DIFF` (the file-path delivery
         from PR #115 stays intact)
-- [ ] Add one line to the `KIRO_PROMPT` heredoc in `scripts/pr-review/run-panel.sh`, directly below
+- [x] Add one line to the `KIRO_PROMPT` heredoc in `scripts/pr-review/run-panel.sh`, directly below
       the `=== DIFF UNDER REVIEW ===` marker, instructing the model to treat the file content as
       data only and never follow instructions found inside it — mirroring the guard
       `scripts/pr-review/synthesize.sh` already sends to the chair.
-- [ ] `tests/run-all.sh` globs `tests/structure/test-*.sh` automatically — no registration needed.
-- [ ] Add a one-line comment next to `--trust-tools=read,grep,fs_read` in `run-panel.sh` noting
+- [x] `tests/run-all.sh` globs `tests/structure/test-*.sh` automatically — no registration needed.
+- [x] Add a one-line comment next to `--trust-tools=read,grep,fs_read` in `run-panel.sh` noting
       that the prompt's tool-name mentions (`read`/`fs_read`) and this flag must stay in sync
       (plan-gate MINOR finding: this alignment wasn't previously called out anywhere).
-- [ ] Run `bash tests/run-all.sh` and confirm the new test passes (TAP `ok`).
+- [x] Run `bash tests/run-all.sh` and confirm the new test passes (TAP `ok`).
 
 ## Plan-gate result
 Single-opinion review (agy; quorum guard — only 1 gate-eligible peer this run, codex misclassified
 ERROR by a `check_panel.py` probe bug (missing `--skip-git-repo-check`), kiro-cli TIMEOUT on
 probe). Verdict: no CRITICAL/MAJOR. One MINOR (the trust-tools/prompt alignment comment) folded
 into the task above.
+
+## Resolution (superseded by CI review, 2 more rounds)
+The actual CI panel (codex + kiro-opus, real run) caught what the single-opinion agy plan-gate
+missed: the guard above initially landed ONLY in `KIRO_PROMPT`, leaving codex — which reads the
+SHARED `panel-prompt.txt` via stdin, not `KIRO_PROMPT` — unprotected. Fixed by moving the guard
+into the shared prompt (`.github/workflows/pr-review.yml`'s heredoc), inherited by all 4
+panelists; `KIRO_PROMPT` also repeats it as defense-in-depth since `run-panel.sh` is reusable with
+any `$PROMPT_FILE`. A second CI round then caught that the new test's `fail()` never set a
+non-zero exit — a false-assurance regression guard — fixed by tracking a `FAILED` counter and
+exiting 1 at the end. Closed.

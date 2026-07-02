@@ -6,8 +6,9 @@
 # (PR #115 review follow-up: codex was left unprotected when the guard was kiro-only).
 cd "$(dirname "$0")/../.."
 
+FAILED=0
 pass() { echo "ok - $1"; }
-fail() { echo "not ok - $1"; }
+fail() { echo "not ok - $1"; FAILED=$((FAILED+1)); }
 
 echo "# pr-review panel prompt safety"
 
@@ -15,12 +16,13 @@ WORKFLOW=".github/workflows/pr-review.yml"
 SCRIPT="scripts/pr-review/run-panel.sh"
 if [ ! -f "$SCRIPT" ]; then
   fail "run-panel.sh exists"
-  exit 0
+  exit 1
 fi
 pass "run-panel.sh exists"
 
 # Isolate the shared panel-prompt heredoc (covers codex + all kiro models) — not just kiro's addendum.
-SHARED_PROMPT="$(sed -n "/cat <<'PROMPT_EOF'/,/^PROMPT_EOF/p" "$WORKFLOW")"
+# Terminator line is indented under the YAML step, so match optional leading whitespace.
+SHARED_PROMPT="$(sed -n "/cat <<'PROMPT_EOF'/,/^[[:space:]]*PROMPT_EOF[[:space:]]*$/p" "$WORKFLOW")"
 
 if [ -n "$SHARED_PROMPT" ]; then
   pass "shared panel-prompt heredoc found"
@@ -55,3 +57,5 @@ if grep -B2 -- '--trust-tools=read,grep,fs_read' "$SCRIPT" | grep -qiE "sync|ali
 else
   fail "trust-tools / prompt tool-name alignment is documented"
 fi
+
+[ "$FAILED" -eq 0 ] || exit 1
