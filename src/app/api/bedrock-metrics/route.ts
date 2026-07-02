@@ -19,6 +19,8 @@ function awsCli(args: string[], timeout = 20000, profileArgs: string[] = []): an
 // Cross-region inference pricing for ap-northeast-2 / 서울 리전 교차 추론 가격
 const MODEL_PRICING: Record<string, { input: number; output: number; cacheRead?: number; cacheWrite?: number; label: string }> = {
   // Claude 4.x — cross-region inference IDs (as seen in CloudWatch) / 교차 추론 ID (CloudWatch 실제 값)
+  'anthropic.claude-sonnet-5': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 5' },
+  'anthropic.claude-sonnet-5-v1': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 5' },
   'anthropic.claude-sonnet-4-6': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 4.6' },
   'anthropic.claude-sonnet-4-6-v1': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 4.6' },
   'anthropic.claude-opus-4-8': { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75, label: 'Claude Opus 4.8' },

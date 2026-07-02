@@ -329,12 +329,12 @@ class DriveAnthropicLoopTest(unittest.TestCase):
             {"type": "tool_use", "id": "t", "name": "x", "input": {}},
         ])
 
-    def test_temperature_zero_passed_to_stream(self):
-        # P4 gate (kiro-opus MAJOR): parity with the Strands BedrockModel temperature=0.0 (ADR-038).
+    def test_temperature_omitted_from_stream_call(self):
+        # Claude Sonnet 5 rejects a non-default temperature (400) — the old ADR-038
+        # temperature=0.0 parity lever from Sonnet 4.6 is gone; omit the key entirely.
         client = _FakeClient([(["x"], _final("end_turn", [_text("x")]))])
         _drive(client, _Recorder(), tools=[])
-        self.assertEqual(client.messages.calls[0]["temperature"], al.MODEL_TEMPERATURE)
-        self.assertEqual(al.MODEL_TEMPERATURE, 0.0)
+        self.assertNotIn("temperature", client.messages.calls[0])
 
     def test_multiple_tool_uses_in_one_turn_all_run(self):
         client = _FakeClient([

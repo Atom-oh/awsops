@@ -45,7 +45,7 @@ Evidence is decomposed per source and gathered in parallel. Missing/unavailable 
 A small set of canonical model IDs, all with the `global.` cross-region inference-profile prefix:
 
 ```
-sonnet-4.6 → global.anthropic.claude-sonnet-4-6
+sonnet-4.6 → global.anthropic.claude-sonnet-5
 opus-4.8   → global.anthropic.claude-opus-4-8
 haiku-4.5  → global.anthropic.claude-haiku-4-5-20251001-v1:0
 ```

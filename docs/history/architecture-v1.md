@@ -30,7 +30,7 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **External Datasources**: 7종 관측성 플랫폼 HTTP 클라이언트 (SSRF 방지, allowlist, AI 쿼리 생성) / 7 observability platform HTTP clients (SSRF-protected, allowlist, AI query generation)
 
 ### AI Layer (`src/app/api/ai/`)
-- **Models**: Bedrock Sonnet 4.6 / Opus 4.8
+- **Models**: Bedrock Sonnet 5 / Opus 4.8
 - **AgentCore**: Runtime (Strands) + 8 Gateways (125 MCP tools via 19 Lambda)
 - **Code Interpreter**: Sandboxed code execution for analysis
 - **Routing**: 11-route priority system (Code → Network → Container → IaC → Data → Security → Monitoring → Cost → Datasource → AWS → General)
@@ -145,6 +145,6 @@ v2 rebuilds the v1 single-EC2 monolith as a **Terraform-based MSA** (CDK dropped
 
 ## Event-Driven Pre-Scaling (Implemented — ADR-010 Phase 1+2)
 
-Admin-only event registration page (`/event-scaling`) that analyzes historical CloudWatch metrics for traffic spikes, generates multi-phase warmup plans via Bedrock Sonnet 4.6 (PLAN_JSON marker parsing), and emits safe bash scripts per resource type (KEDA/HPA, Aurora reader, MSK partition expansion, ASG warm pool, EBS IOPS). The plan and scripts are **review-then-run** — the dashboard never executes mutations on its own. ADR-029 Phase 3 (mutating action gate) was accepted then **REVERSED in v2 (2026-06-11)** — the mutating direction is abandoned; AWSops stays review-then-run / read-only.
+Admin-only event registration page (`/event-scaling`) that analyzes historical CloudWatch metrics for traffic spikes, generates multi-phase warmup plans via Bedrock Sonnet 5 (PLAN_JSON marker parsing), and emits safe bash scripts per resource type (KEDA/HPA, Aurora reader, MSK partition expansion, ASG warm pool, EBS IOPS). The plan and scripts are **review-then-run** — the dashboard never executes mutations on its own. ADR-029 Phase 3 (mutating action gate) was accepted then **REVERSED in v2 (2026-06-11)** — the mutating direction is abandoned; AWSops stays review-then-run / read-only.
 
 See also: `scripts/ARCHITECTURE.md` for detailed architecture diagrams.

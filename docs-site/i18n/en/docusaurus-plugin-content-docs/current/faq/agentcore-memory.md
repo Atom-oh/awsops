@@ -52,7 +52,7 @@ flowchart TD
   ECR -->|"Image reference"| RT
 
   AGENT -->|"MCP + SigV4"| GW["8 section gateways<br/>(~120 read-only tools)"]
-  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5"]
+  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 5 / Opus 4.8 / Haiku 4.5"]
 ```
 
 ### AgentCore Runtime

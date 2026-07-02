@@ -26,7 +26,7 @@ from .sections import SECTIONS, DEEP_SECTIONS, INTENDED_VS_ACTUAL_SECTION
 # Inference-profile id — a BARE id ("anthropic.claude-...") throws ValidationException on
 # Claude 4.x invoke_model. Uses global.* profiles invoked from ap-northeast-2 (matches agent/agent.py)
 # so calls are captured by the ap-northeast-2 invocation log for awsops-only cost attribution.
-MODEL_ID = os.environ.get("DIAGNOSIS_MODEL_ID", "global.anthropic.claude-sonnet-4-6")
+MODEL_ID = os.environ.get("DIAGNOSIS_MODEL_ID", "global.anthropic.claude-sonnet-5")
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 
 # Tier → model + catalog + per-section token budget. Sonnet is the default (enough for most runs);

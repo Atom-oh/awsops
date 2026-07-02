@@ -10,7 +10,7 @@
 Activate the `deep` diagnosis tier. Today `light`/`mid`/`deep` are a *type* (`DiagnosisTier`) but the
 BFF forces every request to `mid` (`web/app/api/diagnosis/route.ts:30`) and the worker renders one
 fixed 9-section catalog regardless of tier. Deep tier should produce a **richer 15-section** read-only
-report, same automatic-report shape as v1, with a **per-run model choice: Sonnet 4.6 (default) or
+report, same automatic-report shape as v1, with a **per-run model choice: Sonnet 5 (default) or
 Opus 4.8** (Sonnet is enough for most runs; Opus for heavier analysis).
 
 ## Non-goals / Out of scope (Spec 2)

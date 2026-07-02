@@ -367,7 +367,7 @@
     <dt>런타임</dt><dd>AgentCore Runtime (Strands, <code>agent/agent.py</code>)</dd>
     <dt>섹션 게이트웨이</dt><dd>8개 (Network · Container · Data · Monitoring · Security · IaC · Cost · Ops)</dd>
     <dt>MCP 도구</dt><dd>총 125개 / 19개 Lambda 함수</dd>
-    <dt>모델</dt><dd>Amazon Bedrock Sonnet 4.6 · Opus 4.8 · Haiku 4.5</dd>
+    <dt>모델</dt><dd>Amazon Bedrock Sonnet 5 · Opus 4.8 · Haiku 4.5</dd>
     <dt>부가</dt><dd>AgentCore Memory · Code Interpreter (Python 샌드박스)</dd>
     <dt>설정 source of truth</dt><dd>SSM (프로비저너가 기록 → BFF가 런타임에 read)</dd>
   </dl>
@@ -410,7 +410,7 @@
   <h2>모델 &amp; Memory / Code Interpreter</h2>
   <p>AWSops는 Amazon Bedrock의 세 모델을 작업 성격에 맞게 사용합니다. 여기에 AgentCore의 두 가지 부가 역량을 결합합니다.</p>
   <div class="feat-grid">
-    <div class="feat"><h3>Sonnet 4.6</h3><p>기본 진단 및 일반 응답에 사용하는 기본 모델.</p><span class="tag">기본</span></div>
+    <div class="feat"><h3>Sonnet 5</h3><p>기본 진단 및 일반 응답에 사용하는 기본 모델.</p><span class="tag">기본</span></div>
     <div class="feat"><h3>Opus 4.8</h3><p>deep 진단 티어에서 선택 가능(cost-gate).</p><span class="tag">deep 옵션</span></div>
     <div class="feat"><h3>Haiku 4.5</h3><p>하이브리드 라우팅 분류기에 사용.</p><span class="tag">라우팅</span></div>
     <div class="feat"><h3>AgentCore Memory</h3><p>세션 컨텍스트 유지.</p><span class="tag">Memory</span></div>

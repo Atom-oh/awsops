@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Event-driven pre-scaling — Phase 1+2 (ADR-010) ([#13](https://github.com/whchoi98/awsops/pull/13))
-  - New `/event-scaling` admin page: register events, collect historical CloudWatch metrics (ASG/RDS/MSK/EBS/ALB), Bedrock Sonnet 4.6 multi-phase warmup plan via `PLAN_JSON` marker, downloadable bash scripts per resource type (KEDA/HPA, Aurora reader, MSK partition expansion, ASG warm pool, EBS IOPS)
+  - New `/event-scaling` admin page: register events, collect historical CloudWatch metrics (ASG/RDS/MSK/EBS/ALB), Bedrock Sonnet 5 multi-phase warmup plan via `PLAN_JSON` marker, downloadable bash scripts per resource type (KEDA/HPA, Aurora reader, MSK partition expansion, ASG warm pool, EBS IOPS)
   - **Review-then-run**: scripts are downloaded for operator review; the dashboard never executes mutating actions
   - New API route `/api/event-scaling` (GET/POST/PUT/DELETE, admin-only)
   - New SQL query file `event-scaling.ts` with CloudWatch GetMetricData batch + resource-state queries
@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Zombie connection cleanup hardened to survive Steampipe FDW hangs — uses a dedicated short-lived `Client` (not pool) so it works even when the pool is exhausted; threshold lowered to 90s for Cost Explorer / IAM summary FDW paths
 - CIS benchmark fails with `relation does not exist` in single-account mode — schema resolution fixed for non-aggregator setups
 - Benchmark parameter validated against allowlist before shell invocation (prevents command injection)
-- `global.anthropic.claude-sonnet-4-6` model ID used for alert diagnosis (was returning a 4xx with the regional ID)
+- `global.anthropic.claude-sonnet-5` model ID used for alert diagnosis (was returning a 4xx with the regional ID)
 
 ### Infrastructure
 
@@ -94,7 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SSRF protection for SNS SubscribeURL, admin auth for alert config, PromQL/LogQL injection prevention
 - Alert correlation: bounded retry, timer cleanup, dedup map cap, rate limit hardening
 - Collector dynamic import restricted to code files via `webpackInclude` magic comment (prevents CLAUDE.md from breaking build)
-- `global.anthropic.claude-sonnet-4-6` model ID used for alert diagnosis
+- `global.anthropic.claude-sonnet-5` model ID used for alert diagnosis
 - Duplicate AI diagnosis menu item removed from sidebar
 - Unused `batchTopics` variable removed; env var replacement fixed
 - Dynamic `reportBucket` config restored; 30min stale timeout
@@ -416,7 +416,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - 이벤트 기반 사전 스케일링 — Phase 1+2 (ADR-010) ([#13](https://github.com/whchoi98/awsops/pull/13))
-  - 신규 `/event-scaling` 관리자 페이지: 이벤트 등록 → 과거 CloudWatch 메트릭 수집(ASG/RDS/MSK/EBS/ALB) → Bedrock Sonnet 4.6 다단계 워밍업 플랜(`PLAN_JSON` 마커) → 자원 타입별 bash 스크립트 다운로드(KEDA/HPA, Aurora 리더, MSK 파티션 확장, ASG warm pool, EBS IOPS)
+  - 신규 `/event-scaling` 관리자 페이지: 이벤트 등록 → 과거 CloudWatch 메트릭 수집(ASG/RDS/MSK/EBS/ALB) → Bedrock Sonnet 5 다단계 워밍업 플랜(`PLAN_JSON` 마커) → 자원 타입별 bash 스크립트 다운로드(KEDA/HPA, Aurora 리더, MSK 파티션 확장, ASG warm pool, EBS IOPS)
   - **검토-후-실행**: 스크립트는 운영자 검토용으로 다운로드만 제공 — 대시보드는 변경 작업을 직접 실행하지 않음
   - 신규 API 라우트 `/api/event-scaling` (GET/POST/PUT/DELETE, admin 전용)
   - 신규 SQL 쿼리 `event-scaling.ts` (CloudWatch GetMetricData 배치 + 자원 상태 쿼리)
@@ -434,7 +434,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 좀비 연결 정리가 Steampipe FDW 행에서도 살아남도록 강화 — 풀이 아닌 전용 단명 `Client` 사용으로 풀 고갈 상태에서도 동작; Cost Explorer/IAM 요약 FDW 경로용 임계값을 90초로 단축
 - 단일 어카운트 모드에서 CIS 벤치마크 `relation does not exist` 오류 — non-aggregator 환경에서 스키마 해석 수정
 - 벤치마크 파라미터를 셸 호출 전 allowlist로 검증 (커맨드 인젝션 방지)
-- 알림 진단에 `global.anthropic.claude-sonnet-4-6` 모델 ID 사용 (리전 ID로 4xx 반환되던 문제 해결)
+- 알림 진단에 `global.anthropic.claude-sonnet-5` 모델 ID 사용 (리전 ID로 4xx 반환되던 문제 해결)
 
 ### Infrastructure
 
@@ -475,7 +475,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SNS SubscribeURL SSRF 방지, 알림 설정 admin 인증, PromQL/LogQL 인젝션 방지
 - 상관 분석: 재시도 제한, 타이머 정리, dedup map 제한, Rate Limit 강화
 - 컬렉터 동적 import를 `webpackInclude` 매직 코멘트로 코드 파일로 제한 (CLAUDE.md 포함 시 빌드 실패 방지)
-- 알림 진단에 `global.anthropic.claude-sonnet-4-6` 모델 ID 사용
+- 알림 진단에 `global.anthropic.claude-sonnet-5` 모델 ID 사용
 - 사이드바의 중복된 AI 진단 메뉴 항목 제거
 - 미사용 `batchTopics` 변수 제거; env var 치환 수정
 - `reportBucket` config 동적 읽기 복원; 30분 stale timeout

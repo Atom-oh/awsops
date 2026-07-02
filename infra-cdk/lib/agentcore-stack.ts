@@ -28,7 +28,7 @@ import { Construct } from 'constructs';
  *     - Tools: reachability-analyzer, flow-monitor, network-mcp, steampipe-query
  *
  * - AgentCore Runtime (ap-northeast-2):
- *     - Strands Agent with Bedrock Sonnet 4.6 / Opus 4.8 (us-east-1 cross-region)
+ *     - Strands Agent with Bedrock Sonnet 5 / Opus 4.8 (us-east-1 cross-region)
  *     - Connected to Gateway for MCP tool access
  *     - ARM64 container on microVM
  *
@@ -54,7 +54,7 @@ import { Construct } from 'constructs';
  *   const runtime = new bedrock_agentcore.Runtime(this, 'AgentRuntime', {
  *     runtimeName: 'awsops_agent',
  *     containerImage: ecr.ContainerImage.fromEcrRepository(repo, 'latest'),
- *     modelId: 'us.anthropic.claude-sonnet-4-6',
+ *     modelId: 'global.anthropic.claude-sonnet-5',  // global.* — endpoint is ap-northeast-2 (Seoul); us./bare anthropic.* IDs fail there
  *     memorySize: 2048,
  *   });
  *

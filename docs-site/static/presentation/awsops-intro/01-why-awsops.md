@@ -137,7 +137,7 @@ AWSops는 이 4가지 문제를 동시에 해결합니다.
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
   <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:20px;">
     <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Bedrock AgentCore</div>
-    <div style="color:#b0b0b0;line-height:1.6;">Claude Opus 4.8 / Sonnet 4.6 / Haiku 4.5<br>AgentCore Runtime + 섹션 에이전트<br>ADR-038 하이브리드 라우팅</div>
+    <div style="color:#b0b0b0;line-height:1.6;">Claude Opus 4.8 / Sonnet 5 / Haiku 4.5<br>AgentCore Runtime + 섹션 에이전트<br>ADR-038 하이브리드 라우팅</div>
   </div>
   <div style="display:grid;grid-template-rows:1fr 1fr;gap:12px;">
     <div style="background:rgba(245,158,11,0.05);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:12px;text-align:center;">
@@ -179,7 +179,7 @@ AWSops는 3개 레이어로 구성됩니다.
 {cue: pause}
 Data Layer는 Aurora Serverless v2가 중심입니다. PostgreSQL 17 기반으로 worker 작업, chat 스레드, 진단 리포트 같은 영속 상태를 안전하게 저장합니다. 인벤토리는 flag로 켜는 Steampipe sync가 약 22종 리소스 타입을 Aurora로 동기화해 화면에 보여주는 보조 역할입니다. 라이브 조회 엔진이 아니라 인벤토리 캐시라는 점이 핵심입니다.
 
-AI Engine은 Bedrock입니다. Opus 4.8, Sonnet 4.6, Haiku 4.5를 상황에 맞게 쓰고, AgentCore의 8개 섹션 게이트웨이를 통해 약 120개의 읽기 전용 도구를 호출합니다. 라우팅은 ADR-038 하이브리드 방식으로 빠르고 정확합니다.
+AI Engine은 Bedrock입니다. Opus 4.8, Sonnet 5, Haiku 4.5를 상황에 맞게 쓰고, AgentCore의 8개 섹션 게이트웨이를 통해 약 120개의 읽기 전용 도구를 호출합니다. 라우팅은 ADR-038 하이브리드 방식으로 빠르고 정확합니다.
 
 Dashboard는 Next.js 14 thin-BFF입니다. Overview, AI Diagnosis, Assistant, Cost, Bedrock, Topology, EKS, Inventory, Datasources 페이지가 있고, 무거운 작업은 비동기 워커 티어로 넘깁니다.
 

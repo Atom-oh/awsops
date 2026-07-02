@@ -288,7 +288,7 @@ export default function AIPage() {
           )}
           <select value={model} onChange={(e) => setModel(e.target.value as any)}
             className="bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-xs text-gray-300 focus:ring-accent-cyan focus:border-accent-cyan">
-            <option value="sonnet-4.6">Claude Sonnet 4.6</option>
+            <option value="sonnet-4.6">Claude Sonnet 5</option>
             <option value="opus-4.8">Claude Opus 4.8</option>
             <option value="haiku-4.5">Claude Haiku 4.5</option>
           </select>

@@ -58,7 +58,7 @@ Stats: 43 pages, 55 routes, 26 SQL query files, 20 API routes, 18 components, 12
 | Cost | 9 | Cost Explorer, Pricing, Budgets, forecasts |
 | Ops | 9 | AWS docs, CLI execution, Steampipe SQL |
 
-Models: Claude Sonnet 4.6 (default), Opus 4.8 (deep analysis), Haiku 4.5 (fast/low-cost).
+Models: Claude Sonnet 5 (default), Opus 4.8 (deep analysis), Haiku 4.5 (fast/low-cost).
 
 ## Prerequisites
 
@@ -220,7 +220,7 @@ Internet -> CloudFront (Lambda@Edge Cognito 인증) -> ALB -> EC2 (t4g.2xlarge, 
 | Cost | 9 | Cost Explorer, Pricing, Budgets, 예측 |
 | Ops | 9 | AWS 문서, CLI 실행, Steampipe SQL |
 
-모델: Claude Sonnet 4.6(기본), Opus 4.8(심층 분석), Haiku 4.5(빠르고 저렴).
+모델: Claude Sonnet 5(기본), Opus 4.8(심층 분석), Haiku 4.5(빠르고 저렴).
 
 ## 사전 요구 사항
 

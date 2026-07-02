@@ -104,27 +104,27 @@ def _discover_gateways():
 GATEWAYS = _discover_gateways()
 
 # Bedrock Model / Bedrock 모델
-# ADR-038: deterministic tool selection + prompt caching (verified against strands-agents 1.41.0:
-# BedrockConfig exposes temperature / cache_config / cache_tools; cache_prompt is deprecated).
-# Cache params are guarded — an unsupported version degrades to temperature-only (spec §6 no-op rule).
+# ADR-038: prompt caching (verified against strands-agents 1.41.0: BedrockConfig exposes
+# cache_config / cache_tools; cache_prompt is deprecated). Cache params are guarded — an
+# unsupported version degrades to no-cache (spec §6 no-op rule).
+# NOTE: Claude Sonnet 5 rejects a non-default `temperature` (400) — the old temperature=0.0
+# "deterministic tool selection" lever from Sonnet 4.6 is gone and was never a hard guarantee.
 try:
     if CacheConfig is None:
         raise TypeError("CacheConfig unavailable")
     model = BedrockModel(
-        model_id="global.anthropic.claude-sonnet-4-6",
+        model_id="global.anthropic.claude-sonnet-5",
         region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
-        temperature=0.0,
         cache_config=CacheConfig(strategy="auto"),  # auto cachePoint injection (system+messages)
         cache_tools="default",                      # toolConfig cachePoint, 5m TTL
     )
 except (TypeError, ValueError) as e:  # older strands: unknown kwarg / CacheConfig missing; or CacheConfig(strategy="auto") rejected (ValueError/pydantic ValidationError)
     # NOTE: this fires once per cold start only. The production cache-degradation detector is
     # the cacheReadInputTokens usage check (ADR-038 Task 8) — do not rely on this line alone.
-    print(f"[Agent] prompt caching unavailable ({e}); falling back to temperature-only")
+    print(f"[Agent] prompt caching unavailable ({e}); falling back to no-cache")
     model = BedrockModel(
-        model_id="global.anthropic.claude-sonnet-4-6",
+        model_id="global.anthropic.claude-sonnet-5",
         region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
-        temperature=0.0,
     )
 
 # ============================================================================

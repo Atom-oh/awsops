@@ -60,7 +60,7 @@ sessions own them).
 - Test: `agent/tests/test_anthropic_loop.py`
 
 - [ ] Write a failing test that installs `sys.modules` stubs (mirroring `agent/test_agent.py`) for `anthropic` (an `AsyncAnthropicBedrock` capturing ctor kwargs) and reuses agent stubs, then asserts `run_anthropic_loop`:
-  - [ ] Constructs `AsyncAnthropicBedrock(aws_region="ap-northeast-2")` and uses model `global.anthropic.claude-sonnet-4-6`, `temperature=0.0`.
+  - [ ] Constructs `AsyncAnthropicBedrock(aws_region="ap-northeast-2")` and uses model `global.anthropic.claude-sonnet-5`, `temperature=0.0`.
   - [ ] Applies `_dedup_by_tool_name` + `_filter_tools(toolAllowlist)` to gateway tools **before** schema conversion (same ceiling/order as Strands).
   - [ ] Builds the system prompt mirroring `agent.handler` EXACTLY: override path = `systemPromptOverride + tool_section + COMMON_FOOTER + account_directive`; built-in path = `build_skill_prompt(skill_role, tools) + account_directive` (build_skill_prompt ALREADY appends COMMON_FOOTER — assert it is NOT doubled); then bounded `extraContext` (≤8000 chars).
   - [ ] No-input payload → single `{"delta": "No input provided."}`.

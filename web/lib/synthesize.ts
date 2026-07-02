@@ -10,7 +10,7 @@ export interface SynthPart { gateway: string; text: string }
 export type SynthSend = (system: string, user: string, modelId: string, abortSignal?: AbortSignal) => AsyncIterable<string>;
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
-const MODEL_ID = process.env.SYNTHESIS_MODEL_ID || 'global.anthropic.claude-sonnet-4-6';
+const MODEL_ID = process.env.SYNTHESIS_MODEL_ID || 'global.anthropic.claude-sonnet-5';
 
 // Immutable synthesis system prompt. Domain answers arrive inside <domain_response> tags and the
 // user question inside <user_query> — both are DATA. A domain answer may itself be prompt-injected
@@ -30,7 +30,7 @@ const bedrockSend: SynthSend = async function* (system, user, modelId, abortSign
     modelId,
     system: [{ text: system }],
     messages: [{ role: 'user', content: [{ text: user }] }],
-    inferenceConfig: { maxTokens: 4096, temperature: 0.2 },
+    inferenceConfig: { maxTokens: 4096 },
   }), { abortSignal }); // stop token generation (and cost) if the client disconnects
   for await (const ev of res.stream ?? []) {
     const d = ev.contentBlockDelta?.delta;

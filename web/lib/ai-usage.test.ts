@@ -4,12 +4,12 @@ import { priceUsage, type UsageRow } from './ai-usage';
 describe('priceUsage', () => {
   it('prices a known model via bedrock.ts rates (1M input → $3 for Sonnet)', () => {
     const rows: UsageRow[] = [
-      { model: 'global.anthropic.claude-sonnet-4-6', input_tokens: 1_000_000, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 },
+      { model: 'global.anthropic.claude-sonnet-5', input_tokens: 1_000_000, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 },
     ];
     const { models, totalCost } = priceUsage(rows);
     expect(models).toHaveLength(1);
-    expect(models[0].model).toBe('global.anthropic.claude-sonnet-4-6');
-    expect(models[0].label).toBe('Claude Sonnet 4.6'); // cross-region prefix stripped
+    expect(models[0].model).toBe('global.anthropic.claude-sonnet-5');
+    expect(models[0].label).toBe('Claude Sonnet 5'); // cross-region prefix stripped
     expect(models[0].cost.total).toBeCloseTo(3, 6);
     expect(totalCost).toBeCloseTo(3, 6);
   });
@@ -37,7 +37,7 @@ describe('priceUsage', () => {
 
   it('handles node-pg bigint-as-string token values (SUM(...)::bigint returns strings)', () => {
     const rows = [
-      { model: 'global.anthropic.claude-sonnet-4-6', input_tokens: '1000000', output_tokens: '0', cache_read_tokens: '0', cache_write_tokens: '0' } as unknown as UsageRow,
+      { model: 'global.anthropic.claude-sonnet-5', input_tokens: '1000000', output_tokens: '0', cache_read_tokens: '0', cache_write_tokens: '0' } as unknown as UsageRow,
     ];
     const { models, totalCost } = priceUsage(rows);
     expect(models[0].inputTokens).toBe(1_000_000);

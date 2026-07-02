@@ -1,14 +1,18 @@
 {
   "project": "awsops-dashboard",
   "description": "AWS/K8s operations dashboard with Steampipe, Next.js, Bedrock AgentCore",
-  "defaultModel": "claude-sonnet-4-6",
+  "defaultModel": "claude-sonnet-5",
   "contextFiles": [
     "CLAUDE.md",
     "scripts/ARCHITECTURE.md",
     "docs/TROUBLESHOOTING.md"
   ],
   "permissions": {
-    "allow": [],
+    "allow": [
+      "Bash(terraform:*)",
+      "Bash(make deploy:*)",
+      "Bash(make agentcore:*)"
+    ],
     "deny": [
       "Bash(rm -rf:*)",
       "Bash(git push --force:*)",

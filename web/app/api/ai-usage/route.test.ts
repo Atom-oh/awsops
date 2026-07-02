@@ -36,7 +36,7 @@ describe('GET /api/ai-usage', () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     query.mockResolvedValue({
       rows: [
-        { model: 'global.anthropic.claude-sonnet-4-6', input_tokens: 1_000_000, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 },
+        { model: 'global.anthropic.claude-sonnet-5', input_tokens: 1_000_000, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 },
       ],
     });
     const { GET } = await import('./route');

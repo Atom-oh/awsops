@@ -16,7 +16,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 | 항목 | 값 |
 |------|---|
-| **모델** | Bedrock Claude Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6-v1`) |
+| **모델** | Bedrock Claude Sonnet 5 (`global.anthropic.claude-sonnet-5-v1`) |
 | **권한** | admin 전용 — `data/config.json`의 `adminEmails` |
 | **상태 머신** | planned → analyzing → plan-ready → approved / cancelled |
 | **실행** | **없음** — bash 스크립트로 export, 사람이 직접 실행 |
