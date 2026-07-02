@@ -1,7 +1,9 @@
 #!/bin/bash
-# Guard the kiro panel prompt (scripts/pr-review/run-panel.sh): the diff is delivered by file
-# path + trusted-tool read (PR #115), so the prompt must tell the model to treat that file's
-# content as data only and never follow instructions found inside it (PR #115 review follow-up).
+# Guard the pr-review panel prompt: the diff is delivered by file path + trusted-tool read to
+# kiro-cli (PR #115) and via stdin to codex, both fed by the SAME shared prompt
+# (.github/workflows/pr-review.yml's panel-prompt heredoc) — so the data-only / prompt-injection
+# guard must live there (covers all 4 panelists), not only in run-panel.sh's kiro-only addendum
+# (PR #115 review follow-up: codex was left unprotected when the guard was kiro-only).
 cd "$(dirname "$0")/../.."
 
 pass() { echo "ok - $1"; }
@@ -9,12 +11,28 @@ fail() { echo "not ok - $1"; }
 
 echo "# pr-review panel prompt safety"
 
+WORKFLOW=".github/workflows/pr-review.yml"
 SCRIPT="scripts/pr-review/run-panel.sh"
 if [ ! -f "$SCRIPT" ]; then
   fail "run-panel.sh exists"
   exit 0
 fi
 pass "run-panel.sh exists"
+
+# Isolate the shared panel-prompt heredoc (covers codex + all kiro models) — not just kiro's addendum.
+SHARED_PROMPT="$(sed -n "/cat <<'PROMPT_EOF'/,/^PROMPT_EOF/p" "$WORKFLOW")"
+
+if [ -n "$SHARED_PROMPT" ]; then
+  pass "shared panel-prompt heredoc found"
+else
+  fail "shared panel-prompt heredoc found"
+fi
+
+if echo "$SHARED_PROMPT" | grep -qiE "data only|not follow|never follow"; then
+  pass "shared panel prompt (codex + kiro) carries a prompt-injection / data-only guard"
+else
+  fail "shared panel prompt (codex + kiro) carries a prompt-injection / data-only guard"
+fi
 
 # Isolate just the KIRO_PROMPT assignment (avoid matching unrelated comments elsewhere).
 BLOCK="$(sed -n '/^KIRO_PROMPT=/,/^KIRO_MODELS=/p' "$SCRIPT")"
@@ -23,12 +41,6 @@ if [ -n "$BLOCK" ]; then
   pass "KIRO_PROMPT assignment block found"
 else
   fail "KIRO_PROMPT assignment block found"
-fi
-
-if echo "$BLOCK" | grep -qiE "data only|not follow|never follow"; then
-  pass "KIRO_PROMPT carries a prompt-injection / data-only guard"
-else
-  fail "KIRO_PROMPT carries a prompt-injection / data-only guard"
 fi
 
 if echo "$BLOCK" | grep -q '\$DIFF'; then
