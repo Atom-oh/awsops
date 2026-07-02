@@ -7,6 +7,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
 import Card from '@/components/ui/Card';
 import DataTable from '@/components/ui/DataTable';
+import SegmentedControl from '@/components/ui/SegmentedControl';
 import AreaTrend from '@/components/charts/AreaTrend';
 import HBarList from '@/components/charts/HBarList';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
@@ -23,10 +24,19 @@ interface ServiceDetail { service: string; currency: string; trend: TrendPoint[]
 const DASH = '—';
 const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+// Trend period presets (months) — v1 parity (src/app/cost/page.tsx PERIODS).
+const PERIODS = [
+  { label: '이번 달', value: '1' },
+  { label: '3개월', value: '3' },
+  { label: '6개월', value: '6' },
+  { label: '1년', value: '12' },
+];
+
 const FANOUT = 6;
-async function fetchCost(accountId: string): Promise<Cost> {
+async function fetchCost(accountId: string, months: number): Promise<Cost> {
   const p = accountParam(accountId);
-  const r = await fetch(`/api/cost${p ? `?${p}` : ''}`);
+  const qs = [p, `months=${months}`].filter(Boolean).join('&');
+  const r = await fetch(`/api/cost?${qs}`);
   if (!r.ok) throw new Error(String(r.status));
   return r.json();
 }
@@ -49,16 +59,16 @@ function mergeCost(parts: Cost[]): Cost {
     forecast: hasForecast ? forecast : null,
   };
 }
-async function loadAllAccountsCost(): Promise<Cost> {
+async function loadAllAccountsCost(months: number): Promise<Cost> {
   const ar = await fetch('/api/accounts');
   const accts: Array<{ accountId: string; isHost: boolean; enabled: boolean }> =
     ar.ok ? ((await ar.json().catch(() => ({ accounts: [] }))).accounts ?? []) : [];
   const ids = accts.filter((a) => a.enabled).map((a) => (a.isHost ? 'self' : a.accountId));
-  if (!ids.length) return await fetchCost('self');
+  if (!ids.length) return await fetchCost('self', months);
   const parts: Cost[] = [];
   for (let i = 0; i < ids.length; i += FANOUT) {
     const chunk = await Promise.all(ids.slice(i, i + FANOUT).map((id) =>
-      fetchCost(id).catch(() => ({ total: 0, currency: 'USD', byService: [] } as Cost))));
+      fetchCost(id, months).catch(() => ({ total: 0, currency: 'USD', byService: [] } as Cost))));
     parts.push(...chunk);
   }
   return mergeCost(parts);
@@ -70,6 +80,7 @@ export default function CostPage() {
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
   const [active] = useActiveAccount();
+  const [period, setPeriod] = useState('6');
 
   // Service drill-down panel: name selected (open) + lazily-fetched detail + its loading state.
   const [picked, setPicked] = useState<string | null>(null);
@@ -113,8 +124,9 @@ export default function CostPage() {
 
   const load = useCallback(async () => {
     setBusy(true);
+    const months = Number(period);
     try {
-      const data = active === ALL_ACCOUNTS ? await loadAllAccountsCost() : await fetchCost(active);
+      const data = active === ALL_ACCOUNTS ? await loadAllAccountsCost(months) : await fetchCost(active, months);
       setD(data);
       setErr('');
       setCapturedAt(new Date().toISOString());
@@ -123,7 +135,7 @@ export default function CostPage() {
     } finally {
       setBusy(false);
     }
-  }, [active]);
+  }, [active, period]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -202,9 +214,20 @@ export default function CostPage() {
               />
             </div>
 
-            {/* ---- Monthly trend area (MoM context) ---- */}
-            {monthly.length > 1 && (
-              <AreaTrend title="월별 비용 추이" data={monthly} xKey="month" yKey="total" valuePrefix="$" />
+            {/* ---- Monthly trend area (MoM context) + period filter ---- */}
+            {monthly.length > 1 ? (
+              <AreaTrend
+                title="월별 비용 추이"
+                right={<SegmentedControl options={PERIODS} value={period} onChange={setPeriod} />}
+                data={monthly}
+                xKey="month"
+                yKey="total"
+                valuePrefix="$"
+              />
+            ) : (
+              <Card title="월별 비용 추이" right={<SegmentedControl options={PERIODS} value={period} onChange={setPeriod} />}>
+                <div className="text-[13px] text-ink-400">비용 추이 데이터 없음</div>
+              </Card>
             )}
 
             {/* ---- Daily trend area (full-width) ---- */}

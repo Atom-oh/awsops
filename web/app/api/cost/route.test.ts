@@ -97,3 +97,32 @@ describe('GET /api/cost — account scoping', () => {
     expect(getMtdCost).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /api/cost — months period filter', () => {
+  const reqU = (url: string, cookie = 'awsops_token=t') => new Request(url, { headers: { cookie } });
+  beforeEach(() => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    getMtdCost.mockResolvedValue({ total: 1, currency: 'USD', byService: [] });
+    getCostTrend.mockResolvedValue([]);
+  });
+  it('default (no months param) → 6', async () => {
+    const { GET } = await import('./route');
+    await GET(reqU('http://x/api/cost'));
+    expect(getMonthlyCost).toHaveBeenCalledWith(6, undefined);
+  });
+  it('?months=12 → 12', async () => {
+    const { GET } = await import('./route');
+    await GET(reqU('http://x/api/cost?months=12'));
+    expect(getMonthlyCost).toHaveBeenCalledWith(12, undefined);
+  });
+  it('?months=1 → 1', async () => {
+    const { GET } = await import('./route');
+    await GET(reqU('http://x/api/cost?months=1'));
+    expect(getMonthlyCost).toHaveBeenCalledWith(1, undefined);
+  });
+  it('invalid ?months= → falls back to 6', async () => {
+    const { GET } = await import('./route');
+    await GET(reqU('http://x/api/cost?months=99'));
+    expect(getMonthlyCost).toHaveBeenCalledWith(6, undefined);
+  });
+});
