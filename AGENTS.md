@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 22dc16d1ceca · generated-at: 2026-06-24 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b631319c7b27 · generated-at: 2026-07-02 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
 > You are Codex, an external reviewer — project context below.
 
@@ -9,6 +9,7 @@ Branch `feat/v2-architecture-design`. Reviews on this branch target **v2** (Terr
 ## ⛔ Product posture (current truth = `docs/decisions/BASELINE.md`)
 v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *proposal* (read-only).** North star: operate AWS resources per the Well-Architected 6 pillars, safely.
 - **FROZEN (do-not-enable, ADR-005):** AWS-resource mutation + autonomy (remediation substrate, BYO-MCP, mutating tools). Unfreezing needs a NEW ADR + multi-AI panel + dated owner-override — never a silent/doc-cleanup reinterpretation. Frozen substrate is retained **dark code** (regression = *enabling* it, not its presence).
+  - **One granted exception exists: ADR-015** (`secret_rotation_redeploy_enabled`, default-off) — owner-override by 오준석, 2026-07-01. Scope is exactly one call: `ecs:UpdateService(forceNewDeployment)` **restarting** the host's own web service on its own Aurora master-secret rotation event (same image/task-def — not a code deploy), IAM scoped to that one service ARN, secret-id fail-closed. Do NOT flag this specific path as a fresh FROZEN violation — it is the one ratified carve-out. Any OTHER mutating/autonomous path (a new flag, a broader IAM grant, a different trigger, actual code/image changes) is still a FROZEN violation and should be flagged.
 - **GATED analysis-only (ADR-006):** incident lifecycle / RCA write-back / K8sGPT — read-only triage/RCA, no autonomous mitigation; flags default OFF (rca_writeback needs role decoupling first).
 - **External DATA is NOT the freeze (ADR-007, keystone):** external observability read + governed external write (Slack/Notion/Jira — SSRF · Secrets · DLP/redaction · human-gate · flag-OFF) are allowed; BYO-MCP only as curated connectors. `diagnosis_notify` (SNS) is already LIVE; broad `integrations_write_enabled` stays GATED-OFF.
 - **🚩 Flag any PR that enables mutation/autonomy/BYO-MCP** — e.g. sets `remediation_enabled=true`, flips a frozen flag, or wires the dark substrate live. The dark code exists intentionally (built-then-reversed); enabling it is the regression, not its presence.
