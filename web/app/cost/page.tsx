@@ -122,18 +122,23 @@ export default function CostPage() {
     return () => document.removeEventListener('keydown', onKey);
   }, [picked, closeDetail]);
 
+  // Monotonic sequence — a slower response for a since-abandoned period/account must not
+  // overwrite the currently-selected one (same class as loadSeqRef in bedrock/page.tsx).
+  const loadSeqRef = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setBusy(true);
     const months = Number(period);
     try {
       const data = active === ALL_ACCOUNTS ? await loadAllAccountsCost(months) : await fetchCost(active, months);
+      if (seq !== loadSeqRef.current) return; // superseded by a newer period/account switch
       setD(data);
       setErr('');
       setCapturedAt(new Date().toISOString());
     } catch (e) {
-      setErr(String(e));
+      if (seq === loadSeqRef.current) setErr(String(e));
     } finally {
-      setBusy(false);
+      if (seq === loadSeqRef.current) setBusy(false);
     }
   }, [active, period]);
 
@@ -226,7 +231,9 @@ export default function CostPage() {
               />
             ) : (
               <Card title="월별 비용 추이" right={<SegmentedControl options={PERIODS} value={period} onChange={setPeriod} />}>
-                <div className="text-[13px] text-ink-400">비용 추이 데이터 없음</div>
+                <div className="text-[13px] text-ink-400">
+                  {monthly.length === 1 ? '추이 표시에는 2개월 이상 필요 — 더 긴 기간을 선택하세요' : '비용 추이 데이터 없음'}
+                </div>
               </Card>
             )}
 
