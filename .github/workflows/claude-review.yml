@@ -56,7 +56,7 @@ jobs:
           use_bedrock: "true"
           # Read-only: inspect the trusted base for context; NO Bash/Write/network (injection defense).
           claude_args: |
-            --model us.anthropic.claude-opus-4-8
+            --model us.anthropic.claude-fable-5
             --allowedTools Read,Grep,Glob
           prompt: |
             You are reviewing a pull request. Its unified diff is in the file `.ci-pr-diff.txt` in the
