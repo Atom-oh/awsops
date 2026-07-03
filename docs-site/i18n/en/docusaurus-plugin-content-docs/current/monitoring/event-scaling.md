@@ -16,7 +16,7 @@ The `/event-scaling` page generates **AI-driven warm-up plans** for upcoming tra
 
 | Item | Value |
 |------|-------|
-| **Model** | Bedrock Claude Sonnet 5 (`global.anthropic.claude-sonnet-5-v1`) |
+| **Model** | Bedrock Claude Sonnet 5 (`global.anthropic.claude-sonnet-5`) |
 | **Access** | admin-only — `data/config.json` `adminEmails` |
 | **State machine** | planned → analyzing → plan-ready → approved / cancelled |
 | **Execution** | **None** — scripts exported as bash; humans run them |
