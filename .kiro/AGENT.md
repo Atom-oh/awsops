@@ -17,7 +17,7 @@ Browser → CloudFront (Lambda@Edge JWT) → ALB → EC2 t4g.2xlarge (Private Su
 ## Tech Stack
 - Frontend: Next.js 14 (App Router), TypeScript, Tailwind CSS (dark navy), Recharts, React Flow
 - Data: Steampipe embedded PostgreSQL (380+ AWS, 60+ K8s tables), pg Pool (max 5, 120s timeout), node-cache 5min TTL
-- AI: Bedrock Claude Sonnet 4.6 / Opus 4.8, AgentCore Runtime (Strands), 8 Gateways (125 MCP tools), Code Interpreter
+- AI: Bedrock Claude Sonnet 5 / Opus 4.8, AgentCore Runtime (Strands), 8 Gateways (125 MCP tools), Code Interpreter
 - Auth: Cognito + Lambda@Edge (JWT cookie)
 - IaC: CDK TypeScript (infra-cdk/)
 - Region: ap-northeast-2 (Lambda@Edge: us-east-1)

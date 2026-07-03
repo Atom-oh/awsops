@@ -25,7 +25,7 @@ Browser → POST /awsops/api/ai (question + model + history)
     ├─ security  → AgentCore Runtime → Security Gateway (14 tools) ~30-60s
     ├─ monitoring→ AgentCore Runtime → Monitoring Gateway (16 tools) ~30-60s
     ├─ cost      → AgentCore Runtime → Cost Gateway (9 tools) ~30-60s
-    ├─ aws-data  → Steampipe SQL + Bedrock Sonnet 4.6 ~5s
+    ├─ aws-data  → Steampipe SQL + Bedrock Sonnet 5 ~5s
     └─ general   → Ops Gateway (9 tools) + Bedrock fallback ~5-30s
   → 멀티 라우트: 병렬 호출 → Bedrock 응답 합성
   → SSE stream → Browser

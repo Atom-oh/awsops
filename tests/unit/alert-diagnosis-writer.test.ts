@@ -62,7 +62,7 @@ function makeResult(overrides: Partial<DiagnosisResult> = {}): DiagnosisResult {
     confidence: 'high',
     investigationSources: ['CloudWatch', 'Steampipe'],
     processingTimeMs: 4321,
-    model: 'global.anthropic.claude-sonnet-4-6',
+    model: 'global.anthropic.claude-sonnet-5',
     inputTokens: 1000,
     outputTokens: 500,
     ...overrides,

@@ -574,7 +574,7 @@ def _bedrock_invoke(prompt):
     body = {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 512,
             "messages": [{"role": "user", "content": prompt}]}
     br = boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
-    resp = br.invoke_model(modelId="global.anthropic.claude-sonnet-4-6", body=json.dumps(body))
+    resp = br.invoke_model(modelId="global.anthropic.claude-sonnet-5", body=json.dumps(body))
     out = json.loads(resp["body"].read())
     return out["content"][0]["text"]
 

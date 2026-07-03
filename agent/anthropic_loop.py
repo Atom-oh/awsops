@@ -20,11 +20,10 @@ import os
 import sys
 
 # Same model + home region as the Strands path → invocation-log cost attribution intact.
-MODEL_ID = "global.anthropic.claude-sonnet-4-6"
+MODEL_ID = "global.anthropic.claude-sonnet-5"
 BEDROCK_REGION = "ap-northeast-2"
 MAX_TOOL_ROUNDS = 8          # hard cap on tool-call rounds (runaway-loop backstop)
 MAX_OUTPUT_TOKENS = 4096     # Anthropic Messages API REQUIRES max_tokens on every call
-MODEL_TEMPERATURE = 0.0      # parity with the Strands BedrockModel — deterministic tool selection (ADR-038)
 EXTRA_CONTEXT_CAP = 8000     # bound BFF-supplied context (parity with agent.handler)
 TOOL_RESULT_CHAR_CAP = 24000 # bound a single tool result fed back (avoid per-round context/token blowup)
 
@@ -178,7 +177,6 @@ async def drive_anthropic_loop(*, aclient, mcp_call, model, system_blocks,
         while True:
             offer_tools = bool(anthropic_tools) and rounds < max_rounds
             kwargs = {"model": model, "max_tokens": max_tokens,
-                      "temperature": MODEL_TEMPERATURE,
                       "system": system_blocks, "messages": msgs}
             if offer_tools:
                 kwargs["tools"] = anthropic_tools

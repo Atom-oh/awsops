@@ -58,7 +58,7 @@ grep -i "AlertDiagnosis" /tmp/awsops-server.log | tail -20
 ```
 
 **원인 / Causes**:
-- 모델 ID 오류 → `src/lib/alert-diagnosis.ts:18` 가 `global.anthropic.claude-sonnet-4-6`인지 확인 (커밋 ba03173 참고)
+- 모델 ID 오류 → `src/lib/alert-diagnosis.ts:18` 가 `global.anthropic.claude-sonnet-5`인지 확인 (커밋 ba03173 참고)
 - 토큰 한도 초과 → 컨텍스트가 60KB를 넘음 → `MAX_CONTEXT_CHARS` 조정
 - IAM 권한 → EC2 인스턴스 롤에 `bedrock:InvokeModel` 필요
 

@@ -76,7 +76,7 @@ The operations tool itself is designed to be inexpensive:
 
 - **A single EC2 t4g.2xlarge (ARM64 Graviton)** runs the Steampipe embedded PostgreSQL alongside the app — **no separate managed-DB cost**.
 - **AgentCore is serverless** — the AI runtime/gateways bill only on invocation.
-- Bedrock models are matched to the task — **Sonnet 4.6** for classification/routing, **Opus 4.8** for deep diagnosis, **Haiku 4.5** for fast/cheap work, with prompt caching (ADR-016).
+- Bedrock models are matched to the task — **Sonnet 5** for classification/routing, **Opus 4.8** for deep diagnosis, **Haiku 4.5** for fast/cheap work, with prompt caching (ADR-016).
 
 And the tool also **reduces the customer's infrastructure cost** — Cost Explorer analysis, idle-resource detection, and FinOps recommendations are included in the diagnosis report.
 

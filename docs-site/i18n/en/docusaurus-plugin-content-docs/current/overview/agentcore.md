@@ -40,7 +40,7 @@ AgentCore handles tool execution for the AI Assistant, powered by Amazon Bedrock
 | **Engine** | Strands Agent Framework |
 | **Container** | Docker arm64 (stored in ECR) |
 | **Execution Environment** | AgentCore managed service |
-| **Model** | Claude Sonnet 4.6 / Opus 4.8 |
+| **Model** | Claude Sonnet 5 / Opus 4.8 |
 
 ### Status
 

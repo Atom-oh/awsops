@@ -34,7 +34,7 @@
                 <mxCell id="cognito" value="Cognito" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cognito;fillColor=#DD344C;strokeColor=none;fontColor=#E0E0E0;fontSize=13;verticalLabelPosition=bottom;verticalAlign=top;fontFamily=Amazon Ember;" parent="1" vertex="1">
                     <mxGeometry x="195" y="280" width="44" height="44" as="geometry"/>
                 </mxCell>
-                <mxCell id="bedrock" value="Bedrock&#10;Sonnet 4.6&#10;Opus 4.6" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;fillColor=#01A88D;strokeColor=none;fontColor=#E0E0E0;fontSize=12;verticalLabelPosition=bottom;verticalAlign=top;fontFamily=Amazon Ember;" parent="1" vertex="1">
+                <mxCell id="bedrock" value="Bedrock&#10;Sonnet 5&#10;Opus 4.6" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;fillColor=#01A88D;strokeColor=none;fontColor=#E0E0E0;fontSize=12;verticalLabelPosition=bottom;verticalAlign=top;fontFamily=Amazon Ember;" parent="1" vertex="1">
                     <mxGeometry x="320" y="275" width="48" height="48" as="geometry"/>
                 </mxCell>
                 <mxCell id="memory" value="memory" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;fillColor=#01A88D;strokeColor=none;fontColor=#E0E0E0;fontSize=13;verticalLabelPosition=bottom;verticalAlign=top;fontFamily=Amazon Ember;" parent="1" vertex="1">

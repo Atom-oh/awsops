@@ -43,8 +43,8 @@ def normalize_model(model):
     """Collapse a Bedrock modelId to its canonical inference-profile / model id.
 
     Callers log modelId inconsistently in the invocation log: the SDK worker logs the FULL ARN
-    (arn:...:inference-profile/global.anthropic.claude-sonnet-4-6) while AgentCore logs the BARE id
-    (global.anthropic.claude-sonnet-4-6). Without this, `by modelId` produces two rows for the same
+    (arn:...:inference-profile/global.anthropic.claude-sonnet-5) while AgentCore logs the BARE id
+    (global.anthropic.claude-sonnet-5). Without this, `by modelId` produces two rows for the same
     model/day. Strip to the part after the last '/' so both collapse to one key; the web BFF
     (bedrock.ts) strips the cross-region prefix (us./eu./ap./global.) on read for pricing/labels."""
     if not model:

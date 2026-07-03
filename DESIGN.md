@@ -292,7 +292,7 @@ hover pop `0 6px 24px rgba(31,30,29,.18)` · focus ring `0 0 0 3px rgba(217,119,
 - **"서비스 상세"** table: 서비스 (colored dot + name) · 비용 (claude/tabular) · 점유율 · 추세 (↑rose / ↓emerald).
 
 ### 7. AI Assistant (`/awsops/ai`)
-- Full-height flex column: shared header ("AI 어시스턴트" + `brand` dot badge "Claude Sonnet 4.6") → scrollable thread → composer.
+- Full-height flex column: shared header ("AI 어시스턴트" + `brand` dot badge "Claude Sonnet 5") → scrollable thread → composer.
 - **Thread** centered, max 860px, gap 22. **User message**: right-aligned bubble, `bg-ink-800 text-paper`, radius 12, max 78%. **Assistant message**: 34px square avatar (white card + AWSops mark) + a white Card (radius 12, `shadow-card`, padding 20/22) containing rich blocks:
   - `h` heading with emerald status dot · `sub` section subhead · `table` (label/value grid, value rendered as a mono chip when it matches an ID/URL/number pattern) · `access` rows (negative "주의" / neutral "꺼짐" badge + text) · `note` callout (`bg-claude-50`, 3px claude left bar) · `text` paragraph.
   - **Footer** (top hairline): `brand` mono route badge (e.g. "AgentCore → Container Gateway (24 tools)"), model (mono), elapsed (faint/tabular), right-aligned "복사" with copy icon; then a "Tools:" row of mono chips + a `Queried: …` line.

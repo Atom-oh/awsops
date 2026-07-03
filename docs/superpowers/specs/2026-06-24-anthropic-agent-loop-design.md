@@ -158,7 +158,7 @@ async def run_anthropic_loop(payload) -> AsyncIterator[dict]:
   the existing `agent.build_account_directive` + the handler's prefix rule.
 
 ### 4.5 Streaming / model / caching
-- `AsyncAnthropicBedrock(aws_region="ap-northeast-2")`, `model="global.anthropic.claude-sonnet-4-6"`
+- `AsyncAnthropicBedrock(aws_region="ap-northeast-2")`, `model="global.anthropic.claude-sonnet-5"`
   — same model + home region as the Strands path, preserving invocation-log cost attribution.
   **Assumption to verify once at impl time**: the Anthropic Bedrock SDK passes a `global.*`
   inference-profile id straight through as the Bedrock `modelId`. If it does not, fall back to the

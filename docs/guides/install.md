@@ -28,7 +28,7 @@ Browser → CloudFront (Cognito Auth) → ALB → EC2 (Next.js:3000)
 | 카테고리 / Category | 페이지 / Page | 경로 / Path | 기능 / Features |
 |----------|------|------|----------|
 | **Overview** | Dashboard | `/awsops` | 20개 StatsCards, 차트, 경고 (20 StatsCards, Charts, Warnings) |
-| | AI Assistant | `/awsops/ai` | Claude Sonnet 4.6 / Opus 4.8, SSE 스트리밍, 멀티 라우트 (SSE streaming, multi-route) |
+| | AI Assistant | `/awsops/ai` | Claude Sonnet 5 / Opus 4.8, SSE 스트리밍, 멀티 라우트 (SSE streaming, multi-route) |
 | | AgentCore | `/awsops/agentcore` | 런타임 상태, 8 Gateway, 125 도구 (Runtime status, 8 Gateways, 125 tools) |
 | **Compute** | EC2 | `/awsops/ec2` | 인스턴스 + 상세 패널 (Instances + detail panel) |
 | | Lambda | `/awsops/lambda` | 함수, 런타임, 메모리/타임아웃 (Functions, runtimes, memory/timeout) |

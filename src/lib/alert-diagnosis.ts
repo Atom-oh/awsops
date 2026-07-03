@@ -15,7 +15,7 @@ import type { Incident, DiagnosisResult, AlertEvent } from '@/lib/alert-types';
 import type { AlertContext, CollectorResult, SendFn } from '@/lib/collectors/types';
 
 const BEDROCK_REGION = 'ap-northeast-2';
-const ANALYSIS_MODEL = 'global.anthropic.claude-sonnet-4-6';
+const ANALYSIS_MODEL = 'global.anthropic.claude-sonnet-5';
 const MAX_CONTEXT_CHARS = 60_000;
 
 // --- Initialization ---

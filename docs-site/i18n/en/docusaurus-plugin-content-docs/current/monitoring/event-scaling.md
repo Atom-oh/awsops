@@ -16,7 +16,7 @@ The `/event-scaling` page generates **AI-driven warm-up plans** for upcoming tra
 
 | Item | Value |
 |------|-------|
-| **Model** | Bedrock Claude Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6-v1`) |
+| **Model** | Bedrock Claude Sonnet 5 (`global.anthropic.claude-sonnet-5`) |
 | **Access** | admin-only — `data/config.json` `adminEmails` |
 | **State machine** | planned → analyzing → plan-ready → approved / cancelled |
 | **Execution** | **None** — scripts exported as bash; humans run them |
@@ -58,7 +58,7 @@ Generated scripts are for **human review**. AWSops does not perform infrastructu
 
 1. CloudWatch metric retrieval around the reference event's ±60-minute window → `MetricsSnapshot`
 2. Steampipe snapshot of current resources
-3. Both datasets are sent to Bedrock Sonnet 4.6 to generate a multi-phase plan
+3. Both datasets are sent to Bedrock Sonnet 5 to generate a multi-phase plan
 4. The `PLAN_JSON: { ... }` marker at the end of the response is parsed into a structured `ScalingPlan`
 
 Typical duration: 30–90 seconds.

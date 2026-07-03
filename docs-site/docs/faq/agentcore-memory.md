@@ -52,7 +52,7 @@ flowchart TD
   ECR -->|"이미지 참조"| RT
 
   AGENT -->|"MCP + SigV4"| GW["8 섹션 게이트웨이<br/>(~120 읽기 전용 도구)"]
-  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 4.6 / Opus 4.8 / Haiku 4.5"]
+  AGENT -->|"Bedrock API"| MODEL["Claude Sonnet 5 / Opus 4.8 / Haiku 4.5"]
 ```
 
 ### AgentCore Runtime

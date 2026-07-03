@@ -71,7 +71,7 @@ import {
 } from '@/lib/queries/event-scaling';
 
 const BEDROCK_REGION = 'ap-northeast-2';
-const ANALYSIS_MODEL = 'global.anthropic.claude-sonnet-4-6';
+const ANALYSIS_MODEL = 'global.anthropic.claude-sonnet-5';
 
 // --- Admin check / 관리자 확인 ---
 function isAdminUser(req: NextRequest): boolean {
