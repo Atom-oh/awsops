@@ -115,10 +115,10 @@ describe('GET /api/cost — months period filter', () => {
     await GET(reqU('http://x/api/cost?months=12'));
     expect(getMonthlyCost).toHaveBeenCalledWith(12, undefined);
   });
-  it('?months=1 → 1', async () => {
+  it('?months=1 → fetches 2 (MoM baseline needs a prior month even when the chart shows 1)', async () => {
     const { GET } = await import('./route');
     await GET(reqU('http://x/api/cost?months=1'));
-    expect(getMonthlyCost).toHaveBeenCalledWith(1, undefined);
+    expect(getMonthlyCost).toHaveBeenCalledWith(2, undefined);
   });
   it('invalid ?months= → falls back to 6', async () => {
     const { GET } = await import('./route');

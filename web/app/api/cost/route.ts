@@ -14,11 +14,14 @@ export async function GET(request: Request) {
   }
   const monthsParam = Number(new URL(request.url).searchParams.get('months'));
   const months = [1, 3, 6, 12].includes(monthsParam) ? monthsParam : 6;
+  // MoM baseline needs a prior month regardless of the chart's display range — always
+  // fetch >=2 months; the client slices the tail down to `months` for the chart itself.
+  const fetchMonths = Math.max(months, 2);
   try {
     const mtd = await getMtdCost(account);
     // trend / monthly / forecast are secondary — degrade so the by-service breakdown still renders.
     const trend = await getCostTrend(account).catch(() => []);
-    const monthly = await getMonthlyCost(months, account).catch(() => []);
+    const monthly = await getMonthlyCost(fetchMonths, account).catch(() => []);
     const forecast = await getCostForecast(account).catch(() => null);
     return Response.json({ ...mtd, trend, monthly, forecast, account: account ?? 'self' });
   } catch (e) {

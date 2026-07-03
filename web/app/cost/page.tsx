@@ -127,13 +127,14 @@ export default function CostPage() {
   const loadSeqRef = useRef(0);
   const load = useCallback(async () => {
     const seq = ++loadSeqRef.current;
+    setD(null);
+    setErr('');
     setBusy(true);
     const months = Number(period);
     try {
       const data = active === ALL_ACCOUNTS ? await loadAllAccountsCost(months) : await fetchCost(active, months);
       if (seq !== loadSeqRef.current) return; // superseded by a newer period/account switch
       setD(data);
-      setErr('');
       setCapturedAt(new Date().toISOString());
     } catch (e) {
       if (seq === loadSeqRef.current) setErr(String(e));
@@ -165,9 +166,12 @@ export default function CostPage() {
   }));
 
   // MoM (from the monthly series) + month-end forecast (AWS CE forecast if present, else linear projection).
-  const monthly = d?.monthly ?? [];
-  const thisMonth = monthly.length > 0 ? monthly[monthly.length - 1].total : total;
-  const lastMonth = monthly.length > 1 ? monthly[monthly.length - 2].total : 0;
+  // The server always fetches >=2 months for a stable MoM baseline (route.ts `fetchMonths`);
+  // the chart only shows the trailing `period` months the user picked, sliced client-side.
+  const monthlyAll = d?.monthly ?? [];
+  const monthly = monthlyAll.slice(-Number(period));
+  const thisMonth = monthlyAll.length > 0 ? monthlyAll[monthlyAll.length - 1].total : total;
+  const lastMonth = monthlyAll.length > 1 ? monthlyAll[monthlyAll.length - 2].total : 0;
   // MoM on a PER-DAY run-rate basis: the current month is month-to-date (partial), so comparing it
   // against the FULL previous month read as a bogus large drop (e.g. -51% on the 17th). Compare
   // average daily spend instead (이번 달 일평균 vs 전월 일평균).
