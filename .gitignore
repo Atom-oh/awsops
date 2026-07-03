@@ -83,7 +83,6 @@ docs/COMPARISON_VS_FAST.md
 
 # 로컬 설정 (세션 데이터, 공유 불필요) / local settings
 .claude/settings.local.json
-.claude/settings.json
 .claude/co-agent.local.json
 .claude/co-agent-panel.local.json
 
