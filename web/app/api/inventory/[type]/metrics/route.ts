@@ -1,6 +1,7 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { ec2AvgCpu, ec2HourlyCost, rdsMetrics } from '@/lib/metrics';
+import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,11 +14,18 @@ export async function GET(request: Request, { params }: { params: { type: string
   if (!(await verifyUser(request.headers.get('cookie')))) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
+  const url = new URL(request.url);
+  const regionsParam = url.searchParams.get('regions');
+  const regions: RegionScope = regionsParam === null || regionsParam === '__all__' ? '__all__' : regionsParam.split(',').filter(Boolean);
+  const includeGlobal = url.searchParams.get('includeGlobal') !== '0';
   try {
     if (params.type === 'ec2') {
+      const qparams: unknown[] = [];
+      const where = `resource_type = 'ec2' AND account_id = 'self'` + regionWhereClause(regions, includeGlobal, qparams);
       const r = await getPool().query<{ id: string | null; state: string | null; type: string | null }>(
         `SELECT data->>'instance_id' AS id, data->>'instance_state' AS state, data->>'instance_type' AS type
-         FROM inventory_resources WHERE resource_type = 'ec2' AND account_id = 'self'`,
+         FROM inventory_resources WHERE ${where}`,
+        qparams,
       );
       const runningIds = r.rows
         .filter((x) => x.state === 'running')
@@ -44,8 +52,11 @@ export async function GET(request: Request, { params }: { params: { type: string
         const one = await rdsMetrics([instanceId]);
         return Response.json({ instance: one.byInstance[instanceId] ?? null });
       }
+      const qparams: unknown[] = [];
+      const where = `resource_type = 'rds' AND account_id = 'self'` + regionWhereClause(regions, includeGlobal, qparams);
       const r = await getPool().query<{ id: string | null }>(
-        `SELECT resource_id AS id FROM inventory_resources WHERE resource_type = 'rds' AND account_id = 'self'`,
+        `SELECT resource_id AS id FROM inventory_resources WHERE ${where}`,
+        qparams,
       );
       const ids = r.rows.map((x) => x.id).filter((id): id is string => !!id);
       const m = await rdsMetrics(ids);

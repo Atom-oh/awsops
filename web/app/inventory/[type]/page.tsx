@@ -71,16 +71,18 @@ export default function InventoryTypePage() {
   useEffect(() => { if (spec) load(); }, [spec, load]);
 
   // Supplementary metric cards — fetch separately so a failure never affects the table/donut.
+  // Scoped the same as the main table (PR review M2): otherwise avg CPU/hourly-cost would stay
+  // fleet-wide while the table/donut narrow to the selected region, showing mismatched numbers.
   useEffect(() => {
     setMetricCards([]);
     if (!spec) return;
     let alive = true;
-    fetch(`/api/inventory/${type}/metrics`)
+    fetch(`/api/inventory/${type}/metrics?${scopeParams(scope)}`)
       .then((r) => (r.ok ? r.json() : { cards: [] }))
       .then((d) => { if (alive) setMetricCards(d.cards || []); })
       .catch(() => { if (alive) setMetricCards([]); });
     return () => { alive = false; };
-  }, [spec, type]);
+  }, [spec, type, scope]);
 
   const refresh = async () => {
     setBusy(true); setErr('');
