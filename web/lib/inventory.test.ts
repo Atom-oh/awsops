@@ -17,6 +17,55 @@ describe('readResources', () => {
     expect(out.rows[0].resource_id).toBe('i-1');
     expect(out.run.status).toBe('succeeded');
   });
+
+  it('__all__ regions (default) → no region predicate in the WHERE clause', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const { readResources } = await import('./inventory');
+    await readResources('ec2', { limit: 50, offset: 0 });
+    const [sql] = query.mock.calls[0];
+    expect(sql).not.toMatch(/region\s*=|region\s*<>/i);
+  });
+
+  it('explicit regions → region = ANY($n) with includeGlobal folded into the array', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const { readResources } = await import('./inventory');
+    await readResources('ec2', { limit: 50, offset: 0, regions: ['ap-northeast-2', 'us-east-1'], includeGlobal: true });
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/region = ANY/);
+    expect(params).toContainEqual(['ap-northeast-2', 'us-east-1', 'global']);
+  });
+
+  it('includeGlobal=false with explicit regions → global excluded from the array', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const { readResources } = await import('./inventory');
+    await readResources('ec2', { limit: 50, offset: 0, regions: ['ap-northeast-2'], includeGlobal: false });
+    const [, params] = query.mock.calls[0];
+    expect(params).toContainEqual(['ap-northeast-2']);
+  });
+
+  it('includeGlobal=false with __all__ regions → excludes region=global directly', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const { readResources } = await import('./inventory');
+    await readResources('ec2', { limit: 50, offset: 0, regions: '__all__', includeGlobal: false });
+    const [sql] = query.mock.calls[0];
+    expect(sql).toMatch(/region <> 'global'/);
+  });
+
+  it('empty region selection → guarded to a non-matching sentinel, not an unfiltered query', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const { readResources } = await import('./inventory');
+    await readResources('ec2', { limit: 50, offset: 0, regions: [], includeGlobal: false });
+    const [, params] = query.mock.calls[0];
+    expect(params).toContainEqual(['__none__']);
+  });
+
+  it('includeGlobal=false strips a caller-supplied "global" out of explicit regions', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const { readResources } = await import('./inventory');
+    await readResources('ec2', { limit: 50, offset: 0, regions: ['ap-northeast-2', 'global'], includeGlobal: false });
+    const [, params] = query.mock.calls[0];
+    expect(params).toContainEqual(['ap-northeast-2']);
+  });
 });
 describe('triggerSync', () => {
   it('invokes the sync Lambda and parses the result', async () => {
