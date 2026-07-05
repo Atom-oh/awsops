@@ -10,6 +10,12 @@ type Card = { label: string; value: string | number; accent?: boolean };
 // Supplementary KPI cards (CloudWatch avg CPU + Pricing hourly cost). EC2-first.
 // Every failure path degrades silently to { cards: [] } — these cards never blank
 // the page (the F3 total/state tiles + donut + table + F4 detail panel stay intact).
+// KNOWN LIMITATION (pre-existing, not introduced or fixed by the region-scope filter): the
+// instance IDs fed to ec2AvgCpu/ec2HourlyCost/rdsMetrics below are now correctly scoped by
+// region, but lib/metrics.ts itself queries CloudWatch/Pricing against a single fixed
+// AWS_REGION client — it has no per-instance region routing. Selecting a non-default region
+// narrows the table correctly but these two KPI cards can go null/inaccurate for it. Fixing
+// that needs per-region CloudWatch clients in lib/metrics.ts, which is a separate change.
 export async function GET(request: Request, { params }: { params: { type: string } }) {
   if (!(await verifyUser(request.headers.get('cookie')))) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });

@@ -130,7 +130,7 @@ describe('GET /api/inventory/[type]/metrics', () => {
     expect((await res.json()).cards).toEqual([]);
   });
 
-  describe('scope query params (PR review M2 — match the main table\'s region scope)', () => {
+  describe('scope query params (match the main table\'s region scope)', () => {
     it('ec2: regions=ap-northeast-2 → region = ANY($n) in the fleet query', async () => {
       verifyUser.mockResolvedValue({ sub: 'u' });
       query.mockResolvedValue({ rows: [] });

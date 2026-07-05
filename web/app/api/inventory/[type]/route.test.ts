@@ -45,7 +45,7 @@ describe('GET /api/inventory/[type]', () => {
       await GET(req('http://x/api/inventory/ec2?includeGlobal=0'), ctx);
       expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: '__all__', includeGlobal: false });
     });
-    it('regions= (explicit empty) → [] , not "__all__" (PR review MAJOR-1)', async () => {
+    it('regions= (explicit empty) → [] , not "__all__"', async () => {
       const { GET } = await import('./route');
       await GET(req('http://x/api/inventory/ec2?regions=&includeGlobal=0'), ctx);
       expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: [], includeGlobal: false });

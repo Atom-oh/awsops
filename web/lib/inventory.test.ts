@@ -59,7 +59,7 @@ describe('readResources', () => {
     expect(params).toContainEqual(['__none__']);
   });
 
-  it('includeGlobal=false strips a caller-supplied "global" out of explicit regions (PR review MAJOR-2)', async () => {
+  it('includeGlobal=false strips a caller-supplied "global" out of explicit regions', async () => {
     query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
     const { readResources } = await import('./inventory');
     await readResources('ec2', { limit: 50, offset: 0, regions: ['ap-northeast-2', 'global'], includeGlobal: false });
