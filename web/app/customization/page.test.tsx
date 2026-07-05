@@ -32,11 +32,20 @@ function stubFetch() {
       if (b.op === 'space') return { ok: true, status: 200, json: async () => ({ ok: true, version: 2 }) } as Response;
       return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
     }
+    if (url === '/api/customization' && method === 'DELETE') {
+      return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+    }
     if (url === '/api/integrations' && method === 'POST') {
       return { ok: true, status: 200, json: async () => ({ id: 5, receivePath: null }) } as Response;
     }
     if (url === '/api/integrations' && method === 'PUT') {
       return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+    }
+    if (url === '/api/integrations' && method === 'DELETE') {
+      return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+    }
+    if (url === '/api/customization/skills/import' && method === 'POST') {
+      return { ok: true, status: 200, json: async () => ({ ok: true, id: 42, referenceFileCount: 1 }) } as Response;
     }
     return { ok: false, status: 404, json: async () => ({}) } as Response;
   }));
@@ -147,6 +156,39 @@ describe('CustomizationPage agent/skill CRUD', () => {
     }));
   });
 
+  it('uploads a skill zip via the file input', async () => {
+    render(<CustomizationPage />);
+    await screen.findByText('Custom Agents & Skills');
+
+    const file = new File(['zipbytes'], 'my-skill.zip', { type: 'application/zip' });
+    const input = screen.getByLabelText(/Upload skill/) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(screen.getByText(/Imported skill #42 from zip/)).toBeTruthy());
+    const post = calls.find((c) => c.url === '/api/customization/skills/import' && c.method === 'POST');
+    expect(post).toBeTruthy();
+  });
+
+  it('imports a skill from a GitHub directory URL', async () => {
+    render(<CustomizationPage />);
+    await screen.findByText('Custom Agents & Skills');
+
+    fireEvent.change(screen.getByPlaceholderText(/github.com\/org\/repo/), { target: { value: 'https://github.com/acme/runbooks/tree/main/s' } });
+    fireEvent.click(screen.getByText('Import'));
+
+    await waitFor(() => expect(screen.getByText(/Imported skill #42 from repository/)).toBeTruthy());
+    const post = calls.find((c) => c.url === '/api/customization/skills/import' && c.method === 'POST');
+    expect(JSON.parse(post!.body!)).toEqual({ source: 'github', url: 'https://github.com/acme/runbooks/tree/main/s' });
+  });
+
+  it('disables the Import button until a URL is typed', async () => {
+    render(<CustomizationPage />);
+    await screen.findByText('Custom Agents & Skills');
+    expect(screen.getByText('Import')).toHaveProperty('disabled', true);
+    fireEvent.change(screen.getByPlaceholderText(/github.com\/org\/repo/), { target: { value: 'https://github.com/x/y/tree/main/s' } });
+    expect(screen.getByText('Import')).toHaveProperty('disabled', false);
+  });
+
   it('creates a new skill from the form and shows the disabled-by-default message', async () => {
     render(<CustomizationPage />);
     await screen.findByText('Custom Agents & Skills');
@@ -182,7 +224,7 @@ describe('CustomizationPage agent/skill CRUD', () => {
       { id: 4, name: 'my-skill', description: 'd', tier: 'custom', enabled: true, version: 1 },
     ];
     render(<CustomizationPage />);
-    await screen.findByText('my-skill');
+    await screen.findByText('Enabled');
 
     fireEvent.click(screen.getByText('Enabled'));
 
@@ -215,6 +257,82 @@ describe('CustomizationPage Agent Space', () => {
     });
     await screen.findByText(/Agent Space saved \(v2\)/);
   });
+
+  it('saves the Agent Space with a checked skill', async () => {
+    customizationGet.skills = [{ id: 8, name: 'my-skill', description: 'd', tier: 'custom', enabled: true, version: 1 }];
+    render(<CustomizationPage />);
+    await waitFor(() => expect(screen.getByLabelText('my-skill')).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText('my-skill'));
+    fireEvent.click(screen.getByText('Save Agent Space'));
+
+    await waitFor(() => {
+      const put = calls.find((c) => c.url === '/api/customization' && c.method === 'PUT' && JSON.parse(c.body!).op === 'space');
+      expect(put).toBeTruthy();
+      expect(JSON.parse(put!.body!)).toEqual(expect.objectContaining({ enabledSkillIds: [8] }));
+    });
+  });
+});
+
+describe('CustomizationPage delete', () => {
+  it('deletes a custom agent after confirm', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    customizationGet.agents = [
+      { id: 3, name: 'my-agent', description: 'd', gateway: 'ops', tier: 'custom', enabled: false, version: 1, skills: [] },
+    ];
+    render(<CustomizationPage />);
+    await screen.findByText('Delete'); // the only custom row on the page (agents-only fixture)
+
+    fireEvent.click(screen.getByText('Delete'));
+
+    await waitFor(() => {
+      const del = calls.find((c) => c.url === '/api/customization' && c.method === 'DELETE');
+      expect(del).toBeTruthy();
+      expect(JSON.parse(del!.body!)).toEqual({ kind: 'agent', id: 3 });
+    });
+  });
+
+  it('does not call DELETE when confirm is declined', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => false));
+    customizationGet.skills = [{ id: 4, name: 'my-skill', description: 'd', tier: 'custom', enabled: true, version: 1 }];
+    render(<CustomizationPage />);
+    await screen.findByText('Delete'); // the only custom row on the page (skills-only fixture)
+
+    fireEvent.click(screen.getByText('Delete'));
+
+    expect(calls.find((c) => c.method === 'DELETE')).toBeUndefined();
+  });
+
+  it('deletes a custom integration after confirm', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    integrationsGet = [
+      { id: 6, name: 'my-grafana', kind: 'grafana', direction: 'egress', capability: 'read', enabled: false, tier: 'custom' },
+    ];
+    render(<CustomizationPage />);
+    await screen.findByText('Delete'); // the only custom row on the page (integrations-only fixture)
+
+    fireEvent.click(screen.getByText('Delete'));
+
+    await waitFor(() => {
+      const del = calls.find((c) => c.url === '/api/integrations' && c.method === 'DELETE');
+      expect(del).toBeTruthy();
+      expect(JSON.parse(del!.body!)).toEqual({ id: 6 });
+    });
+  });
+});
+
+describe('CustomizationPage roadmap labeling', () => {
+  it('badges guide-only tasks (Chat, secondary cloud source) but not live ones (Form, Create skill)', async () => {
+    render(<CustomizationPage />);
+    await screen.findByText('Custom Agents & Skills');
+
+    // Still findable by exact text — the roadmap suffix lives in a nested element, not a merged text node.
+    expect(screen.getByText('Configure secondary cloud source')).toBeTruthy();
+    expect(screen.getAllByText('로드맵 · 미구현').length).toBeGreaterThanOrEqual(1);
+    // A live path (Form) never gets the badge.
+    const formTitle = screen.getAllByText('Form')[0].closest('div');
+    expect(within(formTitle as HTMLElement).queryByText('로드맵 · 미구현')).toBeNull();
+  });
 });
 
 describe('CustomizationPage integrations (advanced)', () => {
@@ -232,6 +350,43 @@ describe('CustomizationPage integrations (advanced)', () => {
     const post = calls.find((c) => c.url === '/api/integrations' && c.method === 'POST');
     expect(post).toBeTruthy();
     expect(JSON.parse(post!.body!)).toEqual(expect.objectContaining({ name: 'my-grafana', kind: 'grafana', direction: 'egress', endpoint: 'https://grafana.example.com' }));
+  });
+
+  it('generates + reveals a webhook credential for a generic_webhook ingress row, gating Enable until acked', async () => {
+    integrationsGet = [
+      { id: 7, name: 'my-hook', kind: 'generic_webhook', direction: 'ingress', capability: 'read', enabled: false, tier: 'custom', receivePath: '/api/integrations/ingress/tok' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method, body: init?.body as string | undefined });
+      if (url === '/api/customization' && method === 'GET') return { ok: true, status: 200, json: async () => customizationGet } as Response;
+      if (url === '/api/integrations' && method === 'GET') return { ok: true, status: 200, json: async () => ({ integrations: integrationsGet }) } as Response;
+      if (url === '/api/integrations' && method === 'PUT') {
+        const b = JSON.parse((init!.body as string) ?? '{}');
+        if (b.op === 'generate-credential') return { ok: true, status: 200, json: async () => ({ ok: true, receivePath: '/api/integrations/ingress/tok', authMode: 'hmac', secret: 'deadbeef' }) } as Response;
+        return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    }));
+
+    render(<CustomizationPage />);
+    await screen.findByText('Disabled'); // the only custom row on the page (integrations-only fixture)
+
+    // Enable is blocked before any credential has been generated + acked.
+    expect(screen.getByText('Disabled')).toHaveProperty('disabled', true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate URL and credentials' }));
+    await screen.findByText('deadbeef');
+    expect(screen.getByText('Disabled')).toHaveProperty('disabled', true); // still blocked — not acked yet
+
+    fireEvent.click(screen.getByLabelText(/saved and stored/));
+    await waitFor(() => expect(screen.getByText('Disabled')).toHaveProperty('disabled', false));
+
+    fireEvent.click(screen.getByText('Disabled'));
+    await waitFor(() => {
+      const put = calls.find((c) => c.url === '/api/integrations' && c.method === 'PUT' && JSON.parse(c.body!).op === 'enable');
+      expect(put).toBeTruthy();
+    });
   });
 
   it('toggles an existing custom integration via PUT', async () => {

@@ -4,6 +4,7 @@ import { isAdmin } from '@/lib/admin';
 import { validateSkill, validateAgent } from '@/lib/skill-validation';
 import {
   upsertSkill, upsertAgent, attachSkill, setEnabled, listAgentsWithSkills, listSkills, writeAudit,
+  deleteSkill, deleteAgent, SkillInUseError,
 } from '@/lib/catalog';
 import { getAgentSpace, upsertAgentSpace } from '@/lib/agent-space';
 import { currentAccountId } from '@/lib/account';
@@ -51,7 +52,8 @@ export async function POST(request: Request) {
       id = await upsertSkill({
         name: String(body.name), description: String(body.description), instructions: String(body.instructions),
         toolAllowlist: (body.toolAllowlist as string[]) ?? [], tier: 'custom', createdBy: g.user!.email,
-        agentTypes: (body.agentTypes as string[]) ?? undefined, referenceKeys: (body.referenceKeys as string[]) ?? undefined,
+        agentTypes: (body.agentTypes as string[]) ?? undefined,
+        referenceKeys: (body.referenceKeys as Array<{ path: string; content: string }>) ?? undefined,
       });
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : 'upsert failed' }, 409); // built-in name collision
@@ -116,4 +118,34 @@ export async function PUT(request: Request) {
     return json({ ok: true, version: space.version }, 200);
   }
   return json({ error: 'unknown op' }, 400);
+}
+
+export async function DELETE(request: Request) {
+  const g = await gate(request);
+  if (g.resp) return g.resp;
+  let body: Record<string, unknown>;
+  try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
+  catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
+
+  const kind = body.kind;
+  const id = Number(body.id);
+  if (!Number.isInteger(id)) return json({ error: 'id must be an integer' }, 400);
+  const actor = g.user!.email ?? g.user!.sub;
+
+  if (kind === 'skill') {
+    try {
+      await deleteSkill(id);
+    } catch (e) {
+      if (e instanceof SkillInUseError) return json({ error: e.message }, 409);
+      throw e;
+    }
+    await writeAudit({ actor, action: 'delete', objectType: 'skill', objectId: String(id) });
+    return json({ ok: true }, 200);
+  }
+  if (kind === 'agent') {
+    await deleteAgent(id);
+    await writeAudit({ actor, action: 'delete', objectType: 'agent', objectId: String(id) });
+    return json({ ok: true }, 200);
+  }
+  return json({ error: 'kind must be skill|agent' }, 400);
 }

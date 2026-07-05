@@ -11,10 +11,11 @@ export class BodyTooLargeError extends Error {
   }
 }
 
-/** Read a RAW text body, rejecting bodies larger than maxBytes before fully materializing them.
- *  Returns '' for a bodyless request. Callers needing the exact bytes (e.g. HMAC over the raw
- *  body) use this; `readJsonBounded` delegates here and parses. */
-export async function readTextBounded(request: Request, maxBytes = 65_536): Promise<string> {
+/** Read the RAW bytes of a body, rejecting bodies larger than maxBytes before fully materializing
+ *  them. Returns an empty Uint8Array for a bodyless request. The binary counterpart of
+ *  readTextBounded — used for non-text uploads (e.g. a skill zip, Phase 3) where decoding to text
+ *  first would be wrong (and wasteful). */
+export async function readBytesBounded(request: Request, maxBytes = 65_536): Promise<Uint8Array> {
   const len = request.headers.get('content-length');
   if (len && Number.isFinite(Number(len)) && Number(len) > maxBytes) {
     throw new BodyTooLargeError();
@@ -24,11 +25,11 @@ export async function readTextBounded(request: Request, maxBytes = 65_536): Prom
     // No readable stream. On the undici/App-Router runtime a present body always yields a non-null
     // stream, so this branch means a bodyless request (Content-Length absent → empty body) — never a
     // path to materialize an unbounded body. If a Content-Length IS present it was already ≤ maxBytes
-    // (the top guard rejected an over-cap value), so text() materializes at most maxBytes.
-    if (!len) return '';
-    const text = await request.text();
-    if (new TextEncoder().encode(text).byteLength > maxBytes) throw new BodyTooLargeError();
-    return text;
+    // (the top guard rejected an over-cap value), so arrayBuffer() materializes at most maxBytes.
+    if (!len) return new Uint8Array(0);
+    const buf = new Uint8Array(await request.arrayBuffer());
+    if (buf.byteLength > maxBytes) throw new BodyTooLargeError();
+    return buf;
   }
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
@@ -48,7 +49,14 @@ export async function readTextBounded(request: Request, maxBytes = 65_536): Prom
   const buf = new Uint8Array(total);
   let off = 0;
   for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
-  return new TextDecoder().decode(buf);
+  return buf;
+}
+
+/** Read a RAW text body, rejecting bodies larger than maxBytes before fully materializing them.
+ *  Returns '' for a bodyless request. Callers needing the exact bytes (e.g. HMAC over the raw
+ *  body) use this; `readJsonBounded` delegates here and parses. */
+export async function readTextBounded(request: Request, maxBytes = 65_536): Promise<string> {
+  return new TextDecoder().decode(await readBytesBounded(request, maxBytes));
 }
 
 /** Read + parse a JSON body, rejecting bodies larger than maxBytes before fully materializing them. */

@@ -119,7 +119,15 @@ export function resolveAgent(
 ): ResolvedAgentSpec {
   const custom = candidates.find((a) => a.name === routeKey && a.enabled && a.tier === 'custom');
   if (custom) {
-    const ordered = [...custom.skills].sort((a, b) => a.ord - b.ord);
+    // Agent Space skill scoping (cap-only, mirrors toolAllowlist): an empty/absent enabledSkillIds
+    // means "no cap" (every already-provisioned Agent Space has enabledSkillIds=[] since the UI never
+    // had a way to set it before this — defaulting to "none" would silently strip every custom agent's
+    // skills on deploy). A non-empty list can only NARROW the agent's attached skills, never widen it.
+    const skillCap = space?.enabledSkillIds;
+    const scopedSkills = skillCap && skillCap.length > 0
+      ? custom.skills.filter((s) => skillCap.includes(s.id))
+      : custom.skills;
+    const ordered = [...scopedSkills].sort((a, b) => a.ord - b.ord);
     const skillBlock = ordered.map((s) => s.instructions).filter(Boolean).join('\n\n');
     const integrationBlock = renderIntegrationContext(egressReadIntegrations);
     // ADR-040/041: READ_WRITE integrations are surfaced as PROPOSE-ONLY prompt metadata — never as

@@ -91,6 +91,17 @@ export async function upsertIntegration(i: IntegrationInput): Promise<number> {
   return rows[0].id;
 }
 
+export async function getIntegrationById(id: number): Promise<IntegrationRow | null> {
+  const { rows } = await getPool().query(
+    `SELECT id, name, kind, direction, description, endpoint, transport, credentials_ref,
+            private_connection_ref, capability, exposed_tools, provided_context, write_action_refs,
+            auth_mode, receive_path, inbound_auth_ref, source_allowlist, trigger_target, tier, enabled
+     FROM integrations WHERE id = $1`,
+    [id],
+  );
+  return rows.length ? mapRow(rows[0]) : null;
+}
+
 export async function listIntegrations(): Promise<IntegrationRow[]> {
   const { rows } = await getPool().query(
     `SELECT id, name, kind, direction, description, endpoint, transport, credentials_ref,
@@ -107,6 +118,26 @@ export async function setIntegrationEnabled(id: number, enabled: boolean): Promi
     `UPDATE integrations SET enabled = $1, updated_at = NOW() WHERE id = $2 AND tier = 'custom'`,
     [enabled, id],
   );
+}
+
+/** Delete a custom integration. Custom-only at the SQL level. No FK references this table (the
+ *  agent_spaces.enabled_integration_ids/agent_spaces cap is a plain JSONB id list, not a foreign key —
+ *  a stale id there is harmlessly ignored by getEnabledIntegrations' `i.id IN (...)` join). */
+export async function deleteIntegration(id: number): Promise<void> {
+  await getPool().query(`DELETE FROM integrations WHERE id = $1 AND tier = 'custom'`, [id]);
+}
+
+/** Look up one ingress integration by its receive_path (the token-bearing custom webhook URL). Used by
+ *  the per-integration ingress route handler (Phase 2 / W4). */
+export async function getIntegrationByReceivePath(receivePath: string): Promise<IntegrationRow | null> {
+  const { rows } = await getPool().query(
+    `SELECT id, name, kind, direction, description, endpoint, transport, credentials_ref,
+            private_connection_ref, capability, exposed_tools, provided_context, write_action_refs,
+            auth_mode, receive_path, inbound_auth_ref, source_allowlist, trigger_target, tier, enabled
+     FROM integrations WHERE receive_path = $1 AND direction = 'ingress'`,
+    [receivePath],
+  );
+  return rows.length ? mapRow(rows[0]) : null;
 }
 
 /**

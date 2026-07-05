@@ -13,7 +13,10 @@ export interface SkillInput {
   tier: Tier;
   createdBy?: string;
   agentTypes?: string[];      // ADR-039: agent-type targeting (default ['generic'])
-  referenceKeys?: string[];   // ADR-039: S3 reference/asset object keys
+  // Phase 3: inline reference files ({path, content}[]), NOT S3 object keys (never implemented that
+  // way — see skill-validation.ts / skill-import.ts). Size-bounded; stored as-is in the same JSONB
+  // column originally documented for S3 keys.
+  referenceKeys?: Array<{ path: string; content: string }>;
 }
 export interface AgentInput {
   name: string;
@@ -29,11 +32,11 @@ export interface AgentInput {
   responseLanguage?: string;  // ADR-039: Agent Space response language
 }
 export interface SkillRef {
-  name: string; instructions: string; contentHash: string; ord: number; toolAllowlist: string[];
+  id: number; name: string; instructions: string; contentHash: string; ord: number; toolAllowlist: string[];
 }
 export interface SkillRow {
   id: number; name: string; description: string; tier: Tier; enabled: boolean; version: number;
-  contentHash: string; agentTypes: string[]; referenceKeys: string[];
+  contentHash: string; agentTypes: string[]; referenceKeys: Array<{ path: string; content: string }>;
 }
 export interface AgentWithSkills {
   id: number; name: string; description: string; persona: string; gateway: string;
@@ -116,6 +119,35 @@ export async function setEnabled(kind: 'skill' | 'agent', id: number, enabled: b
   await getPool().query(`UPDATE ${table} SET enabled = $1, updated_at = NOW() WHERE id = $2 AND tier = 'custom'`, [enabled, id]);
 }
 
+export class SkillInUseError extends Error {
+  constructor(public agentCount: number) {
+    super(`skill is attached to ${agentCount} agent(s); detach it from those agents first`);
+  }
+}
+
+/** Delete a custom skill. Custom-only at the SQL level (builtin rows never match). `agent_skills.skill_id`
+ *  is ON DELETE RESTRICT — attached skills throw SkillInUseError (409 at the route) instead of a raw FK
+ *  error, naming how many agents still reference it. */
+export async function deleteSkill(id: number): Promise<void> {
+  try {
+    await getPool().query(`DELETE FROM skills WHERE id = $1 AND tier = 'custom'`, [id]);
+  } catch (e) {
+    if ((e as { code?: string })?.code === '23503') {
+      const { rows } = await getPool().query(
+        `SELECT COUNT(*)::int AS n FROM agent_skills WHERE skill_id = $1`, [id],
+      );
+      throw new SkillInUseError((rows[0]?.n as number) ?? 0);
+    }
+    throw e;
+  }
+}
+
+/** Delete a custom agent. Custom-only at the SQL level. `agent_skills.agent_id` is ON DELETE CASCADE so
+ *  this also detaches (not deletes) its skill attachments — no FK error possible here. */
+export async function deleteAgent(id: number): Promise<void> {
+  await getPool().query(`DELETE FROM agents WHERE id = $1 AND tier = 'custom'`, [id]);
+}
+
 export async function listSkills(): Promise<SkillRow[]> {
   const { rows } = await getPool().query(
     `SELECT id, name, description, tier, enabled, version, content_hash, agent_types, reference_keys FROM skills ORDER BY name`,
@@ -123,7 +155,8 @@ export async function listSkills(): Promise<SkillRow[]> {
   return rows.map((r: Record<string, unknown>) => ({
     id: r.id as number, name: r.name as string, description: r.description as string,
     tier: r.tier as Tier, enabled: r.enabled as boolean, version: r.version as number, contentHash: r.content_hash as string,
-    agentTypes: (r.agent_types as string[]) ?? ['generic'], referenceKeys: (r.reference_keys as string[]) ?? [],
+    agentTypes: (r.agent_types as string[]) ?? ['generic'],
+    referenceKeys: (r.reference_keys as Array<{ path: string; content: string }>) ?? [],
   }));
 }
 
@@ -133,7 +166,7 @@ export async function listAgentsWithSkills(opts?: { enabledOnly?: boolean }): Pr
     `SELECT a.id, a.name, a.description, a.persona, a.gateway, a.tier, a.version, a.enabled,
             a.routing_keywords, a.agent_type, a.gateways, a.response_language,
             COALESCE(json_agg(json_build_object(
-              'name', s.name, 'instructions', s.instructions, 'content_hash', s.content_hash,
+              'id', s.id, 'name', s.name, 'instructions', s.instructions, 'content_hash', s.content_hash,
               'ord', ags.ord, 'tool_allowlist', s.tool_allowlist
             ) ORDER BY ags.ord) FILTER (WHERE s.id IS NOT NULL), '[]') AS skills
      FROM agents a
@@ -152,7 +185,7 @@ export async function listAgentsWithSkills(opts?: { enabledOnly?: boolean }): Pr
     gateways: (r.gateways as string[]) ?? [],
     responseLanguage: (r.response_language as string) ?? null,
     skills: ((r.skills as Array<Record<string, unknown>>) ?? []).map((sk) => ({
-      name: sk.name as string, instructions: sk.instructions as string,
+      id: sk.id as number, name: sk.name as string, instructions: sk.instructions as string,
       contentHash: sk.content_hash as string, ord: sk.ord as number,
       toolAllowlist: (sk.tool_allowlist as string[]) ?? [],
     })),

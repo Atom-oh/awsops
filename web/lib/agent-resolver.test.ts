@@ -8,8 +8,8 @@ const custom: AgentWithSkills = {
   id: 1, name: 'compliance', description: 'CIS expert', persona: 'You are a CIS auditor.',
   gateway: 'security', tier: 'custom', version: 3, enabled: true, routingKeywords: ['cis', 'benchmark'],
   skills: [
-    { name: 'cis-pack', instructions: 'Always cite the control id.', contentHash: 'h1', ord: 0, toolAllowlist: ['simulate_principal_policy'] },
-    { name: 'tone', instructions: 'Be concise.', contentHash: 'h2', ord: 1, toolAllowlist: [] },
+    { id: 101, name: 'cis-pack', instructions: 'Always cite the control id.', contentHash: 'h1', ord: 0, toolAllowlist: ['simulate_principal_policy'] },
+    { id: 102, name: 'tone', instructions: 'Be concise.', contentHash: 'h2', ord: 1, toolAllowlist: [] },
   ],
 };
 
@@ -51,7 +51,7 @@ describe('resolveAgent — Phase 2 server-side tool-allowlist enforcement', () =
   const customTwoTools: AgentWithSkills = {
     ...custom,
     skills: [
-      { name: 'cis-pack', instructions: 'Always cite the control id.', contentHash: 'h1', ord: 0,
+      { id: 101, name: 'cis-pack', instructions: 'Always cite the control id.', contentHash: 'h1', ord: 0,
         toolAllowlist: ['simulate_principal_policy', 'get_account_security_summary'] },
     ],
   };
@@ -102,6 +102,33 @@ describe('resolveAgent — Phase 2 server-side tool-allowlist enforcement', () =
     };
     expect(resolveAgent('compliance', [customTwoTools], space).spaceVersion).toBe(9);
     expect(resolveAgent('compliance', [customTwoTools]).spaceVersion).toBeUndefined();
+  });
+});
+
+describe('resolveAgent — Agent Space skill scoping (cap-only, mirrors toolAllowlist)', () => {
+  it('empty enabledSkillIds = no cap — both skills still attached (backward-compat default)', () => {
+    const space: AgentSpace = { accountId: 'a', toolAllowlist: [], enabledAgentIds: [], enabledSkillIds: [], version: 1 };
+    const spec = resolveAgent('compliance', [custom], space);
+    expect(spec.skillHashes).toEqual(['h1', 'h2']);
+  });
+
+  it('no space at all = no cap (Phase-1 behavior, unchanged)', () => {
+    const spec = resolveAgent('compliance', [custom]);
+    expect(spec.skillHashes).toEqual(['h1', 'h2']);
+  });
+
+  it('a non-empty enabledSkillIds narrows the agent to only the listed skills', () => {
+    const space: AgentSpace = { accountId: 'a', toolAllowlist: [], enabledAgentIds: [], enabledSkillIds: [101], version: 1 };
+    const spec = resolveAgent('compliance', [custom], space);
+    expect(spec.skillHashes).toEqual(['h1']);
+    expect(spec.systemPromptOverride).toContain('Always cite');
+    expect(spec.systemPromptOverride).not.toContain('Be concise.');
+  });
+
+  it('a cap that names no attached skill drops the whole skill block (never widens)', () => {
+    const space: AgentSpace = { accountId: 'a', toolAllowlist: [], enabledAgentIds: [], enabledSkillIds: [999], version: 1 };
+    const spec = resolveAgent('compliance', [custom], space);
+    expect(spec.skillHashes).toEqual([]);
   });
 });
 

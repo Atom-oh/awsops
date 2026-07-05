@@ -10,8 +10,9 @@ import { getPool } from '@/lib/db';
 import { writeAudit } from '@/lib/catalog';
 import { validateIntegration } from '@/lib/integration-validation';
 import { assertEgressEndpointAllowed } from '@/lib/ssrf-guard';
-import { upsertIntegration, listIntegrations, setIntegrationEnabled } from '@/lib/integrations';
+import { upsertIntegration, listIntegrations, setIntegrationEnabled, deleteIntegration, getIntegrationById } from '@/lib/integrations';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
+import { setIntegrationCredentialById } from '@/lib/integration-credentials';
 
 export const dynamic = 'force-dynamic';
 
@@ -100,5 +101,39 @@ export async function PUT(request: Request) {
     await writeAudit({ actor: g.user!.email ?? g.user!.sub, action: String(body.op), objectType: 'integration', objectId: String(body.id) });
     return json({ ok: true }, 200);
   }
+  if (body.op === 'generate-credential') {
+    // Phase 2 (W4) — mint a one-time-displayed secret for a generic_webhook custom ingress row. This
+    // is the ONLY kind with a self-service credential generator (see INGRESS_AUTH_MODES); the other
+    // ingress kinds keep their existing shared-secret/SNS-signature auth, untouched.
+    const id = Number(body.id);
+    if (!Number.isInteger(id)) return json({ error: 'id must be an integer' }, 400);
+    const row = await getIntegrationById(id);
+    if (!row || row.tier !== 'custom' || row.direction !== 'ingress' || row.kind !== 'generic_webhook') {
+      return json({ error: 'not a custom generic_webhook ingress integration' }, 400);
+    }
+    const authMode = row.authMode === 'api_key' ? 'api_key' : 'hmac'; // default hmac (matches validateIntegration's ingress default when authMode is 'hmac'/'api_key')
+    const secret = authMode === 'api_key'
+      ? randomBytes(24).toString('base64url')
+      : randomBytes(32).toString('hex');
+    // Stored in Secrets Manager only — NEVER in Aurora. This response is the one and only time the
+    // plaintext is returned (mirrors the reference console's "credentials no longer available after
+    // you leave this page").
+    await setIntegrationCredentialById(id, { mode: authMode, secret });
+    await writeAudit({ actor: g.user!.email ?? g.user!.sub, action: 'generate-credential', objectType: 'integration', objectId: String(id) });
+    return json({ ok: true, receivePath: row.receivePath, authMode, secret }, 200);
+  }
   return json({ error: 'unknown op' }, 400);
+}
+
+export async function DELETE(request: Request) {
+  const g = await gate(request);
+  if (g.resp) return g.resp;
+  let body: Record<string, unknown>;
+  try { body = (await readJsonBounded(request)) as Record<string, unknown>; }
+  catch (e) { if (e instanceof BodyTooLargeError) return json({ error: 'request body too large' }, 413); return json({ error: 'invalid JSON' }, 400); }
+  const id = Number(body.id);
+  if (!Number.isInteger(id)) return json({ error: 'id must be an integer' }, 400);
+  await deleteIntegration(id);
+  await writeAudit({ actor: g.user!.email ?? g.user!.sub, action: 'delete', objectType: 'integration', objectId: String(id) });
+  return json({ ok: true }, 200);
 }

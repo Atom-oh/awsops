@@ -9,6 +9,11 @@ const setEnabled = vi.fn();
 const writeAudit = vi.fn();
 const getAgentSpace = vi.fn();
 const upsertAgentSpace = vi.fn();
+const deleteSkill = vi.fn();
+const deleteAgent = vi.fn();
+class SkillInUseError extends Error {
+  constructor(public agentCount: number) { super(`skill is attached to ${agentCount} agent(s); detach it from those agents first`); }
+}
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/catalog', () => ({
@@ -18,6 +23,9 @@ vi.mock('@/lib/catalog', () => ({
   setEnabled: (...a: unknown[]) => setEnabled(...a),
   listAgentsWithSkills: vi.fn(async () => []), listSkills: vi.fn(async () => []),
   writeAudit: (...a: unknown[]) => writeAudit(...a),
+  deleteSkill: (...a: unknown[]) => deleteSkill(...a),
+  deleteAgent: (...a: unknown[]) => deleteAgent(...a),
+  SkillInUseError,
 }));
 vi.mock('@/lib/agent-space', () => ({
   getAgentSpace: (...a: unknown[]) => getAgentSpace(...a),
@@ -34,10 +42,13 @@ function putReq(body: unknown, cookie = 'awsops_token=t') {
 function getReq(cookie = 'awsops_token=t') {
   return new Request('http://x/api/customization', { method: 'GET', headers: { cookie } });
 }
+function deleteReq(body: unknown, cookie = 'awsops_token=t') {
+  return new Request('http://x/api/customization', { method: 'DELETE', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body) });
+}
 beforeEach(() => {
   verifyUser.mockReset(); isAdmin.mockReset(); upsertSkill.mockReset(); upsertAgent.mockReset();
   attachSkill.mockReset(); setEnabled.mockReset(); writeAudit.mockReset();
-  getAgentSpace.mockReset(); upsertAgentSpace.mockReset();
+  getAgentSpace.mockReset(); upsertAgentSpace.mockReset(); deleteSkill.mockReset(); deleteAgent.mockReset();
   verifyUser.mockResolvedValue({ sub: 'a', email: 'admin@x', groups: ['admins'] });
   isAdmin.mockResolvedValue(true);
   getAgentSpace.mockResolvedValue(null);
@@ -195,5 +206,43 @@ describe('PUT /api/customization (op:space)', () => {
     expect(upsertAgentSpace).toHaveBeenCalledWith(expect.objectContaining({
       enabledAgentIds: [1, 4], enabledSkillIds: [], toolAllowlist: ['7', 'tool'],
     }));
+  });
+});
+
+describe('DELETE /api/customization', () => {
+  it('403 non-admin', async () => {
+    isAdmin.mockResolvedValue(false);
+    const { DELETE } = await import('./route');
+    expect((await DELETE(deleteReq({ kind: 'skill', id: 1 }))).status).toBe(403);
+    expect(deleteSkill).not.toHaveBeenCalled();
+  });
+  it('400 when id is not an integer', async () => {
+    const { DELETE } = await import('./route');
+    expect((await DELETE(deleteReq({ kind: 'skill', id: 'nope' }))).status).toBe(400);
+  });
+  it('deletes a custom skill + audits', async () => {
+    const { DELETE } = await import('./route');
+    const res = await DELETE(deleteReq({ kind: 'skill', id: 5 }));
+    expect(res.status).toBe(200);
+    expect(deleteSkill).toHaveBeenCalledWith(5);
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'delete', objectType: 'skill', objectId: '5' }));
+  });
+  it('409 when the skill is still attached to agents (SkillInUseError)', async () => {
+    deleteSkill.mockRejectedValue(new SkillInUseError(2));
+    const { DELETE } = await import('./route');
+    const res = await DELETE(deleteReq({ kind: 'skill', id: 5 }));
+    expect(res.status).toBe(409);
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+  it('deletes a custom agent + audits', async () => {
+    const { DELETE } = await import('./route');
+    const res = await DELETE(deleteReq({ kind: 'agent', id: 6 }));
+    expect(res.status).toBe(200);
+    expect(deleteAgent).toHaveBeenCalledWith(6);
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'delete', objectType: 'agent', objectId: '6' }));
+  });
+  it('400 unknown kind', async () => {
+    const { DELETE } = await import('./route');
+    expect((await DELETE(deleteReq({ kind: 'bogus', id: 1 }))).status).toBe(400);
   });
 });

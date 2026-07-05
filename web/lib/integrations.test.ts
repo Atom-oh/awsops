@@ -5,7 +5,10 @@ const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
 vi.mock('@/lib/catalog', () => ({ writeAudit: vi.fn() }));
 
-import { upsertIntegration, listIntegrations, setIntegrationEnabled, getEnabledIntegrations } from './integrations';
+import {
+  upsertIntegration, listIntegrations, setIntegrationEnabled, getEnabledIntegrations,
+  deleteIntegration, getIntegrationByReceivePath, getIntegrationById,
+} from './integrations';
 
 beforeEach(() => { query.mockReset(); delete process.env.AURORA_ENDPOINT; });
 
@@ -53,6 +56,53 @@ describe('integrations catalog', () => {
     expect(sql).toMatch(/UPDATE integrations SET enabled/i);
     expect(sql).toMatch(/tier = 'custom'/i);
     expect(params).toEqual([true, 7]);
+  });
+
+  it('deleteIntegration is custom-only', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    await deleteIntegration(11);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/DELETE FROM integrations/i);
+    expect(sql).toMatch(/tier = 'custom'/i);
+    expect(params).toEqual([11]);
+  });
+
+  it('getIntegrationByReceivePath finds an ingress row by its receive_path', async () => {
+    query.mockResolvedValueOnce({ rows: [
+      { id: 2, name: 'my-hook', kind: 'generic_webhook', direction: 'ingress', description: '', endpoint: null,
+        transport: null, credentials_ref: null, private_connection_ref: null, capability: 'read',
+        exposed_tools: [], provided_context: {}, write_action_refs: [], auth_mode: 'hmac',
+        receive_path: '/api/integrations/ingress/xyz', inbound_auth_ref: null, source_allowlist: [],
+        trigger_target: null, tier: 'custom', enabled: true },
+    ]});
+    const row = await getIntegrationByReceivePath('/api/integrations/ingress/xyz');
+    expect(row?.name).toBe('my-hook');
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/WHERE receive_path = \$1 AND direction = 'ingress'/i);
+    expect(params).toEqual(['/api/integrations/ingress/xyz']);
+  });
+
+  it('getIntegrationByReceivePath returns null when no row matches', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    expect(await getIntegrationByReceivePath('/api/integrations/ingress/none')).toBeNull();
+  });
+
+  it('getIntegrationById finds a row by id', async () => {
+    query.mockResolvedValueOnce({ rows: [
+      { id: 3, name: 'my-hook', kind: 'generic_webhook', direction: 'ingress', description: '', endpoint: null,
+        transport: null, credentials_ref: null, private_connection_ref: null, capability: 'read',
+        exposed_tools: [], provided_context: {}, write_action_refs: [], auth_mode: 'hmac',
+        receive_path: '/api/integrations/ingress/abc', inbound_auth_ref: null, source_allowlist: [],
+        trigger_target: null, tier: 'custom', enabled: false },
+    ]});
+    const row = await getIntegrationById(3);
+    expect(row?.name).toBe('my-hook');
+    expect(query.mock.calls[0][1]).toEqual([3]);
+  });
+
+  it('getIntegrationById returns null when no row matches', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    expect(await getIntegrationById(999)).toBeNull();
   });
 
   it('getEnabledIntegrations returns [] when AURORA off (never queries)', async () => {

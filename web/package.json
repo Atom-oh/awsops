@@ -28,6 +28,7 @@
     "@smithy/protocol-http": "^5.4.6",
     "@smithy/signature-v4": "^5.4.6",
     "@xyflow/react": "^12.11.0",
+    "adm-zip": "^0.5.16",
     "clsx": "^2.1.1",
     "jose": "^5.10.0",
     "lucide-react": "^1.17.0",
@@ -43,6 +44,7 @@
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@types/adm-zip": "^0.5.7",
     "@types/node": "20.16.5",
     "@types/pg": "8.11.10",
     "@types/react": "18.3.8",

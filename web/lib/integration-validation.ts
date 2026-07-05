@@ -12,6 +12,12 @@ export const INTEGRATION_TRANSPORTS = ['sigv4', 'oauth_client_credentials', 'oau
 export const INTEGRATION_DIRECTIONS = ['egress', 'ingress'] as const;
 export const INTEGRATION_CAPABILITIES = ['read', 'read_write'] as const;
 export const INGRESS_TRIGGER_TARGETS = ['incident'] as const;
+// Phase 2 (W4) — the ONLY ingress kind with a self-service, per-integration credential-generation flow
+// (POST /api/integrations/route PUT op:'generate-credential' + the /api/integrations/ingress/[token]
+// route). The other ingress kinds (cloudwatch_sns/alertmanager/grafana_alert/pagerduty/datadog_monitor)
+// keep their existing shared-secret (SSM) / SNS-signature auth, unchanged — authMode stays free text
+// for those so this constraint never narrows their existing behavior.
+export const INGRESS_AUTH_MODES = ['hmac', 'api_key'] as const;
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
@@ -45,6 +51,9 @@ export function validateIntegration(i: {
   }
   if (i.direction === 'ingress') {
     if (!i.authMode || !i.authMode.trim()) errors.push('ingress requires an auth_mode');
+    else if (i.kind === 'generic_webhook' && !(INGRESS_AUTH_MODES as readonly string[]).includes(i.authMode)) {
+      errors.push(`generic_webhook auth_mode must be one of ${INGRESS_AUTH_MODES.join(', ')}`);
+    }
     if (i.triggerTarget !== undefined && !(INGRESS_TRIGGER_TARGETS as readonly string[]).includes(i.triggerTarget)) errors.push(`triggerTarget must be one of ${INGRESS_TRIGGER_TARGETS.join(', ')}`);
   }
   // credentialsRef is optional at P2 registration (the Secrets Manager write is P2-infra); if present it

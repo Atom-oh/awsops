@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readJsonBounded, readTextBounded, BodyTooLargeError } from './http-body';
+import { readJsonBounded, readTextBounded, readBytesBounded, BodyTooLargeError } from './http-body';
 
 function jsonReq(body: string) {
   return new Request('http://x/', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
@@ -19,6 +19,30 @@ describe('readTextBounded', () => {
     });
     const req = new Request('http://x/', { method: 'POST', body: stream, duplex: 'half' } as RequestInit & { duplex: 'half' });
     await expect(readTextBounded(req, 10)).rejects.toBeInstanceOf(BodyTooLargeError);
+  });
+});
+
+describe('readBytesBounded', () => {
+  it('returns the exact raw bytes under the cap', async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 250]);
+    const req = new Request('http://x/', { method: 'POST', body: bytes });
+    expect(await readBytesBounded(req)).toEqual(bytes);
+  });
+  it('returns an empty array for a bodyless request', async () => {
+    const req = new Request('http://x/', { method: 'GET' });
+    expect(await readBytesBounded(req)).toEqual(new Uint8Array(0));
+  });
+  it('rejects via Content-Length before reading', async () => {
+    const bytes = new Uint8Array(2000);
+    await expect(readBytesBounded(new Request('http://x/', { method: 'POST', body: bytes }), 100))
+      .rejects.toBeInstanceOf(BodyTooLargeError);
+  });
+  it('rejects via the streamed byte cap when Content-Length is absent', async () => {
+    const stream = new ReadableStream({
+      start(c) { c.enqueue(new Uint8Array(120)); c.close(); },
+    });
+    const req = new Request('http://x/', { method: 'POST', body: stream, duplex: 'half' } as RequestInit & { duplex: 'half' });
+    await expect(readBytesBounded(req, 10)).rejects.toBeInstanceOf(BodyTooLargeError);
   });
 });
 

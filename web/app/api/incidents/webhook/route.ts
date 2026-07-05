@@ -20,7 +20,10 @@ import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { normalizeAlert, isolatePayload, bearsSelfWritebackMarker } from '@/lib/incident-normalize';
 import { triageAndCreateOrLink, enqueueInitialStage } from '@/lib/incident';
 import { verifySnsMessage } from '@/lib/sns-verify';
-import { classifyEnvelope, isTopicAllowed, verifyBearer, verifyHmac, resolveSourceHint } from '@/lib/incident-ingress-auth';
+import {
+  classifyEnvelope, isTopicAllowed, verifyBearer, verifyHmac, resolveSourceHint,
+  checkRateLimit, extractClientIp,
+} from '@/lib/incident-ingress-auth';
 import { readTextBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getPool } from '@/lib/db';
 
@@ -31,34 +34,10 @@ export const dynamic = 'force-dynamic';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 
-// --- Rate limiting (PORTED): per-source IP, 60 requests/min, bounded map ---
+// --- Rate limiting (PORTED): per-source IP, 60 requests/min, bounded map. checkRateLimit/extractClientIp
+// now live in @/lib/incident-ingress-auth (shared with the per-integration ingress route, Phase 2/W4) —
+// this route keeps its OWN map instance so the two routes' limits never cross-pollinate. ---
 const rateLimitMap: Map<string, { count: number; resetAt: number }> = new Map();
-const RATE_LIMIT = 60;
-const RATE_WINDOW_MS = 60_000;
-const MAX_RATE_ENTRIES = 10_000;
-
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  if (rateLimitMap.size > MAX_RATE_ENTRIES) {
-    Array.from(rateLimitMap.entries()).forEach(([key, entry]) => {
-      if (now > entry.resetAt) rateLimitMap.delete(key);
-    });
-  }
-  const entry = rateLimitMap.get(ip);
-  if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
-    return true;
-  }
-  entry.count++;
-  return entry.count <= RATE_LIMIT;
-}
-
-// --- Client IP (PORTED): behind CloudFront + ALB, the real client is second-to-last ---
-function extractClientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for') || '';
-  const ips = forwarded.split(',').map((s) => s.trim()).filter(Boolean);
-  return ips.length >= 2 ? ips[ips.length - 2] : ips[0] || 'unknown';
-}
 
 // HMAC verify (ADR-022 active/standby) now lives in @/lib/incident-ingress-auth as verifyHmac.
 
@@ -140,7 +119,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   // 2 — rate limit (per real client IP)
   const ip = extractClientIp(request);
-  if (!checkRateLimit(ip)) {
+  if (!checkRateLimit(rateLimitMap, ip)) {
     return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
   }
 

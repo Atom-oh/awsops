@@ -9,6 +9,9 @@ const assertEgressEndpointAllowed = vi.fn();
 const upsertIntegration = vi.fn();
 const listIntegrations = vi.fn();
 const setIntegrationEnabled = vi.fn();
+const deleteIntegration = vi.fn();
+const getIntegrationById = vi.fn();
+const setIntegrationCredentialById = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
@@ -21,6 +24,11 @@ vi.mock('@/lib/integrations', () => ({
   upsertIntegration: (...a: unknown[]) => upsertIntegration(...a),
   listIntegrations: (...a: unknown[]) => listIntegrations(...a),
   setIntegrationEnabled: (...a: unknown[]) => setIntegrationEnabled(...a),
+  deleteIntegration: (...a: unknown[]) => deleteIntegration(...a),
+  getIntegrationById: (...a: unknown[]) => getIntegrationById(...a),
+}));
+vi.mock('@/lib/integration-credentials', () => ({
+  setIntegrationCredentialById: (...a: unknown[]) => setIntegrationCredentialById(...a),
 }));
 
 function req(body: unknown, method = 'POST') {
@@ -30,7 +38,7 @@ function req(body: unknown, method = 'POST') {
 }
 
 beforeEach(() => {
-  for (const m of [verifyUser, isAdmin, query, writeAudit, validateIntegration, assertEgressEndpointAllowed, upsertIntegration, listIntegrations, setIntegrationEnabled]) m.mockReset();
+  for (const m of [verifyUser, isAdmin, query, writeAudit, validateIntegration, assertEgressEndpointAllowed, upsertIntegration, listIntegrations, setIntegrationEnabled, deleteIntegration, getIntegrationById, setIntegrationCredentialById]) m.mockReset();
   process.env.AURORA_ENDPOINT = 'aurora.example';
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
   isAdmin.mockResolvedValue(true);
@@ -113,5 +121,75 @@ describe('/api/integrations GET + PUT', () => {
     const res = await PUT(req({ op: 'enable', id: 3 }, 'PUT'));
     expect(res.status).toBe(200);
     expect(setIntegrationEnabled).toHaveBeenCalledWith(3, true);
+  });
+});
+
+describe('/api/integrations PUT op:generate-credential (Phase 2 / W4)', () => {
+  const genericWebhookRow = {
+    id: 4, name: 'my-hook', kind: 'generic_webhook', direction: 'ingress', tier: 'custom',
+    enabled: false, authMode: 'hmac', receivePath: '/api/integrations/ingress/abc',
+  };
+
+  it('mints an HMAC secret, stores it by id, returns it once', async () => {
+    getIntegrationById.mockResolvedValue(genericWebhookRow);
+    const { PUT } = await import('./route');
+    const res = await PUT(req({ op: 'generate-credential', id: 4 }, 'PUT'));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.receivePath).toBe('/api/integrations/ingress/abc');
+    expect(body.authMode).toBe('hmac');
+    expect(body.secret).toMatch(/^[a-f0-9]{64}$/);
+    expect(setIntegrationCredentialById).toHaveBeenCalledWith(4, { mode: 'hmac', secret: body.secret });
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'generate-credential', objectId: '4' }));
+  });
+
+  it('mints an api_key secret when the row is configured for api_key', async () => {
+    getIntegrationById.mockResolvedValue({ ...genericWebhookRow, authMode: 'api_key' });
+    const { PUT } = await import('./route');
+    const res = await PUT(req({ op: 'generate-credential', id: 4 }, 'PUT'));
+    const body = await res.json();
+    expect(body.authMode).toBe('api_key');
+    expect(setIntegrationCredentialById).toHaveBeenCalledWith(4, { mode: 'api_key', secret: body.secret });
+  });
+
+  it('400 when the row is not a custom generic_webhook ingress integration', async () => {
+    getIntegrationById.mockResolvedValue({ ...genericWebhookRow, kind: 'pagerduty' });
+    const { PUT } = await import('./route');
+    const res = await PUT(req({ op: 'generate-credential', id: 4 }, 'PUT'));
+    expect(res.status).toBe(400);
+    expect(setIntegrationCredentialById).not.toHaveBeenCalled();
+  });
+
+  it('400 when the row does not exist', async () => {
+    getIntegrationById.mockResolvedValue(null);
+    const { PUT } = await import('./route');
+    expect((await PUT(req({ op: 'generate-credential', id: 999 }, 'PUT'))).status).toBe(400);
+  });
+
+  it('403 non-admin', async () => {
+    isAdmin.mockResolvedValue(false);
+    const { PUT } = await import('./route');
+    expect((await PUT(req({ op: 'generate-credential', id: 4 }, 'PUT'))).status).toBe(403);
+    expect(getIntegrationById).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/integrations DELETE', () => {
+  it('403 non-admin', async () => {
+    isAdmin.mockResolvedValue(false);
+    const { DELETE } = await import('./route');
+    expect((await DELETE(req({ id: 3 }, 'DELETE'))).status).toBe(403);
+    expect(deleteIntegration).not.toHaveBeenCalled();
+  });
+  it('400 when id is not an integer', async () => {
+    const { DELETE } = await import('./route');
+    expect((await DELETE(req({ id: 'nope' }, 'DELETE'))).status).toBe(400);
+  });
+  it('deletes a custom integration + audits', async () => {
+    const { DELETE } = await import('./route');
+    const res = await DELETE(req({ id: 4 }, 'DELETE'));
+    expect(res.status).toBe(200);
+    expect(deleteIntegration).toHaveBeenCalledWith(4);
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'delete', objectType: 'integration', objectId: '4' }));
   });
 });

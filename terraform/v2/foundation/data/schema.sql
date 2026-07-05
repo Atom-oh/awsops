@@ -688,7 +688,11 @@ ON CONFLICT (version) DO NOTHING;
 -- globally-enabled customs are active for that account; tool_allowlist is the
 -- account-level cap that the resolver intersects (server-side enforcement,
 -- ADR-031 Addendum #5). version bumps on every change (traceability).
--- Phase 3 will ADD enabled_mcp_ids via its own ALTER TABLE migration.
+-- CORRECTION (2026-07): custom MCP server attachment did NOT land as a separate enabled_mcp_ids
+-- column. It shipped via the ADR-039 integrations table instead — a `kind='custom_mcp'` egress/read
+-- integration, scoped per account through this table's `enabled_integration_ids` column (added by the
+-- P1 migration), live-connected by agent/agent.py `_connect_integration`. Do not add enabled_mcp_ids;
+-- treat enabled_integration_ids as the MCP-attachment mechanism.
 -- Idempotent.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS agent_spaces (

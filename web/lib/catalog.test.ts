@@ -4,7 +4,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const query = vi.fn();
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query }) }));
 
-import { computeSkillHash, upsertSkill, upsertAgent, listSkills, listAgentsWithSkills, writeAudit, isCustomAgentEnabled } from './catalog';
+import {
+  computeSkillHash, upsertSkill, upsertAgent, listSkills, listAgentsWithSkills, writeAudit,
+  isCustomAgentEnabled, deleteSkill, deleteAgent, SkillInUseError,
+} from './catalog';
 
 beforeEach(() => query.mockReset());
 
@@ -32,12 +35,13 @@ describe('catalog', () => {
     query.mockResolvedValueOnce({ rows: [
       { id: 1, name: 'compliance', description: 'd', persona: 'P', gateway: 'security', tier: 'custom',
         version: 2, enabled: true, routing_keywords: ['cis'],
-        skills: [{ name: 'cis', instructions: 'check', content_hash: 'h1', ord: 0, tool_allowlist: [] }] },
+        skills: [{ id: 10, name: 'cis', instructions: 'check', content_hash: 'h1', ord: 0, tool_allowlist: [] }] },
     ]});
     const agents = await listAgentsWithSkills({ enabledOnly: true });
     expect(agents[0].name).toBe('compliance');
     expect(agents[0].routingKeywords).toEqual(['cis']);
     expect(agents[0].skills[0].contentHash).toBe('h1');
+    expect(agents[0].skills[0].id).toBe(10);
     const [sql] = query.mock.calls[0];
     expect(sql).toMatch(/WHERE a\.enabled = true/);
   });
@@ -93,13 +97,13 @@ describe('catalog', () => {
   it('listSkills returns agentTypes + referenceKeys (defaults when null)', async () => {
     query.mockResolvedValueOnce({ rows: [
       { id: 1, name: 's1', description: 'd', tier: 'custom', enabled: true, version: 1, content_hash: 'h',
-        agent_types: ['triage'], reference_keys: ['s3://k'] },
+        agent_types: ['triage'], reference_keys: [{ path: 'checklist.md', content: '# checklist' }] },
       { id: 2, name: 's2', description: 'd', tier: 'custom', enabled: false, version: 1, content_hash: 'h2',
         agent_types: null, reference_keys: null },
     ]});
     const skills = await listSkills();
     expect(skills[0].agentTypes).toEqual(['triage']);
-    expect(skills[0].referenceKeys).toEqual(['s3://k']);
+    expect(skills[0].referenceKeys).toEqual([{ path: 'checklist.md', content: '# checklist' }]);
     expect(skills[1].agentTypes).toEqual(['generic']); // null → default
     expect(skills[1].referenceKeys).toEqual([]);
   });
@@ -135,5 +139,40 @@ describe('isCustomAgentEnabled (fail-closed revocation)', () => {
   it('false (fail-closed) on any query error — deny, never grant', async () => {
     query.mockRejectedValueOnce(new Error('db down'));
     await expect(isCustomAgentEnabled('x')).resolves.toBe(false);
+  });
+});
+
+describe('deleteSkill / deleteAgent', () => {
+  it('deleteSkill issues a custom-only DELETE', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    await deleteSkill(3);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/DELETE FROM skills/i);
+    expect(sql).toMatch(/tier = 'custom'/i);
+    expect(params).toEqual([3]);
+  });
+
+  it('deleteSkill maps an FK violation (skill still attached to agents) to SkillInUseError', async () => {
+    const fkError = Object.assign(new Error('update or delete violates foreign key constraint'), { code: '23503' });
+    query.mockRejectedValueOnce(fkError);
+    query.mockResolvedValueOnce({ rows: [{ n: 2 }] }); // COUNT(*) of agent_skills rows
+    let caught: unknown;
+    try { await deleteSkill(3); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(SkillInUseError);
+    expect((caught as Error).message).toMatch(/2 agent/);
+  });
+
+  it('deleteSkill rethrows a non-FK error unchanged', async () => {
+    query.mockRejectedValueOnce(new Error('db down'));
+    await expect(deleteSkill(3)).rejects.toThrow('db down');
+  });
+
+  it('deleteAgent issues a custom-only DELETE (agent_skills cascades, no FK risk)', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    await deleteAgent(9);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/DELETE FROM agents/i);
+    expect(sql).toMatch(/tier = 'custom'/i);
+    expect(params).toEqual([9]);
   });
 });

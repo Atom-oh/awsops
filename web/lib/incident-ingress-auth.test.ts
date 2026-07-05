@@ -6,7 +6,34 @@ import {
   verifyBearer,
   verifyHmac,
   resolveSourceHint,
+  checkRateLimit,
+  extractClientIp,
 } from './incident-ingress-auth';
+
+describe('checkRateLimit (per-caller map, 60/min)', () => {
+  it('allows the first 60 requests from an IP then rejects the 61st', () => {
+    const map = new Map<string, { count: number; resetAt: number }>();
+    for (let i = 0; i < 60; i++) expect(checkRateLimit(map, '1.2.3.4')).toBe(true);
+    expect(checkRateLimit(map, '1.2.3.4')).toBe(false);
+  });
+  it('tracks each IP independently', () => {
+    const map = new Map<string, { count: number; resetAt: number }>();
+    for (let i = 0; i < 60; i++) checkRateLimit(map, '1.1.1.1');
+    expect(checkRateLimit(map, '1.1.1.1')).toBe(false);
+    expect(checkRateLimit(map, '2.2.2.2')).toBe(true);
+  });
+});
+
+describe('extractClientIp (second-to-last hop behind CloudFront+ALB)', () => {
+  it('picks the second-to-last IP when 2+ are forwarded', () => {
+    const req = new Request('http://x', { headers: { 'x-forwarded-for': '203.0.113.5, 198.51.100.7' } });
+    expect(extractClientIp(req)).toBe('203.0.113.5');
+  });
+  it('falls back to the single IP or "unknown"', () => {
+    expect(extractClientIp(new Request('http://x', { headers: { 'x-forwarded-for': '9.9.9.9' } }))).toBe('9.9.9.9');
+    expect(extractClientIp(new Request('http://x'))).toBe('unknown');
+  });
+});
 
 describe('classifyEnvelope (body.Type only — never headers)', () => {
   it('SNS for Notification/SubscriptionConfirmation/UnsubscribeConfirmation', () => {

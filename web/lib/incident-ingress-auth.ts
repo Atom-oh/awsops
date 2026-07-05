@@ -76,6 +76,37 @@ export function verifyHmac(body: string, signature: string, secrets: Array<strin
   return { ok: false };
 }
 
+// --- Rate limiting (PORTED from the original webhook route; shared with the per-integration ingress
+// route, Phase 2/W4): per-source IP, 60 requests/min, bounded map. Each caller should keep its own
+// Map instance (module-scoped) — this is a pure helper over that map, not a shared singleton, so the
+// two routes' limits don't cross-pollinate. ---
+const RATE_LIMIT = 60;
+const RATE_WINDOW_MS = 60_000;
+const MAX_RATE_ENTRIES = 10_000;
+
+export function checkRateLimit(map: Map<string, { count: number; resetAt: number }>, ip: string): boolean {
+  const now = Date.now();
+  if (map.size > MAX_RATE_ENTRIES) {
+    Array.from(map.entries()).forEach(([key, entry]) => {
+      if (now > entry.resetAt) map.delete(key);
+    });
+  }
+  const entry = map.get(ip);
+  if (!entry || now > entry.resetAt) {
+    map.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= RATE_LIMIT;
+}
+
+// --- Client IP (PORTED): behind CloudFront + ALB, the real client is second-to-last ---
+export function extractClientIp(request: Request): string {
+  const forwarded = request.headers.get('x-forwarded-for') || '';
+  const ips = forwarded.split(',').map((s) => s.trim()).filter(Boolean);
+  return ips.length >= 2 ? ips[ips.length - 2] : ips[0] || 'unknown';
+}
+
 const ALLOWED_SOURCES: readonly string[] = ['cloudwatch', 'alertmanager', 'grafana', 'sqs', 'generic'];
 
 /** Post-auth normalization source. SNS ⇒ always 'cloudwatch'. Otherwise honor an explicit header

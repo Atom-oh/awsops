@@ -38,9 +38,16 @@ describe('skill-validation', () => {
     expect(validateAgent({ name: 'agt', description: 'd', gateway: 'ops', routingKeywords: [] }).ok).toBe(true);
   });
 
-  it('validateSkill: agentTypes must each be in AGENT_TYPES; referenceKeys must be string[]', () => {
+  it('validateSkill: agentTypes must each be in AGENT_TYPES', () => {
     expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], agentTypes: ['rca'] }).ok).toBe(true);
     expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], agentTypes: ['nope'] }).ok).toBe(false);
-    expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], referenceKeys: [1] as unknown as string[] }).ok).toBe(false);
+  });
+
+  it('validateSkill: referenceKeys is {path, content}[] (Phase 3 inline reference files), size-bounded', () => {
+    expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], referenceKeys: [1] as unknown as string[] }).ok).toBe(false); // wrong shape
+    expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], referenceKeys: [{ path: 'x.md', content: 'y' }] }).ok).toBe(true);
+    expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], referenceKeys: [{ path: 'x.md', content: 'x'.repeat(20_001) }] }).ok).toBe(false); // per-file cap
+    const many = Array.from({ length: 6 }, (_, i) => ({ path: `f${i}.md`, content: 'x'.repeat(20_000) }));
+    expect(validateSkill({ name: 'sk', description: 'd', instructions: 'i', toolAllowlist: [], referenceKeys: many }).ok).toBe(false); // total cap (6*20000 > 100000)
   });
 });
