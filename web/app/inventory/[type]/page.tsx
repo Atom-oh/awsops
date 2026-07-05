@@ -12,6 +12,7 @@ import Input from '@/components/ui/Input';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import RiskHero from '@/components/inventory/RiskHero';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
+import { useActiveScope, scopeParams } from '@/lib/account-context';
 
 type Row = Record<string, unknown>;
 
@@ -54,16 +55,19 @@ export default function InventoryTypePage() {
   const [selected, setSelected] = useState<Row | null>(null);
   // Supplementary metric KPI cards (e.g. EC2 avg CPU + hourly cost). Degrade silently to [].
   const [metricCards, setMetricCards] = useState<{ label: string; value: string | number; accent?: boolean }[]>([]);
+  const [scope] = useActiveScope();
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`/api/inventory/${type}?limit=${ROW_LIMIT}`);
+      // scopeParams also serializes `accounts`, which this route ignores (account filtering is
+      // out of scope for this pass) — harmless to send.
+      const r = await fetch(`/api/inventory/${type}?limit=${ROW_LIMIT}&${scopeParams(scope)}`);
       if (!r.ok) throw new Error(String(r.status));
       const d = await r.json();
       setRows((d.rows as Row[]).map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data as object) })));
       setCaptured(d.run?.finished_at ?? null);
     } catch (e) { setErr(String(e)); }
-  }, [type]);
+  }, [type, scope]);
   useEffect(() => { if (spec) load(); }, [spec, load]);
 
   // Supplementary metric cards — fetch separately so a failure never affects the table/donut.
