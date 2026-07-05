@@ -19,13 +19,15 @@ export interface ReadResourcesOpts {
 
 export async function readResources(type: string, { limit, offset, regions = '__all__', includeGlobal = true }: ReadResourcesOpts): Promise<InventoryPage> {
   const pool = getPool();
-  // Build the allowed-region array once (co-agent panel: ANY() over an array beats an OR clause,
-  // and folding includeGlobal into the array itself means it isn't silently dropped when
-  // regions === '__all__' — the old OR-based draft only checked includeGlobal in the non-'__all__' branch).
+  // Build the allowed-region array once: ANY() over an array beats an OR clause, and folding
+  // includeGlobal into the array means it isn't silently dropped when regions === '__all__'.
   let where = `resource_type = $1 AND account_id = 'self'`;
   const params: unknown[] = [type];
   if (regions !== '__all__') {
-    const allowed = includeGlobal ? [...regions, 'global'] : regions;
+    // includeGlobal is an independent toggle — strip a caller-supplied 'global' first so it
+    // can't smuggle a global row back in when includeGlobal=false.
+    const base = regions.filter((r) => r !== 'global');
+    const allowed = includeGlobal ? [...base, 'global'] : base;
     params.push(allowed.length ? allowed : ['__none__']); // empty selection → empty result, not unfiltered
     where += ` AND region = ANY($${params.length})`;
   } else if (!includeGlobal) {

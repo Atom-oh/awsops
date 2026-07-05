@@ -58,6 +58,14 @@ describe('readResources', () => {
     const [, params] = query.mock.calls[0];
     expect(params).toContainEqual(['__none__']);
   });
+
+  it('includeGlobal=false strips a caller-supplied "global" out of explicit regions (PR review MAJOR-2)', async () => {
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const { readResources } = await import('./inventory');
+    await readResources('ec2', { limit: 50, offset: 0, regions: ['ap-northeast-2', 'global'], includeGlobal: false });
+    const [, params] = query.mock.calls[0];
+    expect(params).toContainEqual(['ap-northeast-2']);
+  });
 });
 describe('triggerSync', () => {
   it('invokes the sync Lambda and parses the result', async () => {

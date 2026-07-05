@@ -14,8 +14,10 @@ export async function GET(request: Request, { params }: { params: { type: string
   const url = new URL(request.url);
   const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
   const offset = Number(url.searchParams.get('offset')) || 0;
+  // `.get()` returns null only when the param is absent — distinct from an explicit `regions=`
+  // (empty string), which must resolve to an empty array, not silently fall back to unfiltered.
   const regionsParam = url.searchParams.get('regions');
-  const regions = regionsParam && regionsParam !== '__all__' ? regionsParam.split(',').filter(Boolean) : '__all__';
+  const regions = regionsParam === null || regionsParam === '__all__' ? '__all__' : regionsParam.split(',').filter(Boolean);
   const includeGlobal = url.searchParams.get('includeGlobal') !== '0';
   try {
     return Response.json(await readResources(params.type, { limit, offset, regions, includeGlobal }));
