@@ -19,9 +19,11 @@ resource "aws_secretsmanager_secret_version" "steampipe" {
 }
 
 # ECS resolves the task def `secrets`/valueFrom with the EXECUTION role (not the task role).
-# The shared execution_secrets policy only covers the Aurora secret; grant the Steampipe secret
-# too or the Steampipe task fails ResourceInitializationError on start. Gated so it stays plan-clean
-# when disabled. No kms grant needed — the secret uses the default aws/secretsmanager key.
+# No task uses the Aurora master secret via valueFrom anymore (web + steampipe both authenticate
+# via IAM DB auth instead — see the M1 note below), so this grants ONLY the Steampipe network-
+# listener's own DB password secret, or the Steampipe task fails ResourceInitializationError on
+# start. Gated so it stays plan-clean when disabled. No kms grant needed — the secret uses the
+# default aws/secretsmanager key.
 #
 # NOTE (M1): this grants ONLY the Steampipe network-listener's own DB password secret — NOT the
 # Aurora master secret. The boot-time aws.spc generator authenticates to Aurora via IAM database
