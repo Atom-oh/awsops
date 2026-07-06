@@ -1,6 +1,9 @@
 """AWSops v2 P2 — shared Aurora access (pg8000) + worker_jobs CRUD.
 
-Env: AURORA_ENDPOINT, AURORA_DATABASE, AURORA_SECRET_ARN (RDS-managed master secret), AWS_REGION.
+Env: AURORA_ENDPOINT, AURORA_DATABASE, AURORA_USER (default awsops_worker), AWS_REGION. Auth is RDS
+IAM database auth (rds-db:connect on the caller's role) — a fresh SigV4-signed token is generated
+per connect(), never cached, so a warm Lambda execution environment can never hold a stale
+credential across the master secret's rotation cycle (mirrors web/lib/db.ts and steampipe.tf).
 Transitions are CONDITIONAL: terminal states (succeeded/failed/canceled) are immutable, so an SFN
 Catch cannot overwrite a worker's succeeded, and retries cannot resurrect a done job.
 """
@@ -11,15 +14,14 @@ import boto3
 import pg8000.native
 
 _TERMINAL = ("succeeded", "failed", "canceled", "manual_intervention")  # widen the terminal set
-_secret_cache = {}
 
 
-def _creds():
-    arn = os.environ["AURORA_SECRET_ARN"]
-    if arn not in _secret_cache:
-        sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
-        _secret_cache[arn] = json.loads(sm.get_secret_value(SecretId=arn)["SecretString"])
-    return _secret_cache[arn]
+def _auth_token():
+    rds = boto3.client("rds", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
+    return rds.generate_db_auth_token(
+        DBHostname=os.environ["AURORA_ENDPOINT"], Port=5432,
+        DBUsername=os.environ.get("AURORA_USER", "awsops_worker"),
+    )
 
 
 def _ssl_ctx():
@@ -31,9 +33,8 @@ def _ssl_ctx():
 
 
 def connect():
-    c = _creds()
     return pg8000.native.Connection(
-        user=c["username"], password=c["password"],
+        user=os.environ.get("AURORA_USER", "awsops_worker"), password=_auth_token(),
         host=os.environ["AURORA_ENDPOINT"], database=os.environ["AURORA_DATABASE"],
         port=5432, ssl_context=_ssl_ctx(),
     )

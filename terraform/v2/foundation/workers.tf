@@ -255,16 +255,14 @@ resource "aws_iam_role_policy" "worker_lambda" {
         Resource = "arn:aws:logs:${var.region}:${local.acct}:*"
       },
       {
-        Sid      = "AuroraSecret"
+        # RDS IAM database auth: db.py generates a short-lived signed token (rds-db:connect) per
+        # connect() to authenticate as the dedicated least-privilege `awsops_worker` Postgres role
+        # (see the awsops_worker_role migration) instead of the Aurora master secret — the master
+        # secret is never granted to this role at all now. Mirrors workload.tf's task_rds_iam_auth.
+        Sid      = "AuroraIamAuth"
         Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
-      },
-      {
-        Sid      = "AuroraKms"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = aws_kms_key.aurora.arn
+        Action   = ["rds-db:connect"]
+        Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.aurora.cluster_resource_id}/awsops_worker"
       },
       {
         # reaper kill-switch check: GetEventSourceMapping has no resource-level scoping → "*".
@@ -278,7 +276,7 @@ resource "aws_iam_role_policy" "worker_lambda" {
   })
 }
 
-# ---- worker Fargate task role: Aurora secret + KMS (db.py fetches creds via boto3) ----
+# ---- worker Fargate task role: RDS IAM auth (db.py generates a signed token via boto3) ----
 resource "aws_iam_role" "worker_task" {
   count              = local.we
   name               = "${var.project}-worker-task"
@@ -294,13 +292,8 @@ resource "aws_iam_role_policy" "worker_task" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = aws_kms_key.aurora.arn
+        Action   = ["rds-db:connect"]
+        Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.aurora.cluster_resource_id}/awsops_worker"
       }
     ]
   })
@@ -458,7 +451,7 @@ resource "aws_ecs_task_definition" "worker" {
       environment = concat([
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
-        { name = "AURORA_SECRET_ARN", value = aws_rds_cluster.aurora.master_user_secret[0].secret_arn },
+        { name = "AURORA_USER", value = "awsops_worker" },
         { name = "AWS_REGION", value = var.region },
         # AI Diagnosis (Task 1b): the report worker uploads markdown here (handlers.py reads
         # ARTIFACT_BUCKET → RuntimeError if unset) and invokes a global.* Bedrock inference profile
@@ -541,7 +534,7 @@ resource "aws_lambda_function" "worker" {
     variables = merge({
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
-      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AURORA_USER       = "awsops_worker"
       # AI Diagnosis (Task 1b): report worker uploads here + invokes a global.* Bedrock profile from var.region.
       ARTIFACT_BUCKET = aws_s3_bucket.diagnosis_artifacts[0].bucket
       BEDROCK_REGION  = var.region
@@ -571,7 +564,7 @@ resource "aws_lambda_function" "status_updater" {
     variables = {
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
-      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AURORA_USER       = "awsops_worker"
     }
   }
   depends_on = [aws_cloudwatch_log_group.status_updater, aws_iam_role_policy_attachment.worker_lambda_vpc]
@@ -597,7 +590,7 @@ resource "aws_lambda_function" "reaper" {
     variables = {
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
-      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AURORA_USER       = "awsops_worker"
       DISPATCH_ESM_UUID = aws_lambda_event_source_mapping.dispatcher[0].uuid
       QUEUED_STALE_MIN  = "30"
       # Must EXCEED the longest legit run (the Fargate SFN TimeoutSeconds = 3600s = 60min) so the
@@ -972,7 +965,7 @@ resource "aws_lambda_function" "ai_cost_aggregator" {
     variables = {
       AURORA_ENDPOINT       = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE       = aws_rds_cluster.aurora.database_name
-      AURORA_SECRET_ARN     = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AURORA_USER           = "awsops_worker"
       BEDROCK_LOG_GROUP     = "/aws/bedrock/invocation-logs"
       AWSOPS_IDENTITY_MATCH = "awsops-v2"
       LOOKBACK_DAYS         = "3"
@@ -1069,7 +1062,7 @@ resource "aws_lambda_function" "schedule_dispatcher" {
     variables = {
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
-      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AURORA_USER       = "awsops_worker"
       AWS_ACCOUNT_ID    = local.acct
       JOBS_QUEUE_URL    = aws_sqs_queue.jobs[0].url
     }
@@ -1161,7 +1154,7 @@ resource "aws_lambda_function" "dsindex_dispatcher" {
     variables = {
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
-      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AURORA_USER       = "awsops_worker"
       AWS_ACCOUNT_ID    = local.acct
       JOBS_QUEUE_URL    = aws_sqs_queue.jobs[0].url
     }
@@ -1260,7 +1253,7 @@ resource "aws_lambda_function" "insight_dispatcher" {
     variables = {
       AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
-      AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AURORA_USER       = "awsops_worker"
       JOBS_QUEUE_URL    = aws_sqs_queue.jobs[0].url
     }
   }

@@ -312,7 +312,7 @@ locals {
   rem_env_base = local.re_or_iw == 1 ? {
     AURORA_ENDPOINT                = aws_rds_cluster.aurora.endpoint
     AURORA_DATABASE                = aws_rds_cluster.aurora.database_name
-    AURORA_SECRET_ARN              = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+    AURORA_USER                    = "awsops_worker"
     REMEDIATION_ENABLED            = tostring(var.remediation_enabled)
     INTEGRATIONS_WRITE_ENABLED     = tostring(var.integrations_write_enabled)
     INTEGRATIONS_WRITE_SSM         = coalesce(one(aws_ssm_parameter.integrations_write_enabled[*].name), "")
