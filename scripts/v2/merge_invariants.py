@@ -62,8 +62,7 @@ def tracked_tfvars_enabling(root):
         [
             "git",
             "ls-files",
-            "terraform/v2/**/*.tfvars",
-            "terraform/v2/**/*.auto.tfvars",
+            "terraform/v2/",
         ],
         cwd=root,
         text=True,
@@ -77,6 +76,8 @@ def tracked_tfvars_enabling(root):
     offenders = []
     enabled_re = re.compile(r"^\s*([A-Za-z0-9_]+_enabled)\s*=\s*true\b", re.IGNORECASE)
     for relpath in proc.stdout.splitlines():
+        if not (relpath.endswith(".tfvars") or relpath.endswith(".auto.tfvars")):
+            continue
         path = os.path.join(root, relpath)
         with open(path, encoding="utf-8") as f:
             for line_no, line in enumerate(f, 1):

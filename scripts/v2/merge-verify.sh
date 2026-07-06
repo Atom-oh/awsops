@@ -58,18 +58,20 @@ fi
 echo "== Stage 3: terraform checks =="
 terraform_status="SKIP terraform binary not found"
 if command -v terraform >/dev/null 2>&1; then
-  terraform_status="PASS fmt -check"
+  terraform_fmt_status="PASS fmt -check"
   if ! terraform -chdir=terraform/v2/foundation fmt -check; then
-    terraform_status="WARN fmt -check failed (non-blocking)"
-  elif [[ -d terraform/v2/foundation/.terraform ]]; then
-    if ! terraform -chdir=terraform/v2/foundation validate; then
-      terraform_status="WARN validate failed (non-blocking)"
-    else
-      terraform_status="PASS fmt -check and validate"
-    fi
-  else
-    terraform_status="PASS fmt -check; SKIP validate (.terraform missing)"
+    terraform_fmt_status="WARN fmt -check failed (non-blocking)"
   fi
+
+  terraform_validate_status="SKIP validate (.terraform missing)"
+  if [[ -d terraform/v2/foundation/.terraform ]]; then
+    terraform_validate_status="PASS validate"
+    if ! terraform -chdir=terraform/v2/foundation validate; then
+      terraform_validate_status="WARN validate failed (non-blocking)"
+    fi
+  fi
+
+  terraform_status="$terraform_fmt_status; $terraform_validate_status"
 fi
 
 echo "== Merge verification summary =="

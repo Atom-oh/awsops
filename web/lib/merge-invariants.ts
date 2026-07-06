@@ -16,11 +16,18 @@ function quotedValues(src: string): string[] {
   return [...src.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function literalBody(src: string, name: string, open: string, close: string): string {
-  const start = src.search(new RegExp(`\\b${name}\\b`));
-  if (start < 0) return '';
-  const equalsAt = src.indexOf('=', start);
-  if (equalsAt < 0) return '';
+  const assignment = new RegExp(
+    `^\\s*(?:export\\s+)?(?:(?:const|let|var)\\s+)?${escapeRegExp(name)}\\b(?:\\s*:[^=\\n]*)?\\s*=`,
+    'm',
+  );
+  const match = assignment.exec(src);
+  if (!match) return '';
+  const equalsAt = match.index + match[0].lastIndexOf('=');
   const openAt = src.indexOf(open, equalsAt);
   if (openAt < 0) return '';
   let depth = 0;

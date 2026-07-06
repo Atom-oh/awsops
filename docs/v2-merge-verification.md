@@ -48,7 +48,7 @@ aggregate-run false failures.
 
 `.github/workflows/merge-verify.yml` runs on pull requests targeting `main`. It checks out the PR,
 sets up Node.js 20 and Python 3.12, installs web dependencies with `cd web && npm ci`, installs
-`pytest`, and executes `bash scripts/v2/merge-verify.sh`.
+`pytest` plus the v2 Python subsystem requirements, and executes `bash scripts/v2/merge-verify.sh`.
 
 ## Manual Gates Outside CI
 
