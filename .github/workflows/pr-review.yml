@@ -49,10 +49,15 @@ jobs:
 
       - name: Get PR diff
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          gh pr diff "$PR_NUMBER" > /tmp/pr-diff-raw.txt
+          # gh pr diff hits the GitHub REST diff endpoint, which 406s past 300 changed files
+          # (confirmed on PR #124, a 666-file integration PR) — git diff has no such cap. Fetch
+          # just the head commit object (shallow, single SHA) alongside the already-checked-out
+          # base; never check out the head as the working tree (M1: PR head code never runs here).
+          git fetch --depth=1 origin "$HEAD_SHA"
+          git diff --no-color "$BASE_SHA" "$HEAD_SHA" -- . > /tmp/pr-diff-raw.txt
           awk '
             /^diff --git/ {
               path = substr($3, 3)
