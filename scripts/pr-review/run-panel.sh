@@ -67,8 +67,8 @@ for entry in "${KIRO_MODELS[@]}"; do
   m="${entry%%:*}"; tag="${entry##*:}"
   if command -v kiro-cli >/dev/null 2>&1; then
     ( try_panel "$SLOT/$tag.md" "$SLOT/$tag.err" \
-        timeout "$T" kiro-cli chat "$KIRO_PROMPT" --model "$m" \
-        --no-interactive --trust-tools=read,grep,fs_read ) & # keep in sync with read/fs_read named in the prompt above
+        timeout "$T" kiro-cli --v3 chat "$KIRO_PROMPT" --model "$m" \
+        --no-interactive --trust-tools=read,grep,fs_read --wrap never ) & # keep in sync with read/fs_read named in the prompt above
   else echo "[skip] $tag (binary absent)" >&2; : > "$SLOT/$tag.md"; fi
 done
 
