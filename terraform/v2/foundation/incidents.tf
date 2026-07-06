@@ -208,16 +208,14 @@ resource "aws_iam_role_policy" "incident_lambda" {
         Resource = "arn:aws:logs:${var.region}:${local.inc_acct}:*"
       },
       {
-        Sid      = "AuroraSecret"
+        # RDS IAM database auth: db.py generates a short-lived signed token (rds-db:connect) per
+        # connect() to authenticate as the dedicated least-privilege `awsops_worker` Postgres role
+        # (see the awsops_worker_role migration) instead of the Aurora master secret. Mirrors
+        # workers.tf's worker_lambda AuroraIamAuth statement.
+        Sid      = "AuroraIamAuth"
         Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
-      },
-      {
-        Sid      = "AuroraKms"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = aws_kms_key.aurora.arn
+        Action   = ["rds-db:connect"]
+        Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.aurora.cluster_resource_id}/awsops_worker"
       },
       {
         # AgentCore Runtime invoke for the read-only Sub-agent consults (agent_bridge.py). Scoped to
@@ -350,10 +348,10 @@ resource "aws_cloudwatch_log_group" "incident_sfn" {
 ############################################################
 locals {
   inc_env_base = local.il == 1 ? {
-    AURORA_ENDPOINT   = aws_rds_cluster.aurora.endpoint
-    AURORA_DATABASE   = aws_rds_cluster.aurora.database_name
-    AURORA_SECRET_ARN = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
-    PROJECT           = var.project # lifecycle.py derives /ops/<PROJECT>/incident/<suffix>
+    AURORA_ENDPOINT = aws_rds_cluster.aurora.endpoint
+    AURORA_DATABASE = aws_rds_cluster.aurora.database_name
+    AURORA_USER     = "awsops_worker"
+    PROJECT         = var.project # lifecycle.py derives /ops/<PROJECT>/incident/<suffix>
     # The five configurable-window SSM param NAMES (Addendum #4/#7). The Lambdas read the live
     # values (with safe fallbacks); these names document the contract + keep web/python aligned.
     INCIDENT_CORRELATION_WINDOW_PARAM = aws_ssm_parameter.incident_correlation_window[0].name
@@ -748,7 +746,7 @@ resource "aws_lambda_function" "prevention_loop" {
     variables = {
       AURORA_ENDPOINT                 = aws_rds_cluster.aurora.endpoint
       AURORA_DATABASE                 = aws_rds_cluster.aurora.database_name
-      AURORA_SECRET_ARN               = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      AURORA_USER                     = "awsops_worker"
       PROJECT                         = var.project
       PREVENTION_WINDOW_DAYS          = aws_ssm_parameter.incident_prevention_window_days[0].value
       PREVENTION_RECURRENCE_THRESHOLD = aws_ssm_parameter.incident_prevention_threshold[0].value
