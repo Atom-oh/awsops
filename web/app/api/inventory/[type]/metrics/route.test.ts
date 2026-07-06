@@ -13,8 +13,8 @@ vi.mock('@/lib/metrics', () => ({
   rdsMetrics: (...a: unknown[]) => rdsMetrics(...a),
 }));
 
-const req = (cookie = 'awsops_token=t') =>
-  new Request('http://x/api/inventory/ec2/metrics', { headers: { cookie } });
+const req = (url = 'http://x/api/inventory/ec2/metrics', cookie = 'awsops_token=t') =>
+  new Request(url, { headers: { cookie } });
 const ctx = (type = 'ec2') => ({ params: { type } });
 
 beforeEach(() => {
@@ -128,5 +128,37 @@ describe('GET /api/inventory/[type]/metrics', () => {
     const res = await GET(req(), ctx());
     expect(res.status).toBe(200);
     expect((await res.json()).cards).toEqual([]);
+  });
+
+  describe('scope query params (match the main table\'s region scope)', () => {
+    it('ec2: regions=ap-northeast-2 → region = ANY($n) in the fleet query', async () => {
+      verifyUser.mockResolvedValue({ sub: 'u' });
+      query.mockResolvedValue({ rows: [] });
+      ec2AvgCpu.mockResolvedValue(null);
+      ec2HourlyCost.mockResolvedValue(null);
+      const { GET } = await import('./route');
+      await GET(req('http://x/api/inventory/ec2/metrics?regions=ap-northeast-2'), ctx());
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toMatch(/region = ANY/);
+      expect(params).toContainEqual(['ap-northeast-2', 'global']);
+    });
+
+    it('rds: includeGlobal=0 → region <> \'global\' in the fleet query', async () => {
+      verifyUser.mockResolvedValue({ sub: 'u' });
+      query.mockResolvedValue({ rows: [] });
+      rdsMetrics.mockResolvedValue({ byInstance: {}, avgCpu: null });
+      const { GET } = await import('./route');
+      await GET(req('http://x/api/inventory/rds/metrics?includeGlobal=0'), ctx('rds'));
+      const [sql] = query.mock.calls[0];
+      expect(sql).toMatch(/region <> 'global'/);
+    });
+
+    it('rds ?id=<db> single-instance path ignores scope params (no fleet query to scope)', async () => {
+      verifyUser.mockResolvedValue({ sub: 'u' });
+      rdsMetrics.mockResolvedValue({ byInstance: { 'db-1': { cpu: 1, connections: 1, freeStorage: 1, freeableMemory: 1, readIops: 1, writeIops: 1, netIn: 1, netOut: 1 } }, avgCpu: 1 });
+      const { GET } = await import('./route');
+      await GET(req('http://x/api/inventory/rds/metrics?id=db-1&regions=us-east-1'), ctx('rds'));
+      expect(query).not.toHaveBeenCalled();
+    });
   });
 });

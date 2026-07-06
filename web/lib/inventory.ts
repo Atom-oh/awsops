@@ -8,12 +8,46 @@ function lambdaClient(): LambdaClient { if (!lambda) lambda = new LambdaClient({
 export interface SyncRun { status: string; finished_at: string | null; row_count: number | null; error?: string | null }
 export interface InventoryPage { rows: Record<string, unknown>[]; run: SyncRun | null }
 
-export async function readResources(type: string, { limit, offset }: { limit: number; offset: number }): Promise<InventoryPage> {
+/** Region allow-list, or '__all__' for no region filter. */
+export type RegionScope = string[] | '__all__';
+
+/**
+ * Appends a region predicate to `params` (mutated) and returns the SQL fragment to AND onto a
+ * WHERE clause (possibly ''). Shared by readResources and the metrics route so both apply the
+ * same region/includeGlobal contract — ANY() over an array beats an OR clause, and folding
+ * includeGlobal into the array means it isn't silently dropped when regions === '__all__'.
+ */
+export function regionWhereClause(regions: RegionScope, includeGlobal: boolean, params: unknown[]): string {
+  if (regions !== '__all__') {
+    // includeGlobal is an independent toggle — strip a caller-supplied 'global' first so it
+    // can't smuggle a global row back in when includeGlobal=false.
+    const base = regions.filter((r) => r !== 'global');
+    const allowed = includeGlobal ? [...base, 'global'] : base;
+    params.push(allowed.length ? allowed : ['__none__']); // empty selection → empty result, not unfiltered
+    return ` AND region = ANY($${params.length})`;
+  }
+  if (!includeGlobal) return ` AND region <> 'global'`;
+  return '';
+}
+
+export interface ReadResourcesOpts {
+  limit: number;
+  offset: number;
+  /** Region allow-list, or '__all__' (default) for no region filter. */
+  regions?: RegionScope;
+  /** Include region='global' rows (IAM, Route53, ...). Default true. */
+  includeGlobal?: boolean;
+}
+
+export async function readResources(type: string, { limit, offset, regions = '__all__', includeGlobal = true }: ReadResourcesOpts): Promise<InventoryPage> {
   const pool = getPool();
+  const params: unknown[] = [type];
+  const where = `resource_type = $1 AND account_id = 'self'` + regionWhereClause(regions, includeGlobal, params);
+  params.push(limit, offset);
   const r = await pool.query(
     `SELECT resource_id, region, data, captured_at FROM inventory_resources
-     WHERE resource_type = $1 AND account_id = 'self' ORDER BY captured_at DESC LIMIT $2 OFFSET $3`,
-    [type, limit, offset],
+     WHERE ${where} ORDER BY captured_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
   );
   const s = await pool.query(
     `SELECT status, finished_at, row_count, error FROM inventory_sync_runs WHERE resource_type = $1 AND account_id = 'self'`,
