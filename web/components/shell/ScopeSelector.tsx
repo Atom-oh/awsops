@@ -124,7 +124,13 @@ export default function ScopeSelector({ className = '' }: { className?: string }
                   type="checkbox"
                   checked={checked}
                   onChange={() => {
-                    const next = scope.regions === ALL_REGIONS ? [region] : toggleValue(regionValues, region);
+                    // Every box renders checked=true while scope.regions === ALL_REGIONS, so a
+                    // click there is always an uncheck gesture — exclude just this region from
+                    // the full set (not narrow down to only it, which was the bug: it silently
+                    // dropped every other region the user hadn't touched).
+                    const next = scope.regions === ALL_REGIONS
+                      ? availableRegions.filter((r) => r !== region)
+                      : toggleValue(regionValues, region);
                     setRegionsValue(next.length ? next : availableRegions.slice(0, 1));
                   }}
                 />
