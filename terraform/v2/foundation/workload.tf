@@ -26,27 +26,8 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Review Blocker A: ECS `secrets`(valueFrom) is resolved by the EXECUTION role at
-# task start — it must read the RDS-managed secret + decrypt with the CMK.
-resource "aws_iam_role_policy" "execution_secrets" {
-  name = "${var.project}-exec-aurora-secret"
-  role = aws_iam_role.execution.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = [aws_rds_cluster.aurora.master_user_secret[0].secret_arn]
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = [aws_kms_key.aurora.arn]
-      }
-    ]
-  })
-}
+
+
 
 resource "aws_iam_role" "task" {
   name               = "${var.project}-task"
@@ -82,6 +63,23 @@ resource "aws_iam_role_policy" "task_integrations_secret" {
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
       Resource = aws_secretsmanager_secret.integrations[0].arn
+    }]
+  })
+}
+
+# RDS IAM database auth: web/lib/db.ts generates a short-lived signed token (rds-db:connect) to
+# connect as the dedicated least-privilege `awsops_web` Postgres role (see the awsops_web_role
+# migration) instead of the Aurora master secret — mirrors steampipe.tf's steampipe_reader pattern.
+# Scoped to this cluster's resource id + that exact dbuser; the master secret is never granted here.
+resource "aws_iam_role_policy" "task_rds_iam_auth" {
+  name = "${var.project}-web-rds-iam-auth"
+  role = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["rds-db:connect"]
+      Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.aurora.cluster_resource_id}/awsops_web"
     }]
   })
 }
@@ -248,6 +246,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "HOSTNAME", value = "0.0.0.0" },
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
+        # IAM DB auth (rds-db:connect above) — a fixed username, not a secret, since the "password"
+        # is now a short-lived signed token web/lib/db.ts generates per connection.
+        { name = "AURORA_USER", value = "awsops_web" },
         { name = "AWS_REGION", value = var.region },
         { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
         { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.main.id },
@@ -333,10 +334,9 @@ resource "aws_ecs_task_definition" "web" {
         # Scheduled-diagnosis mailing list (gated): empty list when diagnosis_notify_enabled=false →
         # concat(base, []) == base → byte-identical web task def (no redeploy when off).
       local.notify_web_env_list)
-      secrets = [
-        { name = "AURORA_USER", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:username::" },
-        { name = "AURORA_PASSWORD", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:password::" }
-      ]
+      # No `secrets` block: the web task no longer injects the Aurora master secret at all (IAM DB
+      # auth above replaces it) — removes the class of bug where a long-running task holds a
+      # password that goes stale on the master secret's next auto-rotation.
       healthCheck = {
         command     = ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/health || exit 1"]
         interval    = 30

@@ -68,13 +68,15 @@ resource "aws_rds_cluster" "aurora" {
   # RDS Data API (HTTP endpoint): lets the read-only inventory-read MCP Lambda query the synced
   # inventory without a VPC attachment or pg8000 bundling. In-place enable (no reboot/replace).
   enable_http_endpoint          = true
-  # IAM database authentication: lets the Steampipe boot-time generator connect as a dedicated
-  # least-privilege `steampipe_reader` role via a short-lived STS-signed auth token (rds-db:connect)
-  # instead of the Aurora master secret — the network-listening Steampipe task never holds a DB
-  # password (M1 fix). In-place enable, no reboot/replace. Gated on steampipe_enabled (not a bare
-  # `true`) so `steampipe_enabled=false` stays plan-clean — this is the ONLY consumer of IAM DB
-  # auth on this cluster today.
-  iam_database_authentication_enabled = var.steampipe_enabled
+  # IAM database authentication: lets long-running Fargate tasks connect via a short-lived
+  # STS-signed auth token (rds-db:connect) instead of the Aurora master secret. The master secret
+  # is RDS-managed and auto-rotates every 7 days; a task that only reads it once at container
+  # start (secrets/valueFrom) is left holding a stale password after the next rotation — every
+  # Postgres-backed route then fails with "password authentication failed" until the task happens
+  # to be replaced. Two consumers today, both dedicated least-privilege roles, no shared password:
+  # Steampipe's boot-time generator (`steampipe_reader`, M1 fix) and the web BFF (`awsops_web`).
+  # In-place enable, no reboot/replace. Unconditional now that web depends on it too.
+  iam_database_authentication_enabled = true
   master_user_secret_kms_key_id = aws_kms_key.aurora.key_id
   storage_encrypted             = true
   kms_key_id                    = aws_kms_key.aurora.arn
