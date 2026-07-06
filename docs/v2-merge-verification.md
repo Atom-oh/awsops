@@ -1,7 +1,33 @@
-# v2 Merge Verification
+# v2 Merge Verification / v2 머지 검증
+
+이 게이트는 설계-대비-구현 감사에서 나온 v2 머지 불변식을 `feat/v2-architecture-design` →
+`main` 머지 전에 실행 가능한 검증으로 고정한다.
+
+- **S1**: `terraform/v2/foundation/`의 frozen/gated 리소스가 여전히 default-off이고
+  `count`/`for_each`로 게이트되어 있는지, 추적된 tfvars가 게이트된 flag를 활성화하지
+  않는지 확인 (`scripts/v2/merge_invariants.py`).
+- **S2**: AgentCore catalog·web sections·route rules 9개 섹션 키가 정합하는지,
+  `observability`→`external-obs` 별칭이 라우팅 양쪽(카탈로그+에이전트 런타임)에 있는지,
+  v1 `/awsops/` 경로 리터럴이 web 소스에 누출되지 않는지 확인 (`web/lib/merge-invariants.ts`).
+- **S3**: 파일 격리 pytest + web vitest + 기회적 terraform 체크를 하나의 러너로 묶고
+  PR CI 게이트로 강제한다 (`scripts/v2/merge-verify.sh` + `.github/workflows/merge-verify.yml`).
+
+**알려진 한계 (patch 대상 아님, 문서화만)**: `ungated_resources()`는 리소스 body 안의
+`count=`/`for_each=` 라인 존재만 확인한다 — 중첩된 `dynamic` 블록의 `for_each`만 있고
+최상위 게이트가 없는 리소스는 이론상 검출을 통과할 수 있다. 현재 10개 게이트 파일 중
+이 패턴으로 실제 발생하는 위양성은 0건(측정 완료)이지만, 최상위 속성만 인정하도록
+좁히는 것은 후속 작업이다.
+
+---
 
 This gate turns the v2 merge invariants from the design audit into executable checks before merging
 `feat/v2-architecture-design` to `main`.
+
+**Known limitation (documented, not patched this round):** `ungated_resources()` only checks
+for the presence of a `count=`/`for_each=` line anywhere in a resource body — a resource whose
+only gate is a nested `dynamic` block's `for_each` (with no top-level gate) could theoretically
+slip through undetected. Zero false negatives from this pattern exist across the current 10
+gated files (measured), but narrowing the check to top-level attributes only is a follow-up.
 
 ## Scenarios
 
