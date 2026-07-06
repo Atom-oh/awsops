@@ -43,14 +43,47 @@ describe('ScopeSelector', () => {
 
     fireEvent.click(screen.getByLabelText('All accounts'));
     await screen.findByLabelText('eu-west-1');
+    // Uncheck the "All enabled regions" toggle first to get a clean single-region baseline,
+    // then add regions one at a time — once out of ALL_REGIONS mode, per-region checkboxes
+    // are a plain add/remove toggle.
+    fireEvent.click(screen.getByLabelText('All enabled regions'));
     fireEvent.click(screen.getByLabelText('us-east-1'));
     fireEvent.click(screen.getByLabelText('eu-west-1'));
 
     expect(getActiveScope()).toEqual({
       accounts: '__all__',
-      regions: ['us-east-1', 'eu-west-1'],
+      regions: ['ap-northeast-2', 'us-east-1', 'eu-west-1'],
       includeGlobal: true,
     });
+  });
+
+  it('unchecking one region while "all" is active excludes it, not narrows to only it', async () => {
+    render(<ScopeSelector />);
+    await screen.findByText(/Accounts:/);
+    fireEvent.click(screen.getByLabelText('All accounts')); // bring us-east-1/eu-west-1 into scope
+    await screen.findByLabelText('eu-west-1');
+
+    // Default scope.regions === ALL_REGIONS, so every per-region box renders checked=true.
+    // User intent: uncheck ap-northeast-2 to EXCLUDE it, keeping the other two selected.
+    fireEvent.click(screen.getByLabelText('ap-northeast-2'));
+
+    const regions = getActiveScope().regions;
+    expect(regions).not.toContain('ap-northeast-2');
+    expect(regions).toEqual(expect.arrayContaining(['us-east-1', 'eu-west-1']));
+  });
+
+  it('unchecking a second region narrows down to exactly the ones left checked', async () => {
+    render(<ScopeSelector />);
+    await screen.findByText(/Accounts:/);
+    fireEvent.click(screen.getByLabelText('All accounts'));
+    await screen.findByLabelText('eu-west-1');
+
+    // Real-world report: 3 regions all checked by default; user unchecks the two they
+    // don't want, expecting only the third to remain selected.
+    fireEvent.click(screen.getByLabelText('ap-northeast-2'));
+    fireEvent.click(screen.getByLabelText('eu-west-1'));
+
+    expect(getActiveScope().regions).toEqual(['us-east-1']);
   });
 
   it('can exclude global services from the active scope', async () => {
