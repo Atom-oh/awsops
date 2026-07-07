@@ -116,6 +116,35 @@ def _row_cells(line: str):
     return [_inline(c) for c in line.strip().strip("|").split("|")]
 
 
+def _shd(pr_element, fill):
+    """Inject <w:shd w:val="clear" w:fill="..."/> into a *Pr element (tcPr or pPr) — cell/
+    paragraph shading has no high-level python-docx API."""
+    from docx.oxml.ns import qn
+    from docx.oxml.shared import OxmlElement
+
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:fill"), fill)
+    pr_element.append(shd)
+
+
+def _calm_borders(table):
+    """A uniform light-grey grid instead of Word's default loud accent-color table style — no
+    high-level API for w:tblBorders."""
+    from docx.oxml.ns import qn
+    from docx.oxml.shared import OxmlElement
+
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{edge}")
+        el.set(qn("w:val"), "single")
+        el.set(qn("w:sz"), "4")
+        el.set(qn("w:space"), "0")
+        el.set(qn("w:color"), _BORDER)
+        borders.append(el)
+    table._tbl.tblPr.append(borders)
+
+
 def to_docx(markdown: str) -> bytes:
     """Pragmatic markdown→DOCX: headings, the date blockquote, bullets, tables, paragraphs."""
     doc = _styled_document()
@@ -131,19 +160,33 @@ def to_docx(markdown: str) -> bytes:
 
         # table block (consecutive | … | rows)
         if _is_table_row(line):
-            block = []
+            raw = []
             while i < len(lines) and _is_table_row(lines[i]):
-                if not _is_table_separator(lines[i]):
-                    block.append(_row_cells(lines[i]))
+                raw.append(lines[i])
                 i += 1
+            has_header = len(raw) >= 2 and _is_table_separator(raw[1])
+            block = [_row_cells(r) for r in raw if not _is_table_separator(r)]
             if block:
                 cols = max(len(r) for r in block)
                 table = doc.add_table(rows=0, cols=cols)
-                table.style = "Light Grid Accent 1"
-                for cells in block:
+                table.style = "Table Grid"
+                table.autofit = False
+                _calm_borders(table)
+                from docx.shared import Mm
+
+                col_width = Mm(178) // cols
+                for c in range(cols):
+                    table.columns[c].width = col_width
+                for row_idx, cells in enumerate(block):
                     row = table.add_row().cells
                     for c in range(cols):
-                        row[c].text = cells[c] if c < len(cells) else ""
+                        cell = row[c]
+                        cell.width = col_width
+                        text = cells[c] if c < len(cells) else ""
+                        run = cell.paragraphs[0].add_run(text)
+                        if has_header and row_idx == 0:
+                            run.bold = True
+                            _shd(cell._tc.get_or_add_tcPr(), _BRAND_TINT)
             continue
 
         m = _HEADING.match(stripped)

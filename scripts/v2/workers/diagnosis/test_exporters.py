@@ -106,3 +106,56 @@ def test_docx_page_break_before_second_h2_only():
     assert len(h2s) == 2
     assert not h2s[0].paragraph_format.page_break_before
     assert h2s[1].paragraph_format.page_break_before is True
+
+
+def test_docx_table_explicit_widths_everywhere():
+    from docx.shared import Mm
+
+    t = _doc(_SAMPLE).tables[0]
+    assert t.autofit is False
+    # Round to whole twips-of-a-mm: OOXML stores widths in integer twips, so an exact EMU
+    # equality fails by the same rounding as the page-size check above.
+    w_mm = round((Mm(178) // len(t.columns)) / 36000)  # 1mm == 36000 EMU
+    for col in t.columns:
+        assert round(col.width.mm) == w_mm
+    for row in t.rows:
+        for cell in row.cells:
+            assert round(cell.width.mm) == w_mm
+
+
+def test_docx_table_header_bold_and_shaded():
+    from docx.oxml.ns import qn
+
+    t = _doc(_SAMPLE).tables[0]  # `| 키 | 값 |` header + separator + one data row
+    header = t.rows[0]
+    for cell in header.cells:
+        assert cell.paragraphs[0].runs and all(r.bold for r in cell.paragraphs[0].runs)
+        shd = cell._tc.tcPr.find(qn("w:shd"))
+        assert shd is not None
+        assert shd.get(qn("w:fill")) == "F5DCCF"
+    data_row = t.rows[1]
+    for cell in data_row.cells:
+        shd = cell._tc.tcPr.find(qn("w:shd")) if cell._tc.tcPr is not None else None
+        assert shd is None
+
+
+def test_docx_table_no_header_gets_no_bold_or_shading():
+    from docx.oxml.ns import qn
+
+    md = "| a | b |\n| c | d |\n"  # two data rows, no `|---|---|` separator → headerless
+    t = _doc(md).tables[0]
+    for row in t.rows:
+        for cell in row.cells:
+            assert not any(r.bold for r in cell.paragraphs[0].runs)
+            shd = cell._tc.tcPr.find(qn("w:shd")) if cell._tc.tcPr is not None else None
+            assert shd is None
+
+
+def test_docx_table_calm_border_color():
+    from docx.oxml.ns import qn
+
+    t = _doc(_SAMPLE).tables[0]
+    assert t.style.name == "Table Grid"
+    top = t._tbl.tblPr.find(qn("w:tblBorders")).find(qn("w:top"))
+    assert top.get(qn("w:color")) == "D7D3C7"
+    assert top.get(qn("w:sz")) == "4"
