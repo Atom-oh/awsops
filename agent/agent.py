@@ -109,7 +109,7 @@ GATEWAYS = _discover_gateways()
 # Cache params are guarded — an unsupported version degrades to temperature-only (spec §6 no-op rule).
 # Single source of truth for the model id — also streamed to the web as answer provenance
 # ({"model": ...} frame), so the chat footer never goes stale when this migrates.
-MODEL_ID = "global.anthropic.claude-sonnet-4-6"
+MODEL_ID = "global.anthropic.claude-sonnet-5"
 try:
     if CacheConfig is None:
         raise TypeError("CacheConfig unavailable")
