@@ -291,7 +291,7 @@ export async function POST(request: NextRequest) {
             messages: [{ role: 'user', content: naturalLanguage }],
           });
           const response = await bedrockClient.send(new InvokeModelCommand({
-            modelId: 'global.anthropic.claude-sonnet-4-6',
+            modelId: 'global.anthropic.claude-sonnet-5',
             contentType: 'application/json',
             accept: 'application/json',
             body: new TextEncoder().encode(bedrockBody),
