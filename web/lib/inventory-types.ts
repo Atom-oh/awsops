@@ -13,11 +13,12 @@ export interface InvType {
 export const INVENTORY_TYPES: Record<string, InvType> = {
   ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', columns: [
     { key: 'name', label: 'Name' }, { key: 'instance_type', label: 'Type' }, { key: 'instance_state', label: 'State' },
+    { key: 'pricing_model', label: 'Pricing' },
     { key: 'private_ip_address', label: 'Private IP' }, { key: 'public_ip_address', label: 'Public IP' },
     { key: 'subnet_id', label: 'Subnet' }, { key: 'vpc_id', label: 'VPC' }, { key: 'launch_time', label: 'Launch' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'region'] },
-      { label: 'Compute', keys: ['instance_type', 'instance_state', 'launch_time'] },
+      { label: 'Compute', keys: ['instance_type', 'instance_state', 'pricing_model', 'launch_time'] },
       { label: 'Network', keys: ['private_ip_address', 'public_ip_address', 'subnet_id', 'vpc_id'] },
     ] },
   lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', columns: [
