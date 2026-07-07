@@ -28,7 +28,7 @@ else
   pass "diff step does not call the capped gh pr diff API"
 fi
 
-if echo "$DIFF_STEP" | grep -qE "git (fetch|diff)"; then
+if echo "$DIFF_CMDS" | grep -qE "git (fetch|diff)"; then
   pass "diff step computes the diff via local git instead"
 else
   fail "diff step computes the diff via local git instead"
@@ -43,8 +43,10 @@ else
 fi
 
 # M1 security boundary must survive: the head ref is never checked out as the working tree
-# (no `git checkout`/`git switch` to the head sha anywhere in the diff step).
-if echo "$DIFF_STEP" | grep -qE "git (checkout|switch)[^|]*head"; then
+# (no `git checkout`/`git switch` to the head sha anywhere in the diff step). Case-insensitive:
+# the real risky pattern is `git checkout "$HEAD_SHA"` (uppercase var name), which a
+# lowercase-only "head" match misses entirely.
+if echo "$DIFF_STEP" | grep -qiE "git (checkout|switch)[^|]*head"; then
   fail "diff step does not check out the PR head as the working tree (M1 boundary)"
 else
   pass "diff step does not check out the PR head as the working tree (M1 boundary)"
