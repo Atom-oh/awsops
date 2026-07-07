@@ -53,9 +53,26 @@ jobs:
       - name: Get PR diff
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          gh pr diff "$PR_NUMBER" > /tmp/pr-diff-raw.txt
+          # gh pr diff hits the GitHub REST diff endpoint, which 406s past 300 changed files
+          # (confirmed on PR #124, a 666-file integration PR) — git diff has no such cap.
+          #
+          # GitHub's own "Files changed" uses merge-base (three-dot BASE...HEAD) semantics, not
+          # a raw two-dot tree diff — a plain `git diff BASE_SHA HEAD_SHA` would also pick up any
+          # unrelated commits landed on base AFTER this PR branched off, eating into the
+          # 3000-line truncation budget with noise that isn't this PR's own change (defeating the
+          # point of this fix on the exact large-diff PRs it targets). Resolve the precise
+          # merge-base via the JSON compare API (cheap — that endpoint reports merge_base_commit
+          # without the 300-file cap; that cap is specific to gh pr diff's raw-diff media type,
+          # confirmed empirically against PR #124: compare returns merge_base_commit fine while
+          # truncating only its `files`/`commits` arrays, which we don't use). Fetch just that
+          # commit + head (both shallow, single SHA — no full-history fetch needed), then a plain
+          # two-dot diff between merge-base and head is exactly equivalent to BASE...HEAD.
+          MERGE_BASE_SHA=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '.merge_base_commit.sha')
+          git fetch --depth=1 origin "$MERGE_BASE_SHA" "$HEAD_SHA"
+          git diff --no-color "$MERGE_BASE_SHA" "$HEAD_SHA" -- . > /tmp/pr-diff-raw.txt
           awk '
             /^diff --git/ {
               path = substr($3, 3)
