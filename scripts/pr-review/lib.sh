@@ -20,7 +20,7 @@ ensure_slots() {
 # 사람 범위보다 넓을 수 있으므로, 원시 200B 를 그대로 찍으면 별도의 스크럽 없는 유출구가 된다.
 record_result() {
   local slot="$1" label="$2" responded="$3"
-  echo "[preview] $label: $(head -c 200 "$slot" | scrub_secrets | tr '\n' ' ')" >&2
+  echo "[preview] $label: $(scrub_secrets < "$slot" | head -c 200 | tr '\n' ' ')" >&2
   if [ -s "$slot" ]; then
     echo "$label" >> "$responded"
   else
