@@ -3,6 +3,7 @@ import { invokeAgent, invokeAgentDetailed, type ChatMsg } from '@/lib/agentcore'
 import { getModelLabel } from '@/lib/bedrock';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt, buildClassifierContext } from '@/lib/classifier';
+import { sanitizeHistory } from '@/lib/chat-context';
 import { synthesizeStream } from '@/lib/synthesize';
 import { assistantAnswer, isProductHelpIntent } from '@/lib/assistant';
 import { sectionByKey } from '@/lib/sections';
@@ -74,6 +75,10 @@ export async function POST(request: Request) {
   const prompt = typeof body.prompt === 'string' ? body.prompt : '';
   if (!prompt) return json({ status: 'error', message: 'prompt required' }, 400);
   if (prompt.length > MAX_PROMPT) return json({ status: 'error', message: 'prompt too large' }, 413);
+  // Sanitize ONCE at the boundary (bug fix, PR #138 review MINOR) — a malformed entry (non-array,
+  // or non-string `content`) would otherwise throw deep inside the classifier/assistant history
+  // renderers, silently degrading routing instead of failing loud or just being dropped.
+  const history = sanitizeHistory(body.messages);
 
   const sessionId = (body.sessionId && body.sessionId.length >= 33) ? body.sessionId : `awsops-${user.sub}-000000000000000000000000`;
   // ADR-038: hybrid routing behind HYBRID_ROUTING_ENABLED. Flag off = exact legacy path.
@@ -92,7 +97,7 @@ export async function POST(request: Request) {
     // client-supplied history; matchedSections(prompt) below is unaffected (raw prompt only).
     route = await classifyRoute(prompt, body.section, {
       llmEnabled: true,
-      classify: (p) => classifyPrompt(buildClassifierContext(body.messages, p)),
+      classify: (p) => classifyPrompt(buildClassifierContext(history, p)),
     });
     gateway = route.primary;
   } else {
@@ -168,7 +173,7 @@ export async function POST(request: Request) {
   const inactiveWasPinned = inactiveSection != null && route?.method === 'pin';
   const useAssistant = hybridOn && !unavailablePin
     && ((!explicitPin && isProductHelpIntent(prompt)) || (inactiveSection != null && !inactiveWasPinned));
-  const messages: ChatMsg[] = [...(Array.isArray(body.messages) ? body.messages : []), { role: 'user', content: prompt }];
+  const messages: ChatMsg[] = [...history, { role: 'user', content: prompt }];
   // Thread persistence: adopt a well-formed client threadId, else mint one. Ownership is
   // enforced at write time by chat-store's owner-guarded upsert (forged ids just drop).
   const THREAD_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -246,7 +251,7 @@ export async function POST(request: Request) {
         // Bug fix: pass the client-supplied history along so the assistant fallback isn't a
         // context-blind one-off (previously dropped, causing "질문이 맥락 없이..." answers on
         // any follow-up that landed here — e.g. via the inactive-section degrade path above).
-        const text = await assistantAnswer(prompt, { history: body.messages ?? [] }); // Haiku, KB-grounded, never throws
+        const text = await assistantAnswer(prompt, { history }); // Haiku, KB-grounded, never throws
         for (const c of chunk(text)) {
           if (request.signal.aborted) break;
           controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));

@@ -1,5 +1,6 @@
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { SECTIONS } from './sections';
+import { renderRecentHistory, type HistoryMsg } from './chat-context';
 
 // ADR-038: Haiku routing classifier. Pure module — Bedrock call is injectable for tests.
 // Output is ADVISORY ONLY (routing), never used for authorization decisions.
@@ -61,13 +62,11 @@ export function parseRanked(raw: string): RankedKey[] {
     .slice(0, 3);
 }
 
-export interface HistoryMsg { role: 'user' | 'assistant'; content: string }
+export type { HistoryMsg }; // re-exported for existing callers/tests
 
 // Last N messages / per-message / total char caps — enough continuity for routing, small
 // enough to stay inside the classifier's tight TIMEOUT_MS budget.
-const CTX_TURNS = 4;
-const CTX_TURN_CHARS = 300;
-const CTX_TOTAL_CHARS = 1200;
+const CTX_OPTS = { turns: 4, perMsgChars: 300, totalChars: 1200 };
 
 /**
  * Prefix the prompt with a short excerpt of the recent conversation so the routing classifier
@@ -79,9 +78,8 @@ const CTX_TOTAL_CHARS = 1200;
  * regex match into a false ambiguous one; only the LLM classifier path gets this context.
  */
 export function buildClassifierContext(messages: HistoryMsg[] | undefined, prompt: string): string {
-  if (!messages || messages.length === 0) return prompt;
-  const recent = messages.slice(-CTX_TURNS);
-  const lines = recent.map((m) => `${m.role}: ${m.content.slice(0, CTX_TURN_CHARS)}`).join('\n').slice(0, CTX_TOTAL_CHARS);
+  const lines = renderRecentHistory(messages, CTX_OPTS);
+  if (!lines) return prompt;
   return `이전 대화(참고용):\n${lines}\n\n현재 질문: ${prompt}`;
 }
 

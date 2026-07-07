@@ -1,6 +1,6 @@
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { AWSOPS_KB } from './awsops-kb';
-import type { ChatMsg } from './agentcore';
+import { renderRecentHistory, type HistoryMsg } from './chat-context';
 
 // In-app "AWSops Assistant": answers product / how-to questions ABOUT AWSops itself (e.g. how to use
 // /customization, build a custom agent, add a Prometheus integration) — which no AWS-domain section
@@ -75,30 +75,20 @@ export function isProductHelpIntent(prompt: string): boolean {
 // as tagged context rather than a real multi-turn Converse array). Bug fix: this path previously
 // dropped history entirely, so any follow-up landing here (product-help or the inactive-section
 // degrade fallback) got a context-blind, single-shot answer even mid-conversation.
-const HISTORY_TURNS = 6;
-const HISTORY_TURN_CHARS = 300;
-const HISTORY_TOTAL_CHARS = 1500;
-
-function renderHistory(history: ChatMsg[]): string {
-  return history.slice(-HISTORY_TURNS)
-    .map((m) => `${m.role}: ${m.content.slice(0, HISTORY_TURN_CHARS)}`)
-    .join('\n')
-    .slice(0, HISTORY_TOTAL_CHARS);
-}
+const HISTORY_OPTS = { turns: 6, perMsgChars: 300, totalChars: 1500 };
 
 /** Build the tagged user turn (injection containment). History (if any) is a separate tagged
  *  block ahead of the current question — data, not instructions (see SYSTEM). */
-export function buildAssistantUser(prompt: string, history: ChatMsg[] = []): string {
-  const histBlock = history.length
-    ? `<awsops_chat_history>\n${renderHistory(history)}\n</awsops_chat_history>\n`
-    : '';
+export function buildAssistantUser(prompt: string, history: HistoryMsg[] = []): string {
+  const rendered = renderRecentHistory(history, HISTORY_OPTS);
+  const histBlock = rendered ? `<awsops_chat_history>\n${rendered}\n</awsops_chat_history>\n` : '';
   return `${histBlock}<user_query>\n${prompt}\n</user_query>`;
 }
 
 /** Answer a product-help question grounded in the AWSops KB. Never throws (returns a guide fallback). */
 export async function assistantAnswer(
   prompt: string,
-  opts: { send?: AssistantSend; history?: ChatMsg[] } = {},
+  opts: { send?: AssistantSend; history?: HistoryMsg[] } = {},
 ): Promise<string> {
   const send = opts.send ?? bedrockSend;
   try {

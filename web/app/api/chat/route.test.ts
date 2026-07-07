@@ -472,6 +472,38 @@ describe('request body bound (OOM guard)', () => {
   });
 });
 
+describe('malformed body.messages (bug fix, PR #138 review MINOR)', () => {
+  it('a non-array `messages` is dropped, not forwarded, and does not break the request', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'q', messages: 'not-an-array', sessionId: 's'.repeat(36) }));
+    expect(res.status).toBe(200);
+    await readStream(res);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ messages: [{ role: 'user', content: 'q' }] }));
+  });
+
+  it('an entry with non-string content is dropped, the rest of the array survives', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const res = await POST(req({
+      prompt: 'q',
+      messages: [{ role: 'user', content: 'fine' }, { role: 'user', content: 12345 }],
+      sessionId: 's'.repeat(36),
+    }));
+    expect(res.status).toBe(200);
+    await readStream(res);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [{ role: 'user', content: 'fine' }, { role: 'user', content: 'q' }],
+    }));
+  });
+});
+
 describe('datasource schema injection', () => {
   it('injects cached schemas as extraContext for the monitoring gateway', async () => {
     verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
