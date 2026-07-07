@@ -1,4 +1,5 @@
 import io
+import re
 
 from diagnosis import exporters
 
@@ -200,3 +201,12 @@ def test_docx_blockquote_muted_color():
     p = next(p for p in _doc(_SAMPLE).paragraphs if "생성 일시" in p.text)
     assert p.runs[0].italic is True
     assert p.runs[0].font.color.rgb == RGBColor.from_string("5F5A4D")
+
+
+def test_docx_ordered_list_uses_list_number_style():
+    md = "# t\n\n1. 첫째\n2. 둘째\n"
+    doc = _doc(md)
+    numbered = [p for p in doc.paragraphs if p.style.name == "List Number"]
+    assert len(numbered) == 2
+    for p in numbered:
+        assert not re.match(r"^\d+[.)]", p.text)  # raw "1." must not leak into the text

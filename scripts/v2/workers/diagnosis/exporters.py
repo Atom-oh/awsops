@@ -14,6 +14,7 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET = re.compile(r"^\s*[-*]\s+(.*)$")
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _ITALIC_LINE = re.compile(r"^_(.+)_$")
+_ORDERED = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 
 # Korean-native sans, ships with every Windows Word install. Deliberately NOT the same font as
 # the PDF path's Noto Sans CJK KR: a PDF renders server-side (where Noto CJK is installed in the
@@ -234,6 +235,15 @@ def to_docx(markdown: str) -> bytes:
         b = _BULLET.match(line)
         if b:
             _add_runs(doc.add_paragraph(style="List Bullet"), b.group(1))
+            i += 1
+            continue
+
+        o = _ORDERED.match(line)
+        if o:
+            # ponytail: built-in "List Number" numbering continues across separate lists
+            # document-wide; this corpus has exactly one numbered list (SPOF, sections.py:73) —
+            # add numbering-restart oxml only if a second numbered list ever actually appears.
+            _add_runs(doc.add_paragraph(style="List Number"), o.group(1))
             i += 1
             continue
 
