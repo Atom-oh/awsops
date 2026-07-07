@@ -180,3 +180,23 @@ def test_docx_inline_code_monospace_run():
     assert code_run.font.name == "Consolas"
     plain_run = next(r for r in item.runs if r.text == ": ok")
     assert plain_run.font.name != "Consolas"
+
+
+def test_docx_underscore_line_italic_no_literal_underscores():
+    from docx.shared import RGBColor
+
+    md = "# t\n\n_이 섹션 생성에 실패했습니다 (degraded): boom_\n"
+    doc = _doc(md)
+    full_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "_" not in full_text
+    p = next(p for p in doc.paragraphs if "degraded" in p.text)
+    assert p.runs and all(r.italic for r in p.runs)
+    assert p.runs[0].font.color.rgb == RGBColor.from_string("5F5A4D")
+
+
+def test_docx_blockquote_muted_color():
+    from docx.shared import RGBColor
+
+    p = next(p for p in _doc(_SAMPLE).paragraphs if "생성 일시" in p.text)
+    assert p.runs[0].italic is True
+    assert p.runs[0].font.color.rgb == RGBColor.from_string("5F5A4D")

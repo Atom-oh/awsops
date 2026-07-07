@@ -13,6 +13,7 @@ import re
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET = re.compile(r"^\s*[-*]\s+(.*)$")
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_ITALIC_LINE = re.compile(r"^_(.+)_$")
 
 # Korean-native sans, ships with every Windows Word install. Deliberately NOT the same font as
 # the PDF path's Noto Sans CJK KR: a PDF renders server-side (where Noto CJK is installed in the
@@ -237,9 +238,22 @@ def to_docx(markdown: str) -> bytes:
             continue
 
         if stripped.startswith(">"):  # blockquote (e.g. the generation-date line) → italic
+            from docx.shared import RGBColor
+
             p = doc.add_paragraph()
             run = p.add_run(_inline(stripped.lstrip("> ").rstrip()))
             run.italic = True
+            run.font.color.rgb = RGBColor.from_string(_INK_500)
+            i += 1
+            continue
+
+        u = _ITALIC_LINE.match(stripped)
+        if u:  # whole-line `_..._` (e.g. the degraded-section fallback body) → italic, muted
+            from docx.shared import RGBColor
+
+            run = doc.add_paragraph().add_run(_inline(u.group(1)))
+            run.italic = True
+            run.font.color.rgb = RGBColor.from_string(_INK_500)
             i += 1
             continue
 
