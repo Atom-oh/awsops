@@ -188,6 +188,25 @@ def to_docx(markdown: str) -> bytes:
             i += 1
             continue
 
+        # fenced code block — the LLM occasionally emits stray ``` fences (report.py's own
+        # _balance_code_fences admits as much); render verbatim as monospace, never through
+        # _inline/_add_runs (code content must not be mangled by the bold/code-span parser).
+        if stripped.startswith("```"):
+            i += 1  # consume the opening fence
+            code_lines = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            if i < len(lines):  # consume the closing fence if one was found (EOF otherwise)
+                i += 1
+            for code_line in code_lines:
+                p = doc.add_paragraph()
+                run = p.add_run(code_line)
+                run.font.name = _MONO
+                _set_east_asia(run, _MONO)
+                _shd(p._p.get_or_add_pPr(), _CODE_BG)
+            continue
+
         # table block (consecutive | … | rows)
         if _is_table_row(line):
             raw = []

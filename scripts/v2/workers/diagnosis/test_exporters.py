@@ -210,3 +210,30 @@ def test_docx_ordered_list_uses_list_number_style():
     assert len(numbered) == 2
     for p in numbered:
         assert not re.match(r"^\d+[.)]", p.text)  # raw "1." must not leak into the text
+
+
+def test_docx_fenced_code_block_rendered_not_literal():
+    from docx.oxml.ns import qn
+
+    md = "# t\n\n```\naws s3 ls\n```\n\n본문\n"
+    doc = _doc(md)
+    full_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "```" not in full_text
+    code_p = next(p for p in doc.paragraphs if p.text == "aws s3 ls")
+    assert code_p.runs[0].font.name == "Consolas"
+    shd = code_p._p.pPr.find(qn("w:shd"))
+    assert shd is not None
+    assert shd.get(qn("w:fill")) == "F7F6F2"
+    # the paragraph after the fence must still render normally (fence consumption doesn't
+    # swallow trailing content)
+    assert any(p.text == "본문" for p in doc.paragraphs)
+
+
+def test_docx_unclosed_fence_does_not_crash_or_leak_backticks():
+    md = "# t\n\n```\naws s3 ls\n"  # opens a fence, never closes it (truncation)
+    doc = _doc(md)  # must not raise
+    full_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "```" not in full_text
+    # must be real fence handling, not an accidental artifact of _add_runs' naive backtick check
+    code_p = next(p for p in doc.paragraphs if p.text == "aws s3 ls")
+    assert code_p.runs[0].font.name == "Consolas"
