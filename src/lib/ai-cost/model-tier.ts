@@ -2,14 +2,14 @@
 // Confidence-based model + synthesis policy (ADR-033 Phase 1).
 import type { HeuristicResult } from './heuristic-classifier';
 
-export type ClassifierModelKey = 'haiku-4.5' | 'sonnet-4.6';
+export type ClassifierModelKey = 'haiku-4.5' | 'sonnet-5';
 
 // When the heuristic is uncertain (low) we still avoid Sonnet: Haiku is ~cheap
 // and good enough to confirm/repair a single-domain guess. Only the hardest
 // case — no heuristic signal at all — escalates to Sonnet.
 export function pickClassifierModel(heuristic: HeuristicResult | null): ClassifierModelKey {
   if (heuristic && heuristic.confidence === 'low') return 'haiku-4.5';
-  return 'sonnet-4.6';
+  return 'sonnet-5';
 }
 
 // Multi-route synthesis (ADR-025) is the expensive extra Bedrock call. A single

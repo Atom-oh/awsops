@@ -24,13 +24,13 @@ interface Message {
 
 // Bedrock pricing (USD per 1M tokens) / Bedrock 가격 (USD / 100만 토큰)
 const TOKEN_PRICING: Record<string, { input: number; output: number }> = {
-  'sonnet-4.6': { input: 3, output: 15 },
+  'sonnet-5': { input: 3, output: 15 },
   'opus-4.8': { input: 15, output: 75 },
   'haiku-4.5': { input: 1, output: 5 },
 };
 
 function calcTokenCost(model: string, inputTokens: number, outputTokens: number): string {
-  const pricing = TOKEN_PRICING[model] || TOKEN_PRICING['sonnet-4.6'];
+  const pricing = TOKEN_PRICING[model] || TOKEN_PRICING['sonnet-5'];
   const cost = (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000;
   return cost < 0.001 ? `$${cost.toFixed(5)}` : `$${cost.toFixed(4)}`;
 }
@@ -42,7 +42,7 @@ export default function AIPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [model, setModel] = useState<'sonnet-4.6' | 'opus-4.8' | 'haiku-4.5'>('sonnet-4.6');
+  const [model, setModel] = useState<'sonnet-5' | 'opus-4.8' | 'haiku-4.5'>('sonnet-5');
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [historyData, setHistoryData] = useState<any[]>([]);
@@ -288,7 +288,7 @@ export default function AIPage() {
           )}
           <select value={model} onChange={(e) => setModel(e.target.value as any)}
             className="bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-xs text-gray-300 focus:ring-accent-cyan focus:border-accent-cyan">
-            <option value="sonnet-4.6">Claude Sonnet 4.6</option>
+            <option value="sonnet-5">Claude Sonnet 5</option>
             <option value="opus-4.8">Claude Opus 4.8</option>
             <option value="haiku-4.5">Claude Haiku 4.5</option>
           </select>
@@ -415,7 +415,7 @@ export default function AIPage() {
                   <span>{t('ai.in')} <span className="text-accent-cyan">{(msg.inputTokens || 0).toLocaleString()}</span></span>
                   <span>{t('ai.out')} <span className="text-accent-green">{(msg.outputTokens || 0).toLocaleString()}</span></span>
                   <span className="text-gray-600">|</span>
-                  <span>{t('ai.cost')} <span className="text-accent-orange">{calcTokenCost(msg.model || 'sonnet-4.6', msg.inputTokens || 0, msg.outputTokens || 0)}</span></span>
+                  <span>{t('ai.cost')} <span className="text-accent-orange">{calcTokenCost(msg.model || 'sonnet-5', msg.inputTokens || 0, msg.outputTokens || 0)}</span></span>
                 </div>
               )}
             </div>
