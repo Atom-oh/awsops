@@ -85,11 +85,16 @@ PROMPT_EOF
 # 있어 오발동하고, ConnectionRefused는 빠르게 실패해 지연 기반으론 못 잡음. 대신 벽시계
 # 타임아웃 + 결과 검증으로 판정한다.
 #
+# 의도적으로 job 전역 ANTHROPIC_MODEL 을 참조하지 않는다 — 그 값은 job 의 다른
+# step/용도에도 쓰일 수 있고, repo 마다 다르게 고정돼 있을 수 있어(예: 아직
+# opus-4-8 로 고정된 repo) 그대로 재사용하면 PRIMARY==FALLBACK 으로 붕괴해
+# fallback 자체가 무력화된다. chair 전용 CHAIR_PRIMARY_MODEL 로 완전히 분리.
+#
 # CHAIR_TIMEOUT 600s (oh-my-cloud-skills #105 실측 근거 재사용): 같은 러너 이미지/서비스
 # 어카운트를 쓰는 ttobak 에서, 타임아웃 없는 구(4-패널) 버전 스크립트가 357줄 diff 종합에
 # 286초를 정상적으로 썼다. 매트릭스(4→16 패널 출력)는 체어 입력이 더 커 286s 실측조차
 # 밑돎 — job timeout-minutes 여유를 반영해 600s로 상향.
-PRIMARY_MODEL="${ANTHROPIC_MODEL:-us.anthropic.claude-fable-5}"
+PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-us.anthropic.claude-fable-5}"
 FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-4-8}"
 CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-600}"
 
@@ -105,18 +110,36 @@ run_chair() {  # $1=model → "$OUT" 에 기록. claude 실패해도 || true 로
     < "$WORK/synth-stdin.txt" > "$OUT" 2>"$WORK/chair.err" || true
 }
 
-chair_degraded() { [ ! -s "$OUT" ] || ! grep -q '^VERDICT:' "$OUT"; }
+# 요구사항: 마지막 non-empty 줄이 정확히 VERDICT: PASS 또는 VERDICT: FAIL.
+# tail -n1 대신 awk 로 trailing 빈 줄을 건너뛴다 — trailing blank line 하나로
+# 유효한 응답이 invalid 처리되는 걸 방지. 정규식엔 whitespace 여유를 두지 않는다
+# — gate(pr-review.yml) 가 동일 라인을 공백 없는 정확매칭(^VERDICT: PASS$)으로
+# 다시 검사하므로, 여기서 여유를 주면 chair_valid 는 통과시키고 gate 는 그 원본
+# 파일을 그대로 걸러버리는 validator/gate 불일치가 생긴다.
+# NOTE: gate 는 파일 전체에서 FAIL 을 먼저 grep 하므로 완전히 동일한 기준은
+# 아니다 — chair 프롬프트가 "마지막 줄" 규칙을 강제하는 한 실무상 충분하지만,
+# 본문에 패널의 raw "VERDICT: FAIL" 인용이 그대로 남으면 gate 와 어긋날 수
+# 있다(이 변경 이전부터 존재하던 gate 자체의 특성, 범위 밖).
+chair_valid() {
+  [ -s "$OUT" ] || return 1
+  awk 'NF{last=$0} END{print last}' "$OUT" | grep -qE '^VERDICT: (PASS|FAIL)$'
+}
 
 run_chair "$PRIMARY_MODEL"
 CHAIR_USED="$PRIMARY_MODEL"
-if chair_degraded; then
-  echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty, ${CHAIR_TIMEOUT}s cap) — falling back to '$(chair_label "$FALLBACK_MODEL")'"
+# PRIMARY_MODEL/FALLBACK_MODEL 이 같은 모델로 resolve 되면(예: job env 의
+# ANTHROPIC_MODEL 이 이미 fallback 기본값과 동일) 재시도는 동일 호출을 그대로
+# 반복할 뿐이라 CHAIR_TIMEOUT 을 두 번 태우고도 아무 이득이 없다 — skip.
+if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
+  echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(head -c 500 "$WORK/chair.err" 2>/dev/null) — falling back to '$(chair_label "$FALLBACK_MODEL")'"
   run_chair "$FALLBACK_MODEL"
-  CHAIR_USED="$FALLBACK_MODEL"
+  if chair_valid; then
+    CHAIR_USED="$FALLBACK_MODEL"
+  fi
 fi
 
-if [ ! -s "$OUT" ]; then
-  echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 빈 응답." > "$OUT"
+if ! chair_valid; then
+  echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음." > "$OUT"
   echo "VERDICT: FAIL" >> "$OUT"
 fi
 
