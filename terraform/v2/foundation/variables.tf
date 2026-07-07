@@ -107,6 +107,12 @@ variable "workers_enabled" {
   default     = false
 }
 
+variable "graph_rebuild_interval_mins" {
+  type        = number
+  description = "Minutes between web-instrumentation topology graph-rebuilds (flow/infra/trace layers, ADR-043 + 2026-06-25 trace-topology design). 0 (default) = the interval never starts; the manual `scripts/v2/graph-rebuild.mjs` path is unaffected either way. No new AWS resource — runs in the existing web task using perms it already holds. Recommended: 15 (matches steampipe.tf's inventory-sync cadence)."
+  default     = 0
+}
+
 variable "ai_cost_tracking_enabled" {
   type        = bool
   description = "Scheduled awsops-only Bedrock-cost aggregator (Logs Insights /aws/bedrock/invocation-logs -> ai_usage_daily). Requires workers_enabled (reuses the worker role/pg8000 layer/VPC). false (default) = 0 resources, $0, no behavior change."
