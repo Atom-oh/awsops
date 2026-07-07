@@ -433,5 +433,51 @@ class HandlerRoutingTest(unittest.TestCase):
         self.assertEqual(out, [{"rca": "RESULT"}])
 
 
+class FakeStreamingAgent:
+    """Stands in for a Strands Agent: stream_async replays canned event dicts."""
+    def __init__(self, events):
+        self._events = events
+
+    async def stream_async(self, _user_input):
+        for e in self._events:
+            yield e
+
+
+class StreamTextTest(unittest.TestCase):
+    """_stream_text: provenance frames (model/tool) interleaved with text deltas."""
+
+    def _collect(self, events):
+        async def run():
+            return [c async for c in agent._stream_text(FakeStreamingAgent(events), 'q')]
+        return asyncio.run(run())
+
+    def test_model_frame_first_then_deltas(self):
+        out = self._collect([{"data": "hel"}, {"data": "lo"}])
+        self.assertEqual(out, [{"model": agent.MODEL_ID}, {"delta": "hel"}, {"delta": "lo"}])
+
+    def test_tool_use_emitted_once_per_tool_use_id(self):
+        # current_tool_use fires repeatedly while the tool input streams in — one {"tool"} per id.
+        out = self._collect([
+            {"current_tool_use": {"toolUseId": "t1", "name": "list_eks_clusters"}},
+            {"current_tool_use": {"toolUseId": "t1", "name": "list_eks_clusters"}},
+            {"data": "answer"},
+            {"current_tool_use": {"toolUseId": "t2", "name": "describe_cluster"}},
+        ])
+        self.assertEqual(out[1:], [
+            {"tool": "list_eks_clusters"},
+            {"delta": "answer"},
+            {"tool": "describe_cluster"},
+        ])
+
+    def test_nameless_or_idless_tool_events_skipped(self):
+        # The first partial event can arrive before the name; lifecycle events carry neither.
+        out = self._collect([
+            {"current_tool_use": {"toolUseId": "t1"}},
+            {"current_tool_use": {"name": "orphan"}},
+            {"event": "lifecycle"},
+        ])
+        self.assertEqual(out, [{"model": agent.MODEL_ID}])
+
+
 if __name__ == '__main__':
     unittest.main()
