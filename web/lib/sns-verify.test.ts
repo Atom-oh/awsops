@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import { generateKeyPairSync, sign, createPublicKey } from 'crypto';
+import { generateKeyPairSync, sign } from 'crypto';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
