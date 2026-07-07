@@ -6,6 +6,7 @@ export interface ModelPricing { input: number; output: number; cacheRead: number
 interface PriceEntry { input: number; output: number; cacheRead?: number; cacheWrite?: number; label: string }
 
 export const MODEL_PRICING: Record<string, PriceEntry> = {
+  'anthropic.claude-sonnet-5': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 5' },
   'anthropic.claude-sonnet-4-6': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 4.6' },
   'anthropic.claude-sonnet-4-6-v1': { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75, label: 'Claude Sonnet 4.6' },
   'anthropic.claude-opus-4-8': { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75, label: 'Claude Opus 4.8' },
