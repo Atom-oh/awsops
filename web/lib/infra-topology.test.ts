@@ -45,4 +45,19 @@ describe('buildInfraGraph', () => {
     expect(g.nodes.find((n) => n.id === 'route53:r1')).toBeUndefined();
     expect(g.edges).toHaveLength(0);
   });
+
+  it('stamps meta.host from data.endpoint_address (M2 trace-topology bridge)', () => {
+    const resources = [{
+      resource_type: 'rds', resource_id: 'db-1',
+      data: { vpc_id: 'vpc-1', endpoint_address: 'db-1.abc123.us-east-1.rds.amazonaws.com' },
+    }];
+    const g = buildInfraGraph({ resources, vpcs, subnets: [], securityGroups: [] });
+    expect(g.nodes.find((n) => n.id === 'rds:db-1')?.meta?.host).toBe('db-1.abc123.us-east-1.rds.amazonaws.com');
+  });
+
+  it('omits meta.host when the resource has no endpoint_address', () => {
+    const resources = [{ resource_type: 'alb', resource_id: 'my-lb', data: { vpc_id: 'vpc-1' } }];
+    const g = buildInfraGraph({ resources, vpcs, subnets: [], securityGroups: [] });
+    expect(g.nodes.find((n) => n.id === 'alb:my-lb')?.meta).not.toHaveProperty('host');
+  });
 });

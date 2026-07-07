@@ -141,11 +141,21 @@ describe('resolveInfraRef (bridge-ref matcher, pure)', () => {
     expect(resolveInfraRef('aurora', [])).toBeUndefined();
   });
 
-  it('does NOT match production infra nodes — they carry meta {invType, resourceId}, no host (M2: bridge dormant)', () => {
-    // infra-topology emits nodes with meta { invType, resourceId } and NO host, so the cross-class
-    // bridge cannot fire in production until infra nodes are given a host. This pins the known
-    // dormant state honestly (rather than implying the bridge works via a fabricated {meta:{host}}).
-    const prodInfra = [{ id: 'rds:db-1', kind: 'rds', meta: { invType: 'rds', resourceId: 'db-1' } }];
+  it('does NOT match a production-shaped infra node with no host (nothing to match against)', () => {
+    // A node lacking meta.host (e.g. a resource type infra-topology never stamps a host for) still
+    // can't bridge — this is the general "unmatched" case, not a dormant-feature gap: infra-topology
+    // now stamps meta.host for any resource carrying data.endpoint_address (M2, see below).
+    const prodInfra = [{ id: 'ec2:i-1', kind: 'ec2', meta: { invType: 'ec2', resourceId: 'i-1' } }];
     expect(resolveInfraRef('awsops-v2-aurora.cluster-xyz.rds.amazonaws.com', prodInfra)).toBeUndefined();
+  });
+
+  it('matches a production-shaped RDS infra node once infra-topology stamps meta.host (M2 bridge active)', () => {
+    // infra-topology.ts now spreads { host } from data.endpoint_address alongside { invType, resourceId }
+    // — the instance-endpoint case matches exactly; this is the case the bridge is designed for.
+    const prodInfra = [{
+      id: 'rds:db-1', kind: 'rds',
+      meta: { invType: 'rds', resourceId: 'db-1', host: 'db-1.abc123.us-east-1.rds.amazonaws.com' },
+    }];
+    expect(resolveInfraRef('db-1.abc123.us-east-1.rds.amazonaws.com', prodInfra)).toBe('rds:db-1');
   });
 });

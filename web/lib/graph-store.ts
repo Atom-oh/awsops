@@ -224,10 +224,11 @@ export async function rebuildTraceGraph(
       const idKey = s.dbHost && s.dbName ? `${s.dbHost}/${s.dbName}` : hostOrName;
       const id = dbId(s.dbSystem, idKey);
       if (!nodes.has(id)) {
-        // infra_ref bridge is best-effort and currently DORMANT in production: infra-topology nodes
-        // carry meta { invType, resourceId } and NO meta.host, so resolveInfraRef can never match
-        // until infra-topology populates host on RDS/Aurora nodes.
-        // TODO(trace-topology, M2): emit meta.host on infra RDS/Aurora nodes to activate this bridge.
+        // infra_ref bridge (M2, active): infra-topology.ts stamps meta.host from data.endpoint_address
+        // on RDS nodes. Known ceiling: sync covers rds *instances* only, whose endpoint_address is the
+        // instance endpoint (e.g. "db-1.xyz…"), not the Aurora cluster/writer endpoint apps typically
+        // connect through — a trace db.host on the cluster endpoint won't share a leading DNS label
+        // with the instance endpoint, so it won't match. Upgrade path: sync an rds_cluster type.
         const infra_ref = resolveInfraRef(s.dbHost, infraNodes);
         const meta: Record<string, unknown> = { system: s.dbSystem, host: s.dbHost ?? null };
         if (s.dbName) meta.dbName = s.dbName;
