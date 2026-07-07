@@ -57,7 +57,41 @@ def _styled_document():
     normal.font.color.rgb = RGBColor.from_string(_INK_800)
     _set_east_asia(normal, _FONT)
 
+    # Override Word's default heading-blue: titles stay near-black for readability (color is an
+    # ACCENT, never the title text itself); Heading 3 — the level the LLM actually authors via its
+    # own `###` — gets the deep-brand tint so AI-authored subsections read as visually distinct
+    # from our own H1/H2 report scaffold.
+    for name, size, color in (
+        ("Heading 1", Pt(20), _INK_900),
+        ("Heading 2", Pt(15), _INK_900),
+        ("Heading 3", Pt(12.5), _BRAND_DEEP),
+    ):
+        style = doc.styles[name]
+        style.font.name = _FONT
+        style.font.size = size
+        style.font.color.rgb = RGBColor.from_string(color)
+        _set_east_asia(style, _FONT)
+
+    _add_bottom_rule(doc.styles["Heading 1"], _BRAND)
+
     return doc
+
+
+def _add_bottom_rule(style, color):
+    """A colored bottom border under a heading style — no high-level python-docx API for
+    paragraph borders (w:pBdr)."""
+    from docx.oxml.ns import qn
+    from docx.oxml.shared import OxmlElement
+
+    ppr = style.element.get_or_add_pPr()
+    pbdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "12")
+    bottom.set(qn("w:space"), "4")
+    bottom.set(qn("w:color"), color)
+    pbdr.append(bottom)
+    ppr.append(pbdr)
 
 
 def _inline(text: str) -> str:

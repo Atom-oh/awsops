@@ -67,3 +67,33 @@ def test_docx_normal_style_korean_font_and_east_asia():
     rfonts = st.element.rPr.find(qn("w:rFonts"))
     assert rfonts is not None
     assert rfonts.get(qn("w:eastAsia")) == "Malgun Gothic"
+
+
+def test_docx_heading_styles_not_word_default():
+    from docx.oxml.ns import qn
+    from docx.shared import Pt, RGBColor
+
+    styles = _doc(_SAMPLE).styles
+    expect = [
+        ("Heading 1", Pt(20), "14130F"),
+        ("Heading 2", Pt(15), "14130F"),
+        ("Heading 3", Pt(12.5), "8E4830"),  # brand-deep — distinguishes LLM ### subheads
+    ]
+    for name, size, color in expect:
+        st = styles[name]
+        assert st.font.size == size, name
+        assert st.font.color.rgb == RGBColor.from_string(color), name
+        rfonts = st.element.rPr.find(qn("w:rFonts"))
+        assert rfonts is not None and rfonts.get(qn("w:eastAsia")) == "Malgun Gothic", name
+
+
+def test_docx_h1_has_brand_bottom_rule():
+    from docx.oxml.ns import qn
+
+    st = _doc(_SAMPLE).styles["Heading 1"]
+    pbdr = st.element.pPr.find(qn("w:pBdr"))
+    assert pbdr is not None
+    bottom = pbdr.find(qn("w:bottom"))
+    assert bottom is not None
+    assert bottom.get(qn("w:val")) == "single"
+    assert bottom.get(qn("w:color")) == "D97757"
