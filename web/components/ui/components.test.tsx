@@ -126,6 +126,17 @@ describe('StatTile (legacy StatCard props)', () => {
     const { container } = render(<StatTile label="EC2" value={25} variant="accent" />);
     expect(container.querySelector('svg')).toBeTruthy();
   });
+
+  it('compact size shrinks the value text and hides hint/trend/watermark (design handoff 개선안 ①)', () => {
+    const { container } = render(
+      <StatTile label="VPC" value={4} size="compact" hint="ignored" trend="↑1%" variant="accent" />,
+    );
+    expect(container.innerHTML).toContain('text-[19px]');
+    expect(container.innerHTML).not.toContain('text-[26px]');
+    expect(screen.queryByText('ignored')).toBeNull();
+    expect(screen.queryByText('↑1%')).toBeNull();
+    expect(container.querySelector('svg')).toBeNull();
+  });
 });
 
 describe('Card / SectionLabel / PageHeader', () => {
@@ -142,6 +153,16 @@ describe('Card / SectionLabel / PageHeader', () => {
     const { container } = render(<SectionLabel>운영 요약</SectionLabel>);
     expect(container.firstElementChild!.className).toContain('uppercase');
     expect(screen.getByText('운영 요약')).toBeTruthy();
+  });
+
+  it('SectionLabel renders a leading color dot and a trailing right slot', () => {
+    const { container } = render(
+      <SectionLabel dot="var(--negative)" right={<span>모두 정상</span>}>
+        요주의
+      </SectionLabel>,
+    );
+    expect(container.querySelector('span[style*="background"]')).toBeTruthy();
+    expect(screen.getByText('모두 정상')).toBeTruthy();
   });
 
   it('PageHeader renders the title and a live badge when live', () => {

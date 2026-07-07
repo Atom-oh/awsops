@@ -27,8 +27,11 @@
   --warning:#F59E0B; --warning-surface:#FEF3E2; --warning-text:#B26B05; --warning-border:#FAD9A0;
 
   /* ===== chart palette (read at runtime by useChartColors → recharts SVG).
-     Must be concrete hex: getComputedStyle does NOT resolve var() in custom props. ===== */
-  --chart-1:#01A88D; --chart-2:#528DF8; --chart-3:#7B26FF; --chart-4:#39C2B0; --chart-5:#7D8A96;
+     Must be concrete hex: getComputedStyle does NOT resolve var() in custom props.
+     8 unique hues (design handoff 개선안 ②-B: 5-color cycling repeated on 8+ slices) —
+     4/5 reuse the warning/negative semantic hues so "기타" rollup + Top-N stays legible. ===== */
+  --chart-1:#01A88D; --chart-2:#528DF8; --chart-3:#7B26FF; --chart-4:#F59E0B; --chart-5:#D13212;
+  --chart-6:#C925D1; --chart-7:#39C2B0; --chart-8:#5A6873; --chart-etc:#AFBAC3;
   --chart-grid:#E7ECEF; --chart-axis:#7D8A96;
   --chart-tooltip-bg:#16202A; --chart-tooltip-fg:#F4F6F8;
 
@@ -54,7 +57,8 @@
   --brand-400:#5E96F8; --brand-500:#528DF8; --brand-600:#2E6BE6; --brand-700:#1F54C2;
   --brand-800:#1B4196; --brand-900:#15306B;
   --brand-action:#2E6BE6; --brand-action-hover:#1F54C2;
-  --chart-1:#528DF8; --chart-2:#01A88D; --chart-3:#7B26FF; --chart-4:#39C2B0;
+  --chart-1:#528DF8; --chart-2:#01A88D; --chart-3:#7B26FF; --chart-4:#F59E0B; --chart-5:#D13212;
+  --chart-6:#C925D1; --chart-7:#39C2B0; --chart-8:#5A6873; --chart-etc:#AFBAC3;
   --shadow-focus:0 0 0 3px rgba(82,141,248,.26);
 }
 
@@ -92,7 +96,8 @@
   --warning:#F5B53C; --warning-surface:#3A2A0E; --warning-text:#F8CE7E; --warning-border:#6E4E12;
 
   /* charts — cobalt lead, brighter series + tooltip flips to elevated dark */
-  --chart-1:#528DF8; --chart-2:#2CC9AE; --chart-3:#9D5BFF; --chart-4:#39C2B0; --chart-5:#9FAEBA;
+  --chart-1:#528DF8; --chart-2:#2CC9AE; --chart-3:#9D5BFF; --chart-4:#F5B53C; --chart-5:#F26B4D;
+  --chart-6:#D964E0; --chart-7:#39C2B0; --chart-8:#9FAEBA; --chart-etc:#586773;
   --chart-grid:#29333B; --chart-axis:#8696A3;
   --chart-tooltip-bg:#2B3640; --chart-tooltip-fg:#E3E9EE;
 

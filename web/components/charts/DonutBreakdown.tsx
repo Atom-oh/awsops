@@ -14,13 +14,17 @@ export interface DonutBreakdownProps {
   valueKey: string;
   /** Prefix legend/center values (e.g. "$"). */
   valuePrefix?: string;
+  /** Top-N slices kept individually; the remainder rolls up into one "기타" slice
+   *  (design handoff 개선안 ②-B: an 8+ slice breakdown otherwise repeats palette colors
+   *  and leaves 2–3% slivers unreadable). Default 8 — matches the 8-color palette. */
+  maxSlices?: number;
   className?: string;
 }
 
 /**
- * DonutBreakdown — PieChart innerRadius 55 / outerRadius 80, palette cycling
- * brand-500 / ink-400 / ink-800 / brand-700 / brand-200, a center total
- * label, and a side legend list. DESIGN.md §Charts.
+ * DonutBreakdown — PieChart innerRadius 55 / outerRadius 80, an 8-color unique
+ * palette (a Top-N rollup keeps 9+ slices legible), a center total label, and
+ * a side legend list with a percentage of total. DESIGN.md §Charts.
  */
 export default function DonutBreakdown({
   title,
@@ -29,6 +33,7 @@ export default function DonutBreakdown({
   nameKey,
   valueKey,
   valuePrefix = '',
+  maxSlices = 8,
   className,
 }: DonutBreakdownProps) {
   const c = useChartColors();
@@ -37,6 +42,19 @@ export default function DonutBreakdown({
     valuePrefix === '$'
       ? `$${Math.round(total).toLocaleString()}`
       : total.toLocaleString();
+
+  // Sort descending so the rollup drops the smallest tail, then fold anything past
+  // maxSlices-1 into one "기타" slice (keeps one slot for it within maxSlices total).
+  const sorted = [...data].sort((a, b) => (Number(b[valueKey]) || 0) - (Number(a[valueKey]) || 0));
+  const keep = maxSlices > 0 ? maxSlices - 1 : sorted.length;
+  const shown = sorted.length > maxSlices ? sorted.slice(0, keep) : sorted;
+  const etcValue = sorted.length > maxSlices
+    ? sorted.slice(keep).reduce((s, d) => s + (Number(d[valueKey]) || 0), 0)
+    : 0;
+  const rows: Array<Record<string, unknown>> =
+    etcValue > 0 ? [...shown, { [nameKey]: '기타', [valueKey]: etcValue }] : shown;
+  const colorFor = (i: number) => (etcValue > 0 && i === rows.length - 1 ? c.etc : c.palette[i % c.palette.length]);
+  const pct = (v: unknown) => (total > 0 ? `${((Number(v) / total) * 100).toFixed(1)}%` : '0%');
 
   return (
     <Card title={title} right={right} className={className}>
@@ -47,7 +65,7 @@ export default function DonutBreakdown({
         <div className="relative shrink-0" style={{ width: 170, height: 170 }}>
           <PieChart width={170} height={170}>
             <Pie
-              data={data}
+              data={rows}
               dataKey={valueKey}
               nameKey={nameKey}
               innerRadius={55}
@@ -55,8 +73,8 @@ export default function DonutBreakdown({
               paddingAngle={2}
               stroke="none"
             >
-              {data.map((_, i) => (
-                <Cell key={i} fill={c.palette[i % c.palette.length]} />
+              {rows.map((_, i) => (
+                <Cell key={i} fill={colorFor(i)} />
               ))}
             </Pie>
             <Tooltip
@@ -79,13 +97,14 @@ export default function DonutBreakdown({
           </div>
         </div>
         <ul className="min-w-0 flex-1 space-y-1.5">
-          {data.map((d, i) => (
+          {rows.map((d, i) => (
             <li key={i} className="flex items-center gap-2 text-[12px]">
               <span
                 className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ background: c.palette[i % c.palette.length] }}
+                style={{ background: colorFor(i) }}
               />
               <span className="min-w-0 flex-1 truncate text-ink-600">{String(d[nameKey])}</span>
+              <span className="shrink-0 text-ink-400">{pct(d[valueKey])}</span>
               <span className="tabular shrink-0 font-medium text-ink-800">
                 {valuePrefix === '$'
                   ? `$${Math.round(Number(d[valueKey])).toLocaleString()}`
