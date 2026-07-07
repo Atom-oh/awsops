@@ -33,7 +33,6 @@ interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost { trend: TrendPoint[] }
 interface ResourceTrendPoint { date: string; total: number; ec2: number; [k: string]: unknown }
 interface ResourceTrend { trend: ResourceTrendPoint[] }
-interface JobSlice { name: string; value: number; [k: string]: unknown }
 interface FleetCluster {
   name: string;
   reachable: boolean;
@@ -106,14 +105,6 @@ export default function Home() {
   };
 
   const jobs = ov?.jobs;
-  const jobsDonut: JobSlice[] | undefined =
-    jobs &&
-    [
-      { name: '성공', value: jobs.succeeded },
-      { name: '실패', value: jobs.failed },
-      { name: '실행', value: jobs.running },
-      { name: '대기', value: jobs.queued },
-    ].filter((d) => d.value > 0);
 
   const barData = sum ? sum.byType.filter((t) => t.count > 0).slice(0, 12) : [];
   const trend = cost?.trend ?? [];
@@ -192,7 +183,7 @@ export default function Home() {
         {/* ---- AI OPERATIONS (v1-parity: chat + analysis entry points) ---- */}
         <AiOps />
 
-        {/* ---- Tier 1: NEEDS ATTENTION — security hero + CIS/jobs (design handoff 개선안 ①) ---- */}
+        {/* ---- Tier 1: NEEDS ATTENTION — security hero + CIS (design handoff 개선안 ①) ---- */}
         <section className="flex flex-col gap-3">
           <SectionLabel dot="var(--negative)">요주의 · 즉시 확인</SectionLabel>
           <div className="grid grid-cols-1 lg:grid-cols-[1.55fr_1fr] gap-4">
@@ -244,13 +235,6 @@ export default function Home() {
             </Link>
             <div className="flex flex-col gap-4">
               <StatTile label="CIS 컴플라이언스" value={DASH} href="/compliance" variant="warn" hint="벤치마크 실행 →" />
-              <StatTile
-                label="작업 (성공/실패)"
-                value={jobs ? `${jobs.succeeded} / ${jobs.failed}` : DASH}
-                href="/jobs"
-                variant={jobs && jobs.failed > 0 ? 'danger' : 'default'}
-                hint={jobs ? `${jobs.queued + jobs.running} 대기·실행 중` : undefined}
-              />
             </div>
           </div>
         </section>
@@ -369,8 +353,8 @@ export default function Home() {
           <>
             <BarDistribution title="리소스 분포" data={barData} xKey="label" yKey="count" />
 
-            {/* ---- Charts row 2: resource-distribution donuts (EC2 type · K8s pods · jobs) ---- */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* ---- Charts row 2: resource-distribution donuts (EC2 type · K8s pods) ---- */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {ec2Types.length > 0 ? (
                 <DonutBreakdown title="EC2 인스턴스 유형" data={ec2Types} nameKey="name" valueKey="count" />
               ) : (
@@ -383,13 +367,6 @@ export default function Home() {
               ) : (
                 <Card title="K8s 파드 상태">
                   <div className="text-[13px] text-ink-400">{hasFleet ? '파드 없음' : 'EKS 데이터 없음'}</div>
-                </Card>
-              )}
-              {jobsDonut && jobsDonut.length > 0 ? (
-                <DonutBreakdown title="작업 상태" data={jobsDonut} nameKey="name" valueKey="value" />
-              ) : (
-                <Card title="작업 상태">
-                  <div className="text-[13px] text-ink-400">작업 데이터 없음</div>
                 </Card>
               )}
             </div>
