@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import StatTile from '@/components/ui/StatTile';
+import StatTile, { passVariant } from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
 import SectionLabel from '@/components/ui/SectionLabel';
@@ -16,6 +16,7 @@ interface Overview {
   jobs: { queued: number; running: number; succeeded: number; failed: number };
   clusterCount: number | null;
   mtdCost: number | null;
+  compliance: { pass_rate: number | null; alarm: number | null; finished_at: string | null } | null;
 }
 interface ByType { type: string; label: string; count: number; [k: string]: unknown }
 interface ByCategory { group: string; count: number; [k: string]: unknown }
@@ -138,6 +139,9 @@ export default function Home() {
   const sp = sum?.splits;
   const secIssues = sp ? sp.sgOpenIngress + sp.ebsUnencrypted + sp.iamUserNoMfa + sp.s3Public : null;
 
+  // Latest succeeded CIS run's pass rate, for the dashboard compliance tile.
+  const compliancePassRate = ov?.compliance?.pass_rate != null ? Number(ov.compliance.pass_rate) : null;
+
   // Cost daily average (MTD ÷ elapsed days) for the cost tile subline.
   const dailyAvg =
     ov && ov.mtdCost != null ? ov.mtdCost / Math.max(1, new Date().getDate()) : null;
@@ -234,7 +238,19 @@ export default function Home() {
               )}
             </Link>
             <div className="flex flex-col gap-4">
-              <StatTile label="CIS 컴플라이언스" value={DASH} href="/compliance" variant="warn" hint="벤치마크 실행 →" />
+              <StatTile
+                label="CIS 컴플라이언스"
+                value={compliancePassRate != null ? `${compliancePassRate.toFixed(0)}%` : DASH}
+                href="/compliance"
+                variant={compliancePassRate != null ? passVariant(compliancePassRate) : 'warn'}
+                hint={
+                  compliancePassRate != null
+                    ? `Alarm ${ov?.compliance?.alarm ?? 0}건 · 완료 ${
+                        ov?.compliance?.finished_at ? new Date(ov.compliance.finished_at).toLocaleString('ko-KR') : DASH
+                      }`
+                    : '벤치마크 실행 →'
+                }
+              />
             </div>
           </div>
         </section>

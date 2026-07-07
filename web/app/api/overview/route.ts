@@ -21,5 +21,15 @@ export async function GET(request: Request) {
   try { clusterCount = (await listClusters()).length; } catch { clusterCount = null; }
   let mtdCost: number | null = null;
   try { mtdCost = (await getMtdCost()).total; } catch { mtdCost = null; }
-  return Response.json({ jobs, clusterCount, mtdCost });
+  // latest completed CIS run, for the dashboard compliance tile — degrades to null,
+  // same pattern as clusterCount/mtdCost above.
+  let compliance: { pass_rate: number | null; alarm: number | null; finished_at: string | null } | null = null;
+  try {
+    const c = await getPool().query(
+      `SELECT pass_rate, alarm, finished_at FROM compliance_runs
+       WHERE status = 'succeeded' ORDER BY started_at DESC LIMIT 1`,
+    );
+    compliance = c.rows[0] ?? null;
+  } catch { compliance = null; }
+  return Response.json({ jobs, clusterCount, mtdCost, compliance });
 }

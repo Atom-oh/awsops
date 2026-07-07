@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
-import StatTile, { type StatTileVariant } from '@/components/ui/StatTile';
+import StatTile, { passVariant } from '@/components/ui/StatTile';
 import Meter from '@/components/ui/Meter';
 import DataTable from '@/components/ui/DataTable';
 import DetailPanel from '@/components/ui/DetailPanel';
@@ -28,12 +28,6 @@ const RESULT_COLS = [
   { key: 'resource', label: 'Resource' },
   { key: 'region', label: 'Region' },
 ];
-
-function passVariant(rate: number): StatTileVariant {
-  if (rate >= 80) return 'accent';
-  if (rate >= 50) return 'warn';
-  return 'danger';
-}
 
 export default function CompliancePage() {
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
