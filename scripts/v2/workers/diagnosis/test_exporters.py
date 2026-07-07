@@ -159,3 +159,24 @@ def test_docx_table_calm_border_color():
     top = t._tbl.tblPr.find(qn("w:tblBorders")).find(qn("w:top"))
     assert top.get(qn("w:color")) == "D7D3C7"
     assert top.get(qn("w:sz")) == "4"
+
+
+def test_docx_toc_label_real_bold_no_literal_asterisks():
+    md = "# t\n\n**목차**\n\n- [항목](#a)\n"
+    doc = _doc(md)
+    full_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "**" not in full_text
+    toc_label = next(p for p in doc.paragraphs if p.text == "목차")
+    assert toc_label.runs and all(r.bold for r in toc_label.runs)
+
+
+def test_docx_inline_code_monospace_run():
+    md = "# t\n\n- `inventory`: ok\n"
+    doc = _doc(md)
+    full_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "`" not in full_text
+    item = next(p for p in doc.paragraphs if p.text == "inventory: ok")
+    code_run = next(r for r in item.runs if r.text == "inventory")
+    assert code_run.font.name == "Consolas"
+    plain_run = next(r for r in item.runs if r.text == ": ok")
+    assert plain_run.font.name != "Consolas"

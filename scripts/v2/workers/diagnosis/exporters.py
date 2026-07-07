@@ -101,6 +101,34 @@ def _inline(text: str) -> str:
     return text.strip()
 
 
+_INLINE_SPLIT = re.compile(r"(\*\*[^*]+\*\*|`[^`]+`)")
+
+
+def _add_runs(paragraph, text: str):
+    """Split `**bold**`/`` `code` `` into real runs instead of stripping the markers to plain
+    text — the only two sites this corpus actually uses (the deterministic '**목차**' TOC label
+    and the coverage note's `` `key` `` spans). Links are stripped first (TOC-only; a downloaded
+    ops report gains nothing from clickable anchors)."""
+    text = _LINK.sub(r"\1", text).strip()
+    for segment in _INLINE_SPLIT.split(text):
+        if not segment:
+            continue
+        if segment.startswith("**") and segment.endswith("**"):
+            run = paragraph.add_run(segment[2:-2])
+            run.bold = True
+        elif segment.startswith("`") and segment.endswith("`"):
+            from docx.shared import Pt, RGBColor
+
+            run = paragraph.add_run(segment[1:-1])
+            run.font.name = _MONO
+            run.font.size = Pt(9.5)
+            run.font.color.rgb = RGBColor.from_string(_BRAND_DEEP)
+            _set_east_asia(run, _MONO)
+        else:
+            paragraph.add_run(segment)
+    return paragraph
+
+
 def _is_table_row(line: str) -> bool:
     s = line.strip()
     return s.startswith("|") and s.endswith("|")
@@ -204,7 +232,7 @@ def to_docx(markdown: str) -> bytes:
 
         b = _BULLET.match(line)
         if b:
-            doc.add_paragraph(_inline(b.group(1)), style="List Bullet")
+            _add_runs(doc.add_paragraph(style="List Bullet"), b.group(1))
             i += 1
             continue
 
@@ -215,7 +243,7 @@ def to_docx(markdown: str) -> bytes:
             i += 1
             continue
 
-        doc.add_paragraph(_inline(stripped))
+        _add_runs(doc.add_paragraph(), stripped)
         i += 1
 
     buf = io.BytesIO()
