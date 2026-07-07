@@ -31,14 +31,17 @@ def _bedrock_invoke(prompt):
         region_name=os.environ.get("AWS_REGION", "ap-northeast-2"),
     )
     response = client.invoke_model(
-        modelId="global.anthropic.claude-sonnet-4-6",
+        # sonnet-5 rejects `temperature` on Converse/ConverseStream with a ValidationException
+        # ("temperature is deprecated for this model" — see agent.py MODEL_ID + hotfix
+        # c30ac9e7) — omit it here too rather than carry the same latent bug into this
+        # currently-gated (RCA_ORCHESTRATOR_ENABLED) path.
+        modelId="global.anthropic.claude-sonnet-5",
         contentType="application/json",
         accept="application/json",
         body=json.dumps(
             {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 512,
-                "temperature": 0,
                 "messages": [
                     {"role": "user", "content": [{"type": "text", "text": prompt}]}
                 ],
