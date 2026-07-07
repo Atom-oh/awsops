@@ -27,9 +27,9 @@ export interface AreaTrendProps {
 }
 
 /**
- * AreaTrend — teal gradient area over a dotted ink-100 grid.
- * Lead series teal (#01A88D), fill = vertical gradient 0.30 → 0.02,
- * axes/labels ink-400, dark inverse tooltip. AgentCore chart palette.
+ * AreaTrend — gradient area over a dotted grid, lead series = theme
+ * --chart-1 (teal by default, cobalt/dark re-tune it — see use-chart-colors),
+ * fill = vertical gradient 0.30 → 0.02, axes/labels ink-400, dark inverse tooltip.
  */
 export default function AreaTrend({
   title,

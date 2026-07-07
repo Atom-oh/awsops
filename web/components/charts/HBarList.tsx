@@ -11,11 +11,14 @@ export interface HBarListProps {
   valueKey: string;
   /** Prefix the right-aligned amount (e.g. "$"). */
   valuePrefix?: string;
+  /** Give the row(s) at the max value a stronger fill (brand-700) — mirrors the
+   *  BarDistribution "max bar" highlight rule (design handoff 개선안 ②-A). */
+  highlightMax?: boolean;
   className?: string;
 }
 
 /**
- * HBarList — NOT recharts. A simple flex list: label / an ink-100 track with a
+ * HBarList — NOT recharts. A simple flex list: label / a sunken track with a
  * proportional brand-500 fill / a right-aligned tabular amount. Matches
  * DESIGN.md §6 "서비스별 비용".
  */
@@ -26,6 +29,7 @@ export default function HBarList({
   labelKey,
   valueKey,
   valuePrefix = '',
+  highlightMax = false,
   className,
 }: HBarListProps) {
   const max = data.reduce((m, d) => {
@@ -49,14 +53,15 @@ export default function HBarList({
         {data.map((d, i) => {
           const n = Number(d[valueKey]) || 0;
           const pct = max > 0 ? Math.max(2, (n / max) * 100) : 0;
+          const isMax = highlightMax && max > 0 && n === max;
           return (
             <li key={i} className="flex items-center gap-3">
               <span className="w-32 shrink-0 truncate text-[12px] text-ink-600" title={String(d[labelKey])}>
                 {String(d[labelKey])}
               </span>
-              <span className="h-2 flex-1 overflow-hidden rounded-full bg-ink-100">
+              <span className="h-2 flex-1 overflow-hidden rounded-full bg-paper-muted">
                 <span
-                  className="block h-full rounded-full bg-brand-500"
+                  className={isMax ? 'block h-full rounded-full bg-brand-700' : 'block h-full rounded-full bg-brand-500'}
                   style={{ width: `${pct}%` }}
                 />
               </span>

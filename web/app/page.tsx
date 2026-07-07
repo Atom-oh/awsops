@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -143,6 +144,12 @@ export default function Home() {
   const dailyAvg =
     ov && ov.mtdCost != null ? ov.mtdCost / Math.max(1, new Date().getDate()) : null;
 
+  // Straight-line month-end projection (design handoff 개선안 ①: "예상 청구액"). Client-side
+  // only — no new API — daily average × days in the current month.
+  const today = new Date();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const projectedCost = dailyAvg != null ? dailyAvg * daysInMonth : null;
+
   const loading = !ov && !ovErr && !sum && !sumErr;
 
   return (
@@ -166,96 +173,127 @@ export default function Home() {
         {/* ---- AI OPERATIONS (v1-parity: chat + analysis entry points) ---- */}
         <AiOps />
 
-        {/* ---- KPI group 1: COMPUTE & CONTAINERS ---- */}
+        {/* ---- Tier 1: NEEDS ATTENTION — security hero + CIS/jobs (design handoff 개선안 ①) ---- */}
         <section className="flex flex-col gap-3">
-          <SectionLabel>COMPUTE &amp; CONTAINERS</SectionLabel>
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <StatTile
-              label="EC2 인스턴스"
-              value={n('ec2')}
-              variant="accent"
-              href="/inventory/ec2"
-              hint={sum?.splits ? `${sum.splits.ec2Running} running · ${sum.splits.ec2Stopped} stopped` : undefined}
-            />
-            <StatTile label="Lambda 함수" value={n('lambda')} href="/inventory/lambda" />
-            <StatTile label="ECS 클러스터" value={n('ecs_cluster')} href="/inventory/ecs_cluster" />
-            <StatTile label="AgentCore" value={`${SECTION_GATEWAYS} GW`} href="/assistant" hint="섹션 게이트웨이 · 어시스턴트" />
-            <StatTile label="ECR 리포지토리" value={n('ecr')} href="/inventory/ecr" />
-            <StatTile
-              label="EKS 클러스터"
-              value={ov ? ov.clusterCount ?? DASH : DASH}
-              href="/eks"
-              hint={hasFleet ? `노드 ${eks.nodes} · 파드 ${eks.pods} · 배포 ${eks.deployments}` : undefined}
-            />
-            <StatTile label="CloudFront" value={n('cloudfront')} href="/inventory/cloudfront" />
-          </div>
-        </section>
-
-        {/* ---- KPI group 2: STORAGE & NETWORK ---- */}
-        <section className="flex flex-col gap-3">
-          <SectionLabel>STORAGE &amp; NETWORK</SectionLabel>
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <StatTile label="VPC" value={n('vpc')} href="/inventory/vpc" />
-            <StatTile label="WAF" value={n('waf')} href="/inventory/waf" />
-            <StatTile
-              label="EBS 볼륨"
-              value={n('ebs_volume')}
-              href="/inventory/ebs_volume"
-              hint={sum?.splits ? (sum.splits.ebsUnencrypted > 0 ? `미암호화 ${sum.splits.ebsUnencrypted}` : '전체 암호화') : undefined}
-              variant={sum?.splits && sum.splits.ebsUnencrypted > 0 ? 'warn' : 'default'}
-            />
-            <StatTile label="S3 버킷" value={n('s3')} href="/inventory/s3" />
-            <StatTile label="RDS 인스턴스" value={n('rds')} href="/inventory/rds" />
-            <StatTile label="DynamoDB 테이블" value={n('dynamodb')} href="/inventory/dynamodb" />
-            <StatTile label="ElastiCache" value={n('elasticache')} href="/inventory/elasticache" />
-            <StatTile label="OpenSearch" value={n('opensearch')} href="/inventory/opensearch" />
-            <StatTile label="MSK" value={n('msk')} href="/inventory/msk" />
-          </div>
-        </section>
-
-        {/* ---- KPI group 3: SECURITY · OPS · COST ---- */}
-        <section className="flex flex-col gap-3">
-          <SectionLabel>SECURITY · OPS · COST</SectionLabel>
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <StatTile
-              label="보안 이슈"
-              value={secIssues == null ? DASH : secIssues}
+          <SectionLabel dot="var(--negative)">요주의 · 즉시 확인</SectionLabel>
+          <div className="grid grid-cols-1 lg:grid-cols-[1.55fr_1fr] gap-4">
+            <Link
               href="/security"
-              variant={secIssues && secIssues > 0 ? 'danger' : 'default'}
-              hint={secIssues != null ? (secIssues > 0 ? '공개 S3 · 개방 SG · 미암호화 · MFA 미설정' : '✓ 이상 없음') : undefined}
-            />
-            <StatTile label="IAM 역할" value={n('iam_role')} href="/inventory/iam_role" />
+              className={
+                'block rounded-lg border p-4 transition hover:shadow-md ' +
+                (secIssues && secIssues > 0
+                  ? 'border-negative-border border-l-[3px] bg-negative-surface'
+                  : 'border-ink-100 bg-card')
+              }
+            >
+              <div className="flex items-start justify-between">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">보안 이슈</div>
+                {secIssues != null && (
+                  <span
+                    className={
+                      'rounded-full px-2 py-0.5 text-[10px] font-semibold leading-none ' +
+                      (secIssues > 0 ? 'bg-negative text-white' : 'bg-positive-surface text-positive-text')
+                    }
+                  >
+                    {secIssues > 0 ? '위험' : '이상 없음'}
+                  </span>
+                )}
+              </div>
+              <div
+                className={
+                  'tabular text-[36px] font-semibold leading-tight mt-1 ' +
+                  (secIssues && secIssues > 0 ? 'text-negative-text' : 'text-ink-800')
+                }
+              >
+                {secIssues == null ? DASH : secIssues}
+              </div>
+              {sp && (
+                <div className="grid grid-cols-4 gap-2 mt-3 border-t border-ink-100 pt-2.5">
+                  {[
+                    { label: '공개 S3', v: sp.s3Public },
+                    { label: '개방 SG', v: sp.sgOpenIngress },
+                    { label: '미암호화 EBS', v: sp.ebsUnencrypted },
+                    { label: 'MFA 미설정', v: sp.iamUserNoMfa },
+                  ].map((it) => (
+                    <div key={it.label}>
+                      <div className="tabular text-[19px] font-semibold text-ink-800">{it.v}</div>
+                      <div className="text-[10.5px] text-ink-500">{it.label}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Link>
+            <div className="flex flex-col gap-4">
+              <StatTile label="CIS 컴플라이언스" value={DASH} href="/compliance" variant="warn" hint="벤치마크 실행 →" />
+              <StatTile
+                label="작업 (성공/실패)"
+                value={jobs ? `${jobs.succeeded} / ${jobs.failed}` : DASH}
+                href="/jobs"
+                variant={jobs && jobs.failed > 0 ? 'danger' : 'default'}
+                hint={jobs ? `${jobs.queued + jobs.running} 대기·실행 중` : undefined}
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* ---- Tier 2: COST ---- */}
+        <section className="flex flex-col gap-3">
+          <SectionLabel dot="var(--brand-500)">비용</SectionLabel>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <StatTile
-              label="IAM 사용자"
-              value={n('iam_user')}
-              href="/inventory/iam_user"
-              hint={sum?.splits ? (sum.splits.iamUserNoMfa > 0 ? `MFA 미설정 ${sum.splits.iamUserNoMfa}` : 'MFA 전체 설정') : undefined}
-              variant={sum?.splits && sum.splits.iamUserNoMfa > 0 ? 'warn' : 'default'}
+              label="이번 달 비용 (USD)"
+              value={ov ? (ov.mtdCost == null ? DASH : `$${ov.mtdCost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`) : DASH}
+              href="/cost"
+              variant="accent"
+              hint={dailyAvg != null ? `약 $${dailyAvg.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/일` : undefined}
             />
             <StatTile
-              label="보안 그룹"
-              value={n('security_group')}
-              href="/inventory/security_group"
-              hint={sum?.splits ? `인그레스 개방 ${sum.splits.sgOpenIngress}` : undefined}
-              variant={sum?.splits && sum.splits.sgOpenIngress > 0 ? 'warn' : 'default'}
+              label="예상 청구액 (USD)"
+              value={projectedCost == null ? DASH : `$${projectedCost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              href="/cost"
+              hint="월말 예상"
             />
             <StatTile label="CloudWatch 알람" value={n('cloudwatch_alarm')} href="/inventory/cloudwatch_alarm" />
             <StatTile label="CloudTrail" value={n('cloudtrail')} href="/inventory/cloudtrail" />
-            <StatTile label="CIS 컴플라이언스" value={DASH} href="/compliance" hint="벤치마크 실행 →" />
-            <StatTile
-              label="작업 (성공/실패)"
-              value={jobs ? `${jobs.succeeded} / ${jobs.failed}` : DASH}
-              href="/jobs"
-              variant={jobs && jobs.failed > 0 ? 'danger' : 'default'}
-              hint={jobs ? `${jobs.queued + jobs.running} 대기·실행 중` : undefined}
-            />
-            <StatTile
-              label="이번 달 비용 (USD)"
-              value={ov ? (ov.mtdCost == null ? DASH : `$${ov.mtdCost.toFixed(2)}`) : DASH}
-              href="/cost"
-              variant="accent"
-              hint={dailyAvg != null ? `약 $${dailyAvg.toFixed(2)}/일` : undefined}
-            />
+          </div>
+        </section>
+
+        {/* ---- Tier 3: RESOURCES — quiet compact tiles, no hints (all-clear by default) ---- */}
+        <section className="flex flex-col gap-3">
+          <SectionLabel dot="var(--positive)" right={secIssues === 0 && (
+            <span className="rounded-full bg-positive-surface px-2 py-0.5 text-[10px] font-semibold text-positive-text">모두 정상</span>
+          )}>
+            리소스 현황
+          </SectionLabel>
+          <div className="flex flex-col gap-3">
+            <div className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400">COMPUTE &amp; CONTAINERS</div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+              <StatTile size="compact" label="EC2 인스턴스" value={n('ec2')} href="/inventory/ec2" />
+              <StatTile size="compact" label="Lambda 함수" value={n('lambda')} href="/inventory/lambda" />
+              <StatTile size="compact" label="ECS 클러스터" value={n('ecs_cluster')} href="/inventory/ecs_cluster" />
+              <StatTile size="compact" label="AgentCore" value={`${SECTION_GATEWAYS} GW`} href="/assistant" />
+              <StatTile size="compact" label="ECR 리포지토리" value={n('ecr')} href="/inventory/ecr" />
+              <StatTile size="compact" label="EKS 클러스터" value={ov ? ov.clusterCount ?? DASH : DASH} href="/eks" />
+              <StatTile size="compact" label="CloudFront" value={n('cloudfront')} href="/inventory/cloudfront" />
+            </div>
+            <div className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400 mt-1">STORAGE &amp; NETWORK</div>
+            <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-3">
+              <StatTile size="compact" label="VPC" value={n('vpc')} href="/inventory/vpc" />
+              <StatTile size="compact" label="WAF" value={n('waf')} href="/inventory/waf" />
+              <StatTile size="compact" label="EBS 볼륨" value={n('ebs_volume')} href="/inventory/ebs_volume" />
+              <StatTile size="compact" label="S3 버킷" value={n('s3')} href="/inventory/s3" />
+              <StatTile size="compact" label="RDS 인스턴스" value={n('rds')} href="/inventory/rds" />
+              <StatTile size="compact" label="DynamoDB 테이블" value={n('dynamodb')} href="/inventory/dynamodb" />
+              <StatTile size="compact" label="ElastiCache" value={n('elasticache')} href="/inventory/elasticache" />
+              <StatTile size="compact" label="OpenSearch" value={n('opensearch')} href="/inventory/opensearch" />
+              <StatTile size="compact" label="MSK" value={n('msk')} href="/inventory/msk" />
+            </div>
+            <div className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400 mt-1">IAM</div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+              <StatTile size="compact" label="IAM 역할" value={n('iam_role')} href="/inventory/iam_role" />
+              <StatTile size="compact" label="IAM 사용자" value={n('iam_user')} href="/inventory/iam_user" />
+              <StatTile size="compact" label="보안 그룹" value={n('security_group')} href="/inventory/security_group" />
+            </div>
           </div>
         </section>
 
