@@ -14,6 +14,51 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET = re.compile(r"^\s*[-*]\s+(.*)$")
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 
+# Korean-native sans, ships with every Windows Word install. Deliberately NOT the same font as
+# the PDF path's Noto Sans CJK KR: a PDF renders server-side (where Noto CJK is installed in the
+# worker image), but a DOCX resolves fonts on the READER's machine, where Noto CJK usually is not
+# installed and would fall back to the exact inconsistent-font mess this is fixing.
+_FONT = "Malgun Gothic"
+_MONO = "Consolas"
+_INK_900, _INK_800, _INK_500 = "14130F", "1F1E1D", "5F5A4D"
+_BRAND, _BRAND_DEEP, _BRAND_TINT = "D97757", "8E4830", "F5DCCF"
+_BORDER, _CODE_BG = "D7D3C7", "F7F6F2"
+
+
+def _set_east_asia(style_or_run, font):
+    """python-docx's font.name setter only writes w:ascii/w:hAnsi — Korean text still renders in
+    Word's East-Asian FALLBACK font unless w:eastAsia is also set. No high-level API for this."""
+    from docx.oxml.ns import qn
+    from docx.oxml.shared import OxmlElement
+
+    rpr = style_or_run.element.get_or_add_rPr()
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        rfonts = OxmlElement("w:rFonts")
+        rpr.append(rfonts)
+    rfonts.set(qn("w:eastAsia"), font)
+
+
+def _styled_document():
+    """Document() with page setup + base typography explicit — never rely on Word's defaults
+    (US Letter, default Calibri, default blue Heading styles)."""
+    from docx import Document
+    from docx.shared import Mm, Pt, RGBColor
+
+    doc = Document()
+    section = doc.sections[0]
+    section.page_width, section.page_height = Mm(210), Mm(297)  # A4, matches the PDF path
+    section.top_margin = section.bottom_margin = Mm(18)
+    section.left_margin = section.right_margin = Mm(16)
+
+    normal = doc.styles["Normal"]
+    normal.font.name = _FONT
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = RGBColor.from_string(_INK_800)
+    _set_east_asia(normal, _FONT)
+
+    return doc
+
 
 def _inline(text: str) -> str:
     """Strip the inline markdown the report uses (links→text, bold/italic/code markers)."""
@@ -39,9 +84,7 @@ def _row_cells(line: str):
 
 def to_docx(markdown: str) -> bytes:
     """Pragmatic markdown→DOCX: headings, the date blockquote, bullets, tables, paragraphs."""
-    from docx import Document
-
-    doc = Document()
+    doc = _styled_document()
     lines = markdown.splitlines()
     i = 0
     while i < len(lines):
