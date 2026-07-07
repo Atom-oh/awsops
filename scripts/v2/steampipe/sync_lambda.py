@@ -23,6 +23,8 @@ QUERIES = {
         "i.public_ip_address, i.public_dns_name, i.vpc_id, i.subnet_id, i.cpu_options_core_count, "
         "i.cpu_options_threads_per_core, i.root_device_type, i.root_device_name, "
         "i.iam_instance_profile_arn, i.launch_time, i.state_transition_time, "
+        # Steampipe returns '' (not SQL NULL) for on-demand instances — NULLIF normalizes both to NULL first.
+        "COALESCE(NULLIF(i.instance_lifecycle, ''), 'on-demand') AS pricing_model, "
         "i.security_groups, i.block_device_mappings, i.network_interfaces, i.tags, "
         "(t.memory_info ->> 'SizeInMiB') AS memory_mib, (t.v_cpu_info ->> 'DefaultVCpus') AS vcpus, "
         "(t.network_info ->> 'NetworkPerformance') AS network_performance, "
