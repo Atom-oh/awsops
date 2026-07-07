@@ -97,3 +97,12 @@ def test_docx_h1_has_brand_bottom_rule():
     assert bottom is not None
     assert bottom.get(qn("w:val")) == "single"
     assert bottom.get(qn("w:color")) == "D97757"
+
+
+def test_docx_page_break_before_second_h2_only():
+    md = "# t\n\n## A\n\nbody\n\n## B\n\nbody\n"
+    doc = _doc(md)
+    h2s = [p for p in doc.paragraphs if p.style.name == "Heading 2"]
+    assert len(h2s) == 2
+    assert not h2s[0].paragraph_format.page_break_before
+    assert h2s[1].paragraph_format.page_break_before is True

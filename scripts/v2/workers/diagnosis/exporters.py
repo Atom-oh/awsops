@@ -121,6 +121,7 @@ def to_docx(markdown: str) -> bytes:
     doc = _styled_document()
     lines = markdown.splitlines()
     i = 0
+    seen_h2 = False
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
@@ -148,7 +149,13 @@ def to_docx(markdown: str) -> bytes:
         m = _HEADING.match(stripped)
         if m:
             level = min(len(m.group(1)), 4)
-            doc.add_heading(_inline(m.group(2)), level=level)
+            heading = doc.add_heading(_inline(m.group(2)), level=level)
+            if level == 2:
+                # Fresh page per major (report-scaffold) section, except the first — the PDF
+                # sibling gets this implicitly from print pagination; docx needs it explicit.
+                if seen_h2:
+                    heading.paragraph_format.page_break_before = True
+                seen_h2 = True
             i += 1
             continue
 
