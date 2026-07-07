@@ -5,6 +5,7 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -23,6 +24,12 @@ export interface AreaTrendProps {
   yKey: string;
   /** Prefix the y values/tooltip with this (e.g. "$"). */
   valuePrefix?: string;
+  /** Optional secondary series — a plain ink stroke line (no fill), e.g. an EC2 count
+   *  overlaid on a total-resources area (DESIGN.md §3 "리소스 추세": lead area + ink line).
+   *  Rendering a 2-series legend (areaLabel/lineLabel) requires both to be set. */
+  lineKey?: string;
+  areaLabel?: string;
+  lineLabel?: string;
   className?: string;
 }
 
@@ -38,6 +45,9 @@ export default function AreaTrend({
   xKey,
   yKey,
   valuePrefix = '',
+  lineKey,
+  areaLabel,
+  lineLabel,
   className,
 }: AreaTrendProps) {
   const c = useChartColors();
@@ -74,7 +84,10 @@ export default function AreaTrend({
             width={56}
             tickFormatter={(v) => fmt(v as number)}
           />
-          <Tooltip {...tooltipStyles(c)} formatter={(v) => [fmt(v as number), ''] as [string, string]} />
+          <Tooltip
+            {...tooltipStyles(c)}
+            formatter={(v, name) => [fmt(v as number), name === lineKey ? lineLabel ?? String(name) : ''] as [string, string]}
+          />
           <Area
             type="monotone"
             dataKey={yKey}
@@ -84,8 +97,30 @@ export default function AreaTrend({
             dot={false}
             activeDot={{ r: 4, fill: c.lead, strokeWidth: 0 }}
           />
+          {lineKey && (
+            <Line
+              type="monotone"
+              dataKey={lineKey}
+              stroke={c.axis}
+              strokeWidth={1.5}
+              dot={false}
+              activeDot={{ r: 3, fill: c.axis, strokeWidth: 0 }}
+            />
+          )}
         </AreaChart>
       </ResponsiveContainer>
+      {lineKey && areaLabel && lineLabel && (
+        <div className="mt-2 flex items-center gap-4 text-[11px] text-ink-500">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: c.lead }} />
+            {areaLabel}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: c.axis }} />
+            {lineLabel}
+          </span>
+        </div>
+      )}
     </Card>
   );
 }

@@ -519,6 +519,13 @@ def _rec_account(rec):
     return "self" if str(aid) == _caller_account() else str(aid)
 
 
+def _self_count(recs):
+    """Count of synced rows that resolve to the host ('self') — used for the daily
+    inventory_snapshots row so the dashboard trend chart matches the account_id='self'
+    scope every other host-facing read (inventory summary, StatTile counts) already uses."""
+    return sum(1 for r in recs if _rec_account(r) == "self")
+
+
 def _owner_ids_in(adb):
     """Comma-joined quoted IN-list of every enabled account's real owner id (host caller id + target
     12-digit ids) for the {owner_ids} pushdown. Excludes the 'self' sentinel and any non-account-id."""
@@ -698,6 +705,13 @@ def sync(resource_type):
                             t=resource_type, acct=acct, rg=rg, id=rid)
             adb.run("UPDATE inventory_sync_runs SET status='succeeded', finished_at=now(), row_count=:n, error=NULL "
                     "WHERE resource_type=:t AND account_id='self'", t=resource_type, n=len(recs))
+            # Daily inventory_snapshots row (dashboard "리소스 추세" chart, self-scoped only —
+            # see _self_count). One row per (account, day, type): delete same-day then insert,
+            # matching backfill-v1.mjs's convention — a resource type can sync more than once a day.
+            adb.run("DELETE FROM inventory_snapshots WHERE account_id='self' AND resource_type=:t "
+                    "AND captured_at::date = CURRENT_DATE", t=resource_type)
+            adb.run("INSERT INTO inventory_snapshots (account_id, captured_at, resource_type, resource_count) "
+                    "VALUES ('self', now(), :t, :n)", t=resource_type, n=_self_count(recs))
             return {"status": "succeeded", "type": resource_type, "row_count": len(recs)}
         except Exception as e:
             adb.run("UPDATE inventory_sync_runs SET status='failed', finished_at=now(), error=:e "

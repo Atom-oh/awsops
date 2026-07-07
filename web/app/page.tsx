@@ -31,6 +31,8 @@ interface Ec2Type { name: string; count: number; [k: string]: unknown }
 interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; splits?: Splits; ec2Types?: Ec2Type[] }
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost { trend: TrendPoint[] }
+interface ResourceTrendPoint { date: string; total: number; ec2: number; [k: string]: unknown }
+interface ResourceTrend { trend: ResourceTrendPoint[] }
 interface JobSlice { name: string; value: number; [k: string]: unknown }
 interface FleetCluster {
   name: string;
@@ -51,6 +53,7 @@ export default function Home() {
   const [sum, setSum] = useState<Summary | null>(null);
   const [sumErr, setSumErr] = useState('');
   const [cost, setCost] = useState<Cost | null>(null);
+  const [resTrend, setResTrend] = useState<ResourceTrend | null>(null);
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
@@ -72,6 +75,10 @@ export default function Home() {
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then(setCost)
         .catch(() => setCost({ trend: [] })),
+      fetch('/api/inventory/trend?days=14')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then(setResTrend)
+        .catch(() => setResTrend({ trend: [] })),
     ]);
     setCapturedAt(new Date().toISOString());
     setBusy(false);
@@ -149,6 +156,18 @@ export default function Home() {
   const today = new Date();
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
   const projectedCost = dailyAvg != null ? dailyAvg * daysInMonth : null;
+
+  // Active-warnings list (v1 parity, ADR design handoff §3): one row per active
+  // condition with a link to its page. Distinct from the Tier-1 hero's counts —
+  // this reads as sentences, not numbers, and only ever lists what's actually active.
+  const warnings = [
+    sp && sp.s3Public > 0 && { key: 's3', dot: 'var(--negative)', text: `공개 접근 가능한 S3 버킷 ${sp.s3Public}개`, href: '/security' },
+    sp && sp.sgOpenIngress > 0 && { key: 'sg', dot: 'var(--negative)', text: `인그레스가 개방된 보안 그룹 ${sp.sgOpenIngress}개`, href: '/inventory/security_group' },
+    sp && sp.ebsUnencrypted > 0 && { key: 'ebs', dot: 'var(--warning)', text: `미암호화 EBS 볼륨 ${sp.ebsUnencrypted}개`, href: '/inventory/ebs_volume' },
+    sp && sp.iamUserNoMfa > 0 && { key: 'mfa', dot: 'var(--warning)', text: `MFA 미설정 IAM 사용자 ${sp.iamUserNoMfa}개`, href: '/inventory/iam_user' },
+    jobs && jobs.failed > 0 && { key: 'jobs', dot: 'var(--negative)', text: `실패한 작업 ${jobs.failed}개`, href: '/jobs' },
+    hasFleet && recentEvents.length > 0 && { key: 'k8s', dot: 'var(--warning)', text: `K8s Warning 이벤트 ${recentEvents.length}건`, href: '/eks' },
+  ].filter((w): w is { key: string; dot: string; text: string; href: string } => Boolean(w));
 
   const loading = !ov && !ovErr && !sum && !sumErr;
 
@@ -236,6 +255,22 @@ export default function Home() {
           </div>
         </section>
 
+        {/* ---- Active warnings (v1 parity) — sentence + link per active condition ---- */}
+        {warnings.length > 0 && (
+          <Card title={`활성 경고 (${warnings.length})`} padded={false}>
+            <ul className="flex flex-col divide-y divide-ink-100">
+              {warnings.map((w) => (
+                <li key={w.key}>
+                  <Link href={w.href} className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-ink-700 hover:bg-ink-50">
+                    <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: w.dot }} />
+                    {w.text}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
+
         {/* ---- Tier 2: COST ---- */}
         <section className="flex flex-col gap-3">
           <SectionLabel dot="var(--brand-500)">비용</SectionLabel>
@@ -297,22 +332,42 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ---- Charts row 1: distribution bar (wide) + category donut ---- */}
+        {/* ---- Resource trend (14d, DESIGN.md §3) + category donut ---- */}
+        {resTrend && (
+          <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-6">
+            {resTrend.trend.length >= 2 ? (
+              <AreaTrend
+                title="리소스 추세 (14d)"
+                data={resTrend.trend}
+                xKey="date"
+                yKey="total"
+                lineKey="ec2"
+                areaLabel="전체 리소스"
+                lineLabel="EC2"
+              />
+            ) : (
+              <Card title="리소스 추세 (14d)">
+                <div className="text-[13px] text-ink-400">이력 수집 중 — sync 주기마다 축적됩니다</div>
+              </Card>
+            )}
+            {sum ? (
+              <DonutBreakdown title="카테고리별 리소스" data={sum.byCategory} nameKey="group" valueKey="count" />
+            ) : (
+              <Card title="카테고리별 리소스">
+                <div className="text-[13px] text-ink-400">{sumErr || '로딩 중…'}</div>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* ---- Charts row 1: distribution bar (full-width) ---- */}
         {sumErr ? (
           <div className="text-[13px] text-ink-400">
             리소스 분포 데이터를 불러오지 못했습니다: {sumErr}
           </div>
         ) : sum ? (
           <>
-            <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-6">
-              <BarDistribution title="리소스 분포" data={barData} xKey="label" yKey="count" />
-              <DonutBreakdown
-                title="카테고리별 리소스"
-                data={sum.byCategory}
-                nameKey="group"
-                valueKey="count"
-              />
-            </div>
+            <BarDistribution title="리소스 분포" data={barData} xKey="label" yKey="count" />
 
             {/* ---- Charts row 2: resource-distribution donuts (EC2 type · K8s pods · jobs) ---- */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

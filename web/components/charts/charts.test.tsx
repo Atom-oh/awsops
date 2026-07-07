@@ -52,6 +52,31 @@ describe('AreaTrend', () => {
     ).not.toThrow();
     expect(screen.getByText('일별 비용 추이')).toBeTruthy();
   });
+
+  it('omits the two-series legend when no lineKey is given (single-series unchanged)', () => {
+    render(<AreaTrend title="일별 비용 추이" data={trend} xKey="date" yKey="amount" valuePrefix="$" />);
+    expect(screen.queryByText('EC2')).toBeNull();
+  });
+
+  it('renders an area+line legend when lineKey/areaLabel/lineLabel are set (리소스 추세)', () => {
+    const resourceTrend = [
+      { date: '2026-06-01', total: 132, ec2: 25 },
+      { date: '2026-06-02', total: 140, ec2: 27 },
+    ];
+    render(
+      <AreaTrend
+        title="리소스 추세"
+        data={resourceTrend}
+        xKey="date"
+        yKey="total"
+        lineKey="ec2"
+        areaLabel="전체 리소스"
+        lineLabel="EC2"
+      />,
+    );
+    expect(screen.getByText('전체 리소스')).toBeTruthy();
+    expect(screen.getByText('EC2')).toBeTruthy();
+  });
 });
 
 describe('BarDistribution', () => {

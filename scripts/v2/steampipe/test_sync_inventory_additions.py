@@ -139,3 +139,21 @@ def test_disabled_account_cleanup_sql_also_excludes_enabled_but_zero_scope_accou
 def test_inject_account_noop_without_placeholder():
     plain = "SELECT name FROM aws_s3_bucket"
     assert sync_lambda._inject_account(plain, "bogus") == plain
+
+
+def test_self_count_matches_rec_account_self_only(monkeypatch):
+    """_self_count (dashboard trend-chart snapshot row) must count exactly the rows
+    _rec_account resolves to 'self' — the host's real id and target-account rows are excluded,
+    mirroring the account_id='self' scope every other host-facing read already uses."""
+    sync_lambda._ACCOUNT_CACHE["id"] = "111111111111"  # host's real 12-digit id
+    recs = [
+        {"account_id": "111111111111"},  # host's real id -> 'self'
+        {"account_id": "111111111111"},
+        {"account_id": "222222222222"},  # target account -> not counted
+        {},  # no account_id column (SDK sync) -> 'self'
+    ]
+    assert sync_lambda._self_count(recs) == 3
+
+
+def test_self_count_empty():
+    assert sync_lambda._self_count([]) == 0
