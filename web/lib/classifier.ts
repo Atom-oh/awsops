@@ -61,6 +61,30 @@ export function parseRanked(raw: string): RankedKey[] {
     .slice(0, 3);
 }
 
+export interface HistoryMsg { role: 'user' | 'assistant'; content: string }
+
+// Last N messages / per-message / total char caps — enough continuity for routing, small
+// enough to stay inside the classifier's tight TIMEOUT_MS budget.
+const CTX_TURNS = 4;
+const CTX_TURN_CHARS = 300;
+const CTX_TOTAL_CHARS = 1200;
+
+/**
+ * Prefix the prompt with a short excerpt of the recent conversation so the routing classifier
+ * doesn't misread a context-dependent follow-up in isolation — e.g. "저걸 클러스터 안에서 어디서
+ * 쓰나" reads as container/EKS alone, but is really "continue investigating the CloudTrail lead
+ * from the last turn" (monitoring). No-op when there's no history (identical to the legacy call).
+ * Regex keyword matching (route.ts matchedSections) intentionally still sees only the raw current
+ * prompt — history text spuriously matching an unrelated keyword must not turn a clean single
+ * regex match into a false ambiguous one; only the LLM classifier path gets this context.
+ */
+export function buildClassifierContext(messages: HistoryMsg[] | undefined, prompt: string): string {
+  if (!messages || messages.length === 0) return prompt;
+  const recent = messages.slice(-CTX_TURNS);
+  const lines = recent.map((m) => `${m.role}: ${m.content.slice(0, CTX_TURN_CHARS)}`).join('\n').slice(0, CTX_TOTAL_CHARS);
+  return `이전 대화(참고용):\n${lines}\n\n현재 질문: ${prompt}`;
+}
+
 /** Classify a prompt into ranked section keys. Never throws — [] means "no answer, fall back". */
 export async function classifyPrompt(prompt: string, opts: ClassifierOpts = {}): Promise<RankedKey[]> {
   const send = opts.send ?? bedrockSend;

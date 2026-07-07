@@ -2,7 +2,7 @@ import { verifyUser } from '@/lib/auth';
 import { invokeAgent, invokeAgentDetailed, type ChatMsg } from '@/lib/agentcore';
 import { getModelLabel } from '@/lib/bedrock';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
-import { classifyPrompt } from '@/lib/classifier';
+import { classifyPrompt, buildClassifierContext } from '@/lib/classifier';
 import { synthesizeStream } from '@/lib/synthesize';
 import { assistantAnswer, isProductHelpIntent } from '@/lib/assistant';
 import { sectionByKey } from '@/lib/sections';
@@ -86,7 +86,14 @@ export async function POST(request: Request) {
   let route: RouteResult | null = null;
   let gateway: string;
   if (hybridOn) {
-    route = await classifyRoute(prompt, body.section, { llmEnabled: true, classify: classifyPrompt });
+    // Bug fix: a context-dependent follow-up (e.g. "저걸 클러스터 안에서 어디서 쓰나" after a
+    // CloudTrail/model-invocation question) read in isolation misroutes to the wrong/inactive
+    // section — the classifier never saw the prior turn. Feed it a bounded excerpt of the
+    // client-supplied history; matchedSections(prompt) below is unaffected (raw prompt only).
+    route = await classifyRoute(prompt, body.section, {
+      llmEnabled: true,
+      classify: (p) => classifyPrompt(buildClassifierContext(body.messages, p)),
+    });
     gateway = route.primary;
   } else {
     gateway = pickGateway(prompt, body.section);
@@ -236,7 +243,10 @@ export async function POST(request: Request) {
       // AWSops Assistant: product/how-to answer grounded in the KB (Bedrock-direct), OR the graceful
       // fallback for an auto-routed inactive section — instead of the 🔒 dead-end.
       if (useAssistant) {
-        const text = await assistantAnswer(prompt); // Haiku, KB-grounded, never throws
+        // Bug fix: pass the client-supplied history along so the assistant fallback isn't a
+        // context-blind one-off (previously dropped, causing "질문이 맥락 없이..." answers on
+        // any follow-up that landed here — e.g. via the inactive-section degrade path above).
+        const text = await assistantAnswer(prompt, { history: body.messages ?? [] }); // Haiku, KB-grounded, never throws
         for (const c of chunk(text)) {
           if (request.signal.aborted) break;
           controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));

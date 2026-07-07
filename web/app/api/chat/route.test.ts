@@ -32,7 +32,11 @@ vi.mock('@/lib/route', () => ({
   classifyRoute: (...a: unknown[]) => classifyRoute(...a),
 }));
 const classifyPrompt = vi.fn();
-vi.mock('@/lib/classifier', () => ({ classifyPrompt: (...a: unknown[]) => classifyPrompt(...a) }));
+// keep the real (pure, no-Bedrock) buildClassifierContext so the wiring test below exercises it.
+vi.mock('@/lib/classifier', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/classifier')>()),
+  classifyPrompt: (...a: unknown[]) => classifyPrompt(...a),
+}));
 vi.mock('@/lib/catalog-source', () => ({ getEnabledCustomAgents: (...a: unknown[]) => getEnabledCustomAgents(...a) }));
 vi.mock('@/lib/agent-resolver', () => ({
   pickCustomAgent: (...a: unknown[]) => pickCustomAgent(...a),
@@ -217,6 +221,26 @@ describe('hybrid routing (ADR-038)', () => {
     expect(body).toContain('"method":"llm"');
     expect(body).toContain('"ranked":[{"key":"network"');
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
+  });
+
+  it('feeds a bounded excerpt of the client history into the classifier (bug fix: context-blind follow-up misrouting)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({ primary: 'ops', ranked: [{ key: 'ops', score: 1, active: true }], method: 'llm', multiDomain: false, selected: [{ key: 'ops', score: 1, active: true }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const history = [
+      { role: 'user' as const, content: 'CloudTrail로 모델 호출 조회해줘' },
+      { role: 'assistant' as const, content: '3곳에서 호출되고 있습니다' },
+    ];
+    await readStream(await POST(req({ prompt: '클러스터 안에 어디서 저걸 쓰나', messages: history, sessionId: 's'.repeat(36) })));
+    // classifyRoute is mocked (never actually invokes the classify callback), so pull the closure
+    // route.ts built and call it directly — this is what proves route.ts wires history through.
+    const opts = classifyRoute.mock.calls[0][2] as { classify: (p: string) => Promise<unknown> };
+    await opts.classify('클러스터 안에 어디서 저걸 쓰나');
+    expect(classifyPrompt).toHaveBeenCalledWith(expect.stringContaining('CloudTrail로 모델 호출 조회해줘'));
+    expect(classifyPrompt).toHaveBeenCalledWith(expect.stringContaining('클러스터 안에 어디서 저걸 쓰나'));
   });
 
   it('flag on: EXPLICIT pin to an inactive section short-circuits with the honest 🔒 (ADR-044 §2)', async () => {
@@ -709,7 +733,7 @@ describe('AWSops Assistant (product help + inactive fallback)', () => {
     assistantAnswer.mockResolvedValue('1) Integrations에서 Prometheus 등록 2) Skill 작성 3) Agent 생성');
     const { POST } = await import('./route');
     const body = await readStream(await POST(req({ prompt: 'prometheus 분석 agent 만들기 /customization', sessionId: 's'.repeat(36) })));
-    expect(assistantAnswer).toHaveBeenCalledWith('prometheus 분석 agent 만들기 /customization');
+    expect(assistantAnswer).toHaveBeenCalledWith('prometheus 분석 agent 만들기 /customization', { history: [] });
     expect(invokeAgent).not.toHaveBeenCalled();
     expect(synthesizeStream).not.toHaveBeenCalled();
     expect(body).toContain('Prometheus'); // single token survives typewriter chunk()
@@ -744,6 +768,18 @@ describe('AWSops Assistant (product help + inactive fallback)', () => {
     const body = await readStream(await POST(req({ prompt: '아무거나', section: 'container', sessionId: 's'.repeat(36) })));
     expect(assistantAnswer).not.toHaveBeenCalled();
     expect(body).toContain('🔒'); // explicit choice → honest unavailable message
+  });
+
+  it('degrade-to-assistant fallback forwards the client history (bug fix: was context-blind)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isProductHelpIntent.mockReturnValue(false);
+    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'container', score: 0.9, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
+    const history = [{ role: 'user' as const, content: '이전 질문' }, { role: 'assistant' as const, content: '이전 답변' }];
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: '파드 CrashLoop 원인', messages: history, sessionId: 's'.repeat(36) })));
+    expect(assistantAnswer).toHaveBeenCalledWith('파드 CrashLoop 원인', { history });
   });
 });
 
