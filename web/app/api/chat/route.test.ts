@@ -16,8 +16,14 @@ async function* invokeAgentStreamImpl(...a: unknown[]): AsyncGenerator<string> {
   const text = await invokeAgent(...a);
   if (text) yield text as string;
 }
+// invokeAgentDetailed (single-route path, provenance footer) delegates to the same invokeAgent
+// mock — existing tests assert call args/count against invokeAgent, so it stays the one spy.
+async function invokeAgentDetailedImpl(...a: unknown[]): Promise<{ text: string; tools: string[]; model?: string }> {
+  return { text: (await invokeAgent(...a)) as string, tools: [] };
+}
 vi.mock('@/lib/agentcore', () => ({
   invokeAgent: (...a: unknown[]) => invokeAgent(...a),
+  invokeAgentDetailed: (...a: unknown[]) => invokeAgentDetailedImpl(...a),
   invokeAgentStream: (...a: unknown[]) => invokeAgentStreamImpl(...a),
 }));
 const classifyRoute = vi.fn();
