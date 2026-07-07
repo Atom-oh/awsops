@@ -1,7 +1,17 @@
 'use client';
-import { memo } from 'react';
+import { Children, isValidElement, memo, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+
+/** Recursively join a node tree's text content — used to sniff a blockquote's leading
+ *  ⚠️/주의 marker without depending on react-markdown's exact AST shape. */
+function flattenText(node: ReactNode): string {
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return Children.toArray(node).map(flattenText).join('');
+  if (isValidElement(node)) return flattenText((node.props as { children?: ReactNode }).children);
+  return '';
+}
 
 /**
  * Themed markdown renderer for assistant messages.
@@ -32,9 +42,22 @@ function MarkdownImpl({ children }: { children: string }) {
           ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5 first:mt-0 last:mb-0">{children}</ul>,
           ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5 first:mt-0 last:mb-0">{children}</ol>,
           li: ({ children }) => <li className="marker:text-ink-300">{children}</li>,
-          blockquote: ({ children }) => (
-            <blockquote className="my-2 border-l-2 border-brand-200 bg-brand-50/50 py-1 pl-3 text-ink-600">{children}</blockquote>
-          ),
+          // "주의"/⚠️ callouts render with the warning token (orange left bar) instead of the
+          // default brand quote styling — matches the design handoff's non-emoji warning treatment.
+          blockquote: ({ children }) => {
+            const isWarning = /^(⚠️|주의)/.test(flattenText(children).trim());
+            return (
+              <blockquote
+                className={
+                  isWarning
+                    ? 'my-2 border-l-2 border-warning bg-warning-surface py-1 pl-3 text-warning-text'
+                    : 'my-2 border-l-2 border-brand-200 bg-brand-50/50 py-1 pl-3 text-ink-600'
+                }
+              >
+                {children}
+              </blockquote>
+            );
+          },
           hr: () => <hr className="my-3 border-ink-100" />,
           code: ({ children }) => (
             <code className="rounded-[4px] border border-ink-100 bg-paper-muted px-1 py-px font-mono text-[12px] text-brand-700">{children}</code>

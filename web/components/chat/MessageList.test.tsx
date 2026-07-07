@@ -34,7 +34,8 @@ describe('MessageList switch chips (ADR-038)', () => {
   });
   it('renders no chips while streaming or when ranked is absent', () => {
     render(<MessageList msgs={[doneMsg({ gateway: 'network' }), { role: 'assistant', content: '...', streaming: true, gateway: 'network', ranked: [{ key: 'security', score: 1, active: true }] }]} onSwitch={() => {}} />);
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    // scoped to switch chips, not the answer-provenance footer's own copy button
+    expect(screen.queryAllByRole('button', { name: /로 다시$/ })).toHaveLength(0);
   });
   it('renders a combined "통합 분석" badge for a cross-domain synthesis answer (ADR-044)', () => {
     const msgs: Msg[] = [doneMsg({
@@ -101,6 +102,41 @@ describe('MessageList streaming status (UX changes)', () => {
     expect(screen.getByText('finished answer')).toBeTruthy();
     expect(screen.queryByText(/분석 중/)).toBeNull();
     expect(container.querySelector('.animate-pulse')).toBeNull();
+  });
+});
+
+describe('MessageList answer-provenance footer (design handoff 개선안 ③)', () => {
+  it('renders route badge, model, elapsed time, and tool chips on a finished section answer', () => {
+    const msgs: Msg[] = [doneMsg({ gateway: 'container', model: 'Claude Sonnet 4.6', elapsedMs: 2500, tools: ['list_eks_clusters', 'describe_cluster', 'get_vpc_network_details', 'get_eks_insights', 'get_cloudwatch_logs'] })];
+    render(<MessageList msgs={msgs} />);
+    expect(screen.getByText(/AgentCore → Container Gateway/)).toBeTruthy();
+    expect(screen.getByText('Claude Sonnet 4.6')).toBeTruthy();
+    expect(screen.getByText('2.5s')).toBeTruthy();
+    expect(screen.getByText('list_eks_clusters')).toBeTruthy();
+    expect(screen.getByText('+1')).toBeTruthy(); // 5 tools, only top 4 shown
+  });
+
+  it('falls back to the default model label and hides elapsed/tools when absent (legacy agent image)', () => {
+    const msgs: Msg[] = [doneMsg({ gateway: 'network' })];
+    render(<MessageList msgs={msgs} />);
+    expect(screen.getByText('Claude Sonnet 4.6')).toBeTruthy(); // fallback constant
+    expect(screen.queryByText(/^\d+\.\ds$/)).toBeNull();
+    expect(screen.queryByText('Tools')).toBeNull();
+  });
+
+  it('hides the footer entirely while streaming', () => {
+    const msgs: Msg[] = [{ role: 'assistant', content: 'partial', streaming: true, gateway: 'network' }];
+    render(<MessageList msgs={msgs} />);
+    expect(screen.queryByLabelText('답변 복사')).toBeNull();
+  });
+
+  it('copies the message content to the clipboard on click', () => {
+    const writeText = vi.fn();
+    Object.assign(navigator, { clipboard: { writeText } });
+    const msgs: Msg[] = [doneMsg({ gateway: 'network', content: 'copy me' })];
+    render(<MessageList msgs={msgs} />);
+    fireEvent.click(screen.getByLabelText('답변 복사'));
+    expect(writeText).toHaveBeenCalledWith('copy me');
   });
 });
 

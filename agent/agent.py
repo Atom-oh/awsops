@@ -107,11 +107,14 @@ GATEWAYS = _discover_gateways()
 # ADR-038: deterministic tool selection + prompt caching (verified against strands-agents 1.41.0:
 # BedrockConfig exposes temperature / cache_config / cache_tools; cache_prompt is deprecated).
 # Cache params are guarded — an unsupported version degrades to temperature-only (spec §6 no-op rule).
+# Single source of truth for the model id — also streamed to the web as answer provenance
+# ({"model": ...} frame), so the chat footer never goes stale when this migrates.
+MODEL_ID = "global.anthropic.claude-sonnet-5"
 try:
     if CacheConfig is None:
         raise TypeError("CacheConfig unavailable")
     model = BedrockModel(
-        model_id="global.anthropic.claude-sonnet-4-6",
+        model_id=MODEL_ID,
         region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
         temperature=0.0,
         cache_config=CacheConfig(strategy="auto"),  # auto cachePoint injection (system+messages)
@@ -122,7 +125,7 @@ except (TypeError, ValueError) as e:  # older strands: unknown kwarg / CacheConf
     # the cacheReadInputTokens usage check (ADR-038 Task 8) — do not rely on this line alone.
     print(f"[Agent] prompt caching unavailable ({e}); falling back to temperature-only")
     model = BedrockModel(
-        model_id="global.anthropic.claude-sonnet-4-6",
+        model_id=MODEL_ID,
         region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
         temperature=0.0,
     )
@@ -724,16 +727,27 @@ This is a non-negotiable requirement for cross-account access."""
 
 
 async def _stream_text(agent, user_input):
-    """Yield assistant text deltas from a Strands agent run as ``{"delta": str}`` chunks.
+    """Yield assistant text deltas from a Strands agent run as ``{"delta": str}`` chunks,
+    plus one ``{"tool": name}`` chunk per tool invocation (answer-provenance footer).
 
     Strands' ``stream_async`` yields a stream of event dicts; the incremental assistant
-    text arrives under the ``"data"`` key. Tool-use / lifecycle events carry no ``"data"``
-    and are skipped here (the agent loop still runs them — we just don't surface them as
-    visible deltas). AgentCore Runtime JSON-encodes each yielded dict into an SSE
-    ``data:`` frame, so embedded newlines are escaped and stay frame-safe."""
+    text arrives under the ``"data"`` key. Tool-use events carry ``"current_tool_use"``
+    and fire repeatedly while the tool input streams in — dedupe on ``toolUseId`` and
+    skip events whose ``name`` hasn't arrived yet. Other lifecycle events are skipped
+    (the agent loop still runs them — we just don't surface them). AgentCore Runtime
+    JSON-encodes each yielded dict into an SSE ``data:`` frame, so embedded newlines
+    are escaped and stay frame-safe. Old web images drop ``{"tool": ...}`` / ``{"model": ...}``
+    frames as empty deltas, so agent/web can deploy in either order."""
+    yield {"model": MODEL_ID}  # answer provenance: which model produced this (footer)
+    seen_tools = set()
     async for event in agent.stream_async(user_input):
         if "data" in event:
             yield {"delta": event["data"]}
+        tu = event.get("current_tool_use") or {}
+        tool_use_id, tool_name = tu.get("toolUseId"), tu.get("name")
+        if tool_use_id and tool_name and tool_use_id not in seen_tools:
+            seen_tools.add(tool_use_id)
+            yield {"tool": tool_name}
 
 
 # Main handler / 메인 핸들러

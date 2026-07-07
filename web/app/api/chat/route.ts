@@ -1,5 +1,6 @@
 import { verifyUser } from '@/lib/auth';
-import { invokeAgent, type ChatMsg } from '@/lib/agentcore';
+import { invokeAgent, invokeAgentDetailed, type ChatMsg } from '@/lib/agentcore';
+import { getModelLabel } from '@/lib/bedrock';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt } from '@/lib/classifier';
 import { synthesizeStream } from '@/lib/synthesize';
@@ -172,12 +173,14 @@ export async function POST(request: Request) {
     : route
       ? { ranked: route.ranked, method: route.method, ...(via ? { via, routes: fanGateways } : {}), ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}) }
       : (spec.tier === 'custom' ? { customAgent: spec.agentName } : undefined);
-  const record = (assistantContent: string) => {
+  // extras = answer provenance (tools/model/elapsedMs) known only after the invoke — merged into
+  // the stored meta so a restored thread renders the same footer as the live stream.
+  const record = (assistantContent: string, extras?: Record<string, unknown>) => {
     recordExchange({
       threadId, userSub: user.sub, sessionId,
       promptTitle: prompt.slice(0, 40),
       userContent: prompt, assistantContent,
-      gateway: recordGateway, meta: exchangeMeta,
+      gateway: recordGateway, meta: extras ? { ...(exchangeMeta ?? {}), ...extras } : exchangeMeta,
     }).catch(() => { /* store is never-throws by contract; belt-and-suspenders (P2 gate) */ });
   };
 
@@ -285,6 +288,7 @@ export async function POST(request: Request) {
         return;
       }
       let text: string;
+      let provenance: { tools: string[]; model?: string } = { tools: [] };
       const t0 = Date.now();
       controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'analyzing' }) + '\n\n'));
       const tick = setInterval(() => {
@@ -299,7 +303,7 @@ export async function POST(request: Request) {
       request.signal.addEventListener('abort', onAbort);
 
       try {
-        text = await invokeAgent({
+        const detailed = await invokeAgentDetailed({
           gateway: spec.gateway, messages, sessionId,
           systemPromptOverride: spec.systemPromptOverride,
           toolAllowlist: spec.toolAllowlist,
@@ -308,6 +312,8 @@ export async function POST(request: Request) {
           integrations: spec.integrations, // ADR-039 P2-infra inc2: live egress-READ MCP connections
           extraContext: datasourceSchemaContext, // cached datasource schemas → agent reads the cache
         });
+        text = detailed.text;
+        provenance = { tools: detailed.tools, model: detailed.model };
       } catch (e) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
@@ -326,7 +332,16 @@ export async function POST(request: Request) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));
         if (TYPE_DELAY_MS) await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
       }
-      record(text); // fire-and-forget after the chunk loop, before [DONE] (P2 gate placement)
+      // Answer-provenance footer (design handoff 개선안 ③): server-measured elapsed is the
+      // authoritative total (the periodic `status` ticks stop once the invoke resolves), plus
+      // the tools the agent actually called and its model — all unknown before this point.
+      const footerMeta = {
+        elapsedMs: Date.now() - t0,
+        ...(provenance.tools.length ? { tools: provenance.tools } : {}),
+        ...(provenance.model ? { model: getModelLabel(provenance.model) } : {}),
+      };
+      controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footerMeta)}\n\n`));
+      record(text, footerMeta); // fire-and-forget after the chunk loop, before [DONE] (P2 gate placement)
       controller.enqueue(enc.encode('data: [DONE]\n\n'));
       controller.close();
     },

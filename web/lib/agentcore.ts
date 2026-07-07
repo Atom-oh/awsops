@@ -59,35 +59,41 @@ function isEventStream(resp: unknown): boolean {
   return ct.includes('text/event-stream');
 }
 
-/** Extract the assistant text from one SSE `data:` payload. The streaming agent.py yields
- *  `{"delta": str}` dicts (AgentCore JSON-encodes them); we also tolerate a raw Strands event
- *  (`{"data": str}`), a bare JSON string, or raw text — and treat non-text events (tool use,
- *  lifecycle) as empty. */
-function extractDelta(data: string): string {
+/** One agent stream event: incremental answer text, a tool invocation, or the model id
+ *  (answer provenance — agent.py emits `{"tool": name}` / `{"model": id}` alongside deltas). */
+export interface AgentEvent { delta?: string; tool?: string; model?: string }
+
+/** Extract an event from one SSE `data:` payload. The streaming agent.py yields
+ *  `{"delta": str}` dicts (AgentCore JSON-encodes them) plus `{"tool": str}` / `{"model": str}`
+ *  provenance frames; we also tolerate a raw Strands event (`{"data": str}`), a bare JSON
+ *  string, or raw text — and treat other non-text events (lifecycle) as null. */
+function extractEvent(data: string): AgentEvent | null {
   try {
     const o = JSON.parse(data);
     if (o && typeof o === 'object') {
-      if (typeof (o as { delta?: unknown }).delta === 'string') return (o as { delta: string }).delta;
-      if (typeof (o as { data?: unknown }).data === 'string') return (o as { data: string }).data;
-      return '';
+      if (typeof (o as { delta?: unknown }).delta === 'string') return { delta: (o as { delta: string }).delta };
+      if (typeof (o as { data?: unknown }).data === 'string') return { delta: (o as { data: string }).data };
+      if (typeof (o as { tool?: unknown }).tool === 'string') return { tool: (o as { tool: string }).tool };
+      if (typeof (o as { model?: unknown }).model === 'string') return { model: (o as { model: string }).model };
+      return null;
     }
-    return typeof o === 'string' ? o : '';
+    return typeof o === 'string' && o ? { delta: o } : null;
   } catch {
-    return data;
+    return data ? { delta: data } : null;
   }
 }
 
-/** Map one SSE line to a delta string (or '' to skip non-data / control lines). */
-function lineToDelta(line: string): string {
-  if (!line.startsWith('data:')) return ''; // skip `event:`/`id:`/comment(`:`)/blank lines
+/** Map one SSE line to an event (or null to skip non-data / control lines). */
+function lineToEvent(line: string): AgentEvent | null {
+  if (!line.startsWith('data:')) return null; // skip `event:`/`id:`/comment(`:`)/blank lines
   const payload = line.slice(5).trim();
-  if (!payload || payload === '[DONE]') return '';
-  return extractDelta(payload);
+  if (!payload || payload === '[DONE]') return null;
+  return extractEvent(payload);
 }
 
-/** Iterate the runtime response as a stream of assistant text deltas. Falls back to a single
- *  buffered chunk when the body isn't an SSE web stream (legacy JSON entrypoint, or a mock). */
-async function* streamDeltas(resp: unknown): AsyncGenerator<string> {
+/** Iterate the runtime response as a stream of agent events. Falls back to a single
+ *  buffered text chunk when the body isn't an SSE web stream (legacy JSON entrypoint, or a mock). */
+async function* streamEvents(resp: unknown): AsyncGenerator<AgentEvent> {
   const body = (resp as {
     response?: {
       transformToWebStream?: () => ReadableStream<Uint8Array>;
@@ -98,7 +104,7 @@ async function* streamDeltas(resp: unknown): AsyncGenerator<string> {
   if (!isEventStream(resp) || !webStream) {
     // Legacy buffered JSON (old agent image) or non-stream mock → yield the whole answer once.
     const full = await readResponse(resp);
-    if (full) yield full;
+    if (full) yield { delta: full };
     return;
   }
   const reader = webStream.getReader();
@@ -111,13 +117,13 @@ async function* streamDeltas(resp: unknown): AsyncGenerator<string> {
       buf += dec.decode(value, { stream: true });
       let nl: number;
       while ((nl = buf.indexOf('\n')) >= 0) {
-        const d = lineToDelta(buf.slice(0, nl));
+        const ev = lineToEvent(buf.slice(0, nl));
         buf = buf.slice(nl + 1);
-        if (d) yield d;
+        if (ev) yield ev;
       }
     }
     buf += dec.decode(); // flush any multibyte remainder held by the decoder
-    const tail = lineToDelta(buf); // flush a trailing line that had no newline
+    const tail = lineToEvent(buf); // flush a trailing line that had no newline
     if (tail) yield tail;
   } finally {
     // If the consumer stops early (client abort → the for-await calls .return() here), cancel the
@@ -160,21 +166,34 @@ async function send(input: InvokeInput): Promise<unknown> {
   }
 }
 
+/** Invoke the AgentCore runtime, buffering the full answer plus provenance (tools invoked,
+ *  model id). Tools/model are empty against a legacy agent image that doesn't emit them —
+ *  callers must treat both as optional. */
+export async function invokeAgentDetailed(input: InvokeInput): Promise<{ text: string; tools: string[]; model?: string }> {
+  const resp = await send(input);
+  if (!isEventStream(resp)) return { text: await readResponse(resp), tools: [] };
+  let text = '';
+  let model: string | undefined;
+  const tools: string[] = []; // insertion-ordered; agent.py dedupes per toolUseId, Set guards re-emits
+  const seen = new Set<string>();
+  for await (const ev of streamEvents(resp)) {
+    if (ev.delta) text += ev.delta;
+    else if (ev.tool && !seen.has(ev.tool)) { seen.add(ev.tool); tools.push(ev.tool); }
+    else if (ev.model) model = ev.model;
+  }
+  return { text, tools, model };
+}
+
 /** Invoke the AgentCore runtime, buffering the full answer. Used by fan-out synthesis and k8sgpt
  *  (which need the complete text). Consumes an SSE stream into a string when present; otherwise
  *  reads the legacy buffered JSON. */
 export async function invokeAgent(input: InvokeInput): Promise<string> {
-  const resp = await send(input);
-  if (!isEventStream(resp)) return readResponse(resp);
-  let full = '';
-  for await (const d of streamDeltas(resp)) full += d;
-  return full;
+  return (await invokeAgentDetailed(input)).text;
 }
 
 /** Invoke the AgentCore runtime and yield assistant text deltas as they arrive (real token
- *  streaming). Used by the single-route chat path. Transparently degrades to a one-shot yield
- *  against a legacy buffered agent image. */
+ *  streaming). Transparently degrades to a one-shot yield against a legacy buffered agent image. */
 export async function* invokeAgentStream(input: InvokeInput): AsyncGenerator<string> {
   const resp = await send(input);
-  yield* streamDeltas(resp);
+  for await (const ev of streamEvents(resp)) if (ev.delta) yield ev.delta;
 }

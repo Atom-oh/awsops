@@ -16,6 +16,8 @@ export function parseFrame(frame: string): {
   ranked?: any;
   method?: string;
   via?: string;
+  tools?: string[];
+  model?: string;
   phase?: string;
   elapsedMs?: number;
   delta?: string;
@@ -113,8 +115,12 @@ export function useChat() {
       }
       const data: { thread: ThreadSummary; messages: ThreadMessage[] } = await res.json();
       setMsgs(data.messages.map((m) => {
-        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string; via?: string };
-        return { role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: meta.ranked, method: meta.method, via: meta.via };
+        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string; via?: string; tools?: string[]; model?: string; elapsedMs?: number };
+        return {
+          role: m.role, content: m.content, gateway: m.gateway ?? undefined,
+          ranked: meta.ranked, method: meta.method, via: meta.via,
+          tools: meta.tools, model: meta.model, elapsedMs: meta.elapsedMs,
+        };
       }));
       sessionRef.current = data.thread.sessionId;
       localStorage.setItem('awsops_chat_session', data.thread.sessionId);
@@ -138,6 +144,16 @@ export function useChat() {
       if (parsed.threadId) setThread(parsed.threadId);
       if (parsed.gateway) {
         patchLast((m) => ({ ...m, gateway: parsed.gateway, ranked: parsed.ranked, method: parsed.method, via: parsed.via }));
+      }
+      // Answer-provenance footer: a second, later `meta` frame (no `gateway`) carries the
+      // server-measured elapsed total + tools/model, known only after the invoke resolves.
+      if (parsed.tools || parsed.model || parsed.elapsedMs !== undefined) {
+        patchLast((m) => ({
+          ...m,
+          tools: parsed.tools ?? m.tools,
+          model: parsed.model ?? m.model,
+          elapsedMs: parsed.elapsedMs ?? m.elapsedMs,
+        }));
       }
     } else if (parsed.kind === 'status') {
       patchLast((m) => ({ ...m, status: { phase: parsed.phase ?? 'analyzing', elapsedMs: parsed.elapsedMs } }));
