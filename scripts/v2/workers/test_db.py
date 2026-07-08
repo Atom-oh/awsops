@@ -96,3 +96,63 @@ class TestSweep:
         db.sweep_diag_signals(c, 5, [])
         sql, p = c.calls[0]
         assert "DELETE FROM datasource_diag_signals" in sql and p["iid"] == 5
+
+
+# ── datasource_graph_queries (pre-built topology-graph queries) ─────────────────────────────────
+GQ_READY = {"query_key": "trace_spans", "status": "ready",
+            "query": {"tool": "clickhouse_query", "mapper": "otel_v1", "args_template": {"sql": "SELECT 1"}},
+            "missing": None, "meta": {"kind": "clickhouse", "provenance": "catalog"}}
+GQ_UNAVAIL = {"query_key": "servicegraph_calls", "status": "unavailable", "query": None,
+              "missing": ["istio_requests_total"], "meta": {"kind": "prometheus", "provenance": "catalog"}}
+
+
+class TestUpsertGraphQueries:
+    def test_upsert_binds_params_and_jsonb_casts(self):
+        c = FakeConn()
+        db.upsert_graph_queries(c, 42, [GQ_READY, GQ_UNAVAIL], "abc123")
+        assert len(c.calls) == 2
+        for sql, p in c.calls:
+            assert "INSERT INTO datasource_graph_queries" in sql
+            assert "::jsonb" in sql
+            assert p["iid"] == 42 and p["sv"] == "abc123"
+            assert p["qk"] in ("trace_spans", "servicegraph_calls")
+            assert "trace_spans" not in sql and "servicegraph_calls" not in sql  # bound, not inlined
+        ready_call = next(p for _, p in c.calls if p["qk"] == "trace_spans")
+        assert json.loads(ready_call["q"])["mapper"] == "otel_v1"
+
+    def test_upsert_empty_rows_is_noop(self):
+        c = FakeConn()
+        db.upsert_graph_queries(c, 1, [], "v")
+        assert c.calls == []
+
+
+class TestReadGraphSchemaVersion:
+    def test_returns_value_when_rows_present(self):
+        c = FakeConn(returns=[[[1, "abc123"]]])
+        assert db.read_graph_schema_version(c, 7) == "abc123"
+        sql, p = c.calls[0]
+        assert "COUNT(DISTINCT schema_version)" in sql and "datasource_graph_queries" in sql
+        assert p["iid"] == 7
+
+    def test_returns_none_when_absent(self):
+        c = FakeConn(returns=[[[0, None]]])
+        assert db.read_graph_schema_version(c, 7) is None
+
+    def test_returns_none_when_versions_are_mixed(self):
+        c = FakeConn(returns=[[[2, "newest"]]])
+        assert db.read_graph_schema_version(c, 7) is None
+
+
+class TestSweepGraphQueries:
+    def test_sweep_deletes_keys_not_kept_bound(self):
+        c = FakeConn()
+        db.sweep_graph_queries(c, 5, ["trace_spans"])
+        sql, p = c.calls[0]
+        assert "DELETE FROM datasource_graph_queries" in sql
+        assert p["iid"] == 5 and p["keep"] == ["trace_spans"]
+
+    def test_sweep_empty_keep_deletes_all_for_instance(self):
+        c = FakeConn()
+        db.sweep_graph_queries(c, 5, [])
+        sql, p = c.calls[0]
+        assert "DELETE FROM datasource_graph_queries" in sql and p["iid"] == 5
