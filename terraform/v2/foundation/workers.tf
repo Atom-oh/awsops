@@ -358,6 +358,18 @@ resource "aws_iam_role_policy" "sfn" {
         Resource = "*"
       },
       {
+        # RunTask's EnableECSManagedTags+PropagateTags (sfn.asl.json) tags the started task —
+        # AWS requires ecs:TagResource on the caller for that, even though the tag itself is
+        # AWS-generated (aws:ecs:clusterName). Task ARNs are per-run, so wildcard like ControlTasks.
+        Sid      = "TagRunTasks"
+        Effect   = "Allow"
+        Action   = ["ecs:TagResource"]
+        Resource = "*"
+        Condition = {
+          StringEquals = { "ecs:CreateAction" = "RunTask" }
+        }
+      },
+      {
         Sid      = "PassTaskRoles"
         Effect   = "Allow"
         Action   = ["iam:PassRole"]

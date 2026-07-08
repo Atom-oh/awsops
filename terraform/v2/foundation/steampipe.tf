@@ -230,6 +230,9 @@ resource "aws_ecs_service" "steampipe" {
     assign_public_ip = false
   }
   service_registries { registry_arn = aws_service_discovery_service.steampipe[0].arn }
+  # Same cluster cost-attribution tagging as the web service — see workload.tf.
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
 }
 resource "aws_cloudwatch_metric_alarm" "steampipe_down" {
   count = local.sp

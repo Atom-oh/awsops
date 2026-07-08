@@ -490,6 +490,12 @@ resource "aws_ecs_service" "web" {
     rollback = true
   }
 
+  # Propagates aws:ecs:clusterName (+ aws:ecs:serviceName) onto every task, so a cost-allocation
+  # tag on that key (see var.ecs_cost_tag_active) lets Cost Explorer GroupBy TAG roll usage up
+  # per cluster — CE has no native cluster dimension otherwise.
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
+
   depends_on = [aws_lb_listener.https]
 }
 
@@ -499,4 +505,13 @@ resource "aws_ecs_service" "web" {
 moved {
   from = aws_lb_target_group.spine
   to   = aws_lb_target_group.web
+}
+
+# Gated separately from enable_ecs_managed_tags above: AWS-generated tag keys can only be
+# activated once tagged usage has actually appeared in CE (~24h lag) — activating an unseen
+# key errors, hence the two-step rollout (var.ecs_cost_tag_active default false).
+resource "aws_ce_cost_allocation_tag" "ecs_cluster_name" {
+  count   = var.ecs_cost_tag_active ? 1 : 0
+  tag_key = "aws:ecs:clusterName"
+  status  = "Active"
 }

@@ -47,6 +47,24 @@ describe('getMtdCost', () => {
   });
 });
 
+describe('getEcsClusterCosts', () => {
+  it('keys by region|clusterName so same-named clusters in different regions don\'t double-count', async () => {
+    ceSend.mockResolvedValue({ ResultsByTime: [{ Groups: [
+      { Keys: ['ap-northeast-2', 'aws:ecs:clusterName$awsops-v2'], Metrics: { UnblendedCost: { Amount: '12.345', Unit: 'USD' } } },
+      { Keys: ['us-east-1', 'aws:ecs:clusterName$awsops-v2'], Metrics: { UnblendedCost: { Amount: '7.0', Unit: 'USD' } } },
+      { Keys: ['ap-northeast-2', 'aws:ecs:clusterName$'], Metrics: { UnblendedCost: { Amount: '3.0', Unit: 'USD' } } },
+    ] }] });
+    const { getEcsClusterCosts } = await import('./aws');
+    const out = await getEcsClusterCosts();
+    expect(out).toEqual({ 'ap-northeast-2|awsops-v2': 12.35, 'us-east-1|awsops-v2': 7 });
+    const input = ceSend.mock.calls[0][0].input;
+    expect(input.GroupBy).toEqual([
+      { Type: 'DIMENSION', Key: 'REGION' },
+      { Type: 'TAG', Key: 'aws:ecs:clusterName' },
+    ]);
+  });
+});
+
 describe('getMonthlyCost', () => {
   it('sums each month\'s service groups → [{month, total}] ascending', async () => {
     ceSend.mockResolvedValue({ ResultsByTime: [
