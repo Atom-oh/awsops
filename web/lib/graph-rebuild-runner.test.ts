@@ -14,8 +14,8 @@ describe('graph-rebuild.mjs', () => {
     expect(src).toMatch(/rebuildInfraGraph/);
     expect(src).toMatch(/rebuildTraceGraph/);
   });
-  it('constructs the default ClickHouseOtelTraceSource and logs the trace line', () => {
-    expect(src).toMatch(/new ClickHouseOtelTraceSource\(\)/);
+  it('loads registry-driven graph sources and logs the trace line', () => {
+    expect(src).toMatch(/loadGraphSources/);
     expect(src).toMatch(/\[graph-rebuild\] trace:/);
   });
 });

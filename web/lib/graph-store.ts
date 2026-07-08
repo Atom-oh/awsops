@@ -2,7 +2,15 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { buildFlowGraph, type FlowInput, type FlowKind } from './flow-topology';
 import { buildInfraGraph, type Row } from './infra-topology';
-import type { TraceSource, TraceSpan } from './trace-source';
+import type { TraceSource, TraceSpan, ServiceGraphCall } from './trace-source';
+
+/** Structural (duck-typed) interface for a Prometheus/Mimir service-graph metrics source — matches
+ *  trace-source.ts's `MetricsCallsSource` class without importing it directly, so tests can supply a
+ *  plain stub. Contributes `calls` edges only (see graph_catalog.py's capability-driven design). */
+interface MetricsCallsSourceLike {
+  available(): Promise<boolean>;
+  calls(windowMins: number): Promise<ServiceGraphCall[]>;
+}
 
 // ADR-043 materializer: read synced inventory from Aurora → reuse the SAME builders the UI uses
 // (no rule duplication) → upsert the derived graph into topology_nodes/edges under one
@@ -162,15 +170,23 @@ export function resolveInfraRef(dbHost: string | undefined, infraNodes: InfraNod
 
 export async function rebuildTraceGraph(
   pool: Pool,
-  source: TraceSource,
+  sources: TraceSource[],
   runId: string = randomUUID(),
+  metricsSources: MetricsCallsSourceLike[] = [],
 ): Promise<{ nodes: number; edges: number }> {
-  // No-op path (the default pre-tracing state): empty trace layer, but DO sweep stale trace rows.
-  if (!(await source.available())) {
+  // Registry-driven (2026-07-08): each source's readiness is independent — filter down to the
+  // available ones and union their contributions. No-op path (nothing available anywhere): empty
+  // trace layer, but DO sweep stale trace rows.
+  const availableSources: TraceSource[] = [];
+  for (const s of sources) if (await s.available()) availableSources.push(s);
+  const availableMetricsSources: MetricsCallsSourceLike[] = [];
+  for (const m of metricsSources) if (await m.available()) availableMetricsSources.push(m);
+  if (availableSources.length === 0 && availableMetricsSources.length === 0) {
     return writeGraph(pool, 'trace', TRACE_LOCK, [], [], runId, true);
   }
 
-  const spans = await source.recentSpans(TRACE_WINDOW_MINS, TRACE_SPAN_CAP);
+  const spanLists = await Promise.all(availableSources.map((s) => s.recentSpans(TRACE_WINDOW_MINS, TRACE_SPAN_CAP)));
+  const spans = spanLists.flat();
 
   // Resolve bridge refs against the current infra-layer nodes (best-effort; failure is non-fatal).
   let infraNodes: InfraNodeLike[] = [];
@@ -189,10 +205,10 @@ export async function rebuildTraceGraph(
 
   const nodes = new Map<string, GNode>();
   const edgeCounts = new Map<string, { source: string; target: string; rel: string; n: number }>();
-  const bump = (source: string, target: string, rel: string) => {
-    const k = `${source} ${target} ${rel}`;
+  const bump = (source: string, target: string, rel: string, inc = 1) => {
+    const k = `${source} ${target} ${rel}`;
     const e = edgeCounts.get(k);
-    if (e) e.n += 1; else edgeCounts.set(k, { source, target, rel, n: 1 });
+    if (e) e.n += inc; else edgeCounts.set(k, { source, target, rel, n: inc });
   };
   const svcId = (svc: string) => `svc:${svc}`;
   const dbId = (sys: string, hostOrName: string) => `db:${sys}:${hostOrName}`;
@@ -224,10 +240,11 @@ export async function rebuildTraceGraph(
       const idKey = s.dbHost && s.dbName ? `${s.dbHost}/${s.dbName}` : hostOrName;
       const id = dbId(s.dbSystem, idKey);
       if (!nodes.has(id)) {
-        // infra_ref bridge is best-effort and currently DORMANT in production: infra-topology nodes
-        // carry meta { invType, resourceId } and NO meta.host, so resolveInfraRef can never match
-        // until infra-topology populates host on RDS/Aurora nodes.
-        // TODO(trace-topology, M2): emit meta.host on infra RDS/Aurora nodes to activate this bridge.
+        // infra_ref bridge (M2, active): infra-topology.ts stamps meta.host from data.endpoint_address
+        // on RDS nodes. Known ceiling: sync covers rds *instances* only, whose endpoint_address is the
+        // instance endpoint (e.g. "db-1.xyz…"), not the Aurora cluster/writer endpoint apps typically
+        // connect through — a trace db.host on the cluster endpoint won't share a leading DNS label
+        // with the instance endpoint, so it won't match. Upgrade path: sync an rds_cluster type.
         const infra_ref = resolveInfraRef(s.dbHost, infraNodes);
         const meta: Record<string, unknown> = { system: s.dbSystem, host: s.dbHost ?? null };
         if (s.dbName) meta.dbName = s.dbName;
@@ -250,6 +267,21 @@ export async function rebuildTraceGraph(
         if (!pods.includes(s.k8sPod)) pods.push(s.k8sPod);
       }
       bump(sid, id, 'runs_on');
+    }
+  }
+
+  // Fold in metrics-sourced service-graph calls (Prometheus/Mimir, Istio mesh or Tempo
+  // metrics-generator) — aggregate `calls` edges only, no spans, so they merge into the SAME
+  // edgeCounts bucket as any span-derived `calls` edge for a matching client/server pair (summed,
+  // not a separate row) and never touch `queries`/`runs_on` (capability-driven design).
+  for (const m of availableMetricsSources) {
+    const calls = await m.calls(TRACE_WINDOW_MINS);
+    for (const c of calls) {
+      const csid = svcId(c.client);
+      const ssid = svcId(c.server);
+      if (!nodes.has(csid)) nodes.set(csid, { id: csid, kind: 'service', label: c.client, meta: { spanCount: 0 } });
+      if (!nodes.has(ssid)) nodes.set(ssid, { id: ssid, kind: 'service', label: c.server, meta: { spanCount: 0 } });
+      bump(csid, ssid, 'calls', c.count);
     }
   }
 

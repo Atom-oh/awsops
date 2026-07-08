@@ -330,6 +330,11 @@ resource "aws_ecs_task_definition" "web" {
         # AI Insights gate: omit the env when off → concat(base, []) == base (no web task-def diff/redeploy).
         # The BFF /api/insights(+refresh) read AI_INSIGHTS_ENABLED and no-op/hide when it's absent.
         { name = "AI_INSIGHTS_ENABLED", value = "true" },
+        ] : [], var.graph_rebuild_interval_mins > 0 ? [
+        # instrumentation.ts's register() reads this to schedule the graph-rebuild interval; 0/absent
+        # (default) means the interval never starts — concat(base, []) == base, byte-identical web
+        # task def when off. The manual scripts/v2/graph-rebuild.mjs path is unaffected either way.
+        { name = "GRAPH_REBUILD_INTERVAL_MINS", value = tostring(var.graph_rebuild_interval_mins) },
         ] : [],
         # Scheduled-diagnosis mailing list (gated): empty list when diagnosis_notify_enabled=false →
         # concat(base, []) == base → byte-identical web task def (no redeploy when off).

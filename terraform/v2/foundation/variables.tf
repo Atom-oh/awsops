@@ -107,6 +107,20 @@ variable "workers_enabled" {
   default     = false
 }
 
+variable "graph_rebuild_interval_mins" {
+  type        = number
+  description = "Minutes between web-instrumentation topology graph-rebuilds (flow/infra/trace layers, ADR-043 + 2026-06-25 trace-topology design). 0 (default) = the interval never starts; the manual `scripts/v2/graph-rebuild.mjs` path is unaffected either way. No new AWS resource — runs in the existing web task using perms it already holds. Recommended: 15 (matches steampipe.tf's inventory-sync cadence)."
+  default     = 0
+  validation {
+    # Must be 0 (off) or a whole minute ≥1 — a fractional/zero-ish positive value (e.g. 0.01) would
+    # produce an unintended, tightly-spinning Node setInterval. Capped at 1 day: this is a lightweight
+    # in-process timer, not a real schedule — anything longer belongs in the EventBridge upgrade path
+    # noted in instrumentation.ts, not this variable.
+    condition     = var.graph_rebuild_interval_mins == 0 || (var.graph_rebuild_interval_mins == floor(var.graph_rebuild_interval_mins) && var.graph_rebuild_interval_mins >= 1 && var.graph_rebuild_interval_mins <= 1440)
+    error_message = "graph_rebuild_interval_mins must be 0 (off) or a whole number of minutes between 1 and 1440."
+  }
+}
+
 variable "ecs_cost_tag_active" {
   type        = bool
   description = "Activates aws:ecs:clusterName as a Cost Explorer cost-allocation tag (feeds the /inventory/ecs_cluster MTD-cost column via GroupBy TAG). AWS only allows activating a tag key once tagged usage has appeared in billing (~24h after the enable_ecs_managed_tags rollout) — flip this on in a second apply, not the same one. false (default) = 0 resources, $0, tag stays inactive (CE just returns no data for it)."
@@ -126,6 +140,16 @@ variable "datasource_diagnosis_enabled" {
   validation {
     condition     = !var.datasource_diagnosis_enabled || (var.workers_enabled && var.agentcore_enabled && var.integrations_enabled)
     error_message = "datasource_diagnosis_enabled=true requires workers_enabled, agentcore_enabled, and integrations_enabled."
+  }
+}
+
+variable "graph_querygen_enabled" {
+  type        = bool
+  description = "Hybrid LLM fallback for the registry-driven graph-sources design (2026-07-08): when a ClickHouse datasource's schema doesn't match graph_catalog.py's standard OTel-exporter shape, ask Bedrock (Haiku) to generate a candidate query, validated by a static read-only check, a best-effort AgentCore Code Interpreter sandbox check (skipped if no interpreter is provisioned), and a live LIMIT-1 dry run — only a query that survives all checks is cached (provenance='generated'). Requires datasource_diagnosis_enabled (runs inside the same datasource_index job). bedrock:InvokeModel is already granted via worker_lambda_diagnosis; this flag adds only the GRAPH_QUERYGEN_ENABLED env + the Code Interpreter session IAM (requires agentcore_enabled). false (default) = 0 resources/IAM, $0, the catalog's deterministic 'unavailable' row stands."
+  default     = false
+  validation {
+    condition     = !var.graph_querygen_enabled || var.datasource_diagnosis_enabled
+    error_message = "graph_querygen_enabled requires datasource_diagnosis_enabled (it runs inside the same datasource_index job and needs the same PROJECT/connector-invoke plumbing)."
   }
 }
 

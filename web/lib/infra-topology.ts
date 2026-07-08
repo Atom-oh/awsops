@@ -61,7 +61,13 @@ export function buildInfraGraph(input: InfraInput): InfraGraph {
     const sgIds = [...new Set([...idsFrom(d.security_groups), ...idsFrom(d.security_group_ids), ...idsFrom(d.vpc_security_group_ids)])];
     if (!vpcId && subnetIds.length === 0 && sgIds.length === 0) continue;
     const rid = `${str(r.resource_type)}:${str(r.resource_id)}`;
-    addNode(rid, str(r.resource_type), nameOf(r), { invType: str(r.resource_type), resourceId: str(r.resource_id) });
+    // meta.host bridges this node to the trace-topology layer's db-node infra_ref (graph-store.ts
+    // resolveInfraRef): only rds rows carry endpoint_address today, so this is a no-op for other types.
+    const host = str(d.endpoint_address);
+    addNode(rid, str(r.resource_type), nameOf(r), {
+      invType: str(r.resource_type), resourceId: str(r.resource_id),
+      ...(host ? { host } : {}),
+    });
     if (vpcId) { addNode(`vpc:${vpcId}`, 'vpc', vpcId); addEdge(rid, `vpc:${vpcId}`, 'infra:in_vpc'); }
     for (const sid of subnetIds) { addNode(`subnet:${sid}`, 'subnet', sid); addEdge(rid, `subnet:${sid}`, 'infra:in_subnet'); }
     for (const gid of sgIds) { addNode(`sg:${gid}`, 'sg', gid); addEdge(rid, `sg:${gid}`, 'infra:uses_sg'); }

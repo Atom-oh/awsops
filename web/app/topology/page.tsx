@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { Globe, Cloud, Network, Target as TargetIcon, Shield, CircleHelp, MoreHorizontal, Server, Zap, Hexagon, Boxes, Circle, Copy, Sparkles, Search, Webhook, Archive, type LucideIcon } from 'lucide-react';
 import { Background, Controls, MiniMap, Position, type Node, type Edge, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -491,6 +492,9 @@ export default function TopologyPage() {
               {entryOptions.lb.map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}
             </select>
             <RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />
+            <Link href="/topology/services" className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-600 hover:bg-ink-50">
+              서비스 맵 →
+            </Link>
           </div>
         }
       />
