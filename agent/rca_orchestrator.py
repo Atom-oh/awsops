@@ -31,11 +31,12 @@ def _bedrock_invoke(prompt):
         region_name=os.environ.get("AWS_REGION", "ap-northeast-2"),
     )
     response = client.invoke_model(
-        # sonnet-5 rejects `temperature` on Converse/ConverseStream with a ValidationException
-        # ("temperature is deprecated for this model" — see agent.py MODEL_ID + hotfix
-        # c30ac9e7) — omit it here too rather than carry the same latent bug into this
-        # currently-gated (RCA_ORCHESTRATOR_ENABLED) path.
-        modelId="global.anthropic.claude-sonnet-5",
+        # `temperature` omitted, not just zeroed: sonnet-5 rejects the param outright on
+        # Converse/ConverseStream with a ValidationException (see agent.py's MODEL_ID +
+        # hotfix c30ac9e7). This path stays on sonnet-4-6 (AGENTS.md's pinned RCA model,
+        # which does accept `temperature`) — a model-generation bump is a separate decision
+        # (own PR + ADR), not something to bundle into this temperature hotfix.
+        modelId="global.anthropic.claude-sonnet-4-6",
         contentType="application/json",
         accept="application/json",
         body=json.dumps(

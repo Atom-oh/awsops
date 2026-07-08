@@ -27,7 +27,7 @@ export async function GET(request: Request) {
   try {
     const c = await getPool().query(
       `SELECT pass_rate, alarm, finished_at FROM compliance_runs
-       WHERE status = 'succeeded' ORDER BY started_at DESC LIMIT 1`,
+       WHERE status = 'succeeded' ORDER BY finished_at DESC NULLS LAST LIMIT 1`,
     );
     compliance = c.rows[0] ?? null;
   } catch { compliance = null; }

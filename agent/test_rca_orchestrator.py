@@ -18,13 +18,14 @@ class BedrockInvokeRequestBodyTest(unittest.TestCase):
         _, kwargs = fake_client.invoke_model.call_args
         return kwargs["modelId"], json.loads(kwargs["body"])
 
-    def test_uses_sonnet_5_and_omits_temperature(self):
-        # sonnet-5 rejects `temperature` on Converse/ConverseStream with a ValidationException
-        # (live-verified 2026-07-07, see agent.py MODEL_ID + the hotfix on this branch) — this
-        # path is RCA_ORCHESTRATOR_ENABLED-gated and currently off, but must not carry the same
-        # latent bug forward once that gate flips on.
+    def test_stays_on_sonnet_4_6_and_omits_temperature(self):
+        # Model stays on sonnet-4-6 (AGENTS.md's pinned RCA model) — bumping to sonnet-5 is a
+        # separate decision (own PR + ADR), not something to bundle into this temperature fix.
+        # `temperature` is still dropped defensively: sonnet-5 rejects it outright on
+        # Converse/ConverseStream (see agent.py's MODEL_ID + hotfix c30ac9e7), so this guards
+        # against a future model bump silently reintroducing that failure.
         model_id, body = self._invoke_and_capture_body()
-        self.assertEqual(model_id, "global.anthropic.claude-sonnet-5")
+        self.assertEqual(model_id, "global.anthropic.claude-sonnet-4-6")
         self.assertNotIn("temperature", body)
 
 
