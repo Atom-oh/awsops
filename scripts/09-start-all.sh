@@ -28,28 +28,47 @@ echo -e "${CYAN}================================================================
 echo ""
 
 # -- [1/2] Steampipe service ---------------------------------------------------
+# Prefer the systemd unit when installed (scripts/13-setup-steampipe-systemd.sh)
+# so processes stay under systemd supervision (Restart=always).
 echo -e "${CYAN}[1/2] Starting Steampipe service (port 9193)...${NC}"
-if steampipe service status 2>&1 | grep -q "running"; then
+if [ -f /etc/systemd/system/steampipe.service ]; then
+    sudo systemctl start steampipe.service
+    echo -e "  ${GREEN}Started via systemd (steampipe.service)${NC}"
+elif steampipe service status 2>&1 | grep -q "running"; then
     echo -e "  ${GREEN}Already running${NC}"
 else
     steampipe service stop --force 2>/dev/null || true
     sleep 2
-    steampipe service start --database-listen network --database-port 9193
+    # Pass the app's password so config.json and the DB stay in sync
+    SP_PW=$(python3 -c "import json; print(json.load(open('$WORK_DIR/data/config.json')).get('steampipePassword',''))" 2>/dev/null || echo "")
+    if [ -n "$SP_PW" ]; then
+        steampipe service start --database-listen network --database-port 9193 --database-password "$SP_PW"
+    else
+        steampipe service start --database-listen network --database-port 9193
+    fi
     echo -e "  ${GREEN}Started${NC}"
 fi
 
 # -- [2/2] Next.js server -----------------------------------------------------
+# Prefer the systemd unit (awsops.service, Restart=always) over nohup — a nohup'd
+# process dies silently and nothing restarts it (see known incident 2026-04-02).
 echo ""
 echo -e "${CYAN}[2/2] Starting Next.js production server (port 3000)...${NC}"
 
-# Kill existing process on port 3000
-fuser -k 3000/tcp 2>/dev/null || true
-sleep 1
+if [ -f /etc/systemd/system/awsops.service ]; then
+    sudo systemctl restart awsops.service
+    sleep 3
+    echo -e "  ${GREEN}Started via systemd (awsops.service)${NC}"
+else
+    # Kill existing process on port 3000
+    fuser -k 3000/tcp 2>/dev/null || true
+    sleep 1
 
-cd "$WORK_DIR"
-nohup sh -c "PORT=3000 npm run start" > /tmp/awsops-server.log 2>&1 &
-sleep 3
-echo -e "  ${GREEN}Started (log: /tmp/awsops-server.log)${NC}"
+    cd "$WORK_DIR"
+    nohup sh -c "PORT=3000 npm run start" > /tmp/awsops-server.log 2>&1 &
+    sleep 3
+    echo -e "  ${GREEN}Started (log: /tmp/awsops-server.log)${NC}"
+fi
 
 # -- [3/3] OpenCost port-forward (if OpenCost installed) ----------------------
 echo ""

@@ -24,7 +24,10 @@ echo ""
 
 # -- [1/3] Stop Next.js -------------------------------------------------------
 echo -e "${CYAN}[1/2] Stopping Next.js (port 3000)...${NC}"
-if fuser 3000/tcp 2>/dev/null; then
+if [ -f /etc/systemd/system/awsops.service ]; then
+    sudo systemctl stop awsops.service
+    echo -e "  ${GREEN}Stopped via systemd (awsops.service)${NC}"
+elif fuser 3000/tcp 2>/dev/null; then
     fuser -k 3000/tcp 2>/dev/null || true
     echo -e "  ${GREEN}Stopped${NC}"
 else
@@ -41,9 +44,14 @@ else
 fi
 
 # -- [3/3] Stop Steampipe ------------------------------------------------------
+# Under systemd management a bare `steampipe service stop` is auto-undone by
+# Restart=always — systemctl stop is the only way to keep it down intentionally.
 echo ""
 echo -e "${CYAN}[2/2] Stopping Steampipe service...${NC}"
-if steampipe service status 2>&1 | grep -q "running"; then
+if [ -f /etc/systemd/system/steampipe.service ]; then
+    sudo systemctl stop steampipe.service
+    echo -e "  ${GREEN}Stopped via systemd (steampipe.service)${NC}"
+elif steampipe service status 2>&1 | grep -q "running"; then
     steampipe service stop --force 2>/dev/null || true
     echo -e "  ${GREEN}Stopped${NC}"
 else

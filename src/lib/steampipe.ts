@@ -170,6 +170,21 @@ async function countStuckBackends(): Promise<number> {
   }
 }
 
+// Restart Steampipe, preferring the systemd unit (steampipe.service) when the host has one.
+// systemd 유닛이 있으면 systemctl로 재시작 — CLI restart는 새 프로세스를 awsops cgroup에 띄워
+// steampipe.service와 충돌하므로, 유닛 관리 호스트에서는 반드시 systemctl을 사용해야 한다.
+// Requires a sudoers grant: `ec2-user ALL=(root) NOPASSWD: /usr/bin/systemctl restart steampipe.service`
+// (installed by scripts/13-setup-steampipe-systemd.sh). Hosts without the unit fall back to the CLI.
+function restartSteampipeService(): void {
+  try {
+    execFileSync('sudo', ['-n', '/usr/bin/systemctl', 'restart', 'steampipe.service'], { timeout: 90000, encoding: 'utf-8' });
+    return;
+  } catch {
+    // No unit / no sudoers grant on this host — fall back to the Steampipe CLI.
+  }
+  execFileSync('steampipe', ['service', 'restart', '--force'], { timeout: 60000, encoding: 'utf-8' });
+}
+
 // Watchdog: when FDW hangs survive termination and pile up, restart Steampipe + reset the pool.
 // This is the only reliable reaper for OS-level FDW hangs. Runs as the awsops service user (ec2-user).
 async function restartSteampipeIfStuck(stuck: number): Promise<void> {
@@ -177,7 +192,7 @@ async function restartSteampipeIfStuck(stuck: number): Promise<void> {
   watchdogRestarting = true;
   console.error(`[Watchdog] ${stuck} stuck FDW backend(s) survived termination (>= ${ZOMBIE_RESTART_THRESHOLD}); restarting Steampipe to free pool slots`);
   try {
-    execFileSync('steampipe', ['service', 'restart', '--force'], { timeout: 60000, encoding: 'utf-8' });
+    restartSteampipeService();
     await resetPool();
     console.log('[Watchdog] Steampipe restarted and pool reset');
   } catch (err) {
