@@ -28,7 +28,9 @@ export async function GET(request: Request, { params }: { params: { type: string
       try {
         const costs = await getEcsClusterCosts();
         for (const row of page.rows) {
-          const cost = costs[String(row.resource_id)];
+          // ecs_cluster's resource_id is the cluster *name* (steampipe sync's primary key for
+          // this type), not an ARN — matches getEcsClusterCosts' region|name keying below.
+          const cost = costs[`${row.region}|${row.resource_id}`];
           if (cost !== undefined) (row.data as Record<string, unknown>).mtd_cost_usd = cost;
         }
       } catch { /* leave rows without mtd_cost_usd */ }

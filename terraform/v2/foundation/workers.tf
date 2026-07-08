@@ -365,6 +365,9 @@ resource "aws_iam_role_policy" "sfn" {
         Effect   = "Allow"
         Action   = ["ecs:TagResource"]
         Resource = "*"
+        Condition = {
+          StringEquals = { "ecs:CreateAction" = "RunTask" }
+        }
       },
       {
         Sid      = "PassTaskRoles"
