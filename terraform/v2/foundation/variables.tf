@@ -119,6 +119,10 @@ variable "graph_rebuild_interval_mins" {
     condition     = var.graph_rebuild_interval_mins == 0 || (var.graph_rebuild_interval_mins == floor(var.graph_rebuild_interval_mins) && var.graph_rebuild_interval_mins >= 1 && var.graph_rebuild_interval_mins <= 1440)
     error_message = "graph_rebuild_interval_mins must be 0 (off) or a whole number of minutes between 1 and 1440."
   }
+variable "ecs_cost_tag_active" {
+  type        = bool
+  description = "Activates aws:ecs:clusterName as a Cost Explorer cost-allocation tag (feeds the /inventory/ecs_cluster MTD-cost column via GroupBy TAG). AWS only allows activating a tag key once tagged usage has appeared in billing (~24h after the enable_ecs_managed_tags rollout) — flip this on in a second apply, not the same one. false (default) = 0 resources, $0, tag stays inactive (CE just returns no data for it)."
+  default     = false
 }
 
 variable "ai_cost_tracking_enabled" {

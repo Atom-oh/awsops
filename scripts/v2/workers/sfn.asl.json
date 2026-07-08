@@ -61,6 +61,8 @@
             "AssignPublicIp": "DISABLED"
           }
         },
+        "EnableECSManagedTags": true,
+        "PropagateTags": "TASK_DEFINITION",
         "Overrides": {
           "ContainerOverrides": [
             {
@@ -93,6 +95,8 @@
             "AssignPublicIp": "DISABLED"
           }
         },
+        "EnableECSManagedTags": true,
+        "PropagateTags": "TASK_DEFINITION",
         "Overrides": {
           "ContainerOverrides": [
             {
