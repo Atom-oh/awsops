@@ -39,6 +39,31 @@ export async function listClusters(): Promise<ClusterInfo[]> {
 
 export interface CostBreakdown { total: number; currency: string; byService: { service: string; amount: number }[] }
 
+// Cost Explorer has no cluster dimension — this relies on the AWS-generated tag
+// `aws:ecs:clusterName` (activated as a cost-allocation tag; see terraform/v2/foundation
+// variable `ecs_cost_tag_active`). Untagged usage groups under the empty-value bucket
+// (key `aws:ecs:clusterName$`, no `$name` suffix) — dropped, not a real cluster.
+export async function getEcsClusterCosts(accountId?: string): Promise<Record<string, number>> {
+  const now = new Date();
+  const start = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
+  const end = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+  const r = await (await ceClient(accountId)).send(new GetCostAndUsageCommand({
+    TimePeriod: { Start: start, End: end },
+    Granularity: 'MONTHLY',
+    Metrics: ['UnblendedCost'],
+    GroupBy: [{ Type: 'TAG', Key: 'aws:ecs:clusterName' }],
+  }));
+  const groups = r.ResultsByTime?.[0]?.Groups ?? [];
+  const out: Record<string, number> = {};
+  for (const g of groups) {
+    const key = g.Keys?.[0] ?? '';
+    const name = key.split('$')[1];
+    if (!name) continue;
+    out[name] = Math.round(Number(g.Metrics?.UnblendedCost?.Amount ?? 0) * 100) / 100;
+  }
+  return out;
+}
+
 export async function getMtdCost(accountId?: string): Promise<CostBreakdown> {
   const now = new Date();
   const start = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;

@@ -28,7 +28,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
   ecs_cluster: { label: 'ECS Clusters', group: 'Compute', stateKey: 'status', distKey: 'status', columns: [
     { key: 'status', label: 'Status' }, { key: 'running_tasks_count', label: 'Running' },
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
-    { key: 'registered_container_instances_count', label: 'Instances' } ] },
+    { key: 'registered_container_instances_count', label: 'Instances' },
+    { key: 'mtd_cost_usd', label: 'MTD Cost ($)' } ] },
   ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', columns: [
     { key: 'service_name', label: 'Service' }, { key: 'status', label: 'Status' },
     { key: 'desired_count', label: 'Desired' }, { key: 'running_count', label: 'Running' },

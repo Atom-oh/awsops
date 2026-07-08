@@ -47,6 +47,20 @@ describe('getMtdCost', () => {
   });
 });
 
+describe('getEcsClusterCosts', () => {
+  it('maps GroupBy TAG results keyed by cluster name, drops the untagged bucket', async () => {
+    ceSend.mockResolvedValue({ ResultsByTime: [{ Groups: [
+      { Keys: ['aws:ecs:clusterName$awsops-v2'], Metrics: { UnblendedCost: { Amount: '12.345', Unit: 'USD' } } },
+      { Keys: ['aws:ecs:clusterName$'], Metrics: { UnblendedCost: { Amount: '3.0', Unit: 'USD' } } },
+    ] }] });
+    const { getEcsClusterCosts } = await import('./aws');
+    const out = await getEcsClusterCosts();
+    expect(out).toEqual({ 'awsops-v2': 12.35 });
+    const input = ceSend.mock.calls[0][0].input;
+    expect(input.GroupBy).toEqual([{ Type: 'TAG', Key: 'aws:ecs:clusterName' }]);
+  });
+});
+
 describe('getMonthlyCost', () => {
   it('sums each month\'s service groups → [{month, total}] ascending', async () => {
     ceSend.mockResolvedValue({ ResultsByTime: [
