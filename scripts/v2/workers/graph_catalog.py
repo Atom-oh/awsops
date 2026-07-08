@@ -33,12 +33,6 @@ _OTEL_REQUIRED_COLUMNS = {
     "ResourceAttributes", "SpanAttributes",
 }
 
-_OTEL_SQL_TEMPLATE = (
-    "SELECT TraceId, SpanId, ParentSpanId, ServiceName, SpanKind, Timestamp, Duration, "
-    "ResourceAttributes, SpanAttributes FROM {table} "
-    "WHERE Timestamp >= now() - INTERVAL {{window}} MINUTE ORDER BY Timestamp DESC LIMIT {{cap}}"
-)
-
 _SERVICEGRAPH_METRIC = "traces_service_graph_request_total"
 _ISTIO_METRIC = "istio_requests_total"
 
@@ -50,7 +44,16 @@ def _clickhouse_trace_spans(schema):
             continue
         cols = {c.get("name") for c in (t.get("columns") or []) if isinstance(c, dict)}
         if _OTEL_REQUIRED_COLUMNS.issubset(cols):
-            sql = _OTEL_SQL_TEMPLATE.format(table=t.get("name"))
+            # SpanKind isn't in the required set (older/custom exporters may omit it) but the SELECT
+            # always requests it — include it only when the table actually has it, else the query
+            # errors at ClickHouse execution time on a table that otherwise matched.
+            select_cols = "TraceId, SpanId, ParentSpanId, ServiceName" + (
+                ", SpanKind" if "SpanKind" in cols else ""
+            ) + ", Timestamp, Duration, ResourceAttributes, SpanAttributes"
+            sql = (
+                f"SELECT {select_cols} FROM {t.get('name')} "
+                "WHERE Timestamp >= now() - INTERVAL {window} MINUTE ORDER BY Timestamp DESC LIMIT {cap}"
+            )
             return {
                 "query_key": "trace_spans", "status": "ready",
                 "query": {"tool": "clickhouse_query", "mapper": "otel_v1", "args_template": {"sql": sql}},

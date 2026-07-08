@@ -932,6 +932,11 @@ resource "aws_iam_role_policy" "worker_lambda_graph_querygen" {
           "bedrock-agentcore:StopCodeInterpreterSession",
         ]
         Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion" = var.region
+          }
+        }
       },
     ]
   })

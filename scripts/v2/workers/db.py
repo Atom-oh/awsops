@@ -221,14 +221,22 @@ def sweep_graph_queries(conn, integration_id, keep_keys):
         iid=integration_id, keep=list(keep_keys or []))
 
 
+_MAX_SCHEMA_BYTES = 256_000  # mirrors web/lib/datasource-schema.ts's MAX_SCHEMA_BYTES — same table/cap
+
+
 def upsert_datasource_schema(conn, account_id, integration_id, kind, schema):
     """Write-back of a freshly re-introspected schema (drift refresh, datasource_index.py only —
     the BFF's normal warm/refresh path uses upsertSchema in web/lib/datasource-schema.ts; this is the
-    python-worker-side mirror, same table). jsonb bound + cast, never inlined."""
+    python-worker-side mirror, same table). jsonb bound + cast, never inlined. Raises (caller falls
+    back to the cached schema — see run()'s `fresh is not None` write-back path) when the introspected
+    schema exceeds the same size cap the BFF enforces, so an oversized live schema never gets cached."""
+    payload = json.dumps(schema)
+    if len(payload.encode("utf-8")) > _MAX_SCHEMA_BYTES:
+        raise ValueError("introspected schema exceeds size limit")
     conn.run(
         "INSERT INTO datasource_schemas (account_id, integration_id, kind, schema, fetched_at) "
         "VALUES (:acct, :iid, :k, :s::jsonb, now()) "
         "ON CONFLICT (account_id, integration_id) DO UPDATE SET "
         "kind=EXCLUDED.kind, schema=EXCLUDED.schema, fetched_at=now()",
-        acct=account_id, iid=integration_id, k=kind, s=json.dumps(schema),
+        acct=account_id, iid=integration_id, k=kind, s=payload,
     )

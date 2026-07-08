@@ -1,6 +1,17 @@
 # Registry-driven graph sources — schema cache + pre-built queries + drift batch
+# 레지스트리 기반 그래프 소스 — 스키마 캐시 + 사전 빌드 쿼리 + 드리프트 배치
 
 **Status:** Approved 2026-07-08. Branch `feat/v2-graph-source-registry` (stacked on `feat/v2-trace-topology-activation`, PR #141).
+
+## 요약 (한국어)
+
+`class='trace'` 토폴로지가 단일 하드코딩된 ClickHouse 인스턴스/테이블에서만 span을 가져오던 구조를,
+**레지스트리에 등록된 모든 datasource**(prometheus/clickhouse/mimir/loki/tempo 5종) 기반으로 일반화한다.
+등록 시 스키마를 Postgres에 캐시하고(`datasource_schemas`), 그 스키마로부터 그래프 빌드용 SQL/쿼리를
+**사전 생성**해 `datasource_graph_queries` 테이블에 저장한다(순수 카탈로그 매칭 우선, ClickHouse
+`trace_spans`만 매칭 실패 시 게이트된 LLM fallback으로 생성). 기존 daily `datasource_index` 잡을
+확장해 (a) 5종 전체로 넓히고 (b) 커넥터의 `{kind}_schema` 도구로 **라이브 재조회하여 드리프트를 감지**,
+캐시/사전빌드쿼리를 갱신한다. 상세 설계·결정 근거·테스트 계획은 아래 영어 본문 참조.
 
 ## Problem
 

@@ -66,26 +66,49 @@ def _lambda_invoke(kind, tool, arguments=None):
     """Credential-blind connector invoke (same shape as diagnosis/sources.py:_invoke_connector),
     duplicated locally because this is a LAMBDA-runtime handler whose zip only bundles this file +
     signal_catalog.py + graph_catalog.py + graph_querygen.py (see workers.tf's archive_file), not the
-    full diagnosis package. Raises on failure — callers decide how to handle it."""
+    full diagnosis package. Raises on failure (FunctionError, non-2xx statusCode) — callers decide
+    how to handle it; never returns an error envelope as if it were a schema."""
     region = os.environ.get("AWS_REGION", "ap-northeast-2")
     project = os.environ.get("PROJECT", "awsops-v2")
     client = boto3.client("lambda", region_name=region)
     req = json.dumps({"tool_name": tool, "arguments": arguments or {}}).encode("utf-8")
     resp = client.invoke(FunctionName=f"{project}-agent-{kind}-mcp", Payload=req)
+    if resp.get("FunctionError"):
+        raise RuntimeError(f"{kind}-mcp {tool} invoke FunctionError: {resp['FunctionError']}")
     raw = resp["Payload"].read()
     out = json.loads(raw) if raw else {}
+    status = out.get("statusCode")
+    if isinstance(status, int) and status >= 400:
+        raise RuntimeError(f"{kind}-mcp {tool} returned statusCode {status}")
     body = out.get("body")
     if isinstance(body, str):
         body = json.loads(body)
     return body
 
 
+# Minimal expected-shape key per connector kind (mirrors the spec's cached-schema shapes) — a
+# connector error envelope (e.g. {"error": "..."}) has none of these, so it can never be mistaken
+# for a real schema even if `_lambda_invoke` ever let one through undetected.
+_SCHEMA_SHAPE_KEY = {
+    "clickhouse": "tables", "tempo": "tags", "prometheus": "metrics",
+    "mimir": "metrics", "loki": "labels",
+}
+
+
+def _looks_like_schema(kind, body):
+    if not isinstance(body, dict):
+        return False
+    key = _SCHEMA_SHAPE_KEY.get(kind)
+    return isinstance(body.get(key), list) if key else True
+
+
 def _reintrospect(kind, integration_id):
     """Live schema fetch via the `{kind}_schema` tool. Returns the schema dict on success, or None on
-    ANY failure (never raises) — the caller falls back to the cached schema."""
+    ANY failure OR a response that doesn't look like a real schema (never raises) — the caller falls
+    back to the cached schema."""
     try:
         body = _lambda_invoke(kind, f"{kind}_schema", {"instance_id": integration_id})
-        return body if isinstance(body, dict) else None
+        return body if _looks_like_schema(kind, body) else None
     except Exception:  # noqa: BLE001 — a flaky/down connector must never block the daily rebuild
         return None
 
@@ -100,8 +123,14 @@ def _schema_version(schema):
 
 def _graph_schema_version(schema):
     """Stable cross-process hash of the FULL schema (graph queries key off tables too, not just
-    metric names — e.g. clickhouse) + graph_catalog.CATALOG_VERSION."""
-    basis = json.dumps(schema, sort_keys=True, separators=(",", ":")) + "|" + _graph_cat.CATALOG_VERSION
+    metric names — e.g. clickhouse) + graph_catalog.CATALOG_VERSION + the querygen flag's on/off
+    state. The flag is mixed in so flipping GRAPH_QUERYGEN_ENABLED — with the schema itself
+    unchanged — still changes the version and forces a rebuild; otherwise a schema cached while the
+    flag was off (catalog 'unavailable', hybrid fallback skipped) stays permanently skipped after the
+    flag turns on, since nothing about the schema itself would ever drift again."""
+    flag = "1" if os.environ.get("GRAPH_QUERYGEN_ENABLED") == "true" else "0"
+    basis = (json.dumps(schema, sort_keys=True, separators=(",", ":")) + "|" + _graph_cat.CATALOG_VERSION
+             + "|querygen=" + flag)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
@@ -188,7 +217,12 @@ def run(payload, conn):
         if fresh is not None:
             if schema is None or json.dumps(fresh, sort_keys=True) != json.dumps(schema, sort_keys=True):
                 acct = os.environ.get("HOST_ACCOUNT_ID") or os.environ.get("AWS_ACCOUNT_ID") or "self"
-                wdb.upsert_datasource_schema(conn, acct, iid, kind, fresh)
+                try:
+                    wdb.upsert_datasource_schema(conn, acct, iid, kind, fresh)
+                except ValueError:
+                    # oversized schema (256KB cap, mirrors the BFF) — still USE it for this run's
+                    # rebuild below, just don't persist it; the cache keeps the last-good schema.
+                    out["schema_cache_skipped"] = "oversized"
             schema = fresh
         else:
             out["introspect_error"] = "introspect_failed"  # fall back to whatever `schema` already is

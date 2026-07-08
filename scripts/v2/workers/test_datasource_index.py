@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pytest  # noqa: E402
 import datasource_index as dsi  # noqa: E402
 
+_REAL_REINTROSPECT = dsi._reintrospect  # saved before the autouse fixture below stubs it out
+
 
 @pytest.fixture(autouse=True)
 def _enable(monkeypatch):
@@ -306,6 +308,115 @@ class TestLiveReintrospection:
         assert out.get("no_schema") is not True
         assert len(c.graph_inserts) == 1
         assert len(c.schema_writes) == 1
+
+
+# ── M1 regression: a connector error envelope must never be written back as a schema ────────────────
+class TestReintrospectRejectsErrorEnvelopes:
+    """_reintrospect must fall back to None (never propagate a bad body) when `_lambda_invoke`
+    returns something that isn't shaped like the target kind's schema — e.g. a connector error
+    envelope `{"error": "..."}` that happens to be a dict. Directly exercises `_looks_like_schema`/
+    `_reintrospect`, independent of `_lambda_invoke`'s own statusCode/FunctionError checks below."""
+
+    def test_error_dict_without_expected_key_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(dsi, "_lambda_invoke", lambda kind, tool, arguments=None: {"error": "bad request"})
+        assert _REAL_REINTROSPECT("prometheus", 7) is None
+        assert _REAL_REINTROSPECT("clickhouse", 7) is None
+
+    def test_real_shaped_body_is_accepted(self, monkeypatch):
+        monkeypatch.setattr(dsi, "_lambda_invoke", lambda kind, tool, arguments=None: {"metrics": ["up"]})
+        assert _REAL_REINTROSPECT("prometheus", 7) == {"metrics": ["up"]}
+
+    def test_lambda_invoke_exception_falls_back_to_none(self, monkeypatch):
+        def boom(kind, tool, arguments=None):
+            raise RuntimeError("connector down")
+        monkeypatch.setattr(dsi, "_lambda_invoke", boom)
+        assert _REAL_REINTROSPECT("clickhouse", 7) is None
+
+
+class TestLambdaInvokeEnvelopeValidation:
+    """_lambda_invoke must raise (never return the body) on a FunctionError or a non-2xx statusCode —
+    the M1 root cause was that the caller trusted any dict body regardless of these signals."""
+
+    class _FakeLambdaClient:
+        def __init__(self, response):
+            self._response = response
+
+        def invoke(self, FunctionName, Payload):  # noqa: N803 — matches boto3's kwarg casing
+            return self._response
+
+    def _stub_boto3(self, monkeypatch, response):
+        monkeypatch.setattr(dsi.boto3, "client", lambda service, region_name=None: self._FakeLambdaClient(response))
+
+    def test_function_error_raises(self, monkeypatch):
+        import io
+        self._stub_boto3(monkeypatch, {"FunctionError": "Unhandled", "Payload": io.BytesIO(b"{}")})
+        with pytest.raises(RuntimeError):
+            dsi._lambda_invoke("prometheus", "prometheus_schema")
+
+    def test_error_statuscode_raises(self, monkeypatch):
+        import io
+        body = json.dumps({"statusCode": 400, "body": json.dumps({"error": "bad request"})}).encode()
+        self._stub_boto3(monkeypatch, {"Payload": io.BytesIO(body)})
+        with pytest.raises(RuntimeError):
+            dsi._lambda_invoke("prometheus", "prometheus_schema")
+
+    def test_ok_statuscode_returns_body(self, monkeypatch):
+        import io
+        body = json.dumps({"statusCode": 200, "body": json.dumps({"metrics": ["up"]})}).encode()
+        self._stub_boto3(monkeypatch, {"Payload": io.BytesIO(body)})
+        assert dsi._lambda_invoke("prometheus", "prometheus_schema") == {"metrics": ["up"]}
+
+
+# ── M2 regression: flipping GRAPH_QUERYGEN_ENABLED must force a graph-query rebuild ─────────────────
+class TestGraphSchemaVersionMixesInQuerygenFlag:
+    def test_flag_flip_with_unchanged_schema_forces_rebuild_not_skip(self, monkeypatch):
+        schema = {"tables": [{"name": "unrelated", "columns": [{"name": "x", "type": "Int64"}]}]}
+        monkeypatch.delenv("GRAPH_QUERYGEN_ENABLED", raising=False)
+        c0 = FakeConn(kind="clickhouse", schema=schema)
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c0)
+        version_off = c0.graph_inserts[0]["sv"]
+        assert c0.graph_inserts[0]["st"] == "unavailable"  # no querygen call while the flag was off
+
+        # Same schema, flag now on — must NOT read as "unchanged" and skip; a real generated row
+        # (querygen stubbed here) must actually get built and persisted.
+        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+        generated = {"query_key": "trace_spans", "status": "ready",
+                     "query": {"tool": "clickhouse_query", "mapper": "otel_v1", "args_template": {"sql": "SELECT 1"}},
+                     "missing": None, "meta": {"kind": "clickhouse", "provenance": "generated"}}
+        monkeypatch.setattr(dsi._querygen, "try_generate_clickhouse_trace_spans", lambda schema, iid, invoke: generated)
+        c1 = FakeConn(kind="clickhouse", schema=schema, existing_graph_version=version_off)
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c1)
+        assert out.get("graph_skipped") is not True
+        assert len(c1.graph_inserts) == 1
+        assert c1.graph_inserts[0]["st"] == "ready"
+        assert json.loads(c1.graph_inserts[0]["me"])["provenance"] == "generated"
+
+    def test_same_flag_state_and_schema_still_skips(self, monkeypatch):
+        # Sanity check the fix didn't just always-rebuild: unchanged schema AND unchanged flag state
+        # must still skip, same as before this fix.
+        schema = {"tables": [{"name": "unrelated", "columns": [{"name": "x", "type": "Int64"}]}]}
+        monkeypatch.delenv("GRAPH_QUERYGEN_ENABLED", raising=False)
+        c0 = FakeConn(kind="clickhouse", schema=schema)
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c0)
+        version = c0.graph_inserts[0]["sv"]
+        c1 = FakeConn(kind="clickhouse", schema=schema, existing_graph_version=version)
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c1)
+        assert out.get("graph_skipped") is True
+        assert c1.graph_inserts == []
+
+
+# ── MINOR fix regression: 256KB write-back cap must not sink the whole job ──────────────────────────
+class TestSchemaWriteBackSizeCap:
+    def test_oversized_fresh_schema_is_used_for_this_run_but_not_persisted(self, monkeypatch):
+        huge = {"metrics": [f"metric_{i}" for i in range(50_000)]}  # comfortably over 256KB serialized
+        assert len(json.dumps(huge).encode("utf-8")) > 256_000
+        monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: huge)
+        c = FakeConn(existing_version="STALE")
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert out.get("schema_cache_skipped") == "oversized"
+        assert c.schema_writes == []          # never persisted
+        assert out.get("built") == 8           # still rebuilt from the fresh (just-not-cached) schema
+        assert not out.get("error")
 
 
 # ── Hybrid LLM fallback wiring (graph_querygen.py, registry-driven graph sources 2026-07-08) ───────

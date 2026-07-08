@@ -25,8 +25,13 @@ export interface GraphSources {
 export async function loadGraphSources(pool: Pool): Promise<GraphSources> {
   let rows: GraphQueryRow[] = [];
   try {
+    // JOIN against integrations as defense-in-depth against an orphan row (deleteDatasource() sweeps
+    // datasource_graph_queries on delete, but a row surviving that sweep — e.g. a race, or predating
+    // that fix — must still never surface a source for an instance that no longer exists).
     const r = await pool.query(
-      `SELECT integration_id, query FROM datasource_graph_queries WHERE account_id = 'self' AND status = 'ready'`,
+      `SELECT gq.integration_id, gq.query FROM datasource_graph_queries gq
+       JOIN integrations i ON i.id = gq.integration_id
+       WHERE gq.account_id = 'self' AND gq.status = 'ready'`,
     );
     rows = r.rows as GraphQueryRow[];
   } catch {

@@ -87,4 +87,16 @@ describe('loadGraphSources', () => {
     expect(sources).toHaveLength(1);
     expect(sources[0]).toBeInstanceOf(ClickHouseOtelTraceSource);
   });
+
+  it('joins against integrations so a row for a deleted instance is skipped (M3 defense-in-depth, independent of deleteDatasource\'s sweep)', async () => {
+    const query = vi.fn(async (sql: string) => {
+      expect(sql).toMatch(/JOIN integrations/i); // loader itself excludes orphans, not just the delete-path sweep
+      return { rows: [] }; // the mock has no matching integrations row — nothing comes back
+    });
+    const pool = { query } as unknown as import('pg').Pool;
+    const { sources } = await loadGraphSources(pool);
+    expect(sources).toHaveLength(1); // no ready rows survived the join → bare default fallback
+    expect(sources[0]).toBeInstanceOf(ClickHouseOtelTraceSource);
+    expect((sources[0] as unknown as { instanceId?: number }).instanceId).toBeUndefined();
+  });
 });

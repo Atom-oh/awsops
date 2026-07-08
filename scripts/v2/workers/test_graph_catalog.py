@@ -21,6 +21,11 @@ OTEL_COLUMNS = [
     {"name": "SpanAttributes", "type": "Map(String, String)"},
 ]
 
+# Required-only shape (no SpanKind) — a table matching _OTEL_REQUIRED_COLUMNS but lacking the
+# optional SpanKind column, e.g. an older/custom exporter. Regression for the MINOR review finding:
+# the emitted SELECT must never reference a column the matched table doesn't actually have.
+OTEL_COLUMNS_NO_SPANKIND = [c for c in OTEL_COLUMNS if c["name"] != "SpanKind"]
+
 
 def _by_key(rows):
     return {r["query_key"]: r for r in rows}
@@ -52,6 +57,20 @@ class TestClickhouse:
     def test_unavailable_when_schema_missing_or_none(self):
         assert _by_key(gc.build_graph_queries("clickhouse", {}))["trace_spans"]["status"] == "unavailable"
         assert _by_key(gc.build_graph_queries("clickhouse", None))["trace_spans"]["status"] == "unavailable"
+
+    def test_ready_query_omits_spankind_when_the_table_lacks_it(self):
+        # Regression: the SELECT must not reference SpanKind on a table that matched via the
+        # required-columns set alone (SpanKind is optional) — else the query 500s at execution time.
+        schema = {"tables": [{"name": "otel_traces", "columns": OTEL_COLUMNS_NO_SPANKIND}]}
+        by = _by_key(gc.build_graph_queries("clickhouse", schema))
+        row = by["trace_spans"]
+        assert row["status"] == "ready"
+        assert "SpanKind" not in row["query"]["args_template"]["sql"]
+
+    def test_ready_query_includes_spankind_when_the_table_has_it(self):
+        schema = {"tables": [{"name": "otel_traces", "columns": OTEL_COLUMNS}]}
+        by = _by_key(gc.build_graph_queries("clickhouse", schema))
+        assert "SpanKind" in by["trace_spans"]["query"]["args_template"]["sql"]
 
     def test_clickhouse_never_produces_servicegraph_calls(self):
         schema = {"tables": [{"name": "otel_traces", "columns": OTEL_COLUMNS}]}
