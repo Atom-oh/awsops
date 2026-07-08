@@ -219,3 +219,16 @@ def sweep_graph_queries(conn, integration_id, keep_keys):
         "DELETE FROM datasource_graph_queries "
         "WHERE account_id='self' AND integration_id=:iid AND query_key <> ALL(:keep)",
         iid=integration_id, keep=list(keep_keys or []))
+
+
+def upsert_datasource_schema(conn, account_id, integration_id, kind, schema):
+    """Write-back of a freshly re-introspected schema (drift refresh, datasource_index.py only —
+    the BFF's normal warm/refresh path uses upsertSchema in web/lib/datasource-schema.ts; this is the
+    python-worker-side mirror, same table). jsonb bound + cast, never inlined."""
+    conn.run(
+        "INSERT INTO datasource_schemas (account_id, integration_id, kind, schema, fetched_at) "
+        "VALUES (:acct, :iid, :k, :s::jsonb, now()) "
+        "ON CONFLICT (account_id, integration_id) DO UPDATE SET "
+        "kind=EXCLUDED.kind, schema=EXCLUDED.schema, fetched_at=now()",
+        acct=account_id, iid=integration_id, k=kind, s=json.dumps(schema),
+    )

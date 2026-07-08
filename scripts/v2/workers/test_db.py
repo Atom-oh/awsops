@@ -156,3 +156,16 @@ class TestSweepGraphQueries:
         db.sweep_graph_queries(c, 5, [])
         sql, p = c.calls[0]
         assert "DELETE FROM datasource_graph_queries" in sql and p["iid"] == 5
+
+
+class TestUpsertDatasourceSchema:
+    """Write-back of a freshly re-introspected schema (drift refresh) — python-worker side mirror
+    of the BFF's upsertSchema (web/lib/datasource-schema.ts), used only by datasource_index.py."""
+    def test_upsert_binds_params_and_jsonb_casts(self):
+        c = FakeConn()
+        db.upsert_datasource_schema(c, "self", 42, "clickhouse", {"version": "1.2", "tables": []})
+        assert len(c.calls) == 1
+        sql, p = c.calls[0]
+        assert "INSERT INTO datasource_schemas" in sql and "::jsonb" in sql
+        assert p["acct"] == "self" and p["iid"] == 42 and p["k"] == "clickhouse"
+        assert json.loads(p["s"]) == {"version": "1.2", "tables": []}

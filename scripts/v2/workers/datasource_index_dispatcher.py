@@ -1,9 +1,13 @@
-"""EventBridge-scheduled (daily). Enqueues a `datasource_index` job per enabled Prometheus/Mimir
-instance so pre-built diagnostic signals are rebuilt when a datasource's schema changes (version
-upgrade) — independent of Explore visits. Mirrors schedule_dispatcher: db.insert_job (ledger) + an
+"""EventBridge-scheduled (daily). Enqueues a `datasource_index` job per enabled datasource instance,
+across all 5 connector kinds (prometheus/mimir/clickhouse/tempo/loki), so pre-built diagnostic signals
+AND pre-built topology-graph queries are rebuilt when a datasource's schema drifts — independent of
+Explore/topology-rebuild visits. "At least weekly" per the registry-driven graph-sources design
+(docs/superpowers/specs/2026-07-08-registry-graph-sources-design.md) is satisfied by this existing
+daily cadence; no new schedule was added. Mirrors schedule_dispatcher: db.insert_job (ledger) + an
 SQS message identical to the BFF's enqueueJob → the existing dispatcher→SFN→Lambda path runs the
-`datasource_index` handler. Read-only effect on AWS (the index job reads a cached schema; the
-diagnosis egress is separately gated). A per-instance enqueue failure is isolated.
+`datasource_index` handler. Read-only effect on AWS (the index job reads a cached schema, optionally
+re-introspects live; the diagnosis/graph egress is separately gated). A per-instance enqueue failure
+is isolated.
 """
 import json
 import os
@@ -16,17 +20,20 @@ import db
 QUEUE_URL = os.environ.get("JOBS_QUEUE_URL", "")
 _sqs = boto3.client("sqs", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
 
-# v1 scope: Prometheus/Mimir egress-read datasources that are enabled.
+# All 5 datasource-kind egress-read connectors that are enabled. Widened from prometheus/mimir-only
+# (diag-signals v1 scope) once graph_catalog.py gave every kind something to pre-build.
 _LIST_SQL = (
     "SELECT id, name, kind FROM integrations "
     "WHERE direction='egress' AND capability='read' AND enabled=true "
-    "AND kind IN ('prometheus','mimir') ORDER BY id"
+    "AND kind IN ('prometheus','mimir','clickhouse','tempo','loki') ORDER BY id"
 )
 
 
-def _enqueue_index(conn, integration_id):
+def _enqueue_index(conn, integration_id, kind):
     job_id = str(uuid.uuid4())
-    payload = {"integration_id": integration_id}
+    # kind travels with the payload — the job would otherwise have to re-look it up (it needs it
+    # before any schema cache row necessarily exists, e.g. a first-ever run for a new instance).
+    payload = {"integration_id": integration_id, "kind": kind}
     db.insert_job(conn, job_id, "datasource_index", payload)  # durable ledger row
     try:
         _sqs.send_message(
@@ -52,9 +59,9 @@ def lambda_handler(_event, _ctx):
         rows = conn.run(_LIST_SQL) or []
         enqueued, failed = 0, 0
         for row in rows:
-            iid = row[0]
+            iid, _name, kind = row[0], row[1], row[2]
             try:
-                _enqueue_index(conn, iid)
+                _enqueue_index(conn, iid, kind)
                 enqueued += 1
             except Exception as exc:  # noqa: BLE001 — one bad instance must not block the rest
                 print(f"datasource_index_dispatcher: enqueue failed for integration {iid}: {exc}")

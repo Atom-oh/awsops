@@ -1,24 +1,34 @@
-"""datasource_index worker job — (re)build pre-computed diagnostic signals for ONE datasource.
+"""datasource_index worker job — (re)build pre-computed diagnostic signals AND pre-built
+topology-graph queries for ONE datasource.
 
-Reads the instance's CACHED introspected schema (datasource_schemas — written by the BFF/connector
-refresh; this job does NOT re-implement introspection), hashes the metric set + CATALOG_VERSION,
-and rebuilds datasource_diag_signals ONLY when that hash changed (version upgrade adds/removes/renames
-metrics). Idempotent, bounded, never raises — a bad instance never sinks the dispatcher.
-
-Read-only: derives queries from a cached schema; no AWS mutation, no egress here (the cache read is
-local Aurora). Prometheus/Mimir only in v1 (other kinds keep the diagnosis generic planner).
+Reads the instance's CACHED introspected schema (datasource_schemas — normally written by the BFF's
+warm/refresh path), attempts a LIVE re-introspection via the connector's `{kind}_schema` tool (drift
+detection — docs/superpowers/specs/2026-07-08-registry-graph-sources-design.md), and rebuilds two
+independent tables, each gated on its OWN schema-version hash so a rebuild only happens when something
+actually changed:
+  - datasource_diag_signals (diagnosis/signal_catalog.py) — prometheus/mimir only, v1 scope, unchanged.
+  - datasource_graph_queries (graph_catalog.py) — ALL 5 connector kinds (capability-driven: only
+    clickhouse/tempo get span queries, prometheus/mimir get them only with a service-graph metric,
+    loki is structurally unavailable — see graph_catalog.py).
+Idempotent, bounded, never raises — a bad instance never sinks the dispatcher. Live re-introspection
+failing (endpoint down, timeout, bad response) falls back to the cached schema; it never blocks the
+rebuild, it only means drift can't be detected on this run.
 """
 import hashlib
 import json
 import logging
 import os
 
+import boto3
+
 try:  # fargate/tests: package path; lambda worker zip flattens it to signal_catalog.py
     from diagnosis import signal_catalog as _cat
 except ImportError:  # noqa: F401
     import signal_catalog as _cat  # flattened in the worker_src lambda bundle
 
-_KINDS = ("prometheus", "mimir")
+import graph_catalog as _graph_cat  # always flat next to this file — never under a package
+
+_DIAG_KINDS = ("prometheus", "mimir")  # datasource_diag_signals scope — unchanged from v1
 
 
 def _read_cached_schema(conn, integration_id):
@@ -51,50 +61,122 @@ def _read_cached_schema(conn, integration_id):
     return kind, (schema if isinstance(schema, dict) else None)
 
 
+def _reintrospect(kind, integration_id):
+    """Live schema fetch via the credential-blind connector Lambda invoke (`{kind}_schema` tool) —
+    same invoke shape as diagnosis/sources.py:_invoke_connector, duplicated locally because this is a
+    LAMBDA-runtime handler whose zip only bundles this file + signal_catalog.py + graph_catalog.py
+    (see workers.tf's archive_file), not the full diagnosis package. Returns the schema dict on
+    success, or None on ANY failure (never raises) — the caller falls back to the cached schema."""
+    try:
+        region = os.environ.get("AWS_REGION", "ap-northeast-2")
+        project = os.environ.get("PROJECT", "awsops-v2")
+        client = boto3.client("lambda", region_name=region)
+        req = json.dumps({"tool_name": f"{kind}_schema",
+                           "arguments": {"instance_id": integration_id}}).encode("utf-8")
+        resp = client.invoke(FunctionName=f"{project}-agent-{kind}-mcp", Payload=req)
+        raw = resp["Payload"].read()
+        out = json.loads(raw) if raw else {}
+        body = out.get("body")
+        if isinstance(body, str):
+            body = json.loads(body)
+        return body if isinstance(body, dict) else None
+    except Exception:  # noqa: BLE001 — a flaky/down connector must never block the daily rebuild
+        return None
+
+
 def _schema_version(schema):
-    """Stable cross-process hash of the metric-name set + CATALOG_VERSION (NOT salted hash())."""
+    """Stable cross-process hash of the metric-name set + signal_catalog.CATALOG_VERSION (diag scope:
+    only prometheus/mimir signals care about metric names). NOT salted hash()."""
     metrics = sorted({m for m in (schema.get("metrics") or []) if isinstance(m, str)})
     basis = json.dumps(metrics, separators=(",", ":")) + "|" + _cat.CATALOG_VERSION
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
+def _graph_schema_version(schema):
+    """Stable cross-process hash of the FULL schema (graph queries key off tables too, not just
+    metric names — e.g. clickhouse) + graph_catalog.CATALOG_VERSION."""
+    basis = json.dumps(schema, sort_keys=True, separators=(",", ":")) + "|" + _graph_cat.CATALOG_VERSION
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+
+
+def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
+    version = _schema_version(schema)
+    if wdb.read_signal_schema_version(conn, iid) == version:
+        return {"skipped": True, "schema_version": version}
+    rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
+    # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
+    # while others stay stale — the next run would read a new-version row, judge "unchanged", and
+    # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
+    conn.run("BEGIN")
+    try:
+        wdb.upsert_diag_signals(conn, iid, rows, version)
+        wdb.sweep_diag_signals(conn, iid, [r["signal_key"] for r in rows])
+        conn.run("COMMIT")
+    except Exception:
+        conn.run("ROLLBACK")
+        raise
+    return {"built": len(rows), "ready": sum(1 for r in rows if r["status"] == "ready"),
+            "schema_version": version}
+
+
+def _rebuild_graph_queries(conn, wdb, iid, kind, schema):
+    version = _graph_schema_version(schema)
+    if wdb.read_graph_schema_version(conn, iid) == version:
+        return {"graph_skipped": True}
+    rows = _graph_cat.build_graph_queries(kind, schema)
+    conn.run("BEGIN")
+    try:
+        wdb.upsert_graph_queries(conn, iid, rows, version)
+        wdb.sweep_graph_queries(conn, iid, [r["query_key"] for r in rows])
+        conn.run("COMMIT")
+    except Exception:
+        conn.run("ROLLBACK")
+        raise
+    return {"graph_built": len(rows), "graph_ready": sum(1 for r in rows if r["status"] == "ready")}
+
+
 def run(payload, conn):
-    """Rebuild signals for payload['integration_id'] if its schema hash changed. Never raises."""
+    """Rebuild diag signals + graph queries for payload['integration_id']. Never raises."""
     import db as wdb
     iid = payload.get("integration_id")
-    # Gate: only build when the datasource-diagnosis feature is enabled (same DIAG_DATASOURCES_ENABLED the
-    # collector checks; wired to the worker lambda via terraform local.ds_env_map). Keeps the always-on
-    # enqueue path (BFF add/refresh + REGISTRY) a no-op when datasource_diagnosis_enabled=false.
+    # Gate: only build when the datasource-diagnosis feature is enabled (same DIAG_DATASOURCES_ENABLED
+    # the collector checks; wired to the worker lambda via terraform local.ds_env_map, which also grants
+    # the connector-invoke IAM this job's live re-introspection needs). Keeps the always-on enqueue path
+    # (BFF add/refresh + REGISTRY + the daily dispatcher) a no-op when datasource_diagnosis_enabled=false.
     if os.environ.get("DIAG_DATASOURCES_ENABLED") != "true":
         return {"integration_id": iid, "disabled": True}
     try:
-        kind, schema = _read_cached_schema(conn, iid)
-        if kind is None and schema is None:
-            # no cache row at all → connector never succeeded / not refreshed → preserve last-good, skip
+        cached_kind, schema = _read_cached_schema(conn, iid)
+        # kind travels in the payload (the dispatcher already knows it from `integrations`) — falls
+        # back to the cache for jobs enqueued before this field existed, or manual/ad-hoc enqueues.
+        kind = payload.get("kind") or cached_kind
+        if kind is None:
+            # no cache row AND no kind to even attempt live introspection with → truly nothing to build
             return {"integration_id": iid, "no_schema": True}
-        if kind not in _KINDS:
-            # non-prom/mimir: out of v1 scope (diagnosis keeps the generic planner for these)
-            return {"integration_id": iid, "skipped_kind": kind}
+
+        out = {"integration_id": iid}
+        fresh = _reintrospect(kind, iid)
+        if fresh is not None:
+            if schema is None or json.dumps(fresh, sort_keys=True) != json.dumps(schema, sort_keys=True):
+                acct = os.environ.get("HOST_ACCOUNT_ID") or os.environ.get("AWS_ACCOUNT_ID") or "self"
+                wdb.upsert_datasource_schema(conn, acct, iid, kind, fresh)
+            schema = fresh
+        else:
+            out["introspect_error"] = "introspect_failed"  # fall back to whatever `schema` already is
+
         if schema is None:
-            # row exists but schema unparseable → can't build; preserve last-good, skip destructively
-            return {"integration_id": iid, "no_schema": True}
-        version = _schema_version(schema)
-        if wdb.read_signal_schema_version(conn, iid) == version:
-            return {"integration_id": iid, "skipped": True, "schema_version": version}
-        rows = _cat.build_signals(kind, schema)          # present-but-empty metrics → all unavailable
-        # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
-        # while others stay stale — the next run would read a new-version row, judge "unchanged", and
-        # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
-        conn.run("BEGIN")
-        try:
-            wdb.upsert_diag_signals(conn, iid, rows, version)
-            wdb.sweep_diag_signals(conn, iid, [r["signal_key"] for r in rows])
-            conn.run("COMMIT")
-        except Exception:
-            conn.run("ROLLBACK")
-            raise
-        return {"integration_id": iid, "built": len(rows),
-                "ready": sum(1 for r in rows if r["status"] == "ready"), "schema_version": version}
+            out["no_schema"] = True
+            return out
+
+        if kind in _DIAG_KINDS:
+            out.update(_rebuild_diag_signals(conn, wdb, iid, kind, schema))
+        else:
+            # out of diag-signal scope (diagnosis keeps the generic planner for these) — graph queries
+            # still get built below regardless; the two tables are independent.
+            out["skipped_kind"] = kind
+
+        out.update(_rebuild_graph_queries(conn, wdb, iid, kind, schema))
+        return out
     except Exception as e:  # noqa: BLE001 — never sink the dispatcher; surface on the job result
         logging.warning("[datasource_index] integration %s failed: %s", iid, e)
         return {"integration_id": iid, "error": str(e)[:300]}

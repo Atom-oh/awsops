@@ -110,8 +110,9 @@ data "archive_file" "workers_src" {
     content  = file("${local.workers_src}/ai_cost/aggregate.py")
     filename = "aggregate.py"
   }
-  # datasource_index handler (REGISTRY 'datasource_index', lambda runtime) + its catalog. Flattened —
-  # datasource_index.py falls back to `import signal_catalog` when the diagnosis package isn't bundled.
+  # datasource_index handler (REGISTRY 'datasource_index', lambda runtime) + its two catalogs.
+  # Flattened — datasource_index.py falls back to `import signal_catalog` when the diagnosis package
+  # isn't bundled; graph_catalog.py is always flat (it never lived under a package).
   source {
     content  = file("${local.workers_src}/datasource_index.py")
     filename = "datasource_index.py"
@@ -119,6 +120,10 @@ data "archive_file" "workers_src" {
   source {
     content  = file("${local.workers_src}/diagnosis/signal_catalog.py")
     filename = "signal_catalog.py"
+  }
+  source {
+    content  = file("${local.workers_src}/graph_catalog.py")
+    filename = "graph_catalog.py"
   }
   # AI Insights: the `insight` REGISTRY handler (job.py) + collectors. The `insight/` package structure
   # is PRESERVED in the zip (NOT flattened) so `from insight.x import …` resolves at runtime.
@@ -1165,7 +1170,7 @@ resource "aws_lambda_function" "dsindex_dispatcher" {
 resource "aws_cloudwatch_event_rule" "dsindex_dispatcher" {
   count               = local.dsd
   name                = "${var.project}-datasource-index-dispatcher"
-  description         = "Daily: enqueue a datasource_index job per enabled Prometheus/Mimir instance"
+  description         = "Daily: enqueue a datasource_index job per enabled datasource instance (all 5 kinds)"
   schedule_expression = "rate(24 hours)"
 }
 

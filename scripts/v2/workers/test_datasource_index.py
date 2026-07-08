@@ -1,7 +1,16 @@
 """Tests for datasource_index.run — schema-cache read → stable hash → rebuild-on-change.
 
+Widened (registry-driven graph sources, 2026-07-08) to also: (a) accept `kind` in the payload (the
+dispatcher now looks it up once so the job never has to), (b) attempt a live re-introspection via the
+connector's `{kind}_schema` tool and write back to datasource_schemas on drift, falling back to the
+cache on any failure, and (c) build pre-computed topology-graph queries (graph_catalog.py) across ALL
+5 datasource kinds — independent of the diag-signals build, which stays prometheus/mimir-only.
+
 A by-pattern FakeConn drives the real db helpers (upsert/read-version/sweep) through run(), so the
-test exercises the actual SQL helpers too. No Aurora, no connector egress (run reads the CACHE).
+test exercises the actual SQL helpers too. No Aurora, no real connector egress: `_reintrospect` is
+stubbed to a deterministic no-op (returns None, i.e. "introspection unavailable") by the autouse
+fixture UNLESS a test explicitly overrides it — this is what keeps the suite from making real boto3
+calls now that live re-introspection exists.
 """
 import json
 import os
@@ -15,6 +24,9 @@ import datasource_index as dsi  # noqa: E402
 @pytest.fixture(autouse=True)
 def _enable(monkeypatch):
     monkeypatch.setenv("DIAG_DATASOURCES_ENABLED", "true")  # M2: run() is gated on this
+    # Default: no live egress in tests — introspection "fails" (returns None), so run() falls back
+    # to the cached schema exactly like before this feature existed. Tests of the live path override.
+    monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: None)
 
 PROM_METRICS = [
     "container_cpu_cfs_throttled_periods_total", "container_cpu_cfs_periods_total",
@@ -26,24 +38,47 @@ PROM_METRICS = [
     "node_cpu_seconds_total", "kube_pod_container_status_restarts_total",
 ]
 
+OTEL_COLUMNS = [{"name": n, "type": "String"} for n in
+                ("TraceId", "SpanId", "ParentSpanId", "ServiceName", "Timestamp", "Duration",
+                 "ResourceAttributes", "SpanAttributes")]
+
 
 class FakeConn:
-    """Returns by SQL substring; records inserts/deletes."""
-    def __init__(self, *, kind="prometheus", metrics=PROM_METRICS, schema_present=True, existing_version=None):
+    """Returns by SQL substring; records inserts/deletes. Tracks diag-signal writes (`inserts`/
+    `deletes`, unchanged names/meaning from before this feature) and graph-query writes
+    (`graph_inserts`/`graph_deletes`, new) independently, since the two tables have independent
+    schema-version hashes and independent skip-on-unchanged behavior."""
+    def __init__(self, *, kind="prometheus", metrics=PROM_METRICS, schema_present=True,
+                 schema=None, existing_version=None, existing_graph_version=None):
         self.kind, self.metrics, self.schema_present = kind, metrics, schema_present
+        self._schema_override = schema
         self.existing_version = existing_version
+        self.existing_graph_version = existing_graph_version
         self.inserts, self.deletes = [], []
+        self.graph_inserts, self.graph_deletes = [], []
+        self.schema_writes = []
+
     def run(self, sql, **p):
         if "FROM datasource_schemas" in sql:
             if not self.schema_present:
                 return []
-            return [[self.kind, json.dumps({"metrics": self.metrics, "version": "2.50"})]]
-        if "COUNT(DISTINCT schema_version)" in sql:
+            schema = self._schema_override if self._schema_override is not None else \
+                {"metrics": self.metrics, "version": "2.50"}
+            return [[self.kind, json.dumps(schema)]]
+        if "COUNT(DISTINCT schema_version)" in sql and "datasource_diag_signals" in sql:
             return [[1, self.existing_version]] if self.existing_version is not None else [[0, None]]
+        if "COUNT(DISTINCT schema_version)" in sql and "datasource_graph_queries" in sql:
+            return [[1, self.existing_graph_version]] if self.existing_graph_version is not None else [[0, None]]
         if sql.strip().startswith("INSERT INTO datasource_diag_signals"):
             self.inserts.append(p); return []
         if sql.strip().startswith("DELETE FROM datasource_diag_signals"):
             self.deletes.append(p); return []
+        if sql.strip().startswith("INSERT INTO datasource_graph_queries"):
+            self.graph_inserts.append(p); return []
+        if sql.strip().startswith("DELETE FROM datasource_graph_queries"):
+            self.graph_deletes.append(p); return []
+        if sql.strip().startswith("INSERT INTO datasource_schemas"):
+            self.schema_writes.append(p); return []
         return []
 
 
@@ -151,6 +186,8 @@ class TestAccountKeyFallback:
         class MismatchConn:
             def __init__(self):
                 self.inserts, self.deletes = [], []
+                self.graph_inserts, self.graph_deletes = [], []
+                self.schema_writes = []
             def run(self, sql, **p):
                 if "FROM datasource_schemas" in sql:
                     # account-scoped query misses (BFF wrote under a different account key); fallback hits
@@ -163,6 +200,10 @@ class TestAccountKeyFallback:
                     self.inserts.append(p); return []
                 if sql.strip().startswith("DELETE FROM datasource_diag_signals"):
                     self.deletes.append(p); return []
+                if sql.strip().startswith("INSERT INTO datasource_graph_queries"):
+                    self.graph_inserts.append(p); return []
+                if sql.strip().startswith("DELETE FROM datasource_graph_queries"):
+                    self.graph_deletes.append(p); return []
                 return []
         c = MismatchConn()
         out = dsi.run({"integration_id": 7}, c)
@@ -177,3 +218,91 @@ def test_gate_off_no_build(monkeypatch):
     out = dsi.run({"integration_id": 7}, c)
     assert out.get("disabled") is True
     assert c.inserts == [] and c.deletes == []
+    assert c.graph_inserts == []
+
+
+# ── Registry-driven graph sources (2026-07-08): pre-built topology-graph queries, all 5 kinds ──────
+class TestGraphQueriesAllKinds:
+    def test_clickhouse_builds_ready_trace_spans_from_matching_schema(self):
+        schema = {"tables": [{"name": "otel_traces", "columns": OTEL_COLUMNS}]}
+        c = FakeConn(kind="clickhouse", schema=schema)
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert len(c.graph_inserts) == 1
+        assert c.graph_inserts[0]["st"] == "ready"
+        assert out.get("graph_built") == 1 and out.get("graph_ready") == 1
+
+    def test_tempo_builds_ready_trace_spans_whenever_introspected(self):
+        c = FakeConn(kind="tempo", schema={"tags": ["service.name"]})
+        dsi.run({"integration_id": 7, "kind": "tempo"}, c)
+        assert c.graph_inserts and c.graph_inserts[0]["st"] == "ready"
+
+    def test_prometheus_builds_ready_servicegraph_calls_when_metric_present(self):
+        c = FakeConn(kind="prometheus", schema={"metrics": ["traces_service_graph_request_total"]})
+        dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert c.graph_inserts and c.graph_inserts[0]["st"] == "ready"
+
+    def test_loki_always_builds_two_unavailable_rows(self):
+        c = FakeConn(kind="loki", schema={"labels": ["job"]})
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert len(c.graph_inserts) == 2
+        assert all(p["st"] == "unavailable" for p in c.graph_inserts)
+
+    def test_graph_build_skips_when_hash_unchanged(self):
+        c0 = FakeConn(kind="tempo", schema={"tags": []})
+        dsi.run({"integration_id": 7, "kind": "tempo"}, c0)
+        gversion = c0.graph_inserts[0]["sv"]
+        c = FakeConn(kind="tempo", schema={"tags": []}, existing_graph_version=gversion)
+        out = dsi.run({"integration_id": 7, "kind": "tempo"}, c)
+        assert c.graph_inserts == [] and out.get("graph_skipped") is True
+
+    def test_graph_build_happens_even_when_kind_is_out_of_diag_signal_scope(self):
+        # loki is out of diag-signal scope (skipped_kind) but STILL gets pre-built graph-query rows.
+        c = FakeConn(kind="loki", schema={"labels": []})
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert out.get("skipped_kind") == "loki"
+        assert c.inserts == []            # no diag signals — out of scope
+        assert len(c.graph_inserts) == 2  # but graph queries still built
+
+
+# ── Live re-introspection (drift detection, 2026-07-08) ─────────────────────────────────────────────
+class TestLiveReintrospection:
+    def test_drift_detected_updates_schema_cache_and_uses_the_fresh_schema(self, monkeypatch):
+        fresh = {"metrics": PROM_METRICS + ["new_metric"], "version": "2.51"}
+        monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: fresh)
+        c = FakeConn(existing_version="STALE")  # cached schema (v2.50) differs from fresh (v2.51)
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert len(c.schema_writes) == 1
+        assert json.loads(c.schema_writes[0]["s"])["version"] == "2.51"
+        assert out.get("introspect_error") is None
+
+    def test_no_drift_does_not_rewrite_the_cache(self, monkeypatch):
+        same = {"metrics": PROM_METRICS, "version": "2.50"}  # identical to the cached schema
+        monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: same)
+        c = FakeConn(existing_version="STALE")
+        dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert c.schema_writes == []
+
+    def test_introspection_failure_falls_back_to_the_cached_schema(self, monkeypatch):
+        monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: None)
+        c = FakeConn(existing_version="STALE")
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert out.get("introspect_error") == "introspect_failed"
+        assert c.schema_writes == []
+        assert out.get("built") == 8   # still built, from the cached schema
+
+    def test_no_cache_and_no_kind_and_failed_introspection_is_no_schema(self):
+        # default fixture stub (_reintrospect -> None) applies; no kind anywhere to even try with.
+        c = FakeConn(schema_present=False)
+        out = dsi.run({"integration_id": 7}, c)
+        assert out.get("no_schema") is True
+
+    def test_first_ever_run_uses_live_schema_when_no_cache_exists_yet(self, monkeypatch):
+        # Brand-new instance: the BFF's warm-cache write hasn't landed (or failed), but the dispatcher
+        # still knows the kind from `integrations` — live introspection alone is enough to build.
+        fresh = {"tables": [{"name": "otel_traces", "columns": OTEL_COLUMNS}]}
+        monkeypatch.setattr(dsi, "_reintrospect", lambda kind, iid: fresh)
+        c = FakeConn(kind="clickhouse", schema_present=False)
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert out.get("no_schema") is not True
+        assert len(c.graph_inserts) == 1
+        assert len(c.schema_writes) == 1
