@@ -129,6 +129,16 @@ variable "datasource_diagnosis_enabled" {
   }
 }
 
+variable "graph_querygen_enabled" {
+  type        = bool
+  description = "Hybrid LLM fallback for the registry-driven graph-sources design (2026-07-08): when a ClickHouse datasource's schema doesn't match graph_catalog.py's standard OTel-exporter shape, ask Bedrock (Haiku) to generate a candidate query, validated by a static read-only check, a best-effort AgentCore Code Interpreter sandbox check (skipped if no interpreter is provisioned), and a live LIMIT-1 dry run — only a query that survives all checks is cached (provenance='generated'). Requires datasource_diagnosis_enabled (runs inside the same datasource_index job). bedrock:InvokeModel is already granted via worker_lambda_diagnosis; this flag adds only the GRAPH_QUERYGEN_ENABLED env + the Code Interpreter session IAM (requires agentcore_enabled). false (default) = 0 resources/IAM, $0, the catalog's deterministic 'unavailable' row stands."
+  default     = false
+  validation {
+    condition     = !var.graph_querygen_enabled || var.datasource_diagnosis_enabled
+    error_message = "graph_querygen_enabled requires datasource_diagnosis_enabled (it runs inside the same datasource_index job and needs the same PROJECT/connector-invoke plumbing)."
+  }
+}
+
 variable "diagnosis_schedule_enabled" {
   type        = bool
   description = "Scheduled auto-diagnosis dispatcher (v1 report-scheduler parity): hourly EventBridge -> Lambda scans report_schedules for due rows and enqueues read-only AI-diagnosis report jobs. Requires workers_enabled (reuses the worker role/pg8000 layer/VPC + jobs queue; adds only sqs:SendMessage). false (default) = 0 resources, $0, no scheduled runs."

@@ -306,3 +306,53 @@ class TestLiveReintrospection:
         assert out.get("no_schema") is not True
         assert len(c.graph_inserts) == 1
         assert len(c.schema_writes) == 1
+
+
+# ── Hybrid LLM fallback wiring (graph_querygen.py, registry-driven graph sources 2026-07-08) ───────
+class TestGraphQuerygenHybridFallback:
+    def test_catalog_unavailable_triggers_querygen_and_a_generated_row_wins(self, monkeypatch):
+        generated = {"query_key": "trace_spans", "status": "ready",
+                     "query": {"tool": "clickhouse_query", "mapper": "otel_v1", "args_template": {"sql": "SELECT 1"}},
+                     "missing": None, "meta": {"kind": "clickhouse", "provenance": "generated"}}
+        monkeypatch.setattr(dsi._querygen, "try_generate_clickhouse_trace_spans", lambda schema, iid, invoke: generated)
+        schema = {"tables": [{"name": "unrelated", "columns": [{"name": "x", "type": "Int64"}]}]}  # no catalog match
+        c = FakeConn(kind="clickhouse", schema=schema)
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert len(c.graph_inserts) == 1
+        assert c.graph_inserts[0]["st"] == "ready"
+        assert __import__("json").loads(c.graph_inserts[0]["me"])["provenance"] == "generated"
+
+    def test_querygen_is_never_called_when_the_catalog_already_matched(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(dsi._querygen, "try_generate_clickhouse_trace_spans",
+                             lambda schema, iid, invoke: calls.append(1))
+        schema = {"tables": [{"name": "otel_traces", "columns": OTEL_COLUMNS}]}  # standard shape → catalog ready
+        c = FakeConn(kind="clickhouse", schema=schema)
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert calls == []  # catalog already ready — no need to ask the model
+
+    def test_querygen_returning_none_leaves_the_catalogs_unavailable_row_in_place(self, monkeypatch):
+        monkeypatch.setattr(dsi._querygen, "try_generate_clickhouse_trace_spans", lambda schema, iid, invoke: None)
+        schema = {"tables": [{"name": "unrelated", "columns": [{"name": "x", "type": "Int64"}]}]}
+        c = FakeConn(kind="clickhouse", schema=schema)
+        dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert len(c.graph_inserts) == 1
+        assert c.graph_inserts[0]["st"] == "unavailable"
+
+    def test_querygen_never_touched_for_non_clickhouse_kinds(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(dsi._querygen, "try_generate_clickhouse_trace_spans",
+                             lambda schema, iid, invoke: calls.append(1))
+        c = FakeConn(kind="loki", schema={"labels": []})
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert calls == []
+
+    def test_a_querygen_exception_never_breaks_the_catalog_based_rebuild(self, monkeypatch):
+        def boom(schema, iid, invoke):
+            raise RuntimeError("bedrock down")
+        monkeypatch.setattr(dsi._querygen, "try_generate_clickhouse_trace_spans", boom)
+        schema = {"tables": [{"name": "unrelated", "columns": [{"name": "x", "type": "Int64"}]}]}
+        c = FakeConn(kind="clickhouse", schema=schema)
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert not out.get("error")  # the outer job must not fail
+        assert len(c.graph_inserts) == 1 and c.graph_inserts[0]["st"] == "unavailable"

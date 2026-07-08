@@ -32,6 +32,14 @@ locals {
     HOST_ACCOUNT_ID          = local.acct
     PROJECT                  = var.project
   } : {}
+  # graph_querygen (hybrid LLM fallback for non-standard ClickHouse schemas, registry-driven graph
+  # sources design 2026-07-08) — requires datasource_diagnosis_enabled (runs INSIDE the same
+  # datasource_index job, needs the same PROJECT/connector-invoke plumbing). bedrock:InvokeModel is
+  # ALREADY granted to worker_lambda via worker_lambda_diagnosis (same Haiku/global-inference-profile
+  # scope) — this gate only adds the env flag + (best-effort, optional) Code Interpreter IAM below.
+  # Default false → 0 resources/IAM, $0.
+  gqg         = local.dsd == 1 && var.graph_querygen_enabled ? 1 : 0
+  gqg_env_map = local.gqg == 1 ? { GRAPH_QUERYGEN_ENABLED = "true" } : {}
   # scheduled auto-diagnosis dispatcher gate — reuses the worker role/pg8000 layer/VPC + the jobs queue,
   # so it REQUIRES workers_enabled. Default false → 0 resources, $0, no scheduled runs.
   sched = var.workers_enabled && var.diagnosis_schedule_enabled ? 1 : 0
@@ -110,9 +118,9 @@ data "archive_file" "workers_src" {
     content  = file("${local.workers_src}/ai_cost/aggregate.py")
     filename = "aggregate.py"
   }
-  # datasource_index handler (REGISTRY 'datasource_index', lambda runtime) + its two catalogs.
-  # Flattened — datasource_index.py falls back to `import signal_catalog` when the diagnosis package
-  # isn't bundled; graph_catalog.py is always flat (it never lived under a package).
+  # datasource_index handler (REGISTRY 'datasource_index', lambda runtime) + its catalogs. Flattened —
+  # datasource_index.py falls back to `import signal_catalog` when the diagnosis package isn't
+  # bundled; graph_catalog.py/graph_querygen.py are always flat (they never lived under a package).
   source {
     content  = file("${local.workers_src}/datasource_index.py")
     filename = "datasource_index.py"
@@ -124,6 +132,10 @@ data "archive_file" "workers_src" {
   source {
     content  = file("${local.workers_src}/graph_catalog.py")
     filename = "graph_catalog.py"
+  }
+  source {
+    content  = file("${local.workers_src}/graph_querygen.py")
+    filename = "graph_querygen.py"
   }
   # AI Insights: the `insight` REGISTRY handler (job.py) + collectors. The `insight/` package structure
   # is PRESERVED in the zip (NOT flattened) so `from insight.x import …` resolves at runtime.
@@ -544,7 +556,9 @@ resource "aws_lambda_function" "worker" {
       ARTIFACT_BUCKET = aws_s3_bucket.diagnosis_artifacts[0].bucket
       BEDROCK_REGION  = var.region
       # + gated DIAGNOSIS_SNS_TOPIC_ARN/APP_DOMAIN (notify) — empty map when diagnosis_notify_enabled=false → no env diff.
-    }, local.notify_worker_env_map, local.ds_env_map, local.insight_env_map) # + gated datasource env; + AI_INSIGHTS_ENABLED/ONBOARD_EKS_CLUSTERS when ai_insights_enabled
+    }, local.notify_worker_env_map, local.ds_env_map, local.insight_env_map, local.gqg_env_map)
+    # + gated datasource env; + AI_INSIGHTS_ENABLED/ONBOARD_EKS_CLUSTERS when ai_insights_enabled;
+    # + GRAPH_QUERYGEN_ENABLED when graph_querygen_enabled
   }
   depends_on = [aws_cloudwatch_log_group.worker_fn, aws_iam_role_policy_attachment.worker_lambda_vpc]
 }
@@ -879,6 +893,47 @@ resource "aws_iam_role_policy" "worker_lambda_datasource_invoke" {
       Action   = ["lambda:InvokeFunction"]
       Resource = local.ds_connector_arns
     }]
+  })
+}
+
+# graph_querygen's step (b) — best-effort, advisory-only AgentCore Code Interpreter sandbox check
+# (graph_querygen.py:_code_interpreter_check). Reads the provisioned interpreter id from SSM, then
+# starts/invokes/stops a session. No static ARN exists for the session actions (the interpreter id is
+# a runtime value written by agentcore.mjs's provisioner, not a Terraform resource here) — Resource
+# "*" on this narrow, session-scoped action set, consistent with the AgentCore execution role's own
+# broader `bedrock-agentcore:*` grant elsewhere (ai.tf). Every failure mode in _code_interpreter_check
+# already degrades to a safe skip (None), so an AccessDenied here just means step (b) never runs — it
+# does not weaken (a)/(c), which are the checks that actually gate.
+resource "aws_iam_role_policy" "worker_lambda_graph_querygen" {
+  count = local.gqg
+  name  = "${var.project}-worker-lambda-graph-querygen"
+  role  = aws_iam_role.worker_lambda[0].id
+  lifecycle {
+    precondition {
+      condition     = var.agentcore_enabled
+      error_message = "graph_querygen_enabled requires agentcore_enabled (it provisions the Code Interpreter this best-effort check reads from SSM)."
+    }
+  }
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ReadInterpreterId"
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/ops/${var.project}/agentcore/interpreter_id"
+      },
+      {
+        Sid      = "CodeInterpreterSandboxCheck"
+        Effect   = "Allow"
+        Action = [
+          "bedrock-agentcore:StartCodeInterpreterSession",
+          "bedrock-agentcore:InvokeCodeInterpreter",
+          "bedrock-agentcore:StopCodeInterpreterSession",
+        ]
+        Resource = "*"
+      },
+    ]
   })
 }
 

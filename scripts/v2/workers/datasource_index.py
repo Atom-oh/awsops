@@ -27,6 +27,7 @@ except ImportError:  # noqa: F401
     import signal_catalog as _cat  # flattened in the worker_src lambda bundle
 
 import graph_catalog as _graph_cat  # always flat next to this file — never under a package
+import graph_querygen as _querygen  # hybrid LLM fallback (v1 scope: clickhouse trace_spans only)
 
 _DIAG_KINDS = ("prometheus", "mimir")  # datasource_diag_signals scope — unchanged from v1
 
@@ -61,24 +62,29 @@ def _read_cached_schema(conn, integration_id):
     return kind, (schema if isinstance(schema, dict) else None)
 
 
+def _lambda_invoke(kind, tool, arguments=None):
+    """Credential-blind connector invoke (same shape as diagnosis/sources.py:_invoke_connector),
+    duplicated locally because this is a LAMBDA-runtime handler whose zip only bundles this file +
+    signal_catalog.py + graph_catalog.py + graph_querygen.py (see workers.tf's archive_file), not the
+    full diagnosis package. Raises on failure — callers decide how to handle it."""
+    region = os.environ.get("AWS_REGION", "ap-northeast-2")
+    project = os.environ.get("PROJECT", "awsops-v2")
+    client = boto3.client("lambda", region_name=region)
+    req = json.dumps({"tool_name": tool, "arguments": arguments or {}}).encode("utf-8")
+    resp = client.invoke(FunctionName=f"{project}-agent-{kind}-mcp", Payload=req)
+    raw = resp["Payload"].read()
+    out = json.loads(raw) if raw else {}
+    body = out.get("body")
+    if isinstance(body, str):
+        body = json.loads(body)
+    return body
+
+
 def _reintrospect(kind, integration_id):
-    """Live schema fetch via the credential-blind connector Lambda invoke (`{kind}_schema` tool) —
-    same invoke shape as diagnosis/sources.py:_invoke_connector, duplicated locally because this is a
-    LAMBDA-runtime handler whose zip only bundles this file + signal_catalog.py + graph_catalog.py
-    (see workers.tf's archive_file), not the full diagnosis package. Returns the schema dict on
-    success, or None on ANY failure (never raises) — the caller falls back to the cached schema."""
+    """Live schema fetch via the `{kind}_schema` tool. Returns the schema dict on success, or None on
+    ANY failure (never raises) — the caller falls back to the cached schema."""
     try:
-        region = os.environ.get("AWS_REGION", "ap-northeast-2")
-        project = os.environ.get("PROJECT", "awsops-v2")
-        client = boto3.client("lambda", region_name=region)
-        req = json.dumps({"tool_name": f"{kind}_schema",
-                           "arguments": {"instance_id": integration_id}}).encode("utf-8")
-        resp = client.invoke(FunctionName=f"{project}-agent-{kind}-mcp", Payload=req)
-        raw = resp["Payload"].read()
-        out = json.loads(raw) if raw else {}
-        body = out.get("body")
-        if isinstance(body, str):
-            body = json.loads(body)
+        body = _lambda_invoke(kind, f"{kind}_schema", {"instance_id": integration_id})
         return body if isinstance(body, dict) else None
     except Exception:  # noqa: BLE001 — a flaky/down connector must never block the daily rebuild
         return None
@@ -119,11 +125,34 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
             "schema_version": version}
 
 
+def _hybrid_fallback(kind, schema, iid, rows):
+    """v1 scope: clickhouse trace_spans only. If the catalog couldn't match, ask graph_querygen for a
+    generated candidate; a success REPLACES that one row. Never lets a querygen failure/exception
+    break the catalog-based rebuild — `rows` (the catalog's own, possibly-unavailable, result) is
+    always a safe fallback."""
+    if kind != "clickhouse":
+        return rows
+    idx = next((i for i, r in enumerate(rows) if r.get("query_key") == "trace_spans"), None)
+    if idx is None or rows[idx].get("status") != "unavailable":
+        return rows
+    try:
+        generated = _querygen.try_generate_clickhouse_trace_spans(
+            schema, iid, lambda args: _lambda_invoke("clickhouse", "clickhouse_query", args))
+    except Exception as e:  # noqa: BLE001 — querygen must never break the catalog-based rebuild
+        logging.warning("[datasource_index] graph_querygen failed for integration %s: %s", iid, e)
+        return rows
+    if generated:
+        rows = list(rows)
+        rows[idx] = generated
+    return rows
+
+
 def _rebuild_graph_queries(conn, wdb, iid, kind, schema):
     version = _graph_schema_version(schema)
     if wdb.read_graph_schema_version(conn, iid) == version:
         return {"graph_skipped": True}
     rows = _graph_cat.build_graph_queries(kind, schema)
+    rows = _hybrid_fallback(kind, schema, iid, rows)
     conn.run("BEGIN")
     try:
         wdb.upsert_graph_queries(conn, iid, rows, version)
