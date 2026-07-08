@@ -1,31 +1,32 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 5ae1ecbe08a9 · generated-at: 2026-06-18 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 29c69f72f4e9 · generated-at: 2026-07-08 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 
-> You are Codex, an external reviewer — project context below.
+> You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 ## Module: `docs/`
 
-Project documentation, organized by purpose. This directory is a documentation index; subdirectories each carry their own context file.
+Project documentation, organized by purpose. This directory is an index; each subdirectory carries its own CLAUDE.md/AGENTS.md.
 
 ### Layout (what lives where)
-- `architecture.md` — system architecture (single file).
-- `onboarding.md` — new-teammate onboarding.
-- `INSTALL_GUIDE.md` / `TROUBLESHOOTING.md` — install steps / general troubleshooting.
-- `decisions/` — ADRs (Architecture Decision Records).
+- `architecture.md`, `onboarding.md`, `INSTALL_GUIDE.md`, `TROUBLESHOOTING.md` — single-file references.
+- `decisions/` — **decision source of truth = `decisions/BASELINE.md`** + consolidated ADRs 001–014 + `ADR-MAPPING.md`. Old ADR 001–046 bodies are NOT in the tree (git tag `adr-legacy-2026-06-22`) — don't read them unless explicitly asked.
 - `runbooks/` — per-scenario operational response guides.
 - `reviews/` — code-review / cross-review outputs.
-- `plans/` — feature design/planning docs.
-- `superpowers/reference/` — current per-component design reference; **one file per component is the single source of truth**.
-- `superpowers/archive/` — historical specs/plans, **superseded by `reference/`** (do not treat as current).
+- `plans/` — legacy planning docs; current plans live under `superpowers/plans/`.
+- `superpowers/reference/` — current per-component v2 design; **one file per component is the single source of truth**.
+- `superpowers/specs/` — design specs (brainstorming output).
+- `superpowers/plans/` — implementation plans; a mix of **current and frozen/superseded** work (e.g. remediation plans 029–036 are frozen per ADR-005) — current truth is still `decisions/BASELINE.md`, not this directory.
+- `superpowers/archive/` — historical v2 design-doc execution log.
 
 ### Conventions a reviewer must enforce
 - **All new docs are bilingual** (Korean + English).
-- **ADR filename format:** `NNN-kebab-case-title.md`. New ADR number = highest existing number + 1 (monotonic; no gaps, no reuse).
-- Runbooks must follow `docs/runbooks/CLAUDE.md` rules.
-- Design content belongs in `superpowers/reference/` (one component = one file). When updating a component's design, edit its reference file rather than adding parallel/duplicate docs or reviving archived ones.
+- **ADR filename format:** `NNN-kebab-case-title.md`. New ADR number = highest existing + 1 (currently 014; monotonic, no gaps/reuse). Same PR must update `decisions/BASELINE.md`.
+- Runbooks must follow `docs/runbooks/AGENTS.md` rules.
+- Design content belongs in `superpowers/reference/` (one component = one file). Edit the reference file rather than adding parallel docs or reviving archived ones.
 
 ### Boundaries / gotchas
-- `reference/` is authoritative; `archive/` is dead history — flag any change that edits archive as if current, or that splits a component's design across multiple reference files.
-- This is a docs tree only — no application logic. Watch for accidental secrets/credentials in committed docs (account IDs, ARNs, domains, tokens) and reject them.
+- `reference/` and `decisions/BASELINE.md` are authoritative; `archive/` and frozen-era `superpowers/plans` entries are dead history — flag any change treating them as current, or splitting one component's design across multiple reference files.
+- AWS-resource mutation/autonomy is FROZEN (ADR-005) — flag any doc that reintroduces it as live guidance without a new ADR + owner-override.
+- Docs tree only — no application logic. Watch for secrets/credentials in committed docs (account IDs, ARNs, domains, tokens) and reject them.
 
 ### v1 vs v2 scope note
-The repo runs a legacy v1 app (`src/`, CDK/EC2) in parallel with the current v2 architecture (`web/`, `terraform/v2/`). Docs may cover either; when reviewing design references, confirm which line a doc targets so v1 rules aren't applied to v2 (or vice versa).
+Legacy v1 (`src/`, CDK/EC2) runs in parallel with v2 (`web/`, `terraform/v2/`). Confirm which stack a doc targets before applying its rules.
