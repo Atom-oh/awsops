@@ -47,6 +47,21 @@ class TestClickhouse:
         by = _by_key(gc.build_graph_queries("clickhouse", schema))
         assert "my_custom_spans" in by["trace_spans"]["query"]["args_template"]["sql"]
 
+    def test_the_table_name_is_backtick_quoted_as_a_clickhouse_identifier(self):
+        # co-agent consensus review finding (2026-07-08): a bare f-string interpolation of the
+        # introspected table name is an identifier-injection smell — quote it like any other
+        # untrusted identifier, even though in practice it comes from this instance's own
+        # SHOW TABLES output, not attacker-controlled user input.
+        schema = {"tables": [{"name": "my_custom_spans", "columns": OTEL_COLUMNS}]}
+        by = _by_key(gc.build_graph_queries("clickhouse", schema))
+        assert "`my_custom_spans`" in by["trace_spans"]["query"]["args_template"]["sql"]
+
+    def test_a_backtick_in_the_table_name_is_escaped_by_doubling(self):
+        weird = "my`spans"
+        schema = {"tables": [{"name": weird, "columns": OTEL_COLUMNS}]}
+        by = _by_key(gc.build_graph_queries("clickhouse", schema))
+        assert "`my``spans`" in by["trace_spans"]["query"]["args_template"]["sql"]
+
     def test_unavailable_when_no_table_matches(self):
         schema = {"tables": [{"name": "unrelated", "columns": [{"name": "x", "type": "Int64"}]}]}
         by = _by_key(gc.build_graph_queries("clickhouse", schema))

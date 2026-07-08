@@ -143,9 +143,14 @@ export class ClickHouseOtelTraceSource implements TraceSource {
     // the instance's ACTUAL table name — never a hardcoded default) wins; falls back to the literal
     // `otel_traces` query for the no-registry-row / dormant-state path (see loadGraphSources).
     const template = this.sqlTemplate ?? DEFAULT_OTEL_SQL_TEMPLATE;
+    // replaceAll, not replace: a string search value only replaces the FIRST occurrence in JS —
+    // Python's str.replace() (used by graph_querygen.py's own dry-run validation of the same
+    // template) replaces ALL occurrences, so a generated template referencing a placeholder twice
+    // would pass validation but leave a literal "{window}"/"{cap}" in the SQL sent here (co-agent
+    // consensus review finding, 2026-07-08).
     const sql = template
-      .replace('{window}', String(Math.max(1, Math.floor(windowMins))))
-      .replace('{cap}', String(Math.max(1, Math.floor(cap))));
+      .replaceAll('{window}', String(Math.max(1, Math.floor(windowMins))))
+      .replaceAll('{cap}', String(Math.max(1, Math.floor(cap))));
     let result: unknown;
     try {
       result = await invokeMcpLambdaTool({
@@ -328,7 +333,7 @@ export class MetricsCallsSource {
   async calls(windowMins: number): Promise<ServiceGraphCall[]> {
     const connConfig = await this.resolve();
     if (!connConfig) return [];
-    const query = this.promqlTemplate.replace('{window}', String(Math.max(1, Math.floor(windowMins))));
+    const query = this.promqlTemplate.replaceAll('{window}', String(Math.max(1, Math.floor(windowMins))));
     let result: unknown;
     try {
       result = await invokeMcpLambdaTool({ kind: this.kind, tool: `${this.kind}_query`, args: { query }, connConfig });

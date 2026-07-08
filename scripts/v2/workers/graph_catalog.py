@@ -37,6 +37,14 @@ _SERVICEGRAPH_METRIC = "traces_service_graph_request_total"
 _ISTIO_METRIC = "istio_requests_total"
 
 
+def _quote_identifier(name):
+    """Backtick-quote a ClickHouse identifier, doubling any inner backtick (ClickHouse's escape
+    convention). The table name comes from this instance's own introspected schema (SHOW TABLES),
+    not attacker-controlled user input, but a bare f-string interpolation is still an
+    identifier-injection smell worth closing (co-agent consensus review finding, 2026-07-08)."""
+    return "`" + str(name).replace("`", "``") + "`"
+
+
 def _clickhouse_trace_spans(schema):
     tables = (schema or {}).get("tables") or []
     for t in tables:
@@ -51,7 +59,7 @@ def _clickhouse_trace_spans(schema):
                 ", SpanKind" if "SpanKind" in cols else ""
             ) + ", Timestamp, Duration, ResourceAttributes, SpanAttributes"
             sql = (
-                f"SELECT {select_cols} FROM {t.get('name')} "
+                f"SELECT {select_cols} FROM {_quote_identifier(t.get('name'))} "
                 "WHERE Timestamp >= now() - INTERVAL {window} MINUTE ORDER BY Timestamp DESC LIMIT {cap}"
             )
             return {

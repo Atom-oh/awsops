@@ -138,6 +138,21 @@ describe('ClickHouseOtelTraceSource', () => {
     const call = invokeMcpLambdaTool.mock.calls[0][0];
     expect(String(call.args.sql)).toBe('SELECT TraceId FROM my_custom_spans WHERE Timestamp >= now() - INTERVAL 15 MINUTE LIMIT 50');
   });
+
+  it('substitutes EVERY occurrence of {window}/{cap}, not just the first — an LLM-generated template' +
+    ' (graph_querygen.py) can plausibly reference a placeholder more than once', async () => {
+    getDatasource.mockResolvedValue({ id: 42, kind: 'clickhouse', isDefault: false });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://ch-42' });
+    invokeMcpLambdaTool.mockResolvedValue({ rows: [] });
+    const template = 'SELECT TraceId FROM t WHERE Timestamp >= now() - INTERVAL {window} MINUTE ' +
+      'AND Timestamp <= now() + INTERVAL {window} MINUTE LIMIT {cap} SETTINGS max_rows = {cap}';
+    await new ClickHouseOtelTraceSource(42, template).recentSpans(15, 50);
+    const call = invokeMcpLambdaTool.mock.calls[0][0];
+    expect(String(call.args.sql)).toBe(
+      'SELECT TraceId FROM t WHERE Timestamp >= now() - INTERVAL 15 MINUTE ' +
+      'AND Timestamp <= now() + INTERVAL 15 MINUTE LIMIT 50 SETTINGS max_rows = 50',
+    );
+  });
 });
 
 // ── TempoTraceSource (registry-driven graph sources, 2026-07-08) ───────────────────────────────────
@@ -290,6 +305,16 @@ describe('MetricsCallsSource', () => {
     expect(call.kind).toBe('prometheus');
     expect(call.tool).toBe('prometheus_query');
     expect(call.args.query).toBe('sum by (client,server) (increase(x[30m]))');
+  });
+
+  it('calls() substitutes EVERY {window} occurrence, not just the first', async () => {
+    getDatasource.mockResolvedValue({ id: 3, kind: 'prometheus', isDefault: false });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://prom' });
+    invokeMcpLambdaTool.mockResolvedValue({ result: [] });
+    const template = 'sum by (client,server) (increase(x[{window}m]) / increase(y[{window}m]))';
+    await new MetricsCallsSource(3, 'prometheus', template).calls(30);
+    const call = invokeMcpLambdaTool.mock.calls[0][0];
+    expect(call.args.query).toBe('sum by (client,server) (increase(x[30m]) / increase(y[30m]))');
   });
 
   it('calls() returns [] (no throw) when the instance is unavailable or the query fails', async () => {
