@@ -27,4 +27,10 @@ describe('instrumentation.ts (graph-rebuild interval)', () => {
   it('schedules a recurring interval, not a one-shot run', () => {
     expect(SRC).toMatch(/setInterval/);
   });
+
+  it('guards against overlapping runs (a rebuild slower than the interval, or the initial 60s' +
+    ' setTimeout landing on top of a 1-minute interval, must not run concurrently)', () => {
+    expect(SRC).toMatch(/running/);
+    expect(SRC).toMatch(/finally/);
+  });
 });

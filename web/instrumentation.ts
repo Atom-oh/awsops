@@ -28,7 +28,15 @@ export async function register() {
     const { ClickHouseOtelTraceSource } = await import('./lib/trace-source');
     const pool = getPool();
 
+    // In-flight guard: the advisory lock in writeGraph() only serializes the WRITE section, not the
+    // (possibly expensive) ClickHouse/inventory reads before it — without this, a rebuild slower than
+    // the interval, or the initial 60s setTimeout landing on top of a short interval (e.g. mins=1),
+    // would pile up duplicate concurrent read/source calls. Skipping a tick (not queuing it) is fine:
+    // the next interval fires regardless, and a rebuild is idempotent.
+    let running = false;
     const run = async () => {
+      if (running) return;
+      running = true;
       try {
         const flow = await rebuildGraph(pool);
         const infra = await rebuildInfraGraph(pool);
@@ -39,6 +47,8 @@ export async function register() {
       } catch (err) {
         // Never crash the server over a background rebuild — log and retry next interval.
         console.error('[graph-rebuild] failed:', err);
+      } finally {
+        running = false;
       }
     };
 

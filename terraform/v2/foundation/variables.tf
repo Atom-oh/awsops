@@ -111,6 +111,14 @@ variable "graph_rebuild_interval_mins" {
   type        = number
   description = "Minutes between web-instrumentation topology graph-rebuilds (flow/infra/trace layers, ADR-043 + 2026-06-25 trace-topology design). 0 (default) = the interval never starts; the manual `scripts/v2/graph-rebuild.mjs` path is unaffected either way. No new AWS resource — runs in the existing web task using perms it already holds. Recommended: 15 (matches steampipe.tf's inventory-sync cadence)."
   default     = 0
+  validation {
+    # Must be 0 (off) or a whole minute ≥1 — a fractional/zero-ish positive value (e.g. 0.01) would
+    # produce an unintended, tightly-spinning Node setInterval. Capped at 1 day: this is a lightweight
+    # in-process timer, not a real schedule — anything longer belongs in the EventBridge upgrade path
+    # noted in instrumentation.ts, not this variable.
+    condition     = var.graph_rebuild_interval_mins == 0 || (var.graph_rebuild_interval_mins == floor(var.graph_rebuild_interval_mins) && var.graph_rebuild_interval_mins >= 1 && var.graph_rebuild_interval_mins <= 1440)
+    error_message = "graph_rebuild_interval_mins must be 0 (off) or a whole number of minutes between 1 and 1440."
+  }
 }
 
 variable "ai_cost_tracking_enabled" {
