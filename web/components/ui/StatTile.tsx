@@ -5,6 +5,13 @@ import { cn } from '@/lib/cn';
 
 export type StatTileVariant = 'default' | 'accent' | 'danger' | 'warn';
 
+/** Maps a 0-100 pass rate to a StatTile variant (shared by /compliance and the dashboard tile). */
+export function passVariant(rate: number): StatTileVariant {
+  if (rate >= 80) return 'accent';
+  if (rate >= 50) return 'warn';
+  return 'danger';
+}
+
 export interface StatTileProps {
   /** Eyebrow label (uppercase/muted). The legacy `label` prop is an alias. */
   label: string;
