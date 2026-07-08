@@ -17,11 +17,11 @@ describe('instrumentation.ts (graph-rebuild interval)', () => {
     expect(SRC).toMatch(/GRAPH_REBUILD_INTERVAL_MINS/);
   });
 
-  it('wires all three materialized layers, same as scripts/v2/graph-rebuild.mjs', () => {
+  it('wires all three materialized layers via the registry-driven graph-source loader, same as scripts/v2/graph-rebuild.mjs', () => {
     expect(SRC).toMatch(/rebuildGraph/);
     expect(SRC).toMatch(/rebuildInfraGraph/);
     expect(SRC).toMatch(/rebuildTraceGraph/);
-    expect(SRC).toMatch(/ClickHouseOtelTraceSource/);
+    expect(SRC).toMatch(/loadGraphSources/);
   });
 
   it('schedules a recurring interval, not a one-shot run', () => {
