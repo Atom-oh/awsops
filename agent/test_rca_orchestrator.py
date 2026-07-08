@@ -18,15 +18,16 @@ class BedrockInvokeRequestBodyTest(unittest.TestCase):
         _, kwargs = fake_client.invoke_model.call_args
         return kwargs["modelId"], json.loads(kwargs["body"])
 
-    def test_stays_on_sonnet_4_6_and_omits_temperature(self):
+    def test_stays_on_sonnet_4_6_with_deterministic_temperature(self):
         # Model stays on sonnet-4-6 (AGENTS.md's pinned RCA model) — bumping to sonnet-5 is a
-        # separate decision (own PR + ADR), not something to bundle into this temperature fix.
-        # `temperature` is still dropped defensively: sonnet-5 rejects it outright on
-        # Converse/ConverseStream (see agent.py's MODEL_ID + hotfix c30ac9e7), so this guards
-        # against a future model bump silently reintroducing that failure.
+        # separate decision (own PR + ADR), not something to bundle into a hotfix. And since
+        # sonnet-4-6 accepts `temperature`, ADR-038 determinism (temperature=0) stays in force
+        # on this path. NOTE for the future model-bump PR: sonnet-5 rejects `temperature`
+        # outright (ValidationException — see agent.py's MODEL_ID + hotfix c30ac9e7), so that
+        # PR must drop the param and update this test together with the modelId.
         model_id, body = self._invoke_and_capture_body()
         self.assertEqual(model_id, "global.anthropic.claude-sonnet-4-6")
-        self.assertNotIn("temperature", body)
+        self.assertEqual(body.get("temperature"), 0)
 
 
 if __name__ == "__main__":

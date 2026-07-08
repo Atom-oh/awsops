@@ -21,8 +21,9 @@ export async function GET(request: Request) {
   try { clusterCount = (await listClusters()).length; } catch { clusterCount = null; }
   let mtdCost: number | null = null;
   try { mtdCost = (await getMtdCost()).total; } catch { mtdCost = null; }
-  // latest completed CIS run, for the dashboard compliance tile — degrades to null,
-  // same pattern as clusterCount/mtdCost above.
+  // latest *succeeded* CIS run, for the dashboard compliance tile — a newer failed run is
+  // deliberately skipped (the tile shows the last known-good pass rate, not run health).
+  // Degrades to null, same pattern as clusterCount/mtdCost above.
   let compliance: { pass_rate: number | null; alarm: number | null; finished_at: string | null } | null = null;
   try {
     const c = await getPool().query(
