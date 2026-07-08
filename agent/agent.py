@@ -116,18 +116,23 @@ try:
     model = BedrockModel(
         model_id=MODEL_ID,
         region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
-        temperature=0.0,
+        # NOTE: sonnet-5 rejects `temperature` on ConverseStream ("temperature is deprecated for
+        # this model" — live-verified 2026-07-07, every request failed with a ValidationException
+        # until this was dropped). The ADR-038 determinism rationale (temperature=0.0 for tool
+        # selection) no longer applies to this model generation — omit rather than pass an invalid value.
+        # Rollback contract: if MODEL_ID moves back to a temperature-accepting generation (e.g.
+        # sonnet-4-6), restore temperature=0.0 here AND in the no-cache fallback below — ADR-038
+        # determinism is suspended only while the model rejects the param, not repealed.
         cache_config=CacheConfig(strategy="auto"),  # auto cachePoint injection (system+messages)
         cache_tools="default",                      # toolConfig cachePoint, 5m TTL
     )
 except (TypeError, ValueError) as e:  # older strands: unknown kwarg / CacheConfig missing; or CacheConfig(strategy="auto") rejected (ValueError/pydantic ValidationError)
     # NOTE: this fires once per cold start only. The production cache-degradation detector is
     # the cacheReadInputTokens usage check (ADR-038 Task 8) — do not rely on this line alone.
-    print(f"[Agent] prompt caching unavailable ({e}); falling back to temperature-only")
+    print(f"[Agent] prompt caching unavailable ({e}); falling back to no-cache")
     model = BedrockModel(
         model_id=MODEL_ID,
         region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
-        temperature=0.0,
     )
 
 # ============================================================================
