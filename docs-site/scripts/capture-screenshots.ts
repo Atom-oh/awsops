@@ -206,16 +206,10 @@ async function captureScreenshot(
   const dir = path.join(OUTPUT_DIR, capture.category);
   fs.mkdirSync(dir, { recursive: true });
 
-  // Viewport screenshot
+  // Viewport screenshot (the only variant used in docs; -full page twin was unreferenced dead weight)
   await page.screenshot({
     path: path.join(dir, `${capture.name}${suffix}.png`),
     fullPage: false,
-  });
-
-  // Full page screenshot
-  await page.screenshot({
-    path: path.join(dir, `${capture.name}-full${suffix}.png`),
-    fullPage: true,
   });
 }
 
