@@ -174,3 +174,69 @@ def sweep_diag_signals(conn, integration_id, keep_keys):
         "DELETE FROM datasource_diag_signals "
         "WHERE account_id='self' AND integration_id=:iid AND signal_key <> ALL(:keep)",
         iid=integration_id, keep=list(keep_keys or []))
+
+
+# ── datasource_graph_queries (pre-built topology-graph queries) ─────────────────────────────────
+# Mirrors the datasource_diag_signals helpers above exactly, one table over — see graph_catalog.py.
+
+
+def upsert_graph_queries(conn, integration_id, rows, schema_version):
+    """Idempotent upsert of built graph-query rows for one instance. jsonb fields are bound + cast
+    (never inlined). Caller sweeps stale keys via sweep_graph_queries. No-op on empty rows."""
+    for r in rows or []:
+        conn.run(
+            "INSERT INTO datasource_graph_queries "
+            "(account_id, integration_id, query_key, status, query, missing, meta, schema_version, built_at) "
+            "VALUES ('self', :iid, :qk, :st, :q::jsonb, :mi::jsonb, :me::jsonb, :sv, now()) "
+            "ON CONFLICT (account_id, integration_id, query_key) DO UPDATE SET "
+            "status=EXCLUDED.status, query=EXCLUDED.query, missing=EXCLUDED.missing, "
+            "meta=EXCLUDED.meta, schema_version=EXCLUDED.schema_version, built_at=now()",
+            iid=integration_id, qk=r["query_key"], st=r["status"],
+            q=(json.dumps(r["query"]) if r.get("query") is not None else None),
+            mi=(json.dumps(r["missing"]) if r.get("missing") is not None else None),
+            me=json.dumps(r.get("meta") or {}), sv=schema_version,
+        )
+
+
+def read_graph_schema_version(conn, integration_id):
+    """Return a stable schema_version only when all existing graph-query rows agree (mirrors
+    read_signal_schema_version — see its docstring for why mixed versions must not short-circuit)."""
+    rows = conn.run(
+        "SELECT COUNT(DISTINCT schema_version), MIN(schema_version) "
+        "FROM datasource_graph_queries "
+        "WHERE account_id='self' AND integration_id=:iid",
+        iid=integration_id)
+    if not rows:
+        return None
+    distinct, version = rows[0]
+    return version if distinct == 1 and version else None
+
+
+def sweep_graph_queries(conn, integration_id, keep_keys):
+    """Delete this instance's graph-query rows whose key is NOT in keep_keys (mark-sweep after a
+    rebuild). Empty keep_keys → delete all rows for the instance."""
+    conn.run(
+        "DELETE FROM datasource_graph_queries "
+        "WHERE account_id='self' AND integration_id=:iid AND query_key <> ALL(:keep)",
+        iid=integration_id, keep=list(keep_keys or []))
+
+
+_MAX_SCHEMA_BYTES = 256_000  # mirrors web/lib/datasource-schema.ts's MAX_SCHEMA_BYTES — same table/cap
+
+
+def upsert_datasource_schema(conn, account_id, integration_id, kind, schema):
+    """Write-back of a freshly re-introspected schema (drift refresh, datasource_index.py only —
+    the BFF's normal warm/refresh path uses upsertSchema in web/lib/datasource-schema.ts; this is the
+    python-worker-side mirror, same table). jsonb bound + cast, never inlined. Raises (caller falls
+    back to the cached schema — see run()'s `fresh is not None` write-back path) when the introspected
+    schema exceeds the same size cap the BFF enforces, so an oversized live schema never gets cached."""
+    payload = json.dumps(schema)
+    if len(payload.encode("utf-8")) > _MAX_SCHEMA_BYTES:
+        raise ValueError("introspected schema exceeds size limit")
+    conn.run(
+        "INSERT INTO datasource_schemas (account_id, integration_id, kind, schema, fetched_at) "
+        "VALUES (:acct, :iid, :k, :s::jsonb, now()) "
+        "ON CONFLICT (account_id, integration_id) DO UPDATE SET "
+        "kind=EXCLUDED.kind, schema=EXCLUDED.schema, fetched_at=now()",
+        acct=account_id, iid=integration_id, k=kind, s=payload,
+    )

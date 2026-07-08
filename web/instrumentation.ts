@@ -25,7 +25,7 @@ export async function register() {
 
     const { getPool } = await import('./lib/db');
     const { rebuildGraph, rebuildInfraGraph, rebuildTraceGraph } = await import('./lib/graph-store');
-    const { ClickHouseOtelTraceSource } = await import('./lib/trace-source');
+    const { loadGraphSources } = await import('./lib/graph-sources');
     const pool = getPool();
 
     // In-flight guard: the advisory lock in writeGraph() only serializes the WRITE section, not the
@@ -40,7 +40,11 @@ export async function register() {
       try {
         const flow = await rebuildGraph(pool);
         const infra = await rebuildInfraGraph(pool);
-        const trace = await rebuildTraceGraph(pool, new ClickHouseOtelTraceSource());
+        // Registry-driven (2026-07-08): sources come from every registered datasource's pre-built
+        // graph-query catalog (datasource_graph_queries), not one hardcoded default — see
+        // docs/superpowers/specs/2026-07-08-registry-graph-sources-design.md.
+        const { sources, metricsSources } = await loadGraphSources(pool);
+        const trace = await rebuildTraceGraph(pool, sources, undefined, metricsSources);
         console.log(`[graph-rebuild] flow: ${flow.nodes} nodes, ${flow.edges} edges`);
         console.log(`[graph-rebuild] infra: ${infra.nodes} nodes, ${infra.edges} edges`);
         console.log(`[graph-rebuild] trace: ${trace.nodes} nodes, ${trace.edges} edges`);
