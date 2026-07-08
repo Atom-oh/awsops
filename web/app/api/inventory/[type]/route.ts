@@ -1,6 +1,7 @@
 import { verifyUser } from '@/lib/auth';
 import { readResources } from '@/lib/inventory';
 import { INVENTORY_TYPES } from '@/lib/inventory-types';
+import { getEcsClusterCosts } from '@/lib/aws';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,7 +21,21 @@ export async function GET(request: Request, { params }: { params: { type: string
   const regions = regionsParam === null || regionsParam === '__all__' ? '__all__' : regionsParam.split(',').filter(Boolean);
   const includeGlobal = url.searchParams.get('includeGlobal') !== '0';
   try {
-    return Response.json(await readResources(params.type, { limit, offset, regions, includeGlobal }));
+    const page = await readResources(params.type, { limit, offset, regions, includeGlobal });
+    // MTD real cost isn't in inventory_resources (Steampipe has no CE access) — merge it in here.
+    // Degrades silently: cost-allocation tag not active yet, or CE denied → rows just lack the field.
+    if (params.type === 'ecs_cluster') {
+      try {
+        const costs = await getEcsClusterCosts();
+        for (const row of page.rows) {
+          // ecs_cluster's resource_id is the cluster *name* (steampipe sync's primary key for
+          // this type), not an ARN — matches getEcsClusterCosts' region|name keying below.
+          const cost = costs[`${row.region}|${row.resource_id}`];
+          if (cost !== undefined) (row.data as Record<string, unknown>).mtd_cost_usd = cost;
+        }
+      } catch { /* leave rows without mtd_cost_usd */ }
+    }
+    return Response.json(page);
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

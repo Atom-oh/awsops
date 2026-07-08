@@ -121,6 +121,12 @@ variable "graph_rebuild_interval_mins" {
   }
 }
 
+variable "ecs_cost_tag_active" {
+  type        = bool
+  description = "Activates aws:ecs:clusterName as a Cost Explorer cost-allocation tag (feeds the /inventory/ecs_cluster MTD-cost column via GroupBy TAG). AWS only allows activating a tag key once tagged usage has appeared in billing (~24h after the enable_ecs_managed_tags rollout) — flip this on in a second apply, not the same one. false (default) = 0 resources, $0, tag stays inactive (CE just returns no data for it)."
+  default     = false
+}
+
 variable "ai_cost_tracking_enabled" {
   type        = bool
   description = "Scheduled awsops-only Bedrock-cost aggregator (Logs Insights /aws/bedrock/invocation-logs -> ai_usage_daily). Requires workers_enabled (reuses the worker role/pg8000 layer/VPC). false (default) = 0 resources, $0, no behavior change."
