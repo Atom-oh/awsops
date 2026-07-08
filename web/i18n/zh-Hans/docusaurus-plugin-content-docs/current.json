@@ -1,0 +1,38 @@
+{
+  "version.label": {
+    "message": "Next",
+    "description": "The label for version current"
+  },
+  "sidebar.guideSidebar.category.시작하기": {
+    "message": "开始使用",
+    "description": "The label for category '시작하기' in sidebar 'guideSidebar'"
+  },
+  "sidebar.guideSidebar.category.Overview": {
+    "message": "概览",
+    "description": "The label for category 'Overview' in sidebar 'guideSidebar'"
+  },
+  "sidebar.guideSidebar.category.Compute": {
+    "message": "计算",
+    "description": "The label for category 'Compute' in sidebar 'guideSidebar'"
+  },
+  "sidebar.guideSidebar.category.Network & CDN": {
+    "message": "网络与 CDN",
+    "description": "The label for category 'Network & CDN' in sidebar 'guideSidebar'"
+  },
+  "sidebar.guideSidebar.category.Storage & DB": {
+    "message": "存储与数据库",
+    "description": "The label for category 'Storage & DB' in sidebar 'guideSidebar'"
+  },
+  "sidebar.guideSidebar.category.Monitoring": {
+    "message": "监控",
+    "description": "The label for category 'Monitoring' in sidebar 'guideSidebar'"
+  },
+  "sidebar.guideSidebar.category.Security": {
+    "message": "安全",
+    "description": "The label for category 'Security' in sidebar 'guideSidebar'"
+  },
+  "sidebar.guideSidebar.category.FAQ": {
+    "message": "常见问题",
+    "description": "The label for category 'FAQ' in sidebar 'guideSidebar'"
+  }
+}

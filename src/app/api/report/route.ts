@@ -154,7 +154,6 @@ markStaleReportsAsFailed();
 // 주기적 리포트 생성 스케줄러 시작
 startScheduler(async (schedule: ReportSchedule) => {
   const reportId = randomUUID();
-  const isEn = schedule.lang === 'en';
   const accountId = schedule.accountId && validateAccountId(schedule.accountId) ? schedule.accountId : undefined;
   const account = accountId ? getAccountById(accountId) : undefined;
 
@@ -177,7 +176,7 @@ startScheduler(async (schedule: ReportSchedule) => {
   fs.writeFileSync(path.join(REPORTS_META_DIR, `${reportId}.json`), JSON.stringify(meta, null, 2));
   console.log(`[Report Scheduler] Triggered report ${reportId} (${schedule.frequency})`);
 
-  generateReportBackground(reportId, accountId, account?.alias, isEn).catch(err => {
+  generateReportBackground(reportId, accountId, account?.alias, schedule.lang).catch(err => {
     console.error(`[Report Scheduler] Generation failed for ${reportId}:`, err);
     updateReportMeta(reportId, {
       status: 'failed',
@@ -209,19 +208,21 @@ function reorderSections(sections: SectionResult[]): SectionResult[] {
 async function analyzeSection(
   section: string,
   data: ReportData,
-  isEn: boolean,
+  lang: string,
   previousResults: SectionResult[],
 ): Promise<SectionResult> {
+  const isEn = lang === 'en';
+  const isZh = lang === 'zh';
   const prompt = REPORT_SECTIONS.find(s => s.section === section);
   const title = prompt
-    ? (isEn ? prompt.title : prompt.titleKo)
+    ? (isEn ? prompt.title : isZh ? prompt.titleZh : prompt.titleKo)
     : section;
 
   // Appendix: format inventory data directly without Bedrock call
   // 부록: Bedrock 호출 없이 인벤토리 데이터를 직접 포맷
   if (section === 'appendix') {
     const context = await formatReportForBedrock(data, 'appendix');
-    return { section, key: section, title, content: context || (isEn ? 'No inventory data.' : '인벤토리 데이터가 없습니다.') };
+    return { section, key: section, title, content: context || (isEn ? 'No inventory data.' : isZh ? '没有清单数据。' : '인벤토리 데이터가 없습니다.') };
   }
 
   // Build context from formatReportForBedrock
@@ -242,16 +243,18 @@ async function analyzeSection(
       section,
       key: section,
       title,
-      content: isEn ? 'No data available for this section.' : '이 섹션에 대한 데이터가 없습니다.',
+      content: isEn ? 'No data available for this section.' : isZh ? '此部分没有可用数据。' : '이 섹션에 대한 데이터가 없습니다.',
     };
   }
 
   // System prompt: use section-specific prompt or a generic one
   const systemPrompt = prompt?.systemPrompt || (isEn
     ? 'You are a senior AWS cloud architect. Analyze the provided data and produce a structured markdown report section.'
-    : '당신은 시니어 AWS 클라우드 아키텍트입니다. 제공된 데이터를 분석하여 구조화된 마크다운 리포트 섹션을 작성하세요.');
+    : isZh
+      ? '你是一名资深 AWS 云架构师。请分析提供的数据，撰写结构化的 markdown 报告章节。'
+      : '당신은 시니어 AWS 클라우드 아키텍트입니다. 제공된 데이터를 분석하여 구조화된 마크다운 리포트 섹션을 작성하세요.');
 
-  const langHint = isEn ? 'Respond in English.' : '한국어로 응답하세요.';
+  const langHint = isEn ? 'Respond in English.' : isZh ? '请用简体中文回答。' : '한국어로 응답하세요.';
 
   const body = JSON.stringify({
     anthropic_version: 'bedrock-2023-05-31',
@@ -336,8 +339,10 @@ async function generateReportBackground(
   reportId: string,
   accountId?: string,
   accountAlias?: string,
-  isEn?: boolean,
+  lang?: string,
 ): Promise<void> {
+  const isEn = lang === 'en';
+  const isZh = lang === 'zh';
   const completedSections: string[] = [];
 
   // Live progress send — writes to meta file instead of SSE
@@ -356,11 +361,12 @@ async function generateReportBackground(
   // 1단계: 데이터 수집
   console.log(`[Report] ${reportId} — Phase 1: Collecting data...`);
   updateReportMeta(reportId, {
-    progress: { current: 0, total: 15, currentSection: 'data-collection', statusMessage: isEn ? 'Collecting infrastructure data...' : '인프라 데이터 수집 중...', completedSections },
+    progress: { current: 0, total: 15, currentSection: 'data-collection', statusMessage: isEn ? 'Collecting infrastructure data...' : isZh ? '正在收集基础设施数据...' : '인프라 데이터 수집 중...', completedSections },
   });
   let reportData: ReportData;
   try {
-    reportData = await collectReportData(accountId, liveSend, isEn);
+    // Collectors are bilingual (en/ko) — zh falls back to English status messages
+    reportData = await collectReportData(accountId, liveSend, isEn || isZh);
     console.log(`[Report] ${reportId} — Phase 1 done. Starting Bedrock analysis...`);
   } catch (err) {
     console.error(`[Report] ${reportId} — Data collection failed:`, err);
@@ -384,7 +390,7 @@ async function generateReportBackground(
         progress: { current: completed, total: 15, currentSection: section, statusMessage: topics, completedSections },
       });
 
-      return analyzeSection(section, reportData, !!isEn, sectionResults)
+      return analyzeSection(section, reportData, lang || 'ko', sectionResults)
         .then(result => {
           sectionResults.push(result);
           completed++;
@@ -397,8 +403,8 @@ async function generateReportBackground(
         })
         .catch(err => {
           const msg = err?.name === 'AbortError'
-            ? (isEn ? 'Analysis timed out (no response for 60s)' : '분석 시간 초과 (60초간 응답 없음)')
-            : (isEn ? `Analysis failed: ${err?.message || 'Unknown error'}` : `분석 실패: ${err?.message || '알 수 없는 오류'}`);
+            ? (isEn ? 'Analysis timed out (no response for 60s)' : isZh ? '分析超时（60 秒无响应）' : '분석 시간 초과 (60초간 응답 없음)')
+            : (isEn ? `Analysis failed: ${err?.message || 'Unknown error'}` : isZh ? `分析失败: ${err?.message || '未知错误'}` : `분석 실패: ${err?.message || '알 수 없는 오류'}`);
           const fallback: SectionResult = { section, key: section, title: section, content: msg };
           sectionResults.push(fallback);
           completed++;
@@ -424,8 +430,8 @@ async function generateReportBackground(
   });
 
   const reportInput = {
-    title: isEn ? 'AWSops AI Diagnosis Report' : 'AWSops AI 종합진단 리포트',
-    subtitle: new Date().toLocaleDateString(isEn ? 'en-US' : 'ko-KR', {
+    title: isEn ? 'AWSops AI Diagnosis Report' : isZh ? 'AWSops AI 综合诊断报告' : 'AWSops AI 종합진단 리포트',
+    subtitle: new Date().toLocaleDateString(isEn ? 'en-US' : isZh ? 'zh-CN' : 'ko-KR', {
       year: 'numeric',
       month: 'long',
     }),
@@ -557,7 +563,7 @@ export async function POST(request: NextRequest) {
   const { accountId: rawAccountId, lang } = body;
   const accountId = rawAccountId && validateAccountId(rawAccountId) ? rawAccountId : undefined;
   const account = accountId ? getAccountById(accountId) : undefined;
-  const isEn = lang === 'en';
+  const reportLang = lang === 'en' || lang === 'zh' ? lang : 'ko';
 
   const reportId = randomUUID();
 
@@ -585,7 +591,7 @@ export async function POST(request: NextRequest) {
 
   // Start background generation (fire and forget)
   // 백그라운드 생성 시작 (실행 후 대기 없음)
-  generateReportBackground(reportId, accountId, account?.alias, isEn).catch(err => {
+  generateReportBackground(reportId, accountId, account?.alias, reportLang).catch(err => {
     console.error(`[Report] Background generation failed for ${reportId}:`, err);
     updateReportMeta(reportId, {
       status: 'failed',

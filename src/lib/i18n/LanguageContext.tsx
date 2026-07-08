@@ -3,11 +3,14 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import en from './translations/en.json';
 import ko from './translations/ko.json';
+import zh from './translations/zh.json';
 
 // Supported languages / 지원 언어
-export type Language = 'ko' | 'en';
+export type Language = 'ko' | 'en' | 'zh';
 
-const translations: Record<Language, Record<string, string>> = { en, ko };
+export const SUPPORTED_LANGUAGES: Language[] = ['ko', 'en', 'zh'];
+
+const translations: Record<Language, Record<string, string>> = { en, ko, zh };
 
 interface LanguageContextType {
   lang: Language;
@@ -27,7 +30,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   // Load saved language preference / 저장된 언어 설정 로드
   useEffect(() => {
     const saved = localStorage.getItem('awsops-lang') as Language;
-    if (saved && (saved === 'ko' || saved === 'en')) {
+    if (saved && SUPPORTED_LANGUAGES.includes(saved)) {
       setLangState(saved);
     }
   }, []);

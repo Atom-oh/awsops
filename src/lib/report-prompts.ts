@@ -6,6 +6,7 @@ export interface SectionPrompt {
   section: string;
   title: string;
   titleKo: string;
+  titleZh: string;
   systemPrompt: string;
 }
 
@@ -21,6 +22,7 @@ export const REPORT_SECTIONS: SectionPrompt[] = [
     section: 'cost-overview',
     title: 'Cost Overview',
     titleKo: '비용 현황',
+    titleZh: '成本概览',
     systemPrompt: `You are a senior FinOps analyst with deep expertise in AWS cost management and optimization.
 Analyze the provided cost data and produce a structured, data-driven report covering total spend, service breakdown, month-over-month trends, and top cost drivers.
 
@@ -74,6 +76,7 @@ Scoring thresholds:
     section: 'cost-compute',
     title: 'Compute Cost Deep Dive',
     titleKo: '컴퓨팅 비용 심층분석',
+    titleZh: '计算成本深度分析',
     systemPrompt: `You are a senior FinOps engineer specializing in AWS compute cost optimization with deep knowledge of EC2, EKS, Lambda, and ECS pricing models.
 Analyze compute costs across all services and identify optimization opportunities.
 
@@ -128,6 +131,7 @@ Prioritized list of specific compute cost reduction actions.`,
     section: 'cost-network',
     title: 'Network & Data Transfer Cost',
     titleKo: '네트워크 전송 비용',
+    titleZh: '网络与数据传输成本',
     systemPrompt: `You are a senior network cost analyst specializing in AWS data transfer pricing and network architecture optimization.
 Analyze network-related costs including data transfer, NAT Gateway, VPN, Transit Gateway, and inter-AZ traffic.
 
@@ -180,6 +184,7 @@ Table: Action | Est. Monthly Savings | Effort (Low/Med/High) | Priority (P1/P2/P
     section: 'cost-storage',
     title: 'Storage Cost Deep Dive',
     titleKo: '스토리지 비용 심층분석',
+    titleZh: '存储成本深度分析',
     systemPrompt: `You are a senior storage cost analyst specializing in AWS storage services pricing and lifecycle optimization.
 Analyze storage costs across S3, EBS, EFS, and related services, focusing on class optimization and lifecycle management.
 
@@ -237,6 +242,7 @@ Prioritized savings actions across all storage services.`,
     section: 'idle-resources',
     title: 'Idle Resources & Waste',
     titleKo: '유휴 리소스 & 낭비',
+    titleZh: '闲置资源与浪费',
     systemPrompt: `You are a cost optimization engineer specializing in identifying idle, unused, and wasteful AWS resources.
 Analyze the provided data to find all forms of waste and calculate recoverable costs per category.
 
@@ -308,6 +314,7 @@ Scoring:
     section: 'security-posture',
     title: 'Security Posture',
     titleKo: '보안 현황',
+    titleZh: '安全态势',
     systemPrompt: `You are a senior cloud security engineer specializing in AWS security posture assessment, CIS benchmark compliance, and threat surface analysis.
 Analyze IAM, encryption, public exposure, and compliance status across the environment.
 
@@ -380,6 +387,7 @@ Numbered list of top 5 most urgent security issues, each with:
     section: 'network-architecture',
     title: 'Network Architecture',
     titleKo: '네트워크 아키텍처',
+    titleZh: '网络架构',
     systemPrompt: `You are a senior network architect specializing in AWS VPC design, hybrid connectivity, and network reliability.
 Analyze the network topology for single points of failure, redundancy gaps, and architectural best practices.
 
@@ -433,6 +441,7 @@ For each finding, describe:
     section: 'compute-analysis',
     title: 'Compute Infrastructure',
     titleKo: '컴퓨팅 인프라 분석',
+    titleZh: '计算基础设施分析',
     systemPrompt: `You are a senior cloud architect specializing in AWS compute infrastructure reliability, performance, and right-sizing.
 Analyze EC2 instances, Lambda functions, ECS services, and Auto Scaling configurations for reliability and efficiency.
 
@@ -482,6 +491,7 @@ Specific right-sizing recommendations with projected savings.`,
     section: 'eks-analysis',
     title: 'EKS & Container Analysis',
     titleKo: 'EKS & 컨테이너 분석',
+    titleZh: 'EKS 与容器分析',
     systemPrompt: `You are a Kubernetes expert specializing in EKS cluster optimization, resource efficiency, and container cost management.
 Analyze cluster configuration, node pool structure, resource allocation, and workload efficiency.
 
@@ -537,6 +547,7 @@ Table: Action | Affected Namespace/Workload | Est. Monthly Savings | Effort (Low
     section: 'database-analysis',
     title: 'Database Analysis',
     titleKo: '데이터베이스 분석',
+    titleZh: '数据库分析',
     systemPrompt: `You are a senior DBA and cloud architect specializing in AWS managed database services optimization.
 Analyze RDS, ElastiCache, OpenSearch, and other database services for utilization, reliability, and cost efficiency.
 
@@ -593,6 +604,7 @@ Each recommendation with specific instance class change and projected savings.`,
     section: 'msk-analysis',
     title: 'MSK & Streaming Analysis',
     titleKo: 'MSK & 스트리밍 분석',
+    titleZh: 'MSK 与流处理分析',
     systemPrompt: `You are a senior data streaming architect specializing in Amazon MSK (Managed Streaming for Apache Kafka) and event-driven architectures.
 Analyze MSK cluster configuration, broker utilization, throughput patterns, and cost efficiency.
 
@@ -648,6 +660,7 @@ Table: Cluster Name | Kafka Version | Broker Count | Broker Type | Storage/Broke
     section: 'storage-analysis',
     title: 'Storage Infrastructure',
     titleKo: '스토리지 인프라 분석',
+    titleZh: '存储基础设施分析',
     systemPrompt: `You are a senior storage architect specializing in AWS storage services design, data lifecycle management, and storage reliability.
 Analyze S3 bucket structure, EBS volume configuration, and overall data architecture for reliability and best practices.
 
@@ -708,6 +721,7 @@ Focus areas:
     section: 'executive-summary',
     title: 'Executive Summary',
     titleKo: '종합 요약',
+    titleZh: '执行摘要',
     systemPrompt: `You are a cloud operations executive advisor producing a C-level summary for an AWS Well-Architected Deep Dive report.
 You will receive analysis results from ALL other sections. Synthesize them into a concise, high-impact executive brief covering ALL 6 Well-Architected Framework pillars.
 
@@ -786,6 +800,7 @@ Health score interpretation:
     section: 'recommendations',
     title: 'Recommendations & Roadmap',
     titleKo: '권장사항 & 로드맵',
+    titleZh: '建议与路线图',
     systemPrompt: `You are a strategic cloud advisor synthesizing ALL findings from an AWS Well-Architected Deep Dive assessment covering all 6 pillars: Operational Excellence, Security, Reliability, Performance Efficiency, Cost Optimization, and Sustainability.
 You will receive analysis results from ALL other sections. Produce an actionable transformation roadmap.
 
@@ -845,6 +860,7 @@ For each recommendation across all sections:
     section: 'appendix',
     title: 'Appendix: Resource Inventory',
     titleKo: '부록: 리소스 인벤토리',
+    titleZh: '附录：资源清单',
     systemPrompt: `You are a cloud infrastructure documentation specialist.
 Format the provided resource inventory data into clean, well-organized summary tables. Minimal analysis is needed — focus on accurate data presentation.
 

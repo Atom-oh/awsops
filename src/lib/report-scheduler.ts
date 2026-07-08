@@ -14,7 +14,7 @@ export interface ReportSchedule {
   dayOfMonth: number;      // 1-28 (for monthly)
   hour: number;            // 0-23 (KST)
   accountId?: string;      // target account (undefined = all)
-  lang: string;            // 'ko' | 'en'
+  lang: string;            // 'ko' | 'en' | 'zh'
   lastRunAt: string | null;
   nextRunAt: string | null;
   createdAt: string;

@@ -12,6 +12,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - **AI 진단**: 15섹션 Bedrock Opus 분석 + DOCX/MD/PDF 내보내기 + 자동 스케줄링
 - **인증**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1) + CloudFront
 - **인프라**: CDK (`infra-cdk/`) → CloudFront (CACHING_DISABLED) → ALB → EC2 (t4g.2xlarge, Private Subnet)
+- **다국어**: 한국어/영어/중국어(간체) — 앱은 `src/lib/i18n` (React Context + localStorage), 가이드는 Docusaurus i18n (ko/en/zh-Hans)
 
 ## 현황 (v1.8.0)
 | 항목 | 수치 |
@@ -203,6 +204,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - **AI Diagnosis**: 15-section Bedrock Opus analysis + DOCX/MD/PDF export + auto-scheduling
 - **Auth**: Cognito User Pool + Lambda@Edge (Python 3.12, us-east-1) + CloudFront
 - **Infra**: CDK → CloudFront (CACHING_DISABLED) → ALB → EC2 (t4g.2xlarge, Private Subnet)
+- **i18n**: Korean/English/Simplified-Chinese — app via `src/lib/i18n` (React Context + localStorage), guide via Docusaurus i18n (ko/en/zh-Hans)
 
 ## Stats (v1.8.0)
 | Item | Count |

@@ -390,6 +390,7 @@ When discussing security issues, prioritize them by severity.`;
 function getSystemPrompt(lang?: string): string {
   if (lang === 'en') return BASE_SYSTEM_PROMPT + '\nAlways respond in English regardless of the input language.';
   if (lang === 'ko') return BASE_SYSTEM_PROMPT + '\nAlways respond in Korean (한국어) regardless of the input language.';
+  if (lang === 'zh') return BASE_SYSTEM_PROMPT + '\nAlways respond in Simplified Chinese (简体中文) regardless of the input language.';
   return BASE_SYSTEM_PROMPT + '\nRespond in the same language as the user\'s question.';
 }
 
@@ -928,26 +929,27 @@ export async function POST(request: NextRequest) {
   const accountId = rawAccountId && validateAccountId(rawAccountId) ? rawAccountId : undefined;
   const account = accountId ? getAccountById(accountId) : undefined;
 
-  // i18n status messages / 다국어 상태 메시지
-  const isEn = clientLang === 'en';
+  // i18n status messages / 다국어 상태 메시지 (ko/en/zh)
+  const isEn = clientLang !== 'ko'; // collectors fall back to English for zh
+  const pick = (en: string, ko: string, zh: string) => clientLang === 'ko' ? ko : clientLang === 'zh' ? zh : en;
   const STATUS = {
-    classifying: isEn ? '🔍 Analyzing question...' : '🔍 질문 분석 중...',
-    multiRoute: (names: string) => isEn ? `📡 Multi-route: ${names}` : `📡 멀티 라우트: ${names}`,
-    connecting: (display: string) => isEn ? `📡 Connecting to ${display}...` : `📡 ${display} 연결 중...`,
-    sqlRetrying: isEn ? '🔄 Retrying with corrected SQL...' : '🔄 SQL 수정 후 재시도...',
-    analyzing: (count: number) => isEn ? `📊 Analyzing ${count} rows of data...` : `📊 ${count}건 데이터 분석 중...`,
-    synthesizing: (count: number) => isEn ? `📊 Synthesizing ${count} responses...` : `📊 ${count}개 응답 합성 중...`,
-    gatewayTimeout: isEn ? '🔄 Gateway timeout, switching to Bedrock Direct...' : '🔄 Gateway 타임아웃, Bedrock Direct로 전환...',
-    fallback: isEn ? '🔄 Bedrock Direct fallback...' : '🔄 Bedrock Direct 폴백...',
-    codeGenerating: isEn ? '💻 Generating code...' : '💻 코드 생성 중...',
-    codeExecuting: isEn ? '⚡ Executing code...' : '⚡ 코드 실행 중...',
-    sqlGenerating: isEn ? '📝 Generating SQL...' : '📝 SQL 생성 중...',
-    sqlQuerying: (retry: boolean) => isEn ? `🔎 Running Steampipe query...${retry ? ' (retry)' : ''}` : `🔎 Steampipe 쿼리 실행 중...${retry ? ' (재시도)' : ''}`,
-    sqlFallback: isEn ? '⚠️ SQL failed, switching to AgentCore...' : '⚠️ SQL 실패, AgentCore로 전환...',
-    multiCall: (count: number) => isEn ? `🤖 Calling ${count} Gateways in parallel...` : `🤖 ${count}개 Gateway 병렬 호출 중...`,
-    multiCallProgress: (count: number, sec: number) => isEn ? `🤖 Running ${count} Gateways... (${sec}s)` : `🤖 ${count}개 Gateway 실행 중... (${sec}s)`,
-    agentcoreCall: (display: string) => isEn ? `🤖 Calling ${display} tools...` : `🤖 ${display} 도구 호출 중...`,
-    agentcoreProgress: (display: string, sec: number) => isEn ? `🤖 Running ${display} tools... (${sec}s)` : `🤖 ${display} 도구 실행 중... (${sec}s)`,
+    classifying: pick('🔍 Analyzing question...', '🔍 질문 분석 중...', '🔍 正在分析问题...'),
+    multiRoute: (names: string) => pick(`📡 Multi-route: ${names}`, `📡 멀티 라우트: ${names}`, `📡 多路由: ${names}`),
+    connecting: (display: string) => pick(`📡 Connecting to ${display}...`, `📡 ${display} 연결 중...`, `📡 正在连接 ${display}...`),
+    sqlRetrying: pick('🔄 Retrying with corrected SQL...', '🔄 SQL 수정 후 재시도...', '🔄 修正 SQL 后重试...'),
+    analyzing: (count: number) => pick(`📊 Analyzing ${count} rows of data...`, `📊 ${count}건 데이터 분석 중...`, `📊 正在分析 ${count} 行数据...`),
+    synthesizing: (count: number) => pick(`📊 Synthesizing ${count} responses...`, `📊 ${count}개 응답 합성 중...`, `📊 正在合成 ${count} 个响应...`),
+    gatewayTimeout: pick('🔄 Gateway timeout, switching to Bedrock Direct...', '🔄 Gateway 타임아웃, Bedrock Direct로 전환...', '🔄 Gateway 超时，切换到 Bedrock Direct...'),
+    fallback: pick('🔄 Bedrock Direct fallback...', '🔄 Bedrock Direct 폴백...', '🔄 Bedrock Direct 回退...'),
+    codeGenerating: pick('💻 Generating code...', '💻 코드 생성 중...', '💻 正在生成代码...'),
+    codeExecuting: pick('⚡ Executing code...', '⚡ 코드 실행 중...', '⚡ 正在执行代码...'),
+    sqlGenerating: pick('📝 Generating SQL...', '📝 SQL 생성 중...', '📝 正在生成 SQL...'),
+    sqlQuerying: (retry: boolean) => pick(`🔎 Running Steampipe query...${retry ? ' (retry)' : ''}`, `🔎 Steampipe 쿼리 실행 중...${retry ? ' (재시도)' : ''}`, `🔎 正在运行 Steampipe 查询...${retry ? '（重试）' : ''}`),
+    sqlFallback: pick('⚠️ SQL failed, switching to AgentCore...', '⚠️ SQL 실패, AgentCore로 전환...', '⚠️ SQL 失败，切换到 AgentCore...'),
+    multiCall: (count: number) => pick(`🤖 Calling ${count} Gateways in parallel...`, `🤖 ${count}개 Gateway 병렬 호출 중...`, `🤖 正在并行调用 ${count} 个 Gateway...`),
+    multiCallProgress: (count: number, sec: number) => pick(`🤖 Running ${count} Gateways... (${sec}s)`, `🤖 ${count}개 Gateway 실행 중... (${sec}s)`, `🤖 ${count} 个 Gateway 运行中... (${sec}s)`),
+    agentcoreCall: (display: string) => pick(`🤖 Calling ${display} tools...`, `🤖 ${display} 도구 호출 중...`, `🤖 正在调用 ${display} 工具...`),
+    agentcoreProgress: (display: string, sec: number) => pick(`🤖 Running ${display} tools... (${sec}s)`, `🤖 ${display} 도구 실행 중... (${sec}s)`, `🤖 ${display} 工具运行中... (${sec}s)`),
   };
 
   const SYSTEM_PROMPT = getSystemPrompt(clientLang);
@@ -1130,9 +1132,10 @@ export async function POST(request: NextRequest) {
             const data = await collector.collect(send, accountId, isEn);
             const context = collector.formatContext(data);
 
-            send('status', { step: `${route}-analyzing`, message: isEn
-              ? `🤖 Analyzing with ${collector.displayName}...`
-              : `🤖 ${collector.displayName} 분석 중...` });
+            send('status', { step: `${route}-analyzing`, message: pick(
+              `🤖 Analyzing with ${collector.displayName}...`,
+              `🤖 ${collector.displayName} 분석 중...`,
+              `🤖 正在使用 ${collector.displayName} 分析...`) });
 
             const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
             const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));

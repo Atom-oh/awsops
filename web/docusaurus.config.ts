@@ -30,10 +30,11 @@ const config: Config = {
 
   i18n: {
     defaultLocale: 'ko',
-    locales: ['ko', 'en'],
+    locales: ['ko', 'en', 'zh-Hans'],
     localeConfigs: {
       ko: { label: '한국어', direction: 'ltr' },
       en: { label: 'English', direction: 'ltr' },
+      'zh-Hans': { label: '简体中文', direction: 'ltr', htmlLang: 'zh-Hans' },
     },
   },
 

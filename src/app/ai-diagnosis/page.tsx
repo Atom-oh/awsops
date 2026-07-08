@@ -88,41 +88,41 @@ const SECTION_ICONS: Record<string, string> = {
 
 // Section sub-topic descriptions for live progress display
 // 섹션별 세부 분석 항목 (실시간 진행 표시용)
-const SECTION_SUBTOPICS: Record<string, { ko: string[]; en: string[] }> = {
-  'cost-overview':          { ko: ['서비스별 비용 집계', '월별 추이 분석', '비용 이상 감지'], en: ['Per-service cost aggregation', 'Monthly trend analysis', 'Cost anomaly detection'] },
-  'cost-compute':           { ko: ['EC2 인스턴스 비용', 'Lambda 실행 비용', 'ECS/Fargate 비용', 'Savings Plans 커버리지'], en: ['EC2 instance costs', 'Lambda execution costs', 'ECS/Fargate costs', 'Savings Plans coverage'] },
-  'cost-network':           { ko: ['Inter-AZ 데이터 전송', 'NAT Gateway 비용', 'Data Transfer Out', 'VPN/TGW 비용'], en: ['Inter-AZ data transfer', 'NAT Gateway costs', 'Data Transfer Out', 'VPN/TGW costs'] },
-  'cost-storage':           { ko: ['S3 스토리지 클래스', 'EBS 볼륨 비용', 'Snapshot 비용', 'Lifecycle 정책'], en: ['S3 storage classes', 'EBS volume costs', 'Snapshot costs', 'Lifecycle policies'] },
-  'idle-resources':         { ko: ['미연결 EBS 스캔', '미사용 EIP 스캔', '중지된 EC2 스캔', '오래된 스냅샷', '미사용 보안그룹'], en: ['Unattached EBS scan', 'Unused EIP scan', 'Stopped EC2 scan', 'Old snapshots', 'Unused security groups'] },
-  'security-posture':       { ko: ['Security Group 분석', 'S3 퍼블릭 접근', 'EBS 암호화', 'IAM 사용자 점검', 'CIS 컴플라이언스'], en: ['Security Group analysis', 'S3 public access', 'EBS encryption', 'IAM user audit', 'CIS compliance'] },
-  'network-architecture':   { ko: ['VPC 구성 분석', '서브넷 설계', 'NAT Gateway 이중화', 'Route Table', 'TGW/Peering'], en: ['VPC architecture', 'Subnet design', 'NAT Gateway redundancy', 'Route tables', 'TGW/Peering'] },
-  'compute-analysis':       { ko: ['EC2 활용률 분석', 'Instance Type 적정성', 'Lambda 메모리 최적화', 'Auto Scaling 설정'], en: ['EC2 utilization', 'Instance type fitness', 'Lambda memory optimization', 'Auto Scaling config'] },
-  'eks-analysis':           { ko: ['EKS 클러스터 구성', '노드풀 분석', 'Pod 리소스 효율', 'Namespace 비용'], en: ['EKS cluster config', 'Node pool analysis', 'Pod resource efficiency', 'Namespace costs'] },
-  'database-analysis':      { ko: ['RDS 인스턴스 분석', 'ElastiCache 노드', 'OpenSearch 도메인', 'Multi-AZ 설정', '스토리지 효율'], en: ['RDS instance analysis', 'ElastiCache nodes', 'OpenSearch domains', 'Multi-AZ setup', 'Storage efficiency'] },
-  'msk-analysis':           { ko: ['MSK 브로커 구성', '처리량 분석', 'EBS 사용량', 'Consumer Lag'], en: ['MSK broker config', 'Throughput analysis', 'EBS usage', 'Consumer lag'] },
-  'storage-analysis':       { ko: ['S3 버킷 구조', 'EBS 타입 분포', '암호화 현황', 'Lifecycle 적용률'], en: ['S3 bucket structure', 'EBS type distribution', 'Encryption status', 'Lifecycle adoption'] },
-  'executive-summary':      { ko: ['전체 섹션 종합', '6 Pillar 점수 산출', '핵심 발견사항 도출'], en: ['Cross-section synthesis', '6 Pillar scoring', 'Key findings extraction'] },
-  'recommendations':        { ko: ['Quick Wins 도출', '단기 로드맵', '중기 로드맵', 'ROI 산출'], en: ['Quick Wins extraction', 'Short-term roadmap', 'Mid-term roadmap', 'ROI calculation'] },
-  'appendix':               { ko: ['리소스 인벤토리 집계'], en: ['Resource inventory aggregation'] },
+const SECTION_SUBTOPICS: Record<string, { ko: string[]; en: string[]; zh: string[] }> = {
+  'cost-overview':          { ko: ['서비스별 비용 집계', '월별 추이 분석', '비용 이상 감지'], en: ['Per-service cost aggregation', 'Monthly trend analysis', 'Cost anomaly detection'], zh: ['按服务成本汇总', '月度趋势分析', '成本异常检测'] },
+  'cost-compute':           { ko: ['EC2 인스턴스 비용', 'Lambda 실행 비용', 'ECS/Fargate 비용', 'Savings Plans 커버리지'], en: ['EC2 instance costs', 'Lambda execution costs', 'ECS/Fargate costs', 'Savings Plans coverage'], zh: ['EC2 实例成本', 'Lambda 执行成本', 'ECS/Fargate 成本', 'Savings Plans 覆盖率'] },
+  'cost-network':           { ko: ['Inter-AZ 데이터 전송', 'NAT Gateway 비용', 'Data Transfer Out', 'VPN/TGW 비용'], en: ['Inter-AZ data transfer', 'NAT Gateway costs', 'Data Transfer Out', 'VPN/TGW costs'], zh: ['跨 AZ 数据传输', 'NAT Gateway 成本', 'Data Transfer Out', 'VPN/TGW 成本'] },
+  'cost-storage':           { ko: ['S3 스토리지 클래스', 'EBS 볼륨 비용', 'Snapshot 비용', 'Lifecycle 정책'], en: ['S3 storage classes', 'EBS volume costs', 'Snapshot costs', 'Lifecycle policies'], zh: ['S3 存储类别', 'EBS 卷成本', 'Snapshot 成本', 'Lifecycle 策略'] },
+  'idle-resources':         { ko: ['미연결 EBS 스캔', '미사용 EIP 스캔', '중지된 EC2 스캔', '오래된 스냅샷', '미사용 보안그룹'], en: ['Unattached EBS scan', 'Unused EIP scan', 'Stopped EC2 scan', 'Old snapshots', 'Unused security groups'], zh: ['未挂载 EBS 扫描', '未使用 EIP 扫描', '已停止 EC2 扫描', '旧快照', '未使用安全组'] },
+  'security-posture':       { ko: ['Security Group 분석', 'S3 퍼블릭 접근', 'EBS 암호화', 'IAM 사용자 점검', 'CIS 컴플라이언스'], en: ['Security Group analysis', 'S3 public access', 'EBS encryption', 'IAM user audit', 'CIS compliance'], zh: ['Security Group 分析', 'S3 公开访问', 'EBS 加密', 'IAM 用户审计', 'CIS 合规'] },
+  'network-architecture':   { ko: ['VPC 구성 분석', '서브넷 설계', 'NAT Gateway 이중화', 'Route Table', 'TGW/Peering'], en: ['VPC architecture', 'Subnet design', 'NAT Gateway redundancy', 'Route tables', 'TGW/Peering'], zh: ['VPC 架构分析', '子网设计', 'NAT Gateway 冗余', 'Route Table', 'TGW/Peering'] },
+  'compute-analysis':       { ko: ['EC2 활용률 분석', 'Instance Type 적정성', 'Lambda 메모리 최적화', 'Auto Scaling 설정'], en: ['EC2 utilization', 'Instance type fitness', 'Lambda memory optimization', 'Auto Scaling config'], zh: ['EC2 利用率分析', 'Instance Type 适配性', 'Lambda 内存优化', 'Auto Scaling 配置'] },
+  'eks-analysis':           { ko: ['EKS 클러스터 구성', '노드풀 분석', 'Pod 리소스 효율', 'Namespace 비용'], en: ['EKS cluster config', 'Node pool analysis', 'Pod resource efficiency', 'Namespace costs'], zh: ['EKS 集群配置', '节点池分析', 'Pod 资源效率', 'Namespace 成本'] },
+  'database-analysis':      { ko: ['RDS 인스턴스 분석', 'ElastiCache 노드', 'OpenSearch 도메인', 'Multi-AZ 설정', '스토리지 효율'], en: ['RDS instance analysis', 'ElastiCache nodes', 'OpenSearch domains', 'Multi-AZ setup', 'Storage efficiency'], zh: ['RDS 实例分析', 'ElastiCache 节点', 'OpenSearch 域', 'Multi-AZ 配置', '存储效率'] },
+  'msk-analysis':           { ko: ['MSK 브로커 구성', '처리량 분석', 'EBS 사용량', 'Consumer Lag'], en: ['MSK broker config', 'Throughput analysis', 'EBS usage', 'Consumer lag'], zh: ['MSK Broker 配置', '吞吐量分析', 'EBS 使用量', 'Consumer Lag'] },
+  'storage-analysis':       { ko: ['S3 버킷 구조', 'EBS 타입 분포', '암호화 현황', 'Lifecycle 적용률'], en: ['S3 bucket structure', 'EBS type distribution', 'Encryption status', 'Lifecycle adoption'], zh: ['S3 存储桶结构', 'EBS 类型分布', '加密现状', 'Lifecycle 采用率'] },
+  'executive-summary':      { ko: ['전체 섹션 종합', '6 Pillar 점수 산출', '핵심 발견사항 도출'], en: ['Cross-section synthesis', '6 Pillar scoring', 'Key findings extraction'], zh: ['全部章节综合', '6 Pillar 评分', '关键发现提炼'] },
+  'recommendations':        { ko: ['Quick Wins 도출', '단기 로드맵', '중기 로드맵', 'ROI 산출'], en: ['Quick Wins extraction', 'Short-term roadmap', 'Mid-term roadmap', 'ROI calculation'], zh: ['Quick Wins 提炼', '短期路线图', '中期路线图', 'ROI 计算'] },
+  'appendix':               { ko: ['리소스 인벤토리 집계'], en: ['Resource inventory aggregation'], zh: ['资源清单汇总'] },
 };
 
 // Full section names for detailed display
-const SECTION_FULL_NAMES: Record<string, { ko: string; en: string }> = {
-  'cost-overview':        { ko: '비용 개요', en: 'Cost Overview' },
-  'cost-compute':         { ko: '컴퓨팅 비용 분석', en: 'Compute Cost Analysis' },
-  'cost-network':         { ko: '네트워크 비용 분석', en: 'Network Cost Analysis' },
-  'cost-storage':         { ko: '스토리지 비용 분석', en: 'Storage Cost Analysis' },
-  'idle-resources':       { ko: '유휴 리소스 스캔', en: 'Idle Resource Scan' },
-  'security-posture':     { ko: '보안 진단', en: 'Security Posture' },
-  'network-architecture': { ko: '네트워크 아키텍처 분석', en: 'Network Architecture' },
-  'compute-analysis':     { ko: '컴퓨팅 최적화 분석', en: 'Compute Optimization' },
-  'eks-analysis':         { ko: 'EKS 클러스터 분석', en: 'EKS Cluster Analysis' },
-  'database-analysis':    { ko: '데이터베이스 분석', en: 'Database Analysis' },
-  'msk-analysis':         { ko: 'MSK 스트리밍 분석', en: 'MSK Streaming Analysis' },
-  'storage-analysis':     { ko: '스토리지 분석', en: 'Storage Analysis' },
-  'executive-summary':    { ko: '종합 요약 (AI 종합)', en: 'Executive Summary (AI Synthesis)' },
-  'recommendations':      { ko: '개선 로드맵 (AI 종합)', en: 'Improvement Roadmap (AI Synthesis)' },
-  'appendix':             { ko: '부록: 인벤토리', en: 'Appendix: Inventory' },
+const SECTION_FULL_NAMES: Record<string, { ko: string; en: string; zh: string }> = {
+  'cost-overview':        { ko: '비용 개요', en: 'Cost Overview', zh: '成本概览' },
+  'cost-compute':         { ko: '컴퓨팅 비용 분석', en: 'Compute Cost Analysis', zh: '计算成本分析' },
+  'cost-network':         { ko: '네트워크 비용 분석', en: 'Network Cost Analysis', zh: '网络成本分析' },
+  'cost-storage':         { ko: '스토리지 비용 분석', en: 'Storage Cost Analysis', zh: '存储成本分析' },
+  'idle-resources':       { ko: '유휴 리소스 스캔', en: 'Idle Resource Scan', zh: '闲置资源扫描' },
+  'security-posture':     { ko: '보안 진단', en: 'Security Posture', zh: '安全态势诊断' },
+  'network-architecture': { ko: '네트워크 아키텍처 분석', en: 'Network Architecture', zh: '网络架构分析' },
+  'compute-analysis':     { ko: '컴퓨팅 최적화 분석', en: 'Compute Optimization', zh: '计算优化分析' },
+  'eks-analysis':         { ko: 'EKS 클러스터 분석', en: 'EKS Cluster Analysis', zh: 'EKS 集群分析' },
+  'database-analysis':    { ko: '데이터베이스 분석', en: 'Database Analysis', zh: '数据库分析' },
+  'msk-analysis':         { ko: 'MSK 스트리밍 분석', en: 'MSK Streaming Analysis', zh: 'MSK 流式分析' },
+  'storage-analysis':     { ko: '스토리지 분석', en: 'Storage Analysis', zh: '存储分析' },
+  'executive-summary':    { ko: '종합 요약 (AI 종합)', en: 'Executive Summary (AI Synthesis)', zh: '综合摘要（AI 综合）' },
+  'recommendations':      { ko: '개선 로드맵 (AI 종합)', en: 'Improvement Roadmap (AI Synthesis)', zh: '改进路线图（AI 综合）' },
+  'appendix':             { ko: '부록: 인벤토리', en: 'Appendix: Inventory', zh: '附录：资源清单' },
 };
 
 const POLL_INTERVAL = 5000;
@@ -192,6 +192,9 @@ export default function DiagnosisPage() {
   const { lang } = useLanguage();
   const { currentAccountId, accounts } = useAccountContext();
   const isEn = lang === 'en';
+  const isZh = lang === 'zh';
+  // 3-way language pick / 3개 언어 선택 헬퍼
+  const L = (en: string, ko: string, zh: string) => isEn ? en : isZh ? zh : ko;
 
   // State
   const [currentReportId, setCurrentReportId] = useState<string | null>(() => {
@@ -338,7 +341,7 @@ export default function DiagnosisPage() {
           } else if (data.status === 'failed') {
             stopPolling();
             setStatus('failed');
-            setError(data.error || (isEn ? 'Report generation failed' : '리포트 생성 실패'));
+            setError(data.error || (isEn ? 'Report generation failed' : isZh ? '报告生成失败' : '리포트 생성 실패'));
             fetchReportList();
           }
         } catch {
@@ -352,7 +355,7 @@ export default function DiagnosisPage() {
 
       return stopPolling;
     }
-  }, [currentReportId, status, stopPolling, fetchReportList, isEn]);
+  }, [currentReportId, status, stopPolling, fetchReportList, isEn, isZh]);
 
   // --- Start diagnosis ---
 
@@ -432,7 +435,7 @@ export default function DiagnosisPage() {
   // --- Resolve account alias ---
 
   const getAccountAlias = (accountId?: string): string => {
-    if (!accountId) return isEn ? 'All Accounts' : '전체 계정';
+    if (!accountId) return L('All Accounts', '전체 계정', '全部账户');
     const found = accounts.find(a => a.accountId === accountId);
     return found ? found.alias : accountId;
   };
@@ -550,10 +553,11 @@ export default function DiagnosisPage() {
   return (
     <div className="space-y-6">
       <Header
-        title={isEn ? 'AI Diagnosis' : 'AI 종합진단'}
-        subtitle={isEn
-          ? 'AWS infrastructure health assessment — Cost, Compute, Security, FinOps (15 sections)'
-          : 'AWS 인프라 건강 진단 — 비용, 컴퓨팅, 보안, FinOps 종합 분석 (15개 섹션)'}
+        title={L('AI Diagnosis', 'AI 종합진단', 'AI 综合诊断')}
+        subtitle={L(
+          'AWS infrastructure health assessment — Cost, Compute, Security, FinOps (15 sections)',
+          'AWS 인프라 건강 진단 — 비용, 컴퓨팅, 보안, FinOps 종합 분석 (15개 섹션)',
+          'AWS 基础设施健康诊断 — 成本、计算、安全、FinOps 综合分析（15 个章节）')}
       />
 
       {/* Control Bar */}
@@ -564,9 +568,9 @@ export default function DiagnosisPage() {
           className="flex items-center gap-2 px-6 py-3 bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg text-accent-cyan hover:bg-accent-cyan/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {status === 'generating' ? (
-            <><Loader2 size={18} className="animate-spin" />{isEn ? 'Generating...' : '생성 중...'}</>
+            <><Loader2 size={18} className="animate-spin" />{L('Generating...', '생성 중...', '生成中...')}</>
           ) : (
-            <><Play size={18} />{isEn ? 'Run Diagnosis' : '진단 시작'}</>
+            <><Play size={18} />{L('Run Diagnosis', '진단 시작', '开始诊断')}</>
           )}
         </button>
 
@@ -575,13 +579,13 @@ export default function DiagnosisPage() {
             <span className="text-gray-400">
               {progress.current}/{progress.total}
               {progress.currentSection && progress.currentSection !== 'data-collection' && progress.currentSection !== 'generating-report' && (
-                <> — {SECTION_ICONS[progress.currentSection] || ''} {(isEn ? SECTION_FULL_NAMES[progress.currentSection]?.en : SECTION_FULL_NAMES[progress.currentSection]?.ko) || progress.currentSection} {isEn ? 'analyzing...' : '분석 중...'}</>
+                <> — {SECTION_ICONS[progress.currentSection] || ''} {(isEn ? SECTION_FULL_NAMES[progress.currentSection]?.en : isZh ? SECTION_FULL_NAMES[progress.currentSection]?.zh : SECTION_FULL_NAMES[progress.currentSection]?.ko) || progress.currentSection} {L('analyzing...', '분석 중...', '分析中...')}</>
               )}
               {progress.currentSection === 'data-collection' && (
-                <> — {isEn ? 'Collecting data...' : '데이터 수집 중...'}</>
+                <> — {L('Collecting data...', '데이터 수집 중...', '数据收集中...')}</>
               )}
               {progress.currentSection === 'generating-report' && (
-                <> — {isEn ? 'Creating report files...' : '리포트 파일 생성 중...'}</>
+                <> — {L('Creating report files...', '리포트 파일 생성 중...', '报告文件生成中...')}</>
               )}
             </span>
             <span className="text-accent-cyan font-mono">{formatElapsed(elapsedTime)}</span>
@@ -594,7 +598,7 @@ export default function DiagnosisPage() {
             className="flex items-center gap-2 px-4 py-3 bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg text-accent-cyan hover:bg-accent-cyan/20 transition-colors"
           >
             <Download size={18} />
-            {isEn ? 'Download DOCX' : 'DOCX 다운로드'}
+            {L('Download DOCX', 'DOCX 다운로드', '下载 DOCX')}
           </button>
         )}
 
@@ -608,7 +612,7 @@ export default function DiagnosisPage() {
           }`}
         >
           <CalendarClock size={18} />
-          {isEn ? 'Schedule' : '자동 스케줄'}
+          {L('Schedule', '자동 스케줄', '自动计划')}
           {schedule?.enabled && <span className="w-2 h-2 rounded-full bg-accent-green animate-pulse" />}
         </button>
         <button
@@ -620,7 +624,7 @@ export default function DiagnosisPage() {
           }`}
         >
           {notifEnabled ? <Bell size={18} /> : <BellOff size={18} />}
-          {isEn ? 'Notification' : '알림'}
+          {L('Notification', '알림', '通知')}
           {notifEnabled && notifEmails.length > 0 && (
             <span className="bg-accent-cyan/20 text-accent-cyan text-xs px-1.5 py-0.5 rounded-full">{notifEmails.length}</span>
           )}
@@ -633,10 +637,10 @@ export default function DiagnosisPage() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <CalendarClock size={18} className="text-accent-cyan" />
-              <span className="text-white font-medium text-sm">{isEn ? 'Scheduled Diagnosis' : '자동 진단 스케줄'}</span>
+              <span className="text-white font-medium text-sm">{L('Scheduled Diagnosis', '자동 진단 스케줄', '自动诊断计划')}</span>
             </div>
             <label className="flex items-center gap-2 cursor-pointer">
-              <span className="text-xs text-gray-400">{schedule.enabled ? (isEn ? 'ON' : '활성') : (isEn ? 'OFF' : '비활성')}</span>
+              <span className="text-xs text-gray-400">{schedule.enabled ? L('ON', '활성', '启用') : L('OFF', '비활성', '停用')}</span>
               <button
                 onClick={() => saveSchedule({ enabled: !schedule.enabled })}
                 className={`relative w-10 h-5 rounded-full transition-colors ${schedule.enabled ? 'bg-accent-green' : 'bg-navy-600'}`}
@@ -649,22 +653,22 @@ export default function DiagnosisPage() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {/* Frequency */}
             <div>
-              <label className="block text-xs text-gray-400 mb-1.5">{isEn ? 'Frequency' : '주기'}</label>
+              <label className="block text-xs text-gray-400 mb-1.5">{L('Frequency', '주기', '频率')}</label>
               <select
                 value={schedule.frequency}
                 onChange={e => saveSchedule({ frequency: e.target.value as ReportSchedule['frequency'] })}
                 className="w-full bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-sm text-white focus:border-accent-cyan/50 focus:outline-none"
               >
-                <option value="weekly">{isEn ? 'Weekly' : '매주'}</option>
-                <option value="biweekly">{isEn ? 'Biweekly' : '격주'}</option>
-                <option value="monthly">{isEn ? 'Monthly' : '매월'}</option>
+                <option value="weekly">{L('Weekly', '매주', '每周')}</option>
+                <option value="biweekly">{L('Biweekly', '격주', '隔周')}</option>
+                <option value="monthly">{L('Monthly', '매월', '每月')}</option>
               </select>
             </div>
 
             {/* Day selection */}
             <div>
               <label className="block text-xs text-gray-400 mb-1.5">
-                {schedule.frequency === 'monthly' ? (isEn ? 'Day of Month' : '날짜') : (isEn ? 'Day of Week' : '요일')}
+                {schedule.frequency === 'monthly' ? L('Day of Month', '날짜', '日期') : L('Day of Week', '요일', '星期')}
               </label>
               {schedule.frequency === 'monthly' ? (
                 <select
@@ -673,7 +677,7 @@ export default function DiagnosisPage() {
                   className="w-full bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-sm text-white focus:border-accent-cyan/50 focus:outline-none"
                 >
                   {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
-                    <option key={d} value={d}>{d}{isEn ? '' : '일'}</option>
+                    <option key={d} value={d}>{d}{L('', '일', '日')}</option>
                   ))}
                 </select>
               ) : (
@@ -684,6 +688,8 @@ export default function DiagnosisPage() {
                 >
                   {(isEn
                     ? ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+                    : isZh
+                    ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
                     : ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일']
                   ).map((name, i) => (
                     <option key={i} value={i}>{name}</option>
@@ -694,7 +700,7 @@ export default function DiagnosisPage() {
 
             {/* Hour */}
             <div>
-              <label className="block text-xs text-gray-400 mb-1.5">{isEn ? 'Time (KST)' : '시간 (KST)'}</label>
+              <label className="block text-xs text-gray-400 mb-1.5">{L('Time (KST)', '시간 (KST)', '时间 (KST)')}</label>
               <select
                 value={schedule.hour}
                 onChange={e => saveSchedule({ hour: Number(e.target.value) })}
@@ -708,7 +714,7 @@ export default function DiagnosisPage() {
 
             {/* Language */}
             <div>
-              <label className="block text-xs text-gray-400 mb-1.5">{isEn ? 'Language' : '언어'}</label>
+              <label className="block text-xs text-gray-400 mb-1.5">{L('Language', '언어', '语言')}</label>
               <select
                 value={schedule.lang}
                 onChange={e => saveSchedule({ lang: e.target.value })}
@@ -716,6 +722,7 @@ export default function DiagnosisPage() {
               >
                 <option value="ko">한국어</option>
                 <option value="en">English</option>
+                <option value="zh">简体中文</option>
               </select>
             </div>
           </div>
@@ -725,14 +732,14 @@ export default function DiagnosisPage() {
             {schedule.enabled && schedule.nextRunAt && (
               <span className="flex items-center gap-1.5">
                 <Clock size={12} />
-                {isEn ? 'Next run:' : '다음 실행:'}{' '}
+                {L('Next run:', '다음 실행:', '下次运行:')}{' '}
                 <span className="text-accent-cyan font-mono">{formatDatetime(schedule.nextRunAt)}</span>
               </span>
             )}
             {schedule.lastRunAt && (
               <span className="flex items-center gap-1.5">
                 <CheckCircle size={12} />
-                {isEn ? 'Last run:' : '최근 실행:'}{' '}
+                {L('Last run:', '최근 실행:', '上次运行:')}{' '}
                 <span className="text-gray-400 font-mono">{formatDatetime(schedule.lastRunAt)}</span>
               </span>
             )}
@@ -747,7 +754,7 @@ export default function DiagnosisPage() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Mail size={18} className="text-accent-cyan" />
-              <span className="text-white font-medium text-sm">{isEn ? 'Email Notification' : '이메일 알림'}</span>
+              <span className="text-white font-medium text-sm">{L('Email Notification', '이메일 알림', '邮件通知')}</span>
             </div>
             <div className="flex items-center gap-3">
               <button
@@ -755,7 +762,7 @@ export default function DiagnosisPage() {
                 disabled={notifLoading || !notifEnabled || notifEmails.length === 0}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-navy-700 text-gray-300 hover:text-white border border-navy-600 disabled:opacity-40"
               >
-                <Send size={12} /> {isEn ? 'Test' : '테스트'}
+                <Send size={12} /> {L('Test', '테스트', '测试')}
               </button>
               <label className="flex items-center gap-2 cursor-pointer">
                 <span className="text-xs text-gray-400">{notifEnabled ? 'ON' : 'OFF'}</span>
@@ -770,9 +777,10 @@ export default function DiagnosisPage() {
           </div>
 
           <p className="text-xs text-gray-500 mb-3">
-            {isEn
-              ? 'Receive email when diagnosis reports or CIS benchmarks complete. Each email must confirm the subscription.'
-              : '종합진단 리포트 또는 CIS 벤치마크 완료 시 이메일을 수신합니다. 각 이메일은 SNS 구독 확인이 필요합니다.'}
+            {L(
+              'Receive email when diagnosis reports or CIS benchmarks complete. Each email must confirm the subscription.',
+              '종합진단 리포트 또는 CIS 벤치마크 완료 시 이메일을 수신합니다. 각 이메일은 SNS 구독 확인이 필요합니다.',
+              '综合诊断报告或 CIS 基准完成时接收邮件。每个邮箱均需确认 SNS 订阅。')}
           </p>
 
           {/* Add email */}
@@ -782,7 +790,7 @@ export default function DiagnosisPage() {
               value={notifNewEmail}
               onChange={e => setNotifNewEmail(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && addEmail()}
-              placeholder={isEn ? 'email@example.com' : 'email@example.com'}
+              placeholder="email@example.com"
               className="flex-1 bg-navy-900 border border-navy-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-accent-cyan/50 focus:outline-none"
             />
             <button
@@ -790,7 +798,7 @@ export default function DiagnosisPage() {
               disabled={notifLoading}
               className="flex items-center gap-1.5 px-4 py-2 bg-accent-cyan/20 text-accent-cyan rounded-lg text-sm font-medium hover:bg-accent-cyan/30 disabled:opacity-40"
             >
-              <Plus size={14} /> {isEn ? 'Add' : '추가'}
+              <Plus size={14} /> {L('Add', '추가', '添加')}
             </button>
           </div>
 
@@ -813,7 +821,7 @@ export default function DiagnosisPage() {
 
           {notifEmails.length === 0 && (
             <div className="text-center text-xs text-gray-600 py-4">
-              {isEn ? 'No email addresses configured' : '등록된 이메일이 없습니다'}
+              {L('No email addresses configured', '등록된 이메일이 없습니다', '未配置邮箱地址')}
             </div>
           )}
 
@@ -830,17 +838,17 @@ export default function DiagnosisPage() {
         <div className="bg-navy-800 border border-navy-600 rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-navy-600">
             <h3 className="text-sm font-medium text-white">
-              {isEn ? 'Report History' : '리포트 이력'}
+              {L('Report History', '리포트 이력', '报告历史')}
             </h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-navy-600">
-                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{isEn ? 'Date' : '날짜'}</th>
-                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{isEn ? 'Account' : '계정'}</th>
-                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{isEn ? 'Status' : '상태'}</th>
-                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{isEn ? 'Actions' : ''}</th>
+                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{L('Date', '날짜', '日期')}</th>
+                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{L('Account', '계정', '账户')}</th>
+                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{L('Status', '상태', '状态')}</th>
+                  <th className="px-4 py-2.5 text-left text-xs text-gray-400 font-medium">{L('Actions', '', '操作')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -852,20 +860,20 @@ export default function DiagnosisPage() {
                     <td className="px-4 py-2.5 text-gray-300 font-mono text-xs">{formatDatetime(report.createdAt)}</td>
                     <td className="px-4 py-2.5 text-gray-300 text-xs">{report.accountAlias || getAccountAlias(report.accountId)}</td>
                     <td className="px-4 py-2.5">
-                      {report.status === 'completed' && <span className="inline-flex items-center gap-1 text-accent-green text-xs"><CheckCircle size={14} />{isEn ? 'Completed' : '완료'}</span>}
-                      {report.status === 'generating' && <span className="inline-flex items-center gap-1 text-accent-cyan text-xs"><Loader2 size={14} className="animate-spin" />{isEn ? 'Generating' : '생성 중'}{report.progress && <span className="text-gray-500 ml-1">({report.progress.current}/{report.progress.total})</span>}</span>}
-                      {report.status === 'failed' && <span className="inline-flex items-center gap-1 text-red-400 text-xs"><XCircle size={14} />{isEn ? 'Failed' : '실패'}</span>}
+                      {report.status === 'completed' && <span className="inline-flex items-center gap-1 text-accent-green text-xs"><CheckCircle size={14} />{L('Completed', '완료', '已完成')}</span>}
+                      {report.status === 'generating' && <span className="inline-flex items-center gap-1 text-accent-cyan text-xs"><Loader2 size={14} className="animate-spin" />{L('Generating', '생성 중', '生成中')}{report.progress && <span className="text-gray-500 ml-1">({report.progress.current}/{report.progress.total})</span>}</span>}
+                      {report.status === 'failed' && <span className="inline-flex items-center gap-1 text-red-400 text-xs"><XCircle size={14} />{L('Failed', '실패', '失败')}</span>}
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
                         {report.status === 'completed' && (
                           <>
-                            <button onClick={() => viewReport(report.reportId)} className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors">{isEn ? 'View' : '보기'}</button>
+                            <button onClick={() => viewReport(report.reportId)} className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors">{L('View', '보기', '查看')}</button>
                             {report.downloadUrlDocx && <button onClick={() => window.open(report.downloadUrlDocx, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors"><Download size={12} /> DOCX</button>}
                             {report.downloadUrlMd && <button onClick={() => window.open(report.downloadUrlMd, '_blank')} className="inline-flex items-center gap-1 text-xs text-accent-green hover:text-accent-green/80 transition-colors"><Download size={12} /> MD</button>}
                           </>
                         )}
-                        {report.status === 'generating' && <button onClick={() => viewReport(report.reportId)} className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors">{isEn ? 'Track' : '진행 확인'}</button>}
+                        {report.status === 'generating' && <button onClick={() => viewReport(report.reportId)} className="text-xs text-accent-cyan hover:text-accent-cyan/80 transition-colors">{L('Track', '진행 확인', '查看进度')}</button>}
                         {report.status === 'failed' && <span className="text-xs text-gray-500">—</span>}
                       </div>
                     </td>
@@ -885,7 +893,7 @@ export default function DiagnosisPage() {
             <div className="flex items-center gap-3">
               <Loader2 size={20} className="animate-spin text-accent-cyan" />
               <span className="text-white font-medium">
-                {isEn ? 'Generating AI Diagnosis Report...' : 'AI 종합진단 리포트 생성 중...'}
+                {L('Generating AI Diagnosis Report...', 'AI 종합진단 리포트 생성 중...', 'AI 综合诊断报告生成中...')}
               </span>
             </div>
             <div className="flex items-center gap-4 text-sm">
@@ -908,11 +916,11 @@ export default function DiagnosisPage() {
               <div className="flex items-center gap-2 mb-2">
                 <Loader2 size={14} className="animate-spin text-accent-cyan" />
                 <span className="text-accent-cyan font-medium text-sm">
-                  {SECTION_ICONS[progress.currentSection] || ''} {(isEn ? SECTION_FULL_NAMES[progress.currentSection]?.en : SECTION_FULL_NAMES[progress.currentSection]?.ko) || progress.currentSection}
+                  {SECTION_ICONS[progress.currentSection] || ''} {(isEn ? SECTION_FULL_NAMES[progress.currentSection]?.en : isZh ? SECTION_FULL_NAMES[progress.currentSection]?.zh : SECTION_FULL_NAMES[progress.currentSection]?.ko) || progress.currentSection}
                 </span>
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-1 ml-6">
-                {(isEn ? SECTION_SUBTOPICS[progress.currentSection]?.en : SECTION_SUBTOPICS[progress.currentSection]?.ko)?.map((topic, i) => (
+                {(isEn ? SECTION_SUBTOPICS[progress.currentSection]?.en : isZh ? SECTION_SUBTOPICS[progress.currentSection]?.zh : SECTION_SUBTOPICS[progress.currentSection]?.ko)?.map((topic, i) => (
                   <span key={i} className="text-[11px] text-gray-400 flex items-center gap-1">
                     <span className="text-accent-cyan/60">&#x2022;</span> {topic}
                   </span>
@@ -925,7 +933,7 @@ export default function DiagnosisPage() {
               <div className="flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin text-accent-cyan" />
                 <span className="text-accent-cyan font-medium text-sm">
-                  {isEn ? 'Collecting infrastructure data from Steampipe...' : 'Steampipe에서 인프라 데이터 수집 중...'}
+                  {L('Collecting infrastructure data from Steampipe...', 'Steampipe에서 인프라 데이터 수집 중...', '正在从 Steampipe 收集基础设施数据...')}
                 </span>
               </div>
               {progress.statusMessage && (
@@ -938,7 +946,7 @@ export default function DiagnosisPage() {
               <div className="flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin text-accent-purple" />
                 <span className="text-accent-purple font-medium text-sm">
-                  {isEn ? 'Generating report files...' : '리포트 파일 생성 중...'}
+                  {L('Generating report files...', '리포트 파일 생성 중...', '报告文件生成中...')}
                 </span>
               </div>
             </div>
@@ -952,7 +960,7 @@ export default function DiagnosisPage() {
               return (
                 <div
                   key={key}
-                  title={(isEn ? SECTION_FULL_NAMES[key]?.en : SECTION_FULL_NAMES[key]?.ko) || key}
+                  title={(isEn ? SECTION_FULL_NAMES[key]?.en : isZh ? SECTION_FULL_NAMES[key]?.zh : SECTION_FULL_NAMES[key]?.ko) || key}
                   className={`flex items-center gap-1.5 px-2 py-1.5 rounded transition-colors ${
                     done ? 'bg-accent-green/10 text-accent-green' :
                     active ? 'bg-accent-cyan/15 text-accent-cyan ring-1 ring-accent-cyan/30' :
@@ -973,7 +981,7 @@ export default function DiagnosisPage() {
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400">
           <div className="flex items-center gap-2">
             <XCircle size={18} />
-            <span className="font-medium">{isEn ? 'Generation Failed' : '생성 실패'}</span>
+            <span className="font-medium">{L('Generation Failed', '생성 실패', '生成失败')}</span>
           </div>
           <p className="mt-2 text-sm text-red-400/80">{error}</p>
         </div>
@@ -985,11 +993,12 @@ export default function DiagnosisPage() {
           <div className="w-12 h-12 mx-auto rounded-full bg-accent-cyan/10 flex items-center justify-center mb-4">
             <FileText size={24} className="text-accent-cyan/50" />
           </div>
-          <h3 className="text-lg text-white mb-2">{isEn ? 'AWS AI Diagnosis' : 'AWS AI 종합진단'}</h3>
+          <h3 className="text-lg text-white mb-2">{L('AWS AI Diagnosis', 'AWS AI 종합진단', 'AWS AI 综合诊断')}</h3>
           <p className="text-gray-400 text-sm max-w-lg mx-auto">
-            {isEn
-              ? 'AI-powered analysis of your AWS infrastructure across 15 dimensions: cost breakdown, compute rightsizing, security posture, idle resources, EKS/DB/MSK efficiency. Export as DOCX, Markdown, or PDF.'
-              : 'AI가 전체 AWS 인프라를 15개 영역에서 분석합니다: 비용 분석, 컴퓨팅 rightsizing, 보안 진단, 유휴 리소스, EKS/DB/MSK 효율 분석. DOCX, Markdown, PDF로 내보낼 수 있습니다.'}
+            {L(
+              'AI-powered analysis of your AWS infrastructure across 15 dimensions: cost breakdown, compute rightsizing, security posture, idle resources, EKS/DB/MSK efficiency. Export as DOCX, Markdown, or PDF.',
+              'AI가 전체 AWS 인프라를 15개 영역에서 분석합니다: 비용 분석, 컴퓨팅 rightsizing, 보안 진단, 유휴 리소스, EKS/DB/MSK 효율 분석. DOCX, Markdown, PDF로 내보낼 수 있습니다.',
+              'AI 从 15 个维度分析您的 AWS 基础设施：成本分析、计算 rightsizing、安全诊断、闲置资源、EKS/DB/MSK 效率分析。可导出为 DOCX、Markdown、PDF。')}
           </p>
           <div className="mt-6 grid grid-cols-3 md:grid-cols-5 gap-3 max-w-3xl mx-auto text-xs text-gray-500">
             {Object.entries(SECTION_ICONS).map(([key, icon]) => (
@@ -1009,7 +1018,7 @@ export default function DiagnosisPage() {
           <div className="flex flex-wrap items-center gap-3 bg-navy-800 border border-navy-600 rounded-lg px-4 py-3">
             <div className="flex items-center gap-2 text-sm">
               <CheckCircle size={16} className="text-accent-green" />
-              <span className="text-gray-300">{sections.length} {isEn ? 'sections' : '섹션'}</span>
+              <span className="text-gray-300">{sections.length} {L('sections', '섹션', '个章节')}</span>
               <span className="text-gray-600">|</span>
               <Clock size={14} className="text-gray-500" />
               <span className="text-gray-400">{formatElapsed(elapsedTime)}</span>
@@ -1021,7 +1030,7 @@ export default function DiagnosisPage() {
               <button
                 onClick={() => setShowToc(t => !t)}
                 className={`p-2 rounded-lg border transition-colors ${showToc ? 'border-accent-cyan/30 text-accent-cyan bg-accent-cyan/10' : 'border-navy-600 text-gray-500 hover:text-gray-300'}`}
-                title={isEn ? 'Toggle TOC' : '목차 토글'}
+                title={L('Toggle TOC', '목차 토글', '切换目录')}
               >
                 <List size={16} />
               </button>
@@ -1058,7 +1067,7 @@ export default function DiagnosisPage() {
               <nav className="hidden lg:block w-52 flex-shrink-0">
                 <div className="sticky top-20 space-y-0.5 bg-navy-800 border border-navy-600 rounded-lg p-2 max-h-[calc(100vh-6rem)] overflow-y-auto">
                   <div className="text-[10px] text-gray-500 uppercase tracking-wider px-2 py-1 font-medium">
-                    {isEn ? 'Contents' : '목차'}
+                    {L('Contents', '목차', '目录')}
                   </div>
                   {sections.map((section) => {
                     const isCollapsed = collapsedSections.has(section.section);

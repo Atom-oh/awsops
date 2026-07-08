@@ -6,7 +6,7 @@ triggers: sync guides, guide update
 
 # 가이드 문서 동기화 / Sync Guides
 
-src 코드 변경에 따라 web 가이드 문서(한국어)와 i18n 영어 번역을 일괄 생성/업데이트합니다.
+src 코드 변경에 따라 web 가이드 문서(한국어)와 i18n 영어/중국어(간체) 번역을 일괄 생성/업데이트합니다.
 
 ## 트리거
 `/sync-guides` 명령어로 실행
@@ -55,7 +55,8 @@ Hook(`accumulate-pending-guides.sh`)이 파일 변경 시 자동으로 축적합
    - Tier 2: Screenshot + StatsCard/차트/테이블 설명
    - 신규: 기존 가이드(예: `web/docs/storage/ebs.md`)를 템플릿으로 참조
 4. **영어 번역 생성**: `web/i18n/en/docusaurus-plugin-content-docs/current/{category}/{service}.md`
-5. **sidebars.ts 업데이트**: 신규 가이드인 경우 적절한 카테고리에 추가
+5. **중국어(간체) 번역 생성**: `web/i18n/zh-Hans/docusaurus-plugin-content-docs/current/{category}/{service}.md`
+6. **sidebars.ts 업데이트**: 신규 가이드인 경우 적절한 카테고리에 추가
 
 ### 3. React Canvas 컴포넌트 패턴
 
@@ -154,7 +155,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ## Agent 실행 방식
 - 각 pending 항목을 **writer Agent** (subagent)에 위임하여 병렬 생성
-- 한국어 가이드 생성 후 영어 번역도 같은 Agent가 처리
+- 한국어 가이드 생성 후 영어/중국어(간체) 번역도 같은 Agent가 처리
 - sidebars.ts 업데이트는 모든 가이드 생성 후 한 번에 처리 (충돌 방지)
 - Tier 1 Canvas 컴포넌트 신규 생성 시 Gemini CLI 협업 가능 (`/ask gemini`)
 

@@ -163,8 +163,9 @@ export default function Sidebar() {
     return item.subItems?.some(sub => isActive(sub.href)) ?? false;
   };
 
+  // Cycle through languages: ko → en → zh → ko / 언어 순환 전환
   const toggleLang = () => {
-    setLang(lang === 'ko' ? 'en' : 'ko');
+    setLang(lang === 'ko' ? 'en' : lang === 'en' ? 'zh' : 'ko');
   };
 
   const renderNavItem = (item: NavItem) => {
@@ -269,9 +270,9 @@ export default function Sidebar() {
           <button
             onClick={toggleLang}
             className="px-2 py-1 rounded-md text-accent-cyan border border-accent-cyan/30 bg-accent-cyan/10 hover:bg-accent-cyan/20 transition-colors"
-            title={lang === 'ko' ? 'Switch to English' : '한국어로 전환'}
+            title={lang === 'ko' ? 'Switch to English' : lang === 'en' ? '切换到中文' : '한국어로 전환'}
           >
-            <span className="text-[11px] font-bold font-mono">{lang === 'ko' ? 'EN' : '한'}</span>
+            <span className="text-[11px] font-bold font-mono">{lang === 'ko' ? 'EN' : lang === 'en' ? '中' : '한'}</span>
           </button>
           {/* Sign Out / 로그아웃 */}
           <button
