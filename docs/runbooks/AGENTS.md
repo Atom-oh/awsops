@@ -12,7 +12,7 @@ Operational playbooks, one Markdown file per failure/operational scenario (servi
 - **Bilingual**: Korean + English side by side.
 - **Commands must be copy-paste runnable** (no pseudo-commands or elided placeholders).
 - Each runbook **must cite related file paths** and the relevant **ADR number(s)** at the bottom.
-- A new runbook must be **registered in the index** in `docs/CLAUDE.md`, and should use an existing runbook (e.g. `start-services.md`, `deploy-new-version.md`) as the structural template.
+- A new runbook must be **registered in the index** in `docs/runbooks/CLAUDE.md`, and should use an existing runbook (e.g. `start-services.md`, `deploy-new-version.md`) as the structural template.
 
 ## Boundaries
 - Doc sink only: imports nothing, is imported by nothing. Review focus is editorial — structure, accuracy of cited paths/commands, ADR cross-references — not code.
