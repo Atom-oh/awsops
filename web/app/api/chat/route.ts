@@ -1,5 +1,5 @@
 import { verifyUser } from '@/lib/auth';
-import { invokeAgent, invokeAgentDetailed, type ChatMsg } from '@/lib/agentcore';
+import { invokeAgent, invokeAgentStreamDetailed, type ChatMsg } from '@/lib/agentcore';
 import { getModelLabel } from '@/lib/bedrock';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt, buildClassifierContext } from '@/lib/classifier';
@@ -302,7 +302,7 @@ export async function POST(request: Request) {
         controller.close();
         return;
       }
-      let text: string;
+      let text = '';
       let provenance: { tools: string[]; model?: string } = { tools: [] };
       const t0 = Date.now();
       controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'analyzing' }) + '\n\n'));
@@ -317,8 +317,16 @@ export async function POST(request: Request) {
       };
       request.signal.addEventListener('abort', onAbort);
 
+      // Real streaming, not buffered-then-rechunked: forward each delta the instant it arrives
+      // from the AgentCore runtime (which itself streams token-by-token, agent/agent.py's
+      // stream_async) instead of awaiting the full answer first — the previous invokeAgentDetailed
+      // + chunk(text) loop only *looked* like streaming (it re-split an already-complete string
+      // and enqueued it in one tick, since CHAT_TYPEWRITER_MS defaults to 0).
+      const tools: string[] = [];
+      const seenTools = new Set<string>();
+      let model: string | undefined;
       try {
-        const detailed = await invokeAgentDetailed({
+        for await (const ev of invokeAgentStreamDetailed({
           gateway: spec.gateway, messages, sessionId,
           systemPromptOverride: spec.systemPromptOverride,
           toolAllowlist: spec.toolAllowlist,
@@ -326,9 +334,15 @@ export async function POST(request: Request) {
           accountId, accountAlias,
           integrations: spec.integrations, // ADR-039 P2-infra inc2: live egress-READ MCP connections
           extraContext: datasourceSchemaContext, // cached datasource schemas → agent reads the cache
-        });
-        text = detailed.text;
-        provenance = { tools: detailed.tools, model: detailed.model };
+        })) {
+          if (request.signal.aborted) break;
+          if (ev.delta) {
+            text += ev.delta;
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: ev.delta })}\n\n`));
+          } else if (ev.tool && !seenTools.has(ev.tool)) { seenTools.add(ev.tool); tools.push(ev.tool); }
+          else if (ev.model) model = ev.model;
+        }
+        provenance = { tools, model };
       } catch (e) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
@@ -341,11 +355,6 @@ export async function POST(request: Request) {
       // traceability (fire-and-forget) — only custom invocations
       if (spec.tier === 'custom') {
         void recordCustomAgentTrace({ gateway: spec.gateway, userSub: user.sub, agentName: spec.agentName, agentVersion: spec.agentVersion, tier: spec.tier, skillHashes: spec.skillHashes, spaceVersion: spec.spaceVersion });
-      }
-      for (const c of chunk(text)) {
-        if (request.signal.aborted) break;
-        controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));
-        if (TYPE_DELAY_MS) await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
       }
       // Answer-provenance footer (design handoff 개선안 ③): server-measured elapsed is the
       // authoritative total (the periodic `status` ticks stop once the invoke resolves), plus

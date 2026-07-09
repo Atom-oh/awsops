@@ -211,4 +211,47 @@ describe('agentcore', () => {
     for await (const d of invokeAgentStream({ gateway: 'ops', messages: [{ role: 'user', content: 'x' }], sessionId: 's'.repeat(36) })) out.push(d);
     expect(out).toEqual(['legacy answer']);
   });
+
+  // --- real streaming + provenance (invokeAgentStreamDetailed) ---
+  it('invokeAgentStreamDetailed yields delta/tool/model events live, in arrival order', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue(eventStreamOf([
+      JSON.stringify({ model: 'sonnet-4-6' }),
+      JSON.stringify({ delta: '이번 ' }),
+      JSON.stringify({ tool: 'get_cost' }),
+      JSON.stringify({ delta: '달 비용은 $4,210' }),
+    ]));
+    const { invokeAgentStreamDetailed } = await import('./agentcore');
+    const events: unknown[] = [];
+    for await (const ev of invokeAgentStreamDetailed({ gateway: 'cost', messages: [{ role: 'user', content: 'hi' }], sessionId: 's'.repeat(36) })) events.push(ev);
+    expect(events).toEqual([
+      { model: 'sonnet-4-6' },
+      { delta: '이번 ' },
+      { tool: 'get_cost' },
+      { delta: '달 비용은 $4,210' },
+    ]);
+  });
+
+  it('invokeAgentStreamDetailed keeps frame boundaries intact when split mid-frame', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue(eventStreamOf([JSON.stringify({ delta: 'hello ' }), JSON.stringify({ delta: 'world' })], 9));
+    const { invokeAgentStreamDetailed } = await import('./agentcore');
+    const deltas: string[] = [];
+    for await (const ev of invokeAgentStreamDetailed({ gateway: 'ops', messages: [{ role: 'user', content: 'x' }], sessionId: 's'.repeat(36) })) {
+      if (ev.delta) deltas.push(ev.delta);
+    }
+    expect(deltas.join('')).toBe('hello world');
+  });
+
+  it('invokeAgentStreamDetailed backward-compat: a legacy buffered JSON answer yields one delta event', async () => {
+    vi.resetModules();
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'arn:rt' } });
+    acSend.mockResolvedValue({ response: streamOf(JSON.stringify('legacy answer')) }); // no contentType
+    const { invokeAgentStreamDetailed } = await import('./agentcore');
+    const events: unknown[] = [];
+    for await (const ev of invokeAgentStreamDetailed({ gateway: 'ops', messages: [{ role: 'user', content: 'x' }], sessionId: 's'.repeat(36) })) events.push(ev);
+    expect(events).toEqual([{ delta: 'legacy answer' }]);
+  });
 });
