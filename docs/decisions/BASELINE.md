@@ -1,7 +1,7 @@
 # AWSops 결정 베이스라인 (BASELINE) / Decision Baseline
 
 > **이것이 결정의 단일 현행 진실(single source of truth)이다.** AI·사람 모두 여기부터 읽는다. 상세 근거는 같은 디렉토리의 통합 ADR(`0NN-*.md`)을, 옛 이력은 `../history/`를 본다(명시 요청 없이는 읽지 않는다).
-> 범위 = **v2 현행 진실.** v1(`src/`, CDK/EC2/Steampipe, `/awsops` basePath)은 별도 레거시 프로덕션 — 이 문서의 제약 대상이 아니다(§1 범위 참조).
+> 범위 = **v2 현행 진실.** v1(`src/`, CDK/EC2/Steampipe, `/awsops` basePath)은 **폐기 진행 중**(ADR-016, 2026-07-09 결정) — 단계적 decommission 상태이며 더 이상 "영구 미변경 레거시"가 아니다(§1 범위 참조).
 > This is the single current-truth for decisions. Read this first; ADRs (`0NN-*.md`) hold detail, `../history/` holds the frozen past.
 
 ---
@@ -40,7 +40,7 @@
 - **6기둥 매핑 규칙** — 모든 신규 기능/결정은 WA 6기둥 중 최소 하나를 개선해야 한다. PR/ADR은 어느 기둥인지 명시한다.
 - **flag 규율** — 위험·대형 기능은 `*_enabled` count/flag 게이트(기본 false → `plan`=무변경·$0). FROZEN 항목은 default false 유지가 invariant(§2).
 - **BASELINE 크기 예산** — 이 문서는 *index*이지 소설이 아니다. 상세 설계는 `../reference/`로, 결정 근거는 통합 ADR로, 옛 이력은 `../history/`로 위임한다. §3 줄 수가 늘면 토픽 통합/reference 추출.
-- **범위 = v2.** v1(`src/`)은 별도 레거시 — v1 패치는 이 BASELINE의 "현행 진실 위반"이 아니다. v1 규칙은 `src/**/CLAUDE.md`.
+- **범위 = v2.** v1(`src/`)은 **ADR-016에 따라 단계적 폐기 진행 중**(Phase 0~5, `docs/runbooks/v1-decommission.md`) — 폐기 완료 전까지 v1 패치는 이 BASELINE의 "현행 진실 위반"이 아니다. v1 규칙은 `src/**/CLAUDE.md`(폐기 Phase 5에서 함께 제거).
 - **anti-drift(C2)** — 새 ADR/flag 변경은 **같은 PR에서 §3(또는 §2) 갱신**이 필수다. 갱신 없으면 "not live". 옛 ADR 본문은 트리에 없다(git tag `adr-legacy-2026-06-22` 보존, 매핑 `../history/ADR-MAPPING.md`).
 
 ---
@@ -69,7 +69,7 @@
 
 ## §3 결정 인덱스 (Decision Index)
 
-> 통합 ADR 14개. 상세·근거는 각 ADR. (옛 46개 → `../history/ADR-MAPPING.md`, 본문은 git tag `adr-legacy-2026-06-22`.)
+> 통합 ADR 16개. 상세·근거는 각 ADR. (옛 46개 → `../history/ADR-MAPPING.md`, 본문은 git tag `adr-legacy-2026-06-22`.)
 
 | ADR | 토픽 | 한 줄 | 6기둥 |
 |---|---|---|---|
@@ -88,5 +88,6 @@
 | [013](013-alerting-notification.md) | 알림·통지 | 웹훅 HMAC + SNS 통지(diagnosis_notify LIVE) + 리포트 다운로드 | 운영우수성 |
 | [014](014-cross-cutting-cache-i18n-cdn.md) | 횡단: 캐시·i18n·CDN | 프리워밍·i18n(ko/en)·CloudFront CACHING_DISABLED | 성능효율성 |
 | [015](015-operational-self-healing.md) | 운영 자가치유 | 호스트 자기 서비스 force-new-deployment 자율 복구(Aurora secret 회전), default-off·IAM 1 ARN·secret-id fail-closed; **ADR-005 불완화**(별개 범주) | 안정성·보안 |
+| [016](016-v1-decommission.md) | v1 레거시 폐기 | 5단계 폐기(데이터확보→도메인컷오버→정지/유예→삭제→코드정리) + `awsops.atomai.click` v2 컷오버; owner 지시, ADR-005 무관(수동 작업) | 비용최적화·운영우수성 |
 
 새 ADR 추가: 최고번호+1, single Status, **같은 PR에서 이 §3(또는 §2) 갱신 필수**(anti-drift, §1).
