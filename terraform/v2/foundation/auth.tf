@@ -26,8 +26,8 @@ resource "aws_cognito_user_pool_client" "main" {
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
   allowed_oauth_flows_user_pool_client = true
-  callback_urls                        = ["https://${var.domain_name}/_callback"]
-  logout_urls                          = ["https://${var.domain_name}/"]
+  callback_urls                        = [for d in concat([var.domain_name], var.extra_domain_aliases) : "https://${d}/_callback"]
+  logout_urls                          = [for d in concat([var.domain_name], var.extra_domain_aliases) : "https://${d}/"]
 
   # USER_PASSWORD_AUTH powers the self-hosted /login form's BFF InitiateAuth call; the Hosted UI
   # authorization-code (PKCE) flow above coexists as the edge dark fallback. No ALLOW_REFRESH_TOKEN_AUTH:

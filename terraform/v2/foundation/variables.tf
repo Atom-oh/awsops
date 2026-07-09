@@ -18,6 +18,12 @@ variable "hosted_zone_name" {
   description = "Route53 public hosted zone, e.g. example.com"
 }
 
+variable "extra_domain_aliases" {
+  type        = list(string)
+  default     = []
+  description = "Additional FQDNs to accept as CloudFront aliases (ADR-016 v1 domain cutover). Each must resolve in hosted_zone_name."
+}
+
 variable "vpc_cidr" {
   type    = string
   default = "10.20.0.0/16"
