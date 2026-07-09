@@ -10,7 +10,7 @@
 
 v1(`src/`, CDK/EC2/Steampipe, `awsops.atomai.click`)은 v2 개발 기간 내내 "손대지 않는 레거시 프로덕션"으로 유지되어 왔다(root `CLAUDE.md` 헤더). v2(Terraform/Fargate/Aurora, `awsops-v2.atomai.click`)는 P1~P2가 GREEN이고 P3가 부분 진행 중이며, 실사용 가능한 상태로 프로덕션에 배포되어 있다.
 
-v1은 계속 비용을 발생시킨다: EC2 `i-0a35c902f44f23adf`(m7g.2xlarge, 상시 실행, ~$235/월) + EBS 100GB + 공개 ALB + CloudFront + VPC 엔드포인트 3개. 병렬 운영의 실익이 소진되었다고 판단, 폐기를 결정한다.
+v1은 계속 비용을 발생시킨다: EC2(m7g.2xlarge, 상시 실행, ~$235/월) + EBS 100GB + 공개 ALB + CloudFront + VPC 엔드포인트 3개. 병렬 운영의 실익이 소진되었다고 판단, 폐기를 결정한다.
 
 폐기 전 확인한 사항(`docs/history/v1-v2-gap-audit-2026-07-09.md`):
 - 2026-06-10 최초 감사의 missing 36건 중 12건은 이후 v2에 실제로 착지됨(ai-diagnosis, compliance, topology `@xyflow/react`, EOL 배지, EBS 스냅샷/ECS 서비스 인벤토리 수집, i18n, admin 그룹 게이트, opencost 등).
