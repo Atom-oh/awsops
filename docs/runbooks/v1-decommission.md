@@ -47,7 +47,15 @@ aws cognito-idp list-users --user-pool-id "$V1_POOL" --query 'Users[].Username' 
 aws cognito-idp list-users --user-pool-id "$V2_POOL" --query 'Users[].Username' --output text
 ```
 
-v2에 없는 사용자는 `aws cognito-idp admin-create-user --user-pool-id "$V2_POOL" --username <email> --user-attributes Name=email,Value=<email>`로 초대(임시 비밀번호 발송, 이관 불가 — 재설정 필요).
+v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user`만 실행하면 사용자가 `FORCE_CHANGE_PASSWORD` challenge 상태로 남는데, v2 로그인(ADR-042 자체 `/login` → `InitiateAuth(USER_PASSWORD_AUTH)`)은 Cognito challenge를 처리하는 플로우가 없어 그 상태로는 **로그인 자체가 실패한다**(비밀번호 재설정 불가로 사실상 락아웃). `admin-set-user-password --permanent`로 즉시 permanent 상태로 만든 뒤, 그 임시 비밀번호를 사용자에게 전달(다음 로그인 시 직접 변경하도록 안내):
+
+```bash
+aws cognito-idp admin-create-user --user-pool-id "$V2_POOL" --username <email> \
+  --user-attributes Name=email,Value=<email> --message-action SUPPRESS
+aws cognito-idp admin-set-user-password --user-pool-id "$V2_POOL" --username <email> \
+  --password '<temp-password>' --permanent
+# 완료 조건: 실제 로그인 성공까지 확인 (POST /api/auth/login 200 응답)
+```
 
 ### 1.3 alert 경로 외부 발신자 확인 (필수 — ADR-016 §Context)
 
@@ -59,9 +67,12 @@ aws sns list-subscriptions-by-topic --topic-arn "$V1_ALERT_TOPIC_ARN"
 aws cloudwatch describe-alarms --query "MetricAlarms[?contains(AlarmActions,\`$V1_ALERT_TOPIC_ARN\`)].AlarmName"
 ```
 
-사내 Grafana Alerting / Prometheus Alertmanager 설정에서 웹훅 URL이 v1 도메인 또는 v1 ALB DNS를 직접 참조하는지 수동 확인. 발견되면:
-- v2 `web/app/api/incidents/webhook/route.ts`로 재설정 — **단, 이 라우트는 `INCIDENT_LIFECYCLE_ENABLED !== 'true'`면 503을 반환한다**(`route.ts:129`). 재설정 전에 해당 flag가 `true`이고 HMAC 시크릿이 SSM에 구성되어 있는지 먼저 확인/활성화한다. 그 전제조건 없이 발신자만 옮기면 여전히 무음 유실(404 대신 503). 추가로 `incident_lifecycle_enabled`는 `workers_enabled=true`를 하드 전제로 요구한다(`variables.tf:150`) — 이것 없이 켜면 plan 단계에서 index 오류.
-- 또는 ADR-016에 "확인 완료, 발신자 없음/재설정 완료"로 기록 후 진행.
+**두 경로를 구분해서 처리한다** — 이 둘은 서로 다른 대체 경로가 필요하다:
+
+1. **외부 웹훅 발신자(Alertmanager/Grafana)**: 사내 설정에서 웹훅 URL이 v1 도메인 또는 v1 ALB DNS를 직접 참조하는지 수동 확인. 발견되면 v2 `web/app/api/incidents/webhook/route.ts`로 재설정 — **단, 이 라우트는 `INCIDENT_LIFECYCLE_ENABLED !== 'true'`면 503을 반환한다**(`route.ts:129`). 재설정 전에 해당 flag가 `true`이고 HMAC 시크릿이 SSM에 구성되어 있는지 먼저 확인/활성화한다. 추가로 `incident_lifecycle_enabled`는 `workers_enabled=true`를 하드 전제로 요구한다(`variables.tf:150`) — 이것 없이 켜면 plan 단계에서 index 오류.
+2. **AWS 네이티브 경로(CloudWatch Alarm → SNS → SQS)**: 위 §1.3 첫 명령에서 구독자가 있다면, **v2에는 이 SNS/SQS 경로를 대체 소비하는 컴포넌트가 아직 없다** — v2 webhook 라우트는 HTTP 엔드포인트이지 SQS consumer가 아니고, SNS가 그 라우트로 `Notification`을 보내더라도 HMAC 서명이 없어 거부된다(`SubscriptionConfirmation`만 무서명 허용). 이 경로는 v1 EC2의 in-process poller가 유일한 소비자이므로, EC2를 멈추면 그대로 무음 유실(큐 적재→DLQ)이다. **v2 쪽에 이 경로의 소비자를 새로 만들 계획이 없다면, 이 사실 자체를 owner에게 보고하고 "수용 가능한 손실"로 명시 승인받아야 한다** — 재설정할 곳이 없으므로 §2(위 1번)처럼 "재설정하면 해결"이 아니다.
+
+확인 후 ADR-016에 "확인 완료 — 외부 웹훅: 없음/재설정 완료, SNS 네이티브 경로: 구독자 없음/owner 승인 하 drop"으로 기록 후 진행.
 
 **이 확인 없이 Phase 3(EC2 정지)로 넘어가지 않는다.**
 
@@ -71,7 +82,7 @@ aws cloudwatch describe-alarms --query "MetricAlarms[?contains(AlarmActions,\`$V
 
 **CloudFront는 동일 별칭(CNAME)을 두 distribution에 동시 등록할 수 없다** — v2에 별칭을 추가하는 일반 `UpdateDistribution`을, v1이 아직 그 별칭을 갖고 있는 동안 실행하면 `CNAMEAlreadyExists`로 즉시 실패한다. 같은 계정 내 이동에는 전용 원자적 명령 `aws cloudfront associate-alias`를 쓴다.
 
-`edge.tf`의 `aws_route53_record.alias`(현재 **singleton**, `for_each` 아님 — line ~124)를 그대로 두고 v1 도메인 키를 바로 import하면 "resource address does not exist in configuration"으로 실패한다. **순서가 중요하다**: ① cert SAN만 먼저 → ② 기존 v2 레코드를 `moved` 블록으로 singleton→for_each(v2 도메인만) 전환·apply(순수 state 정리, 실제 변경 없음) → ③ associate-alias 원자 이동 → ④ v1 CFN에서 레코드 소유권 해제 → ⑤ for_each에 v1 도메인 추가 + import + 새 plan/apply. **각 단계에서 실제로 발생 가능한 짧은 순단을 명시적으로 인지하고, ③~⑤는 가능한 한 연속으로 수행한다** — associate-alias 직후부터 Route53이 v2를 가리키기 전까지는 v1 CloudFront가 이 Host를 더는 인식하지 못해 오류를 낼 수 있으므로 이건 "무중단"이 아니라 "짧은 순단 가능 + 최소화" 절차다.
+`edge.tf`의 `aws_route53_record.alias`(현재 **singleton**, `for_each` 아님 — line ~124)를 그대로 두고 v1 도메인 키를 바로 import하면 "resource address does not exist in configuration"으로 실패한다. **순서가 중요하다**: ① cert SAN만 먼저 → ② 기존 v2 레코드를 `moved` 블록으로 singleton→for_each(v2 도메인만) 전환·apply(순수 state 정리, 실제 변경 없음) → ③ **v1 CFN에서 레코드 소유권을 먼저 해제**(DNS·별칭 어느 쪽도 안 건드리는 순수 CFN 작업이라 v1은 계속 정상 서빙) → ④ associate-alias 원자 이동 → ⑤ for_each에 v1 도메인 추가 + import + 새 plan/apply. **CFN 소유권 해제를 alias 이동보다 먼저 끝내야 한다** — 반대 순서(먼저 손댔던 초안)로 하면 alias가 v2로 넘어간 뒤 CFN 배포(2회, 수 분 소요)가 끝나기까지 Route53이 여전히 v1을 가리켜 v1 CloudFront가 그 Host를 거부하는 outage 창이 CDK 배포 시간만큼 벌어진다. 이 순서로도 ④~⑤ 사이엔 짧은 순단이 가능하니(associate-alias 직후 ~ Route53 apply 완료 전) 그 구간만 가능한 한 연속으로 수행한다 — "무중단"이 아니라 "outage 창을 CFN 배포 시간에서 apply 한 번으로 최소화"하는 절차다.
 
 ### 2.1 ACM SAN만 먼저 적용 (별칭·레코드는 아직 안 건드림)
 
@@ -81,7 +92,11 @@ aws cloudwatch describe-alarms --query "MetricAlarms[?contains(AlarmActions,\`$V
 #          (create_before_destroy는 이미 설정되어 있음)
 # tfvars: extra_domain_aliases=["<v1-domain>"]  ← 지금은 cert SAN 용도로만 참조
 terraform -chdir=terraform/v2/foundation plan -out tfplan
-terraform -chdir=terraform/v2/foundation apply tfplan   # ACM 발급·검증만, CloudFront/Route53 변경 없음
+terraform -chdir=terraform/v2/foundation apply tfplan
+# 실제로 발생하는 변경: SAN 추가는 ACM cert replace(create_before_destroy로 무중단)를 유발하고, 그 결과
+# CloudFront viewer_certificate의 acm_certificate_arn이 새 cert ARN으로 갱신되며, cf_validation DNS 레코드가
+# SAN마다 추가된다(edge.tf:13-26, for_each가 domain_validation_options를 순회하므로 자동으로 포함).
+# "CloudFront/Route53 변경 없음"이 아니라 — 별칭(alias)·Route53 A 레코드는 안 건드리지만 cert/validation은 바뀐다.
 ```
 
 ### 2.2 기존 v2 레코드를 `moved` 블록으로 for_each 전환 (v1 도메인은 아직 미포함)
@@ -105,18 +120,9 @@ terraform -chdir=terraform/v2/foundation apply tfplan
 
 여기까지는 실제 인프라 변경이 전혀 없다 — 나중에 v1 도메인을 위험 없이 끼워 넣기 위한 사전 정지작업.
 
-### 2.3 `associate-alias`로 원자적 이동
+### 2.3 Route53 레코드 소유권을 v1 CFN에서 먼저 풀어준다 (DNS/별칭 미변경, v1 계속 정상 서빙)
 
-```bash
-V2_CF_ID=$(terraform -chdir=terraform/v2/foundation output -raw distribution_id)
-aws cloudfront associate-alias --target-distribution-id "$V2_CF_ID" --alias "<v1-domain>"
-```
-
-CloudFront 레벨에서 별칭이 v1→v2로 원자 이동한다. **Route53은 아직 v1을 가리키므로, DNS가 v1 CloudFront로 트래픽을 보내는 동안 v1은 이제 이 Host를 인식하지 못해 오류(403류)를 낼 수 있다 — 바로 §2.4~2.5로 이어서 멈추지 않고 끝낸다.**
-
-### 2.4 Route53 레코드 소유권을 v1 CFN에서 풀어준다
-
-`terraform import`는 TF state에 리소스를 편입할 뿐 CFN `AwsopsStack`의 소유권을 제거하지 않는다 — 그대로 두면 두 IaC가 같은 레코드를 관리하게 되고, Phase 4에서 CFN이 삭제를 시도해 v2 진입점이 끊길 수 있다. **CFN 쪽에서 먼저 놓아준다**(`infra-cdk/lib/awsops-stack.ts`의 `DomainARecord` 구성):
+`terraform import`는 TF state에 리소스를 편입할 뿐 CFN `AwsopsStack`의 소유권을 제거하지 않는다 — 그대로 두면 두 IaC가 같은 레코드를 관리하게 되고, Phase 4에서 CFN이 삭제를 시도해 v2 진입점이 끊길 수 있다. **이 단계는 CFN 템플릿/스택 작업뿐이라 Route53 값이나 CloudFront 별칭을 전혀 건드리지 않는다** — associate-alias보다 먼저 끝내 두면 뒤의 outage 창이 사라진다(`infra-cdk/lib/awsops-stack.ts`의 `DomainARecord` 구성):
 
 ```bash
 # (a) 해당 record 구성에서 (route53.ARecord L2 construct의 생성자 props가 아니라)
@@ -126,6 +132,15 @@ cd infra-cdk && npx cdk deploy AwsopsStack
 npx cdk deploy AwsopsStack
 cd ..
 ```
+
+### 2.4 `associate-alias`로 원자적 이동
+
+```bash
+V2_CF_ID=$(terraform -chdir=terraform/v2/foundation output -raw distribution_id)
+aws cloudfront associate-alias --target-distribution-id "$V2_CF_ID" --alias "<v1-domain>"
+```
+
+CloudFront 레벨에서 별칭이 v1→v2로 원자 이동한다. **Route53은 아직 v1을 가리키므로, DNS가 v1 CloudFront로 트래픽을 보내는 동안 v1은 이제 이 Host를 인식하지 못해 짧게 오류(403류)를 낼 수 있다 — 바로 §2.5로 이어서 멈추지 않고 끝낸다(§2.3을 먼저 끝내 둔 덕분에 이 구간은 apply 한 번 분량으로 짧다).**
 
 ### 2.5 for_each에 v1 도메인 추가 + import + 새 plan/apply
 
@@ -140,7 +155,7 @@ terraform -chdir=terraform/v2/foundation plan -out tfplan2
 terraform -chdir=terraform/v2/foundation apply tfplan2
 ```
 
-§2.3에서 CloudFront 별칭은 이미 실제로 바뀌어 있으므로 그 부분은 reconcile(무변경)이고, 이 apply의 실질 효과는 **Route53 레코드의 alias target을 v1→v2 distribution domain으로 갱신**하는 것이다 — 이 apply가 끝나야 DNS 레벨에서도 완전히 v2로 넘어간다.
+§2.4에서 CloudFront 별칭은 이미 실제로 바뀌어 있으므로 그 부분은 reconcile(무변경)이고, 이 apply의 실질 효과는 **Route53 레코드의 alias target을 v1→v2 distribution domain으로 갱신**하는 것이다 — 이 apply가 끝나야 DNS 레벨에서도 완전히 v2로 넘어간다.
 
 ### 2.6 검증
 
@@ -204,9 +219,9 @@ aws lambda get-function --function-name awsops-cognito-auth --region us-east-1
 # 그 다음에만: aws lambda delete-function --function-name awsops-cognito-auth --region us-east-1
 
 # 4.3 CDK 스택 삭제
-# §2.4를 이미 수행했다면(정상 경로) DomainARecord는 템플릿에서 제거되어 CFN 관리 밖이므로 --retain-resources 불필요/무의미:
+# §2.3을 이미 수행했다면(정상 경로) DomainARecord는 템플릿에서 제거되어 CFN 관리 밖이므로 --retain-resources 불필요/무의미:
 aws cloudformation delete-stack --stack-name AwsopsStack
-# §2.4를 건너뛴 예외 경로라면(레코드가 아직 CFN 템플릿에 남아있는 경우에만) 대신 이 명령을 쓴다:
+# §2.3을 건너뛴 예외 경로라면(레코드가 아직 CFN 템플릿에 남아있는 경우에만) 대신 이 명령을 쓴다:
 #   aws cloudformation delete-stack --stack-name AwsopsStack --retain-resources DomainARecord
 aws cloudformation wait stack-delete-complete --stack-name AwsopsStack
 # 삭제 후 Route53/TF state에 drift 없는지 확인:
