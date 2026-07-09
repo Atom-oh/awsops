@@ -4,7 +4,7 @@
 
 # AWSops — Reviewer Context
 
-Branch `feat/v2-architecture-design`. Reviews on this branch target **v2** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers). v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) is the **untouched legacy production app** — v1 rules do NOT apply to v2. A diff under `web/`, `terraform/v2/`, `agent/`, or `scripts/v2/` is v2; a diff under `src/` is v1.
+Branch `feat/v2-architecture-design`. Reviews on this branch target **v2** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers). v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) is **being decommissioned in stages per ADR-016** (`docs/runbooks/v1-decommission.md`) — v1 rules do NOT apply to v2. A diff under `web/`, `terraform/v2/`, `agent/`, or `scripts/v2/` is v2; a diff under `src/` is v1.
 
 ## ⛔ Product posture (current truth = `docs/decisions/BASELINE.md`)
 v2 = ops dashboard + AI diagnosis. **Current form = diagnosis + remediation *proposal* (read-only).** North star: operate AWS resources per the Well-Architected 6 pillars, safely.
