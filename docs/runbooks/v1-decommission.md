@@ -68,50 +68,59 @@ aws cloudwatch describe-alarms --query "MetricAlarms[?contains(AlarmActions,\`$V
 
 ## Phase 2 — 도메인 컷오버 (Terraform) / Domain cutover
 
-**순서 원칙: create-before-destroy.** v2에 새 별칭을 먼저 붙이고 검증한 뒤, 마지막에 v1에서 별칭을 뗀다 — 그 반대로 하면 v2 apply/Route53 이전이 끝나기 전에 도메인이 붕 뜨는 순단 창이 생긴다.
+**CloudFront는 동일 별칭(CNAME)을 두 distribution에 동시 등록할 수 없다** — v2에 별칭을 추가하는 일반 `UpdateDistribution`을, v1이 아직 그 별칭을 갖고 있는 동안 실행하면 `CNAMEAlreadyExists`로 즉시 실패한다. 같은 계정 내 이동에는 전용 원자적 명령 `aws cloudfront associate-alias`를 쓴다(별칭을 한쪽에서 다른 쪽으로 무중단 이전). 순서: **① cert만 먼저 apply(별칭은 아직 안 건드림) → ② associate-alias로 원자적 이동 → ③ Route53 소유권을 v1 CFN에서 먼저 풀어준 뒤 import → ④ 새 plan으로 apply(이미 실제 상태와 일치하므로 reconcile).**
 
-### 2.1 Terraform 변경 (`terraform/v2/foundation/`)
-
-- `variables.tf`에 `extra_domain_aliases` (list(string), default `[]`) 추가
-- `edge.tf`: ACM `subject_alternative_names`(+ 기존 `aws_acm_certificate.cf`에 `lifecycle { create_before_destroy = true }` 확인/추가), CloudFront `aliases`에 `concat`, Route53 레코드 `for_each`화(+ `moved` 블록으로 기존 단일 리소스 주소 보존)
-- `auth.tf`: Cognito callback/logout URL에 v1 도메인 추가 (다크 폴백 Hosted UI용)
-- tfvars에 `extra_domain_aliases=["<v1-domain>"]`
+### 2.1 ACM SAN만 먼저 적용 (별칭은 아직 비움)
 
 ```bash
+# variables.tf: extra_domain_aliases (list(string), default []) 추가
+# edge.tf: aws_acm_certificate.cf에 subject_alternative_names = var.extra_domain_aliases
+#          + lifecycle { create_before_destroy = true } 확인/추가
+# tfvars: extra_domain_aliases=["<v1-domain>"]  ← cert SAN만, CloudFront aliases/Route53 for_each는 아직 코드에 넣지 않음
 terraform -chdir=terraform/v2/foundation plan -out tfplan
-# 컨트롤러가 실행 (CloudFront 긴 apply — 서브에이전트 idle-timeout 회피)
-terraform -chdir=terraform/v2/foundation apply tfplan
+terraform -chdir=terraform/v2/foundation apply tfplan   # ACM 발급·검증만, CloudFront/Route53 변경 없음
 ```
 
-이 시점에 v2 CloudFront는 v1 도메인을 별칭으로 갖지만, **Route53은 아직 v1을 가리키고** ACM SAN·CloudFront 쪽만 준비된 상태다. 아직 아무 트래픽도 옮기지 않았으므로 안전하게 검증 가능:
+### 2.2 `associate-alias`로 원자적 이동
 
 ```bash
-curl -sI -H "Host: <v1-domain>" https://$(terraform -chdir=terraform/v2/foundation output -raw cloudfront_domain_name) | head -5
+V2_CF_ID=$(terraform -chdir=terraform/v2/foundation output -raw distribution_id)
+aws cloudfront associate-alias --target-distribution-id "$V2_CF_ID" --alias "<v1-domain>"
 ```
 
-### 2.2 Route53 레코드를 v2로 전환
+이 한 명령이 v1에서 별칭을 제거하고 v2에 등록하는 것을 원자적으로 수행한다(무중단 — AWS가 명시적으로 이 용도로 제공하는 명령). 실행 직후 헤더 레벨에서는 이미 v2가 응답한다(Route53은 아직 안 건드렸으므로 실제 클라이언트 트래픽은 여전히 v1의 CloudFront 배포로 들어오지만, 그 배포가 이제 이 Host를 인식 못 해 오류를 낼 수 있다 — **바로 §2.3~2.4로 이어서 Route53까지 끝낸다, 중간에 멈추지 않는다**).
 
-기존 A 레코드는 CFN `AwsopsStack` 소유. **CFN 스택에서 이 레코드를 먼저 놓아주지 않으면** Terraform이 같은 이름으로 만들려 할 때 `EntityAlreadyExists` 충돌이 나거나, 반대로 이후 Phase 4에서 CFN이 이 레코드를 삭제해버려 v2 진입점이 끊긴다(§Phase 4 참고). 순서:
+### 2.3 Route53 레코드 소유권을 v1 CFN에서 풀어준 뒤 import
+
+`terraform import`는 TF state에 리소스를 편입할 뿐 CFN `AwsopsStack`의 소유권을 제거하지 않는다 — 그대로 두면 두 IaC가 같은 레코드를 관리하게 되고, Phase 4에서 CFN이 삭제를 시도해 v2 진입점이 끊길 수 있다. **CFN 쪽에서 먼저 놓아준다**(`infra-cdk/lib/awsops-stack.ts`의 `DomainARecord` 구성):
 
 ```bash
-# (a) CFN 스택에서 이 리소스를 보호 대상으로 표시해 두되, 실제 소유권은 import로 TF에 넘긴다
-terraform -chdir=terraform/v2/foundation import 'aws_route53_record.alias["<v1-domain>"]' "${HOSTED_ZONE_ID}_<v1-domain>_A"
-terraform -chdir=terraform/v2/foundation apply tfplan   # 값이 v2 CloudFront로 갱신됨
+# (a) 해당 record 구성에 removalPolicy: cdk.RemovalPolicy.RETAIN 추가 후 배포 (CFN엔 남지만 스택 삭제 시 삭제 안 되도록 마킹)
+cd infra-cdk && npx cdk deploy AwsopsStack
+# (b) 템플릿에서 DomainARecord 리소스 자체를 제거하고 다시 배포 — RETAIN 덕분에 실제 Route53 레코드는 남고 CFN 관리에서만 빠진다
+npx cdk deploy AwsopsStack
+cd ..
+
+# (c) 이제 CFN과 무관해졌으니 TF import — bare zone id로 정규화(list-hosted-zones의 Id는 "/hostedzone/Z..." 형태)
+ZONE_ID_BARE=$(echo "$HOSTED_ZONE_ID" | sed 's#/hostedzone/##')
+terraform -chdir=terraform/v2/foundation import 'aws_route53_record.alias["<v1-domain>"]' "${ZONE_ID_BARE}_<v1-domain>_A"
 ```
 
-### 2.3 v1 CloudFront에서 별칭 제거 (마지막)
+### 2.4 새 plan으로 apply (import 직후 저장 plan은 stale — 반드시 재생성)
 
-Route53이 v2를 가리키고 검증(§2.4)까지 마친 **뒤에만** 실행 — 반대 순서면 DNS가 아직 v1을 보는 동안 v1이 그 별칭 요청을 거부하는 순단 창이 생긴다.
+**주의**: `terraform import`(또는 `associate-alias` 같은 out-of-band 변경) 후에는 이전에 저장한 `tfplan`이 stale하다 — `terraform apply <오래된 tfplan>`은 "Saved plan is stale"로 거부된다. **import/외부변경 직후엔 항상 `plan -out`을 새로 생성**한다:
 
 ```bash
-aws cloudfront get-distribution-config --id "$V1_CF_ID" > /tmp/v1-cf-config.json
-V1_CF_ETAG=$(jq -r '.ETag' /tmp/v1-cf-config.json)
-jq '.DistributionConfig.Aliases.Items -= ["<v1-domain>"] | .DistributionConfig.Aliases.Quantity = (.DistributionConfig.Aliases.Items | length) | .DistributionConfig' \
-  /tmp/v1-cf-config.json > /tmp/v1-cf-config-updated.json
-aws cloudfront update-distribution --id "$V1_CF_ID" --distribution-config file:///tmp/v1-cf-config-updated.json --if-match "$V1_CF_ETAG"
+# 이제 코드에 CloudFront aliases concat + Route53 for_each(+ moved 블록)를 반영
+terraform -chdir=terraform/v2/foundation plan -out tfplan2   # 새 plan — 재사용 금지
+terraform -chdir=terraform/v2/foundation apply tfplan2
 ```
 
-### 2.4 검증
+§2.2에서 이미 실제 상태가 바뀌어 있으므로 이 apply는 대부분 "이미 일치함"으로 reconcile되고, Route53 레코드의 alias target만 v1→v2 distribution domain으로 갱신된다.
+
+`auth.tf`의 Cognito callback/logout URL에도 v1 도메인 추가(다크 폴백 Hosted UI용).
+
+### 2.5 검증
 
 ```bash
 curl -sI https://<v1-domain> | head -5   # v2 응답(302 → /login) 기대
@@ -136,7 +145,8 @@ aws cloudfront update-distribution --id "$V1_CF_ID" --distribution-config file:/
 
 ```bash
 aws ec2 start-instances --instance-ids "$V1_EC2_ID"
-# CloudFront Enabled=true로 되돌리고, 필요 시에만 §2.3의 역순으로 별칭을 v1에 임시 복원
+# CloudFront Enabled=true로 되돌리고, 필요 시에만 associate-alias를 역방향(v1 <- v2)으로 실행해 별칭을 v1에 임시 복원:
+#   aws cloudfront associate-alias --target-distribution-id "$V1_CF_ID" --alias "<v1-domain>"
 ```
 
 ---
@@ -151,16 +161,21 @@ aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMP
 # 4.2 Lambda@Edge 선처리 — us-east-1, distribution 연결 해제 후 replica 소멸 대기(수 시간)
 aws lambda get-function --function-name awsops-cognito-auth --region us-east-1
 
-# 4.3 CDK 스택 삭제 — DomainARecord는 **항상 retain** (Phase 2.2에서 이미 Terraform 소유로 넘어갔으므로
-#     CFN이 삭제를 시도하면 v2의 유일한 진입점이 끊긴다 — "충돌 시"가 아니라 매번 필수)
+# 4.3 CDK 스택 삭제 — DomainARecord는 Phase 2.3에서 이미 템플릿에서 제거되어(RETAIN 처리 후) CFN 관리 밖이므로
+#     여기서 별도 --retain-resources가 필요 없다. 혹시 Phase 2.3을 건너뛴 상태라면 아래처럼 방어적으로 지정:
 aws cloudformation delete-stack --stack-name AwsopsStack --retain-resources DomainARecord
 aws cloudformation wait stack-delete-complete --stack-name AwsopsStack
 # 삭제 후 Route53/TF state에 drift 없는지 확인:
 terraform -chdir=terraform/v2/foundation plan   # DomainARecord 관련 변경 없어야 함
 
-# 4.4 고아 리소스 개별 삭제 (CFN 스택 밖 — 이름은 사전 조사 시점 기준, 실행 전 list-functions로 재확인)
-aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].FunctionName" --output text | \
-  tr '\t' '\n' | while read -r fn; do aws lambda delete-function --function-name "$fn"; done
+# 4.4 고아 리소스 개별 삭제 — blast radius 주의: "awsops-" prefix 매칭은 v1과 무관한 다른 Lambda까지 휩쓸 수 있다.
+#     반드시 (a) 먼저 dry-run으로 목록만 뽑아 사람이 검토 → (b) ADR-016/gap-audit 조사 시점 목록과 대조 → (c) 그 다음 삭제.
+aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-') && !starts_with(FunctionName,'awsops-v2-')].{Name:FunctionName,Runtime:Runtime,Modified:LastModified}"
+# ↑ 이 출력을 육안 검토: v1 조사 시점(2026-07-08) 기준 py3.12 runtime의 *-mcp 슬라이스 18개 + steampipe-query 여야 한다.
+#   목록이 다르면(다른 py 버전/최근 수정/모르는 이름) 그 함수는 제외하고 개별 확인한다.
+CONFIRMED_ORPHAN_LAMBDAS=(<검토 완료 후 (a)~(b)에서 확정된 함수명만 여기 나열>)
+for fn in "${CONFIRMED_ORPHAN_LAMBDAS[@]}"; do aws lambda delete-function --function-name "$fn"; done
+
 aws s3 rm "s3://${V1_DEPLOY_BUCKET}" --recursive && aws s3api delete-bucket --bucket "${V1_DEPLOY_BUCKET}"
 ```
 
