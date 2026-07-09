@@ -14,7 +14,8 @@ V1_EC2_ID=$(aws ec2 describe-instances --filters Name=tag:aws:cloudformation:sta
 V1_CF_ID=$(aws cloudformation describe-stack-resources --stack-name AwsopsStack \
   --query "StackResources[?ResourceType=='AWS::CloudFront::Distribution'].PhysicalResourceId" --output text)
 V1_ALERT_TOPIC_ARN=$(aws sns list-topics --query "Topics[?contains(TopicArn,'awsops-alert-topic')].TopicArn" --output text)
-V1_DEPLOY_BUCKET=$(aws s3 ls | awk '{print $3}' | grep '^awsops-deploy-')
+aws s3 ls | awk '{print $3}' | grep '^awsops-deploy-'   # 후보가 여러 개면 아래를 단일 값으로 직접 확정 — 자동 단일매칭 가정 금지
+V1_DEPLOY_BUCKET=<위 목록에서 확정한 단일 버킷명>
 HOSTED_ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='<your-zone>.'].Id" --output text)
 ```
 
@@ -166,7 +167,14 @@ aws cloudfront update-distribution --id "$V1_CF_ID" --distribution-config file:/
 
 ```bash
 aws ec2 start-instances --instance-ids "$V1_EC2_ID"
-# CloudFront Enabled=true로 되돌리고, 별칭을 v1으로 역이동 (associate-alias는 대상 distribution의 alias만 바꾼다 —
+
+# CloudFront를 다시 Enabled=true로 (forward의 disable 블록과 대칭)
+aws cloudfront get-distribution-config --id "$V1_CF_ID" > /tmp/v1-cf-enable.json
+V1_CF_ETAG3=$(jq -r '.ETag' /tmp/v1-cf-enable.json)
+jq '.DistributionConfig.Enabled = true | .DistributionConfig' /tmp/v1-cf-enable.json > /tmp/v1-cf-enable-updated.json
+aws cloudfront update-distribution --id "$V1_CF_ID" --distribution-config file:///tmp/v1-cf-enable-updated.json --if-match "$V1_CF_ETAG3"
+
+# 별칭을 v1으로 역이동 (associate-alias는 대상 distribution의 alias만 바꾼다 —
 # Route53 레코드는 별개로 반드시 같이 되돌려야 한다. 둘 중 하나만 하면 "별칭은 v1인데 DNS는 v2"류 엇갈림으로
 # 동일한 403이 반대 방향으로 재발한다):
 aws cloudfront associate-alias --target-distribution-id "$V1_CF_ID" --alias "<v1-domain>"
@@ -195,9 +203,11 @@ aws lambda get-function --function-name awsops-cognito-auth --region us-east-1
 # distribution 연결 해제(모든 CloudFront behavior에서 이 함수 associate 제거) 후 replica 소멸까지 수 시간 대기,
 # 그 다음에만: aws lambda delete-function --function-name awsops-cognito-auth --region us-east-1
 
-# 4.3 CDK 스택 삭제 — DomainARecord는 §2.4에서 이미 템플릿에서 제거되어(RETAIN 처리 후) CFN 관리 밖이므로
-#     여기서 별도 --retain-resources가 필요 없다. 혹시 §2.4를 건너뛴 상태라면 아래처럼 방어적으로 지정:
-aws cloudformation delete-stack --stack-name AwsopsStack --retain-resources DomainARecord
+# 4.3 CDK 스택 삭제
+# §2.4를 이미 수행했다면(정상 경로) DomainARecord는 템플릿에서 제거되어 CFN 관리 밖이므로 --retain-resources 불필요/무의미:
+aws cloudformation delete-stack --stack-name AwsopsStack
+# §2.4를 건너뛴 예외 경로라면(레코드가 아직 CFN 템플릿에 남아있는 경우에만) 대신 이 명령을 쓴다:
+#   aws cloudformation delete-stack --stack-name AwsopsStack --retain-resources DomainARecord
 aws cloudformation wait stack-delete-complete --stack-name AwsopsStack
 # 삭제 후 Route53/TF state에 drift 없는지 확인:
 terraform -chdir=terraform/v2/foundation plan   # DomainARecord 관련 변경 없어야 함
