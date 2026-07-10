@@ -1481,7 +1481,7 @@ export async function POST(request: NextRequest) {
           await simulateStreaming(finalContent, send);
           recordAndSave({ route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}`, question: lastMessage, summary: finalContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-5' });
           send('done', {
-            content: finalContent, model: 'sonnet-5',
+            content: finalContent, model: 'sonnet-4.6', // AgentCore Runtime's actual model (agent/agent.py model_id) — not yet migrated
             via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], route, routes,
             usedTools,
             inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -1638,7 +1638,7 @@ async function handleSingleRoute(
       anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: cachedSystem(SYSTEM_PROMPT, promptCacheOn), messages: bedrockMessages,
     });
     const response = await bedrockClient.send(new InvokeModelCommand({
-      modelId: MODELS[modelKey || 'sonnet-5'], contentType: 'application/json', accept: 'application/json',
+      modelId: MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'], contentType: 'application/json', accept: 'application/json',
       body: new TextEncoder().encode(body),
     }));
     const analysisText = JSON.parse(new TextDecoder().decode(response.body)).content?.[0]?.text || '';
@@ -1663,7 +1663,7 @@ async function handleSingleRoute(
         anthropic_version: 'bedrock-2023-05-31', max_tokens: 8192, system: cachedSystem(collector.analysisPrompt, promptCacheOn), messages: bedrockMessages,
       });
       const response = await bedrockClient.send(new InvokeModelCommand({
-        modelId: MODELS[modelKey || 'sonnet-5'], contentType: 'application/json', accept: 'application/json',
+        modelId: MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'], contentType: 'application/json', accept: 'application/json',
         body: new TextEncoder().encode(body),
       }));
       const analysisText = JSON.parse(new TextDecoder().decode(response.body)).content?.[0]?.text || '';
