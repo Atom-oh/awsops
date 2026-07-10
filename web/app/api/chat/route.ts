@@ -336,11 +336,14 @@ export async function POST(request: Request) {
           extraContext: datasourceSchemaContext, // cached datasource schemas → agent reads the cache
         })) {
           if (request.signal.aborted) break;
+          // Independent ifs, not else-if: AgentEvent's fields aren't guaranteed mutually
+          // exclusive by the type, so a frame carrying more than one must not drop any of them.
           if (ev.delta) {
             text += ev.delta;
             controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: ev.delta })}\n\n`));
-          } else if (ev.tool && !seenTools.has(ev.tool)) { seenTools.add(ev.tool); tools.push(ev.tool); }
-          else if (ev.model) model = ev.model;
+          }
+          if (ev.tool && !seenTools.has(ev.tool)) { seenTools.add(ev.tool); tools.push(ev.tool); }
+          if (ev.model) model = ev.model;
         }
         provenance = { tools, model };
       } catch (e) {
@@ -365,7 +368,8 @@ export async function POST(request: Request) {
         ...(provenance.model ? { model: getModelLabel(provenance.model) } : {}),
       };
       controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footerMeta)}\n\n`));
-      record(text, footerMeta); // fire-and-forget after the chunk loop, before [DONE] (P2 gate placement)
+      // don't persist a half-streamed, client-aborted answer (same guard as the assistant/fanout paths)
+      if (!request.signal.aborted) record(text, footerMeta);
       controller.enqueue(enc.encode('data: [DONE]\n\n'));
       controller.close();
     },

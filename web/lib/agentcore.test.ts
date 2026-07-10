@@ -242,7 +242,8 @@ describe('agentcore', () => {
     for await (const ev of invokeAgentStreamDetailed({ gateway: 'ops', messages: [{ role: 'user', content: 'x' }], sessionId: 's'.repeat(36) })) {
       if (ev.delta) deltas.push(ev.delta);
     }
-    expect(deltas.join('')).toBe('hello world');
+    // Two distinct events, not one coalesced string — a mid-byte split must not merge the frames.
+    expect(deltas).toEqual(['hello ', 'world']);
   });
 
   it('invokeAgentStreamDetailed backward-compat: a legacy buffered JSON answer yields one delta event', async () => {

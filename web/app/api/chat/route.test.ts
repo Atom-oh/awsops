@@ -27,7 +27,11 @@ type AgentEvent = { delta?: string; tool?: string; model?: string };
 // test keeps working unchanged. A test that needs to assert genuine incremental delivery (multiple
 // SSE frames) or tool/model provenance sets `streamDetailedEvents` directly before calling POST.
 let streamDetailedEvents: AgentEvent[] | null = null;
+// For a test that needs a side effect between yields (e.g. aborting the request mid-stream) —
+// checked before the plain-array override above.
+let streamDetailedGenerator: (() => AsyncGenerator<AgentEvent>) | null = null;
 async function* invokeAgentStreamDetailedImpl(...a: unknown[]): AsyncGenerator<AgentEvent> {
+  if (streamDetailedGenerator) { yield* streamDetailedGenerator(); return; }
   if (streamDetailedEvents) { yield* streamDetailedEvents; return; }
   const text = await invokeAgent(...a);
   if (text) yield { delta: text as string };
@@ -76,11 +80,12 @@ vi.mock('@/lib/assistant', () => ({
   isProductHelpIntent: (...a: unknown[]) => isProductHelpIntent(...a),
 }));
 
-function req(body: unknown, cookie = 'awsops_token=t') {
+function req(body: unknown, cookie = 'awsops_token=t', signal?: AbortSignal) {
   return new Request('http://x/api/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
 }
 async function readStream(res: Response): Promise<string> {
@@ -129,6 +134,7 @@ beforeEach(() => {
   delete process.env.HYBRID_ROUTING_ENABLED;
   delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED;
   streamDetailedEvents = null;
+  streamDetailedGenerator = null;
 });
 
 afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED; });
@@ -224,6 +230,36 @@ describe('POST /api/chat', () => {
       { delta: '답변' },
       { tool: 'get_cost' },
     ];
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: '비용', section: 'cost', sessionId: 's'.repeat(36) }));
+    const body = await readStream(res);
+    expect(body).toContain('"tools":["get_cost"]');
+    expect(body).toContain('"model":"sonnet-4-6"');
+  });
+  it('does not persist a half-streamed answer when the client aborts mid-stream', async () => {
+    // Regression: with live streaming, `text` is the incremental accumulation of deltas seen SO
+    // FAR — if record() isn't guarded by the same abort check the sibling assistant/fanout paths
+    // already use, a client disconnect persists a truncated "complete" answer to chat history.
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('cost');
+    const ac = new AbortController();
+    streamDetailedGenerator = async function* () {
+      yield { delta: 'partial answer' };
+      ac.abort(); // simulate the client disconnecting after the first frame
+      yield { delta: ' never sent' };
+    };
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: '비용', section: 'cost', sessionId: 's'.repeat(36) }, 'awsops_token=t', ac.signal));
+    await readStream(res);
+    expect(recordExchange).not.toHaveBeenCalled();
+  });
+  it('does not drop tool/model provenance when a single event carries multiple fields', async () => {
+    // Regression: `if (ev.delta) ... else if (ev.tool) ... else if (ev.model)` assumed the fields
+    // are mutually exclusive, but AgentEvent's type doesn't guarantee that — a frame carrying more
+    // than one field silently dropped whichever came after the first matched branch.
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('cost');
+    streamDetailedEvents = [{ delta: '답변', model: 'sonnet-4-6', tool: 'get_cost' }];
     const { POST } = await import('./route');
     const res = await POST(req({ prompt: '비용', section: 'cost', sessionId: 's'.repeat(36) }));
     const body = await readStream(res);
