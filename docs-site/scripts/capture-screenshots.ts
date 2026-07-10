@@ -7,6 +7,9 @@ import * as dns from 'dns';
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
 // v2: served at the root path (no /awsops basePath — see CLAUDE.md "v2 ↔ v1 key differences").
+// awsops.atomai.click is the live v2 domain as of the 2026-07 cutover (verified via /api/health
+// returning service:"awsops-web" on this exact host) — root CLAUDE.md's "awsops-v2.atomai.click"
+// live-env example predates that cutover and is otherwise-sanitized placeholder text, not this host.
 const BASE_URL = process.env.AWSOPS_CAPTURE_URL || 'https://awsops.atomai.click';
 const LOGIN_EMAIL = process.env.AWSOPS_LOGIN_EMAIL || 'admin@awsops.local';
 const LOGIN_PASSWORD = process.env.AWSOPS_LOGIN_PASSWORD || '!234Qwer';
@@ -33,7 +36,10 @@ const pages: PageCapture[] = [
   { category: 'getting-started', name: 'login', path: '/login' },
   { category: 'overview', name: 'dashboard', path: '/' },
   { category: 'overview', name: 'assistant', path: '/assistant' },
-  { category: 'overview', name: 'agentcore', path: '/assistant' },
+  // Distinct filename from overview/agentcore.png — that file is still used by the (sidebar-
+  // orphaned) why-awsops.md with an unrelated "AgentCore dashboard" caption; this one captures
+  // the in-chat routing badge for overview/agentcore.md's "라우팅 표시" section.
+  { category: 'overview', name: 'agentcore-routing', path: '/assistant' },
   { category: 'operations', name: 'ai-diagnosis', path: '/ai-diagnosis' },
   { category: 'operations', name: 'custom-agents', path: '/customization' },
   { category: 'operations', name: 'jobs', path: '/jobs' },

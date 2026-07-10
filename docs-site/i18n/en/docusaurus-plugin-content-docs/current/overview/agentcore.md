@@ -11,7 +11,7 @@ import AgentCoreFlow from '@site/src/components/diagrams/AgentCoreFlow';
 
 AgentCore handles tool execution for the [AI Assistant](../overview/assistant), powered by Amazon Bedrock AgentCore Runtime and Gateway. Unlike v1's single-EC2 embedded approach, v2 splits everything out serverless: **Runtime + 9 section Gateways + Memory + Code Interpreter**.
 
-<Screenshot src="/screenshots/overview/agentcore.png" alt="AI Assistant routing badges" />
+<Screenshot src="/screenshots/overview/agentcore-routing.png" alt="AI Assistant routing badges" />
 
 :::tip Customer-session point
 **8 AWS-domain Gateways + external-obs (external observability) = 9 routed sections** · **144 MCP tools** across the full catalog · **23 Lambda slices** (17 gated on `agentcore_enabled`, 6 on `integrations_enabled`, both off by default) run serverless. The classifier routes each question to 1-3 routes and **calls them in parallel, then synthesizes**. → [Why AWSops](./why-awsops)
@@ -45,7 +45,7 @@ AgentCore handles tool execution for the [AI Assistant](../overview/assistant), 
 | **Engine** | Strands Agent Framework |
 | **Container** | Docker arm64 (stored in ECR, via `make agentcore`) |
 | **Execution Environment** | AgentCore managed service (Bedrock AgentCore Runtime) |
-| **Model** | Claude Sonnet 4.6 (classification/routing) / Opus 4.8 (deep analysis) / Haiku 4.5 |
+| **Model** | Claude Haiku 4.5 (ADR-038 routing classifier) / Sonnet 4.6 + Opus 4.8 (AgentCore Runtime tool execution / deep analysis) |
 
 ### Status
 
