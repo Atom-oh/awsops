@@ -213,6 +213,12 @@ variable "hybrid_routing_enabled" {
   default     = false
 }
 
+variable "multi_route_synthesis_enabled" {
+  type        = bool
+  description = "ADR-044 cross-domain auto-synthesis gate (web/lib/synthesize.ts, MULTI_ROUTE_SYNTHESIS_ENABLED). false (default) = single-route chat only, no direct Sonnet Bedrock call from the web task, no extra IAM. PR #153 review: the web task role previously had no bedrock:InvokeModel grant covering the Sonnet model synthesize.ts calls directly (only the ADR-038 Haiku classifier policy existed) — this flag gates the matching IAM statement."
+  default     = false
+}
+
 variable "incident_lifecycle_enabled" {
   type        = bool
   description = "ADR-032 incident lifecycle gate. ⚠️ DOWNGRADED 2026-06-11 (3-AI consensus) — the autonomous mitigation/action path is abandoned (it routed through the reversed ADR-029/036). If ever enabled, it is ANALYSIS-ONLY (read-only Triage/investigation/RCA, recommendation-only, NO mutation routing). false (default) = 0 lifecycle infra, 0 cost, ZERO autonomous triggers; the always-present incident_* tables (migration v5) are harmless when off. REQUIRES workers_enabled=true to enable."

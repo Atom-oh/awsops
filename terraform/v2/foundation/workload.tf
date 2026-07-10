@@ -180,6 +180,26 @@ resource "aws_iam_role_policy" "task_classifier_bedrock" {
   })
 }
 
+# ADR-044: cross-domain auto-synthesis (web/lib/synthesize.ts calls Bedrock directly from the web
+# task, not via AgentCore's unrestricted role). PR #153 review: this had no matching IAM grant —
+# only the Haiku classifier policy above existed on this role, so a live invoke would AccessDenied.
+resource "aws_iam_role_policy" "task_synthesis_bedrock" {
+  count = var.multi_route_synthesis_enabled ? 1 : 0
+  name  = "${var.project}-task-synthesis-bedrock"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+      Resource = [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
+        "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:inference-profile/global.anthropic.claude-sonnet-5",
+      ]
+    }]
+  })
+}
+
 # ADR-032: the web incident ingress (HMAC webhook) + synchronous Triage path reads the incident SSM
 # params (window/storm-cap knobs + the HMAC webhook secret(s)) and synchronously consults the
 # read-only AgentCore runtime. Gated (local.il) so the web task role is UNTOUCHED when off (when
@@ -312,6 +332,9 @@ resource "aws_ecs_task_definition" "web" {
         # ADR-038: hybrid routing flag + classifier model (BFF reads both at runtime).
         { name = "HYBRID_ROUTING_ENABLED", value = "true" },
         { name = "CLASSIFIER_MODEL_ID", value = "global.anthropic.claude-haiku-4-5-20251001-v1:0" }
+        ] : [], var.multi_route_synthesis_enabled ? [
+        # ADR-044: cross-domain auto-synthesis — matches the aws_iam_role_policy.task_synthesis_bedrock gate above.
+        { name = "MULTI_ROUTE_SYNTHESIS_ENABLED", value = "true" }
         ] : [], var.k8sgpt_enabled ? [
         # ADR-035: the /api/eks/[cluster]/k8sgpt route reads K8SGPT_ENABLED FIRST and 503s when not
         # "true" (no cluster read / STS presign / narration). concat(base, []) == base when

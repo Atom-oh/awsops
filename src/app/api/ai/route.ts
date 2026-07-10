@@ -50,7 +50,7 @@ function getCodeInterpreterName(): string {
 // Available Bedrock models / 사용 가능한 Bedrock 모델
 // Seoul region uses global.* prefix for cross-region inference / 서울 리전은 global.* 접두사 사용
 const MODELS: Record<string, string> = {
-  'sonnet-4.6': 'global.anthropic.claude-sonnet-4-6',
+  'sonnet-5': 'global.anthropic.claude-sonnet-5',
   'opus-4.8': 'global.anthropic.claude-opus-4-8',
   'haiku-4.5': 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
 };
@@ -576,7 +576,7 @@ async function generateSQL(messages: Array<{role: string; content: string}>, acc
       messages: messages.slice(-6).map(m => ({ role: m.role, content: m.content })),
     });
     const response = await bedrockClient.send(new InvokeModelCommand({
-      modelId: MODELS['sonnet-4.6'],
+      modelId: MODELS['sonnet-5'],
       contentType: 'application/json',
       accept: 'application/json',
       body: new TextEncoder().encode(body),
@@ -647,7 +647,7 @@ async function generateDatasourceQuery(
       messages: messages.slice(-6).map(m => ({ role: m.role, content: m.content })),
     });
     const response = await bedrockClient.send(new InvokeModelCommand({
-      modelId: MODELS['sonnet-4.6'],
+      modelId: MODELS['sonnet-5'],
       contentType: 'application/json',
       accept: 'application/json',
       body: new TextEncoder().encode(body),
@@ -1143,7 +1143,7 @@ export async function POST(request: NextRequest) {
         // Handler: Code Interpreter / 핸들러: 코드 인터프리터
         if (config.handler === 'code') {
           send('status', { step: 'generating', message: STATUS.codeGenerating });
-          const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+          const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
           const codeSystemPrompt = SYSTEM_PROMPT + `\n\nThe user wants to execute code. If they provide code, wrap it in a \`\`\`python code block. If they describe a task, generate Python code to accomplish it and wrap it in a \`\`\`python code block. Always include print statements to show results.`;
           // Stream code generation / 코드 생성 스트리밍
           const codeStreamResult = await streamBedrockToSSE(
@@ -1162,13 +1162,13 @@ export async function POST(request: NextRequest) {
             // Send execution result as chunk / 실행 결과를 chunk로 전송
             send('chunk', { delta: executionBlock });
             send('done', {
-              content: aiText + executionBlock, model: modelKey || 'sonnet-4.6',
+              content: aiText + executionBlock, model: modelKey || 'sonnet-5',
               via: `Bedrock + ${config.display}`, queriedResources: ['code-interpreter'], route,
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
             });
           } else {
             send('done', {
-              content: aiText, model: modelKey || 'sonnet-4.6',
+              content: aiText, model: modelKey || 'sonnet-5',
               via: 'Bedrock (code request)', queriedResources: [], route,
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
             });
@@ -1224,7 +1224,7 @@ export async function POST(request: NextRequest) {
               .map(r => r.value);
 
             if (successResults.length > 0) {
-              const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+              const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
               const isMultiDs = successResults.length > 1;
               send('status', { step: 'datasource-analyzing', message: isMultiDs
                 ? `${successResults.length}개 데이터소스 상관 분석 중...`
@@ -1250,9 +1250,9 @@ export async function POST(request: NextRequest) {
               const dsTools = successResults.map(s => `${s.dsType}: ${s.dsQuery}`);
               const viaStr = successResults.map(s => `${DATASOURCE_TYPES[s.dsType].label} (${s.result.rows.length} rows)`).join(' + ');
               const dsTimeMs = Date.now() - callStartTime;
-              recordAndSave({ route, gateway: `datasource:${successResults.map(s => s.dsType).join('+')}`, responseTimeMs: dsTimeMs, usedTools: dsTools, success: true, via: viaStr, question: lastMessage, summary: dsContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+              recordAndSave({ route, gateway: `datasource:${successResults.map(s => s.dsType).join('+')}`, responseTimeMs: dsTimeMs, usedTools: dsTools, success: true, via: viaStr, question: lastMessage, summary: dsContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-5' });
               send('done', {
-                content: dsContent, model: modelKey || 'sonnet-4.6',
+                content: dsContent, model: modelKey || 'sonnet-5',
                 via: `Datasource Analytics: ${viaStr}`,
                 queriedResources: successResults.map(s => s.dsType), route,
                 usedTools: dsTools,
@@ -1279,7 +1279,7 @@ export async function POST(request: NextRequest) {
               ? `🤖 Analyzing with ${collector.displayName}...`
               : `🤖 ${collector.displayName} 분석 중...` });
 
-            const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+            const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
             const bedrockMessages = messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
             bedrockMessages[bedrockMessages.length - 1].content += context;
 
@@ -1291,9 +1291,9 @@ export async function POST(request: NextRequest) {
             totalOutputTokens += streamResult.outputTokens;
 
             const timeMs = Date.now() - callStartTime;
-            recordAndSave({ route, gateway: route, responseTimeMs: timeMs, usedTools: data.usedTools, success: true, via: data.viaSummary, question: lastMessage, summary: streamResult.content || '', userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+            recordAndSave({ route, gateway: route, responseTimeMs: timeMs, usedTools: data.usedTools, success: true, via: data.viaSummary, question: lastMessage, summary: streamResult.content || '', userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-5' });
             send('done', {
-              content: streamResult.content || 'No response', model: modelKey || 'sonnet-4.6',
+              content: streamResult.content || 'No response', model: modelKey || 'sonnet-5',
               via: data.viaSummary, queriedResources: data.queriedResources, route,
               usedTools: data.usedTools,
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -1309,7 +1309,7 @@ export async function POST(request: NextRequest) {
         // Handler: SQL (aws-data) / SQL 핸들러
         if (config.handler === 'sql') {
           send('status', { step: 'sql-generating', message: STATUS.sqlGenerating });
-          const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+          const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
           let sql = await generateSQL(messages, accountId, account?.alias);
           let queryResult: { data: string; rowCount: number; error?: string } | null = null;
 
@@ -1340,7 +1340,7 @@ export async function POST(request: NextRequest) {
               const hit = getAnswer(cacheKey);
               if (hit) {
                 await simulateStreaming(hit.content, send);
-                send('done', { content: hit.content, model: modelKey || 'sonnet-4.6', via: `${config.display} (cached)`, queriedResources: ['steampipe'], route, usedTools: hit.usedTools || [], inputTokens: 0, outputTokens: 0 });
+                send('done', { content: hit.content, model: modelKey || 'sonnet-5', via: `${config.display} (cached)`, queriedResources: ['steampipe'], route, usedTools: hit.usedTools || [], inputTokens: 0, outputTokens: 0 });
                 controller.close();
                 return;
               }
@@ -1360,9 +1360,9 @@ export async function POST(request: NextRequest) {
             if (sql) sqlTools.push(`steampipe: ${sql.match(/FROM\s+(\w+)/i)?.[1] || 'query'}`);
             if (answerCacheOn && cacheKey) setAnswer(cacheKey, accountId || 'all', { content: sqlContent, via: config.display, usedTools: sqlTools });
             const sqlTimeMs = Date.now() - callStartTime;
-            recordAndSave({ route, gateway: 'steampipe', responseTimeMs: sqlTimeMs, usedTools: sqlTools, success: true, via: `${config.display} (${queryResult.rowCount} rows)`, question: lastMessage, summary: sqlContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+            recordAndSave({ route, gateway: 'steampipe', responseTimeMs: sqlTimeMs, usedTools: sqlTools, success: true, via: `${config.display} (${queryResult.rowCount} rows)`, question: lastMessage, summary: sqlContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-5' });
             send('done', {
-              content: sqlContent, model: modelKey || 'sonnet-4.6',
+              content: sqlContent, model: modelKey || 'sonnet-5',
               via: `${config.display} (${queryResult.rowCount} rows)`, queriedResources: ['steampipe'], route,
               usedTools: sqlTools,
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -1412,9 +1412,9 @@ export async function POST(request: NextRequest) {
             const finalTools = Array.from(new Set([...dedupedTools, ...synthesizedTools]));
             const viaList = successful.map(s => s.via).join(' + ');
             const multiTimeMs = Date.now() - callStartTime;
-            recordAndSave({ route, gateway: `multi:${routes.join('+')}`, responseTimeMs: multiTimeMs, usedTools: finalTools, success: true, via: `Multi-Route: ${viaList}`, question: lastMsg, summary: synthesized, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+            recordAndSave({ route, gateway: `multi:${routes.join('+')}`, responseTimeMs: multiTimeMs, usedTools: finalTools, success: true, via: `Multi-Route: ${viaList}`, question: lastMsg, summary: synthesized, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-5' });
             send('done', {
-              content: synthesized, model: modelKey || 'sonnet-4.6',
+              content: synthesized, model: modelKey || 'sonnet-5',
               via: `Multi-Route: ${viaList}`, queriedResources: allResources, route, routes,
               usedTools: finalTools,
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -1422,7 +1422,7 @@ export async function POST(request: NextRequest) {
           } else if (successful.length === 1) {
             await simulateStreaming(successful[0].content, send);
             send('done', {
-              content: successful[0].content, model: modelKey || 'sonnet-4.6',
+              content: successful[0].content, model: modelKey || 'sonnet-5',
               via: successful[0].via, queriedResources: allResources, route, routes,
               usedTools: dedupedTools,
               inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -1430,7 +1430,7 @@ export async function POST(request: NextRequest) {
           } else {
             // 모든 Gateway 실패 → Bedrock Direct 스트리밍 폴백 / All gateways failed → Bedrock Direct streaming fallback
             send('status', { step: 'fallback', message: STATUS.gatewayTimeout });
-            const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+            const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
             try {
               const mfStreamResult = await streamBedrockToSSE(
                 { modelId, system: SYSTEM_PROMPT, messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })) },
@@ -1441,7 +1441,7 @@ export async function POST(request: NextRequest) {
               const mfContent = mfStreamResult.content || 'No response';
               const mfTools = extractUsedTools(mfContent);
               send('done', {
-                content: mfContent, model: modelKey || 'sonnet-4.6',
+                content: mfContent, model: modelKey || 'sonnet-5',
                 via: `Bedrock Direct (multi-route fallback: ${routes.join('+')} timed out)`, queriedResources: [], route, routes,
                 usedTools: mfTools,
                 inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -1479,7 +1479,11 @@ export async function POST(request: NextRequest) {
           const finalContent = cleanedResponse || agentResponse;
           // Simulate streaming for AgentCore responses / AgentCore 응답 타이핑 시뮬레이션
           await simulateStreaming(finalContent, send);
-          recordAndSave({ route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}`, question: lastMessage, summary: finalContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+          // model is 'sonnet-4.6' here, not modelKey — this is the AgentCore Runtime path, whose actual
+          // model (agent/agent.py's model_id) hasn't been migrated yet, regardless of the modelKey the
+          // caller requested for the direct-Bedrock fallback below. recordAndSave and send('done') must
+          // agree, or cost/usage attribution disagrees with what the user actually sees.
+          recordAndSave({ route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}`, question: lastMessage, summary: finalContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: 'sonnet-4.6' });
           send('done', {
             content: finalContent, model: 'sonnet-4.6',
             via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], route, routes,
@@ -1492,7 +1496,7 @@ export async function POST(request: NextRequest) {
 
         // Fallback: Bedrock Direct streaming / 폴백: Bedrock 직접 스트리밍
         send('status', { step: 'fallback', message: STATUS.fallback });
-        const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+        const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
         const fbStreamResult = await streamBedrockToSSE(
           { modelId, system: SYSTEM_PROMPT, messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })) },
           send,
@@ -1502,9 +1506,9 @@ export async function POST(request: NextRequest) {
         const fallbackContent = fbStreamResult.content || 'No response';
         const fallbackTools = extractUsedTools(fallbackContent);
         const fbTimeMs = Date.now() - callStartTime;
-        recordAndSave({ route, gateway: 'bedrock-fallback', responseTimeMs: fbTimeMs, usedTools: fallbackTools, success: false, via: `Bedrock Direct (fallback)`, question: lastMessage, summary: fallbackContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-4.6' });
+        recordAndSave({ route, gateway: 'bedrock-fallback', responseTimeMs: fbTimeMs, usedTools: fallbackTools, success: false, via: `Bedrock Direct (fallback)`, question: lastMessage, summary: fallbackContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-5' });
         send('done', {
-          content: fallbackContent, model: modelKey || 'sonnet-4.6',
+          content: fallbackContent, model: modelKey || 'sonnet-5',
           via: `Bedrock Direct (fallback from ${config.display})`, queriedResources: [], route,
           usedTools: fallbackTools,
           inputTokens: totalInputTokens, outputTokens: totalOutputTokens,
@@ -1540,7 +1544,7 @@ async function handleSingleRoute(
 
   // Code handler / 코드 핸들러
   if (config.handler === 'code') {
-    const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+    const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
     const codeSystemPrompt = SYSTEM_PROMPT + `\n\nThe user wants to execute code. If they provide code, wrap it in a \`\`\`python code block. If they describe a task, generate Python code to accomplish it and wrap it in a \`\`\`python code block. Always include print statements to show results.`;
     const body = JSON.stringify({
       anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: codeSystemPrompt,
@@ -1562,7 +1566,7 @@ async function handleSingleRoute(
 
   // SQL handler / SQL 핸들러
   if (config.handler === 'sql') {
-    const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+    const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
     let sql = await generateSQL(messages, accountId, accountAlias);
     let queryResult: { data: string; rowCount: number; error?: string } | null = null;
     for (let attempt = 0; attempt < 2 && sql; attempt++) {
@@ -1638,7 +1642,7 @@ async function handleSingleRoute(
       anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: cachedSystem(SYSTEM_PROMPT, promptCacheOn), messages: bedrockMessages,
     });
     const response = await bedrockClient.send(new InvokeModelCommand({
-      modelId: MODELS[modelKey || 'sonnet-4.6'], contentType: 'application/json', accept: 'application/json',
+      modelId: MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'], contentType: 'application/json', accept: 'application/json',
       body: new TextEncoder().encode(body),
     }));
     const analysisText = JSON.parse(new TextDecoder().decode(response.body)).content?.[0]?.text || '';
@@ -1663,7 +1667,7 @@ async function handleSingleRoute(
         anthropic_version: 'bedrock-2023-05-31', max_tokens: 8192, system: cachedSystem(collector.analysisPrompt, promptCacheOn), messages: bedrockMessages,
       });
       const response = await bedrockClient.send(new InvokeModelCommand({
-        modelId: MODELS[modelKey || 'sonnet-4.6'], contentType: 'application/json', accept: 'application/json',
+        modelId: MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'], contentType: 'application/json', accept: 'application/json',
         body: new TextEncoder().encode(body),
       }));
       const analysisText = JSON.parse(new TextDecoder().decode(response.body)).content?.[0]?.text || '';
@@ -1694,7 +1698,7 @@ async function synthesizeResponses(
   const SYSTEM_PROMPT = getSystemPrompt(lang);
   // ADR-033 Phase 1: prompt-cache the invariant synthesis system prefix (flag-gated, default off).
   const promptCacheOn = getConfig().aiCost?.promptCache === true;
-  const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+  const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
   const parts = responses.map(r => `--- ${r.via} ---\n${r.content}`).join('\n\n');
   const body = JSON.stringify({
     anthropic_version: 'bedrock-2023-05-31',
@@ -1718,7 +1722,7 @@ async function synthesizeResponsesStreaming(
   send: (event: string, data: any) => void, modelKey?: string, lang?: string,
 ): Promise<string> {
   const systemPrompt = getSystemPrompt(lang) + `\n\nYou are synthesizing answers from multiple AWS service agents. Combine them into one coherent, well-structured response. Do not repeat information.`;
-  const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+  const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
   const parts = responses.map(r => `--- ${r.via} ---\n${r.content}`).join('\n\n');
 
   // ADR-033 Phase 1: this path uses the Converse API; Converse-side prompt caching is a
@@ -1761,13 +1765,13 @@ async function handleNonStreaming(messages: Array<{role: string; content: string
       const result = await handleSingleRoute(primaryRoute, messages, modelKey, lang, accountId, accountAlias);
       if (result) {
         return NextResponse.json({
-          content: result.content, model: modelKey || 'sonnet-4.6',
+          content: result.content, model: modelKey || 'sonnet-5',
           via: result.via, queriedResources: result.queriedResources,
           usedTools: result.usedTools || [], route: primaryRoute, routes,
         });
       }
       // Fallback / 폴백
-      const modelId = MODELS[modelKey || 'sonnet-4.6'] || MODELS['sonnet-4.6'];
+      const modelId = MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'];
       const body = JSON.stringify({
         anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: SYSTEM_PROMPT,
         messages: messages.slice(-10).map((m: any) => ({ role: m.role, content: m.content })),
@@ -1778,7 +1782,7 @@ async function handleNonStreaming(messages: Array<{role: string; content: string
       }));
       const fallbackResult = JSON.parse(new TextDecoder().decode(response.body));
       return NextResponse.json({
-        content: fallbackResult.content?.[0]?.text || 'No response', model: modelKey || 'sonnet-4.6',
+        content: fallbackResult.content?.[0]?.text || 'No response', model: modelKey || 'sonnet-5',
         via: `Bedrock Direct (fallback)`, queriedResources: [], route: primaryRoute, routes,
       });
     }
@@ -1800,7 +1804,7 @@ async function handleNonStreaming(messages: Array<{role: string; content: string
 
     if (successful.length === 0) {
       return NextResponse.json({
-        content: 'All routes failed. Please try again.', model: modelKey || 'sonnet-4.6',
+        content: 'All routes failed. Please try again.', model: modelKey || 'sonnet-5',
         via: 'Multi-route (all failed)', queriedResources: [], route: primaryRoute, routes,
       });
     }
@@ -1808,7 +1812,7 @@ async function handleNonStreaming(messages: Array<{role: string; content: string
     // Single success → return directly / 1개만 성공 → 직접 반환
     if (successful.length === 1) {
       return NextResponse.json({
-        content: successful[0].content, model: modelKey || 'sonnet-4.6',
+        content: successful[0].content, model: modelKey || 'sonnet-5',
         via: successful[0].via, queriedResources: allResources, route: primaryRoute, routes,
       });
     }
@@ -1819,7 +1823,7 @@ async function handleNonStreaming(messages: Array<{role: string; content: string
     const viaList = successful.map(s => s.via).join(' + ');
 
     return NextResponse.json({
-      content: synthesized, model: modelKey || 'sonnet-4.6',
+      content: synthesized, model: modelKey || 'sonnet-5',
       via: `Multi-Route: ${viaList}`, queriedResources: allResources, route: primaryRoute, routes,
     });
   } catch (err: any) {
