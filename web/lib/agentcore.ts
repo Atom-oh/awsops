@@ -197,3 +197,11 @@ export async function* invokeAgentStream(input: InvokeInput): AsyncGenerator<str
   const resp = await send(input);
   for await (const ev of streamEvents(resp)) if (ev.delta) yield ev.delta;
 }
+
+/** Invoke the AgentCore runtime and yield each event (delta/tool/model) as it arrives — the
+ *  provenance-aware sibling of invokeAgentStream(), for callers that need to forward deltas
+ *  live to a client AND still surface tool/model provenance once the stream ends. */
+export async function* invokeAgentStreamDetailed(input: InvokeInput): AsyncGenerator<AgentEvent> {
+  const resp = await send(input);
+  yield* streamEvents(resp);
+}
