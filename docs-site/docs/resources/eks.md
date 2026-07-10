@@ -52,10 +52,10 @@ EKS 클러스터 함대와 클러스터 내부 리소스를 읽기 전용으로 
 - **Diagnosis 탭**: K8sGPT 기반 진단으로, 활성화 시에도 읽기 전용입니다. 결정론적 분석 결과(FACT)와 AI 가설을 분리해 보여주며, AI 가설은 검증 후 조치해야 합니다.
 
 ## 사용 방법
-1. 사이드바에서 **리소스 > EKS**를 클릭합니다
+1. 사이드바 **Compute** 그룹에서 **EKS**를 클릭합니다
 2. 상단 KPI 카드로 함대 규모와 연결 상태를 확인합니다
 3. **Connected** 클러스터 카드 제목을 클릭해 상세로 들어갑니다
-4. 상세에서 탭을 전환해 **Nodes / Pods / Deployments / Services / Events** 를 조회합니다
+4. 상세에서 탭을 전환해 **Nodes / Pods / Deployments / Services / Events / Diagnosis** 를 조회합니다
 5. 검색창에 키워드를 입력하거나 네임스페이스 필터로 범위를 좁힙니다
 6. 행을 클릭해 상세 패널에서 전체 속성을 확인합니다
 7. 필요하면 **OpenCost 패널**에서 **values.yaml** / **install.sh** 를 내려받아 직접 설치합니다

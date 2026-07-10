@@ -38,7 +38,7 @@ import Screenshot from '@site/src/components/Screenshot';
 <Screenshot src="/screenshots/resources/topology-detail.png" alt="노드 포커스 모드 + 상세 패널" />
 
 ## 사용 방법
-1. 사이드바에서 **리소스 > 토폴로지**를 클릭합니다.
+1. 사이드바에서 **토폴로지**를 클릭합니다.
 2. 그래프가 그려지면 **MiniMap**과 **Controls**로 원하는 영역을 확대해 살펴봅니다.
 3. 특정 진입점만 보려면 상단 **CloudFront** 또는 **LB** 선택 상자에서 대상을 고릅니다.
 4. 찾는 리소스가 있으면 검색창에 이름 일부를 입력하고 자동완성 목록에서 선택합니다.

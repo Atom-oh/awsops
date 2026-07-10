@@ -19,7 +19,7 @@ import Screenshot from '@site/src/components/Screenshot';
 화면 왼쪽의 고정 영역으로, 모든 페이지로 이동하는 기본 내비게이션입니다.
 
 - **헤더**: **AWSops** 마크와 **한/EN** 언어 전환 토글
-- **상단 고정 메뉴**: **개요(Overview)**, **AI 진단**, **어시스턴트(Assistant)**, **작업(Jobs)**, **비용(Cost)**, **Bedrock**, **토폴로지(Topology)**, **커스텀 에이전트(Custom Agents)**, **데이터소스(Datasources)**
+- **상단 고정 메뉴**: **개요(Overview)**, **AI 진단**, **어시스턴트(Assistant)**, **작업(Jobs)**, **비용(Cost)**, **Bedrock**, **토폴로지(Topology)**, **보안(Security)**, **컴플라이언스(Compliance)**, **연동(Integrations)**. **커스텀 에이전트**는 사이드바에 직접 노출되지 않고 **연동 > Agents & Skills** 탭의 링크로 들어갑니다.
 - **리소스 인벤토리 그룹**: 그 아래로 **Compute**(EKS, EC2, Lambda, ECS Clusters, ECS Tasks, ECR), **Storage & DB**, **Network**, **Security**, **Monitoring** 그룹이 이어집니다
 - **푸터**: 로그인한 사용자 정보와 **로그아웃(Sign out)**, 리전/연결 상태, 그리고 테마 선택기
 - 현재 보고 있는 페이지는 하이라이트로 표시됩니다
