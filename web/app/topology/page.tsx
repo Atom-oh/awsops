@@ -286,15 +286,19 @@ export default function TopologyPage() {
   // EKS/ECS cluster names, read off the same target-node meta.cluster the detail panel already
   // shows (set by fetchEksIpMap / ecsIpMap) — one option per distinct cluster, labeled by backend kind.
   const clusterOptions = useMemo(() => {
-    const seen = new Map<string, string>(); // cluster name -> resolved kind (eks|ecs)
+    // Keyed by `${resolved}:${cluster}`, not cluster name alone — an EKS and an ECS cluster can
+    // share the same name, and a name-only key would merge them into one option/filter value.
+    const seen = new Map<string, { cluster: string; resolved: string }>();
     for (const n of full.nodes) {
       if (n.kind !== 'target') continue;
       const cluster = n.meta?.cluster;
-      if (typeof cluster === 'string' && cluster && !seen.has(cluster)) {
-        seen.set(cluster, String(n.meta?.resolved ?? ''));
+      if (typeof cluster === 'string' && cluster) {
+        const resolved = String(n.meta?.resolved ?? '');
+        const key = `${resolved}:${cluster}`;
+        if (!seen.has(key)) seen.set(key, { cluster, resolved });
       }
     }
-    return [...seen.entries()].map(([cluster, resolved]) => ({ cluster, resolved }));
+    return [...seen.entries()].map(([key, v]) => ({ key, ...v }));
   }, [full]);
 
   const { nodes, edges } = useMemo(() => {
@@ -304,7 +308,7 @@ export default function TopologyPage() {
     // ancestor (route53→cloudfront→lb→tg→target), so the request path into the cluster stays
     // legible. Ancestors are found by walking edges backward (target→source) from the matches.
     if (clusterFilter) {
-      const matches = gFull.nodes.filter((n) => n.kind === 'target' && n.meta?.cluster === clusterFilter);
+      const matches = gFull.nodes.filter((n) => n.kind === 'target' && `${n.meta?.resolved ?? ''}:${n.meta?.cluster ?? ''}` === clusterFilter);
       const incoming = new Map<string, string[]>();
       for (const e of gFull.edges) {
         (incoming.get(e.target) ?? incoming.set(e.target, []).get(e.target)!).push(e.source);
@@ -527,7 +531,7 @@ export default function TopologyPage() {
             <select className={selectCls} value={clusterFilter} onChange={onCluster}>
               <option value="">Cluster: 전체</option>
               {clusterOptions.map((c) => (
-                <option key={c.cluster} value={c.cluster}>{c.resolved ? `${c.resolved.toUpperCase()} · ${c.cluster}` : c.cluster}</option>
+                <option key={c.key} value={c.key}>{c.resolved ? `${c.resolved.toUpperCase()} · ${c.cluster}` : c.cluster}</option>
               ))}
             </select>
             <RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />
