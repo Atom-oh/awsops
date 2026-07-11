@@ -71,6 +71,18 @@ describe('rebuildTraceGraph aggregation', () => {
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('COMMIT'));
   });
 
+  it('stamps meta.cluster on the workload node from the span k8s.cluster.name (deep-link bridge)', async () => {
+    const withCluster: TraceSpan[] = [
+      span({ traceId: 'x', spanId: 'p', service: 'checkout', k8sNamespace: 'shop', k8sDeployment: 'checkout', k8sCluster: 'mall-apne2-az-a' }),
+    ];
+    const { pool, params } = mockPool();
+    await rebuildTraceGraph(pool as never, [new FakeTraceSource(withCluster, true)], 'RUNC');
+    // node upsert params = [id, kind, label, metaJson, runId, class]; find the workload node row.
+    const wl = params.find((p) => p[0] === 'workload:shop/checkout');
+    expect(wl).toBeTruthy();
+    expect(JSON.parse(String(wl![3])).cluster).toBe('mall-apne2-az-a');
+  });
+
   it('confidence is normalized to (0,1] by the max edge count (spec contract, M3)', async () => {
     // checkout→orders twice (calls count 2), orders→postgres once (queries count 1).
     // max edge count = 2 → calls normalizes to "1", queries to "0.5"; every confidence ∈ (0,1].

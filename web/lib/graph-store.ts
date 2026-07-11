@@ -259,7 +259,11 @@ export async function rebuildTraceGraph(
       if (!nodes.has(id)) {
         // workload eks_ref/tg_ref bridge refs are best-effort; EKS node data isn't readily queryable
         // here (pods are live in-cluster, not synced). TODO(trace-topology): resolve eks_ref/tg_ref.
+        // meta.cluster (from the span's k8s.cluster.name resource attr) lets the service-map UI
+        // deep-link to /topology?cluster=eks:<name> — the nav bridge to the main flow topology's
+        // cluster filter (which reads the same cluster name off live-resolved EKS target nodes).
         const meta: Record<string, unknown> = { namespace: s.k8sNamespace, deployment: s.k8sDeployment, pods: [] as string[] };
+        if (s.k8sCluster) meta.cluster = s.k8sCluster;
         nodes.set(id, { id, kind: 'workload', label: `${s.k8sNamespace}/${s.k8sDeployment}`, meta });
       }
       if (s.k8sPod) {

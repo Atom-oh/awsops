@@ -225,6 +225,7 @@ export default function TopologyPage() {
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
   const [cappedTypes, setCappedTypes] = useState<string[]>([]);
   const [entryId, setEntryId] = useState<string>('');
+  const [clusterFilter, setClusterFilter] = useState<string>('');
   const [selected, setSelected] = useState<FlowNode | null>(null);
   const [query, setQuery] = useState('');
   const [netMaps, setNetMaps] = useState<NetMaps>(emptyNetMaps);
@@ -265,6 +266,14 @@ export default function TopologyPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Deep-link from the service map (/topology/services): ?cluster=<resolved:name> seeds the cluster
+  // filter so a trace workload click lands on this cluster's request path. Read once on mount from
+  // window.location (no useSearchParams → no Suspense boundary needed for the standalone build).
+  useEffect(() => {
+    const c = new URLSearchParams(window.location.search).get('cluster');
+    if (c) setClusterFilter(c);
+  }, []);
+
   const dark = useTheme() === 'dark';
 
   const full = useMemo(() => (data ? buildFlowGraph(data) : { nodes: [], edges: [] }), [data]);
@@ -283,8 +292,44 @@ export default function TopologyPage() {
     lb: full.nodes.filter((n) => n.kind === 'alb' || n.kind === 'nlb'),
   }), [full]);
 
+  // EKS/ECS cluster names, read off the same target-node meta.cluster the detail panel already
+  // shows (set by fetchEksIpMap / ecsIpMap) — one option per distinct cluster, labeled by backend kind.
+  const clusterOptions = useMemo(() => {
+    // Keyed by `${resolved}:${cluster}`, not cluster name alone — an EKS and an ECS cluster can
+    // share the same name, and a name-only key would merge them into one option/filter value.
+    const seen = new Map<string, { cluster: string; resolved: string }>();
+    for (const n of full.nodes) {
+      if (n.kind !== 'target') continue;
+      const cluster = n.meta?.cluster;
+      if (typeof cluster === 'string' && cluster) {
+        const resolved = String(n.meta?.resolved ?? '');
+        const key = `${resolved}:${cluster}`;
+        if (!seen.has(key)) seen.set(key, { cluster, resolved });
+      }
+    }
+    return [...seen.entries()].map(([key, v]) => ({ key, ...v }));
+  }, [full]);
+
   const { nodes, edges } = useMemo(() => {
-    const gFull = filterFromEntry(full, entryId || null);
+    let gFull = filterFromEntry(full, entryId || null);
+
+    // Cluster filter: keep target nodes belonging to the selected cluster + every upstream
+    // ancestor (route53→cloudfront→lb→tg→target), so the request path into the cluster stays
+    // legible. Ancestors are found by walking edges backward (target→source) from the matches.
+    if (clusterFilter) {
+      const matches = gFull.nodes.filter((n) => n.kind === 'target' && `${n.meta?.resolved ?? ''}:${n.meta?.cluster ?? ''}` === clusterFilter);
+      const incoming = new Map<string, string[]>();
+      for (const e of gFull.edges) {
+        (incoming.get(e.target) ?? incoming.set(e.target, []).get(e.target)!).push(e.source);
+      }
+      const keep = new Set(matches.map((n) => n.id));
+      const queue = matches.map((n) => n.id);
+      while (queue.length) {
+        const cur = queue.shift()!;
+        for (const src of incoming.get(cur) ?? []) if (!keep.has(src)) { keep.add(src); queue.push(src); }
+      }
+      gFull = { nodes: gFull.nodes.filter((n) => keep.has(n.id)), edges: gFull.edges.filter((e) => keep.has(e.source) && keep.has(e.target)) };
+    }
 
     // Focus: clicking a node collapses the view to ITS connected path (up + downstream), then
     // re-lays-out and re-centers (imperative fitView in the effect below) so the active subgraph
@@ -338,7 +383,7 @@ export default function TopologyPage() {
       style: e.confidence === 'inferred' ? { strokeDasharray: '4 4' } : {},
     }));
     return { nodes, edges };
-  }, [full, entryId, dark, selected]);
+  }, [full, entryId, clusterFilter, dark, selected]);
 
   // Re-center imperatively (NOT by remounting — a remount destroys the user's pan/zoom and makes
   // dragging feel broken). Keep one mounted instance; refit when the entry filter or focus changes.
@@ -347,7 +392,7 @@ export default function TopologyPage() {
   useEffect(() => {
     const id = requestAnimationFrame(() => rfRef.current?.fitView({ padding: 0.2, duration: 300, maxZoom: 1.2 }));
     return () => cancelAnimationFrame(id);
-  }, [entryId, selected?.id]);
+  }, [entryId, clusterFilter, selected?.id]);
 
   // Detail for the clicked node: resource nodes show their full inventory row (every field —
   // vpc, subnet, tags …); target/origin nodes synthesize a small detail from their meta.
@@ -379,6 +424,7 @@ export default function TopologyPage() {
   }, [selected, netMaps]);
 
   const onEntry = (e: React.ChangeEvent<HTMLSelectElement>) => setEntryId(e.target.value);
+  const onCluster = (e: React.ChangeEvent<HTMLSelectElement>) => { setClusterFilter(e.target.value); setSelected(null); };
   // max-w bounds the select so a long CloudFront/LB option label can't blow the toolbar width out
   // and crush the PageHeader title/subtitle (which would wrap the subtitle one char per line).
   const selectCls = 'max-w-[170px] rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700';
@@ -490,6 +536,12 @@ export default function TopologyPage() {
             <select className={selectCls} value={entryOptions.lb.some((n) => n.id === entryId) ? entryId : ''} onChange={onEntry}>
               <option value="">LB: 전체</option>
               {entryOptions.lb.map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}
+            </select>
+            <select className={selectCls} value={clusterFilter} onChange={onCluster}>
+              <option value="">Cluster: 전체</option>
+              {clusterOptions.map((c) => (
+                <option key={c.key} value={c.key}>{c.resolved ? `${c.resolved.toUpperCase()} · ${c.cluster}` : c.cluster}</option>
+              ))}
             </select>
             <RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />
             <Link href="/topology/services" className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-600 hover:bg-ink-50">

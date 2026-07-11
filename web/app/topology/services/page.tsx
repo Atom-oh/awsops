@@ -30,6 +30,12 @@ const relLabel: Record<string, string> = { calls: 'calls', queries: 'queries', r
 const infraRefOf = (meta?: Record<string, unknown>): string | undefined =>
   typeof meta?.infra_ref === 'string' ? meta.infra_ref : undefined;
 
+// workload-node meta carries cluster (from the span's k8s.cluster.name) → deep-link to the main
+// flow topology filtered to that EKS cluster (its filter key is `${resolved}:${cluster}`, resolved
+// = 'eks' for live-resolved EKS target nodes).
+const clusterOf = (meta?: Record<string, unknown>): string | undefined =>
+  typeof meta?.cluster === 'string' && meta.cluster ? meta.cluster : undefined;
+
 export default function ServiceMapPage() {
   const router = useRouter();
   const [graph, setGraph] = useState<Graph | null>(null);
@@ -63,7 +69,7 @@ export default function ServiceMapPage() {
     const nodes: Node[] = graph.nodes.map((n) => {
       const [bg, border] = COLORS[n.kind] ?? RESOURCE;
       const p = pos[n.id] ?? { x: 0, y: 0 };
-      const clickable = n.kind === 'db' && !!infraRefOf(n.meta);
+      const clickable = (n.kind === 'db' && !!infraRefOf(n.meta)) || (n.kind === 'workload' && !!clusterOf(n.meta));
       return {
         id: n.id,
         position: { x: p.x, y: p.y },
@@ -87,8 +93,11 @@ export default function ServiceMapPage() {
   }, [graph]);
 
   const onNodeClick = (_: unknown, node: Node) => {
-    const ref = infraRefOf(metaById.get(node.id));
-    if (ref) router.push(`/topology/resource/${encodeURIComponent(ref)}`);
+    const meta = metaById.get(node.id);
+    const ref = infraRefOf(meta);
+    if (ref) { router.push(`/topology/resource/${encodeURIComponent(ref)}`); return; }
+    const cluster = clusterOf(meta);
+    if (cluster) router.push(`/topology?cluster=${encodeURIComponent(`eks:${cluster}`)}`);
   };
 
   return (

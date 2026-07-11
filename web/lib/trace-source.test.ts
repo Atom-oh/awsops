@@ -53,6 +53,7 @@ describe('mapOtelRow (real nested-map otel_traces shape)', () => {
       ResourceAttributes: {
         'service.name': 'checkout',
         'k8s.namespace.name': 'shop', 'k8s.pod.name': 'checkout-xyz', 'k8s.deployment.name': 'checkout',
+        'k8s.cluster.name': 'mall-apne2-az-a',
       },
       SpanAttributes: { 'db.system': 'postgresql', 'db.name': 'orders', 'server.address': 'aurora.example.rds' },
     };
@@ -61,6 +62,7 @@ describe('mapOtelRow (real nested-map otel_traces shape)', () => {
       traceId: 'abc', spanId: 'def', parentSpanId: 'par', service: 'checkout',
       dbSystem: 'postgresql', dbName: 'orders', dbHost: 'aurora.example.rds',
       k8sNamespace: 'shop', k8sPod: 'checkout-xyz', k8sDeployment: 'checkout',
+      k8sCluster: 'mall-apne2-az-a',
       durationMs: 5,
     });
     expect(s.startMs).toBe(Date.parse('2026-06-25T00:00:00.000Z'));
