@@ -24,7 +24,9 @@ service-graph metric exists; Loki structurally cannot contribute call-graph data
 editing this catalog forces a rebuild even when the datasource's schema is unchanged.
 """
 
-CATALOG_VERSION = "v1"
+# v2: db.table identifiers now quoted per-segment (`db`.`table`) — bump forces a catalog rebuild
+# so already-cached instances regenerate the corrected query (the v1 `db.table` form 404'd).
+CATALOG_VERSION = "v2"
 
 # The OTel ClickHouse exporter's default `otel_traces` column shape. A table matching this column
 # SET (regardless of its actual name) is treated as the span source.
