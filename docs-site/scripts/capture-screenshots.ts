@@ -152,8 +152,11 @@ async function login(page: Page): Promise<void> {
       }
     });
 
-    // Wait for redirect back to app (dark-fallback path only — v2 defaults to /login, ADR-042)
-    await page.waitForURL((u) => !String(u).includes('amazoncognito.com'), { timeout: 60000 });
+    // Wait for redirect back to app (dark-fallback path only — v2 defaults to /login, ADR-042).
+    // Match against BASE_URL's own origin, not just "amazoncognito.com" — a custom Cognito
+    // domain (CLAUDE.md's `a-ops-v2-auth-*`) wouldn't contain that substring, which would make
+    // this predicate true immediately on the auth page itself instead of after the redirect.
+    await page.waitForURL((u) => String(u).startsWith(BASE_URL), { timeout: 60000 });
     console.log('Login successful, redirected to app.');
   } else if (currentUrl.includes('/login') || (await page.locator('input[type="password"]').count()) > 0) {
     // v2's self-hosted /login form (ADR-042) — email + password + a locale-dependent submit
