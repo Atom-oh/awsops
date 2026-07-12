@@ -12,17 +12,19 @@ interface Route {
   toolList?: string[];
 }
 
+// v2: 9 routed sections (8 AWS-domain gateways + external-obs, chat key "observability").
+// Tool counts from the full catalog (scripts/v2/agentcore/catalog.py) — actual activation is
+// staged behind agentcore_enabled/integrations_enabled (P3).
 const ROUTES: Route[] = [
-  { priority: 1, name: 'code', color: THEME.orange, target: 'Code Interpreter', tools: 1, toolList: ['Python sandbox execution'] },
-  { priority: 2, name: 'network', color: THEME.cyan, target: 'Network Gateway', tools: 17, toolList: ['Reachability Analyzer', 'Flow Logs', 'TGW', 'VPN', 'Firewall', 'Route Tables', 'Security Groups', 'NACLs', 'VPC Peering', 'Endpoints'] },
-  { priority: 3, name: 'container', color: THEME.green, target: 'Container Gateway', tools: 24, toolList: ['EKS Clusters', 'ECS Services', 'Fargate', 'Istio', 'Pod Logs', 'Node Status', 'Deployments', 'Services', 'ConfigMaps', 'Secrets'] },
-  { priority: 4, name: 'iac', color: THEME.purple, target: 'IaC Gateway', tools: 12, toolList: ['CDK Synth', 'CloudFormation', 'Terraform', 'Stack Drift', 'Change Sets', 'Template Validation'] },
-  { priority: 5, name: 'data', color: THEME.cyan, target: 'Data Gateway', tools: 24, toolList: ['DynamoDB', 'RDS', 'ElastiCache', 'MSK', 'OpenSearch', 'Redshift', 'S3 Select', 'Athena', 'Glue'] },
-  { priority: 6, name: 'security', color: THEME.red, target: 'Security Gateway', tools: 14, toolList: ['IAM Analyzer', 'Policy Simulator', 'GuardDuty', 'Security Hub', 'Inspector', 'Macie', 'KMS'] },
-  { priority: 7, name: 'monitoring', color: THEME.orange, target: 'Monitoring Gateway', tools: 16, toolList: ['CloudWatch Metrics', 'CloudWatch Logs', 'CloudTrail', 'X-Ray', 'Alarms', 'Dashboards', 'Insights'] },
-  { priority: 8, name: 'cost', color: THEME.green, target: 'Cost Gateway', tools: 9, toolList: ['Cost Explorer', 'Budgets', 'Savings Plans', 'Reserved Instances', 'Cost Anomalies', 'Forecasts'] },
-  { priority: 9, name: 'aws-data', color: THEME.cyan, target: 'Steampipe SQL', tools: 380, toolList: ['380+ AWS tables', 'Real-time queries', 'Bedrock analysis'] },
-  { priority: 10, name: 'general', color: THEME.muted, target: 'Ops Gateway', tools: 9, toolList: ['EC2', 'Lambda', 'S3', 'SNS', 'SQS', 'EventBridge', 'Step Functions'] },
+  { priority: 1, name: 'network', color: THEME.cyan, target: 'Network Gateway', tools: 16, toolList: ['Reachability Analyzer', 'Flow Logs', 'TGW', 'VPN', 'Network Firewall', 'ENI lookup'] },
+  { priority: 2, name: 'container', color: THEME.green, target: 'Container Gateway', tools: 12, toolList: ['EKS Clusters', 'ECS Services', 'Fargate', 'CloudWatch Container Insights'] },
+  { priority: 3, name: 'data', color: THEME.purple, target: 'Data Gateway', tools: 28, toolList: ['DynamoDB', 'RDS/Aurora', 'ElastiCache', 'MSK', 'ClickHouse'] },
+  { priority: 4, name: 'security', color: THEME.red, target: 'Security Gateway', tools: 14, toolList: ['IAM users/roles/policies', 'Policy simulation', 'Account security summary'] },
+  { priority: 5, name: 'cost', color: THEME.orange, target: 'Cost Gateway', tools: 14, toolList: ['Cost Explorer', 'Budgets', 'Forecast', 'Compute Optimizer', 'RI/SP recommendations'] },
+  { priority: 6, name: 'monitoring', color: THEME.cyan, target: 'Monitoring Gateway', tools: 40, toolList: ['CloudWatch Metrics/Logs', 'CloudTrail', 'OpenSearch', 'Prometheus', 'Loki', 'Tempo', 'Mimir'] },
+  { priority: 7, name: 'iac', color: THEME.purple, target: 'IaC Gateway', tools: 12, toolList: ['CloudFormation', 'CDK docs', 'Terraform AWS/AWSCC providers'] },
+  { priority: 8, name: 'ops', color: THEME.muted, target: 'Ops Gateway', tools: 5, toolList: ['AWS documentation search/read'] },
+  { priority: 9, name: 'observability', color: THEME.green, target: 'External-Obs', tools: 3, toolList: ['Notion (external integrations)'] },
 ];
 
 const CANVAS_HEIGHT = 550;
@@ -44,7 +46,7 @@ export default function AgentCoreFlow(): React.ReactElement {
 
     const centerX = width / 2;
     const boxWidth = 200 * scale;
-    const routeBoxW = Math.min(90 * scale, (width - 40 * scale) / 10 - 8 * scale);
+    const routeBoxW = Math.min(90 * scale, (width - 40 * scale) / ROUTES.length - 8 * scale);
     const routeSpacing = 8 * scale;
     const totalRoutesWidth = ROUTES.length * routeBoxW + (ROUTES.length - 1) * routeSpacing;
     const routesStartX = (width - totalRoutesWidth) / 2;
@@ -138,7 +140,7 @@ export default function AgentCoreFlow(): React.ReactElement {
     const routerBoxX = centerX - routerBoxW / 2;
     drawBox(routerBoxX, routerBoxY, routerBoxW, routerBoxH, THEME.purple);
     drawText('AI Router', centerX, routerBoxY + 20 * scale, THEME.text, 14);
-    drawText('10-Priority Route Classification (Sonnet)', centerX, routerBoxY + 42 * scale, THEME.muted, 10);
+    drawText(`${ROUTES.length}-Section Routing (Haiku 4.5, ADR-038)`, centerX, routerBoxY + 42 * scale, THEME.muted, 10);
 
     // Arrows: Router -> Routes (fan out)
     for (let i = 0; i < ROUTES.length; i++) {
@@ -177,7 +179,7 @@ export default function AgentCoreFlow(): React.ReactElement {
       drawText(route.name, x + routeBoxW / 2, y + 30 * scale, THEME.text, 10);
 
       // Tool count badge
-      const toolText = route.name === 'aws-data' ? '380+' : String(route.tools);
+      const toolText = String(route.tools);
       const badgeW = (toolText.length * 6 + 12) * scale;
       const badgeX = x + routeBoxW / 2 - badgeW / 2;
       const badgeY = y + routeBoxH - 22 * scale;
@@ -196,7 +198,7 @@ export default function AgentCoreFlow(): React.ReactElement {
     const runtimeX = centerX - runtimeW / 2;
     drawBox(runtimeX, runtimeY, runtimeW, runtimeH, THEME.green);
     drawText('AgentCore Runtime', centerX, runtimeY + 25 * scale, THEME.text, 16);
-    drawText('Strands Agent Framework + Claude Sonnet 4.6 / Opus 4.8', centerX, runtimeY + 50 * scale, THEME.muted, 11);
+    drawText('Strands Agent Framework + Claude Sonnet 4.6', centerX, runtimeY + 50 * scale, THEME.muted, 11);
 
     // Stats badges
     const badge1X = centerX - 80 * scale;
@@ -206,12 +208,12 @@ export default function AgentCoreFlow(): React.ReactElement {
     ctx.fillStyle = THEME.cyan + '33';
     roundRect(ctx, badge1X - 50 * scale, badgeY - 10 * scale, 100 * scale, 20 * scale, 4 * scale);
     ctx.fill();
-    drawText('125 MCP Tools', badge1X, badgeY, THEME.cyan, 10);
+    drawText('144 MCP Tools', badge1X, badgeY, THEME.cyan, 10);
 
     ctx.fillStyle = THEME.orange + '33';
     roundRect(ctx, badge2X - 50 * scale, badgeY - 10 * scale, 100 * scale, 20 * scale, 4 * scale);
     ctx.fill();
-    drawText('19 Lambda', badge2X, badgeY, THEME.orange, 10);
+    drawText('23 Lambda', badge2X, badgeY, THEME.orange, 10);
 
     // 5. Draw particle
     const particleRadius = 6 * scale;

@@ -1479,13 +1479,9 @@ export async function POST(request: NextRequest) {
           const finalContent = cleanedResponse || agentResponse;
           // Simulate streaming for AgentCore responses / AgentCore 응답 타이핑 시뮬레이션
           await simulateStreaming(finalContent, send);
-          // model is 'sonnet-4.6' here, not modelKey — this is the AgentCore Runtime path, whose actual
-          // model (agent/agent.py's model_id) hasn't been migrated yet, regardless of the modelKey the
-          // caller requested for the direct-Bedrock fallback below. recordAndSave and send('done') must
-          // agree, or cost/usage attribution disagrees with what the user actually sees.
-          recordAndSave({ route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}`, question: lastMessage, summary: finalContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: 'sonnet-4.6' });
+          recordAndSave({ route, gateway, responseTimeMs, usedTools, success: true, via: `AgentCore → ${config.display}`, question: lastMessage, summary: finalContent, userId: currentUser.email, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, model: modelKey || 'sonnet-5' });
           send('done', {
-            content: finalContent, model: 'sonnet-4.6',
+            content: finalContent, model: 'sonnet-5',
             via: `AgentCore → ${config.display}`, queriedResources: [`${gateway}-gateway`], route, routes,
             usedTools,
             inputTokens: totalInputTokens, outputTokens: totalOutputTokens,

@@ -1,12 +1,4 @@
 {
-  "project": "awsops-dashboard",
-  "description": "AWS/K8s operations dashboard with Steampipe, Next.js, Bedrock AgentCore",
-  "defaultModel": "claude-sonnet-4-6",
-  "contextFiles": [
-    "CLAUDE.md",
-    "scripts/ARCHITECTURE.md",
-    "docs/TROUBLESHOOTING.md"
-  ],
   "permissions": {
     "allow": [],
     "deny": [
@@ -24,13 +16,6 @@
       "Bash(wget*|*bash:*)",
       "Bash(wget*|*sh:*)"
     ]
-  },
-  "skills": {
-    "code-review": ".claude/skills/code-review/SKILL.md",
-    "refactor": ".claude/skills/refactor/SKILL.md",
-    "release": ".claude/skills/release/SKILL.md",
-    "sync-docs": ".claude/skills/sync-docs/SKILL.md",
-    "sync-guides": ".claude/skills/sync-guides/SKILL.md"
   },
   "hooks": {
     "SessionStart": [
