@@ -7,7 +7,7 @@
 // Each applied migration is stamped with a release version (app_version column): the migration's
 //   `-- since: <semver>` header if present, else APP_VERSION env, else web/package.json "version".
 // Creds from `terraform output -raw aurora_secret_arn` → Secrets Manager (mirrors scripts/13-deploy-aurora.sh).
-// pg is resolved from the repo-root node_modules (also a web/ dep). Requires PostgreSQL DDL transactionality.
+// pg is resolved from scripts/v2/node_modules (also a web/ dep, separately). Requires PostgreSQL DDL transactionality.
 import { execSync } from 'node:child_process';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

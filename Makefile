@@ -17,7 +17,7 @@ help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 deps: ## Install node deps required by the configurator (idempotent; first run only)
-	@[ -d node_modules/@inquirer/prompts ] || npm install
+	@[ -d scripts/v2/node_modules/@inquirer/prompts ] || npm ci --prefix scripts/v2
 
 configure: deps ## Interactive TUI: choose new/existing VPC, domain, bucket → terraform.tfvars + backend.hcl
 	@node scripts/v2/configure.mjs
