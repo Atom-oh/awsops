@@ -13,12 +13,12 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **페이지**: 40개 리소스 페이지 (EC2, EBS, S3, VPC, IAM, Lambda, RDS, ECS, MSK, OpenSearch, Inventory, Datasources, AI Diagnosis 등)
   (40 resource pages)
 - 멀티 어카운트 지원 (AccountSelector, AccountContext)
-- Bedrock 모델 사용량 모니터링, i18n 다국어(ko/en) 지원
+- Bedrock 모델 사용량 모니터링, i18n 다국어(ko/en/zh) 지원
 - 외부 데이터소스 연동 (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
 
 ### Data Layer (`src/lib/`)
-- **Steampipe**: Embedded PostgreSQL on port 9193 — 380+ AWS tables, 60+ K8s tables
-- **Connection**: pg Pool (max 5, 120s timeout, sequential batch of 5)
+- **Steampipe**: Embedded PostgreSQL on port 9193 — 380+ AWS tables, 60+ K8s tables. Managed by systemd `steampipe.service` (Restart=always, `scripts/13-setup-steampipe-systemd.sh`)
+- **Connection**: pg Pool (max 10, 30s statement timeout + 40s client-side hard timeout for FDW hangs, sequential batch of 5)
 - **Cache**: node-cache with 5-minute TTL
 - **쿼리**: `src/lib/queries/`에 25개 SQL 쿼리 파일 (25 SQL query files)
 - **Inventory**: Resource count snapshots (data/inventory/, zero extra queries)
@@ -42,8 +42,8 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **Memory Store**: 대화 이력 영구 저장 (사용자별, 365일 보관) / Conversation history persistence (per-user, 365-day retention)
 
 ### Auth & Delivery
-- **Auth**: Cognito User Pool + Lambda@Edge (Node.js 20, us-east-1)
-- **CDN**: CloudFront → ALB → EC2 (t4g.2xlarge), CachePolicy: CACHING_DISABLED
+- **Auth**: Cognito User Pool + Lambda@Edge (us-east-1) — deployed via `scripts/05-setup-cognito.sh` (Python 3.12); the CDK `cognito-stack.ts` variant uses Node.js 20
+- **CDN**: CloudFront → ALB → EC2 (Graviton, default t4g.2xlarge / prod m7g.2xlarge), CachePolicy: CACHING_DISABLED
 - **IaC**: CDK (`infra-cdk/`) — AwsopsStack, CognitoStack, AgentCoreStack(placeholder)
 
 ## Data Flow
@@ -59,7 +59,7 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 - **Monitoring**: CloudWatch metrics, CloudTrail audit logs
 - **SSM**: VPC Endpoints (ssm, ssmmessages, ec2messages) for private access
 
-## Deployment (10 Steps)
+## Deployment
 
 | Step | Script | Description |
 |------|--------|-------------|
@@ -72,10 +72,15 @@ AWSops Dashboard (v1.8.0) is an AWS + Kubernetes operations dashboard providing 
 | 6b | `06b-setup-agentcore-gateway.sh` | 8 AgentCore Gateways (role-based MCP routing) |
 | 6c | `06c-setup-agentcore-tools.sh` | 19 Lambda + create_targets.py → 125 MCP tools |
 | 6d | `06d-setup-agentcore-interpreter.sh` | Code Interpreter |
+| 6e | `06e-setup-agentcore-config.sh` | AgentCore config apply (ARN, Gateway URL) |
 | 6f | `06f-setup-agentcore-memory.sh` | Memory Store (대화 이력 365일 보관) |
 | 7 | `07-setup-opencost.sh` | Prometheus + OpenCost (EKS 비용 분석) |
 | 8 | `08-setup-cloudfront-auth.sh` | Lambda@Edge → CloudFront 연동 |
+| 9 | `09-start-all.sh` | Start all services (systemctl-aware) |
+| 10 | `10-stop-all.sh` | Stop all services (systemctl-aware) |
+| 11 | `11-verify.sh` | Health check verification |
 | 12 | `12-setup-multi-account.sh` | Multi-Account (Target account IAM role + Steampipe connection) |
+| 13 | `13-setup-steampipe-systemd.sh` | Steampipe systemd unit (Restart=always, boot-time start) |
 
 ## AgentCore Gateway Architecture
 
@@ -102,7 +107,8 @@ Route priority in `src/app/api/ai/route.ts`:
 6. Security keywords → Security Gateway
 7. Monitoring keywords → Monitoring Gateway
 8. Cost keywords → Cost Gateway
-9. AWS resource keywords → Steampipe + Bedrock Direct
-10. General questions → Ops Gateway (fallback → Bedrock Direct)
+9. External datasource keywords → Datasource route (Prometheus, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog)
+10. AWS resource keywords → Steampipe + Bedrock Direct (`aws-data`)
+11. General questions → Ops Gateway (fallback → Bedrock Direct)
 
 See also: `scripts/ARCHITECTURE.md` for detailed architecture diagrams.

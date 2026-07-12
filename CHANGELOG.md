@@ -13,6 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Manage Steampipe via systemd unit `steampipe.service` (Restart=always, boot-time start) — `scripts/13-setup-steampipe-systemd.sh`; watchdog restarts via `sudo systemctl` and start/stop scripts are systemctl-aware
+- Add Simplified Chinese (zh) support across dashboard and guide site (ko/en/zh)
+- Add SNS notification, auto-collect agents, and diagnosis overhaul ([#16](https://github.com/whchoi98/awsops/pull/16))
+- Add FinOps MCP Lambda, deployment script renumbering, and CDK updates ([#17](https://github.com/whchoi98/awsops/pull/17))
+- Add streaming Bedrock diagnosis with per-section progress updates and idle timeout
+
+### Fixed
+
+- Recover pg pool slots on Steampipe FDW hangs (40s client-side hard timeout) and auto-restart Steampipe via watchdog when stuck backends pile up
+- Harden zombie connection cleanup to survive Steampipe FDW hangs (standalone diagnostic client, multiline query matching)
+- Fix CIS benchmark "relation does not exist" error in single-account mode
+- Remove duplicate AI diagnosis menu item in sidebar
+- Restore dynamic reportBucket config and 30-minute stale timeout
+- Make S3 upload optional for AI diagnosis report
+
+### Security
+
+- Validate benchmark parameter against allowlist to block shell injection
+- Restore upstream datasources route with IPv6 SSRF protection and admin-only query enforcement
+
 ## [1.8.0] - 2026-04-07
 
 ### Added
@@ -300,6 +322,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+### Added
+
+- Steampipe systemd 유닛(`steampipe.service`) 관리 도입 (Restart=always, 부팅 시 자동 시작) — `scripts/13-setup-steampipe-systemd.sh`, watchdog의 `sudo systemctl` 재시작 및 시작/중지 스크립트 systemctl 대응
+- 대시보드/가이드 사이트 중국어 간체(zh) 지원 추가 (ko/en/zh)
+- SNS 알림, 자동 수집 에이전트, 진단 기능 개편 ([#16](https://github.com/whchoi98/awsops/pull/16))
+- FinOps MCP Lambda, 배포 스크립트 번호 재정리, CDK 업데이트 ([#17](https://github.com/whchoi98/awsops/pull/17))
+- 스트리밍 Bedrock 진단 도입 (섹션별 진행 표시, 유휴 타임아웃)
+
+### Fixed
+
+- Steampipe FDW 행에서 pg 풀 슬롯 회수 (40초 클라이언트 측 하드 타임아웃) 및 고착 백엔드 누적 시 watchdog의 Steampipe 자동 재시작
+- FDW 행에도 동작하는 좀비 커넥션 정리 강화 (독립 진단 클라이언트, 멀티라인 쿼리 매칭)
+- 단일 계정 모드 CIS 벤치마크 "relation does not exist" 오류 수정
+- 사이드바 AI 진단 메뉴 중복 항목 제거
+- reportBucket 동적 설정 및 30분 stale 타임아웃 복원
+- AI 진단 리포트 S3 업로드 선택화
+
+### Security
+
+- 벤치마크 파라미터 allowlist 검증으로 셸 인젝션 차단
+- datasources 라우트 업스트림 복원 (IPv6 SSRF 방지, 관리자 전용 쿼리)
 
 ## [1.8.0] - 2026-04-07
 

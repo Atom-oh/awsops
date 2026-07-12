@@ -18,10 +18,10 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 | 항목 | 수치 |
 |------|------|
 | 페이지 | 40 (/datasources, /ai-diagnosis 추가) |
-| 라우트 | 54 |
+| 라우트 | 57 (페이지 40 + API 17) |
 | SQL 쿼리 파일 | 25 |
-| API 라우트 | 16 (datasources, k8s, report 추가) |
-| 컴포넌트 | 18 (ReportMarkdown 추가) |
+| API 라우트 | 17 (datasources, k8s, report, notification 추가) |
+| 컴포넌트 | 19 (ReportMarkdown 추가) |
 | MCP 도구 | 125 (8 Gateway, 19 Lambda) |
 | AI 라우트 | 11 (datasource 라우트 추가) |
 | ADR | 8 (001-008) |
@@ -30,7 +30,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 
 ### 데이터 접근
 - 모든 쿼리는 `src/lib/steampipe.ts`의 **pg Pool**을 통해 실행 — Steampipe CLI 사용 금지
-- 풀 설정: `max: 5, statement_timeout: 120s, batchQuery: 5 sequential`
+- 풀 설정: `max: 10, statement_timeout: 30s, 클라이언트 측 하드 타임아웃 40s (FDW 행 대비), batchQuery: 5 sequential`
 - 결과는 node-cache를 통해 5분간 캐싱 (멀티 어카운트: 캐시키에 accountId 접두사)
 - `steampipe query "SQL"` CLI는 660배 느림 — 절대 사용 금지
 
@@ -101,8 +101,10 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `report-docx.ts` — DOCX 리포트 생성 (A4, TOC, 마크다운 변환)
 - `report-pptx.ts` — PPTX 리포트 생성 (WADD 스타일)
 - `report-scheduler.ts` — 자동 진단 스케줄러 (weekly/biweekly/monthly)
+- `sns-notification.ts` — SNS 이메일 알림 (토픽 생성, 구독 동기화, 진단 완료 발행)
+- `collectors/` — auto-collect 에이전트 6종 (db/eks/msk-optimize, idle-scan, incident, trace-analyze)
 
-### API 라우트 (`src/app/api/`, 16개)
+### API 라우트 (`src/app/api/`, 17개)
 - `ai/route.ts` — AI 라우팅 (11 routes, 멀티 라우트, SSE 스트리밍, 도구 추론, datasource 라우트)
 - `steampipe/route.ts` — Steampipe 쿼리 + Cost 가용성 + 인벤토리 (POST/GET/PUT)
 - `auth/route.ts` — 로그아웃 (HttpOnly 쿠키 서버 사이드 삭제)
@@ -119,6 +121,7 @@ Steampipe, Next.js 14, Amazon Bedrock AgentCore로 구축.
 - `datasources/route.ts` — 외부 데이터소스 CRUD + 쿼리 실행 + AI 쿼리 생성 (SSRF 방지)
 - `k8s/route.ts` — EKS kubeconfig 등록
 - `report/route.ts` — AI 종합 진단 리포트 생성 + S3 저장 + 스케줄링
+- `notification/route.ts` — SNS 이메일 알림 (토픽/구독 관리, 진단 완료 알림)
 
 ### 인프라
 - `infra-cdk/lib/awsops-stack.ts` — CDK 인프라 (VPC, EC2, ALB, CloudFront)
@@ -189,7 +192,7 @@ Step 13: 13-setup-steampipe-systemd.sh   Steampipe systemd 유닛 등록 (Restar
 - API 엔드포인트 변경 → `src/app/CLAUDE.md` 업데이트
 - 쿼리 파일 변경 → `src/lib/CLAUDE.md`, `src/lib/queries/CLAUDE.md` 업데이트
 - 컴포넌트 변경 → `src/components/CLAUDE.md` 업데이트
-- ADR 번호: `docs/decisions/ADR-*.md`에서 가장 높은 번호 + 1
+- ADR 번호: `docs/decisions/NNN-*.md` (예: `008-multi-account-support.md`)에서 가장 높은 번호 + 1
 
 ---
 
@@ -212,10 +215,10 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 | Item | Count |
 |------|-------|
 | Pages | 40 (incl. /datasources, /ai-diagnosis) |
-| Routes | 54 |
+| Routes | 57 (40 pages + 17 APIs) |
 | SQL Query Files | 25 |
-| API Routes | 16 (incl. datasources, k8s, report) |
-| Components | 18 (incl. ReportMarkdown) |
+| API Routes | 17 (incl. datasources, k8s, report, notification) |
+| Components | 19 (incl. ReportMarkdown) |
 | MCP Tools | 125 (8 Gateways, 19 Lambda) |
 | AI Routes | 11 (incl. datasource route) |
 | ADRs | 8 (001-008) |
@@ -224,7 +227,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 
 ### Data Access
 - ALL queries through `src/lib/steampipe.ts` pg Pool — NOT Steampipe CLI
-- Pool: max 5, 120s timeout, 5 sequential batch. Cache: 5min TTL (node-cache, accountId-prefixed keys)
+- Pool: max 10, 30s statement timeout + 40s client-side hard timeout (FDW hang guard), 5 sequential batch. Cache: 5min TTL (node-cache, accountId-prefixed keys)
 - Never use `steampipe query "SQL"` CLI — it's 660x slower
 
 ### Multi-Account
@@ -293,8 +296,10 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `report-docx.ts` — DOCX report generation (A4, TOC, markdown conversion)
 - `report-pptx.ts` — PPTX report generation (WADD-style)
 - `report-scheduler.ts` — Auto-diagnosis scheduler (weekly/biweekly/monthly)
+- `sns-notification.ts` — SNS email notifications (topic creation, subscription sync, diagnosis completion publish)
+- `collectors/` — 6 auto-collect agents (db/eks/msk-optimize, idle-scan, incident, trace-analyze)
 
-### API Routes (`src/app/api/`, 16 routes)
+### API Routes (`src/app/api/`, 17 routes)
 - `ai/route.ts` — AI routing (11 routes, multi-route, SSE streaming, tool inference, datasource route)
 - `steampipe/route.ts` — Steampipe queries + Cost availability + Inventory (POST/GET/PUT)
 - `auth/route.ts` — Logout (server-side HttpOnly cookie deletion)
@@ -311,6 +316,7 @@ AWS + Kubernetes operations dashboard with real-time resource monitoring, networ
 - `datasources/route.ts` — External datasource CRUD + query execution + AI query generation (SSRF-protected)
 - `k8s/route.ts` — EKS kubeconfig registration
 - `report/route.ts` — AI diagnosis report generation + S3 storage + scheduling
+- `notification/route.ts` — SNS email notifications (topic/subscription management, diagnosis completion alerts)
 
 ### Infrastructure
 - `infra-cdk/lib/awsops-stack.ts` — CDK infra (VPC, EC2, ALB, CloudFront)
@@ -381,4 +387,4 @@ Note: after Step 13, manage Steampipe only via `sudo systemctl {start|stop|resta
 - API endpoint changed → update `src/app/CLAUDE.md`
 - Query file changed → update `src/lib/CLAUDE.md`, `src/lib/queries/CLAUDE.md`
 - Component changed → update `src/components/CLAUDE.md`
-- ADR numbering: highest in `docs/decisions/ADR-*.md` + 1
+- ADR numbering: highest in `docs/decisions/NNN-*.md` (e.g. `008-multi-account-support.md`) + 1

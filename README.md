@@ -1,10 +1,10 @@
-# AWSops 대시보드 v1.7.0
+# AWSops 대시보드 v1.8.0
 
 > Steampipe, Next.js 14, Amazon Bedrock AgentCore 기반 AWS + Kubernetes 운영 대시보드
 
 실시간 AWS/K8s 리소스 모니터링, 네트워크 트러블슈팅, CIS 컴플라이언스 스캔, AI 기반 분석을 단일 대시보드에서 제공합니다.
 
-**현황**: 36 페이지 · 50 라우트 · 25 쿼리 파일 · 13 API 라우트 · 125 MCP 도구 (8 Gateway) · 17 컴포넌트
+**현황**: 40 페이지 · 57 라우트 · 25 쿼리 파일 · 17 API 라우트 · 125 MCP 도구 (8 Gateway) · 19 컴포넌트
 
 ---
 
@@ -41,8 +41,8 @@
 │                                                                              │
 │  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────────────────┐  │
 │  │  Next.js :3000  │  │  Steampipe :9193 │  │  VSCode :8888             │  │
-│  │  (36 Pages)     │──│  (Embedded PG)   │  │  (code-server)            │  │
-│  │  (13 APIs)      │  │  aws / k8s / trivy│  │                           │  │
+│  │  (40 Pages)     │──│  (Embedded PG)   │  │  (code-server)            │  │
+│  │  (17 APIs)      │  │  aws / k8s / trivy│  │                           │  │
 │  └─────────────────┘  └──────────────────┘  └────────────────────────────┘  │
 │  ┌─────────────────┐  ┌──────────────────────────────────────────────────┐  │
 │  │  Powerpipe      │  │  Docker (빌드 전용, 실행은 AgentCore 서비스)   │  │
@@ -68,7 +68,7 @@
 
 ## 기능
 
-### 대시보드 페이지 (35개) / Dashboard Pages (35 pages)
+### 대시보드 페이지 (40개) / Dashboard Pages (40 pages)
 
 | Category | Page | Path | Features / 기능 |
 |----------|------|------|-----------------|
@@ -98,6 +98,12 @@
 | | RDS | `/awsops/rds` | Instances, SG chaining, metrics |
 | | DynamoDB | `/awsops/dynamodb` | Tables, capacity, indexes |
 | | ElastiCache | `/awsops/elasticache` | Clusters, SG, metrics |
+| | OpenSearch | `/awsops/opensearch` | Domains, encryption, VPC, CloudWatch metrics |
+| | MSK | `/awsops/msk` | Clusters, broker nodes, CPU/Memory/Network metrics |
+| **Datasources** | Datasources | `/awsops/datasources` | 7 platforms CRUD, connection test, auth config / 7종 플랫폼 관리 |
+| | Explore | `/awsops/datasources/explore` | Direct query + AI query generation / 직접 쿼리 + AI 쿼리 생성 |
+| **Diagnosis** | AI Diagnosis | `/awsops/ai-diagnosis` | 15-section AI analysis, PPTX/DOCX/PDF export / 15섹션 AI 진단 |
+| | Report | `/awsops/ai-diagnosis/report` | Print-friendly report (A4, Print-to-PDF) / 인쇄용 리포트 |
 | **Monitoring** | Monitoring | `/awsops/monitoring` | CPU, Memory, Network, Disk I/O (date range) |
 | | CloudWatch | `/awsops/cloudwatch` | Alarms, state history |
 | | CloudTrail | `/awsops/cloudtrail` | Trails, events (read/write) |
@@ -111,7 +117,7 @@
 
 ## AI 어시스턴트
 
-### 10단계 라우트 분류
+### 11단계 라우트 분류 / 11-Route Classification
 
 The AI classifier analyzes user questions and routes them to 1-3 optimal gateways in parallel, then synthesizes the results.
 AI 분류기가 사용자 질문을 분석하여 1~3개의 최적 게이트웨이로 병렬 라우팅한 후 결과를 통합합니다.
@@ -134,6 +140,8 @@ User Question / 사용자 질문
     |-- CloudWatch, alarms, logs --> Monitoring --> AgentCore Runtime (16 tools)
     |
     |-- Cost, budget, savings   --> Cost --> AgentCore Runtime (9 tools)
+    |
+    |-- Prometheus, Loki, Tempo --> Datasource --> External platforms (7 types)
     |
     |-- EC2, S3, Lambda list    --> AWS Data --> Steampipe SQL + Bedrock analysis
     |
@@ -174,7 +182,7 @@ User Question / 사용자 질문
 ┌──────────┐     ┌─────────────────┐     ┌──────────────────────────────┐
 │ Browser  │     │ Next.js :3000   │     │ Steampipe (Embedded PG)     │
 │          │────>│ POST /awsops/   │────>│ :9193                        │
-│ 34 Pages │     │  api/steampipe  │     │                              │
+│ 40 Pages │     │  api/steampipe  │     │                              │
 │ Charts   │     │ batchQuery()    │     │ |- aws (380+ tables)  -> AWS API
 │ Tables   │<────│ 3 sequential    │<────│ |- k8s (60+ tables)   -> K8s API
 │          │     │ 5min TTL cache  │     │ |- trivy              -> CVE DB
@@ -220,7 +228,7 @@ User Question / 사용자 질문
 - AWS credentials configured
 - kubectl + kubeconfig (for K8s features / K8s 기능용)
 
-### 설치 (10단계)
+### 설치 / Installation
 
 ```bash
 # Step 0: Deploy CDK infrastructure (run from local machine)
@@ -236,7 +244,7 @@ aws ssm start-session --target <instance-id>
 # Step 1-3: Install dashboard (inside EC2)
 # 대시보드 설치 (EC2 내부)
 cd /home/ec2-user/awsops
-bash scripts/install-all.sh        # 01->02->03->10 auto execution
+bash scripts/install-all.sh        # 01->02->03->11 auto execution
 
 # Step 4: EKS access setup (optional)
 # EKS 접근 설정 (선택사항)
@@ -259,15 +267,22 @@ bash scripts/06-setup-agentcore.sh           # 6a->6b->6c->6d->6e batch
 # Step 8: Lambda@Edge -> CloudFront integration
 # Lambda@Edge -> CloudFront 연동
 bash scripts/08-setup-cloudfront-auth.sh
+
+# Step 13: Steampipe systemd unit (Restart=always, boot-time start)
+# Steampipe systemd 유닛 등록 (자동 재시작, 부팅 시 자동 시작)
+sudo bash scripts/13-setup-steampipe-systemd.sh
 ```
 
 ### 운영
 
 ```bash
-bash scripts/09-start-all.sh    # Start + status + URLs
-bash scripts/10-stop-all.sh     # Stop all services
+bash scripts/09-start-all.sh    # Start + status + URLs (systemctl-aware)
+bash scripts/10-stop-all.sh     # Stop all services (systemctl-aware)
 bash scripts/11-verify.sh       # Health check
 ```
+
+Step 13 적용 후 Steampipe는 `sudo systemctl {start|stop|restart} steampipe`로 관리합니다 — CLI `steampipe service stop`은 Restart=always가 자동으로 되돌립니다.
+After Step 13, manage Steampipe via `sudo systemctl {start|stop|restart} steampipe` — a bare CLI `steampipe service stop` is auto-undone by Restart=always.
 
 ---
 
@@ -276,7 +291,7 @@ bash scripts/11-verify.sh       # Health check
 ```
 awsops/
 ├── src/
-│   ├── app/                      # 35 pages + 13 API routes
+│   ├── app/                      # 40 pages + 17 API routes
 │   │   ├── page.tsx              # Dashboard home (18 StatsCards)
 │   │   ├── ai/                   # AI Assistant (SSE streaming)
 │   │   ├── ec2/                  # EC2 instances
@@ -305,10 +320,12 @@ awsops/
 │   │   ├── iam/                  # IAM users/roles
 │   │   ├── security/             # Security findings
 │   │   ├── compliance/           # CIS v1.5~v4.0 benchmarks
-│   │   └── api/                  # 13 API routes (ai, steampipe, auth, msk, rds, elasticache, opensearch, agentcore, code, benchmark, container-cost, eks-container-cost, bedrock-metrics)
-│   ├── components/               # 17 shared components (Sidebar, Charts, Table, K8s, AccountSelector, AccountBadge)
+│   │   ├── datasources/          # External datasources (7 platforms CRUD + Explore)
+│   │   ├── ai-diagnosis/         # AI comprehensive diagnosis (15 sections + print report)
+│   │   └── api/                  # 17 API routes (ai, steampipe, auth, msk, rds, elasticache, opensearch, agentcore, code, benchmark, container-cost, eks-container-cost, bedrock-metrics, datasources, k8s, report, notification)
+│   ├── components/               # 19 shared components (Sidebar, Charts, Table, K8s, AccountSelector, ReportMarkdown)
 │   ├── contexts/                # AccountContext (multi-account state)
-│   ├── lib/steampipe.ts          # pg Pool (NOT CLI) — max 5, 120s timeout, 5min cache
+│   ├── lib/steampipe.ts          # pg Pool (NOT CLI) — max 10, 30s statement + 40s client timeout, 5min cache
 │   ├── lib/resource-inventory.ts  # 리소스 인벤토리 스냅샷 (resource snapshots)
 │   ├── lib/cost-snapshot.ts      # Cost 데이터 스냅샷 (cost data fallback)
 │   ├── lib/app-config.ts         # 앱 설정 (app config: costEnabled)
@@ -336,10 +353,11 @@ awsops/
 │   ├── 06f-setup-agentcore-memory.sh  # Step 6f: Memory Store (365-day retention)
 │   ├── 07-setup-opencost.sh            # Step 7: Prometheus + OpenCost (EKS cost)
 │   ├── 08-setup-cloudfront-auth.sh # Step 8: Lambda@Edge
-│   ├── 12-setup-multi-account.sh  # Step 12: Multi-account setup
-│   ├── 09-start-all.sh           # Start all services
-│   ├── 10-stop-all.sh            # Stop all services
+│   ├── 09-start-all.sh           # Start all services (systemctl-aware)
+│   ├── 10-stop-all.sh            # Stop all services (systemctl-aware)
 │   ├── 11-verify.sh              # Health check
+│   ├── 12-setup-multi-account.sh  # Step 12: Multi-account setup
+│   ├── 13-setup-steampipe-systemd.sh  # Step 13: Steampipe systemd unit (Restart=always)
 │   ├── install-all.sh            # Auto: 01->02->03->10
 │   └── ARCHITECTURE.md           # Full architecture documentation
 ├── docs/                         # Guides + Troubleshooting
@@ -433,13 +451,13 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for details.
 
 ---
 
-# AWSops Dashboard v1.7.0 (English)
+# AWSops Dashboard v1.8.0 (English)
 
 > AWS + Kubernetes Operations Dashboard — Steampipe, Next.js 14, Amazon Bedrock AgentCore
 
 Real-time AWS/K8s resource monitoring, network troubleshooting, CIS compliance scanning, and AI-powered analysis in a single dashboard.
 
-**Stats**: 36 pages · 50 routes · 25 query files · 13 API routes · 125 MCP tools (8 Gateways) · 17 components
+**Stats**: 40 pages · 57 routes · 25 query files · 17 API routes · 125 MCP tools (8 Gateways) · 19 components
 
 ## Documentation
 

@@ -8,7 +8,7 @@
 - `resource-inventory.ts` — 리소스 인벤토리 스냅샷 (data/inventory/, 계정별 디렉토리)
 - `cost-snapshot.ts` — Cost 데이터 스냅샷 폴백 (data/cost/, 계정별)
 - `app-config.ts` — 앱 설정 (costEnabled, agentRuntimeArn, accounts[], customerLogo, adminEmails 등)
-- `cache-warmer.ts` — 백그라운드 캐시 프리워밍 (대시보드 23 + 모니터링 10 쿼리, 4분 주기, lazy-init)
+- `cache-warmer.ts` — 백그라운드 캐시 프리워밍 (대시보드 쿼리 38개, 4분 주기, lazy-init — 모니터링 쿼리는 풀 고갈 방지 위해 제외)
 - `agentcore-stats.ts` — AgentCore 호출 통계 + 모델별 토큰 사용량 추적 (data/agentcore-stats.json)
 - `agentcore-memory.ts` — 대화 이력 저장/검색, 사용자별 분리 (data/memory/)
 - `auth-utils.ts` — Cognito JWT에서 사용자 정보 추출 (Lambda@Edge 검증 후 payload 디코딩)
@@ -16,6 +16,10 @@
 - `report-pptx.ts` — PPTX 리포트 생성 (WADD 스타일: 타이틀바, 요약바, 2컬럼/카드 레이아웃, 인라인 테이블, 마크다운 파싱)
 - `report-docx.ts` — DOCX 리포트 생성 (docx 패키지, A4/라이트 테마, TOC, 마크다운→문단/테이블/블릿 변환, 헤더/푸터/페이지 번호)
 - `report-scheduler.ts` — 리포트 스케줄러 (주기적 자동 진단, weekly/biweekly/monthly, KST 기준, data/report-schedule.json)
+- `report-generator.ts` / `report-prompts.ts` — 진단 데이터 수집 오케스트레이터 / 15섹션 진단 프롬프트 정의
+- `datasource-client.ts` / `datasource-registry.ts` / `datasource-prompts.ts` — 외부 데이터소스 HTTP 클라이언트(7종, SSRF 방지) / 타입 레지스트리 / AI 쿼리 생성 프롬프트
+- `sns-notification.ts` — SNS 이메일 알림 (토픽 생성, 구독 동기화, 진단 완료 발행)
+- `collectors/` — auto-collect 에이전트 (db-optimize, eks-optimize, idle-scan, incident, msk-optimize, trace-analyze — 공통 `Collector` 인터페이스)
 - `queries/*.ts` — 25개 SQL 쿼리 파일 (ebs, msk, opensearch, container-cost, eks-container-cost, bedrock 포함)
 
 ## 규칙
@@ -39,7 +43,7 @@ Core libraries: Steampipe database connection, SQL query definitions, inventory,
 - `resource-inventory.ts` — Resource inventory snapshots (data/inventory/, per-account directories)
 - `cost-snapshot.ts` — Cost data snapshot fallback (data/cost/, per-account)
 - `app-config.ts` — App config (costEnabled, agentRuntimeArn, accounts[], customerLogo, adminEmails, etc.)
-- `cache-warmer.ts` — Background cache pre-warming (dashboard 23 + monitoring 10 queries, 4-min interval, lazy-init)
+- `cache-warmer.ts` — Background cache pre-warming (38 dashboard queries, 4-min interval, lazy-init — monitoring queries excluded to prevent pool exhaustion)
 - `agentcore-stats.ts` — AgentCore call stats + per-model token usage tracking (data/agentcore-stats.json)
 - `agentcore-memory.ts` — Conversation history save/search, per-user isolation (data/memory/)
 - `auth-utils.ts` — Extract Cognito user from JWT (payload decode after Lambda@Edge verification)
@@ -47,6 +51,10 @@ Core libraries: Steampipe database connection, SQL query definitions, inventory,
 - `report-pptx.ts` — PPTX report generation (WADD-style: title bars, summary bars, 2-column/card layouts, inline tables, markdown parsing)
 - `report-docx.ts` — DOCX report generation (docx package, A4/light theme, TOC, markdown→paragraph/table/bullet conversion, header/footer/page numbers)
 - `report-scheduler.ts` — Report scheduler (periodic auto-diagnosis, weekly/biweekly/monthly, KST-based, data/report-schedule.json)
+- `report-generator.ts` / `report-prompts.ts` — Diagnosis data collection orchestrator / 15-section diagnosis prompt definitions
+- `datasource-client.ts` / `datasource-registry.ts` / `datasource-prompts.ts` — External datasource HTTP clients (7 platforms, SSRF-protected) / type registry / AI query generation prompts
+- `sns-notification.ts` — SNS email notifications (topic creation, subscription sync, diagnosis completion publish)
+- `collectors/` — Auto-collect agents (db-optimize, eks-optimize, idle-scan, incident, msk-optimize, trace-analyze — shared `Collector` interface)
 - `queries/*.ts` — 25 SQL query files (incl. ebs, msk, opensearch, container-cost, eks-container-cost, bedrock)
 
 ## Rules
