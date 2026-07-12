@@ -4,14 +4,11 @@
 
 ## tests/ — Test Suite
 
-The project test suite. Two parallel tiers:
-- **Bash structure/hook tests** (`tests/hooks/test-*.sh`, `tests/structure/test-*.sh`) — exercise `.claude/hooks/` scripts (behavior + secret-pattern detection) and agent/plugin structure contracts. Run via `bash tests/run-all.sh`.
-- **TypeScript unit tests** (`tests/unit/*.test.ts`) — cover `src/lib/` alert logic (correlation, knowledge, types, webhook) and CDK alert infra. Run via `npm test` (ts-node / jest).
+Bash structure/hook test suite (`tests/hooks/test-*.sh`, `tests/structure/test-*.sh`) — exercises `.claude/hooks/` scripts (behavior + secret-pattern detection), agent/plugin structure contracts, and PR-review-workflow/Steampipe/ExternalId terraform wiring. `tests/run-all.sh` also drives `agent/`'s Python unittests (dark-path loop, account logic).
 - **`tests/fixtures/`** — secret samples and false-positive samples, loaded by the hook/secret tests.
 
 ## Conventions a reviewer must enforce
 - **Output is TAP v13** — `ok N - desc` / `not ok N - desc`. New bash tests must conform.
-- **1:1 mapping** — a unit test is named `<module>.test.ts` and maps to `src/lib/<module>.ts`.
 - **New hook ⇒ new test** — adding a hook requires a matching `tests/hooks/test-<hook>.sh`.
 - **Secret-detection cases** — positives go in `tests/fixtures/secret-samples.txt`, negatives in `false-positives.txt`. Use real-looking-but-fake samples only.
 
@@ -20,4 +17,4 @@ The project test suite. Two parallel tiers:
 - **Never bypass a failing CI hook** — `--no-verify` is banned; fix the root cause instead.
 
 ## Scope note
-This directory targets the **v1 codebase** (`src/lib/`, CDK alert infra, `.claude/hooks/`). It is distinct from v2 (`web/`, `terraform/v2/`), which carries its own colocated tests (`*.test.ts(x)` beside sources, run from `web/`). Don't conflate the two when reviewing.
+This directory is repo-wide tooling/structure coverage — distinct from v2's own colocated app tests (`web/`'s vitest `*.test.ts(x)` beside sources, `agent/`'s pytest/unittest). Don't conflate the two when reviewing.
