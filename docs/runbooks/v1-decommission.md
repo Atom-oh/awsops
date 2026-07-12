@@ -253,6 +253,7 @@ aws lambda list-functions --query "Functions[?starts_with(FunctionName,'awsops-'
 ## Phase 5 — repo 코드 정리 (별도 PR) / Code cleanup (separate PR)
 
 Phase 4 완료 후에만 진행. 삭제 대상: `src/`, `infra-cdk/`, `scripts/0N-*.sh` + setup류, `tests/`(v1 vitest/shell), 루트 `next.config.mjs`/`tailwind.config.ts`/`postcss.config.mjs`/`.eslintrc.json`/`vitest.config.ts`/루트 `Dockerfile`, `powerpipe/`. `agent/`는 부분 유지(`agent.py`, `agent/lambda/*.py`는 v2 `ai.tf`가 계속 참조 — 삭제 금지). 루트 `package.json`은 `pg`+`@inquirer/prompts`+`@aws-sdk/client-secrets-manager`(명시 추가)로 축소.
+**Follow-up (PR #159)**: 이후 루트 `package.json`/`package-lock.json`은 그 유일한 소비자 `scripts/v2/`로 완전히 이동 — 루트에는 더 이상 존재하지 않으며, `make deps`는 `npm ci --prefix scripts/v2`를 실행한다.
 
 ```bash
 make deps && node scripts/v2/migrate.mjs --status
