@@ -18,6 +18,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'overview/dashboard',
         'overview/assistant',
+        'overview/agentcore',
       ],
     },
     {

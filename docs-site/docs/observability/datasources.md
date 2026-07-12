@@ -10,7 +10,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 연결된 관측성 데이터소스를 각각의 네이티브 쿼리 언어로 읽기 전용 조회할 수 있는 페이지입니다.
 
-<Screenshot src="/screenshots/observability/datasources.png" alt="데이터소스 탐색 (빈 상태)" />
+<Screenshot src="/screenshots/observability/datasources.png" alt="연동 허브 — 데이터소스 탭" />
 
 ## 주요 기능
 
@@ -43,7 +43,7 @@ import Screenshot from '@site/src/components/Screenshot';
 - 생성된 쿼리는 **자동으로 실행되지 않습니다.** 검토 후 직접 **실행**을 눌러야 조회됩니다.
 
 ## 사용 방법
-1. 사이드바에서 **관측성 > 데이터소스 탐색**을 클릭합니다
+1. 사이드바에서 **연동**을 클릭한 뒤 **데이터소스** 탭에서 조회할 데이터소스의 **Explore**를 엽니다
 2. 상단 드롭다운에서 조회할 **데이터소스**를 선택합니다
 3. (선택) 범위 조회가 가능한 데이터소스라면 **시간 범위 (range)** 를 켭니다
 4. 입력창에 해당 언어의 쿼리를 직접 입력하거나, 자연어 설명 후 **AI로 생성**으로 쿼리를 채웁니다
@@ -51,7 +51,7 @@ import Screenshot from '@site/src/components/Screenshot';
 6. 차트 또는 테이블로 나타난 결과를 확인합니다
 
 :::info 데이터소스가 없을 때
-연결된 데이터소스가 하나도 없으면 드롭다운이 비어 있고 **"설정된 데이터소스가 없습니다 — Connectors에서 연결하세요."** 안내가 표시됩니다. 데이터소스 연결과 자격 증명 등록은 **커스텀 에이전트(Connectors)** 페이지에서 진행합니다.
+연결된 데이터소스가 하나도 없으면 드롭다운이 비어 있고 **"설정된 데이터소스가 없습니다 — Datasources 탭에서 추가하세요."** 안내가 표시됩니다. 데이터소스 연결과 자격 증명 등록은 **연동(Integrations) 허브**(`/integrations` → 데이터소스 탭)에서 진행합니다.
 :::
 
 :::tip 빠른 실행
@@ -69,5 +69,5 @@ import Screenshot from '@site/src/components/Screenshot';
 - "테이블별 행 수" → 읽기 전용 SQL 로 생성
 
 ## 관련 페이지
-- [커스텀 에이전트](../operations/custom-agents) - 데이터소스 연결 및 자격 증명 등록
+- [커스텀 에이전트](../operations/custom-agents) - 에이전트·스킬 구성(데이터소스/커넥터는 연동 허브로 이동)
 - [AI 어시스턴트](../overview/assistant) - 대화형 AI 운영 도우미

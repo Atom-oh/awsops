@@ -6,7 +6,11 @@ import * as dns from 'dns';
 // VPC内 default resolver does not know atomai.click — fall back to public DNS.
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
-const BASE_URL = process.env.AWSOPS_CAPTURE_URL || 'https://awsops.atomai.click/awsops';
+// v2: served at the root path (no /awsops basePath — see CLAUDE.md "v2 ↔ v1 key differences").
+// awsops.atomai.click is the live v2 domain as of the 2026-07 cutover (verified via /api/health
+// returning service:"awsops-web" on this exact host) — root CLAUDE.md's "awsops-v2.atomai.click"
+// live-env example predates that cutover and is otherwise-sanitized placeholder text, not this host.
+const BASE_URL = process.env.AWSOPS_CAPTURE_URL || 'https://awsops.atomai.click';
 const LOGIN_EMAIL = process.env.AWSOPS_LOGIN_EMAIL || 'admin@awsops.local';
 const LOGIN_PASSWORD = process.env.AWSOPS_LOGIN_PASSWORD || '!234Qwer';
 const OUTPUT_DIR = path.join(__dirname, '..', 'static', 'screenshots');
@@ -25,54 +29,27 @@ interface PageCapture {
   waitSelector?: string;
 }
 
+// v2 sidebar-guide screenshots only (docs-site/sidebars.ts "guideSidebar"). Interactive/detail
+// shots (drilldowns, dialogs, chat answers, theme toggle, mobile viewport) aren't goto-able —
+// those are captured by hand via the Playwright MCP and are NOT listed here.
 const pages: PageCapture[] = [
-  // Overview
+  { category: 'getting-started', name: 'login', path: '/login' },
   { category: 'overview', name: 'dashboard', path: '/' },
-  { category: 'overview', name: 'ai-assistant', path: '/ai' },
-  { category: 'overview', name: 'agentcore', path: '/agentcore' },
-  { category: 'overview', name: 'accounts', path: '/accounts' },
-  { category: 'overview', name: 'alert-settings', path: '/alert-settings' },
-  { category: 'overview', name: 'event-scaling', path: '/event-scaling' },
-  // Compute
-  { category: 'compute', name: 'ec2', path: '/ec2' },
-  { category: 'compute', name: 'lambda', path: '/lambda' },
-  { category: 'compute', name: 'ecs', path: '/ecs' },
-  { category: 'compute', name: 'ecr', path: '/ecr' },
-  { category: 'compute', name: 'eks', path: '/k8s' },
-  { category: 'compute', name: 'eks-explorer', path: '/k8s/explorer' },
-  { category: 'compute', name: 'eks-pods', path: '/k8s/pods' },
-  { category: 'compute', name: 'eks-nodes', path: '/k8s/nodes' },
-  { category: 'compute', name: 'eks-deployments', path: '/k8s/deployments' },
-  { category: 'compute', name: 'eks-services', path: '/k8s/services' },
-  { category: 'compute', name: 'container-cost', path: '/container-cost' },
-  { category: 'compute', name: 'eks-container-cost', path: '/eks-container-cost' },
-  // Network & CDN
-  { category: 'network', name: 'vpc', path: '/vpc' },
-  { category: 'network', name: 'cloudfront', path: '/cloudfront-cdn' },
-  { category: 'network', name: 'waf', path: '/waf' },
-  { category: 'network', name: 'topology', path: '/topology' },
-  // Storage & DB
-  { category: 'storage', name: 'ebs', path: '/ebs' },
-  { category: 'storage', name: 's3', path: '/s3' },
-  { category: 'storage', name: 'rds', path: '/rds' },
-  { category: 'storage', name: 'dynamodb', path: '/dynamodb' },
-  { category: 'storage', name: 'elasticache', path: '/elasticache' },
-  { category: 'storage', name: 'opensearch', path: '/opensearch' },
-  { category: 'storage', name: 'msk', path: '/msk' },
-  // Monitoring
-  { category: 'monitoring', name: 'bedrock', path: '/bedrock' },
-  { category: 'monitoring', name: 'monitoring', path: '/monitoring' },
-  { category: 'monitoring', name: 'cloudwatch', path: '/cloudwatch' },
-  { category: 'monitoring', name: 'cloudtrail', path: '/cloudtrail' },
-  { category: 'monitoring', name: 'cost', path: '/cost' },
-  { category: 'monitoring', name: 'inventory', path: '/inventory' },
-  { category: 'monitoring', name: 'ai-diagnosis', path: '/ai-diagnosis' },
-  { category: 'monitoring', name: 'datasources', path: '/datasources' },
-  { category: 'monitoring', name: 'datasources-explore', path: '/datasources/explore' },
-  // Security
-  { category: 'security', name: 'iam', path: '/iam' },
-  { category: 'security', name: 'security', path: '/security' },
-  { category: 'security', name: 'compliance', path: '/compliance' },
+  { category: 'overview', name: 'assistant', path: '/assistant' },
+  // Distinct filename from overview/agentcore.png — that file is still used by the (sidebar-
+  // orphaned) why-awsops.md with an unrelated "AgentCore dashboard" caption; this one captures
+  // the in-chat routing badge for overview/agentcore.md's "라우팅 표시" section.
+  { category: 'overview', name: 'agentcore-routing', path: '/assistant' },
+  { category: 'operations', name: 'ai-diagnosis', path: '/ai-diagnosis' },
+  { category: 'operations', name: 'custom-agents', path: '/customization' },
+  { category: 'operations', name: 'jobs', path: '/jobs' },
+  { category: 'resources', name: 'inventory', path: '/inventory/ec2' },
+  { category: 'resources', name: 'eks', path: '/eks' },
+  { category: 'resources', name: 'topology', path: '/topology' },
+  { category: 'cost', name: 'cost-explorer', path: '/cost' },
+  { category: 'cost', name: 'bedrock', path: '/bedrock' },
+  // /datasources now redirects into the Integrations hub (Task 29 fold-in).
+  { category: 'observability', name: 'datasources', path: '/integrations?tab=datasources' },
 ];
 
 function parseOnlyArg(): string[] | null {
@@ -175,21 +152,20 @@ async function login(page: Page): Promise<void> {
       }
     });
 
-    // Wait for redirect back to app
-    await page.waitForURL('**/awsops/**', { timeout: 60000 });
+    // Wait for redirect back to app (dark-fallback path only — v2 defaults to /login, ADR-042).
+    // Match against BASE_URL's own origin, not just "amazoncognito.com" — a custom Cognito
+    // domain (CLAUDE.md's `a-ops-v2-auth-*`) wouldn't contain that substring, which would make
+    // this predicate true immediately on the auth page itself instead of after the redirect.
+    await page.waitForURL((u) => String(u).startsWith(BASE_URL), { timeout: 60000 });
     console.log('Login successful, redirected to app.');
   } else if (currentUrl.includes('/login') || (await page.locator('input[type="password"]').count()) > 0) {
-    // Custom AWSops login page (/awsops/login) — email + Security Key + "Authenticate" button.
+    // v2's self-hosted /login form (ADR-042) — email + password + a locale-dependent submit
+    // button ("로그인 →" / "Sign in →"), no placeholder text and no basePath on redirect.
     console.log('Custom login page detected, filling credentials...');
-    const emailField = page.getByPlaceholder('admin@awsops.internal').first();
-    if (await emailField.count() > 0) {
-      await emailField.fill(LOGIN_EMAIL);
-    } else {
-      await page.locator('input[type="email"], input[type="text"]').first().fill(LOGIN_EMAIL);
-    }
+    await page.locator('input[type="email"], input[type="text"]').first().fill(LOGIN_EMAIL);
     await page.locator('input[type="password"]').first().fill(LOGIN_PASSWORD);
-    await page.getByRole('button', { name: /Authenticate/i }).click();
-    await page.waitForURL((u) => /\/awsops(\/|$)/.test(String(u)) && !String(u).includes('/login'), { timeout: 60000 });
+    await page.locator('button[type="submit"]').first().click();
+    await page.waitForURL((u) => !String(u).includes('/login'), { timeout: 60000 });
     console.log('Custom login successful, redirected to app.');
   } else {
     console.log('Already logged in or no Cognito redirect.');
@@ -206,16 +182,10 @@ async function captureScreenshot(
   const dir = path.join(OUTPUT_DIR, capture.category);
   fs.mkdirSync(dir, { recursive: true });
 
-  // Viewport screenshot
+  // Viewport screenshot (the only variant used in docs — no page references a "-full" twin)
   await page.screenshot({
     path: path.join(dir, `${capture.name}${suffix}.png`),
     fullPage: false,
-  });
-
-  // Full page screenshot
-  await page.screenshot({
-    path: path.join(dir, `${capture.name}-full${suffix}.png`),
-    fullPage: true,
   });
 }
 
