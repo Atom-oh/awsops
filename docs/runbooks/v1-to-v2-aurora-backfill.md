@@ -16,8 +16,8 @@ One-time, **idempotent** load of v1's four high-value history stores into v2's A
 
 ## 1. 사전 준비 / Prerequisites
 
-- Aurora(:5432)에 도달 가능한 호스트(예: mgmt-vpc 호스트)와 리포지토리 체크아웃 + repo-root `node_modules`(`pg` 포함).
-  A host that can reach Aurora:5432 (e.g. the mgmt-vpc host) with the repo checked out and repo-root `node_modules` (provides `pg`).
+- Aurora(:5432)에 도달 가능한 호스트(예: mgmt-vpc 호스트)와 리포지토리 체크아웃 + `scripts/v2/node_modules`(`pg` 포함 — `make deps` 또는 `npm ci --prefix scripts/v2`로 설치).
+  A host that can reach Aurora:5432 (e.g. the mgmt-vpc host) with the repo checked out and `scripts/v2/node_modules` (provides `pg` — install via `make deps` or `npm ci --prefix scripts/v2`).
 - 자격증명 / Credentials — 아래 순서로 해석되며 **DSN/비밀번호는 절대 로그에 남지 않는다** / resolved in this order, and **the DSN/password is never logged**:
   1. `--dsn <url>` 또는 `BACKFILL_DSN`
   2. `AURORA_SECRET_ARN` + `AURORA_ENDPOINT` (Secrets Manager)

@@ -12,7 +12,7 @@
 | 스킬 (Skills) | 3 |
 | 아키텍처 결정 기록 (ADRs) | 3 |
 | 런북 (Runbooks) | 2 |
-| 프롬프트 (Prompts) | 1 |
+| 프롬프트 (Prompts) | 0 |
 | 스크립트 (Scripts) | 11 |
 
 ## 페이지 / Pages
