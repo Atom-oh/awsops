@@ -95,9 +95,6 @@
 - `add-new-page.md` — Runbook: 새 대시보드 페이지 추가 (Add New Dashboard Page)
 - `start-services.md` — Runbook: 서비스 시작 (Start Services)
 
-## 프롬프트 / Prompts
-- `analyze-resources.md` — Prompt: AWS 리소스 분석 (Analyze AWS Resources)
-
 ## 스크립트 / Scripts
 - `00-deploy-infra.sh` — CloudFormation으로 EC2 인프라 배포 (Deploy EC2 Infrastructure via CloudFormation)
 - `01-install-base.sh` — Steampipe + 플러그인 + Powerpipe 설치 (Steampipe + Plugins + Powerpipe Installation)
