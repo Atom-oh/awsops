@@ -148,3 +148,35 @@ describe('classifyRoute — ADR-044 multi-domain detection', () => {
     expect(rx.multiDomain).toBe(false);
   });
 });
+
+describe('topology / unused-resource routing → ops', () => {
+  // The capability home (inventory_read MCP: load balancers, target groups, CloudFront, unused
+  // detection) lives on the ops gateway. These nouns must route there deterministically.
+  it('routes the headline "unused topology resources" query to ops via regex (no LLM)', async () => {
+    const prompt = '토폴로지를 봤을때 지금 미사용리소스라고 보이는것들을 추려줘 예를들면 origin에 아무것도 없거나 하는거 tg가 있는데 실제로 register가 없는것들';
+    expect(matchedSections(prompt)).toEqual(['ops']); // single distinct match ⇒ deterministic
+    const classify = vi.fn();
+    const r = await classifyRoute(prompt, undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('ops');
+    expect(r.method).toBe('regex');
+    expect(classify).not.toHaveBeenCalled();
+  });
+  it('routes unused / inventory / topology phrasings to ops', () => {
+    expect(matchedSections('미사용 리소스 추려줘')).toContain('ops');
+    expect(matchedSections('안 쓰는 리소스 정리하고 싶어')).toContain('ops');
+    expect(matchedSections('리소스 인벤토리 현황')).toContain('ops');
+    expect(matchedSections('전체 토폴로지 보여줘')).toContain('ops');
+    expect(matchedSections('orphan resources cleanup')).toContain('ops');
+  });
+  it('routes load balancer / target group / cloudfront nouns to ops (where the tool lives)', () => {
+    expect(matchedSections('로드밸런서 목록')).toContain('ops');
+    expect(matchedSections('타겟그룹에 등록된 타깃 확인')).toContain('ops');
+    expect(matchedSections('show me the target groups')).toContain('ops');
+    expect(matchedSections('cloudfront 배포 목록')).toContain('ops');
+    expect(matchedSections('빈 origin 인 distribution 찾아줘')).toContain('ops');
+  });
+  it('does NOT steal pure connectivity questions from network', () => {
+    expect(matchedSections('두 인스턴스 통신이 안 돼요')).toEqual(['network']);
+    expect(matchedSections('SG에서 막힌 포트')).toContain('network');
+  });
+});

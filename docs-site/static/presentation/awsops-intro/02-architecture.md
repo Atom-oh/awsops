@@ -4,1102 +4,737 @@ block: 02
 title: "Architecture Deep Dive"
 ---
 
-<!-- Slide 1: Block 2 Intro -->
+<!-- Slide 1: Section Cover -->
 
-@type: section
+@type: cover
 @transition: fade
 
 # Architecture Deep Dive
 ## AWSops 기술 아키텍처
 
+Terraform 기반 MSA · 비공개 엣지 · 읽기 전용 운영 태세
+
 :::notes
 {timing: 1min}
-이제 AWSops가 어떻게 만들어졌는지, 기술 아키텍처를 상세히 살펴보겠습니다.
-인프라부터 데이터 레이어, AI 엔진, 보안까지 순서대로 진행합니다.
-Level 300 세션답게 내부 구현 디테일까지 다루겠습니다.
+두 번째 파트, 아키텍처 딥다이브입니다.
+AWSops가 어떻게 만들어졌는지 레이어별로 자세히 보겠습니다.
+핵심은 세 가지입니다. 첫째, Terraform 기반 MSA로 재구축했다는 점. 둘째, 공개 진입점이 없는 비공개 엣지 구조라는 점. 셋째, 읽기 전용 운영 태세 위에 모든 것이 설계되었다는 점입니다.
 {cue: transition}
-전체 아키텍처 다이어그램부터 보겠습니다.
+전체 그림부터 보겠습니다.
 :::
 
 ---
 
-<!-- Slide 2: Overall Architecture Diagram -->
+<!-- Slide 2: Overall Architecture -->
 
 @type: content
 @transition: slide
 
-# Overall Architecture
+# Overall Architecture — 4-Layer Private Edge
 
 :::html
-<div style="display:flex;justify-content:center;align-items:center;width:100%;height:100%;">
-  <img src="./diagrams/overall-architecture.png" alt="AWSops Overall Architecture" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;">
+<div style="display:flex;flex-direction:column;gap:10px;margin-top:16px;">
+  <div style="background:rgba(0,212,255,0.12);border:1px solid rgba(0,212,255,0.4);border-radius:8px;padding:14px 18px;text-align:center;">
+    <span style="color:#00d4ff;font-weight:bold;font-size:18px;">Browser</span>
+    <span style="color:#8b95a5;font-size:13px;margin-left:10px;">awsops-v2.example.com</span>
+  </div>
+  <div style="text-align:center;color:#666;font-size:20px;">↓ TLS</div>
+  <div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:14px 18px;text-align:center;">
+    <span style="color:#f59e0b;font-weight:bold;font-size:18px;">CloudFront</span>
+    <span style="color:#8b95a5;font-size:13px;margin-left:10px;">VPC Origin · https-only:443 · SNI = public FQDN</span>
+  </div>
+  <div style="text-align:center;color:#666;font-size:20px;">↓ HTTPS:443 (regional ACM)</div>
+  <div style="background:rgba(168,85,247,0.12);border:1px solid rgba(168,85,247,0.4);border-radius:8px;padding:14px 18px;text-align:center;">
+    <span style="color:#a855f7;font-weight:bold;font-size:18px;">Internal ALB</span>
+    <span style="color:#8b95a5;font-size:13px;margin-left:10px;">SG: 443 ONLY from <code style="color:#a855f7;">CloudFront-VPCOrigins-Service-SG</code></span>
+  </div>
+  <div style="text-align:center;color:#666;font-size:20px;">↓ HTTP</div>
+  <div style="background:rgba(0,255,136,0.12);border:1px solid rgba(0,255,136,0.4);border-radius:8px;padding:14px 18px;text-align:center;">
+    <span style="color:#00ff88;font-weight:bold;font-size:18px;">ECS Fargate</span>
+    <span style="color:#8b95a5;font-size:13px;margin-left:10px;"><code style="color:#00ff88;">awsops-v2-web:3000</code> (thin-BFF, arm64)</span>
+  </div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:16px;">
+  <div style="background:rgba(15,22,41,0.6);border-radius:8px;padding:12px;text-align:center;">
+    <div style="color:#00d4ff;font-weight:bold;">No Public ALB</div>
+    <div style="color:#8b95a5;font-size:12px;">진입점은 CloudFront 한 곳</div>
+  </div>
+  <div style="background:rgba(15,22,41,0.6);border-radius:8px;padding:12px;text-align:center;">
+    <div style="color:#00ff88;font-weight:bold;">Aurora</div>
+    <div style="color:#8b95a5;font-size:12px;">영속 상태</div>
+  </div>
+  <div style="background:rgba(15,22,41,0.6);border-radius:8px;padding:12px;text-align:center;">
+    <div style="color:#f59e0b;font-weight:bold;">AgentCore MCP</div>
+    <div style="color:#8b95a5;font-size:12px;">라이브 AWS 읽기</div>
+  </div>
 </div>
 :::
 
 :::notes
 {timing: 3min}
-전체 아키텍처는 4개 계층입니다.
-
-클라이언트 브라우저에서 시작하여 CloudFront를 거칩니다. CloudFront에는 Lambda@Edge가 붙어있고, 여기서 Cognito JWT 토큰을 검증합니다. 인증되지 않은 요청은 여기서 차단됩니다.
-
+전체 구조는 4개 레이어의 비공개 엣지입니다.
+브라우저는 전용 도메인으로 들어오고, CloudFront가 TLS로 받습니다. 여기서 VPC Origin을 https-only 443으로 설정해 내부 ALB까지 TLS가 끊기지 않게 합니다. origin 도메인을 public FQDN으로 지정해 SNI가 맞아야 합니다.
 {cue: pause}
-
-인증을 통과하면 Internal ALB로 라우팅됩니다. ALB 뒤에는 Private Subnet의 EC2 인스턴스가 있고, Next.js 14 App Router가 실행됩니다. EC2는 t4g.2xlarge ARM 인스턴스를 사용합니다. Graviton 기반이라 x86 대비 20% 가격 절감이 있습니다.
-
-데이터는 Steampipe의 내장 PostgreSQL에서 조회하고, AI 분석은 Bedrock AgentCore를 통해 처리합니다.
-
-{cue: question}
-중요한 포인트는, EC2에 Public IP가 없습니다. CloudFront + ALB를 통해서만 접근 가능하고, ALB의 Security Group은 CloudFront Managed Prefix List만 허용합니다.
-
+핵심은 공개 ALB가 없다는 점입니다. 내부 ALB의 보안 그룹은 CloudFront 관리형 SG에서 오는 443만 허용합니다. VPC CIDR만 열면 504가 납니다. ALB는 HTTP로 Fargate의 web 컨테이너 3000번 포트로 전달합니다.
+영속 상태는 Aurora에 두고, 라이브 AWS 조회는 AgentCore MCP 도구가, 무거운 작업은 비동기 워커가 처리합니다.
 {cue: transition}
-CDK로 이 전체 인프라를 코드로 관리합니다.
+이 인프라를 어떻게 코드로 관리하는지 보겠습니다.
 :::
 
 ---
 
-<!-- Slide 3: CDK Infrastructure -->
+<!-- Slide 3: Terraform IaC -->
 
 @type: content
 @transition: slide
 
-# CDK Infrastructure-as-Code
+# Terraform IaC — Single Root + Feature Flags
 
 ::: left
 
-### `infra-cdk/` 구조
+### Foundation
 
-- **awsops-stack.ts** — VPC, EC2, ALB, CloudFront
-- **cognito-stack.ts** — User Pool, Lambda@Edge
-- `cdk deploy` 한 번에 전체 인프라 생성
+- **단일 루트** `terraform/v2/foundation/`
+- **Partial S3 backend** — `awsops-v2-tfstate`, `use_lockfile` (DynamoDB 없음)
+- TF ≥ **1.15**, provider **~>6.0**, **arm64**
+- **Saved-tfplan 규율** — 공유 인프라는 `apply tfplan` (no `-auto-approve`)
 
-### 네트워크 설계
+### Feature Flags (default-off = $0)
 
-- VPC — 기존 VPC 사용 또는 자동 생성
-- EC2 — **Private Subnet** (Public IP 없음)
-- ALB — Internal, CloudFront Prefix List만 허용
-- CloudFront — **CACHING_DISABLED** (실시간 데이터)
+- `agentcore_enabled` · `workers_enabled`
+- `steampipe_enabled` · `hybrid_routing_enabled`
 
 :::
 
 ::: right
 
-### EC2 인스턴스 설정
+### Key `.tf` Files
 
-- **t4g.2xlarge** (8 vCPU, 32GB, ARM64)
-- Steampipe + Next.js + Powerpipe 동시 실행
-- IMDSv2 강제 (Hop Limit 2)
-- SSM Session Manager 접근 (SSH 불필요)
+| 파일 | 역할 |
+|------|------|
+| `network.tf` | VPC 신규/재사용 |
+| `edge.tf` | CloudFront + VPC Origin + ALB |
+| `auth.tf` | Cognito + Lambda@Edge |
+| `data.tf` | Aurora + schema |
+| `workload.tf` | ECS web service |
+| `ecr.tf` | dual-tier ECR |
+| `ai.tf` | AgentCore + SSM |
+| `workers.tf` | SQS + SFN + Lambda |
+| `eks.tf` | Access Entry + View |
 
-### CloudFront 설정
-
-- X-Custom-Secret 헤더로 ALB 원본 검증
-- CACHING_DISABLED 정책 (실시간 데이터)
-- Lambda@Edge Python 3.12 (us-east-1)
-
-:::
-
-:::notes
-{timing: 2min}
-인프라는 CDK 두 개의 스택으로 관리합니다.
-
-awsops-stack.ts가 핵심인데, VPC, EC2, ALB, CloudFront를 하나의 스택으로 생성합니다. 기존 VPC가 있으면 파라미터로 전달해서 재사용할 수 있고, 없으면 자동으로 새 VPC를 만듭니다.
-
-중요한 설계 결정이 CloudFront의 CACHING_DISABLED입니다. 일반적으로 CloudFront는 캐싱을 위해 사용하지만, AWSops는 실시간 데이터 대시보드라서 캐싱을 끄고, 순수하게 보안과 글로벌 엣지 접근을 위해 사용합니다.
-
-{cue: transition}
-이제 데이터 레이어를 보겠습니다.
-:::
-
----
-
-<!-- Slide 4: Data Layer — Steampipe -->
-
-@type: content
-@transition: slide
-
-# Data Layer: Steampipe
-
-:::html
-<div class="tab-bar" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#00d4ff;color:#0a0e1a;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,0)">Architecture</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,1)">Performance</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,2)">Multi-Account</button>
-</div>
-<div class="tc" style="display:block;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;">
-    <div style="color:#00d4ff;font-weight:bold;font-size:16px;margin-bottom:8px;">AWS APIs → Steampipe</div>
-    <div style="color:#b0b0b0;">FDW Plugin이 AWS API를 PostgreSQL 테이블로 변환</div>
-    <div style="margin-top:8px;color:#8b95a5;font-size:13px;">380+ AWS 테이블 | 60+ K8s 테이블</div>
-  </div>
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:16px;">
-    <div style="color:#00ff88;font-weight:bold;font-size:16px;margin-bottom:8px;">Embedded PostgreSQL</div>
-    <div style="color:#b0b0b0;">Port 9193, 외부 DB 설치 불필요</div>
-    <div style="margin-top:8px;color:#8b95a5;font-size:13px;">SELECT * FROM aws_ec2_instance</div>
-  </div>
-</div>
-</div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:16px;">
-    <div style="color:#f59e0b;font-weight:bold;font-size:16px;margin-bottom:8px;">pg Pool vs CLI — 660x 차이</div>
-    <div style="color:#b0b0b0;">Steampipe CLI: 프로세스 기동 + 플러그인 로드 + 연결</div>
-    <div style="color:#b0b0b0;">pg Pool: 이미 떠있는 PostgreSQL에 SQL 전송</div>
-  </div>
-  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.3);border-radius:8px;padding:16px;">
-    <div style="color:#a855f7;font-weight:bold;font-size:16px;margin-bottom:8px;">Cache & Batch</div>
-    <div style="color:#b0b0b0;">node-cache: 5분 TTL (대시보드 23개 쿼리 프리워밍)</div>
-    <div style="color:#b0b0b0;">batchQuery: 8개씩 병렬, pool 슬롯 2개 여유</div>
-  </div>
-</div>
-</div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;">
-    <div style="color:#00d4ff;font-weight:bold;font-size:16px;margin-bottom:8px;">Aggregator Pattern</div>
-    <div style="color:#b0b0b0;"><code>aws</code> — 모든 계정 통합 조회</div>
-    <div style="color:#b0b0b0;"><code>aws_123456789012</code> — 개별 계정</div>
-  </div>
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:16px;">
-    <div style="color:#00ff88;font-weight:bold;font-size:16px;margin-bottom:8px;">buildSearchPath()</div>
-    <div style="color:#b0b0b0;">동적 search_path 생성</div>
-    <div style="color:#b0b0b0;"><code>public, aws_{{id}}, kubernetes, trivy</code></div>
-    <div style="color:#b0b0b0;">캐시키에 accountId 접두사 → 계정별 분리</div>
-  </div>
-</div>
-</div>
 :::
 
 :::notes
 {timing: 3min}
-데이터 레이어의 핵심은 Steampipe입니다.
-
-Steampipe는 AWS API를 PostgreSQL 테이블로 변환하는 오픈소스 도구입니다. EC2 인스턴스 목록을 보려면 SELECT * FROM aws_ec2_instance 하면 됩니다. AWS CLI로 describe-instances를 호출하는 것보다 660배 빠릅니다.
-
+인프라는 전부 Terraform입니다.
+단일 루트 `terraform/v2/foundation/` 아래 모든 리소스를 정의하고, 상태는 partial S3 backend로 관리합니다. `use_lockfile`을 써서 DynamoDB 락 테이블 없이도 동시성 안전을 확보했습니다. Terraform 1.15 이상, provider 6 계열, 이미지는 모두 arm64입니다.
 {cue: pause}
-
-왜 그렇게 빠르냐면, Steampipe CLI를 쓰면 매번 프로세스를 띄우고, 플러그인을 로드하고, 연결을 맺어야 합니다. 하지만 pg Pool로 직접 연결하면 이미 떠있는 PostgreSQL에 SQL을 보내기만 하면 됩니다. 이것이 아키텍처의 핵심 결정 중 하나였습니다.
-
-멀티 어카운트는 Aggregator 패턴을 사용합니다. aws라는 연결명은 모든 계정을 통합 조회하고, aws_123456789012처럼 계정 ID를 붙이면 개별 계정만 조회합니다. buildSearchPath 함수가 search_path를 동적으로 생성합니다.
-
-캐시는 node-cache로 5분 TTL을 적용합니다. 멀티 어카운트 환경에서는 캐시 키에 accountId를 접두사로 붙여서 계정별로 분리합니다.
-
+큰 모듈은 전부 feature flag로 게이트합니다. agentcore, workers, steampipe, hybrid_routing 모두 기본값이 false라서 plan을 돌리면 No changes, 비용은 0입니다. 토글로 켜는 방식이라 안전합니다.
+공유 인프라는 절대 auto-approve를 쓰지 않고, 저장된 tfplan을 apply하는 규율을 지킵니다. CloudFront나 SG 같은 긴 apply는 컨트롤러가 직접 실행합니다.
+오른쪽이 파일별 역할입니다. 네트워크, 엣지, 인증, 데이터, 워크로드, ECR, AI, 워커, EKS로 깔끔하게 분리되어 있습니다.
 {cue: transition}
-다음은 AI 엔진입니다.
+이제 컴퓨트와 웹 레이어입니다.
 :::
 
 ---
 
-<!-- Slide 5: AI Engine — Bedrock AgentCore -->
+<!-- Slide 4: Compute & Web -->
 
 @type: content
 @transition: slide
 
-# AI Engine: Bedrock AgentCore
+# Compute & Web — Thin-BFF on Fargate
+
+::: left
+
+### Next.js 14 Standalone (arm64)
+
+- **루트 경로 서빙** — basePath 없음, fetch는 `/api/*`
+- **Thin-BFF 원칙** — 무겁고·길고·OOM 위험 작업은 직접 실행 금지
+- 무거운 작업은 **`POST /api/jobs`로 enqueue**
+
+### Routes
+
+- `/api/health` — 공개 헬스체크
+- `/api/stream` — SSE 스트리밍
+- `/api/db` — Aurora ping
+- `/api/jobs` (+`/[id]`) — 비동기 작업
+
+:::
+
+::: right
 
 :::html
-<div class="tab-bar" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#00d4ff;color:#0a0e1a;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,0)">Runtime</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,1)">8 Gateways</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,2)">19 Lambda</button>
-</div>
-<div class="tc" style="display:block;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="font-size:32px;margin-bottom:8px;">🐍</div>
-    <div style="color:#00d4ff;font-weight:bold;margin-bottom:4px;">Strands Agent</div>
-    <div style="color:#8b95a5;font-size:13px;">Python 에이전트 프레임워크</div>
+<div style="display:flex;flex-direction:column;gap:14px;margin-top:8px;">
+  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.35);border-radius:10px;padding:16px;">
+    <div style="color:#ef4444;font-weight:bold;font-size:16px;margin-bottom:6px;">⚠ HOSTNAME=0.0.0.0</div>
+    <div style="color:#8b95a5;font-size:13px;line-height:1.5;">런타임 env로 명시. 이미지 ENV로는 부족 — ECS가 ENI IP로 덮어써 healthCheck UNHEALTHY.</div>
   </div>
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="font-size:32px;margin-bottom:8px;">🧠</div>
-    <div style="color:#00ff88;font-weight:bold;margin-bottom:4px;">Claude Opus 4.8</div>
-    <div style="color:#8b95a5;font-size:13px;">Bedrock 모델 (서울 리전)</div>
-  </div>
-  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="font-size:32px;margin-bottom:8px;">🐳</div>
-    <div style="color:#a855f7;font-weight:bold;margin-bottom:4px;">Docker ARM64</div>
-    <div style="color:#8b95a5;font-size:13px;">ECR → AgentCore Runtime</div>
+  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.35);border-radius:10px;padding:16px;">
+    <div style="color:#00d4ff;font-weight:bold;font-size:16px;margin-bottom:6px;">✓ Health Path Match</div>
+    <div style="color:#8b95a5;font-size:13px;line-height:1.5;">컨테이너 + target group 헬스 경로 = <code style="color:#00d4ff;">/api/health</code>. 불일치 시 circuit breaker 루프.</div>
   </div>
 </div>
-</div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:12px;">
-    <div style="display:flex;justify-content:space-between;"><span style="color:#00d4ff;font-weight:bold;">Network</span><span style="color:#8b95a5;">17 tools</span></div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">VPC, TGW, Firewall, Reachability, Flow Logs</div>
-  </div>
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:12px;">
-    <div style="display:flex;justify-content:space-between;"><span style="color:#00ff88;font-weight:bold;">Container</span><span style="color:#8b95a5;">24 tools</span></div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">EKS, ECS, Istio 서비스 메시</div>
-  </div>
-  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.3);border-radius:8px;padding:12px;">
-    <div style="display:flex;justify-content:space-between;"><span style="color:#a855f7;font-weight:bold;">IaC</span><span style="color:#8b95a5;">12 tools</span></div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">CDK, CloudFormation, Terraform</div>
-  </div>
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;">
-    <div style="display:flex;justify-content:space-between;"><span style="color:#f59e0b;font-weight:bold;">Data</span><span style="color:#8b95a5;">24 tools</span></div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">DynamoDB, RDS, ElastiCache, MSK</div>
-  </div>
-  <div style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:8px;padding:12px;">
-    <div style="display:flex;justify-content:space-between;"><span style="color:#8b5cf6;font-weight:bold;">Security</span><span style="color:#8b95a5;">14 tools</span></div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">IAM, 정책 시뮬레이션</div>
-  </div>
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;">
-    <div style="display:flex;justify-content:space-between;"><span style="color:#f59e0b;font-weight:bold;">Monitoring</span><span style="color:#8b95a5;">16 tools</span></div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">CloudWatch, CloudTrail, Log Insights</div>
-  </div>
-  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:12px;">
-    <div style="display:flex;justify-content:space-between;"><span style="color:#ef4444;font-weight:bold;">Cost</span><span style="color:#8b95a5;">9 tools</span></div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">비용 분석, 예측, 예산</div>
-  </div>
-  <div style="background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:12px;">
-    <div style="display:flex;justify-content:space-between;"><span style="color:#3b82f6;font-weight:bold;">Ops</span><span style="color:#8b95a5;">9 tools</span></div>
-    <div style="color:#8b95a5;font-size:12px;margin-top:4px;">AWS 문서, API 호출, Steampipe SQL</div>
-  </div>
-</div>
-</div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#00d4ff;font-weight:bold;margin-bottom:4px;">Network Lambda (x5)</div>
-    <div style="color:#8b95a5;font-size:12px;">VPC Reachability, Flow Log Query, TGW Analysis, Firewall Rules, Path Trace</div>
-  </div>
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#00ff88;font-weight:bold;margin-bottom:4px;">Container Lambda (x3)</div>
-    <div style="color:#8b95a5;font-size:12px;">EKS Insights, ECS Troubleshoot, Istio Mesh</div>
-  </div>
-  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#a855f7;font-weight:bold;margin-bottom:4px;">IaC Lambda (x2)</div>
-    <div style="color:#8b95a5;font-size:12px;">CFN Validate, CDK/Terraform Docs</div>
-  </div>
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#f59e0b;font-weight:bold;margin-bottom:4px;">Data Lambda (x4)</div>
-    <div style="color:#8b95a5;font-size:12px;">DynamoDB, RDS, ElastiCache, MSK</div>
-  </div>
-  <div style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#8b5cf6;font-weight:bold;margin-bottom:4px;">Security Lambda (x1)</div>
-    <div style="color:#8b95a5;font-size:12px;">IAM Policy Simulator</div>
-  </div>
-  <div style="background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#3b82f6;font-weight:bold;margin-bottom:4px;">Others (x4)</div>
-    <div style="color:#8b95a5;font-size:12px;">Monitoring x2, Cost x1, Ops x1</div>
-  </div>
-</div>
-</div>
+:::
+
 :::
 
 :::notes
 {timing: 3min}
-AI 엔진의 핵심은 Bedrock AgentCore입니다.
-
-AgentCore Runtime에서 Strands Agent가 실행됩니다. Python으로 작성된 에이전트가 Docker ARM64 이미지로 패키징되어 AgentCore 관리형 서비스에서 실행됩니다. EC2에서는 Docker 이미지를 빌드만 하고, 실제 실행은 AgentCore가 담당합니다.
-
+웹 레이어는 Next.js 14 standalone 빌드이고 arm64입니다.
+전용 도메인을 쓰므로 basePath 없이 루트 경로에서 서빙하고, fetch는 그냥 `/api/*`를 호출합니다.
 {cue: pause}
-
-8개의 MCP Gateway가 전문 영역별로 나뉘어 있습니다. Network Gateway는 VPC, TGW, VPN, Reachability Analyzer 등 17개 도구를 제공합니다. Container Gateway는 EKS, ECS, Istio 관련 24개 도구를 가지고 있습니다.
-
-각 Gateway 뒤에는 19개의 Lambda 함수가 실제 작업을 수행합니다. 예를 들어 VPC Reachability Analyzer는 Lambda에서 Network Insights Path를 생성하고 분석 결과를 반환합니다.
-
-총 125개의 도구가 이 구조를 통해 AI 에이전트에 제공됩니다.
-
+가장 중요한 설계 원칙은 thin-BFF입니다. 무겁거나, 오래 걸리거나, OOM 위험이 있는 작업은 절대 인라인으로 돌리지 않습니다. 대신 `POST /api/jobs`로 워커 큐에 넣습니다. 라우트는 공개 헬스체크, SSE 스트림, Aurora ping, 비동기 작업 정도로 얇게 유지합니다.
+오른쪽은 실전에서 꼭 챙겨야 하는 두 가지입니다. 첫째, HOSTNAME을 0.0.0.0으로 런타임 env에 명시해야 합니다. 이미지 ENV만으로는 ECS가 ENI IP로 덮어써서 헬스체크가 UNHEALTHY가 됩니다. 둘째, 컨테이너와 타깃 그룹의 헬스 경로가 앱의 `/api/health`와 정확히 일치해야 circuit breaker 루프를 피합니다.
 {cue: transition}
-이 125개의 도구를 어떻게 자동으로 선택하느냐가 다음 주제입니다.
+영속 상태를 담는 데이터 레이어로 갑니다.
 :::
 
 ---
 
-<!-- Slide 5b: Gateway Tool Explorer -->
+<!-- Slide 5: Data Layer -->
 
 @type: content
 @transition: slide
 
-# Gateway Tool Explorer
+# Data Layer — Aurora Serverless v2
+
+::: left
+
+### Aurora (PostgreSQL 17.9)
+
+- **0.5–4 ACU**, KMS CMK, RDS-관리 master secret
+- 앱 접근 = **node-pg** (`web/lib/db.ts`)
+- ADR-030 스키마 (v9 baseline) + `worker_jobs` · chat threads · diagnosis
+- 새 테이블 = **ULID 마이그레이션** (`migrations/<ULID>_*.sql`)
+
+:::
+
+::: right
+
+### Steampipe = 인벤토리 sync ONLY
 
 :::html
-<style>
-:root {
-            --bg-color: #0f1629;
-            --text-color: white;
-            --accent-cyan: #00d4ff;
-            --accent-green: #00ff88;
-            --accent-purple: #a855f7;
-            --accent-orange: #ED7100;
-            --button-bg: #1c2a4a;
-            --button-hover-bg: #2a3d63;
-        }
+<div style="background:rgba(0,255,136,0.08);border:1px solid rgba(0,255,136,0.3);border-radius:10px;padding:16px;margin-top:8px;">
+  <div style="color:#00ff88;font-weight:bold;font-size:15px;margin-bottom:8px;">warm Fargate → Aurora → /inventory/[type]</div>
+  <div style="color:#8b95a5;font-size:13px;line-height:1.6;">
+    flag-gated (<code style="color:#00ff88;">steampipe_enabled</code>)<br>
+    약 <b style="color:#00ff88;">22종</b> 리소스 타입 동기화<br>
+    fan-out sync · registry-driven nav
+  </div>
+  <div style="color:#ef4444;font-size:12px;margin-top:10px;border-top:1px solid rgba(239,68,68,0.3);padding-top:8px;">
+    NOT a live query engine — pg Pool / 라이브 조회 아님
+  </div>
+</div>
+:::
 
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            min-height: 100vh;
-            box-sizing: border-box;
-        }
+:::
 
-        .mcp-gateway-component {
-            width: 100%;
-            max-width: 1200px; /* A reasonable max-width for content */
-            max-height: 550px;
-            background-color: var(--bg-color);
-            border-radius: 10px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden; /* Ensures max-height is respected with scroll */
-            box-sizing: border-box;
-        }
+:::notes
+{timing: 3min}
+영속 상태는 Aurora Serverless v2가 담당합니다.
+PostgreSQL 17.9, 0.5에서 4 ACU로 오토스케일하고, KMS CMK로 암호화하며 master secret은 RDS가 관리합니다. 앱은 node-pg 공유 풀로 접근합니다. 스키마는 ADR-030 기반 v9 baseline에 worker_jobs, chat 스레드, 진단 리포트 테이블이 더해진 형태이고, 새 테이블은 schema.sql에 덧붙이지 않고 ULID 마이그레이션 파일로 추가하는 규칙입니다.
+{cue: pause}
+여기서 꼭 짚어야 할 점이 있습니다. Steampipe는 라이브 쿼리 엔진이 아닙니다. flag로 켜는 인벤토리 sync일 뿐입니다. warm Fargate가 약 22종 리소스 타입을 Aurora로 동기화하고, 이걸 generic `/inventory/[type]` 페이지가 보여줍니다. 라이브 AWS 조회는 어디까지나 AgentCore MCP 도구가 합니다. 예전의 임베디드 pg Pool 방식이 아니라는 점을 강조합니다.
+{cue: transition}
+이제 핵심인 AI 엔진입니다.
+:::
 
-        .gateway-buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 15px;
-            margin-bottom: 20px;
-            justify-content: center;
-        }
+---
 
-        .gateway-button {
-            flex: 1 1 calc(25% - 15px); /* 4 items per row, with gap */
-            max-width: calc(25% - 15px);
-            background-color: var(--button-bg);
-            border: none;
-            border-radius: 8px;
-            padding: 15px 10px;
-            color: var(--text-color);
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background-color 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            text-align: center;
-            position: relative;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-            min-width: 120px; /* Ensure buttons don't get too small */
-            box-sizing: border-box;
-        }
+<!-- Slide 6: AI Engine -->
 
-        .gateway-button:hover {
-            background-color: var(--button-hover-bg);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
-        }
+@type: content
+@transition: slide
 
-        .gateway-button.active {
-            background-color: var(--accent-cyan);
-            color: var(--bg-color);
-            box-shadow: 0 0 15px var(--accent-cyan), 0 0 5px rgba(0, 0, 0, 0.5);
-            transform: translateY(-2px);
-        }
+# AI Engine — Bedrock AgentCore
 
-        .gateway-button-icon {
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            font-weight: bold;
-            color: var(--text-color); /* Fallback for default, overridden by specific colors */
-        }
-
-        .gateway-button.active .gateway-button-icon {
-            color: var(--bg-color); /* Icon text color when button is active */
-        }
-
-        .gateway-button-label {
-            margin-bottom: 5px;
-        }
-
-        .gateway-tool-count {
-            font-size: 0.85rem;
-            opacity: 0.8;
-        }
-
-        /* Specific icon colors */
-        .gateway-button[data-gateway-name="Network"] .gateway-button-icon { background-color: var(--accent-cyan); }
-        .gateway-button[data-gateway-name="Container"] .gateway-button-icon { background-color: var(--accent-green); }
-        .gateway-button[data-gateway-name="IaC"] .gateway-button-icon { background-color: var(--accent-purple); }
-        .gateway-button[data-gateway-name="Data"] .gateway-button-icon { background-color: var(--accent-orange); }
-        .gateway-button[data-gateway-name="Security"] .gateway-button-icon { background-color: #8b5cf6; /* Deeper purple */ }
-        .gateway-button[data-gateway-name="Monitoring"] .gateway-button-icon { background-color: #f59e0b; /* Yellow-orange */ }
-        .gateway-button[data-gateway-name="Cost"] .gateway-button-icon { background-color: #ef4444; /* Red */ }
-        .gateway-button[data-gateway-name="Ops"] .gateway-button-icon { background-color: #3b82f6; /* Blue */ }
-
-        .tools-display-area {
-            flex-grow: 1;
-            background-color: #1a243a;
-            border-radius: 8px;
-            padding: 15px;
-            overflow-y: auto; /* Enable scrolling for tools list */
-            box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.3);
-            min-height: 150px; /* Ensure space for tools even if initially empty */
-            box-sizing: border-box;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            align-content: flex-start; /* Align content to top */
-        }
-
-        .tool-badge {
-            background-color: #33446a;
-            color: white;
-            padding: 8px 12px;
-            border-radius: 20px;
-            font-size: 0.9rem;
-            white-space: nowrap;
-            transition: background-color 0.2s ease;
-        }
-
-        .tool-badge:hover {
-            background-color: var(--accent-cyan);
-            color: var(--bg-color);
-        }
-
-        .no-tools-message {
-            font-style: italic;
-            opacity: 0.7;
-            text-align: center;
-            width: 100%;
-            padding: 20px;
-        }
-
-        /* Responsive adjustments */
-        @media (max-width: 900px) {
-            .gateway-button {
-                flex: 1 1 calc(33.333% - 15px); /* 3 items per row */
-                max-width: calc(33.333% - 15px);
-            }
-        }
-
-        @media (max-width: 600px) {
-            .gateway-button {
-                flex: 1 1 calc(50% - 15px); /* 2 items per row */
-                max-width: calc(50% - 15px);
-            }
-        }
-
-        @media (max-width: 400px) {
-            .gateway-button {
-                flex: 1 1 100%; /* 1 item per row */
-                max-width: 100%;
-            }
-            .mcp-gateway-component {
-                padding: 10px;
-            }
-            .gateway-buttons {
-                gap: 10px;
-            }
-        }
-</style>
-<div class="mcp-gateway-component">
-        <div class="gateway-buttons" id="gatewayButtonsContainer">
-            <!-- Gateway buttons will be dynamically inserted here -->
-        </div>
-        <div class="tools-display-area" id="toolsDisplayArea">
-            <p class="no-tools-message">게이트웨이를 클릭하여 사용 가능한 도구를 확인하세요.</p>
-        </div>
+:::html
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
+  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:10px;padding:18px;">
+    <div style="color:#f59e0b;font-weight:bold;font-size:17px;margin-bottom:8px;">Models + Runtime</div>
+    <div style="color:#b0b0b0;font-size:13px;line-height:1.7;">
+      Claude <b>Opus 4.8</b> / <b>Sonnet 4.6</b> / <b>Haiku 4.5</b><br>
+      AgentCore Runtime (Strands, <code style="color:#f59e0b;">agent/agent.py</code>)<br>
+      + Memory + Code Interpreter
     </div>
-
-    <script>
-        const gatewaysData = [
-            {
-                name: "Network",
-                koreanLabel: "네트워크",
-                iconText: "NW",
-                tools: [
-                    "get_path_trace_methodology", "find_ip_address", "get_eni_details", "list_vpcs",
-                    "get_vpc_network_details", "get_vpc_flow_logs", "describe_network",
-                    "list_transit_gateways", "get_tgw_details", "get_tgw_routes", "get_all_tgw_routes",
-                    "list_tgw_peerings", "list_vpn_connections", "list_network_firewalls", "get_firewall_rules",
-                    "analyze_reachability", "query_flow_logs"
-                ]
-            },
-            {
-                name: "Container",
-                koreanLabel: "컨테이너",
-                iconText: "CT",
-                tools: [
-                    "list_eks_clusters", "get_eks_vpc_config", "get_eks_insights", "get_cloudwatch_logs",
-                    "get_cloudwatch_metrics", "get_eks_metrics_guidance", "get_policies_for_role",
-                    "search_eks_troubleshoot_guide", "generate_app_manifest",
-                    "ecs_resource_management", "ecs_troubleshooting_tool", "wait_for_service_ready",
-                    "istio_overview", "list_virtual_services", "list_destination_rules",
-                    "list_istio_gateways", "list_service_entries", "list_authorization_policies",
-                    "list_peer_authentications", "check_sidecar_injection", "list_envoy_filters",
-                    "list_istio_crds", "istio_troubleshooting", "query_istio_resource"
-                ]
-            },
-            {
-                name: "IaC",
-                koreanLabel: "코드형 인프라",
-                iconText: "IaC",
-                tools: [
-                    "validate_cloudformation_template", "check_cloudformation_template_compliance",
-                    "troubleshoot_cloudformation_deployment", "search_cdk_documentation",
-                    "search_cloudformation_documentation", "cdk_best_practices", "read_iac_documentation_page",
-                    "SearchAwsProviderDocs", "SearchAwsccProviderDocs",
-                    "SearchSpecificAwsIaModules", "SearchUserProvidedModule", "terraform_best_practices"
-                ]
-            },
-            {
-                name: "Data",
-                koreanLabel: "데이터",
-                iconText: "DB",
-                tools: [
-                    "list_tables", "describe_table", "query_table", "get_item",
-                    "dynamodb_data_modeling", "compute_performances_and_costs",
-                    "list_db_instances", "list_db_clusters", "describe_db_instance",
-                    "describe_db_cluster", "execute_sql", "list_snapshots",
-                    "list_cache_clusters", "describe_cache_cluster", "list_replication_groups",
-                    "describe_replication_group", "list_serverless_caches", "elasticache_best_practices",
-                    "list_clusters", "get_cluster_info", "get_configuration_info",
-                    "get_bootstrap_brokers", "list_nodes", "msk_best_practices"
-                ]
-            },
-            {
-                name: "Security",
-                koreanLabel: "보안",
-                iconText: "SC",
-                tools: [
-                    "list_users", "get_user", "list_roles", "get_role_details",
-                    "list_groups", "get_group", "list_policies", "list_user_policies",
-                    "list_role_policies", "get_user_policy", "get_role_policy",
-                    "list_access_keys", "simulate_principal_policy", "get_account_security_summary"
-                ]
-            },
-            {
-                name: "Monitoring",
-                koreanLabel: "모니터링",
-                iconText: "MO",
-                tools: [
-                    "get_metric_data", "get_metric_metadata", "analyze_metric",
-                    "get_recommended_metric_alarms", "get_active_alarms", "get_alarm_history",
-                    "describe_log_groups", "analyze_log_group", "execute_log_insights_query",
-                    "get_logs_insight_query_results", "cancel_logs_insight_query",
-                    "lookup_events", "list_event_data_stores", "lake_query",
-                    "get_query_status", "get_query_results"
-                ]
-            },
-            {
-                name: "Cost",
-                koreanLabel: "비용",
-                iconText: "CO",
-                tools: [
-                    "get_today_date", "get_cost_and_usage", "get_cost_and_usage_comparisons",
-                    "get_cost_comparison_drivers", "get_cost_forecast", "get_dimension_values",
-                    "get_tag_values", "get_pricing", "list_budgets"
-                ]
-            },
-            {
-                name: "Ops",
-                koreanLabel: "운영",
-                iconText: "OP",
-                tools: [
-                    "search_documentation", "read_documentation", "recommend", "list_regions",
-                    "get_regional_availability", "prompt_understanding", "call_aws",
-                    "suggest_aws_commands", "run_steampipe_query"
-                ]
-            }
-        ];
-
-        const gatewayButtonsContainer = document.getElementById('gatewayButtonsContainer');
-        const toolsDisplayArea = document.getElementById('toolsDisplayArea');
-
-        function renderGatewayButtons() {
-            gatewayButtonsContainer.innerHTML = '';
-            gatewaysData.forEach(gateway => {
-                const button = document.createElement('button');
-                button.className = 'gateway-button';
-                button.dataset.gatewayName = gateway.name;
-                button.innerHTML = `
-                    <div class="gateway-button-icon">${gateway.iconText}</div>
-                    <div class="gateway-button-label">${gateway.koreanLabel}</div>
-                    <div class="gateway-tool-count">${gateway.tools.length} tools</div>
-                `;
-                button.addEventListener('click', () => handleGatewayClick(gateway));
-                gatewayButtonsContainer.appendChild(button);
-            });
-        }
-
-        function handleGatewayClick(selectedGateway) {
-            // Remove 'active' class from all buttons
-            document.querySelectorAll('.gateway-button').forEach(button => {
-                button.classList.remove('active');
-            });
-
-            // Add 'active' class to the clicked button
-            const clickedButton = document.querySelector(`.gateway-button[data-gateway-name="${selectedGateway.name}"]`);
-            if (clickedButton) {
-                clickedButton.classList.add('active');
-            }
-
-            // Render tools for the selected gateway
-            toolsDisplayArea.innerHTML = '';
-            if (selectedGateway.tools && selectedGateway.tools.length > 0) {
-                selectedGateway.tools.forEach(tool => {
-                    const badge = document.createElement('span');
-                    badge.className = 'tool-badge';
-                    badge.textContent = tool;
-                    toolsDisplayArea.appendChild(badge);
-                });
-            } else {
-                toolsDisplayArea.innerHTML = '<p class="no-tools-message">선택된 게이트웨이에 대한 도구가 없습니다.</p>';
-            }
-        }
-
-        // Initial rendering of buttons
-        renderGatewayButtons();
-    </script>
-:::
-
-:::notes
-{timing: 2min}
-8개 Gateway를 클릭하면 각 Gateway의 도구 목록을 볼 수 있습니다.
-:::
-
-<!-- Slide 6: AI Route Classification -->
-
-@type: content
-@transition: slide
-
-# AI Route Classification
-
-:::html
-<div class="tab-bar" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#00d4ff;color:#0a0e1a;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,0)">Classification Flow</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,1)">18 Routes</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,2)">Handler Types</button>
-</div>
-<div class="tc" style="display:block;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:flex;align-items:center;gap:16px;justify-content:center;flex-wrap:wrap;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;text-align:center;min-width:160px;">
-    <div style="color:#00d4ff;font-weight:bold;margin-bottom:4px;">User Input</div>
-    <div style="color:#8b95a5;font-size:13px;">"EKS 비용 개선점 찾아줘"</div>
   </div>
-  <div style="color:#00d4ff;font-size:24px;">→</div>
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:16px;text-align:center;min-width:160px;">
-    <div style="color:#f59e0b;font-weight:bold;margin-bottom:4px;">Sonnet 4.6</div>
-    <div style="color:#8b95a5;font-size:13px;">Intent Classification</div>
-  </div>
-  <div style="color:#00d4ff;font-size:24px;">→</div>
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:16px;text-align:center;min-width:160px;">
-    <div style="color:#00ff88;font-weight:bold;margin-bottom:4px;">eks-optimize</div>
-    <div style="color:#8b95a5;font-size:13px;">auto-collect handler</div>
-  </div>
-  <div style="color:#00d4ff;font-size:24px;">→</div>
-  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.3);border-radius:8px;padding:16px;text-align:center;min-width:160px;">
-    <div style="color:#a855f7;font-weight:bold;margin-bottom:4px;">SSE Streaming</div>
-    <div style="color:#8b95a5;font-size:13px;">실시간 응답 + 도구 표시</div>
+  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.35);border-radius:10px;padding:18px;">
+    <div style="color:#00d4ff;font-weight:bold;font-size:17px;margin-bottom:8px;">Config Source of Truth</div>
+    <div style="color:#b0b0b0;font-size:13px;line-height:1.7;">
+      <b>SSM</b> = source of truth<br>
+      <code style="color:#00d4ff;">/ops/awsops-v2/agentcore/*</code><br>
+      provision.py 기록 → BFF 런타임 read
+    </div>
   </div>
 </div>
-</div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:13px;">
-  <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;"><span style="color:#00d4ff;">code</span> — Code Interpreter</div>
-  <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;"><span style="color:#00d4ff;">network</span> — VPC/TGW/VPN</div>
-  <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;"><span style="color:#00d4ff;">container</span> — EKS/ECS</div>
-  <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;"><span style="color:#00d4ff;">iac</span> — CDK/CFn/TF</div>
-  <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;"><span style="color:#00d4ff;">data</span> — DB Services</div>
-  <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;"><span style="color:#00d4ff;">security</span> — IAM/Policy</div>
-  <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;"><span style="color:#f59e0b;">monitoring</span> — CW/CT</div>
-  <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;"><span style="color:#f59e0b;">cost</span> — Billing</div>
-  <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;"><span style="color:#f59e0b;">aws-data</span> — Steampipe SQL</div>
-  <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;"><span style="color:#00ff88;">eks-optimize</span></div>
-  <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;"><span style="color:#00ff88;">db-optimize</span></div>
-  <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;"><span style="color:#00ff88;">msk-optimize</span></div>
-  <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;"><span style="color:#00ff88;">idle-scan</span></div>
-  <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;"><span style="color:#00ff88;">trace-analyze</span></div>
-  <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;"><span style="color:#00ff88;">incident</span></div>
-  <div style="background:rgba(168,85,247,0.15);border-radius:6px;padding:8px;"><span style="color:#a855f7;">datasource</span></div>
-  <div style="background:rgba(168,85,247,0.15);border-radius:6px;padding:8px;"><span style="color:#a855f7;">general</span></div>
-  <div style="background:rgba(168,85,247,0.15);border-radius:6px;padding:8px;"><span style="color:#a855f7;">multi-route</span></div>
-</div>
-</div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#00ff88;font-weight:bold;margin-bottom:4px;">auto-collect</div>
-    <div style="color:#8b95a5;font-size:13px;">데이터 자동 수집 → Bedrock 분석<br>eks-optimize, db-optimize, msk-optimize, idle-scan, trace-analyze, incident</div>
+<div style="background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.3);border-radius:10px;padding:16px;margin-top:16px;">
+  <div style="color:#a855f7;font-weight:bold;font-size:15px;margin-bottom:10px;">8 Section Gateways &nbsp;·&nbsp; ~120 read-only tools</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:5px 12px;font-size:13px;">network</span>
+    <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:5px 12px;font-size:13px;">container</span>
+    <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:5px 12px;font-size:13px;">data</span>
+    <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:5px 12px;font-size:13px;">security</span>
+    <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:5px 12px;font-size:13px;">cost</span>
+    <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:5px 12px;font-size:13px;">monitoring</span>
+    <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:5px 12px;font-size:13px;">iac</span>
+    <span style="background:rgba(168,85,247,0.18);color:#c4a0f7;border-radius:6px;padding:5px 12px;font-size:13px;">ops</span>
   </div>
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#00d4ff;font-weight:bold;margin-bottom:4px;">sql</div>
-    <div style="color:#8b95a5;font-size:13px;">Steampipe SQL 생성 → 실행 → 분석<br>aws-data 라우트</div>
-  </div>
-  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#a855f7;font-weight:bold;margin-bottom:4px;">datasource</div>
-    <div style="color:#8b95a5;font-size:13px;">외부 데이터소스 쿼리 (PromQL/LogQL)<br>datasource 라우트</div>
-  </div>
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;">
-    <div style="color:#f59e0b;font-weight:bold;margin-bottom:4px;">gateway</div>
-    <div style="color:#8b95a5;font-size:13px;">AgentCore MCP Gateway 호출<br>network, container, data, security 등</div>
-  </div>
-</div>
+  <div style="color:#8b95a5;font-size:12px;margin-top:10px;">외부 관측성 = Integrations 축 (ADR-039) — 9번째 게이트웨이가 아님</div>
 </div>
 :::
 
 :::notes
-{timing: 3min}
-AI 라우팅의 핵심은 ROUTE_REGISTRY라는 단일 소스입니다.
-
-18개의 라우트가 등록되어 있고, 각 라우트에는 gateway, display name, description, tools, examples가 정의되어 있습니다. 새로운 도구를 추가하면 분류 프롬프트, UI 표시, 게이트웨이 매핑이 자동으로 업데이트됩니다.
-
+{timing: 4min}
+AI 엔진은 Bedrock AgentCore입니다.
+모델은 Opus 4.8, Sonnet 4.6, Haiku 4.5를 상황에 맞게 쓰고, AgentCore Runtime이 Strands 기반 `agent/agent.py`를 실행합니다. Memory와 Code Interpreter도 함께 붙어 있습니다.
 {cue: pause}
-
-분류 흐름을 보면, 사용자가 자연어로 질문하면 Sonnet 4.6 모델이 18개 라우트 중 1-3개를 선택합니다. 멀티 라우트도 지원합니다. 예를 들어 "VPC 보안그룹과 비용을 분석해줘"라고 하면 network과 cost 두 라우트가 선택됩니다.
-
-핸들러 타입이 5가지 있습니다. auto-collect는 자동 데이터 수집 에이전트, sql은 Steampipe 직접 쿼리, datasource는 Prometheus 같은 외부 데이터소스, code는 Python 코드 인터프리터, gateway는 MCP Gateway 호출입니다.
-
+설정의 source of truth는 SSM입니다. provision.py가 runtime ARN, interpreter ID, memory ID를 `/ops/awsops-v2/agentcore/` 경로에 기록하고, 웹 BFF가 런타임에 읽습니다. valueFrom 레이스를 피하려는 의도적 설계입니다.
+도구는 8개 섹션 게이트웨이로 묶입니다. network, container, data, security, cost, monitoring, iac, ops입니다. 여기에 약 120개의 읽기 전용 도구가 분산되어 있습니다. 이 숫자는 진화하는 근사치라는 점을 기억해 주세요. 고정된 카운트가 아닙니다.
+한 가지 더, 외부 관측성은 Integrations 축, ADR-039로 다룹니다. 9번째 게이트웨이가 아닙니다. 게이트웨이 수는 8로 유지합니다.
 {cue: transition}
-auto-collect가 가장 흥미로운 부분입니다.
+그럼 이 8개 게이트웨이 중 어디로 보낼지는 어떻게 정할까요?
 :::
 
 ---
 
-<!-- Slide 7: Auto-Collect Agents -->
+<!-- Slide 7: Hybrid Routing & Streaming Chat -->
 
 @type: content
 @transition: slide
 
-# Auto-Collect Agents
+# Hybrid Routing & Streaming Chat — ADR-038
 
 ::: left
 
-### 6 Collectors
+### Routing Pipeline
 
-| Agent | Target |
-|-------|--------|
-| **eks-optimize** | EKS rightsizing |
-| **db-optimize** | RDS/ElastiCache/OpenSearch |
-| **msk-optimize** | MSK Kafka brokers |
-| **idle-scan** | Unused resources |
-| **trace-analyze** | Distributed traces |
-| **incident** | Multi-source incidents |
+1. **Regex fast-path** — 명백한 질의는 즉시 라우팅
+2. **Haiku 4.5 classifier** — 애매하면 분류
+3. **Prompt caching** — 약 **59%** 캐시 히트
+4. → 섹션 라우팅 → SSE 스트리밍 + 도구 표시
+
+### Gate Result
+
+- **69.2% → 96.9%** (+27.7pp)
+- **LIVE** 2026-06-10
 
 :::
 
 ::: right
 
-### 4-Phase Architecture
+### Chat UX
 
-1. **Detect** -- 데이터소스 자동 탐지
-   - Prometheus, Loki, Tempo, CloudWatch
-2. **Collect** -- 병렬 데이터 수집
-   - PromQL + Steampipe SQL + CloudWatch
-3. **Format** -- Bedrock 컨텍스트 포맷팅
-   - `formatContext()` 메서드
-4. **Analyze** -- Opus 4.8 심층 분석
-   - `analysisPrompt` 시스템 프롬프트
-
-### Collector Interface
-
-```
-interface Collector {
-  collect(send, accountId?)
-  formatContext(data)
-  analysisPrompt: string
-  displayName: string
-}
-```
+:::html
+<div style="background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.3);border-radius:10px;padding:16px;margin-top:8px;">
+  <div style="color:#00d4ff;font-size:14px;line-height:1.9;">
+    🪟 resizable / maximizable drawer<br>
+    📄 <code style="color:#00d4ff;">/assistant</code> full page<br>
+    📝 react-markdown 렌더링<br>
+    💾 Aurora-backed thread 영속<br>
+    📚 Claude-app 스타일 사이드바
+  </div>
+</div>
+:::
 
 :::
 
 :::notes
 {timing: 3min}
-Auto-Collect Agent는 AWSops의 가장 강력한 기능입니다.
-
-6개의 Collector가 있고, 모두 같은 인터페이스를 구현합니다. collect 메서드로 데이터를 수집하고, formatContext로 Bedrock에 전달할 컨텍스트를 만들고, analysisPrompt로 분석 프롬프트를 제공합니다.
-
+8개 게이트웨이 중 어디로 보낼지는 ADR-038 하이브리드 라우팅이 정합니다.
+파이프라인은 3단계입니다. 먼저 regex fast-path가 명백한 질의를 즉시 라우팅합니다. 애매하면 Haiku 4.5 분류기가 판단합니다. 그리고 prompt caching으로 약 59% 캐시 히트를 내서 비용과 지연을 줄입니다. 결정된 섹션으로 라우팅한 뒤 SSE로 응답을 스트리밍하면서 어떤 도구를 호출하는지도 함께 보여줍니다.
 {cue: pause}
-
-4단계 아키텍처를 보면, 첫 번째 Detect 단계에서 사용 가능한 데이터소스를 자동 탐지합니다. Prometheus가 연결되어 있으면 PromQL을 사용하고, 없으면 CloudWatch와 Steampipe만으로 분석합니다. 이 Graceful Degradation이 핵심입니다.
-
-예를 들어 eks-optimize는 Prometheus에서 CPU/Memory 사용량, CPU Throttling, Pod 재시작, HTTP 에러율을 수집하고, Steampipe에서 K8s 리소스 request/limit를 수집합니다. 없는 메트릭은 건너뜁니다. 이를 MetricCandidate 패턴이라고 합니다. 여러 PromQL 쿼리를 순서대로 시도하고, 첫 번째로 데이터가 반환되는 쿼리를 사용합니다.
-
+게이트 정확도는 69.2%에서 96.9%로 27.7 포인트 올랐고, 2026년 6월 10일에 라이브입니다.
+오른쪽은 챗 UX입니다. 크기 조절과 최대화가 되는 드로어, `/assistant` 풀페이지, react-markdown 렌더링, 그리고 Aurora에 저장되는 스레드 영속까지. 사이드바는 Claude 앱 스타일이라 익숙합니다.
 {cue: transition}
-데이터소스 통합을 좀 더 자세히 보겠습니다.
+이 챗 위에 얹힌 대표 기능이 AI 진단입니다.
 :::
 
 ---
 
-<!-- Slide 8: Datasource Integration -->
+<!-- Slide 8: AI Diagnosis -->
 
 @type: content
 @transition: slide
 
-# Datasource Integration
+# AI Diagnosis — Flagship, Read-Only
 
 :::html
-<div class="tab-bar" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#00d4ff;color:#0a0e1a;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,0)">Metrics</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,1)">Logs</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,2)">Traces</button>
-  <button class="tab-btn" style="padding:8px 16px;border:none;border-radius:6px;background:#1a2540;color:#b0b0b0;font-weight:bold;cursor:pointer;font-size:14px;" onclick="(function(b,i){var p=b.closest('.slide-body')||b.parentNode.parentNode.parentNode;p.querySelectorAll('.tc').forEach(function(c,j){c.style.display=j===i?'block':'none'});var btns=b.parentNode.querySelectorAll('.tab-btn');btns.forEach(function(x){x.style.background='#1a2540';x.style.color='#b0b0b0';x.classList.remove('active')});b.style.background='#00d4ff';b.style.color='#0a0e1a';b.classList.add('active')})(this,3)">Unified Client</button>
-</div>
-<div class="tc" style="display:block;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Prometheus</div>
-    <div style="color:#8b95a5;font-size:13px;">PromQL</div>
-    <div style="color:#b0b0b0;font-size:12px;margin-top:8px;">rate(http_requests_total[5m])</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
+  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.35);border-radius:10px;padding:18px;">
+    <div style="color:#a855f7;font-weight:bold;font-size:18px;margin-bottom:8px;">Base Tier</div>
+    <div style="color:#a855f7;font-size:36px;font-weight:bold;">8</div>
+    <div style="color:#8b95a5;font-size:13px;">섹션 · 기본 진단</div>
   </div>
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Datadog</div>
-    <div style="color:#8b95a5;font-size:13px;">Query API</div>
-    <div style="color:#b0b0b0;font-size:12px;margin-top:8px;">avg:system.cpu.user</div>
-  </div>
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Dynatrace</div>
-    <div style="color:#8b95a5;font-size:13px;">Metrics v2 API</div>
-    <div style="color:#b0b0b0;font-size:12px;margin-top:8px;">builtin:host.cpu.usage</div>
+  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:10px;padding:18px;">
+    <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Deep Tier</div>
+    <div style="color:#f59e0b;font-size:36px;font-weight:bold;">15</div>
+    <div style="color:#8b95a5;font-size:13px;">섹션 · Sonnet 기본 / Opus 선택 (cost-gate)</div>
   </div>
 </div>
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">
+  <span style="background:rgba(0,212,255,0.12);color:#00d4ff;border-radius:6px;padding:8px 14px;font-size:13px;">Well-Architected 매핑</span>
+  <span style="background:rgba(0,212,255,0.12);color:#00d4ff;border-radius:6px;padding:8px 14px;font-size:13px;">SSE 진행률</span>
+  <span style="background:rgba(0,212,255,0.12);color:#00d4ff;border-radius:6px;padding:8px 14px;font-size:13px;">auto-title + tags</span>
+  <span style="background:rgba(0,212,255,0.12);color:#00d4ff;border-radius:6px;padding:8px 14px;font-size:13px;">soft-delete</span>
+  <span style="background:rgba(0,255,136,0.12);color:#00ff88;border-radius:6px;padding:8px 14px;font-size:13px;">DOCX / PDF export</span>
 </div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#00ff88;font-weight:bold;font-size:18px;margin-bottom:8px;">Loki</div>
-    <div style="color:#8b95a5;font-size:13px;">LogQL</div>
-    <div style="color:#b0b0b0;font-size:12px;margin-top:8px;">{{level="error"}} | json</div>
-  </div>
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#00ff88;font-weight:bold;font-size:18px;margin-bottom:8px;">ClickHouse</div>
-    <div style="color:#8b95a5;font-size:13px;">SQL</div>
-    <div style="color:#b0b0b0;font-size:12px;margin-top:8px;">SELECT * FROM logs WHERE level='error'</div>
-  </div>
-</div>
-</div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#00d4ff;font-weight:bold;font-size:18px;margin-bottom:8px;">Tempo</div>
-    <div style="color:#8b95a5;font-size:13px;">TraceQL</div>
-    <div style="color:#b0b0b0;font-size:12px;margin-top:8px;">{{ status = error }}</div>
-  </div>
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#00d4ff;font-weight:bold;font-size:18px;margin-bottom:8px;">Jaeger</div>
-    <div style="color:#8b95a5;font-size:13px;">gRPC API</div>
-    <div style="color:#b0b0b0;font-size:12px;margin-top:8px;">/api/traces?service=payment</div>
-  </div>
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;text-align:center;">
-    <div style="color:#00d4ff;font-weight:bold;font-size:18px;margin-bottom:8px;">ClickHouse</div>
-    <div style="color:#8b95a5;font-size:13px;">SQL (Trace Backend)</div>
-    <div style="color:#b0b0b0;font-size:12px;margin-top:8px;">SELECT * FROM otel_traces</div>
-  </div>
-</div>
-</div>
-<div class="tc" style="display:none;padding:12px;background:rgba(15,22,41,0.5);border-radius:8px;">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.3);border-radius:8px;padding:16px;">
-    <div style="color:#a855f7;font-weight:bold;margin-bottom:8px;">datasource-client.ts</div>
-    <div style="color:#8b95a5;font-size:13px;">통합 쿼리 인터페이스<br><code>queryDatasource(type, query, range)</code><br>하나의 함수로 7개 데이터소스 쿼리</div>
-  </div>
-  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.3);border-radius:8px;padding:16px;">
-    <div style="color:#a855f7;font-weight:bold;margin-bottom:8px;">Auto-Discovery</div>
-    <div style="color:#8b95a5;font-size:13px;">config.json에 URL 등록 → 헬스체크 자동 감지<br>키워드 분석으로 적절한 데이터소스 자동 라우팅</div>
-  </div>
-</div>
+<div style="background:rgba(0,255,136,0.06);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:12px;margin-top:16px;text-align:center;">
+  <span style="color:#00ff88;font-weight:bold;">Strictly Read-Only</span>
+  <span style="color:#8b95a5;font-size:13px;margin-left:8px;">진단·권고만 — auto-remediation 없음. 생성은 비동기 워커 (python-docx + chromium)</span>
 </div>
 :::
 
 :::notes
-{timing: 2min}
-AWSops는 7가지 외부 데이터소스를 지원합니다.
-
-메트릭은 Prometheus, Datadog, Dynatrace. 로그는 Loki와 ClickHouse. 트레이스는 Tempo와 Jaeger입니다.
-
+{timing: 4min}
+AWSops의 대표 기능은 AI 종합진단입니다.
+진단은 워커가 생성하는 종합 리포트입니다. base 티어는 8섹션, deep 티어는 15섹션입니다. deep은 기본 Sonnet으로 돌고, cost-gate를 거쳐 Opus를 선택할 수도 있습니다. 모든 섹션은 Well-Architected 6대 기둥에 매핑됩니다.
 {cue: pause}
-
-모든 데이터소스는 datasource-registry.ts에 메타데이터가 등록되어 있습니다. 쿼리 언어, 헬스체크 엔드포인트, 기본 포트, 예제 쿼리가 포함됩니다. datasource-client.ts가 통합 쿼리 인터페이스를 제공해서, queryDatasource 함수 하나로 어떤 데이터소스든 쿼리할 수 있습니다.
-
-Auto-Discovery 기능이 있어서, data/config.json에 URL만 등록하면 헬스체크로 연결 가능 여부를 자동 감지합니다. 사용자 질문에서 키워드를 분석해서 적절한 데이터소스로 자동 라우팅합니다.
-
+생성 중에는 SSE로 진행률이 흐르고, 끝나면 워커 LLM이 자동으로 제목을 붙이고 태그를 제안합니다. 제목 수정, 태그 수동 추가, soft-delete도 됩니다. 그리고 DOCX와 PDF로 내보낼 수 있는데, 워커가 python-docx와 chromium으로 생성합니다.
+가장 중요한 건 이 모든 게 철저히 읽기 전용이라는 점입니다. 진단하고 권고할 뿐 자동으로 고치지 않습니다. auto-remediation은 없습니다. 그래서 안심하고 운영 환경에 붙일 수 있습니다.
+{cue: question}
+Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠? 이게 그 작업을 대신합니다.
 {cue: transition}
-마지막으로 보안 아키텍처를 보겠습니다.
+이 무거운 생성 작업을 안전하게 받쳐주는 워커 티어를 보겠습니다.
 :::
 
 ---
 
-<!-- Slide 9: Security Architecture -->
+<!-- Slide 9: Async Worker Tier -->
 
 @type: content
 @transition: slide
 
-# Security Architecture
+# Async Worker Tier — OOM-Safe Backbone
 
 :::html
-<div class="flow-h">
-  <div class="flow-group bg-blue" data-fragment-index="1">
-    <div class="flow-group-label">Authentication</div>
-    <div class="flow-box">Cognito User Pool</div>
-    <div class="flow-box">Lambda@Edge (Python)</div>
-    <div class="flow-box">JWT Verification</div>
-    <div class="flow-box">HttpOnly Cookie</div>
+<div style="display:flex;flex-direction:column;gap:8px;margin-top:14px;font-size:13px;">
+  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.35);border-radius:8px;padding:12px 16px;">
+    <span style="color:#00d4ff;font-weight:bold;">web POST /api/jobs</span>
+    <span style="color:#8b95a5;"> → <code style="color:#00d4ff;">worker_jobs</code> (queued) + SQS</span>
   </div>
-  <div class="flow-arrow">&rarr;</div>
-  <div class="flow-group bg-orange" data-fragment-index="2">
-    <div class="flow-group-label">Network Security</div>
-    <div class="flow-box">Private Subnet Only</div>
-    <div class="flow-box">No Public IP</div>
-    <div class="flow-box">CF Prefix List &rarr; ALB SG</div>
-    <div class="flow-box">X-Custom-Secret Header</div>
+  <div style="text-align:center;color:#666;">↓ ESM (kill-switch)</div>
+  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:8px;padding:12px 16px;">
+    <span style="color:#f59e0b;font-weight:bold;">dispatcher Lambda</span>
+    <span style="color:#8b95a5;"> — 멱등 (idempotent on job_id)</span>
   </div>
-  <div class="flow-arrow">&rarr;</div>
-  <div class="flow-group bg-green" data-fragment-index="3">
-    <div class="flow-group-label">Access Control</div>
-    <div class="flow-box">IMDSv2 (Hop Limit 2)</div>
-    <div class="flow-box">SSM Session Manager</div>
-    <div class="flow-box">Admin Email List</div>
-    <div class="flow-box">Per-User Memory</div>
+  <div style="text-align:center;color:#666;">↓ Step Functions Standard · Choice on <code style="color:#a855f7;">$.runtime</code></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+    <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.35);border-radius:8px;padding:12px 16px;text-align:center;">
+      <span style="color:#a855f7;font-weight:bold;">RunLambda</span><br><span style="color:#8b95a5;">짧은 작업</span>
+    </div>
+    <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.35);border-radius:8px;padding:12px 16px;text-align:center;">
+      <span style="color:#00ff88;font-weight:bold;">ecs:runTask.sync (Fargate)</span><br><span style="color:#8b95a5;">긴 작업 / OOM</span>
+    </div>
+  </div>
+  <div style="text-align:center;color:#666;">↓</div>
+  <div style="background:rgba(15,22,41,0.6);border-radius:8px;padding:12px 16px;color:#8b95a5;">
+    worker가 직접 <b style="color:#00ff88;">running/succeeded</b> 기록 · Catch 시 <b style="color:#f59e0b;">status_updater</b>가 failed · <b style="color:#00d4ff;">reaper</b>(EventBridge 5분)가 stale 정합화
   </div>
 </div>
 :::
 
 :::notes
-{timing: 2min}
-보안은 3계층 방어입니다.
-
-인증 계층에서는 Cognito User Pool과 Lambda@Edge를 사용합니다. Lambda@Edge가 CloudFront에서 모든 요청의 JWT 토큰을 검증합니다. 토큰이 없거나 만료되면 Cognito 로그인 페이지로 리다이렉트합니다. 로그아웃 시 HttpOnly 쿠키는 브라우저 JavaScript로 삭제할 수 없기 때문에 서버 사이드 API를 통해 삭제합니다.
-
+{timing: 3min}
+무거운 작업은 모두 비동기 워커 티어가 받습니다.
+흐름은 이렇습니다. 웹이 `POST /api/jobs`로 들어오면 worker_jobs 테이블에 queued 상태로 기록하고 SQS에 넣습니다. ESM이 킬스위치 역할을 하면서 dispatcher Lambda를 호출하는데, dispatcher는 job_id 기준으로 멱등하게 동작합니다.
 {cue: pause}
-
-네트워크 계층에서는 EC2가 Private Subnet에만 있고 Public IP가 없습니다. ALB Security Group은 CloudFront Managed Prefix List만 허용합니다. 추가로 X-Custom-Secret 헤더로 ALB가 CloudFront를 통한 요청인지 검증합니다. 이 헤더가 없는 직접 ALB 접근은 차단됩니다.
-
-접근 제어 계층에서는 IMDSv2를 강제하고 Hop Limit 2로 컨테이너 환경에서의 메타데이터 접근도 차단합니다. SSH 대신 SSM Session Manager를 사용하고, Accounts 페이지 같은 관리 기능은 adminEmails 설정으로 접근을 제한합니다.
-
+그다음 Step Functions Standard가 `$.runtime` 값을 보고 분기합니다. 짧은 작업은 RunLambda로, 길거나 OOM 위험이 있는 작업은 ecs:runTask.sync로 Fargate 워커에 넘깁니다. 진단 리포트나 DOCX·PDF 생성 같은 무거운 작업이 여기로 갑니다.
+워커는 스스로 running과 succeeded를 Aurora에 기록합니다. 실패해서 Catch로 빠지면 status_updater Lambda가 failed로 표시하는데, 이건 SFN이 VPC 안 Aurora에 직접 쓸 수 없기 때문입니다. 마지막으로 reaper가 5분마다 stale 작업을 정합화합니다. 그래서 OOM에 안전한 백본입니다. 참고로 Fargate 워커는 ENTRYPOINT가 아니라 CMD를 써야 SFN command override가 정상 동작합니다.
 {cue: transition}
-정리하겠습니다.
+관측성과 토폴로지로 넘어갑니다.
 :::
 
 ---
 
-<!-- Slide 10: Architecture Decisions -->
+<!-- Slide 10: Datasources & Topology -->
 
 @type: content
 @transition: slide
 
-# Key Architecture Decisions
+# Datasources & Topology
 
 ::: left
 
-### Performance Decisions
+### Datasource Platform (read-only)
 
-- **pg Pool > Steampipe CLI** -- 660x faster
-- **node-cache 5min TTL** -- 대시보드 23개 쿼리 프리워밍
-- **batchQuery (5 sequential)** -- 동시 연결 제한 준수
-- **cache-warmer** -- 4분 주기 백그라운드 워밍
-
-### AI Decisions
-
-- **Sonnet 4.6** -- 라우트 분류 (빠르고 정확)
-- **Opus 4.8** -- 종합진단 리포트 (깊은 분석)
-- **MetricCandidate** -- PromQL 자동 탐색 패턴
+- 커넥터: **ClickHouse · Prometheus · Loki · Tempo · Mimir**
+- connector Lambda + **Aurora schema cache**
+- chat injection — AI가 데이터소스 교차 조회
+- **`/datasources` Explore** 페이지 + NL→query
 
 :::
 
 ::: right
 
-### Resilience Decisions
+### Topology
 
-- **Graceful Degradation** -- 데이터소스 없으면 Skip
-- **Cost Availability Probe** -- MSP 환경 자동 감지
-- **Snapshot Fallback** -- Cost API 실패 시 로컬 스냅샷
-- **Inventory Snapshot** -- 추가 쿼리 0건으로 추이 추적
-
-### Multi-Account Decisions
-
-- **config.json** -- 코드 수정 없이 계정 추가
-- **Aggregator** -- 통합/개별 조회 모두 지원
-- **buildSearchPath()** -- 동적 search_path 생성
-- **Per-Account Cache** -- accountId 접두사 캐시키
+:::html
+<div style="background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.3);border-radius:10px;padding:16px;margin-top:8px;">
+  <div style="display:flex;align-items:center;gap:8px;justify-content:center;flex-wrap:wrap;font-size:13px;color:#c4a0f7;font-weight:bold;">
+    <span>CF</span><span style="color:#666;">→</span>
+    <span>LB</span><span style="color:#666;">→</span>
+    <span>TG</span><span style="color:#666;">→</span>
+    <span>DB</span>
+  </div>
+  <div style="color:#8b95a5;font-size:13px;line-height:1.7;margin-top:12px;">
+    flow + infra 리소스 그래프<br>
+    <code style="color:#a855f7;">/topology/resource/[id]</code> 상세 패널
+  </div>
+</div>
+:::
 
 :::
 
 :::notes
-{timing: 2min}
-주요 아키텍처 결정을 정리합니다.
-
-성능 측면에서 가장 중요한 결정은 Steampipe CLI 대신 pg Pool을 사용한 것입니다. 660배 차이는 대시보드 사용성에 결정적이었습니다.
-
-AI 측면에서는 분류에 빠른 Sonnet을, 심층 분석에 강력한 Opus를 분리해서 사용합니다. MetricCandidate 패턴은 다양한 Prometheus 환경에서 호환성을 보장합니다.
-
+{timing: 3min}
+관측성 데이터는 읽기 전용 데이터소스 플랫폼으로 통합합니다.
+ClickHouse, Prometheus, Loki, Tempo, Mimir 커넥터를 지원합니다. 각 커넥터는 Lambda로 구현되고, 스키마는 Aurora에 캐시합니다. 이 데이터를 챗에 주입하면 AI가 여러 데이터소스를 교차 조회할 수 있습니다. `/datasources` Explore 페이지에서는 자연어를 쿼리로 변환해 직접 탐색할 수도 있습니다. 모두 읽기 전용입니다.
 {cue: pause}
-
-복원력 측면에서 Graceful Degradation이 핵심입니다. Prometheus가 없어도 CloudWatch와 Steampipe만으로 분석합니다. Cost API가 차단된 MSP 환경에서도 로컬 스냅샷으로 동작합니다.
-
-멀티 어카운트는 config.json 하나만 수정하면 코드 변경 없이 계정을 추가할 수 있습니다.
-
+토폴로지는 리소스 간 관계를 그래프로 보여줍니다. flow 그래프와 infra 리소스 그래프 두 가지가 있고, CloudFront에서 로드밸런서, 타깃 그룹, DB로 이어지는 경로를 시각화합니다. `/topology/resource/[id]`로 들어가면 개별 리소스의 상세 패널을 볼 수 있습니다.
 {cue: transition}
-마지막 슬라이드입니다.
+컨테이너 운영자를 위한 EKS 통합을 보겠습니다.
 :::
 
 ---
 
-<!-- Slide 11: Technology Stack Summary -->
+<!-- Slide 11: EKS -->
+
+@type: content
+@transition: slide
+
+# EKS — Read-Only In-Cluster
+
+::: left
+
+### Onboarding
+
+- `configure.mjs` **멀티선택** → `eks.tf`
+- web task role에 **Access Entry** 부여
+- **AmazonEKSViewPolicy** (클러스터 스코프)
+
+### Read-Only Query
+
+- nodes / pods / deployments / services
+- task-role Access-Entry **presigned-STS token**
+- **BFF-direct** (워커 거치지 않음)
+
+:::
+
+::: right
+
+:::html
+<div style="background:rgba(0,255,136,0.08);border:1px solid rgba(0,255,136,0.3);border-radius:10px;padding:18px;margin-top:8px;">
+  <div style="color:#00ff88;font-weight:bold;font-size:16px;margin-bottom:10px;">EKS Page</div>
+  <div style="color:#8b95a5;font-size:13px;line-height:1.8;">
+    ✓ access badges<br>
+    ✓ CLI guide<br>
+    ✓ 클러스터별 워크로드 뷰
+  </div>
+  <div style="color:#666;font-size:12px;margin-top:12px;border-top:1px solid rgba(0,255,136,0.2);padding-top:8px;">
+    View policy = 읽기 전용 RBAC — 변경 권한 없음
+  </div>
+</div>
+:::
+
+:::
+
+:::notes
+{timing: 3min}
+EKS도 읽기 전용으로 통합됩니다.
+온보딩은 configure.mjs의 멀티선택으로 시작합니다. 선택한 클러스터에 대해 eks.tf가 웹 task role에 Access Entry를 부여하고, AmazonEKSViewPolicy를 클러스터 스코프로 붙입니다. 이건 AWS가 관리하는 읽기 전용 RBAC 정책이라 변경 권한이 없습니다.
+{cue: pause}
+조회는 nodes, pods, deployments, services 같은 핵심 리소스를 봅니다. task role의 Access Entry로 presigned STS 토큰을 만들어 클러스터에 접근하고, 이건 BFF가 직접 처리합니다. 워커를 거치지 않습니다.
+EKS 페이지에는 접근 권한 배지와 CLI 가이드, 클러스터별 워크로드 뷰가 있습니다.
+{cue: transition}
+이 모든 걸 떠받치는 인증과 보안 레이어입니다.
+:::
+
+---
+
+<!-- Slide 12: Auth & Security -->
+
+@type: content
+@transition: slide
+
+# Auth & Security
+
+::: left
+
+### Cognito + Lambda@Edge
+
+- **us-east-1**, py3.12, viewer-request
+- **RS256 JWKS** 서명 검증 (iss/aud/token_use)
+- OAuth `state` + **PKCE public client**
+
+### Login (ADR-042)
+
+- **Primary** = 자체 `/login` 폼
+- BFF `POST /api/auth/login` → 무서명 공개 `InitiateAuth(USER_PASSWORD_AUTH)` → `awsops_token` (id_token 12h)
+- Hosted UI PKCE = **dark fallback**, signout = 쿠키 삭제
+
+:::
+
+::: right
+
+:::html
+<div style="display:flex;flex-direction:column;gap:12px;margin-top:8px;">
+  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.35);border-radius:10px;padding:14px;">
+    <div style="color:#00ff88;font-weight:bold;font-size:15px;">🔒 Private Edge</div>
+    <div style="color:#8b95a5;font-size:13px;">공개 ALB 없음 — 진입점은 CloudFront 하나</div>
+  </div>
+  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.35);border-radius:10px;padding:14px;">
+    <div style="color:#00d4ff;font-weight:bold;font-size:15px;">🔑 ECS Secrets</div>
+    <div style="color:#8b95a5;font-size:13px;">execution role 권한 (task role 아님)</div>
+  </div>
+  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.35);border-radius:10px;padding:14px;">
+    <div style="color:#a855f7;font-weight:bold;font-size:15px;">👤 Admin</div>
+    <div style="color:#8b95a5;font-size:13px;">SSM + Cognito group (fail-closed)</div>
+  </div>
+</div>
+:::
+
+:::
+
+:::notes
+{timing: 3min}
+인증은 Cognito와 Lambda@Edge가 함께 처리합니다.
+Lambda@Edge는 us-east-1에서 viewer-request로 동작하며 RS256 JWKS로 토큰 서명을 검증합니다. iss, aud, token_use를 모두 확인하고, OAuth state와 PKCE public client를 씁니다. 시크릿이 없는 공개 클라이언트입니다.
+{cue: pause}
+로그인의 기본 경로는 ADR-042에 따라 자체 `/login` 폼입니다. BFF의 `POST /api/auth/login`이 무서명 공개 InitiateAuth를 USER_PASSWORD_AUTH 방식으로 호출해 awsops_token을 발급합니다. id_token은 12시간 유효합니다. 미인증 요청은 엣지가 `/login`으로 보냅니다. Hosted UI PKCE 플로우는 다크 폴백으로 남겨두고, signout은 쿠키만 삭제합니다.
+오른쪽 세 가지가 보안 기둥입니다. 공개 ALB가 없는 비공개 엣지, ECS 시크릿은 task role이 아니라 execution role 권한이어야 한다는 점, 그리고 admin 모델은 SSM과 Cognito group 기반으로 fail-closed입니다.
+{cue: transition}
+이걸 실제로 배포하는 흐름을 보겠습니다.
+:::
+
+---
+
+<!-- Slide 13: Deployment -->
+
+@type: content
+@transition: slide
+
+# Deployment — Makefile Flow
+
+:::html
+<div style="display:flex;flex-direction:column;gap:8px;margin-top:14px;">
+  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.35);border-radius:8px;padding:12px 16px;">
+    <code style="color:#00d4ff;font-weight:bold;">make configure</code>
+    <span style="color:#8b95a5;font-size:13px;"> — TUI → terraform.tfvars + backend.hcl</span>
+  </div>
+  <div style="text-align:center;color:#666;">↓</div>
+  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:8px;padding:12px 16px;">
+    <code style="color:#f59e0b;font-weight:bold;">terraform init / plan -out tfplan</code>
+    <span style="color:#8b95a5;font-size:13px;"> → 컨트롤러가 <code style="color:#f59e0b;">apply tfplan</code> (공유 인프라)</span>
+  </div>
+  <div style="text-align:center;color:#666;">↓</div>
+  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.35);border-radius:8px;padding:12px 16px;">
+    <code style="color:#00ff88;font-weight:bold;">make deploy</code>
+    <span style="color:#8b95a5;font-size:13px;"> — migrate-first → arm64 build → ECR → ECS rolling → wait stable → smoke <code style="color:#00ff88;">/api/health</code></span>
+  </div>
+  <div style="text-align:center;color:#666;">↓ (flag-gated)</div>
+  <div style="background:rgba(168,85,247,0.1);border:1px solid rgba(168,85,247,0.35);border-radius:8px;padding:12px 16px;">
+    <code style="color:#a855f7;font-weight:bold;">make agentcore</code> / <code style="color:#a855f7;font-weight:bold;">make workers</code>
+    <span style="color:#8b95a5;font-size:13px;"> — 각 flag로 apply 후 실행</span>
+  </div>
+</div>
+:::
+
+:::notes
+{timing: 3min}
+배포는 Makefile로 단계가 깔끔하게 나뉩니다.
+먼저 `make configure`로 대화형 TUI를 돌립니다. VPC, 도메인, 버킷, EKS를 고르면 terraform.tfvars와 backend.hcl이 생성됩니다. 그다음 terraform init과 plan으로 tfplan을 저장하고, 공유 인프라는 컨트롤러가 직접 apply tfplan으로 적용합니다. 에이전트가 공유 프로덕션 인프라를 임의로 apply하지 않도록 막혀 있습니다.
+{cue: pause}
+앱은 `make deploy`로 배포합니다. 중요한 건 migrate가 먼저 돌고 그다음 웹 이미지를 배포한다는 순서입니다. ULID 마이그레이션을 먼저 적용한 뒤 arm64로 빌드해서 ECR에 푸시하고, ECS 롤링 배포 후 stable을 기다린 다음 `/api/health`로 smoke 테스트를 합니다. 여기서 terraform apply는 하지 않습니다.
+AgentCore와 워커는 각각의 flag로 apply한 뒤 `make agentcore`, `make workers`로 이미지와 provisioner를 실행합니다.
+{cue: transition}
+마지막으로 이 아키텍처가 가진 태세와 차별점을 정리하겠습니다.
+:::
+
+---
+
+<!-- Slide 14: Posture & Differentiators -->
 
 @type: content
 @transition: fade
 
-# Technology Stack
+# Posture & Differentiators
 
-| Layer | Technology | Details |
-|-------|-----------|---------|
-| **Frontend** | Next.js 14 | App Router, Tailwind, Recharts, React Flow |
-| **Data** | Steampipe | 380+ AWS, 60+ K8s tables, pg Pool |
-| **AI Model** | Bedrock Claude | Sonnet 4.6 (classify), Opus 4.8 (analyze) |
-| **AI Runtime** | AgentCore | Strands Agent, 8 Gateways, 125 Tools |
-| **Functions** | Lambda | 19 functions (MCP tool implementations) |
-| **Auth** | Cognito | User Pool + Lambda@Edge + CloudFront |
-| **Infra** | CDK | VPC, EC2, ALB, CloudFront as Code |
-| **Observability** | Multi-Source | Prometheus, Loki, Tempo, Jaeger, Datadog, Dynatrace, ClickHouse |
+:::html
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px;">
+  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.4);border-radius:12px;padding:22px;">
+    <div style="font-size:40px;margin-bottom:10px;">🔒</div>
+    <div style="color:#00ff88;font-weight:bold;font-size:17px;margin-bottom:8px;">영구 동결 (do-not-enable)</div>
+    <div style="color:#8b95a5;font-size:13px;line-height:1.6;">ADR-041 / 2026-06-11 reversal<br>AWS-리소스 <b>변경 + 자율</b>은 영구 동결</div>
+  </div>
+  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.4);border-radius:12px;padding:22px;">
+    <div style="font-size:40px;margin-bottom:10px;">📥</div>
+    <div style="color:#00d4ff;font-weight:bold;font-size:17px;margin-bottom:8px;">거버넌스된 External</div>
+    <div style="color:#8b95a5;font-size:13px;line-height:1.6;">외부 DATA read + 기록/티켓/메시지 <b>write</b> 허용<br>SSRF · Secrets · DLP · human-gate 하</div>
+  </div>
+</div>
+<div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:12px;padding:18px;margin-top:18px;text-align:center;">
+  <span style="font-size:24px;">🧠</span>
+  <span style="color:#f59e0b;font-weight:bold;font-size:16px;margin-left:8px;">In-Account Bedrock</span>
+  <span style="color:#8b95a5;font-size:13px;margin-left:8px;">— 계정 안에서 추론, 외부 AI SaaS API 없음</span>
+</div>
+:::
+
+:::notes
+{timing: 3min}
+이 아키텍처의 태세를 정확히 정의하겠습니다.
+AWSops는 읽기 전용 AWS 운영 대시보드에 AI 진단을 더한 것입니다. ADR-041과 2026년 6월 11일 reversal 합의에 따라 AWS 리소스 변경과 자율 실행은 영구 동결입니다. do-not-enable, 켜지 않는다는 뜻입니다. 코드는 dark로 보존하되 활성화하지 않습니다.
+{cue: pause}
+다만 외부 데이터에 대해서는 다릅니다. 외부 관측성 데이터 읽기, 그리고 외부 기록·티켓·메시지 write는 거버넌스 하에 허용됩니다. SSRF 방어, Secrets 관리, DLP와 redaction, human-gate를 모두 거칩니다. 즉 AWS 리소스는 안 건드리지만, 외부 시스템에 리포트를 보내거나 티켓을 끊는 건 통제된 형태로 가능합니다.
+그리고 핵심 차별점, AI 추론은 고객 계정 안 Bedrock에서 돌립니다. 외부 AI SaaS API가 없으므로 운영 데이터가 계정 밖으로 나가지 않습니다.
+{cue: transition}
+전체를 한 장으로 정리하겠습니다.
+:::
+
+---
+
+<!-- Slide 15: Key Takeaways -->
+
+@type: content
+@transition: fade
+
+# Key Takeaways — Architecture
+
+- **Terraform MSA on private edge** — CloudFront VPC Origin → 내부 ALB → Fargate, 공개 ALB 없음
+- **Aurora 영속 상태** — PostgreSQL 17.9 (Steampipe = flag-gated 인벤토리 sync일 뿐)
+- **AgentCore 섹션 에이전트** — 8 게이트웨이 · ~120 read-only 도구로 라이브 AWS 읽기
+- **ADR-038 하이브리드 라우팅** — regex + Haiku 분류기 + caching, SSE 스트리밍 챗
+- **OOM-safe 비동기 워커 티어** — SQS + SFN + Lambda/Fargate, 진단·내보내기 처리
+- **읽기 전용 동결 태세** — AWS 변경·자율 영구 동결, in-account Bedrock
+
+:::notes
+{timing: 2min}
+아키텍처 파트를 한 장으로 정리합니다.
+첫째, 비공개 엣지 위의 Terraform MSA입니다. CloudFront VPC Origin에서 내부 ALB를 거쳐 Fargate로 가고, 공개 ALB는 없습니다. 둘째, 영속 상태는 Aurora PostgreSQL 17.9입니다. Steampipe는 라이브 엔진이 아니라 flag로 켜는 인벤토리 sync일 뿐입니다.
+{cue: pause}
+셋째, 라이브 AWS 읽기는 AgentCore 섹션 에이전트가, 8개 게이트웨이에 약 120개 읽기 전용 도구로 처리합니다. 넷째, 라우팅은 ADR-038 하이브리드, 챗은 SSE 스트리밍입니다. 다섯째, 무거운 작업은 OOM에 안전한 비동기 워커 티어가 받습니다. 여섯째, 그리고 그 위에 읽기 전용 동결 태세와 in-account Bedrock이 있습니다.
+{cue: transition}
+세 번째 파트, 실제 데모와 진단 리포트로 이어가겠습니다.
+:::
+
+---
+
+<!-- Slide 16: Thank You -->
+
+@type: cover
+@transition: fade
+
+# AWSops
+## AI-Powered AWS Operations Dashboard
+
+감사합니다 · Questions?
 
 :::notes
 {timing: 1min}
-기술 스택을 한 눈에 보여드리는 정리 슬라이드입니다.
-
-프론트엔드는 Next.js 14, 데이터는 Steampipe, AI는 Bedrock과 AgentCore, 인증은 Cognito, 인프라는 CDK입니다.
-
-특히 Observability 계층에서 7가지 외부 데이터소스를 통합 지원하는 것이 AWSops의 차별점입니다.
-
+두 번째 파트를 마칩니다.
+지금까지 AWSops의 기술 아키텍처를 레이어별로 살펴봤습니다. Terraform 기반 MSA, 비공개 엣지, Aurora 영속 상태, AgentCore 섹션 에이전트, 하이브리드 라우팅, OOM에 안전한 워커 티어, 그리고 읽기 전용 동결 태세까지 모두 하나의 일관된 설계로 묶여 있습니다.
+{cue: question}
+질문 있으시면 편하게 주세요.
 {cue: transition}
-핵심 내용을 정리하겠습니다.
-:::
-
----
-
-<!-- Slide 12: Key Takeaways -->
-
-@type: content
-@transition: fade
-
-# Key Takeaways -- Architecture
-
-- **Steampipe pg Pool** -- AWS API를 SQL로, CLI 대비 660x 성능
-- **AgentCore + 8 MCP Gateway** -- 125 도구를 전문 영역별로 분리
-- **Route Registry** -- 18 라우트 단일 소스, Sonnet 자동 분류
-- **Auto-Collect 4-Phase** -- Detect → Collect → Format → Analyze
-- **7 Datasource Integration** -- Prometheus, Loki, Tempo, Jaeger, ClickHouse, Datadog, Dynatrace
-- **Zero Trust Network** -- Private Subnet + CloudFront + Lambda@Edge
-
-:::notes
-{timing: 2min}
-아키텍처 파트를 6가지로 정리합니다.
-
-첫째, Steampipe pg Pool로 AWS 리소스를 SQL로 빠르게 조회합니다.
-둘째, AgentCore와 8개 MCP Gateway로 125개 도구를 전문 영역별로 관리합니다.
-셋째, Route Registry 하나로 18개 라우트를 자동 분류합니다.
-넷째, Auto-Collect Agent는 4단계로 데이터를 자동 수집하고 분석합니다.
-다섯째, 7가지 외부 데이터소스를 통합 지원합니다.
-여섯째, Private Subnet 기반 Zero Trust 네트워크입니다.
-
-{cue: transition}
-이제 실제 데모와 종합진단 리포트를 보여드리겠습니다.
+잠시 쉬고 마지막 파트, 실전 데모와 진단 리포트로 이어가겠습니다.
 :::

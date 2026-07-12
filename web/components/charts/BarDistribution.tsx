@@ -1,19 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import {
-  Bar,
-  BarChart,
-  Cell,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import Card from '@/components/ui/Card';
-import { useChartColors } from '@/lib/use-chart-colors';
-import { axisTick, tooltipStyles } from './theme';
+import HBarList from './HBarList';
 
 export interface BarDistributionProps {
   title: ReactNode;
@@ -25,51 +13,22 @@ export interface BarDistributionProps {
 }
 
 /**
- * BarDistribution — vertical bars in brand-500, the max bar emphasised in
- * brand-700, dotted ink-100 grid, ink-400 axes, dark inverse tooltip.
- * DESIGN.md §Charts.
+ * BarDistribution — horizontal ranking bars (design handoff 개선안 ②-A): a
+ * vertical bar chart with rotated labels lost small values and was hard to
+ * read at 12+ categories. Delegates to HBarList (label / sunken track /
+ * tabular value), sorted descending, with the max row highlighted brand-700.
  */
-export default function BarDistribution({
-  title,
-  right,
-  data,
-  xKey,
-  yKey,
-  className,
-}: BarDistributionProps) {
-  const c = useChartColors();
-  const max = data.reduce((m, d) => {
-    const n = Number(d[yKey]);
-    return Number.isFinite(n) && n > m ? n : m;
-  }, -Infinity);
-
+export default function BarDistribution({ title, right, data, xKey, yKey, className }: BarDistributionProps) {
+  const sorted = [...data].sort((a, b) => (Number(b[yKey]) || 0) - (Number(a[yKey]) || 0));
   return (
-    <Card title={title} right={right} className={className}>
-      <ResponsiveContainer width="100%" height={240}>
-        <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="2 4" stroke={c.grid} vertical={false} />
-          <XAxis
-            dataKey={xKey}
-            tick={axisTick(c)}
-            tickLine={false}
-            axisLine={{ stroke: c.grid }}
-            interval={0}
-            angle={-30}
-            textAnchor="end"
-            height={64}
-          />
-          <YAxis tick={axisTick(c)} tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-          <Tooltip {...tooltipStyles(c)} cursor={{ fill: c.grid, opacity: 0.4 }} />
-          <Bar dataKey={yKey} radius={[4, 4, 0, 0]} maxBarSize={40}>
-            {data.map((d, i) => (
-              <Cell
-                key={i}
-                fill={Number(d[yKey]) === max ? c.leadStrong : c.lead}
-              />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </Card>
+    <HBarList
+      title={title}
+      right={right}
+      data={sorted}
+      labelKey={xKey}
+      valueKey={yKey}
+      highlightMax
+      className={className}
+    />
   );
 }

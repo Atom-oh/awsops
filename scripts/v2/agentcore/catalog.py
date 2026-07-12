@@ -29,7 +29,7 @@ GATEWAY_DESCRIPTIONS = {
     "monitoring": "CloudWatch, CloudTrail (AWS native only)",
     "iac": "CloudFormation, CDK, Terraform",
     "ops": "Steampipe SQL listing/status/docs/inventory",
-    "external-obs": "External Observability & Integrations (Notion now; Prometheus/Loki/Tempo next)",
+    "external-obs": "External Observability & Integrations — routed (Prometheus + ClickHouse + Notion; Loki/Tempo/Mimir next)",
 }
 
 
@@ -69,6 +69,52 @@ TARGETS = {
         "description": "VPC Flow Log analyzer (1 tool)",
         "tools": [
             {"name": "query_flow_logs", "description": "Query flow logs", "inputSchema": {"type": "object", "properties": {"vpc_id": _p("string", "VPC ID")}, "required": ["vpc_id"]}},
+        ],
+    },
+    # ===== Read-only MCP additions (2026-06-18): core-helpers (ops) + reachability-read (network) =====
+    "core-helpers-target": {
+        "gateway": "ops",
+        "lambda_key": "core-helpers",
+        "description": "Prompt understanding + AWS CLI suggestions — static, read-only (2 tools; no call_aws)",
+        "tools": [
+            {"name": "prompt_understanding", "description": "AWS solution-design guide (static)", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "suggest_aws_commands", "description": "Suggest read-only AWS CLI commands for a query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "Natural-language query")}, "required": ["query"]}},
+        ],
+    },
+    # inventory_read: reconnects the synced Aurora topology/inventory (inventory_resources +
+    # topology graph) to AgentCore via the RDS Data API — the v2 equivalent of v1's ops
+    # run_steampipe_query. Read-only (SELECT only).
+    "inventory-read-target": {
+        "gateway": "ops",
+        "lambda_key": "inventory-read",
+        "description": "Aurora-backed topology & unused-resource reader (read-only): find_unused_resources, get_topology, query_inventory, inventory_summary",
+        "tools": [
+            {"name": "find_unused_resources", "description": "Find unused/orphaned resources from the synced inventory: orphan target groups (no LB / 0 healthy), empty CloudFront origins, dead/idle load balancers, unattached EBS volumes", "inputSchema": {"type": "object", "properties": {"category": _p("string", "Optional category filter, e.g. 'TargetGroup' or 'CloudFront'")}}},
+            {"name": "get_topology", "description": "Return the materialized topology graph (nodes + edges) from Aurora topology_nodes/edges — matches the /api/graph contract. class='flow' (default) for traffic-path graph (CF→LB→TG→target); class='infra' for resource-relationship graph. Optionally scope to a node's 1-hop neighbourhood via resource_id.", "inputSchema": {"type": "object", "properties": {"resource_id": _p("string", "Optional node id (e.g. CloudFront id, ALB ARN) to scope to its 1-hop neighbourhood"), "class": _p("string", "Graph class: 'flow' (traffic path, default) or 'infra' (resource relationships)")}}},
+            {"name": "query_inventory", "description": "List synced resources of one type (alb, nlb, target_group, cloudfront, ec2, ebs, security_group, route53, lambda, ecs_task, ecs_service, s3)", "inputSchema": {"type": "object", "properties": {"resource_type": _p("string", "Resource type to list"), "limit": _p("integer", "Max rows (default 200, cap 500)")}, "required": ["resource_type"]}},
+            {"name": "inventory_summary", "description": "Per-type counts + last-sync freshness (inventory_sync_runs)", "inputSchema": {"type": "object", "properties": {}}},
+        ],
+    },
+    "reachability-read-target": {
+        "gateway": "network",
+        "lambda_key": "reachability-read",
+        "description": "Computed ENI<->EC2 connectivity, describe-only — static SG/NACL/route (1 tool)",
+        "tools": [
+            {"name": "check_reachability", "description": "Static SG/NACL/route reachability from a source to a destination (describe-only; not AWS Reachability Analyzer)", "inputSchema": {"type": "object", "properties": {"source": _p("string", "instance-id / eni-id / private-ip"), "destination": _p("string", "instance-id / eni-id / private-ip"), "port": _p("integer", "Destination port"), "protocol": _p("string", "tcp/udp (default tcp)")}, "required": ["source", "destination", "port"]}},
+        ],
+    },
+    "istio-read-target": {
+        "gateway": "container",
+        "lambda_key": "istio-read",
+        "description": "Read-only Istio service-mesh CRDs via the EKS k8s API — no Steampipe (7 tools)",
+        "tools": [
+            {"name": "mesh_overview", "description": "Istio CRD counts + istio-injected namespaces", "inputSchema": {"type": "object", "properties": {"cluster_name": _p("string", "EKS cluster name")}, "required": ["cluster_name"]}},
+            {"name": "list_virtual_services", "description": "List Istio VirtualServices", "inputSchema": {"type": "object", "properties": {"cluster_name": _p("string", "EKS cluster name"), "namespace": _p("string", "Namespace (optional)")}, "required": ["cluster_name"]}},
+            {"name": "list_destination_rules", "description": "List Istio DestinationRules", "inputSchema": {"type": "object", "properties": {"cluster_name": _p("string", "EKS cluster name"), "namespace": _p("string", "Namespace (optional)")}, "required": ["cluster_name"]}},
+            {"name": "list_istio_gateways", "description": "List Istio Gateways", "inputSchema": {"type": "object", "properties": {"cluster_name": _p("string", "EKS cluster name"), "namespace": _p("string", "Namespace (optional)")}, "required": ["cluster_name"]}},
+            {"name": "list_service_entries", "description": "List Istio ServiceEntries", "inputSchema": {"type": "object", "properties": {"cluster_name": _p("string", "EKS cluster name"), "namespace": _p("string", "Namespace (optional)")}, "required": ["cluster_name"]}},
+            {"name": "list_authorization_policies", "description": "List Istio AuthorizationPolicies", "inputSchema": {"type": "object", "properties": {"cluster_name": _p("string", "EKS cluster name"), "namespace": _p("string", "Namespace (optional)")}, "required": ["cluster_name"]}},
+            {"name": "list_peer_authentications", "description": "List Istio PeerAuthentications", "inputSchema": {"type": "object", "properties": {"cluster_name": _p("string", "EKS cluster name"), "namespace": _p("string", "Namespace (optional)")}, "required": ["cluster_name"]}},
         ],
     },
     # ===== AF1: +14 read-only targets, tool schemas verbatim from agent/lambda/create_targets.py =====
@@ -315,7 +361,7 @@ TARGETS = {
     # First of the v1 datasource family (user-endpoint + SQL). data gateway. Read-only SQL guard +
     # table-function SSRF block in the Lambda; credential (endpoint+user/pass) via the Connectors UI.
     "clickhouse-mcp-target": {
-        "gateway": "data",
+        "gateway": "external-obs",
         "lambda_key": "clickhouse-mcp",
         "description": "ClickHouse read-only — SQL query, list tables, describe (3 tools)",
         "tools": [
@@ -328,15 +374,16 @@ TARGETS = {
     # Prometheus datasource (v1 family #2) — read-only PromQL. monitoring gateway (with CloudWatch +
     # OpenSearch). User-supplied endpoint via the Connectors UI; SSRF-guarded; read-only by construction.
     "prometheus-mcp-target": {
-        "gateway": "monitoring",
+        "gateway": "external-obs",
         "lambda_key": "prometheus-mcp",
-        "description": "Prometheus read-only — PromQL instant/range query, labels, series (4 tools)",
+        "description": "Prometheus read-only — PromQL instant/range query, labels, series, metric metadata (6 tools)",
         "tools": [
             {"name": "prometheus_schema", "description": "Introspect metric + label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "prometheus_query", "description": "Instant PromQL query at a single time", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time: unix/ISO (default now)")}, "required": ["query"]}},
             {"name": "prometheus_query_range", "description": "Range PromQL query over a time window", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix/ISO (default now-1h)"), "end": _p("string", "unix/ISO (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
             {"name": "prometheus_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "prometheus_series", "description": "Find series matching a selector", "inputSchema": {"type": "object", "properties": {"match": _p("string", "Series selector e.g. up{job=\"x\"}")}, "required": ["match"]}},
+            {"name": "prometheus_metric_meta", "description": "Per-metric type (metadata) + label names for the given metrics (read-only)", "inputSchema": {"type": "object", "properties": {"metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric names (max 12)"}}, "required": ["metrics"]}},
         ],
     },
     # Loki datasource (v1 family #3) — read-only LogQL. monitoring gateway. User-supplied endpoint via
@@ -370,13 +417,14 @@ TARGETS = {
     "mimir-mcp-target": {
         "gateway": "monitoring",
         "lambda_key": "mimir-mcp",
-        "description": "Mimir read-only — PromQL instant/range, labels, series (4 tools)",
+        "description": "Mimir read-only — PromQL instant/range, labels, series, metric metadata (6 tools)",
         "tools": [
             {"name": "mimir_schema", "description": "Introspect metric + label names (cached)", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "mimir_query", "description": "Instant PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "time": _p("string", "Eval time unix/ISO (default now)")}, "required": ["query"]}},
             {"name": "mimir_query_range", "description": "Range PromQL query", "inputSchema": {"type": "object", "properties": {"query": _p("string", "PromQL"), "start": _p("string", "1h/30m or unix (default now-1h)"), "end": _p("string", "unix (default now)"), "step": _p("string", "Step seconds (default 60)")}, "required": ["query"]}},
             {"name": "mimir_labels", "description": "List label names", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "mimir_series", "description": "Find series matching a selector", "inputSchema": {"type": "object", "properties": {"match": _p("string", "Series selector")}, "required": ["match"]}},
+            {"name": "mimir_metric_meta", "description": "Per-metric type (metadata) + label names for the given metrics (read-only)", "inputSchema": {"type": "object", "properties": {"metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric names (max 12)"}}, "required": ["metrics"]}},
         ],
     },
 }

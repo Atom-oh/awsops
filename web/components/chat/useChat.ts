@@ -9,6 +9,41 @@ export function newSessionId(): string {
   return s.length >= 33 ? s : s.padEnd(36, '0');
 }
 
+export function parseFrame(frame: string): {
+  kind: 'meta' | 'status' | 'delta' | 'error' | 'done' | 'ignore';
+  threadId?: string;
+  gateway?: string;
+  ranked?: any;
+  method?: string;
+  via?: string;
+  tools?: string[];
+  model?: string;
+  phase?: string;
+  elapsedMs?: number;
+  delta?: string;
+  error?: string;
+} {
+  const isMeta = frame.startsWith('event: meta');
+  const isStatus = frame.startsWith('event: status');
+  const line = frame.split('\n').find((l) => l.startsWith('data:'));
+  if (!line) return { kind: 'ignore' };
+  const data = line.slice(5).trim();
+  if (data === '[DONE]') return { kind: 'done' };
+  try {
+    const obj = JSON.parse(data);
+    // spread obj FIRST so a server payload field named `kind`/`delta`/`error` can never
+    // override the classifier's discriminant (fail-closed).
+    if (isMeta) return { ...obj, kind: 'meta' };
+    if (isStatus) return { ...obj, kind: 'status' };
+    if (obj.delta !== undefined) return { kind: 'delta', delta: obj.delta };
+    if (obj.error) return { kind: 'error', error: obj.error };
+  } catch {
+    // heartbeat / non-JSON
+  }
+  return { kind: 'ignore' };
+}
+
+
 /**
  * Shared chat engine for the drawer (ChatDrawer) and the /assistant page.
  * Owns conversation state, SSE streaming, and thread CRUD against the same
@@ -80,8 +115,12 @@ export function useChat() {
       }
       const data: { thread: ThreadSummary; messages: ThreadMessage[] } = await res.json();
       setMsgs(data.messages.map((m) => {
-        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string; via?: string };
-        return { role: m.role, content: m.content, gateway: m.gateway ?? undefined, ranked: meta.ranked, method: meta.method, via: meta.via };
+        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string; via?: string; tools?: string[]; model?: string; elapsedMs?: number };
+        return {
+          role: m.role, content: m.content, gateway: m.gateway ?? undefined,
+          ranked: meta.ranked, method: meta.method, via: meta.via,
+          tools: meta.tools, model: meta.model, elapsedMs: meta.elapsedMs,
+        };
       }));
       sessionRef.current = data.thread.sessionId;
       localStorage.setItem('awsops_chat_session', data.thread.sessionId);
@@ -100,18 +139,29 @@ export function useChat() {
   }
 
   function handleFrame(frame: string) {
-    const isMeta = frame.startsWith('event: meta');
-    const line = frame.split('\n').find((l) => l.startsWith('data:'));
-    if (!line) return;
-    const data = line.slice(5).trim();
-    if (data === '[DONE]') return;
-    try {
-      const obj = JSON.parse(data);
-      if (isMeta && obj.threadId) setThread(obj.threadId); // server-issued thread (first message mints it)
-      if (isMeta && obj.gateway) patchLast((m) => ({ ...m, gateway: obj.gateway, ranked: obj.ranked, method: obj.method, via: obj.via }));
-      else if (obj.delta !== undefined) patchLast((m) => ({ ...m, content: m.content + obj.delta }));
-      else if (obj.error) patchLast((m) => ({ ...m, content: `⚠️ ${obj.error}`, streaming: false }));
-    } catch { /* heartbeat / non-JSON */ }
+    const parsed = parseFrame(frame);
+    if (parsed.kind === 'meta') {
+      if (parsed.threadId) setThread(parsed.threadId);
+      if (parsed.gateway) {
+        patchLast((m) => ({ ...m, gateway: parsed.gateway, ranked: parsed.ranked, method: parsed.method, via: parsed.via }));
+      }
+      // Answer-provenance footer: a second, later `meta` frame (no `gateway`) carries the
+      // server-measured elapsed total + tools/model, known only after the invoke resolves.
+      if (parsed.tools || parsed.model || parsed.elapsedMs !== undefined) {
+        patchLast((m) => ({
+          ...m,
+          tools: parsed.tools ?? m.tools,
+          model: parsed.model ?? m.model,
+          elapsedMs: parsed.elapsedMs ?? m.elapsedMs,
+        }));
+      }
+    } else if (parsed.kind === 'status') {
+      patchLast((m) => ({ ...m, status: { phase: parsed.phase ?? 'analyzing', elapsedMs: parsed.elapsedMs } }));
+    } else if (parsed.kind === 'delta') {
+      patchLast((m) => ({ ...m, content: m.content + parsed.delta!, status: undefined }));
+    } else if (parsed.kind === 'error') {
+      patchLast((m) => ({ ...m, content: `⚠️ ${parsed.error!}`, status: undefined, streaming: false }));
+    }
   }
 
   async function send(prompt: string, overrideSection?: string | null, switchedFrom?: string) {
@@ -143,9 +193,9 @@ export function useChat() {
         for (const f of frames) handleFrame(f);
       }
     } catch {
-      patchLast((m) => ({ ...m, streaming: false }));
+      patchLast((m) => ({ ...m, streaming: false, status: undefined }));
     } finally {
-      patchLast((m) => ({ ...m, streaming: false }));
+      patchLast((m) => ({ ...m, streaming: false, status: undefined }));
       setBusy(false);
       if (showThreadsRef.current) void refreshThreads(); // new title/order shows up immediately
     }

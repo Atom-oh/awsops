@@ -19,6 +19,14 @@ describe('isProductHelpIntent', () => {
 });
 
 describe('assistantAnswer', () => {
+  it('does NOT punt the user to a section / slash command — the main chat auto-routes', async () => {
+    let seenSystem = '';
+    const send: AssistantSend = async (system) => { seenSystem = system; return 'ok'; };
+    await assistantAnswer('how do I create a custom agent?', { send });
+    // the old v1-style "say which section agent to ask" punt must be gone
+    expect(seenSystem).not.toMatch(/section agent.*to ask/i);
+    expect(seenSystem.toLowerCase()).toContain('automatically');
+  });
   it('grounds the answer in the KB (system carries the docs; user is tagged)', async () => {
     let seenSystem = ''; let seenUser = '';
     const send: AssistantSend = async (system, user) => { seenSystem = system; seenUser = user; return '단계: 1) Integration 등록 ...'; };
@@ -38,5 +46,29 @@ describe('assistantAnswer', () => {
     const send: AssistantSend = async () => '   ';
     const out = await assistantAnswer('q', { send });
     expect(out).toContain('Customization');
+  });
+
+  it('bug fix: forwards history into the user turn (this path previously dropped it entirely)', async () => {
+    let seenUser = '';
+    const send: AssistantSend = async (_system, user) => { seenUser = user; return 'ok'; };
+    await assistantAnswer('클러스터 안에 어디서 저걸 쓰나', {
+      send,
+      history: [
+        { role: 'user', content: 'CloudTrail로 모델 호출 조회해줘' },
+        { role: 'assistant', content: '3곳에서 호출되고 있습니다' },
+      ],
+    });
+    expect(seenUser).toContain('<awsops_chat_history>');
+    expect(seenUser).toContain('CloudTrail로 모델 호출 조회해줘');
+    expect(seenUser).toContain('3곳에서 호출되고 있습니다');
+    expect(seenUser).toContain('<user_query>\n클러스터 안에 어디서 저걸 쓰나\n</user_query>');
+  });
+
+  it('omits the history block entirely when there is none (unchanged single-turn shape)', async () => {
+    let seenUser = '';
+    const send: AssistantSend = async (_system, user) => { seenUser = user; return 'ok'; };
+    await assistantAnswer('q', { send });
+    expect(seenUser).not.toContain('<awsops_chat_history>');
+    expect(seenUser).toBe(buildAssistantUser('q'));
   });
 });

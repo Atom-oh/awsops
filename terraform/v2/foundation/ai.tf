@@ -51,6 +51,12 @@ variable "mimir_vpc_enabled" {
   default     = false
 }
 
+variable "istio_vpc_enabled" {
+  type        = bool
+  description = "Attach the istio-read Lambda to the private subnets so it can reach a PRIVATE-ONLY EKS API endpoint. Requires agentcore_enabled. Default false → no-op ($0); off = non-VPC (reaches a public/public+private cluster endpoint). PERSIST in live terraform.tfvars."
+  default     = false
+}
+
 locals {
   ac_count    = var.agentcore_enabled ? 1 : 0
   integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
@@ -220,6 +226,39 @@ resource "aws_iam_role_policy" "agent_lambda_integrations_secret" {
   })
 }
 
+# inventory-read MCP (inventory_read_mcp.py) — reads the synced Aurora inventory via the RDS Data
+# API (read-only SELECT). Scoped to ExecuteStatement on the cluster + GetSecretValue on the
+# RDS-managed master secret + Decrypt on the secret's CMK. Additive (own resource) so a targeted
+# apply leaves the runtime policy untouched.
+resource "aws_iam_role_policy" "agent_lambda_inventory" {
+  count = local.ac_count
+  name  = "${var.project}-agent-lambda-inventory"
+  role  = aws_iam_role.agent_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "AuroraDataApiRead"
+        Effect   = "Allow"
+        Action   = ["rds-data:ExecuteStatement"]
+        Resource = aws_rds_cluster.aurora.arn
+      },
+      {
+        Sid      = "AuroraMasterSecretRead"
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+      },
+      {
+        Sid      = "AuroraSecretKmsDecrypt"
+        Effect   = "Allow"
+        Action   = "kms:Decrypt"
+        Resource = aws_kms_key.aurora.arn
+      },
+    ]
+  })
+}
+
 # OpenSearch read connector (opensearch_mcp.py) — AWS-native, read-only. NOTE: Amazon OpenSearch
 # *managed* domains use the es: IAM prefix (NOT opensearch:, which is Serverless/aoss:). Scoped to
 # HTTP read verbs on domain ARNs + list/describe for endpoint resolution.
@@ -249,7 +288,7 @@ resource "aws_iam_role_policy" "agent_lambda_opensearch" {
 # ENI perms for the opensearch-mcp Lambda ONLY when it is VPC-attached (opensearch_vpc_enabled).
 # Compound-gated: references agent_lambda[0], which exists only when agentcore_enabled → guard both.
 resource "aws_iam_role_policy" "agent_lambda_vpc_eni" {
-  count = var.agentcore_enabled && (var.opensearch_vpc_enabled || var.clickhouse_vpc_enabled || var.prometheus_vpc_enabled || var.loki_vpc_enabled || var.tempo_vpc_enabled || var.mimir_vpc_enabled) ? 1 : 0
+  count = var.agentcore_enabled && (var.opensearch_vpc_enabled || var.clickhouse_vpc_enabled || var.prometheus_vpc_enabled || var.loki_vpc_enabled || var.tempo_vpc_enabled || var.mimir_vpc_enabled || var.istio_vpc_enabled) ? 1 : 0
   name  = "${var.project}-agent-lambda-vpc-eni"
   role  = aws_iam_role.agent_lambda[0].id
   policy = jsonencode({
@@ -502,23 +541,29 @@ locals {
   # is gated on integrations_enabled (one unit with its secret + IAM below). integ_count
   # requires agentcore_enabled, so aws_iam_role.agent_lambda[0] is always present here.
   agent_lambdas = merge(var.agentcore_enabled ? {
-    "iam-mcp"        = { file = "aws_iam_mcp.py", handler = "aws_iam_mcp.lambda_handler" }
-    "flow-monitor"   = { file = "flowmonitor.py", handler = "flowmonitor.lambda_handler" }
-    "network-mcp"    = { file = "network_mcp.py", handler = "network_mcp.lambda_handler" }
-    "eks-mcp"        = { file = "aws_eks_mcp.py", handler = "aws_eks_mcp.lambda_handler" }
-    "ecs-mcp"        = { file = "aws_ecs_mcp.py", handler = "aws_ecs_mcp.lambda_handler" }
-    "rds-mcp"        = { file = "aws_rds_mcp.py", handler = "aws_rds_mcp.lambda_handler" }
-    "dynamodb-mcp"   = { file = "aws_dynamodb_mcp.py", handler = "aws_dynamodb_mcp.lambda_handler" }
-    "msk-mcp"        = { file = "aws_msk_mcp.py", handler = "aws_msk_mcp.lambda_handler" }
-    "valkey-mcp"     = { file = "aws_valkey_mcp.py", handler = "aws_valkey_mcp.lambda_handler" }
-    "cost-mcp"       = { file = "aws_cost_mcp.py", handler = "aws_cost_mcp.lambda_handler" }
-    "finops-mcp"     = { file = "aws_finops_mcp.py", handler = "aws_finops_mcp.lambda_handler" }
-    "cloudwatch-mcp" = { file = "aws_cloudwatch_mcp.py", handler = "aws_cloudwatch_mcp.lambda_handler" }
-    "cloudtrail-mcp" = { file = "aws_cloudtrail_mcp.py", handler = "aws_cloudtrail_mcp.lambda_handler" }
-    "iac-mcp"        = { file = "aws_iac_mcp.py", handler = "aws_iac_mcp.lambda_handler" }
-    "terraform-mcp"  = { file = "aws_terraform_mcp.py", handler = "aws_terraform_mcp.lambda_handler" }
-    "aws-knowledge"  = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
-    "opensearch-mcp" = { file = "opensearch_mcp.py", handler = "opensearch_mcp.lambda_handler" }
+    "iam-mcp"      = { file = "aws_iam_mcp.py", handler = "aws_iam_mcp.lambda_handler" }
+    "flow-monitor" = { file = "flowmonitor.py", handler = "flowmonitor.lambda_handler" }
+    # Read-only MCP additions (2026-06-18) — static helpers + computed reachability + istio-read.
+    "core-helpers"      = { file = "core_helpers_mcp.py", handler = "core_helpers_mcp.lambda_handler" }
+    "reachability-read" = { file = "reachability_read_mcp.py", handler = "reachability_read_mcp.lambda_handler" }
+    "istio-read"        = { file = "istio_read_mcp.py", handler = "istio_read_mcp.lambda_handler" }
+    "network-mcp"       = { file = "network_mcp.py", handler = "network_mcp.lambda_handler" }
+    "eks-mcp"           = { file = "aws_eks_mcp.py", handler = "aws_eks_mcp.lambda_handler" }
+    "ecs-mcp"           = { file = "aws_ecs_mcp.py", handler = "aws_ecs_mcp.lambda_handler" }
+    "rds-mcp"           = { file = "aws_rds_mcp.py", handler = "aws_rds_mcp.lambda_handler" }
+    "dynamodb-mcp"      = { file = "aws_dynamodb_mcp.py", handler = "aws_dynamodb_mcp.lambda_handler" }
+    "msk-mcp"           = { file = "aws_msk_mcp.py", handler = "aws_msk_mcp.lambda_handler" }
+    "valkey-mcp"        = { file = "aws_valkey_mcp.py", handler = "aws_valkey_mcp.lambda_handler" }
+    "cost-mcp"          = { file = "aws_cost_mcp.py", handler = "aws_cost_mcp.lambda_handler" }
+    "finops-mcp"        = { file = "aws_finops_mcp.py", handler = "aws_finops_mcp.lambda_handler" }
+    "cloudwatch-mcp"    = { file = "aws_cloudwatch_mcp.py", handler = "aws_cloudwatch_mcp.lambda_handler" }
+    "cloudtrail-mcp"    = { file = "aws_cloudtrail_mcp.py", handler = "aws_cloudtrail_mcp.lambda_handler" }
+    "iac-mcp"           = { file = "aws_iac_mcp.py", handler = "aws_iac_mcp.lambda_handler" }
+    "terraform-mcp"     = { file = "aws_terraform_mcp.py", handler = "aws_terraform_mcp.lambda_handler" }
+    "aws-knowledge"     = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
+    "opensearch-mcp"    = { file = "opensearch_mcp.py", handler = "opensearch_mcp.lambda_handler" }
+    # ops inventory_read: reads the synced Aurora topology/inventory via the RDS Data API (read-only)
+    "inventory-read"    = { file = "inventory_read_mcp.py", handler = "inventory_read_mcp.lambda_handler" }
     } : {}, local.integ_count > 0 ? {
     "notion-mcp"     = { file = "notion_mcp.py", handler = "notion_mcp.lambda_handler" }
     "clickhouse-mcp" = { file = "clickhouse_mcp.py", handler = "clickhouse_mcp.lambda_handler" }
@@ -540,6 +585,17 @@ data "archive_file" "agent" {
   source {
     content  = file("${path.module}/../../../agent/lambda/cross_account.py")
     filename = "cross_account.py"
+  }
+  # The datasource-family connectors (clickhouse/prometheus/loki/tempo/mimir) import the shared
+  # `datasource_http` helper (credential load, SSRF host guard, auth headers, no-redirect HTTP, inline
+  # conn-config + health probe). Bundle it into ONLY those ZIPs — without it the Lambda dies at import
+  # time (Runtime.ImportModuleError: No module named 'datasource_http').
+  dynamic "source" {
+    for_each = contains(["clickhouse_mcp.py", "prometheus_mcp.py", "loki_mcp.py", "tempo_mcp.py", "mimir_mcp.py"], each.value.file) ? [1] : []
+    content {
+      content  = file("${path.module}/../../../agent/lambda/datasource_http.py")
+      filename = "datasource_http.py"
+    }
   }
 }
 
@@ -569,14 +625,22 @@ resource "aws_lambda_function" "agent" {
       contains(["notion-mcp", "clickhouse-mcp", "prometheus-mcp", "loki-mcp", "tempo-mcp", "mimir-mcp"], each.key) ? merge(
         { INTEGRATIONS_SECRET_NAME = aws_secretsmanager_secret.integrations[0].name },
         each.key == "notion-mcp" ? { INTEGRATION_SLUG = "notion" } : {}
-      ) : {}
+      ) : {},
+      # inventory-read reads the synced Aurora inventory via the RDS Data API (no VPC, no pg8000) —
+      # needs the cluster ARN, the RDS-managed master secret ARN, and the DB name.
+      each.key == "inventory-read" ? {
+        AURORA_CLUSTER_ARN = aws_rds_cluster.aurora.arn
+        AURORA_SECRET_ARN  = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+        AURORA_DATABASE    = aws_rds_cluster.aurora.database_name
+      } : {}
     )
   }
 
-  # VPC-only OpenSearch domains: attach ONLY the opensearch-mcp Lambda to the private subnets when
-  # opensearch_vpc_enabled. Off (default) → no vpc_config → non-VPC (reaches public+IAM domains).
+  # Per-Lambda VPC opt-in: attach a connector to the private subnets ONLY when its <name>_vpc_enabled
+  # flag is set (opensearch/clickhouse/prometheus/loki/tempo/mimir for VPC-only datasources;
+  # istio-read for a private-only EKS API endpoint). Off (default) → no vpc_config → non-VPC.
   dynamic "vpc_config" {
-    for_each = ((each.key == "opensearch-mcp" && var.opensearch_vpc_enabled) || (each.key == "clickhouse-mcp" && var.clickhouse_vpc_enabled) || (each.key == "prometheus-mcp" && var.prometheus_vpc_enabled) || (each.key == "loki-mcp" && var.loki_vpc_enabled) || (each.key == "tempo-mcp" && var.tempo_vpc_enabled) || (each.key == "mimir-mcp" && var.mimir_vpc_enabled)) ? [1] : []
+    for_each = ((each.key == "opensearch-mcp" && var.opensearch_vpc_enabled) || (each.key == "clickhouse-mcp" && var.clickhouse_vpc_enabled) || (each.key == "prometheus-mcp" && var.prometheus_vpc_enabled) || (each.key == "loki-mcp" && var.loki_vpc_enabled) || (each.key == "tempo-mcp" && var.tempo_vpc_enabled) || (each.key == "mimir-mcp" && var.mimir_vpc_enabled) || (each.key == "istio-read" && var.istio_vpc_enabled)) ? [1] : []
     content {
       subnet_ids         = local.private_subnet_ids
       security_group_ids = [aws_security_group.service.id]

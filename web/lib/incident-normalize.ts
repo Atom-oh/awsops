@@ -35,6 +35,7 @@ export interface AlertEvent {
   labels: Record<string, string>;
   annotations: Record<string, string>;
   metric?: AlertMetric;
+  alarmArn?: string;                     // CloudWatch alarm ARN (NOT the SNS TopicArn); used by W2 AlertValidation
   services: string[];
   resources: string[];
   rawPayload: unknown;
@@ -105,6 +106,7 @@ export function normalizeCloudWatch(body: Record<string, unknown>): AlertEvent |
       source: 'cloudwatch', alertName, severity, status,
       message: msg.NewStateReason || `Alarm ${alertName} transitioned to ${newState}`,
       timestamp: msg.StateChangeTime || new Date().toISOString(),
+      alarmArn: typeof msg.AlarmArn === 'string' ? msg.AlarmArn : undefined,
       labels,
       annotations: { description: msg.AlarmDescription || '', oldState: msg.OldStateValue || '', accountId: msg.AWSAccountId || '' },
       metric: { name: trigger.MetricName || '', namespace: trigger.Namespace || '', threshold: trigger.Threshold, comparator: trigger.ComparisonOperator || '', dimensions },

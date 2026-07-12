@@ -1,7 +1,11 @@
 // web/lib/skill-validation.ts
 // ADR-031 Phase 1 — pure validation for admin-authored skills/agents.
 // Gateways mirror agent/agent.py SKILL_BASE keys (the bindable built-in tool sets).
-export const KNOWN_GATEWAYS = ['network', 'container', 'iac', 'data', 'security', 'monitoring', 'cost', 'ops'] as const;
+// 9 routed chat sections (ADR-038 routing; external-obs gateway per ADR-004 amendment): the 8
+// AWS-domain gateways + `observability` (external-obs: Prometheus/ClickHouse). Mirrors the
+// agent.py SKILL_BASE roles (which include an "observability" persona, aliased to external-obs).
+// Custom agents may target any of these.
+export const KNOWN_GATEWAYS = ['network', 'container', 'iac', 'data', 'security', 'monitoring', 'cost', 'ops', 'observability'] as const;
 // ADR-039 agent-type lifecycle roles. SOURCE OF TRUTH shared with the migration
 // `agents_agent_type_check` CHECK (01KTY39P4SV1SQES36KCS8BESY_custom_agent_platform_p1.sql) — keep in sync.
 export const AGENT_TYPES = ['generic', 'on_demand', 'triage', 'rca', 'mitigation', 'evaluation'] as const;

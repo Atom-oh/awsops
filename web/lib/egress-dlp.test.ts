@@ -10,8 +10,8 @@ describe('redactEgress', () => {
   });
 
   it('masks ARNs', () => {
-    const r = redactEgress({ text: 'see arn:aws:iam::180294183052:role/AdminRole now' });
-    expect(JSON.stringify(r.payload)).not.toContain('180294183052:role/AdminRole');
+    const r = redactEgress({ text: 'see arn:aws:iam::123456789012:role/AdminRole now' });
+    expect(JSON.stringify(r.payload)).not.toContain('123456789012:role/AdminRole');
   });
 
   it('masks private/metadata IPs', () => {

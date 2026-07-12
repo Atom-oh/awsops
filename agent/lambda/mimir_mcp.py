@@ -120,6 +120,11 @@ def mimir_series(args):
 def mimir_schema(args):
     creds = _ds()
     base = BASE
+    try:  # best-effort server version for version-aware PromQL
+        bi = _get(creds, f"{base}/status/buildinfo", {})
+        version = bi.get("version") if isinstance(bi, dict) else None
+    except _ApiError:
+        version = None
     try:
         labels = _get(creds, f"{base}/labels", {})
     except _ApiError:
@@ -130,12 +135,47 @@ def mimir_schema(args):
         metrics = []
     labels = labels if isinstance(labels, list) else []
     metrics = metrics if isinstance(metrics, list) else []
-    return ok({"metrics": metrics[:500], "labels": labels[:200],
+    return ok({"version": version, "metrics": metrics[:500], "labels": labels[:200],
                "truncated": len(metrics) > 500 or len(labels) > 200})
 
 
+def mimir_metric_meta(args):
+    metrics = args.get("metrics")
+    if not isinstance(metrics, list):
+        metrics = []
+    # Validate metric names (Prometheus name grammar) before building a `match[]` selector — drops
+    # malformed/injection-y inputs (e.g. embedded `"`/`\`) rather than forming a bad selector.
+    metrics = [m for m in (str(x).strip() for x in metrics) if m and re.match(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$", m)][:12]
+    if not metrics:
+        return ok({})
+
+    creds = _ds()
+    base = BASE
+    out = {}
+    for m in metrics:
+        # Per-metric scope (metadata?metric=<m>) — never download the server-wide metadata map.
+        entry = {"type": None, "labels": []}
+        try:
+            meta_resp = _get(creds, f"{base}/metadata", {"metric": m})
+            meta = meta_resp if isinstance(meta_resp, dict) else {}
+            v = meta.get(m)
+            entry["type"] = v[0].get("type") if isinstance(v, list) and v and isinstance(v[0], dict) else None
+            labels_data = _get(creds, f"{base}/labels", {"match[]": f'{{__name__="{m}"}}'})
+            labels = [lb for lb in (labels_data if isinstance(labels_data, list) else []) if lb != "__name__"]
+            if len(labels) > 200:  # bound high-cardinality label sets (mirrors *_labels [:N] convention)
+                entry["labels"], entry["labels_truncated"] = labels[:200], True
+            else:
+                entry["labels"] = labels
+        except _ApiError as e:
+            entry["error"] = str(e)[:200]
+        out[m] = entry
+
+    return ok(out)
+
+
 _TOOLS = {"mimir_query": mimir_query, "mimir_query_range": mimir_query_range,
-          "mimir_labels": mimir_labels, "mimir_series": mimir_series, "mimir_schema": mimir_schema}
+          "mimir_labels": mimir_labels, "mimir_series": mimir_series, "mimir_schema": mimir_schema,
+          "mimir_metric_meta": mimir_metric_meta}
 
 
 def mimir_health(args):
@@ -148,20 +188,31 @@ _TOOLS["mimir_health"] = mimir_health
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
-    set_request_conn(params.get("conn_config"))  # inline conn-config (BFF) > slug map
     t = params.get("tool_name", "")
     args = params.get("arguments", params)
+    inst = args.get("instance_id") if isinstance(args, dict) else None
+    conn = params.get("conn_config")
     if isinstance(args, dict):
         args.pop("target_account_id", None)
-    fn = _TOOLS.get(t)
-    if fn is None:
-        return err(f"unknown tool: {t}")
+        args.pop("instance_id", None)        # routing arg, not a tool arg
     try:
+        # BFF inline conn (trusted) > per-instance secret (credential-blind worker) > kind-mirror default.
+        if conn:
+            set_request_conn(conn)
+        elif inst is not None:
+            set_request_conn(load_datasource(SLUG, instance_id=inst))
+        else:
+            set_request_conn(None)
+        fn = _TOOLS.get(t)
+        if fn is None:
+            return err(f"unknown tool: {t}")
         return fn(args)
     except (NotConnected, SsrfBlocked, _ApiError) as e:
         return err(str(e))
     except Exception as e:  # noqa: BLE001
         return err(f"mimir error: {e}")
+    finally:
+        set_request_conn(None)  # guaranteed reset — no warm-container bleed
 
 
 def ok(body):

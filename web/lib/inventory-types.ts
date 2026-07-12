@@ -13,11 +13,12 @@ export interface InvType {
 export const INVENTORY_TYPES: Record<string, InvType> = {
   ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', columns: [
     { key: 'name', label: 'Name' }, { key: 'instance_type', label: 'Type' }, { key: 'instance_state', label: 'State' },
+    { key: 'pricing_model', label: 'Pricing' },
     { key: 'private_ip_address', label: 'Private IP' }, { key: 'public_ip_address', label: 'Public IP' },
     { key: 'subnet_id', label: 'Subnet' }, { key: 'vpc_id', label: 'VPC' }, { key: 'launch_time', label: 'Launch' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'region'] },
-      { label: 'Compute', keys: ['instance_type', 'instance_state', 'launch_time'] },
+      { label: 'Compute', keys: ['instance_type', 'instance_state', 'pricing_model', 'launch_time'] },
       { label: 'Network', keys: ['private_ip_address', 'public_ip_address', 'subnet_id', 'vpc_id'] },
     ] },
   lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', columns: [
@@ -27,7 +28,19 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
   ecs_cluster: { label: 'ECS Clusters', group: 'Compute', stateKey: 'status', distKey: 'status', columns: [
     { key: 'status', label: 'Status' }, { key: 'running_tasks_count', label: 'Running' },
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
-    { key: 'registered_container_instances_count', label: 'Instances' } ] },
+    { key: 'registered_container_instances_count', label: 'Instances' },
+    { key: 'mtd_cost_usd', label: 'MTD Cost ($)' } ] },
+  ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', columns: [
+    { key: 'service_name', label: 'Service' }, { key: 'status', label: 'Status' },
+    { key: 'desired_count', label: 'Desired' }, { key: 'running_count', label: 'Running' },
+    { key: 'pending_count', label: 'Pending' }, { key: 'launch_type', label: 'Launch' },
+    { key: 'scheduling_strategy', label: 'Strategy' }, { key: 'cluster_arn', label: 'Cluster' },
+    { key: 'task_definition', label: 'Task def' }, { key: 'created_at', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'service_name', 'region', 'status'] },
+      { label: 'Capacity', keys: ['desired_count', 'running_count', 'pending_count', 'launch_type', 'scheduling_strategy'] },
+      { label: 'Runtime', keys: ['cluster_arn', 'task_definition', 'created_at'] },
+    ] },
   ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', columns: [
     { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
     { key: 'launch_type', label: 'Launch' }, { key: 'task_definition_arn', label: 'Task def' } ] },
@@ -40,6 +53,11 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'name', label: 'Name' }, { key: 'volume_type', label: 'Type' }, { key: 'size', label: 'Size(GB)' },
     { key: 'state', label: 'State' }, { key: 'encrypted', label: 'Encrypted' }, { key: 'iops', label: 'IOPS' },
     { key: 'availability_zone', label: 'AZ' }, { key: 'create_time', label: 'Created' } ] },
+  ebs_snapshot: { label: 'EBS Snapshots', group: 'Storage & DB', stateKey: 'state', distKey: 'state', columns: [
+    { key: 'volume_id', label: 'Volume' }, { key: 'volume_size', label: 'Size(GB)' },
+    { key: 'state', label: 'State' }, { key: 'progress', label: 'Progress' },
+    { key: 'encrypted', label: 'Encrypted' }, { key: 'start_time', label: 'Started' },
+    { key: 'description', label: 'Description' } ] },
   rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'class', label: 'Class' }, { key: 'status', label: 'Status' }, { key: 'multi_az', label: 'Multi-AZ' },
@@ -130,6 +148,139 @@ export function inventoryGroups(): { group: string; types: string[] }[] {
   })).filter((g) => g.types.length > 0);
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Nav tree (sidebar IA) — collapsible groups + 2-level subgroups + per-group
+// overview pages. ADDITIVE over inventoryGroups(): that stays the flat source
+// for CommandPalette + mobile-tabs; navTree() is the sidebar's hierarchy.
+// ───────────────────────────────────────────────────────────────────────────
+
+// summary.splits keys (see app/api/inventory/summary/route.ts) shown on overviews.
+export type SplitKey = 'ec2Running' | 'ec2Stopped' | 'ebsUnencrypted' | 'iamUserNoMfa' | 'sgOpenIngress';
+// Splits representing something needing attention — drive the overview verdict.
+export const ATTENTION_SPLITS: SplitKey[] = ['ec2Stopped', 'ebsUnencrypted', 'sgOpenIngress', 'iamUserNoMfa'];
+
+interface SubgroupMeta { key: string; labelKey: string; types: string[] }
+interface GroupMeta {
+  slug: string;            // url segment + i18n suffix
+  labelKey: string;        // i18n key (Security → "Security Resources")
+  singleton?: boolean;     // true → flat render, no overview page
+  splitKeys: SplitKey[];   // summary.splits shown on the overview status band
+  order: string[];         // explicit order for direct inventory items (not in a subgroup)
+  injected?: { key: string; href: string; labelKey: string }[]; // non-inventory feature links (EKS) placed first
+  subgroups?: SubgroupMeta[];
+}
+
+// Keyed by the INVENTORY_TYPES `.group` display name. GROUP_ORDER drives sidebar order.
+// Single bridge: slug ↔ display-group ↔ labelKey ↔ ordering ↔ singleton ↔ splitKeys.
+// split→group mapping is pinned here (security_group ∈ Network → sgOpenIngress is Network's).
+const GROUPS: Record<string, GroupMeta> = {
+  'Compute': {
+    slug: 'compute', labelKey: 'group.compute', splitKeys: ['ec2Running', 'ec2Stopped'],
+    injected: [{ key: 'eks', href: '/eks', labelKey: 'nav.eks' }],
+    order: ['ec2', 'lambda', 'ecr'],
+    subgroups: [{ key: 'ecs', labelKey: 'group.compute.ecs', types: ['ecs_cluster', 'ecs_service', 'ecs_task'] }],
+  },
+  'Storage & DB': {
+    slug: 'storage', labelKey: 'group.storage', splitKeys: ['ebsUnencrypted'],
+    order: ['s3', 'ebs_volume', 'ebs_snapshot', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'msk'],
+  },
+  'Network': {
+    slug: 'network', labelKey: 'group.network', splitKeys: ['sgOpenIngress'],
+    order: ['vpc', 'subnet', 'security_group', 'route53', 'cloudfront', 'cloudfront_vpc_origin'],
+    subgroups: [
+      { key: 'loadBalancing', labelKey: 'group.network.loadBalancing', types: ['alb', 'nlb', 'target_group', 'alb_listener_rule'] },
+      { key: 'apiGateway', labelKey: 'group.network.apiGateway', types: ['apigatewayv2_api', 'apigatewayv2_integration', 'apigatewayv2_route'] },
+    ],
+  },
+  'Security': {
+    slug: 'security', labelKey: 'group.security', splitKeys: ['iamUserNoMfa'],
+    order: ['iam_role', 'iam_user', 'waf', 'cloudtrail', 's3_public_access'],
+  },
+  'Monitoring': {
+    slug: 'monitoring', labelKey: 'group.monitoring', singleton: true, splitKeys: [],
+    order: ['cloudwatch_alarm'],
+  },
+};
+
+// Slugs reserved by group overview routes — no inventory type may collide (incl. the 'g' segment).
+export const RESERVED_NAV_SLUGS: string[] = ['g', ...Object.values(GROUPS).map((m) => m.slug)];
+
+export type NavLeafKind = 'inventory' | 'feature';
+export interface NavLeaf {
+  key: string;
+  kind: NavLeafKind;
+  type?: string;        // inventory slug (kind === 'inventory')
+  href: string;
+  label?: string;       // literal (inventory: INVENTORY_TYPES[type].label)
+  labelKey?: string;    // i18n key (feature links, e.g. EKS)
+}
+export interface NavSubgroupNode { key: string; labelKey: string; items: NavLeaf[] }
+export interface NavGroupNode {
+  group: string; slug: string; labelKey: string;
+  singleton: boolean; href?: string; splitKeys: SplitKey[];
+  items: NavLeaf[]; subgroups: NavSubgroupNode[];
+}
+
+function invLeaf(type: string): NavLeaf {
+  return { key: type, kind: 'inventory', type, href: `/inventory/${type}`, label: INVENTORY_TYPES[type]?.label ?? type };
+}
+// Order `types` by `order` (known first, in that order); append any leftover so a
+// newly-registered type is never silently dropped from the sidebar.
+function ordered(types: string[], order: string[]): string[] {
+  const present = new Set(types);
+  const head = order.filter((t) => present.has(t));
+  const tail = types.filter((t) => !order.includes(t));
+  return [...head, ...tail];
+}
+
+/** Sidebar hierarchy: collapsible groups (GROUP_ORDER) + 2-level subgroups + injected feature links. */
+export function navTree(): NavGroupNode[] {
+  return inventoryGroups().map(({ group, types }) => {
+    const meta: GroupMeta = GROUPS[group] ?? {
+      slug: group.toLowerCase().replace(/[^a-z0-9]+/g, '-'), labelKey: group, splitKeys: [], order: [],
+    };
+    const subgroupMeta = meta.subgroups ?? [];
+    const subMembers = new Set(subgroupMeta.flatMap((s) => s.types));
+    const directTypes = ordered(types.filter((t) => !subMembers.has(t)), meta.order);
+    const injected: NavLeaf[] = (meta.injected ?? []).map((f) => ({ key: f.key, kind: 'feature', href: f.href, labelKey: f.labelKey }));
+    const items: NavLeaf[] = [...injected, ...directTypes.map(invLeaf)];
+    const subgroups: NavSubgroupNode[] = subgroupMeta
+      .map((s) => ({ key: s.key, labelKey: s.labelKey, items: ordered(types.filter((t) => s.types.includes(t)), s.types).map(invLeaf) }))
+      .filter((s) => s.items.length > 0);
+    const singleton = !!meta.singleton;
+    return {
+      group, slug: meta.slug, labelKey: meta.labelKey, singleton,
+      href: singleton ? undefined : `/inventory/g/${meta.slug}`,
+      splitKeys: meta.splitKeys, items, subgroups,
+    };
+  });
+}
+
+/** Non-singleton groups that own an overview page (server route validation + Cmd-K). */
+export function overviewGroups(): NavGroupNode[] {
+  return navTree().filter((g) => !g.singleton);
+}
+
+/** Resolve a slug to its overview group node, or null if unknown/singleton (→ notFound). */
+export function groupBySlug(slug: string): NavGroupNode | null {
+  return overviewGroups().find((g) => g.slug === slug) ?? null;
+}
+
+/** Map an active pathname to its owning group/subgroup — drives 2-level auto-expand. */
+export function groupForPath(path: string): { slug: string; subgroupKey?: string } | null {
+  for (const g of navTree()) {
+    if (g.href && (path === g.href || path.startsWith(`${g.href}/`))) return { slug: g.slug };
+    for (const leaf of g.items) {
+      if (leaf.kind === 'feature' && (path === leaf.href || path.startsWith(`${leaf.href}/`))) return { slug: g.slug };
+      if (leaf.kind === 'inventory' && leaf.href === path) return { slug: g.slug };
+    }
+    for (const s of g.subgroups) {
+      if (s.items.some((l) => l.href === path)) return { slug: g.slug, subgroupKey: s.key };
+    }
+  }
+  return null;
+}
+
 // Lambda runtimes past AWS end-of-support. Static list (no date math / API call) —
 // ported from v1 src/app/lambda/page.tsx. Surfaced as an EOL badge in the inventory table.
 export const DEPRECATED_RUNTIMES = [
@@ -145,3 +296,152 @@ export function isDeprecatedRuntime(runtime: unknown): boolean {
   if (typeof runtime !== 'string') return false;
   return DEPRECATED_SET.has(runtime.trim().toLowerCase());
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Per-type highlight cards — tailored top KPIs so each inventory page reads
+// distinctly (vs the old identical total + top-4-state template). Derived ONLY
+// from already-synced row columns (no new AWS calls). Types without an entry
+// fall back to the generic state-count tiles.
+// ───────────────────────────────────────────────────────────────────────────
+export type Highlight =
+  | { kind: 'countWhere'; label: string; col: string; eq: string; tone?: 'accent' | 'danger' }
+  | { kind: 'countTruthy'; label: string; col: string; tone?: 'accent' | 'danger' }
+  | { kind: 'distinct'; label: string; col: string }
+  | { kind: 'sum'; label: string; col: string; suffix?: string }
+  | { kind: 'deprecatedRuntime'; label: string; col: string };
+
+export interface HighlightCard { label: string; value: string | number; variant: 'default' | 'accent' | 'danger' }
+
+const FALSY = new Set(['', 'false', 'null', 'undefined', '0', 'none', 'no', 'disabled']);
+const sv = (v: unknown): string => (v == null ? '' : String(v));
+
+/** Compute highlight cards from the full row set. Pure — unit-tested. */
+export function computeHighlights(rows: Array<Record<string, unknown>>, highlights: Highlight[]): HighlightCard[] {
+  const tone = (t: 'accent' | 'danger' | undefined, n: number): HighlightCard['variant'] =>
+    t === 'danger' ? (n > 0 ? 'danger' : 'default') : t === 'accent' ? 'accent' : 'default';
+  return highlights.map((h) => {
+    switch (h.kind) {
+      case 'countWhere': {
+        const n = rows.filter((r) => sv(r[h.col]).trim().toLowerCase() === h.eq.toLowerCase()).length;
+        return { label: h.label, value: n, variant: tone(h.tone, n) };
+      }
+      case 'countTruthy': {
+        const n = rows.filter((r) => !FALSY.has(sv(r[h.col]).trim().toLowerCase())).length;
+        return { label: h.label, value: n, variant: tone(h.tone, n) };
+      }
+      case 'distinct': {
+        const set = new Set(rows.map((r) => sv(r[h.col]).trim()).filter((x) => x !== ''));
+        return { label: h.label, value: set.size, variant: 'default' };
+      }
+      case 'sum': {
+        const total = rows.reduce((acc, r) => acc + (Number(r[h.col]) || 0), 0);
+        return { label: h.label, value: `${Math.round(total).toLocaleString()}${h.suffix ?? ''}`, variant: 'default' };
+      }
+      case 'deprecatedRuntime': {
+        const n = rows.filter((r) => isDeprecatedRuntime(r[h.col])).length;
+        return { label: h.label, value: n, variant: n > 0 ? 'danger' : 'default' };
+      }
+    }
+  });
+}
+
+// High-value types first (synced columns only). EKS is a feature route (/eks), not an inventory type.
+export const HIGHLIGHTS: Record<string, Highlight[]> = {
+  ec2: [
+    { kind: 'countWhere', label: '실행 중', col: 'instance_state', eq: 'running', tone: 'accent' },
+    { kind: 'countWhere', label: '중지됨', col: 'instance_state', eq: 'stopped', tone: 'danger' },
+    { kind: 'countTruthy', label: '퍼블릭 IP', col: 'public_ip_address' },
+    { kind: 'distinct', label: '타입 종류', col: 'instance_type' },
+  ],
+  rds: [
+    { kind: 'countWhere', label: '가용', col: 'status', eq: 'available', tone: 'accent' },
+    { kind: 'countWhere', label: 'Multi-AZ', col: 'multi_az', eq: 'true', tone: 'accent' },
+    { kind: 'countWhere', label: '퍼블릭 노출', col: 'publicly_accessible', eq: 'true', tone: 'danger' },
+    { kind: 'distinct', label: '엔진 종류', col: 'engine' },
+  ],
+  lambda: [
+    { kind: 'countWhere', label: '활성', col: 'state', eq: 'active', tone: 'accent' },
+    { kind: 'deprecatedRuntime', label: 'EOL 런타임', col: 'runtime' },
+    { kind: 'distinct', label: '런타임 종류', col: 'runtime' },
+  ],
+  ecs_service: [
+    { kind: 'sum', label: 'Desired', col: 'desired_count' },
+    { kind: 'sum', label: 'Running', col: 'running_count' },
+    { kind: 'sum', label: 'Pending', col: 'pending_count' },
+    { kind: 'distinct', label: 'Clusters', col: 'cluster_arn' },
+  ],
+  ebs_volume: [
+    { kind: 'countWhere', label: '사용 중', col: 'state', eq: 'in-use', tone: 'accent' },
+    { kind: 'countWhere', label: '미암호화', col: 'encrypted', eq: 'false', tone: 'danger' },
+    { kind: 'sum', label: '총 용량', col: 'size', suffix: ' GB' },
+    { kind: 'distinct', label: '타입 종류', col: 'volume_type' },
+  ],
+  ebs_snapshot: [
+    { kind: 'sum', label: '총 용량', col: 'volume_size', suffix: ' GB' },
+    { kind: 'countWhere', label: '완료', col: 'state', eq: 'completed', tone: 'accent' },
+    { kind: 'countWhere', label: '미암호화', col: 'encrypted', eq: 'false', tone: 'danger' },
+    { kind: 'distinct', label: '볼륨 수', col: 'volume_id' },
+  ],
+  alb: [
+    { kind: 'countWhere', label: '활성', col: 'state_code', eq: 'active', tone: 'accent' },
+    { kind: 'countWhere', label: '인터넷 노출', col: 'scheme', eq: 'internet-facing' },
+    { kind: 'countWhere', label: '내부', col: 'scheme', eq: 'internal' },
+  ],
+  nlb: [
+    { kind: 'countWhere', label: '활성', col: 'state_code', eq: 'active', tone: 'accent' },
+    { kind: 'countWhere', label: '인터넷 노출', col: 'scheme', eq: 'internet-facing' },
+    { kind: 'countWhere', label: '내부', col: 'scheme', eq: 'internal' },
+  ],
+  iam_user: [
+    { kind: 'countWhere', label: 'MFA 미설정', col: 'mfa_enabled', eq: 'false', tone: 'danger' },
+    { kind: 'countWhere', label: 'MFA 설정', col: 'mfa_enabled', eq: 'true', tone: 'accent' },
+  ],
+  cloudwatch_alarm: [
+    { kind: 'countWhere', label: 'ALARM', col: 'state_value', eq: 'alarm', tone: 'danger' },
+    { kind: 'countWhere', label: 'OK', col: 'state_value', eq: 'ok', tone: 'accent' },
+    { kind: 'countWhere', label: '액션 비활성', col: 'actions_enabled', eq: 'false' },
+    { kind: 'distinct', label: '네임스페이스', col: 'namespace' },
+  ],
+  s3: [
+    { kind: 'distinct', label: '리전 수', col: 'region' },
+  ],
+  s3_public_access: [
+    { kind: 'countWhere', label: '정책 공개', col: 'bucket_policy_is_public', eq: 'true', tone: 'danger' },
+    { kind: 'countWhere', label: '정책차단 해제', col: 'block_public_policy', eq: 'false', tone: 'danger' },
+    { kind: 'countWhere', label: '공개버킷 미제한', col: 'restrict_public_buckets', eq: 'false', tone: 'danger' },
+  ],
+  cloudtrail: [
+    { kind: 'countWhere', label: '로깅 중', col: 'is_logging', eq: 'true', tone: 'accent' },
+    { kind: 'countWhere', label: '로깅 꺼짐', col: 'is_logging', eq: 'false', tone: 'danger' },
+    { kind: 'countWhere', label: '검증 비활성', col: 'log_file_validation_enabled', eq: 'false', tone: 'danger' },
+    { kind: 'countWhere', label: '멀티리전', col: 'is_multi_region_trail', eq: 'true', tone: 'accent' },
+  ],
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Layout archetypes — each inventory page composes its sections to match the
+// resource's nature, so pages read distinctly (vs one identical template):
+//   risk      → danger-verdict hero on top, table-first (security posture)
+//   chart     → distribution/utilization donut prominent up top, table below
+//   capacity  → donut-left + table-right side-by-side (engine/type/size)
+//   directory → compact KPIs, table-dominant scanning, donut as a small aside
+// ───────────────────────────────────────────────────────────────────────────
+export type Archetype = 'risk' | 'chart' | 'capacity' | 'directory';
+
+const LAYOUTS: Record<string, Archetype> = {
+  // risk — types with genuine danger signals → lead with the verdict
+  iam_user: 'risk', s3_public_access: 'risk', cloudtrail: 'risk',
+  // chart — state/utilization distribution is the story
+  ec2: 'chart', lambda: 'chart', ecs_cluster: 'chart', ecs_service: 'chart', cloudwatch_alarm: 'chart',
+  // capacity — engine/type/size; donut beside the table
+  rds: 'capacity', ebs_volume: 'capacity', ebs_snapshot: 'capacity', dynamodb: 'capacity', elasticache: 'capacity',
+  opensearch: 'capacity', msk: 'capacity', s3: 'capacity', ecr: 'capacity',
+  // directory — listing/scanning, table-dominant (default for the rest)
+  vpc: 'directory', subnet: 'directory', security_group: 'directory', waf: 'directory',
+  alb: 'directory', nlb: 'directory', target_group: 'directory', alb_listener_rule: 'directory',
+  apigatewayv2_api: 'directory', apigatewayv2_integration: 'directory', apigatewayv2_route: 'directory',
+  cloudfront: 'directory', cloudfront_vpc_origin: 'directory', route53: 'directory', ecs_task: 'directory',
+};
+
+/** The layout archetype for an inventory type (unmapped → 'directory', a safe table-lead default). */
+export const layoutOf = (type: string): Archetype => LAYOUTS[type] ?? 'directory';

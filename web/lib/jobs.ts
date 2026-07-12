@@ -49,7 +49,14 @@ export async function enqueueJob(
 
   const dryRun = Boolean(opts.dryRun);
   const idempotencyKey = opts.idempotencyKey ?? null;
-  const payloadJson = JSON.stringify(payload ?? {});
+  // SECURITY (consensus gate): `scheduled` is a scheduler-provenance marker the report worker uses to
+  // decide whether to email the mailing list. It must originate ONLY from the EventBridge dispatcher,
+  // which writes SQS directly (bypassing this function) — never from a client. Strip it from every
+  // web-originated enqueue so a caller can't POST {type:"report", payload:{scheduled:true}} to force a
+  // mailing-list blast. (No legitimate BFF caller sets it.)
+  const safePayload: Record<string, unknown> = { ...(payload ?? {}) };
+  delete safePayload.scheduled;
+  const payloadJson = JSON.stringify(safePayload);
 
   const pool = getPool();
   let jobId = '';
@@ -79,7 +86,7 @@ export async function enqueueJob(
     await getSqs().send(
       new SendMessageCommand({
         QueueUrl: queueUrl,
-        MessageBody: JSON.stringify({ job_id: jobId, type, payload, dry_run: dryRun }),
+        MessageBody: JSON.stringify({ job_id: jobId, type, payload: safePayload, dry_run: dryRun }),
       }),
     );
   } catch (e) {

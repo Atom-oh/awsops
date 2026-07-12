@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import EksClusterPage from './page';
 
 vi.mock('next/navigation', () => ({ useParams: () => ({ cluster: 'c1' }) }));
@@ -84,6 +84,76 @@ describe('EKS [cluster] per-tab KPI/viz', () => {
     // newest (lastSeenTs 9) must appear before oldest (1), despite server order.
     const text = container.textContent ?? '';
     expect(text.indexOf('New')).toBeLessThan(text.indexOf('Old'));
+  });
+
+  it('nodes tab opens a node drilldown with only pods scheduled on that node', async () => {
+    mockKind({
+      nodes: [
+        {
+          name: 'ip-10-0-1-5',
+          status: 'Ready',
+          roles: 'worker',
+          version: 'v1.30.0',
+          instanceType: 'm6g.large',
+          zone: 'ap-northeast-2a',
+          age: '3d',
+          cpuAllocatable: 4,
+          memAllocatable: 8192,
+          diskAllocatable: 20000,
+        },
+        {
+          name: 'ip-10-0-2-9',
+          status: 'Ready',
+          roles: 'worker',
+          version: 'v1.30.0',
+          instanceType: 'm6g.large',
+          zone: 'ap-northeast-2c',
+          age: '3d',
+          cpuAllocatable: 4,
+          memAllocatable: 8192,
+          diskAllocatable: 20000,
+        },
+      ],
+      pods: [
+        {
+          name: 'api-abc',
+          namespace: 'default',
+          status: 'Running',
+          node: 'ip-10-0-1-5',
+          restarts: 2,
+          workload: 'api',
+          cpuRequest: 0.5,
+          memRequest: 256,
+          age: '1h',
+        },
+        {
+          name: 'worker-xyz',
+          namespace: 'jobs',
+          status: 'Running',
+          node: 'ip-10-0-2-9',
+          restarts: 0,
+          workload: 'worker',
+          cpuRequest: 1,
+          memRequest: 512,
+          age: '2h',
+        },
+      ],
+    });
+    render(<EksClusterPage />);
+
+    await waitFor(() => expect(screen.getAllByText('ip-10-0-1-5').length).toBeGreaterThan(0));
+    const tableCell = screen.getAllByText('ip-10-0-1-5').find((el) => el.closest('tr'));
+    expect(tableCell).toBeTruthy();
+    fireEvent.click(tableCell!.closest('tr')!);
+
+    const dialog = await screen.findByRole('dialog', { name: 'ip-10-0-1-5' });
+    expect(within(dialog).getByText('Pods on this node')).toBeTruthy();
+    expect(dialog.textContent).toContain('api-abc');
+    expect(dialog.textContent).toContain('default');
+    expect(dialog.textContent).toContain('api');
+    expect(dialog.textContent).toContain('0.5');
+    expect(dialog.textContent).toContain('256');
+    expect(dialog.textContent).not.toContain('worker-xyz');
   });
 
   it('deployments tab shows degraded-first replica bars', async () => {

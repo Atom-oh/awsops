@@ -9,6 +9,10 @@ import { setIntegrationCredentialById, mirrorDefaultCredential } from '@/lib/int
 import { isDatasourceKind } from '@/lib/integrations-category';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
+import { invokeMcpLambdaTool, type ConnConfig } from '@/lib/mcp-lambda-invoke';
+import { upsertSchema } from '@/lib/datasource-schema';
+import { enqueueDatasourceIndex } from '@/lib/diag-signals';
+import { currentAccountId } from '@/lib/account';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +20,21 @@ const AUTH_TYPES = ['none', 'basic', 'bearer', 'custom_header'];
 
 function json(obj: unknown, status: number) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
+}
+
+/** §3.C connect-time: warm the schema+version cache best-effort so chat/diag never depend on a manual
+ *  "Refresh schema". Fire-and-forget — the web tier is long-lived Fargate (not Lambda), so this runs
+ *  after the response; a failure logs (name only — never the credential) and leaves manual Refresh. */
+function warmSchemaCache(id: number, kind: string, connConfig: ConnConfig): void {
+  void (async () => {
+    try {
+      const schema = await invokeMcpLambdaTool({ kind, tool: `${kind}_schema`, connConfig });
+      await upsertSchema(currentAccountId(), id, kind, schema);
+      await enqueueDatasourceIndex(id, kind);  // rebuild pre-built diagnostic signals (prom/mimir; best-effort)
+    } catch (e) {
+      console.warn('[datasources] connect-time introspect failed (manual Refresh remains):', (e as { name?: string })?.name || 'error');
+    }
+  })();
 }
 
 async function gate(request: Request) {
@@ -53,6 +72,7 @@ export async function POST(request: Request) {
     await setIntegrationCredentialById(id, blob);
     const ds = await getDatasource(id);
     if (ds?.isDefault) await mirrorDefaultCredential(kind, blob); // first of its kind → it is the default
+    warmSchemaCache(id, kind, blob as ConnConfig); // §3.C connect-time introspect (best-effort, after response)
     return json({ id }, 201);
   } catch (e) {
     const msg = (e as Error).message || 'create failed';

@@ -12,22 +12,27 @@ interface Account {
   accountId: string; alias: string; region: string; isHost: boolean;
   externalId: string | null; enabled: boolean; status: string;
 }
+interface AccountRegion { accountId: string; region: string; enabled: boolean }
 
 const statusTone = (s: string): 'positive' | 'negative' | 'neutral' =>
   s === 'verified' ? 'positive' : s === 'error' ? 'negative' : 'neutral';
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [regions, setRegions] = useState<AccountRegion[]>([]);
   const [denied, setDenied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
-  const [form, setForm] = useState({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '' });
+  const [form, setForm] = useState({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '', firstParty: false });
+  const [regionForm, setRegionForm] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
-    const r = await fetch('/api/accounts');
+    const [r, rr] = await Promise.all([fetch('/api/accounts'), fetch('/api/accounts/regions')]);
     if (r.status === 401 || r.status === 403) { setDenied(true); return; }
     const d = await r.json().catch(() => ({ accounts: [] }));
     setAccounts(Array.isArray(d.accounts) ? d.accounts : []);
+    const rd = rr.ok ? await rr.json().catch(() => ({ regions: [] })) : { regions: [] };
+    setRegions(Array.isArray(rd.regions) ? rd.regions : []);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -40,7 +45,7 @@ export default function AccountsPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setMsg(`실패: ${d.message || r.status}`); return; }
-      setMsg('등록·검증 완료'); setForm({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '' });
+      setMsg('등록·검증 완료'); setForm({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '', firstParty: false });
       await load();
     } finally { setBusy(false); }
   };
@@ -51,6 +56,29 @@ export default function AccountsPage() {
     if (!r.ok) { const d = await r.json().catch(() => ({})); setMsg(`삭제 실패: ${d.message || r.status}`); return; }
     await load();
   };
+
+  const addRegion = async (accountId: string) => {
+    const region = (regionForm[accountId] || '').trim();
+    if (!region) return;
+    setBusy(true); setMsg('');
+    try {
+      const r = await fetch('/api/accounts/regions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accountId, region }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(`리전 추가 실패: ${d.message || r.status}`); return; }
+      setMsg('리전 추가 완료');
+      setRegionForm((prev) => ({ ...prev, [accountId]: '' }));
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  // account_regions is keyed by the concrete account id (the host included — its real 12-digit id,
+  // not the 'self' alias), so match on it directly.
+  const regionsFor = (accountId: string) =>
+    regions.filter((r) => r.enabled && r.accountId === accountId).map((r) => r.region);
 
   if (denied) {
     return (
@@ -73,7 +101,7 @@ export default function AccountsPage() {
           <table className="w-full text-[12px]">
             <thead>
               <tr className="text-left text-ink-400">
-                <th className="py-1">Alias</th><th>Account ID</th><th>Region</th><th>상태</th><th></th>
+                <th className="py-1">Alias</th><th>Account ID</th><th>Regions</th><th>상태</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -81,12 +109,35 @@ export default function AccountsPage() {
                 <tr key={a.accountId} className="border-t border-ink-100">
                   <td className="py-1.5">{a.alias}{a.isHost && <span className="ml-1 text-ink-400">(host)</span>}</td>
                   <td className="font-mono">{a.accountId}</td>
-                  <td>{a.region}</td>
+                  <td>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {(regionsFor(a.accountId).length ? regionsFor(a.accountId) : [a.region]).map((region) => (
+                        <span key={region} className="rounded border border-ink-100 px-1.5 py-0.5 font-mono text-[10px] text-ink-600">{region}</span>
+                      ))}
+                    </div>
+                  </td>
                   <td><Badge tone={statusTone(a.status)} variant="soft">{a.status}</Badge></td>
                   <td className="text-right">
-                    {!a.isHost && (
-                      <button onClick={() => remove(a.accountId)} className="text-[11px] text-negative-600 hover:underline">제거</button>
-                    )}
+                    <div className="flex justify-end gap-1">
+                      <input
+                        aria-label={`${a.alias} 추가 리전`}
+                        className="w-28 rounded border border-ink-200 px-1.5 py-1 text-[11px]"
+                        placeholder="us-east-1"
+                        value={regionForm[a.accountId] || ''}
+                        onChange={(e) => setRegionForm({ ...regionForm, [a.accountId]: e.target.value.trim() })}
+                      />
+                      <button
+                        aria-label={`${a.alias} 리전 추가`}
+                        onClick={() => addRegion(a.accountId)}
+                        disabled={busy}
+                        className="rounded border border-ink-200 px-2 py-1 text-[11px] text-ink-600 hover:bg-ink-50 disabled:opacity-50"
+                      >
+                        리전 추가
+                      </button>
+                      {!a.isHost && (
+                        <button onClick={() => remove(a.accountId)} className="text-[11px] text-negative-600 hover:underline">제거</button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -101,8 +152,12 @@ export default function AccountsPage() {
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px] font-mono" placeholder="Account ID (12 digits)" value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value.trim() })} />
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Alias" value={form.alias} onChange={(e) => setForm({ ...form, alias: e.target.value })} />
           <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value.trim() })} />
-          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="ExternalId" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
+          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="ExternalId (optional, 1st-party)" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
         </div>
+        <label className="flex items-center gap-2 text-[11px] text-ink-500">
+          <input type="checkbox" checked={form.firstParty} onChange={(e) => setForm({ ...form, firstParty: e.target.checked })} />
+          1st-party 계정 (ExternalId 생략) — 대상 trust가 호스트 task-role ARN을 정확히 핀할 때만. 3rd-party는 ExternalId 필수.
+        </label>
         <div className="flex items-center gap-3">
           <button onClick={add} disabled={busy} className="self-start rounded-md bg-brand-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
             {busy ? '검증 중…' : '추가 + 검증'}
@@ -113,9 +168,9 @@ export default function AccountsPage() {
 
       <Card className="p-4 text-[12px] text-ink-600 flex flex-col gap-1">
         <div className="text-[13px] font-semibold text-ink-800 mb-1">타깃 계정 온보딩</div>
-        <p>각 타깃 계정에 <code>AWSopsReadOnlyRole</code>을 배포해야 합니다 (호스트 web task role만 신뢰 + ExternalId 조건 + ReadOnlyAccess).</p>
+        <p>각 타깃 계정에 <code>AWSopsReadOnlyRole</code>을 배포해야 합니다 (호스트 web task role 신뢰 + ReadOnlyAccess). <strong>1st-party</strong>(같은 조직, trust가 호스트 task-role ARN을 정확히 핀)는 ExternalId를 생략할 수 있고, <strong>3rd-party/공유</strong> 계정은 ExternalId 조건이 필요합니다 (ADR-011).</p>
         <p>CloudFormation 템플릿: <code>infra/cfn/awsops-target-account-role.yaml</code> — 배포 가이드는 <code>docs/runbooks/onboard-target-account.md</code> 참조.</p>
-        <p className="text-ink-400">배포 후 위 폼에 Account ID·Alias·Region·ExternalId를 입력하면 assume를 검증(상태=verified)한 뒤 등록합니다. ExternalId는 confused-deputy 가드이며 비밀이 아닙니다.</p>
+        <p className="text-ink-400">배포 후 위 폼에 Account ID·Alias·Region을 입력하면 assume를 검증(상태=verified)한 뒤 등록합니다. ExternalId는 선택(1st-party는 생략 가능)이며 confused-deputy 가드일 뿐 비밀이 아닙니다.</p>
       </Card>
     </div>
   );

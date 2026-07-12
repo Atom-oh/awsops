@@ -5,10 +5,10 @@
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { currentAccountId } from '@/lib/account';
-import { invokeMcpLambdaTool, type ConnConfig } from '@/lib/mcp-lambda-invoke';
+import { invokeMcpLambdaTool } from '@/lib/mcp-lambda-invoke';
 import { upsertSchema, listConfiguredSchemas } from '@/lib/datasource-schema';
-import { getDatasource } from '@/lib/datasources';
-import { getCredentialById } from '@/lib/integration-credentials';
+import { enqueueDatasourceIndex } from '@/lib/diag-signals';
+import { getDatasource, resolveConnConfig } from '@/lib/datasources';
 import { isDatasourceKind } from '@/lib/integrations-category';
 import { assertDatasourceEndpointAllowed } from '@/lib/ssrf-guard';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
@@ -52,8 +52,7 @@ export async function POST(request: Request) {
   const ds = await getDatasource(id);
   if (!ds || !isDatasourceKind(ds.kind)) return json({ error: 'unknown datasource instance' }, 400);
 
-  const cred = await getCredentialById(id, ds.kind);
-  const connConfig = cred ? (cred as ConnConfig) : undefined;
+  const connConfig = await resolveConnConfig(ds); // row endpoint (authoritative) + SM cred — works even for auth=none
   if (connConfig?.endpoint) {
     try { assertDatasourceEndpointAllowed(connConfig.endpoint); }
     catch (e) { return json({ error: (e as Error).message }, 400); }
@@ -63,6 +62,7 @@ export async function POST(request: Request) {
   try {
     const schema = await invokeMcpLambdaTool({ kind: ds.kind, tool: `${ds.kind}_schema`, connConfig });
     await upsertSchema(accountId, id, ds.kind, schema);
+    await enqueueDatasourceIndex(id, ds.kind);  // rebuild pre-built diagnostic signals (prom/mimir; best-effort)
     return json({ ok: true, id, kind: ds.kind, summary: summarize(schema) }, 200);
   } catch (e) {
     return json({ error: (e as Error).message }, 400);

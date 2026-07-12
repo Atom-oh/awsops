@@ -10,13 +10,13 @@
   <meta name="remarp-block" content="default">
   <link rel="stylesheet" href="./common/theme.css">
   <link rel="stylesheet" href="./common/pptx-theme/theme-override.css">
-  
+  <style>:root { --slide-ratio-w: 16; --slide-ratio-h: 9; } :root { --slide-width: 960px; --slide-height: 540px; }</style>
   
   <script>window.__remarpTheme = {"colors": {}, "footer": "\u00a9 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved. Amazon Confidential and Trademark.", "pagination": true, "fonts": {}};</script>
 </head>
 <body>
 <div class="slide-deck">
-<div class="slide title-slide">
+<div class="slide title-slide" data-remarp-id="s0">
     <h1>Demo & Diagnosis Report</h1>
   <p class="subtitle">실전 시나리오와 종합진단</p>
 </div>
@@ -263,15 +263,15 @@
     </div>
     <div class="step-details">
       <div id="step1Details" class="hidden">
-        <p class="status-message">🔍 질문 분석 중...</p>
-        <p class="route-info">Route: <span class="accent-cyan">eks-optimize</span></p>
+        <p class="status-message">🔍 하이브리드 라우팅 (regex + Haiku)...</p>
+        <p class="route-info">Gateway: <span class="accent-cyan">cost</span> · 프롬프트 캐싱 hit</p>
       </div>
       <div id="step2Details" class="hidden">
-        <p class="status-message">📊 데이터 수집 중...</p>
-        <p class="data-sources"><span class="accent-green">Prometheus ✅</span> <span class="accent-green">Steampipe ✅</span> <span class="accent-green">Cost API ✅</span></p>
+        <p class="status-message">📊 AgentCore 섹션 에이전트 · 라이브 read-only 조회...</p>
+        <p class="data-sources"><span class="accent-green">MCP Tools ✅</span> <span class="accent-green">Cost Explorer ✅</span> <span class="accent-green">EKS Metrics ✅</span></p>
       </div>
       <div id="step3Details" class="hidden">
-        <p class="status-message">🤖 Opus 4.6 분석 중...</p>
+        <p class="status-message">🤖 Bedrock 분석 · SSE 스트리밍...</p>
       </div>
     </div>
   </div>
@@ -306,10 +306,10 @@
       let streamingInterval; // To manage character streaming
 
       // AI response text to be streamed
-      const aiResponseContent = `Opus 4.6 분석 결과, EKS 클러스터의 비용 효율성을 개선할 수 있는 몇 가지 주요 영역이 확인되었습니다.
-1.  **워크로드 최적화:** 현재 클러스터에 불필요하게 높은 리소스를 할당하고 있는 워크로드가 감지되었습니다. 예를 들어, 일부 개발 환경 파드는 CPU 및 메모리 사용량이 낮음에도 불구하고 큰 인스턴스 타입에서 실행 중입니다.
+      const aiResponseContent = `Bedrock 분석 결과, EKS 클러스터의 비용 효율성을 개선할 수 있는 몇 가지 주요 영역이 확인되었습니다. (read-only 권장 — 자동 적용 없음)
+1.  **워크로드 rightsizing:** 현재 클러스터에 불필요하게 높은 리소스를 할당하고 있는 워크로드가 감지되었습니다. 예를 들어, 일부 개발 환경 파드는 CPU 및 메모리 사용량이 낮음에도 불구하고 큰 인스턴스 타입에서 실행 중입니다.
 2.  **스케줄링 정책 개선:** 비즈니스 시간 외에는 불필요하게 가동되는 파드가 있습니다. 스케일 다운 정책 적용으로 유휴 시간을 최소화할 수 있습니다.
-3.  **Graviton2/3 인스턴스 전환:** 현재 사용 중인 x86 인스턴스 대비 Graviton2/3 인스턴스는 동일 성능에서 최대 20-40% 비용 절감 효과를 제공합니다. 호환성 검토 후 점진적인 전환을 권장합니다.
+3.  **Graviton 인스턴스 전환:** 현재 사용 중인 x86 인스턴스 대비 Graviton 인스턴스는 동일 성능에서 비용 절감 효과를 제공합니다. 호환성 검토 후 점진적인 전환을 권장합니다.
 
 이러한 개선 사항들을 적용할 경우, **월 350만원** 가량의 EKS 비용 절감이 예상됩니다.`;
 
@@ -354,7 +354,7 @@
             cursor.classList.add('hidden'); // Hide cursor after streaming finishes
             cursor.style.animation = 'none'; // Stop animation explicitly
             finalSavings.classList.remove('hidden');
-            finalSavings.textContent = '적용 시 예상 절감액: 월 350만원';
+            finalSavings.textContent = '예상 절감액(권장): 월 350만원 · 자동 적용 없음';
             resetButton.classList.remove('hidden'); // Show reset button at the very end
           }
         }
@@ -369,7 +369,7 @@
 
         currentTimeout = setTimeout(() => {
           streamText(aiResponseContent, responseText, 25);
-        }, 2000); // 2 seconds delay for "Opus 4.6 분석 중..."
+        }, 2000); // 2 seconds delay for "Bedrock 분석 중..."
       }
 
       function animateStep2() {
@@ -410,90 +410,80 @@
 </div>
 
 <div class="slide" data-remarp-id="s2" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
-  <div class="slide-header" data-remarp-id="s2-header"><h2>Scenario 1: EKS Cost Optimization</h2></div>
+  <div class="slide-header" data-remarp-id="s2-header"><h2>Scenario 1: Cost Analysis & Rightsizing</h2></div>
   <div class="slide-body" data-remarp-id="s2-body">
     <div class="columns">
 <div class="col">
 <h3>사용자 질문</h3>
-<blockquote><p>"EKS 비용 개선점 찾아줘"</p></blockquote>
-<h3>자동 수집 데이터</h3>
-<p><strong>Prometheus (PromQL)</strong></p>
-<ul><li>CPU Usage vs Request per Container</li><li>Memory Usage vs Request per Container</li><li>CPU Throttling Rate</li><li>Pod Restart Counts</li><li>HTTP 5xx Error Rates</li><li>Node CPU / Memory Utilization</li></ul>
-<p><strong>Steampipe SQL</strong></p>
-<ul><li>K8s Pod resource requests/limits</li><li>EKS Container Cost (OpenCost)</li></ul>
+<blockquote><p>"비용 개선점 찾아줘"</p></blockquote>
+<h3>동작 흐름 (read-only)</h3>
+<ul><li><strong>cost 섹션 에이전트</strong> — Cost Explorer / Forecast 조회</li><li><strong>Cost 대시보드</strong> — 서비스별 비용·추이 시각화</li><li><strong>EKS 메트릭</strong> — request 대비 실사용량 (read-only)</li><li>regex + Haiku 라우팅 → cost gateway</li></ul>
 </div><div class="col">
-<h3>분석 결과 예시</h3>
-<ul><li>"<strong>payment</strong> Pod: CPU request 500m, 실사용 50m → <strong>90% 과할당</strong>"</li><li>"<strong>frontend</strong> Deployment: Memory limit 2Gi, 사용량 200Mi → <strong>다운사이징 권장</strong>"</li><li>"Node 3대 중 <strong>2대는 활용률 15% 미만</strong> → Karpenter로 통합 가능"</li><li>"예상 월 절감: <strong>$1,200</strong> (현재 $3,500)"</li></ul>
-<h3>MetricCandidate Pattern</h3>
-<div class="code-block">{ key: <span class="string">'cpuUsage'</span>,
-  <span class="key">queries</span>: [
-    'container_cpu_usage_seconds_total
-     {container!=<span class="string">""</span>,image!=<span class="string">""</span>}',
-    'container_cpu_usage_seconds_total
-     {container!=<span class="string">""</span>}',  <span class="comment">// fallback</span>
-  ]}</div>
+<h3>분석 결과 예시 (권장만)</h3>
+<ul><li>"<strong>payment</strong> Pod: CPU request 500m, 실사용 50m → <strong>90% 과할당</strong> (rightsizing 권장)"</li><li>"<strong>frontend</strong> Deployment: Memory limit 2Gi, 사용량 200Mi → <strong>다운사이징 권장</strong>"</li><li>"Node 3대 중 <strong>2대 활용률 15% 미만</strong> → 통합 검토"</li><li>"예상 월 절감 <strong>$1,200</strong> — 권장사항"</li></ul>
+<h3>Read-Only 원칙</h3>
+<blockquote><p>권장사항만 제시 · <strong>자동 적용 없음</strong> (mutating 설치 버튼은 ADR-029 번복으로 폐기)</p></blockquote>
 </div>
 </div>
   </div>
 </div>
 
 <div class="slide" data-remarp-id="s3" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
-  <div class="slide-header" data-remarp-id="s3-header"><h2>Scenario 2: Idle Resource Scanner</h2></div>
+  <div class="slide-header" data-remarp-id="s3-header"><h2>Scenario 2: Inventory & Idle Review</h2></div>
   <div class="slide-body" data-remarp-id="s3-body">
     <div class="columns">
 <div class="col">
-<h3>사용자 질문</h3>
-<blockquote><p>"미사용 리소스 찾아줘"</p></blockquote>
-<h3>6 Categories Scan</h3>
-<table><thead><tr><th>Category</th><th>SQL Query</th></tr></thead><tbody><tr><td>Unattached EBS</td><td><code>status = 'available'</code></td></tr><tr><td>gp2 Volumes</td><td><code>volume_type = 'gp2'</code></td></tr><tr><td>Unassociated EIPs</td><td><code>association_id IS NULL</code></td></tr><tr><td>Stopped EC2</td><td><code>instance_state = 'stopped'</code></td></tr><tr><td>Old Snapshots</td><td><code>start_time < NOW() - 90 days</code></td></tr><tr><td>Unused SGs</td><td>ENI 참조 없음</td></tr></tbody></table>
+<h3>사용자 흐름</h3>
+<blockquote><p><code>/inventory/[type]</code> 페이지 → AgentCore 질의</p></blockquote>
+<h3>Inventory 플랫폼</h3>
+<ul><li><strong>~22 resource types</strong> — <code>/inventory/[type]</code> 제네릭 페이지</li><li>flag-gated <strong>Steampipe sync</strong> (warm Fargate) → <strong>Aurora</strong> 적재</li><li>registry 기반 내비게이션 · fan-out sync</li><li>페이지별 <strong>mini-dashboard</strong> (KPI / donut / filters)</li></ul>
 </div><div class="col">
-<h3>비용 추정 로직</h3>
-<ul><li>EBS: volume_type + size 기반 월 비용 계산</li><li>EIP: <strong>$3.6/month</strong> per unassociated IP</li><li>EC2: instance_type 기반 On-Demand 가격</li><li>Snapshot: size + storage 단가</li><li>gp2 → gp3: <strong>20% 절감</strong> 추정</li></ul>
-<h3>분석 결과 예시</h3>
-<blockquote><p>"6개 미연결 EBS (총 500GB) → <strong>$50/월</strong>" "3개 미연결 EIP → <strong>$10.8/월</strong>" "12개 gp2 볼륨 → gp3 전환 시 <strong>$30/월 절감</strong>" "<strong>총 예상 월 낭비: $240</strong>"</p></blockquote>
+<h3>점검 예시 (read-only)</h3>
+<ul><li>"미연결 EBS 볼륨 · 미사용 Elastic IP 후보 식별"</li><li>"오래된 스냅샷 · 중지된 EC2 검토"</li><li>"ENI 참조 없는 Security Group"</li><li>AgentCore 라이브 조회로 현황 보강</li></ul>
+<h3>라이브 vs 인벤토리</h3>
+<blockquote><p>Steampipe = <strong>인벤토리 sync 전용</strong> (Aurora 적재) 라이브 조회는 <strong>AgentCore MCP 도구</strong>가 담당</p></blockquote>
 </div>
 </div>
   </div>
 </div>
 
 <div class="slide" data-remarp-id="s4" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
-  <div class="slide-header" data-remarp-id="s4-header"><h2>Scenario 3: Incident Analysis</h2></div>
+  <div class="slide-header" data-remarp-id="s4-header"><h2>Scenario 3: Topology & Dependencies</h2></div>
   <div class="slide-body" data-remarp-id="s4-body">
-    <p><!-- Slide 5: Incident Analysis --></p>
+    <p><!-- Slide 5: Topology & Dependency Visualization --></p>
 <div class="flow-h">
   <div class="flow-group bg-blue" data-fragment-index="1">
-    <div class="flow-group-label">CloudWatch</div>
-    <div class="flow-box">ALARM 상태 알람</div>
-    <div class="flow-box">K8s Warning Events</div>
+    <div class="flow-group-label">CloudFront</div>
+    <div class="flow-box">배포 / 도메인</div>
+    <div class="flow-box">VPC Origin</div>
   </div>
   <div class="flow-arrow">&rarr;</div>
   <div class="flow-group bg-orange" data-fragment-index="2">
-    <div class="flow-group-label">Prometheus</div>
-    <div class="flow-box">HTTP 5xx Spike</div>
-    <div class="flow-box">CPU/Memory Anomaly</div>
-    <div class="flow-box">Pod Restart Surge</div>
+    <div class="flow-group-label">Load Balancer</div>
+    <div class="flow-box">내부 ALB</div>
+    <div class="flow-box">Listener / Rule</div>
   </div>
   <div class="flow-arrow">&rarr;</div>
   <div class="flow-group bg-green" data-fragment-index="3">
-    <div class="flow-group-label">Loki</div>
-    <div class="flow-box">Error Log Patterns</div>
-    <div class="flow-box">Exception Traces</div>
+    <div class="flow-group-label">Target Group</div>
+    <div class="flow-box">ECS / EKS Target</div>
+    <div class="flow-box">Health Status</div>
   </div>
   <div class="flow-arrow">&rarr;</div>
   <div class="flow-group bg-pink" data-fragment-index="4">
-    <div class="flow-group-label">Tempo / Jaeger</div>
-    <div class="flow-box">Error Traces</div>
-    <div class="flow-box">Latency Outliers</div>
+    <div class="flow-group-label">Database</div>
+    <div class="flow-box">Aurora / RDS</div>
+    <div class="flow-box">의존 리소스</div>
   </div>
 </div>
-<h3>Cross-Source Correlation → Opus 4.6 분석 → Timeline 재구성</h3>
+<h3>Flow + Infra 그래프 · <code>/topology/resource/[id]</code> 상세 · blast radius 진단</h3>
   </div>
 </div>
 
 <div class="slide" data-remarp-id="s5" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
-  <div class="slide-header" data-remarp-id="s5-header"><h2>Comprehensive Diagnosis Report</h2></div>
+  <div class="slide-header" data-remarp-id="s5-header"><h2>AI Diagnosis Report</h2></div>
   <div class="slide-body" data-remarp-id="s5-body">
-    <p><!-- Slide 6: Comprehensive Diagnosis Report --></p>
+    <p><!-- Slide 6: AI Diagnosis Report --></p>
 <style>
 .ds{font-family:'Segoe UI',sans-serif;color:#fff;width:100%;max-width:580px;max-height:520px;margin:0 auto;overflow-y:auto;background:#1a2233;border-radius:10px;padding:20px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;border:1px solid #334466}
 .ds h3{text-align:center;color:#00d4ff;margin:0 0 8px;font-size:1.4em}
@@ -511,12 +501,12 @@
 .ds-si .ic{margin-right:8px;min-width:18px;text-align:center}
 </style>
 <div class="ds">
-  <h3>종합진단 리포트</h3>
+  <h3>AI 종합진단 리포트 (deep · 15 sections)</h3>
   <div class="ds-bw"><div class="ds-b" id="dBar2"></div></div>
   <div class="ds-i"><span>진행률: <span id="dPct2">0%</span></span><span>경과: <span id="dTm2">00:00</span></span></div>
   <div class="ds-btns">
     <button class="db db1" id="dSt2">진단 시작</button>
-    <button class="db db2" id="dDl2" disabled>&#x2193; DOCX / MD / PDF</button>
+    <button class="db db2" id="dDl2" disabled>&#x2193; DOCX / PDF</button>
     <button class="db db3" id="dRs2" disabled>재설정</button>
   </div>
   <div class="ds-sc" id="dSc2"></div>
@@ -524,14 +514,14 @@
 <script>
 (function(){
   var S=[
-    {n:"Cost Overview",p:"Cost Optimization",c:"#f59e0b"},{n:"Compute Cost",p:"Cost Optimization",c:"#f59e0b"},
-    {n:"Network Cost",p:"Cost Optimization",c:"#f59e0b"},{n:"Storage Cost",p:"Cost Optimization",c:"#f59e0b"},
-    {n:"Idle Resources",p:"Cost Optimization",c:"#f59e0b"},{n:"Security Posture",p:"Security",c:"#ef4444"},
-    {n:"Network Arch",p:"Reliability",c:"#00d4ff"},{n:"Compute",p:"Reliability",c:"#00d4ff"},
-    {n:"EKS Analysis",p:"Performance",c:"#a855f7"},{n:"DB Analysis",p:"Performance",c:"#a855f7"},
-    {n:"MSK Analysis",p:"Performance",c:"#a855f7"},{n:"Storage",p:"Performance",c:"#a855f7"},
-    {n:"Executive Summary",p:"AI Synthesis",c:"#00ff88"},{n:"Recommendations",p:"AI Synthesis",c:"#00ff88"},
-    {n:"Appendix",p:"AI Synthesis",c:"#00ff88"}
+    {n:"Executive Summary",p:"AI Synthesis",c:"#00ff88"},{n:"Security Posture",p:"Security",c:"#ef4444"},
+    {n:"IAM & 자격 증명 심층",p:"Security",c:"#ef4444"},{n:"데이터 보호 & 암호화",p:"Security",c:"#ef4444"},
+    {n:"네트워크 보안 / 노출",p:"Security",c:"#ef4444"},{n:"Network Architecture",p:"Reliability",c:"#00d4ff"},
+    {n:"Compute Infrastructure",p:"Reliability",c:"#00d4ff"},{n:"Database & Storage",p:"Reliability",c:"#00d4ff"},
+    {n:"신뢰성 & 고가용성",p:"Performance",c:"#a855f7"},{n:"관측성 & 알람 커버리지",p:"Performance",c:"#a855f7"},
+    {n:"Cost Overview",p:"Cost Optimization",c:"#f59e0b"},{n:"비용 최적화 심층",p:"Cost Optimization",c:"#f59e0b"},
+    {n:"Recent Changes",p:"AI Synthesis",c:"#00ff88"},{n:"Intended vs Actual",p:"AI Synthesis",c:"#00ff88"},
+    {n:"Recommendations",p:"AI Synthesis",c:"#00ff88"}
   ];
   var el=document.getElementById('dSc2'),bar=document.getElementById('dBar2'),
       pct=document.getElementById('dPct2'),tm=document.getElementById('dTm2'),
@@ -548,7 +538,7 @@
       var h=document.createElement('div');h.className='ds-ph';h.textContent=p;h.style.borderColor=g[p].c;d.appendChild(h);
       g[p].items.forEach(function(it){
         var r=document.createElement('div');r.className='ds-si';r.setAttribute('data-idx',it.i);
-        var ic=document.createElement('span');ic.className='ic';ic.textContent='\u2B1C';
+        var ic=document.createElement('span');ic.className='ic';ic.textContent='⬜';
         var nm=document.createElement('span');nm.textContent=it.n;
         r.appendChild(ic);r.appendChild(nm);d.appendChild(r)});
       el.appendChild(d)}
@@ -557,105 +547,121 @@
   function prog(){var p=idx/S.length*100;bar.style.width=p+'%';pct.textContent=Math.round(p)+'%'}
   function tick(){if(run)tm.textContent=simTime()}
   function next(){
-    if(idx<S.length){if(idx>0)setI(idx-1,'\u2705');setI(idx,'\u23F3');prog();idx++;to=setTimeout(next,800)}
-    else{setI(S.length-1,'\u2705');prog();run=false;clearInterval(iv);tm.textContent='15:25';bD.disabled=false}
+    if(idx<S.length){if(idx>0)setI(idx-1,'✅');setI(idx,'⏳');prog();idx++;to=setTimeout(next,800)}
+    else{setI(S.length-1,'✅');prog();run=false;clearInterval(iv);tm.textContent='15:25';bD.disabled=false}
   }
   function start(){if(run)return;run=true;t0=Date.now();idx=0;bS.disabled=true;bR.disabled=false;bD.disabled=true;
     clearTimeout(to);clearInterval(iv);render();prog();tm.textContent='00:00';iv=setInterval(tick,1000);next()}
   function reset(){run=false;idx=0;clearInterval(iv);clearTimeout(to);render();bar.style.width='0%';pct.textContent='0%';
     tm.textContent='00:00';bS.disabled=false;bD.disabled=true;bR.disabled=true}
   render();bS.addEventListener('click',start);bR.addEventListener('click',reset);
-  bD.addEventListener('click',function(){alert('DOCX / MD / PDF download is a simulation.')});
+  bD.addEventListener('click',function(){alert('DOCX / PDF download is a simulation.')});
 })();
 </script>
   </div>
 </div>
 
 <div class="slide" data-remarp-id="s6" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
-  <div class="slide-header" data-remarp-id="s6-header"><h2>FinOps MCP Tools</h2></div>
+  <div class="slide-header" data-remarp-id="s6-header"><h2>Report Export & Lifecycle</h2></div>
   <div class="slide-body" data-remarp-id="s6-body">
     <div class="columns">
 <div class="col">
-<h3>Cost Gateway (9 tools)</h3>
-<ul><li><strong>Cost Explorer</strong> — 비용/사용량 분석, 기간 비교</li><li><strong>Cost Forecast</strong> — 비용 예측</li><li><strong>Pricing API</strong> — AWS 서비스 가격 조회</li><li><strong>Budgets</strong> — 예산 상태 확인</li></ul>
-<h3>Auto-Collect Agents</h3>
-<ul><li><strong>eks-optimize</strong> — K8s rightsizing</li><li><strong>db-optimize</strong> — RDS/ElastiCache/OpenSearch</li><li><strong>msk-optimize</strong> — Kafka broker sizing</li><li><strong>idle-scan</strong> — 낭비 리소스 탐지</li></ul>
+<h3>워커 기반 Export</h3>
+<ul><li><strong>DOCX</strong> — python-docx</li><li><strong>PDF</strong> — chromium / playwright 렌더</li><li><strong>Noto CJK</strong> 폰트 (한글 깨짐 방지)</li><li>워커 티어에서 생성 · <strong>실패 격리</strong></li></ul>
+<h3>저장 / 다운로드</h3>
+<ul><li>S3 → <code>diagnosis/{id}.docx</code> · <code>diagnosis/{id}.pdf</code></li><li><strong>BFF 프록시 다운로드</strong> 라우트 + UI 메뉴</li><li>생성 일시 <strong>KST</strong> 표기</li></ul>
 </div><div class="col">
-<h3>AWS Native FinOps</h3>
-<ul><li><strong>Compute Optimizer</strong> — EC2/Lambda/EBS 권장</li><li><strong>RI/SP Recommendations</strong> — 예약 인스턴스/Savings Plan</li><li><strong>Cost Optimization Hub</strong> — 통합 최적화 권장</li><li><strong>Trusted Advisor</strong> — 비용 최적화 검사</li></ul>
-<h3>통합 비용 분석</h3>
-<ul><li>ECS: CloudWatch Container Insights + Fargate 가격</li><li>EKS: OpenCost API + Request 기반 폴백</li><li>멀티 어카운트: 계정별 비용 쿼리 → 태깅 병합</li></ul>
+<h3>리포트 라이프사이클</h3>
+<ul><li>자동 제목 (워커 LLM 1회, 격리)</li><li>태그 자동 제안 + 수동 편집</li><li>제목 수정 · <strong>소프트 삭제</strong> (<code>deleted_at</code>)</li><li>읽기 경로 = <code>deleted_at IS NULL</code></li><li>PATCH / DELETE = <strong>fail-closed</strong> (owner | admin)</li></ul>
+<h3>XSS 안전</h3>
+<blockquote><p>title / tags는 React-escape 렌더 (raw HTML 주입 없음)</p></blockquote>
 </div>
 </div>
   </div>
 </div>
 
 <div class="slide" data-remarp-id="s7" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
-  <div class="slide-header" data-remarp-id="s7-header"><h2>Deployment — 30 Minutes</h2></div>
+  <div class="slide-header" data-remarp-id="s7-header"><h2>Datasources & EKS</h2></div>
   <div class="slide-body" data-remarp-id="s7-body">
-    <p><!-- Slide 8: Deployment --></p>
-<div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr;gap:12px;align-items:stretch;">
-  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
-    <div style="color:#00d4ff;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">Phase 1: Infra (5min)</div>
-    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
-      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">00 CDK Deploy</div>
-      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">01 Install Base</div>
-      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">02 Setup Next.js</div>
-      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">03 Build & Deploy</div>
-    </div>
-  </div>
-  <div style="display:flex;align-items:center;color:#00d4ff;font-size:24px;">→</div>
-  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
-    <div style="color:#f59e0b;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">Phase 2: Auth (5min)</div>
-    <div style="flex:1;display:flex;flex-direction:column;gap:6px;justify-content:center;">
-      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">05 Cognito</div>
-      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">08 CloudFront Auth</div>
-    </div>
-  </div>
-  <div style="display:flex;align-items:center;color:#f59e0b;font-size:24px;">→</div>
-  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
-    <div style="color:#ef4444;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">Phase 3: AI (15min)</div>
-    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
-      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">06a Runtime</div>
-      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">06b Gateways</div>
-      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">06c Tools (125)</div>
-      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">06d Interpreter</div>
-      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">06e Memory</div>
-    </div>
-  </div>
-  <div style="display:flex;align-items:center;color:#00ff88;font-size:24px;">→</div>
-  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
-    <div style="color:#00ff88;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">Phase 4: Optional</div>
-    <div style="flex:1;display:flex;flex-direction:column;gap:6px;justify-content:center;">
-      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">07 OpenCost</div>
-      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">12 Multi-Account</div>
-      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">11 Verify</div>
-    </div>
-  </div>
+    <div class="columns">
+<div class="col">
+<h3>Datasources Explore (<code>/datasources</code>)</h3>
+<ul><li><strong>read-only 커넥터 플랫폼</strong> (5종)</li><li>ClickHouse · Prometheus · Loki · Tempo · Mimir</li><li>커넥터 Lambda + <strong>Aurora schema cache</strong></li><li><strong>NL → query</strong> + 챗 주입(injection)</li></ul>
+</div><div class="col">
+<h3>EKS 페이지 (read-only)</h3>
+<ul><li>in-cluster 조회: <strong>nodes / pods / deploy / svc</strong></li><li>task-role <strong>Access Entry + AmazonEKSViewPolicy</strong></li><li><strong>presigned STS</strong> 토큰 · BFF-direct</li><li>access 배지 + CLI 가이드</li></ul>
+<h3>공통 원칙</h3>
+<blockquote><p>외부 관측성·클러스터 = <strong>READ만</strong> (변경·자율 없음)</p></blockquote>
+</div>
 </div>
   </div>
 </div>
 
 <div class="slide" data-remarp-id="s8" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
-  <div class="slide-header" data-remarp-id="s8-header"><h2>Conclusion & Next Steps</h2></div>
+  <div class="slide-header" data-remarp-id="s8-header"><h2>Deployment</h2></div>
   <div class="slide-body" data-remarp-id="s8-body">
+    <p><!-- Slide 9: Deployment --></p>
+<div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr;gap:12px;align-items:stretch;">
+  <div style="background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
+    <div style="color:#00d4ff;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">1. Configure</div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:6px;justify-content:center;">
+      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">make configure (TUI)</div>
+      <div style="background:rgba(0,212,255,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">tfvars + backend.hcl</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;color:#00d4ff;font-size:24px;">→</div>
+  <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
+    <div style="color:#f59e0b;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">2. Terraform</div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">init (S3 backend)</div>
+      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">plan -out tfplan</div>
+      <div style="background:rgba(245,158,11,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">controller apply tfplan</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;color:#f59e0b;font-size:24px;">→</div>
+  <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
+    <div style="color:#ef4444;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">3. make deploy</div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">migrate (ULID)</div>
+      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">buildx arm64 → ECR</div>
+      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">ECS rolling</div>
+      <div style="background:rgba(239,68,68,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">smoke /api/health</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;color:#00ff88;font-size:24px;">→</div>
+  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:8px;padding:16px;min-height:220px;display:flex;flex-direction:column;">
+    <div style="color:#00ff88;font-weight:bold;font-size:14px;margin-bottom:12px;text-align:center;">4. Flag-Gated</div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:6px;justify-content:center;">
+      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">make agentcore</div>
+      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">make workers</div>
+      <div style="background:rgba(0,255,136,0.15);border-radius:6px;padding:8px;font-size:13px;text-align:center;">default off = $0</div>
+    </div>
+  </div>
+</div>
+  </div>
+</div>
+
+<div class="slide" data-remarp-id="s9" style="transition: transform var(--transition-normal), opacity var(--transition-normal)">
+  <div class="slide-header" data-remarp-id="s9-header"><h2>Conclusion & Differentiators</h2></div>
+  <div class="slide-body" data-remarp-id="s9-body">
     <div class="columns">
 <div class="col">
-<h3>AWSops가 해결하는 문제</h3>
-<ul><li><strong>Console Hopping</strong> → 36페이지 Single Pane of Glass</li><li><strong>데이터 사일로</strong> → 7 Datasource 통합</li><li><strong>반복 수작업</strong> → 6 Auto-Collect Agents</li><li><strong>보고서 부담</strong> → 15섹션 자동 종합진단</li></ul>
+<h3>AWSops가 제공하는 것</h3>
+<ul><li><strong>Read-only AWS 운영 대시보드</strong> + AI 진단</li><li>자연어 챗 → 라이브 read-only 조회 (AgentCore MCP)</li><li>종합진단 리포트 (base 8 / deep 15 · Well-Architected)</li><li>인벤토리 · 토폴로지 · Datasources · EKS</li></ul>
 <h3>핵심 차별점</h3>
-<ul><li>Zero SaaS Dependency</li><li>고객 VPC 내 100% 실행</li><li>Bedrock AI (외부 AI API 불필요)</li><li>30분 배포</li></ul>
+<ul><li><strong>in-account Bedrock</strong> (외부 AI SaaS API 없음)</li><li><strong>private edge</strong> (공개 ALB 없음, CloudFront VPC Origin)</li><li>OOM-safe 비동기 워커 티어</li></ul>
 </div><div class="col">
-<h3>Getting Started</h3>
-<ol><li>CDK로 인프라 배포</li><li><code>install-all.sh</code> 실행</li><li>Cognito 사용자 추가</li><li>AI 어시스턴트에서 질문 시작</li></ol>
-<h3>Next Steps</h3>
-<ul><li>데이터소스 연동 (Prometheus, Loki, Tempo)</li><li>멀티 어카운트 설정</li><li>종합진단 리포트 자동 스케줄링</li><li>CIS 벤치마크 정기 실행</li></ul>
+<h3>Read-Only 자세 (ADR-041)</h3>
+<ul><li><strong>AWS-리소스 변경 + 자율 = 영구 동결</strong> (do-not-enable)</li><li>외부 관측성 <strong>READ</strong> 허용</li><li>외부 기록 / 티켓 / 메시지 <strong>WRITE</strong> 는 거버넌스 하 허용
+<ul><li>SSRF · Secrets · DLP · human-gate · flag-OFF</li></ul></li><li>변경되는 것은 <strong>DATA</strong>, AWS 리소스가 아님</li></ul>
+<h3>시작하기</h3>
+<ol><li><code>make configure</code> → Terraform apply</li><li><code>make deploy</code></li><li>Cognito 사용자 추가 · <code>/login</code></li><li>어시스턴트에서 질문 시작</li></ol>
 </div>
 </div>
   </div>
 </div>
 
-<div class="slide" data-remarp-id="s9" style="background:linear-gradient(135deg, #1a1f35 0%, #0d1117 50%, #161b2e 100%); padding:0; overflow:hidden;">
+<div class="slide theme-dark" data-remarp-id="s10" style="background:linear-gradient(135deg, #1a1f35 0%, #0d1117 50%, #161b2e 100%); padding:0; overflow:hidden;">
   <div style="position:absolute; top:-20%; right:-10%; width:60%; height:80%; background:radial-gradient(ellipse, rgba(108,92,231,0.15) 0%, transparent 70%); pointer-events:none;"></div>
   <div style="position:absolute; left:5%; top:42%; width:80px; height:3px; background:linear-gradient(90deg, #6c5ce7, #a29bfe); border-radius:2px;"></div>
   <h1 style="position:absolute; left:5%; top:45%; font-size:2.8rem; color:#fff; font-weight:300; line-height:1.2; width:60%; margin:0;">Thank You</h1>
@@ -669,26 +675,27 @@
 </div>
 <script src="./common/animation-utils.js"></script>
 <script src="./common/slide-framework.js"></script>
-<script src="./common/slide-patches.js"></script>
 <script src="./common/quiz-component.js"></script>
 <script src="./common/presenter-view.js"></script>
 
 <script>
   
   const presenterNotes = {
-    1: "[1min] 마지막 파트입니다. 지금까지 왜 필요한지, 어떻게 만들었는지를 봤고, 이제 실제로 어떻게 쓰는지를 데모로 보여드리겠습니다.\nAI 어시스턴트 사용법, 자동 수집 에이전트, 그리고 종합진단 리포트까지 순서대로 보겠습니다.\n\n먼저 AI 어시스턴트 데모입니다.",
-    2: "🎬 ⏸️ [3min] AI 어시스턴트의 동작 흐름을 보겠습니다.\n\n사용자가 \"VPC 구성을 분석해줘\"라고 질문합니다. Sonnet 4.6이 이 질문을 분류합니다. \"VPC 구성 분석\"은 목록/현황 질문이므로 aws-data 라우트로 분류됩니다. network 라우트가 아닙니다. network은 Reachability Analyzer나 Flow Log 분석 같은 전문 도구가 필요한 경우에만 사용합니다.\n\n\n\naws-data 핸들러는 Steampipe SQL을 생성합니다. aws_vpc, aws_vpc_subnet, aws_vpc_security_group 테이블에서 데이터를 조회하고, Bedrock이 결과를 분석해서 아키텍처 개선점을 제안합니다.\n\n응답은 SSE 스트리밍으로 실시간 전달됩니다. 어떤 도구가 사용되었는지 UI에 표시됩니다. 이것은 AgentCore 응답 텍스트에서 키워드를 추론해서 보여주는 것입니다. AgentCore는 최종 텍스트만 반환하기 때문에 tool_call 태그가 없습니다.\n\n\n(데모) AI 페이지에서 \"VPC 현황 분석해줘\"를 입력합니다.\n라우트가 aws-data로 분류되는 것을 확인하고, SQL 실행 후 분석 결과가 스트리밍되는 것을 보여줍니다.\n\n\n다음은 EKS 비용 최적화 시나리오입니다.",
-    3: "🎬 ⏸️ [3min] 첫 번째 시나리오는 EKS 비용 최적화입니다.\n\n사용자가 \"EKS 비용 개선점 찾아줘\"라고 입력하면, Sonnet이 eks-optimize 라우트로 분류합니다. auto-collect 핸들러가 작동합니다.\n\n\n\n자동으로 Prometheus에서 9가지 메트릭을 수집합니다. 컨테이너별 CPU/Memory 사용량과 요청량을 비교하고, CPU Throttling, Pod 재시작, HTTP 에러율, 노드 활용률까지 수집합니다. Steampipe에서는 K8s Pod의 resource request/limit를 조회합니다.\n\nMetricCandidate 패턴이 핵심인데, 각 메트릭에 대해 여러 PromQL 쿼리를 순서대로 시도합니다. 첫 번째 쿼리에서 데이터가 반환되면 그것을 사용하고, 실패하면 다음 쿼리를 시도합니다. Prometheus 환경마다 메트릭 라벨이 다를 수 있기 때문입니다.\n\n\n(데모) \"EKS 비용 개선점 찾아줘\"를 입력합니다.\n수집 진행 상태가 SSE로 실시간 표시되고, 최종적으로 Opus 4.6이 과할당 리소스와 절감 방안을 분석합니다.\n\n\n다음은 유휴 리소스 스캔입니다.",
-    4: "⏸️ [2min] 두 번째 시나리오는 유휴 리소스 스캔입니다.\n\n\"미사용 리소스 찾아줘\"라고 하면 idle-scan 라우트로 분류됩니다. 6가지 카테고리의 Steampipe SQL을 병렬로 실행합니다.\n\n\n\n미연결 EBS 볼륨, gp2 볼륨, 미연결 Elastic IP, 중지된 EC2, 90일 이상 된 스냅샷, ENI에 연결되지 않은 Security Group을 스캔합니다. 각 카테고리별로 서울 리전 가격 기반으로 월 비용을 추정합니다.\n\n이 에이전트는 Prometheus가 필요 없습니다. Steampipe SQL만으로 동작하기 때문에 어떤 환경에서든 즉시 사용할 수 있습니다.\n\n\n세 번째 시나리오입니다.",
-    5: "⏸️ [3min] 세 번째 시나리오는 인시던트 분석입니다. \"장애 원인 분석해줘\"라고 입력하면 incident 라우트가 선택됩니다.\n\n이 에이전트가 가장 많은 데이터소스를 교차 분석합니다.\n\n\n\n먼저 CloudWatch에서 ALARM 상태인 알람을 조회하고, Steampipe로 K8s Warning 이벤트를 가져옵니다. 이것은 항상 사용 가능합니다.\n\nPrometheus가 있으면 HTTP 5xx 스파이크, CPU/Memory 이상 징후, Pod 재시작 급증을 감지합니다. Loki가 있으면 에러 로그 패턴과 Exception 스택트레이스를 검색합니다. Tempo나 Jaeger가 있으면 에러 트레이스와 지연시간 이상값을 수집합니다.\n\n이 모든 데이터를 Opus 4.6에 전달하면, 시간순 타임라인을 재구성하고 근본 원인을 분석합니다. \"14:30에 payment 서비스의 DB 커넥션 풀이 고갈되어 5xx가 발생했고, 이것이 order 서비스로 전파되어 전체 장애로 확대됨\" 같은 분석을 제공합니다.\n\n\n이제 종합진단 리포트를 보겠습니다.",
-    6: "⏸️ [3min] 종합진단 리포트는 AWSops의 플래그십 기능입니다.\n\n15개 섹션이 Well-Architected Framework의 6 Pillar에 매핑됩니다. Cost Optimization, Security, Reliability, Performance Efficiency, Operational Excellence, Sustainability를 모두 커버합니다.\n\n\n\n아키텍처를 보면, 첫 번째로 report-generator.ts가 Steampipe 배치 쿼리와 Auto-Collect Agent로 데이터를 수집합니다. EKS, DB, MSK, Idle 데이터까지 병렬로 수집합니다.\n\n두 번째로 15개 섹션을 5개 배치(3개씩)로 나누어 Opus 4.6이 분석합니다. 각 섹션마다 전문 시스템 프롬프트가 있습니다. 예를 들어 Cost Overview 섹션은 FinOps 전문가 관점에서 비용 추이, 서비스별 분포, 최적화 전략을 분석합니다.\n\n세 번째로 비동기 백그라운드 워커가 실행되고, SSE로 진행률을 실시간 표시합니다. \"3/15 Security Posture 분석 중...\" 같은 상태가 클라이언트에 표시됩니다.\n\n완성된 리포트는 S3에 저장되고, DOCX, Markdown, 브라우저 Print-to-PDF로 다운로드할 수 있습니다.\n\n\nFinOps 도구를 좀 더 자세히 보겠습니다.",
-    7: "⏸️ [2min] FinOps 도구를 정리하면 3가지 레벨입니다.\n\n첫 번째는 Cost Gateway의 9개 MCP 도구입니다. Cost Explorer로 서비스별 비용을 분석하고, Forecast로 향후 비용을 예측하고, Budgets로 예산 초과를 모니터링합니다.\n\n\n\n두 번째는 Auto-Collect Agent입니다. eks-optimize, db-optimize, msk-optimize, idle-scan이 각각 전문 영역의 리소스 최적화를 담당합니다. 이 에이전트들은 실제 사용량 데이터를 수집해서 구체적인 다운사이징 권장사항을 제시합니다.\n\n세 번째는 AWS Native FinOps 도구입니다. Compute Optimizer, RI/SP Recommendations, Cost Optimization Hub, Trusted Advisor와 연동합니다.\n\n컨테이너 비용은 ECS는 CloudWatch Container Insights와 Fargate 가격으로, EKS는 OpenCost API로 계산합니다. OpenCost가 없으면 resource request 기반 폴백을 사용합니다.\n\n\n배포 방법을 보겠습니다.",
-    8: "⏸️ [2min] 배포는 총 12개 스크립트이고, install-all.sh 하나로 전체를 자동 실행할 수 있습니다.\n\nPhase 1에서 CDK로 인프라를 만들고, Steampipe와 Next.js를 설치하고, 프로덕션 빌드를 합니다. 약 5분 소요됩니다.\n\n\n\nPhase 2에서 Cognito User Pool을 생성하고 Lambda@Edge를 CloudFront에 연결합니다. Phase 3에서 AgentCore Runtime, 8개 Gateway, 125개 Tools, Code Interpreter, Memory Store를 설정합니다. 이 단계가 가장 오래 걸려서 약 15분입니다.\n\nPhase 4는 선택 사항입니다. OpenCost는 EKS 비용 분석을 위해 필요하고, Multi-Account는 교차 계정 분석을 위해 설정합니다.\n\n전체 30분이면 AI 기반 AWS 운영 대시보드가 완성됩니다.\n\n\n마무리하겠습니다.",
-    9: "❓ ⏸️ [2min] AWSops를 정리하면, 클라우드 운영의 4대 도전 과제를 AI로 해결하는 대시보드입니다.\n\nConsole Hopping 대신 36페이지 대시보드, 데이터 사일로 대신 7가지 데이터소스 통합, 반복 작업 대신 6개 AI 에이전트, 수동 보고서 대신 15섹션 자동 종합진단을 제공합니다.\n\n\n\n가장 중요한 차별점은 외부 SaaS 의존성이 제로라는 것입니다. 모든 것이 고객의 AWS 계정 안에서 실행됩니다. 데이터가 밖으로 나가지 않습니다.\n\n시작하려면 CDK로 인프라를 배포하고 install-all.sh를 실행하면 됩니다. 30분이면 됩니다.\n\n\n질문이 있으시면 편하게 해주세요.\n\n\n마지막 슬라이드입니다.",
-    10: "[1min] 감사합니다. 질문이 있으시면 지금 받겠습니다.\n\n발표 후 추가 질문이 있으시면 언제든 연락 주세요.\nAWSops는 내부에서 계속 발전하고 있고, 새로운 기능이 지속적으로 추가되고 있습니다.\n\n오늘 보여드린 Auto-Collect Agent 패턴, Route Registry 패턴, Graceful Degradation 패턴은 여러분의 프로젝트에도 적용할 수 있는 범용적인 아키텍처 패턴입니다.\n\n감사합니다."
+    1: "[1min] 마지막 파트입니다. 지금까지 왜 필요한지, 어떻게 만들었는지를 봤고, 이제 실제로 어떻게 쓰는지를 데모로 보여드리겠습니다.\nAI 어시스턴트, 비용/인벤토리/토폴로지 시나리오, 그리고 종합진단 리포트까지 순서대로 보겠습니다.\n\n한 가지 먼저 짚고 갈 점은, 오늘 보여드리는 모든 데모는 read-only라는 것입니다. 조회와 진단만 하고, AWS 리소스를 변경하지 않습니다.\n\n먼저 AI 어시스턴트 데모입니다.",
+    2: "🎬 ⏸️ [3min] AI 어시스턴트의 동작 흐름을 보겠습니다. 자연어 질문 하나가 답변으로 이어지는 과정입니다.\n\n사용자가 \"EKS 비용 개선점 찾아줘\"라고 질문합니다. 첫 단계는 ADR-038 하이브리드 라우팅입니다. regex fast-path가 먼저 매칭을 시도하고, 애매하면 Haiku 분류기가 판단합니다. 프롬프트 캐싱으로 약 59% 히트율을 내고, 이 질문은 cost 섹션 게이트웨이로 라우팅됩니다.\n\n\n\n선택된 AgentCore 섹션 에이전트가 MCP 도구로 라이브 read-only AWS 조회를 수행합니다. Cost Explorer, EKS 메트릭 등 필요한 도구만 호출합니다. 그리고 in-account Bedrock이 결과를 분석합니다.\n\n응답은 SSE 스트리밍으로 실시간 전달되고, 어떤 라우트와 도구가 쓰였는지 UI에 함께 표시됩니다. 대화는 Aurora에 thread로 영속 저장되어, 사이드바에서 이어보기가 가능합니다. resizable drawer나 /assistant 전체 화면 어디서든 같은 thread를 씁니다.\n\n\n(데모) 어시스턴트에서 질문을 입력하고, 라우트 분류와 도구 호출, 그리고 스트리밍 답변을 보여줍니다.\n\n\n다음은 비용 분석 시나리오입니다.",
+    3: "⏸️ [3min] 첫 번째 시나리오는 비용 분석과 rightsizing 인사이트입니다.\n\n\"비용 개선점 찾아줘\"라고 입력하면 cost 섹션 게이트웨이로 라우팅됩니다. cost 에이전트가 Cost Explorer와 Forecast를 read-only로 조회하고, Cost 대시보드가 서비스별 비용과 추이를 시각화합니다.\n\n\n\nEKS 워크로드는 read-only 메트릭으로 request 대비 실사용량을 비교합니다. 과할당된 파드와 다운사이징 후보, 통합 가능한 노드를 식별합니다. 결과는 구체적인 절감 추정치와 함께 제시됩니다.\n\n\n\n여기서 중요한 점은, AWSops는 권장사항만 제시한다는 것입니다. 어떤 변경도 자동으로 적용하지 않습니다. 과거 설계에 있던 OpenCost mutating 설치 버튼은 ADR-029 번복으로 폐기됐습니다. 진단과 권고까지가 AWSops의 역할이고, 적용 결정과 실행은 운영자의 몫입니다.\n\n\n다음은 인벤토리와 유휴 리소스 점검입니다.",
+    4: "⏸️ [2min] 두 번째 시나리오는 인벤토리와 유휴 리소스 점검입니다.\n\nAWSops는 약 22가지 리소스 타입을 제네릭 `/inventory/[type]` 페이지로 제공합니다. 이 데이터는 flag-gated Steampipe sync가 warm Fargate에서 돌면서 Aurora로 적재한 것입니다. registry 기반으로 내비게이션이 자동 구성되고, 페이지마다 KPI, donut, 필터로 구성된 mini-dashboard가 붙습니다.\n\n\n\n여기서 분명히 할 점은, Steampipe는 인벤토리 sync 전용이라는 것입니다. 라이브 쿼리 엔진이 아닙니다. 실시간 조회와 분석은 AgentCore MCP 도구가 담당합니다. 인벤토리 화면에서 후보를 좁히고, 에이전트로 라이브 현황을 보강하는 방식입니다.\n\n미연결 EBS, 미사용 Elastic IP, 오래된 스냅샷, 중지된 EC2, 참조 없는 Security Group 같은 후보를 read-only로 점검합니다. 변경은 하지 않고, 검토 대상만 정리합니다.\n\n\n세 번째 시나리오, 토폴로지입니다.",
+    5: "⏸️ [3min] 세 번째 시나리오는 토폴로지와 의존성 시각화입니다.\n\nAWSops는 flow 그래프와 infra 리소스 그래프 두 가지를 제공합니다. CloudFront에서 시작해 Load Balancer, Target Group, Database로 이어지는 CF → LB → TG → DB 체인을 한눈에 보여줍니다.\n\n\n\n리소스 노드를 클릭하면 `/topology/resource/[id]` 상세 페이지로 이동합니다. 해당 리소스가 무엇에 연결되어 있고 무엇이 그것에 의존하는지를 추적할 수 있습니다.\n\n이것이 진단에 중요한 이유는 blast radius, 즉 영향 범위 분석 때문입니다. 어떤 리소스에 문제가 생겼을 때 그 영향이 어디까지 전파되는지, 어떤 의존 관계를 끊어야 하는지를 그래프로 따라갈 수 있습니다. 과거의 자율 인시던트 수집 루프 대신, 사람이 그래프를 보며 의존 관계를 진단하는 read-only 방식입니다.\n\n\n이제 플래그십 기능인 종합진단 리포트를 보겠습니다.",
+    6: "⏸️ [3min] AI 종합진단 리포트는 AWSops의 플래그십 기능입니다. 전부 read-only로 동작합니다.\n\n리포트는 두 등급입니다. base는 8개 섹션, deep는 15개 섹션이고 Well-Architected Framework에 매핑됩니다. deep 등급은 기본 Sonnet으로 동작하고, 필요하면 cost-gate를 거쳐 Opus를 선택할 수 있습니다.\n\n\n\n실행은 비동기 워커 티어에서 일어납니다. 웹은 thin-BFF라 무거운 작업을 직접 돌리지 않고 `POST /api/jobs`로 큐에 넣습니다. SQS, Step Functions, Lambda 또는 Fargate 워커가 받아서 섹션을 분석합니다. 진행 상황은 SSE로 실시간 표시됩니다. \"3/15 Security Posture 분석 중\" 같은 상태가 클라이언트에 흐릅니다.\n\n완성된 리포트는 자동 제목과 태그가 붙고, 소프트 삭제를 지원합니다. 리포트 목록과 상세 화면에서 열람할 수 있습니다.\n\n\n이 리포트를 어떻게 내보내는지 보겠습니다.",
+    7: "⏸️ [2min] 완성된 리포트는 워커가 직접 문서로 내보냅니다.\n\nDOCX는 python-docx로, PDF는 chromium과 playwright로 렌더링합니다. 한글이 깨지지 않도록 Noto CJK 폰트를 워커 이미지에 포함했습니다. 내보내기는 워커 티어에서 실행되고, 실패해도 본 리포트 생성과 격리되어 영향을 주지 않습니다. 과거의 브라우저 Print-to-PDF 방식을 대체한 것입니다.\n\n\n\n생성된 파일은 S3의 `diagnosis/{id}.docx`와 `.pdf` 경로에 저장되고, BFF 프록시 라우트로 다운로드합니다. 생성 일시는 KST로 표기됩니다.\n\n라이프사이클 측면에서는 자동 제목과 태그 제안, 제목 수정, 소프트 삭제를 지원합니다. 읽기 경로는 `deleted_at IS NULL`을 전제로 하고, 수정과 삭제는 owner 또는 admin만 가능한 fail-closed입니다. 제목과 태그는 React-escape로 렌더해 XSS 위험을 차단합니다.\n\n\n데모에서 Datasources와 EKS 화면도 짚어보겠습니다.",
+    8: "⏸️ [2min] 데모에서 두 가지 화면을 더 보겠습니다.\n\n먼저 `/datasources` Explore 페이지입니다. AWSops는 ClickHouse, Prometheus, Loki, Tempo, Mimir 5종을 read-only 커넥터 플랫폼으로 통합합니다. 각 커넥터 Lambda가 데이터를 가져오고, 스키마는 Aurora에 캐시됩니다. 자연어를 쿼리로 변환하는 NL-to-query를 지원하고, 그 결과를 챗에 주입해 분석에 활용할 수 있습니다.\n\n\n\nEKS 페이지도 read-only입니다. 클러스터 안의 nodes, pods, deployment, service를 조회합니다. 권한은 web task role에 부여된 Access Entry와 AmazonEKSViewPolicy, 그리고 presigned STS 토큰으로 처리하고, BFF가 직접 호출합니다. 접근 가능 여부는 배지로 표시하고, CLI 가이드도 함께 제공합니다.\n\n\n공통 원칙은 동일합니다. 외부 관측성이든 클러스터든, 데이터는 읽기만 합니다.\n\n\n배포 방법을 보겠습니다.",
+    9: "⏸️ [2min] 배포는 Terraform 기반이고, 네 단계로 정리됩니다.\n\n먼저 `make configure`로 대화형 TUI를 돌려 VPC, 도메인, 버킷, EKS를 고르면 terraform.tfvars와 backend.hcl이 생성됩니다.\n\n\n\n다음으로 Terraform을 init하고 plan을 tfplan으로 저장합니다. 공유 인프라에는 auto-approve를 쓰지 않고, 저장된 tfplan을 컨트롤러가 apply합니다. CloudFront나 Security Group처럼 오래 걸리는 apply는 서브에이전트 타임아웃 때문에 컨트롤러가 직접 실행합니다.\n\n세 번째로 `make deploy`는 먼저 ULID 마이그레이션을 돌리고, arm64 이미지를 빌드해 ECR에 푸시한 뒤 ECS 롤링 배포를 하고, 마지막으로 `/api/health` 스모크로 검증합니다.\n\n마지막으로 AgentCore와 워커는 flag-gated입니다. `make agentcore`, `make workers`로 활성화하며, 기본은 꺼져 있어 비용이 0입니다. 라이브 환경은 단일 계정 123456789012, 도메인 awsops-v2.example.com입니다.\n\n\n마무리하겠습니다.",
+    10: "⏸️ [2min] AWSops를 정리하면, read-only AWS 운영 대시보드에 AI 진단을 결합한 제품입니다.\n\n자연어로 물으면 AgentCore MCP 도구가 라이브 read-only 조회를 하고, 종합진단 리포트가 base 8섹션과 deep 15섹션으로 Well-Architected 관점의 진단을 제공합니다. 인벤토리, 토폴로지, Datasources, EKS 화면이 이를 뒷받침합니다.\n\n\n\n차별점은 세 가지입니다. AI는 계정 안의 Bedrock으로 동작해 외부 AI SaaS API를 쓰지 않습니다. 엣지는 private edge라 공개 ALB가 없고 CloudFront VPC Origin으로만 들어옵니다. 무거운 작업은 OOM-safe 비동기 워커 티어가 처리합니다.\n\n\n\n가장 중요한 원칙은 read-only 자세입니다. ADR-041 기준으로 AWS 리소스 변경과 자율 실행은 영구 동결입니다. 다만 외부 관측성 데이터를 읽고, 외부 기록이나 티켓, 메시지를 쓰는 것은 SSRF 방어, Secrets 관리, DLP, human-gate, flag-OFF 같은 거버넌스 아래에서 허용됩니다. 변경되는 것은 데이터일 뿐, AWS 리소스가 아닙니다.\n\n시작은 간단합니다. configure하고 Terraform을 apply한 뒤 deploy하고, Cognito 사용자를 추가해 `/login`으로 들어오면 됩니다.\n\n\n마지막 슬라이드입니다.",
+    11: "[1min] 감사합니다. 질문이 있으시면 지금 받겠습니다.\n\n발표 후 추가 질문이 있으시면 언제든 연락 주세요. AWSops는 내부에서 계속 발전하고 있고, 새로운 기능이 지속적으로 추가되고 있습니다.\n\n\n오늘 보여드린 하이브리드 라우팅, thin-BFF + 비동기 워커, read-only 진단 자세는 여러분의 프로젝트에도 적용할 수 있는 범용 아키텍처 패턴입니다.\n\n감사합니다."
   };
   const deck = new SlideFramework({
     logoSrc: '../common/pptx-theme/images/logo_1.png',
+    
     footer: '© 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved. Amazon Confidential and Trademark.',
     
     pagination: true,

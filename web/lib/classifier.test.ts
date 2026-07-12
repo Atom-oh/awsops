@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { classifyPrompt, parseRanked, type SendFn } from './classifier';
+import { classifyPrompt, parseRanked, buildClassifierContext, type SendFn } from './classifier';
 
 // SendFn은 (system, query, modelId) => Promise<string> — Bedrock 호출을 주입식으로 추상화.
 const ok = (json: string): SendFn => vi.fn(async () => json);
@@ -30,6 +30,31 @@ describe('parseRanked', () => {
   it('drops entries with non-string key or non-numeric score', () => {
     expect(parseRanked('{"ranked":[{"key":1,"score":0.9},{"key":"iac","score":"x"},{"key":"iac","score":0.7}]}'))
       .toEqual([{ key: 'iac', score: 0.7 }]);
+  });
+});
+
+describe('buildClassifierContext', () => {
+  it('returns the prompt unchanged when there is no history (legacy behavior)', () => {
+    expect(buildClassifierContext(undefined, '이번 달 비용')).toBe('이번 달 비용');
+    expect(buildClassifierContext([], '이번 달 비용')).toBe('이번 달 비용');
+  });
+  it('prepends a recent-turn excerpt ahead of the current question', () => {
+    const out = buildClassifierContext(
+      [{ role: 'user', content: 'CloudTrail로 모델 호출 조회해줘' }, { role: 'assistant', content: '3곳에서 호출됩니다' }],
+      '클러스터 안에 어디서 저걸 쓰나',
+    );
+    expect(out).toContain('CloudTrail로 모델 호출 조회해줘');
+    expect(out).toContain('3곳에서 호출됩니다');
+    expect(out).toContain('클러스터 안에 어디서 저걸 쓰나');
+  });
+  it('caps to the last 4 messages and truncates long ones', () => {
+    const long = (tag: string) => `${tag}${'x'.repeat(5000)}`; // tag first — truncation must not eat it
+    const messages = Array.from({ length: 10 }, (_, i) => ({ role: 'user' as const, content: long(`turn${i}-`) }));
+    const out = buildClassifierContext(messages, 'q');
+    expect(out.length).toBeLessThan(1400); // header + 1200-char cap + "현재 질문: q"
+    expect(out).not.toContain('turn0-'); // oldest messages dropped by the last-4 slice
+    expect(out).toContain('turn9-'); // most recent message survives
+    expect(out).toContain('현재 질문: q');
   });
 });
 

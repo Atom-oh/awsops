@@ -13,8 +13,8 @@ class RedactEgressTest(unittest.TestCase):
         self.assertIn("aws-key", cats)
 
     def test_masks_arn(self):
-        out, _ = dlp.redact_egress({"text": "see arn:aws:iam::180294183052:role/AdminRole now"})
-        self.assertNotIn("180294183052:role/AdminRole", json.dumps(out))
+        out, _ = dlp.redact_egress({"text": "see arn:aws:iam::123456789012:role/AdminRole now"})
+        self.assertNotIn("123456789012:role/AdminRole", json.dumps(out))
 
     def test_masks_private_and_metadata_ips(self):
         out, _ = dlp.redact_egress({"text": "host 10.0.0.5 and 169.254.169.254 and 172.16.3.9"})

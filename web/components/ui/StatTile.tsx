@@ -1,8 +1,16 @@
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import AwsopsMark from './AwsopsMark';
 import { cn } from '@/lib/cn';
 
 export type StatTileVariant = 'default' | 'accent' | 'danger' | 'warn';
+
+/** Maps a 0-100 pass rate to a StatTile variant (shared by /compliance and the dashboard tile). */
+export function passVariant(rate: number): StatTileVariant {
+  if (rate >= 80) return 'accent';
+  if (rate >= 50) return 'warn';
+  return 'danger';
+}
 
 export interface StatTileProps {
   /** Eyebrow label (uppercase/muted). The legacy `label` prop is an alias. */
@@ -21,7 +29,12 @@ export interface StatTileProps {
   /** Optional hint line under the value. */
   hint?: ReactNode;
   variant?: StatTileVariant;
+  /** 'compact' — smaller value/padding, sunken background, no hint/trend/watermark
+   *  (design handoff 개선안 ①: quiet "still healthy" resource tiles). */
+  size?: 'default' | 'compact';
   className?: string;
+  /** When set, the tile becomes a navigation link (v1-parity: click a KPI → its page). */
+  href?: string;
 }
 
 function trendTone(trend: string): string {
@@ -46,8 +59,11 @@ export default function StatTile({
   trend,
   hint,
   variant = 'default',
+  size = 'default',
   className,
+  href,
 }: StatTileProps) {
+  const compact = size === 'compact';
   const border =
     variant === 'accent'
       ? 'border-brand-200'
@@ -58,9 +74,17 @@ export default function StatTile({
   const valueColor =
     variant === 'danger' ? 'text-rose-700' : variant === 'warn' ? 'text-brand-700' : 'text-ink-800';
 
-  return (
-    <div className={cn('relative overflow-hidden bg-card border rounded-lg shadow-card p-4', border, className)}>
-      {variant === 'accent' && (
+  const inner = (
+    <div
+      className={cn(
+        'relative overflow-hidden border rounded-lg',
+        compact ? 'bg-paper-muted p-3' : 'bg-card shadow-card p-4',
+        border,
+        href && 'h-full transition hover:shadow-md hover:border-brand-300',
+        className,
+      )}
+    >
+      {variant === 'accent' && !compact && (
         <div className="pointer-events-none absolute -top-1 -right-1 opacity-[0.07]">
           <AwsopsMark size={56} />
         </div>
@@ -68,8 +92,16 @@ export default function StatTile({
       <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
         {eyebrow ?? label}
       </div>
-      <div className={cn('tabular text-[26px] font-semibold leading-tight mt-1', valueColor)}>{value}</div>
-      {(trend || hint != null) && (
+      <div
+        className={cn(
+          'tabular font-semibold leading-tight mt-1',
+          compact ? 'text-[19px]' : 'text-[26px]',
+          valueColor,
+        )}
+      >
+        {value}
+      </div>
+      {!compact && (trend || hint != null) && (
         <div className="flex items-center gap-2 mt-1.5">
           {trend && (
             <span
@@ -86,4 +118,17 @@ export default function StatTile({
       )}
     </div>
   );
+
+  if (href) {
+    return (
+      <Link
+        href={href}
+        aria-label={`${eyebrow ?? label} 상세 보기`}
+        className="block rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+      >
+        {inner}
+      </Link>
+    );
+  }
+  return inner;
 }

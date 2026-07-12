@@ -52,17 +52,17 @@ export const SECTIONS: Section[] = [
     '삭제보호/위험 리소스 점검',
     '미관리(IaC 밖) 리소스',
   ] },
-  { key: 'ops', label: 'Ops', icon: '⚙️', color: '#5F5A4D', active: false, presets: [
-    '오늘 운영 이슈 요약',
+  { key: 'ops', label: 'Ops', icon: '⚙️', color: '#5F5A4D', active: true, presets: [
+    '미사용 리소스 찾기 (고아 TG·빈 origin)',
     '리소스 인벤토리 현황',
+    '전체 토폴로지 (CF→LB→TG)',
     '태그 누락 리소스',
-    '만료 임박 인증서/시크릿',
   ] },
-  { key: 'observability', label: 'Observability', icon: '🔭', color: '#0E7490', active: false, presets: [
-    '서비스 p99 레이턴시',
-    '에러율 급증 분석',
-    '최근 로그 에러 패턴 (Loki)',
-    '트레이스로 느린 구간 (Tempo)',
+  { key: 'observability', label: 'Observability', icon: '🔭', color: '#0E7490', active: true, presets: [
+    '서비스 p99 레이턴시 (Prometheus)',
+    '에러율 급증 구간 분석 (PromQL)',
+    'ClickHouse로 느린 트레이스 Top N',
+    '메트릭 라벨/시리즈 탐색',
   ] },
 ];
 

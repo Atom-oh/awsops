@@ -44,7 +44,7 @@ def _fake_resp(status, obj):
 
 class _Base(unittest.TestCase):
     def setUp(self):
-        os.environ["AWSOPS_HOST_ACCOUNT_ID"] = "180294183052"  # hermetic: no live STS in get_role_arn
+        os.environ["AWSOPS_HOST_ACCOUNT_ID"] = "123456789012"  # hermetic: no live STS in get_role_arn
         ca._host_account_id.cache_clear()
         self.addCleanup(ca._host_account_id.cache_clear)
         self._creds = mock.patch.object(om, "get_credentials", return_value=FAKE_CREDS)

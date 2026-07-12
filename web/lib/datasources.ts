@@ -6,6 +6,7 @@
 import { getPool } from '@/lib/db';
 import { DATASOURCE_KINDS, isDatasourceKind } from '@/lib/integrations-category';
 import type { AuthType } from '@/lib/datasource-auth';
+import type { ConnConfig } from '@/lib/mcp-lambda-invoke';
 import {
   getCredentialById,
   mirrorDefaultCredential,
@@ -34,7 +35,9 @@ const SELECT_COLS =
 
 function mapRow(r: Record<string, unknown>): DatasourceRow {
   return {
-    id: r.id as number,
+    // node-pg returns BIGINT (BIGSERIAL id) as a STRING — coerce to number so the API contract is
+    // numeric and UI/route comparisons (instanceId === id, schema byId.has) don't string/number-mismatch.
+    id: Number(r.id),
     name: r.name as string,
     kind: r.kind as string,
     endpoint: (r.endpoint as string) ?? null,
@@ -60,7 +63,10 @@ export async function createDatasource(i: CreateDatasourceInput): Promise<number
        RETURNING id`,
       [i.name, i.kind, i.endpoint, i.authType],
     );
-    return rows[0].id as number;
+    // node-pg returns BIGSERIAL as a STRING — coerce so callers get a real number. (The credential
+    // write keys on String(id) and assertPositiveId requires an integer; a string id silently threw,
+    // leaving the row with NO credential → the connector reported "not connected".)
+    return Number(rows[0].id);
   } catch (e) {
     if ((e as { code?: string })?.code === '23505') throw new Error('duplicate datasource name');
     throw e;
@@ -80,6 +86,29 @@ export async function listDatasources(): Promise<DatasourceRow[]> {
 export async function getDatasource(id: number): Promise<DatasourceRow | null> {
   const { rows } = await getPool().query(`SELECT ${SELECT_COLS} FROM integrations WHERE id = $1`, [id]);
   return rows.length ? mapRow(rows[0]) : null;
+}
+
+/** Build the inline connector conn-config for an instance. The integrations ROW is authoritative for
+ *  endpoint + authType — so an auth=none instance (or one whose Secrets Manager credential was never
+ *  written) still resolves a usable endpoint — overlaid with the SM credential (auth material / org_id).
+ *  Without the row fallback, a no-auth datasource has no SM cred → connConfig is empty → the connector
+ *  Lambda falls back to the (often empty) kind-mirror and reports "not connected".
+ *  Callers: the /api/datasources/query route (run) and the /api/datasources/generate route's
+ *  background schema introspect (cache warm). Exported here — see PR #70 review (false-positive). */
+export async function resolveConnConfig(ds: DatasourceRow): Promise<ConnConfig> {
+  // ID-ONLY credential resolution — deliberately NO kind-mirror fallback. The kind mirror holds the
+  // DEFAULT instance's credential; blending it with THIS instance's endpoint (below) would send the
+  // default's auth material to a different target (credential leak). A no-auth instance, or one whose
+  // id-keyed secret was never written, simply resolves with no auth (the row endpoint still works).
+  const cred = await getCredentialById(ds.id);
+  // Spread the SM cred FIRST (auth material / org_id), then FORCE the row's endpoint + authType on top
+  // so the ROW stays authoritative (a stale/partial secret blob can't redirect the query to a different
+  // endpoint). The endpoint is re-checked by the SSRF guard at the call site regardless.
+  return {
+    ...(cred ?? {}),
+    ...(ds.endpoint ? { endpoint: ds.endpoint } : {}),
+    ...(ds.authType ? { authType: ds.authType } : {}),
+  } as ConnConfig;
 }
 
 export async function getDefaultDatasource(kind: string): Promise<DatasourceRow | null> {
@@ -152,6 +181,8 @@ export async function deleteDatasource(id: number): Promise<void> {
   if (!row) return;
 
   await getPool().query('DELETE FROM datasource_schemas WHERE integration_id = $1', [id]);
+  await getPool().query('DELETE FROM datasource_diag_signals WHERE integration_id = $1', [id]); // sweep pre-built signals
+  await getPool().query('DELETE FROM datasource_graph_queries WHERE integration_id = $1', [id]); // sweep pre-built graph queries
   try {
     await deleteCredentialKeys([String(id)]);
   } catch (e) {

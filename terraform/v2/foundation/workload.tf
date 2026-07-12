@@ -26,27 +26,8 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Review Blocker A: ECS `secrets`(valueFrom) is resolved by the EXECUTION role at
-# task start — it must read the RDS-managed secret + decrypt with the CMK.
-resource "aws_iam_role_policy" "execution_secrets" {
-  name = "${var.project}-exec-aurora-secret"
-  role = aws_iam_role.execution.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = [aws_rds_cluster.aurora.master_user_secret[0].secret_arn]
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = [aws_kms_key.aurora.arn]
-      }
-    ]
-  })
-}
+
+
 
 resource "aws_iam_role" "task" {
   name               = "${var.project}-task"
@@ -82,6 +63,23 @@ resource "aws_iam_role_policy" "task_integrations_secret" {
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
       Resource = aws_secretsmanager_secret.integrations[0].arn
+    }]
+  })
+}
+
+# RDS IAM database auth: web/lib/db.ts generates a short-lived signed token (rds-db:connect) to
+# connect as the dedicated least-privilege `awsops_web` Postgres role (see the awsops_web_role
+# migration) instead of the Aurora master secret — mirrors steampipe.tf's steampipe_reader pattern.
+# Scoped to this cluster's resource id + that exact dbuser; the master secret is never granted here.
+resource "aws_iam_role_policy" "task_rds_iam_auth" {
+  name = "${var.project}-web-rds-iam-auth"
+  role = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["rds-db:connect"]
+      Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.aurora.cluster_resource_id}/awsops_web"
     }]
   })
 }
@@ -182,6 +180,26 @@ resource "aws_iam_role_policy" "task_classifier_bedrock" {
   })
 }
 
+# ADR-044: cross-domain auto-synthesis (web/lib/synthesize.ts calls Bedrock directly from the web
+# task, not via AgentCore's unrestricted role). PR #153 review: this had no matching IAM grant —
+# only the Haiku classifier policy above existed on this role, so a live invoke would AccessDenied.
+resource "aws_iam_role_policy" "task_synthesis_bedrock" {
+  count = var.multi_route_synthesis_enabled ? 1 : 0
+  name  = "${var.project}-task-synthesis-bedrock"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+      Resource = [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
+        "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:inference-profile/global.anthropic.claude-sonnet-5",
+      ]
+    }]
+  })
+}
+
 # ADR-032: the web incident ingress (HMAC webhook) + synchronous Triage path reads the incident SSM
 # params (window/storm-cap knobs + the HMAC webhook secret(s)) and synchronously consults the
 # read-only AgentCore runtime. Gated (local.il) so the web task role is UNTOUCHED when off (when
@@ -248,6 +266,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "HOSTNAME", value = "0.0.0.0" },
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
+        # IAM DB auth (rds-db:connect above) — a fixed username, not a secret, since the "password"
+        # is now a short-lived signed token web/lib/db.ts generates per connection.
+        { name = "AURORA_USER", value = "awsops_web" },
         { name = "AWS_REGION", value = var.region },
         { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
         { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.main.id },
@@ -311,6 +332,9 @@ resource "aws_ecs_task_definition" "web" {
         # ADR-038: hybrid routing flag + classifier model (BFF reads both at runtime).
         { name = "HYBRID_ROUTING_ENABLED", value = "true" },
         { name = "CLASSIFIER_MODEL_ID", value = "global.anthropic.claude-haiku-4-5-20251001-v1:0" }
+        ] : [], var.multi_route_synthesis_enabled ? [
+        # ADR-044: cross-domain auto-synthesis — matches the aws_iam_role_policy.task_synthesis_bedrock gate above.
+        { name = "MULTI_ROUTE_SYNTHESIS_ENABLED", value = "true" }
         ] : [], var.k8sgpt_enabled ? [
         # ADR-035: the /api/eks/[cluster]/k8sgpt route reads K8SGPT_ENABLED FIRST and 503s when not
         # "true" (no cluster read / STS presign / narration). concat(base, []) == base when
@@ -320,11 +344,27 @@ resource "aws_ecs_task_definition" "web" {
         { name = "K8SGPT_ENABLED", value = "true" },
         { name = "K8SGPT_STALE_MINUTES", value = "5" },
         { name = "K8SGPT_NARRATION_MODEL", value = "global.anthropic.claude-haiku-4-5-20251001-v1:0" },
-      ] : [])
-      secrets = [
-        { name = "AURORA_USER", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:username::" },
-        { name = "AURORA_PASSWORD", valueFrom = "${aws_rds_cluster.aurora.master_user_secret[0].secret_arn}:password::" }
-      ]
+        ] : [], var.datasource_diagnosis_enabled ? [
+        # External datasource diagnosis enqueue gate. False/default omits the env so add/schema-refresh
+        # routes do not enqueue datasource_index jobs; the worker has the same DIAG_DATASOURCES_ENABLED
+        # hard gate, so activation and egress permissions move together.
+        { name = "DATASOURCE_DIAGNOSIS_ENABLED", value = "true" },
+        ] : [], var.ai_insights_enabled ? [
+        # AI Insights gate: omit the env when off → concat(base, []) == base (no web task-def diff/redeploy).
+        # The BFF /api/insights(+refresh) read AI_INSIGHTS_ENABLED and no-op/hide when it's absent.
+        { name = "AI_INSIGHTS_ENABLED", value = "true" },
+        ] : [], var.graph_rebuild_interval_mins > 0 ? [
+        # instrumentation.ts's register() reads this to schedule the graph-rebuild interval; 0/absent
+        # (default) means the interval never starts — concat(base, []) == base, byte-identical web
+        # task def when off. The manual scripts/v2/graph-rebuild.mjs path is unaffected either way.
+        { name = "GRAPH_REBUILD_INTERVAL_MINS", value = tostring(var.graph_rebuild_interval_mins) },
+        ] : [],
+        # Scheduled-diagnosis mailing list (gated): empty list when diagnosis_notify_enabled=false →
+        # concat(base, []) == base → byte-identical web task def (no redeploy when off).
+      local.notify_web_env_list)
+      # No `secrets` block: the web task no longer injects the Aurora master secret at all (IAM DB
+      # auth above replaces it) — removes the class of bug where a long-running task holds a
+      # password that goes stale on the master secret's next auto-rotation.
       healthCheck = {
         command     = ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/health || exit 1"]
         interval    = 30
@@ -478,6 +518,12 @@ resource "aws_ecs_service" "web" {
     rollback = true
   }
 
+  # Propagates aws:ecs:clusterName (+ aws:ecs:serviceName) onto every task, so a cost-allocation
+  # tag on that key (see var.ecs_cost_tag_active) lets Cost Explorer GroupBy TAG roll usage up
+  # per cluster — CE has no native cluster dimension otherwise.
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
+
   depends_on = [aws_lb_listener.https]
 }
 
@@ -487,4 +533,13 @@ resource "aws_ecs_service" "web" {
 moved {
   from = aws_lb_target_group.spine
   to   = aws_lb_target_group.web
+}
+
+# Gated separately from enable_ecs_managed_tags above: AWS-generated tag keys can only be
+# activated once tagged usage has actually appeared in CE (~24h lag) — activating an unseen
+# key errors, hence the two-step rollout (var.ecs_cost_tag_active default false).
+resource "aws_ce_cost_allocation_tag" "ecs_cluster_name" {
+  count   = var.ecs_cost_tag_active ? 1 : 0
+  tag_key = "aws:ecs:clusterName"
+  status  = "Active"
 }

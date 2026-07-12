@@ -30,6 +30,18 @@ describe('normalizeResult', () => {
     expect(r.columns!.map((c) => c.key)).toContain('metric');
   });
 
+  it('prometheus vector preserves non-finite samples (NaN/+Inf) as null (not coerced to 0)', () => {
+    const body = { resultType: 'vector', result: [
+      { metric: { __name__: 'a' }, value: [1700000000, 'NaN'] },
+      { metric: { __name__: 'b' }, value: [1700000000, '+Inf'] },
+      { metric: { __name__: 'c' }, value: [1700000000, '2.5'] },
+    ] };
+    const r = normalizeResult('prometheus', 'prometheus_query', body);
+    expect(r.rows![0].value).toBeNull();
+    expect(r.rows![1].value).toBeNull();
+    expect(r.rows![2].value).toBe(2.5);
+  });
+
   it('mimir matrix behaves like prometheus (series)', () => {
     const body = { resultType: 'matrix', result: [{ metric: { __name__: 'm' }, values: [[1, '5']] }] };
     expect(normalizeResult('mimir', 'mimir_query_range', body).shape).toBe('series');

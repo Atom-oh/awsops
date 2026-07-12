@@ -1,7 +1,9 @@
 import { verifyUser } from '@/lib/auth';
-import { invokeAgent, type ChatMsg } from '@/lib/agentcore';
+import { invokeAgent, invokeAgentStreamDetailed, type ChatMsg } from '@/lib/agentcore';
+import { getModelLabel } from '@/lib/bedrock';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
-import { classifyPrompt } from '@/lib/classifier';
+import { classifyPrompt, buildClassifierContext } from '@/lib/classifier';
+import { sanitizeHistory } from '@/lib/chat-context';
 import { synthesizeStream } from '@/lib/synthesize';
 import { assistantAnswer, isProductHelpIntent } from '@/lib/assistant';
 import { sectionByKey } from '@/lib/sections';
@@ -12,7 +14,7 @@ import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
 import { recordCustomAgentTrace } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
 import { currentAccountId, currentAccountAlias } from '@/lib/account';
-import { listConfiguredSchemas } from '@/lib/datasource-schema';
+import { listConfiguredSchemas, renderSchemaForPrompt } from '@/lib/datasource-schema';
 import { listDatasources } from '@/lib/datasources';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getAgentSpace } from '@/lib/agent-space';
@@ -33,20 +35,29 @@ function chunk(text: string): string[] {
   return text.match(/\S+\s*|\s+/g) ?? [text];
 }
 
-/** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps). */
-function renderSchemaContext(schemas: { label: string; kind: string | null; schema: unknown }[]): string {
-  const lines = ['## Datasource schemas (cached) — use these real names when writing queries'];
-  const names = (a: unknown, n: number) =>
-    (Array.isArray(a) ? a : []).slice(0, n).map((x) => (typeof x === 'string' ? x : (x as { name?: string }).name ?? JSON.stringify(x))).join(', ');
-  for (const s of schemas) {
-    const sc = (s.schema || {}) as Record<string, unknown>;
-    const parts: string[] = [];
-    for (const [k, n] of [['metrics', 40], ['labels', 40], ['tags', 40], ['tables', 30], ['domains', 10], ['indices', 30]] as const) {
-      if (Array.isArray(sc[k]) && (sc[k] as unknown[]).length) parts.push(`${k}: ${names(sc[k], n)}`);
-    }
-    lines.push(`- **${s.label}** (${s.kind ?? ''}): ${parts.join(' | ') || '(empty)'}`);
+/** Render cached datasource schemas into a bounded context block for the agent (real names, not dumps).
+ *  Uses the shared renderer so SQL datasources (ClickHouse) get their COLUMNS — not just table names —
+ *  and OpenSearch domains get their indices, exactly like the Explore "AI로 생성" path. Each datasource
+ *  gets a GUARANTEED share of the total budget (so a big ClickHouse schema can't crowd out Prometheus),
+ *  and dropped datasources are disclosed instead of silently sliced off. */
+const SCHEMA_CTX_TOTAL = 7000; // fits inside the agent's 8000-char extraContext budget with headroom
+const SCHEMA_CTX_MAX_DATASOURCES = 12;
+function renderSchemaContext(schemas: { label: string; kind: string | null; schema: unknown; version?: string | null }[]): string {
+  const header = '## Datasource schemas (cached) — use these real names AND the server version when writing queries';
+  const lines = [header];
+  const shown = schemas.slice(0, SCHEMA_CTX_MAX_DATASOURCES);
+  const perEntry = Math.max(500, Math.floor((SCHEMA_CTX_TOTAL - header.length) / Math.max(1, shown.length)));
+  for (const s of shown) {
+    const ver = s.version ? ` v${s.version}` : ''; // version informs version-specific DSL/syntax
+    const labelLine = `- **${s.label}** (${s.kind ?? ''}${ver}):`;
+    const body = renderSchemaForPrompt(s.schema, s.kind, perEntry - labelLine.length - 8); // leave room for the label + indentation
+    const indented = body ? '\n' + body.split('\n').map((l) => `  ${l}`).join('\n') : ' (empty)';
+    lines.push(`${labelLine}${indented}`);
   }
-  return lines.join('\n').slice(0, 6000);
+  if (schemas.length > shown.length) lines.push(`… (+${schemas.length - shown.length} more datasource(s) omitted)`);
+  // Absolute backstop: per-entry budgeting doesn't account for per-line indentation, so cap the joined
+  // block at SCHEMA_CTX_TOTAL (well within the agent's 8000-char extraContext budget).
+  return lines.join('\n').slice(0, SCHEMA_CTX_TOTAL);
 }
 
 export async function POST(request: Request) {
@@ -64,6 +75,10 @@ export async function POST(request: Request) {
   const prompt = typeof body.prompt === 'string' ? body.prompt : '';
   if (!prompt) return json({ status: 'error', message: 'prompt required' }, 400);
   if (prompt.length > MAX_PROMPT) return json({ status: 'error', message: 'prompt too large' }, 413);
+  // Sanitize ONCE at the boundary (bug fix, PR #138 review MINOR) — a malformed entry (non-array,
+  // or non-string `content`) would otherwise throw deep inside the classifier/assistant history
+  // renderers, silently degrading routing instead of failing loud or just being dropped.
+  const history = sanitizeHistory(body.messages);
 
   const sessionId = (body.sessionId && body.sessionId.length >= 33) ? body.sessionId : `awsops-${user.sub}-000000000000000000000000`;
   // ADR-038: hybrid routing behind HYBRID_ROUTING_ENABLED. Flag off = exact legacy path.
@@ -76,7 +91,14 @@ export async function POST(request: Request) {
   let route: RouteResult | null = null;
   let gateway: string;
   if (hybridOn) {
-    route = await classifyRoute(prompt, body.section, { llmEnabled: true, classify: classifyPrompt });
+    // Bug fix: a context-dependent follow-up (e.g. "저걸 클러스터 안에서 어디서 쓰나" after a
+    // CloudTrail/model-invocation question) read in isolation misroutes to the wrong/inactive
+    // section — the classifier never saw the prior turn. Feed it a bounded excerpt of the
+    // client-supplied history; matchedSections(prompt) below is unaffected (raw prompt only).
+    route = await classifyRoute(prompt, body.section, {
+      llmEnabled: true,
+      classify: (p) => classifyPrompt(buildClassifierContext(history, p)),
+    });
     gateway = route.primary;
   } else {
     gateway = pickGateway(prompt, body.section);
@@ -151,7 +173,7 @@ export async function POST(request: Request) {
   const inactiveWasPinned = inactiveSection != null && route?.method === 'pin';
   const useAssistant = hybridOn && !unavailablePin
     && ((!explicitPin && isProductHelpIntent(prompt)) || (inactiveSection != null && !inactiveWasPinned));
-  const messages: ChatMsg[] = [...(Array.isArray(body.messages) ? body.messages : []), { role: 'user', content: prompt }];
+  const messages: ChatMsg[] = [...history, { role: 'user', content: prompt }];
   // Thread persistence: adopt a well-formed client threadId, else mint one. Ownership is
   // enforced at write time by chat-store's owner-guarded upsert (forged ids just drop).
   const THREAD_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -163,18 +185,22 @@ export async function POST(request: Request) {
     : route
       ? { ranked: route.ranked, method: route.method, ...(via ? { via, routes: fanGateways } : {}), ...(spec.tier === 'custom' ? { customAgent: spec.agentName } : {}) }
       : (spec.tier === 'custom' ? { customAgent: spec.agentName } : undefined);
-  const record = (assistantContent: string) => {
+  // extras = answer provenance (tools/model/elapsedMs) known only after the invoke — merged into
+  // the stored meta so a restored thread renders the same footer as the live stream.
+  const record = (assistantContent: string, extras?: Record<string, unknown>) => {
     recordExchange({
       threadId, userSub: user.sub, sessionId,
       promptTitle: prompt.slice(0, 40),
       userContent: prompt, assistantContent,
-      gateway: recordGateway, meta: exchangeMeta,
+      gateway: recordGateway, meta: extras ? { ...(exchangeMeta ?? {}), ...extras } : exchangeMeta,
     }).catch(() => { /* store is never-throws by contract; belt-and-suspenders (P2 gate) */ });
   };
 
   // Inject cached datasource schemas (the agent reads the cache) for the observability gateways —
-  // for the single-route spec AND any monitoring/data gateway in a fan-out.
-  const obs = (g: string) => g === 'monitoring' || g === 'data';
+  // for the single-route spec AND any matching gateway in a fan-out. 'observability' owns the
+  // Prometheus/ClickHouse connectors (routed to external-obs); monitoring/data kept for any
+  // datasource connectors still hosted there (Loki/Tempo/Mimir/OpenSearch — deferred).
+  const obs = (g: string) => g === 'observability' || g === 'monitoring' || g === 'data';
   let datasourceSchemaContext: string | undefined;
   if (obs(spec.gateway) || (doFanout && fanGateways.some(obs))) {
     try {
@@ -182,10 +208,10 @@ export async function POST(request: Request) {
       // instances), labeled by the instance name. The agent gateway path also resolves the default
       // (via the kind-mirror credential), so chat and the gateway agree on which instance is used.
       const [schemas, dsRows] = await Promise.all([listConfiguredSchemas(accountId), listDatasources()]);
-      const byId = new Map(schemas.map((s) => [s.integrationId, s.schema]));
+      const byId = new Map(schemas.map((s) => [s.integrationId, s]));
       const entries = dsRows
         .filter((d) => d.isDefault && byId.has(d.id))
-        .map((d) => ({ label: d.name, kind: d.kind, schema: byId.get(d.id) }));
+        .map((d) => { const s = byId.get(d.id)!; return { label: d.name, kind: d.kind, schema: s.schema, version: s.version }; });
       if (entries.length) datasourceSchemaContext = renderSchemaContext(entries);
     } catch { /* schema cache is best-effort; the agent still works (can call discovery tools) without it */ }
   }
@@ -222,7 +248,10 @@ export async function POST(request: Request) {
       // AWSops Assistant: product/how-to answer grounded in the KB (Bedrock-direct), OR the graceful
       // fallback for an auto-routed inactive section — instead of the 🔒 dead-end.
       if (useAssistant) {
-        const text = await assistantAnswer(prompt); // Haiku, KB-grounded, never throws
+        // Bug fix: pass the client-supplied history along so the assistant fallback isn't a
+        // context-blind one-off (previously dropped, causing "질문이 맥락 없이..." answers on
+        // any follow-up that landed here — e.g. via the inactive-section degrade path above).
+        const text = await assistantAnswer(prompt, { history }); // Haiku, KB-grounded, never throws
         for (const c of chunk(text)) {
           if (request.signal.aborted) break;
           controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));
@@ -273,7 +302,8 @@ export async function POST(request: Request) {
         controller.close();
         return;
       }
-      let text: string;
+      let text = '';
+      let provenance: { tools: string[]; model?: string } = { tools: [] };
       const t0 = Date.now();
       controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'analyzing' }) + '\n\n'));
       const tick = setInterval(() => {
@@ -287,8 +317,16 @@ export async function POST(request: Request) {
       };
       request.signal.addEventListener('abort', onAbort);
 
+      // Real streaming, not buffered-then-rechunked: forward each delta the instant it arrives
+      // from the AgentCore runtime (which itself streams token-by-token, agent/agent.py's
+      // stream_async) instead of awaiting the full answer first — the previous invokeAgentDetailed
+      // + chunk(text) loop only *looked* like streaming (it re-split an already-complete string
+      // and enqueued it in one tick, since CHAT_TYPEWRITER_MS defaults to 0).
+      const tools: string[] = [];
+      const seenTools = new Set<string>();
+      let model: string | undefined;
       try {
-        text = await invokeAgent({
+        for await (const ev of invokeAgentStreamDetailed({
           gateway: spec.gateway, messages, sessionId,
           systemPromptOverride: spec.systemPromptOverride,
           toolAllowlist: spec.toolAllowlist,
@@ -296,7 +334,18 @@ export async function POST(request: Request) {
           accountId, accountAlias,
           integrations: spec.integrations, // ADR-039 P2-infra inc2: live egress-READ MCP connections
           extraContext: datasourceSchemaContext, // cached datasource schemas → agent reads the cache
-        });
+        })) {
+          if (request.signal.aborted) break;
+          // Independent ifs, not else-if: AgentEvent's fields aren't guaranteed mutually
+          // exclusive by the type, so a frame carrying more than one must not drop any of them.
+          if (ev.delta) {
+            text += ev.delta;
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: ev.delta })}\n\n`));
+          }
+          if (ev.tool && !seenTools.has(ev.tool)) { seenTools.add(ev.tool); tools.push(ev.tool); }
+          if (ev.model) model = ev.model;
+        }
+        provenance = { tools, model };
       } catch (e) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
@@ -310,12 +359,17 @@ export async function POST(request: Request) {
       if (spec.tier === 'custom') {
         void recordCustomAgentTrace({ gateway: spec.gateway, userSub: user.sub, agentName: spec.agentName, agentVersion: spec.agentVersion, tier: spec.tier, skillHashes: spec.skillHashes, spaceVersion: spec.spaceVersion });
       }
-      for (const c of chunk(text)) {
-        if (request.signal.aborted) break;
-        controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: c })}\n\n`));
-        if (TYPE_DELAY_MS) await new Promise((r) => setTimeout(r, TYPE_DELAY_MS));
-      }
-      record(text); // fire-and-forget after the chunk loop, before [DONE] (P2 gate placement)
+      // Answer-provenance footer (design handoff 개선안 ③): server-measured elapsed is the
+      // authoritative total (the periodic `status` ticks stop once the invoke resolves), plus
+      // the tools the agent actually called and its model — all unknown before this point.
+      const footerMeta = {
+        elapsedMs: Date.now() - t0,
+        ...(provenance.tools.length ? { tools: provenance.tools } : {}),
+        ...(provenance.model ? { model: getModelLabel(provenance.model) } : {}),
+      };
+      controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footerMeta)}\n\n`));
+      // don't persist a half-streamed, client-aborted answer (same guard as the assistant/fanout paths)
+      if (!request.signal.aborted) record(text, footerMeta);
       controller.enqueue(enc.encode('data: [DONE]\n\n'));
       controller.close();
     },

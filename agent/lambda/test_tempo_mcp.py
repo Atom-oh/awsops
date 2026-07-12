@@ -96,4 +96,18 @@ class TestSchema(_Base):
         import json as _j; self.assertEqual(_j.loads(out["body"])["tags"],["service.name","http.status"])
 
 
+class TestSchemaVersion(_Base):
+    def test_schema_version_and_instance_id(self):
+        seq=[(200,{"version":"2.4.0"}),(200,{"tagNames":["service.name"]})]
+        with mock.patch.object(tm,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
+            out=tm.lambda_handler({"tool_name":"tempo_schema","arguments":{}},None)
+        b=json.loads(out["body"]); self.assertEqual(b["version"],"2.4.0"); self.assertIn("service.name",b["tags"])
+
+    def test_instance_id_credential_blind(self):
+        tm.load_datasource.reset_mock()
+        with mock.patch.object(tm,"http_json",return_value=(200,{"traces":[]})):
+            out=tm.lambda_handler({"tool_name":"tempo_search","arguments":{"query":'{ .service.name="x" }',"instance_id":7}},None)
+        self.assertEqual(out["statusCode"],200); tm.load_datasource.assert_any_call(tm.SLUG, instance_id=7)
+
+
 if __name__=="__main__": unittest.main()

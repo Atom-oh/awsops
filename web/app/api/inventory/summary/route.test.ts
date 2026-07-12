@@ -26,6 +26,11 @@ describe('GET /api/inventory/summary', () => {
         { k: 'ebs_unencrypted', n: 2 },
         { k: 'iam_user_no_mfa', n: 3 },
         { k: 'sg_open_ingress', n: 1 },
+        { k: 's3_public', n: 1 },
+      ] })
+      .mockResolvedValueOnce({ rows: [
+        { t: 't3.medium', n: 3 },
+        { t: 't3.large', n: 1 },
       ] });
     const { GET } = await import('./route');
     const res = await GET(req());
@@ -46,7 +51,31 @@ describe('GET /api/inventory/summary', () => {
       ebsUnencrypted: 2,
       iamUserNoMfa: 3,
       sgOpenIngress: 1,
+      s3Public: 1,
     });
+    expect(body.ec2Types).toEqual([
+      { name: 't3.medium', count: 3 },
+      { name: 't3.large', count: 1 },
+    ]);
+    // public-S3 split must use the BROAD predicate shared with /security (PUBLIC_S3_WHERE),
+    // not just policy-public — else a Block-Public-Access-off bucket false-negatives.
+    const splitsSql = query.mock.calls[1][0] as string;
+    expect(splitsSql).toContain('block_public_acls');
+    expect(splitsSql).toContain('block_public_policy');
+  });
+
+  it('degrades ec2Types to [] when its aggregation query fails (byType still returns)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    query
+      .mockResolvedValueOnce({ rows: [{ resource_type: 'ec2', n: 2 }] })   // byType
+      .mockResolvedValueOnce({ rows: [] })                                  // splits
+      .mockRejectedValueOnce(new Error('ec2types boom'));                   // ec2Types
+    const { GET } = await import('./route');
+    const res = await GET(req());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ec2Types).toEqual([]);
+    expect(body.byType[0]).toMatchObject({ type: 'ec2', count: 2 });
   });
   it('splits failure degrades to zeros without failing byType', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
@@ -65,6 +94,7 @@ describe('GET /api/inventory/summary', () => {
       ebsUnencrypted: 0,
       iamUserNoMfa: 0,
       sgOpenIngress: 0,
+      s3Public: 0,
     });
   });
   it('500 on byType db error', async () => {

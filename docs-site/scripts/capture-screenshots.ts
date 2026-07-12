@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as dns from 'dns';
 
-// VPC内 default resolver does not know atomai.click — fall back to public DNS.
+// VPC内 default resolver does not know example.com — fall back to public DNS.
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
 // v2: served at the root path (no /awsops basePath — see CLAUDE.md "v2 ↔ v1 key differences").

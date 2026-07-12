@@ -131,6 +131,31 @@ def _create_stage(conn, incident_id, idem_key, job_id, timeout_s):
     return existing[0][0] if existing else None
 
 
+def _build_trigger_snapshot(p):
+    """Isolated trigger snapshot persisted on the New path for W2 AlertValidation. Mirror of
+    web/lib/incident.ts buildTriggerSnapshot — descriptive/normalized fields only (NOT rawPayload)."""
+    labels = p.get("labels") or {}
+    ann = p.get("annotations") or {}
+    # nullish (not falsy) lockstep with web buildTriggerSnapshot: only a MISSING account_id falls
+    # back to accountId; an explicit "" is preserved on both tiers.
+    account = labels.get("account_id")
+    if account is None:
+        account = ann.get("accountId")
+    return {
+        "id": p.get("id"),
+        "severity": p.get("severity"),
+        "source": p.get("source"),
+        "alertName": p.get("alertName"),
+        "services": p.get("services") or [],
+        "resources": p.get("resources") or [],
+        "labels": labels,
+        "metric": p.get("metric"),
+        "timestamp": p.get("timestamp"),
+        "account": account,
+        "alarmArn": p.get("alarmArn"),
+    }
+
+
 def lambda_handler(event, _ctx):
     """SM Triage Task. Input: {job_id, incident_id?, payload}. Returns {incident_id, decision,
     roster_request, maxConcurrency} — the SM Choice routes 'Skipped' → Done, else → Lead."""
@@ -169,6 +194,15 @@ def lambda_handler(event, _ctx):
             "WHERE id = :iid AND status IN ('triaged','investigating')",
             iid=incident_id,
         )
+        # Persist the isolated trigger snapshot for W2 AlertValidation (New path only; mirrors
+        # web/lib/incident.ts buildTriggerSnapshot). Degrade-safe: pg8000.native autocommits each
+        # run(), so a column-absent error on pre-migration substrate is isolated and never rolls
+        # back the writes above.
+        try:
+            conn.run("UPDATE incidents SET trigger_event = :te::jsonb WHERE id = :iid",
+                     te=json.dumps(_build_trigger_snapshot(payload)), iid=incident_id)
+        except Exception:
+            pass
         return {"job_id": job_id, "incident_id": incident_id, "decision": "New",
                 "roster_request": True, "maxConcurrency": caps["fanout_max"]}
     finally:

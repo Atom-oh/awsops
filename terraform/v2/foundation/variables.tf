@@ -10,12 +10,18 @@ variable "project" {
 
 variable "domain_name" {
   type        = string
-  description = "Public FQDN served by CloudFront, e.g. v2.atomai.click"
+  description = "Public FQDN served by CloudFront, e.g. v2.example.com"
 }
 
 variable "hosted_zone_name" {
   type        = string
-  description = "Route53 public hosted zone, e.g. atomai.click"
+  description = "Route53 public hosted zone, e.g. example.com"
+}
+
+variable "extra_domain_aliases" {
+  type        = list(string)
+  default     = []
+  description = "Additional FQDNs to accept as CloudFront aliases (ADR-016 v1 domain cutover). Each must resolve in hosted_zone_name."
 }
 
 variable "vpc_cidr" {
@@ -107,10 +113,72 @@ variable "workers_enabled" {
   default     = false
 }
 
+variable "graph_rebuild_interval_mins" {
+  type        = number
+  description = "Minutes between web-instrumentation topology graph-rebuilds (flow/infra/trace layers, ADR-043 + 2026-06-25 trace-topology design). 0 (default) = the interval never starts; the manual `scripts/v2/graph-rebuild.mjs` path is unaffected either way. No new AWS resource — runs in the existing web task using perms it already holds. Recommended: 15 (matches steampipe.tf's inventory-sync cadence)."
+  default     = 0
+  validation {
+    # Must be 0 (off) or a whole minute ≥1 — a fractional/zero-ish positive value (e.g. 0.01) would
+    # produce an unintended, tightly-spinning Node setInterval. Capped at 1 day: this is a lightweight
+    # in-process timer, not a real schedule — anything longer belongs in the EventBridge upgrade path
+    # noted in instrumentation.ts, not this variable.
+    condition     = var.graph_rebuild_interval_mins == 0 || (var.graph_rebuild_interval_mins == floor(var.graph_rebuild_interval_mins) && var.graph_rebuild_interval_mins >= 1 && var.graph_rebuild_interval_mins <= 1440)
+    error_message = "graph_rebuild_interval_mins must be 0 (off) or a whole number of minutes between 1 and 1440."
+  }
+}
+
+variable "ecs_cost_tag_active" {
+  type        = bool
+  description = "Activates aws:ecs:clusterName as a Cost Explorer cost-allocation tag (feeds the /inventory/ecs_cluster MTD-cost column via GroupBy TAG). AWS only allows activating a tag key once tagged usage has appeared in billing (~24h after the enable_ecs_managed_tags rollout) — flip this on in a second apply, not the same one. false (default) = 0 resources, $0, tag stays inactive (CE just returns no data for it)."
+  default     = false
+}
+
 variable "ai_cost_tracking_enabled" {
   type        = bool
   description = "Scheduled awsops-only Bedrock-cost aggregator (Logs Insights /aws/bedrock/invocation-logs -> ai_usage_daily). Requires workers_enabled (reuses the worker role/pg8000 layer/VPC). false (default) = 0 resources, $0, no behavior change."
   default     = false
+}
+
+variable "datasource_diagnosis_enabled" {
+  type        = bool
+  description = "AI-diagnosis external-observability collector gate (ADR-039/041 governed egress). When true (requires workers_enabled), grants the worker role lambda:InvokeFunction on the 5 connector Lambdas and sets DIAG_DATASOURCES_ENABLED/HOST_ACCOUNT_ID/PROJECT on the worker so collect_datasources can fan out. false (default) = 0 resources/IAM, $0, collector stays disabled (no AccessDenied degrade)."
+  default     = false
+  validation {
+    condition     = !var.datasource_diagnosis_enabled || (var.workers_enabled && var.agentcore_enabled && var.integrations_enabled)
+    error_message = "datasource_diagnosis_enabled=true requires workers_enabled, agentcore_enabled, and integrations_enabled."
+  }
+}
+
+variable "graph_querygen_enabled" {
+  type        = bool
+  description = "Hybrid LLM fallback for the registry-driven graph-sources design (2026-07-08): when a ClickHouse datasource's schema doesn't match graph_catalog.py's standard OTel-exporter shape, ask Bedrock (Haiku) to generate a candidate query, validated by a static read-only check, a best-effort AgentCore Code Interpreter sandbox check (skipped if no interpreter is provisioned), and a live LIMIT-1 dry run — only a query that survives all checks is cached (provenance='generated'). Requires datasource_diagnosis_enabled (runs inside the same datasource_index job). bedrock:InvokeModel is already granted via worker_lambda_diagnosis; this flag adds only the GRAPH_QUERYGEN_ENABLED env + the Code Interpreter session IAM (requires agentcore_enabled). false (default) = 0 resources/IAM, $0, the catalog's deterministic 'unavailable' row stands."
+  default     = false
+  validation {
+    condition     = !var.graph_querygen_enabled || var.datasource_diagnosis_enabled
+    error_message = "graph_querygen_enabled requires datasource_diagnosis_enabled (it runs inside the same datasource_index job and needs the same PROJECT/connector-invoke plumbing)."
+  }
+}
+
+variable "diagnosis_schedule_enabled" {
+  type        = bool
+  description = "Scheduled auto-diagnosis dispatcher (v1 report-scheduler parity): hourly EventBridge -> Lambda scans report_schedules for due rows and enqueues read-only AI-diagnosis report jobs. Requires workers_enabled (reuses the worker role/pg8000 layer/VPC + jobs queue; adds only sqs:SendMessage). false (default) = 0 resources, $0, no scheduled runs."
+  default     = false
+}
+
+variable "diagnosis_notify_enabled" {
+  type        = bool
+  description = "Email the scheduled-diagnosis mailing list (v1 report-scheduler parity): provisions one SNS topic; the worker publishes a summary+link to it when a SCHEDULED report finishes, and the web BFF manages its email subscriptions (/api/diagnosis/subscribers, admin-only). Governed external-comms write (ADR-040/041), IAM-scoped to the single topic ARN — NOT AWS-resource mutation. Worker publish needs workers_enabled. false (default) = 0 resources/IAM, $0, no topic, app treats it as disabled."
+  default     = false
+}
+
+variable "ai_insights_enabled" {
+  type        = bool
+  description = "AI Insights dashboard panel: a daily worker collects K8s events + CloudWatch alarms + cost anomalies (all read-only) and an LLM synthesizes 3-5 prioritized admin bullets, cached in ai_insights and shown on the Overview dashboard with manual refresh. Requires workers_enabled (reuses worker role/pg8000/VPC + jobs queue; adds read-only cloudwatch:DescribeAlarms/GetMetricData, ce:GetCostAndUsage, eks:DescribeCluster, sqs:SendMessage). K8s events also need the worker role's EKS access entry, registered out-of-band (scripts/v2/eks/register-insight-access.sh). false (default) = 0 resources/IAM, $0, runtime fail-closed (AI_INSIGHTS_ENABLED unset)."
+  default     = false
+  validation {
+    condition     = !var.ai_insights_enabled || var.workers_enabled
+    error_message = "ai_insights_enabled requires workers_enabled (reuses the worker role/pg8000 layer/VPC + jobs queue)."
+  }
 }
 
 variable "worker_image_tag" {
@@ -142,6 +210,12 @@ variable "integrations_write_enabled" {
 variable "hybrid_routing_enabled" {
   type        = bool
   description = "ADR-038 hybrid chat routing gate. false (default) = legacy regex-only routing, no classifier Bedrock calls, no extra IAM. Enable only after the golden-set gate (scripts/v2/routing-accuracy.mjs) passes >=85% and >= +15pp over the regex baseline."
+  default     = false
+}
+
+variable "multi_route_synthesis_enabled" {
+  type        = bool
+  description = "ADR-044 cross-domain auto-synthesis gate (web/lib/synthesize.ts, MULTI_ROUTE_SYNTHESIS_ENABLED). false (default) = single-route chat only, no direct Sonnet Bedrock call from the web task, no extra IAM. PR #153 review: the web task role previously had no bedrock:InvokeModel grant covering the Sonnet model synthesize.ts calls directly (only the ADR-038 Haiku classifier policy existed) — this flag gates the matching IAM statement."
   default     = false
 }
 

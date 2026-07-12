@@ -10,6 +10,9 @@ import { parseCpuCores, parseMem, type NodeRow, type PodRow } from './eks-resour
 export type { NodeRow, PodRow } from './eks-resources';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
+// Per-request K8s API-server timeout (thin-BFF: bound how long a single in-cluster read
+// can occupy the web task when the API server is slow/unreachable).
+const K8S_REQUEST_TIMEOUT_MS = 4000;
 
 /**
  * Replicate `aws eks get-token`: presign an STS GetCallerIdentity GET with the
@@ -100,7 +103,7 @@ interface K8sItem {
   metadata?: { name?: string; namespace?: string; creationTimestamp?: string; labels?: Record<string, string>;
     ownerReferences?: { kind?: string; name?: string }[] };
   status?: {
-    conditions?: { type?: string; status?: string }[];
+    conditions?: { type?: string; status?: string; reason?: string; message?: string }[];
     nodeInfo?: { kubeletVersion?: string };
     phase?: string;
     podIP?: string;
@@ -120,6 +123,7 @@ interface K8sItem {
     containers?: { resources?: { requests?: Record<string, string> } }[];
     initContainers?: { resources?: { requests?: Record<string, string> } }[];
     overhead?: Record<string, string>;
+    taints?: { key?: string; value?: string; effect?: string }[];
   };
   // core /api/v1 Endpoints: subsets[].addresses[].ip = the pod IPs backing the Service
   // (the Endpoints object name == the Service name). Read by normalizeEndpoint.
@@ -173,6 +177,17 @@ export function normalizeNode(it: K8sItem): NodeRow {
   const ready = it.status?.conditions?.find((c) => c.type === 'Ready');
   const cap = it.status?.capacity ?? {};
   const alloc = it.status?.allocatable ?? {};
+  const taints = (it.spec?.taints ?? []).map((t) => ({
+    key: t.key ?? '',
+    value: t.value ?? '',
+    effect: t.effect ?? '',
+  }));
+  const conditions = (it.status?.conditions ?? []).map((c) => ({
+    type: c.type ?? '',
+    status: c.status ?? '',
+    reason: c.reason ?? '',
+    message: c.message ?? '',
+  }));
   return {
     name: it.metadata?.name ?? '',
     status: ready?.status === 'True' ? 'Ready' : 'NotReady',
@@ -187,6 +202,9 @@ export function normalizeNode(it: K8sItem): NodeRow {
     memAllocatable: parseMem(alloc.memory),
     diskCapacity: parseMem(cap['ephemeral-storage']),
     diskAllocatable: parseMem(alloc['ephemeral-storage']),
+    ...(Object.keys(labels).length ? { labels } : {}),
+    ...(taints.length ? { taints } : {}),
+    ...(conditions.length ? { conditions } : {}),
   };
 }
 
@@ -333,6 +351,10 @@ function k8sGet(endpoint: string, path: string, token: string, caPem: Buffer): P
       },
     );
     r.on('error', reject);
+    // Server-side bound: a slow/stuck K8s API must not occupy the web task indefinitely
+    // (thin-BFF). On timeout, destroy the socket → 'error' rejects this read; callers
+    // (e.g. /api/eks/fleet) degrade that cluster to empty rather than hanging the request.
+    r.setTimeout(K8S_REQUEST_TIMEOUT_MS, () => r.destroy(new Error('k8s request timeout')));
     r.end();
   });
 }

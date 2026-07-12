@@ -17,6 +17,7 @@ describe('DatasourceExplorePage', () => {
   it('renders the Explore console scoped to the instance id (picker hidden)', async () => {
     render(DatasourceExplorePage({ params: { id: '5' } }));
     await waitFor(() => expect(screen.getByPlaceholderText(/PromQL/)).toBeTruthy());
-    expect(screen.queryByRole('combobox')).toBeNull(); // scoped → no instance picker
+    // picker is shown and preselected to the scoped instance (no dead-end if id isn't resolvable)
+    await waitFor(() => expect((screen.getByRole('combobox', { name: '데이터소스' }) as HTMLSelectElement).value).toBe('5'));
   });
 });

@@ -69,13 +69,78 @@ class TestGuards(_Base):
 
 
 class TestSchema(_Base):
-    def test_schema_metrics_labels(self):
-        seq=[(200,{"status":"success","data":["job","instance"]}),(200,{"status":"success","data":["up","http_requests_total"]})]
+    def test_schema_metrics_labels_and_version(self):
+        # schema now probes buildinfo FIRST, then labels, then metrics.
+        seq=[(200,{"status":"success","data":{"version":"2.11.0"}}),    # buildinfo
+             (200,{"status":"success","data":["job","instance"]}),       # labels
+             (200,{"status":"success","data":["up","http_requests_total"]})]  # metrics
         with mock.patch.object(mm,"http_json",side_effect=lambda *a,**k: seq.pop(0)):
             out=mm.lambda_handler({"tool_name":"mimir_schema","arguments":{}},None)
         import json as _j; b=_j.loads(out["body"])
         self.assertEqual(out["statusCode"],200)
         self.assertIn("metrics",b); self.assertIn("labels",b)
+        self.assertEqual(b["version"],"2.11.0")  # captured for version-aware PromQL
+
+    def test_instance_id_resolves_per_instance_credential_blind(self):
+        mm.load_datasource.reset_mock()
+        with mock.patch.object(mm,"http_json",return_value=(200,{"status":"success","data":{"resultType":"vector","result":[]}})):
+            out=mm.lambda_handler({"tool_name":"mimir_query","arguments":{"query":"up","instance_id":7}},None)
+        self.assertEqual(out["statusCode"],200)
+        mm.load_datasource.assert_any_call(mm.SLUG, instance_id=7)
+
+
+class TestMetricMeta(_Base):
+    def test_metric_meta(self):
+        cap = []
+        def fake(method, url, headers=None, body=None, timeout=None):
+            cap.append(url)
+            import urllib.parse
+            url_decoded = urllib.parse.unquote(url)
+            if "metadata" in url_decoded:
+                return 200, {"status": "success", "data": {"up": [{"type": "gauge"}], "http_requests": [{"type": "counter"}]}}
+            elif 'up"' in url_decoded:
+                return 200, {"status": "success", "data": ["instance", "job"]}
+            elif 'http_requests"' in url_decoded:
+                return 500, {"raw": "fail"} # skipped
+            elif 'unknown"' in url_decoded:
+                return 200, {"status": "success", "data": []}
+            return 200, {"status": "success", "data": []}
+            
+        with mock.patch.object(mm, "http_json", side_effect=fake):
+            out = mm.lambda_handler({"tool_name": "mimir_metric_meta", "arguments": {"metrics": ["up", "http_requests", "unknown"]}}, None)
+        
+        self.assertEqual(out["statusCode"], 200)
+        b = json.loads(out["body"])
+        
+        self.assertIn("metadata", cap[0])
+        self.assertEqual(len(cap), 6) # per-metric: 3 metrics × (metadata?metric= + labels)
+
+        self.assertIn("up", b)
+        self.assertEqual(b["up"]["type"], "gauge")
+        self.assertEqual(b["up"]["labels"], ["instance", "job"])
+
+        # failed label fetch surfaces an error entry (not silently dropped); type still resolved
+        self.assertIn("http_requests", b)
+        self.assertEqual(b["http_requests"]["type"], "counter")
+        self.assertEqual(b["http_requests"]["labels"], [])
+        self.assertIn("error", b["http_requests"])
+
+        self.assertIn("unknown", b)
+        self.assertIsNone(b["unknown"]["type"])
+        self.assertEqual(b["unknown"]["labels"], [])
+
+    def test_empty_metrics(self):
+        out = mm.lambda_handler({"tool_name": "mimir_metric_meta", "arguments": {"metrics": []}}, None)
+        self.assertEqual(json.loads(out["body"]), {})
+
+    def test_metrics_cap(self):
+        cap = []
+        with mock.patch.object(mm, "http_json", return_value=(200, {"status": "success", "data": {}})) as m:
+            out = mm.lambda_handler({"tool_name": "mimir_metric_meta", "arguments": {"metrics": [f"m{i}" for i in range(20)]}}, None)
+        
+        b = json.loads(out["body"])
+        self.assertEqual(len(b), 12)
+        self.assertEqual(m.call_count, 24) # per-metric: 12 × (metadata?metric= + labels)
 
 
 if __name__=="__main__": unittest.main()

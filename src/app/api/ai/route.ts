@@ -1638,7 +1638,7 @@ async function handleSingleRoute(
       anthropic_version: 'bedrock-2023-05-31', max_tokens: 4096, system: cachedSystem(SYSTEM_PROMPT, promptCacheOn), messages: bedrockMessages,
     });
     const response = await bedrockClient.send(new InvokeModelCommand({
-      modelId: MODELS[modelKey || 'sonnet-5'], contentType: 'application/json', accept: 'application/json',
+      modelId: MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'], contentType: 'application/json', accept: 'application/json',
       body: new TextEncoder().encode(body),
     }));
     const analysisText = JSON.parse(new TextDecoder().decode(response.body)).content?.[0]?.text || '';
@@ -1663,7 +1663,7 @@ async function handleSingleRoute(
         anthropic_version: 'bedrock-2023-05-31', max_tokens: 8192, system: cachedSystem(collector.analysisPrompt, promptCacheOn), messages: bedrockMessages,
       });
       const response = await bedrockClient.send(new InvokeModelCommand({
-        modelId: MODELS[modelKey || 'sonnet-5'], contentType: 'application/json', accept: 'application/json',
+        modelId: MODELS[modelKey || 'sonnet-5'] || MODELS['sonnet-5'], contentType: 'application/json', accept: 'application/json',
         body: new TextEncoder().encode(body),
       }));
       const analysisText = JSON.parse(new TextDecoder().decode(response.body)).content?.[0]?.text || '';

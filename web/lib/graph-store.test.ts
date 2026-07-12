@@ -126,3 +126,19 @@ describe('rebuildInfraGraph', () => {
     expect(calls.some((s) => s.includes('DELETE FROM topology_'))).toBe(false);
   });
 });
+
+// T2.5 — the empty-build guard is preserved for flow/infra (default allowEmpty=false), proving the
+// trace layer's allowEmpty=true sweep (covered in graph-store-trace.test.ts) is an opt-in exception
+// and does NOT regress the flow/infra "don't wipe a live graph on a transient empty fetch" guarantee.
+describe('writeGraph empty-build guard (T2.5)', () => {
+  it('flow empty build keeps its guard (no sweep) — allowEmpty defaults false', async () => {
+    const { pool, calls } = mockPool([]);
+    await rebuildGraph(pool as never, 'GUARD_FLOW');
+    expect(calls.some((s) => s.includes('DELETE FROM topology_'))).toBe(false);
+  });
+  it('infra empty build keeps its guard (no sweep)', async () => {
+    const { pool, calls } = mockPool([]);
+    await rebuildInfraGraph(pool as never, 'GUARD_INFRA');
+    expect(calls.some((s) => s.includes('DELETE FROM topology_'))).toBe(false);
+  });
+});

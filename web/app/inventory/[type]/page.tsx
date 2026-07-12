@@ -10,11 +10,17 @@ import StatTile from '@/components/ui/StatTile';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Input from '@/components/ui/Input';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
-import { INVENTORY_TYPES } from '@/lib/inventory-types';
+import RiskHero from '@/components/inventory/RiskHero';
+import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
+import { useActiveScope, scopeParams } from '@/lib/account-context';
 
 type Row = Record<string, unknown>;
 
 // Lifecycle values treated as degraded → render their KPI tile in the danger variant.
+// Fetch up to the route's max so highlight/RiskHero verdicts cover the full set for
+// almost all accounts; >ROW_LIMIT resources → `capped` flags the verdict as a sample.
+const ROW_LIMIT = 500;
+
 const BAD_STATES = new Set([
   'stopped', 'stopping', 'failed', 'crashloopbackoff', 'alarm', 'impaired',
   'inactive', 'deleting', 'deleted', 'error', 'unhealthy', 'terminated',
@@ -49,29 +55,34 @@ export default function InventoryTypePage() {
   const [selected, setSelected] = useState<Row | null>(null);
   // Supplementary metric KPI cards (e.g. EC2 avg CPU + hourly cost). Degrade silently to [].
   const [metricCards, setMetricCards] = useState<{ label: string; value: string | number; accent?: boolean }[]>([]);
+  const [scope] = useActiveScope();
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`/api/inventory/${type}`);
+      // scopeParams also serializes `accounts`, which this route ignores (account filtering is
+      // out of scope for this pass) — harmless to send.
+      const r = await fetch(`/api/inventory/${type}?limit=${ROW_LIMIT}&${scopeParams(scope)}`);
       if (!r.ok) throw new Error(String(r.status));
       const d = await r.json();
       setRows((d.rows as Row[]).map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data as object) })));
       setCaptured(d.run?.finished_at ?? null);
     } catch (e) { setErr(String(e)); }
-  }, [type]);
+  }, [type, scope]);
   useEffect(() => { if (spec) load(); }, [spec, load]);
 
   // Supplementary metric cards — fetch separately so a failure never affects the table/donut.
+  // Scoped the same as the main table: otherwise avg CPU/hourly-cost would stay fleet-wide
+  // while the table/donut narrow to the selected region, showing mismatched numbers.
   useEffect(() => {
     setMetricCards([]);
     if (!spec) return;
     let alive = true;
-    fetch(`/api/inventory/${type}/metrics`)
+    fetch(`/api/inventory/${type}/metrics?${scopeParams(scope)}`)
       .then((r) => (r.ok ? r.json() : { cards: [] }))
       .then((d) => { if (alive) setMetricCards(d.cards || []); })
       .catch(() => { if (alive) setMetricCards([]); });
     return () => { alive = false; };
-  }, [spec, type]);
+  }, [spec, type, scope]);
 
   const refresh = async () => {
     setBusy(true); setErr('');
@@ -88,6 +99,13 @@ export default function InventoryTypePage() {
   const stateCounts = useMemo(
     () => (spec?.stateKey ? countBy(allRows, spec.stateKey) : []),
     [allRows, spec?.stateKey],
+  );
+
+  // Per-type highlight cards (tailored top KPIs from synced columns). Empty → fall
+  // back to the generic state tiles, so unconfigured types render as before.
+  const highlightCards = useMemo(
+    () => (HIGHLIGHTS[type] ? computeHighlights(allRows, HIGHLIGHTS[type]) : []),
+    [allRows, type],
   );
 
   // Distribution donut — top 6 + 기타, from the FULL row set.
@@ -133,6 +151,27 @@ export default function InventoryTypePage() {
     (key && spec.columns.find((c) => c.key === key)?.label) || key || '';
   const distLabel = colLabel(spec.distKey);
   const stateOptions = ['전체', ...stateCounts.map((s) => s.name)];
+  const arch = layoutOf(type);
+
+  // Composable section blocks — arranged per archetype in the render below.
+  const kpiRow = (
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" />
+      {highlightCards.length > 0
+        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} />)
+        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} />)}
+      {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />)}
+    </div>
+  );
+  const donut = spec.distKey && distData.length > 0
+    ? <DonutBreakdown title={`${distLabel} 분포`} data={distData} nameKey="name" valueKey="value" />
+    : null;
+  const tableBlock = (
+    <div className="flex flex-col gap-3">
+      <Filters query={query} onQuery={setQuery} stateOptions={spec.stateKey ? stateOptions : undefined} stateFilter={stateFilter} onState={setStateFilter} />
+      <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
+    </div>
+  );
 
   return (
     <>
@@ -147,48 +186,41 @@ export default function InventoryTypePage() {
 
         {rows && (
           <>
-            {/* ---- KPI tiles (from FULL rows) ---- */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" />
-              {stateCounts.slice(0, 4).map((s) => (
-                <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} />
-              ))}
-              {metricCards.map((c) => (
-                <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />
-              ))}
-            </div>
-
-            {/* ---- Distribution donut (left) + table (right); table full-width if no distKey ---- */}
-            {spec.distKey && distData.length > 0 ? (
-              <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-6 items-start">
-                <DonutBreakdown
-                  title={`${distLabel} 분포`}
-                  data={distData}
-                  nameKey="name"
-                  valueKey="value"
-                />
-                <div className="flex flex-col gap-3">
-                  <Filters
-                    query={query}
-                    onQuery={setQuery}
-                    stateOptions={spec.stateKey ? stateOptions : undefined}
-                    stateFilter={stateFilter}
-                    onState={setStateFilter}
-                  />
-                  <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
+            {arch === 'risk' ? (
+              /* Security posture: verdict hero → table → compact donut. */
+              <>
+                <RiskHero label={spec.label} total={allRows.length} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
+                {metricCards.length > 0 && (
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />)}
+                  </div>
+                )}
+                {tableBlock}
+                {donut && <div className="lg:max-w-md">{donut}</div>}
+              </>
+            ) : arch === 'chart' && donut ? (
+              /* Utilization/state: KPIs → prominent full-width distribution → table. */
+              <>
+                {kpiRow}
+                {donut}
+                {tableBlock}
+              </>
+            ) : arch === 'capacity' && donut ? (
+              /* Engine/type/size: KPIs → donut beside the table. */
+              <>
+                {kpiRow}
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-6 items-start">
+                  {donut}
+                  {tableBlock}
                 </div>
-              </div>
+              </>
             ) : (
-              <div className="flex flex-col gap-3">
-                <Filters
-                  query={query}
-                  onQuery={setQuery}
-                  stateOptions={spec.stateKey ? stateOptions : undefined}
-                  stateFilter={stateFilter}
-                  onState={setStateFilter}
-                />
-                <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
-              </div>
+              /* directory (+ any archetype without a distribution): scan-first. */
+              <>
+                {kpiRow}
+                {tableBlock}
+                {donut && <div className="lg:max-w-sm">{donut}</div>}
+              </>
             )}
           </>
         )}
@@ -197,6 +229,7 @@ export default function InventoryTypePage() {
         title={selected?.resource_id as string | undefined}
         data={selected}
         spec={spec}
+        resourceType={type}
         onClose={() => setSelected(null)}
       />
     </>

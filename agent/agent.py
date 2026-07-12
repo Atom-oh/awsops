@@ -32,6 +32,36 @@ app = BedrockAgentCoreApp()
 # Gateway URLs — 시작 시 AWS CLI로 자동 감지, 환경변수 폴백
 # Gateway URLs — auto-detect via AWS CLI at startup, env var fallback
 DEFAULT_GATEWAY = "ops"
+# ADR-004: the web chat section key 'observability' routes to the provisioned 'external-obs'
+# gateway (external-obs becomes a routed section once it bears connector tools — Prometheus,
+# ClickHouse). Keeps the readable chat key while matching the deployed gateway short-name.
+_GATEWAY_ALIAS = {"observability": "external-obs"}
+
+
+def _resolve_gateway_key(role, gateways):
+    """Map a chat/section role to an actual key in the runtime GATEWAYS map.
+
+    BUGFIX: `_discover_gateways` derives keys via name.replace("awsops-","").replace("-gateway","").
+    While v1 and v2 gateways COEXIST, v2 gateways are named `awsops-v2-<x>-gateway`, so discovery
+    yields `v2-<x>` (e.g. `v2-external-obs`), whereas the GATEWAYS_JSON env fallback uses the
+    canonical `<x>` (`external-obs`). The `observability`→`external-obs` alias only matched the env
+    spelling; on the (primary) discovery path `external-obs` was absent → silent fallback to `ops`.
+
+    We try the CANONICAL key first, then the `v2-`-prefixed transition spelling. This is
+    forward-compatible: once v2 merges to main and the gateways are renamed to `awsops-<x>-gateway`
+    (v1 retired, the `v2` name dropped), discovery yields the canonical `<x>` and the first branch
+    matches — the `v2-` fallback becomes dead code. **REMOVE the `v2-` candidate at the v2→main
+    cutover** (it is a coexistence shim, not permanent behavior)."""
+    key = _GATEWAY_ALIAS.get(role, role)
+    # canonical first; `v2-` = transition shim (drop at v2→main). The DEFAULT_GATEWAY fallback is
+    # resolved the SAME tolerant way — under v2-only discovery the default is `v2-ops`, not `ops`,
+    # so a hard `GATEWAYS[DEFAULT_GATEWAY]` would KeyError. Returning DEFAULT_GATEWAY as the last
+    # resort yields None at the call site (GATEWAYS.get), which the MCP try-block degrades to a
+    # tool-less Bedrock-direct answer — never a crash outside the try.
+    for candidate in (key, f"v2-{key}", DEFAULT_GATEWAY, f"v2-{DEFAULT_GATEWAY}"):
+        if candidate in gateways:
+            return candidate
+    return DEFAULT_GATEWAY
 GATEWAY_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 SERVICE = "bedrock-agentcore"
 
@@ -77,24 +107,32 @@ GATEWAYS = _discover_gateways()
 # ADR-038: deterministic tool selection + prompt caching (verified against strands-agents 1.41.0:
 # BedrockConfig exposes temperature / cache_config / cache_tools; cache_prompt is deprecated).
 # Cache params are guarded — an unsupported version degrades to temperature-only (spec §6 no-op rule).
+# Single source of truth for the model id — also streamed to the web as answer provenance
+# ({"model": ...} frame), so the chat footer never goes stale when this migrates.
+MODEL_ID = "global.anthropic.claude-sonnet-5"
 try:
     if CacheConfig is None:
         raise TypeError("CacheConfig unavailable")
     model = BedrockModel(
-        model_id="global.anthropic.claude-sonnet-4-6",
+        model_id=MODEL_ID,
         region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
-        temperature=0.0,
+        # NOTE: sonnet-5 rejects `temperature` on ConverseStream ("temperature is deprecated for
+        # this model" — live-verified 2026-07-07, every request failed with a ValidationException
+        # until this was dropped). The ADR-038 determinism rationale (temperature=0.0 for tool
+        # selection) no longer applies to this model generation — omit rather than pass an invalid value.
+        # Rollback contract: if MODEL_ID moves back to a temperature-accepting generation (e.g.
+        # sonnet-4-6), restore temperature=0.0 here AND in the no-cache fallback below — ADR-038
+        # determinism is suspended only while the model rejects the param, not repealed.
         cache_config=CacheConfig(strategy="auto"),  # auto cachePoint injection (system+messages)
         cache_tools="default",                      # toolConfig cachePoint, 5m TTL
     )
 except (TypeError, ValueError) as e:  # older strands: unknown kwarg / CacheConfig missing; or CacheConfig(strategy="auto") rejected (ValueError/pydantic ValidationError)
     # NOTE: this fires once per cold start only. The production cache-degradation detector is
     # the cacheReadInputTokens usage check (ADR-038 Task 8) — do not rely on this line alone.
-    print(f"[Agent] prompt caching unavailable ({e}); falling back to temperature-only")
+    print(f"[Agent] prompt caching unavailable ({e}); falling back to no-cache")
     model = BedrockModel(
-        model_id="global.anthropic.claude-sonnet-4-6",
+        model_id=MODEL_ID,
         region_name="ap-northeast-2",  # global.* profile invoked from the home region so calls land in /aws/bedrock/invocation-logs (ap-northeast-2) for awsops-only cost attribution
-        temperature=0.0,
     )
 
 # ============================================================================
@@ -157,25 +195,25 @@ SKILL_BASE = {
 - ALWAYS call tools for real-time data — never answer from memory""",
 
 
-    "ops": """You are AWSops Operations Assistant. Query AWS resources and provide operational guidance.
+    "ops": """You are AWSops Operations Assistant. Answer resource-inventory, topology, and unused-resource questions over the synced Aurora inventory (read-only).
 
 ## Decision Patterns:
 | User asks about... | Tool chain |
 |---|---|
-| 리소스 현황, 목록, 상태 | run_steampipe_query (SQL) |
+| 미사용/고아 리소스, 정리 후보 (빈 origin, 등록 없는 TG, dead LB) | find_unused_resources |
+| 전체 토폴로지, CF→LB→TG→타깃 체인 | get_topology |
+| 리소스 현황/목록 (특정 타입: alb·nlb·target_group·cloudfront·ec2·ebs…) | query_inventory |
+| 동기화 신선도 / 타입별 카운트 | inventory_summary |
 | AWS 문서, 기능 설명 | search_documentation → read_documentation |
 | 리전 가용성 | get_regional_availability |
-| 아키텍처 추천 | recommend |
-| CLI 명령 | suggest_aws_commands or call_aws |
+| AWS CLI 명령 제안 (읽기 전용) | suggest_aws_commands |
 
-## Steampipe SQL Rules:
-- Do NOT add LIMIT unless explicitly asked
-- Tags: tags ->> 'Name' AS name (single quotes only)
-- EC2: instance_state (not state), placement_availability_zone (not availability_zone)
-- RDS: class AS instance_class (not db_instance_class)
-- S3: versioning_enabled (not versioning)
-- Avoid: mfa_enabled, attached_policy_arns, Lambda tags (SCP blocks)
-- No $ in SQL — use conditions::text LIKE '%..%'""",
+## Rules:
+- ALWAYS call a tool for real data — never answer inventory/topology questions from memory.
+- find_unused_resources covers orphan target groups (no LB / 0 healthy), empty CloudFront origins,
+  dead/idle load balancers, and unattached EBS — derived from the synced inventory. State the data's
+  freshness (it reflects the latest inventory sync; use inventory_summary to check).
+- ELB listeners, Elastic IPs, and detached ENIs are NOT synced yet — say so if asked rather than guessing.""",
 
 
     "data": """You are AWSops Data & Analytics Specialist. Manage and troubleshoot AWS databases and streaming.
@@ -245,12 +283,12 @@ SKILL_BASE = {
 - Incident: get_active_alarms → get_metric_data → execute_log_insights_query → lookup_events
 
 ## External Datasources (when connected — tools appear in the list above; each uses its own query language):
+## NOTE: Prometheus & ClickHouse are owned by the **Observability** section now — route those there.
 | Source | Tools | Query language |
 |---|---|---|
-| Prometheus / Mimir | prometheus_query[_range] / mimir_query[_range], *_labels, *_series | PromQL (e.g. rate(http_requests_total{code=~"5.."}[5m])) |
+| Mimir | mimir_query[_range], *_labels, *_series | PromQL (e.g. rate(http_requests_total{code=~"5.."}[5m])) |
 | Loki | loki_query_range / loki_query, loki_labels | LogQL (e.g. {app="x"} |= "error") |
 | Tempo | tempo_search, tempo_get_trace | TraceQL (e.g. { status=error && duration>1s }) |
-| ClickHouse | clickhouse_query (read-only SELECT/SHOW/DESCRIBE) | SQL |
 | OpenSearch | search_opensearch_logs | query_string |
 - GENERATE the query in the correct language yourself from the user's natural-language ask.
 - If a "## Datasource schemas (cached)" block is provided below, USE it (real metric/label/table/tag
@@ -258,6 +296,23 @@ SKILL_BASE = {
 - Multi-source incident correlation (e.g. "what spiked at 3:30?"): metrics (Prometheus/Mimir/CloudWatch
   → WHAT) → logs (Loki/OpenSearch/CloudWatch Logs → WHY) → traces (Tempo → WHERE) → CloudTrail (WHO).
   Query only the sources that are connected; synthesize across them.""",
+
+
+    "observability": """You are AWSops Observability Specialist. Answer questions over EXTERNAL observability datasources — currently **Prometheus** (metrics) and **ClickHouse** (analytics / otel traces·logs) — by GENERATING the correct query language yourself and calling the read-only connector tools. Read-only by construction.
+
+## Datasources (tools appear in the list above only when the datasource is connected):
+| Source | Tools | Query language |
+|---|---|---|
+| Prometheus | prometheus_query / prometheus_query_range, prometheus_labels, prometheus_series, prometheus_metric_meta, prometheus_schema | PromQL (e.g. `rate(http_requests_total{code=~"5.."}[5m])`) |
+| ClickHouse | clickhouse_query (read-only SELECT/SHOW/DESCRIBE), clickhouse_tables, clickhouse_describe, clickhouse_schema | SQL |
+
+## Rules:
+- GENERATE the query in the correct language yourself from the user's natural-language ask — never ask the user to write PromQL/SQL.
+- If a "## Datasource schemas (cached)" block is provided below, USE it (real metric/label/table/column names) to write accurate queries — do NOT guess names.
+- If a Prometheus/ClickHouse connector tool is present, ALWAYS call it for real data (never answer from memory). If NO connector tool is available (none configured for this account), say so honestly — do NOT fabricate metrics or rows.
+- p99 / latency / error-rate / throughput → Prometheus PromQL (`histogram_quantile`, `rate`, `sum by`). Otel traces·logs·events stored in ClickHouse → SQL.
+- Logs (Loki), distributed traces (Tempo) and long-term metrics (Mimir) live on the **Monitoring** section, not here — defer those there.
+- For cross-source correlation, query each connected source and synthesize.""",
 
 
     "cost": """You are AWSops FinOps Specialist. Analyze costs and recommend optimizations.
@@ -334,6 +389,14 @@ COMMON_FOOTER = """
 ## Multi-Account Rules
 - If [Target Account: XXXX], MUST pass target_account_id='XXXX' to EVERY tool call.
 - This is mandatory.
+
+## Honesty & routing (do NOT hallucinate)
+- The AWSops section agents are EXACTLY these 8: network, container, data, security, cost,
+  monitoring, iac, ops. NEVER invent or name an agent that is not in this list.
+- NEVER tell the user to type a slash command or "go to / switch to" another section — the main
+  chat routes to the right section automatically. Just answer.
+- If you lack a tool for the request, say so honestly and answer with what you have; do not
+  fabricate tools, agents, or results.
 
 Format responses in markdown. Respond in the user's language."""
 
@@ -668,19 +731,77 @@ You MUST include "target_account_id": "{account_id}" in EVERY tool call's argume
 This is a non-negotiable requirement for cross-account access."""
 
 
+async def _stream_text(agent, user_input):
+    """Yield assistant text deltas from a Strands agent run as ``{"delta": str}`` chunks,
+    plus one ``{"tool": name}`` chunk per tool invocation (answer-provenance footer).
+
+    Strands' ``stream_async`` yields a stream of event dicts; the incremental assistant
+    text arrives under the ``"data"`` key. Tool-use events carry ``"current_tool_use"``
+    and fire repeatedly while the tool input streams in — dedupe on ``toolUseId`` and
+    skip events whose ``name`` hasn't arrived yet. Other lifecycle events are skipped
+    (the agent loop still runs them — we just don't surface them). AgentCore Runtime
+    JSON-encodes each yielded dict into an SSE ``data:`` frame, so embedded newlines
+    are escaped and stay frame-safe. Old web images drop ``{"tool": ...}`` / ``{"model": ...}``
+    frames as empty deltas, so agent/web can deploy in either order."""
+    yield {"model": MODEL_ID}  # answer provenance: which model produced this (footer)
+    seen_tools = set()
+    async for event in agent.stream_async(user_input):
+        if "data" in event:
+            yield {"delta": event["data"]}
+        tu = event.get("current_tool_use") or {}
+        tool_use_id, tool_name = tu.get("toolUseId"), tu.get("name")
+        if tool_use_id and tool_name and tool_use_id not in seen_tools:
+            seen_tools.add(tool_use_id)
+            yield {"tool": tool_name}
+
+
 # Main handler / 메인 핸들러
+# Streaming entrypoint: yields ``{"delta": str}`` chunks → AgentCore Runtime streams them
+# back as SSE (text/event-stream). The web BFF forwards each delta to the browser, so the
+# user sees real incremental tokens (the previous version buffered the full answer and the
+# BFF faked a typewriter). callback_handler=None disables Strands' default stdout printer.
 @app.entrypoint
-def handler(payload):
+async def handler(payload):
+    # ADR-006 RCA (EoG) — a second, read-only execution path distinct from chat. The
+    # deterministic controller returns a structured dict (NOT a token stream), so it
+    # short-circuits before build_conversation / the no-input guard. Flag-gated inside
+    # handle_rca (RCA_ORCHESTRATOR_ENABLED); returns {"disabled": True} when off.
+    if payload.get("mode") == "rca":
+        # NOTE: `handler` is an async generator (it `yield`s deltas), so a bare `return <value>`
+        # is a SyntaxError. Emit the structured RCA dict as a single event, then end the stream.
+        # (RCA is flag-OFF/backlog — the runtime streaming contract for this dict is owned by the
+        # RCA orchestrator and should be verified there before it goes live.)
+        from rca_orchestrator import handle_rca
+        yield handle_rca(payload)
+        return
+
+    # Flag-gated dark path (ADR-008 amended 2026-06-24, BASELINE §2): a custom Anthropic-SDK-on-
+    # Bedrock loop that replaces ONLY the Strands agent loop (lever = tool-loop debuggability).
+    # Default OFF (ANTHROPIC_AGENT_LOOP_ENABLED); per-request override via payload.agentLoop.
+    # Minimal slice — integrations (egress MCP) still route to the Strands path below.
+    from anthropic_loop import should_use_anthropic_loop
+    if should_use_anthropic_loop(payload) and not payload.get("integrations"):
+        from anthropic_loop import run_anthropic_loop
+        async for chunk in run_anthropic_loop(payload):
+            yield chunk
+        return
+
     user_input, history = build_conversation(payload)
     if not user_input:
-        return "No input provided."
+        yield {"delta": "No input provided."}
+        return
 
     gateway_role = payload.get("gateway", DEFAULT_GATEWAY)
     skill_role = payload.get("skill", gateway_role)  # skill override for SKILL_BASE / SKILL_BASE용 스킬 오버라이드
     system_prompt_override = payload.get("systemPromptOverride")  # ADR-031: resolver-supplied custom prompt
     extra_context = payload.get("extraContext")  # bounded BFF-supplied context (e.g. cached datasource schemas)
     tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
-    gateway_url = GATEWAYS.get(gateway_role, GATEWAYS[DEFAULT_GATEWAY])
+    gateway_key = _resolve_gateway_key(gateway_role, GATEWAYS)
+    # NO eager `GATEWAYS[DEFAULT_GATEWAY]` default — that index is always evaluated and KeyErrors
+    # (outside the try → no MCP fallback) when `ops` is absent (v2-only discovery = `v2-ops`).
+    # _resolve_gateway_key already returns a present key when possible; a None here is handled by
+    # the MCP try below (tool-less fallback).
+    gateway_url = GATEWAYS.get(gateway_key)
 
     # Extract cross-account info / 크로스 어카운트 정보 추출
     # effective_account_id() blanks the host account → same-account access uses the
@@ -701,10 +822,15 @@ def handler(payload):
 
     logging.info(f"Gateway: {gateway_role} -> {gateway_url} (history: {len(history)} messages, account: {account_id or 'default'}, integrations: {len(integrations)})")
 
+    # `started` guards the fallback: once we have streamed even one delta to the client we must
+    # NOT re-run the Bedrock-direct fallback — that would duplicate the partial answer. The fallback
+    # therefore only fires on a failure BEFORE the first token (i.e. MCP connect / tool discovery),
+    # which is exactly what the original try/except guarded against.
+    started = False
     try:
         mcp_client = MCPClient(lambda: create_gateway_transport(gateway_url))
 
-        # ExitStack keeps the gateway AND every integration MCP session live during agent(user_input).
+        # ExitStack keeps the gateway AND every integration MCP session live for the whole stream.
         with ExitStack() as stack:
             stack.enter_context(mcp_client)
             gateway_tools = get_all_tools(mcp_client)
@@ -740,24 +866,34 @@ def handler(payload):
                 tools=tools,
                 system_prompt=system_prompt,
                 messages=history if history else None,
+                callback_handler=None,
             )
 
-            response = agent(user_input)
-            return response.message['content'][0]['text']
+            async for chunk in _stream_text(agent, user_input):
+                started = True
+                yield chunk
+        return
 
     except Exception as e:
         logging.error(f"Gateway MCP error [{gateway_role}]: {e}")
-        # Fallback: Bedrock direct with base prompt only / 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출
-        base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
-        if extra_context:
-            base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
-        agent = Agent(
-            model=model,
-            system_prompt=base_prompt,
-            messages=history if history else None,
-        )
-        response = agent(user_input)
-        return response.message['content'][0]['text']
+        if started:
+            # We already streamed a partial answer; re-running would duplicate it. End gracefully.
+            yield {"delta": "\n\n_[연결이 중단되어 응답이 일부만 전달되었습니다.]_"}
+            return
+
+    # Fallback: Bedrock direct with base prompt only (reached only on a pre-stream gateway failure).
+    # 폴백: 베이스 프롬프트만으로 Bedrock 직접 호출 (스트림 시작 전 게이트웨이 실패 시에만 도달).
+    base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
+    if extra_context:
+        base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
+    agent = Agent(
+        model=model,
+        system_prompt=base_prompt,
+        messages=history if history else None,
+        callback_handler=None,
+    )
+    async for chunk in _stream_text(agent, user_input):
+        yield chunk
 
 
 if __name__ == "__main__":

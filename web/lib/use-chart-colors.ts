@@ -5,7 +5,10 @@ import { THEME_EVENT } from './theme';
 export interface ChartColors {
   lead: string;
   leadStrong: string;
+  /** 8 unique hues (design handoff 개선안 ②-B) — DonutBreakdown cycles this for its top slices. */
   palette: string[];
+  /** "기타" (Top-N rollup) slice color — deliberately muted/neutral, outside the palette cycle. */
+  etc: string;
   grid: string;
   axis: string;
   tooltipBg: string;
@@ -16,7 +19,8 @@ export interface ChartColors {
 const FALLBACK: ChartColors = {
   lead: '#528DF8',
   leadStrong: '#1F54C2',
-  palette: ['#528DF8', '#01A88D', '#7B26FF', '#39C2B0', '#7D8A96'],
+  palette: ['#528DF8', '#01A88D', '#7B26FF', '#F59E0B', '#D13212', '#C925D1', '#39C2B0', '#5A6873'],
+  etc: '#AFBAC3',
   grid: '#E7ECEF',
   axis: '#7D8A96',
   tooltipBg: '#16202A',
@@ -36,7 +40,11 @@ function read(): ChartColors {
       v('--chart-3', FALLBACK.palette[2]),
       v('--chart-4', FALLBACK.palette[3]),
       v('--chart-5', FALLBACK.palette[4]),
+      v('--chart-6', FALLBACK.palette[5]),
+      v('--chart-7', FALLBACK.palette[6]),
+      v('--chart-8', FALLBACK.palette[7]),
     ],
+    etc: v('--chart-etc', FALLBACK.etc),
     grid: v('--chart-grid', FALLBACK.grid),
     axis: v('--chart-axis', FALLBACK.axis),
     tooltipBg: v('--chart-tooltip-bg', FALLBACK.tooltipBg),

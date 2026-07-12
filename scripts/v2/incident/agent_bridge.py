@@ -91,12 +91,16 @@ def enforce_token_budget(messages, system_prompt, token_budget):
 
 def invoke(gateway, messages, session_id, system_prompt_override=None,
            tool_allowlist=None, agent_name=None, agent_version=None,
-           skill_hashes=None, token_budget=None):
+           skill_hashes=None, token_budget=None, mode=None, incident_id=None,
+           failing_entity=None):
     """Invoke the AgentCore runtime for `gateway` + thread. Mirrors web/lib/agentcore.ts invokeAgent
     (one retry). session_id must be >=33 chars (a UUID works). Returns the final text.
 
     The Lead/sub-agents pass system_prompt_override = build_prompt(...) so SAFEGUARD_LINE is always
-    in force. ADR-033: enforce_token_budget runs before the call (the budget hook)."""
+    in force. ADR-033: enforce_token_budget runs before the call (the budget hook).
+
+    ADR-006 RCA: mode="rca" routes to the agent's EoG branch (returns a JSON dict the
+    handler serializes; _read_response's JSON path unwraps it — no streaming/SSE)."""
     messages, system_prompt_override = enforce_token_budget(messages, system_prompt_override, token_budget)
     arn = get_runtime_arn()
     global _ac
@@ -104,6 +108,10 @@ def invoke(gateway, messages, session_id, system_prompt_override=None,
         import boto3
         _ac = boto3.client("bedrock-agentcore", region_name=_REGION)
     body = {"gateway": gateway, "messages": messages}
+    if mode:
+        body["mode"] = mode
+        body["incident_id"] = incident_id
+        body["failing_entity"] = failing_entity
     if system_prompt_override:
         body["systemPromptOverride"] = system_prompt_override
     if tool_allowlist:

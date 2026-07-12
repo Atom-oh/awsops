@@ -31,12 +31,23 @@ resource "aws_eks_access_policy_association" "web_view" {
   cluster_name  = each.value
   principal_arn = aws_iam_role.task.arn
   # Keep in sync with scripts/v2/eks/auto_register.py _READONLY_POLICY_SUFFIXES (PR #36 r5).
-  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
+  policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
   access_scope {
     type = "cluster"
   }
   depends_on = [aws_eks_access_entry.web]
 }
+
+# ── istio-read MCP (2026-06-18): the agent Lambda exec role needs an EKS Access Entry to read Istio
+#    CRDs via the k8s API. We DELIBERATELY do NOT create it in terraform — granting a principal k8s
+#    access is the CLUSTER OWNER's call, and the apply principal may lack eks:CreateAccessEntry on
+#    third-party clusters. Instead the operator (who holds cluster perms) runs
+#    scripts/v2/eks/register-istio-access.sh (docs/runbooks/istio-agent-eks-access.md), which
+#    registers `output.agent_lambda_role_arn` with **AmazonEKSViewPolicy** (View, NOT AdminView —
+#    least privilege: no cluster-wide Secret/node read for the AI-agent principal; istio-read only
+#    LISTs namespaced CRDs + namespaces). Mirrors the v2 stance: AWSops never mutates a cluster; the
+#    operator grants access out-of-band. The web task-role entry above stays terraform-managed and
+#    uses AdminView because it lists cluster-scoped nodes — that rationale does NOT apply here.
 
 # IAM the web task role needs to discover clusters + build a kubeconfig (P3 consumes this).
 resource "aws_iam_role_policy" "task_eks" {

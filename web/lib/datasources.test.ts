@@ -12,7 +12,7 @@ vi.mock('@/lib/integration-credentials', () => ({
 }));
 
 import {
-  createDatasource, listDatasources, getDatasource, updateDatasource, getDefaultDatasource,
+  createDatasource, listDatasources, getDatasource, updateDatasource, getDefaultDatasource, resolveConnConfig,
 } from './datasources';
 
 beforeEach(() => {
@@ -33,6 +33,13 @@ describe('createDatasource', () => {
     expect(sql).toMatch(/enabled/);
     // is_default derived as "first of kind" via NOT EXISTS
     expect(sql).toMatch(/NOT EXISTS/i);
+  });
+
+  it('coerces a node-pg string BIGSERIAL id to a number (else the credential write breaks)', async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: '42' }] }); // node-pg returns BIGINT as a STRING
+    const id = await createDatasource({ name: 'p', kind: 'prometheus', endpoint: 'http://p:9090', authType: 'none' });
+    expect(id).toBe(42);
+    expect(typeof id).toBe('number'); // not the string '42' — assertPositiveId would have thrown
   });
 
   it('rejects a non-datasource kind with no DB call', async () => {
@@ -93,5 +100,30 @@ describe('getDatasource', () => {
     expect(await getDatasource(4)).toMatchObject({ id: 4, kind: 'clickhouse', authType: 'basic' });
     query.mockResolvedValueOnce({ rows: [] });
     expect(await getDatasource(404)).toBeNull();
+  });
+});
+
+describe('resolveConnConfig', () => {
+  const row = { id: 1, name: 'p', kind: 'prometheus', endpoint: 'http://p:9090', authType: 'none' as const, isDefault: true, enabled: true };
+
+  it('uses the ROW endpoint + authType when no SM credential exists (auth=none heal path)', async () => {
+    getCredentialById.mockResolvedValueOnce(null); // no stored cred (auth=none, or never written)
+    expect(await resolveConnConfig(row)).toEqual({ endpoint: 'http://p:9090', authType: 'none' });
+  });
+
+  it('resolves the credential by id ONLY — no kind-mirror fallback (no default-cred leak to another instance)', async () => {
+    getCredentialById.mockResolvedValueOnce(null);
+    await resolveConnConfig(row);
+    expect(getCredentialById).toHaveBeenCalledWith(1);           // id only
+    expect(getCredentialById).not.toHaveBeenCalledWith(1, 'prometheus'); // never the kind fallback
+  });
+
+  it('takes auth material from the SM credential but keeps the ROW authoritative for endpoint+authType', async () => {
+    // cred carries a DIFFERENT (stale) endpoint + authType — the row must win so a stale secret can't
+    // redirect the query; only the auth material (username/password) is taken from the cred.
+    getCredentialById.mockResolvedValueOnce({ endpoint: 'http://STALE:9090', authType: 'bearer', username: 'u', password: 'pw' });
+    const cc = await resolveConnConfig({ ...row, endpoint: 'http://p:9090', authType: 'basic' as const });
+    expect(cc).toMatchObject({ endpoint: 'http://p:9090', authType: 'basic', username: 'u', password: 'pw' });
+    expect(cc.endpoint).not.toBe('http://STALE:9090'); // row endpoint wins over the stale secret
   });
 });

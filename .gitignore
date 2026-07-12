@@ -26,6 +26,12 @@ next-env.d.ts
 powerpipe/.powerpipe/
 powerpipe/.mod.cache.json
 
+# co-agent harness eval output (generated, not source-controlled)
+.harness-eval/
+
+# python test cache
+.pytest_cache/
+
 # data (config, inventory, cost, memory, stats — all local/auto-generated)
 data/
 # CDK schema/seed files (ADR-030) live under infra-cdk/data/ and are source-controlled
@@ -120,5 +126,7 @@ graphify-out/
 # AI dev tool scratch dirs / MCP tooling local stores
 .serena/
 .headroom/
+# Kiro CLI local machine settings (co-agent panel artifact); .kiro/AGENT.md, rules.md, docs/, steering/ stay tracked
+.kiro/settings/
 tfplan*
 terraform/v2/foundation/tfplan*

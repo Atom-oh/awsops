@@ -46,6 +46,19 @@ export function useResizablePanel(storageKey: string, defaultWidth: number, minW
   return { width, startResize };
 }
 
+// Coordinator for every right-docked panel ↔ the globally-mounted chat (ChatDrawer).
+// A panel publishes its live width to the root `--detail-panel-w` var while open so the
+// chat FAB/drawer offset left and never overlap it; 0 when closed/unmounted returns the
+// chat to the right edge. Single producer per page (panels are mutually exclusive), so
+// last-mounted wins cleanly. Use this from ANY right-docked aside, resizable or fixed.
+export function usePublishDockedWidth(open: boolean, width: number) {
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--detail-panel-w', open ? `${width}px` : '0px');
+    return () => { root.style.setProperty('--detail-panel-w', '0px'); };
+  }, [open, width]);
+}
+
 /** The grip element's shared classes (left-edge, col-resize cursor, hover accent). */
 export const RESIZE_GRIP_CLASS = 'group absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize';
 export const RESIZE_GRIP_BAR_CLASS = 'absolute left-0 top-0 h-full w-px bg-ink-100 transition-colors group-hover:w-0.5 group-hover:bg-claude-400';

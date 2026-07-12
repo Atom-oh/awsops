@@ -9,14 +9,50 @@ const resolveAgent = vi.fn();
 const isCustomAgentEnabled = vi.fn();
 const recordCustomAgentTrace = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
-vi.mock('@/lib/agentcore', () => ({ invokeAgent: (...a: unknown[]) => invokeAgent(...a) }));
+// invokeAgentStream (single-route path) delegates to the invokeAgent mock so existing tests —
+// which set invokeAgent.mockResolvedValue/mockRejectedValue and assert its call args/count —
+// keep working: the stream yields the resolved answer as one delta (the route reassembles it).
+async function* invokeAgentStreamImpl(...a: unknown[]): AsyncGenerator<string> {
+  const text = await invokeAgent(...a);
+  if (text) yield text as string;
+}
+// invokeAgentDetailed (single-route path, provenance footer) delegates to the same invokeAgent
+// mock — existing tests assert call args/count against invokeAgent, so it stays the one spy.
+async function invokeAgentDetailedImpl(...a: unknown[]): Promise<{ text: string; tools: string[]; model?: string }> {
+  return { text: (await invokeAgent(...a)) as string, tools: [] };
+}
+type AgentEvent = { delta?: string; tool?: string; model?: string };
+// invokeAgentStreamDetailed backs the route's main path (real streaming + provenance). Defaults
+// to wrapping the invokeAgent mock as ONE delta event, so every existing invokeAgent.mockResolvedValue
+// test keeps working unchanged. A test that needs to assert genuine incremental delivery (multiple
+// SSE frames) or tool/model provenance sets `streamDetailedEvents` directly before calling POST.
+let streamDetailedEvents: AgentEvent[] | null = null;
+// For a test that needs a side effect between yields (e.g. aborting the request mid-stream) —
+// checked before the plain-array override above.
+let streamDetailedGenerator: (() => AsyncGenerator<AgentEvent>) | null = null;
+async function* invokeAgentStreamDetailedImpl(...a: unknown[]): AsyncGenerator<AgentEvent> {
+  if (streamDetailedGenerator) { yield* streamDetailedGenerator(); return; }
+  if (streamDetailedEvents) { yield* streamDetailedEvents; return; }
+  const text = await invokeAgent(...a);
+  if (text) yield { delta: text as string };
+}
+vi.mock('@/lib/agentcore', () => ({
+  invokeAgent: (...a: unknown[]) => invokeAgent(...a),
+  invokeAgentDetailed: (...a: unknown[]) => invokeAgentDetailedImpl(...a),
+  invokeAgentStream: (...a: unknown[]) => invokeAgentStreamImpl(...a),
+  invokeAgentStreamDetailed: (...a: unknown[]) => invokeAgentStreamDetailedImpl(...a),
+}));
 const classifyRoute = vi.fn();
 vi.mock('@/lib/route', () => ({
   pickGateway: (...a: unknown[]) => pickGateway(...a),
   classifyRoute: (...a: unknown[]) => classifyRoute(...a),
 }));
 const classifyPrompt = vi.fn();
-vi.mock('@/lib/classifier', () => ({ classifyPrompt: (...a: unknown[]) => classifyPrompt(...a) }));
+// keep the real (pure, no-Bedrock) buildClassifierContext so the wiring test below exercises it.
+vi.mock('@/lib/classifier', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/classifier')>()),
+  classifyPrompt: (...a: unknown[]) => classifyPrompt(...a),
+}));
 vi.mock('@/lib/catalog-source', () => ({ getEnabledCustomAgents: (...a: unknown[]) => getEnabledCustomAgents(...a) }));
 vi.mock('@/lib/agent-resolver', () => ({
   pickCustomAgent: (...a: unknown[]) => pickCustomAgent(...a),
@@ -29,7 +65,10 @@ vi.mock('@/lib/trace', () => ({ recordCustomAgentTrace: (...a: unknown[]) => rec
 const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
 const listConfiguredSchemas = vi.fn();
-vi.mock('@/lib/datasource-schema', () => ({ listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a) }));
+vi.mock('@/lib/datasource-schema', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/datasource-schema')>()), // keep the real renderSchemaForPrompt
+  listConfiguredSchemas: (...a: unknown[]) => listConfiguredSchemas(...a),
+}));
 const listDatasources = vi.fn();
 vi.mock('@/lib/datasources', () => ({ listDatasources: (...a: unknown[]) => listDatasources(...a) }));
 const synthesizeStream = vi.fn();
@@ -41,11 +80,12 @@ vi.mock('@/lib/assistant', () => ({
   isProductHelpIntent: (...a: unknown[]) => isProductHelpIntent(...a),
 }));
 
-function req(body: unknown, cookie = 'awsops_token=t') {
+function req(body: unknown, cookie = 'awsops_token=t', signal?: AbortSignal) {
   return new Request('http://x/api/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
 }
 async function readStream(res: Response): Promise<string> {
@@ -93,6 +133,8 @@ beforeEach(() => {
   isProductHelpIntent.mockReturnValue(false); // default off so existing routing is unaffected
   delete process.env.HYBRID_ROUTING_ENABLED;
   delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED;
+  streamDetailedEvents = null;
+  streamDetailedGenerator = null;
 });
 
 afterEach(() => { delete process.env.HYBRID_ROUTING_ENABLED; delete process.env.MULTI_ROUTE_SYNTHESIS_ENABLED; });
@@ -125,6 +167,20 @@ describe('POST /api/chat', () => {
     expect(body).toContain('[DONE]');
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'cost' }));
   });
+  it('does NOT forward a client-supplied agentLoop to the agent (dark-path loop is server-side only)', async () => {
+    // ADR-008/BASELINE §2 invariant: the env flag (ANTHROPIC_AGENT_LOOP_ENABLED) + a server-side
+    // payload.agentLoop pick the loop — the BFF must never let a client request flip it. The route
+    // builds an explicit InvokeInput (no body spread), so agentLoop can't leak; lock that here.
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'x', section: 'ops', sessionId: 's'.repeat(36), agentLoop: 'anthropic' }));
+    expect(res.status).toBe(200);
+    await readStream(res);
+    const input = invokeAgent.mock.calls[0][0] as Record<string, unknown>;
+    expect(input).not.toHaveProperty('agentLoop');
+  });
   it('emits an error frame when invoke fails', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     pickGateway.mockReturnValue('ops');
@@ -147,6 +203,68 @@ describe('POST /api/chat', () => {
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ systemPromptOverride: 'OVR', agentName: 'compliance' }));
     const body = await readStream(res);
     expect(body).toContain('"agentName":"compliance"');
+  });
+  it('forwards each agent delta as its own SSE frame as it arrives (real streaming, not buffered-then-rechunked)', async () => {
+    // Regression: the route used to await the FULL answer (invokeAgentDetailed) before writing
+    // anything, then re-split it into word chunks and enqueue them all in one tick — the user sees
+    // the whole answer appear at once regardless of how many chunks the loop produced. Asserting the
+    // exact frame count (matching what the upstream agent yielded) forces the fix to forward each
+    // delta live instead of buffering first.
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('cost');
+    streamDetailedEvents = [{ delta: '이번 ' }, { delta: '달 비용은 ' }, { delta: '$4,210' }];
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: '비용', section: 'cost', sessionId: 's'.repeat(36) }));
+    const body = await readStream(res);
+    const deltaFrames = body.match(/data: \{"delta":/g) ?? [];
+    expect(deltaFrames.length).toBe(3);
+    expect(body).toContain('이번 ');
+    expect(body).toContain('달 비용은 ');
+    expect(body).toContain('$4,210');
+  });
+  it('surfaces tool/model provenance from the live stream in the footer meta event', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('cost');
+    streamDetailedEvents = [
+      { model: 'sonnet-4-6' },
+      { delta: '답변' },
+      { tool: 'get_cost' },
+    ];
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: '비용', section: 'cost', sessionId: 's'.repeat(36) }));
+    const body = await readStream(res);
+    expect(body).toContain('"tools":["get_cost"]');
+    expect(body).toContain('"model":"sonnet-4-6"');
+  });
+  it('does not persist a half-streamed answer when the client aborts mid-stream', async () => {
+    // Regression: with live streaming, `text` is the incremental accumulation of deltas seen SO
+    // FAR — if record() isn't guarded by the same abort check the sibling assistant/fanout paths
+    // already use, a client disconnect persists a truncated "complete" answer to chat history.
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('cost');
+    const ac = new AbortController();
+    streamDetailedGenerator = async function* () {
+      yield { delta: 'partial answer' };
+      ac.abort(); // simulate the client disconnecting after the first frame
+      yield { delta: ' never sent' };
+    };
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: '비용', section: 'cost', sessionId: 's'.repeat(36) }, 'awsops_token=t', ac.signal));
+    await readStream(res);
+    expect(recordExchange).not.toHaveBeenCalled();
+  });
+  it('does not drop tool/model provenance when a single event carries multiple fields', async () => {
+    // Regression: `if (ev.delta) ... else if (ev.tool) ... else if (ev.model)` assumed the fields
+    // are mutually exclusive, but AgentEvent's type doesn't guarantee that — a frame carrying more
+    // than one field silently dropped whichever came after the first matched branch.
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('cost');
+    streamDetailedEvents = [{ delta: '답변', model: 'sonnet-4-6', tool: 'get_cost' }];
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: '비용', section: 'cost', sessionId: 's'.repeat(36) }));
+    const body = await readStream(res);
+    expect(body).toContain('"tools":["get_cost"]');
+    expect(body).toContain('"model":"sonnet-4-6"');
   });
 });
 
@@ -184,6 +302,26 @@ describe('hybrid routing (ADR-038)', () => {
     expect(body).toContain('"method":"llm"');
     expect(body).toContain('"ranked":[{"key":"network"');
     expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ gateway: 'network' }));
+  });
+
+  it('feeds a bounded excerpt of the client history into the classifier (bug fix: context-blind follow-up misrouting)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    classifyRoute.mockResolvedValue({ primary: 'ops', ranked: [{ key: 'ops', score: 1, active: true }], method: 'llm', multiDomain: false, selected: [{ key: 'ops', score: 1, active: true }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const history = [
+      { role: 'user' as const, content: 'CloudTrail로 모델 호출 조회해줘' },
+      { role: 'assistant' as const, content: '3곳에서 호출되고 있습니다' },
+    ];
+    await readStream(await POST(req({ prompt: '클러스터 안에 어디서 저걸 쓰나', messages: history, sessionId: 's'.repeat(36) })));
+    // classifyRoute is mocked (never actually invokes the classify callback), so pull the closure
+    // route.ts built and call it directly — this is what proves route.ts wires history through.
+    const opts = classifyRoute.mock.calls[0][2] as { classify: (p: string) => Promise<unknown> };
+    await opts.classify('클러스터 안에 어디서 저걸 쓰나');
+    expect(classifyPrompt).toHaveBeenCalledWith(expect.stringContaining('CloudTrail로 모델 호출 조회해줘'));
+    expect(classifyPrompt).toHaveBeenCalledWith(expect.stringContaining('클러스터 안에 어디서 저걸 쓰나'));
   });
 
   it('flag on: EXPLICIT pin to an inactive section short-circuits with the honest 🔒 (ADR-044 §2)', async () => {
@@ -412,6 +550,38 @@ describe('request body bound (OOM guard)', () => {
     const resp = await POST(req({ prompt: 'x'.repeat(600_000) })); // > 512KB chat cap
     expect(resp.status).toBe(413);
     expect(invokeAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe('malformed body.messages (bug fix, PR #138 review MINOR)', () => {
+  it('a non-array `messages` is dropped, not forwarded, and does not break the request', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const res = await POST(req({ prompt: 'q', messages: 'not-an-array', sessionId: 's'.repeat(36) }));
+    expect(res.status).toBe(200);
+    await readStream(res);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({ messages: [{ role: 'user', content: 'q' }] }));
+  });
+
+  it('an entry with non-string content is dropped, the rest of the array survives', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    pickGateway.mockReturnValue('ops');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+    const { POST } = await import('./route');
+    const res = await POST(req({
+      prompt: 'q',
+      messages: [{ role: 'user', content: 'fine' }, { role: 'user', content: 12345 }],
+      sessionId: 's'.repeat(36),
+    }));
+    expect(res.status).toBe(200);
+    await readStream(res);
+    expect(invokeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [{ role: 'user', content: 'fine' }, { role: 'user', content: 'q' }],
+    }));
   });
 });
 
@@ -676,7 +846,7 @@ describe('AWSops Assistant (product help + inactive fallback)', () => {
     assistantAnswer.mockResolvedValue('1) Integrations에서 Prometheus 등록 2) Skill 작성 3) Agent 생성');
     const { POST } = await import('./route');
     const body = await readStream(await POST(req({ prompt: 'prometheus 분석 agent 만들기 /customization', sessionId: 's'.repeat(36) })));
-    expect(assistantAnswer).toHaveBeenCalledWith('prometheus 분석 agent 만들기 /customization');
+    expect(assistantAnswer).toHaveBeenCalledWith('prometheus 분석 agent 만들기 /customization', { history: [] });
     expect(invokeAgent).not.toHaveBeenCalled();
     expect(synthesizeStream).not.toHaveBeenCalled();
     expect(body).toContain('Prometheus'); // single token survives typewriter chunk()
@@ -689,11 +859,11 @@ describe('AWSops Assistant (product help + inactive fallback)', () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     isProductHelpIntent.mockReturnValue(false);
-    // classifier auto-routed (method:'regex') to inactive observability
-    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'observability', score: 0.9, active: false }] });
-    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    // classifier auto-routed (method:'regex') to an inactive section (container)
+    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'container', score: 0.9, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    const body = await readStream(await POST(req({ prompt: 'prometheus p99 추세', sessionId: 's'.repeat(36) })));
+    const body = await readStream(await POST(req({ prompt: '파드 CrashLoop 원인', sessionId: 's'.repeat(36) })));
     expect(assistantAnswer).toHaveBeenCalled();
     expect(body).toContain('답변'); // chunk() splits on spaces
     expect(body).not.toContain('🔒'); // no dead-end
@@ -704,13 +874,25 @@ describe('AWSops Assistant (product help + inactive fallback)', () => {
     process.env.HYBRID_ROUTING_ENABLED = 'true';
     verifyUser.mockResolvedValue({ sub: 'u' });
     isProductHelpIntent.mockReturnValue(false);
-    // user pinned /observability → classifyRoute returns method:'pin'
-    classifyRoute.mockResolvedValue({ primary: 'observability', ranked: [{ key: 'observability', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'observability', score: 1, active: false }] });
-    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'observability', skill: 'observability', agentName: 'observability', skillHashes: [] });
+    // user pinned an inactive section (/container) → classifyRoute returns method:'pin'
+    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
     const { POST } = await import('./route');
-    const body = await readStream(await POST(req({ prompt: '아무거나', section: 'observability', sessionId: 's'.repeat(36) })));
+    const body = await readStream(await POST(req({ prompt: '아무거나', section: 'container', sessionId: 's'.repeat(36) })));
     expect(assistantAnswer).not.toHaveBeenCalled();
     expect(body).toContain('🔒'); // explicit choice → honest unavailable message
+  });
+
+  it('degrade-to-assistant fallback forwards the client history (bug fix: was context-blind)', async () => {
+    process.env.HYBRID_ROUTING_ENABLED = 'true';
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isProductHelpIntent.mockReturnValue(false);
+    classifyRoute.mockResolvedValue({ primary: 'container', ranked: [{ key: 'container', score: 0.9, active: false }], method: 'regex', multiDomain: false, selected: [{ key: 'container', score: 0.9, active: false }] });
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'container', skill: 'container', agentName: 'container', skillHashes: [] });
+    const history = [{ role: 'user' as const, content: '이전 질문' }, { role: 'assistant' as const, content: '이전 답변' }];
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: '파드 CrashLoop 원인', messages: history, sessionId: 's'.repeat(36) })));
+    expect(assistantAnswer).toHaveBeenCalledWith('파드 CrashLoop 원인', { history });
   });
 });
 

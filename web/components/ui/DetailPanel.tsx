@@ -1,11 +1,12 @@
 'use client';
-import { useEffect, type CSSProperties, type ReactNode } from 'react';
-import { useResizablePanel, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useResizablePanel, usePublishDockedWidth, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import { X } from 'lucide-react';
 import Badge from './Badge';
 import StatePill from './StatePill';
 import { buildDetailGroups, type DetailValue } from '@/lib/inventory-detail';
 import type { InvType } from '@/lib/inventory-types';
+import type { RdsInstanceMetrics } from '@/lib/metrics';
 
 /**
  * DetailPanel — right slide-in panel showing EVERY field of a resource row.
@@ -41,20 +42,80 @@ function renderValue(fmt: DetailValue) {
   }
 }
 
+// RDS detail panels show a live per-instance CloudWatch metrics table (v1 parity). Metrics are NOT in the
+// synced inventory row, so this fetches them on open (read-only) and degrades to a "메트릭 불가" note.
+const RDS_METRIC_ROWS: { key: keyof RdsInstanceMetrics; label: string; fmt: (v: number) => string }[] = [
+  { key: 'cpu', label: 'CPU', fmt: (v) => `${v}%` },
+  { key: 'connections', label: 'DB 커넥션', fmt: (v) => `${v}` },
+  { key: 'freeableMemory', label: '여유 메모리', fmt: (v) => `${(v / 1e6).toFixed(0)} MB` },
+  { key: 'freeStorage', label: '여유 스토리지', fmt: (v) => `${(v / 1e9).toFixed(1)} GB` },
+  { key: 'readIops', label: 'Read IOPS', fmt: (v) => `${v}` },
+  { key: 'writeIops', label: 'Write IOPS', fmt: (v) => `${v}` },
+  { key: 'netIn', label: 'Network In', fmt: (v) => `${(v / 1024).toFixed(1)} KB/s` },
+  { key: 'netOut', label: 'Network Out', fmt: (v) => `${(v / 1024).toFixed(1)} KB/s` },
+];
+
+function RdsMetricsSection({ instanceId }: { instanceId: string }) {
+  const [s, setS] = useState<{ loading: boolean; metrics: RdsInstanceMetrics | null; error: boolean }>({
+    loading: true, metrics: null, error: false,
+  });
+  useEffect(() => {
+    let alive = true;
+    setS({ loading: true, metrics: null, error: false });
+    fetch(`/api/inventory/rds/metrics?id=${encodeURIComponent(instanceId)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => { if (alive) setS({ loading: false, metrics: (d.instance ?? null) as RdsInstanceMetrics | null, error: false }); })
+      .catch(() => { if (alive) setS({ loading: false, metrics: null, error: true }); });
+    return () => { alive = false; };
+  }, [instanceId]);
+
+  return (
+    <section className="border-t border-ink-100 pt-3">
+      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-400">
+        인스턴스 메트릭 (CloudWatch)
+      </h3>
+      {s.loading ? (
+        <p className="text-[12px] text-ink-400">메트릭 로딩 중…</p>
+      ) : s.error || !s.metrics ? (
+        <p className="text-[12px] text-ink-300">메트릭 불가</p>
+      ) : (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+          {RDS_METRIC_ROWS.map((row) => {
+            const v = s.metrics![row.key];
+            return (
+              <div key={row.key} className="flex flex-col gap-0.5">
+                <dt className="font-mono text-[11px] text-ink-500">{row.label}</dt>
+                <dd className="text-[13px] text-ink-800">
+                  {typeof v === 'number' ? row.fmt(v) : <span className="text-ink-300">—</span>}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+      )}
+    </section>
+  );
+}
+
 export default function DetailPanel({
   title,
   data,
   spec,
+  resourceType,
   onClose,
   actions,
+  children,
   modal = true,
 }: {
   title?: string;
   data: Record<string, unknown> | null;
   spec?: InvType;
+  resourceType?: string; // inventory resource type (e.g. 'rds') — enables type-specific live metric sections
   onClose: () => void;
   // optional action slot pinned under the header (e.g. topology "ask AI about this resource").
   actions?: ReactNode;
+  // optional extra detail sections rendered after the field list.
+  children?: ReactNode;
   // modal=false: on lg the backdrop is transparent + pointer-events-none so the content behind
   // (e.g. the topology canvas) stays pannable/zoomable while the panel is docked. Mobile (below
   // lg) is always a fullscreen sheet, so it stays modal there regardless.
@@ -72,9 +133,13 @@ export default function DetailPanel({
   // Right-docked panels are user-resizable by default (drag the left edge; persisted).
   const { width, startResize } = useResizablePanel('awsops_detail_width', 480);
 
+  // Coordinate with the global chat so the two right-docked surfaces never overlap.
+  usePublishDockedWidth(!!data, width);
+
   if (!data) return null;
 
   const groups = buildDetailGroups(data, spec);
+  const rdsInstanceId = resourceType === 'rds' && typeof data.resource_id === 'string' ? data.resource_id : null;
 
   return (
     <>
@@ -131,6 +196,8 @@ export default function DetailPanel({
               </dl>
             </section>
           ))}
+          {rdsInstanceId && <RdsMetricsSection instanceId={rdsInstanceId} />}
+          {children}
         </div>
       </aside>
     </>

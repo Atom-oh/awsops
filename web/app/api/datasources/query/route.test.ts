@@ -3,12 +3,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const verifyUser = vi.fn();
 const invokeMcpLambdaTool = vi.fn();
 const getDatasource = vi.fn();
-const getCredentialById = vi.fn();
+const resolveConnConfig = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/mcp-lambda-invoke', () => ({ invokeMcpLambdaTool: (...a: unknown[]) => invokeMcpLambdaTool(...a) }));
-vi.mock('@/lib/datasources', () => ({ getDatasource: (...a: unknown[]) => getDatasource(...a) }));
-vi.mock('@/lib/integration-credentials', () => ({ getCredentialById: (...a: unknown[]) => getCredentialById(...a) }));
+vi.mock('@/lib/datasources', () => ({
+  getDatasource: (...a: unknown[]) => getDatasource(...a),
+  resolveConnConfig: (...a: unknown[]) => resolveConnConfig(...a),
+}));
 // NOTE: datasource-render is NOT mocked — the matrix→series normalization is exercised for real.
 
 function req(body: unknown) {
@@ -18,7 +20,7 @@ function req(body: unknown) {
 }
 
 beforeEach(() => {
-  for (const m of [verifyUser, invokeMcpLambdaTool, getDatasource, getCredentialById]) m.mockReset();
+  for (const m of [verifyUser, invokeMcpLambdaTool, getDatasource, resolveConnConfig]) m.mockReset();
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
   invokeMcpLambdaTool.mockResolvedValue({ resultType: 'vector', result: [] });
 });
@@ -32,7 +34,7 @@ describe('POST /api/datasources/query', () => {
 
   it('by INSTANCE id resolves the row + credential and passes an inline conn-config', async () => {
     getDatasource.mockResolvedValue({ id: 2, kind: 'prometheus', endpoint: 'http://s:9090', authType: 'none', isDefault: false, enabled: true });
-    getCredentialById.mockResolvedValue({ endpoint: 'http://s:9090', authType: 'none' });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://s:9090', authType: 'none' });
     const { POST } = await import('./route');
     expect((await POST(req({ id: 2, query: 'up' }))).status).toBe(200);
     const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
@@ -83,7 +85,7 @@ describe('POST /api/datasources/query', () => {
 
   it('SSRF-blocks a bad resolved endpoint (400, no invoke)', async () => {
     getDatasource.mockResolvedValue({ id: 3, kind: 'clickhouse', endpoint: 'http://169.254.169.254', authType: 'none', isDefault: false, enabled: true });
-    getCredentialById.mockResolvedValue({ endpoint: 'http://169.254.169.254', authType: 'none' });
+    resolveConnConfig.mockResolvedValue({ endpoint: 'http://169.254.169.254', authType: 'none' });
     const { POST } = await import('./route');
     expect((await POST(req({ id: 3, query: 'SELECT 1' }))).status).toBe(400);
     expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
@@ -103,5 +105,59 @@ describe('POST /api/datasources/query', () => {
     const res = await POST(req({ slug: 'prometheus', query: 'up', range: true }));
     expect(res.status).toBe(200);
     expect((await res.json()).result.shape).toBe('series');
+  });
+
+  // --- Part 2: range {window, step} args + validation + back-compat ---
+  it('range object {window,step} → range tool with computed start/end/step strings', async () => {
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300, step: 2 } }));
+    const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
+    expect(call.tool).toBe('prometheus_query_range');
+    expect(call.args.query).toBe('up');
+    expect(typeof call.args.start).toBe('string');
+    expect(typeof call.args.step).toBe('string');
+    expect(Number(call.args.end) - Number(call.args.start)).toBe(300);
+    expect(call.args.step).toBe('2');
+  });
+
+  it('range object with out-of-bounds window or step → 400 and no invoke', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 30, step: 2 } }))).status).toBe(400); // window < 60
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 999999, step: 2 } }))).status).toBe(400); // window > 86400
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300, step: 0 } }))).status).toBe(400); // step < 1
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300, step: 99999999 } }))).status).toBe(400); // step > 86400
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+  });
+
+  it('range object with non-integer window or step → 400', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300.5, step: 2 } }))).status).toBe(400);
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 300, step: 1.5 } }))).status).toBe(400);
+    expect(invokeMcpLambdaTool).not.toHaveBeenCalled();
+  });
+
+  it('range object too dense (ceil(window/step) > 5000) → 400, even with in-bounds window/step', async () => {
+    const { POST } = await import('./route');
+    expect((await POST(req({ slug: 'prometheus', query: 'up', range: { window: 86400, step: 1 } }))).status).toBe(400); // 86400 points
+    // a sane density (≈250 points, what the UI sends) is accepted
+    await POST(req({ slug: 'prometheus', query: 'up', range: { window: 3600, step: 14 } }));
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].tool).toBe('prometheus_query_range');
+  });
+
+  it('range:false and absent range → instant tool', async () => {
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'prometheus', query: 'up', range: false }));
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].tool).toBe('prometheus_query');
+    await POST(req({ slug: 'prometheus', query: 'up' }));
+    expect(invokeMcpLambdaTool.mock.calls.at(-1)![0].tool).toBe('prometheus_query');
+  });
+
+  it('legacy range:true → range tool with NO start/step args (1h connector default)', async () => {
+    const { POST } = await import('./route');
+    await POST(req({ slug: 'prometheus', query: 'up', range: true }));
+    const call = invokeMcpLambdaTool.mock.calls.at(-1)![0];
+    expect(call.tool).toBe('prometheus_query_range');
+    expect(call.args.start).toBeUndefined();
+    expect(call.args.step).toBeUndefined();
   });
 });

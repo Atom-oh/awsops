@@ -32,14 +32,17 @@ describe('deleteDatasource', () => {
     expect(deleteCredentialKeys).not.toHaveBeenCalled();
   });
 
-  it('cascades: schema cache → credential id key → integrations row (non-default)', async () => {
+  it('cascades: schema cache → graph queries → credential id key → integrations row (non-default)', async () => {
     query.mockResolvedValueOnce({ rows: [row({ id: 5, is_default: false })] }); // getDatasource
     await deleteDatasource(5);
     const stmts = query.mock.calls.map((c) => String(c[0]));
     const iCache = stmts.findIndex((s) => /DELETE FROM datasource_schemas/i.test(s));
+    const iGraph = stmts.findIndex((s) => /DELETE FROM datasource_graph_queries/i.test(s));
     const iRow = stmts.findIndex((s) => /DELETE FROM integrations/i.test(s));
     expect(iCache).toBeGreaterThanOrEqual(0);
+    expect(iGraph).toBeGreaterThanOrEqual(0); // M3: pre-built graph-query rows swept too
     expect(iRow).toBeGreaterThan(iCache); // cache deleted before the row
+    expect(iRow).toBeGreaterThan(iGraph); // graph queries deleted before the row
     expect(deleteCredentialKeys).toHaveBeenCalledWith(['5']); // id key only (not default)
   });
 
@@ -47,6 +50,8 @@ describe('deleteDatasource', () => {
     query
       .mockResolvedValueOnce({ rows: [row({ id: 5, is_default: true })] }) // getDatasource
       .mockResolvedValueOnce({ rows: [] })   // DELETE datasource_schemas
+      .mockResolvedValueOnce({ rows: [] })   // DELETE datasource_diag_signals
+      .mockResolvedValueOnce({ rows: [] })   // DELETE datasource_graph_queries
       .mockResolvedValueOnce({ rows: [] })   // DELETE integrations
       .mockResolvedValueOnce({ rows: [{ id: 8 }] }) // SELECT next default candidate
       .mockResolvedValueOnce({ rows: [] });  // UPDATE set new default
@@ -59,6 +64,8 @@ describe('deleteDatasource', () => {
     query
       .mockResolvedValueOnce({ rows: [row({ id: 5, is_default: true })] }) // getDatasource
       .mockResolvedValueOnce({ rows: [] })   // DELETE cache
+      .mockResolvedValueOnce({ rows: [] })   // DELETE datasource_diag_signals
+      .mockResolvedValueOnce({ rows: [] })   // DELETE datasource_graph_queries
       .mockResolvedValueOnce({ rows: [] })   // DELETE row
       .mockResolvedValueOnce({ rows: [] });  // SELECT next → none
     await deleteDatasource(5);

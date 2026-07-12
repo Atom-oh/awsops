@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
-import { INVENTORY_TYPES, inventoryGroups } from '@/lib/inventory-types';
+import { INVENTORY_TYPES, inventoryGroups, overviewGroups } from '@/lib/inventory-types';
 import Input from '@/components/ui/Input';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { cn } from '@/lib/cn';
@@ -22,11 +22,14 @@ function buildCommands(): Cmd[] {
     { href: '/security', label: 'Security', hint: '보안 점검' },
     { href: '/compliance', label: 'Compliance', hint: 'CIS 벤치마크' },
   ];
+  // Group overview destinations (non-singleton groups). Unique labels so they don't
+  // collide with the fixed feature links' React keys (`key={c.label}`).
+  const overviews: Cmd[] = overviewGroups().map((g) => ({ href: g.href!, label: `${g.group} — overview`, hint: 'Group overview' }));
   const inv: Cmd[] = inventoryGroups().flatMap((g) =>
     g.types.map((t) => ({ href: `/inventory/${t}`, label: INVENTORY_TYPES[t].label, hint: g.group })),
   );
   const themes: Cmd[] = THEMES.map((t) => ({ label: `Theme: ${THEME_LABELS[t]}`, hint: '테마', theme: t }));
-  return [...fixed, ...inv, ...themes];
+  return [...fixed, ...overviews, ...inv, ...themes];
 }
 
 export default function CommandPalette() {

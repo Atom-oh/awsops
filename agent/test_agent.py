@@ -7,6 +7,7 @@ time, none of which are available locally. We stub those modules in sys.modules 
 importing agent, so the pure helper `_filter_tools` can be imported and tested in
 isolation. This keeps the change within Task 2's file scope (agent.py + test_agent.py).
 """
+import asyncio
 import sys
 import types
 import unittest
@@ -286,10 +287,196 @@ class IntegrationToolMergeTest(unittest.TestCase):
 
 class TestDatasourceGuidance(unittest.TestCase):
     def test_monitoring_prompt_names_query_languages(self):
+        # Prometheus & ClickHouse moved to the Observability section; monitoring keeps the
+        # still-here datasources (Mimir→PromQL, Loki→LogQL, Tempo→TraceQL).
         mon = agent.SKILL_BASE["monitoring"]
-        for lang in ("PromQL", "LogQL", "TraceQL", "SQL"):
+        for lang in ("PromQL", "LogQL", "TraceQL"):
             self.assertIn(lang, mon)
         self.assertIn("Datasource schemas", mon)  # tells the agent to use the injected cache
+
+    def test_observability_prompt_covers_prometheus_and_clickhouse(self):
+        obs = agent.SKILL_BASE["observability"]
+        for token in ("Prometheus", "PromQL", "ClickHouse", "SQL"):
+            self.assertIn(token, obs)
+        self.assertIn("Datasource schemas", obs)  # uses the injected schema cache
+
+    def test_observability_aliases_to_external_obs_gateway(self):
+        self.assertEqual(agent._GATEWAY_ALIAS.get("observability"), "external-obs")
+
+    def test_resolve_gateway_key_handles_discovery_and_env_spellings(self):
+        # Discovery path: v2 gateway `awsops-v2-external-obs-gateway` → key `v2-external-obs`.
+        disc = {"network": "u", "ops": "u", "v2-external-obs": "u"}
+        self.assertEqual(agent._resolve_gateway_key("observability", disc), "v2-external-obs")
+        # Env fallback path: GATEWAYS_JSON uses the canonical `external-obs`.
+        env = {"network": "u", "ops": "u", "external-obs": "u"}
+        self.assertEqual(agent._resolve_gateway_key("observability", env), "external-obs")
+        # The 8 sections pass through unchanged (no alias, key present).
+        self.assertEqual(agent._resolve_gateway_key("network", disc), "network")
+        # Unknown / unprovisioned → DEFAULT_GATEWAY (never a hard crash).
+        self.assertEqual(agent._resolve_gateway_key("observability", {"ops": "u"}), agent.DEFAULT_GATEWAY)
+
+    def test_resolve_gateway_key_v2_only_discovery_no_keyerror(self):
+        # v2-ONLY discovery (v1 retired, not yet renamed): DEFAULT_GATEWAY 'ops' is absent,
+        # the key is 'v2-ops'. The resolver must return a PRESENT key (v2-external-obs / v2-ops),
+        # not a bare 'ops' that the call site would KeyError on.
+        v2only = {"v2-network": "u", "v2-ops": "u", "v2-external-obs": "u"}
+        self.assertEqual(agent._resolve_gateway_key("observability", v2only), "v2-external-obs")
+        self.assertEqual(agent._resolve_gateway_key("network", v2only), "v2-network")
+        # an unmatched role falls back to the v2-spelled default (never raises, never returns absent 'ops')
+        self.assertEqual(agent._resolve_gateway_key("nope", v2only), "v2-ops")
+
+    def test_resolve_gateway_key_empty_map_returns_default_not_crash(self):
+        # Degenerate (no gateways discovered): returns DEFAULT_GATEWAY; call site GATEWAYS.get → None
+        # → MCP try-block degrades to a tool-less answer (no crash outside the try).
+        self.assertEqual(agent._resolve_gateway_key("observability", {}), agent.DEFAULT_GATEWAY)
+
+
+class TestAntiHallucinationFooter(unittest.TestCase):
+    """The data agent once fabricated a non-existent 'Infra 에이전트'. The footer must give the real
+    roster + forbid inventing agents, and tell the agent to be honest when it lacks a tool."""
+
+    def test_footer_forbids_inventing_agents(self):
+        f = agent.COMMON_FOOTER.lower()
+        self.assertTrue("invent" in f or "make up" in f or "지어내" in agent.COMMON_FOOTER,
+                        "footer must forbid inventing agent names")
+
+    def test_footer_lists_real_section_roster(self):
+        f = agent.COMMON_FOOTER.lower()
+        for section in ("network", "data", "security", "cost", "monitoring", "ops"):
+            self.assertIn(section, f)
+        # the fabricated name must NOT be presented as a real agent
+        self.assertNotIn("infra agent", f)
+
+    def test_footer_tells_agent_to_be_honest_when_lacking_a_tool(self):
+        f = agent.COMMON_FOOTER.lower()
+        self.assertIn("tool", f)
+
+
+class TestOpsTopologyPrompt(unittest.TestCase):
+    """Ops gateway is the inventory_read MCP home — its prompt must route topology/unused asks
+    to the new tools instead of refusing or punting."""
+
+    def test_ops_prompt_mentions_inventory_tools(self):
+        ops = agent.SKILL_BASE["ops"]
+        for tool in ("find_unused_resources", "get_topology", "query_inventory"):
+            self.assertIn(tool, ops)
+
+
+class HandlerRoutingTest(unittest.TestCase):
+    """Task 4: handler routes to the flag-gated Anthropic dark path only when enabled AND no
+    integrations; rca mode wins; otherwise the Strands path. Stubs anthropic_loop + rca_orchestrator
+    in sys.modules (handler imports them lazily at call time)."""
+
+    def setUp(self):
+        self._saved = {k: sys.modules.get(k) for k in ("anthropic_loop", "rca_orchestrator")}
+        self.calls = {"run": 0, "rca": 0}
+
+        al = types.ModuleType("anthropic_loop")
+        al._use = True
+
+        def _should(payload):
+            return al._use
+
+        async def _run(payload):
+            self.calls["run"] += 1
+            yield {"delta": "ANTHROPIC_PATH"}
+
+        al.should_use_anthropic_loop = _should
+        al.run_anthropic_loop = _run
+        sys.modules["anthropic_loop"] = al
+        self._al = al
+
+        rca = types.ModuleType("rca_orchestrator")
+
+        def _handle(payload):
+            self.calls["rca"] += 1
+            return {"rca": "RESULT"}
+
+        rca.handle_rca = _handle
+        sys.modules["rca_orchestrator"] = rca
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+    def _drain(self, payload):
+        async def _c():
+            return [x async for x in agent.handler(payload)]
+        return asyncio.run(_c())
+
+    def test_delegates_to_anthropic_when_enabled_and_no_integrations(self):
+        self._al._use = True
+        out = self._drain({"messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(out, [{"delta": "ANTHROPIC_PATH"}])
+        self.assertEqual(self.calls["run"], 1)
+
+    def test_skips_anthropic_when_integrations_present(self):
+        self._al._use = True  # enabled, but integrations present ⇒ Strands path (minimal slice)
+        out = self._drain({"integrations": [{"name": "x"}]})  # no input ⇒ clean "No input provided."
+        self.assertEqual(self.calls["run"], 0)
+        self.assertEqual(out, [{"delta": "No input provided."}])
+
+    def test_skips_anthropic_when_disabled(self):
+        self._al._use = False
+        out = self._drain({})
+        self.assertEqual(self.calls["run"], 0)
+        self.assertEqual(out, [{"delta": "No input provided."}])
+
+    def test_rca_mode_wins_over_anthropic(self):
+        self._al._use = True
+        out = self._drain({"mode": "rca", "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(self.calls["rca"], 1)
+        self.assertEqual(self.calls["run"], 0)
+        self.assertEqual(out, [{"rca": "RESULT"}])
+
+
+class FakeStreamingAgent:
+    """Stands in for a Strands Agent: stream_async replays canned event dicts."""
+    def __init__(self, events):
+        self._events = events
+
+    async def stream_async(self, _user_input):
+        for e in self._events:
+            yield e
+
+
+class StreamTextTest(unittest.TestCase):
+    """_stream_text: provenance frames (model/tool) interleaved with text deltas."""
+
+    def _collect(self, events):
+        async def run():
+            return [c async for c in agent._stream_text(FakeStreamingAgent(events), 'q')]
+        return asyncio.run(run())
+
+    def test_model_frame_first_then_deltas(self):
+        out = self._collect([{"data": "hel"}, {"data": "lo"}])
+        self.assertEqual(out, [{"model": agent.MODEL_ID}, {"delta": "hel"}, {"delta": "lo"}])
+
+    def test_tool_use_emitted_once_per_tool_use_id(self):
+        # current_tool_use fires repeatedly while the tool input streams in — one {"tool"} per id.
+        out = self._collect([
+            {"current_tool_use": {"toolUseId": "t1", "name": "list_eks_clusters"}},
+            {"current_tool_use": {"toolUseId": "t1", "name": "list_eks_clusters"}},
+            {"data": "answer"},
+            {"current_tool_use": {"toolUseId": "t2", "name": "describe_cluster"}},
+        ])
+        self.assertEqual(out[1:], [
+            {"tool": "list_eks_clusters"},
+            {"delta": "answer"},
+            {"tool": "describe_cluster"},
+        ])
+
+    def test_nameless_or_idless_tool_events_skipped(self):
+        # The first partial event can arrive before the name; lifecycle events carry neither.
+        out = self._collect([
+            {"current_tool_use": {"toolUseId": "t1"}},
+            {"current_tool_use": {"name": "orphan"}},
+            {"event": "lifecycle"},
+        ])
+        self.assertEqual(out, [{"model": agent.MODEL_ID}])
 
 
 if __name__ == '__main__':

@@ -36,17 +36,35 @@ beforeEach(() => {
 });
 
 describe('triageAndCreateOrLink — dedup race (Addendum (a))', () => {
-  it('fresh correlation_key → New (single INSERT … ON CONFLICT returns the row)', async () => {
+  it('fresh correlation_key → New (INSERT … ON CONFLICT) then a trigger_event snapshot UPDATE', async () => {
     query.mockResolvedValueOnce({ rows: [{ id: 'inc-1' }] }); // INSERT RETURNING id (won)
+    query.mockResolvedValueOnce({ rows: [] });                // trigger_event UPDATE
     const { triageAndCreateOrLink } = await import('./incident');
-    const r = await triageAndCreateOrLink(ev());
+    const r = await triageAndCreateOrLink(ev({ source: 'cloudwatch', labels: { account_id: '123456789012' }, alarmArn: 'arn:aws:cloudwatch:::alarm:X' }));
     expect(r.decision).toBe('New');
     expect(r.incidentId).toBeTruthy();
     const sql = String(query.mock.calls[0][0]);
     expect(sql).toMatch(/INSERT INTO incidents/);
     expect(sql).toMatch(/ON CONFLICT \(correlation_key\) DO NOTHING/);
     expect(sql).toMatch(/RETURNING id/);
-    expect(query).toHaveBeenCalledTimes(1); // no link path
+    expect(query).toHaveBeenCalledTimes(2); // INSERT + trigger_event snapshot (New path only)
+    const upd = String(query.mock.calls[1][0]);
+    expect(upd).toMatch(/UPDATE incidents SET trigger_event/);
+    const snap = JSON.parse((query.mock.calls[1][1] as unknown[])[0] as string);
+    expect(snap.id).toBe('a1');
+    expect(snap.source).toBe('cloudwatch');
+    expect(snap.account).toBe('123456789012');
+    expect(snap.alarmArn).toBe('arn:aws:cloudwatch:::alarm:X');
+    expect(snap.services).toEqual(['api']);
+  });
+
+  it('New path is degrade-safe: a missing trigger_event column does NOT fail triage', async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: 'inc-1' }] });                                   // INSERT won
+    query.mockRejectedValueOnce(new Error('column "trigger_event" does not exist'));             // UPDATE throws
+    const { triageAndCreateOrLink } = await import('./incident');
+    const r = await triageAndCreateOrLink(ev());
+    expect(r.decision).toBe('New'); // snapshot is best-effort; triage still succeeds
+    expect(r.incidentId).toBeTruthy();
   });
 
   it('SAME correlation_key (lost race) → Linked: ON CONFLICT returns 0 rows, then link + bump last_event_at', async () => {

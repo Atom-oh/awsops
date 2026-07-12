@@ -4,9 +4,10 @@ data "aws_route53_zone" "main" {
 }
 
 resource "aws_acm_certificate" "cf" {
-  provider          = aws.use1
-  domain_name       = var.domain_name
-  validation_method = "DNS"
+  provider                  = aws.use1
+  domain_name               = var.domain_name
+  subject_alternative_names = var.extra_domain_aliases
+  validation_method         = "DNS"
   lifecycle { create_before_destroy = true }
 }
 
@@ -18,11 +19,12 @@ resource "aws_route53_record" "cf_validation" {
       type   = dvo.resource_record_type
     }
   }
-  zone_id = data.aws_route53_zone.main.zone_id
-  name    = each.value.name
-  type    = each.value.type
-  records = [each.value.record]
-  ttl     = 60
+  zone_id         = data.aws_route53_zone.main.zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 60
+  allow_overwrite = true
 }
 
 resource "aws_acm_certificate_validation" "cf" {
@@ -67,7 +69,7 @@ resource "aws_cloudfront_vpc_origin" "alb" {
 resource "aws_cloudfront_distribution" "main" {
   enabled     = true
   comment     = "AWSops v2 spine — ${var.domain_name}"
-  aliases     = [var.domain_name]
+  aliases     = concat([var.domain_name], var.extra_domain_aliases)
   price_class = "PriceClass_200"
 
   origin {
@@ -122,12 +124,20 @@ resource "aws_cloudfront_distribution" "main" {
 }
 
 resource "aws_route53_record" "alias" {
-  zone_id = data.aws_route53_zone.main.zone_id
-  name    = var.domain_name
-  type    = "A"
+  for_each = toset(concat([var.domain_name], var.extra_domain_aliases))
+  zone_id  = data.aws_route53_zone.main.zone_id
+  name     = each.value
+  type     = "A"
   alias {
     name                   = aws_cloudfront_distribution.main.domain_name
     zone_id                = aws_cloudfront_distribution.main.hosted_zone_id
     evaluate_target_health = false
   }
+}
+
+# ADR-016 Phase 2.2: singleton -> for_each state reshape (v2 domain only, before the v1 alias is
+# added in Phase 2.5) — pure state remap, no infra change.
+moved {
+  from = aws_route53_record.alias
+  to   = aws_route53_record.alias["awsops-v2.atomai.click"]
 }

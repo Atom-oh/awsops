@@ -7,7 +7,15 @@ export interface Msg {
   role: 'user' | 'assistant'; content: string; gateway?: string; streaming?: boolean;
   ranked?: RankedChip[]; method?: string; // ADR-038 meta
   via?: string; // ADR-044 meta: 'multi:network+data' when the answer is a cross-domain synthesis
+  status?: { phase: string; elapsedMs?: number };
+  // Answer-provenance footer (design handoff 개선안 ③): known only after the invoke resolves,
+  // so these arrive on a second `meta` frame — absent against a legacy agent image.
+  tools?: string[]; model?: string; elapsedMs?: number;
 }
+
+// Mirrors agent.py's MODEL_ID label for the (rare) legacy-image case where the stream carries
+// no `{"model": ...}` provenance frame — never shown once a redeployed agent reports its own.
+const FALLBACK_MODEL_LABEL = 'Claude Sonnet 4.6';
 
 export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?: (key: string) => void }) {
   return (
@@ -34,29 +42,71 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
             }
           >
             {viaKeys && viaKeys.length > 1 ? (
-              <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[10px] font-semibold text-ink-500" aria-label="통합 분석">
+              <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-ink-500" aria-label="통합 분석">
                 {viaKeys.map((k, idx) => {
                   const s = sectionByKey(k);
                   return s ? (
-                    <span key={k} className="flex items-center gap-0.5" style={{ color: s.color }}>
-                      {idx > 0 && <span className="text-ink-300">+</span>}{s.icon} {s.label}
+                    <span key={k} className="flex items-center gap-1">
+                      {idx > 0 && <span className="text-ink-300">+</span>}
+                      <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ background: s.color }} />
+                      <span style={{ color: s.color }}>{s.label}</span>
                     </span>
                   ) : null;
                 })}
                 <span className="ml-1 font-normal text-ink-400">· 통합 분석</span>
               </div>
             ) : sec && (
-              <div className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold" style={{ color: sec.color }}>
-                <span>{sec.icon}</span> {sec.label}
+              <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-ink-500">
+                <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ background: sec.color }} />
+                {sec.label}
               </div>
             )}
             {/* Plain text for user messages AND while the assistant is still streaming —
                 rendering Markdown per token re-parses the whole tree (O(n²)) and flashes
                 half-built tables. Switch to Markdown once the stream settles. */}
             {me || m.streaming
-              ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>
+              ? (m.streaming && !m.content
+                ? (m.status
+                  ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink-500">
+                      {m.status.phase === 'working' && m.status.elapsedMs !== undefined
+                        ? `🔎 분석 중… ${Math.floor(m.status.elapsedMs / 1000)}초`
+                        : '🔎 분석 중…'}
+                    </div>
+                  : null)
+                : <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>)
               : <Markdown>{m.content}</Markdown>}
-            {m.streaming && <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-brand-500 align-middle" />}
+            {m.streaming && (!m.content && m.status ? null : <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-brand-500 align-middle" />)}
+            {!me && !m.streaming && sec && (
+              <div className="mt-3 border-t border-ink-100 pt-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-md border border-brand-200 bg-brand-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-brand-700">
+                    AgentCore → {sec.label} Gateway
+                  </span>
+                  <span className="font-mono text-[11px] text-ink-500">{m.model ?? FALLBACK_MODEL_LABEL}</span>
+                  {m.elapsedMs !== undefined && (
+                    <span className="tabular-nums text-[11px] text-ink-300">{(m.elapsedMs / 1000).toFixed(1)}s</span>
+                  )}
+                  <button
+                    onClick={() => void navigator.clipboard?.writeText(m.content)}
+                    aria-label="답변 복사"
+                    className="ml-auto text-ink-400 hover:text-ink-800"
+                  >
+                    ⧉ 복사
+                  </button>
+                </div>
+                {m.tools && m.tools.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] text-ink-400">Tools</span>
+                    {m.tools.slice(0, 4).map((t) => (
+                      <span key={t} className="rounded border border-ink-100 bg-paper-muted px-1.5 py-0.5 font-mono text-[10.5px] text-ink-500">
+                        {t}
+                      </span>
+                    ))}
+                    {m.tools.length > 4 && <span className="text-[10.5px] text-ink-300">+{m.tools.length - 4}</span>}
+                  </div>
+                )}
+              </div>
+            )}
             {alts.length > 0 && (
               <div className="mt-2">
                 {/* ADR-044: chips are a SECONDARY manual aid (cross-domain is auto-synthesized). */}
@@ -73,7 +123,7 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                       className="rounded-md border px-2 py-1 text-[11px] font-medium transition-colors"
                       style={{ background: `${s.color}12`, borderColor: `${s.color}40`, color: s.color }}
                     >
-                      → {s.icon} {s.label}로 다시
+                      → {s.label}로 다시
                     </button>
                   );
                 })}

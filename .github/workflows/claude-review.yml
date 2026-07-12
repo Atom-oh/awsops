@@ -1,0 +1,70 @@
+name: Claude Code Review
+
+# HYBRID review — the strong Claude voice via the OFFICIAL anthropics/claude-code-action on Bedrock,
+# wired to the SAME M1 security model as pr-review.yml (NEVER execute PR-head code):
+#
+#   - pull_request_target (trusted secrets/token context) — NOT pull_request.
+#   - Checkout the TRUSTED BASE (base.sha), never the PR head. So the .claude/ hooks present at
+#     agent startup are the BASE (trusted) versions — a PR that edits .claude/hooks/*.sh CANNOT run
+#     code on this privileged self-hosted runner (the hole that sank the first cut of this file).
+#   - The PR changes are handed to Claude as DATA (a diff file), not checked out / executed.
+#   - Read-only tool allowlist (Read/Grep/Glob): Claude may inspect the trusted base for context but
+#     cannot Bash/Write/network — defense-in-depth against prompt-injection inside the diff data.
+#   - same-repo guard (no forks), matching pr-review.yml.
+#
+# Auth: Bedrock via the ambient EKS Pod Identity SigV4 on awsops-claude-arm (same as the panel) — no
+# aws-actions/configure-aws-credentials / OIDC step.
+#
+# ⚠️ VALIDATE ON A TEST PR (GitHub Actions can't run locally): (a) claude-code-action @v1 input names
+#    (use_bedrock / claude_args / prompt) and that `--allowedTools Read,Grep,Glob` is honored via
+#    claude_args; (b) that it posts a review under pull_request_target; (c) ambient Bedrock pickup.
+#    If a step needs PR-head context it does NOT get here (by design — that's the security boundary).
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+jobs:
+  claude-review:
+    name: Claude Code Review
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: awsops-claude-arm
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      AWS_REGION: us-east-1
+    steps:
+      # SECURITY (M1): trusted BASE only — never the PR head. Hooks here are base (trusted) versions.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      # PR changes as DATA (not checked out / executed). Written into the workspace so the read-only
+      # Read tool (scoped to the working dir) can open it.
+      - name: Fetch PR diff (data only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr diff "$PR_NUMBER" > "$GITHUB_WORKSPACE/.ci-pr-diff.txt"
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          use_bedrock: "true"
+          # Read-only: inspect the trusted base for context; NO Bash/Write/network (injection defense).
+          claude_args: |
+            --model us.anthropic.claude-opus-4-8
+            --allowedTools Read,Grep,Glob
+          prompt: |
+            You are reviewing a pull request. Its unified diff is in the file `.ci-pr-diff.txt` in the
+            current directory — READ that file; that is the change under review. The repository BASE is
+            checked out here (read-only) — read the base files the diff touches for context before
+            flagging anything as missing. Do NOT attempt to run commands; you have read-only tools.
+            NOTE: the live DB schema = the frozen baseline `terraform/v2/foundation/data/schema.sql`
+            PLUS every `terraform/v2/foundation/migrations/*.sql` (applied by `make migrate`) — a
+            column/CHECK absent from schema.sql is NOT missing if a migration adds it.
+            Review for bugs, security risks, logic errors, and CLAUDE.md / AGENTS.md convention
+            violations. Post concise findings grouped CRITICAL / MAJOR / MINOR. 한국어+영문 혼용 가능.
