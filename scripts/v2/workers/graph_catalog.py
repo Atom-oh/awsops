@@ -24,7 +24,9 @@ service-graph metric exists; Loki structurally cannot contribute call-graph data
 editing this catalog forces a rebuild even when the datasource's schema is unchanged.
 """
 
-CATALOG_VERSION = "v1"
+# v2: db.table identifiers now quoted per-segment (`db`.`table`) — bump forces a catalog rebuild
+# so already-cached instances regenerate the corrected query (the v1 `db.table` form 404'd).
+CATALOG_VERSION = "v2"
 
 # The OTel ClickHouse exporter's default `otel_traces` column shape. A table matching this column
 # SET (regardless of its actual name) is treated as the span source.
@@ -41,8 +43,13 @@ def _quote_identifier(name):
     """Backtick-quote a ClickHouse identifier, doubling any inner backtick (ClickHouse's escape
     convention). The table name comes from this instance's own introspected schema (SHOW TABLES),
     not attacker-controlled user input, but a bare f-string interpolation is still an
-    identifier-injection smell worth closing (co-agent consensus review finding, 2026-07-08)."""
-    return "`" + str(name).replace("`", "``") + "`"
+    identifier-injection smell worth closing (co-agent consensus review finding, 2026-07-08).
+
+    A `db.table` name (the shape clickhouse_mcp's introspection emits — `f"{database}.{name}"`) must
+    have EACH dot-separated part quoted independently → `db`.`table`. Wrapping the whole string in one
+    pair (`` `db.table` ``) makes ClickHouse read it as a SINGLE identifier literally containing a dot,
+    resolved against the CURRENT database → UNKNOWN_TABLE (the trace layer silently stayed empty)."""
+    return ".".join("`" + part.replace("`", "``") + "`" for part in str(name).split("."))
 
 
 def _clickhouse_trace_spans(schema):

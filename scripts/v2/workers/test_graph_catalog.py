@@ -62,6 +62,17 @@ class TestClickhouse:
         by = _by_key(gc.build_graph_queries("clickhouse", schema))
         assert "`my``spans`" in by["trace_spans"]["query"]["args_template"]["sql"]
 
+    def test_a_db_qualified_table_name_quotes_each_segment_separately(self):
+        # Regression: clickhouse_mcp introspection emits `f"{database}.{name}"` (e.g. otel.otel_traces).
+        # Wrapping the whole thing in one backtick pair (`otel.otel_traces`) makes ClickHouse read it
+        # as a single dotted identifier in the CURRENT db → UNKNOWN_TABLE → the trace layer stayed
+        # empty. Each segment must be quoted independently.
+        schema = {"tables": [{"name": "otel.otel_traces", "columns": OTEL_COLUMNS}]}
+        by = _by_key(gc.build_graph_queries("clickhouse", schema))
+        sql = by["trace_spans"]["query"]["args_template"]["sql"]
+        assert "`otel`.`otel_traces`" in sql
+        assert "`otel.otel_traces`" not in sql
+
     def test_unavailable_when_no_table_matches(self):
         schema = {"tables": [{"name": "unrelated", "columns": [{"name": "x", "type": "Int64"}]}]}
         by = _by_key(gc.build_graph_queries("clickhouse", schema))

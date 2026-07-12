@@ -22,6 +22,7 @@ export interface TraceSpan {
   k8sNamespace?: string;
   k8sPod?: string;
   k8sDeployment?: string;
+  k8sCluster?: string;
   startMs: number;
   durationMs: number;
 }
@@ -106,6 +107,8 @@ export function mapOtelRow(row: OtelTracesRow): TraceSpan {
   if (pod) out.k8sPod = pod;
   const deploy = res['k8s.deployment.name'];
   if (deploy) out.k8sDeployment = deploy;
+  const cluster = res['k8s.cluster.name'];
+  if (cluster) out.k8sCluster = cluster;
   return out;
 }
 
@@ -245,6 +248,7 @@ export function mapTempoTrace(traceId: string, result: unknown): TraceSpan[] {
         const ns = res['k8s.namespace.name']; if (ns) item.k8sNamespace = ns;
         const pod = res['k8s.pod.name']; if (pod) item.k8sPod = pod;
         const deploy = res['k8s.deployment.name']; if (deploy) item.k8sDeployment = deploy;
+        const cluster = res['k8s.cluster.name']; if (cluster) item.k8sCluster = cluster;
         out.push(item);
       }
     }
