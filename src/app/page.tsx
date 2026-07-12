@@ -297,7 +297,7 @@ export default function DashboardPage() {
       {/* Row 3: Security, Monitoring & Cost / 보안, 모니터링 & 비용 */}
       <div>
         <h2 className="text-xs font-mono uppercase text-gray-400 tracking-wider mb-3">{t('dashboard.securityMonitoringCost')}</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 auto-rows-fr gap-4">
           <CardLink href="/security" className={totalIssues > 0 ? 'ring-1 ring-accent-red/30 rounded-lg' : ''}>
             <StatsCard label={t('dashboard.securityIssues')} value={totalIssues} icon={ShieldCheck}
               color={totalIssues > 0 ? 'red' : 'green'} highlight
