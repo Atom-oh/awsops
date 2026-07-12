@@ -212,7 +212,12 @@ export async function rebuildTraceGraph(
   };
   const svcId = (svc: string) => `svc:${svc}`;
   const dbId = (sys: string, hostOrName: string) => `db:${sys}:${hostOrName}`;
-  const wlId = (ns: string, dep: string) => `workload:${ns}/${dep}`;
+  // cluster-qualified when known: the same namespace/deployment name commonly exists on more than
+  // one onboarded EKS cluster (e.g. the same MSA replicated across az-a/az-c) — an unqualified id
+  // would merge them into one node whose meta.cluster is whichever span happened to land first,
+  // sending the service-map deep-link to the wrong cluster (review finding, PR #155).
+  const wlId = (ns: string, dep: string, cluster?: string) =>
+    cluster ? `workload:${cluster}/${ns}/${dep}` : `workload:${ns}/${dep}`;
   const svcSpanCount = new Map<string, number>();
 
   for (const s of spans) {
@@ -255,16 +260,22 @@ export async function rebuildTraceGraph(
     }
     // service → workload (runs_on): the workload the span originates from (k8s attrs)
     if (s.k8sNamespace && s.k8sDeployment) {
-      const id = wlId(s.k8sNamespace, s.k8sDeployment);
+      const id = wlId(s.k8sNamespace, s.k8sDeployment, s.k8sCluster);
       if (!nodes.has(id)) {
         // workload eks_ref/tg_ref bridge refs are best-effort; EKS node data isn't readily queryable
         // here (pods are live in-cluster, not synced). TODO(trace-topology): resolve eks_ref/tg_ref.
         // meta.cluster (from the span's k8s.cluster.name resource attr) lets the service-map UI
         // deep-link to /topology?cluster=eks:<name> — the nav bridge to the main flow topology's
         // cluster filter (which reads the same cluster name off live-resolved EKS target nodes).
+        // ponytail: a span with no k8s.cluster.name still gets an unqualified node (deep-link just
+        // stays inactive for it, graceful) rather than trying to merge it into a clustered node —
+        // resource attrs are consistently present-or-absent per service, so real mixing is rare.
         const meta: Record<string, unknown> = { namespace: s.k8sNamespace, deployment: s.k8sDeployment, pods: [] as string[] };
         if (s.k8sCluster) meta.cluster = s.k8sCluster;
-        nodes.set(id, { id, kind: 'workload', label: `${s.k8sNamespace}/${s.k8sDeployment}`, meta });
+        const label = s.k8sCluster
+          ? `${s.k8sNamespace}/${s.k8sDeployment} @${s.k8sCluster}`
+          : `${s.k8sNamespace}/${s.k8sDeployment}`;
+        nodes.set(id, { id, kind: 'workload', label, meta });
       }
       if (s.k8sPod) {
         const pods = (nodes.get(id)!.meta!.pods as string[]);

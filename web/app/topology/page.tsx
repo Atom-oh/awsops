@@ -267,11 +267,14 @@ export default function TopologyPage() {
   useEffect(() => { load(); }, [load]);
 
   // Deep-link from the service map (/topology/services): ?cluster=<resolved:name> seeds the cluster
-  // filter so a trace workload click lands on this cluster's request path. Read once on mount from
+  // filter so a trace workload click lands on this cluster's request path. Reads directly from
   // window.location (no useSearchParams → no Suspense boundary needed for the standalone build).
+  // Also re-reads on popstate so browser back/forward after the filter changes tracks the URL.
   useEffect(() => {
-    const c = new URLSearchParams(window.location.search).get('cluster');
-    if (c) setClusterFilter(c);
+    const read = () => setClusterFilter(new URLSearchParams(window.location.search).get('cluster') ?? '');
+    read();
+    window.addEventListener('popstate', read);
+    return () => window.removeEventListener('popstate', read);
   }, []);
 
   const dark = useTheme() === 'dark';

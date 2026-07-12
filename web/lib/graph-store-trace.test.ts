@@ -71,16 +71,45 @@ describe('rebuildTraceGraph aggregation', () => {
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('COMMIT'));
   });
 
-  it('stamps meta.cluster on the workload node from the span k8s.cluster.name (deep-link bridge)', async () => {
+  it('stamps meta.cluster on the workload node from the span k8s.cluster.name (deep-link bridge), ' +
+    'and qualifies the node id by cluster so it does not merge with other clusters (PR #155 MAJOR fix)', async () => {
     const withCluster: TraceSpan[] = [
       span({ traceId: 'x', spanId: 'p', service: 'checkout', k8sNamespace: 'shop', k8sDeployment: 'checkout', k8sCluster: 'mall-apne2-az-a' }),
     ];
     const { pool, params } = mockPool();
     await rebuildTraceGraph(pool as never, [new FakeTraceSource(withCluster, true)], 'RUNC');
     // node upsert params = [id, kind, label, metaJson, runId, class]; find the workload node row.
-    const wl = params.find((p) => p[0] === 'workload:shop/checkout');
+    const wl = params.find((p) => p[0] === 'workload:mall-apne2-az-a/shop/checkout');
     expect(wl).toBeTruthy();
     expect(JSON.parse(String(wl![3])).cluster).toBe('mall-apne2-az-a');
+  });
+
+  it('the SAME namespace/deployment on two different clusters produces two distinct workload ' +
+    'nodes, each keeping its own cluster (regression: an unqualified id would merge them and pin ' +
+    'meta.cluster to whichever span landed first, sending the deep-link to the wrong cluster)', async () => {
+    const twoClusters: TraceSpan[] = [
+      span({ traceId: 'x', spanId: 'a', service: 'checkout', k8sNamespace: 'shop', k8sDeployment: 'checkout', k8sCluster: 'mall-apne2-az-a' }),
+      span({ traceId: 'y', spanId: 'b', service: 'checkout', k8sNamespace: 'shop', k8sDeployment: 'checkout', k8sCluster: 'mall-apne2-az-c' }),
+    ];
+    const { pool, params } = mockPool();
+    await rebuildTraceGraph(pool as never, [new FakeTraceSource(twoClusters, true)], 'RUNC2');
+    const wlA = params.find((p) => p[0] === 'workload:mall-apne2-az-a/shop/checkout');
+    const wlC = params.find((p) => p[0] === 'workload:mall-apne2-az-c/shop/checkout');
+    expect(wlA).toBeTruthy();
+    expect(wlC).toBeTruthy();
+    expect(JSON.parse(String(wlA![3])).cluster).toBe('mall-apne2-az-a');
+    expect(JSON.parse(String(wlC![3])).cluster).toBe('mall-apne2-az-c');
+  });
+
+  it('a span with no k8s.cluster.name still gets an unqualified workload node (graceful, no throw)', async () => {
+    const noCluster: TraceSpan[] = [
+      span({ traceId: 'x', spanId: 'p', service: 'checkout', k8sNamespace: 'shop', k8sDeployment: 'checkout' }),
+    ];
+    const { pool, params } = mockPool();
+    await rebuildTraceGraph(pool as never, [new FakeTraceSource(noCluster, true)], 'RUNC3');
+    const wl = params.find((p) => p[0] === 'workload:shop/checkout');
+    expect(wl).toBeTruthy();
+    expect(JSON.parse(String(wl![3])).cluster).toBeUndefined();
   });
 
   it('confidence is normalized to (0,1] by the max edge count (spec contract, M3)', async () => {
