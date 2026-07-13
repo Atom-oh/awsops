@@ -124,7 +124,7 @@ export default function StatTile({
       <Link
         href={href}
         aria-label={`${eyebrow ?? label} 상세 보기`}
-        className="block rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+        className="block h-full rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
       >
         {inner}
       </Link>

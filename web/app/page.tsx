@@ -237,21 +237,19 @@ export default function Home() {
                 </div>
               )}
             </Link>
-            <div className="flex flex-col gap-4">
-              <StatTile
-                label="CIS 컴플라이언스"
-                value={compliancePassRate != null ? `${compliancePassRate.toFixed(0)}%` : DASH}
-                href="/compliance"
-                variant={compliancePassRate != null ? passVariant(compliancePassRate) : 'warn'}
-                hint={
-                  compliancePassRate != null
-                    ? `Alarm ${ov?.compliance?.alarm ?? 0}건 · 완료 ${
-                        ov?.compliance?.finished_at ? new Date(ov.compliance.finished_at).toLocaleString('ko-KR') : DASH
-                      }`
-                    : '벤치마크 실행 →'
-                }
-              />
-            </div>
+            <StatTile
+              label="CIS 컴플라이언스"
+              value={compliancePassRate != null ? `${compliancePassRate.toFixed(0)}%` : DASH}
+              href="/compliance"
+              variant={compliancePassRate != null ? passVariant(compliancePassRate) : 'warn'}
+              hint={
+                compliancePassRate != null
+                  ? `Alarm ${ov?.compliance?.alarm ?? 0}건 · 완료 ${
+                      ov?.compliance?.finished_at ? new Date(ov.compliance.finished_at).toLocaleString('ko-KR') : DASH
+                    }`
+                  : '벤치마크 실행 →'
+              }
+            />
           </div>
         </section>
 
