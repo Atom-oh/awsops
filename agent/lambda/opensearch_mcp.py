@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
-from cross_account import get_client, get_credentials, get_role_arn
+from cross_account import get_client, get_credentials, get_role_arn, resolve_tool_name
 
 REGION_DEFAULT = "ap-northeast-2"
 DEFAULT_SIZE = 20
@@ -159,7 +159,7 @@ _TOOLS = {
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
-    t = params.get("tool_name", "")
+    t = resolve_tool_name(params, context)
     args = params.get("arguments", params)
     if not isinstance(args, dict):
         args = {}

@@ -16,7 +16,7 @@ definitive, packet-level verdict.
 import ipaddress
 import json
 
-from cross_account import get_client, get_role_arn
+from cross_account import get_client, get_role_arn, resolve_tool_name
 
 _NUM = {"tcp": "6", "udp": "17", "icmp": "1"}
 _EPHEMERAL = 49152  # one representative port in the 1024-65535 ephemeral range; the stateless NACL
@@ -231,7 +231,7 @@ def check_reachability(ec2, source, destination, port, proto):
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
-    tool_name = params.get("tool_name", "") or "check_reachability"
+    tool_name = resolve_tool_name(params, context, default="check_reachability")
     args = params.get("arguments", params)
     target_account_id = args.pop("target_account_id", None) if isinstance(args, dict) else None
     role_arn = get_role_arn(target_account_id) if target_account_id else None

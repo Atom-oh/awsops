@@ -135,3 +135,49 @@ def test_get_credentials_other_builds_credentials(monkeypatch):
     assert c.access_key == "AKIAEXAMPLE"
     assert c.secret_key == "secretkey"
     assert c.token == "tok"
+
+
+# ---- resolve_tool_name (AgentCore Gateway passes the tool via client_context, not event) ----
+class _FakeContext:
+    def __init__(self, custom=None):
+        self.client_context = _FakeClientContext(custom) if custom is not None else None
+
+
+class _FakeClientContext:
+    def __init__(self, custom):
+        self.custom = custom
+
+
+def test_resolve_tool_name_prefers_event_tool_name():
+    # BFF direct-invoke path (datasource explorer) still puts tool_name in the event.
+    ctx = _FakeContext(custom={"bedrockAgentCoreToolName": "clickhouse-mcp-target___clickhouse_schema"})
+    assert ca.resolve_tool_name({"tool_name": "clickhouse_tables"}, ctx) == "clickhouse_tables"
+
+
+def test_resolve_tool_name_falls_back_to_client_context():
+    # Gateway invoke path: event has no tool_name, only client_context.custom.
+    ctx = _FakeContext(custom={"bedrockAgentCoreToolName": "clickhouse-mcp-target___clickhouse_tables"})
+    assert ca.resolve_tool_name({}, ctx) == "clickhouse_tables"
+
+
+def test_resolve_tool_name_strips_only_the_last_separator():
+    # Tool names can themselves contain underscores; only the target___tool separator splits.
+    ctx = _FakeContext(custom={"bedrockAgentCoreToolName": "iam-mcp-target___list_role_policies"})
+    assert ca.resolve_tool_name({}, ctx) == "list_role_policies"
+
+
+def test_resolve_tool_name_no_context_returns_default():
+    assert ca.resolve_tool_name({}, None) == ""
+    assert ca.resolve_tool_name({}, None, default="fallback_tool") == "fallback_tool"
+
+
+def test_resolve_tool_name_context_without_client_context_attr():
+    class _Bare:
+        pass
+
+    assert ca.resolve_tool_name({}, _Bare()) == ""
+
+
+def test_resolve_tool_name_client_context_without_custom():
+    ctx = _FakeContext(custom=None)
+    assert ca.resolve_tool_name({}, ctx) == ""

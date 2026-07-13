@@ -92,10 +92,21 @@ def suggest_aws_commands(query):
     return suggestions[:10]
 
 
+def _resolve_tool_name(params, context):
+    """Same resolution as cross_account.resolve_tool_name, inlined to keep this Lambda's
+    stated no-boto3/no-cross_account dependency footprint (see module docstring)."""
+    tool_name = (params.get("tool_name") or "") if isinstance(params, dict) else ""
+    if not tool_name and context is not None:
+        client_context = getattr(context, "client_context", None)
+        custom = getattr(client_context, "custom", None) or {}
+        tool_name = custom.get("bedrockAgentCoreToolName", "")
+    return tool_name.rsplit("___", 1)[-1] if tool_name else ""
+
+
 def lambda_handler(event, context):
     """Entry point. Read-only: only prompt_understanding + suggest_aws_commands are valid tools."""
     params = event if isinstance(event, dict) else json.loads(event)
-    tool_name = params.get("tool_name", "")
+    tool_name = _resolve_tool_name(params, context)
     arguments = params.get("arguments", params)
     # cross-account parity: accept-and-ignore (these tools make no AWS calls).
     if isinstance(arguments, dict):

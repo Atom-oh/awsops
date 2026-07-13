@@ -14,6 +14,8 @@ import os
 import urllib.error
 import urllib.request
 
+from cross_account import resolve_tool_name
+
 BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 DEFAULT_PAGE_SIZE = 10
@@ -168,7 +170,7 @@ _TOOLS = {
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
-    t = params.get("tool_name", "")
+    t = resolve_tool_name(params, context)
     args = params.get("arguments", params)
     if isinstance(args, dict):
         args.pop("target_account_id", None)  # gateway injects it; Notion is account-agnostic
