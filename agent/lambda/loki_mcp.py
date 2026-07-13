@@ -13,6 +13,7 @@ import re
 import time
 from urllib.parse import quote, urlencode
 
+from cross_account import resolve_tool_name
 from datasource_http import (
     NotConnected, SsrfBlocked, assert_host_allowed, auth_headers, health, http_json, load_datasource,
     set_request_conn,
@@ -177,7 +178,7 @@ _TOOLS["loki_health"] = loki_health
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
-    t = params.get("tool_name", "")
+    t = resolve_tool_name(params, context)
     args = params.get("arguments", params)
     inst = args.get("instance_id") if isinstance(args, dict) else None
     conn = params.get("conn_config")

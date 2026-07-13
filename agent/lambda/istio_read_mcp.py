@@ -23,7 +23,7 @@ import ssl
 import tempfile
 from urllib.request import Request, urlopen
 
-from cross_account import get_client, get_role_arn
+from cross_account import get_client, get_role_arn, resolve_tool_name
 
 # DNS-1123 label (k8s namespace name): lowercase alphanumerics + hyphens, <=63 chars.
 _NS_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -128,7 +128,7 @@ def _mesh_overview(session):
 
 def lambda_handler(event, context):
     params = event if isinstance(event, dict) else json.loads(event)
-    tool_name = params.get("tool_name", "")
+    tool_name = resolve_tool_name(params, context)
     args = params.get("arguments", params)
     target_account_id = args.pop("target_account_id", None) if isinstance(args, dict) else None
     role_arn = get_role_arn(target_account_id) if target_account_id else None

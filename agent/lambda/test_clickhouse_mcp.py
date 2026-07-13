@@ -162,6 +162,21 @@ class TestTools(unittest.TestCase):
                                      "arguments": {"sql": "SELECT 1", "target_account_id": "222222222222"}}, None)
         self.assertEqual(out["statusCode"], 200)
 
+    def test_gateway_invoke_resolves_tool_name_from_client_context(self):
+        # Reproduces the "unknown tool" bug: AgentCore Gateway invokes with no event
+        # tool_name at all — only context.client_context.custom.bedrockAgentCoreToolName
+        # ('<target>___<tool>'). Before the fix this hit the `fn is None` branch.
+        class _ClientContext:
+            custom = {"bedrockAgentCoreToolName": "clickhouse-mcp-target___clickhouse_tables"}
+
+        class _Context:
+            client_context = _ClientContext()
+
+        with mock.patch.object(ch, "http_json", return_value=(200, {"data": []})) as hj:
+            out = ch.lambda_handler({"arguments": {}}, _Context())
+        self.assertEqual(out["statusCode"], 200)
+        self.assertIn("SHOW TABLES", hj.call_args.kwargs.get("body") or hj.call_args.args[3])
+
 
 
 class TestSchema(unittest.TestCase):

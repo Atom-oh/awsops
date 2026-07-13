@@ -6,6 +6,8 @@ import json
 import urllib.request
 import re
 
+from cross_account import resolve_tool_name
+
 
 def search_provider_docs(asset_name, provider='aws'):
     """Search AWS/AWSCC provider docs via AWS Knowledge MCP. / AWS Knowledge MCP를 통해 AWS/AWSCC 프로바이더 문서를 검색합니다."""
@@ -125,7 +127,7 @@ TF_BEST_PRACTICES = """# Terraform AWS Best Practices
 def lambda_handler(event, context):
     """Lambda entry point for Terraform MCP tools. / Terraform MCP 도구의 람다 진입점."""
     params = event if isinstance(event, dict) else json.loads(event)
-    t = params.get("tool_name", "")
+    t = resolve_tool_name(params, context)
     args = params.get("arguments", params)
     args.pop('target_account_id', None)  # not used — HTTP proxy Lambda
 

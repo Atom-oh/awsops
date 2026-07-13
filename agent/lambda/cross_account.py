@@ -136,3 +136,20 @@ def get_resource(service, region='ap-northeast-2', role_arn=None):
 
     creds = _assume_role(role_arn, service)
     return boto3.resource(service, region_name=region, **creds)
+
+
+def resolve_tool_name(params, context, default=''):
+    """Resolve the MCP tool name for a Lambda invocation.
+
+    AgentCore Gateway invokes the target Lambda directly (no MCP envelope) and
+    passes the tool name via context.client_context.custom['bedrockAgentCoreToolName']
+    as '<target-name>___<tool-name>' — never in the event body. A BFF direct-invoke
+    (e.g. the datasource explorer) instead puts 'tool_name' in the event. Event wins
+    when present; client_context is the Gateway-path fallback.
+    """
+    tool_name = (params.get('tool_name') or '') if isinstance(params, dict) else ''
+    if not tool_name and context is not None:
+        client_context = getattr(context, 'client_context', None)
+        custom = getattr(client_context, 'custom', None) or {}
+        tool_name = custom.get('bedrockAgentCoreToolName', '')
+    return tool_name.rsplit('___', 1)[-1] if tool_name else default
