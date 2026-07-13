@@ -44,7 +44,7 @@ make deploy      # migrate → buildx arm64 → ECR push → ECS roll → wait s
 make agentcore   # arm64 agent image + idempotent AgentCore provisioner (builds the agent image; does NOT deploy the MCP Lambdas — those are terraform)
 make workers     # arm64 worker image push (after apply with workers_enabled=true)
 ```
-Note: the repo-root `package.json` belongs to the **v1** app; the **v2** web app lives under `web/` and has no `lint` script. `next build` fails on app-level type errors but `*.test.ts(x)` type noise is non-blocking. **MCP Lambda code (`agent/lambda/*.py`) ships via `terraform apply`, not `make agentcore`** — a stale Lambda after a code change usually means apply wasn't run.
+Note: there is no repo-root `package.json` — the only one outside `web/`/`docs-site/` lives at `scripts/v2/package.json` (3 deps for the CLI tooling: `pg`, `@inquirer/prompts`, `@aws-sdk/client-secrets-manager`; `make deps` runs `npm ci --prefix scripts/v2`). The **v2** web app lives under `web/` and has no `lint` script. `next build` fails on app-level type errors but `*.test.ts(x)` type noise is non-blocking. **MCP Lambda code (`agent/lambda/*.py`) ships via `terraform apply`, not `make agentcore`** — a stale Lambda after a code change usually means apply wasn't run.
 
 ## BANNED PATTERNS (enforce in review)
 - **AWS security:** no `0.0.0.0/0` ingress; no IAM `Principal: "*"` / wildcard-action without a scoped condition; **no secrets in env/code/IaC** (use Secrets Manager / SSM).
@@ -86,4 +86,4 @@ Note: the repo-root `package.json` belongs to the **v1** app; the **v2** web app
 - Exact Aurora minor `17.9` + `lifecycle{ignore_changes=[engine_version]}` on cluster AND instance is deliberate (absorbs minor auto-upgrades), not a drift bug.
 - `CloudFront-VPCOrigins-Service-SG` 443 ingress on the ALB SG is required (VPC-CIDR-only causes 504).
 - SFN `.sync` briefly showing RUNNING after the worker wrote `succeeded` is expected (task-stop polling lag); the `worker_jobs` ledger is the source of truth.
-- web `package.json` having no `lint` script (only dev/build/start/test) is expected; lint lives in the v1 root package.
+- web `package.json` having no `lint` script (only dev/build/start/test) is expected — there is no lint script anywhere in the repo (v1's root package, which had one, is gone).

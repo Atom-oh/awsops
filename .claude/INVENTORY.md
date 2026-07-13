@@ -12,7 +12,7 @@
 | 스킬 (Skills) | 3 |
 | 아키텍처 결정 기록 (ADRs) | 3 |
 | 런북 (Runbooks) | 2 |
-| 프롬프트 (Prompts) | 1 |
+| 프롬프트 (Prompts) | 0 |
 | 스크립트 (Scripts) | 11 |
 
 ## 페이지 / Pages
@@ -94,9 +94,6 @@
 ## 런북 / Runbooks
 - `add-new-page.md` — Runbook: 새 대시보드 페이지 추가 (Add New Dashboard Page)
 - `start-services.md` — Runbook: 서비스 시작 (Start Services)
-
-## 프롬프트 / Prompts
-- `analyze-resources.md` — Prompt: AWS 리소스 분석 (Analyze AWS Resources)
 
 ## 스크립트 / Scripts
 - `00-deploy-infra.sh` — CloudFormation으로 EC2 인프라 배포 (Deploy EC2 Infrastructure via CloudFormation)

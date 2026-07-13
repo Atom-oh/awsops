@@ -136,13 +136,15 @@ for f in "$WORK_DIR/docs/runbooks/"*.md; do
 done
 
 # Prompts
-echo "" >> "$INVENTORY"
-echo "## Prompts" >> "$INVENTORY"
-for f in "$WORK_DIR/tools/prompts/"*.md; do
-  [ -f "$f" ] || continue
-  TITLE=$(head -1 "$f" | sed 's/^# //')
-  echo "- \`$(basename "$f")\` — $TITLE" >> "$INVENTORY"
-done
+if [ "$PROMPT_COUNT" -gt 0 ]; then
+  echo "" >> "$INVENTORY"
+  echo "## Prompts" >> "$INVENTORY"
+  for f in "$WORK_DIR/tools/prompts/"*.md; do
+    [ -f "$f" ] || continue
+    TITLE=$(head -1 "$f" | sed 's/^# //')
+    echo "- \`$(basename "$f")\` — $TITLE" >> "$INVENTORY"
+  done
+fi
 
 # Scripts
 echo "" >> "$INVENTORY"
