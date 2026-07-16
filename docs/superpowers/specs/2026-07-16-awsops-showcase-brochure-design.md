@@ -142,11 +142,17 @@ Source files:
 ```text
 docs-site/static/screenshots/overview/dashboard.png
 docs-site/static/screenshots/overview/assistant-answer.png
-docs-site/static/screenshots/resources/topology.png
+docs-site/static/screenshots/resources/topology-detail.png
 docs-site/static/screenshots/cost/cost-explorer.png
-docs-site/static/screenshots/security/compliance.png
 docs-site/static/screenshots/operations/ai-diagnosis.png
 ```
+
+`compliance.webp` is a second derivative of the current v2 dashboard screenshot,
+cropped to the CIS compliance and security-summary band. The existing
+`security/compliance.png` is a data-empty v1 screen and must not be used.
+`topology-detail.png` is used instead of the full topology canvas so its five
+resource labels can be replaced with generic role labels while preserving the
+request-flow shape.
 
 The original documentation screenshots remain untouched. Every brochure
 derivative must mask or crop:
@@ -282,4 +288,3 @@ dimensions or aspect ratios so loading and hover states do not shift layout.
 - Structural checker, Docusaurus build, asset HTTP checks, and content review
   all pass.
 - The primary CTA opens the supplied v2 demo URL.
-
