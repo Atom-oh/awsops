@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 
 export interface Rect {
@@ -15,6 +16,9 @@ export interface Overlay extends Rect {
 
 export interface AssetSpec {
   source: string;
+  sourceWidth: number;
+  sourceHeight: number;
+  sourceSha256: string;
   output: string;
   crop: Rect;
   outputWidth: number;
@@ -26,6 +30,9 @@ const SCREENSHOTS = path.join('static', 'screenshots');
 export const ASSETS: AssetSpec[] = [
   {
     source: path.join(SCREENSHOTS, 'overview', 'dashboard.png'),
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    sourceSha256: '46d9804a7220e073ab90dcce0567a0a9dbf9ba22f8ed934f88c2c3e799f70d10',
     output: 'dashboard.webp',
     crop: {left: 0, top: 0, width: 1920, height: 1080},
     outputWidth: 1600,
@@ -36,6 +43,9 @@ export const ASSETS: AssetSpec[] = [
   },
   {
     source: path.join(SCREENSHOTS, 'overview', 'assistant-answer.png'),
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    sourceSha256: '0e0024c0fef4880884fecda732af69a4e1cc44a2458d62fd6b200272551218c5',
     output: 'assistant-answer.webp',
     crop: {left: 590, top: 112, width: 720, height: 890},
     outputWidth: 1200,
@@ -43,6 +53,9 @@ export const ASSETS: AssetSpec[] = [
   },
   {
     source: path.join(SCREENSHOTS, 'resources', 'topology-detail.png'),
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    sourceSha256: '69dbf8060f0f10dcc34e7bd718e2e27bbb689d73af09545334c490d5199de2dd',
     output: 'topology.webp',
     crop: {left: 288, top: 160, width: 1150, height: 860},
     outputWidth: 1400,
@@ -56,6 +69,9 @@ export const ASSETS: AssetSpec[] = [
   },
   {
     source: path.join(SCREENSHOTS, 'cost', 'cost-explorer.png'),
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    sourceSha256: '3b2d9ab68bc405fc0bb9e8df295c4ccccbd45d895e60ff682248494ad3ee139b',
     output: 'cost-explorer.webp',
     crop: {left: 288, top: 104, width: 1600, height: 900},
     outputWidth: 1600,
@@ -63,6 +79,9 @@ export const ASSETS: AssetSpec[] = [
   },
   {
     source: path.join(SCREENSHOTS, 'overview', 'dashboard.png'),
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    sourceSha256: '46d9804a7220e073ab90dcce0567a0a9dbf9ba22f8ed934f88c2c3e799f70d10',
     output: 'compliance.webp',
     crop: {left: 288, top: 386, width: 1600, height: 190},
     outputWidth: 1600,
@@ -70,6 +89,9 @@ export const ASSETS: AssetSpec[] = [
   },
   {
     source: path.join(SCREENSHOTS, 'operations', 'ai-diagnosis.png'),
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    sourceSha256: 'aa2aea36c7a008d2171aebcb06bb50e0450bb71abb09ece6560ef58e60664705',
     output: 'ai-diagnosis.webp',
     crop: {left: 568, top: 128, width: 1320, height: 900},
     outputWidth: 1600,
@@ -79,13 +101,66 @@ export const ASSETS: AssetSpec[] = [
   },
 ];
 
-export function validateAssetSpecs(sourceWidth: number, sourceHeight: number): void {
+function assertPositiveFiniteInteger(value: number, label: string): void {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive finite integer`);
+  }
+}
+
+export function assertSourceMatchesSpec(asset: AssetSpec, source: Buffer): void {
+  const actualSha256 = createHash('sha256').update(source).digest('hex');
+  if (actualSha256 !== asset.sourceSha256) {
+    throw new Error(
+      `source hash mismatch for ${asset.output}: expected ${asset.sourceSha256}, got ${actualSha256}`,
+    );
+  }
+
+  const pngSignature = '89504e470d0a1a0a';
+  if (
+    source.length < 24 ||
+    source.subarray(0, 8).toString('hex') !== pngSignature ||
+    source.subarray(12, 16).toString('ascii') !== 'IHDR'
+  ) {
+    throw new Error(`source dimensions mismatch for ${asset.output}: source is not a valid PNG`);
+  }
+
+  const actualWidth = source.readUInt32BE(16);
+  const actualHeight = source.readUInt32BE(20);
+  if (actualWidth !== asset.sourceWidth || actualHeight !== asset.sourceHeight) {
+    throw new Error(
+      `source dimensions mismatch for ${asset.output}: expected ${asset.sourceWidth}x${asset.sourceHeight}, got ${actualWidth}x${actualHeight}`,
+    );
+  }
+}
+
+export function validateAssetSpecs(
+  sourceWidth: number,
+  sourceHeight: number,
+  assets: AssetSpec[] = ASSETS,
+): void {
   const outputs = new Set<string>();
-  for (const asset of ASSETS) {
+  for (const asset of assets) {
     if (outputs.has(asset.output)) {
       throw new Error(`duplicate output: ${asset.output}`);
     }
     outputs.add(asset.output);
+
+    if (path.basename(asset.output) !== asset.output || !/^[^/\\]+\.webp$/.test(asset.output)) {
+      throw new Error(`invalid WebP output basename: ${asset.output}`);
+    }
+    assertPositiveFiniteInteger(asset.outputWidth, 'outputWidth');
+    assertPositiveFiniteInteger(asset.crop.width, 'crop width');
+    assertPositiveFiniteInteger(asset.crop.height, 'crop height');
+    assertPositiveFiniteInteger(asset.sourceWidth, 'sourceWidth');
+    assertPositiveFiniteInteger(asset.sourceHeight, 'sourceHeight');
+    if (!/^[a-f0-9]{64}$/.test(asset.sourceSha256)) {
+      throw new Error(`invalid source SHA-256: ${asset.output}`);
+    }
+    if (asset.sourceWidth !== sourceWidth || asset.sourceHeight !== sourceHeight) {
+      throw new Error(
+        `unexpected source dimensions for ${asset.output}: expected ${sourceWidth}x${sourceHeight}`,
+      );
+    }
 
     const {crop} = asset;
     if (

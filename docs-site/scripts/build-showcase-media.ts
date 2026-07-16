@@ -2,21 +2,30 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
-import {ASSETS, validateAssetSpecs} from './showcase-assets';
+import {
+  ASSETS,
+  assertSourceMatchesSpec,
+  validateAssetSpecs,
+} from './showcase-assets';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const siteRoot = path.resolve(here, '..');
-const outputDir = path.join(siteRoot, 'static', 'showcase', 'media');
+const defaultOutputDir = path.join(siteRoot, 'static', 'showcase', 'media');
 
-async function main(): Promise<void> {
+export async function buildShowcaseMedia(
+  outputDir: string = defaultOutputDir,
+): Promise<void> {
   validateAssetSpecs(1920, 1080);
 
-  const sourcePaths = ASSETS.map((asset) => path.join(siteRoot, asset.source));
-  for (const sourcePath of sourcePaths) {
+  const sources = ASSETS.map((asset) => {
+    const sourcePath = path.join(siteRoot, asset.source);
     if (!fs.existsSync(sourcePath)) {
       throw new Error(`missing source: ${sourcePath}`);
     }
-  }
+    const source = fs.readFileSync(sourcePath);
+    assertSourceMatchesSpec(asset, source);
+    return source;
+  });
 
   fs.mkdirSync(outputDir, {recursive: true});
   const browser = await chromium.launch({headless: true});
@@ -24,7 +33,7 @@ async function main(): Promise<void> {
   try {
     const page = await browser.newPage();
     for (const [index, asset] of ASSETS.entries()) {
-      const source = fs.readFileSync(sourcePaths[index]).toString('base64');
+      const source = sources[index].toString('base64');
       const dataUrl = await page.evaluate(async ({source, asset}) => {
         const image = new Image();
         image.src = `data:image/png;base64,${source}`;
@@ -86,7 +95,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+const isCli = process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isCli) {
+  buildShowcaseMedia().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
