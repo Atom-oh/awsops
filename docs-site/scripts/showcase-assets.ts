@@ -12,6 +12,10 @@ export interface Overlay extends Rect {
   fill: string;
   text: string;
   label?: string;
+  sample: {
+    left: number;
+    top: number;
+  };
 }
 
 export interface AssetSpec {
@@ -37,8 +41,16 @@ export const ASSETS: AssetSpec[] = [
     crop: {left: 0, top: 0, width: 1920, height: 1080},
     outputWidth: 1600,
     overlays: [
-      {left: 42, top: 958, width: 180, height: 58, fill: '#f4f6f8', text: '#526173', label: 'Demo operator'},
-      {left: 846, top: 210, width: 448, height: 112, fill: '#fff', text: '#526173', label: 'Recent AI operations'},
+      {
+        left: 42, top: 958, width: 180, height: 58,
+        fill: '#f4f6f8', text: '#526173', label: 'Demo operator',
+        sample: {left: 58, top: 971},
+      },
+      {
+        left: 846, top: 210, width: 448, height: 112,
+        fill: '#fff', text: '#526173', label: 'Recent AI operations',
+        sample: {left: 1108, top: 225},
+      },
     ],
   },
   {
@@ -60,11 +72,31 @@ export const ASSETS: AssetSpec[] = [
     crop: {left: 288, top: 160, width: 1150, height: 860},
     outputWidth: 1400,
     overlays: [
-      {left: 700, top: 108, width: 232, height: 38, fill: '#e8f8ee', text: '#17362b', label: 'DNS endpoint'},
-      {left: 700, top: 270, width: 232, height: 38, fill: '#eaf1ff', text: '#1f3763', label: 'CloudFront'},
-      {left: 700, top: 429, width: 232, height: 38, fill: '#fff0dc', text: '#523819', label: 'Load balancer'},
-      {left: 700, top: 591, width: 232, height: 38, fill: '#f2e9ff', text: '#3e2a5c', label: 'Target group'},
-      {left: 700, top: 752, width: 232, height: 38, fill: '#e5f8f5', text: '#173d38', label: 'Healthy targets'},
+      {
+        left: 700, top: 108, width: 232, height: 38,
+        fill: '#e8f8ee', text: '#17362b', label: 'DNS endpoint',
+        sample: {left: 813, top: 124},
+      },
+      {
+        left: 700, top: 270, width: 232, height: 38,
+        fill: '#eaf1ff', text: '#1f3763', label: 'CloudFront',
+        sample: {left: 801, top: 285},
+      },
+      {
+        left: 700, top: 429, width: 232, height: 38,
+        fill: '#fff0dc', text: '#523819', label: 'Load balancer',
+        sample: {left: 863, top: 444},
+      },
+      {
+        left: 700, top: 591, width: 232, height: 38,
+        fill: '#f2e9ff', text: '#3e2a5c', label: 'Target group',
+        sample: {left: 912, top: 607},
+      },
+      {
+        left: 700, top: 752, width: 232, height: 38,
+        fill: '#e5f8f5', text: '#173d38', label: 'Healthy targets',
+        sample: {left: 897, top: 765},
+      },
     ],
   },
   {
@@ -96,7 +128,11 @@ export const ASSETS: AssetSpec[] = [
     crop: {left: 568, top: 128, width: 1320, height: 900},
     outputWidth: 1600,
     overlays: [
-      {left: 190, top: 214, width: 275, height: 42, fill: '#f4f6f8', text: '#18212d', label: '호스트 계정 (mid)'},
+      {
+        left: 190, top: 214, width: 275, height: 42,
+        fill: '#f4f6f8', text: '#18212d', label: '호스트 계정 (mid)',
+        sample: {left: 378, top: 235},
+      },
     ],
   },
 ];
@@ -180,6 +216,16 @@ export function validateAssetSpecs(
         overlay.top + overlay.height > crop.height
       ) {
         throw new Error(`overlay outside crop: ${asset.output}`);
+      }
+      if (
+        !Number.isInteger(overlay.sample?.left) ||
+        !Number.isInteger(overlay.sample?.top) ||
+        overlay.sample.left < overlay.left ||
+        overlay.sample.top < overlay.top ||
+        overlay.sample.left >= overlay.left + overlay.width ||
+        overlay.sample.top >= overlay.top + overlay.height
+      ) {
+        throw new Error(`overlay sample outside overlay: ${asset.output}`);
       }
     }
   }

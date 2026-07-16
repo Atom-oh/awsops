@@ -14,6 +14,7 @@ import {
 } from './showcase-assets';
 
 const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PIXEL_TOLERANCE = 12;
 
 function cloneAsset(asset: AssetSpec): AssetSpec {
   return {
@@ -138,6 +139,30 @@ test('topology overlays cover the complete resource label area', () => {
   assert.ok(topology.overlays.every((overlay) => overlay.left + overlay.width >= 932));
 });
 
+test('privacy overlay samples are source-relative points inside their overlays', () => {
+  for (const asset of ASSETS) {
+    for (const overlay of asset.overlays) {
+      assert.ok(overlay.sample);
+      assert.ok(Number.isInteger(overlay.sample.left));
+      assert.ok(Number.isInteger(overlay.sample.top));
+      assert.ok(overlay.sample.left >= overlay.left);
+      assert.ok(overlay.sample.top >= overlay.top);
+      assert.ok(overlay.sample.left < overlay.left + overlay.width);
+      assert.ok(overlay.sample.top < overlay.top + overlay.height);
+    }
+  }
+
+  const invalid = cloneAsset(ASSETS[0]);
+  invalid.overlays[0].sample = {
+    left: invalid.overlays[0].left - 1,
+    top: invalid.overlays[0].top,
+  };
+  assert.throws(
+    () => validateAssetSpecs(1920, 1080, [invalid]),
+    /overlay sample outside overlay/,
+  );
+});
+
 test('generator writes decoded WebPs with baked-in overlay pixels', {timeout: 30_000}, async () => {
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'awsops-showcase-media-'));
 
@@ -153,35 +178,57 @@ test('generator writes decoded WebPs with baked-in overlay pixels', {timeout: 30
       const page = await browser.newPage();
 
       for (const asset of ASSETS) {
+        const source = fs.readFileSync(path.join(siteRoot, asset.source));
         const output = fs.readFileSync(path.join(outputDir, asset.output));
         assert.equal(output.subarray(0, 4).toString('ascii'), 'RIFF');
         assert.equal(output.subarray(8, 12).toString('ascii'), 'WEBP');
 
         const scale = asset.outputWidth / asset.crop.width;
         const samples = asset.overlays.map((overlay) => ({
-          x: Math.round((overlay.left + overlay.width - 16) * scale),
-          y: Math.round((overlay.top + 8) * scale),
+          sourceX: asset.crop.left + overlay.sample.left,
+          sourceY: asset.crop.top + overlay.sample.top,
+          outputX: Math.round(overlay.sample.left * scale),
+          outputY: Math.round(overlay.sample.top * scale),
         }));
-        const decoded = await page.evaluate(async ({source, samples}) => {
-          const image = new Image();
-          image.src = `data:image/webp;base64,${source}`;
-          await image.decode();
-
+        const decoded = await page.evaluate(async ({source, output, samples}) => {
+          const sourceImage = new Image();
+          sourceImage.src = `data:image/png;base64,${source}`;
+          await sourceImage.decode();
+          const outputImage = new Image();
+          outputImage.src = `data:image/webp;base64,${output}`;
+          await outputImage.decode();
+          const sourceCanvas = document.createElement('canvas');
+          sourceCanvas.width = sourceImage.naturalWidth;
+          sourceCanvas.height = sourceImage.naturalHeight;
+          const sourceContext = sourceCanvas.getContext('2d');
+          if (!sourceContext) {
+            throw new Error('2D source canvas unavailable');
+          }
+          sourceContext.drawImage(sourceImage, 0, 0);
           const canvas = document.createElement('canvas');
-          canvas.width = image.naturalWidth;
-          canvas.height = image.naturalHeight;
+          canvas.width = outputImage.naturalWidth;
+          canvas.height = outputImage.naturalHeight;
           const context = canvas.getContext('2d');
           if (!context) {
-            throw new Error('2D canvas unavailable');
+            throw new Error('2D output canvas unavailable');
           }
-          context.drawImage(image, 0, 0);
+          context.drawImage(outputImage, 0, 0);
 
           return {
-            width: image.naturalWidth,
-            height: image.naturalHeight,
-            pixels: samples.map(({x, y}) => [...context.getImageData(x, y, 1, 1).data]),
+            width: outputImage.naturalWidth,
+            height: outputImage.naturalHeight,
+            sourcePixels: samples.map(({sourceX, sourceY}) => [
+              ...sourceContext.getImageData(sourceX, sourceY, 1, 1).data,
+            ]),
+            outputPixels: samples.map(({outputX, outputY}) => [
+              ...context.getImageData(outputX, outputY, 1, 1).data,
+            ]),
           };
-        }, {source: output.toString('base64'), samples});
+        }, {
+          source: source.toString('base64'),
+          output: output.toString('base64'),
+          samples,
+        });
 
         assert.equal(decoded.width, asset.outputWidth);
         assert.equal(
@@ -189,11 +236,17 @@ test('generator writes decoded WebPs with baked-in overlay pixels', {timeout: 30
           Math.round(asset.crop.height * asset.outputWidth / asset.crop.width),
         );
 
-        for (const [index, actual] of decoded.pixels.entries()) {
+        for (const [index, actual] of decoded.outputPixels.entries()) {
           const expected = hexToRgb(asset.overlays[index].fill);
+          assert.ok(
+            decoded.sourcePixels[index]
+              .slice(0, expected.length)
+              .some((value, channel) => Math.abs(value - expected[channel]) > PIXEL_TOLERANCE),
+            `${asset.output} overlay ${index}: source sample unexpectedly matches fill`,
+          );
           for (let channel = 0; channel < expected.length; channel += 1) {
             assert.ok(
-              Math.abs(actual[channel] - expected[channel]) <= 12,
+              Math.abs(actual[channel] - expected[channel]) <= PIXEL_TOLERANCE,
               `${asset.output} overlay ${index} channel ${channel}: expected ${expected[channel]}, got ${actual[channel]}`,
             );
           }
