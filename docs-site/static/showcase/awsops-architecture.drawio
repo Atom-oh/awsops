@@ -73,7 +73,7 @@
         <mxCell id="routes" value="9 routed sections&#10;&#10;network | container | data&#10;security | cost | monitoring&#10;iac | ops | observability&#10;&#10;observability -&gt; external-obs" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4AB29A;fontColor=#232F3E;fontFamily=Amazon Ember;fontSize=9;fontStyle=0;align=center;verticalAlign=top;spacingTop=8;" parent="agentcore-band" vertex="1">
           <mxGeometry x="240" y="30" width="190" height="150" as="geometry"/>
         </mxCell>
-        <mxCell id="mcp-lambda" value="MCP Lambda tools" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda_function;" parent="agentcore-band" vertex="1">
+        <mxCell id="mcp-tools" value="MCP Lambda tools" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontFamily=Amazon Ember;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda_function;" parent="agentcore-band" vertex="1">
           <mxGeometry x="450" y="80" width="48" height="48" as="geometry"/>
         </mxCell>
         <mxCell id="observed-boundary" value="READ ONLY observation boundary" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#F3FAF0;strokeColor=#248814;strokeWidth=2;dashed=1;dashPattern=6 6;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;fontFamily=Amazon Ember;fontSize=11;fontStyle=1;fontColor=#248814;" parent="aws-cloud" vertex="1">
@@ -162,11 +162,20 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e-routes-mcp" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeWidth=2;strokeColor=#116D5B;endArrow=classic;html=1;" parent="agentcore-band" source="routes" target="mcp-lambda" edge="1">
+        <mxCell id="e-routes-mcp" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeWidth=2;strokeColor=#116D5B;endArrow=classic;html=1;" parent="agentcore-band" source="routes" target="mcp-tools" edge="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e-mcp-observed" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeWidth=2;strokeColor=#248814;dashed=1;dashPattern=6 6;endArrow=classic;html=1;" parent="aws-cloud" source="mcp-lambda" target="observed-aws" edge="1">
+        <mxCell id="e-mcp-observed" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeWidth=2;strokeColor=#248814;dashed=1;dashPattern=6 6;endArrow=classic;html=1;" parent="aws-cloud" source="mcp-tools" target="observed-aws" edge="1">
           <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e-mcp-external" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#248814;dashed=1;dashPattern=6 6;endArrow=classic;html=1;" parent="aws-cloud" source="mcp-tools" target="observed-external" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="980" y="396"/>
+              <mxPoint x="980" y="415"/>
+              <mxPoint x="1145" y="415"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
         <mxCell id="e-web-post" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.25;exitY=1;entryX=0.5;entryY=0;strokeWidth=1.5;strokeColor=#545B64;dashed=1;dashPattern=8 8;endArrow=classic;html=1;" parent="aws-cloud" source="fargate-web" target="post-jobs" edge="1">
           <mxGeometry relative="1" as="geometry">
