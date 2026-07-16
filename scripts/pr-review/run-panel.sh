@@ -8,7 +8,7 @@
 # kiro-cli 는 stdin 을 안 읽고 큰 diff 를 argv 에 직접 넣으면 커널 MAX_ARG_STRLEN(128KiB)에 걸려
 # "Argument list too long"로 죽는다(아래 KIRO_INSTRUCTION 코멘트 참조) → kiro 에게는 diff 파일
 # 경로만 주고 자기 신뢰 도구(read/fs_read)로 읽게 한다. timeout 백스톱 + 비대화형 플래그로 멈춤
-# 방지. 슬롯이 비면 최대 PANEL_RETRIES 회 재시도(gpt-5.5/bedrock-mantle 등 transient 흡수).
+# 방지. 슬롯이 비면 최대 PANEL_RETRIES 회 재시도(codex의 gpt-5.6-sol/bedrock-mantle 등 transient 흡수).
 # 매 시도마다 $DIFF 를 다시 연다. 모든 셀(모델 수 × lens 수)이 병렬(&+wait) — 벽시계 ≈ 최슬로우
 # 셀 하나, 순차합 아님.
 set -uo pipefail
@@ -64,13 +64,13 @@ try_panel() {
   done
 }
 
-KIRO_MODELS=("claude-opus-4.8:kiro-opus" "gpt-5.5:kiro-gpt" "glm-5:kiro-glm")
+KIRO_MODELS=("claude-opus-4.8:kiro-opus" "gpt-5.6-terra:kiro-gpt" "glm-5:kiro-glm")
 
 for lens_file in "${LENS_FILES[@]}"; do
   lens="$(basename "$lens_file" .txt)"
   LENS_PROMPT="$(cat "$lens_file")"
 
-  # Codex (Bedrock, config.toml). --skip-git-repo-check 필수. AWS_REGION 강제: gpt-5.5
+  # Codex (Bedrock, config.toml). --skip-git-repo-check 필수. AWS_REGION 강제: gpt-5.6-sol
   # (bedrock-mantle)는 In-Region(us-east-1) 만 지원 — 잡 region 무관하게 고정.
   if command -v codex >/dev/null 2>&1; then
     ( try_panel "$SLOT/codex-$lens.md" "$SLOT/codex-$lens.err" \
