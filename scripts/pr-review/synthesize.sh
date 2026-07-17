@@ -110,19 +110,23 @@ run_chair() {  # $1=model → "$OUT" 에 기록. claude 실패해도 || true 로
     < "$WORK/synth-stdin.txt" > "$OUT" 2>"$WORK/chair.err" || true
 }
 
-# 요구사항: 마지막 non-empty 줄이 정확히 VERDICT: PASS 또는 VERDICT: FAIL.
-# tail -n1 대신 awk 로 trailing 빈 줄을 건너뛴다 — trailing blank line 하나로
-# 유효한 응답이 invalid 처리되는 걸 방지. 정규식엔 whitespace 여유를 두지 않는다
-# — gate(pr-review.yml) 가 동일 라인을 공백 없는 정확매칭(^VERDICT: PASS$)으로
-# 다시 검사하므로, 여기서 여유를 주면 chair_valid 는 통과시키고 gate 는 그 원본
-# 파일을 그대로 걸러버리는 validator/gate 불일치가 생긴다.
-# NOTE: gate 는 파일 전체에서 FAIL 을 먼저 grep 하므로 완전히 동일한 기준은
-# 아니다 — chair 프롬프트가 "마지막 줄" 규칙을 강제하는 한 실무상 충분하지만,
-# 본문에 패널의 raw "VERDICT: FAIL" 인용이 그대로 남으면 gate 와 어긋날 수
-# 있다(이 변경 이전부터 존재하던 gate 자체의 특성, 범위 밖).
+# 요구사항: verdict 라인이 정확히 하나 있고, 그것이 마지막 non-empty 줄이어야 valid.
+# (수정 이력) 한 번 "gate와 동일하게 FAIL-first/PASS 전체 grep"으로 완화를 시도했으나
+# — mixed FAIL/PASS 케이스는 gate 자체가 FAIL-first 라 결과가 항상 FAIL로 확정되므로
+# fallback 으로 구제할 수 있는 시나리오가 원래부터 아니었고(gate를 그대로 재사용해도
+# 이 케이스는 안 풀림), 오히려 last-line 요구를 없애면서 검증이 느슨해져 verdict가
+# 마지막 줄이 아닌 malformed/truncated 출력(예: timeout 에 잘린 응답, injection 이
+# 유도한 lone PASS)까지 valid 로 통과시키는 회귀가 생겼다(PR #167 리뷰 L2 MAJOR).
+# 원래의 엄격한 기준(정확히 1개 + 마지막 줄)으로 되돌린다 — gate 와 완전히 동일하진
+# 않지만(gate 는 위치/개수 무관하게 FAIL 문자열만 찾음) 그 불일치는 사실상 무해하다:
+# 이 validator 가 걸러내는 건 "형식이 안 맞는 응답"뿐이고, 형식이 맞는데 gate 판정만
+# 다른 경우는 없다.
 chair_valid() {
   [ -s "$OUT" ] || return 1
-  awk 'NF{last=$0} END{print last}' "$OUT" | grep -qE '^VERDICT: (PASS|FAIL)$'
+  local last verdict_count
+  last="$(awk 'NF{last=$0} END{print last}' "$OUT")"
+  verdict_count="$(grep -c '^VERDICT:' "$OUT" || true)"
+  [[ "$last" =~ ^VERDICT:\ (PASS|FAIL)$ ]] && [ "$verdict_count" = "1" ]
 }
 
 run_chair "$PRIMARY_MODEL"
@@ -153,6 +157,17 @@ if [ -s "$WORK/degraded-models.txt" ]; then
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
 fi
 
+# lens 커버리지 붕괴 가시화 — 한 lens 가 모든 모델에서 응답 없이 조용히 빠졌으면
+# (run-panel.sh 의 degraded-lenses.txt), 이미 coverage-severe.flag 로 강제 FAIL 되지만
+# "왜" FAIL 인지 리뷰 본문에서 바로 보이도록 배너를 남긴다.
+if [ -s "$WORK/degraded-lenses.txt" ]; then
+  DEGRADED_LENSES="$(tr '\n' ',' < "$WORK/degraded-lenses.txt" | sed 's/,$//; s/,/, /g')"
+  { echo "🛑 **lens 커버리지 붕괴**: lens [$DEGRADED_LENSES] 를 모든 모델이 응답하지 않아 아무도 리뷰하지 않음."
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
 # 심각도 상향(run-panel.sh 의 coverage-severe.flag) — 살아남은 벤더가 최대 1개뿐이면 체어의
 # 판정과 무관하게 VERDICT 를 강제 FAIL 한다(fail-closed 계약 보존). 매치가 있을 때만 마지막
 # VERDICT 줄을 지운다(`tac | sed '0,/re/d' | tac` — GNU sed 의 `0,/re/d` 는 무매치 시 파일
@@ -162,8 +177,17 @@ if [ -f "$WORK/coverage-severe.flag" ]; then
     TAC_TMP="$(tac "$OUT" | sed '0,/^VERDICT:/d' | tac)"
     printf '%s\n' "$TAC_TMP" > "$OUT"
   fi
+  # 이 플래그는 두 원인(벤더 붕괴 / lens 붕괴)이 세울 수 있어, 둘 다 같은 메시지("벤더가
+  # 1개 이하")를 쓰면 lens-only 붕괴(벤더들은 다른 lens에 정상 응답)일 때 이미 위에서
+  # 붙은 lens-collapse 배너와 모순되는 원인 설명이 나란히 남는다 — 실제로 세워진 파일로
+  # 원인을 구분해 메시지를 택일한다.
+  if [ -s "$WORK/degraded-lenses.txt" ]; then
+    SEVERE_REASON="lens [$(tr '\n' ',' < "$WORK/degraded-lenses.txt" | sed 's/,$//; s/,/, /g')] 를 모든 모델이 응답하지 않아 교차확인이 성립하지 않음"
+  else
+    SEVERE_REASON="살아남은 벤더가 1개 이하라 lens×model 매트릭스의 교차확인이 성립하지 않음"
+  fi
   {
-    echo "🛑 **커버리지 붕괴로 강제 FAIL**: 살아남은 벤더가 1개 이하라 lens×model 매트릭스의 교차확인이 성립하지 않음 — 체어의 판정과 무관하게 fail-closed."
+    echo "🛑 **커버리지 붕괴로 강제 FAIL**: $SEVERE_REASON — 체어의 판정과 무관하게 fail-closed."
     echo ""
     cat "$OUT"
     echo ""
