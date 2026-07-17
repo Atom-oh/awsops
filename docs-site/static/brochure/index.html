@@ -138,6 +138,16 @@
   h2 em{font-family:var(--serif); font-style:italic; font-weight:500; color:var(--brand-ink)}
   .sec-head p{font-size:17px; color:var(--text-2); margin:0}
 
+  /* ---------- screens ---------- */
+  .screens{display:grid; gap:18px}
+  .frame{margin:0; overflow:hidden; background:var(--surface); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow-card); transition:transform .3s, box-shadow .3s}
+  .frame:hover{transform:translateY(-4px); box-shadow:var(--shadow-pop)}
+  .frame img{width:100%; height:auto; object-fit:cover; background:var(--sunken)}
+  .frame figcaption{padding:14px 18px; font-size:13.5px; color:var(--text-2); border-top:1px solid var(--line)}
+  .screens-pair{display:grid; grid-template-columns:repeat(2,1fr); gap:18px}
+  .frame.wide img{aspect-ratio:16/9}
+  .frame.pair-img img{aspect-ratio:4/3}
+
   /* ---------- pillars ---------- */
   .pillars{display:grid; grid-template-columns:repeat(3,1fr); gap:20px}
   .pillar{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:30px; box-shadow:var(--shadow-card); transition:transform .3s, box-shadow .3s; position:relative; overflow:hidden}
@@ -281,6 +291,7 @@
     .pillars{grid-template-columns:1fr}
     .pillars .pillar:nth-child(3){grid-column:auto}
     .feat-grid{grid-template-columns:1fr}
+    .screens-pair{grid-template-columns:1fr}
     .diagram{grid-template-columns:1fr; gap:12px}
     .diagram .lane:last-child{grid-column:auto}
     .lane{flex-direction:column}
@@ -321,6 +332,7 @@
     <div class="nav-links">
       <a href="#value">핵심 가치</a>
       <a href="#features">기능</a>
+      <a href="#screens">화면</a>
       <a href="#ai">AI 게이트웨이</a>
       <a href="#architecture">아키텍처</a>
       <a href="#trust">보안</a>
@@ -335,16 +347,16 @@
     <div>
       <span class="eyebrow reveal"><span class="dot"></span> READ-ONLY OPS · AI DIAGNOSIS</span>
       <h1 class="hero-title reveal">클라우드 운영을<br>하나의 <em>차분한 화면</em>에서.</h1>
-      <p class="hero-sub reveal">AWS와 Kubernetes를 실시간으로 모니터링하고, Amazon Bedrock AgentCore가 라이브 데이터를 근거로 진단합니다. 43개 운영 화면, 125개 AI 도구 — 변경 없는 안전한 관측.</p>
+      <p class="hero-sub reveal">AWS와 Kubernetes를 실시간으로 모니터링하고, Amazon Bedrock AgentCore가 라이브 데이터를 근거로 진단합니다. 20개+ 운영 화면, 160개 AI 도구 — 변경 없는 안전한 관측.</p>
       <div class="hero-actions reveal">
         <a href="#start" class="btn btn-primary">라이브 데모 살펴보기</a>
         <a href="#architecture" class="btn btn-ghost">아키텍처 보기 →</a>
       </div>
       <div class="metrics reveal">
-        <div class="metric"><div class="v num">43</div><div class="l">운영 화면 (pages)</div></div>
-        <div class="metric"><div class="v num">125</div><div class="l">AI MCP 도구</div></div>
-        <div class="metric"><div class="v num">8<small> live</small></div><div class="l">AI 게이트웨이 (+ 설계 확장)</div></div>
-        <div class="metric"><div class="v num">400<small>+</small></div><div class="l">CIS 컴플라이언스 제어</div></div>
+        <div class="metric"><div class="v num">20<small>+</small></div><div class="l">운영 화면 (pages)</div></div>
+        <div class="metric"><div class="v num">160</div><div class="l">AI MCP 도구</div></div>
+        <div class="metric"><div class="v num">9</div><div class="l">AI 섹션 게이트웨이</div></div>
+        <div class="metric"><div class="v num">431</div><div class="l">CIS 컴플라이언스 제어</div></div>
       </div>
     </div>
 
@@ -413,7 +425,7 @@
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
         </div>
         <h3>실시간 단일 가시성</h3>
-        <p>EC2 · Lambda · ECS · EKS · VPC · RDS … 43개 화면과 React Flow 토폴로지 맵. 멀티 계정을 합쳐 보거나 전환하며 라이브 차트로 본다.</p>
+        <p>EC2 · Lambda · ECS · EKS · VPC · RDS … 20개+ 화면과 React Flow 토폴로지 맵. 멀티 계정을 합쳐 보거나 전환하며 라이브 차트로 본다.</p>
       </article>
       <article class="pillar reveal">
         <div class="pn">02</div>
@@ -429,7 +441,7 @@
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 5-7"/></svg>
         </div>
         <h3>FinOps &amp; 컴플라이언스</h3>
-        <p>Cost Explorer · 컨테이너 비용(Fargate·EKS OpenCost) · 인벤토리 추세. CIS v1.5–v4.0 400+ 제어를 Powerpipe로 점검.</p>
+        <p>Cost Explorer · 컨테이너 비용(Fargate·EKS OpenCost) · 인벤토리 추세. CIS v1.5–v4.0 431개 제어를 Powerpipe로 점검.</p>
       </article>
     </div>
   </div>
@@ -448,7 +460,7 @@
         <div class="fic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18M8 13h3"/></svg></div>
         <h3>리소스 모니터링</h3>
         <p>EC2·Lambda·ECS/ECR·EKS(파드/노드/디플로이/서비스)·VPC·CloudFront·WAF·EBS·S3·RDS·DynamoDB·MSK·OpenSearch를 라이브 차트로.</p>
-        <span class="tag">43 pages · React Flow 토폴로지</span>
+        <span class="tag">20+ pages · React Flow 토폴로지</span>
       </div>
       <div class="feat reveal">
         <div class="fic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="12" cy="10" r="1"/><circle cx="8" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg></div>
@@ -465,7 +477,7 @@
       <div class="feat reveal">
         <div class="fic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg></div>
         <h3>CIS 컴플라이언스</h3>
-        <p>Powerpipe 벤치마크로 CIS v1.5–v4.0, 400+ 제어를 점검하고 위반 항목을 한눈에 추적.</p>
+        <p>Powerpipe 벤치마크로 CIS v1.5–v4.0, 431개 제어를 점검하고 위반 항목을 한눈에 추적.</p>
         <span class="tag">CIS v1.5 – v4.0</span>
       </div>
       <div class="feat reveal">
@@ -502,6 +514,45 @@
   </div>
 </section>
 
+<!-- ===================== SCREENS ===================== -->
+<section class="sec" id="screens" style="padding-top:0">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">화면 미리보기</div>
+      <h2>실제 운영 화면, <em>그대로</em>.</h2>
+      <p>대시보드, AI 어시스턴트, 토폴로지, 비용, 컴플라이언스, AI 진단 — 여섯 화면으로 보는 AWSops v2.</p>
+    </div>
+    <div class="screens">
+      <figure class="frame wide reveal">
+        <img src="media/dashboard.webp" loading="lazy" width="1200" height="675" alt="AWSops 통합 운영 대시보드 — AWS 리소스, Kubernetes, 비용, 보안 신호를 한 화면에서" />
+        <figcaption>통합 운영 대시보드 — 흩어진 신호를 하나의 화면으로.</figcaption>
+      </figure>
+      <div class="screens-pair">
+        <figure class="frame pair-img reveal">
+          <img src="media/assistant-answer.webp" loading="lazy" width="800" height="600" alt="비용 질문에 근거를 제시하는 AWSops AI 어시스턴트 답변" />
+          <figcaption>AI 어시스턴트 — 라이브 데이터를 근거로 합성한 답변.</figcaption>
+        </figure>
+        <figure class="frame pair-img reveal">
+          <img src="media/topology.webp" loading="lazy" width="800" height="600" alt="요청 경로와 AWS 리소스 관계를 보여주는 토폴로지 맵" />
+          <figcaption>토폴로지 — 리소스 관계와 요청 흐름을 시각적으로 탐색.</figcaption>
+        </figure>
+        <figure class="frame pair-img reveal">
+          <img src="media/cost-explorer.webp" loading="lazy" width="800" height="600" alt="월별·일별 AWS 비용 추이를 보여주는 Cost Explorer 화면" />
+          <figcaption>Cost Explorer — 서비스별 비용과 변화를 비교.</figcaption>
+        </figure>
+        <figure class="frame pair-img reveal">
+          <img src="media/compliance.webp" loading="lazy" width="800" height="600" alt="보안 이슈와 CIS 컴플라이언스 요약 화면" />
+          <figcaption>보안 &amp; 컴플라이언스 — 위험 신호와 CIS 통과율을 한눈에.</figcaption>
+        </figure>
+      </div>
+      <figure class="frame wide reveal">
+        <img src="media/ai-diagnosis.webp" loading="lazy" width="1200" height="675" alt="Well-Architected 관점의 AWSops AI 진단 보고서와 목차" />
+        <figcaption>AI 진단 리포트 — Well-Architected 관점 진단을 MD/DOCX/PDF로 내보내기.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
 <!-- ===================== AI GATEWAYS ===================== -->
 <section class="sec" id="ai" style="padding-top:0">
   <div class="wrap">
@@ -516,20 +567,20 @@
         <thead><tr><th>게이트웨이</th><th class="gcap">대표 역량</th><th class="gtools">도구</th></tr></thead>
         <tbody>
           <tr><td class="gname">Network</td><td class="gcap">VPC · TGW · VPN · ENI · Reachability Analyzer · Flow Logs</td><td class="gtools num">17</td></tr>
-          <tr><td class="gname">Container</td><td class="gcap">EKS 클러스터/노드/파드 · ECS 서비스/태스크 · Istio 메시</td><td class="gtools num">24</td></tr>
+          <tr><td class="gname">Container</td><td class="gcap">EKS 클러스터/노드/파드 · ECS 서비스/태스크 · Istio 메시</td><td class="gtools num">19</td></tr>
           <tr><td class="gname">Data</td><td class="gcap">DynamoDB · RDS Data API · ElastiCache · MSK</td><td class="gtools num">24</td></tr>
-          <tr><td class="gname">Monitoring</td><td class="gcap">CloudWatch 지표/알람 · Log Insights · CloudTrail</td><td class="gtools num">16</td></tr>
+          <tr><td class="gname">Monitoring</td><td class="gcap">CloudWatch 지표/알람 · Log Insights · CloudTrail</td><td class="gtools num">36</td></tr>
           <tr><td class="gname">Security</td><td class="gcap">IAM 사용자/역할/정책 · 정책 시뮬레이션</td><td class="gtools num">14</td></tr>
           <tr><td class="gname">IaC</td><td class="gcap">CloudFormation 검증 · CDK 문서 · Terraform 모듈</td><td class="gtools num">12</td></tr>
-          <tr><td class="gname">Cost</td><td class="gcap">Cost Explorer · Pricing · Budgets · 예측</td><td class="gtools num">9</td></tr>
-          <tr><td class="gname">Ops</td><td class="gcap">AWS 문서 · CLI 실행 · Steampipe SQL</td><td class="gtools num">9</td></tr>
-          <tr><td class="gname">External-Obs <span class="badge ro" style="font-size:9px">설계</span></td><td class="gcap">Prometheus · Loki · Tempo 등 외부 관측성 (read-only)</td><td class="gtools" style="color:var(--text-3)">설계</td></tr>
+          <tr><td class="gname">Cost</td><td class="gcap">Cost Explorer · Pricing · Budgets · 예측</td><td class="gtools num">14</td></tr>
+          <tr><td class="gname">Ops</td><td class="gcap">AWS 문서 · CLI 실행 · Steampipe SQL</td><td class="gtools num">11</td></tr>
+          <tr><td class="gname">External-Obs</td><td class="gcap">Prometheus · ClickHouse · Loki/Tempo/Mimir 등 외부 관측성 (read-only)</td><td class="gtools num">13</td></tr>
         </tbody>
       </table>
       <div class="gw-foot">
-        <span class="pill orange">합계 125 MCP 도구 · 8 라이브 게이트웨이</span>
+        <span class="pill orange">합계 160 MCP 도구 · 9 게이트웨이 · 27 도구 슬라이스</span>
         <span class="pill">로드맵 — 9 섹션 에이전트 + 1 인시던트 오케스트레이터</span>
-        <span class="pill">Sonnet 4.6 · Opus 4.8 · Haiku 4.5</span>
+        <span class="pill">Sonnet 5 · Opus 4.8 · Haiku 4.5</span>
         <span class="pill">Memory · Code Interpreter</span>
       </div>
     </div>
