@@ -110,22 +110,23 @@ run_chair() {  # $1=model → "$OUT" 에 기록. claude 실패해도 || true 로
     < "$WORK/synth-stdin.txt" > "$OUT" 2>"$WORK/chair.err" || true
 }
 
-# 요구사항: gate(pr-review.yml) 와 정확히 같은 기준으로 판정한다 — gate는 파일 전체(마지막
-# 줄 여부·카운트 무관)에서 "^VERDICT: FAIL$"을 먼저 찾고, 없으면 "^VERDICT: PASS$"를
-# 찾는다. 이전엔 chair_valid 가 "마지막 non-empty 줄이 정확히 VERDICT: PASS|FAIL"만 봐서,
-# 본문에 패널 인용 등으로 앞쪽에 "VERDICT: FAIL"이 섞여 있고 마지막 줄이 "VERDICT: PASS"인
-# 경우 chair_valid 는 primary 를 valid 로 판단해 fallback 을 건너뛰지만 gate 는 그 파일을
-# FAIL 로 판정한다 — validator 가 fallback 기회를 날리는 채로 fail-closed 되는 불일치.
-# gate 로직을 그대로 재사용해 이 케이스도 fallback 을 타게 한다.
+# 요구사항: verdict 라인이 정확히 하나 있고, 그것이 마지막 non-empty 줄이어야 valid.
+# (수정 이력) 한 번 "gate와 동일하게 FAIL-first/PASS 전체 grep"으로 완화를 시도했으나
+# — mixed FAIL/PASS 케이스는 gate 자체가 FAIL-first 라 결과가 항상 FAIL로 확정되므로
+# fallback 으로 구제할 수 있는 시나리오가 원래부터 아니었고(gate를 그대로 재사용해도
+# 이 케이스는 안 풀림), 오히려 last-line 요구를 없애면서 검증이 느슨해져 verdict가
+# 마지막 줄이 아닌 malformed/truncated 출력(예: timeout 에 잘린 응답, injection 이
+# 유도한 lone PASS)까지 valid 로 통과시키는 회귀가 생겼다(PR #167 리뷰 L2 MAJOR).
+# 원래의 엄격한 기준(정확히 1개 + 마지막 줄)으로 되돌린다 — gate 와 완전히 동일하진
+# 않지만(gate 는 위치/개수 무관하게 FAIL 문자열만 찾음) 그 불일치는 사실상 무해하다:
+# 이 validator 가 걸러내는 건 "형식이 안 맞는 응답"뿐이고, 형식이 맞는데 gate 판정만
+# 다른 경우는 없다.
 chair_valid() {
   [ -s "$OUT" ] || return 1
-  if grep -q '^VERDICT: FAIL$' "$OUT"; then
-    return 0
-  elif grep -q '^VERDICT: PASS$' "$OUT"; then
-    return 0
-  else
-    return 1
-  fi
+  local last verdict_count
+  last="$(awk 'NF{last=$0} END{print last}' "$OUT")"
+  verdict_count="$(grep -c '^VERDICT:' "$OUT" || true)"
+  [[ "$last" =~ ^VERDICT:\ (PASS|FAIL)$ ]] && [ "$verdict_count" = "1" ]
 }
 
 run_chair "$PRIMARY_MODEL"
@@ -176,8 +177,17 @@ if [ -f "$WORK/coverage-severe.flag" ]; then
     TAC_TMP="$(tac "$OUT" | sed '0,/^VERDICT:/d' | tac)"
     printf '%s\n' "$TAC_TMP" > "$OUT"
   fi
+  # 이 플래그는 두 원인(벤더 붕괴 / lens 붕괴)이 세울 수 있어, 둘 다 같은 메시지("벤더가
+  # 1개 이하")를 쓰면 lens-only 붕괴(벤더들은 다른 lens에 정상 응답)일 때 이미 위에서
+  # 붙은 lens-collapse 배너와 모순되는 원인 설명이 나란히 남는다 — 실제로 세워진 파일로
+  # 원인을 구분해 메시지를 택일한다.
+  if [ -s "$WORK/degraded-lenses.txt" ]; then
+    SEVERE_REASON="lens [$(tr '\n' ',' < "$WORK/degraded-lenses.txt" | sed 's/,$//; s/,/, /g')] 를 모든 모델이 응답하지 않아 교차확인이 성립하지 않음"
+  else
+    SEVERE_REASON="살아남은 벤더가 1개 이하라 lens×model 매트릭스의 교차확인이 성립하지 않음"
+  fi
   {
-    echo "🛑 **커버리지 붕괴로 강제 FAIL**: 살아남은 벤더가 1개 이하라 lens×model 매트릭스의 교차확인이 성립하지 않음 — 체어의 판정과 무관하게 fail-closed."
+    echo "🛑 **커버리지 붕괴로 강제 FAIL**: $SEVERE_REASON — 체어의 판정과 무관하게 fail-closed."
     echo ""
     cat "$OUT"
     echo ""
