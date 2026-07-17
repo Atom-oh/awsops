@@ -64,10 +64,24 @@ variable "existing_private_subnet_ids" {
   default     = []
 }
 
+variable "cf_vpc_origin_sg_ready" {
+  type        = bool
+  description = "Second-apply flag: set true only after the first apply has created the CloudFront VPC Origin so AWS has auto-created the 'CloudFront-VPCOrigins-Service-SG' managed SG. Leaving it false on a fresh VPC avoids a data-source lookup for an SG that does not exist yet. See workload.tf."
+  default     = false
+}
+
 variable "cognito_domain_prefix" {
   type        = string
   description = "Globally-unique Cognito Hosted-UI domain prefix (no 'aws', no symbols)."
-  default     = "awsops-v2-auth"
+  # NOTE: Cognito rejects any domain prefix containing the reserved string
+  # 'aws', so the fork's original default "awsops-v2-auth" fails at apply.
+  # Default set to a valid, 'aws'-free value; override per environment for
+  # global uniqueness (e.g. "a-ops-v2-auth-<account-id>").
+  default = "a-ops-v2-auth"
+  validation {
+    condition     = !can(regex("aws", var.cognito_domain_prefix))
+    error_message = "cognito_domain_prefix must not contain the reserved string 'aws'."
+  }
 }
 
 variable "admin_email" {

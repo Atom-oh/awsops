@@ -135,9 +135,8 @@ resource "aws_route53_record" "alias" {
   }
 }
 
-# ADR-016 Phase 2.2: singleton -> for_each state reshape (v2 domain only, before the v1 alias is
-# added in Phase 2.5) — pure state remap, no infra change.
-moved {
-  from = aws_route53_record.alias
-  to   = aws_route53_record.alias["awsops-v2.atomai.click"]
-}
+# NOTE: the fork carried a `moved {}` block here reshaping a singleton
+# aws_route53_record.alias into the for_each key "awsops-v2.atomai.click".
+# That was a one-time state remap for the fork's own environment and is a
+# no-op (worse: a confusing dangling key) on a fresh upstream apply where
+# the records are created directly from for_each. Removed for upstream.

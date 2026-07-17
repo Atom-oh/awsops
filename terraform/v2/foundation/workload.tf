@@ -386,7 +386,17 @@ resource "aws_ecs_task_definition" "web" {
 
 # CloudFront provisions VPC Origin ENIs into a managed SG ("CloudFront-VPCOrigins-Service-SG").
 # The ALB allows ONLY that SG on 443 (review #3: dropped the broad VPC-CIDR rule).
+#
+# BOOTSTRAP ORDERING: AWS auto-creates this managed SG only after the FIRST VPC
+# Origin is provisioned in the VPC. On a brand-new VPC it does not exist yet, so
+# reading it (and the ALB ingress rule that references it) must be deferred to a
+# second apply. var.cf_vpc_origin_sg_ready gates that: leave it false for the
+# first apply (ALB comes up with no CF ingress → VPC Origin is created → AWS makes
+# the managed SG), then set it true and re-apply to add the 443 rule. The fork
+# never hit this because it applied incrementally onto a VPC where the managed SG
+# already existed.
 data "aws_security_group" "cf_vpc_origin" {
+  count = var.cf_vpc_origin_sg_ready ? 1 : 0
   filter {
     name   = "group-name"
     values = ["CloudFront-VPCOrigins-Service-SG"]
@@ -401,24 +411,30 @@ resource "aws_security_group" "alb" {
   name = "${var.project}-alb-sg"
   # description kept verbatim to match the existing SG (AWS SG description is
   # immutable → changing it forces a replace that DependencyViolation-hangs on the
-  # attached ALB). The actual hardening (drop the broad VPC-CIDR :443 ingress) is an
-  # in-place rule change below. See comment above re: CloudFront VPC Origin SG only.
+  # attached ALB). The 443 ingress is a separate rule resource (below) so it can be
+  # added on the second apply once the managed SG exists.
   description = "Internal ALB - reachable from within the VPC (CloudFront VPC Origin ENIs)"
   vpc_id      = local.vpc_id
 
-  ingress {
-    description     = "HTTPS from CloudFront VPC Origin managed SG"
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    security_groups = [data.aws_security_group.cf_vpc_origin.id]
-  }
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+}
+
+# Added on the second apply (var.cf_vpc_origin_sg_ready=true) once the managed
+# CloudFront VPC Origin SG exists. Kept as a standalone rule (not inline in the
+# ALB SG) precisely so it can be toggled without recreating the SG.
+resource "aws_vpc_security_group_ingress_rule" "alb_from_cf" {
+  count                        = var.cf_vpc_origin_sg_ready ? 1 : 0
+  security_group_id            = aws_security_group.alb.id
+  referenced_security_group_id = data.aws_security_group.cf_vpc_origin[0].id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "HTTPS from CloudFront VPC Origin managed SG"
 }
 
 resource "aws_security_group" "service" {
