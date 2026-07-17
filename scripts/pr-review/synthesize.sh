@@ -110,19 +110,22 @@ run_chair() {  # $1=model → "$OUT" 에 기록. claude 실패해도 || true 로
     < "$WORK/synth-stdin.txt" > "$OUT" 2>"$WORK/chair.err" || true
 }
 
-# 요구사항: 마지막 non-empty 줄이 정확히 VERDICT: PASS 또는 VERDICT: FAIL.
-# tail -n1 대신 awk 로 trailing 빈 줄을 건너뛴다 — trailing blank line 하나로
-# 유효한 응답이 invalid 처리되는 걸 방지. 정규식엔 whitespace 여유를 두지 않는다
-# — gate(pr-review.yml) 가 동일 라인을 공백 없는 정확매칭(^VERDICT: PASS$)으로
-# 다시 검사하므로, 여기서 여유를 주면 chair_valid 는 통과시키고 gate 는 그 원본
-# 파일을 그대로 걸러버리는 validator/gate 불일치가 생긴다.
-# NOTE: gate 는 파일 전체에서 FAIL 을 먼저 grep 하므로 완전히 동일한 기준은
-# 아니다 — chair 프롬프트가 "마지막 줄" 규칙을 강제하는 한 실무상 충분하지만,
-# 본문에 패널의 raw "VERDICT: FAIL" 인용이 그대로 남으면 gate 와 어긋날 수
-# 있다(이 변경 이전부터 존재하던 gate 자체의 특성, 범위 밖).
+# 요구사항: gate(pr-review.yml) 와 정확히 같은 기준으로 판정한다 — gate는 파일 전체(마지막
+# 줄 여부·카운트 무관)에서 "^VERDICT: FAIL$"을 먼저 찾고, 없으면 "^VERDICT: PASS$"를
+# 찾는다. 이전엔 chair_valid 가 "마지막 non-empty 줄이 정확히 VERDICT: PASS|FAIL"만 봐서,
+# 본문에 패널 인용 등으로 앞쪽에 "VERDICT: FAIL"이 섞여 있고 마지막 줄이 "VERDICT: PASS"인
+# 경우 chair_valid 는 primary 를 valid 로 판단해 fallback 을 건너뛰지만 gate 는 그 파일을
+# FAIL 로 판정한다 — validator 가 fallback 기회를 날리는 채로 fail-closed 되는 불일치.
+# gate 로직을 그대로 재사용해 이 케이스도 fallback 을 타게 한다.
 chair_valid() {
   [ -s "$OUT" ] || return 1
-  awk 'NF{last=$0} END{print last}' "$OUT" | grep -qE '^VERDICT: (PASS|FAIL)$'
+  if grep -q '^VERDICT: FAIL$' "$OUT"; then
+    return 0
+  elif grep -q '^VERDICT: PASS$' "$OUT"; then
+    return 0
+  else
+    return 1
+  fi
 }
 
 run_chair "$PRIMARY_MODEL"
@@ -148,6 +151,17 @@ fi
 if [ -s "$WORK/degraded-models.txt" ]; then
   DEGRADED="$(tr '\n' ',' < "$WORK/degraded-models.txt" | sed 's/,$//; s/,/, /g')"
   { echo "⚠️ **커버리지 저하**: [$DEGRADED] 모델이 전체 lens 에서 응답 없음(플래그 무효·바이너리 부재·인증 실패 등) — 아래 리뷰는 그 모델 없이 종합됨."
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# lens 커버리지 붕괴 가시화 — 한 lens 가 모든 모델에서 응답 없이 조용히 빠졌으면
+# (run-panel.sh 의 degraded-lenses.txt), 이미 coverage-severe.flag 로 강제 FAIL 되지만
+# "왜" FAIL 인지 리뷰 본문에서 바로 보이도록 배너를 남긴다.
+if [ -s "$WORK/degraded-lenses.txt" ]; then
+  DEGRADED_LENSES="$(tr '\n' ',' < "$WORK/degraded-lenses.txt" | sed 's/,$//; s/,/, /g')"
+  { echo "🛑 **lens 커버리지 붕괴**: lens [$DEGRADED_LENSES] 를 모든 모델이 응답하지 않아 아무도 리뷰하지 않음."
     echo ""
     cat "$OUT"
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"

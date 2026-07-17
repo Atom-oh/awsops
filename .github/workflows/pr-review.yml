@@ -14,6 +14,7 @@ name: AI Code Review
 on:
   pull_request_target:
     types: [opened, synchronize]
+    branches: [main] # 이 repo의 유일한 PR 타겟 — non-main PR은 없음
 
 jobs:
   review:
@@ -36,11 +37,20 @@ jobs:
       # 보안(M1): pull_request_target 는 시크릿/쓰기권한 컨텍스트 → base(신뢰됨) 체크아웃.
       # base.ref tip 을 명시 체크아웃 → 패널/의장이 diff 가 얹히는 BASE 파일(스택드 PR 의 base
       # 심볼·컬럼·import, migrations/*.sql)을 읽어 "없음" 오탐을 피한다. PR head 는 미체크아웃(코드 미실행).
+      # persist-credentials: false — 기본값(true)은 GH_TOKEN을 .git/config의
+      # http.<host>.extraheader(AUTHORIZATION: basic <base64>)로 남긴다. Kiro가
+      # base 체크아웃 전체를 read/grep/fs_read 하도록 의도적으로 허용돼 있어(BASE
+      # CONTEXT 검증), diff 인젝션이 Kiro를 유도해 .git/config를 읽고 그 값을 셀
+      # 출력에 뱉으면 pull-requests:write 토큰이 그대로 새어나간다(lib.sh의
+      # scrub_secrets가 이 토큰 포맷을 잡는 규칙을 이 PR에서 함께 추가했지만, 그건
+      # last-line-of-defense일 뿐 예방이 아니다). 체크아웃 시점에 자격증명을
+      # 아예 남기지 않는 것이 예방 계층.
       - uses: actions/checkout@v4
         with:
           # Pin to the immutable base SHA (not base.ref branch tip): deterministic base context, and
           # no window where a moved/unprotected base injects unreviewed code into this trusted job.
           ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
 
       - name: Verify CLIs present (runner image)
         run: |
