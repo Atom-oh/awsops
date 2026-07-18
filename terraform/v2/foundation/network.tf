@@ -86,5 +86,7 @@ data "aws_vpc" "existing" {
 locals {
   vpc_id             = var.create_network ? aws_vpc.main[0].id : var.existing_vpc_id
   private_subnet_ids = var.create_network ? aws_subnet.private[*].id : var.existing_private_subnet_ids
-  vpc_cidr           = var.create_network ? var.vpc_cidr : data.aws_vpc.existing[0].cidr_block
+  # Public subnets host the internet-facing ALB (CloudFront custom origin).
+  public_subnet_ids = var.create_network ? aws_subnet.public[*].id : var.existing_public_subnet_ids
+  vpc_cidr          = var.create_network ? var.vpc_cidr : data.aws_vpc.existing[0].cidr_block
 }

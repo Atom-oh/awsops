@@ -60,14 +60,20 @@ variable "existing_vpc_id" {
 
 variable "existing_private_subnet_ids" {
   type        = list(string)
-  description = "Existing private subnets (>=2 AZ, NAT egress) for ALB/Fargate when create_network=false"
+  description = "Existing private subnets (>=2 AZ, NAT egress) for Fargate tasks when create_network=false"
   default     = []
 }
 
-variable "cf_vpc_origin_sg_ready" {
+variable "existing_public_subnet_ids" {
+  type        = list(string)
+  description = "Existing public subnets (>=2 AZ, IGW route) for the internet-facing ALB when create_network=false"
+  default     = []
+}
+
+variable "create_edge" {
   type        = bool
-  description = "Second-apply flag: set true only after the first apply has created the CloudFront VPC Origin so AWS has auto-created the 'CloudFront-VPCOrigins-Service-SG' managed SG. Leaving it false on a fresh VPC avoids a data-source lookup for an SG that does not exist yet. See workload.tf."
-  default     = false
+  description = "Create the CloudFront edge (distribution + cert validation wait + alias record). Requires the ACM DNS validation record to be live in the authoritative zone first. Leave false to build the ALB/compute/data plane, flip true once DNS is in place."
+  default     = true
 }
 
 variable "cognito_domain_prefix" {
