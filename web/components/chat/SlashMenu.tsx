@@ -31,7 +31,7 @@ export default function SlashMenu({
           onMouseEnter={() => onHover(i)}
           className={
             'flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[13px] ' +
-            (i === activeIndex ? 'bg-brand-50 text-ink-900' : 'text-ink-700') +
+            (i === activeIndex ? 'bg-brand-50 text-ink-800' : 'text-ink-700') +
             (c.active ? '' : ' opacity-40')
           }
         >

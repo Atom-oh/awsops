@@ -121,7 +121,12 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                       onClick={() => onSwitch?.(r.key)}
                       aria-label={`${s.label}로 다시`}
                       className="rounded-md border px-2 py-1 text-[11px] font-medium transition-colors"
-                      style={{ background: `${s.color}12`, borderColor: `${s.color}40`, color: s.color }}
+                      style={{
+                        // s.color is a CSS var — alpha via color-mix, not hex-suffix concat
+                        background: `color-mix(in srgb, ${s.color} 7%, transparent)`,
+                        borderColor: `color-mix(in srgb, ${s.color} 25%, transparent)`,
+                        color: s.color,
+                      }}
                     >
                       → {s.label}로 다시
                     </button>
