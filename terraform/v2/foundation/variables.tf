@@ -76,6 +76,12 @@ variable "create_edge" {
   default     = true
 }
 
+variable "existing_acm_certificate_arn" {
+  type        = string
+  description = "Pre-issued us-east-1 ACM certificate ARN covering domain_name (e.g. a *.example.com wildcard). When set, the edge skips creating + DNS-validating its own certificate — useful when this account's hosted zone is a shadow copy so the validation CNAME can never be published from here. Empty (default) = create and DNS-validate a dedicated certificate."
+  default     = ""
+}
+
 variable "cognito_domain_prefix" {
   type        = string
   description = "Globally-unique Cognito Hosted-UI domain prefix (no 'aws', no symbols)."

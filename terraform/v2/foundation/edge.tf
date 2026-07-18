@@ -4,6 +4,7 @@ data "aws_route53_zone" "main" {
 }
 
 resource "aws_acm_certificate" "cf" {
+  count                     = var.existing_acm_certificate_arn == "" ? 1 : 0
   provider                  = aws.use1
   domain_name               = var.domain_name
   subject_alternative_names = var.extra_domain_aliases
@@ -12,8 +13,8 @@ resource "aws_acm_certificate" "cf" {
 }
 
 resource "aws_route53_record" "cf_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.cf.domain_validation_options : dvo.domain_name => {
+  for_each = var.existing_acm_certificate_arn != "" ? {} : {
+    for dvo in aws_acm_certificate.cf[0].domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
@@ -28,9 +29,9 @@ resource "aws_route53_record" "cf_validation" {
 }
 
 resource "aws_acm_certificate_validation" "cf" {
-  count                   = var.create_edge ? 1 : 0
+  count                   = var.create_edge && var.existing_acm_certificate_arn == "" ? 1 : 0
   provider                = aws.use1
-  certificate_arn         = aws_acm_certificate.cf.arn
+  certificate_arn         = aws_acm_certificate.cf[0].arn
   validation_record_fqdns = [for r in aws_route53_record.cf_validation : r.fqdn]
 }
 
@@ -113,7 +114,7 @@ resource "aws_cloudfront_distribution" "main" {
   }
 
   viewer_certificate {
-    acm_certificate_arn      = aws_acm_certificate_validation.cf[0].certificate_arn
+    acm_certificate_arn      = var.existing_acm_certificate_arn != "" ? var.existing_acm_certificate_arn : aws_acm_certificate_validation.cf[0].certificate_arn
     ssl_support_method       = "sni-only"
     minimum_protocol_version = "TLSv1.2_2021"
   }
