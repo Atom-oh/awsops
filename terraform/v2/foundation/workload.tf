@@ -220,11 +220,13 @@ resource "aws_iam_role_policy" "task_incident_ssm" {
         Resource = ["arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/ops/${var.project}/incident/*"]
       },
       {
-        # Synchronous read-only Triage consult against the project's AgentCore runtimes.
+        # Synchronous read-only Triage consult against the project's AgentCore runtime. Scoped to
+        # the provisioner's fixed runtime name (local.agent_runtime_name) + its generated suffix —
+        # NOT var.project, which yields a non-matching ARN (hyphens + wrong prefix).
         Sid      = "InvokeAgentRuntime"
         Effect   = "Allow"
         Action   = ["bedrock-agentcore:InvokeAgentRuntime"]
-        Resource = "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${var.project}*"
+        Resource = "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${local.agent_runtime_name}-*"
       }
     ]
   })

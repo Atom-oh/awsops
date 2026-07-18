@@ -60,6 +60,13 @@ variable "istio_vpc_enabled" {
 locals {
   ac_count    = var.agentcore_enabled ? 1 : 0
   integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
+  # AgentCore runtime name — a FIXED product-level constant (like v1's `awsops_agent`), NOT
+  # project-derived. MUST stay in sync with RUNTIME_NAME in scripts/v2/agentcore/provision.py
+  # ("awsops_v2_agent"); the provisioner appends a control-plane-generated `-<id>` suffix. IAM
+  # resource ARNs that scope runtime invoke must match THIS name — deriving it from var.project
+  # (e.g. "awsops_v2_stg_agent") produces an ARN that never matches the real runtime, so the web
+  # task role gets AccessDenied on bedrock-agentcore:InvokeAgentRuntime and chat fails.
+  agent_runtime_name = "awsops_v2_agent"
 }
 
 # ---- dual-tier ECR for the agent runtime image (mirrors ecr.tf) ----
@@ -364,8 +371,8 @@ resource "aws_iam_role_policy" "task_agentcore_invoke" {
       Effect = "Allow"
       Action = ["bedrock-agentcore:InvokeAgentRuntime"]
       Resource = [
-        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${replace(var.project, "-", "_")}_agent-*",
-        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${replace(var.project, "-", "_")}_agent-*/runtime-endpoint/*"
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${local.agent_runtime_name}-*",
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${local.agent_runtime_name}-*/runtime-endpoint/*"
       ]
     }]
   })

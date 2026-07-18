@@ -219,13 +219,13 @@ resource "aws_iam_role_policy" "incident_lambda" {
       },
       {
         # AgentCore Runtime invoke for the read-only Sub-agent consults (agent_bridge.py). Scoped to
-        # the project's AgentCore runtimes in this account/region (the concrete runtime ARN is
-        # written to SSM by provision.py post-apply; bedrock-agentcore runtime ARNs are not known at
-        # plan time, so scope by account/region + the project name segment). Read-only consult only.
+        # the provisioner's fixed runtime name (local.agent_runtime_name) + its control-plane-
+        # generated suffix, written to SSM by provision.py post-apply. NOT var.project — that yields
+        # a non-matching ARN (hyphens + wrong prefix). Read-only consult only.
         Sid      = "InvokeAgentRuntime"
         Effect   = "Allow"
         Action   = ["bedrock-agentcore:InvokeAgentRuntime"]
-        Resource = "arn:aws:bedrock-agentcore:${var.region}:${local.inc_acct}:runtime/${var.project}*"
+        Resource = "arn:aws:bedrock-agentcore:${var.region}:${local.inc_acct}:runtime/${local.agent_runtime_name}-*"
       },
       {
         # The Lambdas derive SSM paths from PROJECT (/ops/<project>/incident/*) and read the
