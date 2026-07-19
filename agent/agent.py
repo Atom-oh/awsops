@@ -742,17 +742,97 @@ async def _stream_text(agent, user_input):
     (the agent loop still runs them — we just don't surface them). AgentCore Runtime
     JSON-encodes each yielded dict into an SSE ``data:`` frame, so embedded newlines
     are escaped and stay frame-safe. Old web images drop ``{"tool": ...}`` / ``{"model": ...}``
-    frames as empty deltas, so agent/web can deploy in either order."""
+    / ``{"toolInput": ...}`` / ``{"usage": ...}`` frames as empty deltas, so agent/web can
+    deploy in either order.
+
+    v1-parity frames (2026-07-19):
+    - ``{"toolInput": {"tool", "query"}}`` — the generated query (SQL/PromQL/LogQL/...) a tool
+      is about to run, so the UI can show WHAT is being executed, not just the tool name. The
+      tool input streams in fragments, so it is only emitted once complete — flushed when the
+      next text delta arrives or a different tool starts (and at end-of-stream).
+    - ``{"usage": {"inputTokens", "outputTokens"}}`` — accumulated token usage from the final
+      Strands result metrics (per-answer cost footer)."""
     yield {"model": MODEL_ID}  # answer provenance: which model produced this (footer)
     seen_tools = set()
+    pending = {}   # toolUseId -> {"name", "input"} — last (most complete) streamed input
+    cur_tid = None
+
+    def flush_tool_input(tid):
+        entry = pending.pop(tid, None)
+        if not entry:
+            return None
+        q = _extract_tool_query(entry["name"], entry["input"])
+        return {"toolInput": {"tool": entry["name"], "query": q}} if q else None
+
     async for event in agent.stream_async(user_input):
         if "data" in event:
+            if cur_tid:  # text resumed → the pending tool call's input is final
+                frame = flush_tool_input(cur_tid)
+                cur_tid = None
+                if frame:
+                    yield frame
             yield {"delta": event["data"]}
         tu = event.get("current_tool_use") or {}
         tool_use_id, tool_name = tu.get("toolUseId"), tu.get("name")
-        if tool_use_id and tool_name and tool_use_id not in seen_tools:
-            seen_tools.add(tool_use_id)
-            yield {"tool": tool_name}
+        if tool_use_id and tool_name:
+            if cur_tid and cur_tid != tool_use_id:  # next tool started → previous input is final
+                frame = flush_tool_input(cur_tid)
+                if frame:
+                    yield frame
+            if tool_use_id not in seen_tools:
+                seen_tools.add(tool_use_id)
+                yield {"tool": tool_name}
+            pending[tool_use_id] = {"name": tool_name, "input": tu.get("input")}
+            cur_tid = tool_use_id
+        res = event.get("result")
+        if res is not None:  # final AgentResult → accumulated usage for the cost footer
+            usage = _extract_usage(res)
+            if usage:
+                yield {"usage": usage}
+    if cur_tid:  # answer ended right after a tool call (no trailing text delta)
+        frame = flush_tool_input(cur_tid)
+        if frame:
+            yield frame
+
+
+# Query-ish keys surfaced to the UI, in priority order (v1 showed the generated SQL/PromQL
+# in the status line). Only string values count; capped so a huge query can't bloat a frame.
+_QUERY_KEYS = ("sql", "query", "promql", "logql", "traceql", "expr", "query_string", "statement")
+_QUERY_MAX = 800
+
+
+def _extract_tool_query(tool_name, raw_input):
+    """Best-effort: pull the human-meaningful query text out of a completed tool input.
+    ``raw_input`` may be a dict, a complete JSON string, or a partial fragment (→ None)."""
+    obj = raw_input
+    if isinstance(obj, str):
+        try:
+            obj = json.loads(obj)
+        except (ValueError, TypeError):
+            return None  # partial fragment — never surface half a query
+    if not isinstance(obj, dict):
+        return None
+    for k in _QUERY_KEYS:
+        v = obj.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()[:_QUERY_MAX]
+    return None
+
+
+def _extract_usage(result):
+    """Accumulated token usage from a Strands AgentResult (defensive: SDK shape may drift)."""
+    try:
+        metrics = getattr(result, "metrics", None)
+        au = getattr(metrics, "accumulated_usage", None) if metrics else None
+        if not au:
+            return None
+        get = au.get if isinstance(au, dict) else lambda k, d=None: getattr(au, k, d)
+        inp, out = get("inputTokens"), get("outputTokens")
+        if not isinstance(inp, int) or not isinstance(out, int):
+            return None
+        return {"inputTokens": inp, "outputTokens": out}
+    except Exception:
+        return None  # provenance is best-effort — never break the answer stream
 
 
 # Main handler / 메인 핸들러
@@ -795,6 +875,13 @@ async def handler(payload):
     skill_role = payload.get("skill", gateway_role)  # skill override for SKILL_BASE / SKILL_BASE용 스킬 오버라이드
     system_prompt_override = payload.get("systemPromptOverride")  # ADR-031: resolver-supplied custom prompt
     extra_context = payload.get("extraContext")  # bounded BFF-supplied context (e.g. cached datasource schemas)
+    # v1-parity (getSystemPrompt(lang)): the UI language wins over question-language guessing —
+    # a short/mixed-language prompt must still be answered in the user's UI language.
+    response_language = payload.get("responseLanguage")
+    lang_directive = ""
+    if response_language in ("ko", "en", "zh"):
+        lang_name = {"ko": "Korean(한국어)", "en": "English", "zh": "Simplified Chinese(简体中文)"}[response_language]
+        lang_directive = f"\n\n## Response Language\nAlways respond in {lang_name}, regardless of the language of the question."
     tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
     gateway_key = _resolve_gateway_key(gateway_role, GATEWAYS)
     # NO eager `GATEWAYS[DEFAULT_GATEWAY]` default — that index is always evaluated and KeyErrors
@@ -860,6 +947,7 @@ async def handler(payload):
             # Cached datasource schemas (and any other BFF-supplied context) reach BOTH branches here.
             if extra_context:
                 system_prompt = system_prompt + "\n\n" + str(extra_context)[:8000]
+            system_prompt += lang_directive  # UI-language directive outranks COMMON_FOOTER's question-following rule
 
             agent = Agent(
                 model=model,
@@ -886,6 +974,7 @@ async def handler(payload):
     base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
     if extra_context:
         base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
+    base_prompt += lang_directive
     agent = Agent(
         model=model,
         system_prompt=base_prompt,

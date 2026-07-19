@@ -6,6 +6,7 @@ import PresetChips from './PresetChips';
 import Composer from './Composer';
 import MessageList from './MessageList';
 import ThreadList from './ThreadList';
+import SessionStatsBar from './SessionStatsBar';
 import { sectionByKey } from '@/lib/sections';
 import { useChat } from './useChat';
 
@@ -43,7 +44,7 @@ export default function AssistantClient() {
     <div className="flex h-full">
       {/* thread rail — desktop only (always visible at lg+). */}
       <div className="hidden w-72 shrink-0 border-r border-ink-100 lg:block">
-        <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onNew={chat.newChat} />
+        <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onNew={chat.newChat} onSearch={(q) => void chat.refreshThreads(q)} />
       </div>
 
       {/* thread rail — mobile slide-in overlay (<lg), toggled from the header. */}
@@ -68,6 +69,7 @@ export default function AssistantClient() {
                 onSelect={(id) => { void chat.selectThread(id); setMobileThreads(false); }}
                 onDelete={chat.removeThread}
                 onNew={() => { chat.newChat(); setMobileThreads(false); }}
+                onSearch={(q) => void chat.refreshThreads(q)}
               />
             </div>
           </div>
@@ -99,7 +101,8 @@ export default function AssistantClient() {
           <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col">
             {chat.msgs.length === 0
               ? <PresetChips onPick={chat.send} />
-              : <MessageList msgs={chat.msgs} onSwitch={chat.resendWith} />}
+              : <MessageList msgs={chat.msgs} onSwitch={chat.resendWith} onFollowUp={chat.followUp} />}
+            <SessionStatsBar stats={chat.sessionStats()} />
             <Composer disabled={chat.busy} onSend={chat.send} />
           </div>
         </div>

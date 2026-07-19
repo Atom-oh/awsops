@@ -279,6 +279,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "COGNITO_DOMAIN", value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
         { name = "APP_DOMAIN", value = var.domain_name },
         { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
+        # v1-parity Code Interpreter chat route: the BFF reads the provisioned interpreter id from
+        # SSM (fail-open — absent/pending ⇒ the code route no-ops and normal routing runs).
+        { name = "SSM_INTERPRETER_ID_PARAM", value = "/ops/${var.project}/agentcore/interpreter_id" },
         { name = "INTEGRATIONS_SECRET_NAME", value = "ops/${var.project}/integrations/credentials" },
         { name = "PROJECT", value = var.project }, # connector-invoke builds ${PROJECT}-agent-<slug>-mcp; must match the IAM resource
 

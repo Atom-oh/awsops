@@ -175,14 +175,14 @@ export default function ChatDrawer() {
       <div className="flex min-h-0 flex-1">
         {chat.showThreads && (
           <div className="shrink-0 border-r border-ink-100" style={{ width: THREADS_W }}>
-            <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onNew={chat.newChat} />
+            <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onNew={chat.newChat} onSearch={(q) => void chat.refreshThreads(q)} />
           </div>
         )}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
             {chat.msgs.length === 0
               ? <PresetChips onPick={chat.send} />
-              : <MessageList msgs={chat.msgs} onSwitch={chat.resendWith} />}
+              : <MessageList msgs={chat.msgs} onSwitch={chat.resendWith} onFollowUp={chat.followUp} />}
             <Composer disabled={chat.busy} onSend={chat.send} seed={seed} />
           </div>
         </div>

@@ -3,21 +3,43 @@ import { sectionByKey } from '@/lib/sections';
 import Markdown from './Markdown';
 
 export interface RankedChip { key: string; score: number; active: boolean }
+export interface QueryPreview { tool: string; query: string }
 export interface Msg {
   role: 'user' | 'assistant'; content: string; gateway?: string; streaming?: boolean;
   ranked?: RankedChip[]; method?: string; // ADR-038 meta
   via?: string; // ADR-044 meta: 'multi:network+data' when the answer is a cross-domain synthesis
-  status?: { phase: string; elapsedMs?: number };
+  status?: { phase: string; elapsedMs?: number; tool?: string; query?: string };
   // Answer-provenance footer (design handoff 개선안 ③): known only after the invoke resolves,
   // so these arrive on a second `meta` frame — absent against a legacy agent image.
   tools?: string[]; model?: string; elapsedMs?: number;
+  // v1-parity footer extras (2026-07-19): per-answer token usage + estimated USD (agent must
+  // report usage AND a priced model), and the generated queries surfaced during the run.
+  usage?: { inputTokens: number; outputTokens: number }; costUsd?: number;
+  queries?: QueryPreview[];
+}
+
+function fmtCost(usd: number): string {
+  if (usd <= 0) return '$0';
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(3)}`;
+}
+
+function statusLabel(s: { phase: string; elapsedMs?: number }): string {
+  const secs = s.elapsedMs !== undefined ? ` ${Math.floor(s.elapsedMs / 1000)}초` : '';
+  switch (s.phase) {
+    case 'code-generating': return `💻 코드 생성 중…${secs}`;
+    case 'code-executing': return `⚡ 코드 실행 중…${secs}`;
+    case 'querying': return `🔎 쿼리 실행 중…${secs}`;
+    case 'working': return `🔎 분석 중…${secs}`;
+    default: return '🔎 분석 중…';
+  }
 }
 
 // Mirrors agent.py's MODEL_ID label for the (rare) legacy-image case where the stream carries
 // no `{"model": ...}` provenance frame — never shown once a redeployed agent reports its own.
 const FALLBACK_MODEL_LABEL = 'Claude Sonnet 4.6';
 
-export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?: (key: string) => void }) {
+export default function MessageList({ msgs, onSwitch, onFollowUp }: { msgs: Msg[]; onSwitch?: (key: string) => void; onFollowUp?: (q: string) => void }) {
   return (
     <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
       {msgs.map((m, i) => {
@@ -67,10 +89,12 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
             {me || m.streaming
               ? (m.streaming && !m.content
                 ? (m.status
-                  ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink-500">
-                      {m.status.phase === 'working' && m.status.elapsedMs !== undefined
-                        ? `🔎 분석 중… ${Math.floor(m.status.elapsedMs / 1000)}초`
-                        : '🔎 분석 중…'}
+                  ? <div className="text-[13px] leading-relaxed text-ink-500">
+                      <div className="whitespace-pre-wrap">{statusLabel(m.status)}</div>
+                      {/* v1-parity: show the generated query (SQL/PromQL/...) as it runs */}
+                      {m.status.query && (
+                        <pre className="mt-1.5 max-h-32 overflow-auto rounded border border-ink-100 bg-paper-muted px-2 py-1 font-mono text-[11px] text-ink-600">{m.status.query}</pre>
+                      )}
                     </div>
                   : null)
                 : <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>)
@@ -85,6 +109,13 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                   <span className="font-mono text-[11px] text-ink-500">{m.model ?? FALLBACK_MODEL_LABEL}</span>
                   {m.elapsedMs !== undefined && (
                     <span className="tabular-nums text-[11px] text-ink-300">{(m.elapsedMs / 1000).toFixed(1)}s</span>
+                  )}
+                  {/* v1-parity per-answer cost feedback: tokens + estimated USD */}
+                  {m.usage && (
+                    <span className="tabular-nums text-[11px] text-ink-400" title={`in ${m.usage.inputTokens.toLocaleString()} · out ${m.usage.outputTokens.toLocaleString()} tokens`}>
+                      {(m.usage.inputTokens + m.usage.outputTokens).toLocaleString()} tok
+                      {m.costUsd !== undefined && <span className="text-ink-300"> · ~{fmtCost(m.costUsd)}</span>}
+                    </span>
                   )}
                   <button
                     onClick={() => void navigator.clipboard?.writeText(m.content)}
@@ -105,6 +136,23 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                     {m.tools.length > 4 && <span className="text-[10.5px] text-ink-300">+{m.tools.length - 4}</span>}
                   </div>
                 )}
+              </div>
+            )}
+            {/* v1-parity followUpMap: post-answer deepening suggestions for the answered section. */}
+            {!me && !m.streaming && sec?.followUps && sec.followUps.length > 0 && onFollowUp && (
+              <div className="mt-2">
+                <div className="mb-1 text-[10px] text-ink-400">이어서 물어보기</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sec.followUps.slice(0, 3).map((q) => (
+                    <button
+                      key={q}
+                      onClick={() => onFollowUp(q)}
+                      className="rounded-md border border-ink-100 bg-paper-muted px-2 py-1 text-left text-[11px] text-ink-600 transition-colors hover:border-brand-200 hover:text-brand-700"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
             {alts.length > 0 && (

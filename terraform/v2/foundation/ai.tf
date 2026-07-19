@@ -359,6 +359,33 @@ resource "aws_iam_role_policy" "task_agentcore_ssm" {
   })
 }
 
+# v1-parity Code Interpreter chat route (web/lib/code-interpreter.ts): the web task role runs Python
+# in the provisioned AgentCore sandbox (Start/Invoke/Stop/Get session). Data-plane only — NOT the
+# control-plane create/delete. Scoped to this account/region's code-interpreter resources. The
+# Sonnet code-GENERATION + Bedrock-direct fallback InvokeModelWithResponseStream is already granted
+# by task_synthesis_bedrock (same Sonnet FM/profile); this policy adds only the sandbox actions.
+resource "aws_iam_role_policy" "task_code_interpreter" {
+  count = local.ac_count
+  name  = "${var.project}-task-code-interpreter"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "bedrock-agentcore:StartCodeInterpreterSession",
+        "bedrock-agentcore:InvokeCodeInterpreter",
+        "bedrock-agentcore:StopCodeInterpreterSession",
+        "bedrock-agentcore:GetCodeInterpreterSession",
+      ]
+      Resource = [
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:code-interpreter-custom/*",
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:code-interpreter/*",
+      ]
+    }]
+  })
+}
+
 # web task role may invoke the AgentCore runtime (P3-A chat). Scoped to our runtime name prefix
 # (the runtime ID suffix is provisioner-generated) + its DEFAULT endpoint. No wildcard actions.
 resource "aws_iam_role_policy" "task_agentcore_invoke" {

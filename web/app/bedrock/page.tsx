@@ -9,6 +9,7 @@ import AreaTrend from '@/components/charts/AreaTrend';
 import BarDistribution from '@/components/charts/BarDistribution';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
+import ChatOpsStatsCard from '@/components/chat/ChatOpsStatsCard';
 
 interface CostBreakdown { inputCost: number; outputCost: number; cacheReadCost: number; cacheWriteCost: number; total: number; cacheSavings: number }
 interface ModelMetric {
@@ -185,6 +186,10 @@ export default function BedrockPage() {
             </>
           )
         )}
+
+        {/* v1-parity AI-call ops stats — independent of the CloudWatch range/account above
+            (own /api/chat/stats fetch); self-hides when nothing is recorded. */}
+        <ChatOpsStatsCard />
       </div>
     </>
   );
