@@ -35,17 +35,18 @@ export interface StatTileProps {
   className?: string;
   /** When set, the tile becomes a navigation link (v1-parity: click a KPI → its page). */
   href?: string;
-  /** v1-parity accent glyph — an emoji or small icon shown in a rounded tinted box at the
+  /** v1-parity accent glyph — a small icon (lucide) shown in a rounded translucent box at the
    *  TOP-RIGHT of the tile (replaces the faint AwsopsMark watermark when provided). */
   icon?: ReactNode;
 }
 
-// Variant → tinted top-right icon box (matches the value/border accent).
+// Variant → translucent top-right icon box (v1 StatsCard style: `bg-accent-*/10` + colored icon —
+// the box tint is a 10%-alpha wash of the icon color, so it reads as a transparent icon chip).
 const ICON_BOX: Record<StatTileVariant, string> = {
-  default: 'bg-ink-100 text-ink-500',
-  accent: 'bg-brand-50 text-brand-600',
-  warn: 'bg-brand-50 text-brand-700',
-  danger: 'bg-rose-50 text-rose-600',
+  default: 'bg-ink-500/10 text-ink-500',
+  accent: 'bg-brand-500/10 text-brand-600',
+  warn: 'bg-brand-500/10 text-brand-700',
+  danger: 'bg-rose-500/10 text-rose-600',
 };
 
 function trendTone(trend: string): string {

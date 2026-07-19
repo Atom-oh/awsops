@@ -12,10 +12,29 @@ describe('formatDetailValue', () => {
     expect(formatDetailValue('x', undefined).kind).toBe('empty');
     expect(formatDetailValue('x', '').kind).toBe('empty');
   });
-  it('classifies objects as code (pretty JSON)', () => {
-    const f = formatDetailValue('tags', { Name: 'web' });
+  it('classifies generic objects as code (pretty JSON)', () => {
+    const f = formatDetailValue('vpc_config', { SubnetIds: ['s-1'] });
     expect(f.kind).toBe('code');
-    expect(f.text).toContain('"Name"');
+    expect(f.text).toContain('"SubnetIds"');
+  });
+  it('classifies tags as key/value entries (v1-parity readable rows, not JSON)', () => {
+    const f = formatDetailValue('tags', { Name: 'web', env: 'prod' });
+    expect(f.kind).toBe('tags');
+    expect(f.entries).toEqual([['Name', 'web'], ['env', 'prod']]);
+    // empty tag map renders as the muted em-dash, not '{}'
+    expect(formatDetailValue('tags', {}).kind).toBe('empty');
+  });
+  it('classifies known structured arrays as idlist rows (SG / block devices / NICs)', () => {
+    const sg = formatDetailValue('security_groups', [{ GroupId: 'sg-1', GroupName: 'web' }]);
+    expect(sg.kind).toBe('idlist');
+    expect(sg.items).toEqual([{ id: 'sg-1', name: 'web' }]);
+    const bdm = formatDetailValue('block_device_mappings', [
+      { DeviceName: '/dev/xvda', Ebs: { VolumeId: 'vol-1', DeleteOnTermination: true } },
+    ]);
+    expect(bdm.kind).toBe('idlist');
+    expect(bdm.items).toEqual([{ id: '/dev/xvda', name: 'vol-1', flag: 'DeleteOnTermination' }]);
+    // unexpected shape falls back to raw JSON — never a crash or silent drop
+    expect(formatDetailValue('security_groups', ['sg-raw-string']).kind).toBe('code');
   });
   it('classifies known state keys as state', () => {
     expect(formatDetailValue('instance_state', 'running')).toEqual({ kind: 'state', text: 'running' });
@@ -41,14 +60,15 @@ describe('buildDetailGroups', () => {
   it('groups by spec sections with friendly labels and an Other bucket', () => {
     const g = buildDetailGroups(row, INVENTORY_TYPES.ec2);
     const labels = g.map((x) => x.label);
-    expect(labels).toContain('Identity');
-    expect(labels).toContain('Other'); // tags is not in any ec2 section
+    expect(labels).toContain('Instance'); // v1-parity ec2 categories (Instance/Compute/…/Tags/Image)
+    expect(labels).toContain('Tags');     // tags now has its own v1-parity section
     // friendly label from the column spec
     const all = g.flatMap((x) => x.items);
     expect(all.find((i) => i.key === 'instance_type')?.label).toBe('Type');
     // every present key appears exactly once across groups
     const keys = all.map((i) => i.key).sort();
     expect(keys).toEqual(['instance_state', 'instance_type', 'name', 'region', 'resource_id', 'tags']);
+    expect(new Set(keys).size).toBe(keys.length); // exactly once across groups
   });
 
   it('skips section keys absent from the row and drops empty sections', () => {

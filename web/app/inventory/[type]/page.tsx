@@ -1,7 +1,12 @@
 'use client';
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
-import { Search } from 'lucide-react';
+import {
+  Search, Server, Zap, Boxes, Package, Archive, HardDrive, Camera, Database, Table2,
+  DatabaseZap, Radio, Network, Split, BrickWall, Scale, Target, Globe, ListFilter,
+  FileSearch, Bell, KeyRound, Users, Shield, Activity,
+  AlertTriangle, AlertCircle, CheckCircle2, Circle, type LucideIcon,
+} from 'lucide-react';
 import DataTable from '@/components/ui/DataTable';
 import DetailPanel from '@/components/ui/DetailPanel';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -30,20 +35,22 @@ function stateVariant(value: string): 'default' | 'danger' {
   return BAD_STATES.has(value.trim().toLowerCase()) ? 'danger' : 'default';
 }
 
-// v1-parity KPI glyphs. Per-type emoji for the total tile; a group fallback covers unlisted types.
-const TYPE_EMOJI: Record<string, string> = {
-  ec2: '🖥️', lambda: 'λ', ecs_cluster: '📦', ecs_service: '📦', ecs_task: '📦', ecr: '🐳',
-  s3: '🪣', ebs_volume: '💾', ebs_snapshot: '📸', rds: '🗄️', dynamodb: '⚡', elasticache: '🔥',
-  opensearch: '🔍', msk: '📨', vpc: '🌐', subnet: '🔗', security_group: '🛡️',
-  alb: '⚖️', nlb: '⚖️', target_group: '🎯', cloudfront: '🌎', cloudfront_vpc_origin: '🌎',
-  alb_listener_rule: '📋', waf: '🧱', cloudtrail: '🧾', cloudwatch_alarm: '🔔',
-  iam_role: '🔑', iam_user: '👤',
+// v1-parity KPI glyphs (v1 StatsCard used lucide icons in a translucent corner box, not emoji).
+// Per-type icon for the total tile; a group fallback covers unlisted types.
+const TYPE_ICON: Record<string, LucideIcon> = {
+  ec2: Server, lambda: Zap, ecs_cluster: Boxes, ecs_service: Boxes, ecs_task: Boxes, ecr: Package,
+  s3: Archive, ebs_volume: HardDrive, ebs_snapshot: Camera, rds: Database, dynamodb: Table2,
+  elasticache: DatabaseZap, opensearch: Search, msk: Radio, vpc: Network, subnet: Split,
+  security_group: BrickWall, alb: Scale, nlb: Scale, target_group: Target,
+  cloudfront: Globe, cloudfront_vpc_origin: Globe, alb_listener_rule: ListFilter,
+  waf: BrickWall, cloudtrail: FileSearch, cloudwatch_alarm: Bell,
+  iam_role: KeyRound, iam_user: Users,
 };
-const GROUP_EMOJI: Record<string, string> = {
-  Compute: '🖥️', 'Storage & DB': '🗄️', Network: '🌐', Security: '🛡️', Monitoring: '📊',
+const GROUP_ICON: Record<string, LucideIcon> = {
+  Compute: Server, 'Storage & DB': Database, Network: Network, Security: Shield, Monitoring: Activity,
 };
-function variantEmoji(v: 'default' | 'accent' | 'danger' | 'warn'): string {
-  return v === 'danger' ? '⚠️' : v === 'warn' ? '🟡' : v === 'accent' ? '✅' : '•';
+function variantIcon(v: 'default' | 'accent' | 'danger' | 'warn'): LucideIcon {
+  return v === 'danger' ? AlertTriangle : v === 'warn' ? AlertCircle : v === 'accent' ? CheckCircle2 : Circle;
 }
 
 // Count rows by a column value (stringified), descending by count.
@@ -193,15 +200,20 @@ export default function InventoryTypePage() {
   const arch = layoutOf(type);
 
   // Composable section blocks — arranged per archetype in the render below.
-  // v1-parity: a leading emoji glyph in each KPI tile's top-right box (the "총 N" tile gets the
-  // resource-type emoji; state tiles get a health glyph by variant).
+  // v1-parity: a lucide icon in each KPI tile's translucent top-right box (the "총 N" tile gets
+  // the resource-type icon; state tiles get a health icon by variant) — v1 StatsCard style.
+  const TypeIcon = TYPE_ICON[type] ?? GROUP_ICON[spec.group] ?? Package;
+  const stateIconFor = (v: 'default' | 'accent' | 'danger' | 'warn') => {
+    const I = variantIcon(v);
+    return <I size={16} />;
+  };
   const kpiRow = (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" icon={TYPE_EMOJI[type] ?? GROUP_EMOJI[spec.group] ?? '📦'} />
+      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" icon={<TypeIcon size={16} />} />
       {highlightCards.length > 0
-        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} icon={variantEmoji(h.variant)} />)
-        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} icon={variantEmoji(stateVariant(s.name))} />)}
-      {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon="📊" />)}
+        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} icon={stateIconFor(h.variant)} />)
+        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} icon={stateIconFor(stateVariant(s.name))} />)}
+      {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}
     </div>
   );
   const donut = spec.distKey && distData.length > 0

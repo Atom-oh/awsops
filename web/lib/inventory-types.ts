@@ -20,10 +20,16 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'pricing_model', label: 'Pricing' },
     { key: 'private_ip_address', label: 'Private IP' }, { key: 'public_ip_address', label: 'Public IP' },
     { key: 'subnet_id', label: 'Subnet' }, { key: 'vpc_id', label: 'VPC' }, { key: 'launch_time', label: 'Launch' } ],
+    // v1-parity detail categories (v1 src/app/ec2/page.tsx side panel): Instance / Compute /
+    // Network / Security Groups / Storage / Tags / Image. Keys match sync_lambda.py's ec2 SELECT.
     sections: [
-      { label: 'Identity', keys: ['resource_id', 'name', 'region'] },
-      { label: 'Compute', keys: ['instance_type', 'instance_state', 'pricing_model', 'launch_time'] },
-      { label: 'Network', keys: ['private_ip_address', 'public_ip_address', 'subnet_id', 'vpc_id'] },
+      { label: 'Instance', keys: ['resource_id', 'name', 'account_id', 'region', 'placement_availability_zone', 'placement_tenancy', 'key_name', 'iam_instance_profile_arn', 'monitoring_state', 'launch_time', 'state_transition_time'] },
+      { label: 'Compute', keys: ['instance_type', 'instance_state', 'pricing_model', 'vcpus', 'cpu_options_core_count', 'cpu_options_threads_per_core', 'memory_mib', 'network_performance', 'instance_storage_supported'] },
+      { label: 'Network', keys: ['private_ip_address', 'private_dns_name', 'public_ip_address', 'public_dns_name', 'vpc_id', 'subnet_id', 'max_enis', 'ena_support', 'network_interfaces'] },
+      { label: 'Security Groups', keys: ['security_groups'] },
+      { label: 'Storage', keys: ['root_device_name', 'root_device_type', 'ebs_optimized', 'block_device_mappings'] },
+      { label: 'Tags', keys: ['tags'] },
+      { label: 'Image', keys: ['image_id', 'architecture', 'platform_details', 'virtualization_type', 'hypervisor'] },
     ],
     filterKeys: ['instance_type', 'vpc_id'] },
   lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', columns: [

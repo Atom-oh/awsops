@@ -3,7 +3,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useResizablePanel, usePublishDockedWidth, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import {
   X, Info, Cpu, Network, Shield, HardDrive, Tag, KeyRound, DollarSign, Database,
-  Server, Globe, Boxes, Activity, type LucideIcon,
+  Server, Globe, Boxes, Activity, Layers, type LucideIcon,
 } from 'lucide-react';
 import Badge from './Badge';
 import StatePill from './StatePill';
@@ -15,10 +15,12 @@ import type { RdsInstanceMetrics } from '@/lib/metrics';
 // shared vocabulary across inventory types (Identity/Compute/Network/Security/Storage/Tags/…), so
 // a keyword match on the label picks the icon; anything unmatched falls back to Info.
 const SECTION_ICONS: [RegExp, LucideIcon][] = [
+  [/image|ami/i, Layers],
+  [/^instance/i, Server],
   [/network|vpc|subnet|dns|ip|endpoint|route|listener/i, Network],
   [/security|iam|auth|access|policy|encrypt/i, Shield],
   [/storage|volume|disk|ebs|snapshot|backup/i, HardDrive],
-  [/compute|cpu|memory|capacity|instance|runtime|handler|desired/i, Cpu],
+  [/compute|cpu|memory|capacity|runtime|handler|desired/i, Cpu],
   [/tag/i, Tag],
   [/key|credential/i, KeyRound],
   [/cost|billing|pricing/i, DollarSign],
@@ -62,6 +64,33 @@ function renderValue(fmt: DetailValue) {
       );
     case 'state':
       return <StatePill value={fmt.text!} />;
+    // v1-parity readable renderings (was raw JSON):
+    case 'tags':
+      // v1 Tags section: accent mono key column + plain value per line.
+      return (
+        <div className="space-y-1">
+          {fmt.entries!.map(([k, v]) => (
+            <div key={k} className="flex gap-2 text-[12.5px]">
+              <span className="min-w-[110px] shrink-0 break-all font-mono text-[11px] text-brand-700">{k}</span>
+              <span className="break-all text-ink-700 select-text">{v}</span>
+            </div>
+          ))}
+        </div>
+      );
+    case 'idlist':
+      // v1 security-group / block-device / NIC lists: mono id + name (+ public ip / flag).
+      return (
+        <div className="space-y-1">
+          {fmt.items!.map((it, i) => (
+            <div key={`${it.id}-${i}`} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px]">
+              <span className="font-mono text-[11px] text-brand-700 select-text">{it.id}</span>
+              {it.name && <span className="text-ink-600 select-text">{it.name}</span>}
+              {it.extra && <span className="text-ink-400">({it.extra})</span>}
+              {it.flag && <span className="text-[10.5px] font-medium text-warning-text">{it.flag}</span>}
+            </div>
+          ))}
+        </div>
+      );
     default:
       return <span className="block break-words text-[13px] text-ink-800 select-text">{fmt.text}</span>;
   }
@@ -238,12 +267,19 @@ export default function DetailPanel({
                   </h3>
                 )}
                 <dl className="space-y-2.5">
-                  {group.items.map((it) => (
-                    <div key={it.key} className="grid grid-cols-1 gap-0.5">
-                      <dt className="font-mono text-[11px] text-ink-500">{it.label}</dt>
-                      <dd className="text-[13px] text-ink-800">{renderValue(it.fmt)}</dd>
-                    </div>
-                  ))}
+                  {group.items.map((it) => {
+                    // A section whose ONLY field is a structured list (Tags / Security Groups)
+                    // would repeat its own title as the dt — v1 showed just the rows; do the same.
+                    const soloList = group.items.length === 1
+                      && (it.fmt.kind === 'tags' || it.fmt.kind === 'idlist')
+                      && it.label === group.label;
+                    return (
+                      <div key={it.key} className="grid grid-cols-1 gap-0.5">
+                        {!soloList && <dt className="font-mono text-[11px] text-ink-500">{it.label}</dt>}
+                        <dd className="text-[13px] text-ink-800">{renderValue(it.fmt)}</dd>
+                      </div>
+                    );
+                  })}
                 </dl>
               </section>
             );

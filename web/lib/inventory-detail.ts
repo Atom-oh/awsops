@@ -3,8 +3,17 @@ import type { InvType } from './inventory-types';
 // Spec-driven, grouped, typed rendering layer for the inventory DetailPanel.
 // Pure (no React) so it unit-tests in node env and stays client-safe.
 
-export type DetailKind = 'boolean' | 'state' | 'empty' | 'code' | 'text';
-export interface DetailValue { kind: DetailKind; text?: string; bool?: boolean }
+export type DetailKind = 'boolean' | 'state' | 'empty' | 'code' | 'text' | 'tags' | 'idlist';
+export interface DetailListItem { id: string; name?: string; extra?: string; flag?: string }
+export interface DetailValue {
+  kind: DetailKind;
+  text?: string;
+  bool?: boolean;
+  /** kind 'tags': key/value pairs, insertion-ordered. */
+  entries?: [string, string][];
+  /** kind 'idlist': structured rows (security groups / block devices / NICs — v1-parity lists). */
+  items?: DetailListItem[];
+}
 export interface DetailItem { key: string; label: string; value: unknown; fmt: DetailValue }
 export interface DetailGroup { label: string; items: DetailItem[] }
 
@@ -13,17 +22,91 @@ const STATE_KEYS = new Set([
   'state', 'status', 'instance_state', 'cache_cluster_status', 'state_value', 'table_status', 'state_code',
 ]);
 
+const asRecord = (v: unknown): Record<string, unknown> | null =>
+  v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
+/** v1-parity structured lists: map a known array-of-objects field to id/name/extra/flag rows.
+ *  Returns null when the shape is unexpected → caller falls back to raw JSON. */
+function structuredList(key: string, value: unknown): DetailListItem[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const rows: DetailListItem[] = [];
+  for (const el of value) {
+    const o = asRecord(el);
+    if (!o) return null;
+    if (key === 'security_groups') {
+      const id = o.GroupId ?? o.group_id;
+      if (typeof id !== 'string') return null;
+      rows.push({ id, name: typeof (o.GroupName ?? o.group_name) === 'string' ? String(o.GroupName ?? o.group_name) : undefined });
+    } else if (key === 'block_device_mappings') {
+      const id = o.DeviceName ?? o.device_name;
+      if (typeof id !== 'string') return null;
+      const ebs = asRecord(o.Ebs ?? o.ebs);
+      rows.push({
+        id,
+        name: typeof ebs?.VolumeId === 'string' ? (ebs.VolumeId as string)
+          : typeof ebs?.volume_id === 'string' ? (ebs.volume_id as string) : undefined,
+        flag: (ebs?.DeleteOnTermination ?? ebs?.delete_on_termination) === true ? 'DeleteOnTermination' : undefined,
+      });
+    } else if (key === 'network_interfaces') {
+      const id = o.NetworkInterfaceId ?? o.network_interface_id;
+      if (typeof id !== 'string') return null;
+      const assoc = asRecord(o.Association ?? o.association);
+      rows.push({
+        id,
+        name: typeof (o.PrivateIpAddress ?? o.private_ip_address) === 'string'
+          ? String(o.PrivateIpAddress ?? o.private_ip_address) : undefined,
+        extra: typeof assoc?.PublicIp === 'string' ? (assoc.PublicIp as string) : undefined,
+      });
+    } else {
+      return null;
+    }
+  }
+  return rows;
+}
+
 /** Classify a single field value into a render descriptor. */
 export function formatDetailValue(key: string, value: unknown): DetailValue {
   if (typeof value === 'boolean') return { kind: 'boolean', bool: value };
   if (value == null || value === '') return { kind: 'empty' };
-  if (typeof value === 'object') return { kind: 'code', text: JSON.stringify(value, null, 2) };
+  if (typeof value === 'object') {
+    // v1-parity readable renderings for well-known structured fields; JSON only as fallback.
+    if (key === 'tags') {
+      const o = asRecord(value);
+      if (o) {
+        const entries = Object.entries(o)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => [k, String(v)] as [string, string]);
+        if (entries.length === 0) return { kind: 'empty' };
+        return { kind: 'tags', entries };
+      }
+    }
+    const items = structuredList(key, value);
+    if (items) return { kind: 'idlist', items };
+    return { kind: 'code', text: JSON.stringify(value, null, 2) };
+  }
   const s = String(value);
   if (STATE_KEYS.has(key) && s !== '') return { kind: 'state', text: s };
   return { kind: 'text', text: s };
 }
 
-const VIRTUAL_LABELS: Record<string, string> = { resource_id: 'Resource ID', region: 'Region' };
+// Friendly labels for detail-only keys (not in a type's table columns). Shared across types —
+// these names are AWS-universal. Table columns still win (labelFor checks spec.columns first).
+const VIRTUAL_LABELS: Record<string, string> = {
+  resource_id: 'Resource ID', region: 'Region', name: 'Name', account_id: 'Account',
+  image_id: 'Image (AMI)', architecture: 'Architecture', platform_details: 'Platform',
+  virtualization_type: 'Virtualization', hypervisor: 'Hypervisor',
+  ebs_optimized: 'EBS Optimized', ena_support: 'ENA Support', monitoring_state: 'Monitoring',
+  placement_availability_zone: 'AZ', placement_tenancy: 'Tenancy',
+  private_dns_name: 'Private DNS', public_dns_name: 'Public DNS',
+  cpu_options_core_count: 'Cores', cpu_options_threads_per_core: 'Threads/Core',
+  memory_mib: 'Memory (MiB)', vcpus: 'vCPUs', network_performance: 'Network Perf',
+  max_enis: 'Max ENIs', instance_storage_supported: 'Instance Storage',
+  root_device_name: 'Root Device', root_device_type: 'Root Device Type',
+  iam_instance_profile_arn: 'IAM Role', key_name: 'Key Pair',
+  launch_time: 'Launch Time', state_transition_time: 'State Changed',
+  security_groups: 'Security Groups', block_device_mappings: 'Block Devices',
+  network_interfaces: 'Network Interfaces', tags: 'Tags',
+};
 
 function labelFor(key: string, spec?: InvType): string {
   return spec?.columns.find((c) => c.key === key)?.label ?? VIRTUAL_LABELS[key] ?? key;
