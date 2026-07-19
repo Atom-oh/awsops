@@ -36,7 +36,8 @@ export async function* bedrockDirectStream(
     modelId: MODEL_ID,
     system: [{ text: `${SYSTEM} Always respond in ${lang}.` }],
     messages,
-    inferenceConfig: { maxTokens: 4096, temperature: 0.2 },
+    // sonnet-5 rejects `temperature` on ConverseStream (see agent/agent.py note) — omit it.
+    inferenceConfig: { maxTokens: 4096 },
   }), { abortSignal: opts.abortSignal });
   for await (const ev of res.stream ?? []) {
     const d = ev.contentBlockDelta?.delta;

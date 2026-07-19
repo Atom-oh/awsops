@@ -30,7 +30,10 @@ const bedrockSend: SynthSend = async function* (system, user, modelId, abortSign
     modelId,
     system: [{ text: system }],
     messages: [{ role: 'user', content: [{ text: user }] }],
-    inferenceConfig: { maxTokens: 4096, temperature: 0.2 },
+    // LATENT BUG FIX (found via the code-route live test 2026-07-19): sonnet-5 rejects
+    // `temperature` on ConverseStream — with it, EVERY live synthesis call failed and the
+    // fan-out path degraded to concatenation. Same constraint as agent/agent.py.
+    inferenceConfig: { maxTokens: 4096 },
   }), { abortSignal }); // stop token generation (and cost) if the client disconnects
   for await (const ev of res.stream ?? []) {
     const d = ev.contentBlockDelta?.delta;

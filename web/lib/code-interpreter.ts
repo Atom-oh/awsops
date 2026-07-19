@@ -60,7 +60,9 @@ export async function* generateCode(prompt: string, abortSignal?: AbortSignal): 
     modelId: CODEGEN_MODEL,
     system: [{ text: CODEGEN_SYSTEM }],
     messages: [{ role: 'user', content: [{ text: `<request>\n${prompt}\n</request>` }] }],
-    inferenceConfig: { maxTokens: 2048, temperature: 0 },
+    // NOTE: sonnet-5 REJECTS `temperature` on ConverseStream ("temperature is deprecated for this
+    // model" — live-verified 2026-07-19, same constraint documented in agent/agent.py). Omit it.
+    inferenceConfig: { maxTokens: 2048 },
   }), { abortSignal });
   for await (const ev of res.stream ?? []) {
     const d = ev.contentBlockDelta?.delta;
