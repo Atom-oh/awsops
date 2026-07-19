@@ -341,6 +341,7 @@ export async function POST(request: Request) {
       }
       // ADR-044 cross-domain auto-synthesis: fan out over the selected built-in gateways, then merge.
       if (doFanout) {
+        const tf0 = Date.now();
         // gate CRITICAL: each gateway gets its OWN built-in invoke input (no shared primary spec).
         const settled = await Promise.allSettled(
           fanGateways.map((g) => invokeAgent({
@@ -355,7 +356,7 @@ export async function POST(request: Request) {
           controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: chatMsg.allRoutesFailed(lang) })}\n\n`));
           controller.enqueue(enc.encode('data: [DONE]\n\n'));
           controller.close();
-          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub, elapsedMs: 0, success: false, via });
+          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub, elapsedMs: Date.now() - tf0, success: false, via });
           return;
         }
         // synthesizeStream: ≥2 survivors → merged stream; exactly 1 → passthrough (no extra Bedrock call).
@@ -368,7 +369,7 @@ export async function POST(request: Request) {
         }
         if (!request.signal.aborted) {
           record(full); // don't persist a half-streamed, client-aborted answer
-          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub, elapsedMs: 0, success: true, via });
+          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub, elapsedMs: Date.now() - tf0, success: true, via });
         }
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
         controller.close();
