@@ -881,7 +881,16 @@ async def handler(payload):
     lang_directive = ""
     if response_language in ("ko", "en", "zh"):
         lang_name = {"ko": "Korean(한국어)", "en": "English", "zh": "Simplified Chinese(简体中文)"}[response_language]
-        lang_directive = f"\n\n## Response Language\nAlways respond in {lang_name}, regardless of the language of the question."
+        # Deliberately forceful: live-tested 2026-07-19 — a softly-worded directive loses to
+        # COMMON_FOOTER's "respond in the user's language" whenever the equally-forceful
+        # MANDATORY account directive is also present (the model then follows the question's
+        # language). CRITICAL + explicit-override wording wins consistently.
+        lang_directive = (
+            f"\n\n## CRITICAL: Response Language\n"
+            f"Write the ENTIRE response in {lang_name}. This rule OVERRIDES every other language "
+            f"instruction (including 'respond in the user's language') and applies regardless of "
+            f"the language the question was asked in."
+        )
     tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
     gateway_key = _resolve_gateway_key(gateway_role, GATEWAYS)
     # NO eager `GATEWAYS[DEFAULT_GATEWAY]` default — that index is always evaluated and KeyErrors
