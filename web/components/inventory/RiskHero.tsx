@@ -43,12 +43,12 @@ export default function RiskHero({ label, total, cards, capped = false }: { labe
             const hot = c.variant === 'danger' && c.value !== 0;
             const Icon = highlightIcon(c.label, c.variant);
             return (
-              <div key={c.label} className={cn('relative rounded-lg border px-3 py-2.5', hot ? 'border-rose-200 bg-rose-50' : 'border-ink-100 bg-card')}>
-                {/* v1-parity translucent glyph chip, top-right (matches StatTile) */}
+              <div key={c.label} className={cn('relative rounded-lg border px-3 py-2.5', hot ? 'border-rose-200 bg-rose-50' : 'border-brand-200 bg-card')}>
+                {/* v1-parity translucent glyph chip, top-right (matches StatTile: brand unless danger) */}
                 <span
                   className={cn(
                     'absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-md',
-                    hot ? 'bg-rose-500/10 text-rose-600' : c.variant === 'accent' ? 'bg-brand-500/10 text-brand-600' : 'bg-ink-500/10 text-ink-500',
+                    hot ? 'bg-rose-500/10 text-rose-600' : 'bg-brand-500/10 text-brand-600',
                   )}
                 >
                   <Icon size={13} />

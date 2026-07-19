@@ -77,12 +77,16 @@ export default function StatTile({
   icon,
 }: StatTileProps) {
   const compact = size === 'compact';
+  // A full-size tile carrying a glyph chip is a KPI card — informational (default/warn) ones
+  // adopt the accent outline + brand chip so the row reads uniformly; only danger stays rose.
+  const emphasized = !compact && icon != null;
   const border =
-    variant === 'accent'
+    variant === 'accent' || (emphasized && variant !== 'danger')
       ? 'border-brand-200'
       : variant === 'danger'
         ? 'border-rose-200'
         : 'border-ink-100';
+  const chipStyle = emphasized && variant === 'default' ? ICON_BOX.accent : ICON_BOX[variant];
 
   const valueColor =
     variant === 'danger' ? 'text-rose-700' : variant === 'warn' ? 'text-brand-700' : 'text-ink-800';
@@ -104,7 +108,7 @@ export default function StatTile({
           className={cn(
             'absolute flex items-center justify-center leading-none',
             compact ? 'top-2.5 right-2.5 h-6 w-6 rounded-md text-[12px]' : 'top-3 right-3 h-8 w-8 rounded-lg text-[15px]',
-            ICON_BOX[variant],
+            chipStyle,
           )}
         >
           {icon}
