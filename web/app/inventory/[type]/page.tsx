@@ -233,8 +233,9 @@ export default function InventoryTypePage() {
 
         {rows && (
           <>
+            {/* Uniform page order (owner 지시): KPI band → distribution graph → detail table.
+                Risk types keep their verdict hero as the KPI band; everything else uses kpiRow. */}
             {arch === 'risk' ? (
-              /* Security posture: verdict hero → table → compact donut. */
               <>
                 <RiskHero label={spec.label} total={allRows.length} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
                 {metricCards.length > 0 && (
@@ -242,33 +243,12 @@ export default function InventoryTypePage() {
                     {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}
                   </div>
                 )}
-                {tableBlock}
-                {donut && <div className="lg:max-w-md">{donut}</div>}
-              </>
-            ) : arch === 'chart' && donut ? (
-              /* Utilization/state: KPIs → prominent full-width distribution → table. */
-              <>
-                {kpiRow}
-                {donut}
-                {tableBlock}
-              </>
-            ) : arch === 'capacity' && donut ? (
-              /* Engine/type/size: KPIs → donut beside the table. */
-              <>
-                {kpiRow}
-                <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-6 items-start">
-                  {donut}
-                  {tableBlock}
-                </div>
               </>
             ) : (
-              /* directory (+ any archetype without a distribution): scan-first. */
-              <>
-                {kpiRow}
-                {tableBlock}
-                {donut && <div className="lg:max-w-sm">{donut}</div>}
-              </>
+              kpiRow
             )}
+            {donut}
+            {tableBlock}
           </>
         )}
       </div>

@@ -163,7 +163,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Egress Rules', keys: ['ip_permissions_egress'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  iam_role: { label: 'IAM Roles', group: 'Security', columns: [
+  iam_role: { label: 'IAM Roles', group: 'Security', distKey: 'path', columns: [
     { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' },
     { key: 'role_id', label: 'Role ID' }, { key: 'max_session_duration', label: 'Max session(s)' } ],
     sections: [
@@ -246,7 +246,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     ] },
   cloudfront_vpc_origin: { label: 'CloudFront VPC Origins', group: 'Network', stateKey: 'status', distKey: 'status', columns: [
     { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'arn', label: 'Target LB' } ] },
-  apigatewayv2_route: { label: 'API GW Routes', group: 'Network', columns: [
+  apigatewayv2_route: { label: 'API GW Routes', group: 'Network', distKey: 'authorization_type', columns: [
     { key: 'route_key', label: 'Route' }, { key: 'target', label: 'Integration' },
     { key: 'authorization_type', label: 'Auth' } ],
     sections: [
