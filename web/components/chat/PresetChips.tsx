@@ -1,12 +1,14 @@
 'use client';
 import { AUTO_PRESETS } from '@/lib/sections';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // Auto-routing is the default, so the starter chips are the generic AUTO_PRESETS. (Per-section
 // `presets` in lib/sections.ts are retained as data for a possible future per-section hint.)
 export default function PresetChips({ onPick }: { onPick: (q: string) => void }) {
+  const { t } = useI18n();
   return (
     <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-4">
-      <div className="mb-1 text-center text-[13px] text-ink-500">무엇을 도와드릴까요?</div>
+      <div className="mb-1 text-center text-[13px] text-ink-500">{t('chat.welcome')}</div>
       {AUTO_PRESETS.map((p) => (
         <button
           key={p}

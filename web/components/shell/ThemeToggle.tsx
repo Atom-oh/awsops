@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { THEMES, THEME_LABELS, getStoredTheme, setStoredTheme, applyTheme, type Theme } from '@/lib/theme';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import { cn } from '@/lib/cn';
 
 /**
@@ -9,6 +10,7 @@ import { cn } from '@/lib/cn';
  * Uses chrome tokens so it reads correctly on both light and dark chrome.
  */
 export default function ThemeToggle() {
+  const { t } = useI18n();
   const [theme, setTheme] = useState<Theme>('teal');
 
   useEffect(() => {
@@ -22,7 +24,7 @@ export default function ThemeToggle() {
   }
 
   return (
-    <div className="mt-2 flex gap-1 rounded-md border border-chrome-border p-0.5" role="group" aria-label="Theme">
+    <div className="mt-2 flex gap-1 rounded-md border border-chrome-border p-0.5" role="group" aria-label={t('theme.label')}>
       {THEMES.map((t) => (
         <button
           key={t}

@@ -3,6 +3,7 @@ import { isValidElement, useMemo, useState } from 'react';
 import Card from './Card';
 import Badge from './Badge';
 import StatePill from './StatePill';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import { isDeprecatedRuntime } from '@/lib/inventory-types';
 
 export interface Column {
@@ -123,6 +124,7 @@ export default function DataTable({
   /** Column key used as the card title/heading. Default: first column. */
   cardTitleKey?: string;
 }) {
+  const { t } = useI18n();
   const [sort, setSort] = useState<{ key: string; dir: Dir } | null>(null);
 
   const sortedRows = useMemo(() => {
@@ -148,7 +150,7 @@ export default function DataTable({
   if (rows.length === 0) {
     return (
       <Card padded={false}>
-        <div className="py-6 px-3 text-center text-[14px] text-ink-400">데이터 없음</div>
+        <div className="py-6 px-3 text-center text-[14px] text-ink-400">{t('common.noData')}</div>
       </Card>
     );
   }
