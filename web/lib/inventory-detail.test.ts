@@ -34,7 +34,20 @@ describe('formatDetailValue', () => {
     expect(bdm.kind).toBe('idlist');
     expect(bdm.items).toEqual([{ id: '/dev/xvda', name: 'vol-1', flag: 'DeleteOnTermination' }]);
     // unexpected shape falls back to raw JSON — never a crash or silent drop
-    expect(formatDetailValue('security_groups', ['sg-raw-string']).kind).toBe('code');
+    expect(formatDetailValue('security_groups', [{ Unknown: 1 }]).kind).toBe('code');
+  });
+  it('classifies plain string arrays as idlist rows (subnet ids, aliases, ARNs — any key)', () => {
+    const f = formatDetailValue('vpc_subnet_ids', ['subnet-1', 'subnet-2']);
+    expect(f.kind).toBe('idlist');
+    expect(f.items).toEqual([{ id: 'subnet-1' }, { id: 'subnet-2' }]);
+  });
+  it('classifies RDS vpc_security_groups and EBS attachments as idlist rows', () => {
+    const vsg = formatDetailValue('vpc_security_groups', [{ VpcSecurityGroupId: 'sg-9', Status: 'active' }]);
+    expect(vsg.kind).toBe('idlist');
+    expect(vsg.items).toEqual([{ id: 'sg-9', name: 'active' }]);
+    const att = formatDetailValue('attachments', [{ InstanceId: 'i-1', Device: '/dev/xvda', State: 'attached' }]);
+    expect(att.kind).toBe('idlist');
+    expect(att.items).toEqual([{ id: 'i-1', name: '/dev/xvda', extra: 'attached' }]);
   });
   it('classifies known state keys as state', () => {
     expect(formatDetailValue('instance_state', 'running')).toEqual({ kind: 'state', text: 'running' });

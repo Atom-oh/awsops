@@ -29,11 +29,30 @@ const asRecord = (v: unknown): Record<string, unknown> | null =>
  *  Returns null when the shape is unexpected → caller falls back to raw JSON. */
 function structuredList(key: string, value: unknown): DetailListItem[] | null {
   if (!Array.isArray(value) || value.length === 0) return null;
+  // An array of plain strings (subnet ids, SG ids, aliases, ARNs, architectures…) reads far
+  // better as one id per row than as a JSON array literal — applies to every type.
+  if (value.every((el) => typeof el === 'string')) {
+    return (value as string[]).map((id) => ({ id }));
+  }
   const rows: DetailListItem[] = [];
   for (const el of value) {
     const o = asRecord(el);
     if (!o) return null;
-    if (key === 'security_groups') {
+    if (key === 'vpc_security_groups') {
+      // RDS: [{ VpcSecurityGroupId, Status }]
+      const id = o.VpcSecurityGroupId ?? o.vpc_security_group_id;
+      if (typeof id !== 'string') return null;
+      rows.push({ id, name: typeof o.Status === 'string' ? o.Status : undefined });
+    } else if (key === 'attachments') {
+      // EBS: [{ InstanceId, Device, State }] (ECS task attachments fall through to JSON)
+      const id = o.InstanceId ?? o.instance_id;
+      if (typeof id !== 'string') return null;
+      rows.push({
+        id,
+        name: typeof (o.Device ?? o.device) === 'string' ? String(o.Device ?? o.device) : undefined,
+        extra: typeof (o.State ?? o.state) === 'string' ? String(o.State ?? o.state) : undefined,
+      });
+    } else if (key === 'security_groups') {
       const id = o.GroupId ?? o.group_id;
       if (typeof id !== 'string') return null;
       rows.push({ id, name: typeof (o.GroupName ?? o.group_name) === 'string' ? String(o.GroupName ?? o.group_name) : undefined });

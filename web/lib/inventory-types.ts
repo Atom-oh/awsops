@@ -36,12 +36,23 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
     { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' },
     { key: 'handler', label: 'Handler' }, { key: 'last_modified', label: 'Modified' } ],
-    filterKeys: ['runtime'] },
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'description', 'version', 'last_modified'] },
+      { label: 'Runtime', keys: ['runtime', 'handler', 'package_type', 'architectures', 'state', 'last_update_status'] },
+      { label: 'Capacity', keys: ['memory_size', 'timeout', 'code_size', 'code_sha_256', 'layers'] },
+      { label: 'Network', keys: ['vpc_id', 'vpc_subnet_ids', 'vpc_security_group_ids'] },
+    ] },
   ecs_cluster: { label: 'ECS Clusters', group: 'Compute', stateKey: 'status', distKey: 'status', columns: [
     { key: 'status', label: 'Status' }, { key: 'running_tasks_count', label: 'Running' },
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
     { key: 'registered_container_instances_count', label: 'Instances' },
-    { key: 'mtd_cost_usd', label: 'MTD Cost ($)' } ] },
+    { key: 'mtd_cost_usd', label: 'MTD Cost ($)' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'cluster_name', 'account_id', 'region', 'cluster_arn'] },
+      { label: 'Tasks & Services', keys: ['status', 'running_tasks_count', 'pending_tasks_count', 'active_services_count', 'registered_container_instances_count'] },
+      { label: 'Config', keys: ['settings'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', columns: [
     { key: 'service_name', label: 'Service' }, { key: 'status', label: 'Status' },
     { key: 'desired_count', label: 'Desired' }, { key: 'running_count', label: 'Running' },
@@ -49,108 +60,264 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'scheduling_strategy', label: 'Strategy' }, { key: 'cluster_arn', label: 'Cluster' },
     { key: 'task_definition', label: 'Task def' }, { key: 'created_at', label: 'Created' } ],
     sections: [
-      { label: 'Identity', keys: ['resource_id', 'service_name', 'region', 'status'] },
-      { label: 'Capacity', keys: ['desired_count', 'running_count', 'pending_count', 'launch_type', 'scheduling_strategy'] },
-      { label: 'Runtime', keys: ['cluster_arn', 'task_definition', 'created_at'] },
-    ] },
+      { label: 'Identity', keys: ['resource_id', 'service_name', 'service_key', 'account_id', 'region', 'cluster_arn', 'created_at'] },
+      { label: 'Service', keys: ['status', 'desired_count', 'running_count', 'pending_count', 'launch_type', 'scheduling_strategy', 'task_definition'] },
+      { label: 'Tags', keys: ['tags'] },
+    ],
+    filterKeys: ['launch_type'] },
   ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', columns: [
     { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
-    { key: 'launch_type', label: 'Launch' }, { key: 'task_definition_arn', label: 'Task def' } ] },
+    { key: 'launch_type', label: 'Launch' }, { key: 'task_definition_arn', label: 'Task def' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'cluster_arn', 'task_group', 'task_definition_arn'] },
+      { label: 'Task', keys: ['last_status', 'launch_type'] },
+      { label: 'Containers', keys: ['containers', 'attachments'] },
+    ],
+    filterKeys: ['launch_type'] },
   ecr: { label: 'ECR Repositories', group: 'Compute', distKey: 'image_tag_mutability', columns: [
     { key: 'repository_uri', label: 'URI' }, { key: 'image_tag_mutability', label: 'Tag mutability' },
-    { key: 'created_at', label: 'Created' } ] },
+    { key: 'created_at', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'repository_name', 'account_id', 'region', 'arn', 'registry_id', 'repository_uri', 'created_at'] },
+      { label: 'Config', keys: ['image_tag_mutability', 'image_scanning_configuration', 'lifecycle_policy'] },
+      { label: 'Security', keys: ['encryption_configuration'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   s3: { label: 'S3 Buckets', group: 'Storage & DB', distKey: 'region', columns: [
-    { key: 'creation_date', label: 'Created' } ] },
+    { key: 'creation_date', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'creation_date'] },
+    ] },
   ebs_volume: { label: 'EBS Volumes', group: 'Storage & DB', stateKey: 'state', distKey: 'volume_type', columns: [
     { key: 'name', label: 'Name' }, { key: 'volume_type', label: 'Type' }, { key: 'size', label: 'Size(GB)' },
     { key: 'state', label: 'State' }, { key: 'encrypted', label: 'Encrypted' }, { key: 'iops', label: 'IOPS' },
-    { key: 'availability_zone', label: 'AZ' }, { key: 'create_time', label: 'Created' } ] },
+    { key: 'availability_zone', label: 'AZ' }, { key: 'create_time', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'availability_zone', 'create_time'] },
+      { label: 'Storage', keys: ['volume_type', 'size', 'state', 'iops', 'multi_attach_enabled', 'snapshot_id'] },
+      { label: 'Security', keys: ['encrypted', 'kms_key_id'] },
+      { label: 'Attachments', keys: ['attachments'] },
+      { label: 'Tags', keys: ['tags'] },
+    ],
+    filterKeys: ['availability_zone'] },
   ebs_snapshot: { label: 'EBS Snapshots', group: 'Storage & DB', stateKey: 'state', distKey: 'state', columns: [
     { key: 'volume_id', label: 'Volume' }, { key: 'volume_size', label: 'Size(GB)' },
     { key: 'state', label: 'State' }, { key: 'progress', label: 'Progress' },
     { key: 'encrypted', label: 'Encrypted' }, { key: 'start_time', label: 'Started' },
-    { key: 'description', label: 'Description' } ] },
+    { key: 'description', label: 'Description' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'owner_id', 'description', 'start_time'] },
+      { label: 'Snapshot', keys: ['volume_id', 'volume_size', 'state', 'progress'] },
+      { label: 'Security', keys: ['encrypted'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'class', label: 'Class' }, { key: 'status', label: 'Status' }, { key: 'multi_az', label: 'Multi-AZ' },
     { key: 'publicly_accessible', label: 'Public' }, { key: 'allocated_storage', label: 'Storage(GB)' }, { key: 'vpc_id', label: 'VPC' } ],
     sections: [
-      { label: 'Identity', keys: ['resource_id', 'region', 'status'] },
-      { label: 'Engine', keys: ['engine', 'engine_version', 'class', 'allocated_storage'] },
-      { label: 'Network & HA', keys: ['multi_az', 'publicly_accessible', 'vpc_id'] },
-    ] },
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'availability_zone', 'create_time'] },
+      { label: 'Engine', keys: ['engine', 'engine_version', 'class', 'status', 'multi_az', 'auto_minor_version_upgrade'] },
+      { label: 'Endpoint', keys: ['endpoint_address', 'endpoint_port', 'publicly_accessible'] },
+      { label: 'Network', keys: ['vpc_id', 'db_subnet_group_name', 'vpc_security_groups'] },
+      { label: 'Storage', keys: ['allocated_storage', 'storage_type', 'storage_encrypted', 'kms_key_id'] },
+      { label: 'Backup', keys: ['backup_retention_period', 'preferred_backup_window', 'latest_restorable_time', 'copy_tags_to_snapshot', 'deletion_protection'] },
+      { label: 'Security', keys: ['iam_database_authentication_enabled', 'performance_insights_enabled'] },
+      { label: 'Tags', keys: ['tags'] },
+    ],
+    filterKeys: ['class'] },
   dynamodb: { label: 'DynamoDB Tables', group: 'Storage & DB', stateKey: 'table_status', distKey: 'billing_mode', columns: [
     { key: 'table_status', label: 'Status' }, { key: 'billing_mode', label: 'Billing' },
-    { key: 'item_count', label: 'Items' }, { key: 'table_size_bytes', label: 'Size(B)' } ] },
+    { key: 'item_count', label: 'Items' }, { key: 'table_size_bytes', label: 'Size(B)' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'creation_date_time'] },
+      { label: 'Table', keys: ['table_status', 'billing_mode', 'item_count', 'table_size_bytes', 'read_capacity', 'write_capacity', 'key_schema'] },
+      { label: 'Security', keys: ['sse_description', 'point_in_time_recovery_description'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   vpc: { label: 'VPCs', group: 'Network', stateKey: 'state', distKey: 'region', columns: [
     { key: 'name', label: 'Name' }, { key: 'cidr_block', label: 'CIDR' }, { key: 'state', label: 'State' },
-    { key: 'is_default', label: 'Default' }, { key: 'instance_tenancy', label: 'Tenancy' }, { key: 'owner_id', label: 'Owner' } ] },
+    { key: 'is_default', label: 'Default' }, { key: 'instance_tenancy', label: 'Tenancy' }, { key: 'owner_id', label: 'Owner' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'owner_id'] },
+      { label: 'Network', keys: ['cidr_block', 'state', 'is_default', 'instance_tenancy', 'dhcp_options_id'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   subnet: { label: 'Subnets', group: 'Network', distKey: 'availability_zone', columns: [
     { key: 'name', label: 'Name' }, { key: 'vpc_id', label: 'VPC' }, { key: 'cidr_block', label: 'CIDR' },
     { key: 'state', label: 'State' }, { key: 'availability_zone', label: 'AZ' },
-    { key: 'available_ip_address_count', label: 'Free IPs' }, { key: 'map_public_ip_on_launch', label: 'Auto-public-IP' } ] },
+    { key: 'available_ip_address_count', label: 'Free IPs' }, { key: 'map_public_ip_on_launch', label: 'Auto-public-IP' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'subnet_arn', 'owner_id'] },
+      { label: 'Network', keys: ['vpc_id', 'cidr_block', 'state', 'availability_zone', 'availability_zone_id', 'available_ip_address_count', 'map_public_ip_on_launch', 'default_for_az', 'assign_ipv6_address_on_creation'] },
+      { label: 'Tags', keys: ['tags'] },
+    ],
+    filterKeys: ['vpc_id'] },
   security_group: { label: 'Security Groups', group: 'Network', distKey: 'vpc_id', columns: [
     { key: 'name', label: 'Name' }, { key: 'group_name', label: 'Group name' },
-    { key: 'vpc_id', label: 'VPC' }, { key: 'description', label: 'Description' } ] },
+    { key: 'vpc_id', label: 'VPC' }, { key: 'description', label: 'Description' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'group_name', 'account_id', 'region', 'arn', 'owner_id', 'description'] },
+      { label: 'Network', keys: ['vpc_id'] },
+      { label: 'Ingress Rules', keys: ['ip_permissions'] },
+      { label: 'Egress Rules', keys: ['ip_permissions_egress'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   iam_role: { label: 'IAM Roles', group: 'Security', columns: [
     { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' },
-    { key: 'role_id', label: 'Role ID' }, { key: 'max_session_duration', label: 'Max session(s)' } ] },
+    { key: 'role_id', label: 'Role ID' }, { key: 'max_session_duration', label: 'Max session(s)' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'role_id', 'path', 'create_date', 'description'] },
+      { label: 'Access', keys: ['assume_role_policy', 'permissions_boundary_arn', 'max_session_duration', 'instance_profile_arns'] },
+      { label: 'Activity', keys: ['role_last_used_date', 'role_last_used_region'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   iam_user: { label: 'IAM Users', group: 'Security', distKey: 'mfa_enabled', columns: [
     { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' },
-    { key: 'mfa_enabled', label: 'MFA' }, { key: 'password_last_used', label: 'Last PW use' } ] },
+    { key: 'mfa_enabled', label: 'MFA' }, { key: 'password_last_used', label: 'Last PW use' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'user_id', 'path', 'create_date'] },
+      { label: 'Security', keys: ['mfa_enabled', 'password_last_used'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   // ---- D3 wave ----
   cloudfront: { label: 'CloudFront', group: 'Network', stateKey: 'status', distKey: 'price_class', columns: [
     { key: 'domain_name', label: 'Domain' }, { key: 'status', label: 'Status' },
-    { key: 'enabled', label: 'Enabled' }, { key: 'price_class', label: 'Price class' } ] },
+    { key: 'enabled', label: 'Enabled' }, { key: 'price_class', label: 'Price class' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'domain_name', 'e_tag'] },
+      { label: 'Distribution', keys: ['status', 'enabled', 'http_version', 'is_ipv6_enabled', 'price_class', 'aliases', 'origins', 'default_cache_behavior', 'cache_behaviors'] },
+      { label: 'Security', keys: ['web_acl_id'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   route53: { label: 'Route53 Records', group: 'Network', distKey: 'type', columns: [
     { key: 'name', label: 'Name' }, { key: 'type', label: 'Type' },
-    { key: 'zone_id', label: 'Zone' }, { key: 'ttl', label: 'TTL' } ] },
+    { key: 'zone_id', label: 'Zone' }, { key: 'ttl', label: 'TTL' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'zone_id', 'set_identifier', 'private_zone'] },
+      { label: 'Record', keys: ['type', 'ttl', 'records', 'alias_target'] },
+    ] },
   alb: { label: 'App Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', columns: [
     { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
     { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' },
-    { key: 'ip_address_type', label: 'IP type' }, { key: 'created_time', label: 'Created' } ] },
+    { key: 'ip_address_type', label: 'IP type' }, { key: 'created_time', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'created_time'] },
+      { label: 'Network', keys: ['type', 'scheme', 'state_code', 'dns_name', 'ip_address_type', 'canonical_hosted_zone_id', 'availability_zones', 'vpc_id'] },
+      { label: 'Security', keys: ['security_groups'] },
+      { label: 'Tags', keys: ['tags'] },
+    ],
+    filterKeys: ['scheme', 'vpc_id'] },
   nlb: { label: 'Net Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', columns: [
     { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
     { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' },
-    { key: 'ip_address_type', label: 'IP type' }, { key: 'created_time', label: 'Created' } ] },
+    { key: 'ip_address_type', label: 'IP type' }, { key: 'created_time', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'created_time'] },
+      { label: 'Network', keys: ['type', 'scheme', 'state_code', 'dns_name', 'ip_address_type', 'canonical_hosted_zone_id', 'availability_zones', 'vpc_id'] },
+      { label: 'Security', keys: ['security_groups'] },
+      { label: 'Tags', keys: ['tags'] },
+    ],
+    filterKeys: ['scheme', 'vpc_id'] },
   target_group: { label: 'Target Groups', group: 'Network', distKey: 'target_type', columns: [
     { key: 'target_group_name', label: 'Name' }, { key: 'target_type', label: 'Target type' },
     { key: 'protocol', label: 'Protocol' }, { key: 'port', label: 'Port' },
-    { key: 'vpc_id', label: 'VPC' }, { key: 'health_check_path', label: 'Health path' } ] },
+    { key: 'vpc_id', label: 'VPC' }, { key: 'health_check_path', label: 'Health path' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'target_group_name', 'account_id', 'region', 'target_group_arn'] },
+      { label: 'Network', keys: ['vpc_id', 'protocol', 'port', 'target_type', 'load_balancer_arns'] },
+      { label: 'Health Check', keys: ['health_check_enabled', 'health_check_protocol', 'health_check_path', 'target_health_descriptions'] },
+    ],
+    filterKeys: ['protocol', 'target_type'] },
   apigatewayv2_api: { label: 'API Gateway (HTTP)', group: 'Network', distKey: 'protocol_type', columns: [
     { key: 'name', label: 'Name' }, { key: 'api_endpoint', label: 'Endpoint' },
-    { key: 'protocol_type', label: 'Protocol' } ] },
+    { key: 'protocol_type', label: 'Protocol' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'api_id'] },
+      { label: 'Endpoint', keys: ['api_endpoint', 'protocol_type'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   apigatewayv2_integration: { label: 'API GW Integrations', group: 'Network', distKey: 'integration_type', columns: [
     { key: 'api_id', label: 'API' }, { key: 'integration_type', label: 'Type' },
-    { key: 'connection_type', label: 'Conn' }, { key: 'integration_uri', label: 'Target' } ] },
+    { key: 'connection_type', label: 'Conn' }, { key: 'integration_uri', label: 'Target' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'api_id', 'integration_id'] },
+      { label: 'Endpoint', keys: ['integration_type', 'integration_uri', 'connection_type', 'connection_id'] },
+    ] },
   cloudfront_vpc_origin: { label: 'CloudFront VPC Origins', group: 'Network', stateKey: 'status', distKey: 'status', columns: [
     { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'arn', label: 'Target LB' } ] },
   apigatewayv2_route: { label: 'API GW Routes', group: 'Network', columns: [
     { key: 'route_key', label: 'Route' }, { key: 'target', label: 'Integration' },
-    { key: 'authorization_type', label: 'Auth' } ] },
+    { key: 'authorization_type', label: 'Auth' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'api_id', 'route_id', 'route_uid'] },
+      { label: 'Record', keys: ['route_key', 'target', 'authorization_type'] },
+    ] },
   alb_listener_rule: { label: 'ALB Listener Rules', group: 'Network', distKey: 'protocol', columns: [
     { key: 'priority', label: 'Priority' }, { key: 'port', label: 'Port' },
     { key: 'protocol', label: 'Protocol' }, { key: 'is_default', label: 'Default' } ] },
   waf: { label: 'WAF Web ACLs', group: 'Security', distKey: 'scope', columns: [
     { key: 'scope', label: 'Scope' }, { key: 'capacity', label: 'Capacity' },
-    { key: 'description', label: 'Description' }, { key: 'managed_by_firewall_manager', label: 'FMS-managed' } ] },
+    { key: 'description', label: 'Description' }, { key: 'managed_by_firewall_manager', label: 'FMS-managed' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'id', 'arn', 'description'] },
+      { label: 'Security', keys: ['scope', 'capacity', 'default_action', 'managed_by_firewall_manager', 'visibility_config'] },
+      { label: 'Rules', keys: ['rules'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   cloudtrail: { label: 'CloudTrail Trails', group: 'Security', distKey: 'home_region', columns: [
     { key: 'is_logging', label: 'Logging' }, { key: 'is_multi_region_trail', label: 'Multi-region' },
-    { key: 'home_region', label: 'Home region' }, { key: 's3_bucket_name', label: 'S3 bucket' }, { key: 'log_file_validation_enabled', label: 'Log validation' } ] },
+    { key: 'home_region', label: 'Home region' }, { key: 's3_bucket_name', label: 'S3 bucket' }, { key: 'log_file_validation_enabled', label: 'Log validation' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'home_region'] },
+      { label: 'Logging', keys: ['is_logging', 'is_multi_region_trail', 'is_organization_trail', 'include_global_service_events', 'log_file_validation_enabled', 'start_logging_time', 'latest_delivery_time', 'latest_delivery_error'] },
+      { label: 'Storage', keys: ['s3_bucket_name', 's3_key_prefix', 'log_group_arn'] },
+      { label: 'Security', keys: ['kms_key_id', 'sns_topic_arn', 'has_custom_event_selectors', 'has_insight_selectors'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   s3_public_access: { label: 'S3 Public Access', group: 'Security', distKey: 'bucket_policy_is_public', columns: [
     { key: 'bucket_policy_is_public', label: 'Policy public' }, { key: 'block_public_acls', label: 'Block ACLs' },
     { key: 'block_public_policy', label: 'Block policy' }, { key: 'restrict_public_buckets', label: 'Restrict public' }, { key: 'ignore_public_acls', label: 'Ignore ACLs' } ] },
   elasticache: { label: 'ElastiCache', group: 'Storage & DB', stateKey: 'cache_cluster_status', distKey: 'engine', columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
-    { key: 'cache_node_type', label: 'Node type' }, { key: 'cache_cluster_status', label: 'Status' }, { key: 'num_cache_nodes', label: 'Nodes' } ] },
+    { key: 'cache_node_type', label: 'Node type' }, { key: 'cache_cluster_status', label: 'Status' }, { key: 'num_cache_nodes', label: 'Nodes' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'replication_group_id', 'cache_cluster_create_time'] },
+      { label: 'Engine', keys: ['engine', 'engine_version', 'cache_node_type', 'cache_cluster_status', 'num_cache_nodes'] },
+      { label: 'Network', keys: ['preferred_availability_zone', 'cache_subnet_group_name', 'security_groups'] },
+      { label: 'Security', keys: ['at_rest_encryption_enabled', 'transit_encryption_enabled', 'auth_token_enabled'] },
+      { label: 'Maintenance', keys: ['auto_minor_version_upgrade', 'snapshot_retention_limit', 'snapshot_window', 'preferred_maintenance_window'] },
+      { label: 'Tags', keys: ['tags'] },
+    ],
+    filterKeys: ['cache_node_type'] },
   opensearch: { label: 'OpenSearch', group: 'Storage & DB', distKey: 'engine_version', columns: [
     { key: 'engine_version', label: 'Version' }, { key: 'processing', label: 'Processing' },
-    { key: 'created', label: 'Created' }, { key: 'endpoint', label: 'Endpoint' } ] },
+    { key: 'created', label: 'Created' }, { key: 'endpoint', label: 'Endpoint' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'domain_name', 'account_id', 'region', 'arn', 'domain_id', 'created', 'deleted', 'processing'] },
+      { label: 'Engine', keys: ['engine_type', 'engine_version', 'cluster_config'] },
+      { label: 'Endpoint', keys: ['endpoint', 'endpoints', 'vpc_options'] },
+      { label: 'Security', keys: ['encryption_at_rest_options', 'node_to_node_encryption_options_enabled', 'advanced_security_options', 'cognito_options'] },
+      { label: 'Storage', keys: ['ebs_options'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   msk: { label: 'MSK Clusters', group: 'Storage & DB', stateKey: 'state', distKey: 'cluster_type', columns: [
-    { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' }, { key: 'current_version', label: 'Version' } ] },
+    { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' }, { key: 'current_version', label: 'Version' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'cluster_name', 'account_id', 'region', 'arn', 'creation_time'] },
+      { label: 'Engine', keys: ['state', 'cluster_type', 'current_version', 'provisioned'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
   cloudwatch_alarm: { label: 'CloudWatch Alarms', group: 'Monitoring', stateKey: 'state_value', distKey: 'namespace', columns: [
     { key: 'state_value', label: 'State' }, { key: 'metric_name', label: 'Metric' }, { key: 'namespace', label: 'Namespace' },
-    { key: 'threshold', label: 'Threshold' }, { key: 'actions_enabled', label: 'Actions' } ] },
+    { key: 'threshold', label: 'Threshold' }, { key: 'actions_enabled', label: 'Actions' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn'] },
+      { label: 'State', keys: ['state_value', 'state_reason', 'state_updated_timestamp'] },
+      { label: 'Metric', keys: ['namespace', 'metric_name', 'statistic', 'comparison_operator', 'threshold', 'period', 'evaluation_periods'] },
+      { label: 'Actions', keys: ['actions_enabled', 'alarm_actions', 'ok_actions', 'insufficient_data_actions'] },
+    ],
+    filterKeys: ['namespace'] },
 };
 
 const GROUP_ORDER = ['Compute', 'Storage & DB', 'Network', 'Security', 'Monitoring'];

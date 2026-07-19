@@ -3,7 +3,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useResizablePanel, usePublishDockedWidth, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import {
   X, Info, Cpu, Network, Shield, HardDrive, Tag, KeyRound, DollarSign, Database,
-  Server, Globe, Boxes, Activity, Layers, type LucideIcon,
+  Server, Globe, Boxes, Activity, Layers, FileSearch, Bell, type LucideIcon,
 } from 'lucide-react';
 import Badge from './Badge';
 import StatePill from './StatePill';
@@ -17,16 +17,18 @@ import type { RdsInstanceMetrics } from '@/lib/metrics';
 const SECTION_ICONS: [RegExp, LucideIcon][] = [
   [/image|ami/i, Layers],
   [/^instance/i, Server],
-  [/network|vpc|subnet|dns|ip|endpoint|route|listener/i, Network],
-  [/security|iam|auth|access|policy|encrypt/i, Shield],
-  [/storage|volume|disk|ebs|snapshot|backup/i, HardDrive],
+  [/log|trail|audit/i, FileSearch],
+  [/action|notif/i, Bell],
+  [/network|vpc|subnet|dns|ip|endpoint|route|listener|record/i, Network],
+  [/security|iam|auth|access|policy|encrypt|rule|ingress|egress|permission/i, Shield],
+  [/storage|volume|disk|ebs|snapshot|backup|attach/i, HardDrive],
   [/compute|cpu|memory|capacity|runtime|handler|desired/i, Cpu],
   [/tag/i, Tag],
   [/key|credential/i, KeyRound],
   [/cost|billing|pricing/i, DollarSign],
   [/engine|class|database|table|cluster|cache|domain/i, Database],
-  [/identity|general|overview|info|config|meta/i, Info],
-  [/cdn|cloudfront|global|edge/i, Globe],
+  [/identity|general|overview|info|config|meta|maintenance|setting/i, Info],
+  [/cdn|cloudfront|distribution|global|edge/i, Globe],
   [/cluster|node|container|task|service/i, Boxes],
   [/health|metric|monitor|alarm|status|state/i, Activity],
 ];
