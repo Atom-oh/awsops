@@ -127,8 +127,20 @@ const VIRTUAL_LABELS: Record<string, string> = {
   network_interfaces: 'Network Interfaces', tags: 'Tags',
 };
 
+// Acronyms kept uppercase when humanizing a snake_case key into a friendly label.
+const ACRONYMS = new Set([
+  'id', 'arn', 'az', 'vpc', 'ip', 'dns', 'cpu', 'iam', 'kms', 'sg', 'ebs', 'ena',
+  'api', 'url', 'uri', 'ttl', 'iops', 'mfa', 'acl', 'ssl', 'tls', 'waf', 'cidr', 'db',
+]);
+function humanize(key: string): string {
+  return key
+    .split('_')
+    .map((w) => (ACRONYMS.has(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}
+
 function labelFor(key: string, spec?: InvType): string {
-  return spec?.columns.find((c) => c.key === key)?.label ?? VIRTUAL_LABELS[key] ?? key;
+  return spec?.columns.find((c) => c.key === key)?.label ?? VIRTUAL_LABELS[key] ?? humanize(key);
 }
 
 /**
