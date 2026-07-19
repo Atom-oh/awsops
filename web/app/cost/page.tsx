@@ -1,6 +1,6 @@
 'use client';
-import { useCallback, useEffect, useState, useRef } from 'react';
-import { X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { X, Filter, Calendar } from 'lucide-react';
 import { useResizablePanel, usePublishDockedWidth, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
@@ -10,55 +10,62 @@ import DataTable from '@/components/ui/DataTable';
 import AreaTrend from '@/components/charts/AreaTrend';
 import HBarList from '@/components/charts/HBarList';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
-import { momChangePctDaily, projectMonthEnd, trendPill } from '@/lib/cost';
+import {
+  momChangePctDaily, projectMonthEnd, trendPill,
+  PERIOD_MONTHS, PERIOD_OPTIONS, allServiceNames, filterMonthlyTotals, filterDailyTotals,
+  serviceChangeRows, mergeMonthlyByService, mergeDailyByService,
+  type MonthlyServiceCostPoint, type DailyServiceCostPoint,
+} from '@/lib/cost';
 import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
 
-interface ServiceCost { service: string; amount: number; [k: string]: unknown }
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
-interface MonthlyPoint { month: string; total: number; [k: string]: unknown }
-interface Cost { total: number; currency: string; byService: ServiceCost[]; trend?: TrendPoint[]; monthly?: MonthlyPoint[]; forecast?: number | null }
+// Client model: only `forecast` is read directly off the API response — the monthly/daily TOTALS
+// the page renders are always DERIVED from monthlyByService/dailyByService via lib/cost.ts's
+// filter*Totals (so period + service filtering apply uniformly, incl. the "전체 계정" merge below).
+// The API also returns flat `byService`/`trend`/`monthly` fields (older-client back-compat) —
+// intentionally unused here.
+interface Cost {
+  currency: string; forecast?: number | null;
+  monthlyByService: MonthlyServiceCostPoint[]; dailyByService: DailyServiceCostPoint[];
+}
 interface UsageType { usageType: string; amount: number; [k: string]: unknown }
 interface ServiceDetail { service: string; currency: string; trend: TrendPoint[] | null; byUsageType: UsageType[] | null }
 
 const DASH = '—';
 const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const DEFAULT_PERIOD = '3m'; // v1 default
 
 const FANOUT = 6;
-async function fetchCost(accountId: string): Promise<Cost> {
+async function fetchCost(accountId: string, months: number): Promise<Cost> {
   const p = accountParam(accountId);
-  const r = await fetch(`/api/cost${p ? `?${p}` : ''}`);
+  const qs = new URLSearchParams({ months: String(months) });
+  const r = await fetch(`/api/cost?${p ? `${p}&` : ''}${qs}`);
   if (!r.ok) throw new Error(String(r.status));
   return r.json();
 }
-/** Merge per-account Cost: sum total, byService (by service), trend (by date), monthly (by month), forecast. */
+/** Merge per-account Cost: sum forecast + the raw month×service / date×service matrices (every
+ *  rendered total is derived from these via lib/cost.ts, so period + service filtering apply
+ *  uniformly whether one account or "전체 계정" is selected). */
 function mergeCost(parts: Cost[]): Cost {
-  const svc = new Map<string, number>(); const tr = new Map<string, number>();
-  const mo = new Map<string, number>(); let total = 0; let forecast = 0; let hasForecast = false;
-  for (const p of parts) {
-    total += p.total ?? 0;
-    if (typeof p.forecast === 'number') { forecast += p.forecast; hasForecast = true; }
-    for (const s of p.byService ?? []) svc.set(s.service, (svc.get(s.service) ?? 0) + s.amount);
-    for (const t of p.trend ?? []) tr.set(t.date, (tr.get(t.date) ?? 0) + t.amount);
-    for (const m of p.monthly ?? []) mo.set(m.month, (mo.get(m.month) ?? 0) + m.total);
-  }
+  const monthlyByService = mergeMonthlyByService(parts.map((p) => p.monthlyByService ?? []));
+  const dailyByService = mergeDailyByService(parts.map((p) => p.dailyByService ?? []));
   return {
-    total, currency: parts[0]?.currency ?? 'USD',
-    byService: [...svc.entries()].map(([service, amount]) => ({ service, amount })).sort((a, b) => b.amount - a.amount),
-    trend: [...tr.entries()].map(([date, amount]) => ({ date, amount })).sort((a, b) => (a.date < b.date ? -1 : 1)),
-    monthly: [...mo.entries()].map(([month, total]) => ({ month, total })).sort((a, b) => (a.month < b.month ? -1 : 1)),
-    forecast: hasForecast ? forecast : null,
+    currency: parts[0]?.currency ?? 'USD',
+    forecast: parts.some((p) => typeof p.forecast === 'number')
+      ? parts.reduce((s, p) => s + (p.forecast ?? 0), 0) : null,
+    monthlyByService, dailyByService,
   };
 }
-async function loadAllAccountsCost(): Promise<Cost> {
+async function loadAllAccountsCost(months: number): Promise<Cost> {
   const ar = await fetch('/api/accounts');
   const accts: Array<{ accountId: string; isHost: boolean; enabled: boolean }> =
     ar.ok ? ((await ar.json().catch(() => ({ accounts: [] }))).accounts ?? []) : [];
   const ids = accts.filter((a) => a.enabled).map((a) => (a.isHost ? 'self' : a.accountId));
-  if (!ids.length) return await fetchCost('self');
+  if (!ids.length) return await fetchCost('self', months);
   const parts: Cost[] = [];
   for (let i = 0; i < ids.length; i += FANOUT) {
     const chunk = await Promise.all(ids.slice(i, i + FANOUT).map((id) =>
-      fetchCost(id).catch(() => ({ total: 0, currency: 'USD', byService: [] } as Cost))));
+      fetchCost(id, months).catch(() => ({ currency: 'USD', forecast: null, monthlyByService: [], dailyByService: [] } as Cost))));
     parts.push(...chunk);
   }
   return mergeCost(parts);
@@ -70,6 +77,12 @@ export default function CostPage() {
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
   const [active] = useActiveAccount();
+
+  // v1-parity filter menu: period (트레일링 개월 수) + multi-select service filter. Empty selection
+  // = no filter = all services (matches v1's Set-based semantics exactly).
+  const [period, setPeriod] = useState(DEFAULT_PERIOD);
+  const [selectedServices, setSelectedServices] = useState<Set<string>>(new Set());
+  const [showServiceFilter, setShowServiceFilter] = useState(false);
 
   // Service drill-down panel: name selected (open) + lazily-fetched detail + its loading state.
   const [picked, setPicked] = useState<string | null>(null);
@@ -113,8 +126,9 @@ export default function CostPage() {
 
   const load = useCallback(async () => {
     setBusy(true);
+    const months = PERIOD_MONTHS[period] ?? 6;
     try {
-      const data = active === ALL_ACCOUNTS ? await loadAllAccountsCost() : await fetchCost(active);
+      const data = active === ALL_ACCOUNTS ? await loadAllAccountsCost(months) : await fetchCost(active, months);
       setD(data);
       setErr('');
       setCapturedAt(new Date().toISOString());
@@ -123,45 +137,71 @@ export default function CostPage() {
     } finally {
       setBusy(false);
     }
-  }, [active]);
+  }, [active, period]);
 
   useEffect(() => { load(); }, [load]);
 
-  // byService arrives sorted descending from getMtdCost.
-  const byService = d?.byService ?? [];
-  const top = byService[0];
-  const trend = d?.trend ?? [];
+  // A period/account switch can leave a selected service that no longer exists in the new window —
+  // silently drop it rather than filtering everything down to zero with a stale, invisible selection.
+  const allServices = useMemo(() => allServiceNames(d?.monthlyByService ?? []), [d]);
+  useEffect(() => {
+    setSelectedServices((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set([...prev].filter((s) => allServices.includes(s)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [allServices]);
 
-  // Donut: top 6 services + "기타" rollup of the remainder.
+  const toggleService = (svc: string) => {
+    setSelectedServices((prev) => {
+      const next = new Set(prev);
+      if (next.has(svc)) next.delete(svc); else next.add(svc);
+      return next;
+    });
+  };
+
+  // ---- Filtered views (period scoped server-side via `months`; service filter applied here) ----
+  const monthlyByService = d?.monthlyByService ?? [];
+  const dailyByService = d?.dailyByService ?? [];
+  const monthly = useMemo(() => filterMonthlyTotals(monthlyByService, selectedServices), [monthlyByService, selectedServices]);
+  const trend = useMemo(() => filterDailyTotals(dailyByService, selectedServices), [dailyByService, selectedServices]);
+  const changeRows = useMemo(() => serviceChangeRows(monthlyByService, selectedServices), [monthlyByService, selectedServices]);
+
+  const total = changeRows.reduce((s, r) => s + r.current, 0);
+  const top = changeRows[0];
+  const currency = d?.currency ?? 'USD';
+
+  // Donut: top 6 filtered services + "기타" rollup of the remainder.
   const donutData = (() => {
-    if (byService.length <= 6) return byService.map((s) => ({ service: s.service, amount: s.amount }));
-    const head = byService.slice(0, 6).map((s) => ({ service: s.service, amount: s.amount }));
-    const rest = byService.slice(6).reduce((acc, s) => acc + s.amount, 0);
+    if (changeRows.length <= 6) return changeRows.map((s) => ({ service: s.service, amount: s.current }));
+    const head = changeRows.slice(0, 6).map((s) => ({ service: s.service, amount: s.current }));
+    const rest = changeRows.slice(6).reduce((acc, s) => acc + s.current, 0);
     return rest > 0 ? [...head, { service: '기타', amount: rest }] : head;
   })();
+  const hbarData = changeRows.map((s) => ({ service: s.service, amount: s.current }));
 
-  const total = d?.total ?? 0;
-  const tableRows = byService.map((s) => ({
+  const tableRows = changeRows.map((s) => ({
     service: s.service,
-    amount: usd(s.amount),
-    share: total > 0 ? `${((s.amount / total) * 100).toFixed(1)}%` : DASH,
+    current: usd(s.current),
+    previous: usd(s.previous),
+    change: `${s.change > 0 ? '+' : ''}${s.change.toFixed(1)}%`,
+    share: `${s.share.toFixed(1)}%`,
   }));
 
-  // MoM (from the monthly series) + month-end forecast (AWS CE forecast if present, else linear projection).
-  const monthly = d?.monthly ?? [];
+  // MoM (from the FILTERED monthly series) + month-end forecast. AWS's CE forecast is inherently
+  // account/service-unscoped (whole-account), so it only applies when NO service filter is active —
+  // with a filter on, fall back to the linear projection of the filtered total (honest > precise-looking).
   const thisMonth = monthly.length > 0 ? monthly[monthly.length - 1].total : total;
   const lastMonth = monthly.length > 1 ? monthly[monthly.length - 2].total : 0;
-  // MoM on a PER-DAY run-rate basis: the current month is month-to-date (partial), so comparing it
-  // against the FULL previous month read as a bogus large drop (e.g. -51% on the 17th). Compare
-  // average daily spend instead (이번 달 일평균 vs 전월 일평균).
   const mom = momChangePctDaily(thisMonth, lastMonth, new Date());
-  const monthEndEstimate = d?.forecast != null ? total + d.forecast : projectMonthEnd(total, new Date());
+  const useAwsForecast = selectedServices.size === 0 && d?.forecast != null;
+  const monthEndEstimate = useAwsForecast ? total + (d!.forecast as number) : projectMonthEnd(total, new Date());
 
   return (
     <>
       <PageHeader
         title="Cost Explorer"
-        subtitle="Cost Explorer 기반 이번 달 누적 비용 · 서비스별 분포"
+        subtitle="Cost Explorer 기반 누적 비용 · 기간/서비스 필터 · 서비스별 분포"
         right={<RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />}
       />
       <div className="px-4 lg:px-8 py-8 flex flex-col gap-6">
@@ -174,10 +214,77 @@ export default function CostPage() {
 
         {d && (
           <>
+            {/* ---- Period + Service filter (v1 parity) ---- */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-1">
+                <Calendar size={14} className="text-ink-400" />
+                {PERIOD_OPTIONS.map((p) => (
+                  <button
+                    key={p.value}
+                    onClick={() => setPeriod(p.value)}
+                    className={
+                      'rounded-md px-3 py-1.5 text-[12px] font-mono transition-colors ' +
+                      (period === p.value
+                        ? 'border border-brand-200 bg-brand-50 text-brand-700'
+                        : 'border border-ink-100 bg-card text-ink-500 hover:text-ink-800')
+                    }
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setShowServiceFilter((v) => !v)}
+                className={
+                  'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] transition-colors ' +
+                  (showServiceFilter || selectedServices.size > 0
+                    ? 'border border-brand-200 bg-brand-50 text-brand-700'
+                    : 'border border-ink-100 bg-card text-ink-500 hover:text-ink-800')
+                }
+              >
+                <Filter size={12} />
+                서비스 필터
+                {selectedServices.size > 0 && (
+                  <span className="rounded-full bg-brand-100 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700">{selectedServices.size}</span>
+                )}
+              </button>
+              {selectedServices.size > 0 && (
+                <button onClick={() => setSelectedServices(new Set())} className="text-[12px] text-ink-400 hover:text-ink-800">
+                  초기화
+                </button>
+              )}
+            </div>
+
+            {showServiceFilter && (
+              <div className="rounded-lg border border-ink-100 bg-card p-4">
+                <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-ink-400">서비스로 필터링 ({allServices.length})</p>
+                {allServices.length === 0 ? (
+                  <div className="text-[12px] text-ink-400">선택된 기간에 서비스 데이터가 없습니다.</div>
+                ) : (
+                  <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">
+                    {allServices.map((svc) => (
+                      <button
+                        key={svc}
+                        onClick={() => toggleService(svc)}
+                        className={
+                          'rounded px-2.5 py-1 text-[11px] font-mono transition-colors ' +
+                          (selectedServices.has(svc)
+                            ? 'border border-brand-200 bg-brand-50 text-brand-700'
+                            : 'border border-ink-100 bg-paper-muted text-ink-500 hover:text-ink-800')
+                        }
+                      >
+                        {svc}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* ---- KPI tiles ---- */}
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <StatTile
-                label={`이번 달 누적 (${d.currency})`}
+                label={`이번 달 누적 (${currency})`}
                 value={usd(total)}
                 variant="accent"
               />
@@ -190,13 +297,13 @@ export default function CostPage() {
               <StatTile
                 label="예상 월말 비용"
                 value={usd(monthEndEstimate)}
-                hint={d?.forecast != null ? 'AWS 예측' : '선형 추정'}
+                hint={useAwsForecast ? 'AWS 예측' : selectedServices.size > 0 ? '선형 추정 · 서비스 필터 적용 중' : '선형 추정'}
                 variant="warn"
               />
-              <StatTile label="서비스 수" value={byService.length} />
+              <StatTile label="서비스 수" value={changeRows.length} />
               <StatTile
                 label="최대 서비스"
-                value={top ? usd(top.amount) : DASH}
+                value={top ? usd(top.current) : DASH}
                 hint={top ? top.service : undefined}
                 variant="warn"
               />
@@ -207,21 +314,21 @@ export default function CostPage() {
               <AreaTrend title="월별 비용 추이" data={monthly} xKey="month" yKey="total" valuePrefix="$" />
             )}
 
-            {/* ---- Daily trend area (full-width) ---- */}
+            {/* ---- Daily trend area (full-width, trailing 30 days) ---- */}
             {trend.length > 0 ? (
-              <AreaTrend title="일별 비용 추이" data={trend} xKey="date" yKey="amount" valuePrefix="$" />
+              <AreaTrend title="일별 비용 추이 (최근 30일)" data={trend} xKey="date" yKey="amount" valuePrefix="$" />
             ) : (
-              <Card title="일별 비용 추이">
+              <Card title="일별 비용 추이 (최근 30일)">
                 <div className="text-[13px] text-ink-400">비용 추이 데이터 없음</div>
               </Card>
             )}
 
             {/* ---- Row: service HBar (wide) + composition donut ---- */}
-            {byService.length > 0 ? (
+            {changeRows.length > 0 ? (
               <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-6">
                 <HBarList
                   title="서비스별 비용"
-                  data={byService}
+                  data={hbarData}
                   labelKey="service"
                   valueKey="amount"
                   valuePrefix="$"
@@ -236,13 +343,15 @@ export default function CostPage() {
               </div>
             ) : null}
 
-            {/* ---- Detail table: service / amount / share ---- */}
+            {/* ---- Detail table: service / 이번 달 / 전월 / 변화율 / 점유율 ---- */}
             <section className="flex flex-col gap-3">
               <h2 className="text-[13px] font-semibold text-ink-800">서비스 상세</h2>
               <DataTable
                 columns={[
                   { key: 'service', label: '서비스' },
-                  { key: 'amount', label: `비용 (${d.currency})` },
+                  { key: 'current', label: `이번 달 (${currency})` },
+                  { key: 'previous', label: '전월' },
+                  { key: 'change', label: '변화율' },
                   { key: 'share', label: '점유율' },
                 ]}
                 rows={tableRows}

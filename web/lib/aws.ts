@@ -109,6 +109,57 @@ export async function getCostTrend(accountId?: string): Promise<CostTrendPoint[]
   }));
 }
 
+export interface MonthlyServiceCostPoint { month: string; byService: { service: string; amount: number }[] }
+
+/**
+ * v1-parity cost filter menu (period + service): monthly UnblendedCost broken down BY SERVICE for
+ * the trailing `months` calendar months (incl. current MTD) → [{ month, byService: [{service,amount}] }]
+ * ascending. One CE call (same date math as getMonthlyCost). The uncapped per-month service list is
+ * what the client filters against — v1 filtered raw SQL rows the same way; this is its CE equivalent.
+ */
+export async function getMonthlyCostByService(months = 6, accountId?: string): Promise<MonthlyServiceCostPoint[]> {
+  const now = new Date();
+  const startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1));
+  const start = startDate.toISOString().slice(0, 10);
+  const end = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+  const r = await (await ceClient(accountId)).send(new GetCostAndUsageCommand({
+    TimePeriod: { Start: start, End: end },
+    Granularity: 'MONTHLY',
+    Metrics: ['UnblendedCost'],
+    GroupBy: [{ Type: 'DIMENSION', Key: 'SERVICE' }],
+  }));
+  return (r.ResultsByTime ?? []).map((t) => ({
+    month: (t.TimePeriod?.Start ?? '').slice(0, 7),
+    byService: (t.Groups ?? [])
+      .map((g) => ({ service: g.Keys?.[0] ?? '?', amount: Number(g.Metrics?.UnblendedCost?.Amount ?? 0) }))
+      .filter((s) => s.amount > 0)
+      .sort((a, b) => b.amount - a.amount),
+  }));
+}
+
+export interface DailyServiceCostPoint { date: string; byService: { service: string; amount: number }[] }
+
+/** Same 30-day window as getCostTrend, but GroupBy SERVICE — the daily-chart leg of the service filter.
+ *  v1's daily line chart always showed a fixed trailing-30-day window regardless of the period filter
+ *  (period only changed the monthly aggregates) — same fixed window here, no `months` param. */
+export async function getDailyCostByService(accountId?: string): Promise<DailyServiceCostPoint[]> {
+  const now = new Date();
+  const end = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+  const start = new Date(now.getTime() - 29 * 86_400_000).toISOString().slice(0, 10);
+  const r = await (await ceClient(accountId)).send(new GetCostAndUsageCommand({
+    TimePeriod: { Start: start, End: end },
+    Granularity: 'DAILY',
+    Metrics: ['UnblendedCost'],
+    GroupBy: [{ Type: 'DIMENSION', Key: 'SERVICE' }],
+  }));
+  return (r.ResultsByTime ?? []).map((t) => ({
+    date: t.TimePeriod?.Start ?? '',
+    byService: (t.Groups ?? [])
+      .map((g) => ({ service: g.Keys?.[0] ?? '?', amount: Number(g.Metrics?.UnblendedCost?.Amount ?? 0) }))
+      .filter((s) => s.amount > 0),
+  }));
+}
+
 export interface MonthlyCostPoint { month: string; total: number }
 
 /** Monthly UnblendedCost for the trailing `months` calendar months (incl. current MTD) → [{ month: 'YYYY-MM', total }] ascending. */
