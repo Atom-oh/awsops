@@ -92,7 +92,16 @@ jobs:
                      (path ~ /(^|\/)node_modules\//) ||
                      (path ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
                      (path ~ /(^|\/)(dist|out|build)\//) ||
-                     (path ~ /\.terraform\.lock\.hcl$/)
+                     (path ~ /\.terraform\.lock\.hcl$/) ||
+                     # diagram export artifacts (draw.io SVG/XML export): minified to a single
+                     # huge line, not line-count-limited by MAX_LINES below but blows past
+                     # codex's 1,048,576-char turn/start input cap and the chair's stdin in one
+                     # file (seen on PR #168: a single 902,772-char SVG line pushed a 1,388-line
+                     # diff to 1.46M chars — codex failed on all 4 lenses, chair primary+fallback
+                     # both timed out on the same oversized stdin). Not meaningfully reviewable
+                     # line-by-line either way — same rationale as the lockfiles above.
+                     (path ~ /\.svg$/) ||
+                     (path ~ /\.drawio$/)
             }
             !skip
           ' /tmp/pr-diff-raw.txt > /tmp/pr-diff.txt
