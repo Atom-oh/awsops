@@ -12,7 +12,7 @@ import Input from '@/components/ui/Input';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import RiskHero from '@/components/inventory/RiskHero';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
-import { TYPE_ICON, GROUP_ICON, variantIcon } from '@/lib/type-icons';
+import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
 
 type Row = Record<string, unknown>;
@@ -181,16 +181,17 @@ export default function InventoryTypePage() {
   // v1-parity: a lucide icon in each KPI tile's translucent top-right box (the "총 N" tile gets
   // the resource-type icon; state tiles get a health icon by variant) — v1 StatsCard style.
   const TypeIcon = TYPE_ICON[type] ?? GROUP_ICON[spec.group] ?? Package;
-  const stateIconFor = (v: 'default' | 'accent' | 'danger' | 'warn') => {
-    const I = variantIcon(v);
+  // Label-semantic glyph per card (a bare variant Circle on default cards read as "no icon").
+  const cardIcon = (label: string, v: 'default' | 'accent' | 'danger' | 'warn') => {
+    const I = highlightIcon(label, v);
     return <I size={16} />;
   };
   const kpiRow = (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
       <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" icon={<TypeIcon size={16} />} />
       {highlightCards.length > 0
-        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} icon={stateIconFor(h.variant)} />)
-        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} icon={stateIconFor(stateVariant(s.name))} />)}
+        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} icon={cardIcon(h.label, h.variant)} />)
+        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} icon={cardIcon(s.name, stateVariant(s.name))} />)}
       {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}
     </div>
   );

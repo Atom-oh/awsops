@@ -1,6 +1,7 @@
 import Card from '@/components/ui/Card';
 import { cn } from '@/lib/cn';
 import type { HighlightCard } from '@/lib/inventory-types';
+import { highlightIcon } from '@/lib/type-icons';
 
 /**
  * RiskHero — the lead band for security-posture inventory types (IAM users,
@@ -40,9 +41,19 @@ export default function RiskHero({ label, total, cards, capped = false }: { labe
         <div className="grid min-w-0 flex-1 grid-cols-2 gap-3 sm:grid-cols-3 lg:max-w-2xl lg:grid-cols-4">
           {cards.map((c) => {
             const hot = c.variant === 'danger' && c.value !== 0;
+            const Icon = highlightIcon(c.label, c.variant);
             return (
-              <div key={c.label} className={cn('rounded-lg border px-3 py-2.5', hot ? 'border-rose-200 bg-rose-50' : 'border-ink-100 bg-card')}>
-                <div className="truncate text-[11px] text-ink-400">{c.label}</div>
+              <div key={c.label} className={cn('relative rounded-lg border px-3 py-2.5', hot ? 'border-rose-200 bg-rose-50' : 'border-ink-100 bg-card')}>
+                {/* v1-parity translucent glyph chip, top-right (matches StatTile) */}
+                <span
+                  className={cn(
+                    'absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-md',
+                    hot ? 'bg-rose-500/10 text-rose-600' : c.variant === 'accent' ? 'bg-brand-500/10 text-brand-600' : 'bg-ink-500/10 text-ink-500',
+                  )}
+                >
+                  <Icon size={13} />
+                </span>
+                <div className="truncate pr-7 text-[11px] text-ink-400">{c.label}</div>
                 <div className={cn('tabular mt-0.5 text-[20px] font-semibold leading-none', hot ? 'text-rose-700' : c.variant === 'accent' ? 'text-brand-700' : 'text-ink-800')}>
                   {c.value}
                 </div>
