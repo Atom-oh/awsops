@@ -359,6 +359,30 @@ resource "aws_iam_role_policy" "task_agentcore_ssm" {
   })
 }
 
+# v1-parity AgentCore console (web/app/agentcore + web/lib/agentcore-status.ts): read-only
+# control-plane status (runtime/gateways/targets/memory/interpreter). These List*/Get* control
+# actions have no resource-level scoping in AgentCore → "*", read-only by construction.
+resource "aws_iam_role_policy" "task_agentcore_status" {
+  count = local.ac_count
+  name  = "${var.project}-task-agentcore-status"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:ListAgentRuntimeEndpoints",
+        "bedrock-agentcore:ListGateways",
+        "bedrock-agentcore:ListGatewayTargets",
+        "bedrock-agentcore:ListMemories",
+        "bedrock-agentcore:ListCodeInterpreters",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 # v1-parity Code Interpreter chat route (web/lib/code-interpreter.ts): the web task role runs Python
 # in the provisioned AgentCore sandbox (Start/Invoke/Stop/Get session). Data-plane only — NOT the
 # control-plane create/delete. Scoped to this account/region's code-interpreter resources. The
