@@ -92,18 +92,24 @@ jobs:
                      (path ~ /(^|\/)node_modules\//) ||
                      (path ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
                      (path ~ /(^|\/)(dist|out|build)\//) ||
-                     (path ~ /\.terraform\.lock\.hcl$/) ||
-                     # diagram export artifacts (draw.io SVG/XML export): minified to a single
-                     # huge line, not line-count-limited by MAX_LINES below but blows past
-                     # codex's 1,048,576-char turn/start input cap and the chair's stdin in one
-                     # file (seen on PR #168: a single 902,772-char SVG line pushed a 1,388-line
-                     # diff to 1.46M chars — codex failed on all 4 lenses, chair primary+fallback
-                     # both timed out on the same oversized stdin). Not meaningfully reviewable
-                     # line-by-line either way — same rationale as the lockfiles above.
-                     (path ~ /\.svg$/) ||
-                     (path ~ /\.drawio$/)
+                     (path ~ /\.terraform\.lock\.hcl$/)
             }
-            !skip
+            skip { next }
+            # Line-length cap, not extension-based: PR #168s failure (codex 1,048,576-char
+            # turn/start input cap + chair stdin both blown past) came from ONE 902,772-char
+            # line in a draw.io SVG export, not from the .svg/.drawio extension per se — this
+            # repos actual .drawio sources (e.g. images/awsops_arch_v2.drawio) are pretty-printed
+            # multi-line XML, ~150-230 lines, well under this cap, and a blanket extension skip
+            # would also have hidden a real diagram-source change from the L5 docs/ADR lens and
+            # web/app/icon.svg (a runtime-served, CSP-uncovered SVG) from the L3 security lens.
+            # 50000 chars is far above any normal source line yet far below the 1,048,576 cap even
+            # with several such lines in one diff, so it only catches genuinely minified/generated
+            # single-line blobs regardless of file type.
+            length($0) > 50000 {
+              if (!(path in warned)) { print "[omitted: a line over 50000 chars in " path " — likely a minified/generated export]"; warned[path]=1 }
+              next
+            }
+            { print }
           ' /tmp/pr-diff-raw.txt > /tmp/pr-diff.txt
           echo "total_lines=$(wc -l < /tmp/pr-diff.txt)" >> "$GITHUB_ENV"
 
