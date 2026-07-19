@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import StatTile, { passVariant } from '@/components/ui/StatTile';
 import { TYPE_ICON } from '@/lib/type-icons';
+import { INVENTORY_TYPES } from '@/lib/inventory-types';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
 import SectionLabel from '@/components/ui/SectionLabel';
@@ -14,7 +15,10 @@ import InsightCard from '@/components/insights/InsightCard';
 import BarDistribution from '@/components/charts/BarDistribution';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import AreaTrend from '@/components/charts/AreaTrend';
+import MultiLineTrend from '@/components/charts/MultiLineTrend';
+import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
+import { useActiveScope, scopeParams } from '@/lib/account-context';
 
 interface Overview {
   jobs: { queued: number; running: number; succeeded: number; failed: number };
@@ -38,7 +42,7 @@ interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; s
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost { trend: TrendPoint[]; monthly?: { month: string; total: number }[] }
 interface ResourceTrendPoint { date: string; total: number; ec2: number; [k: string]: unknown }
-interface ResourceTrend { trend: ResourceTrendPoint[] }
+interface ResourceTrend { trend: ResourceTrendPoint[]; types?: string[] }
 interface FleetCluster {
   name: string;
   reachable: boolean;
@@ -49,6 +53,7 @@ interface FleetCluster {
 interface Fleet { clusters: FleetCluster[] }
 
 const DASH = '—';
+const INV_LABEL = (t: string): string => INVENTORY_TYPES[t]?.label ?? t;
 // Section gateways per ADR-004 (8). Named so the AgentCore tile isn't a bare magic literal.
 const SECTION_GATEWAYS = 8;
 
@@ -69,6 +74,8 @@ export default function Home() {
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  const [scope] = useActiveScope();
+  const [trendDays, setTrendDays] = useState(14);
 
   const loadAll = useCallback(async () => {
     setBusy(true);
@@ -79,7 +86,7 @@ export default function Home() {
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((d) => { setOv(d); setOvErr(''); })
         .catch((e) => setOvErr(String(e))),
-      fetch('/api/inventory/summary')
+      fetch(`/api/inventory/summary?${scopeParams(scope)}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((d) => { setSum(d); setSumErr(''); })
         .catch((e) => setSumErr(String(e))),
@@ -87,7 +94,7 @@ export default function Home() {
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then(setCost)
         .catch(() => setCost({ trend: [] })),
-      fetch('/api/inventory/trend?days=14')
+      fetch(`/api/inventory/trend?days=${trendDays}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then(setResTrend)
         .catch(() => setResTrend({ trend: [] })),
@@ -106,7 +113,7 @@ export default function Home() {
       .then(setFleet)
       .catch(() => setFleet({ clusters: [] }))
       .finally(() => clearTimeout(t));
-  }, []);
+  }, [scope, trendDays]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -190,6 +197,35 @@ export default function Home() {
     sp && (sp.cwAlarm ?? 0) > 0 && { key: 'cw', dot: 'var(--negative)', text: `ALARM 상태 CloudWatch 알람 ${sp.cwAlarm}개`, href: '/inventory/cloudwatch_alarm' },
     hasFleet && recentEvents.length > 0 && { key: 'k8s', dot: 'var(--warning)', text: `K8s Warning 이벤트 ${recentEvents.length}건`, href: '/eks' },
   ].filter((w): w is { key: string; dot: string; text: string; href: string } => Boolean(w));
+
+  // Multi-line trend series (top 8 types by latest count) + Current/7d/30d delta rows (v1 parity).
+  const trendTypes = (resTrend?.types ?? []).slice(0, 8);
+  const trendSeries = trendTypes.map((t) => ({ key: t, label: INV_LABEL(t) }));
+  const deltaRows = (() => {
+    const pts = resTrend?.trend ?? [];
+    if (pts.length < 2) return [];
+    const last = pts[pts.length - 1];
+    const at = (daysAgo: number): Record<string, unknown> | null => {
+      const target = new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+      // nearest snapshot within ±2 days (v1 tolerance)
+      let best: Record<string, unknown> | null = null;
+      let bestGap = 3;
+      for (const p of pts) {
+        const gap = Math.abs((new Date(p.date).getTime() - new Date(target).getTime()) / 86_400_000);
+        if (gap < bestGap) { best = p; bestGap = gap; }
+      }
+      return best;
+    };
+    const w = at(7);
+    const m = at(30);
+    return (resTrend?.types ?? []).map((t) => {
+      const cur = Number(last[t] ?? 0);
+      const wv = w ? Number(w[t] ?? 0) : null;
+      const mv = m && m !== w ? Number(m[t] ?? 0) : null;
+      const pct = (from: number | null) => (from == null || from === 0 ? null : ((cur - from) / from) * 100);
+      return { type: t, label: INV_LABEL(t), cur, w: wv, m: mv, wPct: pct(wv), mPct: pct(mv) };
+    }).filter((r) => r.cur > 0 || (r.w ?? 0) > 0);
+  })();
 
   const loading = !ov && !ovErr && !sum && !sumErr;
 
@@ -381,18 +417,22 @@ export default function Home() {
         {/* ---- Resource trend (14d, DESIGN.md §3) + category donut ---- */}
         {resTrend && (
           <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-6">
-            {resTrend.trend.length >= 2 ? (
-              <AreaTrend
-                title="리소스 추세 (14d)"
+            {resTrend.trend.length >= 2 && trendSeries.length > 0 ? (
+              <MultiLineTrend
+                title={`리소스 추세 (${trendDays}d)`}
+                right={
+                  <SegmentedControl
+                    options={[{ value: '14', label: '14d' }, { value: '30', label: '30d' }, { value: '90', label: '90d' }]}
+                    value={String(trendDays)}
+                    onChange={(v) => setTrendDays(Number(v))}
+                  />
+                }
                 data={resTrend.trend}
                 xKey="date"
-                yKey="total"
-                lineKey="ec2"
-                areaLabel="전체 리소스"
-                lineLabel="EC2"
+                series={trendSeries}
               />
             ) : (
-              <Card title="리소스 추세 (14d)">
+              <Card title={`리소스 추세 (${trendDays}d)`}>
                 <div className="text-[13px] text-ink-400">이력 수집 중 — sync 주기마다 축적됩니다</div>
               </Card>
             )}
@@ -404,6 +444,48 @@ export default function Home() {
               </Card>
             )}
           </div>
+        )}
+
+        {/* ---- Trend delta table (v1 parity): Current / 7d / 30d ±% per resource type ---- */}
+        {deltaRows.length > 0 && (
+          <Card title="리소스 수량 변화" padded={false}>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12.5px]">
+                <thead>
+                  <tr className="border-b border-ink-100 text-left text-[11px] uppercase tracking-[0.04em] text-ink-400">
+                    <th className="px-4 py-2 font-semibold">Type</th>
+                    <th className="px-4 py-2 text-right font-semibold">Current</th>
+                    <th className="px-4 py-2 text-right font-semibold">7d Ago</th>
+                    <th className="px-4 py-2 text-right font-semibold">7d Δ</th>
+                    <th className="px-4 py-2 text-right font-semibold">30d Ago</th>
+                    <th className="px-4 py-2 text-right font-semibold">30d Δ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deltaRows.map((r) => {
+                    const pctCell = (pct: number | null) =>
+                      pct == null ? (
+                        <span className="text-ink-300">—</span>
+                      ) : (
+                        <span className={pct > 0 ? 'text-brand-700' : pct < 0 ? 'text-positive-text' : 'text-ink-400'}>
+                          {pct > 0 ? '+' : ''}{pct.toFixed(1)}%
+                        </span>
+                      );
+                    return (
+                      <tr key={r.type} className="border-b border-ink-50 last:border-0">
+                        <td className="px-4 py-1.5 text-ink-700">{r.label}</td>
+                        <td className="tabular px-4 py-1.5 text-right font-semibold text-ink-800">{r.cur.toLocaleString()}</td>
+                        <td className="tabular px-4 py-1.5 text-right text-ink-500">{r.w == null ? '—' : r.w.toLocaleString()}</td>
+                        <td className="tabular px-4 py-1.5 text-right">{pctCell(r.wPct)}</td>
+                        <td className="tabular px-4 py-1.5 text-right text-ink-500">{r.m == null ? '—' : r.m.toLocaleString()}</td>
+                        <td className="tabular px-4 py-1.5 text-right">{pctCell(r.mPct)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         )}
 
         {/* ---- Charts row 1: distribution bar (full-width) ---- */}

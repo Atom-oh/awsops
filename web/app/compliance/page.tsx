@@ -38,6 +38,8 @@ export default function CompliancePage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [selected, setSelected] = useState<Result | null>(null);
+  // v1 parity: clicking a section card filters the Controls table to that section.
+  const [sectionFilter, setSectionFilter] = useState<string | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // latestRunIdRef = the run currently DISPLAYED; activeJobIdRef = the just-started running job.
@@ -188,17 +190,30 @@ export default function CompliancePage() {
 
   // Per-section pass% (client-side rollup over the leaf results).
   const sections = useMemo(() => {
-    const m = new Map<string, { ok: number; total: number }>();
+    const m = new Map<string, { ok: number; alarm: number; skip: number; error: number; total: number }>();
     for (const r of results) {
-      const s = m.get(r.section) ?? { ok: 0, total: 0 };
+      const s = m.get(r.section) ?? { ok: 0, alarm: 0, skip: 0, error: 0, total: 0 };
       s.total += 1;
       if (r.status === 'ok') s.ok += 1;
+      else if (r.status === 'alarm') s.alarm += 1;
+      else if (r.status === 'skip') s.skip += 1;
+      else s.error += 1;
       m.set(r.section, s);
     }
     return [...m.entries()]
       .map(([section, v]) => ({ section, pct: v.total ? (v.ok / v.total) * 100 : 0, ...v }))
       .sort((a, b) => a.pct - b.pct);
   }, [results]);
+
+  // Selected section may vanish when a different run loads — drop the stale filter.
+  useEffect(() => {
+    if (sectionFilter && !sections.some((s) => s.section === sectionFilter)) setSectionFilter(null);
+  }, [sections, sectionFilter]);
+
+  const shownResults = useMemo(
+    () => (sectionFilter ? results.filter((r) => r.section === sectionFilter) : results),
+    [results, sectionFilter],
+  );
 
   const statusDist = run
     ? [
@@ -315,20 +330,53 @@ export default function CompliancePage() {
                 <div className="flex flex-col gap-2">
                   {sections.length === 0 && <div className="text-[13px] text-ink-400">데이터 없음</div>}
                   {sections.map((s) => (
-                    <div key={s.section} className="flex items-center justify-between gap-3">
-                      <span className="min-w-0 truncate text-[13px] text-ink-700" title={s.section}>{s.section}</span>
-                      <Meter value={s.pct} />
-                    </div>
+                    <button
+                      key={s.section}
+                      type="button"
+                      onClick={() => setSectionFilter((cur) => (cur === s.section ? null : s.section))}
+                      className={
+                        'rounded-md px-2 py-1.5 text-left transition ' +
+                        (sectionFilter === s.section ? 'bg-brand-50 ring-1 ring-brand-200' : 'hover:bg-ink-50')
+                      }
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="min-w-0 truncate text-[13px] text-ink-700" title={s.section}>{s.section}</span>
+                        <span className="shrink-0 tabular text-[11px] text-ink-400">
+                          <span className="text-positive-text">{s.ok}</span>
+                          {' / '}
+                          <span className={s.alarm > 0 ? 'text-negative' : ''}>{s.alarm}</span>
+                          {' / '}{s.skip}
+                        </span>
+                      </div>
+                      {/* v1-parity stacked status bar: ok / alarm / skip+error */}
+                      <div className="mt-1 flex h-1.5 overflow-hidden rounded-full bg-ink-100">
+                        <span style={{ width: `${(s.ok / s.total) * 100}%` }} className="bg-positive" />
+                        <span style={{ width: `${(s.alarm / s.total) * 100}%` }} className="bg-negative" />
+                        <span style={{ width: `${((s.skip + s.error) / s.total) * 100}%` }} className="bg-ink-300" />
+                      </div>
+                    </button>
                   ))}
                 </div>
               </Card>
             </div>
 
             <div className="mt-6">
-              <div className="mb-3 text-[13px] font-semibold text-ink-700">Controls</div>
+              <div className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-ink-700">
+                Controls
+                {sectionFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setSectionFilter(null)}
+                    className="inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-100"
+                  >
+                    {sectionFilter} ×
+                  </button>
+                )}
+                <span className="font-normal text-ink-400">{shownResults.length} / {results.length}</span>
+              </div>
               <DataTable
                 columns={RESULT_COLS}
-                rows={results as unknown as Record<string, unknown>[]}
+                rows={shownResults as unknown as Record<string, unknown>[]}
                 onRowClick={(row) => setSelected(row as unknown as Result)}
                 cardTitleKey="control_id"
               />

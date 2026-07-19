@@ -244,3 +244,95 @@ export async function bedrockModelMetrics(range = '24h', accountId?: string): Pr
   const series = [...seriesByTs.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([t, tokens]) => ({ t, tokens }));
   return { models: out, totalCost, series };
 }
+
+// ── Generic per-resource live CloudWatch metrics (v1 parity for ElastiCache/OpenSearch/MSK) ──
+// One GetMetricData call per resource; every failure degrades to [] (never blanks the panel).
+export interface LiveMetric { label: string; value: string }
+
+type LiveFmt = 'pct' | 'gb' | 'mb' | 'count' | 'ms' | 'bps';
+interface LiveMetricDef { name: string; label: string; stat: 'Average' | 'Sum' | 'Maximum'; fmt: LiveFmt }
+interface LiveMetricSpec { namespace: string; dims: (id: string) => { Name: string; Value: string }[]; metrics: LiveMetricDef[] }
+
+const LIVE_SPECS: Record<string, LiveMetricSpec> = {
+  // resource_id = CacheClusterId
+  elasticache: {
+    namespace: 'AWS/ElastiCache',
+    dims: (id) => [{ Name: 'CacheClusterId', Value: id }],
+    metrics: [
+      { name: 'CPUUtilization', label: 'CPU', stat: 'Average', fmt: 'pct' },
+      { name: 'EngineCPUUtilization', label: 'Engine CPU', stat: 'Average', fmt: 'pct' },
+      { name: 'FreeableMemory', label: 'Freeable Memory', stat: 'Average', fmt: 'gb' },
+      { name: 'NetworkBytesIn', label: 'Network In', stat: 'Average', fmt: 'mb' },
+      { name: 'NetworkBytesOut', label: 'Network Out', stat: 'Average', fmt: 'mb' },
+      { name: 'CurrConnections', label: 'Connections', stat: 'Average', fmt: 'count' },
+    ],
+  },
+  // resource_id = DomainName. AWS/ES requires the ClientId (account) dimension.
+  opensearch: {
+    namespace: 'AWS/ES',
+    dims: (id) => [
+      { Name: 'DomainName', Value: id },
+      { Name: 'ClientId', Value: process.env.AWS_ACCOUNT_ID ?? '' },
+    ],
+    metrics: [
+      { name: 'CPUUtilization', label: 'CPU', stat: 'Average', fmt: 'pct' },
+      { name: 'JVMMemoryPressure', label: 'JVM Memory', stat: 'Average', fmt: 'pct' },
+      { name: 'FreeStorageSpace', label: 'Free Storage', stat: 'Average', fmt: 'mb' },
+      { name: 'SearchableDocuments', label: 'Documents', stat: 'Average', fmt: 'count' },
+      { name: 'SearchLatency', label: 'Search Latency', stat: 'Average', fmt: 'ms' },
+      { name: 'IndexingLatency', label: 'Indexing Latency', stat: 'Average', fmt: 'ms' },
+      { name: 'ClusterStatus.yellow', label: 'Status Yellow', stat: 'Maximum', fmt: 'count' },
+      { name: 'ClusterStatus.red', label: 'Status Red', stat: 'Maximum', fmt: 'count' },
+    ],
+  },
+  // resource_id = cluster name (sync primary key). Cluster-level dimensions only.
+  msk: {
+    namespace: 'AWS/Kafka',
+    dims: (id) => [{ Name: 'Cluster Name', Value: id }],
+    metrics: [
+      { name: 'ActiveControllerCount', label: 'Active Controllers', stat: 'Sum', fmt: 'count' },
+      { name: 'OfflinePartitionsCount', label: 'Offline Partitions', stat: 'Sum', fmt: 'count' },
+      { name: 'GlobalTopicCount', label: 'Topics', stat: 'Maximum', fmt: 'count' },
+      { name: 'GlobalPartitionCount', label: 'Partitions', stat: 'Maximum', fmt: 'count' },
+    ],
+  },
+};
+
+function fmtLive(v: number, fmt: LiveFmt): string {
+  switch (fmt) {
+    case 'pct': return `${Math.round(v * 10) / 10}%`;
+    case 'gb': return `${(v / 1e9).toFixed(1)} GB`;
+    case 'mb': return `${(v / 1e6).toFixed(1)} MB`;
+    case 'ms': return `${Math.round(v * 1000) / 1000} ms`;
+    case 'bps': return `${(v / 1e6).toFixed(1)} MB/s`;
+    default: return Math.round(v).toLocaleString();
+  }
+}
+
+export function hasLiveMetrics(type: string): boolean { return type in LIVE_SPECS; }
+
+/** Latest-hour metrics for ONE resource of a LIVE_SPECS type. [] on error/no data. */
+export async function liveResourceMetrics(type: string, id: string, accountId?: string): Promise<LiveMetric[]> {
+  const spec = LIVE_SPECS[type];
+  if (!spec) return [];
+  try {
+    const client = await assumedClient(accountId, CloudWatchClient, { region: REGION });
+    const r = await client.send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 3 * 3600_000), EndTime: new Date(),
+      MetricDataQueries: spec.metrics.map((m, i) => ({
+        Id: `lm${i}`, ReturnData: true,
+        MetricStat: { Metric: { Namespace: spec.namespace, MetricName: m.name, Dimensions: spec.dims(id) }, Period: 3600, Stat: m.stat },
+      })),
+    }));
+    const out: LiveMetric[] = [];
+    for (const res of r.MetricDataResults ?? []) {
+      const i = Number((res.Id ?? '').replace('lm', ''));
+      const def = spec.metrics[i];
+      const v = res.Values?.[0];
+      if (def) out.push({ label: def.label, value: typeof v === 'number' ? fmtLive(v, def.fmt) : '—' });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}

@@ -233,6 +233,24 @@ QUERIES = {
         "domain_name",
         "region",
     ),
+    "neptune_cluster": (
+        "SELECT db_cluster_identifier, region, account_id, arn, status, engine, engine_version, "
+        "endpoint, reader_endpoint, port, multi_az, storage_encrypted, kms_key_id, "
+        "availability_zones, vpc_security_groups, db_subnet_group, cluster_create_time, "
+        "backup_retention_period, preferred_backup_window, preferred_maintenance_window, "
+        "iam_database_authentication_enabled, deletion_protection, tags "
+        "FROM aws_neptune_db_cluster ORDER BY db_cluster_identifier",
+        "db_cluster_identifier",
+        "region",
+    ),
+    # OpenSearch Serverless (AOSS) collections — separate API/table from provisioned domains.
+    "opensearch_serverless": (
+        "SELECT name, region, account_id, arn, id, type, status, description, "
+        "collection_endpoint, dashboard_endpoint, kms_key_arn, created_date, last_modified_date "
+        "FROM aws_opensearchserverless_collection ORDER BY name",
+        "name",
+        "region",
+    ),
     "msk": (
         "SELECT cluster_name, region, account_id, arn, state, cluster_type, current_version, creation_time, "
         "provisioned, tags "

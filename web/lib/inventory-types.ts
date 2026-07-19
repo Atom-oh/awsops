@@ -310,6 +310,29 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Engine', keys: ['state', 'cluster_type', 'current_version', 'provisioned'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
+  neptune: { label: 'Neptune', group: 'Storage & DB', stateKey: 'status', distKey: 'engine_version', columns: [
+    { key: 'status', label: 'Status' }, { key: 'engine', label: 'Engine' },
+    { key: 'engine_version', label: 'Version' }, { key: 'multi_az', label: 'Multi-AZ' },
+    { key: 'storage_encrypted', label: 'Encrypted' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'cluster_create_time'] },
+      { label: 'Engine', keys: ['engine', 'engine_version', 'status', 'multi_az', 'deletion_protection'] },
+      { label: 'Endpoint', keys: ['endpoint', 'reader_endpoint', 'port'] },
+      { label: 'Security', keys: ['storage_encrypted', 'kms_key_id', 'iam_database_authentication_enabled', 'vpc_security_groups'] },
+      { label: 'Network', keys: ['availability_zones', 'db_subnet_group'] },
+      { label: 'Backup', keys: ['backup_retention_period', 'preferred_backup_window', 'preferred_maintenance_window'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
+  opensearch_serverless: { label: 'OpenSearch Serverless', group: 'Storage & DB', stateKey: 'status', distKey: 'type', columns: [
+    { key: 'type', label: 'Type' }, { key: 'status', label: 'Status' },
+    { key: 'collection_endpoint', label: 'Endpoint' }, { key: 'created_date', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'id', 'description', 'created_date', 'last_modified_date'] },
+      { label: 'Config', keys: ['type', 'status'] },
+      { label: 'Endpoint', keys: ['collection_endpoint', 'dashboard_endpoint'] },
+      { label: 'Security', keys: ['kms_key_arn'] },
+    ] },
+
   cloudwatch_alarm: { label: 'CloudWatch Alarms', group: 'Monitoring', stateKey: 'state_value', distKey: 'namespace', distKey2: 'state_value', columns: [
     { key: 'state_value', label: 'State' }, { key: 'metric_name', label: 'Metric' }, { key: 'namespace', label: 'Namespace' },
     { key: 'threshold', label: 'Threshold' }, { key: 'state_reason', label: 'Reason' }, { key: 'actions_enabled', label: 'Actions' } ],
@@ -363,7 +386,7 @@ const GROUPS: Record<string, GroupMeta> = {
   },
   'Storage & DB': {
     slug: 'storage', labelKey: 'group.storage', splitKeys: ['ebsUnencrypted'],
-    order: ['s3', 'ebs_volume', 'ebs_snapshot', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'msk'],
+    order: ['s3', 'ebs_volume', 'ebs_snapshot', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'opensearch_serverless', 'msk', 'neptune'],
   },
   'Network': {
     slug: 'network', labelKey: 'group.network', splitKeys: ['sgOpenIngress'],

@@ -154,6 +154,48 @@ function RdsMetricsSection({ instanceId }: { instanceId: string }) {
   );
 }
 
+// Generic live CloudWatch metrics (ElastiCache/OpenSearch/MSK) — the BFF returns pre-formatted
+// {label, value} rows from /api/inventory/<type>/metrics?id=. Same degrade behavior as RDS.
+const LIVE_METRIC_TYPES = new Set(['elasticache', 'opensearch', 'msk']);
+
+function LiveMetricsSection({ type, id }: { type: string; id: string }) {
+  const [s, setS] = useState<{ loading: boolean; rows: { label: string; value: string }[]; error: boolean }>({
+    loading: true, rows: [], error: false,
+  });
+  useEffect(() => {
+    let alive = true;
+    setS({ loading: true, rows: [], error: false });
+    fetch(`/api/inventory/${type}/metrics?id=${encodeURIComponent(id)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => { if (alive) setS({ loading: false, rows: (d.metrics ?? []) as { label: string; value: string }[], error: false }); })
+      .catch(() => { if (alive) setS({ loading: false, rows: [], error: true }); });
+    return () => { alive = false; };
+  }, [type, id]);
+
+  return (
+    <div>
+      <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-ink-700">
+        <span className="flex h-5 w-5 items-center justify-center rounded-md bg-brand-50 text-brand-600"><Activity size={12} /></span>
+        라이브 메트릭 (CloudWatch)
+      </h3>
+      {s.loading ? (
+        <p className="text-[12px] text-ink-400">메트릭 로딩 중…</p>
+      ) : s.error || s.rows.length === 0 ? (
+        <p className="text-[12px] text-ink-300">메트릭 불가</p>
+      ) : (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+          {s.rows.map((row) => (
+            <div key={row.label} className="flex flex-col gap-0.5">
+              <dt className="font-mono text-[11px] text-ink-500">{row.label}</dt>
+              <dd className="text-[13px] text-ink-800">{row.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  );
+}
+
 export default function DetailPanel({
   title,
   data,
@@ -197,6 +239,8 @@ export default function DetailPanel({
 
   const groups = buildDetailGroups(data, spec);
   const rdsInstanceId = resourceType === 'rds' && typeof data.resource_id === 'string' ? data.resource_id : null;
+  const liveMetricId =
+    resourceType && LIVE_METRIC_TYPES.has(resourceType) && typeof data.resource_id === 'string' ? data.resource_id : null;
 
   // v1-parity header: a friendly Name (tag/name column) as the prominent title, the resource_id
   // as the mono subtitle, and a state pill when the type declares a state column.
@@ -289,6 +333,11 @@ export default function DetailPanel({
           {rdsInstanceId && (
             <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
               <RdsMetricsSection instanceId={rdsInstanceId} />
+            </section>
+          )}
+          {liveMetricId && resourceType && (
+            <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
+              <LiveMetricsSection type={resourceType} id={liveMetricId} />
             </section>
           )}
           {children}

@@ -202,14 +202,14 @@ export function rollupUsageTypes(rows: ServiceUsageType[], n: number): ServiceUs
  * Both legs are filtered to a single SERVICE. Each leg degrades to null independently on CE failure
  * (null = call failed; [] = genuinely empty) so a half-broken pull still renders the other half.
  */
-export async function getServiceCostDetail(service: string): Promise<ServiceCostDetail> {
+export async function getServiceCostDetail(service: string, account?: string): Promise<ServiceCostDetail> {
   const now = new Date();
   const filter = { Dimensions: { Key: 'SERVICE' as const, Values: [service] } };
 
   // ① DAILY UnblendedCost, trailing 30 days, no GroupBy → trend.
   const trendEnd = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10); // tomorrow, exclusive
   const trendStart = new Date(now.getTime() - 29 * 86_400_000).toISOString().slice(0, 10);
-  const trend = await (await ceClient()).send(new GetCostAndUsageCommand({
+  const trend = await (await ceClient(account)).send(new GetCostAndUsageCommand({
     TimePeriod: { Start: trendStart, End: trendEnd },
     Granularity: 'DAILY',
     Metrics: ['UnblendedCost'],
@@ -222,7 +222,7 @@ export async function getServiceCostDetail(service: string): Promise<ServiceCost
   // ② MONTHLY UnblendedCost, trailing 3 months, grouped by USAGE_TYPE → summed across months → rolled up.
   const utStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 1)).toISOString().slice(0, 10);
   const utEnd = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
-  const byUsageType = await (await ceClient()).send(new GetCostAndUsageCommand({
+  const byUsageType = await (await ceClient(account)).send(new GetCostAndUsageCommand({
     TimePeriod: { Start: utStart, End: utEnd },
     Granularity: 'MONTHLY',
     Metrics: ['UnblendedCost'],

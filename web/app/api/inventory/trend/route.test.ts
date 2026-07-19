@@ -27,10 +27,13 @@ describe('GET /api/inventory/trend', () => {
     const res = await GET(req());
     expect(res.status).toBe(200);
     const body = await res.json();
+    // Each point now also carries every resource type as a column (multi-line chart) and the
+    // response lists types ranked by latest count.
     expect(body.trend).toEqual([
-      { date: '2026-07-01', total: 17, ec2: 5 },
-      { date: '2026-07-02', total: 21, ec2: 6 },
+      { date: '2026-07-01', total: 17, ec2: 5, lambda: 12 },
+      { date: '2026-07-02', total: 21, ec2: 6, lambda: 12, s3: 3 },
     ]);
+    expect(body.types).toEqual(['lambda', 'ec2', 's3']);
   });
 
   it('clamps days into [1, 90] and defaults to 14', async () => {

@@ -62,9 +62,8 @@ export default function InventoryTypePage() {
 
   const load = useCallback(async () => {
     try {
-      // scopeParams also serializes `accounts`, which this route ignores (account filtering is
-      // out of scope for this pass) — harmless to send.
       const r = await fetch(`/api/inventory/${type}?limit=${ROW_LIMIT}&${scopeParams(scope)}`);
+      if (r.status === 403) throw new Error((await r.json().catch(() => null))?.message ?? '접근 권한이 없습니다');
       if (!r.ok) throw new Error(String(r.status));
       const d = await r.json();
       setRows((d.rows as Row[]).map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data as object) })));
@@ -176,7 +175,13 @@ export default function InventoryTypePage() {
     );
   }
 
-  const columns = [{ key: 'resource_id', label: 'ID' }, { key: 'region', label: 'Region' }, ...spec.columns];
+  const multiAccount = scope.accounts === '__all__' || (Array.isArray(scope.accounts) && scope.accounts.length > 1);
+  const columns = [
+    { key: 'resource_id', label: 'ID' },
+    ...(multiAccount ? [{ key: 'account_id', label: 'Account' }] : []),
+    { key: 'region', label: 'Region' },
+    ...spec.columns,
+  ];
   const colLabel = (key?: string) =>
     (key && spec.columns.find((c) => c.key === key)?.label) || key || '';
   const distLabel = colLabel(spec.distKey);

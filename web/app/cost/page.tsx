@@ -103,7 +103,10 @@ export default function CostPage() {
     setDetail(null);
     setDetailBusy(true);
     try {
-      const r = await fetch(`/api/cost/detail?service=${encodeURIComponent(service)}`);
+      // Scope the drill-down to the selected account (v1 parity). '전체 계정' keeps host scope —
+      // per-account fan-out+merge for the detail panel is not worth the 3× CE calls per click.
+      const acct = active !== ALL_ACCOUNTS ? accountParam(active) : '';
+      const r = await fetch(`/api/cost/detail?service=${encodeURIComponent(service)}${acct ? `&${acct}` : ''}`);
       if (seq !== detailSeqRef.current) return; // superseded by a newer click
       if (!r.ok) throw new Error(String(r.status));
       const body = await r.json();
@@ -113,7 +116,7 @@ export default function CostPage() {
     } finally {
       if (seq === detailSeqRef.current) setDetailBusy(false);
     }
-  }, []);
+  }, [active]);
 
   const closeDetail = useCallback(() => { setPicked(null); setDetail(null); }, []);
 

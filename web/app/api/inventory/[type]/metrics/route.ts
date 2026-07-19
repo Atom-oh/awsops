@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -77,6 +77,12 @@ export async function GET(request: Request, { params }: { params: { type: string
         { label: '최소 여유 스토리지', value: minStoreGb == null ? '—' : `${minStoreGb}GB` },
       ];
       return Response.json({ cards });
+    }
+
+    // ElastiCache/OpenSearch/MSK: per-resource live metrics for the detail panel (?id=).
+    if (hasLiveMetrics(params.type)) {
+      const id = url.searchParams.get('id');
+      if (id) return Response.json({ metrics: await liveResourceMetrics(params.type, id) });
     }
 
     return Response.json({ cards: [] });
