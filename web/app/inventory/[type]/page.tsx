@@ -30,6 +30,22 @@ function stateVariant(value: string): 'default' | 'danger' {
   return BAD_STATES.has(value.trim().toLowerCase()) ? 'danger' : 'default';
 }
 
+// v1-parity KPI glyphs. Per-type emoji for the total tile; a group fallback covers unlisted types.
+const TYPE_EMOJI: Record<string, string> = {
+  ec2: '🖥️', lambda: 'λ', ecs_cluster: '📦', ecs_service: '📦', ecs_task: '📦', ecr: '🐳',
+  s3: '🪣', ebs_volume: '💾', ebs_snapshot: '📸', rds: '🗄️', dynamodb: '⚡', elasticache: '🔥',
+  opensearch: '🔍', msk: '📨', vpc: '🌐', subnet: '🔗', security_group: '🛡️',
+  alb: '⚖️', nlb: '⚖️', target_group: '🎯', cloudfront: '🌎', cloudfront_vpc_origin: '🌎',
+  alb_listener_rule: '📋', waf: '🧱', cloudtrail: '🧾', cloudwatch_alarm: '🔔',
+  iam_role: '🔑', iam_user: '👤',
+};
+const GROUP_EMOJI: Record<string, string> = {
+  Compute: '🖥️', 'Storage & DB': '🗄️', Network: '🌐', Security: '🛡️', Monitoring: '📊',
+};
+function variantEmoji(v: 'default' | 'accent' | 'danger' | 'warn'): string {
+  return v === 'danger' ? '⚠️' : v === 'warn' ? '🟡' : v === 'accent' ? '✅' : '•';
+}
+
 // Count rows by a column value (stringified), descending by count.
 function countBy(rows: Row[], key: string): { name: string; value: number }[] {
   const m = new Map<string, number>();
@@ -52,6 +68,8 @@ export default function InventoryTypePage() {
   const [err, setErr] = useState('');
   const [query, setQuery] = useState('');
   const [stateFilter, setStateFilter] = useState('전체');
+  // v1-parity facet filters (spec.filterKeys): key → selected value ('전체' = no filter).
+  const [facets, setFacets] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Row | null>(null);
   // Supplementary metric KPI cards (e.g. EC2 avg CPU + hourly cost). Degrade silently to [].
   const [metricCards, setMetricCards] = useState<{ label: string; value: string | number; accent?: boolean }[]>([]);
@@ -118,6 +136,19 @@ export default function InventoryTypePage() {
     return rest > 0 ? [...head, { name: '기타', value: rest }] : head;
   }, [allRows, spec?.distKey]);
 
+  // Reset transient filters when switching resource type (a stale facet key would filter to zero).
+  useEffect(() => { setFacets({}); setStateFilter('전체'); setQuery(''); }, [type]);
+
+  // v1-parity facet options: each configured filterKey → its distinct values with live counts.
+  const facetSpecs = useMemo(() => {
+    const keys = spec?.filterKeys ?? [];
+    return keys.map((key) => ({
+      key,
+      label: spec?.columns.find((c) => c.key === key)?.label ?? key,
+      options: countBy(allRows, key),
+    }));
+  }, [spec, allRows]);
+
   // Filters narrow ONLY the displayed table rows.
   const filteredRows = useMemo(() => {
     let out = allRows;
@@ -128,12 +159,20 @@ export default function InventoryTypePage() {
         return name === stateFilter;
       });
     }
+    for (const [key, val] of Object.entries(facets)) {
+      if (!val || val === '전체') continue;
+      out = out.filter((r) => {
+        const v = r[key];
+        const name = v == null || v === '' ? '(none)' : String(v);
+        return name === val;
+      });
+    }
     const q = query.trim().toLowerCase();
     if (q) {
       out = out.filter((r) => Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q)));
     }
     return out;
-  }, [allRows, spec?.stateKey, stateFilter, query]);
+  }, [allRows, spec?.stateKey, stateFilter, facets, query]);
 
   if (!spec) {
     return (
@@ -154,21 +193,38 @@ export default function InventoryTypePage() {
   const arch = layoutOf(type);
 
   // Composable section blocks — arranged per archetype in the render below.
+  // v1-parity: a leading emoji glyph in each KPI tile's top-right box (the "총 N" tile gets the
+  // resource-type emoji; state tiles get a health glyph by variant).
   const kpiRow = (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" />
+      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" icon={TYPE_EMOJI[type] ?? GROUP_EMOJI[spec.group] ?? '📦'} />
       {highlightCards.length > 0
-        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} />)
-        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} />)}
-      {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />)}
+        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} icon={variantEmoji(h.variant)} />)
+        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} icon={variantEmoji(stateVariant(s.name))} />)}
+      {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon="📊" />)}
     </div>
   );
   const donut = spec.distKey && distData.length > 0
     ? <DonutBreakdown title={`${distLabel} 분포`} data={distData} nameKey="name" valueKey="value" />
     : null;
+  const facetsActive = Object.values(facets).some((v) => v && v !== '전체');
+  const anyFilterActive = query.trim() !== '' || stateFilter !== '전체' || facetsActive;
+  const clearAll = () => { setQuery(''); setStateFilter('전체'); setFacets({}); };
   const tableBlock = (
     <div className="flex flex-col gap-3">
-      <Filters query={query} onQuery={setQuery} stateOptions={spec.stateKey ? stateOptions : undefined} stateFilter={stateFilter} onState={setStateFilter} />
+      <Filters
+        query={query}
+        onQuery={setQuery}
+        stateOptions={spec.stateKey ? stateOptions : undefined}
+        stateFilter={stateFilter}
+        onState={setStateFilter}
+        facetSpecs={facetSpecs}
+        facets={facets}
+        onFacet={(key, val) => setFacets((prev) => ({ ...prev, [key]: val }))}
+        shownCount={filteredRows.length}
+        totalCount={allRows.length}
+        onClear={anyFilterActive ? clearAll : undefined}
+      />
       <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
     </div>
   );
@@ -236,34 +292,75 @@ export default function InventoryTypePage() {
   );
 }
 
-// Search + (optional) state SegmentedControl — narrow the table only.
+interface FacetSpec { key: string; label: string; options: { name: string; value: number }[] }
+
+// v1-parity filter bar: search + state SegmentedControl + per-facet dropdowns (with live counts) +
+// a "N / M" shown count + "전체 해제". Narrows the table only.
 function Filters({
   query,
   onQuery,
   stateOptions,
   stateFilter,
   onState,
+  facetSpecs,
+  facets,
+  onFacet,
+  shownCount,
+  totalCount,
+  onClear,
 }: {
   query: string;
   onQuery: (v: string) => void;
   stateOptions?: string[];
   stateFilter: string;
   onState: (v: string) => void;
+  facetSpecs: FacetSpec[];
+  facets: Record<string, string>;
+  onFacet: (key: string, val: string) => void;
+  shownCount: number;
+  totalCount: number;
+  onClear?: () => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="w-full max-w-[280px]">
-        <Input
-          inputSize="sm"
-          placeholder="검색…"
-          value={query}
-          onChange={(e) => onQuery(e.target.value)}
-          icon={<Search className="h-3.5 w-3.5" />}
-        />
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="w-full max-w-[280px]">
+          <Input
+            inputSize="sm"
+            placeholder="검색…"
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            icon={<Search className="h-3.5 w-3.5" />}
+          />
+        </div>
+        {stateOptions && stateOptions.length > 1 && (
+          <div className="overflow-x-auto">
+            <SegmentedControl options={stateOptions} value={stateFilter} onChange={onState} />
+          </div>
+        )}
       </div>
-      {stateOptions && stateOptions.length > 1 && (
-        <div className="overflow-x-auto">
-          <SegmentedControl options={stateOptions} value={stateFilter} onChange={onState} />
+      {(facetSpecs.length > 0 || onClear) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {facetSpecs.map((f) => (
+            <select
+              key={f.key}
+              aria-label={`${f.label} 필터`}
+              value={facets[f.key] ?? '전체'}
+              onChange={(e) => onFacet(f.key, e.target.value)}
+              className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700"
+            >
+              <option value="전체">{f.label}: 전체</option>
+              {f.options.map((o) => (
+                <option key={o.name} value={o.name}>{o.name} ({o.value})</option>
+              ))}
+            </select>
+          ))}
+          {onClear && (
+            <button onClick={onClear} className="text-[12px] text-ink-400 hover:text-ink-800">전체 해제</button>
+          )}
+          <span className="ml-auto tabular-nums text-[12px] text-ink-400">
+            {shownCount.toLocaleString()} / {totalCount.toLocaleString()}
+          </span>
         </div>
       )}
     </div>

@@ -35,7 +35,18 @@ export interface StatTileProps {
   className?: string;
   /** When set, the tile becomes a navigation link (v1-parity: click a KPI → its page). */
   href?: string;
+  /** v1-parity accent glyph — an emoji or small icon shown in a rounded tinted box at the
+   *  TOP-RIGHT of the tile (replaces the faint AwsopsMark watermark when provided). */
+  icon?: ReactNode;
 }
+
+// Variant → tinted top-right icon box (matches the value/border accent).
+const ICON_BOX: Record<StatTileVariant, string> = {
+  default: 'bg-ink-100 text-ink-500',
+  accent: 'bg-brand-50 text-brand-600',
+  warn: 'bg-brand-50 text-brand-700',
+  danger: 'bg-rose-50 text-rose-600',
+};
 
 function trendTone(trend: string): string {
   const t = trend.trim();
@@ -62,6 +73,7 @@ export default function StatTile({
   size = 'default',
   className,
   href,
+  icon,
 }: StatTileProps) {
   const compact = size === 'compact';
   const border =
@@ -84,12 +96,18 @@ export default function StatTile({
         className,
       )}
     >
-      {variant === 'accent' && !compact && (
+      {/* v1-parity: an emoji/icon in a rounded tinted box, top-right. Falls back to the faint
+          AwsopsMark watermark on accent tiles when no icon is supplied. */}
+      {icon != null && !compact ? (
+        <div className={cn('absolute top-3 right-3 flex h-8 w-8 items-center justify-center rounded-lg text-[15px] leading-none', ICON_BOX[variant])}>
+          {icon}
+        </div>
+      ) : variant === 'accent' && !compact ? (
         <div className="pointer-events-none absolute -top-1 -right-1 opacity-[0.07]">
           <AwsopsMark size={56} />
         </div>
-      )}
-      <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
+      ) : null}
+      <div className={cn('text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400', icon != null && !compact && 'pr-10')}>
         {eyebrow ?? label}
       </div>
       <div

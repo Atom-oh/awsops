@@ -7,6 +7,10 @@ export interface InvColumn { key: string; label: string }
 export interface InvType {
   label: string; group: string; columns: InvColumn[]; stateKey?: string; distKey?: string;
   sections?: { label: string; keys: string[] }[];
+  // filterKeys (optional, v1-parity facet filters): columns[].key rendered as dropdown facets above
+  // the table (each option shows a live count). The stateKey already has its own SegmentedControl,
+  // so list OTHER discriminating columns here (e.g. ec2 type/vpc, lambda runtime).
+  filterKeys?: string[];
 }
 
 // resource_id + region are prepended by the page; columns here are the type-specific extras.
@@ -20,11 +24,13 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Identity', keys: ['resource_id', 'name', 'region'] },
       { label: 'Compute', keys: ['instance_type', 'instance_state', 'pricing_model', 'launch_time'] },
       { label: 'Network', keys: ['private_ip_address', 'public_ip_address', 'subnet_id', 'vpc_id'] },
-    ] },
+    ],
+    filterKeys: ['instance_type', 'vpc_id'] },
   lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', columns: [
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
     { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' },
-    { key: 'handler', label: 'Handler' }, { key: 'last_modified', label: 'Modified' } ] },
+    { key: 'handler', label: 'Handler' }, { key: 'last_modified', label: 'Modified' } ],
+    filterKeys: ['runtime'] },
   ecs_cluster: { label: 'ECS Clusters', group: 'Compute', stateKey: 'status', distKey: 'status', columns: [
     { key: 'status', label: 'Status' }, { key: 'running_tasks_count', label: 'Running' },
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },

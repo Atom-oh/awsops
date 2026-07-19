@@ -1,12 +1,37 @@
 'use client';
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useResizablePanel, usePublishDockedWidth, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
-import { X } from 'lucide-react';
+import {
+  X, Info, Cpu, Network, Shield, HardDrive, Tag, KeyRound, DollarSign, Database,
+  Server, Globe, Boxes, Activity, type LucideIcon,
+} from 'lucide-react';
 import Badge from './Badge';
 import StatePill from './StatePill';
 import { buildDetailGroups, type DetailValue } from '@/lib/inventory-detail';
 import type { InvType } from '@/lib/inventory-types';
 import type { RdsInstanceMetrics } from '@/lib/metrics';
+
+// v1-parity: each detail section is a titled card with a leading icon. Section labels are a small
+// shared vocabulary across inventory types (Identity/Compute/Network/Security/Storage/Tags/…), so
+// a keyword match on the label picks the icon; anything unmatched falls back to Info.
+const SECTION_ICONS: [RegExp, LucideIcon][] = [
+  [/network|vpc|subnet|dns|ip|endpoint|route|listener/i, Network],
+  [/security|iam|auth|access|policy|encrypt/i, Shield],
+  [/storage|volume|disk|ebs|snapshot|backup/i, HardDrive],
+  [/compute|cpu|memory|capacity|instance|runtime|handler|desired/i, Cpu],
+  [/tag/i, Tag],
+  [/key|credential/i, KeyRound],
+  [/cost|billing|pricing/i, DollarSign],
+  [/engine|class|database|table|cluster|cache|domain/i, Database],
+  [/identity|general|overview|info|config|meta/i, Info],
+  [/cdn|cloudfront|global|edge/i, Globe],
+  [/cluster|node|container|task|service/i, Boxes],
+  [/health|metric|monitor|alarm|status|state/i, Activity],
+];
+function sectionIcon(label: string): LucideIcon {
+  for (const [re, icon] of SECTION_ICONS) if (re.test(label)) return icon;
+  return Server;
+}
 
 /**
  * DetailPanel — right slide-in panel showing EVERY field of a resource row.
@@ -70,8 +95,9 @@ function RdsMetricsSection({ instanceId }: { instanceId: string }) {
   }, [instanceId]);
 
   return (
-    <section className="border-t border-ink-100 pt-3">
-      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-400">
+    <div>
+      <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-ink-700">
+        <span className="flex h-5 w-5 items-center justify-center rounded-md bg-brand-50 text-brand-600"><Activity size={12} /></span>
         인스턴스 메트릭 (CloudWatch)
       </h3>
       {s.loading ? (
@@ -93,7 +119,7 @@ function RdsMetricsSection({ instanceId }: { instanceId: string }) {
           })}
         </dl>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -141,6 +167,18 @@ export default function DetailPanel({
   const groups = buildDetailGroups(data, spec);
   const rdsInstanceId = resourceType === 'rds' && typeof data.resource_id === 'string' ? data.resource_id : null;
 
+  // v1-parity header: a friendly Name (tag/name column) as the prominent title, the resource_id
+  // as the mono subtitle, and a state pill when the type declares a state column.
+  const rawName = data.name ?? data.Name ?? (data.tags as Record<string, unknown> | undefined)?.Name;
+  const name = typeof rawName === 'string' && rawName.trim() ? rawName.trim() : null;
+  const resourceId = typeof data.resource_id === 'string' ? data.resource_id : (title ?? '');
+  // Prominent title = friendly Name when we have one; else the caller's title / resource id.
+  const bigTitle = name ?? title ?? resourceId ?? '리소스 상세';
+  // Mono subtitle = the resource id, shown only when it adds info beyond the title.
+  const subId = resourceId && resourceId !== bigTitle ? resourceId : null;
+  const stateVal = spec?.stateKey ? data[spec.stateKey] : undefined;
+  const stateText = stateVal == null || stateVal === '' ? null : String(stateVal);
+
   return (
     <>
       <div
@@ -165,9 +203,13 @@ export default function DetailPanel({
           <div className={RESIZE_GRIP_BAR_CLASS} />
         </div>
         <header className="flex items-start justify-between gap-2 border-b border-ink-100 px-4 py-3">
-          <h2 className="min-w-0 break-words font-mono text-[13px] font-semibold text-ink-800">
-            {title ?? '리소스 상세'}
-          </h2>
+          <div className="min-w-0">
+            <h2 className="min-w-0 break-words text-[14px] font-semibold text-ink-800">{bigTitle}</h2>
+            <div className="mt-0.5 flex flex-wrap items-center gap-2">
+              {subId && <span className="break-all font-mono text-[11px] text-ink-400 select-text">{subId}</span>}
+              {stateText && <StatePill value={stateText} />}
+            </div>
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -178,25 +220,39 @@ export default function DetailPanel({
           </button>
         </header>
         {actions && <div className="border-b border-ink-100 px-4 py-3">{actions}</div>}
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-          {groups.map((group, gi) => (
-            <section key={group.label || gi}>
-              {group.label && (
-                <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-400">
-                  {group.label}
-                </h3>
-              )}
-              <dl className="space-y-2.5">
-                {group.items.map((it) => (
-                  <div key={it.key} className="grid grid-cols-1 gap-0.5">
-                    <dt className="font-mono text-[11px] text-ink-500">{it.label}</dt>
-                    <dd className="text-[13px] text-ink-800">{renderValue(it.fmt)}</dd>
-                  </div>
-                ))}
-              </dl>
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+          {groups.map((group, gi) => {
+            // v1-parity: each section is a rounded card with a leading icon + title. An unlabelled
+            // group (no spec/sections) renders as a plain card without the header row.
+            const Icon = group.label ? sectionIcon(group.label) : null;
+            return (
+              <section key={group.label || gi} className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
+                {group.label && (
+                  <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-ink-700">
+                    {Icon && (
+                      <span className="flex h-5 w-5 items-center justify-center rounded-md bg-brand-50 text-brand-600">
+                        <Icon size={12} />
+                      </span>
+                    )}
+                    {group.label}
+                  </h3>
+                )}
+                <dl className="space-y-2.5">
+                  {group.items.map((it) => (
+                    <div key={it.key} className="grid grid-cols-1 gap-0.5">
+                      <dt className="font-mono text-[11px] text-ink-500">{it.label}</dt>
+                      <dd className="text-[13px] text-ink-800">{renderValue(it.fmt)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            );
+          })}
+          {rdsInstanceId && (
+            <section className="rounded-lg border border-ink-100 bg-paper-muted/40 p-3">
+              <RdsMetricsSection instanceId={rdsInstanceId} />
             </section>
-          ))}
-          {rdsInstanceId && <RdsMetricsSection instanceId={rdsInstanceId} />}
+          )}
           {children}
         </div>
       </aside>

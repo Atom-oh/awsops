@@ -21,10 +21,12 @@ describe('DetailPanel', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders the title and the key/value rows for every field', () => {
+  it('renders a friendly Name as the heading with the resource id as the mono subtitle', () => {
     render(<DetailPanel title="i-0abc123" data={MOCK} onClose={() => {}} />);
-    // title (header h2)
-    expect(screen.getByRole('heading', { name: 'i-0abc123' })).toBeTruthy();
+    // v1-parity header: the tag Name ('web') is the prominent title, the resource_id the subtitle.
+    expect(screen.getByRole('heading', { name: 'web' })).toBeTruthy();
+    // resource_id shows in the mono subtitle (and, with no spec, also as a flat field row).
+    expect(screen.getAllByText('i-0abc123').length).toBeGreaterThanOrEqual(1);
     // string key + value
     expect(screen.getByText('region')).toBeTruthy();
     expect(screen.getByText('ap-northeast-2')).toBeTruthy();
@@ -64,8 +66,8 @@ describe('DetailPanel', () => {
     // friendly column label ('Type' for instance_type), not the raw key
     expect(screen.getByText('Type')).toBeTruthy();
     expect(screen.queryByText('instance_type')).toBeNull();
-    // state key rendered as a StatePill (the value text is present)
-    expect(screen.getByText('running')).toBeTruthy();
+    // state rendered as a StatePill BOTH in the header (v1-parity) and in the Compute section row.
+    expect(screen.getAllByText('running').length).toBeGreaterThanOrEqual(1);
   });
 });
 
