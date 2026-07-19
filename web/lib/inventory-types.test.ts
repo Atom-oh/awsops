@@ -189,13 +189,22 @@ describe('computeHighlights (per-type highlight cards)', () => {
     const rows = [{ r: 'python3.7' }, { r: 'nodejs20.x' }, { r: 'go1.x' }];
     expect(computeHighlights(rows, [{ kind: 'deprecatedRuntime', label: 'eol', col: 'r' }])[0]).toEqual({ label: 'eol', value: 2, variant: 'danger' });
   });
-  it('every HIGHLIGHTS entry references a real column (or region/resource_id) for its type', () => {
+  it('every HIGHLIGHTS entry references a real synced field for its type', () => {
     const VIRTUAL = new Set(['region', 'resource_id']);
     for (const [type, hls] of Object.entries(HIGHLIGHTS)) {
       const spec = INVENTORY_TYPES[type];
       expect(spec, `HIGHLIGHTS[${type}] has a registered type`).toBeTruthy();
-      const cols = new Set(spec.columns.map((c) => c.key));
-      for (const h of hls) expect(cols.has(h.col) || VIRTUAL.has(h.col), `${type}.${h.col}`).toBe(true);
+      // Known synced fields = table columns ∪ detail-section keys (both validated against
+      // sync_lambda.py) ∪ state/dist keys. Dotted JSONB paths validate their ROOT field.
+      const cols = new Set<string>([
+        ...spec.columns.map((c) => c.key),
+        ...(spec.sections ?? []).flatMap((sec) => sec.keys),
+        ...[spec.stateKey, spec.distKey, spec.distKey2].filter((k): k is string => Boolean(k)),
+      ]);
+      for (const h of hls) {
+        const root = h.col.split('.')[0];
+        expect(cols.has(root) || VIRTUAL.has(root), `${type}.${h.col}`).toBe(true);
+      }
     }
   });
 });

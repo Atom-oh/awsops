@@ -31,11 +31,12 @@ interface Splits {
   iamUserNoMfa: number;
   sgOpenIngress: number;
   s3Public: number;
+  cwAlarm?: number;
 }
 interface Ec2Type { name: string; count: number; [k: string]: unknown }
-interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; splits?: Splits; ec2Types?: Ec2Type[] }
+interface Summary { byType: ByType[]; byCategory: ByCategory[]; total: number; splits?: Splits; ec2Types?: Ec2Type[]; lastSyncAt?: string | null }
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
-interface Cost { trend: TrendPoint[] }
+interface Cost { trend: TrendPoint[]; monthly?: { month: string; total: number }[] }
 interface ResourceTrendPoint { date: string; total: number; ec2: number; [k: string]: unknown }
 interface ResourceTrend { trend: ResourceTrendPoint[] }
 interface FleetCluster {
@@ -91,7 +92,6 @@ export default function Home() {
         .then(setResTrend)
         .catch(() => setResTrend({ trend: [] })),
     ]);
-    setCapturedAt(new Date().toISOString());
     setBusy(false);
 
     // EKS fleet is a LIVE K8s read (nodes/pods/events per cluster). Kept OUT of the
@@ -109,6 +109,11 @@ export default function Home() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Header freshness = when the inventory was last SYNCED (falls back to fetch time).
+  useEffect(() => {
+    setCapturedAt(sum?.lastSyncAt ?? (sum ? new Date().toISOString() : null));
+  }, [sum]);
 
   // type → count lookup from the inventory summary (DASH when summary unavailable).
   const n = (type: string): number | string => {
@@ -157,6 +162,16 @@ export default function Home() {
   const dailyAvg =
     ov && ov.mtdCost != null ? ov.mtdCost / Math.max(1, new Date().getDate()) : null;
 
+  // MoM delta vs last month's daily average (v1 parity: '전월 대비 ±N%').
+  const monthly = cost?.monthly ?? [];
+  const lastMonthTotal = monthly.length >= 2 ? monthly[monthly.length - 2].total : null;
+  const now = new Date();
+  const daysInLastMonth = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
+  const momPct =
+    dailyAvg != null && lastMonthTotal != null && lastMonthTotal > 0
+      ? (dailyAvg / (lastMonthTotal / daysInLastMonth) - 1) * 100
+      : null;
+
   // Straight-line month-end projection (design handoff 개선안 ①: "예상 청구액"). Client-side
   // only — no new API — daily average × days in the current month.
   const today = new Date();
@@ -172,6 +187,7 @@ export default function Home() {
     sp && sp.ebsUnencrypted > 0 && { key: 'ebs', dot: 'var(--warning)', text: `미암호화 EBS 볼륨 ${sp.ebsUnencrypted}개`, href: '/inventory/ebs_volume' },
     sp && sp.iamUserNoMfa > 0 && { key: 'mfa', dot: 'var(--warning)', text: `MFA 미설정 IAM 사용자 ${sp.iamUserNoMfa}개`, href: '/inventory/iam_user' },
     jobs && jobs.failed > 0 && { key: 'jobs', dot: 'var(--negative)', text: `실패한 작업 ${jobs.failed}개`, href: '/jobs' },
+    sp && (sp.cwAlarm ?? 0) > 0 && { key: 'cw', dot: 'var(--negative)', text: `ALARM 상태 CloudWatch 알람 ${sp.cwAlarm}개`, href: '/inventory/cloudwatch_alarm' },
     hasFleet && recentEvents.length > 0 && { key: 'k8s', dot: 'var(--warning)', text: `K8s Warning 이벤트 ${recentEvents.length}건`, href: '/eks' },
   ].filter((w): w is { key: string; dot: string; text: string; href: string } => Boolean(w));
 
@@ -301,7 +317,8 @@ export default function Home() {
               href="/cost"
               variant="accent"
               icon={<DollarSign size={16} />}
-              hint={dailyAvg != null ? `약 $${dailyAvg.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/일` : undefined}
+              trend={momPct != null ? `${momPct >= 0 ? '↑' : '↓'}${Math.abs(momPct).toFixed(1)}%` : undefined}
+              hint={dailyAvg != null ? `약 $${dailyAvg.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/일${momPct != null ? ' · 전월 일평균 대비' : ''}` : undefined}
             />
             <StatTile
               label="예상 청구액 (USD)"
@@ -310,7 +327,14 @@ export default function Home() {
               icon={<TrendingUp size={16} />}
               hint="월말 예상"
             />
-            <StatTile label="CloudWatch 알람" value={n('cloudwatch_alarm')} href="/inventory/cloudwatch_alarm" icon={<Bell size={16} />} />
+            <StatTile
+              label="CloudWatch 알람"
+              value={n('cloudwatch_alarm')}
+              href="/inventory/cloudwatch_alarm"
+              variant={sp && (sp.cwAlarm ?? 0) > 0 ? 'danger' : 'default'}
+              icon={<Bell size={16} />}
+              hint={sp && (sp.cwAlarm ?? 0) > 0 ? `ALARM ${sp.cwAlarm}건` : undefined}
+            />
             <StatTile label="CloudTrail" value={n('cloudtrail')} href="/inventory/cloudtrail" icon={<FileSearch size={16} />} />
           </div>
         </section>

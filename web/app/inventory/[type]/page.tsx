@@ -112,14 +112,20 @@ export default function InventoryTypePage() {
   );
 
   // Distribution donut — top 6 + 기타, from the FULL row set.
-  const distData = useMemo(() => {
-    if (!spec?.distKey) return [];
-    const counts = countBy(allRows, spec.distKey);
+  const top6 = (counts: { name: string; value: number }[]) => {
     if (counts.length <= 6) return counts;
     const head = counts.slice(0, 6);
     const rest = counts.slice(6).reduce((acc, c) => acc + c.value, 0);
     return rest > 0 ? [...head, { name: '기타', value: rest }] : head;
-  }, [allRows, spec?.distKey]);
+  };
+  const distData = useMemo(
+    () => (spec?.distKey ? top6(countBy(allRows, spec.distKey)) : []),
+    [allRows, spec?.distKey],
+  );
+  const distData2 = useMemo(
+    () => (spec?.distKey2 ? top6(countBy(allRows, spec.distKey2)) : []),
+    [allRows, spec?.distKey2],
+  );
 
   // Reset transient filters when switching resource type (a stale facet key would filter to zero).
   useEffect(() => { setFacets({}); setStateFilter('전체'); setQuery(''); }, [type]);
@@ -198,6 +204,13 @@ export default function InventoryTypePage() {
   const donut = spec.distKey && distData.length > 0
     ? <DonutBreakdown title={`${distLabel} 분포`} data={distData} nameKey="name" valueKey="value" />
     : null;
+  const donut2 = spec.distKey2 && spec.distKey2 !== spec.distKey && distData2.length > 0
+    ? <DonutBreakdown title={`${colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" />
+    : null;
+  // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.
+  const graphBand = donut && donut2
+    ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{donut}{donut2}</div>
+    : donut;
   const facetsActive = Object.values(facets).some((v) => v && v !== '전체');
   const anyFilterActive = query.trim() !== '' || stateFilter !== '전체' || facetsActive;
   const clearAll = () => { setQuery(''); setStateFilter('전체'); setFacets({}); };
@@ -247,7 +260,7 @@ export default function InventoryTypePage() {
             ) : (
               kpiRow
             )}
-            {donut}
+            {graphBand}
             {tableBlock}
           </>
         )}

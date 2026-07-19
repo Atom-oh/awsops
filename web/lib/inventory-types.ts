@@ -6,6 +6,8 @@ export interface InvColumn { key: string; label: string }
 // leftover keys fall into an "Other" group. Types without `sections` render a flat list.
 export interface InvType {
   label: string; group: string; columns: InvColumn[]; stateKey?: string; distKey?: string;
+  /** Optional second distribution dimension — rendered as a second donut beside the first. */
+  distKey2?: string;
   sections?: { label: string; keys: string[] }[];
   // filterKeys (optional, v1-parity facet filters): columns[].key rendered as dropdown facets above
   // the table (each option shows a live count). The stateKey already has its own SegmentedControl,
@@ -15,7 +17,7 @@ export interface InvType {
 
 // resource_id + region are prepended by the page; columns here are the type-specific extras.
 export const INVENTORY_TYPES: Record<string, InvType> = {
-  ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', columns: [
+  ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', distKey2: 'instance_state', columns: [
     { key: 'name', label: 'Name' }, { key: 'instance_type', label: 'Type' }, { key: 'instance_state', label: 'State' },
     { key: 'pricing_model', label: 'Pricing' },
     { key: 'private_ip_address', label: 'Private IP' }, { key: 'public_ip_address', label: 'Public IP' },
@@ -32,7 +34,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Image', keys: ['image_id', 'architecture', 'platform_details', 'virtualization_type', 'hypervisor'] },
     ],
     filterKeys: ['instance_type', 'vpc_id'] },
-  lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', columns: [
+  lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', distKey2: 'package_type', columns: [
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
     { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' },
     { key: 'handler', label: 'Handler' }, { key: 'last_modified', label: 'Modified' } ],
@@ -88,7 +90,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'creation_date'] },
     ] },
-  ebs_volume: { label: 'EBS Volumes', group: 'Storage & DB', stateKey: 'state', distKey: 'volume_type', columns: [
+  ebs_volume: { label: 'EBS Volumes', group: 'Storage & DB', stateKey: 'state', distKey: 'volume_type', distKey2: 'encrypted', columns: [
     { key: 'name', label: 'Name' }, { key: 'volume_type', label: 'Type' }, { key: 'size', label: 'Size(GB)' },
     { key: 'state', label: 'State' }, { key: 'encrypted', label: 'Encrypted' }, { key: 'iops', label: 'IOPS' },
     { key: 'availability_zone', label: 'AZ' }, { key: 'create_time', label: 'Created' } ],
@@ -111,7 +113,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['encrypted'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', columns: [
+  rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', distKey2: 'class', columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'class', label: 'Class' }, { key: 'status', label: 'Status' }, { key: 'multi_az', label: 'Multi-AZ' },
     { key: 'publicly_accessible', label: 'Public' }, { key: 'allocated_storage', label: 'Storage(GB)' }, { key: 'vpc_id', label: 'VPC' } ],
@@ -126,7 +128,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['class'] },
-  dynamodb: { label: 'DynamoDB Tables', group: 'Storage & DB', stateKey: 'table_status', distKey: 'billing_mode', columns: [
+  dynamodb: { label: 'DynamoDB Tables', group: 'Storage & DB', stateKey: 'table_status', distKey: 'billing_mode', distKey2: 'table_status', columns: [
     { key: 'table_status', label: 'Status' }, { key: 'billing_mode', label: 'Billing' },
     { key: 'item_count', label: 'Items' }, { key: 'table_size_bytes', label: 'Size(B)' } ],
     sections: [
@@ -181,7 +183,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ] },
   // ---- D3 wave ----
-  cloudfront: { label: 'CloudFront', group: 'Network', stateKey: 'status', distKey: 'price_class', columns: [
+  cloudfront: { label: 'CloudFront', group: 'Network', stateKey: 'status', distKey: 'price_class', distKey2: 'status', columns: [
     { key: 'domain_name', label: 'Domain' }, { key: 'status', label: 'Status' },
     { key: 'enabled', label: 'Enabled' }, { key: 'price_class', label: 'Price class' } ],
     sections: [
@@ -278,7 +280,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
   s3_public_access: { label: 'S3 Public Access', group: 'Security', distKey: 'bucket_policy_is_public', columns: [
     { key: 'bucket_policy_is_public', label: 'Policy public' }, { key: 'block_public_acls', label: 'Block ACLs' },
     { key: 'block_public_policy', label: 'Block policy' }, { key: 'restrict_public_buckets', label: 'Restrict public' }, { key: 'ignore_public_acls', label: 'Ignore ACLs' } ] },
-  elasticache: { label: 'ElastiCache', group: 'Storage & DB', stateKey: 'cache_cluster_status', distKey: 'engine', columns: [
+  elasticache: { label: 'ElastiCache', group: 'Storage & DB', stateKey: 'cache_cluster_status', distKey: 'engine', distKey2: 'cache_node_type', columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'cache_node_type', label: 'Node type' }, { key: 'cache_cluster_status', label: 'Status' }, { key: 'num_cache_nodes', label: 'Nodes' } ],
     sections: [
@@ -290,7 +292,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['cache_node_type'] },
-  opensearch: { label: 'OpenSearch', group: 'Storage & DB', distKey: 'engine_version', columns: [
+  opensearch: { label: 'OpenSearch', group: 'Storage & DB', distKey: 'engine_version', distKey2: 'engine_type', columns: [
     { key: 'engine_version', label: 'Version' }, { key: 'processing', label: 'Processing' },
     { key: 'created', label: 'Created' }, { key: 'endpoint', label: 'Endpoint' } ],
     sections: [
@@ -301,16 +303,16 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Storage', keys: ['ebs_options'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  msk: { label: 'MSK Clusters', group: 'Storage & DB', stateKey: 'state', distKey: 'cluster_type', columns: [
+  msk: { label: 'MSK Clusters', group: 'Storage & DB', stateKey: 'state', distKey: 'cluster_type', distKey2: 'state', columns: [
     { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' }, { key: 'current_version', label: 'Version' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'cluster_name', 'account_id', 'region', 'arn', 'creation_time'] },
       { label: 'Engine', keys: ['state', 'cluster_type', 'current_version', 'provisioned'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  cloudwatch_alarm: { label: 'CloudWatch Alarms', group: 'Monitoring', stateKey: 'state_value', distKey: 'namespace', columns: [
+  cloudwatch_alarm: { label: 'CloudWatch Alarms', group: 'Monitoring', stateKey: 'state_value', distKey: 'namespace', distKey2: 'state_value', columns: [
     { key: 'state_value', label: 'State' }, { key: 'metric_name', label: 'Metric' }, { key: 'namespace', label: 'Namespace' },
-    { key: 'threshold', label: 'Threshold' }, { key: 'actions_enabled', label: 'Actions' } ],
+    { key: 'threshold', label: 'Threshold' }, { key: 'state_reason', label: 'Reason' }, { key: 'actions_enabled', label: 'Actions' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn'] },
       { label: 'State', keys: ['state_value', 'state_reason', 'state_updated_timestamp'] },
@@ -486,13 +488,39 @@ export type Highlight =
   | { kind: 'countWhere'; label: string; col: string; eq: string; tone?: 'accent' | 'danger' }
   | { kind: 'countTruthy'; label: string; col: string; tone?: 'accent' | 'danger' }
   | { kind: 'distinct'; label: string; col: string }
-  | { kind: 'sum'; label: string; col: string; suffix?: string }
+  | { kind: 'sum'; label: string; col: string; suffix?: string; fmt?: 'bytes' }
   | { kind: 'deprecatedRuntime'; label: string; col: string };
 
 export interface HighlightCard { label: string; value: string | number; variant: 'default' | 'accent' | 'danger' }
 
 const FALSY = new Set(['', 'false', 'null', 'undefined', '0', 'none', 'no', 'disabled']);
 const sv = (v: unknown): string => (v == null ? '' : String(v));
+
+// Resolve a highlight column that may be a dotted JSONB path (e.g. 'provisioned.number_of_broker_nodes').
+// Segment matching is case-insensitive (Steampipe JSONB keys vary between snake_case and PascalCase),
+// and JSON-encoded strings are parsed one level so nested lookups work on raw API rows.
+function cell(r: Record<string, unknown>, col: string): unknown {
+  if (!col.includes('.')) return r[col];
+  let cur: unknown = r;
+  for (const seg of col.split('.')) {
+    if (typeof cur === 'string' && (cur.startsWith('{') || cur.startsWith('['))) {
+      try { cur = JSON.parse(cur); } catch { return undefined; }
+    }
+    if (cur == null || typeof cur !== 'object' || Array.isArray(cur)) return undefined;
+    const o = cur as Record<string, unknown>;
+    const key = Object.keys(o).find((k) => k.toLowerCase().replace(/_/g, '') === seg.toLowerCase().replace(/_/g, ''));
+    if (key == null) return undefined;
+    cur = o[key];
+  }
+  return cur;
+}
+
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+function humanBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const i = Math.min(BYTE_UNITS.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return `${(n / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${BYTE_UNITS[i]}`;
+}
 
 /** Compute highlight cards from the full row set. Pure — unit-tested. */
 export function computeHighlights(rows: Array<Record<string, unknown>>, highlights: Highlight[]): HighlightCard[] {
@@ -501,23 +529,24 @@ export function computeHighlights(rows: Array<Record<string, unknown>>, highligh
   return highlights.map((h) => {
     switch (h.kind) {
       case 'countWhere': {
-        const n = rows.filter((r) => sv(r[h.col]).trim().toLowerCase() === h.eq.toLowerCase()).length;
+        const n = rows.filter((r) => sv(cell(r, h.col)).trim().toLowerCase() === h.eq.toLowerCase()).length;
         return { label: h.label, value: n, variant: tone(h.tone, n) };
       }
       case 'countTruthy': {
-        const n = rows.filter((r) => !FALSY.has(sv(r[h.col]).trim().toLowerCase())).length;
+        const n = rows.filter((r) => !FALSY.has(sv(cell(r, h.col)).trim().toLowerCase())).length;
         return { label: h.label, value: n, variant: tone(h.tone, n) };
       }
       case 'distinct': {
-        const set = new Set(rows.map((r) => sv(r[h.col]).trim()).filter((x) => x !== ''));
+        const set = new Set(rows.map((r) => sv(cell(r, h.col)).trim()).filter((x) => x !== ''));
         return { label: h.label, value: set.size, variant: 'default' };
       }
       case 'sum': {
-        const total = rows.reduce((acc, r) => acc + (Number(r[h.col]) || 0), 0);
+        const total = rows.reduce((acc, r) => acc + (Number(cell(r, h.col)) || 0), 0);
+        if (h.fmt === 'bytes') return { label: h.label, value: humanBytes(total), variant: 'default' };
         return { label: h.label, value: `${Math.round(total).toLocaleString()}${h.suffix ?? ''}`, variant: 'default' };
       }
       case 'deprecatedRuntime': {
-        const n = rows.filter((r) => isDeprecatedRuntime(r[h.col])).length;
+        const n = rows.filter((r) => isDeprecatedRuntime(cell(r, h.col))).length;
         return { label: h.label, value: n, variant: n > 0 ? 'danger' : 'default' };
       }
     }
@@ -578,8 +607,40 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
   cloudwatch_alarm: [
     { kind: 'countWhere', label: 'ALARM', col: 'state_value', eq: 'alarm', tone: 'danger' },
     { kind: 'countWhere', label: 'OK', col: 'state_value', eq: 'ok', tone: 'accent' },
+    { kind: 'countWhere', label: 'INSUFFICIENT_DATA', col: 'state_value', eq: 'insufficient_data' },
     { kind: 'countWhere', label: '액션 비활성', col: 'actions_enabled', eq: 'false' },
-    { kind: 'distinct', label: '네임스페이스', col: 'namespace' },
+  ],
+  elasticache: [
+    { kind: 'countWhere', label: '가용', col: 'cache_cluster_status', eq: 'available', tone: 'accent' },
+    { kind: 'sum', label: '총 노드', col: 'num_cache_nodes' },
+    { kind: 'countWhere', label: 'At-Rest 미암호화', col: 'at_rest_encryption_enabled', eq: 'false', tone: 'danger' },
+    { kind: 'distinct', label: '노드 타입 종류', col: 'cache_node_type' },
+  ],
+  dynamodb: [
+    { kind: 'countWhere', label: 'ACTIVE', col: 'table_status', eq: 'active', tone: 'accent' },
+    { kind: 'sum', label: '총 아이템', col: 'item_count' },
+    { kind: 'sum', label: '총 크기', col: 'table_size_bytes', fmt: 'bytes' },
+    { kind: 'countWhere', label: 'On-Demand', col: 'billing_mode', eq: 'pay_per_request' },
+  ],
+  msk: [
+    { kind: 'countWhere', label: 'ACTIVE', col: 'state', eq: 'active', tone: 'accent' },
+    { kind: 'sum', label: '총 브로커', col: 'provisioned.number_of_broker_nodes' },
+    { kind: 'distinct', label: 'Kafka 버전', col: 'provisioned.current_broker_software_info.kafka_version' },
+  ],
+  ecr: [
+    { kind: 'countTruthy', label: 'Scan on Push', col: 'image_scanning_configuration.scan_on_push', tone: 'accent' },
+    { kind: 'countWhere', label: '태그 불변', col: 'image_tag_mutability', eq: 'immutable', tone: 'accent' },
+    { kind: 'countWhere', label: '태그 변경 가능', col: 'image_tag_mutability', eq: 'mutable' },
+  ],
+  cloudfront: [
+    { kind: 'countTruthy', label: '활성', col: 'enabled', tone: 'accent' },
+    { kind: 'countWhere', label: 'HTTP 허용', col: 'default_cache_behavior.viewer_protocol_policy', eq: 'allow-all', tone: 'danger' },
+    { kind: 'countWhere', label: 'WAF 미연결', col: 'web_acl_id', eq: '' },
+  ],
+  opensearch: [
+    { kind: 'countTruthy', label: 'At-Rest 암호화', col: 'encryption_at_rest_options.enabled', tone: 'accent' },
+    { kind: 'countTruthy', label: 'N2N 암호화', col: 'node_to_node_encryption_options_enabled', tone: 'accent' },
+    { kind: 'countTruthy', label: '처리 중', col: 'processing' },
   ],
   s3: [
     { kind: 'distinct', label: '리전 수', col: 'region' },

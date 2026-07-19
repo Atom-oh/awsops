@@ -14,6 +14,7 @@ interface Splits {
   iamUserNoMfa: number;
   sgOpenIngress: number;
   s3Public: number;
+  cwAlarm: number;
 }
 
 // Derived KPI sublines: one UNION-ALL round-trip over the synced JSONB (the EC2-type
@@ -29,6 +30,7 @@ const SPLITS_SQL = `
     WHERE account_id='self' AND resource_type='security_group'
     AND (data->'ip_permissions')::text ~ '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"'
   UNION ALL SELECT 's3_public', count(*)::int FROM inventory_resources WHERE account_id='self' AND resource_type='s3_public_access' AND ${PUBLIC_S3_WHERE}
+  UNION ALL SELECT 'cw_alarm', count(*)::int FROM inventory_resources WHERE account_id='self' AND resource_type='cloudwatch_alarm' AND lower(data->>'state_value')='alarm'
 `;
 
 /** Aggregate inventory counts: per resource_type (desc) and rolled up per category group. */
@@ -68,6 +70,7 @@ export async function GET(request: Request) {
       iamUserNoMfa: 0,
       sgOpenIngress: 0,
       s3Public: 0,
+      cwAlarm: 0,
     };
     const SPLIT_KEY: Record<string, keyof Splits> = {
       ec2_running: 'ec2Running',
@@ -76,6 +79,7 @@ export async function GET(request: Request) {
       iam_user_no_mfa: 'iamUserNoMfa',
       sg_open_ingress: 'sgOpenIngress',
       s3_public: 's3Public',
+      cw_alarm: 'cwAlarm',
     };
     try {
       const sr = await pool.query<{ k: string; n: number }>(SPLITS_SQL);
@@ -100,7 +104,18 @@ export async function GET(request: Request) {
       // donut omitted — byType already computed, don't fail the response.
     }
 
-    return Response.json({ byType, byCategory, total, splits, ec2Types });
+    // Data freshness for the dashboard header — when the inventory was last synced.
+    let lastSyncAt: string | null = null;
+    try {
+      const fr = await pool.query<{ t: string | null }>(
+        `SELECT max(finished_at)::text AS t FROM inventory_sync_runs WHERE status='succeeded'`,
+      );
+      lastSyncAt = fr.rows[0]?.t ?? null;
+    } catch {
+      // freshness omitted — non-fatal.
+    }
+
+    return Response.json({ byType, byCategory, total, splits, ec2Types, lastSyncAt });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

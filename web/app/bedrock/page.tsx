@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { DollarSign, Activity, ArrowDownToLine, ArrowUpFromLine, PiggyBank } from 'lucide-react';
+import { DollarSign, Activity, ArrowDownToLine, ArrowUpFromLine, PiggyBank, Timer, AlertTriangle } from 'lucide-react';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -117,6 +117,11 @@ export default function BedrockPage() {
   const totalInput = models.reduce((s, m) => s + m.inputTokens, 0);
   const totalOutput = models.reduce((s, m) => s + m.outputTokens, 0);
   const totalSavings = models.reduce((s, m) => s + m.cost.cacheSavings, 0);
+  // v1-parity KPIs: invocation-weighted average latency + total 4xx/5xx errors.
+  const avgLatencyMs = totalInvocations > 0
+    ? models.reduce((s, m) => s + (m.avgLatencyMs || 0) * m.invocations, 0) / totalInvocations
+    : 0;
+  const totalErrors = models.reduce((s, m) => s + m.clientErrors + m.serverErrors, 0);
 
   const costRows = models.map((m) => ({ label: m.label, cost: m.cost.total }));
   const invRows = models.map((m) => ({ label: m.label, invocations: m.invocations }));
@@ -152,12 +157,14 @@ export default function BedrockPage() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
                 <StatTile label={`총 비용 (${range})`} value={usd(totalCost)} variant="accent" icon={<DollarSign size={16} />} />
                 <StatTile label="호출 수" value={totalInvocations.toLocaleString()} icon={<Activity size={16} />} />
                 <StatTile label="입력 토큰" value={compact(totalInput)} icon={<ArrowDownToLine size={16} />} />
                 <StatTile label="출력 토큰" value={compact(totalOutput)} icon={<ArrowUpFromLine size={16} />} />
                 <StatTile label="캐시 절감" value={usd(totalSavings)} hint="cache read 할인" variant="warn" icon={<PiggyBank size={16} />} />
+                <StatTile label="평균 지연" value={avgLatencyMs ? `${(avgLatencyMs / 1000).toFixed(2)}s` : '—'} hint="호출 가중 평균" icon={<Timer size={16} />} />
+                <StatTile label="에러" value={totalErrors.toLocaleString()} variant={totalErrors > 0 ? 'danger' : 'default'} hint="4xx + 5xx" icon={<AlertTriangle size={16} />} />
               </div>
 
               {d.series.length > 1 && (
