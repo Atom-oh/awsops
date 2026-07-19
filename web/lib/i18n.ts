@@ -22,6 +22,7 @@ const MESSAGES: Record<Lang, Dict> = {
     'nav.customAgents': '커스텀 에이전트',
     'nav.datasources': '데이터소스',
     'nav.integrations': '연동',
+    'nav.accounts': '계정 관리',
     // Inventory group labels + 2-level subgroups (sidebar accordion + overview pages)
     'group.compute': '컴퓨트',
     'group.storage': '스토리지 & DB',
@@ -89,6 +90,7 @@ const MESSAGES: Record<Lang, Dict> = {
     'nav.customAgents': 'Custom Agents',
     'nav.datasources': 'Datasources',
     'nav.integrations': 'Integrations',
+    'nav.accounts': 'Accounts',
     // Inventory group labels + 2-level subgroups (sidebar accordion + overview pages)
     'group.compute': 'Compute',
     'group.storage': 'Storage & DB',
