@@ -26,9 +26,9 @@ A background warmer periodically runs the queries the dashboard pages would issu
 
 ### 2. i18n — LanguageProvider + 평면 번역 맵 (구 ADR-026) / i18n — LanguageProvider + flat maps
 
-커스텀 React Context(`LanguageProvider`)가 `{ lang, setLang, t }`를 제공하고, 평면 키-값 JSON 번역 맵(ko/en)을 정적으로 번들에 포함한다. 라우트 세그먼트 로케일(`/en/...`) 없이 라우터 비의존. 언어 선택은 `localStorage`에 저장되며 기본값은 `ko`, 누락 키는 영어 폴백 후 키 자체로 graceful degrade. 선택 언어는 `lang` 파라미터로 AI(AgentCore/스트리밍) 경로까지 전달되어 응답이 사후 번역 없이 선택 언어로 생성된다. v2 MVP 적용 범위는 **shell/네비게이션**이며, 페이지 본문 번역은 점진 적용(현행 부분 적용 — 감사 finding 참조).
+커스텀 React Context(`LanguageProvider`)가 `{ lang, setLang, t }`를 제공하고, 평면 키-값 JSON 번역 맵(**ko/en/zh/ja**)을 정적으로 번들에 포함한다. 라우트 세그먼트 로케일(`/en/...`) 없이 라우터 비의존. 언어 선택은 `localStorage`에 저장되며 기본값은 `ko`, 누락 키는 영어 폴백 후 키 자체로 graceful degrade. 선택 언어는 UI copy(shell/네비게이션 + chat/scope/common 등 점진 적용 범위)에 한해 `t()`로 렌더되며, **AI(AgentCore/스트리밍) 응답 언어 연동은 별도 범위**로 `lang` 파라미터가 해당 경로에 아직 전달되지 않는다(UI 언어와 AI 응답 언어가 다를 수 있음 — 후속 과제). v2 MVP 적용 범위는 **shell/네비게이션**이며, 페이지 본문 번역은 점진 적용(현행 부분 적용 — 감사 finding 참조).
 
-A custom React Context (`LanguageProvider`) exposes `{ lang, setLang, t }`, statically bundling flat key-value JSON maps (ko/en). Router-agnostic, with no route-segmented locales (`/en/...`). Language choice persists in `localStorage`, defaults to `ko`, and missing keys degrade gracefully via an English fallback then the key itself. The selected language flows through the `lang` parameter into the AI (AgentCore/streaming) paths so responses are generated in the chosen language with no post-hoc translation layer. The v2 MVP scope is **shell/navigation**; page-body translation is applied incrementally (currently partial — see audit finding).
+A custom React Context (`LanguageProvider`) exposes `{ lang, setLang, t }`, statically bundling flat key-value JSON maps (**ko/en/zh/ja**). Router-agnostic, with no route-segmented locales (`/en/...`). Language choice persists in `localStorage`, defaults to `ko`, and missing keys degrade gracefully via an English fallback then the key itself. The selected language governs UI copy only (shell/navigation plus the incrementally-covered chat/scope/common areas); **AI (AgentCore/streaming) response-language integration is a separate, not-yet-wired scope** — the `lang` parameter does not currently flow into that path, so the UI language and the AI response language can diverge (tracked as follow-up work). The v2 MVP scope is **shell/navigation**; page-body translation is applied incrementally (currently partial — see audit finding).
 
 ### 3. CDN 캐싱 — CloudFront CACHING_DISABLED (구 ADR-028) / CDN caching — CloudFront CACHING_DISABLED
 
@@ -41,7 +41,7 @@ The CloudFront distribution applies `CACHING_DISABLED` to the default behavior (
 - **정확성 > 히트율**: 대시보드의 핵심 가치는 "지금 이 순간의 상태"이며 0이 아닌 엣지 TTL은 이를 깨뜨린다. 신선도는 계정별 스코핑을 인지하는 앱 캐시가, 엣지 비-캐시 역할은 CloudFront가 분담한다. / **Correctness over hit rate**: the dashboard's value is "state right now"; a non-zero edge TTL breaks it. The app cache (account-aware) owns freshness; CloudFront owns the edge non-cache roles.
 - **정책 레벨 강제 > 응답별 규율**: `CACHING_DISABLED`는 헤더 누락에서 오는 조용한 데이터 유출 버그를 구조적으로 제거한다. / **Policy-level over per-response discipline**: `CACHING_DISABLED` structurally eliminates silent data-leak bugs from missing headers.
 - **프리워밍으로 TTL 만료 첫 요청 비용 제거**: 만료 직전 갱신으로 사용자 요청이 거의 항상 워밍된 캐시를 만난다. 모니터링 제외·슬롯 예약은 백엔드 고갈을 막는다. / **Prewarming removes the first-request-after-TTL cost**: refreshing just before expiry means requests almost always hit a warm cache; monitoring exclusion + slot reservation prevent backend starvation.
-- **i18n는 문제 영역에 맞춘 최소 구현**: 두 언어·짧은 레이블·ICU 불필요 → 평면 맵 + Context가 외부 의존 0으로 충분하고, 라우트 세그먼트 로케일을 피해 라우터/엣지와 충돌하지 않는다. UI·AI 응답 언어가 `lang`으로 끝까지 일치한다. / **i18n is minimal-to-fit**: two languages, short labels, no ICU need → a flat map + Context suffices with zero external dependency, avoids route-segmented locales that would clash with routing/edge, and keeps UI and AI-response language aligned end-to-end via `lang`.
+- **i18n는 문제 영역에 맞춘 최소 구현**: 짧은 레이블·ICU 불필요 → 평면 맵 + Context가 외부 의존 0으로 4개 언어까지 확장되어도 충분하고, 라우트 세그먼트 로케일을 피해 라우터/엣지와 충돌하지 않는다. `lang`은 UI copy 렌더링에만 쓰이며 AI 응답 언어 연동은 별도 범위(현재 미연동). / **i18n is minimal-to-fit**: short labels, no ICU need → a flat map + Context suffices with zero external dependency even scaled to four languages, and avoids route-segmented locales that would clash with routing/edge. `lang` governs UI-copy rendering only; AI-response language integration is a separate, currently-unwired scope.
 
 ## Consequences / 결과
 
@@ -49,13 +49,13 @@ The CloudFront distribution applies `CACHING_DISABLED` to the default behavior (
 
 - 대시보드가 사실상 모든 요청에서 워밍된 캐시로 렌더되어 체감 로딩이 크게 줄고, 엣지 캐싱이 꺼져 있어 낡은 상태가 절대 노출되지 않는다. / Dashboards render from a warm cache on virtually every request (large perceived-latency drop), and with edge caching off stale state is never served.
 - 단일 캐시 정책과 외부 의존 0 i18n으로 유지보수 표면이 작다. 엣지 인증이 100% 요청에서 발화하고, 멀티 어카운트가 계정별 키로 격리된다. / A single cache policy and zero-dependency i18n keep the maintenance surface small; edge auth fires on 100% of requests; multi-account is isolated by per-account keys.
-- UI 언어와 AI 응답 언어가 `lang` 파라미터로 일관되며, 정적 자산만 엣지/브라우저에서 저렴하게 캐싱된다. / UI and AI-response language stay consistent via `lang`; only static assets cache cheaply at edge/browser.
+- UI copy가 4개 언어(ko/en/zh/ja)로 즉시 전환되며, 정적 자산만 엣지/브라우저에서 저렴하게 캐싱된다. / UI copy switches instantly across four languages (ko/en/zh/ja); only static assets cache cheaply at edge/browser.
 
 ### Negative / 부정적
 
 - 엣지 캐싱이 없어 모든 동적 요청이 오리진에 도달 → 용량 산정은 전체 피크 기준이어야 하고, 오리진에서 먼 사용자는 전체 RTT 지연을 감수한다(현 규모에서 무시 가능, 대규모 확장 시 재검토). / No edge caching means every dynamic request hits the origin → capacity planning must size for full peak, and distant users pay full RTT (negligible at current scale; revisit at large scale).
 - 워머는 유휴 시에도 소량 CPU/네트워크 비용이 있고, 워밍 쿼리 목록·번역 키는 코드/JSON에 선언되어 튜닝/문구 추가에 변경+재배포가 필요하다. 캐시 stale 윈도우(앱 TTL)는 인벤토리에는 허용되나 요청별 메트릭에는 부적합(모니터링 제외 사유). / The warmer incurs small idle CPU/network cost, and the warmed-query list and translation keys live in code/JSON so tuning/adding strings needs a change + redeploy. The app-TTL stale window is acceptable for inventory but not per-request metrics (the monitoring-exclusion reason).
-- i18n에 복수형/성별·지역 변형·오프라인 번역 도구·세 번째 언어 확장 용이성이 없고, 언어 설정이 `localStorage`에만 있어 새 브라우저/프라이빗 모드는 기본 `ko`로 시작한다. 현행 페이지 본문 번역은 부분 적용 상태. / i18n has no plural/gender, regional variants, offline-translator tooling, or easy third-language expansion; preference lives only in `localStorage` so new browsers/private mode start in `ko`. Page-body translation is currently partial.
+- i18n에 복수형/성별·지역 변형·오프라인 번역 도구가 없고, 언어 설정이 `localStorage`에만 있어 새 브라우저/프라이빗 모드는 기본 `ko`로 시작한다. UI 언어와 AI 응답 언어가 아직 연동되지 않아 둘이 다를 수 있다(후속 과제). 현행 페이지 본문 번역은 부분 적용 상태. / i18n has no plural/gender, regional variants, or offline-translator tooling; preference lives only in `localStorage` so new browsers/private mode start in `ko`. The UI language and the AI response language are not yet linked, so they can diverge (follow-up work). Page-body translation is currently partial.
 
 ## 6 Pillars / 6대 기둥 (성능 효율성 / Performance Efficiency)
 

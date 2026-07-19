@@ -17,28 +17,28 @@ export default function ThemeToggle() {
     setTheme(getStoredTheme());
   }, []);
 
-  function pick(t: Theme) {
-    setTheme(t);
-    setStoredTheme(t);
-    applyTheme(t);
+  function pick(nextTheme: Theme) {
+    setTheme(nextTheme);
+    setStoredTheme(nextTheme);
+    applyTheme(nextTheme);
   }
 
   return (
     <div className="mt-2 flex gap-1 rounded-md border border-chrome-border p-0.5" role="group" aria-label={t('theme.label')}>
-      {THEMES.map((t) => (
+      {THEMES.map((themeOption) => (
         <button
-          key={t}
+          key={themeOption}
           type="button"
-          onClick={() => pick(t)}
-          aria-pressed={theme === t}
+          onClick={() => pick(themeOption)}
+          aria-pressed={theme === themeOption}
           className={cn(
             'flex-1 rounded px-1.5 py-1 text-[11px] font-semibold transition-colors',
-            theme === t
+            theme === themeOption
               ? 'bg-chrome-active text-chrome-active-fg'
               : 'text-chrome-fg-muted hover:text-chrome-fg',
           )}
         >
-          {THEME_LABELS[t]}
+          {THEME_LABELS[themeOption]}
         </button>
       ))}
     </div>
