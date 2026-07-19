@@ -1,5 +1,6 @@
 'use client';
 import { sectionByKey } from '@/lib/sections';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import Markdown from './Markdown';
 
 export interface RankedChip { key: string; score: number; active: boolean }
@@ -18,6 +19,7 @@ export interface Msg {
 const FALLBACK_MODEL_LABEL = 'Claude Sonnet 4.6';
 
 export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?: (key: string) => void }) {
+  const { t } = useI18n();
   return (
     <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
       {msgs.map((m, i) => {
@@ -42,7 +44,7 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
             }
           >
             {viaKeys && viaKeys.length > 1 ? (
-              <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-ink-500" aria-label="통합 분석">
+              <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-ink-500" aria-label={t('chat.combined')}>
                 {viaKeys.map((k, idx) => {
                   const s = sectionByKey(k);
                   return s ? (
@@ -53,7 +55,7 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                     </span>
                   ) : null;
                 })}
-                <span className="ml-1 font-normal text-ink-400">· 통합 분석</span>
+                <span className="ml-1 font-normal text-ink-400">· {t('chat.combined')}</span>
               </div>
             ) : sec && (
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-ink-500">
@@ -69,8 +71,8 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                 ? (m.status
                   ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink-500">
                       {m.status.phase === 'working' && m.status.elapsedMs !== undefined
-                        ? `🔎 분석 중… ${Math.floor(m.status.elapsedMs / 1000)}초`
-                        : '🔎 분석 중…'}
+                        ? `🔎 ${t('chat.analysisSeconds', { seconds: Math.floor(m.status.elapsedMs / 1000) })}`
+                        : `🔎 ${t('chat.analysis')}`}
                     </div>
                   : null)
                 : <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>)
@@ -88,10 +90,10 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
                   )}
                   <button
                     onClick={() => void navigator.clipboard?.writeText(m.content)}
-                    aria-label="답변 복사"
+                    aria-label={t('chat.copyAnswer')}
                     className="ml-auto text-ink-400 hover:text-ink-800"
                   >
-                    ⧉ 복사
+                    ⧉ {t('chat.copy')}
                   </button>
                 </div>
                 {m.tools && m.tools.length > 0 && (
@@ -110,20 +112,21 @@ export default function MessageList({ msgs, onSwitch }: { msgs: Msg[]; onSwitch?
             {alts.length > 0 && (
               <div className="mt-2">
                 {/* ADR-044: chips are a SECONDARY manual aid (cross-domain is auto-synthesized). */}
-                <div className="mb-1 text-[10px] text-ink-400">다른 도메인으로 더 보기</div>
+                <div className="mb-1 text-[10px] text-ink-400">{t('chat.moreDomains')}</div>
                 <div className="flex flex-wrap gap-1.5">
                 {alts.map((r) => {
                   const s = sectionByKey(r.key);
                   if (!s) return null;
+                  const retryLabel = t('chat.retryWith', { name: s.label });
                   return (
                     <button
                       key={r.key}
                       onClick={() => onSwitch?.(r.key)}
-                      aria-label={`${s.label}로 다시`}
+                      aria-label={retryLabel}
                       className="rounded-md border px-2 py-1 text-[11px] font-medium transition-colors"
                       style={{ background: `${s.color}12`, borderColor: `${s.color}40`, color: s.color }}
                     >
-                      → {s.label}로 다시
+                      → {retryLabel}
                     </button>
                   );
                 })}

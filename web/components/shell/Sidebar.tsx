@@ -293,7 +293,7 @@ export default function Sidebar({ onNavigate, className, persist = true }: { onN
       {/* Active account/region scope selector + admin link */}
       <div className="mb-4 space-y-1">
         <ScopeSelector />
-        <Link href="/accounts" className="block px-0.5 text-[10px] text-chrome-fg-muted hover:text-chrome-fg">계정 관리 →</Link>
+        <Link href="/accounts" className="block px-0.5 text-[10px] text-chrome-fg-muted hover:text-chrome-fg">{t('sidebar.manageAccounts')}</Link>
       </div>
 
       {/* Nav */}
