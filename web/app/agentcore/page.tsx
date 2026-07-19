@@ -69,10 +69,10 @@ export default function AgentCorePage() {
           <>
             {/* Top-line status tiles */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <StatTile label="Runtime" value={rtStatus ?? '미배포'} variant={tone(rtStatus) === 'positive' ? 'accent' : tone(rtStatus) === 'negative' ? 'danger' : 'warn'} hint={d.runtime?.version ? `v${d.runtime.version}` : undefined} />
-              <StatTile label="Gateways" value={`${readyGw}/${gateways.length}`} variant={gateways.length && readyGw === gateways.length ? 'accent' : 'warn'} hint={`${totalTargets} targets`} />
-              <StatTile label="Memory" value={d.memory ? d.memory.status : '미배포'} variant={tone(d.memory?.status) === 'positive' ? 'accent' : 'warn'} />
-              <StatTile label="Code Interpreter" value={d.interpreter ? d.interpreter.status : '미배포'} variant={tone(d.interpreter?.status) === 'positive' ? 'accent' : 'warn'} />
+              <StatTile label="Runtime" icon={<Cpu size={16} />} value={rtStatus ?? '미배포'} variant={tone(rtStatus) === 'positive' ? 'accent' : tone(rtStatus) === 'negative' ? 'danger' : 'warn'} hint={d.runtime?.version ? `v${d.runtime.version}` : undefined} />
+              <StatTile label="Gateways" icon={<Boxes size={16} />} value={`${readyGw}/${gateways.length}`} variant={gateways.length && readyGw === gateways.length ? 'accent' : 'warn'} hint={`${totalTargets} targets`} />
+              <StatTile label="Memory" icon={<Database size={16} />} value={d.memory ? d.memory.status : '미배포'} variant={tone(d.memory?.status) === 'positive' ? 'accent' : 'warn'} />
+              <StatTile label="Code Interpreter" icon={<Terminal size={16} />} value={d.interpreter ? d.interpreter.status : '미배포'} variant={tone(d.interpreter?.status) === 'positive' ? 'accent' : 'warn'} />
             </div>
 
             {/* Runtime detail */}

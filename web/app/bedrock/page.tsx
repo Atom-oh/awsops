@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState, useRef } from 'react';
+import { DollarSign, Activity, ArrowDownToLine, ArrowUpFromLine, PiggyBank } from 'lucide-react';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -152,11 +153,11 @@ export default function BedrockPage() {
           ) : (
             <>
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-                <StatTile label={`총 비용 (${range})`} value={usd(totalCost)} variant="accent" />
-                <StatTile label="호출 수" value={totalInvocations.toLocaleString()} />
-                <StatTile label="입력 토큰" value={compact(totalInput)} />
-                <StatTile label="출력 토큰" value={compact(totalOutput)} />
-                <StatTile label="캐시 절감" value={usd(totalSavings)} hint="cache read 할인" variant="warn" />
+                <StatTile label={`총 비용 (${range})`} value={usd(totalCost)} variant="accent" icon={<DollarSign size={16} />} />
+                <StatTile label="호출 수" value={totalInvocations.toLocaleString()} icon={<Activity size={16} />} />
+                <StatTile label="입력 토큰" value={compact(totalInput)} icon={<ArrowDownToLine size={16} />} />
+                <StatTile label="출력 토큰" value={compact(totalOutput)} icon={<ArrowUpFromLine size={16} />} />
+                <StatTile label="캐시 절감" value={usd(totalSavings)} hint="cache read 할인" variant="warn" icon={<PiggyBank size={16} />} />
               </div>
 
               {d.series.length > 1 && (

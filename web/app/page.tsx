@@ -1,7 +1,11 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
+import {
+  Shield, ShieldCheck, DollarSign, TrendingUp, Bell, FileSearch, Cpu, Container,
+} from 'lucide-react';
 import StatTile, { passVariant } from '@/components/ui/StatTile';
+import { TYPE_ICON } from '@/lib/type-icons';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
 import SectionLabel from '@/components/ui/SectionLabel';
@@ -46,6 +50,13 @@ interface Fleet { clusters: FleetCluster[] }
 const DASH = '—';
 // Section gateways per ADR-004 (8). Named so the AgentCore tile isn't a bare magic literal.
 const SECTION_GATEWAYS = 8;
+
+// v1-parity: every KPI/resource tile carries a lucide glyph in its translucent top-right box.
+// Resource tiles reuse the shared per-type map so icons match the inventory pages.
+function typeIcon(type: string): ReactNode {
+  const I = TYPE_ICON[type];
+  return I ? <I size={13} /> : null;
+}
 
 export default function Home() {
   const [ov, setOv] = useState<Overview | null>(null);
@@ -202,16 +213,26 @@ export default function Home() {
             >
               <div className="flex items-start justify-between">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">보안 이슈</div>
-                {secIssues != null && (
+                <div className="flex items-center gap-2">
+                  {secIssues != null && (
+                    <span
+                      className={
+                        'rounded-full px-2 py-0.5 text-[10px] font-semibold leading-none ' +
+                        (secIssues > 0 ? 'bg-negative text-white' : 'bg-positive-surface text-positive-text')
+                      }
+                    >
+                      {secIssues > 0 ? '위험' : '이상 없음'}
+                    </span>
+                  )}
                   <span
                     className={
-                      'rounded-full px-2 py-0.5 text-[10px] font-semibold leading-none ' +
-                      (secIssues > 0 ? 'bg-negative text-white' : 'bg-positive-surface text-positive-text')
+                      'flex h-8 w-8 items-center justify-center rounded-lg ' +
+                      (secIssues && secIssues > 0 ? 'bg-rose-500/10 text-rose-600' : 'bg-ink-500/10 text-ink-500')
                     }
                   >
-                    {secIssues > 0 ? '위험' : '이상 없음'}
+                    <Shield size={16} />
                   </span>
-                )}
+                </div>
               </div>
               <div
                 className={
@@ -241,6 +262,7 @@ export default function Home() {
               label="CIS 컴플라이언스"
               value={compliancePassRate != null ? `${compliancePassRate.toFixed(0)}%` : DASH}
               href="/compliance"
+              icon={<ShieldCheck size={16} />}
               variant={compliancePassRate != null ? passVariant(compliancePassRate) : 'warn'}
               hint={
                 compliancePassRate != null
@@ -278,16 +300,18 @@ export default function Home() {
               value={ov ? (ov.mtdCost == null ? DASH : `$${ov.mtdCost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`) : DASH}
               href="/cost"
               variant="accent"
+              icon={<DollarSign size={16} />}
               hint={dailyAvg != null ? `약 $${dailyAvg.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/일` : undefined}
             />
             <StatTile
               label="예상 청구액 (USD)"
               value={projectedCost == null ? DASH : `$${projectedCost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
               href="/cost"
+              icon={<TrendingUp size={16} />}
               hint="월말 예상"
             />
-            <StatTile label="CloudWatch 알람" value={n('cloudwatch_alarm')} href="/inventory/cloudwatch_alarm" />
-            <StatTile label="CloudTrail" value={n('cloudtrail')} href="/inventory/cloudtrail" />
+            <StatTile label="CloudWatch 알람" value={n('cloudwatch_alarm')} href="/inventory/cloudwatch_alarm" icon={<Bell size={16} />} />
+            <StatTile label="CloudTrail" value={n('cloudtrail')} href="/inventory/cloudtrail" icon={<FileSearch size={16} />} />
           </div>
         </section>
 
@@ -301,31 +325,31 @@ export default function Home() {
           <div className="flex flex-col gap-3">
             <div className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400">COMPUTE &amp; CONTAINERS</div>
             <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-              <StatTile size="compact" label="EC2 인스턴스" value={n('ec2')} href="/inventory/ec2" />
-              <StatTile size="compact" label="Lambda 함수" value={n('lambda')} href="/inventory/lambda" />
-              <StatTile size="compact" label="ECS 클러스터" value={n('ecs_cluster')} href="/inventory/ecs_cluster" />
-              <StatTile size="compact" label="AgentCore" value={`${SECTION_GATEWAYS} GW`} href="/assistant" />
-              <StatTile size="compact" label="ECR 리포지토리" value={n('ecr')} href="/inventory/ecr" />
-              <StatTile size="compact" label="EKS 클러스터" value={ov ? ov.clusterCount ?? DASH : DASH} href="/eks" />
-              <StatTile size="compact" label="CloudFront" value={n('cloudfront')} href="/inventory/cloudfront" />
+              <StatTile size="compact" label="EC2 인스턴스" value={n('ec2')} href="/inventory/ec2" icon={typeIcon('ec2')} />
+              <StatTile size="compact" label="Lambda 함수" value={n('lambda')} href="/inventory/lambda" icon={typeIcon('lambda')} />
+              <StatTile size="compact" label="ECS 클러스터" value={n('ecs_cluster')} href="/inventory/ecs_cluster" icon={typeIcon('ecs_cluster')} />
+              <StatTile size="compact" label="AgentCore" value={`${SECTION_GATEWAYS} GW`} href="/assistant" icon={<Cpu size={13} />} />
+              <StatTile size="compact" label="ECR 리포지토리" value={n('ecr')} href="/inventory/ecr" icon={typeIcon('ecr')} />
+              <StatTile size="compact" label="EKS 클러스터" value={ov ? ov.clusterCount ?? DASH : DASH} href="/eks" icon={<Container size={13} />} />
+              <StatTile size="compact" label="CloudFront" value={n('cloudfront')} href="/inventory/cloudfront" icon={typeIcon('cloudfront')} />
             </div>
             <div className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400 mt-1">STORAGE &amp; NETWORK</div>
             <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-3">
-              <StatTile size="compact" label="VPC" value={n('vpc')} href="/inventory/vpc" />
-              <StatTile size="compact" label="WAF" value={n('waf')} href="/inventory/waf" />
-              <StatTile size="compact" label="EBS 볼륨" value={n('ebs_volume')} href="/inventory/ebs_volume" />
-              <StatTile size="compact" label="S3 버킷" value={n('s3')} href="/inventory/s3" />
-              <StatTile size="compact" label="RDS 인스턴스" value={n('rds')} href="/inventory/rds" />
-              <StatTile size="compact" label="DynamoDB 테이블" value={n('dynamodb')} href="/inventory/dynamodb" />
-              <StatTile size="compact" label="ElastiCache" value={n('elasticache')} href="/inventory/elasticache" />
-              <StatTile size="compact" label="OpenSearch" value={n('opensearch')} href="/inventory/opensearch" />
-              <StatTile size="compact" label="MSK" value={n('msk')} href="/inventory/msk" />
+              <StatTile size="compact" label="VPC" value={n('vpc')} href="/inventory/vpc" icon={typeIcon('vpc')} />
+              <StatTile size="compact" label="WAF" value={n('waf')} href="/inventory/waf" icon={typeIcon('waf')} />
+              <StatTile size="compact" label="EBS 볼륨" value={n('ebs_volume')} href="/inventory/ebs_volume" icon={typeIcon('ebs_volume')} />
+              <StatTile size="compact" label="S3 버킷" value={n('s3')} href="/inventory/s3" icon={typeIcon('s3')} />
+              <StatTile size="compact" label="RDS 인스턴스" value={n('rds')} href="/inventory/rds" icon={typeIcon('rds')} />
+              <StatTile size="compact" label="DynamoDB 테이블" value={n('dynamodb')} href="/inventory/dynamodb" icon={typeIcon('dynamodb')} />
+              <StatTile size="compact" label="ElastiCache" value={n('elasticache')} href="/inventory/elasticache" icon={typeIcon('elasticache')} />
+              <StatTile size="compact" label="OpenSearch" value={n('opensearch')} href="/inventory/opensearch" icon={typeIcon('opensearch')} />
+              <StatTile size="compact" label="MSK" value={n('msk')} href="/inventory/msk" icon={typeIcon('msk')} />
             </div>
             <div className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-400 mt-1">IAM</div>
             <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-              <StatTile size="compact" label="IAM 역할" value={n('iam_role')} href="/inventory/iam_role" />
-              <StatTile size="compact" label="IAM 사용자" value={n('iam_user')} href="/inventory/iam_user" />
-              <StatTile size="compact" label="보안 그룹" value={n('security_group')} href="/inventory/security_group" />
+              <StatTile size="compact" label="IAM 역할" value={n('iam_role')} href="/inventory/iam_role" icon={typeIcon('iam_role')} />
+              <StatTile size="compact" label="IAM 사용자" value={n('iam_user')} href="/inventory/iam_user" icon={typeIcon('iam_user')} />
+              <StatTile size="compact" label="보안 그룹" value={n('security_group')} href="/inventory/security_group" icon={typeIcon('security_group')} />
             </div>
           </div>
         </section>

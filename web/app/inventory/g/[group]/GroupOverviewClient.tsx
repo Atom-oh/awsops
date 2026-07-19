@@ -8,6 +8,7 @@ import StatTile from '@/components/ui/StatTile';
 import Card from '@/components/ui/Card';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import { groupBySlug, ATTENTION_SPLITS, type NavLeaf } from '@/lib/inventory-types';
+import { TYPE_ICON, GROUP_ICON, variantIcon } from '@/lib/type-icons';
 
 interface ByType { type: string; label: string; count: number; [k: string]: unknown }
 interface Splits { ec2Running: number; ec2Stopped: number; ebsUnencrypted: number; iamUserNoMfa: number; sgOpenIngress: number }
@@ -77,6 +78,7 @@ export default function GroupOverviewClient({ slug }: { slug: string }) {
               label={t('overview.status')}
               value={!sum ? DASH : attention === 0 ? t('overview.healthy') : t('overview.attention', { n: attention })}
               variant={!sum ? 'default' : attention === 0 ? 'accent' : 'danger'}
+              icon={(() => { const I = variantIcon(!sum ? 'default' : attention === 0 ? 'accent' : 'danger'); return <I size={16} />; })()}
             />
             {node.splitKeys.map((k) => (
               <StatTile
@@ -84,6 +86,7 @@ export default function GroupOverviewClient({ slug }: { slug: string }) {
                 label={t(`split.${k}`)}
                 value={splits ? splits[k] : DASH}
                 variant={ATTENTION_SPLITS.includes(k) && splits && splits[k] > 0 ? 'danger' : 'default'}
+                icon={(() => { const I = variantIcon(ATTENTION_SPLITS.includes(k) && splits && splits[k] > 0 ? 'danger' : 'default'); return <I size={16} />; })()}
               />
             ))}
           </div>
@@ -95,7 +98,7 @@ export default function GroupOverviewClient({ slug }: { slug: string }) {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {leaves.map((leaf) => (
               <Link key={leaf.key} href={leaf.href} className="no-underline transition-transform duration-150 hover:-translate-y-0.5">
-                <StatTile label={leaf.labelKey ? t(leaf.labelKey) : leaf.label ?? leaf.type ?? ''} value={countFor(leaf.type)} />
+                <StatTile label={leaf.labelKey ? t(leaf.labelKey) : leaf.label ?? leaf.type ?? ''} value={countFor(leaf.type)} icon={(() => { const I = (leaf.type && TYPE_ICON[leaf.type]) || GROUP_ICON[node.group] || null; return I ? <I size={16} /> : undefined; })()} />
               </Link>
             ))}
           </div>

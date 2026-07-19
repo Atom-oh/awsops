@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
-import { ShieldAlert } from 'lucide-react';
+import { ShieldAlert, Archive, BrickWall, HardDrive, Users, Shield, type LucideIcon } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 import StatTile from '@/components/ui/StatTile';
@@ -13,6 +13,11 @@ import RefreshButton from '@/components/ui/RefreshButton';
 import { CHECK_META, type CheckKey, type Finding } from '@/lib/security-findings';
 
 const CHECKS = Object.keys(CHECK_META) as CheckKey[];
+
+// v1-parity KPI glyphs — per-check icon in the tile's translucent top-right box.
+const CHECK_ICON: Record<CheckKey, LucideIcon> = {
+  public_s3: Archive, open_sg: BrickWall, unencrypted_ebs: HardDrive, iam_no_mfa: Users,
+};
 
 interface ApiResp {
   enabled: boolean;
@@ -115,6 +120,8 @@ export default function SecurityPage() {
                   key={k}
                   label={CHECK_META[k].label}
                   value={summary[k] ?? 0}
+                  variant={(summary[k] ?? 0) > 0 ? 'danger' : 'default'}
+                  icon={(() => { const I = CHECK_ICON[k] ?? Shield; return <I size={16} />; })()}
                   hint={`${CHECK_META[k].severity} severity`}
                 />
               ))}

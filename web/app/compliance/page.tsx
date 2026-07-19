@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ShieldCheck, ListChecks, CheckCircle2, AlertTriangle, CircleMinus, AlertCircle } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -292,12 +293,13 @@ export default function CompliancePage() {
                 label="Pass Rate"
                 value={passRate != null ? `${passRate.toFixed(1)}%` : '—'}
                 variant={passRate != null ? passVariant(passRate) : 'default'}
+                icon={<ShieldCheck size={16} />}
               />
-              <StatTile label="Total" value={run.total_controls ?? 0} />
-              <StatTile label="Passed" value={run.ok ?? 0} variant="accent" />
-              <StatTile label="Alarm" value={run.alarm ?? 0} variant="danger" />
-              <StatTile label="Skipped" value={run.skip ?? 0} />
-              <StatTile label="Error" value={run.error ?? 0} variant={run.error ? 'warn' : 'default'} />
+              <StatTile label="Total" value={run.total_controls ?? 0} icon={<ListChecks size={16} />} />
+              <StatTile label="Passed" value={run.ok ?? 0} variant="accent" icon={<CheckCircle2 size={16} />} />
+              <StatTile label="Alarm" value={run.alarm ?? 0} variant="danger" icon={<AlertTriangle size={16} />} />
+              <StatTile label="Skipped" value={run.skip ?? 0} icon={<CircleMinus size={16} />} />
+              <StatTile label="Error" value={run.error ?? 0} variant={run.error ? 'warn' : 'default'} icon={<AlertCircle size={16} />} />
             </div>
 
             {run.status === 'failed' && (

@@ -1,12 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
-import {
-  Search, Server, Zap, Boxes, Package, Archive, HardDrive, Camera, Database, Table2,
-  DatabaseZap, Radio, Network, Split, BrickWall, Scale, Target, Globe, ListFilter,
-  FileSearch, Bell, KeyRound, Users, Shield, Activity,
-  AlertTriangle, AlertCircle, CheckCircle2, Circle, type LucideIcon,
-} from 'lucide-react';
+import { Search, Package, Activity } from 'lucide-react';
 import DataTable from '@/components/ui/DataTable';
 import DetailPanel from '@/components/ui/DetailPanel';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -17,6 +12,7 @@ import Input from '@/components/ui/Input';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import RiskHero from '@/components/inventory/RiskHero';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
+import { TYPE_ICON, GROUP_ICON, variantIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
 
 type Row = Record<string, unknown>;
@@ -33,24 +29,6 @@ const BAD_STATES = new Set([
 
 function stateVariant(value: string): 'default' | 'danger' {
   return BAD_STATES.has(value.trim().toLowerCase()) ? 'danger' : 'default';
-}
-
-// v1-parity KPI glyphs (v1 StatsCard used lucide icons in a translucent corner box, not emoji).
-// Per-type icon for the total tile; a group fallback covers unlisted types.
-const TYPE_ICON: Record<string, LucideIcon> = {
-  ec2: Server, lambda: Zap, ecs_cluster: Boxes, ecs_service: Boxes, ecs_task: Boxes, ecr: Package,
-  s3: Archive, ebs_volume: HardDrive, ebs_snapshot: Camera, rds: Database, dynamodb: Table2,
-  elasticache: DatabaseZap, opensearch: Search, msk: Radio, vpc: Network, subnet: Split,
-  security_group: BrickWall, alb: Scale, nlb: Scale, target_group: Target,
-  cloudfront: Globe, cloudfront_vpc_origin: Globe, alb_listener_rule: ListFilter,
-  waf: BrickWall, cloudtrail: FileSearch, cloudwatch_alarm: Bell,
-  iam_role: KeyRound, iam_user: Users,
-};
-const GROUP_ICON: Record<string, LucideIcon> = {
-  Compute: Server, 'Storage & DB': Database, Network: Network, Security: Shield, Monitoring: Activity,
-};
-function variantIcon(v: 'default' | 'accent' | 'danger' | 'warn'): LucideIcon {
-  return v === 'danger' ? AlertTriangle : v === 'warn' ? AlertCircle : v === 'accent' ? CheckCircle2 : Circle;
 }
 
 // Count rows by a column value (stringified), descending by count.
@@ -260,7 +238,7 @@ export default function InventoryTypePage() {
                 <RiskHero label={spec.label} total={allRows.length} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
                 {metricCards.length > 0 && (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                    {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />)}
+                    {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}
                   </div>
                 )}
                 {tableBlock}

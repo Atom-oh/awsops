@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Container, CheckCircle2, Server, Boxes, Layers, Network } from 'lucide-react';
 import Link from 'next/link';
 import DataTable from '@/components/ui/DataTable';
 import PageHeader from '@/components/ui/PageHeader';
@@ -203,12 +204,12 @@ export default function EksPage() {
       />
       <div className="px-8 py-8 flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-        <StatCard label="Clusters" value={(rows ?? []).length} />
-        <StatCard label="Connected" value={connected} />
-        <StatCard label="Nodes" value={totals.nodes} trend={`${totals.nodesReady} ready`} />
-        <StatCard label="Pods" value={totals.pods} trend={`${totals.podsRunning} running`} />
-        <StatCard label="Deployments" value={totals.deployments} />
-        <StatCard label="Services" value={totals.services} />
+        <StatCard label="Clusters" value={(rows ?? []).length} icon={<Container size={16} />} />
+        <StatCard label="Connected" value={connected} icon={<CheckCircle2 size={16} />} />
+        <StatCard label="Nodes" value={totals.nodes} trend={`${totals.nodesReady} ready`} icon={<Server size={16} />} />
+        <StatCard label="Pods" value={totals.pods} trend={`${totals.podsRunning} running`} icon={<Boxes size={16} />} />
+        <StatCard label="Deployments" value={totals.deployments} icon={<Layers size={16} />} />
+        <StatCard label="Services" value={totals.services} icon={<Network size={16} />} />
       </div>
 
       {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}

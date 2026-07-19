@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Filter, Calendar } from 'lucide-react';
+import { X, Filter, Calendar, DollarSign, TrendingUp, CalendarDays, Layers, BarChart3 } from 'lucide-react';
 import { useResizablePanel, usePublishDockedWidth, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
@@ -287,11 +287,13 @@ export default function CostPage() {
                 label={`이번 달 누적 (${currency})`}
                 value={usd(total)}
                 variant="accent"
+                icon={<DollarSign size={16} />}
               />
               <StatTile
                 label="전월 대비 (MoM · 일평균)"
                 value={lastMonth > 0 ? `${mom >= 0 ? '+' : ''}${mom.toFixed(1)}%` : DASH}
                 trend={lastMonth > 0 ? trendPill(mom) : undefined}
+                icon={<TrendingUp size={16} />}
                 hint={lastMonth > 0 ? `일평균 기준 · 전월 ${usd(lastMonth)}` : '기준월 부족'}
               />
               <StatTile
@@ -299,13 +301,15 @@ export default function CostPage() {
                 value={usd(monthEndEstimate)}
                 hint={useAwsForecast ? 'AWS 예측' : selectedServices.size > 0 ? '선형 추정 · 서비스 필터 적용 중' : '선형 추정'}
                 variant="warn"
+                icon={<CalendarDays size={16} />}
               />
-              <StatTile label="서비스 수" value={changeRows.length} />
+              <StatTile label="서비스 수" value={changeRows.length} icon={<Layers size={16} />} />
               <StatTile
                 label="최대 서비스"
                 value={top ? usd(top.current) : DASH}
                 hint={top ? top.service : undefined}
                 variant="warn"
+                icon={<BarChart3 size={16} />}
               />
             </div>
 

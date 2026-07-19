@@ -99,8 +99,14 @@ export default function StatTile({
     >
       {/* v1-parity: an emoji/icon in a rounded tinted box, top-right. Falls back to the faint
           AwsopsMark watermark on accent tiles when no icon is supplied. */}
-      {icon != null && !compact ? (
-        <div className={cn('absolute top-3 right-3 flex h-8 w-8 items-center justify-center rounded-lg text-[15px] leading-none', ICON_BOX[variant])}>
+      {icon != null ? (
+        <div
+          className={cn(
+            'absolute flex items-center justify-center leading-none',
+            compact ? 'top-2.5 right-2.5 h-6 w-6 rounded-md text-[12px]' : 'top-3 right-3 h-8 w-8 rounded-lg text-[15px]',
+            ICON_BOX[variant],
+          )}
+        >
           {icon}
         </div>
       ) : variant === 'accent' && !compact ? (
@@ -108,7 +114,7 @@ export default function StatTile({
           <AwsopsMark size={56} />
         </div>
       ) : null}
-      <div className={cn('text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400', icon != null && !compact && 'pr-10')}>
+      <div className={cn('text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400', icon != null && (compact ? 'pr-7' : 'pr-10'))}>
         {eyebrow ?? label}
       </div>
       <div
