@@ -18,7 +18,7 @@ export const TYPE_ICON: Record<string, LucideIcon> = {
   cloudfront: Globe, cloudfront_vpc_origin: Globe, alb_listener_rule: ListFilter,
   waf: BrickWall, cloudtrail: FileSearch, cloudwatch_alarm: Bell,
   iam_role: KeyRound, iam_user: Users, route53: Globe,
-  neptune: Share2, opensearch_serverless: Search,
+  neptune_cluster: Share2, opensearch_serverless: Search,
   apigatewayv2_api: Network, apigatewayv2_stage: Network,
 };
 

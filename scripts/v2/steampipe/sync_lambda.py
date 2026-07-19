@@ -4,6 +4,7 @@ implementation. Advisory-locked per (resource_type) so concurrent triggers don't
 Env: STEAMPIPE_HOST, STEAMPIPE_SECRET_ARN (db password), AURORA_ENDPOINT, AURORA_DATABASE,
 AURORA_SECRET_ARN, AWS_REGION."""
 import json
+from datetime import datetime, timezone
 import os
 import re
 import ssl
@@ -243,14 +244,6 @@ QUERIES = {
         "db_cluster_identifier",
         "region",
     ),
-    # OpenSearch Serverless (AOSS) collections — separate API/table from provisioned domains.
-    "opensearch_serverless": (
-        "SELECT name, region, account_id, arn, id, type, status, description, "
-        "collection_endpoint, dashboard_endpoint, kms_key_arn, created_date, last_modified_date "
-        "FROM aws_opensearchserverless_collection ORDER BY name",
-        "name",
-        "region",
-    ),
     "msk": (
         "SELECT cluster_name, region, account_id, arn, state, cluster_type, current_version, creation_time, "
         "provisioned, tags "
@@ -458,7 +451,46 @@ def _fetch_s3_public_access(s3=None):
     return rows, "name", "region"
 
 
+def _fetch_opensearch_serverless(aoss=None):
+    """OpenSearch Serverless (AOSS) collections via boto3 — the pinned Steampipe plugin has no
+    aws_opensearchserverless_collection table. STRICTLY READ-ONLY (List/BatchGet only).
+    Regional API: covers the deployment region (env AWS_REGION)."""
+    region = os.environ.get("AWS_REGION", "ap-northeast-2")
+    aoss = aoss or boto3.client("opensearchserverless", region_name=region)
+    ids, token = [], None
+    while True:
+        kw = {"maxResults": 100}
+        if token:
+            kw["nextToken"] = token
+        page = aoss.list_collections(**kw)
+        ids.extend(c["id"] for c in page.get("collectionSummaries", []) or [])
+        token = page.get("nextToken")
+        if not token:
+            break
+    rows = []
+    for i in range(0, len(ids), 100):
+        detail = aoss.batch_get_collection(ids=ids[i : i + 100]).get("collectionDetails", []) or []
+        for c in detail:
+            arn = c.get("arn", "")
+            acct = arn.split(":")[4] if arn.count(":") >= 5 else ""
+            def _ts(v):
+                return (datetime.fromtimestamp(v / 1000, tz=timezone.utc).isoformat()
+                        if isinstance(v, (int, float)) else None)
+            rows.append({
+                "name": c.get("name"), "region": region, "account_id": acct, "arn": arn,
+                "id": c.get("id"), "type": c.get("type"), "status": c.get("status"),
+                "description": c.get("description"),
+                "collection_endpoint": c.get("collectionEndpoint"),
+                "dashboard_endpoint": c.get("dashboardEndpoint"),
+                "kms_key_arn": c.get("kmsKeyArn"),
+                "created_date": _ts(c.get("createdDate")),
+                "last_modified_date": _ts(c.get("lastModifiedDate")),
+            })
+    return rows, "name", "region"
+
+
 SDK_SYNCS = {
+    "opensearch_serverless": _fetch_opensearch_serverless,
     "cloudfront_vpc_origin": _fetch_cloudfront_vpc_origins,
     "alb_listener_rule": _fetch_alb_listener_rules,
     "s3_public_access": _fetch_s3_public_access,

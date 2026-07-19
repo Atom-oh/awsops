@@ -310,7 +310,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Engine', keys: ['state', 'cluster_type', 'current_version', 'provisioned'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  neptune: { label: 'Neptune', group: 'Storage & DB', stateKey: 'status', distKey: 'engine_version', columns: [
+  neptune_cluster: { label: 'Neptune', group: 'Storage & DB', stateKey: 'status', distKey: 'engine_version', columns: [
     { key: 'status', label: 'Status' }, { key: 'engine', label: 'Engine' },
     { key: 'engine_version', label: 'Version' }, { key: 'multi_az', label: 'Multi-AZ' },
     { key: 'storage_encrypted', label: 'Encrypted' } ],
@@ -386,7 +386,7 @@ const GROUPS: Record<string, GroupMeta> = {
   },
   'Storage & DB': {
     slug: 'storage', labelKey: 'group.storage', splitKeys: ['ebsUnencrypted'],
-    order: ['s3', 'ebs_volume', 'ebs_snapshot', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'opensearch_serverless', 'msk', 'neptune'],
+    order: ['s3', 'ebs_volume', 'ebs_snapshot', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'opensearch_serverless', 'msk', 'neptune_cluster'],
   },
   'Network': {
     slug: 'network', labelKey: 'group.network', splitKeys: ['sgOpenIngress'],
