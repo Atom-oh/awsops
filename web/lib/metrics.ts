@@ -290,8 +290,8 @@ const LIVE_SPECS: Record<string, LiveMetricSpec> = {
     namespace: 'AWS/Kafka',
     dims: (id) => [{ Name: 'Cluster Name', Value: id }],
     metrics: [
-      { name: 'ActiveControllerCount', label: 'Active Controllers', stat: 'Sum', fmt: 'count' },
-      { name: 'OfflinePartitionsCount', label: 'Offline Partitions', stat: 'Sum', fmt: 'count' },
+      { name: 'ActiveControllerCount', label: 'Active Controllers', stat: 'Maximum', fmt: 'count' },
+      { name: 'OfflinePartitionsCount', label: 'Offline Partitions', stat: 'Maximum', fmt: 'count' },
       { name: 'GlobalTopicCount', label: 'Topics', stat: 'Maximum', fmt: 'count' },
       { name: 'GlobalPartitionCount', label: 'Partitions', stat: 'Maximum', fmt: 'count' },
     ],
