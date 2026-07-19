@@ -2,9 +2,9 @@
 
 ## Status / 상태
 
-Accepted (2026-06-22) — consolidated. consolidates: 017, 026, 028
+Accepted (2026-06-22) — consolidated. consolidates: 017, 026, 028. amended 2026-07-19 (i18n scope: ko/en → ko/en/zh/ja; corrected the "AI response language via `lang`" claim to reflect the actual not-yet-wired state)
 
-채택됨 (2026-06-22) — 통합. 통합 대상: 017(캐시 워머 프리워밍), 026(i18n LanguageProvider), 028(CloudFront CACHING_DISABLED)
+채택됨 (2026-06-22) — 통합. 통합 대상: 017(캐시 워머 프리워밍), 026(i18n LanguageProvider), 028(CloudFront CACHING_DISABLED). 개정 2026-07-19 (i18n 범위: ko/en → ko/en/zh/ja; "AI 응답 언어 `lang` 연동" 서술을 실제 미연동 상태에 맞게 정정)
 
 > 이 ADR은 세 개의 횡단 결정을 하나로 합친다. 단일 Status를 가지며, 각 결정의 현행(net) 상태만 기술한다. 세부 v1 메커니즘 이력은 통합된 원본 ADR(017/026/028)에 보존된다.
 >
@@ -26,9 +26,9 @@ A background warmer periodically runs the queries the dashboard pages would issu
 
 ### 2. i18n — LanguageProvider + 평면 번역 맵 (구 ADR-026) / i18n — LanguageProvider + flat maps
 
-커스텀 React Context(`LanguageProvider`)가 `{ lang, setLang, t }`를 제공하고, 평면 키-값 JSON 번역 맵(**ko/en/zh/ja**)을 정적으로 번들에 포함한다. 라우트 세그먼트 로케일(`/en/...`) 없이 라우터 비의존. 언어 선택은 `localStorage`에 저장되며 기본값은 `ko`, 누락 키는 영어 폴백 후 키 자체로 graceful degrade. 선택 언어는 UI copy(shell/네비게이션 + chat/scope/common 등 점진 적용 범위)에 한해 `t()`로 렌더되며, **AI(AgentCore/스트리밍) 응답 언어 연동은 별도 범위**로 `lang` 파라미터가 해당 경로에 아직 전달되지 않는다(UI 언어와 AI 응답 언어가 다를 수 있음 — 후속 과제). v2 MVP 적용 범위는 **shell/네비게이션**이며, 페이지 본문 번역은 점진 적용(현행 부분 적용 — 감사 finding 참조).
+커스텀 React Context(`LanguageProvider`)가 `{ lang, setLang, t }`를 제공하고, 평면 키-값 JSON 번역 맵(**ko/en/zh/ja**)을 정적으로 번들에 포함한다. 라우트 세그먼트 로케일(`/en/...`) 없이 라우터 비의존. 언어 선택은 `localStorage`에 저장되며 기본값은 `ko`, 누락 키는 영어 폴백 후 키 자체로 graceful degrade. 선택 언어는 UI copy(shell/네비게이션 + chat/scope/common 등 점진 적용 범위)에 한해 `t()`로 렌더되며, **AI(AgentCore/스트리밍) 응답 언어 연동은 별도 범위**로 `lang` 파라미터가 해당 경로에 아직 전달되지 않는다(UI 언어와 AI 응답 언어가 다를 수 있음 — 후속 과제). v2 MVP 적용 범위는 **shell/네비게이션 + chat/scope/common**으로 확장됐으며, 나머지 페이지 본문 번역은 점진 적용(현행 부분 적용 — 감사 finding 참조).
 
-A custom React Context (`LanguageProvider`) exposes `{ lang, setLang, t }`, statically bundling flat key-value JSON maps (**ko/en/zh/ja**). Router-agnostic, with no route-segmented locales (`/en/...`). Language choice persists in `localStorage`, defaults to `ko`, and missing keys degrade gracefully via an English fallback then the key itself. The selected language governs UI copy only (shell/navigation plus the incrementally-covered chat/scope/common areas); **AI (AgentCore/streaming) response-language integration is a separate, not-yet-wired scope** — the `lang` parameter does not currently flow into that path, so the UI language and the AI response language can diverge (tracked as follow-up work). The v2 MVP scope is **shell/navigation**; page-body translation is applied incrementally (currently partial — see audit finding).
+A custom React Context (`LanguageProvider`) exposes `{ lang, setLang, t }`, statically bundling flat key-value JSON maps (**ko/en/zh/ja**). Router-agnostic, with no route-segmented locales (`/en/...`). Language choice persists in `localStorage`, defaults to `ko`, and missing keys degrade gracefully via an English fallback then the key itself. The selected language governs UI copy only (shell/navigation plus the incrementally-covered chat/scope/common areas); **AI (AgentCore/streaming) response-language integration is a separate, not-yet-wired scope** — the `lang` parameter does not currently flow into that path, so the UI language and the AI response language can diverge (tracked as follow-up work). The v2 MVP scope has expanded to **shell/navigation plus chat/scope/common**; remaining page-body translation is applied incrementally (currently partial — see audit finding).
 
 ### 3. CDN 캐싱 — CloudFront CACHING_DISABLED (구 ADR-028) / CDN caching — CloudFront CACHING_DISABLED
 
