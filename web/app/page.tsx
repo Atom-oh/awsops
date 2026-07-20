@@ -82,7 +82,7 @@ export default function Home() {
     // Core summaries (Aurora-backed, fast) gate the refresh spinner. Each degrades on its
     // own (allSettled) so one failure never blanks the others.
     await Promise.allSettled([
-      fetch('/api/overview')
+      fetch(`/api/overview?account=${encodeURIComponent(scope.accounts === '__all__' ? '__all__' : scope.accounts[0] ?? 'self')}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((d) => { setOv(d); setOvErr(''); })
         .catch((e) => setOvErr(String(e))),

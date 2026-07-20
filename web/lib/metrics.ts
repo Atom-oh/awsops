@@ -352,3 +352,102 @@ export async function mskBootstrapBrokers(clusterArn: string): Promise<LiveMetri
     return [];
   }
 }
+
+// ── Monitoring hub (v1 /monitoring parity): fleet live columns + per-resource time series ──
+export interface FleetLiveRow { id: string; cpu: number | null; netIn: number | null; netOut: number | null }
+
+/** Latest-hour CPU/NetIn/NetOut per EC2 instance (one GetMetricData per 160-instance chunk). */
+export async function ec2FleetLive(ids: string[]): Promise<Record<string, FleetLiveRow>> {
+  const out: Record<string, FleetLiveRow> = {};
+  if (!ids.length) return out;
+  const METRICS = [
+    { key: 'cpu', name: 'CPUUtilization' },
+    { key: 'netIn', name: 'NetworkIn' },
+    { key: 'netOut', name: 'NetworkOut' },
+  ] as const;
+  try {
+    const CHUNK = 160; // 3 metrics × 160 = 480 ≤ 500 queries/call
+    for (let c = 0; c < ids.length; c += CHUNK) {
+      const chunk = ids.slice(c, c + CHUNK);
+      for (const id of chunk) out[id] ??= { id, cpu: null, netIn: null, netOut: null };
+      const r = await cwClient().send(new GetMetricDataCommand({
+        StartTime: new Date(Date.now() - 3 * 3600_000), EndTime: new Date(),
+        MetricDataQueries: chunk.flatMap((id, i) =>
+          METRICS.map((m) => ({
+            Id: `${m.key}_i${i}`, ReturnData: true,
+            MetricStat: { Metric: { Namespace: 'AWS/EC2', MetricName: m.name, Dimensions: [{ Name: 'InstanceId', Value: id }] }, Period: 3600, Stat: 'Average' },
+          }))),
+      }));
+      for (const res of r.MetricDataResults ?? []) {
+        const mm = (res.Id ?? '').match(/^(\w+?)_i(\d+)$/);
+        if (!mm) continue;
+        const id = chunk[Number(mm[2])];
+        const v = res.Values?.[0];
+        if (id && typeof v === 'number') (out[id] as unknown as Record<string, number>)[mm[1]] = Math.round(v * 100) / 100;
+      }
+    }
+  } catch { /* rows keep nulls */ }
+  return out;
+}
+
+const SERIES_RANGES: Record<string, { ms: number; period: number }> = {
+  '1h': { ms: 3600_000, period: 300 },
+  '6h': { ms: 6 * 3600_000, period: 300 },
+  '24h': { ms: 24 * 3600_000, period: 900 },
+  '7d': { ms: 7 * 24 * 3600_000, period: 3600 },
+};
+const SERIES_METRICS: Record<string, { namespace: string; dim: string; metrics: { key: string; name: string; scale?: number }[] }> = {
+  ec2: {
+    namespace: 'AWS/EC2', dim: 'InstanceId',
+    metrics: [
+      { key: 'CPU %', name: 'CPUUtilization' },
+      { key: 'Net In MB', name: 'NetworkIn', scale: 1e-6 },
+      { key: 'Net Out MB', name: 'NetworkOut', scale: 1e-6 },
+    ],
+  },
+  rds: {
+    namespace: 'AWS/RDS', dim: 'DBInstanceIdentifier',
+    metrics: [
+      { key: 'CPU %', name: 'CPUUtilization' },
+      { key: 'Connections', name: 'DatabaseConnections' },
+      { key: 'Free Mem GB', name: 'FreeableMemory', scale: 1e-9 },
+    ],
+  },
+};
+
+/** Multi-metric time series for one EC2 instance / RDS instance (v1 drill-down chart). */
+export async function resourceSeries(kind: string, id: string, range: string): Promise<Array<Record<string, unknown>>> {
+  const spec = SERIES_METRICS[kind];
+  const rg = SERIES_RANGES[range] ?? SERIES_RANGES['6h'];
+  if (!spec) return [];
+  try {
+    const r = await cwClient().send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - rg.ms), EndTime: new Date(),
+      ScanBy: 'TimestampAscending',
+      MetricDataQueries: spec.metrics.map((m, i) => ({
+        Id: `s${i}`, ReturnData: true,
+        MetricStat: { Metric: { Namespace: spec.namespace, MetricName: m.name, Dimensions: [{ Name: spec.dim, Value: id }] }, Period: rg.period, Stat: 'Average' },
+      })),
+    }));
+    const byT = new Map<string, Record<string, unknown>>();
+    for (const res of r.MetricDataResults ?? []) {
+      const i = Number((res.Id ?? '').replace('s', ''));
+      const m = spec.metrics[i];
+      if (!m) continue;
+      (res.Timestamps ?? []).forEach((ts, j) => {
+        const t = new Date(ts as unknown as string).toISOString().slice(5, 16).replace('T', ' ');
+        const p = byT.get(t) ?? { t };
+        const v = res.Values?.[j];
+        if (typeof v === 'number') p[m.key] = Math.round(v * (m.scale ?? 1) * 100) / 100;
+        byT.set(t, p);
+      });
+    }
+    return [...byT.values()].sort((a, b) => String(a.t).localeCompare(String(b.t)));
+  } catch {
+    return [];
+  }
+}
+
+export const SERIES_KEYS: Record<string, string[]> = Object.fromEntries(
+  Object.entries(SERIES_METRICS).map(([k, v]) => [k, v.metrics.map((m) => m.key)]),
+);

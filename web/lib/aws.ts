@@ -17,8 +17,8 @@ export interface ClusterInfo {
   region: string; vpcId: string; platformVersion: string;
 }
 
-export async function listClusters(): Promise<ClusterInfo[]> {
-  const c = eksClient();
+export async function listClusters(accountId?: string): Promise<ClusterInfo[]> {
+  const c = accountId && accountId !== 'self' ? await assumedClient(accountId, EKSClient, { region: REGION }) : eksClient();
   const { clusters = [] } = await c.send(new ListClustersCommand({}));
   const out: ClusterInfo[] = [];
   for (const name of clusters.slice(0, 25)) {

@@ -439,6 +439,7 @@ const GROUPS: Record<string, GroupMeta> = {
   'Monitoring': {
     slug: 'monitoring', labelKey: 'group.monitoring', singleton: true, splitKeys: [],
     order: ['cloudwatch_alarm'],
+    injected: [{ key: 'monitoring-hub', href: '/monitoring', labelKey: 'nav.monitoringHub' }],
   },
 };
 

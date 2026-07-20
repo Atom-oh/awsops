@@ -7,6 +7,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
 import Badge from '@/components/ui/Badge';
 import StatCard from '@/components/ui/StatCard';
+import { useActiveAccount, accountParam } from '@/lib/account-context';
 import Card from '@/components/ui/Card';
 import Meter from '@/components/ui/Meter';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
@@ -52,6 +53,7 @@ interface FleetCluster {
 const fmtMib = (mib: number): string => (mib >= 1024 ? `${(mib / 1024).toFixed(1)}G` : `${Math.round(mib)}M`);
 
 export default function EksPage() {
+  const [activeAccount] = useActiveAccount();
   const [rows, setRows] = useState<Cluster[] | null>(null);
   const [admin, setAdmin] = useState(false);
   const [err, setErr] = useState('');
@@ -64,11 +66,11 @@ export default function EksPage() {
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    fetch('/api/eks')
+    fetch(`/api/eks?${accountParam(activeAccount) || 'account=self'}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { setRows(d.clusters); setAdmin(!!d.admin); })
       .catch((e) => setErr(String(e)));
-  }, []);
+  }, [activeAccount]);
   // Monotonic fleet sequence — register/unregister re-fetches must not be
   // overwritten by an older in-flight response (P4 gate: codex). Failures keep
   // the previous fleet (best-effort live data beats a blank page).
@@ -89,7 +91,7 @@ export default function EksPage() {
     setBusy(true);
     try {
       await Promise.allSettled([
-        fetch('/api/eks')
+        fetch(`/api/eks?${accountParam(activeAccount) || 'account=self'}`)
           .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
           .then((d) => { setRows(d.clusters); setAdmin(!!d.admin); setErr(''); })
           .catch((e) => setErr(String(e))),

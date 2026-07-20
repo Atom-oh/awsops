@@ -14,7 +14,9 @@ export async function GET(request: Request) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
   try {
-    const [clusters, allowed] = await Promise.all([listClusters(), getAllowedClusters()]);
+    const accountParam = new URL(request.url).searchParams.get('account') || undefined;
+    const account = accountParam === '__all__' ? undefined : accountParam;
+    const [clusters, allowed] = await Promise.all([listClusters(account), getAllowedClusters()]);
     const rows = await Promise.all(clusters.map(async (c) => {
       let access: AccessState;
       const isEnv = isEnvCluster(c.name);
