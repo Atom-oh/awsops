@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { listClusters } from '@/lib/aws';
-import { getAllowedClusters, isEnvCluster } from '@/lib/eks-registry';
+import { getAllowedClusters, isEnvCluster, getAuthModes } from '@/lib/eks-registry';
 import { hasAccessEntry, onboardingGuide } from '@/lib/eks-access';
 import { isAdmin } from '@/lib/admin';
 
@@ -16,11 +16,14 @@ export async function GET(request: Request) {
   try {
     const accountParam = new URL(request.url).searchParams.get('account') || undefined;
     const account = accountParam === '__all__' ? undefined : accountParam;
-    const [clusters, allowed] = await Promise.all([listClusters(account), getAllowedClusters()]);
+    const [clusters, allowed, authModes] = await Promise.all([listClusters(account), getAllowedClusters(), getAuthModes()]);
     const rows = await Promise.all(clusters.map(async (c) => {
       let access: AccessState;
       const isEnv = isEnvCluster(c.name);
-      if (allowed.has(c.name) && isEnv) {
+      const authMode = authModes.get(c.name);
+      if (authMode) {
+        access = 'connected'; // Aurora-stored auth (SA token / AssumeRole) — no access entry needed
+      } else if (allowed.has(c.name) && isEnv) {
         access = 'connected'; // Terraform guarantees the entry — skip the per-row API call
       } else {
         const entry = await hasAccessEntry(c.name);
@@ -35,7 +38,7 @@ export async function GET(request: Request) {
       // v1 parity: the onboarding script is ALWAYS visible for not-yet-connected clusters
       // (role ARN is cached — per-row cost is string templating only).
       const guide = access === 'connected' ? undefined : await onboardingGuide(c.name);
-      return { ...c, access, runtime: allowed.has(c.name) && !isEnv, guide };
+      return { ...c, access, runtime: allowed.has(c.name) && !isEnv, authMode, guide };
     }));
     const admin = await isAdmin(user);
     return Response.json({ clusters: rows, admin });

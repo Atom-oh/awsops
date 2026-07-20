@@ -10,6 +10,7 @@ const isAdmin = vi.fn();
 vi.mock('@/lib/eks-registry', () => ({
   getAllowedClusters: (...a: unknown[]) => getAllowedClusters(...a),
   isEnvCluster: (...a: unknown[]) => isEnvCluster(...a),
+  getAuthModes: async () => new Map(),
 }));
 const onboardingGuide = vi.fn();
 vi.mock('@/lib/eks-access', () => ({
