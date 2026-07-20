@@ -85,21 +85,28 @@ jobs:
           git diff --no-color "$MERGE_BASE_SHA" "$HEAD_SHA" -- . > /tmp/pr-diff-raw.txt
           rm -f /tmp/pr-diff-omitted.txt /tmp/pr-diff-omitted-source.txt
           awk '
+            # A path is an ignorable artifact (lockfile/vendored/binary/build output). Checked on
+            # BOTH the old and new path so a `dist/foo.js -> src/evil.ts` rename cannot be skipped
+            # on the strength of its old end alone.
+            function ignorable(p) {
+              return (p ~ /(^|\/)package-lock\.json$/) ||
+                     (p ~ /(^|\/)pnpm-lock\.yaml$/) ||
+                     (p ~ /(^|\/)yarn\.lock$/) ||
+                     (p ~ /(^|\/)node_modules\//) ||
+                     (p ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
+                     (p ~ /(^|\/)(dist|out|build)\//) ||
+                     (p ~ /\.terraform\.lock\.hcl$/)
+            }
             /^diff --git/ {
-              # Parse BOTH the old (a/) and new (b/) path. substr($3,3) alone (old path only)
+              # Parse BOTH the old (a/) and new (b/) path. Using the old path alone (substr($3,3))
               # let a `foo.svg -> bar.ts` rename be classified by the .svg end and slip past the
               # fail-closed bucket below. $3 = a/old, $4 = b/new (git quotes paths with spaces, so
               # for the rare space-in-name case the fields split — that only ever over-includes a
               # path into the stricter fail-closed bucket, never under-includes, so it fails safe).
               path = substr($3, 3)
               newpath = substr($4, 3)
-              skip = (path ~ /(^|\/)package-lock\.json$/) ||
-                     (path ~ /(^|\/)pnpm-lock\.yaml$/) ||
-                     (path ~ /(^|\/)yarn\.lock$/) ||
-                     (path ~ /(^|\/)node_modules\//) ||
-                     (path ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
-                     (path ~ /(^|\/)(dist|out|build)\//) ||
-                     (path ~ /\.terraform\.lock\.hcl$/)
+              # Skip only when BOTH ends are ignorable — a rename with one reviewable end stays in.
+              skip = ignorable(path) && ignorable(newpath)
             }
             skip { next }
             # Line-length cap, not extension-based: the PR #168 failure (codex 1,048,576-char
@@ -119,12 +126,13 @@ jobs:
             # source/IaC file with one >50k-char line would be dropped from every lens yet still
             # PASS. So an omitted line is split by file type:
             #   - banner-only ONLY if it is a pure generated/export blob: BOTH the old and new path
-            #     end in a generated type (.svg/.drawio/.min.js/.min.css/.map) AND neither is under
-            #     web/ (a web/ .svg like web/app/icon.svg is runtime-served, script-capable, and must
-            #     still be reviewed — so it goes to the fail-closed bucket like any source file).
+            #     end in a generated type (.svg/.drawio/.min.js/.min.css/.map) AND neither is under a
+            #     PUBLICLY-SERVED tree (web/ = the app served behind the edge; docs-site/ = published
+            #     to GitHub Pages / www.atomai.click). A served .svg is script-capable (stored-XSS
+            #     vector), so it stays reviewable and goes to the fail-closed bucket like source.
             #   - anything else (real source/IaC: .ts/.tsx/.py/.tf/.yml/..., a rename with a source
-            #     end, or a web/ asset) -> ALSO recorded to a second sidecar that the gate turns into
-            #     a deterministic FAIL, preserving the fail-closed contract for content no lens saw.
+            #     end, or a served web//docs-site/ asset) -> ALSO recorded to a second sidecar that
+            #     the gate turns into a deterministic FAIL — the fail-closed contract for unseen content.
             # An inline marker is always left for the panel models too.
             length($0) > 50000 {
               if (!(path in warned)) {
@@ -132,7 +140,7 @@ jobs:
                 print path >> "/tmp/pr-diff-omitted.txt"
                 generated = (path ~ /\.(svg|drawio|min\.js|min\.css|map)$/) &&
                             (newpath ~ /\.(svg|drawio|min\.js|min\.css|map)$/) &&
-                            (path !~ /(^|\/)web\//) && (newpath !~ /(^|\/)web\//)
+                            (path !~ /(^|\/)(web|docs-site)\//) && (newpath !~ /(^|\/)(web|docs-site)\//)
                 if (!generated) {
                   print path >> "/tmp/pr-diff-omitted-source.txt"
                 }
