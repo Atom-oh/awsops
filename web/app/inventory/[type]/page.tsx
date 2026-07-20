@@ -219,7 +219,7 @@ export default function InventoryTypePage() {
   const barData = spec.barKey
     ? [...allRows]
         .map((r) => ({
-          label: String(r.name ?? r.resource_id ?? ''),
+          label: String(r.name ?? r.task_short ?? r.resource_id ?? ''),
           value: Number(r[spec.barKey!.col]) || 0,
         }))
         .filter((x) => x.label && x.value > 0)
