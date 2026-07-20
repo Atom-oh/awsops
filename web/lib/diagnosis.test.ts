@@ -16,7 +16,8 @@ vi.mock('./admin', () => ({ isAdmin: vi.fn() }));
 
 const query = vi.fn(async (sql: string) => {
   if (sql.includes('INSERT INTO diagnosis_reports')) return { rows: [{ id: 7 }] };
-  if (sql.includes('JOIN worker_jobs')) return { rows: [{ id: 9 }] };
+  if (sql.includes('idempotency_key')) return { rows: [{ id: 9 }] };
+  if (sql.includes('LEFT JOIN worker_jobs')) return { rows: [{ id: 1, tier: 'mid', status: 'succeeded', account: '061525506239' }] };
   if (sql.includes('SELECT')) return { rows: [{ id: 1, tier: 'mid', status: 'succeeded' }] };
   return { rows: [] };
 });

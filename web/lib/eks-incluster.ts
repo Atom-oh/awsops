@@ -359,6 +359,13 @@ function k8sGet(endpoint: string, path: string, token: string, caPem: Buffer): P
   });
 }
 
+/** GET an arbitrary in-cluster API path (e.g. an OpenCost service-proxy URL). Raw body string. */
+export async function k8sGetPath(cluster: string, path: string): Promise<string> {
+  const { endpoint, caPem } = await clusterConn(cluster);
+  const token = await eksToken(cluster, REGION);
+  return k8sGet(endpoint, path, token, caPem);
+}
+
 export async function listInCluster(cluster: string, kind: Kind): Promise<InClusterRow[]> {
   const { endpoint, caPem } = await clusterConn(cluster);
   const token = await eksToken(cluster, REGION);

@@ -14,9 +14,11 @@ describe('normalizeResult', () => {
     const r = normalizeResult('prometheus', 'prometheus_query_range', body);
     expect(r.shape).toBe('series');
     expect(r.seriesXKey).toBe('t');
-    expect(r.seriesYKey).toBe('value');
-    expect(r.series).toHaveLength(2); // first series' two points
-    expect(r.series![0].value).toBe(1);
+    // Multi-series (v1 parity): one key per series, merged on the timestamp axis.
+    expect(r.seriesKeys).toHaveLength(2);
+    expect(r.series).toHaveLength(2); // two distinct timestamps
+    expect(r.series![0][r.seriesKeys![0]]).toBe(1); // up{job="api"} @t0
+    expect(r.series![0][r.seriesKeys![1]]).toBe(0); // up{job="web"} @t0
     expect(r.rows).toHaveLength(2); // one row per series
     expect(r.truncated).toBe(true);
   });

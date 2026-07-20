@@ -8,6 +8,8 @@ export type DiagnosisModel = 'sonnet' | 'opus';
 export interface DiagnosisReport {
   id: number;
   worker_job_id: string | null;
+  /** Diagnosed account id (from the linked job payload; null on legacy rows). */
+  account?: string | null;
   tier: DiagnosisTier;
   status: 'running' | 'succeeded' | 'failed' | 'partial';
   requested_by: string;
@@ -40,7 +42,9 @@ const COLS =
 
 export async function listReports(limit = 50): Promise<DiagnosisReport[]> {
   const { rows } = await getPool().query(
-    `SELECT ${COLS} FROM diagnosis_reports WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1`,
+    `SELECT ${COLS.split(', ').map((c) => `r.${c}`).join(', ')}, j.payload->>'account' AS account
+     FROM diagnosis_reports r LEFT JOIN worker_jobs j ON j.job_id = r.worker_job_id
+     WHERE r.deleted_at IS NULL ORDER BY r.created_at DESC LIMIT $1`,
     [limit],
   );
   return rows as DiagnosisReport[];

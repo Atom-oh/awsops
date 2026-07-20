@@ -11,6 +11,7 @@ import SegmentedControl from '@/components/ui/SegmentedControl';
 import Input from '@/components/ui/Input';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import RiskHero from '@/components/inventory/RiskHero';
+import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
 import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
@@ -267,6 +268,8 @@ export default function InventoryTypePage() {
               kpiRow
             )}
             {graphBand}
+            {/* Type-specific live sections (v1 parity): CloudTrail recent-events audit view. */}
+            {type === 'cloudtrail' && <CloudTrailEvents />}
             {tableBlock}
           </>
         )}

@@ -547,6 +547,9 @@ export default function TopologyPage() {
               ))}
             </select>
             <RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />
+            <Link href="/topology/infra" className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-600 hover:bg-ink-50">
+              인프라 배치 →
+            </Link>
             <Link href="/topology/services" className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-600 hover:bg-ink-50">
               서비스 맵 →
             </Link>

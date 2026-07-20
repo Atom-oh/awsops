@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
-import { ShieldAlert, Archive, BrickWall, HardDrive, Users, Shield, type LucideIcon } from 'lucide-react';
+import { ShieldAlert, Archive, BrickWall, HardDrive, Users, Shield, Bug, type LucideIcon } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 import StatTile from '@/components/ui/StatTile';
@@ -16,7 +16,7 @@ const CHECKS = Object.keys(CHECK_META) as CheckKey[];
 
 // v1-parity KPI glyphs — per-check icon in the tile's translucent top-right box.
 const CHECK_ICON: Record<CheckKey, LucideIcon> = {
-  public_s3: Archive, open_sg: BrickWall, unencrypted_ebs: HardDrive, iam_no_mfa: Users,
+  public_s3: Archive, open_sg: BrickWall, unencrypted_ebs: HardDrive, iam_no_mfa: Users, ecr_cve: Bug,
 };
 
 interface ApiResp {
@@ -54,6 +54,14 @@ const CHECK_COLUMNS: Record<CheckKey, { key: string; label: string }[]> = {
   iam_no_mfa: [
     { key: 'create_date', label: 'Created' },
     { key: 'password_last_used', label: 'Last PW Use' },
+  ],
+  ecr_cve: [
+    { key: 'image_tag', label: 'Image' },
+    { key: 'critical', label: 'Critical' },
+    { key: 'high', label: 'High' },
+    { key: 'medium', label: 'Medium' },
+    { key: 'total', label: 'Total' },
+    { key: 'scan_completed_at', label: 'Scanned' },
   ],
 };
 const columnsFor = (k: CheckKey) => [

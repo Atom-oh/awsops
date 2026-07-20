@@ -101,6 +101,12 @@ resource "aws_iam_role_policy" "task_metrics" {
         "pricing:DescribeServices",
         # MSK detail panel: bootstrap broker connection strings (read-only)
         "kafka:GetBootstrapBrokers",
+        # CloudTrail recent-events tab (read-only audit lookup)
+        "cloudtrail:LookupEvents",
+        # /security container-CVE tab: ECR image scan findings (read-only)
+        "ecr:DescribeRepositories",
+        "ecr:DescribeImages",
+        "ecr:DescribeImageScanFindings",
       ]
       Resource = "*"
     }]

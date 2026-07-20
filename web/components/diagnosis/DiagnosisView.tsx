@@ -18,6 +18,7 @@ interface ReportRow {
   status: string;
   created_at: string;
   model?: string | null;        // deep-tier model (sonnet|opus); shown in the list for deep reports
+  account?: string | null;      // diagnosed account id (from the job payload; null on legacy rows)
   title?: string | null;        // LLM auto key-insight title (editable)
   tags?: string[];              // auto-suggested + manual
   can_edit?: boolean;           // owner or admin (BFF-computed) → show edit/delete controls
@@ -247,7 +248,8 @@ export default function DiagnosisView() {
                 </div>
                 <div className="text-[11px] text-ink-400">
                   #{r.id} · {r.tier}
-                  {r.tier === 'deep' && r.model ? ` · ${r.model}` : ''} ·{' '}
+                  {r.tier === 'deep' && r.model ? ` · ${r.model}` : ''}
+                  {r.account ? ` · ${r.account}` : ''} ·{' '}
                   <span className={r.status === 'failed' ? 'text-negative' : ''}>
                     {r.status === 'running' && r.progress?.total
                       ? `running ${r.progress.current ?? 0}/${r.progress.total}`
