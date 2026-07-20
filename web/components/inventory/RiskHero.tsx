@@ -1,7 +1,9 @@
+'use client';
 import Card from '@/components/ui/Card';
 import { cn } from '@/lib/cn';
 import type { HighlightCard } from '@/lib/inventory-types';
 import { highlightIcon } from '@/lib/type-icons';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 /**
  * RiskHero — the lead band for security-posture inventory types (IAM users,
@@ -15,6 +17,7 @@ import { highlightIcon } from '@/lib/type-icons';
  * counts are shown as a lower bound ("주의 N건+").
  */
 export default function RiskHero({ label, total, cards, capped = false }: { label: string; total: number; cards: HighlightCard[]; capped?: boolean }) {
+  const { tt } = useI18n();
   const issues = cards
     .filter((c) => c.variant === 'danger' && typeof c.value === 'number')
     .reduce((s, c) => s + (c.value as number), 0);
@@ -32,10 +35,10 @@ export default function RiskHero({ label, total, cards, capped = false }: { labe
     <Card className={cn('border-l-4', accentBar)}>
       <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="shrink-0">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{label} · 보안 상태</div>
-          <div className={cn('mt-1 text-[24px] font-semibold leading-none', verdictColor)}>{verdict}</div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{tt(label)} · {tt('보안 상태')}</div>
+          <div className={cn('mt-1 text-[24px] font-semibold leading-none', verdictColor)}>{tt(verdict)}</div>
           <div className="mt-1.5 text-[12px] text-ink-400">
-            총 {total.toLocaleString()}개{capped ? '+' : ''} · {sub}
+            {tt('총')} {total.toLocaleString()}{capped ? '+' : ''} · {tt(sub)}
           </div>
         </div>
         <div className="grid min-w-0 flex-1 grid-cols-2 gap-3 sm:grid-cols-3 lg:max-w-2xl lg:grid-cols-4">
@@ -53,7 +56,7 @@ export default function RiskHero({ label, total, cards, capped = false }: { labe
                 >
                   <Icon size={13} />
                 </span>
-                <div className="truncate pr-7 text-[11px] text-ink-400">{c.label}</div>
+                <div className="truncate pr-7 text-[11px] text-ink-400">{tt(c.label)}</div>
                 <div className={cn('tabular mt-0.5 text-[20px] font-semibold leading-none', hot ? 'text-rose-700' : c.variant === 'accent' ? 'text-brand-700' : 'text-ink-800')}>
                   {c.value}
                 </div>

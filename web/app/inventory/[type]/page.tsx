@@ -16,6 +16,7 @@ import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
 import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import { deriveRow } from '@/lib/inventory-derived';
 
 type Row = Record<string, unknown>;
@@ -330,13 +331,14 @@ function Filters({
   totalCount: number;
   onClear?: () => void;
 }) {
+  const { tt } = useI18n();
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="w-full max-w-[280px]">
           <Input
             inputSize="sm"
-            placeholder="검색…"
+            placeholder={tt('검색…')}
             value={query}
             onChange={(e) => onQuery(e.target.value)}
             icon={<Search className="h-3.5 w-3.5" />}
@@ -358,14 +360,14 @@ function Filters({
               onChange={(e) => onFacet(f.key, e.target.value)}
               className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700"
             >
-              <option value="전체">{f.label}: 전체</option>
+              <option value="전체">{f.label}: {tt('전체')}</option>
               {f.options.map((o) => (
                 <option key={o.name} value={o.name}>{o.name} ({o.value})</option>
               ))}
             </select>
           ))}
           {onClear && (
-            <button onClick={onClear} className="text-[12px] text-ink-400 hover:text-ink-800">전체 해제</button>
+            <button onClick={onClear} className="text-[12px] text-ink-400 hover:text-ink-800">{tt('전체 해제')}</button>
           )}
           <span className="ml-auto tabular-nums text-[12px] text-ink-400">
             {shownCount.toLocaleString()} / {totalCount.toLocaleString()}

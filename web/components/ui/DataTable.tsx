@@ -4,6 +4,7 @@ import Card from './Card';
 import Badge from './Badge';
 import StatePill from './StatePill';
 import { isDeprecatedRuntime } from '@/lib/inventory-types';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 export interface Column {
   key: string;
@@ -75,6 +76,7 @@ function MobileCards({
   fieldColumns: Column[];
   statusColumn?: Column;
 }) {
+  const { tt } = useI18n();
   const titleCol = columns.find((c) => c.key === titleKey) ?? columns[0];
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 lg:hidden">
@@ -96,7 +98,7 @@ function MobileCards({
             <dl className="mt-2 space-y-1">
               {fieldColumns.map((c) => (
                 <div key={c.key} className="flex items-baseline justify-between gap-3 text-[13px]">
-                  <dt className="shrink-0 text-[11px] uppercase tracking-[0.04em] text-ink-400">{c.label}</dt>
+                  <dt className="shrink-0 text-[11px] uppercase tracking-[0.04em] text-ink-400">{tt(c.label)}</dt>
                   <dd className="min-w-0 text-ink-800 text-right">{renderCell(c.key, row[c.key])}</dd>
                 </div>
               ))}
@@ -123,6 +125,7 @@ export default function DataTable({
   /** Column key used as the card title/heading. Default: first column. */
   cardTitleKey?: string;
 }) {
+  const { tt } = useI18n();
   const [sort, setSort] = useState<{ key: string; dir: Dir } | null>(null);
 
   const sortedRows = useMemo(() => {
@@ -179,7 +182,7 @@ export default function DataTable({
                       className={`text-left text-[11px] uppercase tracking-[0.04em] font-medium py-2.5 px-3 border-b border-ink-100 cursor-pointer select-none hover:text-ink-600 ${active ? 'text-brand-700' : 'text-ink-400'}`}
                     >
                       <span className="inline-flex items-center gap-1">
-                        {c.label}
+                        {tt(c.label)}
                         <span className="text-[9px] leading-none">{active ? (sort!.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
                       </span>
                     </th>

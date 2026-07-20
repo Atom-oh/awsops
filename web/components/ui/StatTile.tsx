@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import AwsopsMark from './AwsopsMark';
 import { cn } from '@/lib/cn';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 export type StatTileVariant = 'default' | 'accent' | 'danger' | 'warn';
 
@@ -76,6 +77,7 @@ export default function StatTile({
   href,
   icon,
 }: StatTileProps) {
+  const { tt } = useI18n();
   const compact = size === 'compact';
   // A full-size tile carrying a glyph chip is a KPI card — informational (default/warn) ones
   // adopt the accent outline + brand chip so the row reads uniformly; only danger stays rose.
@@ -119,7 +121,7 @@ export default function StatTile({
         </div>
       ) : null}
       <div className={cn('text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400', icon != null && (compact ? 'pr-7' : 'pr-10'))}>
-        {eyebrow ?? label}
+        {tt(eyebrow ?? label)}
       </div>
       <div
         className={cn(
@@ -142,7 +144,7 @@ export default function StatTile({
               {trend}
             </span>
           )}
-          {hint != null && <span className="text-[11px] text-ink-400 truncate">{hint}</span>}
+          {hint != null && <span className="text-[11px] text-ink-400 truncate">{typeof hint === 'string' ? tt(hint) : hint}</span>}
         </div>
       )}
     </div>
@@ -152,7 +154,7 @@ export default function StatTile({
     return (
       <Link
         href={href}
-        aria-label={`${eyebrow ?? label} 상세 보기`}
+        aria-label={`${tt(eyebrow ?? label)}`}
         className="block h-full rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
       >
         {inner}

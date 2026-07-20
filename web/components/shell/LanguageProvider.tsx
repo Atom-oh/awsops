@@ -1,11 +1,13 @@
 'use client';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { type Lang, makeT } from '@/lib/i18n';
+import { type Lang, makeT, makeTT } from '@/lib/i18n';
 
 interface I18nCtx {
   lang: Lang;
   setLang: (l: Lang) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
+  /** Term translator: known Korean UI literals → active language; unknown passthrough. */
+  tt: (s: string) => string;
 }
 
 const Ctx = createContext<I18nCtx | null>(null);
@@ -18,7 +20,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved === 'ko' || saved === 'en') {
+      if (saved === 'ko' || saved === 'en' || saved === 'zh') {
         setLangState(saved);
         document.documentElement.lang = saved;
       }
@@ -31,12 +33,14 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
     if (typeof document !== 'undefined') document.documentElement.lang = l;
   }, []);
 
-  const value = useMemo<I18nCtx>(() => ({ lang, setLang, t: makeT(lang) }), [lang, setLang]);
+  const value = useMemo<I18nCtx>(() => ({ lang, setLang, t: makeT(lang), tt: makeTT(lang) }), [lang, setLang]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
+// No-provider fallback (ko, passthrough) — shared UI atoms (StatTile/Card/…) call useI18n and
+// must keep rendering in unit tests / isolated mounts without a provider.
+const FALLBACK: I18nCtx = { lang: 'ko', setLang: () => {}, t: makeT('ko'), tt: (s) => s };
+
 export function useI18n(): I18nCtx {
-  const c = useContext(Ctx);
-  if (!c) throw new Error('useI18n must be used within <LanguageProvider>');
-  return c;
+  return useContext(Ctx) ?? FALLBACK;
 }

@@ -1,5 +1,7 @@
+'use client';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/cn';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 /**
  * SectionLabel — uppercase eyebrow heading above a KPI group / section.
@@ -18,6 +20,7 @@ export default function SectionLabel({
   right?: ReactNode;
   className?: string;
 }) {
+  const { tt } = useI18n();
   return (
     <div
       className={cn(
@@ -26,7 +29,7 @@ export default function SectionLabel({
       )}
     >
       {dot && <span className="inline-block h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: dot }} />}
-      {children}
+      {typeof children === 'string' ? tt(children) : children}
       {right && <span className="ml-1 normal-case">{right}</span>}
     </div>
   );

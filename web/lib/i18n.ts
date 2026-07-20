@@ -1,7 +1,7 @@
-// Lightweight i18n core (pure, no React) for the shell/nav chrome. KO default, EN toggle.
+// Lightweight i18n core (pure, no React). KO default; EN + ZH(简体) toggles (v1 parity).
 // MVP scope: shell + navigation strings only (not the inventory catalog or page bodies).
 
-export type Lang = 'ko' | 'en';
+export type Lang = 'ko' | 'en' | 'zh';
 type Dict = Record<string, string>;
 
 const MESSAGES: Record<Lang, Dict> = {
@@ -129,8 +129,8 @@ const MESSAGES: Record<Lang, Dict> = {
     'palette.aria': 'Command palette',
     'palette.placeholder': 'Search pages or resources…',
     'palette.noResults': 'No results',
-    'lang.toggle': '한',
-    'lang.toggleTitle': '한국어',
+    'lang.toggle': '中文',
+    'lang.toggleTitle': '中文(简体)',
     'login.title': 'Sign in',
     'login.subtitle': 'Cloud Operations Dashboard',
     'login.email': 'Email',
@@ -143,13 +143,87 @@ const MESSAGES: Record<Lang, Dict> = {
     'login.error.challenge': 'Account requires attention. Contact your administrator',
     'login.error.unavailable': 'Temporary error. Try again shortly',
   },
+  zh: {
+    'nav.overview': '概览',
+    'nav.aiDiagnosis': 'AI 诊断',
+    'nav.assistant': '助手',
+    'nav.inventory': '资源清单',
+    'nav.more': '更多',
+    'nav.eks': 'EKS',
+    'nav.monitoringHub': '统一监控',
+    'nav.jobs': '任务',
+    'nav.cost': '费用',
+    'nav.bedrock': 'Bedrock',
+    'nav.agentcore': 'AgentCore',
+    'nav.topology': '拓扑',
+    'nav.security': '安全',
+    'nav.compliance': '合规',
+    'nav.customAgents': '自定义代理',
+    'nav.datasources': '数据源',
+    'nav.integrations': '集成',
+    'nav.accounts': '账号管理',
+    'group.compute': '计算',
+    'group.storage': '存储 & 数据库',
+    'group.network': '网络',
+    'group.security': '安全资源',
+    'group.monitoring': '监控',
+    'group.compute.ecs': 'ECS',
+    'group.network.loadBalancing': '负载均衡',
+    'group.network.apiGateway': 'API Gateway',
+    'overview.total': '共 {n} 个资源',
+    'overview.summary': '状态摘要',
+    'overview.status': '状态',
+    'overview.healthy': '正常',
+    'overview.attention': '{n} 项需关注',
+    'overview.resourceTypes': '资源类型',
+    'overview.insights': '洞察',
+    'overview.aiSummary': '最近事件 AI 摘要',
+    'overview.rightsizing': 'Right-sizing 分析',
+    'overview.comingSoon': '即将推出',
+    'overview.loadFailed': '加载失败: {err} (会话过期请刷新)',
+    'split.ec2Running': '运行中 EC2',
+    'split.ec2Stopped': '已停止 EC2',
+    'split.ebsUnencrypted': '未加密 EBS',
+    'split.iamUserNoMfa': '未设置 MFA 的用户',
+    'split.sgOpenIngress': '开放安全组',
+    'sidebar.tagline': '云运维',
+    'sidebar.expand': '展开',
+    'sidebar.collapse': '收起',
+    'sidebar.admin': '管理员',
+    'sidebar.signOut': '退出登录',
+    'sidebar.online': '在线',
+    'sidebar.statusLine': 'ap-northeast-2 · {status}',
+    'palette.aria': '命令面板',
+    'palette.placeholder': '搜索页面或资源…',
+    'palette.noResults': '无结果',
+    'lang.toggle': '한',
+    'lang.toggleTitle': '한국어',
+    'login.title': '登录',
+    'login.subtitle': 'Cloud Operations Dashboard',
+    'login.email': '邮箱',
+    'login.password': '密码',
+    'login.remember': '保持登录',
+    'login.submit': '登录 →',
+    'login.busy': '认证中…',
+    'login.secure': '安全连接',
+    'login.error.invalid_credentials': '邮箱或密码不正确',
+    'login.error.challenge': '账号状态异常，请联系管理员',
+    'login.error.unavailable': '临时错误，请稍后重试',
+  },
 };
 
 /** Resolve a key for a language: lang → EN fallback → the key itself. Supports {param} interpolation. */
 export function translate(lang: Lang, key: string, params?: Record<string, string | number>): string {
-  const raw = MESSAGES[lang]?.[key] ?? MESSAGES.en[key] ?? key;
+  const raw = MESSAGES[lang]?.[key] ?? MESSAGES.en[key] ?? MESSAGES.ko[key] ?? key;
   if (!params) return raw;
   return raw.replace(/\{(\w+)\}/g, (_, k: string) => (k in params ? String(params[k]) : `{${k}}`));
+}
+
+import { applyTerms } from './i18n-terms';
+
+/** Bind the TERM translator (Korean UI literals → active language; unknown passthrough). */
+export function makeTT(lang: Lang) {
+  return (s: string) => applyTerms(lang, s);
 }
 
 /** Bind a translator to a language. */
