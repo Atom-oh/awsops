@@ -142,6 +142,8 @@ export function formatDetailValue(key: string, value: unknown): DetailValue {
   if (typeof value === 'boolean') return { kind: 'boolean', bool: value };
   if (value == null || value === '') return { kind: 'empty' };
   if (typeof value === 'object') {
+    // Empty arrays read as "none" (e.g. an SG with no ingress rules), not a JSON literal.
+    if (Array.isArray(value) && value.length === 0) return { kind: 'empty' };
     // v1-parity readable renderings for well-known structured fields; JSON only as fallback.
     if (key === 'tags') {
       const o = asRecord(value);
