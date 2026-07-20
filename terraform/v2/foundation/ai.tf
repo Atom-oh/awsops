@@ -60,6 +60,13 @@ variable "istio_vpc_enabled" {
 locals {
   ac_count    = var.agentcore_enabled ? 1 : 0
   integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
+  # AgentCore runtime name — a FIXED product-level constant (like v1's `awsops_agent`), NOT
+  # project-derived. MUST stay in sync with RUNTIME_NAME in scripts/v2/agentcore/provision.py
+  # ("awsops_v2_agent"); the provisioner appends a control-plane-generated `-<id>` suffix. IAM
+  # resource ARNs that scope runtime invoke must match THIS name — deriving it from var.project
+  # (e.g. "awsops_v2_stg_agent") produces an ARN that never matches the real runtime, so the web
+  # task role gets AccessDenied on bedrock-agentcore:InvokeAgentRuntime and chat fails.
+  agent_runtime_name = "awsops_v2_agent"
 }
 
 # ---- dual-tier ECR for the agent runtime image (mirrors ecr.tf) ----
@@ -352,6 +359,57 @@ resource "aws_iam_role_policy" "task_agentcore_ssm" {
   })
 }
 
+# v1-parity AgentCore console (web/app/agentcore + web/lib/agentcore-status.ts): read-only
+# control-plane status (runtime/gateways/targets/memory/interpreter). These List*/Get* control
+# actions have no resource-level scoping in AgentCore → "*", read-only by construction.
+resource "aws_iam_role_policy" "task_agentcore_status" {
+  count = local.ac_count
+  name  = "${var.project}-task-agentcore-status"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:ListAgentRuntimeEndpoints",
+        "bedrock-agentcore:ListGateways",
+        "bedrock-agentcore:ListGatewayTargets",
+        "bedrock-agentcore:ListMemories",
+        "bedrock-agentcore:ListCodeInterpreters",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
+# v1-parity Code Interpreter chat route (web/lib/code-interpreter.ts): the web task role runs Python
+# in the provisioned AgentCore sandbox (Start/Invoke/Stop/Get session). Data-plane only — NOT the
+# control-plane create/delete. Scoped to this account/region's code-interpreter resources. The
+# Sonnet code-GENERATION + Bedrock-direct fallback InvokeModelWithResponseStream is already granted
+# by task_synthesis_bedrock (same Sonnet FM/profile); this policy adds only the sandbox actions.
+resource "aws_iam_role_policy" "task_code_interpreter" {
+  count = local.ac_count
+  name  = "${var.project}-task-code-interpreter"
+  role  = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "bedrock-agentcore:StartCodeInterpreterSession",
+        "bedrock-agentcore:InvokeCodeInterpreter",
+        "bedrock-agentcore:StopCodeInterpreterSession",
+        "bedrock-agentcore:GetCodeInterpreterSession",
+      ]
+      Resource = [
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:code-interpreter-custom/*",
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:code-interpreter/*",
+      ]
+    }]
+  })
+}
+
 # web task role may invoke the AgentCore runtime (P3-A chat). Scoped to our runtime name prefix
 # (the runtime ID suffix is provisioner-generated) + its DEFAULT endpoint. No wildcard actions.
 resource "aws_iam_role_policy" "task_agentcore_invoke" {
@@ -364,8 +422,8 @@ resource "aws_iam_role_policy" "task_agentcore_invoke" {
       Effect = "Allow"
       Action = ["bedrock-agentcore:InvokeAgentRuntime"]
       Resource = [
-        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${replace(var.project, "-", "_")}_agent-*",
-        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${replace(var.project, "-", "_")}_agent-*/runtime-endpoint/*"
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${local.agent_runtime_name}-*",
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${local.agent_runtime_name}-*/runtime-endpoint/*"
       ]
     }]
   })

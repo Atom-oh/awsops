@@ -14,6 +14,8 @@ export interface NormalizedResult {
   series?: Record<string, unknown>[];
   seriesXKey?: string;
   seriesYKey?: string;
+  /** Multi-series (prom matrix): one key per series, merged on the shared timestamp axis. */
+  seriesKeys?: string[];
   truncated?: boolean;
   note?: string;
 }
@@ -43,17 +45,36 @@ function prom(body: Record<string, unknown>): NormalizedResult {
   if (!result.length) return { shape: 'empty', truncated, note: '결과 없음' };
 
   if (body.resultType === 'matrix') {
-    // first series → chart; all series → a summary table
-    const first = result[0] as Record<string, unknown>;
-    const values = Array.isArray(first.values) ? (first.values as unknown[][]) : [];
-    const series = values.map((p) => ({ t: new Date(num(p[0]) * 1000).toISOString(), value: num(p[1]) }));
+    // v1 parity: up to 8 series merged on the timestamp axis → multi-line chart; all series →
+    // a summary table. (Previously only the FIRST series was charted.)
+    const MAX_SERIES = 8;
+    const charted = result.slice(0, MAX_SERIES) as Record<string, unknown>[];
+    const keys: string[] = charted.map((so, i) => {
+      const raw = labelStr(so.metric) || `series ${i + 1}`;
+      return raw.length > 60 ? `${raw.slice(0, 57)}…#${i + 1}` : raw;
+    });
+    const byT = new Map<string, Record<string, unknown>>();
+    charted.forEach((so, i) => {
+      const values = Array.isArray(so.values) ? (so.values as unknown[][]) : [];
+      for (const pnt of values) {
+        const t = new Date(num(pnt[0]) * 1000).toISOString().slice(5, 16).replace('T', ' ');
+        const row = byT.get(t) ?? { t };
+        row[keys[i]] = num(pnt[1]);
+        byT.set(t, row);
+      }
+    });
+    const series = [...byT.values()].sort((a, b) => String(a.t).localeCompare(String(b.t)));
     const rows = result.map((s) => {
       const so = s as Record<string, unknown>;
       const pts = Array.isArray(so.values) ? (so.values as unknown[]).length : 0;
       return { metric: labelStr(so.metric), points: pts };
     });
     if (!series.length) return { shape: 'empty', truncated, note: '시계열 포인트 없음' };
-    return { shape: 'series', series, seriesXKey: 't', seriesYKey: 'value', rows, columns: cols(['metric', 'points']), truncated };
+    return {
+      shape: 'series', series, seriesXKey: 't', seriesKeys: keys,
+      rows, columns: cols(['metric', 'points']), truncated,
+      note: result.length > MAX_SERIES ? `상위 ${MAX_SERIES}개 시리즈만 차트에 표시 (총 ${result.length})` : undefined,
+    };
   }
   // vector (instant)
   const rows = result.map((e) => {

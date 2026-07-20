@@ -32,7 +32,8 @@ describe('GET /api/security', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.enabled).toBe(true);
-    expect(body.summary).toEqual({ public_s3: 1, open_sg: 1, unencrypted_ebs: 0, iam_no_mfa: 1 });
+    expect(body.summary).toEqual({ public_s3: 1, open_sg: 1, unencrypted_ebs: 0,
+      ecr_cve: 0, iam_no_mfa: 1 });
     expect(body.findings.public_s3[0]).toMatchObject({ check: 'public_s3', resource_id: 'b1', severity: 'high' });
   });
   it('500 on db error', async () => {

@@ -99,6 +99,14 @@ resource "aws_iam_role_policy" "task_metrics" {
         "cloudwatch:ListMetrics",
         "pricing:GetProducts",
         "pricing:DescribeServices",
+        # MSK detail panel: bootstrap broker connection strings (read-only)
+        "kafka:GetBootstrapBrokers",
+        # CloudTrail recent-events tab (read-only audit lookup)
+        "cloudtrail:LookupEvents",
+        # /security container-CVE tab: ECR image scan findings (read-only)
+        "ecr:DescribeRepositories",
+        "ecr:DescribeImages",
+        "ecr:DescribeImageScanFindings",
       ]
       Resource = "*"
     }]
@@ -220,11 +228,13 @@ resource "aws_iam_role_policy" "task_incident_ssm" {
         Resource = ["arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/ops/${var.project}/incident/*"]
       },
       {
-        # Synchronous read-only Triage consult against the project's AgentCore runtimes.
+        # Synchronous read-only Triage consult against the project's AgentCore runtime. Scoped to
+        # the provisioner's fixed runtime name (local.agent_runtime_name) + its generated suffix —
+        # NOT var.project, which yields a non-matching ARN (hyphens + wrong prefix).
         Sid      = "InvokeAgentRuntime"
         Effect   = "Allow"
         Action   = ["bedrock-agentcore:InvokeAgentRuntime"]
-        Resource = "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${var.project}*"
+        Resource = "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:runtime/${local.agent_runtime_name}-*"
       }
     ]
   })
@@ -277,6 +287,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "COGNITO_DOMAIN", value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
         { name = "APP_DOMAIN", value = var.domain_name },
         { name = "SSM_RUNTIME_ARN_PARAM", value = "/ops/${var.project}/agentcore/runtime_arn" },
+        # v1-parity Code Interpreter chat route: the BFF reads the provisioned interpreter id from
+        # SSM (fail-open — absent/pending ⇒ the code route no-ops and normal routing runs).
+        { name = "SSM_INTERPRETER_ID_PARAM", value = "/ops/${var.project}/agentcore/interpreter_id" },
         { name = "INTEGRATIONS_SECRET_NAME", value = "ops/${var.project}/integrations/credentials" },
         { name = "PROJECT", value = var.project }, # connector-invoke builds ${PROJECT}-agent-<slug>-mcp; must match the IAM resource
 
@@ -384,40 +397,40 @@ resource "aws_ecs_task_definition" "web" {
   ])
 }
 
-# CloudFront provisions VPC Origin ENIs into a managed SG ("CloudFront-VPCOrigins-Service-SG").
-# The ALB allows ONLY that SG on 443 (review #3: dropped the broad VPC-CIDR rule).
-data "aws_security_group" "cf_vpc_origin" {
-  filter {
-    name   = "group-name"
-    values = ["CloudFront-VPCOrigins-Service-SG"]
-  }
-  filter {
-    name   = "vpc-id"
-    values = [local.vpc_id]
-  }
+# CloudFront's origin-facing edge IP ranges as an AWS-managed prefix list. This
+# ALWAYS exists (it is not tied to VPC Origin), so the internet-facing ALB can
+# admit CloudFront from the first apply — no bootstrap ordering problem.
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
 resource "aws_security_group" "alb" {
-  name = "${var.project}-alb-sg"
-  # description kept verbatim to match the existing SG (AWS SG description is
-  # immutable → changing it forces a replace that DependencyViolation-hangs on the
-  # attached ALB). The actual hardening (drop the broad VPC-CIDR :443 ingress) is an
-  # in-place rule change below. See comment above re: CloudFront VPC Origin SG only.
-  description = "Internal ALB - reachable from within the VPC (CloudFront VPC Origin ENIs)"
+  # name_prefix + create_before_destroy: this SG is referenced inline by the
+  # service SG, so a name-collision on replace would otherwise deadlock (can't
+  # delete the old one while it's referenced, can't create a same-named new one).
+  # CBD stands up the new SG first, lets the service SG re-point, then removes old.
+  name_prefix = "${var.project}-alb-"
+  description = "Internet-facing ALB - CloudFront origin-facing prefix list only"
   vpc_id      = local.vpc_id
 
+  # http-only origin: CloudFront connects to the ALB on port 80 (viewer traffic
+  # is still HTTPS at the edge). Source restricted to CloudFront edge ranges.
   ingress {
-    description     = "HTTPS from CloudFront VPC Origin managed SG"
-    from_port       = 443
-    to_port         = 443
+    description     = "HTTP from CloudFront edge (origin-facing managed prefix list)"
+    from_port       = 80
+    to_port         = 80
     protocol        = "tcp"
-    security_groups = [data.aws_security_group.cf_vpc_origin.id]
+    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
   }
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
@@ -442,26 +455,32 @@ resource "aws_security_group" "service" {
   }
 }
 
-resource "aws_acm_certificate" "alb" {
-  domain_name       = var.domain_name
-  validation_method = "DNS"
-  lifecycle {
-    create_before_destroy = true
-  }
+# No ALB ACM cert: CloudFront reaches the ALB over HTTP (http-only origin), so
+# the ALB does not terminate TLS. Viewer↔CloudFront is still HTTPS. Removing it
+# also drops the ap-northeast-2 cert, leaving only the CloudFront (us-east-1)
+# cert to DNS-validate.
+
+# Secret shared between CloudFront (sent as X-Origin-Verify) and the ALB listener.
+resource "random_password" "origin_verify" {
+  length  = 40
+  special = false
 }
 
-resource "aws_acm_certificate_validation" "alb" {
-  certificate_arn         = aws_acm_certificate.alb.arn
-  validation_record_fqdns = [for r in aws_route53_record.cf_validation : r.fqdn]
-}
-
-resource "aws_lb" "internal" {
+# Internet-facing, but the SG admits only CloudFront's origin-facing prefix list
+# and the listener requires a secret origin header — so it is reachable in
+# practice only through this distribution.
+resource "aws_lb" "spine" {
   name               = "${var.project}-alb"
-  internal           = true
+  internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  subnets            = local.private_subnet_ids
+  subnets            = local.public_subnet_ids
   idle_timeout       = 120
+}
+
+moved {
+  from = aws_lb.internal
+  to   = aws_lb.spine
 }
 
 resource "aws_lb_target_group" "web" {
@@ -482,15 +501,35 @@ resource "aws_lb_target_group" "web" {
   deregistration_delay = 30
 }
 
-resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.internal.arn
-  port              = 443
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = aws_acm_certificate_validation.alb.certificate_arn
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.spine.arn
+  port              = 80
+  protocol          = "HTTP"
+  # Default: reject anything that did not arrive through our CloudFront (no/other
+  # X-Origin-Verify). The prefix-list SG admits ALL CloudFront distributions, so
+  # this secret header is what pins traffic to THIS distribution.
   default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Direct access not allowed"
+      status_code  = "403"
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "cf_only" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 1
+  action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.web.arn
+  }
+  condition {
+    http_header {
+      http_header_name = "X-Origin-Verify"
+      values           = [random_password.origin_verify.result]
+    }
   }
 }
 
@@ -524,7 +563,7 @@ resource "aws_ecs_service" "web" {
   enable_ecs_managed_tags = true
   propagate_tags          = "SERVICE"
 
-  depends_on = [aws_lb_listener.https]
+  depends_on = [aws_lb_listener.http]
 }
 
 # Only the target group rename needs a moved block (its name "${var.project}-tg" is

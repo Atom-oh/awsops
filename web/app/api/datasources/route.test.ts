@@ -40,9 +40,17 @@ describe('GET /api/datasources (list instances)', () => {
     expect(resp.status).toBe(200);
     const { datasources } = await resp.json();
     expect(datasources).toHaveLength(2);
-    expect(datasources[0]).toEqual({ id: 1, name: 'prod-prom', kind: 'prometheus', authType: 'none', isDefault: true, connected: true });
+    // admin (default mock): the registered URL is included (v1 parity for managers)
+    expect(datasources[0]).toEqual({ id: 1, name: 'prod-prom', kind: 'prometheus', endpoint: 'http://p', authType: 'none', isDefault: true, connected: true });
     expect(datasources[1].connected).toBe(true); // id '2' has a credential
-    expect(JSON.stringify(datasources)).not.toContain('endpoint'); // never leak connection detail beyond the shape
+  });
+
+  it('omits endpoint (connection detail) for non-admin readers', async () => {
+    isAdmin.mockResolvedValue(false);
+    const { GET } = await import('./route');
+    const resp = await GET(get());
+    const { datasources } = await resp.json();
+    expect(JSON.stringify(datasources)).not.toContain('endpoint'); // never leak connection detail to read-only users
   });
   it('degrades to [] (200) when the data layer throws', async () => {
     listDatasources.mockRejectedValue(new Error('aurora down'));

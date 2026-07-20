@@ -15,7 +15,9 @@ const KINDS: Record<string, KindStyle> = {
   loki: { Icon: ScrollText, color: '#D9A406', title: 'Loki' },
   tempo: { Icon: Waypoints, color: '#7C3AED', title: 'Tempo' },
   mimir: { Icon: LineChart, color: '#4F46E5', title: 'Mimir' },
-  notion: { Icon: NotebookPen, color: '#0F172A', title: 'Notion' },
+  // near-black brand mark: themed via CSS var (light #0F172A / dark light-gray) so the icon
+  // stays visible on dark surfaces; the non-hex var makes tint() fall back to the neutral tile.
+  notion: { Icon: NotebookPen, color: 'var(--integration-notion)', title: 'Notion' },
 };
 
 const FALLBACK: KindStyle = { Icon: Plug, color: '#64748b', title: 'Integration' };

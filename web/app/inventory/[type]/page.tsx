@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
-import { Search } from 'lucide-react';
+import { Search, Package, Activity } from 'lucide-react';
 import DataTable from '@/components/ui/DataTable';
 import DetailPanel from '@/components/ui/DetailPanel';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -10,9 +10,14 @@ import StatTile from '@/components/ui/StatTile';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Input from '@/components/ui/Input';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import BarDistribution from '@/components/charts/BarDistribution';
 import RiskHero from '@/components/inventory/RiskHero';
+import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
+import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
+import { useI18n } from '@/components/shell/LanguageProvider';
+import { deriveRow } from '@/lib/inventory-derived';
 
 type Row = Record<string, unknown>;
 
@@ -42,6 +47,7 @@ function countBy(rows: Row[], key: string): { name: string; value: number }[] {
 }
 
 export default function InventoryTypePage() {
+  const { tt } = useI18n();
   const params = useParams();
   const type = String(params.type);
   const spec = INVENTORY_TYPES[type];
@@ -52,6 +58,8 @@ export default function InventoryTypePage() {
   const [err, setErr] = useState('');
   const [query, setQuery] = useState('');
   const [stateFilter, setStateFilter] = useState('전체');
+  // v1-parity facet filters (spec.filterKeys): key → selected value ('전체' = no filter).
+  const [facets, setFacets] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Row | null>(null);
   // Supplementary metric KPI cards (e.g. EC2 avg CPU + hourly cost). Degrade silently to [].
   const [metricCards, setMetricCards] = useState<{ label: string; value: string | number; accent?: boolean }[]>([]);
@@ -59,12 +67,11 @@ export default function InventoryTypePage() {
 
   const load = useCallback(async () => {
     try {
-      // scopeParams also serializes `accounts`, which this route ignores (account filtering is
-      // out of scope for this pass) — harmless to send.
       const r = await fetch(`/api/inventory/${type}?limit=${ROW_LIMIT}&${scopeParams(scope)}`);
+      if (r.status === 403) throw new Error((await r.json().catch(() => null))?.message ?? '접근 권한이 없습니다');
       if (!r.ok) throw new Error(String(r.status));
       const d = await r.json();
-      setRows((d.rows as Row[]).map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data as object) })));
+      setRows((d.rows as Row[]).map((x) => deriveRow(type, { resource_id: x.resource_id, region: x.region, ...(x.data as object) })));
       setCaptured(d.run?.finished_at ?? null);
     } catch (e) { setErr(String(e)); }
   }, [type, scope]);
@@ -109,14 +116,33 @@ export default function InventoryTypePage() {
   );
 
   // Distribution donut — top 6 + 기타, from the FULL row set.
-  const distData = useMemo(() => {
-    if (!spec?.distKey) return [];
-    const counts = countBy(allRows, spec.distKey);
+  const top6 = (counts: { name: string; value: number }[]) => {
     if (counts.length <= 6) return counts;
     const head = counts.slice(0, 6);
     const rest = counts.slice(6).reduce((acc, c) => acc + c.value, 0);
-    return rest > 0 ? [...head, { name: '기타', value: rest }] : head;
-  }, [allRows, spec?.distKey]);
+    return rest > 0 ? [...head, { name: tt('기타'), value: rest }] : head;
+  };
+  const distData = useMemo(
+    () => (spec?.distKey ? top6(countBy(allRows, spec.distKey)) : []),
+    [allRows, spec?.distKey],
+  );
+  const distData2 = useMemo(
+    () => (spec?.distKey2 ? top6(countBy(allRows, spec.distKey2)) : []),
+    [allRows, spec?.distKey2],
+  );
+
+  // Reset transient filters when switching resource type (a stale facet key would filter to zero).
+  useEffect(() => { setFacets({}); setStateFilter('전체'); setQuery(''); }, [type]);
+
+  // v1-parity facet options: each configured filterKey → its distinct values with live counts.
+  const facetSpecs = useMemo(() => {
+    const keys = spec?.filterKeys ?? [];
+    return keys.map((key) => ({
+      key,
+      label: spec?.columns.find((c) => c.key === key)?.label ?? key,
+      options: countBy(allRows, key),
+    }));
+  }, [spec, allRows]);
 
   // Filters narrow ONLY the displayed table rows.
   const filteredRows = useMemo(() => {
@@ -128,12 +154,20 @@ export default function InventoryTypePage() {
         return name === stateFilter;
       });
     }
+    for (const [key, val] of Object.entries(facets)) {
+      if (!val || val === '전체') continue;
+      out = out.filter((r) => {
+        const v = r[key];
+        const name = v == null || v === '' ? '(none)' : String(v);
+        return name === val;
+      });
+    }
     const q = query.trim().toLowerCase();
     if (q) {
       out = out.filter((r) => Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q)));
     }
     return out;
-  }, [allRows, spec?.stateKey, stateFilter, query]);
+  }, [allRows, spec?.stateKey, stateFilter, facets, query]);
 
   if (!spec) {
     return (
@@ -146,7 +180,13 @@ export default function InventoryTypePage() {
     );
   }
 
-  const columns = [{ key: 'resource_id', label: 'ID' }, { key: 'region', label: 'Region' }, ...spec.columns];
+  const multiAccount = scope.accounts === '__all__' || (Array.isArray(scope.accounts) && scope.accounts.length > 1);
+  const columns = [
+    { key: 'resource_id', label: 'ID' },
+    ...(multiAccount ? [{ key: 'account_id', label: 'Account' }] : []),
+    { key: 'region', label: 'Region' },
+    ...spec.columns,
+  ];
   const colLabel = (key?: string) =>
     (key && spec.columns.find((c) => c.key === key)?.label) || key || '';
   const distLabel = colLabel(spec.distKey);
@@ -154,21 +194,65 @@ export default function InventoryTypePage() {
   const arch = layoutOf(type);
 
   // Composable section blocks — arranged per archetype in the render below.
+  // v1-parity: a lucide icon in each KPI tile's translucent top-right box (the "총 N" tile gets
+  // the resource-type icon; state tiles get a health icon by variant) — v1 StatsCard style.
+  const TypeIcon = TYPE_ICON[type] ?? GROUP_ICON[spec.group] ?? Package;
+  // Label-semantic glyph per card (a bare variant Circle on default cards read as "no icon").
+  const cardIcon = (label: string, v: 'default' | 'accent' | 'danger' | 'warn') => {
+    const I = highlightIcon(label, v);
+    return <I size={16} />;
+  };
   const kpiRow = (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" />
+      <StatTile label={`총 ${spec.label}`} value={allRows.length} variant="accent" icon={<TypeIcon size={16} />} />
       {highlightCards.length > 0
-        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} />)
-        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} />)}
-      {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />)}
+        ? highlightCards.map((h) => <StatTile key={h.label} label={h.label} value={h.value} variant={h.variant} icon={cardIcon(h.label, h.variant)} />)
+        : stateCounts.slice(0, 4).map((s) => <StatTile key={s.name} label={s.name} value={s.value} variant={stateVariant(s.name)} icon={cardIcon(s.name, stateVariant(s.name))} />)}
+      {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}
     </div>
   );
   const donut = spec.distKey && distData.length > 0
     ? <DonutBreakdown title={`${distLabel} 분포`} data={distData} nameKey="name" valueKey="value" />
     : null;
+  const donut2 = spec.distKey2 && spec.distKey2 !== spec.distKey && distData2.length > 0
+    ? <DonutBreakdown title={`${colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" />
+    : null;
+  // Optional Top-N numeric bar (spec.barKey): rows ranked by the column, labelled by name/id.
+  const barData = spec.barKey
+    ? [...allRows]
+        .map((r) => ({
+          label: String(r.name ?? r.task_short ?? r.resource_id ?? ''),
+          value: Number(r[spec.barKey!.col]) || 0,
+        }))
+        .filter((x) => x.label && x.value > 0)
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10)
+    : [];
+  const barChart = spec.barKey && barData.length > 0
+    ? <BarDistribution title={`Top ${barData.length} — ${spec.barKey.label}`} data={barData} xKey="label" yKey="value" />
+    : null;
+  // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.
+  const graphBand = donut && donut2
+    ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{donut}{donut2}</div>
+    : donut;
+  const facetsActive = Object.values(facets).some((v) => v && v !== '전체');
+  const anyFilterActive = query.trim() !== '' || stateFilter !== '전체' || facetsActive;
+  const clearAll = () => { setQuery(''); setStateFilter('전체'); setFacets({}); };
   const tableBlock = (
     <div className="flex flex-col gap-3">
-      <Filters query={query} onQuery={setQuery} stateOptions={spec.stateKey ? stateOptions : undefined} stateFilter={stateFilter} onState={setStateFilter} />
+      <Filters
+        query={query}
+        onQuery={setQuery}
+        stateOptions={spec.stateKey ? stateOptions : undefined}
+        stateFilter={stateFilter}
+        onState={setStateFilter}
+        facetSpecs={facetSpecs}
+        facets={facets}
+        onFacet={(key, val) => setFacets((prev) => ({ ...prev, [key]: val }))}
+        shownCount={filteredRows.length}
+        totalCount={allRows.length}
+        onClear={anyFilterActive ? clearAll : undefined}
+      />
       <DataTable columns={columns} rows={filteredRows} onRowClick={setSelected} />
     </div>
   );
@@ -186,42 +270,25 @@ export default function InventoryTypePage() {
 
         {rows && (
           <>
+            {/* Uniform page order (owner 지시): KPI band → distribution graph → detail table.
+                Risk types keep their verdict hero as the KPI band; everything else uses kpiRow. */}
             {arch === 'risk' ? (
-              /* Security posture: verdict hero → table → compact donut. */
               <>
                 <RiskHero label={spec.label} total={allRows.length} cards={highlightCards} capped={allRows.length >= ROW_LIMIT} />
                 {metricCards.length > 0 && (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                    {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" />)}
+                    {metricCards.map((c) => <StatTile key={c.label} label={c.label} value={c.value} variant="accent" icon={<Activity size={16} />} />)}
                   </div>
                 )}
-                {tableBlock}
-                {donut && <div className="lg:max-w-md">{donut}</div>}
-              </>
-            ) : arch === 'chart' && donut ? (
-              /* Utilization/state: KPIs → prominent full-width distribution → table. */
-              <>
-                {kpiRow}
-                {donut}
-                {tableBlock}
-              </>
-            ) : arch === 'capacity' && donut ? (
-              /* Engine/type/size: KPIs → donut beside the table. */
-              <>
-                {kpiRow}
-                <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-6 items-start">
-                  {donut}
-                  {tableBlock}
-                </div>
               </>
             ) : (
-              /* directory (+ any archetype without a distribution): scan-first. */
-              <>
-                {kpiRow}
-                {tableBlock}
-                {donut && <div className="lg:max-w-sm">{donut}</div>}
-              </>
+              kpiRow
             )}
+            {graphBand}
+            {barChart}
+            {/* Type-specific live sections (v1 parity): CloudTrail recent-events audit view. */}
+            {type === 'cloudtrail' && <CloudTrailEvents />}
+            {tableBlock}
           </>
         )}
       </div>
@@ -236,34 +303,76 @@ export default function InventoryTypePage() {
   );
 }
 
-// Search + (optional) state SegmentedControl — narrow the table only.
+interface FacetSpec { key: string; label: string; options: { name: string; value: number }[] }
+
+// v1-parity filter bar: search + state SegmentedControl + per-facet dropdowns (with live counts) +
+// a "N / M" shown count + "전체 해제". Narrows the table only.
 function Filters({
   query,
   onQuery,
   stateOptions,
   stateFilter,
   onState,
+  facetSpecs,
+  facets,
+  onFacet,
+  shownCount,
+  totalCount,
+  onClear,
 }: {
   query: string;
   onQuery: (v: string) => void;
   stateOptions?: string[];
   stateFilter: string;
   onState: (v: string) => void;
+  facetSpecs: FacetSpec[];
+  facets: Record<string, string>;
+  onFacet: (key: string, val: string) => void;
+  shownCount: number;
+  totalCount: number;
+  onClear?: () => void;
 }) {
+  const { tt } = useI18n();
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="w-full max-w-[280px]">
-        <Input
-          inputSize="sm"
-          placeholder="검색…"
-          value={query}
-          onChange={(e) => onQuery(e.target.value)}
-          icon={<Search className="h-3.5 w-3.5" />}
-        />
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="w-full max-w-[280px]">
+          <Input
+            inputSize="sm"
+            placeholder={tt('검색…')}
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            icon={<Search className="h-3.5 w-3.5" />}
+          />
+        </div>
+        {stateOptions && stateOptions.length > 1 && (
+          <div className="overflow-x-auto">
+            <SegmentedControl options={stateOptions} value={stateFilter} onChange={onState} />
+          </div>
+        )}
       </div>
-      {stateOptions && stateOptions.length > 1 && (
-        <div className="overflow-x-auto">
-          <SegmentedControl options={stateOptions} value={stateFilter} onChange={onState} />
+      {(facetSpecs.length > 0 || onClear) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {facetSpecs.map((f) => (
+            <select
+              key={f.key}
+              aria-label={`${f.label} 필터`}
+              value={facets[f.key] ?? '전체'}
+              onChange={(e) => onFacet(f.key, e.target.value)}
+              className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700"
+            >
+              <option value="전체">{f.label}: {tt('전체')}</option>
+              {f.options.map((o) => (
+                <option key={o.name} value={o.name}>{o.name} ({o.value})</option>
+              ))}
+            </select>
+          ))}
+          {onClear && (
+            <button onClick={onClear} className="text-[12px] text-ink-400 hover:text-ink-800">{tt('전체 해제')}</button>
+          )}
+          <span className="ml-auto tabular-nums text-[12px] text-ink-400">
+            {shownCount.toLocaleString()} / {totalCount.toLocaleString()}
+          </span>
         </div>
       )}
     </div>

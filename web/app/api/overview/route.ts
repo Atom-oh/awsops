@@ -16,11 +16,15 @@ export async function GET(request: Request) {
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
+  // Account scope (single account or host; '__all__' stays host — the dashboard fans out cost
+  // itself when needed). jobs/compliance are app-level (Aurora) — account-agnostic by design.
+  const accountParam = new URL(request.url).searchParams.get('account') || undefined;
+  const account = accountParam === '__all__' ? undefined : accountParam;
   // clusters + cost — degrade independently (a CE/EKS hiccup shouldn't blank the whole page)
   let clusterCount: number | null = null;
-  try { clusterCount = (await listClusters()).length; } catch { clusterCount = null; }
+  try { clusterCount = (await listClusters(account)).length; } catch { clusterCount = null; }
   let mtdCost: number | null = null;
-  try { mtdCost = (await getMtdCost()).total; } catch { mtdCost = null; }
+  try { mtdCost = (await getMtdCost(account)).total; } catch { mtdCost = null; }
   // latest *succeeded* CIS run, for the dashboard compliance tile — a newer failed run is
   // deliberately skipped (the tile shows the last known-good pass rate, not run health).
   // Degrades to null, same pattern as clusterCount/mtdCost above.

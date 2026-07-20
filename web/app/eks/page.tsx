@@ -1,11 +1,13 @@
 'use client';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Container, CheckCircle2, Server, Boxes, Layers, Network } from 'lucide-react';
 import Link from 'next/link';
 import DataTable from '@/components/ui/DataTable';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
 import Badge from '@/components/ui/Badge';
 import StatCard from '@/components/ui/StatCard';
+import { useActiveAccount, accountParam } from '@/lib/account-context';
 import Card from '@/components/ui/Card';
 import Meter from '@/components/ui/Meter';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
@@ -20,6 +22,7 @@ interface Cluster {
   name: string; status?: string; version?: string; region?: string;
   vpcId?: string; platformVersion?: string;
   access: 'connected' | 'entry-only' | 'no-entry' | 'unknown';
+  authMode?: 'sa-token' | 'assume-role';
   runtime?: boolean;
   guide?: Guide;
 }
@@ -51,11 +54,18 @@ interface FleetCluster {
 const fmtMib = (mib: number): string => (mib >= 1024 ? `${(mib / 1024).toFixed(1)}G` : `${Math.round(mib)}M`);
 
 export default function EksPage() {
+  const [activeAccount] = useActiveAccount();
   const [rows, setRows] = useState<Cluster[] | null>(null);
   const [admin, setAdmin] = useState(false);
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
   const [guide, setGuide] = useState<{ cluster: string; data: Guide } | null>(null);
+  // Aurora-stored auth form (v1 kubeconfig 등록 parity): per-cluster SA token or AssumeRole.
+  const [authFor, setAuthFor] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<'sa-token' | 'assume-role'>('sa-token');
+  const [authToken, setAuthToken] = useState('');
+  const [authRole, setAuthRole] = useState('');
+  const [authExtId, setAuthExtId] = useState('');
   const [busyCluster, setBusyCluster] = useState('');
   const [fleet, setFleet] = useState<FleetCluster[]>([]);
   const [copied, setCopied] = useState('');
@@ -63,11 +73,11 @@ export default function EksPage() {
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    fetch('/api/eks')
+    fetch(`/api/eks?${accountParam(activeAccount) || 'account=self'}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { setRows(d.clusters); setAdmin(!!d.admin); })
       .catch((e) => setErr(String(e)));
-  }, []);
+  }, [activeAccount]);
   // Monotonic fleet sequence — register/unregister re-fetches must not be
   // overwritten by an older in-flight response (P4 gate: codex). Failures keep
   // the previous fleet (best-effort live data beats a blank page).
@@ -88,7 +98,7 @@ export default function EksPage() {
     setBusy(true);
     try {
       await Promise.allSettled([
-        fetch('/api/eks')
+        fetch(`/api/eks?${accountParam(activeAccount) || 'account=self'}`)
           .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
           .then((d) => { setRows(d.clusters); setAdmin(!!d.admin); setErr(''); })
           .catch((e) => setErr(String(e))),
@@ -118,6 +128,29 @@ export default function EksPage() {
       else setNotice(`등록 실패 (${res.status})`);
     } catch { setNotice('등록 요청 실패'); }
     setBusyCluster('');
+  }
+
+  async function saveAuth(cluster: string) {
+    setBusyCluster(cluster); setNotice('');
+    const auth = authMode === 'sa-token'
+      ? { mode: 'sa-token', token: authToken.trim() }
+      : { mode: 'assume-role', roleArn: authRole.trim(), ...(authExtId.trim() ? { externalId: authExtId.trim() } : {}) };
+    try {
+      const res = await fetch(`/api/eks/${encodeURIComponent(cluster)}/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ auth }),
+      });
+      if (res.status === 200) {
+        setNotice(`${cluster} 인증 저장 완료 — 바로 조회할 수 있습니다.`);
+        setAuthFor(null); setAuthToken(''); setAuthRole(''); setAuthExtId('');
+        load(); loadFleet();
+      } else {
+        const d = await res.json().catch(() => null);
+        setNotice(`인증 저장 실패 (${res.status}${d?.message ? `: ${d.message}` : ''})`);
+      }
+    } catch { setNotice('인증 저장 요청 실패'); }
+    finally { setBusyCluster(''); }
   }
 
   async function unregister(cluster: string) {
@@ -203,12 +236,12 @@ export default function EksPage() {
       />
       <div className="px-8 py-8 flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-        <StatCard label="Clusters" value={(rows ?? []).length} />
-        <StatCard label="Connected" value={connected} />
-        <StatCard label="Nodes" value={totals.nodes} trend={`${totals.nodesReady} ready`} />
-        <StatCard label="Pods" value={totals.pods} trend={`${totals.podsRunning} running`} />
-        <StatCard label="Deployments" value={totals.deployments} />
-        <StatCard label="Services" value={totals.services} />
+        <StatCard label="Clusters" value={(rows ?? []).length} icon={<Container size={16} />} />
+        <StatCard label="Connected" value={connected} icon={<CheckCircle2 size={16} />} />
+        <StatCard label="Nodes" value={totals.nodes} trend={`${totals.nodesReady} ready`} icon={<Server size={16} />} />
+        <StatCard label="Pods" value={totals.pods} trend={`${totals.podsRunning} running`} icon={<Boxes size={16} />} />
+        <StatCard label="Deployments" value={totals.deployments} icon={<Layers size={16} />} />
+        <StatCard label="Services" value={totals.services} icon={<Network size={16} />} />
       </div>
 
       {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
@@ -277,7 +310,7 @@ export default function EksPage() {
                 {(
                   (admin && (c.access === 'entry-only' || c.access === 'unknown')) ||
                   (c.access !== 'connected' && c.guide) ||
-                  (admin && c.runtime)
+                  admin
                 ) && (
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     {admin && (c.access === 'entry-only' || c.access === 'unknown') && (
@@ -286,9 +319,65 @@ export default function EksPage() {
                     {c.access !== 'connected' && c.guide && (
                       <button className={btn} onClick={() => setGuide({ cluster: c.name, data: c.guide! })}>스크립트</button>
                     )}
+                    {admin && (
+                      <button className={btn} onClick={() => { setAuthFor(authFor === c.name ? null : c.name); setAuthMode('sa-token'); }}>
+                        {c.authMode ? `인증 변경 (${c.authMode})` : '인증 등록'}
+                      </button>
+                    )}
                     {admin && c.runtime && (
                       <button className={btn} disabled={busyCluster === c.name} onClick={() => unregister(c.name)}>해제</button>
                     )}
+                  </div>
+                )}
+                {admin && authFor === c.name && (
+                  <div className="mt-3 rounded-lg border border-ink-100 bg-paper-muted/60 p-3 text-[12px]">
+                    <p className="mb-2 text-ink-600">
+                      클러스터 인증을 Aurora에 저장합니다 — Access Entry 없이 조회할 수 있습니다 (v1 kubeconfig 등록 대응).
+                    </p>
+                    <div className="mb-2 flex items-center gap-3">
+                      <label className="flex items-center gap-1.5">
+                        <input type="radio" checked={authMode === 'sa-token'} onChange={() => setAuthMode('sa-token')} />
+                        ServiceAccount 토큰
+                      </label>
+                      <label className="flex items-center gap-1.5">
+                        <input type="radio" checked={authMode === 'assume-role'} onChange={() => setAuthMode('assume-role')} />
+                        AssumeRole (Role ARN)
+                      </label>
+                    </div>
+                    {authMode === 'sa-token' ? (
+                      <textarea
+                        value={authToken}
+                        onChange={(e) => setAuthToken(e.target.value)}
+                        placeholder="kubectl create token <sa> --duration=8760h 결과 또는 SA Secret의 token"
+                        rows={3}
+                        className="w-full rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[11px]"
+                      />
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        <input
+                          value={authRole}
+                          onChange={(e) => setAuthRole(e.target.value)}
+                          placeholder="arn:aws:iam::123456789012:role/eks-read (클러스터에 Access Entry 보유)"
+                          className="w-full rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[11px]"
+                        />
+                        <input
+                          value={authExtId}
+                          onChange={(e) => setAuthExtId(e.target.value)}
+                          placeholder="External ID (선택)"
+                          className="w-full rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[11px]"
+                        />
+                      </div>
+                    )}
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        className={btn}
+                        disabled={busyCluster === c.name || (authMode === 'sa-token' ? !authToken.trim() : !authRole.trim())}
+                        onClick={() => saveAuth(c.name)}
+                      >
+                        저장
+                      </button>
+                      <button className={btn} onClick={() => setAuthFor(null)}>취소</button>
+                    </div>
                   </div>
                 )}
               </Card>

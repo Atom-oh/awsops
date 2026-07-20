@@ -195,7 +195,7 @@ def test_deep_sections_catalog():
 def test_generate_resolves_tier_catalog_and_model(monkeypatch):
     # Task 3: tier picks the catalog (mid=9, deep=16) + model (deep may select Opus) + max_tokens.
     monkeypatch.setattr(report.src, "collect_all",
-                        lambda conn: [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
+                        lambda conn, scope="self": [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
     monkeypatch.setattr(report.ddb, "list_active_invariants", lambda conn: [])
     calls = []
     monkeypatch.setattr(report, "_bedrock_render",
@@ -219,7 +219,7 @@ def test_generate_parallel_preserves_order_and_isolates_section_failure(monkeypa
     # failing section MUST degrade in place (loud) WITHOUT sinking the whole report.
     from diagnosis import sections as S
     monkeypatch.setattr(report.src, "collect_all",
-                        lambda conn: [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
+                        lambda conn, scope="self": [{"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {}}])
     monkeypatch.setattr(report.ddb, "list_active_invariants", lambda conn: [])
 
     def fake_render(section, collected, model_id, max_tokens):

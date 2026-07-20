@@ -44,7 +44,7 @@ describe('GET /api/cost/detail', () => {
     const res = await GET(req('http://x/api/cost/detail?service=Amazon%20EC2'));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(getServiceCostDetail).toHaveBeenCalledWith('Amazon EC2');
+    expect(getServiceCostDetail).toHaveBeenCalledWith('Amazon EC2', undefined);
     expect(body.service).toBe('Amazon EC2');
     expect(body.trend[0]).toEqual({ date: '2026-06-01', amount: 4 });
     expect(body.byUsageType[0]).toEqual({ usageType: 'BoxUsage', amount: 12 });

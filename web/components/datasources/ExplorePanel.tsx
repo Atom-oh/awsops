@@ -7,6 +7,8 @@ import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
 import DataTable from '@/components/ui/DataTable';
 import AreaTrend from '@/components/charts/AreaTrend';
+import MultiLineTrend from '@/components/charts/MultiLineTrend';
+import SegmentedControl from '@/components/ui/SegmentedControl';
 import HBarList from '@/components/charts/HBarList';
 import type { NormalizedResult } from '@/lib/datasource-render';
 import { cn } from '@/lib/cn';
@@ -197,6 +199,8 @@ export default function ExplorePanel({ instanceId }: { instanceId?: number }) {
 }
 
 function ResultView({ result, kind }: { result: NormalizedResult; kind?: string }) {
+  // Line/Bar toggle for multi-series range results (v1 parity).
+  const [chartType, setChartType] = useState<'line' | 'bar'>('line');
   // Instant prom/mimir vector (metric/value rows) → a ranked bar above the table. Gated by kind so
   // an arbitrary ClickHouse table with a `value` column doesn't render a spurious bar (panel finding).
   const barRows =
@@ -217,7 +221,27 @@ function ResultView({ result, kind }: { result: NormalizedResult; kind?: string 
         <Card className="p-6 text-center text-[13px] text-ink-400">{result.note || '결과 없음'}</Card>
       )}
       {result.shape === 'series' && result.series && (
-        <AreaTrend title="시계열" data={result.series} xKey={result.seriesXKey || 't'} yKey={result.seriesYKey || 'value'} />
+        result.seriesKeys && result.seriesKeys.length > 0 ? (
+          <MultiLineTrend
+            title={`시계열 (${result.seriesKeys.length}개 시리즈)`}
+            right={
+              <SegmentedControl
+                options={[{ value: 'line', label: 'Line' }, { value: 'bar', label: 'Bar' }]}
+                value={chartType}
+                onChange={(v) => setChartType(v as 'line' | 'bar')}
+              />
+            }
+            data={result.series}
+            xKey={result.seriesXKey || 't'}
+            series={result.seriesKeys.map((k) => ({ key: k }))}
+            variant={chartType}
+          />
+        ) : (
+          <AreaTrend title="시계열" data={result.series} xKey={result.seriesXKey || 't'} yKey={result.seriesYKey || 'value'} />
+        )
+      )}
+      {result.shape === 'series' && result.note && (
+        <p className="text-[12px] text-ink-400">{result.note}</p>
       )}
       {result.shape === 'series' && result.rows && result.columns && (
         <DataTable columns={result.columns} rows={result.rows} />

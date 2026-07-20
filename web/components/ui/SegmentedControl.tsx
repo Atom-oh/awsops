@@ -1,5 +1,6 @@
 'use client';
 import { cn } from '@/lib/cn';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 export type SegOption = string | { value: string; label: string };
 
@@ -23,6 +24,7 @@ export default function SegmentedControl({
   onChange?: (value: string) => void;
   className?: string;
 }) {
+  const { tt } = useI18n();
   return (
     <div
       role="tablist"
@@ -44,7 +46,7 @@ export default function SegmentedControl({
               active ? 'bg-brand-500 text-white shadow-sm' : 'text-ink-500 hover:text-ink-800',
             )}
           >
-            {label}
+            {tt(label)}
           </button>
         );
       })}

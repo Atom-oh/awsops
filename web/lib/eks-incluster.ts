@@ -19,9 +19,51 @@ const K8S_REQUEST_TIMEOUT_MS = 4000;
  * `x-k8s-aws-id: <cluster>` header SIGNED, then `k8s-aws-v1.` + base64url(url).
  * The web task role's P1e Access Entry + AmazonEKSAdminViewPolicy authorize the read.
  */
+// Cached AssumeRole creds per roleArn (50-min TTL vs 1h default session).
+const assumeCache = new Map<string, { creds: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }; at: number }>();
+const ASSUME_TTL_MS = 50 * 60 * 1000;
+
+async function assumeRoleCreds(roleArn: string, externalId?: string) {
+  const hit = assumeCache.get(roleArn);
+  if (hit && Date.now() - hit.at < ASSUME_TTL_MS) return hit.creds;
+  const { STSClient, AssumeRoleCommand } = await import('@aws-sdk/client-sts');
+  const sts = new STSClient({ region: REGION });
+  const r = await sts.send(new AssumeRoleCommand({
+    RoleArn: roleArn, RoleSessionName: 'awsops-eks-read', DurationSeconds: 3600,
+    ...(externalId ? { ExternalId: externalId } : {}),
+  }));
+  const c = r.Credentials;
+  if (!c?.AccessKeyId || !c.SecretAccessKey) throw new Error('AssumeRole returned no credentials');
+  const creds = { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken };
+  assumeCache.set(roleArn, { creds, at: Date.now() });
+  return creds;
+}
+
+/** Bearer token for a cluster. Auth override from Aurora (v1 kubeconfig parity) wins:
+ *  sa-token → stored ServiceAccount bearer as-is; assume-role → presigned STS token minted
+ *  with the assumed role's creds; null → task-role presigned token (Access Entry required). */
 export async function eksToken(cluster: string, region: string): Promise<string> {
+  try {
+    const { getClusterAuth } = await import('./eks-registry');
+    const auth = await getClusterAuth(cluster);
+    if (auth?.mode === 'sa-token') return auth.token;
+    if (auth?.mode === 'assume-role') {
+      const creds = await assumeRoleCreds(auth.roleArn, auth.externalId);
+      return presignEksToken(cluster, region, creds);
+    }
+  } catch (e) {
+    console.warn(`[eks-incluster] auth override failed, task-role fallback: ${e instanceof Error ? e.message : e}`);
+  }
+  return presignEksToken(cluster, region, fromNodeProviderChain());
+}
+
+async function presignEksToken(
+  cluster: string,
+  region: string,
+  credentials: Parameters<typeof SignatureV4.prototype.presign> extends never ? never : ConstructorParameters<typeof SignatureV4>[0]['credentials'],
+): Promise<string> {
   const host = `sts.${region}.amazonaws.com`;
-  const signer = new SignatureV4({ service: 'sts', region, sha256: Sha256, credentials: fromNodeProviderChain() });
+  const signer = new SignatureV4({ service: 'sts', region, sha256: Sha256, credentials });
   const req = new HttpRequest({
     method: 'GET', protocol: 'https:', hostname: host, path: '/',
     query: { Action: 'GetCallerIdentity', Version: '2011-06-15' },
@@ -357,6 +399,13 @@ function k8sGet(endpoint: string, path: string, token: string, caPem: Buffer): P
     r.setTimeout(K8S_REQUEST_TIMEOUT_MS, () => r.destroy(new Error('k8s request timeout')));
     r.end();
   });
+}
+
+/** GET an arbitrary in-cluster API path (e.g. an OpenCost service-proxy URL). Raw body string. */
+export async function k8sGetPath(cluster: string, path: string): Promise<string> {
+  const { endpoint, caPem } = await clusterConn(cluster);
+  const token = await eksToken(cluster, REGION);
+  return k8sGet(endpoint, path, token, caPem);
 }
 
 export async function listInCluster(cluster: string, kind: Kind): Promise<InClusterRow[]> {

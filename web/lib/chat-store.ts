@@ -77,6 +77,32 @@ export async function getThread(userSub: string, threadId: string): Promise<{ th
   };
 }
 
+/** v1-parity history search (v1 src/lib/agentcore-memory.ts searchMemory): find the user's own
+ *  threads whose messages contain the query text. Case-insensitive substring; LIKE wildcards in
+ *  the user input are escaped so they match literally. Returns newest-first with a hit snippet. */
+export async function searchThreads(
+  userSub: string, q: string, limit = 20,
+): Promise<(ThreadSummary & { snippet: string })[]> {
+  if (!on() || !q.trim()) return [];
+  const escaped = q.trim().replace(/([\\%_])/g, '\\$1');
+  const r = await getPool().query(
+    `SELECT DISTINCT ON (t.id) t.id, t.title, t.session_id, t.updated_at,
+            substring(m.content from greatest(1, position(lower($2) in lower(m.content)) - 40) for 120) AS snippet
+     FROM chat_threads t
+     JOIN chat_messages m ON m.thread_id = t.id
+     WHERE t.user_sub = $1 AND m.content ILIKE '%' || $3 || '%'
+     ORDER BY t.id, m.id DESC`,
+    [userSub, q.trim(), escaped],
+  );
+  return r.rows
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+    .slice(0, limit)
+    .map((t) => ({
+      id: t.id, title: t.title, sessionId: t.session_id,
+      updatedAt: new Date(t.updated_at).toISOString(), snippet: (t.snippet ?? '').trim(),
+    }));
+}
+
 export async function deleteThread(userSub: string, threadId: string): Promise<boolean> {
   if (!on()) return false;
   const r = await getPool().query(`DELETE FROM chat_threads WHERE id = $1 AND user_sub = $2`, [threadId, userSub]);

@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { Cell, Pie, PieChart, Tooltip } from 'recharts';
 import Card from '@/components/ui/Card';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import { useChartColors } from '@/lib/use-chart-colors';
 import { tooltipStyles } from './theme';
 
@@ -36,6 +37,7 @@ export default function DonutBreakdown({
   maxSlices = 8,
   className,
 }: DonutBreakdownProps) {
+  const { tt } = useI18n();
   const c = useChartColors();
   const total = data.reduce((s, d) => s + (Number(d[valueKey]) || 0), 0);
   const fmtTotal =
@@ -52,7 +54,7 @@ export default function DonutBreakdown({
     ? sorted.slice(keep).reduce((s, d) => s + (Number(d[valueKey]) || 0), 0)
     : 0;
   const rows: Array<Record<string, unknown>> =
-    etcValue > 0 ? [...shown, { [nameKey]: '기타', [valueKey]: etcValue }] : shown;
+    etcValue > 0 ? [...shown, { [nameKey]: tt('기타'), [valueKey]: etcValue }] : shown;
   const colorFor = (i: number) => (etcValue > 0 && i === rows.length - 1 ? c.etc : c.palette[i % c.palette.length]);
   const pct = (v: unknown) => (total > 0 ? `${((Number(v) / total) * 100).toFixed(1)}%` : '0%');
 
@@ -93,7 +95,7 @@ export default function DonutBreakdown({
             <div className="tabular text-[20px] font-semibold leading-none text-ink-800">
               {fmtTotal}
             </div>
-            <div className="text-[10px] uppercase tracking-[0.04em] text-ink-400 mt-1">합계</div>
+            <div className="text-[10px] uppercase tracking-[0.04em] text-ink-400 mt-1">{tt('합계')}</div>
           </div>
         </div>
         <ul className="min-w-0 flex-1 space-y-1.5">

@@ -34,6 +34,63 @@ export async function getAllowedClusters(): Promise<Set<string>> {
   return set;
 }
 
+// ── Per-cluster auth override (Aurora, v1 kubeconfig-parity) ────────────────
+export type EksAuth =
+  | { mode: 'sa-token'; token: string }
+  | { mode: 'assume-role'; roleArn: string; externalId?: string };
+
+const AUTH_TTL_MS = 30_000;
+const authCache = new Map<string, { auth: EksAuth | null; at: number }>();
+
+/** Stored auth for a cluster (null = default task-role path). 30s cache; DB failure → null. */
+export async function getClusterAuth(cluster: string): Promise<EksAuth | null> {
+  const hit = authCache.get(cluster);
+  if (hit && Date.now() - hit.at < AUTH_TTL_MS) return hit.auth;
+  let auth: EksAuth | null = null;
+  if (dbOn()) {
+    try {
+      const r = await getPool().query(`SELECT auth FROM eks_registrations WHERE cluster_name = $1`, [cluster]);
+      const raw = r.rows[0]?.auth;
+      if (raw && typeof raw === 'object' && (raw.mode === 'sa-token' || raw.mode === 'assume-role')) auth = raw as EksAuth;
+    } catch (e) {
+      console.warn(`[eks-registry] auth read failed (task-role fallback): ${e instanceof Error ? e.message : e}`);
+    }
+  }
+  authCache.set(cluster, { auth, at: Date.now() });
+  return auth;
+}
+
+/** Upsert the row + auth (null clears → task-role default). Admin-gated at the route. */
+export async function setClusterAuth(cluster: string, registeredBy: string, auth: EksAuth | null): Promise<boolean> {
+  if (!dbOn()) return false;
+  try {
+    await getPool().query(
+      `INSERT INTO eks_registrations (cluster_name, registered_by, auth) VALUES ($1, $2, $3)
+       ON CONFLICT (cluster_name) DO UPDATE SET auth = EXCLUDED.auth`,
+      [cluster, registeredBy, auth === null ? null : JSON.stringify(auth)],
+    );
+  } catch (e) {
+    console.warn(`[eks-registry] auth write failed: ${e instanceof Error ? e.message : e}`);
+    return false;
+  }
+  cache = null;
+  authCache.delete(cluster);
+  return true;
+}
+
+/** Auth MODES per cluster for listings (never the token/role values). */
+export async function getAuthModes(): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!dbOn()) return out;
+  try {
+    const r = await getPool().query(`SELECT cluster_name, auth->>'mode' AS mode FROM eks_registrations WHERE auth IS NOT NULL`);
+    for (const row of r.rows) if (row.mode) out.set(row.cluster_name, row.mode);
+  } catch { /* listing degrades to no-modes */ }
+  return out;
+}
+
+export function _resetAuthCacheForTests() { authCache.clear(); }
+
 export async function isAllowed(cluster: string): Promise<boolean> {
   return (await getAllowedClusters()).has(cluster);
 }

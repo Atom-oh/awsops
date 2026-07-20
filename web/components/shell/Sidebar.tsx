@@ -31,10 +31,12 @@ const FIXED: { href: string; tkey: string; icon: LucideIcon }[] = [
   { href: '/jobs', tkey: 'nav.jobs', icon: Activity },
   { href: '/cost', tkey: 'nav.cost', icon: DollarSign },
   { href: '/bedrock', tkey: 'nav.bedrock', icon: Gauge },
+  { href: '/agentcore', tkey: 'nav.agentcore', icon: Cpu },
   { href: '/topology', tkey: 'nav.topology', icon: Network },
   { href: '/security', tkey: 'nav.security', icon: Shield },
   { href: '/compliance', tkey: 'nav.compliance', icon: FileSearch },
   { href: '/integrations', tkey: 'nav.integrations', icon: Cable },
+  { href: '/accounts', tkey: 'nav.accounts', icon: Users },
 ];
 
 // One distinct lucide icon per inventory type (keyed by the registry slug).

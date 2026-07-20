@@ -14,7 +14,8 @@ describe('sections', () => {
     for (const s of SECTIONS) {
       expect(s.label.length).toBeGreaterThan(0);
       expect(s.icon.length).toBeGreaterThan(0);
-      expect(s.color).toMatch(/^#/);
+      // themed per light/dark in globals.css — NOT a raw hex (hex-suffix alpha concat would break)
+      expect(s.color).toMatch(/^var\(--sec-[a-z]+\)$/);
       expect(s.presets.length).toBeGreaterThanOrEqual(3);
     }
   });

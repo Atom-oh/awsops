@@ -30,6 +30,15 @@ export function regionWhereClause(regions: RegionScope, includeGlobal: boolean, 
   return '';
 }
 
+export type AccountScope = '__all__' | string[];
+
+/** WHERE fragment for the account scope. '__all__' → no filter (host 'self' + every member). */
+export function accountWhereClause(accounts: AccountScope, params: unknown[]): string {
+  if (accounts === '__all__') return '';
+  params.push(accounts.length ? accounts : ['self']);
+  return ` AND account_id = ANY($${params.length})`;
+}
+
 export interface ReadResourcesOpts {
   limit: number;
   offset: number;
@@ -37,15 +46,17 @@ export interface ReadResourcesOpts {
   regions?: RegionScope;
   /** Include region='global' rows (IAM, Route53, ...). Default true. */
   includeGlobal?: boolean;
+  /** Account allow-list ('self' = host), or '__all__'. Default ['self'] (legacy behavior). */
+  accounts?: AccountScope;
 }
 
-export async function readResources(type: string, { limit, offset, regions = '__all__', includeGlobal = true }: ReadResourcesOpts): Promise<InventoryPage> {
+export async function readResources(type: string, { limit, offset, regions = '__all__', includeGlobal = true, accounts = ['self'] }: ReadResourcesOpts): Promise<InventoryPage> {
   const pool = getPool();
   const params: unknown[] = [type];
-  const where = `resource_type = $1 AND account_id = 'self'` + regionWhereClause(regions, includeGlobal, params);
+  const where = `resource_type = $1` + accountWhereClause(accounts, params) + regionWhereClause(regions, includeGlobal, params);
   params.push(limit, offset);
   const r = await pool.query(
-    `SELECT resource_id, region, data, captured_at FROM inventory_resources
+    `SELECT resource_id, region, account_id, data, captured_at FROM inventory_resources
      WHERE ${where} ORDER BY captured_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params,
   );

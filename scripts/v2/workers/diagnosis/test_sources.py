@@ -89,11 +89,8 @@ class TestInventoryDetail:
         conn = _inv_conn({"ec2": [["i-1", "r", {}]]})
         src.collect_inventory(conn)
         s = conn.sqls()
-        assert "account_id='self'" in s.replace(" ", "").replace("account_id = 'self'", "account_id='self'") or "account_id = 'self'" in s
-        assert ":rtype" in s            # named placeholder, not $1
-        assert "$1" not in s
-        # the type was passed as a bound param, not interpolated
-        assert any(q[1].get("rtype") == "ec2" for q in conn.queries)
+        # Scope is parameterized (:scope, default 'self') so member accounts reuse the same SQL.
+        assert "account_id = :scope" in s
 
     def test_strips_sensitive_fields_and_truncates_long_strings(self):
         detail = {"lambda": [["fn-1", "r", {

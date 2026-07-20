@@ -1,6 +1,7 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { FINDING_SQL, rowToFinding, CHECK_META, type CheckKey, type Finding } from '@/lib/security-findings';
+import { ecrCveFindings } from '@/lib/ecr-cve';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,10 +28,18 @@ export async function GET(request: Request) {
     const summary = {} as Record<CheckKey, number>;
     const findings = {} as Record<CheckKey, Finding[]>;
     for (const check of CHECKS) {
-      const r = await pool.query<{ resource_id: string; region: string; detail: unknown }>(FINDING_SQL[check]);
+      if (!(check in FINDING_SQL)) continue; // live-SDK checks handled below
+      const r = await pool.query<{ resource_id: string; region: string; detail: unknown }>(FINDING_SQL[check as keyof typeof FINDING_SQL]);
       findings[check] = r.rows.map((row) => rowToFinding(check, row));
       summary[check] = findings[check].length;
     }
+    // Container CVEs: live ECR scan summaries — degrades to an empty tab, never fails the page.
+    try {
+      findings.ecr_cve = await ecrCveFindings();
+    } catch {
+      findings.ecr_cve = [];
+    }
+    summary.ecr_cve = findings.ecr_cve.length;
     return Response.json({ enabled: true, summary, findings });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });

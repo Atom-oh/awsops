@@ -258,7 +258,7 @@ def _diff_summary(current_drift, parent_summary):
     return {"regressions": regressions, "improvements": improvements}
 
 
-def generate(conn, account, tier="mid", report_id=None, on_progress=None, model="sonnet"):
+def generate(conn, account, tier="mid", report_id=None, on_progress=None, model="sonnet", scope="self"):
     """Collect → evaluate active invariants → render each section → markdown + summary.
     Returns (markdown, summary, sources_used). Read-only throughout; the LLM sees verdict-only
     drift, never raw untrusted edge text. `report_id` (optional) enables the parent-report diff.
@@ -277,7 +277,7 @@ def generate(conn, account, tier="mid", report_id=None, on_progress=None, model=
             print(f"progress emit failed (non-fatal): {e}", file=sys.stderr)  # [P4 gemini MINOR] don't fail silently
 
     _emit(0, "데이터 수집", "collect")
-    collected = {r["key"]: r for r in src.collect_all(conn)}
+    collected = {r["key"]: r for r in src.collect_all(conn, scope)}
     sources_used = [k for k, r in collected.items() if r["ok"]]
     degraded = [k for k, r in collected.items() if r["degraded"]]
 

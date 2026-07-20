@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import AwsopsMark from './AwsopsMark';
 import { cn } from '@/lib/cn';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 export type StatTileVariant = 'default' | 'accent' | 'danger' | 'warn';
 
@@ -35,7 +36,19 @@ export interface StatTileProps {
   className?: string;
   /** When set, the tile becomes a navigation link (v1-parity: click a KPI → its page). */
   href?: string;
+  /** v1-parity accent glyph — a small icon (lucide) shown in a rounded translucent box at the
+   *  TOP-RIGHT of the tile (replaces the faint AwsopsMark watermark when provided). */
+  icon?: ReactNode;
 }
+
+// Variant → translucent top-right icon box (v1 StatsCard style: `bg-accent-*/10` + colored icon —
+// the box tint is a 10%-alpha wash of the icon color, so it reads as a transparent icon chip).
+const ICON_BOX: Record<StatTileVariant, string> = {
+  default: 'bg-ink-500/10 text-ink-500',
+  accent: 'bg-brand-500/10 text-brand-600',
+  warn: 'bg-brand-500/10 text-brand-700',
+  danger: 'bg-rose-500/10 text-rose-600',
+};
 
 function trendTone(trend: string): string {
   const t = trend.trim();
@@ -62,14 +75,20 @@ export default function StatTile({
   size = 'default',
   className,
   href,
+  icon,
 }: StatTileProps) {
+  const { tt } = useI18n();
   const compact = size === 'compact';
+  // A full-size tile carrying a glyph chip is a KPI card — informational (default/warn) ones
+  // adopt the accent outline + brand chip so the row reads uniformly; only danger stays rose.
+  const emphasized = !compact && icon != null;
   const border =
-    variant === 'accent'
+    variant === 'accent' || (emphasized && variant !== 'danger')
       ? 'border-brand-200'
       : variant === 'danger'
         ? 'border-rose-200'
         : 'border-ink-100';
+  const chipStyle = emphasized && variant === 'default' ? ICON_BOX.accent : ICON_BOX[variant];
 
   const valueColor =
     variant === 'danger' ? 'text-rose-700' : variant === 'warn' ? 'text-brand-700' : 'text-ink-800';
@@ -84,13 +103,25 @@ export default function StatTile({
         className,
       )}
     >
-      {variant === 'accent' && !compact && (
+      {/* v1-parity: an emoji/icon in a rounded tinted box, top-right. Falls back to the faint
+          AwsopsMark watermark on accent tiles when no icon is supplied. */}
+      {icon != null ? (
+        <div
+          className={cn(
+            'absolute flex items-center justify-center leading-none',
+            compact ? 'top-2.5 right-2.5 h-6 w-6 rounded-md text-[12px]' : 'top-3 right-3 h-8 w-8 rounded-lg text-[15px]',
+            chipStyle,
+          )}
+        >
+          {icon}
+        </div>
+      ) : variant === 'accent' && !compact ? (
         <div className="pointer-events-none absolute -top-1 -right-1 opacity-[0.07]">
           <AwsopsMark size={56} />
         </div>
-      )}
-      <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
-        {eyebrow ?? label}
+      ) : null}
+      <div className={cn('text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400', icon != null && (compact ? 'pr-7' : 'pr-10'))}>
+        {tt(eyebrow ?? label)}
       </div>
       <div
         className={cn(
@@ -113,7 +144,7 @@ export default function StatTile({
               {trend}
             </span>
           )}
-          {hint != null && <span className="text-[11px] text-ink-400 truncate">{hint}</span>}
+          {hint != null && <span className="text-[11px] text-ink-400 truncate">{typeof hint === 'string' ? tt(hint) : hint}</span>}
         </div>
       )}
     </div>
@@ -123,7 +154,7 @@ export default function StatTile({
     return (
       <Link
         href={href}
-        aria-label={`${eyebrow ?? label} 상세 보기`}
+        aria-label={`${tt(eyebrow ?? label)}`}
         className="block h-full rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
       >
         {inner}
