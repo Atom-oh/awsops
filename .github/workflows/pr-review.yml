@@ -86,7 +86,13 @@ jobs:
           rm -f /tmp/pr-diff-omitted.txt /tmp/pr-diff-omitted-source.txt
           awk '
             /^diff --git/ {
+              # Parse BOTH the old (a/) and new (b/) path. substr($3,3) alone (old path only)
+              # let a `foo.svg -> bar.ts` rename be classified by the .svg end and slip past the
+              # fail-closed bucket below. $3 = a/old, $4 = b/new (git quotes paths with spaces, so
+              # for the rare space-in-name case the fields split — that only ever over-includes a
+              # path into the stricter fail-closed bucket, never under-includes, so it fails safe).
               path = substr($3, 3)
+              newpath = substr($4, 3)
               skip = (path ~ /(^|\/)package-lock\.json$/) ||
                      (path ~ /(^|\/)pnpm-lock\.yaml$/) ||
                      (path ~ /(^|\/)yarn\.lock$/) ||
@@ -112,17 +118,22 @@ jobs:
             # gate fail-closed BLOCKED). A banner-only omission would turn that into fail-open — a
             # source/IaC file with one >50k-char line would be dropped from every lens yet still
             # PASS. So an omitted line is split by file type:
-            #   - a known generated/export type (.svg/.drawio/.min.js/.min.css/.map) -> banner only
-            #     (these are the minified blobs the cap is meant to drop; not lens-reviewable anyway).
-            #   - anything else (real source/IaC: .ts/.tsx/.py/.tf/.yml/...) -> ALSO recorded to a
-            #     second sidecar that the gate turns into a deterministic FAIL, preserving the
-            #     original fail-closed contract for content no lens could see.
+            #   - banner-only ONLY if it is a pure generated/export blob: BOTH the old and new path
+            #     end in a generated type (.svg/.drawio/.min.js/.min.css/.map) AND neither is under
+            #     web/ (a web/ .svg like web/app/icon.svg is runtime-served, script-capable, and must
+            #     still be reviewed — so it goes to the fail-closed bucket like any source file).
+            #   - anything else (real source/IaC: .ts/.tsx/.py/.tf/.yml/..., a rename with a source
+            #     end, or a web/ asset) -> ALSO recorded to a second sidecar that the gate turns into
+            #     a deterministic FAIL, preserving the fail-closed contract for content no lens saw.
             # An inline marker is always left for the panel models too.
             length($0) > 50000 {
               if (!(path in warned)) {
                 print "[omitted: a line over 50000 chars in " path " — likely a minified/generated export]"
                 print path >> "/tmp/pr-diff-omitted.txt"
-                if (path !~ /\.(svg|drawio|min\.js|min\.css|map)$/) {
+                generated = (path ~ /\.(svg|drawio|min\.js|min\.css|map)$/) &&
+                            (newpath ~ /\.(svg|drawio|min\.js|min\.css|map)$/) &&
+                            (path !~ /(^|\/)web\//) && (newpath !~ /(^|\/)web\//)
+                if (!generated) {
                   print path >> "/tmp/pr-diff-omitted-source.txt"
                 }
                 warned[path]=1
