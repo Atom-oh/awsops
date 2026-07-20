@@ -16,9 +16,11 @@ import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import { aggregateNodeResources, type NodeRow, type PodRow, type NodeResourceAgg } from '@/lib/eks-resources';
 import { podStatusCounts, deploymentHealth, serviceTypeCounts } from '@/lib/eks-tab-stats';
 import OpencostPanel from './OpencostPanel';
+import CostPanel from './CostPanel';
+import NodeEniSection from '@/components/eks/NodeEniSection';
 
 type Row = Record<string, unknown>;
-type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'events' | 'diagnosis';
+type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'events' | 'diagnosis' | 'cost';
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'nodes', label: 'Nodes' },
@@ -27,6 +29,7 @@ const TABS: { value: Tab; label: string }[] = [
   { value: 'services', label: 'Services' },
   { value: 'events', label: 'Events' },
   { value: 'diagnosis', label: 'Diagnosis' },
+  { value: 'cost', label: 'Cost' },
 ];
 
 // ADR-035 Rule 7: the deterministic K8sGPT analyzer fact (FACT half).
@@ -54,7 +57,7 @@ interface DiagnosisResult {
 
 // Per-kind columns (match the lib's normalized rows). Kinds with a `namespace`
 // field get the in-page namespace filter. Diagnosis uses DIAGNOSIS_COLUMNS.
-const COLUMNS: Record<Exclude<Tab, 'diagnosis'>, Column[]> = {
+const COLUMNS: Record<Exclude<Tab, 'diagnosis' | 'cost'>, Column[]> = {
   nodes: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status' },
@@ -141,6 +144,7 @@ export default function EksClusterPage() {
     try {
       // ADR-035: the diagnosis endpoint returns {enabled,stale,findings:[...]},
       // NOT {rows}. 503 (flag off) → degrade-safe disabled state, no thrown error.
+      if (tab === 'cost') return; // CostPanel fetches its own data
       if (tab === 'diagnosis') {
         const r = await fetch(`/api/eks/${encodeURIComponent(cluster)}/k8sgpt`);
         if (!fresh()) return;
@@ -301,7 +305,9 @@ export default function EksClusterPage() {
 
         {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
 
-        {isDiagnosis ? (
+        {tab === 'cost' ? (
+          <CostPanel cluster={cluster} />
+        ) : isDiagnosis ? (
           <>
             {!diag && !err && <div className="text-ink-400">로딩 중…</div>}
             {diag && !err && (
@@ -434,7 +440,7 @@ export default function EksClusterPage() {
                   </Card>
                 )}
                 <DataTable
-                  columns={COLUMNS[tab as Exclude<Tab, 'diagnosis'>]}
+                  columns={COLUMNS[tab as Exclude<Tab, 'diagnosis' | 'cost'>]}
                   rows={filteredRows}
                   onRowClick={setSelected}
                 />
@@ -456,6 +462,7 @@ export default function EksClusterPage() {
           onClose={() => setSelected(null)}
         >
           <NodePodsSection pods={selectedNodePods} error={nodePodsErr} />
+          <NodeEniSection nodeName={selectedNode.name} />
         </DetailPanel>
       ) : (
         <DetailPanel

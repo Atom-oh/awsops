@@ -469,6 +469,38 @@ class StreamTextTest(unittest.TestCase):
             {"tool": "describe_cluster"},
         ])
 
+    def test_tool_input_query_flushed_on_next_delta(self):
+        # v1-parity: the completed tool input's query surfaces as a {"toolInput"} frame
+        # once text resumes (input is only final at that point).
+        out = self._collect([
+            {"current_tool_use": {"toolUseId": "t1", "name": "query_inventory", "input": '{"sql": "SELECT'}},
+            {"current_tool_use": {"toolUseId": "t1", "name": "query_inventory", "input": '{"sql": "SELECT * FROM ec2"}'}},
+            {"data": "결과는"},
+        ])
+        self.assertEqual(out[1:], [
+            {"tool": "query_inventory"},
+            {"toolInput": {"tool": "query_inventory", "query": "SELECT * FROM ec2"}},
+            {"delta": "결과는"},
+        ])
+
+    def test_tool_input_flushed_at_end_of_stream_and_partial_json_suppressed(self):
+        out = self._collect([
+            {"current_tool_use": {"toolUseId": "t1", "name": "prom", "input": {"query": "up == 0"}}},
+        ])
+        self.assertEqual(out[1:], [{"tool": "prom"}, {"toolInput": {"tool": "prom", "query": "up == 0"}}])
+        # partial JSON fragment never surfaces half a query
+        out2 = self._collect([
+            {"current_tool_use": {"toolUseId": "t1", "name": "prom", "input": '{"query": "u'}},
+        ])
+        self.assertEqual(out2[1:], [{"tool": "prom"}])
+
+    def test_usage_frame_from_result_metrics(self):
+        class M:  # Strands AgentResult shim
+            class metrics:
+                accumulated_usage = {"inputTokens": 1200, "outputTokens": 340}
+        out = self._collect([{"data": "hi"}, {"result": M()}])
+        self.assertEqual(out[-1], {"usage": {"inputTokens": 1200, "outputTokens": 340}})
+
     def test_nameless_or_idless_tool_events_skipped(self):
         # The first partial event can arrive before the name; lifecycle events carry neither.
         out = self._collect([

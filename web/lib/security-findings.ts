@@ -1,7 +1,7 @@
 // Security findings derived (read-only) from already-synced `inventory_resources` rows.
 // SG/EBS/IAM data is synced by scripts/v2/steampipe/sync_lambda.py; s3_public_access is a
 // dedicated denial-safe SDK sync. Severity + remediation are static metadata (not stored).
-export type CheckKey = 'public_s3' | 'open_sg' | 'unencrypted_ebs' | 'iam_no_mfa';
+export type CheckKey = 'public_s3' | 'open_sg' | 'unencrypted_ebs' | 'iam_no_mfa' | 'ecr_cve';
 
 export interface Finding {
   check: CheckKey;
@@ -34,6 +34,12 @@ export const CHECK_META: Record<CheckKey, { label: string; severity: Finding['se
     severity: 'medium',
     remediation: 'Require MFA for all console users; enforce via an IAM policy condition (aws:MultiFactorAuthPresent).',
   },
+  // v1's Trivy CVE tab — v2-native source: ECR image scanning (live SDK read, not FINDING_SQL).
+  ecr_cve: {
+    label: 'Container CVEs (ECR)',
+    severity: 'high',
+    remediation: 'Rebuild images on patched bases; upgrade flagged packages; keep scan-on-push enabled.',
+  },
 };
 
 // Each query returns { resource_id, region, detail } over inventory_resources (account_id='self').
@@ -50,7 +56,7 @@ export const PUBLIC_S3_WHERE =
   + " OR (data->>'block_public_acls')='false'"
   + " OR (data->>'block_public_policy')='false' )";
 
-export const FINDING_SQL: Record<CheckKey, string> = {
+export const FINDING_SQL: Record<Exclude<CheckKey, 'ecr_cve'>, string> = {
   public_s3: `SELECT resource_id, region, data AS detail
     FROM inventory_resources
     WHERE account_id='self' AND resource_type='s3_public_access'

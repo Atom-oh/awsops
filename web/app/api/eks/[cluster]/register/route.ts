@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
-import { registerCluster, unregisterCluster, isEnvCluster } from '@/lib/eks-registry';
+import { registerCluster, unregisterCluster, isEnvCluster, setClusterAuth, type EksAuth } from '@/lib/eks-registry';
 import { hasAccessEntry, onboardingGuide } from '@/lib/eks-access';
 import { listClusters } from '@/lib/aws';
 
@@ -18,6 +18,28 @@ function json(obj: unknown, status: number) {
 // Hyphen escaped for unambiguity (panel r5: verified literal in JS either way — ':' '<' '@' all reject).
 const CLUSTER_NAME_RE = /^[0-9A-Za-z][A-Za-z0-9\-_]{0,99}$/;
 
+// Aurora-stored auth (v1 kubeconfig parity): validated shapes only; token/roleArn are write-only.
+const ROLE_ARN_RE = /^arn:aws:iam::\d{12}:role\/[\w+=,.@/-]{1,128}$/;
+function parseAuth(body: unknown): EksAuth | null | 'invalid' {
+  if (!body || typeof body !== 'object') return null;
+  const a = (body as { auth?: unknown }).auth;
+  if (a == null) return null;
+  if (typeof a !== 'object') return 'invalid';
+  const o = a as Record<string, unknown>;
+  if (o.mode === 'sa-token') {
+    const token = typeof o.token === 'string' ? o.token.trim() : '';
+    if (!token || token.length > 16384 || /\s/.test(token)) return 'invalid';
+    return { mode: 'sa-token', token };
+  }
+  if (o.mode === 'assume-role') {
+    const roleArn = typeof o.roleArn === 'string' ? o.roleArn.trim() : '';
+    if (!ROLE_ARN_RE.test(roleArn)) return 'invalid';
+    const externalId = typeof o.externalId === 'string' && o.externalId.trim() ? o.externalId.trim().slice(0, 256) : undefined;
+    return { mode: 'assume-role', roleArn, ...(externalId ? { externalId } : {}) };
+  }
+  return 'invalid';
+}
+
 export async function POST(request: Request, { params }: { params: { cluster: string } }) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
@@ -26,6 +48,14 @@ export async function POST(request: Request, { params }: { params: { cluster: st
   // Cluster must actually exist (spec §3.2 ①) — never emit a guide for arbitrary input.
   const known = (await listClusters()).some((c) => c.name === params.cluster);
   if (!known) return json({ status: 'error', message: 'unknown cluster' }, 404);
+  const auth = parseAuth(await request.json().catch(() => null));
+  if (auth === 'invalid') return json({ status: 'error', message: 'invalid auth payload' }, 400);
+  // Aurora-stored auth needs NO access entry — register + store in one step.
+  if (auth) {
+    const ok = await setClusterAuth(params.cluster, user.sub, auth);
+    if (!ok) return json({ status: 'error', message: 'registry storage unavailable' }, 503);
+    return json({ registered: true, authMode: auth.mode }, 200);
+  }
   const entry = await hasAccessEntry(params.cluster);
   if (entry !== true) {
     // No entry (or undeterminable) — hand back the v1-style guide instead of failing opaquely.

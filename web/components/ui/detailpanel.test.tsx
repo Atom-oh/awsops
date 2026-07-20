@@ -21,10 +21,12 @@ describe('DetailPanel', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders the title and the key/value rows for every field', () => {
+  it('renders a friendly Name as the heading with the resource id as the mono subtitle', () => {
     render(<DetailPanel title="i-0abc123" data={MOCK} onClose={() => {}} />);
-    // title (header h2)
-    expect(screen.getByRole('heading', { name: 'i-0abc123' })).toBeTruthy();
+    // v1-parity header: the tag Name ('web') is the prominent title, the resource_id the subtitle.
+    expect(screen.getByRole('heading', { name: 'web' })).toBeTruthy();
+    // resource_id shows in the mono subtitle (and, with no spec, also as a flat field row).
+    expect(screen.getAllByText('i-0abc123').length).toBeGreaterThanOrEqual(1);
     // string key + value
     expect(screen.getByText('region')).toBeTruthy();
     expect(screen.getByText('ap-northeast-2')).toBeTruthy();
@@ -40,12 +42,17 @@ describe('DetailPanel', () => {
     expect(container.textContent).toContain('—');
   });
 
-  it('renders a nested object as pretty JSON in a <pre>', () => {
-    const { container } = render(<DetailPanel data={MOCK} onClose={() => {}} />);
+  it('renders tags as readable key/value rows (v1-parity) and generic objects as JSON', () => {
+    const { container } = render(
+      <DetailPanel data={{ ...MOCK, vpc_config: { SubnetIds: ['s-1'] } }} onClose={() => {}} />,
+    );
+    // tags → k/v rows, no JSON braces
+    expect(screen.getByText('Name')).toBeTruthy();
+    expect(screen.getByText('prod')).toBeTruthy();
+    // an unknown object still falls back to pretty JSON in a <pre>
     const pre = container.querySelector('pre');
     expect(pre).toBeTruthy();
-    expect(pre!.textContent).toContain('"Name"');
-    expect(pre!.textContent).toContain('"prod"');
+    expect(pre!.textContent).toContain('"SubnetIds"');
   });
 
   it('calls onClose when the close button is clicked', () => {
@@ -59,13 +66,13 @@ describe('DetailPanel', () => {
     const row = { resource_id: 'i-1', region: 'ap-northeast-2', name: 'web', instance_type: 't3.micro', instance_state: 'running', vpc_id: 'vpc-1' };
     render(<DetailPanel title="i-1" data={row} spec={INVENTORY_TYPES.ec2} onClose={() => {}} />);
     // section headers from the ec2 spec (Identity always present; Network present because vpc_id is)
-    expect(screen.getByText('Identity')).toBeTruthy();
+    expect(screen.getByText('Instance')).toBeTruthy(); // v1-parity ec2 category names
     expect(screen.getByText('Network')).toBeTruthy();
     // friendly column label ('Type' for instance_type), not the raw key
     expect(screen.getByText('Type')).toBeTruthy();
     expect(screen.queryByText('instance_type')).toBeNull();
-    // state key rendered as a StatePill (the value text is present)
-    expect(screen.getByText('running')).toBeTruthy();
+    // state rendered as a StatePill BOTH in the header (v1-parity) and in the Compute section row.
+    expect(screen.getAllByText('running').length).toBeGreaterThanOrEqual(1);
   });
 });
 

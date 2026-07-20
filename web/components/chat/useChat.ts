@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Msg } from './MessageList';
 import { sectionByKey } from '@/lib/sections';
 import type { ThreadSummary, ThreadMessage } from '@/lib/chat-store';
+import { getActiveAccount } from '@/lib/account-context';
 
 export function newSessionId(): string {
   const s = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.round(Math.random() * 1e9)}`);
@@ -22,6 +23,10 @@ export function parseFrame(frame: string): {
   elapsedMs?: number;
   delta?: string;
   error?: string;
+  usage?: { inputTokens: number; outputTokens: number };
+  costUsd?: number;
+  tool?: string;
+  query?: string;
 } {
   const isMeta = frame.startsWith('event: meta');
   const isStatus = frame.startsWith('event: status');
@@ -87,9 +92,11 @@ export function useChat() {
     setMsgs([]); setBusy(false);
   }
 
-  async function refreshThreads() {
+  async function refreshThreads(query?: string) {
     try {
-      const res = await fetch('/api/chat/threads');
+      // v1-parity history search: ?q= filters the caller's own threads by message content.
+      const url = query?.trim() ? `/api/chat/threads?q=${encodeURIComponent(query.trim())}` : '/api/chat/threads';
+      const res = await fetch(url);
       const data = res.ok ? await res.json() : { threads: [] };
       setThreads(Array.isArray(data.threads) ? data.threads : []);
     } catch {
@@ -115,11 +122,12 @@ export function useChat() {
       }
       const data: { thread: ThreadSummary; messages: ThreadMessage[] } = await res.json();
       setMsgs(data.messages.map((m) => {
-        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string; via?: string; tools?: string[]; model?: string; elapsedMs?: number };
+        const meta = (m.meta ?? {}) as { ranked?: Msg['ranked']; method?: string; via?: string; tools?: string[]; model?: string; elapsedMs?: number; usage?: Msg['usage']; costUsd?: number };
         return {
           role: m.role, content: m.content, gateway: m.gateway ?? undefined,
           ranked: meta.ranked, method: meta.method, via: meta.via,
           tools: meta.tools, model: meta.model, elapsedMs: meta.elapsedMs,
+          usage: meta.usage, costUsd: meta.costUsd,
         };
       }));
       sessionRef.current = data.thread.sessionId;
@@ -146,17 +154,26 @@ export function useChat() {
         patchLast((m) => ({ ...m, gateway: parsed.gateway, ranked: parsed.ranked, method: parsed.method, via: parsed.via }));
       }
       // Answer-provenance footer: a second, later `meta` frame (no `gateway`) carries the
-      // server-measured elapsed total + tools/model, known only after the invoke resolves.
-      if (parsed.tools || parsed.model || parsed.elapsedMs !== undefined) {
+      // server-measured elapsed total + tools/model + token usage/cost, known only after resolve.
+      if (parsed.tools || parsed.model || parsed.elapsedMs !== undefined || parsed.usage) {
         patchLast((m) => ({
           ...m,
           tools: parsed.tools ?? m.tools,
           model: parsed.model ?? m.model,
           elapsedMs: parsed.elapsedMs ?? m.elapsedMs,
+          usage: parsed.usage ?? m.usage,
+          costUsd: parsed.costUsd ?? m.costUsd,
         }));
       }
     } else if (parsed.kind === 'status') {
-      patchLast((m) => ({ ...m, status: { phase: parsed.phase ?? 'analyzing', elapsedMs: parsed.elapsedMs } }));
+      // v1-parity: accumulate the generated query previews (SQL/PromQL/...) surfaced mid-run.
+      patchLast((m) => ({
+        ...m,
+        status: { phase: parsed.phase ?? 'analyzing', elapsedMs: parsed.elapsedMs, tool: parsed.tool, query: parsed.query },
+        queries: parsed.query && parsed.tool
+          ? [...(m.queries ?? []), { tool: parsed.tool, query: parsed.query }]
+          : m.queries,
+      }));
     } else if (parsed.kind === 'delta') {
       patchLast((m) => ({ ...m, content: m.content + parsed.delta!, status: undefined }));
     } else if (parsed.kind === 'error') {
@@ -172,10 +189,22 @@ export function useChat() {
     const ac = new AbortController();
     abortRef.current = ac;
     try {
+      // v1-parity: carry the UI language (LanguageProvider persists 'awsops-lang') and the shell's
+      // active account (existing account-context, key 'awsops:account') so the server forces the
+      // response language and scopes multi-account queries. Both optional — server defaults apply.
+      // getActiveAccount() returns 'self'/'__all__' for the host default (not a 12-digit id), which
+      // the server's validateAccountId() rejects → host creds, exactly the pre-port behavior.
+      let lang: string | undefined;
+      let accountId: string | undefined;
+      try {
+        lang = localStorage.getItem('awsops-lang') || undefined;
+        const a = getActiveAccount();
+        accountId = a && a !== 'self' && a !== '__all__' ? a : undefined;
+      } catch { /* SSR / no storage — server defaults apply */ }
       const res = await fetch('/api/chat', {
         method: 'POST', signal: ac.signal,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, messages: history, section: overrideSection ?? null, switchedFrom, sessionId: sessionRef.current, threadId: threadIdRef.current ?? undefined }),
+        body: JSON.stringify({ prompt, messages: history, section: overrideSection ?? null, switchedFrom, sessionId: sessionRef.current, threadId: threadIdRef.current ?? undefined, lang, accountId }),
       });
       if (!res.ok || !res.body) {
         patchLast((m) => ({ ...m, content: res.status === 401 ? '세션이 만료되었습니다. 새로고침해 주세요.' : 'AI 응답을 받지 못했습니다.', streaming: false }));
@@ -213,12 +242,35 @@ export function useChat() {
 
   function abort() { abortRef.current?.abort(); }
 
+  // v1-parity follow-up: seed a fresh question (auto-routed, not a misroute resend).
+  function followUp(q: string) { void send(q); }
+
+  // v1-parity session stats bar: aggregate THIS session's assistant answers (client-side, no
+  // server call) — query count, avg latency, success rate, per-gateway distribution.
+  function sessionStats() {
+    const answers = msgs.filter((m) => m.role === 'assistant' && !m.streaming && m.content);
+    const count = answers.length;
+    const timed = answers.filter((m) => m.elapsedMs !== undefined);
+    const avgMs = timed.length ? Math.round(timed.reduce((s, m) => s + (m.elapsedMs ?? 0), 0) / timed.length) : null;
+    const errors = answers.filter((m) => m.content.startsWith('⚠️')).length;
+    const successRate = count ? (count - errors) / count : null;
+    const byGateway: Record<string, number> = {};
+    for (const m of answers) if (m.gateway) byGateway[m.gateway] = (byGateway[m.gateway] ?? 0) + 1;
+    const topGateways = Object.entries(byGateway).sort((a, b) => b[1] - a[1]).slice(0, 4)
+      .map(([gateway, n]) => ({ gateway, count: n }));
+    return { count, avgMs, successRate, topGateways };
+  }
+
   return {
     // state
     msgs, busy, threadId, threads, showThreads,
     // actions
-    send, selectThread, newChat, refreshThreads, removeThread, toggleThreads, resendWith, abort,
+    send, selectThread, newChat, refreshThreads, removeThread, toggleThreads, resendWith, followUp, abort,
+    // derived
+    sessionStats,
   };
 }
+
+export type SessionStats = ReturnType<UseChat['sessionStats']>;
 
 export type UseChat = ReturnType<typeof useChat>;

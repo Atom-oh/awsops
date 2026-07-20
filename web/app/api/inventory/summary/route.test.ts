@@ -52,6 +52,7 @@ describe('GET /api/inventory/summary', () => {
       iamUserNoMfa: 3,
       sgOpenIngress: 1,
       s3Public: 1,
+      cwAlarm: 0,
     });
     expect(body.ec2Types).toEqual([
       { name: 't3.medium', count: 3 },
@@ -95,6 +96,7 @@ describe('GET /api/inventory/summary', () => {
       iamUserNoMfa: 0,
       sgOpenIngress: 0,
       s3Public: 0,
+      cwAlarm: 0,
     });
   });
   it('500 on byType db error', async () => {

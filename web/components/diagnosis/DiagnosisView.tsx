@@ -18,6 +18,7 @@ interface ReportRow {
   status: string;
   created_at: string;
   model?: string | null;        // deep-tier model (sonnet|opus); shown in the list for deep reports
+  account?: string | null;      // diagnosed account id (from the job payload; null on legacy rows)
   title?: string | null;        // LLM auto key-insight title (editable)
   tags?: string[];              // auto-suggested + manual
   can_edit?: boolean;           // owner or admin (BFF-computed) → show edit/delete controls
@@ -198,7 +199,7 @@ export default function DiagnosisView() {
           <select
             value={tier}
             onChange={(e) => setTier(e.target.value as 'light' | 'mid' | 'deep')}
-            className="rounded-md border border-ink-200 px-2 py-1 text-sm"
+            className="rounded-md border border-ink-200 bg-card px-2 py-1 text-sm text-ink-700"
           >
             <option value="light">Light</option>
             <option value="mid">Mid</option>
@@ -247,8 +248,9 @@ export default function DiagnosisView() {
                 </div>
                 <div className="text-[11px] text-ink-400">
                   #{r.id} · {r.tier}
-                  {r.tier === 'deep' && r.model ? ` · ${r.model}` : ''} ·{' '}
-                  <span className={r.status === 'failed' ? 'text-red-600' : ''}>
+                  {r.tier === 'deep' && r.model ? ` · ${r.model}` : ''}
+                  {r.account ? ` · ${r.account}` : ''} ·{' '}
+                  <span className={r.status === 'failed' ? 'text-negative' : ''}>
                     {r.status === 'running' && r.progress?.total
                       ? `running ${r.progress.current ?? 0}/${r.progress.total}`
                       : r.status}
@@ -290,7 +292,7 @@ export default function DiagnosisView() {
                     onChange={(e) => setTitleDraft(e.target.value)}
                     maxLength={200}
                     aria-label="제목"
-                    className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-base"
+                    className="min-w-0 flex-1 rounded-md border border-ink-200 bg-card px-2 py-1 text-base text-ink-800"
                   />
                   <button
                     onClick={async () => { await patchMeta(view!.id, { title: titleDraft!.trim() || null }); setTitleDraft(null); }}
@@ -330,7 +332,7 @@ export default function DiagnosisView() {
                   }}
                   placeholder="태그 추가"
                   aria-label="태그 추가"
-                  className="w-24 rounded-md border border-ink-200 px-2 py-0.5 text-[12px]"
+                  className="w-24 rounded-md border border-ink-200 bg-card px-2 py-0.5 text-[12px] text-ink-800"
                 />
               ) : null}
             </div>

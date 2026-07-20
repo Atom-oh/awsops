@@ -19,6 +19,8 @@ vi.mock('@/lib/eks-registry', () => ({
   isEnvCluster: (...a: unknown[]) => isEnvCluster(...a),
   registerCluster: (...a: unknown[]) => registerCluster(...a),
   unregisterCluster: (...a: unknown[]) => unregisterCluster(...a),
+  setClusterAuth: async () => true,
+  getAuthModes: async () => new Map(),
 }));
 vi.mock('@/lib/eks-access', () => ({
   hasAccessEntry: (...a: unknown[]) => hasAccessEntry(...a),

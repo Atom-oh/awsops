@@ -111,14 +111,15 @@ def _sh_client():
     return boto3.client("securityhub", region_name=REGION)
 
 
-def collect_inventory(conn):
+def collect_inventory(conn, scope="self"):
     """Aurora inventory_resources (already synced; no live AWS call): counts by type PLUS a bounded,
     secret-filtered sample of real resource detail (region + data JSONB) so the LLM can reason about
-    the actual account, not just totals. account_id='self' scope matches the web inventory."""
+    the actual account, not just totals. `scope` = 'self' (host) or a member account id."""
     try:
         rows = conn.run(
             "SELECT resource_type, count(*) FROM inventory_resources "
-            "WHERE account_id='self' GROUP BY resource_type ORDER BY 2 DESC"
+            "WHERE account_id = :scope GROUP BY resource_type ORDER BY 2 DESC",
+            scope=scope,
         )
         by_type = {r[0]: int(r[1]) for r in rows}
     except Exception as e:  # noqa: BLE001 — degrade, never raise
@@ -129,9 +130,9 @@ def collect_inventory(conn):
         try:
             drows = conn.run(
                 "SELECT resource_id, region, data FROM inventory_resources "
-                "WHERE account_id='self' AND resource_type = :rtype "
+                "WHERE account_id = :scope AND resource_type = :rtype "
                 f"ORDER BY resource_id LIMIT {DIAG_INV_PER_TYPE}",
-                rtype=rtype,
+                rtype=rtype, scope=scope,
             )
         except Exception:  # noqa: BLE001 — one type degrading must not lose the rest
             continue
@@ -157,16 +158,19 @@ def collect_inventory(conn):
     return _result("inventory", data={"by_type": by_type, "resources": resources, "truncated": truncated})
 
 
-def collect_cw_metrics(conn):
+def collect_cw_metrics(conn, scope="self"):
     """CloudWatch AWS/EC2 CPUUtilization (avg) per instance, ids pulled from inventory_resources.
     No raw log lines — aggregated metric statistics only. Degrades gracefully."""
+    if scope != "self":
+        return _result("cw_metrics", degraded=True,
+                       notes="계정 스코프 미지원 — CloudWatch는 host 자격으로만 조회 (데이터 불가)")
     try:
         import datetime as dt
         # Instance ids from the already-synced inventory (no live describe needed).
         try:
             rows = conn.run(
                 "SELECT resource_id FROM inventory_resources "
-                "WHERE resource_type = 'ec2' AND account_id = 'self' LIMIT 50"
+                "WHERE resource_type = 'ec2' AND account_id = 'self' LIMIT 50",
             )
             instance_ids = [r[0] for r in rows if r and r[0]]
         except Exception:  # noqa: BLE001 — inventory shape varies; tolerate
@@ -254,7 +258,7 @@ def collect_cost():
         return _classify("cost", e)
 
 
-def collect_idle(conn):
+def collect_idle(conn, scope="self"):
     """DB-derived waste from inventory_resources (no live AWS call, no row cap — aggregated in SQL):
     unattached EBS volumes (state 'available') with a recoverable-$/month estimate (type-weighted price
     heuristics) + stopped EC2 (EBS still billed). EIP/snapshots are not synced → reported as a data gap
@@ -265,12 +269,12 @@ def collect_idle(conn):
             "coalesce(sum((data->>'size')::numeric * CASE data->>'volume_type' "
             "  WHEN 'gp3' THEN 0.0912 WHEN 'gp2' THEN 0.114 WHEN 'io1' THEN 0.125 WHEN 'io2' THEN 0.125 "
             "  WHEN 'st1' THEN 0.045 WHEN 'sc1' THEN 0.025 ELSE 0.10 END), 0) "
-            "FROM inventory_resources WHERE account_id='self' AND resource_type='ebs_volume' "
-            "AND data->>'state' = 'available'")
+            "FROM inventory_resources WHERE account_id = :scope AND resource_type='ebs_volume' "
+            "AND data->>'state' = 'available'", scope=scope)
         row = ebs[0] if ebs else (0, 0, 0)
         stopped = conn.run(
-            "SELECT count(*) FROM inventory_resources WHERE account_id='self' "
-            "AND resource_type='ec2' AND data->>'instance_state' = 'stopped'")
+            "SELECT count(*) FROM inventory_resources WHERE account_id = :scope "
+            "AND resource_type='ec2' AND data->>'instance_state' = 'stopped'", scope=scope)
         return _result("idle", data={
             "unattached_ebs": {"count": int(row[0]), "gb": round(float(row[1]), 1),
                                "est_monthly_usd": round(float(row[2]), 2)},
@@ -634,15 +638,23 @@ def collect_datasources(conn):
 
 
 # Ordered registry of native collectors. `conn` is passed only to DB-backed ones.
-def collect_all(conn):
+def _host_only(key):
+    """Honest degrade for member-account scope: these collectors read LIVE host-credentialed AWS
+    APIs (CE/X-Ray/Security Hub/CloudTrail) — showing host data under a member report would lie."""
+    return _result(key, degraded=True,
+                   notes="계정 스코프 미지원 — host 자격 전용 소스 (데이터 불가)")
+
+
+def collect_all(conn, scope="self"):
+    host = scope == "self"
     return [
-        collect_inventory(conn),
-        collect_cw_metrics(conn),
-        collect_cost(),
-        collect_idle(conn),        # DB-derived waste (unattached EBS / stopped EC2) — FinOps
-        collect_commitment(),      # RI / Savings Plans coverage — FinOps
-        collect_service_map(),
+        collect_inventory(conn, scope),
+        collect_cw_metrics(conn, scope),
+        collect_cost() if host else _host_only("cost"),
+        collect_idle(conn, scope),  # DB-derived waste (unattached EBS / stopped EC2) — FinOps
+        collect_commitment() if host else _host_only("commitment"),  # RI / Savings Plans — FinOps
+        collect_service_map() if host else _host_only("service_map"),
         collect_datasources(conn),  # external observability (schema-driven, credential-blind)
-        collect_posture(),
-        collect_what_changed(),
+        collect_posture() if host else _host_only("posture"),
+        collect_what_changed() if host else _host_only("what_changed"),
     ]

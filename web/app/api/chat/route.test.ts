@@ -61,7 +61,23 @@ vi.mock('@/lib/agent-resolver', () => ({
 vi.mock('@/lib/catalog', () => ({ isCustomAgentEnabled: (...a: unknown[]) => isCustomAgentEnabled(...a) }));
 const getEnabledIntegrations = vi.fn();
 vi.mock('@/lib/integrations', () => ({ getEnabledIntegrations: (...a: unknown[]) => getEnabledIntegrations(...a) }));
-vi.mock('@/lib/trace', () => ({ recordCustomAgentTrace: (...a: unknown[]) => recordCustomAgentTrace(...a) }));
+vi.mock('@/lib/trace', () => ({
+  recordCustomAgentTrace: (...a: unknown[]) => recordCustomAgentTrace(...a),
+  recordChatInvoke: vi.fn().mockResolvedValue(undefined), // fire-and-forget ops stat — not asserted here
+}));
+// v1-parity ports (2026-07-19): neutralize the new side-effect modules so existing route tests
+// keep exercising the same paths — code route off (no interpreter), no Bedrock-direct fallback.
+vi.mock('@/lib/code-interpreter', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/code-interpreter')>()), // real isCodeIntent/extractPython
+  getInterpreterId: vi.fn().mockResolvedValue(null),                     // never detour into the sandbox
+}));
+vi.mock('@/lib/bedrock-direct', () => ({
+  bedrockDirectStream: vi.fn(() => { throw new Error('bedrock direct disabled in tests'); }),
+}));
+vi.mock('@/lib/accounts', () => ({
+  validateAccountId: (id: string) => /^\d{12}$/.test(id),
+  getAccount: vi.fn().mockResolvedValue(undefined), // unregistered ⇒ host default
+}));
 const recordExchange = vi.fn();
 vi.mock('@/lib/chat-store', () => ({ recordExchange: (...a: unknown[]) => recordExchange(...a) }));
 const listConfiguredSchemas = vi.fn();

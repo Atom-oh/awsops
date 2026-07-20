@@ -152,12 +152,28 @@ describe('classifyRoute — ADR-044 multi-domain detection', () => {
 describe('topology / unused-resource routing → ops', () => {
   // The capability home (inventory_read MCP: load balancers, target groups, CloudFront, unused
   // detection) lives on the ops gateway. These nouns must route there deterministically.
-  it('routes the headline "unused topology resources" query to ops via regex (no LLM)', async () => {
+  // v1-ladder port: a LONE 'ops' (catch-all) regex hit now CONSULTS the classifier — generic
+  // nouns (LB, cert, S3) live in the ops rules while the intent is often network/cost/monitoring.
+  it('consults the classifier on a lone catch-all ops match, keeps ops when it agrees', async () => {
     const prompt = '토폴로지를 봤을때 지금 미사용리소스라고 보이는것들을 추려줘 예를들면 origin에 아무것도 없거나 하는거 tg가 있는데 실제로 register가 없는것들';
-    expect(matchedSections(prompt)).toEqual(['ops']); // single distinct match ⇒ deterministic
-    const classify = vi.fn();
+    expect(matchedSections(prompt)).toEqual(['ops']); // single distinct match — but the catch-all
+    const classify = vi.fn().mockResolvedValue([{ key: 'ops', score: 0.9 }]);
     const r = await classifyRoute(prompt, undefined, { llmEnabled: true, classify });
     expect(r.primary).toBe('ops');
+    expect(r.method).toBe('llm');
+    expect(classify).toHaveBeenCalledTimes(1);
+  });
+  it('falls back to the regex ops result when the classifier fails on a lone catch-all match', async () => {
+    const prompt = '전체 토폴로지 보여줘';
+    expect(matchedSections(prompt)).toEqual(['ops']);
+    const classify = vi.fn().mockRejectedValue(new Error('bedrock down'));
+    const r = await classifyRoute(prompt, undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('ops');
+    expect(r.method).toBe('regex'); // never blocks chat — same answer as the legacy path
+  });
+  it('still short-circuits a lone SPECIFIC section match without any LLM call', async () => {
+    const classify = vi.fn();
+    const r = await classifyRoute('TGW 라우팅 테이블 보여줘', undefined, { llmEnabled: true, classify });
     expect(r.method).toBe('regex');
     expect(classify).not.toHaveBeenCalled();
   });

@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
-import { ShieldAlert } from 'lucide-react';
+import { ShieldAlert, Archive, BrickWall, HardDrive, Users, Shield, Bug, type LucideIcon } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 import StatTile from '@/components/ui/StatTile';
@@ -14,6 +14,11 @@ import { CHECK_META, type CheckKey, type Finding } from '@/lib/security-findings
 
 const CHECKS = Object.keys(CHECK_META) as CheckKey[];
 
+// v1-parity KPI glyphs — per-check icon in the tile's translucent top-right box.
+const CHECK_ICON: Record<CheckKey, LucideIcon> = {
+  public_s3: Archive, open_sg: BrickWall, unencrypted_ebs: HardDrive, iam_no_mfa: Users, ecr_cve: Bug,
+};
+
 interface ApiResp {
   enabled: boolean;
   summary: Partial<Record<CheckKey, number>>;
@@ -26,9 +31,43 @@ const SEV_TONE: Record<Finding['severity'], 'negative' | 'brand' | 'neutral'> = 
   low: 'neutral',
 };
 
-const COLUMNS = [
+// v1 parity: each check exposes its own high-value columns (from the finding's detail JSONB,
+// flattened into the row below). Common prefix: resource / region.
+const CHECK_COLUMNS: Record<CheckKey, { key: string; label: string }[]> = {
+  public_s3: [
+    { key: 'bucket_policy_is_public', label: 'Policy Public' },
+    { key: 'block_public_policy', label: 'Block Policy' },
+    { key: 'restrict_public_buckets', label: 'Restrict' },
+    { key: 'block_public_acls', label: 'Block ACLs' },
+  ],
+  open_sg: [
+    { key: 'name', label: 'Name' },
+    { key: 'vpc_id', label: 'VPC' },
+    { key: 'owner_id', label: 'Owner' },
+  ],
+  unencrypted_ebs: [
+    { key: 'volume_type', label: 'Type' },
+    { key: 'size', label: 'Size(GB)' },
+    { key: 'state', label: 'State' },
+    { key: 'availability_zone', label: 'AZ' },
+  ],
+  iam_no_mfa: [
+    { key: 'create_date', label: 'Created' },
+    { key: 'password_last_used', label: 'Last PW Use' },
+  ],
+  ecr_cve: [
+    { key: 'image_tag', label: 'Image' },
+    { key: 'critical', label: 'Critical' },
+    { key: 'high', label: 'High' },
+    { key: 'medium', label: 'Medium' },
+    { key: 'total', label: 'Total' },
+    { key: 'scan_completed_at', label: 'Scanned' },
+  ],
+};
+const columnsFor = (k: CheckKey) => [
   { key: 'resource_id', label: 'Resource' },
   { key: 'region', label: 'Region' },
+  ...CHECK_COLUMNS[k],
   { key: 'severity', label: 'Severity' },
 ];
 
@@ -115,6 +154,8 @@ export default function SecurityPage() {
                   key={k}
                   label={CHECK_META[k].label}
                   value={summary[k] ?? 0}
+                  variant={(summary[k] ?? 0) > 0 ? 'danger' : 'default'}
+                  icon={(() => { const I = CHECK_ICON[k] ?? Shield; return <I size={16} />; })()}
                   hint={`${CHECK_META[k].severity} severity`}
                 />
               ))}
@@ -134,8 +175,8 @@ export default function SecurityPage() {
               />
               <div className="mt-3">
                 <DataTable
-                  columns={COLUMNS}
-                  rows={activeFindings as unknown as Record<string, unknown>[]}
+                  columns={columnsFor(active)}
+                  rows={activeFindings.map((f) => ({ ...(f.detail as object), ...f })) as unknown as Record<string, unknown>[]}
                   onRowClick={(row) => setSelected(row as unknown as Finding)}
                   cardTitleKey="resource_id"
                 />

@@ -38,6 +38,7 @@ export interface InvokeInput {
   accountAlias?: string;
   integrations?: ResolvedIntegration[]; // ADR-039 P2-infra inc2: live egress-READ MCP connections
   extraContext?: string; // bounded BFF context appended to the agent system prompt (e.g. cached datasource schemas)
+  responseLanguage?: string; // v1-parity: UI-language directive ('ko'|'en'|'zh') — agent.py forces the answer language
 }
 
 async function readResponse(resp: unknown): Promise<string> {
@@ -59,9 +60,15 @@ function isEventStream(resp: unknown): boolean {
   return ct.includes('text/event-stream');
 }
 
-/** One agent stream event: incremental answer text, a tool invocation, or the model id
- *  (answer provenance — agent.py emits `{"tool": name}` / `{"model": id}` alongside deltas). */
-export interface AgentEvent { delta?: string; tool?: string; model?: string }
+/** Accumulated token usage for one answer (agent.py `{"usage": ...}` frame, v1-parity cost footer). */
+export interface TokenUsage { inputTokens: number; outputTokens: number }
+/** A generated query a tool ran (agent.py `{"toolInput": ...}` frame — SQL/PromQL/... preview). */
+export interface ToolQuery { tool: string; query: string }
+
+/** One agent stream event: incremental answer text, a tool invocation, the model id, the
+ *  answer's token usage, or a tool's generated query (answer provenance — agent.py emits
+ *  `{"tool"}` / `{"model"}` / `{"usage"}` / `{"toolInput"}` frames alongside deltas). */
+export interface AgentEvent { delta?: string; tool?: string; model?: string; usage?: TokenUsage; toolInput?: ToolQuery }
 
 /** Extract an event from one SSE `data:` payload. The streaming agent.py yields
  *  `{"delta": str}` dicts (AgentCore JSON-encodes them) plus `{"tool": str}` / `{"model": str}`
@@ -75,6 +82,14 @@ function extractEvent(data: string): AgentEvent | null {
       if (typeof (o as { data?: unknown }).data === 'string') return { delta: (o as { data: string }).data };
       if (typeof (o as { tool?: unknown }).tool === 'string') return { tool: (o as { tool: string }).tool };
       if (typeof (o as { model?: unknown }).model === 'string') return { model: (o as { model: string }).model };
+      const u = (o as { usage?: { inputTokens?: unknown; outputTokens?: unknown } }).usage;
+      if (u && typeof u.inputTokens === 'number' && typeof u.outputTokens === 'number') {
+        return { usage: { inputTokens: u.inputTokens, outputTokens: u.outputTokens } };
+      }
+      const ti = (o as { toolInput?: { tool?: unknown; query?: unknown } }).toolInput;
+      if (ti && typeof ti.tool === 'string' && typeof ti.query === 'string') {
+        return { toolInput: { tool: ti.tool, query: ti.query } };
+      }
       return null;
     }
     return typeof o === 'string' && o ? { delta: o } : null;
@@ -144,6 +159,7 @@ function buildCommand(input: InvokeInput, arn: string): InvokeAgentRuntimeComman
   if (input.accountAlias) body.accountAlias = input.accountAlias;
   if (input.integrations?.length) body.integrations = input.integrations;
   if (input.extraContext) body.extraContext = input.extraContext;
+  if (input.responseLanguage) body.responseLanguage = input.responseLanguage;
   return new InvokeAgentRuntimeCommand({
     agentRuntimeArn: arn,
     qualifier: 'DEFAULT',

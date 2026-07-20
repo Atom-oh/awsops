@@ -1,6 +1,10 @@
 import { verifyUser } from '@/lib/auth';
-import { invokeAgent, invokeAgentStreamDetailed, type ChatMsg } from '@/lib/agentcore';
-import { getModelLabel } from '@/lib/bedrock';
+import { invokeAgent, invokeAgentStreamDetailed, type ChatMsg, type TokenUsage } from '@/lib/agentcore';
+import { getModelLabel, getModelPricing, computeCost } from '@/lib/bedrock';
+import { isCodeIntent, getInterpreterId, generateCode, extractPython, executePython } from '@/lib/code-interpreter';
+import { bedrockDirectStream } from '@/lib/bedrock-direct';
+import { chatMsg, normalizeChatLang } from '@/lib/chat-i18n';
+import { getAccount, validateAccountId } from '@/lib/accounts';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt, buildClassifierContext } from '@/lib/classifier';
 import { sanitizeHistory } from '@/lib/chat-context';
@@ -11,7 +15,7 @@ import { getEnabledCustomAgents } from '@/lib/catalog-source';
 import { isCustomAgentEnabled } from '@/lib/catalog';
 import { getEnabledIntegrations } from '@/lib/integrations';
 import { pickCustomAgent, resolveAgent } from '@/lib/agent-resolver';
-import { recordCustomAgentTrace } from '@/lib/trace';
+import { recordCustomAgentTrace, recordChatInvoke } from '@/lib/trace';
 import { recordExchange } from '@/lib/chat-store';
 import { currentAccountId, currentAccountAlias } from '@/lib/account';
 import { listConfiguredSchemas, renderSchemaForPrompt } from '@/lib/datasource-schema';
@@ -26,6 +30,12 @@ export const maxDuration = 120; // long agent calls
 const MAX_PROMPT = 50_000;
 const TYPE_DELAY_MS = Number(process.env.CHAT_TYPEWRITER_MS) || 0;
 const STATUS_TICK_MS = 1500;
+const THREAD_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SSE_HEADERS = {
+  'Content-Type': 'text/event-stream; charset=utf-8',
+  'Cache-Control': 'no-cache, no-transform',
+  Connection: 'keep-alive',
+} as const;
 
 
 function json(obj: unknown, status: number) {
@@ -64,7 +74,7 @@ export async function POST(request: Request) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
 
-  let body: { prompt?: string; messages?: ChatMsg[]; section?: string; switchedFrom?: string; sessionId?: string; threadId?: string };
+  let body: { prompt?: string; messages?: ChatMsg[]; section?: string; switchedFrom?: string; sessionId?: string; threadId?: string; lang?: string; accountId?: string };
   try {
     // bound BEFORE parse (App-Router has no default body cap → OOM guard); 512KB covers prompt + thread history
     body = (await readJsonBounded(request, 512_000)) as typeof body;
@@ -79,8 +89,66 @@ export async function POST(request: Request) {
   // or non-string `content`) would otherwise throw deep inside the classifier/assistant history
   // renderers, silently degrading routing instead of failing loud or just being dropped.
   const history = sanitizeHistory(body.messages);
+  // v1-parity UI-language UX: server-issued guides + the agent's response language follow the
+  // UI language (not question-language guessing). Absent/invalid ⇒ 'ko' (legacy behavior).
+  const lang = normalizeChatLang(body.lang);
 
   const sessionId = (body.sessionId && body.sessionId.length >= 33) ? body.sessionId : `awsops-${user.sub}-000000000000000000000000`;
+
+  // v1 priority-1 Code Interpreter route (ADR-004 §5 Accepted; v1 route.ts:1000-1035): explicit
+  // code/calculation intents generate Python via Bedrock, run it in the provisioned AgentCore
+  // sandbox, and stream both. Fail-open: interpreter unprovisioned ⇒ normal routing below.
+  if (isCodeIntent(prompt) && (await getInterpreterId().catch(() => null))) {
+    const threadId = (typeof body.threadId === 'string' && THREAD_RE.test(body.threadId)) ? body.threadId : randomUUID();
+    const enc = new TextEncoder();
+    const t0 = Date.now();
+    const codegenModel = process.env.CODEGEN_MODEL_ID || 'global.anthropic.claude-sonnet-5';
+    const stream = new ReadableStream({
+      async start(controller) {
+        controller.enqueue(enc.encode(': heartbeat\n\n'));
+        controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify({ gateway: 'code', agentName: 'Code Interpreter', tier: 'builtin', skillHashes: [], threadId })}\n\n`));
+        controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'code-generating' }) + '\n\n'));
+        let text = '';
+        try {
+          for await (const d of generateCode(prompt, request.signal)) {
+            if (request.signal.aborted) break;
+            text += d;
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: d })}\n\n`));
+          }
+          const code = extractPython(text);
+          if (code && !request.signal.aborted) {
+            controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'code-executing', elapsedMs: Date.now() - t0 }) + '\n\n'));
+            try {
+              const { output, isError } = await executePython(code);
+              const block = `${chatMsg.codeExecHeader(lang)}\`\`\`\n${output}\n\`\`\`` + (isError ? chatMsg.codeExecFailed(lang) : '');
+              text += block;
+              controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: block })}\n\n`));
+            } catch {
+              // sandbox unavailable mid-flight — the generated code is still a useful answer
+              const note = chatMsg.codeExecFailed(lang);
+              text += note;
+              controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: note })}\n\n`));
+            }
+          }
+          const footerMeta = { elapsedMs: Date.now() - t0, tools: ['code_interpreter'], model: getModelLabel(codegenModel) };
+          controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footerMeta)}\n\n`));
+          if (!request.signal.aborted) {
+            recordExchange({
+              threadId, userSub: user.sub, sessionId, promptTitle: prompt.slice(0, 40),
+              userContent: prompt, assistantContent: text, gateway: 'code', meta: footerMeta,
+            }).catch(() => {});
+            void recordChatInvoke({ gateway: 'code', userSub: user.sub, elapsedMs: Date.now() - t0, success: true, via: 'code-interpreter', model: codegenModel });
+          }
+        } catch (e) {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'code route failed' })}\n\n`));
+          void recordChatInvoke({ gateway: 'code', userSub: user.sub, elapsedMs: Date.now() - t0, success: false, via: 'code-interpreter' });
+        }
+        controller.enqueue(enc.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    return new Response(stream, { headers: SSE_HEADERS });
+  }
   // ADR-038: hybrid routing behind HYBRID_ROUTING_ENABLED. Flag off = exact legacy path.
   const hybridOn = process.env.HYBRID_ROUTING_ENABLED === 'true';
   // ADR-038 §5: a chip-switch resend marks the previous answer as a misroute candidate.
@@ -105,8 +173,18 @@ export async function POST(request: Request) {
   }
   // ADR-031 custom agents. ADR-038 precedence: explicit pin > custom > classifier (spec §2.2).
   // ADR-031 Phase 2: per-account Agent Space. No row ⇒ Phase-1 global behavior.
-  const accountId = currentAccountId();
-  const accountAlias = currentAccountAlias();
+  // v1-parity multi-account target (v1 route.ts:926-930): an explicit body.accountId targets a
+  // REGISTERED+ENABLED account (accounts table); anything else keeps the host default. The value
+  // only ever reaches the agent payload/Agent-Space keying — never IAM decisions.
+  let accountId = currentAccountId();
+  let accountAlias = currentAccountAlias();
+  if (typeof body.accountId === 'string' && validateAccountId(body.accountId) && body.accountId !== accountId) {
+    const target = await getAccount(body.accountId).catch(() => undefined);
+    if (target?.enabled) {
+      accountId = target.accountId;
+      accountAlias = target.alias || undefined;
+    }
+  }
   const customAgents = await getEnabledCustomAgents(accountId);   // [] when Aurora off / no customs
   const space = await getAgentSpace(accountId);                   // null ⇒ Phase-1
   const pinIsBuiltin = !!(body.section && sectionByKey(body.section));
@@ -176,7 +254,6 @@ export async function POST(request: Request) {
   const messages: ChatMsg[] = [...history, { role: 'user', content: prompt }];
   // Thread persistence: adopt a well-formed client threadId, else mint one. Ownership is
   // enforced at write time by chat-store's owner-guarded upsert (forged ids just drop).
-  const THREAD_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const threadId = (typeof body.threadId === 'string' && THREAD_RE.test(body.threadId)) ? body.threadId : randomUUID();
   const via = doFanout ? `multi:${fanGateways.join('+')}` : undefined;
   const recordGateway = useAssistant ? 'assistant' : spec.gateway;
@@ -238,7 +315,7 @@ export async function POST(request: Request) {
       // HONEST message — never a silent fallback to keyword/classifier routing.
       if (unavailablePin) {
         const name = String(body.section).slice(0, 40);
-        const guide = `🔒 선택한 에이전트 '${name}'는 이 Agent Space에서 사용할 수 없습니다(비활성화되었거나 존재하지 않음). 다른 에이전트를 선택하거나 자동 라우팅으로 다시 시도해 주세요.`;
+        const guide = chatMsg.unavailablePin(lang, name);
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: guide })}\n\n`));
         record(guide);
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
@@ -264,19 +341,22 @@ export async function POST(request: Request) {
       }
       // ADR-044 cross-domain auto-synthesis: fan out over the selected built-in gateways, then merge.
       if (doFanout) {
+        const tf0 = Date.now();
         // gate CRITICAL: each gateway gets its OWN built-in invoke input (no shared primary spec).
         const settled = await Promise.allSettled(
           fanGateways.map((g) => invokeAgent({
             gateway: g, messages, sessionId, accountId, accountAlias,
             extraContext: obs(g) ? datasourceSchemaContext : undefined, // cached schema reaches fanned monitoring/data agents too
+            responseLanguage: lang,
           })),
         );
         const survivors = settled.flatMap((r, i) =>
           r.status === 'fulfilled' ? [{ gateway: fanGateways[i], text: r.value }] : []);
         if (survivors.length === 0) {
-          controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: 'all routes failed' })}\n\n`));
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: chatMsg.allRoutesFailed(lang) })}\n\n`));
           controller.enqueue(enc.encode('data: [DONE]\n\n'));
           controller.close();
+          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub, elapsedMs: Date.now() - tf0, success: false, via });
           return;
         }
         // synthesizeStream: ≥2 survivors → merged stream; exactly 1 → passthrough (no extra Bedrock call).
@@ -287,15 +367,17 @@ export async function POST(request: Request) {
           full += t;
           controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: t })}\n\n`));
         }
-        if (!request.signal.aborted) record(full); // don't persist a half-streamed, client-aborted answer
+        if (!request.signal.aborted) {
+          record(full); // don't persist a half-streamed, client-aborted answer
+          void recordChatInvoke({ gateway: fanGateways[0] ?? spec.gateway, userSub: user.sub, elapsedMs: Date.now() - tf0, success: true, via });
+        }
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
         controller.close();
         return;
       }
       if (inactiveSection) {
         const alts = (route?.ranked ?? []).filter((r) => r.active).map((r) => r.key).join(', ');
-        const guide = `🔒 ${inactiveSection.label} 에이전트는 P3에서 제공 예정입니다.` +
-          (alts ? ` 활성 섹션(${alts}) 칩으로 다시 시도해 주세요.` : ' 활성 섹션으로 다시 시도해 주세요.');
+        const guide = chatMsg.inactiveSection(lang, inactiveSection.label, alts);
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: guide })}\n\n`));
         record(guide); // the question is worth keeping even when the section isn't live (spec §3)
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
@@ -325,6 +407,7 @@ export async function POST(request: Request) {
       const tools: string[] = [];
       const seenTools = new Set<string>();
       let model: string | undefined;
+      let usage: TokenUsage | undefined;
       try {
         for await (const ev of invokeAgentStreamDetailed({
           gateway: spec.gateway, messages, sessionId,
@@ -334,6 +417,7 @@ export async function POST(request: Request) {
           accountId, accountAlias,
           integrations: spec.integrations, // ADR-039 P2-infra inc2: live egress-READ MCP connections
           extraContext: datasourceSchemaContext, // cached datasource schemas → agent reads the cache
+          responseLanguage: lang, // v1-parity: UI language wins over question-language guessing
         })) {
           if (request.signal.aborted) break;
           // Independent ifs, not else-if: AgentEvent's fields aren't guaranteed mutually
@@ -344,12 +428,43 @@ export async function POST(request: Request) {
           }
           if (ev.tool && !seenTools.has(ev.tool)) { seenTools.add(ev.tool); tools.push(ev.tool); }
           if (ev.model) model = ev.model;
+          if (ev.usage) usage = ev.usage; // v1-parity per-answer token usage (cost footer)
+          if (ev.toolInput) {
+            // v1-parity: surface the generated query (SQL/PromQL/...) in the status line
+            controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({
+              phase: 'querying', tool: ev.toolInput.tool, query: ev.toolInput.query, elapsedMs: Date.now() - t0,
+            }) + '\n\n'));
+          }
         }
         provenance = { tools, model };
       } catch (e) {
+        // v1-parity last-resort ladder (v1 route.ts:1335-1353): the Runtime itself was unreachable
+        // BEFORE any answer text — answer via Bedrock direct instead of a dead error frame. Honest:
+        // tagged via 'bedrock-direct-fallback' + an explicit no-live-tools notice in the text.
+        if (!text && !request.signal.aborted) {
+          try {
+            controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify({ via: 'bedrock-direct-fallback' })}\n\n`));
+            const notice = chatMsg.fallbackNotice(lang);
+            text = notice;
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: notice })}\n\n`));
+            for await (const d of bedrockDirectStream(prompt, history, { abortSignal: request.signal, responseLanguage: lang })) {
+              if (request.signal.aborted) break;
+              text += d;
+              controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: d })}\n\n`));
+            }
+            if (!request.signal.aborted) {
+              record(text, { via: 'bedrock-direct-fallback' });
+              void recordChatInvoke({ gateway: spec.gateway, userSub: user.sub, elapsedMs: Date.now() - t0, success: true, via: 'bedrock-direct-fallback' });
+            }
+            controller.enqueue(enc.encode('data: [DONE]\n\n'));
+            controller.close();
+            return;
+          } catch { /* Bedrock also down — fall through to the true end of the ladder */ }
+        }
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'invoke failed' })}\n\n`));
         controller.enqueue(enc.encode('data: [DONE]\n\n'));
         controller.close();
+        void recordChatInvoke({ gateway: spec.gateway, userSub: user.sub, elapsedMs: Date.now() - t0, success: false });
         return;
       } finally {
         clearInterval(tick);
@@ -362,14 +477,30 @@ export async function POST(request: Request) {
       // Answer-provenance footer (design handoff 개선안 ③): server-measured elapsed is the
       // authoritative total (the periodic `status` ticks stop once the invoke resolves), plus
       // the tools the agent actually called and its model — all unknown before this point.
+      // v1-parity cost footer: tokens + estimated USD, computable only when the agent reported
+      // usage AND its model id maps to a known price (both absent against an old agent image).
+      const costUsd = usage && model
+        ? computeCost(
+            { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            getModelPricing(model),
+          ).total
+        : undefined;
       const footerMeta = {
         elapsedMs: Date.now() - t0,
         ...(provenance.tools.length ? { tools: provenance.tools } : {}),
         ...(provenance.model ? { model: getModelLabel(provenance.model) } : {}),
+        ...(usage ? { usage } : {}),
+        ...(costUsd !== undefined ? { costUsd: Number(costUsd.toFixed(6)) } : {}),
       };
       controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footerMeta)}\n\n`));
       // don't persist a half-streamed, client-aborted answer (same guard as the assistant/fanout paths)
-      if (!request.signal.aborted) record(text, footerMeta);
+      if (!request.signal.aborted) {
+        record(text, footerMeta);
+        void recordChatInvoke({
+          gateway: spec.gateway, userSub: user.sub, elapsedMs: Date.now() - t0, success: true,
+          model: provenance.model, toolCount: provenance.tools.length, usage,
+        });
+      }
       controller.enqueue(enc.encode('data: [DONE]\n\n'));
       controller.close();
     },

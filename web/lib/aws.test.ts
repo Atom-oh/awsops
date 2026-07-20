@@ -162,9 +162,21 @@ describe('getServiceCostDetail', () => {
           ] },
         ],
       });
+    ceSend
+      // ③ MONTHLY totals (6 months)
+      .mockResolvedValueOnce({
+        ResultsByTime: [
+          { TimePeriod: { Start: '2026-06-01' }, Total: { UnblendedCost: { Amount: '10', Unit: 'USD' } } },
+          { TimePeriod: { Start: '2026-07-01' }, Total: { UnblendedCost: { Amount: '12', Unit: 'USD' } } },
+        ],
+      });
     const { getServiceCostDetail } = await import('./aws');
     const d = await getServiceCostDetail('Amazon EC2');
     expect(d.service).toBe('Amazon EC2');
+    expect(d.monthly).toEqual([
+      { month: '2026-06', amount: 10 },
+      { month: '2026-07', amount: 12 },
+    ]);
     expect(d.trend).toEqual([
       { date: '2026-06-01', amount: 4 },
       { date: '2026-06-02', amount: 6 },
@@ -187,10 +199,12 @@ describe('getServiceCostDetail', () => {
   it('null on the leg that fails, [] semantics preserved per-leg', async () => {
     ceSend
       .mockRejectedValueOnce(new Error('no ce perms')) // trend fails
-      .mockResolvedValueOnce({ ResultsByTime: [] });    // usage-type genuinely empty
+      .mockResolvedValueOnce({ ResultsByTime: [] })     // usage-type genuinely empty
+      .mockRejectedValueOnce(new Error('no ce perms')); // monthly fails too
     const { getServiceCostDetail } = await import('./aws');
     const d = await getServiceCostDetail('Amazon S3');
     expect(d.trend).toBeNull();
+    expect(d.monthly).toBeNull();
     expect(d.byUsageType).toEqual([]);
   });
 });

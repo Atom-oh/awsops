@@ -7,7 +7,7 @@ import IntegrationIcon from '@/components/datasources/IntegrationIcon';
 import DatasourceForm, { type DatasourceFormValue } from './DatasourceForm';
 
 interface Instance {
-  id: number; name: string; kind: string; authType?: string | null; isDefault?: boolean; connected?: boolean;
+  id: number; name: string; kind: string; endpoint?: string | null; authType?: string | null; isDefault?: boolean; connected?: boolean;
 }
 
 // The Datasources tab: manage instances (multi-per-type, named) + drill into Explore. Read-visible to
@@ -63,14 +63,14 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
         <table className="w-full text-[13px]">
           <thead>
             <tr className="text-left text-[11px] uppercase tracking-wide text-ink-400 border-b border-ink-100">
-              <th className="px-3 py-2">Name</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Auth</th>
+              <th className="px-3 py-2">Name</th><th className="px-3 py-2">Type</th>{canManage && <th className="px-3 py-2">URL</th>}<th className="px-3 py-2">Auth</th>
               <th className="px-3 py-2">Status</th><th className="px-3 py-2">Default</th><th className="px-3 py-2" />
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={6} className="px-3 py-6 text-center text-ink-400">불러오는 중…</td></tr>}
+            {loading && <tr><td colSpan={7} className="px-3 py-6 text-center text-ink-400">불러오는 중…</td></tr>}
             {!loading && list.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-ink-400">등록된 데이터소스가 없습니다.</td></tr>
+              <tr><td colSpan={7} className="px-3 py-6 text-center text-ink-400">등록된 데이터소스가 없습니다.</td></tr>
             )}
             {list.map((i) => (
               <tr key={i.id} className="border-b border-ink-50">
@@ -78,6 +78,11 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
                   <span className="inline-flex items-center gap-2"><IntegrationIcon kind={i.kind} /> {i.name}</span>
                 </td>
                 <td className="px-3 py-2 text-ink-600">{i.kind}</td>
+                {canManage && (
+                  <td className="px-3 py-2">
+                    <span className="block max-w-[260px] truncate font-mono text-[11px] text-ink-500" title={i.endpoint ?? ''}>{i.endpoint ?? '—'}</span>
+                  </td>
+                )}
                 <td className="px-3 py-2 text-ink-500">{i.authType ?? 'none'}</td>
                 <td className="px-3 py-2">
                   <span className={i.connected ? 'text-emerald-600' : 'text-amber-600'}>{i.connected ? '● connected' : '○ unconfigured'}</span>
@@ -85,7 +90,7 @@ export default function DatasourcesTab({ canManage = false }: { canManage?: bool
                 <td className="px-3 py-2">{i.isDefault ? <span className="text-amber-600">★ default</span> : (canManage && <button className="text-[12px] text-brand-600 hover:underline" onClick={() => onSetDefault(i)} disabled={busyId === i.id}>set default</button>)}</td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
                   <Link href={`/integrations/datasources/${i.id}`} className="text-[12px] text-brand-600 hover:underline mr-3">Explore →</Link>
-                  {canManage && <button className="text-[12px] text-ink-600 hover:underline mr-3" onClick={() => setForm({ mode: 'edit', value: { id: i.id, name: i.name, kind: i.kind, endpoint: '', authType: i.authType ?? 'none' } })}>Edit</button>}
+                  {canManage && <button className="text-[12px] text-ink-600 hover:underline mr-3" onClick={() => setForm({ mode: 'edit', value: { id: i.id, name: i.name, kind: i.kind, endpoint: i.endpoint ?? '', authType: i.authType ?? 'none' } })}>Edit</button>}
                   {canManage && <button className="text-[12px] text-rose-600 hover:underline" onClick={() => onDelete(i)} disabled={busyId === i.id}>Delete</button>}
                 </td>
               </tr>

@@ -70,7 +70,7 @@ export default function SchedulePanel() {
           aria-label="진단 주기"
           value={sched.scheduleType}
           onChange={(e) => patch({ scheduleType: e.target.value as Schedule['scheduleType'] })}
-          className="rounded-md border border-ink-200 px-2 py-1 text-[13px]"
+          className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[13px] text-ink-700"
         >
           <option value="weekly">매주</option>
           <option value="biweekly">격주</option>

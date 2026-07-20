@@ -119,7 +119,7 @@ export default function SubscribersPanel() {
             }}
             placeholder="email@example.com"
             aria-label="구독 이메일 추가"
-            className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-[13px]"
+            className="min-w-0 flex-1 rounded-md border border-ink-200 bg-card px-2 py-1 text-[13px] text-ink-800"
           />
           <button
             onClick={add}
@@ -133,7 +133,7 @@ export default function SubscribersPanel() {
       {subs.some((s) => s.status === 'PendingConfirmation') && (
         // A pending subscription has no real ARN yet, so it cannot be unsubscribed via the SNS API (and
         // thus has no 제거 button). Tell admins it is self-clearing so it is not read as a stuck dead-end.
-        <p className="mt-1 text-[11px] text-amber-700">
+        <p className="mt-1 text-[11px] text-warning-text">
           확인 대기 항목은 수신자가 확인 메일의 링크를 눌러야 활성화됩니다. 미확인 시 약 3일 후 자동 만료됩니다.
         </p>
       )}

@@ -11,10 +11,13 @@ name: AI Code Review
 #   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO)
 #   - 리전: us-east-1 (Claude us. geo / codex gpt-5.6-sol bedrock-mantle In-Region)
 
+# DISABLED for upstream: this job requires the fork's self-hosted runner
+# 'awsops-claude-arm' (EKS Pod Identity + Bedrock us-east-1), which does not
+# exist on whchoi98/awsops — on pull_request_target it would queue forever.
+# Trigger left as workflow_dispatch only. Restore pull_request_target once an
+# equivalent runner exists.
 on:
-  pull_request_target:
-    types: [opened, synchronize]
-    branches: [main] # 이 repo의 유일한 PR 타겟 — non-main PR은 없음
+  workflow_dispatch:
 
 jobs:
   review:

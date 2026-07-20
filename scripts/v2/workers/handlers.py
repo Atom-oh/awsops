@@ -83,8 +83,10 @@ def _report(payload, dry_run):
             # A4 (V1 parity): stream per-section progress to diagnosis_reports as generate() advances.
             on_progress = (lambda c, t, s, p: ddb.update_progress(
                 conn, report_id, current=c, total=t, section=s, phase=p))
+            scope = payload.get("scope") or "self"
             md, summary, sources_used = rpt.generate(
-                conn, account, tier, report_id=report_id, on_progress=on_progress, model=model)
+                conn, account, tier, report_id=report_id, on_progress=on_progress, model=model,
+                scope=scope)
             artifact_uri = _upload_markdown(md, report_id)
             _export_artifacts(md, report_id)  # best-effort DOCX+PDF; never fails the report
             try:  # auto title + suggested tags — best-effort, never fails the report

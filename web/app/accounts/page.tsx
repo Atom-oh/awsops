@@ -10,7 +10,7 @@ import Badge from '@/components/ui/Badge';
 
 interface Account {
   accountId: string; alias: string; region: string; isHost: boolean;
-  externalId: string | null; enabled: boolean; status: string;
+  externalId: string | null; enabled: boolean; status: string; lastVerifiedAt: string | null;
 }
 interface AccountRegion { accountId: string; region: string; enabled: boolean }
 
@@ -25,6 +25,7 @@ export default function AccountsPage() {
   const [msg, setMsg] = useState('');
   const [form, setForm] = useState({ accountId: '', alias: '', region: 'ap-northeast-2', externalId: '', firstParty: false });
   const [regionForm, setRegionForm] = useState<Record<string, string>>({});
+  const [testing, setTesting] = useState<string | null>(null); // v1-parity per-row connection re-test
 
   const load = useCallback(async () => {
     const [r, rr] = await Promise.all([fetch('/api/accounts'), fetch('/api/accounts/regions')]);
@@ -55,6 +56,19 @@ export default function AccountsPage() {
     const r = await fetch(`/api/accounts?accountId=${id}`, { method: 'DELETE' });
     if (!r.ok) { const d = await r.json().catch(() => ({})); setMsg(`삭제 실패: ${d.message || r.status}`); return; }
     await load();
+  };
+
+  // v1-parity connection test: re-assume the registered role and refresh status/lastVerifiedAt.
+  const testConnection = async (accountId: string) => {
+    setTesting(accountId); setMsg('');
+    try {
+      const r = await fetch('/api/accounts', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      setMsg(r.ok ? `${accountId} 연결 확인됨 (verified)` : `${accountId} 연결 실패: ${d.message || r.status}`);
+      await load(); // status badge + last_verified_at reflect the outcome either way
+    } finally { setTesting(null); }
   };
 
   const addRegion = async (accountId: string) => {
@@ -116,12 +130,22 @@ export default function AccountsPage() {
                       ))}
                     </div>
                   </td>
-                  <td><Badge tone={statusTone(a.status)} variant="soft">{a.status}</Badge></td>
+                  <td title={a.lastVerifiedAt ? `마지막 검증: ${new Date(a.lastVerifiedAt).toLocaleString('ko-KR')}` : '검증 이력 없음'}>
+                    <Badge tone={statusTone(a.status)} variant="soft">{a.status}</Badge>
+                  </td>
                   <td className="text-right">
                     <div className="flex justify-end gap-1">
+                      <button
+                        aria-label={`${a.alias} 연결 테스트`}
+                        onClick={() => testConnection(a.accountId)}
+                        disabled={testing !== null}
+                        className="rounded border border-brand-200 bg-brand-50 px-2 py-1 text-[11px] text-brand-700 hover:bg-brand-100 disabled:opacity-50"
+                      >
+                        {testing === a.accountId ? '테스트 중…' : '테스트'}
+                      </button>
                       <input
                         aria-label={`${a.alias} 추가 리전`}
-                        className="w-28 rounded border border-ink-200 px-1.5 py-1 text-[11px]"
+                        className="w-28 rounded border border-ink-200 bg-card px-1.5 py-1 text-[11px] text-ink-800"
                         placeholder="us-east-1"
                         value={regionForm[a.accountId] || ''}
                         onChange={(e) => setRegionForm({ ...regionForm, [a.accountId]: e.target.value.trim() })}
@@ -149,10 +173,10 @@ export default function AccountsPage() {
       <Card className="p-4 flex flex-col gap-2">
         <div className="text-[13px] font-semibold text-ink-800">계정 추가</div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-          <input className="border border-ink-200 rounded px-2 py-1 text-[12px] font-mono" placeholder="Account ID (12 digits)" value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value.trim() })} />
-          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Alias" value={form.alias} onChange={(e) => setForm({ ...form, alias: e.target.value })} />
-          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="Region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value.trim() })} />
-          <input className="border border-ink-200 rounded px-2 py-1 text-[12px]" placeholder="ExternalId (optional, 1st-party)" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
+          <input className="border border-ink-200 bg-card rounded px-2 py-1 text-[12px] font-mono text-ink-800" placeholder="Account ID (12 digits)" value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value.trim() })} />
+          <input className="border border-ink-200 bg-card rounded px-2 py-1 text-[12px] text-ink-800" placeholder="Alias" value={form.alias} onChange={(e) => setForm({ ...form, alias: e.target.value })} />
+          <input className="border border-ink-200 bg-card rounded px-2 py-1 text-[12px] text-ink-800" placeholder="Region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value.trim() })} />
+          <input className="border border-ink-200 bg-card rounded px-2 py-1 text-[12px] text-ink-800" placeholder="ExternalId (optional, 1st-party)" value={form.externalId} onChange={(e) => setForm({ ...form, externalId: e.target.value.trim() })} />
         </div>
         <label className="flex items-center gap-2 text-[11px] text-ink-500">
           <input type="checkbox" checked={form.firstParty} onChange={(e) => setForm({ ...form, firstParty: e.target.checked })} />

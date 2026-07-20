@@ -6,7 +6,7 @@ import {
 } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
-  it('has the 33 wave types (31 + ecs_service + ebs_snapshot)', () => {
+  it('has the 41 registered types (39 + elasticache_replication_group + iam_policy)', () => {
     const keys = Object.keys(INVENTORY_TYPES);
     expect(keys).toContain('ec2'); expect(keys).toContain('s3'); expect(keys).toContain('iam_role');
     expect(keys).toContain('cloudfront'); expect(keys).toContain('cloudwatch_alarm'); expect(keys).toContain('msk');
@@ -17,7 +17,7 @@ describe('INVENTORY_TYPES registry', () => {
     expect(keys).toContain('apigatewayv2_route'); expect(keys).toContain('alb_listener_rule');
     // security findings source (denial-safe S3 public-access sync)
     expect(keys).toContain('s3_public_access');
-    expect(keys.length).toBe(33);
+    expect(keys.length).toBe(41);
   });
   it('every type has a label, group, and >=1 column', () => {
     for (const [k, v] of Object.entries(INVENTORY_TYPES)) {
@@ -94,11 +94,11 @@ describe('navTree (sidebar IA hierarchy)', () => {
     expect(tree.map((g) => g.slug)).toEqual(['compute', 'storage', 'network', 'security', 'monitoring']);
   });
 
-  it('places every inventory type exactly once (no drop, no dup) — 33 total', () => {
+  it('places every inventory type exactly once (no drop, no dup) — 41 total', () => {
     const placed = tree.flatMap((g) => invTypesOf(g.slug));
     expect(new Set(placed).size).toBe(placed.length); // no duplicates
     expect(new Set(placed)).toEqual(new Set(Object.keys(INVENTORY_TYPES)));
-    expect(placed.length).toBe(33);
+    expect(placed.length).toBe(41);
   });
 
   it('Compute injects EKS as a feature leaf first, then ec2/lambda/ecr, with an ECS subgroup', () => {
@@ -116,7 +116,7 @@ describe('navTree (sidebar IA hierarchy)', () => {
     expect(n.subgroups.find((s) => s.key === 'apiGateway')!.items.map((l) => l.type))
       .toEqual(['apigatewayv2_api', 'apigatewayv2_integration', 'apigatewayv2_route']);
     const direct = n.items.filter((l) => l.kind === 'inventory').map((l) => l.type);
-    expect(direct).toEqual(['vpc', 'subnet', 'security_group', 'route53', 'cloudfront', 'cloudfront_vpc_origin']);
+    expect(direct).toEqual(['vpc', 'subnet', 'route_table', 'nat_gateway', 'internet_gateway', 'transit_gateway', 'security_group', 'route53', 'cloudfront', 'cloudfront_vpc_origin']);
   });
 
   it('Monitoring is a singleton (flat, no overview href)', () => {
@@ -189,13 +189,22 @@ describe('computeHighlights (per-type highlight cards)', () => {
     const rows = [{ r: 'python3.7' }, { r: 'nodejs20.x' }, { r: 'go1.x' }];
     expect(computeHighlights(rows, [{ kind: 'deprecatedRuntime', label: 'eol', col: 'r' }])[0]).toEqual({ label: 'eol', value: 2, variant: 'danger' });
   });
-  it('every HIGHLIGHTS entry references a real column (or region/resource_id) for its type', () => {
+  it('every HIGHLIGHTS entry references a real synced field for its type', () => {
     const VIRTUAL = new Set(['region', 'resource_id']);
     for (const [type, hls] of Object.entries(HIGHLIGHTS)) {
       const spec = INVENTORY_TYPES[type];
       expect(spec, `HIGHLIGHTS[${type}] has a registered type`).toBeTruthy();
-      const cols = new Set(spec.columns.map((c) => c.key));
-      for (const h of hls) expect(cols.has(h.col) || VIRTUAL.has(h.col), `${type}.${h.col}`).toBe(true);
+      // Known synced fields = table columns ∪ detail-section keys (both validated against
+      // sync_lambda.py) ∪ state/dist keys. Dotted JSONB paths validate their ROOT field.
+      const cols = new Set<string>([
+        ...spec.columns.map((c) => c.key),
+        ...(spec.sections ?? []).flatMap((sec) => sec.keys),
+        ...[spec.stateKey, spec.distKey, spec.distKey2, spec.barKey?.col].filter((k): k is string => Boolean(k)),
+      ]);
+      for (const h of hls) {
+        const root = h.col.split('.')[0];
+        expect(cols.has(root) || VIRTUAL.has(root), `${type}.${h.col}`).toBe(true);
+      }
     }
   });
 });

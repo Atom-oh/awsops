@@ -40,20 +40,35 @@ export async function POST(req: Request) {
   const tier = ['light', 'mid', 'deep'].includes(body?.tier) ? body.tier : 'mid';
   // Only the deep tier may select Opus; every other tier is pinned to Sonnet (cost guard).
   const model: DiagnosisModel = tier === 'deep' && body?.model === 'opus' ? 'opus' : 'sonnet';
-  const account = process.env.AWS_ACCOUNT_ID || '';
+  const hostAccount = process.env.AWS_ACCOUNT_ID || '';
   // [PR#37 review MAJOR] fail fast — an empty account would silently reach the LLM context.
-  if (!account) {
+  if (!hostAccount) {
     return NextResponse.json(
       { message: 'AWS_ACCOUNT_ID not configured on the web task' },
       { status: 503 },
     );
+  }
+  // v1 parity: diagnose a selected member account. Validated against the registered accounts
+  // table (12-digit + enabled member) — anything else falls back to the host. The worker's
+  // Aurora collectors filter by `scope`; host-credentialed live collectors degrade honestly.
+  let account = hostAccount;
+  let scope = 'self';
+  const requested = typeof body?.account === 'string' ? body.account.trim() : '';
+  if (requested && requested !== hostAccount && /^[0-9]{12}$/.test(requested)) {
+    try {
+      const { rows } = await (await import('@/lib/db')).getPool().query(
+        `SELECT 1 FROM accounts WHERE account_id = $1 AND enabled AND NOT is_host`,
+        [requested],
+      );
+      if (rows.length > 0) { account = requested; scope = requested; }
+    } catch { /* fall back to host */ }
   }
   const email = user.email || user.sub;
 
   // [GATE-FIX R2 CRITICAL] Idempotency-FIRST → create the report with NULL fk → enqueue (inserts
   // worker_jobs) → LINK. The FK is only set once worker_jobs(job_id) exists.
   const hour = new Date().toISOString().slice(0, 13);
-  const key = `report:${email}:${tier}:${model}:${hour}`;
+  const key = `report:${email}:${tier}:${model}:${scope}:${hour}`;
 
   const existing = await reportForIdempotencyKey(key);
   if (existing) {
@@ -65,7 +80,7 @@ export async function POST(req: Request) {
   try {
     job = await enqueueJob(
       'report',
-      { account, tier, model, requested_by: email, report_id: reportId },
+      { account, scope, tier, model, requested_by: email, report_id: reportId },
       { idempotencyKey: key },
     );
   } catch (e) {

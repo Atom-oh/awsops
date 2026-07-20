@@ -26,11 +26,11 @@ function ReportMarkdownImpl({ markdown }: { markdown: string }) {
         components={{
           // Document title.
           h1: ({ children }) => (
-            <h1 className="mt-6 mb-3 border-b border-ink-200 pb-2 text-[19px] font-bold text-ink-900 first:mt-0">{children}</h1>
+            <h1 className="mt-6 mb-3 border-b border-ink-200 pb-2 text-[19px] font-bold text-ink-800 first:mt-0">{children}</h1>
           ),
           // Section headers (## per diagnosis section) — bordered for scannability across 15 sections.
           h2: ({ children }) => (
-            <h2 className="mt-6 mb-2.5 border-b border-ink-200 pb-1.5 text-[16px] font-bold text-ink-900 first:mt-0">{children}</h2>
+            <h2 className="mt-6 mb-2.5 border-b border-ink-200 pb-1.5 text-[16px] font-bold text-ink-800 first:mt-0">{children}</h2>
           ),
           // Subsections (### tables/blocks inside a section) — accent bar like v1.
           h3: ({ children }) => (
@@ -41,7 +41,7 @@ function ReportMarkdownImpl({ markdown }: { markdown: string }) {
           ),
           h4: ({ children }) => <h4 className="mt-3 mb-1 text-[13px] font-semibold text-ink-700">{children}</h4>,
           p: ({ children }) => <p className="my-2.5 first:mt-0 last:mb-0">{children}</p>,
-          strong: ({ children }) => <strong className="font-semibold text-ink-900">{children}</strong>,
+          strong: ({ children }) => <strong className="font-semibold text-ink-800">{children}</strong>,
           em: ({ children }) => <em className="italic text-ink-600">{children}</em>,
           a: ({ children, href }) => (
             <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-brand-700 underline decoration-brand-200 underline-offset-2 hover:text-brand-600">{children}</a>

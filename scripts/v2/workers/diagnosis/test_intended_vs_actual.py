@@ -101,7 +101,7 @@ def test_diff_empty_when_same_drift():
 
 def test_generate_weaves_drift_and_renders_verdict_only(monkeypatch):
     # collectors return an internet→rds edge; one active private_only invariant must drift.
-    def fake_collect_all(conn):
+    def fake_collect_all(conn, scope="self"):
         return [
             {"key": "inventory", "ok": True, "degraded": False, "notes": "", "data": {"by_type": {"rds": 1}}},
             {"key": "service_map", "ok": True, "degraded": False, "notes": "",
@@ -136,7 +136,7 @@ def test_generate_weaves_drift_and_renders_verdict_only(monkeypatch):
 
 
 def test_generate_computes_diff_when_parent_set(monkeypatch):
-    def fake_collect_all(conn):
+    def fake_collect_all(conn, scope="self"):
         return [
             {"key": "service_map", "ok": True, "degraded": False, "notes": "",
              "data": {"edges": [{"from": "internet", "to": "rds-prod"}]}},
@@ -156,7 +156,7 @@ def test_generate_computes_diff_when_parent_set(monkeypatch):
 
 
 def test_generate_no_diff_without_parent(monkeypatch):
-    def fake_collect_all(conn):
+    def fake_collect_all(conn, scope="self"):
         return [{"key": "service_map", "ok": True, "degraded": False, "notes": "", "data": {"edges": []}}]
     monkeypatch.setattr(report.src, "collect_all", fake_collect_all)
     monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "본문")
@@ -168,7 +168,7 @@ def test_generate_no_diff_without_parent(monkeypatch):
 # --- A3: live per-section progress + bedrock idle timeout ----------------
 
 def test_generate_emits_monotonic_section_progress(monkeypatch):
-    def fake_collect_all(conn):
+    def fake_collect_all(conn, scope="self"):
         return [{"key": "service_map", "ok": True, "degraded": False, "notes": "", "data": {"edges": []}}]
     monkeypatch.setattr(report.src, "collect_all", fake_collect_all)
     monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "본문")
@@ -190,7 +190,7 @@ def test_generate_emits_monotonic_section_progress(monkeypatch):
 
 
 def test_generate_progress_failure_never_aborts_report(monkeypatch):
-    def fake_collect_all(conn):
+    def fake_collect_all(conn, scope="self"):
         return [{"key": "service_map", "ok": True, "degraded": False, "notes": "", "data": {"edges": []}}]
     monkeypatch.setattr(report.src, "collect_all", fake_collect_all)
     monkeypatch.setattr(report, "_bedrock_render", lambda *a, **k: "본문")

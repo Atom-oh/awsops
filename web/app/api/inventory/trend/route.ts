@@ -30,15 +30,21 @@ export async function GET(request: Request) {
        GROUP BY 1, 2 ORDER BY 1`,
       [days],
     );
-    const byDate = new Map<string, TrendPoint>();
+    const byDate = new Map<string, TrendPoint & Record<string, number | string>>();
+    const latestByType = new Map<string, number>();
     for (const row of r.rows) {
       const p = byDate.get(row.d) ?? { date: row.d, total: 0, ec2: 0 };
       p.total += Number(row.n);
       if (row.resource_type === 'ec2') p.ec2 = Number(row.n);
+      // v1 parity: every type is a column on the point (multi-line chart + delta table).
+      p[row.resource_type] = Number(row.n);
       byDate.set(row.d, p);
+      latestByType.set(row.resource_type, Number(row.n)); // rows are date-ordered → last write wins
     }
     const trend = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-    return Response.json({ trend });
+    // Types ranked by their latest count (chart picks top-N client-side; table shows all).
+    const types = [...latestByType.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+    return Response.json({ trend, types });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

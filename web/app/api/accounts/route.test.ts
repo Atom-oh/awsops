@@ -119,6 +119,63 @@ describe('POST /api/accounts', () => {
   });
 });
 
+// v1-parity per-account connection re-test.
+describe('PATCH /api/accounts (connection re-test)', () => {
+  const REGISTERED = {
+    accountId: TARGET, alias: 'Prod', region: 'ap-northeast-2', isHost: false,
+    roleName: 'AWSopsReadOnlyRole', externalId: 'ext-1', enabled: true, status: 'verified', lastVerifiedAt: null,
+  };
+  it('401 unauth / 403 non-admin', async () => {
+    verifyUser.mockResolvedValue(null);
+    const { PATCH } = await import('./route');
+    expect((await PATCH(req('PATCH'))).status).toBe(401);
+    verifyUser.mockResolvedValue({ sub: 'u' });
+    isAdmin.mockResolvedValue(false);
+    expect((await PATCH(req('PATCH'))).status).toBe(403);
+  });
+  it('404 when the account is not registered', async () => {
+    readJsonBounded.mockResolvedValue({ accountId: TARGET });
+    getAccount.mockResolvedValue(undefined);
+    const { PATCH } = await import('./route');
+    expect((await PATCH(req('PATCH'))).status).toBe(404);
+  });
+  it('re-assumes the REGISTERED role/externalId (never client input) and stamps verified', async () => {
+    readJsonBounded.mockResolvedValue({ accountId: TARGET, externalId: 'attacker-supplied' });
+    getAccount.mockResolvedValue(REGISTERED);
+    const { PATCH } = await import('./route');
+    const res = await PATCH(req('PATCH'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).status).toBe('verified');
+    // the AssumeRoleCommand got the DB row's externalId, not the request body's
+    const { AssumeRoleCommand } = await import('@aws-sdk/client-sts');
+    const calls = (AssumeRoleCommand as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const assumeArgs = calls[calls.length - 1][0]; // mock.calls accumulate across tests — check the latest
+    expect(assumeArgs.ExternalId).toBe('ext-1');
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("status = 'verified'"), [TARGET]);
+  });
+  it('assume failure → 400, status stamped error', async () => {
+    readJsonBounded.mockResolvedValue({ accountId: TARGET });
+    getAccount.mockResolvedValue(REGISTERED);
+    send.mockReset();
+    send.mockRejectedValue(new Error('AccessDenied'));
+    const { PATCH } = await import('./route');
+    const res = await PATCH(req('PATCH'));
+    expect(res.status).toBe(400);
+    expect((await res.json()).status).toBe('error');
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("status = 'error'"), [TARGET]);
+  });
+  it('host account verifies trivially without any STS call', async () => {
+    readJsonBounded.mockResolvedValue({ accountId: TARGET });
+    getAccount.mockResolvedValue({ ...REGISTERED, isHost: true });
+    send.mockReset(); // any STS call would now throw undefined behavior — assert none happen
+    const { PATCH } = await import('./route');
+    const res = await PATCH(req('PATCH'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).host).toBe(true);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe('DELETE /api/accounts', () => {
   it('400 deleting the host account', async () => {
     getAccount.mockResolvedValue({ accountId: TARGET, isHost: true });

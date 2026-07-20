@@ -28,27 +28,27 @@ describe('GET /api/inventory/[type]', () => {
     it('no params → regions "__all__", includeGlobal true (unchanged default)', async () => {
       const { GET } = await import('./route');
       await GET(req(), ctx);
-      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: '__all__', includeGlobal: true });
+      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: '__all__', includeGlobal: true, accounts: ['self'] });
     });
     it('regions=ap-northeast-2,us-east-1 → parsed to an array', async () => {
       const { GET } = await import('./route');
       await GET(req('http://x/api/inventory/ec2?regions=ap-northeast-2,us-east-1'), ctx);
-      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: ['ap-northeast-2', 'us-east-1'], includeGlobal: true });
+      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: ['ap-northeast-2', 'us-east-1'], includeGlobal: true, accounts: ['self'] });
     });
     it('regions=__all__ explicit → same as unset', async () => {
       const { GET } = await import('./route');
       await GET(req('http://x/api/inventory/ec2?regions=__all__'), ctx);
-      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: '__all__', includeGlobal: true });
+      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: '__all__', includeGlobal: true, accounts: ['self'] });
     });
     it('includeGlobal=0 → false', async () => {
       const { GET } = await import('./route');
       await GET(req('http://x/api/inventory/ec2?includeGlobal=0'), ctx);
-      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: '__all__', includeGlobal: false });
+      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: '__all__', includeGlobal: false, accounts: ['self'] });
     });
     it('regions= (explicit empty) → [] , not "__all__"', async () => {
       const { GET } = await import('./route');
       await GET(req('http://x/api/inventory/ec2?regions=&includeGlobal=0'), ctx);
-      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: [], includeGlobal: false });
+      expect(readResources).toHaveBeenCalledWith('ec2', { limit: 100, offset: 0, regions: [], includeGlobal: false, accounts: ['self'] });
     });
   });
 });

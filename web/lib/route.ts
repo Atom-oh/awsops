@@ -88,7 +88,14 @@ export async function classifyRoute(prompt: string, pinned?: string, opts: Class
     return single(pinned, [entry(pinned, 1)], 'pin');
   }
   const matched = matchedSections(prompt);
-  if (matched.length === 1) {
+  // v1 lesson (11-route priority ladder: specialized routes above the general catch-all):
+  // a lone 'ops' keyword hit is weak evidence — generic nouns (load balancer, certificate,
+  // S3 bucket) live in the ops rules while the USER INTENT is often network/cost/monitoring.
+  // Let the classifier confirm or override a lone catch-all match; specific single matches
+  // keep short-circuiting (fast, no Bedrock call). LLM failure falls through to the same
+  // regex result below, so behavior is unchanged when the classifier is off or errors.
+  const loneCatchAll = matched.length === 1 && matched[0] === 'ops' && !!(opts.llmEnabled && opts.classify);
+  if (matched.length === 1 && !loneCatchAll) {
     return single(matched[0], [entry(matched[0], 1)], 'regex');
   }
   if (opts.llmEnabled && opts.classify) {

@@ -318,10 +318,13 @@ resource "aws_iam_role_policy" "inv_sync" {
       { Effect = "Allow", Action = ["cloudfront:ListVpcOrigins", "cloudfront:GetVpcOrigin", "cloudfront:ListDistributions", "cloudfront:GetDistributionConfig"], Resource = "*" },
       # SDK-sourced s3_public_access sync (Steampipe aws_s3_bucket public-access columns fail the whole
       # query on one denied bucket): read-only per-bucket public-access flags. Read-only; no mutation.
-      { Effect = "Allow", Action = ["s3:ListAllMyBuckets", "s3:GetBucketLocation", "s3:GetBucketPolicyStatus", "s3:GetBucketPublicAccessBlock"], Resource = "*" },
+      { Effect = "Allow", Action = ["s3:ListAllMyBuckets", "s3:GetBucketLocation", "s3:GetBucketPolicyStatus", "s3:GetBucketPublicAccessBlock", "s3:GetBucketVersioning", "s3:GetEncryptionConfiguration", "s3:GetBucketLogging"], Resource = "*" },
       # SDK-sourced alb_listener_rule sync (Steampipe rule table needs a per-listener qualifier):
       # read-only ELBv2 describe for LBs/listeners/rules. Read-only; no mutation.
-      { Effect = "Allow", Action = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules"], Resource = "*" }
+      { Effect = "Allow", Action = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules"], Resource = "*" },
+      # SDK-sourced opensearch_serverless sync (pinned Steampipe plugin lacks the AOSS table):
+      # read-only collection list/detail. Read-only; no mutation.
+      { Effect = "Allow", Action = ["aoss:ListCollections", "aoss:BatchGetCollection"], Resource = "*" }
       # NOTE (M2, round 5): the "0-row account" reachability probe queries the account's OWN
       # Steampipe connection directly (data path) instead of doing an independent sts:AssumeRole
       # from this Lambda — an AssumeRole only proves the IAM trust policy is intact, not that the

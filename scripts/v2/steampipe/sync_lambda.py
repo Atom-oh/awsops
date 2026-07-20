@@ -4,6 +4,7 @@ implementation. Advisory-locked per (resource_type) so concurrent triggers don't
 Env: STEAMPIPE_HOST, STEAMPIPE_SECRET_ARN (db password), AURORA_ENDPOINT, AURORA_DATABASE,
 AURORA_SECRET_ARN, AWS_REGION."""
 import json
+from datetime import datetime, timezone
 import os
 import re
 import ssl
@@ -32,16 +33,6 @@ QUERIES = {
         "FROM aws_ec2_instance i LEFT JOIN aws_ec2_instance_type t ON i.instance_type = t.instance_type "
         "ORDER BY i.launch_time DESC",
         "instance_id",
-        "region",
-    ),
-    "s3": (
-        # ListBuckets-sourced columns only. versioning_enabled/bucket_policy_is_public trigger
-        # per-bucket GetBucketVersioning/GetBucketPolicyStatus, which a restrictive bucket
-        # resource policy (e.g. eks-hybrid-packages) can explicit-deny — and one denied bucket
-        # fails the WHOLE aws_s3_bucket query. Keep S3 robust against arbitrary bucket policies.
-        "SELECT name, region, account_id, arn, creation_date "
-        "FROM aws_s3_bucket ORDER BY creation_date DESC",
-        "name",
         "region",
     ),
     "lambda": (
@@ -209,7 +200,7 @@ QUERIES = {
         # attachments[].Details[Name='privateIPv4Address'].Value (PascalCase jsonb); `group` (a SQL
         # reserved word → quoted) = "service:<name>". Matches a TG ip target → ECS service/task.
         "SELECT task_arn, region, account_id, cluster_arn, \"group\" AS task_group, last_status, "
-        "launch_type, task_definition_arn, attachments, containers "
+        "launch_type, task_definition_arn, cpu, memory, availability_zone, started_at, attachments, containers "
         "FROM aws_ecs_task ORDER BY task_arn",
         "task_arn",
         "region",
@@ -231,6 +222,60 @@ QUERIES = {
         "cluster_config, vpc_options, ebs_options, endpoints, cognito_options, advanced_security_options, tags "
         "FROM aws_opensearch_domain ORDER BY domain_name",
         "domain_name",
+        "region",
+    ),
+    "route_table": (
+        "SELECT route_table_id, region, account_id, vpc_id, owner_id, routes, associations, "
+        "propagating_vgws, tags "
+        "FROM aws_vpc_route_table ORDER BY route_table_id",
+        "route_table_id",
+        "region",
+    ),
+    "nat_gateway": (
+        "SELECT nat_gateway_id, region, account_id, arn, vpc_id, subnet_id, state, "
+        "create_time, nat_gateway_addresses, tags "
+        "FROM aws_vpc_nat_gateway ORDER BY nat_gateway_id",
+        "nat_gateway_id",
+        "region",
+    ),
+    "internet_gateway": (
+        "SELECT internet_gateway_id, region, account_id, owner_id, attachments, tags "
+        "FROM aws_vpc_internet_gateway ORDER BY internet_gateway_id",
+        "internet_gateway_id",
+        "region",
+    ),
+    "transit_gateway": (
+        "SELECT transit_gateway_id, region, account_id, transit_gateway_arn, state, owner_id, "
+        "description, creation_time, amazon_side_asn, tags "
+        "FROM aws_ec2_transit_gateway ORDER BY transit_gateway_id",
+        "transit_gateway_id",
+        "region",
+    ),
+    "elasticache_replication_group": (
+        "SELECT replication_group_id, region, account_id, arn, description, status, "
+        "automatic_failover, multi_az, cluster_enabled, cache_node_type, "
+        "auth_token_enabled, transit_encryption_enabled, at_rest_encryption_enabled, "
+        "snapshot_retention_limit, member_clusters, node_groups "
+        "FROM aws_elasticache_replication_group ORDER BY replication_group_id",
+        "replication_group_id",
+        "region",
+    ),
+    "iam_policy": (
+        # customer-managed only (is_aws_managed=false) — v1 IAM policy KPI parity
+        "SELECT name, region, account_id, arn, policy_id, path, is_attachable, "
+        "create_date, update_date, attachment_count, default_version_id, tags "
+        "FROM aws_iam_policy WHERE NOT is_aws_managed ORDER BY name",
+        "name",
+        "region",
+    ),
+    "neptune_cluster": (
+        "SELECT db_cluster_identifier, region, account_id, arn, status, engine, engine_version, "
+        "endpoint, reader_endpoint, port, multi_az, storage_encrypted, kms_key_id, "
+        "availability_zones, vpc_security_groups, db_subnet_group, cluster_create_time, "
+        "backup_retention_period, preferred_backup_window, preferred_maintenance_window, "
+        "iam_database_authentication_enabled, deletion_protection, tags "
+        "FROM aws_neptune_db_cluster ORDER BY db_cluster_identifier",
+        "db_cluster_identifier",
         "region",
     ),
     "msk": (
@@ -296,7 +341,7 @@ QUERIES = {
         # g-02: account-owned EBS snapshots. The `owner_id = (caller account)` predicate is
         # MANDATORY — it pushes OwnerIds=self down to DescribeSnapshots. Without it Steampipe
         # returns every public AWS snapshot (hundreds of thousands → API throttle / OOM).
-        "SELECT snapshot_id, region, account_id, arn, volume_id, volume_size, state, progress, "
+        "SELECT snapshot_id, region, account_id, arn, (tags ->> 'Name') AS name, volume_id, volume_size, state, progress, "
         "encrypted, start_time, description, owner_id, tags "
         # owner_id MUST be LITERAL constants so Steampipe pushes OwnerIds down to DescribeSnapshots.
         # Under the multi-account aggregator a single host literal would miss every TARGET account's
@@ -440,7 +485,91 @@ def _fetch_s3_public_access(s3=None):
     return rows, "name", "region"
 
 
+def _fetch_s3_security(s3=None):
+    """S3 buckets WITH per-bucket security flags (versioning/encryption/logging) — denial-safe
+    boto3 (one denied bucket degrades to None flags, never fails the sweep). Replaces the
+    Steampipe ListBuckets-lite `s3` sync so the menu can show v1's security columns/KPIs.
+    STRICTLY READ-ONLY (List/Get only)."""
+    s3 = s3 or boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
+    rows = []
+    for b in s3.list_buckets().get("Buckets", []) or []:
+        name = b["Name"]
+        try:
+            loc = s3.get_bucket_location(Bucket=name).get("LocationConstraint")
+            region = loc or "us-east-1"
+        except ClientError:
+            region = ""
+        rec = {
+            "name": name, "region": region,
+            "arn": f"arn:aws:s3:::{name}",
+            "creation_date": b.get("CreationDate").isoformat() if b.get("CreationDate") else None,
+            "versioning_enabled": None, "encryption": None, "logging_enabled": None,
+        }
+        try:
+            v = s3.get_bucket_versioning(Bucket=name)
+            rec["versioning_enabled"] = v.get("Status") == "Enabled"
+        except ClientError:
+            pass  # denied → unknown (None)
+        try:
+            enc = s3.get_bucket_encryption(Bucket=name)
+            rules = enc.get("ServerSideEncryptionConfiguration", {}).get("Rules", [])
+            algo = (rules[0].get("ApplyServerSideEncryptionByDefault", {}).get("SSEAlgorithm")
+                    if rules else None)
+            rec["encryption"] = algo or "enabled"
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ServerSideEncryptionConfigurationNotFoundError":
+                rec["encryption"] = "none"
+            # else denied → unknown (None)
+        try:
+            log = s3.get_bucket_logging(Bucket=name)
+            rec["logging_enabled"] = bool(log.get("LoggingEnabled"))
+        except ClientError:
+            pass
+        rows.append(rec)
+    return rows, "name", "region"
+
+
+def _fetch_opensearch_serverless(aoss=None):
+    """OpenSearch Serverless (AOSS) collections via boto3 — the pinned Steampipe plugin has no
+    aws_opensearchserverless_collection table. STRICTLY READ-ONLY (List/BatchGet only).
+    Regional API: covers the deployment region (env AWS_REGION)."""
+    region = os.environ.get("AWS_REGION", "ap-northeast-2")
+    aoss = aoss or boto3.client("opensearchserverless", region_name=region)
+    ids, token = [], None
+    while True:
+        kw = {"maxResults": 100}
+        if token:
+            kw["nextToken"] = token
+        page = aoss.list_collections(**kw)
+        ids.extend(c["id"] for c in page.get("collectionSummaries", []) or [])
+        token = page.get("nextToken")
+        if not token:
+            break
+    rows = []
+    for i in range(0, len(ids), 100):
+        detail = aoss.batch_get_collection(ids=ids[i : i + 100]).get("collectionDetails", []) or []
+        for c in detail:
+            arn = c.get("arn", "")
+            acct = arn.split(":")[4] if arn.count(":") >= 5 else ""
+            def _ts(v):
+                return (datetime.fromtimestamp(v / 1000, tz=timezone.utc).isoformat()
+                        if isinstance(v, (int, float)) else None)
+            rows.append({
+                "name": c.get("name"), "region": region, "account_id": acct, "arn": arn,
+                "id": c.get("id"), "type": c.get("type"), "status": c.get("status"),
+                "description": c.get("description"),
+                "collection_endpoint": c.get("collectionEndpoint"),
+                "dashboard_endpoint": c.get("dashboardEndpoint"),
+                "kms_key_arn": c.get("kmsKeyArn"),
+                "created_date": _ts(c.get("createdDate")),
+                "last_modified_date": _ts(c.get("lastModifiedDate")),
+            })
+    return rows, "name", "region"
+
+
 SDK_SYNCS = {
+    "s3": _fetch_s3_security,
+    "opensearch_serverless": _fetch_opensearch_serverless,
     "cloudfront_vpc_origin": _fetch_cloudfront_vpc_origins,
     "alb_listener_rule": _fetch_alb_listener_rules,
     "s3_public_access": _fetch_s3_public_access,

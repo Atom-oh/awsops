@@ -60,14 +60,40 @@ variable "existing_vpc_id" {
 
 variable "existing_private_subnet_ids" {
   type        = list(string)
-  description = "Existing private subnets (>=2 AZ, NAT egress) for ALB/Fargate when create_network=false"
+  description = "Existing private subnets (>=2 AZ, NAT egress) for Fargate tasks when create_network=false"
   default     = []
+}
+
+variable "existing_public_subnet_ids" {
+  type        = list(string)
+  description = "Existing public subnets (>=2 AZ, IGW route) for the internet-facing ALB when create_network=false"
+  default     = []
+}
+
+variable "create_edge" {
+  type        = bool
+  description = "Create the CloudFront edge (distribution + cert validation wait + alias record). Requires the ACM DNS validation record to be live in the authoritative zone first. Leave false to build the ALB/compute/data plane, flip true once DNS is in place."
+  default     = true
+}
+
+variable "existing_acm_certificate_arn" {
+  type        = string
+  description = "Pre-issued us-east-1 ACM certificate ARN covering domain_name (e.g. a *.example.com wildcard). When set, the edge skips creating + DNS-validating its own certificate — useful when this account's hosted zone is a shadow copy so the validation CNAME can never be published from here. Empty (default) = create and DNS-validate a dedicated certificate."
+  default     = ""
 }
 
 variable "cognito_domain_prefix" {
   type        = string
   description = "Globally-unique Cognito Hosted-UI domain prefix (no 'aws', no symbols)."
-  default     = "awsops-v2-auth"
+  # NOTE: Cognito rejects any domain prefix containing the reserved string
+  # 'aws', so the fork's original default "awsops-v2-auth" fails at apply.
+  # Default set to a valid, 'aws'-free value; override per environment for
+  # global uniqueness (e.g. "a-ops-v2-auth-<account-id>").
+  default = "a-ops-v2-auth"
+  validation {
+    condition     = !can(regex("aws", var.cognito_domain_prefix))
+    error_message = "cognito_domain_prefix must not contain the reserved string 'aws'."
+  }
 }
 
 variable "admin_email" {
