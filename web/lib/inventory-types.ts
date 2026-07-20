@@ -68,8 +68,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     ],
     filterKeys: ['launch_type'] },
   ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', columns: [
-    { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
-    { key: 'launch_type', label: 'Launch' }, { key: 'task_definition_arn', label: 'Task def' } ],
+    { key: 'task_short', label: 'Task' }, { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
+    { key: 'launch_type', label: 'Launch' }, { key: 'cpu_h', label: 'CPU' }, { key: 'memory_h', label: 'Memory' },
+    { key: 'availability_zone', label: 'AZ' }, { key: 'started_h', label: 'Started' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'cluster_arn', 'task_group', 'task_definition_arn'] },
       { label: 'Task', keys: ['last_status', 'launch_type'] },
@@ -92,7 +93,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     ] },
   ebs_volume: { label: 'EBS Volumes', group: 'Storage & DB', stateKey: 'state', distKey: 'volume_type', distKey2: 'encrypted', columns: [
     { key: 'name', label: 'Name' }, { key: 'volume_type', label: 'Type' }, { key: 'size', label: 'Size(GB)' },
-    { key: 'state', label: 'State' }, { key: 'encrypted', label: 'Encrypted' }, { key: 'iops', label: 'IOPS' },
+    { key: 'state', label: 'State' }, { key: 'attached_to', label: 'Attached To' }, { key: 'encrypted', label: 'Encrypted' }, { key: 'iops', label: 'IOPS' },
     { key: 'availability_zone', label: 'AZ' }, { key: 'create_time', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'availability_zone', 'create_time'] },
@@ -128,9 +129,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['class'] },
-  dynamodb: { label: 'DynamoDB Tables', group: 'Storage & DB', stateKey: 'table_status', distKey: 'billing_mode', distKey2: 'table_status', columns: [
-    { key: 'table_status', label: 'Status' }, { key: 'billing_mode', label: 'Billing' },
-    { key: 'item_count', label: 'Items' }, { key: 'table_size_bytes', label: 'Size(B)' } ],
+  dynamodb: { label: 'DynamoDB Tables', group: 'Storage & DB', stateKey: 'table_status', distKey: 'billing_h', distKey2: 'table_status', columns: [
+    { key: 'table_status', label: 'Status' }, { key: 'billing_h', label: 'Billing' },
+    { key: 'item_count_h', label: 'Items' }, { key: 'table_size_h', label: 'Size' }, { key: 'created_h', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'creation_date_time'] },
       { label: 'Table', keys: ['table_status', 'billing_mode', 'item_count', 'table_size_bytes', 'read_capacity', 'write_capacity', 'key_schema'] },
@@ -165,6 +166,38 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Egress Rules', keys: ['ip_permissions_egress'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
+  route_table: { label: 'Route Tables', group: 'Network', distKey: 'vpc_id', columns: [
+    { key: 'vpc_id', label: 'VPC' }, { key: 'owner_id', label: 'Owner' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'vpc_id', 'owner_id'] },
+      { label: 'Routes', keys: ['routes'] },
+      { label: 'Associations', keys: ['associations', 'propagating_vgws'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
+  nat_gateway: { label: 'NAT Gateways', group: 'Network', stateKey: 'state', distKey: 'vpc_id', columns: [
+    { key: 'state', label: 'State' }, { key: 'vpc_id', label: 'VPC' },
+    { key: 'subnet_id', label: 'Subnet' }, { key: 'create_time', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'create_time'] },
+      { label: 'Network', keys: ['vpc_id', 'subnet_id', 'state', 'nat_gateway_addresses'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
+  internet_gateway: { label: 'Internet Gateways', group: 'Network', columns: [
+    { key: 'owner_id', label: 'Owner' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'owner_id'] },
+      { label: 'Attachments', keys: ['attachments'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
+  transit_gateway: { label: 'Transit Gateways', group: 'Network', stateKey: 'state', distKey: 'state', columns: [
+    { key: 'state', label: 'State' }, { key: 'owner_id', label: 'Owner' },
+    { key: 'description', label: 'Description' }, { key: 'creation_time', label: 'Created' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'transit_gateway_arn', 'creation_time', 'description'] },
+      { label: 'Config', keys: ['state', 'owner_id', 'amazon_side_asn'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
+
   iam_role: { label: 'IAM Roles', group: 'Security', distKey: 'path', columns: [
     { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' },
     { key: 'role_id', label: 'Role ID' }, { key: 'max_session_duration', label: 'Max session(s)' } ],
@@ -304,7 +337,10 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ] },
   msk: { label: 'MSK Clusters', group: 'Storage & DB', stateKey: 'state', distKey: 'cluster_type', distKey2: 'state', columns: [
-    { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' }, { key: 'current_version', label: 'Version' } ],
+    { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' },
+    { key: 'kafka_version', label: 'Kafka' }, { key: 'broker_nodes', label: 'Brokers' },
+    { key: 'broker_instance_type', label: 'Instance' }, { key: 'broker_ebs_gb', label: 'EBS(GB)' },
+    { key: 'created_h', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'cluster_name', 'account_id', 'region', 'arn', 'creation_time'] },
       { label: 'Engine', keys: ['state', 'cluster_type', 'current_version', 'provisioned'] },
@@ -390,7 +426,7 @@ const GROUPS: Record<string, GroupMeta> = {
   },
   'Network': {
     slug: 'network', labelKey: 'group.network', splitKeys: ['sgOpenIngress'],
-    order: ['vpc', 'subnet', 'security_group', 'route53', 'cloudfront', 'cloudfront_vpc_origin'],
+    order: ['vpc', 'subnet', 'route_table', 'nat_gateway', 'internet_gateway', 'transit_gateway', 'security_group', 'route53', 'cloudfront', 'cloudfront_vpc_origin'],
     subgroups: [
       { key: 'loadBalancing', labelKey: 'group.network.loadBalancing', types: ['alb', 'nlb', 'target_group', 'alb_listener_rule'] },
       { key: 'apiGateway', labelKey: 'group.network.apiGateway', types: ['apigatewayv2_api', 'apigatewayv2_integration', 'apigatewayv2_route'] },
@@ -512,6 +548,7 @@ export type Highlight =
   | { kind: 'countTruthy'; label: string; col: string; tone?: 'accent' | 'danger' }
   | { kind: 'distinct'; label: string; col: string }
   | { kind: 'sum'; label: string; col: string; suffix?: string; fmt?: 'bytes' }
+  | { kind: 'sumWhere'; label: string; col: string; where: string; eq: string; suffix?: string; tone?: 'accent' | 'danger' }
   | { kind: 'deprecatedRuntime'; label: string; col: string };
 
 export interface HighlightCard { label: string; value: string | number; variant: 'default' | 'accent' | 'danger' }
@@ -568,6 +605,12 @@ export function computeHighlights(rows: Array<Record<string, unknown>>, highligh
         if (h.fmt === 'bytes') return { label: h.label, value: humanBytes(total), variant: 'default' };
         return { label: h.label, value: `${Math.round(total).toLocaleString()}${h.suffix ?? ''}`, variant: 'default' };
       }
+      case 'sumWhere': {
+        const total = rows
+          .filter((r) => sv(cell(r, h.where)).trim().toLowerCase() === h.eq.toLowerCase())
+          .reduce((acc, r) => acc + (Number(cell(r, h.col)) || 0), 0);
+        return { label: h.label, value: `${Math.round(total).toLocaleString()}${h.suffix ?? ''}`, variant: tone(h.tone, total) };
+      }
       case 'deprecatedRuntime': {
         const n = rows.filter((r) => isDeprecatedRuntime(cell(r, h.col))).length;
         return { label: h.label, value: n, variant: n > 0 ? 'danger' : 'default' };
@@ -605,7 +648,8 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
     { kind: 'countWhere', label: '사용 중', col: 'state', eq: 'in-use', tone: 'accent' },
     { kind: 'countWhere', label: '미암호화', col: 'encrypted', eq: 'false', tone: 'danger' },
     { kind: 'sum', label: '총 용량', col: 'size', suffix: ' GB' },
-    { kind: 'distinct', label: '타입 종류', col: 'volume_type' },
+    { kind: 'countWhere', label: '유휴 볼륨', col: 'state', eq: 'available', tone: 'danger' },
+    { kind: 'sumWhere', label: '유휴(낭비) 용량', col: 'size', where: 'state', eq: 'available', suffix: ' GB', tone: 'danger' },
   ],
   ebs_snapshot: [
     { kind: 'sum', label: '총 용량', col: 'volume_size', suffix: ' GB' },

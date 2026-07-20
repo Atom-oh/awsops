@@ -14,6 +14,7 @@ import RiskHero from '@/components/inventory/RiskHero';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
 import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
+import { deriveRow } from '@/lib/inventory-derived';
 
 type Row = Record<string, unknown>;
 
@@ -66,7 +67,7 @@ export default function InventoryTypePage() {
       if (r.status === 403) throw new Error((await r.json().catch(() => null))?.message ?? '접근 권한이 없습니다');
       if (!r.ok) throw new Error(String(r.status));
       const d = await r.json();
-      setRows((d.rows as Row[]).map((x) => ({ resource_id: x.resource_id, region: x.region, ...(x.data as object) })));
+      setRows((d.rows as Row[]).map((x) => deriveRow(type, { resource_id: x.resource_id, region: x.region, ...(x.data as object) })));
       setCaptured(d.run?.finished_at ?? null);
     } catch (e) { setErr(String(e)); }
   }, [type, scope]);

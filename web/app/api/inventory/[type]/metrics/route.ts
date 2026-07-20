@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -82,7 +82,22 @@ export async function GET(request: Request, { params }: { params: { type: string
     // ElastiCache/OpenSearch/MSK: per-resource live metrics for the detail panel (?id=).
     if (hasLiveMetrics(params.type)) {
       const id = url.searchParams.get('id');
-      if (id) return Response.json({ metrics: await liveResourceMetrics(params.type, id) });
+      if (id) {
+        const metrics = await liveResourceMetrics(params.type, id);
+        // MSK: append bootstrap broker connection strings (v1 parity) — ARN from the synced row.
+        if (params.type === 'msk') {
+          try {
+            const r = await getPool().query<{ arn: string | null }>(
+              `SELECT data->>'arn' AS arn FROM inventory_resources
+               WHERE resource_type='msk' AND resource_id=$1 LIMIT 1`,
+              [id],
+            );
+            const arn = r.rows[0]?.arn;
+            if (arn) metrics.push(...(await mskBootstrapBrokers(arn)));
+          } catch { /* bootstrap rows omitted */ }
+        }
+        return Response.json({ metrics });
+      }
     }
 
     return Response.json({ cards: [] });

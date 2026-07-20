@@ -1,4 +1,5 @@
 import { CloudWatchClient, GetMetricDataCommand, ListMetricsCommand } from '@aws-sdk/client-cloudwatch';
+import { KafkaClient, GetBootstrapBrokersCommand } from '@aws-sdk/client-kafka';
 import { PricingClient, GetProductsCommand } from '@aws-sdk/client-pricing';
 import { getModelLabel, getModelPricing, computeCost, RANGE_CONFIGS, type ModelPricing, type CostBreakdown } from './bedrock';
 import { assumedClient } from './aws-assume';
@@ -331,6 +332,21 @@ export async function liveResourceMetrics(type: string, id: string, accountId?: 
       const v = res.Values?.[0];
       if (def) out.push({ label: def.label, value: typeof v === 'number' ? fmtLive(v, def.fmt) : '—' });
     }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** MSK bootstrap broker connection strings (v1 parity) — [] on error/denied. */
+export async function mskBootstrapBrokers(clusterArn: string): Promise<LiveMetric[]> {
+  try {
+    const client = new KafkaClient({ region: REGION });
+    const r = await client.send(new GetBootstrapBrokersCommand({ ClusterArn: clusterArn }));
+    const out: LiveMetric[] = [];
+    if (r.BootstrapBrokerStringTls) out.push({ label: 'Bootstrap (TLS)', value: r.BootstrapBrokerStringTls });
+    if (r.BootstrapBrokerString) out.push({ label: 'Bootstrap (Plaintext)', value: r.BootstrapBrokerString });
+    if (r.BootstrapBrokerStringSaslIam) out.push({ label: 'Bootstrap (SASL/IAM)', value: r.BootstrapBrokerStringSaslIam });
     return out;
   } catch {
     return [];

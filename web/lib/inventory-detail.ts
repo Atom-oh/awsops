@@ -44,13 +44,67 @@ function structuredList(key: string, value: unknown): DetailListItem[] | null {
       if (typeof id !== 'string') return null;
       rows.push({ id, name: typeof o.Status === 'string' ? o.Status : undefined });
     } else if (key === 'attachments') {
-      // EBS: [{ InstanceId, Device, State }] (ECS task attachments fall through to JSON)
-      const id = o.InstanceId ?? o.instance_id;
+      // EBS: [{ InstanceId, Device, State }]; IGW: [{ VpcId, State }] (ECS task attachments → JSON)
+      const id = o.InstanceId ?? o.instance_id ?? o.VpcId ?? o.vpc_id;
       if (typeof id !== 'string') return null;
       rows.push({
         id,
         name: typeof (o.Device ?? o.device) === 'string' ? String(o.Device ?? o.device) : undefined,
         extra: typeof (o.State ?? o.state) === 'string' ? String(o.State ?? o.state) : undefined,
+      });
+    } else if (key === 'routes') {
+      // Route table (v1 parity): destination → target, blackhole flagged.
+      const dest = o.DestinationCidrBlock ?? o.destination_cidr_block ?? o.DestinationIpv6CidrBlock
+        ?? o.destination_ipv6_cidr_block ?? o.DestinationPrefixListId ?? o.destination_prefix_list_id;
+      if (typeof dest !== 'string') return null;
+      const target = [o.GatewayId ?? o.gateway_id, o.NatGatewayId ?? o.nat_gateway_id,
+        o.TransitGatewayId ?? o.transit_gateway_id, o.VpcPeeringConnectionId ?? o.vpc_peering_connection_id,
+        o.NetworkInterfaceId ?? o.network_interface_id, o.InstanceId ?? o.instance_id]
+        .find((x) => typeof x === 'string' && x !== '');
+      const st = String(o.State ?? o.state ?? '');
+      rows.push({
+        id: dest,
+        name: typeof target === 'string' ? target : undefined,
+        flag: st.toLowerCase() === 'blackhole' ? 'BLACKHOLE' : undefined,
+      });
+    } else if (key === 'associations') {
+      // Route table associations: subnet (or main) → association id.
+      const aid = o.RouteTableAssociationId ?? o.route_table_association_id;
+      const subnet = o.SubnetId ?? o.subnet_id;
+      const main = (o.Main ?? o.main) === true;
+      rows.push({
+        id: typeof subnet === 'string' ? subnet : main ? '(main)' : String(aid ?? ''),
+        name: typeof aid === 'string' ? aid : undefined,
+        flag: main ? 'MAIN' : undefined,
+      });
+    } else if (key === 'nat_gateway_addresses') {
+      const pub = o.PublicIp ?? o.public_ip;
+      const priv = o.PrivateIp ?? o.private_ip;
+      const eni = o.NetworkInterfaceId ?? o.network_interface_id;
+      if (typeof pub !== 'string' && typeof priv !== 'string') return null;
+      rows.push({
+        id: String(pub ?? priv),
+        name: typeof priv === 'string' && pub ? priv : undefined,
+        extra: typeof eni === 'string' ? eni : undefined,
+      });
+    } else if (key === 'ip_permissions' || key === 'ip_permissions_egress') {
+      // SG rules (v1 parity): one row per rule — "proto ports" + sources + open-world flag.
+      const g = (obj: Record<string, unknown>, a: string, b: string) => obj[a] ?? obj[b];
+      const proto = String(g(o, 'IpProtocol', 'ip_protocol') ?? '');
+      const from = g(o, 'FromPort', 'from_port');
+      const to = g(o, 'ToPort', 'to_port');
+      const ports = proto === '-1' ? 'ALL' : from == null ? '' : from === to ? String(from) : `${from}-${to}`;
+      const ranges = (Array.isArray(g(o, 'IpRanges', 'ip_ranges')) ? (g(o, 'IpRanges', 'ip_ranges') as Record<string, unknown>[]) : [])
+        .map((x) => String(g(x, 'CidrIp', 'cidr_ip') ?? ''));
+      const ranges6 = (Array.isArray(g(o, 'Ipv6Ranges', 'ipv6_ranges')) ? (g(o, 'Ipv6Ranges', 'ipv6_ranges') as Record<string, unknown>[]) : [])
+        .map((x) => String(g(x, 'CidrIpv6', 'cidr_ipv6') ?? ''));
+      const sgs = (Array.isArray(g(o, 'UserIdGroupPairs', 'user_id_group_pairs')) ? (g(o, 'UserIdGroupPairs', 'user_id_group_pairs') as Record<string, unknown>[]) : [])
+        .map((x) => String(g(x, 'GroupId', 'group_id') ?? ''));
+      const sources = [...ranges, ...ranges6, ...sgs].filter(Boolean);
+      rows.push({
+        id: `${proto === '-1' ? 'ALL' : proto.toUpperCase()}${ports ? ` ${ports}` : ''}`,
+        name: sources.join(', ') || '(none)',
+        flag: sources.some((x) => x === '0.0.0.0/0' || x === '::/0') ? 'OPEN' : undefined,
       });
     } else if (key === 'security_groups') {
       const id = o.GroupId ?? o.group_id;

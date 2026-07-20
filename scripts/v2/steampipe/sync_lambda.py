@@ -210,7 +210,7 @@ QUERIES = {
         # attachments[].Details[Name='privateIPv4Address'].Value (PascalCase jsonb); `group` (a SQL
         # reserved word → quoted) = "service:<name>". Matches a TG ip target → ECS service/task.
         "SELECT task_arn, region, account_id, cluster_arn, \"group\" AS task_group, last_status, "
-        "launch_type, task_definition_arn, attachments, containers "
+        "launch_type, task_definition_arn, cpu, memory, availability_zone, started_at, attachments, containers "
         "FROM aws_ecs_task ORDER BY task_arn",
         "task_arn",
         "region",
@@ -232,6 +232,33 @@ QUERIES = {
         "cluster_config, vpc_options, ebs_options, endpoints, cognito_options, advanced_security_options, tags "
         "FROM aws_opensearch_domain ORDER BY domain_name",
         "domain_name",
+        "region",
+    ),
+    "route_table": (
+        "SELECT route_table_id, region, account_id, vpc_id, owner_id, routes, associations, "
+        "propagating_vgws, tags "
+        "FROM aws_vpc_route_table ORDER BY route_table_id",
+        "route_table_id",
+        "region",
+    ),
+    "nat_gateway": (
+        "SELECT nat_gateway_id, region, account_id, arn, vpc_id, subnet_id, state, "
+        "create_time, nat_gateway_addresses, tags "
+        "FROM aws_vpc_nat_gateway ORDER BY nat_gateway_id",
+        "nat_gateway_id",
+        "region",
+    ),
+    "internet_gateway": (
+        "SELECT internet_gateway_id, region, account_id, owner_id, attachments, tags "
+        "FROM aws_vpc_internet_gateway ORDER BY internet_gateway_id",
+        "internet_gateway_id",
+        "region",
+    ),
+    "transit_gateway": (
+        "SELECT transit_gateway_id, region, account_id, transit_gateway_arn, state, owner_id, "
+        "description, creation_time, amazon_side_asn, tags "
+        "FROM aws_ec2_transit_gateway ORDER BY transit_gateway_id",
+        "transit_gateway_id",
         "region",
     ),
     "neptune_cluster": (

@@ -31,9 +31,35 @@ const SEV_TONE: Record<Finding['severity'], 'negative' | 'brand' | 'neutral'> = 
   low: 'neutral',
 };
 
-const COLUMNS = [
+// v1 parity: each check exposes its own high-value columns (from the finding's detail JSONB,
+// flattened into the row below). Common prefix: resource / region.
+const CHECK_COLUMNS: Record<CheckKey, { key: string; label: string }[]> = {
+  public_s3: [
+    { key: 'bucket_policy_is_public', label: 'Policy Public' },
+    { key: 'block_public_policy', label: 'Block Policy' },
+    { key: 'restrict_public_buckets', label: 'Restrict' },
+    { key: 'block_public_acls', label: 'Block ACLs' },
+  ],
+  open_sg: [
+    { key: 'name', label: 'Name' },
+    { key: 'vpc_id', label: 'VPC' },
+    { key: 'owner_id', label: 'Owner' },
+  ],
+  unencrypted_ebs: [
+    { key: 'volume_type', label: 'Type' },
+    { key: 'size', label: 'Size(GB)' },
+    { key: 'state', label: 'State' },
+    { key: 'availability_zone', label: 'AZ' },
+  ],
+  iam_no_mfa: [
+    { key: 'create_date', label: 'Created' },
+    { key: 'password_last_used', label: 'Last PW Use' },
+  ],
+};
+const columnsFor = (k: CheckKey) => [
   { key: 'resource_id', label: 'Resource' },
   { key: 'region', label: 'Region' },
+  ...CHECK_COLUMNS[k],
   { key: 'severity', label: 'Severity' },
 ];
 
@@ -141,8 +167,8 @@ export default function SecurityPage() {
               />
               <div className="mt-3">
                 <DataTable
-                  columns={COLUMNS}
-                  rows={activeFindings as unknown as Record<string, unknown>[]}
+                  columns={columnsFor(active)}
+                  rows={activeFindings.map((f) => ({ ...(f.detail as object), ...f })) as unknown as Record<string, unknown>[]}
                   onRowClick={(row) => setSelected(row as unknown as Finding)}
                   cardTitleKey="resource_id"
                 />

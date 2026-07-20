@@ -99,6 +99,8 @@ resource "aws_iam_role_policy" "task_metrics" {
         "cloudwatch:ListMetrics",
         "pricing:GetProducts",
         "pricing:DescribeServices",
+        # MSK detail panel: bootstrap broker connection strings (read-only)
+        "kafka:GetBootstrapBrokers",
       ]
       Resource = "*"
     }]

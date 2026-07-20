@@ -3,7 +3,7 @@ import {
   DatabaseZap, Radio, Network, Split, BrickWall, Scale, Target, Globe, ListFilter,
   FileSearch, Bell, BellRing, KeyRound, Users, Shield, Activity,
   AlertTriangle, AlertCircle, CheckCircle2, Circle, CircleOff, CircleStop,
-  MapPin, Lock, LockOpen, Copy, Clock, Layers, Hash, Share2, type LucideIcon,
+  MapPin, Lock, LockOpen, Copy, Clock, Layers, Hash, Share2, Route, ArrowLeftRight, Waypoints, type LucideIcon,
 } from 'lucide-react';
 
 // v1-parity KPI glyphs (v1 StatsCard used lucide icons in a translucent corner box, not emoji).
@@ -19,6 +19,7 @@ export const TYPE_ICON: Record<string, LucideIcon> = {
   waf: BrickWall, cloudtrail: FileSearch, cloudwatch_alarm: Bell,
   iam_role: KeyRound, iam_user: Users, route53: Globe,
   neptune_cluster: Share2, opensearch_serverless: Search,
+  route_table: Route, nat_gateway: ArrowLeftRight, internet_gateway: Globe, transit_gateway: Waypoints,
   apigatewayv2_api: Network, apigatewayv2_stage: Network,
 };
 
@@ -47,7 +48,7 @@ const HIGHLIGHT_ICONS: [RegExp, LucideIcon][] = [
   [/액션|action/i, Bell],
   [/로깅|logging|trail|검증|validation/i, FileSearch],
   [/eol|deprecated|만료/i, AlertCircle],
-  [/pending|대기/i, Clock],
+  [/pending|대기|유휴|idle/i, Clock],
   [/desired|target/i, Target],
   [/클러스터|cluster/i, Boxes],
   [/용량|볼륨|size|volume|storage/i, HardDrive],

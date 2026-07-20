@@ -6,7 +6,7 @@ import {
 } from './inventory-types';
 
 describe('INVENTORY_TYPES registry', () => {
-  it('has the 35 registered types (33 wave + neptune + opensearch_serverless)', () => {
+  it('has the 39 registered types (35 + route_table/nat_gateway/internet_gateway/transit_gateway)', () => {
     const keys = Object.keys(INVENTORY_TYPES);
     expect(keys).toContain('ec2'); expect(keys).toContain('s3'); expect(keys).toContain('iam_role');
     expect(keys).toContain('cloudfront'); expect(keys).toContain('cloudwatch_alarm'); expect(keys).toContain('msk');
@@ -17,7 +17,7 @@ describe('INVENTORY_TYPES registry', () => {
     expect(keys).toContain('apigatewayv2_route'); expect(keys).toContain('alb_listener_rule');
     // security findings source (denial-safe S3 public-access sync)
     expect(keys).toContain('s3_public_access');
-    expect(keys.length).toBe(35);
+    expect(keys.length).toBe(39);
   });
   it('every type has a label, group, and >=1 column', () => {
     for (const [k, v] of Object.entries(INVENTORY_TYPES)) {
@@ -94,11 +94,11 @@ describe('navTree (sidebar IA hierarchy)', () => {
     expect(tree.map((g) => g.slug)).toEqual(['compute', 'storage', 'network', 'security', 'monitoring']);
   });
 
-  it('places every inventory type exactly once (no drop, no dup) — 35 total', () => {
+  it('places every inventory type exactly once (no drop, no dup) — 39 total', () => {
     const placed = tree.flatMap((g) => invTypesOf(g.slug));
     expect(new Set(placed).size).toBe(placed.length); // no duplicates
     expect(new Set(placed)).toEqual(new Set(Object.keys(INVENTORY_TYPES)));
-    expect(placed.length).toBe(35);
+    expect(placed.length).toBe(39);
   });
 
   it('Compute injects EKS as a feature leaf first, then ec2/lambda/ecr, with an ECS subgroup', () => {
@@ -116,7 +116,7 @@ describe('navTree (sidebar IA hierarchy)', () => {
     expect(n.subgroups.find((s) => s.key === 'apiGateway')!.items.map((l) => l.type))
       .toEqual(['apigatewayv2_api', 'apigatewayv2_integration', 'apigatewayv2_route']);
     const direct = n.items.filter((l) => l.kind === 'inventory').map((l) => l.type);
-    expect(direct).toEqual(['vpc', 'subnet', 'security_group', 'route53', 'cloudfront', 'cloudfront_vpc_origin']);
+    expect(direct).toEqual(['vpc', 'subnet', 'route_table', 'nat_gateway', 'internet_gateway', 'transit_gateway', 'security_group', 'route53', 'cloudfront', 'cloudfront_vpc_origin']);
   });
 
   it('Monitoring is a singleton (flat, no overview href)', () => {
