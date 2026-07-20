@@ -19,6 +19,7 @@ import MultiLineTrend from '@/components/charts/MultiLineTrend';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import AiOps from '@/components/overview/AiOps';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 interface Overview {
   jobs: { queued: number; running: number; succeeded: number; failed: number };
@@ -65,6 +66,7 @@ function typeIcon(type: string): ReactNode {
 }
 
 export default function Home() {
+  const { tt } = useI18n();
   const [ov, setOv] = useState<Overview | null>(null);
   const [ovErr, setOvErr] = useState('');
   const [sum, setSum] = useState<Summary | null>(null);
@@ -264,7 +266,7 @@ export default function Home() {
               }
             >
               <div className="flex items-start justify-between">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">보안 이슈</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">{tt('보안 이슈')}</div>
                 <div className="flex items-center gap-2">
                   {secIssues != null && (
                     <span
@@ -273,7 +275,7 @@ export default function Home() {
                         (secIssues > 0 ? 'bg-negative text-white' : 'bg-positive-surface text-positive-text')
                       }
                     >
-                      {secIssues > 0 ? '위험' : '이상 없음'}
+                      {secIssues > 0 ? tt('위험') : tt('이상 없음')}
                     </span>
                   )}
                   <span
@@ -304,7 +306,7 @@ export default function Home() {
                   ].map((it) => (
                     <div key={it.label}>
                       <div className="tabular text-[19px] font-semibold text-ink-800">{it.v}</div>
-                      <div className="text-[10.5px] text-ink-500">{it.label}</div>
+                      <div className="text-[10.5px] text-ink-500">{tt(it.label)}</div>
                     </div>
                   ))}
                 </div>
@@ -335,7 +337,7 @@ export default function Home() {
                 <li key={w.key}>
                   <Link href={w.href} className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-ink-700 hover:bg-ink-50">
                     <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: w.dot }} />
-                    {w.text}
+                    {tt(w.text)}
                   </Link>
                 </li>
               ))}

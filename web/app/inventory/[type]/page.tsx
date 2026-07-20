@@ -47,6 +47,7 @@ function countBy(rows: Row[], key: string): { name: string; value: number }[] {
 }
 
 export default function InventoryTypePage() {
+  const { tt } = useI18n();
   const params = useParams();
   const type = String(params.type);
   const spec = INVENTORY_TYPES[type];
@@ -119,7 +120,7 @@ export default function InventoryTypePage() {
     if (counts.length <= 6) return counts;
     const head = counts.slice(0, 6);
     const rest = counts.slice(6).reduce((acc, c) => acc + c.value, 0);
-    return rest > 0 ? [...head, { name: '기타', value: rest }] : head;
+    return rest > 0 ? [...head, { name: tt('기타'), value: rest }] : head;
   };
   const distData = useMemo(
     () => (spec?.distKey ? top6(countBy(allRows, spec.distKey)) : []),

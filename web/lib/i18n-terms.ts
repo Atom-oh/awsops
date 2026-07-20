@@ -204,6 +204,21 @@ export const TERMS: Record<string, Pair> = {
   '리소스': { en: 'Resources', zh: '资源' },
   '보안 상태': { en: 'security posture', zh: '安全状态' },
   '총': { en: 'Total', zh: '共' },
+  '합계': { en: 'total', zh: '合计' },
+  '업데이트': { en: 'Updated', zh: '更新' },
+  '미수집': { en: 'Not collected', zh: '未采集' },
+  '수집 중…': { en: 'Collecting…', zh: '采集中…' },
+  '보기 →': { en: 'View →', zh: '查看 →' },
+  '대화 시작': { en: 'Start chat', zh: '开始对话' },
+  '최근 AI 대화': { en: 'Recent AI chats', zh: '最近 AI 对话' },
+  'AI 분석': { en: 'AI analysis', zh: 'AI 分析' },
+  '인시던트 자동 분석': { en: 'Incident auto-analysis', zh: '事件自动分析' },
+  '하이브리드 라우팅': { en: 'Hybrid routing', zh: '混合路由' },
+  '분석-전용 대기': { en: 'Analyze-only queue', zh: '仅分析队列' },
+  '게이트 OFF': { en: 'Gate OFF', zh: '闸门关闭' },
+  '저장된 대화가 없습니다 — 첫 질문을 해보세요.': { en: 'No saved chats — ask your first question.', zh: '暂无会话 — 试着提出第一个问题。' },
+  '벤치마크 실행 →': { en: 'Run a benchmark →', zh: '运行基准测试 →' },
+  '이력 수집 중 — sync 주기마다 축적됩니다': { en: 'Collecting history — accrues every sync', zh: '正在积累历史 — 每次同步累计' },
 };
 
 // Parameterized patterns — matched AFTER an exact TERMS hit fails.
@@ -215,6 +230,16 @@ const RULES: { re: RegExp; en: (m: RegExpMatchArray) => string; zh: (m: RegExpMa
   { re: /^활성 경고 \((\d+)\)$/, en: (m) => `Active warnings (${m[1]})`, zh: (m) => `活动警告 (${m[1]})` },
   { re: /^리소스 추세 \((.+)\)$/, en: (m) => `Resource trend (${m[1]})`, zh: (m) => `资源趋势 (${m[1]})` },
   { re: /^최근 이벤트 \((\d+)\)$/, en: (m) => `Recent events (${m[1]})`, zh: (m) => `最近事件 (${m[1]})` },
+  { re: /^(.+) · ([\d,]+)개 리소스$/, en: (m) => `${m[1]} · ${m[2]} resources`, zh: (m) => `${m[1]} · ${m[2]} 个资源` },
+  { re: /^공개 접근 가능한 S3 버킷 ([\d,]+)개$/, en: (m) => `${m[1]} publicly accessible S3 buckets`, zh: (m) => `${m[1]} 个可公开访问的 S3 桶` },
+  { re: /^인그레스가 개방된 보안 그룹 ([\d,]+)개$/, en: (m) => `${m[1]} security groups with open ingress`, zh: (m) => `${m[1]} 个开放入站的安全组` },
+  { re: /^미암호화 EBS 볼륨 ([\d,]+)개$/, en: (m) => `${m[1]} unencrypted EBS volumes`, zh: (m) => `${m[1]} 个未加密 EBS 卷` },
+  { re: /^MFA 미설정 IAM 사용자 ([\d,]+)개$/, en: (m) => `${m[1]} IAM users without MFA`, zh: (m) => `${m[1]} 个未设置 MFA 的 IAM 用户` },
+  { re: /^실패한 작업 ([\d,]+)개$/, en: (m) => `${m[1]} failed jobs`, zh: (m) => `${m[1]} 个失败任务` },
+  { re: /^K8s Warning 이벤트 ([\d,]+)건$/, en: (m) => `${m[1]} K8s warning events`, zh: (m) => `${m[1]} 条 K8s 警告事件` },
+  { re: /^ALARM 상태 CloudWatch 알람 ([\d,]+)개$/, en: (m) => `${m[1]} CloudWatch alarms in ALARM`, zh: (m) => `${m[1]} 个处于 ALARM 的告警` },
+  { re: /^Alarm ([\d,]+)건 · 완료 (.+)$/, en: (m) => `Alarm ${m[1]} · finished ${m[2]}`, zh: (m) => `告警 ${m[1]} · 完成于 ${m[2]}` },
+  { re: /^ALARM ([\d,]+)건$/, en: (m) => `ALARM: ${m[1]}`, zh: (m) => `ALARM ${m[1]} 项` },
 ];
 
 /** Translate a known Korean UI literal (exact match, then patterns). Unknown → unchanged. */
