@@ -56,7 +56,7 @@ QUERIES = {
         "region",
     ),
     "ebs_volume": (
-        "SELECT volume_id, region, account_id, arn, volume_type, size, state, encrypted, iops, throughput, "
+        "SELECT volume_id, region, account_id, arn, volume_type, size, state, encrypted, iops, "
         "availability_zone, create_time, snapshot_id, kms_key_id, multi_attach_enabled, attachments, tags, "
         "(tags ->> 'Name') AS name "
         "FROM aws_ebs_volume ORDER BY volume_id",
