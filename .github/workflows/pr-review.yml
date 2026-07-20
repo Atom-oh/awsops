@@ -83,6 +83,7 @@ jobs:
           MERGE_BASE_SHA=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '.merge_base_commit.sha')
           git fetch --depth=1 origin "$MERGE_BASE_SHA" "$HEAD_SHA"
           git diff --no-color "$MERGE_BASE_SHA" "$HEAD_SHA" -- . > /tmp/pr-diff-raw.txt
+          rm -f /tmp/pr-diff-omitted.txt
           awk '
             /^diff --git/ {
               path = substr($3, 3)
@@ -95,7 +96,7 @@ jobs:
                      (path ~ /\.terraform\.lock\.hcl$/)
             }
             skip { next }
-            # Line-length cap, not extension-based: PR #168s failure (codex 1,048,576-char
+            # Line-length cap, not extension-based: the PR #168 failure (codex 1,048,576-char
             # turn/start input cap + chair stdin both blown past) came from ONE 902,772-char
             # line in a draw.io SVG export, not from the .svg/.drawio extension per se — this
             # repos actual .drawio sources (e.g. images/awsops_arch_v2.drawio) are pretty-printed
@@ -105,13 +106,28 @@ jobs:
             # 50000 chars is far above any normal source line yet far below the 1,048,576 cap even
             # with several such lines in one diff, so it only catches genuinely minified/generated
             # single-line blobs regardless of file type.
+            #
+            # Omission must stay VISIBLE, not silent: pre-cap, an oversized line broke the whole
+            # job (input cap exceeded -> no VERDICT -> gate fail-closed BLOCKED); post-cap it is
+            # just dropped, which would let a real source/IaC file with one huge line pass review
+            # unseen by every lens. So every omitted path also gets appended to a sidecar file
+            # that the comment step turns into a warning banner on the final PR comment (same
+            # pattern as the existing panel_truncated banner), on top of the inline marker left
+            # for the panel models themselves.
             length($0) > 50000 {
-              if (!(path in warned)) { print "[omitted: a line over 50000 chars in " path " — likely a minified/generated export]"; warned[path]=1 }
+              if (!(path in warned)) {
+                print "[omitted: a line over 50000 chars in " path " — likely a minified/generated export]"
+                print path >> "/tmp/pr-diff-omitted.txt"
+                warned[path]=1
+              }
               next
             }
             { print }
           ' /tmp/pr-diff-raw.txt > /tmp/pr-diff.txt
           echo "total_lines=$(wc -l < /tmp/pr-diff.txt)" >> "$GITHUB_ENV"
+          if [ -s /tmp/pr-diff-omitted.txt ]; then
+            echo "omitted_paths=$(tr '\n' ' ' < /tmp/pr-diff-omitted.txt)" >> "$GITHUB_ENV"
+          fi
 
       - name: Build lens prompts (L2-L5 — each self-contained, one lens only)
         run: |
@@ -229,6 +245,7 @@ jobs:
             echo ""
             echo "_Cells (model/lens): ${panel_responded:-solo}_"
             [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
+            [ -n "${omitted_paths:-}" ] && echo "_⚠️ oversized lines (>50k chars) omitted from the reviewed diff in: ${omitted_paths} — no lens saw those lines; verify them manually._"
             echo ""
             echo "$STATUS_BADGE"
             echo ""
