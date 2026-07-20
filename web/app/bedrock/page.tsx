@@ -1,6 +1,9 @@
 'use client';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { DollarSign, Activity, ArrowDownToLine, ArrowUpFromLine, PiggyBank, Timer, AlertTriangle } from 'lucide-react';
+import Card from '@/components/ui/Card';
+import DetailPanel from '@/components/ui/DetailPanel';
+import { getModelPricing } from '@/lib/bedrock';
 import StatTile from '@/components/ui/StatTile';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -111,6 +114,17 @@ export default function BedrockPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const [picked, setPicked] = useState<string | null>(null);
+  const [appStats, setAppStats] = useState<{ totalCalls: number; successRate: number; avgElapsedMs: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/chat/stats')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => { if (alive && b) setAppStats(b); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
   const models = d?.models ?? [];
   const totalCost = d?.totalCost ?? 0;
   const totalInvocations = models.reduce((s, m) => s + m.invocations, 0);
@@ -122,6 +136,43 @@ export default function BedrockPage() {
     ? models.reduce((s, m) => s + (m.avgLatencyMs || 0) * m.invocations, 0) / totalInvocations
     : 0;
   const totalErrors = models.reduce((s, m) => s + m.clientErrors + m.serverErrors, 0);
+  // Prompt-caching rollup (v1 parity): cache read/write totals + hit rate = cacheRead/(input+cacheRead).
+  const totalCacheRead = models.reduce((s, m) => s + m.cacheReadTokens, 0);
+  const totalCacheWrite = models.reduce((s, m) => s + m.cacheWriteTokens, 0);
+  const cacheHitRate = totalInput + totalCacheRead > 0 ? (totalCacheRead / (totalInput + totalCacheRead)) * 100 : 0;
+
+  // Model drill-down (v1 parity): unit prices + cost breakdown + 4xx/5xx split, flat fields.
+  const pickedModel = models.find((m) => m.label === picked) ?? null;
+  const pickedDetail = pickedModel
+    ? (() => {
+        const pr = getModelPricing(pickedModel.modelId);
+        const hit = pickedModel.inputTokens + pickedModel.cacheReadTokens > 0
+          ? (pickedModel.cacheReadTokens / (pickedModel.inputTokens + pickedModel.cacheReadTokens)) * 100 : 0;
+        return {
+          resource_id: pickedModel.modelId,
+          name: pickedModel.label,
+          '호출 수': pickedModel.invocations.toLocaleString(),
+          '평균 지연': pickedModel.avgLatencyMs ? `${pickedModel.avgLatencyMs} ms` : DASH,
+          '4xx 에러': pickedModel.clientErrors,
+          '5xx 에러': pickedModel.serverErrors,
+          '입력 토큰': pickedModel.inputTokens.toLocaleString(),
+          '출력 토큰': pickedModel.outputTokens.toLocaleString(),
+          '캐시 읽기 토큰': pickedModel.cacheReadTokens.toLocaleString(),
+          '캐시 쓰기 토큰': pickedModel.cacheWriteTokens.toLocaleString(),
+          '캐시 적중률': `${hit.toFixed(1)}%`,
+          '입력 비용': usd(pickedModel.cost.inputCost),
+          '출력 비용': usd(pickedModel.cost.outputCost),
+          '캐시 읽기 비용': usd(pickedModel.cost.cacheReadCost),
+          '캐시 쓰기 비용': usd(pickedModel.cost.cacheWriteCost),
+          '총 비용': usd(pickedModel.cost.total),
+          '캐시 절감': usd(pickedModel.cost.cacheSavings),
+          '단가 (입력/1M)': usd(pr.input),
+          '단가 (출력/1M)': usd(pr.output),
+          '단가 (캐시읽기/1M)': usd(pr.cacheRead),
+          '단가 (캐시쓰기/1M)': usd(pr.cacheWrite),
+        } as Record<string, unknown>;
+      })()
+    : null;
 
   const costRows = models.map((m) => ({ label: m.label, cost: m.cost.total }));
   const invRows = models.map((m) => ({ label: m.label, invocations: m.invocations }));
@@ -131,6 +182,7 @@ export default function BedrockPage() {
     inputTokens: compact(m.inputTokens),
     outputTokens: compact(m.outputTokens),
     avgLatencyMs: m.avgLatencyMs ? `${m.avgLatencyMs} ms` : DASH,
+    cacheRead: compact(m.cacheReadTokens),
     errors: m.clientErrors + m.serverErrors,
     cost: usd(m.cost.total),
   }));
@@ -176,6 +228,37 @@ export default function BedrockPage() {
                 <DonutBreakdown title="모델별 비용" data={costRows} nameKey="label" valueKey="cost" valuePrefix="$" />
               </div>
 
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* v1 parity: prompt-caching rollup — hit rate + read/write volumes + savings */}
+                <Card title="Prompt Caching 요약">
+                  <dl className="grid grid-cols-2 gap-x-6 gap-y-3">
+                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">캐시 적중률</dt>
+                      <dd className={`tabular mt-0.5 text-[22px] font-semibold ${cacheHitRate >= 50 ? 'text-positive-text' : 'text-ink-800'}`}>{cacheHitRate.toFixed(1)}%</dd></div>
+                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">캐시 절감</dt>
+                      <dd className="tabular mt-0.5 text-[22px] font-semibold text-ink-800">{usd(totalSavings)}</dd></div>
+                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">캐시 읽기 토큰</dt>
+                      <dd className="tabular mt-0.5 text-[15px] text-ink-700">{compact(totalCacheRead)}</dd></div>
+                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">캐시 쓰기 토큰</dt>
+                      <dd className="tabular mt-0.5 text-[15px] text-ink-700">{compact(totalCacheWrite)}</dd></div>
+                  </dl>
+                  <p className="mt-3 text-[11px] text-ink-400">적중률 = 캐시 읽기 ÷ (입력 + 캐시 읽기). 읽기 단가는 입력의 10%.</p>
+                </Card>
+                {/* v1 parity: account-wide CloudWatch totals vs AWSops app-recorded usage */}
+                <Card title="계정 전체 vs AWSops 앱 사용량">
+                  <dl className="grid grid-cols-2 gap-x-6 gap-y-3">
+                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">계정 전체 호출 ({range})</dt>
+                      <dd className="tabular mt-0.5 text-[22px] font-semibold text-ink-800">{totalInvocations.toLocaleString()}</dd></div>
+                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">AWSops 앱 호출 (기록 누계)</dt>
+                      <dd className="tabular mt-0.5 text-[22px] font-semibold text-ink-800">{appStats ? appStats.totalCalls.toLocaleString() : DASH}</dd></div>
+                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">앱 성공률</dt>
+                      <dd className="tabular mt-0.5 text-[15px] text-ink-700">{appStats ? `${(appStats.successRate * 100).toFixed(0)}%` : DASH}</dd></div>
+                    <div><dt className="text-[11px] uppercase tracking-[0.04em] text-ink-400">앱 평균 응답</dt>
+                      <dd className="tabular mt-0.5 text-[15px] text-ink-700">{appStats ? `${(appStats.avgElapsedMs / 1000).toFixed(1)}s` : DASH}</dd></div>
+                  </dl>
+                  <p className="mt-3 text-[11px] text-ink-400">계정 전체는 CloudWatch(선택 기간), 앱은 어시스턴트 호출 기록 — 집계 창이 다릅니다.</p>
+                </Card>
+              </div>
+
               <section className="flex flex-col gap-3">
                 <h2 className="text-[13px] font-semibold text-ink-800">모델 상세</h2>
                 <DataTable
@@ -184,11 +267,13 @@ export default function BedrockPage() {
                     { key: 'invocations', label: '호출' },
                     { key: 'inputTokens', label: '입력 토큰' },
                     { key: 'outputTokens', label: '출력 토큰' },
+                    { key: 'cacheRead', label: '캐시 읽기' },
                     { key: 'avgLatencyMs', label: '평균 지연' },
                     { key: 'errors', label: '에러' },
                     { key: 'cost', label: '비용' },
                   ]}
                   rows={tableRows}
+                  onRowClick={(row) => setPicked(String(row.model))}
                 />
               </section>
             </>
@@ -198,6 +283,7 @@ export default function BedrockPage() {
         {/* v1-parity AI-call ops stats — independent of the CloudWatch range/account above
             (own /api/chat/stats fetch); self-hides when nothing is recorded. */}
         <ChatOpsStatsCard />
+        <DetailPanel title={picked ?? undefined} data={pickedDetail} onClose={() => setPicked(null)} />
       </div>
     </>
   );

@@ -27,9 +27,10 @@ interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 interface Cost {
   currency: string; forecast?: number | null;
   monthlyByService: MonthlyServiceCostPoint[]; dailyByService: DailyServiceCostPoint[];
+  cached?: boolean; cachedAt?: string;
 }
 interface UsageType { usageType: string; amount: number; [k: string]: unknown }
-interface ServiceDetail { service: string; currency: string; trend: TrendPoint[] | null; byUsageType: UsageType[] | null }
+interface ServiceDetail { service: string; currency: string; trend: TrendPoint[] | null; byUsageType: UsageType[] | null; monthly: { month: string; amount: number }[] | null }
 
 const DASH = '—';
 const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -77,6 +78,8 @@ export default function CostPage() {
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
   const [active] = useActiveAccount();
+  const [avail, setAvail] = useState<{ available: boolean; reason: string; message?: string } | null>(null);
+  const [rechecking, setRechecking] = useState(false);
 
   // v1-parity filter menu: period (트레일링 개월 수) + multi-select service filter. Empty selection
   // = no filter = all services (matches v1's Set-based semantics exactly).
@@ -137,10 +140,22 @@ export default function CostPage() {
       setCapturedAt(new Date().toISOString());
     } catch (e) {
       setErr(String(e));
+      // v1 cost-check parity: classify WHY CE is unavailable (권한/미활성/오류) for the notice.
+      fetch('/api/cost/availability').then((r) => (r.ok ? r.json() : null)).then((a) => a && setAvail(a)).catch(() => {});
     } finally {
       setBusy(false);
     }
   }, [active, period]);
+
+  const recheck = useCallback(async () => {
+    setRechecking(true);
+    try {
+      const r = await fetch('/api/cost/availability?force=1');
+      const a = r.ok ? await r.json() : null;
+      if (a) setAvail(a);
+      if (a?.available) { setErr(''); await load(); }
+    } finally { setRechecking(false); }
+  }, [load]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -209,8 +224,25 @@ export default function CostPage() {
       />
       <div className="px-4 lg:px-8 py-8 flex flex-col gap-6">
         {err && (
-          <div className="text-[13px] text-rose-600">
-            로드 실패: {err} (Cost Explorer 권한/요금 또는 세션 만료 확인)
+          <div className="rounded-lg border border-rose-200 bg-negative-surface px-4 py-3">
+            <p className="text-[13px] font-semibold text-negative-text">비용 데이터를 불러올 수 없습니다</p>
+            <p className="mt-1 text-[12px] text-ink-600">
+              {avail?.reason === 'access_denied' && 'Cost Explorer 접근 권한이 없습니다 (ce:GetCostAndUsage) — MSP/멤버 계정에서 흔한 구성입니다.'}
+              {avail?.reason === 'not_enabled' && 'Cost Explorer가 아직 활성화되지 않았습니다 (콘솔에서 최초 활성화 후 최대 24시간 소요).'}
+              {(!avail || avail.reason === 'error' || avail.reason === 'ok') && `일시적 오류일 수 있습니다: ${err}`}
+            </p>
+            <div className="mt-2 flex items-center gap-3 text-[12px]">
+              <button onClick={recheck} disabled={rechecking} className="rounded-md border border-ink-200 bg-card px-2.5 py-1 font-medium text-ink-700 hover:bg-ink-50 disabled:opacity-50">
+                {rechecking ? '확인 중…' : '가용성 재확인'}
+              </button>
+              <a href="/inventory/ec2" className="text-brand-600 hover:underline">리소스 인벤토리로 이동 →</a>
+            </div>
+          </div>
+        )}
+        {d?.cached && (
+          <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-[12px] text-amber-700">
+            <span>캐시된 데이터 표시 중 — Cost Explorer 호출 실패로 마지막 성공 응답({d.cachedAt ? new Date(d.cachedAt).toLocaleString('ko-KR') : ''})을 보여줍니다.</span>
+            <button onClick={load} className="rounded-md border border-amber-300 bg-card px-2 py-0.5 font-medium hover:bg-amber-100">라이브 재시도</button>
           </div>
         )}
         {!d && !err && <div className="text-ink-400">로딩 중…</div>}
@@ -410,6 +442,44 @@ export default function CostPage() {
                       <div className="text-[13px] text-ink-400">데이터 없음</div>
                     </Card>
                   )}
+
+                  {detail?.monthly == null ? (
+                    <Card title="월별 비용 추이 (6개월)">
+                      <div className="text-[13px] text-ink-400">월별 호출 실패 — 잠시 후 재시도</div>
+                    </Card>
+                  ) : detail.monthly.length > 0 ? (
+                    <>
+                      <AreaTrend title="월별 비용 추이 (6개월)" data={detail.monthly} xKey="month" yKey="amount" valuePrefix="$" />
+                      {/* v1 parity: Cost Summary — this vs last month + change */}
+                      {detail.monthly.length >= 2 && (() => {
+                        const cur = detail.monthly[detail.monthly.length - 1].amount;
+                        const prev = detail.monthly[detail.monthly.length - 2].amount;
+                        const pct = prev > 0 ? ((cur - prev) / prev) * 100 : null;
+                        return (
+                          <Card title="Cost Summary">
+                            <dl className="grid grid-cols-3 gap-3">
+                              <div><dt className="text-[11px] uppercase text-ink-400">이번 달</dt>
+                                <dd className="tabular mt-0.5 text-[16px] font-semibold text-ink-800">{usd(cur)}</dd></div>
+                              <div><dt className="text-[11px] uppercase text-ink-400">지난 달</dt>
+                                <dd className="tabular mt-0.5 text-[16px] text-ink-700">{usd(prev)}</dd></div>
+                              <div><dt className="text-[11px] uppercase text-ink-400">변화</dt>
+                                <dd className={`tabular mt-0.5 text-[16px] font-semibold ${pct != null && pct > 0 ? 'text-brand-700' : 'text-positive-text'}`}>
+                                  {pct == null ? DASH : `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%`}
+                                </dd></div>
+                            </dl>
+                            <ul className="mt-3 flex flex-col gap-1 border-t border-ink-100 pt-2">
+                              {[...detail.monthly].reverse().map((mo) => (
+                                <li key={mo.month} className="flex items-center justify-between text-[12px]">
+                                  <span className="text-ink-500">{mo.month}</span>
+                                  <span className="tabular text-ink-700">{usd(mo.amount)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </Card>
+                        );
+                      })()}
+                    </>
+                  ) : null}
 
                   {detail?.byUsageType == null ? (
                     <Card title="사용 유형별 비용 (최근 3개월)">

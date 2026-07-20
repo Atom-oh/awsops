@@ -47,6 +47,15 @@ function dateH(v: unknown): string | undefined {
 const boolH = (v: unknown): string | undefined =>
   v === true || v === 'true' ? 'true' : v === false || v === 'false' ? 'false' : undefined;
 
+function _ecsTaskBase(r: Row): Row {
+  return {
+    task_short: typeof r.resource_id === 'string' ? r.resource_id.split('/').pop()?.slice(0, 12) : undefined,
+    cpu_h: Number.isFinite(Number(r.cpu)) ? `${r.cpu} (${(Number(r.cpu) / 1024).toFixed(2)} vCPU)` : undefined,
+    memory_h: Number.isFinite(Number(r.memory)) ? `${r.memory} MB (${(Number(r.memory) / 1024).toFixed(1)} GB)` : undefined,
+    started_h: dateH(r.started_at),
+  };
+}
+
 const DERIVERS: Record<string, (r: Row) => Row> = {
   opensearch: (r) => ({
     instance_type_h: walk(r.cluster_config, 'instance_type'),
@@ -94,12 +103,25 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
     const inst = first ? (walk(first, 'instance_id') as string | undefined) : undefined;
     return { attached_to: inst ?? 'Unattached' };
   },
-  ecs_task: (r) => ({
-    task_short: typeof r.resource_id === 'string' ? r.resource_id.split('/').pop()?.slice(0, 12) : undefined,
-    cpu_h: Number.isFinite(Number(r.cpu)) ? `${r.cpu} (${(Number(r.cpu) / 1024).toFixed(2)} vCPU)` : undefined,
-    memory_h: Number.isFinite(Number(r.memory)) ? `${r.memory} MB (${(Number(r.memory) / 1024).toFixed(1)} GB)` : undefined,
-    started_h: dateH(r.started_at),
-  }),
+  ecs_task: (r) => {
+    // Fargate on-demand (ap-northeast-2): $/vCPU-h + $/GB-h — v1 constants (config-overridable in v1).
+    const VCPU_H = 0.04656;
+    const GB_H = 0.00511;
+    const cpu = Number(r.cpu);
+    const mem = Number(r.memory);
+    const isFargate = String(r.launch_type ?? '').toUpperCase() === 'FARGATE';
+    const daily = isFargate && Number.isFinite(cpu) && Number.isFinite(mem)
+      ? (cpu / 1024) * VCPU_H * 24 + (mem / 1024) * GB_H * 24
+      : undefined;
+    const clusterArn = String(r.cluster_arn ?? '');
+    return {
+      cluster_h: clusterArn ? clusterArn.split('/').pop() : undefined,
+      cost_day_num: daily != null ? Math.round(daily * 100) / 100 : undefined,
+      cost_day_h: daily != null ? `$${daily.toFixed(2)}` : undefined,
+      cost_month_h: daily != null ? `$${(daily * 30).toFixed(2)}` : undefined,
+      ..._ecsTaskBase(r),
+    };
+  },
 };
 
 /** Merge type-specific derived fields into a flattened row (missing sources stay undefined). */

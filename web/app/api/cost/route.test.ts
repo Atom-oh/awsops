@@ -11,6 +11,7 @@ vi.mock('@/lib/aws', () => ({
 }));
 const req = (cookie = 'awsops_token=t') => new Request('http://x/api/cost', { headers: { cookie } });
 beforeEach(() => {
+  (async () => { const m = await import('@/lib/cost-availability'); m._clearCostSnapshotsForTests(); })();
   verifyUser.mockReset(); getMonthlyCostByService.mockReset();
   getDailyCostByService.mockReset(); getCostForecast.mockReset();
   // sensible defaults so older cases don't crash on the new secondary calls

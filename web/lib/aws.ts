@@ -186,6 +186,7 @@ export interface ServiceCostDetail {
   currency: string;
   trend: CostTrendPoint[] | null;          // null = the trend CE call failed (vs [] = genuinely empty)
   byUsageType: ServiceUsageType[] | null;  // null = the usage-type CE call failed (vs [] = genuinely empty)
+  monthly: { month: string; amount: number }[] | null;
 }
 
 /** Sort rows desc, keep the top-n, and roll any remainder into a single '기타' row (omitted when the rest sums to 0). */
@@ -240,7 +241,19 @@ export async function getServiceCostDetail(service: string, account?: string): P
     return rollupUsageTypes(rows, 8);
   }).catch(() => null);
 
-  return { service, currency: 'USD', trend, byUsageType };
+  // ③ MONTHLY totals, trailing 6 months → monthly trend + this/last-month summary (v1 parity).
+  const moStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1)).toISOString().slice(0, 10);
+  const monthly = await (await ceClient(account)).send(new GetCostAndUsageCommand({
+    TimePeriod: { Start: moStart, End: utEnd },
+    Granularity: 'MONTHLY',
+    Metrics: ['UnblendedCost'],
+    Filter: filter,
+  })).then((r) => (r.ResultsByTime ?? []).map((t) => ({
+    month: (t.TimePeriod?.Start ?? '').slice(0, 7),
+    amount: Number(t.Total?.UnblendedCost?.Amount ?? 0),
+  }))).catch(() => null);
+
+  return { service, currency: 'USD', trend, byUsageType, monthly };
 }
 
 /** AWS-forecasted remaining UnblendedCost from tomorrow to month-end. null when there is no future window (last day). */

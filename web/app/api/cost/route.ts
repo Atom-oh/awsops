@@ -1,3 +1,4 @@
+import { saveCostSnapshot, getCostSnapshot } from '@/lib/cost-availability';
 import { verifyUser } from '@/lib/auth';
 import { getMonthlyCostByService, getDailyCostByService, getCostForecast } from '@/lib/aws';
 
@@ -35,11 +36,19 @@ export async function GET(request: Request) {
     const monthly = monthlyByService.map((m) => ({ month: m.month, total: m.byService.reduce((s, x) => s + x.amount, 0) }));
     const trend = dailyByService.map((d) => ({ date: d.date, amount: d.byService.reduce((s, x) => s + x.amount, 0) }));
 
-    return Response.json({
+    const body = {
       total, currency, byService, trend, monthly, forecast,
       monthlyByService, dailyByService, account: account ?? 'self',
-    });
+    };
+    // v1 parity: keep the last-good response so a CE outage serves cached data, not a blank page.
+    saveCostSnapshot(`${account ?? 'self'}:${months}`, body);
+    return Response.json(body);
   } catch (e) {
+    // Snapshot fallback: serve the last-good body with an explicit cached marker.
+    const snap = getCostSnapshot(`${account ?? 'self'}:${months}`);
+    if (snap) {
+      return Response.json({ ...(snap.body as Record<string, unknown>), cached: true, cachedAt: snap.at });
+    }
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

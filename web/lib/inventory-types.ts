@@ -69,16 +69,16 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['launch_type'] },
-  ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', columns: [
-    { key: 'task_short', label: 'Task' }, { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
+  ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', distKey2: 'cluster_h', barKey: { col: 'cost_day_num', label: 'Daily $ (Fargate est.)' }, filterKeys: ['cluster_h', 'launch_type'], columns: [
+    { key: 'task_short', label: 'Task' }, { key: 'cluster_h', label: 'Cluster' }, { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
     { key: 'launch_type', label: 'Launch' }, { key: 'cpu_h', label: 'CPU' }, { key: 'memory_h', label: 'Memory' },
+    { key: 'cost_day_h', label: 'Cost/Day' }, { key: 'cost_month_h', label: 'Cost/Mo' },
     { key: 'availability_zone', label: 'AZ' }, { key: 'started_h', label: 'Started' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'cluster_arn', 'task_group', 'task_definition_arn'] },
       { label: 'Task', keys: ['last_status', 'launch_type'] },
       { label: 'Containers', keys: ['containers', 'attachments'] },
-    ],
-    filterKeys: ['launch_type'] },
+    ] },
   ecr: { label: 'ECR Repositories', group: 'Compute', distKey: 'image_tag_mutability', columns: [
     { key: 'repository_uri', label: 'URI' }, { key: 'image_tag_mutability', label: 'Tag mutability' },
     { key: 'created_at', label: 'Created' } ],
@@ -665,6 +665,12 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
     { kind: 'countWhere', label: '활성', col: 'state', eq: 'active', tone: 'accent' },
     { kind: 'deprecatedRuntime', label: 'EOL 런타임', col: 'runtime' },
     { kind: 'distinct', label: '런타임 종류', col: 'runtime' },
+  ],
+  ecs_task: [
+    { kind: 'countWhere', label: 'RUNNING', col: 'last_status', eq: 'running', tone: 'accent' },
+    { kind: 'countWhere', label: 'Fargate', col: 'launch_type', eq: 'fargate' },
+    { kind: 'sum', label: '일일 비용 합 (est.)', col: 'cost_day_num', suffix: ' USD' },
+    { kind: 'distinct', label: '클러스터 수', col: 'cluster_h' },
   ],
   ecs_service: [
     { kind: 'sum', label: 'Desired', col: 'desired_count' },
