@@ -106,6 +106,29 @@ function structuredList(key: string, value: unknown): DetailListItem[] | null {
         name: sources.join(', ') || '(none)',
         flag: sources.some((x) => x === '0.0.0.0/0' || x === '::/0') ? 'OPEN' : undefined,
       });
+    } else if (key === 'key_schema') {
+      // DynamoDB: [{ AttributeName, KeyType }] → attr + HASH/RANGE
+      const attr = o.AttributeName ?? o.attribute_name;
+      if (typeof attr !== 'string') return null;
+      rows.push({ id: attr, name: String(o.KeyType ?? o.key_type ?? '') });
+    } else if (key === 'origins') {
+      // CloudFront: [{ Id, DomainName }]
+      const oid = o.Id ?? o.id;
+      if (typeof oid !== 'string') return null;
+      rows.push({ id: oid, name: String(o.DomainName ?? o.domain_name ?? '') });
+    } else if (key === 'rules') {
+      // WAF: [{ Name, Priority, Action: { <Allow|Block|Count>: {} } }]
+      const rn = o.Name ?? o.name;
+      if (typeof rn !== 'string') return null;
+      const action = asRecord(o.Action ?? o.action);
+      const act = action ? Object.keys(action)[0] : undefined;
+      const prio = o.Priority ?? o.priority;
+      rows.push({
+        id: rn,
+        name: prio != null ? `priority ${prio}` : undefined,
+        extra: act,
+        flag: act?.toLowerCase() === 'block' ? 'BLOCK' : undefined,
+      });
     } else if (key === 'security_groups') {
       const id = o.GroupId ?? o.group_id;
       if (typeof id !== 'string') return null;
@@ -181,6 +204,9 @@ const VIRTUAL_LABELS: Record<string, string> = {
   launch_time: 'Launch Time', state_transition_time: 'State Changed',
   security_groups: 'Security Groups', block_device_mappings: 'Block Devices',
   network_interfaces: 'Network Interfaces', tags: 'Tags',
+  sse_h: 'SSE', pitr_h: 'PITR', key_schema: 'Key Schema',
+  kafka_version: 'Kafka Version', broker_nodes: 'Broker Nodes',
+  broker_instance_type: 'Broker Instance', broker_ebs_gb: 'Broker EBS (GB)',
 };
 
 // Acronyms kept uppercase when humanizing a snake_case key into a friendly label.

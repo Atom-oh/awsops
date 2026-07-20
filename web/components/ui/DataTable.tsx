@@ -11,7 +11,7 @@ export interface Column {
 }
 
 // Keys whose cells render as a StatePill (resource state/status).
-const STATE_KEYS = new Set(['state', 'status', 'instance_state', 'cache_cluster_status', 'state_value']);
+const STATE_KEYS = new Set(['state', 'status', 'instance_state', 'cache_cluster_status', 'state_value', 'table_status', 'last_status', 'state_code']);
 
 function renderCell(key: string, value: unknown) {
   // Pre-rendered cell (e.g. a drill-in <Link>) — render as-is, don't stringify.

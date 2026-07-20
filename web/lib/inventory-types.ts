@@ -8,6 +8,8 @@ export interface InvType {
   label: string; group: string; columns: InvColumn[]; stateKey?: string; distKey?: string;
   /** Optional second distribution dimension — rendered as a second donut beside the first. */
   distKey2?: string;
+  /** Optional Top-N metric bar chart: numeric column ranked desc over the row set. */
+  barKey?: { col: string; label: string };
   sections?: { label: string; keys: string[] }[];
   // filterKeys (optional, v1-parity facet filters): columns[].key rendered as dropdown facets above
   // the table (each option shows a live count). The stateKey already has its own SegmentedControl,
@@ -86,10 +88,12 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['encryption_configuration'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  s3: { label: 'S3 Buckets', group: 'Storage & DB', distKey: 'region', columns: [
-    { key: 'creation_date', label: 'Created' } ],
+  s3: { label: 'S3 Buckets', group: 'Storage & DB', distKey: 'region', distKey2: 'encryption', filterKeys: ['region'], columns: [
+    { key: 'versioning_enabled', label: 'Versioning' }, { key: 'encryption', label: 'Encryption' },
+    { key: 'logging_enabled', label: 'Logging' }, { key: 'creation_date', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'creation_date'] },
+      { label: 'Security', keys: ['versioning_enabled', 'encryption', 'logging_enabled'] },
     ] },
   ebs_volume: { label: 'EBS Volumes', group: 'Storage & DB', stateKey: 'state', distKey: 'volume_type', distKey2: 'encrypted', columns: [
     { key: 'name', label: 'Name' }, { key: 'volume_type', label: 'Type' }, { key: 'size', label: 'Size(GB)' },
@@ -129,13 +133,13 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['class'] },
-  dynamodb: { label: 'DynamoDB Tables', group: 'Storage & DB', stateKey: 'table_status', distKey: 'billing_h', distKey2: 'table_status', columns: [
+  dynamodb: { label: 'DynamoDB Tables', group: 'Storage & DB', stateKey: 'table_status', distKey: 'billing_h', distKey2: 'table_status', barKey: { col: 'item_count', label: 'Items' }, columns: [
     { key: 'table_status', label: 'Status' }, { key: 'billing_h', label: 'Billing' },
     { key: 'item_count_h', label: 'Items' }, { key: 'table_size_h', label: 'Size' }, { key: 'created_h', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'creation_date_time'] },
       { label: 'Table', keys: ['table_status', 'billing_mode', 'item_count', 'table_size_bytes', 'read_capacity', 'write_capacity', 'key_schema'] },
-      { label: 'Security', keys: ['sse_description', 'point_in_time_recovery_description'] },
+      { label: 'Security', keys: ['sse_h', 'pitr_h', 'key_schema', 'sse_description', 'point_in_time_recovery_description'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
   vpc: { label: 'VPCs', group: 'Network', stateKey: 'state', distKey: 'region', columns: [
@@ -218,7 +222,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
   // ---- D3 wave ----
   cloudfront: { label: 'CloudFront', group: 'Network', stateKey: 'status', distKey: 'price_class', distKey2: 'status', columns: [
     { key: 'domain_name', label: 'Domain' }, { key: 'status', label: 'Status' },
-    { key: 'enabled', label: 'Enabled' }, { key: 'price_class', label: 'Price class' } ],
+    { key: 'enabled', label: 'Enabled' }, { key: 'price_class', label: 'Price class' } , { key: 'protocol_h', label: 'Protocol' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'domain_name', 'e_tag'] },
       { label: 'Distribution', keys: ['status', 'enabled', 'http_version', 'is_ipv6_enabled', 'price_class', 'aliases', 'origins', 'default_cache_behavior', 'cache_behaviors'] },
@@ -315,7 +319,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'block_public_policy', label: 'Block policy' }, { key: 'restrict_public_buckets', label: 'Restrict public' }, { key: 'ignore_public_acls', label: 'Ignore ACLs' } ] },
   elasticache: { label: 'ElastiCache', group: 'Storage & DB', stateKey: 'cache_cluster_status', distKey: 'engine', distKey2: 'cache_node_type', columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
-    { key: 'cache_node_type', label: 'Node type' }, { key: 'cache_cluster_status', label: 'Status' }, { key: 'num_cache_nodes', label: 'Nodes' } ],
+    { key: 'cache_node_type', label: 'Node type' }, { key: 'cache_cluster_status', label: 'Status' }, { key: 'num_cache_nodes', label: 'Nodes' },
+    { key: 'replication_group_id', label: 'Repl Group' }, { key: 'at_rest_encryption_enabled', label: 'At-Rest Enc' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'replication_group_id', 'cache_cluster_create_time'] },
       { label: 'Engine', keys: ['engine', 'engine_version', 'cache_node_type', 'cache_cluster_status', 'num_cache_nodes'] },
@@ -326,8 +331,10 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     ],
     filterKeys: ['cache_node_type'] },
   opensearch: { label: 'OpenSearch', group: 'Storage & DB', distKey: 'engine_version', distKey2: 'engine_type', columns: [
-    { key: 'engine_version', label: 'Version' }, { key: 'processing', label: 'Processing' },
-    { key: 'created', label: 'Created' }, { key: 'endpoint', label: 'Endpoint' } ],
+    { key: 'engine_version', label: 'Version' }, { key: 'instance_type_h', label: 'Instance' },
+    { key: 'instance_count_h', label: 'Count' }, { key: 'storage_gb_h', label: 'Storage(GB)' },
+    { key: 'n2n_enc_h', label: 'N2N Enc' }, { key: 'rest_enc_h', label: 'Rest Enc' },
+    { key: 'created', label: 'Created' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'domain_name', 'account_id', 'region', 'arn', 'domain_id', 'created', 'deleted', 'processing'] },
       { label: 'Engine', keys: ['engine_type', 'engine_version', 'cluster_config'] },
@@ -342,10 +349,30 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
     { key: 'broker_instance_type', label: 'Instance' }, { key: 'broker_ebs_gb', label: 'EBS(GB)' },
     { key: 'created_h', label: 'Created' } ],
     sections: [
+      { label: 'Broker Config', keys: ['kafka_version', 'broker_nodes', 'broker_instance_type', 'broker_ebs_gb'] },
       { label: 'Identity', keys: ['resource_id', 'cluster_name', 'account_id', 'region', 'arn', 'creation_time'] },
       { label: 'Engine', keys: ['state', 'cluster_type', 'current_version', 'provisioned'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
+  elasticache_replication_group: { label: 'ElastiCache Repl Groups', group: 'Storage & DB', stateKey: 'status', distKey: 'automatic_failover', columns: [
+    { key: 'status', label: 'Status' }, { key: 'cache_node_type', label: 'Node type' },
+    { key: 'automatic_failover', label: 'Failover' }, { key: 'multi_az', label: 'Multi-AZ' },
+    { key: 'at_rest_encryption_enabled', label: 'At-Rest Enc' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'description'] },
+      { label: 'Config', keys: ['status', 'cache_node_type', 'automatic_failover', 'multi_az', 'cluster_enabled', 'snapshot_retention_limit'] },
+      { label: 'Security', keys: ['auth_token_enabled', 'transit_encryption_enabled', 'at_rest_encryption_enabled'] },
+      { label: 'Cluster', keys: ['member_clusters', 'node_groups'] },
+    ] },
+  iam_policy: { label: 'IAM Policies', group: 'Security', distKey: 'is_attachable', columns: [
+    { key: 'is_attachable', label: 'Attachable' }, { key: 'attachment_count', label: 'Attached' }, { key: 'path', label: 'Path' },
+    { key: 'create_date', label: 'Created' }, { key: 'update_date', label: 'Updated' } ],
+    sections: [
+      { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'policy_id', 'path', 'create_date', 'update_date'] },
+      { label: 'Config', keys: ['is_attachable', 'attachment_count', 'default_version_id'] },
+      { label: 'Tags', keys: ['tags'] },
+    ] },
+
   neptune_cluster: { label: 'Neptune', group: 'Storage & DB', stateKey: 'status', distKey: 'engine_version', columns: [
     { key: 'status', label: 'Status' }, { key: 'engine', label: 'Engine' },
     { key: 'engine_version', label: 'Version' }, { key: 'multi_az', label: 'Multi-AZ' },
@@ -422,7 +449,7 @@ const GROUPS: Record<string, GroupMeta> = {
   },
   'Storage & DB': {
     slug: 'storage', labelKey: 'group.storage', splitKeys: ['ebsUnencrypted'],
-    order: ['s3', 'ebs_volume', 'ebs_snapshot', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'opensearch_serverless', 'msk', 'neptune_cluster'],
+    order: ['s3', 'ebs_volume', 'ebs_snapshot', 'rds', 'dynamodb', 'elasticache', 'opensearch', 'opensearch_serverless', 'msk', 'neptune_cluster', 'elasticache_replication_group'],
   },
   'Network': {
     slug: 'network', labelKey: 'group.network', splitKeys: ['sgOpenIngress'],
@@ -434,7 +461,7 @@ const GROUPS: Record<string, GroupMeta> = {
   },
   'Security': {
     slug: 'security', labelKey: 'group.security', splitKeys: ['iamUserNoMfa'],
-    order: ['iam_role', 'iam_user', 'waf', 'cloudtrail', 's3_public_access'],
+    order: ['iam_role', 'iam_user', 'iam_policy', 'waf', 'cloudtrail', 's3_public_access'],
   },
   'Monitoring': {
     slug: 'monitoring', labelKey: 'group.monitoring', singleton: true, splitKeys: [],
@@ -711,6 +738,9 @@ export const HIGHLIGHTS: Record<string, Highlight[]> = {
     { kind: 'countTruthy', label: '처리 중', col: 'processing' },
   ],
   s3: [
+    { kind: 'countWhere', label: 'Versioning 미설정', col: 'versioning_enabled', eq: 'false', tone: 'danger' },
+    { kind: 'countWhere', label: '미암호화', col: 'encryption', eq: 'none', tone: 'danger' },
+    { kind: 'countTruthy', label: 'Logging', col: 'logging_enabled', tone: 'accent' },
     { kind: 'distinct', label: '리전 수', col: 'region' },
   ],
   s3_public_access: [

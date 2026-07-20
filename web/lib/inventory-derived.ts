@@ -44,7 +44,32 @@ function dateH(v: unknown): string | undefined {
   return Number.isNaN(d.getTime()) ? v : d.toISOString().slice(0, 16).replace('T', ' ');
 }
 
+const boolH = (v: unknown): string | undefined =>
+  v === true || v === 'true' ? 'true' : v === false || v === 'false' ? 'false' : undefined;
+
 const DERIVERS: Record<string, (r: Row) => Row> = {
+  opensearch: (r) => ({
+    instance_type_h: walk(r.cluster_config, 'instance_type'),
+    instance_count_h: walk(r.cluster_config, 'instance_count'),
+    storage_gb_h: walk(r.ebs_options, 'volume_size'),
+    n2n_enc_h: boolH(r.node_to_node_encryption_options_enabled),
+    rest_enc_h: boolH(walk(r.encryption_at_rest_options, 'enabled')),
+  }),
+  cloudfront: (r) => ({
+    protocol_h: walk(r.default_cache_behavior, 'viewer_protocol_policy'),
+  }),
+  iam_user: (r) => ({
+    create_date: dateH(r.create_date) ?? (r.create_date as string | undefined),
+    password_last_used: dateH(r.password_last_used) ?? (r.password_last_used ? String(r.password_last_used) : 'Never'),
+  }),
+  iam_role: (r) => ({
+    create_date: dateH(r.create_date) ?? (r.create_date as string | undefined),
+    session_hours: Number.isFinite(Number(r.max_session_duration)) ? `${(Number(r.max_session_duration) / 3600).toFixed(1)}h` : undefined,
+  }),
+  iam_policy: (r) => ({
+    create_date: dateH(r.create_date) ?? (r.create_date as string | undefined),
+    update_date: dateH(r.update_date) ?? (r.update_date as string | undefined),
+  }),
   msk: (r) => ({
     kafka_version: walk(r.provisioned, 'current_broker_software_info.kafka_version'),
     broker_nodes: walk(r.provisioned, 'number_of_broker_nodes'),
@@ -53,6 +78,8 @@ const DERIVERS: Record<string, (r: Row) => Row> = {
     created_h: dateH(r.creation_time),
   }),
   dynamodb: (r) => ({
+    pitr_h: walk(r.point_in_time_recovery_description, 'point_in_time_recovery_status'),
+    sse_h: walk(r.sse_description, 'status'),
     item_count_h: Number.isFinite(Number(r.item_count)) ? Number(r.item_count).toLocaleString() : undefined,
     table_size_h: bytesH(r.table_size_bytes),
     billing_h:

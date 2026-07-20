@@ -10,6 +10,7 @@ import StatTile from '@/components/ui/StatTile';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Input from '@/components/ui/Input';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import BarDistribution from '@/components/charts/BarDistribution';
 import RiskHero from '@/components/inventory/RiskHero';
 import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
@@ -214,6 +215,20 @@ export default function InventoryTypePage() {
   const donut2 = spec.distKey2 && spec.distKey2 !== spec.distKey && distData2.length > 0
     ? <DonutBreakdown title={`${colLabel(spec.distKey2)} 분포`} data={distData2} nameKey="name" valueKey="value" />
     : null;
+  // Optional Top-N numeric bar (spec.barKey): rows ranked by the column, labelled by name/id.
+  const barData = spec.barKey
+    ? [...allRows]
+        .map((r) => ({
+          label: String(r.name ?? r.resource_id ?? ''),
+          value: Number(r[spec.barKey!.col]) || 0,
+        }))
+        .filter((x) => x.label && x.value > 0)
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10)
+    : [];
+  const barChart = spec.barKey && barData.length > 0
+    ? <BarDistribution title={`Top ${barData.length} — ${spec.barKey.label}`} data={barData} xKey="label" yKey="value" />
+    : null;
   // Graph band: one full-width donut, or two side-by-side when the spec has a second dimension.
   const graphBand = donut && donut2
     ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{donut}{donut2}</div>
@@ -268,6 +283,7 @@ export default function InventoryTypePage() {
               kpiRow
             )}
             {graphBand}
+            {barChart}
             {/* Type-specific live sections (v1 parity): CloudTrail recent-events audit view. */}
             {type === 'cloudtrail' && <CloudTrailEvents />}
             {tableBlock}
