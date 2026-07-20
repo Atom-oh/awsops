@@ -83,7 +83,7 @@ jobs:
           MERGE_BASE_SHA=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '.merge_base_commit.sha')
           git fetch --depth=1 origin "$MERGE_BASE_SHA" "$HEAD_SHA"
           git diff --no-color "$MERGE_BASE_SHA" "$HEAD_SHA" -- . > /tmp/pr-diff-raw.txt
-          rm -f /tmp/pr-diff-omitted.txt
+          rm -f /tmp/pr-diff-omitted.txt /tmp/pr-diff-omitted-source.txt
           awk '
             /^diff --git/ {
               path = substr($3, 3)
@@ -107,17 +107,24 @@ jobs:
             # with several such lines in one diff, so it only catches genuinely minified/generated
             # single-line blobs regardless of file type.
             #
-            # Omission must stay VISIBLE, not silent: pre-cap, an oversized line broke the whole
-            # job (input cap exceeded -> no VERDICT -> gate fail-closed BLOCKED); post-cap it is
-            # just dropped, which would let a real source/IaC file with one huge line pass review
-            # unseen by every lens. So every omitted path also gets appended to a sidecar file
-            # that the comment step turns into a warning banner on the final PR comment (same
-            # pattern as the existing panel_truncated banner), on top of the inline marker left
-            # for the panel models themselves.
+            # Omission must stay VISIBLE, not silent, and must NOT weaken the fail-closed gate:
+            # pre-cap, an oversized line broke the whole job (input cap exceeded -> no VERDICT ->
+            # gate fail-closed BLOCKED). A banner-only omission would turn that into fail-open — a
+            # source/IaC file with one >50k-char line would be dropped from every lens yet still
+            # PASS. So an omitted line is split by file type:
+            #   - a known generated/export type (.svg/.drawio/.min.js/.min.css/.map) -> banner only
+            #     (these are the minified blobs the cap is meant to drop; not lens-reviewable anyway).
+            #   - anything else (real source/IaC: .ts/.tsx/.py/.tf/.yml/...) -> ALSO recorded to a
+            #     second sidecar that the gate turns into a deterministic FAIL, preserving the
+            #     original fail-closed contract for content no lens could see.
+            # An inline marker is always left for the panel models too.
             length($0) > 50000 {
               if (!(path in warned)) {
                 print "[omitted: a line over 50000 chars in " path " — likely a minified/generated export]"
                 print path >> "/tmp/pr-diff-omitted.txt"
+                if (path !~ /\.(svg|drawio|min\.js|min\.css|map)$/) {
+                  print path >> "/tmp/pr-diff-omitted-source.txt"
+                }
                 warned[path]=1
               }
               next
@@ -127,6 +134,9 @@ jobs:
           echo "total_lines=$(wc -l < /tmp/pr-diff.txt)" >> "$GITHUB_ENV"
           if [ -s /tmp/pr-diff-omitted.txt ]; then
             echo "omitted_paths=$(tr '\n' ' ' < /tmp/pr-diff-omitted.txt)" >> "$GITHUB_ENV"
+          fi
+          if [ -s /tmp/pr-diff-omitted-source.txt ]; then
+            echo "omitted_source_paths=$(tr '\n' ' ' < /tmp/pr-diff-omitted-source.txt)" >> "$GITHUB_ENV"
           fi
 
       - name: Build lens prompts (L2-L5 — each self-contained, one lens only)
@@ -214,7 +224,13 @@ jobs:
       - name: Check for blocking issues
         id: gate
         run: |
-          if grep -q "^VERDICT: FAIL$" /tmp/review.md; then
+          # Fail-closed first: if an oversized line was dropped from a real source/IaC file (not a
+          # known generated/export type), no lens saw that content — force BLOCKED regardless of the
+          # chair's VERDICT, matching the pre-cap behaviour where the oversized line failed the job.
+          if [ -n "${omitted_source_paths:-}" ]; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=oversized line(s) omitted from reviewable source/IaC file(s): ${omitted_source_paths} — no lens saw them, fail-closed" >> "$GITHUB_OUTPUT"
+          elif grep -q "^VERDICT: FAIL$" /tmp/review.md; then
             echo "result=fail" >> "$GITHUB_OUTPUT"
             echo "reason=VERDICT: FAIL" >> "$GITHUB_OUTPUT"
           elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
@@ -246,6 +262,7 @@ jobs:
             echo "_Cells (model/lens): ${panel_responded:-solo}_"
             [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
             [ -n "${omitted_paths:-}" ] && echo "_⚠️ oversized lines (>50k chars) omitted from the reviewed diff in: ${omitted_paths} — no lens saw those lines; verify them manually._"
+            [ -n "${omitted_source_paths:-}" ] && echo "_🛑 omitted lines include reviewable source/IaC files (${omitted_source_paths}) — gate forced to BLOCKED (fail-closed); split/reformat those files so the change is reviewable._"
             echo ""
             echo "$STATUS_BADGE"
             echo ""
