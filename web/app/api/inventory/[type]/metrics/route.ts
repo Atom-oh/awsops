@@ -21,6 +21,10 @@ export async function GET(request: Request, { params }: { params: { type: string
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
   const url = new URL(request.url);
+  // 진단 테이블 기간별 조회: allow-listed range (초) — 값은 선택 기간 전체에 대한 단일 집계.
+  const RANGE_ALLOWED = [3600, 21600, 86400, 604800];
+  const rangeRaw = Number(url.searchParams.get('range'));
+  const range = RANGE_ALLOWED.includes(rangeRaw) ? rangeRaw : 3600;
   const regionsParam = url.searchParams.get('regions');
   const regions: RegionScope = regionsParam === null || regionsParam === '__all__' ? '__all__' : regionsParam.split(',').filter(Boolean);
   const includeGlobal = url.searchParams.get('includeGlobal') !== '0';
@@ -41,9 +45,9 @@ export async function GET(request: Request, { params }: { params: { type: string
         }
         const fleet: Record<string, Record<string, number | null>> = {};
         await Promise.all(
-          [...byRegion.entries()].map(async ([reg, insts]) => Object.assign(fleet, await ec2DiagFleetLive(insts, reg))),
+          [...byRegion.entries()].map(async ([reg, insts]) => Object.assign(fleet, await ec2DiagFleetLive(insts, reg, range))),
         );
-        return Response.json({ fleet });
+        return Response.json({ fleet, range });
       }
       const qparams: unknown[] = [];
       const where = `resource_type = 'ec2' AND account_id = 'self'` + regionWhereClause(regions, includeGlobal, qparams);
@@ -75,7 +79,7 @@ export async function GET(request: Request, { params }: { params: { type: string
       const idsParam = new URL(request.url).searchParams.get('ids');
       if (idsParam !== null) {
         const ids = idsParam.split(',').map((x) => x.trim()).filter((x) => /^[a-zA-Z0-9.-]+$/.test(x)).slice(0, 200);
-        return Response.json({ fleet: await rdsFleetLive(ids) });
+        return Response.json({ fleet: await rdsFleetLive(ids, range), range });
       }
       const instanceId = new URL(request.url).searchParams.get('id');
       if (instanceId) {
@@ -138,14 +142,14 @@ export async function GET(request: Request, { params }: { params: { type: string
       }
       const namespace = isAlb ? 'AWS/ApplicationELB' : 'AWS/NetworkELB';
       const [fleetByDim, targetHealth] = await Promise.all([
-        isAlb ? albFleetLive([...dimOf.values()]) : nlbFleetLive([...dimOf.values()]),
-        albTargetHealth(pairs, namespace),
+        isAlb ? albFleetLive([...dimOf.values()], range) : nlbFleetLive([...dimOf.values()], range),
+        albTargetHealth(pairs, namespace, range),
       ]);
       // key the fleet back by resource_id; health rows carry lbDim → page maps via lbDim field
       const fleet: Record<string, Record<string, number | null>> = {};
       for (const [rid, dim] of dimOf) fleet[rid] = fleetByDim[dim] ?? {};
       const lbDimByResource = Object.fromEntries(dimOf);
-      return Response.json({ fleet, targetHealth, lbDimByResource });
+      return Response.json({ fleet, targetHealth, lbDimByResource, range });
     }
 
     // S3: per-bucket storage(일별)+request(유료, 활성화 시) metrics — the metrics live in each
@@ -164,11 +168,11 @@ export async function GET(request: Request, { params }: { params: { type: string
       }
       const fleet: Record<string, Record<string, number | null>> = {};
       const [replication, ...fleets] = await Promise.all([
-        s3ReplicationStatus(),
-        ...[...byRegion.entries()].map(([reg, buckets]) => s3FleetLive(buckets, reg)),
+        s3ReplicationStatus(30, range),
+        ...[...byRegion.entries()].map(([reg, buckets]) => s3FleetLive(buckets, reg, range)),
       ]);
       for (const f of fleets) Object.assign(fleet, f);
-      return Response.json({ fleet, replication });
+      return Response.json({ fleet, replication, range });
     }
 
     // EBS: per-volume diagnostics grouped by the volume's region + instance-level EBS balance
@@ -198,26 +202,26 @@ export async function GET(request: Request, { params }: { params: { type: string
       const fleet: Record<string, Record<string, number | null>> = {};
       const instanceBalance: Record<string, Record<string, number | null>> = {};
       await Promise.all([
-        ...[...volByRegion.entries()].map(async ([reg, vols]) => Object.assign(fleet, await ebsFleetLive(vols, reg))),
-        ...[...instByRegion.entries()].map(async ([reg, insts]) => Object.assign(instanceBalance, await ec2EbsBalance([...insts], reg))),
+        ...[...volByRegion.entries()].map(async ([reg, vols]) => Object.assign(fleet, await ebsFleetLive(vols, reg, range))),
+        ...[...instByRegion.entries()].map(async ([reg, insts]) => Object.assign(instanceBalance, await ec2EbsBalance([...insts], reg, range))),
       ]);
-      return Response.json({ fleet, instanceBalance, instOfVol });
+      return Response.json({ fleet, instanceBalance, instOfVol, range });
     }
 
     // DynamoDB: per-table diagnostics + Global Tables replication lag (discovered via ListMetrics).
     if (params.type === 'dynamodb' && url.searchParams.get('ids') !== null) {
       const ids = (url.searchParams.get('ids') ?? '')
         .split(',').map((x) => x.trim()).filter((x) => /^[a-zA-Z0-9._-]+$/.test(x)).slice(0, 200);
-      const [fleet, replication] = await Promise.all([ddbFleetLive(ids), ddbReplicationLags()]);
-      return Response.json({ fleet, replication });
+      const [fleet, replication] = await Promise.all([ddbFleetLive(ids, range), ddbReplicationLags(30, range)]);
+      return Response.json({ fleet, replication, range });
     }
     // v1-parity fleet metrics (page-level tables):
     // elasticache/opensearch ?ids=a,b → { fleet: { id: {metricKey: value|null} } }
     if ((params.type === 'elasticache' || params.type === 'opensearch') && url.searchParams.get('ids') !== null) {
       const ids = (url.searchParams.get('ids') ?? '')
         .split(',').map((x) => x.trim()).filter((x) => /^[a-zA-Z0-9._-]+$/.test(x)).slice(0, 200);
-      const fleet = params.type === 'elasticache' ? await elasticacheFleetLive(ids) : await opensearchFleetLive(ids);
-      return Response.json({ fleet });
+      const fleet = params.type === 'elasticache' ? await elasticacheFleetLive(ids, range) : await opensearchFleetLive(ids, range);
+      return Response.json({ fleet, range });
     }
     // msk ?nodes=<clusterArn> → { nodes, brokerMetrics } (kafka ListNodes + per-broker CloudWatch)
     if (params.type === 'msk' && url.searchParams.get('nodes') !== null) {
@@ -230,11 +234,11 @@ export async function GET(request: Request, { params }: { params: { type: string
       const nodes = await mskListNodes(arn);
       const brokerIds = nodes.filter((n) => n.nodeType === 'BROKER' && n.brokerId != null).map((n) => n.brokerId as number);
       const [brokerMetrics, health, lags] = await Promise.all([
-        brokerIds.length ? mskBrokerFleetLive(clusterName, brokerIds, clusterRegion) : Promise.resolve({}),
-        mskClusterHealth(clusterName, clusterRegion),
-        mskOffsetLags(clusterName, clusterRegion),
+        brokerIds.length ? mskBrokerFleetLive(clusterName, brokerIds, clusterRegion, range) : Promise.resolve({}),
+        mskClusterHealth(clusterName, clusterRegion, range),
+        mskOffsetLags(clusterName, clusterRegion, 20, range),
       ]);
-      return Response.json({ nodes, brokerMetrics, health, lags });
+      return Response.json({ nodes, brokerMetrics, health, lags, range });
     }
 
     // ElastiCache/OpenSearch/MSK: per-resource live metrics for the detail panel (?id=).

@@ -4,14 +4,19 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import DiagnosisGuide from './DiagnosisGuide';
 import { MSK_GUIDE } from './guides';
-import { type Row, type Fleet, num, dash, kbps, cnt, meter, TH, TD, MONO, useFleet, HealthPill } from './shared';
+import MetricTable, { type MetricCol } from './MetricTable';
+import { type Row, type Fleet, num, dash, kbps, cnt, meter, RangePicker, HealthPill } from './shared';
 
 // ── MSK: broker/controller node rows (kafka ListNodes + per-broker CloudWatch) ──
 interface MskNodeRow { nodeType: string; brokerId: number | null; instanceType: string | null; clientVpcIp: string | null; eni: string | null; endpoints: string[] }
 interface MskLagRow { consumerGroup: string; topic: string; maxOffsetLag: number | null }
 interface MskClusterData { nodes: MskNodeRow[]; brokerMetrics: Fleet; health?: Record<string, number | null>; lags?: MskLagRow[] }
 
+type NodeItem = { cluster: string; n: MskNodeRow; m: Record<string, number | null> };
+type LagItem = { cluster: string } & MskLagRow;
+
 export function MskBrokerNodes({ rows }: { rows: Row[] }) {
+  const [range, setRange] = useState(3600);
   const [data, setData] = useState<Record<string, MskClusterData>>({});
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState('');
@@ -27,7 +32,7 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
     if (!key) return;
     let live = true;
     Promise.all(clusters.map((c) =>
-      fetch(`/api/inventory/msk/metrics?nodes=${encodeURIComponent(c.arn)}`)
+      fetch(`/api/inventory/msk/metrics?nodes=${encodeURIComponent(c.arn)}&range=${range}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((d) => [c.name, d] as const),
     ))
@@ -36,13 +41,25 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
       .finally(() => { if (live) setLoaded(true); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, range]);
+
+  // 브로커+컨트롤러를 하나의 목록으로 병합 — 컨트롤러는 메트릭 없음(m={} → 각 컬럼 null → dash).
+  const items = useMemo<NodeItem[]>(
+    () => clusters.flatMap((c) => (data[c.name]?.nodes ?? []).map((n) => ({
+      cluster: c.name,
+      n,
+      m: n.nodeType === 'BROKER' ? (data[c.name]?.brokerMetrics?.[String(n.brokerId)] ?? {}) : {},
+    }))),
+    [clusters, data],
+  );
+  const lagItems = useMemo<LagItem[]>(
+    () => clusters.flatMap((c) => (data[c.name]?.lags ?? []).map((l) => ({ cluster: c.name, ...l }))),
+    [clusters, data],
+  );
 
   if (clusters.length === 0) return null;
-  const flat = clusters.flatMap((c) => (data[c.name]?.nodes ?? []).map((n) => ({ cluster: c.name, n })));
-  const brokers = flat.filter((x) => x.n.nodeType === 'BROKER');
-  const controllers = flat.filter((x) => x.n.nodeType !== 'BROKER');
-  const allLags = clusters.flatMap((c) => (data[c.name]?.lags ?? []).map((l) => ({ cluster: c.name, ...l })));
+  const brokerCount = items.filter((x) => x.n.nodeType === 'BROKER').length;
+  const controllerCount = items.length - brokerCount;
 
   // 클러스터별 건강성 요약: 컨트롤러/오프라인 파티션은 클러스터 레벨, URP·MinISR·디스크·CPU는 브로커 값 집계.
   const healthRows = clusters.map((c) => {
@@ -70,10 +87,75 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
   const fmtN = (v: number | null) => (v == null ? '—' : Math.round(v).toLocaleString());
   const fmtPct = (v: number | null) => (v == null ? '—' : `${v.toFixed(0)}%`);
 
+  // 셀 파생값 — value()는 정렬용 원시 숫자, render()는 표시용.
+  const cpuOf = (m: Record<string, number | null>): number | null => {
+    const u = num(m.cpuUser); const s = num(m.cpuSystem);
+    return u == null && s == null ? null : (u ?? 0) + (s ?? 0);
+  };
+  const memPctOf = (m: Record<string, number | null>): number | null => {
+    const used = num(m.memUsed); const free = num(m.memFree);
+    return used != null && free != null && used + free > 0 ? (used / (used + free)) * 100 : null;
+  };
+  const throttleOf = (m: Record<string, number | null>): number | null => {
+    const p = num(m.produceThrottle); const f = num(m.fetchThrottle);
+    return p == null && f == null ? null : Math.max(p ?? 0, f ?? 0);
+  };
+
+  const nodeCols: MetricCol<NodeItem>[] = [
+    { key: 'cluster', label: 'Cluster', mono: true, facet: true, value: (it) => it.cluster },
+    {
+      key: 'type', label: 'Type', facet: true,
+      value: (it) => (it.n.nodeType === 'BROKER' ? 'BROKER' : 'CTRL'),
+      render: (it) => (it.n.nodeType === 'BROKER'
+        ? <Badge tone="brand" variant="soft">BROKER</Badge>
+        : <Badge tone="neutral" variant="soft">CTRL</Badge>),
+    },
+    { key: 'id', label: 'ID', type: 'num', value: (it) => it.n.brokerId },
+    { key: 'instance', label: 'Instance', mono: true, value: (it) => (it.n.nodeType === 'BROKER' ? it.n.instanceType : 'KRaft') },
+    { key: 'ip', label: 'VPC IP', mono: true, value: (it) => it.n.clientVpcIp },
+    {
+      key: 'cpu', label: 'CPU', type: 'num', title: 'CpuUser + CpuSystem — 60% 초과 시 경보 권장',
+      value: (it) => cpuOf(it.m), render: (it) => meter(cpuOf(it.m)),
+      danger: (it) => { const v = cpuOf(it.m); return v != null && v > 60; },
+    },
+    {
+      key: 'mem', label: 'Memory', type: 'num',
+      value: (it) => memPctOf(it.m), render: (it) => meter(memPctOf(it.m)),
+    },
+    {
+      key: 'disk', label: 'Data Disk', type: 'num', title: 'KafkaDataLogsDiskUsed — 85% 초과 위험 (가장 흔한 장애 원인)',
+      value: (it) => num(it.m.dataDisk), render: (it) => meter(num(it.m.dataDisk)),
+      danger: (it) => { const v = num(it.m.dataDisk); return v != null && v > 85; },
+    },
+    { key: 'netIn', label: 'Net In', type: 'num', value: (it) => num(it.m.bytesIn), render: (it) => kbps(num(it.m.bytesIn)) },
+    { key: 'netOut', label: 'Net Out', type: 'num', value: (it) => num(it.m.bytesOut), render: (it) => kbps(num(it.m.bytesOut)) },
+    { key: 'msgs', label: 'Msgs/s', type: 'num', value: (it) => num(it.m.msgsIn), render: (it) => cnt(num(it.m.msgsIn)) },
+    {
+      key: 'throttle', label: 'Throttle', type: 'num', title: 'ProduceThrottleTime / FetchThrottleTime 중 최대값 (ms)',
+      value: (it) => throttleOf(it.m),
+      render: (it) => { const v = throttleOf(it.m); return v != null && v > 0 ? `${v.toFixed(1)} ms` : dash; },
+      danger: (it) => { const v = throttleOf(it.m); return v != null && v > 0; },
+    },
+    { key: 'endpoint', label: 'Endpoint', mono: true, value: (it) => it.n.endpoints[0] ?? null },
+  ];
+
+  const lagCols: MetricCol<LagItem>[] = [
+    { key: 'cluster', label: 'Cluster', mono: true, facet: true, value: (it) => it.cluster },
+    { key: 'group', label: 'Consumer Group', mono: true, value: (it) => it.consumerGroup || null },
+    { key: 'topic', label: 'Topic', mono: true, value: (it) => it.topic || null },
+    {
+      key: 'lag', label: 'Max Offset Lag', type: 'num',
+      title: 'lag이 계속 증가하면 컨슈머가 프로듀서를 못 따라가는 중 — 추세가 안정적이어야 정상',
+      value: (it) => it.maxOffsetLag,
+      render: (it) => (it.maxOffsetLag == null ? dash : Math.round(it.maxOffsetLag).toLocaleString()),
+    },
+  ];
+
   return (
     <Card
       title="Broker Nodes · 클러스터 건강성"
-      subtitle={`${brokers.length} brokers · ${controllers.length} controllers · CloudWatch AWS/Kafka (브로커 단위, Last 1h)`}
+      subtitle={`${brokerCount} brokers · ${controllerCount} controllers · CloudWatch AWS/Kafka (브로커 단위) · 값은 선택 기간 전체 집계`}
+      right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
       {err && <div className="px-3 py-2 text-[12px] text-rose-600">노드 조회 실패: {err}</div>}
@@ -96,79 +178,25 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
         </div>
       )}
 
-      <div className="overflow-x-auto border-t border-ink-100">
-        <table className="w-full">
-          <thead><tr className="border-b border-ink-100">
-            {['Cluster', 'Type', 'ID', 'Instance', 'VPC IP', 'CPU', 'Memory', 'Data Disk', 'Net In', 'Net Out', 'Msgs/s', 'Throttle', 'Endpoint'].map((h) => <th key={h} className={TH}>{h}</th>)}
-          </tr></thead>
-          <tbody>
-            {brokers.map(({ cluster, n }, i) => {
-              const m = data[cluster]?.brokerMetrics?.[String(n.brokerId)] ?? {};
-              const cpuUser = num(m.cpuUser); const cpuSystem = num(m.cpuSystem);
-              const cpu = cpuUser == null && cpuSystem == null ? null : (cpuUser ?? 0) + (cpuSystem ?? 0);
-              const used = num(m.memUsed); const free = num(m.memFree);
-              const memPct = used != null && free != null && used + free > 0 ? (used / (used + free)) * 100 : null;
-              const throttle = Math.max(num(m.produceThrottle) ?? 0, num(m.fetchThrottle) ?? 0);
-              return (
-                <tr key={`b${i}`} className="border-b border-ink-50 last:border-0">
-                  <td className={MONO}>{cluster}</td>
-                  <td className={TD}><Badge tone="brand" variant="soft">BROKER</Badge></td>
-                  <td className={TD}>{n.brokerId ?? '—'}</td>
-                  <td className={MONO}>{n.instanceType ?? '—'}</td>
-                  <td className={MONO}>{n.clientVpcIp ?? '—'}</td>
-                  <td className={TD} title="CpuUser + CpuSystem — 60% 초과 시 경보 권장">{meter(cpu)}</td>
-                  <td className={TD}>{meter(memPct)}</td>
-                  <td className={TD} title="KafkaDataLogsDiskUsed — 85% 초과 위험 (가장 흔한 장애 원인)">{meter(num(m.dataDisk))}</td>
-                  <td className={TD}>{kbps(num(m.bytesIn))}</td>
-                  <td className={TD}>{kbps(num(m.bytesOut))}</td>
-                  <td className={TD}>{cnt(num(m.msgsIn))}</td>
-                  <td className={TD} title="ProduceThrottleTime / FetchThrottleTime 중 최대값 (ms)">{throttle > 0 ? `${throttle.toFixed(1)} ms` : dash}</td>
-                  <td className={MONO}>{n.endpoints[0] ?? '—'}</td>
-                </tr>
-              );
-            })}
-            {controllers.map(({ cluster, n }, i) => (
-              <tr key={`c${i}`} className="border-b border-ink-50 last:border-0">
-                <td className={MONO}>{cluster}</td>
-                <td className={TD}><Badge tone="neutral" variant="soft">CTRL</Badge></td>
-                <td className={TD}>—</td>
-                <td className={TD}>KRaft</td>
-                <td className={TD} colSpan={8}><span className="text-ink-300">—</span></td>
-                <td className={MONO}>{n.endpoints[0] ?? '—'}</td>
-              </tr>
-            ))}
-            {flat.length === 0 && !err && (
-              <tr><td className={TD} colSpan={13}>
-                <span className="text-ink-400">{loaded ? '브로커 노드 없음 — kafka:ListNodes 권한 또는 클러스터 상태를 확인하세요' : '노드 조회 중…'}</span>
-              </td></tr>
-            )}
-          </tbody>
-        </table>
+      <div className="border-t border-ink-100">
+        <MetricTable
+          columns={nodeCols}
+          items={items}
+          rowKey={(it, i) => `${it.cluster}:${it.n.nodeType}:${it.n.brokerId ?? it.n.endpoints[0] ?? i}`}
+          emptyText={loaded ? '브로커 노드 없음 — kafka:ListNodes 권한 또는 클러스터 상태를 확인하세요' : '노드 조회 중…'}
+        />
       </div>
 
       {/* 컨슈머 그룹 lag — 실무 최우선 지표. 시리즈는 ListMetrics로 발견 (그룹/토픽별). */}
-      {allLags.length > 0 && (
+      {lagItems.length > 0 && (
         <div className="border-t border-ink-100">
-          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">컨슈머 그룹 Offset Lag (MaxOffsetLag, Last 1h)</div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead><tr className="border-b border-ink-100">
-                {['Cluster', 'Consumer Group', 'Topic', 'Max Offset Lag'].map((h) => <th key={h} className={TH}>{h}</th>)}
-              </tr></thead>
-              <tbody>
-                {allLags.slice(0, 15).map((l, i) => (
-                  <tr key={i} className="border-b border-ink-50 last:border-0">
-                    <td className={MONO}>{l.cluster}</td>
-                    <td className={MONO}>{l.consumerGroup || '—'}</td>
-                    <td className={MONO}>{l.topic || '—'}</td>
-                    <td className={`${TD} tabular`} title="lag이 계속 증가하면 컨슈머가 프로듀서를 못 따라가는 중 — 추세가 안정적이어야 정상">
-                      {l.maxOffsetLag == null ? dash : Math.round(l.maxOffsetLag).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">컨슈머 그룹 Offset Lag (MaxOffsetLag, 선택 기간)</div>
+          <MetricTable
+            columns={lagCols}
+            items={lagItems}
+            rowKey={(it, i) => `${it.cluster}:${it.consumerGroup}:${it.topic}:${i}`}
+            defaultSortKey="lag"
+          />
         </div>
       )}
 
