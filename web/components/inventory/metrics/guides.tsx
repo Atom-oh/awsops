@@ -351,3 +351,111 @@ export const NLB_GUIDE: GuideSpec = {
     ['TargetTLSNegotiationErrorCount', '> 0', '타깃 TLS 문제'],
   ],
 };
+
+export const S3_GUIDE: GuideSpec = {
+  service: 'S3',
+  intro: (
+    <>S3는 무제한 확장되는 관리형 스토리지라 "용량 포화" 개념이 없고, 대신 <b>스토리지 사용량 ·
+    요청 성능/에러 · 복제 · 데이터 보호</b>를 봅니다. CloudWatch 메트릭이 <b>스토리지 메트릭(무료,
+    일 1회)</b>과 <b>요청 메트릭(유료, 1분 — 버킷/프리픽스별로 활성화해야 존재)</b> 두 종류로
+    나뉜다는 점이 중요합니다.</>
+  ),
+  sections: [
+    { title: '① 스토리지 메트릭 (기본, 무료 — 일 1회 집계)', items: [
+      <><b>BucketSizeBytes</b> — 스토리지 클래스별(StandardStorage/StandardIAStorage/GlacierStorage…)로 분해해야 비용/라이프사이클 진단에 유용.</>,
+      <><b>NumberOfObjects</b> — 급증/급감으로 이상 감지, 요청 비용 산정. 하루 한 번 집계라 실시간용이 아닌 <b>추세·비용 관점.</b></>,
+    ]},
+    { title: '② 요청 메트릭 (활성화 필요, 1분) — 성능 진단 핵심', items: [
+      <><b>4xxErrors</b> — 403 권한/404 경로 등. 급증 시 정책·키 경로 문제. <b>5xxErrors</b> — 500/503 SlowDown, S3 측 이슈 또는 요청률 초과.</>,
+      <><b>503 SlowDown</b> — 프리픽스당 요청률 한도(<b>초당 3,500 write / 5,500 read per prefix</b>) 초과 = 핫 프리픽스 신호.</>,
+      <><b>FirstByteLatency</b>(S3 처리 지연) vs <b>TotalRequestLatency</b>(전체 — 큰 객체면 자연히 큼) 구분.</>,
+      <>AllRequests/Get/Put/Delete/Head/List, BytesDownloaded/Uploaded — 트래픽 기준선.</>,
+    ]},
+    { title: '③ 복제 (CRR/SRR 사용 시)', items: [
+      <><b>ReplicationLatency</b> — RTC 사용 시 SLA(15분) 대비. <b>BytesPendingReplication / OperationsPendingReplication</b> 증가 추세 = 복제 병목.</>,
+      <><b>OperationsFailedReplication</b> — 0보다 크면 권한/설정 문제 조사.</>,
+    ]},
+    { title: '④ 데이터 보호·수명주기·기타', items: [
+      <><b>Storage Lens</b> — 계정/조직 전반 가시성: 불완전 멀티파트 업로드, 비현재 버전 누적 등 비효율 진단의 핵심 도구.</>,
+      <>S3 Storage Class Analysis — 라이프사이클 최적화 진단.</>,
+    ]},
+    { title: '증상별 진단 흐름', items: [
+      <>간헐적 503 SlowDown → <b>핫 프리픽스</b>: 키 네임스페이스를 프리픽스로 분산(랜덤/해시), 프리픽스별 요청 메트릭으로 어느 프리픽스가 뜨거운지 확인.</>,
+      <>403 급증 → 버킷 정책/IAM/ACL/Block Public Access/KMS 키 권한 점검. <b>CloudTrail 데이터 이벤트</b>로 거부된 주체·오퍼레이션 추적.</>,
+      <>지연 급증 → FirstByteLatency vs TotalRequestLatency 구분(S3 처리 vs 객체 크기/네트워크). Transfer Acceleration·멀티파트·리전 근접성 검토.</>,
+      <>복제 지연/실패 → OperationsPendingReplication 추세 + OperationsFailedReplication + 복제 룰/권한.</>,
+      <>원인 불명 접근/삭제 → <b>서버 액세스 로그 / CloudTrail 데이터 이벤트</b>로 개별 요청(요청자·오퍼레이션·응답 코드·지연) 분해.</>,
+    ]},
+    { title: 'S3만의 특이점', items: [
+      <>실시간 성능 진단은 <b>요청 메트릭을 먼저 켜야</b> 합니다(기본 비활성, 유료) — 안 켜면 4xx/5xx/Latency가 안 보입니다(아래 테이블의 '—').</>,
+      <>개별 요청 추적은 CloudWatch가 아니라 <b>서버 액세스 로그 / CloudTrail 데이터 이벤트</b>의 몫.</>,
+      <>비용·수명주기 최적화는 <b>Storage Lens</b>가 핵심 도구.</>,
+    ]},
+  ],
+  priorityHeader: ['메트릭', '주의 기준', '의미'],
+  priority: [
+    ['5xxErrors', '급증', 'S3 측 오류 또는 요청률 초과(503 SlowDown)'],
+    ['4xxErrors', '급증', '권한/경로/요청 오류'],
+    ['FirstByteLatency', '급증', 'S3 처리 지연'],
+    ['OperationsFailedReplication', '> 0', '복제 실패'],
+    ['ReplicationLatency', 'SLA 초과', '복제 지연'],
+    ['BucketSizeBytes', '이상 급증', '비용/이상 업로드'],
+    ['NumberOfObjects', '이상 급증/급감', '대량 삭제/생성'],
+  ],
+};
+
+export const EBS_GUIDE: GuideSpec = {
+  service: 'EBS',
+  intro: (
+    <>EBS는 <b>IOPS · 처리량 · 지연 · 큐 깊이 · 버스트/성능 크레딧</b>을 중심으로 봅니다. 핵심은
+    <b> 볼륨이 프로비저닝한 성능 한계에 걸렸는지, 인스턴스 쪽 EBS 대역폭에 걸렸는지 구분</b>하는
+    것입니다 — 둘은 별개의 한계입니다.</>
+  ),
+  sections: [
+    { title: '① IOPS (작업 수)', items: [
+      <><b>VolumeReadOps / VolumeWriteOps</b> — 기간 합계라 <b>기간(초)으로 나눠야 IOPS</b>(5분 집계면 /300). 프로비저닝 IOPS(gp3/io1/io2) 또는 baseline(gp2 = 3 IOPS/GB) 대비 확인.</>,
+      <>합산 IOPS가 프로비저닝 한계에 붙어 있으면 → 볼륨이 병목.</>,
+    ]},
+    { title: '② 처리량 (Throughput)', items: [
+      <><b>VolumeReadBytes / VolumeWriteBytes</b> — MB/s로 환산해 처리량 한계 대비. <b>gp3는 IOPS와 처리량을 독립 프로비저닝</b>하므로 둘 다 따로 봐야 함.</>,
+    ]},
+    { title: '③ 지연 (Latency) — I/O 병목 판단', items: [
+      <><b>VolumeTotalRead/WriteTime</b> — 작업당 평균 지연 = <b>TotalTime / Ops</b>.</>,
+      <>지연이 높은데 IOPS/처리량은 한계 미달 → I/O 크기가 크거나 랜덤 액세스 패턴 문제.</>,
+    ]},
+    { title: '④ 큐 깊이 — 포화 신호', items: [
+      <><b>VolumeQueueLength</b> — 대기 중인 I/O 요청 수. <b>가장 직관적인 포화 지표.</b> 지속적으로 높으면 볼륨이 요청을 못 따라가는 중 (지연 급증과 동반).</>,
+    ]},
+    { title: '⑤ 유휴·사용률', items: [
+      <>VolumeIdleTime, <b>VolumeThroughputPercentage</b>(io1/io2 전용 — 프로비저닝 대비 실제 제공 비율, 100% 미만 지속 = 성능 저하), VolumeConsumedReadWriteOps.</>,
+    ]},
+    { title: '⑥ 버스트/성능 크레딧 — 놓치기 쉬운 병목', items: [
+      <><b>BurstBalance</b> — gp2·st1·sc1 전용 크레딧 잔량(%). 0에 수렴하면 baseline으로 강등 → 간헐적 성능 저하. <b>gp2 원인 불명 성능 저하의 흔한 범인.</b></>,
+      <>gp3/io1/io2는 버스트 개념 없음 — <b>gp2→gp3 마이그레이션으로 해결</b>하는 경우가 많음.</>,
+    ]},
+    { title: '⑦ 인스턴스 레벨 — EBS 대역폭 한계', items: [
+      <>볼륨은 여유로운데 느리면 인스턴스 쪽을 의심: <b>EBSIOBalance% / EBSByteBalance%</b>(소형 인스턴스의 EBS 버스트 잔량) — 0에 수렴하면 인스턴스 baseline으로 강등 → <b>볼륨이 아무리 커도 병목.</b></>,
+      <>EBSRead/WriteOps·Bytes — 인스턴스 타입별 EBS 대역폭 상한 대비 확인.</>,
+    ]},
+    { title: '증상별 진단 흐름', items: [
+      <>간헐적/주기적 성능 저하 → <b>BurstBalance(gp2) 또는 EBSIOBalance%(소형 인스턴스) 크레딧 고갈</b> — EBS 성능 문제의 1순위 원인.</>,
+      <>지연 높음 + IOPS/처리량 한계 미달 → I/O 크기·랜덤성 또는 인스턴스 대역폭. VolumeQueueLength + 인스턴스 EBS balance 함께 확인.</>,
+      <>볼륨은 여유로운데 느림 → 인스턴스 EBSByte/IOBalance% + 인스턴스 타입 EBS 상한 점검 (타입 상향 필요할 수 있음).</>,
+      <>IOPS가 프로비저닝 한계에 붙음 → gp3 IOPS/처리량 상향, io2 전환, 볼륨 분산(RAID 0)/앱 캐싱 검토.</>,
+    ]},
+    { title: 'EBS만의 주의점', items: [
+      <>CloudWatch 원시값은 <b>기간 합계 — 나눠서 환산해야 실제 IOPS/지연</b>이 됩니다.</>,
+      <>gp2의 3 IOPS/GB baseline + 버스트 모델 → <b>작은 gp2 볼륨의 크레딧 고갈</b>이 단골 원인. 대개 gp3 전환이 답.</>,
+      <><b>볼륨 성능과 인스턴스 EBS 대역폭은 별개 한계</b> — 둘 다 봐야 병목을 정확히 짚습니다.</>,
+    ]},
+  ],
+  priorityHeader: ['메트릭', '주의 기준', '의미'],
+  priority: [
+    ['VolumeQueueLength', '지속적 높음', '볼륨 포화(I/O 대기)'],
+    ['BurstBalance (gp2/st1/sc1)', '0 근접', '크레딧 고갈 → baseline 강등'],
+    ['평균 지연 (TotalTime/Ops)', '급증', 'I/O 병목'],
+    ['VolumeReadOps+WriteOps (환산 IOPS)', '프로비저닝 근접', 'IOPS 한계'],
+    ['VolumeThroughputPercentage (io1/io2)', '< 100%', '프로비저닝 성능 미달'],
+    ['EBSIOBalance%/EBSByteBalance%', '0 근접', '인스턴스 EBS 대역폭 강등'],
+  ],
+};

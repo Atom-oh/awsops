@@ -8,3 +8,5 @@ export { RdsInstanceMetrics } from './metrics/RdsInstanceMetrics';
 export { DynamoTableMetrics } from './metrics/DynamoTableMetrics';
 export { AlbMetrics } from './metrics/AlbMetrics';
 export { NlbMetrics } from './metrics/NlbMetrics';
+export { S3Metrics } from './metrics/S3Metrics';
+export { EbsMetrics } from './metrics/EbsMetrics';

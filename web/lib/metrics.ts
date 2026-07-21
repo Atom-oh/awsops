@@ -460,8 +460,9 @@ async function fleetLatest(
   namespace: string,
   entities: string[],
   dimsFor: (id: string) => { Name: string; Value: string }[],
-  metrics: readonly { key: string; name: string; stat: string; dims?: readonly { Name: string; Value: string }[] }[],
+  metrics: readonly { key: string; name: string; stat: string; dims?: readonly { Name: string; Value: string }[]; period?: number }[],
   region?: string,
+  windowMs = 3600_000,
 ): Promise<Record<string, Record<string, number | null>>> {
   const out: Record<string, Record<string, number | null>> = {};
   if (!entities.length) return out;
@@ -474,11 +475,11 @@ async function fleetLatest(
     for (let c = 0; c < entities.length; c += CHUNK) {
       const chunk = entities.slice(c, c + CHUNK);
       const r = await client.send(new GetMetricDataCommand({
-        StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+        StartTime: new Date(Date.now() - windowMs), EndTime: new Date(),
         MetricDataQueries: chunk.flatMap((id, i) =>
           metrics.map((m) => ({
             Id: `${m.key}_i${i}`, ReturnData: true,
-            MetricStat: { Metric: { Namespace: namespace, MetricName: m.name, Dimensions: [...dimsFor(id), ...(m.dims ?? [])] }, Period: 300, Stat: m.stat },
+            MetricStat: { Metric: { Namespace: namespace, MetricName: m.name, Dimensions: [...dimsFor(id), ...(m.dims ?? [])] }, Period: m.period ?? 300, Stat: m.stat },
           }))),
       }));
       for (const res of r.MetricDataResults ?? []) {
@@ -791,5 +792,80 @@ const NLB_FLEET_METRICS = [
 ] as const;
 export function nlbFleetLive(lbDims: string[]) {
   return fleetLatest('AWS/NetworkELB', lbDims, (id) => [{ Name: 'LoadBalancer', Value: id }], NLB_FLEET_METRICS);
+}
+
+// S3 per-bucket diagnostics (owner 가이드): 스토리지 메트릭(무료, 일 1회)과 요청 메트릭(유료,
+// 1분 — 버킷에서 활성화해야 존재, FilterId='EntireBucket' 관례)을 함께. 윈도 2일(일별 집계 포착).
+const S3_FLEET_METRICS = [
+  { key: 'sizeStd', name: 'BucketSizeBytes', stat: 'Average', period: 86400, dims: [{ Name: 'StorageType', Value: 'StandardStorage' }] },
+  { key: 'objects', name: 'NumberOfObjects', stat: 'Average', period: 86400, dims: [{ Name: 'StorageType', Value: 'AllStorageTypes' }] },
+  { key: 'allReq', name: 'AllRequests', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'req4xx', name: '4xxErrors', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'req5xx', name: '5xxErrors', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'firstByte', name: 'FirstByteLatency', stat: 'Average', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'bytesDown', name: 'BytesDownloaded', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'bytesUp', name: 'BytesUploaded', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+] as const;
+/** Per-bucket S3 metrics — S3 CloudWatch metrics live in the BUCKET's region (caller groups by region). */
+export function s3FleetLive(buckets: string[], region?: string) {
+  return fleetLatest('AWS/S3', buckets, (id) => [{ Name: 'BucketName', Value: id }], S3_FLEET_METRICS, region, 2 * 86400_000);
+}
+
+export interface S3ReplicationRow { source: string; dest: string; rule: string; latencySec: number | null; failed: number | null }
+/** CRR/SRR 복제 상태 — Source/DestinationBucket/RuleId 차원을 ListMetrics로 발견 (배포 리전 한정). */
+export async function s3ReplicationStatus(cap = 30): Promise<S3ReplicationRow[]> {
+  try {
+    const lm = await cwClient().send(new ListMetricsCommand({ Namespace: 'AWS/S3', MetricName: 'ReplicationLatency' }));
+    const series = (lm.Metrics ?? []).slice(0, cap).map((m) => {
+      const dim = (n: string) => m.Dimensions?.find((d) => d.Name === n)?.Value ?? '';
+      return { source: dim('SourceBucket'), dest: dim('DestinationBucket'), rule: dim('RuleId'), dims: m.Dimensions ?? [] };
+    }).filter((x) => x.source);
+    if (!series.length) return [];
+    const r = await cwClient().send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+      MetricDataQueries: series.flatMap((x, i) => [
+        { Id: `sl_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: 'AWS/S3', MetricName: 'ReplicationLatency', Dimensions: x.dims }, Period: 300, Stat: 'Maximum' } },
+        { Id: `sf_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: 'AWS/S3', MetricName: 'OperationsFailedReplication', Dimensions: x.dims }, Period: 300, Stat: 'Sum' } },
+      ]),
+    }));
+    const vals = new Map<string, number>();
+    for (const res of r.MetricDataResults ?? []) {
+      const v = res.Values?.[0];
+      if (res.Id && typeof v === 'number') vals.set(res.Id, v);
+    }
+    return series.map((x, i) => ({
+      source: x.source, dest: x.dest, rule: x.rule,
+      latencySec: vals.get(`sl_i${i}`) ?? null, failed: vals.get(`sf_i${i}`) ?? null,
+    })).sort((a, b) => (b.latencySec ?? -1) - (a.latencySec ?? -1));
+  } catch {
+    return [];
+  }
+}
+
+// EBS per-volume diagnostics (owner 가이드: 볼륨 성능 한계 vs 인스턴스 EBS 대역폭 구분이 핵심).
+// 원시값은 기간 합계 — IOPS/MBps/평균지연은 컴포넌트에서 /300, TotalTime/Ops로 환산한다.
+const EBS_FLEET_METRICS = [
+  { key: 'readOps', name: 'VolumeReadOps', stat: 'Sum' },
+  { key: 'writeOps', name: 'VolumeWriteOps', stat: 'Sum' },
+  { key: 'readBytes', name: 'VolumeReadBytes', stat: 'Sum' },
+  { key: 'writeBytes', name: 'VolumeWriteBytes', stat: 'Sum' },
+  { key: 'totalReadTime', name: 'VolumeTotalReadTime', stat: 'Sum' },
+  { key: 'totalWriteTime', name: 'VolumeTotalWriteTime', stat: 'Sum' },
+  { key: 'queueLength', name: 'VolumeQueueLength', stat: 'Average' },
+  { key: 'burstBalance', name: 'BurstBalance', stat: 'Average' },
+  { key: 'throughputPct', name: 'VolumeThroughputPercentage', stat: 'Average' },
+  { key: 'idleTime', name: 'VolumeIdleTime', stat: 'Sum' },
+] as const;
+export function ebsFleetLive(volumeIds: string[], region?: string) {
+  return fleetLatest('AWS/EBS', volumeIds, (id) => [{ Name: 'VolumeId', Value: id }], EBS_FLEET_METRICS, region);
+}
+
+// 인스턴스 레벨 EBS 대역폭 버스트 잔량 (소형 Nitro 인스턴스만 발행 — 0 근접 = 인스턴스가 병목).
+const EC2_EBS_BALANCE_METRICS = [
+  { key: 'ioBalance', name: 'EBSIOBalance%', stat: 'Average' },
+  { key: 'byteBalance', name: 'EBSByteBalance%', stat: 'Average' },
+] as const;
+export function ec2EbsBalance(instanceIds: string[], region?: string) {
+  return fleetLatest('AWS/EC2', instanceIds, (id) => [{ Name: 'InstanceId', Value: id }], EC2_EBS_BALANCE_METRICS, region);
 }
 
