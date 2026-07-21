@@ -86,7 +86,7 @@ describe('navTree (sidebar IA hierarchy)', () => {
     const g = find(slug);
     return [
       ...g.items.filter((l) => l.kind === 'inventory').map((l) => l.type!),
-      ...g.subgroups.flatMap((s) => s.items.map((l) => l.type!)),
+      ...g.subgroups.flatMap((s) => s.items.filter((l) => l.kind === 'inventory').map((l) => l.type!)),
     ];
   };
 
@@ -101,10 +101,14 @@ describe('navTree (sidebar IA hierarchy)', () => {
     expect(placed.length).toBe(41);
   });
 
-  it('Compute injects EKS as a feature leaf first, then ec2/lambda/ecr, with an ECS subgroup', () => {
+  it('Compute nests the EKS family as a feature-link subgroup + the ECS subgroup', () => {
     const c = find('compute');
-    expect(c.items[0]).toMatchObject({ kind: 'feature', href: '/eks', labelKey: 'nav.eks' });
     expect(c.items.filter((l) => l.kind === 'inventory').map((l) => l.type)).toEqual(['ec2', 'lambda', 'ecr']);
+    const eks = c.subgroups.find((s) => s.key === 'eks')!;
+    expect(eks.items.every((l) => l.kind === 'feature')).toBe(true);
+    expect(eks.items.map((l) => l.href)).toEqual([
+      '/eks', '/eks/nodes', '/eks/pods', '/eks/deployments', '/eks/services', '/eks/explorer', '/eks/cost',
+    ]);
     const ecs = c.subgroups.find((s) => s.key === 'ecs')!;
     expect(ecs.items.map((l) => l.type)).toEqual(['ecs_cluster', 'ecs_service', 'ecs_task']);
   });
@@ -148,8 +152,9 @@ describe('overview helpers + path resolver', () => {
   });
   it('groupForPath maps inventory/feature/overview/subgroup paths to their group', () => {
     expect(groupForPath('/inventory/ec2')).toEqual({ slug: 'compute' });
-    expect(groupForPath('/eks')).toEqual({ slug: 'compute' });
-    expect(groupForPath('/eks/my-cluster')).toEqual({ slug: 'compute' });
+    expect(groupForPath('/eks')).toEqual({ slug: 'compute', subgroupKey: 'eks' });
+    expect(groupForPath('/eks/my-cluster')).toEqual({ slug: 'compute', subgroupKey: 'eks' });
+    expect(groupForPath('/eks/explorer')).toEqual({ slug: 'compute', subgroupKey: 'eks' });
     expect(groupForPath('/inventory/g/network')).toEqual({ slug: 'network' });
     expect(groupForPath('/inventory/alb')).toEqual({ slug: 'network', subgroupKey: 'loadBalancing' });
     expect(groupForPath('/inventory/apigatewayv2_route')).toEqual({ slug: 'network', subgroupKey: 'apiGateway' });

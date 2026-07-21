@@ -262,10 +262,10 @@ export default function EksPage() {
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <StatCard label="Clusters" value={(rows ?? []).length} icon={<Container size={16} />} />
         <StatCard label="Connected" value={connected} icon={<CheckCircle2 size={16} />} />
-        <StatCard label="Nodes" value={totals.nodes} trend={`${totals.nodesReady} ready`} icon={<Server size={16} />} />
-        <StatCard label="Pods" value={totals.pods} trend={`${totals.podsRunning} running`} icon={<Boxes size={16} />} />
-        <StatCard label="Deployments" value={totals.deployments} icon={<Layers size={16} />} />
-        <StatCard label="Services" value={totals.services} icon={<Network size={16} />} />
+        <StatCard label="Nodes" value={totals.nodes} trend={`${totals.nodesReady} ready`} icon={<Server size={16} />} href="/eks/nodes" />
+        <StatCard label="Pods" value={totals.pods} trend={`${totals.podsRunning} running`} icon={<Boxes size={16} />} href="/eks/pods" />
+        <StatCard label="Deployments" value={totals.deployments} icon={<Layers size={16} />} href="/eks/deployments" />
+        <StatCard label="Services" value={totals.services} icon={<Network size={16} />} href="/eks/services" />
       </div>
 
       {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}

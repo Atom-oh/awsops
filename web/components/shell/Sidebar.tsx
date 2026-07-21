@@ -10,7 +10,7 @@ import {
   Network, Waypoints, BrickWall, Globe, Scale, Split, Webhook, Cable, CloudCog, Route, ListFilter,
   KeyRound, Users, Shield, FileSearch, Bell,
   Stethoscope, // /ai-diagnosis nav (this branch)
-  Cpu, Lock, Target, ShieldAlert, Milestone, ChevronRight,
+  Cpu, Lock, Target, ShieldAlert, Milestone, ChevronRight, Boxes, Layers, Terminal,
   type LucideIcon,
 } from 'lucide-react';
 import { navTree, groupForPath, type NavLeaf, type NavGroupNode } from '@/lib/inventory-types';
@@ -81,7 +81,11 @@ const TYPE_ICON: Record<string, LucideIcon> = {
 
 // Icon per group (header) and per injected feature leaf.
 const GROUP_ICON: Record<string, LucideIcon> = { compute: Cpu, storage: Database, network: Network, security: Lock, monitoring: Gauge };
-const FEATURE_ICON: Record<string, LucideIcon> = { eks: Box };
+const FEATURE_ICON: Record<string, LucideIcon> = {
+  eks: Box,
+  'eks-nodes': Server, 'eks-pods': Boxes, 'eks-deployments': Layers,
+  'eks-services': Network, 'eks-explorer': Terminal, 'eks-cost': DollarSign,
+};
 
 const STORAGE_KEY = 'awsops:nav:expanded';
 const gId = (slug: string) => `g:${slug}`;
