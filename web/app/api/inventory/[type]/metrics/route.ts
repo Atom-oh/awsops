@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -26,6 +26,25 @@ export async function GET(request: Request, { params }: { params: { type: string
   const includeGlobal = url.searchParams.get('includeGlobal') !== '0';
   try {
     if (params.type === 'ec2') {
+      // Per-instance diagnostic fleet (page bottom table) — must run BEFORE the KPI-cards path.
+      if (url.searchParams.get('ids') !== null) {
+        const ids = (url.searchParams.get('ids') ?? '')
+          .split(',').map((x) => x.trim()).filter((x) => /^i-[0-9a-f]+$/.test(x)).slice(0, 150);
+        const rowsR = await getPool().query<{ resource_id: string; region: string | null }>(
+          `SELECT resource_id, region FROM inventory_resources
+           WHERE resource_type = 'ec2' AND resource_id = ANY($1)`, [ids],
+        );
+        const byRegion = new Map<string, string[]>();
+        for (const row of rowsR.rows) {
+          const reg = row.region || process.env.AWS_REGION || 'ap-northeast-2';
+          byRegion.set(reg, [...(byRegion.get(reg) ?? []), row.resource_id]);
+        }
+        const fleet: Record<string, Record<string, number | null>> = {};
+        await Promise.all(
+          [...byRegion.entries()].map(async ([reg, insts]) => Object.assign(fleet, await ec2DiagFleetLive(insts, reg))),
+        );
+        return Response.json({ fleet });
+      }
       const qparams: unknown[] = [];
       const where = `resource_type = 'ec2' AND account_id = 'self'` + regionWhereClause(regions, includeGlobal, qparams);
       const r = await getPool().query<{ id: string | null; state: string | null; type: string | null }>(
@@ -84,6 +103,114 @@ export async function GET(request: Request, { params }: { params: { type: string
       return Response.json({ cards });
     }
 
+    // ALB: per-LB diagnostics + per-TargetGroup health. The CloudWatch LoadBalancer dimension is
+    // the ARN suffix ("app/<name>/<id>") — resolved from the synced inventory ARNs, keyed back to
+    // resource_id for the page. TG dims come from target_group rows' load_balancer_arns linkage.
+    if ((params.type === 'alb' || params.type === 'nlb') && url.searchParams.get('ids') !== null) {
+      const isAlb = params.type === 'alb';
+      const prefix = isAlb ? 'app' : 'net';
+      const ids = (url.searchParams.get('ids') ?? '')
+        .split(',').map((x) => x.trim()).filter((x) => /^[a-zA-Z0-9-]+$/.test(x)).slice(0, 100);
+      const lbRows = await getPool().query<{ resource_id: string; arn: string | null }>(
+        `SELECT resource_id, data->>'arn' AS arn FROM inventory_resources
+         WHERE resource_type = $2 AND resource_id = ANY($1)`, [ids, params.type],
+      );
+      const dimOf = new Map<string, string>(); // resource_id → "app|net/name/id"
+      for (const row of lbRows.rows) {
+        const mDim = (row.arn ?? '').match(new RegExp(`loadbalancer\\/(${prefix}\\/.+)$`));
+        if (mDim) dimOf.set(row.resource_id, mDim[1]);
+      }
+      const tgRows = await getPool().query<{ arn: string | null; name: string | null; lbs: unknown }>(
+        `SELECT data->>'target_group_arn' AS arn, data->>'target_group_name' AS name,
+                data->'load_balancer_arns' AS lbs
+         FROM inventory_resources WHERE resource_type = 'target_group'`,
+      );
+      const pairs: { tgDim: string; tgName: string; lbDim: string }[] = [];
+      for (const tg of tgRows.rows) {
+        const tgDim = (tg.arn ?? '').match(/(targetgroup\/.+)$/)?.[1];
+        if (!tgDim) continue;
+        for (const lbArn of Array.isArray(tg.lbs) ? (tg.lbs as unknown[]) : []) {
+          const lbDim = String(lbArn).match(new RegExp(`loadbalancer\\/(${prefix}\\/.+)$`))?.[1];
+          if (lbDim && [...dimOf.values()].includes(lbDim)) {
+            pairs.push({ tgDim, tgName: tg.name ?? tgDim, lbDim });
+          }
+        }
+      }
+      const namespace = isAlb ? 'AWS/ApplicationELB' : 'AWS/NetworkELB';
+      const [fleetByDim, targetHealth] = await Promise.all([
+        isAlb ? albFleetLive([...dimOf.values()]) : nlbFleetLive([...dimOf.values()]),
+        albTargetHealth(pairs, namespace),
+      ]);
+      // key the fleet back by resource_id; health rows carry lbDim → page maps via lbDim field
+      const fleet: Record<string, Record<string, number | null>> = {};
+      for (const [rid, dim] of dimOf) fleet[rid] = fleetByDim[dim] ?? {};
+      const lbDimByResource = Object.fromEntries(dimOf);
+      return Response.json({ fleet, targetHealth, lbDimByResource });
+    }
+
+    // S3: per-bucket storage(일별)+request(유료, 활성화 시) metrics — the metrics live in each
+    // BUCKET's region, so ids are grouped by the inventory row region and queried per region.
+    if (params.type === 's3' && url.searchParams.get('ids') !== null) {
+      const ids = (url.searchParams.get('ids') ?? '')
+        .split(',').map((x) => x.trim()).filter((x) => /^[a-z0-9.-]{3,63}$/.test(x)).slice(0, 150);
+      const rowsR = await getPool().query<{ resource_id: string; region: string | null }>(
+        `SELECT resource_id, region FROM inventory_resources
+         WHERE resource_type = 's3' AND resource_id = ANY($1)`, [ids],
+      );
+      const byRegion = new Map<string, string[]>();
+      for (const row of rowsR.rows) {
+        const reg = row.region || process.env.AWS_REGION || 'ap-northeast-2';
+        byRegion.set(reg, [...(byRegion.get(reg) ?? []), row.resource_id]);
+      }
+      const fleet: Record<string, Record<string, number | null>> = {};
+      const [replication, ...fleets] = await Promise.all([
+        s3ReplicationStatus(),
+        ...[...byRegion.entries()].map(([reg, buckets]) => s3FleetLive(buckets, reg)),
+      ]);
+      for (const f of fleets) Object.assign(fleet, f);
+      return Response.json({ fleet, replication });
+    }
+
+    // EBS: per-volume diagnostics grouped by the volume's region + instance-level EBS balance
+    // (EBSIOBalance%/EBSByteBalance%) for the ATTACHED instances (from attachments JSONB).
+    if (params.type === 'ebs_volume' && url.searchParams.get('ids') !== null) {
+      const ids = (url.searchParams.get('ids') ?? '')
+        .split(',').map((x) => x.trim()).filter((x) => /^vol-[0-9a-f]+$/.test(x)).slice(0, 150);
+      const rowsR = await getPool().query<{ resource_id: string; region: string | null; att: unknown }>(
+        `SELECT resource_id, region, data->'attachments' AS att FROM inventory_resources
+         WHERE resource_type = 'ebs_volume' AND resource_id = ANY($1)`, [ids],
+      );
+      const volByRegion = new Map<string, string[]>();
+      const instByRegion = new Map<string, Set<string>>();
+      const instOfVol: Record<string, string> = {};
+      for (const row of rowsR.rows) {
+        const reg = row.region || process.env.AWS_REGION || 'ap-northeast-2';
+        volByRegion.set(reg, [...(volByRegion.get(reg) ?? []), row.resource_id]);
+        for (const a of Array.isArray(row.att) ? (row.att as Record<string, unknown>[]) : []) {
+          const iid = String(a.InstanceId ?? a.instance_id ?? '');
+          if (/^i-[0-9a-f]+$/.test(iid)) {
+            instOfVol[row.resource_id] = iid;
+            if (!instByRegion.has(reg)) instByRegion.set(reg, new Set());
+            instByRegion.get(reg)!.add(iid);
+          }
+        }
+      }
+      const fleet: Record<string, Record<string, number | null>> = {};
+      const instanceBalance: Record<string, Record<string, number | null>> = {};
+      await Promise.all([
+        ...[...volByRegion.entries()].map(async ([reg, vols]) => Object.assign(fleet, await ebsFleetLive(vols, reg))),
+        ...[...instByRegion.entries()].map(async ([reg, insts]) => Object.assign(instanceBalance, await ec2EbsBalance([...insts], reg))),
+      ]);
+      return Response.json({ fleet, instanceBalance, instOfVol });
+    }
+
+    // DynamoDB: per-table diagnostics + Global Tables replication lag (discovered via ListMetrics).
+    if (params.type === 'dynamodb' && url.searchParams.get('ids') !== null) {
+      const ids = (url.searchParams.get('ids') ?? '')
+        .split(',').map((x) => x.trim()).filter((x) => /^[a-zA-Z0-9._-]+$/.test(x)).slice(0, 200);
+      const [fleet, replication] = await Promise.all([ddbFleetLive(ids), ddbReplicationLags()]);
+      return Response.json({ fleet, replication });
+    }
     // v1-parity fleet metrics (page-level tables):
     // elasticache/opensearch ?ids=a,b → { fleet: { id: {metricKey: value|null} } }
     if ((params.type === 'elasticache' || params.type === 'opensearch') && url.searchParams.get('ids') !== null) {
