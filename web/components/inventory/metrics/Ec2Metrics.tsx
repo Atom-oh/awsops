@@ -4,12 +4,14 @@ import Card from '@/components/ui/Card';
 import DiagnosisGuide from './DiagnosisGuide';
 import { EC2_GUIDE } from './guides';
 import { type Row, type Fleet, num, dash, meter, TH, TD, MONO, DANGER } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // EC2 per-instance diagnostics (owner 가이드): 상태 점검 System/Instance/EBS 구분(책임 소재),
 // T계열 크레딧, 네트워크 Mbps/PPS(합계/300 환산), 인스턴스 관점 EBS IOPS·밸런스.
 // 중지 인스턴스·미발행 메트릭(비-T 크레딧, 비-Nitro 밸런스)은 정직한 '—'.
 
 export function Ec2Metrics({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 150), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [err, setErr] = useState('');
@@ -30,11 +32,11 @@ export function Ec2Metrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="인스턴스 진단 메트릭 (Last 1h)"
-      subtitle={`${ids.length} instances · CloudWatch AWS/EC2 · 메모리/디스크는 기본 메트릭에 없음(CloudWatch Agent 필요 — 가이드 참조)`}
+      title={tt('인스턴스 진단 메트릭 (Last 1h)')}
+      subtitle={`${ids.length} instances · ${tt('CloudWatch AWS/EC2 · 메모리/디스크는 기본 메트릭에 없음(CloudWatch Agent 필요 — 가이드 참조)')}`}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-ink-100">

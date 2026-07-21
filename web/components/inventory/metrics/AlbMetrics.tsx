@@ -5,10 +5,12 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { ALB_GUIDE } from './guides';
 import TgHealthTable, { type TgHealthRow } from './TgHealthTable';
 import { type Row, type Fleet, num, dash, cnt, TH, TD, MONO, DANGER } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // ALB per-LB diagnostics (owner 가이드): ELB가 낸 에러 vs 타깃이 낸 에러 구분 + p50/p99 지연 +
 // 연결 거부/타깃 연결 실패 + 타깃그룹 헬스. 응답은 {fleet(resource_id 키), targetHealth, lbDimByResource}.
 export function AlbMetrics({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 100), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [health, setHealth] = useState<TgHealthRow[]>([]);
@@ -29,8 +31,8 @@ export function AlbMetrics({ rows }: { rows: Row[] }) {
   const secs = (v: number | null) => (v == null ? dash : `${(v * 1000).toFixed(0)} ms`); // TargetResponseTime unit = seconds
 
   return (
-    <Card title="LB 진단 메트릭 (Last 1h)" subtitle={`${ids.length} load balancers · CloudWatch AWS/ApplicationELB · ELB 에러(LB 자체) vs Target 에러(백엔드) 구분`} padded={false}>
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+    <Card title={tt('LB 진단 메트릭 (Last 1h)')} subtitle={`${ids.length} load balancers · ${tt('CloudWatch AWS/ApplicationELB · ELB 에러(LB 자체) vs Target 에러(백엔드) 구분')}`} padded={false}>
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-ink-100">

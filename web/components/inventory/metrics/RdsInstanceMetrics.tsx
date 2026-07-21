@@ -4,11 +4,13 @@ import Card from '@/components/ui/Card';
 import DiagnosisGuide from './DiagnosisGuide';
 import { RDS_GUIDE } from './guides';
 import { type Row, num, dash, gb, cnt, meter, TH, TD, MONO, DANGER, useFleet } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // RDS per-instance diagnostic table (owner 가이드: CloudWatch/복제/EM/PI 4층위).
 // 임계값: CPU>80 지속=컴퓨트 병목, Free Storage 고갈=가장 흔한 장애 원인, Swap 증가=메모리 부족,
 // 크레딧(BurstBalance/CPUCreditBalance) 0 근접=gp2/T계열 함정, ReplicaLag 증가=복제 지연.
 export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const { fleet, err } = useFleet('rds', ids);
   if (rows.length === 0) return null;
@@ -16,8 +18,8 @@ export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
   const lat = (v: number | null) => (v == null ? dash : `${(v * 1000).toFixed(1)} ms`); // CloudWatch RDS latency unit = seconds
 
   return (
-    <Card title="인스턴스 진단 메트릭 (Last 1h)" subtitle={`${ids.length} instances · CloudWatch AWS/RDS (인스턴스 레벨)`} padded={false}>
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+    <Card title={tt('인스턴스 진단 메트릭 (Last 1h)')} subtitle={`${ids.length} instances · CloudWatch AWS/RDS (${tt('인스턴스 레벨')})`} padded={false}>
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-ink-100">
