@@ -26,6 +26,25 @@ export async function GET(request: Request, { params }: { params: { type: string
   const includeGlobal = url.searchParams.get('includeGlobal') !== '0';
   try {
     if (params.type === 'ec2') {
+      // Per-instance diagnostic fleet (page bottom table) — must run BEFORE the KPI-cards path.
+      if (url.searchParams.get('ids') !== null) {
+        const ids = (url.searchParams.get('ids') ?? '')
+          .split(',').map((x) => x.trim()).filter((x) => /^i-[0-9a-f]+$/.test(x)).slice(0, 150);
+        const rowsR = await getPool().query<{ resource_id: string; region: string | null }>(
+          `SELECT resource_id, region FROM inventory_resources
+           WHERE resource_type = 'ec2' AND resource_id = ANY($1)`, [ids],
+        );
+        const byRegion = new Map<string, string[]>();
+        for (const row of rowsR.rows) {
+          const reg = row.region || process.env.AWS_REGION || 'ap-northeast-2';
+          byRegion.set(reg, [...(byRegion.get(reg) ?? []), row.resource_id]);
+        }
+        const fleet: Record<string, Record<string, number | null>> = {};
+        await Promise.all(
+          [...byRegion.entries()].map(async ([reg, insts]) => Object.assign(fleet, await ec2DiagFleetLive(insts, reg))),
+        );
+        return Response.json({ fleet });
+      }
       const qparams: unknown[] = [];
       const where = `resource_type = 'ec2' AND account_id = 'self'` + regionWhereClause(regions, includeGlobal, qparams);
       const r = await getPool().query<{ id: string | null; state: string | null; type: string | null }>(
@@ -150,27 +169,6 @@ export async function GET(request: Request, { params }: { params: { type: string
       ]);
       for (const f of fleets) Object.assign(fleet, f);
       return Response.json({ fleet, replication });
-    }
-
-    // EC2: per-instance diagnostics grouped by the instance's region (?diag=1 to keep the
-    // existing KPI-cards contract on the plain GET intact).
-    if (params.type === 'ec2' && url.searchParams.get('ids') !== null) {
-      const ids = (url.searchParams.get('ids') ?? '')
-        .split(',').map((x) => x.trim()).filter((x) => /^i-[0-9a-f]+$/.test(x)).slice(0, 150);
-      const rowsR = await getPool().query<{ resource_id: string; region: string | null }>(
-        `SELECT resource_id, region FROM inventory_resources
-         WHERE resource_type = 'ec2' AND resource_id = ANY($1)`, [ids],
-      );
-      const byRegion = new Map<string, string[]>();
-      for (const row of rowsR.rows) {
-        const reg = row.region || process.env.AWS_REGION || 'ap-northeast-2';
-        byRegion.set(reg, [...(byRegion.get(reg) ?? []), row.resource_id]);
-      }
-      const fleet: Record<string, Record<string, number | null>> = {};
-      await Promise.all(
-        [...byRegion.entries()].map(async ([reg, insts]) => Object.assign(fleet, await ec2DiagFleetLive(insts, reg))),
-      );
-      return Response.json({ fleet });
     }
 
     // EBS: per-volume diagnostics grouped by the volume's region + instance-level EBS balance
