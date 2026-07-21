@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { translate, makeT, MESSAGES } from './i18n';
+import { translate, makeT, MESSAGES, type Lang } from './i18n';
+
+const LANGS: Lang[] = ['ko', 'en', 'zh', 'ja'];
 
 describe('translate', () => {
   it('looks up ko and en', () => {
@@ -32,13 +34,28 @@ describe('makeT', () => {
 });
 
 describe('keyset parity (regression guard)', () => {
-  it('ko and en define the exact same keys', () => {
-    expect(Object.keys(MESSAGES.ko).sort()).toEqual(Object.keys(MESSAGES.en).sort());
+  it('every language defines the exact same keys as ko', () => {
+    const koKeys = Object.keys(MESSAGES.ko).sort();
+    for (const lang of LANGS) {
+      expect(Object.keys(MESSAGES[lang]).sort(), `MESSAGES.${lang} key set`).toEqual(koKeys);
+    }
   });
 
-  it('nav.datasources exists in both ko and en (Explore page)', () => {
+  it('every language has the same {param} placeholders per key as ko', () => {
+    const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+    for (const key of Object.keys(MESSAGES.ko)) {
+      const koParams = placeholders(MESSAGES.ko[key]);
+      for (const lang of LANGS) {
+        expect(placeholders(MESSAGES[lang][key]), `${lang}.${key}`).toEqual(koParams);
+      }
+    }
+  });
+
+  it('nav.datasources exists in every locale (Explore page)', () => {
     expect(translate('ko', 'nav.datasources')).toBe('데이터소스');
     expect(translate('en', 'nav.datasources')).toBe('Datasources');
+    expect(translate('zh', 'nav.datasources')).toBe('数据源');
+    expect(translate('ja', 'nav.datasources')).toBe('データソース');
   });
 
 });
