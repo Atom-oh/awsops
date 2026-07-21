@@ -186,3 +186,59 @@ export const EC_GUIDE: GuideSpec = {
     ['ReplicationLag', '증가 추세', '복제 지연'],
   ],
 };
+
+export const OS_GUIDE: GuideSpec = {
+  service: 'OpenSearch',
+  intro: (
+    <>OpenSearch는 <b>클러스터 상태 · JVM/메모리 · 스토리지 · 검색/인덱싱 성능 · 스레드 풀 큐</b>를
+    핵심으로 봅니다 (관리형 OpenSearch Service, CloudWatch 메트릭 기준).</>
+  ),
+  sections: [
+    { title: '① 클러스터 상태 — 가장 먼저 보는 것', items: [
+      <><b>ClusterStatus.green/yellow/red</b> — <b>red는 즉시 대응</b>: 프라이머리 샤드 미할당(데이터 접근 불가). yellow는 레플리카 미할당(가용성 저하, 데이터는 접근 가능).</>,
+      <><b>Nodes</b> — 예상값과 다르면 노드 이탈/장애.</>,
+      <><b>ClusterIndexWritesBlocked</b> — 값 1 = 쓰기 차단(디스크 부족/JVM 압박/red 등). <b>매우 중요한 경보 지표.</b></>,
+    ]},
+    { title: '② JVM 메모리 압박 — 진단의 핵심', items: [
+      <><b>JVMMemoryPressure</b>(신형 OldGenJVMMemoryPressure) — 가장 중요. <b>80% 초과 시 잦은 GC로 성능 저하</b>, 92% 이상 지속 시 보호 메커니즘이 쓰기를 차단할 수 있음.</>,
+      <><b>JVMGCYoung/OldCollectionCount·Time</b> — Old GC가 잦고 길면 힙 압박 심각.</>,
+      <>압박 높음 → 샤드 수 과다(오버샤딩), 큰 집계 쿼리, 필드 데이터 캐시 과다, 노드 확장 필요 의심.</>,
+    ]},
+    { title: '③ CPU', items: [
+      <><b>CPUUtilization</b>(데이터 노드) / <b>MasterCPUUtilization</b>(전용 마스터 — 포화 시 샤드 할당·상태 갱신 지연) / WarmCPUUtilization(UltraWarm).</>,
+    ]},
+    { title: '④ 스토리지', items: [
+      <><b>FreeStorageSpace</b> — 노드별 여유 디스크. <b>가장 흔한 장애 원인.</b> 디스크 워터마크(low 85% / high 90% / flood 95%)에 걸리면 샤드 재배치·쓰기 차단.</>,
+      <>ClusterUsedSpace, <b>DiskQueueDepth</b>(I/O 대기), Read/WriteLatency·Throughput(EBS).</>,
+    ]},
+    { title: '⑤ 검색·인덱싱 성능', items: [
+      <><b>SearchRate / SearchLatency</b>, <b>IndexingRate / IndexingLatency</b> — 지연이 튀면 무거운 쿼리·오버샤딩·리소스 포화 의심.</>,
+    ]},
+    { title: '⑥ 스레드 풀 큐와 거부 — 부하 포화 신호', items: [
+      <><b>ThreadpoolSearchQueue / ThreadpoolWriteQueue</b> — 큐가 쌓이면 처리 지연 중.</>,
+      <><b>ThreadpoolSearchRejected / ThreadpoolWriteRejected</b> — 큐가 꽉 차 요청 거부. <b>0보다 크면 클라이언트가 에러를 받는 중 → 즉시 조사.</b> 용량 부족/쿼리 비효율의 강한 신호. CoordinatingWriteRejected·PrimaryWriteRejected는 쓰기 배압.</>,
+    ]},
+    { title: '⑦ 기타 자주 보는 것', items: [
+      <><b>MasterReachableFromNode</b>(1이 정상), <b>AutomatedSnapshotFailure</b>(백업 실패), <b>KMSKeyError/KMSKeyInaccessible</b>(값 1이면 클러스터 접근 불가 위험).</>,
+      <>5xx/4xx/2xx HTTP 코드, InvalidHostHeaderRequests, ThroughputThrottle/IopsThrottle(gp3).</>,
+    ]},
+    { title: '증상별 진단 경로', items: [
+      <>클러스터 red/yellow → 샤드 할당 실패 원인(디스크 워터마크, 노드 이탈) 확인.</>,
+      <>간헐적 요청 실패(429/거부) → <b>Threadpool...Rejected + JVM 압박</b> 확인.</>,
+      <>검색 지연 급증 → 무거운 쿼리, 오버샤딩(샤드 수 대비 데이터량), 리소스 포화 점검.</>,
+      <>쓰기 차단 → <b>ClusterIndexWritesBlocked + FreeStorageSpace + JVMMemoryPressure</b> 조합.</>,
+      <>CloudWatch로 안 잡히는 세밀한 원인(특정 인덱스/샤드/쿼리)은 자체 API로: {code('_cluster/health')}, {code('_cat/indices?v')}, {code('_cat/shards')}, {code('_nodes/stats')}, Slow logs / Error logs.</>,
+    ]},
+  ],
+  priorityHeader: ['메트릭', '주의 기준', '의미'],
+  priority: [
+    ['ClusterStatus.red', '= 1', '프라이머리 샤드 미할당(데이터 불가)'],
+    ['ClusterIndexWritesBlocked', '= 1', '쓰기 차단'],
+    ['JVMMemoryPressure', '> 80%', '힙 압박 → GC/성능 저하'],
+    ['FreeStorageSpace', '워터마크 근접', '디스크 고갈'],
+    ['Threadpool...Rejected', '> 0', '요청 거부(포화)'],
+    ['MasterCPUUtilization', '높음', '마스터 병목'],
+    ['SearchLatency/IndexingLatency', '급증', '쿼리/인덱싱 성능'],
+    ['AutomatedSnapshotFailure', '= 1', '백업 실패'],
+  ],
+};

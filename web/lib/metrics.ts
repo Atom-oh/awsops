@@ -531,6 +531,16 @@ const OS_FLEET_METRICS = [
   { key: 'indexLatency', name: 'IndexingLatency', stat: 'Average' },
   { key: 'searchRate', name: 'SearchRate', stat: 'Sum' },
   { key: 'indexRate', name: 'IndexingRate', stat: 'Sum' },
+  // 진단 계층 (owner 가이드): 쓰기 차단·스레드풀 거부(포화 신호)·마스터 병목·스냅샷 실패.
+  { key: 'writesBlocked', name: 'ClusterIndexWritesBlocked', stat: 'Maximum' },
+  { key: 'masterCpu', name: 'MasterCPUUtilization', stat: 'Average' },
+  { key: 'searchQueue', name: 'ThreadpoolSearchQueue', stat: 'Maximum' },
+  { key: 'writeQueue', name: 'ThreadpoolWriteQueue', stat: 'Maximum' },
+  { key: 'searchRejected', name: 'ThreadpoolSearchRejected', stat: 'Sum' },
+  { key: 'writeRejected', name: 'ThreadpoolWriteRejected', stat: 'Sum' },
+  { key: 'diskQueue', name: 'DiskQueueDepth', stat: 'Average' },
+  { key: 'http5xx', name: '5xx', stat: 'Sum' },
+  { key: 'snapshotFail', name: 'AutomatedSnapshotFailure', stat: 'Maximum' },
 ] as const;
 /** Per-domain latest metrics (v1 opensearch 도메인 메트릭). AWS/ES requires the ClientId dimension. */
 export function opensearchFleetLive(domains: string[]) {
