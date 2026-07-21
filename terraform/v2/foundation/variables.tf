@@ -60,26 +60,8 @@ variable "existing_vpc_id" {
 
 variable "existing_private_subnet_ids" {
   type        = list(string)
-  description = "Existing private subnets (>=2 AZ, NAT egress) for Fargate tasks when create_network=false"
+  description = "Existing private subnets (>=2 AZ, NAT egress) for ALB/Fargate when create_network=false"
   default     = []
-}
-
-variable "existing_public_subnet_ids" {
-  type        = list(string)
-  description = "Existing public subnets (>=2 AZ, IGW route) for the internet-facing ALB when create_network=false"
-  default     = []
-}
-
-variable "create_edge" {
-  type        = bool
-  description = "Create the CloudFront edge (distribution + cert validation wait + alias record). Requires the ACM DNS validation record to be live in the authoritative zone first. Leave false to build the ALB/compute/data plane, flip true once DNS is in place."
-  default     = true
-}
-
-variable "existing_acm_certificate_arn" {
-  type        = string
-  description = "Pre-issued us-east-1 ACM certificate ARN covering domain_name (e.g. a *.example.com wildcard). When set, the edge skips creating + DNS-validating its own certificate — useful when this account's hosted zone is a shadow copy so the validation CNAME can never be published from here. Empty (default) = create and DNS-validate a dedicated certificate."
-  default     = ""
 }
 
 variable "cognito_domain_prefix" {

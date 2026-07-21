@@ -115,6 +115,26 @@ resource "aws_iam_role_policy" "task_metrics" {
   })
 }
 
+# IAM the web task role needs to discover clusters + build a kubeconfig (P3 consumes this).
+# Lives here (not eks.tf) rather than gated on onboard_eks_clusters/eks_auto_register_enabled:
+# Aurora-stored cluster auth (eks_registrations.auth — sa-token/assume-role) lets clusters
+# connect without terraform onboarding, but /eks discovery (ListClusters/DescribeCluster,
+# used unconditionally by /api/eks, /api/overview, /api/cost) must work regardless of those
+# flags — eks.tf is a merge-invariant GATED_FILE (test_merge_invariants.py), so a resource
+# that's core/always-on doesn't belong there.
+resource "aws_iam_role_policy" "task_eks" {
+  name = "${var.project}-task-eks-read"
+  role = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["eks:DescribeCluster", "eks:ListClusters", "eks:DescribeAccessEntry"]
+      Resource = "*"
+    }]
+  })
+}
+
 # Multi-account: the web task role assumes the read-only role in each registered TARGET account
 # (web/lib/aws-assume.ts, with ExternalId). Scoped to the role NAME (target accounts are dynamic);
 # read-only assume — grants nothing in the target beyond that role's ReadOnlyAccess.
@@ -399,40 +419,40 @@ resource "aws_ecs_task_definition" "web" {
   ])
 }
 
-# CloudFront's origin-facing edge IP ranges as an AWS-managed prefix list. This
-# ALWAYS exists (it is not tied to VPC Origin), so the internet-facing ALB can
-# admit CloudFront from the first apply — no bootstrap ordering problem.
-data "aws_ec2_managed_prefix_list" "cloudfront" {
-  name = "com.amazonaws.global.cloudfront.origin-facing"
+# CloudFront provisions VPC Origin ENIs into a managed SG ("CloudFront-VPCOrigins-Service-SG").
+# The ALB allows ONLY that SG on 443 (review #3: dropped the broad VPC-CIDR rule).
+data "aws_security_group" "cf_vpc_origin" {
+  filter {
+    name   = "group-name"
+    values = ["CloudFront-VPCOrigins-Service-SG"]
+  }
+  filter {
+    name   = "vpc-id"
+    values = [local.vpc_id]
+  }
 }
 
 resource "aws_security_group" "alb" {
-  # name_prefix + create_before_destroy: this SG is referenced inline by the
-  # service SG, so a name-collision on replace would otherwise deadlock (can't
-  # delete the old one while it's referenced, can't create a same-named new one).
-  # CBD stands up the new SG first, lets the service SG re-point, then removes old.
-  name_prefix = "${var.project}-alb-"
-  description = "Internet-facing ALB - CloudFront origin-facing prefix list only"
+  name = "${var.project}-alb-sg"
+  # description kept verbatim to match the existing SG (AWS SG description is
+  # immutable → changing it forces a replace that DependencyViolation-hangs on the
+  # attached ALB). The actual hardening (drop the broad VPC-CIDR :443 ingress) is an
+  # in-place rule change below. See comment above re: CloudFront VPC Origin SG only.
+  description = "Internal ALB - reachable from within the VPC (CloudFront VPC Origin ENIs)"
   vpc_id      = local.vpc_id
 
-  # http-only origin: CloudFront connects to the ALB on port 80 (viewer traffic
-  # is still HTTPS at the edge). Source restricted to CloudFront edge ranges.
   ingress {
-    description     = "HTTP from CloudFront edge (origin-facing managed prefix list)"
-    from_port       = 80
-    to_port         = 80
+    description     = "HTTPS from CloudFront VPC Origin managed SG"
+    from_port       = 443
+    to_port         = 443
     protocol        = "tcp"
-    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
+    security_groups = [data.aws_security_group.cf_vpc_origin.id]
   }
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  lifecycle {
-    create_before_destroy = true
   }
 }
 
@@ -457,32 +477,26 @@ resource "aws_security_group" "service" {
   }
 }
 
-# No ALB ACM cert: CloudFront reaches the ALB over HTTP (http-only origin), so
-# the ALB does not terminate TLS. Viewer↔CloudFront is still HTTPS. Removing it
-# also drops the ap-northeast-2 cert, leaving only the CloudFront (us-east-1)
-# cert to DNS-validate.
-
-# Secret shared between CloudFront (sent as X-Origin-Verify) and the ALB listener.
-resource "random_password" "origin_verify" {
-  length  = 40
-  special = false
+resource "aws_acm_certificate" "alb" {
+  domain_name       = var.domain_name
+  validation_method = "DNS"
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
-# Internet-facing, but the SG admits only CloudFront's origin-facing prefix list
-# and the listener requires a secret origin header — so it is reachable in
-# practice only through this distribution.
-resource "aws_lb" "spine" {
+resource "aws_acm_certificate_validation" "alb" {
+  certificate_arn         = aws_acm_certificate.alb.arn
+  validation_record_fqdns = [for r in aws_route53_record.cf_validation : r.fqdn]
+}
+
+resource "aws_lb" "internal" {
   name               = "${var.project}-alb"
-  internal           = false
+  internal           = true
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  subnets            = local.public_subnet_ids
+  subnets            = local.private_subnet_ids
   idle_timeout       = 120
-}
-
-moved {
-  from = aws_lb.internal
-  to   = aws_lb.spine
 }
 
 resource "aws_lb_target_group" "web" {
@@ -503,35 +517,15 @@ resource "aws_lb_target_group" "web" {
   deregistration_delay = 30
 }
 
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.spine.arn
-  port              = 80
-  protocol          = "HTTP"
-  # Default: reject anything that did not arrive through our CloudFront (no/other
-  # X-Origin-Verify). The prefix-list SG admits ALL CloudFront distributions, so
-  # this secret header is what pins traffic to THIS distribution.
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.internal.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = aws_acm_certificate_validation.alb.certificate_arn
   default_action {
-    type = "fixed-response"
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "Direct access not allowed"
-      status_code  = "403"
-    }
-  }
-}
-
-resource "aws_lb_listener_rule" "cf_only" {
-  listener_arn = aws_lb_listener.http.arn
-  priority     = 1
-  action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.web.arn
-  }
-  condition {
-    http_header {
-      http_header_name = "X-Origin-Verify"
-      values           = [random_password.origin_verify.result]
-    }
   }
 }
 
@@ -565,7 +559,7 @@ resource "aws_ecs_service" "web" {
   enable_ecs_managed_tags = true
   propagate_tags          = "SERVICE"
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.https]
 }
 
 # Only the target group rename needs a moved block (its name "${var.project}-tg" is
