@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -52,7 +52,12 @@ export async function GET(request: Request, { params }: { params: { type: string
 
     if (params.type === 'rds') {
       // resource_id = DBInstanceIdentifier (sync_lambda). Metrics are a live CloudWatch read (not stored).
-      // ?id=<DBInstanceIdentifier> → that one instance's 8 series (for the detail panel); else fleet KPI cards.
+      // ?ids=a,b → per-instance diagnostic fleet (page table); ?id=<x> → detail-panel series; else KPI cards.
+      const idsParam = new URL(request.url).searchParams.get('ids');
+      if (idsParam !== null) {
+        const ids = idsParam.split(',').map((x) => x.trim()).filter((x) => /^[a-zA-Z0-9.-]+$/.test(x)).slice(0, 200);
+        return Response.json({ fleet: await rdsFleetLive(ids) });
+      }
       const instanceId = new URL(request.url).searchParams.get('id');
       if (instanceId) {
         const one = await rdsMetrics([instanceId]);

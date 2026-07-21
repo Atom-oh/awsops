@@ -625,3 +625,24 @@ export async function mskOffsetLags(clusterName: string, region?: string, cap = 
   }
 }
 
+const RDS_FLEET_METRICS = [
+  { key: 'cpu', name: 'CPUUtilization', stat: 'Average' },
+  { key: 'freeStorage', name: 'FreeStorageSpace', stat: 'Average' },
+  { key: 'freeMem', name: 'FreeableMemory', stat: 'Average' },
+  { key: 'swap', name: 'SwapUsage', stat: 'Average' },
+  { key: 'conn', name: 'DatabaseConnections', stat: 'Average' },
+  { key: 'readLat', name: 'ReadLatency', stat: 'Average' },
+  { key: 'writeLat', name: 'WriteLatency', stat: 'Average' },
+  { key: 'readIops', name: 'ReadIOPS', stat: 'Average' },
+  { key: 'writeIops', name: 'WriteIOPS', stat: 'Average' },
+  { key: 'diskQueue', name: 'DiskQueueDepth', stat: 'Average' },
+  // 크레딧 계열 (owner 가이드: 프로덕션에서 자주 놓치는 함정) — gp2/T계열만 값이 존재.
+  { key: 'burst', name: 'BurstBalance', stat: 'Average' },
+  { key: 'cpuCredit', name: 'CPUCreditBalance', stat: 'Average' },
+  { key: 'replicaLag', name: 'ReplicaLag', stat: 'Average' },
+] as const;
+/** Per-DBInstance latest metrics (owner 가이드: RDS 진단 계층 — 인스턴스 레벨 CloudWatch). */
+export function rdsFleetLive(ids: string[]) {
+  return fleetLatest('AWS/RDS', ids, (id) => [{ Name: 'DBInstanceIdentifier', Value: id }], RDS_FLEET_METRICS);
+}
+
