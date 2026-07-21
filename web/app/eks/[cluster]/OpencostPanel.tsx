@@ -134,7 +134,7 @@ export default function OpencostPanel({ cluster }: { cluster: string }) {
       {notOnboarded ? (
         <div className="flex flex-col gap-1 px-4 py-3">
           <div className="flex items-center gap-2.5">{Label}{badge}</div>
-          <p className="text-[12px] text-ink-400">인-앱 조회 미온보딩 (Access Entry 필요)</p>
+          <p className="text-[12px] text-ink-400">인-앱 조회 미온보딩 (Access Entry 또는 인증 등록 필요)</p>
         </div>
       ) : !status ? (
         <div className="flex items-center gap-2.5 px-4 py-3">{Label}{badge}</div>

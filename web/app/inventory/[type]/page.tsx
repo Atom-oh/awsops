@@ -13,6 +13,8 @@ import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import BarDistribution from '@/components/charts/BarDistribution';
 import RiskHero from '@/components/inventory/RiskHero';
 import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
+import VpcResourceMap from '@/components/inventory/VpcResourceMap';
+import { ElasticacheNodeMetrics, OpensearchDomainMetrics, MskBrokerNodes, RdsInstanceMetrics } from '@/components/inventory/NodeMetricsTables';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
 import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
@@ -61,6 +63,8 @@ export default function InventoryTypePage() {
   // v1-parity facet filters (spec.filterKeys): key → selected value ('전체' = no filter).
   const [facets, setFacets] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Row | null>(null);
+  // VPC Resource Map (v1 parity): opened from the VPC detail panel's action button.
+  const [mapVpc, setMapVpc] = useState<Row | null>(null);
   // Supplementary metric KPI cards (e.g. EC2 avg CPU + hourly cost). Degrade silently to [].
   const [metricCards, setMetricCards] = useState<{ label: string; value: string | number; accent?: boolean }[]>([]);
   const [scope] = useActiveScope();
@@ -289,6 +293,11 @@ export default function InventoryTypePage() {
             {/* Type-specific live sections (v1 parity): CloudTrail recent-events audit view. */}
             {type === 'cloudtrail' && <CloudTrailEvents />}
             {tableBlock}
+            {/* v1-parity live metric tables (owner: 페이지 하단 배치): 노드/도메인/브로커 단위 */}
+            {type === 'elasticache' && <ElasticacheNodeMetrics rows={filteredRows} />}
+            {type === 'opensearch' && <OpensearchDomainMetrics rows={filteredRows} />}
+            {type === 'msk' && <MskBrokerNodes rows={filteredRows} />}
+            {type === 'rds' && <RdsInstanceMetrics rows={filteredRows} />}
           </>
         )}
       </div>
@@ -298,7 +307,26 @@ export default function InventoryTypePage() {
         spec={spec}
         resourceType={type}
         onClose={() => setSelected(null)}
+        actions={
+          type === 'vpc' && selected ? (
+            <button
+              type="button"
+              onClick={() => { setMapVpc(selected); setSelected(null); }}
+              className="rounded-md border border-brand-300 bg-brand-500/10 px-3 py-1.5 text-[12px] font-medium text-brand-700 hover:bg-brand-500/20"
+            >
+              리소스 맵 열기
+            </button>
+          ) : undefined
+        }
       />
+      {type === 'vpc' && mapVpc && (
+        <VpcResourceMap
+          vpcId={String(mapVpc.resource_id)}
+          vpcName={typeof mapVpc.name === 'string' ? mapVpc.name : undefined}
+          cidr={typeof mapVpc.cidr_block === 'string' ? mapVpc.cidr_block : undefined}
+          onClose={() => setMapVpc(null)}
+        />
+      )}
     </>
   );
 }

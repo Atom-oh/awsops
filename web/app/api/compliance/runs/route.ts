@@ -10,7 +10,7 @@ export async function GET(req: Request) {
   }
   try {
     const r = await getPool().query(
-      `SELECT id, worker_job_id, benchmark, status, requested_by, pass_rate,
+      `SELECT id, worker_job_id, benchmark, status, requested_by, account, pass_rate,
               total_controls, ok, alarm, info, skip, error, error_message, started_at, finished_at
        FROM compliance_runs ORDER BY started_at DESC LIMIT 50`,
     );

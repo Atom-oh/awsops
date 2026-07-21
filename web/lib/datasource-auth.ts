@@ -15,6 +15,9 @@ export interface DatasourceCreds {
   token?: string;
   headerName?: string;
   headerValue?: string;
+  /** Optional SECOND custom header — Datadog auth is a DD-API-KEY + DD-APPLICATION-KEY pair. */
+  headerName2?: string;
+  headerValue2?: string;
   org_id?: string;
 }
 
@@ -58,11 +61,17 @@ export function buildAuthHeaders(authType: AuthType, creds: DatasourceCreds): Re
       break;
     }
     case 'custom_header': {
-      if (creds.headerName || creds.headerValue) {
-        const name = creds.headerName ?? '';
-        const value = creds.headerValue ?? '';
-        assertSafeCustomHeader(name, value);
-        headers[name] = value;
+      // Up to TWO custom headers — Datadog needs the DD-API-KEY + DD-APPLICATION-KEY pair.
+      for (const [n, v] of [
+        [creds.headerName, creds.headerValue],
+        [creds.headerName2, creds.headerValue2],
+      ] as const) {
+        if (n || v) {
+          const name = n ?? '';
+          const value = v ?? '';
+          assertSafeCustomHeader(name, value);
+          headers[name] = value;
+        }
       }
       break;
     }

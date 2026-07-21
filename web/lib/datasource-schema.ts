@@ -104,7 +104,7 @@ export function prioritizeSchemaForQuery(schema: unknown, nl: string): unknown {
       .sort((a, b) => b.sc - a.sc || a.i - b.i) // score desc, stable on ties
       .map((e) => e.x);
   const out: Record<string, unknown> = { ...s };
-  for (const k of ['metrics', 'labels', 'tags'] as const) {
+  for (const k of ['metrics', 'labels', 'tags', 'services'] as const) {
     if (Array.isArray(s[k]) && (s[k] as unknown[]).length) out[k] = reorder(s[k] as unknown[]);
   }
   return out;
@@ -210,7 +210,7 @@ export function renderSchemaForPrompt(schema: unknown, _kind?: string | null, ma
   }
 
   // metric/label/tag/index datasources: names only (that's all they carry). (`domains` handled above.)
-  for (const [k, n] of [['metrics', 80], ['labels', 80], ['tags', 80], ['indices', 60]] as const) {
+  for (const [k, n] of [['metrics', 80], ['labels', 80], ['tags', 80], ['indices', 60], ['services', 80]] as const) {
     if (Array.isArray(s[k]) && (s[k] as unknown[]).length) {
       if (budget < 16) break; // out of room — stop (don't silently skip an individual key out of order)
       const full = `${k}: ${names(s[k], n)}`;

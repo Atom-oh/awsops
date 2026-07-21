@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useActiveAccount, accountParam } from '@/lib/account-context';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { Background, Controls, Position, type Node, type Edge } from '@xyflow/react';
@@ -29,6 +30,7 @@ const relLabel: Record<string, string> = {
 
 export default function ResourceTopologyPage({ params }: { params: { id: string } }) {
   const fromId = decodeURIComponent(params.id);
+  const [activeAccount] = useActiveAccount();
   const [depth, setDepth] = useState(2);
   const [graph, setGraph] = useState<Graph | null>(null);
   const [err, setErr] = useState('');
@@ -37,13 +39,13 @@ export default function ResourceTopologyPage({ params }: { params: { id: string 
   useEffect(() => {
     let live = true;
     setBusy(true);
-    fetch(`/api/graph?class=infra&from=${encodeURIComponent(fromId)}&depth=${depth}`)
+    fetch(`/api/graph?class=infra&from=${encodeURIComponent(fromId)}&depth=${depth}&${accountParam(activeAccount) || 'account=self'}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (live) { setGraph(d); setErr(''); } })
       .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); })
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
-  }, [fromId, depth]);
+  }, [fromId, depth, activeAccount]);
 
   const { nodes, edges } = useMemo(() => {
     if (!graph) return { nodes: [] as Node[], edges: [] as Edge[] };

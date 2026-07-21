@@ -1,8 +1,9 @@
-// THE allow-list swap-point for OpenCost. Today it parses ONBOARDED_EKS_CLUSTERS env
-// (same as web/app/api/eks/[cluster]/incluster/route.ts:10). When the EKS-page buildout
-// lands eks-registry, replace this body with `return (await isAllowed(cluster))` — a 1-line
-// swap isolated here so no OpenCost route/page changes (consensus Decision 2).
-export function isClusterOnboarded(cluster: string): boolean {
-  const allow = (process.env.ONBOARDED_EKS_CLUSTERS || '').split(',').map((s) => s.trim()).filter(Boolean);
-  return allow.includes(cluster);
+// THE allow-list swap-point for OpenCost. Delegates to eks-registry's isAllowed —
+// env clusters (ONBOARDED_EKS_CLUSTERS) + runtime registrations + Aurora-stored auth
+// (sa-token/assume-role) all count, matching what the fleet/allocation routes read.
+// (Originally env-only; the planned 1-line swap landed with the eks-registry buildout.)
+import { isAllowed } from '@/lib/eks-registry';
+
+export async function isClusterOnboarded(cluster: string): Promise<boolean> {
+  return isAllowed(cluster);
 }

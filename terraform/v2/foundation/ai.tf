@@ -621,7 +621,7 @@ locals {
     "aws-knowledge"     = { file = "aws_knowledge.py", handler = "aws_knowledge.lambda_handler" }
     "opensearch-mcp"    = { file = "opensearch_mcp.py", handler = "opensearch_mcp.lambda_handler" }
     # ops inventory_read: reads the synced Aurora topology/inventory via the RDS Data API (read-only)
-    "inventory-read"    = { file = "inventory_read_mcp.py", handler = "inventory_read_mcp.lambda_handler" }
+    "inventory-read" = { file = "inventory_read_mcp.py", handler = "inventory_read_mcp.lambda_handler" }
     } : {}, local.integ_count > 0 ? {
     "notion-mcp"     = { file = "notion_mcp.py", handler = "notion_mcp.lambda_handler" }
     "clickhouse-mcp" = { file = "clickhouse_mcp.py", handler = "clickhouse_mcp.lambda_handler" }
@@ -629,6 +629,10 @@ locals {
     "loki-mcp"       = { file = "loki_mcp.py", handler = "loki_mcp.lambda_handler" }
     "tempo-mcp"      = { file = "tempo_mcp.py", handler = "tempo_mcp.lambda_handler" }
     "mimir-mcp"      = { file = "mimir_mcp.py", handler = "mimir_mcp.lambda_handler" }
+    # v1 datasource-family completion (2026-07-21): trace search / SaaS metric platforms.
+    "jaeger-mcp"    = { file = "jaeger_mcp.py", handler = "jaeger_mcp.lambda_handler" }
+    "dynatrace-mcp" = { file = "dynatrace_mcp.py", handler = "dynatrace_mcp.lambda_handler" }
+    "datadog-mcp"   = { file = "datadog_mcp.py", handler = "datadog_mcp.lambda_handler" }
   } : {})
 }
 
@@ -649,7 +653,7 @@ data "archive_file" "agent" {
   # conn-config + health probe). Bundle it into ONLY those ZIPs — without it the Lambda dies at import
   # time (Runtime.ImportModuleError: No module named 'datasource_http').
   dynamic "source" {
-    for_each = contains(["clickhouse_mcp.py", "prometheus_mcp.py", "loki_mcp.py", "tempo_mcp.py", "mimir_mcp.py"], each.value.file) ? [1] : []
+    for_each = contains(["clickhouse_mcp.py", "prometheus_mcp.py", "loki_mcp.py", "tempo_mcp.py", "mimir_mcp.py", "jaeger_mcp.py", "dynatrace_mcp.py", "datadog_mcp.py"], each.value.file) ? [1] : []
     content {
       content  = file("${path.module}/../../../agent/lambda/datasource_http.py")
       filename = "datasource_http.py"
@@ -680,7 +684,7 @@ resource "aws_lambda_function" "agent" {
       # Connectors that read the single integrations secret get its exact TF-created name (no drift
       # from the Python default). notion-mcp also pins INTEGRATION_SLUG; clickhouse-mcp uses a fixed
       # SLUG in code. Both exist only when integ_count>0 so integrations[0] is safe.
-      contains(["notion-mcp", "clickhouse-mcp", "prometheus-mcp", "loki-mcp", "tempo-mcp", "mimir-mcp"], each.key) ? merge(
+      contains(["notion-mcp", "clickhouse-mcp", "prometheus-mcp", "loki-mcp", "tempo-mcp", "mimir-mcp", "jaeger-mcp", "dynatrace-mcp", "datadog-mcp"], each.key) ? merge(
         { INTEGRATIONS_SECRET_NAME = aws_secretsmanager_secret.integrations[0].name },
         each.key == "notion-mcp" ? { INTEGRATION_SLUG = "notion" } : {}
       ) : {},

@@ -54,7 +54,7 @@ describe('OpencostPanel', () => {
   it('404 (not onboarded): shows the onboarding note, no download buttons', async () => {
     stubFetch({ status: jsonRes({ status: 'error', message: 'unknown cluster' }, 404) });
     render(<OpencostPanel cluster="c1" />);
-    await waitFor(() => expect(screen.getByText(/Access Entry 필요/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Access Entry 또는 인증 등록 필요/)).toBeTruthy());
     expect(screen.queryByText('values.yaml')).toBeNull();
     expect(screen.queryByText('install.sh')).toBeNull();
   });

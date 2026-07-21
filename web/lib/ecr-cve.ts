@@ -3,33 +3,43 @@
 // STRICTLY read-only; every failure degrades to [] (a denied repo never blanks the tab).
 import { ECRClient, DescribeImagesCommand, DescribeImageScanFindingsCommand } from '@aws-sdk/client-ecr';
 import { getPool } from './db';
+import { assumedClient } from './aws-assume';
 import type { Finding } from './security-findings';
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
-let ecr: ECRClient | null = null;
-const ecrClient = () => (ecr ??= new ECRClient({ region: REGION }));
 
 const MAX_REPOS = 30; // one DescribeImages + one DescribeImageScanFindings per repo — bounded
 
-export async function ecrCveFindings(): Promise<Finding[]> {
+export async function ecrCveFindings(accounts: string[] = ['self']): Promise<Finding[]> {
   // Repo list from the synced inventory (deployment region only — the ECR client is regional).
-  let repos: { name: string; region: string }[] = [];
+  // Member-account repos are read with STS-assumed creds (aws-assume); 'self' uses task-role creds.
+  let repos: { name: string; region: string; account_id: string }[] = [];
   try {
-    const r = await getPool().query<{ name: string; region: string }>(
-      `SELECT resource_id AS name, region FROM inventory_resources
-       WHERE resource_type='ecr' AND account_id='self' AND region=$1
+    const r = await getPool().query<{ name: string; region: string; account_id: string }>(
+      `SELECT resource_id AS name, region, account_id FROM inventory_resources
+       WHERE resource_type='ecr' AND account_id = ANY($2) AND region=$1
        ORDER BY resource_id LIMIT ${MAX_REPOS}`,
-      [REGION],
+      [REGION, accounts],
     );
     repos = r.rows;
   } catch {
     return [];
   }
+  const clients = new Map<string, ECRClient>();
+  const clientFor = async (account: string): Promise<ECRClient> => {
+    let c = clients.get(account);
+    if (!c) {
+      c = await assumedClient(account === 'self' ? undefined : account, ECRClient, { region: REGION });
+      clients.set(account, c);
+    }
+    return c;
+  };
   const out: Finding[] = [];
   for (const repo of repos) {
     try {
+      const ecr = await clientFor(repo.account_id);
       // Latest pushed image (scan results follow the newest artifact).
-      const imgs = await ecrClient().send(new DescribeImagesCommand({
+      const imgs = await ecr.send(new DescribeImagesCommand({
         repositoryName: repo.name, maxResults: 100,
       }));
       const latest = (imgs.imageDetails ?? [])
@@ -46,7 +56,7 @@ export async function ecrCveFindings(): Promise<Finding[]> {
         status = latest.imageScanStatus?.status ?? 'COMPLETE';
         completedAt = latest.imageScanFindingsSummary.imageScanCompletedAt?.toISOString() ?? null;
       } else {
-        const scan = await ecrClient().send(new DescribeImageScanFindingsCommand({
+        const scan = await (await clientFor(repo.account_id)).send(new DescribeImageScanFindingsCommand({
           repositoryName: repo.name, imageId: { imageDigest: latest.imageDigest }, maxResults: 1,
         }));
         sev = (scan.imageScanFindings?.findingSeverityCounts ?? {}) as Record<string, number>;
@@ -63,6 +73,7 @@ export async function ecrCveFindings(): Promise<Finding[]> {
         check: 'ecr_cve',
         resource_id: repo.name,
         region: repo.region,
+        account_id: repo.account_id,
         title: `${repo.name}: CVE ${total}건 (Critical ${critical} / High ${high})`,
         severity: critical > 0 ? 'high' : high > 0 ? 'medium' : 'low',
         detail: {

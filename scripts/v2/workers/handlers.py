@@ -134,7 +134,7 @@ def _report(payload, dry_run):
 
 
 def _compliance(payload, dry_run):
-    """CIS benchmark via Powerpipe (Fargate). payload: {benchmark, run_id, requested_by}.
+    """CIS benchmark via Powerpipe (Fargate). payload: {benchmark, run_id, requested_by, scope}.
     The BFF pre-creates the compliance_runs row (run_id) — same pattern as _report (fixes the
     worker_job_id linkage + the UI race). Read-only: Powerpipe only QUERIES the Steampipe FDW."""
     import compliance
@@ -149,7 +149,8 @@ def _compliance(payload, dry_run):
     conn = wdb.connect()
     try:  # always release the pg8000 connection (Aurora pool exhaustion guard, per _report)
         try:
-            doc = compliance.run_powerpipe(benchmark, compliance.steampipe_db_url())
+            scope = str(payload.get("scope") or "all")
+            doc = compliance.run_powerpipe(benchmark, compliance.steampipe_db_url(), scope)
             totals, controls = compliance.parse_powerpipe_json(doc)
             compliance.persist(conn, run_id, totals, controls)
             return {"run_id": run_id, "benchmark": benchmark, **totals}, None

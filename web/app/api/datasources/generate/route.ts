@@ -21,6 +21,8 @@ export const maxDuration = 60;
 
 const LANG: Record<string, string> = {
   prometheus: 'PromQL', mimir: 'PromQL', loki: 'LogQL', tempo: 'TraceQL', clickhouse: 'read-only SQL',
+  jaeger: 'Jaeger trace-search parameter string (service=<name>&operation=…&tags=…&limit=…)',
+  dynatrace: 'Dynatrace metricSelector (Metrics API v2)', datadog: 'Datadog metrics query',
 };
 const MAX_NL = 4_000;
 
