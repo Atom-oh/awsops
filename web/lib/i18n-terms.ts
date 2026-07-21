@@ -43,6 +43,14 @@ export const TERMS: Record<string, Pair> = {
   '섹션 명령': { en: 'Section commands', zh: '分区命令', ja: 'セクションコマンド' },
   '자동 라우팅': { en: 'Auto routing', zh: '自动路由', ja: '自動ルーティング' },
   '· 준비중': { en: '· coming soon', zh: '· 即将推出', ja: '· 準備中' },
+  '값 복사': { en: 'Copy value', zh: '复制值', ja: '値をコピー' },
+  'DB 커넥션': { en: 'DB connections', zh: 'DB 连接数', ja: 'DB コネクション' },
+  '여유 메모리': { en: 'Freeable memory', zh: '可用内存', ja: '空きメモリ' },
+  '여유 스토리지': { en: 'Free storage', zh: '可用存储', ja: '空き容量' },
+  '리소스 상세': { en: 'Resource detail', zh: '资源详情', ja: 'リソース詳細' },
+  '드래그하여 폭 조절': { en: 'Drag to resize', zh: '拖动以调整宽度', ja: 'ドラッグして幅を調整' },
+  '패널 폭 조절': { en: 'Resize panel', zh: '调整面板宽度', ja: 'パネル幅を調整' },
+  'ID 복사': { en: 'Copy ID', zh: '复制 ID', ja: 'ID をコピー' },
 
   // ---- dashboard ----
   '대시보드': { en: 'Dashboard', zh: '仪表盘', ja: 'ダッシュボード' },
