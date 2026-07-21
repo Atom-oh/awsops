@@ -460,7 +460,7 @@ async function fleetLatest(
   namespace: string,
   entities: string[],
   dimsFor: (id: string) => { Name: string; Value: string }[],
-  metrics: readonly { key: string; name: string; stat: string }[],
+  metrics: readonly { key: string; name: string; stat: string; dims?: readonly { Name: string; Value: string }[] }[],
   region?: string,
 ): Promise<Record<string, Record<string, number | null>>> {
   const out: Record<string, Record<string, number | null>> = {};
@@ -478,7 +478,7 @@ async function fleetLatest(
         MetricDataQueries: chunk.flatMap((id, i) =>
           metrics.map((m) => ({
             Id: `${m.key}_i${i}`, ReturnData: true,
-            MetricStat: { Metric: { Namespace: namespace, MetricName: m.name, Dimensions: dimsFor(id) }, Period: 300, Stat: m.stat },
+            MetricStat: { Metric: { Namespace: namespace, MetricName: m.name, Dimensions: [...dimsFor(id), ...(m.dims ?? [])] }, Period: 300, Stat: m.stat },
           }))),
       }));
       for (const res of r.MetricDataResults ?? []) {
@@ -644,5 +644,59 @@ const RDS_FLEET_METRICS = [
 /** Per-DBInstance latest metrics (owner 가이드: RDS 진단 계층 — 인스턴스 레벨 CloudWatch). */
 export function rdsFleetLive(ids: string[]) {
   return fleetLatest('AWS/RDS', ids, (id) => [{ Name: 'DBInstanceIdentifier', Value: id }], RDS_FLEET_METRICS);
+}
+
+// DynamoDB per-table diagnostics (owner 가이드: 스로틀링이 진단의 최우선 — 용량 부족 vs 핫 파티션).
+// 스로틀/에러 계열은 Sum(5분 누적 건수), 소비 용량은 Sum/300 = 초당 소비율로 환산해 프로비저닝과 비교,
+// SuccessfulRequestLatency는 Operation 차원 필수 → 대표 4개 오퍼레이션으로 분해.
+const DDB_TABLE_METRICS = [
+  { key: 'rThrottle', name: 'ReadThrottleEvents', stat: 'Sum' },
+  { key: 'wThrottle', name: 'WriteThrottleEvents', stat: 'Sum' },
+  { key: 'consumedR', name: 'ConsumedReadCapacityUnits', stat: 'Sum' },
+  { key: 'consumedW', name: 'ConsumedWriteCapacityUnits', stat: 'Sum' },
+  { key: 'provR', name: 'ProvisionedReadCapacityUnits', stat: 'Average' },
+  { key: 'provW', name: 'ProvisionedWriteCapacityUnits', stat: 'Average' },
+  { key: 'condFail', name: 'ConditionalCheckFailedRequests', stat: 'Sum' },
+  { key: 'txnConflict', name: 'TransactionConflict', stat: 'Sum' },
+  { key: 'latGet', name: 'SuccessfulRequestLatency', stat: 'Average', dims: [{ Name: 'Operation', Value: 'GetItem' }] },
+  { key: 'latQuery', name: 'SuccessfulRequestLatency', stat: 'Average', dims: [{ Name: 'Operation', Value: 'Query' }] },
+  { key: 'latPut', name: 'SuccessfulRequestLatency', stat: 'Average', dims: [{ Name: 'Operation', Value: 'PutItem' }] },
+  { key: 'latScan', name: 'SuccessfulRequestLatency', stat: 'Average', dims: [{ Name: 'Operation', Value: 'Scan' }] },
+] as const;
+export function ddbFleetLive(tables: string[]) {
+  return fleetLatest('AWS/DynamoDB', tables, (id) => [{ Name: 'TableName', Value: id }], DDB_TABLE_METRICS);
+}
+
+export interface DdbReplicationRow { table: string; region: string; latencyMs: number | null }
+/** Global Tables 리전 간 복제 지연 — ReceivingRegion 차원을 모르므로 ListMetrics로 발견. */
+export async function ddbReplicationLags(cap = 30): Promise<DdbReplicationRow[]> {
+  try {
+    const lm = await cwClient().send(new ListMetricsCommand({
+      Namespace: 'AWS/DynamoDB', MetricName: 'ReplicationLatency',
+    }));
+    const series = (lm.Metrics ?? []).slice(0, cap).map((m) => {
+      const dim = (n: string) => m.Dimensions?.find((d) => d.Name === n)?.Value ?? '';
+      return { table: dim('TableName'), region: dim('ReceivingRegion'), dims: m.Dimensions ?? [] };
+    }).filter((x) => x.table);
+    if (!series.length) return [];
+    const r = await cwClient().send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+      MetricDataQueries: series.map((x, i) => ({
+        Id: `rep_i${i}`, ReturnData: true,
+        MetricStat: { Metric: { Namespace: 'AWS/DynamoDB', MetricName: 'ReplicationLatency', Dimensions: x.dims }, Period: 300, Stat: 'Average' },
+      })),
+    }));
+    const byIdx = new Map<number, number>();
+    for (const res of r.MetricDataResults ?? []) {
+      const mm = (res.Id ?? '').match(/^rep_i(\d+)$/);
+      const v = res.Values?.[0];
+      if (mm && typeof v === 'number') byIdx.set(Number(mm[1]), v);
+    }
+    return series
+      .map((x, i) => ({ table: x.table, region: x.region, latencyMs: byIdx.get(i) ?? null }))
+      .sort((a, b) => (b.latencyMs ?? -1) - (a.latencyMs ?? -1));
+  } catch {
+    return [];
+  }
 }
 

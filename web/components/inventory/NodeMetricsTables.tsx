@@ -572,3 +572,192 @@ export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
     </Card>
   );
 }
+
+// ── DynamoDB: per-table diagnostic metrics (owner 가이드: 스로틀링·용량·지연·에러·Global Tables) ──
+
+function DdbDiagnosisGuide() {
+  const [open, setOpen] = useState(false);
+  const th = 'px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400';
+  const td = 'px-2.5 py-1.5 text-[12px] text-ink-600';
+  const h4 = 'mt-3 mb-1 text-[12.5px] font-semibold text-ink-700';
+  return (
+    <div className="border-t border-ink-100">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[12.5px] font-medium text-brand-700 hover:bg-ink-50"
+      >
+        <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        DynamoDB 진단 가이드 — 지표 읽는 법 (펼쳐 보기)
+      </button>
+      {open && (
+        <div className="px-5 pb-4 text-[12.5px] leading-relaxed text-ink-600">
+          <p className="mt-1">
+            DynamoDB는 관리형 서비스라 OS/디스크 층위가 없고 <b>CloudWatch 중심으로 처리량·스로틀링·지연·에러</b>를
+            봅니다. 캐패시티 모드(On-Demand vs Provisioned)에 따라 관심 지표가 달라집니다.
+          </p>
+
+          <div className={h4}>① 스로틀링 — 진단에서 가장 중요</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>ThrottledRequests</b>, <b>ReadThrottleEvents / WriteThrottleEvents</b>, <b>OnlineIndexThrottleEvents</b>(GSI 인덱싱).</li>
+            <li>원인은 보통 둘 중 하나: <b>프로비저닝 부족</b>(용량 &lt; 트래픽) 또는 <b>핫 파티션/핫 키</b> — 전체 용량은 남는데 특정 파티션이 한계(파티션당 3000 RCU / 1000 WCU)에 걸림. 후자가 가장 진단하기 까다로운 케이스.</li>
+          </ul>
+
+          <div className={h4}>② 캐패시티 사용량</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>ConsumedRead/WriteCapacityUnits</b>(실소비) vs <b>ProvisionedRead/WriteCapacityUnits</b>(설정값)를 겹쳐 여유/부족 판단.</li>
+            <li>On-Demand는 소비량 추세 + AccountMaxTableLevelReads/Writes 상한 + 순간 급증(2배 룰 초과) 여부.</li>
+          </ul>
+
+          <div className={h4}>③ 지연 (Latency)</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>SuccessfulRequestLatency</b> — <b>오퍼레이션별 분해가 핵심</b>(GetItem/Query/PutItem/Scan…). 서비스 측 지연(네트워크 왕복 제외).</li>
+            <li>Scan/Query 지연이 튀면 비효율적 액세스 패턴(풀스캔, 큰 결과셋) 의심.</li>
+          </ul>
+
+          <div className={h4}>④ 에러</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>SystemErrors</b>(HTTP 500, 서버 측) / <b>UserErrors</b>(HTTP 400, 클라이언트 측).</li>
+            <li><b>ConditionalCheckFailedRequests</b> — 낙관적 락 사용 시 정상적으로도 발생 → 맥락 판단. <b>TransactionConflict</b> 높으면 경합 심함.</li>
+          </ul>
+
+          <div className={h4}>⑤ Global Tables / 스트림</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>ReplicationLatency</b>, PendingReplicationCount, AgeOfOldestUnreplicatedRecord — 리전 간 복제 지연.</li>
+            <li>Streams를 Lambda로 소비 중이면 Lambda의 <b>IteratorAge</b>로 스트림 처리 지연 확인.</li>
+          </ul>
+
+          <div className={h4}>진단 심화: CloudWatch Contributor Insights for DynamoDB</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>핫 파티션/핫 키 탐지 특화 도구</b> — 가장 자주 접근되는 파티션 키를 순위로 표시해, 스로틀 원인이 "용량 부족"인지 "키 분포 불균형"인지 구분할 때 결정적.</li>
+            <li>Throttled key(스로틀된 키)도 별도 룰로 확인 가능 — 테이블별로 Contributor Insights를 활성화해 사용.</li>
+          </ul>
+
+          <div className={h4}>경보 우선순위 요약</div>
+          <div className="overflow-x-auto rounded-lg border border-ink-100">
+            <table className="w-full">
+              <thead><tr className="border-b border-ink-100 bg-paper-muted/60">
+                <th className={th}>메트릭</th><th className={th}>주의 기준</th><th className={th}>의미</th>
+              </tr></thead>
+              <tbody>
+                {[
+                  ['ReadThrottleEvents / WriteThrottleEvents', '> 0 지속', '용량 부족 또는 핫 파티션'],
+                  ['SystemErrors', '급증', '서버 측 이상'],
+                  ['ConsumedRCU/WCU vs Provisioned', '근접/초과', '용량 여유 부족'],
+                  ['SuccessfulRequestLatency', '급증', '액세스 패턴/성능 문제'],
+                  ['ConditionalCheckFailedRequests', '예상보다 높음', '경합 또는 로직 문제'],
+                  ['ReplicationLatency (Global Tables)', '증가 추세', '리전 간 복제 지연'],
+                ].map(([m, v, d]) => (
+                  <tr key={m} className="border-b border-ink-50 last:border-0">
+                    <td className={`${td} font-mono text-[11.5px]`}>{m}</td>
+                    <td className={`${td} tabular`}>{v}</td>
+                    <td className={td}>{d}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface DdbReplicationRow { table: string; region: string; latencyMs: number | null }
+
+export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
+  const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
+  const [fleet, setFleet] = useState<Fleet>({});
+  const [replication, setReplication] = useState<DdbReplicationRow[]>([]);
+  const [err, setErr] = useState('');
+  const key = ids.join(',');
+  useEffect(() => {
+    if (!key) return;
+    let live = true;
+    fetch(`/api/inventory/dynamodb/metrics?ids=${encodeURIComponent(key)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => { if (live) { setFleet(d.fleet ?? {}); setReplication(d.replication ?? []); setErr(''); } })
+      .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); });
+    return () => { live = false; };
+  }, [key]);
+  if (rows.length === 0) return null;
+
+  const danger = 'text-rose-700 font-semibold';
+  const lat = (v: number | null) => (v == null ? dash : `${v.toFixed(1)}`); // SuccessfulRequestLatency is already ms
+  // 소비 용량: Sum(5분) → 초당 소비율. Provisioned와 직접 비교 (근접/초과 = 위험).
+  const rate = (sum: number | null) => (sum == null ? null : sum / 300);
+  const capCell = (consumed: number | null, prov: number | null) => {
+    const c = rate(consumed);
+    if (c == null && prov == null) return dash;
+    const provisioned = prov != null && prov > 0 ? prov : null;
+    const hot = provisioned != null && c != null && c >= provisioned * 0.8;
+    return (
+      <span className={hot ? danger : undefined}>
+        {c == null ? '0' : c < 10 ? c.toFixed(2) : Math.round(c).toLocaleString()}
+        {provisioned != null ? ` / ${Math.round(provisioned).toLocaleString()}` : ''}
+      </span>
+    );
+  };
+
+  return (
+    <Card title="테이블 진단 메트릭 (Last 1h)" subtitle={`${ids.length} tables · CloudWatch AWS/DynamoDB · 용량은 초당 소비율(소비/프로비저닝)`} padded={false}>
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead><tr className="border-b border-ink-100">
+            {['Table', 'Billing', 'Throttle R/W', 'RCU (소비/프로비저닝)', 'WCU (소비/프로비저닝)', 'Lat Get', 'Lat Query', 'Lat Put', 'Lat Scan', 'CondFail', 'TxnConflict'].map((h) => <th key={h} className={TH}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const m = fleet[String(r.resource_id)] ?? {};
+              const rt = num(m.rThrottle) ?? 0; const wt = num(m.wThrottle) ?? 0;
+              const throttled = rt > 0 || wt > 0;
+              return (
+                <tr key={i} className="border-b border-ink-50 last:border-0">
+                  <td className={MONO}>{String(r.resource_id)}</td>
+                  <td className={TD}>{String(r.billing_mode ?? '—') === 'PAY_PER_REQUEST' ? 'On-Demand' : 'Provisioned'}</td>
+                  <td className={`${TD} ${throttled ? danger : ''}`} title="Read/WriteThrottleEvents(5분 누적) — >0 지속이면 용량 부족 또는 핫 파티션. Contributor Insights로 핫 키 확인">
+                    {num(m.rThrottle) == null && num(m.wThrottle) == null ? dash : `${rt}/${wt}`}
+                  </td>
+                  <td className={TD} title="ConsumedReadCapacityUnits(초당) vs ProvisionedReadCapacityUnits — 근접/초과 시 위험">{capCell(num(m.consumedR), num(m.provR))}</td>
+                  <td className={TD} title="ConsumedWriteCapacityUnits(초당) vs ProvisionedWriteCapacityUnits">{capCell(num(m.consumedW), num(m.provW))}</td>
+                  <td className={TD} title="SuccessfulRequestLatency(GetItem, ms)">{lat(num(m.latGet))}</td>
+                  <td className={TD} title="SuccessfulRequestLatency(Query, ms) — 급증 시 액세스 패턴 의심">{lat(num(m.latQuery))}</td>
+                  <td className={TD} title="SuccessfulRequestLatency(PutItem, ms)">{lat(num(m.latPut))}</td>
+                  <td className={TD} title="SuccessfulRequestLatency(Scan, ms) — 풀스캔/큰 결과셋 의심">{lat(num(m.latScan))}</td>
+                  <td className={TD} title="ConditionalCheckFailedRequests — 낙관적 락이면 정상 발생 가능, 맥락 판단">{cnt(num(m.condFail))}</td>
+                  <td className={TD} title="TransactionConflict — 높으면 경합 심함">{cnt(num(m.txnConflict))}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {replication.length > 0 && (
+        <div className="border-t border-ink-100">
+          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">Global Tables 복제 지연 (ReplicationLatency, Last 1h)</div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead><tr className="border-b border-ink-100">
+                {['Table', 'Receiving Region', 'Latency'].map((h) => <th key={h} className={TH}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {replication.slice(0, 15).map((l, i) => (
+                  <tr key={i} className="border-b border-ink-50 last:border-0">
+                    <td className={MONO}>{l.table}</td>
+                    <td className={MONO}>{l.region || '—'}</td>
+                    <td className={`${TD} tabular`} title="리전 간 복제 지연 — 증가 추세면 경보">{l.latencyMs == null ? dash : `${Math.round(l.latencyMs).toLocaleString()} ms`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <DdbDiagnosisGuide />
+    </Card>
+  );
+}

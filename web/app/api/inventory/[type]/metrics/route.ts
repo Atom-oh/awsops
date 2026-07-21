@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -84,6 +84,13 @@ export async function GET(request: Request, { params }: { params: { type: string
       return Response.json({ cards });
     }
 
+    // DynamoDB: per-table diagnostics + Global Tables replication lag (discovered via ListMetrics).
+    if (params.type === 'dynamodb' && url.searchParams.get('ids') !== null) {
+      const ids = (url.searchParams.get('ids') ?? '')
+        .split(',').map((x) => x.trim()).filter((x) => /^[a-zA-Z0-9._-]+$/.test(x)).slice(0, 200);
+      const [fleet, replication] = await Promise.all([ddbFleetLive(ids), ddbReplicationLags()]);
+      return Response.json({ fleet, replication });
+    }
     // v1-parity fleet metrics (page-level tables):
     // elasticache/opensearch ?ids=a,b → { fleet: { id: {metricKey: value|null} } }
     if ((params.type === 'elasticache' || params.type === 'opensearch') && url.searchParams.get('ids') !== null) {
