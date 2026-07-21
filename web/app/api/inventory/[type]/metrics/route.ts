@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -97,8 +97,12 @@ export async function GET(request: Request, { params }: { params: { type: string
       const clusterRegion = arn.split(':')[3];
       const nodes = await mskListNodes(arn);
       const brokerIds = nodes.filter((n) => n.nodeType === 'BROKER' && n.brokerId != null).map((n) => n.brokerId as number);
-      const brokerMetrics = brokerIds.length ? await mskBrokerFleetLive(clusterName, brokerIds, clusterRegion) : {};
-      return Response.json({ nodes, brokerMetrics });
+      const [brokerMetrics, health, lags] = await Promise.all([
+        brokerIds.length ? mskBrokerFleetLive(clusterName, brokerIds, clusterRegion) : Promise.resolve({}),
+        mskClusterHealth(clusterName, clusterRegion),
+        mskOffsetLags(clusterName, clusterRegion),
+      ]);
+      return Response.json({ nodes, brokerMetrics, health, lags });
     }
 
     // ElastiCache/OpenSearch/MSK: per-resource live metrics for the detail panel (?id=).

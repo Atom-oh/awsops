@@ -559,6 +559,15 @@ const MSK_BROKER_METRICS = [
   { key: 'memFree', name: 'MemoryFree', stat: 'Average' },
   { key: 'bytesIn', name: 'BytesInPerSec', stat: 'Average' },
   { key: 'bytesOut', name: 'BytesOutPerSec', stat: 'Average' },
+  // 진단 계층 확장 (owner 가이드): 디스크 고갈이 가장 흔한 장애 원인 (85% 임계),
+  // 복제 건강성(URP/MinISR)은 정상값 0, 스로틀은 쿼터/네트워크 병목 신호.
+  { key: 'dataDisk', name: 'KafkaDataLogsDiskUsed', stat: 'Average' },
+  { key: 'rootDisk', name: 'RootDiskUsed', stat: 'Average' },
+  { key: 'msgsIn', name: 'MessagesInPerSec', stat: 'Average' },
+  { key: 'produceThrottle', name: 'ProduceThrottleTime', stat: 'Average' },
+  { key: 'fetchThrottle', name: 'FetchThrottleTime', stat: 'Average' },
+  { key: 'urp', name: 'UnderReplicatedPartitions', stat: 'Maximum' },
+  { key: 'underMinIsr', name: 'UnderMinIsrPartitionCount', stat: 'Maximum' },
 ] as const;
 /** Per-broker latest metrics (v1 msk 브로커 메트릭 — dims 'Cluster Name' + 'Broker ID'). */
 export function mskBrokerFleetLive(clusterName: string, brokerIds: number[], region?: string) {
@@ -566,5 +575,53 @@ export function mskBrokerFleetLive(clusterName: string, brokerIds: number[], reg
     { Name: 'Cluster Name', Value: clusterName },
     { Name: 'Broker ID', Value: id },
   ], MSK_BROKER_METRICS, region);
+}
+
+const MSK_CLUSTER_HEALTH_METRICS = [
+  { key: 'activeControllers', name: 'ActiveControllerCount', stat: 'Maximum' },
+  { key: 'offlinePartitions', name: 'OfflinePartitionsCount', stat: 'Maximum' },
+  { key: 'globalPartitions', name: 'GlobalPartitionCount', stat: 'Maximum' },
+] as const;
+/** Cluster-level health metrics (v1 gap — 진단 우선순위 표: 컨트롤러=1, 오프라인 파티션=0). */
+export async function mskClusterHealth(clusterName: string, region?: string): Promise<Record<string, number | null>> {
+  const r = await fleetLatest('AWS/Kafka', [clusterName], (id) => [{ Name: 'Cluster Name', Value: id }], MSK_CLUSTER_HEALTH_METRICS, region);
+  return r[clusterName] ?? {};
+}
+
+export interface MskOffsetLagRow { consumerGroup: string; topic: string; maxOffsetLag: number | null }
+/** Consumer-group MaxOffsetLag rows for a cluster — series discovered via ListMetrics (the
+ *  Consumer Group/Topic dimension values aren't known upfront), then one GetMetricData batch.
+ *  실무 최우선 지표 (owner 가이드): lag이 계속 증가하면 컨슈머가 프로듀서를 못 따라가는 중. */
+export async function mskOffsetLags(clusterName: string, region?: string, cap = 20): Promise<MskOffsetLagRow[]> {
+  try {
+    const client = region && region !== REGION ? new CloudWatchClient({ region }) : cwClient();
+    const lm = await client.send(new ListMetricsCommand({
+      Namespace: 'AWS/Kafka', MetricName: 'MaxOffsetLag',
+      Dimensions: [{ Name: 'Cluster Name', Value: clusterName }],
+    }));
+    const series = (lm.Metrics ?? []).slice(0, cap).map((m) => {
+      const dim = (n: string) => m.Dimensions?.find((d) => d.Name === n)?.Value ?? '';
+      return { consumerGroup: dim('Consumer Group'), topic: dim('Topic'), dims: m.Dimensions ?? [] };
+    }).filter((x) => x.consumerGroup || x.topic);
+    if (!series.length) return [];
+    const r = await client.send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+      MetricDataQueries: series.map((x, i) => ({
+        Id: `lag_i${i}`, ReturnData: true,
+        MetricStat: { Metric: { Namespace: 'AWS/Kafka', MetricName: 'MaxOffsetLag', Dimensions: x.dims }, Period: 300, Stat: 'Maximum' },
+      })),
+    }));
+    const byIdx = new Map<number, number>();
+    for (const res of r.MetricDataResults ?? []) {
+      const mm = (res.Id ?? '').match(/^lag_i(\d+)$/);
+      const v = res.Values?.[0];
+      if (mm && typeof v === 'number') byIdx.set(Number(mm[1]), v);
+    }
+    return series
+      .map((x, i) => ({ consumerGroup: x.consumerGroup, topic: x.topic, maxOffsetLag: byIdx.get(i) ?? null }))
+      .sort((a, b) => (b.maxOffsetLag ?? -1) - (a.maxOffsetLag ?? -1));
+  } catch {
+    return [];
+  }
 }
 
