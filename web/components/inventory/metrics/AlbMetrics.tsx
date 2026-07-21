@@ -65,10 +65,10 @@ export function AlbMetrics({ rows }: { rows: Row[] }) {
         </table>
       </div>
 
-      {/* 타깃 그룹 헬스 — HealthyHostCount(1h 최솟값)/UnHealthy(최댓값)는 TG 차원이어야 의미 */}
+      {/* 타깃 그룹 헬스 — HealthyHostCount(1h 최소값)/UnHealthy(최대값)는 TG 차원이어야 의미 */}
       {health.length > 0 && (
         <div className="border-t border-ink-100">
-          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">타깃 그룹 헬스 (Healthy 최솟값 / UnHealthy 최댓값, Last 1h)</div>
+          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">타깃 그룹 헬스 (Healthy 최소값 / UnHealthy 최대값, Last 1h)</div>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead><tr className="border-b border-ink-100">
