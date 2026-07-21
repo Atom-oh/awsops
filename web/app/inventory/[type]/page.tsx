@@ -14,6 +14,7 @@ import BarDistribution from '@/components/charts/BarDistribution';
 import RiskHero from '@/components/inventory/RiskHero';
 import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import VpcResourceMap from '@/components/inventory/VpcResourceMap';
+import { ElasticacheNodeMetrics, OpensearchDomainMetrics, MskBrokerNodes } from '@/components/inventory/NodeMetricsTables';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
 import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
@@ -291,6 +292,10 @@ export default function InventoryTypePage() {
             {barChart}
             {/* Type-specific live sections (v1 parity): CloudTrail recent-events audit view. */}
             {type === 'cloudtrail' && <CloudTrailEvents />}
+            {/* v1-parity live metric tables (owner request): 노드/도메인/브로커 단위 */}
+            {type === 'elasticache' && <ElasticacheNodeMetrics rows={filteredRows} />}
+            {type === 'opensearch' && <OpensearchDomainMetrics rows={filteredRows} />}
+            {type === 'msk' && <MskBrokerNodes rows={filteredRows} />}
             {tableBlock}
           </>
         )}
