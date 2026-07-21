@@ -6,7 +6,7 @@
 // The trailing 4 (clickhouse/mimir/loki/tempo) are the datasource (egress READ query) kinds, added by
 // 01KVB3MDTRVQW4MMC4GBVS6PPR_datasource_instances_additive.sql; kept in lockstep with
 // integrations-category.ts DATASOURCE_KINDS (see integration-validation.test.ts).
-export const INTEGRATION_KINDS_EGRESS = ['grafana', 'datadog', 'splunk', 'prometheus', 'newrelic', 'notion', 'confluence', 'jira', 'servicenow', 'slack', 'github', 'gitlab', 'custom_mcp', 'clickhouse', 'mimir', 'loki', 'tempo'] as const;
+export const INTEGRATION_KINDS_EGRESS = ['grafana', 'datadog', 'splunk', 'prometheus', 'newrelic', 'notion', 'confluence', 'jira', 'servicenow', 'slack', 'github', 'gitlab', 'custom_mcp', 'clickhouse', 'mimir', 'loki', 'tempo', 'jaeger', 'dynatrace'] as const;
 export const INTEGRATION_KINDS_INGRESS = ['cloudwatch_sns', 'alertmanager', 'grafana_alert', 'pagerduty', 'datadog_monitor', 'generic_webhook'] as const;
 export const INTEGRATION_TRANSPORTS = ['sigv4', 'oauth_client_credentials', 'oauth_3lo', 'api_key'] as const;
 export const INTEGRATION_DIRECTIONS = ['egress', 'ingress'] as const;
