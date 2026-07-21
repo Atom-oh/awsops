@@ -1,10 +1,10 @@
 'use client';
 import { useI18n } from './LanguageProvider';
 
-/** ko→en→zh cycle. Shows the language you'd switch TO ('EN' while ko, '中文' while en, '한' while zh). */
+/** ko→en→zh→ja cycle. Shows the language you'd switch TO ('EN' while ko, '中文' while en, '日本語' while zh, '한' while ja). */
 export default function LanguageToggle() {
   const { lang, setLang, t } = useI18n();
-  const next = lang === 'ko' ? 'en' : lang === 'en' ? 'zh' : 'ko';
+  const next = lang === 'ko' ? 'en' : lang === 'en' ? 'zh' : lang === 'zh' ? 'ja' : 'ko';
   return (
     <button
       type="button"
