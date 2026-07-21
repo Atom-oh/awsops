@@ -13,7 +13,7 @@ function json(obj: unknown, status: number) {
 export async function GET(request: Request, { params }: { params: { cluster: string } }) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
-  if (!isClusterOnboarded(params.cluster)) return json({ status: 'error', message: 'unknown cluster' }, 404);
+  if (!(await isClusterOnboarded(params.cluster))) return json({ status: 'error', message: 'unknown cluster' }, 404);
   const status = await detectOpencostInstall(params.cluster);
   return json(status, 200);
 }

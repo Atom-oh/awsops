@@ -49,23 +49,6 @@ resource "aws_eks_access_policy_association" "web_view" {
 #    operator grants access out-of-band. The web task-role entry above stays terraform-managed and
 #    uses AdminView because it lists cluster-scoped nodes — that rationale does NOT apply here.
 
-# IAM the web task role needs to discover clusters + build a kubeconfig (P3 consumes this).
-# ALWAYS created (was gated on onboard_eks_clusters): Aurora-stored cluster auth
-# (eks_registrations.auth — sa-token/assume-role) lets clusters connect without terraform
-# onboarding, but /eks discovery (ListClusters/DescribeCluster) must work regardless.
-resource "aws_iam_role_policy" "task_eks" {
-  name = "${var.project}-task-eks-read"
-  role = aws_iam_role.task.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["eks:DescribeCluster", "eks:ListClusters", "eks:DescribeAccessEntry"]
-      Resource = "*"
-    }]
-  })
-}
-
 output "onboarded_eks_clusters" {
   description = "Onboarded EKS clusters -> endpoint/ARN (for P3 dashboard kubeconfig registration)."
   value = {

@@ -7,6 +7,7 @@ export interface Finding {
   check: CheckKey;
   resource_id: string;
   region: string;
+  account_id?: string; // 'self' = host; 12-digit for member accounts (multi-account scope)
   title: string;
   severity: 'high' | 'medium' | 'low';
   detail: Record<string, unknown>;
@@ -42,7 +43,8 @@ export const CHECK_META: Record<CheckKey, { label: string; severity: Finding['se
   },
 };
 
-// Each query returns { resource_id, region, detail } over inventory_resources (account_id='self').
+// Each query returns { resource_id, region, account_id, detail } over inventory_resources,
+// scoped by $1 = account_id[] (the route resolves '__all__' to the enabled-account list).
 // `detail` carries the JSONB row (data) for the slide-in panel.
 // open_sg: the cidr predicate is anchored to the cidr KEY (so a description containing 0.0.0.0/0
 // cannot false-trigger) and covers IPv4 0.0.0.0/0 + IPv6 ::/0 in both Steampipe key casings —
@@ -57,37 +59,38 @@ export const PUBLIC_S3_WHERE =
   + " OR (data->>'block_public_policy')='false' )";
 
 export const FINDING_SQL: Record<Exclude<CheckKey, 'ecr_cve'>, string> = {
-  public_s3: `SELECT resource_id, region, data AS detail
+  public_s3: `SELECT resource_id, region, account_id, data AS detail
     FROM inventory_resources
-    WHERE account_id='self' AND resource_type='s3_public_access'
+    WHERE account_id = ANY($1) AND resource_type='s3_public_access'
       AND ${PUBLIC_S3_WHERE}
     ORDER BY resource_id`,
-  open_sg: `SELECT resource_id, region, data AS detail
+  open_sg: `SELECT resource_id, region, account_id, data AS detail
     FROM inventory_resources
-    WHERE account_id='self' AND resource_type='security_group'
+    WHERE account_id = ANY($1) AND resource_type='security_group'
       AND (data->'ip_permissions')::text ~ '"(cidr_ip|CidrIp|cidr_ipv6|CidrIpv6)"\\s*:\\s*"(0\\.0\\.0\\.0/0|::/0)"'
     ORDER BY resource_id`,
-  unencrypted_ebs: `SELECT resource_id, region, data AS detail
+  unencrypted_ebs: `SELECT resource_id, region, account_id, data AS detail
     FROM inventory_resources
-    WHERE account_id='self' AND resource_type='ebs_volume'
+    WHERE account_id = ANY($1) AND resource_type='ebs_volume'
       AND (data->>'encrypted')='false'
     ORDER BY resource_id`,
-  iam_no_mfa: `SELECT resource_id, region, data AS detail
+  iam_no_mfa: `SELECT resource_id, region, account_id, data AS detail
     FROM inventory_resources
-    WHERE account_id='self' AND resource_type='iam_user'
+    WHERE account_id = ANY($1) AND resource_type='iam_user'
       AND (data->>'mfa_enabled')='false'
     ORDER BY resource_id`,
 };
 
 export function rowToFinding(
   check: CheckKey,
-  row: { resource_id: string; region: string; detail: unknown },
+  row: { resource_id: string; region: string; account_id?: string; detail: unknown },
 ): Finding {
   const meta = CHECK_META[check];
   return {
     check,
     resource_id: row.resource_id,
     region: row.region,
+    ...(row.account_id ? { account_id: row.account_id } : {}),
     title: `${meta.label}: ${row.resource_id}`,
     severity: meta.severity,
     detail: (row.detail && typeof row.detail === 'object' ? row.detail : {}) as Record<string, unknown>,

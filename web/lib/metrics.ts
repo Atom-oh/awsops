@@ -1,5 +1,5 @@
 import { CloudWatchClient, GetMetricDataCommand, ListMetricsCommand } from '@aws-sdk/client-cloudwatch';
-import { KafkaClient, GetBootstrapBrokersCommand } from '@aws-sdk/client-kafka';
+import { KafkaClient, GetBootstrapBrokersCommand, ListNodesCommand } from '@aws-sdk/client-kafka';
 import { PricingClient, GetProductsCommand } from '@aws-sdk/client-pricing';
 import { getModelLabel, getModelPricing, computeCost, RANGE_CONFIGS, type ModelPricing, type CostBreakdown } from './bedrock';
 import { assumedClient } from './aws-assume';
@@ -451,3 +451,197 @@ export async function resourceSeries(kind: string, id: string, range: string): P
 export const SERIES_KEYS: Record<string, string[]> = Object.fromEntries(
   Object.entries(SERIES_METRICS).map(([k, v]) => [k, v.metrics.map((m) => m.key)]),
 );
+
+// ── v1-parity per-entity live metric fleets (요청: ElastiCache 노드 / OpenSearch 도메인 / MSK 브로커) ──
+// Same GetMetricData batching discipline as ec2FleetLive: Period 300, last-1h window, latest
+// value only (Values[0]), one call per ≤480-query chunk, every failure degrades to nulls.
+
+async function fleetLatest(
+  namespace: string,
+  entities: string[],
+  dimsFor: (id: string) => { Name: string; Value: string }[],
+  metrics: readonly { key: string; name: string; stat: string }[],
+  region?: string,
+): Promise<Record<string, Record<string, number | null>>> {
+  const out: Record<string, Record<string, number | null>> = {};
+  if (!entities.length) return out;
+  for (const id of entities) out[id] = Object.fromEntries(metrics.map((m) => [m.key, null]));
+  try {
+    // CloudWatch metrics live in the resource's region — an off-region cluster (e.g. a DR MSK
+    // in us-west-2) needs its own regional client; default stays the deployment region.
+    const client = region && region !== REGION ? new CloudWatchClient({ region }) : cwClient();
+    const CHUNK = Math.max(1, Math.floor(480 / metrics.length));
+    for (let c = 0; c < entities.length; c += CHUNK) {
+      const chunk = entities.slice(c, c + CHUNK);
+      const r = await client.send(new GetMetricDataCommand({
+        StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+        MetricDataQueries: chunk.flatMap((id, i) =>
+          metrics.map((m) => ({
+            Id: `${m.key}_i${i}`, ReturnData: true,
+            MetricStat: { Metric: { Namespace: namespace, MetricName: m.name, Dimensions: dimsFor(id) }, Period: 300, Stat: m.stat },
+          }))),
+      }));
+      for (const res of r.MetricDataResults ?? []) {
+        const mm = (res.Id ?? '').match(/^(\w+?)_i(\d+)$/);
+        if (!mm) continue;
+        const id = chunk[Number(mm[2])];
+        const v = res.Values?.[0];
+        if (id && typeof v === 'number') out[id][mm[1]] = v;
+      }
+    }
+  } catch { /* nulls */ }
+  return out;
+}
+
+const EC_FLEET_METRICS = [
+  { key: 'cpu', name: 'CPUUtilization', stat: 'Average' },
+  { key: 'ecpu', name: 'EngineCPUUtilization', stat: 'Average' },
+  { key: 'mem', name: 'FreeableMemory', stat: 'Average' },
+  { key: 'conn', name: 'CurrConnections', stat: 'Average' },
+  { key: 'netIn', name: 'NetworkBytesIn', stat: 'Sum' },
+  { key: 'netOut', name: 'NetworkBytesOut', stat: 'Sum' },
+] as const;
+/** Per-CacheClusterId latest metrics (v1 elasticache 노드 메트릭 — cluster-level, applied to each node). */
+export function elasticacheFleetLive(ids: string[]) {
+  return fleetLatest('AWS/ElastiCache', ids, (id) => [{ Name: 'CacheClusterId', Value: id }], EC_FLEET_METRICS);
+}
+
+const OS_FLEET_METRICS = [
+  { key: 'cpu', name: 'CPUUtilization', stat: 'Average' },
+  { key: 'jvm', name: 'JVMMemoryPressure', stat: 'Average' },
+  { key: 'freeStorage', name: 'FreeStorageSpace', stat: 'Average' },
+  { key: 'green', name: 'ClusterStatus.green', stat: 'Maximum' },
+  { key: 'yellow', name: 'ClusterStatus.yellow', stat: 'Maximum' },
+  { key: 'red', name: 'ClusterStatus.red', stat: 'Maximum' },
+  { key: 'nodes', name: 'Nodes', stat: 'Average' },
+  { key: 'docs', name: 'SearchableDocuments', stat: 'Average' },
+  { key: 'searchLatency', name: 'SearchLatency', stat: 'Average' },
+  { key: 'indexLatency', name: 'IndexingLatency', stat: 'Average' },
+  { key: 'searchRate', name: 'SearchRate', stat: 'Sum' },
+  { key: 'indexRate', name: 'IndexingRate', stat: 'Sum' },
+] as const;
+/** Per-domain latest metrics (v1 opensearch 도메인 메트릭). AWS/ES requires the ClientId dimension. */
+export function opensearchFleetLive(domains: string[]) {
+  return fleetLatest('AWS/ES', domains, (id) => [
+    { Name: 'DomainName', Value: id },
+    { Name: 'ClientId', Value: process.env.AWS_ACCOUNT_ID ?? '' },
+  ], OS_FLEET_METRICS);
+}
+
+export interface MskNode {
+  nodeType: string; brokerId: number | null; instanceType: string | null;
+  clientVpcIp: string | null; eni: string | null; endpoints: string[];
+}
+/** Broker/controller nodes for an MSK cluster (kafka ListNodes — Steampipe has no node table). */
+export async function mskListNodes(clusterArn: string): Promise<MskNode[]> {
+  try {
+    // kafka is regional — parse the cluster's region off the ARN (DR clusters live off-region).
+    const region = clusterArn.split(':')[3] || REGION;
+    const client = new KafkaClient({ region });
+    const r = await client.send(new ListNodesCommand({ ClusterArn: clusterArn, MaxResults: 100 }));
+    return (r.NodeInfoList ?? []).map((n) => ({
+      nodeType: n.NodeType ?? 'BROKER',
+      brokerId: n.BrokerNodeInfo?.BrokerId != null ? Math.round(n.BrokerNodeInfo.BrokerId) : null,
+      instanceType: n.InstanceType ?? null,
+      clientVpcIp: n.BrokerNodeInfo?.ClientVpcIpAddress ?? null,
+      eni: n.BrokerNodeInfo?.AttachedENIId ?? null,
+      endpoints: n.BrokerNodeInfo?.Endpoints ?? n.ControllerNodeInfo?.Endpoints ?? [],
+    }));
+  } catch {
+    return [];
+  }
+}
+
+const MSK_BROKER_METRICS = [
+  { key: 'cpuUser', name: 'CpuUser', stat: 'Average' },
+  { key: 'cpuSystem', name: 'CpuSystem', stat: 'Average' },
+  { key: 'memUsed', name: 'MemoryUsed', stat: 'Average' },
+  { key: 'memFree', name: 'MemoryFree', stat: 'Average' },
+  { key: 'bytesIn', name: 'BytesInPerSec', stat: 'Average' },
+  { key: 'bytesOut', name: 'BytesOutPerSec', stat: 'Average' },
+  // 진단 계층 확장 (owner 가이드): 디스크 고갈이 가장 흔한 장애 원인 (85% 임계),
+  // 복제 건강성(URP/MinISR)은 정상값 0, 스로틀은 쿼터/네트워크 병목 신호.
+  { key: 'dataDisk', name: 'KafkaDataLogsDiskUsed', stat: 'Average' },
+  { key: 'rootDisk', name: 'RootDiskUsed', stat: 'Average' },
+  { key: 'msgsIn', name: 'MessagesInPerSec', stat: 'Average' },
+  { key: 'produceThrottle', name: 'ProduceThrottleTime', stat: 'Average' },
+  { key: 'fetchThrottle', name: 'FetchThrottleTime', stat: 'Average' },
+  { key: 'urp', name: 'UnderReplicatedPartitions', stat: 'Maximum' },
+  { key: 'underMinIsr', name: 'UnderMinIsrPartitionCount', stat: 'Maximum' },
+] as const;
+/** Per-broker latest metrics (v1 msk 브로커 메트릭 — dims 'Cluster Name' + 'Broker ID'). */
+export function mskBrokerFleetLive(clusterName: string, brokerIds: number[], region?: string) {
+  return fleetLatest('AWS/Kafka', brokerIds.map(String), (id) => [
+    { Name: 'Cluster Name', Value: clusterName },
+    { Name: 'Broker ID', Value: id },
+  ], MSK_BROKER_METRICS, region);
+}
+
+const MSK_CLUSTER_HEALTH_METRICS = [
+  { key: 'activeControllers', name: 'ActiveControllerCount', stat: 'Maximum' },
+  { key: 'offlinePartitions', name: 'OfflinePartitionsCount', stat: 'Maximum' },
+  { key: 'globalPartitions', name: 'GlobalPartitionCount', stat: 'Maximum' },
+] as const;
+/** Cluster-level health metrics (v1 gap — 진단 우선순위 표: 컨트롤러=1, 오프라인 파티션=0). */
+export async function mskClusterHealth(clusterName: string, region?: string): Promise<Record<string, number | null>> {
+  const r = await fleetLatest('AWS/Kafka', [clusterName], (id) => [{ Name: 'Cluster Name', Value: id }], MSK_CLUSTER_HEALTH_METRICS, region);
+  return r[clusterName] ?? {};
+}
+
+export interface MskOffsetLagRow { consumerGroup: string; topic: string; maxOffsetLag: number | null }
+/** Consumer-group MaxOffsetLag rows for a cluster — series discovered via ListMetrics (the
+ *  Consumer Group/Topic dimension values aren't known upfront), then one GetMetricData batch.
+ *  실무 최우선 지표 (owner 가이드): lag이 계속 증가하면 컨슈머가 프로듀서를 못 따라가는 중. */
+export async function mskOffsetLags(clusterName: string, region?: string, cap = 20): Promise<MskOffsetLagRow[]> {
+  try {
+    const client = region && region !== REGION ? new CloudWatchClient({ region }) : cwClient();
+    const lm = await client.send(new ListMetricsCommand({
+      Namespace: 'AWS/Kafka', MetricName: 'MaxOffsetLag',
+      Dimensions: [{ Name: 'Cluster Name', Value: clusterName }],
+    }));
+    const series = (lm.Metrics ?? []).slice(0, cap).map((m) => {
+      const dim = (n: string) => m.Dimensions?.find((d) => d.Name === n)?.Value ?? '';
+      return { consumerGroup: dim('Consumer Group'), topic: dim('Topic'), dims: m.Dimensions ?? [] };
+    }).filter((x) => x.consumerGroup || x.topic);
+    if (!series.length) return [];
+    const r = await client.send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+      MetricDataQueries: series.map((x, i) => ({
+        Id: `lag_i${i}`, ReturnData: true,
+        MetricStat: { Metric: { Namespace: 'AWS/Kafka', MetricName: 'MaxOffsetLag', Dimensions: x.dims }, Period: 300, Stat: 'Maximum' },
+      })),
+    }));
+    const byIdx = new Map<number, number>();
+    for (const res of r.MetricDataResults ?? []) {
+      const mm = (res.Id ?? '').match(/^lag_i(\d+)$/);
+      const v = res.Values?.[0];
+      if (mm && typeof v === 'number') byIdx.set(Number(mm[1]), v);
+    }
+    return series
+      .map((x, i) => ({ consumerGroup: x.consumerGroup, topic: x.topic, maxOffsetLag: byIdx.get(i) ?? null }))
+      .sort((a, b) => (b.maxOffsetLag ?? -1) - (a.maxOffsetLag ?? -1));
+  } catch {
+    return [];
+  }
+}
+
+const RDS_FLEET_METRICS = [
+  { key: 'cpu', name: 'CPUUtilization', stat: 'Average' },
+  { key: 'freeStorage', name: 'FreeStorageSpace', stat: 'Average' },
+  { key: 'freeMem', name: 'FreeableMemory', stat: 'Average' },
+  { key: 'swap', name: 'SwapUsage', stat: 'Average' },
+  { key: 'conn', name: 'DatabaseConnections', stat: 'Average' },
+  { key: 'readLat', name: 'ReadLatency', stat: 'Average' },
+  { key: 'writeLat', name: 'WriteLatency', stat: 'Average' },
+  { key: 'readIops', name: 'ReadIOPS', stat: 'Average' },
+  { key: 'writeIops', name: 'WriteIOPS', stat: 'Average' },
+  { key: 'diskQueue', name: 'DiskQueueDepth', stat: 'Average' },
+  // 크레딧 계열 (owner 가이드: 프로덕션에서 자주 놓치는 함정) — gp2/T계열만 값이 존재.
+  { key: 'burst', name: 'BurstBalance', stat: 'Average' },
+  { key: 'cpuCredit', name: 'CPUCreditBalance', stat: 'Average' },
+  { key: 'replicaLag', name: 'ReplicaLag', stat: 'Average' },
+] as const;
+/** Per-DBInstance latest metrics (owner 가이드: RDS 진단 계층 — 인스턴스 레벨 CloudWatch). */
+export function rdsFleetLive(ids: string[]) {
+  return fleetLatest('AWS/RDS', ids, (id) => [{ Name: 'DBInstanceIdentifier', Value: id }], RDS_FLEET_METRICS);
+}

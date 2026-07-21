@@ -34,15 +34,20 @@ describe('graph-query functions', () => {
   it('downstream defaults to class=flow + MAX_DEPTH', async () => {
     const query = vi.fn(() => Promise.resolve({ rows: [{ id: 'x', depth: 1 }] }));
     const r = await downstream({ query } as never, 'cf:D1');
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('WITH RECURSIVE'), ['cf:D1', 'flow', MAX_DEPTH]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('WITH RECURSIVE'), ['cf:D1', 'flow', MAX_DEPTH, 'self']);
     expect(r[0].id).toBe('x');
   });
   it('passes class + clamped depth from opts', async () => {
     const query = vi.fn(() => Promise.resolve({ rows: [] }));
     await downstream({ query } as never, 'alb:lb', { cls: 'infra', depth: 2 });
-    expect(query).toHaveBeenCalledWith(expect.anything(), ['alb:lb', 'infra', 2]);
+    expect(query).toHaveBeenCalledWith(expect.anything(), ['alb:lb', 'infra', 2, 'self']);
     await downstream({ query } as never, 'alb:lb', { cls: 'infra', depth: 999 });
-    expect(query).toHaveBeenCalledWith(expect.anything(), ['alb:lb', 'infra', MAX_DEPTH]); // clamped
+    expect(query).toHaveBeenCalledWith(expect.anything(), ['alb:lb', 'infra', MAX_DEPTH, 'self']); // clamped
+  });
+  it('passes the account scope through to the traversal params', async () => {
+    const query = vi.fn(() => Promise.resolve({ rows: [] }));
+    await downstream({ query } as never, 'x', { cls: 'infra', depth: 2, account: '222233334444' });
+    expect(query).toHaveBeenCalledWith(expect.anything(), ['x', 'infra', 2, '222233334444']);
   });
   it('blastRadius is the upstream traversal', () => {
     expect(blastRadius).toBe(upstream);

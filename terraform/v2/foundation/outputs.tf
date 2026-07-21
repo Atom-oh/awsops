@@ -1,9 +1,9 @@
 output "cloudfront_domain" {
-  value = one(aws_cloudfront_distribution.main[*].domain_name)
+  value = aws_cloudfront_distribution.main.domain_name
 }
 
 output "distribution_id" {
-  value = one(aws_cloudfront_distribution.main[*].id)
+  value = aws_cloudfront_distribution.main.id
 }
 
 output "public_url" {
@@ -11,7 +11,7 @@ output "public_url" {
 }
 
 output "alb_arn" {
-  value = aws_lb.spine.arn
+  value = aws_lb.internal.arn
 }
 
 output "ecr_uri" {

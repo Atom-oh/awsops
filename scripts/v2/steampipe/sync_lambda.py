@@ -208,7 +208,7 @@ QUERIES = {
     "elasticache": (
         # NON-metric detail fields only; v1's ecMetrics CloudWatch JOIN is live/heavy → F5, not stored here.
         "SELECT cache_cluster_id, region, account_id, arn, engine, engine_version, cache_node_type, "
-        "cache_cluster_status, num_cache_nodes, replication_group_id, preferred_availability_zone, "
+        "cache_cluster_status, num_cache_nodes, cache_nodes, replication_group_id, preferred_availability_zone, "
         "cache_subnet_group_name, at_rest_encryption_enabled, transit_encryption_enabled, "
         "auth_token_enabled, auto_minor_version_upgrade, snapshot_retention_limit, snapshot_window, "
         "preferred_maintenance_window, cache_cluster_create_time, security_groups, tags "

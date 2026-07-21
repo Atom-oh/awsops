@@ -6,7 +6,7 @@ import IntegrationIcon from '@/components/datasources/IntegrationIcon';
 
 // v1-parity Add/Edit form: multiple instances per type, a name, an explicit auth method (optional auth),
 // and a Test-before-save probe. POSTs (create) / PATCHes (update) /api/datasources/manage.
-const DATASOURCE_KINDS = ['prometheus', 'mimir', 'loki', 'tempo', 'clickhouse'] as const;
+const DATASOURCE_KINDS = ['prometheus', 'mimir', 'loki', 'tempo', 'clickhouse', 'jaeger', 'dynatrace', 'datadog'] as const;
 const AUTH_TYPES = [
   { value: 'none', label: 'None (인증 없음)' },
   { value: 'basic', label: 'Basic (사용자/비밀번호)' },
@@ -14,6 +14,19 @@ const AUTH_TYPES = [
   { value: 'custom_header', label: 'Custom header' },
 ] as const;
 const ORG_ID_KINDS = new Set(['loki', 'tempo', 'mimir']); // X-Scope-OrgID multi-tenancy
+// Per-kind endpoint placeholder (SaaS kinds get their real API base as the hint).
+const ENDPOINT_PH: Record<string, string> = {
+  prometheus: 'http://prometheus.internal:9090', mimir: 'http://mimir.internal:9009',
+  loki: 'http://loki.internal:3100', tempo: 'http://tempo.internal:3200',
+  clickhouse: 'http://clickhouse.internal:8123', jaeger: 'http://jaeger-query.internal:16686',
+  dynatrace: 'https://{env}.live.dynatrace.com', datadog: 'https://api.datadoghq.com',
+};
+// Auth hints: Dynatrace uses an API token (Authorization: Api-Token — pick Bearer/token here);
+// Datadog needs the DD-API-KEY + DD-APPLICATION-KEY custom-header PAIR.
+const AUTH_HINT: Record<string, string> = {
+  dynatrace: 'Bearer 선택 후 API 토큰 입력 — 커넥터가 Api-Token 스킴으로 전송합니다 (metrics.read/problems.read 스코프 필요).',
+  datadog: 'Custom header 선택 후 DD-API-KEY / DD-APPLICATION-KEY 두 헤더를 입력하세요.',
+};
 const labelCls = 'block text-[11px] uppercase tracking-wide text-ink-400 mb-1';
 const selectCls = 'w-full rounded-md border border-ink-200 bg-card px-2.5 py-1.5 text-[13px] text-ink-700';
 
@@ -45,7 +58,7 @@ export default function DatasourceForm({
     const c: Record<string, string> = {};
     if (authType === 'basic') { if (creds.username) c.username = creds.username; if (creds.password) c.password = creds.password; }
     if (authType === 'bearer' && creds.token) c.token = creds.token;
-    if (authType === 'custom_header') { if (creds.headerName) c.headerName = creds.headerName; if (creds.headerValue) c.headerValue = creds.headerValue; }
+    if (authType === 'custom_header') { if (creds.headerName) c.headerName = creds.headerName; if (creds.headerValue) c.headerValue = creds.headerValue; if (creds.headerName2) c.headerName2 = creds.headerName2; if (creds.headerValue2) c.headerValue2 = creds.headerValue2; }
     if (ORG_ID_KINDS.has(kind) && creds.org_id) c.org_id = creds.org_id;
     return c;
   };
@@ -102,7 +115,7 @@ export default function DatasourceForm({
 
       <div>
         <label className={labelCls}>Endpoint URL</label>
-        <Input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="http://prometheus.internal:9090" />
+        <Input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder={ENDPOINT_PH[kind] ?? 'http://prometheus.internal:9090'} />
       </div>
 
       <div>
@@ -122,11 +135,19 @@ export default function DatasourceForm({
         <div><label className={labelCls}>Token</label><Input type="password" value={creds.token ?? ''} onChange={(e) => setCred('token', e.target.value)} /></div>
       )}
       {authType === 'custom_header' && (
-        <div className="grid grid-cols-2 gap-2">
-          <div><label className={labelCls}>Header name</label><Input value={creds.headerName ?? ''} onChange={(e) => setCred('headerName', e.target.value)} placeholder="X-API-Key" /></div>
-          <div><label className={labelCls}>Header value</label><Input type="password" value={creds.headerValue ?? ''} onChange={(e) => setCred('headerValue', e.target.value)} /></div>
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className={labelCls}>Header name</label><Input value={creds.headerName ?? ''} onChange={(e) => setCred('headerName', e.target.value)} placeholder={kind === 'datadog' ? 'DD-API-KEY' : 'X-API-Key'} /></div>
+            <div><label className={labelCls}>Header value</label><Input type="password" value={creds.headerValue ?? ''} onChange={(e) => setCred('headerValue', e.target.value)} /></div>
+          </div>
+          {/* Optional SECOND header — Datadog auth is a DD-API-KEY + DD-APPLICATION-KEY pair. */}
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className={labelCls}>Header name 2 (선택)</label><Input value={creds.headerName2 ?? ''} onChange={(e) => setCred('headerName2', e.target.value)} placeholder={kind === 'datadog' ? 'DD-APPLICATION-KEY' : ''} /></div>
+            <div><label className={labelCls}>Header value 2 (선택)</label><Input type="password" value={creds.headerValue2 ?? ''} onChange={(e) => setCred('headerValue2', e.target.value)} /></div>
+          </div>
+        </>
       )}
+      {AUTH_HINT[kind] && <p className="text-[12px] text-ink-400">{AUTH_HINT[kind]}</p>}
       {ORG_ID_KINDS.has(kind) && (
         <div><label className={labelCls}>Org ID (X-Scope-OrgID, 선택)</label><Input value={creds.org_id ?? ''} onChange={(e) => setCred('org_id', e.target.value)} /></div>
       )}

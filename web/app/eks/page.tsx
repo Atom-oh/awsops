@@ -66,6 +66,11 @@ export default function EksPage() {
   const [authToken, setAuthToken] = useState('');
   const [authRole, setAuthRole] = useState('');
   const [authExtId, setAuthExtId] = useState('');
+  // Page-level 클러스터 등록 panel — one entry point covering all three register
+  // modes (Access Entry 조회 등록 / SA 토큰 / AssumeRole) with a cluster picker.
+  const [regOpen, setRegOpen] = useState(false);
+  const [regCluster, setRegCluster] = useState('');
+  const [regMode, setRegMode] = useState<'entry' | 'sa-token' | 'assume-role'>('sa-token');
   const [busyCluster, setBusyCluster] = useState('');
   const [fleet, setFleet] = useState<FleetCluster[]>([]);
   const [copied, setCopied] = useState('');
@@ -121,7 +126,7 @@ export default function EksPage() {
     setBusyCluster(cluster); setNotice(''); setGuide(null);
     try {
       const res = await fetch(`/api/eks/${encodeURIComponent(cluster)}/register`, { method: 'POST' });
-      if (res.status === 200) { setNotice(`${cluster} 등록 완료 — 바로 조회할 수 있습니다.`); load(); loadFleet(); }
+      if (res.status === 200) { setNotice(`${cluster} 등록 완료 — 바로 조회할 수 있습니다.`); setRegOpen(false); load(); loadFleet(); }
       else if (res.status === 409) { const d = await res.json(); setGuide({ cluster, data: d.guide }); }
       else if (res.status === 403) setNotice('관리자 전용 기능입니다.');
       else if (res.status === 503) setNotice('등록 저장소(Aurora)가 설정되지 않았습니다.');
@@ -130,9 +135,9 @@ export default function EksPage() {
     setBusyCluster('');
   }
 
-  async function saveAuth(cluster: string) {
+  async function saveAuth(cluster: string, mode: 'sa-token' | 'assume-role') {
     setBusyCluster(cluster); setNotice('');
-    const auth = authMode === 'sa-token'
+    const auth = mode === 'sa-token'
       ? { mode: 'sa-token', token: authToken.trim() }
       : { mode: 'assume-role', roleArn: authRole.trim(), ...(authExtId.trim() ? { externalId: authExtId.trim() } : {}) };
     try {
@@ -143,7 +148,7 @@ export default function EksPage() {
       });
       if (res.status === 200) {
         setNotice(`${cluster} 인증 저장 완료 — 바로 조회할 수 있습니다.`);
-        setAuthFor(null); setAuthToken(''); setAuthRole(''); setAuthExtId('');
+        setAuthFor(null); setRegOpen(false); setAuthToken(''); setAuthRole(''); setAuthExtId('');
         load(); loadFleet();
       } else {
         const d = await res.json().catch(() => null);
@@ -232,7 +237,26 @@ export default function EksPage() {
       <PageHeader
         title="EKS Clusters"
         subtitle="Access Entry가 있는 클러스터는 바로 조회 등록할 수 있습니다 (v1의 kubeconfig 등록 대체)."
-        right={<RefreshButton busy={busy} onClick={refresh} capturedAt={capturedAt} />}
+        right={
+          <div className="flex items-center gap-2">
+            {admin && (
+              <button
+                className="rounded-md border border-brand-300 bg-brand-500/10 px-3 py-1.5 text-[12px] font-medium text-brand-700 hover:bg-brand-500/20"
+                onClick={() => {
+                  setRegOpen((o) => !o);
+                  setAuthFor(null);
+                  setRegMode('sa-token');
+                  // Default the picker to the first not-yet-connected cluster.
+                  const first = (rows ?? []).find((r) => r.access !== 'connected') ?? (rows ?? [])[0];
+                  if (first) setRegCluster(first.name);
+                }}
+              >
+                <span className="mr-1">+</span>클러스터 등록
+              </button>
+            )}
+            <RefreshButton busy={busy} onClick={refresh} capturedAt={capturedAt} />
+          </div>
+        }
       />
       <div className="px-8 py-8 flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
@@ -247,6 +271,91 @@ export default function EksPage() {
       {err && <div className="text-[13px] text-rose-600">로드 실패: {err}</div>}
       {notice && <div className="text-[13px] text-brand-700">{notice}</div>}
       {!rows && !err && <div className="text-ink-400">로딩 중…</div>}
+
+      {admin && regOpen && (
+        <Card title="클러스터 등록" subtitle="클러스터를 선택하고 연결 방식을 지정하세요 — 인증은 Aurora에 저장되며 조회 전용입니다 (v1 kubeconfig 등록 대응).">
+          <div className="flex flex-col gap-3 text-[12px]">
+            <label className="flex flex-col gap-1">
+              <span className="text-ink-500">클러스터</span>
+              <select
+                value={regCluster}
+                onChange={(e) => setRegCluster(e.target.value)}
+                className="w-full max-w-md rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[12px]"
+              >
+                {(rows ?? []).map((r) => (
+                  <option key={r.name} value={r.name}>
+                    {r.name} {r.access === 'connected' ? '· 연결됨' : '· 미연결'}{r.authMode ? ` (${r.authMode})` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-1.5">
+                <input type="radio" checked={regMode === 'sa-token'} onChange={() => setRegMode('sa-token')} />
+                ServiceAccount 토큰
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input type="radio" checked={regMode === 'assume-role'} onChange={() => setRegMode('assume-role')} />
+                AssumeRole (Role ARN)
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input type="radio" checked={regMode === 'entry'} onChange={() => setRegMode('entry')} />
+                Access Entry 조회 등록
+              </label>
+            </div>
+            {regMode === 'sa-token' && (
+              <>
+                <textarea
+                  value={authToken}
+                  onChange={(e) => setAuthToken(e.target.value)}
+                  placeholder="kubectl create token <sa> --duration=8760h 결과 또는 SA Secret의 token"
+                  rows={3}
+                  className="w-full rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[11px]"
+                />
+                <p className="text-ink-400">
+                  클러스터에 읽기 전용 ServiceAccount(nodes/pods/deployments/services/namespaces/events get·list·watch)를 만들고 토큰을 붙여넣으세요 — AWS 쪽 설정(Access Entry)이 필요 없습니다.
+                </p>
+              </>
+            )}
+            {regMode === 'assume-role' && (
+              <div className="flex flex-col gap-2">
+                <input
+                  value={authRole}
+                  onChange={(e) => setAuthRole(e.target.value)}
+                  placeholder="arn:aws:iam::123456789012:role/eks-read (클러스터에 Access Entry 보유)"
+                  className="w-full max-w-xl rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[11px]"
+                />
+                <input
+                  value={authExtId}
+                  onChange={(e) => setAuthExtId(e.target.value)}
+                  placeholder="External ID (선택)"
+                  className="w-full max-w-xl rounded-md border border-ink-200 bg-card px-2 py-1.5 font-mono text-[11px]"
+                />
+                <p className="text-ink-400">해당 클러스터에 Access Entry가 있는 IAM Role을 AssumeRole 해서 조회합니다.</p>
+              </div>
+            )}
+            {regMode === 'entry' && (
+              <p className="text-ink-400">
+                웹 task role의 Access Entry가 이미 있는 클러스터를 바로 조회 등록합니다 — 없으면 온보딩 스크립트를 안내합니다.
+              </p>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                className={btn}
+                disabled={
+                  !regCluster ||
+                  busyCluster === regCluster ||
+                  (regMode === 'sa-token' ? !authToken.trim() : regMode === 'assume-role' ? !authRole.trim() : false)
+                }
+                onClick={() => (regMode === 'entry' ? register(regCluster) : saveAuth(regCluster, regMode))}
+              >
+                등록
+              </button>
+              <button className={btn} onClick={() => setRegOpen(false)}>취소</button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {guide && (
         <div className="rounded-lg border border-ink-200 bg-paper-muted p-4 flex flex-col gap-3">
@@ -320,7 +429,7 @@ export default function EksPage() {
                       <button className={btn} onClick={() => setGuide({ cluster: c.name, data: c.guide! })}>스크립트</button>
                     )}
                     {admin && (
-                      <button className={btn} onClick={() => { setAuthFor(authFor === c.name ? null : c.name); setAuthMode('sa-token'); }}>
+                      <button className={btn} onClick={() => { setAuthFor(authFor === c.name ? null : c.name); setAuthMode('sa-token'); setRegOpen(false); }}>
                         {c.authMode ? `인증 변경 (${c.authMode})` : '인증 등록'}
                       </button>
                     )}
@@ -372,7 +481,7 @@ export default function EksPage() {
                       <button
                         className={btn}
                         disabled={busyCluster === c.name || (authMode === 'sa-token' ? !authToken.trim() : !authRole.trim())}
-                        onClick={() => saveAuth(c.name)}
+                        onClick={() => saveAuth(c.name, authMode)}
                       >
                         저장
                       </button>

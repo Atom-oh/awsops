@@ -11,7 +11,8 @@ export const FANOUT_CAP = 20;   // max neighbors expanded PER node (hairball-hub
 
 // down = follow source→target (what this node fronts/leads to);
 // up   = follow target→source (what leads to / depends on this node).
-// Params: $1 = start node id, $2 = class, $3 = max depth (caller clamps to <= MAX_DEPTH).
+// Params: $1 = start node id, $2 = class, $3 = max depth (caller clamps to <= MAX_DEPTH),
+//         $4 = account_id ('self' | 12-digit | '__all__' = no account filter).
 export function traversalSql(dir: 'down' | 'up'): string {
   const cur = dir === 'down' ? 'source' : 'target';
   const next = dir === 'down' ? 'target' : 'source';
@@ -25,7 +26,7 @@ export function traversalSql(dir: 'down' | 'up'): string {
               JOIN LATERAL (
                 SELECT e.${next} AS next
                   FROM topology_edges e
-                 WHERE e.account_id = 'self' AND e.class = $2 AND e.${cur} = w.node
+                 WHERE ($4 = '__all__' OR e.account_id = $4) AND e.class = $2 AND e.${cur} = w.node
                  ORDER BY e.${next}
                  LIMIT ${FANOUT_CAP}
               ) nbr ON true
@@ -33,7 +34,7 @@ export function traversalSql(dir: 'down' | 'up'): string {
                -- don't expand FROM a default security group (huge hub) unless it is the start node
                AND (w.depth = 0 OR NOT EXISTS (
                  SELECT 1 FROM topology_nodes n
-                  WHERE n.account_id = 'self' AND n.class = $2 AND n.id = w.node
+                  WHERE ($4 = '__all__' OR n.account_id = $4) AND n.class = $2 AND n.id = w.node
                     AND n.kind = 'sg' AND (n.meta ->> 'default') = 'true'
                ))
           ) CYCLE node SET is_cycle USING path
@@ -47,12 +48,12 @@ const clampDepth = (d?: number): number => {
   return Number.isFinite(n) ? Math.min(MAX_DEPTH, Math.max(1, n)) : MAX_DEPTH; // NaN/Infinity → MAX_DEPTH
 };
 
-export async function downstream(pool: Pool, id: string, opts?: { cls?: string; depth?: number }): Promise<GraphReach[]> {
-  const r = await pool.query(traversalSql('down'), [id, opts?.cls ?? 'flow', clampDepth(opts?.depth)]);
+export async function downstream(pool: Pool, id: string, opts?: { cls?: string; depth?: number; account?: string }): Promise<GraphReach[]> {
+  const r = await pool.query(traversalSql('down'), [id, opts?.cls ?? 'flow', clampDepth(opts?.depth), opts?.account ?? 'self']);
   return r.rows as GraphReach[];
 }
-export async function upstream(pool: Pool, id: string, opts?: { cls?: string; depth?: number }): Promise<GraphReach[]> {
-  const r = await pool.query(traversalSql('up'), [id, opts?.cls ?? 'flow', clampDepth(opts?.depth)]);
+export async function upstream(pool: Pool, id: string, opts?: { cls?: string; depth?: number; account?: string }): Promise<GraphReach[]> {
+  const r = await pool.query(traversalSql('up'), [id, opts?.cls ?? 'flow', clampDepth(opts?.depth), opts?.account ?? 'self']);
   return r.rows as GraphReach[];
 }
 // Blast radius = everything that depends on this node (reached by following edges backwards).

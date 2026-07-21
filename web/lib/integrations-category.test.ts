@@ -6,9 +6,9 @@ import {
 } from './integrations-category';
 
 describe('DATASOURCE_KINDS', () => {
-  it('is exactly the 5 query-language observability kinds', () => {
+  it('is exactly the 8 query-language observability kinds', () => {
     expect([...DATASOURCE_KINDS].sort()).toEqual(
-      ['clickhouse', 'loki', 'mimir', 'prometheus', 'tempo'].sort(),
+      ['clickhouse', 'datadog', 'dynatrace', 'jaeger', 'loki', 'mimir', 'prometheus', 'tempo'].sort(),
     );
   });
 });
@@ -18,7 +18,7 @@ describe('isDatasourceKind', () => {
     for (const k of DATASOURCE_KINDS) expect(isDatasourceKind(k)).toBe(true);
   });
   it('is false for connector / non-datasource kinds', () => {
-    for (const k of ['notion', 'slack', 'jira', 'grafana', 'datadog', 'github', 'pagerduty', '']) {
+    for (const k of ['notion', 'slack', 'jira', 'grafana', 'github', 'pagerduty', '']) {
       expect(isDatasourceKind(k)).toBe(false);
     }
   });

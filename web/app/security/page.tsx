@@ -11,6 +11,7 @@ import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import RefreshButton from '@/components/ui/RefreshButton';
 import { CHECK_META, type CheckKey, type Finding } from '@/lib/security-findings';
+import { useActiveScope, scopeParams } from '@/lib/account-context';
 
 const CHECKS = Object.keys(CHECK_META) as CheckKey[];
 
@@ -24,6 +25,11 @@ interface ApiResp {
   summary: Partial<Record<CheckKey, number>>;
   findings: Partial<Record<CheckKey, Finding[]>>;
 }
+
+// Fixed CVE-severity slice colors (v1 parity: red/orange/purple/cyan; v2 chart-palette hues).
+const CVE_SEV_COLORS: Record<string, string> = {
+  CRITICAL: '#D13212', HIGH: '#F59E0B', MEDIUM: '#7B26FF', LOW: '#39C2B0', UNKNOWN: '#AFBAC3',
+};
 
 const SEV_TONE: Record<Finding['severity'], 'negative' | 'brand' | 'neutral'> = {
   high: 'negative',
@@ -64,14 +70,16 @@ const CHECK_COLUMNS: Record<CheckKey, { key: string; label: string }[]> = {
     { key: 'scan_completed_at', label: 'Scanned' },
   ],
 };
-const columnsFor = (k: CheckKey) => [
+const columnsFor = (k: CheckKey, multiAccount: boolean) => [
   { key: 'resource_id', label: 'Resource' },
+  ...(multiAccount ? [{ key: 'account_id', label: 'Account' }] : []),
   { key: 'region', label: 'Region' },
   ...CHECK_COLUMNS[k],
   { key: 'severity', label: 'Severity' },
 ];
 
 export default function SecurityPage() {
+  const [scope] = useActiveScope();
   const [data, setData] = useState<ApiResp | null>(null);
   const [active, setActive] = useState<CheckKey>(CHECKS[0]);
   const [selected, setSelected] = useState<Finding | null>(null);
@@ -81,13 +89,13 @@ export default function SecurityPage() {
   const load = useCallback(async () => {
     setErr('');
     try {
-      const res = await fetch('/api/security');
+      const res = await fetch(`/api/security?${scopeParams(scope)}`);
       const body = (await res.json()) as ApiResp;
       setData(body);
     } catch {
       setErr('보안 점검 데이터를 불러오지 못했습니다.');
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     void load();
@@ -123,6 +131,21 @@ export default function SecurityPage() {
   })();
 
   const activeFindings = findings[active] ?? [];
+  const multiAccount = scope.accounts === '__all__' || (Array.isArray(scope.accounts) && scope.accounts.length > 1);
+
+  // v1 'CVE Severity Distribution' parity — per-CVE-severity totals summed from the ECR scan
+  // details (each finding carries critical/high/medium/low counts), with fixed severity colors.
+  const cveSevData = (() => {
+    const t = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+    for (const f of findings.ecr_cve ?? []) {
+      const d = f.detail as Record<string, unknown>;
+      t.CRITICAL += Number(d.critical) || 0;
+      t.HIGH += Number(d.high) || 0;
+      t.MEDIUM += Number(d.medium) || 0;
+      t.LOW += Number(d.low) || 0;
+    }
+    return Object.entries(t).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value }));
+  })();
 
   return (
     <div>
@@ -161,9 +184,18 @@ export default function SecurityPage() {
               ))}
             </div>
 
-            {/* Severity distribution */}
+            {/* Severity distribution (+ v1-parity CVE severity pie when ECR scans report CVEs) */}
             <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
               <DonutBreakdown title="Findings by severity" data={sevData} nameKey="name" valueKey="value" />
+              {cveSevData.length > 0 && (
+                <DonutBreakdown
+                  title="CVE Severity Distribution"
+                  data={cveSevData}
+                  nameKey="name"
+                  valueKey="value"
+                  colors={CVE_SEV_COLORS}
+                />
+              )}
             </div>
 
             {/* Tabs + table */}
@@ -175,7 +207,7 @@ export default function SecurityPage() {
               />
               <div className="mt-3">
                 <DataTable
-                  columns={columnsFor(active)}
+                  columns={columnsFor(active, multiAccount)}
                   rows={activeFindings.map((f) => ({ ...(f.detail as object), ...f })) as unknown as Record<string, unknown>[]}
                   onRowClick={(row) => setSelected(row as unknown as Finding)}
                   cardTitleKey="resource_id"
@@ -192,6 +224,7 @@ export default function SecurityPage() {
           selected
             ? {
                 resource_id: selected.resource_id,
+                ...(selected.account_id && multiAccount ? { account_id: selected.account_id } : {}),
                 region: selected.region,
                 severity: selected.severity,
                 remediation: selected.remediation,

@@ -26,14 +26,14 @@ describe('GET /api/graph', () => {
     expect(j).toHaveProperty('nodes');
     expect(j).toHaveProperty('edges');
     expect(j.class).toBe('flow');
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['flow']);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['flow', 'self']);
   });
 
   it('honors ?class=infra for the full graph', async () => {
     const r = await GET(new Request('http://x/api/graph?class=infra'));
     const j = await r.json();
     expect(j.class).toBe('infra');
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['infra']);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['infra', 'self']);
   });
 
   it('honors ?class=trace (the third materialized layer)', async () => {
@@ -41,13 +41,23 @@ describe('GET /api/graph', () => {
     const j = await r.json();
     expect(r.status).toBe(200);
     expect(j.class).toBe('trace');
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['trace']);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['trace', 'self']);
   });
 
   it('400 on an unknown class (no silent fall-back to flow)', async () => {
     const r = await GET(new Request('http://x/api/graph?class=bogus'));
     expect(r.status).toBe(400);
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it('scopes to a 12-digit member account and rejects malformed ones', async () => {
+    const ok = await GET(new Request('http://x/api/graph?class=infra&account=222233334444'));
+    expect(ok.status).toBe(200);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('class = $1'), ['infra', '222233334444']);
+    const all = await GET(new Request('http://x/api/graph?class=infra&account=__all__'));
+    expect(all.status).toBe(200);
+    const bad = await GET(new Request('http://x/api/graph?class=infra&account=abc'));
+    expect(bad.status).toBe(400);
   });
 
   it('?from= returns the per-resource subgraph and runs the class+depth traversal', async () => {
@@ -59,7 +69,7 @@ describe('GET /api/graph', () => {
     expect(j).toHaveProperty('nodes');
     expect(j).toHaveProperty('edges');
     expect(j).toHaveProperty('capped');
-    // traversal issued with [id, class, depth]
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('WITH RECURSIVE'), ['alb:lb', 'infra', 2]);
+    // traversal issued with [id, class, depth, account]
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('WITH RECURSIVE'), ['alb:lb', 'infra', 2, 'self']);
   });
 });

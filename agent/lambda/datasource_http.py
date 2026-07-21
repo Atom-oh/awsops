@@ -112,11 +112,13 @@ def auth_headers(creds):
         if creds.get("token"):
             h["Authorization"] = f"Bearer {creds['token']}"
     elif at == "custom_header":
-        name, value = creds.get("headerName"), creds.get("headerValue", "")
-        if name:
-            if not _safe_custom_header(name, value):
-                raise SsrfBlocked("unsafe custom auth header rejected")
-            h[name] = value
+        # Up to TWO custom headers — Datadog needs DD-API-KEY + DD-APPLICATION-KEY as a pair.
+        for nk, vk in (("headerName", "headerValue"), ("headerName2", "headerValue2")):
+            name, value = creds.get(nk), creds.get(vk, "")
+            if name:
+                if not _safe_custom_header(name, value):
+                    raise SsrfBlocked("unsafe custom auth header rejected")
+                h[name] = value
     if creds.get("org_id"):
         h["X-Scope-OrgID"] = creds["org_id"]
     return h

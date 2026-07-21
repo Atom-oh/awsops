@@ -19,6 +19,9 @@ export interface DonutBreakdownProps {
    *  (design handoff 개선안 ②-B: an 8+ slice breakdown otherwise repeats palette colors
    *  and leaves 2–3% slivers unreadable). Default 8 — matches the 8-color palette. */
   maxSlices?: number;
+  /** Semantic per-slice colors keyed by the slice's name (e.g. severity → fixed color).
+   *  Unmapped names fall back to the positional palette. */
+  colors?: Record<string, string>;
   className?: string;
 }
 
@@ -35,6 +38,7 @@ export default function DonutBreakdown({
   valueKey,
   valuePrefix = '',
   maxSlices = 8,
+  colors,
   className,
 }: DonutBreakdownProps) {
   const { tt } = useI18n();
@@ -55,7 +59,11 @@ export default function DonutBreakdown({
     : 0;
   const rows: Array<Record<string, unknown>> =
     etcValue > 0 ? [...shown, { [nameKey]: tt('기타'), [valueKey]: etcValue }] : shown;
-  const colorFor = (i: number) => (etcValue > 0 && i === rows.length - 1 ? c.etc : c.palette[i % c.palette.length]);
+  const colorFor = (i: number) => {
+    const pinned = colors?.[String(rows[i]?.[nameKey])];
+    if (pinned) return pinned;
+    return etcValue > 0 && i === rows.length - 1 ? c.etc : c.palette[i % c.palette.length];
+  };
   const pct = (v: unknown) => (total > 0 ? `${((Number(v) / total) * 100).toFixed(1)}%` : '0%');
 
   return (

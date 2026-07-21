@@ -9,7 +9,7 @@
 import type { Direction, Capability } from '@/lib/integrations';
 
 /** Egress observability kinds that have a query language (Datasources tab + Explore). */
-export const DATASOURCE_KINDS = ['prometheus', 'mimir', 'loki', 'tempo', 'clickhouse'] as const;
+export const DATASOURCE_KINDS = ['prometheus', 'mimir', 'loki', 'tempo', 'clickhouse', 'jaeger', 'dynatrace', 'datadog'] as const;
 export type DatasourceKind = (typeof DATASOURCE_KINDS)[number];
 
 export type IntegrationCategory = 'datasource' | 'connector';

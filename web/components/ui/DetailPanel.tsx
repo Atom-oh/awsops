@@ -3,7 +3,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useResizablePanel, usePublishDockedWidth, RESIZE_GRIP_CLASS, RESIZE_GRIP_BAR_CLASS } from '@/lib/useResizablePanel';
 import {
   X, Info, Cpu, Network, Shield, HardDrive, Tag, KeyRound, DollarSign, Database,
-  Server, Globe, Boxes, Activity, Layers, FileSearch, Bell, type LucideIcon,
+  Server, Globe, Boxes, Activity, Layers, FileSearch, Bell, Copy, Check, type LucideIcon,
 } from 'lucide-react';
 import Badge from './Badge';
 import StatePill from './StatePill';
@@ -96,6 +96,45 @@ function renderValue(fmt: DetailValue) {
     default:
       return <span className="block break-words text-[13px] text-ink-800 select-text">{fmt.text}</span>;
   }
+}
+
+// The plain string a field's copy button puts on the clipboard (null = nothing to copy).
+// Structured kinds flatten to one line per entry so pasting stays readable.
+function copyText(fmt: DetailValue): string | null {
+  switch (fmt.kind) {
+    case 'empty':
+      return null;
+    case 'boolean':
+      return fmt.bool ? 'true' : 'false';
+    case 'tags':
+      return fmt.entries!.map(([k, v]) => `${k}=${v}`).join('\n') || null;
+    case 'idlist':
+      return fmt.items!.map((it) => [it.id, it.name, it.extra].filter(Boolean).join(' ')).join('\n') || null;
+    default:
+      return fmt.text?.trim() ? fmt.text : null;
+  }
+}
+
+// Per-value copy affordance — subtle until hovered, flips to a ✓ for a moment after copying.
+// Always rendered (not hover-gated) so it stays tappable on the mobile fullscreen sheet.
+function CopyButton({ text, label = '값 복사' }: { text: string; label?: string }) {
+  const [ok, setOk] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setOk(true);
+          setTimeout(() => setOk(false), 1200);
+        }).catch(() => {});
+      }}
+      className={`shrink-0 rounded p-1 transition-colors ${ok ? 'text-emerald-600' : 'text-ink-300 hover:bg-ink-50 hover:text-ink-600'}`}
+    >
+      {ok ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  );
 }
 
 // RDS detail panels show a live per-instance CloudWatch metrics table (v1 parity). Metrics are NOT in the
@@ -281,7 +320,12 @@ export default function DetailPanel({
           <div className="min-w-0">
             <h2 className="min-w-0 break-words text-[14px] font-semibold text-ink-800">{bigTitle}</h2>
             <div className="mt-0.5 flex flex-wrap items-center gap-2">
-              {subId && <span className="break-all font-mono text-[11px] text-ink-400 select-text">{subId}</span>}
+              {subId && (
+                <span className="flex items-center gap-0.5">
+                  <span className="break-all font-mono text-[11px] text-ink-400 select-text">{subId}</span>
+                  <CopyButton text={subId} label="ID 복사" />
+                </span>
+              )}
               {stateText && <StatePill value={stateText} />}
             </div>
           </div>
@@ -319,10 +363,14 @@ export default function DetailPanel({
                     const soloList = group.items.length === 1
                       && (it.fmt.kind === 'tags' || it.fmt.kind === 'idlist')
                       && it.label === group.label;
+                    const copy = copyText(it.fmt);
                     return (
                       <div key={it.key} className="grid grid-cols-1 gap-0.5">
                         {!soloList && <dt className="font-mono text-[11px] text-ink-500">{it.label}</dt>}
-                        <dd className="text-[13px] text-ink-800">{renderValue(it.fmt)}</dd>
+                        <dd className="flex items-start gap-1 text-[13px] text-ink-800">
+                          <div className="min-w-0 flex-1">{renderValue(it.fmt)}</div>
+                          {copy && <CopyButton text={copy} label={`${it.label} 복사`} />}
+                        </dd>
                       </div>
                     );
                   })}

@@ -14,7 +14,7 @@ function json(obj: unknown, status: number) {
 export async function GET(request: Request, { params }: { params: { cluster: string } }) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
-  if (!isClusterOnboarded(params.cluster)) return json({ status: 'error', message: 'unknown cluster' }, 404);
+  if (!(await isClusterOnboarded(params.cluster))) return json({ status: 'error', message: 'unknown cluster' }, 404);
   const config = await getOpencostConfig(params.cluster);
   return json({ cluster: params.cluster, config }, 200);
 }
@@ -24,7 +24,7 @@ export async function PUT(request: Request, { params }: { params: { cluster: str
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
   if (!(await isAdmin(user))) return json({ status: 'error', message: 'admin only' }, 403);
-  if (!isClusterOnboarded(params.cluster)) return json({ status: 'error', message: 'unknown cluster' }, 404);
+  if (!(await isClusterOnboarded(params.cluster))) return json({ status: 'error', message: 'unknown cluster' }, 404);
   let body: { chartVersion?: string | null; config?: Record<string, unknown> } = {};
   try { body = (await readJsonBounded(request)) as typeof body; } // bound BEFORE parse (OOM guard)
   catch (e) { if (e instanceof BodyTooLargeError) return json({ status: 'error', message: 'request body too large' }, 413); /* tolerate empty/invalid body */ }

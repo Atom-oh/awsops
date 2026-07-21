@@ -63,3 +63,32 @@ def test_compliance_registered_as_fargate():
     assert handlers.REGISTRY["compliance"][1] == "fargate"
     assert handlers.is_allowed("compliance")
     assert handlers.runtime_for("compliance") == "fargate"
+
+
+def test_run_powerpipe_scope_search_path(monkeypatch):
+    """A 12-digit scope adds --search-path public,aws_<id>; 'all' keeps the aggregator default;
+    a malformed scope raises before any subprocess call (defense vs forged payloads)."""
+    import subprocess as sp
+    import compliance
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+
+        class P:
+            returncode = 0
+            stdout = "{}"
+            stderr = ""
+        return P()
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    compliance.run_powerpipe("cis_v400", "postgres://x", "123456789012")
+    assert "--search-path" in seen["cmd"]
+    assert "public,aws_123456789012" in seen["cmd"]
+
+    compliance.run_powerpipe("cis_v400", "postgres://x", "all")
+    assert "--search-path" not in seen["cmd"]
+
+    import pytest
+    with pytest.raises(ValueError):
+        compliance.run_powerpipe("cis_v400", "postgres://x", "123; DROP TABLE x")
