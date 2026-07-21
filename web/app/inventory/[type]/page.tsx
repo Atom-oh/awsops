@@ -288,15 +288,15 @@ export default function InventoryTypePage() {
             ) : (
               kpiRow
             )}
-            {/* v1-parity live metric tables (owner: KPI 바로 아래 배치): 노드/도메인/브로커 단위 */}
-            {type === 'elasticache' && <ElasticacheNodeMetrics rows={filteredRows} />}
-            {type === 'opensearch' && <OpensearchDomainMetrics rows={filteredRows} />}
-            {type === 'msk' && <MskBrokerNodes rows={filteredRows} />}
             {graphBand}
             {barChart}
             {/* Type-specific live sections (v1 parity): CloudTrail recent-events audit view. */}
             {type === 'cloudtrail' && <CloudTrailEvents />}
             {tableBlock}
+            {/* v1-parity live metric tables (owner: 페이지 하단 배치): 노드/도메인/브로커 단위 */}
+            {type === 'elasticache' && <ElasticacheNodeMetrics rows={filteredRows} />}
+            {type === 'opensearch' && <OpensearchDomainMetrics rows={filteredRows} />}
+            {type === 'msk' && <MskBrokerNodes rows={filteredRows} />}
           </>
         )}
       </div>
