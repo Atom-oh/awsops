@@ -51,6 +51,8 @@ export const TERMS: Record<string, Pair> = {
   '드래그하여 폭 조절': { en: 'Drag to resize', zh: '拖动以调整宽度', ja: 'ドラッグして幅を調整' },
   '패널 폭 조절': { en: 'Resize panel', zh: '调整面板宽度', ja: 'パネル幅を調整' },
   'ID 복사': { en: 'Copy ID', zh: '复制 ID', ja: 'ID をコピー' },
+  '진단 가이드 — 지표 읽는 법 (펼쳐 보기)': { en: 'Diagnosis Guide — How to Read the Metrics (expand)', zh: '诊断指南 — 指标解读方法（展开）', ja: '診断ガイド — 指標の見方（展開）' },
+  '경보 우선순위 요약': { en: 'Alert Priority Summary', zh: '告警优先级摘要', ja: 'アラート優先度サマリー' },
 
   // ---- dashboard ----
   '대시보드': { en: 'Dashboard', zh: '仪表盘', ja: 'ダッシュボード' },
