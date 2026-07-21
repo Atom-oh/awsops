@@ -459,3 +459,60 @@ export const EBS_GUIDE: GuideSpec = {
     ['EBSIOBalance%/EBSByteBalance%', '0 근접', '인스턴스 EBS 대역폭 강등'],
   ],
 };
+
+export const EC2_GUIDE: GuideSpec = {
+  service: 'EC2',
+  intro: (
+    <>EC2는 <b>CPU · 네트워크 · EBS I/O · 상태 점검(status check) · 버스터블 크레딧</b>을 기본으로
+    봅니다. 가장 중요한 특이점: <b>메모리와 디스크 사용률은 기본 CloudWatch 메트릭에 없습니다</b>
+    (하이퍼바이저 밖을 못 봄) — 이 둘은 CloudWatch Agent를 설치해야 합니다.</>
+  ),
+  sections: [
+    { title: '① CPU', items: [
+      <><b>CPUUtilization</b> — 지속 80% 초과 시 확장/타입 변경 검토. 하이퍼바이저 관점이라 vCPU steal 등 게스트 내부는 못 봄.</>,
+      <><b>CPUCreditBalance / CPUCreditUsage</b> — T계열 전용. 0 수렴 시 baseline 강등(Standard) 또는 추가 과금(Unlimited). <b>원인 불명 성능 저하의 단골 범인.</b> CPUSurplusCreditsCharged는 Unlimited 초과 과금.</>,
+    ]},
+    { title: '② 상태 점검 (Status Checks) — 가용성 진단 핵심', items: [
+      <><b>StatusCheckFailed_System</b> — AWS 인프라 문제(호스트 하드웨어/네트워크/전원). 대응: <b>stop/start</b>(다른 호스트로 이동).</>,
+      <><b>StatusCheckFailed_Instance</b> — 인스턴스 내부 문제(OS 부팅/파일시스템/네트워크 설정/커널). 대응: OS 조사/재부팅.</>,
+      <><b>StatusCheckFailed_AttachedEBS</b> — 연결 EBS가 I/O에 응답 못 함.</>,
+      <>이 구분이 <b>"AWS 문제냐 내 OS 문제냐"</b>를 즉시 갈라줍니다. 자동 복구는 CloudWatch 알람 + EC2 auto-recovery.</>,
+    ]},
+    { title: '③ 네트워크', items: [
+      <><b>NetworkIn/Out</b>(대역폭 상한 대비), <b>NetworkPacketsIn/Out</b>(PPS 상한 감지).</>,
+      <>대역폭/PPS/conntrack 상한 초과는 기본 메트릭에 안 나옴 — <b>네트워크 성능 메트릭(ethtool, CloudWatch Agent)</b>의 bw_in/out_allowance_exceeded, pps_allowance_exceeded, conntrack_allowance_exceeded로 봐야 정확. <b>놓치기 쉬운 병목.</b></>,
+    ]},
+    { title: '④ EBS I/O (인스턴스 관점)', items: [
+      <>EBSRead/WriteOps·Bytes — 인스턴스↔EBS I/O.</>,
+      <><b>EBSIOBalance% / EBSByteBalance%</b> — 소형 인스턴스의 EBS 버스트 잔량. 0 수렴 시 인스턴스 baseline 강등 → <b>볼륨이 커도 병목</b> (EBS 진단과 연결).</>,
+    ]},
+    { title: '⑤ CloudWatch Agent 필요 (기본 미제공) — 실무 필수', items: [
+      <><b>메모리</b>(mem_used_percent 등) — EC2 성능 문제의 상당수가 메모리인데 기본 메트릭에 없음.</>,
+      <><b>디스크</b>(disk_used_percent, diskio_*) — 루트/데이터 볼륨 고갈 감지. <b>스왑</b>(swap_used_percent), 게스트 관점 CPU(steal 포함), 프로세스.</>,
+      <>세밀한 진단에는 CloudWatch Agent 설치가 사실상 필수.</>,
+    ]},
+    { title: '증상별 진단 흐름', items: [
+      <>인스턴스 응답 없음 → <b>상태 점검부터</b>: System 실패면 AWS 측(stop/start 이전), Instance 실패면 OS 조사(시스템 로그/스크린샷).</>,
+      <>간헐적/주기적 성능 저하 → T계열이면 <b>CPUCreditBalance 고갈 1순위</b>, 다음 EBSIOBalance%.</>,
+      <>CPU는 낮은데 느림 → 메모리/스왑(Agent), 디스크 I/O, 네트워크 allowance 초과 확인.</>,
+      <>네트워크 처리량 정체 → 타입 대역폭 상한 + *_allowance_exceeded 확인, 타입 상향 검토.</>,
+    ]},
+    { title: 'EC2만의 주의점', items: [
+      <><b>메모리·디스크는 기본 메트릭에 없음 → CloudWatch Agent 필수.</b> "메모리 메트릭이 왜 없지?"의 답.</>,
+      <>상태 점검 <b>System vs Instance</b> 구분 = 책임 소재(AWS vs 사용자)를 즉시 가르는 핵심 진단 포인트.</>,
+      <>버스터블(T) 크레딧·소형 인스턴스의 EBS/네트워크 버스트가 원인 불명 성능 문제의 단골 — T/소형이면 우선 의심.</>,
+      <>심층 조사: CloudWatch Logs, EC2 시스템 로그/스크린샷, Compute Optimizer(라이트사이징).</>,
+    ]},
+  ],
+  priorityHeader: ['메트릭', '주의 기준', '의미'],
+  priority: [
+    ['StatusCheckFailed_System', '= 1', 'AWS 인프라 문제 → stop/start'],
+    ['StatusCheckFailed_Instance', '= 1', 'OS/인스턴스 내부 문제'],
+    ['CPUUtilization', '> 80% 지속', '컴퓨트 병목'],
+    ['CPUCreditBalance (T계열)', '0 근접', '크레딧 고갈 → 강등/과금'],
+    ['mem_used_percent (Agent)', '높음', '메모리 압박'],
+    ['disk_used_percent (Agent)', '> 85%', '디스크 고갈'],
+    ['EBSIOBalance%/EBSByteBalance%', '0 근접', 'EBS 대역폭 강등'],
+    ['bw/pps/conntrack_allowance_exceeded (Agent)', '> 0', '네트워크 상한 병목'],
+  ],
+};

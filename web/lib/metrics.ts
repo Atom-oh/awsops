@@ -869,3 +869,24 @@ export function ec2EbsBalance(instanceIds: string[], region?: string) {
   return fleetLatest('AWS/EC2', instanceIds, (id) => [{ Name: 'InstanceId', Value: id }], EC2_EBS_BALANCE_METRICS, region);
 }
 
+// EC2 per-instance diagnostics (owner 가이드: 상태 점검의 System vs Instance 구분이 책임 소재를
+// 즉시 가르는 핵심 — 메모리/디스크는 기본 메트릭에 없음(CloudWatch Agent 필요), 가이드가 설명).
+const EC2_DIAG_METRICS = [
+  { key: 'cpu', name: 'CPUUtilization', stat: 'Average' },
+  { key: 'cpuCredit', name: 'CPUCreditBalance', stat: 'Average' },
+  { key: 'statusSystem', name: 'StatusCheckFailed_System', stat: 'Maximum' },
+  { key: 'statusInstance', name: 'StatusCheckFailed_Instance', stat: 'Maximum' },
+  { key: 'statusEbs', name: 'StatusCheckFailed_AttachedEBS', stat: 'Maximum' },
+  { key: 'netIn', name: 'NetworkIn', stat: 'Sum' },
+  { key: 'netOut', name: 'NetworkOut', stat: 'Sum' },
+  { key: 'pktIn', name: 'NetworkPacketsIn', stat: 'Sum' },
+  { key: 'pktOut', name: 'NetworkPacketsOut', stat: 'Sum' },
+  { key: 'ebsReadOps', name: 'EBSReadOps', stat: 'Sum' },
+  { key: 'ebsWriteOps', name: 'EBSWriteOps', stat: 'Sum' },
+  { key: 'ioBalance', name: 'EBSIOBalance%', stat: 'Average' },
+  { key: 'byteBalance', name: 'EBSByteBalance%', stat: 'Average' },
+] as const;
+export function ec2DiagFleetLive(instanceIds: string[], region?: string) {
+  return fleetLatest('AWS/EC2', instanceIds, (id) => [{ Name: 'InstanceId', Value: id }], EC2_DIAG_METRICS, region);
+}
+
