@@ -500,6 +500,18 @@ const EC_FLEET_METRICS = [
   { key: 'conn', name: 'CurrConnections', stat: 'Average' },
   { key: 'netIn', name: 'NetworkBytesIn', stat: 'Sum' },
   { key: 'netOut', name: 'NetworkBytesOut', stat: 'Sum' },
+  // 진단 계층 (owner 가이드): DatabaseMemoryUsagePercentage가 가장 중요한 경보 지표,
+  // Evictions>0 지속=메모리 부족, Network*AllowanceExceeded=놓치기 쉬운 대역폭 상한 병목.
+  { key: 'dbMemPct', name: 'DatabaseMemoryUsagePercentage', stat: 'Average' },
+  { key: 'hitRate', name: 'CacheHitRate', stat: 'Average' },
+  { key: 'evictions', name: 'Evictions', stat: 'Sum' },
+  { key: 'reclaimed', name: 'Reclaimed', stat: 'Sum' },
+  { key: 'swap', name: 'SwapUsage', stat: 'Average' },
+  { key: 'currItems', name: 'CurrItems', stat: 'Average' },
+  { key: 'newConn', name: 'NewConnections', stat: 'Sum' },
+  { key: 'bwInEx', name: 'NetworkBandwidthInAllowanceExceeded', stat: 'Sum' },
+  { key: 'bwOutEx', name: 'NetworkBandwidthOutAllowanceExceeded', stat: 'Sum' },
+  { key: 'replLag', name: 'ReplicationLag', stat: 'Average' },
 ] as const;
 /** Per-CacheClusterId latest metrics (v1 elasticache 노드 메트릭 — cluster-level, applied to each node). */
 export function elasticacheFleetLive(ids: string[]) {

@@ -94,7 +94,160 @@ export function ElasticacheNodeMetrics({ rows }: { rows: Row[] }) {
           </tbody>
         </table>
       </div>
+
+      {/* 진단 지표 (owner 가이드): 메모리 압박·히트율·축출·대역폭 상한·복제 지연 — 클러스터 단위 */}
+      <div className="border-t border-ink-100">
+        <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">진단 지표 (Redis/Valkey 중심, Last 1h)</div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead><tr className="border-b border-ink-100">
+              {['Cluster', 'Engine', 'DB Mem', 'Hit Rate', 'Evictions', 'Reclaimed', 'Swap', 'Items', 'New Conn', 'BW 상한 초과', 'Repl Lag'].map((h) => <th key={h} className={TH}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const m = fleet[String(r.resource_id)] ?? {};
+                const danger = 'text-rose-700 font-semibold';
+                const evict = num(m.evictions);
+                const swapMb = num(m.swap) == null ? null : (num(m.swap) as number) / 1024 / 1024;
+                // CacheHitRate: 요청이 없으면 null — 값이 0..1 비율로 오면 %로 환산.
+                const hrRaw = num(m.hitRate);
+                const hitPct = hrRaw == null ? null : hrRaw <= 1 ? hrRaw * 100 : hrRaw;
+                const bwEx = (num(m.bwInEx) ?? 0) + (num(m.bwOutEx) ?? 0);
+                const replLag = num(m.replLag);
+                return (
+                  <tr key={i} className="border-b border-ink-50 last:border-0">
+                    <td className={MONO}>{String(r.resource_id)}</td>
+                    <td className={TD}>{String(r.engine ?? '—')}</td>
+                    <td className={TD} title="DatabaseMemoryUsagePercentage — maxmemory 대비 사용률, 가장 중요한 경보 지표">{meter(num(m.dbMemPct))}</td>
+                    <td className={`${TD} ${hitPct != null && hitPct < 80 ? danger : ''}`} title="CacheHitRate — 낮으면 캐시 효용 저하 (TTL 짧음/키 설계/콜드 캐시)">
+                      {hitPct == null ? dash : `${hitPct.toFixed(1)}%`}
+                    </td>
+                    <td className={`${TD} ${evict != null && evict > 0 ? danger : ''}`} title="Evictions(5분 누적) — >0 지속 = 메모리 부족으로 키 강제 축출 → 노드 확장/샤딩/maxmemory-policy 재검토">
+                      {cnt(evict)}
+                    </td>
+                    <td className={TD} title="Reclaimed — TTL 만료로 제거된 키 수 (정상 동작)">{cnt(num(m.reclaimed))}</td>
+                    <td className={`${TD} ${swapMb != null && swapMb > 50 ? danger : ''}`} title="SwapUsage — 커지면 디스크 스왑 → 지연 급증 위험">
+                      {swapMb == null ? dash : `${swapMb.toFixed(0)} MB`}
+                    </td>
+                    <td className={TD} title="CurrItems — 저장된 아이템 수">{cnt(num(m.currItems))}</td>
+                    <td className={TD} title="NewConnections(5분 누적) — 급증 시 커넥션 풀 미사용/재연결 폭풍 의심">{cnt(num(m.newConn))}</td>
+                    <td className={`${TD} ${bwEx > 0 ? danger : ''}`} title="NetworkBandwidthIn/OutAllowanceExceeded — 인스턴스 네트워크 상한 초과, 놓치기 쉬운 병목">
+                      {num(m.bwInEx) == null && num(m.bwOutEx) == null ? dash : Math.round(bwEx).toLocaleString()}
+                    </td>
+                    <td className={`${TD} ${replLag != null && replLag > 10 ? danger : ''}`} title="ReplicationLag(초) — 리드 리플리카 복제 지연, 증가 추세면 경보">
+                      {replLag == null ? dash : `${replLag.toFixed(1)}s`}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <EcDiagnosisGuide />
     </Card>
+  );
+}
+
+// ElastiCache 진단 가이드 — 접이식 (owner 가이드: 엔진별 차이 + 증상별 진단 경로).
+function EcDiagnosisGuide() {
+  const [open, setOpen] = useState(false);
+  const th = 'px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400';
+  const td = 'px-2.5 py-1.5 text-[12px] text-ink-600';
+  const h4 = 'mt-3 mb-1 text-[12.5px] font-semibold text-ink-700';
+  return (
+    <div className="border-t border-ink-100">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[12.5px] font-medium text-brand-700 hover:bg-ink-50"
+      >
+        <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        ElastiCache 진단 가이드 — 지표 읽는 법 (펼쳐 보기)
+      </button>
+      {open && (
+        <div className="px-5 pb-4 text-[12.5px] leading-relaxed text-ink-600">
+          <p className="mt-1">
+            엔진(Redis/Valkey vs Memcached)에 따라 메트릭이 다르지만 공통적으로 <b>CPU · 메모리 · 연결 ·
+            성능(히트율/지연) · 엔진 고유 지표</b>를 봅니다. 아래는 Redis/Valkey 기준입니다.
+          </p>
+
+          <div className={h4}>① CPU</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>EngineCPUUtilization</b> — Redis/Valkey에서 가장 중요. 주 명령 처리가 사실상 <b>단일 스레드</b>라 코어 하나가 포화되면 CPUUtilization(전체 vCPU 평균)은 낮아 보여도 실제로는 병목.</li>
+            <li><b>CPUUtilization</b> — 노드 전체. <b>Memcached는 멀티스레드라 이쪽이 유효.</b></li>
+            <li>EngineCPU 지속 높음 → 느린 명령(O(N): KEYS, 큰 HGETALL, 대형 SORT) 의심 또는 샤드 확장.</li>
+          </ul>
+
+          <div className={h4}>② 메모리 — 진단 핵심</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>DatabaseMemoryUsagePercentage</b> — maxmemory 대비 사용률. <b>가장 중요한 경보 지표.</b> FreeableMemory / BytesUsedForCache 병행.</li>
+            <li><b>SwapUsage</b> — 커지면 위험(디스크 스왑 → 지연 급증).</li>
+            <li><b>Evictions</b> — 메모리가 꽉 차 키 강제 축출. 지속 발생 시 노드 확장·샤딩·maxmemory-policy 재검토. <b>Reclaimed</b>(TTL 만료 제거)는 정상 동작.</li>
+          </ul>
+
+          <div className={h4}>③ 성능 — 히트율과 지연</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>CacheHitRate</b>(또는 CacheHits/CacheMisses) — 캐시 효용의 핵심. 낮으면 TTL 너무 짧음 / 캐시 키 설계 문제 / 콜드 캐시.</li>
+            <li>명령군별 지연(StringBasedCmdsLatency, GetType/SetType/HashBasedCmdsLatency…)으로 어떤 명령이 느린지 분해. SuccessfulRead/WriteRequestLatency 병행.</li>
+          </ul>
+
+          <div className={h4}>④ 연결</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li><b>CurrConnections</b> — maxclients 대비. <b>NewConnections</b> 급증 = 커넥션 풀 미사용/재연결 폭풍 의심(연결 수립 비용 큼). <b>CurrItems</b>는 아이템 수.</li>
+          </ul>
+
+          <div className={h4}>⑤ 네트워크·처리량</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li>NetworkBytesIn/Out, <b>NetworkBandwidthIn/OutAllowanceExceeded</b> — 인스턴스 타입별 네트워크 상한 초과. <b>놓치기 쉬운 병목.</b> ConnTrack/PPS AllowanceExceeded도 동류.</li>
+            <li><b>ReplicationBytes / ReplicationLag</b> — 리드 리플리카 복제 지연.</li>
+          </ul>
+
+          <div className={h4}>⑥ 엔진 고유 (Redis/Valkey)</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li>KeyspaceHits/Misses, SaveInProgress, BytesUsedForCache. 느린 명령 추적은 Redis <code className="rounded bg-ink-50 px-1 font-mono text-[11px]">SLOWLOG</code> 병행.</li>
+            <li>클러스터 모드면 샤드/노드별로 분해해 <b>핫 샤드</b> 확인.</li>
+          </ul>
+
+          <div className={h4}>증상별 진단 경로</div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li>지연 증가 + 전체 CPU 낮음 → <b>EngineCPUUtilization + SLOWLOG</b> 확인.</li>
+            <li>간헐적 성능 저하 + Evictions → <b>메모리 부족 / TTL·eviction 정책</b> 재검토.</li>
+            <li>원인 불명 지연 + 트래픽 많음 → <b>Network...AllowanceExceeded</b> 대역폭 상한 확인.</li>
+            <li>히트율 낮음 → <b>캐시 키 설계·TTL</b> 재검토.</li>
+          </ul>
+
+          <div className={h4}>경보 우선순위 요약</div>
+          <div className="overflow-x-auto rounded-lg border border-ink-100">
+            <table className="w-full">
+              <thead><tr className="border-b border-ink-100 bg-paper-muted/60">
+                <th className={th}>메트릭</th><th className={th}>주의 기준</th><th className={th}>의미</th>
+              </tr></thead>
+              <tbody>
+                {[
+                  ['EngineCPUUtilization', '> 90% (Redis)', '단일 스레드 포화/느린 명령'],
+                  ['DatabaseMemoryUsagePercentage', '높음', '메모리 압박'],
+                  ['Evictions', '> 0 지속', '메모리 부족 → 키 축출'],
+                  ['SwapUsage', '증가', '성능 급락 위험'],
+                  ['CacheHitRate', '낮음', '캐시 효용 저하'],
+                  ['CurrConnections', 'max 근접', '연결 고갈'],
+                  ['Network...AllowanceExceeded', '> 0', '네트워크 상한 병목'],
+                  ['ReplicationLag', '증가 추세', '복제 지연'],
+                ].map(([m, v, d]) => (
+                  <tr key={m} className="border-b border-ink-50 last:border-0">
+                    <td className={`${td} font-mono text-[11.5px]`}>{m}</td>
+                    <td className={`${td} tabular`}>{v}</td>
+                    <td className={td}>{d}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
