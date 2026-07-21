@@ -748,16 +748,17 @@ export function albFleetLive(lbDims: string[]) {
 }
 
 export interface AlbTgHealthRow { tg: string; tgName: string; lbDim: string; healthy: number | null; unhealthy: number | null }
-/** Per-TargetGroup 헬스 (Healthy/UnHealthyHostCount는 TG 차원이어야 의미) — (tgDim, lbDim) 쌍으로 조회. */
-export async function albTargetHealth(pairs: { tgDim: string; tgName: string; lbDim: string }[]): Promise<AlbTgHealthRow[]> {
+/** Per-TargetGroup 헬스 (Healthy/UnHealthyHostCount는 TG 차원이어야 의미) — (tgDim, lbDim) 쌍으로 조회.
+ *  namespace: AWS/ApplicationELB(기본) 또는 AWS/NetworkELB — ALB/NLB 공용. */
+export async function albTargetHealth(pairs: { tgDim: string; tgName: string; lbDim: string }[], namespace = 'AWS/ApplicationELB'): Promise<AlbTgHealthRow[]> {
   if (!pairs.length) return [];
   try {
     const capped = pairs.slice(0, 100);
     const r = await cwClient().send(new GetMetricDataCommand({
       StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
       MetricDataQueries: capped.flatMap((p, i) => [
-        { Id: `h_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: 'AWS/ApplicationELB', MetricName: 'HealthyHostCount', Dimensions: [{ Name: 'TargetGroup', Value: p.tgDim }, { Name: 'LoadBalancer', Value: p.lbDim }] }, Period: 300, Stat: 'Minimum' } },
-        { Id: `u_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: 'AWS/ApplicationELB', MetricName: 'UnHealthyHostCount', Dimensions: [{ Name: 'TargetGroup', Value: p.tgDim }, { Name: 'LoadBalancer', Value: p.lbDim }] }, Period: 300, Stat: 'Maximum' } },
+        { Id: `h_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: namespace, MetricName: 'HealthyHostCount', Dimensions: [{ Name: 'TargetGroup', Value: p.tgDim }, { Name: 'LoadBalancer', Value: p.lbDim }] }, Period: 300, Stat: 'Minimum' } },
+        { Id: `u_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: namespace, MetricName: 'UnHealthyHostCount', Dimensions: [{ Name: 'TargetGroup', Value: p.tgDim }, { Name: 'LoadBalancer', Value: p.lbDim }] }, Period: 300, Stat: 'Maximum' } },
       ]),
     }));
     const vals = new Map<string, number>();
@@ -772,5 +773,23 @@ export async function albTargetHealth(pairs: { tgDim: string; tgName: string; lb
   } catch {
     return [];
   }
+}
+
+// NLB per-LB diagnostics (owner 가이드: L4 — HTTP 코드가 없어 RST 카운트와 타깃 헬스가 진단의 핵심).
+const NLB_FLEET_METRICS = [
+  { key: 'activeFlow', name: 'ActiveFlowCount', stat: 'Average' },
+  { key: 'newFlow', name: 'NewFlowCount', stat: 'Sum' },
+  { key: 'tgtRst', name: 'TCP_Target_Reset_Count', stat: 'Sum' },
+  { key: 'elbRst', name: 'TCP_ELB_Reset_Count', stat: 'Sum' },
+  { key: 'clientRst', name: 'TCP_Client_Reset_Count', stat: 'Sum' },
+  { key: 'processedBytes', name: 'ProcessedBytes', stat: 'Sum' },
+  { key: 'clientTlsErr', name: 'ClientTLSNegotiationErrorCount', stat: 'Sum' },
+  { key: 'targetTlsErr', name: 'TargetTLSNegotiationErrorCount', stat: 'Sum' },
+  { key: 'portAllocErr', name: 'PortAllocationErrorCount', stat: 'Sum' },
+  { key: 'unhealthyRouting', name: 'UnhealthyRoutingFlowCount', stat: 'Sum' },
+  { key: 'lcu', name: 'ConsumedLCUs', stat: 'Sum' },
+] as const;
+export function nlbFleetLive(lbDims: string[]) {
+  return fleetLatest('AWS/NetworkELB', lbDims, (id) => [{ Name: 'LoadBalancer', Value: id }], NLB_FLEET_METRICS);
 }
 

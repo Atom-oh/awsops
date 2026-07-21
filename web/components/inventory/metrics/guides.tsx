@@ -296,3 +296,58 @@ export const ALB_GUIDE: GuideSpec = {
     ['TargetConnectionErrorCount', '> 0', '타깃 연결 실패(네트워크/SG)'],
   ],
 };
+
+export const NLB_GUIDE: GuideSpec = {
+  service: 'NLB',
+  intro: (
+    <>NLB는 <b>L4(TCP/UDP/TLS)</b>에서 동작해 ALB와 관점이 다릅니다 — HTTP 응답 코드가 없고
+    <b> 연결(플로우) · 리셋(RST) · 타깃 헬스 · 처리량 · 용량(LCU)</b>을 중심으로 봅니다.
+    CloudWatch 메트릭이 제한적이라 <b>RST 카운트와 타깃 헬스가 진단의 핵심</b>입니다.</>
+  ),
+  sections: [
+    { title: '① 연결(플로우) 수', items: [
+      <><b>ActiveFlowCount</b> — 활성 플로우(TCP 기준). 급증/급감으로 트래픽 이상 감지. <b>NewFlowCount</b>는 연결 수립률.</>,
+      <>프로토콜별 분해: ActiveFlowCount_TCP/_UDP/_TLS, NewFlowCount_TCP/_UDP/_TLS. <b>ConsumedLCUs</b>(_TCP/_UDP/_TLS)는 용량·요금 산정.</>,
+    ]},
+    { title: '② 리셋(RST) — NLB 진단의 핵심', items: [
+      <><b>TCP_Target_Reset_Count</b> — 타깃이 보낸 RST: 백엔드가 연결을 끊음(앱 크래시, 포트 닫힘, 백로그 초과). <b>급증 = 백엔드 문제 강한 신호.</b></>,
+      <><b>TCP_ELB_Reset_Count</b> — NLB가 생성한 RST: 유휴 타임아웃 초과 등. <b>TCP_Client_Reset_Count</b> — 클라이언트발.</>,
+      <><b>핵심 구분</b>: Target RST 급증 → 백엔드 문제, ELB RST 급증 → NLB 레벨(주로 <b>idle timeout 350초</b>) 또는 비대칭 라우팅.</>,
+    ]},
+    { title: '③ 타깃 헬스 — 가용성 (타깃 그룹 차원)', items: [
+      <><b>HealthyHostCount</b>(0에 가까우면 위험) / <b>UnHealthyHostCount</b>(증가 시 헬스체크 실패 조사).</>,
+      <>NLB는 액티브(TCP/HTTP/HTTPS) 헬스체크 + 자체 판단이 섞임 — 대상 그룹의 헬스체크 설정(프로토콜/포트/경로)도 함께 점검.</>,
+    ]},
+    { title: '④ 처리량·바이트', items: [
+      <><b>ProcessedBytes</b>(_TCP/_UDP/_TLS), ProcessedPackets.</>,
+    ]},
+    { title: '⑤ TLS (TLS 리스너 사용 시)', items: [
+      <><b>Client/TargetTLSNegotiationErrorCount</b>, TLSNegotiationErrorCount — 협상 실패.</>,
+    ]},
+    { title: '⑥ 용량 한계·기타', items: [
+      <><b>PortAllocationErrorCount</b> — 클라이언트 IP 보존 + PrivateLink/SNAT 상황의 소스 포트 고갈. <b>0보다 크면 연결 실패 발생 — 놓치기 쉬운 원인.</b></>,
+      <>PeakPackets/BytesPerSecond, <b>UnhealthyRoutingFlowCount</b>(정상 타깃이 없어 라우팅 실패 — 페일오버 오픈 관련).</>,
+    ]},
+    { title: '증상별 진단 흐름', items: [
+      <>간헐적 연결 끊김 → <b>Target RST(백엔드) vs ELB RST(idle timeout 350초 초과)</b> 구분, keep-alive 설정 점검.</>,
+      <>연결 자체가 안 됨 → HealthyHostCount + 보안그룹/NACL/타깃 포트. <b>NLB는 클라이언트 IP를 보존하므로 타깃 SG가 클라이언트 IP를 허용해야 함 — 흔한 함정.</b></>,
+      <>부하 높을 때 연결 실패 → <b>PortAllocationErrorCount</b>(SNAT 포트 고갈).</>,
+      <>TLS 리스너 오류 → Client/TargetTLSNegotiationErrorCount.</>,
+    ]},
+    { title: 'ALB와 다른 주의점', items: [
+      <>L4라 <b>애플리케이션 레벨 지연/에러를 못 봄</b> — HTTP 문제는 타깃(백엔드) 메트릭·로그로.</>,
+      <><b>VPC Flow Logs</b>가 트러블슈팅에 매우 유용(연결 수락/거부, 클라이언트 IP 추적). NLB 자체 액세스 로그는 <b>TLS 리스너에서만</b> 제공.</>,
+      <>클라이언트 IP 보존 특성 때문에 <b>타깃 보안그룹 규칙</b>이 자주 원인.</>,
+    ]},
+  ],
+  priorityHeader: ['메트릭', '주의 기준', '의미'],
+  priority: [
+    ['HealthyHostCount', '낮음/0', '가용 타깃 부족'],
+    ['UnHealthyHostCount', '> 0', '헬스체크 실패'],
+    ['TCP_Target_Reset_Count', '급증', '백엔드가 연결 리셋'],
+    ['TCP_ELB_Reset_Count', '급증', 'NLB 리셋(idle timeout 등)'],
+    ['PortAllocationErrorCount', '> 0', 'SNAT 소스 포트 고갈'],
+    ['ActiveFlowCount', '이상 추세', '트래픽/연결 이상'],
+    ['TargetTLSNegotiationErrorCount', '> 0', '타깃 TLS 문제'],
+  ],
+};

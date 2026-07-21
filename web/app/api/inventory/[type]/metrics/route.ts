@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -87,16 +87,18 @@ export async function GET(request: Request, { params }: { params: { type: string
     // ALB: per-LB diagnostics + per-TargetGroup health. The CloudWatch LoadBalancer dimension is
     // the ARN suffix ("app/<name>/<id>") — resolved from the synced inventory ARNs, keyed back to
     // resource_id for the page. TG dims come from target_group rows' load_balancer_arns linkage.
-    if (params.type === 'alb' && url.searchParams.get('ids') !== null) {
+    if ((params.type === 'alb' || params.type === 'nlb') && url.searchParams.get('ids') !== null) {
+      const isAlb = params.type === 'alb';
+      const prefix = isAlb ? 'app' : 'net';
       const ids = (url.searchParams.get('ids') ?? '')
         .split(',').map((x) => x.trim()).filter((x) => /^[a-zA-Z0-9-]+$/.test(x)).slice(0, 100);
       const lbRows = await getPool().query<{ resource_id: string; arn: string | null }>(
         `SELECT resource_id, data->>'arn' AS arn FROM inventory_resources
-         WHERE resource_type = 'alb' AND resource_id = ANY($1)`, [ids],
+         WHERE resource_type = $2 AND resource_id = ANY($1)`, [ids, params.type],
       );
-      const dimOf = new Map<string, string>(); // resource_id → "app/name/id"
+      const dimOf = new Map<string, string>(); // resource_id → "app|net/name/id"
       for (const row of lbRows.rows) {
-        const mDim = (row.arn ?? '').match(/loadbalancer\/(app\/.+)$/);
+        const mDim = (row.arn ?? '').match(new RegExp(`loadbalancer\\/(${prefix}\\/.+)$`));
         if (mDim) dimOf.set(row.resource_id, mDim[1]);
       }
       const tgRows = await getPool().query<{ arn: string | null; name: string | null; lbs: unknown }>(
@@ -109,14 +111,16 @@ export async function GET(request: Request, { params }: { params: { type: string
         const tgDim = (tg.arn ?? '').match(/(targetgroup\/.+)$/)?.[1];
         if (!tgDim) continue;
         for (const lbArn of Array.isArray(tg.lbs) ? (tg.lbs as unknown[]) : []) {
-          const lbDim = String(lbArn).match(/loadbalancer\/(app\/.+)$/)?.[1];
+          const lbDim = String(lbArn).match(new RegExp(`loadbalancer\\/(${prefix}\\/.+)$`))?.[1];
           if (lbDim && [...dimOf.values()].includes(lbDim)) {
             pairs.push({ tgDim, tgName: tg.name ?? tgDim, lbDim });
           }
         }
       }
+      const namespace = isAlb ? 'AWS/ApplicationELB' : 'AWS/NetworkELB';
       const [fleetByDim, targetHealth] = await Promise.all([
-        albFleetLive([...dimOf.values()]), albTargetHealth(pairs),
+        isAlb ? albFleetLive([...dimOf.values()]) : nlbFleetLive([...dimOf.values()]),
+        albTargetHealth(pairs, namespace),
       ]);
       // key the fleet back by resource_id; health rows carry lbDim → page maps via lbDim field
       const fleet: Record<string, Record<string, number | null>> = {};
