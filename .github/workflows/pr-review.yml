@@ -84,6 +84,29 @@ jobs:
           git fetch --depth=1 origin "$MERGE_BASE_SHA" "$HEAD_SHA"
           git diff --no-color "$MERGE_BASE_SHA" "$HEAD_SHA" -- . > /tmp/pr-diff-raw.txt
           rm -f /tmp/pr-diff-omitted.txt /tmp/pr-diff-omitted-source.txt
+          # Authoritative (old-path, new-path) pairs, in the SAME order `git diff` (above) emits
+          # `diff --git` headers for the same two trees — both walk the identical tree-diff/rename
+          # pairing. Sourced from -z (NUL-delimited) --name-status, NOT by field-splitting the
+          # `diff --git a/... b/...` header text below: git only C-quotes control/non-ASCII/quote/
+          # backslash bytes (core.quotePath), so a perfectly ordinary space in a filename (e.g.
+          # `foo.png xx.png exploit.ts`) is NOT quoted, splits into extra awk fields, and silently
+          # misclassifies the file — verified empirically, not merely asserted (see PR #170 review).
+          git diff -z --no-color --name-status "$MERGE_BASE_SHA" "$HEAD_SHA" -- . > /tmp/pr-diff-namestatus.nul
+          python3 - <<'PYEOF'
+          data = open('/tmp/pr-diff-namestatus.nul', 'rb').read().decode('utf-8', 'surrogateescape')
+          parts = data.split('\0')
+          if parts and parts[-1] == '':
+              parts.pop()
+          i = 0
+          with open('/tmp/pr-diff-pathmap.tsv', 'w', encoding='utf-8', errors='surrogateescape') as out:
+              while i < len(parts):
+                  status = parts[i]; i += 1
+                  if status[:1] in ('R', 'C'):
+                      old, new = parts[i], parts[i + 1]; i += 2
+                  else:
+                      old = new = parts[i]; i += 1
+                  out.write(f"{old}\t{new}\n")
+          PYEOF
           awk '
             # A path is an ignorable artifact (lockfile/vendored/binary/build output). Checked on
             # BOTH the old and new path so a `dist/foo.js -> src/evil.ts` rename cannot be skipped
@@ -97,14 +120,24 @@ jobs:
                      (p ~ /(^|\/)(dist|out|build)\//) ||
                      (p ~ /\.terraform\.lock\.hcl$/)
             }
+            BEGIN {
+              n = 0
+              while ((getline line < "/tmp/pr-diff-pathmap.tsv") > 0) {
+                n++
+                split(line, f, "\t")
+                oldp[n] = f[1]
+                newp[n] = f[2]
+              }
+              close("/tmp/pr-diff-pathmap.tsv")
+              idx = 0
+            }
             /^diff --git/ {
-              # Parse BOTH the old (a/) and new (b/) path. Using the old path alone (substr($3,3))
-              # let a `foo.svg -> bar.ts` rename be classified by the .svg end and slip past the
-              # fail-closed bucket below. $3 = a/old, $4 = b/new (git quotes paths with spaces, so
-              # for the rare space-in-name case the fields split — that only ever over-includes a
-              # path into the stricter fail-closed bucket, never under-includes, so it fails safe).
-              path = substr($3, 3)
-              newpath = substr($4, 3)
+              # Look up both ends from the pre-built authoritative map (see above) instead of
+              # parsing this header line's own text, which is ambiguous once either path contains
+              # a space (nothing anchors where "a/old" ends and "b/new" begins).
+              idx++
+              path = (idx in oldp) ? oldp[idx] : ""
+              newpath = (idx in newp) ? newp[idx] : ""
               # Skip only when BOTH ends are ignorable — a rename with one reviewable end stays in.
               skip = ignorable(path) && ignorable(newpath)
             }
@@ -126,10 +159,14 @@ jobs:
             # source/IaC file with one >50k-char line would be dropped from every lens yet still
             # PASS. So an omitted line is split by file type:
             #   - banner-only ONLY if it is a pure generated/export blob: BOTH the old and new path
-            #     end in a generated type (.svg/.drawio/.min.js/.min.css/.map) AND neither is under a
-            #     PUBLICLY-SERVED tree (web/ = the app served behind the edge; docs-site/ = published
-            #     to GitHub Pages / www.atomai.click). A served .svg is script-capable (stored-XSS
-            #     vector), so it stays reviewable and goes to the fail-closed bucket like source.
+            #     end in a generated type (.svg/.drawio/.map — NOT .min.js/.min.css: "minified" is a
+            #     filename convention the PR author picks, not a property git can verify, so trusting
+            #     it would let a >50k-char payload in any non-served tree — e.g. scripts/foo.min.js —
+            #     go banner-only-omitted instead of fail-closed BLOCKED; see PR #170 review) AND
+            #     neither is under a PUBLICLY-SERVED tree (web/ = the app served behind the edge;
+            #     docs-site/ = published to GitHub Pages / www.atomai.click). A served .svg is
+            #     script-capable (stored-XSS vector), so it stays reviewable and goes to the
+            #     fail-closed bucket like source.
             #   - anything else (real source/IaC: .ts/.tsx/.py/.tf/.yml/..., a rename with a source
             #     end, or a served web//docs-site/ asset) -> ALSO recorded to a second sidecar that
             #     the gate turns into a deterministic FAIL — the fail-closed contract for unseen content.
@@ -138,8 +175,8 @@ jobs:
               if (!(path in warned)) {
                 print "[omitted: a line over 50000 chars in " path " — likely a minified/generated export]"
                 print path >> "/tmp/pr-diff-omitted.txt"
-                generated = (path ~ /\.(svg|drawio|min\.js|min\.css|map)$/) &&
-                            (newpath ~ /\.(svg|drawio|min\.js|min\.css|map)$/) &&
+                generated = (path ~ /\.(svg|drawio|map)$/) &&
+                            (newpath ~ /\.(svg|drawio|map)$/) &&
                             (path !~ /(^|\/)(web|docs-site)\//) && (newpath !~ /(^|\/)(web|docs-site)\//)
                 if (!generated) {
                   print path >> "/tmp/pr-diff-omitted-source.txt"
