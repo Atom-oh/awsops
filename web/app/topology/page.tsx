@@ -12,6 +12,7 @@ import { INVENTORY_TYPES } from '@/lib/inventory-types';
 import { buildFlowGraph, filterFromEntry, type FlowInput, type FlowKind, type FlowNode } from '@/lib/flow-topology';
 import { layoutFlow } from '@/lib/flow-layout';
 import { useTheme } from '@/lib/use-theme';
+import { useActiveAccount } from '@/lib/account-context';
 
 // ReactFlow touches the DOM on mount — load it client-only to avoid SSR mismatch.
 const ReactFlow = dynamic(() => import('@xyflow/react').then((m) => m.ReactFlow), { ssr: false });
@@ -122,8 +123,9 @@ function nodeLabel(n: FlowNode): ReactNode {
 
 const ROW_CAP = 500; // /api/inventory caps limit at 500
 
-async function fetchType(t: InvType): Promise<{ rows: Row[]; finishedAt: string | null; capped: boolean }> {
-  const r = await fetch(`/api/inventory/${t}?limit=${ROW_CAP}`);
+async function fetchType(t: InvType, account: string): Promise<{ rows: Row[]; finishedAt: string | null; capped: boolean }> {
+  // account scope: 'self' | 12-digit | '__all__' — the inventory read route's `accounts` param.
+  const r = await fetch(`/api/inventory/${t}?limit=${ROW_CAP}&accounts=${encodeURIComponent(account)}`);
   if (!r.ok) return { rows: [], finishedAt: null, capped: false };
   const d = await r.json();
   const rows = (d.rows ?? []) as { resource_id: unknown; region: unknown; data?: object }[];
@@ -218,6 +220,7 @@ function networkNames(row: Record<string, unknown>, nm: NetMaps): Record<string,
 }
 
 export default function TopologyPage() {
+  const [activeAccount] = useActiveAccount();
   const [data, setData] = useState<FlowInput | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [err, setErr] = useState('');
@@ -233,12 +236,13 @@ export default function TopologyPage() {
   const load = useCallback(async () => {
     setBusy(true);
     try {
+      const account = activeAccount || 'self';
       const NET = ['vpc', 'subnet', 'security_group'] as const;
       const [res, ipResolved, net] = await Promise.all([
-        Promise.all(TYPES.map(fetchType)),
+        Promise.all(TYPES.map((t) => fetchType(t, account))),
         fetchEksIpMap(),
         // VPC/subnet/SG inventory → id→name maps for the detail panel (lookup only, not graph nodes)
-        Promise.all(NET.map((t) => fetch(`/api/inventory/${t}?limit=500`).then((r) => (r.ok ? r.json() : { rows: [] })).catch(() => ({ rows: [] })))),
+        Promise.all(NET.map((t) => fetch(`/api/inventory/${t}?limit=500&accounts=${encodeURIComponent(account)}`).then((r) => (r.ok ? r.json() : { rows: [] })).catch(() => ({ rows: [] })))),
       ]);
       const mk = (rows: { resource_id?: unknown; data?: Record<string, unknown> }[]) =>
         new Map((rows ?? []).map((r) => [String(r.resource_id), invName(r)]));
@@ -262,7 +266,7 @@ export default function TopologyPage() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [activeAccount]);
 
   useEffect(() => { load(); }, [load]);
 

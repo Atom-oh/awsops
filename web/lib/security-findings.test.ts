@@ -6,7 +6,7 @@ describe('security-findings', () => {
     for (const k of ['public_s3', 'open_sg', 'unencrypted_ebs', 'iam_no_mfa'] as const) {
       expect(CHECK_META[k].severity).toMatch(/high|medium|low/);
       expect(CHECK_META[k].remediation.length).toBeGreaterThan(0);
-      expect(FINDING_SQL[k]).toContain("account_id='self'");
+      expect(FINDING_SQL[k]).toContain("account_id = ANY($1)");
     }
   });
   it('open_sg SQL anchors cidr to the cidr key (ipv4+ipv6, both casings) and reads security_group', () => {

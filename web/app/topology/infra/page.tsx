@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useActiveAccount, accountParam } from '@/lib/account-context';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { Background, Controls, Position, type Node, type Edge } from '@xyflow/react';
@@ -35,6 +36,7 @@ const LEGEND: { kind: string; label: string }[] = [
 
 /** 계정 전체 인프라 배치 그래프 (v1 Infra Graph View parity) — materialized infra 그래프 전체 렌더. */
 export default function InfraTopologyPage() {
+  const [activeAccount] = useActiveAccount();
   const [graph, setGraph] = useState<Graph | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -43,13 +45,13 @@ export default function InfraTopologyPage() {
   useEffect(() => {
     let live = true;
     setBusy(true);
-    fetch('/api/graph?class=infra')
+    fetch(`/api/graph?class=infra&${accountParam(activeAccount) || 'account=self'}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (live) { setGraph(d); setErr(''); } })
       .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); })
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
-  }, []);
+  }, [activeAccount]);
 
   // Multi-match search highlight (v1 parity): id/label/kind/meta substring, case-insensitive.
   const matches = useMemo(() => {

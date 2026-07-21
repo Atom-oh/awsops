@@ -4,6 +4,9 @@
 //   prometheus/mimir : { truncated?, resultType: 'matrix'|'vector', result: [...] }
 //   loki             : { truncated?, resultType: 'streams', result: [{ stream, values:[[ns,line]] }] }
 //   tempo            : { truncated?, traces: [{ traceID, rootServiceName, rootTraceName, durationMs }] }
+//   jaeger           : { truncated?, traces: [{ traceID, rootServiceName, rootTraceName, spanCount, durationMs }] }
+//   dynatrace        : { truncated?, result: [{ metricId, data: [{ dimensions, timestamps, values }] }] }
+//   datadog          : { truncated?, series: [{ metric, scope, pointlist: [[ms, val]] }] }
 //   clickhouse       : { rowCount, rows: [{col:val}], meta: [{name,type}] }
 
 export interface Column { key: string; label: string }
@@ -118,6 +121,87 @@ function tempo(body: Record<string, unknown>): NormalizedResult {
   return { shape: 'traces', rows, columns: cols(['traceID', 'rootServiceName', 'rootTraceName', 'durationMs']), truncated };
 }
 
+function jaeger(body: Record<string, unknown>): NormalizedResult {
+  const traces = Array.isArray(body.traces) ? body.traces : [];
+  const truncated = body.truncated === true;
+  if (!traces.length) return { shape: 'empty', truncated, note: '트레이스 없음' };
+  const rows = traces.map((t) => {
+    const to = t as Record<string, unknown>;
+    return {
+      traceID: to.traceID ?? '',
+      rootServiceName: to.rootServiceName ?? '',
+      rootTraceName: to.rootTraceName ?? '',
+      spanCount: to.spanCount ?? '',
+      durationMs: to.durationMs ?? '',
+    };
+  });
+  return { shape: 'traces', rows, columns: cols(['traceID', 'rootServiceName', 'rootTraceName', 'spanCount', 'durationMs']), truncated };
+}
+
+// Shared multi-series merger for timestamped series → { shape:'series' } (same contract as prom matrix).
+function mergeSeries(
+  entries: Array<{ key: string; points: Array<[number, number | null]> }>,
+  truncated: boolean,
+  totalCount: number,
+): NormalizedResult {
+  const MAX_SERIES = 8;
+  const charted = entries.slice(0, MAX_SERIES);
+  const keys = charted.map((e, i) => (e.key.length > 60 ? `${e.key.slice(0, 57)}…#${i + 1}` : e.key || `series ${i + 1}`));
+  const byT = new Map<string, Record<string, unknown>>();
+  charted.forEach((e, i) => {
+    for (const [ms, v] of e.points) {
+      if (v == null) continue;
+      const t = new Date(ms).toISOString().slice(5, 16).replace('T', ' ');
+      const row = byT.get(t) ?? { t };
+      row[keys[i]] = v;
+      byT.set(t, row);
+    }
+  });
+  const series = [...byT.values()].sort((a, b) => String(a.t).localeCompare(String(b.t)));
+  if (!series.length) return { shape: 'empty', truncated, note: '시계열 포인트 없음' };
+  const rows = entries.map((e) => ({ metric: e.key, points: e.points.length }));
+  return {
+    shape: 'series', series, seriesXKey: 't', seriesKeys: keys,
+    rows, columns: cols(['metric', 'points']), truncated,
+    note: totalCount > MAX_SERIES ? `상위 ${MAX_SERIES}개 시리즈만 차트에 표시 (총 ${totalCount})` : undefined,
+  };
+}
+
+function dynatrace(body: Record<string, unknown>): NormalizedResult {
+  const result = Array.isArray(body.result) ? body.result : [];
+  const truncated = body.truncated === true;
+  const entries: Array<{ key: string; points: Array<[number, number | null]> }> = [];
+  for (const metric of result) {
+    if (!isObj(metric)) continue;
+    const mid = String(metric.metricId ?? '');
+    for (const d of Array.isArray(metric.data) ? metric.data : []) {
+      if (!isObj(d)) continue;
+      const dims = Array.isArray(d.dimensions) ? (d.dimensions as unknown[]).join(',') : '';
+      const ts = Array.isArray(d.timestamps) ? (d.timestamps as unknown[]) : [];
+      const vals = Array.isArray(d.values) ? (d.values as unknown[]) : [];
+      entries.push({
+        key: dims ? `${mid}{${dims}}` : mid,
+        points: ts.map((t, i) => [num(t), finiteOrNull(vals[i])] as [number, number | null]),
+      });
+    }
+  }
+  if (!entries.length) return { shape: 'empty', truncated, note: '결과 없음' };
+  return mergeSeries(entries, truncated, entries.length);
+}
+
+function datadog(body: Record<string, unknown>): NormalizedResult {
+  const series = Array.isArray(body.series) ? body.series : [];
+  const truncated = body.truncated === true;
+  const entries = series.filter(isObj).map((s) => ({
+    key: [String(s.metric ?? ''), String(s.scope ?? '')].filter(Boolean).join(' '),
+    points: (Array.isArray(s.pointlist) ? (s.pointlist as unknown[][]) : []).map(
+      (p) => [num(p[0]), finiteOrNull(p[1])] as [number, number | null],
+    ),
+  }));
+  if (!entries.length) return { shape: 'empty', truncated, note: '결과 없음' };
+  return mergeSeries(entries, truncated, series.length);
+}
+
 function clickhouse(body: Record<string, unknown>): NormalizedResult {
   const rows = Array.isArray(body.rows) ? (body.rows as Record<string, unknown>[]) : [];
   const truncated = body.truncated === true;
@@ -140,6 +224,12 @@ export function normalizeResult(kind: string, _tool: string, body: unknown): Nor
         return loki(body);
       case 'tempo':
         return tempo(body);
+      case 'jaeger':
+        return jaeger(body);
+      case 'dynatrace':
+        return dynatrace(body);
+      case 'datadog':
+        return datadog(body);
       case 'clickhouse':
         return clickhouse(body);
       default:

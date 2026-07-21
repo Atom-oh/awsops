@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -77,6 +77,28 @@ export async function GET(request: Request, { params }: { params: { type: string
         { label: '최소 여유 스토리지', value: minStoreGb == null ? '—' : `${minStoreGb}GB` },
       ];
       return Response.json({ cards });
+    }
+
+    // v1-parity fleet metrics (page-level tables):
+    // elasticache/opensearch ?ids=a,b → { fleet: { id: {metricKey: value|null} } }
+    if ((params.type === 'elasticache' || params.type === 'opensearch') && url.searchParams.get('ids') !== null) {
+      const ids = (url.searchParams.get('ids') ?? '')
+        .split(',').map((x) => x.trim()).filter((x) => /^[a-zA-Z0-9._-]+$/.test(x)).slice(0, 200);
+      const fleet = params.type === 'elasticache' ? await elasticacheFleetLive(ids) : await opensearchFleetLive(ids);
+      return Response.json({ fleet });
+    }
+    // msk ?nodes=<clusterArn> → { nodes, brokerMetrics } (kafka ListNodes + per-broker CloudWatch)
+    if (params.type === 'msk' && url.searchParams.get('nodes') !== null) {
+      const arn = url.searchParams.get('nodes') ?? '';
+      if (!/^arn:aws:kafka:[a-z0-9-]+:\d{12}:cluster\/[a-zA-Z0-9._-]+\/[a-z0-9-]+$/.test(arn)) {
+        return Response.json({ status: 'error', message: 'invalid cluster arn' }, { status: 400 });
+      }
+      const clusterName = arn.split('/')[1];
+      const clusterRegion = arn.split(':')[3];
+      const nodes = await mskListNodes(arn);
+      const brokerIds = nodes.filter((n) => n.nodeType === 'BROKER' && n.brokerId != null).map((n) => n.brokerId as number);
+      const brokerMetrics = brokerIds.length ? await mskBrokerFleetLive(clusterName, brokerIds, clusterRegion) : {};
+      return Response.json({ nodes, brokerMetrics });
     }
 
     // ElastiCache/OpenSearch/MSK: per-resource live metrics for the detail panel (?id=).

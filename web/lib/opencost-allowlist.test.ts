@@ -1,23 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Delegates to eks-registry (env clusters + runtime registrations + Aurora auth) —
+// the OpenCost gate must match what the fleet/allocation routes consider onboarded.
+const isAllowed = vi.fn();
+vi.mock('@/lib/eks-registry', () => ({ isAllowed: (...a: unknown[]) => isAllowed(...a) }));
+
 import { isClusterOnboarded } from './opencost-allowlist';
 
-const orig = process.env.ONBOARDED_EKS_CLUSTERS;
-afterEach(() => { process.env.ONBOARDED_EKS_CLUSTERS = orig; });
+beforeEach(() => { isAllowed.mockReset(); });
 
 describe('isClusterOnboarded', () => {
-  beforeEach(() => { process.env.ONBOARDED_EKS_CLUSTERS = 'fsi-demo-cluster, mall-apne2-az-a ,'; });
-  it('matches a member (trimming + dropping empties)', () => {
-    expect(isClusterOnboarded('fsi-demo-cluster')).toBe(true);
-    expect(isClusterOnboarded('mall-apne2-az-a')).toBe(true);
+  it('is true when the registry allows the cluster', async () => {
+    isAllowed.mockResolvedValue(true);
+    await expect(isClusterOnboarded('fsi-demo-cluster')).resolves.toBe(true);
+    expect(isAllowed).toHaveBeenCalledWith('fsi-demo-cluster');
   });
-  it('rejects a non-member', () => {
-    expect(isClusterOnboarded('nope')).toBe(false);
-    expect(isClusterOnboarded('')).toBe(false);
-  });
-  it('is false when the env is unset/empty', () => {
-    delete process.env.ONBOARDED_EKS_CLUSTERS;
-    expect(isClusterOnboarded('fsi-demo-cluster')).toBe(false);
-    process.env.ONBOARDED_EKS_CLUSTERS = '   ';
-    expect(isClusterOnboarded('fsi-demo-cluster')).toBe(false);
+  it('is false when the registry rejects the cluster', async () => {
+    isAllowed.mockResolvedValue(false);
+    await expect(isClusterOnboarded('nope')).resolves.toBe(false);
   });
 });

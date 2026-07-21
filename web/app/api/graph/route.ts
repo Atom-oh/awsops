@@ -21,6 +21,14 @@ export async function GET(request: Request) {
     return Response.json({ status: 'error', message: `unknown class: ${raw}` }, { status: 400 });
   }
   const cls = raw;
+  // Account scope: 'self' (default) | 12-digit member id | '__all__' (union across accounts).
+  // Trace is host-scoped by construction (spans carry no AWS-account dimension) — its rows only
+  // exist under 'self', so member scopes honestly return an empty trace graph.
+  const acctRaw = url.searchParams.get('account') ?? 'self';
+  const account = acctRaw === '' ? 'self' : acctRaw;
+  if (account !== 'self' && account !== '__all__' && !/^\d{12}$/.test(account)) {
+    return Response.json({ status: 'error', message: `invalid account: ${account}` }, { status: 400 });
+  }
   const from = url.searchParams.get('from');
   const depthRaw = Number(url.searchParams.get('depth'));
   const depth = Number.isFinite(depthRaw) && depthRaw > 0 ? depthRaw : 2;
@@ -29,32 +37,36 @@ export async function GET(request: Request) {
     if (from) {
       // per-resource neighborhood: union of up + down reachable ids (each capped per hop in SQL)
       const [down, up] = await Promise.all([
-        downstream(pool, from, { cls, depth }),
-        upstream(pool, from, { cls, depth }),
+        downstream(pool, from, { cls, depth, account }),
+        upstream(pool, from, { cls, depth, account }),
       ]);
       const ids = [...new Set([from, ...down.map((r) => r.id), ...up.map((r) => r.id)])];
       const [nodes, edges, cap] = await Promise.all([
-        pool.query(`SELECT id, kind, label, meta, captured_at FROM topology_nodes
-                      WHERE account_id = 'self' AND class = $1 AND id = ANY($2) ORDER BY kind, id`, [cls, ids]),
-        pool.query(`SELECT source, target, rel, confidence FROM topology_edges
-                      WHERE account_id = 'self' AND class = $1 AND source = ANY($2) AND target = ANY($2)`, [cls, ids]),
+        // DISTINCT ON: under '__all__' the same node id may exist in more than one account's graph
+        // (AWS ids are practically unique, but the PK allows it) — keep the freshest row per id.
+        pool.query(`SELECT DISTINCT ON (id) id, kind, label, meta, captured_at FROM topology_nodes
+                      WHERE ($3 = '__all__' OR account_id = $3) AND class = $1 AND id = ANY($2)
+                      ORDER BY id, captured_at DESC`, [cls, ids, account]),
+        pool.query(`SELECT DISTINCT source, target, rel, confidence FROM topology_edges
+                      WHERE ($3 = '__all__' OR account_id = $3) AND class = $1 AND source = ANY($2) AND target = ANY($2)`, [cls, ids, account]),
         // capped = some included node actually has more neighbors than the per-hop cap showed
         pool.query(`SELECT EXISTS (SELECT 1 FROM (
-                      SELECT source FROM topology_edges WHERE account_id = 'self' AND class = $1 AND source = ANY($2)
-                      GROUP BY source HAVING count(*) > $3) t) AS capped`, [cls, ids, FANOUT_CAP]),
+                      SELECT source FROM topology_edges WHERE ($4 = '__all__' OR account_id = $4) AND class = $1 AND source = ANY($2)
+                      GROUP BY source HAVING count(*) > $3) t) AS capped`, [cls, ids, FANOUT_CAP, account]),
       ]);
       return Response.json({
-        from, depth, class: cls, nodes: nodes.rows, edges: edges.rows,
+        from, depth, class: cls, account, nodes: nodes.rows, edges: edges.rows,
         captured_at: nodes.rows[0]?.captured_at ?? null, capped: cap.rows[0]?.capped ?? false,
       });
     }
     const [nodes, edges] = await Promise.all([
-      pool.query(`SELECT id, kind, label, meta, captured_at FROM topology_nodes
-                    WHERE account_id = 'self' AND class = $1 ORDER BY kind, id`, [cls]),
-      pool.query(`SELECT source, target, rel, confidence FROM topology_edges
-                    WHERE account_id = 'self' AND class = $1`, [cls]),
+      pool.query(`SELECT DISTINCT ON (id) id, kind, label, meta, captured_at FROM topology_nodes
+                    WHERE ($2 = '__all__' OR account_id = $2) AND class = $1
+                    ORDER BY id, captured_at DESC`, [cls, account]),
+      pool.query(`SELECT DISTINCT source, target, rel, confidence FROM topology_edges
+                    WHERE ($2 = '__all__' OR account_id = $2) AND class = $1`, [cls, account]),
     ]);
-    return Response.json({ class: cls, nodes: nodes.rows, edges: edges.rows, captured_at: nodes.rows[0]?.captured_at ?? null });
+    return Response.json({ class: cls, account, nodes: nodes.rows, edges: edges.rows, captured_at: nodes.rows[0]?.captured_at ?? null });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

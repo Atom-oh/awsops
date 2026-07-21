@@ -29,6 +29,9 @@ const PH: Record<string, string> = {
   loki: 'LogQL… 예: {job="varlogs"} |= "error"',
   tempo: 'TraceQL… 예: { duration > 500ms }',
   clickhouse: 'SQL… 예: SELECT count() FROM system.tables',
+  jaeger: '트레이스 검색… 예: service=frontend&limit=20 (또는 서비스명만)',
+  dynatrace: 'metricSelector… 예: builtin:host.cpu.usage:avg',
+  datadog: '메트릭 쿼리… 예: avg:system.cpu.user{*}',
 };
 const RANGE_KINDS = new Set(['prometheus', 'mimir', 'loki']); // kinds with a *_query_range tool
 const selectCls = 'rounded-md border border-ink-200 bg-card px-2.5 py-1.5 text-[13px] text-ink-700';

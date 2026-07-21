@@ -15,7 +15,7 @@ const PROJECT = process.env.PROJECT || 'awsops-v2';
 /** Kinds that have a per-kind connector MCP Lambda (the invoke transport allowlist). Kept independent
  *  of integration-credentials so the invoke transport doesn't pull the Secrets Manager SDK into its
  *  import graph (mirrors integration-credentials.KNOWN_CONNECTOR_SLUGS). */
-export const KNOWN_MCP_LAMBDA_KINDS = ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir'] as const;
+export const KNOWN_MCP_LAMBDA_KINDS = ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir', 'jaeger', 'dynatrace', 'datadog'] as const;
 
 // The connection config is the FLAT secret blob the routes resolve (getCredentialById) and the
 // connector Lambda reads verbatim (creds.get("authType"), creds.get("username"), …) — NOT nested.

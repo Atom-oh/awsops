@@ -19,7 +19,7 @@ describe('IntegrationIcon', () => {
   });
 
   it('falls back to the kind name for an unknown kind (never crashes)', () => {
-    render(<IntegrationIcon kind="datadog" />);
-    expect(screen.getByRole('img').getAttribute('aria-label')).toBe('datadog');
+    render(<IntegrationIcon kind="newrelic" />);
+    expect(screen.getByRole('img').getAttribute('aria-label')).toBe('newrelic');
   });
 });

@@ -9,10 +9,11 @@ import Meter from '@/components/ui/Meter';
 import DataTable from '@/components/ui/DataTable';
 import DetailPanel from '@/components/ui/DetailPanel';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import { useActiveAccount } from '@/lib/account-context';
 
 interface Benchmark { id: string; name: string; description: string }
 interface Run {
-  id: number; benchmark: string; status: string; pass_rate: number | null;
+  id: number; benchmark: string; status: string; account?: string; pass_rate: number | null;
   total_controls: number | null; ok: number | null; alarm: number | null;
   info: number | null; skip: number | null; error: number | null;
   started_at?: string; finished_at?: string; error_message?: string | null;
@@ -157,6 +158,7 @@ export default function CompliancePage() {
     })();
   }, [fetchRun, pollActive]);
 
+  const [activeAccount] = useActiveAccount();
   useEffect(() => () => { if (pollRef.current) clearTimeout(pollRef.current); }, []);
 
   const runBenchmark = useCallback(async () => {
@@ -166,10 +168,12 @@ export default function CompliancePage() {
     setRun(null);
     setResults([]);
     try {
+      // Scope: a selected 12-digit member account pins the benchmark to that account's Steampipe
+      // connection; host/'전체' runs the aggregator (all accounts merged — BFF maps '' → 'all').
       const r = await fetch('/api/compliance/run', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ benchmark }),
+        body: JSON.stringify({ benchmark, account: /^[0-9]{12}$/.test(activeAccount) ? activeAccount : '' }),
       });
       if (!r.ok) {
         const e = await r.json().catch(() => ({}));
@@ -186,7 +190,7 @@ export default function CompliancePage() {
       setErr('벤치마크 실행을 시작하지 못했습니다.');
       setBusy(false);
     }
-  }, [benchmark, pollActive]);
+  }, [benchmark, pollActive, activeAccount]);
 
   // Per-section pass% (client-side rollup over the leaf results).
   const sections = useMemo(() => {
@@ -276,6 +280,9 @@ export default function CompliancePage() {
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="font-medium">{h.benchmark}</span>
+                    {h.account && h.account !== 'all' && (
+                      <span className="rounded bg-ink-100 px-1.5 py-0.5 font-mono text-[10.5px] text-ink-500">{h.account}</span>
+                    )}
                     {/* execution time distinguishes repeated runs of the same benchmark (v1 parity) */}
                     <span className="tabular-nums truncate text-ink-400">{h.started_at ? new Date(h.started_at).toLocaleString('ko-KR') : ''}</span>
                   </span>

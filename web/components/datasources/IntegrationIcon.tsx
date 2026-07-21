@@ -1,5 +1,5 @@
 import {
-  Flame, Database, ScrollText, Waypoints, LineChart, NotebookPen, Plug, type LucideIcon,
+  Flame, Database, ScrollText, Waypoints, LineChart, NotebookPen, Plug, Radar, Gauge, PawPrint, type LucideIcon,
 } from 'lucide-react';
 
 // Per-kind brand icon so datasources/connectors are visually distinguishable across the Integrations
@@ -18,6 +18,9 @@ const KINDS: Record<string, KindStyle> = {
   // near-black brand mark: themed via CSS var (light #0F172A / dark light-gray) so the icon
   // stays visible on dark surfaces; the non-hex var makes tint() fall back to the neutral tile.
   notion: { Icon: NotebookPen, color: 'var(--integration-notion)', title: 'Notion' },
+  jaeger: { Icon: Radar, color: '#60A5FA', title: 'Jaeger' },
+  dynatrace: { Icon: Gauge, color: '#1496FF', title: 'Dynatrace' },
+  datadog: { Icon: PawPrint, color: '#632CA6', title: 'Datadog' },
 };
 
 const FALLBACK: KindStyle = { Icon: Plug, color: '#64748b', title: 'Integration' };
