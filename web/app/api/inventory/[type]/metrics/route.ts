@@ -94,9 +94,10 @@ export async function GET(request: Request, { params }: { params: { type: string
         return Response.json({ status: 'error', message: 'invalid cluster arn' }, { status: 400 });
       }
       const clusterName = arn.split('/')[1];
+      const clusterRegion = arn.split(':')[3];
       const nodes = await mskListNodes(arn);
       const brokerIds = nodes.filter((n) => n.nodeType === 'BROKER' && n.brokerId != null).map((n) => n.brokerId as number);
-      const brokerMetrics = brokerIds.length ? await mskBrokerFleetLive(clusterName, brokerIds) : {};
+      const brokerMetrics = brokerIds.length ? await mskBrokerFleetLive(clusterName, brokerIds, clusterRegion) : {};
       return Response.json({ nodes, brokerMetrics });
     }
 

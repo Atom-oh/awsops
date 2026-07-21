@@ -461,15 +461,19 @@ async function fleetLatest(
   entities: string[],
   dimsFor: (id: string) => { Name: string; Value: string }[],
   metrics: readonly { key: string; name: string; stat: string }[],
+  region?: string,
 ): Promise<Record<string, Record<string, number | null>>> {
   const out: Record<string, Record<string, number | null>> = {};
   if (!entities.length) return out;
   for (const id of entities) out[id] = Object.fromEntries(metrics.map((m) => [m.key, null]));
   try {
+    // CloudWatch metrics live in the resource's region — an off-region cluster (e.g. a DR MSK
+    // in us-west-2) needs its own regional client; default stays the deployment region.
+    const client = region && region !== REGION ? new CloudWatchClient({ region }) : cwClient();
     const CHUNK = Math.max(1, Math.floor(480 / metrics.length));
     for (let c = 0; c < entities.length; c += CHUNK) {
       const chunk = entities.slice(c, c + CHUNK);
-      const r = await cwClient().send(new GetMetricDataCommand({
+      const r = await client.send(new GetMetricDataCommand({
         StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
         MetricDataQueries: chunk.flatMap((id, i) =>
           metrics.map((m) => ({
@@ -531,7 +535,9 @@ export interface MskNode {
 /** Broker/controller nodes for an MSK cluster (kafka ListNodes — Steampipe has no node table). */
 export async function mskListNodes(clusterArn: string): Promise<MskNode[]> {
   try {
-    const client = new KafkaClient({ region: REGION });
+    // kafka is regional — parse the cluster's region off the ARN (DR clusters live off-region).
+    const region = clusterArn.split(':')[3] || REGION;
+    const client = new KafkaClient({ region });
     const r = await client.send(new ListNodesCommand({ ClusterArn: clusterArn, MaxResults: 100 }));
     return (r.NodeInfoList ?? []).map((n) => ({
       nodeType: n.NodeType ?? 'BROKER',
@@ -555,10 +561,10 @@ const MSK_BROKER_METRICS = [
   { key: 'bytesOut', name: 'BytesOutPerSec', stat: 'Average' },
 ] as const;
 /** Per-broker latest metrics (v1 msk 브로커 메트릭 — dims 'Cluster Name' + 'Broker ID'). */
-export function mskBrokerFleetLive(clusterName: string, brokerIds: number[]) {
+export function mskBrokerFleetLive(clusterName: string, brokerIds: number[], region?: string) {
   return fleetLatest('AWS/Kafka', brokerIds.map(String), (id) => [
     { Name: 'Cluster Name', Value: clusterName },
     { Name: 'Broker ID', Value: id },
-  ], MSK_BROKER_METRICS);
+  ], MSK_BROKER_METRICS, region);
 }
 

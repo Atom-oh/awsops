@@ -148,6 +148,7 @@ interface MskNodeRow { nodeType: string; brokerId: number | null; instanceType: 
 
 export function MskBrokerNodes({ rows }: { rows: Row[] }) {
   const [data, setData] = useState<Record<string, { nodes: MskNodeRow[]; brokerMetrics: Fleet }>>({});
+  const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState('');
   const clusters = useMemo(
     () => rows
@@ -166,7 +167,8 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
         .then((d) => [c.name, d] as const),
     ))
       .then((pairs) => { if (live) { setData(Object.fromEntries(pairs)); setErr(''); } })
-      .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); });
+      .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); })
+      .finally(() => { if (live) setLoaded(true); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
@@ -222,7 +224,9 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
               </tr>
             ))}
             {flat.length === 0 && !err && (
-              <tr><td className={TD} colSpan={11}><span className="text-ink-400">노드 조회 중…</span></td></tr>
+              <tr><td className={TD} colSpan={11}>
+                <span className="text-ink-400">{loaded ? '브로커 노드 없음 — kafka:ListNodes 권한 또는 클러스터 상태를 확인하세요' : '노드 조회 중…'}</span>
+              </td></tr>
             )}
           </tbody>
         </table>
