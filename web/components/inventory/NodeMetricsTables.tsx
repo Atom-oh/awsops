@@ -6,3 +6,4 @@ export { OpensearchDomainMetrics } from './metrics/OpensearchDomainMetrics';
 export { MskBrokerNodes } from './metrics/MskBrokerNodes';
 export { RdsInstanceMetrics } from './metrics/RdsInstanceMetrics';
 export { DynamoTableMetrics } from './metrics/DynamoTableMetrics';
+export { AlbMetrics } from './metrics/AlbMetrics';

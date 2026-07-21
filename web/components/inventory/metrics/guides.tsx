@@ -242,3 +242,57 @@ export const OS_GUIDE: GuideSpec = {
     ['AutomatedSnapshotFailure', '= 1', '백업 실패'],
   ],
 };
+
+export const ALB_GUIDE: GuideSpec = {
+  service: 'ALB',
+  intro: (
+    <>ALB는 <b>HTTP 응답 코드 · 지연 · 연결/요청 수 · 타깃 헬스 · 용량(LCU)</b>을 핵심으로 봅니다.
+    특히 <b>"로드밸런서 자체가 낸 에러"(HTTPCode_ELB_*)와 "타깃이 낸 에러"(HTTPCode_Target_*)를
+    구분하는 것</b>이 진단의 출발점입니다.</>
+  ),
+  sections: [
+    { title: '① HTTP 응답 코드 — 진단의 핵심', items: [
+      <><b>HTTPCode_ELB_5XX_Count</b> — ALB가 직접 생성한 5xx(타깃까지 못 갔거나 응답을 못 받음). 502/503/504로 세분하면 원인이 좁혀집니다.</>,
+      <><b>502</b>(Bad Gateway) — 타깃의 malformed 응답/연결 끊김. <b>가장 흔한 트러블.</b> <b>503</b> — 정상 타깃이 없음(전부 unhealthy), 매우 중요. <b>504</b> — idle timeout 내 응답 실패, 백엔드 느림 신호.</>,
+      <><b>HTTPCode_Target_5XX_Count</b> — 백엔드 애플리케이션 오류. Target_2XX/3XX는 정상 트래픽 기준선.</>,
+      <><b>핵심 구분</b>: ELB_5XX↑ = LB↔타깃 연결/헬스 문제, Target_5XX↑ = 애플리케이션 코드 문제.</>,
+    ]},
+    { title: '② 지연 (Latency)', items: [
+      <><b>TargetResponseTime</b> — 가장 중요. <b>p50/p90/p99 백분위로</b> 봐야 함(평균은 롱테일을 숨김). 급증 = 백엔드 성능 저하.</>,
+    ]},
+    { title: '③ 요청·연결 수', items: [
+      <><b>RequestCount</b>(트래픽 기준선), <b>ActiveConnectionCount</b>, <b>NewConnectionCount</b>(TLS 재협상 폭주 감지).</>,
+      <><b>RejectedConnectionCount</b> — ALB 최대 연결 한도 도달. <b>0보다 크면 용량 문제.</b></>,
+      <><b>Client/TargetTLSNegotiationErrorCount</b> — TLS 협상 실패.</>,
+    ]},
+    { title: '④ 타깃 헬스 — 가용성 (타깃 그룹 차원으로 봐야 의미)', items: [
+      <><b>HealthyHostCount</b> — 0에 가까워지면 위험, 0이면 503 발생.</>,
+      <><b>UnHealthyHostCount</b> — 증가 시 헬스체크 실패 원인 조사(앱 크래시, 헬스체크 경로 오류, 시작 지연).</>,
+    ]},
+    { title: '⑤ 용량 / 스로틀', items: [
+      <><b>ConsumedLCUs</b>(요금·용량 산정, 급증 감지), ProcessedBytes.</>,
+      <><b>TargetConnectionErrorCount</b> — ALB→타깃 연결 실패. 네트워크/보안그룹/타깃 포트 문제 신호.</>,
+    ]},
+    { title: '⑥ 기타 상황별', items: [
+      <><b>RequestCountPerTarget</b> — 부하 분산 불균형 감지. HTTP_Redirect/Fixed_Response_Count.</>,
+      <>DesyncMitigationMode_NonCompliant_Request_Count(HTTP desync 위험), GrpcRequestCount(gRPC).</>,
+    ]},
+    { title: '증상별 진단 흐름', items: [
+      <>502 급증 → 타깃 앱 크래시/커넥션 조기 종료, <b>keep-alive 타임아웃 불일치</b>(ALB idle timeout &gt; 백엔드 keep-alive면 발생) 점검.</>,
+      <>503 급증 → <b>HealthyHostCount</b> 확인, 헬스체크 실패 원인 조사.</>,
+      <>504 급증 → 백엔드 느림(TargetResponseTime) + ALB idle timeout 설정.</>,
+      <>간헐적 5xx인데 Target은 2xx → LB 레벨 문제: <b>RejectedConnectionCount / TargetConnectionErrorCount</b> 확인.</>,
+      <>원인 불명 → <b>액세스 로그(S3)</b>로 개별 요청의 elb_status_code vs target_status_code, request/target/response_processing_time 분해 — 지연이 LB 큐잉인지 백엔드인지 정확히 구분.</>,
+    ]},
+  ],
+  priorityHeader: ['메트릭', '주의 기준', '의미'],
+  priority: [
+    ['HTTPCode_ELB_5XX_Count', '급증', 'LB↔타깃 문제(502/503/504로 세분)'],
+    ['HTTPCode_Target_5XX_Count', '급증', '백엔드 앱 오류'],
+    ['TargetResponseTime (p99)', '급증', '백엔드 성능 저하'],
+    ['HealthyHostCount', '낮음/0', '가용 타깃 부족 → 503'],
+    ['UnHealthyHostCount', '> 0', '헬스체크 실패'],
+    ['RejectedConnectionCount', '> 0', '연결 한도 도달'],
+    ['TargetConnectionErrorCount', '> 0', '타깃 연결 실패(네트워크/SG)'],
+  ],
+};

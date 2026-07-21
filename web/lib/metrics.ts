@@ -722,3 +722,55 @@ export async function ddbReplicationLags(cap = 30): Promise<DdbReplicationRow[]>
   }
 }
 
+// ALB per-LB diagnostics (owner 가이드: LB가 낸 에러 vs 타깃이 낸 에러 구분이 진단의 출발점).
+// entities = CloudWatch LoadBalancer 차원 값("app/<name>/<id>", ARN 접미사) — 라우트가
+// 인벤토리 ARN에서 도출해 resource_id로 되돌려 매핑한다. p50/p99는 확장 통계.
+const ALB_FLEET_METRICS = [
+  { key: 'elb5xx', name: 'HTTPCode_ELB_5XX_Count', stat: 'Sum' },
+  { key: 'elb502', name: 'HTTPCode_ELB_502_Count', stat: 'Sum' },
+  { key: 'elb503', name: 'HTTPCode_ELB_503_Count', stat: 'Sum' },
+  { key: 'elb504', name: 'HTTPCode_ELB_504_Count', stat: 'Sum' },
+  { key: 'tgt5xx', name: 'HTTPCode_Target_5XX_Count', stat: 'Sum' },
+  { key: 'tgt4xx', name: 'HTTPCode_Target_4XX_Count', stat: 'Sum' },
+  { key: 'tgt2xx', name: 'HTTPCode_Target_2XX_Count', stat: 'Sum' },
+  { key: 'respP50', name: 'TargetResponseTime', stat: 'p50' },
+  { key: 'respP99', name: 'TargetResponseTime', stat: 'p99' },
+  { key: 'requests', name: 'RequestCount', stat: 'Sum' },
+  { key: 'active', name: 'ActiveConnectionCount', stat: 'Sum' },
+  { key: 'newConn', name: 'NewConnectionCount', stat: 'Sum' },
+  { key: 'rejected', name: 'RejectedConnectionCount', stat: 'Sum' },
+  { key: 'tgtConnErr', name: 'TargetConnectionErrorCount', stat: 'Sum' },
+  { key: 'clientTlsErr', name: 'ClientTLSNegotiationErrorCount', stat: 'Sum' },
+  { key: 'lcu', name: 'ConsumedLCUs', stat: 'Sum' },
+] as const;
+export function albFleetLive(lbDims: string[]) {
+  return fleetLatest('AWS/ApplicationELB', lbDims, (id) => [{ Name: 'LoadBalancer', Value: id }], ALB_FLEET_METRICS);
+}
+
+export interface AlbTgHealthRow { tg: string; tgName: string; lbDim: string; healthy: number | null; unhealthy: number | null }
+/** Per-TargetGroup 헬스 (Healthy/UnHealthyHostCount는 TG 차원이어야 의미) — (tgDim, lbDim) 쌍으로 조회. */
+export async function albTargetHealth(pairs: { tgDim: string; tgName: string; lbDim: string }[]): Promise<AlbTgHealthRow[]> {
+  if (!pairs.length) return [];
+  try {
+    const capped = pairs.slice(0, 100);
+    const r = await cwClient().send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+      MetricDataQueries: capped.flatMap((p, i) => [
+        { Id: `h_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: 'AWS/ApplicationELB', MetricName: 'HealthyHostCount', Dimensions: [{ Name: 'TargetGroup', Value: p.tgDim }, { Name: 'LoadBalancer', Value: p.lbDim }] }, Period: 300, Stat: 'Minimum' } },
+        { Id: `u_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: 'AWS/ApplicationELB', MetricName: 'UnHealthyHostCount', Dimensions: [{ Name: 'TargetGroup', Value: p.tgDim }, { Name: 'LoadBalancer', Value: p.lbDim }] }, Period: 300, Stat: 'Maximum' } },
+      ]),
+    }));
+    const vals = new Map<string, number>();
+    for (const res of r.MetricDataResults ?? []) {
+      const v = res.Values?.[0];
+      if (res.Id && typeof v === 'number') vals.set(res.Id, v);
+    }
+    return capped.map((p, i) => ({
+      tg: p.tgDim, tgName: p.tgName, lbDim: p.lbDim,
+      healthy: vals.get(`h_i${i}`) ?? null, unhealthy: vals.get(`u_i${i}`) ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
