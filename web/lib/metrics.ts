@@ -460,8 +460,9 @@ async function fleetLatest(
   namespace: string,
   entities: string[],
   dimsFor: (id: string) => { Name: string; Value: string }[],
-  metrics: readonly { key: string; name: string; stat: string }[],
+  metrics: readonly { key: string; name: string; stat: string; dims?: readonly { Name: string; Value: string }[]; period?: number }[],
   region?: string,
+  windowMs = 3600_000,
 ): Promise<Record<string, Record<string, number | null>>> {
   const out: Record<string, Record<string, number | null>> = {};
   if (!entities.length) return out;
@@ -474,11 +475,11 @@ async function fleetLatest(
     for (let c = 0; c < entities.length; c += CHUNK) {
       const chunk = entities.slice(c, c + CHUNK);
       const r = await client.send(new GetMetricDataCommand({
-        StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+        StartTime: new Date(Date.now() - windowMs), EndTime: new Date(),
         MetricDataQueries: chunk.flatMap((id, i) =>
           metrics.map((m) => ({
             Id: `${m.key}_i${i}`, ReturnData: true,
-            MetricStat: { Metric: { Namespace: namespace, MetricName: m.name, Dimensions: dimsFor(id) }, Period: 300, Stat: m.stat },
+            MetricStat: { Metric: { Namespace: namespace, MetricName: m.name, Dimensions: [...dimsFor(id), ...(m.dims ?? [])] }, Period: m.period ?? 300, Stat: m.stat },
           }))),
       }));
       for (const res of r.MetricDataResults ?? []) {
@@ -500,6 +501,18 @@ const EC_FLEET_METRICS = [
   { key: 'conn', name: 'CurrConnections', stat: 'Average' },
   { key: 'netIn', name: 'NetworkBytesIn', stat: 'Sum' },
   { key: 'netOut', name: 'NetworkBytesOut', stat: 'Sum' },
+  // 진단 계층 (owner 가이드): DatabaseMemoryUsagePercentage가 가장 중요한 경보 지표,
+  // Evictions>0 지속=메모리 부족, Network*AllowanceExceeded=놓치기 쉬운 대역폭 상한 병목.
+  { key: 'dbMemPct', name: 'DatabaseMemoryUsagePercentage', stat: 'Average' },
+  { key: 'hitRate', name: 'CacheHitRate', stat: 'Average' },
+  { key: 'evictions', name: 'Evictions', stat: 'Sum' },
+  { key: 'reclaimed', name: 'Reclaimed', stat: 'Sum' },
+  { key: 'swap', name: 'SwapUsage', stat: 'Average' },
+  { key: 'currItems', name: 'CurrItems', stat: 'Average' },
+  { key: 'newConn', name: 'NewConnections', stat: 'Sum' },
+  { key: 'bwInEx', name: 'NetworkBandwidthInAllowanceExceeded', stat: 'Sum' },
+  { key: 'bwOutEx', name: 'NetworkBandwidthOutAllowanceExceeded', stat: 'Sum' },
+  { key: 'replLag', name: 'ReplicationLag', stat: 'Average' },
 ] as const;
 /** Per-CacheClusterId latest metrics (v1 elasticache 노드 메트릭 — cluster-level, applied to each node). */
 export function elasticacheFleetLive(ids: string[]) {
@@ -519,6 +532,16 @@ const OS_FLEET_METRICS = [
   { key: 'indexLatency', name: 'IndexingLatency', stat: 'Average' },
   { key: 'searchRate', name: 'SearchRate', stat: 'Sum' },
   { key: 'indexRate', name: 'IndexingRate', stat: 'Sum' },
+  // 진단 계층 (owner 가이드): 쓰기 차단·스레드풀 거부(포화 신호)·마스터 병목·스냅샷 실패.
+  { key: 'writesBlocked', name: 'ClusterIndexWritesBlocked', stat: 'Maximum' },
+  { key: 'masterCpu', name: 'MasterCPUUtilization', stat: 'Average' },
+  { key: 'searchQueue', name: 'ThreadpoolSearchQueue', stat: 'Maximum' },
+  { key: 'writeQueue', name: 'ThreadpoolWriteQueue', stat: 'Maximum' },
+  { key: 'searchRejected', name: 'ThreadpoolSearchRejected', stat: 'Sum' },
+  { key: 'writeRejected', name: 'ThreadpoolWriteRejected', stat: 'Sum' },
+  { key: 'diskQueue', name: 'DiskQueueDepth', stat: 'Average' },
+  { key: 'http5xx', name: '5xx', stat: 'Sum' },
+  { key: 'snapshotFail', name: 'AutomatedSnapshotFailure', stat: 'Maximum' },
 ] as const;
 /** Per-domain latest metrics (v1 opensearch 도메인 메트릭). AWS/ES requires the ClientId dimension. */
 export function opensearchFleetLive(domains: string[]) {
@@ -644,4 +667,225 @@ const RDS_FLEET_METRICS = [
 /** Per-DBInstance latest metrics (owner 가이드: RDS 진단 계층 — 인스턴스 레벨 CloudWatch). */
 export function rdsFleetLive(ids: string[]) {
   return fleetLatest('AWS/RDS', ids, (id) => [{ Name: 'DBInstanceIdentifier', Value: id }], RDS_FLEET_METRICS);
+}
+
+// DynamoDB per-table diagnostics (owner 가이드: 스로틀링이 진단의 최우선 — 용량 부족 vs 핫 파티션).
+// 스로틀/에러 계열은 Sum(5분 누적 건수), 소비 용량은 Sum/300 = 초당 소비율로 환산해 프로비저닝과 비교,
+// SuccessfulRequestLatency는 Operation 차원 필수 → 대표 4개 오퍼레이션으로 분해.
+const DDB_TABLE_METRICS = [
+  { key: 'rThrottle', name: 'ReadThrottleEvents', stat: 'Sum' },
+  { key: 'wThrottle', name: 'WriteThrottleEvents', stat: 'Sum' },
+  { key: 'consumedR', name: 'ConsumedReadCapacityUnits', stat: 'Sum' },
+  { key: 'consumedW', name: 'ConsumedWriteCapacityUnits', stat: 'Sum' },
+  { key: 'provR', name: 'ProvisionedReadCapacityUnits', stat: 'Average' },
+  { key: 'provW', name: 'ProvisionedWriteCapacityUnits', stat: 'Average' },
+  { key: 'condFail', name: 'ConditionalCheckFailedRequests', stat: 'Sum' },
+  { key: 'txnConflict', name: 'TransactionConflict', stat: 'Sum' },
+  { key: 'latGet', name: 'SuccessfulRequestLatency', stat: 'Average', dims: [{ Name: 'Operation', Value: 'GetItem' }] },
+  { key: 'latQuery', name: 'SuccessfulRequestLatency', stat: 'Average', dims: [{ Name: 'Operation', Value: 'Query' }] },
+  { key: 'latPut', name: 'SuccessfulRequestLatency', stat: 'Average', dims: [{ Name: 'Operation', Value: 'PutItem' }] },
+  { key: 'latScan', name: 'SuccessfulRequestLatency', stat: 'Average', dims: [{ Name: 'Operation', Value: 'Scan' }] },
+] as const;
+export function ddbFleetLive(tables: string[]) {
+  return fleetLatest('AWS/DynamoDB', tables, (id) => [{ Name: 'TableName', Value: id }], DDB_TABLE_METRICS);
+}
+
+export interface DdbReplicationRow { table: string; region: string; latencyMs: number | null }
+/** Global Tables 리전 간 복제 지연 — ReceivingRegion 차원을 모르므로 ListMetrics로 발견. */
+export async function ddbReplicationLags(cap = 30): Promise<DdbReplicationRow[]> {
+  try {
+    const lm = await cwClient().send(new ListMetricsCommand({
+      Namespace: 'AWS/DynamoDB', MetricName: 'ReplicationLatency',
+    }));
+    const series = (lm.Metrics ?? []).slice(0, cap).map((m) => {
+      const dim = (n: string) => m.Dimensions?.find((d) => d.Name === n)?.Value ?? '';
+      return { table: dim('TableName'), region: dim('ReceivingRegion'), dims: m.Dimensions ?? [] };
+    }).filter((x) => x.table);
+    if (!series.length) return [];
+    const r = await cwClient().send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+      MetricDataQueries: series.map((x, i) => ({
+        Id: `rep_i${i}`, ReturnData: true,
+        MetricStat: { Metric: { Namespace: 'AWS/DynamoDB', MetricName: 'ReplicationLatency', Dimensions: x.dims }, Period: 300, Stat: 'Average' },
+      })),
+    }));
+    const byIdx = new Map<number, number>();
+    for (const res of r.MetricDataResults ?? []) {
+      const mm = (res.Id ?? '').match(/^rep_i(\d+)$/);
+      const v = res.Values?.[0];
+      if (mm && typeof v === 'number') byIdx.set(Number(mm[1]), v);
+    }
+    return series
+      .map((x, i) => ({ table: x.table, region: x.region, latencyMs: byIdx.get(i) ?? null }))
+      .sort((a, b) => (b.latencyMs ?? -1) - (a.latencyMs ?? -1));
+  } catch {
+    return [];
+  }
+}
+
+// ALB per-LB diagnostics (owner 가이드: LB가 낸 에러 vs 타깃이 낸 에러 구분이 진단의 출발점).
+// entities = CloudWatch LoadBalancer 차원 값("app/<name>/<id>", ARN 접미사) — 라우트가
+// 인벤토리 ARN에서 도출해 resource_id로 되돌려 매핑한다. p50/p99는 확장 통계.
+const ALB_FLEET_METRICS = [
+  { key: 'elb5xx', name: 'HTTPCode_ELB_5XX_Count', stat: 'Sum' },
+  { key: 'elb502', name: 'HTTPCode_ELB_502_Count', stat: 'Sum' },
+  { key: 'elb503', name: 'HTTPCode_ELB_503_Count', stat: 'Sum' },
+  { key: 'elb504', name: 'HTTPCode_ELB_504_Count', stat: 'Sum' },
+  { key: 'tgt5xx', name: 'HTTPCode_Target_5XX_Count', stat: 'Sum' },
+  { key: 'tgt4xx', name: 'HTTPCode_Target_4XX_Count', stat: 'Sum' },
+  { key: 'tgt2xx', name: 'HTTPCode_Target_2XX_Count', stat: 'Sum' },
+  { key: 'respP50', name: 'TargetResponseTime', stat: 'p50' },
+  { key: 'respP99', name: 'TargetResponseTime', stat: 'p99' },
+  { key: 'requests', name: 'RequestCount', stat: 'Sum' },
+  { key: 'active', name: 'ActiveConnectionCount', stat: 'Sum' },
+  { key: 'newConn', name: 'NewConnectionCount', stat: 'Sum' },
+  { key: 'rejected', name: 'RejectedConnectionCount', stat: 'Sum' },
+  { key: 'tgtConnErr', name: 'TargetConnectionErrorCount', stat: 'Sum' },
+  { key: 'clientTlsErr', name: 'ClientTLSNegotiationErrorCount', stat: 'Sum' },
+  { key: 'lcu', name: 'ConsumedLCUs', stat: 'Sum' },
+] as const;
+export function albFleetLive(lbDims: string[]) {
+  return fleetLatest('AWS/ApplicationELB', lbDims, (id) => [{ Name: 'LoadBalancer', Value: id }], ALB_FLEET_METRICS);
+}
+
+export interface AlbTgHealthRow { tg: string; tgName: string; lbDim: string; healthy: number | null; unhealthy: number | null }
+/** Per-TargetGroup 헬스 (Healthy/UnHealthyHostCount는 TG 차원이어야 의미) — (tgDim, lbDim) 쌍으로 조회.
+ *  namespace: AWS/ApplicationELB(기본) 또는 AWS/NetworkELB — ALB/NLB 공용. */
+export async function albTargetHealth(pairs: { tgDim: string; tgName: string; lbDim: string }[], namespace = 'AWS/ApplicationELB'): Promise<AlbTgHealthRow[]> {
+  if (!pairs.length) return [];
+  try {
+    const capped = pairs.slice(0, 100);
+    const r = await cwClient().send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+      MetricDataQueries: capped.flatMap((p, i) => [
+        { Id: `h_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: namespace, MetricName: 'HealthyHostCount', Dimensions: [{ Name: 'TargetGroup', Value: p.tgDim }, { Name: 'LoadBalancer', Value: p.lbDim }] }, Period: 300, Stat: 'Minimum' } },
+        { Id: `u_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: namespace, MetricName: 'UnHealthyHostCount', Dimensions: [{ Name: 'TargetGroup', Value: p.tgDim }, { Name: 'LoadBalancer', Value: p.lbDim }] }, Period: 300, Stat: 'Maximum' } },
+      ]),
+    }));
+    const vals = new Map<string, number>();
+    for (const res of r.MetricDataResults ?? []) {
+      const v = res.Values?.[0];
+      if (res.Id && typeof v === 'number') vals.set(res.Id, v);
+    }
+    return capped.map((p, i) => ({
+      tg: p.tgDim, tgName: p.tgName, lbDim: p.lbDim,
+      healthy: vals.get(`h_i${i}`) ?? null, unhealthy: vals.get(`u_i${i}`) ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// NLB per-LB diagnostics (owner 가이드: L4 — HTTP 코드가 없어 RST 카운트와 타깃 헬스가 진단의 핵심).
+const NLB_FLEET_METRICS = [
+  { key: 'activeFlow', name: 'ActiveFlowCount', stat: 'Average' },
+  { key: 'newFlow', name: 'NewFlowCount', stat: 'Sum' },
+  { key: 'tgtRst', name: 'TCP_Target_Reset_Count', stat: 'Sum' },
+  { key: 'elbRst', name: 'TCP_ELB_Reset_Count', stat: 'Sum' },
+  { key: 'clientRst', name: 'TCP_Client_Reset_Count', stat: 'Sum' },
+  { key: 'processedBytes', name: 'ProcessedBytes', stat: 'Sum' },
+  { key: 'clientTlsErr', name: 'ClientTLSNegotiationErrorCount', stat: 'Sum' },
+  { key: 'targetTlsErr', name: 'TargetTLSNegotiationErrorCount', stat: 'Sum' },
+  { key: 'portAllocErr', name: 'PortAllocationErrorCount', stat: 'Sum' },
+  { key: 'unhealthyRouting', name: 'UnhealthyRoutingFlowCount', stat: 'Sum' },
+  { key: 'lcu', name: 'ConsumedLCUs', stat: 'Sum' },
+] as const;
+export function nlbFleetLive(lbDims: string[]) {
+  return fleetLatest('AWS/NetworkELB', lbDims, (id) => [{ Name: 'LoadBalancer', Value: id }], NLB_FLEET_METRICS);
+}
+
+// S3 per-bucket diagnostics (owner 가이드): 스토리지 메트릭(무료, 일 1회)과 요청 메트릭(유료,
+// 1분 — 버킷에서 활성화해야 존재, FilterId='EntireBucket' 관례)을 함께. 윈도 2일(일별 집계 포착).
+const S3_FLEET_METRICS = [
+  { key: 'sizeStd', name: 'BucketSizeBytes', stat: 'Average', period: 86400, dims: [{ Name: 'StorageType', Value: 'StandardStorage' }] },
+  { key: 'objects', name: 'NumberOfObjects', stat: 'Average', period: 86400, dims: [{ Name: 'StorageType', Value: 'AllStorageTypes' }] },
+  { key: 'allReq', name: 'AllRequests', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'req4xx', name: '4xxErrors', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'req5xx', name: '5xxErrors', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'firstByte', name: 'FirstByteLatency', stat: 'Average', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'bytesDown', name: 'BytesDownloaded', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+  { key: 'bytesUp', name: 'BytesUploaded', stat: 'Sum', dims: [{ Name: 'FilterId', Value: 'EntireBucket' }] },
+] as const;
+/** Per-bucket S3 metrics — S3 CloudWatch metrics live in the BUCKET's region (caller groups by region). */
+export function s3FleetLive(buckets: string[], region?: string) {
+  return fleetLatest('AWS/S3', buckets, (id) => [{ Name: 'BucketName', Value: id }], S3_FLEET_METRICS, region, 2 * 86400_000);
+}
+
+export interface S3ReplicationRow { source: string; dest: string; rule: string; latencySec: number | null; failed: number | null }
+/** CRR/SRR 복제 상태 — Source/DestinationBucket/RuleId 차원을 ListMetrics로 발견 (배포 리전 한정). */
+export async function s3ReplicationStatus(cap = 30): Promise<S3ReplicationRow[]> {
+  try {
+    const lm = await cwClient().send(new ListMetricsCommand({ Namespace: 'AWS/S3', MetricName: 'ReplicationLatency' }));
+    const series = (lm.Metrics ?? []).slice(0, cap).map((m) => {
+      const dim = (n: string) => m.Dimensions?.find((d) => d.Name === n)?.Value ?? '';
+      return { source: dim('SourceBucket'), dest: dim('DestinationBucket'), rule: dim('RuleId'), dims: m.Dimensions ?? [] };
+    }).filter((x) => x.source);
+    if (!series.length) return [];
+    const r = await cwClient().send(new GetMetricDataCommand({
+      StartTime: new Date(Date.now() - 3600_000), EndTime: new Date(),
+      MetricDataQueries: series.flatMap((x, i) => [
+        { Id: `sl_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: 'AWS/S3', MetricName: 'ReplicationLatency', Dimensions: x.dims }, Period: 300, Stat: 'Maximum' } },
+        { Id: `sf_i${i}`, ReturnData: true, MetricStat: { Metric: { Namespace: 'AWS/S3', MetricName: 'OperationsFailedReplication', Dimensions: x.dims }, Period: 300, Stat: 'Sum' } },
+      ]),
+    }));
+    const vals = new Map<string, number>();
+    for (const res of r.MetricDataResults ?? []) {
+      const v = res.Values?.[0];
+      if (res.Id && typeof v === 'number') vals.set(res.Id, v);
+    }
+    return series.map((x, i) => ({
+      source: x.source, dest: x.dest, rule: x.rule,
+      latencySec: vals.get(`sl_i${i}`) ?? null, failed: vals.get(`sf_i${i}`) ?? null,
+    })).sort((a, b) => (b.latencySec ?? -1) - (a.latencySec ?? -1));
+  } catch {
+    return [];
+  }
+}
+
+// EBS per-volume diagnostics (owner 가이드: 볼륨 성능 한계 vs 인스턴스 EBS 대역폭 구분이 핵심).
+// 원시값은 기간 합계 — IOPS/MBps/평균지연은 컴포넌트에서 /300, TotalTime/Ops로 환산한다.
+const EBS_FLEET_METRICS = [
+  { key: 'readOps', name: 'VolumeReadOps', stat: 'Sum' },
+  { key: 'writeOps', name: 'VolumeWriteOps', stat: 'Sum' },
+  { key: 'readBytes', name: 'VolumeReadBytes', stat: 'Sum' },
+  { key: 'writeBytes', name: 'VolumeWriteBytes', stat: 'Sum' },
+  { key: 'totalReadTime', name: 'VolumeTotalReadTime', stat: 'Sum' },
+  { key: 'totalWriteTime', name: 'VolumeTotalWriteTime', stat: 'Sum' },
+  { key: 'queueLength', name: 'VolumeQueueLength', stat: 'Average' },
+  { key: 'burstBalance', name: 'BurstBalance', stat: 'Average' },
+  { key: 'throughputPct', name: 'VolumeThroughputPercentage', stat: 'Average' },
+  { key: 'idleTime', name: 'VolumeIdleTime', stat: 'Sum' },
+] as const;
+export function ebsFleetLive(volumeIds: string[], region?: string) {
+  return fleetLatest('AWS/EBS', volumeIds, (id) => [{ Name: 'VolumeId', Value: id }], EBS_FLEET_METRICS, region);
+}
+
+// 인스턴스 레벨 EBS 대역폭 버스트 잔량 (소형 Nitro 인스턴스만 발행 — 0 근접 = 인스턴스가 병목).
+const EC2_EBS_BALANCE_METRICS = [
+  { key: 'ioBalance', name: 'EBSIOBalance%', stat: 'Average' },
+  { key: 'byteBalance', name: 'EBSByteBalance%', stat: 'Average' },
+] as const;
+export function ec2EbsBalance(instanceIds: string[], region?: string) {
+  return fleetLatest('AWS/EC2', instanceIds, (id) => [{ Name: 'InstanceId', Value: id }], EC2_EBS_BALANCE_METRICS, region);
+}
+
+// EC2 per-instance diagnostics (owner 가이드: 상태 점검의 System vs Instance 구분이 책임 소재를
+// 즉시 가르는 핵심 — 메모리/디스크는 기본 메트릭에 없음(CloudWatch Agent 필요), 가이드가 설명).
+const EC2_DIAG_METRICS = [
+  { key: 'cpu', name: 'CPUUtilization', stat: 'Average' },
+  { key: 'cpuCredit', name: 'CPUCreditBalance', stat: 'Average' },
+  { key: 'statusSystem', name: 'StatusCheckFailed_System', stat: 'Maximum' },
+  { key: 'statusInstance', name: 'StatusCheckFailed_Instance', stat: 'Maximum' },
+  { key: 'statusEbs', name: 'StatusCheckFailed_AttachedEBS', stat: 'Maximum' },
+  { key: 'netIn', name: 'NetworkIn', stat: 'Sum' },
+  { key: 'netOut', name: 'NetworkOut', stat: 'Sum' },
+  { key: 'pktIn', name: 'NetworkPacketsIn', stat: 'Sum' },
+  { key: 'pktOut', name: 'NetworkPacketsOut', stat: 'Sum' },
+  { key: 'ebsReadOps', name: 'EBSReadOps', stat: 'Sum' },
+  { key: 'ebsWriteOps', name: 'EBSWriteOps', stat: 'Sum' },
+  { key: 'ioBalance', name: 'EBSIOBalance%', stat: 'Average' },
+  { key: 'byteBalance', name: 'EBSByteBalance%', stat: 'Average' },
+] as const;
+export function ec2DiagFleetLive(instanceIds: string[], region?: string) {
+  return fleetLatest('AWS/EC2', instanceIds, (id) => [{ Name: 'InstanceId', Value: id }], EC2_DIAG_METRICS, region);
 }

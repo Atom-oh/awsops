@@ -14,7 +14,7 @@ import BarDistribution from '@/components/charts/BarDistribution';
 import RiskHero from '@/components/inventory/RiskHero';
 import CloudTrailEvents from '@/components/inventory/CloudTrailEvents';
 import VpcResourceMap from '@/components/inventory/VpcResourceMap';
-import { ElasticacheNodeMetrics, OpensearchDomainMetrics, MskBrokerNodes, RdsInstanceMetrics } from '@/components/inventory/NodeMetricsTables';
+import { ElasticacheNodeMetrics, OpensearchDomainMetrics, MskBrokerNodes, RdsInstanceMetrics, DynamoTableMetrics, AlbMetrics, NlbMetrics, S3Metrics, EbsMetrics, Ec2Metrics } from '@/components/inventory/NodeMetricsTables';
 import { INVENTORY_TYPES, HIGHLIGHTS, computeHighlights, layoutOf } from '@/lib/inventory-types';
 import { TYPE_ICON, GROUP_ICON, highlightIcon } from '@/lib/type-icons';
 import { useActiveScope, scopeParams } from '@/lib/account-context';
@@ -298,6 +298,12 @@ export default function InventoryTypePage() {
             {type === 'opensearch' && <OpensearchDomainMetrics rows={filteredRows} />}
             {type === 'msk' && <MskBrokerNodes rows={filteredRows} />}
             {type === 'rds' && <RdsInstanceMetrics rows={filteredRows} />}
+            {type === 'dynamodb' && <DynamoTableMetrics rows={filteredRows} />}
+            {type === 'alb' && <AlbMetrics rows={filteredRows} />}
+            {type === 'nlb' && <NlbMetrics rows={filteredRows} />}
+            {type === 's3' && <S3Metrics rows={filteredRows} />}
+            {type === 'ebs_volume' && <EbsMetrics rows={filteredRows} />}
+            {type === 'ec2' && <Ec2Metrics rows={filteredRows} />}
           </>
         )}
       </div>
