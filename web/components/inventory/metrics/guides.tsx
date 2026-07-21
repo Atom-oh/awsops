@@ -516,3 +516,59 @@ export const EC2_GUIDE: GuideSpec = {
     ['bw/pps/conntrack_allowance_exceeded (Agent)', '> 0', '네트워크 상한 병목'],
   ],
 };
+
+export const LAMBDA_GUIDE: GuideSpec = {
+  service: 'Lambda',
+  intro: (
+    <>Lambda는 <b>호출 · 에러 · 스로틀 · 실행 시간 · 동시성</b>을 중심으로 봅니다. 서버리스라
+    인프라 메트릭은 없고, 실행 단위의 성공/실패/지연/용량에 집중합니다.</>
+  ),
+  sections: [
+    { title: '① 호출과 에러 — 진단의 출발점', items: [
+      <><b>Invocations</b>(트래픽 기준선), <b>Errors</b>(핸들러 예외·타임아웃). <b>에러율 = Errors / Invocations</b>로 봐야 의미 있음 — 절대값만 보면 트래픽 증가와 구분 불가.</>,
+      <><b>DeadLetterErrors</b> — DLQ 전달 실패(비동기). 0보다 크면 실패 이벤트가 유실 중일 수 있음. <b>DestinationDeliveryFailures</b>도 동류.</>,
+    ]},
+    { title: '② 스로틀 — 동시성 한계', items: [
+      <><b>Throttles</b> — 동시성 한도 초과 429. <b>가장 흔한 스케일 문제.</b> 원인: 계정 리전 한도(기본 1,000), reserved concurrency 설정, 급격한 버스트.</>,
+    ]},
+    { title: '③ 실행 시간 (Duration)', items: [
+      <><b>Duration</b> — <b>p50/p90/p99 백분위로</b> (평균은 콜드스타트·롱테일을 숨김). <b>타임아웃 설정에 근접</b>하면 타임아웃 에러 위험.</>,
+      <>PostRuntimeExtensionsDuration — 확장(extension) 오버헤드 확인.</>,
+    ]},
+    { title: '④ 동시성 (Concurrency)', items: [
+      <><b>ConcurrentExecutions</b> — 계정/함수 한도 대비. 근접 시 스로틀 임박. UnreservedConcurrentExecutions는 reserved 제외 풀.</>,
+    ]},
+    { title: '⑤ 프로비저닝된 동시성 (PC)', items: [
+      <><b>ProvisionedConcurrencyUtilization</b> 100% 근접 = PC 부족. <b>ProvisionedConcurrencySpilloverInvocations &gt; 0</b> = PC 초과분이 on-demand 콜드스타트로 넘어가는 중.</>,
+    ]},
+    { title: '⑥ 이벤트 소스별 (스트림/큐)', items: [
+      <><b>IteratorAge</b> — Kinesis/DynamoDB Streams 소비의 핵심. 계속 증가하면 Lambda가 프로듀서를 못 따라감 → 배치 크기/ParallelizationFactor/함수 성능 조정.</>,
+      <><b>OffsetLag</b>(Kafka/MSK 소스), SQS면 ApproximateAgeOfOldestMessage 병행, 비동기면 AsyncEventsReceived/Age/Dropped.</>,
+    ]},
+    { title: '⑦ 콜드스타트', items: [
+      <>직접 메트릭 없음 — CloudWatch Logs의 <b>INIT_START / Init Duration</b> 또는 X-Ray로 확인. Duration p99 급증 + PC 스필오버와 함께 진단.</>,
+    ]},
+    { title: '증상별 진단 흐름', items: [
+      <>429 거부 → <b>Throttles + ConcurrentExecutions vs 한도</b>. reserved 상향/계정 한도 증설/버스트 완화.</>,
+      <>간헐적 느림 → <b>Duration p99 + Init Duration</b>(로그). PC 도입, <b>메모리 상향(Lambda는 메모리↑=CPU↑)</b>, 패키지 경량화.</>,
+      <>에러율 상승 → 로그 예외 스택. 타임아웃이면 Duration이 설정값에 붙어 있는지 확인.</>,
+      <>스트림 밀림 → IteratorAge 지속 증가 → 배치/병렬화/함수 성능/다운스트림 병목.</>,
+      <>비동기 유실 → DeadLetterErrors / AsyncEventsDropped + DLQ 설정.</>,
+    ]},
+    { title: 'Lambda만의 주의점', items: [
+      <><b>메모리 설정이 곧 성능</b> — 메모리↑=CPU·네트워크↑로 Duration이 줄기도. Max Memory Used(로그 리포트)로 라이트사이징, <b>Lambda Power Tuning</b> 유용.</>,
+      <>에러율은 반드시 <b>Invocations 대비 비율</b>로.</>,
+      <>심층 진단: <b>CloudWatch Logs Insights</b>(에러 패턴·Init Duration·Max Memory Used 집계) + <b>X-Ray</b>(콜드스타트·다운스트림 분해). <b>Lambda Insights</b>를 켜면 CPU/메모리/네트워크 실행 환경 메트릭까지.</>,
+    ]},
+  ],
+  priorityHeader: ['메트릭', '주의 기준', '의미'],
+  priority: [
+    ['Errors (에러율)', '급증', '예외/타임아웃'],
+    ['Throttles', '> 0', '동시성 한도 초과(429)'],
+    ['Duration (p99)', '타임아웃 근접', '성능 저하/타임아웃 위험'],
+    ['ConcurrentExecutions', '한도 근접', '스로틀 임박'],
+    ['IteratorAge (스트림)', '증가 추세', '컨슈머 처리 지연'],
+    ['ProvisionedConcurrencySpilloverInvocations', '> 0', 'PC 부족 → 콜드스타트'],
+    ['DeadLetterErrors', '> 0', '실패 이벤트 유실 위험'],
+  ],
+};

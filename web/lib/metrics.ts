@@ -892,3 +892,21 @@ export function ec2DiagFleetLive(instanceIds: string[], region?: string, rangeSe
   return fleetLatest('AWS/EC2', instanceIds, (id) => [{ Name: 'InstanceId', Value: id }], EC2_DIAG_METRICS, region, rangeSec * 1000, rangeSec);
 }
 
+// Lambda per-function diagnostics (owner 가이드: 호출·에러(율)·스로틀·Duration p50/p99·동시성·
+// 스트림 IteratorAge·PC 스필오버 — 서버리스라 인프라 메트릭 없음, 실행 단위에 집중).
+const LAMBDA_FLEET_METRICS = [
+  { key: 'invocations', name: 'Invocations', stat: 'Sum' },
+  { key: 'errors', name: 'Errors', stat: 'Sum' },
+  { key: 'throttles', name: 'Throttles', stat: 'Sum' },
+  { key: 'durP50', name: 'Duration', stat: 'p50' },
+  { key: 'durP99', name: 'Duration', stat: 'p99' },
+  { key: 'concurrent', name: 'ConcurrentExecutions', stat: 'Maximum' },
+  { key: 'iteratorAge', name: 'IteratorAge', stat: 'Maximum' },
+  { key: 'deadLetterErrors', name: 'DeadLetterErrors', stat: 'Sum' },
+  { key: 'pcSpillover', name: 'ProvisionedConcurrencySpilloverInvocations', stat: 'Sum' },
+  { key: 'pcUtil', name: 'ProvisionedConcurrencyUtilization', stat: 'Maximum' },
+] as const;
+export function lambdaFleetLive(functionNames: string[], region?: string, rangeSec = 3600) {
+  return fleetLatest('AWS/Lambda', functionNames, (id) => [{ Name: 'FunctionName', Value: id }], LAMBDA_FLEET_METRICS, region, rangeSec * 1000, rangeSec);
+}
+
