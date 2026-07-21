@@ -73,11 +73,18 @@ def parse_powerpipe_json(doc):
     return totals, controls
 
 
-def run_powerpipe(benchmark, db_url):
+def run_powerpipe(benchmark, db_url, scope="all"):
     if benchmark not in ALLOWED:
         raise ValueError(f"benchmark not allowed: {benchmark!r}")
     cmd = ["powerpipe", "benchmark", "run", f"aws_compliance.benchmark.{benchmark}",
            "--mod-location", MOD_DIR, "--output", "json", "--progress=false"]
+    # Account scoping (v1 parity): a 12-digit scope pins the search path to that account's
+    # Steampipe connection (aws_<id>); "all" keeps the aggregator default (every account merged).
+    # The id is validated here too (defense-in-depth vs a forged worker payload).
+    if scope and scope != "all":
+        if not re.fullmatch(r"[0-9]{12}", str(scope)):
+            raise ValueError(f"scope not allowed: {scope!r}")
+        cmd += ["--search-path", f"public,aws_{scope}"]
     proc = subprocess.run(cmd, capture_output=True, text=True,
                           env={**os.environ, "POWERPIPE_DATABASE": db_url})
     out = (proc.stdout or "").strip()
