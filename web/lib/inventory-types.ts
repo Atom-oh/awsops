@@ -19,7 +19,7 @@ export interface InvType {
 
 // resource_id + region are prepended by the page; columns here are the type-specific extras.
 export const INVENTORY_TYPES: Record<string, InvType> = {
-  ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', distKey2: 'instance_state', columns: [
+  ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', distKey2: 'instance_state', barKey: { col: 'memory_mib', label: 'Memory (MiB)' }, columns: [
     { key: 'name', label: 'Name' }, { key: 'instance_type', label: 'Type' }, { key: 'instance_state', label: 'State' },
     { key: 'pricing_model', label: 'Pricing' },
     { key: 'private_ip_address', label: 'Private IP' }, { key: 'public_ip_address', label: 'Public IP' },
@@ -36,7 +36,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Image', keys: ['image_id', 'architecture', 'platform_details', 'virtualization_type', 'hypervisor'] },
     ],
     filterKeys: ['instance_type', 'vpc_id'] },
-  lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', distKey2: 'package_type', columns: [
+  lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', distKey2: 'package_type', barKey: { col: 'memory_size', label: 'Memory (MB)' }, columns: [
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
     { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' },
     { key: 'handler', label: 'Handler' }, { key: 'last_modified', label: 'Modified' } ],
@@ -46,7 +46,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Capacity', keys: ['memory_size', 'timeout', 'code_size', 'code_sha_256', 'layers'] },
       { label: 'Network', keys: ['vpc_id', 'vpc_subnet_ids', 'vpc_security_group_ids'] },
     ] },
-  ecs_cluster: { label: 'ECS Clusters', group: 'Compute', stateKey: 'status', distKey: 'status', columns: [
+  ecs_cluster: { label: 'ECS Clusters', group: 'Compute', stateKey: 'status', distKey: 'status', distKey2: 'region', barKey: { col: 'running_tasks_count', label: 'Running Tasks' }, columns: [
     { key: 'status', label: 'Status' }, { key: 'running_tasks_count', label: 'Running' },
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
     { key: 'registered_container_instances_count', label: 'Instances' },
@@ -57,7 +57,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Config', keys: ['settings'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', columns: [
+  ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', distKey2: 'status', barKey: { col: 'running_count', label: 'Running' }, columns: [
     { key: 'service_name', label: 'Service' }, { key: 'status', label: 'Status' },
     { key: 'desired_count', label: 'Desired' }, { key: 'running_count', label: 'Running' },
     { key: 'pending_count', label: 'Pending' }, { key: 'launch_type', label: 'Launch' },
@@ -107,7 +107,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['availability_zone'] },
-  ebs_snapshot: { label: 'EBS Snapshots', group: 'Storage & DB', stateKey: 'state', distKey: 'state', columns: [
+  ebs_snapshot: { label: 'EBS Snapshots', group: 'Storage & DB', stateKey: 'state', distKey: 'state', distKey2: 'encrypted', barKey: { col: 'volume_size', label: 'Volume Size (GB)' }, columns: [
     { key: 'volume_id', label: 'Volume' }, { key: 'volume_size', label: 'Size(GB)' },
     { key: 'state', label: 'State' }, { key: 'progress', label: 'Progress' },
     { key: 'encrypted', label: 'Encrypted' }, { key: 'start_time', label: 'Started' },
@@ -118,7 +118,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['encrypted'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', distKey2: 'class', columns: [
+  rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', distKey2: 'class', barKey: { col: 'allocated_storage', label: 'Storage (GB)' }, columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'class', label: 'Class' }, { key: 'status', label: 'Status' }, { key: 'multi_az', label: 'Multi-AZ' },
     { key: 'publicly_accessible', label: 'Public' }, { key: 'allocated_storage', label: 'Storage(GB)' }, { key: 'vpc_id', label: 'VPC' } ],
@@ -142,7 +142,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['sse_h', 'pitr_h', 'key_schema', 'sse_description', 'point_in_time_recovery_description'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  vpc: { label: 'VPCs', group: 'Network', stateKey: 'state', distKey: 'region', columns: [
+  vpc: { label: 'VPCs', group: 'Network', stateKey: 'state', distKey: 'region', distKey2: 'is_default', columns: [
     { key: 'name', label: 'Name' }, { key: 'cidr_block', label: 'CIDR' }, { key: 'state', label: 'State' },
     { key: 'is_default', label: 'Default' }, { key: 'instance_tenancy', label: 'Tenancy' }, { key: 'owner_id', label: 'Owner' } ],
     sections: [
@@ -150,7 +150,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Network', keys: ['cidr_block', 'state', 'is_default', 'instance_tenancy', 'dhcp_options_id'] },
       { label: 'Tags', keys: ['tags'] },
     ] },
-  subnet: { label: 'Subnets', group: 'Network', distKey: 'availability_zone', columns: [
+  subnet: { label: 'Subnets', group: 'Network', distKey: 'availability_zone', distKey2: 'map_public_ip_on_launch', barKey: { col: 'available_ip_address_count', label: 'Available IPs' }, columns: [
     { key: 'name', label: 'Name' }, { key: 'vpc_id', label: 'VPC' }, { key: 'cidr_block', label: 'CIDR' },
     { key: 'state', label: 'State' }, { key: 'availability_zone', label: 'AZ' },
     { key: 'available_ip_address_count', label: 'Free IPs' }, { key: 'map_public_ip_on_launch', label: 'Auto-public-IP' } ],
@@ -160,7 +160,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['vpc_id'] },
-  security_group: { label: 'Security Groups', group: 'Network', distKey: 'vpc_id', columns: [
+  security_group: { label: 'Security Groups', group: 'Network', distKey: 'vpc_id', distKey2: 'region', columns: [
     { key: 'name', label: 'Name' }, { key: 'group_name', label: 'Group name' },
     { key: 'vpc_id', label: 'VPC' }, { key: 'description', label: 'Description' } ],
     sections: [
@@ -236,7 +236,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'zone_id', 'set_identifier', 'private_zone'] },
       { label: 'Record', keys: ['type', 'ttl', 'records', 'alias_target'] },
     ] },
-  alb: { label: 'App Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', columns: [
+  alb: { label: 'App Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', distKey2: 'vpc_id', columns: [
     { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
     { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' },
     { key: 'ip_address_type', label: 'IP type' }, { key: 'created_time', label: 'Created' } ],
@@ -247,7 +247,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['scheme', 'vpc_id'] },
-  nlb: { label: 'Net Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', columns: [
+  nlb: { label: 'Net Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', distKey2: 'vpc_id', columns: [
     { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
     { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' },
     { key: 'ip_address_type', label: 'IP type' }, { key: 'created_time', label: 'Created' } ],
@@ -258,7 +258,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ],
     filterKeys: ['scheme', 'vpc_id'] },
-  target_group: { label: 'Target Groups', group: 'Network', distKey: 'target_type', columns: [
+  target_group: { label: 'Target Groups', group: 'Network', distKey: 'target_type', distKey2: 'protocol', columns: [
     { key: 'target_group_name', label: 'Name' }, { key: 'target_type', label: 'Target type' },
     { key: 'protocol', label: 'Protocol' }, { key: 'port', label: 'Port' },
     { key: 'vpc_id', label: 'VPC' }, { key: 'health_check_path', label: 'Health path' } ],
@@ -295,7 +295,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
   alb_listener_rule: { label: 'ALB Listener Rules', group: 'Network', distKey: 'protocol', columns: [
     { key: 'priority', label: 'Priority' }, { key: 'port', label: 'Port' },
     { key: 'protocol', label: 'Protocol' }, { key: 'is_default', label: 'Default' } ] },
-  waf: { label: 'WAF Web ACLs', group: 'Security', distKey: 'scope', columns: [
+  waf: { label: 'WAF Web ACLs', group: 'Security', distKey: 'scope', barKey: { col: 'capacity', label: 'WCU Capacity' }, columns: [
     { key: 'scope', label: 'Scope' }, { key: 'capacity', label: 'Capacity' },
     { key: 'description', label: 'Description' }, { key: 'managed_by_firewall_manager', label: 'FMS-managed' } ],
     sections: [
@@ -364,7 +364,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['auth_token_enabled', 'transit_encryption_enabled', 'at_rest_encryption_enabled'] },
       { label: 'Cluster', keys: ['member_clusters', 'node_groups'] },
     ] },
-  iam_policy: { label: 'IAM Policies', group: 'Security', distKey: 'is_attachable', columns: [
+  iam_policy: { label: 'IAM Policies', group: 'Security', distKey: 'is_attachable', barKey: { col: 'attachment_count', label: 'Attachments' }, columns: [
     { key: 'is_attachable', label: 'Attachable' }, { key: 'attachment_count', label: 'Attached' }, { key: 'path', label: 'Path' },
     { key: 'create_date', label: 'Created' }, { key: 'update_date', label: 'Updated' } ],
     sections: [
@@ -373,7 +373,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
     ] },
 
-  neptune_cluster: { label: 'Neptune', group: 'Storage & DB', stateKey: 'status', distKey: 'engine_version', columns: [
+  neptune_cluster: { label: 'Neptune', group: 'Storage & DB', stateKey: 'status', distKey: 'engine_version', distKey2: 'status', columns: [
     { key: 'status', label: 'Status' }, { key: 'engine', label: 'Engine' },
     { key: 'engine_version', label: 'Version' }, { key: 'multi_az', label: 'Multi-AZ' },
     { key: 'storage_encrypted', label: 'Encrypted' } ],
