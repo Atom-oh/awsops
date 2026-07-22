@@ -26,7 +26,8 @@ export async function* bedrockDirectStream(
 ): AsyncGenerator<string> {
   if (!client) client = new BedrockRuntimeClient({ region: REGION });
   const lang = opts.responseLanguage === 'en' ? 'English'
-    : opts.responseLanguage === 'zh' ? 'Simplified Chinese' : 'Korean';
+    : opts.responseLanguage === 'zh' ? 'Simplified Chinese'
+    : opts.responseLanguage === 'ja' ? 'Japanese' : 'Korean';
   const messages: Message[] = [
     // bound the carried history the same way sanitizeHistory already did upstream
     ...history.slice(-8).map((m) => ({ role: m.role, content: [{ text: m.content }] })),

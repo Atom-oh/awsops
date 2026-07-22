@@ -5,10 +5,12 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { NLB_GUIDE } from './guides';
 import TgHealthTable, { type TgHealthRow } from './TgHealthTable';
 import { type Row, type Fleet, num, dash, cnt, mb, TH, TD, MONO, DANGER } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // NLB per-LB diagnostics (owner 가이드): L4 — HTTP 코드가 없어 RST 카운트/타깃 헬스가 핵심.
 // 응답: {fleet(resource_id 키), targetHealth, lbDimByResource} — ALB와 동일 계약(net/ 차원).
 export function NlbMetrics({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 100), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [health, setHealth] = useState<TgHealthRow[]>([]);
@@ -27,8 +29,8 @@ export function NlbMetrics({ rows }: { rows: Row[] }) {
   if (rows.length === 0) return null;
 
   return (
-    <Card title="LB 진단 메트릭 (Last 1h)" subtitle={`${ids.length} load balancers · CloudWatch AWS/NetworkELB · L4: RST 카운트와 타깃 헬스가 진단의 핵심`} padded={false}>
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+    <Card title={tt('LB 진단 메트릭 (Last 1h)')} subtitle={`${ids.length} load balancers · ${tt('CloudWatch AWS/NetworkELB · L4: RST 카운트와 타깃 헬스가 진단의 핵심')}`} padded={false}>
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-ink-100">

@@ -4,6 +4,7 @@ import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
 import IntegrationIcon from '@/components/datasources/IntegrationIcon';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // Connectors tab: external SERVICE integrations (Notion now; Slack/Jira later) — distinct from
 // observability Datasources and from Skills. Read + GOVERNED write (write is propose-only / flag-OFF
@@ -14,6 +15,7 @@ const CONNECTORS: ConnectorDef[] = [
 ];
 
 export default function ConnectorsTab({ canManage = false }: { canManage?: boolean }) {
+  const { tt } = useI18n();
   const [configured, setConfigured] = useState<Set<string>>(new Set());
   const [token, setToken] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -36,9 +38,9 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ slug, secret: { token: t } }),
       });
-      if (!r.ok) { setMsg((await r.json().catch(() => ({}))).error || `오류 ${r.status}`); return; }
+      if (!r.ok) { setMsg((await r.json().catch(() => ({}))).error || tt(`오류 ${r.status}`)); return; }
       setToken((s) => ({ ...s, [slug]: '' })); // never keep the secret in state
-      setMsg('저장되었습니다.');
+      setMsg(tt('저장되었습니다.'));
       await load();
     } finally { setBusy(null); }
   };
@@ -46,8 +48,8 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
   return (
     <div className="space-y-3">
       <p className="text-[13px] text-ink-500">
-        외부 서비스 커넥터 (Notion 등). 자격증명은 Secrets Manager에 암호화 저장되며 다시 표시되지 않습니다.
-        쓰기(노트/티켓 생성)는 거버넌스 하에 <b>제안 전용 · 기본 비활성</b>입니다.
+        {tt('외부 서비스 커넥터 (Notion 등). 자격증명은 Secrets Manager에 암호화 저장되며 다시 표시되지 않습니다.')}{' '}
+        {tt('쓰기(노트/티켓 생성)는 거버넌스 하에 제안 전용 · 기본 비활성입니다.')}
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         {CONNECTORS.map((c) => (
@@ -58,18 +60,18 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
                 {configured.has(c.slug) ? '● connected' : '○ not connected'}
               </span>
             </div>
-            <p className="text-[12px] text-ink-400">{c.help}</p>
+            <p className="text-[12px] text-ink-400">{tt(c.help)}</p>
             {canManage ? (
               <div className="flex gap-2">
-                <Input type="password" value={token[c.slug] ?? ''} onChange={(e) => setToken((s) => ({ ...s, [c.slug]: e.target.value }))} placeholder={configured.has(c.slug) ? '토큰 교체…' : '토큰 붙여넣기'} />
+                <Input type="password" value={token[c.slug] ?? ''} onChange={(e) => setToken((s) => ({ ...s, [c.slug]: e.target.value }))} placeholder={configured.has(c.slug) ? tt('토큰 교체…') : tt('토큰 붙여넣기')} />
                 <Button onClick={() => connect(c.slug)} disabled={busy === c.slug || !(token[c.slug] ?? '').trim()}>
-                  {configured.has(c.slug) ? '교체' : '연결'}
+                  {configured.has(c.slug) ? tt('교체') : tt('연결')}
                 </Button>
               </div>
             ) : (
-              <p className="text-[12px] text-ink-400">연결 관리는 관리자 전용입니다.</p>
+              <p className="text-[12px] text-ink-400">{tt('연결 관리는 관리자 전용입니다.')}</p>
             )}
-            <span className="inline-block text-[11px] text-ink-400 border border-ink-200 rounded px-1.5 py-0.5">읽기 전용 · 쓰기 제안전용(비활성)</span>
+            <span className="inline-block text-[11px] text-ink-400 border border-ink-200 rounded px-1.5 py-0.5">{tt('읽기 전용 · 쓰기 제안전용(비활성)')}</span>
           </Card>
         ))}
       </div>

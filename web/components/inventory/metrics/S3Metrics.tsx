@@ -4,6 +4,7 @@ import Card from '@/components/ui/Card';
 import DiagnosisGuide from './DiagnosisGuide';
 import { S3_GUIDE } from './guides';
 import { type Row, type Fleet, num, dash, cnt, mb, ms, TH, TD, MONO, DANGER } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // S3 per-bucket diagnostics (owner 가이드): 스토리지(일별)/요청(유료, 활성화 시)/복제.
 // 요청 메트릭 미활성 버킷은 '—' — 가이드의 'S3만의 특이점' 섹션이 이유를 설명한다.
@@ -17,6 +18,7 @@ const fmtSize = (v: number | null) => {
 };
 
 export function S3Metrics({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 150), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [replication, setReplication] = useState<ReplicationRow[]>([]);
@@ -35,11 +37,11 @@ export function S3Metrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="버킷 진단 메트릭"
-      subtitle={`${ids.length} buckets · 크기/객체 수는 일별 집계(Standard), 요청 지표는 요청 메트릭(EntireBucket) 활성 버킷만 (Last 1h)`}
+      title={tt('버킷 진단 메트릭')}
+      subtitle={`${ids.length} buckets · ${tt('크기/객체 수는 일별 집계(Standard), 요청 지표는 요청 메트릭(EntireBucket) 활성 버킷만 (Last 1h)')}`}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-ink-100">

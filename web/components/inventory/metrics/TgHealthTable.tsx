@@ -1,15 +1,17 @@
 'use client';
 import { TH, TD, MONO, DANGER, dash } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // 타깃 그룹 헬스 테이블 (ALB/NLB 공용) — Healthy/UnHealthyHostCount는 TG 차원이어야 의미.
 // Healthy = 1h 최소값(순간 이탈 감지), UnHealthy = 1h 최대값.
 export interface TgHealthRow { tg: string; tgName: string; lbDim: string; healthy: number | null; unhealthy: number | null }
 
 export default function TgHealthTable({ health, lbDims }: { health: TgHealthRow[]; lbDims: Record<string, string> }) {
+  const { tt } = useI18n();
   if (health.length === 0) return null;
   return (
     <div className="border-t border-ink-100">
-      <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">타깃 그룹 헬스 (Healthy 최소값 / UnHealthy 최대값, Last 1h)</div>
+      <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">{tt('타깃 그룹 헬스 (Healthy 최소값 / UnHealthy 최대값, Last 1h)')}</div>
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-ink-100">

@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // Explore "자주 쓰는 쿼리" — pre-built diagnostic signals (datasource_index) surfaced as clickable
 // chips. Ready signals fill+run their query via onPick; unavailable signals render disabled with a
@@ -15,6 +16,7 @@ interface Props {
 const chip = 'rounded-full border px-2.5 py-1 text-[12px] transition-colors';
 
 export default function DiagSignalChips({ instanceId, kind, onPick }: Props) {
+  const { tt } = useI18n();
   const [ready, setReady] = useState<ReadySignal[]>([]);
   const [unavailable, setUnavailable] = useState<UnavailableSignal[]>([]);
   const enabled = !!instanceId && (kind === 'prometheus' || kind === 'mimir');
@@ -39,7 +41,7 @@ export default function DiagSignalChips({ instanceId, kind, onPick }: Props) {
 
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-testid="diag-signal-chips">
-      <span className="text-[12px] text-ink-500">자주 쓰는 쿼리:</span>
+      <span className="text-[12px] text-ink-500">{tt('자주 쓰는 쿼리:')}</span>
       {ready.map((s) => (
         <button
           key={s.signalKey}
@@ -55,7 +57,7 @@ export default function DiagSignalChips({ instanceId, kind, onPick }: Props) {
         <span
           key={s.signalKey}
           className={`${chip} cursor-not-allowed border-ink-200 bg-ink-50 text-ink-400`}
-          title={`metric ${s.missingMetrics.join(', ')} 없음 — Refresh schema`}
+          title={tt(`metric ${s.missingMetrics.join(', ')} 없음 — Refresh schema`)}
           data-testid="diag-chip-unavailable"
         >
           {s.title}

@@ -5,16 +5,18 @@ import Badge from '@/components/ui/Badge';
 import DiagnosisGuide from './DiagnosisGuide';
 import { OS_GUIDE } from './guides';
 import { type Row, num, dash, cnt, ms, meter, TH, TD, MONO, DANGER, useFleet } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // ── OpenSearch: per-domain metric rows (v1 도메인 메트릭) ──
 export function OpensearchDomainMetrics({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const { fleet, err } = useFleet('opensearch', ids);
   if (rows.length === 0) return null;
 
   return (
-    <Card title="도메인 메트릭 (Last 1h)" subtitle={`${ids.length} domains · CloudWatch AWS/ES`} padded={false}>
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+    <Card title={tt('도메인 메트릭 (Last 1h)')} subtitle={`${ids.length} domains · CloudWatch AWS/ES`} padded={false}>
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-ink-100">

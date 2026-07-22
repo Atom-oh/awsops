@@ -4,11 +4,13 @@ import Card from '@/components/ui/Card';
 import DiagnosisGuide from './DiagnosisGuide';
 import { EBS_GUIDE } from './guides';
 import { type Row, type Fleet, num, dash, TH, TD, MONO, DANGER } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // EBS per-volume diagnostics (owner 가이드): 원시값(기간 합계)을 IOPS(/300)·MB/s·평균지연
 // (TotalTime/Ops)으로 환산해 표시. 볼륨 한계 vs 인스턴스 EBS 대역폭(밸런스 테이블) 구분.
 
 export function EbsMetrics({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 150), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [instanceBalance, setInstanceBalance] = useState<Fleet>({});
@@ -48,11 +50,11 @@ export function EbsMetrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="볼륨 진단 메트릭 (Last 1h)"
-      subtitle={`${ids.length} volumes · CloudWatch AWS/EBS · IOPS/MBps/지연은 5분 합계를 환산한 값`}
+      title={tt('볼륨 진단 메트릭 (Last 1h)')}
+      subtitle={`${ids.length} volumes · ${tt('CloudWatch AWS/EBS · IOPS/MBps/지연은 5분 합계를 환산한 값')}`}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-ink-100">

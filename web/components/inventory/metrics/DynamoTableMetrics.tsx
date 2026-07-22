@@ -4,11 +4,13 @@ import Card from '@/components/ui/Card';
 import DiagnosisGuide from './DiagnosisGuide';
 import { DDB_GUIDE } from './guides';
 import { type Row, type Fleet, num, dash, cnt, TH, TD, MONO, DANGER } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // DynamoDB per-table diagnostics (owner 가이드: 스로틀링·용량·지연·에러·Global Tables).
 interface DdbReplicationRow { table: string; region: string; latencyMs: number | null }
 
 export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [replication, setReplication] = useState<DdbReplicationRow[]>([]);
@@ -42,8 +44,8 @@ export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
   };
 
   return (
-    <Card title="테이블 진단 메트릭 (Last 1h)" subtitle={`${ids.length} tables · CloudWatch AWS/DynamoDB · 용량은 초당 소비율(소비/프로비저닝)`} padded={false}>
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+    <Card title={tt('테이블 진단 메트릭 (Last 1h)')} subtitle={`${ids.length} tables · CloudWatch AWS/DynamoDB · ${tt('용량은 초당 소비율(소비/프로비저닝)')}`} padded={false}>
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-ink-100">
