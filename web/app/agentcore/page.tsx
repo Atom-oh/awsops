@@ -7,6 +7,7 @@ import RefreshButton from '@/components/ui/RefreshButton';
 import Badge from '@/components/ui/Badge';
 import ChatOpsStatsCard from '@/components/chat/ChatOpsStatsCard';
 import type { AgentCoreStatus } from '@/lib/agentcore-status';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // v1-parity AgentCore console (v1 /agentcore): control-plane status (runtime / gateways / memory /
 // code interpreter) + the chat-invoke ops stats (reused ChatOpsStatsCard). Read-only.
@@ -26,6 +27,7 @@ function badgeTone(status: string): 'positive' | 'negative' | 'neutral' {
 }
 
 export default function AgentCorePage() {
+  const { tt } = useI18n();
   const [d, setD] = useState<AgentCoreStatus | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -62,17 +64,17 @@ export default function AgentCorePage() {
         right={<RefreshButton busy={busy} onClick={load} capturedAt={capturedAt} />}
       />
       <div className="px-4 lg:px-8 py-8 flex flex-col gap-6">
-        {err && <div className="text-[13px] text-rose-600">로드 실패: {err} (control-plane 권한 또는 세션 만료 확인)</div>}
-        {!d && !err && <div className="text-ink-400">로딩 중…</div>}
+        {err && <div className="text-[13px] text-rose-600">{tt('로드 실패:')} {err} {tt('(control-plane 권한 또는 세션 만료 확인)')}</div>}
+        {!d && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
 
         {d && (
           <>
             {/* Top-line status tiles */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <StatTile label="Runtime" icon={<Cpu size={16} />} value={rtStatus ?? '미배포'} variant={tone(rtStatus) === 'positive' ? 'accent' : tone(rtStatus) === 'negative' ? 'danger' : 'warn'} hint={d.runtime?.version ? `v${d.runtime.version}` : undefined} />
+              <StatTile label="Runtime" icon={<Cpu size={16} />} value={rtStatus ?? tt('미배포')} variant={tone(rtStatus) === 'positive' ? 'accent' : tone(rtStatus) === 'negative' ? 'danger' : 'warn'} hint={d.runtime?.version ? `v${d.runtime.version}` : undefined} />
               <StatTile label="Gateways" icon={<Boxes size={16} />} value={`${readyGw}/${gateways.length}`} variant={gateways.length && readyGw === gateways.length ? 'accent' : 'warn'} hint={`${totalTargets} targets`} />
-              <StatTile label="Memory" icon={<Database size={16} />} value={d.memory ? d.memory.status : '미배포'} variant={tone(d.memory?.status) === 'positive' ? 'accent' : 'warn'} />
-              <StatTile label="Code Interpreter" icon={<Terminal size={16} />} value={d.interpreter ? d.interpreter.status : '미배포'} variant={tone(d.interpreter?.status) === 'positive' ? 'accent' : 'warn'} />
+              <StatTile label="Memory" icon={<Database size={16} />} value={d.memory ? d.memory.status : tt('미배포')} variant={tone(d.memory?.status) === 'positive' ? 'accent' : 'warn'} />
+              <StatTile label="Code Interpreter" icon={<Terminal size={16} />} value={d.interpreter ? d.interpreter.status : tt('미배포')} variant={tone(d.interpreter?.status) === 'positive' ? 'accent' : 'warn'} />
             </div>
 
             {/* Runtime detail */}
@@ -95,7 +97,7 @@ export default function AgentCorePage() {
             <section className="flex flex-col gap-3">
               <h2 className="flex items-center gap-2 text-[13px] font-semibold text-ink-800"><Wifi size={15} className="text-brand-500" /> Gateways ({gateways.length})</h2>
               {gateways.length === 0 ? (
-                <div className="rounded-md border border-ink-100 bg-paper-muted px-3 py-3 text-[13px] text-ink-400">배포된 게이트웨이가 없습니다.</div>
+                <div className="rounded-md border border-ink-100 bg-paper-muted px-3 py-3 text-[13px] text-ink-400">{tt('배포된 게이트웨이가 없습니다.')}</div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
                   {gateways.map((gw) => (
@@ -123,13 +125,13 @@ export default function AgentCorePage() {
                 <h2 className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-ink-800"><Database size={15} className="text-brand-500" /> Memory</h2>
                 {d.memory
                   ? <div className="font-mono text-[12px]"><span className="text-ink-400">ID</span> <span className="text-ink-700">{d.memory.id}</span> · <span className={tone(d.memory.status) === 'positive' ? 'text-positive-text' : 'text-warning-text'}>{d.memory.status}</span></div>
-                  : <div className="text-[13px] text-ink-400">프로비저닝되지 않음</div>}
+                  : <div className="text-[13px] text-ink-400">{tt('프로비저닝되지 않음')}</div>}
               </section>
               <section className="rounded-lg border border-ink-100 bg-card p-5">
                 <h2 className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-ink-800"><Terminal size={15} className="text-brand-500" /> Code Interpreter</h2>
                 {d.interpreter
                   ? <div className="font-mono text-[12px]"><span className="text-ink-400">ID</span> <span className="text-ink-700">{d.interpreter.id}</span> · <span className={tone(d.interpreter.status) === 'positive' ? 'text-positive-text' : 'text-warning-text'}>{d.interpreter.status}</span></div>
-                  : <div className="text-[13px] text-ink-400">프로비저닝되지 않음</div>}
+                  : <div className="text-[13px] text-ink-400">{tt('프로비저닝되지 않음')}</div>}
               </section>
             </div>
 
