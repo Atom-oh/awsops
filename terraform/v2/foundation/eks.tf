@@ -22,7 +22,8 @@ resource "aws_eks_access_entry" "web" {
 # AdminView (not View): AmazonEKSViewPolicy mirrors the k8s 'view' ClusterRole and has NO
 # cluster-scoped resources — listing nodes 403s. AdminViewPolicy is */*/get,list,watch.
 # It can read Secrets, but the BFF only proxies an allow-listed set of kinds
-# (nodes/pods/deployments/services/namespaces/events in eks-incluster.ts isKind/KIND_PATH)
+# (nodes/pods/deployments/services/namespaces/events/endpoints + explorer kinds replicasets/
+# daemonsets/statefulsets/jobs/pvcs/configmaps[METADATA-ONLY] in eks-incluster.ts isKind/KIND_PATH)
 # — secrets/configmaps never transit, and eks-incluster.test.ts pins their rejection.
 # ⚠️ This allow-list is the single line of defense behind AdminView: ANY new kind added
 # to eks-incluster.ts MUST update this comment + the negative-kind test in the same PR.

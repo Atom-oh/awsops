@@ -1,91 +1,106 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Card from '@/components/ui/Card';
 import DiagnosisGuide from './DiagnosisGuide';
 import { EC2_GUIDE } from './guides';
-import { type Row, type Fleet, num, dash, meter, TH, TD, MONO, DANGER } from './shared';
+import MetricTable, { type MetricCol } from './MetricTable';
+import { type Row, num, meter, RangePicker, useFleet } from './shared';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 // EC2 per-instance diagnostics (owner 가이드): 상태 점검 System/Instance/EBS 구분(책임 소재),
-// T계열 크레딧, 네트워크 Mbps/PPS(합계/300 환산), 인스턴스 관점 EBS IOPS·밸런스.
-// 중지 인스턴스·미발행 메트릭(비-T 크레딧, 비-Nitro 밸런스)은 정직한 '—'.
+// T계열 크레딧, 네트워크 Mbps/PPS(선택 기간 합계 환산), 인스턴스 관점 EBS IOPS·밸런스.
+// 기간별 조회(RangePicker) + 컬럼 정렬/검색/facet/문제만 필터는 MetricTable이 제공.
+
+type Item = { row: Row; m: Record<string, number | null> };
 
 export function Ec2Metrics({ rows }: { rows: Row[] }) {
+  const [range, setRange] = useState(3600);
   const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 150), [rows]);
-  const [fleet, setFleet] = useState<Fleet>({});
-  const [err, setErr] = useState('');
-  const key = ids.join(',');
-  useEffect(() => {
-    if (!key) return;
-    let live = true;
-    fetch(`/api/inventory/ec2/metrics?ids=${encodeURIComponent(key)}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => { if (live) { setFleet(d.fleet ?? {}); setErr(''); } })
-      .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); });
-    return () => { live = false; };
-  }, [key]);
+  const { fleet, err } = useFleet('ec2', ids, range);
+
+  const items: Item[] = useMemo(
+    () => rows.map((row) => ({ row, m: fleet[String(row.resource_id)] ?? {} })),
+    [rows, fleet],
+  );
   if (rows.length === 0) return null;
 
-  const mbps = (v: number | null) => (v == null ? dash : `${((v / 300) * 8 / 1e6).toFixed(2)}`);
-  const pps = (v: number | null) => (v == null ? dash : Math.round(v / 300).toLocaleString());
+  const mbps = (v: number | null) => (v == null ? null : (v / range) * 8 / 1e6);
+  const statusText = (m: Record<string, number | null>): string | null => {
+    const sSys = num(m.statusSystem); const sInst = num(m.statusInstance); const sEbs = num(m.statusEbs);
+    if (sSys == null && sInst == null && sEbs == null) return null;
+    const fails = [(sSys ?? 0) >= 1 ? 'Sys' : '', (sInst ?? 0) >= 1 ? 'Inst' : '', (sEbs ?? 0) >= 1 ? 'EBS' : ''].filter(Boolean);
+    return fails.length ? `FAIL (${fails.join(' ')})` : 'OK';
+  };
+
+  const columns: MetricCol<Item>[] = [
+    { key: 'id', label: 'Instance', mono: true, value: (it) => String(it.row.resource_id) },
+    { key: 'name', label: 'Name', value: (it) => (typeof it.row.name === 'string' ? it.row.name : null) },
+    { key: 'type', label: 'Type', mono: true, facet: true, value: (it) => (typeof it.row.instance_type === 'string' ? it.row.instance_type : null) },
+    {
+      key: 'cpu', label: 'CPU', type: 'num', title: 'CPUUtilization — 지속 80% 초과 시 확장/타입 변경 검토 (하이퍼바이저 관점)',
+      value: (it) => num(it.m.cpu), render: (it) => meter(num(it.m.cpu)),
+    },
+    {
+      key: 'credit', label: 'CPU Credit', type: 'num',
+      title: 'CPUCreditBalance(T계열 전용) — 0 근접 시 baseline 강등/추가 과금. 원인불명 성능저하의 단골',
+      value: (it) => num(it.m.cpuCredit),
+      render: (it) => { const v = num(it.m.cpuCredit); return v == null ? null : Math.round(v).toLocaleString(); },
+      danger: (it) => { const v = num(it.m.cpuCredit); return v != null && v < 50; },
+    },
+    {
+      key: 'status', label: 'Status', facet: true,
+      title: 'StatusCheckFailed System/Instance/AttachedEBS — System=AWS 인프라(stop/start로 이전), Instance=OS 내부(로그/스크린샷 조사)',
+      value: (it) => statusText(it.m),
+      danger: (it) => (statusText(it.m) ?? '').startsWith('FAIL'),
+    },
+    {
+      key: 'netIn', label: 'Net In (Mbps)', type: 'num', title: 'NetworkIn → 선택 기간 평균 Mbps — 인스턴스 타입 대역폭 상한 대비',
+      value: (it) => mbps(num(it.m.netIn)), render: (it) => { const v = mbps(num(it.m.netIn)); return v == null ? null : v.toFixed(2); },
+    },
+    {
+      key: 'netOut', label: 'Net Out (Mbps)', type: 'num', title: 'NetworkOut → 선택 기간 평균 Mbps',
+      value: (it) => mbps(num(it.m.netOut)), render: (it) => { const v = mbps(num(it.m.netOut)); return v == null ? null : v.toFixed(2); },
+    },
+    {
+      key: 'ppsIn', label: 'PPS In', type: 'num', title: 'NetworkPacketsIn → 선택 기간 평균 PPS — PPS 상한 감지',
+      value: (it) => (num(it.m.pktIn) == null ? null : Math.round((num(it.m.pktIn) as number) / range)),
+    },
+    {
+      key: 'ppsOut', label: 'PPS Out', type: 'num', title: 'NetworkPacketsOut → 선택 기간 평균 PPS',
+      value: (it) => (num(it.m.pktOut) == null ? null : Math.round((num(it.m.pktOut) as number) / range)),
+    },
+    {
+      key: 'ebsR', label: 'EBS IOPS R', type: 'num', title: 'EBSReadOps → 선택 기간 평균 IOPS — 인스턴스 관점 EBS I/O',
+      value: (it) => (num(it.m.ebsReadOps) == null ? null : Math.round((num(it.m.ebsReadOps) as number) / range)),
+    },
+    {
+      key: 'ebsW', label: 'EBS IOPS W', type: 'num', title: 'EBSWriteOps → 선택 기간 평균 IOPS',
+      value: (it) => (num(it.m.ebsWriteOps) == null ? null : Math.round((num(it.m.ebsWriteOps) as number) / range)),
+    },
+    {
+      key: 'ioBal', label: 'IO Bal %', type: 'num', title: 'EBSIOBalance% — 0 근접 시 인스턴스 EBS baseline 강등 (볼륨이 커도 병목)',
+      value: (it) => num(it.m.ioBalance),
+      render: (it) => { const v = num(it.m.ioBalance); return v == null ? null : `${v.toFixed(0)}%`; },
+      danger: (it) => { const v = num(it.m.ioBalance); return v != null && v < 20; },
+    },
+    {
+      key: 'byteBal', label: 'Byte Bal %', type: 'num', title: 'EBSByteBalance% — 0 근접 시 인스턴스 EBS 대역폭 강등',
+      value: (it) => num(it.m.byteBalance),
+      render: (it) => { const v = num(it.m.byteBalance); return v == null ? null : `${v.toFixed(0)}%`; },
+      danger: (it) => { const v = num(it.m.byteBalance); return v != null && v < 20; },
+    },
+  ];
 
   return (
     <Card
-      title={tt('인스턴스 진단 메트릭 (Last 1h)')}
-      subtitle={`${ids.length} instances · ${tt('CloudWatch AWS/EC2 · 메모리/디스크는 기본 메트릭에 없음(CloudWatch Agent 필요 — 가이드 참조)')}`}
+      title={tt('인스턴스 진단 메트릭')}
+      subtitle={`${ids.length} instances · CloudWatch AWS/EC2 · ${tt('값은 선택 기간 전체 집계 · 메모리/디스크는 기본 메트릭에 없음(CloudWatch Agent 필요 — 가이드 참조)')}`}
+      right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
       {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
-      <div className="overflow-x-auto">
-        <table className="w-full">
-          <thead><tr className="border-b border-ink-100">
-            {['Instance', 'Name', 'Type', 'CPU', 'CPU Credit', 'Status (Sys/Inst/EBS)', 'Net In/Out (Mbps)', 'PPS In/Out', 'EBS IOPS R/W', 'IO Bal %', 'Byte Bal %'].map((h) => <th key={h} className={TH}>{h}</th>)}
-          </tr></thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const m = fleet[String(r.resource_id)] ?? {};
-              const credit = num(m.cpuCredit);
-              const sSys = num(m.statusSystem); const sInst = num(m.statusInstance); const sEbs = num(m.statusEbs);
-              const anyStatus = sSys != null || sInst != null || sEbs != null;
-              const statusFail = (sSys ?? 0) >= 1 || (sInst ?? 0) >= 1 || (sEbs ?? 0) >= 1;
-              const ioBal = num(m.ioBalance); const byteBal = num(m.byteBalance);
-              const rIops = num(m.ebsReadOps); const wIops = num(m.ebsWriteOps);
-              return (
-                <tr key={i} className="border-b border-ink-50 last:border-0">
-                  <td className={MONO}>{String(r.resource_id)}</td>
-                  <td className={TD}>{String(r.name ?? '—')}</td>
-                  <td className={MONO}>{String(r.instance_type ?? '—')}</td>
-                  <td className={TD} title="CPUUtilization — 지속 80% 초과 시 확장/타입 변경 검토 (하이퍼바이저 관점)">{meter(num(m.cpu))}</td>
-                  <td className={`${TD} ${credit != null && credit < 50 ? DANGER : ''}`} title="CPUCreditBalance(T계열 전용) — 0 근접 시 baseline 강등/추가 과금. 원인불명 성능저하의 단골">
-                    {credit == null ? dash : Math.round(credit).toLocaleString()}
-                  </td>
-                  <td className={`${TD} ${statusFail ? DANGER : ''}`} title="StatusCheckFailed System/Instance/AttachedEBS — System=AWS 인프라(stop/start로 이전), Instance=OS 내부(로그/스크린샷 조사)">
-                    {!anyStatus ? dash : statusFail
-                      ? `FAIL (${(sSys ?? 0) >= 1 ? 'Sys' : ''}${(sInst ?? 0) >= 1 ? ' Inst' : ''}${(sEbs ?? 0) >= 1 ? ' EBS' : ''})`.replace('( ', '(')
-                      : 'OK'}
-                  </td>
-                  <td className={TD} title="NetworkIn/Out → Mbps 환산(합계/300×8) — 인스턴스 타입 대역폭 상한 대비">
-                    {num(m.netIn) == null && num(m.netOut) == null ? dash : `${mbps(num(m.netIn))}/${mbps(num(m.netOut))}`}
-                  </td>
-                  <td className={TD} title="NetworkPacketsIn/Out → PPS 환산(/300) — PPS 상한 감지">
-                    {num(m.pktIn) == null && num(m.pktOut) == null ? dash : `${pps(num(m.pktIn))}/${pps(num(m.pktOut))}`}
-                  </td>
-                  <td className={TD} title="EBSRead/WriteOps → IOPS(/300) — 인스턴스 관점 EBS I/O">
-                    {rIops == null && wIops == null ? dash : `${Math.round((rIops ?? 0) / 300)}/${Math.round((wIops ?? 0) / 300)}`}
-                  </td>
-                  <td className={`${TD} ${ioBal != null && ioBal < 20 ? DANGER : ''}`} title="EBSIOBalance% — 0 근접 시 인스턴스 EBS baseline 강등 (볼륨이 커도 병목)">
-                    {ioBal == null ? dash : `${ioBal.toFixed(0)}%`}
-                  </td>
-                  <td className={`${TD} ${byteBal != null && byteBal < 20 ? DANGER : ''}`} title="EBSByteBalance% — 0 근접 시 인스턴스 EBS 대역폭 강등">
-                    {byteBal == null ? dash : `${byteBal.toFixed(0)}%`}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <MetricTable columns={columns} items={items} rowKey={(it) => String(it.row.resource_id)} />
       <DiagnosisGuide spec={EC2_GUIDE} />
     </Card>
   );

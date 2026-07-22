@@ -23,20 +23,41 @@ export const TD = 'px-3 py-1.5 text-[12px] text-ink-600 whitespace-nowrap';
 export const MONO = `${TD} font-mono text-[11.5px]`;
 export const DANGER = 'text-rose-700 font-semibold';
 
+// 진단 테이블 기간 프리셋 — 값은 선택 기간 전체에 대한 단일 집계(Sum=기간 누적, Avg=기간 평균, Max=기간 최대).
+export const RANGES: ReadonlyArray<readonly [string, number]> = [['1h', 3600], ['6h', 21600], ['24h', 86400], ['7d', 604800]];
+
+/** 기간 선택 토글 — 각 진단 카드 헤더(right)에 배치. */
+export function RangePicker({ value, onChange }: { value: number; onChange: (sec: number) => void }) {
+  return (
+    <div className="flex items-center gap-1">
+      {RANGES.map(([label, sec]) => (
+        <button
+          key={sec}
+          type="button"
+          onClick={() => onChange(sec)}
+          className={`rounded-md px-2 py-1 text-[11.5px] ${value === sec ? 'bg-brand-500/10 font-medium text-brand-700' : 'text-ink-400 hover:bg-ink-50'}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Bulk fleet metrics for a type's `?ids=` endpoint. Fire-and-forget: errors surface as a line, never fail the page. */
-export function useFleet(type: string, ids: string[]): { fleet: Fleet; err: string } {
+export function useFleet(type: string, ids: string[], range = 3600): { fleet: Fleet; err: string } {
   const [fleet, setFleet] = useState<Fleet>({});
   const [err, setErr] = useState('');
   const key = ids.join(',');
   useEffect(() => {
     if (!key) return;
     let live = true;
-    fetch(`/api/inventory/${type}/metrics?ids=${encodeURIComponent(key)}`)
+    fetch(`/api/inventory/${type}/metrics?ids=${encodeURIComponent(key)}&range=${range}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (live) { setFleet(d.fleet ?? {}); setErr(''); } })
       .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); });
     return () => { live = false; };
-  }, [type, key]);
+  }, [type, key, range]);
   return { fleet, err };
 }
 

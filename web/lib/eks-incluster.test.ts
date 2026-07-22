@@ -61,11 +61,12 @@ describe('eksToken', () => {
 
 describe('isKind', () => {
   // ⚠️ PR #36: with AmazonEKSAdminViewPolicy (*/get,list,watch — Secrets readable) this
-  // allow-list is the SINGLE line of defense. secrets/configmaps rejection below is pinned
+  // allow-list is the SINGLE line of defense. secrets rejection below is pinned (configmaps became
+  // an allowed EXPLORER kind 2026-07-21 — METADATA-ONLY: the normalizer emits a key COUNT, never values)
   // intentionally — any new kind must extend this test + the eks.tf comment in the same PR.
   it('accepts the read-only kinds and rejects others', () => {
     for (const k of ['nodes', 'pods', 'deployments', 'services', 'namespaces']) expect(isKind(k)).toBe(true);
-    for (const k of ['secrets', 'configmaps', '', 'NODES', 'pods/exec']) expect(isKind(k)).toBe(false);
+    for (const k of ['secrets', '', 'NODES', 'pods/exec']) expect(isKind(k)).toBe(false);
   });
 });
 

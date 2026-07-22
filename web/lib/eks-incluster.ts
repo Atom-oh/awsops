@@ -98,7 +98,11 @@ export async function clusterConn(cluster: string): Promise<ClusterConn> {
 }
 
 // ── in-cluster list + normalize ────────────────────────────────────────────
-export type Kind = 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces' | 'events' | 'endpoints';
+export type Kind =
+  | 'nodes' | 'pods' | 'deployments' | 'services' | 'namespaces' | 'events' | 'endpoints'
+  // EKS 탐색기 kinds (v1 K9s-style explorer parity). SECURITY: secrets stay REJECTED (the pinned
+  // allow-list invariant); configmaps are METADATA-ONLY — the normalizer never carries data values.
+  | 'replicasets' | 'daemonsets' | 'statefulsets' | 'jobs' | 'configmaps' | 'pvcs';
 
 const KIND_PATH: Record<Kind, string> = {
   nodes: '/api/v1/nodes',
@@ -111,6 +115,12 @@ const KIND_PATH: Record<Kind, string> = {
   // preserves the fields our normalizeEvent fallbacks read.
   events: '/api/v1/events?fieldSelector=type=Warning', // Warning만 (v1 parity, read-only GET; 미인코딩 '='가 k8s 표준형 — PR #36)
   endpoints: '/api/v1/endpoints', // service↔podIP mapping for topology target resolution (read-only GET)
+  replicasets: '/apis/apps/v1/replicasets',
+  daemonsets: '/apis/apps/v1/daemonsets',
+  statefulsets: '/apis/apps/v1/statefulsets',
+  jobs: '/apis/batch/v1/jobs',
+  configmaps: '/api/v1/configmaps',
+  pvcs: '/api/v1/persistentvolumeclaims',
 };
 
 export function isKind(k: string): k is Kind {
@@ -121,7 +131,13 @@ export function isKind(k: string): k is Kind {
     k === 'services' ||
     k === 'namespaces' ||
     k === 'events' ||
-    k === 'endpoints'
+    k === 'endpoints' ||
+    k === 'replicasets' ||
+    k === 'daemonsets' ||
+    k === 'statefulsets' ||
+    k === 'jobs' ||
+    k === 'configmaps' ||
+    k === 'pvcs'
   );
 }
 
@@ -191,7 +207,17 @@ export interface EventRow {
   kind: string; object: string; reason: string; message: string;
   count: number; lastSeen: string; lastSeenTs: number;
 }
-export type InClusterRow = NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow | EventRow | EndpointRow;
+// EKS 탐색기 rows — 요약 메타데이터만 (configmap/secret VALUES는 절대 미전송).
+export interface ReplicaSetRow { name: string; namespace: string; desired: number; ready: number; age: string }
+export interface DaemonSetRow { name: string; namespace: string; desired: number; current: number; ready: number; age: string }
+export interface StatefulSetRow { name: string; namespace: string; ready: string; age: string }
+export interface JobRow { name: string; namespace: string; completions: string; status: string; age: string }
+export interface ConfigMapRow { name: string; namespace: string; keys: number; age: string }
+export interface PvcRow { name: string; namespace: string; status: string; volume: string; capacity: string; storageClass: string; age: string }
+
+export type InClusterRow =
+  | NodeRow | PodRow | DeploymentRow | ServiceRow | NamespaceRow | EventRow | EndpointRow
+  | ReplicaSetRow | DaemonSetRow | StatefulSetRow | JobRow | ConfigMapRow | PvcRow;
 
 export function normalizeEndpoint(it: K8sItem): EndpointRow {
   const ips = (it.subsets ?? []).flatMap((s) => (s.addresses ?? []).map((a) => a.ip ?? '').filter(Boolean));
@@ -353,6 +379,65 @@ export function normalizeEvent(it: K8sItem): EventRow {
   };
 }
 
+// EKS 탐색기 normalizers — SUMMARY metadata only. K8sItem is typed for the classic kinds, so the
+// explorer kinds read their extra fields via a narrow local cast (never the raw payload passthrough).
+type AnyObj = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+export function normalizeReplicaSet(it: K8sItem): ReplicaSetRow {
+  const o = it as AnyObj;
+  return {
+    name: it.metadata?.name ?? '', namespace: it.metadata?.namespace ?? '',
+    desired: Number(o.spec?.replicas ?? 0), ready: Number(o.status?.readyReplicas ?? 0),
+    age: age(it.metadata?.creationTimestamp),
+  };
+}
+export function normalizeDaemonSet(it: K8sItem): DaemonSetRow {
+  const o = it as AnyObj;
+  return {
+    name: it.metadata?.name ?? '', namespace: it.metadata?.namespace ?? '',
+    desired: Number(o.status?.desiredNumberScheduled ?? 0),
+    current: Number(o.status?.currentNumberScheduled ?? 0),
+    ready: Number(o.status?.numberReady ?? 0),
+    age: age(it.metadata?.creationTimestamp),
+  };
+}
+export function normalizeStatefulSet(it: K8sItem): StatefulSetRow {
+  const o = it as AnyObj;
+  return {
+    name: it.metadata?.name ?? '', namespace: it.metadata?.namespace ?? '',
+    ready: `${Number(o.status?.readyReplicas ?? 0)}/${Number(o.spec?.replicas ?? 0)}`,
+    age: age(it.metadata?.creationTimestamp),
+  };
+}
+export function normalizeJob(it: K8sItem): JobRow {
+  const o = it as AnyObj;
+  const conds = (o.status?.conditions ?? []) as AnyObj[];
+  const done = conds.find((c) => c.type === 'Complete' && c.status === 'True');
+  const failed = conds.find((c) => c.type === 'Failed' && c.status === 'True');
+  return {
+    name: it.metadata?.name ?? '', namespace: it.metadata?.namespace ?? '',
+    completions: `${Number(o.status?.succeeded ?? 0)}/${Number(o.spec?.completions ?? 1)}`,
+    status: failed ? 'Failed' : done ? 'Complete' : 'Running',
+    age: age(it.metadata?.creationTimestamp),
+  };
+}
+export function normalizeConfigMap(it: K8sItem): ConfigMapRow {
+  // METADATA ONLY — key COUNT, never key names or values (values can carry credentials-ish config).
+  const o = it as AnyObj;
+  const keys = Object.keys(o.data ?? {}).length + Object.keys(o.binaryData ?? {}).length;
+  return { name: it.metadata?.name ?? '', namespace: it.metadata?.namespace ?? '', keys, age: age(it.metadata?.creationTimestamp) };
+}
+export function normalizePvc(it: K8sItem): PvcRow {
+  const o = it as AnyObj;
+  return {
+    name: it.metadata?.name ?? '', namespace: it.metadata?.namespace ?? '',
+    status: String(o.status?.phase ?? ''), volume: String(o.spec?.volumeName ?? ''),
+    capacity: String(o.status?.capacity?.storage ?? o.spec?.resources?.requests?.storage ?? ''),
+    storageClass: String(o.spec?.storageClassName ?? ''),
+    age: age(it.metadata?.creationTimestamp),
+  };
+}
+
 const NORMALIZERS: Record<Kind, (it: K8sItem) => InClusterRow> = {
   nodes: normalizeNode,
   pods: normalizePod,
@@ -361,6 +446,12 @@ const NORMALIZERS: Record<Kind, (it: K8sItem) => InClusterRow> = {
   namespaces: normalizeNamespace,
   events: normalizeEvent,
   endpoints: normalizeEndpoint,
+  replicasets: normalizeReplicaSet,
+  daemonsets: normalizeDaemonSet,
+  statefulsets: normalizeStatefulSet,
+  jobs: normalizeJob,
+  configmaps: normalizeConfigMap,
+  pvcs: normalizePvc,
 };
 
 /** HTTPS GET against the cluster K8s API, verifying TLS with the cluster CA. */

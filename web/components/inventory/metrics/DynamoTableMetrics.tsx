@@ -3,13 +3,18 @@ import { useEffect, useMemo, useState } from 'react';
 import Card from '@/components/ui/Card';
 import DiagnosisGuide from './DiagnosisGuide';
 import { DDB_GUIDE } from './guides';
-import { type Row, type Fleet, num, dash, cnt, TH, TD, MONO, DANGER } from './shared';
+import MetricTable, { type MetricCol } from './MetricTable';
+import { type Row, type Fleet, num, dash, cnt, RangePicker } from './shared';
 import { useI18n } from '@/components/shell/LanguageProvider';
 
 // DynamoDB per-table diagnostics (owner 가이드: 스로틀링·용량·지연·에러·Global Tables).
+// 기간별 조회(RangePicker) + 컬럼 정렬/검색/facet/문제만 필터는 MetricTable이 제공.
 interface DdbReplicationRow { table: string; region: string; latencyMs: number | null }
 
+type Item = { row: Row; m: Record<string, number | null> };
+
 export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
+  const [range, setRange] = useState(3600);
   const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
@@ -19,84 +24,126 @@ export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
   useEffect(() => {
     if (!key) return;
     let live = true;
-    fetch(`/api/inventory/dynamodb/metrics?ids=${encodeURIComponent(key)}`)
+    fetch(`/api/inventory/dynamodb/metrics?ids=${encodeURIComponent(key)}&range=${range}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (live) { setFleet(d.fleet ?? {}); setReplication(d.replication ?? []); setErr(''); } })
       .catch((e) => { if (live) setErr(String(e instanceof Error ? e.message : e)); });
     return () => { live = false; };
-  }, [key]);
+  }, [key, range]);
+
+  const items: Item[] = useMemo(
+    () => rows.map((row) => ({ row, m: fleet[String(row.resource_id)] ?? {} })),
+    [rows, fleet],
+  );
   if (rows.length === 0) return null;
 
-  const lat = (v: number | null) => (v == null ? dash : `${v.toFixed(1)}`); // SuccessfulRequestLatency is already ms
-  // 소비 용량: Sum(5분) → 초당 소비율. Provisioned와 직접 비교 (근접/초과 = 위험).
-  const rate = (sum: number | null) => (sum == null ? null : sum / 300);
-  const capCell = (consumed: number | null, prov: number | null) => {
-    const c = rate(consumed);
-    if (c == null && prov == null) return dash;
-    const provisioned = prov != null && prov > 0 ? prov : null;
-    const hot = provisioned != null && c != null && c >= provisioned * 0.8;
-    return (
-      <span className={hot ? DANGER : undefined}>
-        {c == null ? '0' : c < 10 ? c.toFixed(2) : Math.round(c).toLocaleString()}
-        {provisioned != null ? ` / ${Math.round(provisioned).toLocaleString()}` : ''}
-      </span>
-    );
+  const latFmt = (v: number | null) => (v == null ? dash : v.toFixed(1)); // SuccessfulRequestLatency is already ms
+  // 소비 용량: Sum(선택 기간) → 초당 소비율. Provisioned와 직접 비교 (근접/초과 = 위험).
+  const rate = (sum: number | null) => (sum == null ? null : sum / range);
+  const provOf = (v: number | null) => (v != null && v > 0 ? v : null); // On-Demand는 0 → 비교 불가
+  const rateFmt = (c: number | null) => (c == null ? dash : c < 10 ? c.toFixed(2) : Math.round(c).toLocaleString());
+  const capHot = (consumed: number | null, prov: number | null) => {
+    const c = rate(consumed); const p = provOf(prov);
+    return p != null && c != null && c >= p * 0.8;
   };
 
+  const throttleTitle = (metric: string) =>
+    `${metric}(선택 기간 누적) — >0 지속이면 용량 부족 또는 핫 파티션. Contributor Insights로 핫 키 확인`;
+
+  const columns: MetricCol<Item>[] = [
+    { key: 'table', label: 'Table', mono: true, value: (it) => String(it.row.resource_id) },
+    {
+      key: 'billing', label: 'Billing', facet: true,
+      value: (it) => (String(it.row.billing_mode ?? '—') === 'PAY_PER_REQUEST' ? 'On-Demand' : 'Provisioned'),
+    },
+    {
+      key: 'throttleR', label: 'Throttle R', type: 'num', title: throttleTitle('ReadThrottleEvents'),
+      value: (it) => num(it.m.rThrottle), render: (it) => cnt(num(it.m.rThrottle)),
+      danger: (it) => (num(it.m.rThrottle) ?? 0) > 0,
+    },
+    {
+      key: 'throttleW', label: 'Throttle W', type: 'num', title: throttleTitle('WriteThrottleEvents'),
+      value: (it) => num(it.m.wThrottle), render: (it) => cnt(num(it.m.wThrottle)),
+      danger: (it) => (num(it.m.wThrottle) ?? 0) > 0,
+    },
+    {
+      key: 'rcuUsed', label: 'RCU 소비', type: 'num',
+      title: 'ConsumedReadCapacityUnits(초당 소비율) — 프로비저닝의 80% 이상이면 위험(근접/초과)',
+      value: (it) => rate(num(it.m.consumedR)), render: (it) => rateFmt(rate(num(it.m.consumedR))),
+      danger: (it) => capHot(num(it.m.consumedR), num(it.m.provR)),
+    },
+    {
+      key: 'rcuProv', label: 'RCU 프로비저닝', type: 'num',
+      title: 'ProvisionedReadCapacityUnits — On-Demand는 표시 없음',
+      value: (it) => provOf(num(it.m.provR)),
+      render: (it) => { const p = provOf(num(it.m.provR)); return p == null ? dash : Math.round(p).toLocaleString(); },
+    },
+    {
+      key: 'wcuUsed', label: 'WCU 소비', type: 'num',
+      title: 'ConsumedWriteCapacityUnits(초당 소비율) — 프로비저닝의 80% 이상이면 위험(근접/초과)',
+      value: (it) => rate(num(it.m.consumedW)), render: (it) => rateFmt(rate(num(it.m.consumedW))),
+      danger: (it) => capHot(num(it.m.consumedW), num(it.m.provW)),
+    },
+    {
+      key: 'wcuProv', label: 'WCU 프로비저닝', type: 'num',
+      title: 'ProvisionedWriteCapacityUnits — On-Demand는 표시 없음',
+      value: (it) => provOf(num(it.m.provW)),
+      render: (it) => { const p = provOf(num(it.m.provW)); return p == null ? dash : Math.round(p).toLocaleString(); },
+    },
+    {
+      key: 'latGet', label: 'Lat Get', type: 'num', title: 'SuccessfulRequestLatency(GetItem, ms)',
+      value: (it) => num(it.m.latGet), render: (it) => latFmt(num(it.m.latGet)),
+    },
+    {
+      key: 'latQuery', label: 'Lat Query', type: 'num', title: 'SuccessfulRequestLatency(Query, ms) — 급증 시 액세스 패턴 의심',
+      value: (it) => num(it.m.latQuery), render: (it) => latFmt(num(it.m.latQuery)),
+    },
+    {
+      key: 'latPut', label: 'Lat Put', type: 'num', title: 'SuccessfulRequestLatency(PutItem, ms)',
+      value: (it) => num(it.m.latPut), render: (it) => latFmt(num(it.m.latPut)),
+    },
+    {
+      key: 'latScan', label: 'Lat Scan', type: 'num', title: 'SuccessfulRequestLatency(Scan, ms) — 풀스캔/큰 결과셋 의심',
+      value: (it) => num(it.m.latScan), render: (it) => latFmt(num(it.m.latScan)),
+    },
+    {
+      key: 'condFail', label: 'CondFail', type: 'num', title: 'ConditionalCheckFailedRequests — 낙관적 락이면 정상 발생 가능, 맥락 판단',
+      value: (it) => num(it.m.condFail), render: (it) => cnt(num(it.m.condFail)),
+    },
+    {
+      key: 'txnConflict', label: 'TxnConflict', type: 'num', title: 'TransactionConflict — 높으면 경합 심함',
+      value: (it) => num(it.m.txnConflict), render: (it) => cnt(num(it.m.txnConflict)),
+    },
+  ];
+
+  const repColumns: MetricCol<DdbReplicationRow>[] = [
+    { key: 'table', label: 'Table', mono: true, value: (l) => l.table },
+    { key: 'region', label: 'Receiving Region', mono: true, facet: true, value: (l) => l.region || null },
+    {
+      key: 'latency', label: 'Latency', type: 'num', title: '리전 간 복제 지연 — 증가 추세면 경보',
+      value: (l) => l.latencyMs,
+      render: (l) => (l.latencyMs == null ? dash : `${Math.round(l.latencyMs).toLocaleString()} ms`),
+    },
+  ];
+
   return (
-    <Card title={tt('테이블 진단 메트릭 (Last 1h)')} subtitle={`${ids.length} tables · CloudWatch AWS/DynamoDB · ${tt('용량은 초당 소비율(소비/프로비저닝)')}`} padded={false}>
+    <Card
+      title={tt('테이블 진단 메트릭')}
+      subtitle={`${ids.length} tables · CloudWatch AWS/DynamoDB · ${tt('용량은 초당 소비율 · 값은 선택 기간 전체 집계')}`}
+      right={<RangePicker value={range} onChange={setRange} />}
+      padded={false}
+    >
       {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
-      <div className="overflow-x-auto">
-        <table className="w-full">
-          <thead><tr className="border-b border-ink-100">
-            {['Table', 'Billing', 'Throttle R/W', 'RCU (소비/프로비저닝)', 'WCU (소비/프로비저닝)', 'Lat Get', 'Lat Query', 'Lat Put', 'Lat Scan', 'CondFail', 'TxnConflict'].map((h) => <th key={h} className={TH}>{h}</th>)}
-          </tr></thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const m = fleet[String(r.resource_id)] ?? {};
-              const rt = num(m.rThrottle) ?? 0; const wt = num(m.wThrottle) ?? 0;
-              const throttled = rt > 0 || wt > 0;
-              return (
-                <tr key={i} className="border-b border-ink-50 last:border-0">
-                  <td className={MONO}>{String(r.resource_id)}</td>
-                  <td className={TD}>{String(r.billing_mode ?? '—') === 'PAY_PER_REQUEST' ? 'On-Demand' : 'Provisioned'}</td>
-                  <td className={`${TD} ${throttled ? DANGER : ''}`} title="Read/WriteThrottleEvents(5분 누적) — >0 지속이면 용량 부족 또는 핫 파티션. Contributor Insights로 핫 키 확인">
-                    {num(m.rThrottle) == null && num(m.wThrottle) == null ? dash : `${rt}/${wt}`}
-                  </td>
-                  <td className={TD} title="ConsumedReadCapacityUnits(초당) vs ProvisionedReadCapacityUnits — 근접/초과 시 위험">{capCell(num(m.consumedR), num(m.provR))}</td>
-                  <td className={TD} title="ConsumedWriteCapacityUnits(초당) vs ProvisionedWriteCapacityUnits">{capCell(num(m.consumedW), num(m.provW))}</td>
-                  <td className={TD} title="SuccessfulRequestLatency(GetItem, ms)">{lat(num(m.latGet))}</td>
-                  <td className={TD} title="SuccessfulRequestLatency(Query, ms) — 급증 시 액세스 패턴 의심">{lat(num(m.latQuery))}</td>
-                  <td className={TD} title="SuccessfulRequestLatency(PutItem, ms)">{lat(num(m.latPut))}</td>
-                  <td className={TD} title="SuccessfulRequestLatency(Scan, ms) — 풀스캔/큰 결과셋 의심">{lat(num(m.latScan))}</td>
-                  <td className={TD} title="ConditionalCheckFailedRequests — 낙관적 락이면 정상 발생 가능, 맥락 판단">{cnt(num(m.condFail))}</td>
-                  <td className={TD} title="TransactionConflict — 높으면 경합 심함">{cnt(num(m.txnConflict))}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <MetricTable columns={columns} items={items} rowKey={(it, i) => `${String(it.row.resource_id)}:${i}`} />
 
       {replication.length > 0 && (
         <div className="border-t border-ink-100">
-          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">Global Tables 복제 지연 (ReplicationLatency, Last 1h)</div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead><tr className="border-b border-ink-100">
-                {['Table', 'Receiving Region', 'Latency'].map((h) => <th key={h} className={TH}>{h}</th>)}
-              </tr></thead>
-              <tbody>
-                {replication.slice(0, 15).map((l, i) => (
-                  <tr key={i} className="border-b border-ink-50 last:border-0">
-                    <td className={MONO}>{l.table}</td>
-                    <td className={MONO}>{l.region || '—'}</td>
-                    <td className={`${TD} tabular`} title="리전 간 복제 지연 — 증가 추세면 경보">{l.latencyMs == null ? dash : `${Math.round(l.latencyMs).toLocaleString()} ms`}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">{tt('Global Tables 복제 지연 (ReplicationLatency, 선택 기간)')}</div>
+          <MetricTable
+            columns={repColumns}
+            items={replication.slice(0, 15)}
+            rowKey={(l, i) => `${l.table}:${l.region}:${i}`}
+          />
         </div>
       )}
 
