@@ -38,7 +38,15 @@ function stateVariant(value: string): 'default' | 'danger' {
 }
 
 // Labels for filterKeys that aren't table columns (row keys injected by the page or detail-only).
-const FACET_LABELS: Record<string, string> = { region: 'Region', account_id: 'Account' };
+// Per-type column labels win (facetSpecs checks spec.columns first); these are the shared fallbacks.
+const FACET_LABELS: Record<string, string> = {
+  region: 'Region', account_id: 'Account', name: 'Name', vpc_id: 'VPC', api_id: 'API',
+  storage_type: 'Storage Type', transit_encryption_enabled: 'Transit Enc', engine_type: 'Engine Type',
+  default_for_az: 'Default for AZ', amazon_side_asn: 'ASN', private_zone: 'Private Zone',
+  http_version: 'HTTP Version', is_ipv6_enabled: 'IPv6', role_last_used_region: 'Last Used Region',
+  include_global_service_events: 'Global Service Events', statistic: 'Statistic',
+  comparison_operator: 'Comparison', period: 'Period (s)',
+};
 
 // Count rows by a column value (stringified), descending by count.
 function countBy(rows: Row[], key: string): { name: string; value: number }[] {
