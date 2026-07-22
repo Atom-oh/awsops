@@ -570,4 +570,75 @@ export const GUIDES_EN: Record<string, GuideSpec> = {
       ['DeadLetterErrors', '> 0', 'Risk of losing failed events'],
     ],
   },
+
+  EKS: {
+    service: 'EKS',
+    intro: (
+      <>EKS has more layers than other services — you have to look at the <b>control plane (API server/etcd), nodes
+      (workers), pods/workloads, and scaling</b> layer by layer, and the metrics come not from CloudWatch alone but
+      from several sources: <b>Container Insights, control-plane logs, and Prometheus/kube-state-metrics</b>.</>
+    ),
+    sections: [
+      { title: 'Sort out the metric sources first', items: [
+        <>EKS control plane → CloudWatch control-plane logging + some CloudWatch metrics (this dashboard: the {code('AWS/EKS')} namespace).</>,
+        <>Nodes/pods/containers → <b>CloudWatch Container Insights</b> (agent required) or Prometheus (this dashboard: the {code('ContainerInsights')} namespace + the in-cluster API).</>,
+        <>Kubernetes object state (Deployments, ReplicaSets, etc.) → kube-state-metrics. Node OS level → node_exporter / CloudWatch agent.</>,
+      ]},
+      { title: '① Control plane (API server / etcd) — managed, but you still watch its load', items: [
+        <><b>apiserver_request_duration_seconds</b> — API server request latency. A spike means the control plane is overloaded.</>,
+        <><b>apiserver_request_total</b> (per response code) — the <b>429 (throttling) and 5xx ratios</b>.</>,
+        <><b>etcd_db_total_size_in_bytes</b> — etcd DB size. Approaching the limit (default cap 8GB) risks write rejections and cluster paralysis. Detects runaway accumulation of objects/secrets.</>,
+        <><b>apiserver_current_inflight_requests</b> — in-flight requests. Check for Priority and Fairness (APF) throttling.</>,
+        <>Control-plane logs (api, audit, authenticator, controllerManager, scheduler) are essential for root-cause tracing.</>,
+      ]},
+      { title: '② Node (worker) level — Container Insights', items: [
+        <><b>node_cpu_utilization / node_memory_utilization</b> — node CPU/memory usage. Memory is central to diagnosing OOM/eviction.</>,
+        <><b>node_filesystem_utilization</b> — node disk (especially /var/lib images/logs). <b>Above 85%, DiskPressure evicts pods.</b></>,
+        <><b>node_status_condition</b> (Ready, MemoryPressure, DiskPressure, PIDPressure) — node condition status (this dashboard: queried in-cluster).</>,
+        <><b>cluster_node_count / cluster_failed_node_count</b> — node counts / failed nodes, plus <b>node_network_total_bytes</b>.</>,
+      ]},
+      { title: '③ Pods / workloads — Container Insights', items: [
+        <><b>pod_cpu_utilization_over_pod_limit</b> — usage against the limit. Exceeding the limit means CPU throttling.</>,
+        <><b>pod_memory_utilization_over_pod_limit</b> — approaching the limit risks OOMKilled.</>,
+        <><b>pod_number_of_container_restarts</b> — container restart count. A spike signals CrashLoopBackOff / OOMKill. <b>One of the most important anomaly indicators.</b></>,
+        <><b>pod_status_ready / running / pending / failed</b>, and kube-state-metrics' {code('kube_pod_container_status_last_terminated_reason')} to confirm OOMKilled.</>,
+        <><b>kube_pod_status_phase</b> — accumulating Pending pods means scheduling failures (insufficient resources, taints, unbound PVs).</>,
+      ]},
+      { title: '④ Scheduling / scaling', items: [
+        <><b>Pending pod count</b> — pods that cannot be scheduled. Diagnose whether Cluster Autoscaler / Karpenter is failing to attach nodes, or resource requests are oversized.</>,
+        <>Cluster Autoscaler: {code('cluster_autoscaler_unschedulable_pods_count')} · Karpenter: provisioning/drift/consolidation metrics.</>,
+        <>HPA: {code('kube_horizontalpodautoscaler_status_current_replicas')} vs desired — whether the scale target is being reached.</>,
+        <><b>Reserved vs actual resources</b>: the sum of requests vs node allocatable — detects nodes that are "logically full" from over-reserved requests (this dashboard: the reserved capacity column).</>,
+      ]},
+      { title: '⑤ Network / add-ons', items: [
+        <><b>VPC CNI IP exhaustion</b> — subnet IPs run out, or the per-ENI IP cap keeps pods from getting an IP, leaving them Pending. Check awscni/ipamd metrics such as {code('aws_eni_allocated')}. <b>A common trap on EKS</b> (this dashboard: the ENI IP slot bar in the node detail).</>,
+        <><b>CoreDNS latency/errors</b> — DNS problems fan out into widespread outages. {code('coredns_dns_request_duration_seconds')} and the failure rate.</>,
+        <>kube-proxy and load-balancer controller health (this dashboard: the add-on status table).</>,
+      ]},
+      { title: 'Diagnosis flows by symptom', items: [
+        <>Pods restarting continuously → <b>container_restarts + last_terminated_reason</b> (is it OOMKilled?) + memory against the limit. If OOM, raise the limit or investigate an app memory leak. Confirm with logs and {code('kubectl describe')}.</>,
+        <>Pods stuck Pending → check the events in {code('kubectl describe pod')}. The cause is usually one of: ① insufficient resources (scaling needed) ② VPC CNI IP exhaustion ③ taints/affinity ④ an unbound PV.</>,
+        <>Node NotReady → node conditions (Pressure), kubelet status, node OS level (disk/memory).</>,
+        <>Intermittent API errors / slow deployments → control-plane latency and 429s, APF throttling, etcd size.</>,
+        <>Widespread DNS-related outage → CoreDNS metrics/logs and the replica count.</>,
+      ]},
+      { title: 'EKS-specific caveats', items: [
+        <><b>Container Insights must be enabled</b> for node/pod/container metrics to reach CloudWatch (not provided by default). Alternatively, AMP (Amazon Managed Prometheus) + kube-state-metrics/node_exporter.</>,
+        <>CloudWatch metrics alone are often not enough — in practice it is common to view Kubernetes-native metrics with <b>Prometheus + Grafana</b> (or AMP/AMG).</>,
+        <>Diagnosis combines metrics with <b>kubectl (describe, logs, events, top)</b> and the control-plane logs. For a specific pod/node problem, the kubectl events are ultimately decisive.</>,
+        <><b>VPC CNI IP exhaustion</b> and <b>over-reserved resource requests</b> are EKS-specific causes of Pending — keep them at the top of your suspect list.</>,
+      ]},
+    ],
+    priorityHeader: ['Metric', 'Warning threshold', 'Meaning'],
+    priority: [
+      ['pod_number_of_container_restarts', 'Spiking', 'CrashLoop/OOMKill'],
+      ['pod_memory_utilization_over_pod_limit', 'Near 100%', 'OOMKilled risk'],
+      ['node_status_condition (Pressure)', 'True', 'Disk/Memory/PID pressure → eviction'],
+      ['Pending pod count', '> 0 sustained', 'Scheduling/scaling/IP failure'],
+      ['node_filesystem_utilization', '> 85%', 'DiskPressure'],
+      ['apiserver_request_duration / 429', 'Spiking', 'Control-plane overload'],
+      ['etcd_db_total_size_in_bytes', 'Near limit', 'etcd saturation'],
+      ['VPC CNI IP headroom', 'Low', 'Pod IP exhaustion'],
+    ],
+  },
 };

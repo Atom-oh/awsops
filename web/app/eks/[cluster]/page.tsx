@@ -20,6 +20,7 @@ import CostPanel from './CostPanel';
 import NodeEniSection from '@/components/eks/NodeEniSection';
 import NodeCapacityCards from '@/components/eks/NodeCapacityCards';
 import NodePodsSection from '@/components/eks/NodePodsSection';
+import EksDiagnosis from '@/components/eks/EksDiagnosis';
 
 type Row = Record<string, unknown>;
 type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'events' | 'diagnosis' | 'cost';
@@ -311,6 +312,9 @@ export default function EksClusterPage() {
           <CostPanel cluster={cluster} />
         ) : isDiagnosis ? (
           <>
+            {/* Metric diagnosis tier (owner 가이드): control plane / nodes / workload / addons.
+                Self-fetching — independent of the K8sGPT analyzer block below. */}
+            <EksDiagnosis cluster={cluster} />
             {!diag && !err && <div className="text-ink-400">로딩 중…</div>}
             {diag && !err && (
               <>

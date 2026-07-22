@@ -561,4 +561,74 @@ export const GUIDES_ZH: Record<string, GuideSpec> = {
       ['DeadLetterErrors', '> 0', '失败事件丢失风险'],
     ],
   },
+  EKS: {
+    service: 'EKS',
+    intro: (
+      <>EKS 的层次比其他服务更多 — 需要按<b>控制平面（API Server/etcd）· 节点（Worker）· Pod/工作负载 ·
+      扩缩容</b>逐层排查，而且指标来源也不只是 CloudWatch 一处，还包括 <b>Container Insights ·
+      控制平面日志 · Prometheus/kube-state-metrics</b> 等多个渠道。</>
+    ),
+    sections: [
+      { title: '先理清指标来源', items: [
+        <>EKS 控制平面 → CloudWatch 控制平面日志 + 部分 CloudWatch 指标（本仪表盘：{code('AWS/EKS')} 命名空间）。</>,
+        <>节点/Pod/容器 → <b>CloudWatch Container Insights</b>（需要安装代理）或 Prometheus（本仪表盘：{code('ContainerInsights')} 命名空间 + 集群内 API）。</>,
+        <>Kubernetes 对象状态（Deployment、ReplicaSet 等）→ kube-state-metrics。节点 OS 层 → node_exporter / CloudWatch agent。</>,
+      ]},
+      { title: '① 控制平面（API Server / etcd）— 虽是托管服务，负载指标仍需关注', items: [
+        <><b>apiserver_request_duration_seconds</b> — API Server 请求延迟。突增说明控制平面过载。</>,
+        <><b>apiserver_request_total</b>（按状态码）— 关注 <b>429（限流）、5xx 比例</b>。</>,
+        <><b>etcd_db_total_size_in_bytes</b> — etcd 数据库大小。接近上限（默认 8GB）时有拒绝写入、集群瘫痪的风险。可用于发现对象/Secret 的过量堆积。</>,
+        <><b>apiserver_current_inflight_requests</b> — 进行中的请求数。用于确认优先级与公平性（APF）限流。</>,
+        <>控制平面日志（api、audit、authenticator、controllerManager、scheduler）是追查问题根因的必备手段。</>,
+      ]},
+      { title: '② 节点（Worker）层 — Container Insights', items: [
+        <><b>node_cpu_utilization / node_memory_utilization</b> — 节点 CPU/内存使用率。内存是诊断 OOM/驱逐（eviction）的关键。</>,
+        <><b>node_filesystem_utilization</b> — 节点磁盘（尤其是 /var/lib 下的镜像/日志）。<b>超过 85% 会触发 DiskPressure 并驱逐 Pod。</b></>,
+        <><b>node_status_condition</b>（Ready、MemoryPressure、DiskPressure、PIDPressure）— 节点状态条件（本仪表盘：集群内查询）。</>,
+        <><b>cluster_node_count / cluster_failed_node_count</b> — 节点数/故障节点数，以及 <b>node_network_total_bytes</b>。</>,
+      ]},
+      { title: '③ Pod / 工作负载 — Container Insights', items: [
+        <><b>pod_cpu_utilization_over_pod_limit</b> — 相对 limit 的使用率。超过 limit 时会发生 CPU 限流（throttling）。</>,
+        <><b>pod_memory_utilization_over_pod_limit</b> — 接近 limit 时有 OOMKilled 风险。</>,
+        <><b>pod_number_of_container_restarts</b> — 容器重启次数。突增是 CrashLoopBackOff / OOMKill 的信号。<b>最重要的异常指标之一。</b></>,
+        <><b>pod_status_ready / running / pending / failed</b>，并通过 kube-state-metrics 的 {code('kube_pod_container_status_last_terminated_reason')} 确认是否为 OOMKilled。</>,
+        <><b>kube_pod_status_phase</b> — Pending 持续堆积意味着调度失败（资源不足、taint、PV 未绑定）。</>,
+      ]},
+      { title: '④ 调度 / 扩缩容', items: [
+        <><b>Pending Pod 数量</b> — 无法被调度的 Pod。判断是 Cluster Autoscaler / Karpenter 加不上节点，还是资源 request 设置过高。</>,
+        <>Cluster Autoscaler：{code('cluster_autoscaler_unschedulable_pods_count')} · Karpenter：置备/漂移（drift）/consolidation 相关指标。</>,
+        <>HPA：{code('kube_horizontalpodautoscaler_status_current_replicas')} vs desired — 判断扩缩目标是否达成。</>,
+        <><b>资源预留 vs 实际使用</b>：request 总和 vs 节点 allocatable — 发现因 request 过度预留导致节点"逻辑上已满"的情况（本仪表盘：reserved capacity 列）。</>,
+      ]},
+      { title: '⑤ 网络 / 插件（Add-on）', items: [
+        <><b>VPC CNI IP 耗尽</b> — 子网 IP 用尽、单 ENI 的 IP 上限导致 Pod 拿不到 IP 而 Pending。检查 {code('aws_eni_allocated')} 等 awscni/ipamd 指标。<b>EKS 中的常见陷阱</b>（本仪表盘：节点详情中的 ENI IP 槽位条）。</>,
+        <><b>CoreDNS 延迟/错误</b> — DNS 问题会蔓延成大范围故障。关注 {code('coredns_dns_request_duration_seconds')} 及失败率。</>,
+        <>kube-proxy、负载均衡器控制器的状态（本仪表盘：插件状态表）。</>,
+      ]},
+      { title: '按症状的诊断流程', items: [
+        <>Pod 反复重启 → <b>container_restarts + last_terminated_reason</b>（是否为 OOMKilled）+ 相对 limit 的内存使用。若是 OOM，则上调 limit 或排查应用内存泄漏。用日志和 {code('kubectl describe')} 确认。</>,
+        <>Pod 处于 Pending → 用 {code('kubectl describe pod')} 查看事件。原因通常是以下之一：①资源不足（需要扩容）②VPC CNI IP 耗尽 ③taint/affinity ④PV 未绑定。</>,
+        <>节点 NotReady → 检查 node condition（各类 Pressure）、kubelet 状态、节点 OS 层（磁盘/内存）。</>,
+        <>间歇性 API 报错/部署缓慢 → 检查控制平面延迟与 429、APF 限流、etcd 大小。</>,
+        <>DNS 引发的大范围故障 → 查看 CoreDNS 指标与日志、副本数。</>,
+      ]},
+      { title: 'EKS 特有的注意点', items: [
+        <><b>必须开启 Container Insights</b>，节点/Pod/容器指标才会进入 CloudWatch（默认不提供）。或者采用 AMP（Amazon Managed Prometheus）+ kube-state-metrics/node_exporter 的组合。</>,
+        <>仅靠 CloudWatch 指标往往不够，实践中通常用 <b>Prometheus + Grafana</b>（或 AMP/AMG）来查看 Kubernetes 原生指标。</>,
+        <>诊断时应把指标、<b>kubectl（describe、logs、events、top）</b>和控制平面日志结合起来用。针对具体 Pod/节点的问题，最终往往是 kubectl 事件给出决定性线索。</>,
+        <><b>VPC CNI IP 耗尽</b>和<b>资源 request 过度预留</b>是 EKS 特有的 Pending 原因，应放入优先排查清单。</>,
+      ]},
+    ],
+    priorityHeader: ['指标', '告警标准', '含义'],
+    priority: [
+      ['pod_number_of_container_restarts', '突增', 'CrashLoop/OOMKill'],
+      ['pod_memory_utilization_over_pod_limit', '接近 100%', 'OOMKilled 风险'],
+      ['node_status_condition (Pressure)', 'True', 'Disk/Memory/PID 压力 → 驱逐'],
+      ['Pending Pod 数量', '持续 > 0', '调度/扩缩容/IP 分配失败'],
+      ['node_filesystem_utilization', '> 85%', 'DiskPressure'],
+      ['apiserver_request_duration / 429', '突增', '控制平面过载'],
+      ['etcd_db_total_size_in_bytes', '接近上限', 'etcd 饱和'],
+      ['VPC CNI IP 余量', '偏低', 'Pod IP 耗尽'],
+    ],
+  },
 };
