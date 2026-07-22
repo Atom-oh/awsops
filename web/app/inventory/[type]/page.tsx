@@ -37,6 +37,9 @@ function stateVariant(value: string): 'default' | 'danger' {
   return BAD_STATES.has(value.trim().toLowerCase()) ? 'danger' : 'default';
 }
 
+// Labels for filterKeys that aren't table columns (row keys injected by the page or detail-only).
+const FACET_LABELS: Record<string, string> = { region: 'Region', account_id: 'Account' };
+
 // Count rows by a column value (stringified), descending by count.
 function countBy(rows: Row[], key: string): { name: string; value: number }[] {
   const m = new Map<string, number>();
@@ -143,7 +146,7 @@ export default function InventoryTypePage() {
     const keys = spec?.filterKeys ?? [];
     return keys.map((key) => ({
       key,
-      label: spec?.columns.find((c) => c.key === key)?.label ?? key,
+      label: spec?.columns.find((c) => c.key === key)?.label ?? FACET_LABELS[key] ?? key,
       options: countBy(allRows, key),
     }));
   }, [spec, allRows]);

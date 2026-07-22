@@ -11,9 +11,10 @@ export interface InvType {
   /** Optional Top-N metric bar chart: numeric column ranked desc over the row set. */
   barKey?: { col: string; label: string };
   sections?: { label: string; keys: string[] }[];
-  // filterKeys (optional, v1-parity facet filters): columns[].key rendered as dropdown facets above
+  // filterKeys (optional, v1-parity facet filters): row keys rendered as dropdown facets above
   // the table (each option shows a live count). The stateKey already has its own SegmentedControl,
-  // so list OTHER discriminating columns here (e.g. ec2 type/vpc, lambda runtime).
+  // so list OTHER discriminating keys here (e.g. ec2 type/vpc, lambda runtime). Keys need not be
+  // table columns — non-column keys (e.g. region) get their label from the page's FACET_LABELS.
   filterKeys?: string[];
 }
 
@@ -35,7 +36,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
       { label: 'Image', keys: ['image_id', 'architecture', 'platform_details', 'virtualization_type', 'hypervisor'] },
     ],
-    filterKeys: ['instance_type', 'vpc_id'] },
+    filterKeys: ['region', 'name', 'instance_type', 'pricing_model', 'subnet_id', 'vpc_id'] },
   lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', distKey2: 'package_type', barKey: { col: 'memory_size', label: 'Memory (MB)' }, columns: [
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
     { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' },
