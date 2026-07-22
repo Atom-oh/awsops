@@ -1,6 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
 import Card from '@/components/ui/Card';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import DiagnosisGuide from './DiagnosisGuide';
 import { RDS_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
@@ -14,6 +15,7 @@ import { type Row, num, dash, gb, cnt, meter, RangePicker, useFleet } from './sh
 type Item = { row: Row; m: Record<string, number | null> };
 
 export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const [range, setRange] = useState(3600);
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const { fleet, err } = useFleet('rds', ids, range);
@@ -47,12 +49,12 @@ export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
       },
     },
     {
-      key: 'cpu', label: 'CPU', type: 'num', title: 'CPUUtilization — 지속 80% 초과 시 확장/쿼리 튜닝',
+      key: 'cpu', label: 'CPU', type: 'num', title: tt('CPUUtilization — 지속 80% 초과 시 확장/쿼리 튜닝'),
       value: (it) => num(it.m.cpu), render: (it) => meter(num(it.m.cpu)),
     },
     {
       key: 'freeStorage', label: 'Free Storage', type: 'num',
-      title: 'FreeStorageSpace — 가장 흔한 장애 원인. 고갈되면 DB 정지',
+      title: tt('FreeStorageSpace — 가장 흔한 장애 원인. 고갈되면 DB 정지'),
       // 정렬 값: allocated_storage로 %를 계산할 수 있으면 잔여 %(진단 신호), 아니면 잔여 바이트.
       // 스케일이 섞이지만(%↔bytes) % 미산출 행은 예외적이고, 고갈 위험 정렬에는 %가 옳은 축.
       value: (it) => freePct(it) ?? num(it.m.freeStorage),
@@ -67,21 +69,21 @@ export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
     { key: 'freeMem', label: 'Free Mem', type: 'num', value: (it) => num(it.m.freeMem), render: (it) => gb(num(it.m.freeMem)) },
     {
       key: 'swap', label: 'Swap', type: 'num',
-      title: 'SwapUsage — 0에 가까워야 정상. 커지면 메모리 부족 → 성능 급락',
+      title: tt('SwapUsage — 0에 가까워야 정상. 커지면 메모리 부족 → 성능 급락'),
       value: (it) => swapMb(it),
       render: (it) => { const v = swapMb(it); return v == null ? dash : `${v.toFixed(0)} MB`; },
       danger: (it) => { const v = swapMb(it); return v != null && v > 100; },
     },
     {
-      key: 'conn', label: 'Conn', type: 'num', title: 'DatabaseConnections — max_connections 대비 확인',
+      key: 'conn', label: 'Conn', type: 'num', title: tt('DatabaseConnections — max_connections 대비 확인'),
       value: (it) => num(it.m.conn), render: (it) => cnt(num(it.m.conn)),
     },
     {
-      key: 'readLat', label: 'Read Lat', type: 'num', title: 'ReadLatency — 급증 시 스토리지 병목',
+      key: 'readLat', label: 'Read Lat', type: 'num', title: tt('ReadLatency — 급증 시 스토리지 병목'),
       value: (it) => num(it.m.readLat), render: (it) => lat(num(it.m.readLat)),
     },
     {
-      key: 'writeLat', label: 'Write Lat', type: 'num', title: 'WriteLatency — 급증 시 스토리지 병목',
+      key: 'writeLat', label: 'Write Lat', type: 'num', title: tt('WriteLatency — 급증 시 스토리지 병목'),
       value: (it) => num(it.m.writeLat), render: (it) => lat(num(it.m.writeLat)),
     },
     {
@@ -95,13 +97,13 @@ export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
       render: (it) => { const v = num(it.m.writeIops); return v == null ? dash : Math.round(v).toLocaleString(); },
     },
     {
-      key: 'queue', label: 'Queue', type: 'num', title: 'DiskQueueDepth — 높으면 스토리지 병목',
+      key: 'queue', label: 'Queue', type: 'num', title: tt('DiskQueueDepth — 높으면 스토리지 병목'),
       value: (it) => num(it.m.diskQueue),
       render: (it) => { const v = num(it.m.diskQueue); return v == null ? dash : v.toFixed(1); },
     },
     {
       key: 'credit', label: 'Credit', type: 'num',
-      title: 'BurstBalance(gp2)/CPUCreditBalance(T계열) — 0 근접 시 성능 강등 (자주 놓치는 함정)',
+      title: tt('BurstBalance(gp2)/CPUCreditBalance(T계열) — 0 근접 시 성능 강등 (자주 놓치는 함정)'),
       // 크레딧: gp2=BurstBalance(%), T계열=CPUCreditBalance — 인스턴스당 한쪽만 존재하므로 단일
       // 컬럼 유지. 정렬 값은 있는 쪽(단위 혼재: %↔credits)이지만 '0 근접=위험' 축은 공유.
       value: (it) => num(it.m.burst) ?? num(it.m.cpuCredit),
@@ -115,7 +117,7 @@ export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
       },
     },
     {
-      key: 'replicaLag', label: 'Replica Lag', type: 'num', title: 'ReplicaLag(초) — 증가 추세면 복제 지연',
+      key: 'replicaLag', label: 'Replica Lag', type: 'num', title: tt('ReplicaLag(초) — 증가 추세면 복제 지연'),
       value: (it) => num(it.m.replicaLag),
       render: (it) => { const v = num(it.m.replicaLag); return v == null ? dash : `${v.toFixed(1)}s`; },
       danger: (it) => { const v = num(it.m.replicaLag); return v != null && v > 10; },
@@ -124,12 +126,12 @@ export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="인스턴스 진단 메트릭"
-      subtitle={`${ids.length} instances · CloudWatch AWS/RDS (인스턴스 레벨) · 값은 선택 기간 전체 집계`}
+      title={tt('인스턴스 진단 메트릭')}
+      subtitle={`${ids.length} instances · CloudWatch AWS/RDS (${tt('인스턴스 레벨')}) · ${tt('값은 선택 기간 전체 집계')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패')}: {err}</div>}
       <MetricTable columns={columns} items={items} rowKey={(it) => String(it.row.resource_id)} />
       <DiagnosisGuide spec={RDS_GUIDE} />
     </Card>

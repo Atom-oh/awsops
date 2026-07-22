@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import DiagnosisGuide from './DiagnosisGuide';
 import { MSK_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
@@ -16,6 +17,7 @@ type NodeItem = { cluster: string; n: MskNodeRow; m: Record<string, number | nul
 type LagItem = { cluster: string } & MskLagRow;
 
 export function MskBrokerNodes({ rows }: { rows: Row[] }) {
+  const { tt } = useI18n();
   const [range, setRange] = useState(3600);
   const [data, setData] = useState<Record<string, MskClusterData>>({});
   const [loaded, setLoaded] = useState(false);
@@ -114,7 +116,7 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
     { key: 'instance', label: 'Instance', mono: true, value: (it) => (it.n.nodeType === 'BROKER' ? it.n.instanceType : 'KRaft') },
     { key: 'ip', label: 'VPC IP', mono: true, value: (it) => it.n.clientVpcIp },
     {
-      key: 'cpu', label: 'CPU', type: 'num', title: 'CpuUser + CpuSystem — 60% 초과 시 경보 권장',
+      key: 'cpu', label: 'CPU', type: 'num', title: tt('CpuUser + CpuSystem — 60% 초과 시 경보 권장'),
       value: (it) => cpuOf(it.m), render: (it) => meter(cpuOf(it.m)),
       danger: (it) => { const v = cpuOf(it.m); return v != null && v > 60; },
     },
@@ -123,7 +125,7 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
       value: (it) => memPctOf(it.m), render: (it) => meter(memPctOf(it.m)),
     },
     {
-      key: 'disk', label: 'Data Disk', type: 'num', title: 'KafkaDataLogsDiskUsed — 85% 초과 위험 (가장 흔한 장애 원인)',
+      key: 'disk', label: 'Data Disk', type: 'num', title: tt('KafkaDataLogsDiskUsed — 85% 초과 위험 (가장 흔한 장애 원인)'),
       value: (it) => num(it.m.dataDisk), render: (it) => meter(num(it.m.dataDisk)),
       danger: (it) => { const v = num(it.m.dataDisk); return v != null && v > 85; },
     },
@@ -131,7 +133,7 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
     { key: 'netOut', label: 'Net Out', type: 'num', value: (it) => num(it.m.bytesOut), render: (it) => kbps(num(it.m.bytesOut)) },
     { key: 'msgs', label: 'Msgs/s', type: 'num', value: (it) => num(it.m.msgsIn), render: (it) => cnt(num(it.m.msgsIn)) },
     {
-      key: 'throttle', label: 'Throttle', type: 'num', title: 'ProduceThrottleTime / FetchThrottleTime 중 최대값 (ms)',
+      key: 'throttle', label: 'Throttle', type: 'num', title: tt('ProduceThrottleTime / FetchThrottleTime 중 최대값 (ms)'),
       value: (it) => throttleOf(it.m),
       render: (it) => { const v = throttleOf(it.m); return v != null && v > 0 ? `${v.toFixed(1)} ms` : dash; },
       danger: (it) => { const v = throttleOf(it.m); return v != null && v > 0; },
@@ -145,7 +147,7 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
     { key: 'topic', label: 'Topic', mono: true, value: (it) => it.topic || null },
     {
       key: 'lag', label: 'Max Offset Lag', type: 'num',
-      title: 'lag이 계속 증가하면 컨슈머가 프로듀서를 못 따라가는 중 — 추세가 안정적이어야 정상',
+      title: tt('lag이 계속 증가하면 컨슈머가 프로듀서를 못 따라가는 중 — 추세가 안정적이어야 정상'),
       value: (it) => it.maxOffsetLag,
       render: (it) => (it.maxOffsetLag == null ? dash : Math.round(it.maxOffsetLag).toLocaleString()),
     },
@@ -153,12 +155,12 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="Broker Nodes · 클러스터 건강성"
-      subtitle={`${brokerCount} brokers · ${controllerCount} controllers · CloudWatch AWS/Kafka (브로커 단위) · 값은 선택 기간 전체 집계`}
+      title={`Broker Nodes · ${tt('클러스터 건강성')}`}
+      subtitle={`${brokerCount} brokers · ${controllerCount} controllers · CloudWatch AWS/Kafka (${tt('브로커 단위')}) · ${tt('값은 선택 기간 전체 집계')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">노드 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('노드 조회 실패')}: {err}</div>}
 
       {/* 진단 우선순위 스트립 — 정상 기대값(컨트롤러=1, 오프라인/URP/MinISR=0, 디스크<85%, CPU<60%) 대비 색상 */}
       {loaded && healthRows.length > 0 && (
@@ -166,13 +168,13 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
           {healthRows.map((h) => (
             <div key={h.cluster} className="flex flex-wrap items-center gap-1.5">
               <span className="mr-1 w-32 truncate font-mono text-[11.5px] text-ink-500" title={h.cluster}>{h.cluster}</span>
-              <HealthPill label="Controller" value={fmtN(h.controllers)} ok={h.controllers == null ? null : h.controllers === 1} hint="ActiveControllerCount — 정상값은 정확히 1. 0 또는 2+ 는 컨트롤러 이상 → 즉시 조사." />
-              <HealthPill label="Offline" value={fmtN(h.offline)} ok={h.offline == null ? null : h.offline === 0} hint="OfflinePartitionsCount — 정상값 0. 0보다 크면 해당 파티션 서비스 불가 (가용성 문제)." />
-              <HealthPill label="URP" value={fmtN(h.urp)} ok={h.urp == null ? null : h.urp === 0} hint="UnderReplicatedPartitions — 정상값 0. 0보다 크면 복제가 뒤처지는 중 (브로커 부하/장애 신호)." />
-              <HealthPill label="MinISR" value={fmtN(h.minIsr)} ok={h.minIsr == null ? null : h.minIsr === 0} hint="UnderMinIsrPartitionCount — min.insync.replicas 미달 파티션. acks=all 쓰기가 거부되는 상황." />
-              <HealthPill label="Data Disk" value={fmtPct(h.dataDiskMax)} ok={h.dataDiskMax == null ? null : h.dataDiskMax < 85} hint="KafkaDataLogsDiskUsed(max) — 가장 흔한 장애 원인. 85% 초과 시 위험: 스토리지 확장 필요." />
-              <HealthPill label="Root Disk" value={fmtPct(h.rootDiskMax)} ok={h.rootDiskMax == null ? null : h.rootDiskMax < 85} hint="RootDiskUsed(max) — 루트 볼륨 사용률." />
-              <HealthPill label="CPU max" value={fmtPct(h.cpuMax)} ok={h.cpuMax == null ? null : h.cpuMax < 60} hint="CpuUser+CpuSystem 브로커 최대값 — 60~70% 초과 시 경보 (여유 40% 이상 권장)." />
+              <HealthPill label="Controller" value={fmtN(h.controllers)} ok={h.controllers == null ? null : h.controllers === 1} hint={tt('ActiveControllerCount — 정상값은 정확히 1. 0 또는 2+ 는 컨트롤러 이상 → 즉시 조사.')} />
+              <HealthPill label="Offline" value={fmtN(h.offline)} ok={h.offline == null ? null : h.offline === 0} hint={tt('OfflinePartitionsCount — 정상값 0. 0보다 크면 해당 파티션 서비스 불가 (가용성 문제).')} />
+              <HealthPill label="URP" value={fmtN(h.urp)} ok={h.urp == null ? null : h.urp === 0} hint={tt('UnderReplicatedPartitions — 정상값 0. 0보다 크면 복제가 뒤처지는 중 (브로커 부하/장애 신호).')} />
+              <HealthPill label="MinISR" value={fmtN(h.minIsr)} ok={h.minIsr == null ? null : h.minIsr === 0} hint={tt('UnderMinIsrPartitionCount — min.insync.replicas 미달 파티션. acks=all 쓰기가 거부되는 상황.')} />
+              <HealthPill label="Data Disk" value={fmtPct(h.dataDiskMax)} ok={h.dataDiskMax == null ? null : h.dataDiskMax < 85} hint={tt('KafkaDataLogsDiskUsed(max) — 가장 흔한 장애 원인. 85% 초과 시 위험: 스토리지 확장 필요.')} />
+              <HealthPill label="Root Disk" value={fmtPct(h.rootDiskMax)} ok={h.rootDiskMax == null ? null : h.rootDiskMax < 85} hint={tt('RootDiskUsed(max) — 루트 볼륨 사용률.')} />
+              <HealthPill label="CPU max" value={fmtPct(h.cpuMax)} ok={h.cpuMax == null ? null : h.cpuMax < 60} hint={tt('CpuUser+CpuSystem 브로커 최대값 — 60~70% 초과 시 경보 (여유 40% 이상 권장).')} />
             </div>
           ))}
         </div>
@@ -183,14 +185,14 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
           columns={nodeCols}
           items={items}
           rowKey={(it, i) => `${it.cluster}:${it.n.nodeType}:${it.n.brokerId ?? it.n.endpoints[0] ?? i}`}
-          emptyText={loaded ? '브로커 노드 없음 — kafka:ListNodes 권한 또는 클러스터 상태를 확인하세요' : '노드 조회 중…'}
+          emptyText={loaded ? tt('브로커 노드 없음 — kafka:ListNodes 권한 또는 클러스터 상태를 확인하세요') : tt('노드 조회 중…')}
         />
       </div>
 
       {/* 컨슈머 그룹 lag — 실무 최우선 지표. 시리즈는 ListMetrics로 발견 (그룹/토픽별). */}
       {lagItems.length > 0 && (
         <div className="border-t border-ink-100">
-          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">컨슈머 그룹 Offset Lag (MaxOffsetLag, 선택 기간)</div>
+          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">{tt('컨슈머 그룹 Offset Lag (MaxOffsetLag, 선택 기간)')}</div>
           <MetricTable
             columns={lagCols}
             items={lagItems}
