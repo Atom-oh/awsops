@@ -5,6 +5,7 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { DDB_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, type Fleet, num, dash, cnt, RangePicker } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // DynamoDB per-table diagnostics (owner 가이드: 스로틀링·용량·지연·에러·Global Tables).
 // 기간별 조회(RangePicker) + 컬럼 정렬/검색/facet/문제만 필터는 MetricTable이 제공.
@@ -14,6 +15,7 @@ type Item = { row: Row; m: Record<string, number | null> };
 
 export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
   const [range, setRange] = useState(3600);
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [replication, setReplication] = useState<DdbReplicationRow[]>([]);
@@ -126,17 +128,17 @@ export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="테이블 진단 메트릭"
-      subtitle={`${ids.length} tables · CloudWatch AWS/DynamoDB · 용량은 초당 소비율 · 값은 선택 기간 전체 집계`}
+      title={tt('테이블 진단 메트릭')}
+      subtitle={`${ids.length} tables · CloudWatch AWS/DynamoDB · ${tt('용량은 초당 소비율 · 값은 선택 기간 전체 집계')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <MetricTable columns={columns} items={items} rowKey={(it, i) => `${String(it.row.resource_id)}:${i}`} />
 
       {replication.length > 0 && (
         <div className="border-t border-ink-100">
-          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">Global Tables 복제 지연 (ReplicationLatency, 선택 기간)</div>
+          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">{tt('Global Tables 복제 지연 (ReplicationLatency, 선택 기간)')}</div>
           <MetricTable
             columns={repColumns}
             items={replication.slice(0, 15)}

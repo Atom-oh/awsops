@@ -1,6 +1,7 @@
 'use client';
 import { useState, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // Data-driven collapsible diagnosis explainer (owner: "설명 내용을 화면에서 펼쳐 보기로").
 // One component renders every service's guide — the per-service CONTENT lives as a GuideSpec
@@ -27,6 +28,7 @@ const TDC = 'px-2.5 py-1.5 text-[12px] text-ink-600';
 const H4 = 'mt-3 mb-1 text-[12.5px] font-semibold text-ink-700';
 
 export default function DiagnosisGuide({ spec }: { spec: GuideSpec }) {
+  const { tt } = useI18n();
   const [open, setOpen] = useState(false);
   return (
     <div className="border-t border-ink-100">
@@ -37,7 +39,7 @@ export default function DiagnosisGuide({ spec }: { spec: GuideSpec }) {
         className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[12.5px] font-medium text-brand-700 hover:bg-ink-50"
       >
         <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-        {spec.service} 진단 가이드 — 지표 읽는 법 (펼쳐 보기)
+        {spec.service} {tt('진단 가이드 — 지표 읽는 법 (펼쳐 보기)')}
       </button>
       {open && (
         <div className="px-5 pb-4 text-[12.5px] leading-relaxed text-ink-600">
@@ -50,7 +52,7 @@ export default function DiagnosisGuide({ spec }: { spec: GuideSpec }) {
               </ul>
             </div>
           ))}
-          <div className={H4}>경보 우선순위 요약</div>
+          <div className={H4}>{tt('경보 우선순위 요약')}</div>
           <div className="overflow-x-auto rounded-lg border border-ink-100">
             <table className="w-full">
               <thead><tr className="border-b border-ink-100 bg-paper-muted/60">

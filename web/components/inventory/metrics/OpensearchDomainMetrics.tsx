@@ -6,6 +6,7 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { OS_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, num, dash, cnt, ms, meter, RangePicker, useFleet } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // ── OpenSearch: per-domain metric rows (v1 도메인 메트릭) ──
 // 기간별 조회(RangePicker) + 컬럼 정렬/검색/facet/문제만 필터는 MetricTable이 제공.
@@ -14,6 +15,7 @@ type Item = { row: Row; m: Record<string, number | null> };
 
 export function OpensearchDomainMetrics({ rows }: { rows: Row[] }) {
   const [range, setRange] = useState(3600);
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const { fleet, err } = useFleet('opensearch', ids, range);
 
@@ -115,16 +117,16 @@ export function OpensearchDomainMetrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="도메인 메트릭"
-      subtitle={`${ids.length} domains · CloudWatch AWS/ES · 값은 선택 기간 전체 집계`}
+      title={tt('도메인 메트릭')}
+      subtitle={`${ids.length} domains · CloudWatch AWS/ES · ${tt('값은 선택 기간 전체 집계')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <MetricTable columns={domainCols} items={items} rowKey={(it) => String(it.row.resource_id)} />
 
       <div className="border-t border-ink-100">
-        <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">진단 지표</div>
+        <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">{tt('진단 지표')}</div>
         <MetricTable columns={diagCols} items={items} rowKey={(it) => String(it.row.resource_id)} />
       </div>
 

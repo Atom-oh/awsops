@@ -5,6 +5,7 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { EBS_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, type Fleet, num, dash, RangePicker } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // EBS per-volume diagnostics (owner 가이드): 원시값(선택 기간 합계)을 IOPS·MB/s·평균지연
 // (TotalTime/Ops)으로 환산해 표시. 볼륨 한계 vs 인스턴스 EBS 대역폭(밸런스 테이블) 구분.
@@ -15,6 +16,7 @@ type BalanceItem = { iid: string; io: number | null; byte: number | null };
 
 export function EbsMetrics({ rows }: { rows: Row[] }) {
   const [range, setRange] = useState(3600);
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 150), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [instanceBalance, setInstanceBalance] = useState<Fleet>({});
@@ -165,18 +167,18 @@ export function EbsMetrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="볼륨 진단 메트릭"
-      subtitle={`${ids.length} volumes · CloudWatch AWS/EBS · 값은 선택 기간 전체 집계 · IOPS/MBps는 기간 합계 환산, 지연은 TotalTime/Ops`}
+      title={tt('볼륨 진단 메트릭')}
+      subtitle={`${ids.length} volumes · CloudWatch AWS/EBS · ${tt('값은 선택 기간 전체 집계 · IOPS/MBps는 기간 합계 환산, 지연은 TotalTime/Ops')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <MetricTable columns={columns} items={items} rowKey={(it) => String(it.row.resource_id)} />
 
       {/* 인스턴스 레벨 EBS 대역폭 밸런스 — 볼륨이 여유로운데 느릴 때의 범인 (소형 Nitro만 발행) */}
       {balanceRows.length > 0 && (
         <div className="border-t border-ink-100">
-          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">인스턴스 EBS 대역폭 밸런스</div>
+          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">{tt('인스턴스 EBS 대역폭 밸런스')}</div>
           <MetricTable columns={balanceColumns} items={balanceRows} rowKey={(b) => b.iid} />
         </div>
       )}

@@ -5,6 +5,7 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { S3_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, type Fleet, num, dash, cnt, mb, ms, RangePicker } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // S3 per-bucket diagnostics (owner 가이드): 스토리지(일별)/요청(유료, 활성화 시)/복제.
 // 요청 메트릭 미활성 버킷은 '—' — 가이드의 'S3만의 특이점' 섹션이 이유를 설명한다.
@@ -22,6 +23,7 @@ const fmtSize = (v: number | null) => {
 
 export function S3Metrics({ rows }: { rows: Row[] }) {
   const [range, setRange] = useState(3600);
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 150), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [replication, setReplication] = useState<ReplicationRow[]>([]);
@@ -109,18 +111,18 @@ export function S3Metrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="버킷 진단 메트릭"
-      subtitle={`${ids.length} buckets · 크기/객체 수는 일별 집계(Standard), 요청 지표는 요청 메트릭(EntireBucket) 활성 버킷만 · 값은 선택 기간 전체 집계`}
+      title={tt('버킷 진단 메트릭')}
+      subtitle={`${ids.length} buckets · ${tt('크기/객체 수는 일별 집계(Standard), 요청 지표는 요청 메트릭(EntireBucket) 활성 버킷만 · 값은 선택 기간 전체 집계')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <MetricTable columns={columns} items={items} rowKey={(it) => String(it.row.resource_id)} />
 
       {/* CRR/SRR 복제 상태 — Source/Dest/RuleId 차원은 ListMetrics로 발견 (복제 룰 있는 계정만 표시) */}
       {replication.length > 0 && (
         <div className="border-t border-ink-100">
-          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">복제 상태 (CRR/SRR, 선택 기간)</div>
+          <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">{tt('복제 상태 (CRR/SRR, 선택 기간)')}</div>
           <MetricTable
             columns={replCols}
             items={replication.slice(0, 15)}

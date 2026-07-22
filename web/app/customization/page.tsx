@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import PageHeader from '@/components/ui/PageHeader';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string }>; agentType?: string; gateways?: string[]; }
 interface SkillRow { id: number; name: string; description: string; tier: string; enabled: boolean; version: number; agentTypes?: string[]; }
@@ -19,6 +20,7 @@ const INTEG_TRANSPORTS = ['sigv4', 'oauth_client_credentials', 'oauth_3lo', 'api
 // the advanced custom-integration registration.
 
 export default function CustomizationPage() {
+  const { tt } = useI18n();
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [skills, setSkills] = useState<SkillRow[]>([]);
   const [denied, setDenied] = useState(false);
@@ -213,8 +215,7 @@ export default function CustomizationPage() {
         <div>
           <h2 className="text-[13px] font-semibold">Integrations (advanced)</h2>
           <p className="text-[11px] text-ink-400">
-            데이터소스(Prometheus·Loki·…)와 커넥터(Notion)는 이제 <a href="/integrations" className="text-brand-600 underline">연동 허브</a>에서 관리합니다.
-            아래는 고급 — 임의 egress/ingress 통합 등록입니다.
+            {tt('데이터소스(Prometheus·Loki·…)와 커넥터(Notion)는 이제')} <a href="/integrations" className="text-brand-600 underline">{tt('연동 허브')}</a>{tt('에서 관리합니다.')} {tt('아래는 고급 — 임의 egress/ingress 통합 등록입니다.')}
           </p>
         </div>
 

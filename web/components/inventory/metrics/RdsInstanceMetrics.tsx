@@ -5,6 +5,7 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { RDS_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, num, dash, gb, cnt, meter, RangePicker, useFleet } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // RDS per-instance diagnostic table (owner 가이드: CloudWatch/복제/EM/PI 4층위).
 // 임계값: CPU>80 지속=컴퓨트 병목, Free Storage 고갈=가장 흔한 장애 원인, Swap 증가=메모리 부족,
@@ -15,6 +16,7 @@ type Item = { row: Row; m: Record<string, number | null> };
 
 export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
   const [range, setRange] = useState(3600);
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const { fleet, err } = useFleet('rds', ids, range);
 
@@ -124,12 +126,12 @@ export function RdsInstanceMetrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="인스턴스 진단 메트릭"
-      subtitle={`${ids.length} instances · CloudWatch AWS/RDS (인스턴스 레벨) · 값은 선택 기간 전체 집계`}
+      title={tt('인스턴스 진단 메트릭')}
+      subtitle={`${ids.length} instances · CloudWatch AWS/RDS (${tt('인스턴스 레벨')}) · ${tt('값은 선택 기간 전체 집계')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <MetricTable columns={columns} items={items} rowKey={(it) => String(it.row.resource_id)} />
       <DiagnosisGuide spec={RDS_GUIDE} />
     </Card>

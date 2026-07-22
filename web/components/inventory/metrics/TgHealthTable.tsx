@@ -1,6 +1,7 @@
 'use client';
 import { useMemo } from 'react';
 import MetricTable, { type MetricCol } from './MetricTable';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // 타깃 그룹 헬스 테이블 (ALB/NLB 공용) — Healthy/UnHealthyHostCount는 TG 차원이어야 의미.
 // Healthy = 선택 기간 최소값(순간 이탈 감지), UnHealthy = 선택 기간 최대값.
@@ -29,6 +30,7 @@ const COLUMNS: MetricCol<Item>[] = [
 ];
 
 export default function TgHealthTable({ health, lbDims }: { health: TgHealthRow[]; lbDims: Record<string, string> }) {
+  const { tt } = useI18n();
   const items: Item[] = useMemo(
     () => health.map((hRow) => ({
       ...hRow,
@@ -39,7 +41,7 @@ export default function TgHealthTable({ health, lbDims }: { health: TgHealthRow[
   if (health.length === 0) return null;
   return (
     <div className="border-t border-ink-100">
-      <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">타깃 그룹 헬스 (Healthy 최소값 / UnHealthy 최대값, 선택 기간)</div>
+      <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">{tt('타깃 그룹 헬스 (Healthy 최소값 / UnHealthy 최대값, 선택 기간)')}</div>
       <MetricTable columns={COLUMNS} items={items} rowKey={(it, i) => `${it.tg}|${it.lbDim}|${i}`} />
     </div>
   );

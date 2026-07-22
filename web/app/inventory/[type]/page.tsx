@@ -72,7 +72,7 @@ export default function InventoryTypePage() {
   const load = useCallback(async () => {
     try {
       const r = await fetch(`/api/inventory/${type}?limit=${ROW_LIMIT}&${scopeParams(scope)}`);
-      if (r.status === 403) throw new Error((await r.json().catch(() => null))?.message ?? '접근 권한이 없습니다');
+      if (r.status === 403) throw new Error((await r.json().catch(() => null))?.message ?? tt('접근 권한이 없습니다'));
       if (!r.ok) throw new Error(String(r.status));
       const d = await r.json();
       setRows((d.rows as Row[]).map((x) => deriveRow(type, { resource_id: x.resource_id, region: x.region, ...(x.data as object) })));
@@ -99,7 +99,7 @@ export default function InventoryTypePage() {
     setBusy(true); setErr('');
     try {
       const r = await fetch(`/api/inventory/${type}/refresh`, { method: 'POST' });
-      if (!r.ok) throw new Error(r.status === 401 ? '세션 만료 — 새로고침' : `수집 실패 (${r.status})`);
+      if (!r.ok) throw new Error(r.status === 401 ? tt('세션 만료 — 새로고침') : tt(`수집 실패 (${r.status})`));
       await load();
     } catch (e) { setErr(String(e)); } finally { setBusy(false); }
   };
@@ -270,7 +270,7 @@ export default function InventoryTypePage() {
       />
       <div className="px-8 py-8 flex flex-col gap-6">
         {err && <div className="text-[13px] text-rose-600">{err}</div>}
-        {!rows && !err && <div className="text-ink-400">로딩 중…</div>}
+        {!rows && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
 
         {rows && (
           <>
@@ -321,7 +321,7 @@ export default function InventoryTypePage() {
               onClick={() => { setMapVpc(selected); setSelected(null); }}
               className="rounded-md border border-brand-300 bg-brand-500/10 px-3 py-1.5 text-[12px] font-medium text-brand-700 hover:bg-brand-500/20"
             >
-              리소스 맵 열기
+              {tt('리소스 맵 열기')}
             </button>
           ) : undefined
         }
@@ -391,7 +391,7 @@ function Filters({
           {facetSpecs.map((f) => (
             <select
               key={f.key}
-              aria-label={`${f.label} 필터`}
+              aria-label={tt(`${f.label} 필터`)}
               value={facets[f.key] ?? '전체'}
               onChange={(e) => onFacet(f.key, e.target.value)}
               className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-700"

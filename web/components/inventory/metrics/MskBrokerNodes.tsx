@@ -6,6 +6,7 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { MSK_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, type Fleet, num, dash, kbps, cnt, meter, RangePicker, HealthPill } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // ── MSK: broker/controller node rows (kafka ListNodes + per-broker CloudWatch) ──
 interface MskNodeRow { nodeType: string; brokerId: number | null; instanceType: string | null; clientVpcIp: string | null; eni: string | null; endpoints: string[] }
@@ -17,6 +18,7 @@ type LagItem = { cluster: string } & MskLagRow;
 
 export function MskBrokerNodes({ rows }: { rows: Row[] }) {
   const [range, setRange] = useState(3600);
+  const { tt } = useI18n();
   const [data, setData] = useState<Record<string, MskClusterData>>({});
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState('');
@@ -153,12 +155,12 @@ export function MskBrokerNodes({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="Broker Nodes · 클러스터 건강성"
-      subtitle={`${brokerCount} brokers · ${controllerCount} controllers · CloudWatch AWS/Kafka (브로커 단위) · 값은 선택 기간 전체 집계`}
+      title={tt('Broker Nodes · 클러스터 건강성')}
+      subtitle={`${brokerCount} brokers · ${controllerCount} controllers · CloudWatch AWS/Kafka (${tt('브로커 단위')}) · ${tt('값은 선택 기간 전체 집계')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">노드 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('노드 조회 실패:')} {err}</div>}
 
       {/* 진단 우선순위 스트립 — 정상 기대값(컨트롤러=1, 오프라인/URP/MinISR=0, 디스크<85%, CPU<60%) 대비 색상 */}
       {loaded && healthRows.length > 0 && (

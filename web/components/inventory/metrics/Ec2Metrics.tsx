@@ -5,6 +5,7 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { EC2_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, num, meter, RangePicker, useFleet } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // EC2 per-instance diagnostics (owner 가이드): 상태 점검 System/Instance/EBS 구분(책임 소재),
 // T계열 크레딧, 네트워크 Mbps/PPS(선택 기간 합계 환산), 인스턴스 관점 EBS IOPS·밸런스.
@@ -14,6 +15,7 @@ type Item = { row: Row; m: Record<string, number | null> };
 
 export function Ec2Metrics({ rows }: { rows: Row[] }) {
   const [range, setRange] = useState(3600);
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 150), [rows]);
   const { fleet, err } = useFleet('ec2', ids, range);
 
@@ -92,12 +94,12 @@ export function Ec2Metrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="인스턴스 진단 메트릭"
-      subtitle={`${ids.length} instances · CloudWatch AWS/EC2 · 값은 선택 기간 전체 집계 · 메모리/디스크는 기본 메트릭에 없음(CloudWatch Agent 필요 — 가이드 참조)`}
+      title={tt('인스턴스 진단 메트릭')}
+      subtitle={`${ids.length} instances · CloudWatch AWS/EC2 · ${tt('값은 선택 기간 전체 집계 · 메모리/디스크는 기본 메트릭에 없음(CloudWatch Agent 필요 — 가이드 참조)')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <MetricTable columns={columns} items={items} rowKey={(it) => String(it.row.resource_id)} />
       <DiagnosisGuide spec={EC2_GUIDE} />
     </Card>

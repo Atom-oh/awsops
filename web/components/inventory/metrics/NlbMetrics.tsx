@@ -6,6 +6,7 @@ import { NLB_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import TgHealthTable, { type TgHealthRow } from './TgHealthTable';
 import { type Row, type Fleet, num, cnt, mb, RangePicker } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // NLB per-LB diagnostics (owner 가이드): L4 — HTTP 코드가 없어 RST 카운트/타깃 헬스가 핵심.
 // 응답: {fleet(resource_id 키), targetHealth, lbDimByResource} — ALB와 동일 계약(net/ 차원).
@@ -15,6 +16,7 @@ type Item = { row: Row; m: Record<string, number | null> };
 
 export function NlbMetrics({ rows }: { rows: Row[] }) {
   const [range, setRange] = useState(3600);
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 100), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [health, setHealth] = useState<TgHealthRow[]>([]);
@@ -98,12 +100,12 @@ export function NlbMetrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="LB 진단 메트릭"
-      subtitle={`${ids.length} load balancers · CloudWatch AWS/NetworkELB · 값은 선택 기간 전체 집계 · L4: RST 카운트와 타깃 헬스가 진단의 핵심`}
+      title={tt('LB 진단 메트릭')}
+      subtitle={`${ids.length} load balancers · CloudWatch AWS/NetworkELB · ${tt('값은 선택 기간 전체 집계 · L4: RST 카운트와 타깃 헬스가 진단의 핵심')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <MetricTable columns={columns} items={items} rowKey={(it) => String(it.row.resource_id)} />
 
       <TgHealthTable health={health} lbDims={lbDims} />

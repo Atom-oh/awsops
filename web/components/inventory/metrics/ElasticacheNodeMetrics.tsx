@@ -6,6 +6,7 @@ import DiagnosisGuide from './DiagnosisGuide';
 import { EC_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, num, dash, gb, mb, cnt, meter, RangePicker, useFleet } from './shared';
+import { useI18n } from '@/components/shell/LanguageProvider';
 
 // ── ElastiCache: per-node rows (cache_nodes JSONB flattened; metrics are cluster-level, v1 parity) ──
 interface CacheNode { CacheNodeId?: string; cache_node_id?: string; CacheNodeStatus?: string; cache_node_status?: string; CustomerAvailabilityZone?: string; customer_availability_zone?: string; Endpoint?: { Address?: string }; endpoint?: { address?: string } }
@@ -30,6 +31,7 @@ const bwExOf = (m: Metrics): number | null =>
 
 export function ElasticacheNodeMetrics({ rows }: { rows: Row[] }) {
   const [range, setRange] = useState(3600);
+  const { tt } = useI18n();
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const { fleet, err } = useFleet('elasticache', ids, range);
 
@@ -143,12 +145,12 @@ export function ElasticacheNodeMetrics({ rows }: { rows: Row[] }) {
 
   return (
     <Card
-      title="노드 메트릭"
-      subtitle={`${nodeItems.length} nodes · CloudWatch AWS/ElastiCache (클러스터 단위) · 값은 선택 기간 전체 집계`}
+      title={tt('노드 메트릭')}
+      subtitle={`${nodeItems.length} nodes · CloudWatch AWS/ElastiCache (${tt('클러스터 단위')}) · ${tt('값은 선택 기간 전체 집계')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">메트릭 조회 실패: {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
       <MetricTable
         columns={nodeColumns}
         items={nodeItems}
@@ -157,7 +159,7 @@ export function ElasticacheNodeMetrics({ rows }: { rows: Row[] }) {
 
       {/* 진단 지표 (owner 가이드): 메모리 압박·히트율·축출·대역폭 상한·복제 지연 — 클러스터 단위 */}
       <div className="border-t border-ink-100">
-        <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">진단 지표 (Redis/Valkey 중심, 선택 기간)</div>
+        <div className="px-4 pt-3 text-[12.5px] font-semibold text-ink-700">{tt('진단 지표 (Redis/Valkey 중심, 선택 기간)')}</div>
         <MetricTable
           columns={diagColumns}
           items={clusterItems}
