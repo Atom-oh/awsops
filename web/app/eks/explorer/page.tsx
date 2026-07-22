@@ -158,6 +158,24 @@ export default function EksExplorerPage() {
   const [status, setStatus] = useState(ALL);
   const [visible, setVisible] = useState(PAGE_SIZE);
   const [selected, setSelected] = useState<Row | null>(null);
+  // describe 심층 조회 (v1 K9s row-describe parity): 선택 시 전체 오브젝트를 읽어 패널에 표시
+  // (managedFields 제거, configmap 값은 서버에서 redact). 실패하면 행 요약으로 폴백.
+  const [describe, setDescribe] = useState<Record<string, unknown> | null>(null);
+  const describeSeq = useRef(0);
+  const openRow = useCallback((row: Row) => {
+    setSelected(row);
+    setDescribe(null);
+    const name = typeof row.name === 'string' ? row.name : '';
+    if (!name || kind === 'events') return; // events는 행 자체가 내용
+    const rowCluster = typeof row.cluster === 'string' ? row.cluster : cluster;
+    if (!rowCluster || rowCluster === ALL_CLUSTERS) return;
+    const nsQ = typeof row.namespace === 'string' && row.namespace ? `&namespace=${encodeURIComponent(row.namespace)}` : '';
+    const seq = ++describeSeq.current;
+    fetch(`/api/eks/${encodeURIComponent(rowCluster)}/incluster/describe?kind=${kind}&name=${encodeURIComponent(name)}${nsQ}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.object && seq === describeSeq.current) setDescribe(d.object as Record<string, unknown>); })
+      .catch(() => {});
+  }, [kind, cluster]);
 
   // Connected clusters only — everything else is not queryable via the BFF.
   useEffect(() => {
@@ -374,7 +392,7 @@ export default function EksExplorerPage() {
         {!rows && !err && <div className="text-ink-400">로딩 중…</div>}
         {rows && (
           <>
-            <DataTable columns={columns} rows={visibleRows} onRowClick={setSelected} />
+            <DataTable columns={columns} rows={visibleRows} onRowClick={openRow} />
             {filteredRows.length > visible && (
               <button
                 className={`${btnCls} self-center px-3 py-1`}
@@ -387,7 +405,11 @@ export default function EksExplorerPage() {
         )}
       </div>
 
-      <DetailPanel title={detailTitle} data={selected} onClose={() => setSelected(null)} />
+      <DetailPanel
+        title={detailTitle}
+        data={selected ? (describe ? { ...selected, ...describe } : selected) : null}
+        onClose={() => { setSelected(null); setDescribe(null); }}
+      />
     </>
   );
 }

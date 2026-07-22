@@ -1,5 +1,17 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
+import { ec2DiagFleetLive } from '@/lib/metrics';
+
+// IPv4 addresses per ENI for common instance types (AWS 공식 한도표의 자주 쓰는 항목만 —
+// 미등재 타입은 v1과 동일하게 15로 폴백). 정확한 전수 조회는 DescribeInstanceTypes가 필요.
+const IPV4_PER_ENI: Record<string, number> = {
+  't3.micro': 2, 't3.small': 4, 't3.medium': 6, 't3.large': 12, 't3.xlarge': 15,
+  't4g.micro': 2, 't4g.small': 4, 't4g.medium': 6, 't4g.large': 12, 't4g.xlarge': 15, 't4g.2xlarge': 15,
+  'm5.large': 10, 'm5.xlarge': 15, 'm6g.large': 10, 'm6g.xlarge': 15,
+  'm7g.large': 10, 'm7g.xlarge': 15, 'm7g.2xlarge': 15, 'm7g.4xlarge': 30,
+  'c5.large': 10, 'c6g.large': 10, 'c7g.large': 10, 'c7g.xlarge': 15,
+  'r5.large': 10, 'r6g.large': 10, 'r7g.large': 10, 'r7g.xlarge': 15,
+};
 
 export const dynamic = 'force-dynamic';
 
@@ -45,9 +57,22 @@ export async function GET(request: Request) {
       };
     }).filter((e) => e.id);
     const maxEnis = Number(d.max_enis) || null;
+    const instanceType = typeof d.instance_type === 'string' ? d.instance_type : null;
+    const ipv4PerEni = instanceType ? IPV4_PER_ENI[instanceType] ?? 15 : 15; // v1 폴백: /15
+    // 인스턴스 트래픽 (1h): CloudWatch에 ENI별 메트릭은 없음 — 인스턴스 레벨로 정직하게 표시.
+    let traffic: { netIn: number | null; netOut: number | null; pktIn: number | null; pktOut: number | null } | null = null;
+    try {
+      const m = (await ec2DiagFleetLive([row.id], typeof d.region === 'string' ? d.region : undefined))[row.id] ?? {};
+      traffic = {
+        netIn: m.netIn ?? null, netOut: m.netOut ?? null,
+        pktIn: m.pktIn ?? null, pktOut: m.pktOut ?? null,
+      };
+    } catch { /* traffic omitted */ }
     return Response.json({
       found: true,
       instanceId: row.id,
+      ipv4PerEni,
+      traffic,
       instanceType: (d.instance_type as string | undefined) ?? null,
       maxEnis,
       eniCount: enis.length,

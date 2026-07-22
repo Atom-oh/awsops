@@ -18,6 +18,7 @@ import { podStatusCounts, deploymentHealth, serviceTypeCounts } from '@/lib/eks-
 import OpencostPanel from './OpencostPanel';
 import CostPanel from './CostPanel';
 import NodeEniSection from '@/components/eks/NodeEniSection';
+import NodeCapacityCards from '@/components/eks/NodeCapacityCards';
 
 type Row = Record<string, unknown>;
 type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'events' | 'diagnosis' | 'cost';
@@ -461,6 +462,21 @@ export default function EksClusterPage() {
           data={selectedNodeData}
           onClose={() => setSelected(null)}
         >
+          {/* v1 노드 상세 3분할 카드: CPU/Memory 스택 바 (Requested/Available/Reserved) + Pod Info */}
+          <NodeCapacityCards
+            cpuCapacity={selectedNode.cpuCapacity}
+            cpuAllocatable={selectedNode.cpuAllocatable}
+            cpuRequest={selectedNodeAgg?.cpuRequest ?? 0}
+            memCapacityMiB={selectedNode.memCapacity}
+            memAllocatableMiB={selectedNode.memAllocatable}
+            memRequestMiB={selectedNodeAgg?.memRequest ?? 0}
+            podCIDR={selectedNode.podCIDR}
+            podCount={selectedNodePods?.length ?? 0}
+            podRunning={(selectedNodePods ?? []).filter((x) => x.status === 'Running').length}
+            podPending={(selectedNodePods ?? []).filter((x) => x.status === 'Pending').length}
+            podFailed={(selectedNodePods ?? []).filter((x) => x.status === 'Failed').length}
+            createdAt={selectedNode.createdAt}
+          />
           <NodePodsSection pods={selectedNodePods} error={nodePodsErr} />
           <NodeEniSection nodeName={selectedNode.name} />
         </DetailPanel>
