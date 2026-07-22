@@ -426,7 +426,7 @@ export type SplitKey = 'ec2Running' | 'ec2Stopped' | 'ebsUnencrypted' | 'iamUser
 // Splits representing something needing attention — drive the overview verdict.
 export const ATTENTION_SPLITS: SplitKey[] = ['ec2Stopped', 'ebsUnencrypted', 'sgOpenIngress', 'iamUserNoMfa'];
 
-interface SubgroupMeta { key: string; labelKey: string; types: string[] }
+interface SubgroupMeta { key: string; labelKey: string; types: string[]; links?: { key: string; href: string; labelKey: string }[] }
 interface GroupMeta {
   slug: string;            // url segment + i18n suffix
   labelKey: string;        // i18n key (Security → "Security Resources")
@@ -443,9 +443,23 @@ interface GroupMeta {
 const GROUPS: Record<string, GroupMeta> = {
   'Compute': {
     slug: 'compute', labelKey: 'group.compute', splitKeys: ['ec2Running', 'ec2Stopped'],
-    injected: [{ key: 'eks', href: '/eks', labelKey: 'nav.eks' }],
     order: ['ec2', 'lambda', 'ecr'],
-    subgroups: [{ key: 'ecs', labelKey: 'group.compute.ecs', types: ['ecs_cluster', 'ecs_service', 'ecs_task'] }],
+    subgroups: [
+      // EKS family (v1 parity): fleet overview + per-kind fleet pages + K9s-style explorer + cost.
+      {
+        key: 'eks', labelKey: 'group.compute.eks', types: [],
+        links: [
+          { key: 'eks', href: '/eks', labelKey: 'nav.eksOverview' },
+          { key: 'eks-nodes', href: '/eks/nodes', labelKey: 'nav.eksNodes' },
+          { key: 'eks-pods', href: '/eks/pods', labelKey: 'nav.eksPods' },
+          { key: 'eks-deployments', href: '/eks/deployments', labelKey: 'nav.eksDeployments' },
+          { key: 'eks-services', href: '/eks/services', labelKey: 'nav.eksServices' },
+          { key: 'eks-explorer', href: '/eks/explorer', labelKey: 'nav.eksExplorer' },
+          { key: 'eks-cost', href: '/eks/cost', labelKey: 'nav.eksCost' },
+        ],
+      },
+      { key: 'ecs', labelKey: 'group.compute.ecs', types: ['ecs_cluster', 'ecs_service', 'ecs_task'] },
+    ],
   },
   'Storage & DB': {
     slug: 'storage', labelKey: 'group.storage', splitKeys: ['ebsUnencrypted'],
@@ -513,7 +527,14 @@ export function navTree(): NavGroupNode[] {
     const injected: NavLeaf[] = (meta.injected ?? []).map((f) => ({ key: f.key, kind: 'feature', href: f.href, labelKey: f.labelKey }));
     const items: NavLeaf[] = [...injected, ...directTypes.map(invLeaf)];
     const subgroups: NavSubgroupNode[] = subgroupMeta
-      .map((s) => ({ key: s.key, labelKey: s.labelKey, items: ordered(types.filter((t) => s.types.includes(t)), s.types).map(invLeaf) }))
+      .map((s) => ({
+        key: s.key,
+        labelKey: s.labelKey,
+        items: [
+          ...(s.links ?? []).map((f): NavLeaf => ({ key: f.key, kind: 'feature', href: f.href, labelKey: f.labelKey })),
+          ...ordered(types.filter((t) => s.types.includes(t)), s.types).map(invLeaf),
+        ],
+      }))
       .filter((s) => s.items.length > 0);
     const singleton = !!meta.singleton;
     return {
@@ -543,7 +564,10 @@ export function groupForPath(path: string): { slug: string; subgroupKey?: string
       if (leaf.kind === 'inventory' && leaf.href === path) return { slug: g.slug };
     }
     for (const s of g.subgroups) {
-      if (s.items.some((l) => l.href === path)) return { slug: g.slug, subgroupKey: s.key };
+      if (s.items.some((l) =>
+        l.href === path || (l.kind === 'feature' && path.startsWith(`${l.href}/`)))) {
+        return { slug: g.slug, subgroupKey: s.key };
+      }
     }
   }
   return null;

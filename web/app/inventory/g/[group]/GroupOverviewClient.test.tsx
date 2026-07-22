@@ -40,8 +40,10 @@ describe('GroupOverviewClient', () => {
     await waitFor(() => expect(screen.getByText('4')).toBeTruthy());
   });
 
-  it('Compute injects an EKS tile (no inventory count in Phase 1)', async () => {
+  it('Compute surfaces the EKS family tiles (feature links from the eks subgroup)', async () => {
     renderG('compute');
-    await waitFor(() => expect(screen.getByText('EKS')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('EKS 개요')).toBeTruthy());
+    expect(screen.getByText('EKS 탐색기')).toBeTruthy();
+    expect(screen.getByText('컨테이너 비용')).toBeTruthy();
   });
 });
