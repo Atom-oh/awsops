@@ -64,13 +64,14 @@ def update_progress(conn, report_id, current, total, section, phase="render"):
 def list_pending_notifications(conn):
     """Completed reports not yet folded into a digest email (notified_at IS NULL). Oldest-first so
     the digest lists them in completion order. Only succeeded/partial — a failed report has nothing
-    worth emailing."""
+    worth emailing. artifact_uri (may be NULL on old/broken rows) lets the caller fetch the report
+    markdown for a teaser — best-effort, so a missing artifact just means no teaser, not a failure."""
     rows = conn.run(
-        "SELECT id, title FROM diagnosis_reports "
+        "SELECT id, title, artifact_uri FROM diagnosis_reports "
         "WHERE notified_at IS NULL AND status IN ('succeeded','partial') "
         "ORDER BY created_at"
     )
-    return [{"id": r[0], "title": r[1]} for r in rows]
+    return [{"id": r[0], "title": r[1], "artifact_uri": r[2]} for r in rows]
 
 
 def mark_notified(conn, report_ids):

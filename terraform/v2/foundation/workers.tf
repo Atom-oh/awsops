@@ -1221,6 +1221,24 @@ data "archive_file" "diagnosis_digest_src" {
   }
 }
 
+# The digest fetches each pending report's markdown (best-effort, for the email teaser/exec-summary)
+# from the artifact bucket — read-only, scoped to diagnosis/* only (same prefix the worker writes to
+# and the web BFF reads from). worker_lambda otherwise only has s3:PutObject there (worker_lambda_diagnosis).
+resource "aws_iam_role_policy" "diagnosis_digest_s3_read" {
+  count = local.digest
+  name  = "diagnosis-digest-read-artifacts"
+  role  = aws_iam_role.worker_lambda[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "GetDiagnosisArtifact"
+      Effect   = "Allow"
+      Action   = ["s3:GetObject"]
+      Resource = "${aws_s3_bucket.diagnosis_artifacts[0].arn}/diagnosis/*"
+    }]
+  })
+}
+
 resource "aws_lambda_function" "diagnosis_digest" {
   count            = local.digest
   function_name    = "${var.project}-diagnosis-digest"
