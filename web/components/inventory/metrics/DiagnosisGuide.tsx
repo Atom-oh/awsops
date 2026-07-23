@@ -6,6 +6,8 @@ import { useI18n } from '@/components/shell/LanguageProvider';
 // Data-driven collapsible diagnosis explainer (owner: "설명 내용을 화면에서 펼쳐 보기로").
 // One component renders every service's guide — the per-service CONTENT lives as a GuideSpec
 // in guides.tsx, so adding a service is data-only (no new component). Static content, no fetch.
+// i18n: callers pass the Korean spec; EN/ZH variants live in guides.en/zh.tsx keyed by
+// GuideSpec.service and are resolved here from the active language (missing key → Korean).
 
 export interface GuideSection {
   title: string;
@@ -23,13 +25,17 @@ export interface GuideSpec {
   priority: [string, string, string][];
 }
 
+import { GUIDES_EN } from './guides.en';
+import { GUIDES_ZH } from './guides.zh';
+
 const TH = 'px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400';
 const TDC = 'px-2.5 py-1.5 text-[12px] text-ink-600';
 const H4 = 'mt-3 mb-1 text-[12.5px] font-semibold text-ink-700';
 
-export default function DiagnosisGuide({ spec }: { spec: GuideSpec }) {
-  const { tt } = useI18n();
+export default function DiagnosisGuide({ spec: koSpec }: { spec: GuideSpec }) {
   const [open, setOpen] = useState(false);
+  const { lang, tt } = useI18n();
+  const spec = (lang === 'en' ? GUIDES_EN[koSpec.service] : lang === 'zh' ? GUIDES_ZH[koSpec.service] : undefined) ?? koSpec;
   return (
     <div className="border-t border-ink-100">
       <button

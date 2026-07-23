@@ -909,3 +909,88 @@ const LAMBDA_FLEET_METRICS = [
 export function lambdaFleetLive(functionNames: string[], region?: string, rangeSec = 3600) {
   return fleetLatest('AWS/Lambda', functionNames, (id) => [{ Name: 'FunctionName', Value: id }], LAMBDA_FLEET_METRICS, region, rangeSec * 1000, rangeSec);
 }
+
+
+// ── EKS diagnosis tier (owner 가이드: 컨트롤 플레인/노드/워크로드/스케줄링 계층별) ──────────
+// 소스 2곳: AWS/EKS(컨트롤 플레인 — EKS 관리형 발행) + ContainerInsights(노드/파드 — 에이전트 필요).
+// CI 미설치 클러스터는 값이 null로 남아 '—' 정직 표시 (Aurora FreeStorageSpace 선례).
+
+// AWS/EKS control-plane metrics: verb-suffixed P99s are pre-aggregated series (Average over
+// the range reads the P99 level; Sum would be meaningless), counters are Sum, gauges Max.
+const EKS_CONTROL_PLANE_METRICS = [
+  { key: 'p99Get', name: 'apiserver_request_duration_seconds_GET_P99', stat: 'Average' },
+  { key: 'p99List', name: 'apiserver_request_duration_seconds_LIST_P99', stat: 'Average' },
+  { key: 'p99Post', name: 'apiserver_request_duration_seconds_POST_P99', stat: 'Average' },
+  { key: 'p99Put', name: 'apiserver_request_duration_seconds_PUT_P99', stat: 'Average' },
+  { key: 'p99Patch', name: 'apiserver_request_duration_seconds_PATCH_P99', stat: 'Average' },
+  { key: 'p99Delete', name: 'apiserver_request_duration_seconds_DELETE_P99', stat: 'Average' },
+  { key: 'reqTotal', name: 'apiserver_request_total', stat: 'Sum' },
+  { key: 'err429', name: 'apiserver_request_total_429', stat: 'Sum' },
+  { key: 'err4xx', name: 'apiserver_request_total_4XX', stat: 'Sum' },
+  { key: 'err5xx', name: 'apiserver_request_total_5XX', stat: 'Sum' },
+  { key: 'inflightMutating', name: 'apiserver_current_inflight_requests_MUTATING', stat: 'Maximum' },
+  { key: 'inflightReadonly', name: 'apiserver_current_inflight_requests_READONLY', stat: 'Maximum' },
+  { key: 'etcdDbBytes', name: 'etcd_mvcc_db_total_size_in_use_in_bytes', stat: 'Maximum' },
+  { key: 'storageBytes', name: 'apiserver_storage_size_bytes', stat: 'Maximum' },
+  { key: 'pendingPods', name: 'scheduler_pending_pods', stat: 'Maximum' },
+  { key: 'pendingUnschedulable', name: 'scheduler_pending_pods_UNSCHEDULABLE', stat: 'Maximum' },
+  { key: 'schedErrors', name: 'scheduler_schedule_attempts_ERROR', stat: 'Sum' },
+  { key: 'schedUnschedulable', name: 'scheduler_schedule_attempts_UNSCHEDULABLE', stat: 'Sum' },
+] as const;
+export async function eksControlPlane(cluster: string, region?: string, rangeSec = 3600): Promise<Record<string, number | null>> {
+  const out = await fleetLatest('AWS/EKS', [cluster], (id) => [{ Name: 'ClusterName', Value: id }], EKS_CONTROL_PLANE_METRICS, region, rangeSec * 1000, rangeSec);
+  return out[cluster] ?? {};
+}
+
+// ContainerInsights cluster rollups (dims: ClusterName only) — pod_* rollups aggregate the
+// whole cluster; restarts are a range Sum (재시작 급증 감지), status gauges are Max (지속/발생 여부).
+const EKS_CLUSTER_CI_METRICS = [
+  { key: 'nodeCount', name: 'cluster_node_count', stat: 'Average' },
+  { key: 'failedNodes', name: 'cluster_failed_node_count', stat: 'Maximum' },
+  { key: 'runningPods', name: 'cluster_number_of_running_pods', stat: 'Average' },
+  { key: 'restarts', name: 'pod_number_of_container_restarts', stat: 'Sum' },
+  { key: 'oomKilled', name: 'pod_container_status_terminated_reason_oom_killed', stat: 'Maximum' },
+  { key: 'crashLoop', name: 'pod_container_status_waiting_reason_crash_loop_back_off', stat: 'Maximum' },
+  { key: 'podPending', name: 'pod_status_pending', stat: 'Maximum' },
+  { key: 'podFailed', name: 'pod_status_failed', stat: 'Maximum' },
+  { key: 'cpuOverLimit', name: 'pod_cpu_utilization_over_pod_limit', stat: 'Average' },
+  { key: 'memOverLimit', name: 'pod_memory_utilization_over_pod_limit', stat: 'Average' },
+] as const;
+export async function eksClusterCI(cluster: string, region?: string, rangeSec = 3600): Promise<Record<string, number | null>> {
+  const out = await fleetLatest('ContainerInsights', [cluster], (id) => [{ Name: 'ClusterName', Value: id }], EKS_CLUSTER_CI_METRICS, region, rangeSec * 1000, rangeSec);
+  return out[cluster] ?? {};
+}
+
+// CI per-node metrics need the (ClusterName, InstanceId, NodeName) dim tuple — InstanceId is
+// not known from the in-cluster API, so discover live tuples via ListMetrics (MSK lag 패턴).
+const EKS_NODE_CI_METRICS = [
+  { key: 'cpu', name: 'node_cpu_utilization', stat: 'Average' },
+  { key: 'mem', name: 'node_memory_utilization', stat: 'Average' },
+  { key: 'fs', name: 'node_filesystem_utilization', stat: 'Maximum' },
+  { key: 'cpuReserved', name: 'node_cpu_reserved_capacity', stat: 'Average' },
+  { key: 'memReserved', name: 'node_memory_reserved_capacity', stat: 'Average' },
+  { key: 'netBytes', name: 'node_network_total_bytes', stat: 'Average' },
+  { key: 'rxDropped', name: 'node_interface_network_rx_dropped', stat: 'Sum' },
+  { key: 'txDropped', name: 'node_interface_network_tx_dropped', stat: 'Sum' },
+] as const;
+export async function eksNodesCI(cluster: string, region?: string, rangeSec = 3600, cap = 100): Promise<Record<string, Record<string, number | null>>> {
+  try {
+    const client = region && region !== REGION ? new CloudWatchClient({ region }) : cwClient();
+    const lm = await client.send(new ListMetricsCommand({
+      Namespace: 'ContainerInsights', MetricName: 'node_cpu_utilization',
+      Dimensions: [{ Name: 'ClusterName', Value: cluster }],
+    }));
+    const dimsByNode = new Map<string, { Name: string; Value: string }[]>();
+    for (const m of lm.Metrics ?? []) {
+      const node = m.Dimensions?.find((d) => d.Name === 'NodeName')?.Value;
+      // Skip the ClusterName-only rollup series; keep one full tuple per node.
+      if (node && (m.Dimensions?.length ?? 0) >= 3 && !dimsByNode.has(node)) {
+        dimsByNode.set(node, (m.Dimensions ?? []).map((d) => ({ Name: d.Name ?? '', Value: d.Value ?? '' })));
+      }
+    }
+    const nodes = [...dimsByNode.keys()].slice(0, cap);
+    return await fleetLatest('ContainerInsights', nodes, (id) => dimsByNode.get(id) ?? [], EKS_NODE_CI_METRICS, region, rangeSec * 1000, rangeSec);
+  } catch {
+    return {};
+  }
+}

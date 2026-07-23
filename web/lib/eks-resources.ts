@@ -26,6 +26,9 @@ export interface NodeRow {
   labels?: Record<string, string>;
   taints?: NodeTaint[];
   conditions?: NodeCondition[];
+  /** v1 parity (node capacity card): the node's pod CIDR + creation timestamp. */
+  podCIDR?: string;
+  createdAt?: string;
 }
 export interface PodRow {
   name: string; namespace: string; status: string; node: string; restarts: number; age: string;

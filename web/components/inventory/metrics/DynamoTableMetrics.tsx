@@ -1,11 +1,11 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import Card from '@/components/ui/Card';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import DiagnosisGuide from './DiagnosisGuide';
 import { DDB_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, type Fleet, num, dash, cnt, RangePicker } from './shared';
-import { useI18n } from '@/components/shell/LanguageProvider';
 
 // DynamoDB per-table diagnostics (owner 가이드: 스로틀링·용량·지연·에러·Global Tables).
 // 기간별 조회(RangePicker) + 컬럼 정렬/검색/facet/문제만 필터는 MetricTable이 제공.
@@ -14,8 +14,8 @@ interface DdbReplicationRow { table: string; region: string; latencyMs: number |
 type Item = { row: Row; m: Record<string, number | null> };
 
 export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
-  const [range, setRange] = useState(3600);
   const { tt } = useI18n();
+  const [range, setRange] = useState(3600);
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const [fleet, setFleet] = useState<Fleet>({});
   const [replication, setReplication] = useState<DdbReplicationRow[]>([]);
@@ -48,7 +48,7 @@ export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
   };
 
   const throttleTitle = (metric: string) =>
-    `${metric}(선택 기간 누적) — >0 지속이면 용량 부족 또는 핫 파티션. Contributor Insights로 핫 키 확인`;
+    `${metric}${tt('(선택 기간 누적) — >0 지속이면 용량 부족 또는 핫 파티션. Contributor Insights로 핫 키 확인')}`;
 
   const columns: MetricCol<Item>[] = [
     { key: 'table', label: 'Table', mono: true, value: (it) => String(it.row.resource_id) },
@@ -67,26 +67,26 @@ export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
       danger: (it) => (num(it.m.wThrottle) ?? 0) > 0,
     },
     {
-      key: 'rcuUsed', label: 'RCU 소비', type: 'num',
-      title: 'ConsumedReadCapacityUnits(초당 소비율) — 프로비저닝의 80% 이상이면 위험(근접/초과)',
+      key: 'rcuUsed', label: tt('RCU 소비'), type: 'num',
+      title: tt('ConsumedReadCapacityUnits(초당 소비율) — 프로비저닝의 80% 이상이면 위험(근접/초과)'),
       value: (it) => rate(num(it.m.consumedR)), render: (it) => rateFmt(rate(num(it.m.consumedR))),
       danger: (it) => capHot(num(it.m.consumedR), num(it.m.provR)),
     },
     {
-      key: 'rcuProv', label: 'RCU 프로비저닝', type: 'num',
-      title: 'ProvisionedReadCapacityUnits — On-Demand는 표시 없음',
+      key: 'rcuProv', label: tt('RCU 프로비저닝'), type: 'num',
+      title: tt('ProvisionedReadCapacityUnits — On-Demand는 표시 없음'),
       value: (it) => provOf(num(it.m.provR)),
       render: (it) => { const p = provOf(num(it.m.provR)); return p == null ? dash : Math.round(p).toLocaleString(); },
     },
     {
-      key: 'wcuUsed', label: 'WCU 소비', type: 'num',
-      title: 'ConsumedWriteCapacityUnits(초당 소비율) — 프로비저닝의 80% 이상이면 위험(근접/초과)',
+      key: 'wcuUsed', label: tt('WCU 소비'), type: 'num',
+      title: tt('ConsumedWriteCapacityUnits(초당 소비율) — 프로비저닝의 80% 이상이면 위험(근접/초과)'),
       value: (it) => rate(num(it.m.consumedW)), render: (it) => rateFmt(rate(num(it.m.consumedW))),
       danger: (it) => capHot(num(it.m.consumedW), num(it.m.provW)),
     },
     {
-      key: 'wcuProv', label: 'WCU 프로비저닝', type: 'num',
-      title: 'ProvisionedWriteCapacityUnits — On-Demand는 표시 없음',
+      key: 'wcuProv', label: tt('WCU 프로비저닝'), type: 'num',
+      title: tt('ProvisionedWriteCapacityUnits — On-Demand는 표시 없음'),
       value: (it) => provOf(num(it.m.provW)),
       render: (it) => { const p = provOf(num(it.m.provW)); return p == null ? dash : Math.round(p).toLocaleString(); },
     },
@@ -95,7 +95,7 @@ export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
       value: (it) => num(it.m.latGet), render: (it) => latFmt(num(it.m.latGet)),
     },
     {
-      key: 'latQuery', label: 'Lat Query', type: 'num', title: 'SuccessfulRequestLatency(Query, ms) — 급증 시 액세스 패턴 의심',
+      key: 'latQuery', label: 'Lat Query', type: 'num', title: tt('SuccessfulRequestLatency(Query, ms) — 급증 시 액세스 패턴 의심'),
       value: (it) => num(it.m.latQuery), render: (it) => latFmt(num(it.m.latQuery)),
     },
     {
@@ -103,15 +103,15 @@ export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
       value: (it) => num(it.m.latPut), render: (it) => latFmt(num(it.m.latPut)),
     },
     {
-      key: 'latScan', label: 'Lat Scan', type: 'num', title: 'SuccessfulRequestLatency(Scan, ms) — 풀스캔/큰 결과셋 의심',
+      key: 'latScan', label: 'Lat Scan', type: 'num', title: tt('SuccessfulRequestLatency(Scan, ms) — 풀스캔/큰 결과셋 의심'),
       value: (it) => num(it.m.latScan), render: (it) => latFmt(num(it.m.latScan)),
     },
     {
-      key: 'condFail', label: 'CondFail', type: 'num', title: 'ConditionalCheckFailedRequests — 낙관적 락이면 정상 발생 가능, 맥락 판단',
+      key: 'condFail', label: 'CondFail', type: 'num', title: tt('ConditionalCheckFailedRequests — 낙관적 락이면 정상 발생 가능, 맥락 판단'),
       value: (it) => num(it.m.condFail), render: (it) => cnt(num(it.m.condFail)),
     },
     {
-      key: 'txnConflict', label: 'TxnConflict', type: 'num', title: 'TransactionConflict — 높으면 경합 심함',
+      key: 'txnConflict', label: 'TxnConflict', type: 'num', title: tt('TransactionConflict — 높으면 경합 심함'),
       value: (it) => num(it.m.txnConflict), render: (it) => cnt(num(it.m.txnConflict)),
     },
   ];
@@ -120,7 +120,7 @@ export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
     { key: 'table', label: 'Table', mono: true, value: (l) => l.table },
     { key: 'region', label: 'Receiving Region', mono: true, facet: true, value: (l) => l.region || null },
     {
-      key: 'latency', label: 'Latency', type: 'num', title: '리전 간 복제 지연 — 증가 추세면 경보',
+      key: 'latency', label: 'Latency', type: 'num', title: tt('리전 간 복제 지연 — 증가 추세면 경보'),
       value: (l) => l.latencyMs,
       render: (l) => (l.latencyMs == null ? dash : `${Math.round(l.latencyMs).toLocaleString()} ms`),
     },
@@ -129,11 +129,11 @@ export function DynamoTableMetrics({ rows }: { rows: Row[] }) {
   return (
     <Card
       title={tt('테이블 진단 메트릭')}
-      subtitle={`${ids.length} tables · CloudWatch AWS/DynamoDB · ${tt('용량은 초당 소비율 · 값은 선택 기간 전체 집계')}`}
+      subtitle={`${ids.length} tables · CloudWatch AWS/DynamoDB · ${tt('용량은 초당 소비율')} · ${tt('값은 선택 기간 전체 집계')}`}
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패')}: {err}</div>}
       <MetricTable columns={columns} items={items} rowKey={(it, i) => `${String(it.row.resource_id)}:${i}`} />
 
       {replication.length > 0 && (

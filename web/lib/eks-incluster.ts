@@ -242,6 +242,7 @@ function nodeRoles(labels: Record<string, string> = {}): string {
 
 export function normalizeNode(it: K8sItem): NodeRow {
   const labels = it.metadata?.labels ?? {};
+  const specAny = (it.spec ?? {}) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   const ready = it.status?.conditions?.find((c) => c.type === 'Ready');
   const cap = it.status?.capacity ?? {};
   const alloc = it.status?.allocatable ?? {};
@@ -273,6 +274,8 @@ export function normalizeNode(it: K8sItem): NodeRow {
     ...(Object.keys(labels).length ? { labels } : {}),
     ...(taints.length ? { taints } : {}),
     ...(conditions.length ? { conditions } : {}),
+    podCIDR: typeof specAny.podCIDR === 'string' ? specAny.podCIDR : undefined,
+    createdAt: it.metadata?.creationTimestamp,
   };
 }
 
@@ -497,6 +500,48 @@ export async function k8sGetPath(cluster: string, path: string): Promise<string>
   const { endpoint, caPem } = await clusterConn(cluster);
   const token = await eksToken(cluster, REGION);
   return k8sGet(endpoint, path, token, caPem);
+}
+
+// ── describe (탐색기 심층 조회) — full object GET, read-only. managedFields stripped (huge);
+// configmap data/binaryData VALUES are redacted (키 이름만) — the metadata-only invariant holds
+// for describe too. Secrets are not a Kind, so they can never be described.
+const DESCRIBE_BASE: Partial<Record<Kind, { base: string; namespaced: boolean }>> = {
+  nodes: { base: '/api/v1/nodes', namespaced: false },
+  pods: { base: '/api/v1/namespaces/{ns}/pods', namespaced: true },
+  deployments: { base: '/apis/apps/v1/namespaces/{ns}/deployments', namespaced: true },
+  services: { base: '/api/v1/namespaces/{ns}/services', namespaced: true },
+  replicasets: { base: '/apis/apps/v1/namespaces/{ns}/replicasets', namespaced: true },
+  daemonsets: { base: '/apis/apps/v1/namespaces/{ns}/daemonsets', namespaced: true },
+  statefulsets: { base: '/apis/apps/v1/namespaces/{ns}/statefulsets', namespaced: true },
+  jobs: { base: '/apis/batch/v1/namespaces/{ns}/jobs', namespaced: true },
+  configmaps: { base: '/api/v1/namespaces/{ns}/configmaps', namespaced: true },
+  pvcs: { base: '/api/v1/namespaces/{ns}/persistentvolumeclaims', namespaced: true },
+};
+
+export function isDescribableKind(k: string): k is Kind {
+  return isKind(k) && k in DESCRIBE_BASE;
+}
+
+export async function describeInCluster(
+  cluster: string, kind: Kind, name: string, namespace?: string,
+): Promise<Record<string, unknown>> {
+  const spec = DESCRIBE_BASE[kind];
+  if (!spec) throw new Error(`kind not describable: ${kind}`);
+  if (spec.namespaced && !namespace) throw new Error('namespace required');
+  const base = spec.namespaced ? spec.base.replace('{ns}', encodeURIComponent(namespace!)) : spec.base;
+  const { endpoint, caPem } = await clusterConn(cluster);
+  const token = await eksToken(cluster, REGION);
+  const body = await k8sGet(endpoint, `${base}/${encodeURIComponent(name)}`, token, caPem);
+  const obj = JSON.parse(body) as Record<string, unknown>;
+  const meta = obj.metadata as Record<string, unknown> | undefined;
+  if (meta) delete meta.managedFields; // noise — huge and useless for diagnosis
+  if (kind === 'configmaps') {
+    for (const field of ['data', 'binaryData'] as const) {
+      const d = obj[field] as Record<string, unknown> | undefined;
+      if (d) obj[field] = Object.fromEntries(Object.keys(d).map((k) => [k, '(redacted)']));
+    }
+  }
+  return obj;
 }
 
 export async function listInCluster(cluster: string, kind: Kind): Promise<InClusterRow[]> {

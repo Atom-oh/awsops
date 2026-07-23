@@ -572,3 +572,74 @@ export const LAMBDA_GUIDE: GuideSpec = {
     ['DeadLetterErrors', '> 0', '실패 이벤트 유실 위험'],
   ],
 };
+
+export const EKS_GUIDE: GuideSpec = {
+  service: 'EKS',
+  intro: (
+    <>EKS는 다른 서비스보다 계층이 많습니다 — <b>컨트롤 플레인(API 서버/etcd) · 노드(워커) · 파드/워크로드 ·
+    스케일링</b>을 층별로 봐야 하고, 메트릭 출처도 CloudWatch 하나가 아니라 <b>Container Insights ·
+    컨트롤 플레인 로그 · Prometheus/kube-state-metrics</b> 등 여러 곳입니다.</>
+  ),
+  sections: [
+    { title: '메트릭 출처 먼저 정리', items: [
+      <>EKS 컨트롤 플레인 → CloudWatch 컨트롤 플레인 로깅 + 일부 CloudWatch 메트릭 (이 대시보드: {code('AWS/EKS')} 네임스페이스).</>,
+      <>노드/파드/컨테이너 → <b>CloudWatch Container Insights</b>(에이전트 필요) 또는 Prometheus (이 대시보드: {code('ContainerInsights')} 네임스페이스 + 인-클러스터 API).</>,
+      <>쿠버네티스 오브젝트 상태(Deployment, ReplicaSet 등) → kube-state-metrics. 노드 OS 레벨 → node_exporter / CloudWatch agent.</>,
+    ]},
+    { title: '① 컨트롤 플레인 (API 서버 / etcd) — 관리형이지만 부하 지표는 봐야 함', items: [
+      <><b>apiserver_request_duration_seconds</b> — API 서버 요청 지연. 급증하면 컨트롤 플레인 과부하.</>,
+      <><b>apiserver_request_total</b> (코드별) — <b>429(스로틀), 5xx 비율</b>.</>,
+      <><b>etcd_db_total_size_in_bytes</b> — etcd DB 크기. 한계(기본 상한 8GB)에 근접하면 쓰기 거부·클러스터 마비 위험. 오브젝트/시크릿 과다 누적 감지.</>,
+      <><b>apiserver_current_inflight_requests</b> — 진행 중 요청. 우선순위/공정성(APF) 스로틀 확인.</>,
+      <>컨트롤 플레인 로그(api, audit, authenticator, controllerManager, scheduler)는 문제 원인 추적에 필수.</>,
+    ]},
+    { title: '② 노드 (워커) 레벨 — Container Insights', items: [
+      <><b>node_cpu_utilization / node_memory_utilization</b> — 노드 CPU/메모리 사용률. 메모리는 OOM/eviction 진단 핵심.</>,
+      <><b>node_filesystem_utilization</b> — 노드 디스크(특히 /var/lib 이미지/로그). <b>85% 넘으면 DiskPressure로 파드 축출.</b></>,
+      <><b>node_status_condition</b> (Ready, MemoryPressure, DiskPressure, PIDPressure) — 노드 상태 조건 (이 대시보드: 인-클러스터 조회).</>,
+      <><b>cluster_node_count / cluster_failed_node_count</b> — 노드 수/실패 노드, <b>node_network_total_bytes</b>.</>,
+    ]},
+    { title: '③ 파드 / 워크로드 — Container Insights', items: [
+      <><b>pod_cpu_utilization_over_pod_limit</b> — limit 대비 사용률. limit 초과 시 CPU 스로틀링.</>,
+      <><b>pod_memory_utilization_over_pod_limit</b> — limit 근접 시 OOMKilled 위험.</>,
+      <><b>pod_number_of_container_restarts</b> — 컨테이너 재시작 수. 급증하면 CrashLoopBackOff / OOMKill 신호. <b>가장 중요한 이상 지표 중 하나.</b></>,
+      <><b>pod_status_ready / running / pending / failed</b>, kube-state-metrics의 {code('kube_pod_container_status_last_terminated_reason')}으로 OOMKilled 여부.</>,
+      <><b>kube_pod_status_phase</b> — Pending이 쌓이면 스케줄링 실패(리소스 부족, taint, PV 미할당).</>,
+    ]},
+    { title: '④ 스케줄링 / 스케일링', items: [
+      <><b>Pending 파드 수</b> — 스케줄 안 되는 파드. Cluster Autoscaler / Karpenter가 노드를 못 붙이는지, 리소스 request 과다인지 진단.</>,
+      <>Cluster Autoscaler: {code('cluster_autoscaler_unschedulable_pods_count')} · Karpenter: 프로비저닝/드리프트/consolidation 메트릭.</>,
+      <>HPA: {code('kube_horizontalpodautoscaler_status_current_replicas')} vs desired — 스케일 목표 도달 여부.</>,
+      <><b>리소스 예약 vs 실제</b>: request 합계 vs 노드 allocatable — request 과다 예약으로 노드가 "논리적으로 꽉 찬" 상황 감지 (이 대시보드: reserved capacity 컬럼).</>,
+    ]},
+    { title: '⑤ 네트워크 / 애드온', items: [
+      <><b>VPC CNI IP 고갈</b> — 서브넷 IP 소진, ENI당 IP 한계로 파드가 IP를 못 받아 Pending. {code('aws_eni_allocated')} 등 awscni/ipamd 메트릭 확인. <b>EKS에서 흔한 함정</b> (이 대시보드: 노드 상세의 ENI IP 슬롯 바).</>,
+      <><b>CoreDNS 지연/에러</b> — DNS 문제는 광범위한 장애로 번짐. {code('coredns_dns_request_duration_seconds')}, 실패율.</>,
+      <>kube-proxy, 로드밸런서 컨트롤러 상태 (이 대시보드: 애드온 상태 표).</>,
+    ]},
+    { title: '증상별 진단 흐름', items: [
+      <>파드가 계속 재시작 → <b>container_restarts + last_terminated_reason</b>(OOMKilled인지) + limit 대비 메모리. OOM이면 limit 상향 or 앱 메모리 누수 조사. 로그·{code('kubectl describe')}로 확인.</>,
+      <>파드가 Pending → {code('kubectl describe pod')} 이벤트 확인. 원인은 대개 ①리소스 부족(스케일링 필요) ②VPC CNI IP 고갈 ③taint/affinity ④PV 미할당 중 하나.</>,
+      <>노드가 NotReady → node condition(Pressure), kubelet 상태, 노드 OS 레벨(디스크/메모리).</>,
+      <>간헐적 API 오류/느린 배포 → 컨트롤 플레인 지연·429, APF 스로틀, etcd 크기 확인.</>,
+      <>DNS 관련 광범위 장애 → CoreDNS 메트릭·로그, 레플리카 수.</>,
+    ]},
+    { title: 'EKS만의 주의점', items: [
+      <><b>Container Insights를 켜야</b> 노드/파드/컨테이너 메트릭이 CloudWatch에 들어옵니다(기본 미제공). 또는 AMP(Amazon Managed Prometheus) + kube-state-metrics/node_exporter 조합.</>,
+      <>CloudWatch 메트릭만으로는 부족한 경우가 많아, 실무에선 <b>Prometheus + Grafana</b>(또는 AMP/AMG)로 쿠버네티스 네이티브 메트릭을 보는 게 일반적입니다.</>,
+      <>진단은 메트릭 + <b>kubectl (describe, logs, events, top)</b> + 컨트롤 플레인 로그를 함께 씁니다. 특정 파드/노드 문제는 결국 kubectl 이벤트가 결정적입니다.</>,
+      <><b>VPC CNI IP 고갈</b>과 <b>리소스 request 과다 예약</b>은 EKS 특유의 Pending 원인이니 우선 의심 목록에 두세요.</>,
+    ]},
+  ],
+  priorityHeader: ['메트릭', '주의 기준', '의미'],
+  priority: [
+    ['pod_number_of_container_restarts', '급증', 'CrashLoop/OOMKill'],
+    ['pod_memory_utilization_over_pod_limit', '100% 근접', 'OOMKilled 위험'],
+    ['node_status_condition (Pressure)', 'True', 'Disk/Memory/PID 압박 → 축출'],
+    ['Pending 파드 수', '> 0 지속', '스케줄링/스케일링/IP 실패'],
+    ['node_filesystem_utilization', '> 85%', 'DiskPressure'],
+    ['apiserver_request_duration / 429', '급증', '컨트롤 플레인 과부하'],
+    ['etcd_db_total_size_in_bytes', '한계 근접', 'etcd 포화'],
+    ['VPC CNI IP 잔량', '낮음', '파드 IP 고갈'],
+  ],
+};

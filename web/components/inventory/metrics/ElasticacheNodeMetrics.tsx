@@ -2,11 +2,11 @@
 import { useMemo, useState } from 'react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import DiagnosisGuide from './DiagnosisGuide';
 import { EC_GUIDE } from './guides';
 import MetricTable, { type MetricCol } from './MetricTable';
 import { type Row, num, dash, gb, mb, cnt, meter, RangePicker, useFleet } from './shared';
-import { useI18n } from '@/components/shell/LanguageProvider';
 
 // ── ElastiCache: per-node rows (cache_nodes JSONB flattened; metrics are cluster-level, v1 parity) ──
 interface CacheNode { CacheNodeId?: string; cache_node_id?: string; CacheNodeStatus?: string; cache_node_status?: string; CustomerAvailabilityZone?: string; customer_availability_zone?: string; Endpoint?: { Address?: string }; endpoint?: { address?: string } }
@@ -30,8 +30,8 @@ const bwExOf = (m: Metrics): number | null =>
   num(m.bwInEx) == null && num(m.bwOutEx) == null ? null : (num(m.bwInEx) ?? 0) + (num(m.bwOutEx) ?? 0);
 
 export function ElasticacheNodeMetrics({ rows }: { rows: Row[] }) {
-  const [range, setRange] = useState(3600);
   const { tt } = useI18n();
+  const [range, setRange] = useState(3600);
   const ids = useMemo(() => [...new Set(rows.map((r) => String(r.resource_id)))].slice(0, 200), [rows]);
   const { fleet, err } = useFleet('elasticache', ids, range);
 
@@ -75,11 +75,11 @@ export function ElasticacheNodeMetrics({ rows }: { rows: Row[] }) {
     { key: 'ecpu', label: 'Engine CPU', type: 'num', value: (it) => num(it.m.ecpu), render: (it) => meter(num(it.m.ecpu)) },
     { key: 'mem', label: 'Memory', type: 'num', value: (it) => num(it.m.mem), render: (it) => gb(num(it.m.mem)) },
     {
-      key: 'netIn', label: 'Net In (누적)', type: 'num', title: 'NetworkBytesIn — 선택 기간 누적 합계',
+      key: 'netIn', label: tt('Net In (누적)'), type: 'num', title: tt('NetworkBytesIn — 선택 기간 누적 합계'),
       value: (it) => num(it.m.netIn), render: (it) => mb(num(it.m.netIn)),
     },
     {
-      key: 'netOut', label: 'Net Out (누적)', type: 'num', title: 'NetworkBytesOut — 선택 기간 누적 합계',
+      key: 'netOut', label: tt('Net Out (누적)'), type: 'num', title: tt('NetworkBytesOut — 선택 기간 누적 합계'),
       value: (it) => num(it.m.netOut), render: (it) => mb(num(it.m.netOut)),
     },
     { key: 'conn', label: 'Conn', type: 'num', value: (it) => num(it.m.conn), render: (it) => cnt(num(it.m.conn)) },
@@ -95,48 +95,48 @@ export function ElasticacheNodeMetrics({ rows }: { rows: Row[] }) {
     { key: 'cluster', label: 'Cluster', mono: true, value: (it) => String(it.row.resource_id) },
     { key: 'engine', label: 'Engine', facet: true, value: (it) => str(it.row.engine) },
     {
-      key: 'dbMem', label: 'DB Mem', type: 'num', title: 'DatabaseMemoryUsagePercentage — maxmemory 대비 사용률, 가장 중요한 경보 지표',
+      key: 'dbMem', label: 'DB Mem', type: 'num', title: tt('DatabaseMemoryUsagePercentage — maxmemory 대비 사용률, 가장 중요한 경보 지표'),
       value: (it) => num(it.m.dbMemPct), render: (it) => meter(num(it.m.dbMemPct)),
     },
     {
-      key: 'hitRate', label: 'Hit Rate', type: 'num', title: 'CacheHitRate — 낮으면 캐시 효용 저하 (TTL 짧음/키 설계/콜드 캐시)',
+      key: 'hitRate', label: 'Hit Rate', type: 'num', title: tt('CacheHitRate — 낮으면 캐시 효용 저하 (TTL 짧음/키 설계/콜드 캐시)'),
       value: (it) => hitPctOf(it.m),
       render: (it) => { const v = hitPctOf(it.m); return v == null ? dash : `${v.toFixed(1)}%`; },
       danger: (it) => { const v = hitPctOf(it.m); return v != null && v < 80; },
     },
     {
       key: 'evictions', label: 'Evictions', type: 'num',
-      title: 'Evictions(선택 기간 누적) — >0 지속 = 메모리 부족으로 키 강제 축출 → 노드 확장/샤딩/maxmemory-policy 재검토',
+      title: tt('Evictions(선택 기간 누적) — >0 지속 = 메모리 부족으로 키 강제 축출 → 노드 확장/샤딩/maxmemory-policy 재검토'),
       value: (it) => num(it.m.evictions), render: (it) => cnt(num(it.m.evictions)),
       danger: (it) => { const v = num(it.m.evictions); return v != null && v > 0; },
     },
     {
-      key: 'reclaimed', label: 'Reclaimed', type: 'num', title: 'Reclaimed — TTL 만료로 제거된 키 수 (정상 동작)',
+      key: 'reclaimed', label: 'Reclaimed', type: 'num', title: tt('Reclaimed — TTL 만료로 제거된 키 수 (정상 동작)'),
       value: (it) => num(it.m.reclaimed), render: (it) => cnt(num(it.m.reclaimed)),
     },
     {
-      key: 'swap', label: 'Swap', type: 'num', title: 'SwapUsage — 커지면 디스크 스왑 → 지연 급증 위험',
+      key: 'swap', label: 'Swap', type: 'num', title: tt('SwapUsage — 커지면 디스크 스왑 → 지연 급증 위험'),
       value: (it) => swapMbOf(it.m),
       render: (it) => { const v = swapMbOf(it.m); return v == null ? dash : `${v.toFixed(0)} MB`; },
       danger: (it) => { const v = swapMbOf(it.m); return v != null && v > 50; },
     },
     {
-      key: 'items', label: 'Items', type: 'num', title: 'CurrItems — 저장된 아이템 수',
+      key: 'items', label: 'Items', type: 'num', title: tt('CurrItems — 저장된 아이템 수'),
       value: (it) => num(it.m.currItems), render: (it) => cnt(num(it.m.currItems)),
     },
     {
-      key: 'newConn', label: 'New Conn', type: 'num', title: 'NewConnections(선택 기간 누적) — 급증 시 커넥션 풀 미사용/재연결 폭풍 의심',
+      key: 'newConn', label: 'New Conn', type: 'num', title: tt('NewConnections(선택 기간 누적) — 급증 시 커넥션 풀 미사용/재연결 폭풍 의심'),
       value: (it) => num(it.m.newConn), render: (it) => cnt(num(it.m.newConn)),
     },
     {
-      key: 'bwEx', label: 'BW 상한 초과', type: 'num',
-      title: 'NetworkBandwidthIn/OutAllowanceExceeded — 인스턴스 네트워크 상한 초과, 놓치기 쉬운 병목',
+      key: 'bwEx', label: tt('BW 상한 초과'), type: 'num',
+      title: tt('NetworkBandwidthIn/OutAllowanceExceeded — 인스턴스 네트워크 상한 초과, 놓치기 쉬운 병목'),
       value: (it) => bwExOf(it.m),
       render: (it) => { const v = bwExOf(it.m); return v == null ? dash : Math.round(v).toLocaleString(); },
       danger: (it) => { const v = bwExOf(it.m); return v != null && v > 0; },
     },
     {
-      key: 'replLag', label: 'Repl Lag', type: 'num', title: 'ReplicationLag(초) — 리드 리플리카 복제 지연, 증가 추세면 경보',
+      key: 'replLag', label: 'Repl Lag', type: 'num', title: tt('ReplicationLag(초) — 리드 리플리카 복제 지연, 증가 추세면 경보'),
       value: (it) => num(it.m.replLag),
       render: (it) => { const v = num(it.m.replLag); return v == null ? dash : `${v.toFixed(1)}s`; },
       danger: (it) => { const v = num(it.m.replLag); return v != null && v > 10; },
@@ -150,7 +150,7 @@ export function ElasticacheNodeMetrics({ rows }: { rows: Row[] }) {
       right={<RangePicker value={range} onChange={setRange} />}
       padded={false}
     >
-      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패:')} {err}</div>}
+      {err && <div className="px-3 py-2 text-[12px] text-rose-600">{tt('메트릭 조회 실패')}: {err}</div>}
       <MetricTable
         columns={nodeColumns}
         items={nodeItems}

@@ -19,6 +19,9 @@ import OpencostPanel from './OpencostPanel';
 import CostPanel from './CostPanel';
 import NodeEniSection from '@/components/eks/NodeEniSection';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import NodeCapacityCards from '@/components/eks/NodeCapacityCards';
+import NodePodsSection from '@/components/eks/NodePodsSection';
+import EksDiagnosis from '@/components/eks/EksDiagnosis';
 
 type Row = Record<string, unknown>;
 type Tab = 'nodes' | 'pods' | 'deployments' | 'services' | 'events' | 'diagnosis' | 'cost';
@@ -311,6 +314,9 @@ export default function EksClusterPage() {
           <CostPanel cluster={cluster} />
         ) : isDiagnosis ? (
           <>
+            {/* Metric diagnosis tier (owner 가이드): control plane / nodes / workload / addons.
+                Self-fetching — independent of the K8sGPT analyzer block below. */}
+            <EksDiagnosis cluster={cluster} />
             {!diag && !err && <div className="text-ink-400">{tt('로딩 중…')}</div>}
             {diag && !err && (
               <>
@@ -463,6 +469,21 @@ export default function EksClusterPage() {
           data={selectedNodeData}
           onClose={() => setSelected(null)}
         >
+          {/* v1 노드 상세 3분할 카드: CPU/Memory 스택 바 (Requested/Available/Reserved) + Pod Info */}
+          <NodeCapacityCards
+            cpuCapacity={selectedNode.cpuCapacity}
+            cpuAllocatable={selectedNode.cpuAllocatable}
+            cpuRequest={selectedNodeAgg?.cpuRequest ?? 0}
+            memCapacityMiB={selectedNode.memCapacity}
+            memAllocatableMiB={selectedNode.memAllocatable}
+            memRequestMiB={selectedNodeAgg?.memRequest ?? 0}
+            podCIDR={selectedNode.podCIDR}
+            podCount={selectedNodePods?.length ?? 0}
+            podRunning={(selectedNodePods ?? []).filter((x) => x.status === 'Running').length}
+            podPending={(selectedNodePods ?? []).filter((x) => x.status === 'Pending').length}
+            podFailed={(selectedNodePods ?? []).filter((x) => x.status === 'Failed').length}
+            createdAt={selectedNode.createdAt}
+          />
           <NodePodsSection pods={selectedNodePods} error={nodePodsErr} />
           <NodeEniSection nodeName={selectedNode.name} />
         </DetailPanel>
@@ -474,88 +495,6 @@ export default function EksClusterPage() {
         />
       )}
     </>
-  );
-}
-
-function fmtCpu(v: unknown): string {
-  const n = Number(v ?? 0);
-  if (!Number.isFinite(n)) return '0';
-  return n.toFixed(2).replace(/\.?0+$/, '');
-}
-
-function fmtMiB(v: unknown): string {
-  const n = Number(v ?? 0);
-  if (!Number.isFinite(n)) return '0';
-  return Math.round(n).toLocaleString();
-}
-
-function podTone(status: string): 'positive' | 'negative' | 'neutral' {
-  if (status === 'Running' || status === 'Succeeded') return 'positive';
-  if (status === 'Failed' || status === 'CrashLoopBackOff') return 'negative';
-  return 'neutral';
-}
-
-function NodePodsSection({
-  pods,
-  error,
-}: {
-  pods: PodRow[] | null;
-  error: string;
-}) {
-  return (
-    <section>
-      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-400">
-        Pods on this node
-      </h3>
-      {error ? (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
-          Pod list unavailable: {error}
-        </div>
-      ) : pods === null ? (
-        <div className="rounded-md border border-ink-100 bg-ink-50 px-3 py-2 text-[12px] text-ink-500">
-          Pod list loading...
-        </div>
-      ) : pods.length === 0 ? (
-        <div className="rounded-md border border-ink-100 bg-ink-50 px-3 py-2 text-[12px] text-ink-500">
-          No scheduled pods
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-md border border-ink-100">
-          <table className="w-full min-w-[520px] text-[12px]">
-            <thead className="bg-ink-50 text-[10px] uppercase tracking-[0.04em] text-ink-400">
-              <tr>
-                <th className="px-2.5 py-2 text-left font-medium">Namespace</th>
-                <th className="px-2.5 py-2 text-left font-medium">Pod</th>
-                <th className="px-2.5 py-2 text-left font-medium">Status</th>
-                <th className="px-2.5 py-2 text-left font-medium">Owner</th>
-                <th className="px-2.5 py-2 text-right font-medium">Restarts</th>
-                <th className="px-2.5 py-2 text-right font-medium">CPU</th>
-                <th className="px-2.5 py-2 text-right font-medium">Mem MiB</th>
-                <th className="px-2.5 py-2 text-left font-medium">Age</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pods.map((p) => (
-                <tr key={`${p.namespace}/${p.name}`} className="border-t border-ink-100">
-                  <td className="px-2.5 py-2 font-mono text-ink-500">{p.namespace || 'default'}</td>
-                  <td className="px-2.5 py-2 font-mono text-ink-800">{p.name}</td>
-                  <td className="px-2.5 py-2">
-                    <Badge tone={podTone(p.status)} variant="soft" dot>
-                      {p.status || 'Unknown'}
-                    </Badge>
-                  </td>
-                  <td className="px-2.5 py-2 font-mono text-ink-600">{p.workload || '-'}</td>
-                  <td className="px-2.5 py-2 text-right tabular text-ink-700">{p.restarts ?? 0}</td>
-                  <td className="px-2.5 py-2 text-right tabular text-ink-700">{fmtCpu(p.cpuRequest)}</td>
-                  <td className="px-2.5 py-2 text-right tabular text-ink-700">{fmtMiB(p.memRequest)}</td>
-                  <td className="px-2.5 py-2 text-ink-500">{p.age || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
   );
 }
 
