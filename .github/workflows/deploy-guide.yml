@@ -1,11 +1,15 @@
 name: Deploy Guide to GitHub Pages
 
-# DISABLED for upstream: runs-on the fork's self-hosted runner
-# 'awsops-claude-arm' which does not exist on whchoi98/awsops, and upstream
-# already publishes its guide from web/ via its own Pages workflow. Left as
-# workflow_dispatch only so a main push to docs-site/** does not queue forever
-# on a missing runner (and does not compete with upstream's Pages deploy).
+# NOTE: upstream (whchoi98/awsops) lacks the fork's self-hosted runner
+# 'awsops-claude-arm', so a bring-up commit (20abf6cd) dropped this to
+# workflow_dispatch-only "for upstream" — but that landed on THIS fork's main
+# via the routine upstream-sync merge too, silently disabling auto-deploy on
+# every docs-site push since 2026-07-20. The runner is alive here (EKS Pod
+# Identity + Bedrock us-east-1 on mall-apne2-mgmt), so restore the real trigger.
 on:
+  push:
+    branches: [main]
+    paths: ['docs-site/**']
   workflow_dispatch:
 
 permissions:
