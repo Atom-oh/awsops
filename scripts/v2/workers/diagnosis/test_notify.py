@@ -101,6 +101,19 @@ def test_build_digest_message_lists_every_report():
     assert "2" in body.splitlines()[0]  # count in the heading
 
 
+def test_build_digest_message_includes_teaser_when_present():
+    reports = [
+        {"title": "리포트 A", "report_url": "https://x/r?report=1", "teaser": "핵심 요약 한 줄"},
+        {"title": "리포트 B", "report_url": "https://x/r?report=2"},  # no teaser → omitted, not blank
+    ]
+    _, body = notify.build_digest_message(reports)
+    lines = body.splitlines()
+    a_idx = next(i for i, l in enumerate(lines) if l == "• 리포트 A")
+    assert lines[a_idx + 1] == "  핵심 요약 한 줄"
+    b_idx = next(i for i, l in enumerate(lines) if l == "• 리포트 B")
+    assert lines[b_idx + 1].strip().startswith("https://")  # straight to the link, no blank teaser line
+
+
 def test_build_digest_message_missing_title_falls_back():
     subject, body = notify.build_digest_message([{"title": None, "report_url": "https://x/r?report=9"}])
     assert "AI 진단 리포트" in body

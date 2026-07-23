@@ -18,6 +18,10 @@ import re
 import boto3
 
 _MAX_SUMMARY = 1200
+# Per-entry teaser inside a multi-report digest — much shorter than the single-report _MAX_SUMMARY
+# (1200) since a digest can list several reports and each one only needs a one-liner, not a full
+# executive summary (that's what the deep link is for).
+_DIGEST_TEASER_LIMIT = 200
 # SNS requires an ASCII Subject (≤100 chars, no leading whitespace/newlines). The Korean title goes in
 # the body — a non-ASCII Subject is rejected by SNS (→ publish fails → no email). Keep this ASCII.
 _SUBJECT = "[AWSops] AI Diagnosis Report"
@@ -107,20 +111,24 @@ def publish_report(topic_arn, title, md, report_url, region=None, scheduled=Fals
 
 def build_digest_message(reports):
     """Return (subject, body) for a batched digest covering multiple completed reports.
-    `reports` is a list of {"title": str, "report_url": str} dicts, oldest-first. Digests
-    intentionally skip the per-report executive-summary teaser (would make a multi-report email
-    unreadably long) and the scheduled/manual distinction (diagnosis_reports doesn't persist that,
-    and a batch can legitimately mix both) — just a title + deep link per report."""
+    `reports` is a list of {"title": str, "report_url": str, "teaser": str|None} dicts, oldest-first.
+    `teaser` (caller-supplied, e.g. via summarize(md, limit=_DIGEST_TEASER_LIMIT)) is a short one-line
+    excerpt — omitted when unavailable (e.g. the artifact couldn't be fetched) rather than left blank.
+    Skips the scheduled/manual distinction (diagnosis_reports doesn't persist that, and a batch can
+    legitimately mix both)."""
     n = len(reports)
     parts = [f"완료된 진단 리포트 {n}건", "=" * 40, ""]
     for r in reports:
         title = (r.get("title") or "AI 진단 리포트").strip()
         parts.append(f"• {title}")
+        teaser = r.get("teaser")
+        if teaser:
+            parts.append(f"  {teaser}")
         url = r.get("report_url")
         if url:
             parts.append(f"  {url}")
+        parts.append("")
     parts += [
-        "",
         "-" * 40,
         "이 메일은 AWSops 진단 다이제스트(주기 배치)로 발송되었습니다.",
         "수신 거부 / 구독 관리는 관리자에게 문의하세요.",
