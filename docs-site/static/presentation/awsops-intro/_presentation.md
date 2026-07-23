@@ -4,7 +4,7 @@ slug: awsops-intro
 language: ko
 ratio: "16:9"
 level: 300
-duration: 60
+duration: 65
 quiz: false
 speaker:
   name: "Junseok Oh"
@@ -24,5 +24,5 @@ blocks:
     duration: 20
   - file: 03-demo-scenarios.md
     title: "Demo & Diagnosis Report"
-    duration: 20
+    duration: 25
 ---
