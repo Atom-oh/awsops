@@ -15,7 +15,7 @@ export default function LanguageToggle() {
           type="button"
           onClick={() => setLang(l)}
           aria-pressed={lang === l}
-          className={`px-1.5 py-0.5 text-[11px] font-semibold transition-colors ${
+          className={`whitespace-nowrap px-1.5 py-0.5 text-[11px] font-semibold transition-colors ${
             lang === l ? 'bg-brand-500/10 text-brand-700' : 'text-ink-400 hover:bg-ink-100 hover:text-ink-700'
           }`}
         >
