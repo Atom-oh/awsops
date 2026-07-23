@@ -1,6 +1,7 @@
 'use client';
 import { useMemo, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Search } from 'lucide-react';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import { TH, TD, MONO, DANGER, dash } from './shared';
 
 // Generic diagnostic metric table (owner 요청: 기간별 조회 + 정렬 + 다양한 필터).
@@ -37,6 +38,7 @@ export default function MetricTable<T>({
   defaultSortKey?: string;
   emptyText?: string;
 }) {
+  const { tt } = useI18n();
   const [sortKey, setSortKey] = useState<string | null>(defaultSortKey ?? null);
   const [dir, setDir] = useState<Dir>(defaultSortKey ? 'desc' : null);
   const [q, setQ] = useState('');
@@ -102,7 +104,7 @@ export default function MetricTable<T>({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="검색…"
+            placeholder={tt('검색…')}
             className="w-44 rounded-md border border-ink-200 bg-card py-1 pl-6 pr-2 text-[12px]"
           />
         </div>
@@ -114,7 +116,7 @@ export default function MetricTable<T>({
             className="rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-600"
             aria-label={`${c.label} 필터`}
           >
-            <option value="">{c.label}: 전체</option>
+            <option value="">{c.label}: {tt('전체')}</option>
             {(facetValues[c.key] ?? []).map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
         ))}
@@ -124,7 +126,7 @@ export default function MetricTable<T>({
             onClick={() => setDangerOnly((v) => !v)}
             className={`rounded-md border px-2 py-1 text-[12px] ${dangerOnly ? 'border-rose-300 bg-rose-500/10 text-rose-700 font-medium' : 'border-ink-200 text-ink-500 hover:bg-ink-50'}`}
           >
-            문제만
+            {tt('문제만')}
           </button>
         )}
         <span className="ml-auto text-[11.5px] text-ink-400">{shown.length} / {items.length}</span>
@@ -160,7 +162,7 @@ export default function MetricTable<T>({
               </tr>
             ))}
             {shown.length === 0 && (
-              <tr><td className={TD} colSpan={columns.length}><span className="text-ink-400">{emptyText}</span></td></tr>
+              <tr><td className={TD} colSpan={columns.length}><span className="text-ink-400">{tt(emptyText)}</span></td></tr>
             )}
           </tbody>
         </table>

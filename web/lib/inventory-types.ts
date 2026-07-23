@@ -11,15 +11,16 @@ export interface InvType {
   /** Optional Top-N metric bar chart: numeric column ranked desc over the row set. */
   barKey?: { col: string; label: string };
   sections?: { label: string; keys: string[] }[];
-  // filterKeys (optional, v1-parity facet filters): columns[].key rendered as dropdown facets above
+  // filterKeys (optional, v1-parity facet filters): row keys rendered as dropdown facets above
   // the table (each option shows a live count). The stateKey already has its own SegmentedControl,
-  // so list OTHER discriminating columns here (e.g. ec2 type/vpc, lambda runtime).
+  // so list OTHER discriminating keys here (e.g. ec2 type/vpc, lambda runtime). Keys need not be
+  // table columns — non-column keys (e.g. region) get their label from the page's FACET_LABELS.
   filterKeys?: string[];
 }
 
 // resource_id + region are prepended by the page; columns here are the type-specific extras.
 export const INVENTORY_TYPES: Record<string, InvType> = {
-  ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', distKey2: 'instance_state', columns: [
+  ec2: { label: 'EC2 Instances', group: 'Compute', stateKey: 'instance_state', distKey: 'instance_type', distKey2: 'instance_state', barKey: { col: 'memory_mib', label: 'Memory (MiB)' }, columns: [
     { key: 'name', label: 'Name' }, { key: 'instance_type', label: 'Type' }, { key: 'instance_state', label: 'State' },
     { key: 'pricing_model', label: 'Pricing' },
     { key: 'private_ip_address', label: 'Private IP' }, { key: 'public_ip_address', label: 'Public IP' },
@@ -35,8 +36,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tags', keys: ['tags'] },
       { label: 'Image', keys: ['image_id', 'architecture', 'platform_details', 'virtualization_type', 'hypervisor'] },
     ],
-    filterKeys: ['instance_type', 'vpc_id'] },
-  lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', distKey2: 'package_type', columns: [
+    filterKeys: ['region', 'name', 'instance_type', 'pricing_model', 'subnet_id', 'vpc_id'] },
+  lambda: { label: 'Lambda Functions', group: 'Compute', stateKey: 'state', distKey: 'runtime', distKey2: 'package_type', barKey: { col: 'memory_size', label: 'Memory (MB)' }, columns: [
     { key: 'runtime', label: 'Runtime' }, { key: 'memory_size', label: 'Mem(MB)' },
     { key: 'timeout', label: 'Timeout(s)' }, { key: 'state', label: 'State' },
     { key: 'handler', label: 'Handler' }, { key: 'last_modified', label: 'Modified' } ],
@@ -45,8 +46,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Runtime', keys: ['runtime', 'handler', 'package_type', 'architectures', 'state', 'last_update_status'] },
       { label: 'Capacity', keys: ['memory_size', 'timeout', 'code_size', 'code_sha_256', 'layers'] },
       { label: 'Network', keys: ['vpc_id', 'vpc_subnet_ids', 'vpc_security_group_ids'] },
-    ] },
-  ecs_cluster: { label: 'ECS Clusters', group: 'Compute', stateKey: 'status', distKey: 'status', columns: [
+    ],
+    filterKeys: ['region', 'runtime', 'memory_size', 'timeout', 'vpc_id'] },
+  ecs_cluster: { label: 'ECS Clusters', group: 'Compute', stateKey: 'status', distKey: 'status', distKey2: 'region', barKey: { col: 'running_tasks_count', label: 'Running Tasks' }, columns: [
     { key: 'status', label: 'Status' }, { key: 'running_tasks_count', label: 'Running' },
     { key: 'pending_tasks_count', label: 'Pending' }, { key: 'active_services_count', label: 'Services' },
     { key: 'registered_container_instances_count', label: 'Instances' },
@@ -56,8 +58,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Tasks & Services', keys: ['status', 'running_tasks_count', 'pending_tasks_count', 'active_services_count', 'registered_container_instances_count'] },
       { label: 'Config', keys: ['settings'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
-  ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', columns: [
+    ],
+    filterKeys: ['region'] },
+  ecs_service: { label: 'ECS Services', group: 'Compute', stateKey: 'status', distKey: 'launch_type', distKey2: 'status', barKey: { col: 'running_count', label: 'Running' }, columns: [
     { key: 'service_name', label: 'Service' }, { key: 'status', label: 'Status' },
     { key: 'desired_count', label: 'Desired' }, { key: 'running_count', label: 'Running' },
     { key: 'pending_count', label: 'Pending' }, { key: 'launch_type', label: 'Launch' },
@@ -68,8 +71,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Service', keys: ['status', 'desired_count', 'running_count', 'pending_count', 'launch_type', 'scheduling_strategy', 'task_definition'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    filterKeys: ['launch_type'] },
-  ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', distKey2: 'cluster_h', barKey: { col: 'cost_day_num', label: 'Daily $ (Fargate est.)' }, filterKeys: ['cluster_h', 'launch_type'], columns: [
+    filterKeys: ['region', 'service_name', 'desired_count', 'launch_type', 'cluster_arn'] },
+  ecs_task: { label: 'ECS Tasks', group: 'Compute', stateKey: 'last_status', distKey: 'launch_type', distKey2: 'cluster_h', barKey: { col: 'cost_day_num', label: 'Daily $ (Fargate est.)' }, filterKeys: ['region', 'cluster_h', 'launch_type', 'cpu_h', 'memory_h', 'availability_zone'], columns: [
     { key: 'task_short', label: 'Task' }, { key: 'cluster_h', label: 'Cluster' }, { key: 'task_group', label: 'Group' }, { key: 'last_status', label: 'Status' },
     { key: 'launch_type', label: 'Launch' }, { key: 'cpu_h', label: 'CPU' }, { key: 'memory_h', label: 'Memory' },
     { key: 'cost_day_h', label: 'Cost/Day' }, { key: 'cost_month_h', label: 'Cost/Mo' },
@@ -87,8 +90,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Config', keys: ['image_tag_mutability', 'image_scanning_configuration', 'lifecycle_policy'] },
       { label: 'Security', keys: ['encryption_configuration'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
-  s3: { label: 'S3 Buckets', group: 'Storage & DB', distKey: 'region', distKey2: 'encryption', filterKeys: ['region'], columns: [
+    ],
+    filterKeys: ['region', 'image_tag_mutability'] },
+  s3: { label: 'S3 Buckets', group: 'Storage & DB', distKey: 'region', distKey2: 'encryption', filterKeys: ['region', 'versioning_enabled', 'encryption', 'logging_enabled'], columns: [
     { key: 'versioning_enabled', label: 'Versioning' }, { key: 'encryption', label: 'Encryption' },
     { key: 'logging_enabled', label: 'Logging' }, { key: 'creation_date', label: 'Created' } ],
     sections: [
@@ -106,8 +110,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Attachments', keys: ['attachments'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    filterKeys: ['availability_zone'] },
-  ebs_snapshot: { label: 'EBS Snapshots', group: 'Storage & DB', stateKey: 'state', distKey: 'state', columns: [
+    filterKeys: ['region', 'name', 'volume_type', 'encrypted', 'availability_zone'] },
+  ebs_snapshot: { label: 'EBS Snapshots', group: 'Storage & DB', stateKey: 'state', distKey: 'state', distKey2: 'encrypted', barKey: { col: 'volume_size', label: 'Volume Size (GB)' }, columns: [
     { key: 'volume_id', label: 'Volume' }, { key: 'volume_size', label: 'Size(GB)' },
     { key: 'state', label: 'State' }, { key: 'progress', label: 'Progress' },
     { key: 'encrypted', label: 'Encrypted' }, { key: 'start_time', label: 'Started' },
@@ -117,8 +121,9 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Snapshot', keys: ['volume_id', 'volume_size', 'state', 'progress'] },
       { label: 'Security', keys: ['encrypted'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
-  rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', distKey2: 'class', columns: [
+    ],
+    filterKeys: ['region', 'encrypted'] },
+  rds: { label: 'RDS Instances', group: 'Storage & DB', stateKey: 'status', distKey: 'engine', distKey2: 'class', barKey: { col: 'allocated_storage', label: 'Storage (GB)' }, columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'class', label: 'Class' }, { key: 'status', label: 'Status' }, { key: 'multi_az', label: 'Multi-AZ' },
     { key: 'publicly_accessible', label: 'Public' }, { key: 'allocated_storage', label: 'Storage(GB)' }, { key: 'vpc_id', label: 'VPC' } ],
@@ -132,7 +137,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['iam_database_authentication_enabled', 'performance_insights_enabled'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    filterKeys: ['class'] },
+    filterKeys: ['region', 'engine', 'engine_version', 'class', 'vpc_id', 'storage_type'] },
   dynamodb: { label: 'DynamoDB Tables', group: 'Storage & DB', stateKey: 'table_status', distKey: 'billing_h', distKey2: 'table_status', barKey: { col: 'item_count', label: 'Items' }, columns: [
     { key: 'table_status', label: 'Status' }, { key: 'billing_h', label: 'Billing' },
     { key: 'item_count_h', label: 'Items' }, { key: 'table_size_h', label: 'Size' }, { key: 'created_h', label: 'Created' } ],
@@ -141,16 +146,18 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Table', keys: ['table_status', 'billing_mode', 'item_count', 'table_size_bytes', 'read_capacity', 'write_capacity', 'key_schema'] },
       { label: 'Security', keys: ['sse_h', 'pitr_h', 'key_schema', 'sse_description', 'point_in_time_recovery_description'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
-  vpc: { label: 'VPCs', group: 'Network', stateKey: 'state', distKey: 'region', columns: [
+    ],
+    filterKeys: ['region', 'name'] },
+  vpc: { label: 'VPCs', group: 'Network', stateKey: 'state', distKey: 'region', distKey2: 'is_default', columns: [
     { key: 'name', label: 'Name' }, { key: 'cidr_block', label: 'CIDR' }, { key: 'state', label: 'State' },
     { key: 'is_default', label: 'Default' }, { key: 'instance_tenancy', label: 'Tenancy' }, { key: 'owner_id', label: 'Owner' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'arn', 'owner_id'] },
       { label: 'Network', keys: ['cidr_block', 'state', 'is_default', 'instance_tenancy', 'dhcp_options_id'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
-  subnet: { label: 'Subnets', group: 'Network', distKey: 'availability_zone', columns: [
+    ],
+    filterKeys: ['region', 'name', 'cidr_block', 'is_default'] },
+  subnet: { label: 'Subnets', group: 'Network', distKey: 'availability_zone', distKey2: 'map_public_ip_on_launch', barKey: { col: 'available_ip_address_count', label: 'Available IPs' }, columns: [
     { key: 'name', label: 'Name' }, { key: 'vpc_id', label: 'VPC' }, { key: 'cidr_block', label: 'CIDR' },
     { key: 'state', label: 'State' }, { key: 'availability_zone', label: 'AZ' },
     { key: 'available_ip_address_count', label: 'Free IPs' }, { key: 'map_public_ip_on_launch', label: 'Auto-public-IP' } ],
@@ -159,8 +166,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Network', keys: ['vpc_id', 'cidr_block', 'state', 'availability_zone', 'availability_zone_id', 'available_ip_address_count', 'map_public_ip_on_launch', 'default_for_az', 'assign_ipv6_address_on_creation'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    filterKeys: ['vpc_id'] },
-  security_group: { label: 'Security Groups', group: 'Network', distKey: 'vpc_id', columns: [
+    filterKeys: ['region', 'vpc_id', 'availability_zone', 'map_public_ip_on_launch', 'default_for_az'] },
+  security_group: { label: 'Security Groups', group: 'Network', distKey: 'vpc_id', distKey2: 'region', columns: [
     { key: 'name', label: 'Name' }, { key: 'group_name', label: 'Group name' },
     { key: 'vpc_id', label: 'VPC' }, { key: 'description', label: 'Description' } ],
     sections: [
@@ -169,7 +176,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Ingress Rules', keys: ['ip_permissions'] },
       { label: 'Egress Rules', keys: ['ip_permissions_egress'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'vpc_id'] },
   route_table: { label: 'Route Tables', group: 'Network', distKey: 'vpc_id', columns: [
     { key: 'vpc_id', label: 'VPC' }, { key: 'owner_id', label: 'Owner' } ],
     sections: [
@@ -177,7 +185,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Routes', keys: ['routes'] },
       { label: 'Associations', keys: ['associations', 'propagating_vgws'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'vpc_id'] },
   nat_gateway: { label: 'NAT Gateways', group: 'Network', stateKey: 'state', distKey: 'vpc_id', columns: [
     { key: 'state', label: 'State' }, { key: 'vpc_id', label: 'VPC' },
     { key: 'subnet_id', label: 'Subnet' }, { key: 'create_time', label: 'Created' } ],
@@ -185,14 +194,16 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'arn', 'create_time'] },
       { label: 'Network', keys: ['vpc_id', 'subnet_id', 'state', 'nat_gateway_addresses'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'vpc_id'] },
   internet_gateway: { label: 'Internet Gateways', group: 'Network', columns: [
     { key: 'owner_id', label: 'Owner' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'owner_id'] },
       { label: 'Attachments', keys: ['attachments'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region'] },
   transit_gateway: { label: 'Transit Gateways', group: 'Network', stateKey: 'state', distKey: 'state', columns: [
     { key: 'state', label: 'State' }, { key: 'owner_id', label: 'Owner' },
     { key: 'description', label: 'Description' }, { key: 'creation_time', label: 'Created' } ],
@@ -200,7 +211,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'transit_gateway_arn', 'creation_time', 'description'] },
       { label: 'Config', keys: ['state', 'owner_id', 'amazon_side_asn'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'amazon_side_asn'] },
 
   iam_role: { label: 'IAM Roles', group: 'Security', distKey: 'path', columns: [
     { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' },
@@ -210,7 +222,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Access', keys: ['assume_role_policy', 'permissions_boundary_arn', 'max_session_duration', 'instance_profile_arns'] },
       { label: 'Activity', keys: ['role_last_used_date', 'role_last_used_region'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'path', 'max_session_duration', 'role_last_used_region'] },
   iam_user: { label: 'IAM Users', group: 'Security', distKey: 'mfa_enabled', columns: [
     { key: 'create_date', label: 'Created' }, { key: 'path', label: 'Path' },
     { key: 'mfa_enabled', label: 'MFA' }, { key: 'password_last_used', label: 'Last PW use' } ],
@@ -218,7 +231,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'user_id', 'path', 'create_date'] },
       { label: 'Security', keys: ['mfa_enabled', 'password_last_used'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'path', 'mfa_enabled'] },
   // ---- D3 wave ----
   cloudfront: { label: 'CloudFront', group: 'Network', stateKey: 'status', distKey: 'price_class', distKey2: 'status', columns: [
     { key: 'domain_name', label: 'Domain' }, { key: 'status', label: 'Status' },
@@ -228,15 +242,17 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Distribution', keys: ['status', 'enabled', 'http_version', 'is_ipv6_enabled', 'price_class', 'aliases', 'origins', 'default_cache_behavior', 'cache_behaviors'] },
       { label: 'Security', keys: ['web_acl_id'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'price_class', 'http_version', 'is_ipv6_enabled'] },
   route53: { label: 'Route53 Records', group: 'Network', distKey: 'type', columns: [
     { key: 'name', label: 'Name' }, { key: 'type', label: 'Type' },
     { key: 'zone_id', label: 'Zone' }, { key: 'ttl', label: 'TTL' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'zone_id', 'set_identifier', 'private_zone'] },
       { label: 'Record', keys: ['type', 'ttl', 'records', 'alias_target'] },
-    ] },
-  alb: { label: 'App Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', columns: [
+    ],
+    filterKeys: ['region', 'type', 'zone_id', 'ttl', 'private_zone'] },
+  alb: { label: 'App Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', distKey2: 'vpc_id', columns: [
     { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
     { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' },
     { key: 'ip_address_type', label: 'IP type' }, { key: 'created_time', label: 'Created' } ],
@@ -246,8 +262,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['security_groups'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    filterKeys: ['scheme', 'vpc_id'] },
-  nlb: { label: 'Net Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', columns: [
+    filterKeys: ['region', 'name', 'scheme', 'vpc_id'] },
+  nlb: { label: 'Net Load Balancers', group: 'Network', stateKey: 'state_code', distKey: 'scheme', distKey2: 'vpc_id', columns: [
     { key: 'scheme', label: 'Scheme' }, { key: 'vpc_id', label: 'VPC' },
     { key: 'state_code', label: 'State' }, { key: 'dns_name', label: 'DNS' },
     { key: 'ip_address_type', label: 'IP type' }, { key: 'created_time', label: 'Created' } ],
@@ -257,8 +273,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['security_groups'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    filterKeys: ['scheme', 'vpc_id'] },
-  target_group: { label: 'Target Groups', group: 'Network', distKey: 'target_type', columns: [
+    filterKeys: ['region', 'scheme', 'vpc_id'] },
+  target_group: { label: 'Target Groups', group: 'Network', distKey: 'target_type', distKey2: 'protocol', columns: [
     { key: 'target_group_name', label: 'Name' }, { key: 'target_type', label: 'Target type' },
     { key: 'protocol', label: 'Protocol' }, { key: 'port', label: 'Port' },
     { key: 'vpc_id', label: 'VPC' }, { key: 'health_check_path', label: 'Health path' } ],
@@ -267,7 +283,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Network', keys: ['vpc_id', 'protocol', 'port', 'target_type', 'load_balancer_arns'] },
       { label: 'Health Check', keys: ['health_check_enabled', 'health_check_protocol', 'health_check_path', 'target_health_descriptions'] },
     ],
-    filterKeys: ['protocol', 'target_type'] },
+    filterKeys: ['region', 'target_type', 'protocol', 'port', 'vpc_id', 'health_check_path'] },
   apigatewayv2_api: { label: 'API Gateway (HTTP)', group: 'Network', distKey: 'protocol_type', columns: [
     { key: 'name', label: 'Name' }, { key: 'api_endpoint', label: 'Endpoint' },
     { key: 'protocol_type', label: 'Protocol' } ],
@@ -275,27 +291,32 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'region', 'api_id'] },
       { label: 'Endpoint', keys: ['api_endpoint', 'protocol_type'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'protocol_type'] },
   apigatewayv2_integration: { label: 'API GW Integrations', group: 'Network', distKey: 'integration_type', columns: [
     { key: 'api_id', label: 'API' }, { key: 'integration_type', label: 'Type' },
     { key: 'connection_type', label: 'Conn' }, { key: 'integration_uri', label: 'Target' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'api_id', 'integration_id'] },
       { label: 'Endpoint', keys: ['integration_type', 'integration_uri', 'connection_type', 'connection_id'] },
-    ] },
+    ],
+    filterKeys: ['region', 'api_id', 'integration_type', 'connection_type'] },
   cloudfront_vpc_origin: { label: 'CloudFront VPC Origins', group: 'Network', stateKey: 'status', distKey: 'status', columns: [
-    { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'arn', label: 'Target LB' } ] },
+    { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }, { key: 'arn', label: 'Target LB' } ],
+    filterKeys: ['region', 'account_id'] },
   apigatewayv2_route: { label: 'API GW Routes', group: 'Network', distKey: 'authorization_type', columns: [
     { key: 'route_key', label: 'Route' }, { key: 'target', label: 'Integration' },
     { key: 'authorization_type', label: 'Auth' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'account_id', 'region', 'api_id', 'route_id', 'route_uid'] },
       { label: 'Record', keys: ['route_key', 'target', 'authorization_type'] },
-    ] },
+    ],
+    filterKeys: ['region', 'api_id', 'target', 'authorization_type'] },
   alb_listener_rule: { label: 'ALB Listener Rules', group: 'Network', distKey: 'protocol', columns: [
     { key: 'priority', label: 'Priority' }, { key: 'port', label: 'Port' },
-    { key: 'protocol', label: 'Protocol' }, { key: 'is_default', label: 'Default' } ] },
-  waf: { label: 'WAF Web ACLs', group: 'Security', distKey: 'scope', columns: [
+    { key: 'protocol', label: 'Protocol' }, { key: 'is_default', label: 'Default' } ],
+    filterKeys: ['region', 'port', 'protocol', 'is_default'] },
+  waf: { label: 'WAF Web ACLs', group: 'Security', distKey: 'scope', barKey: { col: 'capacity', label: 'WCU Capacity' }, columns: [
     { key: 'scope', label: 'Scope' }, { key: 'capacity', label: 'Capacity' },
     { key: 'description', label: 'Description' }, { key: 'managed_by_firewall_manager', label: 'FMS-managed' } ],
     sections: [
@@ -303,7 +324,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['scope', 'capacity', 'default_action', 'managed_by_firewall_manager', 'visibility_config'] },
       { label: 'Rules', keys: ['rules'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'scope'] },
   cloudtrail: { label: 'CloudTrail Trails', group: 'Security', distKey: 'home_region', columns: [
     { key: 'is_logging', label: 'Logging' }, { key: 'is_multi_region_trail', label: 'Multi-region' },
     { key: 'home_region', label: 'Home region' }, { key: 's3_bucket_name', label: 'S3 bucket' }, { key: 'log_file_validation_enabled', label: 'Log validation' } ],
@@ -313,10 +335,12 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Storage', keys: ['s3_bucket_name', 's3_key_prefix', 'log_group_arn'] },
       { label: 'Security', keys: ['kms_key_id', 'sns_topic_arn', 'has_custom_event_selectors', 'has_insight_selectors'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'is_multi_region_trail', 'home_region', 's3_bucket_name', 'include_global_service_events'] },
   s3_public_access: { label: 'S3 Public Access', group: 'Security', distKey: 'bucket_policy_is_public', columns: [
     { key: 'bucket_policy_is_public', label: 'Policy public' }, { key: 'block_public_acls', label: 'Block ACLs' },
-    { key: 'block_public_policy', label: 'Block policy' }, { key: 'restrict_public_buckets', label: 'Restrict public' }, { key: 'ignore_public_acls', label: 'Ignore ACLs' } ] },
+    { key: 'block_public_policy', label: 'Block policy' }, { key: 'restrict_public_buckets', label: 'Restrict public' }, { key: 'ignore_public_acls', label: 'Ignore ACLs' } ],
+    filterKeys: ['region', 'name'] },
   elasticache: { label: 'ElastiCache', group: 'Storage & DB', stateKey: 'cache_cluster_status', distKey: 'engine', distKey2: 'cache_node_type', columns: [
     { key: 'engine', label: 'Engine' }, { key: 'engine_version', label: 'Version' },
     { key: 'cache_node_type', label: 'Node type' }, { key: 'cache_cluster_status', label: 'Status' }, { key: 'num_cache_nodes', label: 'Nodes' },
@@ -329,7 +353,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Maintenance', keys: ['auto_minor_version_upgrade', 'snapshot_retention_limit', 'snapshot_window', 'preferred_maintenance_window'] },
       { label: 'Tags', keys: ['tags'] },
     ],
-    filterKeys: ['cache_node_type'] },
+    filterKeys: ['region', 'engine_version', 'cache_node_type', 'replication_group_id', 'at_rest_encryption_enabled', 'transit_encryption_enabled'] },
   opensearch: { label: 'OpenSearch', group: 'Storage & DB', distKey: 'engine_version', distKey2: 'engine_type', columns: [
     { key: 'engine_version', label: 'Version' }, { key: 'instance_type_h', label: 'Instance' },
     { key: 'instance_count_h', label: 'Count' }, { key: 'storage_gb_h', label: 'Storage(GB)' },
@@ -342,7 +366,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Security', keys: ['encryption_at_rest_options', 'node_to_node_encryption_options_enabled', 'advanced_security_options', 'cognito_options'] },
       { label: 'Storage', keys: ['ebs_options'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'engine_version', 'engine_type'] },
   msk: { label: 'MSK Clusters', group: 'Storage & DB', stateKey: 'state', distKey: 'cluster_type', distKey2: 'state', columns: [
     { key: 'state', label: 'State' }, { key: 'cluster_type', label: 'Type' },
     { key: 'kafka_version', label: 'Kafka' }, { key: 'broker_nodes', label: 'Brokers' },
@@ -353,7 +378,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Identity', keys: ['resource_id', 'cluster_name', 'account_id', 'region', 'arn', 'creation_time'] },
       { label: 'Engine', keys: ['state', 'cluster_type', 'current_version', 'provisioned'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'cluster_type', 'kafka_version'] },
   elasticache_replication_group: { label: 'ElastiCache Repl Groups', group: 'Storage & DB', stateKey: 'status', distKey: 'automatic_failover', columns: [
     { key: 'status', label: 'Status' }, { key: 'cache_node_type', label: 'Node type' },
     { key: 'automatic_failover', label: 'Failover' }, { key: 'multi_az', label: 'Multi-AZ' },
@@ -363,17 +389,19 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Config', keys: ['status', 'cache_node_type', 'automatic_failover', 'multi_az', 'cluster_enabled', 'snapshot_retention_limit'] },
       { label: 'Security', keys: ['auth_token_enabled', 'transit_encryption_enabled', 'at_rest_encryption_enabled'] },
       { label: 'Cluster', keys: ['member_clusters', 'node_groups'] },
-    ] },
-  iam_policy: { label: 'IAM Policies', group: 'Security', distKey: 'is_attachable', columns: [
+    ],
+    filterKeys: ['region', 'at_rest_encryption_enabled', 'transit_encryption_enabled'] },
+  iam_policy: { label: 'IAM Policies', group: 'Security', distKey: 'is_attachable', barKey: { col: 'attachment_count', label: 'Attachments' }, columns: [
     { key: 'is_attachable', label: 'Attachable' }, { key: 'attachment_count', label: 'Attached' }, { key: 'path', label: 'Path' },
     { key: 'create_date', label: 'Created' }, { key: 'update_date', label: 'Updated' } ],
     sections: [
       { label: 'Identity', keys: ['resource_id', 'name', 'account_id', 'arn', 'policy_id', 'path', 'create_date', 'update_date'] },
       { label: 'Config', keys: ['is_attachable', 'attachment_count', 'default_version_id'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'path'] },
 
-  neptune_cluster: { label: 'Neptune', group: 'Storage & DB', stateKey: 'status', distKey: 'engine_version', columns: [
+  neptune_cluster: { label: 'Neptune', group: 'Storage & DB', stateKey: 'status', distKey: 'engine_version', distKey2: 'status', columns: [
     { key: 'status', label: 'Status' }, { key: 'engine', label: 'Engine' },
     { key: 'engine_version', label: 'Version' }, { key: 'multi_az', label: 'Multi-AZ' },
     { key: 'storage_encrypted', label: 'Encrypted' } ],
@@ -385,7 +413,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Network', keys: ['availability_zones', 'db_subnet_group'] },
       { label: 'Backup', keys: ['backup_retention_period', 'preferred_backup_window', 'preferred_maintenance_window'] },
       { label: 'Tags', keys: ['tags'] },
-    ] },
+    ],
+    filterKeys: ['region', 'engine_version', 'storage_encrypted'] },
   opensearch_serverless: { label: 'OpenSearch Serverless', group: 'Storage & DB', stateKey: 'status', distKey: 'type', columns: [
     { key: 'type', label: 'Type' }, { key: 'status', label: 'Status' },
     { key: 'collection_endpoint', label: 'Endpoint' }, { key: 'created_date', label: 'Created' } ],
@@ -394,7 +423,8 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Config', keys: ['type', 'status'] },
       { label: 'Endpoint', keys: ['collection_endpoint', 'dashboard_endpoint'] },
       { label: 'Security', keys: ['kms_key_arn'] },
-    ] },
+    ],
+    filterKeys: ['region', 'type'] },
 
   cloudwatch_alarm: { label: 'CloudWatch Alarms', group: 'Monitoring', stateKey: 'state_value', distKey: 'namespace', distKey2: 'state_value', columns: [
     { key: 'state_value', label: 'State' }, { key: 'metric_name', label: 'Metric' }, { key: 'namespace', label: 'Namespace' },
@@ -405,7 +435,7 @@ export const INVENTORY_TYPES: Record<string, InvType> = {
       { label: 'Metric', keys: ['namespace', 'metric_name', 'statistic', 'comparison_operator', 'threshold', 'period', 'evaluation_periods'] },
       { label: 'Actions', keys: ['actions_enabled', 'alarm_actions', 'ok_actions', 'insufficient_data_actions'] },
     ],
-    filterKeys: ['namespace'] },
+    filterKeys: ['region', 'metric_name', 'namespace', 'statistic', 'comparison_operator', 'period'] },
 };
 
 const GROUP_ORDER = ['Compute', 'Storage & DB', 'Network', 'Security', 'Monitoring'];

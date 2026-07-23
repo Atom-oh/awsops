@@ -13,6 +13,11 @@ import Meter from '@/components/ui/Meter';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import BarDistribution from '@/components/charts/BarDistribution';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import DetailPanel from '@/components/ui/DetailPanel';
+import NodeCapacityCards from '@/components/eks/NodeCapacityCards';
+import NodePodsSection from '@/components/eks/NodePodsSection';
+import NodeEniSection from '@/components/eks/NodeEniSection';
+import type { NodeRow, PodRow } from '@/lib/eks-resources';
 
 // EKS fleet overview — v1 /k8s-Overview parity. Access Entry holders register
 // instantly (the v2 equivalent of v1's "Register kubeconfig"); others get the
@@ -78,6 +83,29 @@ export default function EksPage() {
   const [copied, setCopied] = useState('');
   const [busy, setBusy] = useState(false);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  // v1 parity: 클러스터 카드 클릭 = 아래 패널(노드/파드/타입/네임스페이스/이벤트) 필터 토글.
+  const [clusterFilter, setClusterFilter] = useState('');
+  // v1 parity: 노드 클릭 → CPU/Memory/Pod Info/ENI/Pods 상세 패널 (per-cluster live fetch).
+  const [nodeSel, setNodeSel] = useState<{ cluster: string; name: string } | null>(null);
+  const [nodeDetail, setNodeDetail] = useState<{ node: NodeRow | null; pods: PodRow[] | null; err: string }>({ node: null, pods: null, err: '' });
+  const nodeSeqRef = useRef(0);
+
+  const openNode = useCallback((cluster: string, name: string) => {
+    setNodeSel({ cluster, name });
+    setNodeDetail({ node: null, pods: null, err: '' });
+    const seq = ++nodeSeqRef.current;
+    Promise.all([
+      fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=nodes`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status))))),
+      fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=pods`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ])
+      .then(([nd, pd]) => {
+        if (seq !== nodeSeqRef.current) return;
+        const node = ((nd.rows ?? []) as NodeRow[]).find((n) => n.name === name) ?? null;
+        const pods = pd ? ((pd.rows ?? []) as PodRow[]).filter((x) => x.node === name) : null;
+        setNodeDetail({ node, pods, err: node ? '' : '노드를 찾지 못했습니다' });
+      })
+      .catch((e) => { if (seq === nodeSeqRef.current) setNodeDetail({ node: null, pods: null, err: String(e instanceof Error ? e.message : e) }); });
+  }, []);
 
   const load = useCallback(() => {
     fetch(`/api/eks?${accountParam(activeAccount) || 'account=self'}`)
@@ -179,7 +207,11 @@ export default function EksPage() {
     return m;
   }, [fleet]);
 
-  const reachable = useMemo(() => fleet.filter((f) => f.reachable), [fleet]);
+  const visibleFleet = useMemo(
+    () => (clusterFilter ? fleet.filter((f) => f.name === clusterFilter) : fleet),
+    [fleet, clusterFilter],
+  );
+  const reachable = useMemo(() => visibleFleet.filter((f) => f.reachable), [visibleFleet]);
   const connected = reachable.length;
 
   // Stats row totals (sum across the reachable fleet). Clusters count comes from
@@ -388,7 +420,20 @@ export default function EksPage() {
           {rows.map((c) => {
             const f = fleetBy.get(c.name);
             return (
-              <Card key={c.name} className="p-4">
+              <div
+                key={c.name}
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  // 카드 내부의 버튼/링크/폼 조작(등록·인증·이름 링크)은 필터 토글로 새지 않게.
+                  if ((e.target as HTMLElement).closest('button, a, input, textarea, select, label')) return;
+                  setClusterFilter((cur) => (cur === c.name ? '' : c.name));
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) setClusterFilter((cur) => (cur === c.name ? '' : c.name)); }}
+                title="클릭하면 아래 패널이 이 클러스터로 필터링됩니다"
+                className={`cursor-pointer rounded-lg transition ${clusterFilter === c.name ? 'ring-2 ring-brand-400' : ''}`}
+              >
+              <Card className="p-4 h-full">
                 <div className="flex items-start justify-between gap-2">
                   {c.access === 'connected' ? (
                     <Link href={`/eks/${encodeURIComponent(c.name)}`} className="font-mono text-[13px] font-semibold text-brand-600 hover:underline">{c.name}</Link>
@@ -492,8 +537,16 @@ export default function EksPage() {
                   </div>
                 )}
               </Card>
+              </div>
             );
           })}
+        </div>
+      )}
+
+      {clusterFilter && (
+        <div className="flex items-center gap-2 text-[12.5px] text-brand-700">
+          <span>클러스터 필터: <b className="font-mono">{clusterFilter}</b> — 아래 패널이 이 클러스터로 스코프됩니다</span>
+          <button type="button" className="rounded-md border border-ink-200 px-2 py-0.5 text-[11px] text-ink-500 hover:bg-ink-100" onClick={() => setClusterFilter('')}>필터 해제</button>
         </div>
       )}
 
@@ -504,7 +557,14 @@ export default function EksPage() {
               <div key={f.name} className="flex flex-col gap-2">
                 <div className="font-mono text-[12px] text-ink-500">{f.name}</div>
                 {f.nodeAgg.map((n) => (
-                  <div key={n.name} className="grid grid-cols-1 gap-y-1 sm:grid-cols-[minmax(0,14rem)_repeat(3,minmax(0,1fr))] sm:items-center sm:gap-x-4 text-[12px]">
+                  <div
+                    key={n.name}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openNode(f.name, n.name)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') openNode(f.name, n.name); }}
+                    title="클릭하면 노드 상세 (CPU/Memory/Pod Info/ENI/Pods)"
+                    className="grid grid-cols-1 gap-y-1 sm:grid-cols-[minmax(0,14rem)_repeat(3,minmax(0,1fr))] sm:items-center sm:gap-x-4 text-[12px] -mx-2 rounded-md px-2 py-0.5 cursor-pointer hover:bg-ink-50">
                     <span className="min-w-0 truncate font-mono text-ink-700" title={n.name}>
                       {n.name}
                       {n.instanceType && <span className="ml-2 text-ink-400">{n.instanceType}</span>}
@@ -559,6 +619,40 @@ export default function EksPage() {
         )
       )}
       </div>
+
+      {/* v1 parity 노드 드릴다운: CPU/Memory 3분할 + Pod Info + ENI + Pods (개요에서 바로) */}
+      {nodeSel && (
+        <DetailPanel
+          title={nodeSel.name}
+          data={nodeDetail.node ? ({ ...nodeDetail.node } as unknown as Record<string, unknown>) : { name: nodeSel.name, cluster: nodeSel.cluster, ...(nodeDetail.err ? { error: nodeDetail.err } : { 상태: '조회 중…' }) }}
+          onClose={() => { setNodeSel(null); nodeSeqRef.current += 1; }}
+        >
+          {nodeDetail.node && (() => {
+            const agg = fleetBy.get(nodeSel.cluster)?.nodeAgg.find((n) => n.name === nodeSel.name);
+            const pods = nodeDetail.pods;
+            return (
+              <>
+                <NodeCapacityCards
+                  cpuCapacity={nodeDetail.node.cpuCapacity}
+                  cpuAllocatable={nodeDetail.node.cpuAllocatable}
+                  cpuRequest={agg?.cpuRequest ?? 0}
+                  memCapacityMiB={nodeDetail.node.memCapacity}
+                  memAllocatableMiB={nodeDetail.node.memAllocatable}
+                  memRequestMiB={agg?.memRequest ?? 0}
+                  podCIDR={nodeDetail.node.podCIDR}
+                  podCount={pods?.length ?? agg?.podCount ?? 0}
+                  podRunning={(pods ?? []).filter((x) => x.status === 'Running').length}
+                  podPending={(pods ?? []).filter((x) => x.status === 'Pending').length}
+                  podFailed={(pods ?? []).filter((x) => x.status === 'Failed').length}
+                  createdAt={nodeDetail.node.createdAt}
+                />
+                <NodePodsSection pods={pods} error="" />
+                <NodeEniSection nodeName={nodeSel.name} />
+              </>
+            );
+          })()}
+        </DetailPanel>
+      )}
     </div>
   );
 }
