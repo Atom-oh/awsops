@@ -215,7 +215,9 @@ Dashboard는 Next.js 14 thin-BFF입니다. Overview, AI Diagnosis, Assistant, Se
 
 # 실제 화면 — Live v2 Dashboard
 
-@img: ../../screenshots/overview/dashboard.png center 75%
+:::html
+<div style="text-align:center"><img src="../../screenshots/overview/dashboard.png" alt="" class="slide-img" style="max-width:75%" /></div>
+:::
 
 :::notes
 {timing: 1min}
@@ -315,7 +317,9 @@ FinOps나 Management 분들에게는 읽기 전용 비용 분석과 rightsizing 
 
 # UX — Cmd-K + 4개 언어
 
-@img: ../../screenshots/getting-started/command-palette.png center 55%
+:::html
+<div style="text-align:center"><img src="../../screenshots/getting-started/command-palette.png" alt="" class="slide-img" style="max-width:55%" /></div>
+:::
 
 - **Cmd-K 커맨드 팔레트** — 콘솔 호핑 없이 키보드로 전체 화면 이동
 - **4개 언어 완전 지원** — 한국어 / English / 中文 / 日本語 (2026-07-21 일본어 복원 + 전체 화면 번역 커버리지 점검 완료)

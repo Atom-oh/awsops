@@ -299,7 +299,9 @@ PostgreSQL 17.9, 0.5에서 4 ACU로 오토스케일하고, KMS CMK로 암호화�
 </div>
 :::
 
-@img: ../../screenshots/overview/agentcore.png right 280px
+:::html
+<div style="text-align:right"><img src="../../screenshots/overview/agentcore.png" alt="" class="slide-img" style="max-width:280px" /></div>
+:::
 
 :::notes
 {timing: 4min}
@@ -353,7 +355,9 @@ AI 엔진은 Bedrock AgentCore입니다.
 </div>
 :::
 
-@img: ../../screenshots/overview/agentcore-routing.png center 260px
+:::html
+<div style="text-align:center"><img src="../../screenshots/overview/agentcore-routing.png" alt="" class="slide-img" style="max-width:260px" /></div>
+:::
 
 :::
 
@@ -464,7 +468,9 @@ Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠
 
 ::: right
 
-@img: ../../screenshots/operations/jobs.png center 90%
+:::html
+<div style="text-align:center"><img src="../../screenshots/operations/jobs.png" alt="" class="slide-img" style="max-width:90%" /></div>
+:::
 
 :::
 
