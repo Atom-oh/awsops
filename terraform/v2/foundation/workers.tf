@@ -44,6 +44,14 @@ locals {
   # so it REQUIRES workers_enabled. Default false → 0 resources, $0, no scheduled runs.
   sched = var.workers_enabled && var.diagnosis_schedule_enabled ? 1 : 0
 
+  # Diagnosis-notify digest dispatcher gate — batches completed-report notifications into one
+  # periodic email instead of one-per-completion (see diagnosis_digest.py). Reuses the worker
+  # role/pg8000 layer/VPC (same as schedule_dispatcher); the role's sns:Publish grant already comes
+  # from notify.tf's worker_diagnosis_notify (for_each includes "lambda", gated on the SAME
+  # diagnosis_notify_enabled && workers_enabled condition) — no new IAM needed here. Default false →
+  # 0 resources, $0.
+  digest = var.workers_enabled && var.diagnosis_notify_enabled ? 1 : 0
+
   # AI Insights gate — requires workers_enabled. Grants the worker role read-only CloudWatch/Cost/EKS
   # describe + SendMessage, wires the runtime flag + cluster list, and creates the daily dispatcher.
   # Default false → 0 resources, $0. (EKS event access-entry is out-of-band: register-insight-access.sh.)
@@ -1168,6 +1176,100 @@ resource "aws_lambda_permission" "schedule_dispatcher_events" {
   function_name = aws_lambda_function.schedule_dispatcher[0].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.schedule_dispatcher[0].arn
+}
+
+############################################################
+# Diagnosis-notify digest dispatcher (replaces the prior one-email-per-completion path). Periodic
+# EventBridge -> Lambda that batches every diagnosis_reports row with notified_at IS NULL into ONE
+# SNS digest, then stamps notified_at. Reuses the shared worker role + pg8000 layer + VPC; the
+# role's sns:Publish comes from notify.tf's worker_diagnosis_notify (same gate). All count-gated on
+# local.digest (workers_enabled && diagnosis_notify_enabled). Default off -> 0 resources, $0.
+############################################################
+resource "aws_cloudwatch_log_group" "diagnosis_digest" {
+  count             = local.digest
+  name              = "/aws/lambda/${var.project}-diagnosis-digest"
+  retention_in_days = 14
+}
+
+# Dedicated code bundle (db.py + diagnosis_digest.py + the diagnosis/ package it imports from) so
+# enabling this does NOT change the shared workers_src archive hash. diagnosis/ keeps its package
+# path (mirrors the insight/ package above) — diagnosis_digest.py does `from diagnosis import db`
+# and `from diagnosis import notify`, both of which stay import-only (json/re/boto3), no heavy deps.
+data "archive_file" "diagnosis_digest_src" {
+  count       = local.digest
+  type        = "zip"
+  output_path = "${path.module}/.build/diagnosis_digest.zip"
+  source {
+    content  = file("${local.workers_src}/db.py")
+    filename = "db.py"
+  }
+  source {
+    content  = file("${local.workers_src}/diagnosis_digest.py")
+    filename = "diagnosis_digest.py"
+  }
+  source {
+    content  = file("${local.workers_src}/diagnosis/__init__.py")
+    filename = "diagnosis/__init__.py"
+  }
+  source {
+    content  = file("${local.workers_src}/diagnosis/db.py")
+    filename = "diagnosis/db.py"
+  }
+  source {
+    content  = file("${local.workers_src}/diagnosis/notify.py")
+    filename = "diagnosis/notify.py"
+  }
+}
+
+resource "aws_lambda_function" "diagnosis_digest" {
+  count            = local.digest
+  function_name    = "${var.project}-diagnosis-digest"
+  role             = aws_iam_role.worker_lambda[0].arn
+  runtime          = "python3.12"
+  architectures    = ["arm64"]
+  handler          = "diagnosis_digest.lambda_handler"
+  filename         = data.archive_file.diagnosis_digest_src[0].output_path
+  source_code_hash = data.archive_file.diagnosis_digest_src[0].output_base64sha256
+  timeout          = 60
+  memory_size      = 128
+  layers           = [aws_lambda_layer_version.pg8000[0].arn]
+  vpc_config {
+    subnet_ids         = local.private_subnet_ids
+    security_group_ids = [aws_security_group.service.id]
+  }
+  environment {
+    variables = {
+      AURORA_ENDPOINT         = aws_rds_cluster.aurora.endpoint
+      AURORA_DATABASE         = aws_rds_cluster.aurora.database_name
+      AURORA_USER             = "awsops_worker"
+      DIAGNOSIS_SNS_TOPIC_ARN = local.notify_topic_arn
+      APP_DOMAIN              = var.domain_name
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.diagnosis_digest, aws_iam_role_policy_attachment.worker_lambda_vpc]
+}
+
+resource "aws_cloudwatch_event_rule" "diagnosis_digest" {
+  count               = local.digest
+  name                = "${var.project}-diagnosis-digest"
+  description         = "Batch completed diagnosis reports (notified_at IS NULL) into one digest email"
+  schedule_expression = "rate(15 minutes)"
+}
+
+resource "aws_cloudwatch_event_target" "diagnosis_digest" {
+  count     = local.digest
+  rule      = aws_cloudwatch_event_rule.diagnosis_digest[0].name
+  target_id = "diagnosis-digest"
+  arn       = aws_lambda_function.diagnosis_digest[0].arn
+}
+
+resource "aws_lambda_permission" "diagnosis_digest_events" {
+  count         = local.digest
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.diagnosis_digest[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.diagnosis_digest[0].arn
 }
 
 ############################################################
