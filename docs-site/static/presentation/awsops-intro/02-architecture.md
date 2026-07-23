@@ -233,7 +233,7 @@ AWSops가 어떻게 만들어졌는지 레이어별로 자세히 보겠습니다
   <div style="color:#00ff88;font-weight:bold;font-size:15px;margin-bottom:8px;">warm Fargate → Aurora → /inventory/[type]</div>
   <div style="color:#8b95a5;font-size:13px;line-height:1.6;">
     flag-gated (<code style="color:#00ff88;">steampipe_enabled</code>)<br>
-    약 <b style="color:#00ff88;">22종</b> 리소스 타입 동기화<br>
+    <b style="color:#00ff88;">41종</b> 리소스 타입 동기화<br>
     fan-out sync · registry-driven nav
   </div>
   <div style="color:#ef4444;font-size:12px;margin-top:10px;border-top:1px solid rgba(239,68,68,0.3);padding-top:8px;">
@@ -249,7 +249,7 @@ AWSops가 어떻게 만들어졌는지 레이어별로 자세히 보겠습니다
 영속 상태는 Aurora Serverless v2가 담당합니다.
 PostgreSQL 17.9, 0.5에서 4 ACU로 오토스케일하고, KMS CMK로 암호화하며 master secret은 RDS가 관리합니다. 앱은 node-pg 공유 풀로 접근합니다. 스키마는 ADR-030 기반 v9 baseline에 worker_jobs, chat 스레드, 진단 리포트 테이블이 더해진 형태이고, 새 테이블은 schema.sql에 덧붙이지 않고 ULID 마이그레이션 파일로 추가하는 규칙입니다.
 {cue: pause}
-여기서 꼭 짚어야 할 점이 있습니다. Steampipe는 라이브 쿼리 엔진이 아닙니다. flag로 켜는 인벤토리 sync일 뿐입니다. warm Fargate가 약 22종 리소스 타입을 Aurora로 동기화하고, 이걸 generic `/inventory/[type]` 페이지가 보여줍니다. 라이브 AWS 조회는 어디까지나 AgentCore MCP 도구가 합니다. 예전의 임베디드 pg Pool 방식이 아니라는 점을 강조합니다.
+여기서 꼭 짚어야 할 점이 있습니다. Steampipe는 라이브 쿼리 엔진이 아닙니다. flag로 켜는 인벤토리 sync일 뿐입니다. warm Fargate가 41종 리소스 타입을 Aurora로 동기화하고, 이걸 generic `/inventory/[type]` 페이지가 보여줍니다. 라이브 AWS 조회는 어디까지나 AgentCore MCP 도구가 합니다. 예전의 임베디드 pg Pool 방식이 아니라는 점을 강조합니다.
 {cue: transition}
 이제 핵심인 AI 엔진입니다.
 :::
@@ -335,7 +335,7 @@ AI 엔진은 Bedrock AgentCore입니다.
 ### Gate Result
 
 - **69.2% → 96.9%** (+27.7pp)
-- **LIVE** 2026-06-10
+- **LIVE** (hybrid_routing_enabled = true)
 
 :::
 
@@ -390,8 +390,8 @@ AI 엔진은 Bedrock AgentCore입니다.
   </div>
   <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:10px;padding:18px;">
     <div style="color:#f59e0b;font-weight:bold;font-size:18px;margin-bottom:8px;">Deep Tier</div>
-    <div style="color:#f59e0b;font-size:36px;font-weight:bold;">15</div>
-    <div style="color:#8b95a5;font-size:13px;">섹션 · 8 base + 6 deep-only + drift, Sonnet 기본 / Opus 선택 (cost-gate)</div>
+    <div style="color:#f59e0b;font-size:36px;font-weight:bold;">16</div>
+    <div style="color:#8b95a5;font-size:13px;">섹션 · 8 base + 7 deep-only + drift, Sonnet 기본 / Opus 선택 (cost-gate)</div>
   </div>
 </div>
 <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">
@@ -410,7 +410,7 @@ AI 엔진은 Bedrock AgentCore입니다.
 :::notes
 {timing: 4min}
 AWSops의 대표 기능은 AI 종합진단입니다.
-진단은 워커가 생성하는 종합 리포트입니다. light·mid 티어는 9섹션인데, 8개 기본 섹션에 intended-vs-actual drift 섹션이 하나 더 붙습니다. deep 티어는 15섹션으로, 같은 8개 기본 섹션에 6개 deep-only 섹션과 drift 섹션이 더해집니다. deep은 기본 Sonnet으로 돌고, cost-gate를 거쳐 Opus를 선택할 수도 있습니다. 모든 섹션은 Well-Architected 6대 기둥에 매핑됩니다.
+진단은 워커가 생성하는 종합 리포트입니다. light·mid 티어는 9섹션인데, 8개 기본 섹션에 intended-vs-actual drift 섹션이 하나 더 붙습니다. deep 티어는 16섹션으로, 같은 8개 기본 섹션에 7개 deep-only 섹션과 drift 섹션이 더해집니다. deep은 기본 Sonnet으로 돌고, cost-gate를 거쳐 Opus를 선택할 수도 있습니다. 모든 섹션은 Well-Architected 6대 기둥에 매핑됩니다.
 {cue: pause}
 생성 중에는 SSE로 진행률이 흐르고, 끝나면 워커 LLM이 자동으로 제목을 붙이고 태그를 제안합니다. 제목 수정, 태그 수동 추가, soft-delete도 됩니다. 내보내기는 DOCX, PDF, Markdown 세 가지를 지원하는데, 워커가 python-docx와 chromium으로 생성합니다.
 가장 중요한 건 이 모든 게 철저히 읽기 전용이라는 점입니다. 진단하고 권고할 뿐 자동으로 고치지 않습니다. auto-remediation은 없습니다. 그래서 안심하고 운영 환경에 붙일 수 있습니다.
@@ -461,7 +461,7 @@ Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠
 ### 잡 종류 (2026-06-18 이후 증가)
 
 - **schedule_dispatcher** — 시간별 EventBridge → `report_schedules` 스캔 → 진단 잡 enqueue (`diagnosis_schedule_enabled`, LIVE)
-- **diagnosis_digest** (notify.tf) — 리포트별 이메일 대신 배치 SNS 다이제스트 (`diagnosis_notify_enabled`, LIVE, ADR-013)
+- **diagnosis_digest** (notify.tf) — 리포트별 이메일 대신 배치 SNS 다이제스트 (`diagnosis_notify_enabled`, ADR-013, 병합 대기 중)
 - **compliance** (Powerpipe) — CIS 벤치마크 Fargate 잡 (`steampipe_enabled`)
 
 :::
@@ -482,7 +482,7 @@ Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠
 그다음 Step Functions Standard가 `$.runtime` 값을 보고 분기합니다. 짧은 작업은 RunLambda로, 길거나 OOM 위험이 있는 작업은 ecs:runTask.sync로 Fargate 워커에 넘깁니다. 진단 리포트나 DOCX·PDF 생성 같은 무거운 작업이 여기로 갑니다.
 워커는 스스로 running과 succeeded를 Aurora에 기록합니다. 실패해서 Catch로 빠지면 status_updater Lambda가 failed로 표시하는데, 이건 SFN이 VPC 안 Aurora에 직접 쓸 수 없기 때문입니다. 마지막으로 reaper가 5분마다 stale 작업을 정합화합니다. 그래서 OOM에 안전한 백본입니다. 참고로 Fargate 워커는 ENTRYPOINT가 아니라 CMD를 써야 SFN command override가 정상 동작합니다.
 {cue: pause}
-이 백본에 얹히는 잡 종류도 계속 늘었습니다. schedule_dispatcher는 시간별로 report_schedules를 스캔해서 예약된 진단 잡을 큐에 넣고, diagnosis_digest는 리포트가 끝날 때마다 개별 이메일을 보내던 걸 배치 SNS 다이제스트로 바꿨습니다. 그리고 Powerpipe 기반 compliance 잡이 CIS 벤치마크를 이 워커 티어 위에서 돌립니다. 셋 다 flag-gated지만 라이브 환경에서는 이미 켜져 있습니다.
+이 백본에 얹히는 잡 종류도 계속 늘었습니다. schedule_dispatcher는 시간별로 report_schedules를 스캔해서 예약된 진단 잡을 큐에 넣고, diagnosis_digest는 리포트가 끝날 때마다 개별 이메일을 보내던 걸 배치 SNS 다이제스트로 바꾸는 작업인데, 별도 브랜치에서 완료돼 병합을 기다리고 있습니다. 그리고 Powerpipe 기반 compliance 잡이 CIS 벤치마크를 이 워커 티어 위에서 돌립니다. schedule_dispatcher와 compliance는 flag-gated로 라이브 환경에서 이미 켜져 있습니다.
 {cue: transition}
 관측성과 토폴로지로 넘어갑니다.
 :::
@@ -500,7 +500,7 @@ Well-Architected Review를 수동으로 며칠씩 만들어 보신 분 계시죠
 
 ### Datasource Platform (read-only)
 
-- 커넥터: **ClickHouse · Prometheus · Loki · Tempo · Mimir**
+- 커넥터: **ClickHouse · Prometheus · Loki · Tempo · Mimir** + Jaeger · Dynatrace · Datadog (8종)
 - connector Lambda + **Aurora schema cache**
 - chat injection — AI가 데이터소스 교차 조회
 - **`/datasources` Explore** 페이지 + NL→query
