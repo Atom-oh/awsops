@@ -2,8 +2,8 @@
 import { useI18n } from './LanguageProvider';
 import type { Lang } from '@/lib/i18n';
 
-// KO/EN/CN을 모두 노출하는 3-버튼 언어 스위치 (owner 요청 — 기존 순환 토글 대체).
-const LANGS: ReadonlyArray<readonly [Lang, string]> = [['ko', 'KO'], ['en', 'EN'], ['zh', 'CN']];
+// 4개 언어를 각 언어 고유 표기로 노출하는 버튼 스위치 (owner 요청 — 기존 순환 토글 대체, JA 추가).
+const LANGS: ReadonlyArray<readonly [Lang, string]> = [['ko', '한국어'], ['en', 'English'], ['zh', '中文'], ['ja', '日本語']];
 
 export default function LanguageToggle() {
   const { lang, setLang } = useI18n();
