@@ -1,0 +1,53 @@
+name: Sync v2 mirror
+
+# `v2` is a pure fast-forward mirror of upstream(whchoi98/awsops)'s `v2` branch — the clean
+# base we branch from when contributing fixes back upstream (see PR #35). This job keeps it
+# in sync daily. Fast-forward only: never merges, rebases, or force-pushes. If `v2` has
+# diverged from a clean fast-forward (e.g. someone pushed directly onto it in this fork),
+# the job fails loudly instead of guessing how to reconcile — that needs a human.
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # daily at 00:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync v2 with upstream/v2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: v2
+
+      - name: Fetch upstream v2
+        run: |
+          git remote add upstream https://github.com/whchoi98/awsops.git 2>/dev/null || true
+          git fetch upstream v2
+          git fetch origin v2
+
+      - name: Fast-forward v2 if possible
+        run: |
+          set -euo pipefail
+          UP=$(git rev-parse upstream/v2)
+          CUR=$(git rev-parse origin/v2)
+          if [ "$UP" = "$CUR" ]; then
+            echo "v2 already in sync with upstream/v2 ($CUR)"
+            exit 0
+          fi
+          if git merge-base --is-ancestor "$CUR" "$UP"; then
+            echo "Fast-forwarding v2: $CUR -> $UP"
+            git log --oneline "$CUR..$UP"
+            git push origin "upstream/v2:v2"
+          else
+            echo "::error::v2 has diverged from upstream/v2 — not a clean fast-forward. Manual reconciliation needed."
+            echo "Commits only on origin/v2:"
+            git log --oneline "$UP..$CUR"
+            echo "Commits only on upstream/v2:"
+            git log --oneline "$CUR..$UP"
+            exit 1
+          fi
