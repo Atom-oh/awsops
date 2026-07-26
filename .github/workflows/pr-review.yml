@@ -139,7 +139,7 @@ jobs:
             }
             /^diff --git/ {
               # Look up both ends from the pre-built authoritative map (see above) instead of
-              # parsing this header line's own text, which is ambiguous once either path contains
+              # parsing the header line text itself, which is ambiguous once either path contains
               # a space (nothing anchors where "a/old" ends and "b/new" begins).
               idx++
               path = (idx in oldp) ? oldp[idx] : ""
