@@ -38,7 +38,7 @@ export interface InvokeInput {
   accountAlias?: string;
   integrations?: ResolvedIntegration[]; // ADR-039 P2-infra inc2: live egress-READ MCP connections
   extraContext?: string; // bounded BFF context appended to the agent system prompt (e.g. cached datasource schemas)
-  responseLanguage?: string; // v1-parity: UI-language directive ('ko'|'en'|'zh') — agent.py forces the answer language
+  responseLanguage?: string; // v1-parity: UI-language directive ('ko'|'en'|'zh'|'ja') — agent.py forces the answer language
 }
 
 async function readResponse(resp: unknown): Promise<string> {

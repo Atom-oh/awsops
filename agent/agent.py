@@ -879,8 +879,8 @@ async def handler(payload):
     # a short/mixed-language prompt must still be answered in the user's UI language.
     response_language = payload.get("responseLanguage")
     lang_directive = ""
-    if response_language in ("ko", "en", "zh"):
-        lang_name = {"ko": "Korean(한국어)", "en": "English", "zh": "Simplified Chinese(简体中文)"}[response_language]
+    if response_language in ("ko", "en", "zh", "ja"):
+        lang_name = {"ko": "Korean(한국어)", "en": "English", "zh": "Simplified Chinese(简体中文)", "ja": "Japanese(日本語)"}[response_language]
         # Deliberately forceful: live-tested 2026-07-19 — a softly-worded directive loses to
         # COMMON_FOOTER's "respond in the user's language" whenever the equally-forceful
         # MANDATORY account directive is also present (the model then follows the question's
