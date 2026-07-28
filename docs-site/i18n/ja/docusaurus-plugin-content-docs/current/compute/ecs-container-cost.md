@@ -1,0 +1,120 @@
+---
+sidebar_position: 11
+title: ECS Container Cost
+description: ECS Fargate タスクのコスト分析、CloudWatch Container Insights メトリクス
+---
+
+import Screenshot from '@site/src/components/Screenshot';
+
+# ECS Container Cost
+
+ECS Fargate タスクのコストを分析するページです。Fargate の価格と CloudWatch Container Insights メトリクスに基づいてコストを計算します。
+
+<Screenshot src="/screenshots/compute/ecs-container-cost.png" alt="ECS Container Cost" />
+
+## 主な機能
+
+### 統計カード
+- **Daily Cost (ECS)**: 日次の合計コスト（シアン）
+- **Monthly Estimate**: 月間推定コスト（緑）
+- **Running Tasks**: 実行中のタスク数 - Fargate/EC2 の区分（紫）
+- **Top Cost Service**: 最もコストが高いサービス（オレンジ）
+
+### Service Cost Distribution チャート
+サービスごとの日次コスト分布を円グラフで表示
+
+### Cost by Service (CPU vs Memory) チャート
+サービスごとの CPU コストと Memory コストを積み上げバーチャートで比較
+
+### ECS Tasks テーブル
+| カラム | 説明 |
+|------|------|
+| Cluster | クラスター名 |
+| Service | サービス名 |
+| Task ID | タスク ID（先頭 12 桁） |
+| Type | 起動タイプ（FARGATE/EC2） |
+| CPU (units) | CPU ユニットおよび vCPU 換算値 |
+| Memory (MB) | メモリおよび GB 換算値 |
+| Daily Cost | 日次コスト（Fargate のみ） |
+| AZ | アベイラビリティゾーン |
+
+## コスト計算方式
+
+### Fargate 価格（ap-northeast-2）
+| リソース | 単価 | 課金単位 |
+|--------|------|-----------|
+| vCPU | $0.04048 | per vCPU-hour |
+| Memory | $0.004445 | per GB-hour |
+| Ephemeral Storage (>20GB) | $0.000111 | per GB-hour |
+
+### 計算式
+```
+CPU Cost = (CPU Units / 1024) x $0.04048/hr x 24hr
+Memory Cost = (Memory MB / 1024) x $0.004445/hr x 24hr
+Daily Cost = CPU Cost + Memory Cost
+Monthly Estimate = Daily Cost x 30
+```
+
+### 計算例
+Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
+- CPU: 0.5 vCPU x $0.04048/hr x 24hr = **$0.486/day**
+- Memory: 1 GB x $0.004445/hr x 24hr = **$0.107/day**
+- Total: **$0.593/day ($17.78/month)**
+
+## 計算根拠トグル（Cost Calculation Basis）
+
+テーブル下部に **▶ Cost Calculation Basis / 비용 계산 근거** の折りたたみ可能なセクションがあります。`showBasis` のトグルで次をインラインに展開します:
+
+- **Fargate Pricing 表**（`ap-northeast-2`、On-Demand 基準）
+  - vCPU hourly rate: `$0.04048`
+  - GB hourly rate: `$0.004445`
+- 計算例: 0.5 vCPU × 1 GB のタスク → `$0.593/day` に換算
+- Spot、ARM (Graviton) の変動分に関する参考ノート
+
+価格の値は `data/config.json` の `fargatePricing` でオーバーライドできます。
+
+## EKS Pod Cost へのポインター（Phase 2）
+
+ページ下部に EKS コンテナコスト分析へ案内するカードがあります — このページは ECS Fargate に限定されており、EKS Pod 単位のコストは別ページで扱います:
+
+→ [EKS Container Cost](./eks-container-cost) — Pod / Node タブ、OpenCost (Prometheus) または Request-based 推定
+
+## 使い方
+
+1. サイドバーで **Compute > Container Cost** をクリックします
+2. 統計カードで全体のコスト状況を把握します
+3. チャートでコストの高いサービスを特定します
+4. テーブルでタスクごとの詳細なコストを確認します
+5. "Cost Calculation Basis" セクションを展開して計算根拠を確認します
+
+## サポート範囲
+
+| 項目 | サポート |
+|------|------|
+| Fargate Launch Type | O（コスト計算対応） |
+| EC2 Launch Type | X（ノードコストの配分が必要、未対応） |
+| Spot Fargate | -（On-Demand 価格基準） |
+
+## 活用のヒント
+
+:::tip EC2 Launch Type
+EC2 タイプのタスクは "N/A (EC2)" と表示されます。EC2 のコストはノードコストの配分が必要なため、現在は未対応です。
+:::
+
+:::tip コスト最適化
+CPU vs Memory チャートで一方が大きく高い場合は、タスク定義の調整を検討してください。Fargate は CPU と Memory の組み合わせが制限されています。
+:::
+
+:::tip 価格設定の変更
+`data/config.json` の `fargatePricing` フィールドでリージョンごとの価格を変更できます。
+:::
+
+:::info AI 分析
+AI Assistant で「ECS のコスト分析」「最もコストの高いサービス」「Fargate コスト最適化の方法」などの分析ができます。
+:::
+
+## 関連ページ
+
+- [ECS](../compute/ecs) - ECS クラスターおよびサービスの状態
+- [EKS Container Cost](../compute/eks-container-cost) - EKS Pod のコスト分析
+- [Cost](../monitoring/cost) - AWS 全体のコスト分析
