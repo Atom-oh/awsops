@@ -2,7 +2,7 @@
 
 Source for the docs-site landing hero video: `docs-site/static/video/product-tour.{mp4,webm}` + `product-tour-poster.webp`.
 
-11s, 1280x720, no audio. Six beats: title → dashboard → AI assistant → topology → AI diagnosis → outro (holds on the final frame). Screenshots are copied from `docs-site/static/showcase/media/*.webp` (already privacy-redacted and SHA256-pinned there — this project only reads them, never edits them).
+30s, 1280x720, no audio. Eight beats: title → dashboard → AI assistant → topology → cost explorer → compliance (ultra-wide banner, `.shot-frame-banner`, shown uncropped) → AI diagnosis → outro (holds on the final frame). Screenshots are copied from `docs-site/static/showcase/media/*.webp` (already privacy-redacted and SHA256-pinned there — this project only reads them, never edits them).
 
 ## Why this exists as committed binaries
 
@@ -35,7 +35,7 @@ npx hyperframes@latest doctor --json | jq -e '.ok'
 cd docs-site/hyperframes/product-tour
 npx hyperframes@latest lint
 npx hyperframes@latest check
-npx hyperframes@latest snapshot . --at 0,0.7,1.39,2.5,3.6,5.5,7.6,9.6,10.9,11.0 -o /tmp/hf-snapshots --no-end
+npx hyperframes@latest snapshot . --at 0,0.7,1.5,3,6,10.5,15,19.5,24,28.5,29.9,30.0 -o /tmp/hf-snapshots --no-end
 # eyeball /tmp/hf-snapshots/contact-sheet-*.jpg, then:
 npx hyperframes@latest render --quality high --output ../../static/video/product-tour.mp4
 
@@ -54,12 +54,12 @@ ffmpeg -y -i product-tour.mp4 -c:v libvpx-vp9 -crf 34 -b:v 0 -pix_fmt yuv420p -a
 ffmpeg -y -ss 2.0 -i product-tour.mp4 -frames:v 1 -update 1 poster.png
 ffmpeg -y -i poster.png -quality 85 product-tour-poster.webp
 rm poster.png
-ffprobe -v error -show_format product-tour.mp4   # confirm duration=11.0, size
+ffprobe -v error -show_format product-tour.mp4   # confirm duration=30.0, size
 ```
 
 ## Notes
 
-- The `t=11.0` (exact `data-duration`) snapshot renders black — that's the snapshot tool sampling past the last real frame, not a defect. `t=10.999` (and the actual rendered video, fps-quantized before the boundary) holds the outro correctly. Verify with `ffmpeg -ss 10.9 -i product-tour.mp4 -frames:v 1 ...` after any re-render.
+- The `t=30.0` (exact `data-duration`) snapshot renders black — that's the snapshot tool sampling past the last real frame, not a defect. `t=29.9` (and the actual rendered video, fps-quantized before the boundary) holds the outro correctly. Verify with `ffmpeg -ss 29.9 -i product-tour.mp4 -frames:v 1 ...` after any re-render.
 - `.shot-frame` containers carry `data-layout-allow-overflow="true"` — the Ken Burns zoom intentionally overflows the rounded frame by design; this silences the (informational) layout audit for that specific choice.
 - Font is `Noto Sans CJK KR` via `src: local(...)` — it's installed system-wide on this box (`fc-list | grep -i "noto sans cjk"`). No network font fetch, so renders stay deterministic.
 - Ship both `product-tour.webm` (VP9, first `<source>`) and `product-tour.mp4` (H.264, second `<source>`) — don't drop either. Verifying autoplay end-to-end in this environment requires the VP9 file (see codec check above); real users mostly hit the mp4.

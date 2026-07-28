@@ -80,6 +80,28 @@
         box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
         border: 1px solid #1a2540;
       }
+      /* Ultra-wide banner captures (e.g. the compliance strip, 8.4:1) — full width, natural
+         aspect, no crop. A deliberate change of rhythm rather than forcing a tall crop.
+         The label sits below as a normal-flow sibling, not an absolutely-positioned child —
+         .shot-frame-banner's own overflow:hidden would otherwise clip an out-of-bounds label. */
+      .banner-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 28px;
+      }
+      .shot-frame-banner {
+        position: relative;
+        width: 1120px;
+        height: 133px;
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+        border: 1px solid #1a2540;
+      }
+      .shot-label-banner {
+        position: static;
+      }
       .shot-img {
         display: block;
         width: 100%;
@@ -102,6 +124,11 @@
         font-size: 24px;
         font-weight: 600;
       }
+      .shot-frame-banner .shot-label {
+        left: 50%;
+        bottom: -56px;
+        transform: translateX(-50%);
+      }
     </style>
   </head>
   <body>
@@ -109,24 +136,24 @@
       id="root"
       data-composition-id="product-tour"
       data-start="0"
-      data-duration="11"
+      data-duration="30"
       data-width="1280"
       data-height="720"
     >
       <div id="backdrop"></div>
 
-      <!-- 0.0 - 1.4s: title -->
-      <section id="scene-title" class="clip text-scene" data-start="0" data-duration="1.4" data-track-index="1">
+      <!-- 0.0 - 1.5s: title -->
+      <section id="scene-title" class="clip text-scene" data-start="0" data-duration="1.5" data-track-index="1">
         <div class="brand">AWSops</div>
         <div class="tagline">AWS + Kubernetes 운영을 한 화면에서</div>
       </section>
 
-      <!-- 1.4 - 3.6s: dashboard -->
+      <!-- 1.5 - 6.0s: dashboard -->
       <section
         id="scene-dashboard"
         class="clip"
-        data-start="1.4"
-        data-duration="2.2"
+        data-start="1.5"
+        data-duration="4.5"
         data-track-index="2"
       >
         <div class="shot-frame" data-layout-allow-overflow="true">
@@ -135,12 +162,12 @@
         </div>
       </section>
 
-      <!-- 3.6 - 5.6s: AI assistant -->
+      <!-- 6.0 - 10.5s: AI assistant -->
       <section
         id="scene-assistant"
         class="clip"
-        data-start="3.6"
-        data-duration="2.0"
+        data-start="6.0"
+        data-duration="4.5"
         data-track-index="1"
       >
         <div class="shot-frame" data-layout-allow-overflow="true">
@@ -149,12 +176,12 @@
         </div>
       </section>
 
-      <!-- 5.6 - 7.6s: topology -->
+      <!-- 10.5 - 15.0s: topology -->
       <section
         id="scene-topology"
         class="clip"
-        data-start="5.6"
-        data-duration="2.0"
+        data-start="10.5"
+        data-duration="4.5"
         data-track-index="2"
       >
         <div class="shot-frame" data-layout-allow-overflow="true">
@@ -163,12 +190,42 @@
         </div>
       </section>
 
-      <!-- 7.6 - 9.6s: AI diagnosis -->
+      <!-- 15.0 - 19.5s: cost explorer -->
+      <section
+        id="scene-cost"
+        class="clip"
+        data-start="15.0"
+        data-duration="4.5"
+        data-track-index="1"
+      >
+        <div class="shot-frame" data-layout-allow-overflow="true">
+          <img id="img-cost" class="shot-img" src="assets/cost-explorer.webp" alt="" />
+          <div id="label-cost" class="shot-label">비용 분석</div>
+        </div>
+      </section>
+
+      <!-- 19.5 - 24.0s: compliance (ultra-wide banner, no crop) -->
+      <section
+        id="scene-compliance"
+        class="clip"
+        data-start="19.5"
+        data-duration="4.5"
+        data-track-index="2"
+      >
+        <div class="banner-wrap" data-layout-allow-overflow="true">
+          <div class="shot-frame-banner">
+            <img id="img-compliance" class="shot-img" src="assets/compliance.webp" alt="" />
+          </div>
+          <div id="label-compliance" class="shot-label shot-label-banner">보안 · 컴플라이언스</div>
+        </div>
+      </section>
+
+      <!-- 24.0 - 28.5s: AI diagnosis -->
       <section
         id="scene-diagnosis"
         class="clip"
-        data-start="7.6"
-        data-duration="2.0"
+        data-start="24.0"
+        data-duration="4.5"
         data-track-index="1"
       >
         <div class="shot-frame" data-layout-allow-overflow="true">
@@ -177,8 +234,8 @@
         </div>
       </section>
 
-      <!-- 9.6 - 11.0s: outro (holds to the final frame) -->
-      <section id="scene-outro" class="clip text-scene" data-start="9.6" data-duration="1.4" data-track-index="2">
+      <!-- 28.5 - 30.0s: outro (holds to the final frame) -->
+      <section id="scene-outro" class="clip text-scene" data-start="28.5" data-duration="1.5" data-track-index="2">
         <div class="brand">AWSops</div>
         <div class="outro-note">읽기 전용 운영 대시보드</div>
       </section>
@@ -188,16 +245,16 @@
       window.__timelines = window.__timelines || {};
       const tl = gsap.timeline({ paused: true });
 
-      // ---- title (0 - 1.4) ----
+      // ---- title (0 - 1.5) ----
       const TITLE_SEL = "#scene-title .brand, #scene-title .tagline";
       tl.from("#scene-title .brand", { autoAlpha: 0, y: 24, duration: 0.5, ease: "power2.out" }, 0.1);
       tl.from("#scene-title .tagline", { autoAlpha: 0, y: 16, duration: 0.5, ease: "power2.out" }, 0.3);
-      tl.to(TITLE_SEL, { autoAlpha: 0, duration: 0.3, ease: "power1.in" }, 1.1);
-      tl.set(TITLE_SEL, { autoAlpha: 0 }, 1.4);
+      tl.to(TITLE_SEL, { autoAlpha: 0, duration: 0.3, ease: "power1.in" }, 1.2);
+      tl.set(TITLE_SEL, { autoAlpha: 0 }, 1.5);
 
       // ---- reusable per-scene reveal + Ken Burns + label ----
       function scene(imgSel, labelSel, start, duration, panScale) {
-        const fade = 0.35;
+        const fade = 0.4;
         const end = start + duration;
         // scale: slow constant Ken Burns zoom across the whole visible span
         tl.fromTo(imgSel, { scale: panScale[0] }, { scale: panScale[1], duration: duration, ease: "none" }, start);
@@ -211,14 +268,16 @@
         tl.set(labelSel, { autoAlpha: 0 }, end);
       }
 
-      scene("#img-dashboard", "#label-dashboard", 1.4, 2.2, [1.08, 1.0]);
-      scene("#img-assistant", "#label-assistant", 3.6, 2.0, [1.0, 1.06]);
-      scene("#img-topology", "#label-topology", 5.6, 2.0, [1.06, 1.0]);
-      scene("#img-diagnosis", "#label-diagnosis", 7.6, 2.0, [1.0, 1.06]);
+      scene("#img-dashboard", "#label-dashboard", 1.5, 4.5, [1.08, 1.0]);
+      scene("#img-assistant", "#label-assistant", 6.0, 4.5, [1.0, 1.06]);
+      scene("#img-topology", "#label-topology", 10.5, 4.5, [1.06, 1.0]);
+      scene("#img-cost", "#label-cost", 15.0, 4.5, [1.0, 1.06]);
+      scene("#img-compliance", "#label-compliance", 19.5, 4.5, [1.02, 1.0]);
+      scene("#img-diagnosis", "#label-diagnosis", 24.0, 4.5, [1.0, 1.06]);
 
-      // ---- outro (9.6 - 11.0): fades in and HOLDS — final frame is part of the animation ----
-      tl.from("#scene-outro .brand", { autoAlpha: 0, y: 16, duration: 0.5, ease: "power2.out" }, 9.8);
-      tl.from("#scene-outro .outro-note", { autoAlpha: 0, y: 12, duration: 0.5, ease: "power2.out" }, 10.0);
+      // ---- outro (28.5 - 30.0): fades in and HOLDS — final frame is part of the animation ----
+      tl.from("#scene-outro .brand", { autoAlpha: 0, y: 16, duration: 0.5, ease: "power2.out" }, 28.7);
+      tl.from("#scene-outro .outro-note", { autoAlpha: 0, y: 12, duration: 0.5, ease: "power2.out" }, 28.9);
 
       window.__timelines["product-tour"] = tl;
     </script>

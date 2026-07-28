@@ -77,7 +77,7 @@ function TourVideo(): React.ReactElement {
       )}
       <figcaption>
         <Translate id="home.watch.caption">
-          대시보드 → AI 어시스턴트 → 토폴로지 → AI 진단으로 이어지는 10초 투어입니다.
+          대시보드 → AI 어시스턴트 → 토폴로지 → 비용 → 컴플라이언스 → AI 진단으로 이어지는 30초 투어입니다.
         </Translate>
       </figcaption>
     </figure>
@@ -221,7 +221,7 @@ export default function Home(): React.ReactElement {
             <div className={styles.sectionHead} data-reveal="">
               <span className={styles.kicker}>Watch</span>
               <h2>
-                <Translate id="home.watch.heading">10초로 보는 AWSops</Translate>
+                <Translate id="home.watch.heading">30초로 보는 AWSops</Translate>
               </h2>
               <p className={styles.lead}>
                 <Translate id="home.watch.lead">
