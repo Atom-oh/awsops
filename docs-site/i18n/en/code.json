@@ -355,7 +355,7 @@
     "description": "Hero primary CTA"
   },
   "home.hero.ctaSecondary": {
-    "message": "Why AWSops",
+    "message": "See the dashboard",
     "description": "Hero secondary CTA"
   },
   "home.watch.heading": {

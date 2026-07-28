@@ -139,8 +139,8 @@ function Hero(): React.ReactElement {
           <Link className={styles.button} to="/intro">
             <Translate id="home.hero.ctaPrimary">가이드 시작하기</Translate>
           </Link>
-          <Link className={`${styles.button} ${styles.buttonGhost}`} to="/overview/why-awsops">
-            <Translate id="home.hero.ctaSecondary">왜 AWSops인가</Translate>
+          <Link className={`${styles.button} ${styles.buttonGhost}`} to="/overview/dashboard">
+            <Translate id="home.hero.ctaSecondary">대시보드 살펴보기</Translate>
           </Link>
         </div>
       </div>

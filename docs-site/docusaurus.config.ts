@@ -108,7 +108,7 @@ const config: Config = {
           position: 'left',
         },
         {
-          href: 'https://awsops.whchoi.net/awsops/',
+          href: 'https://awsops.atomai.click/',
           label: '대시보드',
           position: 'right',
         },
