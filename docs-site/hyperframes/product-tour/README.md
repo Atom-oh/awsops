@@ -1,6 +1,6 @@
 # AWSops product-tour (HyperFrames)
 
-Source for the docs-site landing hero video: `docs-site/static/video/product-tour.mp4` + `product-tour-poster.webp`.
+Source for the docs-site landing hero video: `docs-site/static/video/product-tour.{mp4,webm}` + `product-tour-poster.webp`.
 
 11s, 1280x720, no audio. Six beats: title → dashboard → AI assistant → topology → AI diagnosis → outro (holds on the final frame). Screenshots are copied from `docs-site/static/showcase/media/*.webp` (already privacy-redacted and SHA256-pinned there — this project only reads them, never edits them).
 
@@ -43,6 +43,14 @@ npx hyperframes@latest render --quality high --output ../../static/video/product
 cd ../../static/video
 ffmpeg -y -i product-tour.mp4 -c:v libx264 -preset slow -crf 27 -pix_fmt yuv420p -movflags +faststart -an product-tour.compressed.mp4
 mv product-tour.compressed.mp4 product-tour.mp4
+
+# WebM/VP9 fallback — plain Chromium (no proprietary codec license: Playwright's bundled
+# browser, some Linux distro Firefox/Chromium builds) can't decode H.264 at all
+# (`canPlayType('video/mp4;codecs="avc1.42E01E"')` returns ""); VP9 fills that gap. Listed
+# as the FIRST <source> in index.tsx so a browser that can decode it prefers it; real Chrome/
+# Firefox/Safari with H.264 licensing fall through to the mp4 <source> right after.
+ffmpeg -y -i product-tour.mp4 -c:v libvpx-vp9 -crf 34 -b:v 0 -pix_fmt yuv420p -an product-tour.webm
+
 ffmpeg -y -ss 2.0 -i product-tour.mp4 -frames:v 1 -update 1 poster.png
 ffmpeg -y -i poster.png -quality 85 product-tour-poster.webp
 rm poster.png
@@ -54,3 +62,4 @@ ffprobe -v error -show_format product-tour.mp4   # confirm duration=11.0, size
 - The `t=11.0` (exact `data-duration`) snapshot renders black — that's the snapshot tool sampling past the last real frame, not a defect. `t=10.999` (and the actual rendered video, fps-quantized before the boundary) holds the outro correctly. Verify with `ffmpeg -ss 10.9 -i product-tour.mp4 -frames:v 1 ...` after any re-render.
 - `.shot-frame` containers carry `data-layout-allow-overflow="true"` — the Ken Burns zoom intentionally overflows the rounded frame by design; this silences the (informational) layout audit for that specific choice.
 - Font is `Noto Sans CJK KR` via `src: local(...)` — it's installed system-wide on this box (`fc-list | grep -i "noto sans cjk"`). No network font fetch, so renders stay deterministic.
+- Ship both `product-tour.webm` (VP9, first `<source>`) and `product-tour.mp4` (H.264, second `<source>`) — don't drop either. Verifying autoplay end-to-end in this environment requires the VP9 file (see codec check above); real users mostly hit the mp4.

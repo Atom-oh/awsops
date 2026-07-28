@@ -43,7 +43,8 @@ function useScrollReveal(): React.RefObject<HTMLDivElement> {
 }
 
 function TourVideo(): React.ReactElement {
-  const videoUrl = useBaseUrl('/video/product-tour.mp4');
+  const webmUrl = useBaseUrl('/video/product-tour.webm');
+  const mp4Url = useBaseUrl('/video/product-tour.mp4');
   const posterUrl = useBaseUrl('/video/product-tour-poster.webp');
   const [motionOk, setMotionOk] = useState(false);
 
@@ -64,7 +65,8 @@ function TourVideo(): React.ReactElement {
           poster={posterUrl}
           aria-hidden="true"
         >
-          <source src={videoUrl} type="video/mp4" />
+          <source src={webmUrl} type="video/webm" />
+          <source src={mp4Url} type="video/mp4" />
         </video>
       ) : (
         <img
