@@ -1,7 +1,7 @@
 name: AI Code Review
 
 # PR마다 lens×모델 매트릭스 패널(Codex + Kiro x3, L2~L5 각 lens 독립 에이전트)이 리뷰하고
-# Claude Fable 5 의장(저하 시 Opus 4.8 폴백)이 lens별로 종합해 코멘트로 게시(fail-closed
+# Claude Fable 5 의장(저하 시 Opus 5 폴백)이 lens별로 종합해 코멘트로 게시(fail-closed
 # VERDICT). 공유 actions-runner-claude 이미지 사용. (oh-my-cloud-skills 의 lens×model
 # 매트릭스 설계를 포팅 — 이 repo는 매니페스트 검증 대상이 없어 L1 결정적 게이트는 미포함)
 # (kiro-cli 는 headless chat 에서 STDIN 을 안 읽음 → diff 파일 경로를 프롬프트로 주고 자기 신뢰 도구로
