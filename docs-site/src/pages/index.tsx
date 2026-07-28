@@ -157,7 +157,7 @@ export default function Home(): React.ReactElement {
       description={translate({
         id: 'home.meta.description',
         message:
-          'AWS 운영 현황, 리소스 관계, 비용과 보안을 한 화면에서 보고 Amazon Bedrock AgentCore로 근거 기반 진단을 수행하는 읽기 전용 운영 대시보드입니다.',
+          'AWS 운영 현황, 리소스 관계, 비용과 보안을 한 화면에서 보고, 라이브 데이터 질문은 Amazon Bedrock AgentCore로, 종합 진단은 읽기 전용 비동기 워커로 수행하는 읽기 전용 운영 대시보드입니다.',
       })}
     >
       <div ref={rootRef} className={styles.page}>
@@ -426,7 +426,8 @@ export default function Home(): React.ReactElement {
                 </h3>
                 <p>
                   <Translate id="home.trust.privilege.body">
-                    라이브 조회는 AgentCore MCP 도구 경계 안에서 읽기 전용으로 수행합니다.
+                    챗의 라이브 조회는 AgentCore MCP 도구 경계 안에서, 종합 진단은 읽기 전용 권한의
+                    비동기 워커에서 수행합니다.
                   </Translate>
                 </p>
               </article>

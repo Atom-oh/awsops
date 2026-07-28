@@ -105,11 +105,21 @@ export function useCanvas(draw: DrawFn, height = 500) {
     canvas.addEventListener('mousemove', handleMouseMove);
     canvas.addEventListener('mouseleave', handleMouseLeave);
 
+    // With no rAF loop running under reduced-motion, hover state would
+    // otherwise never repaint — redraw once per pointer event instead.
+    function redrawOnPointerActivity() {
+      if (reduceMotion) drawFrame();
+    }
+    canvas.addEventListener('mousemove', redrawOnPointerActivity);
+    canvas.addEventListener('mouseleave', redrawOnPointerActivity);
+
     return () => {
       cancelAnimationFrame(animId);
       ro.disconnect();
       canvas.removeEventListener('mousemove', handleMouseMove);
       canvas.removeEventListener('mouseleave', handleMouseLeave);
+      canvas.removeEventListener('mousemove', redrawOnPointerActivity);
+      canvas.removeEventListener('mouseleave', redrawOnPointerActivity);
     };
   }, [draw, height, handleMouseMove, handleMouseLeave]);
 

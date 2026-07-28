@@ -21,8 +21,13 @@ const config: Config = {
 
   stylesheets: [
     {
-      href: 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css',
+      // Pinned to the immutable /npm/ path (not /gh/@tag, which is a
+      // re-assignable git ref) and locked with SRI, since GitHub Pages
+      // can't send a CSP to backstop a compromised or re-tagged asset.
+      href: 'https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/static/pretendard.min.css',
       type: 'text/css',
+      integrity: 'sha384-1WPwPzrT39Q3uXVY1qOrNSiFcW7oxY0Xf5CZYw4D3j1EuApQlY8DzzfQw0tySMyG',
+      crossorigin: 'anonymous',
     },
   ],
 
@@ -128,7 +133,7 @@ const config: Config = {
         {
           title: '리소스',
           items: [
-            { label: 'Dashboard', href: 'https://awsops.whchoi.net/awsops/' },
+            { label: 'Dashboard', href: 'https://awsops.atomai.click/' },
           ],
         },
         {

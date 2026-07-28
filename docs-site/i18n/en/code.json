@@ -331,7 +331,7 @@
     "description": "Landing page <title>"
   },
   "home.meta.description": {
-    "message": "A read-only operations dashboard that shows AWS operating status, resource relationships, cost, and security in one screen, and runs evidence-based diagnosis with Amazon Bedrock AgentCore.",
+    "message": "A read-only operations dashboard that shows AWS operating status, resource relationships, cost, and security in one screen, answers live-data questions via Amazon Bedrock AgentCore, and runs comprehensive diagnosis on a read-only async worker.",
     "description": "Landing page meta description"
   },
   "home.hero.eyebrow": {
@@ -503,7 +503,7 @@
     "description": "Trust item title"
   },
   "home.trust.privilege.body": {
-    "message": "Live queries run read-only, inside the AgentCore MCP tool boundary.",
+    "message": "Chat's live queries run inside the AgentCore MCP tool boundary; comprehensive diagnosis runs on a read-only async worker.",
     "description": "Trust item body"
   },
   "home.trust.encrypted.title": {
