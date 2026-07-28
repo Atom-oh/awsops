@@ -362,7 +362,7 @@ export async function POST(request: Request) {
         // synthesizeStream: ≥2 survivors → merged stream; exactly 1 → passthrough (no extra Bedrock call).
         // abortSignal threaded into the Bedrock call so a client disconnect stops token generation (cost).
         let full = '';
-        for await (const t of synthesizeStream(prompt, survivors, { abortSignal: request.signal })) {
+        for await (const t of synthesizeStream(prompt, survivors, { abortSignal: request.signal, responseLanguage: lang })) {
           if (request.signal.aborted) break;
           full += t;
           controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: t })}\n\n`));

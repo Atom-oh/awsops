@@ -879,6 +879,7 @@ async def handler(payload):
     # a short/mixed-language prompt must still be answered in the user's UI language.
     response_language = payload.get("responseLanguage")
     lang_directive = ""
+    lang_user_suffix = ""
     if response_language in ("ko", "en", "zh", "ja"):
         lang_name = {"ko": "Korean(한국어)", "en": "English", "zh": "Simplified Chinese(简体中文)", "ja": "Japanese(日本語)"}[response_language]
         # Deliberately forceful: live-tested 2026-07-19 — a softly-worded directive loses to
@@ -891,6 +892,10 @@ async def handler(payload):
             f"instruction (including 'respond in the user's language') and applies regardless of "
             f"the language the question was asked in."
         )
+        # Per-turn reinforcement (live-tested 2026-07-28): the system-prompt directive alone drifts
+        # back to the question's language after Korean tool output lands mid-conversation — a
+        # reminder at the END of the user turn (max recency) holds the language through tool use.
+        lang_user_suffix = f"\n\n[Answer language: {lang_name}. Write the entire answer in {lang_name}.]"
     tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
     gateway_key = _resolve_gateway_key(gateway_role, GATEWAYS)
     # NO eager `GATEWAYS[DEFAULT_GATEWAY]` default — that index is always evaluated and KeyErrors
@@ -912,6 +917,8 @@ async def handler(payload):
     #  there is no other account to disambiguate against.)
     if account_id and account_id != '__all__':
         user_input = f"[Target Account: {account_alias or account_id} ({account_id})] {user_input}"
+    if lang_user_suffix:
+        user_input = f"{user_input}{lang_user_suffix}"
 
     # ADR-039 P2-infra inc2: enabled egress-READ integrations the resolver surfaced (live MCP connect).
     integrations = payload.get("integrations") or []
