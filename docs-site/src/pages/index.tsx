@@ -77,7 +77,7 @@ function TourVideo(): React.ReactElement {
       )}
       <figcaption>
         <Translate id="home.watch.caption">
-          대시보드 → AI 어시스턴트 → 토폴로지 → 비용 → 컴플라이언스 → AI 진단으로 이어지는 30초 투어입니다.
+          대시보드부터 보안·컴플라이언스·EKS·AI 진단까지, 8개 화면을 훑는 30초 투어입니다.
         </Translate>
       </figcaption>
     </figure>

@@ -379,7 +379,7 @@
     "description": "Product tour poster alt text (reduced-motion fallback)"
   },
   "home.watch.caption": {
-    "message": "A 30-second tour through dashboard, AI assistant, topology, cost, compliance, and AI diagnosis.",
+    "message": "A 30-second tour across 8 screens, from the dashboard to security, compliance, EKS, and AI diagnosis.",
     "description": "Product tour figure caption"
   },
   "home.proof.heading": {

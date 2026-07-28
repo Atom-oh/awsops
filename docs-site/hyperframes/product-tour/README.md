@@ -2,7 +2,7 @@
 
 Source for the docs-site landing hero video: `docs-site/static/video/product-tour.{mp4,webm}` + `product-tour-poster.webp`.
 
-30s, 1280x720, no audio. Eight beats: title → dashboard → AI assistant → topology → cost explorer → compliance (ultra-wide banner, `.shot-frame-banner`, shown uncropped) → AI diagnosis → outro (holds on the final frame). Screenshots are copied from `docs-site/static/showcase/media/*.webp` (already privacy-redacted and SHA256-pinned there — this project only reads them, never edits them).
+30s, 1280x720, no audio. Ten beats: title → dashboard → AI assistant → topology → cost explorer → security → compliance (ultra-wide banner, `.shot-frame-banner`, shown uncropped) → EKS → AI diagnosis → outro (holds on the final frame). Screenshots are copied from `docs-site/static/showcase/media/*.webp` (already privacy-redacted and SHA256-pinned there — this project only reads them, never edits them). Ken Burns is deliberately subtle (±2%, see `scene()` in index.html) — several captures have UI flush against the crop edge (card borders, a heading with no left margin), and a bigger zoom crops symmetrically from center into whichever side has no margin.
 
 ## Why this exists as committed binaries
 
@@ -35,7 +35,7 @@ npx hyperframes@latest doctor --json | jq -e '.ok'
 cd docs-site/hyperframes/product-tour
 npx hyperframes@latest lint
 npx hyperframes@latest check
-npx hyperframes@latest snapshot . --at 0,0.7,1.5,3,6,10.5,15,19.5,24,28.5,29.9,30.0 -o /tmp/hf-snapshots --no-end
+npx hyperframes@latest snapshot . --at 0,0.7,1.2,3,4.65,8.1,11.55,15,18.45,21.9,25.35,28.8,29.9,30.0 -o /tmp/hf-snapshots --no-end
 # eyeball /tmp/hf-snapshots/contact-sheet-*.jpg, then:
 npx hyperframes@latest render --quality high --output ../../static/video/product-tour.mp4
 

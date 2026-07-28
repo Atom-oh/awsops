@@ -140,15 +140,44 @@ export const ASSETS: AssetSpec[] = [
     sourceHeight: 1080,
     sourceSha256: 'e902a17f2333bbb5ea5ba9449692e3c1161590c5ffc0af86513313e3ee3242e5',
     output: 'ai-diagnosis.webp',
-    crop: {left: 568, top: 128, width: 1320, height: 900},
+    // left shifted 40px earlier (was 568) so the video's Ken Burns zoom-in has a margin to eat
+    // into before it reaches the "AWS 진단 리포트" heading, which otherwise sits flush against
+    // the old crop's left edge — right edge (568+1320=1888) kept identical.
+    crop: {left: 528, top: 128, width: 1360, height: 900},
     outputWidth: 1600,
     overlays: [
       {
-        left: 190, top: 214, width: 275, height: 42,
+        left: 230, top: 214, width: 275, height: 42,
         fill: '#f4f6f8', text: '#18212d', label: '호스트 계정 (mid)',
-        sample: {left: 378, top: 235},
+        sample: {left: 418, top: 235},
+      },
+      {
+        // Hides the sliver of the page's secondary settings panel exposed by the wider crop.
+        left: 0, top: 0, width: 44, height: 900,
+        fill: '#f7f8fa', text: '#f7f8fa',
+        sample: {left: 10, top: 10},
       },
     ],
+  },
+  {
+    source: path.join(SCREENSHOTS, 'security', 'security.png'),
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    sourceSha256: '17d6518904efec2aaee4685070ec994f045c8c842bdc40b1ab60ee2dd703f554',
+    output: 'security.webp',
+    crop: {left: 288, top: 0, width: 1600, height: 900},
+    outputWidth: 1600,
+    overlays: [],
+  },
+  {
+    source: path.join(SCREENSHOTS, 'resources', 'eks.png'),
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    sourceSha256: 'fbf69350f2d7adaba49c19e7cb5691ac38ba29367a20e428b07383243ebfda7e',
+    output: 'eks.webp',
+    crop: {left: 288, top: 0, width: 1600, height: 900},
+    outputWidth: 1600,
+    overlays: [],
   },
 ];
 
