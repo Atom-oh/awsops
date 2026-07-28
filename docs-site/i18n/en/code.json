@@ -358,6 +358,14 @@
     "message": "See the dashboard",
     "description": "Hero secondary CTA"
   },
+  "home.hero.svgAria": {
+    "message": "Connected operations node graph",
+    "description": "Hero abstract graphic aria-label"
+  },
+  "home.hero.figCap2": {
+    "message": "One operations neural net across accounts, regions, and clusters.",
+    "description": "Hero figure caption under SINGLE PANE OF GLASS"
+  },
   "home.watch.heading": {
     "message": "AWSops in 10 seconds",
     "description": "Watch section heading"

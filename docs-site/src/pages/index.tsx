@@ -7,7 +7,6 @@ import Translate, { translate } from '@docusaurus/Translate';
 import useBaseUrl from '@docusaurus/useBaseUrl';
 import styles from './index.module.css';
 
-const HERO_FRAMES = ['dashboard', 'topology', 'cost-explorer', 'ai-diagnosis'];
 const DASHBOARD_URL = 'https://awsops.atomai.click/';
 
 function useScrollReveal(): React.RefObject<HTMLDivElement> {
@@ -85,64 +84,118 @@ function TourVideo(): React.ReactElement {
   );
 }
 
+function HeroGlyph(): React.ReactElement {
+  return (
+    <svg
+      className={styles.heroGlyph}
+      viewBox="0 0 420 300"
+      role="img"
+      aria-label={translate({
+        id: 'home.hero.svgAria',
+        message: '연결된 운영 노드 그래프',
+      })}
+    >
+      <defs>
+        <radialGradient id="awsopsHeroHalo" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#00d4ff" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="#00d4ff" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <g stroke="#33415c" strokeWidth="1.4" fill="none">
+        <line x1="60" y1="220" x2="210" y2="150" />
+        <line x1="210" y1="150" x2="360" y2="90" />
+        <line x1="210" y1="150" x2="350" y2="220" />
+        <line x1="60" y1="220" x2="150" y2="70" />
+        <line x1="150" y1="70" x2="210" y2="150" />
+        <line x1="350" y1="220" x2="360" y2="90" />
+        <line x1="60" y1="220" x2="350" y2="220" />
+      </g>
+      <g stroke="#00d4ff" strokeWidth="1.8" fill="none" strokeDasharray="4 6">
+        <line x1="210" y1="150" x2="360" y2="90">
+          <animate attributeName="stroke-dashoffset" from="40" to="0" dur="2.4s" repeatCount="indefinite" />
+        </line>
+        <line x1="60" y1="220" x2="210" y2="150">
+          <animate attributeName="stroke-dashoffset" from="40" to="0" dur="3s" repeatCount="indefinite" />
+        </line>
+      </g>
+      <g>
+        <circle cx="60" cy="220" r="9" fill="#0f1629" stroke="#4a5a7a" strokeWidth="1.6" />
+        <circle cx="150" cy="70" r="9" fill="#0f1629" stroke="#4a5a7a" strokeWidth="1.6" />
+        <circle cx="360" cy="90" r="9" fill="#0f1629" stroke="#4a5a7a" strokeWidth="1.6" />
+        <circle cx="350" cy="220" r="9" fill="#0f1629" stroke="#4a5a7a" strokeWidth="1.6" />
+      </g>
+      <circle cx="210" cy="150" r="46" fill="url(#awsopsHeroHalo)">
+        <animate attributeName="r" values="40;52;40" dur="3.2s" repeatCount="indefinite" />
+      </circle>
+      <circle cx="210" cy="150" r="17" fill="#00d4ff" />
+      <circle cx="210" cy="150" r="9" fill="#0a0e1a" />
+      <g fontFamily="'SFMono-Regular', Consolas, 'Liberation Mono', monospace" fontSize="11" fill="#8fa3c4">
+        <text x="60" y="246" textAnchor="middle">EC2 · EKS</text>
+        <text x="150" y="52" textAnchor="middle">VPC · 네트워크</text>
+        <text x="360" y="72" textAnchor="middle">비용 · FinOps</text>
+        <text x="350" y="246" textAnchor="middle">보안 · CIS</text>
+        <text x="210" y="207" textAnchor="middle" fill="#00d4ff" fontWeight="600">AgentCore</text>
+      </g>
+    </svg>
+  );
+}
+
 function Hero(): React.ReactElement {
-  const mediaBase = useBaseUrl('/showcase/media/');
-  const [frame, setFrame] = useState(0);
-  const [extraFrames, setExtraFrames] = useState(false);
-
-  useEffect(() => {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    setExtraFrames(true);
-    const timer = setInterval(() => {
-      setFrame((n) => (n + 1) % HERO_FRAMES.length);
-    }, 5000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const frames = extraFrames ? HERO_FRAMES : HERO_FRAMES.slice(0, 1);
-
   return (
     <header className={styles.hero}>
-      {frames.map((name, i) => (
-        <img
-          key={name}
-          className={styles.heroMedia}
-          data-active={i === frame}
-          src={`${mediaBase}${name}.webp`}
-          alt={
-            i === 0
-              ? translate({
-                  id: 'home.hero.alt',
-                  message: 'AWSops 통합 운영 대시보드',
-                })
-              : ''
-          }
-          fetchPriority={i === 0 ? 'high' : undefined}
-        />
-      ))}
-      <div className={styles.heroScrim} aria-hidden="true" />
-      <div className={`${styles.wrap} ${styles.heroContent}`}>
-        <span className={styles.eyebrow}>
-          <Translate id="home.hero.eyebrow">AWS + Kubernetes operations</Translate>
-        </span>
-        <h1>AWSops</h1>
-        <p className={styles.heroLine}>
-          <Translate id="home.hero.line">흩어진 AWS 운영을 하나의 화면에.</Translate>
-        </p>
-        <p className={styles.heroCopy}>
-          <Translate id="home.hero.copy">
-            운영 현황을 보고, 라이브 데이터에 질문하고, Well-Architected 관점의 진단까지 한
-            흐름으로 이어갑니다.
-          </Translate>
-        </p>
-        <div className={styles.ctaRow}>
-          <Link className={styles.button} to="/intro">
-            <Translate id="home.hero.ctaPrimary">가이드 시작하기</Translate>
-          </Link>
-          <Link className={`${styles.button} ${styles.buttonGhost}`} to="/overview/dashboard">
-            <Translate id="home.hero.ctaSecondary">대시보드 살펴보기</Translate>
-          </Link>
+      <div className={`${styles.wrap} ${styles.heroGrid}`}>
+        <div>
+          <span className={styles.eyebrow}>
+            <Translate id="home.hero.eyebrow">AWS + Kubernetes operations</Translate>
+          </span>
+          <h1>AWSops</h1>
+          <p className={styles.heroLine}>
+            <Translate id="home.hero.line">흩어진 AWS 운영을 하나의 화면에.</Translate>
+          </p>
+          <p className={styles.heroCopy}>
+            <Translate id="home.hero.copy">
+              운영 현황을 보고, 라이브 데이터에 질문하고, Well-Architected 관점의 진단까지 한
+              흐름으로 이어갑니다.
+            </Translate>
+          </p>
+          <div className={styles.ctaRow}>
+            <Link className={styles.button} to="/intro">
+              <Translate id="home.hero.ctaPrimary">가이드 시작하기</Translate>
+            </Link>
+            <Link className={`${styles.button} ${styles.buttonGhost}`} to="/overview/dashboard">
+              <Translate id="home.hero.ctaSecondary">대시보드 살펴보기</Translate>
+            </Link>
+          </div>
+          <div className={styles.metrics}>
+            <div className={styles.metric}>
+              <div className={styles.metricValue}>9</div>
+              <div className={styles.metricLabel}>
+                <Translate id="home.proof.routes">AI 라우팅 섹션</Translate>
+              </div>
+            </div>
+            <div className={styles.metric}>
+              <div className={styles.metricValue}>6</div>
+              <div className={styles.metricLabel}>
+                <Translate id="home.proof.pillars">Well-Architected 필러</Translate>
+              </div>
+            </div>
+            <div className={styles.metric}>
+              <div className={styles.metricValue}>3</div>
+              <div className={styles.metricLabel}>
+                <Translate id="home.proof.exports">리포트 내보내기 형식</Translate>
+              </div>
+            </div>
+          </div>
         </div>
+        <aside className={styles.heroFig}>
+          <div className={styles.heroFigCap}>SINGLE PANE OF GLASS</div>
+          <div className={styles.heroFigCap2}>
+            <Translate id="home.hero.figCap2">
+              계정 · 리전 · 클러스터를 가로질러 하나의 운영 신경망으로.
+            </Translate>
+          </div>
+          <HeroGlyph />
+        </aside>
       </div>
     </header>
   );
@@ -177,44 +230,6 @@ export default function Home(): React.ReactElement {
               </p>
             </div>
             <TourVideo />
-          </div>
-        </section>
-
-        <section className={styles.band}>
-          <div className={styles.wrap}>
-            <div className={styles.sectionHead} data-reveal="">
-              <span className={styles.kicker}>See</span>
-              <h2>
-                <Link to="/overview/agentcore">
-                  <Translate id="home.proof.heading">먼저, 운영 전체를 봅니다.</Translate>
-                </Link>
-              </h2>
-              <p className={styles.lead}>
-                <Translate id="home.proof.lead">
-                  AWS 리소스, Kubernetes, 비용, 보안 신호를 하나의 대시보드에서 비교합니다.
-                </Translate>
-              </p>
-            </div>
-            <div className={styles.proofs} data-reveal="">
-              <div className={styles.proof}>
-                <b>9</b>
-                <span>
-                  <Translate id="home.proof.routes">AI 라우팅 섹션</Translate>
-                </span>
-              </div>
-              <div className={styles.proof}>
-                <b>6</b>
-                <span>
-                  <Translate id="home.proof.pillars">Well-Architected 필러</Translate>
-                </span>
-              </div>
-              <div className={styles.proof}>
-                <b>3</b>
-                <span>
-                  <Translate id="home.proof.exports">리포트 내보내기 형식</Translate>
-                </span>
-              </div>
-            </div>
           </div>
         </section>
 
