@@ -1,7 +1,16 @@
 // Lightweight i18n core (pure, no React). KO default; EN + ZH(简体) + JA toggles (v1 parity).
 // MVP scope: shell + navigation strings only (not the inventory catalog or page bodies).
 
-export type Lang = 'ko' | 'en' | 'zh' | 'ja';
+// Single source of truth for the supported-language set. TS consumers derive from this
+// (Lang, ChatLang, LanguageProvider restore, LanguageToggle buttons — a new entry breaks
+// their compiles until updated). Hand-maintained lockstep sites a compile can't catch:
+// agent/agent.py language-directive map, web/lib/bedrock-direct.ts lang ternary, and
+// components/inventory/metrics/guides.<lang>.tsx bodies.
+export const SUPPORTED_LANGS = ['ko', 'en', 'zh', 'ja'] as const;
+export type Lang = (typeof SUPPORTED_LANGS)[number];
+export function isLang(v: unknown): v is Lang {
+  return typeof v === 'string' && (SUPPORTED_LANGS as readonly string[]).includes(v);
+}
 type Dict = Record<string, string>;
 
 const MESSAGES: Record<Lang, Dict> = {

@@ -1,10 +1,14 @@
 // v1-parity chat-path i18n (v1 src/app/api/ai/route.ts:932-953 pick(en,ko,zh)): server-issued
 // guide/system strings follow the user's UI language, not hardcoded Korean. Pure data + one pick.
 
-export type ChatLang = 'ko' | 'en' | 'zh' | 'ja';
+import { isLang, type Lang } from './i18n';
+
+// ChatLang = Lang: adding a language to SUPPORTED_LANGS breaks this file's compile
+// until every template below gains that language — the lockstep is intentional.
+export type ChatLang = Lang;
 
 export function normalizeChatLang(v: unknown): ChatLang {
-  return v === 'en' || v === 'zh' || v === 'ja' ? v : 'ko';
+  return isLang(v) ? v : 'ko';
 }
 
 type L10n = Record<ChatLang, string>;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { translate, makeT, MESSAGES } from './i18n';
+import { translate, makeT, MESSAGES, SUPPORTED_LANGS, isLang } from './i18n';
 
 describe('translate', () => {
   it('looks up ko and en', () => {
@@ -32,8 +32,21 @@ describe('makeT', () => {
 });
 
 describe('keyset parity (regression guard)', () => {
-  it('ko and en define the exact same keys', () => {
-    expect(Object.keys(MESSAGES.ko).sort()).toEqual(Object.keys(MESSAGES.en).sort());
+  it('every supported language defines the exact same keys as ko', () => {
+    const koKeys = Object.keys(MESSAGES.ko).sort();
+    for (const l of SUPPORTED_LANGS) {
+      expect(Object.keys(MESSAGES[l]).sort(), `MESSAGES.${l} keyset`).toEqual(koKeys);
+    }
+  });
+
+  it('{param} placeholders match across all languages for every key', () => {
+    const ph = (s: string) => (s.match(/\{\w+\}/g) ?? []).sort();
+    for (const key of Object.keys(MESSAGES.ko)) {
+      const expected = ph(MESSAGES.ko[key]);
+      for (const l of SUPPORTED_LANGS) {
+        expect(ph(MESSAGES[l][key]), `placeholders of ${l}:${key}`).toEqual(expected);
+      }
+    }
   });
 
   it('nav.datasources exists in both ko and en (Explore page)', () => {
@@ -41,5 +54,24 @@ describe('keyset parity (regression guard)', () => {
     expect(translate('en', 'nav.datasources')).toBe('Datasources');
   });
 
+});
+
+describe('language set (single source of truth)', () => {
+  it('exposes the four supported languages in toggle order', () => {
+    expect(SUPPORTED_LANGS).toEqual(['ko', 'en', 'zh', 'ja']);
+  });
+
+  it('isLang validates membership', () => {
+    expect(isLang('ja')).toBe(true);
+    expect(isLang('ko')).toBe(true);
+    expect(isLang('jp')).toBe(false);
+    expect(isLang(null)).toBe(false);
+    expect(isLang(undefined)).toBe(false);
+  });
+
+  it('translates a shell key in every language', () => {
+    expect(translate('ja', 'sidebar.signOut')).toBe('ログアウト');
+    expect(translate('zh', 'sidebar.signOut')).toBe('退出登录');
+  });
 });
 
