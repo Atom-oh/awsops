@@ -19,6 +19,13 @@ const config: Config = {
   url: process.env.SITE_URL || 'https://www.atomai.click',
   baseUrl: process.env.BASE_URL || '/awsops/',
 
+  stylesheets: [
+    {
+      href: 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css',
+      type: 'text/css',
+    },
+  ],
+
   organizationName: 'Atom-oh',
   projectName: 'awsops',
   deploymentBranch: 'gh-pages',

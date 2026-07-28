@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1280, height=720" />
+    <title>AWSops Product Tour</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      @font-face {
+        font-family: "Noto Sans CJK KR";
+        src: local("Noto Sans CJK KR");
+      }
+
+      html,
+      body {
+        width: 1280px;
+        height: 720px;
+        overflow: hidden;
+        background: #0a0e1a;
+        font-family: "Noto Sans CJK KR", system-ui, sans-serif;
+      }
+
+      #root {
+        position: relative;
+        width: 1280px;
+        height: 720px;
+        overflow: hidden;
+      }
+
+      /* Persistent backdrop — not a timed clip, stays for the whole render */
+      #backdrop {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at 30% 20%, #10182c 0%, #0a0e1a 60%, #060911 100%);
+      }
+
+      .clip {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      /* ---- Title / outro text scenes ---- */
+      .text-scene {
+        flex-direction: column;
+        gap: 18px;
+        text-align: center;
+      }
+      .brand {
+        font-size: 88px;
+        font-weight: 800;
+        color: #ffffff;
+        letter-spacing: 1px;
+      }
+      .tagline {
+        font-size: 30px;
+        font-weight: 500;
+        color: #00d4ff;
+      }
+      .outro-note {
+        font-size: 22px;
+        font-weight: 500;
+        color: #94a3b8;
+      }
+
+      /* ---- Screenshot scenes ---- */
+      .shot-frame {
+        position: relative;
+        width: 1120px;
+        height: 630px;
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+        border: 1px solid #1a2540;
+      }
+      .shot-img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: top center;
+        transform-origin: center center;
+      }
+      .shot-label {
+        position: absolute;
+        left: 32px;
+        bottom: 28px;
+        display: inline-flex;
+        align-items: center;
+        padding: 12px 22px;
+        border-radius: 999px;
+        background: rgba(6, 9, 17, 0.96);
+        border: 1px solid rgba(0, 212, 255, 0.4);
+        color: #e2e8f0;
+        font-size: 24px;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="product-tour"
+      data-start="0"
+      data-duration="11"
+      data-width="1280"
+      data-height="720"
+    >
+      <div id="backdrop"></div>
+
+      <!-- 0.0 - 1.4s: title -->
+      <section id="scene-title" class="clip text-scene" data-start="0" data-duration="1.4" data-track-index="1">
+        <div class="brand">AWSops</div>
+        <div class="tagline">AWS + Kubernetes 운영을 한 화면에서</div>
+      </section>
+
+      <!-- 1.4 - 3.6s: dashboard -->
+      <section
+        id="scene-dashboard"
+        class="clip"
+        data-start="1.4"
+        data-duration="2.2"
+        data-track-index="2"
+      >
+        <div class="shot-frame" data-layout-allow-overflow="true">
+          <img id="img-dashboard" class="shot-img" src="assets/dashboard.webp" alt="" />
+          <div id="label-dashboard" class="shot-label">한눈에 보는 대시보드</div>
+        </div>
+      </section>
+
+      <!-- 3.6 - 5.6s: AI assistant -->
+      <section
+        id="scene-assistant"
+        class="clip"
+        data-start="3.6"
+        data-duration="2.0"
+        data-track-index="1"
+      >
+        <div class="shot-frame" data-layout-allow-overflow="true">
+          <img id="img-assistant" class="shot-img" src="assets/assistant-answer.webp" alt="" />
+          <div id="label-assistant" class="shot-label">AI 어시스턴트</div>
+        </div>
+      </section>
+
+      <!-- 5.6 - 7.6s: topology -->
+      <section
+        id="scene-topology"
+        class="clip"
+        data-start="5.6"
+        data-duration="2.0"
+        data-track-index="2"
+      >
+        <div class="shot-frame" data-layout-allow-overflow="true">
+          <img id="img-topology" class="shot-img" src="assets/topology.webp" alt="" />
+          <div id="label-topology" class="shot-label">토폴로지</div>
+        </div>
+      </section>
+
+      <!-- 7.6 - 9.6s: AI diagnosis -->
+      <section
+        id="scene-diagnosis"
+        class="clip"
+        data-start="7.6"
+        data-duration="2.0"
+        data-track-index="1"
+      >
+        <div class="shot-frame" data-layout-allow-overflow="true">
+          <img id="img-diagnosis" class="shot-img" src="assets/ai-diagnosis.webp" alt="" />
+          <div id="label-diagnosis" class="shot-label">AI 진단</div>
+        </div>
+      </section>
+
+      <!-- 9.6 - 11.0s: outro (holds to the final frame) -->
+      <section id="scene-outro" class="clip text-scene" data-start="9.6" data-duration="1.4" data-track-index="2">
+        <div class="brand">AWSops</div>
+        <div class="outro-note">읽기 전용 운영 대시보드</div>
+      </section>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      // ---- title (0 - 1.4) ----
+      const TITLE_SEL = "#scene-title .brand, #scene-title .tagline";
+      tl.from("#scene-title .brand", { autoAlpha: 0, y: 24, duration: 0.5, ease: "power2.out" }, 0.1);
+      tl.from("#scene-title .tagline", { autoAlpha: 0, y: 16, duration: 0.5, ease: "power2.out" }, 0.3);
+      tl.to(TITLE_SEL, { autoAlpha: 0, duration: 0.3, ease: "power1.in" }, 1.1);
+      tl.set(TITLE_SEL, { autoAlpha: 0 }, 1.4);
+
+      // ---- reusable per-scene reveal + Ken Burns + label ----
+      function scene(imgSel, labelSel, start, duration, panScale) {
+        const fade = 0.35;
+        const end = start + duration;
+        // scale: slow constant Ken Burns zoom across the whole visible span
+        tl.fromTo(imgSel, { scale: panScale[0] }, { scale: panScale[1], duration: duration, ease: "none" }, start);
+        // image visibility: quick fade in, hold, quick fade out, then a hard kill at the boundary
+        tl.fromTo(imgSel, { autoAlpha: 0 }, { autoAlpha: 1, duration: fade, ease: "power2.out" }, start);
+        tl.to(imgSel, { autoAlpha: 0, duration: fade, ease: "power1.in" }, end - fade);
+        tl.set(imgSel, { autoAlpha: 0 }, end);
+        // label: slide up + fade in shortly after the image starts, hold, fade with scene end
+        tl.from(labelSel, { autoAlpha: 0, y: 20, duration: 0.4, ease: "power2.out" }, start + 0.3);
+        tl.to(labelSel, { autoAlpha: 0, duration: fade, ease: "power1.in" }, end - fade);
+        tl.set(labelSel, { autoAlpha: 0 }, end);
+      }
+
+      scene("#img-dashboard", "#label-dashboard", 1.4, 2.2, [1.08, 1.0]);
+      scene("#img-assistant", "#label-assistant", 3.6, 2.0, [1.0, 1.06]);
+      scene("#img-topology", "#label-topology", 5.6, 2.0, [1.06, 1.0]);
+      scene("#img-diagnosis", "#label-diagnosis", 7.6, 2.0, [1.0, 1.06]);
+
+      // ---- outro (9.6 - 11.0): fades in and HOLDS — final frame is part of the animation ----
+      tl.from("#scene-outro .brand", { autoAlpha: 0, y: 16, duration: 0.5, ease: "power2.out" }, 9.8);
+      tl.from("#scene-outro .outro-note", { autoAlpha: 0, y: 12, duration: 0.5, ease: "power2.out" }, 10.0);
+
+      window.__timelines["product-tour"] = tl;
+    </script>
+  </body>
+</html>

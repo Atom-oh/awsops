@@ -64,6 +64,8 @@ export function useCanvas(draw: DrawFn, height = 500) {
     const ro = new ResizeObserver(resize);
     ro.observe(canvas.parentElement!);
 
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     let animId: number;
     function animate() {
       const w = canvas.width;
@@ -77,8 +79,11 @@ export function useCanvas(draw: DrawFn, height = 500) {
         mouse: mouseRef.current,
         dpr,
       });
-      animId = requestAnimationFrame(animate);
+      if (!reduceMotion) {
+        animId = requestAnimationFrame(animate);
+      }
     }
+    // Reduced motion: draw exactly one static frame instead of a permanent rAF loop.
     animId = requestAnimationFrame(animate);
 
     canvas.addEventListener('mousemove', handleMouseMove);

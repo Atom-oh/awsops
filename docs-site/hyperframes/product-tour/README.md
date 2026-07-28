@@ -1,0 +1,56 @@
+# AWSops product-tour (HyperFrames)
+
+Source for the docs-site landing hero video: `docs-site/static/video/product-tour.mp4` + `product-tour-poster.webp`.
+
+11s, 1280x720, no audio. Six beats: title → dashboard → AI assistant → topology → AI diagnosis → outro (holds on the final frame). Screenshots are copied from `docs-site/static/showcase/media/*.webp` (already privacy-redacted and SHA256-pinned there — this project only reads them, never edits them).
+
+## Why this exists as committed binaries
+
+The GitHub Pages build (`.github/workflows/deploy-guide.yml`) runs on Node 20 with no ffmpeg, and the HyperFrames CLI requires Node ≥22 + ffmpeg. CI cannot render this. The mp4/webp are committed static assets; re-render locally when the product UI changes enough to make the tour stale (roughly: a redesign of dashboard/assistant/topology/diagnosis, or a refresh of the underlying `static/showcase/media/*.webp` set).
+
+## Toolchain (one-time, no sudo)
+
+```bash
+# Node >=22 (this repo's default runner has Node 20)
+curl -fL -o /tmp/node22.tar.xz https://nodejs.org/dist/v22.18.0/node-v22.18.0-linux-arm64.tar.xz
+tar xf /tmp/node22.tar.xz -C /tmp
+mv /tmp/node-v22.18.0-linux-arm64 ~/.local/node22
+export PATH="$HOME/.local/node22/bin:$PATH"
+
+# ffmpeg/ffprobe static build (Playwright's bundled ffmpeg is VP8-only, no libx264/mp4)
+curl -fL -o /tmp/ffmpeg-static.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz
+tar xf /tmp/ffmpeg-static.tar.xz -C /tmp
+cp /tmp/ffmpeg-*-arm64-static/{ffmpeg,ffprobe} ~/.local/bin/
+
+# Chromium: reuse Playwright's cached build (HyperFrames' own installer has no arm64 headless shell)
+export HYPERFRAMES_BROWSER_PATH="$HOME/.cache/ms-playwright/chromium_headless_shell-1228/chrome-linux/headless_shell"
+# ^ adjust the version suffix to whatever `ls ~/.cache/ms-playwright` shows
+
+npx hyperframes@latest doctor --json | jq -e '.ok'
+```
+
+## Regenerate
+
+```bash
+cd docs-site/hyperframes/product-tour
+npx hyperframes@latest lint
+npx hyperframes@latest check
+npx hyperframes@latest snapshot . --at 0,0.7,1.39,2.5,3.6,5.5,7.6,9.6,10.9,11.0 -o /tmp/hf-snapshots --no-end
+# eyeball /tmp/hf-snapshots/contact-sheet-*.jpg, then:
+npx hyperframes@latest render --quality high --output ../../static/video/product-tour.mp4
+
+# the raw render is ~3.5MB; recompress to keep the landing page light (~600KB, budget ≤2MB)
+cd ../../static/video
+ffmpeg -y -i product-tour.mp4 -c:v libx264 -preset slow -crf 27 -pix_fmt yuv420p -movflags +faststart -an product-tour.compressed.mp4
+mv product-tour.compressed.mp4 product-tour.mp4
+ffmpeg -y -ss 2.0 -i product-tour.mp4 -frames:v 1 -update 1 poster.png
+ffmpeg -y -i poster.png -quality 85 product-tour-poster.webp
+rm poster.png
+ffprobe -v error -show_format product-tour.mp4   # confirm duration=11.0, size
+```
+
+## Notes
+
+- The `t=11.0` (exact `data-duration`) snapshot renders black — that's the snapshot tool sampling past the last real frame, not a defect. `t=10.999` (and the actual rendered video, fps-quantized before the boundary) holds the outro correctly. Verify with `ffmpeg -ss 10.9 -i product-tour.mp4 -frames:v 1 ...` after any re-render.
+- `.shot-frame` containers carry `data-layout-allow-overflow="true"` — the Ken Burns zoom intentionally overflows the rounded frame by design; this silences the (informational) layout audit for that specific choice.
+- Font is `Noto Sans CJK KR` via `src: local(...)` — it's installed system-wide on this box (`fc-list | grep -i "noto sans cjk"`). No network font fetch, so renders stay deterministic.
