@@ -287,7 +287,7 @@ export default function Sidebar({ onNavigate, className, persist = true }: { onN
       )}
     >
       {/* Lockup */}
-      <div className="mb-5 flex items-center gap-2.5">
+      <div className="mb-5 flex flex-wrap items-center gap-2.5">
         <AwsopsMark size={36} />
         <div className="min-w-0 flex-1">
           <div className="text-[15px] font-semibold leading-tight text-chrome-fg">AWSops</div>
