@@ -48,7 +48,7 @@ describe('isBlockedHost (ADR-011 blocklist)', () => {
     for (const host of ['localhost.', 'localhost..', 'foo.localhost', 'foo.localhost.', 'localhost.localdomain.']) {
       expect(isBlockedHost(host)).toBe(true);
     }
-    expect(() => assertEgressEndpointAllowed('https://localhost.:9090')).toThrow(/private\/metadata/);
+    expect(() => assertEgressEndpointAllowed('https://localhost.:9090')).toThrow(/always blocked/);
   });
 });
 
@@ -60,10 +60,25 @@ describe('assertEgressEndpointAllowed', () => {
     expect(() => assertEgressEndpointAllowed('not a url')).toThrow(/valid URL/);
   });
   it('throws on a private/metadata literal host unless allowPrivate', () => {
-    expect(() => assertEgressEndpointAllowed('https://169.254.169.254/latest/meta-data')).toThrow(/private\/metadata/);
+    expect(() => assertEgressEndpointAllowed('https://169.254.169.254/latest/meta-data')).toThrow(/always blocked/);
     expect(() => assertEgressEndpointAllowed('https://10.0.0.5:3000')).toThrow(/private/);
-    // opt-in permits it (the legitimate private-datasource case)
+    // opt-in permits RFC1918 private (the legitimate private-datasource case)
     expect(() => assertEgressEndpointAllowed('https://10.0.0.5:3000', { allowPrivate: true })).not.toThrow();
+  });
+  // PR #192 review M1: `isBlockedHost(...) && !opts.allowPrivate` alone let an opt-in account
+  // register the exact loopback/0.0.0.0 endpoints this guard exists to block. Loopback/metadata is
+  // never a legitimate "private datasource" opt-in target — allowPrivate must not open it.
+  it('allowPrivate does NOT bypass loopback/metadata/0.0.0.0 (always-blocked, not opt-in-able)', () => {
+    for (const u of [
+      'https://localhost:9090',
+      'https://localhost.:9090',
+      'https://foo.localhost:9090',
+      'https://0.0.0.0:9090',
+      'https://127.0.0.1:9090',
+      'https://169.254.169.254/latest/meta-data',
+    ]) {
+      expect(() => assertEgressEndpointAllowed(u, { allowPrivate: true })).toThrow(/always blocked/);
+    }
   });
   it('allows a public https endpoint', () => {
     expect(() => assertEgressEndpointAllowed('https://api.datadoghq.com/api/v1')).not.toThrow();

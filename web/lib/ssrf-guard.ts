@@ -1,10 +1,14 @@
 // web/lib/ssrf-guard.ts
-// ADR-039 §11 / ADR-011 — static SSRF host blocklist for egress integration REGISTRATION.
+// ADR-007 §6 (formerly ADR-011/ADR-039 §11 pre-consolidation — see ADR-MAPPING.md) — static SSRF
+// host blocklist for egress integration REGISTRATION.
 // v2 runs in-VPC (mgmt-vpc, near 169.254.169.254 + the internal ALB), so an admin-registered egress
 // endpoint pointing at a private/link-local/metadata address is the SSRF risk this guards.
 // NOTE: there is NO v1 code to mirror (src/lib/datasource-client.ts does not implement this); the
-// CIDRs are taken from ADR-011's decision. DNS-resolution-before-request + redirect:'manual' are the
-// CONNECTION-TIME defenses (P2-infra); this module is the registration-time literal-host/IP guard.
+// CIDRs are taken from that ADR's decision. DNS-resolution-before-request + redirect:'manual' are the
+// CONNECTION-TIME defenses (P2-infra); this module is the registration-time literal-host/IP guard,
+// now extended with a fixed-set literal-hostname-alias check (see isLoopbackHostname below) —
+// still not general DNS resolution, just a few known strings that are loopback without ever being
+// a literal IP.
 
 function ipv4Blocked(a: number, b: number): boolean {
   return (
@@ -44,10 +48,16 @@ function sixToFour(host: string): string | null {
 // leaves to connection-time in the connector Lambda) — so checking it here at registration time is
 // free of the latency/availability cost a DNS lookup from this route would add.
 const LOOPBACK_HOSTNAME_ALIASES = new Set([
-  'localhost',
+  // Debian/Ubuntu-style /etc/hosts defaults ('localhost' itself is handled by isLoopbackHostname's
+  // exact-match branch, not repeated here).
   'localhost.localdomain',
   'ip6-localhost',
   'ip6-loopback',
+  // RHEL/Amazon Linux-style /etc/hosts defaults.
+  'localhost4',
+  'localhost4.localdomain4',
+  'localhost6',
+  'localhost6.localdomain6',
 ]);
 
 // `new URL(...).hostname` preserves a trailing dot (WHATWG URL spec doesn't strip it), so
@@ -81,14 +91,22 @@ export function isBlockedHost(hostOrIp: string): boolean {
   return false;
 }
 
-/** Throw if a registered egress endpoint is unsafe: non-https, or a literal blocked host unless the
- *  per-account `allowPrivate` (ADR-011 allowPrivateDatasource) opt-in is set. */
+/** Throw if a registered egress endpoint is unsafe: non-https; a literal loopback/metadata/
+ *  link-local/multicast/unspecified/broadcast host (always blocked, `allowPrivate` cannot open this —
+ *  see isAlwaysBlockedHost); or, for RFC1918 private ranges, a literal blocked host unless the
+ *  per-account `allowPrivate` (ADR-007 §6 allowPrivateDatasource) opt-in is set.
+ *  isAlwaysBlockedHost is checked unconditionally FIRST: `isBlockedHost(...) && !opts.allowPrivate`
+ *  alone let an opt-in account register the exact loopback/0.0.0.0 endpoints this guard exists to
+ *  block — loopback is never a legitimate "private datasource" opt-in target the way RFC1918 is. */
 export function assertEgressEndpointAllowed(urlString: string, opts: { allowPrivate?: boolean } = {}): void {
   let url: URL;
   try { url = new URL(urlString); } catch { throw new Error('endpoint must be a valid URL'); }
   if (url.protocol !== 'https:') throw new Error('endpoint must use https');
+  if (isAlwaysBlockedHost(url.hostname)) {
+    throw new Error(`endpoint host ${url.hostname} is a loopback/metadata/link-local address (always blocked)`);
+  }
   if (isBlockedHost(url.hostname) && !opts.allowPrivate) {
-    throw new Error(`endpoint host ${url.hostname} is a private/metadata address; enable allowPrivateDatasource for this account to permit it`);
+    throw new Error(`endpoint host ${url.hostname} is a private address; enable allowPrivateDatasource for this account to permit it`);
   }
 }
 
