@@ -69,7 +69,7 @@ Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
 
 テーブル下部に **▶ Cost Calculation Basis / 비용 계산 근거** の折りたたみ可能なセクションがあります。`showBasis` のトグルで次をインラインに展開します:
 
-- **Fargate Pricing 表**（`ap-northeast-2`、On-Demand 基準）
+- **Fargate Pricing 表**（v1 例、us-east-1 単価 — リージョン表記の誤りをそのまま保持）
   - vCPU hourly rate: `$0.04048`
   - GB hourly rate: `$0.004445`
 - 計算例: 0.5 vCPU × 1 GB のタスク → `$0.593/day` に換算
