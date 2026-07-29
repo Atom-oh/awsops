@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 아카이브 수치 — v2 미적용
-이 페이지의 Fargate 단가(`$0.04048`/`$0.004445`)와 `data/config.json`의 `fargatePricing` 오버라이드는 v1 패턴입니다. v2는 `web/lib/inventory-derived.ts`의 현행 단가(`$0.04656`/`$0.00511`)를 사용하며 `data/config.json` 오버라이드는 존재하지 않습니다 — 이 페이지의 수치를 실제 비용 계산 근거로 사용하지 마세요.
+:::caution v1 아카이브 문서 — v2 미적용
+이 페이지 전체(가격표, 계산 공식, `data/config.json` `fargatePricing` 오버라이드 안내)는 v1 패턴입니다. v2는 `web/lib/inventory-derived.ts`/`web/lib/opencost-allocation.ts`의 현행 단가(`$0.04656`/`$0.00511`)를 사용하며 `data/config.json` 오버라이드는 존재하지 않습니다. 아래 가격표·공식·tip은 v1 전용이며 v2에는 적용되지 않습니다.
 :::
 
 ECS Fargate 태스크의 비용을 분석하는 페이지입니다. Fargate 가격과 CloudWatch Container Insights 메트릭을 기반으로 비용을 계산합니다.
@@ -44,7 +44,7 @@ ECS Fargate 태스크의 비용을 분석하는 페이지입니다. Fargate 가�
 
 ## 비용 계산 방식
 
-### Fargate 가격 (ap-northeast-2)
+### Fargate 가격 (v1 예시 — 리전 표기와 무관하게 실제 값은 us-east-1 단가)
 | 리소스 | 단가 | 과금 단위 |
 |--------|------|-----------|
 | vCPU | $0.04048 | per vCPU-hour |
@@ -75,7 +75,7 @@ Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
 - 예시 계산: 0.5 vCPU × 1 GB 태스크 → `$0.593/day` 환산
 - Spot, ARM(Graviton) 변동분에 대한 참고 노트
 
-가격 값은 `data/config.json`의 `fargatePricing`으로 오버라이드 가능합니다.
+가격 값은 v1에서 `data/config.json`의 `fargatePricing`으로 오버라이드할 수 있었습니다 — v2에는 이 메커니즘이 없습니다.
 
 ## EKS Pod Cost 포인터 (Phase 2)
 
@@ -109,8 +109,8 @@ EC2 타입 태스크는 "N/A (EC2)"로 표시됩니다. EC2 비용은 노드 비
 CPU vs Memory 차트에서 한쪽이 크게 높으면 태스크 정의 조정을 검토하세요. Fargate는 CPU와 Memory 조합이 제한되어 있습니다.
 :::
 
-:::tip 가격 설정 변경
-`data/config.json`의 `fargatePricing` 필드에서 리전별 가격을 변경할 수 있습니다.
+:::tip 가격 설정 변경 (v1 전용)
+`data/config.json`의 `fargatePricing` 필드는 v1의 오버라이드 메커니즘입니다 — v2에는 존재하지 않습니다.
 :::
 
 :::info AI 분석

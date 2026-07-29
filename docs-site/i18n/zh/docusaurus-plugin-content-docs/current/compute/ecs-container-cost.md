@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 归档数值 — 不适用于 v2
-本页的 Fargate 单价（`$0.04048`/`$0.004445`）和 `data/config.json` 的 `fargatePricing` 覆盖是 v1 模式。v2 使用 `web/lib/inventory-derived.ts` 中的现行单价（`$0.04656`/`$0.00511`），且不存在 `data/config.json` 覆盖机制 — 请不要将本页数值作为实际成本计算依据。
+:::caution v1 归档文档 — 不适用于 v2
+本页全部内容（价格表、计算公式、`data/config.json` `fargatePricing` 覆盖说明）都是 v1 模式。v2 使用 `web/lib/inventory-derived.ts` / `web/lib/opencost-allocation.ts` 中的现行单价（`$0.04656`/`$0.00511`），且不存在 `data/config.json` 覆盖机制。以下价格表、公式和提示均仅适用于 v1，不适用于 v2。
 :::
 
 用于分析 ECS Fargate 任务成本的页面。基于 Fargate 价格和 CloudWatch Container Insights 指标计算成本。
@@ -44,7 +44,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ## 成本计算方式
 
-### Fargate 价格（ap-northeast-2）
+### Fargate 价格（v1 示例 — 无论区域标注如何，实际值均为 us-east-1 单价）
 | 资源 | 单价 | 计费单位 |
 |--------|------|-----------|
 | vCPU | $0.04048 | per vCPU-hour |
@@ -75,7 +75,7 @@ Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
 - 示例计算：0.5 vCPU × 1 GB 任务 → 换算为 `$0.593/day`
 - 关于 Spot、ARM（Graviton）价格差异的参考说明
 
-价格值可通过 `data/config.json` 中的 `fargatePricing` 覆盖。
+在 v1 中，价格值可通过 `data/config.json` 中的 `fargatePricing` 覆盖 — v2 没有这一机制。
 
 ## EKS Pod Cost 指引（Phase 2）
 
@@ -109,8 +109,8 @@ EC2 类型任务会显示为 "N/A (EC2)"。EC2 成本需要分摊节点成本，
 如果在 CPU vs Memory 图表中某一方明显偏高，请考虑调整任务定义。Fargate 的 CPU 与 Memory 组合是受限的。
 :::
 
-:::tip 更改价格设置
-可以在 `data/config.json` 的 `fargatePricing` 字段中按区域修改价格。
+:::tip 更改价格设置（仅限 v1）
+`data/config.json` 的 `fargatePricing` 字段是 v1 的覆盖机制 — v2 中不存在。
 :::
 
 :::info AI 分析

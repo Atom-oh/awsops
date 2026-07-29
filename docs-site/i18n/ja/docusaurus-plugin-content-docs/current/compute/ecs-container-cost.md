@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 アーカイブ数値 — v2 には適用されません
-このページの Fargate 単価（`$0.04048`/`$0.004445`）と `data/config.json` の `fargatePricing` オーバーライドは v1 のパターンです。v2 は `web/lib/inventory-derived.ts` の現行単価（`$0.04656`/`$0.00511`）を使用し、`data/config.json` オーバーライドは存在しません — このページの数値を実際のコスト計算の根拠として使用しないでください。
+:::caution v1 アーカイブ文書 — v2 には適用されません
+このページ全体（価格表、計算式、`data/config.json` `fargatePricing` オーバーライドの案内）は v1 のパターンです。v2 は `web/lib/inventory-derived.ts` / `web/lib/opencost-allocation.ts` の現行単価（`$0.04656`/`$0.00511`）を使用し、`data/config.json` オーバーライドは存在しません。以下の価格表・計算式・tip は v1 専用で、v2 には適用されません。
 :::
 
 ECS Fargate タスクのコストを分析するページです。Fargate の価格と CloudWatch Container Insights メトリクスに基づいてコストを計算します。
@@ -44,7 +44,7 @@ ECS Fargate タスクのコストを分析するページです。Fargate の価
 
 ## コスト計算方式
 
-### Fargate 価格（ap-northeast-2）
+### Fargate 価格（v1 例 — リージョン表記に関わらず実際の値は us-east-1 単価）
 | リソース | 単価 | 課金単位 |
 |--------|------|-----------|
 | vCPU | $0.04048 | per vCPU-hour |
@@ -75,7 +75,7 @@ Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
 - 計算例: 0.5 vCPU × 1 GB のタスク → `$0.593/day` に換算
 - Spot、ARM (Graviton) の変動分に関する参考ノート
 
-価格の値は `data/config.json` の `fargatePricing` でオーバーライドできます。
+価格の値は v1 では `data/config.json` の `fargatePricing` でオーバーライドできました — v2 にはこの仕組みはありません。
 
 ## EKS Pod Cost へのポインター（Phase 2）
 
@@ -109,8 +109,8 @@ EC2 タイプのタスクは "N/A (EC2)" と表示されます。EC2 のコス�
 CPU vs Memory チャートで一方が大きく高い場合は、タスク定義の調整を検討してください。Fargate は CPU と Memory の組み合わせが制限されています。
 :::
 
-:::tip 価格設定の変更
-`data/config.json` の `fargatePricing` フィールドでリージョンごとの価格を変更できます。
+:::tip 価格設定の変更（v1 専用）
+`data/config.json` の `fargatePricing` フィールドは v1 のオーバーライド機構です — v2 には存在しません。
 :::
 
 :::info AI 分析

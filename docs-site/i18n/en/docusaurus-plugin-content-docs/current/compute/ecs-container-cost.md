@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 archive figures — not applicable to v2
-This page's Fargate rates (`$0.04048`/`$0.004445`) and the `data/config.json` `fargatePricing` override are a v1 pattern. v2 uses the current rates in `web/lib/inventory-derived.ts` (`$0.04656`/`$0.00511`), and no `data/config.json` override exists — do not use this page's figures as an actual cost basis.
+:::caution v1 archive — not applicable to v2
+This entire page (pricing table, calculation formula, `data/config.json` `fargatePricing` override guidance) is a v1 pattern. v2 uses the current rates in `web/lib/inventory-derived.ts` / `web/lib/opencost-allocation.ts` (`$0.04656`/`$0.00511`), and no `data/config.json` override exists. The pricing table, formula, and tip below are v1-only and do not apply to v2.
 :::
 
 A page for analyzing the cost of ECS Fargate tasks. Costs are calculated based on Fargate pricing and CloudWatch Container Insights metrics.
@@ -44,7 +44,7 @@ Stacked bar chart comparing CPU cost vs Memory cost per service
 
 ## Cost Calculation Method
 
-### Fargate Pricing (ap-northeast-2)
+### Fargate Pricing (v1 example — regardless of the region label, the actual values are us-east-1 rates)
 | Resource | Rate | Billing Unit |
 |----------|------|--------------|
 | vCPU | $0.04048 | per vCPU-hour |
@@ -91,8 +91,8 @@ EC2 type tasks are displayed as "N/A (EC2)". EC2 costs require node cost distrib
 If one side is significantly higher in the CPU vs Memory chart, consider adjusting the task definition. Fargate has limited CPU and Memory combinations.
 :::
 
-:::tip Changing Price Settings
-You can change region-specific pricing in the `fargatePricing` field of `data/config.json`.
+:::tip Changing Price Settings (v1-only)
+The `fargatePricing` field of `data/config.json` was v1's override mechanism — it does not exist in v2.
 :::
 
 :::info AI Analysis
