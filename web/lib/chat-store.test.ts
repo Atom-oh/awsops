@@ -21,6 +21,25 @@ describe('chat-store', () => {
     expect(upsertParams).toEqual(['t1', 'u1', '제목후보', 's'.repeat(36)]);
   });
 
+  // PR #200 review M1: a legacy thread's session_id (raw client UUID, predates the P3-1 fix)
+  // gets re-derived under the caller's sub the first time it's resumed. Without rewriting the
+  // stored value, every future resume re-derives from the same stale legacy id, permanently
+  // diverging from the runtime session id. The upsert must persist whatever sessionId route.ts
+  // actually used, every time — not just on first insert.
+  it('recordExchange rewrites session_id on every call, so a re-derived legacy id sticks', async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: 't1' }] });
+    query.mockResolvedValue({ rows: [] });
+    const { recordExchange } = await import('./chat-store');
+    const derived = `awsops-u1-${'a'.repeat(32)}`;
+    await recordExchange({
+      threadId: 't1', userSub: 'u1', sessionId: derived, promptTitle: 't',
+      userContent: 'q', assistantContent: 'a',
+    });
+    const [upsertSql, upsertParams] = query.mock.calls[0];
+    expect(String(upsertSql)).toContain('session_id = EXCLUDED.session_id');
+    expect(upsertParams).toEqual(['t1', 'u1', 't', derived]);
+  });
+
   it('recordExchange skips message inserts when the thread upsert returns no row (foreign thread)', async () => {
     query.mockResolvedValueOnce({ rows: [] }); // owner mismatch → no RETURNING row
     const { recordExchange } = await import('./chat-store');

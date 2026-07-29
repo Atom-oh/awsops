@@ -18,10 +18,14 @@ export async function recordExchange(x: ExchangeInput): Promise<void> {
   try {
     const pool = getPool();
     // Upsert the thread; the WHERE guard means a foreign threadId updates nothing → no RETURNING row.
+    // session_id is rewritten on every exchange (not just insert): a legacy thread's raw-UUID
+    // session_id (pre-P3-1) gets re-derived under the caller's sub on first resume, and this
+    // upsert then persists that composite value so subsequent resumes hit the OWN_PREFIX fast
+    // path in route.ts instead of diverging from the runtime session id forever (PR #200 review M1).
     const up = await pool.query(
       `INSERT INTO chat_threads (id, user_sub, title, session_id)
        VALUES ($1, $2, $3, $4)
-       ON CONFLICT (id) DO UPDATE SET updated_at = now()
+       ON CONFLICT (id) DO UPDATE SET updated_at = now(), session_id = EXCLUDED.session_id
        WHERE chat_threads.user_sub = EXCLUDED.user_sub
        RETURNING id`,
       [x.threadId, x.userSub, x.promptTitle, x.sessionId],
