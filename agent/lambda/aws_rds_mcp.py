@@ -4,6 +4,7 @@ AWS RDS MCP 람다 - MySQL/PostgreSQL 인스턴스 관리, RDS Data API를 통�
 """
 import json
 from cross_account import get_client, get_role_arn, resolve_tool_name
+from sql_readonly_guard import assert_read_only
 
 
 def lambda_handler(event, context):
@@ -76,11 +77,16 @@ def lambda_handler(event, context):
         # Execute read-only SQL via RDS Data API / RDS Data API를 통한 읽기 전용 SQL 실행
         elif t == "execute_sql":
             rds_data = get_client('rds-data', region, role_arn)
-            # Block write operations (read-only enforcement) / 쓰기 작업 차단 (읽기 전용 강제)
+            # pentest-remediation P2-4: the old guard was `kw in sql.lower().split()` — whitespace-only
+            # tokenization, so a keyword not surrounded by spaces (e.g. DROP/*x*/TABLE) never produced
+            # the bare token "drop" and sailed through. Also missing UPDATE was covered but GRANT/
+            # REVOKE/SET/CALL/COPY/MERGE were not, and there was no stacked-statement or first-token
+            # read-verb check. Shares the same comment/string-stripping guard clickhouse_mcp.py uses.
             sql = args["sql"].strip()
-            for kw in ["drop", "delete", "update", "insert", "alter", "create", "truncate"]:
-                if kw in sql.lower().split():
-                    return err("Only SELECT queries allowed")
+            try:
+                assert_read_only(sql)
+            except ValueError as e:
+                return err(str(e))
             # Execute SQL statement via Data API / Data API로 SQL 문 실행
             resp = rds_data.execute_statement(
                 resourceArn=args["resource_arn"], secretArn=args["secret_arn"],

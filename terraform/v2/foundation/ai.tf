@@ -659,6 +659,17 @@ data "archive_file" "agent" {
       filename = "datasource_http.py"
     }
   }
+  # pentest-remediation P2-4: clickhouse_mcp.py and aws_rds_mcp.py share the read-only SQL guard in
+  # `sql_readonly_guard.py` (strip comments/strings, require a read-verb-leading single statement,
+  # reject write/admin keywords). Bundle it into ONLY those two ZIPs — same ImportModuleError risk as
+  # datasource_http above.
+  dynamic "source" {
+    for_each = contains(["clickhouse_mcp.py", "aws_rds_mcp.py"], each.value.file) ? [1] : []
+    content {
+      content  = file("${path.module}/../../../agent/lambda/sql_readonly_guard.py")
+      filename = "sql_readonly_guard.py"
+    }
+  }
 }
 
 resource "aws_lambda_function" "agent" {
