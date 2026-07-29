@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
 import { enqueueJob, EnqueueDeliveryError } from '@/lib/jobs';
+import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,8 +18,11 @@ export async function POST(req: Request) {
   }
   let body: any;
   try {
-    body = await req.json();
-  } catch {
+    // pentest-remediation P0-2 (Finding 8): raw req.json() had no size cap — a chunked request
+    // with no Content-Length bypassed middleware.ts's header-only check entirely.
+    body = await readJsonBounded(req, 65_536);
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) return NextResponse.json({ message: 'request body too large' }, { status: 413 });
     return NextResponse.json({ message: 'invalid JSON body' }, { status: 400 });
   }
   const benchmark = body?.benchmark;
@@ -47,7 +51,7 @@ export async function POST(req: Request) {
   const runId = ins.rows[0].id;
 
   try {
-    const { job_id } = await enqueueJob('compliance', { benchmark, run_id: runId, requested_by: requestedBy, scope }, {});
+    const { job_id } = await enqueueJob('compliance', { benchmark, run_id: runId, requested_by: requestedBy, scope }, { requestedBy });
     // Link the run 1:1 to its worker job (migration documents worker_job_id → worker_jobs).
     await getPool().query(`UPDATE compliance_runs SET worker_job_id = $1 WHERE id = $2`, [job_id, runId]);
     return NextResponse.json({ run_id: runId, job_id }, { status: 202 });

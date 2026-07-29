@@ -17,10 +17,10 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request) {
   const user = await verifyUser(req.headers.get('cookie'));
   if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
-  const reports = await listReports(50);
   // can_edit per report: compute isAdmin ONCE (async + SSM-backed), then compare requested_by.
   const admin = await isAdmin(user);
-  const me = user.email ?? user.sub;
+  const me = user.email || user.sub; // pentest-remediation P2-1: match canMutateReport's `||`
+  const reports = await listReports(50, admin ? null : me);
   return NextResponse.json({
     reports: reports.map((r) => ({ ...r, can_edit: admin || r.requested_by === me })),
   });

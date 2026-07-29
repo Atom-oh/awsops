@@ -13,6 +13,10 @@ export interface EnqueueOpts {
   dryRun?: boolean;
   // Caller-supplied job id (so the BFF can link worker_job_id before the job runs).
   jobId?: string;
+  // Server-derived requester identity (user.email || user.sub) — NEVER taken from the client
+  // payload. Null for internal-only enqueues (scheduler dispatcher, reaper) with no end-user
+  // principal; those rows are admin-only on read (see app/api/jobs/route.ts GET).
+  requestedBy?: string | null;
 }
 
 export interface EnqueueResult {
@@ -62,11 +66,11 @@ export async function enqueueJob(
   let jobId = '';
   let status = 'queued';
   const ins = await pool.query(
-    `INSERT INTO worker_jobs (job_id, type, payload, dry_run, idempotency_key, status)
-     VALUES ($1, $2, $3::jsonb, $4, $5, 'queued')
+    `INSERT INTO worker_jobs (job_id, type, payload, dry_run, idempotency_key, requested_by, status)
+     VALUES ($1, $2, $3::jsonb, $4, $5, $6, 'queued')
      ON CONFLICT (idempotency_key) DO NOTHING
      RETURNING job_id`,
-    [opts.jobId || randomUUID(), type, payloadJson, dryRun, idempotencyKey],
+    [opts.jobId || randomUUID(), type, payloadJson, dryRun, idempotencyKey, opts.requestedBy ?? null],
   );
   if (ins.rows.length > 0) {
     jobId = ins.rows[0].job_id;

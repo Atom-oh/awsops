@@ -29,6 +29,18 @@ describe('diagnosis queries', () => {
     const rows = await listReports(10);
     expect(rows[0].id).toBe(1);
   });
+  // pentest-remediation P2-1 (Finding 5): listReports had no per-user filter at all — every
+  // authenticated user saw every report. `owner=null` (admin) must skip the predicate.
+  it('listReports scopes by owner when given, and passes null through unfiltered for admins', async () => {
+    await listReports(10, 'u@x.io');
+    let [sql, args] = query.mock.calls.at(-1) as [string, unknown[]];
+    expect(sql).toContain('$2::text IS NULL OR r.requested_by = $2');
+    expect(args).toEqual([10, 'u@x.io']);
+
+    await listReports(10, null);
+    [sql, args] = query.mock.calls.at(-1) as [string, unknown[]];
+    expect(args).toEqual([10, null]);
+  });
   it('getReport returns one or null', async () => {
     const r = await getReport(1);
     expect(r?.tier).toBe('mid');
@@ -113,5 +125,13 @@ describe('diagnosis queries', () => {
     expect(await canMutateReport({ email: 'other@x.io', sub: 'o' } as any, { requested_by: 'u@x.io' } as any)).toBe(false);
     (isAdmin as any).mockResolvedValue(true);
     expect(await canMutateReport({ email: 'admin@x.io', sub: 'a' } as any, { requested_by: 'u@x.io' } as any)).toBe(true);
+  });
+  // pentest-remediation P2-1: createReport/diagnosis-route write requested_by via `user.email ||
+  // user.sub` (empty-string email falls back to sub). canMutateReport used to compare with `??`,
+  // which does NOT treat '' as absent — an owner with an empty-string email claim would fail this
+  // check against their own report. Must use the same `||` on both sides of the comparison.
+  it('canMutateReport: empty-string email falls back to sub (matches how requested_by is written)', async () => {
+    (isAdmin as any).mockResolvedValue(false);
+    expect(await canMutateReport({ email: '', sub: 'u' } as any, { requested_by: 'u' } as any)).toBe(true);
   });
 });

@@ -51,3 +51,16 @@ describe('enqueueJob — scheduler-provenance hardening', () => {
     expect(JSON.parse(insertParams[2] as string)).toEqual({ tier: 'deep' });
   });
 });
+
+// pentest-remediation P0-1: worker_jobs now carries the server-derived requester identity so
+// GET /api/jobs and GET /api/jobs/[id] can enforce ownership instead of exposing every job.
+describe('enqueueJob — requested_by persistence', () => {
+  it('persists opts.requestedBy into the INSERT', async () => {
+    await enqueueJob('noop', {}, { jobId: 'j3', requestedBy: 'u@x.io' });
+    expect(insertParams).toContain('u@x.io');
+  });
+  it('defaults to null when requestedBy is omitted (internal-only enqueues)', async () => {
+    await enqueueJob('noop', {}, { jobId: 'j4' });
+    expect(insertParams.at(-1)).toBeNull();
+  });
+});

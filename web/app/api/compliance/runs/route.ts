@@ -1,19 +1,28 @@
 import { NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
+import { isAdmin } from '@/lib/admin';
 import { getPool } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
+// pentest-remediation P2-1: no requested_by filter — any authenticated user could list every
+// account's CIS benchmark results (full security-posture data) regardless of who ran the scan.
 export async function GET(req: Request) {
-  if (!(await verifyUser(req.headers.get('cookie')))) {
+  const user = await verifyUser(req.headers.get('cookie'));
+  if (!user) {
     return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
   }
   try {
-    const r = await getPool().query(
-      `SELECT id, worker_job_id, benchmark, status, requested_by, account, pass_rate,
-              total_controls, ok, alarm, info, skip, error, error_message, started_at, finished_at
-       FROM compliance_runs ORDER BY started_at DESC LIMIT 50`,
-    );
+    const admin = await isAdmin(user);
+    const me = user.email || user.sub;
+    const cols = `id, worker_job_id, benchmark, status, requested_by, account, pass_rate,
+              total_controls, ok, alarm, info, skip, error, error_message, started_at, finished_at`;
+    const r = admin
+      ? await getPool().query(`SELECT ${cols} FROM compliance_runs ORDER BY started_at DESC LIMIT 50`)
+      : await getPool().query(
+          `SELECT ${cols} FROM compliance_runs WHERE requested_by = $1 ORDER BY started_at DESC LIMIT 50`,
+          [me],
+        );
     return NextResponse.json({ runs: r.rows });
   } catch (e) {
     return NextResponse.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
