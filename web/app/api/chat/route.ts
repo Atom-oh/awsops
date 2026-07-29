@@ -93,7 +93,20 @@ export async function POST(request: Request) {
   // UI language (not question-language guessing). Absent/invalid ⇒ 'ko' (legacy behavior).
   const lang = normalizeChatLang(body.lang);
 
-  const sessionId = (body.sessionId && body.sessionId.length >= 33) ? body.sessionId : `awsops-${user.sub}-000000000000000000000000`;
+  // pentest-remediation P3-1: the client-supplied sessionId used to flow straight into the AgentCore
+  // Memory runtimeSessionId with only a length check — a client that knew (or guessed) another
+  // user's sub could attach to that user's memory session. (Finding 6 itself, which reasoned from
+  // this same code path, was a false positive: chat_threads/chat_messages are correctly scoped by
+  // user_sub everywhere in web/lib/chat-store.ts, so no thread/message data crossed principals — but
+  // the underlying sessionId-trust gap was real.) Namespace under the CALLER's own sub unconditionally
+  // — the client-supplied value only ever picks which of THIS user's sessions to use (preserves the
+  // per-browser-tab isolation from useChat.ts's crypto.randomUUID()), it can never name another
+  // user's. Deterministic per input, so repeated requests with the same client value keep the same
+  // composite id (session continuity across turns is preserved).
+  const clientEntropy = typeof body.sessionId === 'string' && body.sessionId.length >= 8
+    ? body.sessionId.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64)
+    : '000000000000000000000000';
+  const sessionId = `awsops-${user.sub}-${clientEntropy}`;
 
   // v1 priority-1 Code Interpreter route (ADR-004 §5 Accepted; v1 route.ts:1000-1035): explicit
   // code/calculation intents generate Python via Bedrock, run it in the provisioned AgentCore

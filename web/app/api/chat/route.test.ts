@@ -955,3 +955,60 @@ describe('typewriter delay and progressive status events', () => {
   });
 });
 
+// pentest-remediation P3-1: the client-supplied sessionId used to flow straight into the AgentCore
+// Memory runtimeSessionId with only a length check — a client that knew (or guessed) another user's
+// sub could attach to that user's memory session. (Finding 6 itself was a false positive — see
+// web/lib/chat-store.test.ts / lib/chat-store.ts, correctly scoped by user_sub everywhere — but this
+// sessionId-trust gap was real and separate.) The runtimeSessionId actually used must always be
+// namespaced under the CALLER's own sub, never the raw client value.
+describe('chat sessionId — bound to the caller, never client-trusted', () => {
+  beforeEach(() => {
+    pickGateway.mockReturnValue('ops');
+    resolveAgent.mockReturnValue({ tier: 'builtin', gateway: 'ops', skill: 'ops', agentName: 'ops', skillHashes: [] });
+    invokeAgent.mockResolvedValue('ok');
+  });
+
+  it('never forwards the raw client-supplied sessionId as the runtime session id', async () => {
+    verifyUser.mockResolvedValue({ sub: 'victim-sub' });
+    const { POST } = await import('./route');
+    // An attacker who somehow obtained another principal's sessionId string cannot make the
+    // server use it verbatim — it must always be re-namespaced under the CALLER's own sub.
+    const smuggled = 'awsops-someone-elses-sub-000000000000000000000000';
+    await readStream(await POST(req({ prompt: 'hi', sessionId: smuggled })));
+    const used = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId as string;
+    expect(used).not.toBe(smuggled);
+    expect(used.startsWith('awsops-victim-sub-')).toBe(true);
+  });
+
+  it('is deterministic per client value (session continuity across turns for the same tab)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u-1' });
+    const { POST } = await import('./route');
+    const clientSid = 'abc123-def456-tab-uuid-0000000000000000';
+    await readStream(await POST(req({ prompt: 'turn 1', sessionId: clientSid })));
+    const first = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId;
+    await readStream(await POST(req({ prompt: 'turn 2', sessionId: clientSid })));
+    const second = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId;
+    expect(first).toBe(second);
+  });
+
+  it('two different users supplying the SAME client sessionId never collide', async () => {
+    const { POST } = await import('./route');
+    const sharedClientSid = 'guessable-or-leaked-session-id-000000000';
+    verifyUser.mockResolvedValue({ sub: 'user-a' });
+    await readStream(await POST(req({ prompt: 'hi', sessionId: sharedClientSid })));
+    const a = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId;
+    verifyUser.mockResolvedValue({ sub: 'user-b' });
+    await readStream(await POST(req({ prompt: 'hi', sessionId: sharedClientSid })));
+    const b = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId;
+    expect(a).not.toBe(b);
+  });
+
+  it('falls back to the deterministic per-user default when sessionId is absent/too short', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u-2' });
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'hi' })));
+    const used = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId as string;
+    expect(used).toBe('awsops-u-2-000000000000000000000000');
+  });
+});
+
