@@ -28,6 +28,18 @@ describe('isBlockedHost (ADR-011 blocklist)', () => {
     expect(isBlockedHost('grafana.example.com')).toBe(false);
     expect(isBlockedHost('api.datadoghq.com')).toBe(false);
   });
+
+  // 2026-07-21 pentest: `localhost` isn't a literal IP, so the checks above let it fall through as
+  // a "non-literal hostname" — 337 integrations/datasources rows got registered with
+  // `http://localhost:...` endpoints before this was fixed. `0.0.0.0` was a parallel gap: it's a
+  // literal IPv4, but ipv4Blocked() never checked for it (only isAlwaysBlockedHost did).
+  it('blocks the localhost hostname aliases and 0.0.0.0/8', () => {
+    for (const host of ['localhost', 'LOCALHOST', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback']) {
+      expect(isBlockedHost(host)).toBe(true);
+    }
+    expect(isBlockedHost('0.0.0.0')).toBe(true);
+    expect(isBlockedHost('0.1.2.3')).toBe(true);
+  });
 });
 
 describe('assertEgressEndpointAllowed', () => {
@@ -100,5 +112,12 @@ describe('assertDatasourceEndpointAllowed (datasource — private allowed, alway
     }
     expect(isAlwaysBlockedHost('0.0.0.0')).toBe(true);
     expect(isAlwaysBlockedHost('::')).toBe(true);
+  });
+
+  it('blocks the localhost hostname aliases (registration-time, not just literal IPs)', () => {
+    for (const host of ['localhost', 'LOCALHOST', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback']) {
+      expect(isAlwaysBlockedHost(host)).toBe(true);
+    }
+    expect(() => assertDatasourceEndpointAllowed('http://localhost:9090')).toThrow();
   });
 });

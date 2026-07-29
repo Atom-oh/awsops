@@ -12,7 +12,8 @@ function ipv4Blocked(a: number, b: number): boolean {
     (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12
     (a === 192 && b === 168) ||       // 192.168.0.0/16
     (a === 169 && b === 254) ||       // 169.254.0.0/16 (incl. 169.254.169.254 metadata)
-    a === 127                          // 127.0.0.0/8 loopback
+    a === 127 ||                       // 127.0.0.0/8 loopback
+    a === 0                            // 0.0.0.0/8 unspecified — routes to loopback on Linux
   );
 }
 
@@ -34,10 +35,30 @@ function sixToFour(host: string): string | null {
   return `${(h1 >> 8) & 255}.${h1 & 255}.${(h2 >> 8) & 255}.${h2 & 255}`;
 }
 
+// Non-IP hostname aliases that resolve to loopback on virtually every host (via /etc/hosts or the
+// resolver's own built-in defaults) without ever being a literal IP the parseIpv4/IPv6 checks above
+// would catch. A 2026-07-21 registration-endpoint pentest planted 337 `integrations`/`datasources`
+// rows with endpoints like `http://localhost:9090` — isBlockedHost/isAlwaysBlockedHost only parsed
+// literal IPs, so the plain string "localhost" fell through as a "non-literal hostname" and was
+// accepted. This is a fixed, finite set (not general DNS resolution, which ADR-011 deliberately
+// leaves to connection-time in the connector Lambda) — so checking it here at registration time is
+// free of the latency/availability cost a DNS lookup from this route would add.
+const LOOPBACK_HOSTNAME_ALIASES = new Set([
+  'localhost',
+  'localhost.localdomain',
+  'ip6-localhost',
+  'ip6-loopback',
+]);
+
+function isLoopbackHostname(host: string): boolean {
+  return LOOPBACK_HOSTNAME_ALIASES.has(host);
+}
+
 /** True for a LITERAL private/link-local/loopback/metadata IP (v4 or v6). Non-literal hostnames → false
  *  (their resolution is deferred to connection time, P2-infra). */
 export function isBlockedHost(hostOrIp: string): boolean {
   const host = hostOrIp.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  if (isLoopbackHostname(host)) return true;
   const v4 = parseIpv4(host);
   if (v4) return ipv4Blocked(v4[0], v4[1]);
   if (host.includes(':')) {
@@ -71,6 +92,7 @@ export function assertEgressEndpointAllowed(urlString: string, opts: { allowPriv
  *  (in-cluster datasources are the intended target); the metadata IPv6 fd00:ec2::254 IS blocked. */
 export function isAlwaysBlockedHost(hostOrIp: string): boolean {
   const host = hostOrIp.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  if (isLoopbackHostname(host)) return true;
   const v4 = parseIpv4(host);
   if (v4) {
     const [a, b] = v4;
