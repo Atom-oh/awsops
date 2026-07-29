@@ -146,18 +146,18 @@ ADR-019：额外的 PDF 库（Puppeteer 等）会显著增大 Next.js 打包体�
 ## 直接调用 API
 
 ```bash
-# 진단 시작
+# 开始诊断
 curl -X POST /awsops/api/report \
   -H 'Content-Type: application/json' \
   -d '{"action":"generate","lang":"ko"}'
 
-# 진행 상태 확인
+# 查看进度
 curl '/awsops/api/report?action=status&id=<reportId>'
 
-# 목록 조회 (페이지네이션)
+# 查询列表 (分页)
 curl '/awsops/api/report?action=list&page=1&pageSize=5'
 
-# 스케줄 변경
+# 更改调度
 curl -X POST /awsops/api/report \
   -H 'Content-Type: application/json' \
   -d '{"action":"set-schedule","schedule":{"enabled":true,"frequency":"weekly","dayOfWeek":1,"hour":6,"lang":"ko"}}'

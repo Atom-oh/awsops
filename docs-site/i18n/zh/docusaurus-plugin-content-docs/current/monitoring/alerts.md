@@ -50,12 +50,12 @@ description: 接收 CloudWatch / Alertmanager / Grafana Webhook、告警关联�
 共享密钥保存在 `data/config.json` 的 `alertWebhookSecret` 中。发送方必须使用 HMAC-SHA256 对 raw body 进行签名，并通过 `X-Signature-256: sha256=<hex>` 头发送。
 
 ```bash
-# Alertmanager webhook_configs 예시
+# Alertmanager webhook_configs 示例
 - url: https://awsops.example.com/awsops/api/alert-webhook
   http_config:
     authorization:
       type: HMAC
-      credentials: "<공유-시크릿>"
+      credentials: "<共享密钥>"
 ```
 
 ### GET /awsops/api/alert-webhook
@@ -147,7 +147,7 @@ description: 接收 CloudWatch / Alertmanager / Grafana Webhook、告警关联�
       "matcher": { "service": "batch-job", "alertname": "HighCPU" },
       "startsAt": "2026-04-22T00:00:00Z",
       "endsAt":   "2026-04-22T06:00:00Z",
-      "reason": "야간 배치 윈도우"
+      "reason": "夜间批处理窗口"
     }
   ]
 }

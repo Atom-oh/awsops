@@ -11,12 +11,12 @@ AWSops の Kubernetes ダッシュボード（`/k8s/*`）は、Steampipe の `ku
 ## 認証の構造
 
 ```
-EC2 인스턴스 역할 (IAM Role)
+EC2 インスタンスロール (IAM Role)
   → kubeconfig (aws eks update-kubeconfig)
     → EKS API Server
-      → Access Entry 또는 aws-auth ConfigMap 검증
-        → Kubernetes API 접근 허용
-          → Steampipe kubernetes 플러그인 → 대시보드 표시
+      → Access Entry または aws-auth ConfigMap で検証
+        → Kubernetes API アクセスを許可
+          → Steampipe kubernetes プラグイン → ダッシュボード表示
 ```
 
 ## 事前確認
@@ -26,10 +26,10 @@ EC2 인스턴스 역할 (IAM Role)
 AWSops EC2 に SSH 接続後、実行します:
 
 ```bash
-# EC2 인스턴스 역할 ARN 확인
+# EC2 インスタンスロール ARN の確認
 aws sts get-caller-identity --query "Arn" --output text
 
-# 출력 예시: arn:aws:sts::123456789012:assumed-role/AwsopsEc2Role/i-0abc123
+# 出力例: arn:aws:sts::123456789012:assumed-role/AwsopsEc2Role/i-0abc123
 # → IAM Role ARN: arn:aws:iam::123456789012:role/AwsopsEc2Role
 ```
 
@@ -102,17 +102,17 @@ connection "kubernetes" {
 }
 EOF
 
-# Steampipe 서비스 재시작
+# Steampipe サービスの再起動
 sudo systemctl restart steampipe
 ```
 
 ### Step 5: 接続テスト
 
 ```bash
-# kubectl 테스트
+# kubectl テスト
 kubectl get nodes
 
-# Steampipe 테스트
+# Steampipe テスト
 steampipe query "SELECT name, phase FROM kubernetes_namespace LIMIT 5"
 ```
 
@@ -140,12 +140,12 @@ metadata:
   namespace: kube-system
 data:
   mapRoles: |
-    # 기존 역할 유지
+    # 既存のロールを維持
     - rolearn: arn:aws:iam::ACCOUNT_ID:role/EXISTING_ROLE
       username: existing-user
       groups:
         - system:masters
-    # AWSops EC2 역할 추가
+    # AWSops EC2 ロールを追加
     - rolearn: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
       username: awsops-ec2
       groups:
@@ -168,11 +168,11 @@ kubectl get configmap aws-auth -n kube-system -o yaml > aws-auth-backup.yaml
 複数の EKS クラスターをモニタリングするには、各クラスターに対して認証設定を繰り返します:
 
 ```bash
-# 각 클러스터의 kubeconfig 추가
+# 各クラスターの kubeconfig を追加
 aws eks update-kubeconfig --name cluster-1 --region ap-northeast-2
 aws eks update-kubeconfig --name cluster-2 --region ap-northeast-2
 
-# kubeconfig에 여러 컨텍스트가 등록됨
+# kubeconfig に複数のコンテキストが登録される
 kubectl config get-contexts
 ```
 
@@ -241,7 +241,7 @@ EC2 ロールに EKS API 呼び出しの権限がありません。IAM ポリシ
 
 AWS CLI v1 を使用している可能性があります。v2 にアップグレードしてください:
 ```bash
-aws --version  # aws-cli/2.x 확인
+aws --version  # aws-cli/2.x を確認
 ```
 
 ### Steampipe で K8s テーブルが表示されない
@@ -249,7 +249,7 @@ aws --version  # aws-cli/2.x 확인
 Steampipe K8s プラグインの設定を確認してください:
 ```bash
 cat ~/.steampipe/config/kubernetes.spc
-# plugin = "kubernetes" 확인
+# plugin = "kubernetes" を確認
 sudo systemctl restart steampipe
 ```
 

@@ -146,18 +146,18 @@ ADR-019: 別途の PDF ライブラリ（Puppeteer など）は Next.js のバ�
 ## API の直接呼び出し
 
 ```bash
-# 진단 시작
+# 診断を開始
 curl -X POST /awsops/api/report \
   -H 'Content-Type: application/json' \
   -d '{"action":"generate","lang":"ko"}'
 
-# 진행 상태 확인
+# 進行状況の確認
 curl '/awsops/api/report?action=status&id=<reportId>'
 
-# 목록 조회 (페이지네이션)
+# 一覧の取得 (ページネーション)
 curl '/awsops/api/report?action=list&page=1&pageSize=5'
 
-# 스케줄 변경
+# スケジュールの変更
 curl -X POST /awsops/api/report \
   -H 'Content-Type: application/json' \
   -d '{"action":"set-schedule","schedule":{"enabled":true,"frequency":"weekly","dayOfWeek":1,"hour":6,"lang":"ko"}}'

@@ -319,15 +319,15 @@ Allowed Networks 设置需要管理员角色。
 
 ### API 端点
 ```bash
-# 현재 허용 목록 조회 (admin 전용)
+# 查询当前允许列表 (仅限 admin)
 curl '/awsops/api/datasources?action=allowlist'
 
-# 허용 목록 업데이트
+# 更新允许列表
 curl -X POST '/awsops/api/datasources' \
   -H 'Content-Type: application/json' \
   -d '{"action":"update-allowlist","networks":["10.0.0.0/16","prometheus.internal"]}'
 
-# 연결 테스트
+# 连接测试
 curl -X POST '/awsops/api/datasources' \
   -H 'Content-Type: application/json' \
   -d '{"action":"test-connection","datasourceId":"<id>"}'
@@ -340,8 +340,8 @@ curl -X POST '/awsops/api/datasources' \
 ### 单一数据源查询
 
 ```
-"프로메테우스에서 CPU 사용량 확인해줘"
-→ datasource 라우트 → PromQL 자동 생성 → 결과 분석
+"帮我在 Prometheus 中确认 CPU 使用量"
+→ datasource 路由 → 自动生成 PromQL → 分析结果
 ```
 
 ### 多数据源关联分析
@@ -349,8 +349,8 @@ curl -X POST '/awsops/api/datasources' \
 可以同时查询多个数据源进行关联分析：
 
 ```
-"프로메테우스 메트릭과 로키 에러 로그 상관 분석해줘"
-→ Prometheus PromQL + Loki LogQL 병렬 실행 → 종합 분석
+"帮我对 Prometheus 指标和 Loki 错误日志做相关性分析"
+→ Prometheus PromQL + Loki LogQL 并行执行 → 综合分析
 ```
 
 ### 与 AWS 资源交叉分析
@@ -358,8 +358,8 @@ curl -X POST '/awsops/api/datasources' \
 可以将数据源查询与 AWS 资源结合分析以找出根本原因：
 
 ```
-"Prometheus CPU 스파이크와 CloudWatch 알람 비교해줘"
-→ datasource + monitoring 멀티 라우트 → 교차 상관 분석
+"帮我比较 Prometheus CPU 尖峰和 CloudWatch 告警"
+→ datasource + monitoring 多路由 → 交叉相关分析
 ```
 
 :::tip AI 关键词

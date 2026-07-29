@@ -11,12 +11,12 @@ AWSops 的 Kubernetes 仪表板（`/k8s/*`）通过 Steampipe 的 `kubernetes` �
 ## 认证结构
 
 ```
-EC2 인스턴스 역할 (IAM Role)
+EC2 实例角色 (IAM Role)
   → kubeconfig (aws eks update-kubeconfig)
     → EKS API Server
-      → Access Entry 또는 aws-auth ConfigMap 검증
-        → Kubernetes API 접근 허용
-          → Steampipe kubernetes 플러그인 → 대시보드 표시
+      → Access Entry 或 aws-auth ConfigMap 验证
+        → 允许访问 Kubernetes API
+          → Steampipe kubernetes 插件 → 仪表板显示
 ```
 
 ## 事前确认
@@ -26,10 +26,10 @@ EC2 인스턴스 역할 (IAM Role)
 通过 SSH 连接到 AWSops EC2 后执行：
 
 ```bash
-# EC2 인스턴스 역할 ARN 확인
+# 确认 EC2 实例角色 ARN
 aws sts get-caller-identity --query "Arn" --output text
 
-# 출력 예시: arn:aws:sts::123456789012:assumed-role/AwsopsEc2Role/i-0abc123
+# 输出示例: arn:aws:sts::123456789012:assumed-role/AwsopsEc2Role/i-0abc123
 # → IAM Role ARN: arn:aws:iam::123456789012:role/AwsopsEc2Role
 ```
 
@@ -102,17 +102,17 @@ connection "kubernetes" {
 }
 EOF
 
-# Steampipe 서비스 재시작
+# 重启 Steampipe 服务
 sudo systemctl restart steampipe
 ```
 
 ### Step 5：连接测试
 
 ```bash
-# kubectl 테스트
+# kubectl 测试
 kubectl get nodes
 
-# Steampipe 테스트
+# Steampipe 测试
 steampipe query "SELECT name, phase FROM kubernetes_namespace LIMIT 5"
 ```
 
@@ -140,12 +140,12 @@ metadata:
   namespace: kube-system
 data:
   mapRoles: |
-    # 기존 역할 유지
+    # 保留现有角色
     - rolearn: arn:aws:iam::ACCOUNT_ID:role/EXISTING_ROLE
       username: existing-user
       groups:
         - system:masters
-    # AWSops EC2 역할 추가
+    # 添加 AWSops EC2 角色
     - rolearn: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
       username: awsops-ec2
       groups:
@@ -168,11 +168,11 @@ kubectl get configmap aws-auth -n kube-system -o yaml > aws-auth-backup.yaml
 如需监控多个 EKS 集群，请对每个集群重复认证配置：
 
 ```bash
-# 각 클러스터의 kubeconfig 추가
+# 为每个集群添加 kubeconfig
 aws eks update-kubeconfig --name cluster-1 --region ap-northeast-2
 aws eks update-kubeconfig --name cluster-2 --region ap-northeast-2
 
-# kubeconfig에 여러 컨텍스트가 등록됨
+# kubeconfig 中会注册多个上下文
 kubectl config get-contexts
 ```
 
@@ -241,7 +241,7 @@ EC2 角色没有调用 EKS API 的权限。请在 IAM 策略中添加以下内�
 
 可能正在使用 AWS CLI v1。请升级到 v2：
 ```bash
-aws --version  # aws-cli/2.x 확인
+aws --version  # 确认为 aws-cli/2.x
 ```
 
 ### Steampipe 中看不到 K8s 表
@@ -249,7 +249,7 @@ aws --version  # aws-cli/2.x 확인
 请检查 Steampipe K8s 插件配置：
 ```bash
 cat ~/.steampipe/config/kubernetes.spc
-# plugin = "kubernetes" 확인
+# 确认 plugin = "kubernetes"
 sudo systemctl restart steampipe
 ```
 

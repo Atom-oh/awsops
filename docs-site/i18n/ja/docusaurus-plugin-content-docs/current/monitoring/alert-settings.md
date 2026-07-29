@@ -133,21 +133,21 @@ info     → #ops-general
 ## API
 
 ```bash
-# 설정 조회
+# 設定の取得
 curl '/awsops/api/steampipe?action=config'
 
-# admin 확인
+# admin の確認
 curl '/awsops/api/steampipe?action=admin-check'
 
-# 진단 이력
+# 診断履歴
 curl '/awsops/api/alert-webhook'
 
-# Slack 테스트 메시지
+# Slack テストメッセージ
 curl -X POST '/awsops/api/notification' \
   -H 'Content-Type: application/json' \
   -d '{"action":"test","channel":"#ops-alerts"}'
 
-# 더미 알림 송신 (테스트용)
+# ダミーアラートの送信 (テスト用)
 curl -X POST '/awsops/api/alert-webhook?source=generic' \
   -H 'X-AWSops-Signature: <hmac>' \
   -H 'Content-Type: application/json' \

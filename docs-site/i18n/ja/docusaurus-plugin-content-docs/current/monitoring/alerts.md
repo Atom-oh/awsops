@@ -50,12 +50,12 @@ description: CloudWatch / Alertmanager / Grafana Webhook 受信、アラート�
 共有シークレットは `data/config.json` の `alertWebhookSecret` に保存します。送信側は raw body を HMAC-SHA256 で署名し、`X-Signature-256: sha256=<hex>` ヘッダーとして送信する必要があります。
 
 ```bash
-# Alertmanager webhook_configs 예시
+# Alertmanager webhook_configs の例
 - url: https://awsops.example.com/awsops/api/alert-webhook
   http_config:
     authorization:
       type: HMAC
-      credentials: "<공유-시크릿>"
+      credentials: "<共有シークレット>"
 ```
 
 ### GET /awsops/api/alert-webhook
@@ -147,7 +147,7 @@ UI の **Knowledge Base** タブで過去の類似インシデントを検索で
       "matcher": { "service": "batch-job", "alertname": "HighCPU" },
       "startsAt": "2026-04-22T00:00:00Z",
       "endsAt":   "2026-04-22T06:00:00Z",
-      "reason": "야간 배치 윈도우"
+      "reason": "夜間バッチウィンドウ"
     }
   ]
 }

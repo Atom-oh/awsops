@@ -31,7 +31,7 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ```
 [New Event] → [Save] → [Analyze] → [Review Plan] → [Approve | Cancel]
-              POST     POST        UI 확장          POST approve / DELETE
+              POST     POST        UI 展開          POST approve / DELETE
               create   analyze
                        ├ metrics  fetch
                        └ bedrock  generate
@@ -99,27 +99,27 @@ import Screenshot from '@site/src/components/Screenshot';
 ## API
 
 ```bash
-# 목록
+# 一覧
 curl '/awsops/api/event-scaling?action=list&accountId=111111111111'
 
-# 단건 상세
+# 単一の詳細
 curl '/awsops/api/event-scaling?action=detail&id=<eventId>'
 
-# 등록
+# 登録
 curl -X POST '/awsops/api/event-scaling?action=create' \
   -H 'Content-Type: application/json' \
   -d '{"name":"BF2026","eventStart":"2026-11-27T13:00:00+09:00","eventEnd":"2026-11-27T18:00:00+09:00","pattern":{"type":"flash-sale","expectedPeakMultiplier":10,"durationMinutes":120,"rampUpMinutes":60}}'
 
-# 메트릭 + 분석
+# メトリクス + 分析
 curl -X POST '/awsops/api/event-scaling?action=analyze&id=<eventId>'
 
-# 승인 마킹
+# 承認のマーキング
 curl -X POST '/awsops/api/event-scaling?action=approve&id=<eventId>'
 
-# 스크립트 다운로드 (text/x-shellscript)
+# スクリプトのダウンロード (text/x-shellscript)
 curl '/awsops/api/event-scaling?action=script&id=<eventId>' -o warmup.sh
 
-# 취소
+# キャンセル
 curl -X DELETE '/awsops/api/event-scaling?id=<eventId>'
 ```
 

@@ -319,15 +319,15 @@ Allowed Networks に過度に広い CIDR 帯域を追加すると、SSRF 保護�
 
 ### API エンドポイント
 ```bash
-# 현재 허용 목록 조회 (admin 전용)
+# 現在の許可リストの取得 (admin 専用)
 curl '/awsops/api/datasources?action=allowlist'
 
-# 허용 목록 업데이트
+# 許可リストの更新
 curl -X POST '/awsops/api/datasources' \
   -H 'Content-Type: application/json' \
   -d '{"action":"update-allowlist","networks":["10.0.0.0/16","prometheus.internal"]}'
 
-# 연결 테스트
+# 接続テスト
 curl -X POST '/awsops/api/datasources' \
   -H 'Content-Type: application/json' \
   -d '{"action":"test-connection","datasourceId":"<id>"}'
@@ -340,8 +340,8 @@ curl -X POST '/awsops/api/datasources' \
 ### 単一データソースクエリ
 
 ```
-"프로메테우스에서 CPU 사용량 확인해줘"
-→ datasource 라우트 → PromQL 자동 생성 → 결과 분석
+"Prometheus で CPU 使用量を確認して"
+→ datasource ルート → PromQL 自動生成 → 結果分析
 ```
 
 ### マルチデータソース相関分析
@@ -349,8 +349,8 @@ curl -X POST '/awsops/api/datasources' \
 複数のデータソースを同時に照会して相関分析ができます：
 
 ```
-"프로메테우스 메트릭과 로키 에러 로그 상관 분석해줘"
-→ Prometheus PromQL + Loki LogQL 병렬 실행 → 종합 분석
+"Prometheus のメトリクスと Loki のエラーログを相関分析して"
+→ Prometheus PromQL + Loki LogQL 並列実行 → 総合分析
 ```
 
 ### AWS リソースとのクロス分析
@@ -358,8 +358,8 @@ curl -X POST '/awsops/api/datasources' \
 データソースクエリと AWS リソースを併せて分析し、根本原因を特定できます：
 
 ```
-"Prometheus CPU 스파이크와 CloudWatch 알람 비교해줘"
-→ datasource + monitoring 멀티 라우트 → 교차 상관 분석
+"Prometheus の CPU スパイクと CloudWatch アラームを比較して"
+→ datasource + monitoring マルチルート → クロス相関分析
 ```
 
 :::tip AI キーワード
