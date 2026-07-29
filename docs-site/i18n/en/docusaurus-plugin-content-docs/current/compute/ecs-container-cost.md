@@ -8,6 +8,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
+:::caution v1 archive figures — not applicable to v2
+This page's Fargate rates (`$0.04048`/`$0.004445`) and the `data/config.json` `fargatePricing` override are a v1 pattern. v2 uses the current rates in `web/lib/inventory-derived.ts` (`$0.04656`/`$0.00511`), and no `data/config.json` override exists — do not use this page's figures as an actual cost basis.
+:::
+
 A page for analyzing the cost of ECS Fargate tasks. Costs are calculated based on Fargate pricing and CloudWatch Container Insights metrics.
 
 <Screenshot src="/screenshots/compute/ecs-container-cost.png" alt="ECS Container Cost" />

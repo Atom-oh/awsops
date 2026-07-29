@@ -8,6 +8,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
+:::caution v1 아카이브 수치 — v2 미적용
+이 페이지의 Fargate 단가(`$0.04048`/`$0.004445`)와 `data/config.json`의 `fargatePricing` 오버라이드는 v1 패턴입니다. v2는 `web/lib/inventory-derived.ts`의 현행 단가(`$0.04656`/`$0.00511`)를 사용하며 `data/config.json` 오버라이드는 존재하지 않습니다 — 이 페이지의 수치를 실제 비용 계산 근거로 사용하지 마세요.
+:::
+
 ECS Fargate 태스크의 비용을 분석하는 페이지입니다. Fargate 가격과 CloudWatch Container Insights 메트릭을 기반으로 비용을 계산합니다.
 
 <Screenshot src="/screenshots/compute/ecs-container-cost.png" alt="ECS Container Cost" />

@@ -8,6 +8,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
+:::caution v1 归档数值 — 不适用于 v2
+本页的 Fargate 单价（`$0.04048`/`$0.004445`）和 `data/config.json` 的 `fargatePricing` 覆盖是 v1 模式。v2 使用 `web/lib/inventory-derived.ts` 中的现行单价（`$0.04656`/`$0.00511`），且不存在 `data/config.json` 覆盖机制 — 请不要将本页数值作为实际成本计算依据。
+:::
+
 用于分析 ECS Fargate 任务成本的页面。基于 Fargate 价格和 CloudWatch Container Insights 指标计算成本。
 
 <Screenshot src="/screenshots/compute/ecs-container-cost.png" alt="ECS Container Cost" />

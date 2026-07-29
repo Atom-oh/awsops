@@ -8,6 +8,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
+:::caution v1 アーカイブ数値 — v2 には適用されません
+このページの Fargate 単価（`$0.04048`/`$0.004445`）と `data/config.json` の `fargatePricing` オーバーライドは v1 のパターンです。v2 は `web/lib/inventory-derived.ts` の現行単価（`$0.04656`/`$0.00511`）を使用し、`data/config.json` オーバーライドは存在しません — このページの数値を実際のコスト計算の根拠として使用しないでください。
+:::
+
 ECS Fargate タスクのコストを分析するページです。Fargate の価格と CloudWatch Container Insights メトリクスに基づいてコストを計算します。
 
 <Screenshot src="/screenshots/compute/ecs-container-cost.png" alt="ECS Container Cost" />
