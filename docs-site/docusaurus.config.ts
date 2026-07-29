@@ -47,7 +47,7 @@ const config: Config = {
       ko: { label: '한국어', direction: 'ltr' },
       en: { label: 'English', direction: 'ltr' },
       ja: { label: '日本語', direction: 'ltr' },
-      zh: { label: '简体中文', direction: 'ltr' },
+      zh: { label: '简体中文', direction: 'ltr', htmlLang: 'zh-Hans' },
     },
   },
 

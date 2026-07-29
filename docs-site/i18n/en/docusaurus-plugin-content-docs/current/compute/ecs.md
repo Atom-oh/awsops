@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 A page for monitoring the status of ECS clusters, services, and tasks.
 
+:::info How this is served in v2
+This screen isn't a dedicated page — it's served through v2's shared inventory group view (the "Compute" group in the sidebar, combining ECS clusters/services/tasks).
+:::
+
 <Screenshot src="/screenshots/compute/ecs.png" alt="ECS" />
 
 ## Key Features

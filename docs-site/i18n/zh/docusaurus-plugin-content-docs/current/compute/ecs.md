@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 用于监控 ECS 集群、服务和任务状态的页面。
 
+:::info v2 中的呈现方式
+此界面并非独立页面，而是通过 v2 的通用清单分组视图（侧边栏「计算」分组，整合 ECS 集群/服务/任务）提供。
+:::
+
 <Screenshot src="/screenshots/compute/ecs.png" alt="ECS" />
 
 ## 主要功能

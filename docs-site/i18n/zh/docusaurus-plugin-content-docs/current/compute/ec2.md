@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 用于实时监控 EC2 实例状态并查看详细信息的页面。
 
+:::info v2 中的呈现方式
+此界面并非独立页面，而是通过 v2 的通用清单视图（`/inventory/ec2`，侧边栏「计算」分组）提供。
+:::
+
 <Screenshot src="/screenshots/compute/ec2.png" alt="EC2 实例" />
 
 ## 主要功能

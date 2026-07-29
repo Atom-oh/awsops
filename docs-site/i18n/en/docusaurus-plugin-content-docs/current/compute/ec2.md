@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 A page for monitoring the real-time status of EC2 instances and viewing detailed information.
 
+:::info How this is served in v2
+This screen isn't a dedicated page — it's served through v2's shared inventory view (`/inventory/ec2`, under the "Compute" group in the sidebar).
+:::
+
 <Screenshot src="/screenshots/compute/ec2.png" alt="EC2 Instances" />
 
 ## Key Features

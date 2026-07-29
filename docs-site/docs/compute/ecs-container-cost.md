@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 아카이브 문서 — v2 미적용
-이 페이지 전체(가격표, 계산 공식, `data/config.json` `fargatePricing` 오버라이드 안내)는 v1 패턴입니다. v2는 `web/lib/inventory-derived.ts`/`web/lib/opencost-allocation.ts`의 현행 단가(`$0.04656`/`$0.00511`)를 사용하며 `data/config.json` 오버라이드는 존재하지 않습니다. 아래 가격표·공식·tip은 v1 전용이며 v2에는 적용되지 않습니다.
+:::caution v1 아카이브 — 일부만 v2 적용
+**계산 공식**은 v2에도 그대로 유효합니다(`web/lib/inventory-derived.ts`의 `ecs_task` deriver가 동일한 `(vCPU/1024)×단가×24 + (GB/1024)×단가×24` 식과 동일 상수 `$0.04656`/`$0.00511`을 사용). v2에서 사라진 것은 **`data/config.json`의 `fargatePricing` 오버라이드 메커니즘**뿐입니다 — 단가는 ap-northeast-2 on-demand 기준으로 코드에 하드코딩되어 있어 리전별로 변경할 수 없습니다. 아래 가격표는 v1 시절 예시이며 리전 표기에 오류가 있습니다(실제 표시된 값은 us-east-1 단가).
 :::
 
 ECS Fargate 태스크의 비용을 분석하는 페이지입니다. Fargate 가격과 CloudWatch Container Insights 메트릭을 기반으로 비용을 계산합니다.

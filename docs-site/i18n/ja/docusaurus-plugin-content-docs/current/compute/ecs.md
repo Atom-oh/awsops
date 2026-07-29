@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ECS クラスター、サービス、タスクの状態を監視できるページです。
 
+:::info v2 での提供方法
+この画面は専用ページではなく、v2 の共通インベントリグループビュー（サイドバーの「コンピュート」グループ、ECS クラスター/サービス/タスクを統合）から提供されます。
+:::
+
 <Screenshot src="/screenshots/compute/ecs.png" alt="ECS" />
 
 ## 主な機能

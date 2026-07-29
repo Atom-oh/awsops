@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 A page for viewing ECR repository and image information.
 
+:::info How this is served in v2
+This screen isn't a dedicated page — it's served through v2's shared inventory view (`/inventory/ecr`, under the "Compute" group in the sidebar).
+:::
+
 <Screenshot src="/screenshots/compute/ecr.png" alt="ECR" />
 
 ## Key Features

@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 用于查看 ECR 存储库和镜像信息的页面。
 
+:::info v2 中的呈现方式
+此界面并非独立页面，而是通过 v2 的通用清单视图（`/inventory/ecr`，侧边栏「计算」分组）提供。
+:::
+
 <Screenshot src="/screenshots/compute/ecr.png" alt="ECR" />
 
 ## 主要功能

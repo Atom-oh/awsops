@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ECS 클러스터, 서비스, 태스크의 상태를 모니터링할 수 있는 페이지입니다.
 
+:::info v2 조회 방식
+이 화면은 별도의 전용 페이지가 아니라 v2의 공용 인벤토리 그룹 뷰(사이드바 "컴퓨트" 그룹, ECS 클러스터/서비스/태스크 통합)를 통해 제공됩니다.
+:::
+
 <Screenshot src="/screenshots/compute/ecs.png" alt="ECS" />
 
 ## 주요 기능

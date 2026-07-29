@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 EC2 インスタンスのリアルタイムステータスを監視し、詳細情報を確認できるページです。
 
+:::info v2 での提供方法
+この画面は専用ページではなく、v2 の共通インベントリビュー（`/inventory/ec2`、サイドバーの「コンピュート」グループ）から提供されます。
+:::
+
 <Screenshot src="/screenshots/compute/ec2.png" alt="EC2 インスタンス" />
 
 ## 主な機能

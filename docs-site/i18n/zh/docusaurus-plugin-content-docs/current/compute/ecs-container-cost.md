@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 归档文档 — 不适用于 v2
-本页全部内容（价格表、计算公式、`data/config.json` `fargatePricing` 覆盖说明）都是 v1 模式。v2 使用 `web/lib/inventory-derived.ts` / `web/lib/opencost-allocation.ts` 中的现行单价（`$0.04656`/`$0.00511`），且不存在 `data/config.json` 覆盖机制。以下价格表、公式和提示均仅适用于 v1，不适用于 v2。
+:::caution v1 归档 — 仅部分内容适用于 v2
+以下**计算公式**在 v2 中仍然有效（`web/lib/inventory-derived.ts` 的 `ecs_task` deriver 使用相同的 `(vCPU/1024)×单价×24 + (GB/1024)×单价×24` 公式和相同常量 `$0.04656`/`$0.00511`）。v2 中消失的只是 **`data/config.json` 的 `fargatePricing` 覆盖机制** —单价以 ap-northeast-2 按需价格硬编码在代码中，无法按区域更改。下方价格表是 v1 时代的示例，且区域标注有误（实际数值是 us-east-1 单价）。
 :::
 
 用于分析 ECS Fargate 任务成本的页面。基于 Fargate 价格和 CloudWatch Container Insights 指标计算成本。

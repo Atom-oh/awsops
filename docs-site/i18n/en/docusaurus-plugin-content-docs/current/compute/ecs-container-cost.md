@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 archive — not applicable to v2
-This entire page (pricing table, calculation formula, `data/config.json` `fargatePricing` override guidance) is a v1 pattern. v2 uses the current rates in `web/lib/inventory-derived.ts` / `web/lib/opencost-allocation.ts` (`$0.04656`/`$0.00511`), and no `data/config.json` override exists. The pricing table, formula, and tip below are v1-only and do not apply to v2.
+:::caution v1 archive — partially applies to v2
+The **calculation formula** below is still valid in v2 — `web/lib/inventory-derived.ts`'s `ecs_task` deriver uses the identical `(vCPU/1024)×rate×24 + (GB/1024)×rate×24` formula and the same `$0.04656`/`$0.00511` constants. What's gone in v2 is only the **`data/config.json` `fargatePricing` override mechanism** — the rates are hardcoded in code for ap-northeast-2 on-demand and can't be changed per region. The pricing table below is a v1-era example with a region-label error (the values shown are actually us-east-1 rates).
 :::
 
 A page for analyzing the cost of ECS Fargate tasks. Costs are calculated based on Fargate pricing and CloudWatch Container Insights metrics.

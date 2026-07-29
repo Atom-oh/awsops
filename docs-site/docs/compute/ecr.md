@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ECR 리포지토리와 이미지 정보를 확인할 수 있는 페이지입니다.
 
+:::info v2 조회 방식
+이 화면은 별도의 전용 페이지가 아니라 v2의 공용 인벤토리 뷰(`/inventory/ecr`, 사이드바 "컴퓨트" 그룹)를 통해 제공됩니다.
+:::
+
 <Screenshot src="/screenshots/compute/ecr.png" alt="ECR" />
 
 ## 주요 기능

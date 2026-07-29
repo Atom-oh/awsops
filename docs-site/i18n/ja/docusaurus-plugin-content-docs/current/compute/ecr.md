@@ -10,6 +10,10 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ECR リポジトリとイメージ情報を確認できるページです。
 
+:::info v2 での提供方法
+この画面は専用ページではなく、v2 の共通インベントリビュー（`/inventory/ecr`、サイドバーの「コンピュート」グループ）から提供されます。
+:::
+
 <Screenshot src="/screenshots/compute/ecr.png" alt="ECR" />
 
 ## 主な機能

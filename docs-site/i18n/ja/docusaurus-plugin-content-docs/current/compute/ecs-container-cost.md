@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 アーカイブ文書 — v2 には適用されません
-このページ全体（価格表、計算式、`data/config.json` `fargatePricing` オーバーライドの案内）は v1 のパターンです。v2 は `web/lib/inventory-derived.ts` / `web/lib/opencost-allocation.ts` の現行単価（`$0.04656`/`$0.00511`）を使用し、`data/config.json` オーバーライドは存在しません。以下の価格表・計算式・tip は v1 専用で、v2 には適用されません。
+:::caution v1 アーカイブ — 一部のみ v2 に適用
+以下の**計算式**は v2 でもそのまま有効です（`web/lib/inventory-derived.ts` の `ecs_task` deriver が同じ `(vCPU/1024)×単価×24 + (GB/1024)×単価×24` 式と同じ定数 `$0.04656`/`$0.00511` を使用）。v2 で無くなったのは **`data/config.json` の `fargatePricing` オーバーライド機構**のみです — 単価は ap-northeast-2 オンデマンド基準でコードにハードコードされており、リージョンごとに変更できません。以下の価格表は v1 時代の例で、リージョン表記に誤りがあります（実際の値は us-east-1 単価です）。
 :::
 
 ECS Fargate タスクのコストを分析するページです。Fargate の価格と CloudWatch Container Insights メトリクスに基づいてコストを計算します。
