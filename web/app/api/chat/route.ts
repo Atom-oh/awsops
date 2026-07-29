@@ -111,9 +111,15 @@ export async function POST(request: Request) {
   // resumes, collapses every thread for a user onto one fixed runtimeSessionId — losing per-thread
   // AgentCore Memory isolation. Detect our own prefix and reuse verbatim; only derive a fresh
   // composite for a value that isn't already ours.
+  // PR #200 review MAJOR-1: the own-prefix fast path used to accept ANY value starting with
+  // OWN_PREFIX verbatim — no length/charset check — contradicting agentcore.ts's own "never pass
+  // a raw client-supplied value through untouched" contract. A caller could suffix its own prefix
+  // with megabytes/newlines/unicode straight into InvokeAgentRuntime + the Aurora session_id
+  // column. The remainder must match what derivation would have produced (8-64 charset-safe chars).
   const OWN_PREFIX = `awsops-${user.sub}-`;
+  const OWN_REMAINDER_RE = /^[A-Za-z0-9-]{8,64}$/;
   let sessionId: string;
-  if (typeof body.sessionId === 'string' && body.sessionId.startsWith(OWN_PREFIX)) {
+  if (typeof body.sessionId === 'string' && body.sessionId.startsWith(OWN_PREFIX) && OWN_REMAINDER_RE.test(body.sessionId.slice(OWN_PREFIX.length))) {
     sessionId = body.sessionId;
   } else {
     const sanitized = typeof body.sessionId === 'string' ? body.sessionId.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 32) : '';

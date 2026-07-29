@@ -21,12 +21,13 @@ describe('chat-store', () => {
     expect(upsertParams).toEqual(['t1', 'u1', '제목후보', 's'.repeat(36)]);
   });
 
-  // PR #200 review M1: a legacy thread's session_id (raw client UUID, predates the P3-1 fix)
-  // gets re-derived under the caller's sub the first time it's resumed. Without rewriting the
-  // stored value, every future resume re-derives from the same stale legacy id, permanently
-  // diverging from the runtime session id. The upsert must persist whatever sessionId route.ts
-  // actually used, every time — not just on first insert.
-  it('recordExchange rewrites session_id on every call, so a re-derived legacy id sticks', async () => {
+  // PR #200 review M1/M2: a legacy thread's session_id (raw client UUID, predates the P3-1 fix)
+  // re-derives deterministically under the caller's sub on resume, but never migrates to that
+  // composite in the DB unless the upsert does it — so it never hits route.ts's OWN_PREFIX fast
+  // path. The migration must be one-time only: once a row already holds a namespaced value, later
+  // exchanges must never overwrite it (M2 — avoids a last-writer-wins flip across the client's
+  // single per-browser session).
+  it('recordExchange migrates a legacy (non-namespaced) session_id to the derived composite exactly once', async () => {
     query.mockResolvedValueOnce({ rows: [{ id: 't1' }] });
     query.mockResolvedValue({ rows: [] });
     const { recordExchange } = await import('./chat-store');
@@ -36,7 +37,7 @@ describe('chat-store', () => {
       userContent: 'q', assistantContent: 'a',
     });
     const [upsertSql, upsertParams] = query.mock.calls[0];
-    expect(String(upsertSql)).toContain('session_id = EXCLUDED.session_id');
+    expect(String(upsertSql)).toContain("WHEN chat_threads.session_id LIKE 'awsops-%' THEN chat_threads.session_id ELSE EXCLUDED.session_id");
     expect(upsertParams).toEqual(['t1', 'u1', 't', derived]);
   });
 

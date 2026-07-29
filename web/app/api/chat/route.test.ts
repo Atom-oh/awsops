@@ -1032,7 +1032,7 @@ describe('chat sessionId — bound to the caller, never client-trusted', () => {
     expect(invokeAgent.mock.calls.at(-1)?.[0]?.sessionId).toBe(derived);
   });
 
-  it('rejects a client-forged own-prefix value with garbage entropy no differently than any other own-prefixed reuse (still scoped to the caller)', async () => {
+  it('reuses a client-supplied own-prefix value verbatim when its entropy is charset/length-valid (still scoped to the caller)', async () => {
     // Belt-and-suspenders: even a client that HAND-CRAFTS a string starting with its own
     // `awsops-<own-sub>-` prefix only ever reuses ITS OWN namespace — never another user's.
     verifyUser.mockResolvedValue({ sub: 'u-4' });
@@ -1040,6 +1040,28 @@ describe('chat sessionId — bound to the caller, never client-trusted', () => {
     const handCrafted = 'awsops-u-4-whatever-the-client-wants-here';
     await readStream(await POST(req({ prompt: 'hi', sessionId: handCrafted })));
     expect(invokeAgent.mock.calls.at(-1)?.[0]?.sessionId).toBe(handCrafted);
+  });
+
+  // PR #200 review MAJOR-1 (confirmed against base): the own-prefix fast path used to accept ANY
+  // value starting with OWN_PREFIX verbatim, with zero length/charset validation — contradicting
+  // agentcore.ts's own "never pass a raw client-supplied value through untouched" contract. An
+  // authenticated caller could suffix its own prefix with megabytes/newlines/unicode straight into
+  // InvokeAgentRuntime + the Aurora session_id column (self-DoS + row bloat).
+  it('rejects an own-prefixed value whose remainder is not charset/length-safe, re-deriving instead', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u-5' });
+    const { POST } = await import('./route');
+    const tooLong = `awsops-u-5-${'a'.repeat(500)}`;
+    await readStream(await POST(req({ prompt: 'hi', sessionId: tooLong })));
+    const used = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId as string;
+    expect(used).not.toBe(tooLong);
+    expect(used.startsWith('awsops-u-5-')).toBe(true);
+    expect(used.length).toBeLessThan(tooLong.length);
+
+    const badCharset = 'awsops-u-5-has spaces and\nnewlines';
+    await readStream(await POST(req({ prompt: 'hi', sessionId: badCharset })));
+    const used2 = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId as string;
+    expect(used2).not.toBe(badCharset);
+    expect(used2.startsWith('awsops-u-5-')).toBe(true);
   });
 });
 
