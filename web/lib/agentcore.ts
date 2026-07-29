@@ -28,7 +28,9 @@ export interface ChatMsg {
 export interface InvokeInput {
   gateway: string;
   messages: ChatMsg[];
-  sessionId: string; // >=33 chars (a UUID works)
+  sessionId: string; // >=33 chars (a UUID works). app/api/chat/route.ts's POST handler always
+  // namespaces this under `awsops-<caller's own sub>-...` before calling in — never pass a raw
+  // client-supplied value through untouched (pentest-remediation P3-1).
   systemPromptOverride?: string; // ADR-031: resolved custom prompt
   toolAllowlist?: string[];      // ADR-031 Phase 2: now the server-side-enforced set
   agentName?: string;            // ADR-031: traceability

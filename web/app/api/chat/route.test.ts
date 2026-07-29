@@ -1008,7 +1008,38 @@ describe('chat sessionId — bound to the caller, never client-trusted', () => {
     const { POST } = await import('./route');
     await readStream(await POST(req({ prompt: 'hi' })));
     const used = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId as string;
-    expect(used).toBe('awsops-u-2-000000000000000000000000');
+    expect(used).toBe(`awsops-u-2-${'0'.repeat(32)}`);
+  });
+
+  // PR #200 review (confirmed against base): recordExchange() persists the derived sessionId into
+  // chat_threads.session_id, and useChat.ts's selectThread() echoes data.thread.sessionId straight
+  // back as the NEXT request's body.sessionId — not the original raw client UUID. A naive
+  // "always re-prefix" derivation double-prefixes on that round-trip and, after enough thread
+  // resumes, collapses every thread for a user onto one fixed runtimeSessionId. This simulates the
+  // real round-trip (server output → next input), not just resending the same raw client value.
+  it('is idempotent across a thread-resume round-trip: feeding the SERVER-DERIVED id back as the next sessionId must not re-prefix it', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u-3' });
+    const { POST } = await import('./route');
+    await readStream(await POST(req({ prompt: 'turn 1', sessionId: 'fresh-client-uuid-0000000000000' })));
+    const derived = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId as string;
+    // This is exactly what selectThread() + the next send() does: the stored/returned composite
+    // comes back as body.sessionId verbatim.
+    await readStream(await POST(req({ prompt: 'turn 2 (thread resumed)', sessionId: derived })));
+    const afterResume = invokeAgent.mock.calls.at(-1)?.[0]?.sessionId as string;
+    expect(afterResume).toBe(derived);
+    // And it stays stable across many resumes (no convergence toward a per-user fixed point).
+    await readStream(await POST(req({ prompt: 'turn 3 (resumed again)', sessionId: afterResume })));
+    expect(invokeAgent.mock.calls.at(-1)?.[0]?.sessionId).toBe(derived);
+  });
+
+  it('rejects a client-forged own-prefix value with garbage entropy no differently than any other own-prefixed reuse (still scoped to the caller)', async () => {
+    // Belt-and-suspenders: even a client that HAND-CRAFTS a string starting with its own
+    // `awsops-<own-sub>-` prefix only ever reuses ITS OWN namespace — never another user's.
+    verifyUser.mockResolvedValue({ sub: 'u-4' });
+    const { POST } = await import('./route');
+    const handCrafted = 'awsops-u-4-whatever-the-client-wants-here';
+    await readStream(await POST(req({ prompt: 'hi', sessionId: handCrafted })));
+    expect(invokeAgent.mock.calls.at(-1)?.[0]?.sessionId).toBe(handCrafted);
   });
 });
 

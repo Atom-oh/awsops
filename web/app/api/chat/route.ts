@@ -98,15 +98,28 @@ export async function POST(request: Request) {
   // user's sub could attach to that user's memory session. (Finding 6 itself, which reasoned from
   // this same code path, was a false positive: chat_threads/chat_messages are correctly scoped by
   // user_sub everywhere in web/lib/chat-store.ts, so no thread/message data crossed principals — but
-  // the underlying sessionId-trust gap was real.) Namespace under the CALLER's own sub unconditionally
-  // — the client-supplied value only ever picks which of THIS user's sessions to use (preserves the
-  // per-browser-tab isolation from useChat.ts's crypto.randomUUID()), it can never name another
-  // user's. Deterministic per input, so repeated requests with the same client value keep the same
-  // composite id (session continuity across turns is preserved).
-  const clientEntropy = typeof body.sessionId === 'string' && body.sessionId.length >= 8
-    ? body.sessionId.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64)
-    : '000000000000000000000000';
-  const sessionId = `awsops-${user.sub}-${clientEntropy}`;
+  // the underlying sessionId-trust gap was real.) Namespace under the CALLER's own sub — the
+  // client-supplied value only ever picks which of THIS user's sessions to use (preserves the
+  // per-browser session isolation from useChat.ts's crypto.randomUUID()), it can never name another
+  // user's, since a forged `awsops-<other-sub>-...` simply fails the OWN_PREFIX check below and gets
+  // re-derived under the caller's real sub instead.
+  //
+  // MUST be idempotent (PR #200 review, confirmed against base): recordExchange() persists this same
+  // `sessionId` into chat_threads.session_id (below), and useChat.ts's selectThread() echoes
+  // data.thread.sessionId straight back as the next request's body.sessionId. A naive "always
+  // re-prefix" derivation therefore double-prefixes on every thread resume and, after enough
+  // resumes, collapses every thread for a user onto one fixed runtimeSessionId — losing per-thread
+  // AgentCore Memory isolation. Detect our own prefix and reuse verbatim; only derive a fresh
+  // composite for a value that isn't already ours.
+  const OWN_PREFIX = `awsops-${user.sub}-`;
+  let sessionId: string;
+  if (typeof body.sessionId === 'string' && body.sessionId.startsWith(OWN_PREFIX)) {
+    sessionId = body.sessionId;
+  } else {
+    const sanitized = typeof body.sessionId === 'string' ? body.sessionId.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 32) : '';
+    const clientEntropy = sanitized.length >= 8 ? sanitized : '0'.repeat(32);
+    sessionId = `${OWN_PREFIX}${clientEntropy}`;
+  }
 
   // v1 priority-1 Code Interpreter route (ADR-004 §5 Accepted; v1 route.ts:1000-1035): explicit
   // code/calculation intents generate Python via Bedrock, run it in the provisioned AgentCore
