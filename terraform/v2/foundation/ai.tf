@@ -57,9 +57,29 @@ variable "istio_vpc_enabled" {
   default     = false
 }
 
+# ADR-017 — curated official-vendor MCP presets registered as external-obs `mcpServer` gateway
+# targets (scripts/v2/agentcore/provision.py), replacing the hand-written Lambda for kinds that
+# ship a vendor-official MCP server (Datadog/ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk/...).
+# Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0, plan = No changes).
+variable "official_mcp_enabled" {
+  type        = bool
+  description = "Register curated official-vendor MCP servers (ADR-017) as external-obs gateway mcpServer targets. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0)."
+  default     = false
+}
+
+# preset_key (matches scripts/v2/agentcore/catalog.py MCP_SERVER_TARGETS) -> https endpoint. Only
+# presets with an entry here are provisioned; the rest SKIP (same convention as agent_lambdas +
+# missing lambda_arn). Deployment-specific — set in terraform.tfvars, not hardcoded here.
+variable "official_mcp_endpoints" {
+  type        = map(string)
+  description = "preset_key -> MCP server https endpoint (ADR-017). Deployment-specific; unset presets SKIP. e.g. { datadog = \"https://mcp.datadoghq.com/v1/mcp\" }."
+  default     = {}
+}
+
 locals {
-  ac_count    = var.agentcore_enabled ? 1 : 0
-  integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
+  ac_count           = var.agentcore_enabled ? 1 : 0
+  integ_count        = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
+  official_mcp_count = var.official_mcp_enabled && local.integ_count > 0 ? 1 : 0
   # AgentCore runtime name — a FIXED product-level constant (like v1's `awsops_agent`), NOT
   # project-derived. MUST stay in sync with RUNTIME_NAME in scripts/v2/agentcore/provision.py
   # ("awsops_v2_agent"); the provisioner appends a control-plane-generated `-<id>` suffix. IAM
@@ -733,6 +753,13 @@ output "agentcore" {
     ssm_runtime_arn    = aws_ssm_parameter.agentcore_runtime_arn[0].name
     ssm_interpreter_id = aws_ssm_parameter.agentcore_interpreter_id[0].name
     ssm_memory_id      = aws_ssm_parameter.agentcore_memory_id[0].name
+    # ADR-017 — curated official-MCP preset endpoints (empty map when official_mcp_enabled=false).
+    # provision.py SKIPs any catalog.MCP_SERVER_TARGETS preset whose key is missing here.
+    official_mcp_endpoints = local.official_mcp_count > 0 ? var.official_mcp_endpoints : {}
+    # Same secret the web BFF writes preset credentials into (web/lib/integration-credentials.ts,
+    # key = preset_key, e.g. secret["datadog"]) — provision.py reads it to create/refresh each
+    # preset's AgentCore Identity API-key credential provider. null when integrations_enabled=false.
+    integrations_secret_name = local.integ_count > 0 ? aws_secretsmanager_secret.integrations[0].name : null
     # Runtime VPC mode (Pattern 2): ENIs in our private subnets (apne2-az1/az2, AgentCore-supported)
     # so section agents can reach private resources (Aurora/EKS) directly. Reuse the service SG —
     # the Aurora SG already allows it (C8), and its egress→NAT lets the runtime still reach

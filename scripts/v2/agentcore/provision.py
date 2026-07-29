@@ -146,6 +146,128 @@ def ensure_targets(ctrl, ac, gw_ids):
             log(f"target:{tname}", "ERR", str(e)[:140])
 
 
+def _load_official_mcp_secret(ac):
+    """ADR-017: preset credentials live in the SAME shared secret the web BFF writes connector
+    credentials into (web/lib/integration-credentials.ts), keyed by preset_key — e.g.
+    {"datadog": {"token": "..."}}. Returns {} if integrations_enabled=false or the secret has no
+    entries yet (both are SKIP-worthy, not errors)."""
+    secret_name = ac.get("integrations_secret_name")
+    if not secret_name:
+        return {}
+    sm = boto3.client("secretsmanager", region_name=ac["region"])
+    try:
+        resp = sm.get_secret_value(SecretId=secret_name)
+    except ClientError as e:
+        log("mcp-server:secret", "ERR", str(e)[:140])
+        return {}
+    try:
+        m = json.loads(resp.get("SecretString") or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return m if isinstance(m, dict) else {}
+
+
+def _ensure_api_key_provider(ctrl, provider_name, token):
+    """Idempotent AgentCore Identity API-key credential provider: create if missing, update if the
+    token changed. get_api_key_credential_provider does NOT return the key value back (write-only
+    vault semantics) so drift can't be detected here — update_api_key_credential_provider is called
+    every run when a token is present; AgentCore Identity itself is expected to no-op on an
+    unchanged value. Returns the providerArn, or "" on failure."""
+    try:
+        existing = ctrl.get_api_key_credential_provider(name=provider_name)
+        arn = existing["credentialProviderArn"]
+        ctrl.update_api_key_credential_provider(name=provider_name, apiKey=token)
+        return arn
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") not in ("ResourceNotFoundException",):
+            log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
+            return ""
+    try:
+        resp = ctrl.create_api_key_credential_provider(name=provider_name, apiKey=token)
+        return resp["credentialProviderArn"]
+    except ClientError as e:
+        log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
+        return ""
+
+
+def ensure_mcp_server_targets(ctrl, ac, gw_ids):
+    """ADR-017: register curated official-vendor MCP servers as remote `mcpServer` gateway targets.
+    Mirrors ensure_targets' SKIP-on-missing-config convention: a preset with no configured endpoint
+    (var.official_mcp_endpoints) or no stored credential is SKIPped, not an error — both are normal
+    for a deployment that hasn't onboarded that vendor yet."""
+    endpoints = ac.get("official_mcp_endpoints") or {}
+    if not endpoints:
+        log("mcp-server-targets", "SKIP", "official_mcp_enabled=false or official_mcp_endpoints={}")
+        return
+    lambda_arns = ac.get("lambda_arns") or {}
+    secrets = _load_official_mcp_secret(ac)
+    for tname, spec in catalog.MCP_SERVER_TARGETS.items():
+        preset_key = spec["preset_key"]
+        endpoint = endpoints.get(preset_key)
+        if not endpoint:
+            log(f"target:{tname}", "SKIP", f"no endpoint configured for preset '{preset_key}'")
+            continue
+        conflict = catalog.conflicting_lambda_key(preset_key, lambda_arns)
+        if conflict:
+            log(f"target:{tname}", "ERR", f"lambda '{conflict}' still deployed — remove from ai.tf local.agent_lambdas first (ADR-017)")
+            continue
+        gw_id = gw_ids.get(spec["gateway"])
+        if not gw_id:
+            log(f"target:{tname}", "ERR", f"gateway {spec['gateway']} missing")
+            continue
+        auth = spec["auth"]
+        creds = [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
+        if auth["mode"] == "api_key":
+            token = (secrets.get(preset_key) or {}).get("token")
+            if not token:
+                log(f"target:{tname}", "SKIP", f"no stored credential for preset '{preset_key}' (Connectors tab)")
+                continue
+            provider_arn = _ensure_api_key_provider(ctrl, f"awsops-v2-{preset_key}-mcp", token)
+            if not provider_arn:
+                continue  # error already logged by _ensure_api_key_provider
+            creds = [{
+                "credentialProviderType": "API_KEY",
+                "credentialProvider": {"apiKeyCredentialProvider": {
+                    "providerArn": provider_arn,
+                    "credentialLocation": auth["credential_location"],
+                    "credentialParameterName": auth["credential_parameter_name"],
+                    "credentialPrefix": auth.get("credential_prefix", ""),
+                }},
+            }]
+        cfg = {"mcp": {"mcpServer": {"endpoint": endpoint, "listingMode": "DEFAULT"}}}
+        existing = {t.get("name"): t for t in _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id)}
+        tid_to_sync = None
+        try:
+            if tname in existing:
+                tid = existing[tname]["targetId"]
+                cur = ctrl.get_gateway_target(gatewayIdentifier=gw_id, targetId=tid)
+                cur_endpoint = cur.get("targetConfiguration", {}).get("mcp", {}).get("mcpServer", {}).get("endpoint")
+                # Drift = endpoint only (the remote server owns its own tool list under DEFAULT
+                # listing mode, so there is no tool-name set to diff like ensure_targets does).
+                if cur_endpoint == endpoint:
+                    log(f"target:{tname}", "EXISTS", endpoint)
+                else:
+                    ctrl.update_gateway_target(gatewayIdentifier=gw_id, targetId=tid, name=tname,
+                                                description=spec["description"], targetConfiguration=cfg,
+                                                credentialProviderConfigurations=creds)
+                    log(f"target:{tname}", "UPDATED", f"endpoint changed -> {endpoint}")
+                    tid_to_sync = tid
+            else:
+                resp = ctrl.create_gateway_target(gatewayIdentifier=gw_id, name=tname, description=spec["description"],
+                                                   targetConfiguration=cfg, credentialProviderConfigurations=creds)
+                log(f"target:{tname}", "CREATED", endpoint)
+                tid_to_sync = resp["targetId"]
+        except ClientError as e:
+            log(f"target:{tname}", "ERR", str(e)[:140])
+            continue
+        if tid_to_sync:
+            try:
+                ctrl.synchronize_gateway_targets(gatewayIdentifier=gw_id, targetIdList=[tid_to_sync])
+                log(f"target:{tname}:sync", "OK", "tools/list refresh requested")
+            except ClientError as e:
+                log(f"target:{tname}:sync", "ERR", str(e)[:140])
+
+
 def prune_moved_targets(ctrl, gw_ids):
     """Idempotent reconcile: delete a target that the catalog has MOVED to a different gateway —
     a KNOWN target name still living on a gateway it is no longer assigned to. Prevents the
@@ -155,6 +277,7 @@ def prune_moved_targets(ctrl, gw_ids):
     so the new target exists before the old one is removed. Targets whose name is NOT in the catalog
     are manual/experimental — never auto-deleted, only logged."""
     desired = {tname: spec["gateway"] for tname, spec in catalog.TARGETS.items()}
+    desired.update({tname: spec["gateway"] for tname, spec in catalog.MCP_SERVER_TARGETS.items()})
     # Snapshot every provisioned gateway's targets once.
     by_gw = {gw_key: _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id)
              for gw_key, gw_id in gw_ids.items()}
@@ -311,6 +434,7 @@ def main():
     print(f"\n=== AWSops v2 AgentCore provisioner (region={region}) ===")
     gw_ids = ensure_gateways(ctrl, ac)
     ensure_targets(ctrl, ac, gw_ids)
+    ensure_mcp_server_targets(ctrl, ac, gw_ids)  # ADR-017 curated official-vendor MCP presets
     prune_moved_targets(ctrl, gw_ids)  # remove split-brain orphans after a catalog gateway move
     memory_id = ensure_memory(ctrl)
     interpreter_id = ensure_interpreter(ctrl)

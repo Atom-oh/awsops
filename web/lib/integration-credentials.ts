@@ -18,9 +18,14 @@ const REGION = process.env.AWS_REGION || 'ap-northeast-2';
 const SECRET_NAME =
   process.env.INTEGRATIONS_SECRET_NAME || 'ops/awsops-v2/integrations/credentials';
 
-// Kinds that have a connector Lambda reading this secret (INTEGRATION_SLUG = kind). Extend as
-// connectors are added. An arbitrary key is rejected (no arbitrary secret-key injection).
-export const KNOWN_CONNECTOR_SLUGS = ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir'] as const;
+// Kinds that have a connector Lambda (or, per ADR-017, an official MCP preset) reading this
+// secret (INTEGRATION_SLUG = kind, or preset_key for ADR-017 presets). Extend as connectors are
+// added. An arbitrary key is rejected (no arbitrary secret-key injection).
+// Kept in lockstep with web/lib/mcp-lambda-invoke.ts KNOWN_MCP_LAMBDA_KINDS (jaeger/dynatrace/
+// datadog were invokable there but couldn't have their kind-mirror credential stored here until
+// this fix) and, for the ADR-017 presets, with scripts/v2/agentcore/catalog.py MCP_SERVER_TARGETS
+// preset_key values (datadog/clickhouse/tempo/jaeger/grafana/dynatrace/splunk/newrelic).
+export const KNOWN_CONNECTOR_SLUGS = ['notion', 'clickhouse', 'prometheus', 'loki', 'tempo', 'mimir', 'jaeger', 'dynatrace', 'datadog', 'grafana', 'splunk', 'newrelic'] as const;
 
 const MAX_SECRET_PAYLOAD_BYTES = 65000; // Secrets Manager limit is 64 KB/version
 const LOCK_KEY = 729153866; // fixed advisory-lock key for the single credentials secret

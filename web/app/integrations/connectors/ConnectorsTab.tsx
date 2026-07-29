@@ -5,14 +5,15 @@ import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
 import IntegrationIcon from '@/components/datasources/IntegrationIcon';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import { MCP_PRESETS } from '@/lib/mcp-presets';
 
-// Connectors tab: external SERVICE integrations (Notion now; Slack/Jira later) — distinct from
-// observability Datasources and from Skills. Read + GOVERNED write (write is propose-only / flag-OFF
-// per ADR-040/041 — surfaced as a disabled note here). Notion connect = paste one token.
-interface ConnectorDef { slug: string; label: string; help: string; }
-const CONNECTORS: ConnectorDef[] = [
-  { slug: 'notion', label: 'Notion', help: 'notion.so/my-integrations 에서 내부 통합을 만들고 토큰을 붙여넣으세요.' },
-];
+// Connectors tab: external SERVICE integrations — distinct from observability Datasources and from
+// Skills. Read + GOVERNED write (write is propose-only / flag-OFF per ADR-040/041 — surfaced as a
+// disabled note here). ADR-017 — the catalog is curated official-vendor MCP presets (Datadog/
+// ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk/New Relic) plus Notion (pre-existing, hosted MCP
+// is OAuth-only so it stays on the direct token path). Connect = paste one token; the same PUT
+// writes it to the shared credentials secret provision.py reads for the ADR-017 gateway targets.
+const CONNECTORS = MCP_PRESETS;
 
 export default function ConnectorsTab({ canManage = false }: { canManage?: boolean }) {
   const { tt } = useI18n();
@@ -60,7 +61,14 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
                 {configured.has(c.slug) ? '● connected' : '○ not connected'}
               </span>
             </div>
-            <p className="text-[12px] text-ink-400">{tt(c.help)}</p>
+            <div className="flex flex-wrap gap-1">
+              {c.official && <span className="inline-block text-[11px] text-sky-700 bg-sky-50 border border-sky-200 rounded px-1.5 py-0.5">{tt('공식 MCP')}</span>}
+              {c.preview && <span className="inline-block text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">{tt('벤더 preview')}</span>}
+            </div>
+            <p className="text-[12px] text-ink-400">
+              {tt(c.help)}{' '}
+              <a href={c.docsUrl} target="_blank" rel="noreferrer" className="underline">{tt('문서')}</a>
+            </p>
             {canManage ? (
               <div className="flex gap-2">
                 <Input type="password" value={token[c.slug] ?? ''} onChange={(e) => setToken((s) => ({ ...s, [c.slug]: e.target.value }))} placeholder={configured.has(c.slug) ? tt('토큰 교체…') : tt('토큰 붙여넣기')} />
@@ -71,7 +79,7 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
             ) : (
               <p className="text-[12px] text-ink-400">{tt('연결 관리는 관리자 전용입니다.')}</p>
             )}
-            <span className="inline-block text-[11px] text-ink-400 border border-ink-200 rounded px-1.5 py-0.5">{tt('읽기 전용 · 쓰기 제안전용(비활성)')}</span>
+            <span className="inline-block text-[11px] text-ink-400 border border-ink-200 rounded px-1.5 py-0.5">{tt(`읽기 전용(${c.readOnlyNote}) · 쓰기 제안전용(비활성)`)}</span>
           </Card>
         ))}
       </div>

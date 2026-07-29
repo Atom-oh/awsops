@@ -29,7 +29,7 @@ GATEWAY_DESCRIPTIONS = {
     "monitoring": "CloudWatch, CloudTrail (AWS native only)",
     "iac": "CloudFormation, CDK, Terraform",
     "ops": "Steampipe SQL listing/status/docs/inventory",
-    "external-obs": "External Observability & Integrations — routed (Prometheus + ClickHouse + Notion; Loki/Tempo/Mimir next)",
+    "external-obs": "External Observability & Integrations — routed (Prometheus + ClickHouse + Notion lambdas; Loki/Tempo/Mimir; + ADR-017 curated official-vendor MCP servers when official_mcp_enabled)",
 }
 
 
@@ -428,3 +428,111 @@ TARGETS = {
         ],
     },
 }
+
+# ADR-017 — curated official-vendor MCP servers, registered as remote `mcpServer` gateway targets
+# (NOT `mcp.lambda` — no Lambda, no hand-written handler; the vendor's own MCP server is the tool
+# provider). Endpoint is deployment-specific (terraform var.official_mcp_endpoints, injected via the
+# `agentcore` tf output as ac["official_mcp_endpoints"]); provision.py SKIPs any preset whose key is
+# absent there, same convention as a missing lambda_arn in TARGETS.
+#
+# auth.mode:
+#   "api_key"  -> AgentCore Identity API-key credential provider. credential_location/parameter_name/
+#                 prefix describe WHERE the secret is injected (a single header or query param — the
+#                 API only supports one slot, see the datadog note below).
+#   "none"     -> credentialProviderType GATEWAY_IAM_ROLE with no secret (self-hosted server behind
+#                 network-level auth only, e.g. an internal Tempo/Jaeger already gated by the VPC).
+#
+# capability is always read (ADR-017 Decision) — no write preset exists.
+MCP_SERVER_TARGETS = {
+    "datadog-mcp-server-target": {
+        "gateway": "external-obs",
+        "preset_key": "datadog",
+        "description": "Datadog official MCP (mcp.datadoghq.com) — GA, vendor-hosted, read (RBAC mcp_read)",
+        # Datadog's own docs offer 3 auth shapes: OAuth2.1+PKCE (browser, unusable headless), a
+        # DD_API_KEY+DD_APPLICATION_KEY header PAIR (needs 2 header slots — NOT expressible by one
+        # apiKeyCredentialProvider), or a single bearer PAT/service token. Use the single-bearer form.
+        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
+        "read_only_note": "RBAC-scoped (mcp_read); no local flag",
+    },
+    "clickhouse-mcp-server-target": {
+        "gateway": "external-obs",
+        "preset_key": "clickhouse",
+        "description": "ClickHouse official MCP (ClickHouse/mcp-clickhouse), self-hosted streamable-HTTP — read-only by default",
+        # Cloud-hosted mcp.clickhouse.cloud is OAuth-3LO-only (browser consent) — not usable for a
+        # headless diagnosis agent. This preset targets a SELF-HOSTED instance (CLICKHOUSE_MCP_SERVER_TRANSPORT=http),
+        # replacing agent/lambda/clickhouse_mcp.py. Mutually exclusive with clickhouse-mcp-target (see ASSERT below).
+        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
+        "read_only_note": "read-only by default (CLICKHOUSE_ALLOW_WRITE_ACCESS unset)",
+    },
+    "tempo-mcp-server-target": {
+        "gateway": "external-obs",
+        "preset_key": "tempo",
+        "description": "Tempo built-in MCP (query-frontend /api/mcp) — official, in-binary, read (query-only tools)",
+        # Ships in the Tempo binary itself (query_frontend.mcp_server.enabled); inherits whatever auth
+        # already fronts the query-frontend. Mutually exclusive with tempo-mcp-target.
+        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
+        "read_only_note": "query-only tools; no documented read-only flag",
+    },
+    "jaeger-mcp-server-target": {
+        "gateway": "external-obs",
+        "preset_key": "jaeger",
+        "description": "Jaeger v2 built-in MCP (/api/ai/mcp/) — official, in-binary, gated by ai.enable_mcp (default off on the Jaeger side), read",
+        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
+        "read_only_note": "9 read-only tools, tenancy-aware",
+    },
+    "grafana-mcp-server-target": {
+        "gateway": "external-obs",
+        "preset_key": "grafana",
+        "description": "Grafana official MCP (grafana/mcp-grafana), self-hosted streamable-HTTP — dashboards + Loki datasource tools, read with --disable-write",
+        # Self-host only — Grafana Cloud's hosted MCP is OAuth-browser-consent. Loki has no standalone
+        # official MCP; its tools are surfaced here via mcp-grafana's Loki datasource support.
+        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
+        "read_only_note": "server started with --disable-write",
+    },
+    "dynatrace-mcp-server-target": {
+        "gateway": "external-obs",
+        "preset_key": "dynatrace",
+        "description": "Dynatrace official hosted MCP gateway (per-environment) — read, scope-based",
+        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
+        "read_only_note": "no local flag; least-privilege via Platform Token scopes",
+    },
+    "splunk-mcp-server-target": {
+        "gateway": "external-obs",
+        "preset_key": "splunk",
+        "description": "Splunk official MCP (Splunkbase app 7931), self-hosted (:8089/services/mcp) — RBAC-scoped, read",
+        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
+        "read_only_note": "grant only mcp_tool_execute, never mcp_tool_admin",
+    },
+    "newrelic-mcp-server-target": {
+        "gateway": "external-obs",
+        "preset_key": "newrelic",
+        "description": "New Relic official MCP (mcp.newrelic.com) — PREVIEW (enable under Previews & Trials), read",
+        "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Api-Key", "credential_prefix": ""},
+        "read_only_note": "preview — no documented read-only flag; use a read-scoped User API key",
+    },
+}
+
+# ADR-017 mutual-exclusion guard: a preset_key's kind must not be live as BOTH a lambda TARGETS
+# entry and an MCP_SERVER_TARGETS entry at once — the gateway would otherwise expose the same tool
+# name from two targets and agent.py's _dedup_by_tool_name pick is non-deterministic (agent.py:599).
+# Transition is one kind at a time: to cut a kind over, remove its lambda_key from local.agent_lambdas
+# (terraform) — provision.py's SKIP-on-missing-lambda_arn then retires the old target automatically.
+_LAMBDA_KEY_BY_PRESET = {
+    "clickhouse": "clickhouse-mcp",
+    "tempo": "tempo-mcp",
+    "jaeger": "jaeger-mcp",
+    "dynatrace": "dynatrace-mcp",
+    "datadog": "datadog-mcp",
+    # prometheus/mimir/notion/loki have no official-MCP preset (ADR-017 Context) — no entry here.
+}
+
+
+def conflicting_lambda_key(preset_key, lambda_arns):
+    """Return the lambda_key still deployed for this preset's kind, or None if there's no conflict.
+    A preset is only checked when it's actually ACTIVE (caller ensures endpoint is configured) —
+    an unconfigured preset is inert regardless of the lambda's state. provision.py calls this per
+    active target so one conflicting kind ERRs and SKIPs without blocking every other preset."""
+    lambda_key = _LAMBDA_KEY_BY_PRESET.get(preset_key)
+    if lambda_key and lambda_key in lambda_arns:
+        return lambda_key
+    return None

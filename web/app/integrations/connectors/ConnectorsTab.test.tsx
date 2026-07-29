@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import ConnectorsTab from './ConnectorsTab';
 
 let calls: { url: string; method?: string; body?: string }[] = [];
@@ -23,11 +23,24 @@ describe('ConnectorsTab', () => {
     expect(screen.queryByText('clickhouse')).toBeNull();
   });
 
+  // ADR-017 — the catalog now has 9 preset cards (Notion + 8 curated official-MCP vendors), each
+  // with its own token input/connect button, so queries must be scoped to Notion's own card.
+  it('lists the ADR-017 official-MCP presets alongside Notion, each badged', async () => {
+    render(<ConnectorsTab canManage />);
+    await waitFor(() => expect(screen.getByText('Datadog')).toBeTruthy());
+    for (const label of ['Datadog', 'ClickHouse', 'Tempo', 'Jaeger', 'Grafana', 'Dynatrace', 'Splunk', 'New Relic']) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    expect(screen.getAllByText('공식 MCP').length).toBe(8); // every preset but Notion
+    expect(screen.getByText('벤더 preview')).toBeTruthy(); // New Relic only
+  });
+
   it('admin can paste a token and connect (PUT credential)', async () => {
     render(<ConnectorsTab canManage />);
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy());
-    fireEvent.change(screen.getByPlaceholderText(/토큰 붙여넣기/), { target: { value: 'secret_x' } });
-    fireEvent.click(screen.getByRole('button', { name: '연결' }));
+    const notionCard = screen.getByText('Notion').closest('[class*="p-4"]') as HTMLElement;
+    fireEvent.change(within(notionCard).getByPlaceholderText(/토큰 붙여넣기/), { target: { value: 'secret_x' } });
+    fireEvent.click(within(notionCard).getByRole('button', { name: '연결' }));
     await waitFor(() => {
       const put = calls.find((c) => c.method === 'PUT');
       expect(put).toBeTruthy();
@@ -35,10 +48,10 @@ describe('ConnectorsTab', () => {
     });
   });
 
-  it('non-admin sees a read-only note, no token field', async () => {
+  it('non-admin sees a read-only note, no token field, on every card', async () => {
     render(<ConnectorsTab canManage={false} />);
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy());
     expect(screen.queryByPlaceholderText(/토큰/)).toBeNull();
-    expect(screen.getByText(/관리자 전용/)).toBeTruthy();
+    expect(screen.getAllByText(/관리자 전용/).length).toBe(9); // one per preset card
   });
 });
