@@ -40,7 +40,7 @@ function sixToFour(host: string): string | null {
 // would catch. A 2026-07-21 registration-endpoint pentest planted 337 `integrations`/`datasources`
 // rows with endpoints like `http://localhost:9090` — isBlockedHost/isAlwaysBlockedHost only parsed
 // literal IPs, so the plain string "localhost" fell through as a "non-literal hostname" and was
-// accepted. This is a fixed, finite set (not general DNS resolution, which ADR-011 deliberately
+// accepted. This is a fixed, finite set (not general DNS resolution, which ADR-007 §6 deliberately
 // leaves to connection-time in the connector Lambda) — so checking it here at registration time is
 // free of the latency/availability cost a DNS lookup from this route would add.
 const LOOPBACK_HOSTNAME_ALIASES = new Set([
@@ -50,12 +50,18 @@ const LOOPBACK_HOSTNAME_ALIASES = new Set([
   'ip6-loopback',
 ]);
 
+// `new URL(...).hostname` preserves a trailing dot (WHATWG URL spec doesn't strip it), so
+// "localhost." is a one-character bypass of an exact Set match — same DNS target, different
+// string. RFC 6761 also reserves the whole `*.localhost` suffix (e.g. "foo.localhost") to resolve
+// to loopback, which an exact match likewise misses entirely.
 function isLoopbackHostname(host: string): boolean {
-  return LOOPBACK_HOSTNAME_ALIASES.has(host);
+  const h = host.replace(/\.+$/, '');
+  return h === 'localhost' || h.endsWith('.localhost') || LOOPBACK_HOSTNAME_ALIASES.has(h);
 }
 
-/** True for a LITERAL private/link-local/loopback/metadata IP (v4 or v6). Non-literal hostnames → false
- *  (their resolution is deferred to connection time, P2-infra). */
+/** True for a literal private/link-local/loopback/metadata IP (v4 or v6), or a fixed-set loopback
+ *  hostname alias (see isLoopbackHostname). Any other non-literal hostname → false (its resolution
+ *  is deferred to connection time, P2-infra). */
 export function isBlockedHost(hostOrIp: string): boolean {
   const host = hostOrIp.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
   if (isLoopbackHostname(host)) return true;
@@ -86,10 +92,11 @@ export function assertEgressEndpointAllowed(urlString: string, opts: { allowPriv
   }
 }
 
-/** True for a LITERAL ALWAYS-BLOCKED IP — metadata / loopback / link-local / multicast / unspecified /
- *  broadcast — i.e. blocked even for datasources (which otherwise ALLOW private RFC1918/ULA). Mirrors
- *  agent.py `_ip_always_blocked`. RFC1918 (10/172.16/192.168) and ULA fc00::/7 are NOT blocked here
- *  (in-cluster datasources are the intended target); the metadata IPv6 fd00:ec2::254 IS blocked. */
+/** True for a literal ALWAYS-BLOCKED IP — metadata / loopback / link-local / multicast / unspecified /
+ *  broadcast — or a fixed-set loopback hostname alias (see isLoopbackHostname) — i.e. blocked even
+ *  for datasources (which otherwise ALLOW private RFC1918/ULA). Mirrors agent.py
+ *  `_ip_always_blocked`. RFC1918 (10/172.16/192.168) and ULA fc00::/7 are NOT blocked here (in-cluster
+ *  datasources are the intended target); the metadata IPv6 fd00:ec2::254 IS blocked. */
 export function isAlwaysBlockedHost(hostOrIp: string): boolean {
   const host = hostOrIp.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
   if (isLoopbackHostname(host)) return true;
@@ -118,9 +125,10 @@ export function isAlwaysBlockedHost(hostOrIp: string): boolean {
 }
 
 /** Throw if a user-supplied DATASOURCE endpoint (ClickHouse/Prometheus/Loki/…) is unsafe: only
- *  http/https schemes; a literal ALWAYS-BLOCKED host (metadata/loopback/link-local/multicast) is
- *  rejected. Private RFC1918/ULA is ALLOWED (in-cluster datasources). Non-literal hostnames pass the
- *  registration guard and are re-checked at connection time by the connector Lambda (datasource_http). */
+ *  http/https schemes; a literal ALWAYS-BLOCKED host (metadata/loopback/link-local/multicast) or a
+ *  fixed-set loopback hostname alias is rejected. Private RFC1918/ULA is ALLOWED (in-cluster
+ *  datasources). Any other non-literal hostname passes the registration guard and is re-checked at
+ *  connection time by the connector Lambda (datasource_http). */
 export function assertDatasourceEndpointAllowed(urlString: string): void {
   let url: URL;
   try { url = new URL(urlString); } catch { throw new Error('endpoint must be a valid URL'); }

@@ -40,6 +40,16 @@ describe('isBlockedHost (ADR-011 blocklist)', () => {
     expect(isBlockedHost('0.0.0.0')).toBe(true);
     expect(isBlockedHost('0.1.2.3')).toBe(true);
   });
+
+  // PR #192 review: new URL(...).hostname preserves a trailing dot and RFC 6761 reserves the whole
+  // `*.localhost` suffix — an exact Set match on the alias list missed both, a one-character bypass
+  // of the fix above.
+  it('blocks a trailing-dot FQDN and any *.localhost subdomain', () => {
+    for (const host of ['localhost.', 'localhost..', 'foo.localhost', 'foo.localhost.', 'localhost.localdomain.']) {
+      expect(isBlockedHost(host)).toBe(true);
+    }
+    expect(() => assertEgressEndpointAllowed('https://localhost.:9090')).toThrow(/private\/metadata/);
+  });
 });
 
 describe('assertEgressEndpointAllowed', () => {
@@ -119,5 +129,13 @@ describe('assertDatasourceEndpointAllowed (datasource — private allowed, alway
       expect(isAlwaysBlockedHost(host)).toBe(true);
     }
     expect(() => assertDatasourceEndpointAllowed('http://localhost:9090')).toThrow();
+  });
+
+  it('blocks a trailing-dot FQDN and any *.localhost subdomain (datasource path)', () => {
+    for (const host of ['localhost.', 'foo.localhost']) {
+      expect(isAlwaysBlockedHost(host)).toBe(true);
+    }
+    expect(() => assertDatasourceEndpointAllowed('http://localhost.:9090')).toThrow();
+    expect(() => assertDatasourceEndpointAllowed('http://foo.localhost:9090')).toThrow();
   });
 });
