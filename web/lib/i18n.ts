@@ -2,6 +2,12 @@
 // MVP scope: shell + navigation strings only (not the inventory catalog or page bodies).
 
 export type Lang = 'ko' | 'en' | 'zh' | 'ja';
+
+/** BCP-47 locale for Date#toLocaleString/toLocaleDateString — keyed off the active UI language. */
+const LOCALES: Record<Lang, string> = { ko: 'ko-KR', en: 'en-US', zh: 'zh-CN', ja: 'ja-JP' };
+export function localeOf(lang: Lang): string {
+  return LOCALES[lang];
+}
 type Dict = Record<string, string>;
 
 const MESSAGES: Record<Lang, Dict> = {
