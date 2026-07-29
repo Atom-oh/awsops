@@ -67,4 +67,15 @@ describe('PUT /api/opencost/[cluster]', () => {
     const { PUT } = await import('./route');
     expect((await PUT(req('PUT', { config: {} }), P)).status).toBe(503);
   });
+  // pentest-remediation P1-2 (Finding 4): reject the newline-injected key at save time (400), not
+  // just at render time — so a bad config never reaches storage in the first place.
+  it('400 on a newline-injected override key, without ever calling upsertOpencostConfig', async () => {
+    const { PUT } = await import('./route');
+    const res = await PUT(
+      req('PUT', { chartVersion: '1.0', config: { override: { 'key\nmalicious_key: injected_value': 'test' } } }),
+      P,
+    );
+    expect(res.status).toBe(400);
+    expect(upsertOpencostConfig).not.toHaveBeenCalled();
+  });
 });

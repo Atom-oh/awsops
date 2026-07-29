@@ -2,6 +2,7 @@ import { verifyUser } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { isClusterOnboarded } from '@/lib/opencost-allowlist';
 import { getOpencostConfig, upsertOpencostConfig } from '@/lib/opencost-config';
+import { assertSafeYamlKeys } from '@/lib/opencost';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -28,6 +29,14 @@ export async function PUT(request: Request, { params }: { params: { cluster: str
   let body: { chartVersion?: string | null; config?: Record<string, unknown> } = {};
   try { body = (await readJsonBounded(request)) as typeof body; } // bound BEFORE parse (OOM guard)
   catch (e) { if (e instanceof BodyTooLargeError) return json({ status: 'error', message: 'request body too large' }, 413); /* tolerate empty/invalid body */ }
+  // pentest-remediation P1-2 (Finding 4): fail fast at save time (400) instead of only failing when
+  // the bundle is later rendered — renderValuesYaml() throws on any config key outside the
+  // cluster/region/chartVersion charset (a literal '\n' or ':' would otherwise rewrite YAML structure).
+  try {
+    assertSafeYamlKeys((body.config ?? {}) as any);
+  } catch (e) {
+    return json({ status: 'error', message: e instanceof Error ? e.message : 'invalid config' }, 400);
+  }
   const ok = await upsertOpencostConfig({
     cluster: params.cluster,
     chartVersion: body.chartVersion ?? null,

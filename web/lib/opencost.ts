@@ -38,6 +38,23 @@ export function assertSafeName(label: string, v: string): string {
   return v;
 }
 
+// pentest-remediation P1-2 (Finding 4): toYaml() interpolated object keys with NO validation —
+// only scalar() quotes *values*. A key containing '\n' (e.g. "key\nmalicious_key: injected_value")
+// re-writes YAML structure once rendered, letting an authenticated user inject arbitrary Helm chart
+// values (global.imageRegistry, extraEnv, nodeSelector, ...) into the downloadable install bundle.
+// Reuse the SAME charset already trusted for cluster/region/chartVersion via assertSafeName —
+// applied recursively to every key in the (curated + override) tree, not just the top level.
+export function assertSafeYamlKeys(node: Json): void {
+  if (Array.isArray(node)) {
+    for (const v of node) assertSafeYamlKeys(v);
+  } else if (isPlainObject(node)) {
+    for (const k of Object.keys(node)) {
+      assertSafeName('config key', k);
+      assertSafeYamlKeys(node[k]);
+    }
+  }
+}
+
 type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
 
 function isPlainObject(v: unknown): v is { [k: string]: Json } {
@@ -93,6 +110,7 @@ export function renderValuesYaml(cfg: OpencostConfig): string {
   if (v.awsRegion) exporter.aws = { service_account_region: v.awsRegion };
   let tree: { [k: string]: Json } = { opencost: { exporter, prometheus: { internal } } };
   if (cfg.override && isPlainObject(cfg.override as Json)) tree = deepMerge(tree, cfg.override as { [k: string]: Json });
+  assertSafeYamlKeys(tree); // fail loud rather than silently emit structurally-broken YAML
   return toYaml(tree);
 }
 
