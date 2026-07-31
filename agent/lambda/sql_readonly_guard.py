@@ -87,6 +87,28 @@ as an ordinary identifier character, so `SELECT 1 AS $x$ INTO OUTFILE ...` on a 
 a heredoc at all — but the old dialect-agnostic scanner saw `$x$`, found no matching close, and
 swallowed `INTO OUTFILE` as "still inside the string". `dollar_quote=False` on the MySQL path
 disables that scan (Postgres/ClickHouse keep the default `dollar_quote=True`).
+
+PR-review round-7 CRITICAL #1: the dollar-quote scan above had no LEFT boundary check. Postgres
+allows `$` as an ordinary identifier character, so `foo$tag$` is a legal column alias, not a
+heredoc opener — but the scanner matched `\$[A-Za-z0-9_]*\$` at the current position regardless of
+what preceded it, then hunted forward for the next `$tag$` and swallowed everything in between as
+"string content". `SELECT 1 AS foo$tag$, pg_cancel_backend(123) AS bar$tag$` was misread as one
+heredoc spanning `foo$tag$`..`bar$tag$`, hiding the call from DANGER entirely. Fixed by requiring
+the character immediately before a `$tag$` match to NOT be an identifier char
+(`[A-Za-z0-9_$]`) before treating it as an opener; otherwise it's just consumed as a literal `$`
+and scanning continues normally. Also: a dollar-quote that IS correctly recognized as opening but
+never finds its matching close before EOF now fails closed (raises) instead of silently consuming
+to EOF as if the tail were valid string content.
+
+PR-review round-7 CRITICAL #2: Postgres `U&"..."` Unicode-escape quoted identifiers let `\XXXX`
+(and `\+XXXXXX`) escapes inside the identifier decode to arbitrary Unicode characters at parse
+time. `SELECT U&"pg_cancel_backen\0064"(123)` retains the literal undecoded text
+`pg_cancel_backen\0064` in the stripped output — it does not string-match `pg_cancel_backend` in
+DANGER — but real Postgres decodes `\0064` to `d` and calls `pg_cancel_backend(123)` for real. The
+same trick defeats every DANGER function name, one U&-escaped character at a time. Rather than ship
+a hex-decoder whose surrogate-pair/invalid-escape edge cases might be subtly wrong (this bug class's
+history), `U&"..."`/`u&"..."` is fail-closed entirely — rejected outright, regardless of content.
+It is rare, exotic syntax with no legitimate use in this tool's Aurora-diagnostic query patterns.
 """
 import re
 
@@ -108,7 +130,8 @@ DANGER = re.compile(
     r"NOTIFY|REFRESH|UPDATE|INTO|"
     r"pg_read_file|pg_read_binary_file|pg_stat_file|pg_ls_\w+|lo_import|lo_export|lo_create|lo_unlink|"
     r"lo_put|dblink\w*|pg_terminate_backend|pg_cancel_backend|pg_advisory_\w+|set_config|load_file|"
-    r"setval|nextval)\b",
+    r"setval|nextval|pg_stat_reset\w*|pg_drop_replication_slot|pg_create_logical_replication_slot|"
+    r"pg_create_physical_replication_slot|pg_switch_wal|pg_reload_conf|pg_sleep)\b",
     re.IGNORECASE,
 )
 
@@ -202,12 +225,27 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
                     break
                 idx += 1
             out.append(" ")
-        elif dollar_quote and c == "$" and re.match(r"\$[A-Za-z0-9_]*\$", sql[idx:]):  # heredoc/dollar-quoted string
+        elif (dollar_quote and c == "$" and re.match(r"\$[A-Za-z0-9_]*\$", sql[idx:])
+              # PR-review round-7 CRITICAL #1: `$` is a legal Postgres identifier character, so
+              # `foo$tag$` is just an alias ending in `$tag$`, NOT a heredoc opener — only treat
+              # a `$tag$` match as an opener when NOT preceded by an identifier char (LEFT
+              # boundary). Missing this let `SELECT 1 AS foo$tag$, pg_cancel_backend(123) AS
+              # bar$tag$` be misread as one heredoc spanning foo$tag$..bar$tag$, hiding the call.
+              and not (idx > 0 and re.match(r"[A-Za-z0-9_$]", sql[idx - 1]))):
             delim = re.match(r"\$[A-Za-z0-9_]*\$", sql[idx:]).group(0)  # $$ or $tag$
             j = sql.find(delim, idx + len(delim))
-            idx = (j + len(delim)) if j != -1 else n
+            if j == -1:  # no matching close — real syntax error or parser-confusion attempt either way
+                raise ValueError("read-only: unterminated dollar-quoted string")
+            idx = j + len(delim)
             out.append(" ")                   # whole heredoc dropped (a ' inside can't desync)
         elif c == "`" or c == '"':            # IDENTIFIER quote → keep inner, drop quote chars
+            # PR-review round-7 CRITICAL #2: Postgres U&"..." Unicode-escape identifiers decode
+            # \XXXX (and \+XXXXXX) escapes at parse time, letting a DANGER function name (e.g.
+            # pg_cancel_backend) be spelled with one char escaped so it never appears as
+            # plaintext here. This syntax has no legitimate use in this tool's diagnostic
+            # queries — fail closed entirely rather than ship a partial/possibly-wrong decoder.
+            if c == '"' and re.search(r"(?<![A-Za-z0-9_])[Uu]&$", sql[:idx]):
+                raise ValueError('read-only: U&"..." unicode-escape identifiers are not allowed')
             q = c
             idx += 1
             while idx < n:

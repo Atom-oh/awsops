@@ -211,6 +211,36 @@ class TestPostgresDialect(unittest.TestCase):
     def test_mysql_load_file_rejected(self):
         self._bad("SELECT load_file('/etc/passwd')")
 
+    def test_control_plane_dos_functions_rejected(self):
+        # MAJOR (round 7): more control-plane/DoS functions a READ ONLY transaction doesn't block.
+        self._bad("SELECT pg_reload_conf()")
+
+    def test_dollar_quote_left_boundary_no_false_heredoc_from_identifier_suffix(self):
+        # PR-review round-7 CRITICAL #1: `$` is a legal Postgres identifier char, so `foo$tag$` is
+        # an ordinary alias, not a heredoc opener. The old scanner had no LEFT boundary check, so it
+        # misread this as one heredoc spanning foo$tag$..bar$tag$, hiding pg_cancel_backend(123)
+        # (an ordinary function call between the two aliases in real Postgres) as "string content".
+        self._bad("SELECT 1 AS foo$tag$, pg_cancel_backend(123) AS bar$tag$")
+
+    def test_dollar_quote_genuine_heredoc_still_works(self):
+        # Proves the left-boundary fix didn't break legitimate dollar-quoted strings with no
+        # adjacent-identifier collision.
+        self._ok("SELECT $tag$hello world$tag$ AS greeting")
+
+    def test_dollar_quote_unterminated_fails_closed(self):
+        with self.assertRaises(ValueError):
+            g.strip_sql("SELECT $tag$hello")
+
+    def test_unicode_escape_identifier_hiding_dangerous_function_rejected(self):
+        # PR-review round-7 CRITICAL #2: U&"..." Unicode-escape identifiers decode \XXXX escapes
+        # at parse time — U&"pg_cancel_backen\0064"(123) decodes to pg_cancel_backend(123) in real
+        # Postgres, but the literal undecoded text never string-matches DANGER. Fail-closed on any
+        # U&"..." usage (option b: blanket reject, not a partial decoder).
+        self._bad('SELECT U&"pg_cancel_backen\\0064"(123)')
+
+    def test_lowercase_u_ampersand_identifier_also_rejected(self):
+        self._bad('SELECT u&"drop\\0021"(123)')
+
 
 class TestMysqlDashDashComment(unittest.TestCase):
     """PR-review round 3: MySQL only treats `--` as a comment when the second dash is followed by
