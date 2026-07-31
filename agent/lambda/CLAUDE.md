@@ -72,9 +72,15 @@ AgentCore 게이트웨이 MCP 도구용 Lambda 함수 + 공유 모듈. 각 Lambd
   인자는 **무시**되며 도구 스키마에서도 제거됐다 — 자격증명 선택은 서버 설정이지 모델 입력이 아니다.
   env 미설정 시 **fail-closed**(더 높은 권한으로 폴백하지 않음).
 - 롤 권한: `NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
-  `CONNECT`(awsops) + `USAGE`(public) + `SELECT`(public 테이블) **만**, `default_transaction_read_only=on`,
-  EXECUTE 부여 0건, predefined-role 멤버십 0건.
+  `CONNECT`(awsops) + `USAGE`(public) + **명시 allowlist 테이블에 대한 `SELECT`만**,
+  `default_transaction_read_only=on`, 이 롤에 **부여된** EXECUTE 0건, predefined-role 멤버십 0건.
+  `ON ALL TABLES` / `ALTER DEFAULT PRIVILEGES` 포괄 부여는 **쓰지 않는다** — `execute_sql`은 모델이 호출하는
+  도구이므로 새 테이블은 누군가 allowlist에 넣기 전까지 보이지 않는다. 자격증명 보유 컬럼은 컬럼단위
+  `GRANT SELECT (…)`로 제외(`eks_registrations.auth` = k8s bearer token, `accounts.external_id`) →
+  앱의 redaction 경계를 DB에서 재현. **비밀을 담는 컬럼을 추가하는 마이그레이션은 이 grant 목록도 확인해야 한다.**
   → `terraform/v2/foundation/migrations/01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql`
+- 자격증명이 host 계정 롤이므로 `execute_sql`은 **cross-account 미지원**(다른 계정 target이면 fail-closed 400).
+  나머지 rds-mcp 도구의 cross-account 경로는 그대로.
 - agent Lambda IAM 롤에는 master secret `GetSecretValue`가 **없다**(`ai.tf` `agent_lambda_inventory`).
   어휘 가드를 우회해도 **권한 없는 세션**에 도달할 뿐이다.
 - **왜**: PR #197 리뷰 3~7라운드가 매번 새 우회를 찾았다. 원인은 denylist가 열거할 수 없는 부류 —
@@ -85,9 +91,13 @@ AgentCore 게이트웨이 MCP 도구용 Lambda 함수 + 공유 모듈. 각 Lambd
   권한상승이 아니다(ClickHouse 커넥터는 아직 DB-롤 경계가 없어 그쪽에선 가드가 여전히 1차 방어다).
 
 (English) `execute_sql` / `inventory-read` authenticate as the dedicated `awsops_sql_reader` role
-(NOSUPERUSER, CONNECT+USAGE+SELECT only, `default_transaction_read_only=on`, no EXECUTE grants), via
-its own secret — the caller-supplied `secret_arn` is ignored and gone from the tool schema, and an
-unset env fails closed with no fallback. The agent Lambda role has **no** `GetSecretValue` on the
+(NOSUPERUSER, `default_transaction_read_only=on`, SELECT on an explicit table ALLOWLIST only — no
+`ON ALL TABLES`/default-privileges blanket — no EXECUTE granted to the role), via its own secret. The
+caller-supplied `secret_arn` is ignored and gone from the tool schema, and an unset env fails closed
+with no fallback. Credential-bearing columns are excluded with column-level grants
+(`eks_registrations.auth`, `accounts.external_id`); a migration that adds a secret column must also
+check that grant list. Cross-account `execute_sql` is unsupported (fail-closed 400) because the
+credential is a host-account role. The agent Lambda role has **no** `GetSecretValue` on the
 Aurora master secret, so a lexical-guard bypass now lands in an unprivileged session. Do not grow the
 DANGER denylist hoping to make it exhaustive — "functions that execute a string" is unbounded. The
 ClickHouse connector has no equivalent DB-role boundary yet, so there the guard is still primary.

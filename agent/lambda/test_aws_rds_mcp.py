@@ -12,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 import aws_rds_mcp as rds_mcp  # noqa: E402
+import cross_account  # noqa: E402
 
 
 # PR-review round 8: execute_sql's Data API credential now comes from env (the dedicated
@@ -317,6 +318,58 @@ class TestExecuteSqlUsesTheLeastPrivilegeSecret(unittest.TestCase):
             resp = self._run()
         self.assertEqual(resp["statusCode"], 400)
         self.rds_data_client.begin_transaction.assert_not_called()
+
+
+class TestExecuteSqlCrossAccountFailsClosed(unittest.TestCase):
+    """PR-review round 9 MAJOR: the Data API credential is the HOST account's least-privilege reader
+    secret, so a genuinely different target account can never work — say so instead of attempting a
+    doomed call. Host detection reuses cross_account.get_role_arn (None when target == host)."""
+
+    HOST = "180294183052"
+    OTHER = "999988887777"
+
+    def setUp(self):
+        self.rds_client = mock.MagicMock()
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-postgresql"}]}
+        self.rds_data_client = mock.MagicMock()
+        self.rds_data_client.execute_statement.return_value = {"columnMetadata": [], "records": []}
+        self.rds_data_client.begin_transaction.return_value = {"transactionId": "txn-1"}
+
+        def fake_get_client(service, region, role_arn):
+            return self.rds_data_client if service == "rds-data" else self.rds_client
+
+        self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
+        self.get_client_patch.start()
+        self.env_patch = mock.patch.dict(os.environ, {
+            "AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN,
+            "AWSOPS_HOST_ACCOUNT_ID": self.HOST,
+        })
+        self.env_patch.start()
+        cross_account._host_account_id.cache_clear()
+
+    def tearDown(self):
+        self.get_client_patch.stop()
+        self.env_patch.stop()
+        cross_account._host_account_id.cache_clear()
+
+    def _run(self, account_id):
+        event = _event("SELECT 1")
+        event["arguments"]["target_account_id"] = account_id
+        return rds_mcp.lambda_handler(event, None)
+
+    def test_other_account_target_fails_closed_before_any_data_api_call(self):
+        resp = self._run(self.OTHER)
+        self.assertEqual(resp["statusCode"], 400)
+        self.assertIn("cross-account", json.loads(resp["body"])["error"])
+        self.rds_data_client.begin_transaction.assert_not_called()
+        self.rds_data_client.execute_statement.assert_not_called()
+
+    def test_host_account_target_still_works(self):
+        # v2 is single-account: agent.py passes the host id explicitly, and get_role_arn returns
+        # None for it — that must NOT be treated as cross-account.
+        resp = self._run(self.HOST)
+        self.assertEqual(resp["statusCode"], 200)
+        self.rds_data_client.begin_transaction.assert_called_once()
 
 
 if __name__ == "__main__":

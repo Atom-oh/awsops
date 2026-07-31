@@ -81,6 +81,18 @@ def lambda_handler(event, context):
 
         # Execute read-only SQL via RDS Data API / RDS Data API를 통한 읽기 전용 SQL 실행
         elif t == "execute_sql":
+            # PR-review round 9 MAJOR: fail closed on a genuine cross-account target. The Data API
+            # credential is now the HOST account's least-privilege reader secret
+            # (AURORA_SQL_READER_SECRET_ARN) and the caller-supplied secret_arn is ignored — so
+            # pointing this at another account's cluster would send host credentials to a foreign
+            # engine and fail anyway. Say so instead of attempting a doomed call. `role_arn` is
+            # already None when target_account_id is absent OR equals the host account
+            # (cross_account.get_role_arn) — so a truthy role_arn means a genuinely different
+            # account. The other rds-mcp tools keep their cross-account path unchanged.
+            if role_arn:
+                return err("read-only: cross-account execute_sql is unsupported — the Data API "
+                           "credential is the host account's least-privilege reader role "
+                           "(awsops_sql_reader); host-account PostgreSQL only")
             rds_data = get_client('rds-data', region, role_arn)
             # pentest-remediation P2-4: the old guard was `kw in sql.lower().split()` — whitespace-only
             # tokenization, so a keyword not surrounded by spaces (e.g. DROP/*x*/TABLE) never produced
@@ -104,7 +116,8 @@ def lambda_handler(event, context):
             # transaction only blocks data WRITES — control-plane/side-effect calls sail through it.
             # That set is unbounded; a denylist cannot enumerate it. So the boundary is now the
             # DATABASE: this path authenticates as the dedicated `awsops_sql_reader` Postgres role
-            # (NOSUPERUSER, CONNECT+USAGE+SELECT only, `default_transaction_read_only=on`) whose
+            # (NOSUPERUSER, `default_transaction_read_only=on`, SELECT on an explicit table allowlist
+            # that excludes credential-bearing columns — round 9 CRITICAL) whose
             # credentials live in their own secret — see the ULID `agent_sql_reader_role` migration.
             # The caller-supplied `secret_arn` is deliberately IGNORED (and removed from the tool
             # schema): credential choice is server-side config, never a model-controlled argument.
