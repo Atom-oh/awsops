@@ -59,10 +59,14 @@ describe('POST /api/auth/signout', () => {
     expect(revokeSessionsFor).not.toHaveBeenCalled();
   });
   it('still clears the cookie and returns 200 even if the revocation write fails (best-effort)', async () => {
-    verifyUserForSignout.mockResolvedValue({ sub: 'u-1' });
+    // iat must be set here — the route only calls revokeSessionsFor when `user.iat` is truthy
+    // (see the sibling "does not attempt revocation when the verified token has no iat" test), so
+    // omitting it made this test never actually exercise the catch/failure path it claims to.
+    verifyUserForSignout.mockResolvedValue({ sub: 'u-1', iat: 1_700_000_000 });
     revokeSessionsFor.mockRejectedValue(new Error('db down'));
     const { POST } = await import('./route');
     const res = await POST(req());
+    expect(revokeSessionsFor).toHaveBeenCalledWith('u-1', 1_700_000_000); // path actually exercised
     expect(res.status).toBe(200);
     expect(res.headers.get('set-cookie')).toContain('Max-Age=0');
     expect(await res.json()).toEqual({ redirect: '/login' });

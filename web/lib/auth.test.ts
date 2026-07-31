@@ -7,7 +7,16 @@ vi.mock('jose', () => ({
 }));
 
 const query = vi.fn();
-vi.mock('./db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
+const release = vi.fn();
+// isRevoked runs its SELECT through a pooled client (BEGIN/SET LOCAL/SELECT/COMMIT) so
+// `SET LOCAL statement_timeout` scopes to just that query (P3-review MAJOR-2) — route all of
+// client.query through the same `query` mock so existing assertions on the SELECT call still work.
+vi.mock('./db', () => ({
+  getPool: () => ({
+    query: (...a: unknown[]) => query(...a),
+    connect: async () => ({ query: (...a: unknown[]) => query(...a), release }),
+  }),
+}));
 
 const NOW = 1_700_000_000; // arbitrary fixed epoch seconds for iat/revoked_at comparisons
 
@@ -50,6 +59,17 @@ describe('verifyUser', () => {
     it('rejects a token issued before (or at) the revocation cutoff', async () => {
       jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
       query.mockResolvedValue({ rows: [{ revoked_at: new Date((NOW + 1) * 1000).toISOString() }] });
+      const { verifyUser } = await import('./auth');
+      expect(await verifyUser('awsops_token=eyJ...')).toBeNull();
+    });
+    // pentest-remediation P3-review (CRITICAL): revokeSessionsFor stamps revoked_at to the
+    // signing-out token's OWN iat. If isRevoked used strict `<`, that exact token's own
+    // post-logout check would evaluate `iat < iat` -> false ("not revoked") and stay valid for its
+    // full remaining lifetime — defeating the entire point of this PR (the leaked token used to
+    // log out is never actually revoked). This is the missing equality case: iat === revoked_at.
+    it('rejects a token whose iat exactly EQUALS the revocation cutoff (the signout token itself)', async () => {
+      jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
+      query.mockResolvedValue({ rows: [{ revoked_at: new Date(NOW * 1000).toISOString() }] });
       const { verifyUser } = await import('./auth');
       expect(await verifyUser('awsops_token=eyJ...')).toBeNull();
     });

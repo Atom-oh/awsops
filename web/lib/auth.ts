@@ -41,6 +41,33 @@ function getJwks() {
 // settles doesn't. Race it against a short timer so "hung" degrades the same way "errored" does.
 const REVOCATION_CHECK_TIMEOUT_MS = 3000;
 
+// pentest-remediation P3-review (MAJOR-2): Promise.race above only stops *us* from waiting on a
+// hung query — the query itself keeps running server-side and keeps holding its connection out of
+// the `max: 3` pool. 3 concurrent hangs (e.g. an Aurora Serverless v2 scaling event) would then
+// starve the whole app's pool, not just auth. `SET LOCAL statement_timeout` makes Postgres itself
+// cancel the statement, freeing the connection. Scoped to this one query via a throwaway
+// transaction (`SET LOCAL` reverts at COMMIT/ROLLBACK) so it never leaks onto other queries that
+// share this same pooled connection afterward — a pool-wide `options: '-c statement_timeout=...'`
+// would also throttle unrelated longer-running queries elsewhere in the app.
+async function queryRevocation(sub: string): Promise<{ rows: { revoked_at: string }[] }> {
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL statement_timeout = ${REVOCATION_CHECK_TIMEOUT_MS}`);
+    const result = await client.query<{ revoked_at: string }>(
+      'SELECT revoked_at FROM session_revocations WHERE user_sub = $1',
+      [sub],
+    );
+    await client.query('COMMIT');
+    return result;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {}); // best-effort — connection may already be dead
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function isRevoked(sub: string, iat: number | undefined): Promise<boolean> {
   if (!iat) return true; // malformed token (no iat) — fail closed, this one input we don't trust
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -48,19 +75,19 @@ async function isRevoked(sub: string, iat: number | undefined): Promise<boolean>
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error('revocation check timed out')), REVOCATION_CHECK_TIMEOUT_MS);
     });
-    const { rows } = await Promise.race([
-      getPool().query<{ revoked_at: string }>(
-        'SELECT revoked_at FROM session_revocations WHERE user_sub = $1',
-        [sub],
-      ),
-      timeout,
-    ]);
+    // Client-side race stays as a backstop — e.g. if the connection itself can't be acquired from
+    // the pool at all, statement_timeout never gets a chance to run server-side.
+    const { rows } = await Promise.race([queryRevocation(sub), timeout]);
     if (rows.length === 0) return false;
     const revokedAtSec = new Date(rows[0].revoked_at).getTime() / 1000;
-    // strict `<`: a token issued in the same second as the revocation cutoff (e.g. an immediate
-    // re-login right after logout) shouldn't be rejected — self-healing on the next request made
-    // this low-priority, but it's a one-character fix.
-    return iat < revokedAtSec;
+    // `<=`, not strict `<`: revokeSessionsFor stores the signing-out token's OWN iat as the
+    // cutoff. With strict `<`, that exact token's own check evaluates `iat < iat` -> false, i.e.
+    // the very token just used to log out is judged NOT revoked and stays valid for its full
+    // remaining lifetime — defeating the point of this whole mechanism (pentest-remediation
+    // P3-review CRITICAL). `<=` closes that. A same-second re-login lands on a token with the
+    // same or a later `iat`; in the pathological same-`iat` case it self-heals on the next
+    // request once time advances a second — an accepted, documented tradeoff, not a bug.
+    return iat <= revokedAtSec;
   } catch (e) {
     // fail open — see comment above the timeout constant / module comment
     console.warn(JSON.stringify({ evt: 'revocation_check_failed', sub, err: e instanceof Error ? e.message : String(e) }));

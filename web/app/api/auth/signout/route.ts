@@ -17,13 +17,16 @@ export const dynamic = 'force-dynamic';
 // old/stolen). This must never block the response: the cookie always gets cleared and the client
 // always gets redirected, even if there's no token, the token is unverifiable, or the DB write fails.
 export async function POST(request: Request) {
+  let sub: string | undefined;
   try {
     const user = await verifyUserForSignout(request.headers.get('cookie'));
+    sub = user?.sub;
     if (user && user.iat) await revokeSessionsFor(user.sub, user.iat);
   } catch (e) {
     // best-effort — logout must succeed regardless; log so a persistently-failing revocation
-    // write isn't silently invisible (symmetric with isRevoked's revocation_check_failed warning).
-    console.warn(JSON.stringify({ evt: 'revocation_write_failed', err: e instanceof Error ? e.message : String(e) }));
+    // write isn't silently invisible (symmetric with isRevoked's revocation_check_failed warning,
+    // which also logs `sub` — pentest-remediation P3-review MINOR).
+    console.warn(JSON.stringify({ evt: 'revocation_write_failed', sub, err: e instanceof Error ? e.message : String(e) }));
   }
   return new Response(JSON.stringify({ redirect: '/login' }), {
     status: 200,
