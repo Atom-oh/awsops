@@ -364,6 +364,23 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
     to avoid a second Secrets Manager read when main() already needed one (to compute the
     ensure_targets legacy-skip set); when omitted (e.g. every existing test), loads them itself.
     """
+    # ACCEPTED RESIDUAL RISK — the preset_key -> host binding is OPERATOR-ASSERTED, not code-pinned.
+    # `official_mcp_endpoints` is a map(string) whose terraform validation checks only the `https://`
+    # SCHEME, and the read-only ack below is a self-echo (it compares ack[preset_key] to
+    # endpoints[preset_key], i.e. the operator's own string against itself). Nothing here verifies
+    # that the host actually belongs to the vendor the preset_key names. So an operator who writes
+    # the SAME arbitrary URL into both maps can bind e.g. `datadog` to `https://attacker.example/mcp`,
+    # and _ensure_api_key_provider will then attach that preset's real stored credential
+    # (`mcp:datadog`) to it — credential handoff to a non-vendor host, plus an effective BYO-MCP
+    # connection that BASELINE §2 otherwise pins as do-not-revive.
+    # This is knowingly accepted, NOT overlooked (ADR-017 §Trade-offs). The control is the
+    # tfvars/PR review gate: both maps live in terraform.tfvars, so only a principal who can already
+    # run `terraform apply` on shared infra can do it — the same principal could point any target
+    # anywhere regardless. THE FIX, if it is ever wanted: add a per-preset allowed-host-suffix tuple
+    # to catalog.MCP_SERVER_TARGETS and fail closed here on a mismatch, matching on the PARSED
+    # hostname's suffix (never `endswith` on the raw URL — `evil-datadoghq.com` and
+    # `datadoghq.com.attacker.example` must both fail). Self-hosted presets (ClickHouse/Grafana/
+    # Splunk/Tempo/Jaeger) have no vendor domain and would stay operator-asserted by definition.
     endpoints = ac.get("official_mcp_endpoints") or {}
     lambda_arns = ac.get("lambda_arns") or {}
     read_only_acks = ac.get("official_mcp_read_only_ack") or {}
@@ -491,19 +508,33 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
                 "credentialProvider": {"apiKeyCredentialProvider": api_key_provider},
             }]
 
-        # listingMode DEFAULT = the control plane caches the tool list it discovered. ACCEPTED
-        # RESIDUAL RISK (round-4 review MAJOR L3-1, 2026-07-31): combined with the sync-on-EXISTS
-        # below, a tool the vendor ADDS later is absorbed on the next `make agentcore` without a
-        # re-ack. We cannot gate on the tool set: bedrock-agentcore-control has NO tool-listing
-        # operation at all (its only target ops are Create/Get/List/Update/Delete GatewayTarget +
-        # SynchronizeGatewayTargets, and none of their responses carry tool names — verified against
-        # the botocore 2023-06-05 model), and the one static-schema field that WOULD cap the tool
-        # set, McpServerTargetConfiguration.mcpToolSchema, is documented as "Supported only when the
-        # credential provider is configured with an authorization code grant type" — these presets
-        # are API_KEY, and setting it also disables tool synchronization entirely. So the ack
-        # necessarily attests to the VENDOR-SIDE control (RBAC scope / --disable-write / read-scoped
-        # token), which keeps applying to tools added later; it cannot attest to a tool list.
-        # Documented as an explicit trade-off in ADR-017 §Trade-offs rather than left implied.
+        # listingMode DEFAULT = the control plane caches the tool list it discovered, i.e. THE VENDOR
+        # DECIDES WHICH TOOLS THIS GATEWAY EXPOSES.
+        #
+        # ACCEPTED RESIDUAL RISK — read the following as the recorded decision, not a caveat:
+        # ADR-017's `capability = read` is a DECLARATIVE LABEL, NOT SERVER-SIDE ENFORCEMENT on this
+        # path. A `mcp.lambda` target caps its tool set with toolSchema.inlinePayload; an mcpServer
+        # target on an API_KEY credential has NO equivalent cap available:
+        #   - bedrock-agentcore-control has no tool-listing operation at all (target ops are only
+        #     Create/Get/List/Update/DeleteGatewayTarget + SynchronizeGatewayTargets, and no response
+        #     carries tool names — verified against the botocore 2023-06-05 model), so provision.py
+        #     cannot even read, let alone diff, the vendor's advertised tools; and
+        #   - the one field that WOULD cap them, McpServerTargetConfiguration.mcpToolSchema, is
+        #     documented as "Supported only when the credential provider is configured with an
+        #     authorization code grant type" — these presets are API_KEY, and setting it disables
+        #     tool synchronization entirely.
+        # Consequence, stated plainly: if a vendor adds a WRITE tool (mute monitor, create incident,
+        # delete dashboard) to an ALREADY-ACKED preset, the sync-on-EXISTS above absorbs it into the
+        # agent's tool surface on the next `make agentcore` — no re-ack, no PR, no review. The
+        # `read_only_note` and the operator ack attest to a VENDOR-SIDE control (RBAC scope /
+        # --disable-write / read-scoped token), which does keep applying to later-added tools; they
+        # do NOT and cannot attest to a tool list.
+        # This risk is knowingly accepted because AgentCore offers no tool-schema cap on the API_KEY
+        # path. The compensating controls are: `official_mcp_enabled` + `integrations_enabled`
+        # default-off; the curated catalog (only vendors WE list get a preset_key at all — see
+        # MCP_SERVER_TARGETS); the fail-closed per-preset `official_mcp_read_only_ack` bound to the
+        # exact endpoint; and `integrations_write_enabled` staying off so no external write tier is
+        # live. Recorded in ADR-017 §Decision/§Trade-offs and the ADR-004/ADR-007 amendments.
         cfg = {"mcp": {"mcpServer": {"endpoint": endpoint, "listingMode": "DEFAULT"}}}
         tid_final = None
         tid_to_sync = None
