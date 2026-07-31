@@ -17,7 +17,12 @@ const CONNECTORS = MCP_PRESETS;
 
 export default function ConnectorsTab({ canManage = false }: { canManage?: boolean }) {
   const { tt } = useI18n();
+  // Two distinct sets (round-2 review MAJOR, 2026-07-31): `configured` = plain-slug
+  // datasource-mirror credentials; `mcpConfigured` = ADR-017 namespaced "mcp:<slug>" credentials,
+  // the ONLY key provision.py reads for official-MCP presets. A preset row must check the one
+  // that actually matters for its activation path — merging them made the UI lie either way.
   const [configured, setConfigured] = useState<Set<string>>(new Set());
+  const [mcpConfigured, setMcpConfigured] = useState<Set<string>>(new Set());
   const [token, setToken] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
@@ -25,10 +30,19 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
   const load = useCallback(async () => {
     try {
       const r = await fetch('/api/integrations/credential');
-      if (r.ok) setConfigured(new Set(((await r.json()).configured ?? []) as string[]));
+      if (r.ok) {
+        const body = await r.json();
+        setConfigured(new Set((body.configured ?? []) as string[]));
+        setMcpConfigured(new Set((body.mcpConfigured ?? []) as string[]));
+      }
     } catch { /* status is best-effort */ }
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // A preset row's activation credential lives under the namespaced key when it's an official
+  // MCP preset (provision.py reads mcp:<slug> exclusively), else the plain slug (legacy connectors).
+  const isConfigured = (c: { slug: string; official: boolean }) =>
+    (c.official ? mcpConfigured : configured).has(c.slug);
 
   const connect = async (slug: string, official: boolean) => {
     const t = (token[slug] ?? '').trim();
@@ -64,10 +78,10 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
                   live — that also needs official_mcp_enabled + this preset's endpoint set in
                   terraform, and successful `make agentcore` provisioning. Only Notion's status can
                   honestly say "connected", since its credential IS the whole activation path. */}
-              <span className={`text-[12px] ${configured.has(c.slug) ? 'text-emerald-600' : 'text-ink-400'}`}>
+              <span className={`text-[12px] ${isConfigured(c) ? 'text-emerald-600' : 'text-ink-400'}`}>
                 {c.official
-                  ? (configured.has(c.slug) ? tt('● 자격증명 저장됨') : tt('○ 자격증명 없음'))
-                  : (configured.has(c.slug) ? '● connected' : '○ not connected')}
+                  ? (isConfigured(c) ? tt('● 자격증명 저장됨') : tt('○ 자격증명 없음'))
+                  : (isConfigured(c) ? '● connected' : '○ not connected')}
               </span>
             </div>
             <div className="flex flex-wrap gap-1">
@@ -85,9 +99,9 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
             )}
             {canManage ? (
               <div className="flex gap-2">
-                <Input type="password" value={token[c.slug] ?? ''} onChange={(e) => setToken((s) => ({ ...s, [c.slug]: e.target.value }))} placeholder={configured.has(c.slug) ? tt('토큰 교체…') : tt('토큰 붙여넣기')} />
+                <Input type="password" value={token[c.slug] ?? ''} onChange={(e) => setToken((s) => ({ ...s, [c.slug]: e.target.value }))} placeholder={isConfigured(c) ? tt('토큰 교체…') : tt('토큰 붙여넣기')} />
                 <Button onClick={() => connect(c.slug, c.official)} disabled={busy === c.slug || !(token[c.slug] ?? '').trim()}>
-                  {configured.has(c.slug) ? tt('교체') : tt('연결')}
+                  {isConfigured(c) ? tt('교체') : tt('연결')}
                 </Button>
               </div>
             ) : (

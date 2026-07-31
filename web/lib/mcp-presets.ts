@@ -6,9 +6,11 @@
 // (web/lib/integration-credentials.ts); this file only adds curated UI metadata + the ADR-017
 // "official MCP" framing on top of the existing egress/credential machinery.
 //
-// Credential shape written by ConnectorsTab is the SAME as the existing Notion flow —
-// `PUT /api/integrations/credential { slug, secret: { token } }` — because
-// scripts/v2/agentcore/provision.py's ensure_mcp_server_targets reads `secret[preset_key].token`
+// Credential PAYLOAD shape written by ConnectorsTab is the SAME as the existing Notion flow —
+// `PUT /api/integrations/credential { slug, secret: { token }, official: true }` — but the
+// namespaced STORAGE KEY differs from Notion's: `official: true` routes to setMcpPresetCredential
+// (web/lib/integration-credentials.ts), which stores under `mcp:<slug>`, not the plain slug.
+// scripts/v2/agentcore/provision.py's ensure_mcp_server_targets reads `secret["mcp:" + preset_key].token`
 // as the single bearer/API-key value for the AgentCore Identity credential provider (see
 // catalog.py MCP_SERVER_TARGETS auth.credential_parameter_name — always one header slot).
 //

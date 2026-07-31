@@ -115,6 +115,9 @@ Runtime configuration is **flag-gated in Terraform** (`variables.tf`), all defau
 | `integrations_enabled` | remaining 6 AgentCore Lambda slices |
 | `workers_enabled` | the async worker tier (SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | the Steampipe inventory-sync data layer |
+| `official_mcp_enabled` | ADR-017 curated official-vendor MCP presets (external-obs `mcpServer` targets) |
+| `official_mcp_endpoints` | per-preset endpoint map (`https://` only) feeding the above |
+| `official_mcp_read_only_ack` | per-preset operator attestation gate — unacknowledged presets are fail-closed SKIPped |
 
 AgentCore's own config (runtime ARN, Memory ID, Code Interpreter ID) is written to SSM (`/ops/awsops-v2/agentcore/*`) by the provisioner and read by the web BFF at runtime — never passed via task-def `valueFrom` (avoids a startup race).
 
@@ -262,6 +265,9 @@ make upgrade             # 안전한 릴리스 업그레이드: RDS 스냅샷 ->
 | `integrations_enabled` | 나머지 AgentCore Lambda 슬라이스 6개 |
 | `workers_enabled` | 비동기 워커 계층(SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | Steampipe 인벤토리 sync 데이터 계층 |
+| `official_mcp_enabled` | ADR-017 큐레이션 공식 벤더 MCP 프리셋(external-obs `mcpServer` target) |
+| `official_mcp_endpoints` | 위 기능에 쓰이는 프리셋별 엔드포인트 맵(`https://`만 허용) |
+| `official_mcp_read_only_ack` | 프리셋별 운영자 attestation 게이트 — 미승인 프리셋은 fail-closed SKIP |
 
 AgentCore 자체 설정(runtime ARN, Memory ID, Code Interpreter ID)은 provisioner가 SSM(`/ops/awsops-v2/agentcore/*`)에 기록하고 web BFF가 런타임에 읽습니다 — 시작 시 레이스를 피하기 위해 task-def `valueFrom`으로는 절대 전달하지 않습니다.
 

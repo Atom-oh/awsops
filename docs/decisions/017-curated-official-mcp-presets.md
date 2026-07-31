@@ -7,7 +7,7 @@
 
 ## Context / 컨텍스트
 
-`/integrations` 허브의 Connectors 탭은 Notion 1개만 하드코딩돼 있고(`web/app/integrations/connectors/ConnectorsTab.tsx`), `custom_mcp`라는 kind는 enum·DB CHECK·`/customization` 고급 폼에 존재하지만 그 문자열을 분기하는 런타임 코드는 하나도 없다 — 라벨만 있고 UI에 노출되지 않는 상태였다.
+`/integrations` 허브의 Connectors 탭은 Notion 1개만 하드코딩돼 있고(`web/app/integrations/connectors/ConnectorsTab.tsx`), `custom_mcp`라는 kind는 enum·DB CHECK에 존재하고 `/customization` 고급 폼의 kind 드롭다운에도 선택 가능한 옵션으로 이미 노출돼 있었다(`INTEGRATION_KINDS_EGRESS`를 그대로 렌더링하므로) — 다만 그 문자열을 분기해 실제로 무언가를 하는 런타임 코드는 하나도 없었다(round-2 review 정정, 2026-07-31: 선택은 가능했지만 기능은 없는 상태였다는 것이 정확한 표현이며, "UI에 노출되지 않았다"는 이전 표현은 부정확했다).
 
 한편 Prometheus/ClickHouse는 이미 MCP다: `agent/lambda/{prometheus,clickhouse}_mcp.py`가 external-obs 게이트웨이의 `mcp.lambda` target으로 등록돼 있다(`scripts/v2/agentcore/catalog.py`). 이 두 관찰을 검토한 결과 실제 문제는 프로토콜이 아니라 **우리가 커넥터 코드(HTTP 클라이언트, 인증 헤더, SQL/PromQL 가드)를 직접 작성·유지보수하고 있다는 점**이었다. Datadog·ClickHouse·Tempo·Jaeger v2·Grafana·Dynatrace·Splunk 등은 이미 벤더가 공식 MCP 서버를 배포 중이고, AWS Bedrock AgentCore Gateway는 `McpServerTargetConfiguration`으로 원격 MCP 엔드포인트를 target으로 등록하는 것을 정식 지원한다(outbound auth: none/OAuth 2LO/3LO/SigV4/API key) — 지금까지 쓰던 `mcp.lambda` target 타입 외에 두 번째 target 타입이 이미 AWS 쪽에 존재한다.
 

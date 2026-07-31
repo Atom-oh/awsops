@@ -34,20 +34,23 @@ export async function GET(request: Request) {
   // has no access) degrades to an empty configured list so the read-only status panel doesn't 500.
   // Any OTHER failure (PG, malformed secret, …) surfaces as 500 — masking it would hide real breakage.
   try {
-    // Merge the plain connector-mirror slugs with the ADR-017 namespaced MCP-preset slugs — both
-    // sets use the plain (non-namespaced) slug in the returned array, so ConnectorsTab's
-    // `configured.has(slug)` check works regardless of which path a given preset's write went
-    // through (kiro review MAJOR finding, 2026-07-31: the two paths write to different keys now).
-    const [configured, mcpConfigured, configuredIds] = await Promise.all([
+    // Keep the plain connector-mirror slugs and the ADR-017 namespaced ("mcp:<slug>") MCP-preset
+    // slugs as TWO DISTINCT sets (round-2 review MAJOR, 2026-07-31: merging them into one
+    // `configured` set let the UI claim a preset was "configured" from a plain datasource-mirror
+    // credential while the namespaced "mcp:" key — the ONLY one provision.py reads — was actually
+    // empty, or vice versa). `configured` also strips any stray "mcp:"/numeric-id keys that
+    // getConfiguredSlugs' unfiltered Object.keys() would otherwise leak in.
+    const [rawSlugs, mcpConfigured, configuredIds] = await Promise.all([
       getConfiguredSlugs(),
       getConfiguredMcpPresetSlugs(),
       getConfiguredIds(),
     ]);
-    return json({ configured: [...new Set([...configured, ...mcpConfigured])], configuredIds }, 200);
+    const configured = rawSlugs.filter((k) => !k.startsWith('mcp:') && !/^\d+$/.test(k));
+    return json({ configured, mcpConfigured, configuredIds }, 200);
   } catch (e) {
     const name = (e as { name?: string })?.name || '';
     if (/AccessDenied|ResourceNotFound|NotFound/i.test(name)) {
-      return json({ configured: [], configuredIds: [] }, 200);
+      return json({ configured: [], mcpConfigured: [], configuredIds: [] }, 200);
     }
     console.error('[credential GET] unexpected error reading configured integrations:', name);
     return json({ error: 'failed to read configured integrations' }, 500);

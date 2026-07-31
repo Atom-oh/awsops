@@ -782,8 +782,10 @@ output "agentcore" {
     # var.official_mcp_read_only_ack above.
     official_mcp_read_only_ack = local.official_mcp_count > 0 ? var.official_mcp_read_only_ack : {}
     # Same secret the web BFF writes preset credentials into (web/lib/integration-credentials.ts,
-    # key = preset_key, e.g. secret["datadog"]) — provision.py reads it to create/refresh each
-    # preset's AgentCore Identity API-key credential provider. null when integrations_enabled=false.
+    # namespaced key = "mcp:<preset_key>", e.g. secret["mcp:datadog"] — NOT the plain preset_key,
+    # which is a separate legacy datasource-connector kind-mirror) — provision.py reads the
+    # namespaced key to create/refresh each preset's AgentCore Identity API-key credential
+    # provider. null when integrations_enabled=false.
     integrations_secret_name = local.integ_count > 0 ? aws_secretsmanager_secret.integrations[0].name : null
     # Runtime VPC mode (Pattern 2): ENIs in our private subnets (apne2-az1/az2, AgentCore-supported)
     # so section agents can reach private resources (Aurora/EKS) directly. Reuse the service SG —

@@ -75,9 +75,11 @@ describe('ConnectorsTab', () => {
   // preset's endpoint are set server-side, or that provisioning succeeded. Notion is exempt: its
   // credential IS the whole activation path, so "connected" stays honest for it.
   it('an official-MCP preset with a stored credential says "credential stored", not "connected"', async () => {
+    // datadog's credential lives under the namespaced "mcp:" key (mcpConfigured) — Notion's under
+    // the plain slug (configured). Round-2 review MAJOR: these must be checked separately per row.
     global.fetch = vi.fn(async (url: string) => ({
       ok: true, status: 200,
-      json: async () => (url === '/api/integrations/credential' ? { configured: ['datadog', 'notion'] } : { ok: true }),
+      json: async () => (url === '/api/integrations/credential' ? { configured: ['notion'], mcpConfigured: ['datadog'] } : { ok: true }),
     })) as unknown as typeof fetch;
     render(<ConnectorsTab canManage />);
     await waitFor(() => expect(screen.getByText(/자격증명 저장됨/)).toBeTruthy());
@@ -85,5 +87,19 @@ describe('ConnectorsTab', () => {
     const notionCard = screen.getByText('Notion').closest('[class*="p-4"]') as HTMLElement;
     expect(within(notionCard).getByText(/connected/)).toBeTruthy(); // Notion alone keeps "connected"
     expect(screen.getAllByText(/official_mcp_enabled 플래그와/).length).toBe(8); // one per official preset
+  });
+
+  // Round-2 review MAJOR: a plain-slug (datasource-mirror) credential for a slug that is ALSO an
+  // official-MCP preset must NOT make the preset row claim "credential stored" — provision.py only
+  // ever reads the namespaced "mcp:" key, so this datadog row must stay "no credential".
+  it('a plain-slug credential alone does NOT mark an official-MCP preset as configured', async () => {
+    global.fetch = vi.fn(async (url: string) => ({
+      ok: true, status: 200,
+      json: async () => (url === '/api/integrations/credential' ? { configured: ['datadog'], mcpConfigured: [] } : { ok: true }),
+    })) as unknown as typeof fetch;
+    render(<ConnectorsTab canManage />);
+    await waitFor(() => expect(screen.getByText('Datadog')).toBeTruthy());
+    const datadogCard = screen.getByText('Datadog').closest('[class*="p-4"]') as HTMLElement;
+    expect(within(datadogCard).getByText(/자격증명 없음/)).toBeTruthy();
   });
 });

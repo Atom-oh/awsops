@@ -426,14 +426,20 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
             provider_arn = _ensure_api_key_provider(ctrl, provider_name, token)
             if not provider_arn:
                 continue  # error already logged by _ensure_api_key_provider — legacy target untouched
+            api_key_provider = {
+                "providerArn": provider_arn,
+                "credentialLocation": auth["credential_location"],
+                "credentialParameterName": auth["credential_parameter_name"],
+            }
+            # ponytail: defensive only — omit credentialPrefix entirely when the preset has none
+            # (e.g. New Relic's "Api-Key" header takes no prefix) rather than passing "", in case
+            # botocore/the API enforces a min-length on this field (unverified as of 2026-07-31
+            # review; AWS testing would confirm either way — this fix is safe regardless).
+            if auth.get("credential_prefix"):
+                api_key_provider["credentialPrefix"] = auth["credential_prefix"]
             creds = [{
                 "credentialProviderType": "API_KEY",
-                "credentialProvider": {"apiKeyCredentialProvider": {
-                    "providerArn": provider_arn,
-                    "credentialLocation": auth["credential_location"],
-                    "credentialParameterName": auth["credential_parameter_name"],
-                    "credentialPrefix": auth.get("credential_prefix", ""),
-                }},
+                "credentialProvider": {"apiKeyCredentialProvider": api_key_provider},
             }]
 
         cfg = {"mcp": {"mcpServer": {"endpoint": endpoint, "listingMode": "DEFAULT"}}}

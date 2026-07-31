@@ -31,8 +31,20 @@ describe('pickGateway', () => {
     expect(pickGateway('check the datadog dashboard')).toBe('observability');
     expect(pickGateway('dynatrace 확인해줘')).toBe('observability'); // avoid Korean '지표' which is monitoring's own keyword
   });
-  it('still routes tempo/trace to monitoring (legacy tempo-mcp-target lives there during the ADR-017 deprecation window)', () => {
-    expect(pickGateway('tempo trace 조회')).toBe('monitoring');
+  // Regression (2026-07-31 round-2 review MAJOR): tempo's legacy monitoring target gets DELETED
+  // by provision.py's cutover once the mcpServer target on external-obs goes live (cross-gateway
+  // retire — see test_provision_mcp_server.py). Routing tempo to monitoring post-cutover would be
+  // a permanent dead-end, so tempo/trace route to observability/external-obs now.
+  it('routes tempo/trace to observability/external-obs (avoids a post-cutover dead-end on monitoring)', () => {
+    expect(pickGateway('tempo trace 조회')).toBe('observability');
+    expect(pickGateway('트레이스 검색')).toBe('observability');
+  });
+  // Regression (2026-07-31 round-2 review MAJOR): rule ORDER previously let monitoring's generic
+  // 'metric'/'지표' keyword steal a vendor-named query before the vendor-aware observability rule
+  // got a chance. Vendor names must win regardless of RULES array position of generic keywords.
+  it('routes vendor-named queries to observability, not generic monitoring', () => {
+    expect(pickGateway('Datadog metric 확인')).toBe('observability');
+    expect(pickGateway('Grafana 지표 좀 보여줘')).toBe('observability');
   });
 });
 

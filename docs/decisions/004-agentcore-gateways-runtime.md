@@ -74,6 +74,10 @@ External observability integration is a typed catalog/UX/governance over **one h
 
 Relation to gateway count: external observability = Integrations egress READ (surfaced as the 9th provisioned gateway external-obs), internal CloudWatch = the `monitoring` section gateway. Section-gateway count stays 8 (§1).
 
+> **개정 (2026-07-31, ADR-017 PR #194):** 위 "서버측 도구 allowlist(`exposed_tools` 상한)" 불변식은 `mcp.lambda` target에 한정된 것으로 명확히 한다 — `toolSchema.inlinePayload`가 노출 툴 집합을 하드 리밋한다. ADR-017이 도입한 `mcpServer`-type target(원격 벤더 MCP 프리셋)에는 **동일한 서버측 강제가 없다**: `listingMode=DEFAULT`로 벤더 서버가 광고하는 툴 전부를 노출하며, control-plane API에 `tools/list` 동등 기능이 없어 provision.py가 이를 검증할 수 없다. 이는 문서화되고 범위가 좁혀진 예외이며, `official_mcp_read_only_ack`(운영자 attestation-only, 기본 미승인=fail-closed SKIP) + `official_mcp_enabled` tfvars 게이트(기본 false)로 상쇄한다. 상세는 ADR-017 §Security 참조.
+>
+> **Amendment (2026-07-31, ADR-017 PR #194):** the "server-side tool allowlist (`exposed_tools` ceiling)" invariant above is clarified to apply to `mcp.lambda` targets specifically — `toolSchema.inlinePayload` hard-limits the exposed tool set there. The `mcpServer`-type targets (remote vendor MCP presets) introduced by ADR-017 have **no equivalent server-side enforcement**: with `listingMode=DEFAULT` they expose every tool the vendor server advertises, and the control-plane API has no `tools/list` equivalent for provision.py to verify against. This is a documented, scoped exception, offset by `official_mcp_read_only_ack` (operator attestation-only, default unacknowledged = fail-closed SKIP) + the `official_mcp_enabled` tfvars gate (default false). See ADR-017 §Security for detail.
+
 ### §4 Memory — 사용자별 격리 + 365일 보관 / Memory — per-user isolation + 365-day retention
 
 **단일 공유 AgentCore Memory 리소스**(`awsops_memory`, 하이픈 금지 — 언더스코어만)를 **Cognito 사용자 ID로 네임스페이스 분리**하고, `eventExpiryDuration`을 AgentCore 최대값 **365일**로 설정한다. 모든 읽기 경로는 `userId`로 필터링한다. 쓰기는 fire-and-forget(AI 지연 보호). 기록에는 신원 클레임(`sub`/`email`)과 대화 내용만 담고 JWT 원문·쿠키·AWS 자격증명은 담지 않는다. 크로스 계정 컨텍스트(`accountId`)를 기록에 포함해 계정 간 메모리 누출을 막는다(ADR-008 캐시-키 격리 정렬). AgentCore Memory API 미지원 리전에서는 로컬 폴백으로 우아하게 저하한다.
