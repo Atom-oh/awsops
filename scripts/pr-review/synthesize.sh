@@ -12,6 +12,15 @@ RESP="$(tr '\n' ',' < "$WORK/responded.txt" 2>/dev/null | sed 's/,$//')" || true
 # 셀당 바이트 캡(belt-and-braces) — 매트릭스가 4→16 출력으로 늘어난 뒤에도 체어 입력을
 # 유한하게 유지(폭주한 셀 하나가 체어 컨텍스트/처리시간을 지배하지 않도록).
 PANEL_CELL_CAP="${PANEL_CELL_CAP:-20000}"
+# 총량 캡 — 셀당 캡만으로는 셀 개수(4→16…)가 늘어난 만큼 합본 총량도 그대로 늘어나 chair
+# 입력이 무한정 커질 수 있다(AWS-Demo-Platform PR#195 에서 실제로 재현: 16셀 정상 응답 +
+# 정상 크기 diff 인데도 chair 가 600s timeout — 원인은 입력 크기). 셀 수로 나눠 합본
+# 상한(기본 200KB)을 지키도록 유효 캡을 셀당 캡과 다시 min 한다.
+CHAIR_PANEL_TOTAL_CAP="${CHAIR_PANEL_TOTAL_CAP:-200000}"
+CELL_COUNT="$(printf '%s\n' "$SLOT"/*.md | wc -l)"
+[ "$CELL_COUNT" -gt 0 ] || CELL_COUNT=1
+FAIR_CAP=$(( CHAIR_PANEL_TOTAL_CAP / CELL_COUNT ))
+[ "$FAIR_CAP" -lt "$PANEL_CELL_CAP" ] && PANEL_CELL_CAP="$FAIR_CAP"
 PANEL=""
 SCRUB_TMP="$WORK/scrub-cell.tmp"
 while IFS= read -r f; do
@@ -19,8 +28,10 @@ while IFS= read -r f; do
   # 크리덴셜 스크럽(마지막 방어선) — Kiro 는 이 repo에서 base 체크아웃 전체를 read/grep 할 수
   # 있어(BASE CONTEXT 검증이 의도된 기능), diff 인젝션이 절대경로/레포 밖 크리덴셜을 읽게 유도
   # 하면 셀 출력에 노출될 잔여 위험이 있다. 캡 적용 전체 스크럽 후 캡을 적용해야 잘린 경계에서
-  # 패턴이 쪼개져 탐지를 피하는 걸 막는다.
-  scrub_secrets < "$f" > "$SCRUB_TMP"
+  # 패턴이 쪼개져 탐지를 피하는 걸 막는다. ANSI 이스케이프(Kiro `--wrap never`는 줄바꿈만
+  # 끄고 색 코드는 남김 — 실측: `kiro-cli chat` 출력이 `\x1b[38;5;141m…`류로 가득함)도 같은
+  # 단계에서 제거 — 순수 오버헤드가 셀마다 수백~수천 바이트씩 캡을 갉아먹는다.
+  scrub_secrets < "$f" | sed -E 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' > "$SCRUB_TMP"
   CELL="$(head -c "$PANEL_CELL_CAP" "$SCRUB_TMP")"
   SCRUBBED_LEN="$(wc -c < "$SCRUB_TMP")"
   [ "$SCRUBBED_LEN" -gt "$PANEL_CELL_CAP" ] && CELL+=$'\n[...TRUNCATED at '"$PANEL_CELL_CAP"'B — full output not retained...]'
@@ -104,10 +115,10 @@ chair_label() { case "$1" in
   *)          echo "$1" ;;
 esac ; }
 
-run_chair() {  # $1=model → "$OUT" 에 기록. claude 실패해도 || true 로 계속.
+run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도 || true 로 계속.
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-    < "$WORK/synth-stdin.txt" > "$OUT" 2>"$WORK/chair.err" || true
+    < "$WORK/synth-stdin.txt" > "$OUT" 2>"$2" || true
 }
 
 # 요구사항: verdict 라인이 정확히 하나 있고, 그것이 마지막 non-empty 줄이어야 valid.
@@ -129,22 +140,41 @@ chair_valid() {
   [[ "$last" =~ ^VERDICT:\ (PASS|FAIL)$ ]] && [ "$verdict_count" = "1" ]
 }
 
-run_chair "$PRIMARY_MODEL"
+# chair 입력 실측 — 실패 시 "입력이 컸는가"를 로그만으로 바로 판정할 수 있게(이전엔 이
+# 수치가 어디에도 안 남아 사후 원인 규명이 불가능했다 — AWS-Demo-Platform PR#195 참조).
+echo "chair input: $(wc -c < "$WORK/synth-stdin.txt") bytes (cells: $CELL_COUNT, cell cap: ${PANEL_CELL_CAP}B)"
+
+# primary/fallback 이 같은 chair.err 를 공유하면 fallback 이 primary 의 stderr 를 덮어써
+# 실패 원인이 사후에 안 보였다 — 시도별로 분리.
+run_chair "$PRIMARY_MODEL" "$WORK/chair-primary.err"
 CHAIR_USED="$PRIMARY_MODEL"
+FALLBACK_RAN=0
 # PRIMARY_MODEL/FALLBACK_MODEL 이 같은 모델로 resolve 되면(예: job env 의
 # ANTHROPIC_MODEL 이 이미 fallback 기본값과 동일) 재시도는 동일 호출을 그대로
 # 반복할 뿐이라 CHAIR_TIMEOUT 을 두 번 태우고도 아무 이득이 없다 — skip.
 if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
-  echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(head -c 500 "$WORK/chair.err" 2>/dev/null) — falling back to '$(chair_label "$FALLBACK_MODEL")'"
-  run_chair "$FALLBACK_MODEL"
+  FALLBACK_RAN=1
+  echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(head -c 500 "$WORK/chair-primary.err" 2>/dev/null) — falling back to '$(chair_label "$FALLBACK_MODEL")'"
+  run_chair "$FALLBACK_MODEL" "$WORK/chair-fallback.err"
   if chair_valid; then
     CHAIR_USED="$FALLBACK_MODEL"
+  else
+    echo "::warning::chair '$(chair_label "$FALLBACK_MODEL")' fallback also degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(head -c 500 "$WORK/chair-fallback.err" 2>/dev/null)"
   fi
 fi
 
 if ! chair_valid; then
-  echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음." > "$OUT"
+  {
+    echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음."
+    echo "이는 코드 지적이 아니라 워크플로우 인프라 실패(모델 timeout/연결 오류) — 재실행 필요."
+    echo ""
+    echo "primary($(chair_label "$PRIMARY_MODEL")) stderr: $(head -c 500 "$WORK/chair-primary.err" 2>/dev/null)"
+    if [ "$FALLBACK_RAN" = "1" ]; then
+      echo "fallback($(chair_label "$FALLBACK_MODEL")) stderr: $(head -c 500 "$WORK/chair-fallback.err" 2>/dev/null)"
+    fi
+  } > "$OUT"
   echo "VERDICT: FAIL" >> "$OUT"
+  : > "$WORK/chair-failed.flag"
 fi
 
 # 커버리지 저하 가시화 — 모델 하나가 전체 lens 에서 응답 없이 조용히 빠졌으면(run-panel.sh
@@ -195,5 +225,10 @@ if [ -f "$WORK/coverage-severe.flag" ]; then
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
 fi
 
-[ -n "${GITHUB_ENV:-}" ] && echo "chair_used=$(chair_label "$CHAIR_USED")" >> "$GITHUB_ENV"
+if [ -n "${GITHUB_ENV:-}" ]; then
+  echo "chair_used=$(chair_label "$CHAIR_USED")" >> "$GITHUB_ENV"
+  # chair-failed.flag(위) — 코드 지적으로 인한 FAIL과 chair 자체의 인프라 실패(timeout/연결
+  # 오류)를 워크플로가 게이트 판정과 별개로 PR 코멘트 배지 문구에서 구분하도록 신호 전달.
+  [ -f "$WORK/chair-failed.flag" ] && echo "chair_failed=1" >> "$GITHUB_ENV"
+fi
 echo "Synthesis: $(wc -c < "$OUT") bytes (chair: $(chair_label "$CHAIR_USED"), panel: ${RESP})"
