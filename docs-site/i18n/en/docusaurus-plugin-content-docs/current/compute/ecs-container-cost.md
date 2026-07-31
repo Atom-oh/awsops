@@ -44,12 +44,14 @@ Stacked bar chart comparing CPU cost vs Memory cost per service
 
 ## Cost Calculation Method
 
-### Fargate Pricing (v2 actual values — us-east-1 rates, `web/lib/inventory-derived.ts`)
+### Fargate Pricing (v2 actual values — ap-northeast-2 (Seoul) rates, `web/lib/inventory-derived.ts`)
 | Resource | Rate | Billing Unit |
 |----------|------|--------------|
 | vCPU | $0.04656 | per vCPU-hour |
 | Memory | $0.00511 | per GB-hour |
 | Ephemeral Storage (>20GB) | $0.000111 | per GB-hour |
+
+> These are fixed, static estimate constants applied regardless of the task's actual AWS region — the deriver does not look up a per-task region column.
 
 ### Calculation Formula
 ```

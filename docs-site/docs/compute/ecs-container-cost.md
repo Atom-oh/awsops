@@ -44,12 +44,14 @@ ECS Fargate 태스크의 비용을 분석하는 페이지입니다. Fargate 가�
 
 ## 비용 계산 방식
 
-### Fargate 가격 (v2 실제 값 — us-east-1 단가, `web/lib/inventory-derived.ts`)
+### Fargate 가격 (v2 실제 값 — ap-northeast-2(서울) 단가, `web/lib/inventory-derived.ts`)
 | 리소스 | 단가 | 과금 단위 |
 |--------|------|-----------|
 | vCPU | $0.04656 | per vCPU-hour |
 | Memory | $0.00511 | per GB-hour |
 | Ephemeral Storage (>20GB) | $0.000111 | per GB-hour |
+
+> 이 값은 태스크의 실제 리전과 무관하게 항상 적용되는 고정 정적 추정 상수입니다 — deriver는 각 태스크 행의 리전 컬럼을 조회하지 않습니다.
 
 ### 계산 공식
 ```
@@ -69,7 +71,7 @@ Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
 
 테이블 하단에 **▶ Cost Calculation Basis / 비용 계산 근거** 접기 가능 섹션이 있습니다. `showBasis` 토글 시 다음을 인라인으로 확장합니다:
 
-- **Fargate Pricing 표** (v2 실제 값, us-east-1 단가 — 리전 표기는 v1 원본 UI 그대로 보존)
+- **Fargate Pricing 표** (v2 실제 값, ap-northeast-2(서울) 단가 — 태스크의 실제 리전과 무관하게 적용되는 고정 상수)
   - vCPU hourly rate: `$0.04656`
   - GB hourly rate: `$0.00511`
 - 예시 계산: 0.5 vCPU × 1 GB 태스크 → `$0.681/day` 환산

@@ -44,12 +44,14 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ## 成本计算方式
 
-### Fargate 价格（v2 实际值 — us-east-1 单价，`web/lib/inventory-derived.ts`）
+### Fargate 价格（v2 实际值 — ap-northeast-2（首尔）单价，`web/lib/inventory-derived.ts`）
 | 资源 | 单价 | 计费单位 |
 |--------|------|-----------|
 | vCPU | $0.04656 | per vCPU-hour |
 | Memory | $0.00511 | per GB-hour |
 | Ephemeral Storage (>20GB) | $0.000111 | per GB-hour |
+
+> 这是一个固定的静态估算常量，无论任务的实际 AWS 区域为何都会应用 —— deriver 不会查询每个任务行的区域列。
 
 ### 计算公式
 ```
@@ -69,7 +71,7 @@ Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
 
 表格下方有一个 **▶ Cost Calculation Basis / 成本计算依据** 可折叠部分。切换 `showBasis` 时会内联展开以下内容：
 
-- **Fargate Pricing 表**（v2 实际值，us-east-1 单价 — 区域标注保留 v1 原始 UI 的写法）
+- **Fargate Pricing 表**（v2 实际值，ap-northeast-2（首尔）单价 —— 该固定常量与任务的实际区域无关）
   - vCPU hourly rate: `$0.04656`
   - GB hourly rate: `$0.00511`
 - 示例计算：0.5 vCPU × 1 GB 任务 → 换算为 `$0.681/day`
