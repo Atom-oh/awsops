@@ -116,11 +116,23 @@ def lambda_handler(event, context):
             # PR-review round 5 MAJOR: `$tag$` dollar-quoting is Postgres-only syntax — MySQL treats
             # `$` as a plain identifier char, so `SELECT 1 AS $x$ INTO OUTFILE ...` isn't a heredoc
             # there; scanning for one anyway swallowed the real `INTO OUTFILE` as "still in string".
+            # PR-review round 6 (MAJOR, MAJOR-preferred-fix): this tool runs under the Aurora MASTER
+            # secret with no dedicated low-privilege MySQL credential, and MySQL has no DB-level
+            # read-only backstop (unlike Postgres's `SET TRANSACTION READ ONLY` below) — rounds 3-6
+            # kept finding new MySQL-only lexical bypasses (comment/escape desync, `--` boundary,
+            # `$` dollar-quote, block-comment nesting) because the lexical guard alone can never fully
+            # enumerate that class. Rather than keep patching individual MySQL edge cases, fail closed
+            # for MySQL entirely — a third fail-closed case alongside "engine lookup failed" and
+            # "unrecognized engine string" above — until a dedicated low-priv MySQL user/secret exists.
             if engine == "mysql":
-                dialect = {"hash_comment": True, "backslash_escapes": True,
-                           "dash_comment_needs_boundary": True, "dollar_quote": False}
+                return err("read-only: execute_sql is not supported for MySQL/MariaDB targets "
+                           "(no dedicated low-privilege credential exists yet) — refusing to execute")
             elif engine == "postgres":
-                dialect = {"hash_comment": False, "backslash_escapes": False}
+                # nested_block_comment=True: Postgres block comments genuinely nest by spec, and this
+                # dialect ALSO gets the DB-level READ ONLY transaction backstop below — see round-6
+                # module docstring note in sql_readonly_guard.py for why nesting is unsafe elsewhere.
+                dialect = {"hash_comment": False, "backslash_escapes": False,
+                           "nested_block_comment": True}
             else:
                 return err("read-only: could not determine target DB engine — refusing to execute")
             try:
@@ -133,49 +145,34 @@ def lambda_handler(event, context):
             # lexical guard above is the ONLY thing standing between a clever bypass and a real write
             # — and three rounds of finding-and-patching individual bypasses (comment/escape desync,
             # INTO, dangerous functions, ...) prove a denylist can never fully enumerate that class
-            # (arbitrary present/future string-returning functions that mutate data). So on Postgres,
-            # every execute_sql call is ALSO wrapped in a DB-level READ ONLY transaction: even a query
-            # that evades the regex entirely is rejected by the engine itself, not by pattern-matching
-            # its text.
-            #
-            # Round-4 fix: `SET TRANSACTION READ ONLY` (no SESSION/GLOBAL) is NOT valid mid-transaction
-            # on MySQL — it sets the characteristics of the NEXT transaction, and MySQL rejects it with
-            # error 1568 ("Transaction characteristics can't be changed while a transaction is in
-            # progress") if a transaction is already open. Round 3's comment claiming this statement is
-            # "valid syntax on both Postgres and MySQL/Aurora MySQL 5.6+" was wrong for the in-transaction
-            # case and broke every MySQL execute_sql call. There is no DB-level read-only enforcement
-            # achievable here for MySQL without a dedicated low-privilege DB user/secret (this tool runs
-            # under the Aurora MASTER secret) — that's the real fix, tracked as a follow-up, not done in
-            # this round. Until then, MySQL relies on the lexical guard above ONLY; Postgres keeps the
-            # transaction backstop, since `SET TRANSACTION READ ONLY` as the first statement of an
-            # already-open transaction is valid Postgres syntax. Never commit either way — this tool is
-            # read-only by contract, so there's nothing to persist — and always rollback in `finally` so
-            # the transaction never lingers on an error path.
+            # (arbitrary present/future string-returning functions that mutate data). So on Postgres
+            # (the only engine reaching this point — MySQL fails closed above), every execute_sql call
+            # is ALSO wrapped in a DB-level READ ONLY transaction: even a query that evades the regex
+            # entirely is rejected by the engine itself, not by pattern-matching its text. Never commit
+            # either way — this tool is read-only by contract, so there's nothing to persist — and
+            # always rollback in `finally` so the transaction never lingers on an error path.
             txn_args = dict(resourceArn=args["resource_arn"], secretArn=args["secret_arn"],
                              database=args.get("database", ""))
-            if engine == "mysql":
-                resp = rds_data.execute_statement(sql=sql, **txn_args)
-            else:
-                transaction_id = rds_data.begin_transaction(**txn_args)["transactionId"]
+            transaction_id = rds_data.begin_transaction(**txn_args)["transactionId"]
+            try:
                 try:
-                    try:
-                        rds_data.execute_statement(transactionId=transaction_id,
-                            sql="SET TRANSACTION READ ONLY", **txn_args)
-                    except Exception as e:
-                        # Abort rather than fall through to running the query without the read-only
-                        # guarantee — the lexical guard is defense-in-depth, not the primary barrier.
-                        return err("read-only: could not establish a read-only transaction — refusing to execute: " + str(e))
-                    resp = rds_data.execute_statement(transactionId=transaction_id, sql=sql, **txn_args)
-                finally:
-                    try:
-                        rds_data.rollback_transaction(resourceArn=args["resource_arn"],
-                            secretArn=args["secret_arn"], transactionId=transaction_id)
-                    except Exception as e:
-                        # Logged, not silently swallowed — a leaked transaction (rds-data has a
-                        # 3-minute idle transaction timeout, but this could still mask a real
-                        # AccessDenied on RollbackTransaction rather than a benign already-closed txn).
-                        logger.warning("execute_sql: rollback_transaction failed for txn %s: %s",
-                                       transaction_id, e)
+                    rds_data.execute_statement(transactionId=transaction_id,
+                        sql="SET TRANSACTION READ ONLY", **txn_args)
+                except Exception as e:
+                    # Abort rather than fall through to running the query without the read-only
+                    # guarantee — the lexical guard is defense-in-depth, not the primary barrier.
+                    return err("read-only: could not establish a read-only transaction — refusing to execute: " + str(e))
+                resp = rds_data.execute_statement(transactionId=transaction_id, sql=sql, **txn_args)
+            finally:
+                try:
+                    rds_data.rollback_transaction(resourceArn=args["resource_arn"],
+                        secretArn=args["secret_arn"], transactionId=transaction_id)
+                except Exception as e:
+                    # Logged, not silently swallowed — a leaked transaction (rds-data has a
+                    # 3-minute idle transaction timeout, but this could still mask a real
+                    # AccessDenied on RollbackTransaction rather than a benign already-closed txn).
+                    logger.warning("execute_sql: rollback_transaction failed for txn %s: %s",
+                                   transaction_id, e)
             columns = [c.get("label", c.get("name", "")) for c in resp.get("columnMetadata", [])]
             rows = []
             for record in resp.get("records", [])[:100]:

@@ -74,20 +74,37 @@ class TestAssertReadOnly(unittest.TestCase):
         self._bad("SELECT 1 /*!50000 INTO OUTFILE '/tmp/x'*/")
 
     def test_nested_block_comment_bypass_rejected(self):
-        # PR-review round-5 CRITICAL: real Postgres nests /* */ — this whole comment is one block
-        # ending at the OUTERMOST */. The old single-find("*/") scanner stopped at the first (inner)
-        # */, leaving a stray ' that then ate the rest of the string as an "unterminated literal",
-        # hiding "pg_cancel_backend(123)" from DANGER entirely. Real Postgres parses this as
-        # "SELECT 1 , pg_cancel_backend(123)" — must be rejected.
-        self._bad("SELECT 1 /* outer /* inner */ ' */ , pg_cancel_backend(123)")
+        # PR-review round-5 CRITICAL, round-6 note: real Postgres nests /* */ — this whole comment
+        # is one block ending at the OUTERMOST */. The old single-find("*/") scanner stopped at the
+        # first (inner) */, leaving a stray ' that then ate the rest of the string as an
+        # "unterminated literal", hiding "pg_cancel_backend(123)" from DANGER entirely. Real Postgres
+        # parses this as "SELECT 1 , pg_cancel_backend(123)" — must be rejected. nested_block_comment
+        # is Postgres-only (round 6): this dialect knob must be passed explicitly, it's not the
+        # (non-nesting) default.
+        with self.assertRaises(ValueError):
+            g.assert_read_only("SELECT 1 /* outer /* inner */ ' */ , pg_cancel_backend(123)",
+                                nested_block_comment=True)
 
     def test_deeply_nested_block_comment_bypass_rejected(self):
-        self._bad("SELECT 1 /* a /* b /* c */ ' */ */ , pg_cancel_backend(123)")
+        with self.assertRaises(ValueError):
+            g.assert_read_only("SELECT 1 /* a /* b /* c */ ' */ */ , pg_cancel_backend(123)",
+                                nested_block_comment=True)
 
     def test_well_formed_nested_comment_still_allows_legitimate_query(self):
         # Proves the fix isn't just fail-closing on ALL comments — a fully-balanced nested comment
         # strips cleanly to a genuinely safe statement.
-        self._ok("SELECT 1 /* outer /* inner */ trailing */ , col FROM t")
+        g.assert_read_only("SELECT 1 /* outer /* inner */ trailing */ , col FROM t",
+                            nested_block_comment=True)  # no raise
+
+    def test_non_nested_default_terminates_at_first_close(self):
+        # PR-review round-6 CRITICAL: MySQL/ClickHouse (and the module default) do NOT nest — they
+        # terminate at the FIRST */. A block-comment-adjacent payload that would fully hide a
+        # dangerous call under Postgres-style nesting must instead reveal it as live SQL here, so
+        # the existing DANGER check (INTO) catches it. Traced PoC from the module docstring.
+        self._bad("SELECT 1 /* a /* */ INTO OUTFILE '/tmp/x' /* */")
+
+    def test_non_nested_default_still_allows_legitimate_query(self):
+        self._ok("SELECT 1 /* a comment */ , col FROM t")
 
     def test_unresolved_comment_marker_fails_closed(self):
         # Defense-in-depth: if a literal /* or */ somehow survives stripping, reject rather than
@@ -101,14 +118,17 @@ class TestAssertReadOnly(unittest.TestCase):
 class TestPostgresDialect(unittest.TestCase):
     """aws_rds_mcp.py's RDS/PostgreSQL call path passes hash_comment=False, backslash_escapes=False
     (Aurora PostgreSQL: no '#' line comments — '#'/'#>'/'#>>' are jsonb operators — and
-    standard_conforming_strings=on by default, so '\\' is a literal char, not an escape)."""
+    standard_conforming_strings=on by default, so '\\' is a literal char, not an escape) and
+    (round 6) nested_block_comment=True (real Postgres block comments nest by spec)."""
 
     def _ok(self, sql):
-        g.assert_read_only(sql, hash_comment=False, backslash_escapes=False)  # no raise
+        g.assert_read_only(sql, hash_comment=False, backslash_escapes=False,
+                            nested_block_comment=True)  # no raise
 
     def _bad(self, sql):
         with self.assertRaises(ValueError, msg=sql):
-            g.assert_read_only(sql, hash_comment=False, backslash_escapes=False)
+            g.assert_read_only(sql, hash_comment=False, backslash_escapes=False,
+                                nested_block_comment=True)
 
     def test_jsonb_hash_operator_not_treated_as_comment(self):
         # PR-review CRITICAL: '#' stripped as a comment hid the trailing "INTO write_probe" CTAS.

@@ -103,9 +103,15 @@ class TestExecuteSqlGuard(unittest.TestCase):
 
 
 class TestExecuteSqlEngineDialect(unittest.TestCase):
-    """PR-review round-2 CRITICAL #2: execute_sql is registered for both engines but was always
-    forcing Postgres guard flags — on a real MySQL target (which DOES backslash-escape) that
-    mis-scans a string and hides a mutating construct past the closing quote."""
+    """PR-review round-2 CRITICAL #2 found execute_sql was registered for both engines but always
+    forced Postgres guard flags. Rounds 3-6 kept finding new MySQL-only lexical bypasses (backslash
+    escaping, `--` boundary, `$` dollar-quoting, block-comment nesting) because MySQL has no
+    dedicated low-privilege credential and no DB-level read-only backstop, so a lexical guard alone
+    can never fully close that class. Round-6 preferred fix: fail closed for MySQL/MariaDB targets
+    entirely, before any dialect-specific lexical scanning or Data API call happens — removing the
+    surface instead of chasing more bypasses. These tests assert that fail-closed behavior; they
+    replace the old MySQL bypass-repro tests (which exercised, and had to keep re-defending, the
+    lexical-guard-only path)."""
 
     def setUp(self):
         self.rds_client = mock.MagicMock()
@@ -126,53 +132,22 @@ class TestExecuteSqlEngineDialect(unittest.TestCase):
         resp = rds_mcp.lambda_handler(_event(sql), None)
         return resp["statusCode"], json.loads(resp["body"])
 
-    def test_mysql_backslash_hidden_into_outfile_now_rejected(self):
-        # Forcing Postgres flags (backslash_escapes=False) on a MySQL target mis-scans this: the
-        # guard thinks the string ends right after `x\`, hiding "y' INTO OUTFILE ..." from DANGER.
+    def test_mysql_target_fails_closed_even_for_a_plain_select(self):
+        # Round 6: MySQL/MariaDB is now unsupported outright — not "supported but lexically risky".
+        # Even an entirely benign SELECT never reaches the guard or the Data API.
         self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
-        status, body = self._status("SELECT 'x\\' y' INTO OUTFILE '/tmp/x'")
+        status, body = self._status("SELECT * FROM t WHERE x = 1")
         self.assertEqual(status, 400)
-        self.assertIn("read-only", body["error"])
+        self.assertIn("MySQL", body["error"])
         self.rds_data_client.execute_statement.assert_not_called()
         self.rds_data_client.begin_transaction.assert_not_called()
 
-    def test_mysql_dash_dash_comment_bypass_now_rejected(self):
-        # PR-review round 3: MySQL only treats `--` as a comment when followed by whitespace/a
-        # control char (or EOF). `--1` is not a comment in MySQL — it parses as `1 - -1` — so the
-        # old dialect-unaware strip_sql hid `INTO OUTFILE` behind a fake comment here.
-        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
-        status, body = self._status("SELECT 1--1 INTO OUTFILE '/tmp/x'")
+    def test_mariadb_target_also_fails_closed(self):
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "mariadb"}]}
+        status, body = self._status("SELECT 1")
         self.assertEqual(status, 400)
-        self.assertIn("read-only", body["error"])
+        self.assertIn("MySQL", body["error"])
         self.rds_data_client.execute_statement.assert_not_called()
-
-    def test_mysql_dollar_quote_hidden_into_outfile_now_rejected(self):
-        # PR-review round 5 MAJOR: `$tag$` dollar-quoting is Postgres-only syntax. MySQL parses `$`
-        # as an ordinary identifier char, so `$x$` here is just a weird alias, NOT a heredoc — but
-        # the old dialect-agnostic scanner treated it as an unterminated dollar-quoted string and
-        # swallowed the real `INTO OUTFILE` past it.
-        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
-        status, body = self._status("SELECT 1 AS $x$ INTO OUTFILE '/tmp/x'")
-        self.assertEqual(status, 400)
-        self.assertIn("read-only", body["error"])
-        self.rds_data_client.execute_statement.assert_not_called()
-
-    def test_mysql_plain_select_still_allowed(self):
-        # Round-4 fix: MySQL does NOT get the begin_transaction/"SET TRANSACTION READ ONLY"/rollback
-        # wrapper — `SET TRANSACTION READ ONLY` is invalid mid-transaction on MySQL (error 1568) and
-        # round 3's version of this test only proved a MagicMock doesn't enforce real MySQL syntax,
-        # silently masking that every real MySQL query would have failed. MySQL read-only enforcement
-        # is lexical-guard-only (see TestExecuteSqlEngineDialect above); this test proves the query
-        # actually reaches the Data API as a single plain execute_statement, no transaction calls.
-        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
-        status, _ = self._status("SELECT * FROM t WHERE x = 1")
-        self.assertEqual(status, 200)
-        self.rds_data_client.begin_transaction.assert_not_called()
-        self.rds_data_client.rollback_transaction.assert_not_called()
-        self.rds_data_client.execute_statement.assert_called_once_with(
-            sql="SELECT * FROM t WHERE x = 1",
-            resourceArn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1",
-            secretArn="arn:aws:secretsmanager:x", database="postgres")
 
     def test_unresolvable_engine_fails_closed_rather_than_guessing(self):
         self.rds_client.describe_db_clusters.side_effect = Exception("boom")

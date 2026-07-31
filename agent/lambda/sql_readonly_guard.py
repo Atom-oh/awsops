@@ -62,10 +62,25 @@ comment) and treated everything after that (a stray `'` from the payload, then r
 were outside the comment — the stray `'` then ate the rest of the string as an "unterminated
 literal", hiding a real `pg_cancel_backend(...)` call from DANGER *and* from the DB-level READ ONLY
 backstop (control-plane calls aren't writes). Fixed with a real depth-tracking scanner below.
-MySQL doesn't nest block comments, but defaulting to "nested" is the safe direction here (it only
-ever consumes MORE as comment, never less) — there's no dialect flag for this.
 Defense-in-depth: after stripping, if a literal `/*` or `*/` remains in the output, the comment
 scanner didn't cleanly resolve — fail closed rather than pass through a partially-stripped string.
+
+PR-review round-6 CRITICAL (fixes a regression from round 5): round 5's comment above claimed
+"defaulting to nested is the safe direction — it only ever consumes MORE as comment, never less".
+That's backwards: consuming MORE text as "comment" means the guard SEES LESS of what actually
+executes — that's the unsafe direction. MySQL and ClickHouse do NOT nest block comments (they
+terminate at the FIRST `*/`, unlike Postgres); applying nesting there let a single crafted comment
+swallow real SQL between two innocuous-looking comments. PoC on the MySQL dialect path:
+`SELECT 1 /* a /* */ INTO OUTFILE '/tmp/x' /* */` — real MySQL parses this as comment `/* a /* */`
+(first `*/` wins) followed by executable `INTO OUTFILE '/tmp/x'` and a second, separate, trailing
+comment `/* */`. The old unconditionally-nested scanner instead walked `/*`(depth1)→`/*`(depth2)→
+`*/`(depth1)→`/*`(depth2, from the LAST comment's opener)→`*/`(depth0) and consumed the ENTIRE
+string as one comment, stripping down to just `"SELECT 1 "` — hiding `INTO OUTFILE` completely, and
+with no `/*`/`*/` residue left for the defense-in-depth fail-closed check to catch. Fixed with a
+`nested_block_comment` flag: only PostgreSQL (real spec nesting, and also backstopped by the
+round-3 DB-level `SET TRANSACTION READ ONLY`) opts into nested scanning; every other dialect
+(default) uses a first-`*/`-terminates scan, which correctly reveals `INTO OUTFILE`/`_TABLE_FN`
+etc. as unstripped SQL for the existing DANGER/extra_forbidden_re checks below to catch.
 
 PR-review round-5 MAJOR: dollar-quoting (`$tag$...$tag$`) is Postgres-only syntax; MySQL allows `$`
 as an ordinary identifier character, so `SELECT 1 AS $x$ INTO OUTFILE ...` on a MySQL target isn't
@@ -99,7 +114,7 @@ DANGER = re.compile(
 
 
 def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs_boundary=False,
-              dollar_quote=True):
+              dollar_quote=True, nested_block_comment=False):
     """Single left-to-right tokenizer (NOT sequential regexes — those desync on a quote inside an
     identifier and can eat a forbidden token, e.g. a ClickHouse url( call, past the guard). Drops
     string literals + comments; for IDENTIFIER quotes (` and ") keeps the inner name but removes the
@@ -116,6 +131,11 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
     dollar_quote: whether `$tag$...$tag$` is a heredoc/dollar-quoted string (True for Postgres/
     ClickHouse; False for MySQL, where `$` is an ordinary identifier character and there's no such
     syntax — scanning for it there lets a bogus `$x$`-looking alias hide real SQL past it).
+    nested_block_comment: whether `/* */` nests (True for PostgreSQL only — real SQL-standard
+    nesting there, and also backstopped by the DB-level READ ONLY transaction). False (default) for
+    every other dialect (MySQL, ClickHouse — neither nests; they terminate at the FIRST `*/`).
+    Defaulting True here is UNSAFE, not conservative: nesting only ever consumes MORE text as
+    "comment", i.e. hides MORE of what actually executes from this guard.
     """
     out = []
     n = len(sql)
@@ -126,22 +146,29 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
         if two == "/*":                       # block comment — PostgreSQL/SQL-standard NESTING
             if sql[idx:idx + 3] == "/*!":     # MySQL executable comment — NOT a real comment, fail closed
                 raise ValueError("read-only: MySQL executable comment (/*! ... */) is not allowed")
-            # PR-review round-5 CRITICAL: `/* outer /* inner */ still-comment */` is ONE comment in
-            # real Postgres, ending at the OUTERMOST `*/` — a single find("*/") stops at the first
-            # (inner) close and leaves the rest of the payload looking like live SQL. Track nesting
-            # depth instead. Defaulting to "nested" even for dialects that don't nest (MySQL) is the
-            # safe direction: it only ever swallows more as comment, never exposes less.
-            depth = 1
-            idx += 2
-            while idx < n and depth > 0:
-                if sql[idx:idx + 2] == "/*":
-                    depth += 1
-                    idx += 2
-                elif sql[idx:idx + 2] == "*/":
-                    depth -= 1
-                    idx += 2
-                else:
-                    idx += 1
+            # PR-review round-5 CRITICAL (Postgres only, see nested_block_comment): `/* outer /*
+            # inner */ still-comment */` is ONE comment in real Postgres, ending at the OUTERMOST
+            # `*/` — a single find("*/") stops at the first (inner) close and leaves the rest of the
+            # payload looking like live SQL. Track nesting depth for that dialect.
+            # PR-review round-6 CRITICAL: MySQL/ClickHouse do NOT nest — they terminate at the FIRST
+            # `*/`. Applying Postgres nesting there is the UNSAFE direction (swallows MORE as
+            # comment, hiding more real SQL from this guard), not a safe default — see module
+            # docstring PoC. Non-nested dialects (the default) stop at the first `*/` instead.
+            if nested_block_comment:
+                depth = 1
+                idx += 2
+                while idx < n and depth > 0:
+                    if sql[idx:idx + 2] == "/*":
+                        depth += 1
+                        idx += 2
+                    elif sql[idx:idx + 2] == "*/":
+                        depth -= 1
+                        idx += 2
+                    else:
+                        idx += 1
+            else:
+                j = sql.find("*/", idx + 2)
+                idx = (j + 2) if j != -1 else n
             out.append(" ")
         elif (two == "--" and (
                 not dash_comment_needs_boundary
@@ -211,14 +238,15 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
 
 def assert_read_only(sql, read_verbs=READ_VERBS, danger_re=DANGER, extra_forbidden_re=None,
                       extra_message=None, hash_comment=True, backslash_escapes=True,
-                      dash_comment_needs_boundary=False, dollar_quote=True):
+                      dash_comment_needs_boundary=False, dollar_quote=True,
+                      nested_block_comment=False):
     """Raise ValueError unless `sql` is a single, comment/string-stripped statement starting with a
     read verb and containing no DANGER (or caller-supplied extra_forbidden_re) keyword/construct.
     See `strip_sql` for the `hash_comment` / `backslash_escapes` / `dash_comment_needs_boundary` /
-    `dollar_quote` dialect knobs."""
+    `dollar_quote` / `nested_block_comment` dialect knobs."""
     stripped = strip_sql(sql or "", hash_comment=hash_comment, backslash_escapes=backslash_escapes,
                           dash_comment_needs_boundary=dash_comment_needs_boundary,
-                          dollar_quote=dollar_quote)
+                          dollar_quote=dollar_quote, nested_block_comment=nested_block_comment)
     if len([p for p in stripped.split(";") if p.strip()]) > 1:
         raise ValueError("read-only: multiple statements are not allowed")
     tokens = stripped.strip().split()

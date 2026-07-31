@@ -57,10 +57,16 @@ def _assert_read_only(sql):
     # users/grants/query_log, so the general clickhouse_query tool must never reach system.*. Cross-DB
     # schema introspection reads system.tables via _run_sql(trusted=True), which bypasses this guard.
     # (SYSTEM is in the shared DANGER regex; layered here on top with the ClickHouse-only _TABLE_FN.)
+    # nested_block_comment=False (explicit, matches the shared default): ClickHouse block comments
+    # do NOT nest — they terminate at the FIRST `*/`, like MySQL. PR-review round 6: an earlier
+    # version of the shared guard defaulted to Postgres-style nesting unconditionally, which let a
+    # single crafted comment swallow real SQL (incl. a _TABLE_FN call) between two adjacent-looking
+    # comments; see sql_readonly_guard.py's module docstring for the traced PoC.
     _shared_assert_read_only(
         sql,
         extra_forbidden_re=_TABLE_FN,
         extra_message="read-only: table functions (url/file/remote/s3/mysql/...) are not allowed",
+        nested_block_comment=False,
     )
 
 

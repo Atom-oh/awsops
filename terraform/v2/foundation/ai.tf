@@ -234,15 +234,17 @@ resource "aws_iam_role_policy" "agent_lambda_integrations_secret" {
 }
 
 # inventory-read MCP (inventory_read_mcp.py) — reads the synced Aurora inventory via the RDS Data
-# API (read-only SELECT). Scoped to ExecuteStatement on the cluster + GetSecretValue on the
-# RDS-managed master secret + Decrypt on the secret's CMK. Additive (own resource) so a targeted
-# apply leaves the runtime policy untouched.
+# API (read-only SELECT). Scoped to ExecuteStatement + BeginTransaction + RollbackTransaction on
+# the cluster + GetSecretValue on the RDS-managed master secret + Decrypt on the secret's CMK.
+# Additive (own resource) so a targeted apply leaves the runtime policy untouched.
 # pentest-remediation round 3: aws_rds_mcp.py's execute_sql wraps every Postgres query in a
 # DB-level READ ONLY transaction (BeginTransaction -> SET TRANSACTION READ ONLY -> user SQL ->
 # RollbackTransaction) as a structural backstop to the lexical guard — a denylist can't enumerate
 # every write-capable string function, but the engine itself can refuse any write inside a
-# read-only transaction (round 4: MySQL does NOT get this wrapper — `SET TRANSACTION READ ONLY` is
-# invalid mid-transaction on MySQL — so MySQL only ever calls ExecuteStatement). Begin/Rollback are
+# read-only transaction (round 6: MySQL/MariaDB targets are now fail-closed in aws_rds_mcp.py's
+# execute_sql before any rds-data call is made — no dedicated low-privilege MySQL credential exists,
+# and `SET TRANSACTION READ ONLY` is invalid mid-transaction on MySQL anyway, so there was no
+# DB-level backstop achievable for it). Begin/Rollback are
 # separate IAM actions from ExecuteStatement; added here on the SAME resource (the cluster this
 # role could already ExecuteStatement against) — this tightens how the role is forced to interact
 # with what it could already reach, it does not expand what the role can reach, so it's not a new
