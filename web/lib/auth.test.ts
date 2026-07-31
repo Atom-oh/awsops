@@ -117,13 +117,34 @@ describe('revokeSessionsFor', () => {
     await revokeSessionsFor('u-1', NOW);
     // "Replay" call: an attacker resubmits an older, already-revoked token (iat = NOW - 100).
     await revokeSessionsFor('u-1', NOW - 100);
-    const [, params] = query.mock.calls.at(-1) as [string, [string, number]];
-    const [sql] = query.mock.calls.at(-1) as [string, unknown];
+    // The write now runs inside a BEGIN/SET LOCAL/.../COMMIT transaction (P4-review MAJOR, same
+    // protection as isRevoked below), so the last `query` call is COMMIT, not the UPSERT — find
+    // the last call that actually contains the UPSERT instead of assuming it's the tail call.
+    const upsertCall = query.mock.calls.filter(([sql]) => String(sql).includes('ON CONFLICT')).at(-1) as [
+      string,
+      [string, number],
+    ];
+    const [sql, params] = upsertCall;
     // The guard clause must be present and parameterized on the *replayed* call's own iat, so
     // Postgres — not this test — is what actually prevents the cutoff from moving backward: the
     // WHERE clause only lets the update through if the new cutoff is later than what's stored.
     expect(sql).toContain('WHERE session_revocations.revoked_at < to_timestamp($2)');
     expect(params).toEqual(['u-1', NOW - 100]);
+  });
+
+  // pentest-remediation P4-review (MAJOR): the READ path (isRevoked) got a statement_timeout +
+  // client-side race in round 3; the WRITE path did not, leaving a hung UPSERT free to hold a
+  // connection out of the `max: 3` pool forever. Both now go through the same withStatementTimeout
+  // helper, so a hung write must degrade the same way a hung read does: reject, not hang forever.
+  it('fails (does not hang forever) when the revocation write query hangs past the timeout', async () => {
+    vi.useFakeTimers();
+    query.mockReturnValue(new Promise(() => {})); // never resolves — simulate a hung DB write
+    const { revokeSessionsFor } = await import('./auth');
+    const p = revokeSessionsFor('u-1', NOW);
+    const assertion = expect(p).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(3100);
+    await assertion;
+    vi.useRealTimers();
   });
 });
 

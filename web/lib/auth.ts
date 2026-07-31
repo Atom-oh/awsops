@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import type { PoolClient } from 'pg';
 import { getPool } from './db';
 
 export interface User {
@@ -49,15 +50,25 @@ const REVOCATION_CHECK_TIMEOUT_MS = 3000;
 // transaction (`SET LOCAL` reverts at COMMIT/ROLLBACK) so it never leaks onto other queries that
 // share this same pooled connection afterward — a pool-wide `options: '-c statement_timeout=...'`
 // would also throttle unrelated longer-running queries elsewhere in the app.
-async function queryRevocation(sub: string): Promise<{ rows: { revoked_at: string }[] }> {
+// pentest-remediation P4-review (MAJOR): this used to be READ-path-only (queryRevocation), leaving
+// the WRITE path (revokeSessionsFor) with a raw, un-timeout-bounded pool.query — a hung UPSERT
+// could hold a connection forever, and since /api/auth/signout is a PUBLIC route with only
+// `max: 3` connections in the pool, a handful of concurrent hung signouts could exhaust the pool
+// and take isRevoked() (and thus every authenticated request) down with it. Both callers now share
+// this one helper so they can never drift apart again.
+if (!Number.isInteger(REVOCATION_CHECK_TIMEOUT_MS)) {
+  // `SET LOCAL statement_timeout = ${...}` is string-interpolated (SET LOCAL can't take a bound
+  // parameter), so this constant must stay a literal integer — guard against it silently becoming
+  // an injection point if it's ever moved to an env var.
+  throw new Error('REVOCATION_CHECK_TIMEOUT_MS must be an integer');
+}
+
+async function runInTimeoutScopedTransaction<T>(runQuery: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
     await client.query(`SET LOCAL statement_timeout = ${REVOCATION_CHECK_TIMEOUT_MS}`);
-    const result = await client.query<{ revoked_at: string }>(
-      'SELECT revoked_at FROM session_revocations WHERE user_sub = $1',
-      [sub],
-    );
+    const result = await runQuery(client);
     await client.query('COMMIT');
     return result;
   } catch (e) {
@@ -68,16 +79,28 @@ async function queryRevocation(sub: string): Promise<{ rows: { revoked_at: strin
   }
 }
 
-async function isRevoked(sub: string, iat: number | undefined): Promise<boolean> {
-  if (!iat) return true; // malformed token (no iat) — fail closed, this one input we don't trust
+/** Race any pooled query against a client-side timer AND a server-side `SET LOCAL
+ * statement_timeout` (see comment above) — the client-side race alone doesn't free a connection
+ * still stuck server-side; the timeout alone doesn't help if the connection can't even be
+ * acquired from the pool. Both isRevoked (read) and revokeSessionsFor (write) go through this. */
+async function withStatementTimeout<T>(runQuery: (client: PoolClient) => Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('revocation check timed out')), REVOCATION_CHECK_TIMEOUT_MS);
+      timer = setTimeout(() => reject(new Error('statement timed out')), REVOCATION_CHECK_TIMEOUT_MS);
     });
-    // Client-side race stays as a backstop — e.g. if the connection itself can't be acquired from
-    // the pool at all, statement_timeout never gets a chance to run server-side.
-    const { rows } = await Promise.race([queryRevocation(sub), timeout]);
+    return await Promise.race([runInTimeoutScopedTransaction(runQuery), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function isRevoked(sub: string, iat: number | undefined): Promise<boolean> {
+  if (!iat) return true; // malformed token (no iat) — fail closed, this one input we don't trust
+  try {
+    const { rows } = await withStatementTimeout<{ revoked_at: string }>((client) =>
+      client.query('SELECT revoked_at FROM session_revocations WHERE user_sub = $1', [sub]),
+    );
     if (rows.length === 0) return false;
     const revokedAtSec = new Date(rows[0].revoked_at).getTime() / 1000;
     // `<=`, not strict `<`: revokeSessionsFor stores the signing-out token's OWN iat as the
@@ -85,15 +108,17 @@ async function isRevoked(sub: string, iat: number | undefined): Promise<boolean>
     // the very token just used to log out is judged NOT revoked and stays valid for its full
     // remaining lifetime — defeating the point of this whole mechanism (pentest-remediation
     // P3-review CRITICAL). `<=` closes that. A same-second re-login lands on a token with the
-    // same or a later `iat`; in the pathological same-`iat` case it self-heals on the next
-    // request once time advances a second — an accepted, documented tradeoff, not a bug.
+    // same or a later `iat`, so in the pathological same-`iat` case the rejected token itself
+    // never "heals" (iat is fixed at issuance — it can't advance on its own). Recovery is via
+    // re-login: the rejected verifyUser() sends the edge redirect to /login, and authenticating
+    // again mints a genuinely later iat that passes (pentest-remediation P4-review MINOR — this
+    // used to describe it as self-healing "the next request once time advances a second", which
+    // is wrong; a same-iat token stays rejected for its entire remaining lifetime, not one request).
     return iat <= revokedAtSec;
   } catch (e) {
     // fail open — see comment above the timeout constant / module comment
     console.warn(JSON.stringify({ evt: 'revocation_check_failed', sub, err: e instanceof Error ? e.message : String(e) }));
     return false;
-  } finally {
-    clearTimeout(timer); // the query-won path left this timer live otherwise
   }
 }
 
@@ -105,13 +130,19 @@ async function isRevoked(sub: string, iat: number | undefined): Promise<boolean>
  * `now()` on every call — a rolling forced-logout DoS on any session the victim created *after*
  * their first real logout, for as long as the stolen token stays unexpired (up to ~12h). Capping
  * the cutoff at this token's own `iat` means a replay can never invalidate a session issued after
- * the legitimate revocation. */
+ * the legitimate revocation.
+ * pentest-remediation P4-review (MAJOR): now goes through withStatementTimeout like isRevoked
+ * (see comment there) instead of a raw getPool().query — the caller (POST /api/auth/signout)
+ * already wraps this call in a try/catch that clears the cookie and redirects regardless, so a
+ * thrown timeout here degrades exactly like any other write failure: best-effort, fail-open. */
 export async function revokeSessionsFor(sub: string, iat: number): Promise<void> {
-  await getPool().query(
-    `INSERT INTO session_revocations (user_sub, revoked_at) VALUES ($1, to_timestamp($2))
-     ON CONFLICT (user_sub) DO UPDATE SET revoked_at = to_timestamp($2)
-     WHERE session_revocations.revoked_at < to_timestamp($2)`,
-    [sub, iat],
+  await withStatementTimeout((client) =>
+    client.query(
+      `INSERT INTO session_revocations (user_sub, revoked_at) VALUES ($1, to_timestamp($2))
+       ON CONFLICT (user_sub) DO UPDATE SET revoked_at = to_timestamp($2)
+       WHERE session_revocations.revoked_at < to_timestamp($2)`,
+      [sub, iat],
+    ),
   );
 }
 
