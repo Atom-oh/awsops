@@ -1,11 +1,15 @@
-"""Tests for datasource_http — shared SSRF/auth/HTTP helper for the v1 datasource family.
-`python3 -m unittest test_datasource_http`. No network beyond loopback: a fake resolver + mocked
-secret/opener, plus (for the IP-pinning tests) a real local HTTP server on 127.0.0.1.
+"""Tests for datasource_http — shared SSRF/auth/HTTP helper for the v2 external-observability
+datasource family. `python3 -m unittest test_datasource_http`. No network beyond loopback: a fake
+resolver + mocked secret/opener, plus (for the IP-pinning tests) a real local HTTP(S) server on
+127.0.0.1.
 """
 import http.server
 import json
 import os
+import ssl
+import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from unittest import mock
@@ -239,6 +243,91 @@ class TestIpPinning(unittest.TestCase):
         with self.assertRaises(OSError) as ctx:
             wrapped(("original-hostname", 443))
         self.assertIn("10.0.0.2", str(ctx.exception))  # the last attempt's error surfaces
+
+
+class TestHttpsPinning(unittest.TestCase):
+    """MAJOR #1 (review round 2): _PinnedHTTPSHandler.https_open used to pass a check_hostname=
+    kwarg that stdlib removed from HTTPSConnection/ssl on py3.12+ — silently breaking every pinned
+    HTTPS request the moment the Lambda runtime is bumped past 3.11. HTTPS pinning previously had
+    zero test coverage (only the plaintext HTTP server in TestIpPinning was exercised). This spins
+    up a REAL local TLS server with a self-signed cert (openssl — PROTOCOL_TLS_SERVER needs a cert
+    file, and stdlib ssl has no CA-generation of its own) and proves a pinned HTTPS request
+    completes end-to-end: same non-resolving fake-hostname trick as TestIpPinning, but over TLS
+    with a matching cert SAN and a trusted CA — proving the connection both used the pinned IP AND
+    passed real certificate/hostname verification (not a check_hostname=None bypass)."""
+
+    FAKE_HOST = "totally-fake-https-host-that-does-not-resolve.invalid"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.certfile = os.path.join(cls._tmp.name, "cert.pem")
+        cls.keyfile = os.path.join(cls._tmp.name, "key.pem")
+        try:
+            subprocess.run(
+                ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                 "-keyout", cls.keyfile, "-out", cls.certfile, "-days", "1",
+                 "-subj", f"/CN={cls.FAKE_HOST}", "-addext", f"subjectAltName=DNS:{cls.FAKE_HOST}"],
+                check=True, capture_output=True, timeout=30,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            cls._tmp.cleanup()
+            raise unittest.SkipTest(f"openssl unavailable/failed, cannot generate test cert: {e}")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def setUp(self):
+        dh._PINNED_IP_CACHE = {}
+        self.received = {}
+        handler_self = self
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 — stdlib method name
+                handler_self.received["host_header"] = self.headers.get("Host")
+                handler_self.received["path"] = self.path
+                body = b'{"ok":true}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):  # silence test output
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+        server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_ctx.load_cert_chain(certfile=self.certfile, keyfile=self.keyfile)
+        self.server.socket = server_ctx.wrap_socket(self.server.socket, server_side=True)
+        self.port = self.server.server_port
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+        # Trust our self-signed cert like a real CA, but leave check_hostname ON (the default) —
+        # this proves the fix relies on the default context's built-in hostname/cert verification
+        # (server_hostname = self.host = the ORIGINAL hostname, unchanged by pinning), not on the
+        # now-removed check_hostname= kwarg this MAJOR deletes.
+        client_ctx = ssl.create_default_context(cafile=self.certfile)
+        self._ctx_patch = mock.patch("ssl._create_default_https_context", return_value=client_ctx)
+        self._ctx_patch.start()
+
+    def tearDown(self):
+        self._ctx_patch.stop()
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        dh._PINNED_IP_CACHE = {}
+
+    def test_pinned_https_request_completes_with_real_tls_verification(self):
+        dh._PINNED_IP_CACHE[self.FAKE_HOST] = ["127.0.0.1"]
+        status, data = dh.http_json("GET", f"https://{self.FAKE_HOST}:{self.port}/probe")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        # Reached only via the pinned IP (FAKE_HOST cannot resolve via real DNS) and TLS/hostname
+        # verification passed (cert CN/SAN matches the original hostname used as server_hostname).
+        self.assertEqual(self.received["path"], "/probe")
+        self.assertEqual(self.received["host_header"], f"{self.FAKE_HOST}:{self.port}")
 
 
 if __name__ == "__main__":

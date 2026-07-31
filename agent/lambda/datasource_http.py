@@ -1,7 +1,7 @@
 """
-Shared datasource-connector helper for the v1 datasource family (ClickHouse/Prometheus/Loki/Tempo/
-Mimir/Jaeger/Dynatrace/Datadog). Each is a user-supplied HTTP endpoint + credential queried in a
-query language. This module
+Shared datasource-connector helper for the v2 external-observability datasource family
+(ClickHouse/Prometheus/Loki/Tempo/Mimir/Jaeger/Dynatrace/Datadog). Each is a user-supplied HTTP
+endpoint + credential queried in a query language. This module
 centralizes: reading the per-slug credential from the single integrations secret, SSRF host guarding
 (always-block metadata/loopback/...; private allowed — in-cluster datasources are the target),
 auth headers (Basic/Bearer), and a no-redirect HTTP fetch. Stdlib + boto3 only.
@@ -300,11 +300,16 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         self._pinned_ips = pinned_ips
 
     def https_open(self, req):
+        # ponytail: no check_hostname= kwarg here — stdlib HTTPSHandler._check_hostname is always
+        # None on py3.11 (a no-op) and the parameter was REMOVED from http.client.HTTPSConnection /
+        # ssl on py3.12+ (upgrade landmine fixed in review round 2). TLS verification for the pinned
+        # connection still happens: self._context defaults to ssl._create_default_https_context()
+        # inside HTTPSConnection, and self.host (unchanged — only the socket target is pinned) is
+        # passed as server_hostname for SNI + the default context's built-in hostname/cert check.
         return self.do_open(
             functools.partial(_PinnedHTTPSConnection, pinned_ips=self._pinned_ips),
             req,
             context=self._context,
-            check_hostname=self._check_hostname,
         )
 
 

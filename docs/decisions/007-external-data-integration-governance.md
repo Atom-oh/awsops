@@ -2,7 +2,11 @@
 
 ## Status / 상태
 
-Accepted (2026-06-22) — consolidated. consolidates: 011, 031(P3 BYO-MCP), 039, 040, 041. **단, ADR-041 keystone 재정의는 owner-override이며 멀티-AI 패널 verdict = PARTIAL (2026-06-16)** — 외부-write 결과는 ADR-040 패널이 비준했으나 "reversal은 external-endpoint 대상 아님"이라는 사후 재서술은 2026-06-11 합의문과 충돌(이 한정자는 §References가 아니라 Status에 명시). / The ADR-041 re-scope is an owner-override; multi-AI panel verdict = PARTIAL (2026-06-16).
+Accepted (2026-06-22) — consolidated. consolidates: 011, 031(P3 BYO-MCP), 039, 040, 041. **단, ADR-041 keystone 재정의는 owner-override이며 멀티-AI 패널 verdict = PARTIAL (2026-06-16)** — 외부-write 결과는 ADR-040 패널이 비준했으나 "reversal은 external-endpoint 대상 아님"이라는 사후 재서술은 2026-06-11 합의문과 충돌(이 한정자는 §References가 아니라 Status에 명시). / The ADR-041 re-scope is an owner-override; multi-AI panel verdict = PARTIAL (2026-06-16). **Amended (pentest Finding 2/7, round 2 review) — §4/§6.1 corrected.**
+
+> **개정 (2026-07-31, pentest Finding 2/7 리뷰 대응):** §6.1이 일시 "http/https 허용(https 권장)"으로 완화되어 있었으나, 이는 §3의 write-path 통제(`agent.py` `_assert_host_allowed`, 여전히 https-only 강제)와 충돌하는 오기재였다 — **되돌림: §6.1은 다시 https-only.** "http/https 둘 다 허용 + private 무조건 허용"은 §4로 이동 — 그 사실은 이 write-path pillar가 아니라 별도의 **read**-only datasource-connector substrate(`agent/lambda/datasource_http.py`)에만 해당한다. `BASELINE.md` 갱신 불필요(register 항목 변경 없음, 문구 정정만).
+>
+> **Amendment (2026-07-31, pentest Finding 2/7 review response):** §6.1 had briefly read "http/https allowed (https recommended)," which conflicted with the write-path enforcement (`agent.py`'s `_assert_host_allowed`, still https-only) — **reverted: §6.1 is https-only again.** The accurate "http and https both allowed, private allowed unconditionally" statement moved to §4, scoped explicitly to the separate **read**-only datasource-connector substrate (`agent/lambda/datasource_http.py`), not this write-path pillar. No `BASELINE.md` change needed (no register entry changed, wording-only fix).
 
 이 ADR은 외부 데이터 통합에 관한 흩어진 결정 4건을 단일 keystone으로 통합한다 — 011(외부 관측 데이터소스 연동), 039(Integrations 축/egress substrate), 040(거버넌스된 외부 knowledge/comms write), 041(keystone 재정의: read-only=리소스 한정). 단일 Status를 가지며, 이전 4개 ADR의 개별 Status·amendment·addendum은 본 문서의 결정으로 대체된다.
 
@@ -48,6 +52,8 @@ AWS 리소스의 생성/수정/삭제(SSM Automation, Change Manager, 인프라 
 
 egress/SSRF/credential-custody/exfiltration 리스크는 **실재**하며, 데이터 통합을 금지하는 것이 아니라 의무 통제로 해소한다(아래 §6). 본 keystone은 011의 SSRF 방어를 그대로 승계한다(connection-time SSRF: https + DNS resolve-and-recheck + metadata/private block + `redirect:'manual'`). **2026-07-22 펜테스트(Finding 2/7) 대응으로 datasource-connector substrate(`agent/lambda/datasource_http.py` — ClickHouse/Prometheus/Loki/Tempo/Mimir/Jaeger/Dynatrace/Datadog)는 IP-pinning 적용 완료**: `assert_host_allowed()`가 검증한 IP를 캐시해 `http_json()`이 그 IP로 직접 접속(Host/SNI는 원본 호스트명 유지) — resolve-and-recheck 창을 제거. **잔존 backlog**: `agent.py`의 범용 egress-integrations 경로(`_assert_host_allowed`, ADR-039 direction=egress — Slack/Notion/Jira 등)는 여전히 resolve-and-recheck이며 별도 수정 필요(같은 취약군, 다른 전송 경로).
 
+> **각주 — datasource-connector *read* substrate는 별도 스코프.** 위 SSRF 방어 문단과 §6.1 pillar는 §3의 "광역 거버넌스 **write**" 통제(`integrations_write_enabled`)를 기술한다. 그와 스코프가 다른 `agent/lambda/datasource_http.py`(§2 "외부 DATA READ" — ClickHouse/Prometheus/Loki/Tempo/Mimir/Jaeger/Dynatrace/Datadog)의 `assert_host_allowed()`는: (a) **http와 https 둘 다 허용**(write 경로의 https-only 강제 없음 — in-cluster 관측성 엔드포인트가 평문 HTTP인 경우가 흔함), (b) private/RFC1918/ULA를 **무조건 허용**(계정별 `allow_private` opt-in 게이트가 코드에 없음 — 해당 substrate 자체가 in-cluster 대상이므로 opt-in 불필요로 설계됨), (c) 위 IP-pinning 적용. 이 substrate가 §6.1의 write-pillar "private CIDR은 계정별 opt-in"을 만족한다고 오독하지 말 것 — read substrate는 그 opt-in 메커니즘 자체가 없다.
+
 ### 5. BYO-MCP / 임의 HTTP = 폐기, 큐레이션 커넥터만 / curated connectors only
 
 임의 writable BYO-MCP(031 Phase 3의 uncurated 형태)는 폐기 유지. admin이 등록한 큐레이션·타입드 first-party 커넥터(벤더 프리셋)만 허용. egress substrate는 단일(011→039 재유도)이며, 별도 두 번째 substrate를 세우지 않는다. write 경로는 lambda executor 분기로 분리되며 AWS 리소스 SSM/Change-Manager 자동화를 부활시키지 않는다.
@@ -81,7 +87,7 @@ egress/SSRF/credential-custody/exfiltration 리스크는 **실재**하며, 데�
 
 외부 DATA write가 켜질 때 반드시 통과해야 하는 통제. (비-AWS-comms write에 맞게 의미 재매핑 — 멱등·가역 AWS-리소스 연산용으로 설계된 통제를 문자 그대로가 아니라 의미 보존하여 적용.)
 
-1. **SSRF (연결 시점)** — http/https 허용(https 권장) + DNS resolve-and-recheck + metadata/private-CIDR block + `redirect:'manual'`. private CIDR은 계정별 opt-in. (011 승계, LIVE.) datasource-connector substrate는 IP-pinning까지 적용(위 §4); `agent.py`의 범용 egress 경로는 resolve-and-recheck 잔존(backlog).
+1. **SSRF (연결 시점)** — **https-only**(외부 DATA *write* 경로, `agent.py` `_assert_host_allowed`가 강제 — scheme≠https는 즉시 SsrfBlocked) + DNS resolve-and-recheck + metadata/private-CIDR block + `redirect:'manual'`. private CIDR은 계정별 opt-in. (011 승계, LIVE.) `agent.py`의 범용 egress 경로는 resolve-and-recheck 잔존(backlog) — 아래 §4의 datasource-connector read substrate 각주 참조(스코프가 다름, write pillar에 안 섞임).
 2. **Secrets / credential custody** — 자격증명은 Secrets Manager(ARN-ref, 런타임 fetch, 계정별 스코핑). `data/config.json` 평문 저장 금지. GET 응답은 토큰 마스킹.
 3. **DLP / redaction (반대표의 결정적 지점)** — 모든 write payload는 server-side egress DLP 통과: 시크릿/자격증명 금지, raw 인벤토리/토폴로지/계정 덤프 금지, per-connector 목적지 allowlist(admin 등록 SaaS 타깃만), content-size cap, audit. 신뢰성 있게 redact 불가능한 커넥터 → **draft-only**(에이전트가 본문 렌더, 사람이 copy-paste; egress-write 표면 0).
 4. **human-gate (4-eyes + dry-run + rollback)** — action_catalog facade(`executor_type='lambda'`), `enabled=false` default, 필수 dry-run(=draft-render, SaaS엔 dry-run API 없으므로 DLP-후 payload를 사람 검토용 렌더), 4-eyes(승인자≠생성자) 또는 로그된 single-operator escape, paired rollback_ref(보상 행동 + audit, 진짜 undo로 표기 금지 — 이미 읽힌 알림은 비가역), idempotency token(`job_id`-keyed dedup). 모델은 입력 제안만.
