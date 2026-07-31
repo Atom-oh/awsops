@@ -282,7 +282,7 @@ fi
 # possibly for a different PR by a different author, can read whatever is left there. Resetting at
 # start of run does not close that window; not writing the raw output at all does.
 LEAKED=""
-for f in "$WORK5"/*; do
+for f in "$WORK5"/* "$WORK3"/*; do
   case "$(basename "$f")" in
     synth-stdin.txt|review.md) continue ;;  # both are scrubbed by construction, asserted above
   esac

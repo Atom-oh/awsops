@@ -154,6 +154,14 @@ run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
     < "$WORK/synth-stdin.txt" 2>"$2" \
     | strip_controls | scrub_secrets > "$OUT" || true
+  # stderr 는 파일로 받아야 한다(primary/fallback 을 따로 보존해 진단에 쓰므로) — 대신 호출이
+  # 끝난 직후 제자리에서 스크럽한다. 발췌 시점에만 스크럽하면 원본 .err 이 $WORK 에 그대로
+  # 남고, $WORK 는 실행 간 유지되는 러너 전역 경로라 다음 실행까지 다른 job 이 읽을 수 있다
+  # (stdout 을 파일로 안 떨어뜨린 것과 같은 이유). 스크럽본을 새 파일에 쓰고 mv 로 덮으므로
+  # 원본은 호출 중에만 존재한다. 발췌 쪽 스크럽은 idempotent 하니 그대로 둔다(이중 방어).
+  if [ -f "$2" ]; then
+    strip_controls < "$2" | scrub_secrets > "$2.scrubbed" && mv "$2.scrubbed" "$2"
+  fi
 }
 
 scrubbed_err_excerpt() {
