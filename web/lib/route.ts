@@ -14,20 +14,24 @@ const RULES: { key: string; re: RegExp }[] = [
   // here (Prometheus/ClickHouse) PLUS every ADR-017 curated official-vendor MCP preset (catalog.py
   // MCP_SERVER_TARGETS 'gateway' field — all currently 'external-obs'). Grafana/Datadog/Dynatrace/
   // Splunk/New Relic/Jaeger have NO legacy lambda target anywhere, so this is their ONLY chat path.
-  // Tempo/트레이스 live HERE too (not on monitoring): tempo-mcp-target (legacy, on monitoring) gets
-  // DELETED by provision.py's cutover once the tempo preset's mcpServer target goes live on
-  // external-obs (see test_provision_mcp_server.py's cross-gateway retire test) — routing tempo to
-  // monitoring post-cutover would be a dead-end (zero tools). Pre-cutover (flag off / not yet
-  // migrated) there's a narrow window where tempo tools aren't reachable from either gateway; that
-  // gap is accepted as smaller than "cutover complete but routing broken forever."
-  // \btrace\b (word boundary): a bare 'trace' substring also appears inside 'dynatrace' — already
-  // matched by name above, so the boundary just avoids a redundant double-match, not misrouting.
-  { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스|grafana|그라파나|datadog|데이터독|dynatrace|다이나트레이스|splunk|스플렁크|newrelic|new relic|뉴렐릭|jaeger|예거|tempo|트레이스|\btrace\b/i },
+  // Tempo/트레이스/trace are DELIBERATELY EXCLUDED here (round-3 review MAJOR, 2026-07-31): round-2
+  // put them on this rule to fix the POST-cutover dead-end (tempo-mcp-target retired, tools only
+  // live on external-obs), but official_mcp_enabled defaults to false — that made the dead-end the
+  // DEFAULT state for every deployment that never opts into ADR-017 presets, not just a brief
+  // migration window. There's no runtime signal here (route.ts is a pure prompt->key function; the
+  // official_mcp_enabled/ack/endpoint state lives in terraform vars + provision.py, not something
+  // this request handler reads) to route dynamically per deployment, so this picks the one static
+  // answer that matches the DEFAULT/most-common state: legacy tempo-mcp-target on 'monitoring'.
+  // REQUIRED cutover step: when actually flipping official_mcp_enabled=true for the tempo preset,
+  // move `tempo|트레이스|\btrace\b` from the monitoring rule below to this rule (see ADR-017 §Trade-offs).
+  { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스|grafana|그라파나|datadog|데이터독|dynatrace|다이나트레이스|splunk|스플렁크|newrelic|new relic|뉴렐릭|jaeger|예거/i },
   // monitoring owns CloudWatch/CloudTrail AND the still-here datasource connectors (Loki logs,
   // Mimir long-term metrics, OpenSearch) — route those keywords here, where the tools are.
   // Ambiguous generic terms (metric/alarm/audit) are matched here but only reached when no
-  // vendor-specific observability keyword matched first (see rule above).
-  { key: 'monitoring', re: /알람|지표|로그변경|cloudwatch|cloudtrail|alarm|metric|who changed|audit|loki|mimir|opensearch/i },
+  // vendor-specific observability keyword matched first (see rule above). tempo/트레이스/trace stay
+  // here too (see the comment on the rule above) — tempo-mcp-target is the legacy lambda target and
+  // lives on this gateway in the DEFAULT (official_mcp_enabled=false) state most deployments run in.
+  { key: 'monitoring', re: /알람|지표|로그변경|cloudwatch|cloudtrail|alarm|metric|who changed|audit|loki|mimir|opensearch|tempo|트레이스|\btrace\b/i },
   { key: 'iac', re: /드리프트|스택|terraform|cloudformation|\bcdk\b|drift|stack|iac/i },
   // ops = inventory_read MCP home: topology, unused/orphan resources, and the load-balancer /
   // target-group / CloudFront *listing* tools live here (network only does connectivity).

@@ -382,7 +382,7 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
             log(f"target:{tname}", "SKIP", f"could not read credentials secret this run for preset '{preset_key}' — leaving any existing target/provider untouched")
             continue
 
-        if endpoint and not read_only_acks.get(preset_key):
+        if endpoint and read_only_acks.get(preset_key) != endpoint:
             # CRITICAL (kiro review, 2026-07-31): unlike the Lambda TARGETS (toolSchema.inlinePayload
             # hard-limits the exposed tool set), an mcpServer target has NO server-side tool
             # allowlist — it exposes 100% of whatever the vendor's remote MCP server advertises,
@@ -391,14 +391,22 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
             # no control-plane API to introspect the vendor's live tool list (tools/list only exists
             # on the data-plane MCP endpoint, not bedrock-agentcore-control) so it cannot verify that
             # claim itself. Fail CLOSED: require an explicit per-preset operator acknowledgment
-            # (terraform var.official_mcp_read_only_ack[preset_key]=true) that the read_only_note
-            # control was actually verified on the vendor side, before provisioning at all — default
-            # {} means nothing provisions until acked.
+            # (terraform var.official_mcp_read_only_ack[preset_key] = the exact endpoint reviewed)
+            # that the read_only_note control was actually verified on the vendor side, before
+            # provisioning at all — default {} means nothing provisions until acked.
+            #
+            # ack is bound to the ENDPOINT VALUE, not just the preset_key (round-3 review MAJOR,
+            # 2026-07-31 fix): comparing != endpoint (not just falsy) means changing
+            # official_mcp_endpoints[preset_key] to a different URL without a matching re-ack is
+            # treated exactly like never having acked at all — fail-closed, retire, no silent
+            # credential handoff to an unreviewed endpoint.
             log(f"target:{tname}", "SKIP",
-                f"official_mcp_read_only_ack['{preset_key}'] not set — refusing to provision an "
-                f"unenforced write surface ({spec.get('read_only_note', 'no read-only note')}); "
-                "ack in terraform.tfvars only after verifying the vendor-side read-only control")
-            _retire_gateway_target(ctrl, gw_id, existing, tname, "read-only ack missing — retiring")
+                f"official_mcp_read_only_ack['{preset_key}'] missing or doesn't match the current "
+                f"endpoint — refusing to provision an unenforced write surface "
+                f"({spec.get('read_only_note', 'no read-only note')}); ack in terraform.tfvars "
+                "(value = the exact endpoint URL) only after verifying the vendor-side read-only "
+                "control, and re-ack whenever the endpoint changes")
+            _retire_gateway_target(ctrl, gw_id, existing, tname, "read-only ack missing or stale (endpoint changed since ack) — retiring")
             _delete_api_key_provider(ctrl, provider_name)
             continue
 
@@ -455,6 +463,13 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
                 drifted = (cur_endpoint != endpoint or cur_provider != new_provider or cur.get("description") != spec["description"])
                 if not drifted:
                     log(f"target:{tname}", "EXISTS", endpoint)
+                    # Round-3 review MAJOR (2026-07-31): ADR-017's whole stated benefit is "the
+                    # vendor maintains the tool list, we don't" — but a sync request only fired on
+                    # CREATE/UPDATE, never on an unchanged EXISTS target, so a vendor adding/renaming
+                    # tools on their end never reached this Gateway after the first provision. Sync
+                    # every run regardless of drift; synchronize_gateway_targets is a cheap best-effort
+                    # refresh request, not a mutation of our config.
+                    tid_to_sync = tid_final
                 else:
                     ctrl.update_gateway_target(gatewayIdentifier=gw_id, targetId=tid_final, name=tname,
                                                 description=spec["description"], targetConfiguration=cfg,
@@ -514,7 +529,8 @@ def _cutover_preset_keys(ac, secrets, secrets_read_ok):
     active = set()
     for spec in catalog.MCP_SERVER_TARGETS.values():
         preset_key = spec["preset_key"]
-        if not endpoints.get(preset_key) or not read_only_acks.get(preset_key):
+        endpoint = endpoints.get(preset_key)
+        if not endpoint or read_only_acks.get(preset_key) != endpoint:
             continue
         if spec["auth"]["mode"] == "api_key":
             raw = secrets.get(f"mcp:{preset_key}")

@@ -31,13 +31,15 @@ describe('pickGateway', () => {
     expect(pickGateway('check the datadog dashboard')).toBe('observability');
     expect(pickGateway('dynatrace 확인해줘')).toBe('observability'); // avoid Korean '지표' which is monitoring's own keyword
   });
-  // Regression (2026-07-31 round-2 review MAJOR): tempo's legacy monitoring target gets DELETED
-  // by provision.py's cutover once the mcpServer target on external-obs goes live (cross-gateway
-  // retire — see test_provision_mcp_server.py). Routing tempo to monitoring post-cutover would be
-  // a permanent dead-end, so tempo/trace route to observability/external-obs now.
-  it('routes tempo/trace to observability/external-obs (avoids a post-cutover dead-end on monitoring)', () => {
-    expect(pickGateway('tempo trace 조회')).toBe('observability');
-    expect(pickGateway('트레이스 검색')).toBe('observability');
+  // Regression (2026-07-31 round-3 review MAJOR): round-2 moved tempo/trace to observability to
+  // avoid a POST-cutover dead-end, but official_mcp_enabled defaults to false, so that just made
+  // the dead-end the DEFAULT state for every deployment that never opts into ADR-017 presets.
+  // route.ts has no runtime signal to pick dynamically, so it routes to the legacy target's home
+  // (monitoring) — the actual default/most-common state — and the cutover playbook (ADR-017) must
+  // move this keyword when official_mcp_enabled is actually flipped for tempo.
+  it('routes tempo/trace to monitoring (matches the default/pre-cutover state; legacy tempo-mcp-target lives there)', () => {
+    expect(pickGateway('tempo trace 조회')).toBe('monitoring');
+    expect(pickGateway('트레이스 검색')).toBe('monitoring');
   });
   // Regression (2026-07-31 round-2 review MAJOR): rule ORDER previously let monitoring's generic
   // 'metric'/'지표' keyword steal a vendor-named query before the vendor-aware observability rule

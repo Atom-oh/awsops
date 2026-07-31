@@ -99,7 +99,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ctrl.get_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
         ctrl.create_gateway_target.return_value = {"targetId": "t-1"}
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
-              "official_mcp_read_only_ack": {"datadog": True},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {"datadog-mcp": "arn:aws:lambda:...:function:x-agent-datadog-mcp"},
               "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
@@ -129,7 +129,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ctrl.create_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
         ctrl.create_gateway_target.return_value = {"targetId": "t-new"}
         ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
-              "official_mcp_read_only_ack": {"clickhouse": True},
+              "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
@@ -145,7 +145,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         # preset, not raise AttributeError and abort the whole provisioner run.
         ctrl = _ctrl_with_targets()
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
-              "official_mcp_read_only_ack": {"datadog": True},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:datadog": "not-a-dict"}, True)):
@@ -173,7 +173,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ctrl.get_api_key_credential_provider.side_effect = None
         ctrl.get_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
-              "official_mcp_read_only_ack": {"datadog": True},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:datadog": {"token": "tok"}}, True)):
@@ -202,7 +202,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ctrl = _ctrl_with_targets({"gw-1": [live_target]})
         ctrl.get_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider-NEW"}
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
-              "official_mcp_read_only_ack": {"datadog": True},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:datadog": {"token": "tok"}}, True)):
@@ -217,7 +217,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         # live. Must be retired, not left running with a stale/unverifiable credential.
         ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
-              "official_mcp_read_only_ack": {"datadog": True},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({}, True)):  # credential gone
@@ -238,7 +238,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ctrl.create_gateway_target.side_effect = ClientError(
             {"Error": {"Code": "ValidationException", "Message": "boom"}}, "CreateGatewayTarget")
         ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
-              "official_mcp_read_only_ack": {"clickhouse": True},
+              "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
@@ -257,7 +257,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         # a routine `make agentcore` run must never mass-deprovision every configured preset.
         ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
-              "official_mcp_read_only_ack": {"datadog": True},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
              mock.patch.object(provision, "_load_official_mcp_secret", return_value=({}, False)):  # read FAILED
@@ -280,7 +280,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ctrl.get_gateway_target.side_effect = lambda gatewayIdentifier, targetId: (
             {"status": "FAILED"} if targetId == "t-new" else {"status": "READY"})
         ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
-              "official_mcp_read_only_ack": {"clickhouse": True},
+              "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
@@ -309,6 +309,70 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         self.assertIn("SKIP", {r[1] for r in provision.report})
         self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
 
+    def test_ack_bound_to_old_endpoint_is_treated_as_unacked_after_endpoint_changes(self):
+        # MAJOR (round-3 review, 2026-07-31): official_mcp_read_only_ack is now map(string), the
+        # acked value must equal the CURRENT endpoint. An operator acking preset X against endpoint
+        # A, then repointing official_mcp_endpoints[X] at endpoint B without re-acking, must be
+        # treated exactly like never having acked B — fail-closed, retire, no credential handoff to
+        # the unreviewed endpoint.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
+        ac = {"official_mcp_endpoints": {"datadog": "https://attacker-controlled.example.com/mcp"},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},  # stale ack, old endpoint
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.create_gateway_target.assert_not_called()
+        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-1")
+        ctrl.delete_api_key_credential_provider.assert_called_once_with(name="awsops-v2-datadog-mcp")
+        self.assertIn("SKIP", {r[1] for r in provision.report})
+        self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
+
+    def test_matching_ack_still_provisions(self):
+        # Sanity counterpart: an ack whose value equals the CURRENT endpoint is a valid ack.
+        ctrl = _ctrl_with_targets()
+        ctrl.get_api_key_credential_provider.side_effect = _raise_not_found
+        ctrl.create_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
+        ctrl.create_gateway_target.return_value = {"targetId": "t-1"}
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.create_gateway_target.assert_called_once()
+        self.assertIn(("target:datadog-mcp-server-target", "CREATED"), [(r[0], r[1]) for r in provision.report])
+
+    def test_unchanged_existing_target_still_gets_a_tools_sync_request(self):
+        # MAJOR (round-3 review, 2026-07-31): synchronize_gateway_targets was only requested on the
+        # CREATE/UPDATE branches — an EXISTS (no drift) target never got a sync, so a vendor adding/
+        # renaming tools after the initial provision never reached the Gateway on subsequent
+        # `make agentcore` runs. It must be requested on EXISTS too.
+        live_target = {
+            "name": "datadog-mcp-server-target", "targetId": "t-1",
+            "targetConfiguration": {"mcp": {"mcpServer": {"endpoint": "https://mcp.datadoghq.com/v1/mcp"}}},
+            "credentialProviderConfigurations": [{
+                "credentialProviderType": "API_KEY",
+                "credentialProvider": {"apiKeyCredentialProvider": {
+                    "providerArn": "arn:provider", "credentialLocation": "HEADER",
+                    "credentialParameterName": "Authorization", "credentialPrefix": "Bearer ",
+                }},
+            }],
+            "description": "Datadog official MCP",
+        }
+        ctrl = _ctrl_with_targets({"gw-1": [live_target]})
+        ctrl.get_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"mcp:datadog": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.update_gateway_target.assert_not_called()  # no drift -> EXISTS, not UPDATED
+        ctrl.synchronize_gateway_targets.assert_called_once_with(gatewayIdentifier="gw-1", targetIdList=["t-1"])
+        self.assertIn(("target:datadog-mcp-server-target", "EXISTS"), [(r[0], r[1]) for r in provision.report])
+        self.assertIn(("target:datadog-mcp-server-target:sync", "OK"), [(r[0], r[1]) for r in provision.report])
+
 
 class TestEnsureTargetsSkipsCutoverLegacy(unittest.TestCase):
     """MAJOR (kiro review, 2026-07-31): ensure_targets must not recreate a legacy lambda target
@@ -332,7 +396,7 @@ class TestEnsureTargetsSkipsCutoverLegacy(unittest.TestCase):
         # End-to-end of the helper main() uses: an active, acked, credentialed preset's legacy
         # target name must be in the computed skip set.
         ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
-              "official_mcp_read_only_ack": {"clickhouse": True}}
+              "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"}}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS):
             active = provision._cutover_preset_keys(ac, {"mcp:clickhouse": {"token": "tok"}}, True)
@@ -342,7 +406,7 @@ class TestEnsureTargetsSkipsCutoverLegacy(unittest.TestCase):
         # No endpoint configured -> ensure_mcp_server_targets will SKIP it (not own its legacy
         # target this run) -> ensure_targets must be free to keep managing the legacy target as
         # normal (not in the skip set).
-        ac = {"official_mcp_endpoints": {}, "official_mcp_read_only_ack": {"clickhouse": True}}
+        ac = {"official_mcp_endpoints": {}, "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"}}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET):
             active = provision._cutover_preset_keys(ac, {}, True)
         self.assertEqual(active, set())
@@ -379,7 +443,7 @@ class TestLegacyRetireCrossesGateways(unittest.TestCase):
         ctrl.create_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
         ctrl.create_gateway_target.return_value = {"targetId": "t-new"}
         ac = {"official_mcp_endpoints": {"tempo": "https://tempo.example.com/api/mcp"},
-              "official_mcp_read_only_ack": {"tempo": True},
+              "official_mcp_read_only_ack": {"tempo": "https://tempo.example.com/api/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _TEMPO_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _TEMPO_LAMBDA_TARGETS), \

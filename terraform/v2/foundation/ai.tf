@@ -91,9 +91,17 @@ variable "official_mcp_endpoints" {
 # --disable-write, etc) that provision.py cannot verify from the control plane. This var is the
 # explicit, per-preset, dated operator acknowledgment that the vendor-side control was actually
 # checked before flipping it on — default {} means NOTHING provisions (fail-closed).
+#
+# type = map(string), NOT map(bool) (round-3 review MAJOR, 2026-07-31 fix): a bare bool acks the
+# preset_key forever, independent of WHICH endpoint was reviewed — an operator could ack once, then
+# later repoint official_mcp_endpoints[preset_key] at any other URL without re-acking, silently
+# sending the stored mcp:<preset_key> credential to an unreviewed endpoint. The ack value must be
+# the exact endpoint string that was reviewed; provision.py treats the preset as un-acked (fail-
+# closed, same as never-acked) whenever the current official_mcp_endpoints[preset_key] value
+# differs from the acked string — so changing the endpoint requires a matching re-ack.
 variable "official_mcp_read_only_ack" {
-  type        = map(bool)
-  description = "preset_key -> operator has verified the read-only vendor-side control described in that preset's catalog.py read_only_note (ADR-017). Required in addition to official_mcp_endpoints; unacked presets SKIP (and retire). Default {} = nothing provisions."
+  type        = map(string)
+  description = "preset_key -> the exact official_mcp_endpoints[preset_key] URL the operator reviewed and verified the read-only vendor-side control (catalog.py read_only_note) against (ADR-017). Must equal the CURRENT endpoint value or the preset is treated as un-acked (fail-closed, retires any live target) — changing the endpoint requires re-acking with the new URL. Default {} = nothing provisions."
   default     = {}
 }
 
