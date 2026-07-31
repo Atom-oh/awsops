@@ -1,11 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
+import { verifyUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+// pentest-remediation P1-review (MAJOR-2): this route returned worker_jobs.result/artifact_uri/
+// error to anyone who could guess/observe a job UUID, with no auth check at all — bypassing the
+// revocation this PR added, since Lambda@Edge only checks JWT signature/expiry and knows nothing
+// about session_revocations. GET /api/jobs already gates on verifyUser; this sibling route must
+// too.
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  if (!(await verifyUser(req.headers.get('cookie')))) {
+    return NextResponse.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
+  }
   const id = params.id;
   if (!UUID_RE.test(id)) {
     return NextResponse.json({ message: 'invalid job id' }, { status: 400 });
