@@ -37,6 +37,13 @@ export async function PUT(request: Request, { params }: { params: { cluster: str
   if (body.config !== undefined && (typeof body.config !== 'object' || body.config === null || Array.isArray(body.config))) {
     return json({ status: 'error', message: 'config must be an object' }, 400);
   }
+  // pentest-remediation P1-2 round 2: assertSafeName's regex check (SAFE.test(v)) coerces its
+  // argument to a string, so a non-string chartVersion (e.g. an array) silently passes validation
+  // and gets stored as-is — reproducing the same permanent-500 bug this file's chartVersion check
+  // exists to prevent. Reject non-string chartVersion outright, before assertSafeName ever sees it.
+  if (body.chartVersion !== undefined && body.chartVersion !== null && typeof body.chartVersion !== 'string') {
+    return json({ status: 'error', message: 'chartVersion must be a string' }, 400);
+  }
   try {
     assertSafeYamlKeys((body.config ?? {}) as any);
     if (body.chartVersion) assertSafeName('chartVersion', body.chartVersion);

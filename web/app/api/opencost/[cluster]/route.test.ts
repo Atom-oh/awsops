@@ -101,4 +101,20 @@ describe('PUT /api/opencost/[cluster]', () => {
     expect(res.status).toBe(400);
     expect(upsertOpencostConfig).not.toHaveBeenCalled();
   });
+  // pentest-remediation P1-2 round 2: RegExp.test() coerces its argument to a string, so
+  // assertSafeName('chartVersion', ['1.0']) would silently pass (String(['1.0']) === '1.0') and
+  // store the array — later rendering as a Postgres array literal that fails assertSafeName at
+  // bundle-download time. Reject non-string chartVersion before it ever reaches assertSafeName.
+  it('400 when chartVersion is an array, without ever calling upsertOpencostConfig', async () => {
+    const { PUT } = await import('./route');
+    const res = await PUT(req('PUT', { chartVersion: ['1.0'] as any, config: {} }), P);
+    expect(res.status).toBe(400);
+    expect(upsertOpencostConfig).not.toHaveBeenCalled();
+  });
+  it('400 when chartVersion is an object, without ever calling upsertOpencostConfig', async () => {
+    const { PUT } = await import('./route');
+    const res = await PUT(req('PUT', { chartVersion: { evil: 1 } as any, config: {} }), P);
+    expect(res.status).toBe(400);
+    expect(upsertOpencostConfig).not.toHaveBeenCalled();
+  });
 });
