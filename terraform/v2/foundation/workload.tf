@@ -267,6 +267,70 @@ resource "aws_cloudwatch_log_group" "web" {
   retention_in_days = 30
 }
 
+# pentest-remediation P7-review (MAJOR 2): the server-side session-revocation check (ADR-002 §2-4)
+# is deliberately FAIL-OPEN on Aurora trouble — if Aurora is degraded or the `max: 3` pool is
+# saturated, revocation is effectively OFF and the only signal was a console.warn nobody reads.
+# Since fail-open is the documented availability-first choice, DETECTION is the compensating
+# control, so it can't be optional: unconditional (no flag) — 2 filters + 2 alarms ≈ $0.20/mo on a
+# log group that already exists. Same shape as secret-rotation.tf's skip-path filter/alarm, and
+# like those it has no alarm_actions yet (no SNS topic is wired in this root) — wire alarm_actions
+# to your alerting stack before relying on it; the alarm is visible in the console meanwhile.
+resource "aws_cloudwatch_log_metric_filter" "revocation_check_failed" {
+  log_group_name = aws_cloudwatch_log_group.web.name
+  name           = "${var.project}-revocation-check-failed"
+  pattern        = "\"revocation_check_failed\""
+  metric_transformation {
+    name      = "RevocationCheckFailed"
+    namespace = "${var.project}/auth"
+    value     = "1"
+    unit      = "Count"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "revocation_write_failed" {
+  log_group_name = aws_cloudwatch_log_group.web.name
+  name           = "${var.project}-revocation-write-failed"
+  pattern        = "\"revocation_write_failed\""
+  metric_transformation {
+    name      = "RevocationWriteFailed"
+    namespace = "${var.project}/auth"
+    value     = "1"
+    unit      = "Count"
+  }
+}
+
+# Both should be exactly zero in steady state, so alarm on a SUSTAINED count (2 consecutive 5-min
+# periods) rather than a single blip — one warn during an Aurora Serverless v2 scaling event is the
+# expected fail-open behavior, not an incident. The read path's warn is deduped to ~1 line per sub
+# per 10s (web/lib/auth.ts), so >5 in a period means several distinct users, not one noisy loop.
+resource "aws_cloudwatch_metric_alarm" "revocation_check_failed" {
+  alarm_name          = "${var.project}-revocation-check-failed"
+  alarm_description   = "verifyUser()'s revocation check is failing (Aurora degraded / pool saturated) — session revocation is failing OPEN, i.e. logged-out id_tokens are being accepted again. See ADR-002 §2-4."
+  namespace           = "${var.project}/auth"
+  metric_name         = "RevocationCheckFailed"
+  statistic           = "Sum"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 5
+  period              = 300
+  evaluation_periods  = 2
+  treat_missing_data  = "notBreaching"
+}
+
+resource "aws_cloudwatch_metric_alarm" "revocation_write_failed" {
+  alarm_name = "${var.project}-revocation-write-failed"
+  # Lower threshold: this fires only on actual signouts (far lower volume than the read path), so a
+  # couple per period already means logouts are not being recorded at all.
+  alarm_description   = "POST /api/auth/signout could not record the session revocation — users' logouts are not cutting their id_tokens off. See ADR-002 §2-4."
+  namespace           = "${var.project}/auth"
+  metric_name         = "RevocationWriteFailed"
+  statistic           = "Sum"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 2
+  period              = 300
+  evaluation_periods  = 2
+  treat_missing_data  = "notBreaching"
+}
+
 resource "aws_ecs_task_definition" "web" {
   family                   = "${var.project}-web"
   requires_compatibilities = ["FARGATE"]

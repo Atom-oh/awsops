@@ -9,7 +9,14 @@ export const dynamic = 'force-dynamic';
 // Mirror scripts/v2/workers/handlers.py REGISTRY. The dispatcher Lambda re-validates server-side.
 const ALLOWED = new Set(['noop', 'noop-heavy', 'report', 'compliance']);
 
+// pentest-remediation P2-review (MAJOR-2): this handler enqueues real Fargate/Lambda work but had
+// no auth check at all — Lambda@Edge only validates JWT signature/expiry, so a token that's been
+// revoked (logged out) but not yet expired could still enqueue jobs for its full remaining
+// lifetime. Mirrors GET (this file) and GET /api/jobs/[id] — verifyUser() is revocation-aware.
 export async function POST(req: NextRequest) {
+  if (!(await verifyUser(req.headers.get('cookie')))) {
+    return NextResponse.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
+  }
   const queueUrl = process.env.JOBS_QUEUE_URL;
   if (!queueUrl) {
     return NextResponse.json(
