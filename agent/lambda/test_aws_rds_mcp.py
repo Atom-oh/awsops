@@ -25,17 +25,21 @@ READER_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:o
 # validates resource_arn against AURORA_CLUSTER_ARN (injected by ai.tf) instead of letting the Data
 # API blow up with an unhandled 500. Every env patch below carries it; _event() defaults to it.
 CLUSTER_ARN = "arn:aws:rds:ap-northeast-2:123456789012:cluster:c1"
-_READER_ENV = {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN, "AURORA_CLUSTER_ARN": CLUSTER_ARN}
+DATABASE_NAME = "awsops"
+_READER_ENV = {
+    "AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN,
+    "AURORA_CLUSTER_ARN": CLUSTER_ARN,
+    "AURORA_DATABASE": DATABASE_NAME,
+}
 
 
-def _event(sql, resource_arn=CLUSTER_ARN, secret_arn=MASTER_SECRET_ARN, database="postgres"):
+def _event(sql, resource_arn=CLUSTER_ARN, secret_arn=MASTER_SECRET_ARN):
     return {
         "tool_name": "execute_sql",
         "arguments": {
             "sql": sql,
             "resource_arn": resource_arn,
             "secret_arn": secret_arn,
-            "database": database,
         },
     }
 
@@ -80,6 +84,8 @@ class TestExecuteSqlGuard(unittest.TestCase):
         self.assertEqual(calls[1].kwargs["sql"], "SELECT id, requested_by FROM diagnosis_reports LIMIT 10")
         self.assertEqual(calls[0].kwargs["transactionId"], "txn-1")
         self.assertEqual(calls[1].kwargs["transactionId"], "txn-1")
+        self.assertEqual(self.rds_data_client.begin_transaction.call_args.kwargs["database"], DATABASE_NAME)
+        self.assertEqual({call.kwargs["database"] for call in calls}, {DATABASE_NAME})
         self.rds_data_client.rollback_transaction.assert_called_once_with(
             resourceArn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1",
             secretArn=READER_SECRET_ARN, transactionId="txn-1")
@@ -307,6 +313,30 @@ class TestExecuteSqlUsesTheLeastPrivilegeSecret(unittest.TestCase):
         used = {c.kwargs["secretArn"] for c in self.rds_data_client.execute_statement.call_args_list}
         self.assertEqual(used, {READER_SECRET_ARN})
         self.assertNotIn(other, used)
+
+    def test_caller_supplied_database_is_ignored(self):
+        event = _event("SELECT 1")
+        event["arguments"]["database"] = "attacker_chosen_database"
+        with mock.patch.dict(os.environ, _READER_ENV):
+            resp = rds_mcp.lambda_handler(event, None)
+        self.assertEqual(resp["statusCode"], 200)
+        seen = [self.rds_data_client.begin_transaction.call_args.kwargs["database"]]
+        seen += [c.kwargs["database"] for c in self.rds_data_client.execute_statement.call_args_list]
+        self.assertEqual(set(seen), {DATABASE_NAME})
+        self.assertNotIn("attacker_chosen_database", seen)
+
+    def test_unset_or_empty_database_config_fails_closed_before_any_data_api_call(self):
+        without_database = {k: v for k, v in _READER_ENV.items() if k != "AURORA_DATABASE"}
+        for label, env in [
+            ("unset", without_database),
+            ("empty", {**_READER_ENV, "AURORA_DATABASE": "  "}),
+        ]:
+            with self.subTest(label=label), mock.patch.dict(os.environ, env, clear=True):
+                resp = self._run()
+            self.assertEqual(resp["statusCode"], 400)
+            self.assertIn("AURORA_DATABASE", json.loads(resp["body"])["error"])
+            self.rds_data_client.begin_transaction.assert_not_called()
+            self.rds_data_client.execute_statement.assert_not_called()
 
     def test_missing_reader_secret_fails_closed_before_any_data_api_call(self):
         # No fallback to the master secret (or to the caller's argument) — the tool refuses.

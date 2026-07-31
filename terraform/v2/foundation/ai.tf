@@ -770,14 +770,15 @@ resource "aws_lambda_function" "agent" {
         AURORA_SECRET_ARN  = aws_secretsmanager_secret.agent_sql_reader[0].arn
         AURORA_DATABASE    = aws_rds_cluster.aurora.database_name
       } : {},
-      # rds-mcp's execute_sql resolves its Data API credential from env ONLY — the caller-supplied
-      # secret_arn argument is ignored (and removed from the tool schema). Unset => the tool fails
-      # closed rather than falling back to anything more privileged. AURORA_CLUSTER_ARN is the
-      # cluster that reader secret belongs to: round 10 MAJOR — execute_sql refuses any other
-      # resource_arn with a tool-level error instead of letting the Data API raise an unhandled 500.
+      # rds-mcp's execute_sql resolves its Data API credential and database from env ONLY — the
+      # caller-supplied secret_arn/database arguments are ignored (and removed from the tool schema).
+      # Unset => the tool fails closed rather than falling back to anything more privileged.
+      # AURORA_CLUSTER_ARN is the cluster that reader secret belongs to: round 10 MAJOR — execute_sql
+      # refuses any other resource_arn instead of letting the Data API raise an unhandled 500.
       each.key == "rds-mcp" ? {
         AURORA_SQL_READER_SECRET_ARN = aws_secretsmanager_secret.agent_sql_reader[0].arn
         AURORA_CLUSTER_ARN           = aws_rds_cluster.aurora.arn
+        AURORA_DATABASE              = aws_rds_cluster.aurora.database_name
       } : {}
     )
   }

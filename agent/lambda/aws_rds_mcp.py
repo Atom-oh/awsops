@@ -140,6 +140,13 @@ def lambda_handler(event, context):
             if not cluster_arn:
                 return err("read-only: the foundation cluster ARN is not configured "
                            "(AURORA_CLUSTER_ARN unset) — refusing to execute")
+            # Database selection is server-side configuration too: ai.tf injects the foundation
+            # cluster's database_name (awsops), matching inventory_read_mcp.py. Never let a model
+            # redirect the least-privilege credential to a caller-selected database.
+            database = os.environ.get("AURORA_DATABASE", "").strip()
+            if not database:
+                return err("read-only: the foundation database is not configured "
+                           "(AURORA_DATABASE unset or empty) — refusing to execute")
             if not _is_foundation_cluster(args["resource_arn"], cluster_arn):
                 return err("read-only: execute_sql only supports the host's own foundation Aurora "
                            f"cluster ({cluster_arn.rsplit(':', 1)[-1]}) — the Data API credential is "
@@ -203,7 +210,7 @@ def lambda_handler(event, context):
             # either way — this tool is read-only by contract, so there's nothing to persist — and
             # always rollback in `finally` so the transaction never lingers on an error path.
             txn_args = dict(resourceArn=args["resource_arn"], secretArn=secret_arn,
-                             database=args.get("database", ""))
+                             database=database)
             transaction_id = rds_data.begin_transaction(**txn_args)["transactionId"]
             try:
                 try:
