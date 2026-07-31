@@ -326,7 +326,26 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 kill -TERM "$SYNTH_PID" 2>/dev/null || true
-wait "$SYNTH_PID" 2>/dev/null || true
+# The previous version of this test only checked the file, which let a real bug through: a bare
+# `trap handler INT TERM` scrubs and then RESUMES, so the script kept running after the cancel and
+# a later fallback chair call could re-leak. Assert the process actually dies, promptly, with the
+# conventional 128+SIGTERM status — otherwise "cancelled" is a lie.
+CANCEL_STATUS=""
+for _ in $(seq 1 100); do
+  if ! kill -0 "$SYNTH_PID" 2>/dev/null; then break; fi
+  sleep 0.1
+done
+if kill -0 "$SYNTH_PID" 2>/dev/null; then
+  kill -KILL "$SYNTH_PID" 2>/dev/null || true
+  fail "a TERM'd run actually terminates (still alive 10s after SIGTERM)"
+else
+  wait "$SYNTH_PID" 2>/dev/null; CANCEL_STATUS=$?
+  if [ "$CANCEL_STATUS" -eq 143 ]; then
+    pass "a TERM'd run actually terminates (exit 143 = 128+SIGTERM)"
+  else
+    fail "a TERM'd run actually terminates (expected exit 143, got $CANCEL_STATUS)"
+  fi
+fi
 
 CANCEL_LEAK=""
 for f in "$WORK6"/*.err; do
@@ -337,6 +356,46 @@ if [ -n "$CANCEL_LEAK" ]; then
   fail "a cancelled run leaves no raw chair stderr on disk (found in:$CANCEL_LEAK)"
 else
   pass "a cancelled run leaves no raw chair stderr on disk"
+fi
+
+# SIGKILL cannot be trapped, so the trap-based scrub cannot cover it — GitHub SIGKILLs after its
+# grace period expires, which is exactly what happens on a long chair call. This is what earns the
+# process-substitution scrub its place: the raw bytes never reach the file at all, so there is
+# nothing to clean up when the process dies without warning.
+WORK7=$(mktemp -d); mkdir -p "$WORK7/slot"; : > "$WORK7/responded.txt"
+echo "model0/L2" >> "$WORK7/responded.txt"; echo "cell" > "$WORK7/slot/model0-L2.md"
+DIFF7=$(mktemp); echo "diff --git a/x b/x" > "$DIFF7"
+
+cat > "$BIN/claude" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'creds %s\n' "$FAILURE_SECRET" >&2
+sleep 30
+EOF
+chmod +x "$BIN/claude"
+
+PATH="$BIN:$PATH" FAILURE_SECRET="$FAKE_AWS_KEY" \
+  CHAIR_PRIMARY_MODEL="$PRIMARY_MODEL" CHAIR_FALLBACK_MODEL="$FALLBACK_MODEL" \
+  GITHUB_ENV="$WORK7/github-env.txt" \
+  bash "$SCRIPT" "$DIFF7" "$WORK7" 1 "sigkilled" "$WORK7/review.md" \
+  > "$WORK7/synth.log" 2>&1 &
+KILL_PID=$!
+for _ in $(seq 1 100); do
+  [ -s "$WORK7/chair-primary.err" ] && break
+  sleep 0.1
+done
+kill -KILL "$KILL_PID" 2>/dev/null || true
+wait "$KILL_PID" 2>/dev/null || true
+
+KILL_LEAK=""
+for f in "$WORK7"/*.err; do
+  [ -f "$f" ] || continue
+  grep -Fq "$FAKE_AWS_KEY" "$f" 2>/dev/null && KILL_LEAK="$KILL_LEAK $(basename "$f")"
+done
+if [ -n "$KILL_LEAK" ]; then
+  fail "a SIGKILLed run leaves no raw chair stderr (untrappable, so scrub must happen on write):$KILL_LEAK"
+else
+  pass "a SIGKILLed run leaves no raw chair stderr (untrappable, so scrub must happen on write)"
 fi
 
 [ "$FAILED" -eq 0 ] || exit 1

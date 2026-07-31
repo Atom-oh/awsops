@@ -61,7 +61,25 @@ scrub_chair_stderr() {
     fi
   done
 }
-trap scrub_chair_stderr EXIT INT TERM HUP
+# A bare `trap handler INT TERM` scrubs but does NOT stop the script — bash resumes from where the
+# signal landed. That is wrong twice over: the cancellation doesn't actually cancel (we keep burning
+# runner time after GitHub asked us to stop), and if execution continues into the fallback chair
+# call it writes FRESH raw stderr while the trap has already run, so the leak comes straight back.
+# So the signal handlers scrub and then exit with the conventional 128+signo, clearing the EXIT trap
+# first so the scrub doesn't run twice. EXIT keeps the plain handler for normal/`set -e` paths.
+CHAIR_JOB_PID=""
+on_chair_signal() {  # $1 = signal number
+  # 진행 중인 chair 자식을 먼저 끊는다 — 안 그러면 `wait` 를 벗어나도 자식이 계속 돌며 러너
+  # 시간을 태우고, 그 사이 새 출력이 흘러나온다.
+  [ -n "$CHAIR_JOB_PID" ] && kill -TERM "$CHAIR_JOB_PID" 2>/dev/null || true
+  scrub_chair_stderr
+  trap - EXIT
+  exit $((128 + $1))
+}
+trap scrub_chair_stderr EXIT
+trap 'on_chair_signal 1' HUP
+trap 'on_chair_signal 2' INT
+trap 'on_chair_signal 15' TERM
 
 while IFS= read -r f; do
   [ -s "$f" ] || continue
@@ -159,29 +177,36 @@ chair_label() { case "$1" in
 esac ; }
 
 run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도 || true 로 계속.
-  # chair 출력도 scrub 한다 — 이게 실제 게시 경계다. $OUT 은 pr-review.yml 이 PR 코멘트로
-  # verbatim 게시하므로, 입력을 아무리 스크럽해도 여기서 한 번 더 걸러야 fail-safe 가 된다:
-  # 모델이 입력에 없던 형태로 재구성/환각할 수도 있고, 향후 누군가 새 입력 소스를 추가하면서
-  # 스크럽을 빼먹어도 이 지점이 마지막 방어선으로 남는다. 입력 스크럽은 defence-in-depth,
-  # 출력 스크럽이 경계.
+  # 두 출력 모두 디스크에 닿기 전에 scrub 한다. $OUT 은 pr-review.yml 이 PR 코멘트로 verbatim
+  # 게시하므로 출력 스크럽이 실제 경계이고(모델이 입력에 없던 형태를 재구성할 수도, 향후 누가
+  # 새 입력 소스를 추가하며 스크럽을 빼먹을 수도 있다), 입력 스크럽은 defence-in-depth 다.
   #
-  # 스크럽 전 원본을 파일로 떨어뜨리지 않고 파이프로 흘린다 — $WORK 는 non-ephemeral
-  # self-hosted 러너의 고정 전역 경로라, 원본을 디스크에 쓰면 이 실행이 끝난 뒤 다음 실행이
-  # 시작할 때까지 스크럽 안 된 크리덴셜이 러너에 남고, 그 사이 다른 PR 의 job 이 읽을 수 있다
-  # (실행 시작 시 rm 은 이 창을 닫지 못한다). `set -o pipefail` + `|| true` 로 claude 실패 시
-  # 동작은 종전과 같고, 호출자는 exit status 가 아니라 $OUT 유효성으로 판정한다.
+  # stderr 는 process substitution 으로 받는다 — 원본을 파일로 쓴 뒤 나중에 스크럽하는 방식은
+  # 취소에 취약했다: bash 는 foreground 자식이 블로킹 중이면 trap 을 자식 종료까지 미루고,
+  # 이 자식은 CHAIR_TIMEOUT(600s)까지 살 수 있어서 GitHub 의 grace period 가 먼저 끝나고
+  # SIGKILL 이 오면 스크럽은 영원히 실행되지 않는다. 창을 닫으려 경쟁하는 대신 창을 없앤다:
+  # `>(…)` 로 흘리면 파일에는 스크럽된 바이트만 도착하므로, 어느 시점에 죽어도(SIGKILL 포함)
+  # 러너에 원본이 남지 않는다. 두 파일은 여전히 따로 보존돼 primary/fallback 진단은 그대로다.
+  # 백그라운드 + `wait` 로 돌린다 — foreground 자식이 블로킹 중이면 bash 는 트랩을 자식 종료
+  # 시점까지 미루므로, 이 자식이 CHAIR_TIMEOUT(600s)까지 살 수 있는 상황에서 SIGTERM 을 받아도
+  # 스크립트가 즉시 죽지 않는다(GitHub grace period 가 먼저 끝나 SIGKILL 로 이어짐). `wait` 는
+  # 시그널로 중단되므로 트랩이 제때 돌고, 핸들러가 이 PID 를 먼저 정리한다.
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-    < "$WORK/synth-stdin.txt" 2>"$2" \
-    | strip_controls | scrub_secrets > "$OUT" || true
-  # stderr 는 파일로 받아야 한다(primary/fallback 을 따로 보존해 진단에 쓰므로) — 대신 호출이
-  # 끝난 직후 제자리에서 스크럽한다. 발췌 시점에만 스크럽하면 원본 .err 이 $WORK 에 그대로
-  # 남고, $WORK 는 실행 간 유지되는 러너 전역 경로라 다음 실행까지 다른 job 이 읽을 수 있다
-  # (stdout 을 파일로 안 떨어뜨린 것과 같은 이유). 스크럽본을 새 파일에 쓰고 mv 로 덮으므로
-  # 원본은 호출 중에만 존재한다. 발췌 쪽 스크럽은 idempotent 하니 그대로 둔다(이중 방어).
-  if [ -f "$2" ]; then
-    strip_controls < "$2" | scrub_secrets > "$2.scrubbed" && mv "$2.scrubbed" "$2"
-  fi
+    < "$WORK/synth-stdin.txt" 2> >(strip_controls | scrub_secrets > "$2") \
+    | strip_controls | scrub_secrets > "$OUT" &
+  CHAIR_JOB_PID=$!
+  wait "$CHAIR_JOB_PID" || true
+  CHAIR_JOB_PID=""
+  # `>(…)` writer 는 비동기라 위 명령이 반환한 직후 아직 flush 중일 수 있다. 발췌를 온전히
+  # 읽기 위해 파일 크기가 안정될 때까지 짧게 기다린다(상한 있음 — 절대 매달리지 않는다).
+  # 실패해도 보안 성질은 불변이다: 늦게 도착하는 바이트도 이미 스크럽을 통과한 것이다.
+  local prev=-1 cur
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    cur=$(wc -c < "$2" 2>/dev/null || echo 0)
+    [ "$cur" = "$prev" ] && break
+    prev="$cur"; sleep 0.1
+  done
 }
 
 scrubbed_err_excerpt() {
