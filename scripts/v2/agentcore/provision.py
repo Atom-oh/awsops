@@ -191,15 +191,15 @@ def _ensure_api_key_provider(ctrl, provider_name, token):
 
 
 def _api_key_provider_fields(credential_provider_configurations):
-    """Extract the (location, param_name, prefix) an API_KEY credentialProviderConfigurations entry
-    injects the secret at, or None for any other/absent config. Used to detect drift in the
-    credential-provider WIRING (not the secret value itself, which _ensure_api_key_provider already
-    refreshes every run) — e.g. a catalog.py edit changing which header a preset's token goes in."""
+    """Extract (providerArn, location, param_name, prefix) an API_KEY credentialProviderConfigurations
+    entry uses, or None for any other/absent config. providerArn is included (not just the header
+    wiring) so a provider that got deleted-and-recreated (new ARN, same location/param/prefix) is
+    still detected as drift — otherwise the target keeps pointing at a now-nonexistent provider."""
     cfgs = credential_provider_configurations or []
     if not cfgs or cfgs[0].get("credentialProviderType") != "API_KEY":
         return None
     apk = (cfgs[0].get("credentialProvider") or {}).get("apiKeyCredentialProvider") or {}
-    return (apk.get("credentialLocation"), apk.get("credentialParameterName"), apk.get("credentialPrefix", ""))
+    return (apk.get("providerArn"), apk.get("credentialLocation"), apk.get("credentialParameterName"), apk.get("credentialPrefix", ""))
 
 
 def _delete_api_key_provider(ctrl, provider_name):
@@ -228,11 +228,21 @@ def _retire_gateway_target(ctrl, gw_id, existing, tname, reason):
 
 def ensure_mcp_server_targets(ctrl, ac, gw_ids):
     """ADR-017: register curated official-vendor MCP servers as remote `mcpServer` gateway targets.
-    A preset with no configured endpoint (var.official_mcp_endpoints, including the flag entirely
-    off) or no stored credential is SKIPped, not an error — both are normal for a deployment that
-    hasn't onboarded that vendor yet. SKIP additionally RETIRES (deletes) any target + credential
-    provider a PRIOR run left behind for that preset — turning the flag/endpoint off must actually
-    take the remote MCP + its stored token out of service, not just stop touching them."""
+
+    Ordering is deliberate and safety-critical (2026-07-31 kiro review, findings #1/#2 on the first
+    cut of this function):
+      1. INACTIVE (no endpoint, or api_key mode with no stored credential) -> retire only THIS
+         preset's own mcp-server target + credential provider if a prior run left them live. The
+         legacy lambda target is NEVER touched here — an incomplete/reverted cutover must leave the
+         old tool working, not take it down too. This covers both "flag/endpoint off" AND
+         "credential removed while the endpoint stays configured" (finding #2 — a missing
+         credential is not merely a no-op skip, it must also tear down a now-uncredentialed target).
+      2. ACTIVE -> validate the credential provider FIRST, then create/update the new target, and
+         ONLY on confirmed success (CREATED/UPDATED/EXISTS) retire the legacy lambda target. Doing
+         the legacy delete BEFORE the new target was confirmed live was the outage bug (finding #1):
+         a missing credential or a create/update failure would delete the working old tool with
+         nothing to replace it.
+    """
     endpoints = ac.get("official_mcp_endpoints") or {}
     lambda_arns = ac.get("lambda_arns") or {}
     secrets = _load_official_mcp_secret(ac)
@@ -253,31 +263,34 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
         if not gw_id:
             log(f"target:{tname}", "ERR", f"gateway {spec['gateway']} missing")
             continue
-        if not endpoint:
-            log(f"target:{tname}", "SKIP", "official_mcp_enabled=false or no endpoint configured for preset" if not endpoints else f"no endpoint configured for preset '{preset_key}'")
-            _retire_gateway_target(ctrl, gw_id, existing, tname, "endpoint removed/flag off")
-            _delete_api_key_provider(ctrl, f"awsops-v2-{preset_key}-mcp")
-            continue
-        # INFORMATIONAL only (dead-code reminder) — does NOT gate target creation. The actual
-        # conflict is closed below by deleting any LIVE legacy target before creating the new one,
-        # since a tf-config check alone can't see a leftover target object from a prior run.
-        conflict = catalog.conflicting_lambda_key(preset_key, lambda_arns)
-        if conflict:
-            log(f"target:{tname}", "WARN", f"lambda '{conflict}' still deployed — remove from ai.tf local.agent_lambdas (dead code once this preset is live)")
-        legacy_name = catalog.legacy_target_name(preset_key)
-        if legacy_name and legacy_name in existing:
-            _retire_gateway_target(ctrl, gw_id, existing, legacy_name, f"superseded by {tname} (ADR-017 cutover)")
+
         auth = spec["auth"]
-        creds = [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
+        provider_name = f"awsops-v2-{preset_key}-mcp"
+        token = None
         if auth["mode"] == "api_key":
             raw = secrets.get(preset_key)
             token = raw.get("token") if isinstance(raw, dict) else None
-            if not token:
-                log(f"target:{tname}", "SKIP", f"no stored credential for preset '{preset_key}' (Connectors tab)")
-                continue
-            provider_arn = _ensure_api_key_provider(ctrl, f"awsops-v2-{preset_key}-mcp", token)
+
+        if not endpoint or (auth["mode"] == "api_key" and not token):
+            reason = "no endpoint configured" if not endpoint else "no stored credential"
+            log(f"target:{tname}", "SKIP", f"{reason} for preset '{preset_key}' (official_mcp_enabled/endpoint or Connectors tab)")
+            _retire_gateway_target(ctrl, gw_id, existing, tname, f"{reason} — retiring")
+            _delete_api_key_provider(ctrl, provider_name)
+            continue
+
+        # INFORMATIONAL only (dead-code reminder) — does NOT gate target creation. The legacy
+        # target itself (below, AFTER a confirmed-successful create/update) is what closes the
+        # actual duplicate-tool-name risk; a tf-config-only check can't see a leftover target
+        # object from a prior run, and gating on it would just reproduce that gap.
+        conflict = catalog.conflicting_lambda_key(preset_key, lambda_arns)
+        if conflict:
+            log(f"target:{tname}", "WARN", f"lambda '{conflict}' still deployed — remove from ai.tf local.agent_lambdas (dead code once this preset is live)")
+
+        creds = [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
+        if auth["mode"] == "api_key":
+            provider_arn = _ensure_api_key_provider(ctrl, provider_name, token)
             if not provider_arn:
-                continue  # error already logged by _ensure_api_key_provider
+                continue  # error already logged by _ensure_api_key_provider — legacy target untouched
             creds = [{
                 "credentialProviderType": "API_KEY",
                 "credentialProvider": {"apiKeyCredentialProvider": {
@@ -287,6 +300,7 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
                     "credentialPrefix": auth.get("credential_prefix", ""),
                 }},
             }]
+
         cfg = {"mcp": {"mcpServer": {"endpoint": endpoint, "listingMode": "DEFAULT"}}}
         tid_to_sync = None
         try:
@@ -312,13 +326,21 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
                 tid_to_sync = resp["targetId"]
         except ClientError as e:
             log(f"target:{tname}", "ERR", str(e)[:140])
-            continue
+            continue  # new target failed — leave the legacy lambda target alone (no outage)
+
         if tid_to_sync:
             try:
                 ctrl.synchronize_gateway_targets(gatewayIdentifier=gw_id, targetIdList=[tid_to_sync])
                 log(f"target:{tname}:sync", "OK", "tools/list refresh requested")
             except ClientError as e:
                 log(f"target:{tname}:sync", "ERR", str(e)[:140])
+
+        # Only now — after the new mcp-server target is confirmed CREATED/UPDATED/EXISTS — retire
+        # the legacy lambda target for this kind, if one is still live (finding #1: this must never
+        # happen before the replacement is confirmed working).
+        legacy_name = catalog.legacy_target_name(preset_key)
+        if legacy_name and legacy_name in existing:
+            _retire_gateway_target(ctrl, gw_id, existing, legacy_name, f"superseded by {tname} (ADR-017 cutover)")
 
 
 def prune_moved_targets(ctrl, gw_ids):

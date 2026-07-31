@@ -85,11 +85,17 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
     def test_conflicting_lambda_in_tf_config_is_warn_not_err(self):
         # datadog was never a lambda TARGETS entry (legacy_target_name -> None), so the tf-config
         # check is purely informational here: it must WARN, never ERR/block, and must not crash.
+        # The WARN check only runs once the preset is ACTIVE (endpoint + credential present) — an
+        # inactive preset never reaches it (it's retired/skipped first) — so a credential must be
+        # stored for this scenario to exercise the check at all.
         ctrl = _ctrl_with_targets()
+        ctrl.get_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
+        ctrl.create_gateway_target.return_value = {"targetId": "t-1"}
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {"datadog-mcp": "arn:aws:lambda:...:function:x-agent-datadog-mcp"},
-              "region": "ap-northeast-2", "integrations_secret_name": None}
-        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET):
+              "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value={"datadog": {"token": "tok"}}):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         self.assertIn("WARN", {r[1] for r in provision.report})
         self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
@@ -163,6 +169,72 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.update_gateway_target.assert_called_once()
         self.assertIn(("target:datadog-mcp-server-target", "UPDATED"), [(r[0], r[1]) for r in provision.report])
+
+    def test_recreated_provider_with_unchanged_wiring_is_still_drift(self):
+        # WARNING (2026-07-31 follow-up) regression: the live target's credentialProviderConfigurations
+        # references an OLD providerArn (e.g. the provider was deleted+recreated by a prior retire/
+        # re-enable cycle) even though location/param/prefix are unchanged. Comparing only the header
+        # wiring (not providerArn) would call this "no drift" and leave the target bound to a
+        # nonexistent provider — must still UPDATE.
+        live_target = {
+            "name": "datadog-mcp-server-target", "targetId": "t-1",
+            "targetConfiguration": {"mcp": {"mcpServer": {"endpoint": "https://mcp.datadoghq.com/v1/mcp"}}},
+            "credentialProviderConfigurations": [{
+                "credentialProviderType": "API_KEY",
+                "credentialProvider": {"apiKeyCredentialProvider": {
+                    "providerArn": "arn:provider-OLD-STALE", "credentialLocation": "HEADER",
+                    "credentialParameterName": "Authorization", "credentialPrefix": "Bearer ",
+                }},
+            }],
+            "description": "Datadog official MCP",
+        }
+        ctrl = _ctrl_with_targets({"gw-1": [live_target]})
+        ctrl.get_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider-NEW"}
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value={"datadog": {"token": "tok"}}):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.update_gateway_target.assert_called_once()
+        updated_creds = ctrl.update_gateway_target.call_args.kwargs["credentialProviderConfigurations"]
+        self.assertEqual(updated_creds[0]["credentialProvider"]["apiKeyCredentialProvider"]["providerArn"], "arn:provider-NEW")
+
+    def test_missing_credential_retires_a_previously_live_target_not_just_skips(self):
+        # CRITICAL #2 (2026-07-31 follow-up) regression: endpoint stays configured but the stored
+        # credential disappeared (rotated out / cleared) — a PRIOR run's target + provider are still
+        # live. Must be retired, not left running with a stale/unverifiable credential.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value={}):  # credential gone
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-1")
+        ctrl.delete_api_key_credential_provider.assert_called_once_with(name="awsops-v2-datadog-mcp")
+        ctrl.create_gateway_target.assert_not_called()
+
+    def test_legacy_target_is_retired_only_after_new_target_confirmed_created_not_before(self):
+        # CRITICAL #1 (2026-07-31 follow-up) regression: the ORIGINAL fix deleted the legacy lambda
+        # target BEFORE creating the new one — a create failure then left NEITHER target live
+        # (outage). The new target must be confirmed CREATED/UPDATED/EXISTS first; only then may the
+        # legacy target be retired.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-target", "targetId": "t-legacy"}]})
+        ctrl.get_api_key_credential_provider.side_effect = _raise_not_found
+        ctrl.create_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
+        from botocore.exceptions import ClientError
+        ctrl.create_gateway_target.side_effect = ClientError(
+            {"Error": {"Code": "ValidationException", "Message": "boom"}}, "CreateGatewayTarget")
+        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
+             mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value={"clickhouse": {"token": "tok"}}):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        # The new target creation failed — the legacy target must NOT have been deleted, or the
+        # kind would be unavailable through EITHER path.
+        ctrl.delete_gateway_target.assert_not_called()
+        self.assertIn(("target:clickhouse-mcp-server-target", "ERR"), [(r[0], r[1]) for r in provision.report])
+        self.assertNotIn("RETIRED", {r[1] for r in provision.report})
 
 
 def _raise_not_found(*_a, **_kw):
