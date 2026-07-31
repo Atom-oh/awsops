@@ -39,6 +39,21 @@ as a comment on the MySQL path hid a trailing `INTO OUTFILE` behind a fake comme
 (`SELECT 1--1 INTO OUTFILE '/tmp/x'`). `dash_comment_needs_boundary=True` (set on the RDS MySQL
 path) requires that trailing boundary before `--` is treated as a comment; PostgreSQL/ClickHouse
 keep the old unconditional behavior (`dash_comment_needs_boundary=False`, the default).
+
+PR-review round-4 findings (both classes the DB-level READ ONLY transaction backstop in
+aws_rds_mcp.py genuinely cannot catch, because PostgreSQL's read-only transaction mode only blocks
+actual data writes — control-plane and session-GUC calls sail through it):
+- `pg_cancel_backend` (and read-only-transaction-immune info-disclosure functions
+  `pg_read_binary_file`, `pg_stat_file`, `pg_ls_\w+` covering `pg_ls_dir`/`pg_ls_waldir`/etc., MySQL's
+  `load_file(...)`) are ordinary read-verb-first function calls that a READ ONLY transaction does
+  NOT reject — they had to be added here, lexically, since the transaction backstop is not a
+  backstop for this class at all.
+- `set_config(...)` looked, in round 3, like something the engine's read-only transaction mode
+  would reject (same logic as an UPDATE) — it does not: GUC/session-variable changes are explicitly
+  allowed inside a Postgres READ ONLY transaction. `pg_advisory_\w+` (advisory locks) and `lo_put`
+  (large-object write, missed alongside the round-2 `lo_import`/`lo_export`/`lo_create`/`lo_unlink`
+  set) are the same story. All three are lexical-guard-only catches; see the corrected test in
+  test_aws_rds_mcp.py that used to (incorrectly) assert the transaction caught `set_config`.
 """
 import re
 
@@ -58,7 +73,8 @@ DANGER = re.compile(
     r"\b(INSERT|ALTER|DROP|CREATE|DELETE|TRUNCATE|OPTIMIZE|ATTACH|DETACH|SET|SYSTEM|GRANT|REVOKE|"
     r"KILL|MOVE|RENAME|CALL|COPY|MERGE|REPLACE\s+(?:INTO|TABLE)|LOCK|EXECUTE|DO|VACUUM|REINDEX|LISTEN|"
     r"NOTIFY|REFRESH|UPDATE|INTO|"
-    r"pg_read_file|pg_ls_dir|lo_import|lo_export|lo_create|lo_unlink|dblink\w*|pg_terminate_backend|"
+    r"pg_read_file|pg_read_binary_file|pg_stat_file|pg_ls_\w+|lo_import|lo_export|lo_create|lo_unlink|"
+    r"lo_put|dblink\w*|pg_terminate_backend|pg_cancel_backend|pg_advisory_\w+|set_config|load_file|"
     r"setval|nextval)\b",
     re.IGNORECASE,
 )

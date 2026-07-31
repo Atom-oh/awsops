@@ -147,10 +147,21 @@ class TestExecuteSqlEngineDialect(unittest.TestCase):
         self.rds_data_client.execute_statement.assert_not_called()
 
     def test_mysql_plain_select_still_allowed(self):
+        # Round-4 fix: MySQL does NOT get the begin_transaction/"SET TRANSACTION READ ONLY"/rollback
+        # wrapper — `SET TRANSACTION READ ONLY` is invalid mid-transaction on MySQL (error 1568) and
+        # round 3's version of this test only proved a MagicMock doesn't enforce real MySQL syntax,
+        # silently masking that every real MySQL query would have failed. MySQL read-only enforcement
+        # is lexical-guard-only (see TestExecuteSqlEngineDialect above); this test proves the query
+        # actually reaches the Data API as a single plain execute_statement, no transaction calls.
         self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
         status, _ = self._status("SELECT * FROM t WHERE x = 1")
         self.assertEqual(status, 200)
-        self.assertEqual(self.rds_data_client.execute_statement.call_count, 2)
+        self.rds_data_client.begin_transaction.assert_not_called()
+        self.rds_data_client.rollback_transaction.assert_not_called()
+        self.rds_data_client.execute_statement.assert_called_once_with(
+            sql="SELECT * FROM t WHERE x = 1",
+            resourceArn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1",
+            secretArn="arn:aws:secretsmanager:x", database="postgres")
 
     def test_unresolvable_engine_fails_closed_rather_than_guessing(self):
         self.rds_client.describe_db_clusters.side_effect = Exception("boom")
@@ -195,31 +206,19 @@ class TestExecuteSqlReadOnlyTransaction(unittest.TestCase):
         resp = rds_mcp.lambda_handler(_event(sql), None)
         return resp["statusCode"], json.loads(resp["body"])
 
-    def test_write_that_lexically_evades_the_guard_still_runs_inside_a_read_only_transaction(self):
-        # `set_config(...)` starts with a read verb and contains no DANGER bare token (the `\bSET\b`
-        # regex doesn't match "set_config" — no word boundary before the underscore) — it is exactly
-        # the kind of unenumerated write-capable function the round-3 review flagged the lexical
-        # guard can never fully close. Simulate the real Postgres READ_ONLY_SQL_TRANSACTION behavior:
-        # once "SET TRANSACTION READ ONLY" has executed on a transactionId, any subsequent statement
-        # on that SAME transactionId invoking set_config raises, mirroring the engine refusing a
-        # GUC-mutating call inside a read-only transaction.
-        read_only_active = {"txn-1": False}
-
-        def fake_execute_statement(transactionId, sql, **kwargs):
-            if sql == "SET TRANSACTION READ ONLY":
-                read_only_active[transactionId] = True
-                return {"columnMetadata": [], "records": []}
-            if read_only_active.get(transactionId) and "set_config" in sql.lower():
-                raise Exception("ERROR: cannot execute in a read-only transaction (READ_ONLY_SQL_TRANSACTION)")
-            return {"columnMetadata": [], "records": []}
-
-        self.rds_data_client.execute_statement.side_effect = fake_execute_statement
+    def test_set_config_is_rejected_lexically_not_by_the_transaction(self):
+        # Round-3's version of this test simulated the engine rejecting `set_config(...)` inside a
+        # READ ONLY transaction (READ_ONLY_SQL_TRANSACTION) — that's not real Postgres behavior:
+        # GUC/session-variable changes are explicitly PERMITTED inside a read-only transaction (they
+        # aren't "writes" from the engine's point of view), so that test encoded a false guarantee.
+        # Round-4 fix: `set_config` is now in sql_readonly_guard's DANGER pattern, so this is caught
+        # at the assert_read_only layer, before the Data API (or any transaction) is ever touched.
         status, body = self._status("SELECT set_config('search_path', 'public', false)")
-        self.assertEqual(status, 500)  # caught by lambda_handler's outer except, not a clean 400
-        self.rds_data_client.begin_transaction.assert_called_once()
-        self.rds_data_client.rollback_transaction.assert_called_once_with(
-            resourceArn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1",
-            secretArn="arn:aws:secretsmanager:x", transactionId="txn-1")
+        self.assertEqual(status, 400)
+        self.assertIn("read-only", body["error"])
+        self.rds_data_client.begin_transaction.assert_not_called()
+        self.rds_data_client.execute_statement.assert_not_called()
+        self.rds_data_client.rollback_transaction.assert_not_called()
 
     def test_normal_select_works_end_to_end_through_the_transaction_wrapped_flow(self):
         self.rds_data_client.execute_statement.return_value = {"columnMetadata": [], "records": []}

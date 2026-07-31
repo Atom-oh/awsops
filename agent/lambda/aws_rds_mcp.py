@@ -3,8 +3,12 @@ AWS RDS MCP Lambda - MySQL/PostgreSQL instance management, queries via RDS Data 
 AWS RDS MCP 람다 - MySQL/PostgreSQL 인스턴스 관리, RDS Data API를 통한 쿼리
 """
 import json
+import logging
 from cross_account import get_client, get_role_arn, resolve_tool_name
 from sql_readonly_guard import assert_read_only
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def lambda_handler(event, context):
@@ -92,8 +96,15 @@ def lambda_handler(event, context):
             sql = args["sql"].strip()
             try:
                 engine = _engine_family(rds, args["resource_arn"])
-            except Exception:
+            except Exception as e:
+                # Logged (not silently swallowed) — this can be a real AccessDenied on
+                # DescribeDBClusters, not just an unrecognized dialect string, and the fail-closed
+                # 400 below reads identically to a dialect-detection miss unless this is visible.
+                logger.warning("execute_sql: engine lookup failed for %s: %s", args.get("resource_arn"), e)
                 engine = None
+            if engine is None:
+                logger.warning("execute_sql: could not determine engine family for %s — failing closed",
+                                args.get("resource_arn"))
             # Fail closed: the Postgres and MySQL dialect flags are each unsafe for the OTHER
             # engine (backslash_escapes=True hides real Postgres SQL as "still inside a string";
             # =False hides a MySQL backslash-escaped quote past `INTO OUTFILE`) — there is no
@@ -119,31 +130,49 @@ def lambda_handler(event, context):
             # lexical guard above is the ONLY thing standing between a clever bypass and a real write
             # — and three rounds of finding-and-patching individual bypasses (comment/escape desync,
             # INTO, dangerous functions, ...) prove a denylist can never fully enumerate that class
-            # (arbitrary present/future string-returning functions that mutate data). So every
-            # execute_sql call is now ALSO wrapped in a DB-level READ ONLY transaction: even a query
+            # (arbitrary present/future string-returning functions that mutate data). So on Postgres,
+            # every execute_sql call is ALSO wrapped in a DB-level READ ONLY transaction: even a query
             # that evades the regex entirely is rejected by the engine itself, not by pattern-matching
-            # its text. `SET TRANSACTION READ ONLY` is valid syntax on both Postgres and MySQL/Aurora
-            # MySQL (5.6+), so the same statement text is used for both engines. Never commit — this
-            # tool is read-only by contract, so there's nothing to persist — and always rollback in
-            # `finally` so the transaction never lingers on an error path.
+            # its text.
+            #
+            # Round-4 fix: `SET TRANSACTION READ ONLY` (no SESSION/GLOBAL) is NOT valid mid-transaction
+            # on MySQL — it sets the characteristics of the NEXT transaction, and MySQL rejects it with
+            # error 1568 ("Transaction characteristics can't be changed while a transaction is in
+            # progress") if a transaction is already open. Round 3's comment claiming this statement is
+            # "valid syntax on both Postgres and MySQL/Aurora MySQL 5.6+" was wrong for the in-transaction
+            # case and broke every MySQL execute_sql call. There is no DB-level read-only enforcement
+            # achievable here for MySQL without a dedicated low-privilege DB user/secret (this tool runs
+            # under the Aurora MASTER secret) — that's the real fix, tracked as a follow-up, not done in
+            # this round. Until then, MySQL relies on the lexical guard above ONLY; Postgres keeps the
+            # transaction backstop, since `SET TRANSACTION READ ONLY` as the first statement of an
+            # already-open transaction is valid Postgres syntax. Never commit either way — this tool is
+            # read-only by contract, so there's nothing to persist — and always rollback in `finally` so
+            # the transaction never lingers on an error path.
             txn_args = dict(resourceArn=args["resource_arn"], secretArn=args["secret_arn"],
                              database=args.get("database", ""))
-            transaction_id = rds_data.begin_transaction(**txn_args)["transactionId"]
-            try:
+            if engine == "mysql":
+                resp = rds_data.execute_statement(sql=sql, **txn_args)
+            else:
+                transaction_id = rds_data.begin_transaction(**txn_args)["transactionId"]
                 try:
-                    rds_data.execute_statement(transactionId=transaction_id,
-                        sql="SET TRANSACTION READ ONLY", **txn_args)
-                except Exception as e:
-                    # Abort rather than fall through to running the query without the read-only
-                    # guarantee — the lexical guard is defense-in-depth, not the primary barrier.
-                    return err("read-only: could not establish a read-only transaction — refusing to execute: " + str(e))
-                resp = rds_data.execute_statement(transactionId=transaction_id, sql=sql, **txn_args)
-            finally:
-                try:
-                    rds_data.rollback_transaction(resourceArn=args["resource_arn"],
-                        secretArn=args["secret_arn"], transactionId=transaction_id)
-                except Exception:
-                    pass
+                    try:
+                        rds_data.execute_statement(transactionId=transaction_id,
+                            sql="SET TRANSACTION READ ONLY", **txn_args)
+                    except Exception as e:
+                        # Abort rather than fall through to running the query without the read-only
+                        # guarantee — the lexical guard is defense-in-depth, not the primary barrier.
+                        return err("read-only: could not establish a read-only transaction — refusing to execute: " + str(e))
+                    resp = rds_data.execute_statement(transactionId=transaction_id, sql=sql, **txn_args)
+                finally:
+                    try:
+                        rds_data.rollback_transaction(resourceArn=args["resource_arn"],
+                            secretArn=args["secret_arn"], transactionId=transaction_id)
+                    except Exception as e:
+                        # Logged, not silently swallowed — a leaked transaction (rds-data has a
+                        # 3-minute idle transaction timeout, but this could still mask a real
+                        # AccessDenied on RollbackTransaction rather than a benign already-closed txn).
+                        logger.warning("execute_sql: rollback_transaction failed for txn %s: %s",
+                                       transaction_id, e)
             columns = [c.get("label", c.get("name", "")) for c in resp.get("columnMetadata", [])]
             rows = []
             for record in resp.get("records", [])[:100]:

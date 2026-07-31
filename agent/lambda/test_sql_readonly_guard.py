@@ -140,6 +140,33 @@ class TestPostgresDialect(unittest.TestCase):
         self._bad("SELECT setval('seq', 100)")
         self._bad("SELECT nextval('seq')")
 
+    def test_pg_cancel_backend_rejected(self):
+        # PR-review round-4 MAJOR: pg_cancel_backend is a read-verb-first function call that a
+        # Postgres READ ONLY transaction does NOT block (it only blocks data writes, not backend
+        # control-plane calls) — this class has to be caught lexically or not at all.
+        self._bad("SELECT pg_cancel_backend(123)")
+
+    def test_info_disclosure_and_control_functions_rejected(self):
+        for fn in ["pg_read_binary_file('/etc/passwd')", "pg_stat_file('/etc/passwd')",
+                   "pg_ls_dir('/etc')", "pg_ls_waldir()"]:
+            self._bad(f"SELECT {fn}")
+
+    def test_set_config_rejected(self):
+        # PR-review round-4 MAJOR: set_config(...) is permitted by Postgres inside a READ ONLY
+        # transaction (GUC changes aren't "writes"), so the DB-level backstop can't catch it —
+        # lexical-only.
+        self._bad("SELECT set_config('search_path', 'public', false)")
+
+    def test_pg_advisory_lock_functions_rejected(self):
+        self._bad("SELECT pg_advisory_lock(1)")
+        self._bad("SELECT pg_advisory_unlock(1)")
+
+    def test_lo_put_rejected(self):
+        self._bad("SELECT lo_put(1, 0, 'data')")
+
+    def test_mysql_load_file_rejected(self):
+        self._bad("SELECT load_file('/etc/passwd')")
+
 
 class TestMysqlDashDashComment(unittest.TestCase):
     """PR-review round 3: MySQL only treats `--` as a comment when the second dash is followed by

@@ -237,16 +237,18 @@ resource "aws_iam_role_policy" "agent_lambda_integrations_secret" {
 # API (read-only SELECT). Scoped to ExecuteStatement on the cluster + GetSecretValue on the
 # RDS-managed master secret + Decrypt on the secret's CMK. Additive (own resource) so a targeted
 # apply leaves the runtime policy untouched.
-# pentest-remediation round 3: aws_rds_mcp.py's execute_sql now wraps every query in a DB-level
-# READ ONLY transaction (BeginTransaction -> SET TRANSACTION READ ONLY -> user SQL ->
+# pentest-remediation round 3: aws_rds_mcp.py's execute_sql wraps every Postgres query in a
+# DB-level READ ONLY transaction (BeginTransaction -> SET TRANSACTION READ ONLY -> user SQL ->
 # RollbackTransaction) as a structural backstop to the lexical guard — a denylist can't enumerate
 # every write-capable string function, but the engine itself can refuse any write inside a
-# read-only transaction. Begin/Rollback/CommitTransaction are separate IAM actions from
-# ExecuteStatement; added here on the SAME resource (the cluster this role could already
-# ExecuteStatement against) — this tightens how the role is forced to interact with what it could
-# already reach, it does not expand what the role can reach, so it's not a new ADR-005 capability
-# grant. CommitTransaction is included for API completeness even though the tool never calls it
-# (always rollback, even on success — there is nothing to persist from a read-only query).
+# read-only transaction (round 4: MySQL does NOT get this wrapper — `SET TRANSACTION READ ONLY` is
+# invalid mid-transaction on MySQL — so MySQL only ever calls ExecuteStatement). Begin/Rollback are
+# separate IAM actions from ExecuteStatement; added here on the SAME resource (the cluster this
+# role could already ExecuteStatement against) — this tightens how the role is forced to interact
+# with what it could already reach, it does not expand what the role can reach, so it's not a new
+# ADR-005 capability grant. CommitTransaction is deliberately NOT granted (round-4 least-privilege
+# fix) — the tool always rollsback, even on success (nothing to persist from a read-only query), so
+# it never calls CommitTransaction and granting it would be an unused privilege.
 resource "aws_iam_role_policy" "agent_lambda_inventory" {
   count = local.ac_count
   name  = "${var.project}-agent-lambda-inventory"
@@ -260,7 +262,6 @@ resource "aws_iam_role_policy" "agent_lambda_inventory" {
         Action = [
           "rds-data:ExecuteStatement",
           "rds-data:BeginTransaction",
-          "rds-data:CommitTransaction",
           "rds-data:RollbackTransaction",
         ]
         Resource = aws_rds_cluster.aurora.arn
