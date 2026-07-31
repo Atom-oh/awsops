@@ -199,25 +199,63 @@ def _endpoint_blocked(endpoint, spec=None):
     return None
 
 
-def _host_pin_violation(endpoint, spec):
-    """Per-preset host pin. Match on the PARSED hostname's suffix — never `endswith` on the raw URL,
-    which both `https://evil-datadoghq.com/` (no dot boundary) and
-    `https://datadoghq.com.attacker.example/` (suffix in the middle) would slip through."""
+def _host_under_suffix(host, suffixes):
+    """True if `host` sits under one of `suffixes`. Suffixes carry a leading dot so matching can only
+    happen on a DNS label boundary: this is what rejects `evil-datadoghq.com` (no boundary) and
+    `datadoghq.com.attacker.example` (suffix in the middle), both of which a raw-URL endswith allows."""
+    for suf in suffixes:
+        bare = suf.lstrip(".")
+        if host == bare or host.endswith(suf if suf.startswith(".") else "." + suf):
+            return True
+    return False
+
+
+def _host_pin_violation(endpoint, spec, self_hosted_suffixes=()):
+    """Per-preset host pin — the control that actually keeps this inside ADR-007's curated boundary.
+
+    Vendor-hosted presets pin to `allowed_host_suffixes` from the catalog. Self-hosted ones
+    (ClickHouse/Grafana/Splunk/Tempo/Jaeger) have no vendor domain, but leaving them to accept ANY
+    host still left the BYO-MCP path open — the preset's real credential would be handed to whatever
+    URL was configured, which is exactly what BASELINE §2 pins as do-not-revive. They are in-VPC by
+    design, so they are confined to the deployment's declared internal suffixes
+    (`official_mcp_self_hosted_host_suffixes`) or a literal private address. No declaration means
+    they cannot be enabled: enabling one has to be a deliberate, reviewable statement of where it
+    lives, not a free-form URL."""
     suffixes = spec.get("allowed_host_suffixes")
     if not suffixes:
-        if spec.get("host_is_operator_asserted"):
-            return None  # self-hosted by design; no vendor domain to pin against
-        return "catalog entry declares neither allowed_host_suffixes nor host_is_operator_asserted"
+        if not spec.get("host_is_operator_asserted"):
+            return "catalog entry declares neither allowed_host_suffixes nor host_is_operator_asserted"
+        try:
+            host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
+        except ValueError:
+            return "unparsable URL"
+        if not host:
+            return "no host in URL"
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            # A literal in-VPC address needs no suffix declaration. Public literals do not get a pass
+            # (loopback/link-local are already rejected by _endpoint_blocked before we get here).
+            if ip.is_private:
+                return None
+            return f"self-hosted preset points at public IP {ip} — must be in-VPC"
+        if not self_hosted_suffixes:
+            return ("self-hosted preset has no declared internal host suffix "
+                    "(set official_mcp_self_hosted_host_suffixes) — failing closed")
+        if _host_under_suffix(host, self_hosted_suffixes):
+            return None
+        return (f"self-hosted preset host {host!r} is not under any declared internal suffix "
+                f"{tuple(self_hosted_suffixes)!r}")
     try:
         host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
     except ValueError:
         return "unparsable URL"
     if not host:
         return "no host in URL"
-    for suf in suffixes:
-        bare = suf.lstrip(".")
-        if host == bare or host.endswith(suf):
-            return None
+    if _host_under_suffix(host, suffixes):
+        return None
     return f"host {host!r} is not under any allowed suffix {tuple(suffixes)!r}"
 
 
@@ -416,6 +454,7 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
     endpoints = ac.get("official_mcp_endpoints") or {}
     lambda_arns = ac.get("lambda_arns") or {}
     read_only_acks = ac.get("official_mcp_read_only_ack") or {}
+    self_hosted_suffixes = tuple(ac.get("official_mcp_self_hosted_host_suffixes") or ())
     if secrets is None:
         secrets, secrets_read_ok = _load_official_mcp_secret(ac)
     existing_by_gw = {}  # gateway short-key -> {target_name: target}, fetched once per gateway
@@ -448,7 +487,7 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         # — the kill-switch silently stopped working, and (flag off) ensure_targets would then also
         # recreate the legacy lambda target, giving the gateway duplicate tool names.
         if endpoint:
-            blocked_reason = _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec)
+            blocked_reason = _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec, self_hosted_suffixes)
             if blocked_reason:
                 log(f"target:{tname}", "ERR", f"official_mcp_endpoints['{preset_key}'] rejected: {blocked_reason}")
                 _retire_gateway_target(ctrl, gw_id, existing, tname, "endpoint failed the SSRF/scheme guard — retiring")
@@ -652,13 +691,14 @@ def _cutover_preset_keys(ac, secrets, secrets_read_ok):
     a blocked endpoint is simply "not cut over", which keeps the legacy target alive."""
     endpoints = ac.get("official_mcp_endpoints") or {}
     read_only_acks = ac.get("official_mcp_read_only_ack") or {}
+    self_hosted_suffixes = tuple(ac.get("official_mcp_self_hosted_host_suffixes") or ())
     active = set()
     for spec in catalog.MCP_SERVER_TARGETS.values():
         preset_key = spec["preset_key"]
         endpoint = endpoints.get(preset_key)
         if not endpoint or read_only_acks.get(preset_key) != endpoint:
             continue
-        if _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec):
+        if _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec, self_hosted_suffixes):
             continue
         if spec["auth"]["mode"] == "api_key":
             if not _preset_token(secrets, preset_key) and secrets_read_ok:

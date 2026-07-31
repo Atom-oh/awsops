@@ -134,8 +134,10 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ctrl.get_api_key_credential_provider.side_effect = _raise_not_found
         ctrl.create_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
         ctrl.create_gateway_target.return_value = {"targetId": "t-new"}
-        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
-              "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"},
+        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.internal/mcp"},
+              # self-hosted presets are confined to declared internal suffixes (ADR-017)
+              "official_mcp_self_hosted_host_suffixes": [".internal"],
+              "official_mcp_read_only_ack": {"clickhouse": "https://ch.internal/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
@@ -243,8 +245,10 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         from botocore.exceptions import ClientError
         ctrl.create_gateway_target.side_effect = ClientError(
             {"Error": {"Code": "ValidationException", "Message": "boom"}}, "CreateGatewayTarget")
-        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
-              "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"},
+        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.internal/mcp"},
+              # self-hosted presets are confined to declared internal suffixes (ADR-017)
+              "official_mcp_self_hosted_host_suffixes": [".internal"],
+              "official_mcp_read_only_ack": {"clickhouse": "https://ch.internal/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
@@ -285,8 +289,10 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         # Override the default READY-immediately behavior: the new target reports FAILED.
         ctrl.get_gateway_target.side_effect = lambda gatewayIdentifier, targetId: (
             {"status": "FAILED"} if targetId == "t-new" else {"status": "READY"})
-        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
-              "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"},
+        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.internal/mcp"},
+              # self-hosted presets are confined to declared internal suffixes (ADR-017)
+              "official_mcp_self_hosted_host_suffixes": [".internal"],
+              "official_mcp_read_only_ack": {"clickhouse": "https://ch.internal/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
@@ -404,8 +410,10 @@ class TestEnsureTargetsSkipsCutoverLegacy(unittest.TestCase):
     def test_main_computes_skip_names_from_an_active_acked_preset(self):
         # End-to-end of the helper main() uses: an active, acked, credentialed preset's legacy
         # target name must be in the computed skip set.
-        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
-              "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"}}
+        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.internal/mcp"},
+              # self-hosted presets are confined to declared internal suffixes (ADR-017)
+              "official_mcp_self_hosted_host_suffixes": [".internal"],
+              "official_mcp_read_only_ack": {"clickhouse": "https://ch.internal/mcp"}}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS):
             active = provision._cutover_preset_keys(ac, {"mcp:clickhouse": {"token": "tok"}}, True)
@@ -415,7 +423,7 @@ class TestEnsureTargetsSkipsCutoverLegacy(unittest.TestCase):
         # No endpoint configured -> ensure_mcp_server_targets will SKIP it (not own its legacy
         # target this run) -> ensure_targets must be free to keep managing the legacy target as
         # normal (not in the skip set).
-        ac = {"official_mcp_endpoints": {}, "official_mcp_read_only_ack": {"clickhouse": "https://ch.example.com/mcp"}}
+        ac = {"official_mcp_endpoints": {}, "official_mcp_read_only_ack": {"clickhouse": "https://ch.internal/mcp"}}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET):
             active = provision._cutover_preset_keys(ac, {}, True)
         self.assertEqual(active, set())
@@ -453,8 +461,10 @@ class TestLegacyRetireCrossesGateways(unittest.TestCase):
         ctrl.get_api_key_credential_provider.side_effect = _raise_not_found
         ctrl.create_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
         ctrl.create_gateway_target.return_value = {"targetId": "t-new"}
-        ac = {"official_mcp_endpoints": {"tempo": "https://tempo.example.com/api/mcp"},
-              "official_mcp_read_only_ack": {"tempo": "https://tempo.example.com/api/mcp"},
+        ac = {"official_mcp_endpoints": {"tempo": "https://tempo.internal/api/mcp"},
+              # self-hosted presets are confined to declared internal suffixes (ADR-017)
+              "official_mcp_self_hosted_host_suffixes": [".internal"],
+              "official_mcp_read_only_ack": {"tempo": "https://tempo.internal/api/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _TEMPO_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _TEMPO_LAMBDA_TARGETS), \
@@ -477,6 +487,8 @@ class TestRound4Findings(unittest.TestCase):
         # target — every tool for the kind vanished. Both paths now share _endpoint_blocked.
         for endpoint in ("https://127.0.0.1/mcp", "https://169.254.169.254/mcp", "https://localhost/mcp"):
             ac = {"official_mcp_endpoints": {"clickhouse": endpoint},
+              # self-hosted presets are confined to declared internal suffixes (ADR-017)
+              "official_mcp_self_hosted_host_suffixes": [".internal"],
                   "official_mcp_read_only_ack": {"clickhouse": endpoint}}
             with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
                  mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS):
@@ -488,6 +500,8 @@ class TestRound4Findings(unittest.TestCase):
         # which is only safe BECAUSE the legacy target is no longer skipped (test above).
         ctrl = _ctrl_with_targets()
         ac = {"official_mcp_endpoints": {"clickhouse": "https://127.0.0.1/mcp"},
+              # self-hosted presets are confined to declared internal suffixes (ADR-017)
+              "official_mcp_self_hosted_host_suffixes": [".internal"],
               "official_mcp_read_only_ack": {"clickhouse": "https://127.0.0.1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \

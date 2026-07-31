@@ -65,9 +65,52 @@ class TestHostPin(unittest.TestCase):
             provision._host_pin_violation("https://attacker.example/mcp", _spec("datadog"))
         )
 
-    def test_self_hosted_preset_accepts_an_operator_host(self):
+class TestSelfHostedConfinement(unittest.TestCase):
+    """Marking a preset host_is_operator_asserted was NOT enough on its own: it still accepted any
+    host, so the preset's real credential could be handed to an arbitrary URL — the BYO-MCP
+    connection BASELINE §2 pins as do-not-revive, just relabelled. Self-hosted presets are in-VPC by
+    design, so they are confined to the deployment's declared internal suffixes (or a literal private
+    address), and no declaration means they cannot be enabled at all."""
+
+    SUFFIXES = (".internal", ".svc.cluster.local")
+
+    def test_no_declaration_fails_closed(self):
+        self.assertIsNotNone(
+            provision._host_pin_violation("https://ch.internal/mcp", _spec("clickhouse"), ())
+        )
+
+    def test_public_host_rejected_even_with_a_declaration(self):
+        self.assertIsNotNone(
+            provision._host_pin_violation(
+                "https://attacker.example/mcp", _spec("clickhouse"), self.SUFFIXES
+            )
+        )
+
+    def test_host_under_declared_suffix_allowed(self):
+        for url in ("https://ch.internal:8123/mcp", "https://ch.svc.cluster.local/mcp"):
+            self.assertIsNone(
+                provision._host_pin_violation(url, _spec("clickhouse"), self.SUFFIXES), url
+            )
+
+    def test_declared_suffix_matches_only_on_a_label_boundary(self):
+        for url in ("https://evil-internal/mcp", "https://internal.attacker.example/mcp"):
+            self.assertIsNotNone(
+                provision._host_pin_violation(url, _spec("clickhouse"), self.SUFFIXES), url
+            )
+
+    def test_literal_private_address_needs_no_declaration(self):
         self.assertIsNone(
-            provision._host_pin_violation("https://clickhouse.internal:8123/mcp", _spec("clickhouse"))
+            provision._host_pin_violation("https://10.0.3.7:8123/mcp", _spec("clickhouse"), ())
+        )
+
+    def test_public_literal_address_rejected(self):
+        self.assertIsNotNone(
+            provision._host_pin_violation("https://93.184.216.34/mcp", _spec("clickhouse"), self.SUFFIXES)
+        )
+
+    def test_vendor_hosted_preset_is_unaffected_by_the_declaration(self):
+        self.assertIsNone(
+            provision._host_pin_violation("https://mcp.datadoghq.com/mcp", _spec("datadog"), ())
         )
 
     def test_catalog_entry_declaring_neither_fails_closed(self):

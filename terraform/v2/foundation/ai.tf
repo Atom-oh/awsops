@@ -99,6 +99,24 @@ variable "official_mcp_endpoints" {
 # the exact endpoint string that was reviewed; provision.py treats the preset as un-acked (fail-
 # closed, same as never-acked) whenever the current official_mcp_endpoints[preset_key] value
 # differs from the acked string — so changing the endpoint requires a matching re-ack.
+# Self-hosted ADR-017 presets (ClickHouse/Grafana/Splunk/Tempo/Jaeger) have no vendor domain to pin
+# against, so catalog.py marks them host_is_operator_asserted. That alone still let a preset key be
+# bound to ANY host — the credential would then be handed to it, which is the BYO-MCP connection
+# BASELINE §2 pins as do-not-revive. These presets are in-VPC by design, so declare the internal
+# domain suffix(es) they may live under ONCE per deployment and the provisioner confines them there.
+# A literal RFC1918/ULA address is accepted without a suffix (in-VPC by definition). Default [] means
+# self-hosted presets cannot be enabled at all — enabling one is a deliberate, reviewable declaration
+# rather than a free-form URL. Vendor-hosted presets ignore this: they use catalog allowed_host_suffixes.
+variable "official_mcp_self_hosted_host_suffixes" {
+  type        = list(string)
+  description = "Internal domain suffixes the self-hosted ADR-017 presets may be reached at, e.g. [\".internal\", \".svc.cluster.local\"] (ADR-017). A literal private (RFC1918/ULA) address is allowed without a suffix. Default [] = self-hosted presets fail closed."
+  default     = []
+  validation {
+    condition     = alltrue([for v in var.official_mcp_self_hosted_host_suffixes : startswith(v, ".")])
+    error_message = "every suffix must start with '.' so it can only match on a DNS label boundary (e.g. \".internal\" — \"internal\" would also match \"evil-internal\")."
+  }
+}
+
 variable "official_mcp_read_only_ack" {
   type        = map(string)
   description = "preset_key -> the exact official_mcp_endpoints[preset_key] URL the operator reviewed and verified the read-only vendor-side control (catalog.py read_only_note) against (ADR-017). Must equal the CURRENT endpoint value or the preset is treated as un-acked (fail-closed, retires any live target) — changing the endpoint requires re-acking with the new URL. Default {} = nothing provisions."
@@ -790,6 +808,8 @@ output "agentcore" {
     # provision (and retires any live target for) every preset whose ack is missing or != the
     # current endpoint, regardless of credential. See var.official_mcp_read_only_ack above.
     official_mcp_read_only_ack = local.official_mcp_count > 0 ? var.official_mcp_read_only_ack : {}
+    # Confines the self-hosted (host_is_operator_asserted) presets — see the variable above.
+    official_mcp_self_hosted_host_suffixes = local.official_mcp_count > 0 ? var.official_mcp_self_hosted_host_suffixes : []
     # Same secret the web BFF writes preset credentials into (web/lib/integration-credentials.ts,
     # namespaced key = "mcp:<preset_key>", e.g. secret["mcp:datadog"] — NOT the plain preset_key,
     # which is a separate legacy datasource-connector kind-mirror) — provision.py reads the
