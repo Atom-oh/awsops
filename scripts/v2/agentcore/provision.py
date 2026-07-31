@@ -248,7 +248,11 @@ def _host_pin_violation(endpoint, spec, self_hosted_suffixes=()):
         if not _host_under_suffix(host, self_hosted_suffixes):
             return (f"self-hosted preset host {host!r} is not under any declared internal suffix "
                     f"{tuple(self_hosted_suffixes)!r}")
-        # Last check, and the only one that does not merely move the goalposts: the suffix list is
+        # Best-effort only — NOT a boundary, and deliberately not described as one. It runs ONCE at
+        # provision time while the actual connection is made later by the AgentCore-managed network,
+        # which we cannot instrument: repointing DNS to a public address after provisioning (classic
+        # rebinding/TOCTOU) defeats it, and so does a name this host cannot resolve. It raises the
+        # bar on the naive case (a plainly public exfil host) and nothing more. The suffix list is
         # itself tfvars, so an operator could declare an attacker's domain as "internal" and pass the
         # gate above. Nothing at the config layer can bind whoever edits the config — but a real
         # exfiltration host has to be reachable, i.e. publicly resolvable, whereas a genuine in-VPC
