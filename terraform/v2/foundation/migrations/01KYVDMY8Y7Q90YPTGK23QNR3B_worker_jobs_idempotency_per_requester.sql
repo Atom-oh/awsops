@@ -9,9 +9,11 @@
 -- the victim). Round-2 pentest-remediation MAJOR: cross-user idempotency-key DoS.
 --
 -- Fix: scope the uniqueness by requester instead of globally, via two partial unique indexes.
--- requested_by IS NULL rows (internal-only enqueues: scheduler dispatcher, reaper) have no
--- end-user principal to scope by, and must stay deduped globally amongst themselves exactly like
--- before, so they get their own global-among-NULLs partial index.
+-- requested_by IS NULL rows (internal-only enqueues with no end-user principal, e.g. the reaper)
+-- have nothing to scope by, and must stay deduped globally amongst themselves exactly like before,
+-- so they get their own global-among-NULLs partial index. The schedule dispatcher is NOT in that
+-- bucket — it persists the schedule owner's identity() value, so its jobs land in the
+-- (requested_by, idempotency_key) index like any user-initiated enqueue.
 --
 -- PR #195 round-4 review MAJOR #2: this file is PHASE 1 of a two-phase rollout — it only ADDS the
 -- new partial indexes and deliberately does NOT drop the old global `UNIQUE(idempotency_key)`

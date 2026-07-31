@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Ownership is now enforced on the diagnosis and compliance read paths too, not just jobs:
+  `GET /api/diagnosis` (list), `GET /api/diagnosis/[id]`, `GET /api/diagnosis/[id]/download`, and
+  `GET /api/compliance/runs` (list) + `GET /api/compliance/runs/[id]` all gate on owner-or-admin.
+  Before this, any authenticated user could read or download another user's diagnosis report and
+  read another user's CIS compliance run (kiro review: the security changelog omitted these)
 - `POST /api/jobs` now requires auth and enforces ownership on `GET /api/jobs`(`/[id]`); the
   generic `report`/`compliance` job types were removed from its allowlist entirely — those job
   types trust client-supplied `report_id`/`run_id`/`requested_by` with no ownership check, so
