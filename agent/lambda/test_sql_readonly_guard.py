@@ -273,5 +273,36 @@ class TestMysqlDashDashComment(unittest.TestCase):
         g.assert_read_only("SELECT 1--1 AS x")  # `--1 AS x` is a comment on the Postgres path
 
 
+class TestRound8TokenizerBoundaries(unittest.TestCase):
+    """PR-review round 8 — the two round-7 leftovers. With the DB-role boundary in place (see the
+    module docstring) these are tokenizer-correctness fixes, not privilege-escalation paths."""
+
+    def _bad(self, sql, **kw):
+        with self.assertRaises(ValueError, msg=sql):
+            g.assert_read_only(sql, **kw)
+
+    def test_u_ampersand_string_literal_is_rejected(self):
+        # U&'...' also accepts `UESCAPE '<c>'` to redefine the escape char, so no fixed decoder can
+        # be trusted — reject it like round 7 rejected the U&"..." identifier form.
+        self._bad("SELECT U&'pg_cancel_backen!0064' UESCAPE '!'")
+        self._bad("SELECT u&'\0064rop'")
+
+    def test_plain_e_string_still_works(self):
+        g.assert_read_only(r"SELECT 'a' || E'\n' FROM t")  # no raise
+
+    def test_identifier_ending_in_u_ampersand_lookalike_is_not_treated_as_a_prefix(self):
+        # `xu&'...'` — the `u&` is part of a longer name, so this is a plain string literal.
+        g.assert_read_only("SELECT 1 FROM t WHERE xu = 'a'")  # no raise
+
+    def test_non_ascii_identifier_char_before_a_dollar_tag_is_not_an_opener(self):
+        # Round-7 fixed the ASCII case (`foo$tag$`); the check was `[A-Za-z0-9_$]`, so a Unicode
+        # letter right before `$tag$` still made it look like a heredoc opener and swallowed the
+        # pg_cancel_backend call between the two `$tag$` occurrences.
+        self._bad("SELECT 1 AS fooé$tag$, pg_cancel_backend(123) AS baré$tag$")
+
+    def test_real_dollar_quoted_string_still_parses(self):
+        g.assert_read_only("SELECT $tag$anything ; DROP TABLE t$tag$ AS x")  # no raise
+
+
 if __name__ == "__main__":
     unittest.main()

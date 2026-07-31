@@ -14,7 +14,15 @@ sys.path.insert(0, os.path.dirname(__file__))
 import aws_rds_mcp as rds_mcp  # noqa: E402
 
 
-def _event(sql, resource_arn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1", secret_arn="arn:aws:secretsmanager:x", database="postgres"):
+# PR-review round 8: execute_sql's Data API credential now comes from env (the dedicated
+# least-privilege awsops_sql_reader secret, wired by ai.tf) and the caller-supplied `secret_arn`
+# argument is IGNORED — the tests keep passing a master-looking ARN in the arguments precisely to
+# prove it never reaches the rds-data client.
+MASTER_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:rds!cluster-abc-master-AbCdEf"
+READER_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:ops/awsops-v2/agent/sql-reader-XyZw12"
+
+
+def _event(sql, resource_arn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1", secret_arn=MASTER_SECRET_ARN, database="postgres"):
     return {
         "tool_name": "execute_sql",
         "arguments": {
@@ -42,9 +50,12 @@ class TestExecuteSqlGuard(unittest.TestCase):
 
         self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
         self.get_client_patch.start()
+        self.env_patch = mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN})
+        self.env_patch.start()
 
     def tearDown(self):
         self.get_client_patch.stop()
+        self.env_patch.stop()
 
     def _status(self, sql):
         resp = rds_mcp.lambda_handler(_event(sql), None)
@@ -65,7 +76,7 @@ class TestExecuteSqlGuard(unittest.TestCase):
         self.assertEqual(calls[1].kwargs["transactionId"], "txn-1")
         self.rds_data_client.rollback_transaction.assert_called_once_with(
             resourceArn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1",
-            secretArn="arn:aws:secretsmanager:x", transactionId="txn-1")
+            secretArn=READER_SECRET_ARN, transactionId="txn-1")
         self.rds_data_client.commit_transaction.assert_not_called()
 
     def test_benign_select_with_a_decoy_comment_still_passes(self):
@@ -124,9 +135,12 @@ class TestExecuteSqlEngineDialect(unittest.TestCase):
 
         self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
         self.get_client_patch.start()
+        self.env_patch = mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN})
+        self.env_patch.start()
 
     def tearDown(self):
         self.get_client_patch.stop()
+        self.env_patch.stop()
 
     def _status(self, sql):
         resp = rds_mcp.lambda_handler(_event(sql), None)
@@ -184,9 +198,12 @@ class TestExecuteSqlReadOnlyTransaction(unittest.TestCase):
 
         self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
         self.get_client_patch.start()
+        self.env_patch = mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN})
+        self.env_patch.start()
 
     def tearDown(self):
         self.get_client_patch.stop()
+        self.env_patch.stop()
 
     def _status(self, sql):
         resp = rds_mcp.lambda_handler(_event(sql), None)
@@ -228,7 +245,78 @@ class TestExecuteSqlReadOnlyTransaction(unittest.TestCase):
         self.assertEqual(self.rds_data_client.execute_statement.call_count, 1)
         self.rds_data_client.rollback_transaction.assert_called_once_with(
             resourceArn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1",
-            secretArn="arn:aws:secretsmanager:x", transactionId="txn-1")
+            secretArn=READER_SECRET_ARN, transactionId="txn-1")
+
+
+class TestExecuteSqlUsesTheLeastPrivilegeSecret(unittest.TestCase):
+    """PR-review round 8 (STRUCTURAL fix for the bypass class rounds 3-7 kept re-finding).
+
+    Rounds 3-7 each found a new way past the lexical guard, and reviewers concluded the denylist
+    cannot enumerate the vulnerable set (any core function taking SQL as a *string* — e.g.
+    `query_to_xml('SELECT pg_cancel_backend(...)')` — is invisible to a filter that strips string
+    literals, and `SET TRANSACTION READ ONLY` does not block control-plane calls). Each bypass only
+    mattered because the tool ran under the Aurora MASTER secret. So the boundary moved into the
+    database: execute_sql authenticates as the dedicated `awsops_sql_reader` role (NOSUPERUSER,
+    SELECT-only, default_transaction_read_only=on). These assert the security-relevant, DB-free
+    fact: the secretArn handed to rds-data is the low-privilege one, never the master."""
+
+    def setUp(self):
+        self.rds_client = mock.MagicMock()
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-postgresql"}]}
+        self.rds_data_client = mock.MagicMock()
+        self.rds_data_client.execute_statement.return_value = {"columnMetadata": [], "records": []}
+        self.rds_data_client.begin_transaction.return_value = {"transactionId": "txn-1"}
+
+        def fake_get_client(service, region, role_arn):
+            return self.rds_data_client if service == "rds-data" else self.rds_client
+
+        self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
+        self.get_client_patch.start()
+
+    def tearDown(self):
+        self.get_client_patch.stop()
+
+    def _run(self, sql="SELECT 1"):
+        return rds_mcp.lambda_handler(_event(sql), None)
+
+    def test_every_data_api_call_uses_the_reader_secret_not_the_master_secret(self):
+        with mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN}):
+            resp = self._run()
+        self.assertEqual(resp["statusCode"], 200)
+        seen = [self.rds_data_client.begin_transaction.call_args.kwargs["secretArn"]]
+        seen += [c.kwargs["secretArn"] for c in self.rds_data_client.execute_statement.call_args_list]
+        seen.append(self.rds_data_client.rollback_transaction.call_args.kwargs["secretArn"])
+        self.assertEqual(len(seen), 4)  # begin + SET TRANSACTION READ ONLY + user SQL + rollback
+        self.assertEqual(set(seen), {READER_SECRET_ARN})
+        self.assertNotIn(MASTER_SECRET_ARN, seen)
+
+    def test_caller_supplied_secret_arn_is_ignored(self):
+        # The model/gateway does not get to choose the credential. Even an explicit master ARN in the
+        # tool arguments (still tolerated for back-compat) must never be used.
+        other = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:attacker-chosen-AAAAAA"
+        event = _event("SELECT 1", secret_arn=other)
+        with mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN}):
+            resp = rds_mcp.lambda_handler(event, None)
+        self.assertEqual(resp["statusCode"], 200)
+        used = {c.kwargs["secretArn"] for c in self.rds_data_client.execute_statement.call_args_list}
+        self.assertEqual(used, {READER_SECRET_ARN})
+        self.assertNotIn(other, used)
+
+    def test_missing_reader_secret_fails_closed_before_any_data_api_call(self):
+        # No fallback to the master secret (or to the caller's argument) — the tool refuses.
+        with mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": ""}):
+            resp = self._run()
+        self.assertEqual(resp["statusCode"], 400)
+        self.assertIn("read-only", json.loads(resp["body"])["error"])
+        self.rds_data_client.begin_transaction.assert_not_called()
+        self.rds_data_client.execute_statement.assert_not_called()
+
+    def test_unset_reader_secret_env_also_fails_closed(self):
+        env = {k: v for k, v in os.environ.items() if k != "AURORA_SQL_READER_SECRET_ARN"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            resp = self._run()
+        self.assertEqual(resp["statusCode"], 400)
+        self.rds_data_client.begin_transaction.assert_not_called()
 
 
 if __name__ == "__main__":

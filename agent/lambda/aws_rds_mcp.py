@@ -4,6 +4,7 @@ AWS RDS MCP 람다 - MySQL/PostgreSQL 인스턴스 관리, RDS Data API를 통�
 """
 import json
 import logging
+import os
 from cross_account import get_client, get_role_arn, resolve_tool_name
 from sql_readonly_guard import assert_read_only
 
@@ -94,6 +95,25 @@ def lambda_handler(event, context):
             # Lambda already uses for list_db_clusters) rather than trusting a caller-supplied flag.
             # Data API only targets Aurora clusters, so resource_arn is a cluster ARN/id either way.
             sql = args["sql"].strip()
+            # PR-review round 8 (STRUCTURAL FIX for the bypass class rounds 3-7 kept re-finding):
+            # this tool used to run under the Aurora MASTER secret — a superuser-equivalent role —
+            # with the lexical guard + `SET TRANSACTION READ ONLY` as the only barriers. Neither is
+            # a real boundary: the guard strips string literals before matching, so any core function
+            # that takes SQL as a *string argument* (`query_to_xml('...pg_cancel_backend...')`,
+            # `aws_lambda.invoke`, `aws_s3.query_export_to_s3`) is invisible to it, and a READ ONLY
+            # transaction only blocks data WRITES — control-plane/side-effect calls sail through it.
+            # That set is unbounded; a denylist cannot enumerate it. So the boundary is now the
+            # DATABASE: this path authenticates as the dedicated `awsops_sql_reader` Postgres role
+            # (NOSUPERUSER, CONNECT+USAGE+SELECT only, `default_transaction_read_only=on`) whose
+            # credentials live in their own secret — see the ULID `agent_sql_reader_role` migration.
+            # The caller-supplied `secret_arn` is deliberately IGNORED (and removed from the tool
+            # schema): credential choice is server-side config, never a model-controlled argument.
+            # The Lambda role no longer has GetSecretValue on the master secret at all, so a lexical
+            # bypass now lands in an unprivileged session instead of a superuser one.
+            secret_arn = os.environ.get("AURORA_SQL_READER_SECRET_ARN", "").strip()
+            if not secret_arn:
+                return err("read-only: no dedicated low-privilege DB credential is configured "
+                           "(AURORA_SQL_READER_SECRET_ARN unset) — refusing to execute")
             try:
                 engine = _engine_family(rds, args["resource_arn"])
             except Exception as e:
@@ -151,7 +171,7 @@ def lambda_handler(event, context):
             # entirely is rejected by the engine itself, not by pattern-matching its text. Never commit
             # either way — this tool is read-only by contract, so there's nothing to persist — and
             # always rollback in `finally` so the transaction never lingers on an error path.
-            txn_args = dict(resourceArn=args["resource_arn"], secretArn=args["secret_arn"],
+            txn_args = dict(resourceArn=args["resource_arn"], secretArn=secret_arn,
                              database=args.get("database", ""))
             transaction_id = rds_data.begin_transaction(**txn_args)["transactionId"]
             try:
@@ -166,7 +186,7 @@ def lambda_handler(event, context):
             finally:
                 try:
                     rds_data.rollback_transaction(resourceArn=args["resource_arn"],
-                        secretArn=args["secret_arn"], transactionId=transaction_id)
+                        secretArn=secret_arn, transactionId=transaction_id)
                 except Exception as e:
                     # Logged, not silently swallowed — a leaked transaction (rds-data has a
                     # 3-minute idle transaction timeout, but this could still mask a real

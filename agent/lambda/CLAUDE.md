@@ -27,7 +27,7 @@ AgentCore 게이트웨이 MCP 도구용 Lambda 함수 + 공유 모듈. 각 Lambd
 
 ### Data Gateway (24 tools)
 - `aws_dynamodb_mcp.py` — Tables, queries, data modeling, costs (6 tools)
-- `aws_rds_mcp.py` — RDS/Aurora instances, SQL via Data API (6 tools)
+- `aws_rds_mcp.py` — RDS/Aurora instances, SQL via Data API (6 tools). **`execute_sql`의 read-only 보장은 DB 롤 권한에 있다** (아래 참조) / **`execute_sql`'s read-only guarantee rests on DB-level role permissions** (see below)
 - `aws_valkey_mcp.py` — ElastiCache clusters, replication groups (6 tools)
 - `aws_msk_mcp.py` — MSK Kafka clusters, brokers, configs (6 tools)
 
@@ -60,3 +60,35 @@ AgentCore 게이트웨이 MCP 도구용 Lambda 함수 + 공유 모듈. 각 Lambd
   (All Lambda read-only — **no exceptions in v2**; the v1 reachability path-creation write is dark, replaced by describe-only `reachability_read_mcp.py`)
 - 도구 스키마 형식: `inlinePayload: [{name, description, inputSchema: {type, properties, required}}]`
   (Tool schema format)
+
+## `execute_sql` — read-only 경계는 DB 롤이다 / the read-only boundary is a DB role
+
+**요약: 어휘 가드(`sql_readonly_guard.py`)는 경계가 아니라 defense-in-depth다.**
+(**TL;DR: the lexical guard is defense-in-depth, NOT the boundary.**)
+
+- `aws_rds_mcp.py`의 `execute_sql`과 `inventory_read_mcp.py`는 RDS Data API로 앱 자신의 Aurora에 접속한다.
+  자격증명은 **Aurora master secret이 아니라** 전용 최소권한 롤 **`awsops_sql_reader`** secret이다
+  (`AURORA_SQL_READER_SECRET_ARN` / `AURORA_SECRET_ARN` env, `ai.tf`가 주입). 호출자가 넘긴 `secret_arn`
+  인자는 **무시**되며 도구 스키마에서도 제거됐다 — 자격증명 선택은 서버 설정이지 모델 입력이 아니다.
+  env 미설정 시 **fail-closed**(더 높은 권한으로 폴백하지 않음).
+- 롤 권한: `NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+  `CONNECT`(awsops) + `USAGE`(public) + `SELECT`(public 테이블) **만**, `default_transaction_read_only=on`,
+  EXECUTE 부여 0건, predefined-role 멤버십 0건.
+  → `terraform/v2/foundation/migrations/01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql`
+- agent Lambda IAM 롤에는 master secret `GetSecretValue`가 **없다**(`ai.tf` `agent_lambda_inventory`).
+  어휘 가드를 우회해도 **권한 없는 세션**에 도달할 뿐이다.
+- **왜**: PR #197 리뷰 3~7라운드가 매번 새 우회를 찾았다. 원인은 denylist가 열거할 수 없는 부류 —
+  SQL을 *문자열 인자*로 받아 실행하는 코어 함수(`query_to_xml('SELECT pg_cancel_backend(...)')`)는
+  가드가 문자열 리터럴을 매칭 전에 제거하므로 보이지 않고, `SET TRANSACTION READ ONLY`는 데이터 쓰기만
+  막아 control-plane 호출을 허용한다.
+- **그러므로 이 파일들에 DANGER 항목을 더 추가해 "완전"하게 만들려 하지 말 것.** 새 어휘 구멍은
+  권한상승이 아니다(ClickHouse 커넥터는 아직 DB-롤 경계가 없어 그쪽에선 가드가 여전히 1차 방어다).
+
+(English) `execute_sql` / `inventory-read` authenticate as the dedicated `awsops_sql_reader` role
+(NOSUPERUSER, CONNECT+USAGE+SELECT only, `default_transaction_read_only=on`, no EXECUTE grants), via
+its own secret — the caller-supplied `secret_arn` is ignored and gone from the tool schema, and an
+unset env fails closed with no fallback. The agent Lambda role has **no** `GetSecretValue` on the
+Aurora master secret, so a lexical-guard bypass now lands in an unprivileged session. Do not grow the
+DANGER denylist hoping to make it exhaustive — "functions that execute a string" is unbounded. The
+ClickHouse connector has no equivalent DB-role boundary yet, so there the guard is still primary.
+Detail: ADR-004 §7 amendment (2026-07-31).

@@ -251,6 +251,17 @@ resource "aws_iam_role_policy" "agent_lambda_integrations_secret" {
 # ADR-005 capability grant. CommitTransaction is deliberately NOT granted (round-4 least-privilege
 # fix) — the tool always rollsback, even on success (nothing to persist from a read-only query), so
 # it never calls CommitTransaction and granting it would be an unused privilege.
+#
+# pentest-remediation round 8 (STRUCTURAL): this role no longer reads the Aurora MASTER secret at
+# all. Rounds 3-7 each found a new lexical bypass of aws_rds_mcp.py's execute_sql guard, and every
+# one of them mattered only because the tool held superuser-equivalent credentials — a core function
+# taking SQL as a string (`query_to_xml('...pg_cancel_backend...')`) is invisible to a filter that
+# strips string literals, and `SET TRANSACTION READ ONLY` does not block control-plane calls. The
+# boundary is now the database: both Data API consumers authenticate as the dedicated least-privilege
+# `awsops_sql_reader` Postgres role (NOSUPERUSER, SELECT-only, default_transaction_read_only=on —
+# see the `agent_sql_reader_role` migration), whose password lives in its own secret below. The
+# master secret ARN and its CMK Decrypt grant are gone from this policy, so a future bypass lands in
+# an unprivileged session. Removing a privilege — not an ADR-005 capability grant.
 resource "aws_iam_role_policy" "agent_lambda_inventory" {
   count = local.ac_count
   name  = "${var.project}-agent-lambda-inventory"
@@ -269,19 +280,52 @@ resource "aws_iam_role_policy" "agent_lambda_inventory" {
         Resource = aws_rds_cluster.aurora.arn
       },
       {
-        Sid      = "AuroraMasterSecretRead"
+        # The dedicated low-privilege role's own secret — NOT the master secret. Default
+        # aws/secretsmanager key, so no kms:Decrypt statement is needed (same as `integrations`).
+        Sid      = "AuroraSqlReaderSecretRead"
         Effect   = "Allow"
         Action   = "secretsmanager:GetSecretValue"
-        Resource = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
-      },
-      {
-        Sid      = "AuroraSecretKmsDecrypt"
-        Effect   = "Allow"
-        Action   = "kms:Decrypt"
-        Resource = aws_kms_key.aurora.arn
+        Resource = aws_secretsmanager_secret.agent_sql_reader[0].arn
       },
     ]
   })
+}
+
+# ---- Credentials for the least-privilege `awsops_sql_reader` Postgres role. -----------------------
+# The RDS Data API REQUIRES a Secrets Manager secretArn on every ExecuteStatement/BeginTransaction/
+# RollbackTransaction call (secretArn is a required member of all three in botocore's rds-data
+# model) and sends that username/password to the engine — so IAM database auth (rds_iam, used by
+# awsops_web / awsops_worker / steampipe_reader) is NOT reachable on this path, and a password
+# secret is unavoidable. Terraform owns the password; `make migrate` pushes it into the DB role
+# (scripts/v2/migrate.mjs), so this secret stays the single source of truth.
+resource "random_password" "agent_sql_reader" {
+  count   = local.ac_count
+  length  = 40
+  special = false # avoids quoting/escaping hazards in the ALTER ROLE ... PASSWORD sync
+}
+resource "aws_secretsmanager_secret" "agent_sql_reader" {
+  count       = local.ac_count
+  name        = "ops/${var.project}/agent/sql-reader"
+  description = "awsops_sql_reader (least-privilege Aurora role) credentials for the agent Data API tools"
+}
+resource "aws_secretsmanager_secret_version" "agent_sql_reader" {
+  count     = local.ac_count
+  secret_id = aws_secretsmanager_secret.agent_sql_reader[0].id
+  secret_string = jsonencode({
+    username = "awsops_sql_reader"
+    password = random_password.agent_sql_reader[0].result
+    engine   = "postgres"
+    host     = aws_rds_cluster.aurora.endpoint
+    port     = 5432
+    dbname   = aws_rds_cluster.aurora.database_name
+  })
+}
+
+# Consumed by scripts/v2/migrate.mjs to sync the generated password onto the DB role after applying
+# migrations. Empty string when agentcore is disabled → migrate.mjs skips the sync.
+output "agent_sql_reader_secret_arn" {
+  description = "Secret holding the awsops_sql_reader Aurora credentials ('' when agentcore_enabled=false)."
+  value       = local.ac_count > 0 ? aws_secretsmanager_secret.agent_sql_reader[0].arn : ""
 }
 
 # OpenSearch read connector (opensearch_mcp.py) — AWS-native, read-only. NOTE: Amazon OpenSearch
@@ -718,11 +762,19 @@ resource "aws_lambda_function" "agent" {
         each.key == "notion-mcp" ? { INTEGRATION_SLUG = "notion" } : {}
       ) : {},
       # inventory-read reads the synced Aurora inventory via the RDS Data API (no VPC, no pg8000) —
-      # needs the cluster ARN, the RDS-managed master secret ARN, and the DB name.
+      # needs the cluster ARN, a credential secret, and the DB name. Round 8: that credential is the
+      # least-privilege `awsops_sql_reader` secret, NOT the RDS-managed master secret (both this
+      # connector and rds-mcp's execute_sql are pure SELECT paths).
       each.key == "inventory-read" ? {
         AURORA_CLUSTER_ARN = aws_rds_cluster.aurora.arn
-        AURORA_SECRET_ARN  = aws_rds_cluster.aurora.master_user_secret[0].secret_arn
+        AURORA_SECRET_ARN  = aws_secretsmanager_secret.agent_sql_reader[0].arn
         AURORA_DATABASE    = aws_rds_cluster.aurora.database_name
+      } : {},
+      # rds-mcp's execute_sql resolves its Data API credential from env ONLY — the caller-supplied
+      # secret_arn argument is ignored (and removed from the tool schema). Unset => the tool fails
+      # closed rather than falling back to anything more privileged.
+      each.key == "rds-mcp" ? {
+        AURORA_SQL_READER_SECRET_ARN = aws_secretsmanager_secret.agent_sql_reader[0].arn
       } : {}
     )
   }

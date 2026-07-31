@@ -109,8 +109,55 @@ same trick defeats every DANGER function name, one U&-escaped character at a tim
 a hex-decoder whose surrogate-pair/invalid-escape edge cases might be subtly wrong (this bug class's
 history), `U&"..."`/`u&"..."` is fail-closed entirely — rejected outright, regardless of content.
 It is rare, exotic syntax with no legitimate use in this tool's Aurora-diagnostic query patterns.
+
+PR-review round-8 — READ THIS BEFORE PATCHING ANOTHER BYPASS INTO THIS FILE. Rounds 3 through 7 each
+closed a real bypass and each time the reviewers found a new one, because the vulnerable set is
+unbounded: any function that takes SQL as a *string argument* executes text this module has already
+stripped. `query_to_xml('SELECT pg_cancel_backend(pid) FROM pg_stat_activity', true, false, '')` is
+core PostgreSQL, first token SELECT, no DANGER match — and `pg_cancel_backend` is a control-plane
+call, so `SET TRANSACTION READ ONLY` does not stop it either. So for aws_rds_mcp.py's execute_sql the
+security boundary is no longer here: that tool now authenticates to Aurora as the dedicated
+least-privilege `awsops_sql_reader` Postgres role (NOSUPERUSER, CONNECT+USAGE+SELECT only,
+`default_transaction_read_only=on`, no EXECUTE grants, no predefined-role membership) instead of the
+Aurora master secret, and the agent Lambda IAM role no longer has GetSecretValue on the master secret
+at all. See terraform/v2/foundation/migrations/*_agent_sql_reader_role.sql and ai.tf. THIS MODULE IS
+DEFENSE-IN-DEPTH — it catches honest mistakes cheaply and early, and it is still enforced, but a
+bypass of it now lands in an unprivileged session, not a superuser one. Do not treat a new lexical
+hole here as a privilege-escalation finding, and do not grow DANGER hoping to make it exhaustive.
+(ClickHouse's caller has no equivalent DB-role boundary yet — for clickhouse_mcp.py this module IS
+still the primary barrier.)
+
+PR-review round-8 MAJOR (two round-7 leftovers, both tokenizer desyncs rather than escalation paths
+now): (1) `U&'...'` — the STRING form of the Unicode-escape syntax round 7 fail-closed for the
+IDENTIFIER form (`U&"..."`) — additionally supports `UESCAPE '<char>'` to redefine the escape
+character, so no fixed decoder can be relied on; it is now rejected outright like its identifier
+sibling. (2) every identifier-boundary check was ASCII-only (`[A-Za-z0-9_$]`) while PostgreSQL
+identifiers may contain any Unicode letter, so a name ending in a non-ASCII char (`fooé$tag$`,
+`abcéE'...'`) slipped past the left-boundary guards; they now use Unicode-aware `_is_ident_char`.
 """
 import re
+
+
+# PR-review round-8 MAJOR (round-7 leftover): the identifier-boundary checks below were ASCII-only
+# (`[A-Za-z0-9_$]`), but PostgreSQL identifiers may contain any non-ASCII letter — so a name ending
+# in e.g. `é` did not count as "preceded by an identifier char" and could re-open a boundary check
+# that was meant to stay closed (`fooé$tag$` misread as a heredoc opener; `abcéE'...'` misread as an
+# escape-string prefix). `str.isalnum()` is Unicode-aware, which is the direction that makes the
+# guard see MORE of the statement, not less.
+def _is_ident_char(ch):
+    return ch.isalnum() or ch in "_$"
+
+
+def _prefix_is(sql, idx, prefix):
+    """True if the quote at `idx` carries the (case-insensitive) literal prefix `prefix` (`E`, `U&`)
+    as a standalone token — i.e. the text right before `idx` is that prefix and the character before
+    THAT is not an identifier char (so `myE'x'`/`fooU&'x'` are ordinary names, not prefixes)."""
+    head = sql[:idx]
+    if head[-len(prefix):].upper() != prefix.upper():
+        return False
+    before = head[:-len(prefix)]
+    return not (before and _is_ident_char(before[-1]))
+
 
 READ_VERBS = ("SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXISTS", "EXPLAIN")
 # Union of every write/admin/session verb either caller's dialect supports, plus INTO (blocks Postgres
@@ -203,15 +250,21 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
             idx = j if j != -1 else n
             out.append(" ")
         elif c == "'":                        # STRING literal → drop contents
-            # Postgres E'...'/U&'...' literals ALWAYS backslash-escape, regardless of
-            # standard_conforming_strings (that's what the E/U& prefix means) — so this literal
+            # PR-review round-8 MAJOR (round-7 leftover): `U&'...'` is the STRING form of Postgres's
+            # Unicode-escape syntax and it accepts `UESCAPE '<c>'`, which redefines the escape
+            # character to an arbitrary one — so round 7's fail-closed on `U&"..."` (the identifier
+            # form) did not cover this, and no fixed-escape decoder can: with `UESCAPE '!'`,
+            # `U&'pg_cancel_backen!0064'` decodes to a DANGER name that never appears literally in
+            # the stripped text. Same call as round 7: reject `U&'...'` outright rather than decode
+            # it. Exotic syntax, zero legitimate use in this tool's Aurora-diagnostic queries.
+            if _prefix_is(sql, idx, "U&"):
+                raise ValueError("read-only: U&'...' unicode-escape string literals are not allowed")
+            # Postgres E'...' literals ALWAYS backslash-escape, regardless of
+            # standard_conforming_strings (that's what the E prefix means) — so this literal
             # scans in escaped mode even if the caller passed backslash_escapes=False for
-            # ordinary '...' literals on that dialect. Word-boundary-guarded so an identifier
-            # char right before E/U& (part of a longer name) can't false-trigger it.
-            literal_escapes = backslash_escapes or bool(
-                re.search(r"(?<![A-Za-z0-9_])[Ee]$", sql[:idx])
-                or re.search(r"(?<![A-Za-z0-9_])[Uu]&$", sql[:idx])
-            )
+            # ordinary '...' literals on that dialect. Boundary-guarded so an identifier
+            # char right before E (part of a longer name) can't false-trigger it.
+            literal_escapes = backslash_escapes or _prefix_is(sql, idx, "E")
             idx += 1
             while idx < n:
                 if literal_escapes and sql[idx] == "\\":
@@ -231,7 +284,9 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
               # a `$tag$` match as an opener when NOT preceded by an identifier char (LEFT
               # boundary). Missing this let `SELECT 1 AS foo$tag$, pg_cancel_backend(123) AS
               # bar$tag$` be misread as one heredoc spanning foo$tag$..bar$tag$, hiding the call.
-              and not (idx > 0 and re.match(r"[A-Za-z0-9_$]", sql[idx - 1]))):
+              # Round-8: Unicode-aware (was ASCII-only `[A-Za-z0-9_$]`) — a non-ASCII identifier
+              # char such as `é` right before `$tag$` still made this look like an opener.
+              and not (idx > 0 and _is_ident_char(sql[idx - 1]))):
             delim = re.match(r"\$[A-Za-z0-9_]*\$", sql[idx:]).group(0)  # $$ or $tag$
             j = sql.find(delim, idx + len(delim))
             if j == -1:  # no matching close — real syntax error or parser-confusion attempt either way
@@ -244,7 +299,7 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
             # pg_cancel_backend) be spelled with one char escaped so it never appears as
             # plaintext here. This syntax has no legitimate use in this tool's diagnostic
             # queries — fail closed entirely rather than ship a partial/possibly-wrong decoder.
-            if c == '"' and re.search(r"(?<![A-Za-z0-9_])[Uu]&$", sql[:idx]):
+            if c == '"' and _prefix_is(sql, idx, "U&"):
                 raise ValueError('read-only: U&"..." unicode-escape identifiers are not allowed')
             q = c
             idx += 1
