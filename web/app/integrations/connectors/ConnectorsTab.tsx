@@ -57,8 +57,14 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
           <Card key={c.slug} className="p-4 space-y-2">
             <div className="flex items-center justify-between">
               <span className="inline-flex items-center gap-2 font-medium text-ink-800"><IntegrationIcon kind={c.slug} /> {c.label}</span>
+              {/* ADR-017 presets: credential presence alone does NOT mean the gateway target is
+                  live — that also needs official_mcp_enabled + this preset's endpoint set in
+                  terraform, and successful `make agentcore` provisioning. Only Notion's status can
+                  honestly say "connected", since its credential IS the whole activation path. */}
               <span className={`text-[12px] ${configured.has(c.slug) ? 'text-emerald-600' : 'text-ink-400'}`}>
-                {configured.has(c.slug) ? '● connected' : '○ not connected'}
+                {c.official
+                  ? (configured.has(c.slug) ? tt('● 자격증명 저장됨') : tt('○ 자격증명 없음'))
+                  : (configured.has(c.slug) ? '● connected' : '○ not connected')}
               </span>
             </div>
             <div className="flex flex-wrap gap-1">
@@ -69,6 +75,11 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
               {tt(c.help)}{' '}
               <a href={c.docsUrl} target="_blank" rel="noreferrer" className="underline">{tt('문서')}</a>
             </p>
+            {c.official && (
+              <p className="text-[11px] text-ink-400">
+                {tt('실제 활성화는 official_mcp_enabled 플래그와 이 프리셋의 엔드포인트 설정(terraform)이 추가로 필요합니다.')}
+              </p>
+            )}
             {canManage ? (
               <div className="flex gap-2">
                 <Input type="password" value={token[c.slug] ?? ''} onChange={(e) => setToken((s) => ({ ...s, [c.slug]: e.target.value }))} placeholder={configured.has(c.slug) ? tt('토큰 교체…') : tt('토큰 붙여넣기')} />

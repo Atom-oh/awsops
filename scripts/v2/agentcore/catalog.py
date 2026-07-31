@@ -515,8 +515,13 @@ MCP_SERVER_TARGETS = {
 # ADR-017 mutual-exclusion guard: a preset_key's kind must not be live as BOTH a lambda TARGETS
 # entry and an MCP_SERVER_TARGETS entry at once — the gateway would otherwise expose the same tool
 # name from two targets and agent.py's _dedup_by_tool_name pick is non-deterministic (agent.py:599).
-# Transition is one kind at a time: to cut a kind over, remove its lambda_key from local.agent_lambdas
-# (terraform) — provision.py's SKIP-on-missing-lambda_arn then retires the old target automatically.
+# Enabling a preset's endpoint is treated as the operator's cutover signal: provision.py DELETES the
+# live legacy lambda target (found via legacy_target_name, below) before creating the mcp-server
+# target, so the two can never coexist after a run completes — checking `lambda_arns` (whether the
+# Lambda is still IN THE TF CONFIG) is not enough on its own, because a config change removing the
+# lambda_key does not, by itself, delete the gateway target object a PRIOR run already created
+# (ensure_targets only SKIPs creating/updating when the lambda is gone; it never deletes the
+# leftover target) — that gap is exactly what the live-target check + delete-before-create closes.
 _LAMBDA_KEY_BY_PRESET = {
     "clickhouse": "clickhouse-mcp",
     "tempo": "tempo-mcp",
@@ -528,11 +533,25 @@ _LAMBDA_KEY_BY_PRESET = {
 
 
 def conflicting_lambda_key(preset_key, lambda_arns):
-    """Return the lambda_key still deployed for this preset's kind, or None if there's no conflict.
-    A preset is only checked when it's actually ACTIVE (caller ensures endpoint is configured) —
-    an unconfigured preset is inert regardless of the lambda's state. provision.py calls this per
-    active target so one conflicting kind ERRs and SKIPs without blocking every other preset."""
+    """Return the lambda_key still deployed (per tf config) for this preset's kind, or None.
+    INFORMATIONAL only — provision.py logs this as a WARNING (dead-code reminder to clean up
+    ai.tf), it does NOT gate the mcp-server target's creation; the live-target delete-before-create
+    (legacy_target_name) is what actually prevents duplicate tool registration, since this check
+    can't see a leftover gateway target object from a prior run."""
     lambda_key = _LAMBDA_KEY_BY_PRESET.get(preset_key)
     if lambda_key and lambda_key in lambda_arns:
         return lambda_key
+    return None
+
+
+def legacy_target_name(preset_key):
+    """Return the catalog.TARGETS name (e.g. 'clickhouse-mcp-target') for the lambda target this
+    preset's kind used to run as, or None if this preset never had one (datadog/jaeger/dynatrace
+    were never registered as a lambda target in TARGETS — no legacy object can exist for them)."""
+    lambda_key = _LAMBDA_KEY_BY_PRESET.get(preset_key)
+    if not lambda_key:
+        return None
+    for tname, spec in TARGETS.items():
+        if spec.get("lambda_key") == lambda_key:
+            return tname
     return None

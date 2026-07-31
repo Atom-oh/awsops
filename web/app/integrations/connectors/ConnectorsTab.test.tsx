@@ -54,4 +54,21 @@ describe('ConnectorsTab', () => {
     expect(screen.queryByPlaceholderText(/토큰/)).toBeNull();
     expect(screen.getAllByText(/관리자 전용/).length).toBe(9); // one per preset card
   });
+
+  // Regression for the 2026-07-31 kiro review: an ADR-017 preset with a stored credential must
+  // NOT claim "connected" — credential presence alone doesn't mean official_mcp_enabled + this
+  // preset's endpoint are set server-side, or that provisioning succeeded. Notion is exempt: its
+  // credential IS the whole activation path, so "connected" stays honest for it.
+  it('an official-MCP preset with a stored credential says "credential stored", not "connected"', async () => {
+    global.fetch = vi.fn(async (url: string) => ({
+      ok: true, status: 200,
+      json: async () => (url === '/api/integrations/credential' ? { configured: ['datadog', 'notion'] } : { ok: true }),
+    })) as unknown as typeof fetch;
+    render(<ConnectorsTab canManage />);
+    await waitFor(() => expect(screen.getByText(/자격증명 저장됨/)).toBeTruthy());
+    expect(screen.queryByText(/^connected$/)).toBeNull();
+    const notionCard = screen.getByText('Notion').closest('[class*="p-4"]') as HTMLElement;
+    expect(within(notionCard).getByText(/connected/)).toBeTruthy(); // Notion alone keeps "connected"
+    expect(screen.getAllByText(/official_mcp_enabled 플래그와/).length).toBe(8); // one per official preset
+  });
 });
