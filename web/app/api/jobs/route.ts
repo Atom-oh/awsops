@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { verifyUser, identity } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
-import { enqueueJob, EnqueueDeliveryError } from '@/lib/jobs';
+import { enqueueJob, EnqueueDeliveryError, IdempotencyKeyCollisionError } from '@/lib/jobs';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -71,6 +71,11 @@ export async function POST(req: NextRequest) {
         { job_id: e.job_id, status: e.status, enqueue: 'failed', message: e.message },
         { status: 202 },
       );
+    }
+    // round-6 review MAJOR: a cross-requester idempotency_key collision on the legacy global
+    // constraint is a clean conflict, not a server error — 409, not an opaque 500.
+    if (e instanceof IdempotencyKeyCollisionError) {
+      return NextResponse.json({ status: 'error', message: e.message }, { status: 409 });
     }
     return NextResponse.json(
       { status: 'error', message: e instanceof Error ? e.message : String(e) },

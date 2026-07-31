@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifyUser, identity } from '@/lib/auth';
+import { verifyUser, matchesIdentity } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { getPool } from '@/lib/db';
 
@@ -28,7 +28,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       return NextResponse.json({ message: 'run not found' }, { status: 404 });
     }
     const run = runR.rows[0];
-    if (run.requested_by !== identity(user) && !(await isAdmin(user))) {
+    // round-6 review MAJOR: use matchesIdentity (also accepts a legacy row keyed by the raw sub,
+    // written before the identity() switch), matching the LIST route and jobs/[id] — a direct
+    // `!==` here let a legacy-sub-keyed run show up in LIST but 403 on this DETAIL route.
+    if (!matchesIdentity(run.requested_by, user) && !(await isAdmin(user))) {
       return NextResponse.json({ message: 'forbidden' }, { status: 403 });
     }
     const resR = await pool.query(

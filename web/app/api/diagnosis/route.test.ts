@@ -19,7 +19,10 @@ vi.mock('@/lib/diagnosis', () => ({
   markReportFailed: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/admin', () => ({ isAdmin: vi.fn(async () => false) }));
-vi.mock('@/lib/jobs', () => ({ enqueueJob: vi.fn(async () => ({ job_id: 'j1', status: 'queued' })) }));
+vi.mock('@/lib/jobs', () => ({
+  enqueueJob: vi.fn(async () => ({ job_id: 'j1', status: 'queued' })),
+  IdempotencyKeyCollisionError: class IdempotencyKeyCollisionError extends Error {},
+}));
 
 import { verifyUser } from '@/lib/auth';
 import {

@@ -6,6 +6,15 @@ const queryCalls: Array<{ sql: string; params: unknown[] }> = [];
 // When set, the INSERT ... ON CONFLICT reports no row (simulating an idempotency-key collision),
 // forcing enqueueJob down the conflict-lookup SELECT path.
 let simulateConflict = false;
+// When set, the INSERT throws a raw pg unique_violation (simulating the legacy global
+// UNIQUE(idempotency_key) constraint firing on a DIFFERENT requester's row — round-6 review).
+let simulateLegacyConstraintViolation = false;
+// When set, the INSERT throws a non-23505 error (e.g. a connection failure) — must propagate as-is.
+let simulateOtherInsertError = false;
+// The conflict-lookup SELECT's canned response — override per-test to simulate "no row of my own".
+let selectResult: { rows: Array<{ job_id: string; status: string }> } = {
+  rows: [{ job_id: 'existing-job', status: 'queued' }],
+};
 
 vi.mock('@/lib/db', () => ({
   getPool: () => ({
@@ -13,11 +22,17 @@ vi.mock('@/lib/db', () => ({
       queryCalls.push({ sql, params });
       if (/^INSERT/.test(sql)) {
         insertParams = params;
+        if (simulateOtherInsertError) throw new Error('connection reset');
+        if (simulateLegacyConstraintViolation) {
+          const err: any = new Error('duplicate key value violates unique constraint "worker_jobs_idempotency_key_key"');
+          err.code = '23505';
+          throw err;
+        }
         if (simulateConflict) return { rows: [] };
         return { rows: [{ job_id: params[0] }] }; // inserted (not a conflict)
       }
       // conflict-lookup SELECT
-      return { rows: [{ job_id: 'existing-job', status: 'queued' }] };
+      return selectResult;
     },
   }),
 }));
@@ -33,13 +48,16 @@ vi.mock('@aws-sdk/client-sqs', () => ({
   },
 }));
 
-import { enqueueJob } from './jobs';
+import { enqueueJob, IdempotencyKeyCollisionError } from './jobs';
 
 beforeEach(() => {
   insertParams = [];
   sqsBodies.length = 0;
   queryCalls.length = 0;
   simulateConflict = false;
+  simulateLegacyConstraintViolation = false;
+  simulateOtherInsertError = false;
+  selectResult = { rows: [{ job_id: 'existing-job', status: 'queued' }] };
   process.env.JOBS_QUEUE_URL = 'https://sqs.local/q';
   process.env.AWS_REGION = 'ap-northeast-2';
 });
@@ -124,5 +142,37 @@ describe('enqueueJob — ON CONFLICT target matches the partial index for this r
     // both scoped by the per-requester partial index so neither collides with the other's row.
     expect(first).toContain('a@x.io');
     expect(insertParams).toContain('b@x.io');
+  });
+});
+
+// round-6 review MAJOR: the OLD global UNIQUE(idempotency_key) constraint is deliberately kept
+// (dropping it is a separate Phase-2 migration — Phase-1-only rollout), so it can still fire on a
+// DIFFERENT requester's collision that the ON CONFLICT target above doesn't cover. Postgres
+// checks ALL matching unique constraints, not just the named arbiter, so this surfaces as a raw
+// 23505 rather than being caught by DO NOTHING.
+describe('enqueueJob — legacy global UNIQUE(idempotency_key) constraint fallback', () => {
+  it('recovers a same-requester retry that happens to hit the legacy constraint instead of the named partial index', async () => {
+    simulateLegacyConstraintViolation = true;
+    selectResult = { rows: [{ job_id: 'my-own-job', status: 'running' }] };
+    const result = await enqueueJob('report', {}, { idempotencyKey: 'k', requestedBy: 'a@x.io', jobId: 'j11' });
+    // Recovered via the requester-scoped lookup, not a thrown error.
+    expect(result).toEqual({ job_id: 'my-own-job', status: 'running' });
+    const select = queryCalls.find((c) => /^SELECT/.test(c.sql));
+    expect(select?.params).toEqual(['k', 'a@x.io']);
+  });
+
+  it('fails with a clean IdempotencyKeyCollisionError (not the raw pg exception) when two different requesters collide on the identical key', async () => {
+    simulateLegacyConstraintViolation = true;
+    selectResult = { rows: [] }; // no row of MY OWN — the colliding row belongs to someone else
+    await expect(
+      enqueueJob('report', {}, { idempotencyKey: 'shared-key', requestedBy: 'b@x.io', jobId: 'j12' }),
+    ).rejects.toThrow(IdempotencyKeyCollisionError);
+  });
+
+  it('re-throws non-23505 INSERT errors unchanged', async () => {
+    simulateOtherInsertError = true;
+    await expect(
+      enqueueJob('report', {}, { idempotencyKey: 'k', requestedBy: 'a@x.io', jobId: 'j13' }),
+    ).rejects.toThrow('connection reset');
   });
 });

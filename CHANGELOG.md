@@ -32,12 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `worker_jobs.requested_by` — server-derived requester identity on every enqueue, used to scope
   `GET /api/jobs`(`/[id]`) to the caller's own jobs (2026-07-22 pentest report remediation)
 - `worker_jobs` idempotency-per-requester — adds two partial unique indexes (per-requester, plus a
-  NULL-requester bucket for internal enqueues) alongside the existing global
-  `UNIQUE(idempotency_key)`, closing a cross-user DoS where a guessable future idempotency key
-  could be pre-inserted under a victim's identity (PR #195 round-2 review). This is Phase 1 of a
-  two-phase rollout — dropping the old global constraint is deliberately deferred to a separate,
-  later PR once this deploy is confirmed stable (round-5 review: shipping both phases in one PR
-  would race `make deploy`'s migrate-then-roll-out ordering and cause a guaranteed enqueue outage)
+  NULL-requester bucket for internal enqueues) **alongside** the existing global
+  `UNIQUE(idempotency_key)` (that column-level constraint is NOT dropped in this PR). This is
+  Phase 1 of a two-phase rollout — dropping the old global constraint is deliberately deferred to
+  a separate, later PR once this deploy is confirmed stable (round-5 review: shipping both phases
+  in one PR would race `make deploy`'s migrate-then-roll-out ordering and cause a guaranteed
+  enqueue outage)
 
 ### Security
 
@@ -49,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Idempotency-key conflict lookup (`lib/jobs.ts`) is now scoped to the requesting user — a
   guessable, deterministic key (e.g. a diagnosis report key derived from the victim's email) could
   otherwise return another user's `job_id`/status and attach the attacker's payload to it
+- `enqueueJob` now catches a `23505` unique_violation raised by the legacy global
+  `UNIQUE(idempotency_key)` constraint above (it isn't the `ON CONFLICT` arbiter, so Postgres
+  still enforces it independently) and falls back to the same requester-scoped lookup: a
+  same-requester retry still dedupes cleanly, and a genuine cross-requester key collision now
+  fails with a clean `409` (`IdempotencyKeyCollisionError`) instead of an opaque `500`. This
+  **mitigates** the cross-user idempotency-key collision as an interim measure — full closure
+  still requires the follow-up PR that drops the legacy global constraint (see the Phase 1/Phase 2
+  note above; PR #195 round-6 review)
+- `GET /api/compliance/runs/[id]` now uses the same dual-key (`identity()` + raw `sub`) ownership
+  check as the list route and `GET /api/jobs/[id]`, instead of a direct `requested_by !==`
+  comparison — a legacy sub-keyed run was visible in the list but 403'd on this detail route
+  (PR #195 round-6 review)
 - `/api/eks/[cluster]/register` now returns 413 (not a silent default-registration fallback) when
   the request body exceeds the size cap
 - Request-body size caps (`readJsonBounded`) on several routes that previously read unbounded JSON
@@ -435,9 +447,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `eks_registrations` — EKS 런타임 등록(인앱 조회 온보딩; EventBridge 자동등록)
 - `worker_jobs.requested_by` — 모든 enqueue에 서버 측에서 유도한 요청자 identity 기록. `GET /api/jobs`(`/[id]`)를
   호출자 본인 작업으로 범위 제한하는 데 사용(2026-07-22 pentest 리포트 후속 조치)
-- `worker_jobs` 요청자별 idempotency — 단일 글로벌 `UNIQUE(idempotency_key)`를 부분 유니크 인덱스 2개(요청자별 +
-  내부 enqueue용 NULL-요청자 버킷)로 대체. 예측 가능한 미래 idempotency key를 피해자 identity로 선점
-  삽입해두는 cross-user DoS를 차단(PR #195 round-2 리뷰)
+- `worker_jobs` 요청자별 idempotency — 기존 단일 글로벌 `UNIQUE(idempotency_key)`는 그대로 유지한 채,
+  그 **옆에** 부분 유니크 인덱스 2개(요청자별 + 내부 enqueue용 NULL-요청자 버킷)를 **추가**(이 PR에서는
+  기존 컬럼 제약을 삭제하지 않음). 이번 PR은 2단계 롤아웃 중 Phase 1이며, 옛 글로벌 제약 삭제는 이번
+  배포가 안정적으로 확인된 뒤 별도 후속 PR로 의도적으로 미룸(round-5 리뷰: 두 단계를 한 PR에 같이
+  실으면 `make deploy`의 migrate-then-roll-out 순서와 경합해 enqueue 장애가 확정적으로 발생)
 
 ### 보안
 
@@ -448,6 +462,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - idempotency-key 충돌 조회(`lib/jobs.ts`)를 요청자 기준으로 범위 제한 — 예측 가능한 idempotency key(예:
   피해자 이메일에서 파생된 진단 리포트 키)를 알면 다른 사용자의 `job_id`/status를 조회하고 공격자의
   payload를 그 작업에 붙일 수 있었음
+- `enqueueJob`이 위의 옛 글로벌 `UNIQUE(idempotency_key)` 제약이 던지는 `23505` unique_violation을
+  이제 catch — 이 제약은 `ON CONFLICT`의 arbiter가 아니라서 Postgres가 별도로 계속 강제하며, catch 시
+  동일한 요청자 범위 조회로 fallback한다: 동일 요청자의 재시도는 여전히 깨끗하게 dedupe되고, 진짜
+  다른 요청자 간의 key 충돌은 opaque `500` 대신 깨끗한 `409`(`IdempotencyKeyCollisionError`)로 실패.
+  이는 cross-user idempotency-key 충돌을 **완화**하는 중간 조치이며, 완전한 해결은 위 Phase 1/Phase 2
+  노트에 언급된 옛 글로벌 제약 삭제 후속 PR이 나가야 함(PR #195 round-6 리뷰)
+- `GET /api/compliance/runs/[id]`가 목록 라우트·`GET /api/jobs/[id]`와 동일한 dual-key(`identity()` +
+  raw `sub`) 소유권 검증을 쓰도록 변경 — 기존에는 `requested_by !==` 직접 비교라서, 레거시 sub-키 run이
+  목록에는 보였지만 상세 라우트에서는 403이 나는 불일치가 있었음(PR #195 round-6 리뷰)
 - `/api/eks/[cluster]/register`가 요청 본문이 크기 상한을 넘을 때 조용히 기본값으로 등록하지 않고 413을 반환
 - 이전에는 무제한 JSON을 읽던 여러 라우트에 요청 본문 크기 상한(`readJsonBounded`) 적용
 

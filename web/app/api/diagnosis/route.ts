@@ -9,7 +9,7 @@ import {
   type DiagnosisModel,
 } from '@/lib/diagnosis';
 import { isAdmin } from '@/lib/admin';
-import { enqueueJob } from '@/lib/jobs';
+import { enqueueJob, IdempotencyKeyCollisionError } from '@/lib/jobs';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -87,6 +87,12 @@ export async function POST(req: Request) {
     );
   } catch (e) {
     await markReportFailed(reportId, 'enqueue failed'); // no orphan running row
+    // round-6 review MAJOR: clean 409 for a cross-requester idempotency_key collision (this
+    // route's key is email-namespaced so it shouldn't fire in practice, but stay consistent with
+    // the other enqueueJob callers rather than letting any raw error propagate unhandled).
+    if (e instanceof IdempotencyKeyCollisionError) {
+      return NextResponse.json({ status: 'error', message: e.message }, { status: 409 });
+    }
     throw e;
   }
   await linkReportJob(reportId, job.job_id); // FK now satisfiable

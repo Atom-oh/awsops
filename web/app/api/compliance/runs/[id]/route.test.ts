@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const verifyUser = vi.fn();
 const isAdmin = vi.fn();
 const query = vi.fn();
-vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a), identity: (u: any) => u.email || u.sub }));
+const identity = (u: any) => u.email || u.sub;
+vi.mock('@/lib/auth', () => ({
+  verifyUser: (...a: unknown[]) => verifyUser(...a),
+  identity,
+  matchesIdentity: (owner: any, u: any) => !!owner && (owner === identity(u) || owner === u.sub),
+}));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 
@@ -57,6 +62,16 @@ describe('GET /api/compliance/runs/[id]', () => {
     verifyUser.mockResolvedValue({ sub: 'admin-u' });
     isAdmin.mockResolvedValue(true);
     query.mockResolvedValueOnce({ rows: [{ id: 2, requested_by: 'someone-else' }] });
+    query.mockResolvedValueOnce({ rows: [] });
+    const { GET } = await import('./route');
+    expect((await GET(req() as any, ctx())).status).toBe(200);
+  });
+  // round-6 review MAJOR: this route compared raw `run.requested_by !== identity(user)` while
+  // LIST (compliance/runs/route.ts) and jobs/[id] both used matchesIdentity (also accepts a
+  // legacy row keyed by the raw sub) — a legacy-sub-keyed run showed up in LIST but 403'd here.
+  it('200 for a legacy sub-keyed run even though the caller now has a different identity() (email)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    query.mockResolvedValueOnce({ rows: [{ id: 2, requested_by: 'u' }] });
     query.mockResolvedValueOnce({ rows: [] });
     const { GET } = await import('./route');
     expect((await GET(req() as any, ctx())).status).toBe(200);

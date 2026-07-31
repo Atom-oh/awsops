@@ -36,6 +36,38 @@ export class EnqueueDeliveryError extends Error {
 }
 
 /**
+ * Raised when an idempotency_key collides with a row that does NOT belong to this requester and
+ * no fresh row of the caller's own could be inserted or found — i.e. a genuine cross-requester
+ * key collision on the legacy global UNIQUE(idempotency_key) constraint (round-6 review MAJOR:
+ * that column-level constraint still exists alongside the new per-requester partial indexes
+ * during this Phase-1-only rollout — see migration 01KYVDMY8Y7Q90YPTGK23QNR3B). Callers should
+ * surface this as a clean 409, never let a raw pg 23505 leak through as an opaque 500.
+ */
+export class IdempotencyKeyCollisionError extends Error {
+  constructor() {
+    super('idempotency key collision: please retry with a different idempotency_key');
+    this.name = 'IdempotencyKeyCollisionError';
+  }
+}
+
+// Requester-scoped lookup for an idempotency_key conflict (NULL-safe on requested_by). Shared by
+// both conflict paths below: the ON CONFLICT ... DO NOTHING no-op (the named partial index
+// covered this row) and the legacy global UNIQUE(idempotency_key) violation (a different
+// constraint entirely, not named as our ON CONFLICT arbiter, so Postgres raises 23505 instead of
+// invoking DO NOTHING — round-6 review).
+async function findOwnJob(
+  pool: ReturnType<typeof getPool>,
+  idempotencyKey: string | null,
+  requestedBy: string | null,
+): Promise<{ job_id: string; status: string } | null> {
+  const existing = await pool.query(
+    `SELECT job_id, status FROM worker_jobs WHERE idempotency_key = $1 AND requested_by IS NOT DISTINCT FROM $2`,
+    [idempotencyKey, requestedBy],
+  );
+  return existing.rows.length > 0 ? existing.rows[0] : null;
+}
+
+/**
  * Enqueue a worker job: durable ledger write to worker_jobs (source of truth) then a best-effort
  * SQS SendMessage. Extracted verbatim from app/api/jobs/route.ts so both routes share one seam.
  *
@@ -74,29 +106,38 @@ export async function enqueueJob(
   const conflictTarget = requestedBy === null
     ? 'ON CONFLICT (idempotency_key) WHERE requested_by IS NULL'
     : 'ON CONFLICT (requested_by, idempotency_key) WHERE requested_by IS NOT NULL';
-  const ins = await pool.query(
-    `INSERT INTO worker_jobs (job_id, type, payload, dry_run, idempotency_key, requested_by, status)
-     VALUES ($1, $2, $3::jsonb, $4, $5, $6, 'queued')
-     ${conflictTarget} DO NOTHING
-     RETURNING job_id`,
-    [opts.jobId || randomUUID(), type, payloadJson, dryRun, idempotencyKey, requestedBy],
-  );
-  if (ins.rows.length > 0) {
+  let ins: { rows: Array<{ job_id: string }> } | null = null;
+  try {
+    ins = await pool.query(
+      `INSERT INTO worker_jobs (job_id, type, payload, dry_run, idempotency_key, requested_by, status)
+       VALUES ($1, $2, $3::jsonb, $4, $5, $6, 'queued')
+       ${conflictTarget} DO NOTHING
+       RETURNING job_id`,
+      [opts.jobId || randomUUID(), type, payloadJson, dryRun, idempotencyKey, requestedBy],
+    );
+  } catch (e) {
+    // round-6 review MAJOR: the legacy global UNIQUE(idempotency_key) constraint (kept
+    // deliberately — dropping it is a separate Phase-2 migration) isn't our ON CONFLICT arbiter
+    // above, so a collision on IT (e.g. a different requester's row with the same key) surfaces
+    // as a raw 23505 instead of being caught by DO NOTHING. Fall through to the same
+    // requester-scoped recovery lookup the named-arbiter conflict path uses below — `ins` stays
+    // null, so the `!ins` branch runs findOwnJob() for us.
+    if ((e as { code?: string })?.code !== '23505') throw e;
+  }
+  if (ins && ins.rows.length > 0) {
     jobId = ins.rows[0].job_id;
   } else {
     // Scope the conflict lookup to the same requester (NULL-safe): idempotency keys can be
     // deterministic and guessable (e.g. report:${email}:${tier}:...:${hour}), so without this an
     // attacker who knows a victim's email could read the victim's job_id/status here and have
     // their own payload attached to it via the SQS send below (pentest-remediation PR #195 review).
-    const existing = await pool.query(
-      `SELECT job_id, status FROM worker_jobs WHERE idempotency_key = $1 AND requested_by IS NOT DISTINCT FROM $2`,
-      [idempotencyKey, requestedBy],
-    );
-    if (existing.rows.length === 0) {
-      throw new Error('idempotency conflict but no existing row');
-    }
-    jobId = existing.rows[0].job_id;
-    status = existing.rows[0].status;
+    // Also the recovery path for the legacy-constraint 23505 caught above: if no row of the
+    // caller's own turns up, the collision genuinely belongs to a different requester — fail
+    // cleanly instead of leaking the raw pg exception.
+    const existing = await findOwnJob(pool, idempotencyKey, requestedBy);
+    if (!existing) throw new IdempotencyKeyCollisionError();
+    jobId = existing.job_id;
+    status = existing.status;
   }
 
   try {

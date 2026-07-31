@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { enqueueJob, EnqueueDeliveryError } from '@/lib/jobs';
+import { enqueueJob, EnqueueDeliveryError, IdempotencyKeyCollisionError } from '@/lib/jobs';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -59,6 +59,10 @@ export async function POST(req: Request) {
     if (e instanceof EnqueueDeliveryError) {
       await getPool().query(`UPDATE compliance_runs SET worker_job_id = $1 WHERE id = $2`, [e.job_id, runId]).catch(() => {});
       return NextResponse.json({ run_id: runId, job_id: e.job_id, enqueue: 'failed' }, { status: 202 });
+    }
+    // round-6 review MAJOR: clean 409 for a cross-requester idempotency_key collision, not a raw 500.
+    if (e instanceof IdempotencyKeyCollisionError) {
+      return NextResponse.json({ status: 'error', message: e.message }, { status: 409 });
     }
     return NextResponse.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

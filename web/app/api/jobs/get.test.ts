@@ -9,6 +9,7 @@ vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query
 vi.mock('@/lib/jobs', () => ({
   enqueueJob: (...a: unknown[]) => enqueueJob(...a),
   EnqueueDeliveryError: class EnqueueDeliveryError extends Error {},
+  IdempotencyKeyCollisionError: class IdempotencyKeyCollisionError extends Error {},
 }));
 const req = (cookie = 'awsops_token=t') => new Request('http://x/api/jobs', { headers: { cookie } });
 const postReq = (body: unknown, cookie = 'awsops_token=t') =>
@@ -88,5 +89,16 @@ describe('POST /api/jobs', () => {
     const res = await POST(postReq({ type: 'noop' }));
     expect(res.status).toBe(202);
     expect(enqueueJob.mock.calls[0][2]).toMatchObject({ requestedBy: 'u@x.io' });
+  });
+  // round-6 review MAJOR: a cross-requester idempotency_key collision on the legacy global
+  // UNIQUE(idempotency_key) constraint (still present alongside the new per-requester partial
+  // indexes) must surface as a clean 409, never an opaque 500 from a raw pg 23505.
+  it('409s cleanly on a cross-requester idempotency_key collision', async () => {
+    const { IdempotencyKeyCollisionError } = await import('@/lib/jobs');
+    verifyUser.mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    enqueueJob.mockRejectedValue(new IdempotencyKeyCollisionError());
+    const { POST } = await import('./route');
+    const res = await POST(postReq({ type: 'noop', idempotency_key: 'shared-key' }));
+    expect(res.status).toBe(409);
   });
 });
