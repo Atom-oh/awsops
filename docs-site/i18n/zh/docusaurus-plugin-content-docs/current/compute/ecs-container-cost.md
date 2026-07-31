@@ -44,35 +44,35 @@ import Screenshot from '@site/src/components/Screenshot';
 
 ## 成本计算方式
 
-### Fargate 价格（v1 示例 — 无论区域标注如何，实际值均为 us-east-1 单价）
+### Fargate 价格（v2 实际值 — us-east-1 单价，`web/lib/inventory-derived.ts`）
 | 资源 | 单价 | 计费单位 |
 |--------|------|-----------|
-| vCPU | $0.04048 | per vCPU-hour |
-| Memory | $0.004445 | per GB-hour |
+| vCPU | $0.04656 | per vCPU-hour |
+| Memory | $0.00511 | per GB-hour |
 | Ephemeral Storage (>20GB) | $0.000111 | per GB-hour |
 
 ### 计算公式
 ```
-CPU Cost = (CPU Units / 1024) x $0.04048/hr x 24hr
-Memory Cost = (Memory MB / 1024) x $0.004445/hr x 24hr
+CPU Cost = (CPU Units / 1024) x $0.04656/hr x 24hr
+Memory Cost = (Memory MB / 1024) x $0.00511/hr x 24hr
 Daily Cost = CPU Cost + Memory Cost
 Monthly Estimate = Daily Cost x 30
 ```
 
 ### 计算示例
 Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
-- CPU: 0.5 vCPU x $0.04048/hr x 24hr = **$0.486/day**
-- Memory: 1 GB x $0.004445/hr x 24hr = **$0.107/day**
-- Total: **$0.593/day ($17.78/month)**
+- CPU: 0.5 vCPU x $0.04656/hr x 24hr = **$0.5587/day**
+- Memory: 1 GB x $0.00511/hr x 24hr = **$0.1226/day**
+- Total: **$0.681/day ($20.44/month)**
 
 ## 计算依据折叠区（Cost Calculation Basis）
 
 表格下方有一个 **▶ Cost Calculation Basis / 成本计算依据** 可折叠部分。切换 `showBasis` 时会内联展开以下内容：
 
-- **Fargate Pricing 表**（v1 示例，us-east-1 单价 — 保留原有区域标注错误）
-  - vCPU hourly rate: `$0.04048`
-  - GB hourly rate: `$0.004445`
-- 示例计算：0.5 vCPU × 1 GB 任务 → 换算为 `$0.593/day`
+- **Fargate Pricing 表**（v2 实际值，us-east-1 单价 — 区域标注保留 v1 原始 UI 的写法）
+  - vCPU hourly rate: `$0.04656`
+  - GB hourly rate: `$0.00511`
+- 示例计算：0.5 vCPU × 1 GB 任务 → 换算为 `$0.681/day`
 - 关于 Spot、ARM（Graviton）价格差异的参考说明
 
 在 v1 中，价格值可通过 `data/config.json` 中的 `fargatePricing` 覆盖 — v2 没有这一机制。

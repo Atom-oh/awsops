@@ -44,35 +44,35 @@ ECS Fargate 태스크의 비용을 분석하는 페이지입니다. Fargate 가�
 
 ## 비용 계산 방식
 
-### Fargate 가격 (v1 예시 — 리전 표기와 무관하게 실제 값은 us-east-1 단가)
+### Fargate 가격 (v2 실제 값 — us-east-1 단가, `web/lib/inventory-derived.ts`)
 | 리소스 | 단가 | 과금 단위 |
 |--------|------|-----------|
-| vCPU | $0.04048 | per vCPU-hour |
-| Memory | $0.004445 | per GB-hour |
+| vCPU | $0.04656 | per vCPU-hour |
+| Memory | $0.00511 | per GB-hour |
 | Ephemeral Storage (>20GB) | $0.000111 | per GB-hour |
 
 ### 계산 공식
 ```
-CPU Cost = (CPU Units / 1024) x $0.04048/hr x 24hr
-Memory Cost = (Memory MB / 1024) x $0.004445/hr x 24hr
+CPU Cost = (CPU Units / 1024) x $0.04656/hr x 24hr
+Memory Cost = (Memory MB / 1024) x $0.00511/hr x 24hr
 Daily Cost = CPU Cost + Memory Cost
 Monthly Estimate = Daily Cost x 30
 ```
 
 ### 계산 예시
 Fargate Task: 512 CPU units (0.5 vCPU) + 1024 MB (1 GB)
-- CPU: 0.5 vCPU x $0.04048/hr x 24hr = **$0.486/day**
-- Memory: 1 GB x $0.004445/hr x 24hr = **$0.107/day**
-- Total: **$0.593/day ($17.78/month)**
+- CPU: 0.5 vCPU x $0.04656/hr x 24hr = **$0.5587/day**
+- Memory: 1 GB x $0.00511/hr x 24hr = **$0.1226/day**
+- Total: **$0.681/day ($20.44/month)**
 
 ## 계산 근거 토글 (Cost Calculation Basis)
 
 테이블 하단에 **▶ Cost Calculation Basis / 비용 계산 근거** 접기 가능 섹션이 있습니다. `showBasis` 토글 시 다음을 인라인으로 확장합니다:
 
-- **Fargate Pricing 표** (v1 예시, us-east-1 단가 — 리전 표기 오류 그대로 보존)
-  - vCPU hourly rate: `$0.04048`
-  - GB hourly rate: `$0.004445`
-- 예시 계산: 0.5 vCPU × 1 GB 태스크 → `$0.593/day` 환산
+- **Fargate Pricing 표** (v2 실제 값, us-east-1 단가 — 리전 표기는 v1 원본 UI 그대로 보존)
+  - vCPU hourly rate: `$0.04656`
+  - GB hourly rate: `$0.00511`
+- 예시 계산: 0.5 vCPU × 1 GB 태스크 → `$0.681/day` 환산
 - Spot, ARM(Graviton) 변동분에 대한 참고 노트
 
 가격 값은 v1에서 `data/config.json`의 `fargatePricing`으로 오버라이드할 수 있었습니다 — v2에는 이 메커니즘이 없습니다.
