@@ -4,7 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 DIFF="$1"; WORK="$2"; PR_NUMBER="$3"; PR_TITLE="$4"; OUT="$5"
 SLOT="$WORK/slot"
-rm -f "$WORK/chair-failed.flag" "$WORK/chair-primary.err" "$WORK/chair-fallback.err"
+rm -f "$WORK/chair-failed.flag" "$WORK/chair-primary.err" "$WORK/chair-fallback.err" \
+      "$WORK/chair-primary.err.scrubbed" "$WORK/chair-fallback.err.scrubbed"
 # chair-raw.txt is never written any more (run_chair pipes instead of staging the pre-scrub output
 # on disk — see the comment there). This rm stays only to clean up a stale copy left by the earlier
 # revision of this script that DID create it, since $WORK persists across runs on a self-hosted
@@ -42,6 +43,25 @@ SCRUB_TMP="$WORK/scrub-cell.tmp"
 strip_controls() {
   sed -E 's#(\x1B\][^\x07\x1B]*(\x07|\x1B\\)|\x1B\[[0-?]*[ -/]*[@-~]|\x1B[()][0-9A-Z]|\r)##g'
 }
+
+# run_chair scrubs its stderr file in place once the call returns — but that call is the chair
+# model, bounded at CHAIR_TIMEOUT (600s), which makes it by far the likeliest moment for the job to
+# be cancelled. A cancel there skips the scrub and leaves raw stderr in $WORK, which persists to
+# the next run on a non-ephemeral runner. So cover every exit path with a trap: scrub if we can,
+# and if scrubbing itself fails, DELETE rather than leave it — losing a diagnostic is strictly
+# better than leaking a credential. SIGKILL can't be trapped; nothing in-process can cover that.
+scrub_chair_stderr() {
+  local f
+  for f in "$WORK/chair-primary.err" "$WORK/chair-fallback.err"; do
+    [ -f "$f" ] || continue
+    if strip_controls < "$f" 2>/dev/null | scrub_secrets > "$f.scrubbed" 2>/dev/null; then
+      mv -f "$f.scrubbed" "$f" 2>/dev/null || rm -f "$f" "$f.scrubbed"
+    else
+      rm -f "$f" "$f.scrubbed"
+    fi
+  done
+}
+trap scrub_chair_stderr EXIT INT TERM HUP
 
 while IFS= read -r f; do
   [ -s "$f" ] || continue

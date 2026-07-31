@@ -297,4 +297,46 @@ else
   pass "no unscrubbed credential is left in \$WORK after the run"
 fi
 
+# Cancellation mid-chair-call is the realistic case: the call is bounded at CHAIR_TIMEOUT (600s),
+# so it is by far the likeliest moment for GitHub to cancel the job. The in-place scrub runs only
+# after the call returns, so without a trap a cancel leaves raw stderr in the runner-global $WORK.
+WORK6=$(mktemp -d); mkdir -p "$WORK6/slot"; : > "$WORK6/responded.txt"
+echo "model0/L2" >> "$WORK6/responded.txt"; echo "cell" > "$WORK6/slot/model0-L2.md"
+DIFF6=$(mktemp); echo "diff --git a/x b/x" > "$DIFF6"
+
+# Chair that leaks to stderr immediately, then hangs — so the TERM lands mid-call, before the
+# post-call scrub could ever run.
+cat > "$BIN/claude" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'creds %s\n' "$FAILURE_SECRET" >&2
+sleep 30
+EOF
+chmod +x "$BIN/claude"
+
+PATH="$BIN:$PATH" FAILURE_SECRET="$FAKE_AWS_KEY" \
+  CHAIR_PRIMARY_MODEL="$PRIMARY_MODEL" CHAIR_FALLBACK_MODEL="$FALLBACK_MODEL" \
+  GITHUB_ENV="$WORK6/github-env.txt" \
+  bash "$SCRIPT" "$DIFF6" "$WORK6" 1 "cancelled" "$WORK6/review.md" \
+  > "$WORK6/synth.log" 2>&1 &
+SYNTH_PID=$!
+# Wait for the leak to actually be on disk, then cancel — bounded so this can't hang the suite.
+for _ in $(seq 1 100); do
+  [ -s "$WORK6/chair-primary.err" ] && break
+  sleep 0.1
+done
+kill -TERM "$SYNTH_PID" 2>/dev/null || true
+wait "$SYNTH_PID" 2>/dev/null || true
+
+CANCEL_LEAK=""
+for f in "$WORK6"/*.err; do
+  [ -f "$f" ] || continue
+  grep -Fq "$FAKE_AWS_KEY" "$f" 2>/dev/null && CANCEL_LEAK="$CANCEL_LEAK $(basename "$f")"
+done
+if [ -n "$CANCEL_LEAK" ]; then
+  fail "a cancelled run leaves no raw chair stderr on disk (found in:$CANCEL_LEAK)"
+else
+  pass "a cancelled run leaves no raw chair stderr on disk"
+fi
+
 [ "$FAILED" -eq 0 ] || exit 1
