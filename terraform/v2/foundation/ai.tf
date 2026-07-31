@@ -104,7 +104,11 @@ variable "official_mcp_endpoints" {
 # bound to ANY host — the credential would then be handed to it, which is the BYO-MCP connection
 # BASELINE §2 pins as do-not-revive. These presets are in-VPC by design, so declare the internal
 # domain suffix(es) they may live under ONCE per deployment and the provisioner confines them there.
-# A literal RFC1918/ULA address is accepted without a suffix (in-VPC by definition). Default [] means
+# A literal RFC1918/ULA address is accepted without a suffix (in-VPC by definition, and with no DNS
+# to repoint later it is the recommended form). A NAME must additionally resolve to a private
+# address at provision time — if it cannot be resolved from where the provisioner runs it is
+# REJECTED, because unverifiable is exactly the attacker case; use the private IP literal instead.
+# Default [] means
 # self-hosted presets cannot be enabled at all — enabling one is a deliberate, reviewable declaration
 # rather than a free-form URL. Vendor-hosted presets ignore this: they use catalog allowed_host_suffixes.
 variable "official_mcp_self_hosted_host_suffixes" {

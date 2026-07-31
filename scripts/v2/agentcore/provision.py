@@ -248,31 +248,34 @@ def _host_pin_violation(endpoint, spec, self_hosted_suffixes=()):
         if not _host_under_suffix(host, self_hosted_suffixes):
             return (f"self-hosted preset host {host!r} is not under any declared internal suffix "
                     f"{tuple(self_hosted_suffixes)!r}")
-        # Best-effort only — NOT a boundary, and deliberately not described as one. It runs ONCE at
-        # provision time while the actual connection is made later by the AgentCore-managed network,
-        # which we cannot instrument: repointing DNS to a public address after provisioning (classic
-        # rebinding/TOCTOU) defeats it, and so does a name this host cannot resolve. It raises the
-        # bar on the naive case (a plainly public exfil host) and nothing more. The suffix list is
-        # itself tfvars, so an operator could declare an attacker's domain as "internal" and pass the
-        # gate above. Nothing at the config layer can bind whoever edits the config — but a real
-        # exfiltration host has to be reachable, i.e. publicly resolvable, whereas a genuine in-VPC
-        # host resolves privately or not at all from where the provisioner runs. So resolve it: a
-        # PUBLIC answer for a preset declared self-hosted is a contradiction, and we reject it. No
-        # answer is NOT treated as failure — provisioning legitimately runs from outside the VPC
-        # where internal DNS is unavailable, and failing closed there would break real deployments.
+        # This is a REAL gate, not best-effort — and it is enforceable even though we do not make
+        # the connection, because the thing that turns a wrong host into exfiltration is US attaching
+        # the preset's credential to it. So: never hand a credential to a host we cannot PROVE is
+        # in-VPC. An earlier revision let an unresolvable name pass ("the provisioner often runs
+        # outside the VPC"), which was the actual hole — unverifiable is exactly the attacker's case,
+        # and an operator who cannot resolve their internal name from here can give the private IP
+        # literal instead. A literal private address is also the only form with no DNS to repoint
+        # afterwards, so it is the one shape immune to the rebinding/TOCTOU window as well.
         try:
             infos = socket.getaddrinfo(host, None)
-        except (socket.gaierror, UnicodeError, OSError):
-            return None  # unresolvable here — expected for in-VPC names; cannot verify, do not block
+        except (socket.gaierror, UnicodeError, OSError) as e:
+            return (f"self-hosted preset host {host!r} cannot be resolved here, so it cannot be shown "
+                    f"to be in-VPC ({type(e).__name__}) — use the private IP literal, or run the "
+                    f"provisioner where internal DNS resolves. Refusing to attach a credential to an "
+                    f"unverifiable host")
+        resolved = []
         for info in infos:
             try:
-                ip = ipaddress.ip_address(info[4][0])
+                resolved.append(ipaddress.ip_address(info[4][0]))
             except ValueError:
                 continue
-            if ip.is_global:
-                return (f"self-hosted preset host {host!r} resolves to PUBLIC address {ip} — a "
-                        f"self-hosted preset must be in-VPC; declaring a public domain as an "
-                        f"internal suffix does not make it one")
+        if not resolved:
+            return f"self-hosted preset host {host!r} produced no usable address"
+        public = [str(ip) for ip in resolved if ip.is_global]
+        if public:
+            return (f"self-hosted preset host {host!r} resolves to PUBLIC address(es) "
+                    f"{', '.join(public)} — a self-hosted preset must be in-VPC; declaring a public "
+                    f"domain as an internal suffix does not make it one")
         return None
     try:
         host = (urlparse(endpoint).hostname or "").lower().rstrip(".")

@@ -89,11 +89,15 @@ class TestSelfHostedConfinement(unittest.TestCase):
             )
         )
 
-    def test_host_under_declared_suffix_allowed(self):
-        for url in ("https://ch.internal:8123/mcp", "https://ch.svc.cluster.local/mcp"):
-            self.assertIsNone(
-                provision._host_pin_violation(url, _spec("clickhouse"), self.SUFFIXES), url
-            )
+    def test_host_under_declared_suffix_allowed_when_it_resolves_privately(self):
+        # Under the suffix is necessary but not sufficient — it must also be shown to be in-VPC.
+        with mock.patch.object(
+            socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("10.0.3.7", 0))]
+        ):
+            for url in ("https://ch.internal:8123/mcp", "https://ch.svc.cluster.local/mcp"):
+                self.assertIsNone(
+                    provision._host_pin_violation(url, _spec("clickhouse"), self.SUFFIXES), url
+                )
 
     def test_declared_suffix_matches_only_on_a_label_boundary(self):
         for url in ("https://evil-internal/mcp", "https://internal.attacker.example/mcp"):
@@ -149,9 +153,20 @@ class TestDeclaredSuffixCannotLaunderAPublicHost(unittest.TestCase):
                 )
             )
 
-    def test_unresolvable_host_is_not_blocked(self):
+    def test_unresolvable_host_is_rejected(self):
+        # This used to pass ("the provisioner often runs outside the VPC") and that was the hole:
+        # unverifiable is precisely the attacker's case. An operator who cannot resolve their internal
+        # name from here uses the private IP literal instead — see the literal test above.
         with mock.patch.object(socket, "getaddrinfo", side_effect=socket.gaierror):
-            self.assertIsNone(
+            v = provision._host_pin_violation(
+                "https://ch.internal/mcp", _spec("clickhouse"), (".internal",)
+            )
+        self.assertIsNotNone(v)
+        self.assertIn("unverifiable", v)
+
+    def test_no_usable_address_is_rejected(self):
+        with mock.patch.object(socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("not-an-ip", 0))]):
+            self.assertIsNotNone(
                 provision._host_pin_violation(
                     "https://ch.internal/mcp", _spec("clickhouse"), (".internal",)
                 )
