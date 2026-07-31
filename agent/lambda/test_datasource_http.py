@@ -177,7 +177,7 @@ class TestIpPinning(unittest.TestCase):
         fake_hostname = "totally-fake-host-that-does-not-resolve.invalid"
         # Seed the cache exactly as assert_host_allowed would after validating a resolution to our
         # local server's IP — this is the state http_json relies on.
-        dh._PINNED_IP_CACHE[fake_hostname] = "127.0.0.1"
+        dh._PINNED_IP_CACHE[fake_hostname] = ["127.0.0.1"]
         status, data = dh.http_json("GET", f"http://{fake_hostname}:{self.port}/probe")
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
@@ -195,12 +195,50 @@ class TestIpPinning(unittest.TestCase):
         # 10.0.0.5 (private, allowed) — 127.0.0.1 is itself always-blocked and would raise here.
         resolver = lambda host, port, proto=None: [(2, 1, 6, "", ("10.0.0.5", port))]  # noqa: E731
         dh.assert_host_allowed("http://pin-me:1234", resolver=resolver)
-        self.assertEqual(dh._PINNED_IP_CACHE["pin-me"], "10.0.0.5")
+        self.assertEqual(dh._PINNED_IP_CACHE["pin-me"], ["10.0.0.5"])
+
+    def test_assert_host_allowed_caches_all_resolved_ips_deduped(self):
+        # dual-stack / multi-A-record: every validated IP is cached (in order, deduped), not just
+        # the first — this is what preserves socket.create_connection's fallback-through-addresses.
+        resolver = lambda host, port, proto=None: [  # noqa: E731
+            (10, 1, 6, "", ("2001:db8::1", port, 0, 0)),
+            (2, 1, 6, "", ("10.0.0.5", port)),
+            (2, 1, 6, "", ("10.0.0.5", port)),  # duplicate resolved address
+        ]
+        dh.assert_host_allowed("http://multi:1234", resolver=resolver)
+        self.assertEqual(dh._PINNED_IP_CACHE["multi"], ["2001:db8::1", "10.0.0.5"])
 
     def test_set_request_conn_resets_the_cache(self):
-        dh._PINNED_IP_CACHE["stale-host"] = "10.0.0.5"
+        dh._PINNED_IP_CACHE["stale-host"] = ["10.0.0.5"]
         dh.set_request_conn(None)
         self.assertEqual(dh._PINNED_IP_CACHE, {})
+
+    def test_first_pinned_ip_failing_falls_back_to_second(self):
+        # The core MAJOR fix: _pin_create_connection must try each pinned IP in order and fall back
+        # on connect failure — same as stdlib socket.create_connection's multi-address behavior.
+        # Drive it directly (no real Lambda networking needed): a fake base_create that raises for
+        # the first IP and succeeds for the second.
+        attempts = []
+
+        def fake_base_create(address, *a, **kw):
+            attempts.append(address)
+            if address[0] == "10.0.0.1":
+                raise OSError("simulated: network is unreachable")
+            return ("connected", address)
+
+        wrapped = dh._pin_create_connection(fake_base_create, ["10.0.0.1", "10.0.0.2"])
+        result = wrapped(("original-hostname", 443))
+        self.assertEqual(attempts, [("10.0.0.1", 443), ("10.0.0.2", 443)])
+        self.assertEqual(result, ("connected", ("10.0.0.2", 443)))
+
+    def test_all_pinned_ips_failing_raises_the_last_error(self):
+        def fake_base_create(address, *a, **kw):
+            raise OSError(f"unreachable: {address[0]}")
+
+        wrapped = dh._pin_create_connection(fake_base_create, ["10.0.0.1", "10.0.0.2"])
+        with self.assertRaises(OSError) as ctx:
+            wrapped(("original-hostname", 443))
+        self.assertIn("10.0.0.2", str(ctx.exception))  # the last attempt's error surfaces
 
 
 if __name__ == "__main__":

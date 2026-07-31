@@ -81,7 +81,7 @@ egress/SSRF/credential-custody/exfiltration 리스크는 **실재**하며, 데�
 
 외부 DATA write가 켜질 때 반드시 통과해야 하는 통제. (비-AWS-comms write에 맞게 의미 재매핑 — 멱등·가역 AWS-리소스 연산용으로 설계된 통제를 문자 그대로가 아니라 의미 보존하여 적용.)
 
-1. **SSRF (연결 시점)** — https-only + DNS resolve-and-recheck + metadata/private-CIDR block + `redirect:'manual'`. private CIDR은 계정별 opt-in. (011 승계, LIVE.) datasource-connector substrate는 IP-pinning까지 적용(위 §4); `agent.py`의 범용 egress 경로는 resolve-and-recheck 잔존(backlog).
+1. **SSRF (연결 시점)** — http/https 허용(https 권장) + DNS resolve-and-recheck + metadata/private-CIDR block + `redirect:'manual'`. private CIDR은 계정별 opt-in. (011 승계, LIVE.) datasource-connector substrate는 IP-pinning까지 적용(위 §4); `agent.py`의 범용 egress 경로는 resolve-and-recheck 잔존(backlog).
 2. **Secrets / credential custody** — 자격증명은 Secrets Manager(ARN-ref, 런타임 fetch, 계정별 스코핑). `data/config.json` 평문 저장 금지. GET 응답은 토큰 마스킹.
 3. **DLP / redaction (반대표의 결정적 지점)** — 모든 write payload는 server-side egress DLP 통과: 시크릿/자격증명 금지, raw 인벤토리/토폴로지/계정 덤프 금지, per-connector 목적지 allowlist(admin 등록 SaaS 타깃만), content-size cap, audit. 신뢰성 있게 redact 불가능한 커넥터 → **draft-only**(에이전트가 본문 렌더, 사람이 copy-paste; egress-write 표면 0).
 4. **human-gate (4-eyes + dry-run + rollback)** — action_catalog facade(`executor_type='lambda'`), `enabled=false` default, 필수 dry-run(=draft-render, SaaS엔 dry-run API 없으므로 DLP-후 payload를 사람 검토용 렌더), 4-eyes(승인자≠생성자) 또는 로그된 single-operator escape, paired rollback_ref(보상 행동 + audit, 진짜 undo로 표기 금지 — 이미 읽힌 알림은 비가역), idempotency token(`job_id`-keyed dedup). 모델은 입력 제안만.
