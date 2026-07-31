@@ -13,6 +13,7 @@ Run from the repo root (so `terraform -chdir=...` resolves) AFTER `terraform app
 import argparse
 import copy
 import ipaddress
+import socket
 import json
 import os
 import subprocess
@@ -244,10 +245,31 @@ def _host_pin_violation(endpoint, spec, self_hosted_suffixes=()):
         if not self_hosted_suffixes:
             return ("self-hosted preset has no declared internal host suffix "
                     "(set official_mcp_self_hosted_host_suffixes) — failing closed")
-        if _host_under_suffix(host, self_hosted_suffixes):
-            return None
-        return (f"self-hosted preset host {host!r} is not under any declared internal suffix "
-                f"{tuple(self_hosted_suffixes)!r}")
+        if not _host_under_suffix(host, self_hosted_suffixes):
+            return (f"self-hosted preset host {host!r} is not under any declared internal suffix "
+                    f"{tuple(self_hosted_suffixes)!r}")
+        # Last check, and the only one that does not merely move the goalposts: the suffix list is
+        # itself tfvars, so an operator could declare an attacker's domain as "internal" and pass the
+        # gate above. Nothing at the config layer can bind whoever edits the config — but a real
+        # exfiltration host has to be reachable, i.e. publicly resolvable, whereas a genuine in-VPC
+        # host resolves privately or not at all from where the provisioner runs. So resolve it: a
+        # PUBLIC answer for a preset declared self-hosted is a contradiction, and we reject it. No
+        # answer is NOT treated as failure — provisioning legitimately runs from outside the VPC
+        # where internal DNS is unavailable, and failing closed there would break real deployments.
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except (socket.gaierror, UnicodeError, OSError):
+            return None  # unresolvable here — expected for in-VPC names; cannot verify, do not block
+        for info in infos:
+            try:
+                ip = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                continue
+            if ip.is_global:
+                return (f"self-hosted preset host {host!r} resolves to PUBLIC address {ip} — a "
+                        f"self-hosted preset must be in-VPC; declaring a public domain as an "
+                        f"internal suffix does not make it one")
+        return None
     try:
         host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
     except ValueError:

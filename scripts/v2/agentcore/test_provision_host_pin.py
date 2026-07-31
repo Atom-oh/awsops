@@ -11,6 +11,9 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import socket
+from unittest import mock
+
 import catalog  # noqa: E402
 import provision  # noqa: E402
 
@@ -115,3 +118,52 @@ class TestSelfHostedConfinement(unittest.TestCase):
 
     def test_catalog_entry_declaring_neither_fails_closed(self):
         self.assertIsNotNone(provision._host_pin_violation("https://anything.example/", {}))
+
+
+class TestDeclaredSuffixCannotLaunderAPublicHost(unittest.TestCase):
+    """The suffix list is itself tfvars, so an operator can declare an attacker's domain as
+    "internal" and satisfy the suffix gate. No config-layer allowlist can bind whoever edits the
+    config — but an exfiltration host has to be reachable, so it resolves publicly, while a genuine
+    in-VPC host resolves privately or not at all. A public answer for a self-hosted preset is a
+    contradiction and is rejected; an unresolvable name is NOT (the provisioner legitimately runs
+    outside the VPC, and failing closed there would break real deployments)."""
+
+    def test_public_resolution_is_rejected_even_when_the_suffix_is_declared(self):
+        with mock.patch.object(
+            socket, "getaddrinfo",
+            return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
+        ):
+            v = provision._host_pin_violation(
+                "https://attacker.example/mcp", _spec("clickhouse"), (".example",)
+            )
+        self.assertIsNotNone(v)
+        self.assertIn("PUBLIC", v)
+
+    def test_private_resolution_is_allowed(self):
+        with mock.patch.object(
+            socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("10.0.3.7", 0))]
+        ):
+            self.assertIsNone(
+                provision._host_pin_violation(
+                    "https://ch.internal/mcp", _spec("clickhouse"), (".internal",)
+                )
+            )
+
+    def test_unresolvable_host_is_not_blocked(self):
+        with mock.patch.object(socket, "getaddrinfo", side_effect=socket.gaierror):
+            self.assertIsNone(
+                provision._host_pin_violation(
+                    "https://ch.internal/mcp", _spec("clickhouse"), (".internal",)
+                )
+            )
+
+    def test_a_mixed_answer_containing_a_public_address_is_rejected(self):
+        with mock.patch.object(
+            socket, "getaddrinfo",
+            return_value=[(2, 1, 6, "", ("10.0.3.7", 0)), (2, 1, 6, "", ("93.184.216.34", 0))],
+        ):
+            self.assertIsNotNone(
+                provision._host_pin_violation(
+                    "https://ch.internal/mcp", _spec("clickhouse"), (".internal",)
+                )
+            )
