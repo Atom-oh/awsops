@@ -50,13 +50,20 @@ _CLICKHOUSE_LAMBDA_TARGETS = {
 
 def _ctrl_with_targets(targets_by_gw=None):
     """A Mock() ctrl whose list_gateway_targets returns the given {gw_id: [target,...]} map in the
-    shape provision._list_all expects (an 'items' key), and whose get_gateway_target returns a
-    target's full body (including credentialProviderConfigurations) by targetId."""
+    shape provision._list_all expects (an 'items' key). get_gateway_target returns a pre-existing
+    target's full body (including credentialProviderConfigurations) by targetId, defaulting
+    status to READY unless the test set one — including for a NEWLY CREATED targetId (not in the
+    initial map), so _wait_target_ready's poll succeeds immediately by default in every test that
+    doesn't specifically exercise the not-ready/failed path."""
     targets_by_gw = targets_by_gw or {}
     ctrl = mock.Mock()
     ctrl.list_gateway_targets.side_effect = lambda gatewayIdentifier, **_kw: {"items": targets_by_gw.get(gatewayIdentifier, [])}
     by_id = {t["targetId"]: t for ts in targets_by_gw.values() for t in ts}
-    ctrl.get_gateway_target.side_effect = lambda gatewayIdentifier, targetId: by_id[targetId]
+
+    def _get_gateway_target(gatewayIdentifier, targetId):
+        t = by_id.get(targetId, {})
+        return {**t, "status": t.get("status", "READY")}
+    ctrl.get_gateway_target.side_effect = _get_gateway_target
     return ctrl
 
 
@@ -95,7 +102,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
               "lambda_arns": {"datadog-mcp": "arn:aws:lambda:...:function:x-agent-datadog-mcp"},
               "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
-             mock.patch.object(provision, "_load_official_mcp_secret", return_value={"datadog": {"token": "tok"}}):
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"datadog": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         self.assertIn("WARN", {r[1] for r in provision.report})
         self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
@@ -124,7 +131,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
-             mock.patch.object(provision, "_load_official_mcp_secret", return_value={"clickhouse": {"token": "tok"}}):
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-legacy")
         ctrl.create_gateway_target.assert_called_once()
@@ -138,7 +145,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
-             mock.patch.object(provision, "_load_official_mcp_secret", return_value={"datadog": "not-a-dict"}):
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"datadog": "not-a-dict"}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})  # must not raise
         self.assertIn("SKIP", {r[1] for r in provision.report})
         self.assertEqual([r for r in provision.report if r[1] == "ERR"], [])
@@ -165,7 +172,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
-             mock.patch.object(provision, "_load_official_mcp_secret", return_value={"datadog": {"token": "tok"}}):
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"datadog": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.update_gateway_target.assert_called_once()
         self.assertIn(("target:datadog-mcp-server-target", "UPDATED"), [(r[0], r[1]) for r in provision.report])
@@ -193,7 +200,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
-             mock.patch.object(provision, "_load_official_mcp_secret", return_value={"datadog": {"token": "tok"}}):
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"datadog": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.update_gateway_target.assert_called_once()
         updated_creds = ctrl.update_gateway_target.call_args.kwargs["credentialProviderConfigurations"]
@@ -207,7 +214,7 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
-             mock.patch.object(provision, "_load_official_mcp_secret", return_value={}):  # credential gone
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({}, True)):  # credential gone
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         ctrl.delete_gateway_target.assert_called_once_with(gatewayIdentifier="gw-1", targetId="t-1")
         ctrl.delete_api_key_credential_provider.assert_called_once_with(name="awsops-v2-datadog-mcp")
@@ -228,13 +235,51 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
              mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
-             mock.patch.object(provision, "_load_official_mcp_secret", return_value={"clickhouse": {"token": "tok"}}):
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"clickhouse": {"token": "tok"}}, True)):
             provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
         # The new target creation failed — the legacy target must NOT have been deleted, or the
         # kind would be unavailable through EITHER path.
         ctrl.delete_gateway_target.assert_not_called()
         self.assertIn(("target:clickhouse-mcp-server-target", "ERR"), [(r[0], r[1]) for r in provision.report])
         self.assertNotIn("RETIRED", {r[1] for r in provision.report})
+
+    def test_secret_read_failure_does_not_retire_a_live_target(self):
+        # CRITICAL (2026-07-31 second follow-up) regression: the credentials secret READ itself
+        # failed (transient Secrets Manager error / malformed JSON) — must NOT be treated the same
+        # as "credential intentionally removed" (which retires a live target). A transient blip on
+        # a routine `make agentcore` run must never mass-deprovision every configured preset.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({}, False)):  # read FAILED
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.delete_gateway_target.assert_not_called()
+        ctrl.delete_api_key_credential_provider.assert_not_called()
+        self.assertIn("SKIP", {r[1] for r in provision.report})
+        self.assertNotIn("RETIRED", {r[1] for r in provision.report})
+
+    def test_new_target_not_yet_ready_does_not_retire_legacy_target(self):
+        # CRITICAL (2026-07-31 second follow-up) regression: create_gateway_target returning 200
+        # means the request was ACCEPTED, not that the target is usable yet. If it never reaches
+        # READY (stuck CREATING, or a terminal FAILED status), the legacy lambda target must stay
+        # live — cutover is not confirmed, so retiring the old tool would cause an outage.
+        ctrl = _ctrl_with_targets({"gw-1": [{"name": "clickhouse-mcp-target", "targetId": "t-legacy"}]})
+        ctrl.get_api_key_credential_provider.side_effect = _raise_not_found
+        ctrl.create_api_key_credential_provider.return_value = {"credentialProviderArn": "arn:provider"}
+        ctrl.create_gateway_target.return_value = {"targetId": "t-new"}
+        # Override the default READY-immediately behavior: the new target reports FAILED.
+        ctrl.get_gateway_target.side_effect = lambda gatewayIdentifier, targetId: (
+            {"status": "FAILED"} if targetId == "t-new" else {"status": "READY"})
+        ac = {"official_mcp_endpoints": {"clickhouse": "https://ch.example.com/mcp"},
+              "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
+        with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _CLICKHOUSE_PRESET), \
+             mock.patch.object(provision.catalog, "TARGETS", _CLICKHOUSE_LAMBDA_TARGETS), \
+             mock.patch.object(provision, "_load_official_mcp_secret", return_value=({"clickhouse": {"token": "tok"}}, True)):
+            provision.ensure_mcp_server_targets(ctrl, ac, {"external-obs": "gw-1"})
+        ctrl.delete_gateway_target.assert_not_called()  # legacy target untouched
+        self.assertNotIn("RETIRED", {r[1] for r in provision.report})
+        self.assertIn(("target:clickhouse-mcp-server-target:ready", "ERR"), [(r[0], r[1]) for r in provision.report])
 
 
 def _raise_not_found(*_a, **_kw):

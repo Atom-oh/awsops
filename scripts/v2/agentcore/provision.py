@@ -149,22 +149,30 @@ def ensure_targets(ctrl, ac, gw_ids):
 def _load_official_mcp_secret(ac):
     """ADR-017: preset credentials live in the SAME shared secret the web BFF writes connector
     credentials into (web/lib/integration-credentials.ts), keyed by preset_key — e.g.
-    {"datadog": {"token": "..."}}. Returns {} if integrations_enabled=false or the secret has no
-    entries yet (both are SKIP-worthy, not errors)."""
+    {"datadog": {"token": "..."}}.
+
+    Returns (secret_map, read_ok). read_ok=False means the READ OR PARSE ITSELF failed (a
+    transient Secrets Manager error, e.g. throttling, or malformed JSON) — the caller must NOT
+    treat that the same as "the credential is genuinely absent" (which retires any live target),
+    or a transient API blip on a routine `make agentcore` re-run would mass-deprovision every
+    configured preset (kiro review finding, 2026-07-31). read_ok=True with an empty/missing key
+    means integrations_enabled=false or the credential genuinely isn't stored — both real SKIP
+    states, not errors."""
     secret_name = ac.get("integrations_secret_name")
     if not secret_name:
-        return {}
+        return {}, True  # integrations_enabled=false is a real "nothing configured" state
     sm = boto3.client("secretsmanager", region_name=ac["region"])
     try:
         resp = sm.get_secret_value(SecretId=secret_name)
     except ClientError as e:
         log("mcp-server:secret", "ERR", str(e)[:140])
-        return {}
+        return {}, False
     try:
         m = json.loads(resp.get("SecretString") or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return m if isinstance(m, dict) else {}
+    except json.JSONDecodeError as e:
+        log("mcp-server:secret", "ERR", f"malformed JSON: {e}"[:140])
+        return {}, False
+    return (m if isinstance(m, dict) else {}), True
 
 
 def _ensure_api_key_provider(ctrl, provider_name, token):
@@ -212,6 +220,36 @@ def _delete_api_key_provider(ctrl, provider_name):
             log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
 
 
+# Gateway target lifecycle states (GetGatewayTarget `status`), confirmed against the botocore
+# model: CREATING/UPDATING/SYNCHRONIZING are in-flight; READY is the only "safe to cut over to"
+# state; the rest are terminal failures.
+_TARGET_TERMINAL_FAILURE_STATUSES = {"FAILED", "UPDATE_UNSUCCESSFUL", "SYNCHRONIZE_UNSUCCESSFUL"}
+
+
+def _wait_target_ready(ctrl, gw_id, target_id, tname, timeout_s=30, interval_s=2):
+    """Poll GetGatewayTarget until status=READY (True), a terminal failure status (False, logged),
+    or timeout_s elapses (False, logged). create/update_gateway_target return as soon as the
+    request is ACCEPTED, not once the target is actually usable — retiring the legacy target right
+    after that 200, without confirming READY, can cut over to a target that isn't live yet (kiro
+    review finding, 2026-07-31)."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            status = ctrl.get_gateway_target(gatewayIdentifier=gw_id, targetId=target_id).get("status")
+        except ClientError as e:
+            log(f"target:{tname}:ready", "ERR", str(e)[:140])
+            return False
+        if status == "READY":
+            return True
+        if status in _TARGET_TERMINAL_FAILURE_STATUSES:
+            log(f"target:{tname}:ready", "ERR", f"reached terminal status {status}, never became READY")
+            return False
+        if time.monotonic() >= deadline:
+            log(f"target:{tname}:ready", "ERR", f"timed out after {timeout_s}s waiting for READY (last status: {status})")
+            return False
+        time.sleep(interval_s)
+
+
 def _retire_gateway_target(ctrl, gw_id, existing, tname, reason):
     """Delete a live gateway target by name, if it exists. Used both to retire a disabled/removed
     ADR-017 preset's target and to clear a legacy lambda target out of the way before cutover."""
@@ -245,7 +283,7 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
     """
     endpoints = ac.get("official_mcp_endpoints") or {}
     lambda_arns = ac.get("lambda_arns") or {}
-    secrets = _load_official_mcp_secret(ac)
+    secrets, secrets_read_ok = _load_official_mcp_secret(ac)
     existing_by_gw = {}  # gateway short-key -> {target_name: target}, fetched once per gateway
 
     def gw_existing(gw_key):
@@ -271,10 +309,23 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
             raw = secrets.get(preset_key)
             token = raw.get("token") if isinstance(raw, dict) else None
 
+        if auth["mode"] == "api_key" and not token and not secrets_read_ok:
+            # Could not READ the credentials secret this run (transient Secrets Manager error /
+            # malformed JSON) — this is NOT the same as "the credential was intentionally removed"
+            # and must never retire a live target on that basis (kiro review finding, 2026-07-31:
+            # a transient API blip would otherwise mass-deprovision every configured preset). Fail
+            # safe: skip this preset, touch nothing.
+            log(f"target:{tname}", "SKIP", f"could not read credentials secret this run for preset '{preset_key}' — leaving any existing target/provider untouched")
+            continue
+
         if not endpoint or (auth["mode"] == "api_key" and not token):
             reason = "no endpoint configured" if not endpoint else "no stored credential"
             log(f"target:{tname}", "SKIP", f"{reason} for preset '{preset_key}' (official_mcp_enabled/endpoint or Connectors tab)")
             _retire_gateway_target(ctrl, gw_id, existing, tname, f"{reason} — retiring")
+            # Best-effort: AWS may reject deleting a provider while a target still references it
+            # if the just-issued target deletion is still async. A failure here is logged (ERR) and
+            # self-heals on the NEXT provisioner run — this SKIP path re-attempts the delete every
+            # time the preset stays inactive, and delete_api_key_credential_provider is idempotent.
             _delete_api_key_provider(ctrl, provider_name)
             continue
 
@@ -302,11 +353,12 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
             }]
 
         cfg = {"mcp": {"mcpServer": {"endpoint": endpoint, "listingMode": "DEFAULT"}}}
+        tid_final = None
         tid_to_sync = None
         try:
             if tname in existing:
-                tid = existing[tname]["targetId"]
-                cur = ctrl.get_gateway_target(gatewayIdentifier=gw_id, targetId=tid)
+                tid_final = existing[tname]["targetId"]
+                cur = ctrl.get_gateway_target(gatewayIdentifier=gw_id, targetId=tid_final)
                 cur_endpoint = cur.get("targetConfiguration", {}).get("mcp", {}).get("mcpServer", {}).get("endpoint")
                 cur_provider = _api_key_provider_fields(cur.get("credentialProviderConfigurations"))
                 new_provider = _api_key_provider_fields(creds)
@@ -314,33 +366,41 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
                 if not drifted:
                     log(f"target:{tname}", "EXISTS", endpoint)
                 else:
-                    ctrl.update_gateway_target(gatewayIdentifier=gw_id, targetId=tid, name=tname,
+                    ctrl.update_gateway_target(gatewayIdentifier=gw_id, targetId=tid_final, name=tname,
                                                 description=spec["description"], targetConfiguration=cfg,
                                                 credentialProviderConfigurations=creds)
                     log(f"target:{tname}", "UPDATED", f"drift: endpoint/description/credential-provider config changed -> {endpoint}")
-                    tid_to_sync = tid
+                    tid_to_sync = tid_final
             else:
                 resp = ctrl.create_gateway_target(gatewayIdentifier=gw_id, name=tname, description=spec["description"],
                                                    targetConfiguration=cfg, credentialProviderConfigurations=creds)
                 log(f"target:{tname}", "CREATED", endpoint)
-                tid_to_sync = resp["targetId"]
+                tid_final = resp["targetId"]
+                tid_to_sync = tid_final
         except ClientError as e:
             log(f"target:{tname}", "ERR", str(e)[:140])
             continue  # new target failed — leave the legacy lambda target alone (no outage)
 
         if tid_to_sync:
+            # Best-effort refresh request — its success/failure is INDEPENDENT of whether the
+            # target actually reaches READY (checked below), so a sync failure alone must not
+            # short-circuit the ready-wait or silently permit an unconfirmed cutover either way.
             try:
                 ctrl.synchronize_gateway_targets(gatewayIdentifier=gw_id, targetIdList=[tid_to_sync])
                 log(f"target:{tname}:sync", "OK", "tools/list refresh requested")
             except ClientError as e:
                 log(f"target:{tname}:sync", "ERR", str(e)[:140])
 
-        # Only now — after the new mcp-server target is confirmed CREATED/UPDATED/EXISTS — retire
-        # the legacy lambda target for this kind, if one is still live (finding #1: this must never
-        # happen before the replacement is confirmed working).
+        # create/update_gateway_target return as soon as the request is ACCEPTED, not once the
+        # target is actually usable — confirm READY before treating the new target as the live
+        # replacement (kiro review finding, 2026-07-31). Not ready -> leave the legacy lambda
+        # target alone; retry on the next provisioner run (this whole block is idempotent).
+        if not _wait_target_ready(ctrl, gw_id, tid_final, tname):
+            continue
+
         legacy_name = catalog.legacy_target_name(preset_key)
         if legacy_name and legacy_name in existing:
-            _retire_gateway_target(ctrl, gw_id, existing, legacy_name, f"superseded by {tname} (ADR-017 cutover)")
+            _retire_gateway_target(ctrl, gw_id, existing, legacy_name, f"superseded by {tname} (ADR-017 cutover, confirmed READY)")
 
 
 def prune_moved_targets(ctrl, gw_ids):
