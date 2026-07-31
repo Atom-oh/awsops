@@ -90,6 +90,43 @@ export async function setIntegrationCredential(
   });
 }
 
+// ── ADR-017 official-vendor MCP preset credentials ─────────────────────────────────────────
+// 5 of the 8 preset slugs (clickhouse/tempo/jaeger/dynatrace/datadog) are ALSO DATASOURCE_KINDS
+// members (web/lib/integrations-category.ts) whose kind-mirror lives at the PLAIN slug key
+// (mirrorDefaultCredential, above) — saving the MCP token there would clobber the datasource
+// connector's {endpoint, authType, ...} shape and vice versa. Namespace the MCP credential under
+// "mcp:<slug>" instead so the two never collide. scripts/v2/agentcore/provision.py's
+// _load_official_mcp_secret reads this same "mcp:<preset_key>" key.
+const mcpPresetKey = (slug: string) => `mcp:${slug}`;
+
+/** Store an ADR-017 official-vendor MCP preset's credential under its namespaced key. */
+export async function setMcpPresetCredential(
+  slug: string,
+  secretObj: Record<string, unknown>,
+): Promise<void> {
+  assertKnownSlug(slug);
+  await mutateCredentialMap((map) => {
+    map[mcpPresetKey(slug)] = secretObj;
+  });
+}
+
+/** Preset slugs (namespace-stripped) that currently have an ADR-017 MCP credential stored —
+ *  KEYS ONLY. Best-effort: degrades to [] on a Secrets Manager read failure, same as
+ *  getConfiguredSlugs (the gated/off state must not 500 the Connectors tab). */
+export async function getConfiguredMcpPresetSlugs(): Promise<string[]> {
+  try {
+    return Object.keys(await readMap())
+      .filter((k) => k.startsWith('mcp:'))
+      .map((k) => k.slice(4));
+  } catch (e) {
+    console.warn(
+      '[integration-credentials] getConfiguredMcpPresetSlugs read failed; treating as none configured:',
+      (e as { name?: string })?.name || 'unknown error',
+    );
+    return [];
+  }
+}
+
 // ── Multi-instance datasources (ADR-039 hub) ────────────────────────────────────────────────
 // Each datasource INSTANCE stores its connConfig secret blob ({endpoint, authType, creds…, org_id?})
 // under its bigint `integrations.id` key. The plain `kind` key is the MANAGED DEFAULT MIRROR — the

@@ -10,15 +10,26 @@ const RULES: { key: string; re: RegExp }[] = [
   { key: 'cost', re: /\$\d/i },
   // monitoring owns CloudWatch/CloudTrail AND the still-here datasource connectors (Loki logs,
   // Tempo traces, Mimir long-term metrics, OpenSearch) — route those keywords here, where the tools are.
-  { key: 'monitoring', re: /알람|지표|로그변경|cloudwatch|cloudtrail|alarm|metric|who changed|audit|loki|tempo|mimir|opensearch|trace|트레이스|grafana/i },
+  // NOTE: 'grafana' deliberately removed (2026-07-31 kiro review MAJOR finding) — grafana has no
+  // legacy lambda target on this (or any) gateway; its only tools are the ADR-017 external-obs
+  // mcpServer preset, routed below. Tempo/trace stay here — tempo-mcp-target (legacy) still lives
+  // on monitoring during the ADR-017 deprecation window; see catalog.py TARGETS/MCP_SERVER_TARGETS.
+  // \btrace\b (word boundary): a bare 'trace' substring also appears inside 'dynatrace', which
+  // must route to observability/external-obs instead (see below) — an unbounded match would always
+  // steal it here first.
+  { key: 'monitoring', re: /알람|지표|로그변경|cloudwatch|cloudtrail|alarm|metric|who changed|audit|loki|tempo|mimir|opensearch|\btrace\b|트레이스/i },
   { key: 'iac', re: /드리프트|스택|terraform|cloudformation|\bcdk\b|drift|stack|iac/i },
   // ops = inventory_read MCP home: topology, unused/orphan resources, and the load-balancer /
   // target-group / CloudFront *listing* tools live here (network only does connectivity).
   { key: 'ops', re: /미사용|안 ?쓰는|놀고 ?있는|orphan|고아|unused|인벤토리|inventory|리소스 ?(현황|목록|정리)|정리하|leftover|미연결|unattached|미할당|토폴로지|topology|origin|\btg\b|로드 ?밸런서|load ?balancer|\belb\b|\balb\b|\bnlb\b|타겟 ?그룹|대상 ?그룹|target ?group|cloudfront|클라우드프론트|리스너|listener/i },
-  // observability = the connectors actually moved here: Prometheus (PromQL) + ClickHouse (SQL/otel).
-  // Match only EXPLICIT datasource identifiers; ambiguous generic terms (metric/latency/p99) are left to
-  // the LLM classifier so they don't steal CloudWatch's 'metric'. Loki/Tempo/Mimir stay on monitoring.
-  { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스/i },
+  // observability = external-obs: the connectors actually moved here (Prometheus/ClickHouse) PLUS
+  // every ADR-017 curated official-vendor MCP preset (catalog.py MCP_SERVER_TARGETS 'gateway' field
+  // — all currently 'external-obs'). Grafana/Datadog/Dynatrace/Splunk/New Relic/Jaeger have NO
+  // legacy lambda target anywhere, so this is their ONLY chat path (2026-07-31 kiro review MAJOR
+  // finding: Grafana had none at all before this). Match only EXPLICIT vendor/product identifiers;
+  // ambiguous generic terms (metric/latency/p99) are left to the LLM classifier so they don't steal
+  // CloudWatch's 'metric'. Loki/Tempo/Mimir stay on monitoring (see the rule above).
+  { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스|grafana|그라파나|datadog|데이터독|dynatrace|다이나트레이스|splunk|스플렁크|newrelic|new relic|뉴렐릭|jaeger|예거/i },
 ];
 
 /** Choose the agent gateway. A valid pin always wins; otherwise keyword-match; else 'ops'. */

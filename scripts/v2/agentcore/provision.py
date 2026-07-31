@@ -12,11 +12,13 @@ Run from the repo root (so `terraform -chdir=...` resolves) AFTER `terraform app
 """
 import argparse
 import copy
+import ipaddress
 import json
 import os
 import subprocess
 import sys
 import time
+from urllib.parse import urlparse
 
 import boto3
 from botocore.exceptions import ClientError
@@ -107,9 +109,20 @@ def _inject_account(tools):
     return out
 
 
-def ensure_targets(ctrl, ac, gw_ids):
-    """Slice targets, idempotent by name. update_gateway_target on tool-schema drift."""
+def ensure_targets(ctrl, ac, gw_ids, skip_names=frozenset()):
+    """Slice targets, idempotent by name. update_gateway_target on tool-schema drift.
+
+    skip_names: legacy TARGETS names that ensure_mcp_server_targets owns THIS run (the preset is
+    active or actively cutting over). Without this, ensure_targets (which only looks at whether
+    the lambda_arn is still in the tf output — true for the whole ADR-017 deprecation window) would
+    recreate a legacy target that a PRIOR run's ensure_mcp_server_targets retired, and THIS run's
+    ensure_mcp_server_targets would retire it again seconds later — flapping the target into
+    existence and back out every single provisioner run (kiro review MAJOR finding, 2026-07-31),
+    which is exactly the duplicate-tool-name window the retire ordering is meant to prevent."""
     for tname, spec in catalog.TARGETS.items():
+        if tname in skip_names:
+            log(f"target:{tname}", "SKIP", "superseded by an active ADR-017 mcp-server preset — owned by ensure_mcp_server_targets this run")
+            continue
         gw_id = gw_ids.get(spec["gateway"])
         if not gw_id:
             log(f"target:{tname}", "ERR", f"gateway {spec['gateway']} missing")
@@ -146,10 +159,46 @@ def ensure_targets(ctrl, ac, gw_ids):
             log(f"target:{tname}", "ERR", str(e)[:140])
 
 
+def _endpoint_blocked(endpoint):
+    """ADR-017 defense-in-depth (kiro review MAJOR finding, 2026-07-31): official_mcp_endpoints is
+    an https-only tfvars map (enforced by ai.tf's variable validation block at plan time), but a
+    tfvars edit can be applied without ever re-running that validation against code that already
+    changed — this is the second, runtime check. Mirrors the ALWAYS-BLOCKED subset of
+    web/lib/ssrf-guard.ts isAlwaysBlockedHost (metadata/loopback/link-local/multicast/unspecified) —
+    RFC1918 private is deliberately ALLOWED (several ADR-017 presets are explicitly self-hosted
+    in-VPC per catalog.py's own comments, e.g. ClickHouse/Grafana/Splunk). Returns a reason string
+    if blocked, else None. A non-literal hostname (the common case) is not resolved here — same
+    deferral to connect time as the TS guard."""
+    try:
+        parsed = urlparse(endpoint)
+    except ValueError:
+        return "unparsable URL"
+    if parsed.scheme != "https":
+        return f"scheme {parsed.scheme!r} is not https"
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return "no host in URL"
+    if host == "localhost" or host.endswith(".localhost"):
+        return "loopback hostname"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None  # non-literal hostname
+    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or str(ip) == "255.255.255.255":
+        return f"IP {ip} is loopback/link-local/multicast/unspecified (always blocked)"
+    return None
+
+
 def _load_official_mcp_secret(ac):
     """ADR-017: preset credentials live in the SAME shared secret the web BFF writes connector
-    credentials into (web/lib/integration-credentials.ts), keyed by preset_key — e.g.
-    {"datadog": {"token": "..."}}.
+    credentials into (web/lib/integration-credentials.ts), under the NAMESPACED key
+    "mcp:<preset_key>" — e.g. {"mcp:datadog": {"token": "..."}}. The plain (non-namespaced)
+    preset_key is a SEPARATE map entry owned by the datasource-connector kind-mirror
+    (mirrorDefaultCredential) for the 5 presets that are ALSO a DATASOURCE_KINDS member
+    (clickhouse/tempo/jaeger/dynatrace/datadog) — reusing that key for the MCP credential clobbers
+    the connector's {endpoint, authType, ...} shape and vice versa (kiro review MAJOR finding,
+    2026-07-31). setMcpPresetCredential (web/lib/integration-credentials.ts) writes the same
+    "mcp:<preset_key>" key.
 
     Returns (secret_map, read_ok). read_ok=False means the READ OR PARSE ITSELF failed (a
     transient Secrets Manager error, e.g. throttling, or malformed JSON) — the caller must NOT
@@ -264,7 +313,7 @@ def _retire_gateway_target(ctrl, gw_id, existing, tname, reason):
         log(f"target:{tname}", "ERR", str(e)[:140])
 
 
-def ensure_mcp_server_targets(ctrl, ac, gw_ids):
+def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=None):
     """ADR-017: register curated official-vendor MCP servers as remote `mcpServer` gateway targets.
 
     Ordering is deliberate and safety-critical (2026-07-31 kiro review, findings #1/#2 on the first
@@ -280,10 +329,16 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
          the legacy delete BEFORE the new target was confirmed live was the outage bug (finding #1):
          a missing credential or a create/update failure would delete the working old tool with
          nothing to replace it.
+
+    secrets/secrets_read_ok: pass the values from a caller-side _load_official_mcp_secret(ac) call
+    to avoid a second Secrets Manager read when main() already needed one (to compute the
+    ensure_targets legacy-skip set); when omitted (e.g. every existing test), loads them itself.
     """
     endpoints = ac.get("official_mcp_endpoints") or {}
     lambda_arns = ac.get("lambda_arns") or {}
-    secrets, secrets_read_ok = _load_official_mcp_secret(ac)
+    read_only_acks = ac.get("official_mcp_read_only_ack") or {}
+    if secrets is None:
+        secrets, secrets_read_ok = _load_official_mcp_secret(ac)
     existing_by_gw = {}  # gateway short-key -> {target_name: target}, fetched once per gateway
 
     def gw_existing(gw_key):
@@ -304,9 +359,18 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
 
         auth = spec["auth"]
         provider_name = f"awsops-v2-{preset_key}-mcp"
+
+        if endpoint:
+            blocked_reason = _endpoint_blocked(endpoint)
+            if blocked_reason:
+                log(f"target:{tname}", "ERR", f"official_mcp_endpoints['{preset_key}'] rejected: {blocked_reason}")
+                _retire_gateway_target(ctrl, gw_id, existing, tname, "endpoint failed the SSRF/scheme guard — retiring")
+                _delete_api_key_provider(ctrl, provider_name)
+                continue
+
         token = None
         if auth["mode"] == "api_key":
-            raw = secrets.get(preset_key)
+            raw = secrets.get(f"mcp:{preset_key}")
             token = raw.get("token") if isinstance(raw, dict) else None
 
         if auth["mode"] == "api_key" and not token and not secrets_read_ok:
@@ -316,6 +380,26 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
             # a transient API blip would otherwise mass-deprovision every configured preset). Fail
             # safe: skip this preset, touch nothing.
             log(f"target:{tname}", "SKIP", f"could not read credentials secret this run for preset '{preset_key}' — leaving any existing target/provider untouched")
+            continue
+
+        if endpoint and not read_only_acks.get(preset_key):
+            # CRITICAL (kiro review, 2026-07-31): unlike the Lambda TARGETS (toolSchema.inlinePayload
+            # hard-limits the exposed tool set), an mcpServer target has NO server-side tool
+            # allowlist — it exposes 100% of whatever the vendor's remote MCP server advertises,
+            # write tools included. ADR-017's read_only_note (spec["read_only_note"]) is currently
+            # "trust the vendor's own config" (RBAC scope / --disable-write / etc); provision.py has
+            # no control-plane API to introspect the vendor's live tool list (tools/list only exists
+            # on the data-plane MCP endpoint, not bedrock-agentcore-control) so it cannot verify that
+            # claim itself. Fail CLOSED: require an explicit per-preset operator acknowledgment
+            # (terraform var.official_mcp_read_only_ack[preset_key]=true) that the read_only_note
+            # control was actually verified on the vendor side, before provisioning at all — default
+            # {} means nothing provisions until acked.
+            log(f"target:{tname}", "SKIP",
+                f"official_mcp_read_only_ack['{preset_key}'] not set — refusing to provision an "
+                f"unenforced write surface ({spec.get('read_only_note', 'no read-only note')}); "
+                "ack in terraform.tfvars only after verifying the vendor-side read-only control")
+            _retire_gateway_target(ctrl, gw_id, existing, tname, "read-only ack missing — retiring")
+            _delete_api_key_provider(ctrl, provider_name)
             continue
 
         if not endpoint or (auth["mode"] == "api_key" and not token):
@@ -399,8 +483,40 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids):
             continue
 
         legacy_name = catalog.legacy_target_name(preset_key)
-        if legacy_name and legacy_name in existing:
-            _retire_gateway_target(ctrl, gw_id, existing, legacy_name, f"superseded by {tname} (ADR-017 cutover, confirmed READY)")
+        if legacy_name:
+            # The legacy lambda target may live on a DIFFERENT gateway than this preset's new
+            # mcpServer target (e.g. tempo-mcp-target is on 'monitoring' while
+            # tempo-mcp-server-target is on 'external-obs') — searching only `existing` (this
+            # preset's own gateway) can never find it there, so it would live forever (kiro review
+            # MAJOR finding, 2026-07-31). Look up the legacy target's OWN gateway from the catalog.
+            legacy_gw_key = (catalog.TARGETS.get(legacy_name) or {}).get("gateway", spec["gateway"])
+            legacy_gw_id, legacy_existing = gw_existing(legacy_gw_key)
+            if legacy_gw_id and legacy_name in legacy_existing:
+                _retire_gateway_target(ctrl, legacy_gw_id, legacy_existing, legacy_name,
+                                        f"superseded by {tname} (ADR-017 cutover, confirmed READY)")
+
+
+def _cutover_preset_keys(ac, secrets, secrets_read_ok):
+    """Preset keys ensure_mcp_server_targets will treat as ACTIVE this run — same conditions as its
+    own SKIP/retire branch (endpoint configured, ack'd, and — for api_key auth — a credential
+    present OR the secret read itself failed, mirroring that function's own fail-safe so this
+    helper and ensure_mcp_server_targets never disagree). Used by main() to tell ensure_targets
+    which legacy lambda targets are owned by ensure_mcp_server_targets this run (see
+    ensure_targets' skip_names docstring for why that matters — otherwise the legacy target flaps)."""
+    endpoints = ac.get("official_mcp_endpoints") or {}
+    read_only_acks = ac.get("official_mcp_read_only_ack") or {}
+    active = set()
+    for spec in catalog.MCP_SERVER_TARGETS.values():
+        preset_key = spec["preset_key"]
+        if not endpoints.get(preset_key) or not read_only_acks.get(preset_key):
+            continue
+        if spec["auth"]["mode"] == "api_key":
+            raw = secrets.get(f"mcp:{preset_key}")
+            token = raw.get("token") if isinstance(raw, dict) else None
+            if not token and secrets_read_ok:
+                continue
+        active.add(preset_key)
+    return active
 
 
 def prune_moved_targets(ctrl, gw_ids):
@@ -568,8 +684,14 @@ def main():
 
     print(f"\n=== AWSops v2 AgentCore provisioner (region={region}) ===")
     gw_ids = ensure_gateways(ctrl, ac)
-    ensure_targets(ctrl, ac, gw_ids)
-    ensure_mcp_server_targets(ctrl, ac, gw_ids)  # ADR-017 curated official-vendor MCP presets
+    # Load the ADR-017 credentials secret ONCE and share it with both calls below — also lets
+    # ensure_targets know which legacy lambda targets ensure_mcp_server_targets owns this run (see
+    # ensure_targets' skip_names docstring: without this a legacy target flaps every run).
+    secrets, secrets_read_ok = _load_official_mcp_secret(ac)
+    legacy_skip = {catalog.legacy_target_name(pk) for pk in _cutover_preset_keys(ac, secrets, secrets_read_ok)}
+    legacy_skip.discard(None)
+    ensure_targets(ctrl, ac, gw_ids, skip_names=legacy_skip)
+    ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=secrets, secrets_read_ok=secrets_read_ok)  # ADR-017 curated official-vendor MCP presets
     prune_moved_targets(ctrl, gw_ids)  # remove split-brain orphans after a catalog gateway move
     memory_id = ensure_memory(ctrl)
     interpreter_id = ensure_interpreter(ctrl)

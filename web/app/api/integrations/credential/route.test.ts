@@ -3,14 +3,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const verifyUser = vi.fn();
 const isAdmin = vi.fn();
 const setIntegrationCredential = vi.fn();
+const setMcpPresetCredential = vi.fn();
 const getConfiguredSlugs = vi.fn();
+const getConfiguredMcpPresetSlugs = vi.fn();
 const getConfiguredIds = vi.fn();
 
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/integration-credentials', () => ({
   setIntegrationCredential: (...a: unknown[]) => setIntegrationCredential(...a),
+  setMcpPresetCredential: (...a: unknown[]) => setMcpPresetCredential(...a),
   getConfiguredSlugs: (...a: unknown[]) => getConfiguredSlugs(...a),
+  getConfiguredMcpPresetSlugs: (...a: unknown[]) => getConfiguredMcpPresetSlugs(...a),
   getConfiguredIds: (...a: unknown[]) => getConfiguredIds(...a),
 }));
 
@@ -21,12 +25,14 @@ function req(body: unknown, method = 'PUT') {
 }
 
 beforeEach(() => {
-  for (const m of [verifyUser, isAdmin, setIntegrationCredential, getConfiguredSlugs, getConfiguredIds]) m.mockReset();
+  for (const m of [verifyUser, isAdmin, setIntegrationCredential, setMcpPresetCredential, getConfiguredSlugs, getConfiguredMcpPresetSlugs, getConfiguredIds]) m.mockReset();
   process.env.AURORA_ENDPOINT = 'aurora.example';
   verifyUser.mockResolvedValue({ sub: 'u', email: 'a@x' });
   isAdmin.mockResolvedValue(true);
   setIntegrationCredential.mockResolvedValue(undefined);
+  setMcpPresetCredential.mockResolvedValue(undefined);
   getConfiguredSlugs.mockResolvedValue(['notion']);
+  getConfiguredMcpPresetSlugs.mockResolvedValue([]);
   getConfiguredIds.mockResolvedValue([]);
 });
 
@@ -83,6 +89,22 @@ describe('PUT', () => {
     const { PUT } = await import('./route');
     expect((await PUT(req({ slug: 'evil', secret: { token: 'x' } }))).status).toBe(400);
   });
+
+  it('official=true (ADR-017 MCP preset) stores via setMcpPresetCredential, not setIntegrationCredential', async () => {
+    const { PUT } = await import('./route');
+    const resp = await PUT(req({ slug: 'clickhouse', secret: { token: 'x' }, official: true }));
+    expect(resp.status).toBe(200);
+    expect(setMcpPresetCredential).toHaveBeenCalledWith('clickhouse', { token: 'x' });
+    expect(setIntegrationCredential).not.toHaveBeenCalled();
+  });
+
+  it('official absent (legacy/Notion/datasource path) still stores via setIntegrationCredential', async () => {
+    const { PUT } = await import('./route');
+    const resp = await PUT(req({ slug: 'notion', secret: { token: 'x' } }));
+    expect(resp.status).toBe(200);
+    expect(setIntegrationCredential).toHaveBeenCalledWith('notion', { token: 'x' });
+    expect(setMcpPresetCredential).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET', () => {
@@ -95,6 +117,19 @@ describe('GET', () => {
     const body = await resp.json();
     expect(new Set(body.configured)).toEqual(new Set(['notion', 'datadog']));
     expect(new Set(body.configuredIds)).toEqual(new Set(['11', '12']));
+  });
+
+  it('merges the namespaced ADR-017 mcp-preset slugs into `configured` (dedup, plain slugs only)', async () => {
+    // clickhouse is configured via the OLD plain-slug path (a datasource save) AND the NEW
+    // namespaced mcp-preset path (a ConnectorsTab save) — must appear once, as 'clickhouse'.
+    getConfiguredSlugs.mockResolvedValue(['notion', 'clickhouse']);
+    getConfiguredMcpPresetSlugs.mockResolvedValue(['clickhouse', 'datadog']);
+    getConfiguredIds.mockResolvedValue([]);
+    const { GET } = await import('./route');
+    const resp = await GET(req(undefined, 'GET'));
+    expect(resp.status).toBe(200);
+    const body = await resp.json();
+    expect(new Set(body.configured)).toEqual(new Set(['notion', 'clickhouse', 'datadog']));
   });
 
   it('NARROW downgrade: Secrets Manager AccessDenied → 200 empty (not 500)', async () => {

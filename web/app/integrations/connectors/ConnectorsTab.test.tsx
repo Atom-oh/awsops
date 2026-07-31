@@ -44,7 +44,22 @@ describe('ConnectorsTab', () => {
     await waitFor(() => {
       const put = calls.find((c) => c.method === 'PUT');
       expect(put).toBeTruthy();
-      expect(JSON.parse(put!.body!)).toEqual({ slug: 'notion', secret: { token: 'secret_x' } });
+      // official=false for Notion (its hosted MCP is OAuth-only — see mcp-presets.ts) — stays on
+      // the legacy plain-slug credential path, unlike the ADR-017 official presets.
+      expect(JSON.parse(put!.body!)).toEqual({ slug: 'notion', secret: { token: 'secret_x' }, official: false });
+    });
+  });
+
+  it('an ADR-017 preset (official=true) sends official:true so it lands under the namespaced mcp: key', async () => {
+    render(<ConnectorsTab canManage />);
+    await waitFor(() => expect(screen.getByText('Datadog')).toBeTruthy());
+    const datadogCard = screen.getByText('Datadog').closest('[class*="p-4"]') as HTMLElement;
+    fireEvent.change(within(datadogCard).getByPlaceholderText(/토큰 붙여넣기/), { target: { value: 'dd_tok' } });
+    fireEvent.click(within(datadogCard).getByRole('button', { name: '연결' }));
+    await waitFor(() => {
+      const put = calls.find((c) => c.method === 'PUT');
+      expect(put).toBeTruthy();
+      expect(JSON.parse(put!.body!)).toEqual({ slug: 'datadog', secret: { token: 'dd_tok' }, official: true });
     });
   });
 

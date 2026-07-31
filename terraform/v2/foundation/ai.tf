@@ -74,6 +74,27 @@ variable "official_mcp_endpoints" {
   type        = map(string)
   description = "preset_key -> MCP server https endpoint (ADR-017). Deployment-specific; unset presets SKIP. e.g. { datadog = \"https://mcp.datadoghq.com/v1/mcp\" }."
   default     = {}
+  # kiro review MAJOR finding, 2026-07-31: without this, an http:// typo would send the bearer
+  # token in plaintext, and an arbitrary URL is a de facto BYO-MCP / SSRF-adjacent escape hatch.
+  # provision.py additionally re-checks scheme (belt-and-suspenders, since a tfvars change doesn't
+  # require a plan/apply of THIS validation to take effect on an existing endpoint value).
+  validation {
+    condition     = alltrue([for v in values(var.official_mcp_endpoints) : can(regex("^https://", v))])
+    error_message = "every official_mcp_endpoints value must be an https:// URL (ADR-017 presets carry a bearer/API-key credential — plaintext http would leak it)."
+  }
+}
+
+# ADR-017 CRITICAL gate (kiro review, 2026-07-31): provision.py has no server-side tool allowlist
+# for mcpServer targets (unlike the Lambda targets' toolSchema.inlinePayload) — it exposes 100% of
+# whatever the vendor's remote MCP server advertises. Each preset's read_only_note
+# (scripts/v2/agentcore/catalog.py MCP_SERVER_TARGETS) describes a VENDOR-SIDE control (RBAC scope,
+# --disable-write, etc) that provision.py cannot verify from the control plane. This var is the
+# explicit, per-preset, dated operator acknowledgment that the vendor-side control was actually
+# checked before flipping it on — default {} means NOTHING provisions (fail-closed).
+variable "official_mcp_read_only_ack" {
+  type        = map(bool)
+  description = "preset_key -> operator has verified the read-only vendor-side control described in that preset's catalog.py read_only_note (ADR-017). Required in addition to official_mcp_endpoints; unacked presets SKIP (and retire). Default {} = nothing provisions."
+  default     = {}
 }
 
 locals {
@@ -756,6 +777,10 @@ output "agentcore" {
     # ADR-017 — curated official-MCP preset endpoints (empty map when official_mcp_enabled=false).
     # provision.py SKIPs any catalog.MCP_SERVER_TARGETS preset whose key is missing here.
     official_mcp_endpoints = local.official_mcp_count > 0 ? var.official_mcp_endpoints : {}
+    # ADR-017 CRITICAL gate — provision.py refuses to provision (and retires any live target for)
+    # any preset key not explicitly true here, regardless of endpoint/credential. See
+    # var.official_mcp_read_only_ack above.
+    official_mcp_read_only_ack = local.official_mcp_count > 0 ? var.official_mcp_read_only_ack : {}
     # Same secret the web BFF writes preset credentials into (web/lib/integration-credentials.ts,
     # key = preset_key, e.g. secret["datadog"]) — provision.py reads it to create/refresh each
     # preset's AgentCore Identity API-key credential provider. null when integrations_enabled=false.

@@ -30,14 +30,17 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const connect = async (slug: string) => {
+  const connect = async (slug: string, official: boolean) => {
     const t = (token[slug] ?? '').trim();
     if (!t) return;
     setBusy(slug); setMsg('');
     try {
       const r = await fetch('/api/integrations/credential', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ slug, secret: { token: t } }),
+        // official=true (all ADR-017 presets except Notion) stores under the namespaced "mcp:"
+        // key so it can never clobber the plain-slug datasource-connector kind-mirror that 5 of
+        // these slugs (clickhouse/tempo/jaeger/dynatrace/datadog) also own.
+        body: JSON.stringify({ slug, secret: { token: t }, official }),
       });
       if (!r.ok) { setMsg((await r.json().catch(() => ({}))).error || tt(`오류 ${r.status}`)); return; }
       setToken((s) => ({ ...s, [slug]: '' })); // never keep the secret in state
@@ -83,7 +86,7 @@ export default function ConnectorsTab({ canManage = false }: { canManage?: boole
             {canManage ? (
               <div className="flex gap-2">
                 <Input type="password" value={token[c.slug] ?? ''} onChange={(e) => setToken((s) => ({ ...s, [c.slug]: e.target.value }))} placeholder={configured.has(c.slug) ? tt('토큰 교체…') : tt('토큰 붙여넣기')} />
-                <Button onClick={() => connect(c.slug)} disabled={busy === c.slug || !(token[c.slug] ?? '').trim()}>
+                <Button onClick={() => connect(c.slug, c.official)} disabled={busy === c.slug || !(token[c.slug] ?? '').trim()}>
                   {configured.has(c.slug) ? tt('교체') : tt('연결')}
                 </Button>
               </div>

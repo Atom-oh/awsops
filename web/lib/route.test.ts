@@ -23,6 +23,17 @@ describe('pickGateway', () => {
   it('ignores a pin that is not a known section', () => {
     expect(pickGateway('이번 달 비용', 'bogus')).toBe('cost');
   });
+  // Regression (2026-07-31 kiro review MAJOR finding): Grafana has NO legacy lambda target on
+  // any gateway — its only tools are the ADR-017 external-obs mcpServer preset. Before this fix
+  // 'grafana' routed to 'monitoring', which has no Grafana tools at all (dead-end route).
+  it('routes grafana (and other legacy-target-less ADR-017 presets) to observability/external-obs', () => {
+    expect(pickGateway('grafana 대시보드 좀 보여줘')).toBe('observability');
+    expect(pickGateway('check the datadog dashboard')).toBe('observability');
+    expect(pickGateway('dynatrace 확인해줘')).toBe('observability'); // avoid Korean '지표' which is monitoring's own keyword
+  });
+  it('still routes tempo/trace to monitoring (legacy tempo-mcp-target lives there during the ADR-017 deprecation window)', () => {
+    expect(pickGateway('tempo trace 조회')).toBe('monitoring');
+  });
 });
 
 describe('matchedSections', () => {

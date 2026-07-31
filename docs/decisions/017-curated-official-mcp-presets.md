@@ -32,12 +32,12 @@ Prometheus·Mimir는 조사 시점(2026-07) 공식 MCP가 없어(community만 �
 - 큐레이션이므로 ADR-007이 이미 그려둔 "admin 등록 벤더 프리셋만 허용" 라인 안에서 처리된다 — 새 거버넌스 계층이 필요 없다.
 
 ### Negative / Trade-offs
-- 원격 target은 툴 스키마를 서버가 소유한다(`listingMode=DEFAULT`가 캐싱) — 우리 쪽 `toolAllowlist` 서버측 강제(ADR-004)는 여전히 유지되지만, 툴의 정확한 인풋 스키마 변경은 우리가 통제할 수 없다.
+- **원격 target에는 우리 쪽 서버측 toolAllowlist 강제가 없다(2026-07-31 kiro 리뷰로 정정).** Lambda target(`mcp.lambda`)은 `toolSchema.inlinePayload`가 노출 툴 집합을 하드 리밋하지만, `mcpServer` target은 `listingMode=DEFAULT`로 벤더 서버가 광고하는 툴 전부(쓰기 툴 포함 가능)를 그대로 노출한다 — control-plane API에는 `tools/list` 동등 기능이 없어 provision.py가 벤더의 실제 툴 목록을 검증할 수 없다. `read_only_note`(catalog.py)는 여전히 "벤더측 설정(RBAC 스코프/`--disable-write`/preview 등)을 신뢰"하는 텍스트 메모일 뿐이다. **완화**: `terraform.tfvars`의 `official_mcp_read_only_ack[preset_key]`를 운영자가 `read_only_note`를 실제로 검증한 뒤에만 명시적으로 `true`로 켜야 하며, 비어있으면(기본값) provision.py가 해당 프리셋을 fail-closed로 SKIP(및 기존 target 회수)한다 — 이것은 벤더 측 컨트롤을 provision.py가 대신 검증해주는 것이 아니라, "운영자가 검증했다"는 사실을 기록하는 게이트다.
 - 벤더별 인증 모양이 제각각이라(헤더 2개 요구 등) 프리셋마다 검증이 필요하고, 일부(New Relic 등)는 preview 단계라 변경 가능성이 있다.
 - 전환 기간 동안 자체 람다와 원격 target이 공존할 수 있어 kind 단위 순차 전환·상호배제 검증이 필요하다.
 
 ## 6 Pillars (보안 중심) / 6 Pillars (security-focused)
-- **Security**: capability=read 고정, 서버측 `exposed_tools`/toolAllowlist 유지, 자격증명은 기존 Secrets Manager ARN-ref 경로 재사용(신규 평문 저장 없음). `custom_mcp` 폐기 유지로 임의 엔드포인트 attack surface 확장 없음.
+- **Security**: capability=read 고정. **서버측 toolAllowlist 강제는 mcpServer target에는 없다** (위 Trade-offs 참조) — 대신 `official_mcp_read_only_ack`(기본 `{}` = 미승인 프리셋은 provisioning 거부)로 "운영자가 벤더측 read-only 컨트롤을 확인했다"는 명시적 acknowledgment를 요구하는 fail-closed 게이트로 대체한다. `official_mcp_endpoints`는 `https://`만 허용(Terraform variable validation + provision.py 런타임 재검증, 메타데이터/루프백/링크로컬 호스트 차단)하여 토큰 평문전송·SSRF-adjacent 임의 엔드포인트를 막는다. 자격증명은 기존 Secrets Manager 시크릿을 재사용하되 `mcp:<preset_key>` 네임스페이스 키에 저장(같은 슬러그를 쓰는 datasource-connector kind-mirror와 충돌 방지). `custom_mcp` 폐기 유지로 임의 엔드포인트 attack surface 확장 없음.
 - **Operational Excellence**: 벤더 유지보수로 우리 커넥터 코드의 장기 유지보수 부담 감소. `official_mcp_enabled` 기본 false → 게이트 규율(§1) 준수, `plan`=무변경.
 - **Reliability**: 기존 SKIP-on-missing-endpoint·멱등 재실행 패턴 재사용 — 전환 실패 시 자체 람다로 즉시 되돌릴 수 있는 롤백 경로 보존(람다 소스 삭제하지 않음).
 - **Cost**: default-off=$0. 켜져도 게이트웨이 target 등록 자체는 무료(Lambda 호출 비용만 제거).
