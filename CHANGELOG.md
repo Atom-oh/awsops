@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `eks_registrations` — EKS runtime registration (in-app query onboarding; EventBridge auto-register)
 - `worker_jobs.requested_by` — server-derived requester identity on every enqueue, used to scope
   `GET /api/jobs`(`/[id]`) to the caller's own jobs (2026-07-22 pentest report remediation)
+- `worker_jobs` idempotency-per-requester — replaces the single global `UNIQUE(idempotency_key)`
+  with two partial unique indexes (per-requester, plus a NULL-requester bucket for internal
+  enqueues), closing a cross-user DoS where a guessable future idempotency key could be
+  pre-inserted under a victim's identity (PR #195 round-2 review)
 
 ### Security
 
@@ -428,6 +432,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `eks_registrations` — EKS 런타임 등록(인앱 조회 온보딩; EventBridge 자동등록)
 - `worker_jobs.requested_by` — 모든 enqueue에 서버 측에서 유도한 요청자 identity 기록. `GET /api/jobs`(`/[id]`)를
   호출자 본인 작업으로 범위 제한하는 데 사용(2026-07-22 pentest 리포트 후속 조치)
+- `worker_jobs` 요청자별 idempotency — 단일 글로벌 `UNIQUE(idempotency_key)`를 부분 유니크 인덱스 2개(요청자별 +
+  내부 enqueue용 NULL-요청자 버킷)로 대체. 예측 가능한 미래 idempotency key를 피해자 identity로 선점
+  삽입해두는 cross-user DoS를 차단(PR #195 round-2 리뷰)
 
 ### 보안
 

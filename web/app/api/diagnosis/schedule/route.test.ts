@@ -35,7 +35,7 @@ describe('GET /api/diagnosis/schedule', () => {
     readSchedule.mockResolvedValue(null);
     const body = await (await GET(req())).json();
     expect(body.schedule.enabled).toBe(false);
-    expect(readSchedule).toHaveBeenCalledWith('u1'); // scoped to the caller's sub
+    expect(readSchedule).toHaveBeenCalledWith('u1', 'u1'); // scoped to the caller's sub (== identity when no email)
   });
 
   it('returns the stored schedule', async () => {
@@ -63,7 +63,7 @@ describe('PUT /api/diagnosis/schedule', () => {
     upsertSchedule.mockResolvedValue({ scheduleType: 'monthly', enabled: true, tier: 'mid', model: null, nextRunAt: 'n', lastRunAt: null });
     const res = await PUT(req({ scheduleType: 'monthly', enabled: true, tier: 'mid' }));
     expect(res.status).toBe(200);
-    expect(upsertSchedule).toHaveBeenCalledWith('u1', expect.objectContaining({ scheduleType: 'monthly', enabled: true, tier: 'mid' }));
+    expect(upsertSchedule).toHaveBeenCalledWith('u1', expect.objectContaining({ scheduleType: 'monthly', enabled: true, tier: 'mid' }), 'u1');
     expect((await res.json()).schedule.scheduleType).toBe('monthly');
   });
 
@@ -71,7 +71,7 @@ describe('PUT /api/diagnosis/schedule', () => {
     verifyUser.mockResolvedValue({ sub: 'u1' });
     upsertSchedule.mockResolvedValue({ scheduleType: 'weekly', enabled: false, tier: 'mid', model: null, nextRunAt: 'n', lastRunAt: null });
     await PUT(req({ scheduleType: 'weekly', enabled: false, user_sub: 'victim', userSub: 'victim' }));
-    expect(upsertSchedule).toHaveBeenCalledWith('u1', expect.anything()); // authed sub, not the body's
+    expect(upsertSchedule).toHaveBeenCalledWith('u1', expect.anything(), 'u1'); // authed sub, not the body's
   });
 });
 
@@ -85,13 +85,32 @@ describe('GET/PUT /api/diagnosis/schedule scope by identity() (email-preferring)
     verifyUser.mockResolvedValue({ sub: 'u1', email: 'u1@x.io' });
     readSchedule.mockResolvedValue(null);
     await GET(req());
-    expect(readSchedule).toHaveBeenCalledWith('u1@x.io');
+    expect(readSchedule).toHaveBeenCalledWith('u1@x.io', 'u1');
   });
 
   it('PUT upserts the schedule under the email, not the sub, when both claims are present', async () => {
     verifyUser.mockResolvedValue({ sub: 'u1', email: 'u1@x.io' });
     upsertSchedule.mockResolvedValue({ scheduleType: 'weekly', enabled: true, tier: 'mid', model: null, nextRunAt: 'n', lastRunAt: null });
     await PUT(req({ scheduleType: 'weekly', enabled: true }));
-    expect(upsertSchedule).toHaveBeenCalledWith('u1@x.io', expect.anything());
+    expect(upsertSchedule).toHaveBeenCalledWith('u1@x.io', expect.anything(), 'u1');
+  });
+});
+
+// PR #195 round-3 review MAJOR: round-2's identity() switch has no bulk migration for rows created
+// before it (no queryable sub->email mapping exists to backfill from) — the route must thread the
+// caller's raw sub through as a fallback so lib/diagnosis-schedule.ts can self-heal legacy rows.
+describe('GET/PUT thread the raw sub through as a legacy fallback for pre-identity() rows', () => {
+  it('GET passes both identity() and the raw sub, even with no email claim', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u1' });
+    readSchedule.mockResolvedValue(null);
+    await GET(req());
+    expect(readSchedule).toHaveBeenCalledWith('u1', 'u1');
+  });
+
+  it('PUT passes both identity() and the raw sub, even with no email claim', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u1' });
+    upsertSchedule.mockResolvedValue({ scheduleType: 'weekly', enabled: true, tier: 'mid', model: null, nextRunAt: 'n', lastRunAt: null });
+    await PUT(req({ scheduleType: 'weekly', enabled: true }));
+    expect(upsertSchedule).toHaveBeenCalledWith('u1', expect.anything(), 'u1');
   });
 });

@@ -48,23 +48,54 @@ function mapRow(r: Row): DiagnosisSchedule {
   };
 }
 
-/** The caller's current schedule, or null if they have none yet. Scoped by user_sub (no cross-user read). */
-export async function readSchedule(userSub: string): Promise<DiagnosisSchedule | null> {
-  const { rows } = await getPool().query<Row>(
-    `SELECT schedule_type, enabled, next_run_at, last_run_at, config
-       FROM report_schedules WHERE user_sub = $1 ORDER BY enabled DESC, updated_at DESC LIMIT 1`,
-    [userSub],
+const SELECT_SQL = `SELECT schedule_type, enabled, next_run_at, last_run_at, config
+     FROM report_schedules WHERE user_sub = $1 ORDER BY enabled DESC, updated_at DESC LIMIT 1`;
+
+// PR #195 round-3 review MAJOR: round-2 switched ownership keying from the raw Cognito `sub` to
+// identity() (email-preferring), but rows created before that switch are still keyed by the old raw
+// sub — there's no bulk-rekey table to backfill from (Cognito sub->email isn't stored anywhere
+// queryable; this app is stateless-JWT). Self-heal on access instead: whenever a caller's legacy
+// sub differs from their current identity(), fold any legacy-keyed row into the identity-keyed slot
+// (per schedule_type, only where that slot is free — uq_schedule (user_sub, schedule_type) would
+// otherwise conflict), and disable whatever legacy row couldn't move (a stale duplicate) so it can
+// never survive un-migrated and double-fire alongside a newly created one.
+async function migrateLegacyRows(identityKey: string, legacySub: string): Promise<void> {
+  const pool = getPool();
+  await pool.query(
+    `UPDATE report_schedules r SET user_sub = $1
+       WHERE r.user_sub = $2
+         AND NOT EXISTS (SELECT 1 FROM report_schedules r2 WHERE r2.user_sub = $1 AND r2.schedule_type = r.schedule_type)`,
+    [identityKey, legacySub],
   );
-  return rows.length ? mapRow(rows[0]) : null;
+  await pool.query(`UPDATE report_schedules SET enabled = false WHERE user_sub = $1`, [legacySub]);
+}
+
+/**
+ * The caller's current schedule, or null if they have none yet. Scoped by user_sub (no cross-user
+ * read). `legacySub` (the caller's raw Cognito sub) is checked as a fallback when the identity()-keyed
+ * lookup comes up empty, to self-heal rows created before the identity() switch (see migrateLegacyRows).
+ */
+export async function readSchedule(userSub: string, legacySub?: string): Promise<DiagnosisSchedule | null> {
+  const pool = getPool();
+  const { rows } = await pool.query<Row>(SELECT_SQL, [userSub]);
+  if (rows.length) return mapRow(rows[0]);
+  if (!legacySub || legacySub === userSub) return null;
+  await migrateLegacyRows(userSub, legacySub);
+  const { rows: migrated } = await pool.query<Row>(SELECT_SQL, [userSub]);
+  return migrated.length ? mapRow(migrated[0]) : null;
 }
 
 /** Create/replace the caller's schedule. next_run_at is always recomputed (NOT NULL); `enabled` gates firing. */
 export async function upsertSchedule(
   userSub: string,
   input: { scheduleType: ScheduleFreq; enabled: boolean; tier?: string; model?: string | null; nowISO?: string },
+  legacySub?: string,
 ): Promise<DiagnosisSchedule> {
   const nextRunAt = computeNextRun(input.scheduleType, input.nowISO ?? new Date().toISOString());
   const config = { tier: input.tier ?? 'mid', model: input.model ?? null };
+  // Fold in any pre-identity()-switch row before disabling/upserting, so a legacy row can never
+  // survive un-migrated alongside a freshly created one (see readSchedule/migrateLegacyRows above).
+  if (legacySub && legacySub !== userSub) await migrateLegacyRows(userSub, legacySub);
   // One active schedule per user. The table's conflict key is (user_sub, schedule_type), so changing
   // frequency (e.g. weekly→monthly) would INSERT a new row and leave the previous one enabled — the
   // dispatcher (WHERE enabled) would then fire BOTH, and readSchedule (LIMIT 1) would hide the leak.

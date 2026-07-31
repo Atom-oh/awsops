@@ -19,7 +19,7 @@ export async function assertInventoryTypeAllowed(
   type: string,
   user: Pick<User, 'email' | 'sub' | 'groups'>,
 ): Promise<{ status: number; message: string } | null> {
-  if (!(type in INVENTORY_TYPES)) return { status: 404, message: 'unknown type' };
+  if (!Object.hasOwn(INVENTORY_TYPES, type)) return { status: 404, message: 'unknown type' };
   if (ADMIN_ONLY_TYPES.has(type) && !(await isAdmin(user))) {
     return { status: 403, message: '관리자 전용 메뉴입니다 (IAM)' };
   }

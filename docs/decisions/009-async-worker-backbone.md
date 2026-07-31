@@ -21,8 +21,8 @@ The v2 web service is a **thin-BFF**: heavy / long / OOM-risk work cannot run in
 A single `workers_enabled`-gated durable orchestration spine (default false → idle cost $0). Current net flow:
 
 ```
-POST /api/jobs
-  → worker_jobs (Aurora, status=queued; ledger-first)
+POST /api/jobs (noop/noop-heavy only) · POST /api/diagnosis (report) · POST /api/compliance/run (compliance)
+  → lib/jobs.ts enqueueJob() → worker_jobs (Aurora, status=queued; ledger-first)
   → SQS
   → ESM (Event Source Mapping, kill-switch)
   → dispatcher Lambda (idempotent on job_id)
@@ -47,9 +47,9 @@ POST /api/jobs
 - **Fargate 워커 = `CMD`** (ENTRYPOINT 금지) — SFN `containerOverrides.command`는 CMD를 대체하지만 exec-form ENTRYPOINT엔 append되어 argv 중복 → argparse 실패.
 - **Single Status**: 본 ADR은 단일 Status(Accepted)만 가진다.
 
-**Job 타입 (전부 read-only):** `noop` · `report`(진단 리포트 렌더) · `compliance`(Powerpipe CIS 스캔). 모든 job은 AWS-리소스를 변경하지 않는다.
+**Job 타입 (전부 read-only):** `noop`/`noop-heavy`(범용 `POST /api/jobs`) · `report`(진단 리포트 렌더, `POST /api/diagnosis` 전용 — 클라이언트가 넘긴 report_id로 다른 사용자 리포트를 위조/덮어쓸 수 있어 범용 라우트에서는 거부) · `compliance`(Powerpipe CIS 스캔, `POST /api/compliance/run` 전용, 동일 사유). 모든 job은 AWS-리소스를 변경하지 않는다.
 
-**Job types (all read-only):** `noop`, `report` (diagnosis report render), `compliance` (Powerpipe CIS scan). No job mutates AWS resources.
+**Job types (all read-only):** `noop`/`noop-heavy` (generic `POST /api/jobs`) · `report` (diagnosis report render — `POST /api/diagnosis` only; the generic route rejects it since a client-supplied report_id could forge/overwrite another user's report) · `compliance` (Powerpipe CIS scan — `POST /api/compliance/run` only, same reason). No job mutates AWS resources.
 
 **실행 substrate의 *mutating* 분기는 ADR-005가 관할하며 영구 동결(FROZEN, do-not-enable)이다.** 동일 spine 위에 설계됐던 AWS-리소스 변경 경로는 flag-OFF로 동결되어 있고 본 ADR의 범위가 아니다.
 

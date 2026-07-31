@@ -17,8 +17,8 @@ ops (reports, AI synthesis, large scans, mutating actions) land on top of it in 
 **Flow / 흐름**
 
 ```
-web POST /api/jobs
-  → INSERT worker_jobs (status=queued) + SQS SendMessage {job_id, type, payload, dry_run}
+web POST /api/jobs (noop/noop-heavy only), POST /api/diagnosis, POST /api/compliance/run
+  → lib/jobs.ts enqueueJob() → INSERT worker_jobs (status=queued) + SQS SendMessage {job_id, type, payload, dry_run}
   → SQS Event Source Mapping  ← THE KILL-SWITCH (enable/disable this ESM to pause/resume all dispatch)
   → dispatcher Lambda (no VPC; idempotent on job_id; type-guard: registry-only, mutate/unknown rejected)
   → Step Functions (STANDARD)
@@ -31,7 +31,12 @@ web POST /api/jobs
   reaper Lambda (EventBridge rate(5 min)) reconciles stale rows (running→failed; queued→failed when ESM enabled)
 ```
 
-**EN** — `POST /api/jobs` writes the durable ledger row first (source of truth), then best-effort
+**EN** — `POST /api/jobs` accepts only `noop`/`noop-heavy` (the generic route rejects `report`/
+`compliance`: those trust a client-supplied `report_id`/`run_id`/`requested_by` with no ownership
+check — pentest-remediation, PR #195). Diagnosis reports go through `POST /api/diagnosis` and
+compliance scans through `POST /api/compliance/run`, both of which call the same `lib/jobs.ts`
+`enqueueJob()` used by `/api/jobs`, computing `requestedBy` server-side. Whichever route calls it,
+`enqueueJob()` writes the durable ledger row first (source of truth), then best-effort
 SQS send. The dispatcher Lambda runs outside the VPC (reaches SQS/SFN APIs directly), validates
 the job type against the `handlers.py` registry (read/compute only — mutate/unknown rejected per
 ADR-005), and calls `StartExecution(name=job_id)` — the execution name gives transport-level
@@ -43,8 +48,12 @@ VPC-only Aurora (RDS Data API not adopted), the `Catch` path invokes a VPC-attac
 rows. **Everything is gated by `workers_enabled` (default false → `terraform plan` = No changes,
 $0 idle).**
 
-**KO** — `POST /api/jobs`는 내구성 있는 ledger 행을 먼저 쓰고(권위), 그 다음 best-effort SQS send.
-디스패처 Lambda는 VPC 밖에서 동작(SQS/SFN API 직접 접근)하고 `handlers.py` 레지스트리로 타입을
+**KO** — `POST /api/jobs`는 `noop`/`noop-heavy`만 허용(범용 라우트는 `report`/`compliance`를 거부 —
+클라이언트가 넘긴 `report_id`/`run_id`/`requested_by`를 소유권 검증 없이 신뢰하게 되므로,
+pentest-remediation PR #195). 진단 리포트는 `POST /api/diagnosis`, 컴플라이언스 스캔은
+`POST /api/compliance/run`을 통하며, 둘 다 `/api/jobs`와 동일한 `lib/jobs.ts`의 `enqueueJob()`을
+호출하고 `requestedBy`는 서버 측에서 계산한다. 어느 라우트를 거치든 `enqueueJob()`이 내구성 있는
+ledger 행을 먼저 쓰고(권위), 그 다음 best-effort SQS send. 디스패처 Lambda는 VPC 밖에서 동작(SQS/SFN API 직접 접근)하고 `handlers.py` 레지스트리로 타입을
 검증(read/compute만 — mutate/unknown 거부, ADR-005)한 뒤 `StartExecution(name=job_id)` 호출 —
 실행명이 transport 멱등을 제공(`ExecutionAlreadyExists`는 성공 처리). Step Functions Standard가
 `$.runtime`으로 라우팅: 짧은 잡은 `RunLambda`, 길거나 OOM 위험인 잡은 `ecs:runTask.sync` Fargate.
@@ -80,8 +89,9 @@ $0 idle).**
 | `scripts/v2/workers/reaper.py` | EventBridge-scheduled stale-job reconciliation (running→failed; queued→failed when ESM enabled) |
 | `scripts/v2/workers/fargate_worker.py` | Fargate entrypoint `--job-id [--oom]`; long task / OOM demo |
 | `scripts/v2/workers/sfn.asl.json` | Step Functions ASL (Choice lambda/fargate, Retry, Catch→status_updater); Terraform `templatefile` vars |
-| `web/app/api/jobs/route.ts` | `POST` enqueue (ledger insert + SQS send; `ON CONFLICT` idempotency dedup) |
-| `web/app/api/jobs/[id]/route.ts` | `GET` job status/result by id |
+| `web/app/api/jobs/route.ts` | `POST` enqueue for `noop`/`noop-heavy` only; `GET` lists the caller's own jobs (admins see all) |
+| `web/app/api/jobs/[id]/route.ts` | `GET` job status/result by id, owner-or-admin only |
+| `web/lib/jobs.ts` | Shared `enqueueJob()` (ledger insert + SQS send; `ON CONFLICT` idempotency dedup) — used by `/api/jobs`, `/api/diagnosis`, `/api/compliance/run` |
 | `web/lib/db.ts` | Shared `getPool()` (node-postgres) used by jobs routes |
 | `scripts/v2/workers.mjs` | `make workers`: build+push the arm64 Fargate worker image |
 

@@ -1,6 +1,7 @@
 // Per-user auto-diagnosis schedule. THIN-BFF: this route ONLY reads/writes the report_schedules row — it never
 // runs a diagnosis inline. The EventBridge-driven schedule_dispatcher (worker tier) scans report_schedules and
-// enqueues the runs. Scoped by the authenticated user's sub (no cross-user access).
+// enqueues the runs. Scoped by the authenticated user's identity() (email-preferring; no cross-user access) —
+// user.sub is also threaded through as a legacy-row fallback (see lib/diagnosis-schedule.ts).
 import { NextResponse } from 'next/server';
 import { verifyUser, identity } from '@/lib/auth';
 import { readSchedule, upsertSchedule, SCHEDULE_FREQS, type ScheduleFreq } from '@/lib/diagnosis-schedule';
@@ -17,7 +18,7 @@ export async function GET(req: Request) {
   // email-preferring identity() used everywhere else for ownership (diagnosis_reports.requested_by,
   // worker_jobs.requested_by) — storing the raw sub here made a scheduled report invisible to any
   // owner who has an email claim (identity() prefers email, but the row was created under sub).
-  const schedule = await readSchedule(identity(user));
+  const schedule = await readSchedule(identity(user), user.sub);
   return NextResponse.json({ schedule: schedule ?? DISABLED_DEFAULT });
 }
 
@@ -42,6 +43,6 @@ export async function PUT(req: Request) {
   const model = typeof body?.model === 'string' ? (body.model as string) : null;
 
   // Persist only — the dispatcher (not this route) enqueues runs. Same identity() convention as GET.
-  const schedule = await upsertSchedule(identity(user), { scheduleType, enabled, tier, model });
+  const schedule = await upsertSchedule(identity(user), { scheduleType, enabled, tier, model }, user.sub);
   return NextResponse.json({ schedule });
 }
