@@ -119,4 +119,34 @@ describe('verifyUserForSignout', () => {
     await verifyUserForSignout('awsops_token=eyJ...');
     expect(query).not.toHaveBeenCalled();
   });
+  // pentest-remediation P1-review (MAJOR-1): clockTolerance must be short (minutes), not the
+  // original 10-year value — otherwise anyone holding a long-expired token can replay it against
+  // signout forever to keep force-logging-out the victim's *current* valid sessions.
+  it('uses a short (minutes-scale) clockTolerance, not a multi-year one (logout-replay DoS)', async () => {
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id' } });
+    const { verifyUserForSignout } = await import('./auth');
+    await verifyUserForSignout('awsops_token=eyJ...');
+    const [, , opts] = jwtVerify.mock.calls.at(-1) as [unknown, unknown, { clockTolerance?: string }];
+    expect(opts.clockTolerance).toMatch(/minute/);
+  });
+  it('rejects (via jose) a token expired well beyond the tolerance window', async () => {
+    // jose itself enforces clockTolerance against real exp math; simulate that rejection here
+    // since jwtVerify is mocked — this documents the boundary the real library enforces.
+    jwtVerify.mockRejectedValue(new Error('"exp" claim timestamp check failed'));
+    const { verifyUserForSignout } = await import('./auth');
+    expect(await verifyUserForSignout('awsops_token=eyJ...')).toBeNull();
+  });
+});
+
+describe('isRevoked timeout (via verifyUser)', () => {
+  it('fails open when the revocation-check query hangs past the timeout', async () => {
+    vi.useFakeTimers();
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
+    query.mockReturnValue(new Promise(() => {})); // never resolves — simulate a hung DB query
+    const { verifyUser } = await import('./auth');
+    const p = verifyUser('awsops_token=eyJ...');
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(await p).not.toBeNull();
+    vi.useRealTimers();
+  });
 });

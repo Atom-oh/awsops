@@ -34,18 +34,32 @@ function getJwks() {
 // revocation store: one row per user (sub), stamped by signout() below. Fails OPEN on a DB error —
 // a transient Aurora blip must not log every user in the app out; it just means revocation isn't
 // enforced during that window, which is the pre-fix status quo, not a new failure domain.
+// pentest-remediation P1-review (MAJOR-3): every authenticated request now costs an Aurora
+// round-trip. A hung query (cold-start ACU scaling, exhausted `max: 3` pool) would previously
+// stall forever — a rejected promise fails open via the catch below, but a promise that never
+// settles doesn't. Race it against a short timer so "hung" degrades the same way "errored" does.
+const REVOCATION_CHECK_TIMEOUT_MS = 3000;
+
 async function isRevoked(sub: string, iat: number | undefined): Promise<boolean> {
   if (!iat) return true; // malformed token (no iat) — fail closed, this one input we don't trust
   try {
-    const { rows } = await getPool().query<{ revoked_at: string }>(
-      'SELECT revoked_at FROM session_revocations WHERE user_sub = $1',
-      [sub],
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('revocation check timed out')), REVOCATION_CHECK_TIMEOUT_MS),
     );
+    const { rows } = await Promise.race([
+      getPool().query<{ revoked_at: string }>(
+        'SELECT revoked_at FROM session_revocations WHERE user_sub = $1',
+        [sub],
+      ),
+      timeout,
+    ]);
     if (rows.length === 0) return false;
     const revokedAtSec = new Date(rows[0].revoked_at).getTime() / 1000;
     return iat <= revokedAtSec;
-  } catch {
-    return false; // fail open — see comment above
+  } catch (e) {
+    // fail open — see comment above the timeout constant / module comment
+    console.warn(JSON.stringify({ evt: 'revocation_check_failed', sub, err: e instanceof Error ? e.message : String(e) }));
+    return false;
   }
 }
 
@@ -86,11 +100,21 @@ export async function verifyUser(cookieHeader: string | null): Promise<User | nu
   }
 }
 
-/** Like verifyUser, but tolerates an EXPIRED token (huge clockTolerance) — signature/issuer/
- * audience/token_use are still fully checked, so this cannot be forged. Used only by signout: a
- * user must be able to log out (and revoke) with a token that's already expired, and the whole
- * point of revocation-on-logout is to cut off a token that may be old/stolen. Never use this for
- * granting access — only for extracting a trusted `sub` to revoke. */
+// pentest-remediation P1-review (MAJOR-1): the original `clockTolerance: '3650 days'` accepted
+// ANY expired token, no matter how old — a token expired for weeks (e.g. an old leaked cookie)
+// could still hit this public, unauthenticated route and revoke the victim's *current* sessions,
+// repeatedly. There's no legitimate reason for that: an id_token already expired by more than
+// ordinary clock/network skew can't be used for anything else, so accepting it here bought zero
+// benefit while opening a logout-DoS. 5 minutes covers real skew/latency, not a replayed-forever
+// stale token.
+const SIGNOUT_CLOCK_TOLERANCE = '5 minutes';
+
+/** Like verifyUser, but tolerates a token expired within `SIGNOUT_CLOCK_TOLERANCE` — signature/
+ * issuer/audience/token_use are still fully checked, so this cannot be forged. Used only by
+ * signout: a user must be able to log out (and revoke) with a token that just expired (clock
+ * skew / request latency), and the whole point of revocation-on-logout is to cut off a token
+ * that may be stolen but is still (nearly) live. Never use this for granting access — only for
+ * extracting a trusted `sub` to revoke. */
 export async function verifyUserForSignout(cookieHeader: string | null): Promise<User | null> {
   const token = parseCookie(cookieHeader, 'awsops_token');
   if (!token) return null;
@@ -101,7 +125,7 @@ export async function verifyUserForSignout(cookieHeader: string | null): Promise
       issuer: `https://cognito-idp.${region}.amazonaws.com/${pool}`,
       audience: process.env.COGNITO_CLIENT_ID,
       algorithms: ['RS256'],
-      clockTolerance: '3650 days', // effectively ignore exp — see docstring
+      clockTolerance: SIGNOUT_CLOCK_TOLERANCE,
     });
     if (payload.token_use !== 'id' || !payload.sub) return null;
     return { sub: String(payload.sub) };
