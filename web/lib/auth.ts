@@ -146,14 +146,61 @@ async function withStatementTimeout<T>(runQuery: (client: PoolClient) => Promise
   }
 }
 
+// pentest-remediation P7-review (MAJOR 1): isRevoked() ran a dedicated pool checkout +
+// BEGIN/SET LOCAL/SELECT/COMMIT (4 round-trips) on EVERY authenticated request — ~67 of ~74 API
+// routes call verifyUser(), and one dashboard page fans several of them out in parallel against a
+// pool of `max: 3`. That interferes both ways: heavy inventory/compliance queries starve auth
+// checkouts (→ the check times out → fails open → this whole control is silently off), and auth
+// checkouts starve the data queries (→ 500s that look like an Aurora fault). Cache the resolved
+// cutoff per sub for a few seconds.
+//
+// Safe because the cutoff is MONOTONICALLY NON-DECREASING: revokeSessionsFor only ever advances
+// `revoked_at` (`WHERE session_revocations.revoked_at < to_timestamp($2)`), so a cached value can
+// only be stale in the PERMISSIVE direction, and only for at most the TTL — it can never resurrect
+// a session a newer cutoff already killed beyond that window. Cost of the staleness: a logged-out
+// token stays usable for ≤5s past logout, a negligible extension of an already-12h token lifetime.
+// In exchange the steady-state cost of the control drops from one connection + 4 round-trips per
+// request to one per sub per 5s. 5s (not admin.ts's 5min) keeps the security window trivially small
+// while still collapsing a whole page's parallel fan-out into a single query.
+//
+// The cached value is the in-flight PROMISE, not the settled result, so the parallel fan-out that
+// motivated this dedupes too (all N requests await the same query instead of each missing the cache
+// before the first one finishes). Failures are NOT cached — the entry is dropped on rejection, so a
+// transient Aurora blip can't disable revocation for the whole TTL; only a definitive answer
+// (a cutoff, or `null` for "no revocation row", which is the common case) is kept.
+// Self-cleaning like recentRevokeWriteAt below: each entry removes itself when its window expires.
+const REVOCATION_CACHE_TTL_MS = 5000;
+type CachedCutoff = { at: number; p: Promise<number | null> };
+const revocationCutoffCache = new Map<string, CachedCutoff>();
+
+async function queryRevocationCutoff(sub: string): Promise<number | null> {
+  const { rows } = await withStatementTimeout((client) =>
+    client.query<{ revoked_at: string }>('SELECT revoked_at FROM session_revocations WHERE user_sub = $1', [sub]),
+  );
+  return rows.length === 0 ? null : new Date(rows[0].revoked_at).getTime() / 1000;
+}
+
+function revocationCutoff(sub: string): Promise<number | null> {
+  const hit = revocationCutoffCache.get(sub);
+  if (hit && Date.now() - hit.at < REVOCATION_CACHE_TTL_MS) return hit.p;
+  const entry: CachedCutoff = { at: Date.now(), p: queryRevocationCutoff(sub) };
+  revocationCutoffCache.set(sub, entry);
+  const drop = () => {
+    if (revocationCutoffCache.get(sub) === entry) revocationCutoffCache.delete(sub);
+  };
+  entry.p.catch(drop); // never cache a fail-open result
+  setTimeout(drop, REVOCATION_CACHE_TTL_MS);
+  return entry.p;
+}
+
+const WARN_DEDUPE_MS = 10_000;
+const recentWarnAt = new Set<string>();
+
 async function isRevoked(sub: string, iat: number | undefined): Promise<boolean> {
   if (!iat) return true; // malformed token (no iat) — fail closed, this one input we don't trust
   try {
-    const { rows } = await withStatementTimeout((client) =>
-      client.query<{ revoked_at: string }>('SELECT revoked_at FROM session_revocations WHERE user_sub = $1', [sub]),
-    );
-    if (rows.length === 0) return false;
-    const revokedAtSec = new Date(rows[0].revoked_at).getTime() / 1000;
+    const revokedAtSec = await revocationCutoff(sub);
+    if (revokedAtSec === null) return false;
     // `<=`, not strict `<`: revokeSessionsFor stores the signing-out token's OWN iat as the
     // cutoff. With strict `<`, that exact token's own check evaluates `iat < iat` -> false, i.e.
     // the very token just used to log out is judged NOT revoked and stays valid for its full
@@ -167,8 +214,17 @@ async function isRevoked(sub: string, iat: number | undefined): Promise<boolean>
     // is wrong; a same-iat token stays rejected for its entire remaining lifetime, not one request).
     return iat <= revokedAtSec;
   } catch (e) {
-    // fail open — see comment above the timeout constant / module comment
-    console.warn(JSON.stringify({ evt: 'revocation_check_failed', sub, err: e instanceof Error ? e.message : String(e) }));
+    // fail open — see comment above the timeout constant / module comment.
+    // pentest-remediation P7-review (MINOR): failures aren't cached (by design), so a sustained
+    // Aurora outage would otherwise emit one warn line per authenticated request — a log flood
+    // exactly when the logs matter. One line per sub per window is enough for the metric filter /
+    // alarm in terraform/v2/foundation/workload.tf to fire. Self-cleaning, same as the maps
+    // above.
+    if (!recentWarnAt.has(sub)) {
+      recentWarnAt.add(sub);
+      setTimeout(() => recentWarnAt.delete(sub), WARN_DEDUPE_MS);
+      console.warn(JSON.stringify({ evt: 'revocation_check_failed', sub, err: e instanceof Error ? e.message : String(e) }));
+    }
     return false;
   }
 }
@@ -219,6 +275,12 @@ export async function revokeSessionsFor(sub: string, iat: number): Promise<void>
       [sub, iat],
     ),
   );
+  // pentest-remediation P7-review (MAJOR 1): the write just moved the cutoff, so a cached cutoff
+  // for this sub is now wrong (permissively). Drop it so the user's OWN logout takes effect on the
+  // next request instead of waiting out the TTL. This is per-CONTAINER: other ECS tasks keep
+  // serving their own cached cutoff until it expires, i.e. ≤REVOCATION_CACHE_TTL_MS of extra
+  // validity elsewhere in the fleet — the accepted tradeoff (recorded in ADR-002 §2-4).
+  revocationCutoffCache.delete(sub);
 }
 
 /** Re-verify the edge-set Cognito id_token (awsops_token cookie). Returns the user or null. */

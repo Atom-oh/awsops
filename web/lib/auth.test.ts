@@ -244,6 +244,43 @@ describe('verifyUserForSignout', () => {
   });
 });
 
+// pentest-remediation P7-review (MAJOR 1): the revocation check used to cost a dedicated pool
+// checkout + 4 round-trips on EVERY authenticated request, against a pool of `max: 3` — mutual
+// starvation with the app's data queries. Now cached per sub for a few seconds (safe because the
+// cutoff only ever advances, so staleness is bounded and only ever permissive).
+describe('revocation-cutoff cache', () => {
+  const selects = () => query.mock.calls.filter(([sql]) => String(sql).includes('SELECT revoked_at')).length;
+
+  it('issues only ONE query for two consecutive checks of the same sub within the TTL', async () => {
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
+    const { verifyUser } = await import('./auth');
+    await verifyUser('awsops_token=eyJ...');
+    expect(selects()).toBe(1);
+    await verifyUser('awsops_token=eyJ...');
+    expect(selects()).toBe(1); // served from cache — no second round-trip
+  });
+
+  it('does NOT cache a fail-open result — the next check retries the DB', async () => {
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
+    query.mockRejectedValueOnce(new Error('db down'));
+    const { verifyUser } = await import('./auth');
+    expect(await verifyUser('awsops_token=eyJ...')).not.toBeNull(); // failed open
+    query.mockResolvedValue({ rows: [{ revoked_at: new Date((NOW + 1) * 1000).toISOString() }] });
+    // A transient blip must not disable revocation for the whole TTL: this must hit the DB again
+    // and see the real (revoking) cutoff.
+    expect(await verifyUser('awsops_token=eyJ...')).toBeNull();
+  });
+
+  it('is invalidated by revokeSessionsFor so the sub\'s own logout takes effect immediately', async () => {
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
+    const { verifyUser, revokeSessionsFor } = await import('./auth');
+    expect(await verifyUser('awsops_token=eyJ...')).not.toBeNull(); // caches "no revocation row"
+    await revokeSessionsFor('u-1', NOW);
+    query.mockResolvedValue({ rows: [{ revoked_at: new Date(NOW * 1000).toISOString() }] });
+    expect(await verifyUser('awsops_token=eyJ...')).toBeNull(); // not the stale cached miss
+  });
+});
+
 describe('isRevoked timeout (via verifyUser)', () => {
   it('fails open when the revocation-check query hangs past the timeout', async () => {
     vi.useFakeTimers();
