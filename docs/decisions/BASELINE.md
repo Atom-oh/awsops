@@ -81,7 +81,7 @@
 | [006](006-incident-analysis-only.md) | 인시던트 **ANALYSIS-ONLY** (GATED) | read-only triage/RCA만, 자율 mitigation 폐기 | 안정성·운영우수성 |
 | [007](007-external-data-integration-governance.md) | 외부 데이터 통합 거버넌스 (keystone) | read-only=리소스 한정; 외부 read LIVE·write 2-티어 거버넌스 | 보안·운영우수성 |
 | [008](008-ai-diagnosis-pipeline.md) | AI 진단 파이프라인 | raw boto3 Bedrock·15섹션 병렬렌더·포맷·비용캐싱 (스트리밍 후속); 챗 루프 `AsyncAnthropicBedrock` 실험=flag-gated dark(`ANTHROPIC_AGENT_LOOP_ENABLED`) | 운영우수성·비용 |
-| [009](009-async-worker-backbone.md) | 비동기 워커 백본 | SQS+SFN+Lambda/Fargate; read-only job — `noop`/`noop-heavy`(범용 `/api/jobs`), `report`·`compliance`는 소유권-스코프 전용 라우트(`/api/diagnosis`, `/api/compliance/run`)로만 enqueue | 안정성·운영우수성 |
+| [009](009-async-worker-backbone.md) | 비동기 워커 백본 | SQS+SFN+Lambda/Fargate; read-only job — `noop`/`noop-heavy`(범용 `/api/jobs`), `report`·`compliance`는 사용자 경로 기준 소유권-스코프 전용 라우트(`/api/diagnosis`, `/api/compliance/run`)로 enqueue(`schedule_dispatcher.py` 내부 직접 enqueue 예외), `datasource_index`·`insight`는 내부 전용 enqueue(사용자 제출 불가) | 안정성·운영우수성 |
 | [010](010-inventory-resource-model.md) | 인벤토리·리소스 모델 | 타입 레지스트리 + flag-gated Steampipe sync→Aurora (ECS service 갭) | 안정성·비용 |
 | [011](011-multi-account.md) | 멀티 어카운트 | STS AssumeRole(AWSopsReadOnlyRole; ExternalId = 3rd-party 필수 / 1st-party는 task-role ARN 핀 시 선택, amended 2026-06-26), read-only fan-out | 보안 |
 | [012](012-cost-finops.md) | Cost / FinOps | Cost Explorer probe + FinOps MCP + Bedrock 비용 귀속 | 비용최적화 |

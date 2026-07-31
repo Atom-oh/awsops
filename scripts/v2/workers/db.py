@@ -43,9 +43,8 @@ def connect():
 def insert_job(conn, job_id, type_, payload, dry_run=False, idempotency_key=None, requested_by=None):
     """requested_by defaults to NULL (internal-only enqueue — reaper/generic dispatchers with no
     end-user principal; treated admin-only on read, see app/api/jobs/route.ts GET). Callers that
-    enqueue on behalf of a specific user (e.g. schedule_dispatcher.py) MUST pass the same
-    email-preferring identity() value used everywhere else for ownership, or GET /api/jobs[/id]'s
-    ownership filter hides the row from its own owner (round-2 pentest-remediation MAJOR)."""
+    enqueue on behalf of a specific user MUST pass their domain row's ownership key; for example,
+    schedule_dispatcher.py passes report_schedules.user_sub (the immutable Cognito sub)."""
     conn.run(
         "INSERT INTO worker_jobs (job_id, type, payload, dry_run, idempotency_key, requested_by) "
         "VALUES (:id, :t, :p::jsonb, :d, :k, :rb)",

@@ -44,7 +44,7 @@ def _coerce_config(config):
     return config if isinstance(config, dict) else {}
 
 
-def _create_report(conn, tier, owner_identity, model):
+def _create_report(conn, tier, owner_sub, model):
     """Pre-create a visible 'running' diagnosis_reports row mirroring the BFF createReport — including
     `model` (UI metadata) and `parent_report_id` (diff lineage = most-recent SUCCEEDED report of the same
     tier) — so a scheduled run is tracked, shows its model, supports regression diff, and a pre-_report
@@ -54,35 +54,32 @@ def _create_report(conn, tier, owner_identity, model):
         "VALUES (NULL, :t, :rb, 'running', "
         "  (SELECT id FROM diagnosis_reports WHERE tier = :t AND status = 'succeeded' AND deleted_at IS NULL "
         "   ORDER BY created_at DESC LIMIT 1), :m) RETURNING id",
-        t=tier, rb=owner_identity, m=model,
+        t=tier, rb=owner_sub, m=model,
     )
     return rows[0][0]
 
 
-def _enqueue_report(conn, owner_identity, config):
-    """`owner_identity` is report_schedules.user_sub — despite the column name, the BFF (round-2
-    pentest fix) now writes the SAME email-preferring identity() value used for diagnosis_reports/
-    worker_jobs ownership everywhere else, NOT necessarily the raw Cognito sub. Pass it straight
-    through as requested_by (never re-derive it) so a scheduled report/job stays visible to the
-    owner under GET /api/diagnosis and GET /api/jobs, which both filter by that same identity."""
+def _enqueue_report(conn, owner_sub, config):
+    """`owner_sub` is the immutable Cognito sub stored in report_schedules.user_sub. Pass it through
+    unchanged as requested_by; the diagnosis and jobs read paths accept both sub and identity(user)."""
     cfg = _coerce_config(config)
     account = cfg.get("account") or HOST_ACCOUNT
     tier = cfg.get("tier", "mid")
     # only the deep tier may select opus; light/mid are pinned to sonnet (matches the BFF/worker resolver).
     model = "opus" if (tier == "deep" and cfg.get("model") == "opus") else "sonnet"
-    report_id = _create_report(conn, tier, owner_identity, model)  # visible 'running' row first
+    report_id = _create_report(conn, tier, owner_sub, model)  # visible 'running' row first
     job_id = str(uuid.uuid4())
     payload = {
         "account": account,
         "tier": tier,
         "model": model,
-        "requested_by": owner_identity,
+        "requested_by": owner_sub,
         "report_id": report_id,  # _report uses this → no duplicate self-created row
         "scheduled": True,
     }
-    # requested_by=owner_identity: worker_jobs ownership must match, or GET /api/jobs/[id] (owner-or-
+    # requested_by=owner_sub: worker_jobs ownership must match, or GET /api/jobs/[id] (owner-or-
     # admin check) would 403 the very user this scheduled run was created for (round-2 MAJOR).
-    db.insert_job(conn, job_id, "report", payload, requested_by=owner_identity)  # durable ledger row
+    db.insert_job(conn, job_id, "report", payload, requested_by=owner_sub)  # durable ledger row
     conn.run("UPDATE diagnosis_reports SET worker_job_id = :jid WHERE id = :rid", jid=job_id, rid=report_id)
     try:
         _sqs.send_message(
@@ -108,12 +105,12 @@ def lambda_handler(_event, _ctx):
         due = conn.run(_CLAIM_SQL)  # atomic claim+advance
         enqueued, failed = [], []
         for row in due or []:
-            owner_identity, _schedule_type, config = row[0], row[1], row[2]
+            owner_sub, _schedule_type, config = row[0], row[1], row[2]
             try:
-                enqueued.append(_enqueue_report(conn, owner_identity, config))
+                enqueued.append(_enqueue_report(conn, owner_sub, config))
             except Exception as exc:  # noqa: BLE001 — one bad row must not block the rest
-                print(f"schedule_dispatcher: enqueue failed for {owner_identity}: {exc}")
-                failed.append(owner_identity)
+                print(f"schedule_dispatcher: enqueue failed for {owner_sub}: {exc}")
+                failed.append(owner_sub)
         out = {"due": len(due or []), "enqueued": len(enqueued), "failed": len(failed)}
         print(f"schedule_dispatcher: {out}")
         return out
