@@ -21,13 +21,15 @@ describe('chat-store', () => {
     expect(upsertParams).toEqual(['t1', 'u1', '제목후보', 's'.repeat(36)]);
   });
 
-  // PR #200 review M1/M2: a legacy thread's session_id (raw client UUID, predates the P3-1 fix)
-  // re-derives deterministically under the caller's sub on resume, but never migrates to that
-  // composite in the DB unless the upsert does it — so it never hits route.ts's OWN_PREFIX fast
-  // path. The migration must be one-time only: once a row already holds a namespaced value, later
-  // exchanges must never overwrite it (M2 — avoids a last-writer-wins flip across the client's
-  // single per-browser session).
-  it('recordExchange migrates a legacy (non-namespaced) session_id to the derived composite exactly once', async () => {
+  // PR #200 review M1/M2/M2-followup: a legacy thread's session_id (raw client UUID, predates the
+  // P3-1 fix) re-derives deterministically under the caller's sub on resume, but never migrates to
+  // that composite in the DB unless the upsert does it — so it never hits route.ts's OWN_PREFIX
+  // fast path. The migration must be one-time AND owner-scoped: once a row already holds a value
+  // namespaced under THIS OWNER's own sub, later exchanges must never overwrite it (M2 — avoids a
+  // last-writer-wins flip across the client's single per-browser session); a value namespaced under
+  // some OTHER sub (a pre-fix bug artifact) must still be healed, not frozen as "already migrated"
+  // (M2-followup — a bare `LIKE 'awsops-%'` can't tell whose namespace it is).
+  it('recordExchange migrates a legacy (non-namespaced) session_id to the derived composite exactly once, scoped to the owner', async () => {
     query.mockResolvedValueOnce({ rows: [{ id: 't1' }] });
     query.mockResolvedValue({ rows: [] });
     const { recordExchange } = await import('./chat-store');
@@ -37,7 +39,7 @@ describe('chat-store', () => {
       userContent: 'q', assistantContent: 'a',
     });
     const [upsertSql, upsertParams] = query.mock.calls[0];
-    expect(String(upsertSql)).toContain("WHEN chat_threads.session_id LIKE 'awsops-%' THEN chat_threads.session_id ELSE EXCLUDED.session_id");
+    expect(String(upsertSql)).toContain("WHEN starts_with(chat_threads.session_id, 'awsops-' || EXCLUDED.user_sub || '-') THEN chat_threads.session_id ELSE EXCLUDED.session_id");
     expect(upsertParams).toEqual(['t1', 'u1', 't', derived]);
   });
 

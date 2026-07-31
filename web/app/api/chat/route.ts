@@ -22,7 +22,7 @@ import { listConfiguredSchemas, renderSchemaForPrompt } from '@/lib/datasource-s
 import { listDatasources } from '@/lib/datasources';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 import { getAgentSpace } from '@/lib/agent-space';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120; // long agent calls
@@ -111,19 +111,26 @@ export async function POST(request: Request) {
   // resumes, collapses every thread for a user onto one fixed runtimeSessionId — losing per-thread
   // AgentCore Memory isolation. Detect our own prefix and reuse verbatim; only derive a fresh
   // composite for a value that isn't already ours.
-  // PR #200 review MAJOR-1: the own-prefix fast path used to accept ANY value starting with
-  // OWN_PREFIX verbatim — no length/charset check — contradicting agentcore.ts's own "never pass
-  // a raw client-supplied value through untouched" contract. A caller could suffix its own prefix
-  // with megabytes/newlines/unicode straight into InvokeAgentRuntime + the Aurora session_id
-  // column. The remainder must match what derivation would have produced (8-64 charset-safe chars).
+  // PR #200 review MAJOR-1 (2nd round): OWN_PREFIX is `awsops-<sub>-`, and a real Cognito sub is
+  // a 36-char UUID -> 44 chars, longer than the old `slice(0, 32)`. Any input that starts with
+  // "awsops-" but fails the fast path (foreign-sub prefix, malformed own-prefix, stale legacy
+  // localStorage value) got sliced on the RAW string, not the remainder — so its "entropy" was
+  // just a truncated chunk of the literal prefix text, collapsing distinct inputs that share the
+  // same first 32 characters onto one runtimeSessionId (the exact per-thread isolation loss this
+  // PR exists to close). Hash the full raw value instead: fixed-length, full-avalanche output, so
+  // two different inputs (even sharing a prefix) never collide, and it's always charset/length-safe.
+  // PR #200 review MAJOR-1 (1st round): the own-prefix fast path used to accept ANY value starting
+  // with OWN_PREFIX verbatim — no length/charset check — contradicting agentcore.ts's own "never
+  // pass a raw client-supplied value through untouched" contract. The remainder must match exactly
+  // what derivation produces (32 lowercase hex chars) — nothing else passes through verbatim.
   const OWN_PREFIX = `awsops-${user.sub}-`;
-  const OWN_REMAINDER_RE = /^[A-Za-z0-9-]{8,64}$/;
+  const OWN_REMAINDER_RE = /^[a-f0-9]{32}$/;
   let sessionId: string;
   if (typeof body.sessionId === 'string' && body.sessionId.startsWith(OWN_PREFIX) && OWN_REMAINDER_RE.test(body.sessionId.slice(OWN_PREFIX.length))) {
     sessionId = body.sessionId;
   } else {
-    const sanitized = typeof body.sessionId === 'string' ? body.sessionId.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 32) : '';
-    const clientEntropy = sanitized.length >= 8 ? sanitized : '0'.repeat(32);
+    const clientRaw = typeof body.sessionId === 'string' ? body.sessionId : '';
+    const clientEntropy = createHash('sha256').update(clientRaw).digest('hex').slice(0, 32);
     sessionId = `${OWN_PREFIX}${clientEntropy}`;
   }
 
