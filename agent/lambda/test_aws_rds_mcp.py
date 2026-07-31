@@ -21,9 +21,14 @@ import cross_account  # noqa: E402
 # prove it never reaches the rds-data client.
 MASTER_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:rds!cluster-abc-master-AbCdEf"
 READER_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:ops/awsops-v2/agent/sql-reader-XyZw12"
+# PR-review round 10 MAJOR: the reader secret belongs to exactly one cluster, so execute_sql now
+# validates resource_arn against AURORA_CLUSTER_ARN (injected by ai.tf) instead of letting the Data
+# API blow up with an unhandled 500. Every env patch below carries it; _event() defaults to it.
+CLUSTER_ARN = "arn:aws:rds:ap-northeast-2:123456789012:cluster:c1"
+_READER_ENV = {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN, "AURORA_CLUSTER_ARN": CLUSTER_ARN}
 
 
-def _event(sql, resource_arn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1", secret_arn=MASTER_SECRET_ARN, database="postgres"):
+def _event(sql, resource_arn=CLUSTER_ARN, secret_arn=MASTER_SECRET_ARN, database="postgres"):
     return {
         "tool_name": "execute_sql",
         "arguments": {
@@ -51,7 +56,7 @@ class TestExecuteSqlGuard(unittest.TestCase):
 
         self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
         self.get_client_patch.start()
-        self.env_patch = mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN})
+        self.env_patch = mock.patch.dict(os.environ, _READER_ENV)
         self.env_patch.start()
 
     def tearDown(self):
@@ -136,7 +141,7 @@ class TestExecuteSqlEngineDialect(unittest.TestCase):
 
         self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
         self.get_client_patch.start()
-        self.env_patch = mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN})
+        self.env_patch = mock.patch.dict(os.environ, _READER_ENV)
         self.env_patch.start()
 
     def tearDown(self):
@@ -199,7 +204,7 @@ class TestExecuteSqlReadOnlyTransaction(unittest.TestCase):
 
         self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
         self.get_client_patch.start()
-        self.env_patch = mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN})
+        self.env_patch = mock.patch.dict(os.environ, _READER_ENV)
         self.env_patch.start()
 
     def tearDown(self):
@@ -281,7 +286,7 @@ class TestExecuteSqlUsesTheLeastPrivilegeSecret(unittest.TestCase):
         return rds_mcp.lambda_handler(_event(sql), None)
 
     def test_every_data_api_call_uses_the_reader_secret_not_the_master_secret(self):
-        with mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN}):
+        with mock.patch.dict(os.environ, _READER_ENV):
             resp = self._run()
         self.assertEqual(resp["statusCode"], 200)
         seen = [self.rds_data_client.begin_transaction.call_args.kwargs["secretArn"]]
@@ -296,7 +301,7 @@ class TestExecuteSqlUsesTheLeastPrivilegeSecret(unittest.TestCase):
         # tool arguments (still tolerated for back-compat) must never be used.
         other = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:attacker-chosen-AAAAAA"
         event = _event("SELECT 1", secret_arn=other)
-        with mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN}):
+        with mock.patch.dict(os.environ, _READER_ENV):
             resp = rds_mcp.lambda_handler(event, None)
         self.assertEqual(resp["statusCode"], 200)
         used = {c.kwargs["secretArn"] for c in self.rds_data_client.execute_statement.call_args_list}
@@ -305,7 +310,7 @@ class TestExecuteSqlUsesTheLeastPrivilegeSecret(unittest.TestCase):
 
     def test_missing_reader_secret_fails_closed_before_any_data_api_call(self):
         # No fallback to the master secret (or to the caller's argument) — the tool refuses.
-        with mock.patch.dict(os.environ, {"AURORA_SQL_READER_SECRET_ARN": ""}):
+        with mock.patch.dict(os.environ, {**_READER_ENV, "AURORA_SQL_READER_SECRET_ARN": ""}):
             resp = self._run()
         self.assertEqual(resp["statusCode"], 400)
         self.assertIn("read-only", json.loads(resp["body"])["error"])
@@ -341,7 +346,7 @@ class TestExecuteSqlCrossAccountFailsClosed(unittest.TestCase):
         self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
         self.get_client_patch.start()
         self.env_patch = mock.patch.dict(os.environ, {
-            "AURORA_SQL_READER_SECRET_ARN": READER_SECRET_ARN,
+            **_READER_ENV,
             "AWSOPS_HOST_ACCOUNT_ID": self.HOST,
         })
         self.env_patch.start()
@@ -370,6 +375,63 @@ class TestExecuteSqlCrossAccountFailsClosed(unittest.TestCase):
         resp = self._run(self.HOST)
         self.assertEqual(resp["statusCode"], 200)
         self.rds_data_client.begin_transaction.assert_called_once()
+
+
+class TestExecuteSqlNonFoundationCluster(unittest.TestCase):
+    """PR-review round 10 MAJOR: a NON-foundation cluster in the SAME account (so the round-9
+    cross-account guard doesn't fire) used to reach `begin_transaction` with a secret that belongs to
+    a different cluster — BadRequestException from outside any try, i.e. an unhandled 500 + stack
+    trace instead of a tool error the model can act on."""
+
+    OTHER_CLUSTER = "arn:aws:rds:ap-northeast-2:123456789012:cluster:some-other-cluster"
+
+    def setUp(self):
+        self.rds_client = mock.MagicMock()
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-postgresql"}]}
+        self.rds_data_client = mock.MagicMock()
+        self.rds_data_client.execute_statement.return_value = {"columnMetadata": [], "records": []}
+        self.rds_data_client.begin_transaction.return_value = {"transactionId": "txn-1"}
+
+        def fake_get_client(service, region, role_arn):
+            return self.rds_data_client if service == "rds-data" else self.rds_client
+
+        self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
+        self.get_client_patch.start()
+        self.env_patch = mock.patch.dict(os.environ, _READER_ENV)
+        self.env_patch.start()
+
+    def tearDown(self):
+        self.get_client_patch.stop()
+        self.env_patch.stop()
+
+    def test_other_cluster_returns_a_tool_error_not_a_500(self):
+        resp = rds_mcp.lambda_handler(_event("SELECT 1", resource_arn=self.OTHER_CLUSTER), None)
+        self.assertEqual(resp["statusCode"], 400)
+        self.assertIn("foundation Aurora cluster", json.loads(resp["body"])["error"])
+        # Fails closed BEFORE any Data API call (and before the DescribeDBClusters engine lookup).
+        self.rds_data_client.begin_transaction.assert_not_called()
+        self.rds_data_client.execute_statement.assert_not_called()
+        self.rds_client.describe_db_clusters.assert_not_called()
+
+    def test_bare_cluster_identifier_of_the_foundation_cluster_is_accepted(self):
+        # The Data API and describe_db_clusters both accept the bare identifier — same cluster.
+        resp = rds_mcp.lambda_handler(_event("SELECT 1", resource_arn="c1"), None)
+        self.assertEqual(resp["statusCode"], 200)
+        self.rds_data_client.begin_transaction.assert_called_once()
+
+    def test_missing_cluster_arn_env_fails_closed(self):
+        env = {k: v for k, v in _READER_ENV.items() if k != "AURORA_CLUSTER_ARN"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            resp = rds_mcp.lambda_handler(_event("SELECT 1"), None)
+        self.assertEqual(resp["statusCode"], 400)
+        self.assertIn("AURORA_CLUSTER_ARN", json.loads(resp["body"])["error"])
+        self.rds_data_client.begin_transaction.assert_not_called()
+
+    def test_a_prefix_of_the_cluster_arn_is_not_accepted(self):
+        # Guard against a substring/startswith-style comparison sneaking back in.
+        resp = rds_mcp.lambda_handler(_event("SELECT 1", resource_arn=CLUSTER_ARN + "-replica"), None)
+        self.assertEqual(resp["statusCode"], 400)
+        self.rds_data_client.begin_transaction.assert_not_called()
 
 
 if __name__ == "__main__":

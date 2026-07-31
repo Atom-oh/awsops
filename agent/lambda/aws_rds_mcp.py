@@ -116,8 +116,9 @@ def lambda_handler(event, context):
             # transaction only blocks data WRITES — control-plane/side-effect calls sail through it.
             # That set is unbounded; a denylist cannot enumerate it. So the boundary is now the
             # DATABASE: this path authenticates as the dedicated `awsops_sql_reader` Postgres role
-            # (NOSUPERUSER, `default_transaction_read_only=on`, SELECT on an explicit table allowlist
-            # that excludes credential-bearing columns — round 9 CRITICAL) whose
+            # (NOSUPERUSER, `default_transaction_read_only=on`, SELECT on redacted VIEWS ONLY and no
+            # privilege at all on any base table — round 10 replaced the round-9 table allowlist,
+            # which had leaked `worker_jobs.task_token`) whose
             # credentials live in their own secret — see the ULID `agent_sql_reader_role` migration.
             # The caller-supplied `secret_arn` is deliberately IGNORED (and removed from the tool
             # schema): credential choice is server-side config, never a model-controlled argument.
@@ -127,6 +128,23 @@ def lambda_handler(event, context):
             if not secret_arn:
                 return err("read-only: no dedicated low-privilege DB credential is configured "
                            "(AURORA_SQL_READER_SECRET_ARN unset) — refusing to execute")
+            # PR-review round 10 MAJOR: the reader secret belongs to ONE cluster (the host's own
+            # foundation Aurora). Pointed at any OTHER cluster — same account, so round 9's
+            # cross-account fail-closed above does not catch it — begin_transaction would raise
+            # BadRequestException from inside the un-try'd Data API block and surface as an
+            # unhandled 500 + stack trace instead of a tool error the model can act on. Compare
+            # against the foundation cluster ARN (AURORA_CLUSTER_ARN, injected by ai.tf alongside
+            # the secret) and refuse cleanly. Fail closed when the env var is missing: without it
+            # there is nothing to validate against.
+            cluster_arn = os.environ.get("AURORA_CLUSTER_ARN", "").strip()
+            if not cluster_arn:
+                return err("read-only: the foundation cluster ARN is not configured "
+                           "(AURORA_CLUSTER_ARN unset) — refusing to execute")
+            if not _is_foundation_cluster(args["resource_arn"], cluster_arn):
+                return err("read-only: execute_sql only supports the host's own foundation Aurora "
+                           f"cluster ({cluster_arn.rsplit(':', 1)[-1]}) — the Data API credential is "
+                           "that cluster's least-privilege reader role (awsops_sql_reader) and is not "
+                           "valid anywhere else. Use the describe_* tools for other clusters.")
             try:
                 engine = _engine_family(rds, args["resource_arn"])
             except Exception as e:
@@ -234,6 +252,18 @@ def lambda_handler(event, context):
 # Data API only targets Aurora clusters, and describe_db_clusters accepts either the identifier
 # or the ARN for DBClusterIdentifier. Returns None (never guesses) if the engine string is
 # unrecognized or the lookup itself fails — caller fails closed on None.
+def _is_foundation_cluster(resource_arn, cluster_arn):
+    """True when resource_arn designates the host's own foundation Aurora cluster.
+
+    describe_db_clusters / the Data API both accept either the full cluster ARN or the bare cluster
+    identifier, so accept both spellings of the same cluster and nothing else. RDS identifiers and
+    ARNs are lowercase, but casefold anyway so a hand-typed argument isn't a spurious refusal.
+    """
+    want = (cluster_arn or "").strip().lower()
+    got = (resource_arn or "").strip().lower()
+    return bool(want) and got in (want, want.rsplit(":", 1)[-1])
+
+
 def _engine_family(rds, resource_arn):
     engine = rds.describe_db_clusters(DBClusterIdentifier=resource_arn)["DBClusters"][0]["Engine"].lower()
     if "mysql" in engine or "mariadb" in engine:

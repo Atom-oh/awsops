@@ -3,6 +3,15 @@
 -- the inventory-read connector (inventory_read_mcp.py) — replaces running those RDS Data API calls
 -- under the Aurora MASTER secret (a superuser-equivalent role).
 --
+-- ══ INVARIANT — read this before touching anything below ═══════════════════════════════════════════
+--   1. `awsops_sql_reader` gets data access ONLY through views in the `sql_reader` schema.
+--   2. NEVER grant this role anything in `public` (no schema USAGE beyond what PUBLIC already has,
+--      no table grant, no column grant). If you find yourself writing `GRANT ... ON public.x`, stop.
+--   3. Adding a column to a view here is a SECURITY-RELEVANT change. It widens what a
+--      model-invocable tool can print. It needs review, not a drive-by edit.
+--   4. Adding a whole new view is likewise a widening — justify the diagnostic need in the diff.
+-- ══════════════════════════════════════════════════════════════════════════════════════════════════
+--
 -- WHY (PR #197 rounds 3-7): execute_sql's read-only guarantee rested on two things that are not
 -- boundaries. (1) A lexical denylist in sql_readonly_guard.py — it strips string literals BEFORE
 -- matching, so any core function that takes SQL as a *string argument* is invisible to it:
@@ -18,6 +27,32 @@
 -- lexical guard and the READ ONLY transaction both stay in place — cheap, and they catch honest
 -- mistakes early — but they are defense-in-depth, not the boundary.
 --
+-- WHY VIEWS AND NOT A TABLE ALLOWLIST (PR-review round 10 CRITICAL — the pivot):
+-- Round 8 granted `SELECT ON ALL TABLES` and missed `eks_registrations.auth` (a raw k8s bearer
+-- token). Round 9 replaced that with an explicit ~38-table allowlist and missed
+-- `worker_jobs.task_token` — a Step Functions task token, i.e. a transferable CAPABILITY: whoever
+-- holds it can SendTaskSuccess/SendTaskFailure on a live workflow execution. Two rounds, same
+-- structural failure: a TABLE-level allowlist fails OPEN per column. Every table is one
+-- `ALTER TABLE ... ADD COLUMN secret` away from silent exposure, with no review signal, and
+-- correctness depends on a human re-auditing ~38 tables × every column, forever.
+--
+-- So the default is inverted. This role is granted SELECT on VIEWS ONLY, each with an EXPLICIT
+-- column list, in a schema it does not own and cannot write. Consequences:
+--   * A new column on any base table is INVISIBLE to this role until someone adds it to a view.
+--     The failure mode flips from "silently exposed" to "silently absent" — the correct direction
+--     for a model-invocable tool: a missing column is a bug report, a leaked token is an incident.
+--   * Each view is a self-documenting contract. Widening shows up in review as a deliberate diff.
+--   * The role's search_path points at `sql_reader` first, so an unqualified `FROM worker_jobs` in a
+--     model-written query resolves to the redacted view. Explicitly qualifying `public.worker_jobs`
+--     is DENIED — there is no grant on it. (search_path is convenience, not the boundary: the role
+--     can change its own search_path and can always fully-qualify. The boundary is the grants.)
+--   * The privilege chain: views are owned by the migration role (the Aurora master user, normally
+--     `awsops_admin`) and created with the DEFAULT `security_invoker = false`, so the view body runs
+--     with the OWNER's privileges on the base table. That is precisely what lets a grant on the view
+--     work while the role has zero privilege on the table underneath. `security_invoker = false` is
+--     stated explicitly below rather than left to the default — if it were ever flipped, every view
+--     would start failing (fail-closed), but being explicit keeps the intent reviewable.
+--
 -- Unlike awsops_web / awsops_worker / steampipe_reader (all rds_iam, no password), this role needs a
 -- password: the RDS Data API REQUIRES a Secrets Manager `secretArn` on every ExecuteStatement /
 -- BeginTransaction / RollbackTransaction call (see botocore's rds-data model — secretArn is a
@@ -26,6 +61,31 @@
 -- (random_password.agent_sql_reader -> aws_secretsmanager_secret.agent_sql_reader in ai.tf) and
 -- pushed into this role by `make migrate` (scripts/v2/migrate.mjs), so the secret stays the single
 -- source of truth and a Terraform-side rotation re-syncs on the next migrate.
+--
+-- PASSWORD-SYNC ORDERING WINDOW (PR-review round 10 MAJOR — documented, not "fixed"):
+-- `syncSqlReaderPassword` in migrate.mjs runs `ALTER ROLE ... PASSWORD <secret value>` on every
+-- `make migrate`, so the DB converges to the secret. The window is between Terraform writing a new
+-- `random_password` into the secret version and the next `make migrate`: during it, the Lambda reads
+-- the NEW password from the secret while the DB role still has the OLD one → `execute_sql` returns a
+-- Data API auth error. Bounds and why this is acceptable:
+--   * `random_password` is only regenerated when its own arguments change or it is tainted — there is
+--     no rotation schedule on this secret (no `aws_secretsmanager_secret_rotation` resource), so the
+--     window opens only on a deliberate operator action, never spontaneously. This is the opposite of
+--     the RDS-managed master secret's 7-day auto-rotation.
+--   * `make deploy` runs `migrate` first (see the Makefile), and the documented apply order is
+--     `terraform apply` → `make migrate`/`make deploy`, so the normal path closes the window within
+--     the same operator session.
+--   * Failure mode is a clean tool-level error on one read-only diagnostic tool. No data loss, no
+--     partial write, no effect on web/worker (those use rds_iam and are unaffected).
+-- A true fix (have the Lambda tolerate both passwords, or drive the ALTER ROLE from a Terraform-side
+-- rotation Lambda) means new infrastructure this PR should not add, so the window is documented here
+-- and in the runbook rather than engineered away. Recovery is one command: `make migrate`.
+--
+-- NOTE on re-running: migrate.mjs enforces checksum immutability for APPLIED migrations, so on a
+-- cluster where an earlier version of THIS file already ran, `make migrate` will refuse with
+-- "checksum drift" and the REVOKEs below will not execute. That is intended (migrations are
+-- immutable); this file is still editable because it has never shipped on `main`. The REVOKEs are
+-- kept so the file is self-converging on a fresh apply and for a cluster where the row was cleared.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'awsops_sql_reader') THEN
@@ -39,122 +99,149 @@ ALTER ROLE awsops_sql_reader WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOIN
   NOREPLICATION NOBYPASSRLS;
 
 -- Session-level read-only for this principal specifically: every connection starts read-only even
--- if a future code path forgets the explicit `SET TRANSACTION READ ONLY` wrapper.
+-- if a future code path forgets the explicit `SET TRANSACTION READ ONLY` wrapper. (A USERSET GUC —
+-- the role could turn it off — so it is convenience, not the boundary. The boundary is that this
+-- role holds no INSERT/UPDATE/DELETE anywhere and only SELECT on non-updatable views.)
 ALTER ROLE awsops_sql_reader SET default_transaction_read_only = on;
--- Deny the role the ability to turn that back off, or to reach anything outside `public`/pg_catalog
--- by search_path games. (search_path is not a privilege, but pinning it keeps a shadowed function
--- in a user-writable schema from being resolved ahead of a catalog one.)
-ALTER ROLE awsops_sql_reader SET search_path = public, pg_catalog;
+-- Resolve unqualified names to the redacted views. `public` is deliberately ABSENT.
+ALTER ROLE awsops_sql_reader SET search_path = sql_reader, pg_catalog;
 
 GRANT CONNECT ON DATABASE awsops TO awsops_sql_reader;
-GRANT USAGE ON SCHEMA public TO awsops_sql_reader;
 
--- ── INVARIANT (read this before adding a table to the list below) ─────────────────────────────────
--- `execute_sql` is a MODEL-INVOCABLE tool: whatever this role can SELECT, the agent can be talked
--- into printing. So this role must NEVER be granted access to a credential-bearing column. A future
--- migration that adds a secret/token/password/bearer column MUST also verify this grant list (and
--- prefer a column-level grant or a redacted view over a whole-table grant).
---
--- PR-review round 9 CRITICAL: this migration originally did
---   GRANT SELECT ON ALL TABLES IN SCHEMA public + ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES
--- which handed the agent `eks_registrations.auth` — a JSONB holding a raw Kubernetes ServiceAccount
--- bearer token that the read APIs deliberately return as `mode` only (see the
--- `eks_registrations_auth` migration, line 7). A PR that set out to STRENGTHEN the read-only boundary
--- would have shipped a new credential-exfiltration path. The blanket ALTER DEFAULT PRIVILEGES was the
--- worse half: it silently extends SELECT to every table any FUTURE migration adds, so the next person
--- to store a secret in a new table re-opens the hole with no review signal at all. Both are gone —
--- the grant is now an explicit allowlist, so a new table is invisible to this role until someone
--- deliberately adds it here.
---
--- Also REVOKEd first, so a cluster where the earlier blanket-grant version of this file already ran
--- converges to the allowlist instead of keeping the wide grant.
+-- ── Converge a cluster that ran round 8's blanket grant or round 9's table allowlist ──────────────
+-- Revoking a table-level privilege also drops the column-level grants derived from it, but the
+-- round-9 column grants on eks_registrations/accounts were granted independently, so revoke
+-- ALL PRIVILEGES (which in PostgreSQL covers column privileges on those tables too — verified on
+-- postgres:17-alpine, see the round-10 test evidence in the PR).
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM awsops_sql_reader;
 ALTER DEFAULT PRIVILEGES FOR ROLE awsops_admin IN SCHEMA public
   REVOKE SELECT ON TABLES FROM awsops_sql_reader;
+-- Drops the explicit round-8/9 grant. Honest caveat: PostgreSQL grants USAGE on `public` to PUBLIC
+-- by default, and this file does NOT revoke that (other roles depend on it) — so the role may still
+-- resolve `public.x`. That does not matter: with no table or column privilege, every
+-- `SELECT ... FROM public.<anything>` is "permission denied for table". The denial rests on the
+-- absence of table privileges, not on schema USAGE.
+REVOKE USAGE ON SCHEMA public FROM awsops_sql_reader;
 
--- Allowlist: the inventory/diagnostic tables the two consumers of this role actually read.
---   * inventory-read connector (agent/lambda/inventory_read_mcp.py): inventory_resources,
---     inventory_sync_runs, topology_nodes, topology_edges.
---   * rds-mcp `execute_sql`: ad-hoc Aurora diagnostics over the same operational state.
--- Existence-guarded per table (RAISE NOTICE, not abort) so the migration still runs against a DB
--- that predates one of them.
+-- ── The boundary: a schema of read-only views, one per thing the tool genuinely needs ─────────────
+CREATE SCHEMA IF NOT EXISTS sql_reader;
+-- No CREATE/USAGE on this schema for anyone but the owner (PostgreSQL's default for a new schema);
+-- stated as a REVOKE so re-running against a schema someone widened converges back.
+REVOKE ALL ON SCHEMA sql_reader FROM PUBLIC;
+GRANT USAGE ON SCHEMA sql_reader TO awsops_sql_reader;
+
+-- Views are named IDENTICALLY to their base tables so `search_path` makes an unqualified
+-- `FROM worker_jobs` resolve here. Each is DROP+CREATE (not CREATE OR REPLACE) so a column-list
+-- change re-runs cleanly; nothing depends on these views.
 --
--- DELIBERATELY EXCLUDED (do not add without re-reading the invariant above):
---   * eks_registrations  — `auth` JSONB holds a plaintext k8s bearer token. Column-level grant below
---                          mirrors the app's redaction boundary at the DB level instead.
---   * accounts           — `external_id` is documented as a confused-deputy guard rather than a
---                          secret, but it is still an AssumeRole input; column-level grant below.
---   * integrations       — the credential registry (credentials_ref / inbound_auth_ref /
---                          private_connection_ref). Those are Secrets Manager ARNs, not plaintext,
---                          but no consumer of this role needs the table, so it stays out.
---   * chat_threads / chat_messages / agentcore_memory — cross-user conversation content (users do
---                          paste credentials into chat). No consumer needs them.
+-- Derived from what the two consumers genuinely need — deliberately much SMALLER than round 9's
+-- 38-table allowlist, because this is an Aurora *diagnostics* tool, not general data access:
+--   * inventory-read connector (inventory_read_mcp.py): inventory_resources, inventory_sync_runs,
+--     topology_nodes, topology_edges — the only tables it queries.
+--   * rds-mcp `execute_sql`: "is the DB healthy, are jobs/diagnoses/compliance runs progressing,
+--     is inventory fresh, what accounts/clusters are registered, what does AI cost".
+--
+-- COLUMNS EXCLUDED (capability- or arbitrary-content-bearing). Do not add these back:
+--   worker_jobs.task_token        — Step Functions task token. A CAPABILITY, not data: the holder
+--                                   can SendTaskSuccess/SendTaskFailure on a live execution. This is
+--                                   the round-10 CRITICAL that killed the table allowlist.
+--   worker_jobs.payload           — arbitrary job input; carries caller-supplied content.
+--   worker_jobs.result            — arbitrary job output.
+--   worker_jobs.error             — arbitrary error text (can echo payload contents).
+--   worker_jobs.automation_execution_id, .plan_id
+--                                 — SSM Automation / remediation-plan handles (ADR-005 FROZEN
+--                                   surface); no diagnostic need.
+--   eks_registrations.auth        — JSONB holding a plaintext k8s ServiceAccount bearer token. The
+--                                   read APIs return `mode` only; this mirrors that at the DB level.
+--   accounts.external_id          — documented as a confused-deputy guard rather than a secret, but
+--                                   still an AssumeRole input.
+--   inventory_sync_runs.error     — arbitrary AWS SDK error text; status + row_count answer "is the
+--                                   sync healthy".
+--   diagnosis_reports.summary, .error, .progress, .tags, .sources_used, .artifact_uri
+--                                 — LLM output and free text; the metadata columns answer "did the
+--                                   report run". (`error` count columns on compliance_runs are
+--                                   INTEGERS — CIS status tallies — and are kept; the TEXT
+--                                   `compliance_runs.error_message` is excluded.)
+--
+-- TABLES DELIBERATELY NOT EXPOSED AT ALL (were in round 9's allowlist):
+--   integrations                  — the credential registry (credentials_ref / inbound_auth_ref /
+--                                   private_connection_ref). Secrets Manager ARNs, not plaintext,
+--                                   but no consumer needs it.
+--   chat_threads / chat_messages / agentcore_memory
+--                                 — cross-user conversation content (users do paste credentials
+--                                   into chat).
+--   agentcore_stats, ai_insights, ai_token_budget, cost_snapshots, inventory_snapshots,
+--   alert_diagnosis, architecture_intent, event_scaling_plans, opencost_config, action_catalog,
+--   action_plans, remediation_audit, customization_audit, report_schedules, prevention_*,
+--   incident_* , datasource_*, agents, agent_spaces, agent_skills, skills
+--                                 — each either carries a `payload`/`config`/`inputs` JSONB of
+--                                   arbitrary content, or has no concrete diagnostic need. YAGNI:
+--                                   add a view when a real query needs one.
 DO $$
 DECLARE
-  t text;
-  tables text[] := ARRAY[
-    -- inventory / topology (the inventory-read connector's own queries)
-    'inventory_resources', 'inventory_snapshots', 'inventory_sync_runs',
-    'topology_nodes', 'topology_edges',
-    -- jobs, diagnosis, compliance
-    'worker_jobs', 'schema_migrations', 'diagnosis_reports', 'alert_diagnosis',
-    'compliance_runs', 'compliance_results',
-    -- incident lifecycle
-    'incidents', 'incident_findings', 'incident_stages', 'incident_links', 'incident_writeback',
-    -- prevention / insights / AI accounting
-    'prevention_insights', 'prevention_recommendations',
-    'ai_insights', 'ai_usage_daily', 'ai_token_budget', 'agentcore_stats',
-    -- cost
-    'cost_snapshots', 'opencost_config',
-    -- architecture / datasource metadata (no secrets: schema caches and query templates)
-    'architecture_intent', 'datasource_schemas', 'datasource_diag_signals',
-    'datasource_graph_queries',
-    -- account scoping (accounts itself is column-level below)
-    'account_regions',
-    -- actions / audit / scheduling
-    'action_catalog', 'action_plans', 'event_scaling_plans',
-    'remediation_audit', 'customization_audit', 'report_schedules',
-    -- agent platform config (personas/routing, no credentials)
-    'agents', 'agent_spaces', 'agent_skills', 'skills'
-  ];
+  v record;
 BEGIN
-  FOREACH t IN ARRAY tables LOOP
+  FOR v IN
+    -- (base table in public, explicit column list). The column list is literal SQL from THIS file —
+    -- never user input — so raw %s interpolation below is safe.
+    SELECT * FROM (VALUES
+      -- inventory / topology (the inventory-read connector's own queries)
+      ('inventory_resources',
+       'resource_type, account_id, region, resource_id, data, captured_at'),
+      ('inventory_sync_runs',
+       'resource_type, account_id, started_at, finished_at, status, row_count'),
+      ('topology_nodes',
+       'account_id, id, kind, label, meta, run_id, captured_at, class'),
+      ('topology_edges',
+       'id, account_id, source, target, rel, confidence, run_id, captured_at, class'),
+      -- async job tier: metadata only (no task_token / payload / result / error)
+      ('worker_jobs',
+       'job_id, type, runtime, status, artifact_uri, dry_run, idempotency_key, attempt,
+        sfn_execution_arn, created_at, updated_at'),
+      -- "what schema is this cluster on" — the single most useful DB-diagnostic table
+      ('schema_migrations',
+       'version, applied_at, description'),
+      -- diagnosis / compliance run bookkeeping (no LLM output, no free-text errors)
+      ('diagnosis_reports',
+       'id, worker_job_id, parent_report_id, tier, status, requested_by, model, title,
+        created_at, updated_at, notified_at, deleted_at'),
+      ('compliance_runs',
+       'id, worker_job_id, benchmark, status, requested_by, pass_rate, total_controls,
+        ok, alarm, info, skip, error, started_at, finished_at, created_at, updated_at, account'),
+      ('compliance_results',
+       'id, run_id, control_id, title, section, status, reason, resource, region, severity'),
+      -- account / cluster scoping (minus external_id, minus auth)
+      ('accounts',
+       'account_id, alias, region, is_host, role_name, enabled, status, last_verified_at,
+        created_at, all_regions'),
+      ('account_regions',
+       'account_id, region, enabled, created_at, updated_at'),
+      ('eks_registrations',
+       'cluster_name, registered_by, created_at'),
+      -- AI spend (aggregate counters only)
+      ('ai_usage_daily',
+       'day, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, updated_at')
+    ) AS t(tbl, cols)
+  LOOP
     IF EXISTS (SELECT 1 FROM information_schema.tables
-                WHERE table_schema = 'public' AND table_name = t) THEN
-      EXECUTE format('GRANT SELECT ON public.%I TO awsops_sql_reader', t);
+                WHERE table_schema = 'public' AND table_name = v.tbl) THEN
+      EXECUTE format('DROP VIEW IF EXISTS sql_reader.%I', v.tbl);
+      EXECUTE format(
+        'CREATE VIEW sql_reader.%I WITH (security_invoker = false) AS SELECT %s FROM public.%I',
+        v.tbl, v.cols, v.tbl);
+      EXECUTE format('GRANT SELECT ON sql_reader.%I TO awsops_sql_reader', v.tbl);
     ELSE
-      RAISE NOTICE 'awsops_sql_reader: table public.% not present — grant skipped', t;
+      RAISE NOTICE 'awsops_sql_reader: base table public.% not present — view skipped', v.tbl;
     END IF;
   END LOOP;
 END $$;
 
--- Column-level grants: same tables the app exposes, minus the sensitive column. This is the DB-level
--- mirror of the application's redaction boundary — `SELECT auth FROM eks_registrations` and
--- `SELECT external_id FROM accounts` both fail for this role, while everything the agent legitimately
--- needs (which clusters/accounts exist, their status) still works. Note the consequence:
--- `SELECT * FROM eks_registrations` is DENIED for this role (the star expands to include `auth`) —
--- name the columns. Verified on postgres:17-alpine: cluster_name OK, `auth` and `*` denied,
--- `accounts.external_id` denied, a newly created table denied (no blanket/default grant), and
--- INSERT rejected by default_transaction_read_only.
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables
-              WHERE table_schema = 'public' AND table_name = 'eks_registrations') THEN
-    -- every column EXCEPT auth (the k8s bearer token)
-    GRANT SELECT (cluster_name, registered_by, created_at) ON eks_registrations TO awsops_sql_reader;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables
-              WHERE table_schema = 'public' AND table_name = 'accounts') THEN
-    -- every column EXCEPT external_id
-    GRANT SELECT (account_id, alias, region, is_host, role_name, enabled, status,
-                  last_verified_at, created_at, all_regions) ON accounts TO awsops_sql_reader;
-  END IF;
-END $$;
-
--- Explicitly NOT granted: INSERT/UPDATE/DELETE/TRUNCATE, any sequence, CREATE on any schema, any
--- EXECUTE grant to this role, membership in any predefined role (pg_read_server_files, pg_write_server_files,
--- pg_execute_server_program, pg_signal_backend, rds_superuser, aws_lambda, aws_s3). NOINHERIT means
--- even a future accidental group grant does not take effect without an explicit SET ROLE.
+-- Explicitly NOT granted: INSERT/UPDATE/DELETE/TRUNCATE anywhere, any privilege on any table in
+-- `public`, any sequence, CREATE on any schema, any EXECUTE grant, membership in any predefined role
+-- (pg_read_server_files, pg_write_server_files, pg_execute_server_program, pg_signal_backend,
+-- rds_superuser, aws_lambda, aws_s3). NOINHERIT means even a future accidental group grant does not
+-- take effect without an explicit SET ROLE. No ALTER DEFAULT PRIVILEGES anywhere — a future
+-- migration's new table reaches this role only by someone adding a view above.
 
 -- ── Best-effort belt-and-braces: revoke PUBLIC EXECUTE on the side-effect function classes ────────
 -- Which of these actually need this, for a plain NOSUPERUSER role:
@@ -179,13 +266,12 @@ END $$;
 -- fail with insufficient_privilege. That is tolerated per-function (NOTICE, not abort): they are
 -- hardening on top of the boundary, not the boundary.
 -- PR-review round 9 MAJOR — do NOT read these REVOKEs as a guarantee that PUBLIC EXECUTE is gone.
--- They are best-effort and may all be skipped. The boundary is the ROLE: NOSUPERUSER, no table-write
--- privilege, SELECT on an explicit allowlist only, no predefined-role membership,
--- default_transaction_read_only=on. That argument holds whether or not a single REVOKE lands:
+-- They are best-effort and may all be skipped. The boundary is the ROLE + the VIEW-ONLY grants:
+-- NOSUPERUSER, no privilege on any base table, SELECT only on the explicit-column views above, no
+-- predefined-role membership. That argument holds whether or not a single REVOKE lands:
 -- `query_to_xml(...)` invoked BY this role executes its inner SQL AS this role, so it can only reach
--- what this role can already reach, and `pg_cancel_backend` is limited by PostgreSQL to backends
--- owned by the same role (this role is not in pg_signal_backend), so it can only signal its own
--- sessions — never the web or worker roles'.
+-- what this role can already reach (the views), and `pg_cancel_backend` is limited by PostgreSQL to
+-- backends owned by the same role, so it can only signal its own sessions — never web's or worker's.
 -- Making the revoke failures fatal is deliberately NOT done: on Aurora that would likely make this
 -- migration unrunnable. Instead the post-state is reported below so an operator can see the truth.
 DO $$
