@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifyUser } from '@/lib/auth';
+import { verifyUser, identity } from '@/lib/auth';
 import {
   listReports,
   createReport,
@@ -19,7 +19,7 @@ export async function GET(req: Request) {
   if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
   // can_edit per report: compute isAdmin ONCE (async + SSM-backed), then compare requested_by.
   const admin = await isAdmin(user);
-  const me = user.email || user.sub; // pentest-remediation P2-1: match canMutateReport's `||`
+  const me = identity(user); // pentest-remediation P2-1: match canMutateReport's `||`
   const reports = await listReports(50, admin ? null : me);
   return NextResponse.json({
     reports: reports.map((r) => ({ ...r, can_edit: admin || r.requested_by === me })),
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
       if (rows.length > 0) { account = requested; scope = requested; }
     } catch { /* fall back to host */ }
   }
-  const email = user.email || user.sub;
+  const email = identity(user);
 
   // [GATE-FIX R2 CRITICAL] Idempotency-FIRST → create the report with NULL fk → enqueue (inserts
   // worker_jobs) → LINK. The FK is only set once worker_jobs(job_id) exists.
@@ -81,7 +81,7 @@ export async function POST(req: Request) {
     job = await enqueueJob(
       'report',
       { account, scope, tier, model, requested_by: email, report_id: reportId },
-      { idempotencyKey: key },
+      { idempotencyKey: key, requestedBy: email },
     );
   } catch (e) {
     await markReportFailed(reportId, 'enqueue failed'); // no orphan running row

@@ -75,9 +75,13 @@ export async function enqueueJob(
   if (ins.rows.length > 0) {
     jobId = ins.rows[0].job_id;
   } else {
+    // Scope the conflict lookup to the same requester (NULL-safe): idempotency keys can be
+    // deterministic and guessable (e.g. report:${email}:${tier}:...:${hour}), so without this an
+    // attacker who knows a victim's email could read the victim's job_id/status here and have
+    // their own payload attached to it via the SQS send below (pentest-remediation PR #195 review).
     const existing = await pool.query(
-      `SELECT job_id, status FROM worker_jobs WHERE idempotency_key = $1`,
-      [idempotencyKey],
+      `SELECT job_id, status FROM worker_jobs WHERE idempotency_key = $1 AND requested_by IS NOT DISTINCT FROM $2`,
+      [idempotencyKey, opts.requestedBy ?? null],
     );
     if (existing.rows.length === 0) {
       throw new Error('idempotency conflict but no existing row');

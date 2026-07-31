@@ -29,6 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `opencost_config` — read-only OpenCost install config (cluster-scoped helm version/values)
 - `prevention_insights` — ADR-032 Phase 4 cross-incident proactive-prevention tier
 - `eks_registrations` — EKS runtime registration (in-app query onboarding; EventBridge auto-register)
+- `worker_jobs.requested_by` — server-derived requester identity on every enqueue, used to scope
+  `GET /api/jobs`(`/[id]`) to the caller's own jobs (2026-07-22 pentest report remediation)
+
+### Security
+
+- `POST /api/jobs` now requires auth and enforces ownership on `GET /api/jobs`(`/[id]`); the
+  generic `report`/`compliance` job types were removed from its allowlist entirely — those job
+  types trust client-supplied `report_id`/`run_id`/`requested_by` with no ownership check, so
+  reaching them via the generic route was a cross-user IDOR write. They're only enqueueable via
+  `/api/diagnosis` and `/api/compliance/run`, which compute `requestedBy` server-side
+- Idempotency-key conflict lookup (`lib/jobs.ts`) is now scoped to the requesting user — a
+  guessable, deterministic key (e.g. a diagnosis report key derived from the victim's email) could
+  otherwise return another user's `job_id`/status and attach the attacker's payload to it
+- `/api/eks/[cluster]/register` now returns 413 (not a silent default-registration fallback) when
+  the request body exceeds the size cap
+- Request-body size caps (`readJsonBounded`) on several routes that previously read unbounded JSON
 
 ## [1.9.0] - 2026-05-27
 
@@ -410,6 +426,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `opencost_config` — read-only OpenCost 설치 설정(클러스터별 helm 버전/values)
 - `prevention_insights` — ADR-032 Phase 4 교차-인시던트 사전예방 티어
 - `eks_registrations` — EKS 런타임 등록(인앱 조회 온보딩; EventBridge 자동등록)
+- `worker_jobs.requested_by` — 모든 enqueue에 서버 측에서 유도한 요청자 identity 기록. `GET /api/jobs`(`/[id]`)를
+  호출자 본인 작업으로 범위 제한하는 데 사용(2026-07-22 pentest 리포트 후속 조치)
+
+### 보안
+
+- `POST /api/jobs`에 인증 요구 + `GET /api/jobs`(`/[id]`)에 소유권 검증 추가. 범용 `report`/`compliance`
+  잡 타입은 허용 목록에서 완전히 제거 — 해당 타입은 클라이언트가 넘긴 `report_id`/`run_id`/`requested_by`를
+  소유권 검증 없이 신뢰하므로, 범용 라우트로 도달 가능한 상태는 cross-user IDOR 쓰기였음. 이제
+  `requestedBy`를 서버에서 계산하는 `/api/diagnosis`, `/api/compliance/run`을 통해서만 enqueue 가능
+- idempotency-key 충돌 조회(`lib/jobs.ts`)를 요청자 기준으로 범위 제한 — 예측 가능한 idempotency key(예:
+  피해자 이메일에서 파생된 진단 리포트 키)를 알면 다른 사용자의 `job_id`/status를 조회하고 공격자의
+  payload를 그 작업에 붙일 수 있었음
+- `/api/eks/[cluster]/register`가 요청 본문이 크기 상한을 넘을 때 조용히 기본값으로 등록하지 않고 413을 반환
+- 이전에는 무제한 JSON을 읽던 여러 라우트에 요청 본문 크기 상한(`readJsonBounded`) 적용
 
 ## [1.9.0] - 2026-05-27
 

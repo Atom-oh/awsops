@@ -7,7 +7,7 @@ const proposeCandidates = vi.fn();
 const promoteIntent = vi.fn();
 const rejectIntent = vi.fn();
 
-vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a), identity: (u: any) => u.email || u.sub }));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/intent', () => ({
   listIntents: (...a: unknown[]) => listIntents(...a),

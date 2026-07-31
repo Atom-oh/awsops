@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifyUser } from '@/lib/auth';
+import { verifyUser, identity } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { getPool } from '@/lib/db';
 
@@ -28,7 +28,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       return NextResponse.json({ message: 'run not found' }, { status: 404 });
     }
     const run = runR.rows[0];
-    if (run.requested_by !== (user.email || user.sub) && !(await isAdmin(user))) {
+    if (run.requested_by !== identity(user) && !(await isAdmin(user))) {
       return NextResponse.json({ message: 'forbidden' }, { status: 403 });
     }
     const resR = await pool.query(

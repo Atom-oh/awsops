@@ -2,12 +2,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let insertParams: unknown[] = [];
 const sqsBodies: string[] = [];
+const queryCalls: Array<{ sql: string; params: unknown[] }> = [];
+// When set, the INSERT ... ON CONFLICT reports no row (simulating an idempotency-key collision),
+// forcing enqueueJob down the conflict-lookup SELECT path.
+let simulateConflict = false;
 
 vi.mock('@/lib/db', () => ({
   getPool: () => ({
-    query: async (_sql: string, params: unknown[]) => {
-      insertParams = params;
-      return { rows: [{ job_id: params[0] }] }; // inserted (not a conflict)
+    query: async (sql: string, params: unknown[]) => {
+      queryCalls.push({ sql, params });
+      if (/^INSERT/.test(sql)) {
+        insertParams = params;
+        if (simulateConflict) return { rows: [] };
+        return { rows: [{ job_id: params[0] }] }; // inserted (not a conflict)
+      }
+      // conflict-lookup SELECT
+      return { rows: [{ job_id: 'existing-job', status: 'queued' }] };
     },
   }),
 }));
@@ -28,6 +38,8 @@ import { enqueueJob } from './jobs';
 beforeEach(() => {
   insertParams = [];
   sqsBodies.length = 0;
+  queryCalls.length = 0;
+  simulateConflict = false;
   process.env.JOBS_QUEUE_URL = 'https://sqs.local/q';
   process.env.AWS_REGION = 'ap-northeast-2';
 });
@@ -62,5 +74,26 @@ describe('enqueueJob — requested_by persistence', () => {
   it('defaults to null when requestedBy is omitted (internal-only enqueues)', async () => {
     await enqueueJob('noop', {}, { jobId: 'j4' });
     expect(insertParams.at(-1)).toBeNull();
+  });
+});
+
+// PR #195 review MAJOR: idempotency keys can be deterministic/guessable (e.g. a diagnosis report
+// key derived from the victim's email). Without scoping the conflict-lookup by requester, an
+// attacker who knows a victim's email could read the victim's job_id/status and have their own
+// payload attached to it via the SQS send.
+describe('enqueueJob — idempotency conflict lookup scoped by requester', () => {
+  it('scopes the conflict SELECT to idempotency_key AND requested_by (NULL-safe)', async () => {
+    simulateConflict = true;
+    await enqueueJob('report', {}, { idempotencyKey: 'k1', requestedBy: 'victim@x.io', jobId: 'j5' });
+    const select = queryCalls.find((c) => /^SELECT/.test(c.sql));
+    expect(select?.sql).toMatch(/requested_by IS NOT DISTINCT FROM \$2/);
+    expect(select?.params).toEqual(['k1', 'victim@x.io']);
+  });
+
+  it('passes null (not undefined) for internal-only enqueues so IS NOT DISTINCT FROM matches NULL rows', async () => {
+    simulateConflict = true;
+    await enqueueJob('report', {}, { idempotencyKey: 'k2', jobId: 'j6' });
+    const select = queryCalls.find((c) => /^SELECT/.test(c.sql));
+    expect(select?.params).toEqual(['k2', null]);
   });
 });

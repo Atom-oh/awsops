@@ -51,3 +51,8 @@ export async function verifyUser(cookieHeader: string | null): Promise<User | nu
     return null;
   }
 }
+
+/** Stable identity for ownership checks (requested_by, created_by, etc.) — email if present, else sub. */
+export function identity(user: User): string {
+  return user.email || user.sub;
+}

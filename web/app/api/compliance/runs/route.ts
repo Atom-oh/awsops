@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifyUser } from '@/lib/auth';
+import { verifyUser, identity } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { getPool } from '@/lib/db';
 
@@ -14,7 +14,7 @@ export async function GET(req: Request) {
   }
   try {
     const admin = await isAdmin(user);
-    const me = user.email || user.sub;
+    const me = identity(user);
     const cols = `id, worker_job_id, benchmark, status, requested_by, account, pass_rate,
               total_controls, ok, alarm, info, skip, error, error_message, started_at, finished_at`;
     const r = admin

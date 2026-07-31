@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
-import { verifyUser } from '@/lib/auth';
+import { verifyUser, identity } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 
 export const dynamic = 'force-dynamic';
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       return NextResponse.json({ message: 'job not found' }, { status: 404 });
     }
     const row = r.rows[0];
-    const me = user.email || user.sub;
+    const me = identity(user);
     if (row.requested_by !== me && !(await isAdmin(user))) {
       return NextResponse.json({ message: 'forbidden' }, { status: 403 });
     }

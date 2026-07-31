@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({ verifyUser: vi.fn() }));
+vi.mock('@/lib/auth', () => ({ verifyUser: vi.fn(), identity: (u: any) => u.email || u.sub }));
 vi.mock('@/lib/diagnosis', () => ({
   listReports: vi.fn(async () => [
     { id: 1, requested_by: 'u@x.io' },
