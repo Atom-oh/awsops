@@ -19,10 +19,13 @@ const ALLOWED = new Set(['noop', 'noop-heavy']);
 // request reaching the BFF (or the ALB directly, since /api/jobs is not in the edge's is_public()
 // allowlist) could enqueue a job, triggering billed Bedrock/Powerpipe work unauthenticated.
 // GET had verifyUser but no ownership filter, exposing every job's result/error.
+// Also (P2-review MAJOR-2, merged from #199): Lambda@Edge only validates JWT signature/expiry, so
+// without this call a token that had been revoked on logout — but not yet expired — could keep
+// enqueueing billable work for its full remaining lifetime. verifyUser() is revocation-aware, so
+// one call covers both the unauthenticated and the revoked-but-unexpired case.
 export async function POST(req: NextRequest) {
   const user = await verifyUser(req.headers.get('cookie'));
   if (!user) return NextResponse.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
-
   const queueUrl = process.env.JOBS_QUEUE_URL;
   if (!queueUrl) {
     return NextResponse.json(

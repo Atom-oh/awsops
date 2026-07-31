@@ -28,7 +28,7 @@ describe('GET /api/jobs/[id]', () => {
     const { GET } = await import('./route');
     expect((await GET(req(), ctx)).status).toBe(401);
   });
-  it('400 invalid id', async () => {
+  it('400 on a malformed id (checked only after auth)', async () => {
     verifyUser.mockResolvedValue({ sub: 'u' });
     const { GET } = await import('./route');
     const res = await GET(req(), { params: { id: 'not-a-uuid' } });
