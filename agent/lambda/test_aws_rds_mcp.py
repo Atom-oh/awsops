@@ -146,6 +146,17 @@ class TestExecuteSqlEngineDialect(unittest.TestCase):
         self.assertIn("read-only", body["error"])
         self.rds_data_client.execute_statement.assert_not_called()
 
+    def test_mysql_dollar_quote_hidden_into_outfile_now_rejected(self):
+        # PR-review round 5 MAJOR: `$tag$` dollar-quoting is Postgres-only syntax. MySQL parses `$`
+        # as an ordinary identifier char, so `$x$` here is just a weird alias, NOT a heredoc — but
+        # the old dialect-agnostic scanner treated it as an unterminated dollar-quoted string and
+        # swallowed the real `INTO OUTFILE` past it.
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
+        status, body = self._status("SELECT 1 AS $x$ INTO OUTFILE '/tmp/x'")
+        self.assertEqual(status, 400)
+        self.assertIn("read-only", body["error"])
+        self.rds_data_client.execute_statement.assert_not_called()
+
     def test_mysql_plain_select_still_allowed(self):
         # Round-4 fix: MySQL does NOT get the begin_transaction/"SET TRANSACTION READ ONLY"/rollback
         # wrapper — `SET TRANSACTION READ ONLY` is invalid mid-transaction on MySQL (error 1568) and

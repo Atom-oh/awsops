@@ -113,9 +113,12 @@ def lambda_handler(event, context):
             # PR-review round 3: MySQL's `--` comment additionally requires a trailing whitespace/
             # control char (or EOF) — `--1` is subtraction, not a comment, in MySQL. Postgres has
             # no such requirement, so its path keeps dash_comment_needs_boundary=False (default).
+            # PR-review round 5 MAJOR: `$tag$` dollar-quoting is Postgres-only syntax — MySQL treats
+            # `$` as a plain identifier char, so `SELECT 1 AS $x$ INTO OUTFILE ...` isn't a heredoc
+            # there; scanning for one anyway swallowed the real `INTO OUTFILE` as "still in string".
             if engine == "mysql":
                 dialect = {"hash_comment": True, "backslash_escapes": True,
-                           "dash_comment_needs_boundary": True}
+                           "dash_comment_needs_boundary": True, "dollar_quote": False}
             elif engine == "postgres":
                 dialect = {"hash_comment": False, "backslash_escapes": False}
             else:

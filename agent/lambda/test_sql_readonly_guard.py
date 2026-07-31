@@ -73,6 +73,30 @@ class TestAssertReadOnly(unittest.TestCase):
         # PR-review MAJOR: /*! ... */ is executed by MySQL/Aurora-MySQL, not a real comment.
         self._bad("SELECT 1 /*!50000 INTO OUTFILE '/tmp/x'*/")
 
+    def test_nested_block_comment_bypass_rejected(self):
+        # PR-review round-5 CRITICAL: real Postgres nests /* */ — this whole comment is one block
+        # ending at the OUTERMOST */. The old single-find("*/") scanner stopped at the first (inner)
+        # */, leaving a stray ' that then ate the rest of the string as an "unterminated literal",
+        # hiding "pg_cancel_backend(123)" from DANGER entirely. Real Postgres parses this as
+        # "SELECT 1 , pg_cancel_backend(123)" — must be rejected.
+        self._bad("SELECT 1 /* outer /* inner */ ' */ , pg_cancel_backend(123)")
+
+    def test_deeply_nested_block_comment_bypass_rejected(self):
+        self._bad("SELECT 1 /* a /* b /* c */ ' */ */ , pg_cancel_backend(123)")
+
+    def test_well_formed_nested_comment_still_allows_legitimate_query(self):
+        # Proves the fix isn't just fail-closing on ALL comments — a fully-balanced nested comment
+        # strips cleanly to a genuinely safe statement.
+        self._ok("SELECT 1 /* outer /* inner */ trailing */ , col FROM t")
+
+    def test_unresolved_comment_marker_fails_closed(self):
+        # Defense-in-depth: if a literal /* or */ somehow survives stripping, reject rather than
+        # pass through a partial parse. An unterminated block comment can't leave a marker (the
+        # whole tail is consumed), so exercise the safety net directly against strip_sql's output
+        # contract instead.
+        with self.assertRaises(ValueError):
+            g.strip_sql("SELECT 1 */ FROM t")
+
 
 class TestPostgresDialect(unittest.TestCase):
     """aws_rds_mcp.py's RDS/PostgreSQL call path passes hash_comment=False, backslash_escapes=False

@@ -54,6 +54,24 @@ actual data writes — control-plane and session-GUC calls sail through it):
   (large-object write, missed alongside the round-2 `lo_import`/`lo_export`/`lo_create`/`lo_unlink`
   set) are the same story. All three are lexical-guard-only catches; see the corrected test in
   test_aws_rds_mcp.py that used to (incorrectly) assert the transaction caught `set_config`.
+
+PR-review round-5 CRITICAL: PostgreSQL block comments NEST by spec — `/* outer /* inner */ still-
+comment */` is ONE comment ending at the outermost `*/`, not two. The old scanner did a single
+`sql.find("*/", ...)` from the first `/*`, so it stopped at the FIRST `*/` (inside the nested
+comment) and treated everything after that (a stray `'` from the payload, then real SQL) as if it
+were outside the comment — the stray `'` then ate the rest of the string as an "unterminated
+literal", hiding a real `pg_cancel_backend(...)` call from DANGER *and* from the DB-level READ ONLY
+backstop (control-plane calls aren't writes). Fixed with a real depth-tracking scanner below.
+MySQL doesn't nest block comments, but defaulting to "nested" is the safe direction here (it only
+ever consumes MORE as comment, never less) — there's no dialect flag for this.
+Defense-in-depth: after stripping, if a literal `/*` or `*/` remains in the output, the comment
+scanner didn't cleanly resolve — fail closed rather than pass through a partially-stripped string.
+
+PR-review round-5 MAJOR: dollar-quoting (`$tag$...$tag$`) is Postgres-only syntax; MySQL allows `$`
+as an ordinary identifier character, so `SELECT 1 AS $x$ INTO OUTFILE ...` on a MySQL target isn't
+a heredoc at all — but the old dialect-agnostic scanner saw `$x$`, found no matching close, and
+swallowed `INTO OUTFILE` as "still inside the string". `dollar_quote=False` on the MySQL path
+disables that scan (Postgres/ClickHouse keep the default `dollar_quote=True`).
 """
 import re
 
@@ -80,7 +98,8 @@ DANGER = re.compile(
 )
 
 
-def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs_boundary=False):
+def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs_boundary=False,
+              dollar_quote=True):
     """Single left-to-right tokenizer (NOT sequential regexes — those desync on a quote inside an
     identifier and can eat a forbidden token, e.g. a ClickHouse url( call, past the guard). Drops
     string literals + comments; for IDENTIFIER quotes (` and ") keeps the inner name but removes the
@@ -94,6 +113,9 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
     dash_comment_needs_boundary: whether `--` requires a following whitespace/control char (or EOF)
     to count as a comment (True for MySQL, which parses e.g. `--1` as subtraction, not a comment;
     False for PostgreSQL/ClickHouse, where `--` is unconditionally a line comment).
+    dollar_quote: whether `$tag$...$tag$` is a heredoc/dollar-quoted string (True for Postgres/
+    ClickHouse; False for MySQL, where `$` is an ordinary identifier character and there's no such
+    syntax — scanning for it there lets a bogus `$x$`-looking alias hide real SQL past it).
     """
     out = []
     n = len(sql)
@@ -101,11 +123,25 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
     while idx < n:
         c = sql[idx]
         two = sql[idx:idx + 2]
-        if two == "/*":                       # block comment
+        if two == "/*":                       # block comment — PostgreSQL/SQL-standard NESTING
             if sql[idx:idx + 3] == "/*!":     # MySQL executable comment — NOT a real comment, fail closed
                 raise ValueError("read-only: MySQL executable comment (/*! ... */) is not allowed")
-            j = sql.find("*/", idx + 2)
-            idx = (j + 2) if j != -1 else n
+            # PR-review round-5 CRITICAL: `/* outer /* inner */ still-comment */` is ONE comment in
+            # real Postgres, ending at the OUTERMOST `*/` — a single find("*/") stops at the first
+            # (inner) close and leaves the rest of the payload looking like live SQL. Track nesting
+            # depth instead. Defaulting to "nested" even for dialects that don't nest (MySQL) is the
+            # safe direction: it only ever swallows more as comment, never exposes less.
+            depth = 1
+            idx += 2
+            while idx < n and depth > 0:
+                if sql[idx:idx + 2] == "/*":
+                    depth += 1
+                    idx += 2
+                elif sql[idx:idx + 2] == "*/":
+                    depth -= 1
+                    idx += 2
+                else:
+                    idx += 1
             out.append(" ")
         elif (two == "--" and (
                 not dash_comment_needs_boundary
@@ -139,7 +175,7 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
                     break
                 idx += 1
             out.append(" ")
-        elif c == "$" and re.match(r"\$[A-Za-z0-9_]*\$", sql[idx:]):  # heredoc/dollar-quoted string
+        elif dollar_quote and c == "$" and re.match(r"\$[A-Za-z0-9_]*\$", sql[idx:]):  # heredoc/dollar-quoted string
             delim = re.match(r"\$[A-Za-z0-9_]*\$", sql[idx:]).group(0)  # $$ or $tag$
             j = sql.find(delim, idx + len(delim))
             idx = (j + len(delim)) if j != -1 else n
@@ -164,18 +200,25 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs
         else:
             out.append(c)
             idx += 1
-    return "".join(out)
+    result = "".join(out)
+    # PR-review round-5 defense-in-depth: a literal `/*` or `*/` surviving to here means the comment
+    # scanner didn't cleanly resolve (e.g. some future edge case leaves nesting depth unbalanced) —
+    # fail closed instead of passing through whatever partial strip result was produced.
+    if "/*" in result or "*/" in result:
+        raise ValueError("read-only: unresolved block comment marker after parsing")
+    return result
 
 
 def assert_read_only(sql, read_verbs=READ_VERBS, danger_re=DANGER, extra_forbidden_re=None,
                       extra_message=None, hash_comment=True, backslash_escapes=True,
-                      dash_comment_needs_boundary=False):
+                      dash_comment_needs_boundary=False, dollar_quote=True):
     """Raise ValueError unless `sql` is a single, comment/string-stripped statement starting with a
     read verb and containing no DANGER (or caller-supplied extra_forbidden_re) keyword/construct.
-    See `strip_sql` for the `hash_comment` / `backslash_escapes` / `dash_comment_needs_boundary`
-    dialect knobs."""
+    See `strip_sql` for the `hash_comment` / `backslash_escapes` / `dash_comment_needs_boundary` /
+    `dollar_quote` dialect knobs."""
     stripped = strip_sql(sql or "", hash_comment=hash_comment, backslash_escapes=backslash_escapes,
-                          dash_comment_needs_boundary=dash_comment_needs_boundary)
+                          dash_comment_needs_boundary=dash_comment_needs_boundary,
+                          dollar_quote=dollar_quote)
     if len([p for p in stripped.split(";") if p.strip()]) > 1:
         raise ValueError("read-only: multiple statements are not allowed")
     tokens = stripped.strip().split()
