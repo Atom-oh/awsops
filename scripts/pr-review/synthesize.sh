@@ -191,10 +191,17 @@ run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도
   # 시점까지 미루므로, 이 자식이 CHAIR_TIMEOUT(600s)까지 살 수 있는 상황에서 SIGTERM 을 받아도
   # 스크립트가 즉시 죽지 않는다(GitHub grace period 가 먼저 끝나 SIGKILL 로 이어짐). `wait` 는
   # 시그널로 중단되므로 트랩이 제때 돌고, 핸들러가 이 PID 를 먼저 정리한다.
+  # 파이프라인이 아니라 단일 명령으로 띄운다 — `a | b &` 에서 `$!` 는 파이프라인의 *마지막*
+  # 원소를 가리키므로(실측: `sleep 30 | cat &` 의 `$!` 는 cat), 그걸 kill 해도 정작 chair 프로세스는
+  # 살아남아 러너에서 계속 돈다. 또 이 셸에서 백그라운드 잡은 별도 프로세스 그룹이 아니라 스크립트와
+  # 같은 PGID 를 쓰므로 `kill -- -PGID` 는 우리 자신까지 죽인다. stdout 도 process substitution 으로
+  # 받아 파이프라인을 없애면 `$!` 가 timeout 의 PID 가 되고, 그걸 TERM 하면 timeout 이 claude 를
+  # 정리한다. 두 출력 모두 쓰이는 시점에 스크럽되므로 SIGKILL 에도 원본이 남지 않는다.
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-    < "$WORK/synth-stdin.txt" 2> >(strip_controls | scrub_secrets > "$2") \
-    | strip_controls | scrub_secrets > "$OUT" &
+    < "$WORK/synth-stdin.txt" \
+    > >(strip_controls | scrub_secrets > "$OUT") \
+    2> >(strip_controls | scrub_secrets > "$2") &
   CHAIR_JOB_PID=$!
   wait "$CHAIR_JOB_PID" || true
   CHAIR_JOB_PID=""
@@ -203,7 +210,7 @@ run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도
   # 실패해도 보안 성질은 불변이다: 늦게 도착하는 바이트도 이미 스크럽을 통과한 것이다.
   local prev=-1 cur
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    cur=$(wc -c < "$2" 2>/dev/null || echo 0)
+    cur="$(wc -c < "$2" 2>/dev/null || echo 0)/$(wc -c < "$OUT" 2>/dev/null || echo 0)"
     [ "$cur" = "$prev" ] && break
     prev="$cur"; sleep 0.1
   done

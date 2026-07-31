@@ -398,4 +398,50 @@ else
   pass "a SIGKILLed run leaves no raw chair stderr (untrappable, so scrub must happen on write)"
 fi
 
+# Terminating the script is not enough — the chair child must die with it. NOTE this test passes
+# against the old pipeline form too, so it does NOT by itself justify the single-command
+# restructure: with `a | b &` the last stage dying gives `a` a SIGPIPE, which happens to clean up
+# this fake chair. It is kept as a regression guard on the property we want, not as proof. The
+# restructure rests on a separately measured fact: in `a | b &` bash sets `$!` to the LAST element
+# (verified: `sleep 30 | cat &` → `$!` is cat, and the sleep survived killing it), so the handler
+# was TERMing the wrong process; a real chair that ignores SIGPIPE or buffers would be orphaned.
+# Killing the process group is not an option here — background jobs share the script's PGID.
+WORK8=$(mktemp -d); mkdir -p "$WORK8/slot"; : > "$WORK8/responded.txt"
+echo "model0/L2" >> "$WORK8/responded.txt"; echo "cell" > "$WORK8/slot/model0-L2.md"
+DIFF8=$(mktemp); echo "diff --git a/x b/x" > "$DIFF8"
+CHAIR_MARKER="chairproc-$$-$(date +%s)"
+
+# The fake chair writes its own marker into argv so we can find it in the process table, then hangs.
+cat > "$BIN/claude" <<EOF
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'creds %s\\n' "\$FAILURE_SECRET" >&2
+exec sleep 300 # $CHAIR_MARKER
+EOF
+chmod +x "$BIN/claude"
+
+PATH="$BIN:$PATH" FAILURE_SECRET="$FAKE_AWS_KEY" \
+  CHAIR_PRIMARY_MODEL="$PRIMARY_MODEL" CHAIR_FALLBACK_MODEL="$FALLBACK_MODEL" \
+  GITHUB_ENV="$WORK8/github-env.txt" \
+  bash "$SCRIPT" "$DIFF8" "$WORK8" 1 "child leak" "$WORK8/review.md" \
+  > "$WORK8/synth.log" 2>&1 &
+LEAK_PID=$!
+for _ in $(seq 1 100); do
+  pgrep -f "$CHAIR_MARKER" >/dev/null 2>&1 && break
+  sleep 0.1
+done
+kill -TERM "$LEAK_PID" 2>/dev/null || true
+wait "$LEAK_PID" 2>/dev/null || true
+# Give the TERM a moment to propagate through timeout to the child.
+for _ in $(seq 1 30); do
+  pgrep -f "$CHAIR_MARKER" >/dev/null 2>&1 || break
+  sleep 0.1
+done
+if pgrep -f "$CHAIR_MARKER" >/dev/null 2>&1; then
+  pkill -KILL -f "$CHAIR_MARKER" 2>/dev/null || true
+  fail "cancelling the script also kills the chair child (child survived)"
+else
+  pass "cancelling the script also kills the chair child"
+fi
+
 [ "$FAILED" -eq 0 ] || exit 1
