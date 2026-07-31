@@ -316,7 +316,12 @@ jobs:
           GATE_RESULT: ${{ steps.gate.outputs.result }}
         run: |
           MARKER="<!-- multi-ai-pr-review -->"
-          if [ "$GATE_RESULT" = "fail" ]; then
+          if [ "$GATE_RESULT" = "fail" ] && [ "${chair_failed:-0}" = "1" ]; then
+            # chair(Fable 5/Opus 5 둘 다) 가 timeout/연결 오류로 리뷰를 못 만든 경우 —
+            # fail-closed 로 여전히 BLOCKED 하지만, 코드에 CRITICAL/MAJOR 가 있다는 뜻이
+            # 아니므로 문구를 구분한다(synthesize.sh 의 chair-failed.flag → chair_failed).
+            STATUS_BADGE="**Status: BLOCKED** — 리뷰 생성 실패(모델 timeout/오류) — 코드 문제 아님, 워크플로 재실행 필요"
+          elif [ "$GATE_RESULT" = "fail" ]; then
             STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
           else
             STATUS_BADGE="**Status: PASSED** — No blocking issues found"
