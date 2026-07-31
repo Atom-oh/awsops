@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { verifyUser, readSchedule, upsertSchedule } = vi.hoisted(() => ({
   verifyUser: vi.fn(), readSchedule: vi.fn(), upsertSchedule: vi.fn(),
 }));
-vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+vi.mock('@/lib/auth', () => ({
+  verifyUser: (...a: unknown[]) => verifyUser(...a),
+  identity: (u: { sub: string; email?: string }) => u.email || u.sub,
+}));
 vi.mock('@/lib/diagnosis-schedule', () => ({
   readSchedule: (...a: unknown[]) => readSchedule(...a),
   upsertSchedule: (...a: unknown[]) => upsertSchedule(...a),
@@ -69,5 +72,26 @@ describe('PUT /api/diagnosis/schedule', () => {
     upsertSchedule.mockResolvedValue({ scheduleType: 'weekly', enabled: false, tier: 'mid', model: null, nextRunAt: 'n', lastRunAt: null });
     await PUT(req({ scheduleType: 'weekly', enabled: false, user_sub: 'victim', userSub: 'victim' }));
     expect(upsertSchedule).toHaveBeenCalledWith('u1', expect.anything()); // authed sub, not the body's
+  });
+});
+
+// PR #195 review round 2 MAJOR: report_schedules.user_sub must store the SAME email-preferring
+// identity() used everywhere else for ownership (diagnosis_reports.requested_by, worker_jobs.
+// requested_by) — a user with both an email and a sub claim was previously scheduled under sub,
+// but GET /api/diagnosis and GET /api/jobs filter by identity() (email-preferring), so their own
+// scheduled report/job became invisible to them.
+describe('GET/PUT /api/diagnosis/schedule scope by identity() (email-preferring), not raw sub', () => {
+  it('GET reads the schedule under the email, not the sub, when both claims are present', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u1', email: 'u1@x.io' });
+    readSchedule.mockResolvedValue(null);
+    await GET(req());
+    expect(readSchedule).toHaveBeenCalledWith('u1@x.io');
+  });
+
+  it('PUT upserts the schedule under the email, not the sub, when both claims are present', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u1', email: 'u1@x.io' });
+    upsertSchedule.mockResolvedValue({ scheduleType: 'weekly', enabled: true, tier: 'mid', model: null, nextRunAt: 'n', lastRunAt: null });
+    await PUT(req({ scheduleType: 'weekly', enabled: true }));
+    expect(upsertSchedule).toHaveBeenCalledWith('u1@x.io', expect.anything());
   });
 });

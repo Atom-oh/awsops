@@ -97,3 +97,32 @@ describe('enqueueJob — idempotency conflict lookup scoped by requester', () =>
     expect(select?.params).toEqual(['k2', null]);
   });
 });
+
+// PR #195 review round 2 MAJOR: idempotency_key is no longer a single global UNIQUE column (see
+// migration 01KYVDMY8Y7Q90YPTGK23QNR3B) — it's two partial unique indexes, one scoped per
+// requester and one for internal (requested_by IS NULL) enqueues. The ON CONFLICT target must
+// name whichever partial index actually covers the row being inserted, or Postgres rejects the
+// statement (no matching arbiter) / silently uses the wrong one.
+describe('enqueueJob — ON CONFLICT target matches the partial index for this row', () => {
+  it('targets the per-requester partial index when requestedBy is set', async () => {
+    await enqueueJob('report', {}, { idempotencyKey: 'k3', requestedBy: 'a@x.io', jobId: 'j7' });
+    const insert = queryCalls.find((c) => /^INSERT/.test(c.sql));
+    expect(insert?.sql).toMatch(/ON CONFLICT \(requested_by, idempotency_key\) WHERE requested_by IS NOT NULL/);
+  });
+
+  it('targets the internal (NULL-requester) partial index when requestedBy is omitted', async () => {
+    await enqueueJob('noop', {}, { idempotencyKey: 'k4', jobId: 'j8' });
+    const insert = queryCalls.find((c) => /^INSERT/.test(c.sql));
+    expect(insert?.sql).toMatch(/ON CONFLICT \(idempotency_key\) WHERE requested_by IS NULL/);
+  });
+
+  it('two different requesters using the identical idempotency key both take the insert path (no cross-user conflict)', async () => {
+    await enqueueJob('report', {}, { idempotencyKey: 'shared-key', requestedBy: 'a@x.io', jobId: 'j9' });
+    const first = insertParams;
+    await enqueueJob('report', {}, { idempotencyKey: 'shared-key', requestedBy: 'b@x.io', jobId: 'j10' });
+    // Each requester's own row is inserted independently — same idempotency_key, different requested_by,
+    // both scoped by the per-requester partial index so neither collides with the other's row.
+    expect(first).toContain('a@x.io');
+    expect(insertParams).toContain('b@x.io');
+  });
+});

@@ -65,12 +65,21 @@ export async function enqueueJob(
   const pool = getPool();
   let jobId = '';
   let status = 'queued';
+  const requestedBy = opts.requestedBy ?? null;
+  // idempotency_key is no longer a single global UNIQUE column (round-2 pentest fix: a globally
+  // guessable key let one requester's pre-inserted row DoS another requester's real request) — it's
+  // now two partial unique indexes, one per requested_by IS [NOT] NULL (see migration
+  // 01KYVDMY8Y7Q90YPTGK23QNR3B). The ON CONFLICT target must name whichever partial index actually
+  // covers this row; Postgres can't pick between two partial arbiters based on the row's own values.
+  const conflictTarget = requestedBy === null
+    ? 'ON CONFLICT (idempotency_key) WHERE requested_by IS NULL'
+    : 'ON CONFLICT (requested_by, idempotency_key) WHERE requested_by IS NOT NULL';
   const ins = await pool.query(
     `INSERT INTO worker_jobs (job_id, type, payload, dry_run, idempotency_key, requested_by, status)
      VALUES ($1, $2, $3::jsonb, $4, $5, $6, 'queued')
-     ON CONFLICT (idempotency_key) DO NOTHING
+     ${conflictTarget} DO NOTHING
      RETURNING job_id`,
-    [opts.jobId || randomUUID(), type, payloadJson, dryRun, idempotencyKey, opts.requestedBy ?? null],
+    [opts.jobId || randomUUID(), type, payloadJson, dryRun, idempotencyKey, requestedBy],
   );
   if (ins.rows.length > 0) {
     jobId = ins.rows[0].job_id;
@@ -81,7 +90,7 @@ export async function enqueueJob(
     // their own payload attached to it via the SQS send below (pentest-remediation PR #195 review).
     const existing = await pool.query(
       `SELECT job_id, status FROM worker_jobs WHERE idempotency_key = $1 AND requested_by IS NOT DISTINCT FROM $2`,
-      [idempotencyKey, opts.requestedBy ?? null],
+      [idempotencyKey, requestedBy],
     );
     if (existing.rows.length === 0) {
       throw new Error('idempotency conflict but no existing row');

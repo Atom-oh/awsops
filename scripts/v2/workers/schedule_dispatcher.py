@@ -44,7 +44,7 @@ def _coerce_config(config):
     return config if isinstance(config, dict) else {}
 
 
-def _create_report(conn, tier, requested_by, model):
+def _create_report(conn, tier, owner_identity, model):
     """Pre-create a visible 'running' diagnosis_reports row mirroring the BFF createReport — including
     `model` (UI metadata) and `parent_report_id` (diff lineage = most-recent SUCCEEDED report of the same
     tier) — so a scheduled run is tracked, shows its model, supports regression diff, and a pre-_report
@@ -54,28 +54,35 @@ def _create_report(conn, tier, requested_by, model):
         "VALUES (NULL, :t, :rb, 'running', "
         "  (SELECT id FROM diagnosis_reports WHERE tier = :t AND status = 'succeeded' AND deleted_at IS NULL "
         "   ORDER BY created_at DESC LIMIT 1), :m) RETURNING id",
-        t=tier, rb=requested_by, m=model,
+        t=tier, rb=owner_identity, m=model,
     )
     return rows[0][0]
 
 
-def _enqueue_report(conn, user_sub, config):
+def _enqueue_report(conn, owner_identity, config):
+    """`owner_identity` is report_schedules.user_sub — despite the column name, the BFF (round-2
+    pentest fix) now writes the SAME email-preferring identity() value used for diagnosis_reports/
+    worker_jobs ownership everywhere else, NOT necessarily the raw Cognito sub. Pass it straight
+    through as requested_by (never re-derive it) so a scheduled report/job stays visible to the
+    owner under GET /api/diagnosis and GET /api/jobs, which both filter by that same identity."""
     cfg = _coerce_config(config)
     account = cfg.get("account") or HOST_ACCOUNT
     tier = cfg.get("tier", "mid")
     # only the deep tier may select opus; light/mid are pinned to sonnet (matches the BFF/worker resolver).
     model = "opus" if (tier == "deep" and cfg.get("model") == "opus") else "sonnet"
-    report_id = _create_report(conn, tier, user_sub, model)  # visible 'running' row first
+    report_id = _create_report(conn, tier, owner_identity, model)  # visible 'running' row first
     job_id = str(uuid.uuid4())
     payload = {
         "account": account,
         "tier": tier,
         "model": model,
-        "requested_by": user_sub,
+        "requested_by": owner_identity,
         "report_id": report_id,  # _report uses this → no duplicate self-created row
         "scheduled": True,
     }
-    db.insert_job(conn, job_id, "report", payload)  # durable ledger row (FK target for the link)
+    # requested_by=owner_identity: worker_jobs ownership must match, or GET /api/jobs/[id] (owner-or-
+    # admin check) would 403 the very user this scheduled run was created for (round-2 MAJOR).
+    db.insert_job(conn, job_id, "report", payload, requested_by=owner_identity)  # durable ledger row
     conn.run("UPDATE diagnosis_reports SET worker_job_id = :jid WHERE id = :rid", jid=job_id, rid=report_id)
     try:
         _sqs.send_message(
@@ -101,12 +108,12 @@ def lambda_handler(_event, _ctx):
         due = conn.run(_CLAIM_SQL)  # atomic claim+advance
         enqueued, failed = [], []
         for row in due or []:
-            user_sub, _schedule_type, config = row[0], row[1], row[2]
+            owner_identity, _schedule_type, config = row[0], row[1], row[2]
             try:
-                enqueued.append(_enqueue_report(conn, user_sub, config))
+                enqueued.append(_enqueue_report(conn, owner_identity, config))
             except Exception as exc:  # noqa: BLE001 — one bad row must not block the rest
-                print(f"schedule_dispatcher: enqueue failed for {user_sub}: {exc}")
-                failed.append(user_sub)
+                print(f"schedule_dispatcher: enqueue failed for {owner_identity}: {exc}")
+                failed.append(owner_identity)
         out = {"due": len(due or []), "enqueued": len(enqueued), "failed": len(failed)}
         print(f"schedule_dispatcher: {out}")
         return out
