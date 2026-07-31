@@ -78,4 +78,27 @@ describe('PUT /api/opencost/[cluster]', () => {
     expect(res.status).toBe(400);
     expect(upsertOpencostConfig).not.toHaveBeenCalled();
   });
+  it('200 accepts an IRSA-style override key containing a slash', async () => {
+    upsertOpencostConfig.mockResolvedValue(true);
+    const { PUT } = await import('./route');
+    const res = await PUT(
+      req('PUT', { config: { override: { serviceAccount: { annotations: { 'eks.amazonaws.com/role-arn': 'arn:aws:iam::123:role/x' } } } } }),
+      P,
+    );
+    expect(res.status).toBe(200);
+  });
+  // pentest-remediation P1-2 follow-up: chartVersion used to only be validated at bundle-render
+  // time (renderInstallSh), so a bad value saved fine and permanently 500'd the bundle route later.
+  it('400 on an unsafe chartVersion, without ever calling upsertOpencostConfig', async () => {
+    const { PUT } = await import('./route');
+    const res = await PUT(req('PUT', { chartVersion: '1.0;curl evil', config: {} }), P);
+    expect(res.status).toBe(400);
+    expect(upsertOpencostConfig).not.toHaveBeenCalled();
+  });
+  it('400 when config is not a plain object', async () => {
+    const { PUT } = await import('./route');
+    const res = await PUT(req('PUT', { config: 'not-an-object' as any }), P);
+    expect(res.status).toBe(400);
+    expect(upsertOpencostConfig).not.toHaveBeenCalled();
+  });
 });

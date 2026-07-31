@@ -55,6 +55,30 @@ describe('renderValuesYaml', () => {
       renderValuesYaml({ ...baseCfg, override: { 'my-key.v2_ok': 'fine' } }),
     ).not.toThrow();
   });
+  // real Helm/K8s keys routinely contain '/' (IRSA annotations, nodeSelector, podAnnotations) —
+  // '/' doesn't break bare-scalar YAML key syntax, so the key validator must accept it (was
+  // wrongly reusing the shell-safety assertSafeName charset, which rejects '/').
+  it('accepts IRSA-style annotation keys containing a slash', () => {
+    expect(() =>
+      renderValuesYaml({
+        ...baseCfg,
+        override: {
+          serviceAccount: { annotations: { 'eks.amazonaws.com/role-arn': 'arn:aws:iam::123:role/x' } },
+          nodeSelector: { 'kubernetes.io/os': 'linux' },
+          podAnnotations: { 'prometheus.io/scrape': 'true' },
+        },
+      }),
+    ).not.toThrow();
+  });
+  it('still rejects the original Finding 4 newline/colon injection payloads', () => {
+    expect(() =>
+      renderValuesYaml({ ...baseCfg, override: { 'key\nmalicious_key: injected_value': 'test' } }),
+    ).toThrow(/unsafe config key/);
+  });
+  it('rejects __proto__/constructor/prototype override keys at validation time', () => {
+    // computed key forces a real own property (a literal `{ __proto__: ... }` sets the prototype instead)
+    expect(() => assertSafeYamlKeys({ ['__proto__']: { polluted: true } } as any)).toThrow(/unsafe config key/);
+  });
 });
 
 describe('assertSafeYamlKeys', () => {
@@ -63,6 +87,12 @@ describe('assertSafeYamlKeys', () => {
   });
   it('throws on an unsafe key at any depth', () => {
     expect(() => assertSafeYamlKeys({ a: { 'b\nc': 1 } } as any)).toThrow(/unsafe config key/);
+  });
+  it('accepts a slash in keys (IRSA/K8s annotation style)', () => {
+    expect(() => assertSafeYamlKeys({ 'eks.amazonaws.com/role-arn': 'x' } as any)).not.toThrow();
+  });
+  it('rejects a leading dash (YAML sequence indicator)', () => {
+    expect(() => assertSafeYamlKeys({ '-foo': 1 } as any)).toThrow(/unsafe config key/);
   });
 });
 
