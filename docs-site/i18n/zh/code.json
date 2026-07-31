@@ -350,6 +350,18 @@
     "message": "AWSops 统一运维仪表板",
     "description": "Hero image alt text"
   },
+  "home.hero.glyph.network": {
+    "message": "网络",
+    "description": "Hero glyph label: network"
+  },
+  "home.hero.glyph.cost": {
+    "message": "成本",
+    "description": "Hero glyph label: cost"
+  },
+  "home.hero.glyph.security": {
+    "message": "安全",
+    "description": "Hero glyph label: security"
+  },
   "home.hero.ctaPrimary": {
     "message": "开始阅读指南",
     "description": "Hero primary CTA"

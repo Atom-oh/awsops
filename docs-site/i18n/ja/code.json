@@ -350,6 +350,18 @@
     "message": "AWSops 統合運用ダッシュボード",
     "description": "Hero image alt text"
   },
+  "home.hero.glyph.network": {
+    "message": "ネットワーク",
+    "description": "Hero glyph label: network"
+  },
+  "home.hero.glyph.cost": {
+    "message": "コスト",
+    "description": "Hero glyph label: cost"
+  },
+  "home.hero.glyph.security": {
+    "message": "セキュリティ",
+    "description": "Hero glyph label: security"
+  },
   "home.hero.ctaPrimary": {
     "message": "ガイドを始める",
     "description": "Hero primary CTA"

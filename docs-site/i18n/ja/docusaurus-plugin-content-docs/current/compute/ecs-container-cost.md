@@ -8,8 +8,8 @@ import Screenshot from '@site/src/components/Screenshot';
 
 # ECS Container Cost
 
-:::caution v1 アーカイブ — 一部のみ v2 に適用
-以下の**計算式**は v2 でもそのまま有効です（`web/lib/inventory-derived.ts` の `ecs_task` deriver が同じ `(vCPU/1024)×単価×24 + (GB/1024)×単価×24` 式と同じ定数 `$0.04656`/`$0.00511` を使用）。v2 で無くなったのは **`data/config.json` の `fargatePricing` オーバーライド機構**のみです — 単価は ap-northeast-2 オンデマンド基準でコードにハードコードされており、リージョンごとに変更できません。以下の価格表は v1 時代の例で、リージョン表記に誤りがあります（実際の値は us-east-1 単価です）。
+:::caution v1 アーカイブ文書 — v2 に対応するページはありません
+この文書は v1 専用の **ECS Container Cost** ページ（統計カード、チャート、"Cost Calculation Basis" トグルを含む）について説明しています。**v2 にはこの専用ページ/UI が存在しません** — `web/` には `showBasis` トグルや対応する StatsCard・チャートはありません。v2 での対応機能は **`/inventory/ecs_task`** インベントリビューの **Cost/Day, Cost/Mo** カラムのみで、これらの値は CloudWatch Container Insights の使用率メトリクスではなく、**タスク定義に割り当てられた cpu/memory から算出した静的な推定値**です（`web/lib/inventory-derived.ts` の `ecs_task` deriver、106〜124 行目付近）。以下の**価格定数・計算式**（`$0.04656`/`$0.00511`、`(vCPU/1024)×単価×24 + (GB/1024)×単価×24`）はこの静的推定値の実際のロジックと一致しており正確です — 変更しないでください。ただし、この文書にある統計カード・チャート・"Cost Calculation Basis" トグル・「CloudWatch Container Insights メトリクスに基づいて計算」という記述は v1 専用であり、v2 には存在しません。
 :::
 
 ECS Fargate タスクのコストを分析するページです。Fargate の価格と CloudWatch Container Insights メトリクスに基づいてコストを計算します。
