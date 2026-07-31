@@ -447,6 +447,9 @@ MCP_SERVER_TARGETS = {
     "datadog-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "datadog",
+        # Vendor-hosted: pin the host. Datadog's MCP is mcp.datadoghq.com with regional siblings
+        # (EU / us3 / us5 / ap1 all live under datadoghq.com or datadoghq.eu; GovCloud is ddog-gov.com).
+        "allowed_host_suffixes": (".datadoghq.com", ".datadoghq.eu", ".ddog-gov.com"),
         "description": "Datadog official MCP (mcp.datadoghq.com) — GA, vendor-hosted, read (RBAC mcp_read)",
         # Datadog's own docs offer 3 auth shapes: OAuth2.1+PKCE (browser, unusable headless), a
         # DD_API_KEY+DD_APPLICATION_KEY header PAIR (needs 2 header slots — NOT expressible by one
@@ -457,6 +460,10 @@ MCP_SERVER_TARGETS = {
     "clickhouse-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "clickhouse",
+        # Self-hosted by design (cloud is OAuth-3LO-only, unusable headless) — no vendor domain
+        # exists to pin against, so the host is operator-asserted. This is NOT "unknown": it is a
+        # deliberate, distinct state from a missing pin.
+        "host_is_operator_asserted": True,
         "description": "ClickHouse official MCP (ClickHouse/mcp-clickhouse), self-hosted streamable-HTTP — read-only by default",
         # Cloud-hosted mcp.clickhouse.cloud is OAuth-3LO-only (browser consent) — not usable for a
         # headless diagnosis agent. This preset targets a SELF-HOSTED instance (CLICKHOUSE_MCP_SERVER_TRANSPORT=http),
@@ -467,6 +474,8 @@ MCP_SERVER_TARGETS = {
     "tempo-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "tempo",
+        # Self-hosted (in-binary query-frontend endpoint) — operator-asserted host.
+        "host_is_operator_asserted": True,
         "description": "Tempo built-in MCP (query-frontend /api/mcp) — official, in-binary, read (query-only tools)",
         # Ships in the Tempo binary itself (query_frontend.mcp_server.enabled); inherits whatever auth
         # already fronts the query-frontend. Mutually exclusive with tempo-mcp-target.
@@ -476,6 +485,8 @@ MCP_SERVER_TARGETS = {
     "jaeger-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "jaeger",
+        # Self-hosted (in-binary) — operator-asserted host.
+        "host_is_operator_asserted": True,
         "description": "Jaeger v2 built-in MCP (/api/ai/mcp/) — official, in-binary, gated by ai.enable_mcp (default off on the Jaeger side), read",
         "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
         "read_only_note": "9 read-only tools, tenancy-aware",
@@ -483,6 +494,8 @@ MCP_SERVER_TARGETS = {
     "grafana-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "grafana",
+        # Self-hosted (grafana/mcp-grafana) — operator-asserted host.
+        "host_is_operator_asserted": True,
         "description": "Grafana official MCP (grafana/mcp-grafana), self-hosted streamable-HTTP — dashboards + Loki datasource tools, read with --disable-write",
         # Self-host only — Grafana Cloud's hosted MCP is OAuth-browser-consent. Loki has no standalone
         # official MCP; its tools are surfaced here via mcp-grafana's Loki datasource support.
@@ -492,6 +505,10 @@ MCP_SERVER_TARGETS = {
     "dynatrace-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "dynatrace",
+        # Vendor-hosted SaaS: <env>.live.dynatrace.com / .apps.dynatrace.com. NOTE this pin excludes
+        # Dynatrace *Managed*, which customers self-host on their own domain — a Managed deployment
+        # must not reuse this preset key; it needs an operator-asserted entry of its own.
+        "allowed_host_suffixes": (".dynatrace.com",),
         "description": "Dynatrace official hosted MCP gateway (per-environment) — read, scope-based",
         "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
         "read_only_note": "no local flag; least-privilege via Platform Token scopes",
@@ -499,6 +516,8 @@ MCP_SERVER_TARGETS = {
     "splunk-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "splunk",
+        # Self-hosted (Splunkbase app on :8089) — operator-asserted host.
+        "host_is_operator_asserted": True,
         "description": "Splunk official MCP (Splunkbase app 7931), self-hosted (:8089/services/mcp) — RBAC-scoped, read",
         "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
         "read_only_note": "grant only mcp_tool_execute, never mcp_tool_admin",
@@ -506,6 +525,8 @@ MCP_SERVER_TARGETS = {
     "newrelic-mcp-server-target": {
         "gateway": "external-obs",
         "preset_key": "newrelic",
+        # Vendor-hosted: mcp.newrelic.com (EU accounts stay under newrelic.com).
+        "allowed_host_suffixes": (".newrelic.com",),
         "description": "New Relic official MCP (mcp.newrelic.com) — PREVIEW (enable under Previews & Trials), read",
         "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Api-Key", "credential_prefix": ""},
         "read_only_note": "preview — no documented read-only flag; use a read-scoped User API key",

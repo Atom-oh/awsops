@@ -30,6 +30,10 @@ _DATADOG_PRESET = {
         "gateway": "external-obs",
         "preset_key": "datadog",
         "description": "Datadog official MCP",
+        # Mirrors the real catalog entry: vendor-hosted, so the host is pinned. Without one of the
+        # two host-pin keys _host_pin_violation fails closed (a catalog entry that declares neither
+        # is a bug), which is exactly what we want in production but would break every test here.
+        "allowed_host_suffixes": (".datadoghq.com", ".datadoghq.eu", ".ddog-gov.com"),
         "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
     }
 }
@@ -39,6 +43,8 @@ _CLICKHOUSE_PRESET = {
         "gateway": "external-obs",
         "preset_key": "clickhouse",
         "description": "ClickHouse official MCP",
+        # Mirrors the real catalog entry: self-hosted, so the host is operator-asserted.
+        "host_is_operator_asserted": True,
         "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
     }
 }
@@ -316,7 +322,10 @@ class TestEnsureMcpServerTargets(unittest.TestCase):
         # treated exactly like never having acked B — fail-closed, retire, no credential handoff to
         # the unreviewed endpoint.
         ctrl = _ctrl_with_targets({"gw-1": [{"name": "datadog-mcp-server-target", "targetId": "t-1"}]})
-        ac = {"official_mcp_endpoints": {"datadog": "https://attacker-controlled.example.com/mcp"},
+        # The new endpoint is a VALID vendor host (regional sibling) on purpose — an off-domain host
+        # is now rejected by the host pin before the ack is consulted at all (ERR, not SKIP; see
+        # test_provision_host_pin), which would stop this test isolating the ack binding it exists for.
+        ac = {"official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.eu/mcp"},
               "official_mcp_read_only_ack": {"datadog": "https://mcp.datadoghq.com/v1/mcp"},  # stale ack, old endpoint
               "lambda_arns": {}, "region": "ap-northeast-2", "integrations_secret_name": "sec"}
         with mock.patch.object(provision.catalog, "MCP_SERVER_TARGETS", _DATADOG_PRESET), \
@@ -427,6 +436,8 @@ class TestLegacyRetireCrossesGateways(unittest.TestCase):
                 "gateway": "external-obs",
                 "preset_key": "tempo",
                 "description": "Tempo official MCP",
+                # Mirrors the real catalog entry: self-hosted, so the host is operator-asserted.
+                "host_is_operator_asserted": True,
                 "auth": {"mode": "api_key", "credential_location": "HEADER", "credential_parameter_name": "Authorization", "credential_prefix": "Bearer "},
             }
         }

@@ -65,8 +65,7 @@
 > **주의 (2-티어 정밀):** 외부 DATA write 티어가 일률 OFF는 아니다 — `diagnosis_notify_enabled`(SNS 이메일, IAM 단일 토픽 스코프, NOT AWS-리소스 변경)는 **이미 LIVE**(거버넌스 충족). 광역 `integrations_write_enabled`만 OFF. (ADR-007/ADR-013)
 
 > **폐기(do-not-revive):** BYO-MCP(임의 형태 외부 MCP, ADR 구 031-P3) — 큐레이션 커넥터만 허용. (ADR-007)
->
-> ⚠️ **미해결 이탈 (ADR-017, 2026-07-31):** official MCP 프리셋의 `preset_key` ↔ 호스트 바인딩이 코드로 고정되지 않는다 — `official_mcp_endpoints` 는 `https://` 스킴만 검사하고 ack 는 운영자 문자열의 자기 에코이므로, 프리셋을 임의 호스트에 바인딩하고 그 프리셋의 실제 자격증명을 붙일 수 있다. 이는 위 do-not-revive 와 실질적으로 동일한 연결이며 **정식 완화 절차(새 ADR + 패널 + owner-override)를 밟지 않았다.** 오너 결정(오준석, 2026-07-31)으로 이탈을 연 상태로 머지했고, 통제는 tfvars/PR 리뷰 게이트뿐이다. 해소책은 프리셋별 허용 호스트 suffix allowlist(fail-closed) — ADR-017 §Trade-offs 이탈 ② 참조. 이 줄은 해소되면 삭제한다.
+
 
 ---
 

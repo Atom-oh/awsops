@@ -159,7 +159,7 @@ def ensure_targets(ctrl, ac, gw_ids, skip_names=frozenset()):
             log(f"target:{tname}", "ERR", str(e)[:140])
 
 
-def _endpoint_blocked(endpoint):
+def _endpoint_blocked(endpoint, spec=None):
     """ADR-017 defense-in-depth (kiro review MAJOR finding, 2026-07-31): official_mcp_endpoints is
     an https-only tfvars map (enforced by ai.tf's variable validation block at plan time), but a
     tfvars edit can be applied without ever re-running that validation against code that already
@@ -168,7 +168,17 @@ def _endpoint_blocked(endpoint):
     RFC1918 private is deliberately ALLOWED (several ADR-017 presets are explicitly self-hosted
     in-VPC per catalog.py's own comments, e.g. ClickHouse/Grafana/Splunk). Returns a reason string
     if blocked, else None. A non-literal hostname (the common case) is not resolved here — same
-    deferral to connect time as the TS guard."""
+    deferral to connect time as the TS guard.
+
+    When `spec` (the catalog MCP_SERVER_TARGETS entry) is passed, this ALSO enforces the per-preset
+    host pin, which is what actually keeps this feature inside ADR-007's "curated official-vendor
+    only" boundary. Without it, `official_mcp_endpoints` only had to be `https://` and the ack was a
+    self-echo of the operator's own string, so a preset key could be bound to any host and
+    _ensure_api_key_provider would hand that host the preset's real vendor credential — effectively
+    the BYO-MCP connection BASELINE §2 pins as do-not-revive. Two states, deliberately distinct:
+    `allowed_host_suffixes` = vendor-hosted, pinned here; `host_is_operator_asserted` = genuinely
+    self-hosted (ClickHouse/Grafana/Splunk/Tempo/Jaeger), where no vendor domain exists to pin.
+    A spec with NEITHER is a catalog bug and fails closed rather than defaulting to permissive."""
     try:
         parsed = urlparse(endpoint)
     except ValueError:
@@ -187,6 +197,28 @@ def _endpoint_blocked(endpoint):
     if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or str(ip) == "255.255.255.255":
         return f"IP {ip} is loopback/link-local/multicast/unspecified (always blocked)"
     return None
+
+
+def _host_pin_violation(endpoint, spec):
+    """Per-preset host pin. Match on the PARSED hostname's suffix — never `endswith` on the raw URL,
+    which both `https://evil-datadoghq.com/` (no dot boundary) and
+    `https://datadoghq.com.attacker.example/` (suffix in the middle) would slip through."""
+    suffixes = spec.get("allowed_host_suffixes")
+    if not suffixes:
+        if spec.get("host_is_operator_asserted"):
+            return None  # self-hosted by design; no vendor domain to pin against
+        return "catalog entry declares neither allowed_host_suffixes nor host_is_operator_asserted"
+    try:
+        host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return "unparsable URL"
+    if not host:
+        return "no host in URL"
+    for suf in suffixes:
+        bare = suf.lstrip(".")
+        if host == bare or host.endswith(suf):
+            return None
+    return f"host {host!r} is not under any allowed suffix {tuple(suffixes)!r}"
 
 
 def _load_official_mcp_secret(ac):
@@ -416,7 +448,7 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         # — the kill-switch silently stopped working, and (flag off) ensure_targets would then also
         # recreate the legacy lambda target, giving the gateway duplicate tool names.
         if endpoint:
-            blocked_reason = _endpoint_blocked(endpoint)
+            blocked_reason = _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec)
             if blocked_reason:
                 log(f"target:{tname}", "ERR", f"official_mcp_endpoints['{preset_key}'] rejected: {blocked_reason}")
                 _retire_gateway_target(ctrl, gw_id, existing, tname, "endpoint failed the SSRF/scheme guard — retiring")
@@ -626,7 +658,7 @@ def _cutover_preset_keys(ac, secrets, secrets_read_ok):
         endpoint = endpoints.get(preset_key)
         if not endpoint or read_only_acks.get(preset_key) != endpoint:
             continue
-        if _endpoint_blocked(endpoint):
+        if _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec):
             continue
         if spec["auth"]["mode"] == "api_key":
             if not _preset_token(secrets, preset_key) and secrets_read_ok:
