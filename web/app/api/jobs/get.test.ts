@@ -101,4 +101,30 @@ describe('POST /api/jobs', () => {
     const res = await POST(postReq({ type: 'noop', idempotency_key: 'shared-key' }));
     expect(res.status).toBe(409);
   });
+
+  // round-7 review MAJOR: with the legacy global UNIQUE(idempotency_key) still in place (Phase 1),
+  // an authenticated attacker could POST a *victim's* deterministic diagnosis key here to squat it,
+  // making the victim's own /api/diagnosis 409 + markReportFailed for the whole hour bucket.
+  // Namespacing the caller-supplied key per requester makes that structurally impossible.
+  it('namespaces a caller-supplied idempotency_key per requester so it cannot squat another user key', async () => {
+    verifyUser.mockResolvedValue({ sub: 'attacker-sub', email: 'attacker@x.io' });
+    enqueueJob.mockResolvedValue({ job_id: 'j1', status: 'queued' });
+    const { POST } = await import('./route');
+    // The exact shape of a victim's server-minted diagnosis key.
+    const victimKey = 'report:victim@x.io:mid:sonnet:self:2026-07-31T11';
+    await POST(postReq({ type: 'noop', idempotency_key: victimKey }));
+    const passedKey = enqueueJob.mock.calls[0][2].idempotencyKey;
+    // Must NOT reach the ledger as the victim's key...
+    expect(passedKey).not.toBe(victimKey);
+    // ...and must be scoped to the attacker's own identity instead.
+    expect(passedKey).toBe(`u:attacker@x.io:${victimKey}`);
+  });
+
+  it('leaves idempotencyKey null when the caller supplies none', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    enqueueJob.mockResolvedValue({ job_id: 'j1', status: 'queued' });
+    const { POST } = await import('./route');
+    await POST(postReq({ type: 'noop' }));
+    expect(enqueueJob.mock.calls[0][2].idempotencyKey).toBeNull();
+  });
 });

@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
   }
   const payload = body?.payload && typeof body.payload === 'object' ? body.payload : {};
   const dryRun = Boolean(body?.dry_run);
-  const idempotencyKey =
+  const rawIdempotencyKey =
     typeof body?.idempotency_key === 'string' && body.idempotency_key ? body.idempotency_key : null;
 
   // M3: bound the payload well under the SQS 256 KB message cap (the body also wraps
@@ -63,6 +63,18 @@ export async function POST(req: NextRequest) {
   // enqueue:'failed' (the client can poll; a redrive/reaper recovers).
   try {
     const requestedBy = identity(user);
+    // round-7 review MAJOR: this route accepts a caller-supplied idempotency_key, and the legacy
+    // global UNIQUE(idempotency_key) is still in place during Phase 1 — so an authenticated
+    // attacker could squat a *victim's* key and deny them service. The diagnosis keys are
+    // deterministic and guessable (`report:${email}:${tier}:${model}:${scope}:${hour}`), so
+    // POSTing that exact string here would make the victim's own /api/diagnosis hit 23505 on the
+    // legacy constraint, fail its requester-scoped recovery lookup, and 409 + markReportFailed for
+    // the whole hour bucket. Namespacing the client-supplied key per requester makes squatting
+    // structurally impossible — the attacker can only ever collide with their own keys — and it
+    // closes the DoS inside this PR, with no dependency on the Phase 2 constraint drop. Keys
+    // minted server-side (diagnosis, compliance) are NOT namespaced here: they're already derived
+    // from the requester's own identity and must stay byte-stable across callers.
+    const idempotencyKey = rawIdempotencyKey ? `u:${requestedBy}:${rawIdempotencyKey}` : null;
     const { job_id, status } = await enqueueJob(type, payload, { idempotencyKey, dryRun, requestedBy });
     return NextResponse.json({ job_id, status }, { status: 202 });
   } catch (e) {

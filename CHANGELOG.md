@@ -57,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **mitigates** the cross-user idempotency-key collision as an interim measure — full closure
   still requires the follow-up PR that drops the legacy global constraint (see the Phase 1/Phase 2
   note above; PR #195 round-6 review)
+- `POST /api/jobs` now namespaces a caller-supplied `idempotency_key` as `u:<requester>:<key>`
+  before it reaches the ledger. Because the legacy global `UNIQUE(idempotency_key)` is still
+  enforced during Phase 1, an authenticated attacker could otherwise POST a victim's deterministic
+  diagnosis key (`report:<email>:<tier>:<model>:<scope>:<hour>` — guessable from the email) to squat
+  it, making the victim's own `POST /api/diagnosis` hit `23505`, fail its requester-scoped recovery
+  lookup, and `409` + `markReportFailed` for that whole hour bucket. Namespacing makes squatting
+  structurally impossible (a caller can only collide with their own keys) and closes the DoS
+  **within this PR**, independent of the Phase 2 constraint drop. Server-minted keys (diagnosis,
+  compliance) are unchanged — they already derive from the requester's own identity (PR #195
+  round-7 review)
 - `GET /api/compliance/runs/[id]` now uses the same dual-key (`identity()` + raw `sub`) ownership
   check as the list route and `GET /api/jobs/[id]`, instead of a direct `requested_by !==`
   comparison — a legacy sub-keyed run was visible in the list but 403'd on this detail route
@@ -468,6 +478,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   다른 요청자 간의 key 충돌은 opaque `500` 대신 깨끗한 `409`(`IdempotencyKeyCollisionError`)로 실패.
   이는 cross-user idempotency-key 충돌을 **완화**하는 중간 조치이며, 완전한 해결은 위 Phase 1/Phase 2
   노트에 언급된 옛 글로벌 제약 삭제 후속 PR이 나가야 함(PR #195 round-6 리뷰)
+- `POST /api/jobs`가 클라이언트가 준 `idempotency_key`를 ledger에 쓰기 전에 `u:<요청자>:<key>`로
+  네임스페이싱. Phase 1 동안에는 옛 글로벌 `UNIQUE(idempotency_key)`가 여전히 강제되므로, 그렇지
+  않으면 인증된 공격자가 피해자의 결정적 진단 키(`report:<email>:<tier>:<model>:<scope>:<hour>` —
+  이메일만 알면 추측 가능)를 이 라우트로 선점할 수 있었고, 그 결과 피해자 본인의
+  `POST /api/diagnosis`가 `23505` → 요청자 범위 복구 조회 무소득 → `409` + `markReportFailed`로
+  해당 hour 버킷 내내 진단 불가 상태가 됨. 네임스페이싱으로 선점이 구조적으로 불가능해지고(자기 키와만
+  충돌 가능) Phase 2 제약 삭제와 무관하게 **이 PR 안에서** DoS가 닫힘. 서버에서 생성되는 키(진단,
+  컴플라이언스)는 이미 요청자 신원에서 파생되므로 변경 없음(PR #195 round-7 리뷰)
 - `GET /api/compliance/runs/[id]`가 목록 라우트·`GET /api/jobs/[id]`와 동일한 dual-key(`identity()` +
   raw `sub`) 소유권 검증을 쓰도록 변경 — 기존에는 `requested_by !==` 직접 비교라서, 레거시 sub-키 run이
   목록에는 보였지만 상세 라우트에서는 403이 나는 불일치가 있었음(PR #195 round-6 리뷰)
