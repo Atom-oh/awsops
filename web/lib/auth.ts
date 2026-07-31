@@ -63,8 +63,14 @@ if (!Number.isInteger(REVOCATION_CHECK_TIMEOUT_MS)) {
   throw new Error('REVOCATION_CHECK_TIMEOUT_MS must be an integer');
 }
 
-async function runInTimeoutScopedTransaction<T>(runQuery: (client: PoolClient) => Promise<T>): Promise<T> {
+type TimeoutRaceState = { client: PoolClient | null; released: boolean };
+
+async function runInTimeoutScopedTransaction<T>(
+  runQuery: (client: PoolClient) => Promise<T>,
+  state: TimeoutRaceState,
+): Promise<T> {
   const client = await getPool().connect();
+  state.client = client;
   try {
     await client.query('BEGIN');
     await client.query(`SET LOCAL statement_timeout = ${REVOCATION_CHECK_TIMEOUT_MS}`);
@@ -75,21 +81,45 @@ async function runInTimeoutScopedTransaction<T>(runQuery: (client: PoolClient) =
     await client.query('ROLLBACK').catch(() => {}); // best-effort — connection may already be dead
     throw e;
   } finally {
-    client.release();
+    // pentest-remediation P5-review (MAJOR M2): if the timer below already destroyed this
+    // connection (we lost the race), don't also call the normal release() path here — `state`
+    // is shared so whichever side settles first "wins" the connection's disposition.
+    if (!state.released) {
+      state.released = true;
+      client.release();
+    }
   }
 }
 
 /** Race any pooled query against a client-side timer AND a server-side `SET LOCAL
  * statement_timeout` (see comment above) — the client-side race alone doesn't free a connection
  * still stuck server-side; the timeout alone doesn't help if the connection can't even be
- * acquired from the pool. Both isRevoked (read) and revokeSessionsFor (write) go through this. */
+ * acquired from the pool. Both isRevoked (read) and revokeSessionsFor (write) go through this.
+ * `T` is inferred from `runQuery`'s own return type — do NOT pass an explicit type argument at the
+ * call site (pentest-remediation P5-review CRITICAL: an earlier round pinned T to a row shape like
+ * `{ revoked_at: string }` while `runQuery` actually returns `QueryResult<...>`, a structural
+ * mismatch `next build`'s `strict` type-check correctly rejects — `vitest` doesn't type-check, so
+ * this broke the production build silently past this file's own tests). */
 async function withStatementTimeout<T>(runQuery: (client: PoolClient) => Promise<T>): Promise<T> {
+  const state: TimeoutRaceState = { client: null, released: false };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('statement timed out')), REVOCATION_CHECK_TIMEOUT_MS);
+      timer = setTimeout(() => {
+        // Lost the race — destroy (not release) the connection instead of returning it healthy to
+        // the pool: BEGIN/SET LOCAL/the query itself may still be in flight on a socket we've
+        // stopped waiting on, and handing back a connection whose transaction state is unknown
+        // would corrupt whatever the next borrower does with it (pentest-remediation P5-review
+        // MAJOR M2 — `client.release()`'s normal path never runs until the stuck query itself
+        // settles, which may be never; `release(true)` drops the connection from the pool now).
+        if (state.client && !state.released) {
+          state.released = true;
+          state.client.release(true);
+        }
+        reject(new Error('statement timed out'));
+      }, REVOCATION_CHECK_TIMEOUT_MS);
     });
-    return await Promise.race([runInTimeoutScopedTransaction(runQuery), timeout]);
+    return await Promise.race([runInTimeoutScopedTransaction(runQuery, state), timeout]);
   } finally {
     clearTimeout(timer);
   }
@@ -98,8 +128,8 @@ async function withStatementTimeout<T>(runQuery: (client: PoolClient) => Promise
 async function isRevoked(sub: string, iat: number | undefined): Promise<boolean> {
   if (!iat) return true; // malformed token (no iat) — fail closed, this one input we don't trust
   try {
-    const { rows } = await withStatementTimeout<{ revoked_at: string }>((client) =>
-      client.query('SELECT revoked_at FROM session_revocations WHERE user_sub = $1', [sub]),
+    const { rows } = await withStatementTimeout((client) =>
+      client.query<{ revoked_at: string }>('SELECT revoked_at FROM session_revocations WHERE user_sub = $1', [sub]),
     );
     if (rows.length === 0) return false;
     const revokedAtSec = new Date(rows[0].revoked_at).getTime() / 1000;
@@ -135,7 +165,31 @@ async function isRevoked(sub: string, iat: number | undefined): Promise<boolean>
  * (see comment there) instead of a raw getPool().query — the caller (POST /api/auth/signout)
  * already wraps this call in a try/catch that clears the cookie and redirects regardless, so a
  * thrown timeout here degrades exactly like any other write failure: best-effort, fail-open. */
+// pentest-remediation P5-review (MAJOR M3): /api/auth/signout is public and has no rate limit — a
+// single valid token (an attacker's own, or a stolen-but-live one) replayed in a tight parallel
+// loop drives repeated connect→BEGIN→SET LOCAL→UPSERT→COMMIT round-trips through the `max: 3`
+// pool. Once the pool is saturated, isRevoked() for every OTHER user's request starts timing out
+// too, and its fail-open path means the revocation control this whole PR adds gets silently
+// disabled for everyone, not just the attacker's own account. The UPSERT's WHERE guard already
+// makes a same-or-older-iat replay a costless no-op *at the database*, so the fix is simply to
+// stop paying for the round-trip at all when we've already written for this sub very recently —
+// legitimate signout only ever needs to land once. Self-cleaning: each entry removes itself after
+// the debounce window, so this can't grow unbounded across the life of a long-running container.
+// Keyed by (sub, iat) rather than sub alone: the actual replay attack resends the SAME captured
+// token (same iat) — a legitimately *different* token from the same sub (a fresh signout with a
+// newer iat) must still write through, since only the exact-token replay is a costless no-op.
+const RECENT_REVOKE_DEBOUNCE_MS = 2000;
+const recentRevokeWriteAt = new Map<string, number>();
+
 export async function revokeSessionsFor(sub: string, iat: number): Promise<void> {
+  const key = `${sub}:${iat}`;
+  const now = Date.now();
+  const last = recentRevokeWriteAt.get(key);
+  if (last !== undefined && now - last < RECENT_REVOKE_DEBOUNCE_MS) return;
+  recentRevokeWriteAt.set(key, now);
+  setTimeout(() => {
+    if (recentRevokeWriteAt.get(key) === now) recentRevokeWriteAt.delete(key);
+  }, RECENT_REVOKE_DEBOUNCE_MS);
   await withStatementTimeout((client) =>
     client.query(
       `INSERT INTO session_revocations (user_sub, revoked_at) VALUES ($1, to_timestamp($2))

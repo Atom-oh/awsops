@@ -27,6 +27,13 @@ beforeEach(() => {
   process.env.COGNITO_USER_POOL_ID = 'ap-northeast-2_TEST';
   process.env.COGNITO_CLIENT_ID = 'client123';
   process.env.AWS_REGION = 'ap-northeast-2';
+  // pentest-remediation P5-review: revokeSessionsFor debounces repeat writes for the same
+  // (sub, iat) in a module-level Map so it survives across requests within one running process —
+  // but that same persistence leaks across test cases in this file, several of which intentionally
+  // reuse the shared `NOW` constant as an iat. Reset the module registry so each test imports a
+  // fresh `./auth` with an empty debounce map, matching a cold container rather than a warm one
+  // that's already seen an identical (sub, iat) pair from an earlier, unrelated test.
+  vi.resetModules();
 });
 
 describe('verifyUser', () => {
@@ -104,6 +111,31 @@ describe('revokeSessionsFor', () => {
     const { revokeSessionsFor } = await import('./auth');
     await revokeSessionsFor('u-1', NOW);
     expect(query).toHaveBeenCalledWith(expect.stringContaining('ON CONFLICT (user_sub) DO UPDATE'), ['u-1', NOW]);
+  });
+
+  // pentest-remediation P5-review (MAJOR M3): /api/auth/signout is public with no rate limit —
+  // replaying the identical captured token in a tight loop would otherwise drive one DB round-trip
+  // per call, and enough concurrent hung round-trips exhaust the `max: 3` pool and take
+  // isRevoked() (and thus every authenticated request) down with it via fail-open. The exact-same
+  // (sub, iat) pair is a costless no-op at the database anyway (WHERE guard), so skip the
+  // round-trip entirely for repeats within the debounce window — this must not touch the query
+  // mock a second time.
+  it('debounces an immediate replay of the exact same (sub, iat) — does not hit the DB again', async () => {
+    const { revokeSessionsFor } = await import('./auth');
+    await revokeSessionsFor('u-1', NOW);
+    const callsAfterFirst = query.mock.calls.length;
+    await revokeSessionsFor('u-1', NOW); // identical replay, well within the debounce window
+    expect(query.mock.calls.length).toBe(callsAfterFirst); // no additional query calls at all
+  });
+
+  // A genuinely different iat from the same sub (a fresh, later signout) must NOT be swallowed by
+  // the same-token debounce above — only the exact-token replay is a no-op.
+  it('does not debounce a different iat from the same sub', async () => {
+    const { revokeSessionsFor } = await import('./auth');
+    await revokeSessionsFor('u-1', NOW);
+    const callsAfterFirst = query.mock.calls.length;
+    await revokeSessionsFor('u-1', NOW + 1);
+    expect(query.mock.calls.length).toBeGreaterThan(callsAfterFirst);
   });
 
   // pentest-remediation P2-review (MAJOR-1): replaying an already-revoked (but unexpired) token
