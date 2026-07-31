@@ -52,6 +52,68 @@ class TestAssertReadOnly(unittest.TestCase):
             g.assert_read_only("SELECT * FROM file('/etc/passwd')", extra_forbidden_re=extra)
         g.assert_read_only("SELECT 1", extra_forbidden_re=extra)  # unaffected when absent
 
+    def test_replace_scalar_function_no_longer_a_false_positive(self):
+        # PR-review MAJOR: bare \bREPLACE\b false-flagged the read-only scalar string function.
+        self._ok("SELECT replace(col, 'a', 'b') FROM t")
+
+    def test_replace_into_and_replace_table_still_rejected(self):
+        self._bad("REPLACE INTO t VALUES (1)")
+        self._bad("REPLACE TABLE t (a int)")
+
+    def test_update_explicitly_rejected(self):
+        self._bad("UPDATE t SET x = 1")
+
+    def test_explain_select_allowed_explain_analyze_of_mutation_still_blocked(self):
+        # PR-review MINOR: EXPLAIN is a legitimate Aurora diagnostic first-token; the mutating
+        # statement it explains is still caught by DANGER regardless of the first-token check.
+        self._ok("EXPLAIN SELECT * FROM t")
+        self._bad("EXPLAIN DELETE FROM t")
+
+    def test_mysql_executable_comment_fails_closed_for_any_caller(self):
+        # PR-review MAJOR: /*! ... */ is executed by MySQL/Aurora-MySQL, not a real comment.
+        self._bad("SELECT 1 /*!50000 INTO OUTFILE '/tmp/x'*/")
+
+
+class TestPostgresDialect(unittest.TestCase):
+    """aws_rds_mcp.py's RDS/PostgreSQL call path passes hash_comment=False, backslash_escapes=False
+    (Aurora PostgreSQL: no '#' line comments — '#'/'#>'/'#>>' are jsonb operators — and
+    standard_conforming_strings=on by default, so '\\' is a literal char, not an escape)."""
+
+    def _ok(self, sql):
+        g.assert_read_only(sql, hash_comment=False, backslash_escapes=False)  # no raise
+
+    def _bad(self, sql):
+        with self.assertRaises(ValueError, msg=sql):
+            g.assert_read_only(sql, hash_comment=False, backslash_escapes=False)
+
+    def test_jsonb_hash_operator_not_treated_as_comment(self):
+        # PR-review CRITICAL: '#' stripped as a comment hid the trailing "INTO write_probe" CTAS.
+        self._bad("SELECT '{\"a\":1}'::jsonb #> '{a}' INTO write_probe")
+
+    def test_select_into_ctas_rejected(self):
+        # PR-review CRITICAL: Postgres SELECT ... INTO table is CTAS (a real write), not a plain read.
+        self._bad("SELECT * INTO write_probe FROM t")
+
+    def test_select_into_outfile_rejected(self):
+        self._bad("SELECT * FROM t INTO OUTFILE '/tmp/x'")
+
+    def test_dangerous_pg_functions_rejected(self):
+        for fn in ["pg_read_file('/etc/passwd')", "pg_ls_dir('/etc')", "lo_import('/etc/passwd')",
+                   "lo_export(1, '/tmp/x')", "lo_create(1)", "lo_unlink(1)",
+                   "dblink('host=x', 'select 1')", "pg_terminate_backend(123)"]:
+            self._bad(f"SELECT {fn}")
+
+    def test_backslash_terminated_string_hiding_second_statement_rejected(self):
+        # PR-review MAJOR: with standard_conforming_strings=on, 'a\' ends the string at the next ',
+        # not after the backslash — treating '\' as an escape here mis-scanned past a real DELETE.
+        self._bad("SELECT 'a\\' ; DELETE FROM t; SELECT 'b'")
+
+    def test_plain_select_still_allowed(self):
+        self._ok("SELECT * FROM t WHERE x = 1")
+
+    def test_replace_scalar_function_still_allowed(self):
+        self._ok("SELECT replace(col, 'a', 'b') FROM t")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,9 +82,12 @@ def lambda_handler(event, context):
             # the bare token "drop" and sailed through. Also missing UPDATE was covered but GRANT/
             # REVOKE/SET/CALL/COPY/MERGE were not, and there was no stacked-statement or first-token
             # read-verb check. Shares the same comment/string-stripping guard clickhouse_mcp.py uses.
+            # PR-review follow-up: this Lambda talks to Aurora PostgreSQL (`standard_conforming_strings
+            # =on` by default, no `#` line comments — `#`/`#>`/`#>>` are jsonb operators) — pass the
+            # Postgres dialect flags so the guard doesn't mis-scan those two constructs.
             sql = args["sql"].strip()
             try:
-                assert_read_only(sql)
+                assert_read_only(sql, hash_comment=False, backslash_escapes=False)
             except ValueError as e:
                 return err(str(e))
             # Execute SQL statement via Data API / Data API로 SQL 문 실행
