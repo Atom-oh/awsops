@@ -131,9 +131,9 @@ function HeroGlyph(): React.ReactElement {
       <circle cx="210" cy="150" r="9" fill="#0a0e1a" />
       <g fontFamily="'SFMono-Regular', Consolas, 'Liberation Mono', monospace" fontSize="11" fill="#8fa3c4">
         <text x="60" y="246" textAnchor="middle">EC2 · EKS</text>
-        <text x="150" y="52" textAnchor="middle">VPC · 네트워크</text>
-        <text x="360" y="72" textAnchor="middle">비용 · FinOps</text>
-        <text x="350" y="246" textAnchor="middle">보안 · CIS</text>
+        <text x="150" y="52" textAnchor="middle">VPC · <Translate id="home.hero.glyph.network">네트워크</Translate></text>
+        <text x="360" y="72" textAnchor="middle"><Translate id="home.hero.glyph.cost">비용</Translate> · FinOps</text>
+        <text x="350" y="246" textAnchor="middle"><Translate id="home.hero.glyph.security">보안</Translate> · CIS</text>
         <text x="210" y="207" textAnchor="middle" fill="#00d4ff" fontWeight="600">AgentCore</text>
       </g>
     </svg>
