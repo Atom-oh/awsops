@@ -63,7 +63,7 @@ if (!Number.isInteger(REVOCATION_CHECK_TIMEOUT_MS)) {
   throw new Error('REVOCATION_CHECK_TIMEOUT_MS must be an integer');
 }
 
-type TimeoutRaceState = { client: PoolClient | null; released: boolean };
+type TimeoutRaceState = { client: PoolClient | null; released: boolean; cancelled: boolean };
 
 async function runInTimeoutScopedTransaction<T>(
   runQuery: (client: PoolClient) => Promise<T>,
@@ -71,6 +71,22 @@ async function runInTimeoutScopedTransaction<T>(
 ): Promise<T> {
   const client = await getPool().connect();
   state.client = client;
+  // pentest-remediation P6-review (MAJOR): the timer may have fired while we were still waiting on
+  // connect() — at that point `state.client` was still null, so the timer had no connection to
+  // destroy and could only set `cancelled`. Without this check we'd go on to spend a full
+  // BEGIN/SET LOCAL/query/COMMIT round-trip on a connection nobody is waiting for any more. That's
+  // the pathological case under pool saturation: the 3s timer beats db.ts's 5s
+  // connectionTimeoutMillis, so EVERY saturated request would take this path and the abandoned
+  // work would keep the `max: 3` pool starved — load-shedding inverted into positive feedback,
+  // silently disabling revocation app-wide via isRevoked's fail-open. Hand the connection straight
+  // back instead and do no work on it.
+  if (state.cancelled) {
+    if (!state.released) {
+      state.released = true;
+      client.release();
+    }
+    throw new Error('revocation query cancelled before it acquired a connection');
+  }
   try {
     await client.query('BEGIN');
     await client.query(`SET LOCAL statement_timeout = ${REVOCATION_CHECK_TIMEOUT_MS}`);
@@ -101,11 +117,16 @@ async function runInTimeoutScopedTransaction<T>(
  * mismatch `next build`'s `strict` type-check correctly rejects — `vitest` doesn't type-check, so
  * this broke the production build silently past this file's own tests). */
 async function withStatementTimeout<T>(runQuery: (client: PoolClient) => Promise<T>): Promise<T> {
-  const state: TimeoutRaceState = { client: null, released: false };
+  const state: TimeoutRaceState = { client: null, released: false, cancelled: false };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        // Always record the cancellation, even when no connection has been checked out yet — a
+        // still-pending connect() has nothing to destroy here, but runInTimeoutScopedTransaction
+        // needs to know not to start work once it finally does get one (pentest-remediation
+        // P6-review MAJOR; see the check there).
+        state.cancelled = true;
         // Lost the race — destroy (not release) the connection instead of returning it healthy to
         // the pool: BEGIN/SET LOCAL/the query itself may still be in flight on a socket we've
         // stopped waiting on, and handing back a connection whose transaction state is unknown

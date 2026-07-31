@@ -8,13 +8,16 @@ vi.mock('jose', () => ({
 
 const query = vi.fn();
 const release = vi.fn();
+// `connect` is its own mock (not just an inline async fn) so individual tests can override the
+// checkout itself — e.g. to leave it pending past the timeout (P6-review MAJOR).
+const connect = vi.fn(async () => ({ query: (...a: unknown[]) => query(...a), release }));
 // isRevoked runs its SELECT through a pooled client (BEGIN/SET LOCAL/SELECT/COMMIT) so
 // `SET LOCAL statement_timeout` scopes to just that query (P3-review MAJOR-2) — route all of
 // client.query through the same `query` mock so existing assertions on the SELECT call still work.
 vi.mock('./db', () => ({
   getPool: () => ({
     query: (...a: unknown[]) => query(...a),
-    connect: async () => ({ query: (...a: unknown[]) => query(...a), release }),
+    connect: (...a: unknown[]) => connect(...(a as [])),
   }),
 }));
 
@@ -23,6 +26,9 @@ const NOW = 1_700_000_000; // arbitrary fixed epoch seconds for iat/revoked_at c
 beforeEach(() => {
   jwtVerify.mockReset();
   query.mockReset();
+  release.mockReset();
+  connect.mockReset();
+  connect.mockImplementation(async () => ({ query: (...a: unknown[]) => query(...a), release }));
   query.mockResolvedValue({ rows: [] }); // default: no revocation row → not revoked
   process.env.COGNITO_USER_POOL_ID = 'ap-northeast-2_TEST';
   process.env.COGNITO_CLIENT_ID = 'client123';
@@ -247,6 +253,36 @@ describe('isRevoked timeout (via verifyUser)', () => {
     const p = verifyUser('awsops_token=eyJ...');
     await vi.advanceTimersByTimeAsync(3100);
     expect(await p).not.toBeNull();
+    vi.useRealTimers();
+  });
+
+  // pentest-remediation P6-review (MAJOR): the case above hangs AFTER checkout, which the timer
+  // handles by destroying the connection. The nastier case is a hang while still WAITING for a
+  // connection — under pool saturation the 3s timer always beats db.ts's 5s
+  // connectionTimeoutMillis, so this is the DEFAULT path when the pool is full. A late-arriving
+  // connection must be handed straight back with no queries run on it, or the abandoned work keeps
+  // the `max: 3` pool starved and turns load-shedding into positive feedback.
+  it('runs no queries on a connection acquired after the timeout already fired', async () => {
+    vi.useFakeTimers();
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
+    let releaseLateClient: ((c: { query: unknown; release: unknown }) => void) | undefined;
+    const lateRelease = vi.fn();
+    connect.mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseLateClient = resolve as typeof releaseLateClient;
+      }),
+    );
+    const { verifyUser } = await import('./auth');
+    const p = verifyUser('awsops_token=eyJ...');
+    await vi.advanceTimersByTimeAsync(3100); // timer fires while connect() is still pending
+    const callsBeforeLateArrival = query.mock.calls.length;
+    // Now the pool finally hands us a connection, well after we gave up on it.
+    releaseLateClient!({ query: (...a: unknown[]) => query(...a), release: lateRelease });
+    expect(await p).not.toBeNull(); // still failed open, as before
+    // The whole point: no BEGIN / SET LOCAL / SELECT / COMMIT was issued on the late connection...
+    expect(query.mock.calls.length).toBe(callsBeforeLateArrival);
+    // ...and it went straight back to the pool instead of being held.
+    expect(lateRelease).toHaveBeenCalled();
     vi.useRealTimers();
   });
 });
