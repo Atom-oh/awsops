@@ -13,7 +13,6 @@ Run from the repo root (so `terraform -chdir=...` resolves) AFTER `terraform app
 import argparse
 import copy
 import ipaddress
-import socket
 import json
 import os
 import subprocess
@@ -211,78 +210,46 @@ def _host_under_suffix(host, suffixes):
     return False
 
 
-def _host_pin_violation(endpoint, spec, self_hosted_suffixes=()):
+def _host_pin_violation(endpoint, spec):
     """Per-preset host pin — the control that actually keeps this inside ADR-007's curated boundary.
 
-    Vendor-hosted presets pin to `allowed_host_suffixes` from the catalog. Self-hosted ones
-    (ClickHouse/Grafana/Splunk/Tempo/Jaeger) have no vendor domain, but leaving them to accept ANY
-    host still left the BYO-MCP path open — the preset's real credential would be handed to whatever
-    URL was configured, which is exactly what BASELINE §2 pins as do-not-revive. They are in-VPC by
-    design, so they are confined to the deployment's declared internal suffixes
-    (`official_mcp_self_hosted_host_suffixes`) or a literal private address. No declaration means
-    they cannot be enabled: enabling one has to be a deliberate, reviewable statement of where it
-    lives, not a free-form URL."""
-    suffixes = spec.get("allowed_host_suffixes")
-    if not suffixes:
-        if not spec.get("host_is_operator_asserted"):
-            return "catalog entry declares neither allowed_host_suffixes nor host_is_operator_asserted"
-        try:
-            host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
-        except ValueError:
-            return "unparsable URL"
-        if not host:
-            return "no host in URL"
-        try:
-            ip = ipaddress.ip_address(host)
-        except ValueError:
-            pass
-        else:
-            # A literal in-VPC address needs no suffix declaration. Public literals do not get a pass
-            # (loopback/link-local are already rejected by _endpoint_blocked before we get here).
-            if ip.is_private:
-                return None
-            return f"self-hosted preset points at public IP {ip} — must be in-VPC"
-        if not self_hosted_suffixes:
-            return ("self-hosted preset has no declared internal host suffix "
-                    "(set official_mcp_self_hosted_host_suffixes) — failing closed")
-        if not _host_under_suffix(host, self_hosted_suffixes):
-            return (f"self-hosted preset host {host!r} is not under any declared internal suffix "
-                    f"{tuple(self_hosted_suffixes)!r}")
-        # This is a REAL gate, not best-effort — and it is enforceable even though we do not make
-        # the connection, because the thing that turns a wrong host into exfiltration is US attaching
-        # the preset's credential to it. So: never hand a credential to a host we cannot PROVE is
-        # in-VPC. An earlier revision let an unresolvable name pass ("the provisioner often runs
-        # outside the VPC"), which was the actual hole — unverifiable is exactly the attacker's case,
-        # and an operator who cannot resolve their internal name from here can give the private IP
-        # literal instead. A literal private address is also the only form with no DNS to repoint
-        # afterwards, so it is the one shape immune to the rebinding/TOCTOU window as well.
-        try:
-            infos = socket.getaddrinfo(host, None)
-        except (socket.gaierror, UnicodeError, OSError) as e:
-            return (f"self-hosted preset host {host!r} cannot be resolved here, so it cannot be shown "
-                    f"to be in-VPC ({type(e).__name__}) — use the private IP literal, or run the "
-                    f"provisioner where internal DNS resolves. Refusing to attach a credential to an "
-                    f"unverifiable host")
-        resolved = []
-        for info in infos:
-            try:
-                resolved.append(ipaddress.ip_address(info[4][0]))
-            except ValueError:
-                continue
-        if not resolved:
-            return f"self-hosted preset host {host!r} produced no usable address"
-        public = [str(ip) for ip in resolved if ip.is_global]
-        if public:
-            return (f"self-hosted preset host {host!r} resolves to PUBLIC address(es) "
-                    f"{', '.join(public)} — a self-hosted preset must be in-VPC; declaring a public "
-                    f"domain as an internal suffix does not make it one")
-        return None
+    Vendor-hosted presets pin to `allowed_host_suffixes` from the catalog — a name is fine there,
+    because the pin is the vendor's own domain. Self-hosted ones (ClickHouse/Grafana/Splunk/Tempo/
+    Jaeger) have no vendor domain to pin, and letting them take any host left the BYO-MCP path open:
+    the preset's real credential would be handed to whatever URL was configured, which is exactly what
+    BASELINE §2 pins as do-not-revive. They must therefore give the PRIVATE IP LITERAL of their
+    in-VPC endpoint. The literal is the point — a NAME resolves privately at provision time and can
+    be repointed at a public address afterwards, and the connection is made later by the
+    AgentCore-managed network where we get no second look, so verifying a name proves nothing about
+    what gets connected to. A literal has no DNS behind it."""
     try:
         host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
     except ValueError:
         return "unparsable URL"
     if not host:
         return "no host in URL"
+    suffixes = spec.get("allowed_host_suffixes")
+    if not suffixes:
+        if not spec.get("host_is_operator_asserted"):
+            return "catalog entry declares neither allowed_host_suffixes nor host_is_operator_asserted"
+        # A self-hosted preset must give a PRIVATE IP LITERAL. Not a name — a name is what makes this
+        # exfiltratable at all: it resolves privately at provision time, then can be repointed at a
+        # public address afterwards, and the connection is made later by the AgentCore-managed network
+        # where we have no re-check. A literal has no DNS behind it, so there is nothing to repoint and
+        # the value we verify is the value that gets connected to. That closes the class rather than
+        # narrowing it, which is why this is enforced instead of merely recommended (earlier revisions
+        # documented the rebinding window as residual — it did not have to be).
+        try:
+            host_ip = ipaddress.ip_address(host)
+        except ValueError:
+            return (f"self-hosted preset host {host!r} is a NAME — use the private IP literal of the "
+                    f"in-VPC endpoint. A name resolves privately now but can be repointed at a public "
+                    f"address later, and the connection is made by AgentCore where we cannot re-check")
+        if not host_ip.is_private:
+            return (f"self-hosted preset points at {host_ip}, which is not a private address — a "
+                    f"self-hosted preset must be in-VPC")
+        return None
+
     if _host_under_suffix(host, suffixes):
         return None
     return f"host {host!r} is not under any allowed suffix {tuple(suffixes)!r}"
@@ -483,7 +450,6 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
     endpoints = ac.get("official_mcp_endpoints") or {}
     lambda_arns = ac.get("lambda_arns") or {}
     read_only_acks = ac.get("official_mcp_read_only_ack") or {}
-    self_hosted_suffixes = tuple(ac.get("official_mcp_self_hosted_host_suffixes") or ())
     if secrets is None:
         secrets, secrets_read_ok = _load_official_mcp_secret(ac)
     existing_by_gw = {}  # gateway short-key -> {target_name: target}, fetched once per gateway
@@ -516,7 +482,7 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         # — the kill-switch silently stopped working, and (flag off) ensure_targets would then also
         # recreate the legacy lambda target, giving the gateway duplicate tool names.
         if endpoint:
-            blocked_reason = _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec, self_hosted_suffixes)
+            blocked_reason = _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec)
             if blocked_reason:
                 log(f"target:{tname}", "ERR", f"official_mcp_endpoints['{preset_key}'] rejected: {blocked_reason}")
                 _retire_gateway_target(ctrl, gw_id, existing, tname, "endpoint failed the SSRF/scheme guard — retiring")
@@ -720,14 +686,13 @@ def _cutover_preset_keys(ac, secrets, secrets_read_ok):
     a blocked endpoint is simply "not cut over", which keeps the legacy target alive."""
     endpoints = ac.get("official_mcp_endpoints") or {}
     read_only_acks = ac.get("official_mcp_read_only_ack") or {}
-    self_hosted_suffixes = tuple(ac.get("official_mcp_self_hosted_host_suffixes") or ())
     active = set()
     for spec in catalog.MCP_SERVER_TARGETS.values():
         preset_key = spec["preset_key"]
         endpoint = endpoints.get(preset_key)
         if not endpoint or read_only_acks.get(preset_key) != endpoint:
             continue
-        if _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec, self_hosted_suffixes):
+        if _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec):
             continue
         if spec["auth"]["mode"] == "api_key":
             if not _preset_token(secrets, preset_key) and secrets_read_ok:

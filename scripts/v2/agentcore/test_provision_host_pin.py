@@ -68,117 +68,30 @@ class TestHostPin(unittest.TestCase):
             provision._host_pin_violation("https://attacker.example/mcp", _spec("datadog"))
         )
 
-class TestSelfHostedConfinement(unittest.TestCase):
-    """Marking a preset host_is_operator_asserted was NOT enough on its own: it still accepted any
-    host, so the preset's real credential could be handed to an arbitrary URL — the BYO-MCP
-    connection BASELINE §2 pins as do-not-revive, just relabelled. Self-hosted presets are in-VPC by
-    design, so they are confined to the deployment's declared internal suffixes (or a literal private
-    address), and no declaration means they cannot be enabled at all."""
+class TestSelfHostedRequiresAPrivateLiteral(unittest.TestCase):
+    """Marking a preset host_is_operator_asserted, or confining it to a declared internal suffix, both
+    still left it exfiltratable: a NAME resolves privately at provision time and can be repointed at a
+    public address afterwards, and AgentCore makes the connection so we get no second look. Requiring
+    the private IP LITERAL removes the DNS indirection entirely — the value verified is the value
+    connected to — which closes the class instead of narrowing it."""
 
-    SUFFIXES = (".internal", ".svc.cluster.local")
+    def test_private_literal_is_accepted(self):
+        for url in ("https://10.0.3.7:8123/mcp", "https://192.168.4.4/mcp", "https://[fd00::1]/mcp"):
+            self.assertIsNone(provision._host_pin_violation(url, _spec("clickhouse")), url)
 
-    def test_no_declaration_fails_closed(self):
+    def test_a_name_is_rejected_even_if_it_looks_internal(self):
+        for url in ("https://ch.internal:8123/mcp", "https://ch.svc.cluster.local/mcp"):
+            v = provision._host_pin_violation(url, _spec("clickhouse"))
+            self.assertIsNotNone(v, url)
+            self.assertIn("NAME", v)
+
+    def test_public_literal_is_rejected(self):
         self.assertIsNotNone(
-            provision._host_pin_violation("https://ch.internal/mcp", _spec("clickhouse"), ())
+            provision._host_pin_violation("https://93.184.216.34/mcp", _spec("clickhouse"))
         )
 
-    def test_public_host_rejected_even_with_a_declaration(self):
-        self.assertIsNotNone(
-            provision._host_pin_violation(
-                "https://attacker.example/mcp", _spec("clickhouse"), self.SUFFIXES
-            )
-        )
-
-    def test_host_under_declared_suffix_allowed_when_it_resolves_privately(self):
-        # Under the suffix is necessary but not sufficient — it must also be shown to be in-VPC.
-        with mock.patch.object(
-            socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("10.0.3.7", 0))]
-        ):
-            for url in ("https://ch.internal:8123/mcp", "https://ch.svc.cluster.local/mcp"):
-                self.assertIsNone(
-                    provision._host_pin_violation(url, _spec("clickhouse"), self.SUFFIXES), url
-                )
-
-    def test_declared_suffix_matches_only_on_a_label_boundary(self):
-        for url in ("https://evil-internal/mcp", "https://internal.attacker.example/mcp"):
-            self.assertIsNotNone(
-                provision._host_pin_violation(url, _spec("clickhouse"), self.SUFFIXES), url
-            )
-
-    def test_literal_private_address_needs_no_declaration(self):
+    def test_vendor_hosted_preset_still_uses_its_name_pin(self):
+        # Vendor-hosted presets are unaffected — they pin on the vendor domain, by name.
         self.assertIsNone(
-            provision._host_pin_violation("https://10.0.3.7:8123/mcp", _spec("clickhouse"), ())
+            provision._host_pin_violation("https://mcp.datadoghq.com/mcp", _spec("datadog"))
         )
-
-    def test_public_literal_address_rejected(self):
-        self.assertIsNotNone(
-            provision._host_pin_violation("https://93.184.216.34/mcp", _spec("clickhouse"), self.SUFFIXES)
-        )
-
-    def test_vendor_hosted_preset_is_unaffected_by_the_declaration(self):
-        self.assertIsNone(
-            provision._host_pin_violation("https://mcp.datadoghq.com/mcp", _spec("datadog"), ())
-        )
-
-    def test_catalog_entry_declaring_neither_fails_closed(self):
-        self.assertIsNotNone(provision._host_pin_violation("https://anything.example/", {}))
-
-
-class TestDeclaredSuffixCannotLaunderAPublicHost(unittest.TestCase):
-    """The suffix list is itself tfvars, so an operator can declare an attacker's domain as
-    "internal" and satisfy the suffix gate. No config-layer allowlist can bind whoever edits the
-    config — but an exfiltration host has to be reachable, so it resolves publicly, while a genuine
-    in-VPC host resolves privately or not at all. A public answer for a self-hosted preset is a
-    contradiction and is rejected; an unresolvable name is NOT (the provisioner legitimately runs
-    outside the VPC, and failing closed there would break real deployments)."""
-
-    def test_public_resolution_is_rejected_even_when_the_suffix_is_declared(self):
-        with mock.patch.object(
-            socket, "getaddrinfo",
-            return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
-        ):
-            v = provision._host_pin_violation(
-                "https://attacker.example/mcp", _spec("clickhouse"), (".example",)
-            )
-        self.assertIsNotNone(v)
-        self.assertIn("PUBLIC", v)
-
-    def test_private_resolution_is_allowed(self):
-        with mock.patch.object(
-            socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("10.0.3.7", 0))]
-        ):
-            self.assertIsNone(
-                provision._host_pin_violation(
-                    "https://ch.internal/mcp", _spec("clickhouse"), (".internal",)
-                )
-            )
-
-    def test_unresolvable_host_is_rejected(self):
-        # This used to pass ("the provisioner often runs outside the VPC") and that was the hole:
-        # unverifiable is precisely the attacker's case. An operator who cannot resolve their internal
-        # name from here uses the private IP literal instead — see the literal test above.
-        with mock.patch.object(socket, "getaddrinfo", side_effect=socket.gaierror):
-            v = provision._host_pin_violation(
-                "https://ch.internal/mcp", _spec("clickhouse"), (".internal",)
-            )
-        self.assertIsNotNone(v)
-        self.assertIn("unverifiable", v)
-
-    def test_no_usable_address_is_rejected(self):
-        with mock.patch.object(socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("not-an-ip", 0))]):
-            self.assertIsNotNone(
-                provision._host_pin_violation(
-                    "https://ch.internal/mcp", _spec("clickhouse"), (".internal",)
-                )
-            )
-
-    def test_a_mixed_answer_containing_a_public_address_is_rejected(self):
-        with mock.patch.object(
-            socket, "getaddrinfo",
-            return_value=[(2, 1, 6, "", ("10.0.3.7", 0)), (2, 1, 6, "", ("93.184.216.34", 0))],
-        ):
-            self.assertIsNotNone(
-                provision._host_pin_violation(
-                    "https://ch.internal/mcp", _spec("clickhouse"), (".internal",)
-                )
-            )
