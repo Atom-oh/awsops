@@ -114,6 +114,32 @@ class TestPostgresDialect(unittest.TestCase):
     def test_replace_scalar_function_still_allowed(self):
         self._ok("SELECT replace(col, 'a', 'b') FROM t")
 
+    def test_e_string_desync_no_longer_hides_a_stacked_statement(self):
+        # PR-review round-2 CRITICAL #1: E'...' literals ALWAYS backslash-escape in Postgres
+        # regardless of standard_conforming_strings — scanning them under backslash_escapes=False
+        # (correct for ordinary '...' literals here) mis-found the closing quote, then treated the
+        # real closing `'` as opening a NEW string that swallowed the rest of the input, hiding
+        # the trailing DELETE entirely.
+        self._bad("SELECT E'a\\'b'; DELETE FROM t")
+        # Not a bypass: with the escaped quote correctly consumed, the entire remainder (including
+        # "DROP TABLE y") is genuinely still inside this one string literal in real Postgres too —
+        # the guard now agrees with the engine's own parse instead of closing the string early.
+        self._ok("SELECT E'x\\'; DROP TABLE y; --'")
+
+    def test_e_string_ordinary_content_still_allowed(self):
+        self._ok("SELECT E'a\\'b' AS note")
+
+    def test_u_ampersand_string_desync_also_handled(self):
+        self._bad("SELECT U&'a\\'b'; DELETE FROM t")
+
+    def test_dblink_exec_word_boundary_now_caught(self):
+        # PR-review MAJOR: bare \bdblink\b doesn't end before "_exec" (underscore is a word char).
+        self._bad("SELECT dblink_exec('host=x', 'delete from t')")
+
+    def test_setval_nextval_sequence_mutation_rejected(self):
+        self._bad("SELECT setval('seq', 100)")
+        self._bad("SELECT nextval('seq')")
+
 
 if __name__ == "__main__":
     unittest.main()

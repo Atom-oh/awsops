@@ -29,6 +29,10 @@ def _event(sql, resource_arn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1
 class TestExecuteSqlGuard(unittest.TestCase):
     def setUp(self):
         self.rds_client = mock.MagicMock()
+        # These tests exercise the Postgres dialect path (the tool's historical hardcoded flags,
+        # now resolved dynamically per PR-review round-2 CRITICAL #2) — default the cluster lookup
+        # to aurora-postgresql. MySQL-dialect behavior has its own test class below.
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-postgresql"}]}
         self.rds_data_client = mock.MagicMock()
         self.rds_data_client.execute_statement.return_value = {"columnMetadata": [], "records": []}
 
@@ -80,6 +84,58 @@ class TestExecuteSqlGuard(unittest.TestCase):
 
     def test_rejects_stacked_statements(self):
         status, _ = self._status("SELECT 1; DROP TABLE t")
+        self.assertEqual(status, 400)
+        self.rds_data_client.execute_statement.assert_not_called()
+
+
+class TestExecuteSqlEngineDialect(unittest.TestCase):
+    """PR-review round-2 CRITICAL #2: execute_sql is registered for both engines but was always
+    forcing Postgres guard flags — on a real MySQL target (which DOES backslash-escape) that
+    mis-scans a string and hides a mutating construct past the closing quote."""
+
+    def setUp(self):
+        self.rds_client = mock.MagicMock()
+        self.rds_data_client = mock.MagicMock()
+        self.rds_data_client.execute_statement.return_value = {"columnMetadata": [], "records": []}
+
+        def fake_get_client(service, region, role_arn):
+            return self.rds_data_client if service == "rds-data" else self.rds_client
+
+        self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
+        self.get_client_patch.start()
+
+    def tearDown(self):
+        self.get_client_patch.stop()
+
+    def _status(self, sql):
+        resp = rds_mcp.lambda_handler(_event(sql), None)
+        return resp["statusCode"], json.loads(resp["body"])
+
+    def test_mysql_backslash_hidden_into_outfile_now_rejected(self):
+        # Forcing Postgres flags (backslash_escapes=False) on a MySQL target mis-scans this: the
+        # guard thinks the string ends right after `x\`, hiding "y' INTO OUTFILE ..." from DANGER.
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
+        status, body = self._status("SELECT 'x\\' y' INTO OUTFILE '/tmp/x'")
+        self.assertEqual(status, 400)
+        self.assertIn("read-only", body["error"])
+        self.rds_data_client.execute_statement.assert_not_called()
+
+    def test_mysql_plain_select_still_allowed(self):
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
+        status, _ = self._status("SELECT * FROM t WHERE x = 1")
+        self.assertEqual(status, 200)
+        self.rds_data_client.execute_statement.assert_called_once()
+
+    def test_unresolvable_engine_fails_closed_rather_than_guessing(self):
+        self.rds_client.describe_db_clusters.side_effect = Exception("boom")
+        status, body = self._status("SELECT 1")
+        self.assertEqual(status, 400)
+        self.assertIn("read-only", body["error"])
+        self.rds_data_client.execute_statement.assert_not_called()
+
+    def test_unrecognized_engine_string_fails_closed(self):
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "some-future-engine"}]}
+        status, body = self._status("SELECT 1")
         self.assertEqual(status, 400)
         self.rds_data_client.execute_statement.assert_not_called()
 

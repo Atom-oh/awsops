@@ -82,12 +82,31 @@ def lambda_handler(event, context):
             # the bare token "drop" and sailed through. Also missing UPDATE was covered but GRANT/
             # REVOKE/SET/CALL/COPY/MERGE were not, and there was no stacked-statement or first-token
             # read-verb check. Shares the same comment/string-stripping guard clickhouse_mcp.py uses.
-            # PR-review follow-up: this Lambda talks to Aurora PostgreSQL (`standard_conforming_strings
-            # =on` by default, no `#` line comments — `#`/`#>`/`#>>` are jsonb operators) — pass the
-            # Postgres dialect flags so the guard doesn't mis-scan those two constructs.
+            # PR-review round 2: this tool is registered for BOTH MySQL and PostgreSQL targets, but
+            # was always passing Postgres dialect flags (hash_comment=False, backslash_escapes=
+            # False) — on a real MySQL target (which DOES backslash-escape by default) that mis-
+            # scans a string literal and can hide a mutating construct (e.g. `INTO OUTFILE`) past
+            # the closing quote. Determine engine from the cluster itself (same `rds` client this
+            # Lambda already uses for list_db_clusters) rather than trusting a caller-supplied flag.
+            # Data API only targets Aurora clusters, so resource_arn is a cluster ARN/id either way.
             sql = args["sql"].strip()
             try:
-                assert_read_only(sql, hash_comment=False, backslash_escapes=False)
+                engine = _engine_family(rds, args["resource_arn"])
+            except Exception:
+                engine = None
+            # Fail closed: the Postgres and MySQL dialect flags are each unsafe for the OTHER
+            # engine (backslash_escapes=True hides real Postgres SQL as "still inside a string";
+            # =False hides a MySQL backslash-escaped quote past `INTO OUTFILE`) — there is no
+            # single "stricter" combo that's safe for both, so an unresolved engine means the
+            # query is rejected outright rather than executed under a guessed dialect.
+            if engine == "mysql":
+                dialect = {"hash_comment": True, "backslash_escapes": True}
+            elif engine == "postgres":
+                dialect = {"hash_comment": False, "backslash_escapes": False}
+            else:
+                return err("read-only: could not determine target DB engine — refusing to execute")
+            try:
+                assert_read_only(sql, **dialect)
             except ValueError as e:
                 return err(str(e))
             # Execute SQL statement via Data API / Data API로 SQL 문 실행
@@ -116,6 +135,19 @@ def lambda_handler(event, context):
         return err("Unknown tool: " + t)
     except Exception as e:
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
+
+# Resolve a Data API resource_arn's engine family so execute_sql picks the right guard dialect.
+# `rds` (boto3 RDS, not rds-data) already has DescribeDBClusters perms via list_db_clusters above;
+# Data API only targets Aurora clusters, and describe_db_clusters accepts either the identifier
+# or the ARN for DBClusterIdentifier. Returns None (never guesses) if the engine string is
+# unrecognized or the lookup itself fails — caller fails closed on None.
+def _engine_family(rds, resource_arn):
+    engine = rds.describe_db_clusters(DBClusterIdentifier=resource_arn)["DBClusters"][0]["Engine"].lower()
+    if "mysql" in engine or "mariadb" in engine:
+        return "mysql"
+    if "postgres" in engine:
+        return "postgres"
+    return None
 
 # Return success response / 성공 응답 반환
 def ok(body): return {"statusCode": 200, "body": json.dumps(body, default=str)}

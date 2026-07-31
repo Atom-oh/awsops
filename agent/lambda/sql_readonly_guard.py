@@ -37,17 +37,20 @@ READ_VERBS = ("SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXISTS", "EXPLAIN")
 # Union of every write/admin/session verb either caller's dialect supports, plus INTO (blocks Postgres
 # `SELECT ... INTO table` CTAS and MySQL `SELECT ... INTO OUTFILE/DUMPFILE`, both otherwise
 # indistinguishable from a plain SELECT by the first-token check) and known dangerous Postgres
-# functions (file/large-object access, dblink SSRF, backend termination) that are just ordinary
-# function calls inside a syntactically-valid SELECT. Blocking a verb/fn the target engine doesn't
-# have is harmless (it can never appear in a legitimate read-only query); missing one that it does
-# have is the actual vulnerability class this module exists to close. REPLACE is anchored to its
-# mutating statement forms (REPLACE INTO / REPLACE TABLE) — a bare `\bREPLACE\b` also matches the
-# read-only scalar string function `replace(col, 'a', 'b')`, which is common and harmless.
+# functions (file/large-object access, dblink SSRF, backend termination, sequence mutation via
+# setval/nextval) that are just ordinary function calls inside a syntactically-valid SELECT.
+# Blocking a verb/fn the target engine doesn't have is harmless (it can never appear in a
+# legitimate read-only query); missing one that it does have is the actual vulnerability class
+# this module exists to close. REPLACE is anchored to its mutating statement forms (REPLACE INTO /
+# REPLACE TABLE) — a bare `\bREPLACE\b` also matches the read-only scalar string function
+# `replace(col, 'a', 'b')`, which is common and harmless. `dblink\w*` (not `\bdblink\b`) so
+# `dblink_exec(...)` also trips — underscore is a word char, so `\b` alone doesn't end at `dblink`.
 DANGER = re.compile(
     r"\b(INSERT|ALTER|DROP|CREATE|DELETE|TRUNCATE|OPTIMIZE|ATTACH|DETACH|SET|SYSTEM|GRANT|REVOKE|"
     r"KILL|MOVE|RENAME|CALL|COPY|MERGE|REPLACE\s+(?:INTO|TABLE)|LOCK|EXECUTE|DO|VACUUM|REINDEX|LISTEN|"
     r"NOTIFY|REFRESH|UPDATE|INTO|"
-    r"pg_read_file|pg_ls_dir|lo_import|lo_export|lo_create|lo_unlink|dblink|pg_terminate_backend)\b",
+    r"pg_read_file|pg_ls_dir|lo_import|lo_export|lo_create|lo_unlink|dblink\w*|pg_terminate_backend|"
+    r"setval|nextval)\b",
     re.IGNORECASE,
 )
 
@@ -81,9 +84,18 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True):
             idx = j if j != -1 else n
             out.append(" ")
         elif c == "'":                        # STRING literal → drop contents
+            # Postgres E'...'/U&'...' literals ALWAYS backslash-escape, regardless of
+            # standard_conforming_strings (that's what the E/U& prefix means) — so this literal
+            # scans in escaped mode even if the caller passed backslash_escapes=False for
+            # ordinary '...' literals on that dialect. Word-boundary-guarded so an identifier
+            # char right before E/U& (part of a longer name) can't false-trigger it.
+            literal_escapes = backslash_escapes or bool(
+                re.search(r"(?<![A-Za-z0-9_])[Ee]$", sql[:idx])
+                or re.search(r"(?<![A-Za-z0-9_])[Uu]&$", sql[:idx])
+            )
             idx += 1
             while idx < n:
-                if backslash_escapes and sql[idx] == "\\":
+                if literal_escapes and sql[idx] == "\\":
                     idx += 2
                     continue
                 if sql[idx] == "'":
