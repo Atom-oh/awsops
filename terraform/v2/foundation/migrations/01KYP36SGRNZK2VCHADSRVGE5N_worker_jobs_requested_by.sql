@@ -1,4 +1,4 @@
--- since: 2.1.0
+-- since: 2.0.0
 -- worker_jobs.requested_by — server-set requester identity (user.email ?? user.sub), NOT the
 -- client-controlled `payload` JSONB. Backs the P0-1 pentest-remediation fix: POST /api/jobs had no
 -- verifyUser() call and GET /api/jobs / GET /api/jobs/[id] had no ownership filter, so any request

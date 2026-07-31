@@ -33,8 +33,19 @@ describe('GET /api/jobs', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).jobs[0].job_id).toBe('j1');
     // non-admin caller: query must be scoped by requested_by, not the unfiltered ORDER BY-only form.
-    expect(query.mock.calls[0][0]).toMatch(/WHERE requested_by = \$1/);
-    expect(query.mock.calls[0][1]).toEqual(['u']);
+    expect(query.mock.calls[0][0]).toMatch(/WHERE requested_by = ANY\(\$1\)/);
+    expect(query.mock.calls[0][1]).toEqual([['u', 'u']]);
+  });
+  // round-5 review MAJOR: jobs/[id] and listReports already fall back to the raw sub for legacy
+  // rows; the LIST endpoint must too, or an owner can never discover the UUID to fetch it directly.
+  it('includes a legacy sub-keyed row (identity() differs from sub) in the list', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u-sub', email: 'u@x.io' });
+    query.mockResolvedValue({ rows: [{ job_id: 'legacy', type: 'noop', status: 'succeeded', runtime: 'lambda', error: null, created_at: 't', updated_at: 't' }] });
+    const { GET } = await import('./route');
+    const res = await GET(req());
+    expect(res.status).toBe(200);
+    expect((await res.json()).jobs[0].job_id).toBe('legacy');
+    expect(query.mock.calls[0][1]).toEqual([['u@x.io', 'u-sub']]);
   });
   it('admin sees the unfiltered query', async () => {
     verifyUser.mockResolvedValue({ sub: 'admin-u' });

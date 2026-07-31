@@ -1,4 +1,4 @@
--- since: 2.1.0
+-- since: 2.0.0
 -- worker_jobs.idempotency_key was a single GLOBAL UNIQUE constraint. Diagnosis idempotency keys
 -- are deterministic and guessable from a victim's email (report:${email}:${tier}:${model}:
 -- ${scope}:${hour}), and /api/jobs accepts a client-supplied idempotency_key for type 'noop'. An

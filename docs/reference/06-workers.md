@@ -73,12 +73,17 @@ ledger 행을 먼저 쓰고(권위), 그 다음 best-effort SQS send. 디스패�
 
 ## Decisions (ADRs) / 결정
 
-- **[ADR-005 — AWS mutation & autonomy (FROZEN)](../../decisions/005-aws-mutation-autonomy-frozen.md)** — workers
-  are the execution surface for the gated mutating operations. P2 implements the *safety hooks* only
-  (idempotency token, kill-switch, mutate/unknown-type guard, dry-run pass-through); approval workflow,
-  first-class rollback, and the mutate-action registry are deferred to P3+ (no mutate ops exist yet).
-  / 워커는 게이트된 mutate 작업의 실행 표면. P2는 안전 훅(멱등 토큰·킬스위치·mutate/unknown 타입
-  가드·dry-run 통과)만 구현; 승인 워크플로·1급 롤백·mutate-action 레지스트리는 P3+로 연기.
+- **[ADR-005 — AWS mutation & autonomy (FROZEN)](../../decisions/005-aws-mutation-autonomy-frozen.md)** — P2
+  implements the *safety hooks* (idempotency token, kill-switch, mutate/unknown-type guard, dry-run
+  pass-through) as a dark/inactive substrate for a potential future mutate-action registry — this is
+  architecturally reserved, not an implicit escalation path. AWS-resource mutation stays FROZEN per
+  ADR-005; turning any of this into live mutating operations (approval workflow, first-class rollback,
+  the mutate-action registry itself) requires a new ADR decision, not just implementation work.
+  / P2가 구현한 안전 훅(멱등 토큰·킬스위치·mutate/unknown 타입 가드·dry-run 통과)은 향후 있을 수 있는
+  mutate-action 레지스트리를 위해 architecturally 예약된 dark/inactive substrate일 뿐, 암묵적 확장
+  경로가 아니다. AWS 리소스 변경은 ADR-005에 따라 계속 FROZEN이며, 이를 실제 mutate 작업(승인
+  워크플로·1급 롤백·mutate-action 레지스트리 자체)으로 전환하려면 구현이 아니라 새 ADR 결정이
+  필요하다.
 - **[ADR-001 — v2 foundation (ECS/Fargate + Aurora split)](../../decisions/001-v2-foundation.md)** — the job
   ledger is the Aurora `worker_jobs` table (an infra table orthogonal to the 7 app-state tables); the
   worker_jobs row, not the SFN execution status, is the source of truth.

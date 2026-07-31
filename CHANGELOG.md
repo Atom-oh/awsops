@@ -31,10 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `eks_registrations` — EKS runtime registration (in-app query onboarding; EventBridge auto-register)
 - `worker_jobs.requested_by` — server-derived requester identity on every enqueue, used to scope
   `GET /api/jobs`(`/[id]`) to the caller's own jobs (2026-07-22 pentest report remediation)
-- `worker_jobs` idempotency-per-requester — replaces the single global `UNIQUE(idempotency_key)`
-  with two partial unique indexes (per-requester, plus a NULL-requester bucket for internal
-  enqueues), closing a cross-user DoS where a guessable future idempotency key could be
-  pre-inserted under a victim's identity (PR #195 round-2 review)
+- `worker_jobs` idempotency-per-requester — adds two partial unique indexes (per-requester, plus a
+  NULL-requester bucket for internal enqueues) alongside the existing global
+  `UNIQUE(idempotency_key)`, closing a cross-user DoS where a guessable future idempotency key
+  could be pre-inserted under a victim's identity (PR #195 round-2 review). This is Phase 1 of a
+  two-phase rollout — dropping the old global constraint is deliberately deferred to a separate,
+  later PR once this deploy is confirmed stable (round-5 review: shipping both phases in one PR
+  would race `make deploy`'s migrate-then-roll-out ordering and cause a guaranteed enqueue outage)
 
 ### Security
 

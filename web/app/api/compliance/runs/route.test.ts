@@ -21,8 +21,19 @@ describe('GET /api/compliance/runs', () => {
     const res = await GET(req() as any);
     expect(res.status).toBe(200);
     expect((await res.json()).runs[0]).toMatchObject({ id: 2, benchmark: 'cis_v300' });
-    expect(query.mock.calls[0][0]).toMatch(/WHERE requested_by = \$1/);
-    expect(query.mock.calls[0][1]).toEqual(['u']);
+    expect(query.mock.calls[0][0]).toMatch(/WHERE requested_by = ANY\(\$1\)/);
+    expect(query.mock.calls[0][1]).toEqual([['u', 'u']]);
+  });
+  // round-5 review MAJOR: same identity-OR-raw-sub fallback as /api/jobs list, so a legacy
+  // sub-keyed run still shows up for its real owner.
+  it('includes a legacy sub-keyed run (identity() differs from sub) in the list', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u-sub', email: 'u@x.io' });
+    query.mockResolvedValueOnce({ rows: [{ id: 3, benchmark: 'cis_v300', status: 'succeeded', pass_rate: 90 }] });
+    const { GET } = await import('./route');
+    const res = await GET(req() as any);
+    expect(res.status).toBe(200);
+    expect((await res.json()).runs[0]).toMatchObject({ id: 3 });
+    expect(query.mock.calls[0][1]).toEqual([['u@x.io', 'u-sub']]);
   });
   it('200 returns the unfiltered query for an admin', async () => {
     verifyUser.mockResolvedValue({ sub: 'admin-u' });

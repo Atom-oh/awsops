@@ -14,14 +14,15 @@ export async function GET(req: Request) {
   }
   try {
     const admin = await isAdmin(user);
-    const me = identity(user);
     const cols = `id, worker_job_id, benchmark, status, requested_by, account, pass_rate,
               total_controls, ok, alarm, info, skip, error, error_message, started_at, finished_at`;
+    // round-5 review MAJOR (parallel to /api/jobs list): also scope by the raw sub so a legacy
+    // sub-keyed row still shows up in the LIST for its real owner.
     const r = admin
       ? await getPool().query(`SELECT ${cols} FROM compliance_runs ORDER BY started_at DESC LIMIT 50`)
       : await getPool().query(
-          `SELECT ${cols} FROM compliance_runs WHERE requested_by = $1 ORDER BY started_at DESC LIMIT 50`,
-          [me],
+          `SELECT ${cols} FROM compliance_runs WHERE requested_by = ANY($1) ORDER BY started_at DESC LIMIT 50`,
+          [[identity(user), user.sub]],
         );
     return NextResponse.json({ runs: r.rows });
   } catch (e) {

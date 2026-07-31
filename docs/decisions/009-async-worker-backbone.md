@@ -49,7 +49,7 @@ POST /api/jobs (noop/noop-heavy only) · POST /api/diagnosis (report) · POST /a
 
 **Job 타입 (전부 read-only):** `noop`/`noop-heavy`(범용 `POST /api/jobs`) · `report`(진단 리포트 렌더, `POST /api/diagnosis` 전용 — 클라이언트가 넘긴 report_id로 다른 사용자 리포트를 위조/덮어쓸 수 있어 범용 라우트에서는 거부) · `compliance`(Powerpipe CIS 스캔, `POST /api/compliance/run` 전용, 동일 사유). 모든 job은 AWS-리소스를 변경하지 않는다.
 
-**Job types (all read-only):** `noop`/`noop-heavy` (generic `POST /api/jobs`) · `report` (diagnosis report render — `POST /api/diagnosis` only; the generic route rejects it since a client-supplied report_id could forge/overwrite another user's report) · `compliance` (Powerpipe CIS scan — `POST /api/compliance/run` only, same reason). No job mutates AWS resources.
+**Job types (all read-only):** `noop`/`noop-heavy` (generic `POST /api/jobs`) · `report` (diagnosis report render — `POST /api/diagnosis` only; the generic route rejects it since a client-supplied report_id could forge/overwrite another user's report) · `compliance` (Powerpipe CIS scan — `POST /api/compliance/run` only, same reason). No job mutates AWS resources. `scripts/v2/workers/schedule_dispatcher.py` (EventBridge-triggered) enqueues `report` jobs directly for scheduled auto-diagnosis — a distinct, trusted internal path, not the user-facing `/api/diagnosis` route, so it doesn't go through the route's request-derived `requestedBy`.
 
 **실행 substrate의 *mutating* 분기는 ADR-005가 관할하며 영구 동결(FROZEN, do-not-enable)이다.** 동일 spine 위에 설계됐던 AWS-리소스 변경 경로는 flag-OFF로 동결되어 있고 본 ADR의 범위가 아니다.
 

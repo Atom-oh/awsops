@@ -87,8 +87,10 @@ export async function GET(req: NextRequest) {
   try {
     // Ownership filter: admins see every job; everyone else sees only jobs they requested.
     // requested_by IS NULL rows are internal-only enqueues (scheduler/reaper) — admin-only.
+    // round-5 review MAJOR: match jobs/[id] and listReports — also scope by the raw sub, so a
+    // legacy row (requested_by = sub, written before the identity() switch) still shows up in
+    // the LIST, not just when fetched directly by UUID.
     const admin = await isAdmin(user);
-    const me = identity(user);
     const r = admin
       ? await getPool().query(
           `SELECT job_id, type, status, runtime, error, created_at, updated_at
@@ -96,8 +98,8 @@ export async function GET(req: NextRequest) {
         )
       : await getPool().query(
           `SELECT job_id, type, status, runtime, error, created_at, updated_at
-           FROM worker_jobs WHERE requested_by = $1 ORDER BY created_at DESC LIMIT 50`,
-          [me],
+           FROM worker_jobs WHERE requested_by = ANY($1) ORDER BY created_at DESC LIMIT 50`,
+          [[identity(user), user.sub]],
         );
     return NextResponse.json({ jobs: r.rows });
   } catch (e) {
