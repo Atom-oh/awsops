@@ -11,39 +11,41 @@ import Screenshot from '@site/src/components/Screenshot';
 用于查看 ECR 存储库和镜像信息的页面。
 
 :::info v2 中的呈现方式
-此界面并非独立页面，而是通过 v2 的通用清单视图（`/inventory/ecr`，侧边栏「计算」分组）提供。
+此界面并非独立页面，而是通过 v2 的通用清单视图（`/inventory/ecr`，侧边栏「计算」分组）提供。以下内容基于 v2 清单视图的实际配置（`web/lib/inventory-types.ts` 中的 `HIGHLIGHTS.ecr`/`INVENTORY_TYPES.ecr`），而非 v1 的专用 ECR 页面。
 :::
 
 <Screenshot src="/screenshots/compute/ecr.png" alt="ECR" />
 
 ## 主要功能
 
-### 统计卡片
-- **Repositories**：全部存储库数量（青色）
-- **Scan on Push**：已启用镜像推送时自动扫描的存储库数量（绿色）
-- **Immutable Tags**：已启用标签不可变性的存储库数量（紫色）
+### 高亮卡片
+- **Scan on Push**：已启用镜像推送时自动扫描的存储库数量
+- **标签不可变**：已设置标签不可变（IMMUTABLE）的存储库数量
+- **标签可变**：已设置标签可变（MUTABLE）的存储库数量
+
+不存在显示存储库总数的卡片（请通过表格行数确认）。
 
 ### 存储库表格
 | 列 | 说明 |
 |------|------|
-| Repository | 存储库名称 |
 | URI | 存储库 URI（镜像推送/拉取地址） |
-| Tag Mutability | 标签是否可更改（MUTABLE/IMMUTABLE） |
-| Scan | 推送时是否启用扫描 |
-| Encryption | 加密类型（AES256/KMS） |
+| Tag mutability | 标签是否可更改（MUTABLE/IMMUTABLE） |
 | Created | 创建日期 |
+
+Scan on Push 状态和加密类型**并非表格列** —— Scan on Push 显示在上方的高亮卡片中，加密信息在下方的详情面板中查看。
 
 ### 详情面板
 点击存储库可以查看详细信息：
-- **Repository 部分**：Name、URI、ARN、Registry ID、Tag Mutability、Created、Region
+- **Identity 部分**：Name、Account、Region、ARN、Registry ID、URI、Created
+- **Config 部分**：Tag Mutability、Image Scanning Configuration（包含 Scan on Push）、Lifecycle Policy
+- **Security 部分**：Encryption Configuration（AES256/KMS）
 - **Tags 部分**：存储库上设置的标签
 
 ## 使用方法
 
 1. 在侧边栏中点击 **Compute > ECR**
-2. 通过顶部统计了解存储库整体状况
-3. 识别未启用 Scan on Push 的存储库
-4. 点击存储库查看详细 URI 和设置
+2. 通过顶部高亮卡片了解 Scan on Push 与标签不可变的整体状况
+3. 点击存储库查看详细的 URI、Scan on Push 与 Encryption 设置
 
 ## 安全设置指南
 
@@ -64,7 +66,7 @@ import Screenshot from '@site/src/components/Screenshot';
 ## 使用技巧
 
 :::tip 启用 Scan on Push
-表格中 Scan 列显示为 "No" 的存储库未启用漏洞扫描。为了安全起见，建议启用。
+如果高亮卡片中的 Scan on Push 数量少于存储库总数，说明部分存储库未启用扫描。可在各存储库详情面板的 Config 部分逐一确认。
 :::
 
 :::tip 复制镜像 URI

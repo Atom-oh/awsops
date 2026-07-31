@@ -11,28 +11,30 @@ import Screenshot from '@site/src/components/Screenshot';
 用于实时监控 EC2 实例状态并查看详细信息的页面。
 
 :::info v2 中的呈现方式
-此界面并非独立页面，而是通过 v2 的通用清单视图（`/inventory/ec2`，侧边栏「计算」分组）提供。
+此界面并非独立页面，而是通过 v2 的通用清单视图（`/inventory/ec2`，侧边栏「计算」分组）提供。以下内容基于 v2 清单视图的实际配置（`web/lib/inventory-types.ts` 中的 `HIGHLIGHTS.ec2`/`INVENTORY_TYPES.ec2`），而非 v1 的专用 EC2 页面。
 :::
 
 <Screenshot src="/screenshots/compute/ec2.png" alt="EC2 实例" />
 
 ## 主要功能
 
-### 统计卡片
-页面顶部的 4 个 StatsCard 显示核心指标：
-- **Running**：正在运行的实例数量（绿色）
-- **Stopped**：已停止的实例数量（红色）
-- **Total vCPUs**：全部 vCPU 总和（青色）
-- **Instance Types**：正在使用的实例类型种类数（紫色）
+### 高亮卡片
+页面顶部的 4 个高亮卡片显示核心指标：
+- **实例中**：`instance_state` 为 running 的实例数量
+- **已停止**：`instance_state` 为 stopped 的实例数量
+- **公共 IP**：已分配公共 IP 的实例数量
+- **类型种类数**：正在使用的实例类型（`instance_type`）的去重计数
+
+不存在显示 vCPU 总和的卡片（该指标仅存在于 v1）。
 
 ### 可视化图表
-- **Instance Type Distribution**：以饼图显示各实例类型的分布
-- **Instance Status**：以柱状图显示各状态的实例数量
+- 按实例类型（`instance_type`）和状态（`instance_state`）分布的环形图
+- 按内存（MiB）排名的 Top-N 柱状图
 
 ### 实例列表表格
 以表格形式显示所有 EC2 实例：
-- Instance ID、Name、Type、State、Public/Private IP、VPC、Launch Time
-- 根据状态显示不同颜色的 StatusBadge（running=绿色，stopped=红色）
+- Name、Type、State、Pricing、Private/Public IP、Subnet、VPC、Launch Time
+- 根据状态（running/stopped 等）显示不同颜色的徽章
 
 ### 筛选与搜索
 - **搜索框**：在 ID、Name、IP 等所有字段中进行文本搜索
@@ -53,7 +55,7 @@ import Screenshot from '@site/src/components/Screenshot';
 ## 使用方法
 
 1. 在侧边栏中点击 **Compute > EC2**
-2. 通过顶部统计卡片了解整体状况
+2. 通过顶部高亮卡片了解整体状况
 3. 使用筛选功能查找所需实例
 4. 在表格中点击实例查看详细信息
 5. 通过刷新按钮加载最新数据

@@ -11,39 +11,41 @@ import Screenshot from '@site/src/components/Screenshot';
 ECR リポジトリとイメージ情報を確認できるページです。
 
 :::info v2 での提供方法
-この画面は専用ページではなく、v2 の共通インベントリビュー（`/inventory/ecr`、サイドバーの「コンピュート」グループ）から提供されます。
+この画面は専用ページではなく、v2 の共通インベントリビュー（`/inventory/ecr`、サイドバーの「コンピュート」グループ）から提供されます。以下の内容は v1 の専用 ECR ページではなく、v2 インベントリビューの実際の構成（`web/lib/inventory-types.ts` の `HIGHLIGHTS.ecr`/`INVENTORY_TYPES.ecr`）に基づいています。
 :::
 
 <Screenshot src="/screenshots/compute/ecr.png" alt="ECR" />
 
 ## 主な機能
 
-### 統計カード
-- **Repositories**: リポジトリの総数(シアン)
-- **Scan on Push**: イメージのプッシュ時に自動スキャンが有効化されているリポジトリ数(緑)
-- **Immutable Tags**: タグの不変性が有効化されているリポジトリ数(紫)
+### ハイライトカード
+- **Scan on Push**: イメージのプッシュ時に自動スキャンが有効化されているリポジトリ数
+- **タグ不変**: タグ不変性(IMMUTABLE)が設定されているリポジトリ数
+- **タグ変更可能**: タグ変更可能(MUTABLE)が設定されているリポジトリ数
+
+リポジトリの総数を表示するカードはありません(テーブルの行数で確認します)。
 
 ### リポジトリテーブル
 | カラム | 説明 |
 |------|------|
-| Repository | リポジトリ名 |
 | URI | リポジトリ URI(イメージのプッシュ/プル用アドレス) |
-| Tag Mutability | タグの変更可否(MUTABLE/IMMUTABLE) |
-| Scan | プッシュ時のスキャンの有効/無効 |
-| Encryption | 暗号化タイプ(AES256/KMS) |
+| Tag mutability | タグの変更可否(MUTABLE/IMMUTABLE) |
 | Created | 作成日 |
+
+Scan on Push の有効/無効と暗号化タイプは**テーブルのカラムではありません** — Scan on Push は上のハイライトカードで、暗号化は下の詳細パネルで確認します。
 
 ### 詳細パネル
 リポジトリをクリックすると詳細情報を確認できます:
-- **Repository セクション**: Name、URI、ARN、Registry ID、Tag Mutability、Created、Region
+- **Identity セクション**: Name、Account、Region、ARN、Registry ID、URI、Created
+- **Config セクション**: Tag Mutability、Image Scanning Configuration(Scan on Push を含む)、Lifecycle Policy
+- **Security セクション**: Encryption Configuration(AES256/KMS)
 - **Tags セクション**: リポジトリに設定されたタグ
 
 ## 使い方
 
 1. サイドバーで **Compute > ECR** をクリックします
-2. 上部の統計でリポジトリ全体の状況を把握します
-3. Scan on Push が無効になっているリポジトリを特定します
-4. リポジトリをクリックして詳細な URI と設定を確認します
+2. 上部のハイライトカードで Scan on Push とタグ不変性の状況を把握します
+3. リポジトリをクリックして詳細な URI、Scan on Push、Encryption 設定を確認します
 
 ## セキュリティ設定ガイド
 
@@ -64,7 +66,7 @@ ECR リポジトリとイメージ情報を確認できるページです。
 ## 利用のヒント
 
 :::tip Scan on Push の有効化
-テーブルで Scan カラムが「No」のリポジトリは脆弱性スキャンが無効になっています。セキュリティのため有効化を推奨します。
+ハイライトカードの Scan on Push 数がリポジトリ総数より少ない場合、一部のリポジトリでスキャンが無効になっています。各リポジトリの詳細パネルの Config セクションで個別に確認してください。
 :::
 
 :::tip イメージ URI のコピー

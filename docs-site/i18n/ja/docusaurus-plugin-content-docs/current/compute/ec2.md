@@ -11,28 +11,30 @@ import Screenshot from '@site/src/components/Screenshot';
 EC2 インスタンスのリアルタイムステータスを監視し、詳細情報を確認できるページです。
 
 :::info v2 での提供方法
-この画面は専用ページではなく、v2 の共通インベントリビュー（`/inventory/ec2`、サイドバーの「コンピュート」グループ）から提供されます。
+この画面は専用ページではなく、v2 の共通インベントリビュー（`/inventory/ec2`、サイドバーの「コンピュート」グループ）から提供されます。以下の内容は v1 の専用 EC2 ページではなく、v2 インベントリビューの実際の構成（`web/lib/inventory-types.ts` の `HIGHLIGHTS.ec2`/`INVENTORY_TYPES.ec2`）に基づいています。
 :::
 
 <Screenshot src="/screenshots/compute/ec2.png" alt="EC2 インスタンス" />
 
 ## 主な機能
 
-### 統計カード
-ページ上部に 4 つの StatsCard が主要指標を表示します:
-- **Running**: 実行中のインスタンス数(緑)
-- **Stopped**: 停止中のインスタンス数(赤)
-- **Total vCPUs**: 全体の vCPU 合計(シアン)
-- **Instance Types**: 使用中のインスタンスタイプの種類数(紫)
+### ハイライトカード
+ページ上部に 4 つのハイライトカードが主要指標を表示します:
+- **実行中**: `instance_state` が running のインスタンス数
+- **停止中**: `instance_state` が stopped のインスタンス数
+- **パブリック IP**: パブリック IP が割り当てられているインスタンス数
+- **タイプ種類数**: 使用中のインスタンスタイプ(`instance_type`)の distinct 数
+
+vCPU の合計を表示するカードはありません(v1 のみに存在した指標です)。
 
 ### 可視化チャート
-- **Instance Type Distribution**: インスタンスタイプ別の分布を円グラフで表示
-- **Instance Status**: ステータス別のインスタンス数を棒グラフで表示
+- インスタンスタイプ(`instance_type`)とステータス(`instance_state`)別の分布ドーナツチャート
+- メモリ(MiB)基準の Top-N インスタンスランキングを表す棒グラフ
 
 ### インスタンス一覧テーブル
 すべての EC2 インスタンスをテーブル形式で表示します:
-- Instance ID、Name、Type、State、Public/Private IP、VPC、Launch Time
-- ステータスに応じて色が異なる StatusBadge を表示(running=緑、stopped=赤)
+- Name、Type、State、Pricing、Private/Public IP、Subnet、VPC、Launch Time
+- ステータス(running/stopped など)に応じて色が異なるバッジを表示
 
 ### フィルターと検索
 - **検索ボックス**: ID、Name、IP など、すべてのフィールドを対象にテキスト検索
@@ -53,7 +55,7 @@ EC2 インスタンスのリアルタイムステータスを監視し、詳細�
 ## 使い方
 
 1. サイドバーで **Compute > EC2** をクリックします
-2. 上部の統計カードで全体の状況を把握します
+2. 上部のハイライトカードで全体の状況を把握します
 3. フィルターを使って目的のインスタンスを探します
 4. テーブルでインスタンスをクリックして詳細情報を確認します
 5. 更新ボタンで最新データを読み込むことができます

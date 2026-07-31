@@ -11,57 +11,56 @@ import Screenshot from '@site/src/components/Screenshot';
 用于监控 ECS 集群、服务和任务状态的页面。
 
 :::info v2 中的呈现方式
-此界面并非独立页面，而是通过 v2 的通用清单分组视图（侧边栏「计算」分组，整合 ECS 集群/服务/任务）提供。
+v1 曾在一个页面中统一监控集群/服务/任务，但**v2 将其拆分为 3 个独立的清单路由** —— `/inventory/ecs_cluster`、`/inventory/ecs_service`、`/inventory/ecs_task`。侧边栏只是将三者归入「计算」分组下一并显示 —— 每个都是拥有各自表格、筛选器和详情面板的独立页面。以下内容基于这一 3-路由结构，而非 v1 的统一页面。
 :::
 
 <Screenshot src="/screenshots/compute/ecs.png" alt="ECS" />
 
 ## 主要功能
 
-### 统计卡片
-- **Clusters**：全部 ECS 集群数量（青色）
-- **Services**：全部服务数量（紫色）
-- **Tasks**：正在运行的任务数量（绿色）
-- **Container Instances**：EC2 容器实例数量（橙色）
+### ECS Clusters（`/inventory/ecs_cluster`）
+高亮卡片显示状态与区域分布，以及按运行中任务数排名的 Top-N 柱状图。
 
-### 可视化图表
-- **Running Tasks per Cluster**：各集群运行中任务数量的饼图
-
-### 集群表格
+表格列：
 | 列 | 说明 |
 |------|------|
-| Cluster Name | 集群名称 |
 | Status | 状态（ACTIVE、INACTIVE） |
-| Running Tasks | 运行中的任务数量 |
-| Pending Tasks | 等待中的任务数量 |
-| Active Services | 活跃服务数量 |
-| Container Instances | 容器实例数量 |
-| Region | 区域 |
+| Running | 运行中的任务数量 |
+| Pending | 等待中的任务数量 |
+| Services | 活跃服务数量 |
+| Instances | 已注册容器实例数量 |
+| MTD Cost ($) | 本月至今累计成本 |
 
-### 服务表格
+详情面板：Identity（Name、Account、Region、ARN）/ Tasks & Services / Config（Settings、Container Insights 等）/ Tags 各部分。
+
+### ECS Services（`/inventory/ecs_service`）
+高亮卡片显示 Desired/Running/Pending 总和及集群去重数量。
+
+表格列：
 | 列 | 说明 |
 |------|------|
-| Service Name | 服务名称 |
+| Service | 服务名称 |
 | Status | 状态（ACTIVE、DRAINING） |
 | Desired | 期望任务数量 |
 | Running | 运行中的任务数量 |
 | Pending | 等待中的任务数量 |
-| Launch Type | 启动类型（FARGATE、EC2） |
+| Launch | 启动类型（FARGATE、EC2） |
 | Strategy | 调度策略 |
+| Cluster | 所属集群 |
+| Task def | 任务定义 |
+| Created | 创建日期 |
 
-### 集群详情面板
-点击集群可以查看详细信息：
-- **Cluster 部分**：Name、ARN、Status、Tasks、Services、Container Instances
-- **Settings 部分**：集群设置（Container Insights 等）
-- **Tags 部分**：集群标签
+### ECS Tasks（`/inventory/ecs_task`）
+高亮卡片显示 RUNNING 数量、Fargate 任务数量、每日成本合计（估算值）以及集群去重数量。成本是根据任务定义分配的 cpu/memory 计算出的静态估算值，详细计算方式请参见 [ECS Container Cost](../compute/ecs-container-cost)。
+
+表格列：Task、Cluster、Group、Status、Launch、CPU、Memory、Cost/Day、Cost/Mo、AZ、Started。
 
 ## 使用方法
 
-1. 在侧边栏中点击 **Compute > ECS**
-2. 通过顶部统计卡片了解 ECS 整体状况
-3. 在 Clusters 表格中查看各集群的状态
-4. 在 Services 表格中比较各服务的 Desired 与 Running 任务数
-5. 点击集群查看详细设置
+1. 在侧边栏中点击 **Compute > ECS Clusters / Services / Tasks** 中所需的路由
+2. 通过顶部高亮卡片了解该资源的整体状况
+3. 在 Services 页面比较 Desired 与 Running，在 Clusters 页面查看各集群的状态
+4. 点击行以在详情面板中查看具体设置
 
 ## Fargate vs EC2 Launch Type
 
@@ -70,7 +69,7 @@ import Screenshot from '@site/src/components/Screenshot';
 | 基础设施管理 | 无服务器（AWS 托管） | 需要自行管理 |
 | 成本 | 基于 vCPU/Memory | EC2 实例费用 |
 | 扩缩容 | 自动 | 需要配置 Auto Scaling |
-| 成本分析 | 支持 Container Cost 页面 | 计划在 Phase 2 支持 |
+| 成本分析 | ECS Tasks 视图的 Cost/Day、Cost/Mo 列（静态估算值） | 不支持 |
 
 ## 使用技巧
 
