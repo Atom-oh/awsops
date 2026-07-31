@@ -99,8 +99,12 @@ def lambda_handler(event, context):
             # =False hides a MySQL backslash-escaped quote past `INTO OUTFILE`) — there is no
             # single "stricter" combo that's safe for both, so an unresolved engine means the
             # query is rejected outright rather than executed under a guessed dialect.
+            # PR-review round 3: MySQL's `--` comment additionally requires a trailing whitespace/
+            # control char (or EOF) — `--1` is subtraction, not a comment, in MySQL. Postgres has
+            # no such requirement, so its path keeps dash_comment_needs_boundary=False (default).
             if engine == "mysql":
-                dialect = {"hash_comment": True, "backslash_escapes": True}
+                dialect = {"hash_comment": True, "backslash_escapes": True,
+                           "dash_comment_needs_boundary": True}
             elif engine == "postgres":
                 dialect = {"hash_comment": False, "backslash_escapes": False}
             else:
@@ -109,10 +113,37 @@ def lambda_handler(event, context):
                 assert_read_only(sql, **dialect)
             except ValueError as e:
                 return err(str(e))
-            # Execute SQL statement via Data API / Data API로 SQL 문 실행
-            resp = rds_data.execute_statement(
-                resourceArn=args["resource_arn"], secretArn=args["secret_arn"],
-                database=args.get("database", ""), sql=sql)
+
+            # PR-review round 3 CRITICAL: this tool reaches the app's own Aurora cluster with MASTER
+            # credentials (rds-data:ExecuteStatement + GetSecretValue on the master secret), so the
+            # lexical guard above is the ONLY thing standing between a clever bypass and a real write
+            # — and three rounds of finding-and-patching individual bypasses (comment/escape desync,
+            # INTO, dangerous functions, ...) prove a denylist can never fully enumerate that class
+            # (arbitrary present/future string-returning functions that mutate data). So every
+            # execute_sql call is now ALSO wrapped in a DB-level READ ONLY transaction: even a query
+            # that evades the regex entirely is rejected by the engine itself, not by pattern-matching
+            # its text. `SET TRANSACTION READ ONLY` is valid syntax on both Postgres and MySQL/Aurora
+            # MySQL (5.6+), so the same statement text is used for both engines. Never commit — this
+            # tool is read-only by contract, so there's nothing to persist — and always rollback in
+            # `finally` so the transaction never lingers on an error path.
+            txn_args = dict(resourceArn=args["resource_arn"], secretArn=args["secret_arn"],
+                             database=args.get("database", ""))
+            transaction_id = rds_data.begin_transaction(**txn_args)["transactionId"]
+            try:
+                try:
+                    rds_data.execute_statement(transactionId=transaction_id,
+                        sql="SET TRANSACTION READ ONLY", **txn_args)
+                except Exception as e:
+                    # Abort rather than fall through to running the query without the read-only
+                    # guarantee — the lexical guard is defense-in-depth, not the primary barrier.
+                    return err("read-only: could not establish a read-only transaction — refusing to execute: " + str(e))
+                resp = rds_data.execute_statement(transactionId=transaction_id, sql=sql, **txn_args)
+            finally:
+                try:
+                    rds_data.rollback_transaction(resourceArn=args["resource_arn"],
+                        secretArn=args["secret_arn"], transactionId=transaction_id)
+                except Exception:
+                    pass
             columns = [c.get("label", c.get("name", "")) for c in resp.get("columnMetadata", [])]
             rows = []
             for record in resp.get("records", [])[:100]:

@@ -35,6 +35,7 @@ class TestExecuteSqlGuard(unittest.TestCase):
         self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-postgresql"}]}
         self.rds_data_client = mock.MagicMock()
         self.rds_data_client.execute_statement.return_value = {"columnMetadata": [], "records": []}
+        self.rds_data_client.begin_transaction.return_value = {"transactionId": "txn-1"}
 
         def fake_get_client(service, region, role_arn):
             return self.rds_data_client if service == "rds-data" else self.rds_client
@@ -50,9 +51,22 @@ class TestExecuteSqlGuard(unittest.TestCase):
         return resp["statusCode"], json.loads(resp["body"])
 
     def test_plain_select_reaches_the_data_api(self):
+        # PR-review round 3: execute_sql now wraps the query in a DB-level READ ONLY transaction —
+        # begin_transaction, then TWO execute_statement calls (SET TRANSACTION READ ONLY, then the
+        # real query) both carrying the SAME transactionId, then rollback_transaction in `finally`.
         status, body = self._status("SELECT id, requested_by FROM diagnosis_reports LIMIT 10")
         self.assertEqual(status, 200)
-        self.rds_data_client.execute_statement.assert_called_once()
+        self.rds_data_client.begin_transaction.assert_called_once()
+        calls = self.rds_data_client.execute_statement.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].kwargs["sql"], "SET TRANSACTION READ ONLY")
+        self.assertEqual(calls[1].kwargs["sql"], "SELECT id, requested_by FROM diagnosis_reports LIMIT 10")
+        self.assertEqual(calls[0].kwargs["transactionId"], "txn-1")
+        self.assertEqual(calls[1].kwargs["transactionId"], "txn-1")
+        self.rds_data_client.rollback_transaction.assert_called_once_with(
+            resourceArn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1",
+            secretArn="arn:aws:secretsmanager:x", transactionId="txn-1")
+        self.rds_data_client.commit_transaction.assert_not_called()
 
     def test_benign_select_with_a_decoy_comment_still_passes(self):
         # The pentest's own repro used SELECT/*delete*/table_name FROM information_schema.tables to
@@ -60,7 +74,7 @@ class TestExecuteSqlGuard(unittest.TestCase):
         # is a decoy word inside a comment, not a real DML verb) and must still succeed.
         status, _ = self._status("SELECT/*delete*/table_name FROM/**/information_schema.tables")
         self.assertEqual(status, 200)
-        self.rds_data_client.execute_statement.assert_called_once()
+        self.assertEqual(self.rds_data_client.execute_statement.call_count, 2)
 
     def test_the_exact_pentest_bypass_is_now_blocked(self):
         # These chain the same block-comment technique onto REAL write verbs — the pentest report's
@@ -97,6 +111,7 @@ class TestExecuteSqlEngineDialect(unittest.TestCase):
         self.rds_client = mock.MagicMock()
         self.rds_data_client = mock.MagicMock()
         self.rds_data_client.execute_statement.return_value = {"columnMetadata": [], "records": []}
+        self.rds_data_client.begin_transaction.return_value = {"transactionId": "txn-1"}
 
         def fake_get_client(service, region, role_arn):
             return self.rds_data_client if service == "rds-data" else self.rds_client
@@ -119,12 +134,23 @@ class TestExecuteSqlEngineDialect(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("read-only", body["error"])
         self.rds_data_client.execute_statement.assert_not_called()
+        self.rds_data_client.begin_transaction.assert_not_called()
+
+    def test_mysql_dash_dash_comment_bypass_now_rejected(self):
+        # PR-review round 3: MySQL only treats `--` as a comment when followed by whitespace/a
+        # control char (or EOF). `--1` is not a comment in MySQL — it parses as `1 - -1` — so the
+        # old dialect-unaware strip_sql hid `INTO OUTFILE` behind a fake comment here.
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
+        status, body = self._status("SELECT 1--1 INTO OUTFILE '/tmp/x'")
+        self.assertEqual(status, 400)
+        self.assertIn("read-only", body["error"])
+        self.rds_data_client.execute_statement.assert_not_called()
 
     def test_mysql_plain_select_still_allowed(self):
         self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-mysql"}]}
         status, _ = self._status("SELECT * FROM t WHERE x = 1")
         self.assertEqual(status, 200)
-        self.rds_data_client.execute_statement.assert_called_once()
+        self.assertEqual(self.rds_data_client.execute_statement.call_count, 2)
 
     def test_unresolvable_engine_fails_closed_rather_than_guessing(self):
         self.rds_client.describe_db_clusters.side_effect = Exception("boom")
@@ -132,12 +158,92 @@ class TestExecuteSqlEngineDialect(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("read-only", body["error"])
         self.rds_data_client.execute_statement.assert_not_called()
+        self.rds_data_client.begin_transaction.assert_not_called()
 
     def test_unrecognized_engine_string_fails_closed(self):
         self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "some-future-engine"}]}
         status, body = self._status("SELECT 1")
         self.assertEqual(status, 400)
         self.rds_data_client.execute_statement.assert_not_called()
+        self.rds_data_client.begin_transaction.assert_not_called()
+
+
+class TestExecuteSqlReadOnlyTransaction(unittest.TestCase):
+    """PR-review round 3 CRITICAL: a lexical denylist can't practically enumerate every present/
+    future write-capable string function on Postgres/MySQL (query_to_xml(...RETURNING...), lo_put,
+    set_config, ...) given this tool runs with the app's own Aurora MASTER credentials. These prove
+    the structural fix — every execute_sql call runs inside a DB-level READ ONLY transaction — via
+    the call sequence (begin -> SET TRANSACTION READ ONLY -> user SQL -> rollback), since a plain
+    mock can't itself enforce Postgres/MySQL transaction semantics."""
+
+    def setUp(self):
+        self.rds_client = mock.MagicMock()
+        self.rds_client.describe_db_clusters.return_value = {"DBClusters": [{"Engine": "aurora-postgresql"}]}
+        self.rds_data_client = mock.MagicMock()
+        self.rds_data_client.begin_transaction.return_value = {"transactionId": "txn-1"}
+
+        def fake_get_client(service, region, role_arn):
+            return self.rds_data_client if service == "rds-data" else self.rds_client
+
+        self.get_client_patch = mock.patch.object(rds_mcp, "get_client", side_effect=fake_get_client)
+        self.get_client_patch.start()
+
+    def tearDown(self):
+        self.get_client_patch.stop()
+
+    def _status(self, sql):
+        resp = rds_mcp.lambda_handler(_event(sql), None)
+        return resp["statusCode"], json.loads(resp["body"])
+
+    def test_write_that_lexically_evades_the_guard_still_runs_inside_a_read_only_transaction(self):
+        # `set_config(...)` starts with a read verb and contains no DANGER bare token (the `\bSET\b`
+        # regex doesn't match "set_config" — no word boundary before the underscore) — it is exactly
+        # the kind of unenumerated write-capable function the round-3 review flagged the lexical
+        # guard can never fully close. Simulate the real Postgres READ_ONLY_SQL_TRANSACTION behavior:
+        # once "SET TRANSACTION READ ONLY" has executed on a transactionId, any subsequent statement
+        # on that SAME transactionId invoking set_config raises, mirroring the engine refusing a
+        # GUC-mutating call inside a read-only transaction.
+        read_only_active = {"txn-1": False}
+
+        def fake_execute_statement(transactionId, sql, **kwargs):
+            if sql == "SET TRANSACTION READ ONLY":
+                read_only_active[transactionId] = True
+                return {"columnMetadata": [], "records": []}
+            if read_only_active.get(transactionId) and "set_config" in sql.lower():
+                raise Exception("ERROR: cannot execute in a read-only transaction (READ_ONLY_SQL_TRANSACTION)")
+            return {"columnMetadata": [], "records": []}
+
+        self.rds_data_client.execute_statement.side_effect = fake_execute_statement
+        status, body = self._status("SELECT set_config('search_path', 'public', false)")
+        self.assertEqual(status, 500)  # caught by lambda_handler's outer except, not a clean 400
+        self.rds_data_client.begin_transaction.assert_called_once()
+        self.rds_data_client.rollback_transaction.assert_called_once_with(
+            resourceArn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1",
+            secretArn="arn:aws:secretsmanager:x", transactionId="txn-1")
+
+    def test_normal_select_works_end_to_end_through_the_transaction_wrapped_flow(self):
+        self.rds_data_client.execute_statement.return_value = {"columnMetadata": [], "records": []}
+        status, body = self._status("SELECT 1")
+        self.assertEqual(status, 200)
+        calls = self.rds_data_client.execute_statement.call_args_list
+        self.assertEqual([c.kwargs["transactionId"] for c in calls], ["txn-1", "txn-1"])
+        self.rds_data_client.rollback_transaction.assert_called_once()
+        self.rds_data_client.commit_transaction.assert_not_called()
+
+    def test_set_transaction_read_only_failure_aborts_without_running_the_query(self):
+        def fake_execute_statement(transactionId, sql, **kwargs):
+            if sql == "SET TRANSACTION READ ONLY":
+                raise Exception("boom")
+            raise AssertionError("must not execute the user SQL if READ ONLY setup failed")
+
+        self.rds_data_client.execute_statement.side_effect = fake_execute_statement
+        status, body = self._status("SELECT 1")
+        self.assertEqual(status, 400)
+        self.assertIn("read-only", body["error"])
+        self.assertEqual(self.rds_data_client.execute_statement.call_count, 1)
+        self.rds_data_client.rollback_transaction.assert_called_once_with(
+            resourceArn="arn:aws:rds:ap-northeast-2:123456789012:cluster:c1",
+            secretArn="arn:aws:secretsmanager:x", transactionId="txn-1")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,15 @@ PR-review P2-4 follow-up (this file was CRITICAL-blocked on first pass):
   is not a real comment. Stripping it like `/* */` hid executed SQL from the guard. No dialect ever
   needs this literal substring in a legitimate read-only query, so `strip_sql` fails closed on it
   unconditionally (raises instead of stripping), for every caller.
+
+PR-review round-3 finding: `--` was treated as an unconditional line-comment start for every
+dialect. PostgreSQL agrees, but MySQL only treats `--` as a comment when the second dash is
+followed by whitespace/a control character (or end of input) — `--1`, `--(`, etc. are NOT comments
+in MySQL, they parse as ordinary tokens (e.g. `1--1` is `1 - -1`). Unconditionally stripping `--1`
+as a comment on the MySQL path hid a trailing `INTO OUTFILE` behind a fake comment
+(`SELECT 1--1 INTO OUTFILE '/tmp/x'`). `dash_comment_needs_boundary=True` (set on the RDS MySQL
+path) requires that trailing boundary before `--` is treated as a comment; PostgreSQL/ClickHouse
+keep the old unconditional behavior (`dash_comment_needs_boundary=False`, the default).
 """
 import re
 
@@ -55,7 +64,7 @@ DANGER = re.compile(
 )
 
 
-def strip_sql(sql, hash_comment=True, backslash_escapes=True):
+def strip_sql(sql, hash_comment=True, backslash_escapes=True, dash_comment_needs_boundary=False):
     """Single left-to-right tokenizer (NOT sequential regexes — those desync on a quote inside an
     identifier and can eat a forbidden token, e.g. a ClickHouse url( call, past the guard). Drops
     string literals + comments; for IDENTIFIER quotes (` and ") keeps the inner name but removes the
@@ -66,6 +75,9 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True):
     where `#`/`#>`/`#>>` are jsonb operators, not comments).
     backslash_escapes: whether `\\` inside a '...' string escapes the next char (True for MySQL's
     default; False for PostgreSQL's default `standard_conforming_strings=on`, where `\\` is literal).
+    dash_comment_needs_boundary: whether `--` requires a following whitespace/control char (or EOF)
+    to count as a comment (True for MySQL, which parses e.g. `--1` as subtraction, not a comment;
+    False for PostgreSQL/ClickHouse, where `--` is unconditionally a line comment).
     """
     out = []
     n = len(sql)
@@ -79,7 +91,12 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True):
             j = sql.find("*/", idx + 2)
             idx = (j + 2) if j != -1 else n
             out.append(" ")
-        elif two == "--" or (hash_comment and c == "#"):  # line comment (-- and MySQL/ClickHouse #)
+        elif (two == "--" and (
+                not dash_comment_needs_boundary
+                or idx + 2 >= n
+                or sql[idx + 2].isspace()
+                or ord(sql[idx + 2]) < 0x20
+              )) or (hash_comment and c == "#"):  # line comment (-- and MySQL/ClickHouse #)
             j = sql.find("\n", idx)
             idx = j if j != -1 else n
             out.append(" ")
@@ -135,11 +152,14 @@ def strip_sql(sql, hash_comment=True, backslash_escapes=True):
 
 
 def assert_read_only(sql, read_verbs=READ_VERBS, danger_re=DANGER, extra_forbidden_re=None,
-                      extra_message=None, hash_comment=True, backslash_escapes=True):
+                      extra_message=None, hash_comment=True, backslash_escapes=True,
+                      dash_comment_needs_boundary=False):
     """Raise ValueError unless `sql` is a single, comment/string-stripped statement starting with a
     read verb and containing no DANGER (or caller-supplied extra_forbidden_re) keyword/construct.
-    See `strip_sql` for the `hash_comment` / `backslash_escapes` dialect knobs."""
-    stripped = strip_sql(sql or "", hash_comment=hash_comment, backslash_escapes=backslash_escapes)
+    See `strip_sql` for the `hash_comment` / `backslash_escapes` / `dash_comment_needs_boundary`
+    dialect knobs."""
+    stripped = strip_sql(sql or "", hash_comment=hash_comment, backslash_escapes=backslash_escapes,
+                          dash_comment_needs_boundary=dash_comment_needs_boundary)
     if len([p for p in stripped.split(";") if p.strip()]) > 1:
         raise ValueError("read-only: multiple statements are not allowed")
     tokens = stripped.strip().split()

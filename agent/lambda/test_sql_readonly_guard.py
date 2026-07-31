@@ -141,5 +141,36 @@ class TestPostgresDialect(unittest.TestCase):
         self._bad("SELECT nextval('seq')")
 
 
+class TestMysqlDashDashComment(unittest.TestCase):
+    """PR-review round 3: MySQL only treats `--` as a comment when the second dash is followed by
+    whitespace/a control char (or EOF) — `--1`, `--(`, etc. are ordinary tokens in MySQL, not
+    comments. aws_rds_mcp.py's RDS/MySQL call path now passes dash_comment_needs_boundary=True."""
+
+    def _ok(self, sql):
+        g.assert_read_only(sql, hash_comment=True, backslash_escapes=True,
+                            dash_comment_needs_boundary=True)  # no raise
+
+    def _bad(self, sql):
+        with self.assertRaises(ValueError, msg=sql):
+            g.assert_read_only(sql, hash_comment=True, backslash_escapes=True,
+                                dash_comment_needs_boundary=True)
+
+    def test_dash_dash_without_boundary_is_not_a_comment_and_hidden_write_is_caught(self):
+        # PR-review round-3 finding: SELECT 1--1 INTO OUTFILE ... — MySQL parses `1--1` as `1 - -1`
+        # (subtraction), NOT a comment, so INTO OUTFILE is real SQL the old unconditional `--`
+        # comment stripping hid from the guard.
+        self._bad("SELECT 1--1 INTO OUTFILE '/tmp/x'")
+
+    def test_dash_dash_with_trailing_space_is_still_a_real_comment(self):
+        self._ok("SELECT 1 -- this is a real comment\n")
+
+    def test_dash_dash_at_end_of_string_is_still_a_real_comment(self):
+        self._ok("SELECT 1 --")
+
+    def test_postgres_dialect_keeps_unconditional_dash_dash_comment(self):
+        # dash_comment_needs_boundary defaults to False — PostgreSQL/ClickHouse behavior unchanged.
+        g.assert_read_only("SELECT 1--1 AS x")  # `--1 AS x` is a comment on the Postgres path
+
+
 if __name__ == "__main__":
     unittest.main()
