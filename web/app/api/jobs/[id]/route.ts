@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
-import { verifyUser, identity } from '@/lib/auth';
+import { verifyUser, matchesIdentity } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 
 export const dynamic = 'force-dynamic';
@@ -29,8 +29,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       return NextResponse.json({ message: 'job not found' }, { status: 404 });
     }
     const row = r.rows[0];
-    const me = identity(user);
-    if (row.requested_by !== me && !(await isAdmin(user))) {
+    // PR #195 round-4 review MAJOR #1: matchesIdentity also accepts a legacy row keyed by the raw
+    // sub (written before the identity() switch), not just identity(user).
+    if (!matchesIdentity(row.requested_by, user) && !(await isAdmin(user))) {
       return NextResponse.json({ message: 'forbidden' }, { status: 403 });
     }
     delete row.requested_by; // internal field, not part of the response contract

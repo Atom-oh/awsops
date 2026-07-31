@@ -56,3 +56,13 @@ export async function verifyUser(cookieHeader: string | null): Promise<User | nu
 export function identity(user: User): string {
   return user.email || user.sub;
 }
+
+// PR #195 round-4 review MAJOR #1: rows written before the identity() switch (or by the dispatcher
+// before its owning report_schedules row has been self-healed) have requested_by = raw Cognito
+// `sub`, not identity(). There is no sub->email backfill source, so rather than migrate history we
+// accept either key on read — a legacy-row escape hatch. Every ownership check should route through
+// this instead of comparing to identity(user) alone.
+export function matchesIdentity(owner: string | null | undefined, user: User): boolean {
+  if (!owner) return false;
+  return owner === identity(user) || owner === user.sub;
+}

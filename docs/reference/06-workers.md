@@ -4,13 +4,22 @@
 
 **EN** — A managed async backbone that lifts heavy, long-running, or OOM-prone work off the
 web request path. The web tier stays a thin BFF; a worker can OOM, hang, or crash without
-affecting web availability. P2 ships the backbone + a synthetic proof workload — real heavy
-ops (reports, AI synthesis, large scans, mutating actions) land on top of it in P3+.
+affecting web availability. P2 shipped the backbone with a synthetic proof workload (`noop`/
+`noop-heavy`); it now also carries real read/compute-only workloads — diagnosis report
+rendering (`report`) and CIS compliance scans (`compliance`) — enqueued through their own
+ownership-scoped routes (`POST /api/diagnosis`, `POST /api/compliance/run`). Every job type on
+this backbone is read-only / computation-only and never mutates AWS resources; AWS-resource
+mutation stays FROZEN per ADR-005 (do-not-enable) — any future async work stays within this
+same read-only substrate, not an escalation path for mutating actions.
 
 **KO** — 무겁거나 오래 걸리거나 OOM 위험이 있는 작업을 web 요청 경로에서 떼어내는 관리형 비동기
 백본. web은 thin BFF로 유지되고, 워커가 OOM·행·크래시로 죽어도 web 가용성은 무영향. P2는 백본 +
-합성 증명 워크로드만 제공하고, 실제 무거운 ops(리포트·AI 합성·대용량 스캔·mutate 작업)는 P3+에서
-이 위에 올린다.
+합성 증명 워크로드(`noop`/`noop-heavy`)로 시작했고, 현재는 실제 read/compute-only 작업도 이 위에서
+돈다 — 진단 리포트 렌더링(`report`)과 CIS 컴플라이언스 스캔(`compliance`)이 각자의 소유권-스코프
+전용 라우트(`POST /api/diagnosis`, `POST /api/compliance/run`)로 enqueue된다. 이 백본의 모든 job
+타입은 read-only/계산 전용이며 AWS 리소스를 변경하지 않는다 — AWS 리소스 변경은 ADR-005에 따라
+영구 동결(FROZEN, do-not-enable)이며, 향후 추가되는 비동기 작업도 같은 read-only substrate 안에
+머문다(mutate 작업으로 가는 확장 경로가 아니다).
 
 ## Current design / 현행 설계
 

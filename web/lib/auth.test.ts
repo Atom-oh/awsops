@@ -38,3 +38,26 @@ describe('verifyUser', () => {
     expect(await verifyUser('awsops_token=eyJ...')).toBeNull();
   });
 });
+
+// PR #195 round-4 review MAJOR #1: matchesIdentity() is the legacy-row escape hatch — a report/job
+// row written before the identity() switch (raw sub) must still resolve for its owner even after
+// their token starts carrying an email that makes identity() diverge from sub.
+describe('matchesIdentity', () => {
+  it('matches a row keyed by identity() (email)', async () => {
+    const { matchesIdentity } = await import('./auth');
+    expect(matchesIdentity('u@x.io', { sub: 'u', email: 'u@x.io' })).toBe(true);
+  });
+  it('matches a legacy row keyed by the raw sub even when identity() now differs', async () => {
+    const { matchesIdentity } = await import('./auth');
+    expect(matchesIdentity('u', { sub: 'u', email: 'u@x.io' })).toBe(true);
+  });
+  it('does not match a different user’s row', async () => {
+    const { matchesIdentity } = await import('./auth');
+    expect(matchesIdentity('other@x.io', { sub: 'u', email: 'u@x.io' })).toBe(false);
+  });
+  it('fails closed on a null/empty owner', async () => {
+    const { matchesIdentity } = await import('./auth');
+    expect(matchesIdentity(null, { sub: 'u', email: 'u@x.io' })).toBe(false);
+    expect(matchesIdentity('', { sub: 'u', email: 'u@x.io' })).toBe(false);
+  });
+});

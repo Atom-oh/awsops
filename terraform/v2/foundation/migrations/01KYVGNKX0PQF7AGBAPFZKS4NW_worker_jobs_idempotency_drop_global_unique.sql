@@ -1,0 +1,12 @@
+-- since: 2.1.0
+-- PHASE 2 of the two-phase idempotency-key rollout started in
+-- 01KYVDMY8Y7Q90YPTGK23QNR3B_worker_jobs_idempotency_per_requester.sql (see that file for the full
+-- rationale). That migration added the per-requester partial unique indexes WITHOUT dropping the
+-- old global `UNIQUE(idempotency_key)` constraint, specifically so migrate-then-deploy has no
+-- outage gap. This migration finishes the job by dropping the now-redundant global constraint.
+--
+-- DO NOT apply this migration until the web code from PR #195 (the `ON CONFLICT` target change in
+-- web/lib/jobs.ts naming the two partial indexes) is confirmed deployed and stable — by that point
+-- nothing depends on the old constraint's arbiter index, so dropping it here is safe regardless of
+-- ordering relative to any *later* deploy.
+ALTER TABLE worker_jobs DROP CONSTRAINT IF EXISTS worker_jobs_idempotency_key_key;

@@ -4,7 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const verifyUser = vi.fn();
 const isAdmin = vi.fn();
 const query = vi.fn();
-vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a), identity: (u: any) => u.email || u.sub }));
+const identity = (u: any) => u.email || u.sub;
+vi.mock('@/lib/auth', () => ({
+  verifyUser: (...a: unknown[]) => verifyUser(...a),
+  identity,
+  matchesIdentity: (owner: any, u: any) => !!owner && (owner === identity(u) || owner === u.sub),
+}));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 
@@ -55,6 +60,15 @@ describe('GET /api/jobs/[id]', () => {
     verifyUser.mockResolvedValue({ sub: 'admin-u' });
     isAdmin.mockResolvedValue(true);
     query.mockResolvedValue({ rows: [{ job_id: UUID, requested_by: 'someone-else', status: 'succeeded' }] });
+    const { GET } = await import('./route');
+    expect((await GET(req(), ctx)).status).toBe(200);
+  });
+  // PR #195 round-4 review MAJOR #1: a job row created before the identity() switch (or before
+  // this user's schedule self-heal ran) is stuck with requested_by = raw sub forever otherwise —
+  // even though the caller's token now also carries an email that differs from that sub.
+  it('200 for a legacy sub-keyed job even though the caller now has a different identity() (email)', async () => {
+    verifyUser.mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    query.mockResolvedValue({ rows: [{ job_id: UUID, requested_by: 'u', status: 'succeeded' }] });
     const { GET } = await import('./route');
     expect((await GET(req(), ctx)).status).toBe(200);
   });

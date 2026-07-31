@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifyUser, identity } from '@/lib/auth';
+import { verifyUser, identity, matchesIdentity } from '@/lib/auth';
 import {
   listReports,
   createReport,
@@ -20,9 +20,11 @@ export async function GET(req: Request) {
   // can_edit per report: compute isAdmin ONCE (async + SSM-backed), then compare requested_by.
   const admin = await isAdmin(user);
   const me = identity(user); // pentest-remediation P2-1: match canMutateReport's `||`
-  const reports = await listReports(50, admin ? null : me);
+  // PR #195 round-4 review MAJOR #1: also scope by the raw sub, so a legacy row (requested_by =
+  // sub, written before the identity() switch) still shows up for its real owner.
+  const reports = await listReports(50, admin ? null : [me, user.sub]);
   return NextResponse.json({
-    reports: reports.map((r) => ({ ...r, can_edit: admin || r.requested_by === me })),
+    reports: reports.map((r) => ({ ...r, can_edit: admin || matchesIdentity(r.requested_by, user) })),
   });
 }
 

@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({ verifyUser: vi.fn(), identity: (u: any) => u.email || u.sub }));
+vi.mock('@/lib/auth', () => {
+  const identity = (u: any) => u.email || u.sub;
+  return {
+    verifyUser: vi.fn(),
+    identity,
+    matchesIdentity: (owner: any, u: any) => !!owner && (owner === identity(u) || owner === u.sub),
+  };
+});
 vi.mock('@/lib/diagnosis', () => ({
   listReports: vi.fn(async () => [
     { id: 1, requested_by: 'u@x.io' },
@@ -16,6 +23,7 @@ vi.mock('@/lib/jobs', () => ({ enqueueJob: vi.fn(async () => ({ job_id: 'j1', st
 
 import { verifyUser } from '@/lib/auth';
 import {
+  listReports,
   createReport,
   linkReportJob,
   reportForIdempotencyKey,
@@ -60,6 +68,20 @@ describe('GET /api/diagnosis', () => {
     const reports = (await (await GET(req())).json()).reports;
     expect(reports.find((r: any) => r.id === 1).can_edit).toBe(true);   // owner
     expect(reports.find((r: any) => r.id === 2).can_edit).toBe(false);  // someone else's
+  });
+  it('scopes listReports by both identity() and the raw sub (legacy-row escape hatch)', async () => {
+    (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    await GET(req());
+    expect(listReports).toHaveBeenCalledWith(50, ['u@x.io', 'u']);
+  });
+  // PR #195 round-4 review MAJOR #1: a report row created before the identity() switch (or before
+  // this user's schedule self-heal ran) has requested_by = raw sub — even though the caller's
+  // token now carries an email that differs from that sub. Must still be visible/editable.
+  it('can_edit is true for a legacy sub-keyed report even when identity() (email) now differs', async () => {
+    (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    (listReports as any).mockResolvedValue([{ id: 3, requested_by: 'u' }]);
+    const reports = (await (await GET(req())).json()).reports;
+    expect(reports[0].can_edit).toBe(true);
   });
 });
 

@@ -13,6 +13,9 @@ import {
 import { isAdmin } from './admin';
 
 vi.mock('./admin', () => ({ isAdmin: vi.fn() }));
+vi.mock('./auth', () => ({
+  matchesIdentity: (owner: any, u: any) => !!owner && (owner === (u.email || u.sub) || owner === u.sub),
+}));
 
 const query = vi.fn(async (sql: string) => {
   if (sql.includes('INSERT INTO diagnosis_reports')) return { rows: [{ id: 7 }] };
@@ -34,12 +37,19 @@ describe('diagnosis queries', () => {
   it('listReports scopes by owner when given, and passes null through unfiltered for admins', async () => {
     await listReports(10, 'u@x.io');
     let [sql, args] = query.mock.calls.at(-1) as [string, unknown[]];
-    expect(sql).toContain('$2::text IS NULL OR r.requested_by = $2');
-    expect(args).toEqual([10, 'u@x.io']);
+    expect(sql).toContain('$2::text[] IS NULL OR r.requested_by = ANY($2)');
+    expect(args).toEqual([10, ['u@x.io']]);
 
     await listReports(10, null);
     [sql, args] = query.mock.calls.at(-1) as [string, unknown[]];
     expect(args).toEqual([10, null]);
+  });
+  // PR #195 round-4 review MAJOR #1: owner also accepts a string[] (identity() + raw sub) so a
+  // legacy row written before the identity() switch still shows up for its real owner.
+  it('listReports accepts a string[] owner (identity() + legacy raw sub)', async () => {
+    await listReports(10, ['u@x.io', 'u-sub']);
+    const [, args] = query.mock.calls.at(-1) as [string, unknown[]];
+    expect(args).toEqual([10, ['u@x.io', 'u-sub']]);
   });
   it('getReport returns one or null', async () => {
     const r = await getReport(1);
@@ -133,5 +143,12 @@ describe('diagnosis queries', () => {
   it('canMutateReport: empty-string email falls back to sub (matches how requested_by is written)', async () => {
     (isAdmin as any).mockResolvedValue(false);
     expect(await canMutateReport({ email: '', sub: 'u' } as any, { requested_by: 'u' } as any)).toBe(true);
+  });
+  // PR #195 round-4 review MAJOR #1: a report row created before the identity() switch (or before
+  // this user's schedule self-heal ran) has requested_by = raw sub, even though the caller's token
+  // now also carries an email that differs from that sub. Must still be visible/mutable by them.
+  it('canMutateReport: a legacy sub-keyed report is visible even when identity() (email) now differs', async () => {
+    (isAdmin as any).mockResolvedValue(false);
+    expect(await canMutateReport({ email: 'u@x.io', sub: 'u' } as any, { requested_by: 'u' } as any)).toBe(true);
   });
 });
