@@ -229,4 +229,52 @@ else
   fail "omitted source-path failure takes badge priority over chair infrastructure failure"
 fi
 
+# Fifth scenario: the two OUTPUT paths. Scrubbing the panel cells and the stderr excerpts is not
+# enough — the diff goes into the chair's stdin and the chair's stdout becomes $OUT, which
+# pr-review.yml posts verbatim to a PUBLIC PR comment. A PR that accidentally commits a credential
+# is exactly this pipeline's input, and a security-lens review quoting "line N hardcodes <key>" is
+# the normal, expected behaviour — so both the diff going in and the synthesis coming out must be
+# scrubbed. Redaction does not blunt the review: it still says a key is there, just not its value.
+WORK5=$(mktemp -d); mkdir -p "$WORK5/slot"; : > "$WORK5/responded.txt"
+echo "model0/L2" >> "$WORK5/responded.txt"
+echo "clean panel cell" > "$WORK5/slot/model0-L2.md"
+DIFF5=$(mktemp)
+{
+  echo "diff --git a/config.ts b/config.ts"
+  echo "+const key = '${AWS_KEY_LEFT}${AWS_KEY_RIGHT}';"
+} > "$DIFF5"
+
+# A chair that echoes its own stdin back (the realistic worst case: it quotes the offending line)
+# and also emits a credential of its own that never appeared in any input.
+cat > "$BIN/claude" <<'EOF'
+#!/usr/bin/env bash
+cat
+printf 'chair also emitted %s on its own\n' "$CHAIR_OWN_SECRET"
+echo "VERDICT: PASS"
+EOF
+chmod +x "$BIN/claude"
+
+PATH="$BIN:$PATH" CHAIR_OWN_SECRET="${AWS_KEY_LEFT}${AWS_KEY_RIGHT}" \
+  CHAIR_PRIMARY_MODEL="$PRIMARY_MODEL" CHAIR_FALLBACK_MODEL="$FALLBACK_MODEL" \
+  GITHUB_ENV="$WORK5/github-env.txt" \
+  bash "$SCRIPT" "$DIFF5" "$WORK5" 1 "output paths" "$WORK5/review.md" \
+  > "$WORK5/synth.log" 2>&1
+
+if grep -Fq "$FAKE_AWS_KEY" "$WORK5/review.md" 2>/dev/null \
+  || grep -Fq "AKIA1" "$WORK5/review.md" 2>/dev/null; then
+  fail "credential in the reviewed diff does not survive into the posted synthesis"
+else
+  pass "credential in the reviewed diff does not survive into the posted synthesis"
+fi
+
+# The chair's own output is the publication boundary: a credential it emits that was never in any
+# input must still be redacted, because $OUT is what gets posted.
+if grep -Fq "$FAKE_AWS_KEY" "$WORK5/review.md" 2>/dev/null; then
+  fail "credential emitted by the chair itself is redacted before posting"
+elif grep -Fq "[REDACTED-AWS-KEY]" "$WORK5/review.md" 2>/dev/null; then
+  pass "credential emitted by the chair itself is redacted before posting"
+else
+  fail "credential emitted by the chair itself is redacted before posting: no redaction marker found"
+fi
+
 [ "$FAILED" -eq 0 ] || exit 1

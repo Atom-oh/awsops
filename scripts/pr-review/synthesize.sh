@@ -4,7 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 DIFF="$1"; WORK="$2"; PR_NUMBER="$3"; PR_TITLE="$4"; OUT="$5"
 SLOT="$WORK/slot"
-rm -f "$WORK/chair-failed.flag" "$WORK/chair-primary.err" "$WORK/chair-fallback.err"
+rm -f "$WORK/chair-failed.flag" "$WORK/chair-primary.err" "$WORK/chair-fallback.err" \
+      "$WORK/chair-raw.txt"
 RESP="$(tr '\n' ',' < "$WORK/responded.txt" 2>/dev/null | sed 's/,$//')" || true
 [ -z "$RESP" ] && RESP="(none — Claude solo)"
 
@@ -95,9 +96,14 @@ CRITICAL/MAJOR 있으면 FAIL, 아니면 PASS.
 PROMPT_EOF
 
 # stdin 페이로드: diff + 패널 리뷰.
+# diff 도 scrub 한다 — 패널 셀만 스크럽하고 diff 를 날것으로 넣는 건 가장 큰 구멍이었다:
+# 크리덴셜이 실수로 커밋된 PR 이 바로 이 파이프라인의 입력이고, 보안 렌즈 리뷰라면 "이 줄이
+# 키를 하드코딩한다"며 그 값을 인용하는 게 자연스럽다 — 그러면 chair 출력을 타고 공개 PR
+# 코멘트에 실린다. 리뷰가 필요한 건 "크리덴셜이 있다"는 사실이지 그 값이 아니므로,
+# `[REDACTED-*]` 로 치환해도 지적 능력은 그대로다.
 {
   echo "=== DIFF UNDER REVIEW ==="
-  cat "$DIFF"
+  strip_controls < "$DIFF" | scrub_secrets
   echo ""
   echo "=== PANEL REVIEWS ==="
   printf '%s\n' "$PANEL"
@@ -129,9 +135,15 @@ chair_label() { case "$1" in
 esac ; }
 
 run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도 || true 로 계속.
+  # chair 출력도 scrub 한다 — 이게 실제 게시 경계다. $OUT 은 pr-review.yml 이 PR 코멘트로
+  # verbatim 게시하므로, 입력을 아무리 스크럽해도 여기서 한 번 더 걸러야 fail-safe 가 된다:
+  # 모델이 입력에 없던 형태로 재구성/환각할 수도 있고, 향후 누군가 새 입력 소스를 추가하면서
+  # 스크럽을 빼먹어도 이 지점이 마지막 방어선으로 남는다. 입력 스크럽은 defence-in-depth,
+  # 출력 스크럽이 경계.
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-    < "$WORK/synth-stdin.txt" > "$OUT" 2>"$2" || true
+    < "$WORK/synth-stdin.txt" > "$WORK/chair-raw.txt" 2>"$2" || true
+  strip_controls < "$WORK/chair-raw.txt" | scrub_secrets > "$OUT"
 }
 
 scrubbed_err_excerpt() {
