@@ -277,4 +277,24 @@ else
   fail "credential emitted by the chair itself is redacted before posting: no redaction marker found"
 fi
 
+# $WORK is a fixed, runner-global path on non-ephemeral self-hosted runners and persists between
+# runs, so no file under it may hold pre-scrub model output after a run finishes — a later job,
+# possibly for a different PR by a different author, can read whatever is left there. Resetting at
+# start of run does not close that window; not writing the raw output at all does.
+LEAKED=""
+for f in "$WORK5"/*; do
+  case "$(basename "$f")" in
+    synth-stdin.txt|review.md) continue ;;  # both are scrubbed by construction, asserted above
+  esac
+  [ -f "$f" ] || continue
+  if grep -Fq "$FAKE_AWS_KEY" "$f" 2>/dev/null || grep -Fq "AKIA1" "$f" 2>/dev/null; then
+    LEAKED="$LEAKED $(basename "$f")"
+  fi
+done
+if [ -n "$LEAKED" ]; then
+  fail "no unscrubbed credential is left in \$WORK after the run (found in:$LEAKED)"
+else
+  pass "no unscrubbed credential is left in \$WORK after the run"
+fi
+
 [ "$FAILED" -eq 0 ] || exit 1

@@ -4,8 +4,12 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 DIFF="$1"; WORK="$2"; PR_NUMBER="$3"; PR_TITLE="$4"; OUT="$5"
 SLOT="$WORK/slot"
-rm -f "$WORK/chair-failed.flag" "$WORK/chair-primary.err" "$WORK/chair-fallback.err" \
-      "$WORK/chair-raw.txt"
+rm -f "$WORK/chair-failed.flag" "$WORK/chair-primary.err" "$WORK/chair-fallback.err"
+# chair-raw.txt is never written any more (run_chair pipes instead of staging the pre-scrub output
+# on disk — see the comment there). This rm stays only to clean up a stale copy left by the earlier
+# revision of this script that DID create it, since $WORK persists across runs on a self-hosted
+# runner and that file holds unscrubbed model output.
+rm -f "$WORK/chair-raw.txt"
 RESP="$(tr '\n' ',' < "$WORK/responded.txt" 2>/dev/null | sed 's/,$//')" || true
 [ -z "$RESP" ] && RESP="(none — Claude solo)"
 
@@ -140,10 +144,16 @@ run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도
   # 모델이 입력에 없던 형태로 재구성/환각할 수도 있고, 향후 누군가 새 입력 소스를 추가하면서
   # 스크럽을 빼먹어도 이 지점이 마지막 방어선으로 남는다. 입력 스크럽은 defence-in-depth,
   # 출력 스크럽이 경계.
+  #
+  # 스크럽 전 원본을 파일로 떨어뜨리지 않고 파이프로 흘린다 — $WORK 는 non-ephemeral
+  # self-hosted 러너의 고정 전역 경로라, 원본을 디스크에 쓰면 이 실행이 끝난 뒤 다음 실행이
+  # 시작할 때까지 스크럽 안 된 크리덴셜이 러너에 남고, 그 사이 다른 PR 의 job 이 읽을 수 있다
+  # (실행 시작 시 rm 은 이 창을 닫지 못한다). `set -o pipefail` + `|| true` 로 claude 실패 시
+  # 동작은 종전과 같고, 호출자는 exit status 가 아니라 $OUT 유효성으로 판정한다.
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-    < "$WORK/synth-stdin.txt" > "$WORK/chair-raw.txt" 2>"$2" || true
-  strip_controls < "$WORK/chair-raw.txt" | scrub_secrets > "$OUT"
+    < "$WORK/synth-stdin.txt" 2>"$2" \
+    | strip_controls | scrub_secrets > "$OUT" || true
 }
 
 scrubbed_err_excerpt() {
