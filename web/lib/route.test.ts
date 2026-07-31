@@ -48,6 +48,13 @@ describe('pickGateway', () => {
     expect(pickGateway('Datadog metric 확인')).toBe('observability');
     expect(pickGateway('Grafana 지표 좀 보여줘')).toBe('observability');
   });
+  // Regression (2026-07-31 round-4 review MAJOR): the round-2 fix only moved the vendor rule above
+  // 'monitoring'; the generic 'data' rule (쿼리|database|...) still sat ABOVE it and kept stealing
+  // vendor-named queries. Vendor names now win over EVERY generic domain rule (rule index 0).
+  it('routes vendor-named queries to observability, not generic data', () => {
+    expect(pickGateway('ClickHouse 쿼리 느려')).toBe('observability');
+    expect(pickGateway('Datadog database latency')).toBe('observability');
+  });
 });
 
 describe('matchedSections', () => {

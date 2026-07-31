@@ -2,18 +2,17 @@ import { sectionByKey, activeSections } from './sections';
 
 // MVP keyword heuristics per section (KO + EN). First match wins, in this order.
 const RULES: { key: string; re: RegExp }[] = [
-  { key: 'cost', re: /비용|요금|예산|절감|billing|cost|budget|forecast|spend/i },
-  { key: 'security', re: /보안|권한|역할|정책|iam|policy|role|denied|permission|public|노출/i },
-  { key: 'network', re: /통신|연결|네트워크|포트|라우트|reachab|network|connectivity|security ?group|\bsg\b|nacl|tgw|vpn|peering|flow ?log/i },
-  { key: 'container', re: /파드|컨테이너|eks|ecs|kubernetes|k8s|pod|istio|namespace|sidecar/i },
-  { key: 'data', re: /쿼리|데이터베이스|rds|aurora|dynamo|elasticache|redis|msk|kafka|database|slow query|throttl/i },
-  { key: 'cost', re: /\$\d/i },
-  // observability = external-obs: checked BEFORE the generic 'monitoring' rule below (2026-07-31
-  // round-2 review MAJOR: a vendor-named query like "Datadog metric" must not be stolen by
-  // monitoring's generic 'metric' keyword before reaching here). Covers the connectors that moved
-  // here (Prometheus/ClickHouse) PLUS every ADR-017 curated official-vendor MCP preset (catalog.py
-  // MCP_SERVER_TARGETS 'gateway' field — all currently 'external-obs'). Grafana/Datadog/Dynatrace/
-  // Splunk/New Relic/Jaeger have NO legacy lambda target anywhere, so this is their ONLY chat path.
+  // observability = external-obs. FIRST rule on purpose (round-4 review MAJOR, 2026-07-31): an
+  // explicit VENDOR NAME is the strongest routing signal there is, so it must be checked before
+  // EVERY generic domain rule — not just before 'monitoring' (the round-2/3 fix, which left
+  // "ClickHouse 쿼리 느려" and "Datadog database latency" being stolen by the generic 'data' rule's
+  // 쿼리/database keywords, since that rule sat above this one). Only a real vendor identifier is
+  // listed here; ambiguous generic terms (metric/latency/p99/쿼리) stay on their domain rules so
+  // this rule can sit at the top without hijacking anything.
+  // Covers the connectors that moved here (Prometheus/ClickHouse) PLUS every ADR-017 curated
+  // official-vendor MCP preset (catalog.py MCP_SERVER_TARGETS 'gateway' — all 'external-obs').
+  // Grafana/Datadog/Dynatrace/Splunk/New Relic/Jaeger have NO legacy lambda target anywhere, so
+  // this is their ONLY chat path.
   // Tempo/트레이스/trace are DELIBERATELY EXCLUDED here (round-3 review MAJOR, 2026-07-31): round-2
   // put them on this rule to fix the POST-cutover dead-end (tempo-mcp-target retired, tools only
   // live on external-obs), but official_mcp_enabled defaults to false — that made the dead-end the
@@ -25,12 +24,18 @@ const RULES: { key: string; re: RegExp }[] = [
   // REQUIRED cutover step: when actually flipping official_mcp_enabled=true for the tempo preset,
   // move `tempo|트레이스|\btrace\b` from the monitoring rule below to this rule (see ADR-017 §Trade-offs).
   { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스|grafana|그라파나|datadog|데이터독|dynatrace|다이나트레이스|splunk|스플렁크|newrelic|new relic|뉴렐릭|jaeger|예거/i },
+  { key: 'cost', re: /비용|요금|예산|절감|billing|cost|budget|forecast|spend/i },
+  { key: 'security', re: /보안|권한|역할|정책|iam|policy|role|denied|permission|public|노출/i },
+  { key: 'network', re: /통신|연결|네트워크|포트|라우트|reachab|network|connectivity|security ?group|\bsg\b|nacl|tgw|vpn|peering|flow ?log/i },
+  { key: 'container', re: /파드|컨테이너|eks|ecs|kubernetes|k8s|pod|istio|namespace|sidecar/i },
+  { key: 'data', re: /쿼리|데이터베이스|rds|aurora|dynamo|elasticache|redis|msk|kafka|database|slow query|throttl/i },
+  { key: 'cost', re: /\$\d/i },
   // monitoring owns CloudWatch/CloudTrail AND the still-here datasource connectors (Loki logs,
   // Mimir long-term metrics, OpenSearch) — route those keywords here, where the tools are.
   // Ambiguous generic terms (metric/alarm/audit) are matched here but only reached when no
-  // vendor-specific observability keyword matched first (see rule above). tempo/트레이스/trace stay
-  // here too (see the comment on the rule above) — tempo-mcp-target is the legacy lambda target and
-  // lives on this gateway in the DEFAULT (official_mcp_enabled=false) state most deployments run in.
+  // vendor-specific observability keyword matched first (see the FIRST rule above). tempo/트레이스/
+  // trace stay here too (see that rule's comment) — tempo-mcp-target is the legacy lambda target
+  // and lives on this gateway in the DEFAULT (official_mcp_enabled=false) state most deployments run in.
   { key: 'monitoring', re: /알람|지표|로그변경|cloudwatch|cloudtrail|alarm|metric|who changed|audit|loki|mimir|opensearch|tempo|트레이스|\btrace\b/i },
   { key: 'iac', re: /드리프트|스택|terraform|cloudformation|\bcdk\b|drift|stack|iac/i },
   // ops = inventory_read MCP home: topology, unused/orphan resources, and the load-balancer /

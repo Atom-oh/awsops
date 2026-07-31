@@ -221,7 +221,28 @@ def _load_official_mcp_secret(ac):
     except json.JSONDecodeError as e:
         log("mcp-server:secret", "ERR", f"malformed JSON: {e}"[:140])
         return {}, False
-    return (m if isinstance(m, dict) else {}), True
+    if not isinstance(m, dict):
+        # Valid JSON but not an object (an array/string/number secret — hand-edited or written by
+        # something other than web/lib/integration-credentials.ts). Round-4 review MINOR L2-5: this
+        # used to return ({}, True) = "read fine, credential absent", which RETIRES a live target.
+        # A shape we can't read is a read failure, not evidence the credential was removed.
+        log("mcp-server:secret", "ERR", f"secret JSON is a {type(m).__name__}, expected an object — treating as unreadable")
+        return {}, False
+    return m, True
+
+
+def _preset_token(secrets, preset_key):
+    """The stored API token for an ADR-017 preset, or None if absent/unusable.
+
+    Single choke point for reading `mcp:<preset_key>` — both ensure_mcp_server_targets and
+    _cutover_preset_keys go through it so they can never disagree about whether a preset has a
+    credential. Type-checked (round-4 review MINOR L2-6): a non-str token (dict/number/null from a
+    hand-edited secret) handed to boto3 raises ParamValidationError — NOT a ClientError, so it
+    escapes _ensure_api_key_provider's handler and aborts the whole provisioner run. An unusable
+    value is treated as absent (SKIP this one preset)."""
+    raw = secrets.get(f"mcp:{preset_key}")
+    token = raw.get("token") if isinstance(raw, dict) else None
+    return token if isinstance(token, str) and token else None
 
 
 def _ensure_api_key_provider(ctrl, provider_name, token):
@@ -230,6 +251,12 @@ def _ensure_api_key_provider(ctrl, provider_name, token):
     vault semantics) so drift can't be detected here — update_api_key_credential_provider is called
     every run when a token is present; AgentCore Identity itself is expected to no-op on an
     unchanged value. Returns the providerArn, or "" on failure."""
+    if not isinstance(token, str) or not token:
+        # Defense in depth — callers get their token from _preset_token, which already enforces
+        # this; a non-str here would be a ParamValidationError (uncatchable by our ClientError
+        # handlers below) and would kill the whole run instead of skipping one preset.
+        log(f"mcp-server-provider:{provider_name}", "ERR", "refusing to send a non-string/empty apiKey to AgentCore Identity")
+        return ""
     try:
         existing = ctrl.get_api_key_credential_provider(name=provider_name)
         arn = existing["credentialProviderArn"]
@@ -317,13 +344,16 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
     """ADR-017: register curated official-vendor MCP servers as remote `mcpServer` gateway targets.
 
     Ordering is deliberate and safety-critical (2026-07-31 kiro review, findings #1/#2 on the first
-    cut of this function):
-      1. INACTIVE (no endpoint, or api_key mode with no stored credential) -> retire only THIS
-         preset's own mcp-server target + credential provider if a prior run left them live. The
-         legacy lambda target is NEVER touched here — an incomplete/reverted cutover must leave the
-         old tool working, not take it down too. This covers both "flag/endpoint off" AND
-         "credential removed while the endpoint stays configured" (finding #2 — a missing
-         credential is not merely a no-op skip, it must also tear down a now-uncredentialed target).
+    cut of this function, plus round-4 L2-2):
+      1. TEARDOWN FIRST — blocked endpoint, no endpoint (flag off / removed), ack missing-or-stale:
+         retire only THIS preset's own mcp-server target + credential provider if a prior run left
+         them live. These run ABOVE the secrets-read gate (round-4 L2-2) because a retirement needs
+         no credential, and a Secrets Manager blip must not disable the kill-switch.
+         The legacy lambda target is NEVER touched here — an incomplete/reverted cutover must leave
+         the old tool working, not take it down too.
+      1b. Credential gate: secret unreadable -> SKIP touching anything (fail-safe); credential
+         genuinely absent while the endpoint+ack stand -> retire (finding #2 — a missing credential
+         must also tear down a now-uncredentialed target, not just no-op).
       2. ACTIVE -> validate the credential provider FIRST, then create/update the new target, and
          ONLY on confirmed success (CREATED/UPDATED/EXISTS) retire the legacy lambda target. Doing
          the legacy delete BEFORE the new target was confirmed live was the outage bug (finding #1):
@@ -360,6 +390,14 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         auth = spec["auth"]
         provider_name = f"awsops-v2-{preset_key}-mcp"
 
+        # ── Teardown decisions first (round-4 review MAJOR L2-2, 2026-07-31) ─────────────────
+        # Every branch below is an EXPLICIT operator-requested retirement (blocked endpoint / flag
+        # off / endpoint removed / ack revoked or stale) and needs NO credential to carry out —
+        # retiring a target never reads the secret. They therefore run ABOVE the secrets-read gate.
+        # Round-3 had the secrets-read SKIP first, which meant a Secrets Manager blip left a live
+        # target AND its API-key provider running after the flag was turned off or the ack revoked
+        # — the kill-switch silently stopped working, and (flag off) ensure_targets would then also
+        # recreate the legacy lambda target, giving the gateway duplicate tool names.
         if endpoint:
             blocked_reason = _endpoint_blocked(endpoint)
             if blocked_reason:
@@ -368,21 +406,17 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
                 _delete_api_key_provider(ctrl, provider_name)
                 continue
 
-        token = None
-        if auth["mode"] == "api_key":
-            raw = secrets.get(f"mcp:{preset_key}")
-            token = raw.get("token") if isinstance(raw, dict) else None
-
-        if auth["mode"] == "api_key" and not token and not secrets_read_ok:
-            # Could not READ the credentials secret this run (transient Secrets Manager error /
-            # malformed JSON) — this is NOT the same as "the credential was intentionally removed"
-            # and must never retire a live target on that basis (kiro review finding, 2026-07-31:
-            # a transient API blip would otherwise mass-deprovision every configured preset). Fail
-            # safe: skip this preset, touch nothing.
-            log(f"target:{tname}", "SKIP", f"could not read credentials secret this run for preset '{preset_key}' — leaving any existing target/provider untouched")
+        if not endpoint:
+            log(f"target:{tname}", "SKIP", f"no endpoint configured for preset '{preset_key}' (official_mcp_enabled/official_mcp_endpoints)")
+            _retire_gateway_target(ctrl, gw_id, existing, tname, "no endpoint configured — retiring")
+            # Best-effort: AWS may reject deleting a provider while a target still references it
+            # if the just-issued target deletion is still async. A failure here is logged (ERR) and
+            # self-heals on the NEXT provisioner run — this SKIP path re-attempts the delete every
+            # time the preset stays inactive, and delete_api_key_credential_provider is idempotent.
+            _delete_api_key_provider(ctrl, provider_name)
             continue
 
-        if endpoint and read_only_acks.get(preset_key) != endpoint:
+        if read_only_acks.get(preset_key) != endpoint:
             # CRITICAL (kiro review, 2026-07-31): unlike the Lambda TARGETS (toolSchema.inlinePayload
             # hard-limits the exposed tool set), an mcpServer target has NO server-side tool
             # allowlist — it exposes 100% of whatever the vendor's remote MCP server advertises,
@@ -410,15 +444,22 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
             _delete_api_key_provider(ctrl, provider_name)
             continue
 
-        if not endpoint or (auth["mode"] == "api_key" and not token):
-            reason = "no endpoint configured" if not endpoint else "no stored credential"
-            log(f"target:{tname}", "SKIP", f"{reason} for preset '{preset_key}' (official_mcp_enabled/endpoint or Connectors tab)")
-            _retire_gateway_target(ctrl, gw_id, existing, tname, f"{reason} — retiring")
-            # Best-effort: AWS may reject deleting a provider while a target still references it
-            # if the just-issued target deletion is still async. A failure here is logged (ERR) and
-            # self-heals on the NEXT provisioner run — this SKIP path re-attempts the delete every
-            # time the preset stays inactive, and delete_api_key_credential_provider is idempotent.
-            _delete_api_key_provider(ctrl, provider_name)
+        # ── Credential gate (provisioning only — everything that tears down already ran) ──────
+        token = _preset_token(secrets, preset_key) if auth["mode"] == "api_key" else None
+
+        if auth["mode"] == "api_key" and not token and not secrets_read_ok:
+            # Could not READ the credentials secret this run (transient Secrets Manager error /
+            # malformed JSON / non-object secret) — NOT the same as "the credential was
+            # intentionally removed", and must never retire a live target on that basis (kiro
+            # review finding, 2026-07-31: a transient API blip would otherwise mass-deprovision
+            # every configured preset). Fail safe: skip this preset, touch nothing.
+            log(f"target:{tname}", "SKIP", f"could not read credentials secret this run for preset '{preset_key}' — leaving any existing target/provider untouched")
+            continue
+
+        if auth["mode"] == "api_key" and not token:
+            log(f"target:{tname}", "SKIP", f"no stored credential for preset '{preset_key}' (Connectors tab)")
+            _retire_gateway_target(ctrl, gw_id, existing, tname, "no stored credential — retiring")
+            _delete_api_key_provider(ctrl, provider_name)  # see the no-endpoint branch's note
             continue
 
         # INFORMATIONAL only (dead-code reminder) — does NOT gate target creation. The legacy
@@ -450,6 +491,19 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
                 "credentialProvider": {"apiKeyCredentialProvider": api_key_provider},
             }]
 
+        # listingMode DEFAULT = the control plane caches the tool list it discovered. ACCEPTED
+        # RESIDUAL RISK (round-4 review MAJOR L3-1, 2026-07-31): combined with the sync-on-EXISTS
+        # below, a tool the vendor ADDS later is absorbed on the next `make agentcore` without a
+        # re-ack. We cannot gate on the tool set: bedrock-agentcore-control has NO tool-listing
+        # operation at all (its only target ops are Create/Get/List/Update/Delete GatewayTarget +
+        # SynchronizeGatewayTargets, and none of their responses carry tool names — verified against
+        # the botocore 2023-06-05 model), and the one static-schema field that WOULD cap the tool
+        # set, McpServerTargetConfiguration.mcpToolSchema, is documented as "Supported only when the
+        # credential provider is configured with an authorization code grant type" — these presets
+        # are API_KEY, and setting it also disables tool synchronization entirely. So the ack
+        # necessarily attests to the VENDOR-SIDE control (RBAC scope / --disable-write / read-scoped
+        # token), which keeps applying to tools added later; it cannot attest to a tool list.
+        # Documented as an explicit trade-off in ADR-017 §Trade-offs rather than left implied.
         cfg = {"mcp": {"mcpServer": {"endpoint": endpoint, "listingMode": "DEFAULT"}}}
         tid_final = None
         tid_to_sync = None
@@ -519,11 +573,20 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
 
 def _cutover_preset_keys(ac, secrets, secrets_read_ok):
     """Preset keys ensure_mcp_server_targets will treat as ACTIVE this run — same conditions as its
-    own SKIP/retire branch (endpoint configured, ack'd, and — for api_key auth — a credential
-    present OR the secret read itself failed, mirroring that function's own fail-safe so this
-    helper and ensure_mcp_server_targets never disagree). Used by main() to tell ensure_targets
-    which legacy lambda targets are owned by ensure_mcp_server_targets this run (see
-    ensure_targets' skip_names docstring for why that matters — otherwise the legacy target flaps)."""
+    own SKIP/retire branches (endpoint configured, endpoint not blocked, ack matching the current
+    endpoint, and — for api_key auth — a credential present OR the secret read itself failed,
+    mirroring that function's own fail-safe so this helper and ensure_mcp_server_targets never
+    disagree). Used by main() to tell ensure_targets which legacy lambda targets are owned by
+    ensure_mcp_server_targets this run (see ensure_targets' skip_names docstring for why that
+    matters — otherwise the legacy target flaps).
+
+    The _endpoint_blocked / _preset_token calls here are the SAME helpers ensure_mcp_server_targets
+    uses, deliberately not re-implemented (round-4 review MAJOR L2-1, 2026-07-31): this helper used
+    to check only "endpoint present + ack matches", so a blocked endpoint (e.g. https://127.0.0.1/mcp
+    — https, so terraform's ^https:// validation passes it) counted as a cutover here (legacy target
+    landed in skip_names => never created) while ensure_mcp_server_targets rejected it (remote target
+    retired/never created) => EVERY tool for that kind silently vanished. Sharing one decision means
+    a blocked endpoint is simply "not cut over", which keeps the legacy target alive."""
     endpoints = ac.get("official_mcp_endpoints") or {}
     read_only_acks = ac.get("official_mcp_read_only_ack") or {}
     active = set()
@@ -532,10 +595,10 @@ def _cutover_preset_keys(ac, secrets, secrets_read_ok):
         endpoint = endpoints.get(preset_key)
         if not endpoint or read_only_acks.get(preset_key) != endpoint:
             continue
+        if _endpoint_blocked(endpoint):
+            continue
         if spec["auth"]["mode"] == "api_key":
-            raw = secrets.get(f"mcp:{preset_key}")
-            token = raw.get("token") if isinstance(raw, dict) else None
-            if not token and secrets_read_ok:
+            if not _preset_token(secrets, preset_key) and secrets_read_ok:
                 continue
         active.add(preset_key)
     return active

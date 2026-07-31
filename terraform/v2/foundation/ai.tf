@@ -785,9 +785,10 @@ output "agentcore" {
     # ADR-017 — curated official-MCP preset endpoints (empty map when official_mcp_enabled=false).
     # provision.py SKIPs any catalog.MCP_SERVER_TARGETS preset whose key is missing here.
     official_mcp_endpoints = local.official_mcp_count > 0 ? var.official_mcp_endpoints : {}
-    # ADR-017 CRITICAL gate — provision.py refuses to provision (and retires any live target for)
-    # any preset key not explicitly true here, regardless of endpoint/credential. See
-    # var.official_mcp_read_only_ack above.
+    # ADR-017 CRITICAL gate — map(string), NOT bools: the value must be the EXACT
+    # official_mcp_endpoints[preset_key] URL the operator reviewed. provision.py refuses to
+    # provision (and retires any live target for) every preset whose ack is missing or != the
+    # current endpoint, regardless of credential. See var.official_mcp_read_only_ack above.
     official_mcp_read_only_ack = local.official_mcp_count > 0 ? var.official_mcp_read_only_ack : {}
     # Same secret the web BFF writes preset credentials into (web/lib/integration-credentials.ts,
     # namespaced key = "mcp:<preset_key>", e.g. secret["mcp:datadog"] — NOT the plain preset_key,
