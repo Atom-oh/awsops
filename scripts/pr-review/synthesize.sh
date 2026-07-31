@@ -4,6 +4,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 DIFF="$1"; WORK="$2"; PR_NUMBER="$3"; PR_TITLE="$4"; OUT="$5"
 SLOT="$WORK/slot"
+rm -f "$WORK/chair-failed.flag" "$WORK/chair-primary.err" "$WORK/chair-fallback.err"
 RESP="$(tr '\n' ',' < "$WORK/responded.txt" 2>/dev/null | sed 's/,$//')" || true
 [ -z "$RESP" ] && RESP="(none — Claude solo)"
 
@@ -17,21 +18,33 @@ PANEL_CELL_CAP="${PANEL_CELL_CAP:-20000}"
 # 정상 크기 diff 인데도 chair 가 600s timeout — 원인은 입력 크기). 셀 수로 나눠 합본
 # 상한(기본 200KB)을 지키도록 유효 캡을 셀당 캡과 다시 min 한다.
 CHAIR_PANEL_TOTAL_CAP="${CHAIR_PANEL_TOTAL_CAP:-200000}"
-CELL_COUNT="$(printf '%s\n' "$SLOT"/*.md | wc -l)"
+CELL_COUNT=0
+for f in "$SLOT"/*.md; do
+  [ -s "$f" ] || continue
+  CELL_COUNT=$((CELL_COUNT + 1))
+done
 [ "$CELL_COUNT" -gt 0 ] || CELL_COUNT=1
 FAIR_CAP=$(( CHAIR_PANEL_TOTAL_CAP / CELL_COUNT ))
 [ "$FAIR_CAP" -lt "$PANEL_CELL_CAP" ] && PANEL_CELL_CAP="$FAIR_CAP"
 PANEL=""
 SCRUB_TMP="$WORK/scrub-cell.tmp"
+
+# ANSI/제어문자 제거는 반드시 scrub 앞에 와야 한다: 제어문자가 credential 중간에 끼면 scrub
+# 정규식이 분할돼 매칭에 실패하고, 그 뒤 제어문자만 제거되면 평문 credential이 복원된다.
+# CSI/OSC(+ST)/charset-select/CR 을 모두 덮는다 (Kiro `--wrap never` 는 줄바꿈만 끄고 색 코드는
+# 남김 — 실측: `kiro-cli chat` 출력이 `\x1b[38;5;141m…`류로 가득함). 패널 셀과 chair stderr
+# 발췌가 같은 함수를 공유해야 한 쪽만 고쳐지는 일이 없다 (리뷰에서 실제로 stderr 쪽만 누락됨).
+strip_controls() {
+  sed -E 's#(\x1B\][^\x07\x1B]*(\x07|\x1B\\)|\x1B\[[0-?]*[ -/]*[@-~]|\x1B[()][0-9A-Z]|\r)##g'
+}
+
 while IFS= read -r f; do
   [ -s "$f" ] || continue
   # 크리덴셜 스크럽(마지막 방어선) — Kiro 는 이 repo에서 base 체크아웃 전체를 read/grep 할 수
   # 있어(BASE CONTEXT 검증이 의도된 기능), diff 인젝션이 절대경로/레포 밖 크리덴셜을 읽게 유도
-  # 하면 셀 출력에 노출될 잔여 위험이 있다. 캡 적용 전체 스크럽 후 캡을 적용해야 잘린 경계에서
-  # 패턴이 쪼개져 탐지를 피하는 걸 막는다. ANSI 이스케이프(Kiro `--wrap never`는 줄바꿈만
-  # 끄고 색 코드는 남김 — 실측: `kiro-cli chat` 출력이 `\x1b[38;5;141m…`류로 가득함)도 같은
-  # 단계에서 제거 — 순수 오버헤드가 셀마다 수백~수천 바이트씩 캡을 갉아먹는다.
-  scrub_secrets < "$f" | sed -E 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' > "$SCRUB_TMP"
+  # 하면 셀 출력에 노출될 잔여 위험이 있다. 캡 적용 전 전체 스크럽 후 캡을 적용해야 잘린 경계에서
+  # 패턴이 쪼개져 탐지를 피하는 걸 막는다.
+  strip_controls < "$f" | scrub_secrets > "$SCRUB_TMP"
   CELL="$(head -c "$PANEL_CELL_CAP" "$SCRUB_TMP")"
   SCRUBBED_LEN="$(wc -c < "$SCRUB_TMP")"
   [ "$SCRUBBED_LEN" -gt "$PANEL_CELL_CAP" ] && CELL+=$'\n[...TRUNCATED at '"$PANEL_CELL_CAP"'B — full output not retained...]'
@@ -121,6 +134,18 @@ run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도
     < "$WORK/synth-stdin.txt" > "$OUT" 2>"$2" || true
 }
 
+scrubbed_err_excerpt() {
+  # Order is load-bearing in BOTH directions, and this path is emitted into a PUBLIC PR comment
+  # where GitHub's secret masking does not apply:
+  #   1. strip_controls first — a credential with an ANSI escape spliced into the middle
+  #      (AKIA1234...\x1b[31m...DEF) splits scrub_secrets' pattern, so scrub misses it; removing
+  #      the escape afterwards would then reassemble it in plaintext.
+  #   2. scrub_secrets BEFORE the 500B cap — capping first cuts the credential mid-token
+  #      (…zzzAKIA1), and the fragment no longer matches `AKIA[0-9A-Z]{16}`, so it survives.
+  # Same rule the panel-cell path above follows; this one had it inverted.
+  strip_controls < "$1" 2>/dev/null | scrub_secrets | head -c 500
+}
+
 # 요구사항: verdict 라인이 정확히 하나 있고, 그것이 마지막 non-empty 줄이어야 valid.
 # (수정 이력) 한 번 "gate와 동일하게 FAIL-first/PASS 전체 grep"으로 완화를 시도했으나
 # — mixed FAIL/PASS 케이스는 gate 자체가 FAIL-first 라 결과가 항상 FAIL로 확정되므로
@@ -142,7 +167,10 @@ chair_valid() {
 
 # chair 입력 실측 — 실패 시 "입력이 컸는가"를 로그만으로 바로 판정할 수 있게(이전엔 이
 # 수치가 어디에도 안 남아 사후 원인 규명이 불가능했다 — AWS-Demo-Platform PR#195 참조).
-echo "chair input: $(wc -c < "$WORK/synth-stdin.txt") bytes (cells: $CELL_COUNT, cell cap: ${PANEL_CELL_CAP}B)"
+DIFF_BYTES="$(wc -c < "$DIFF")"
+PANEL_BYTES="$(printf '%s\n' "$PANEL" | wc -c)"
+TOTAL_BYTES="$(wc -c < "$WORK/synth-stdin.txt")"
+echo "chair input: diff=${DIFF_BYTES}B, panel=${PANEL_BYTES}B, total=${TOTAL_BYTES}B (cells: $CELL_COUNT, cell cap: ${PANEL_CELL_CAP}B)"
 
 # primary/fallback 이 같은 chair.err 를 공유하면 fallback 이 primary 의 stderr 를 덮어써
 # 실패 원인이 사후에 안 보였다 — 시도별로 분리.
@@ -154,12 +182,12 @@ FALLBACK_RAN=0
 # 반복할 뿐이라 CHAIR_TIMEOUT 을 두 번 태우고도 아무 이득이 없다 — skip.
 if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
   FALLBACK_RAN=1
-  echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(head -c 500 "$WORK/chair-primary.err" 2>/dev/null) — falling back to '$(chair_label "$FALLBACK_MODEL")'"
+  echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(scrubbed_err_excerpt "$WORK/chair-primary.err") — falling back to '$(chair_label "$FALLBACK_MODEL")'"
   run_chair "$FALLBACK_MODEL" "$WORK/chair-fallback.err"
   if chair_valid; then
     CHAIR_USED="$FALLBACK_MODEL"
   else
-    echo "::warning::chair '$(chair_label "$FALLBACK_MODEL")' fallback also degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(head -c 500 "$WORK/chair-fallback.err" 2>/dev/null)"
+    echo "::warning::chair '$(chair_label "$FALLBACK_MODEL")' fallback also degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(scrubbed_err_excerpt "$WORK/chair-fallback.err")"
   fi
 fi
 
@@ -168,9 +196,9 @@ if ! chair_valid; then
     echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음."
     echo "이는 코드 지적이 아니라 워크플로우 인프라 실패(모델 timeout/연결 오류) — 재실행 필요."
     echo ""
-    echo "primary($(chair_label "$PRIMARY_MODEL")) stderr: $(head -c 500 "$WORK/chair-primary.err" 2>/dev/null)"
+    echo "primary($(chair_label "$PRIMARY_MODEL")) stderr: $(scrubbed_err_excerpt "$WORK/chair-primary.err")"
     if [ "$FALLBACK_RAN" = "1" ]; then
-      echo "fallback($(chair_label "$FALLBACK_MODEL")) stderr: $(head -c 500 "$WORK/chair-fallback.err" 2>/dev/null)"
+      echo "fallback($(chair_label "$FALLBACK_MODEL")) stderr: $(scrubbed_err_excerpt "$WORK/chair-fallback.err")"
     fi
   } > "$OUT"
   echo "VERDICT: FAIL" >> "$OUT"
@@ -229,6 +257,11 @@ if [ -n "${GITHUB_ENV:-}" ]; then
   echo "chair_used=$(chair_label "$CHAIR_USED")" >> "$GITHUB_ENV"
   # chair-failed.flag(위) — 코드 지적으로 인한 FAIL과 chair 자체의 인프라 실패(timeout/연결
   # 오류)를 워크플로가 게이트 판정과 별개로 PR 코멘트 배지 문구에서 구분하도록 신호 전달.
-  [ -f "$WORK/chair-failed.flag" ] && echo "chair_failed=1" >> "$GITHUB_ENV"
+  # 소스/IaC 누락이 이미 fail-closed 원인이면 그 배너가 우선이며 "코드 문제 아님" 신호는 숨긴다.
+  if [ -n "${omitted_source_paths:-}" ]; then
+    echo "chair_failed=0" >> "$GITHUB_ENV"
+  elif [ -f "$WORK/chair-failed.flag" ]; then
+    echo "chair_failed=1" >> "$GITHUB_ENV"
+  fi
 fi
 echo "Synthesis: $(wc -c < "$OUT") bytes (chair: $(chair_label "$CHAIR_USED"), panel: ${RESP})"

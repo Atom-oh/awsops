@@ -18,6 +18,11 @@ if [ ! -f "$SCRIPT" ]; then
   fail "synthesize.sh exists"
   exit 1
 fi
+PRIMARY_MODEL="test-primary"
+FALLBACK_MODEL="test-fallback"
+AWS_KEY_LEFT="AKIA12345678"
+AWS_KEY_RIGHT="90ABCDEF"
+FAKE_AWS_KEY="${AWS_KEY_LEFT}${AWS_KEY_RIGHT}"
 
 WORK=$(mktemp -d); BIN=$(mktemp -d); DIFF=$(mktemp)
 mkdir -p "$WORK/slot"
@@ -25,11 +30,22 @@ echo "diff --git a/foo b/foo" > "$DIFF"
 : > "$WORK/responded.txt"
 i=0
 while [ "$i" -lt 16 ]; do
-  { printf '\033[38;5;141m> \033[0mfindings\033[0m\n'; head -c 25000 /dev/zero | tr '\0' 'x'; } \
+  {
+    printf '\033[38;5;141m> \033[0mfindings\033[0m\n'
+    printf 'split credential: %s\033[31m%s\n' "$AWS_KEY_LEFT" "$AWS_KEY_RIGHT"
+    printf '\033]0;osc-bel\007OSC-BEL\n'
+    printf '\033]0;osc-st\033\\OSC-ST\n'
+    printf '\033(BCHARSET\rSPINNER\n'
+    head -c 25000 /dev/zero | tr '\0' 'x'
+  } \
     > "$WORK/slot/model$i-L2.md"
   echo "model$i/L2" >> "$WORK/responded.txt"
   i=$((i + 1))
 done
+: > "$WORK/chair-failed.flag"
+echo "stale primary error" > "$WORK/chair-primary.err"
+echo "stale fallback error" > "$WORK/chair-fallback.err"
+GITHUB_ENV_FILE="$WORK/github-env.txt"
 
 STDIN_SIZE_FILE="$WORK/stdin-size.txt"
 cat > "$BIN/claude" <<'EOF'
@@ -40,7 +56,10 @@ echo "VERDICT: PASS"
 EOF
 chmod +x "$BIN/claude"
 
-PATH="$BIN:$PATH" STDIN_SIZE_FILE="$STDIN_SIZE_FILE" bash "$SCRIPT" "$DIFF" "$WORK" 1 "test pr" "$WORK/review.md" \
+PATH="$BIN:$PATH" STDIN_SIZE_FILE="$STDIN_SIZE_FILE" \
+  CHAIR_PRIMARY_MODEL="$PRIMARY_MODEL" CHAIR_FALLBACK_MODEL="$FALLBACK_MODEL" \
+  GITHUB_ENV="$GITHUB_ENV_FILE" \
+  bash "$SCRIPT" "$DIFF" "$WORK" 1 "test pr" "$WORK/review.md" \
   > "$WORK/synth.log" 2>&1
 
 if grep -q "Argument list too long" "$WORK/synth.log"; then
@@ -60,48 +79,154 @@ else
   fail "panel bundle respects total cap (~200KB, was 400KB uncapped): stdin size file missing"
 fi
 
-if [ -s "$WORK/synth-stdin.txt" ] && grep -qP '\x1b\[' "$WORK/synth-stdin.txt" 2>/dev/null; then
+if [ -s "$WORK/synth-stdin.txt" ] && LC_ALL=C grep -q "$(printf '\033')\[" "$WORK/synth-stdin.txt"; then
   fail "ANSI escapes are stripped from panel bundle before reaching chair"
 else
   pass "ANSI escapes are stripped from panel bundle before reaching chair"
+fi
+
+if LC_ALL=C grep -q "$(printf '\033')" "$WORK/synth-stdin.txt" \
+  || LC_ALL=C grep -q "$(printf '\r')" "$WORK/synth-stdin.txt"; then
+  fail "OSC, ST, charset-select, and bare carriage-return controls are stripped"
+else
+  pass "OSC, ST, charset-select, and bare carriage-return controls are stripped"
+fi
+
+if grep -Fq "$FAKE_AWS_KEY" "$WORK/synth-stdin.txt"; then
+  fail "ANSI-split credential is not restored in plaintext after control stripping"
+elif grep -Fq "[REDACTED-AWS-KEY]" "$WORK/synth-stdin.txt"; then
+  pass "ANSI is stripped before credential scrubbing"
+else
+  fail "ANSI is stripped before credential scrubbing: redaction marker missing"
 fi
 
 grep -q "VERDICT: PASS" "$WORK/review.md" 2>/dev/null \
   && pass "chair completes and produces a valid VERDICT" \
   || fail "chair completes and produces a valid VERDICT"
 
-# Second scenario: primary + fallback both fail — must be diagnosable, not a silent dead end.
-WORK2=$(mktemp -d); mkdir -p "$WORK2/slot"
-echo "x" > "$WORK2/slot/model0-L2.md"; echo "model0/L2" >> "$WORK2/responded.txt" 2>/dev/null
-: > "$WORK2/responded.txt"; echo "model0/L2" >> "$WORK2/responded.txt"
+if [ -f "$WORK/chair-failed.flag" ] \
+  || grep -q '^chair_failed=1$' "$GITHUB_ENV_FILE" 2>/dev/null \
+  || grep -q "리뷰 생성 실패" "$WORK/review.md" 2>/dev/null; then
+  fail "successful chair run clears stale failure state and does not emit the generation-failed badge signal"
+else
+  pass "successful chair run clears stale failure state and does not emit the generation-failed badge signal"
+fi
+
+if grep -q "stale .* error" "$WORK/chair-primary.err" "$WORK/chair-fallback.err" 2>/dev/null; then
+  fail "successful chair run clears stale primary/fallback stderr"
+else
+  pass "successful chair run clears stale primary/fallback stderr"
+fi
+
+if grep -Eq 'chair input: diff=[0-9]+B, panel=[0-9]+B, total=[0-9]+B' "$WORK/synth.log"; then
+  pass "chair input metrics split diff, panel, and total bytes"
+else
+  fail "chair input metrics split diff, panel, and total bytes"
+fi
+
+# Second scenario: empty slot files must not reduce the fair cap for surviving reviews.
+WORK2=$(mktemp -d); mkdir -p "$WORK2/slot"; : > "$WORK2/responded.txt"
+i=0
+while [ "$i" -lt 16 ]; do
+  : > "$WORK2/slot/model$i-L2.md"
+  if [ "$i" -lt 4 ]; then
+    head -c 25000 /dev/zero | tr '\0' 'y' > "$WORK2/slot/model$i-L2.md"
+    echo "model$i/L2" >> "$WORK2/responded.txt"
+  fi
+  i=$((i + 1))
+done
+STDIN_SIZE_FILE="$WORK2/stdin-size.txt"
+PATH="$BIN:$PATH" STDIN_SIZE_FILE="$STDIN_SIZE_FILE" \
+  CHAIR_PRIMARY_MODEL="$PRIMARY_MODEL" CHAIR_FALLBACK_MODEL="$FALLBACK_MODEL" \
+  CHAIR_PANEL_TOTAL_CAP=80000 PANEL_CELL_CAP=20000 \
+  bash "$SCRIPT" "$DIFF" "$WORK2" 1 "degraded panel" "$WORK2/review.md" \
+  > "$WORK2/synth.log" 2>&1
+
+if [ -s "$STDIN_SIZE_FILE" ] \
+  && [ "$(cat "$STDIN_SIZE_FILE")" -gt 75000 ] \
+  && [ "$(cat "$STDIN_SIZE_FILE")" -lt 90000 ] \
+  && grep -q "cells: 4" "$WORK2/synth.log"; then
+  pass "fair cap denominator counts only non-empty panel cells"
+else
+  fail "fair cap denominator counts only non-empty panel cells"
+fi
+
+# Third scenario: primary + fallback both fail — must be diagnosable without leaking stderr.
+WORK3=$(mktemp -d); mkdir -p "$WORK3/slot"; : > "$WORK3/responded.txt"
+echo "x" > "$WORK3/slot/model0-L2.md"
+echo "model0/L2" >> "$WORK3/responded.txt"
+GITHUB_ENV_FILE3="$WORK3/github-env.txt"
 
 cat > "$BIN/claude" <<'EOF'
 #!/usr/bin/env bash
 cat >/dev/null
-echo "boom: connection refused" >&2
+if [ "$ANTHROPIC_MODEL" = "test-primary" ]; then
+  printf 'boom: connection refused %s\033[31m%s\n' "$FAILURE_KEY_LEFT" "$FAILURE_KEY_RIGHT" >&2
+else
+  head -c 495 /dev/zero | tr '\0' 'z' >&2
+  printf '%s\n' "$FAILURE_SECRET" >&2
+fi
 exit 1
 EOF
 chmod +x "$BIN/claude"
 
-PATH="$BIN:$PATH" bash "$SCRIPT" "$DIFF" "$WORK2" 1 "test pr" "$WORK2/review.md" \
-  > "$WORK2/synth.log" 2>&1
+PATH="$BIN:$PATH" FAILURE_SECRET="$FAKE_AWS_KEY" \
+  FAILURE_KEY_LEFT="$AWS_KEY_LEFT" FAILURE_KEY_RIGHT="$AWS_KEY_RIGHT" \
+  CHAIR_PRIMARY_MODEL="$PRIMARY_MODEL" CHAIR_FALLBACK_MODEL="$FALLBACK_MODEL" \
+  GITHUB_ENV="$GITHUB_ENV_FILE3" \
+  bash "$SCRIPT" "$DIFF" "$WORK3" 1 "test pr" "$WORK3/review.md" \
+  > "$WORK3/synth.log" 2>&1
 
-if [ -f "$WORK2/chair-failed.flag" ]; then
+if [ -f "$WORK3/chair-failed.flag" ]; then
   pass "chair-failed.flag set when both primary and fallback fail"
 else
   fail "chair-failed.flag set when both primary and fallback fail"
 fi
 
-if [ -s "$WORK2/chair-primary.err" ] && [ -s "$WORK2/chair-fallback.err" ]; then
+if [ -s "$WORK3/chair-primary.err" ] && [ -s "$WORK3/chair-fallback.err" ]; then
   pass "primary/fallback stderr kept in separate files (not overwritten)"
 else
   fail "primary/fallback stderr kept in separate files (not overwritten)"
 fi
 
-if grep -q "connection refused" "$WORK2/review.md" 2>/dev/null; then
+if grep -q "connection refused" "$WORK3/review.md" 2>/dev/null; then
   pass "failure stderr excerpt is recorded in the review body (diagnosable from PR comment)"
 else
   fail "failure stderr excerpt is recorded in the review body (diagnosable from PR comment)"
+fi
+
+if grep -Fq "$FAKE_AWS_KEY" "$WORK3/review.md" \
+  || grep -Fq "$FAKE_AWS_KEY" "$WORK3/synth.log" \
+  || grep -Fq "AKIA1" "$WORK3/review.md" \
+  || grep -Fq "AKIA1" "$WORK3/synth.log" \
+  || LC_ALL=C grep -q "$(printf '\033')" "$WORK3/review.md" \
+  || LC_ALL=C grep -q "$(printf '\033')" "$WORK3/synth.log"; then
+  fail "chair stderr is scrubbed in PR body and primary/fallback warnings"
+elif grep -Fq "[REDACTED-AWS-KEY]" "$WORK3/review.md" \
+  && grep -Fq "[REDACTED-AWS-KEY]" "$WORK3/synth.log"; then
+  pass "chair stderr is scrubbed in PR body and primary/fallback warnings"
+else
+  fail "chair stderr is scrubbed in PR body and primary/fallback warnings: redaction markers missing"
+fi
+
+grep -q '^chair_failed=1$' "$GITHUB_ENV_FILE3" 2>/dev/null \
+  && pass "chair failure exports the generation-failed badge signal" \
+  || fail "chair failure exports the generation-failed badge signal"
+
+# Fourth scenario: an omitted source path is the fail-closed reason, even if the chair also fails.
+GITHUB_ENV_FILE4="$WORK3/github-env-omitted.txt"
+PATH="$BIN:$PATH" FAILURE_SECRET="$FAKE_AWS_KEY" \
+  FAILURE_KEY_LEFT="$AWS_KEY_LEFT" FAILURE_KEY_RIGHT="$AWS_KEY_RIGHT" \
+  CHAIR_PRIMARY_MODEL="$PRIMARY_MODEL" CHAIR_FALLBACK_MODEL="$FALLBACK_MODEL" \
+  GITHUB_ENV="$GITHUB_ENV_FILE4" omitted_source_paths="src/oversized.ts" \
+  bash "$SCRIPT" "$DIFF" "$WORK3" 1 "omitted source" "$WORK3/review.md" \
+  > "$WORK3/synth-omitted.log" 2>&1
+
+if grep -q '^chair_failed=0$' "$GITHUB_ENV_FILE4" 2>/dev/null \
+  && ! grep -q '^chair_failed=1$' "$GITHUB_ENV_FILE4" 2>/dev/null; then
+  pass "omitted source-path failure takes badge priority over chair infrastructure failure"
+else
+  fail "omitted source-path failure takes badge priority over chair infrastructure failure"
 fi
 
 [ "$FAILED" -eq 0 ] || exit 1
