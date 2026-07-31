@@ -19,9 +19,11 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request) {
   try {
     const user = await verifyUserForSignout(request.headers.get('cookie'));
-    if (user) await revokeSessionsFor(user.sub);
-  } catch {
-    /* best-effort — logout must succeed regardless */
+    if (user && user.iat) await revokeSessionsFor(user.sub, user.iat);
+  } catch (e) {
+    // best-effort — logout must succeed regardless; log so a persistently-failing revocation
+    // write isn't silently invisible (symmetric with isRevoked's revocation_check_failed warning).
+    console.warn(JSON.stringify({ evt: 'revocation_write_failed', err: e instanceof Error ? e.message : String(e) }));
   }
   return new Response(JSON.stringify({ redirect: '/login' }), {
     status: 200,

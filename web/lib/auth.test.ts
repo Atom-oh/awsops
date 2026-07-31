@@ -80,10 +80,30 @@ describe('verifyUser', () => {
 });
 
 describe('revokeSessionsFor', () => {
-  it('upserts a revocation row for the given sub', async () => {
+  it('upserts a revocation row bound to the given iat', async () => {
     const { revokeSessionsFor } = await import('./auth');
-    await revokeSessionsFor('u-1');
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('ON CONFLICT (user_sub) DO UPDATE'), ['u-1']);
+    await revokeSessionsFor('u-1', NOW);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('ON CONFLICT (user_sub) DO UPDATE'), ['u-1', NOW]);
+  });
+
+  // pentest-remediation P2-review (MAJOR-1): replaying an already-revoked (but unexpired) token
+  // against signout must not be able to push the cutoff past that token's own iat — otherwise a
+  // captured, already-logged-out token can be replayed forever to roll-DoS every session the
+  // victim creates afterward. Exercised at the SQL/param level since query is mocked (matches
+  // this file's existing style for revokeSessionsFor/isRevoked).
+  it('bounds the cutoff to the WHERE-guarded upsert so a replay with an older iat cannot re-advance a newer cutoff', async () => {
+    const { revokeSessionsFor } = await import('./auth');
+    // First call: a normal fresh logout, iat = NOW.
+    await revokeSessionsFor('u-1', NOW);
+    // "Replay" call: an attacker resubmits an older, already-revoked token (iat = NOW - 100).
+    await revokeSessionsFor('u-1', NOW - 100);
+    const [, params] = query.mock.calls.at(-1) as [string, [string, number]];
+    const [sql] = query.mock.calls.at(-1) as [string, unknown];
+    // The guard clause must be present and parameterized on the *replayed* call's own iat, so
+    // Postgres — not this test — is what actually prevents the cutoff from moving backward: the
+    // WHERE clause only lets the update through if the new cutoff is later than what's stored.
+    expect(sql).toContain('WHERE session_revocations.revoked_at < to_timestamp($2)');
+    expect(params).toEqual(['u-1', NOW - 100]);
   });
 });
 
@@ -96,10 +116,10 @@ describe('verifyUserForSignout', () => {
     // Simulate: the mocked jwtVerify call succeeds because we pass clockTolerance — we can't
     // actually exercise jose's real expiry math against a mock, so this asserts the call site
     // wires clockTolerance through (the behavior jose then enforces).
-    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id' } });
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
     const { verifyUserForSignout } = await import('./auth');
     const user = await verifyUserForSignout('awsops_token=eyJ...');
-    expect(user).toEqual({ sub: 'u-1' });
+    expect(user).toEqual({ sub: 'u-1', iat: NOW });
     const [, , opts] = jwtVerify.mock.calls.at(-1) as [unknown, unknown, { clockTolerance?: unknown }];
     expect(opts.clockTolerance).toBeTruthy();
   });
@@ -109,12 +129,19 @@ describe('verifyUserForSignout', () => {
     expect(await verifyUserForSignout('awsops_token=eyJ...')).toBeNull();
   });
   it('rejects a non-id token_use', async () => {
-    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'access' } });
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'access', iat: NOW } });
+    const { verifyUserForSignout } = await import('./auth');
+    expect(await verifyUserForSignout('awsops_token=eyJ...')).toBeNull();
+  });
+  // MAJOR-1 needs iat to bound revokeSessionsFor's cutoff — a token without one can't be
+  // safely revoked-with-a-bound, so treat it like the other malformed-shape rejections.
+  it('rejects a token with no iat claim (nothing to bound the revocation cutoff to)', async () => {
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id' } });
     const { verifyUserForSignout } = await import('./auth');
     expect(await verifyUserForSignout('awsops_token=eyJ...')).toBeNull();
   });
   it('does NOT check revocation (signout must work even for an already-revoked/expired session)', async () => {
-    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id' } });
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
     const { verifyUserForSignout } = await import('./auth');
     await verifyUserForSignout('awsops_token=eyJ...');
     expect(query).not.toHaveBeenCalled();
@@ -123,7 +150,7 @@ describe('verifyUserForSignout', () => {
   // original 10-year value — otherwise anyone holding a long-expired token can replay it against
   // signout forever to keep force-logging-out the victim's *current* valid sessions.
   it('uses a short (minutes-scale) clockTolerance, not a multi-year one (logout-replay DoS)', async () => {
-    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id' } });
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'id', iat: NOW } });
     const { verifyUserForSignout } = await import('./auth');
     await verifyUserForSignout('awsops_token=eyJ...');
     const [, , opts] = jwtVerify.mock.calls.at(-1) as [unknown, unknown, { clockTolerance?: string }];

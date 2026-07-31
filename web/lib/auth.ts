@@ -5,6 +5,7 @@ export interface User {
   sub: string;
   email?: string;
   groups?: string[];
+  iat?: number;
 }
 
 function parseCookie(header: string | null, name: string): string | null {
@@ -42,10 +43,11 @@ const REVOCATION_CHECK_TIMEOUT_MS = 3000;
 
 async function isRevoked(sub: string, iat: number | undefined): Promise<boolean> {
   if (!iat) return true; // malformed token (no iat) — fail closed, this one input we don't trust
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('revocation check timed out')), REVOCATION_CHECK_TIMEOUT_MS),
-    );
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('revocation check timed out')), REVOCATION_CHECK_TIMEOUT_MS);
+    });
     const { rows } = await Promise.race([
       getPool().query<{ revoked_at: string }>(
         'SELECT revoked_at FROM session_revocations WHERE user_sub = $1',
@@ -55,21 +57,34 @@ async function isRevoked(sub: string, iat: number | undefined): Promise<boolean>
     ]);
     if (rows.length === 0) return false;
     const revokedAtSec = new Date(rows[0].revoked_at).getTime() / 1000;
-    return iat <= revokedAtSec;
+    // strict `<`: a token issued in the same second as the revocation cutoff (e.g. an immediate
+    // re-login right after logout) shouldn't be rejected — self-healing on the next request made
+    // this low-priority, but it's a one-character fix.
+    return iat < revokedAtSec;
   } catch (e) {
     // fail open — see comment above the timeout constant / module comment
     console.warn(JSON.stringify({ evt: 'revocation_check_failed', sub, err: e instanceof Error ? e.message : String(e) }));
     return false;
+  } finally {
+    clearTimeout(timer); // the query-won path left this timer live otherwise
   }
 }
 
 /** Record that `sub`'s sessions issued up to now are no longer valid. Called by POST
- * /api/auth/signout. Idempotent (upsert) — repeated logout just advances the cutoff. */
-export async function revokeSessionsFor(sub: string): Promise<void> {
+ * /api/auth/signout with the signed-out token's own `iat` (epoch seconds). Idempotent (upsert) —
+ * but the cutoff only advances if `iat` is newer than what's already recorded.
+ * pentest-remediation P2-review (MAJOR-1): without the `iat` bound, replaying an already-revoked
+ * (but not-yet-expired) token against the public signout route kept pushing `revoked_at` to
+ * `now()` on every call — a rolling forced-logout DoS on any session the victim created *after*
+ * their first real logout, for as long as the stolen token stays unexpired (up to ~12h). Capping
+ * the cutoff at this token's own `iat` means a replay can never invalidate a session issued after
+ * the legitimate revocation. */
+export async function revokeSessionsFor(sub: string, iat: number): Promise<void> {
   await getPool().query(
-    `INSERT INTO session_revocations (user_sub, revoked_at) VALUES ($1, now())
-     ON CONFLICT (user_sub) DO UPDATE SET revoked_at = now()`,
-    [sub],
+    `INSERT INTO session_revocations (user_sub, revoked_at) VALUES ($1, to_timestamp($2))
+     ON CONFLICT (user_sub) DO UPDATE SET revoked_at = to_timestamp($2)
+     WHERE session_revocations.revoked_at < to_timestamp($2)`,
+    [sub, iat],
   );
 }
 
@@ -127,8 +142,10 @@ export async function verifyUserForSignout(cookieHeader: string | null): Promise
       algorithms: ['RS256'],
       clockTolerance: SIGNOUT_CLOCK_TOLERANCE,
     });
-    if (payload.token_use !== 'id' || !payload.sub) return null;
-    return { sub: String(payload.sub) };
+    if (payload.token_use !== 'id' || !payload.sub || !payload.iat) return null;
+    // `iat` is returned so the caller (signout route) can bound revokeSessionsFor's cutoff to
+    // this specific token's issue time — see MAJOR-1 comment on revokeSessionsFor.
+    return { sub: String(payload.sub), iat: payload.iat };
   } catch {
     return null;
   }

@@ -37,11 +37,20 @@ describe('POST /api/auth/signout', () => {
   // id_token itself stayed valid for its full ~12h remaining lifetime. Signout now best-effort
   // records a server-side revocation for the token's sub.
   it('revokes sessions for the signed-out user (even an already-expired token — that is the point)', async () => {
-    verifyUserForSignout.mockResolvedValue({ sub: 'u-1' });
+    verifyUserForSignout.mockResolvedValue({ sub: 'u-1', iat: 1_700_000_000 });
     const { POST } = await import('./route');
     const res = await POST(req());
     expect(res.status).toBe(200);
-    expect(revokeSessionsFor).toHaveBeenCalledWith('u-1');
+    expect(revokeSessionsFor).toHaveBeenCalledWith('u-1', 1_700_000_000);
+  });
+  // pentest-remediation P2-review (MAJOR-1): revokeSessionsFor's cutoff-advance guard depends on
+  // being handed *this* token's iat — if verifyUserForSignout ever returned no iat, we must not
+  // call revokeSessionsFor with `undefined` (which would be an unbounded/unsafe cutoff).
+  it('does not attempt revocation when the verified token has no iat', async () => {
+    verifyUserForSignout.mockResolvedValue({ sub: 'u-1' });
+    const { POST } = await import('./route');
+    await POST(req());
+    expect(revokeSessionsFor).not.toHaveBeenCalled();
   });
   it('does not attempt revocation when there is no verifiable token (no cookie, forged, etc.)', async () => {
     verifyUserForSignout.mockResolvedValue(null);
