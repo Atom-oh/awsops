@@ -418,6 +418,7 @@ export const TERMS: Record<string, Pair> = {
   '타깃 그룹 헬스 (Healthy 최소값 / UnHealthy 최대값, 선택 기간)': { en: 'Target Group Health (Healthy min / UnHealthy max, selected period)', zh: '目标组健康状态（Healthy 最小值 / UnHealthy 最大值，所选时间段）', ja: 'ターゲットグループのヘルス（Healthy 最小値 / UnHealthy 最大値、選択期間）' },
 
   // ---- Network Flow Monitor (/network-flow + EKS Pod 전송량) ----
+  'End to End 경로': { en: 'End-to-End path', zh: '端到端路径', ja: 'エンドツーエンド経路' },
   'Transfer/Day (NFM): 최근 1시간 실측 ×24 외삽 · 방향당 $0.01/GB 추정 — 정확한 청구 아님': { en: 'Transfer/Day (NFM): last-1h measurement extrapolated ×24 · estimated at $0.01/GB per direction — not exact billing', zh: 'Transfer/Day (NFM)：最近 1 小时实测 ×24 外推 · 按每方向 $0.01/GB 估算 — 非准确账单', ja: 'Transfer/Day (NFM)：直近1時間の実測を×24で外挿 · 方向あたり $0.01/GB の推定 — 正確な請求額ではありません' },
   'CloudWatch Network Flow Monitor(NFM) 기반 플로우 조회 — 모니터·메트릭·카테고리·기간별 top-contributors 탐색': { en: 'Flow lookup powered by CloudWatch Network Flow Monitor (NFM) — explore top contributors by monitor, metric, category, and range', zh: '基于 CloudWatch Network Flow Monitor（NFM）的流量查询 — 按监控器、指标、类别和时间段浏览 top contributors', ja: 'CloudWatch Network Flow Monitor（NFM）ベースのフロー照会 — モニター・メトリクス・カテゴリ・期間別に top contributors を探索' },
   'NFM 상태 조회 실패': { en: 'NFM status check failed', zh: 'NFM 状态查询失败', ja: 'NFM ステータス取得失敗' },

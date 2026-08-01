@@ -11,6 +11,7 @@ import { RangePicker, dash } from '@/components/inventory/metrics/shared';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import type { NfmEndpoint, NfmFlowRow } from '@/lib/nfm';
 import type { InvType } from '@/lib/inventory-types';
+import FlowHopPath, { ResourceIcon, endpointKind } from '@/components/nfm/FlowHopPath';
 
 // /network-flow — nfm-dashboard 플로우 조회 이식 (CloudWatch Network Flow Monitor).
 // 데이터 계층은 lib/nfm.ts(비동기 쿼리 폴링 + TTL 캐시)가 담당하고, 이 페이지는
@@ -65,10 +66,15 @@ function epTitle(e: NfmEndpoint): string | undefined {
   return parts.length ? parts.join(' · ') : undefined;
 }
 
-function EndpointCell({ e }: { e: NfmEndpoint }) {
+function EndpointCell({ e, category }: { e: NfmEndpoint; category?: string }) {
   const label = epLabel(e);
   if (!label) return dash;
-  return <span title={epTitle(e)}>{label}</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5" title={epTitle(e)}>
+      <ResourceIcon kind={endpointKind(e, category)} size={18} />
+      {label}
+    </span>
+  );
 }
 
 // 상세 패널을 인벤토리 상세와 같은 섹션 카드 디자인으로 렌더하기 위한 최소 spec —
@@ -178,14 +184,14 @@ export default function NetworkFlowPage() {
       key: 'local', label: 'Local', mono: true,
       title: tt('로컬 엔드포인트 — 파드(ns/name) 우선, 없으면 instanceId/IP'),
       value: (r) => epValue(r.local),
-      render: (r) => <EndpointCell e={r.local} />,
+      render: (r) => <EndpointCell e={r.local} category={r.category} />,
     },
     { key: 'localAz', label: 'Local AZ', facet: true, value: (r) => r.local.az ?? null },
     {
       key: 'remote', label: 'Remote', mono: true,
       title: tt('원격 엔드포인트 — 파드(ns/name) 우선, 없으면 instanceId/IP'),
       value: (r) => epValue(r.remote),
-      render: (r) => <EndpointCell e={r.remote} />,
+      render: (r) => <EndpointCell e={r.remote} category={r.category} />,
     },
     { key: 'remoteAz', label: 'Remote AZ', facet: true, value: (r) => r.remote.az ?? null },
     { key: 'port', label: 'Port', type: 'num', mono: true, value: (r) => r.targetPort ?? null },
@@ -348,6 +354,7 @@ export default function NetworkFlowPage() {
         title={selected ? `${epLabel(selected.local) ?? '?'} ↔ ${epLabel(selected.remote) ?? '?'}` : undefined}
         data={selected ? flowDetail(selected, selected.unit) : null}
         spec={FLOW_DETAIL_SPEC}
+        actions={selected ? <FlowHopPath row={selected} /> : undefined}
         onClose={() => setSelected(null)}
       />
     </>
