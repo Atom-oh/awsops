@@ -12,8 +12,13 @@ let simulateLegacyConstraintViolation = false;
 // When set, the INSERT throws a non-23505 error (e.g. a connection failure) — must propagate as-is.
 let simulateOtherInsertError = false;
 // The conflict-lookup SELECT's canned response — override per-test to simulate "no row of my own".
-let selectResult: { rows: Array<{ job_id: string; status: string }> } = {
-  rows: [{ job_id: 'existing-job', status: 'queued' }],
+let selectResult: {
+  rows: Array<{
+    job_id: string; status: string; type?: string;
+    payload?: Record<string, unknown> | null; dry_run?: boolean;
+  }>;
+} = {
+  rows: [{ job_id: 'existing-job', status: 'queued', type: 'report', payload: {}, dry_run: false }],
 };
 
 vi.mock('@/lib/db', () => ({
@@ -174,5 +179,46 @@ describe('enqueueJob — legacy global UNIQUE(idempotency_key) constraint fallba
     await expect(
       enqueueJob('report', {}, { idempotencyKey: 'k', requestedBy: 'a@x.io', jobId: 'j13' }),
     ).rejects.toThrow('connection reset');
+  });
+});
+
+
+// PR #195 review MAJOR: on an idempotent replay the insert is a no-op, so worker_jobs still
+// describes the FIRST request — but the SQS message was built from the REPLAYING request. The
+// worker would then execute the replay's payload under a job_id whose ledger row (and so
+// /api/jobs/[id], the audit trail, the reaper) describes something else. Replaying a key is the
+// normal retry path, so this needs no adversary; with one, a deterministic key is guessable by
+// design and this becomes a payload swap on an already-recorded job.
+describe('enqueueJob — idempotent replay enqueues the LEDGER job, not the replaying request', () => {
+  beforeEach(() => {
+    simulateConflict = true;
+    selectResult = {
+      rows: [{
+        job_id: 'existing-job', status: 'queued',
+        type: 'report', payload: { tier: 'original' }, dry_run: true,
+      }],
+    };
+  });
+
+  it('sends the stored type/payload/dry_run, ignoring the replaying request body', async () => {
+    const { enqueueJob } = await import('@/lib/jobs');
+    await enqueueJob('compliance', { tier: 'attacker-supplied' }, {
+      idempotencyKey: 'k-replay', requestedBy: 'a@x.io', jobId: 'ignored', dryRun: false,
+    });
+    expect(sqsBodies).toHaveLength(1);
+    const msg = JSON.parse(sqsBodies[0]);
+    expect(msg.job_id).toBe('existing-job');
+    expect(msg.type).toBe('report');
+    expect(msg.payload).toEqual({ tier: 'original' });
+    expect(msg.dry_run).toBe(true);
+  });
+
+  it('selects type/payload/dry_run so the ledger values are actually available', async () => {
+    const { enqueueJob } = await import('@/lib/jobs');
+    await enqueueJob('report', {}, { idempotencyKey: 'k-sel', requestedBy: 'a@x.io' });
+    const sel = queryCalls.find((c) => /^SELECT/.test(c.sql.trim()));
+    expect(sel?.sql).toMatch(/type/);
+    expect(sel?.sql).toMatch(/payload/);
+    expect(sel?.sql).toMatch(/dry_run/);
   });
 });

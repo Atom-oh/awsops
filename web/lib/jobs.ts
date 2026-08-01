@@ -59,9 +59,12 @@ async function findOwnJob(
   pool: ReturnType<typeof getPool>,
   idempotencyKey: string | null,
   requestedBy: string | null,
-): Promise<{ job_id: string; status: string } | null> {
+): Promise<{ job_id: string; status: string; type: string; payload: Record<string, unknown> | null; dry_run: boolean } | null> {
+  // type/payload/dry_run come back too: on an idempotent replay the SQS message must describe the
+  // job that the LEDGER holds, not whatever the replaying request happened to carry (see below).
   const existing = await pool.query(
-    `SELECT job_id, status FROM worker_jobs WHERE idempotency_key = $1 AND requested_by IS NOT DISTINCT FROM $2`,
+    `SELECT job_id, status, type, payload, dry_run FROM worker_jobs
+      WHERE idempotency_key = $1 AND requested_by IS NOT DISTINCT FROM $2`,
     [idempotencyKey, requestedBy],
   );
   return existing.rows.length > 0 ? existing.rows[0] : null;
@@ -106,6 +109,11 @@ export async function enqueueJob(
   const conflictTarget = requestedBy === null
     ? 'ON CONFLICT (idempotency_key) WHERE requested_by IS NULL'
     : 'ON CONFLICT (requested_by, idempotency_key) WHERE requested_by IS NOT NULL';
+  // What actually goes on the queue. Equal to this request on a fresh insert; replaced by the
+  // ledger's own values on an idempotent replay so the message can never contradict the row.
+  let sendType = type;
+  let sendPayload: Record<string, unknown> = safePayload;
+  let sendDryRun = dryRun;
   let ins: { rows: Array<{ job_id: string }> } | null = null;
   try {
     ins = await pool.query(
@@ -138,13 +146,26 @@ export async function enqueueJob(
     if (!existing) throw new IdempotencyKeyCollisionError();
     jobId = existing.job_id;
     status = existing.status;
+    // Enqueue what the LEDGER says this job is, not what this request asked for. The insert above
+    // was a no-op, so worker_jobs still describes the FIRST request; sending this request's
+    // type/payload/dry_run under that job_id would have the worker execute P2 while the ledger row
+    // — and therefore /api/jobs/[id], the audit trail, and the reaper — all say P1. Replaying a
+    // key is how a caller RETRIES, so this is reachable without any adversary; with one (a
+    // deterministic key is guessable by design, cf. report:${email}:...) it is a way to swap the
+    // payload of an already-recorded job. Round-2 scoped the lookup to the caller's own rows,
+    // which stopped cross-requester capture but left same-requester divergence in place.
+    sendType = existing.type;
+    sendPayload = existing.payload ?? {};
+    sendDryRun = existing.dry_run;
   }
 
   try {
     await getSqs().send(
       new SendMessageCommand({
         QueueUrl: queueUrl,
-        MessageBody: JSON.stringify({ job_id: jobId, type, payload: safePayload, dry_run: dryRun }),
+        MessageBody: JSON.stringify({
+          job_id: jobId, type: sendType, payload: sendPayload, dry_run: sendDryRun,
+        }),
       }),
     );
   } catch (e) {
