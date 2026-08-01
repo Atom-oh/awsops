@@ -1,7 +1,9 @@
 # ADR-017: 큐레이션 공식 MCP 프리셋 / Curated Official MCP Presets
 
 ## Status / 상태
-**Accepted — 단, `integrations_enabled` 프리셋 경로는 `do-not-enable`(GATED, 활성화 금지).**
+**Accepted — 단, `official_mcp_enabled` 는 `do-not-enable`(GATED, 활성화 금지).**
+
+게이트는 **`official_mcp_enabled`** 다(`ai.tf`, 기본 false). 이 프리셋 경로만 켜는 스위치이므로 여기에 걸어야 한다 — `agentcore_enabled`/`integrations_enabled` 는 상위 전제조건일 뿐이고, 거기에 do-not-enable 을 걸면 무관한 인티그레이션 람다(clickhouse/prometheus/loki/tempo/mimir MCP 등)까지 함께 잠그면서 정작 뒤집을 스위치는 표시하지 못한다.
 
 활성화 전제조건 2개가 아직 충족되지 않았다(PR #194 리뷰, CRITICAL×2·MAJOR×1):
 
