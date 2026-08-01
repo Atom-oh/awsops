@@ -90,6 +90,20 @@ class TestSelfHostedRequiresAPrivateLiteral(unittest.TestCase):
             provision._host_pin_violation("https://93.184.216.34/mcp", _spec("clickhouse"))
         )
 
+    def test_publicly_routed_ipv6_transition_forms_are_rejected(self):
+        """`ipaddress.is_private` answers from the IPv4 EMBEDDED in a 6to4/Teredo address, so these
+        report is_private=True while routing to the public internet — the exact exfiltration this gate
+        exists to stop. Gating on is_private accepted all of them; the in-VPC allowlist rejects them."""
+        for url in (
+            "https://[2002:5db8:d822::1]/mcp",      # 6to4 wrapping public 93.184.216.34
+            "https://[2001:0:5db8:d822::1]/mcp",    # Teredo wrapping the same
+            "https://[2002:0a00:0001::1]/mcp",      # 6to4 wrapping private 10.0.0.1 — still public routing
+            "https://[::ffff:10.0.0.1]/mcp",        # IPv4-mapped private
+            "https://[64:ff9b::5db8:d822]/mcp",     # NAT64
+            "https://[2600:1f00::1]/mcp",           # AWS-style GUA (routable)
+        ):
+            self.assertIsNotNone(provision._host_pin_violation(url, _spec("clickhouse")), url)
+
     def test_vendor_hosted_preset_still_uses_its_name_pin(self):
         # Vendor-hosted presets are unaffected — they pin on the vendor domain, by name.
         self.assertIsNone(

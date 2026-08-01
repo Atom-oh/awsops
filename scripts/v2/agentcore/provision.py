@@ -199,6 +199,28 @@ def _endpoint_blocked(endpoint, spec=None):
     return None
 
 
+#: The only address ranges a self-hosted preset may point at. This is an ALLOWLIST, not
+#: `ipaddress.is_private`, because `is_private` is a broader predicate than "cannot leave the VPC" and
+#: admits publicly-routed IPv6 transition forms: it derives its answer from the IPv4 address EMBEDDED in
+#: a 6to4/Teredo address, so `2002:5db8:d822::1` (6to4 wrapping the public 93.184.216.34) and
+#: `2001:0:5db8:d822::1` (Teredo) both report is_private=True while routing straight to the public
+#: internet — i.e. exactly the exfiltration this gate exists to stop, waved through. Allowlisting the
+#: two real in-VPC families instead rejects every transition form by construction (they all sit outside
+#: these ranges), so there is no per-form blocklist to keep in sync with future ones.
+_IN_VPC_NETS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),  # IPv6 ULA. AWS VPC IPv6 CIDRs are globally-routable GUAs and
+                                       # so are deliberately NOT here — a GUA is indistinguishable
+                                       # from an exfil target by address alone.
+)
+
+
+def _is_in_vpc_literal(ip):
+    return any(ip in net for net in _IN_VPC_NETS)
+
+
 def _host_under_suffix(host, suffixes):
     """True if `host` sits under one of `suffixes`. Suffixes carry a leading dot so matching can only
     happen on a DNS label boundary: this is what rejects `evil-datadoghq.com` (no boundary) and
@@ -245,9 +267,9 @@ def _host_pin_violation(endpoint, spec):
             return (f"self-hosted preset host {host!r} is a NAME — use the private IP literal of the "
                     f"in-VPC endpoint. A name resolves privately now but can be repointed at a public "
                     f"address later, and the connection is made by AgentCore where we cannot re-check")
-        if not host_ip.is_private:
-            return (f"self-hosted preset points at {host_ip}, which is not a private address — a "
-                    f"self-hosted preset must be in-VPC")
+        if not _is_in_vpc_literal(host_ip):
+            return (f"self-hosted preset points at {host_ip}, which is not in an in-VPC range "
+                    f"{tuple(str(n) for n in _IN_VPC_NETS)!r} — a self-hosted preset must be in-VPC")
         return None
 
     if _host_under_suffix(host, suffixes):
