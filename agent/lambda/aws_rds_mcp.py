@@ -152,17 +152,28 @@ def lambda_handler(event, context):
                            f"cluster ({cluster_arn.rsplit(':', 1)[-1]}) — the Data API credential is "
                            "that cluster's least-privilege reader role (awsops_sql_reader) and is not "
                            "valid anywhere else. Use the describe_* tools for other clusters.")
+            # PR #197 review MAJOR (L2/L4, 2 models): the guard above deliberately accepts the bare
+            # cluster identifier as well as the full ARN — but the RDS Data API requires the FULL
+            # ARN, so passing the caller's spelling straight through made begin_transaction throw
+            # BadRequestException, which left this tool as an unhandled 500: exactly the "clean tool
+            # error, not a 500" property the earlier round was added to establish. And it is the
+            # NORMAL path, not an edge case — list_db_clusters/describe_db_cluster expose cluster
+            # IDENTIFIERS only, never ARNs, so an identifier is what the model has to hand.
+            # Both accepted spellings designate this one cluster, so canonicalize to the env ARN and
+            # use it for every downstream call. (The mock-based test passed because the mock accepted
+            # the identifier; the test now asserts the canonical ARN actually reached the Data API.)
+            resource_arn = cluster_arn
             try:
-                engine = _engine_family(rds, args["resource_arn"])
+                engine = _engine_family(rds, resource_arn)
             except Exception as e:
                 # Logged (not silently swallowed) — this can be a real AccessDenied on
                 # DescribeDBClusters, not just an unrecognized dialect string, and the fail-closed
                 # 400 below reads identically to a dialect-detection miss unless this is visible.
-                logger.warning("execute_sql: engine lookup failed for %s: %s", args.get("resource_arn"), e)
+                logger.warning("execute_sql: engine lookup failed for %s: %s", resource_arn, e)
                 engine = None
             if engine is None:
                 logger.warning("execute_sql: could not determine engine family for %s — failing closed",
-                                args.get("resource_arn"))
+                                resource_arn)
             # Fail closed: the Postgres and MySQL dialect flags are each unsafe for the OTHER
             # engine (backslash_escapes=True hides real Postgres SQL as "still inside a string";
             # =False hides a MySQL backslash-escaped quote past `INTO OUTFILE`) — there is no
@@ -209,7 +220,7 @@ def lambda_handler(event, context):
             # entirely is rejected by the engine itself, not by pattern-matching its text. Never commit
             # either way — this tool is read-only by contract, so there's nothing to persist — and
             # always rollback in `finally` so the transaction never lingers on an error path.
-            txn_args = dict(resourceArn=args["resource_arn"], secretArn=secret_arn,
+            txn_args = dict(resourceArn=resource_arn, secretArn=secret_arn,
                              database=database)
             transaction_id = rds_data.begin_transaction(**txn_args)["transactionId"]
             try:
@@ -223,7 +234,7 @@ def lambda_handler(event, context):
                 resp = rds_data.execute_statement(transactionId=transaction_id, sql=sql, **txn_args)
             finally:
                 try:
-                    rds_data.rollback_transaction(resourceArn=args["resource_arn"],
+                    rds_data.rollback_transaction(resourceArn=resource_arn,
                         secretArn=secret_arn, transactionId=transaction_id)
                 except Exception as e:
                     # Logged, not silently swallowed — a leaked transaction (rds-data has a

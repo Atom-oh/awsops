@@ -79,7 +79,9 @@
 --     partial write, no effect on web/worker (those use rds_iam and are unaffected).
 -- A true fix (have the Lambda tolerate both passwords, or drive the ALTER ROLE from a Terraform-side
 -- rotation Lambda) means new infrastructure this PR should not add, so the window is documented here
--- and in the runbook rather than engineered away. Recovery is one command: `make migrate`.
+-- and in docs/runbooks/agent-sql-reader.md rather than engineered away (that runbook also carries the
+-- required `apply -> make migrate -> make agentcore` order, which `make agentcore` alone does NOT
+-- satisfy). Recovery is one command: `make migrate`.
 --
 -- NOTE on re-running: migrate.mjs enforces checksum immutability for APPLIED migrations, so on a
 -- cluster where an earlier version of THIS file already ran, `make migrate` will refuse with

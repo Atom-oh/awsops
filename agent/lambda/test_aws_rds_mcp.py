@@ -443,11 +443,30 @@ class TestExecuteSqlNonFoundationCluster(unittest.TestCase):
         self.rds_data_client.execute_statement.assert_not_called()
         self.rds_client.describe_db_clusters.assert_not_called()
 
-    def test_bare_cluster_identifier_of_the_foundation_cluster_is_accepted(self):
-        # The Data API and describe_db_clusters both accept the bare identifier — same cluster.
+    def test_bare_cluster_identifier_is_canonicalized_to_the_full_arn(self):
+        # PR #197 review MAJOR: the guard accepts the bare identifier, but the RDS Data API requires
+        # the FULL ARN — passing "c1" through made begin_transaction raise BadRequestException, which
+        # surfaced as an unhandled 500. This is the normal path, not an edge case: list_db_clusters /
+        # describe_db_cluster expose cluster identifiers only, never ARNs.
+        #
+        # Asserting statusCode 200 was what hid it — the mock happily accepted "c1". Assert the value
+        # that actually reached the Data API instead.
         resp = rds_mcp.lambda_handler(_event("SELECT 1", resource_arn="c1"), None)
         self.assertEqual(resp["statusCode"], 200)
         self.rds_data_client.begin_transaction.assert_called_once()
+        self.assertEqual(
+            self.rds_data_client.begin_transaction.call_args.kwargs["resourceArn"], CLUSTER_ARN)
+        self.assertEqual(
+            self.rds_data_client.execute_statement.call_args.kwargs["resourceArn"], CLUSTER_ARN)
+        # The engine lookup must not see the bare id either.
+        self.assertEqual(
+            self.rds_client.describe_db_clusters.call_args.kwargs["DBClusterIdentifier"], CLUSTER_ARN)
+
+    def test_full_arn_is_passed_through_unchanged(self):
+        resp = rds_mcp.lambda_handler(_event("SELECT 1", resource_arn=CLUSTER_ARN), None)
+        self.assertEqual(resp["statusCode"], 200)
+        self.assertEqual(
+            self.rds_data_client.begin_transaction.call_args.kwargs["resourceArn"], CLUSTER_ARN)
 
     def test_missing_cluster_arn_env_fails_closed(self):
         env = {k: v for k, v in _READER_ENV.items() if k != "AURORA_CLUSTER_ARN"}
