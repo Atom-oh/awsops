@@ -119,6 +119,11 @@ resource "aws_iam_role_policy" "task_metrics" {
         "networkflowmonitor:GetQueryStatusMonitorTopContributors",
         "networkflowmonitor:GetQueryResultsMonitorTopContributors",
         "networkflowmonitor:StopQueryMonitorTopContributors",
+        # /dns-query: Route53 Resolver query-log config discovery + Logs Insights aggregation
+        "route53resolver:ListResolverQueryLogConfigs",
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery",
       ]
       Resource = "*"
     }]

@@ -461,6 +461,41 @@ export const TERMS: Record<string, Pair> = {
   '기타(합)': { en: 'Other (sum)', zh: '其他（合计）', ja: 'その他（合計）' },
   '방향당 $0.01/GB 추정': { en: 'Estimated at $0.01/GB per direction', zh: '按每方向 $0.01/GB 估算', ja: '方向あたり $0.01/GB の推定' },
 
+
+  // ---- DNS Query Logs (/dns-query) ----
+  'Route53 Resolver 쿼리 로그 기반 DNS 분석 — CloudWatch Logs Insights로 RCODE·쿼리 타입·Top 도메인·NXDOMAIN·소스를 집계': { en: 'DNS analysis from Route53 Resolver query logs — RCODE, query type, top domains, NXDOMAIN, and sources aggregated via CloudWatch Logs Insights', zh: '基于 Route53 Resolver 查询日志的 DNS 分析 — 通过 CloudWatch Logs Insights 聚合 RCODE、查询类型、Top 域名、NXDOMAIN 和来源', ja: 'Route53 Resolver クエリログに基づく DNS 分析 — CloudWatch Logs Insights で RCODE・クエリタイプ・Top ドメイン・NXDOMAIN・ソースを集計' },
+  'DNS 로그 상태 조회 실패': { en: 'Failed to load DNS log status', zh: '获取 DNS 日志状态失败', ja: 'DNS ログステータスの取得に失敗' },
+  '쿼리 로그 설정': { en: 'Query log configs', zh: '查询日志配置', ja: 'クエリログ設定' },
+  '연관 VPC': { en: 'Associated VPCs', zh: '关联 VPC', ja: '関連付け VPC' },
+  '로그 그룹': { en: 'Log groups', zh: '日志组', ja: 'ロググループ' },
+  'CREATED 상태': { en: 'CREATED status', zh: 'CREATED 状态', ja: 'CREATED ステータス' },
+  'CloudWatch Logs 대상만 분석 가능': { en: 'Only CloudWatch Logs destinations can be analyzed', zh: '仅可分析 CloudWatch Logs 目标', ja: '分析できるのは CloudWatch Logs 宛先のみ' },
+  'Route53 Resolver query logging 미구성': { en: 'Route53 Resolver query logging not configured', zh: '未配置 Route53 Resolver 查询日志', ja: 'Route53 Resolver query logging が未構成' },
+  'Route53 Resolver query logging을 CloudWatch Logs 대상으로 구성하면 DNS 쿼리 로그 분석이 활성화됩니다. S3/Kinesis Data Firehose 대상은 Logs Insights로 조회할 수 없어 분석에 사용할 수 없습니다.': { en: 'Configure Route53 Resolver query logging with a CloudWatch Logs destination to enable DNS query log analysis. S3/Kinesis Data Firehose destinations cannot be queried with Logs Insights and are not usable for analysis.', zh: '将 Route53 Resolver 查询日志配置为 CloudWatch Logs 目标后即可启用 DNS 查询日志分析。S3/Kinesis Data Firehose 目标无法通过 Logs Insights 查询，无法用于分析。', ja: 'Route53 Resolver query logging を CloudWatch Logs 宛先で構成すると DNS クエリログ分析が有効になります。S3/Kinesis Data Firehose 宛先は Logs Insights で照会できないため分析には使用できません。' },
+  '쿼리 로그 분석': { en: 'Query log analysis', zh: '查询日志分析', ja: 'クエリログ分析' },
+  'Logs Insights 집계 쿼리 7종 병렬 실행 — 로그 그룹·기간 변경 시 자동 재조회': { en: 'Runs 7 Logs Insights aggregation queries in parallel — auto-refreshes when the log group or range changes', zh: '并行执行 7 个 Logs Insights 聚合查询 — 更改日志组或时间范围时自动重新查询', ja: 'Logs Insights 集計クエリ 7 種を並列実行 — ロググループ・期間の変更時に自動再取得' },
+  'Logs Insights 집계 중…': { en: 'Aggregating with Logs Insights…', zh: 'Logs Insights 聚合中…', ja: 'Logs Insights 集計中…' },
+  '쿼리': { en: 'queries', zh: '查询', ja: 'クエリ' },
+  '집계 실패': { en: 'Aggregation failed', zh: '聚合失败', ja: '集計失敗' },
+  '일부 집계 실패': { en: 'Some aggregations failed', zh: '部分聚合失败', ja: '一部の集計に失敗' },
+  '총 쿼리': { en: 'Total queries', zh: '总查询数', ja: '総クエリ数' },
+  '고유 도메인': { en: 'Unique domains', zh: '唯一域名数', ja: 'ユニークドメイン' },
+  '쿼리 타임라인': { en: 'Query timeline', zh: '查询时间线', ja: 'クエリタイムライン' },
+  'RCODE 분포': { en: 'RCODE breakdown', zh: 'RCODE 分布', ja: 'RCODE 分布' },
+  '쿼리 타입 분포': { en: 'Query type breakdown', zh: '查询类型分布', ja: 'クエリタイプ分布' },
+  'Top 도메인': { en: 'Top domains', zh: 'Top 域名', ja: 'Top ドメイン' },
+  '쿼리 수 기준 상위 25개': { en: 'Top 25 by query count', zh: '按查询数排名前 25', ja: 'クエリ数上位 25 件' },
+  '존재하지 않는 도메인 응답 상위 25개': { en: 'Top 25 non-existent domain responses', zh: '不存在域名响应前 25', ja: '存在しないドメイン応答の上位 25 件' },
+  'Top 소스': { en: 'Top sources', zh: 'Top 来源', ja: 'Top ソース' },
+  '쿼리를 많이 보낸 소스 IP 상위 25개': { en: 'Top 25 source IPs by query volume', zh: '发送查询最多的源 IP 前 25', ja: 'クエリ送信数上位 25 のソース IP' },
+  '방화벽 규칙에 매칭된 도메인 (BLOCK=차단)': { en: 'Domains matched by firewall rules (BLOCK = blocked)', zh: '与防火墙规则匹配的域名（BLOCK=拦截）', ja: 'ファイアウォールルールに一致したドメイン (BLOCK=遮断)' },
+  '도메인': { en: 'Domain', zh: '域名', ja: 'ドメイン' },
+  '쿼리 수': { en: 'Queries', zh: '查询数', ja: 'クエリ数' },
+  '건수': { en: 'Count', zh: '次数', ja: '件数' },
+  '소스 IP': { en: 'Source IP', zh: '源 IP', ja: 'ソース IP' },
+  '반복적인 NXDOMAIN 급증은 오타·잘못된 설정 또는 DNS 터널링(DGA) 활동의 신호일 수 있습니다': { en: 'Repeated NXDOMAIN spikes may signal typos, misconfiguration, or DNS tunneling (DGA) activity', zh: '反复出现的 NXDOMAIN 激增可能是拼写错误、配置错误或 DNS 隧道（DGA）活动的信号', ja: '繰り返す NXDOMAIN の急増はタイプミス・設定ミス、または DNS トンネリング (DGA) 活動の兆候の可能性があります' },
+  '쿼리를 발생시킨 EC2 인스턴스 (srcids.instance)': { en: 'EC2 instance that issued the queries (srcids.instance)', zh: '发起查询的 EC2 实例 (srcids.instance)', ja: 'クエリを発行した EC2 インスタンス (srcids.instance)' },
+
 };
 
 // Parameterized patterns — matched AFTER an exact TERMS hit fails.
