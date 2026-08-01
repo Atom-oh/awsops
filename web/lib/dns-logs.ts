@@ -171,7 +171,9 @@ export async function coreDnsGroups(): Promise<CoreDnsGroup[]> {
 
 // CoreDNS 쿼리 라인 parse (라이브 검증: CI JSON 래핑 그대로 @message에 매칭).
 // [INFO] ip:port - id "A IN name. udp 94 false 1232" RCODE flags size 0.0001s
-const CORE_PARSE = String.raw`parse @message /\[INFO\] (?<client>[0-9.]+):\d+ - \d+ \"(?<qtype>\S+) IN (?<qname>\S+?)\.? (?<proto>\S+) \d+ \S+ \d+\" (?<rcode>\S+) \S+ \d+ (?<dur>[\d.]+)s/ | filter ispresent(qname)`;
+// 주의: @message는 원시 JSON 텍스트라 내부 따옴표가 \" 로 이스케이프되어 있음 —
+// 정규식은 리터럴 백슬래시+따옴표(\\")를 매칭해야 함 (\"만 쓰면 0행, 라이브 실측).
+const CORE_PARSE = String.raw`parse @message /\[INFO\] (?<client>[0-9.]+):\d+ - \d+ \\"(?<qtype>\S+) IN (?<qname>\S+?)\.? (?<proto>\S+) \d+ \S+ \d+\\" (?<rcode>\S+) \S+ \d+ (?<dur>[\d.]+)s/ | filter ispresent(qname)`;
 
 export interface CoreDnsAnalytics {
   totals: { total: number; nxdomain: number; servfail: number; p50Ms: number | null; p95Ms: number | null };
