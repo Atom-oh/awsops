@@ -205,7 +205,7 @@ export default function DnsQueryPage() {
             {onboarded && (
               <Card
                 title="쿼리 로그 분석"
-                subtitle="Logs Insights 집계 쿼리 7종 병렬 실행 — 로그 그룹·기간 변경 시 자동 재조회"
+                subtitle="Logs Insights 집계 쿼리 8종 병렬 실행 — 로그 그룹·기간 변경 시 자동 재조회"
                 right={<RangePicker value={range} onChange={setRange} />}
                 padded={false}
               >

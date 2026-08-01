@@ -473,7 +473,7 @@ export const TERMS: Record<string, Pair> = {
   'Route53 Resolver query logging 미구성': { en: 'Route53 Resolver query logging not configured', zh: '未配置 Route53 Resolver 查询日志', ja: 'Route53 Resolver query logging が未構成' },
   'Route53 Resolver query logging을 CloudWatch Logs 대상으로 구성하면 DNS 쿼리 로그 분석이 활성화됩니다. S3/Kinesis Data Firehose 대상은 Logs Insights로 조회할 수 없어 분석에 사용할 수 없습니다.': { en: 'Configure Route53 Resolver query logging with a CloudWatch Logs destination to enable DNS query log analysis. S3/Kinesis Data Firehose destinations cannot be queried with Logs Insights and are not usable for analysis.', zh: '将 Route53 Resolver 查询日志配置为 CloudWatch Logs 目标后即可启用 DNS 查询日志分析。S3/Kinesis Data Firehose 目标无法通过 Logs Insights 查询，无法用于分析。', ja: 'Route53 Resolver query logging を CloudWatch Logs 宛先で構成すると DNS クエリログ分析が有効になります。S3/Kinesis Data Firehose 宛先は Logs Insights で照会できないため分析には使用できません。' },
   '쿼리 로그 분석': { en: 'Query log analysis', zh: '查询日志分析', ja: 'クエリログ分析' },
-  'Logs Insights 집계 쿼리 7종 병렬 실행 — 로그 그룹·기간 변경 시 자동 재조회': { en: 'Runs 7 Logs Insights aggregation queries in parallel — auto-refreshes when the log group or range changes', zh: '并行执行 7 个 Logs Insights 聚合查询 — 更改日志组或时间范围时自动重新查询', ja: 'Logs Insights 集計クエリ 7 種を並列実行 — ロググループ・期間の変更時に自動再取得' },
+  'Logs Insights 집계 쿼리 8종 병렬 실행 — 로그 그룹·기간 변경 시 자동 재조회': { en: 'Runs 8 Logs Insights aggregation queries in parallel — auto-refreshes when the log group or range changes', zh: '并行执行 8 个 Logs Insights 聚合查询 — 更改日志组或时间范围时自动重新查询', ja: 'Logs Insights 集計クエリ 8 種を並列実行 — ロググループ・期間の変更時に自動再取得' },
   'Logs Insights 집계 중…': { en: 'Aggregating with Logs Insights…', zh: 'Logs Insights 聚合中…', ja: 'Logs Insights 集計中…' },
   '쿼리': { en: 'queries', zh: '查询', ja: 'クエリ' },
   '집계 실패': { en: 'Aggregation failed', zh: '聚合失败', ja: '集計失敗' },
