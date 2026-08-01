@@ -1,5 +1,5 @@
 import { verifyUser } from '@/lib/auth';
-import { dnsLogStatus } from '@/lib/dns-logs';
+import { dnsLogStatus, coreDnsGroups } from '@/lib/dns-logs';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,8 +10,13 @@ export async function GET(request: Request) {
     return Response.json({ status: 'error', message: 'unauthenticated' }, { status: 401 });
   }
   try {
-    return Response.json(await dnsLogStatus());
+    // CoreDNS(CI application 로그)는 별개 소스 — 한쪽 실패가 다른 쪽을 가리지 않게 개별 degrade.
+    const [status, coredns] = await Promise.all([
+      dnsLogStatus(),
+      coreDnsGroups().catch(() => []),
+    ]);
+    return Response.json({ ...status, coredns });
   } catch (e) {
-    return Response.json({ configs: [], groups: [], error: e instanceof Error ? e.message : String(e) });
+    return Response.json({ configs: [], groups: [], coredns: [], error: e instanceof Error ? e.message : String(e) });
   }
 }

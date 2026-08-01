@@ -7,6 +7,7 @@ vi.mock('@aws-sdk/client-cloudwatch-logs', () => ({
   StartQueryCommand: class { constructor(public input: unknown) {} },
   GetQueryResultsCommand: class { constructor(public input: unknown) {} },
   StopQueryCommand: class { constructor(public input: unknown) {} },
+  DescribeLogGroupsCommand: class { constructor(public input: unknown) {} },
 }));
 vi.mock('@aws-sdk/client-route53resolver', () => ({
   Route53ResolverClient: class { send = r53Send; },
@@ -205,5 +206,124 @@ describe('dnsAnalytics', () => {
       .filter((q) => q.includes('bin('));
     expect(timelineQueries).toHaveLength(1);
     expect(timelineQueries[0]).toContain('bin(120s)');
+  });
+});
+
+// ── coreDnsGroups ─────────────────────────────────────────────────────────────
+
+describe('coreDnsGroups', () => {
+  it("keeps only '/aws/containerinsights/<cluster>/application' groups and parses cluster", async () => {
+    logsSend.mockResolvedValue({
+      logGroups: [
+        { logGroupName: '/aws/containerinsights/prod-eks/application' },
+        { logGroupName: '/aws/containerinsights/prod-eks/performance' },
+        { logGroupName: '/aws/containerinsights/prod-eks/dataplane' },
+        { logGroupName: '/aws/containerinsights/dev-eks/application' },
+        { logGroupName: '/aws/containerinsights/dev-eks/host' },
+      ],
+    });
+    const { coreDnsGroups } = await import('./dns-logs');
+    expect(await coreDnsGroups()).toEqual([
+      { cluster: 'prod-eks', group: '/aws/containerinsights/prod-eks/application' },
+      { cluster: 'dev-eks', group: '/aws/containerinsights/dev-eks/application' },
+    ]);
+    const cmd = logsSend.mock.calls[0][0] as Cmd;
+    expect(cmd.constructor.name).toBe('DescribeLogGroupsCommand');
+    expect(cmd.input.logGroupNamePrefix).toBe('/aws/containerinsights/');
+  });
+
+  it('caches: second call sends no additional commands', async () => {
+    logsSend.mockResolvedValue({ logGroups: [] });
+    const { coreDnsGroups } = await import('./dns-logs');
+    await coreDnsGroups();
+    await coreDnsGroups();
+    expect(logsSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── coreDnsAnalytics fixtures ─────────────────────────────────────────────────
+// Same dispatch idea as dnsAnalytics: 4 parallel Insights queries, routed by
+// query-string keyword. All CoreDNS queries share the CORE_PARSE prefix, so the
+// keywords must come from each query's stats/by clause, not the parse pattern.
+function coreQueryKey(q: string): string {
+  if (q.includes('percentile')) return 'totals';
+  if (q.includes('by rcode')) return 'rcode';
+  if (q.includes('by qname')) return 'topDomains';
+  if (q.includes('bin(')) return 'timeline';
+  throw new Error(`unrecognized CoreDNS query: ${q}`);
+}
+
+const coreResultsByKey: Record<string, { field: string; value: string }[][]> = {
+  // percentile(dur, N) comes back as a fractional-seconds string
+  totals: [[f('total', '5000'), f('p50', '0.000107'), f('p95', '0.004215')]],
+  rcode: [
+    [f('rcode', 'NOERROR'), f('cnt', '4000')],
+    [f('rcode', 'NXDOMAIN'), f('cnt', '800')],
+    [f('rcode', 'SERVFAIL'), f('cnt', '200')],
+  ],
+  topDomains: [[f('qname', 'kubernetes.default.svc.cluster.local'), f('cnt', '1200')]],
+  timeline: [
+    [f('t', '2026-08-01 10:00:00.000'), f('cnt', '50')],
+    [f('t', '2026-08-01 10:02:00.000'), f('cnt', '60')],
+  ],
+};
+
+function mockCoreInsights(failKeys: string[] = [], results = coreResultsByKey) {
+  logsSend.mockImplementation(async (cmd: Cmd) => {
+    switch (cmd.constructor.name) {
+      case 'StartQueryCommand':
+        return { queryId: `q-${coreQueryKey(String(cmd.input.queryString))}` };
+      case 'GetQueryResultsCommand': {
+        const key = String(cmd.input.queryId).slice(2);
+        if (failKeys.includes(key)) return { status: 'Failed' };
+        return { status: 'Complete', results: results[key] ?? [] };
+      }
+      case 'StopQueryCommand':
+        return {};
+      default:
+        throw new Error(`unexpected command ${cmd.constructor.name}`);
+    }
+  });
+}
+
+describe('coreDnsAnalytics', () => {
+  const GROUP = '/aws/containerinsights/prod-eks/application';
+
+  it('normalizes totals with percentile sec→ms conversion, rcode extraction, topDomains, timeline', async () => {
+    mockCoreInsights();
+    const { coreDnsAnalytics } = await import('./dns-logs');
+    const a = await coreDnsAnalytics(GROUP, 3600);
+
+    // '0.000107' s → 0.107 ms, '0.004215' s → 4.215 ms
+    expect(a.totals).toEqual({ total: 5000, nxdomain: 800, servfail: 200, p50Ms: 0.107, p95Ms: 4.215 });
+    expect(a.rcode).toEqual([
+      { name: 'NOERROR', value: 4000 },
+      { name: 'NXDOMAIN', value: 800 },
+      { name: 'SERVFAIL', value: 200 },
+    ]);
+    expect(a.topDomains).toEqual([{ name: 'kubernetes.default.svc.cluster.local', value: 1200 }]);
+    expect(a.timeline).toEqual([
+      { t: '2026-08-01 10:00:00.000', value: 50 },
+      { t: '2026-08-01 10:02:00.000', value: 60 },
+    ]);
+    expect(a.failed).toEqual([]);
+  });
+
+  it('maps empty/absent percentiles to null (no traffic → no latency claim)', async () => {
+    // p50 present but empty string, p95 field absent entirely — both → null
+    mockCoreInsights([], { ...coreResultsByKey, totals: [[f('total', '10'), f('p50', '')]] });
+    const { coreDnsAnalytics } = await import('./dns-logs');
+    const a = await coreDnsAnalytics(GROUP, 3600);
+    expect(a.totals).toEqual({ total: 10, nxdomain: 800, servfail: 200, p50Ms: null, p95Ms: null });
+  });
+
+  it('degrades a Failed query to empty + failed key, others stay intact', async () => {
+    mockCoreInsights(['timeline']);
+    const { coreDnsAnalytics } = await import('./dns-logs');
+    const a = await coreDnsAnalytics(GROUP, 3600);
+    expect(a.failed).toEqual(['timeline']);
+    expect(a.timeline).toEqual([]);
+    expect(a.totals).toEqual({ total: 5000, nxdomain: 800, servfail: 200, p50Ms: 0.107, p95Ms: 4.215 });
+    expect(a.topDomains).toHaveLength(1);
   });
 });

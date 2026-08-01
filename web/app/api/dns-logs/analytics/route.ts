@@ -1,5 +1,5 @@
 import { verifyUser } from '@/lib/auth';
-import { dnsLogStatus, dnsAnalytics } from '@/lib/dns-logs';
+import { dnsLogStatus, dnsAnalytics, coreDnsGroups, coreDnsAnalytics } from '@/lib/dns-logs';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // Logs Insights 병렬 쿼리 폴링
@@ -15,12 +15,20 @@ export async function GET(request: Request) {
   const group = url.searchParams.get('group') ?? '';
   const rangeRaw = Number(url.searchParams.get('range') ?? 3600);
   const range = RANGE_ALLOWED.includes(rangeRaw) ? rangeRaw : 3600;
-  const status = await dnsLogStatus().catch(() => ({ configs: [], groups: [] as string[] }));
-  if (!status.groups.includes(group)) {
-    return Response.json({ status: 'error', message: 'unknown log group' }, { status: 404 });
-  }
+  const source = url.searchParams.get('source') ?? 'resolver';
   try {
-    return Response.json({ group, range, ...(await dnsAnalytics(group, range)) });
+    if (source === 'coredns') {
+      const groups = await coreDnsGroups().catch(() => []);
+      if (!groups.some((g) => g.group === group)) {
+        return Response.json({ status: 'error', message: 'unknown log group' }, { status: 404 });
+      }
+      return Response.json({ source, group, range, ...(await coreDnsAnalytics(group, range)) });
+    }
+    const status = await dnsLogStatus().catch(() => ({ configs: [], groups: [] as string[] }));
+    if (!status.groups.includes(group)) {
+      return Response.json({ status: 'error', message: 'unknown log group' }, { status: 404 });
+    }
+    return Response.json({ source, group, range, ...(await dnsAnalytics(group, range)) });
   } catch (e) {
     return Response.json({ status: 'error', message: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }

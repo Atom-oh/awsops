@@ -11,16 +11,19 @@ import AreaTrend from '@/components/charts/AreaTrend';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import HBarList from '@/components/charts/HBarList';
 import { useI18n } from '@/components/shell/LanguageProvider';
-import type { DnsAnalytics, DnsLogConfig } from '@/lib/dns-logs';
+import type { CoreDnsAnalytics, CoreDnsGroup, DnsAnalytics, DnsLogConfig } from '@/lib/dns-logs';
 
 // /dns-query — Route53 Resolver query logging 기반 DNS 쿼리 로그 분석.
 // 데이터 계층은 lib/dns-logs.ts(Logs Insights 집계 + TTL 캐시)가 담당하고, 이 페이지는
 // GET /api/dns-logs(상태 게이트) + GET /api/dns-logs/analytics(집계)만 소비한다.
 // 쿼리 로그 설정이 없거나 CW Logs 대상이 아니면 온보딩 안내로 degrade (분석 패널 숨김).
+// CoreDNS(EKS 내부 DNS, CI application 로그)는 별개 소스 — Resolver와 독립적으로 렌더하고
+// '리졸버 비교' 카드에서 같은 range로 나란히 본다 (nfm-dashboard G3 패리티).
 
 interface StatusResp {
   configs: DnsLogConfig[];
   groups: string[];
+  coredns?: CoreDnsGroup[];
   error?: string;
 }
 type AnalyticsResp = DnsAnalytics & { group: string; range: number };
@@ -48,6 +51,24 @@ type Nv = { name: string; value: number };
 type SourceRow = DnsAnalytics['topSources'][number];
 type FirewallRow = DnsAnalytics['firewall'][number];
 
+// 리졸버 비교 행 — Resolver 1행 + CoreDNS 클러스터별 행. Resolver는 per-query latency가
+// 로그에 없어 p50/p95를 null로 두고 '—'로 정직 표기 (0ms로 조작하지 않음).
+interface CompareRow {
+  key: string;
+  source: string;
+  total: number | null;
+  /** (NXDOMAIN+SERVFAIL)/total % — null이면 데이터 없음. */
+  failRate: number | null;
+  p50: number | null;
+  p95: number | null;
+  resolver?: boolean;
+  /** 해당 클러스터 analytics fetch 실패 — 행은 유지하고 '조회 실패'로 표기. */
+  error?: boolean;
+}
+
+const fmtMs = (v: number): string => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+const fmtPct = (v: number): string => `${v >= 1 ? v.toFixed(1) : v.toFixed(2)}%`;
+
 export default function DnsQueryPage() {
   const { tt } = useI18n();
   const [status, setStatus] = useState<StatusResp | null>(null);
@@ -57,6 +78,10 @@ export default function DnsQueryPage() {
   const [analytics, setAnalytics] = useState<AnalyticsResp | null>(null);
   const [busy, setBusy] = useState(false);
   const [queryErr, setQueryErr] = useState('');
+  // CoreDNS: 클러스터 로그 그룹 → analytics ('error' = 해당 클러스터만 조회 실패)
+  const [coreMap, setCoreMap] = useState<Record<string, CoreDnsAnalytics | 'error'>>({});
+  const [coreBusy, setCoreBusy] = useState(false);
+  const [coreSel, setCoreSel] = useState('');
 
   // 상태 게이트 로드 (query-log config + CW 로그 그룹 대상 목록)
   useEffect(() => {
@@ -89,6 +114,29 @@ export default function DnsQueryPage() {
     return () => { alive = false; };
   }, [group, range]);
 
+  // CoreDNS: 클러스터별 analytics 병렬 fetch — 개별 실패는 'error'로 해당 행만 degrade,
+  // range 변경 중에는 이전 결과 유지 (Resolver 패널과 동일 정책).
+  useEffect(() => {
+    const cds = status?.coredns ?? [];
+    if (!cds.length) return;
+    setCoreSel((prev) => (prev && cds.some((c) => c.group === prev) ? prev : cds[0].group));
+    let alive = true;
+    setCoreBusy(true);
+    Promise.all(cds.map(async (c): Promise<readonly [string, CoreDnsAnalytics | 'error']> => {
+      try {
+        const r = await fetch(`/api/dns-logs/analytics?source=coredns&group=${encodeURIComponent(c.group)}&range=${range}`);
+        const d = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(d?.message ?? `HTTP ${r.status}`);
+        return [c.group, d as CoreDnsAnalytics] as const;
+      } catch {
+        return [c.group, 'error'] as const;
+      }
+    }))
+      .then((entries) => { if (alive) setCoreMap(Object.fromEntries(entries)); })
+      .finally(() => { if (alive) setCoreBusy(false); });
+    return () => { alive = false; };
+  }, [status, range]);
+
   const configs = status?.configs ?? [];
   const groups = status?.groups ?? [];
   const vpcCount = configs.reduce((s, c) => s + c.associationCount, 0);
@@ -98,6 +146,12 @@ export default function DnsQueryPage() {
   const a = analytics;
   const nxRate = a && a.totals.total > 0 ? (a.totals.nxdomain / a.totals.total) * 100 : 0;
   const nxRateLabel = `${nxRate >= 1 ? nxRate.toFixed(1) : nxRate.toFixed(2)}%`;
+
+  // CoreDNS derived — 상세 카드는 셀렉트로 고른 클러스터 하나만 그린다.
+  const coredns = status?.coredns ?? [];
+  const cd = coreSel ? coreMap[coreSel] : undefined;
+  const cdData = cd && cd !== 'error' ? cd : null;
+  const cdNxRate = cdData && cdData.totals.total > 0 ? (cdData.totals.nxdomain / cdData.totals.total) * 100 : 0;
 
   const timelineData = useMemo(
     () => (a?.timeline ?? []).map((p) => ({ t: fmtBin(p.t, a?.range ?? 3600), value: p.value })),
@@ -152,6 +206,67 @@ export default function DnsQueryPage() {
       render: (r) => <span className="tabular">{r.value.toLocaleString()}</span>,
     },
   ], [tt]);
+
+  // ── 리졸버 비교 (CoreDNS vs Route53 Resolver) — nfm-dashboard G3 패리티 ──
+  const latencyNote = tt('Resolver 쿼리 로그에는 per-query latency가 없음 — 0ms로 조작하지 않고 미표기');
+  const failTitle = tt('(NXDOMAIN+SERVFAIL) / 전체 쿼리 — 30% 초과는 쿠버네티스 ndots:5 검색 도메인 확장 프로브일 가능성이 높습니다');
+
+  const compareCols = useMemo<MetricCol<CompareRow>[]>(() => {
+    const pCol = (key: 'p50' | 'p95'): MetricCol<CompareRow> => ({
+      key, label: `${key} (ms)`, type: 'num',
+      value: (r) => r[key],
+      render: (r) => {
+        if (r.resolver) return <span title={latencyNote}>—</span>;
+        const v = r[key];
+        return v == null ? '—' : <span className="tabular">{fmtMs(v)}</span>;
+      },
+    });
+    return [
+      { key: 'source', label: tt('소스'), mono: true, value: (r) => r.source },
+      {
+        key: 'total', label: tt('쿼리 수'), type: 'num',
+        value: (r) => r.total,
+        render: (r) => r.error
+          ? <span className="text-rose-600">{tt('조회 실패')}</span>
+          : r.total == null ? '—' : <span className="tabular">{r.total.toLocaleString()}</span>,
+      },
+      {
+        key: 'fail', label: tt('실패율'), type: 'num', title: failTitle,
+        value: (r) => r.failRate,
+        danger: (r) => r.failRate != null && r.failRate > 30,
+        render: (r) => (r.failRate == null ? '—' : <span className="tabular">{fmtPct(r.failRate)}</span>),
+      },
+      pCol('p50'),
+      pCol('p95'),
+    ];
+  }, [tt, latencyNote, failTitle]);
+
+  // Resolver 행 수치는 페이지가 이미 가진 analytics totals 재사용 (재조회 없음).
+  const compareRows = useMemo<CompareRow[]>(() => {
+    const rows: CompareRow[] = [{
+      key: 'resolver', source: 'Route53 Resolver',
+      total: a ? a.totals.total : null,
+      failRate: a && a.totals.total > 0 ? ((a.totals.nxdomain + a.totals.servfail) / a.totals.total) * 100 : null,
+      p50: null, p95: null, resolver: true,
+    }];
+    for (const c of status?.coredns ?? []) {
+      const d = coreMap[c.group];
+      if (d && d !== 'error') {
+        const t = d.totals;
+        rows.push({
+          key: c.group, source: `CoreDNS · ${c.cluster}`, total: t.total,
+          failRate: t.total > 0 ? ((t.nxdomain + t.servfail) / t.total) * 100 : null,
+          p50: t.p50Ms, p95: t.p95Ms,
+        });
+      } else {
+        rows.push({
+          key: c.group, source: `CoreDNS · ${c.cluster}`,
+          total: null, failRate: null, p50: null, p95: null, error: d === 'error',
+        });
+      }
+    }
+    return rows;
+  }, [a, status, coreMap]);
 
   return (
     <>
@@ -324,6 +439,86 @@ export default function DnsQueryPage() {
                     </Card>
                   )}
                 </div>
+              </>
+            )}
+
+            {/* ── CoreDNS 소스 (EKS 내부 DNS) — Resolver 온보딩과 독립 렌더 ── */}
+            {coredns.length === 0 ? (
+              <div className="text-[12.5px] text-ink-400">
+                {tt('CoreDNS 분석은 Container Insights application 로그와 CoreDNS log 플러그인 구성이 필요합니다.')}
+              </div>
+            ) : (
+              <>
+                {/* 리졸버 비교 — 페이지 range 공유. Resolver의 p50/p95는 '—' 고정 (latencyNote). */}
+                <Card
+                  title="리졸버 비교 (CoreDNS vs Route53 Resolver)"
+                  subtitle="동일 기간의 쿼리 볼륨·실패율·지연 비교 — Resolver 쿼리 로그에는 per-query latency가 없어 지연은 CoreDNS만 표기"
+                  right={!onboarded ? <RangePicker value={range} onChange={setRange} /> : undefined}
+                  padded={false}
+                >
+                  {coreBusy && (
+                    <div className="px-4 py-2">
+                      <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-brand-700">
+                        <Loader2 size={13} className="animate-spin" />
+                        {tt('CoreDNS 집계 중…')}
+                      </span>
+                    </div>
+                  )}
+                  <MetricTable columns={compareCols} items={compareRows} rowKey={(r) => r.key} />
+                </Card>
+
+                {/* CoreDNS 상세 — 클러스터 셀렉트 + 요약 수치 + ndots 힌트 */}
+                <Card
+                  title="CoreDNS 상세"
+                  subtitle="Container Insights application 로그의 CoreDNS log 플러그인 라인 집계"
+                  right={
+                    <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
+                      {tt('클러스터')}
+                      <select className={SELECT_CLS} value={coreSel} onChange={(e) => setCoreSel(e.target.value)}>
+                        {coredns.map((c) => <option key={c.group} value={c.group}>{c.cluster}</option>)}
+                      </select>
+                    </label>
+                  }
+                  padded={false}
+                >
+                  {cd === 'error' && (
+                    <div className="px-4 py-3 text-[12px] text-rose-600">{tt('조회 실패')}</div>
+                  )}
+                  {!cd && (
+                    <div className="px-4 py-3 text-[12.5px] text-ink-400">
+                      {coreBusy ? tt('CoreDNS 집계 중…') : tt('데이터 없음')}
+                    </div>
+                  )}
+                  {cdData && (
+                    <>
+                      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 px-4 py-3 text-[12px] text-ink-600">
+                        <span>{tt('쿼리 수')}: <span className="tabular font-medium">{cdData.totals.total.toLocaleString()}</span></span>
+                        <span>NXDOMAIN: <span className="tabular font-medium">{cdData.totals.nxdomain.toLocaleString()}</span> ({fmtPct(cdNxRate)})</span>
+                        <span>SERVFAIL: <span className="tabular font-medium">{cdData.totals.servfail.toLocaleString()}</span></span>
+                        <span>p50: <span className="tabular font-medium">{cdData.totals.p50Ms != null ? `${fmtMs(cdData.totals.p50Ms)}ms` : '—'}</span></span>
+                        <span>p95: <span className="tabular font-medium">{cdData.totals.p95Ms != null ? `${fmtMs(cdData.totals.p95Ms)}ms` : '—'}</span></span>
+                      </div>
+                      {cdData.failed.length > 0 && (
+                        <div className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-700">
+                          {tt('일부 집계 실패')}: <span className="font-mono text-[11.5px]">{cdData.failed.join(', ')}</span>
+                        </div>
+                      )}
+                      {/* 실측: eksworkshop 74%가 ndots 검색 도메인 확장 패턴 */}
+                      {cdNxRate > 30 && (
+                        <div className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-700">
+                          {tt('NXDOMAIN 비율이 높습니다 — 쿠버네티스 ndots:5 검색 도메인 확장 프로브(cluster.local/compute.internal 접미사 시도)일 가능성이 높습니다. 파드의 dnsConfig ndots 조정 또는 FQDN(트레일링 닷) 사용을 검토하세요.')}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </Card>
+
+                {cdData && (
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    <DonutBreakdown title="CoreDNS RCODE 분포" data={cdData.rcode} nameKey="name" valueKey="value" colors={RCODE_COLORS} />
+                    <HBarList title="CoreDNS Top 도메인" data={cdData.topDomains.slice(0, 12)} labelKey="name" valueKey="value" highlightMax />
+                  </div>
+                )}
               </>
             )}
           </>

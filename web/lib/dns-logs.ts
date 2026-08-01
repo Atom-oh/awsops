@@ -149,3 +149,67 @@ export async function dnsAnalytics(group: string, rangeSec: number): Promise<Dns
     };
   });
 }
+
+// ── CoreDNS (EKS 클러스터 내부 DNS) — Container Insights application 로그 ────
+// CoreDNS `log` 플러그인 라인을 Logs Insights `parse`로 서버측 집계한다 (원시 라인
+// fan-out 없음). Resolver 로그에는 per-query latency가 없으므로 지연 비교는 CoreDNS만
+// 실측을 갖고 Resolver는 '—'로 정직 표시 (nfm-dashboard G3 패리티).
+import { DescribeLogGroupsCommand } from '@aws-sdk/client-cloudwatch-logs';
+
+export interface CoreDnsGroup { cluster: string; group: string }
+
+/** /aws/containerinsights/<cluster>/application 로그 그룹 발견 (CI 미설치 클러스터는 자연히 빠짐). */
+export async function coreDnsGroups(): Promise<CoreDnsGroup[]> {
+  return cached('coredns-groups', async () => {
+    const r = await logs().send(new DescribeLogGroupsCommand({ logGroupNamePrefix: '/aws/containerinsights/' }));
+    return (r.logGroups ?? [])
+      .map((g) => g.logGroupName ?? '')
+      .filter((n) => n.endsWith('/application'))
+      .map((n) => ({ cluster: n.split('/')[3] ?? n, group: n }));
+  });
+}
+
+// CoreDNS 쿼리 라인 parse (라이브 검증: CI JSON 래핑 그대로 @message에 매칭).
+// [INFO] ip:port - id "A IN name. udp 94 false 1232" RCODE flags size 0.0001s
+const CORE_PARSE = String.raw`parse @message /\[INFO\] (?<client>[0-9.]+):\d+ - \d+ \"(?<qtype>\S+) IN (?<qname>\S+?)\.? (?<proto>\S+) \d+ \S+ \d+\" (?<rcode>\S+) \S+ \d+ (?<dur>[\d.]+)s/ | filter ispresent(qname)`;
+
+export interface CoreDnsAnalytics {
+  totals: { total: number; nxdomain: number; servfail: number; p50Ms: number | null; p95Ms: number | null };
+  rcode: { name: string; value: number }[];
+  topDomains: { name: string; value: number }[];
+  timeline: { t: string; value: number }[];
+  failed: string[];
+}
+
+/** 한 클러스터 CoreDNS 로그의 집계 분석 (4개 Insights 쿼리 병렬, 개별 실패 degrade). */
+export async function coreDnsAnalytics(group: string, rangeSec: number): Promise<CoreDnsAnalytics> {
+  return cached(`cd|${group}|${rangeSec}`, async () => {
+    const bin = BIN_SEC[rangeSec] ?? 300;
+    const Q: Record<string, string> = {
+      totals: `${CORE_PARSE} | stats count(*) as total, percentile(dur, 50) as p50, percentile(dur, 95) as p95`,
+      rcode: `${CORE_PARSE} | stats count(*) as cnt by rcode | sort cnt desc`,
+      topDomains: `${CORE_PARSE} | stats count(*) as cnt by qname | sort cnt desc | limit 25`,
+      timeline: `${CORE_PARSE} | stats count(*) as cnt by bin(${bin}s) as t | sort t asc`,
+    };
+    const failed: string[] = [];
+    const out: Record<string, Row[]> = {};
+    await Promise.all(Object.entries(Q).map(async ([k, q]) => {
+      try { out[k] = await runInsights(group, q, rangeSec); }
+      catch { out[k] = []; failed.push(k); }
+    }));
+    const rcode = nv(out.rcode ?? [], 'rcode');
+    const find = (n: string) => rcode.find((r) => r.name === n)?.value ?? 0;
+    const t0 = out.totals?.[0];
+    const secToMs = (s: string | undefined) => (s != null && s !== '' ? Math.round(Number(s) * 1e6) / 1000 : null);
+    return {
+      totals: {
+        total: num(t0?.total), nxdomain: find('NXDOMAIN'), servfail: find('SERVFAIL'),
+        p50Ms: secToMs(t0?.p50), p95Ms: secToMs(t0?.p95),
+      },
+      rcode,
+      topDomains: nv(out.topDomains ?? [], 'qname'),
+      timeline: (out.timeline ?? []).filter((r) => r.t).map((r) => ({ t: r.t, value: num(r.cnt) })),
+      failed,
+    };
+  });
+}

@@ -496,6 +496,23 @@ export const TERMS: Record<string, Pair> = {
   '반복적인 NXDOMAIN 급증은 오타·잘못된 설정 또는 DNS 터널링(DGA) 활동의 신호일 수 있습니다': { en: 'Repeated NXDOMAIN spikes may signal typos, misconfiguration, or DNS tunneling (DGA) activity', zh: '反复出现的 NXDOMAIN 激增可能是拼写错误、配置错误或 DNS 隧道（DGA）活动的信号', ja: '繰り返す NXDOMAIN の急増はタイプミス・設定ミス、または DNS トンネリング (DGA) 活動の兆候の可能性があります' },
   '쿼리를 발생시킨 EC2 인스턴스 (srcids.instance)': { en: 'EC2 instance that issued the queries (srcids.instance)', zh: '发起查询的 EC2 实例 (srcids.instance)', ja: 'クエリを発行した EC2 インスタンス (srcids.instance)' },
 
+
+  // ---- DNS Query Logs: CoreDNS comparison ----
+  '리졸버 비교 (CoreDNS vs Route53 Resolver)': { en: 'Resolver comparison (CoreDNS vs Route53 Resolver)', zh: '解析器对比（CoreDNS vs Route53 Resolver）', ja: 'リゾルバー比較（CoreDNS vs Route53 Resolver）' },
+  '동일 기간의 쿼리 볼륨·실패율·지연 비교 — Resolver 쿼리 로그에는 per-query latency가 없어 지연은 CoreDNS만 표기': { en: 'Query volume, failure rate, and latency over the same range — Resolver query logs carry no per-query latency, so latency is shown for CoreDNS only', zh: '同一时段的查询量·失败率·延迟对比 — Resolver 查询日志没有 per-query latency，因此延迟仅显示 CoreDNS', ja: '同一期間のクエリ量・失敗率・レイテンシ比較 — Resolver クエリログには per-query latency がないため、レイテンシは CoreDNS のみ表示' },
+  '소스': { en: 'Source', zh: '来源', ja: 'ソース' },
+  '실패율': { en: 'Failure rate', zh: '失败率', ja: '失敗率' },
+  '(NXDOMAIN+SERVFAIL) / 전체 쿼리 — 30% 초과는 쿠버네티스 ndots:5 검색 도메인 확장 프로브일 가능성이 높습니다': { en: '(NXDOMAIN+SERVFAIL) / total queries — above 30% is most likely Kubernetes ndots:5 search-domain expansion probes', zh: '(NXDOMAIN+SERVFAIL) / 全部查询 — 超过 30% 很可能是 Kubernetes ndots:5 搜索域扩展探测', ja: '(NXDOMAIN+SERVFAIL) / 全クエリ — 30% 超は Kubernetes ndots:5 検索ドメイン展開プローブの可能性が高い' },
+  'Resolver 쿼리 로그에는 per-query latency가 없음 — 0ms로 조작하지 않고 미표기': { en: 'Resolver query logs carry no per-query latency — left blank rather than faking 0ms', zh: 'Resolver 查询日志没有 per-query latency — 不伪造 0ms，留空不显示', ja: 'Resolver クエリログには per-query latency がない — 0ms に偽装せず非表示' },
+  'CoreDNS 상세': { en: 'CoreDNS detail', zh: 'CoreDNS 详情', ja: 'CoreDNS 詳細' },
+  'Container Insights application 로그의 CoreDNS log 플러그인 라인 집계': { en: 'Aggregated CoreDNS log-plugin lines from Container Insights application logs', zh: '聚合 Container Insights application 日志中的 CoreDNS log 插件行', ja: 'Container Insights application ログの CoreDNS log プラグイン行を集計' },
+  '클러스터': { en: 'Cluster', zh: '集群', ja: 'クラスター' },
+  'CoreDNS 집계 중…': { en: 'Aggregating CoreDNS…', zh: 'CoreDNS 聚合中…', ja: 'CoreDNS 集計中…' },
+  'NXDOMAIN 비율이 높습니다 — 쿠버네티스 ndots:5 검색 도메인 확장 프로브(cluster.local/compute.internal 접미사 시도)일 가능성이 높습니다. 파드의 dnsConfig ndots 조정 또는 FQDN(트레일링 닷) 사용을 검토하세요.': { en: 'High NXDOMAIN ratio — most likely Kubernetes ndots:5 search-domain expansion probes (cluster.local/compute.internal suffix attempts). Consider tuning pod dnsConfig ndots or using FQDNs (trailing dot).', zh: 'NXDOMAIN 比例偏高 — 很可能是 Kubernetes ndots:5 搜索域扩展探测（尝试 cluster.local/compute.internal 后缀）。请考虑调整 Pod 的 dnsConfig ndots 或使用 FQDN（结尾加点）。', ja: 'NXDOMAIN 比率が高い — Kubernetes ndots:5 検索ドメイン展開プローブ（cluster.local/compute.internal サフィックス試行）の可能性が高い。Pod の dnsConfig ndots の調整、または FQDN（末尾ドット）の使用を検討してください。' },
+  'CoreDNS 분석은 Container Insights application 로그와 CoreDNS log 플러그인 구성이 필요합니다.': { en: 'CoreDNS analysis requires Container Insights application logs and the CoreDNS log plugin.', zh: 'CoreDNS 分析需要 Container Insights application 日志和 CoreDNS log 插件。', ja: 'CoreDNS 分析には Container Insights application ログと CoreDNS log プラグインの構成が必要です。' },
+  'CoreDNS RCODE 분포': { en: 'CoreDNS RCODE breakdown', zh: 'CoreDNS RCODE 分布', ja: 'CoreDNS RCODE 分布' },
+  'CoreDNS Top 도메인': { en: 'CoreDNS top domains', zh: 'CoreDNS Top 域名', ja: 'CoreDNS Top ドメイン' },
+
 };
 
 // Parameterized patterns — matched AFTER an exact TERMS hit fails.

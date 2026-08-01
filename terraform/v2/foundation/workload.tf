@@ -120,10 +120,12 @@ resource "aws_iam_role_policy" "task_metrics" {
         "networkflowmonitor:GetQueryResultsMonitorTopContributors",
         "networkflowmonitor:StopQueryMonitorTopContributors",
         # /dns-query: Route53 Resolver query-log config discovery + Logs Insights aggregation
+        # (+ DescribeLogGroups: CoreDNS 소스인 CI application 로그 그룹 발견)
         "route53resolver:ListResolverQueryLogConfigs",
         "logs:StartQuery",
         "logs:GetQueryResults",
         "logs:StopQuery",
+        "logs:DescribeLogGroups",
       ]
       Resource = "*"
     }]
