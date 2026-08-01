@@ -7,7 +7,7 @@ import {
   Box, Gauge,
   Server, Zap, Container, Package,
   Archive, HardDrive, Database, Table, DatabaseZap, Search, Radio,
-  Network, Waypoints, BrickWall, Globe, Scale, Split, Webhook, Cable, CloudCog, Route, ListFilter,
+  Network, Waypoints, Locate, BrickWall, Globe, Scale, Split, Webhook, Cable, CloudCog, Route, ListFilter,
   KeyRound, Users, Shield, FileSearch, Bell,
   Stethoscope, // /ai-diagnosis nav (this branch)
   Cpu, Lock, Target, ShieldAlert, Milestone, ChevronRight, Boxes, Layers, Terminal,
@@ -85,7 +85,7 @@ const FEATURE_ICON: Record<string, LucideIcon> = {
   eks: Box,
   'eks-nodes': Server, 'eks-pods': Boxes, 'eks-deployments': Layers,
   'eks-services': Network, 'eks-explorer': Terminal, 'eks-cost': DollarSign,
-  'network-flow': Activity, 'dns-query': FileSearch,
+  'network-flow': Activity, 'dns-query': FileSearch, 'ip-addresses': Locate,
 };
 
 const STORAGE_KEY = 'awsops:nav:expanded';

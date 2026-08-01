@@ -503,6 +503,8 @@ const GROUPS: Record<string, GroupMeta> = {
       { key: 'network-flow', href: '/network-flow', labelKey: 'nav.networkFlow' },
       // DNS Query Log 분석 (Route53 Resolver query logging + Logs Insights)
       { key: 'dns-query', href: '/dns-query', labelKey: 'nav.dnsQuery' },
+      // IP 인벤토리/조회 (ENI + EIP + 파드 IP 조인 — IP→리소스 검색, 미사용 EIP)
+      { key: 'ip-addresses', href: '/ip-addresses', labelKey: 'nav.ipAddresses' },
     ],
     subgroups: [
       { key: 'loadBalancing', labelKey: 'group.network.loadBalancing', types: ['alb', 'nlb', 'target_group', 'alb_listener_rule'] },

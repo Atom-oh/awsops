@@ -126,6 +126,9 @@ resource "aws_iam_role_policy" "task_metrics" {
         "logs:GetQueryResults",
         "logs:StopQuery",
         "logs:DescribeLogGroups",
+        # /ip-addresses: ENI 전량 + EIP 조회 (IP → 리소스 매핑, 미사용 EIP 탐지)
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeAddresses",
       ]
       Resource = "*"
     }]

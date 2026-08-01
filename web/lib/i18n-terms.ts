@@ -513,6 +513,30 @@ export const TERMS: Record<string, Pair> = {
   'CoreDNS RCODE 분포': { en: 'CoreDNS RCODE breakdown', zh: 'CoreDNS RCODE 分布', ja: 'CoreDNS RCODE 分布' },
   'CoreDNS Top 도메인': { en: 'CoreDNS top domains', zh: 'CoreDNS Top 域名', ja: 'CoreDNS Top ドメイン' },
 
+
+  // ---- IP Addresses (/ip-addresses) ----
+  'ENI 전량 + EIP + EKS 파드 IP를 조인해 어떤 IP가 어느 리소스에서 쓰이는지 조회하고, 미사용 public IP(EIP)를 찾습니다': { en: 'Joins every ENI + EIP + EKS pod IP to answer which IP is used by which resource, and surfaces unused public IPs (EIPs)', zh: '联接全部 ENI + EIP + EKS Pod IP，查询每个 IP 被哪个资源使用，并找出未使用的公网 IP（EIP）', ja: '全 ENI + EIP + EKS ポッド IP を結合し、どの IP がどのリソースで使われているかを照会し、未使用のパブリック IP（EIP）を検出します' },
+  'IP 검색 — 예: 10.0.1.23 (부분 일치)': { en: 'Search IP — e.g. 10.0.1.23 (partial match)', zh: '搜索 IP — 例：10.0.1.23（部分匹配）', ja: 'IP 検索 — 例: 10.0.1.23（部分一致）' },
+  '총 ENI': { en: 'Total ENIs', zh: 'ENI 总数', ja: 'ENI 総数' },
+  '미부착 ENI': { en: 'Detached ENIs', zh: '未挂载 ENI', ja: '未アタッチ ENI' },
+  '미사용 EIP': { en: 'Unused EIPs', zh: '未使用 EIP', ja: '未使用 EIP' },
+  '프라이빗 IP': { en: 'Private IPs', zh: '私有 IP', ja: 'プライベート IP' },
+  '유휴 과금 발생': { en: 'Idle charges accruing', zh: '产生闲置费用', ja: 'アイドル課金発生' },
+  '미사용 리소스': { en: 'Unused resources', zh: '未使用资源', ja: '未使用リソース' },
+  '연결 안 된 EIP(유휴 과금) + 미부착(available) ENI': { en: 'Unassociated EIPs (idle charges) + available (detached) ENIs', zh: '未关联的 EIP（闲置费用）+ available（未挂载）ENI', ja: '未関連付け EIP（アイドル課金）+ available（未アタッチ）ENI' },
+  '이상 없음 — 미사용 public IP/ENI 없음': { en: 'All clear — no unused public IPs/ENIs', zh: '无异常 — 没有未使用的公网 IP/ENI', ja: '異常なし — 未使用のパブリック IP/ENI はありません' },
+  '연결 안 된 EIP — 유휴 과금 발생 중': { en: 'Unassociated EIPs — idle charges accruing', zh: '未关联的 EIP — 正在产生闲置费用', ja: '未関連付け EIP — アイドル課金発生中' },
+  '미부착(available) ENI': { en: 'Available (detached) ENIs', zh: 'available（未挂载）ENI', ja: 'available（未アタッチ）ENI' },
+  'ENI 인벤토리': { en: 'ENI inventory', zh: 'ENI 清单', ja: 'ENI インベントリ' },
+  '행 클릭 → 주소·파드·네트워크 상세': { en: 'Click a row → address / pod / network details', zh: '点击行 → 地址·Pod·网络详情', ja: '行クリック → アドレス・ポッド・ネットワーク詳細' },
+  '검색과 일치하는 ENI 없음': { en: 'No ENIs match the search', zh: '没有匹配搜索的 ENI', ja: '検索に一致する ENI なし' },
+  'IP 인벤토리 조회 실패': { en: 'Failed to load IP inventory', zh: 'IP 清单查询失败', ja: 'IP インベントリの取得に失敗' },
+  '미사용 — 유휴 과금 발생': { en: 'Unused — idle charges accruing', zh: '未使用 — 产生闲置费用', ja: '未使用 — アイドル課金発生' },
+  '클릭하여 상세 보기': { en: 'Click to view details', zh: '点击查看详情', ja: 'クリックして詳細を表示' },
+  '프라이빗 IP — 여러 개면 첫 IP + 나머지 개수': { en: 'Private IPs — first IP + count of the rest when multiple', zh: '私有 IP — 多个时显示第一个 IP + 其余数量', ja: 'プライベート IP — 複数の場合は先頭 IP + 残り件数' },
+  '해당 IP를 쓰는 EKS 파드 (VPC CNI 보조 IP 조인)': { en: 'EKS pod using this IP (VPC CNI secondary-IP join)', zh: '使用该 IP 的 EKS Pod（VPC CNI 辅助 IP 联接）', ja: 'この IP を使う EKS ポッド（VPC CNI セカンダリ IP 結合）' },
+  'available = 어디에도 부착되지 않은 ENI': { en: 'available = ENI not attached to anything', zh: 'available = 未挂载到任何资源的 ENI', ja: 'available = どこにもアタッチされていない ENI' },
+
 };
 
 // Parameterized patterns — matched AFTER an exact TERMS hit fails.
