@@ -48,6 +48,8 @@ export interface NfmFlowRow {
   snatIp?: string; dnatIp?: string; targetPort?: number;
   /** traversedConstructs component types, deduped (e.g. TGW / NAT) — 경로 요약 배지용. */
   traversed: string[];
+  /** 상세 패널용 전체 경유 목록 (type:id, 순서 유지). */
+  traversedIds: string[];
 }
 
 // ── TTL cache + in-flight dedupe ────────────────────────────────────────────
@@ -97,12 +99,15 @@ interface RawContributor {
   remoteIp?: string; remoteInstanceId?: string; remoteSubnetId?: string; remoteAz?: string;
   remoteVpcId?: string; remoteRegion?: string;
   snatIp?: string; dnatIp?: string; targetPort?: number; value?: number;
-  traversedConstructs?: { componentType?: string; serviceName?: string }[];
+  traversedConstructs?: { componentId?: string; componentType?: string; serviceName?: string }[];
   kubernetesMetadata?: {
     localPodName?: string; localPodNamespace?: string; localServiceName?: string;
     remotePodName?: string; remotePodNamespace?: string; remoteServiceName?: string;
   };
 }
+
+// CFN 타입 접두사를 줄여 배지/상세를 읽기 쉽게: 'AWS::EC2::NetworkInterface' → 'NetworkInterface'.
+const shortType = (t?: string): string | undefined => (t ? t.split('::').pop() : undefined);
 
 // 라이브 API는 빈 필드를 ''로 채워 반환한다(예: remotePodName: "") — undefined로 정규화.
 const nz = (s?: string): string | undefined => (s ? s : undefined);
@@ -122,7 +127,10 @@ function toRow(r: RawContributor, category: NfmCategory, unit: string): NfmFlowR
     },
     value: r.value ?? 0, unit, category,
     snatIp: nz(r.snatIp), dnatIp: nz(r.dnatIp), targetPort: r.targetPort,
-    traversed: [...new Set((r.traversedConstructs ?? []).map((t) => t.componentType ?? t.serviceName ?? '').filter(Boolean))],
+    traversed: [...new Set((r.traversedConstructs ?? []).map((t) => shortType(t.componentType) ?? t.serviceName ?? '').filter(Boolean))],
+    traversedIds: (r.traversedConstructs ?? [])
+      .map((t) => [shortType(t.componentType) ?? t.serviceName, t.componentId].filter(Boolean).join(':'))
+      .filter(Boolean),
   };
 }
 

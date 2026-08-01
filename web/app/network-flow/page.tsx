@@ -5,6 +5,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 import StatTile from '@/components/ui/StatTile';
 import Badge from '@/components/ui/Badge';
+import DetailPanel from '@/components/ui/DetailPanel';
 import MetricTable, { type MetricCol } from '@/components/inventory/metrics/MetricTable';
 import { RangePicker, dash } from '@/components/inventory/metrics/shared';
 import { useI18n } from '@/components/shell/LanguageProvider';
@@ -67,6 +68,31 @@ function EndpointCell({ e }: { e: NfmEndpoint }) {
   return <span title={epTitle(e)}>{label}</span>;
 }
 
+/** 상세 패널용 flat 뷰 — 빈 필드는 제외 (DetailPanel이 키/값 + 복사 버튼을 렌더). */
+function flowDetail(r: NfmFlowRow, unitLabel: string): Record<string, unknown> {
+  const ep = (p: 'local' | 'remote', e: NfmEndpoint): Record<string, unknown> => ({
+    [`${p}_pod`]: e.podName ? `${e.podNamespace ?? '-'}/${e.podName}` : undefined,
+    [`${p}_service`]: e.serviceName,
+    [`${p}_instance`]: e.instanceId,
+    [`${p}_ip`]: e.ip,
+    [`${p}_az`]: e.az,
+    [`${p}_subnet`]: e.subnetId,
+    [`${p}_vpc`]: e.vpcId,
+    [`${p}_region`]: e.region,
+  });
+  const all: Record<string, unknown> = {
+    category: r.category,
+    value: `${fmtValue(r.value, unitLabel)} (${Math.round(r.value).toLocaleString()} ${unitLabel})`,
+    target_port: r.targetPort,
+    ...ep('local', r.local),
+    ...ep('remote', r.remote),
+    snat_ip: r.snatIp,
+    dnat_ip: r.dnatIp,
+    traversed_path: r.traversedIds.length ? r.traversedIds.join(' → ') : undefined,
+  };
+  return Object.fromEntries(Object.entries(all).filter(([, v]) => v != null && v !== ''));
+}
+
 const SELECT_CLS = 'rounded-md border border-ink-200 bg-card px-2 py-1 text-[12px] text-ink-600';
 
 export default function NetworkFlowPage() {
@@ -81,6 +107,7 @@ export default function NetworkFlowPage() {
   const [result, setResult] = useState<QueryResp | null>(null);
   const [busy, setBusy] = useState(false);
   const [queryErr, setQueryErr] = useState('');
+  const [selected, setSelected] = useState<NfmFlowRow | null>(null);
 
   // 상태 게이트 로드 (모니터 목록 + scope 수 + 셀렉트 enum)
   useEffect(() => {
@@ -101,7 +128,7 @@ export default function NetworkFlowPage() {
   useEffect(() => {
     if (!monitor) return;
     let alive = true;
-    setBusy(true); setQueryErr('');
+    setBusy(true); setQueryErr(''); setSelected(null);
     const qs = `monitor=${encodeURIComponent(monitor)}&metric=${metric}&category=${category}&range=${range}`;
     fetch(`/api/nfm/query?${qs}`)
       .then(async (r) => {
@@ -279,6 +306,7 @@ export default function NetworkFlowPage() {
                     rowKey={(r, i) => `${i}|${epLabel(r.local) ?? ''}|${epLabel(r.remote) ?? ''}|${r.targetPort ?? ''}`}
                     defaultSortKey="value"
                     emptyText="해당 기간/카테고리에 플로우 없음"
+                    onRowClick={setSelected}
                   />
                 ) : (
                   <div className="px-4 py-8 text-center text-[12.5px] text-ink-400">
@@ -290,6 +318,12 @@ export default function NetworkFlowPage() {
           </>
         )}
       </div>
+
+      <DetailPanel
+        title={selected ? `${epLabel(selected.local) ?? '?'} ↔ ${epLabel(selected.remote) ?? '?'}` : undefined}
+        data={selected ? flowDetail(selected, selected.unit) : null}
+        onClose={() => setSelected(null)}
+      />
     </>
   );
 }

@@ -92,6 +92,26 @@ export default function EksFleetCostPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Pod별 NFM 전송비용 (24h — 테이블의 '일간' 기준과 정합): cluster|ns/pod → est USD.
+  // 미온보딩 클러스터/실패는 조용히 빠지고 해당 셀은 '—' (best-effort, 테이블을 막지 않음).
+  const [xfer, setXfer] = useState<Map<string, number> | null>(null);
+  useEffect(() => {
+    if (clusterNames.length === 0) return;
+    let live = true;
+    Promise.all(clusterNames.map(async (cluster) => {
+      try {
+        const r = await fetch(`/api/eks/${encodeURIComponent(cluster)}/pod-transfer?range=86400`);
+        if (!r.ok) return [] as [string, number][];
+        const d = await r.json();
+        if (!d.available) return [] as [string, number][];
+        return (d.pods as { podName: string | null; namespace: string | null; estUsd: number }[])
+          .filter((p) => p.podName)
+          .map((p): [string, number] => [`${cluster}|${p.namespace ?? ''}/${p.podName}`, p.estUsd]);
+      } catch { return [] as [string, number][]; }
+    })).then((entries) => { if (live) setXfer(new Map(entries.flat())); });
+    return () => { live = false; };
+  }, [clusterNames]);
+
   // 새로고침으로 클러스터 목록이 바뀌어 선택이 무효가 되면 '전체'로 복귀.
   useEffect(() => {
     if (sel !== ALL && results && !results.some((r) => r.cluster === sel)) setSel(ALL);
@@ -174,14 +194,21 @@ export default function EksFleetCostPage() {
     ...(merged.hasNetwork ? [{ key: 'net_h', label: 'Network' }] : []),
     ...(merged.hasPv ? [{ key: 'pv_h', label: 'Storage(PV)' }] : []),
     ...(merged.hasGpu ? [{ key: 'gpu_h', label: 'GPU' }] : []),
+    // NFM 전송비용(24h 추정, 방향당 $0.01/GB) — 온보딩된 클러스터가 있을 때만 컬럼 노출.
+    ...(xfer && xfer.size > 0 ? [{ key: 'xfer_h', label: 'Transfer (NFM)' }] : []),
     { key: 'total_h', label: 'Total/Day' },
   ];
-  const rows = filteredPods.map((p) => ({
-    cluster: p.cluster, namespace: p.namespace, pod: p.pod, node: p.node,
-    cpu_h: usd(p.cpuCost), ram_h: usd(p.ramCost), net_h: usd(p.networkCost),
-    pv_h: usd(p.pvCost), gpu_h: usd(p.gpuCost), total_h: usd(p.totalCost),
-    _raw: p as unknown as Record<string, unknown>,
-  }));
+  // NFM 추정치는 센트 미만이 흔함 — $0.01 미만은 4자리로 표기해 전부 $0.00으로 뭉개지지 않게.
+  const xferUsd = (v: number | undefined) => (v == null ? '—' : v >= 0.01 ? usd(v) : `$${v.toFixed(4)}`);
+  const rows = filteredPods.map((p) => {
+    const x = xfer?.get(`${p.cluster}|${p.namespace}/${p.pod}`);
+    return {
+      cluster: p.cluster, namespace: p.namespace, pod: p.pod, node: p.node,
+      cpu_h: usd(p.cpuCost), ram_h: usd(p.ramCost), net_h: usd(p.networkCost),
+      pv_h: usd(p.pvCost), gpu_h: usd(p.gpuCost), xfer_h: xferUsd(x), total_h: usd(p.totalCost),
+      _raw: { ...p, nfmTransferUsd24h: x ?? null } as unknown as Record<string, unknown>,
+    };
+  });
 
   const segOptions = useMemo(() => [ALL, ...(results ?? []).map((r) => r.cluster)], [results]);
   const anyEstimate = scoped.some((r) => r.data.source === 'request-estimate');
