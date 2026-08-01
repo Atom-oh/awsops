@@ -17,6 +17,8 @@ import type { NfmCategory, PodTransferResult, PodTransferRow } from '@/lib/nfm';
 // 타입은 lib/nfm에서 `import type`으로만 가져온다 (AWS SDK가 클라이언트 번들에 안 들어가게).
 
 const OTHER_CATEGORIES: readonly NfmCategory[] = ['INTER_REGION', 'AMAZON_S3', 'AMAZON_DYNAMODB', 'UNCLASSIFIED'];
+// NFM 모니터 쿼리 한도: 최대 1시간 윈도우 → 프리셋을 15m/30m/1h로 제한.
+const NFM_RANGES = [['15m', 900], ['30m', 1800], ['1h', 3600]] as const;
 
 const fmtBytes = (n: number): string => {
   if (!Number.isFinite(n) || n < 1) return '0 B';
@@ -112,7 +114,7 @@ export default function PodTransferSection({ clusters }: { clusters: string[] })
           <select value={cluster} onChange={(e) => setCluster(e.target.value)} className={selectCls} aria-label="Cluster">
             {clusters.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
-          <RangePicker value={rangeSec} onChange={setRangeSec} />
+          <RangePicker value={rangeSec} onChange={setRangeSec} ranges={NFM_RANGES} />
         </div>
       }
     >

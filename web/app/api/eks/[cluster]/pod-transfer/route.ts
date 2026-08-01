@@ -5,7 +5,8 @@ import { nfmPodTransfer } from '@/lib/nfm';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // 카테고리별 NFM 쿼리 병렬 폴링
 
-const RANGE_ALLOWED = [3600, 21600, 86400, 604800];
+// NFM 모니터 쿼리는 최대 1시간 윈도우 (API ValidationException) — 프리셋도 1h 이하만.
+const RANGE_ALLOWED = [900, 1800, 3600];
 
 // EKS 비용 메뉴의 "Pod 전송량 (NFM)" 데이터: 클러스터 모니터의 DATA_TRANSFERRED를
 // 카테고리 전체에 대해 질의해 파드별로 합산 + billable(INTER_AZ/VPC/REGION) 추정 비용.

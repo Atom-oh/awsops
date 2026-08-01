@@ -143,10 +143,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface NfmQueryResult { rows: NfmFlowRow[]; unit: string; tookMs: number }
 
-/** One monitor × metric × category top-contributors query over the trailing range. */
+// NFM 모니터 쿼리의 하드 한도 (실측: "Time range can not exceed 1 hour" ValidationException).
+// 더 긴 기간이 필요하면 nfm-dashboard처럼 수집 파이프라인이 필요하다 — 라이브 조회는 1h가 상한.
+export const NFM_MAX_RANGE_SEC = 3600;
+
+/** One monitor × metric × category top-contributors query over the trailing range (≤ 1h). */
 export async function nfmTopContributors(
   monitor: string, metric: NfmMetric, category: NfmCategory, rangeSec: number, limit = 50,
 ): Promise<NfmQueryResult> {
+  if (rangeSec > NFM_MAX_RANGE_SEC) throw new Error(`NFM query range max ${NFM_MAX_RANGE_SEC}s (API limit)`);
   return cached(`q|${monitor}|${metric}|${category}|${rangeSec}|${limit}`, async () => {
     const t0 = Date.now();
     const end = new Date();

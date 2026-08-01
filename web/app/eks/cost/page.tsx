@@ -11,6 +11,7 @@ import SegmentedControl from '@/components/ui/SegmentedControl';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import DetailPanel from '@/components/ui/DetailPanel';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import { useI18n } from '@/components/shell/LanguageProvider';
 import PodTransferSection from '@/components/eks/PodTransferSection';
 
 // EKS 컨테이너 비용 (fleet-wide) — v1 /eks-container-cost parity. Every connected
@@ -38,6 +39,7 @@ const usd = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigi
 const ALL = '전체';
 
 export default function EksFleetCostPage() {
+  const { tt } = useI18n();
   const [results, setResults] = useState<ClusterAlloc[] | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -92,7 +94,8 @@ export default function EksFleetCostPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  // Pod별 NFM 전송비용 (24h — 테이블의 '일간' 기준과 정합): cluster|ns/pod → est USD.
+  // Pod별 NFM 전송비용: NFM 모니터 쿼리는 최대 1시간 윈도우(API 한도)라 최근 1h를 실측하고
+  // 테이블의 '일간' 기준에 맞춰 ×24 외삽한다 (KPI의 '월간 추정 = 일간 × 30'과 같은 방식).
   // 미온보딩 클러스터/실패는 조용히 빠지고 해당 셀은 '—' (best-effort, 테이블을 막지 않음).
   const [xfer, setXfer] = useState<Map<string, number> | null>(null);
   useEffect(() => {
@@ -100,7 +103,7 @@ export default function EksFleetCostPage() {
     let live = true;
     Promise.all(clusterNames.map(async (cluster) => {
       try {
-        const r = await fetch(`/api/eks/${encodeURIComponent(cluster)}/pod-transfer?range=86400`);
+        const r = await fetch(`/api/eks/${encodeURIComponent(cluster)}/pod-transfer?range=3600`);
         if (!r.ok) return [] as [string, number][];
         const d = await r.json();
         if (!d.available) return [] as [string, number][];
@@ -194,19 +197,20 @@ export default function EksFleetCostPage() {
     ...(merged.hasNetwork ? [{ key: 'net_h', label: 'Network' }] : []),
     ...(merged.hasPv ? [{ key: 'pv_h', label: 'Storage(PV)' }] : []),
     ...(merged.hasGpu ? [{ key: 'gpu_h', label: 'GPU' }] : []),
-    // NFM 전송비용(24h 추정, 방향당 $0.01/GB) — 온보딩된 클러스터가 있을 때만 컬럼 노출.
-    ...(xfer && xfer.size > 0 ? [{ key: 'xfer_h', label: 'Transfer (NFM)' }] : []),
+    // NFM 전송비용(일간 = 최근 1h 실측 ×24 외삽, 방향당 $0.01/GB) — 온보딩 클러스터가 있을 때만 노출.
+    ...(xfer && xfer.size > 0 ? [{ key: 'xfer_h', label: 'Transfer/Day (NFM)' }] : []),
     { key: 'total_h', label: 'Total/Day' },
   ];
   // NFM 추정치는 센트 미만이 흔함 — $0.01 미만은 4자리로 표기해 전부 $0.00으로 뭉개지지 않게.
   const xferUsd = (v: number | undefined) => (v == null ? '—' : v >= 0.01 ? usd(v) : `$${v.toFixed(4)}`);
   const rows = filteredPods.map((p) => {
-    const x = xfer?.get(`${p.cluster}|${p.namespace}/${p.pod}`);
+    const x1h = xfer?.get(`${p.cluster}|${p.namespace}/${p.pod}`);
+    const xDay = x1h == null ? undefined : x1h * 24;
     return {
       cluster: p.cluster, namespace: p.namespace, pod: p.pod, node: p.node,
       cpu_h: usd(p.cpuCost), ram_h: usd(p.ramCost), net_h: usd(p.networkCost),
-      pv_h: usd(p.pvCost), gpu_h: usd(p.gpuCost), xfer_h: xferUsd(x), total_h: usd(p.totalCost),
-      _raw: { ...p, nfmTransferUsd24h: x ?? null } as unknown as Record<string, unknown>,
+      pv_h: usd(p.pvCost), gpu_h: usd(p.gpuCost), xfer_h: xferUsd(xDay), total_h: usd(p.totalCost),
+      _raw: { ...p, nfmTransferUsd1h: x1h ?? null, nfmTransferUsdDayEst: xDay ?? null } as unknown as Record<string, unknown>,
     };
   });
 
@@ -318,6 +322,11 @@ export default function EksFleetCostPage() {
                       )}
                     </div>
 
+                    {xfer && xfer.size > 0 && (
+                      <div className="text-[11.5px] text-ink-400">
+                        {tt('Transfer/Day (NFM): 최근 1시간 실측 ×24 외삽 · 방향당 $0.01/GB 추정 — 정확한 청구 아님')}
+                      </div>
+                    )}
                     <DataTable
                       columns={columns}
                       rows={rows}

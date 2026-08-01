@@ -33,6 +33,8 @@ const CATEGORIES_FALLBACK = ['INTRA_AZ', 'INTER_AZ', 'INTER_VPC', 'INTER_REGION'
 /** 데이터 전송 요금이 발생할 수 있는 카테고리 (lib/nfm.ts BILLED_CATEGORIES 미러). */
 const BILLED = new Set(['INTER_AZ', 'INTER_VPC', 'INTER_REGION']);
 const VPC_MONITOR = 'nfm-vpc-all';
+// NFM 모니터 쿼리 한도: 최대 1시간 윈도우 → 프리셋을 15m/30m/1h로 제한.
+const NFM_RANGES = [['15m', 900], ['30m', 1800], ['1h', 3600]] as const;
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
 function humanBytes(v: number): string {
@@ -240,7 +242,7 @@ export default function NetworkFlowPage() {
               <Card
                 title="플로우 조회"
                 subtitle="모니터 × 메트릭 × 카테고리 top-contributors — 파라미터 변경 시 자동 재조회"
-                right={<RangePicker value={range} onChange={setRange} />}
+                right={<RangePicker value={range} onChange={setRange} ranges={NFM_RANGES} />}
                 padded={false}
               >
                 {/* 쿼리 파라미터 + 실행 상태 */}

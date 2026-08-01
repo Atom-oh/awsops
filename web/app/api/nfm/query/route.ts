@@ -4,7 +4,8 @@ import { nfmStatus, nfmTopContributors, NFM_METRICS, NFM_CATEGORIES, type NfmMet
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // NFM 비동기 쿼리 폴링 (수 초~수십 초)
 
-const RANGE_ALLOWED = [3600, 21600, 86400, 604800];
+// NFM 모니터 쿼리는 최대 1시간 윈도우 (API ValidationException) — 프리셋도 1h 이하만.
+const RANGE_ALLOWED = [900, 1800, 3600];
 
 // Top contributors 쿼리 프록시. 모든 입력을 allow-list로 검증:
 // monitor는 라이브 ListMonitors 결과에 실존해야 하고, metric/category/range는 enum.
