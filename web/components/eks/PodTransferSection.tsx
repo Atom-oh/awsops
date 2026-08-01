@@ -5,10 +5,12 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import StatTile from '@/components/ui/StatTile';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import DetailPanel from '@/components/ui/DetailPanel';
 import MetricTable, { type MetricCol } from '@/components/inventory/metrics/MetricTable';
 import { RangePicker, dash } from '@/components/inventory/metrics/shared';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import type { NfmCategory, PodTransferResult, PodTransferRow } from '@/lib/nfm';
+import type { InvType } from '@/lib/inventory-types';
 
 // EKS 비용 메뉴의 "Pod 전송량 (NFM)" 섹션 — CloudWatch Network Flow Monitor의
 // DATA_TRANSFERRED를 파드별로 집계한 /api/eks/<cluster>/pod-transfer를 소비한다.
@@ -44,6 +46,36 @@ const catCol = (cat: NfmCategory): MetricCol<PodTransferRow> => ({
   },
 });
 
+// 상세 패널을 인벤토리 상세와 같은 섹션 카드 디자인으로 렌더하기 위한 최소 spec.
+const XFER_DETAIL_SPEC: InvType = {
+  label: 'Pod Transfer', group: 'Compute',
+  columns: [
+    { key: 'pod', label: 'Pod' }, { key: 'namespace', label: 'Namespace' }, { key: 'service', label: 'Service' },
+    { key: 'total_transfer', label: 'Total Transfer' },
+    { key: 'INTRA_AZ', label: 'INTRA_AZ' }, { key: 'INTER_AZ', label: 'INTER_AZ' }, { key: 'INTER_VPC', label: 'INTER_VPC' },
+    { key: 'INTER_REGION', label: 'INTER_REGION' }, { key: 'AMAZON_S3', label: 'AMAZON_S3' },
+    { key: 'AMAZON_DYNAMODB', label: 'AMAZON_DYNAMODB' }, { key: 'UNCLASSIFIED', label: 'UNCLASSIFIED' },
+    { key: 'billable_transfer', label: 'Billable Transfer' }, { key: 'est_usd', label: 'Est. Cost (USD)' },
+  ],
+  sections: [
+    { label: 'Identity', keys: ['pod', 'namespace', 'service'] },
+    { label: 'Network Transfer', keys: ['total_transfer', 'INTRA_AZ', 'INTER_AZ', 'INTER_VPC', 'INTER_REGION', 'AMAZON_S3', 'AMAZON_DYNAMODB', 'UNCLASSIFIED'] },
+    { label: 'Cost', keys: ['billable_transfer', 'est_usd'] },
+  ],
+};
+
+/** 상세 패널용 flat 뷰 — 빈 카테고리는 제외. */
+function xferDetail(r: PodTransferRow): Record<string, unknown> {
+  const cats = Object.fromEntries(
+    Object.entries(r.byCategory).filter(([, v]) => (v ?? 0) > 0).map(([k, v]) => [k, fmtBytes(v ?? 0)]));
+  const all: Record<string, unknown> = {
+    pod: podLabel(r), namespace: r.namespace, service: r.serviceName,
+    total_transfer: fmtBytes(r.bytes), ...cats,
+    billable_transfer: fmtBytes(r.billableBytes), est_usd: usd(r.estUsd),
+  };
+  return Object.fromEntries(Object.entries(all).filter(([, v]) => v != null && v !== ''));
+}
+
 export default function PodTransferSection({ clusters }: { clusters: string[] }) {
   const { tt } = useI18n();
   const [cluster, setCluster] = useState(clusters[0] ?? '');
@@ -51,6 +83,7 @@ export default function PodTransferSection({ clusters }: { clusters: string[] })
   const [data, setData] = useState<PodTransferResult | null>(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<PodTransferRow | null>(null);
 
   // 새로고침으로 클러스터 목록이 바뀌어 선택이 무효가 되면 첫 클러스터로 복귀.
   useEffect(() => {
@@ -63,6 +96,7 @@ export default function PodTransferSection({ clusters }: { clusters: string[] })
     let alive = true;
     setLoading(true);
     setErr('');
+    setSelected(null);
     fetch(`/api/eks/${encodeURIComponent(cluster)}/pod-transfer?range=${rangeSec}`)
       .then((r) => (r.ok ? (r.json() as Promise<PodTransferResult>) : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setData(d); })
@@ -173,9 +207,17 @@ export default function PodTransferSection({ clusters }: { clusters: string[] })
             items={data.pods}
             rowKey={(r) => r.key}
             defaultSortKey="bytes"
+            onRowClick={setSelected}
           />
         </>
       )}
+
+      <DetailPanel
+        title={selected ? podLabel(selected) : undefined}
+        data={selected ? xferDetail(selected) : null}
+        spec={XFER_DETAIL_SPEC}
+        onClose={() => setSelected(null)}
+      />
     </Card>
   );
 }

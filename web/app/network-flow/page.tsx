@@ -10,6 +10,7 @@ import MetricTable, { type MetricCol } from '@/components/inventory/metrics/Metr
 import { RangePicker, dash } from '@/components/inventory/metrics/shared';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import type { NfmEndpoint, NfmFlowRow } from '@/lib/nfm';
+import type { InvType } from '@/lib/inventory-types';
 
 // /network-flow — nfm-dashboard 플로우 조회 이식 (CloudWatch Network Flow Monitor).
 // 데이터 계층은 lib/nfm.ts(비동기 쿼리 폴링 + TTL 캐시)가 담당하고, 이 페이지는
@@ -69,6 +70,28 @@ function EndpointCell({ e }: { e: NfmEndpoint }) {
   if (!label) return dash;
   return <span title={epTitle(e)}>{label}</span>;
 }
+
+// 상세 패널을 인벤토리 상세와 같은 섹션 카드 디자인으로 렌더하기 위한 최소 spec —
+// sections가 있으면 DetailPanel이 아이콘 있는 섹션 + 친화적 라벨 포맷을 쓴다 (없으면 평면 raw 키).
+const FLOW_DETAIL_SPEC: InvType = {
+  label: 'Network Flow', group: 'Network',
+  columns: [
+    { key: 'category', label: 'Category' }, { key: 'value', label: 'Value' }, { key: 'target_port', label: 'Target Port' },
+    { key: 'snat_ip', label: 'SNAT IP' }, { key: 'dnat_ip', label: 'DNAT IP' }, { key: 'traversed_path', label: 'Traversed Constructs' },
+    { key: 'local_pod', label: 'Pod' }, { key: 'local_service', label: 'Service' }, { key: 'local_instance', label: 'Instance' },
+    { key: 'local_ip', label: 'IP' }, { key: 'local_az', label: 'AZ' }, { key: 'local_subnet', label: 'Subnet' },
+    { key: 'local_vpc', label: 'VPC' }, { key: 'local_region', label: 'Region' },
+    { key: 'remote_pod', label: 'Pod' }, { key: 'remote_service', label: 'Service' }, { key: 'remote_instance', label: 'Instance' },
+    { key: 'remote_ip', label: 'IP' }, { key: 'remote_az', label: 'AZ' }, { key: 'remote_subnet', label: 'Subnet' },
+    { key: 'remote_vpc', label: 'VPC' }, { key: 'remote_region', label: 'Region' },
+  ],
+  sections: [
+    { label: 'Flow', keys: ['category', 'value', 'target_port'] },
+    { label: 'Local Endpoint', keys: ['local_pod', 'local_service', 'local_instance', 'local_ip', 'local_az', 'local_subnet', 'local_vpc', 'local_region'] },
+    { label: 'Remote Endpoint', keys: ['remote_pod', 'remote_service', 'remote_instance', 'remote_ip', 'remote_az', 'remote_subnet', 'remote_vpc', 'remote_region'] },
+    { label: 'Network Path', keys: ['snat_ip', 'dnat_ip', 'traversed_path'] },
+  ],
+};
 
 /** 상세 패널용 flat 뷰 — 빈 필드는 제외 (DetailPanel이 키/값 + 복사 버튼을 렌더). */
 function flowDetail(r: NfmFlowRow, unitLabel: string): Record<string, unknown> {
@@ -324,6 +347,7 @@ export default function NetworkFlowPage() {
       <DetailPanel
         title={selected ? `${epLabel(selected.local) ?? '?'} ↔ ${epLabel(selected.remote) ?? '?'}` : undefined}
         data={selected ? flowDetail(selected, selected.unit) : null}
+        spec={FLOW_DETAIL_SPEC}
         onClose={() => setSelected(null)}
       />
     </>
