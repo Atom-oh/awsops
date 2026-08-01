@@ -444,4 +444,81 @@ else
   pass "cancelling the script also kills the chair child"
 fi
 
+# --- bare C0 controls spliced into a credential must not survive the scrub -------------------
+# strip_controls removed CSI/OSC *sequences* plus CR, but a BARE control byte — BEL on its own,
+# backspace — was left in place. That splits scrub_secrets' `AKIA[0-9A-Z]{16}` so the scrub misses,
+# while every viewer/terminal renders the two halves as one contiguous key. This is the published
+# PR-comment path, where GitHub's secret masking does not apply.
+WORK9=$(mktemp -d); DIFF9=$(mktemp)
+echo "diff --git a/foo b/foo" > "$DIFF9"
+mkdir -p "$WORK9/slot"; : > "$WORK9/responded.txt"
+printf 'x/L2\n' > "$WORK9/responded.txt"
+printf 'cell\n' > "$WORK9/slot/x-L2.txt"
+
+# Splice a bare BEL (\x07) and a backspace (\x08) into the middle of the key, on stderr, and fail
+# so the BLOCKED path emits the stderr excerpt into the review comment.
+cat > "$BIN/claude" <<EOF
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'boom %s\\x07%s and %s\\x08%s\\n' "\$AWS_KEY_LEFT" "\$AWS_KEY_RIGHT" "\$AWS_KEY_LEFT" "\$AWS_KEY_RIGHT" >&2
+exit 1
+EOF
+chmod +x "$BIN/claude"
+
+PATH="$BIN:$PATH" AWS_KEY_LEFT="$AWS_KEY_LEFT" AWS_KEY_RIGHT="$AWS_KEY_RIGHT" \
+  CHAIR_PRIMARY_MODEL="$PRIMARY_MODEL" CHAIR_FALLBACK_MODEL="$FALLBACK_MODEL" \
+  GITHUB_ENV="$WORK9/github-env.txt" \
+  bash "$SCRIPT" "$DIFF9" "$WORK9" 1 "c0 splice" "$WORK9/review.md" \
+  > "$WORK9/synth.log" 2>&1 || true
+
+C0_LEAK=""
+for f in "$WORK9/review.md" "$WORK9/synth.log" "$WORK9"/chair-*.err; do
+  [ -f "$f" ] || continue
+  # The reassembled key, and the left half on its own — a surviving bare control byte leaves the
+  # halves adjacent but unscrubbed, so the left half is the tell.
+  if grep -Fq "$FAKE_AWS_KEY" "$f" 2>/dev/null || grep -Fq "$AWS_KEY_LEFT" "$f" 2>/dev/null; then
+    C0_LEAK="$C0_LEAK $(basename "$f")"
+  fi
+done
+if [ -n "$C0_LEAK" ]; then
+  fail "bare C0 controls spliced into a credential are stripped before scrubbing (leaked in:$C0_LEAK)"
+else
+  pass "bare C0 controls spliced into a credential are stripped before scrubbing"
+fi
+rm -rf "$WORK9" "$DIFF9"
+
+# --- the chair's scrubbers must be waited for, not size-polled ---------------------------------
+# `>(…)` never exposed the scrub processes' PIDs, so the script could not wait on them: when the
+# chair returned, the scrubber might still be draining megabytes, and reading $OUT then yields a
+# TRUNCATED synthesis that goes on to verdict validation and the PR comment. The previous revision
+# polled file sizes until they settled, which narrowed the race instead of removing it (a poll that
+# sees 0 bytes twice "settles" immediately).
+#
+# This is asserted STRUCTURALLY, and deliberately so. A behavioural test was tried first — shim
+# `sed` to lag, then check the output — and it passed against the broken code too, because
+# review.md is assembled at the very end of the script, by which point the lag has elapsed and the
+# truncation window has closed. Rather than tune a timing trick until it happens to fail, assert
+# the property that makes the race impossible: the scrub PIDs are captured and waited on, and the
+# size-settle poll is gone. Honest limitation: this checks the mechanism, not the outcome.
+RC_BODY="$(awk '/^run_chair\(\) \{/,/^\}/' "$SCRIPT")"
+if printf '%s' "$RC_BODY" | grep -Eq 'wait "\$scrub_out" "\$scrub_err"'; then
+  pass "run_chair waits on both scrub processes (PIDs captured, completion guaranteed)"
+else
+  fail "run_chair waits on both scrub processes (PIDs captured, completion guaranteed)"
+fi
+
+if printf '%s' "$RC_BODY" | grep -q 'wc -c'; then
+  fail "run_chair no longer size-polls for scrub completion (heuristic replaced by wait)"
+else
+  pass "run_chair no longer size-polls for scrub completion (heuristic replaced by wait)"
+fi
+
+# mkfifo failing must NOT degrade into a plain-file redirect — that would put raw, unscrubbed chair
+# output on the runner's disk, which is the exact leak the FIFO exists to prevent.
+if printf '%s' "$RC_BODY" | grep -q 'refusing to run the chair unscrubbed'; then
+  pass "mkfifo failure fails closed instead of redirecting raw output to a regular file"
+else
+  fail "mkfifo failure fails closed instead of redirecting raw output to a regular file"
+fi
+
 [ "$FAILED" -eq 0 ] || exit 1

@@ -40,8 +40,16 @@ SCRUB_TMP="$WORK/scrub-cell.tmp"
 # CSI/OSC(+ST)/charset-select/CR 을 모두 덮는다 (Kiro `--wrap never` 는 줄바꿈만 끄고 색 코드는
 # 남김 — 실측: `kiro-cli chat` 출력이 `\x1b[38;5;141m…`류로 가득함). 패널 셀과 chair stderr
 # 발췌가 같은 함수를 공유해야 한 쪽만 고쳐지는 일이 없다 (리뷰에서 실제로 stderr 쪽만 누락됨).
+#
+# 2단계인 이유: 1단계에서 escape *시퀀스*를 먼저 통째로 걷어내고, 2단계에서 남은 **단독 제어문자**를
+# 지운다. 1단계만 있으면 `\x07`(BEL)은 OSC 종결자일 때만, `\r`만 개별로 제거돼 `AKIA12345678\x07
+# 90ABCDEF` 처럼 credential 중간에 낀 단독 BEL/backspace 가 그대로 남는다 — 그러면 scrub 정규식이
+# 분할돼 매칭에 실패하는데 뷰어/터미널은 온전한 키로 렌더한다(= 그대로 유출).
+# UTF-8 주의: C1(\x80-\x9F)을 raw 바이트로 지우면 한글 등 multibyte 문자가 깨지므로(이 로그는 한글이
+# 대부분) UTF-8 로 인코딩된 형태인 `\xC2[\x80-\x9F]` 만 제거한다. \x09(TAB)/\x0A(LF)는 보존.
 strip_controls() {
-  sed -E 's#(\x1B\][^\x07\x1B]*(\x07|\x1B\\)|\x1B\[[0-?]*[ -/]*[@-~]|\x1B[()][0-9A-Z]|\r)##g'
+  sed -E -e 's#(\x1B\][^\x07\x1B]*(\x07|\x1B\\)|\x1B\[[0-?]*[ -/]*[@-~]|\x1B[()][0-9A-Z])##g' \
+         -e 's#(\xC2[\x80-\x9F]|[\x00-\x08\x0B-\x1F\x7F])##g'
 }
 
 # run_chair scrubs its stderr file in place once the call returns — but that call is the chair
@@ -194,26 +202,39 @@ run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도
   # 파이프라인이 아니라 단일 명령으로 띄운다 — `a | b &` 에서 `$!` 는 파이프라인의 *마지막*
   # 원소를 가리키므로(실측: `sleep 30 | cat &` 의 `$!` 는 cat), 그걸 kill 해도 정작 chair 프로세스는
   # 살아남아 러너에서 계속 돈다. 또 이 셸에서 백그라운드 잡은 별도 프로세스 그룹이 아니라 스크립트와
-  # 같은 PGID 를 쓰므로 `kill -- -PGID` 는 우리 자신까지 죽인다. stdout 도 process substitution 으로
-  # 받아 파이프라인을 없애면 `$!` 가 timeout 의 PID 가 되고, 그걸 TERM 하면 timeout 이 claude 를
-  # 정리한다. 두 출력 모두 쓰이는 시점에 스크럽되므로 SIGKILL 에도 원본이 남지 않는다.
+  # 같은 PGID 를 쓰므로 `kill -- -PGID` 는 우리 자신까지 죽인다.
+  #
+  # process substitution 대신 **named pipe(FIFO)** 를 쓴다. `>(…)` 는 스크럽 프로세스의 PID 를
+  # 노출하지 않아서 `wait` 로 완료를 기다릴 수가 없었다 — chair 프로세스가 반환해도 스크러버는
+  # 아직 수 MB 를 파이프에서 빼내는 중일 수 있고, 그 상태로 $OUT 을 읽으면 **잘린 합성 결과**가
+  # verdict 검증과 PR 코멘트로 넘어간다. 직전 리비전은 파일 크기가 안정될 때까지 폴링하는
+  # settle 루프로 이걸 덮으려 했지만 그건 경합을 없앤 게 아니라 좁힌 것이었다(크기가 계속
+  # 커지는 동안 상한에 걸리면 그냥 잘린 채 통과). FIFO 로 하면 스크러버를 우리가 직접 백그라운드
+  # 로 띄우므로 PID 가 있고, `wait` 가 **결정론적**으로 완료를 보장한다.
+  # 여기서 `a | b &` 의 `$!` 가 마지막 원소(= scrub_secrets)라는 사실은 이번엔 정확히 원하는
+  # 것이다: 그 프로세스의 종료가 곧 "출력 파일 쓰기 완료"다.
+  # FIFO 는 디스크에 데이터를 담지 않으므로 원본이 파일로 남지 않는 성질은 그대로다.
+  local outfifo="$WORK/chair-out.fifo" errfifo="$WORK/chair-err.fifo"
+  rm -f "$outfifo" "$errfifo"
+  if ! mkfifo -m 600 "$outfifo" "$errfifo" 2>/dev/null; then
+    # fail closed: 여기서 그냥 리다이렉트하면 FIFO 가 아닌 **일반 파일**이 생겨 원본이 디스크에
+    # 남는다. 진단 하나 잃는 게 credential 유출보다 낫다 — chair 는 invalid 로 처리된다.
+    echo "run_chair: mkfifo failed — refusing to run the chair unscrubbed" >&2
+    rm -f "$outfifo" "$errfifo"; : > "$OUT"; return 0
+  fi
+  strip_controls < "$outfifo" | scrub_secrets > "$OUT" &
+  local scrub_out=$!
+  strip_controls < "$errfifo" | scrub_secrets > "$2" &
+  local scrub_err=$!
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
     < "$WORK/synth-stdin.txt" \
-    > >(strip_controls | scrub_secrets > "$OUT") \
-    2> >(strip_controls | scrub_secrets > "$2") &
+    > "$outfifo" 2> "$errfifo" &
   CHAIR_JOB_PID=$!
   wait "$CHAIR_JOB_PID" || true
   CHAIR_JOB_PID=""
-  # `>(…)` writer 는 비동기라 위 명령이 반환한 직후 아직 flush 중일 수 있다. 발췌를 온전히
-  # 읽기 위해 파일 크기가 안정될 때까지 짧게 기다린다(상한 있음 — 절대 매달리지 않는다).
-  # 실패해도 보안 성질은 불변이다: 늦게 도착하는 바이트도 이미 스크럽을 통과한 것이다.
-  local prev=-1 cur
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    cur="$(wc -c < "$2" 2>/dev/null || echo 0)/$(wc -c < "$OUT" 2>/dev/null || echo 0)"
-    [ "$cur" = "$prev" ] && break
-    prev="$cur"; sleep 0.1
-  done
+  wait "$scrub_out" "$scrub_err" || true   # 결정론적 — settle 루프 휴리스틱을 대체한다
+  rm -f "$outfifo" "$errfifo"
 }
 
 scrubbed_err_excerpt() {
