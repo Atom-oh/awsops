@@ -53,6 +53,7 @@
 |---|---|---|---|---|
 | **FROZEN** | AWS 리소스 변경(SSM/Change Manager) + 자율 mitigation substrate | `remediation_enabled` | **do-not-enable.** 재활성화 = 새 ADR로 2026-06-11 reversal 명시 번복 + 멀티-AI 패널 + owner-override. flag-OFF substrate는 보존(삭제 아님) | ADR-005 |
 | **GATED** | 자율 인시던트 라이프사이클 | `incident_lifecycle_enabled` | analysis-only(read-only triage/RCA, 권고전용, mutation 라우팅 금지). 활성화해도 자율 조치 없음 | ADR-006 |
+| **GATED** | 큐레이션 공식 MCP 프리셋(벤더 원격 `mcpServer` target) | `integrations_enabled` | **do-not-enable.** `mcpServer` 는 `listingMode=DEFAULT` 로 벤더 write 툴까지 노출하고 AWS 는 API_KEY 경로에 툴 상한을 제공하지 않는다 → 강제 지점은 런타임(`agent.py:get_all_tools()` 에서 프리셋별 ack 툴과 fail-closed 교집합). 그 allowlist(벤더 문서 기반) + 자체호스팅 도달성 실측이 선행조건 | ADR-017 |
 | **GATED** | RCA write-back (OpsCenter/Incident Manager 관측메타 write) | `rca_writeback_enabled` | `incident_lifecycle_enabled` + **자족 role 분리 선행**(현재 frozen remediation role 상속 → 분리 전 do-not-enable) | ADR-006 |
 | **GATED** | K8sGPT 인클러스터 진단 | `k8sgpt_enabled` | GET-only(Result CRD read), 클러스터 write 없음, 오퍼레이터는 out-of-band 설치 | ADR-006 |
 | **GATED(거버넌스)** | 외부 knowledge/comms write — 광역(Slack/Notion/Jira) | `integrations_write_enabled` | 독립 control plane · no-AWS-mutation IAM · SSRF/Secrets/DLP/human-gate. BYO-MCP(임의) 제외, 큐레이션 커넥터만 | ADR-007 |
@@ -91,6 +92,6 @@
 | [014](014-cross-cutting-cache-i18n-cdn.md) | 횡단: 캐시·i18n·CDN | 프리워밍·i18n(ko/en/zh/ja, UI copy only, amended 2026-07-19)·CloudFront CACHING_DISABLED | 성능효율성 |
 | [015](015-operational-self-healing.md) | 운영 자가치유 | 호스트 자기 서비스 force-new-deployment 자율 복구(Aurora secret 회전), default-off·IAM 1 ARN·secret-id fail-closed; **ADR-005 불완화**(별개 범주) | 안정성·보안 |
 | [016](016-v1-decommission.md) | v1 레거시 폐기 | 5단계 폐기(데이터확보→도메인컷오버→정지/유예→삭제→코드정리) + `awsops.atomai.click` v2 컷오버; owner 지시, ADR-005 무관(수동 작업) | 비용최적화·운영우수성 |
-| [017](017-curated-official-mcp-presets.md) | 큐레이션 공식 MCP 프리셋 | external-obs `mcpServer` target으로 벤더 공식 MCP(Datadog/ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk 등) 등록; 자체 람다 유지보수 이관, capability=read 고정, `custom_mcp`(임의 BYO) 폐기 불변 | 운영우수성·보안 |
+| [017](017-curated-official-mcp-presets.md) | 큐레이션 공식 MCP 프리셋 | external-obs `mcpServer` target으로 벤더 공식 MCP(Datadog/ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk 등) 등록; 자체 람다 유지보수 이관, capability=read 고정, `custom_mcp`(임의 BYO) 폐기 불변. **현재 `do-not-enable`** — 런타임 툴 allowlist 미구현(§2 GATED 표) | 운영우수성·보안 |
 
 새 ADR 추가: 최고번호+1, single Status, **같은 PR에서 이 §3(또는 §2) 갱신 필수**(anti-drift, §1).

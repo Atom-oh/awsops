@@ -1,7 +1,14 @@
 # ADR-017: 큐레이션 공식 MCP 프리셋 / Curated Official MCP Presets
 
 ## Status / 상태
-**Accepted.**
+**Accepted — 단, `integrations_enabled` 프리셋 경로는 `do-not-enable`(GATED, 활성화 금지).**
+
+활성화 전제조건 2개가 아직 충족되지 않았다(PR #194 리뷰, CRITICAL×2·MAJOR×1):
+
+1. **런타임 per-preset 툴 allowlist가 없다.** `mcpServer` target 은 `listingMode=DEFAULT` 로 벤더가 광고하는 툴 **전부(write 툴 포함)** 를 노출하고, AWS 는 API_KEY 경로에 상한 필드를 제공하지 않는다(§Trade-offs ①). 유일하게 남은 강제 지점은 **우리 런타임**이다 — `agent/agent.py:get_all_tools()` 가 게이트웨이 툴을 받는 관문이므로, 거기서 `<target>___<tool>` 이름을 프리셋별 ack 된 툴 집합과 교집합(fail-closed, 빈 집합 ⇒ 툴 없음)해야 한다. 이는 이미 egress-READ 인티그레이션에 쓰는 `select_integration_tools()` 와 동일한 형태다. 그 allowlist는 **벤더 문서에서 옮겨 적어야** 하며 추측으로 채우면 안 된다(틀리면 fail-closed 로 기능이 죽고, 느슨하면 통제가 없다).
+2. **자체 호스팅 프리셋의 도달성이 미검증이다.** 아래 host-pin 규칙은 사설 IP 리터럴을 요구하는데, `mcpServer` 호출은 AgentCore 관리형 네트워크에서 나가므로 VPC 사설 대역에 도달하지 못할 가능성이 있다(리뷰 MAJOR). 도달성을 실측하기 전까지 ClickHouse/Grafana/Splunk/Tempo/Jaeger 프리셋은 동작이 보장되지 않는다.
+
+두 조건이 충족되고 그 변경이 리뷰를 통과할 때까지 이 경로는 켜지 않는다. flag-OFF substrate 는 보존한다(삭제 아님) — BASELINE §2 GATED 항목과 같은 취급.
 
 - **Owner 지시:** 오준석(Junseok Oh), 2026-07-29 — "우리가 만든 mcp는 앞으로 유지보수가 걸림돌이 될거 같아서 외부에서 잘 관리되는 mcp가 맞는거 같아서, 다만 유명한 데이터 소스의 mcp를 우리가 먼저 정해주는게 좋긴 할거 같아". 이는 ADR-005 autonomy freeze의 예외가 아니다 — 대상은 **외부 DATA read**(ADR-007 관할, read-only 정의 밖)이며, AWS 리소스 변경도 자율 조치도 아니다.
 
@@ -22,7 +29,7 @@ Prometheus·Mimir는 조사 시점(2026-07) 공식 MCP가 없어(community만 �
 - **큐레이션 대상만** — 공식 MCP가 존재하고 헤드리스(비-브라우저 OAuth) 인증이 가능한 kind만 프리셋화한다(Datadog·ClickHouse self-host·Tempo·Jaeger·Grafana self-host·Dynatrace·Splunk·New Relic-preview). 공식 MCP가 없거나(Prometheus·Mimir) 헤드리스 인증이 불가능한(Notion hosted) kind는 자체 람다/기존 방식을 유지한다.
 - **`custom_mcp`(임의 사용자 지정 엔드포인트 등록)는 이 ADR로도 여전히 폐기 상태다** — BASELINE §2의 "폐기(do-not-revive): BYO-MCP" 조항은 변경되지 않는다. 이 ADR이 허용하는 것은 **admin이 미리 정한 벤더 프리셋**일 뿐, 사용자가 URL을 직접 입력하는 경로가 아니다.
 - **자격증명**은 신규 저장소를 만들지 않는다 — 기존 `ops/${project}/integrations/credentials` Secrets Manager 시크릿과 `web/lib/integration-credentials.ts`의 advisory-lock 쓰기 경로를 재사용한다.
-- **capability는 항상 `read`이지만, 이는 선언적 라벨이며 서버측에서 강제되지 않는다(declarative label, NOT server-side enforcement).** `mcp.lambda` target은 `toolSchema.inlinePayload`로 노출 툴 집합을 하드 리밋하지만, API key 자격증명을 쓰는 `mcpServer` target에는 동등한 상한이 **AWS 쪽에 존재하지 않는다** — 툴 집합을 고정할 수 있는 유일한 필드 `McpServerTargetConfiguration.mcpToolSchema`는 authorization code grant 자격증명에서만 지원된다. 따라서 **이미 ack된 프리셋에 벤더가 write 툴을 추가하면 다음 `make agentcore`에서 재-ack 없이 흡수된다.** 이는 AgentCore가 API_KEY 경로에 툴 스키마 상한을 제공하지 않기 때문에 **알고서 수용한 잔여 리스크**다(상세·보상 컨트롤은 §Trade-offs). 쓰기 티어(`integrations_write_enabled`)는 이 ADR의 범위 밖이며 변경하지 않는다(계속 기본 false).
+- **capability는 항상 `read`이지만, 이는 선언적 라벨이며 서버측에서 강제되지 않는다(declarative label, NOT server-side enforcement).** `mcp.lambda` target은 `toolSchema.inlinePayload`로 노출 툴 집합을 하드 리밋하지만, API key 자격증명을 쓰는 `mcpServer` target에는 동등한 상한이 **AWS 쪽에 존재하지 않는다** — 툴 집합을 고정할 수 있는 유일한 필드 `McpServerTargetConfiguration.mcpToolSchema`는 authorization code grant 자격증명에서만 지원된다. 따라서 **이미 ack된 프리셋에 벤더가 write 툴을 추가하면 다음 `make agentcore`에서 재-ack 없이 흡수된다.** AgentCore 가 API_KEY 경로에 툴 스키마 상한을 제공하지 않는 것은 사실이지만, 그렇다고 이것이 **수용 가능한 잔여 리스크가 되지는 않는다** — BASELINE §1 은 외부 DATA write 를 거버넌스(DLP·human-gate·flag) 하에서만 허용하고, ADR 이 그 요건을 단독으로 면제할 수 없다. 따라서 이 항목은 *수용*이 아니라 **활성화 차단 사유**이며, 강제 지점은 게이트웨이가 아니라 우리 런타임이다(§Status 전제조건 1). 쓰기 티어(`integrations_write_enabled`)는 이 ADR의 범위 밖이며 변경하지 않는다(계속 기본 false).
 
 ## Consequences / 결과
 
@@ -32,9 +39,9 @@ Prometheus·Mimir는 조사 시점(2026-07) 공식 MCP가 없어(community만 �
 - 큐레이션이므로 ADR-007이 이미 그려둔 "admin 등록 벤더 프리셋만 허용" 라인 안에서 처리된다 — 새 거버넌스 계층이 필요 없다.
 
 ### Negative / Trade-offs
-- **[수용된 잔여 리스크 ①] 노출 툴 집합의 결정권은 벤더에게 있고, 벤더가 추가한 write 툴은 재-ack 없이 흡수된다.** Lambda target(`mcp.lambda`)은 `toolSchema.inlinePayload`가 노출 툴 집합을 하드 리밋하지만, `mcpServer` target은 `listingMode=DEFAULT`로 벤더 서버가 광고하는 툴 전부(쓰기 툴 포함)를 그대로 노출하며, provision.py는 매 실행 `synchronize_gateway_targets`를 호출해 현재 상태를 그대로 수용한다. 즉 벤더가 다음 릴리스에 mutating 툴(mute monitor / create incident / delete dashboard 등)을 추가하면 **다음 `make agentcore`에서 재-ack·PR·리뷰 없이 에이전트 툴 surface에 편입된다.** `capability=read`는 이 경로에서 **선언적 라벨이며 서버측 강제가 아니다.**
+- **[미해결 — 활성화 차단 사유 ①] 노출 툴 집합의 결정권은 벤더에게 있고, 벤더가 추가한 write 툴은 재-ack 없이 흡수된다.** Lambda target(`mcp.lambda`)은 `toolSchema.inlinePayload`가 노출 툴 집합을 하드 리밋하지만, `mcpServer` target은 `listingMode=DEFAULT`로 벤더 서버가 광고하는 툴 전부(쓰기 툴 포함)를 그대로 노출하며, provision.py는 매 실행 `synchronize_gateway_targets`를 호출해 현재 상태를 그대로 수용한다. 즉 벤더가 다음 릴리스에 mutating 툴(mute monitor / create incident / delete dashboard 등)을 추가하면 **다음 `make agentcore`에서 재-ack·PR·리뷰 없이 에이전트 툴 surface에 편입된다.** `capability=read`는 이 경로에서 **선언적 라벨이며 서버측 강제가 아니다.**
   - **왜 코드로 막을 수 없는가(외부 제약):** `bedrock-agentcore-control`에는 툴 목록을 읽는 오퍼레이션이 아예 없고(target 관련 오퍼레이션은 `Create/Get/List/Update/DeleteGatewayTarget` + `SynchronizeGatewayTargets`뿐이며 응답에 툴 이름이 없음 — botocore `2023-06-05` 모델 확인) → 스냅샷 비교조차 불가능하다. 툴 집합을 고정할 수 있는 유일한 필드 `McpServerTargetConfiguration.mcpToolSchema`는 AWS 문서상 **authorization code grant 자격증명에서만 지원**되고(이 프리셋들은 API key) 설정 시 툴 동기화 자체가 비활성화된다.
-  - **알고서 수용한다(외부 제약).** 단 이것이 ADR-007 §5 의 "curation = 기술적으로 강제되는 provenance" 요건을 충족한다는 뜻은 아니다 — 충족하지 못하며, AWS 가 API_KEY 경로에 상한을 제공하지 않는 한 우리 코드로 충족시킬 방법이 없다. `read_only_note`(catalog.py)와 ack는 **툴 목록이 아니라 벤더측 컨트롤**(RBAC 스코프 / `--disable-write` / read-scoped 토큰)에 대한 attestation이며, 그 컨트롤은 나중에 추가되는 툴에도 계속 적용된다 — 그러나 그 이상은 보장하지 않는다.
+  - **수용하지 않는다 — 활성화를 막는다(§Status).** 이전 리비전은 이를 "알고서 수용한 잔여 리스크"로 적었는데, 그것이 BASELINE §1 과 정면으로 충돌했다(리뷰 CRITICAL). 외부 제약은 게이트웨이에서 막을 수 없다는 것까지만 참이고, 우리 런타임에서 막을 수 있다는 사실을 덮지 못한다. 단 이것이 ADR-007 §5 의 "curation = 기술적으로 강제되는 provenance" 요건을 충족한다는 뜻은 아니다 — 충족하지 못하며, AWS 가 API_KEY 경로에 상한을 제공하지 않는 한 우리 코드로 충족시킬 방법이 없다. `read_only_note`(catalog.py)와 ack는 **툴 목록이 아니라 벤더측 컨트롤**(RBAC 스코프 / `--disable-write` / read-scoped 토큰)에 대한 attestation이며, 그 컨트롤은 나중에 추가되는 툴에도 계속 적용된다 — 그러나 그 이상은 보장하지 않는다.
   - **보상 컨트롤(존재하는 것만 적는다):** ① `official_mcp_enabled` + `integrations_enabled` 기본 false($0/무변경), ② 큐레이션 카탈로그 — 우리가 `MCP_SERVER_TARGETS`에 넣은 벤더만 `preset_key`를 가진다(임의 URL 등록 UI 없음, `custom_mcp` 폐기 유지), ③ 프리셋별 fail-closed `official_mcp_read_only_ack[preset_key]` — 값은 운영자가 검증한 **엔드포인트 URL 그대로**(불리언 `true`가 아니다. `map(string)`이며 provision.py는 `ack[preset_key] == official_mcp_endpoints[preset_key]`를 비교한다). 비어있거나 현재 엔드포인트와 다르면 SKIP + 기존 target 회수, ④ `integrations_write_enabled`가 계속 기본 false라 외부 write 티어 자체가 live가 아니다. 예:
   ```hcl
   official_mcp_endpoints     = { datadog = "https://mcp.datadoghq.com/v1/mcp" }
