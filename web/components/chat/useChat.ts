@@ -142,6 +142,12 @@ export function useChat() {
     void refreshThreads();
   }
 
+  async function removeAllThreads() {
+    try { await fetch('/api/chat/threads', { method: 'DELETE' }); } catch { /* best-effort */ }
+    newChat();
+    void refreshThreads();
+  }
+
   function patchLast(fn: (m: Msg) => Msg) {
     setMsgs((arr) => arr.map((m, i) => (i === arr.length - 1 && m.role === 'assistant' ? fn(m) : m)));
   }
@@ -265,7 +271,7 @@ export function useChat() {
     // state
     msgs, busy, threadId, threads, showThreads,
     // actions
-    send, selectThread, newChat, refreshThreads, removeThread, toggleThreads, resendWith, followUp, abort,
+    send, selectThread, newChat, refreshThreads, removeThread, removeAllThreads, toggleThreads, resendWith, followUp, abort,
     // derived
     sessionStats,
   };

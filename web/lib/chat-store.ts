@@ -108,3 +108,10 @@ export async function deleteThread(userSub: string, threadId: string): Promise<b
   const r = await getPool().query(`DELETE FROM chat_threads WHERE id = $1 AND user_sub = $2`, [threadId, userSub]);
   return (r.rowCount ?? 0) > 0;
 }
+
+/** 대화 목록 전체 삭제 — 본인(user_sub) 것만. 삭제한 스레드 수를 반환. */
+export async function deleteAllThreads(userSub: string): Promise<number> {
+  if (!on()) return 0;
+  const r = await getPool().query(`DELETE FROM chat_threads WHERE user_sub = $1`, [userSub]);
+  return r.rowCount ?? 0;
+}

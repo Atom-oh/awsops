@@ -5,12 +5,14 @@ import type { ThreadSummary } from '@/lib/chat-store';
 
 // Claude-app-style left sidebar: "+ new chat" on top, a v1-parity history SEARCH box, thread list
 // below, active thread highlighted, switching is a single click and keeps the panel open.
-export default function ThreadList({ threads, activeId, onSelect, onDelete, onNew, onSearch }: {
+export default function ThreadList({ threads, activeId, onSelect, onDelete, onDeleteAll, onNew, onSearch }: {
   threads: (ThreadSummary & { snippet?: string })[]; activeId: string | null;
-  onSelect: (id: string) => void; onDelete: (id: string) => void; onNew: () => void;
+  onSelect: (id: string) => void; onDelete: (id: string) => void;
+  onDeleteAll?: () => void; onNew: () => void;
   onSearch?: (q: string) => void;
 }) {
   const [q, setQ] = useState('');
+  const [confirmAll, setConfirmAll] = useState(false);
   return (
     <div className="flex h-full w-full flex-col bg-paper-muted/60">
       <div className="p-2">
@@ -34,6 +36,26 @@ export default function ThreadList({ threads, activeId, onSelect, onDelete, onNe
               className="min-w-0 flex-1 bg-transparent text-[12px] text-ink-800 placeholder:text-ink-400 focus:outline-none"
             />
           </div>
+        </div>
+      )}
+      {onDeleteAll && threads.length > 0 && (
+        <div className="px-2 pb-1.5">
+          <button
+            onClick={() => {
+              if (!confirmAll) { setConfirmAll(true); setTimeout(() => setConfirmAll(false), 4000); return; }
+              setConfirmAll(false);
+              onDeleteAll();
+            }}
+            aria-label="대화 전체 삭제"
+            className={
+              'flex w-full items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[11.5px] transition-colors ' +
+              (confirmAll
+                ? 'border-rose-300 bg-rose-500/10 font-semibold text-rose-700'
+                : 'border-ink-100 text-ink-400 hover:bg-rose-50 hover:text-rose-600')
+            }
+          >
+            <Trash2 size={13} /> {confirmAll ? '다시 누르면 전체 삭제됩니다' : '대화 전체 삭제'}
+          </button>
         </div>
       )}
       <div className="flex-1 overflow-y-auto px-2 pb-2">
@@ -60,7 +82,7 @@ export default function ThreadList({ threads, activeId, onSelect, onDelete, onNe
               <button
                 onClick={(e) => { e.stopPropagation(); onDelete(t.id); }}
                 aria-label={`${t.title} 삭제`}
-                className="shrink-0 rounded p-1 text-ink-300 opacity-0 transition-colors hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100"
+                className="shrink-0 rounded p-1 text-ink-300 opacity-60 transition-colors hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100"
               >
                 <Trash2 size={14} />
               </button>

@@ -44,7 +44,7 @@ export default function AssistantClient() {
     <div className="flex h-full">
       {/* thread rail — desktop only (always visible at lg+). */}
       <div className="hidden w-72 shrink-0 border-r border-ink-100 lg:block">
-        <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onNew={chat.newChat} onSearch={(q) => void chat.refreshThreads(q)} />
+        <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onDeleteAll={chat.removeAllThreads} onNew={chat.newChat} onSearch={(q) => void chat.refreshThreads(q)} />
       </div>
 
       {/* thread rail — mobile slide-in overlay (<lg), toggled from the header. */}
@@ -67,7 +67,7 @@ export default function AssistantClient() {
                 threads={chat.threads}
                 activeId={chat.threadId}
                 onSelect={(id) => { void chat.selectThread(id); setMobileThreads(false); }}
-                onDelete={chat.removeThread}
+                onDelete={chat.removeThread} onDeleteAll={chat.removeAllThreads}
                 onNew={() => { chat.newChat(); setMobileThreads(false); }}
                 onSearch={(q) => void chat.refreshThreads(q)}
               />
