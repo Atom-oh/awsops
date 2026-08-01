@@ -20,6 +20,7 @@
     "@aws-sdk/client-eks": "^3.1062.0",
     "@aws-sdk/client-kafka": "^3.1090.0",
     "@aws-sdk/client-lambda": "^3.1063.0",
+    "@aws-sdk/client-networkflowmonitor": "^3.1101.0",
     "@aws-sdk/client-pricing": "^3.1064.0",
     "@aws-sdk/client-s3": "^3.1066.0",
     "@aws-sdk/client-secrets-manager": "^3.1068.0",

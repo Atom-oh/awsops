@@ -11,6 +11,7 @@ import SegmentedControl from '@/components/ui/SegmentedControl';
 import DataTable, { type Column } from '@/components/ui/DataTable';
 import DetailPanel from '@/components/ui/DetailPanel';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import PodTransferSection from '@/components/eks/PodTransferSection';
 
 // EKS 컨테이너 비용 (fleet-wide) — v1 /eks-container-cost parity. Every connected
 // cluster's OpenCost 1d allocation is fetched in parallel and merged; per-cluster
@@ -48,6 +49,8 @@ export default function EksFleetCostPage() {
   const [tableCluster, setTableCluster] = useState(ALL);
   const [tableNs, setTableNs] = useState(ALL);
   const [selected, setSelected] = useState<Record<string, unknown> | null>(null);
+  // connected 클러스터 이름 목록 — 최하단 Pod 전송량 (NFM) 섹션에 전달.
+  const [clusterNames, setClusterNames] = useState<string[]>([]);
 
   // Monotonic load sequence — a late response from a superseded refresh must not
   // overwrite newer results (same guard as the cluster detail page).
@@ -79,6 +82,7 @@ export default function EksFleetCostPage() {
       }));
       if (!fresh()) return;
       setResults(settled);
+      setClusterNames(names);
       setCapturedAt(new Date().toISOString());
     } catch (e) {
       if (fresh()) setErr(e instanceof Error ? e.message : String(e));
@@ -319,6 +323,8 @@ export default function EksFleetCostPage() {
             )}
           </>
         )}
+
+        {clusterNames.length > 0 && <PodTransferSection clusters={clusterNames} />}
       </div>
 
       <DetailPanel

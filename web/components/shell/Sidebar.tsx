@@ -85,6 +85,7 @@ const FEATURE_ICON: Record<string, LucideIcon> = {
   eks: Box,
   'eks-nodes': Server, 'eks-pods': Boxes, 'eks-deployments': Layers,
   'eks-services': Network, 'eks-explorer': Terminal, 'eks-cost': DollarSign,
+  'network-flow': Activity,
 };
 
 const STORAGE_KEY = 'awsops:nav:expanded';

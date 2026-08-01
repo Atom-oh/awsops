@@ -109,6 +109,16 @@ resource "aws_iam_role_policy" "task_metrics" {
         "ecr:DescribeRepositories",
         "ecr:DescribeImages",
         "ecr:DescribeImageScanFindings",
+        # /network-flow + EKS Pod 전송량: CloudWatch Network Flow Monitor top-contributors
+        # queries (read-only in effect — Start/Stop only manage the async query lifecycle)
+        "networkflowmonitor:ListMonitors",
+        "networkflowmonitor:GetMonitor",
+        "networkflowmonitor:ListScopes",
+        "networkflowmonitor:GetScope",
+        "networkflowmonitor:StartQueryMonitorTopContributors",
+        "networkflowmonitor:GetQueryStatusMonitorTopContributors",
+        "networkflowmonitor:GetQueryResultsMonitorTopContributors",
+        "networkflowmonitor:StopQueryMonitorTopContributors",
       ]
       Resource = "*"
     }]
