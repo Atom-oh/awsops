@@ -10,8 +10,15 @@ import {
 // 라이브 EC2 API + TTL 캐시 (ip-inventory와 동일 패턴).
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-2';
-let client: EC2Client | null = null;
-const ec2 = () => (client ??= new EC2Client({ region: REGION }));
+// TGW는 리전 리소스 — 타 리전 TGW(예: us-west-2)는 해당 리전 클라이언트로 조회해야 한다
+// (기본 리전만 쓰면 필터 미매치로 조용히 빈 결과 — MSK DR 클러스터와 동일 함정).
+const clients = new Map<string, EC2Client>();
+const ec2 = (region?: string) => {
+  const r = region || REGION;
+  let c = clients.get(r);
+  if (!c) { c = new EC2Client({ region: r }); clients.set(r, c); }
+  return c;
+};
 
 const TTL_MS = 4 * 60_000;
 const cache = new Map<string, { at: number; v: unknown }>();
@@ -28,7 +35,7 @@ async function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
   inflight.set(key, p);
   return p;
 }
-export function _resetTgwCacheForTests() { cache.clear(); inflight.clear(); client = null; }
+export function _resetTgwCacheForTests() { cache.clear(); inflight.clear(); clients.clear(); }
 
 export interface TgwAttachment {
   id: string; tgwId: string; resourceType: string; resourceId: string;
@@ -49,16 +56,32 @@ export interface TgwDetails { attachments: TgwAttachment[]; routeTables: TgwRout
 
 const ROUTE_CAP = 100;
 
-/** 여러 TGW의 어태치먼트 + 라우트 테이블(+라우트)을 한 번에 조회. */
-export async function tgwDetails(tgwIds: string[]): Promise<TgwDetails> {
-  const ids = [...new Set(tgwIds)].sort().slice(0, 20);
-  if (ids.length === 0) return { attachments: [], routeTables: [] };
-  return cached(`d|${ids.join(',')}`, async () => {
+/** 여러 TGW의 어태치먼트 + 라우트 테이블(+라우트)을 한 번에 조회 — TGW 소속 리전별로 그룹 실행. */
+export async function tgwDetails(tgws: { id: string; region?: string }[]): Promise<TgwDetails> {
+  const uniq = [...new Map(tgws.map((t) => [t.id, t])).values()].slice(0, 20);
+  if (uniq.length === 0) return { attachments: [], routeTables: [] };
+  const key = uniq.map((t) => `${t.id}@${t.region ?? ''}`).sort().join(',');
+  return cached(`d|${key}`, async () => {
+    const byRegion = new Map<string, string[]>();
+    for (const t of uniq) {
+      const r = t.region || REGION;
+      byRegion.set(r, [...(byRegion.get(r) ?? []), t.id]);
+    }
+    const parts = await Promise.all([...byRegion.entries()].map(([region, ids]) => tgwRegionDetails(region, ids)));
+    return {
+      attachments: parts.flatMap((p) => p.attachments),
+      routeTables: parts.flatMap((p) => p.routeTables),
+    };
+  });
+}
+
+async function tgwRegionDetails(region: string, ids: string[]): Promise<TgwDetails> {
+  try {
     const [att, rtb] = await Promise.all([
-      ec2().send(new DescribeTransitGatewayAttachmentsCommand({
+      ec2(region).send(new DescribeTransitGatewayAttachmentsCommand({
         Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 200,
       })),
-      ec2().send(new DescribeTransitGatewayRouteTablesCommand({
+      ec2(region).send(new DescribeTransitGatewayRouteTablesCommand({
         Filters: [{ Name: 'transit-gateway-id', Values: ids }], MaxResults: 50,
       })),
     ]);
@@ -73,7 +96,7 @@ export async function tgwDetails(tgwIds: string[]): Promise<TgwDetails> {
         let routes: TgwRoute[] = [];
         let truncated = false;
         try {
-          const r = await ec2().send(new SearchTransitGatewayRoutesCommand({
+          const r = await ec2(region).send(new SearchTransitGatewayRoutesCommand({
             TransitGatewayRouteTableId: id,
             Filters: [{ Name: 'state', Values: ['active', 'blackhole'] }],
             MaxResults: ROUTE_CAP,
@@ -94,5 +117,7 @@ export async function tgwDetails(tgwIds: string[]): Promise<TgwDetails> {
       }),
     );
     return { attachments, routeTables };
-  });
+  } catch {
+    return { attachments: [], routeTables: [] }; // per-region degrade
+  }
 }

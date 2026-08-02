@@ -175,11 +175,24 @@ export async function GET(request: Request, { params }: { params: { type: string
       return Response.json({ fleet, replication, range });
     }
 
-    // Transit Gateway: 진단 메트릭 (Bytes/Packets + Blackhole/NoRoute 드롭).
+    // Transit Gateway: 진단 메트릭 (Bytes/Packets + Blackhole/NoRoute 드롭) — TGW 리전별 그룹.
     if (params.type === 'transit_gateway' && url.searchParams.get('ids') !== null) {
       const ids = (url.searchParams.get('ids') ?? '')
         .split(',').map((x) => x.trim()).filter((x) => /^tgw-[0-9a-f]+$/.test(x)).slice(0, 30);
-      return Response.json({ fleet: await tgwFleetLive(ids, undefined, range), range });
+      const rowsR = await getPool().query<{ resource_id: string; region: string | null }>(
+        `SELECT resource_id, region FROM inventory_resources
+         WHERE resource_type = 'transit_gateway' AND resource_id = ANY($1)`, [ids],
+      );
+      const byRegion = new Map<string, string[]>();
+      for (const row of rowsR.rows) {
+        const reg = row.region || process.env.AWS_REGION || 'ap-northeast-2';
+        byRegion.set(reg, [...(byRegion.get(reg) ?? []), row.resource_id]);
+      }
+      const fleet: Record<string, Record<string, number | null>> = {};
+      await Promise.all(
+        [...byRegion.entries()].map(async ([reg, tg]) => Object.assign(fleet, await tgwFleetLive(tg, reg, range))),
+      );
+      return Response.json({ fleet, range });
     }
 
     // Lambda: per-function diagnostics grouped by the function's region.
