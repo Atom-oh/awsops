@@ -245,7 +245,10 @@ function collectorResponse(args: {
             });
           }
         } else if (!request.signal.aborted) {
-          // every source failed — degrade honestly (aws-data 'sql-fallback' pattern), never a dead end
+          // every source failed — degrade honestly (aws-data 'sql-fallback' pattern), never a dead end.
+          // fail-open이 원인을 삼키지 않도록 수집 요약(레그별 미가용 사유)을 서버 로그에 남긴다
+          // (eks-optimize 전량 실패가 무흔적이었던 2026-08-02 사후 개선).
+          console.error(JSON.stringify({ level: 'error', msg: 'collector total failure', collector: collector.key, summary: out?.summary ?? [] }));
           status({ phase: 'collect-fallback', elapsedMs: Date.now() - t0 });
           const notice = chatMsg.collectFallback(lang);
           text = notice;
