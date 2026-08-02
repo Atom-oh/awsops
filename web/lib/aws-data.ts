@@ -192,7 +192,7 @@ const invokeSend: GenSend = async (system, messages) => {
   if (!br) br = new BedrockRuntimeClient({ region: REGION });
   const body = JSON.stringify({
     anthropic_version: 'bedrock-2023-05-31',
-    max_tokens: 600,
+    max_tokens: 1024, // thinking 블록이 예산을 소모해도 SQL 본문이 잘리지 않게
     system,
     messages,
   });
@@ -202,8 +202,11 @@ const invokeSend: GenSend = async (system, messages) => {
     accept: 'application/json',
     body: new TextEncoder().encode(body),
   }));
-  const parsed = JSON.parse(new TextDecoder().decode(res.body)) as { content?: { text?: string }[] };
-  return parsed.content?.[0]?.text ?? '';
+  // sonnet-5는 content 배열이 thinking 블록으로 시작할 수 있음 — content[0].text만 읽으면
+  // 빈 문자열이 되어 'no SQL block, head:""'로 침묵 실패 (2026-08-02 사용자 지속 폴백의 진범).
+  // 모든 text 블록을 join해 어떤 블록 배치에서도 SQL을 회수한다.
+  const parsed = JSON.parse(new TextDecoder().decode(res.body)) as { content?: { type?: string; text?: string }[] };
+  return (parsed.content ?? []).filter((b) => typeof b.text === 'string').map((b) => b.text as string).join('');
 };
 
 /** Pull the SQL out of a ```sql fenced block (or accept bare SQL); null unless it reads SELECT/WITH. */
