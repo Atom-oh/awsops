@@ -269,3 +269,9 @@ make workers     # arm64 worker image push (after apply with workers_enabled=tru
 - **AWS-resource mutation + autonomy = FROZEN (ADR-005, do-not-enable).** Unfreezing is a separate product decision requiring a new ADR + multi-AI panel + dated owner-override — never a doc-cleanup reinterpretation. External DATA read/write is governed and separate (ADR-007).
   - **First exception: ADR-015** (operational self-healing) — owner-override by 오준석 (2026-07-01), scoped to exactly one thing: `ecs:UpdateService force-new-deployment` (a restart — same image/task-def, not a code deploy) on the host's own web service, only on its own Aurora secret-rotation event, IAM scoped to one ARN, secret-id fail-closed, default-off. The rest of ADR-005 (code deploys, remediation, mutating tools) stays FROZEN.
 - New ADR = highest + 1 (currently **015**), single Status, **must update BASELINE in the same PR** (anti-drift). Rules: `docs/decisions/CLAUDE.md`.
+
+## Implementation References
+<!-- AUTO-MANAGED:references — /project-init sync가 이 블록을 관리. 수동 편집은 마커 밖에. -->
+계층별 구현 레퍼런스는 `docs/reference/`(인덱스: [README](docs/reference/README.md)) — [01 엣지 네트워크](docs/reference/01-edge-network.md) · [02 인증](docs/reference/02-auth.md) · [03 Aurora 데이터](docs/reference/03-data-aurora.md) · [04 web BFF](docs/reference/04-web-bff.md) · [05 AgentCore](docs/reference/05-agentcore.md) · [06 워커](docs/reference/06-workers.md) · [07 EKS](docs/reference/07-eks.md).
+전체 조감도: [docs/architecture.md](docs/architecture.md) (이중언어 + mermaid) · 신규 합류: [docs/onboarding.md](docs/onboarding.md) · API 전수 인덱스(80 라우트): [docs/api-reference.md](docs/api-reference.md) · 운영: [docs/runbooks/](docs/runbooks/).
+<!-- /AUTO-MANAGED:references -->
