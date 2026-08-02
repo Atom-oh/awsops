@@ -232,8 +232,12 @@ export async function generateSql(
       ...cleaned.slice(-6).map((m) => ({ role: m.role, content: m.content })),
       { role: 'user', content: question },
     ];
-    return extractSql(await send(system, messages));
-  } catch {
+    const raw = await send(system, messages);
+    const sql = extractSql(raw);
+    if (!sql) console.error(JSON.stringify({ level: 'error', msg: 'aws-data sql-generate: no SQL block', head: (raw ?? '').slice(0, 200) }));
+    return sql;
+  } catch (e) {
+    console.error(JSON.stringify({ level: 'error', msg: 'aws-data sql-generate failed', reason: (e instanceof Error ? e.message : String(e)).slice(0, 300) }));
     return null;
   }
 }
