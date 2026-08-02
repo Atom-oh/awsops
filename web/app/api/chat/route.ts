@@ -110,8 +110,11 @@ function awsDataResponse(args: {
             break;
           } catch (e) {
             result = null;
+            const reason = e instanceof Error ? e.message : String(e);
+            // fail-open이 원인을 삼키지 않도록 시도별 실패 사유를 남긴다 (타임아웃/컬럼 오류 구분).
+            console.error(JSON.stringify({ level: 'error', msg: 'aws-data sql attempt failed', attempt, reason: reason.slice(0, 300) }));
             if (attempt === 0) {
-              sql = await selfCorrectSql(prompt, sql, e instanceof Error ? e.message : String(e));
+              sql = await selfCorrectSql(prompt, sql, reason);
             }
           }
         }

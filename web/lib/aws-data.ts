@@ -50,7 +50,9 @@ export function getSteampipePool(): Pool {
       password: () => getSteampipePassword(),
       ssl: { rejectUnauthorized: false },
       max: 2,
-      statement_timeout: 15_000,
+      // 콜드 멀티 리전 와이드 스캔(예: aws_ec2_instance 전 컬럼 × 3리전)이 15s를 초과하는
+      // 실측(2026-08-02, 'EC2 리스트 정리' 이중 타임아웃 → sql-fallback) — V1(30s)에 맞춰 상향.
+      statement_timeout: 35_000,
       connectionTimeoutMillis: 5_000,
       idleTimeoutMillis: 30_000,
     });
