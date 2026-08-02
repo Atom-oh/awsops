@@ -514,6 +514,11 @@ export const TERMS: Record<string, Pair> = {
   'CoreDNS Top 도메인': { en: 'CoreDNS top domains', zh: 'CoreDNS Top 域名', ja: 'CoreDNS Top ドメイン' },
 
 
+  // ---- Changelog (사이드바 버전 칩 + 모달) ----
+  '변경 이력': { en: 'Changelog', zh: '更新日志', ja: '変更履歴' },
+  '변경 이력 보기': { en: 'View changelog', zh: '查看更新日志', ja: '変更履歴を見る' },
+  '현재 버전': { en: 'Current', zh: '当前版本', ja: '現在のバージョン' },
+
   // ---- IP Addresses (/ip-addresses) ----
   'ENI 전량 + EIP + EKS 파드 IP를 조인해 어떤 IP가 어느 리소스에서 쓰이는지 조회하고, 미사용 public IP(EIP)를 찾습니다': { en: 'Joins every ENI + EIP + EKS pod IP to answer which IP is used by which resource, and surfaces unused public IPs (EIPs)', zh: '联接全部 ENI + EIP + EKS Pod IP，查询每个 IP 被哪个资源使用，并找出未使用的公网 IP（EIP）', ja: '全 ENI + EIP + EKS ポッド IP を結合し、どの IP がどのリソースで使われているかを照会し、未使用のパブリック IP（EIP）を検出します' },
   'IP 검색 — 예: 10.0.1.23 (부분 일치)': { en: 'Search IP — e.g. 10.0.1.23 (partial match)', zh: '搜索 IP — 例：10.0.1.23（部分匹配）', ja: 'IP 検索 — 例: 10.0.1.23（部分一致）' },

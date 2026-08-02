@@ -19,6 +19,7 @@ import SectionLabel from '@/components/ui/SectionLabel';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import LanguageToggle from '@/components/shell/LanguageToggle';
 import UserIdentity from '@/components/shell/UserIdentity';
+import ChangelogVersion from './ChangelogVersion';
 import ThemeToggle from '@/components/shell/ThemeToggle';
 import ScopeSelector from '@/components/shell/ScopeSelector';
 import { cn } from '@/lib/cn';
@@ -328,6 +329,7 @@ export default function Sidebar({ onNavigate, className, persist = true }: { onN
           <span className="h-1.5 w-1.5 rounded-full bg-positive" />
           <span>{t('sidebar.statusLine', { status: t('sidebar.online') })}</span>
         </div>
+        <ChangelogVersion />
         <ThemeToggle />
       </div>
     </aside>

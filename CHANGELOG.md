@@ -15,22 +15,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-02
+
+First release of the **v2 line** (versioned independently from the v1 1.x line, starting at 0.5).
+
 ### Added
 
+- **v2 platform (Terraform MSA)** — private edge (CloudFront VPC Origin → internal ALB → Fargate `web`),
+  Cognito + Lambda@Edge auth (RS256 JWKS, PKCE), Aurora Serverless v2 persistent state, async worker
+  tier (SQS → Step Functions → Lambda/Fargate), AgentCore section agents. IaC: single Terraform root
+  with partial S3 backend and feature-flag gates.
+- **Inventory** — 41 resource types with per-type facet filters, highlight KPIs, chart bands, and
+  sectioned detail panels; VPC resource map; multi-language UI (Korean/English/Chinese/Japanese).
+- **EKS suite** — overview with cluster filter + node drilldown, fleet pages, K9s-style explorer
+  (read-only), container cost (OpenCost), layered diagnosis (control plane / nodes / workloads / addons).
+- **Diagnosis tiers** — 12 services (MSK/RDS/DynamoDB/ElastiCache/OpenSearch/ALB/NLB/S3/EBS/EC2/Lambda/EKS)
+  with range-scoped CloudWatch metric tables and collapsible bilingual diagnosis guides.
+- **Network Flow Monitor** — live NFM top-contributor queries (pod-level endpoints, 1-hour API window),
+  End-to-End hop-path visualization, per-pod transfer cost in EKS container cost.
+- **DNS query logs** — Route53 Resolver + CoreDNS analysis via Logs Insights aggregation
+  (RCODE/type/top domains/NXDOMAIN/sources/firewall, resolver comparison with honest latency gaps).
+- **IP addresses** — ENI-based IP→resource lookup (15+ owner kinds), unused EIP/detached-ENI detection,
+  EKS pod-IP join.
+- **AI assistant** — AgentCore section routing with SSE streaming (markdown renders while streaming),
+  thread history with per-thread and delete-all, floating 🤖 launcher.
 - v2 DB migration framework (`make migrate`) — collision-free **ULID** migration files, advisory-locked,
-  fail-loud (plain INSERT = PK violation, no silent `ON CONFLICT`), **version-stamped** (`app_version`
-  ledger column from each migration's `-- since:` header, else the deploying app version). Cumulative
-  ledger: upgrading from any prior release applies exactly the missing migrations (no version-pair scripts).
-  - `make migrate-status` — offline app version + each migration's declared release.
-  - `scripts/v2/upgrade.sh` (`make upgrade`) — safe release-upgrade wrapper: RDS snapshot → migrate
-    (auto one-time legacy INTEGER→TEXT bootstrap) → idempotency check → `make deploy`. PREVIEW unless `CONFIRM=go`.
-  - See `terraform/v2/foundation/migrations/README.md`.
+  fail-loud, **version-stamped** (`app_version` ledger); `make migrate-status`; `scripts/v2/upgrade.sh`
+  (`make upgrade`): RDS snapshot → migrate → idempotency check → deploy (PREVIEW unless `CONFIRM=go`).
+  Migrations added in this line include `opencost_config`, `prevention_insights`, `eks_registrations`.
 
-### Database migrations (since 2.0.0)
+### Changed
 
-- `opencost_config` — read-only OpenCost install config (cluster-scoped helm version/values)
-- `prevention_insights` — ADR-032 Phase 4 cross-incident proactive-prevention tier
-- `eks_registrations` — EKS runtime registration (in-app query onboarding; EventBridge auto-register)
+- **BREAKING:** v1 (CDK/EC2/Steampipe monolith, `/awsops` basePath) is decommissioned per ADR-016 —
+  v2 serves at the root path with its own auth and data plane.
+
+### Security
+
+- AWS-resource mutation + autonomy frozen (ADR-005); BFF never proxies secrets; in-cluster reads are
+  GET-only; auth tokens are write-only in the registration API.
 
 ## [1.9.0] - 2026-05-27
 
@@ -373,7 +395,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AI routing: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 integration
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
 [1.8.1]: https://github.com/whchoi98/awsops/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/whchoi98/awsops/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/whchoi98/awsops/compare/v1.6.0...v1.7.0
@@ -398,22 +421,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 추가됨
+## [0.5.0] - 2026-08-02
 
-- v2 DB 마이그레이션 프레임워크 (`make migrate`) — 충돌 없는 **ULID** 마이그레이션 파일, advisory-lock,
-  fail-loud(plain INSERT=PK 위반, silent `ON CONFLICT` 없음), **버전 스탬프**(`app_version` ledger 컬럼 —
-  마이그레이션의 `-- since:` 헤더, 없으면 배포 앱 버전). 누적 ledger: 어느 이전 릴리스에서 올리든 누락된
-  마이그레이션만 정확히 적용(버전쌍 스크립트 불필요).
-  - `make migrate-status` — 오프라인 앱 버전 + 각 마이그레이션의 선언된 릴리스.
-  - `scripts/v2/upgrade.sh` (`make upgrade`) — 안전 릴리스 업그레이드 래퍼: RDS 스냅샷 → migrate
-    (레거시 INTEGER→TEXT 1회 부트스트랩 자동) → 멱등 검증 → `make deploy`. `CONFIRM=go` 아니면 PREVIEW.
-  - `terraform/v2/foundation/migrations/README.md` 참조.
+**v2 라인**의 첫 릴리스입니다 (v1 1.x 라인과 독립적으로 0.5부터 시작).
 
-### DB 마이그레이션 (since 2.0.0)
+### Added
 
-- `opencost_config` — read-only OpenCost 설치 설정(클러스터별 helm 버전/values)
-- `prevention_insights` — ADR-032 Phase 4 교차-인시던트 사전예방 티어
-- `eks_registrations` — EKS 런타임 등록(인앱 조회 온보딩; EventBridge 자동등록)
+- **v2 플랫폼 (Terraform MSA)** — 비공개 엣지(CloudFront VPC Origin → 내부 ALB → Fargate `web`),
+  Cognito + Lambda@Edge 인증(RS256 JWKS, PKCE), Aurora Serverless v2 영속 상태, 비동기 워커 티어
+  (SQS → Step Functions → Lambda/Fargate), AgentCore 섹션 에이전트. IaC: partial S3 backend +
+  기능 플래그 게이트의 단일 Terraform 루트.
+- **인벤토리** — 리소스 41종: 타입별 facet 필터, 하이라이트 KPI, 차트 밴드, 섹션형 상세 패널;
+  VPC 리소스 맵; 4개 언어 UI(한국어/영어/중국어/일본어).
+- **EKS 스위트** — 클러스터 필터 + 노드 드릴다운 개요, 플릿 페이지, K9s 스타일 탐색기(읽기 전용),
+  컨테이너 비용(OpenCost), 계층별 진단(컨트롤 플레인/노드/워크로드/애드온).
+- **진단 계층** — 12개 서비스(MSK/RDS/DynamoDB/ElastiCache/OpenSearch/ALB/NLB/S3/EBS/EC2/Lambda/EKS):
+  기간 선택 CloudWatch 메트릭 테이블 + 접이식 이중언어 진단 가이드.
+- **Network Flow Monitor** — 라이브 NFM top-contributors 조회(파드 수준 엔드포인트, 1시간 API 한도),
+  End-to-End 홉 경로 시각화, EKS 컨테이너 비용의 파드별 전송 비용.
+- **DNS 쿼리 로그** — Route53 Resolver + CoreDNS를 Logs Insights 집계로 분석
+  (RCODE/타입/Top 도메인/NXDOMAIN/소스/방화벽, 지연 공백을 정직 표기하는 리졸버 비교).
+- **IP 주소** — ENI 기반 IP→리소스 조회(소유자 15+종 분류), 미사용 EIP/미부착 ENI 탐지,
+  EKS 파드 IP 조인.
+- **AI 어시스턴트** — AgentCore 섹션 라우팅 + SSE 스트리밍(스트리밍 중 마크다운 렌더),
+  대화 이력(개별/전체 삭제), 플로팅 🤖 런처.
+- v2 DB 마이그레이션 프레임워크 (`make migrate`) — 충돌 없는 **ULID** 파일, advisory-lock,
+  fail-loud, **버전 스탬프**(`app_version` ledger); `make migrate-status`; `scripts/v2/upgrade.sh`
+  (`make upgrade`): RDS 스냅샷 → migrate → 멱등 검증 → deploy (`CONFIRM=go` 아니면 PREVIEW).
+  이 라인에서 추가된 마이그레이션: `opencost_config`, `prevention_insights`, `eks_registrations`.
+
+### Changed
+
+- **BREAKING:** v1(CDK/EC2/Steampipe 모놀리식, `/awsops` basePath)은 ADR-016에 따라 폐기 —
+  v2는 루트 경로에서 자체 인증·데이터 플레인으로 서비스.
+
+### Security
+
+- AWS 리소스 변경 + 자율 실행 동결(ADR-005); BFF는 시크릿을 프록시하지 않음; 인-클러스터 조회는
+  GET 전용; 인증 토큰은 등록 API에서 쓰기 전용.
 
 ## [1.9.0] - 2026-05-27
 
@@ -756,7 +801,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AI 라우팅: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 통합
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
 [1.8.1]: https://github.com/whchoi98/awsops/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/whchoi98/awsops/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/whchoi98/awsops/compare/v1.6.0...v1.7.0
