@@ -30,7 +30,7 @@ import { getAgentSpace } from '@/lib/agent-space';
 import { randomUUID } from 'crypto';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120; // long agent calls
+export const maxDuration = 180; // 콜드 Steampipe(≤35s) + 자기수정 + 장문 분석 스트림이 60s를 넘던 실측(2026-08-02) // long agent calls
 
 const MAX_PROMPT = 50_000;
 const TYPE_DELAY_MS = Number(process.env.CHAT_TYPEWRITER_MS) || 0;

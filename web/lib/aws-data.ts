@@ -225,8 +225,11 @@ export async function generateSql(
   const send = opts.send ?? invokeSend;
   try {
     const system = `${SQL_GEN_PROMPT}\n\n(The user's UI language is '${lang}' — still return ONLY the SQL block; keep aliases as plain English identifiers.)`;
+    // 이전 턴의 폴백 공지('⚠️ …도구 사용 불가')가 이력에 남으면 모델이 "도구 불가"로 오도되어
+    // SQL 생성을 거부할 수 있다 — 오염 방지를 위해 ⚠️ 시작 assistant 턴은 제외 (2026-08-02 실측).
+    const cleaned = history.filter((m) => !(m.role === 'assistant' && m.content.trimStart().startsWith('⚠️')));
     const messages = [
-      ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+      ...cleaned.slice(-6).map((m) => ({ role: m.role, content: m.content })),
       { role: 'user', content: question },
     ];
     return extractSql(await send(system, messages));
@@ -322,7 +325,7 @@ export async function* analyzeStream(opts: AnalyzeOpts): AsyncGenerator<string> 
     system: [{ text: system }],
     messages: [{ role: 'user', content: [{ text: user }] }],
     // sonnet-5 rejects `temperature` on ConverseStream (see synthesize.ts / agent.py note) — omit it.
-    inferenceConfig: { maxTokens: 4096 },
+    inferenceConfig: { maxTokens: 8192 }, // 69행 전량 목록 답변이 4096 상한에 절단되던 실측 — 상향
   }), { abortSignal: opts.abortSignal });
   for await (const ev of res.stream ?? []) {
     const d = ev.contentBlockDelta?.delta;
