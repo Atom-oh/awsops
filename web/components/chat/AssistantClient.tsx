@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Sparkles, PanelLeft, X } from 'lucide-react';
+import { PanelLeft, X } from 'lucide-react';
 import PresetChips from './PresetChips';
 import Composer from './Composer';
 import MessageList from './MessageList';
@@ -87,7 +87,7 @@ export default function AssistantClient() {
             >
               <PanelLeft size={17} />
             </button>
-            <Sparkles size={17} className="shrink-0 text-brand-500" />
+            <span aria-hidden className="shrink-0 text-[17px] leading-none">🤖</span>
             <span className="truncate">{title}</span>
           </div>
           {activeSec && (
