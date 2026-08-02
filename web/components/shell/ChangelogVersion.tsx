@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ScrollText } from 'lucide-react';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import Markdown from '@/components/chat/Markdown';
@@ -49,7 +50,7 @@ export default function ChangelogVersion() {
         v{data.latest}
       </button>
 
-      {open && (
+      {open && createPortal(
         <>
           <div aria-hidden onClick={() => setOpen(false)} className="fixed inset-0 z-40 bg-ink-900/40" />
           <div
@@ -92,7 +93,8 @@ export default function ChangelogVersion() {
               {body ? <Markdown>{body}</Markdown> : <p className="text-ink-400">{tt('데이터 없음')}</p>}
             </div>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </>
   );
