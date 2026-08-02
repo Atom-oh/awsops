@@ -148,6 +148,32 @@ describe('classifyRoute — ADR-044 multi-domain detection', () => {
   });
 });
 
+describe('aws-data rule — LAST in RULES (v1 priority-10 parity)', () => {
+  it('never steals questions a specialized domain keyword already claims', () => {
+    expect(pickGateway('CrashLoop 파드 몇 개야?')).toBe('container');      // 파드 → container wins
+    expect(pickGateway('how many CloudWatch alarms fired today')).toBe('monitoring');
+    expect(pickGateway('IAM 역할 총 3개가 미사용이야?')).toBe('security'); // 역할 → security wins
+    expect(pickGateway('RDS 인스턴스 개수 알려줘')).toBe('data');          // rds → data wins
+  });
+  it('catches unclaimed list/count questions (the v1 aws-data receiver)', () => {
+    expect(pickGateway('EC2 인스턴스 몇 개야?')).toBe('aws-data');
+    expect(pickGateway('S3 버킷 전체 목록 보여줘')).toBe('aws-data');
+    expect(pickGateway('list all S3 buckets with encryption status')).toBe('aws-data');
+    expect(pickGateway('EBS 볼륨 개수는?')).toBe('aws-data');
+  });
+  it('weak phrasings without a strong list/count pattern still fall through to ops', () => {
+    expect(pickGateway('안녕하세요')).toBe('ops');
+    expect(matchedSections('EC2 상태가 궁금해')).toEqual([]); // no 몇개/개수/목록 pattern → classifier decides
+  });
+  it('is a single distinct regex match → short-circuits without an LLM call', async () => {
+    const classify = vi.fn();
+    const r = await classifyRoute('EC2 인스턴스 몇 개야?', undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('aws-data');
+    expect(r.method).toBe('regex');
+    expect(classify).not.toHaveBeenCalled();
+  });
+});
+
 describe('topology / unused-resource routing → ops', () => {
   // The capability home (inventory_read MCP: load balancers, target groups, CloudFront, unused
   // detection) lives on the ops gateway. These nouns must route there deterministically.

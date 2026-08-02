@@ -135,6 +135,12 @@ resource "aws_iam_role_policy" "task_metrics" {
         "ec2:SearchTransitGatewayRoutes",
       ]
       Resource = "*"
+      }, {
+      # aws-data 챗 라우트: Steampipe 네트워크 리스너 비밀번호 (해당 시크릿만 스코프)
+      Sid      = "SteampipeSecret"
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = "arn:aws:secretsmanager:*:*:secret:${var.project}-steampipe-db-*"
     }]
   })
 }

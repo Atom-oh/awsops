@@ -3,7 +3,11 @@ import { invokeAgent, invokeAgentStreamDetailed, type ChatMsg, type TokenUsage }
 import { getModelLabel, getModelPricing, computeCost } from '@/lib/bedrock';
 import { isCodeIntent, getInterpreterId, generateCode, extractPython, executePython } from '@/lib/code-interpreter';
 import { bedrockDirectStream } from '@/lib/bedrock-direct';
-import { chatMsg, normalizeChatLang } from '@/lib/chat-i18n';
+import {
+  steampipeAvailable, generateSql, selfCorrectSql, runSteampipeQuery, analyzeStream,
+  AWS_DATA_ANALYSIS_MODEL, type SteampipeResult,
+} from '@/lib/aws-data';
+import { chatMsg, normalizeChatLang, type ChatLang } from '@/lib/chat-i18n';
 import { getAccount, validateAccountId } from '@/lib/accounts';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
 import { classifyPrompt, buildClassifierContext } from '@/lib/classifier';
@@ -68,6 +72,113 @@ function renderSchemaContext(schemas: { label: string; kind: string | null; sche
   // Absolute backstop: per-entry budgeting doesn't account for per-line indentation, so cap the joined
   // block at SCHEMA_CTX_TOTAL (well within the agent's 8000-char extraContext budget).
   return lines.join('\n').slice(0, SCHEMA_CTX_TOTAL);
+}
+
+/** v1 priority-10 'aws-data' local handler (v1 route.ts:1167-1216 port): LLM-generated Steampipe
+ *  SQL → guarded live execution (one self-correction on error, corrected SQL re-previewed as a
+ *  status frame) → streamed Bedrock analysis grounded in the rows. Same SSE frame contract as the
+ *  code route: meta → status(querying + SQL preview) → deltas → footer meta → [DONE]. If SQL still
+ *  fails after the self-correction, it degrades honestly to a Bedrock-direct answer (v1
+ *  'sql-fallback') — never a dead end. */
+function awsDataResponse(args: {
+  request: Request; user: { sub: string }; prompt: string; history: ChatMsg[];
+  lang: ChatLang; sessionId: string; threadId: string;
+}): Response {
+  const { request, user, prompt, history, lang, sessionId, threadId } = args;
+  const enc = new TextEncoder();
+  const t0 = Date.now();
+  const stream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(enc.encode(': heartbeat\n\n'));
+      controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify({
+        gateway: 'aws-data', agentName: 'AWS Data (Steampipe SQL)', tier: 'builtin', skillHashes: [], threadId,
+      })}\n\n`));
+      const status = (obj: Record<string, unknown>) =>
+        controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify(obj) + '\n\n'));
+      let text = '';
+      try {
+        status({ phase: 'querying', elapsedMs: 0 });
+        let sql = await generateSql(prompt, history, lang);
+        let result: SteampipeResult | null = null;
+        for (let attempt = 0; attempt < 2 && sql && !request.signal.aborted; attempt++) {
+          // v1-parity SQL preview (main path emits the same shape from ev.toolInput) — the
+          // corrected SQL of attempt 2 flows through this same frame.
+          status({ phase: 'querying', tool: 'steampipe_sql', query: sql, elapsedMs: Date.now() - t0 });
+          try {
+            result = await runSteampipeQuery(sql);
+            break;
+          } catch (e) {
+            result = null;
+            if (attempt === 0) {
+              sql = await selfCorrectSql(prompt, sql, e instanceof Error ? e.message : String(e));
+            }
+          }
+        }
+        if (sql && result && !request.signal.aborted) {
+          let usage: TokenUsage | undefined;
+          for await (const d of analyzeStream({
+            question: prompt, sql, rows: result.rows, rowCount: result.rowCount, truncated: result.truncated,
+            lang, abortSignal: request.signal, onUsage: (u) => { usage = u; },
+          })) {
+            if (request.signal.aborted) break;
+            text += d;
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: d })}\n\n`));
+          }
+          const costUsd = usage
+            ? computeCost(
+                { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 },
+                getModelPricing(AWS_DATA_ANALYSIS_MODEL),
+              ).total
+            : undefined;
+          const footerMeta = {
+            elapsedMs: Date.now() - t0, tools: ['steampipe_sql'], model: getModelLabel(AWS_DATA_ANALYSIS_MODEL),
+            ...(usage ? { usage } : {}),
+            ...(costUsd !== undefined ? { costUsd: Number(costUsd.toFixed(6)) } : {}),
+          };
+          controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footerMeta)}\n\n`));
+          if (!request.signal.aborted) {
+            recordExchange({
+              threadId, userSub: user.sub, sessionId, promptTitle: prompt.slice(0, 40),
+              userContent: prompt, assistantContent: text, gateway: 'aws-data',
+              meta: { ...footerMeta, via: `steampipe (${result.rowCount} rows)` },
+            }).catch(() => {});
+            void recordChatInvoke({
+              gateway: 'aws-data', userSub: user.sub, elapsedMs: Date.now() - t0, success: true,
+              via: `steampipe (${result.rowCount} rows)`, model: AWS_DATA_ANALYSIS_MODEL, toolCount: 1, usage,
+            });
+          }
+        } else if (!request.signal.aborted) {
+          // v1 'sql-fallback' (route.ts:1215): generation/execution failed even after the one
+          // self-correction — answer from general knowledge, honestly labeled, never a dead end.
+          status({ phase: 'sql-fallback', elapsedMs: Date.now() - t0 });
+          const notice = chatMsg.sqlFallback(lang);
+          text = notice;
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: notice })}\n\n`));
+          for await (const d of bedrockDirectStream(prompt, history, { abortSignal: request.signal, responseLanguage: lang })) {
+            if (request.signal.aborted) break;
+            text += d;
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: d })}\n\n`));
+          }
+          const footerMeta = { elapsedMs: Date.now() - t0 };
+          controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footerMeta)}\n\n`));
+          if (!request.signal.aborted) {
+            recordExchange({
+              threadId, userSub: user.sub, sessionId, promptTitle: prompt.slice(0, 40),
+              userContent: prompt, assistantContent: text, gateway: 'aws-data',
+              meta: { ...footerMeta, via: 'sql-fallback' },
+            }).catch(() => {});
+            void recordChatInvoke({ gateway: 'aws-data', userSub: user.sub, elapsedMs: Date.now() - t0, success: false, via: 'sql-fallback' });
+          }
+        }
+      } catch (e) {
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : 'aws-data route failed' })}\n\n`));
+        void recordChatInvoke({ gateway: 'aws-data', userSub: user.sub, elapsedMs: Date.now() - t0, success: false });
+      }
+      controller.enqueue(enc.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+  return new Response(stream, { headers: SSE_HEADERS });
 }
 
 export async function POST(request: Request) {
@@ -206,9 +317,22 @@ export async function POST(request: Request) {
     : customPinEnabled
       ? customPinTarget                                   // explicit custom pin — highest precedence
       : (hybridOn && pinIsBuiltin) ? null : pickCustomAgent(prompt, customAgents);
-  const routeKey = customPinEnabled
+  let routeKey = customPinEnabled
     ? customPinTarget!
     : (customPick && (await isCustomAgentEnabled(customPick)) ? customPick : gateway);
+  // v1 priority-10 'aws-data' local handler: when the routing decision (pin included — a pinned
+  // built-in section reaches here as `gateway`) lands on aws-data, answer with live Steampipe SQL
+  // instead of an AgentCore gateway. Fail-open like the code route: Steampipe unreachable /
+  // secret missing ⇒ one 'sql-unavailable' status line + normal routing below (ops home).
+  let sqlUnavailable = false;
+  if (routeKey === 'aws-data') {
+    if (await steampipeAvailable()) {
+      const threadId = (typeof body.threadId === 'string' && THREAD_RE.test(body.threadId)) ? body.threadId : randomUUID();
+      return awsDataResponse({ request, user, prompt, history, lang, sessionId, threadId });
+    }
+    sqlUnavailable = true;
+    routeKey = 'ops'; // v2's general home (v1 'general' equivalent) — never a dead 🔒
+  }
   // ADR-039 P2: enabled egress-READ integrations contribute tools + bounded context (per-space scoped).
   // ingress + READ_WRITE contribute nothing here (writes go via the mutating gate).
   // P2-infra inc2: also carry connection details so the resolver can hand agent.py a live-connect list.
@@ -236,7 +360,8 @@ export async function POST(request: Request) {
   // route.multiDomain can never force a fan-out over an inactive route). Each fan-out gateway gets
   // its OWN built-in invoke input (gate CRITICAL: never reuse the primary's spec/toolAllowlist).
   const synthOn = process.env.MULTI_ROUTE_SYNTHESIS_ENABLED === 'true';
-  const fanGateways = (route?.selected ?? []).filter((s) => s.active).map((s) => s.key).slice(0, 3);
+  // aws-data is excluded from fan-out: it has no AgentCore gateway (local Steampipe handler only).
+  const fanGateways = (route?.selected ?? []).filter((s) => s.active && s.key !== 'aws-data').map((s) => s.key).slice(0, 3);
   const doFanout = synthOn && hybridOn && !customPick && !unavailablePin && spec.tier === 'builtin'
     && fanGateways.length >= 2;
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).
@@ -311,6 +436,10 @@ export async function POST(request: Request) {
         ...(!useAssistant && spec.tier === 'custom' ? { customAgent: spec.agentName, spaceVersion: spec.spaceVersion } : {}),
       };
       controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(meta)}\n\n`));
+      // aws-data fail-open: one honest status line, then the normal (ops) routing below answers.
+      if (sqlUnavailable) {
+        controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify({ phase: 'sql-unavailable' }) + '\n\n'));
+      }
       // ADR-044 §2: an explicit pin to a custom agent disabled/absent in this Agent Space gets an
       // HONEST message — never a silent fallback to keyword/classifier routing.
       if (unavailablePin) {

@@ -560,6 +560,19 @@ export const TERMS: Record<string, Pair> = {
   '상한 도달': { en: 'Cap reached', zh: '达到上限', ja: '上限到達' },
   '라우트 없음': { en: 'No routes', zh: '无路由', ja: 'ルートなし' },
 
+
+  // ---- aws-data 라우트 (Steampipe SQL) ----
+  '리전별 EC2 인스턴스 몇 개야?': { en: 'How many EC2 instances per region?', zh: '每个区域有多少台 EC2 实例？', ja: 'リージョン別の EC2 インスタンスはいくつ？' },
+  'S3 버킷 전체 목록과 암호화 상태': { en: 'All S3 buckets with encryption status', zh: '全部 S3 存储桶及加密状态', ja: 'S3 バケットの全一覧と暗号化状態' },
+  '미암호화 EBS 볼륨 찾아줘': { en: 'Find unencrypted EBS volumes', zh: '查找未加密的 EBS 卷', ja: '未暗号化の EBS ボリュームを探して' },
+  '람다 함수 런타임별 분포': { en: 'Lambda functions by runtime', zh: '按运行时统计 Lambda 函数分布', ja: 'Lambda 関数のランタイム別分布' },
+  '이 결과를 계정/리전별로 분해해줘': { en: 'Break this result down by account/region', zh: '按账号/区域拆分这个结果', ja: 'この結果をアカウント/リージョン別に分解して' },
+  '태그가 누락된 항목만 추려줘': { en: 'Show only items missing tags', zh: '只筛选缺少标签的项目', ja: 'タグが欠落している項目だけ抽出して' },
+  '이 목록에서 보안상 위험한 설정을 짚어줘': { en: 'Point out risky security settings in this list', zh: '指出此列表中存在安全风险的配置', ja: 'この一覧からセキュリティ上危険な設定を指摘して' },
+  '라이브 SQL 미가용 — 일반 라우팅으로 전환…': { en: 'Live SQL unavailable — switching to normal routing…', zh: '实时 SQL 不可用——切换到常规路由…', ja: 'ライブ SQL 利用不可 — 通常ルーティングに切替中…' },
+  'SQL 실행 실패 — 일반 지식으로 답변 중…': { en: 'SQL execution failed — answering from general knowledge…', zh: 'SQL 执行失败——正在以通用知识回答…', ja: 'SQL 実行失敗 — 一般知識で回答中…' },
+  '⚠️ 라이브 SQL 조회에 실패해 일반 지식으로 답변합니다(계정 실데이터 미포함).': { en: '⚠️ The live SQL query failed — answering from general knowledge (no live account data).', zh: '⚠️ 实时 SQL 查询失败——以下回答基于通用知识（不含账户实时数据）。', ja: '⚠️ ライブ SQL クエリに失敗したため、一般知識で回答します（アカウントの実データは含まれません）。' },
+
 };
 
 // Parameterized patterns — matched AFTER an exact TERMS hit fails.

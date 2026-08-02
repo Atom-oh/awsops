@@ -84,6 +84,16 @@ export const SECTIONS: Section[] = [
   ], followUps: [
     '같은 기간 에러율과 레이턴시 상관관계를 그려줘', 'p99 급증 구간의 트레이스를 더 파고들어줘', '이 지표의 라벨별 분해(서비스/엔드포인트)를 보여줘',
   ] },
+  // v1 priority-10 'aws-data' port — MUST stay LAST: it is the receiver for listing/status/count
+  // questions no specialized gateway claimed (LLM-generated Steampipe SQL, live-executed).
+  { key: 'aws-data', label: 'AWS Data', icon: '🗃️', color: 'var(--sec-awsdata)', active: true, presets: [
+    '리전별 EC2 인스턴스 몇 개야?',
+    'S3 버킷 전체 목록과 암호화 상태',
+    '미암호화 EBS 볼륨 찾아줘',
+    '람다 함수 런타임별 분포',
+  ], followUps: [
+    '이 결과를 계정/리전별로 분해해줘', '태그가 누락된 항목만 추려줘', '이 목록에서 보안상 위험한 설정을 짚어줘',
+  ] },
 ];
 
 export const AUTO_PRESETS: string[] = [

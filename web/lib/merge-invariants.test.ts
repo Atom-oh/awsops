@@ -22,11 +22,16 @@ describe('S2 routing consistency', () => {
     expect(rules).toEqual(sections);
   });
 
-  it('section keys with observability→external-obs alias match GATEWAYS', () => {
+  it('section keys with observability→external-obs alias match GATEWAYS (+ local-handler sections)', () => {
     const alias = (k: string) => (k === 'observability' ? 'external-obs' : k);
-    const sections = [...new Set(readSectionKeys().map(alias))].sort();
+    // aws-data (v1 priority-10 port) is served by a LOCAL Steampipe SQL handler in
+    // web/app/api/chat/route.ts — deliberately NOT an AgentCore gateway, so it is the one
+    // section allowed to exist without a catalog.py gateway. Everything else must still match.
+    const LOCAL_SECTIONS = new Set(['aws-data']);
+    const sections = [...new Set(readSectionKeys().filter((k) => !LOCAL_SECTIONS.has(k)).map(alias))].sort();
     const gateways = [...readCatalogGateways()].sort();
     expect(sections).toEqual(gateways);
+    expect(readSectionKeys()).toContain('aws-data'); // the local section itself must stay registered
   });
 
   it('agent.py runtime _GATEWAY_ALIAS maps observability to external-obs', () => {

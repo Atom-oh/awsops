@@ -50,6 +50,12 @@ const M = {
     zh: '\n\n_（沙箱执行失败，仅提供代码）_',
     ja: '\n\n_（サンドボックス実行に失敗したため、コードのみ提供します）_',
   } as L10n,
+  sqlFallback: {
+    ko: '⚠️ 라이브 SQL 조회에 실패해 일반 지식으로 답변합니다(계정 실데이터 미포함).\n\n',
+    en: '⚠️ The live SQL query failed — answering from general knowledge (no live account data).\n\n',
+    zh: '⚠️ 实时 SQL 查询失败——以下回答基于通用知识（不含账户实时数据）。\n\n',
+    ja: '⚠️ ライブ SQL クエリに失敗したため、一般知識で回答します（アカウントの実データは含まれません）。\n\n',
+  } as L10n,
 } as const;
 
 export const chatMsg = {
@@ -59,4 +65,5 @@ export const chatMsg = {
   fallbackNotice: (lang: ChatLang) => M.fallbackNotice[lang],
   codeExecHeader: (lang: ChatLang) => M.codeExecHeader[lang],
   codeExecFailed: (lang: ChatLang) => M.codeExecFailed[lang],
+  sqlFallback: (lang: ChatLang) => M.sqlFallback[lang],
 };

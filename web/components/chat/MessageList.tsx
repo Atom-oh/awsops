@@ -64,6 +64,8 @@ function statusLabel(s: { phase: string; elapsedMs?: number }): string {
     case 'code-generating': return `💻 코드 생성 중…${secs}`;
     case 'code-executing': return `⚡ 코드 실행 중…${secs}`;
     case 'querying': return `🔎 쿼리 실행 중…${secs}`;
+    case 'sql-unavailable': return '🗃️ 라이브 SQL 미가용 — 일반 라우팅으로 전환…';
+    case 'sql-fallback': return `🗃️ SQL 실행 실패 — 일반 지식으로 답변 중…${secs}`;
     case 'working': return `🔎 분석 중…${secs}`;
     default: return '🔎 분석 중…';
   }

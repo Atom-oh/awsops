@@ -19,6 +19,10 @@ const RULES: { key: string; re: RegExp }[] = [
   // Match only EXPLICIT datasource identifiers; ambiguous generic terms (metric/latency/p99) are left to
   // the LLM classifier so they don't steal CloudWatch's 'metric'. Loki/Tempo/Mimir stay on monitoring.
   { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스/i },
+  // v1 priority-10 'aws-data' (Steampipe SQL) — MUST stay LAST: only STRONG list/count patterns,
+  // and every specialized domain keyword above wins first ('CrashLoop 파드 몇 개야?' → container).
+  // This is the receiver for listing/status/count questions nobody else claimed.
+  { key: 'aws-data', re: /몇 ?개|개수|총 ?\d|전체 ?(목록|리스트)|목록 ?보여|how many|count of|list all/i },
 ];
 
 /** Choose the agent gateway. A valid pin always wins; otherwise keyword-match; else 'ops'. */

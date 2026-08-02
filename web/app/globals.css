@@ -45,6 +45,7 @@
   --sec-network:#2F6F8F; --sec-container:#1F7A48; --sec-data:#7C5CBF;
   --sec-security:#BE123C; --sec-cost:#8A5A12; --sec-monitoring:#2563EB;
   --sec-iac:#8E4830; --sec-ops:#5F5A4D; --sec-observability:#0E7490;
+  --sec-awsdata:#9C2F7F; /* magenta/plum — the only unused hue family in the section palette */
   /* near-black brand marks that must invert on dark (icon accents) */
   --integration-notion:#0F172A;
 
@@ -87,6 +88,7 @@
   --sec-network:#6FAECB; --sec-container:#4FBE82; --sec-data:#A98FE3;
   --sec-security:#F0708F; --sec-cost:#D9A15A; --sec-monitoring:#7DA4F5;
   --sec-iac:#CE8A6E; --sec-ops:#A8A190; --sec-observability:#4FB3CF;
+  --sec-awsdata:#E08BC7; /* magenta/plum lifted for dark surfaces (same hue as light) */
   --integration-notion:#CBD5E1;
   /* neutrals — surfaces dark (low) → text light (high); 900 pinned for scrims */
   --ink-50:#1F262D; --ink-100:#29333B; --ink-200:#38444E; --ink-300:#586773;
