@@ -71,7 +71,7 @@ describe('classifyRoute', () => {
     expect(r.ranked).toEqual([
       { key: 'network', score: 0.9, active: true },
       { key: 'data', score: 0.6, active: true }, // data activated in Wave-1
-      { key: 'container', score: 0.4, active: false },
+      { key: 'container', score: 0.4, active: true }, // container activated 2026-08-02
     ]);
   });
   it('no-match goes to the LLM too', async () => {
@@ -97,10 +97,9 @@ describe('classifyRoute', () => {
     expect(r.primary).toBe('ops'); // legacy pickGateway behavior preserved when flag off
     expect(r.method).toBe('regex');
   });
-  it('honors a pin to a valid-but-inactive section, surfacing active:false (spec §2.3)', async () => {
-    // 'container' is still inactive after the Wave-1 fleet activation (data/cost/monitoring went active)
+  it('honors a pin to a now-active section, surfacing active:true (container activated 2026-08-02)', async () => {
     const r = await classifyRoute('아무거나', 'container', { llmEnabled: true, classify: vi.fn() });
-    expect(r).toEqual({ primary: 'container', ranked: [{ key: 'container', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: false }] });
+    expect(r).toEqual({ primary: 'container', ranked: [{ key: 'container', score: 1, active: true }], method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: true }] });
   });
   it('marks an unknown key from a custom classifier as active:false (contract)', async () => {
     const classify = vi.fn().mockResolvedValue([{ key: 'bogus-section', score: 0.9 }]);
@@ -120,7 +119,7 @@ describe('classifyRoute — ADR-044 multi-domain detection', () => {
     const r = await classifyRoute('EKS 파드가 RDS에 연결이 안 돼요', undefined, { llmEnabled: true, classify });
     expect(r.multiDomain).toBe(true);
     // container is inactive ⇒ excluded from the fan-out set even though score ≥ threshold
-    expect(r.selected.map((s) => s.key)).toEqual(['network', 'data']);
+    expect(r.selected.map((s) => s.key)).toEqual(['network', 'data', 'container']); // container 활성화(2026-08-02) — threshold 통과 3개 전부(≤3)
   });
   it('one dominant active route ⇒ single (multiDomain false, selected=[primary])', async () => {
     const classify = vi.fn().mockResolvedValue([{ key: 'cost', score: 0.95 }, { key: 'data', score: 0.1 }]);

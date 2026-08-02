@@ -20,7 +20,7 @@ export const SECTIONS: Section[] = [
   ], followUps: [
     '이 경로의 SG/NACL 규칙을 홉별로 검증해줘', '해당 구간 Flow Log에서 REJECT 기록 찾아줘', '동일 증상이 다른 AZ/서브넷에도 있는지 확인해줘',
   ] },
-  { key: 'container', label: 'Container', icon: '📦', color: 'var(--sec-container)', active: false, presets: [
+  { key: 'container', label: 'Container', icon: '📦', color: 'var(--sec-container)', active: true, presets: [
     '파드가 Pending/CrashLoop인 이유',
     'ECS 태스크 반복 재시작 진단',
     '네임스페이스 리소스 상태',
@@ -60,7 +60,7 @@ export const SECTIONS: Section[] = [
   ], followUps: [
     '이 알람의 최근 1주 발생 패턴을 분석해줘', '관련 로그에서 에러 시그니처를 추출해줘', '이 지표에 적절한 임계값/이상탐지 설정을 제안해줘',
   ] },
-  { key: 'iac', label: 'IaC', icon: '🏗️', color: 'var(--sec-iac)', active: false, presets: [
+  { key: 'iac', label: 'IaC', icon: '🏗️', color: 'var(--sec-iac)', active: true, presets: [
     '드리프트 난 스택 찾기',
     '이 스택의 최근 변경 이력',
     '삭제보호/위험 리소스 점검',
