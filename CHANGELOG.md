@@ -21,28 +21,72 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Added
 
-- **v2 platform (Terraform MSA)** — private edge (CloudFront VPC Origin → internal ALB → Fargate `web`),
-  Cognito + Lambda@Edge auth (RS256 JWKS, PKCE), Aurora Serverless v2 persistent state, async worker
-  tier (SQS → Step Functions → Lambda/Fargate), AgentCore section agents. IaC: single Terraform root
-  with partial S3 backend and feature-flag gates.
-- **Inventory** — 41 resource types with per-type facet filters, highlight KPIs, chart bands, and
-  sectioned detail panels; VPC resource map; multi-language UI (Korean/English/Chinese/Japanese).
-- **EKS suite** — overview with cluster filter + node drilldown, fleet pages, K9s-style explorer
-  (read-only), container cost (OpenCost), layered diagnosis (control plane / nodes / workloads / addons).
-- **Diagnosis tiers** — 12 services (MSK/RDS/DynamoDB/ElastiCache/OpenSearch/ALB/NLB/S3/EBS/EC2/Lambda/EKS)
-  with range-scoped CloudWatch metric tables and collapsible bilingual diagnosis guides.
-- **Network Flow Monitor** — live NFM top-contributor queries (pod-level endpoints, 1-hour API window),
-  End-to-End hop-path visualization, per-pod transfer cost in EKS container cost.
-- **DNS query logs** — Route53 Resolver + CoreDNS analysis via Logs Insights aggregation
-  (RCODE/type/top domains/NXDOMAIN/sources/firewall, resolver comparison with honest latency gaps).
-- **IP addresses** — ENI-based IP→resource lookup (15+ owner kinds), unused EIP/detached-ENI detection,
-  EKS pod-IP join.
-- **AI assistant** — AgentCore section routing with SSE streaming (markdown renders while streaming),
-  thread history with per-thread and delete-all, floating 🤖 launcher.
-- v2 DB migration framework (`make migrate`) — collision-free **ULID** migration files, advisory-locked,
-  fail-loud, **version-stamped** (`app_version` ledger); `make migrate-status`; `scripts/v2/upgrade.sh`
-  (`make upgrade`): RDS snapshot → migrate → idempotency check → deploy (PREVIEW unless `CONFIRM=go`).
-  Migrations added in this line include `opencost_config`, `prevention_insights`, `eks_registrations`.
+- **Platform — Terraform MSA, private edge & auth**
+  - Rebuild the stack as a Terraform MSA (ADR-001): single `terraform/v2/foundation/` root, partial S3 backend, feature-flag gates on every large feature (default false → `plan` = No changes) — CDK dropped.
+  - Serve a fully private edge path: CloudFront (TLS) → VPC Origin `https-only:443` → internal ALB HTTPS:443 (regional ACM) → Fargate `awsops-v2-web` (arm64, root path — no basePath); no public ALB.
+  - Authenticate at the edge (ADR-002): Cognito User Pool + Lambda@Edge RS256 JWKS verification (iss/aud/token_use) + PKCE public client; self-hosted `/login` form (BFF `InitiateAuth` mints a 12h `awsops_token`); keep the Hosted UI PKCE flow as a dark fallback.
+  - Run web as a Next.js 14 thin-BFF exposing 80 API routes — enqueue heavy work, never run it inline.
+  - Add the async worker backbone (ADR-009): `POST /api/jobs` → `worker_jobs` ledger + SQS → ESM (kill-switch) → idempotent dispatcher Lambda → Step Functions `$.runtime` Choice → Lambda (short) or `ecs:runTask.sync` Fargate (long/OOM) → status_updater + 5-minute reaper.
+  - Ship a Makefile deployment flow: `make configure` (interactive TUI) / `deploy` / `agentcore` / `workers` / `migrate` / `upgrade`.
+- **Data — Aurora & migrations**
+  - Persist all app state in Aurora Serverless v2 (PG 17.9, 0.5–4 ACU, KMS CMK, RDS-managed master secret) via node-pg — replaces v1 `data/*.json`.
+  - Add the v2 DB migration framework (`make migrate`): collision-free ULID files, advisory-locked, fail-loud, version-stamped `app_version` ledger; `make migrate-status`; `scripts/v2/upgrade.sh` (`make upgrade`): RDS snapshot → migrate → idempotency check → deploy (PREVIEW unless `CONFIRM=go`). Migrations in this line include `opencost_config`, `prevention_insights`, `eks_registrations`.
+  - Feed inventory through a flag-gated warm Steampipe Fargate (FDW) + sync Lambda → Aurora pipeline (`steampipe_enabled`); back-fill v1 history via `backfill-*.mjs`.
+- **Inventory — 41 resource types**
+  - Compute (6): EC2, Lambda, ECS Clusters, ECS Services, ECS Tasks, ECR.
+  - Storage & DB (11): S3, EBS Volumes, EBS Snapshots, RDS, DynamoDB, ElastiCache, ElastiCache Replication Groups, OpenSearch, OpenSearch Serverless, MSK, Neptune.
+  - Network (17): VPC, Subnet, Route Table, NAT Gateway, Internet Gateway, Transit Gateway, Security Group, Route53 Records, CloudFront, CloudFront VPC Origins, ALB, NLB, Target Group, ALB Listener Rules, API Gateway (HTTP), API GW Integrations, API GW Routes.
+  - Security (6): IAM Roles, IAM Users, IAM Policies, WAF Web ACLs, CloudTrail Trails, S3 Public Access.
+  - Monitoring (1): CloudWatch Alarms.
+  - Give every type facet filters with live counts, a state SegmentedControl, tailored highlight KPI cards, distribution donuts + Top-N bars, and a sectioned DetailPanel; flag EOL Lambda runtimes; add CloudTrail event lookup, summary + daily-trend APIs (up to 90 days), and per-type refresh (Steampipe → Aurora sync trigger).
+- **EKS suite**
+  - Overview with cluster filter + node drilldown; fleet pages for nodes/pods/deployments/services (server-side live aggregation; per-cluster failures degrade to `reachable:false`).
+  - K9s-style read-only in-cluster explorer with per-object describe (secrets excluded).
+  - Container cost via OpenCost: saved per-cluster config, 1-day allocation (KPI + per-pod cost), install-bundle download (values.yaml + install.sh, run out-of-band), install-status badge.
+  - Cluster register/unregister + Access Entry status with onboarding guidance (Terraform grants Access Entry + AmazonEKSAdminViewPolicy, read-only); control-plane + Container Insights metrics; per-instance-type ENI IPv4 limits.
+- **Diagnosis tiers — 12 services**
+  - Provide range-scoped CloudWatch metric tables for EC2, RDS, ElastiCache, OpenSearch, MSK (broker nodes), DynamoDB, S3, EBS, Lambda, ALB, NLB, and EKS (layered: control plane / nodes / workloads / addons).
+  - Attach collapsible per-service diagnosis guides in all 4 UI languages; add a Target Group health table and TGW detail section.
+- **Network tools**
+  - Network Flow Monitor: live NFM top-contributor queries (pod-level endpoints, 1-hour API window), End-to-End hop-path visualization, onboarding-aware menu gating.
+  - DNS query logs: Route53 Resolver + CoreDNS analysis via Logs Insights aggregation (RCODE/type/top domains/NXDOMAIN/sources/firewall; resolver comparison with honest latency gaps).
+  - IP addresses: ENI-based IP→resource lookup (15+ owner kinds), unused-EIP / detached-ENI detection, EKS pod-IP join.
+  - Topology: read-only graph API (flow/infra classes, `?from=` subgraphs) with infra / resource / services views; AWS-console-style VPC Resource Map.
+- **AI**
+  - AI assistant: hybrid routing (regex fast-path + Haiku classifier, ADR-003) across 9 chat sections (network/container/data/security/cost/monitoring/iac/ops/observability) with cross-domain auto-synthesis; SSE streaming (markdown renders while streaming); thread history with search, per-thread and delete-all; slash menu, preset chips, follow-up suggestions, session stats bar, floating 🤖 launcher; Bedrock Sonnet 5 / Opus 4.8 / Haiku 4.5.
+  - AgentCore (ADR-004): 9 section gateways (8 AWS domains + external-obs) + shared Strands Runtime + Memory + Code Interpreter, provisioned idempotently via boto3 with SSM as config source of truth; control-plane status page.
+  - AI comprehensive diagnosis (ADR-008): 15-section parallel Bedrock rendering (bounded concurrency, per-section timeout isolation, `partial` degrade), md/docx/pdf artifacts via S3 proxy download, Intent Engine (`architecture_intent`), report management UI.
+  - AI insights: cached insight cards on the Overview dashboard + admin-gated regeneration enqueue (fail-closed when the flag is off, duplicate-job dedup).
+  - K8sGPT read-only in-cluster diagnosis per cluster (GET-only Result reads, admin + cluster allowlist, `k8sgpt_enabled`-gated).
+  - Agent Space customization: skills/agents catalog CRUD with routing keywords and gateway/model/language selection (admin).
+- **Cost**
+  - Cost overview: 1m/3m/6m/12m period filter, per-service detail, Cost Explorer availability probe (1h cache, `?force=1`).
+  - Container cost: OpenCost per-pod EKS cost incl. NFM per-pod transfer cost; Fargate daily/monthly cost estimates on ECS tasks and MTD cost on ECS clusters in inventory.
+  - Bedrock cost: app token spend from `ai_usage_daily` aggregates + per-model usage metrics (client fan-out for "All accounts") on the Bedrock page.
+- **Security & compliance**
+  - Security findings: Public S3, open security-group ingress, unencrypted EBS, IAM users without MFA — derived read-only in the BFF from `inventory_resources`, with a re-sync endpoint.
+  - Container-image CVE findings from ECR image scanning (v2-native successor to v1's Trivy CVE tab).
+  - CIS compliance: run Powerpipe benchmarks as async Fargate `compliance` jobs with `compliance_runs`/`compliance_results` history and a static benchmark allowlist.
+- **Integrations**
+  - External datasources (8 kinds): Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog — instance CRUD + credential storage (admin), SSRF-guarded connection test, per-kind default selection, read-only query execution, natural-language query drafting (review-only, never auto-executed), predefined diagnosis signals.
+  - Integration registry under ADR-007 governance: egress connectors + ingress webhook sources, single Secrets Manager secret keyed by kind slug, schema introspection/cache.
+  - Multi-account (ADR-011): account CRUD with `GetCallerIdentity` anti-spoof verification, per-account region enable/disable, STS AssumeRole read-only fan-out, account/scope selectors in the shell.
+- **Operations**
+  - Async job queue UI: enqueue/list jobs with per-job status lookup.
+  - Per-user auto-diagnosis schedules executed by the worker `schedule_dispatcher`.
+  - Diagnosis-completion email notifications via SNS with subscriber management (LIVE under ADR-007 governance).
+  - Incident lifecycle (flag-gated, analysis-only per ADR-006): HMAC-signed webhook ingest with active/standby secret rotation, manual trigger, detail views, cross-incident prevention insights.
+  - Actions framework (kill-switch gated): list/detail/execute split between integrations-write and mutating-actions gates, fail-closed on empty action names.
+  - Operational self-healing (ADR-015, default-off): Aurora secret-rotation event → `ecs:UpdateService force-new-deployment` on the host's own web service only.
+- **UI/UX**
+  - 4-language UI (Korean/English/Chinese/Japanese) with a language toggle; per-language diagnosis guides.
+  - 3 themes (Cobalt/Teal/Dark) with a theme toggle and theme-aware chart colors.
+  - Sidebar IA: collapsible groups + 2-level subgroups + per-group overview pages with attention splits; CommandPalette; mobile bottom-tab bar and mobile nav.
+  - Reusable UI kit: sortable DataTable, sectioned DetailPanel, StatCard / StatTile / Meter / StatePill / SegmentedControl, resizable panels.
+  - Changelog modal + sidebar version display fed by the bilingual CHANGELOG.md.
+- **Observability**
+  - Monitoring hub: EC2/RDS fleet tabs + single-resource time series with range selection; CloudWatch alarm inventory page.
+  - Chat/AgentCore operational telemetry: per-gateway call volume, success rate, and average latency surfaced in the UI.
 
 ### Changed
 
@@ -427,28 +471,72 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 
 ### Added
 
-- **v2 플랫폼 (Terraform MSA)** — 비공개 엣지(CloudFront VPC Origin → 내부 ALB → Fargate `web`),
-  Cognito + Lambda@Edge 인증(RS256 JWKS, PKCE), Aurora Serverless v2 영속 상태, 비동기 워커 티어
-  (SQS → Step Functions → Lambda/Fargate), AgentCore 섹션 에이전트. IaC: partial S3 backend +
-  기능 플래그 게이트의 단일 Terraform 루트.
-- **인벤토리** — 리소스 41종: 타입별 facet 필터, 하이라이트 KPI, 차트 밴드, 섹션형 상세 패널;
-  VPC 리소스 맵; 4개 언어 UI(한국어/영어/중국어/일본어).
-- **EKS 스위트** — 클러스터 필터 + 노드 드릴다운 개요, 플릿 페이지, K9s 스타일 탐색기(읽기 전용),
-  컨테이너 비용(OpenCost), 계층별 진단(컨트롤 플레인/노드/워크로드/애드온).
-- **진단 계층** — 12개 서비스(MSK/RDS/DynamoDB/ElastiCache/OpenSearch/ALB/NLB/S3/EBS/EC2/Lambda/EKS):
-  기간 선택 CloudWatch 메트릭 테이블 + 접이식 이중언어 진단 가이드.
-- **Network Flow Monitor** — 라이브 NFM top-contributors 조회(파드 수준 엔드포인트, 1시간 API 한도),
-  End-to-End 홉 경로 시각화, EKS 컨테이너 비용의 파드별 전송 비용.
-- **DNS 쿼리 로그** — Route53 Resolver + CoreDNS를 Logs Insights 집계로 분석
-  (RCODE/타입/Top 도메인/NXDOMAIN/소스/방화벽, 지연 공백을 정직 표기하는 리졸버 비교).
-- **IP 주소** — ENI 기반 IP→리소스 조회(소유자 15+종 분류), 미사용 EIP/미부착 ENI 탐지,
-  EKS 파드 IP 조인.
-- **AI 어시스턴트** — AgentCore 섹션 라우팅 + SSE 스트리밍(스트리밍 중 마크다운 렌더),
-  대화 이력(개별/전체 삭제), 플로팅 🤖 런처.
-- v2 DB 마이그레이션 프레임워크 (`make migrate`) — 충돌 없는 **ULID** 파일, advisory-lock,
-  fail-loud, **버전 스탬프**(`app_version` ledger); `make migrate-status`; `scripts/v2/upgrade.sh`
-  (`make upgrade`): RDS 스냅샷 → migrate → 멱등 검증 → deploy (`CONFIRM=go` 아니면 PREVIEW).
-  이 라인에서 추가된 마이그레이션: `opencost_config`, `prevention_insights`, `eks_registrations`.
+- **플랫폼 — Terraform MSA·비공개 엣지·인증**
+  - Terraform MSA로 스택 재구축(ADR-001): 단일 `terraform/v2/foundation/` 루트, partial S3 backend, 모든 대형 기능에 기능 플래그 게이트(기본 false → `plan` = No changes) — CDK 폐기.
+  - 완전 비공개 엣지 경로 제공: CloudFront(TLS) → VPC Origin `https-only:443` → 내부 ALB HTTPS:443(리전 ACM) → Fargate `awsops-v2-web`(arm64, 루트 경로 — basePath 없음); 공개 ALB 없음.
+  - 엣지 인증(ADR-002): Cognito User Pool + Lambda@Edge RS256 JWKS 검증(iss/aud/token_use) + PKCE public client; 자체 `/login` 폼(BFF `InitiateAuth`가 12h `awsops_token` 발급); Hosted UI PKCE 플로우는 다크 폴백으로 보존.
+  - web을 Next.js 14 thin-BFF로 운영 — API 라우트 80개, 무거운 작업은 인라인 실행 없이 큐잉.
+  - 비동기 워커 백본 추가(ADR-009): `POST /api/jobs` → `worker_jobs` ledger + SQS → ESM(킬스위치) → 멱등 dispatcher Lambda → Step Functions `$.runtime` Choice → Lambda(짧음) 또는 `ecs:runTask.sync` Fargate(긺/OOM) → status_updater + 5분 reaper.
+  - Makefile 배포 플로우 제공: `make configure`(대화형 TUI) / `deploy` / `agentcore` / `workers` / `migrate` / `upgrade`.
+- **데이터 — Aurora·마이그레이션**
+  - 모든 앱 상태를 Aurora Serverless v2(PG 17.9, 0.5–4 ACU, KMS CMK, RDS-관리 master secret)에 node-pg로 영속화 — v1 `data/*.json` 대체.
+  - v2 DB 마이그레이션 프레임워크(`make migrate`): 충돌 없는 ULID 파일, advisory-lock, fail-loud, 버전 스탬프(`app_version` ledger); `make migrate-status`; `scripts/v2/upgrade.sh`(`make upgrade`): RDS 스냅샷 → migrate → 멱등 검증 → deploy(`CONFIRM=go` 아니면 PREVIEW). 이 라인의 마이그레이션: `opencost_config`, `prevention_insights`, `eks_registrations`.
+  - flag-gated warm Steampipe Fargate(FDW) + sync Lambda → Aurora 인벤토리 파이프라인(`steampipe_enabled`); `backfill-*.mjs`로 v1 이력 백필.
+- **인벤토리 — 리소스 41종**
+  - Compute (6): EC2, Lambda, ECS Clusters, ECS Services, ECS Tasks, ECR.
+  - Storage & DB (11): S3, EBS Volumes, EBS Snapshots, RDS, DynamoDB, ElastiCache, ElastiCache Replication Groups, OpenSearch, OpenSearch Serverless, MSK, Neptune.
+  - Network (17): VPC, Subnet, Route Table, NAT Gateway, Internet Gateway, Transit Gateway, Security Group, Route53 Records, CloudFront, CloudFront VPC Origins, ALB, NLB, Target Group, ALB Listener Rules, API Gateway (HTTP), API GW Integrations, API GW Routes.
+  - Security (6): IAM Roles, IAM Users, IAM Policies, WAF Web ACLs, CloudTrail Trails, S3 Public Access.
+  - Monitoring (1): CloudWatch Alarms.
+  - 전 타입 공통: 라이브 카운트 facet 필터, 상태 SegmentedControl, 타입 맞춤 하이라이트 KPI 카드, 분포 도넛 + Top-N 바, 섹션형 DetailPanel; Lambda EOL 런타임 배지; CloudTrail 이벤트 조회, 요약 + 일별 추세 API(최대 90일), 타입별 refresh(Steampipe → Aurora sync 트리거).
+- **EKS 스위트**
+  - 클러스터 필터 + 노드 드릴다운 개요; 노드/파드/디플로이먼트/서비스 플릿 페이지(서버측 라이브 집계, 클러스터별 실패는 `reachable:false`로 degrade).
+  - K9s 스타일 읽기 전용 in-cluster 탐색기 + 오브젝트 단위 describe(secrets 제외).
+  - OpenCost 컨테이너 비용: 클러스터별 저장 설정, 1-day allocation(KPI + 파드별 비용), 설치 번들 다운로드(values.yaml + install.sh, out-of-band 실행), 설치 상태 배지.
+  - 클러스터 등록/해제 + Access Entry 상태·온보딩 가이드(Terraform이 Access Entry + AmazonEKSAdminViewPolicy 부여, read-only); 컨트롤플레인 + Container Insights 메트릭; 인스턴스 타입별 ENI IPv4 한도.
+- **진단 계층 — 12개 서비스**
+  - EC2, RDS, ElastiCache, OpenSearch, MSK(브로커 노드), DynamoDB, S3, EBS, Lambda, ALB, NLB, EKS(계층별: 컨트롤 플레인/노드/워크로드/애드온)의 기간 선택 CloudWatch 메트릭 테이블 제공.
+  - 서비스별 접이식 진단 가이드를 UI 4개 언어 전부로 제공; Target Group 헬스 테이블 + TGW 상세 섹션 추가.
+- **네트워크 도구**
+  - Network Flow Monitor: 라이브 NFM top-contributors 조회(파드 수준 엔드포인트, 1시간 API 한도), End-to-End 홉 경로 시각화, 온보딩 인지형 메뉴 게이트.
+  - DNS 쿼리 로그: Route53 Resolver + CoreDNS를 Logs Insights 집계로 분석(RCODE/타입/Top 도메인/NXDOMAIN/소스/방화벽; 지연 공백을 정직 표기하는 리졸버 비교).
+  - IP 주소: ENI 기반 IP→리소스 조회(소유자 15+종 분류), 미사용 EIP/미부착 ENI 탐지, EKS 파드 IP 조인.
+  - 토폴로지: read-only 그래프 API(flow/infra 클래스, `?from=` 서브그래프) + infra/resource/services 뷰; AWS 콘솔 스타일 VPC 리소스 맵.
+- **AI**
+  - AI 어시스턴트: 9개 챗 섹션(network/container/data/security/cost/monitoring/iac/ops/observability)에 대한 하이브리드 라우팅(정규식 fast-path + Haiku 분류기, ADR-003) + 교차도메인 자동 합성; SSE 스트리밍(스트리밍 중 마크다운 렌더); 대화 이력(검색, 개별/전체 삭제); 슬래시 메뉴·프리셋 칩·후속 질문 제안·세션 통계 바·플로팅 🤖 런처; Bedrock Sonnet 5 / Opus 4.8 / Haiku 4.5.
+  - AgentCore(ADR-004): 9 섹션 게이트웨이(8 AWS 도메인 + external-obs) + 공유 Strands Runtime + Memory + Code Interpreter, boto3 멱등 프로비저닝 + SSM 설정 source of truth; 컨트롤플레인 상태 페이지.
+  - AI 종합 진단(ADR-008): 15섹션 병렬 Bedrock 렌더(동시성 제한, 섹션별 타임아웃 격리, `partial` degrade), md/docx/pdf 산출물 S3 프록시 다운로드, Intent Engine(`architecture_intent`), 리포트 관리 UI.
+  - AI 인사이트: Overview 대시보드용 캐시 인사이트 카드 + admin 게이트 재생성 enqueue(플래그 off 시 fail-closed, 중복 job dedup).
+  - K8sGPT 클러스터별 read-only in-cluster 진단(GET 전용 Result 조회, admin + 클러스터 allowlist, `k8sgpt_enabled` 게이트).
+  - Agent Space 커스터마이제이션: 라우팅 키워드·게이트웨이/모델/언어 선택이 가능한 스킬/에이전트 카탈로그 CRUD(admin).
+- **비용**
+  - 비용 개요: 1m/3m/6m/12m 기간 필터, 서비스별 상세, Cost Explorer 가용성 probe(1h 캐시, `?force=1`).
+  - 컨테이너 비용: OpenCost 기반 EKS 파드별 비용(NFM 파드별 전송 비용 포함); 인벤토리의 ECS 태스크 Fargate 일간/월간 비용 추정 + ECS 클러스터 MTD 비용.
+  - Bedrock 비용: `ai_usage_daily` 집계 기반 앱 토큰 비용 + 모델별 사용량 메트릭("All accounts"는 클라이언트 fan-out) — Bedrock 페이지.
+- **보안·컴플라이언스**
+  - 보안 findings: Public S3, 개방 보안그룹 ingress, 미암호화 EBS, MFA 미설정 IAM 사용자 — `inventory_resources`에서 BFF read-only 파생 + 재동기화 엔드포인트.
+  - ECR 이미지 스캔 기반 컨테이너 이미지 CVE findings(v1 Trivy CVE 탭의 v2 네이티브 후속).
+  - CIS 컴플라이언스: Powerpipe 벤치마크를 비동기 Fargate `compliance` job으로 실행 — `compliance_runs`/`compliance_results` 이력 + 정적 벤치마크 allowlist.
+- **통합**
+  - 외부 데이터소스 8종: Prometheus, Mimir, Loki, Tempo, ClickHouse, Jaeger, Dynatrace, Datadog — 인스턴스 CRUD + 크리덴셜 저장(admin), SSRF 가드 연결 테스트, kind별 기본 인스턴스 지정, read-only 쿼리 실행, 자연어 쿼리 초안 생성(리뷰 전용 — 절대 자동 실행 안 함), 사전 정의 진단 시그널.
+  - ADR-007 거버넌스 하의 통합 레지스트리: egress 커넥터 + ingress 웹훅 소스, kind slug 키의 단일 Secrets Manager secret, 스키마 introspect/캐시.
+  - 멀티 어카운트(ADR-011): `GetCallerIdentity` anti-spoof 검증 포함 계정 CRUD, 계정별 리전 활성/비활성, STS AssumeRole read-only fan-out, 셸의 계정/스코프 셀렉터.
+- **운영**
+  - 비동기 작업 큐 UI: 작업 enqueue/목록 + 작업별 상태 조회.
+  - 사용자별 자동 진단 스케줄 — 실행은 워커 `schedule_dispatcher` 담당.
+  - SNS 기반 진단 완료 이메일 알림 + 구독자 관리(ADR-007 거버넌스 하 LIVE).
+  - 인시던트 라이프사이클(flag 게이트, ADR-006 analysis-only): HMAC 서명 웹훅 수신(active/standby 시크릿 로테이션), 수동 트리거, 상세 뷰, 교차 인시던트 예방 인사이트.
+  - 액션 프레임워크(킬스위치 게이트): integrations-write / mutating-actions 게이트 분기의 목록/상세/실행, 빈 액션 이름 fail-closed.
+  - 운영 자가치유(ADR-015, 기본 off): Aurora 시크릿 회전 이벤트 → 자기 web 서비스 한정 `ecs:UpdateService force-new-deployment`.
+- **UI/UX**
+  - 4개 언어 UI(한국어/영어/중국어/일본어) + 언어 토글; 언어별 진단 가이드.
+  - 3종 테마(Cobalt/Teal/Dark) + 테마 토글 + 테마 연동 차트 색상.
+  - 사이드바 IA: 접이식 그룹 + 2단계 서브그룹 + attention split 포함 그룹별 개요 페이지; CommandPalette; 모바일 하단 탭 바 + 모바일 내비.
+  - 재사용 UI 킷: 정렬형 DataTable, 섹션형 DetailPanel, StatCard / StatTile / Meter / StatePill / SegmentedControl, 크기 조절 패널.
+  - 이중언어 CHANGELOG.md 기반 변경 이력 모달 + 사이드바 버전 표시.
+- **관측성**
+  - 모니터링 허브: EC2/RDS 플릿 탭 + 기간 선택 단일 리소스 시계열; CloudWatch 알람 인벤토리 페이지.
+  - 챗/AgentCore 운영 텔레메트리: 게이트웨이별 호출량·성공률·평균 지연을 UI에 표시.
 
 ### Changed
 

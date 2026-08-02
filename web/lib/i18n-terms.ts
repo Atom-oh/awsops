@@ -542,6 +542,24 @@ export const TERMS: Record<string, Pair> = {
   '해당 IP를 쓰는 EKS 파드 (VPC CNI 보조 IP 조인)': { en: 'EKS pod using this IP (VPC CNI secondary-IP join)', zh: '使用该 IP 的 EKS Pod（VPC CNI 辅助 IP 联接）', ja: 'この IP を使う EKS ポッド（VPC CNI セカンダリ IP 結合）' },
   'available = 어디에도 부착되지 않은 ENI': { en: 'available = ENI not attached to anything', zh: 'available = 未挂载到任何资源的 ENI', ja: 'available = どこにもアタッチされていない ENI' },
 
+
+  // ---- Transit Gateway (inventory 상세 섹션) ----
+  'TGW 진단 메트릭': { en: 'TGW diagnostic metrics', zh: 'TGW 诊断指标', ja: 'TGW 診断メトリクス' },
+  'Blackhole/NoRoute 드롭 >0 = 라우팅 문제 신호': { en: 'Blackhole/NoRoute drops >0 = routing problem signal', zh: 'Blackhole/NoRoute 丢包 >0 = 路由问题信号', ja: 'Blackhole/NoRoute ドロップ >0 = ルーティング問題の兆候' },
+  'BytesIn(선택 기간 누적) — TGW로 들어온 트래픽': { en: 'BytesIn (sum over the selected range) — traffic into the TGW', zh: 'BytesIn（所选时间段累计）— 进入 TGW 的流量', ja: 'BytesIn（選択期間の累計）— TGW への受信トラフィック' },
+  'BytesOut(선택 기간 누적) — TGW에서 나간 트래픽': { en: 'BytesOut (sum over the selected range) — traffic out of the TGW', zh: 'BytesOut（所选时间段累计）— 从 TGW 发出的流量', ja: 'BytesOut（選択期間の累計）— TGW からの送信トラフィック' },
+  'Blackhole 드롭': { en: 'Blackhole drops', zh: 'Blackhole 丢包', ja: 'Blackhole ドロップ' },
+  'NoRoute 드롭': { en: 'NoRoute drops', zh: 'NoRoute 丢包', ja: 'NoRoute ドロップ' },
+  'PacketDropCountBlackhole — >0이면 블랙홀 라우트로 드롭된 트래픽(라우팅 문제 신호)': { en: 'PacketDropCountBlackhole — >0 means traffic dropped by blackhole routes (routing problem signal)', zh: 'PacketDropCountBlackhole — >0 表示流量被黑洞路由丢弃（路由问题信号）', ja: 'PacketDropCountBlackhole — >0 ならブラックホールルートでドロップされたトラフィック（ルーティング問題の兆候）' },
+  'PacketDropCountNoRoute — >0이면 매칭 라우트 없음(라우팅 문제 신호)': { en: 'PacketDropCountNoRoute — >0 means no matching route (routing problem signal)', zh: 'PacketDropCountNoRoute — >0 表示没有匹配的路由（路由问题信号）', ja: 'PacketDropCountNoRoute — >0 ならマッチするルートなし（ルーティング問題の兆候）' },
+  '어태치먼트': { en: 'Attachments', zh: '挂载', ja: 'アタッチメント' },
+  'available 아닌 상태는 위험으로 표시': { en: 'States other than available are flagged as risk', zh: '非 available 状态标记为风险', ja: 'available 以外の状態は危険として表示' },
+  '상세 조회 실패': { en: 'Detail fetch failed', zh: '详情查询失败', ja: '詳細照会失敗' },
+  '라우팅 테이블': { en: 'Route tables', zh: '路由表', ja: 'ルートテーブル' },
+  '라우트는 active/blackhole만, 테이블당 상한 있음': { en: 'Routes limited to active/blackhole, capped per table', zh: '仅显示 active/blackhole 路由，每个表有上限', ja: 'ルートは active/blackhole のみ、テーブルごとに上限あり' },
+  '상한 도달': { en: 'Cap reached', zh: '达到上限', ja: '上限到達' },
+  '라우트 없음': { en: 'No routes', zh: '无路由', ja: 'ルートなし' },
+
 };
 
 // Parameterized patterns — matched AFTER an exact TERMS hit fails.

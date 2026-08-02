@@ -129,6 +129,10 @@ resource "aws_iam_role_policy" "task_metrics" {
         # /ip-addresses: ENI 전량 + EIP 조회 (IP → 리소스 매핑, 미사용 EIP 탐지)
         "ec2:DescribeNetworkInterfaces",
         "ec2:DescribeAddresses",
+        # inventory transit_gateway 상세: 어태치먼트 + 라우트 테이블 + 라우트 검색
+        "ec2:DescribeTransitGatewayAttachments",
+        "ec2:DescribeTransitGatewayRouteTables",
+        "ec2:SearchTransitGatewayRoutes",
       ]
       Resource = "*"
     }]

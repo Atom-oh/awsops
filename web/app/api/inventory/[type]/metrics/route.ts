@@ -1,6 +1,6 @@
 import { verifyUser } from '@/lib/auth';
 import { getPool } from '@/lib/db';
-import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive } from '@/lib/metrics';
+import { ec2AvgCpu, ec2HourlyCost, rdsMetrics, hasLiveMetrics, liveResourceMetrics, mskBootstrapBrokers, elasticacheFleetLive, opensearchFleetLive, mskListNodes, mskBrokerFleetLive, mskClusterHealth, mskOffsetLags, rdsFleetLive, ddbFleetLive, ddbReplicationLags, albFleetLive, albTargetHealth, nlbFleetLive, s3FleetLive, s3ReplicationStatus, ebsFleetLive, ec2EbsBalance, ec2DiagFleetLive, lambdaFleetLive, tgwFleetLive } from '@/lib/metrics';
 import { regionWhereClause, type RegionScope } from '@/lib/inventory';
 
 export const dynamic = 'force-dynamic';
@@ -173,6 +173,13 @@ export async function GET(request: Request, { params }: { params: { type: string
       ]);
       for (const f of fleets) Object.assign(fleet, f);
       return Response.json({ fleet, replication, range });
+    }
+
+    // Transit Gateway: 진단 메트릭 (Bytes/Packets + Blackhole/NoRoute 드롭).
+    if (params.type === 'transit_gateway' && url.searchParams.get('ids') !== null) {
+      const ids = (url.searchParams.get('ids') ?? '')
+        .split(',').map((x) => x.trim()).filter((x) => /^tgw-[0-9a-f]+$/.test(x)).slice(0, 30);
+      return Response.json({ fleet: await tgwFleetLive(ids, undefined, range), range });
     }
 
     // Lambda: per-function diagnostics grouped by the function's region.
