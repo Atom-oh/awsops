@@ -2,13 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { SECTIONS, AUTO_PRESETS, sectionByKey, activeSections } from './sections';
 
 describe('sections', () => {
-  it('has 10 sections with the expected keys — aws-data LAST (v1 priority-10 receiver)', () => {
+  it('has 16 sections with the expected keys — aws-data LAST (v1 priority-10 receiver), collectors just before it', () => {
     expect(SECTIONS.map((s) => s.key)).toEqual([
-      'network', 'container', 'data', 'security', 'cost', 'monitoring', 'iac', 'ops', 'observability', 'aws-data',
+      'network', 'container', 'data', 'security', 'cost', 'monitoring', 'iac', 'ops', 'observability',
+      'idle-scan', 'eks-optimize', 'db-optimize', 'msk-optimize', 'trace-analyze', 'incident', 'aws-data',
     ]);
   });
-  it('marks all 10 sections active (container/iac 2026-08-02; aws-data local Steampipe handler)', () => {
-    expect(activeSections().map((s) => s.key).sort()).toEqual(['aws-data', 'container', 'cost', 'data', 'iac', 'monitoring', 'network', 'observability', 'ops', 'security']);
+  it('marks all 16 sections active (container/iac 2026-08-02; aws-data + collectors local handlers)', () => {
+    expect(activeSections().map((s) => s.key).sort()).toEqual(['aws-data', 'container', 'cost', 'data', 'db-optimize', 'eks-optimize', 'iac', 'idle-scan', 'incident', 'monitoring', 'msk-optimize', 'network', 'observability', 'ops', 'security', 'trace-analyze']);
   });
   it('every section has label, icon, color, and >=3 presets', () => {
     for (const s of SECTIONS) {

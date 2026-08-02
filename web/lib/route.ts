@@ -19,6 +19,22 @@ const RULES: { key: string; re: RegExp }[] = [
   // Match only EXPLICIT datasource identifiers; ambiguous generic terms (metric/latency/p99) are left to
   // the LLM classifier so they don't steal CloudWatch's 'metric'. Loki/Tempo/Mimir stay on monitoring.
   { key: 'observability', re: /promql|prometheus|프로메테우스|clickhouse|클릭하우스/i },
+  // v1 auto-collect collectors — dedicated STRONG keywords only, near-last on purpose: generic
+  // 미사용/unused listings stay with ops and 비용/절감 stays with cost. A prompt matching BOTH
+  // (e.g. '미사용 리소스 찾아줘' hits ops+idle-scan) goes ambiguous → the LLM classifier (which
+  // knows these sections) arbitrates; only unmistakable phrasings short-circuit here.
+  { key: 'idle-scan', re: /(미사용|유휴|idle|unused).{0,16}(리소스|resources?).{0,12}(찾|스캔|검색|scan)|idle ?scan|유휴 ?리소스/i },
+  { key: 'eks-optimize', re: /(eks|k8s|쿠버네티스|kubernetes|컨테이너|container|파드|pod).{0,24}(최적화|낭비|과다 ?할당|rightsiz|optimi[sz])|rightsiz/i },
+  // db/msk-optimize need a SERVICE noun + an optimize verb together — generic nouns alone stay with
+  // data (troubleshooting) and generic 비용/절감 stays with cost; bare 'rightsiz' stays eks-optimize.
+  { key: 'db-optimize', re: /(rds|aurora|elasticache|opensearch|데이터베이스|디비|\bdb\b).{0,20}(rightsiz|다운사이징|downsiz|과다 ?(프로비저닝|할당)|최적화|낭비|적정 ?규모)/i },
+  { key: 'msk-optimize', re: /(msk|kafka|카프카|브로커|broker).{0,20}(rightsiz|다운사이징|downsiz|과다 ?(프로비저닝|할당)|최적화|낭비|적정 ?규모)/i },
+  // trace-analyze: explicit trace/dependency/bottleneck intents only — a bare 'trace/트레이스' noun
+  // stays with monitoring (where the Tempo connector lives); ambiguity goes to the classifier.
+  { key: 'trace-analyze', re: /트레이스 ?분석|trace ?analy|분산 ?트레이싱|distributed ?trac|서비스 ?의존성|service ?dependenc|(지연 ?시간?|latency).{0,12}(병목|bottleneck)|병목.{0,8}(찾|분석)/i },
+  // incident: root-cause phrasings only — a plain '장애가 났어' report (no 원인/분석 ask) is left to
+  // the classifier so monitoring/container keep their troubleshooting flows.
+  { key: 'incident', re: /(장애|사고|인시던트|incident).{0,12}(원인|분석|analysis)|root ?cause|무슨 ?문제(가|는)? ?있/i },
   // v1 priority-10 'aws-data' (Steampipe SQL) — MUST stay LAST: only STRONG list/count patterns,
   // and every specialized domain keyword above wins first ('CrashLoop 파드 몇 개야?' → container).
   // This is the receiver for listing/status/count questions nobody else claimed.

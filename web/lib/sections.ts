@@ -84,6 +84,56 @@ export const SECTIONS: Section[] = [
   ], followUps: [
     '같은 기간 에러율과 레이턴시 상관관계를 그려줘', 'p99 급증 구간의 트레이스를 더 파고들어줘', '이 지표의 라벨별 분해(서비스/엔드포인트)를 보여줘',
   ] },
+  // v1 auto-collect collectors (local collect→analyze handlers, web/lib/collectors) — keep just
+  // BEFORE aws-data: dedicated scan/optimize intents, while aws-data stays the LAST generic receiver.
+  { key: 'idle-scan', label: 'Idle Scan', icon: '🧹', color: 'var(--sec-idlescan)', active: true, presets: [
+    '미사용 리소스 찾아줘 (유휴 리소스 스캔)',
+    '미연결 EBS 볼륨과 EIP 낭비 스캔',
+    '90일 이상 된 스냅샷 정리 대상 스캔',
+    'gp2 → gp3 전환 절감 대상 찾기',
+  ], followUps: [
+    '이 목록의 예상 월 절감액을 계정별로 집계해줘', '삭제 전 확인이 필요한 리소스(태그/연관성)를 짚어줘', '정리용 AWS CLI 명령을 순서대로 만들어줘',
+  ] },
+  { key: 'eks-optimize', label: 'EKS Optimize', icon: '⚖️', color: 'var(--sec-eksoptimize)', active: true, presets: [
+    'EKS 비용 최적화 포인트 찾아줘',
+    '파드 CPU/메모리 과다 할당 분석',
+    '노드 활용률 낮은 클러스터 통합 제안',
+    'EKS rightsizing 권장값 계산',
+  ], followUps: [
+    '추천 request/limit을 kubectl 명령으로 만들어줘', '재시작/OOM 위험이 있는 워크로드를 짚어줘', '노드 그룹 인스턴스 타입 변경안을 비교해줘',
+  ] },
+  { key: 'db-optimize', label: 'DB Optimize', icon: '🧪', color: 'var(--sec-dboptimize)', active: true, presets: [
+    'RDS 인스턴스 다운사이징 후보 찾아줘',
+    'ElastiCache 노드 타입 rightsizing',
+    'OpenSearch 도메인 과다 프로비저닝 점검',
+    'DB 리소스 낭비 스캔 (RDS·캐시·검색)',
+  ], followUps: [
+    '추천 인스턴스 클래스별 예상 절감액을 표로 정리해줘', '다운사이징하면 안 되는 리소스(고사용률)를 짚어줘', 'RI/Savings Plans 적용 가능 대상을 계산해줘',
+  ] },
+  { key: 'msk-optimize', label: 'MSK Optimize', icon: '🧵', color: 'var(--sec-mskoptimize)', active: true, presets: [
+    'MSK 브로커 rightsizing 분석해줘',
+    '브로커 다운사이징 가능 여부 확인',
+    'MSK 디스크/스로틀 위험 점검',
+    'Provisioned vs Serverless 비교 분석',
+  ], followUps: [
+    '브로커별 CPU/디스크 불균형을 짚어줘', '컨슈머 랙이 큰 그룹의 원인을 분석해줘', '추천 구성 변경의 AWS CLI 명령을 만들어줘',
+  ] },
+  { key: 'trace-analyze', label: 'Latency', icon: '🛰️', color: 'var(--sec-traceanalyze)', active: true, presets: [
+    '서비스 지연시간 병목 찾아줘 (p99)',
+    'ALB 에러율 급증 서비스 분석',
+    '서비스 의존성 관점 병목 분석',
+    '느린 서비스 Top 5와 원인 추정',
+  ], followUps: [
+    'p50 대비 p99 격차가 큰 서비스를 짚어줘', 'ELB 5xx와 타깃 5xx를 구분해 원인을 좁혀줘', '트레이싱 계측(X-Ray/Tempo) 도입 우선순위를 제안해줘',
+  ] },
+  { key: 'incident', label: 'Incident', icon: '🚨', color: 'var(--sec-incident)', active: true, presets: [
+    '장애 원인 분석해줘 (알람+변경 이력)',
+    '지금 발생 중인 알람과 근본 원인',
+    '사고 분석: 최근 변경과 이상 징후 상관관계',
+    '장애 타임라인 재구성해줘',
+  ], followUps: [
+    '알람 직전의 CloudTrail 변경 이벤트를 짚어줘', '영향 범위(blast radius)를 추정해줘', '재발 방지용 알람/대시보드 추가안을 제안해줘',
+  ] },
   // v1 priority-10 'aws-data' port — MUST stay LAST: it is the receiver for listing/status/count
   // questions no specialized gateway claimed (LLM-generated Steampipe SQL, live-executed).
   { key: 'aws-data', label: 'AWS Data', icon: '🗃️', color: 'var(--sec-awsdata)', active: true, presets: [

@@ -46,6 +46,11 @@
   --sec-security:#BE123C; --sec-cost:#8A5A12; --sec-monitoring:#2563EB;
   --sec-iac:#8E4830; --sec-ops:#5F5A4D; --sec-observability:#0E7490;
   --sec-awsdata:#9C2F7F; /* magenta/plum — the only unused hue family in the section palette */
+  /* v1 auto-collect collectors: idle-scan(olive-lime), eks-optimize(indigo),
+     db-optimize(pine teal), msk-optimize(burgundy), trace-analyze(slate blue), incident(vermilion) */
+  --sec-idlescan:#6B7F2C; --sec-eksoptimize:#4653A8;
+  --sec-dboptimize:#0F766E; --sec-mskoptimize:#8E2F4A;
+  --sec-traceanalyze:#3F5E8C; --sec-incident:#C2410C;
   /* near-black brand marks that must invert on dark (icon accents) */
   --integration-notion:#0F172A;
 
@@ -89,6 +94,9 @@
   --sec-security:#F0708F; --sec-cost:#D9A15A; --sec-monitoring:#7DA4F5;
   --sec-iac:#CE8A6E; --sec-ops:#A8A190; --sec-observability:#4FB3CF;
   --sec-awsdata:#E08BC7; /* magenta/plum lifted for dark surfaces (same hue as light) */
+  --sec-idlescan:#B4C266; --sec-eksoptimize:#96A0EE; /* collectors lifted for dark (same hues) */
+  --sec-dboptimize:#4FC2B8; --sec-mskoptimize:#E087A3;
+  --sec-traceanalyze:#8FAEDC; --sec-incident:#F0925C;
   --integration-notion:#CBD5E1;
   /* neutrals — surfaces dark (low) → text light (high); 900 pinned for scrims */
   --ink-50:#1F262D; --ink-100:#29333B; --ink-200:#38444E; --ink-300:#586773;

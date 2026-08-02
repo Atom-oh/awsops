@@ -56,6 +56,12 @@ const M = {
     zh: '⚠️ 实时 SQL 查询失败——以下回答基于通用知识（不含账户实时数据）。\n\n',
     ja: '⚠️ ライブ SQL クエリに失敗したため、一般知識で回答します（アカウントの実データは含まれません）。\n\n',
   } as L10n,
+  collectFallback: {
+    ko: '⚠️ 라이브 데이터 수집에 실패해 일반 지식으로 답변합니다(계정 실데이터 미포함).\n\n',
+    en: '⚠️ Live data collection failed — answering from general knowledge (no live account data).\n\n',
+    zh: '⚠️ 实时数据采集失败——以下回答基于通用知识（不含账户实时数据）。\n\n',
+    ja: '⚠️ ライブデータ収集に失敗したため、一般知識で回答します（アカウントの実データは含まれません）。\n\n',
+  } as L10n,
 } as const;
 
 export const chatMsg = {
@@ -66,4 +72,5 @@ export const chatMsg = {
   codeExecHeader: (lang: ChatLang) => M.codeExecHeader[lang],
   codeExecFailed: (lang: ChatLang) => M.codeExecFailed[lang],
   sqlFallback: (lang: ChatLang) => M.sqlFallback[lang],
+  collectFallback: (lang: ChatLang) => M.collectFallback[lang],
 };

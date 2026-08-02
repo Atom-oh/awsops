@@ -7,6 +7,7 @@ import {
   steampipeAvailable, generateSql, selfCorrectSql, runSteampipeQuery, analyzeStream,
   AWS_DATA_ANALYSIS_MODEL, type SteampipeResult,
 } from '@/lib/aws-data';
+import { collectorByKey, collectorAnalyzeStream, type ChatCollector } from '@/lib/collectors';
 import { chatMsg, normalizeChatLang, type ChatLang } from '@/lib/chat-i18n';
 import { getAccount, validateAccountId } from '@/lib/accounts';
 import { pickGateway, classifyRoute, type RouteResult } from '@/lib/route';
@@ -181,6 +182,101 @@ function awsDataResponse(args: {
   return new Response(stream, { headers: SSE_HEADERS });
 }
 
+/** v1 auto-collect local handler (v1 route.ts:1125-1165 port): the registry collector gathers
+ *  live data (Steampipe SQL / CloudWatch CI — per-step SSE previews), then a streamed Bedrock
+ *  analysis grounded in it. Same SSE frame contract as aws-data/code: meta → status(working +
+ *  per-step tool/query) → deltas → footer meta(tools = sources actually used) → [DONE].
+ *  Partial collection failure is disclosed INSIDE the context (fail-open); TOTAL failure degrades
+ *  honestly to a Bedrock-direct answer (aws-data 'sql-fallback' pattern) — never a dead end. */
+function collectorResponse(args: {
+  request: Request; user: { sub: string }; prompt: string; history: ChatMsg[];
+  lang: ChatLang; sessionId: string; threadId: string; collector: ChatCollector; accountId?: string;
+}): Response {
+  const { request, user, prompt, history, lang, sessionId, threadId, collector } = args;
+  const enc = new TextEncoder();
+  const t0 = Date.now();
+  const stream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(enc.encode(': heartbeat\n\n'));
+      controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify({
+        gateway: collector.key, agentName: collector.sectionMeta.agentName, tier: 'builtin', skillHashes: [], threadId,
+      })}\n\n`));
+      const status = (obj: Record<string, unknown>) =>
+        controller.enqueue(enc.encode('event: status\ndata: ' + JSON.stringify(obj) + '\n\n'));
+      let text = '';
+      try {
+        status({ phase: 'working', elapsedMs: 0 });
+        const out = await collector.collect({
+          lang, accountId: args.accountId, signal: request.signal,
+          onStep: (s) => status({ phase: 'working', tool: s.tool, ...(s.query ? { query: s.query } : {}), elapsedMs: Date.now() - t0 }),
+        });
+        if (out.collected > 0 && !request.signal.aborted) {
+          status({ phase: 'analyzing', elapsedMs: Date.now() - t0 });
+          let usage: TokenUsage | undefined;
+          for await (const d of collectorAnalyzeStream({
+            question: prompt, context: out.context, analysisPrompt: collector.analysisPrompt,
+            lang, abortSignal: request.signal, onUsage: (u) => { usage = u; },
+          })) {
+            if (request.signal.aborted) break;
+            text += d;
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: d })}\n\n`));
+          }
+          const costUsd = usage
+            ? computeCost(
+                { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 },
+                getModelPricing(AWS_DATA_ANALYSIS_MODEL),
+              ).total
+            : undefined;
+          const footerMeta = {
+            elapsedMs: Date.now() - t0, tools: out.tools, model: getModelLabel(AWS_DATA_ANALYSIS_MODEL),
+            ...(usage ? { usage } : {}),
+            ...(costUsd !== undefined ? { costUsd: Number(costUsd.toFixed(6)) } : {}),
+          };
+          controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footerMeta)}\n\n`));
+          if (!request.signal.aborted) {
+            recordExchange({
+              threadId, userSub: user.sub, sessionId, promptTitle: prompt.slice(0, 40),
+              userContent: prompt, assistantContent: text, gateway: collector.key,
+              meta: { ...footerMeta, via: out.via },
+            }).catch(() => {});
+            void recordChatInvoke({
+              gateway: collector.key, userSub: user.sub, elapsedMs: Date.now() - t0, success: true,
+              via: out.via, model: AWS_DATA_ANALYSIS_MODEL, toolCount: out.tools.length, usage,
+            });
+          }
+        } else if (!request.signal.aborted) {
+          // every source failed — degrade honestly (aws-data 'sql-fallback' pattern), never a dead end
+          status({ phase: 'collect-fallback', elapsedMs: Date.now() - t0 });
+          const notice = chatMsg.collectFallback(lang);
+          text = notice;
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: notice })}\n\n`));
+          for await (const d of bedrockDirectStream(prompt, history, { abortSignal: request.signal, responseLanguage: lang })) {
+            if (request.signal.aborted) break;
+            text += d;
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta: d })}\n\n`));
+          }
+          const footerMeta = { elapsedMs: Date.now() - t0 };
+          controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(footerMeta)}\n\n`));
+          if (!request.signal.aborted) {
+            recordExchange({
+              threadId, userSub: user.sub, sessionId, promptTitle: prompt.slice(0, 40),
+              userContent: prompt, assistantContent: text, gateway: collector.key,
+              meta: { ...footerMeta, via: 'collect-fallback' },
+            }).catch(() => {});
+            void recordChatInvoke({ gateway: collector.key, userSub: user.sub, elapsedMs: Date.now() - t0, success: false, via: 'collect-fallback' });
+          }
+        }
+      } catch (e) {
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : `${collector.key} route failed` })}\n\n`));
+        void recordChatInvoke({ gateway: collector.key, userSub: user.sub, elapsedMs: Date.now() - t0, success: false });
+      }
+      controller.enqueue(enc.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+  return new Response(stream, { headers: SSE_HEADERS });
+}
+
 export async function POST(request: Request) {
   const user = await verifyUser(request.headers.get('cookie'));
   if (!user) return json({ status: 'error', message: 'unauthenticated' }, 401);
@@ -333,6 +429,19 @@ export async function POST(request: Request) {
     sqlUnavailable = true;
     routeKey = 'ops'; // v2's general home (v1 'general' equivalent) — never a dead 🔒
   }
+  // v1 auto-collect local handlers (v1 route.ts:1127 'auto-collect'): when routing (pin included)
+  // lands on a REGISTERED collector (idle-scan, eks-optimize, …), gather live data locally and
+  // stream the analysis — ONE generic branch; a new collector needs only a lib/collectors registry
+  // entry. Fail-open like aws-data: required source unreachable ⇒ honest status + normal routing.
+  const collector = collectorByKey(routeKey);
+  if (collector) {
+    if (await collector.available()) {
+      const threadId = (typeof body.threadId === 'string' && THREAD_RE.test(body.threadId)) ? body.threadId : randomUUID();
+      return collectorResponse({ request, user, prompt, history, lang, sessionId, threadId, collector, accountId });
+    }
+    sqlUnavailable = true; // same honest '미가용 → 일반 라우팅' status frame as aws-data
+    routeKey = 'ops';
+  }
   // ADR-039 P2: enabled egress-READ integrations contribute tools + bounded context (per-space scoped).
   // ingress + READ_WRITE contribute nothing here (writes go via the mutating gate).
   // P2-infra inc2: also carry connection details so the resolver can hand agent.py a live-connect list.
@@ -360,8 +469,9 @@ export async function POST(request: Request) {
   // route.multiDomain can never force a fan-out over an inactive route). Each fan-out gateway gets
   // its OWN built-in invoke input (gate CRITICAL: never reuse the primary's spec/toolAllowlist).
   const synthOn = process.env.MULTI_ROUTE_SYNTHESIS_ENABLED === 'true';
-  // aws-data is excluded from fan-out: it has no AgentCore gateway (local Steampipe handler only).
-  const fanGateways = (route?.selected ?? []).filter((s) => s.active && s.key !== 'aws-data').map((s) => s.key).slice(0, 3);
+  // aws-data and the auto-collect collectors are excluded from fan-out: they have no AgentCore
+  // gateway (local handlers only) — invokeAgent on their keys would 404.
+  const fanGateways = (route?.selected ?? []).filter((s) => s.active && s.key !== 'aws-data' && !collectorByKey(s.key)).map((s) => s.key).slice(0, 3);
   const doFanout = synthOn && hybridOn && !customPick && !unavailablePin && spec.tier === 'builtin'
     && fanGateways.length >= 2;
   // ADR-038 honest inactive handling: built-in section not live yet → no agent call (spec §2.3).

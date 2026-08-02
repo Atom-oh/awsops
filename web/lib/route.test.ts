@@ -221,3 +221,94 @@ describe('topology / unused-resource routing → ops', () => {
     expect(matchedSections('SG에서 막힌 포트')).toContain('network');
   });
 });
+
+describe('auto-collect collector rules — dedicated strong keywords only (v1 auto-collect port)', () => {
+  it('unmistakable idle-scan phrasings match idle-scan', () => {
+    expect(matchedSections('유휴 리소스 스캔해줘')).toEqual(['idle-scan']);
+    expect(pickGateway('유휴 리소스 스캔해줘')).toBe('idle-scan');
+    expect(matchedSections('run an idle scan')).toContain('idle-scan');
+  });
+  it("'미사용 리소스 찾아줘' matches BOTH ops and idle-scan → ambiguous → classifier arbitrates", async () => {
+    const keys = matchedSections('미사용 리소스 찾아줘');
+    expect(keys).toContain('ops');
+    expect(keys).toContain('idle-scan');
+    const classify = vi.fn().mockResolvedValue([{ key: 'idle-scan', score: 0.9 }, { key: 'ops', score: 0.4 }]);
+    const r = await classifyRoute('미사용 리소스 찾아줘', undefined, { llmEnabled: true, classify });
+    expect(r.method).toBe('llm');
+    expect(r.primary).toBe('idle-scan');
+  });
+  it('generic unused/idle phrasings do NOT hit idle-scan (ops/security keep them)', () => {
+    expect(matchedSections('미사용 리소스 추려줘')).toEqual(['ops']); // no 찾/스캔 → ops only
+    expect(matchedSections('미사용 액세스 키 90일 이상')).not.toContain('idle-scan'); // golden case stays security
+    expect(pickGateway('IAM 역할 총 3개가 미사용이야?')).toBe('security');
+  });
+  it('unmistakable eks-optimize phrasings match eks-optimize', () => {
+    expect(matchedSections('rightsizing 권장값 계산해줘')).toEqual(['eks-optimize']);
+    expect(pickGateway('rightsizing 권장값 계산해줘')).toBe('eks-optimize');
+  });
+  it("'EKS 비용 최적화' is ambiguous (cost+container+eks-optimize) → classifier arbitrates", async () => {
+    const keys = matchedSections('EKS 비용 최적화');
+    expect(keys).toContain('cost');
+    expect(keys).toContain('container');
+    expect(keys).toContain('eks-optimize');
+    const classify = vi.fn().mockResolvedValue([{ key: 'eks-optimize', score: 0.9 }]);
+    const r = await classifyRoute('EKS 비용 최적화', undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('eks-optimize');
+  });
+  it('pod troubleshooting stays with container (no optimize keyword)', () => {
+    expect(matchedSections('EKS 파드가 RDS에 연결이 안 돼요')).not.toContain('eks-optimize');
+    expect(pickGateway('파드가 Pending인 이유')).toBe('container');
+  });
+
+  // ── db-optimize / msk-optimize: SERVICE noun + optimize verb required together ──
+  it('db-optimize needs a DB noun + an optimize verb; ambiguity goes to the classifier', async () => {
+    const keys = matchedSections('RDS 인스턴스 다운사이징 후보 찾아줘');
+    expect(keys).toContain('data');        // rds noun
+    expect(keys).toContain('db-optimize'); // rds + 다운사이징
+    const classify = vi.fn().mockResolvedValue([{ key: 'db-optimize', score: 0.9 }]);
+    const r = await classifyRoute('RDS 인스턴스 다운사이징 후보 찾아줘', undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('db-optimize');
+  });
+  it('DB troubleshooting/listing phrasings do NOT hit db-optimize (data/aws-data keep them)', () => {
+    expect(matchedSections('RDS 느린 쿼리 진단')).not.toContain('db-optimize');
+    expect(matchedSections('RDS 인스턴스 개수 알려줘')).not.toContain('db-optimize');
+    expect(matchedSections('rightsizing 권장값 계산해줘')).not.toContain('db-optimize'); // bare rightsiz stays eks-optimize
+  });
+  it('msk-optimize needs an MSK/broker noun + an optimize verb', () => {
+    expect(matchedSections('브로커 다운사이징 해줘')).toEqual(['msk-optimize']); // 브로커 is not a data-rule noun
+    expect(pickGateway('브로커 다운사이징 해줘')).toBe('msk-optimize');
+    expect(matchedSections('MSK 브로커 rightsizing')).toContain('msk-optimize'); // + data(msk) → ambiguous → classifier
+    expect(matchedSections('MSK 컨슈머 랙 확인해줘')).not.toContain('msk-optimize'); // lag troubleshooting stays data
+  });
+
+  // ── trace-analyze: explicit trace/dependency/bottleneck intents only ──
+  it('unmistakable trace-analyze phrasings match trace-analyze', () => {
+    expect(matchedSections('서비스 의존성 분석해줘')).toEqual(['trace-analyze']);
+    expect(pickGateway('서비스 의존성 분석해줘')).toBe('trace-analyze');
+    expect(pickGateway('latency bottleneck 찾아줘')).toBe('trace-analyze');
+    expect(matchedSections('지연시간 병목 찾아줘')).toContain('trace-analyze');
+  });
+  it("a bare 'trace/트레이스' noun stays with monitoring; '트레이스 분석' is ambiguous → classifier", async () => {
+    expect(matchedSections('grafana 대시보드에서 본 trace 이상해')).toEqual(['monitoring']);
+    const keys = matchedSections('트레이스 분석해줘');
+    expect(keys).toContain('monitoring');
+    expect(keys).toContain('trace-analyze');
+    const classify = vi.fn().mockResolvedValue([{ key: 'trace-analyze', score: 0.9 }]);
+    const r = await classifyRoute('트레이스 분석해줘', undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('trace-analyze');
+  });
+
+  // ── incident: root-cause phrasings only ──
+  it('unmistakable incident phrasings match incident', () => {
+    expect(matchedSections('장애 원인 분석해줘')).toEqual(['incident']);
+    expect(pickGateway('장애 원인 분석해줘')).toBe('incident');
+    expect(pickGateway('지금 무슨 문제가 있어?')).toBe('incident');
+    expect(matchedSections('incident analysis 돌려줘')).toContain('incident');
+    expect(pickGateway('root cause 찾아줘')).toBe('incident');
+  });
+  it('plain failure reports without a root-cause ask are left to the classifier', () => {
+    expect(matchedSections('배포 후에 장애가 났어')).toEqual([]); // no 원인/분석 → classifier decides
+    expect(matchedSections('어제부터 뭔가 이상해요')).toEqual([]);
+    expect(matchedSections('DynamoDB 스로틀링 원인 분석')).not.toContain('incident'); // no 장애/사고 noun → stays data
+  });
+});
