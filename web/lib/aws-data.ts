@@ -280,18 +280,41 @@ export interface AnalyzeOpts {
   onUsage?: (u: { inputTokens: number; outputTokens: number }) => void;
 }
 
-/** Stream the analysis answer grounded in the query result (rows JSON capped at 2000 chars). */
+// 결과 직렬화: JSON.stringify 대신 컴팩트 TSV(헤더+행) — 같은 예산에서 행 3~4배 수용.
+// 예산 24000자(≈8k 토큰): "현황을 보여줘"류 전량 목록 질문(예: EC2 69행)이 통째로 들어간다
+// (2000자 캡은 6행만 전달돼 모델이 "잘렸다"고 답하던 실측 결함 — 2026-08-02).
+const DATA_BUDGET = 24_000;
+function rowsToTsv(rows: Record<string, unknown>[]): { text: string; shown: number } {
+  if (rows.length === 0) return { text: '(no rows)', shown: 0 };
+  const cols = Object.keys(rows[0]);
+  const cell = (v: unknown) => (v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)).replaceAll('\t', ' ').slice(0, 200);
+  const lines = [cols.join('\t')];
+  let used = lines[0].length;
+  let shown = 0;
+  for (const r of rows) {
+    const line = cols.map((c) => cell(r[c])).join('\t');
+    if (used + line.length + 1 > DATA_BUDGET) break;
+    lines.push(line);
+    used += line.length + 1;
+    shown++;
+  }
+  return { text: lines.join('\n'), shown };
+}
+
+/** Stream the analysis answer grounded in the query result (compact TSV, 24k-char budget). */
 export async function* analyzeStream(opts: AnalyzeOpts): AsyncGenerator<string> {
   if (!br) br = new BedrockRuntimeClient({ region: REGION });
   const langName = opts.lang ? LANG_NAME[opts.lang] : undefined;
   const system = ANALYSIS_SYSTEM + (langName
     ? ` CRITICAL: Write the ENTIRE answer in ${langName}, regardless of the languages inside the tags.`
     : '');
-  const dataJson = JSON.stringify(opts.rows).slice(0, 2000);
+  const { text: dataTsv, shown } = rowsToTsv(opts.rows as Record<string, unknown>[]);
+  const clipped = opts.truncated || shown < opts.rows.length;
   const user =
     `<user_query>\n${opts.question}\n</user_query>\n` +
-    `<sql_result rows="${opts.rowCount}"${opts.truncated ? ' truncated="true"' : ''}>\n` +
-    `SQL: ${opts.sql}\n${dataJson}\n</sql_result>`;
+    `<sql_result total_rows="${opts.rowCount}" shown_rows="${shown}"${clipped ? ' clipped="true"' : ''}>\n` +
+    `SQL: ${opts.sql}\n${dataTsv}\n</sql_result>` +
+    (clipped ? `\n(Note: ${shown} of ${opts.rowCount} rows shown — summarize totals from total_rows; do not claim data is missing.)` : '');
   const res = await br.send(new ConverseStreamCommand({
     modelId: AWS_DATA_ANALYSIS_MODEL,
     system: [{ text: system }],
