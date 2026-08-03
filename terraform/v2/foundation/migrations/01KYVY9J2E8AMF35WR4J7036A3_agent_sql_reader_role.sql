@@ -10,12 +10,16 @@
 --   3. Adding a column to a view here is a SECURITY-RELEVANT change. It widens what a
 --      model-invocable tool can print. It needs review, not a drive-by edit.
 --   4. Adding a whole new view is likewise a widening — justify the diagnostic need in the diff.
---   5. NEVER list a JSONB blob column (inventory_resources.data, topology_nodes.meta). Those hold
+--   5. NEVER list a JSONB blob column RAW (inventory_resources.data, topology_nodes.meta). They hold
 --      raw provider payloads — CloudFront origin CustomHeaders values among them — and topology
---      copies the ENTIRE source row into meta.row, so listing one reopens column-level fail-open
---      one level down, inside the JSON, defeating rule 3. A projection of NAMED keys is fine; the
---      column itself is not. A key blocklist would be fail-open by construction — do not.
---      (PR #197 review MAJOR, 2 models independently.)
+--      copies the ENTIRE source row into meta.row, so listing one reopens column-level fail-open one
+--      level down, inside the JSON, defeating rule 3. Expose a NAMED-KEY projection instead, as the
+--      two views below do. A key blocklist would be fail-open by construction — do not.
+--      Dropping the column outright is not the answer either: a previous revision did that and broke
+--      the inventory-read connector at runtime (PR #197 review CRITICAL) — a leak traded for an
+--      outage. Adding a key to a projection is a rule-3 widening and takes the same review.
+--      The data allowlist must stay a SUPERSET of inventory_read_mcp.PROJECTIONS —
+--      agent/lambda/test_inventory_view_contract.py fails if the two drift apart.
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════
 --
 -- WHY (PR #197 rounds 3-7): execute_sql's read-only guarantee rested on two things that are not
@@ -194,22 +198,32 @@ BEGIN
     -- never user input — so raw %s interpolation below is safe.
     SELECT * FROM (VALUES
       -- inventory / topology (the inventory-read connector's own queries)
-      -- `data` (JSONB) is DELIBERATELY EXCLUDED. Listing it would undo the very inversion this
-      -- migration is for: an explicit column list replaces a table allowlist so that anything not
-      -- named is absent rather than silently exposed — but a whole JSONB column is fail-open again,
-      -- one level down, at the JSON-key granularity. sync_lambda.py stores raw provider payloads in
-      -- it, including CloudFront origin CustomHeaders values (origin secrets), and nothing keeps a
-      -- future provider field from landing there. Excluded means `execute_sql` cannot dump it.
-      -- (PR #197 review MAJOR, 2 models.) A per-resource-type safe projection can be added later as
-      -- its own migration; a key blocklist would be fail-open by construction, so it is not that.
+      -- `data` (JSONB) is exposed ONLY as a NAMED-KEY PROJECTION. Listing the raw column would undo
+      -- the inversion this migration is for: an explicit column list replaces a table allowlist so
+      -- anything unnamed is absent — but a whole JSONB column is fail-open again one level down, at
+      -- JSON-key granularity. sync_lambda.py stores raw provider payloads there, CloudFront origin
+      -- CustomHeaders values (origin secrets) among them, and nothing stops a future provider field
+      -- from landing in it.
+      -- A previous revision simply dropped the column, which broke the inventory-read connector at
+      -- runtime (find_unused_resources / query_inventory / get_topology all failed with
+      -- "column data does not exist") — trading a leak for an outage (PR #197 review CRITICAL).
+      -- The key list is the union of inventory_read_mcp.PROJECTIONS; a blocklist would be fail-open
+      -- by construction, so it is an allowlist, and a new key is absent until named here.
       ('inventory_resources',
-       'resource_type, account_id, region, resource_id, captured_at'),
+       'resource_type, account_id, region, resource_id, captured_at, '
+       '(SELECT jsonb_object_agg(k, v) FROM jsonb_each(data) AS e(k, v) '
+       '  WHERE k = ANY(ARRAY['target_group_arn','target_group_name','load_balancer_arns','target_health_descriptions','name','dns_name','arn','id','domain_name','enabled','origins','aliases','volume_id','state','size','volume_type'])) AS data'),
       ('inventory_sync_runs',
        'resource_type, account_id, started_at, finished_at, status, row_count'),
-      -- `meta` (JSONB) excluded for the same reason, and more sharply: flow-topology.ts copies the
-      -- ENTIRE source row into meta.row, so exposing it re-exposes every column this file excludes.
+      -- `meta` (JSONB) likewise projected, and the stakes are sharper here: flow-topology.ts copies
+      -- the ENTIRE source row into meta.row, so exposing meta raw would re-expose every column this
+      -- file excludes. `row` is therefore absent while the scalar hints flow-topology writes beside
+      -- it are named. get_topology returns meta to the model, so dropping it outright degraded the
+      -- topology tool; projecting keeps the diagnosis useful without the row copy.
       ('topology_nodes',
-       'account_id, id, kind, label, run_id, captured_at, class'),
+       'account_id, id, kind, label, run_id, captured_at, class, '
+       '(SELECT jsonb_object_agg(k, v) FROM jsonb_each(meta) AS e(k, v) '
+       '  WHERE k = ANY(ARRAY['invType','targetType','recordType','service','bucket','domain','unresolved','resolvedTarget','ecsService','task','cluster','groupLabel','members','aliases','port','health'])) AS meta'),
       ('topology_edges',
        'id, account_id, source, target, rel, confidence, run_id, captured_at, class'),
       -- async job tier: metadata only (no task_token / payload / result / error)

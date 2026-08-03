@@ -81,6 +81,13 @@ AgentCore 게이트웨이 MCP 도구용 Lambda 함수 + 공유 모듈. 각 Lambd
     **테이블** allowlist는 `worker_jobs.task_token`을 놓쳤다 — 이건 데이터가 아니라 **capability**다
     (Step Functions task token 보유자는 실행 중인 워크플로를 `SendTaskSuccess/Failure`로 조작할 수 있다).
     테이블 단위 allowlist는 **컬럼 단위로 fail-open**이라 같은 실패가 두 번 반복됐다.
+  - **JSONB 블롭은 named-key 투영으로만 노출된다** (`inventory_resources.data`, `topology_nodes.meta`).
+    컬럼 목록에 raw JSONB를 넣으면 **JSON 키 단위로 다시 fail-open**이고, `data`엔 CloudFront origin
+    CustomHeaders(origin secret)가, `meta.row`엔 **원본 행 전체 복사본**이 들어 있다. 반대로 컬럼을
+    그냥 **지우면 커넥터가 런타임에 깨진다**(PR #197 리뷰 CRITICAL — `find_unused_resources`/
+    `query_inventory`/`get_topology` 전멸). 그래서 allowlist 투영이며, `data` allowlist는
+    `inventory_read_mcp.PROJECTIONS`의 superset이어야 한다 —
+    `agent/lambda/test_inventory_view_contract.py`가 드리프트를 실패로 만든다.
   - 효과: base table에 컬럼이 추가돼도 누군가 뷰에 넣기 전까지 **보이지 않는다**
     (조용한 노출 → 조용한 부재. 모델 호출 도구에는 이게 올바른 방향).
   - `search_path = sql_reader, pg_catalog` → 모델이 쓴 미수식 `FROM worker_jobs`는 뷰로 해석된다.

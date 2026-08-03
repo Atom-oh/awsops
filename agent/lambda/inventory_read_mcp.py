@@ -232,6 +232,14 @@ PROJECTIONS = {
 
 
 def _projected_select(rtype):
+    """Column expression for a type's inventory payload.
+
+    Reads run as `awsops_sql_reader`, whose sql_reader.inventory_resources view exposes `data` as a
+    NAMED-KEY PROJECTION (migration 01KYVY9J…, INVARIANT rule 5) — raw provider payloads are not
+    reachable, so any key not on that allowlist comes back absent, not denied. Selecting `data`
+    unqualified is therefore safe here AND under the exec role, and asking for a specific key that
+    the view drops simply yields null rather than an error.
+    """
     keys = PROJECTIONS.get(rtype)
     if not keys:
         return "data"
