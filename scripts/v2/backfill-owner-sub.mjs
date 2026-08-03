@@ -226,6 +226,7 @@ async function apply(client) {
   }
 
   let total = 0;
+  let committed = false;
   const applied = [];
   await client.query('BEGIN');
   try {
@@ -242,13 +243,36 @@ async function apply(client) {
         `${skipped ? `, ${skipped} changed since the plan — left alone` : ''})`);
     }
     await client.query('COMMIT');
-    journal('committed');
+    committed = true;
   } catch (err) {
+    // Only reachable while the transaction is still open — `committed` is set immediately after
+    // COMMIT returns and nothing else runs inside the try, so this branch can never be entered for a
+    // run whose data is already durable (codex stop-gate: journal('committed') used to sit inside the
+    // try, so a failing journal WRITE after a successful COMMIT rolled into this handler and recorded
+    // `rolled-back` — telling the operator nothing changed when everything had).
     await client.query('ROLLBACK').catch(() => {});
-    journal('rolled-back');
+    try { journal('rolled-back'); } catch { /* the message below is the real signal */ }
     console.error('\nROLLED BACK — nothing was rewritten:');
     console.error(`  ${err?.message || err}`);
     die('resolve the error and re-run --apply with the same plan; no rows were changed');
+  }
+
+  // Past this point the rewrite IS durable — the catch above always exits, so this line is only
+  // reachable after COMMIT returned. Asserted rather than assumed: if a future edit adds an early
+  // continue/return into the try, this fails loudly instead of writing a `committed` journal for a
+  // transaction that never committed.
+  if (!committed) die('internal: reached the post-commit path without a COMMIT — refusing to journal');
+
+  // A journal failure here must not be reported as a rollback, and must not exit non-zero as though
+  // the data were unchanged — losing the audit file is bad, but claiming the rewrite did not happen
+  // is worse.
+  try {
+    journal('committed');
+  } catch (err) {
+    console.error(`\nCOMMITTED, but the journal could not be written: ${err?.message || err}`);
+    console.error(`Record this by hand — the rewrite IS applied. Reverse it with, per plan entry:`);
+    console.error(`  UPDATE <table> SET <column> = <from> WHERE <column> = <to>;`);
+    console.error(`Plan (still on disk): ${APPLY_FROM}`);
   }
   for (const line of applied) console.log(line);
   console.log(`\nrewrote ${total} rows (one transaction, committed).`);
