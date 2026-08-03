@@ -22,12 +22,51 @@ MIGRATION = os.path.join(
     "01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql")
 
 
+def _entries():
+    """Every (table, column-list) pair the migration's VALUES list declares.
+
+    Parsed by walking the quoting rather than by one big regex: the column list may be a chain of
+    '…' fragments OR a $$…$$ block, and the earlier single-regex version was fragile enough that
+    three panel models flagged it — and, worse, it happily matched a migration whose SQL did not
+    parse at all, because matching text says nothing about validity (PR #197 review).
+    """
+    src = open(MIGRATION, encoding="utf-8").read()
+    out = {}
+    for m in re.finditer(r"\(\s*'([a-z_]+)'\s*,\s*", src):
+        table, i = m.group(1), m.end()
+        if src[i:i + 2] == "$$":
+            j = src.index("$$", i + 2)
+            out[table] = src[i + 2:j]
+        elif src[i] == "'":
+            # chain of adjacent single-quoted fragments
+            frags, k = [], i
+            while k < len(src) and src[k] == "'":
+                e = src.index("'", k + 1)
+                frags.append(src[k + 1:e])
+                k = e + 1
+                while k < len(src) and src[k] in " \t\r\n":
+                    k += 1
+            out[table] = "".join(frags)
+    return out
+
+
 def _view_columns(table):
     """The column-list literal the migration builds this view from."""
-    src = open(MIGRATION, encoding="utf-8").read()
-    m = re.search(r"\('" + re.escape(table) + r"',\s*(.*?)\),\s*$", src, re.S | re.M)
-    assert m, "no view definition for " + table
-    return m.group(1)
+    e = _entries()
+    assert table in e, "no view definition for " + table
+    return e[table]
+
+
+def _sql_literal_is_intact(raw_src, table):
+    """A '…'-quoted column list must not contain an unescaped quote.
+
+    This is the failure that shipped: the projection was written inside a '…' literal while
+    containing ARRAY['key',…], so the literal ENDED at the first inner quote and the migration would
+    not have parsed. $$…$$ entries are immune, which is why the file uses them.
+    """
+    m = re.search(r"\(\s*'" + re.escape(table) + r"'\s*,\s*(\$\$)?", raw_src)
+    assert m, table
+    return m.group(1) == "$$" or "ARRAY[" not in _view_columns(table)
 
 
 def _allowlisted_keys(table):
@@ -75,6 +114,24 @@ class TestInventoryViewContract(unittest.TestCase):
             cols = _view_columns(table)
             for c in needed:
                 self.assertIn(c, cols, f"{table} view lost {c!r}, which inventory_read_mcp selects")
+
+
+    def test_a_projection_is_dollar_quoted_so_its_inner_quotes_survive(self):
+        # The shipped bug: ARRAY['k',…] inside a '…' column list terminates the literal and the
+        # migration does not parse. Text-matching tests cannot see that, so assert the quoting choice.
+        src = open(MIGRATION, encoding="utf-8").read()
+        for table in ("inventory_resources", "topology_nodes"):
+            self.assertTrue(_sql_literal_is_intact(src, table),
+                            f"{table}'s column list embeds SQL literals inside a '…' string — use "
+                            f"$$…$$ (PR #197 review CRITICAL)")
+
+    def test_secret_bearing_keys_are_not_on_the_data_allowlist(self):
+        # CloudFront origins carry CustomHeaders[].HeaderValue — the origin secret the projection
+        # exists to keep out. It was on the allowlist, which re-opened exactly that leak.
+        exposed = _allowlisted_keys("inventory_resources")
+        for k in ("origins", "CustomHeaders", "custom_headers"):
+            self.assertNotIn(k, exposed, f"{k!r} may carry origin secrets — keep it off the allowlist")
+        self.assertNotIn("origins", inv.PROJECTIONS.get("cloudfront", []))
 
 
 if __name__ == "__main__":

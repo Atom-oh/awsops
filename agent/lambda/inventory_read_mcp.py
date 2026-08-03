@@ -226,7 +226,11 @@ PROJECTIONS = {
     "target_group": ["target_group_arn", "target_group_name", "load_balancer_arns", "target_health_descriptions"],
     "alb": ["name", "dns_name", "arn"],
     "nlb": ["name", "dns_name", "arn"],
-    "cloudfront": ["id", "domain_name", "enabled", "origins", "aliases"],
+    # `origins` deliberately absent: it carries CustomHeaders[].HeaderValue (origin secrets), so the
+    # sql_reader view does not expose it (migration 01KYVY9J…, INVARIANT rule 5) and asking for it
+    # here would only ever read null. CloudFront->origin detail needs the ingest side to stop storing
+    # the header values first (PR #197 review CRITICAL).
+    "cloudfront": ["id", "domain_name", "enabled", "aliases"],
     "ebs": ["volume_id", "state", "size", "volume_type"],
 }
 

@@ -209,10 +209,19 @@ BEGIN
       -- "column data does not exist") — trading a leak for an outage (PR #197 review CRITICAL).
       -- The key list is the union of inventory_read_mcp.PROJECTIONS; a blocklist would be fail-open
       -- by construction, so it is an allowlist, and a new key is absent until named here.
+      -- NOTE the $$ … $$ quoting: this column list contains SQL string literals, and inside a
+      -- '…'-quoted literal their quotes TERMINATE it — the previous revision did exactly that and the
+      -- migration would not have parsed at all (PR #197 review CRITICAL). Dollar-quoting removes the
+      -- hazard rather than relying on doubling every quote correctly forever.
+      -- `origins` is NOT on the allowlist: CloudFront origins carry CustomHeaders[].HeaderValue —
+      -- the origin secret this projection exists to keep out — so listing it re-opened precisely the
+      -- leak described above (PR #197 review CRITICAL). The real fix for wanting origin detail here
+      -- is upstream: stop storing the header values at ingest. Until then execute_sql and
+      -- inventory-read do not see origins.
       ('inventory_resources',
-       'resource_type, account_id, region, resource_id, captured_at, '
-       '(SELECT jsonb_object_agg(k, v) FROM jsonb_each(data) AS e(k, v) '
-       '  WHERE k = ANY(ARRAY['target_group_arn','target_group_name','load_balancer_arns','target_health_descriptions','name','dns_name','arn','id','domain_name','enabled','origins','aliases','volume_id','state','size','volume_type'])) AS data'),
+       $$resource_type, account_id, region, resource_id, captured_at,
+         (SELECT jsonb_object_agg(k, v) FROM jsonb_each(data) AS e(k, v)
+           WHERE k = ANY(ARRAY['target_group_arn','target_group_name','load_balancer_arns','target_health_descriptions','name','dns_name','arn','id','domain_name','enabled','aliases','volume_id','state','size','volume_type'])) AS data$$),
       ('inventory_sync_runs',
        'resource_type, account_id, started_at, finished_at, status, row_count'),
       -- `meta` (JSONB) likewise projected, and the stakes are sharper here: flow-topology.ts copies
@@ -221,9 +230,9 @@ BEGIN
       -- it are named. get_topology returns meta to the model, so dropping it outright degraded the
       -- topology tool; projecting keeps the diagnosis useful without the row copy.
       ('topology_nodes',
-       'account_id, id, kind, label, run_id, captured_at, class, '
-       '(SELECT jsonb_object_agg(k, v) FROM jsonb_each(meta) AS e(k, v) '
-       '  WHERE k = ANY(ARRAY['invType','targetType','recordType','service','bucket','domain','unresolved','resolvedTarget','ecsService','task','cluster','groupLabel','members','aliases','port','health'])) AS meta'),
+       $$account_id, id, kind, label, run_id, captured_at, class,
+         (SELECT jsonb_object_agg(k, v) FROM jsonb_each(meta) AS e(k, v)
+           WHERE k = ANY(ARRAY['invType','targetType','recordType','service','bucket','domain','unresolved','resolvedTarget','ecsService','task','cluster','groupLabel','members','aliases','port','health'])) AS meta$$),
       ('topology_edges',
        'id, account_id, source, target, rel, confidence, run_id, captured_at, class'),
       -- async job tier: metadata only (no task_token / payload / result / error)
