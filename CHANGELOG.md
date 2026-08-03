@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-03
+
+### Added
+
+- Add a VPC Endpoints page (`/vpc-endpoints`, Network group): all-region endpoint inventory with three analysis lenses — unused Interface endpoints via `AWS/PrivateLinkEndpoints` BytesProcessed (idle endpoints bill hourly per ENI/AZ, shown as an est. $0.0126/h), security signals (full-access policies, private DNS off), and per-VPC S3/DynamoDB Gateway coverage gaps; KPI tiles, type/service charts, a faceted table with sectioned detail; read-only `ec2:DescribeVpcEndpoints` IAM grant; 4-language i18n.
+- Add the aws-data chat route (v1 parity): route listing/count/config questions to a BFF-local handler that generates SQL with the codegen model, runs it against the live Steampipe listener (single-statement SELECT-only guard, 200-row cap), self-corrects once on error, streams the SQL preview in status frames, then streams an analysis grounded in the rows; fail-open at every step — Steampipe unreachable degrades to normal routing, double SQL failure falls back to Bedrock with an explicit no-live-data notice.
+- Add auto-collect analysis chat routes (v1 parity): 6 registry-based collectors — idle-scan, eks-optimize, db-optimize, msk-optimize, trace-analyze, incident — each collects live context (Steampipe SQL, CloudWatch, CloudTrail; missing sources are marked unavailable instead of failing) and streams a grounded analysis with per-step status frames; total collection failure falls back to Bedrock with an honest notice.
+- Activate the container and iac chat sections: EKS/ECS/Istio and CFN/CDK/Terraform questions now route to their gateways instead of the inactive notice (all 9 gateways have READY MCP targets).
+- Add EKS fleet-node drilldown: `/eks/nodes` rows open the same rich drilldown as the overview (CPU/Memory tri-split, pods on node, ENI) via a shared `NodeDrilldownPanel` — the overview reuses it too.
+
+### Fixed
+
+- Stabilize the aws-data route (4 fixes): raise the Steampipe statement timeout to 35s (cold multi-region wide scans exceeded the previous 15s) and the chat route `maxDuration` to 180s (a cold scan plus one self-correction plus a long analysis stream overran 60s); read all text blocks from the codegen response (a leading thinking block made the SQL parser return empty) and raise codegen `max_tokens` to 1024 and analysis `maxTokens` to 8192 (full listings were truncated); drop assistant turns starting with the fallback marker from codegen history (poisoned history); log SQL-generation and per-attempt failure reasons so fail-open never hides the cause.
+- Stop aws-data answers claiming rows are missing and restore natural streaming: move the analysis context from a 2k-char JSON slice to compact TSV under a 24k-char budget with an explicit shown/total note, and drain SSE deltas through an adaptive typewriter buffer.
+- Restore the eks-optimize collector: the curated Steampipe read policy had no EKS actions, so `aws_eks_cluster` got AccessDenied and collection returned zero rows — grant read-only `eks:Describe*`/`eks:List*` and log the per-leg collection summary on total failure.
+- Resolve each Transit Gateway's region from inventory before querying: default-region clients silently returned nothing for off-region TGWs — the detail and metrics paths now fan out per-region clients with per-region degrade (partial results kept).
+
 ## [0.5.0] - 2026-08-02
 
 First release of the **v2 line** (versioned independently from the v1 1.x line, starting at 0.5).
@@ -439,7 +456,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI routing: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 integration
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
 [1.8.1]: https://github.com/whchoi98/awsops/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/whchoi98/awsops/compare/v1.7.0...v1.8.0
@@ -464,6 +482,23 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
 ## [Unreleased]
+
+## [0.6.0] - 2026-08-03
+
+### Added
+
+- VPC 엔드포인트 페이지(`/vpc-endpoints`, Network 그룹) 추가: 전 리전 엔드포인트 인벤토리 + 분석 렌즈 3종 — `AWS/PrivateLinkEndpoints` BytesProcessed 기반 미사용 Interface 엔드포인트(유휴 엔드포인트도 ENI/AZ당 시간 과금, $0.0126/h 추정치 표기), 보안 시그널(full-access 정책, private DNS off), VPC별 S3/DynamoDB Gateway 커버리지 갭; KPI 타일·타입/서비스 차트·섹션형 상세 포함 facet 테이블; read-only `ec2:DescribeVpcEndpoints` IAM 권한; 4개 언어 i18n.
+- aws-data 챗 라우트 추가(v1 패리티): 목록/카운트/구성 질문을 BFF 로컬 핸들러로 라우팅 — codegen 모델로 SQL 생성, 라이브 Steampipe 리스너에서 실행(단일 문장 SELECT 전용 가드, 200행 상한), 오류 시 1회 자기수정, SQL 프리뷰 status frame 스트리밍 후 행 기반 분석 스트리밍; 전 단계 fail-open — Steampipe 불가 시 일반 라우팅으로 degrade, SQL 2회 실패 시 no-live-data 고지와 함께 Bedrock 폴백.
+- auto-collect 분석 챗 라우트 추가(v1 패리티): 레지스트리 기반 콜렉터 6종 — idle-scan, eks-optimize, db-optimize, msk-optimize, trace-analyze, incident — 라이브 컨텍스트 수집(Steampipe SQL, CloudWatch, CloudTrail; 누락 소스는 실패 대신 unavailable 표기) + 단계별 status frame과 함께 근거 기반 분석 스트리밍; 전체 수집 실패 시 고지와 함께 Bedrock 폴백.
+- container·iac 챗 섹션 활성화: EKS/ECS/Istio 및 CFN/CDK/Terraform 질문이 비활성 안내 대신 해당 게이트웨이로 라우팅(9개 게이트웨이 전부 READY MCP 타겟 보유).
+- EKS 플릿 노드 드릴다운 추가: `/eks/nodes` 행에서 개요와 동일한 리치 드릴다운(CPU/Memory 3분할, 노드 내 파드, ENI) 오픈 — 공유 `NodeDrilldownPanel`로 추출(개요도 동일 컴포넌트 재사용).
+
+### Fixed
+
+- aws-data 라우트 안정화(fix 4건): Steampipe statement timeout 35초 상향(콜드 멀티 리전 광역 스캔이 기존 15초 초과) + 챗 라우트 `maxDuration` 180초 상향(콜드 스캔 + 자기수정 1회 + 장문 분석 스트림이 60초 초과); codegen 응답의 모든 text 블록 읽기(선행 thinking 블록으로 SQL 파서가 빈 문자열 반환) + codegen `max_tokens` 1024·분석 `maxTokens` 8192 상향(전량 목록 답변 절단 해결); fallback 마커로 시작하는 assistant 턴을 codegen 히스토리에서 제외(오염된 히스토리); SQL 생성·시도별 실패 사유 로깅으로 fail-open이 원인을 숨기지 않도록 수정.
+- aws-data 답변의 "데이터 없음" 오판 및 스트리밍 체감 수정: 분석 컨텍스트를 2k자 JSON 슬라이스에서 24k자 예산의 압축 TSV(표시/전체 건수 명시)로 전환, SSE 델타를 적응형 typewriter 버퍼로 방출.
+- eks-optimize 콜렉터 수집 전면 실패 복구: Steampipe read 정책에 EKS 액션이 없어 `aws_eks_cluster`가 AccessDenied → 수집 0건 — read-only `eks:Describe*`/`eks:List*` 부여 + 전면 실패 시 leg별 수집 요약 로깅.
+- Transit Gateway 조회 전 리전을 인벤토리에서 해석하도록 수정: 기본 리전 클라이언트가 타 리전 TGW에 대해 조용히 빈 결과 반환 — 상세·메트릭 경로가 리전별 클라이언트로 fan-out(리전별 degrade로 부분 결과 유지).
 
 ## [0.5.0] - 2026-08-02
 
@@ -889,7 +924,8 @@ First release of the **v2 line** (versioned independently from the v1 1.x line, 
 - AI 라우팅: Code Interpreter, AgentCore, Steampipe+Bedrock, Bedrock Direct
 - Bedrock Claude Sonnet/Opus 4.6 통합
 
-[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/whchoi98/awsops/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/whchoi98/awsops/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/whchoi98/awsops/releases/tag/v0.5.0
 [1.8.1]: https://github.com/whchoi98/awsops/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/whchoi98/awsops/compare/v1.7.0...v1.8.0

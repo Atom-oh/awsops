@@ -1,8 +1,8 @@
 # API 레퍼런스 / API Reference
 
 ## 역할 / Role
-`web/app/api/**/route.ts` 전수(80개 라우트) 인덱스 — 경로·메서드·역할·인증.
-(Full index of all 80 `route.ts` files under `web/app/api` — path, methods, role, auth.)
+`web/app/api/**/route.ts` 전수(83개 라우트) 인덱스 — 경로·메서드·역할·인증.
+(Full index of all 83 `route.ts` files under `web/app/api` — path, methods, role, auth.)
 - 인증 컬럼: `verifyUser` = Cognito `awsops_token` 쿠키 검증(`@/lib/auth`). `없음` = 라우트 자체 비게이트(엣지 Lambda@Edge 게이트는 별도). 역할에 "admin"이 있으면 `isAdmin` 추가 게이트.
 - 모든 라우트는 루트 경로(`/api/*`) — basePath 없음. web은 thin-BFF: 무거운 작업은 `POST /api/jobs`로 enqueue.
 
@@ -24,7 +24,7 @@
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
 | `/api/inventory/[type]` | GET | 인벤토리 리소스 목록 — `iam_user`/`iam_role`은 admin 전용 | verifyUser |
-| `/api/inventory/[type]/metrics` | GET | 보조 KPI 카드 (CloudWatch/Pricing) — 실패 시 `{cards:[]}`로 조용히 degrade | verifyUser |
+| `/api/inventory/[type]/metrics` | GET | 보조 KPI 카드 (CloudWatch/Pricing) + `?ids=`/`?nodes=` 타입별 라이브 진단 플릿(ec2/rds/alb/nlb/s3/transit_gateway/lambda/ebs_volume/dynamodb/elasticache/opensearch/msk) — 실패 시 `{cards:[]}`로 조용히 degrade | verifyUser |
 | `/api/inventory/[type]/refresh` | POST | warm Steampipe → Aurora sync 트리거 + 첫 페이지 반환 (락 중이면 `busy`) | verifyUser |
 | `/api/inventory/cloudtrail/events` | GET | CloudTrail `LookupEvents` 조회 | verifyUser |
 | `/api/inventory/summary` | GET | 타입/카테고리별 카운트 + 보안 분할(ec2 running, 미암호화 EBS 등) | verifyUser |
@@ -42,7 +42,7 @@
 | `/api/eks/[cluster]/k8sgpt` | GET | K8sGPT read-only 진단 (ADR-035) — admin + 클러스터 allowlist | verifyUser |
 | `/api/eks/[cluster]/metrics` | GET | 컨트롤플레인 + ContainerInsights CloudWatch 메트릭 | verifyUser |
 | `/api/eks/[cluster]/pod-transfer` | GET | NFM 파드 전송 쿼리 (최대 1h 윈도우) | verifyUser |
-| `/api/eks/[cluster]/register` | POST, DELETE | 클러스터 등록/해제 (EKS 공식 이름 패턴 검증) | verifyUser |
+| `/api/eks/[cluster]/register` | POST, DELETE | 클러스터 등록/해제 (admin, EKS 공식 이름 패턴 검증) | verifyUser |
 
 ## nfm (2)
 | 경로 | 메서드 | 역할 | 인증 |
@@ -61,16 +61,27 @@
 |------|--------|------|------|
 | `/api/ip-inventory` | GET | ENI 전량 + EIP + EKS 파드 IP 조인 (파드 맵 best-effort — 실패해도 ENI/EIP 반환) | verifyUser |
 
-## 기타 (53)
+## tgw (1)
+| 경로 | 메서드 | 역할 | 인증 |
+|------|--------|------|------|
+| `/api/tgw` | GET | Transit Gateway 상세 — 어태치먼트 + 라우트 테이블(+라우트). `ids`는 `tgw-` 접두사만 통과, 인벤토리로 TGW별 소속 리전 해석 | verifyUser |
+
+## vpce (1)
+| 경로 | 메서드 | 역할 | 인증 |
+|------|--------|------|------|
+| `/api/vpce` | GET | VPC Endpoint 목록+분석 — 인벤토리 VPC 리전 fan-out + PrivateLink 메트릭 기반 미사용 감지 | verifyUser |
+
+## 기타 (54)
 | 경로 | 메서드 | 역할 | 인증 |
 |------|--------|------|------|
 | `/api/accounts` | GET, POST, PATCH, DELETE | 등록 계정 CRUD (admin) — POST는 role assume + `GetCallerIdentity` anti-spoof 검증 후 insert | verifyUser |
-| `/api/accounts/regions` | GET, POST, DELETE | 계정별 리전 활성/비활성 (`'self'` → 호스트 실제 id 해석) | verifyUser |
-| `/api/actions` | GET, POST | 액션 목록/생성 (ADR-040/041) | verifyUser |
-| `/api/actions/[id]` | GET, POST | 액션 상세/실행 — kill-switch 분기(integrations-write vs mutating-actions), 빈 이름 fail-closed | verifyUser |
+| `/api/accounts/regions` | GET, POST, DELETE | 계정별 리전 활성/비활성 (`'self'` → 호스트 실제 id 해석) — 조회 auth / 변경 admin | verifyUser |
+| `/api/actions` | GET, POST | 액션 목록/생성 (ADR-040/041, admin) | verifyUser |
+| `/api/actions/[id]` | GET, POST | 액션 상세/실행 (admin) — kill-switch 분기(integrations-write vs mutating-actions), 빈 이름 fail-closed | verifyUser |
 | `/api/agentcore` | GET | AgentCore 컨트롤플레인 상태 (runtime/gateway/memory/interpreter, `?action=stats`) | verifyUser |
 | `/api/ai-usage` | GET | 앱 Bedrock 토큰 비용 — `ai_usage_daily` SUM (스케줄 집계 산출물, 라이브 AWS 호출 없음) | verifyUser |
 | `/api/bedrock-metrics` | GET | Bedrock 모델 사용 메트릭 — 단일 계정 라우트 (All accounts는 클라이언트 fan-out) | verifyUser |
+| `/api/changelog` | GET | 사이드바 버전 칩 + 변경 이력 모달 데이터 — 저장소 `CHANGELOG.md`와 항상 일치 (배포된 커밋 = 표시 버전) | verifyUser |
 | `/api/compliance/benchmarks` | GET | UI 셀렉터용 벤치마크 정적 allowlist | verifyUser |
 | `/api/compliance/run` | POST | CIS 벤치마크 실행 enqueue — allowlist 검증 후 worker `compliance` job | verifyUser |
 | `/api/compliance/runs` | GET | 실행 이력 목록 (`compliance_runs`) | verifyUser |
@@ -97,7 +108,7 @@
 | `/api/graph` | GET | 토폴로지 그래프 (ADR-043 read-only) — class `flow\|infra`, `?from=`으로 서브그래프 | verifyUser |
 | `/api/health` | GET | 헬스체크 — 컨테이너/타깃그룹 health 경로와 일치 필수 | 없음 (공개) |
 | `/api/incidents` | GET, POST | 인시던트 목록 + 수동 트리거 (ADR-032, admin) | verifyUser |
-| `/api/incidents/prevention` | GET | 교차 인시던트 예방 인사이트 (read-only) | verifyUser |
+| `/api/incidents/prevention` | GET | 교차 인시던트 예방 인사이트 (admin, read-only) — Aurora 미설정/실패도 200 + 빈 목록 | verifyUser |
 | `/api/incidents/webhook` | POST | 인시던트 ingress — HMAC 서명 웹훅 (ADR-022 active/standby 로테이션) | 없음 (HMAC 검증) |
 | `/api/incidents/[id]` | GET | 인시던트 상세 (admin, read-only, UUID 가드) | verifyUser |
 | `/api/insights` | GET | Overview용 최신 캐시 AI 인사이트 (DB read only) | verifyUser |
@@ -109,11 +120,11 @@
 | `/api/jobs/[id]` | GET | 작업 상태 단건 조회 — UUID 형식 검증만 | 없음 |
 | `/api/me` | GET | 현재 사용자 + `isAdmin` 시그널 (UI 표시용 — 쓰기 게이트는 서버측 별도 유지) | verifyUser |
 | `/api/monitoring` | GET | 모니터링 허브 — `?tab=ec2\|rds` 플릿, `?series=`+`range`로 단일 리소스 시계열 | verifyUser |
-| `/api/opencost/[cluster]` | GET, PUT | OpenCost 저장 설정 조회/저장 (null = 미저장, 페이지가 기본값 사용) | verifyUser |
+| `/api/opencost/[cluster]` | GET, PUT | OpenCost 저장 설정 — 조회 auth / 저장 admin (null = 미저장, 페이지가 기본값 사용) | verifyUser |
 | `/api/opencost/[cluster]/allocation` | GET | 1-day allocation — KPI + 파드별 비용, degrade-safe | verifyUser |
 | `/api/opencost/[cluster]/bundle` | GET | 설치 번들(values.yaml + install.sh) 다운로드 — 사용자가 out-of-band 실행 (read-only) | verifyUser |
 | `/api/opencost/[cluster]/status` | GET | 설치 상태 배지 — 403/에러도 200 `{installed:false, reason}` | verifyUser |
 | `/api/overview` | GET | 대시보드 Overview 집계 — jobs/compliance는 계정 무관(Aurora 앱 레벨) | verifyUser |
-| `/api/security` | GET | 보안 findings (`inventory_resources` 파생, read-only) — `accounts` 파라미터 해석(`__all__` 포함) | verifyUser |
+| `/api/security` | GET | 보안 findings (`inventory_resources` 파생, read-only) + ECR 이미지 스캔 CVE(라이브, 실패 시 빈 탭) — `accounts` 파라미터 해석(`__all__` 포함) | verifyUser |
 | `/api/security/refresh` | POST | 보안 관련 인벤토리 타입 재동기화 | verifyUser |
 | `/api/stream` | GET | SSE 스트림 | 없음 |
