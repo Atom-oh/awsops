@@ -22,3 +22,7 @@ next-env.d.ts
 
 # local env files
 .env*.local
+!.env.example
+
+# deploy.mjs가 빌드 직전 저장소 루트에서 복사 (원본은 ../CHANGELOG.md)
+CHANGELOG.md

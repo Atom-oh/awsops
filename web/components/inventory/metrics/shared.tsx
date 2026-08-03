@@ -26,11 +26,14 @@ export const DANGER = 'text-rose-700 font-semibold';
 // 진단 테이블 기간 프리셋 — 값은 선택 기간 전체에 대한 단일 집계(Sum=기간 누적, Avg=기간 평균, Max=기간 최대).
 export const RANGES: ReadonlyArray<readonly [string, number]> = [['1h', 3600], ['6h', 21600], ['24h', 86400], ['7d', 604800]];
 
-/** 기간 선택 토글 — 각 진단 카드 헤더(right)에 배치. */
-export function RangePicker({ value, onChange }: { value: number; onChange: (sec: number) => void }) {
+/** 기간 선택 토글 — 각 진단 카드 헤더(right)에 배치. ranges로 프리셋 교체 가능 (예: NFM 1h 한도). */
+export function RangePicker({ value, onChange, ranges = RANGES }: {
+  value: number; onChange: (sec: number) => void;
+  ranges?: ReadonlyArray<readonly [string, number]>;
+}) {
   return (
     <div className="flex items-center gap-1">
-      {RANGES.map(([label, sec]) => (
+      {ranges.map(([label, sec]) => (
         <button
           key={sec}
           type="button"

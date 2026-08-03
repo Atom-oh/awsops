@@ -20,6 +20,9 @@ console.log(`\n[1/5] ECR login -> ${registry}`);
 sh(`aws ecr get-login-password --region ${REGION} | ${DOCKER} login --username AWS --password-stdin ${registry}`);
 
 console.log(`\n[2/5] build + push arm64 -> ${repo}:${TAG}`);
+// CHANGELOG.md는 저장소 루트가 원본이지만 빌드 컨텍스트가 web/ 뿐이라 빌드 직전 복사한다
+// (web/CHANGELOG.md는 gitignore — 사이드바 버전/변경내역이 배포 커밋과 항상 일치).
+sh('cp CHANGELOG.md web/CHANGELOG.md');
 sh(`${DOCKER} buildx build --platform linux/arm64 -t ${repo}:${TAG} --push web/`);
 
 console.log(`\n[3/5] ECS force-new-deployment -> ${cluster}/${service}`);

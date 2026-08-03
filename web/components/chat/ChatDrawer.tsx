@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { Menu, Plus, X, Maximize2, Minimize2, ExternalLink, Sparkles } from 'lucide-react';
+import { Menu, Plus, X, Maximize2, Minimize2, ExternalLink } from 'lucide-react';
 import PresetChips from './PresetChips';
 import Composer from './Composer';
 import MessageList from './MessageList';
@@ -119,7 +119,7 @@ export default function ChatDrawer() {
         // so the FAB never sits on top of the panel. Mobile keeps right-5 (panel is fullscreen there).
         className="fixed bottom-20 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-pop transition-colors hover:bg-brand-600 lg:bottom-5 lg:right-[calc(1.25rem+var(--detail-panel-w,0px))]"
       >
-        <Sparkles size={20} strokeWidth={2} />
+        <span aria-hidden className="text-[22px] leading-none">🤖</span>
       </button>
     );
   }
@@ -159,7 +159,7 @@ export default function ChatDrawer() {
         <div className="flex items-center gap-2">
           <IconBtn onClick={chat.toggleThreads} title="대화 목록" label="대화 목록" active={chat.showThreads}><Menu size={16} /></IconBtn>
           <span className="flex items-center gap-1.5 text-[13px] font-semibold text-ink-800">
-            <Sparkles size={14} className="text-brand-500" /> AWSops Assistant
+            <span aria-hidden className="text-[15px] leading-none">🤖</span> AWSops Assistant
           </span>
         </div>
         <div className="flex items-center gap-0.5">
@@ -175,7 +175,7 @@ export default function ChatDrawer() {
       <div className="flex min-h-0 flex-1">
         {chat.showThreads && (
           <div className="shrink-0 border-r border-ink-100" style={{ width: THREADS_W }}>
-            <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onNew={chat.newChat} onSearch={(q) => void chat.refreshThreads(q)} />
+            <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onDeleteAll={chat.removeAllThreads} onNew={chat.newChat} onSearch={(q) => void chat.refreshThreads(q)} />
           </div>
         )}
         <div className="flex min-w-0 flex-1 flex-col">

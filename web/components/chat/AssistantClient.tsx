@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Sparkles, PanelLeft, X } from 'lucide-react';
+import { PanelLeft, X } from 'lucide-react';
 import PresetChips from './PresetChips';
 import Composer from './Composer';
 import MessageList from './MessageList';
@@ -44,7 +44,7 @@ export default function AssistantClient() {
     <div className="flex h-full">
       {/* thread rail — desktop only (always visible at lg+). */}
       <div className="hidden w-72 shrink-0 border-r border-ink-100 lg:block">
-        <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onNew={chat.newChat} onSearch={(q) => void chat.refreshThreads(q)} />
+        <ThreadList threads={chat.threads} activeId={chat.threadId} onSelect={chat.selectThread} onDelete={chat.removeThread} onDeleteAll={chat.removeAllThreads} onNew={chat.newChat} onSearch={(q) => void chat.refreshThreads(q)} />
       </div>
 
       {/* thread rail — mobile slide-in overlay (<lg), toggled from the header. */}
@@ -67,7 +67,7 @@ export default function AssistantClient() {
                 threads={chat.threads}
                 activeId={chat.threadId}
                 onSelect={(id) => { void chat.selectThread(id); setMobileThreads(false); }}
-                onDelete={chat.removeThread}
+                onDelete={chat.removeThread} onDeleteAll={chat.removeAllThreads}
                 onNew={() => { chat.newChat(); setMobileThreads(false); }}
                 onSearch={(q) => void chat.refreshThreads(q)}
               />
@@ -87,7 +87,7 @@ export default function AssistantClient() {
             >
               <PanelLeft size={17} />
             </button>
-            <Sparkles size={17} className="shrink-0 text-brand-500" />
+            <span aria-hidden className="shrink-0 text-[17px] leading-none">🤖</span>
             <span className="truncate">{title}</span>
           </div>
           {activeSec && (
