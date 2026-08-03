@@ -310,6 +310,63 @@ export async function verifyUser(cookieHeader: string | null): Promise<User | nu
   }
 }
 
+/**
+ * Display identity — email if present, else sub. NOT an authorization key: email is mutable and can
+ * be reassigned, so ownership must never be derived from this. Writes record `user.sub`; this exists
+ * for rendering and for the legacy read path below.
+ */
+export function identity(user: User): string {
+  return user.email || user.sub;
+}
+
+/**
+ * Whether the legacy email-keyed ownership match is still accepted on READ. Rows written before the
+ * sub cut-over hold `requested_by = <email>`, and their real owners would be locked out without it.
+ *
+ * PR #195 review MAJOR (4 models, 2 lenses): `matchesIdentity()` used to accept the email form
+ * UNCONDITIONALLY. Cognito reassigns addresses (`username_attributes = ["email"]`), so a departed
+ * user's address landing on a new account let that new sub read the previous owner's legacy rows —
+ * with no way to close the window short of a full backfill. This flag is that way: set
+ * `LEGACY_EMAIL_OWNER_MATCH=false` once the backfill (PR #203's `make backfill-owner-sub`) has
+ * rewritten those rows. Until then a reassigned email can still match — that is the exposure the
+ * backfill closes — but it is now a named, flippable switch instead of an unconditional accept, and
+ * an operator who wants zero window before the backfill runs can flip it early and accept the
+ * lockout that causes for existing users.
+ */
+function legacyEmailMatchEnabled(): boolean {
+  return process.env.LEGACY_EMAIL_OWNER_MATCH !== 'false';
+}
+
+/**
+ * LEGACY ONLY — do not call from new code. Matches a pre-cut-over `requested_by = <email>` row.
+ * Kept as its own named function so the email branch is greppable and removable in one place;
+ * folding it back into an `||` inside matchesIdentity() is what let it spread into authorization
+ * unconditionally in the first place.
+ */
+export function matchesLegacyEmailOwner(owner: string, user: User): boolean {
+  return legacyEmailMatchEnabled() && !!user.email && owner === user.email;
+}
+
+/**
+ * Ownership keys to filter a LIST query by, for the same user. Mirrors matchesIdentity() exactly —
+ * `sub` always, plus the legacy email form only while LEGACY_EMAIL_OWNER_MATCH is on. Row-level
+ * checks and list filters MUST agree, otherwise flipping the flag would sub-only the detail routes
+ * while the lists kept matching on email.
+ */
+export function ownerKeysForRead(user: User): string[] {
+  return legacyEmailMatchEnabled() && user.email ? [user.email, user.sub] : [user.sub];
+}
+
+/**
+ * Canonical ownership check. `user.sub` is the only key new rows carry; the legacy email form is
+ * accepted separately and only while the flag above is on.
+ */
+export function matchesIdentity(owner: string | null | undefined, user: User): boolean {
+  if (!owner) return false;
+  if (owner === user.sub) return true;
+  return matchesLegacyEmailOwner(owner, user);
+}
+
 // pentest-remediation P1-review (MAJOR-1): the original `clockTolerance: '3650 days'` accepted
 // ANY expired token, no matter how old — a token expired for weeks (e.g. an old leaked cookie)
 // could still hit this public, unauthenticated route and revoke the victim's *current* sessions,

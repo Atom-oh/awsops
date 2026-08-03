@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server';
-import { verifyUser } from '@/lib/auth';
+import { verifyUser, identity, matchesIdentity, ownerKeysForRead } from '@/lib/auth';
 import {
+  getReport,
   listReports,
   createReport,
   linkReportJob,
   reportForIdempotencyKey,
   markReportFailed,
+  softDeleteReport,
   type DiagnosisModel,
 } from '@/lib/diagnosis';
 import { isAdmin } from '@/lib/admin';
-import { enqueueJob } from '@/lib/jobs';
+import { enqueueJob, IdempotencyKeyCollisionError } from '@/lib/jobs';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -17,12 +19,14 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request) {
   const user = await verifyUser(req.headers.get('cookie'));
   if (!user) return NextResponse.json({ message: 'unauthenticated' }, { status: 401 });
-  const reports = await listReports(50);
   // can_edit per report: compute isAdmin ONCE (async + SSM-backed), then compare requested_by.
   const admin = await isAdmin(user);
-  const me = user.email ?? user.sub;
+  const me = identity(user); // pentest-remediation P2-1: match canMutateReport's `||`
+  // PR #195 round-4 review MAJOR #1: also scope by the raw sub, so a legacy row (requested_by =
+  // sub, written before the identity() switch) still shows up for its real owner.
+  const reports = await listReports(50, admin ? null : ownerKeysForRead(user));
   return NextResponse.json({
-    reports: reports.map((r) => ({ ...r, can_edit: admin || r.requested_by === me })),
+    reports: reports.map((r) => ({ ...r, can_edit: admin || matchesIdentity(r.requested_by, user) })),
   });
 }
 
@@ -63,29 +67,76 @@ export async function POST(req: Request) {
       if (rows.length > 0) { account = requested; scope = requested; }
     } catch { /* fall back to host */ }
   }
-  const email = user.email || user.sub;
+  const owner = user.sub;   // immutable ownership key — see the note in app/api/jobs/route.ts
 
   // [GATE-FIX R2 CRITICAL] Idempotency-FIRST → create the report with NULL fk → enqueue (inserts
   // worker_jobs) → LINK. The FK is only set once worker_jobs(job_id) exists.
   const hour = new Date().toISOString().slice(0, 13);
-  const key = `report:${email}:${tier}:${model}:${scope}:${hour}`;
+  // The idempotency key deliberately stays on identity(), NOT on the ownership key. They are separate
+  // concerns — this one only has to be stable per requester within the hour — and switching it to the
+  // sub bought nothing while creating a rolling-deploy discontinuity: a new pod writing
+  // `report:<sub>:…` is invisible to an old pod that only knows `report:<email>:…`, so the same user
+  // gets a SECOND Bedrock run. A fallback lookup only covered one direction, which is why the
+  // key itself is left alone (PR #195 review MAJOR). requested_by below is the immutable sub.
+  const key = `report:${identity(user)}:${tier}:${model}:${scope}:${hour}`;
 
   const existing = await reportForIdempotencyKey(key);
   if (existing) {
     return NextResponse.json({ report_id: existing, tier, model, deduped: true }, { status: 202 });
   }
 
-  const reportId = await createReport(tier, email, model); // worker_job_id = NULL (FK-safe)
-  let job: { job_id: string; status: string };
+  const reportId = await createReport(tier, owner, model); // worker_job_id = NULL (FK-safe)
+  let job: { job_id: string; status: string; payload?: Record<string, unknown> };
   try {
     job = await enqueueJob(
       'report',
-      { account, scope, tier, model, requested_by: email, report_id: reportId },
-      { idempotencyKey: key },
+      { account, scope, tier, model, requested_by: owner, report_id: reportId },
+      { idempotencyKey: key, requestedBy: owner },
     );
   } catch (e) {
     await markReportFailed(reportId, 'enqueue failed'); // no orphan running row
+    // round-6 review MAJOR: clean 409 for a cross-requester idempotency_key collision (this
+    // route's key is email-namespaced so it shouldn't fire in practice, but stay consistent with
+    // the other enqueueJob callers rather than letting any raw error propagate unhandled).
+    if (e instanceof IdempotencyKeyCollisionError) {
+      return NextResponse.json({ status: 'error', message: e.message }, { status: 409 });
+    }
     throw e;
+  }
+  // Concurrent same-key requests both pass the check above (it joins through worker_job_id, which is
+  // NULL until the link happens), so the second one gets the FIRST job from the conflict path. The
+  // LEDGER payload decides who owns it, because the worker obeys the payload — linking our row to a
+  // job whose payload names another report strands ours as `running` for good, with no
+  // markReportFailed and no reaper coverage (the reaper only reconciles worker_jobs).
+  // Only a POSITIVE INTEGER counts as a ledger report id. `Number(null)` is 0 and
+  // `Number.isFinite(0)` is true, so the previous guard treated a payload carrying
+  // `report_id: null` — or no id at all, stored as null — as "the ledger names report 0", then
+  // soft-deleted the FRESH report and answered with id 0 (codex stop-gate). Absent must mean absent.
+  const rawLedgerId = (job.payload as { report_id?: unknown } | undefined)?.report_id;
+  const ledgerReportId = typeof rawLedgerId === 'number' && Number.isInteger(rawLedgerId) && rawLedgerId > 0
+    ? rawLedgerId
+    : null;
+  if (ledgerReportId !== null && ledgerReportId !== reportId) {
+    // Is the ledger's report still there? reportForIdempotencyKey filters deleted_at, so it never
+    // sees a soft-deleted report and lets a same-key retry through to createReport — but
+    // findOwnJob() (lib/jobs.ts) matches worker_jobs purely on idempotency_key with no such filter,
+    // so it can still return the OLD job whose payload names the now-deleted report (PR #195 review
+    // MAJOR: deduped onto a deleted id → 202 with a report_id that 404s, for the rest of the hour
+    // bucket). Keeping our fresh row is not available either — enqueueJob already deduped, so no
+    // message carrying our report_id was ever sent and the worker will never render it. Say what is
+    // true instead of handing back a broken pointer.
+    const ledgerLive = await getReport(ledgerReportId);
+    if (!ledgerLive) {
+      await softDeleteReport(reportId);
+      return NextResponse.json({
+        status: 'error',
+        message: `the report this window already produced (${ledgerReportId}) was deleted; this `
+          + `${tier} diagnosis can be re-run once the hour bucket rolls over`,
+      }, { status: 409 });
+    }
+    await softDeleteReport(reportId);   // never ran, never will — not a FAILED diagnosis
+    return NextResponse.json(
+      { job_id: job.job_id, report_id: ledgerReportId, tier, model, deduped: true }, { status: 202 });
   }
   await linkReportJob(reportId, job.job_id); // FK now satisfiable
   return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier, model }, { status: 202 });

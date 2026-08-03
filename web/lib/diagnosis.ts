@@ -1,6 +1,6 @@
 import { getPool } from './db';
 import { isAdmin } from './admin';
-import type { User } from './auth';
+import { matchesIdentity, type User } from './auth';
 
 export type DiagnosisTier = 'light' | 'mid' | 'deep';
 // Bedrock model for the report. Only the deep tier may select 'opus'; light/mid are always 'sonnet'.
@@ -40,12 +40,23 @@ export interface DiagnosisProgress {
 const COLS =
   'id, worker_job_id, tier, status, requested_by, sources_used, summary, artifact_uri, error, created_at, model, title, tags, deleted_at, progress';
 
-export async function listReports(limit = 50): Promise<DiagnosisReport[]> {
+// pentest-remediation P2-1 (Finding 5): the list had no per-user filter — every authenticated user
+// saw every report (48/48 in the pentest run) regardless of who requested it. `owner` = the
+// caller's `email ?? sub` (matches canMutateReport's ownership comparison); pass null for an admin
+// caller to see every report (mirrors the existing GET [id]/download admin-bypass).
+// PR #195 round-4 review MAJOR #1: `owner` also accepts a string[] (identity() + raw sub) so a
+// legacy row written before the identity() switch still shows up for its real owner.
+export async function listReports(
+  limit = 50,
+  owner: string | string[] | null = null,
+): Promise<DiagnosisReport[]> {
+  const owners = owner == null ? null : Array.isArray(owner) ? owner : [owner];
   const { rows } = await getPool().query(
     `SELECT ${COLS.split(', ').map((c) => `r.${c}`).join(', ')}, j.payload->>'account' AS account
      FROM diagnosis_reports r LEFT JOIN worker_jobs j ON j.job_id = r.worker_job_id
-     WHERE r.deleted_at IS NULL ORDER BY r.created_at DESC LIMIT $1`,
-    [limit],
+     WHERE r.deleted_at IS NULL AND ($2::text[] IS NULL OR r.requested_by = ANY($2))
+     ORDER BY r.created_at DESC LIMIT $1`,
+    [limit, owners],
   );
   return rows as DiagnosisReport[];
 }
@@ -141,10 +152,16 @@ export async function softDeleteReport(id: number): Promise<void> {
 }
 
 // Edit/delete gate: report owner (requested_by) OR an admin. Fail-closed (server-side enforced).
+// pentest-remediation P2-1: use `||` (not `??`) to match how requested_by is WRITTEN everywhere
+// (diagnosis/route.ts, compliance/run/route.ts) — an empty-string email must fall back to sub on
+// both sides, or an owner with an empty email claim would be locked out of their own report.
+// PR #195 round-4 review MAJOR #1: also accept a legacy row keyed by the raw sub (matchesIdentity),
+// since rows created before the identity() switch (or before this user's schedule self-heal ran)
+// are stuck with requested_by = sub forever otherwise.
 export async function canMutateReport(
   user: Pick<User, 'email' | 'sub' | 'groups'>,
   report: Pick<DiagnosisReport, 'requested_by'>,
 ): Promise<boolean> {
   if (await isAdmin(user)) return true;
-  return report.requested_by === (user.email ?? user.sub);
+  return matchesIdentity(report.requested_by, user as User);
 }

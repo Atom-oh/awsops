@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const jwtVerify = vi.fn();
 vi.mock('jose', () => ({
@@ -321,5 +321,63 @@ describe('isRevoked timeout (via verifyUser)', () => {
     // ...and it went straight back to the pool instead of being held.
     expect(lateRelease).toHaveBeenCalled();
     vi.useRealTimers();
+  });
+});
+
+// PR #195 round-4 review MAJOR #1: matchesIdentity() is the legacy-row escape hatch — a report/job
+// row written before the identity() switch (raw sub) must still resolve for its owner even after
+// their token starts carrying an email that makes identity() diverge from sub.
+describe('matchesIdentity', () => {
+  it('matches a row keyed by identity() (email)', async () => {
+    const { matchesIdentity } = await import('./auth');
+    expect(matchesIdentity('u@x.io', { sub: 'u', email: 'u@x.io' })).toBe(true);
+  });
+  it('matches a legacy row keyed by the raw sub even when identity() now differs', async () => {
+    const { matchesIdentity } = await import('./auth');
+    expect(matchesIdentity('u', { sub: 'u', email: 'u@x.io' })).toBe(true);
+  });
+  it('does not match a different user’s row', async () => {
+    const { matchesIdentity } = await import('./auth');
+    expect(matchesIdentity('other@x.io', { sub: 'u', email: 'u@x.io' })).toBe(false);
+  });
+  it('fails closed on a null/empty owner', async () => {
+    const { matchesIdentity } = await import('./auth');
+    expect(matchesIdentity(null, { sub: 'u', email: 'u@x.io' })).toBe(false);
+    expect(matchesIdentity('', { sub: 'u', email: 'u@x.io' })).toBe(false);
+  });
+});
+
+// PR #195 review MAJOR: matchesIdentity() used to accept the email form unconditionally, so a
+// reassigned Cognito address let a new sub read the previous owner's legacy rows with no way to close
+// the window. These pin the flag in both states.
+describe('legacy email ownership match is gated and removable', () => {
+  const user = { sub: 'sub-1', email: 'a@x.io', groups: [] };
+  const original = process.env.LEGACY_EMAIL_OWNER_MATCH;
+  afterEach(() => {
+    if (original === undefined) delete process.env.LEGACY_EMAIL_OWNER_MATCH;
+    else process.env.LEGACY_EMAIL_OWNER_MATCH = original;
+  });
+
+  it('matches a legacy email-keyed row while the flag is on (default)', async () => {
+    delete process.env.LEGACY_EMAIL_OWNER_MATCH;
+    const { matchesIdentity } = await import('@/lib/auth');
+    expect(matchesIdentity('a@x.io', user)).toBe(true);
+    expect(matchesIdentity('sub-1', user)).toBe(true);
+  });
+
+  it('stops matching the email form once the flag is off — sub only', async () => {
+    process.env.LEGACY_EMAIL_OWNER_MATCH = 'false';
+    const { matchesIdentity } = await import('@/lib/auth');
+    expect(matchesIdentity('a@x.io', user)).toBe(false);
+    expect(matchesIdentity('sub-1', user)).toBe(true);
+  });
+
+  it('ownerKeysForRead mirrors matchesIdentity exactly in both flag states', async () => {
+    const { ownerKeysForRead } = await import('@/lib/auth');
+    delete process.env.LEGACY_EMAIL_OWNER_MATCH;
+    expect(ownerKeysForRead(user)).toEqual(['a@x.io', 'sub-1']);
+    process.env.LEGACY_EMAIL_OWNER_MATCH = 'false';
+    expect(ownerKeysForRead(user)).toEqual(['sub-1']);
+    expect(ownerKeysForRead({ sub: 'sub-2', groups: [] })).toEqual(['sub-2']);
   });
 });

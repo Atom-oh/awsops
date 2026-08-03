@@ -392,6 +392,12 @@ resource "aws_ecs_task_definition" "web" {
         # so the app listened on the ENI IP and the 127.0.0.1 container healthcheck probe failed
         # (ALB to the ENI IP still passed). Pinning HOSTNAME here makes loopback reachable.
         { name = "HOSTNAME", value = "0.0.0.0" },
+        # The legacy email-keyed ownership match is the email-reassignment exposure; it stays on
+        # until `make backfill-owner-sub` (PR #203) has rewritten legacy rows, then this flips to
+        # "false" and matchesIdentity() looks at the immutable sub only. Wired here because
+        # `make deploy` only force-new-deployments the EXISTING task def — a flag that is not in this
+        # block cannot be turned off through the standard deploy path at all (PR #195 review MAJOR).
+        { name = "LEGACY_EMAIL_OWNER_MATCH", value = tostring(var.legacy_email_owner_match) },
         { name = "AURORA_ENDPOINT", value = aws_rds_cluster.aurora.endpoint },
         { name = "AURORA_DATABASE", value = aws_rds_cluster.aurora.database_name },
         # IAM DB auth (rds-db:connect above) — a fixed username, not a secret, since the "password"

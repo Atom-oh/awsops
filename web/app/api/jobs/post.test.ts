@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const verifyUser = vi.fn();
 const enqueueJob = vi.fn();
-vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+// The mock factory REPLACES the module, so it must export every symbol route.ts imports —
+// after merging #199 into #195 the POST handler also calls identity() to bind requestedBy
+// server-side, and omitting it here made the call throw and surface as a 500.
+vi.mock('@/lib/auth', () => ({
+  verifyUser: (...a: unknown[]) => verifyUser(...a),
+  identity: (u: any) => u.email || u.sub,
+}));
 vi.mock('@/lib/jobs', async () => {
   const actual = await vi.importActual<typeof import('@/lib/jobs')>('@/lib/jobs');
   return { ...actual, enqueueJob: (...a: unknown[]) => enqueueJob(...a) };

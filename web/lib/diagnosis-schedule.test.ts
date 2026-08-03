@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
-vi.mock('@/lib/db', () => ({ getPool: () => ({ query: queryMock }) }));
+vi.mock('@/lib/db', () => ({
+  getPool: () => ({ query: queryMock }),
+}));
 
 import { computeNextRun, readSchedule, upsertSchedule } from './diagnosis-schedule';
 
@@ -28,6 +30,7 @@ describe('readSchedule', () => {
     const s = await readSchedule('u1');
     expect(s).toMatchObject({ scheduleType: 'weekly', enabled: true, tier: 'deep', model: 'opus', nextRunAt: '2026-06-25T00:00:00.000Z', lastRunAt: null });
   });
+
 });
 
 describe('upsertSchedule', () => {
@@ -67,4 +70,5 @@ describe('upsertSchedule', () => {
     await upsertSchedule('u1', { scheduleType: 'weekly', enabled: true });
     expect(queryMock.mock.calls.some((c) => /UPDATE report_schedules SET enabled = false/.test(c[0] as string) && (c[1] as unknown[])[1] === 'weekly')).toBe(true);
   });
+
 });
