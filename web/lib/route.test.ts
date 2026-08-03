@@ -23,6 +23,38 @@ describe('pickGateway', () => {
   it('ignores a pin that is not a known section', () => {
     expect(pickGateway('이번 달 비용', 'bogus')).toBe('cost');
   });
+  // Regression (2026-07-31 kiro review MAJOR finding): Grafana has NO legacy lambda target on
+  // any gateway — its only tools are the ADR-017 external-obs mcpServer preset. Before this fix
+  // 'grafana' routed to 'monitoring', which has no Grafana tools at all (dead-end route).
+  it('routes grafana (and other legacy-target-less ADR-017 presets) to observability/external-obs', () => {
+    expect(pickGateway('grafana 대시보드 좀 보여줘')).toBe('observability');
+    expect(pickGateway('check the datadog dashboard')).toBe('observability');
+    expect(pickGateway('dynatrace 확인해줘')).toBe('observability'); // avoid Korean '지표' which is monitoring's own keyword
+  });
+  // Regression (2026-07-31 round-3 review MAJOR): round-2 moved tempo/trace to observability to
+  // avoid a POST-cutover dead-end, but official_mcp_enabled defaults to false, so that just made
+  // the dead-end the DEFAULT state for every deployment that never opts into ADR-017 presets.
+  // route.ts has no runtime signal to pick dynamically, so it routes to the legacy target's home
+  // (monitoring) — the actual default/most-common state — and the cutover playbook (ADR-017) must
+  // move this keyword when official_mcp_enabled is actually flipped for tempo.
+  it('routes tempo/trace to monitoring (matches the default/pre-cutover state; legacy tempo-mcp-target lives there)', () => {
+    expect(pickGateway('tempo trace 조회')).toBe('monitoring');
+    expect(pickGateway('트레이스 검색')).toBe('monitoring');
+  });
+  // Regression (2026-07-31 round-2 review MAJOR): rule ORDER previously let monitoring's generic
+  // 'metric'/'지표' keyword steal a vendor-named query before the vendor-aware observability rule
+  // got a chance. Vendor names must win regardless of RULES array position of generic keywords.
+  it('routes vendor-named queries to observability, not generic monitoring', () => {
+    expect(pickGateway('Datadog metric 확인')).toBe('observability');
+    expect(pickGateway('Grafana 지표 좀 보여줘')).toBe('observability');
+  });
+  // Regression (2026-07-31 round-4 review MAJOR): the round-2 fix only moved the vendor rule above
+  // 'monitoring'; the generic 'data' rule (쿼리|database|...) still sat ABOVE it and kept stealing
+  // vendor-named queries. Vendor names now win over EVERY generic domain rule (rule index 0).
+  it('routes vendor-named queries to observability, not generic data', () => {
+    expect(pickGateway('ClickHouse 쿼리 느려')).toBe('observability');
+    expect(pickGateway('Datadog database latency')).toBe('observability');
+  });
 });
 
 describe('matchedSections', () => {
@@ -71,7 +103,7 @@ describe('classifyRoute', () => {
     expect(r.ranked).toEqual([
       { key: 'network', score: 0.9, active: true },
       { key: 'data', score: 0.6, active: true }, // data activated in Wave-1
-      { key: 'container', score: 0.4, active: false },
+      { key: 'container', score: 0.4, active: true }, // container activated 2026-08-02
     ]);
   });
   it('no-match goes to the LLM too', async () => {
@@ -97,10 +129,9 @@ describe('classifyRoute', () => {
     expect(r.primary).toBe('ops'); // legacy pickGateway behavior preserved when flag off
     expect(r.method).toBe('regex');
   });
-  it('honors a pin to a valid-but-inactive section, surfacing active:false (spec §2.3)', async () => {
-    // 'container' is still inactive after the Wave-1 fleet activation (data/cost/monitoring went active)
+  it('honors a pin to a now-active section, surfacing active:true (container activated 2026-08-02)', async () => {
     const r = await classifyRoute('아무거나', 'container', { llmEnabled: true, classify: vi.fn() });
-    expect(r).toEqual({ primary: 'container', ranked: [{ key: 'container', score: 1, active: false }], method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: false }] });
+    expect(r).toEqual({ primary: 'container', ranked: [{ key: 'container', score: 1, active: true }], method: 'pin', multiDomain: false, selected: [{ key: 'container', score: 1, active: true }] });
   });
   it('marks an unknown key from a custom classifier as active:false (contract)', async () => {
     const classify = vi.fn().mockResolvedValue([{ key: 'bogus-section', score: 0.9 }]);
@@ -120,7 +151,7 @@ describe('classifyRoute — ADR-044 multi-domain detection', () => {
     const r = await classifyRoute('EKS 파드가 RDS에 연결이 안 돼요', undefined, { llmEnabled: true, classify });
     expect(r.multiDomain).toBe(true);
     // container is inactive ⇒ excluded from the fan-out set even though score ≥ threshold
-    expect(r.selected.map((s) => s.key)).toEqual(['network', 'data']);
+    expect(r.selected.map((s) => s.key)).toEqual(['network', 'data', 'container']); // container 활성화(2026-08-02) — threshold 통과 3개 전부(≤3)
   });
   it('one dominant active route ⇒ single (multiDomain false, selected=[primary])', async () => {
     const classify = vi.fn().mockResolvedValue([{ key: 'cost', score: 0.95 }, { key: 'data', score: 0.1 }]);
@@ -146,6 +177,32 @@ describe('classifyRoute — ADR-044 multi-domain detection', () => {
     expect(pin.multiDomain).toBe(false);
     const rx = await classifyRoute('show me the billing forecast', undefined, { llmEnabled: true, classify: vi.fn() });
     expect(rx.multiDomain).toBe(false);
+  });
+});
+
+describe('aws-data rule — LAST in RULES (v1 priority-10 parity)', () => {
+  it('never steals questions a specialized domain keyword already claims', () => {
+    expect(pickGateway('CrashLoop 파드 몇 개야?')).toBe('container');      // 파드 → container wins
+    expect(pickGateway('how many CloudWatch alarms fired today')).toBe('monitoring');
+    expect(pickGateway('IAM 역할 총 3개가 미사용이야?')).toBe('security'); // 역할 → security wins
+    expect(pickGateway('RDS 인스턴스 개수 알려줘')).toBe('data');          // rds → data wins
+  });
+  it('catches unclaimed list/count questions (the v1 aws-data receiver)', () => {
+    expect(pickGateway('EC2 인스턴스 몇 개야?')).toBe('aws-data');
+    expect(pickGateway('S3 버킷 전체 목록 보여줘')).toBe('aws-data');
+    expect(pickGateway('list all S3 buckets with encryption status')).toBe('aws-data');
+    expect(pickGateway('EBS 볼륨 개수는?')).toBe('aws-data');
+  });
+  it('weak phrasings without a strong list/count pattern still fall through to ops', () => {
+    expect(pickGateway('안녕하세요')).toBe('ops');
+    expect(matchedSections('EC2 상태가 궁금해')).toEqual([]); // no 몇개/개수/목록 pattern → classifier decides
+  });
+  it('is a single distinct regex match → short-circuits without an LLM call', async () => {
+    const classify = vi.fn();
+    const r = await classifyRoute('EC2 인스턴스 몇 개야?', undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('aws-data');
+    expect(r.method).toBe('regex');
+    expect(classify).not.toHaveBeenCalled();
   });
 });
 
@@ -194,5 +251,96 @@ describe('topology / unused-resource routing → ops', () => {
   it('does NOT steal pure connectivity questions from network', () => {
     expect(matchedSections('두 인스턴스 통신이 안 돼요')).toEqual(['network']);
     expect(matchedSections('SG에서 막힌 포트')).toContain('network');
+  });
+});
+
+describe('auto-collect collector rules — dedicated strong keywords only (v1 auto-collect port)', () => {
+  it('unmistakable idle-scan phrasings match idle-scan', () => {
+    expect(matchedSections('유휴 리소스 스캔해줘')).toEqual(['idle-scan']);
+    expect(pickGateway('유휴 리소스 스캔해줘')).toBe('idle-scan');
+    expect(matchedSections('run an idle scan')).toContain('idle-scan');
+  });
+  it("'미사용 리소스 찾아줘' matches BOTH ops and idle-scan → ambiguous → classifier arbitrates", async () => {
+    const keys = matchedSections('미사용 리소스 찾아줘');
+    expect(keys).toContain('ops');
+    expect(keys).toContain('idle-scan');
+    const classify = vi.fn().mockResolvedValue([{ key: 'idle-scan', score: 0.9 }, { key: 'ops', score: 0.4 }]);
+    const r = await classifyRoute('미사용 리소스 찾아줘', undefined, { llmEnabled: true, classify });
+    expect(r.method).toBe('llm');
+    expect(r.primary).toBe('idle-scan');
+  });
+  it('generic unused/idle phrasings do NOT hit idle-scan (ops/security keep them)', () => {
+    expect(matchedSections('미사용 리소스 추려줘')).toEqual(['ops']); // no 찾/스캔 → ops only
+    expect(matchedSections('미사용 액세스 키 90일 이상')).not.toContain('idle-scan'); // golden case stays security
+    expect(pickGateway('IAM 역할 총 3개가 미사용이야?')).toBe('security');
+  });
+  it('unmistakable eks-optimize phrasings match eks-optimize', () => {
+    expect(matchedSections('rightsizing 권장값 계산해줘')).toEqual(['eks-optimize']);
+    expect(pickGateway('rightsizing 권장값 계산해줘')).toBe('eks-optimize');
+  });
+  it("'EKS 비용 최적화' is ambiguous (cost+container+eks-optimize) → classifier arbitrates", async () => {
+    const keys = matchedSections('EKS 비용 최적화');
+    expect(keys).toContain('cost');
+    expect(keys).toContain('container');
+    expect(keys).toContain('eks-optimize');
+    const classify = vi.fn().mockResolvedValue([{ key: 'eks-optimize', score: 0.9 }]);
+    const r = await classifyRoute('EKS 비용 최적화', undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('eks-optimize');
+  });
+  it('pod troubleshooting stays with container (no optimize keyword)', () => {
+    expect(matchedSections('EKS 파드가 RDS에 연결이 안 돼요')).not.toContain('eks-optimize');
+    expect(pickGateway('파드가 Pending인 이유')).toBe('container');
+  });
+
+  // ── db-optimize / msk-optimize: SERVICE noun + optimize verb required together ──
+  it('db-optimize needs a DB noun + an optimize verb; ambiguity goes to the classifier', async () => {
+    const keys = matchedSections('RDS 인스턴스 다운사이징 후보 찾아줘');
+    expect(keys).toContain('data');        // rds noun
+    expect(keys).toContain('db-optimize'); // rds + 다운사이징
+    const classify = vi.fn().mockResolvedValue([{ key: 'db-optimize', score: 0.9 }]);
+    const r = await classifyRoute('RDS 인스턴스 다운사이징 후보 찾아줘', undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('db-optimize');
+  });
+  it('DB troubleshooting/listing phrasings do NOT hit db-optimize (data/aws-data keep them)', () => {
+    expect(matchedSections('RDS 느린 쿼리 진단')).not.toContain('db-optimize');
+    expect(matchedSections('RDS 인스턴스 개수 알려줘')).not.toContain('db-optimize');
+    expect(matchedSections('rightsizing 권장값 계산해줘')).not.toContain('db-optimize'); // bare rightsiz stays eks-optimize
+  });
+  it('msk-optimize needs an MSK/broker noun + an optimize verb', () => {
+    expect(matchedSections('브로커 다운사이징 해줘')).toEqual(['msk-optimize']); // 브로커 is not a data-rule noun
+    expect(pickGateway('브로커 다운사이징 해줘')).toBe('msk-optimize');
+    expect(matchedSections('MSK 브로커 rightsizing')).toContain('msk-optimize'); // + data(msk) → ambiguous → classifier
+    expect(matchedSections('MSK 컨슈머 랙 확인해줘')).not.toContain('msk-optimize'); // lag troubleshooting stays data
+  });
+
+  // ── trace-analyze: explicit trace/dependency/bottleneck intents only ──
+  it('unmistakable trace-analyze phrasings match trace-analyze', () => {
+    expect(matchedSections('서비스 의존성 분석해줘')).toEqual(['trace-analyze']);
+    expect(pickGateway('서비스 의존성 분석해줘')).toBe('trace-analyze');
+    expect(pickGateway('latency bottleneck 찾아줘')).toBe('trace-analyze');
+    expect(matchedSections('지연시간 병목 찾아줘')).toContain('trace-analyze');
+  });
+  it("a bare 'trace/트레이스' noun stays with monitoring; '트레이스 분석' is ambiguous → classifier", async () => {
+    expect(matchedSections('대시보드에서 본 trace 이상해')).toEqual(['monitoring']);
+    const keys = matchedSections('트레이스 분석해줘');
+    expect(keys).toContain('monitoring');
+    expect(keys).toContain('trace-analyze');
+    const classify = vi.fn().mockResolvedValue([{ key: 'trace-analyze', score: 0.9 }]);
+    const r = await classifyRoute('트레이스 분석해줘', undefined, { llmEnabled: true, classify });
+    expect(r.primary).toBe('trace-analyze');
+  });
+
+  // ── incident: root-cause phrasings only ──
+  it('unmistakable incident phrasings match incident', () => {
+    expect(matchedSections('장애 원인 분석해줘')).toEqual(['incident']);
+    expect(pickGateway('장애 원인 분석해줘')).toBe('incident');
+    expect(pickGateway('지금 무슨 문제가 있어?')).toBe('incident');
+    expect(matchedSections('incident analysis 돌려줘')).toContain('incident');
+    expect(pickGateway('root cause 찾아줘')).toBe('incident');
+  });
+  it('plain failure reports without a root-cause ask are left to the classifier', () => {
+    expect(matchedSections('배포 후에 장애가 났어')).toEqual([]); // no 원인/분석 → classifier decides
+    expect(matchedSections('어제부터 뭔가 이상해요')).toEqual([]);
+    expect(matchedSections('DynamoDB 스로틀링 원인 분석')).not.toContain('incident'); // no 장애/사고 noun → stays data
   });
 });

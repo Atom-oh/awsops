@@ -4,7 +4,7 @@
 [![GitHub forks](https://img.shields.io/github/forks/Atom-oh/awsops?style=flat&logo=github)](https://github.com/Atom-oh/awsops/network/members)
 [![GitHub issues](https://img.shields.io/github/issues/Atom-oh/awsops)](https://github.com/Atom-oh/awsops/issues)
 [![License](https://img.shields.io/github/license/Atom-oh/awsops)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v2.0.0-green.svg)](https://github.com/Atom-oh/awsops/releases)
+[![Version](https://img.shields.io/badge/version-v0.6.0-green.svg)](https://github.com/Atom-oh/awsops/releases)
 [![Last commit](https://img.shields.io/github/last-commit/Atom-oh/awsops)](https://github.com/Atom-oh/awsops/commits/main)
 [![PR Review](https://github.com/Atom-oh/awsops/actions/workflows/pr-review.yml/badge.svg)](https://github.com/Atom-oh/awsops/actions/workflows/pr-review.yml)
 
@@ -32,7 +32,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito auth) -> VPC Origin (https-only
   -> async workers: POST /api/jobs -> SQS -> Step Functions -> Lambda or Fargate worker
 ```
 
-Stats: 21 pages, 65 API routes, 72 components (`web/`), 16 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
+Stats: 21 pages, 65 API routes, 72 components (`web/`), 17 consolidated ADRs, Terraform-managed (`terraform/v2/foundation`, no CDK).
 
 > **No public ALB.** The edge is fully private — CloudFront reaches the ALB only through a VPC Origin, and the ALB only accepts traffic from CloudFront's managed security group. v2's posture is a **read-only ops dashboard + AI diagnosis**: AWS-resource mutation and autonomous remediation are FROZEN by design (ADR-005) — infra changes stay with the operator's own IaC/Change Manager, with one narrowly-scoped exception for self-healing service restarts (ADR-015).
 
@@ -107,7 +107,7 @@ make upgrade            # safe release upgrade: RDS snapshot -> migrate -> deplo
 
 ## Configuration
 
-Runtime configuration is **flag-gated in Terraform** (`variables.tf`), all default `false` so a fresh `plan` is a no-op:
+Runtime configuration is **flag-gated in Terraform** (`variables.tf`), booleans all default `false` so a fresh `plan` is a no-op:
 
 | Flag | Gates |
 |------|-------|
@@ -115,6 +115,14 @@ Runtime configuration is **flag-gated in Terraform** (`variables.tf`), all defau
 | `integrations_enabled` | remaining 6 AgentCore Lambda slices |
 | `workers_enabled` | the async worker tier (SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | the Steampipe inventory-sync data layer |
+| `official_mcp_enabled` | ADR-017 curated official-vendor MCP presets (external-obs `mcpServer` targets) |
+
+Two companion **maps** (not booleans, both default `{}`) configure ADR-017 per preset — `official_mcp_endpoints` (`map(string)`, `preset_key` -> `https://` endpoint) and `official_mcp_read_only_ack` (`map(string)`, `preset_key` -> **the exact endpoint URL the operator reviewed**, echoed verbatim — *not* `true`). A preset provisions only when its ack equals its current endpoint; anything else is a fail-closed SKIP that retires any live target:
+
+```hcl
+official_mcp_endpoints     = { datadog = "https://mcp.datadoghq.com/v1/mcp" }
+official_mcp_read_only_ack = { datadog = "https://mcp.datadoghq.com/v1/mcp" }
+```
 
 AgentCore's own config (runtime ARN, Memory ID, Code Interpreter ID) is written to SSM (`/ops/awsops-v2/agentcore/*`) by the provisioner and read by the web BFF at runtime — never passed via task-def `valueFrom` (avoids a startup race).
 
@@ -127,7 +135,7 @@ awsops/
   terraform/v2/foundation/  # single Terraform root: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/             # configure/deploy/migrate/agentcore/workers tooling (all Node.js/Python)
   tests/                  # repo-wide hook/structure tests + PR-review/Steampipe/ExternalId wiring checks
-  docs/                   # guides, runbooks, decisions/ (BASELINE.md + 16 consolidated ADRs)
+  docs/                   # guides, runbooks, decisions/ (BASELINE.md + 17 consolidated ADRs)
   docs-site/              # Docusaurus user guide (deployed separately)
 ```
 
@@ -179,7 +187,7 @@ Internet -> CloudFront (TLS, Lambda@Edge Cognito 인증) -> VPC Origin (https-on
   -> 비동기 워커: POST /api/jobs -> SQS -> Step Functions -> Lambda 또는 Fargate 워커
 ```
 
-현황: 21 페이지, 65 API 라우트, 72 컴포넌트(`web/`), 16개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
+현황: 21 페이지, 65 API 라우트, 72 컴포넌트(`web/`), 17개 통합 ADR, Terraform 관리(`terraform/v2/foundation`, CDK 없음).
 
 > **공개 ALB 없음.** 엣지는 완전히 비공개입니다 — CloudFront는 VPC Origin을 통해서만 ALB에 도달하고, ALB는 CloudFront 관리형 보안 그룹의 트래픽만 허용합니다. v2의 자세는 **read-only 운영 대시보드 + AI 진단**입니다: AWS 리소스 변경·자율 조치는 설계상 FROZEN(ADR-005) — 인프라 변경은 운영자 자신의 IaC/Change Manager가 담당하며, 자가치유 서비스 재시작 하나만 좁게 예외 허용됩니다(ADR-015).
 
@@ -254,7 +262,7 @@ make upgrade             # 안전한 릴리스 업그레이드: RDS 스냅샷 ->
 
 ## 환경 설정
 
-런타임 설정은 **Terraform에서 flag-gated**(`variables.tf`)이며, 모두 기본값 `false`라 갓 받은 상태에서 `plan`은 no-op입니다:
+런타임 설정은 **Terraform에서 flag-gated**(`variables.tf`)이며, 불리언 플래그는 모두 기본값 `false`라 갓 받은 상태에서 `plan`은 no-op입니다:
 
 | Flag | 게이트 대상 |
 |------|-------------|
@@ -262,6 +270,14 @@ make upgrade             # 안전한 릴리스 업그레이드: RDS 스냅샷 ->
 | `integrations_enabled` | 나머지 AgentCore Lambda 슬라이스 6개 |
 | `workers_enabled` | 비동기 워커 계층(SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | Steampipe 인벤토리 sync 데이터 계층 |
+| `official_mcp_enabled` | ADR-017 큐레이션 공식 벤더 MCP 프리셋(external-obs `mcpServer` target) |
+
+ADR-017은 프리셋별 설정용 **맵 변수 2개**(불리언 아님, 둘 다 기본 `{}`)를 함께 씁니다 — `official_mcp_endpoints`(`map(string)`, `preset_key` -> `https://` 엔드포인트)와 `official_mcp_read_only_ack`(`map(string)`, `preset_key` -> **운영자가 검토한 엔드포인트 URL 그대로**. `true`가 아닙니다). ack 값이 현재 엔드포인트와 정확히 같을 때만 provisioning되고, 그 밖의 모든 경우는 fail-closed SKIP(기존 target 회수)입니다:
+
+```hcl
+official_mcp_endpoints     = { datadog = "https://mcp.datadoghq.com/v1/mcp" }
+official_mcp_read_only_ack = { datadog = "https://mcp.datadoghq.com/v1/mcp" }
+```
 
 AgentCore 자체 설정(runtime ARN, Memory ID, Code Interpreter ID)은 provisioner가 SSM(`/ops/awsops-v2/agentcore/*`)에 기록하고 web BFF가 런타임에 읽습니다 — 시작 시 레이스를 피하기 위해 task-def `valueFrom`으로는 절대 전달하지 않습니다.
 
@@ -274,7 +290,7 @@ awsops/
   terraform/v2/foundation/  # 단일 Terraform 루트: network, edge, auth, data, workload, ai, workers, eks
   scripts/v2/               # configure/deploy/migrate/agentcore/workers 도구(전부 Node.js/Python)
   tests/                    # repo 전반의 hook/structure 테스트 + PR-review/Steampipe/ExternalId 배선 체크
-  docs/                     # 가이드, 런북, decisions/(BASELINE.md + 통합 ADR 16개)
+  docs/                     # 가이드, 런북, decisions/(BASELINE.md + 통합 ADR 17개)
   docs-site/                # Docusaurus 사용자 가이드(별도 배포)
 ```
 

@@ -1,10 +1,14 @@
 // v1-parity chat-path i18n (v1 src/app/api/ai/route.ts:932-953 pick(en,ko,zh)): server-issued
 // guide/system strings follow the user's UI language, not hardcoded Korean. Pure data + one pick.
 
-export type ChatLang = 'ko' | 'en' | 'zh' | 'ja';
+import { isLang, type Lang } from './i18n';
+
+// ChatLang = Lang: adding a language to SUPPORTED_LANGS breaks this file's compile
+// until every template below gains that language — the lockstep is intentional.
+export type ChatLang = Lang;
 
 export function normalizeChatLang(v: unknown): ChatLang {
-  return v === 'en' || v === 'zh' || v === 'ja' ? v : 'ko';
+  return isLang(v) ? v : 'ko';
 }
 
 type L10n = Record<ChatLang, string>;
@@ -46,6 +50,18 @@ const M = {
     zh: '\n\n_（沙箱执行失败，仅提供代码）_',
     ja: '\n\n_（サンドボックス実行に失敗したため、コードのみ提供します）_',
   } as L10n,
+  sqlFallback: {
+    ko: '⚠️ 라이브 SQL 조회에 실패해 일반 지식으로 답변합니다(계정 실데이터 미포함).\n\n',
+    en: '⚠️ The live SQL query failed — answering from general knowledge (no live account data).\n\n',
+    zh: '⚠️ 实时 SQL 查询失败——以下回答基于通用知识（不含账户实时数据）。\n\n',
+    ja: '⚠️ ライブ SQL クエリに失敗したため、一般知識で回答します（アカウントの実データは含まれません）。\n\n',
+  } as L10n,
+  collectFallback: {
+    ko: '⚠️ 라이브 데이터 수집에 실패해 일반 지식으로 답변합니다(계정 실데이터 미포함).\n\n',
+    en: '⚠️ Live data collection failed — answering from general knowledge (no live account data).\n\n',
+    zh: '⚠️ 实时数据采集失败——以下回答基于通用知识（不含账户实时数据）。\n\n',
+    ja: '⚠️ ライブデータ収集に失敗したため、一般知識で回答します（アカウントの実データは含まれません）。\n\n',
+  } as L10n,
 } as const;
 
 export const chatMsg = {
@@ -55,4 +71,6 @@ export const chatMsg = {
   fallbackNotice: (lang: ChatLang) => M.fallbackNotice[lang],
   codeExecHeader: (lang: ChatLang) => M.codeExecHeader[lang],
   codeExecFailed: (lang: ChatLang) => M.codeExecFailed[lang],
+  sqlFallback: (lang: ChatLang) => M.sqlFallback[lang],
+  collectFallback: (lang: ChatLang) => M.collectFallback[lang],
 };

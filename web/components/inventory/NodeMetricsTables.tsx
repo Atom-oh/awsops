@@ -12,3 +12,4 @@ export { S3Metrics } from './metrics/S3Metrics';
 export { EbsMetrics } from './metrics/EbsMetrics';
 export { Ec2Metrics } from './metrics/Ec2Metrics';
 export { LambdaMetrics } from './metrics/LambdaMetrics';
+export { TgwSection } from './metrics/TgwSection';

@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { type Lang, makeT, makeTT } from '@/lib/i18n';
+import { type Lang, isLang, makeT, makeTT } from '@/lib/i18n';
 
 interface I18nCtx {
   lang: Lang;
@@ -20,7 +20,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved === 'ko' || saved === 'en' || saved === 'zh' || saved === 'ja') {
+      if (isLang(saved)) {
         setLangState(saved);
         document.documentElement.lang = saved;
       }

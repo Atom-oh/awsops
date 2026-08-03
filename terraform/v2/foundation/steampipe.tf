@@ -134,6 +134,7 @@ resource "aws_iam_role_policy" "steampipe_task" {
         "elasticache:Describe*", "elasticache:ListTagsForResource",
         "es:Describe*", "es:List*",
         "kafka:Describe*", "kafka:List*",
+        "eks:Describe*", "eks:List*",  # aws-data/eks-optimize 콜렉터: aws_eks_cluster 등 EKS 테이블
         "wafv2:List*", "wafv2:Get*",
         "cloudwatch:Describe*",
         "cloudtrail:Describe*", "cloudtrail:List*", "cloudtrail:GetTrailStatus", "cloudtrail:GetEventSelectors", "cloudtrail:GetInsightSelectors",

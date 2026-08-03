@@ -994,3 +994,17 @@ export async function eksNodesCI(cluster: string, region?: string, rangeSec = 36
     return {};
   }
 }
+
+// ── Transit Gateway 진단 메트릭 (inventory transit_gateway 하단) ─────────────
+// Blackhole/NoRoute 드롭 >0 = 라우팅 문제의 직접 신호 (블랙홀 라우트 매칭/라우트 부재).
+const TGW_FLEET_METRICS = [
+  { key: 'bytesIn', name: 'BytesIn', stat: 'Sum' },
+  { key: 'bytesOut', name: 'BytesOut', stat: 'Sum' },
+  { key: 'packetsIn', name: 'PacketsIn', stat: 'Sum' },
+  { key: 'packetsOut', name: 'PacketsOut', stat: 'Sum' },
+  { key: 'dropBlackhole', name: 'PacketDropCountBlackhole', stat: 'Sum' },
+  { key: 'dropNoRoute', name: 'PacketDropCountNoRoute', stat: 'Sum' },
+] as const;
+export function tgwFleetLive(tgwIds: string[], region?: string, rangeSec = 3600) {
+  return fleetLatest('AWS/TransitGateway', tgwIds, (id) => [{ Name: 'TransitGateway', Value: id }], TGW_FLEET_METRICS, region, rangeSec * 1000, rangeSec);
+}

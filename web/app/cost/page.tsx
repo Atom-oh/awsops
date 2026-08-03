@@ -10,6 +10,8 @@ import DataTable from '@/components/ui/DataTable';
 import AreaTrend from '@/components/charts/AreaTrend';
 import HBarList from '@/components/charts/HBarList';
 import DonutBreakdown from '@/components/charts/DonutBreakdown';
+import { useI18n } from '@/components/shell/LanguageProvider';
+import { localeOf } from '@/lib/i18n';
 import {
   momChangePctDaily, projectMonthEnd, trendPill,
   PERIOD_MONTHS, PERIOD_OPTIONS, allServiceNames, filterMonthlyTotals, filterDailyTotals,
@@ -17,8 +19,6 @@ import {
   type MonthlyServiceCostPoint, type DailyServiceCostPoint,
 } from '@/lib/cost';
 import { useActiveAccount, accountParam, ALL_ACCOUNTS } from '@/lib/account-context';
-import { useI18n } from '@/components/shell/LanguageProvider';
-import { localeOf } from '@/lib/i18n';
 
 interface TrendPoint { date: string; amount: number; [k: string]: unknown }
 // Client model: only `forecast` is read directly off the API response — the monthly/daily TOTALS

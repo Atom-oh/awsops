@@ -142,8 +142,41 @@ export function useChat() {
     void refreshThreads();
   }
 
+  async function removeAllThreads() {
+    try { await fetch('/api/chat/threads', { method: 'DELETE' }); } catch { /* best-effort */ }
+    newChat();
+    void refreshThreads();
+  }
+
   function patchLast(fn: (m: Msg) => Msg) {
     setMsgs((arr) => arr.map((m, i) => (i === arr.length - 1 && m.role === 'assistant' ? fn(m) : m)));
+  }
+
+  // v1식 자연스러운 타자기 렌더(owner: "렌더링은 v1이 더 자연스럽다"): 실스트리밍 델타를
+  // 버퍼에 모아 24ms마다 백로그 비례(최소 3자)로 방출 — 버스트 청크가 일정한 타이핑으로
+  // 보이면서도 백로그가 크면 가속해 절대 뒤처지지 않는다. 종결 시 flushSmoothed()로 즉시 배출.
+  const smoothBufRef = useRef('');
+  const smoothTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  function appendSmoothed(delta: string) {
+    smoothBufRef.current += delta;
+    if (smoothTimerRef.current) return;
+    smoothTimerRef.current = setInterval(() => {
+      const buf = smoothBufRef.current;
+      if (!buf) {
+        if (smoothTimerRef.current) { clearInterval(smoothTimerRef.current); smoothTimerRef.current = null; }
+        return;
+      }
+      const n = Math.max(3, Math.ceil(buf.length / 15));
+      smoothBufRef.current = buf.slice(n);
+      const chunk = buf.slice(0, n);
+      patchLast((m) => ({ ...m, content: m.content + chunk, status: undefined }));
+    }, 24);
+  }
+  function flushSmoothed() {
+    if (smoothTimerRef.current) { clearInterval(smoothTimerRef.current); smoothTimerRef.current = null; }
+    const rest = smoothBufRef.current;
+    smoothBufRef.current = '';
+    if (rest) patchLast((m) => ({ ...m, content: m.content + rest, status: undefined }));
   }
 
   function handleFrame(frame: string) {
@@ -175,8 +208,9 @@ export function useChat() {
           : m.queries,
       }));
     } else if (parsed.kind === 'delta') {
-      patchLast((m) => ({ ...m, content: m.content + parsed.delta!, status: undefined }));
+      appendSmoothed(parsed.delta!);
     } else if (parsed.kind === 'error') {
+      flushSmoothed();
       patchLast((m) => ({ ...m, content: `⚠️ ${parsed.error!}`, status: undefined, streaming: false }));
     }
   }
@@ -224,6 +258,7 @@ export function useChat() {
     } catch {
       patchLast((m) => ({ ...m, streaming: false, status: undefined }));
     } finally {
+      flushSmoothed();
       patchLast((m) => ({ ...m, streaming: false, status: undefined }));
       setBusy(false);
       if (showThreadsRef.current) void refreshThreads(); // new title/order shows up immediately
@@ -265,7 +300,7 @@ export function useChat() {
     // state
     msgs, busy, threadId, threads, showThreads,
     // actions
-    send, selectThread, newChat, refreshThreads, removeThread, toggleThreads, resendWith, followUp, abort,
+    send, selectThread, newChat, refreshThreads, removeThread, removeAllThreads, toggleThreads, resendWith, followUp, abort,
     // derived
     sessionStats,
   };

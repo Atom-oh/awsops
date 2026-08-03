@@ -1,15 +1,16 @@
 'use client';
 import { useI18n } from './LanguageProvider';
-import type { Lang } from '@/lib/i18n';
+import { SUPPORTED_LANGS, type Lang } from '@/lib/i18n';
 
-// 4개 언어를 각 언어 고유 표기로 노출하는 버튼 스위치 (기존 순환 토글 대체).
-const LANGS: ReadonlyArray<readonly [Lang, string]> = [['ko', '한국어'], ['en', 'English'], ['zh', '中文'], ['ja', '日本語']];
+// 라틴 코드 4버튼 (owner 확정 디자인 — 네이티브 라벨은 w-64 헤더를 상시 2행으로 만들어 원복).
+// Record<Lang, …>이므로 언어 추가 시 여기서 컴파일이 깨져 라벨 누락을 잡는다.
+const LABELS: Record<Lang, string> = { ko: 'KO', en: 'EN', zh: 'CN', ja: 'JA' };
 
 export default function LanguageToggle() {
   const { lang, setLang } = useI18n();
   return (
     <div className="inline-flex overflow-hidden rounded-md border border-ink-200" role="group" aria-label="Language">
-      {LANGS.map(([l, label]) => (
+      {SUPPORTED_LANGS.map((l) => (
         <button
           key={l}
           type="button"
@@ -19,7 +20,7 @@ export default function LanguageToggle() {
             lang === l ? 'bg-brand-500/10 text-brand-700' : 'text-ink-400 hover:bg-ink-100 hover:text-ink-700'
           }`}
         >
-          {label}
+          {LABELS[l]}
         </button>
       ))}
     </div>

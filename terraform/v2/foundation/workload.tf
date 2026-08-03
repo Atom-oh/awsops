@@ -109,8 +109,40 @@ resource "aws_iam_role_policy" "task_metrics" {
         "ecr:DescribeRepositories",
         "ecr:DescribeImages",
         "ecr:DescribeImageScanFindings",
+        # /network-flow + EKS Pod 전송량: CloudWatch Network Flow Monitor top-contributors
+        # queries (read-only in effect — Start/Stop only manage the async query lifecycle)
+        "networkflowmonitor:ListMonitors",
+        "networkflowmonitor:GetMonitor",
+        "networkflowmonitor:ListScopes",
+        "networkflowmonitor:GetScope",
+        "networkflowmonitor:StartQueryMonitorTopContributors",
+        "networkflowmonitor:GetQueryStatusMonitorTopContributors",
+        "networkflowmonitor:GetQueryResultsMonitorTopContributors",
+        "networkflowmonitor:StopQueryMonitorTopContributors",
+        # /dns-query: Route53 Resolver query-log config discovery + Logs Insights aggregation
+        # (+ DescribeLogGroups: CoreDNS 소스인 CI application 로그 그룹 발견)
+        "route53resolver:ListResolverQueryLogConfigs",
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery",
+        "logs:DescribeLogGroups",
+        # /ip-addresses: ENI 전량 + EIP 조회 (IP → 리소스 매핑, 미사용 EIP 탐지)
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeAddresses",
+        # inventory transit_gateway 상세: 어태치먼트 + 라우트 테이블 + 라우트 검색
+        "ec2:DescribeTransitGatewayAttachments",
+        "ec2:DescribeTransitGatewayRouteTables",
+        "ec2:SearchTransitGatewayRoutes",
+        # /vpc-endpoints: 엔드포인트 리스트+분석 (PrivateLink 메트릭 미사용 감지)
+        "ec2:DescribeVpcEndpoints",
       ]
       Resource = "*"
+      }, {
+      # aws-data 챗 라우트: Steampipe 네트워크 리스너 비밀번호 (해당 시크릿만 스코프)
+      Sid      = "SteampipeSecret"
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = "arn:aws:secretsmanager:*:*:secret:${var.project}-steampipe-db-*"
     }]
   })
 }

@@ -10,6 +10,7 @@ import ipaddress
 import urllib.parse
 from contextlib import ExitStack
 from strands import Agent
+from strands.hooks import AfterToolCallEvent, HookProvider, HookRegistry
 try:
     from strands.models import BedrockModel, CacheConfig
 except ImportError:  # pre-CacheConfig strands
@@ -698,6 +699,41 @@ def get_all_tools(client):
     return tools
 
 
+class LanguageReminderHook(HookProvider):
+    """Append a target-language reminder to EVERY tool result (max recency).
+
+    The system-prompt sandwich + user-turn suffix alone still lose stochastically
+    (live-tested 2026-07-28: zh/en flipped back to the Korean question's language on
+    ~10-30% of runs whenever a large inventory tool result was the last turn). A
+    reminder INSIDE each tool result is always the most recent instruction the model
+    sees before continuing, which is what finally holds the language deterministically.
+    Best-effort by design: any failure must never break the tool loop.
+    """
+
+    def __init__(self, reminder_text):
+        self._reminder = reminder_text
+
+    def register_hooks(self, registry: HookRegistry, **kwargs) -> None:
+        registry.add_callback(AfterToolCallEvent, self._after_tool)
+
+    def _after_tool(self, event) -> None:
+        try:
+            content = (event.result or {}).get("content")
+            if isinstance(content, list):
+                content.append({"text": self._reminder})
+        except Exception:
+            pass
+
+
+# Tool-result language reminders (target-language text — native priming holds best).
+LANG_TOOL_REMINDER = {
+    "ko": "[도구 결과 수신 — 최종 답변은 반드시 한국어로 작성]",
+    "en": "[Tool result received — write the final answer in English only, never in Korean]",
+    "zh": "[已收到工具结果 — 最终回答必须仅使用简体中文，禁止使用韩语]",
+    "ja": "[ツール結果受信 — 最終回答は必ず日本語のみで書くこと、韓国語は禁止]",
+}
+
+
 def build_conversation(payload):
     """Extract user input and conversation history from payload. / 페이로드에서 사용자 입력과 대화 히스토리 추출."""
     messages_list = payload.get("messages", [])
@@ -879,8 +915,11 @@ async def handler(payload):
     # a short/mixed-language prompt must still be answered in the user's UI language.
     response_language = payload.get("responseLanguage")
     lang_directive = ""
-    if response_language in ("ko", "en", "zh"):
-        lang_name = {"ko": "Korean(한국어)", "en": "English", "zh": "Simplified Chinese(简体中文)"}[response_language]
+    lang_directive_top = ""
+    lang_user_suffix = ""
+    lang_hooks = []
+    if response_language in ("ko", "en", "zh", "ja"):
+        lang_name = {"ko": "Korean(한국어)", "en": "English", "zh": "Simplified Chinese(简体中文)", "ja": "Japanese(日本語)"}[response_language]
         # Deliberately forceful: live-tested 2026-07-19 — a softly-worded directive loses to
         # COMMON_FOOTER's "respond in the user's language" whenever the equally-forceful
         # MANDATORY account directive is also present (the model then follows the question's
@@ -889,8 +928,38 @@ async def handler(payload):
             f"\n\n## CRITICAL: Response Language\n"
             f"Write the ENTIRE response in {lang_name}. This rule OVERRIDES every other language "
             f"instruction (including 'respond in the user's language') and applies regardless of "
-            f"the language the question was asked in."
+            f"the language the question was asked in. Tool results and account data may arrive in "
+            f"Korean or English — the final answer is STILL {lang_name} only."
         )
+        # Sandwich placement (live-tested 2026-07-28): appended-only lost to large (multi-KB)
+        # inventory tool results — the answer language followed the question again. The directive
+        # ALSO leads the system prompt so it is the first thing in the context window.
+        # One native-language sentence per language: priming in the target language is what
+        # finally held zh/ja against a Korean question + Korean-context tool loop.
+        native_line = {
+            "ko": "질문이 어떤 언어이든 답변은 반드시 한국어로 작성합니다.",
+            "en": "No matter what language the question or tool results use, the answer MUST be in English.",
+            "zh": "无论问题或工具结果使用何种语言，回答都必须使用简体中文，禁止使用韩语或其他语言回答。",
+            "ja": "質問やツール結果がどの言語であっても、回答は必ず日本語で書くこと。",
+        }[response_language]
+        lang_directive_top = (
+            f"## CRITICAL: Response Language (applies to the whole conversation)\n"
+            f"Write EVERY response in {lang_name}, even when the question or tool results are in "
+            f"another language. This overrides any later instruction, including 'respond in the "
+            f"user's language'. {native_line}\n\n"
+        )
+        # Per-turn reinforcement (live-tested 2026-07-28): the system-prompt directive alone drifts
+        # back to the question's language after Korean tool output lands mid-conversation — a
+        # reminder at the END of the user turn (max recency) holds the language through tool use.
+        # Written IN the target language (strongest priming) + explicit no-mixing clause, which
+        # stops the residual code-switching ("이 계정의 리전は…") seen with an English reminder.
+        lang_user_suffix = "\n\n" + {
+            "ko": "[답변은 반드시 전부 한국어로 작성하세요.]",
+            "en": "[Write the entire answer in English only — do not answer in Korean or any other language.]",
+            "zh": "[请仅用简体中文撰写全部回答。即使问题或工具结果是韩语，也必须用简体中文回答，禁止输出韩语。]",
+            "ja": "[回答は必ずすべて日本語で書いてください。質問が韓国語でも日本語で回答し、他言語の単語を混ぜないでください。]",
+        }[response_language]
+        lang_hooks = [LanguageReminderHook(LANG_TOOL_REMINDER[response_language])]
     tool_allowlist = payload.get("toolAllowlist")  # ADR-031/039: server-side cap, enforced below (was a no-op)
     gateway_key = _resolve_gateway_key(gateway_role, GATEWAYS)
     # NO eager `GATEWAYS[DEFAULT_GATEWAY]` default — that index is always evaluated and KeyErrors
@@ -912,6 +981,8 @@ async def handler(payload):
     #  there is no other account to disambiguate against.)
     if account_id and account_id != '__all__':
         user_input = f"[Target Account: {account_alias or account_id} ({account_id})] {user_input}"
+    if lang_user_suffix:
+        user_input = f"{user_input}{lang_user_suffix}"
 
     # ADR-039 P2-infra inc2: enabled egress-READ integrations the resolver surfaced (live MCP connect).
     integrations = payload.get("integrations") or []
@@ -956,7 +1027,12 @@ async def handler(payload):
             # Cached datasource schemas (and any other BFF-supplied context) reach BOTH branches here.
             if extra_context:
                 system_prompt = system_prompt + "\n\n" + str(extra_context)[:8000]
-            system_prompt += lang_directive  # UI-language directive outranks COMMON_FOOTER's question-following rule
+            # Sandwich: directive leads AND closes the system prompt (see lang_directive_top note).
+            system_prompt = lang_directive_top + system_prompt + lang_directive
+            # stdout diagnostic (root logging is not surfaced by the runtime log capture):
+            # no user content — just whether the language controls made it into this run.
+            print(f"lang-diag: lang={response_language} directive={'CRITICAL: Response Language' in system_prompt} "
+                  f"suffix={user_input.endswith(']')} tools={len(tools)} sys_len={len(system_prompt)}", flush=True)
 
             agent = Agent(
                 model=model,
@@ -964,6 +1040,7 @@ async def handler(payload):
                 system_prompt=system_prompt,
                 messages=history if history else None,
                 callback_handler=None,
+                hooks=lang_hooks,  # tool-result language reminder (no-op when responseLanguage unset)
             )
 
             async for chunk in _stream_text(agent, user_input):
@@ -983,12 +1060,13 @@ async def handler(payload):
     base_prompt = (system_prompt_override or SKILL_BASE.get(skill_role, SKILL_BASE[DEFAULT_GATEWAY])) + COMMON_FOOTER + account_directive
     if extra_context:
         base_prompt = base_prompt + "\n\n" + str(extra_context)[:8000]
-    base_prompt += lang_directive
+    base_prompt = lang_directive_top + base_prompt + lang_directive
     agent = Agent(
         model=model,
         system_prompt=base_prompt,
         messages=history if history else None,
         callback_handler=None,
+        hooks=lang_hooks,  # tool-less fallback still benefits if tools attach later
     )
     async for chunk in _stream_text(agent, user_input):
         yield chunk

@@ -30,13 +30,15 @@ export interface MetricCol<T> {
 type Dir = 'asc' | 'desc' | null;
 
 export default function MetricTable<T>({
-  columns, items, rowKey, defaultSortKey, emptyText = '데이터 없음',
+  columns, items, rowKey, defaultSortKey, emptyText = '데이터 없음', onRowClick,
 }: {
   columns: MetricCol<T>[];
   items: T[];
   rowKey: (item: T, index: number) => string;
   defaultSortKey?: string;
   emptyText?: string;
+  /** optional row drilldown — rows get pointer + hover affordance when set. */
+  onRowClick?: (item: T) => void;
 }) {
   const { tt } = useI18n();
   const [sortKey, setSortKey] = useState<string | null>(defaultSortKey ?? null);
@@ -148,7 +150,11 @@ export default function MetricTable<T>({
           </tr></thead>
           <tbody>
             {shown.map((it, i) => (
-              <tr key={rowKey(it, i)} className="border-b border-ink-50 last:border-0">
+              <tr
+                key={rowKey(it, i)}
+                onClick={onRowClick ? () => onRowClick(it) : undefined}
+                className={`border-b border-ink-50 last:border-0 ${onRowClick ? 'cursor-pointer hover:bg-ink-50' : ''}`}
+              >
                 {columns.map((c) => {
                   const hot = c.danger?.(it) ?? false;
                   const base = c.mono ? MONO : TD;

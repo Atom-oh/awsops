@@ -1,7 +1,16 @@
-// Lightweight i18n core (pure, no React). KO default; EN + ZH(简体) + JA toggles.
+// Lightweight i18n core (pure, no React). KO default; EN + ZH(简体) + JA toggles (v1 parity).
 // MVP scope: shell + navigation strings only (not the inventory catalog or page bodies).
 
-export type Lang = 'ko' | 'en' | 'zh' | 'ja';
+// Single source of truth for the supported-language set. TS consumers derive from this
+// (Lang, ChatLang, LanguageProvider restore, LanguageToggle buttons — a new entry breaks
+// their compiles until updated). Hand-maintained lockstep sites a compile can't catch:
+// agent/agent.py language-directive map, web/lib/bedrock-direct.ts lang ternary, and
+// components/inventory/metrics/guides.<lang>.tsx bodies.
+export const SUPPORTED_LANGS = ['ko', 'en', 'zh', 'ja'] as const;
+export type Lang = (typeof SUPPORTED_LANGS)[number];
+export function isLang(v: unknown): v is Lang {
+  return typeof v === 'string' && (SUPPORTED_LANGS as readonly string[]).includes(v);
+}
 
 /** BCP-47 locale for Date#toLocaleString/toLocaleDateString — keyed off the active UI language. */
 const LOCALES: Record<Lang, string> = { ko: 'ko-KR', en: 'en-US', zh: 'zh-CN', ja: 'ja-JP' };
@@ -27,6 +36,10 @@ const MESSAGES: Record<Lang, Dict> = {
   'nav.eksCost': '컨테이너 비용',
   'group.compute.eks': 'EKS',
     'nav.monitoringHub': '통합 모니터링',
+    'nav.networkFlow': '네트워크 플로우',
+    'nav.dnsQuery': 'DNS 쿼리 로그',
+    'nav.ipAddresses': 'IP 주소',
+    'nav.vpcEndpoints': 'VPC 엔드포인트',
     'nav.jobs': '작업',
     'nav.cost': '비용',
     'nav.bedrock': 'Bedrock',
@@ -129,6 +142,10 @@ const MESSAGES: Record<Lang, Dict> = {
   'nav.eksCost': 'Container Cost',
   'group.compute.eks': 'EKS',
     'nav.monitoringHub': 'Monitoring Hub',
+    'nav.networkFlow': 'Network Flow',
+    'nav.dnsQuery': 'DNS Query Logs',
+    'nav.ipAddresses': 'IP Addresses',
+    'nav.vpcEndpoints': 'VPC Endpoints',
     'nav.jobs': 'Jobs',
     'nav.cost': 'Cost',
     'nav.bedrock': 'Bedrock',
@@ -231,6 +248,10 @@ const MESSAGES: Record<Lang, Dict> = {
   'nav.eksCost': '容器成本',
   'group.compute.eks': 'EKS',
     'nav.monitoringHub': '统一监控',
+    'nav.networkFlow': '网络流量',
+    'nav.dnsQuery': 'DNS 查询日志',
+    'nav.ipAddresses': 'IP 地址',
+    'nav.vpcEndpoints': 'VPC 终端节点',
     'nav.jobs': '任务',
     'nav.cost': '费用',
     'nav.bedrock': 'Bedrock',
@@ -331,6 +352,10 @@ const MESSAGES: Record<Lang, Dict> = {
     'nav.eksCost': 'コンテナコスト',
     'group.compute.eks': 'EKS',
     'nav.monitoringHub': '統合モニタリング',
+    'nav.networkFlow': 'ネットワークフロー',
+    'nav.dnsQuery': 'DNS クエリログ',
+    'nav.ipAddresses': 'IP アドレス',
+    'nav.vpcEndpoints': 'VPC エンドポイント',
     'nav.jobs': 'ジョブ',
     'nav.cost': 'コスト',
     'nav.bedrock': 'Bedrock',

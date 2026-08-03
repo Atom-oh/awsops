@@ -1,7 +1,41 @@
 'use client';
+import { memo, useEffect, useRef, useState } from 'react';
 import { sectionByKey } from '@/lib/sections';
 import Markdown from './Markdown';
 import { useI18n } from '@/components/shell/LanguageProvider';
+
+// 스트리밍 중에도 마크다운을 렌더하되(owner: "렌더링이 늦게 됩니다"), 토큰마다 전체
+// 재파싱하는 O(n²)를 피하기 위해 파싱 입력을 ~180ms로 스로틀한다. 미완성 코드펜스는
+// 짝을 맞춰 닫아 절반 파싱 플래시를 줄인다 (트레일링 업데이트 보장: 마지막 값 반영).
+function useThrottled<T>(value: T, ms = 180): T {
+  const [v, setV] = useState(value);
+  const last = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const now = Date.now();
+    const due = last.current + ms - now;
+    if (due <= 0) {
+      last.current = now;
+      setV(value);
+      return;
+    }
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => { last.current = Date.now(); setV(value); }, due);
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, [value, ms]);
+  return v;
+}
+
+/** 홀수 개의 ``` 는 파서가 이후 전체를 코드로 삼켜버림 — 스트리밍 중에만 임시로 닫는다. */
+function balanceFences(md: string): string {
+  const fences = (md.match(/```/g) ?? []).length;
+  return fences % 2 === 1 ? `${md}\n\`\`\`` : md;
+}
+
+const StreamingMarkdown = memo(function StreamingMarkdown({ content }: { content: string }) {
+  const throttled = useThrottled(content);
+  return <Markdown>{balanceFences(throttled)}</Markdown>;
+});
 
 export interface RankedChip { key: string; score: number; active: boolean }
 export interface QueryPreview { tool: string; query: string }
@@ -31,6 +65,9 @@ function statusLabel(s: { phase: string; elapsedMs?: number }, tt: (s: string) =
     case 'code-generating': return `💻 ${tt('코드 생성 중…')}${secs}`;
     case 'code-executing': return `⚡ ${tt('코드 실행 중…')}${secs}`;
     case 'querying': return `🔎 ${tt('쿼리 실행 중…')}${secs}`;
+    case 'sql-unavailable': return `🗃️ ${tt('라이브 SQL 미가용 — 일반 라우팅으로 전환…')}`;
+    case 'sql-fallback': return `🗃️ ${tt('SQL 실행 실패 — 일반 지식으로 답변 중…')}${secs}`;
+    case 'collect-fallback': return `${tt('📡 데이터 수집 실패 — 일반 지식으로 답변 중…')}${secs}`;
     case 'working': return `🔎 ${tt('분석 중…')}${secs}`;
     default: return `🔎 ${tt('분석 중…')}`;
   }
@@ -85,11 +122,12 @@ export default function MessageList({ msgs, onSwitch, onFollowUp }: { msgs: Msg[
                 {sec.label}
               </div>
             )}
-            {/* Plain text for user messages AND while the assistant is still streaming —
-                rendering Markdown per token re-parses the whole tree (O(n²)) and flashes
-                half-built tables. Switch to Markdown once the stream settles. */}
-            {me || m.streaming
-              ? (m.streaming && !m.content
+            {/* User messages stay plain text. Assistant messages render Markdown even WHILE
+                streaming (throttled parse + balanced fences — see StreamingMarkdown), so the
+                formatting doesn't "arrive late" after the stream ends. */}
+            {me
+              ? <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>
+              : m.streaming && !m.content
                 ? (m.status
                   ? <div className="text-[13px] leading-relaxed text-ink-500">
                       <div className="whitespace-pre-wrap">{statusLabel(m.status, tt)}</div>
@@ -99,8 +137,9 @@ export default function MessageList({ msgs, onSwitch, onFollowUp }: { msgs: Msg[
                       )}
                     </div>
                   : null)
-                : <div className="whitespace-pre-wrap text-[13px] leading-relaxed">{m.content}</div>)
-              : <Markdown>{m.content}</Markdown>}
+                : m.streaming
+                  ? <StreamingMarkdown content={m.content} />
+                  : <Markdown>{m.content}</Markdown>}
             {m.streaming && (!m.content && m.status ? null : <span className="ml-0.5 inline-block h-3 w-[6px] translate-y-0.5 animate-pulse bg-brand-500 align-middle" />)}
             {!me && !m.streaming && sec && (
               <div className="mt-3 border-t border-ink-100 pt-2.5">

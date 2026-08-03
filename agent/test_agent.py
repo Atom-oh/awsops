@@ -27,6 +27,11 @@ def _install_stubs():
     stub('strands.tools')
     stub('strands.tools.mcp')
     stub('strands.tools.mcp.mcp_client', MCPClient=lambda *a, **k: None)
+    hooks = stub('strands.hooks',
+                 AfterToolCallEvent=type('AfterToolCallEvent', (), {}),
+                 HookProvider=object,
+                 HookRegistry=type('HookRegistry', (), {}))
+    strands.hooks = hooks
     stub('botocore')
     stub('botocore.credentials', Credentials=object)
     stub('bedrock_agentcore')
