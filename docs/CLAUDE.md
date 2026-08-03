@@ -11,7 +11,7 @@ Project documentation organized by purpose. Each subdirectory has its own CLAUDE
 | [onboarding.md](onboarding.md) | 신규 팀원 온보딩 |
 | [INSTALL_GUIDE.md](INSTALL_GUIDE.md) | 설치 가이드 (11단계) |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 일반 트러블슈팅 모음 |
-| [decisions/](decisions/) | **결정 단일 진실 = `BASELINE.md`** + 통합 ADR 001~016 + `ADR-MAPPING.md` (옛 ADR 001~046 본문은 git tag `adr-legacy-2026-06-22`) |
+| [decisions/](decisions/) | **결정 단일 진실 = `BASELINE.md`** + 통합 ADR 001~017 + `ADR-MAPPING.md` (옛 ADR 001~046 본문은 git tag `adr-legacy-2026-06-22`) |
 | [runbooks/](runbooks/) | 운영 시나리오별 대응 가이드 |
 | [reviews/](reviews/) | 코드 리뷰 / 교차 리뷰 결과 |
 | [plans/](plans/) | 구 기획 문서(legacy) — 현행 plan은 `superpowers/plans/` |
