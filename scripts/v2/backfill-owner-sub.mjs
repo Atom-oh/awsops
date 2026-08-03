@@ -202,30 +202,56 @@ async function apply(client) {
     die('re-run the plan step and review the new plan; an ownership rewrite is not reversible');
   }
 
-  // Journal BEFORE writing, per row id — an UPDATE erases the old value, so a journal written
-  // afterwards from in-memory counts cannot reverse a partial failure (PR #195 review MAJOR: the
-  // previous journal was row-nonspecific and written after the fact).
+  // Journal BEFORE writing, per row id — an UPDATE erases the old value, so a journal written only
+  // afterwards cannot tell you what to put back (PR #195 review MAJOR: the previous journal was
+  // row-nonspecific and written after the fact). It carries an explicit `status` because the write is
+  // now transactional: a file named "-applied" that was left behind by a rolled-back run would be a
+  // lie, and the reverse ordering (journal after COMMIT) loses the record if the process dies between
+  // the two. Stamping the outcome covers both.
   const journalPath = `${APPLY_FROM.replace(/\.json$/, '')}-applied.json`;
-  writeFileSync(journalPath, JSON.stringify({ startedFrom: APPLY_FROM, entries }, null, 2), { mode: 0o600 });
+  const journal = (status) => writeFileSync(
+    journalPath, JSON.stringify({ startedFrom: APPLY_FROM, status, entries }, null, 2), { mode: 0o600 });
+  journal('attempting');
   console.log(`journal (pre-write, row-specific): ${journalPath}`);
 
-  let total = 0;
+  // ONE TRANSACTION for every entry. The previous revision ran each UPDATE on its own — each
+  // autocommitted — so a failure (or a `die()`) partway through left the earlier entries applied:
+  // a partially-rewritten ownership table, which the commit message claimed was exactly what this
+  // avoids (codex stop-gate). Table/column validation moves ahead of BEGIN so a malformed plan
+  // never opens a transaction at all.
   for (const e of entries) {
     if (!TARGETS.some((t) => t.table === e.table && t.column === e.column && t.pk === e.pk)) {
       die(`plan entry targets an unknown table/column: ${e.table}.${e.column}`);
     }
-    // Re-verify at apply time and update exactly the planned rows: scoped to the ids AND still
-    // holding the planned old value, so rows that changed since the plan are left alone.
-    const r = await client.query(
-      `UPDATE ${e.table} SET ${e.column} = $1
-        WHERE ${e.pk}::text = ANY($2::text[]) AND ${e.column} = $3`,
-      [e.to, e.ids, e.from]);
-    total += r.rowCount;
-    const skipped = e.ids.length - r.rowCount;
-    console.log(`${e.table}.${e.column}: ${e.from} -> ${e.to} (${r.rowCount}/${e.ids.length} rows` +
-      `${skipped ? `, ${skipped} changed since the plan — left alone` : ''})`);
   }
-  console.log(`\nrewrote ${total} rows.`);
+
+  let total = 0;
+  const applied = [];
+  await client.query('BEGIN');
+  try {
+    for (const e of entries) {
+      // Update exactly the planned rows: scoped to the ids AND still holding the planned old value,
+      // so rows that changed since the plan are left alone.
+      const r = await client.query(
+        `UPDATE ${e.table} SET ${e.column} = $1
+          WHERE ${e.pk}::text = ANY($2::text[]) AND ${e.column} = $3`,
+        [e.to, e.ids, e.from]);
+      total += r.rowCount;
+      const skipped = e.ids.length - r.rowCount;
+      applied.push(`${e.table}.${e.column}: ${e.from} -> ${e.to} (${r.rowCount}/${e.ids.length} rows` +
+        `${skipped ? `, ${skipped} changed since the plan — left alone` : ''})`);
+    }
+    await client.query('COMMIT');
+    journal('committed');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    journal('rolled-back');
+    console.error('\nROLLED BACK — nothing was rewritten:');
+    console.error(`  ${err?.message || err}`);
+    die('resolve the error and re-run --apply with the same plan; no rows were changed');
+  }
+  for (const line of applied) console.log(line);
+  console.log(`\nrewrote ${total} rows (one transaction, committed).`);
 
   const left = await scan(client);
   if (left.length > 0) {
