@@ -185,6 +185,13 @@ chair_label() { case "$1" in
 esac ; }
 
 run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도 || true 로 계속.
+  # --allowedTools 를 명시적으로 좁힌다(diff 파일 + 패널 요약만 종합하면 되므로 read-only
+  # 로컬 도구로 충분) — 지정하지 않으면 claude CLI 가 글로벌 설치된 MCP 플러그인(예: github)
+  # 까지 기본 도구 후보에 포함시킨다. github MCP 인증이 깨지면(관찰된 실패: "HTTP 400:
+  # Authorization header is badly formatted") claude -p 는 에러를 내지 않고 그 도구 확보를
+  # 기다리며 CHAIR_TIMEOUT(600s) 까지 응답 없이 멈춘다. primary/fallback 이 같은 호출을
+  # 공유하므로 한 번 걸리면 두 chair 가 통째로 죽어 fail-closed 게이트가 실제 diff 와
+  # 무관하게 FAIL(관찰: PR #194, #197, #202).
   # 두 출력 모두 디스크에 닿기 전에 scrub 한다. $OUT 은 pr-review.yml 이 PR 코멘트로 verbatim
   # 게시하므로 출력 스크럽이 실제 경계이고(모델이 입력에 없던 형태를 재구성할 수도, 향후 누가
   # 새 입력 소스를 추가하며 스크럽을 빼먹을 수도 있다), 입력 스크럽은 defence-in-depth 다.
@@ -228,6 +235,7 @@ run_chair() {  # $1=model $2=err-file → "$OUT" 에 기록. claude 실패해도
   local scrub_err=$!
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
+    --allowedTools "Read Grep Glob Bash(gh pr diff:*) Bash(gh pr view:*)" \
     < "$WORK/synth-stdin.txt" \
     > "$outfifo" 2> "$errfifo" &
   CHAIR_JOB_PID=$!
