@@ -73,9 +73,15 @@ describe('useChat hook and parseFrame', () => {
       status: { phase: 'working', elapsedMs: 3000 },
     });
 
-    // Step 2: Emit delta frame (should clear status and append content)
+    // Step 2: Emit delta frame (should clear status and append content).
+    // 델타는 타자기 스무딩 버퍼(24ms 간격 방출)를 거치므로 폴링으로 최종 상태를 기다린다.
     await act(async () => {
       resolveRead2({ done: false, value: new TextEncoder().encode('data: {"delta":"hello"}\n\n') });
+    });
+    await act(async () => {
+      for (let i = 0; i < 40 && (result.current.msgs[1]?.content ?? '') !== 'hello'; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
     });
 
     expect(result.current.msgs[1]).toEqual({

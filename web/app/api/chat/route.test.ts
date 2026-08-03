@@ -10,6 +10,19 @@ const resolveAgent = vi.fn();
 const isCustomAgentEnabled = vi.fn();
 const recordCustomAgentTrace = vi.fn();
 vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+// container/iac가 2026-08-02 활성화됨(게이트웨이+READY 타깃) — 이 파일의 🔒/degrade 픽스처는
+// 'container 비활성'을 전제하므로 여기서만 container를 비활성으로 강제해, 미래의 비활성
+// 섹션에도 적용될 §2.3 계약(핀=🔒 유지, 자동 라우팅=Assistant degrade)을 계속 검증한다.
+vi.mock('@/lib/sections', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/sections')>();
+  return {
+    ...real,
+    sectionByKey: (k: string) => {
+      const sec = real.sectionByKey(k);
+      return sec && sec.key === 'container' ? { ...sec, active: false } : sec;
+    },
+  };
+});
 // invokeAgentStream (single-route path) delegates to the invokeAgent mock so existing tests —
 // which set invokeAgent.mockResolvedValue/mockRejectedValue and assert its call args/count —
 // keep working: the stream yields the resolved answer as one delta (the route reassembles it).

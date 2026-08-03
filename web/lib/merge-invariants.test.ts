@@ -8,6 +8,7 @@ import {
   readAgentAlias,
   scanV1PathLeak,
 } from './merge-invariants';
+import { COLLECTORS } from './collectors';
 
 describe('S2 routing consistency', () => {
   it('catalog.py provisions exactly 9 gateways', () => {
@@ -22,11 +23,18 @@ describe('S2 routing consistency', () => {
     expect(rules).toEqual(sections);
   });
 
-  it('section keys with observability→external-obs alias match GATEWAYS', () => {
+  it('section keys with observability→external-obs alias match GATEWAYS (+ local-handler sections)', () => {
     const alias = (k: string) => (k === 'observability' ? 'external-obs' : k);
-    const sections = [...new Set(readSectionKeys().map(alias))].sort();
+    // aws-data (v1 priority-10 port) is served by a LOCAL Steampipe SQL handler in
+    // web/app/api/chat/route.ts, and the v1 auto-collect collectors (lib/collectors registry:
+    // idle-scan, eks-optimize, …) by the LOCAL collector handler — deliberately NOT AgentCore
+    // gateways, so they may exist without a catalog.py gateway. Everything else must still match.
+    // Derived from the registry so a newly registered collector can't silently break this gate.
+    const LOCAL_SECTIONS = new Set(['aws-data', ...COLLECTORS.map((c) => c.key)]);
+    const sections = [...new Set(readSectionKeys().filter((k) => !LOCAL_SECTIONS.has(k)).map(alias))].sort();
     const gateways = [...readCatalogGateways()].sort();
     expect(sections).toEqual(gateways);
+    expect(readSectionKeys()).toContain('aws-data'); // the local section itself must stay registered
   });
 
   it('agent.py runtime _GATEWAY_ALIAS maps observability to external-obs', () => {

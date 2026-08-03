@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import DataTable, { type Column } from '@/components/ui/DataTable';
+import NodeDrilldownPanel from '@/components/eks/NodeDrilldownPanel';
 import DetailPanel from '@/components/ui/DetailPanel';
 import PageHeader from '@/components/ui/PageHeader';
 import RefreshButton from '@/components/ui/RefreshButton';
@@ -91,6 +92,8 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
   const [query, setQuery] = useState('');
   const [ns, setNs] = useState('전체');
   const [clusterSel, setClusterSel] = useState('전체');
+  // nodes 전용 드릴다운 (v1 parity — 개요와 동일 패널): 행 클릭 → CPU/Memory/Pods/ENI
+  const [nodeSel, setNodeSel] = useState<{ cluster: string; name: string } | null>(null);
   const [selected, setSelected] = useState<Row | null>(null);
 
   // Monotonic load sequence — a late response from a superseded load must not
@@ -335,7 +338,18 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
               );
             })()}
 
-            <DataTable columns={COLUMNS[kind]} rows={filteredRows} onRowClick={setSelected} />
+            <DataTable
+              columns={COLUMNS[kind]}
+              rows={filteredRows}
+              onRowClick={(row) => {
+                // nodes는 개요와 동일한 리치 드릴다운(CPU/Memory/Pods/ENI), 그 외 kind는 기존 raw 패널.
+                if (kind === 'nodes' && typeof row.cluster === 'string' && typeof row.name === 'string') {
+                  setNodeSel({ cluster: row.cluster, name: row.name });
+                } else {
+                  setSelected(row);
+                }
+              }}
+            />
           </>
         )}
       </div>
@@ -345,6 +359,9 @@ export default function FleetKindPage({ kind }: { kind: FleetKind }) {
         data={selected}
         onClose={() => setSelected(null)}
       />
+      {nodeSel && (
+        <NodeDrilldownPanel cluster={nodeSel.cluster} nodeName={nodeSel.name} onClose={() => setNodeSel(null)} />
+      )}
     </>
   );
 }

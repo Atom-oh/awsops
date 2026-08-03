@@ -14,7 +14,7 @@ import DonutBreakdown from '@/components/charts/DonutBreakdown';
 import BarDistribution from '@/components/charts/BarDistribution';
 import { useI18n } from '@/components/shell/LanguageProvider';
 import DetailPanel from '@/components/ui/DetailPanel';
-import NodeCapacityCards from '@/components/eks/NodeCapacityCards';
+import NodeDrilldownPanel from '@/components/eks/NodeDrilldownPanel';
 import NodePodsSection from '@/components/eks/NodePodsSection';
 import NodeEniSection from '@/components/eks/NodeEniSection';
 import type { NodeRow, PodRow } from '@/lib/eks-resources';
@@ -87,25 +87,7 @@ export default function EksPage() {
   const [clusterFilter, setClusterFilter] = useState('');
   // v1 parity: 노드 클릭 → CPU/Memory/Pod Info/ENI/Pods 상세 패널 (per-cluster live fetch).
   const [nodeSel, setNodeSel] = useState<{ cluster: string; name: string } | null>(null);
-  const [nodeDetail, setNodeDetail] = useState<{ node: NodeRow | null; pods: PodRow[] | null; err: string }>({ node: null, pods: null, err: '' });
-  const nodeSeqRef = useRef(0);
-
-  const openNode = useCallback((cluster: string, name: string) => {
-    setNodeSel({ cluster, name });
-    setNodeDetail({ node: null, pods: null, err: '' });
-    const seq = ++nodeSeqRef.current;
-    Promise.all([
-      fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=nodes`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status))))),
-      fetch(`/api/eks/${encodeURIComponent(cluster)}/incluster?kind=pods`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    ])
-      .then(([nd, pd]) => {
-        if (seq !== nodeSeqRef.current) return;
-        const node = ((nd.rows ?? []) as NodeRow[]).find((n) => n.name === name) ?? null;
-        const pods = pd ? ((pd.rows ?? []) as PodRow[]).filter((x) => x.node === name) : null;
-        setNodeDetail({ node, pods, err: node ? '' : '노드를 찾지 못했습니다' });
-      })
-      .catch((e) => { if (seq === nodeSeqRef.current) setNodeDetail({ node: null, pods: null, err: String(e instanceof Error ? e.message : e) }); });
-  }, []);
+  const openNode = useCallback((cluster: string, name: string) => setNodeSel({ cluster, name }), []);
 
   const load = useCallback(() => {
     fetch(`/api/eks?${accountParam(activeAccount) || 'account=self'}`)
@@ -620,38 +602,9 @@ export default function EksPage() {
       )}
       </div>
 
-      {/* v1 parity 노드 드릴다운: CPU/Memory 3분할 + Pod Info + ENI + Pods (개요에서 바로) */}
+      {/* v1 parity 노드 드릴다운 — 공유 패널(/eks/nodes와 동일) */}
       {nodeSel && (
-        <DetailPanel
-          title={nodeSel.name}
-          data={nodeDetail.node ? ({ ...nodeDetail.node } as unknown as Record<string, unknown>) : { name: nodeSel.name, cluster: nodeSel.cluster, ...(nodeDetail.err ? { error: nodeDetail.err } : { 상태: '조회 중…' }) }}
-          onClose={() => { setNodeSel(null); nodeSeqRef.current += 1; }}
-        >
-          {nodeDetail.node && (() => {
-            const agg = fleetBy.get(nodeSel.cluster)?.nodeAgg.find((n) => n.name === nodeSel.name);
-            const pods = nodeDetail.pods;
-            return (
-              <>
-                <NodeCapacityCards
-                  cpuCapacity={nodeDetail.node.cpuCapacity}
-                  cpuAllocatable={nodeDetail.node.cpuAllocatable}
-                  cpuRequest={agg?.cpuRequest ?? 0}
-                  memCapacityMiB={nodeDetail.node.memCapacity}
-                  memAllocatableMiB={nodeDetail.node.memAllocatable}
-                  memRequestMiB={agg?.memRequest ?? 0}
-                  podCIDR={nodeDetail.node.podCIDR}
-                  podCount={pods?.length ?? agg?.podCount ?? 0}
-                  podRunning={(pods ?? []).filter((x) => x.status === 'Running').length}
-                  podPending={(pods ?? []).filter((x) => x.status === 'Pending').length}
-                  podFailed={(pods ?? []).filter((x) => x.status === 'Failed').length}
-                  createdAt={nodeDetail.node.createdAt}
-                />
-                <NodePodsSection pods={pods} error="" />
-                <NodeEniSection nodeName={nodeSel.name} />
-              </>
-            );
-          })()}
-        </DetailPanel>
+        <NodeDrilldownPanel cluster={nodeSel.cluster} nodeName={nodeSel.name} onClose={() => setNodeSel(null)} />
       )}
     </div>
   );
