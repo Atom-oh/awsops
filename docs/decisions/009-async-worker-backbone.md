@@ -89,8 +89,7 @@ that rather than a 202 pointing at an id that 404s.
   an enqueue path, and records the same key as `created_by`. `report_schedules` and its dispatcher
   use the sub as well.
 - **dual-key 읽기 = legacy 전용, 종료 예정** — 읽기 게이트만 두 형태를 수용한다
-  (`matchesIdentity()`, `ownerKeysForRead()`), 컷오버 이전에 기록된 email-keyed 행 때문이다. diff
-  lineage 도 같은 키를 쓰므로 플래그를 내리면 정확히 함께 sub-only 로 좁아진다.
+  (`matchesIdentity()`, `ownerKeysForRead()`), 컷오버 이전에 기록된 email-keyed 행 때문이다. diff lineage(`createReport()` 의 `parent_report_id` 서브쿼리, BFF·`schedule_dispatcher` 양쪽)도 같은 키를 쓰므로 플래그를 내리면 정확히 함께 sub-only 로 좁아진다 — 리뷰 시점에는 BFF lineage 가 owner 키를 아예 쓰지 않아 이 서술이 사실과 달랐고(경로별로 baseline 이 달라졌다), 같은 PR 에서 정합화했다.
   **Dual-key reads = legacy only, time-limited** — only the read gate accepts both forms, for rows
   written before the cut-over. Diff lineage uses the same keys, so it narrows to sub-only exactly
   when the flag is turned off.

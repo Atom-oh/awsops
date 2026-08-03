@@ -31,7 +31,8 @@
 -- Pre-existing duplicates would make this fail. There should be none — the application only ever
 -- linked one report per job on the happy path, and the race window has been narrow — but if a
 -- deployment does hit it, resolve by soft-deleting the extra rows (they are the stranded `running`
--- ones) and re-running: the index excludes nothing on deleted_at, so pick the row the worker
+-- ones) and re-running. NOTE the predicate DOES exclude soft-deleted rows (added in review), so
+-- soft-deleting the extras is itself enough to satisfy the index — pick the row the worker
 -- actually wrote results into.
 
 -- deleted_at IS NULL is part of the predicate (PR #203 review): the race LOSER is soft-deleted, and

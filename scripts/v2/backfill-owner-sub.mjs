@@ -49,12 +49,29 @@ const ROOT = new URL('../..', import.meta.url).pathname;
 // gitignored AND written 0600 (PR #203 review, 3 models). The .gitignore patterns key off this
 // prefix, so an operator-supplied PLAN_PATH must keep it — otherwise a differently-named plan is
 // committable, which is exactly what the gitignore was for.
+// Must line up with the .gitignore patterns EXACTLY. Two holes, both found in review (3 models):
+//   (1) the old check accepted any `backfill-owner-sub*` basename, which is broader than the ignore
+//       globs — `backfill-owner-sub-review.json` passed and was still committable;
+//   (2) `--apply <path>` was not checked at all, and the journal path derives from it, so
+//       `--apply approved.json` wrote `approved-applied.json`: the full email->sub mapping plus row
+//       ids, untracked by any ignore rule. The comment claiming "the gitignore patterns key off this
+//       prefix" was guarding exactly one of the two paths that produce these files.
 const ARTIFACT_PREFIX = 'backfill-owner-sub';
-const PLAN_PATH = process.env.PLAN_PATH || `${ARTIFACT_PREFIX}-plan.json`;
-if (!basename(PLAN_PATH).startsWith(ARTIFACT_PREFIX)) {
-  die(`PLAN_PATH basename must start with "${ARTIFACT_PREFIX}" (it carries every user's email->sub `
-    + `mapping and the .gitignore patterns key off that prefix); got: ${PLAN_PATH}`);
+/** True only for basenames the .gitignore rules actually cover. */
+function isIgnoredArtifactName(p) {
+  const b = basename(p);
+  return b.startsWith(`${ARTIFACT_PREFIX}-`) && b.endsWith('.json');
 }
+function requireIgnoredArtifactName(p, what) {
+  if (!isIgnoredArtifactName(p)) {
+    die(`${what} must be named "${ARTIFACT_PREFIX}-<something>.json" — it carries every user's `
+      + `email->sub mapping and the affected row ids, and .gitignore only covers that shape, so any `
+      + `other name is committable. Got: ${p}`);
+  }
+}
+const PLAN_PATH = process.env.PLAN_PATH || `${ARTIFACT_PREFIX}-plan.json`;
+requireIgnoredArtifactName(PLAN_PATH, 'PLAN_PATH');
+if (APPLY_FROM) requireIgnoredArtifactName(APPLY_FROM, 'the --apply plan path');
 
 const applyIdx = process.argv.indexOf('--apply');
 const APPLY_FROM = applyIdx >= 0 ? process.argv[applyIdx + 1] : null;
@@ -81,7 +98,7 @@ function loadCreds() {
   };
 }
 
-/** email (lowercased) -> { sub, accountCreated } for every user whose email is VERIFIED.
+/** email (lowercased) -> { sub, accountCreated, verified } for every user in the pool.
  *
  * Unverified addresses are deliberately excluded, which makes them show up as unmapped rather than
  * as a rewrite target (codex stop-gate). This is the same rule verifyUser() applies to the token
@@ -106,8 +123,16 @@ function cognitoUsersByEmail() {
     for (const u of page.u || []) {
       const byName = Object.fromEntries((u.a || []).map((a) => [a.Name, a.Value]));
       // `email_verified` arrives as the STRING "true" from Cognito's attribute list, not a boolean.
-      if (byName.email && byName.sub && byName.email_verified === 'true') {
-        map.set(byName.email.toLowerCase(), { sub: byName.sub, accountCreated: u.c || null });
+      // Unverified holders are recorded with verified:false rather than dropped, so the plan can say
+      // WHY an address is unmappable — "exists but unverified" needs different handling from "no such
+      // user", and conflating them tells an operator a live colleague is gone (review MINOR, 2 models;
+      // the ADR already promised the distinction). Eligibility is checked at the use site.
+      if (byName.email && byName.sub) {
+        map.set(byName.email.toLowerCase(), {
+          sub: byName.sub,
+          accountCreated: u.c || null,
+          verified: byName.email_verified === 'true',
+        });
       }
     }
     token = page.t || null;
@@ -129,21 +154,29 @@ async function scan(client) {
 }
 
 async function plan(client) {
-  const users = cognitoUsersByEmail();
-  if (users.size === 0) die('Cognito returned no users — refusing to write a plan');
-  console.log(`pool: ${users.size} users`);
-
+  // Scan FIRST. Dying on an empty pool before looking at the data meant a fresh or empty user pool
+  // could not report the clean "nothing to migrate" result even when there were zero legacy rows
+  // (review MINOR) — the refusal only matters when there is something to map.
   const groups = await scan(client);
   if (groups.length === 0) {
     console.log('No legacy email-keyed rows. Nothing to do — safe to deploy with LEGACY_EMAIL_OWNER_MATCH=false.');
     return;
   }
 
+  const users = cognitoUsersByEmail();
+  if (users.size === 0) {
+    die('there are legacy email-keyed rows but Cognito returned no users with a verified email — '
+      + 'refusing to write a plan (every entry would be unmappable)');
+  }
+  console.log(`pool: ${users.size} users with a verified email`);
+
   const entries = [];
-  const unmapped = [];
+  const unmapped = [];    // no such user
+  const unverified = [];  // user exists, email not verified — NOT a rewrite target
   for (const g of groups) {
     const hit = users.get(String(g.owner).toLowerCase());
     if (!hit) { unmapped.push(g); continue; }
+    if (!hit.verified) { unverified.push(g); continue; }
     entries.push({
       table: g.table, column: g.column, pk: g.pk,
       from: g.owner, to: hit.sub, rows: g.n, ids: g.ids,
@@ -160,16 +193,22 @@ async function plan(client) {
   console.log(`\nplan written: ${PLAN_PATH} (${entries.length} entries, ${entries.reduce((a, e) => a + e.rows, 0)} rows) — NOTHING CHANGED`);
   console.log('Review every entry. Delete the ones you cannot vouch for, then:');
   console.log(`  node scripts/v2/backfill-owner-sub.mjs --apply ${PLAN_PATH}`);
+  // Two causes, reported separately because they need different handling — and because telling an
+  // operator a live colleague is "gone" would be wrong.
+  if (unverified.length > 0) {
+    console.log(`\nNOT IN THE PLAN — the address exists in the pool but is NOT VERIFIED:`);
+    for (const g of unverified) console.log(`  ${g.owner}  (${g.table}, ${g.n} rows)`);
+    console.log('An unverified address proves nothing about who controls that mailbox, and the');
+    console.log('rewrite is irreversible. Verify it (or correct the holder) and re-plan.');
+  }
   if (unmapped.length > 0) {
-    console.log(`\nNOT IN THE PLAN — no user holds these addresses with a VERIFIED email:`);
+    console.log(`\nNOT IN THE PLAN — no user holds these addresses at all (deleted?):`);
     for (const g of unmapped) console.log(`  ${g.owner}  (${g.table}, ${g.n} rows)`);
-    console.log('Two different causes, and they need different handling:');
-    console.log('  - the address exists in the pool but is UNVERIFIED -> do NOT rewrite. An');
-    console.log('    unverified address proves nothing about who controls the mailbox, and a');
-    console.log('    rewrite is irreversible. Verify it (or correct the holder) first.');
-    console.log('  - the address is absent (deleted user) -> find the original sub, or retire the');
-    console.log('    rows. Nothing here can recover the owner.');
-    console.log('Either way keep LEGACY_EMAIL_OWNER_MATCH=true until these are resolved.');
+    console.log('Nothing here can recover the owner. Find the original sub by hand, or retire the');
+    console.log('rows.');
+  }
+  if (unverified.length > 0 || unmapped.length > 0) {
+    console.log('\nKeep LEGACY_EMAIL_OWNER_MATCH=true until these are resolved.');
   }
   process.exitCode = 2;   // a plan is not a completed migration
 }
@@ -186,12 +225,14 @@ async function apply(client) {
   // of specific rows; it is not evidence that the identity behind an address is still the same one,
   // and this is the step that cannot be undone.
   const users = cognitoUsersByEmail();
-  if (users.size === 0) die('Cognito returned no users with a verified email — refusing to apply');
+  if (users.size === 0) die('Cognito returned no users — refusing to apply');
   const rejected = [];
   for (const e of entries) {
     const hit = users.get(String(e.from).toLowerCase());
     if (!hit) {
-      rejected.push(`${e.from} -> ${e.to}: no user holds this address with a VERIFIED email now`);
+      rejected.push(`${e.from} -> ${e.to}: no user holds this address now`);
+    } else if (!hit.verified) {
+      rejected.push(`${e.from} -> ${e.to}: the address is no longer VERIFIED on ${hit.sub}`);
     } else if (hit.sub !== e.to) {
       rejected.push(`${e.from} -> ${e.to}: address now belongs to ${hit.sub}, not the planned sub`);
     }
@@ -247,10 +288,21 @@ async function apply(client) {
           RETURNING ${e.pk}::text AS __changed_id`,
         [e.to, e.ids, e.from]);
       e.changedIds = r.rows.map((row) => row.__changed_id);
+      // A count mismatch means the world moved since the plan, and the ADR's contract is "any
+      // mismatch -> write nothing". The previous revision only LOGGED "left alone" and committed the
+      // rest, which is a partial apply against the operator's approved set — behaviourally
+      // conservative, but not what the document promised, and for an irreversible ownership tool the
+      // gap between the two is itself the defect (PR #203 review MAJOR, 3 models across 4 cells).
+      // Throwing here rolls the whole transaction back; the operator re-plans against reality.
+      if (e.changedIds.length !== e.ids.length) {
+        const missing = e.ids.filter((id) => !e.changedIds.includes(id));
+        throw new Error(
+          `${e.table}.${e.column}: ${e.ids.length - e.changedIds.length} of ${e.ids.length} planned rows `
+          + `no longer hold ${e.from} (${missing.slice(0, 5).join(', ')}`
+          + `${missing.length > 5 ? `, +${missing.length - 5} more` : ''}) — the plan is stale`);
+      }
       total += e.changedIds.length;
-      const skipped = e.ids.length - e.changedIds.length;
-      applied.push(`${e.table}.${e.column}: ${e.from} -> ${e.to} (${e.changedIds.length}/${e.ids.length} rows` +
-        `${skipped ? `, ${skipped} changed since the plan — left alone` : ''})`);
+      applied.push(`${e.table}.${e.column}: ${e.from} -> ${e.to} (${e.changedIds.length} rows)`);
     }
     await client.query('COMMIT');
     committed = true;

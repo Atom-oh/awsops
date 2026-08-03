@@ -85,7 +85,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ report_id: existing, tier, model, deduped: true }, { status: 202 });
   }
 
-  const reportId = await createReport(tier, owner, model); // worker_job_id = NULL (FK-safe)
+  // Lineage keys mirror the READ path, and the account keeps the baseline inside the account being
+  // diagnosed — same predicate schedule_dispatcher uses, so both paths pick the same parent.
+  const reportId = await createReport(tier, owner, model, {
+    ownerKeys: ownerKeysForRead(user), account,
+  }); // worker_job_id = NULL (FK-safe)
   let job: { job_id: string; status: string; payload?: Record<string, unknown> };
   try {
     job = await enqueueJob(

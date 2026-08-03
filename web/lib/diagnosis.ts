@@ -76,20 +76,40 @@ export async function getReport(id: number): Promise<DiagnosisReport | null> {
 // The worker finds its row via payload.report_id (not the FK), so NULL-at-insert is safe.
 // [Plan 2] parent_report_id = the most-recent SUCCEEDED report of the SAME tier (diff lineage). Set
 // atomically in the INSERT via a subquery so the worker can compute summary.diff vs the prior run.
+/**
+ * `lineage` scopes the `parent_report_id` subquery. Without it the parent was the most recent
+ * succeeded report of the same TIER, by anyone, for any account — so once reads became owner-scoped,
+ * a user's regression diff was computed against a report they cannot even open, and parts of that
+ * report's summary leaked into their diff. It also disagreed with schedule_dispatcher, which scopes
+ * by owner+account: the same diagnosis got a different baseline depending on which path created it
+ * (PR #203 review MAJOR, 3 models across 5 cells).
+ *
+ * `ownerKeys` mirrors the READ path (ownerKeysForRead) so the lineage narrows to sub-only exactly
+ * when LEGACY_EMAIL_OWNER_MATCH is turned off; matching the new key alone would silently drop the
+ * baseline for every user whose earlier reports are still email-keyed, and `parent_report_id` is
+ * stamped at INSERT so nothing recovers it afterwards. Empty keys or a null account narrow rather
+ * than widen — no parent beats the wrong one.
+ */
 export async function createReport(
   tier: DiagnosisTier,
   requestedBy: string,
   model: DiagnosisModel = 'sonnet',
+  lineage: { ownerKeys?: string[]; account?: string | null } = {},
 ): Promise<number> {
+  const ownerKeys = lineage.ownerKeys?.length ? lineage.ownerKeys : [requestedBy];
+  const account = lineage.account ?? null;
   const { rows } = await getPool().query(
     `INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status, parent_report_id, model)
      VALUES (NULL, $1, $2, 'running',
-       (SELECT id FROM diagnosis_reports
-         WHERE tier = $1 AND status = 'succeeded' AND deleted_at IS NULL
-         ORDER BY created_at DESC LIMIT 1),
+       (SELECT r.id FROM diagnosis_reports r
+          JOIN worker_jobs j ON j.job_id = r.worker_job_id
+         WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
+           AND r.status = 'succeeded' AND r.deleted_at IS NULL
+           AND ($5::text IS NULL OR j.payload->>'account' = $5)
+         ORDER BY r.created_at DESC LIMIT 1),
        $3)
      RETURNING id`,
-    [tier, requestedBy, model],
+    [tier, requestedBy, model, ownerKeys, account],
   );
   return rows[0].id as number;
 }

@@ -66,12 +66,13 @@ describe('diagnosis queries', () => {
     expect(sql).toContain("status = 'succeeded'");
     // model column bound; defaults to 'sonnet' when omitted
     expect(sql).toContain('model');
-    expect(args).toEqual(['mid', 'u@x.io', 'sonnet']);
+    // Lineage args appended: dual owner keys (read-path parity) + account.
+    expect(args).toEqual(['mid', 'u@x.io', 'sonnet', ['u@x.io'], null]);
   });
   it('createReport persists the selected model (deep + opus)', async () => {
     await createReport('deep', 'u@x.io', 'opus');
     const [, args] = query.mock.calls.at(-1) as [string, unknown[]];
-    expect(args).toEqual(['deep', 'u@x.io', 'opus']);
+    expect(args).toEqual(['deep', 'u@x.io', 'opus', ['u@x.io'], null]);
   });
   it('reportForIdempotencyKey returns existing report id or null', async () => {
     const id = await reportForIdempotencyKey('report:u@x.io:mid:2026-06-11T00');
