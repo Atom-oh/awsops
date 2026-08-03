@@ -298,6 +298,13 @@ def _load_official_mcp_secret(ac):
     secret_name = ac.get("integrations_secret_name")
     if not secret_name:
         return {}, True  # integrations_enabled=false is a real "nothing configured" state
+    # PR #194 review MAJOR (L2): read NOTHING when no preset endpoint is configured. The shared
+    # store has no version until the BFF writes a value for the first time, so the read raises
+    # ResourceNotFoundException -- which logged ERR and made `sys.exit(1 if errs else 0)` fail a
+    # provisioner run that was otherwise fine and had no reason to touch this store at all. That is
+    # a regression introduced purely by ADR-017 on deployments that do not use ADR-017.
+    if not (ac.get("official_mcp_endpoints") or {}):
+        return {}, True
     sm = boto3.client("secretsmanager", region_name=ac["region"])
     try:
         resp = sm.get_secret_value(SecretId=secret_name)
@@ -452,23 +459,26 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
     to avoid a second Secrets Manager read when main() already needed one (to compute the
     ensure_targets legacy-skip set); when omitted (e.g. every existing test), loads them itself.
     """
-    # ACCEPTED RESIDUAL RISK — the preset_key -> host binding is OPERATOR-ASSERTED, not code-pinned.
-    # `official_mcp_endpoints` is a map(string) whose terraform validation checks only the `https://`
-    # SCHEME, and the read-only ack below is a self-echo (it compares ack[preset_key] to
-    # endpoints[preset_key], i.e. the operator's own string against itself). Nothing here verifies
-    # that the host actually belongs to the vendor the preset_key names. So an operator who writes
-    # the SAME arbitrary URL into both maps can bind e.g. `datadog` to `https://attacker.example/mcp`,
-    # and _ensure_api_key_provider will then attach that preset's real stored credential
-    # (`mcp:datadog`) to it — credential handoff to a non-vendor host, plus an effective BYO-MCP
-    # connection that BASELINE §2 otherwise pins as do-not-revive.
-    # This is knowingly accepted, NOT overlooked (ADR-017 §Trade-offs). The control is the
-    # tfvars/PR review gate: both maps live in terraform.tfvars, so only a principal who can already
-    # run `terraform apply` on shared infra can do it — the same principal could point any target
-    # anywhere regardless. THE FIX, if it is ever wanted: add a per-preset allowed-host-suffix tuple
-    # to catalog.MCP_SERVER_TARGETS and fail closed here on a mismatch, matching on the PARSED
-    # hostname's suffix (never `endswith` on the raw URL — `evil-datadoghq.com` and
-    # `datadoghq.com.attacker.example` must both fail). Self-hosted presets (ClickHouse/Grafana/
-    # Splunk/Tempo/Jaeger) have no vendor domain and would stay operator-asserted by definition.
+    # HOST BINDING IS CODE-PINNED — see _host_pin_violation(), called on every endpoint below.
+    #
+    # This used to read "ACCEPTED RESIDUAL RISK … the binding is OPERATOR-ASSERTED" and then propose,
+    # as a hypothetical, adding a per-preset allowed-host-suffix tuple. That fix landed in this same
+    # PR, so the comment described the opposite of the code and would have led the next reviewer to
+    # believe no pin exists on a credential-exfiltration boundary (PR #194 review MAJOR, L3).
+    #
+    # What is actually enforced:
+    #   - vendor-hosted presets pin to catalog `allowed_host_suffixes`, matched on the PARSED
+    #     hostname at a DNS label boundary — `evil-datadoghq.com` and `datadoghq.com.attacker.example`
+    #     both fail (a raw-URL endswith would pass both);
+    #   - self-hosted presets must give a PRIVATE IP LITERAL inside an in-VPC range, so there is no
+    #     DNS indirection to repoint after the check;
+    #   - a catalog entry declaring neither key fails closed.
+    # The ack (ack[preset_key] == endpoints[preset_key]) is still a self-echo and is NOT the host
+    # control — it records that an operator reviewed a specific URL. The host control is the pin.
+    #
+    # What the pin does NOT prove: that the software answering at a permitted address is the genuine
+    # vendor/product. Inside a private range that is a trust-boundary question, not a config one —
+    # recorded as an activation precondition in ADR-017 §Status.
     endpoints = ac.get("official_mcp_endpoints") or {}
     lambda_arns = ac.get("lambda_arns") or {}
     read_only_acks = ac.get("official_mcp_read_only_ack") or {}
@@ -573,7 +583,17 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         # object from a prior run, and gating on it would just reproduce that gap.
         conflict = catalog.conflicting_lambda_key(preset_key, lambda_arns)
         if conflict:
-            log(f"target:{tname}", "WARN", f"lambda '{conflict}' still deployed — remove from ai.tf local.agent_lambdas (dead code once this preset is live)")
+            # NOT necessarily dead code: web/lib/mcp-lambda-invoke.ts (KNOWN_MCP_LAMBDA_KINDS covers
+            # clickhouse/tempo/jaeger/dynatrace/datadog), web/lib/trace-source.ts and
+            # scripts/v2/workers/diagnosis/sources.py invoke these Lambdas DIRECTLY, not through a
+            # gateway target. The earlier wording said "dead code once this preset is live", and
+            # following it would have broken Explore, trace lookup and async diagnosis (PR #194
+            # review MAJOR, L4). Only the gateway TARGET is superseded here.
+            log(f"target:{tname}", "WARN",
+                f"lambda '{conflict}' still deployed — its gateway target is superseded by this preset, "
+                f"but do NOT remove it from ai.tf without checking the direct-invoke callers "
+                f"(web/lib/mcp-lambda-invoke.ts, web/lib/trace-source.ts, "
+                f"scripts/v2/workers/diagnosis/sources.py)")
 
         creds = [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
         if auth["mode"] == "api_key":
@@ -599,7 +619,11 @@ def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=No
         # listingMode DEFAULT = the control plane caches the tool list it discovered, i.e. THE VENDOR
         # DECIDES WHICH TOOLS THIS GATEWAY EXPOSES.
         #
-        # ACCEPTED RESIDUAL RISK — read the following as the recorded decision, not a caveat:
+        # ACTIVATION BLOCKER — not an accepted risk. ADR-017 §Status keeps official_mcp_enabled
+        # do-not-enable until a runtime per-preset tool allowlist exists (agent.py:get_all_tools,
+        # same fail-closed shape as select_integration_tools). An earlier revision of this
+        # comment called it "knowingly accepted", which contradicted BASELINE §1's governance
+        # requirement and the ADR's own §Trade-offs (PR #194 review MAJOR, L5).
         # ADR-017's `capability = read` is a DECLARATIVE LABEL, NOT SERVER-SIDE ENFORCEMENT on this
         # path. A `mcp.lambda` target caps its tool set with toolSchema.inlinePayload; an mcpServer
         # target on an API_KEY credential has NO equivalent cap available:

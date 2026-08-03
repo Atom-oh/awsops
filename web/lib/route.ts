@@ -120,6 +120,23 @@ export async function classifyRoute(prompt: string, pinned?: string, opts: Class
   if (matched.length === 1 && !loneCatchAll) {
     return single(matched[0], [entry(matched[0], 1)], 'regex');
   }
+  // PR #194 review MAJOR (L2 + L4): an explicit VENDOR NAME is the strongest routing signal there
+  // is — that is why the observability rule sits first in RULES — but the fast-path above only fires
+  // on EXACTLY ONE match, so "Datadog metric 확인" (observability + monitoring) fell through to the
+  // LLM classifier and the vendor-first ordering that rounds 2-4 established was silently discarded
+  // on the hybrid path. pickGateway() kept it (first-match-wins); classifyRoute() did not.
+  //
+  // Keeping the OTHER matched sections is the second half of the fix. Routing a mixed-intent query
+  // like "grafana 대시보드에서 본 trace 이상해" to observability ALONE drops `monitoring`, which is
+  // where the tempo tools actually live in the default (official_mcp_enabled=false) deployment — a
+  // dead end. Vendor first, then the rest, so the fan-out still reaches the section holding tools.
+  if (matched[0] === 'observability') {
+    const ranked = matched.map((k, i) => entry(k, i === 0 ? 1 : 0.5));
+    const selected = selectMultiRoute(ranked, opts.minScore);
+    const multiDomain = selected.length >= 2;
+    return { primary: 'observability', ranked, method: 'regex', multiDomain,
+             selected: multiDomain ? selected : [ranked[0]] };
+  }
   if (opts.llmEnabled && opts.classify) {
     try {
       const ranked = (await opts.classify(prompt)).map((r) => entry(r.key, r.score));

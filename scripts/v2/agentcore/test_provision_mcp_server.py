@@ -556,9 +556,35 @@ class TestRound4Findings(unittest.TestCase):
             def get_secret_value(self, SecretId):
                 return {"SecretString": '["not", "an", "object"]'}
         with mock.patch.object(provision.boto3, "client", return_value=_SM()):
-            secrets, ok = provision._load_official_mcp_secret({"integrations_secret_name": "sec", "region": "ap-northeast-2"})
+            # An endpoint must be configured for the read to happen at all: with none, the loader
+            # short-circuits to ({}, True) on purpose so a deployment not using ADR-017 never fails
+            # a provisioner run on a store it has no reason to touch (PR #194 review MAJOR, L2).
+            secrets, ok = provision._load_official_mcp_secret({
+                "integrations_secret_name": "sec", "region": "ap-northeast-2",
+                "official_mcp_endpoints": {"datadog": "https://mcp.datadoghq.com/mcp"},
+            })
         self.assertEqual(secrets, {})
         self.assertFalse(ok)
+
+    def test_no_configured_endpoint_reads_nothing_and_is_not_an_error(self):
+        # PR #194 review MAJOR (L2): the store has no version until the BFF first writes to it, so
+        # reading it unconditionally raised ResourceNotFoundException -> ERR -> exit 1, breaking a
+        # provisioner run that had nothing to do with ADR-017. No endpoints => no read at all.
+        called = []
+
+        class _SM:
+            def get_secret_value(self, SecretId):
+                called.append(SecretId)
+                raise AssertionError("must not read the store when no preset endpoint is configured")
+
+        with mock.patch.object(provision.boto3, "client", return_value=_SM()):
+            secrets, ok = provision._load_official_mcp_secret({
+                "integrations_secret_name": "sec", "region": "ap-northeast-2",
+                "official_mcp_endpoints": {},
+            })
+        self.assertEqual(secrets, {})
+        self.assertTrue(ok)
+        self.assertEqual(called, [])
 
     def test_non_string_token_skips_the_preset_instead_of_crashing_the_run(self):
         # MINOR L2-6: a dict/number token reaches boto3 as ParamValidationError — NOT a ClientError,
