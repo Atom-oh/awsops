@@ -72,7 +72,18 @@ export async function POST(req: Request) {
   const hour = new Date().toISOString().slice(0, 13);
   const key = `report:${owner}:${tier}:${model}:${scope}:${hour}`;
 
-  const existing = await reportForIdempotencyKey(key);
+  // Moving the key from the email to the sub is a DISCONTINUITY, and the deploy lands inside a live
+  // hour bucket: a request already deduped under `report:<email>:…` would not be found under
+  // `report:<sub>:…`, so the same user would get a SECOND report — and a diagnosis run is a Bedrock
+  // job, not a cheap retry. Check the legacy spelling too while the user still has an email; the
+  // window closes on its own once the hour rolls over, and disappears entirely for users with no
+  // email claim.
+  const legacyKey = user.email && user.email !== owner
+    ? `report:${user.email}:${tier}:${model}:${scope}:${hour}`
+    : null;
+
+  const existing = (await reportForIdempotencyKey(key))
+    ?? (legacyKey ? await reportForIdempotencyKey(legacyKey) : null);
   if (existing) {
     return NextResponse.json({ report_id: existing, tier, model, deduped: true }, { status: 202 });
   }

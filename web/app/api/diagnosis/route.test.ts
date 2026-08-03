@@ -166,3 +166,39 @@ describe('POST /api/diagnosis', () => {
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 });
+
+// PR #195 review + codex stop-gate: moving the idempotency key from the email to the sub is a
+// discontinuity, and the deploy lands inside a live hour bucket. Without checking the legacy
+// spelling, a request already deduped under report:<email>:… is invisible under report:<sub>:… and
+// the same user gets a SECOND Bedrock diagnosis run.
+describe('POST /api/diagnosis — idempotency across the email→sub cutover', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.AWS_ACCOUNT_ID = '123456789012';
+    (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    (createReport as any).mockResolvedValue(42);
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued' });
+  });
+
+  it('dedupes onto a report keyed by the legacy email form', async () => {
+    (reportForIdempotencyKey as any)
+      .mockImplementationOnce(async () => null)   // sub-form: nothing yet
+      .mockImplementationOnce(async () => 7);     // email-form: the in-flight one
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    const body = await res.json();
+    expect(body).toMatchObject({ report_id: 7, deduped: true });
+    expect(createReport).not.toHaveBeenCalled();  // must NOT start a second run
+    const keys = (reportForIdempotencyKey as any).mock.calls.map((c: any[]) => c[0]);
+    expect(keys[0]).toContain('report:u:');
+    expect(keys[1]).toContain('report:u@x.io:');
+  });
+
+  it('does not look up a legacy key when the user has no email claim', async () => {
+    (verifyUser as any).mockResolvedValue({ sub: 'u' });
+    (reportForIdempotencyKey as any).mockResolvedValue(null);
+    const { POST } = await import('./route');
+    await POST(req({ tier: 'mid' }) as any);
+    expect((reportForIdempotencyKey as any).mock.calls).toHaveLength(1);
+  });
+});
