@@ -137,12 +137,6 @@ resource "aws_iam_role_policy" "task_metrics" {
         "ec2:DescribeVpcEndpoints",
       ]
       Resource = "*"
-      }, {
-      # aws-data 챗 라우트: Steampipe 네트워크 리스너 비밀번호 (해당 시크릿만 스코프)
-      Sid      = "SteampipeSecret"
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = "arn:aws:secretsmanager:*:*:secret:${var.project}-steampipe-db-*"
     }]
   })
 }
@@ -418,12 +412,6 @@ resource "aws_ecs_task_definition" "web" {
         { name = "PROJECT", value = var.project }, # connector-invoke builds ${PROJECT}-agent-<slug>-mcp; must match the IAM resource
 
         { name = "INV_SYNC_FUNCTION", value = var.steampipe_enabled ? "${var.project}-inv-sync" : "" },
-        # v1 priority-10 'aws-data' chat route + the 6 auto-collect collectors dial the Steampipe
-        # Fargate listener directly (steampipe.${var.project}.internal:9193) — that service exists
-        # only when steampipe_enabled=true (steampipe.tf, count=local.sp). Empty ⇒ steampipeAvailable()
-        # in aws-data.ts short-circuits to false (fail-open to normal routing) instead of attempting a
-        # connection to a host that was never provisioned when the flag is off.
-        { name = "STEAMPIPE_ENABLED", value = var.steampipe_enabled ? "true" : "" },
         # P3-D: onboarded-cluster allow-list for the in-cluster (K8s) read routes.
         # Static join of the tfvar (no cross-resource ref) — the BFF gates /api/eks/[cluster]/* on this.
         { name = "ONBOARDED_EKS_CLUSTERS", value = join(",", var.onboard_eks_clusters) },
