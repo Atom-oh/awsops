@@ -12,11 +12,13 @@ Run from the repo root (so `terraform -chdir=...` resolves) AFTER `terraform app
 """
 import argparse
 import copy
+import ipaddress
 import json
 import os
 import subprocess
 import sys
 import time
+from urllib.parse import urlparse
 
 import boto3
 from botocore.exceptions import ClientError
@@ -107,9 +109,20 @@ def _inject_account(tools):
     return out
 
 
-def ensure_targets(ctrl, ac, gw_ids):
-    """Slice targets, idempotent by name. update_gateway_target on tool-schema drift."""
+def ensure_targets(ctrl, ac, gw_ids, skip_names=frozenset()):
+    """Slice targets, idempotent by name. update_gateway_target on tool-schema drift.
+
+    skip_names: legacy TARGETS names that ensure_mcp_server_targets owns THIS run (the preset is
+    active or actively cutting over). Without this, ensure_targets (which only looks at whether
+    the lambda_arn is still in the tf output — true for the whole ADR-017 deprecation window) would
+    recreate a legacy target that a PRIOR run's ensure_mcp_server_targets retired, and THIS run's
+    ensure_mcp_server_targets would retire it again seconds later — flapping the target into
+    existence and back out every single provisioner run (kiro review MAJOR finding, 2026-07-31),
+    which is exactly the duplicate-tool-name window the retire ordering is meant to prevent."""
     for tname, spec in catalog.TARGETS.items():
+        if tname in skip_names:
+            log(f"target:{tname}", "SKIP", "superseded by an active ADR-017 mcp-server preset — owned by ensure_mcp_server_targets this run")
+            continue
         gw_id = gw_ids.get(spec["gateway"])
         if not gw_id:
             log(f"target:{tname}", "ERR", f"gateway {spec['gateway']} missing")
@@ -146,6 +159,594 @@ def ensure_targets(ctrl, ac, gw_ids):
             log(f"target:{tname}", "ERR", str(e)[:140])
 
 
+def _endpoint_blocked(endpoint, spec=None):
+    """ADR-017 defense-in-depth (kiro review MAJOR finding, 2026-07-31): official_mcp_endpoints is
+    an https-only tfvars map (enforced by ai.tf's variable validation block at plan time), but a
+    tfvars edit can be applied without ever re-running that validation against code that already
+    changed — this is the second, runtime check. Mirrors the ALWAYS-BLOCKED subset of
+    web/lib/ssrf-guard.ts isAlwaysBlockedHost (metadata/loopback/link-local/multicast/unspecified) —
+    RFC1918 private is deliberately ALLOWED (several ADR-017 presets are explicitly self-hosted
+    in-VPC per catalog.py's own comments, e.g. ClickHouse/Grafana/Splunk). Returns a reason string
+    if blocked, else None. A non-literal hostname (the common case) is not resolved here — same
+    deferral to connect time as the TS guard.
+
+    When `spec` (the catalog MCP_SERVER_TARGETS entry) is passed, this ALSO enforces the per-preset
+    host pin, which is what actually keeps this feature inside ADR-007's "curated official-vendor
+    only" boundary. Without it, `official_mcp_endpoints` only had to be `https://` and the ack was a
+    self-echo of the operator's own string, so a preset key could be bound to any host and
+    _ensure_api_key_provider would hand that host the preset's real vendor credential — effectively
+    the BYO-MCP connection BASELINE §2 pins as do-not-revive. Two states, deliberately distinct:
+    `allowed_host_suffixes` = vendor-hosted, pinned here; `host_is_operator_asserted` = genuinely
+    self-hosted (ClickHouse/Grafana/Splunk/Tempo/Jaeger), where no vendor domain exists to pin.
+    A spec with NEITHER is a catalog bug and fails closed rather than defaulting to permissive."""
+    try:
+        parsed = urlparse(endpoint)
+    except ValueError:
+        return "unparsable URL"
+    if parsed.scheme != "https":
+        return f"scheme {parsed.scheme!r} is not https"
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return "no host in URL"
+    if host == "localhost" or host.endswith(".localhost"):
+        return "loopback hostname"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None  # non-literal hostname
+    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or str(ip) == "255.255.255.255":
+        return f"IP {ip} is loopback/link-local/multicast/unspecified (always blocked)"
+    return None
+
+
+#: The only address ranges a self-hosted preset may point at. This is an ALLOWLIST, not
+#: `ipaddress.is_private`, because `is_private` is a broader predicate than "cannot leave the VPC" and
+#: admits publicly-routed IPv6 transition forms: it derives its answer from the IPv4 address EMBEDDED in
+#: a 6to4/Teredo address, so `2002:5db8:d822::1` (6to4 wrapping the public 93.184.216.34) and
+#: `2001:0:5db8:d822::1` (Teredo) both report is_private=True while routing straight to the public
+#: internet — i.e. exactly the exfiltration this gate exists to stop, waved through. Allowlisting the
+#: two real in-VPC families instead rejects every transition form by construction (they all sit outside
+#: these ranges), so there is no per-form blocklist to keep in sync with future ones.
+_IN_VPC_NETS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),  # IPv6 ULA. AWS VPC IPv6 CIDRs are globally-routable GUAs and
+                                       # so are deliberately NOT here — a GUA is indistinguishable
+                                       # from an exfil target by address alone.
+)
+
+
+def _is_in_vpc_literal(ip):
+    return any(ip in net for net in _IN_VPC_NETS)
+
+
+def _host_under_suffix(host, suffixes):
+    """True if `host` sits under one of `suffixes`. Suffixes carry a leading dot so matching can only
+    happen on a DNS label boundary: this is what rejects `evil-datadoghq.com` (no boundary) and
+    `datadoghq.com.attacker.example` (suffix in the middle), both of which a raw-URL endswith allows."""
+    for suf in suffixes:
+        bare = suf.lstrip(".")
+        if host == bare or host.endswith(suf if suf.startswith(".") else "." + suf):
+            return True
+    return False
+
+
+def _host_pin_violation(endpoint, spec):
+    """Per-preset host pin — the control that actually keeps this inside ADR-007's curated boundary.
+
+    Vendor-hosted presets pin to `allowed_host_suffixes` from the catalog — a name is fine there,
+    because the pin is the vendor's own domain. Self-hosted ones (ClickHouse/Grafana/Splunk/Tempo/
+    Jaeger) have no vendor domain to pin, and letting them take any host left the BYO-MCP path open:
+    the preset's real credential would be handed to whatever URL was configured, which is exactly what
+    BASELINE §2 pins as do-not-revive. They must therefore give the PRIVATE IP LITERAL of their
+    in-VPC endpoint. The literal is the point — a NAME resolves privately at provision time and can
+    be repointed at a public address afterwards, and the connection is made later by the
+    AgentCore-managed network where we get no second look, so verifying a name proves nothing about
+    what gets connected to. A literal has no DNS behind it."""
+    try:
+        host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return "unparsable URL"
+    if not host:
+        return "no host in URL"
+    suffixes = spec.get("allowed_host_suffixes")
+    if not suffixes:
+        if not spec.get("host_is_operator_asserted"):
+            return "catalog entry declares neither allowed_host_suffixes nor host_is_operator_asserted"
+        # A self-hosted preset must give a PRIVATE IP LITERAL. Not a name — a name is what makes this
+        # exfiltratable at all: it resolves privately at provision time, then can be repointed at a
+        # public address afterwards, and the connection is made later by the AgentCore-managed network
+        # where we have no re-check. A literal has no DNS behind it, so there is nothing to repoint and
+        # the value we verify is the value that gets connected to. That closes the class rather than
+        # narrowing it, which is why this is enforced instead of merely recommended (earlier revisions
+        # documented the rebinding window as residual — it did not have to be).
+        try:
+            host_ip = ipaddress.ip_address(host)
+        except ValueError:
+            return (f"self-hosted preset host {host!r} is a NAME — use the private IP literal of the "
+                    f"in-VPC endpoint. A name resolves privately now but can be repointed at a public "
+                    f"address later, and the connection is made by AgentCore where we cannot re-check")
+        if not _is_in_vpc_literal(host_ip):
+            return (f"self-hosted preset points at {host_ip}, which is not in an in-VPC range "
+                    f"{tuple(str(n) for n in _IN_VPC_NETS)!r} — a self-hosted preset must be in-VPC")
+        return None
+
+    if _host_under_suffix(host, suffixes):
+        return None
+    return f"host {host!r} is not under any allowed suffix {tuple(suffixes)!r}"
+
+
+def _load_official_mcp_secret(ac):
+    """ADR-017: preset credentials live in the SAME shared secret the web BFF writes connector
+    credentials into (web/lib/integration-credentials.ts), under the NAMESPACED key
+    "mcp:<preset_key>" — e.g. {"mcp:datadog": {"token": "..."}}. The plain (non-namespaced)
+    preset_key is a SEPARATE map entry owned by the datasource-connector kind-mirror
+    (mirrorDefaultCredential) for the 5 presets that are ALSO a DATASOURCE_KINDS member
+    (clickhouse/tempo/jaeger/dynatrace/datadog) — reusing that key for the MCP credential clobbers
+    the connector's {endpoint, authType, ...} shape and vice versa (kiro review MAJOR finding,
+    2026-07-31). setMcpPresetCredential (web/lib/integration-credentials.ts) writes the same
+    "mcp:<preset_key>" key.
+
+    Returns (secret_map, read_ok). read_ok=False means the READ OR PARSE ITSELF failed (a
+    transient Secrets Manager error, e.g. throttling, or malformed JSON) — the caller must NOT
+    treat that the same as "the credential is genuinely absent" (which retires any live target),
+    or a transient API blip on a routine `make agentcore` re-run would mass-deprovision every
+    configured preset (kiro review finding, 2026-07-31). read_ok=True with an empty/missing key
+    means integrations_enabled=false or the credential genuinely isn't stored — both real SKIP
+    states, not errors."""
+    secret_name = ac.get("integrations_secret_name")
+    if not secret_name:
+        return {}, True  # integrations_enabled=false is a real "nothing configured" state
+    # PR #194 review MAJOR (L2): read NOTHING when no preset endpoint is configured. The shared
+    # store has no version until the BFF writes a value for the first time, so the read raises
+    # ResourceNotFoundException -- which logged ERR and made `sys.exit(1 if errs else 0)` fail a
+    # provisioner run that was otherwise fine and had no reason to touch this store at all. That is
+    # a regression introduced purely by ADR-017 on deployments that do not use ADR-017.
+    if not (ac.get("official_mcp_endpoints") or {}):
+        return {}, True
+    sm = boto3.client("secretsmanager", region_name=ac["region"])
+    try:
+        resp = sm.get_secret_value(SecretId=secret_name)
+    except ClientError as e:
+        log("mcp-server:secret", "ERR", str(e)[:140])
+        return {}, False
+    try:
+        m = json.loads(resp.get("SecretString") or "{}")
+    except json.JSONDecodeError as e:
+        log("mcp-server:secret", "ERR", f"malformed JSON: {e}"[:140])
+        return {}, False
+    if not isinstance(m, dict):
+        # Valid JSON but not an object (an array/string/number secret — hand-edited or written by
+        # something other than web/lib/integration-credentials.ts). Round-4 review MINOR L2-5: this
+        # used to return ({}, True) = "read fine, credential absent", which RETIRES a live target.
+        # A shape we can't read is a read failure, not evidence the credential was removed.
+        log("mcp-server:secret", "ERR", f"secret JSON is a {type(m).__name__}, expected an object — treating as unreadable")
+        return {}, False
+    return m, True
+
+
+def _preset_token(secrets, preset_key):
+    """The stored API token for an ADR-017 preset, or None if absent/unusable.
+
+    Single choke point for reading `mcp:<preset_key>` — both ensure_mcp_server_targets and
+    _cutover_preset_keys go through it so they can never disagree about whether a preset has a
+    credential. Type-checked (round-4 review MINOR L2-6): a non-str token (dict/number/null from a
+    hand-edited secret) handed to boto3 raises ParamValidationError — NOT a ClientError, so it
+    escapes _ensure_api_key_provider's handler and aborts the whole provisioner run. An unusable
+    value is treated as absent (SKIP this one preset)."""
+    raw = secrets.get(f"mcp:{preset_key}")
+    token = raw.get("token") if isinstance(raw, dict) else None
+    return token if isinstance(token, str) and token else None
+
+
+def _ensure_api_key_provider(ctrl, provider_name, token):
+    """Idempotent AgentCore Identity API-key credential provider: create if missing, update if the
+    token changed. get_api_key_credential_provider does NOT return the key value back (write-only
+    vault semantics) so drift can't be detected here — update_api_key_credential_provider is called
+    every run when a token is present; AgentCore Identity itself is expected to no-op on an
+    unchanged value. Returns the providerArn, or "" on failure."""
+    if not isinstance(token, str) or not token:
+        # Defense in depth — callers get their token from _preset_token, which already enforces
+        # this; a non-str here would be a ParamValidationError (uncatchable by our ClientError
+        # handlers below) and would kill the whole run instead of skipping one preset.
+        log(f"mcp-server-provider:{provider_name}", "ERR", "refusing to send a non-string/empty apiKey to AgentCore Identity")
+        return ""
+    try:
+        existing = ctrl.get_api_key_credential_provider(name=provider_name)
+        arn = existing["credentialProviderArn"]
+        ctrl.update_api_key_credential_provider(name=provider_name, apiKey=token)
+        return arn
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") not in ("ResourceNotFoundException",):
+            log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
+            return ""
+    try:
+        resp = ctrl.create_api_key_credential_provider(name=provider_name, apiKey=token)
+        return resp["credentialProviderArn"]
+    except ClientError as e:
+        log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
+        return ""
+
+
+def _api_key_provider_fields(credential_provider_configurations):
+    """Extract (providerArn, location, param_name, prefix) an API_KEY credentialProviderConfigurations
+    entry uses, or None for any other/absent config. providerArn is included (not just the header
+    wiring) so a provider that got deleted-and-recreated (new ARN, same location/param/prefix) is
+    still detected as drift — otherwise the target keeps pointing at a now-nonexistent provider."""
+    cfgs = credential_provider_configurations or []
+    if not cfgs or cfgs[0].get("credentialProviderType") != "API_KEY":
+        return None
+    apk = (cfgs[0].get("credentialProvider") or {}).get("apiKeyCredentialProvider") or {}
+    return (apk.get("providerArn"), apk.get("credentialLocation"), apk.get("credentialParameterName"), apk.get("credentialPrefix", ""))
+
+
+def _delete_api_key_provider(ctrl, provider_name):
+    """Best-effort delete — a missing provider is not an error (nothing to retire)."""
+    try:
+        ctrl.delete_api_key_credential_provider(name=provider_name)
+        log(f"mcp-server-provider:{provider_name}", "DELETED", "retired")
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ResourceNotFoundException":
+            log(f"mcp-server-provider:{provider_name}", "ERR", str(e)[:140])
+
+
+# Gateway target lifecycle states (GetGatewayTarget `status`), confirmed against the botocore
+# model: CREATING/UPDATING/SYNCHRONIZING are in-flight; READY is the only "safe to cut over to"
+# state; the rest are terminal failures.
+_TARGET_TERMINAL_FAILURE_STATUSES = {"FAILED", "UPDATE_UNSUCCESSFUL", "SYNCHRONIZE_UNSUCCESSFUL"}
+
+
+def _wait_target_ready(ctrl, gw_id, target_id, tname, timeout_s=30, interval_s=2):
+    """Poll GetGatewayTarget until status=READY (True), a terminal failure status (False, logged),
+    or timeout_s elapses (False, logged). create/update_gateway_target return as soon as the
+    request is ACCEPTED, not once the target is actually usable — retiring the legacy target right
+    after that 200, without confirming READY, can cut over to a target that isn't live yet (kiro
+    review finding, 2026-07-31)."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            status = ctrl.get_gateway_target(gatewayIdentifier=gw_id, targetId=target_id).get("status")
+        except ClientError as e:
+            log(f"target:{tname}:ready", "ERR", str(e)[:140])
+            return False
+        if status == "READY":
+            return True
+        if status in _TARGET_TERMINAL_FAILURE_STATUSES:
+            log(f"target:{tname}:ready", "ERR", f"reached terminal status {status}, never became READY")
+            return False
+        if time.monotonic() >= deadline:
+            log(f"target:{tname}:ready", "ERR", f"timed out after {timeout_s}s waiting for READY (last status: {status})")
+            return False
+        time.sleep(interval_s)
+
+
+def _retire_gateway_target(ctrl, gw_id, existing, tname, reason):
+    """Delete a live gateway target by name, if it exists. Used both to retire a disabled/removed
+    ADR-017 preset's target and to clear a legacy lambda target out of the way before cutover."""
+    t = existing.get(tname)
+    if not t:
+        return
+    try:
+        ctrl.delete_gateway_target(gatewayIdentifier=gw_id, targetId=t["targetId"])
+        log(f"target:{tname}", "RETIRED", reason)
+        existing.pop(tname, None)  # keep the cache correct for the rest of this run
+    except ClientError as e:
+        log(f"target:{tname}", "ERR", str(e)[:140])
+
+
+def ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=None, secrets_read_ok=None):
+    """ADR-017: register curated official-vendor MCP servers as remote `mcpServer` gateway targets.
+
+    Ordering is deliberate and safety-critical (2026-07-31 kiro review, findings #1/#2 on the first
+    cut of this function, plus round-4 L2-2):
+      1. TEARDOWN FIRST — blocked endpoint, no endpoint (flag off / removed), ack missing-or-stale:
+         retire only THIS preset's own mcp-server target + credential provider if a prior run left
+         them live. These run ABOVE the secrets-read gate (round-4 L2-2) because a retirement needs
+         no credential, and a Secrets Manager blip must not disable the kill-switch.
+         The legacy lambda target is NEVER touched here — an incomplete/reverted cutover must leave
+         the old tool working, not take it down too.
+      1b. Credential gate: secret unreadable -> SKIP touching anything (fail-safe); credential
+         genuinely absent while the endpoint+ack stand -> retire (finding #2 — a missing credential
+         must also tear down a now-uncredentialed target, not just no-op).
+      2. ACTIVE -> validate the credential provider FIRST, then create/update the new target, and
+         ONLY on confirmed success (CREATED/UPDATED/EXISTS) retire the legacy lambda target. Doing
+         the legacy delete BEFORE the new target was confirmed live was the outage bug (finding #1):
+         a missing credential or a create/update failure would delete the working old tool with
+         nothing to replace it.
+
+    secrets/secrets_read_ok: pass the values from a caller-side _load_official_mcp_secret(ac) call
+    to avoid a second Secrets Manager read when main() already needed one (to compute the
+    ensure_targets legacy-skip set); when omitted (e.g. every existing test), loads them itself.
+    """
+    # HOST BINDING IS CODE-PINNED — see _host_pin_violation(), called on every endpoint below.
+    #
+    # This used to read "ACCEPTED RESIDUAL RISK … the binding is OPERATOR-ASSERTED" and then propose,
+    # as a hypothetical, adding a per-preset allowed-host-suffix tuple. That fix landed in this same
+    # PR, so the comment described the opposite of the code and would have led the next reviewer to
+    # believe no pin exists on a credential-exfiltration boundary (PR #194 review MAJOR, L3).
+    #
+    # What is actually enforced:
+    #   - vendor-hosted presets pin to catalog `allowed_host_suffixes`, matched on the PARSED
+    #     hostname at a DNS label boundary — `evil-datadoghq.com` and `datadoghq.com.attacker.example`
+    #     both fail (a raw-URL endswith would pass both);
+    #   - self-hosted presets must give a PRIVATE IP LITERAL inside an in-VPC range, so there is no
+    #     DNS indirection to repoint after the check;
+    #   - a catalog entry declaring neither key fails closed.
+    # The ack (ack[preset_key] == endpoints[preset_key]) is still a self-echo and is NOT the host
+    # control — it records that an operator reviewed a specific URL. The host control is the pin.
+    #
+    # What the pin does NOT prove: that the software answering at a permitted address is the genuine
+    # vendor/product. Inside a private range that is a trust-boundary question, not a config one —
+    # recorded as an activation precondition in ADR-017 §Status.
+    endpoints = ac.get("official_mcp_endpoints") or {}
+    lambda_arns = ac.get("lambda_arns") or {}
+    read_only_acks = ac.get("official_mcp_read_only_ack") or {}
+    if secrets is None:
+        secrets, secrets_read_ok = _load_official_mcp_secret(ac)
+    existing_by_gw = {}  # gateway short-key -> {target_name: target}, fetched once per gateway
+
+    def gw_existing(gw_key):
+        gw_id = gw_ids.get(gw_key)
+        if not gw_id:
+            return None, {}
+        if gw_key not in existing_by_gw:
+            existing_by_gw[gw_key] = {t.get("name"): t for t in _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id)}
+        return gw_id, existing_by_gw[gw_key]
+
+    for tname, spec in catalog.MCP_SERVER_TARGETS.items():
+        preset_key = spec["preset_key"]
+        endpoint = endpoints.get(preset_key)
+        gw_id, existing = gw_existing(spec["gateway"])
+        if not gw_id:
+            log(f"target:{tname}", "ERR", f"gateway {spec['gateway']} missing")
+            continue
+
+        auth = spec["auth"]
+        provider_name = f"awsops-v2-{preset_key}-mcp"
+
+        # ── Teardown decisions first (round-4 review MAJOR L2-2, 2026-07-31) ─────────────────
+        # Every branch below is an EXPLICIT operator-requested retirement (blocked endpoint / flag
+        # off / endpoint removed / ack revoked or stale) and needs NO credential to carry out —
+        # retiring a target never reads the secret. They therefore run ABOVE the secrets-read gate.
+        # Round-3 had the secrets-read SKIP first, which meant a Secrets Manager blip left a live
+        # target AND its API-key provider running after the flag was turned off or the ack revoked
+        # — the kill-switch silently stopped working, and (flag off) ensure_targets would then also
+        # recreate the legacy lambda target, giving the gateway duplicate tool names.
+        if endpoint:
+            blocked_reason = _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec)
+            if blocked_reason:
+                log(f"target:{tname}", "ERR", f"official_mcp_endpoints['{preset_key}'] rejected: {blocked_reason}")
+                _retire_gateway_target(ctrl, gw_id, existing, tname, "endpoint failed the SSRF/scheme guard — retiring")
+                _delete_api_key_provider(ctrl, provider_name)
+                continue
+
+        if not endpoint:
+            log(f"target:{tname}", "SKIP", f"no endpoint configured for preset '{preset_key}' (official_mcp_enabled/official_mcp_endpoints)")
+            _retire_gateway_target(ctrl, gw_id, existing, tname, "no endpoint configured — retiring")
+            # Best-effort: AWS may reject deleting a provider while a target still references it
+            # if the just-issued target deletion is still async. A failure here is logged (ERR) and
+            # self-heals on the NEXT provisioner run — this SKIP path re-attempts the delete every
+            # time the preset stays inactive, and delete_api_key_credential_provider is idempotent.
+            _delete_api_key_provider(ctrl, provider_name)
+            continue
+
+        if read_only_acks.get(preset_key) != endpoint:
+            # CRITICAL (kiro review, 2026-07-31): unlike the Lambda TARGETS (toolSchema.inlinePayload
+            # hard-limits the exposed tool set), an mcpServer target has NO server-side tool
+            # allowlist — it exposes 100% of whatever the vendor's remote MCP server advertises,
+            # write tools included. ADR-017's read_only_note (spec["read_only_note"]) is currently
+            # "trust the vendor's own config" (RBAC scope / --disable-write / etc); provision.py has
+            # no control-plane API to introspect the vendor's live tool list (tools/list only exists
+            # on the data-plane MCP endpoint, not bedrock-agentcore-control) so it cannot verify that
+            # claim itself. Fail CLOSED: require an explicit per-preset operator acknowledgment
+            # (terraform var.official_mcp_read_only_ack[preset_key] = the exact endpoint reviewed)
+            # that the read_only_note control was actually verified on the vendor side, before
+            # provisioning at all — default {} means nothing provisions until acked.
+            #
+            # ack is bound to the ENDPOINT VALUE, not just the preset_key (round-3 review MAJOR,
+            # 2026-07-31 fix): comparing != endpoint (not just falsy) means changing
+            # official_mcp_endpoints[preset_key] to a different URL without a matching re-ack is
+            # treated exactly like never having acked at all — fail-closed, retire, no silent
+            # credential handoff to an unreviewed endpoint.
+            log(f"target:{tname}", "SKIP",
+                f"official_mcp_read_only_ack['{preset_key}'] missing or doesn't match the current "
+                f"endpoint — refusing to provision an unenforced write surface "
+                f"({spec.get('read_only_note', 'no read-only note')}); ack in terraform.tfvars "
+                "(value = the exact endpoint URL) only after verifying the vendor-side read-only "
+                "control, and re-ack whenever the endpoint changes")
+            _retire_gateway_target(ctrl, gw_id, existing, tname, "read-only ack missing or stale (endpoint changed since ack) — retiring")
+            _delete_api_key_provider(ctrl, provider_name)
+            continue
+
+        # ── Credential gate (provisioning only — everything that tears down already ran) ──────
+        token = _preset_token(secrets, preset_key) if auth["mode"] == "api_key" else None
+
+        if auth["mode"] == "api_key" and not token and not secrets_read_ok:
+            # Could not READ the credentials secret this run (transient Secrets Manager error /
+            # malformed JSON / non-object secret) — NOT the same as "the credential was
+            # intentionally removed", and must never retire a live target on that basis (kiro
+            # review finding, 2026-07-31: a transient API blip would otherwise mass-deprovision
+            # every configured preset). Fail safe: skip this preset, touch nothing.
+            log(f"target:{tname}", "SKIP", f"could not read credentials secret this run for preset '{preset_key}' — leaving any existing target/provider untouched")
+            continue
+
+        if auth["mode"] == "api_key" and not token:
+            log(f"target:{tname}", "SKIP", f"no stored credential for preset '{preset_key}' (Connectors tab)")
+            _retire_gateway_target(ctrl, gw_id, existing, tname, "no stored credential — retiring")
+            _delete_api_key_provider(ctrl, provider_name)  # see the no-endpoint branch's note
+            continue
+
+        # INFORMATIONAL only (dead-code reminder) — does NOT gate target creation. The legacy
+        # target itself (below, AFTER a confirmed-successful create/update) is what closes the
+        # actual duplicate-tool-name risk; a tf-config-only check can't see a leftover target
+        # object from a prior run, and gating on it would just reproduce that gap.
+        conflict = catalog.conflicting_lambda_key(preset_key, lambda_arns)
+        if conflict:
+            # NOT necessarily dead code: web/lib/mcp-lambda-invoke.ts (KNOWN_MCP_LAMBDA_KINDS covers
+            # clickhouse/tempo/jaeger/dynatrace/datadog), web/lib/trace-source.ts and
+            # scripts/v2/workers/diagnosis/sources.py invoke these Lambdas DIRECTLY, not through a
+            # gateway target. The earlier wording said "dead code once this preset is live", and
+            # following it would have broken Explore, trace lookup and async diagnosis (PR #194
+            # review MAJOR, L4). Only the gateway TARGET is superseded here.
+            log(f"target:{tname}", "WARN",
+                f"lambda '{conflict}' still deployed — its gateway target is superseded by this preset, "
+                f"but do NOT remove it from ai.tf without checking the direct-invoke callers "
+                f"(web/lib/mcp-lambda-invoke.ts, web/lib/trace-source.ts, "
+                f"scripts/v2/workers/diagnosis/sources.py)")
+
+        creds = [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
+        if auth["mode"] == "api_key":
+            provider_arn = _ensure_api_key_provider(ctrl, provider_name, token)
+            if not provider_arn:
+                continue  # error already logged by _ensure_api_key_provider — legacy target untouched
+            api_key_provider = {
+                "providerArn": provider_arn,
+                "credentialLocation": auth["credential_location"],
+                "credentialParameterName": auth["credential_parameter_name"],
+            }
+            # ponytail: defensive only — omit credentialPrefix entirely when the preset has none
+            # (e.g. New Relic's "Api-Key" header takes no prefix) rather than passing "", in case
+            # botocore/the API enforces a min-length on this field (unverified as of 2026-07-31
+            # review; AWS testing would confirm either way — this fix is safe regardless).
+            if auth.get("credential_prefix"):
+                api_key_provider["credentialPrefix"] = auth["credential_prefix"]
+            creds = [{
+                "credentialProviderType": "API_KEY",
+                "credentialProvider": {"apiKeyCredentialProvider": api_key_provider},
+            }]
+
+        # listingMode DEFAULT = the control plane caches the tool list it discovered, i.e. THE VENDOR
+        # DECIDES WHICH TOOLS THIS GATEWAY EXPOSES.
+        #
+        # ACTIVATION BLOCKER — not an accepted risk. ADR-017 §Status keeps official_mcp_enabled
+        # do-not-enable until a runtime per-preset tool allowlist exists (agent.py:get_all_tools,
+        # same fail-closed shape as select_integration_tools). An earlier revision of this
+        # comment called it "knowingly accepted", which contradicted BASELINE §1's governance
+        # requirement and the ADR's own §Trade-offs (PR #194 review MAJOR, L5).
+        # ADR-017's `capability = read` is a DECLARATIVE LABEL, NOT SERVER-SIDE ENFORCEMENT on this
+        # path. A `mcp.lambda` target caps its tool set with toolSchema.inlinePayload; an mcpServer
+        # target on an API_KEY credential has NO equivalent cap available:
+        #   - bedrock-agentcore-control has no tool-listing operation at all (target ops are only
+        #     Create/Get/List/Update/DeleteGatewayTarget + SynchronizeGatewayTargets, and no response
+        #     carries tool names — verified against the botocore 2023-06-05 model), so provision.py
+        #     cannot even read, let alone diff, the vendor's advertised tools; and
+        #   - the one field that WOULD cap them, McpServerTargetConfiguration.mcpToolSchema, is
+        #     documented as "Supported only when the credential provider is configured with an
+        #     authorization code grant type" — these presets are API_KEY, and setting it disables
+        #     tool synchronization entirely.
+        # Consequence, stated plainly: if a vendor adds a WRITE tool (mute monitor, create incident,
+        # delete dashboard) to an ALREADY-ACKED preset, the sync-on-EXISTS above absorbs it into the
+        # agent's tool surface on the next `make agentcore` — no re-ack, no PR, no review. The
+        # `read_only_note` and the operator ack attest to a VENDOR-SIDE control (RBAC scope /
+        # --disable-write / read-scoped token), which does keep applying to later-added tools; they
+        # do NOT and cannot attest to a tool list.
+        # This risk is knowingly accepted because AgentCore offers no tool-schema cap on the API_KEY
+        # path. The compensating controls are: `official_mcp_enabled` + `integrations_enabled`
+        # default-off; the curated catalog (only vendors WE list get a preset_key at all — see
+        # MCP_SERVER_TARGETS); the fail-closed per-preset `official_mcp_read_only_ack` bound to the
+        # exact endpoint; and `integrations_write_enabled` staying off so no external write tier is
+        # live. Recorded in ADR-017 §Decision/§Trade-offs and the ADR-004/ADR-007 amendments.
+        cfg = {"mcp": {"mcpServer": {"endpoint": endpoint, "listingMode": "DEFAULT"}}}
+        tid_final = None
+        tid_to_sync = None
+        try:
+            if tname in existing:
+                tid_final = existing[tname]["targetId"]
+                cur = ctrl.get_gateway_target(gatewayIdentifier=gw_id, targetId=tid_final)
+                cur_endpoint = cur.get("targetConfiguration", {}).get("mcp", {}).get("mcpServer", {}).get("endpoint")
+                cur_provider = _api_key_provider_fields(cur.get("credentialProviderConfigurations"))
+                new_provider = _api_key_provider_fields(creds)
+                drifted = (cur_endpoint != endpoint or cur_provider != new_provider or cur.get("description") != spec["description"])
+                if not drifted:
+                    log(f"target:{tname}", "EXISTS", endpoint)
+                    # Round-3 review MAJOR (2026-07-31): ADR-017's whole stated benefit is "the
+                    # vendor maintains the tool list, we don't" — but a sync request only fired on
+                    # CREATE/UPDATE, never on an unchanged EXISTS target, so a vendor adding/renaming
+                    # tools on their end never reached this Gateway after the first provision. Sync
+                    # every run regardless of drift; synchronize_gateway_targets is a cheap best-effort
+                    # refresh request, not a mutation of our config.
+                    tid_to_sync = tid_final
+                else:
+                    ctrl.update_gateway_target(gatewayIdentifier=gw_id, targetId=tid_final, name=tname,
+                                                description=spec["description"], targetConfiguration=cfg,
+                                                credentialProviderConfigurations=creds)
+                    log(f"target:{tname}", "UPDATED", f"drift: endpoint/description/credential-provider config changed -> {endpoint}")
+                    tid_to_sync = tid_final
+            else:
+                resp = ctrl.create_gateway_target(gatewayIdentifier=gw_id, name=tname, description=spec["description"],
+                                                   targetConfiguration=cfg, credentialProviderConfigurations=creds)
+                log(f"target:{tname}", "CREATED", endpoint)
+                tid_final = resp["targetId"]
+                tid_to_sync = tid_final
+        except ClientError as e:
+            log(f"target:{tname}", "ERR", str(e)[:140])
+            continue  # new target failed — leave the legacy lambda target alone (no outage)
+
+        if tid_to_sync:
+            # Best-effort refresh request — its success/failure is INDEPENDENT of whether the
+            # target actually reaches READY (checked below), so a sync failure alone must not
+            # short-circuit the ready-wait or silently permit an unconfirmed cutover either way.
+            try:
+                ctrl.synchronize_gateway_targets(gatewayIdentifier=gw_id, targetIdList=[tid_to_sync])
+                log(f"target:{tname}:sync", "OK", "tools/list refresh requested")
+            except ClientError as e:
+                log(f"target:{tname}:sync", "ERR", str(e)[:140])
+
+        # create/update_gateway_target return as soon as the request is ACCEPTED, not once the
+        # target is actually usable — confirm READY before treating the new target as the live
+        # replacement (kiro review finding, 2026-07-31). Not ready -> leave the legacy lambda
+        # target alone; retry on the next provisioner run (this whole block is idempotent).
+        if not _wait_target_ready(ctrl, gw_id, tid_final, tname):
+            continue
+
+        legacy_name = catalog.legacy_target_name(preset_key)
+        if legacy_name:
+            # The legacy lambda target may live on a DIFFERENT gateway than this preset's new
+            # mcpServer target (e.g. tempo-mcp-target is on 'monitoring' while
+            # tempo-mcp-server-target is on 'external-obs') — searching only `existing` (this
+            # preset's own gateway) can never find it there, so it would live forever (kiro review
+            # MAJOR finding, 2026-07-31). Look up the legacy target's OWN gateway from the catalog.
+            legacy_gw_key = (catalog.TARGETS.get(legacy_name) or {}).get("gateway", spec["gateway"])
+            legacy_gw_id, legacy_existing = gw_existing(legacy_gw_key)
+            if legacy_gw_id and legacy_name in legacy_existing:
+                _retire_gateway_target(ctrl, legacy_gw_id, legacy_existing, legacy_name,
+                                        f"superseded by {tname} (ADR-017 cutover, confirmed READY)")
+
+
+def _cutover_preset_keys(ac, secrets, secrets_read_ok):
+    """Preset keys ensure_mcp_server_targets will treat as ACTIVE this run — same conditions as its
+    own SKIP/retire branches (endpoint configured, endpoint not blocked, ack matching the current
+    endpoint, and — for api_key auth — a credential present OR the secret read itself failed,
+    mirroring that function's own fail-safe so this helper and ensure_mcp_server_targets never
+    disagree). Used by main() to tell ensure_targets which legacy lambda targets are owned by
+    ensure_mcp_server_targets this run (see ensure_targets' skip_names docstring for why that
+    matters — otherwise the legacy target flaps).
+
+    The _endpoint_blocked / _preset_token calls here are the SAME helpers ensure_mcp_server_targets
+    uses, deliberately not re-implemented (round-4 review MAJOR L2-1, 2026-07-31): this helper used
+    to check only "endpoint present + ack matches", so a blocked endpoint (e.g. https://127.0.0.1/mcp
+    — https, so terraform's ^https:// validation passes it) counted as a cutover here (legacy target
+    landed in skip_names => never created) while ensure_mcp_server_targets rejected it (remote target
+    retired/never created) => EVERY tool for that kind silently vanished. Sharing one decision means
+    a blocked endpoint is simply "not cut over", which keeps the legacy target alive."""
+    endpoints = ac.get("official_mcp_endpoints") or {}
+    read_only_acks = ac.get("official_mcp_read_only_ack") or {}
+    active = set()
+    for spec in catalog.MCP_SERVER_TARGETS.values():
+        preset_key = spec["preset_key"]
+        endpoint = endpoints.get(preset_key)
+        if not endpoint or read_only_acks.get(preset_key) != endpoint:
+            continue
+        if _endpoint_blocked(endpoint) or _host_pin_violation(endpoint, spec):
+            continue
+        if spec["auth"]["mode"] == "api_key":
+            if not _preset_token(secrets, preset_key) and secrets_read_ok:
+                continue
+        active.add(preset_key)
+    return active
+
+
 def prune_moved_targets(ctrl, gw_ids):
     """Idempotent reconcile: delete a target that the catalog has MOVED to a different gateway —
     a KNOWN target name still living on a gateway it is no longer assigned to. Prevents the
@@ -155,6 +756,7 @@ def prune_moved_targets(ctrl, gw_ids):
     so the new target exists before the old one is removed. Targets whose name is NOT in the catalog
     are manual/experimental — never auto-deleted, only logged."""
     desired = {tname: spec["gateway"] for tname, spec in catalog.TARGETS.items()}
+    desired.update({tname: spec["gateway"] for tname, spec in catalog.MCP_SERVER_TARGETS.items()})
     # Snapshot every provisioned gateway's targets once.
     by_gw = {gw_key: _list_all(ctrl.list_gateway_targets, gatewayIdentifier=gw_id)
              for gw_key, gw_id in gw_ids.items()}
@@ -310,7 +912,14 @@ def main():
 
     print(f"\n=== AWSops v2 AgentCore provisioner (region={region}) ===")
     gw_ids = ensure_gateways(ctrl, ac)
-    ensure_targets(ctrl, ac, gw_ids)
+    # Load the ADR-017 credentials secret ONCE and share it with both calls below — also lets
+    # ensure_targets know which legacy lambda targets ensure_mcp_server_targets owns this run (see
+    # ensure_targets' skip_names docstring: without this a legacy target flaps every run).
+    secrets, secrets_read_ok = _load_official_mcp_secret(ac)
+    legacy_skip = {catalog.legacy_target_name(pk) for pk in _cutover_preset_keys(ac, secrets, secrets_read_ok)}
+    legacy_skip.discard(None)
+    ensure_targets(ctrl, ac, gw_ids, skip_names=legacy_skip)
+    ensure_mcp_server_targets(ctrl, ac, gw_ids, secrets=secrets, secrets_read_ok=secrets_read_ok)  # ADR-017 curated official-vendor MCP presets
     prune_moved_targets(ctrl, gw_ids)  # remove split-brain orphans after a catalog gateway move
     memory_id = ensure_memory(ctrl)
     interpreter_id = ensure_interpreter(ctrl)

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import PageHeader from '@/components/ui/PageHeader';
 import { useI18n } from '@/components/shell/LanguageProvider';
+import { INTEGRATION_KINDS_EGRESS, INTEGRATION_KINDS_INGRESS, INTEGRATION_TRANSPORTS } from '@/lib/integration-validation';
 
 interface AgentRow { id: number; name: string; description: string; gateway: string; tier: string; enabled: boolean; version: number; skills: Array<{ name: string }>; agentType?: string; gateways?: string[]; }
 interface SkillRow { id: number; name: string; description: string; tier: string; enabled: boolean; version: number; agentTypes?: string[]; }
@@ -11,10 +12,12 @@ interface IntegrationRow { id: number; name: string; kind: string; direction: st
 const GATEWAYS = ['network', 'container', 'iac', 'data', 'security', 'monitoring', 'cost', 'ops'];
 // ADR-039 agent-type lifecycle roles (mirrors web/lib/skill-validation.ts AGENT_TYPES).
 const AGENT_TYPES = ['generic', 'on_demand', 'triage', 'rca', 'mitigation', 'evaluation'];
-// ADR-039 P2 — integration kinds (mirror web/lib/integration-validation.ts).
-const INTEG_KINDS_EGRESS = ['grafana', 'datadog', 'splunk', 'prometheus', 'newrelic', 'notion', 'confluence', 'jira', 'servicenow', 'slack', 'github', 'gitlab', 'custom_mcp'];
-const INTEG_KINDS_INGRESS = ['cloudwatch_sns', 'alertmanager', 'grafana_alert', 'pagerduty', 'datadog_monitor', 'generic_webhook'];
-const INTEG_TRANSPORTS = ['sigv4', 'oauth_client_credentials', 'oauth_3lo', 'api_key'];
+// ADR-039 P2 — integration kinds. Imported (not re-hardcoded) so this dropdown can't drift from the
+// migration's integrations_kind_check like it did before (missing clickhouse/mimir/loki/tempo/
+// jaeger/dynatrace) — see web/lib/integration-validation.ts for the source of truth.
+const INTEG_KINDS_EGRESS = INTEGRATION_KINDS_EGRESS;
+const INTEG_KINDS_INGRESS = INTEGRATION_KINDS_INGRESS;
+const INTEG_TRANSPORTS = INTEGRATION_TRANSPORTS;
 // NOTE: curated read connectors (Prometheus/Loki/…/Notion credential cards) moved to the Integrations
 // hub (/integrations) — Datasources tab + Connectors tab. This page keeps Agents/Skills/Agent-Space +
 // the advanced custom-integration registration.
