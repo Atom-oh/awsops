@@ -4,13 +4,6 @@
 
 # Lambda Module (AgentCore MCP tools)
 
-> **`make migrate` runs BEFORE `make agentcore`.** migrate creates the least-privilege
-> `awsops_sql_reader` DB role and syncs its password; agentcore does neither. Skipping it leaves
-> `execute_sql` and `inventory-read` failing Data API auth. The read-only boundary for those two
-> tools is that DB role (SELECT on views in the `sql_reader` schema, no privilege in `public`,
-> JSONB exposed only as named-key projections) — not the lexical SQL guard, which is
-> defence-in-depth. See `docs/runbooks/agent-sql-reader.md`.
-
 ## What this is
 Lambda functions (one per AWS service area) plus a shared `cross_account.py`. Each Lambda implements the MCP tools exposed by an AgentCore Gateway. Gateways are role-based: network, container, iac, data, security, monitoring, cost, ops (+ v2 adds `external-obs`). `create_targets.py` registers every Gateway Target via boto3.
 

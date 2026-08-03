@@ -4,13 +4,6 @@
 
 # AWSops — Reviewer Context
 
-> **`make migrate` runs BEFORE `make agentcore`.** migrate creates the least-privilege
-> `awsops_sql_reader` DB role and syncs its password; agentcore does neither. Skipping it leaves
-> `execute_sql` and `inventory-read` failing Data API auth. The read-only boundary for those two
-> tools is that DB role (SELECT on views in the `sql_reader` schema, no privilege in `public`,
-> JSONB exposed only as named-key projections) — not the lexical SQL guard, which is
-> defence-in-depth. See `docs/runbooks/agent-sql-reader.md`.
-
 Branch `feat/v2-architecture-design`. Reviews on this branch target **v2** (Terraform · ECS Fargate · Aurora · AgentCore agents · async workers). v1.8.0 (`src/`, CDK/EC2/Steampipe, `/awsops` basePath) is **being decommissioned in stages per ADR-016** (`docs/runbooks/v1-decommission.md`) — v1 rules do NOT apply to v2. A diff under `web/`, `terraform/v2/`, `agent/`, or `scripts/v2/` is v2; a diff under `src/` is v1.
 
 ## ⛔ Product posture (current truth = `docs/decisions/BASELINE.md`)
