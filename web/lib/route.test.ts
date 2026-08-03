@@ -23,6 +23,38 @@ describe('pickGateway', () => {
   it('ignores a pin that is not a known section', () => {
     expect(pickGateway('이번 달 비용', 'bogus')).toBe('cost');
   });
+  // Regression (2026-07-31 kiro review MAJOR finding): Grafana has NO legacy lambda target on
+  // any gateway — its only tools are the ADR-017 external-obs mcpServer preset. Before this fix
+  // 'grafana' routed to 'monitoring', which has no Grafana tools at all (dead-end route).
+  it('routes grafana (and other legacy-target-less ADR-017 presets) to observability/external-obs', () => {
+    expect(pickGateway('grafana 대시보드 좀 보여줘')).toBe('observability');
+    expect(pickGateway('check the datadog dashboard')).toBe('observability');
+    expect(pickGateway('dynatrace 확인해줘')).toBe('observability'); // avoid Korean '지표' which is monitoring's own keyword
+  });
+  // Regression (2026-07-31 round-3 review MAJOR): round-2 moved tempo/trace to observability to
+  // avoid a POST-cutover dead-end, but official_mcp_enabled defaults to false, so that just made
+  // the dead-end the DEFAULT state for every deployment that never opts into ADR-017 presets.
+  // route.ts has no runtime signal to pick dynamically, so it routes to the legacy target's home
+  // (monitoring) — the actual default/most-common state — and the cutover playbook (ADR-017) must
+  // move this keyword when official_mcp_enabled is actually flipped for tempo.
+  it('routes tempo/trace to monitoring (matches the default/pre-cutover state; legacy tempo-mcp-target lives there)', () => {
+    expect(pickGateway('tempo trace 조회')).toBe('monitoring');
+    expect(pickGateway('트레이스 검색')).toBe('monitoring');
+  });
+  // Regression (2026-07-31 round-2 review MAJOR): rule ORDER previously let monitoring's generic
+  // 'metric'/'지표' keyword steal a vendor-named query before the vendor-aware observability rule
+  // got a chance. Vendor names must win regardless of RULES array position of generic keywords.
+  it('routes vendor-named queries to observability, not generic monitoring', () => {
+    expect(pickGateway('Datadog metric 확인')).toBe('observability');
+    expect(pickGateway('Grafana 지표 좀 보여줘')).toBe('observability');
+  });
+  // Regression (2026-07-31 round-4 review MAJOR): the round-2 fix only moved the vendor rule above
+  // 'monitoring'; the generic 'data' rule (쿼리|database|...) still sat ABOVE it and kept stealing
+  // vendor-named queries. Vendor names now win over EVERY generic domain rule (rule index 0).
+  it('routes vendor-named queries to observability, not generic data', () => {
+    expect(pickGateway('ClickHouse 쿼리 느려')).toBe('observability');
+    expect(pickGateway('Datadog database latency')).toBe('observability');
+  });
 });
 
 describe('matchedSections', () => {

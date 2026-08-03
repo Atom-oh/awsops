@@ -350,6 +350,18 @@
     "message": "AWSops unified operations dashboard",
     "description": "Hero image alt text"
   },
+  "home.hero.glyph.network": {
+    "message": "network",
+    "description": "Hero glyph label: network"
+  },
+  "home.hero.glyph.cost": {
+    "message": "cost",
+    "description": "Hero glyph label: cost"
+  },
+  "home.hero.glyph.security": {
+    "message": "security",
+    "description": "Hero glyph label: security"
+  },
   "home.hero.ctaPrimary": {
     "message": "Start the guide",
     "description": "Hero primary CTA"

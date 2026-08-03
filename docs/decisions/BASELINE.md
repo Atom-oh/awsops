@@ -59,11 +59,13 @@
 | **GATED** | 외부 관측성 진단 수집 | `datasource_diagnosis_enabled` | governed egress collector(read), SSRF 방어 | ADR-007/ADR-008 |
 | **GATED(실험)** | 챗 에이전트 루프 — `AsyncAnthropicBedrock` 커스텀 루프(다크) | `ANTHROPIC_AGENT_LOOP_ENABLED` (+ per-request `payload.agentLoop` 오버라이드) | default OFF·dark. read-only·additive; Bedrock 경유(IAM/VPC/레지던시/비용귀속 보존, API키 無, 동일 global.* 프로파일+홈리전), 기존 게이트웨이 MCP 재사용(BYO-MCP 아님). 레버=도구 루프 디버깅성(지연 아님). **per-request `payload.agentLoop`('anthropic'\|'strands')가 env를 오버라이드** — BFF는 client-controlled `agentLoop`를 forward하지 않음(서버측 설정만; 불변식 유지 필수) | ADR-008/ADR-003 |
 | **GATED(owner-override 예외)** | 운영 자가치유: 호스트 자기 서비스 재배포(Aurora secret 회전 복구) | `secret_rotation_redeploy_enabled` | **ADR-005 freeze에 대한 명시적·날짜박힌 owner-override 예외**(오준석, 2026-07-01, PR #114 멀티-AI 패널 리뷰 거쳐 ratify — self-scoping 재해석이 아님). EventBridge(RotationSucceeded)→Lambda→`ecs:UpdateService` force-new-deployment **자기 web 서비스 한정**. IAM 1 ARN·secret-id fail-closed·default-off. ADR-005의 나머지(remediation/BYO-MCP/mutating tools)는 그대로 FROZEN — 이 예외는 이 좁은 케이스 하나만. CloudTrail trail 의존 | ADR-015 |
+| **GATED** | 큐레이션 공식 MCP 프리셋 (external-obs `mcpServer` target) | `official_mcp_enabled` | 벤더 공식 MCP만(Datadog/ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk/New Relic 등) — 엔드포인트는 `official_mcp_endpoints` map(데이터, 코드 아님, https만 허용), capability=read 고정. **현재 `do-not-enable`** — `mcpServer` 는 `listingMode=DEFAULT` 로 벤더 write 툴까지 노출하고 AWS 는 API_KEY 경로에 툴 상한 필드를 제공하지 않는다(BASELINE §1 은 외부 DATA write 를 거버넌스 하에서만 허용하므로 ADR 이 단독 면제할 수 없다). 강제 지점은 게이트웨이가 아니라 런타임 — `agent.py:get_all_tools()` 에서 프리셋별 ack 툴과 fail-closed 교집합(`select_integration_tools()` 와 동일 형태). 그 allowlist(벤더 문서 전사) + 자체호스팅 도달성 실측이 활성화 선행조건. **서버측 toolAllowlist 강제 없음** — 프리셋별 `official_mcp_read_only_ack[preset_key]`(기본 미설정=SKIP)로 운영자가 벤더측 read-only 컨트롤을 확인했음을 명시해야 provisioning된다. 미설정 프리셋은 SKIP. Prometheus/Mimir(공식 MCP 無)·Notion(hosted가 3LO 전용)은 자체 람다/기존 방식 유지. `custom_mcp`(임의 엔드포인트) 등록은 그대로 폐기 | ADR-017 |
 | **옵션(deferred)** | Neptune/그래프 substrate | — | Postgres-first 확정, 그래프 substrate는 후속 옵션 | legacy ADR-043 (deferred — MAPPING 참조) |
 
 > **주의 (2-티어 정밀):** 외부 DATA write 티어가 일률 OFF는 아니다 — `diagnosis_notify_enabled`(SNS 이메일, IAM 단일 토픽 스코프, NOT AWS-리소스 변경)는 **이미 LIVE**(거버넌스 충족). 광역 `integrations_write_enabled`만 OFF. (ADR-007/ADR-013)
 
 > **폐기(do-not-revive):** BYO-MCP(임의 형태 외부 MCP, ADR 구 031-P3) — 큐레이션 커넥터만 허용. (ADR-007)
+
 
 ---
 
@@ -74,7 +76,7 @@
 | ADR | 토픽 | 한 줄 | 6기둥 |
 |---|---|---|---|
 | [001](001-v2-foundation.md) | v2 파운데이션 | Terraform MSA·비공개 엣지·Aurora·thin-BFF·이중 ECR (CDK·라이브 Steampipe 폐기) | 운영우수성·안정성·비용 |
-| [002](002-auth-and-login.md) | 인증·로그인 | Cognito+Lambda@Edge RS256 + 인앱 `/login`(USER_PASSWORD_AUTH), Hosted UI 다크폴백 | 보안 |
+| [002](002-auth-and-login.md) | 인증·로그인 | Cognito+Lambda@Edge RS256 + 인앱 `/login`(USER_PASSWORD_AUTH), Hosted UI 다크폴백 + Aurora `session_revocations` 서버측 로그아웃 폐기(BFF-side, edge는 JWT-only) | 보안 |
 | [003](003-ai-agent-routing.md) | AI 에이전트 라우팅 | 하이브리드(정규식+Haiku 분류기) + 교차도메인 자동합성 (LIVE) | 운영우수성 |
 | [004](004-agentcore-gateways-runtime.md) | AgentCore 게이트웨이·런타임 | **9 게이트웨이 프로비저닝 / 9 섹션 에이전트 라우트** (external-obs 승격 2026-06-24: Prometheus+ClickHouse) + Memory + Code Interpreter. **§7(2026-07-31 amendment, 사실 기록): Aurora Data API agent Lambda는 master secret 대신 최소권한 `awsops_sql_reader`로 인증하고, `sql_reader` 스키마의 명시적 컬럼 VIEW에만 SELECT를 부여(`public`에는 table/column grant 0). 테이블 allowlist는 컬럼 단위 fail-open으로 `eks_registrations.auth`, 이어 `worker_jobs.task_token`(SFN capability token)을 누출해 폐기. host 계정 PostgreSQL 전용이며 권한 제거이므로 신규 capability 아님** | 운영우수성 |
 | [005](005-aws-mutation-autonomy-frozen.md) | AWS 변경·자율 **FROZEN** | do-not-enable; 재활성화=새 ADR+패널+owner-override | 보안·운영우수성 |
@@ -89,5 +91,6 @@
 | [014](014-cross-cutting-cache-i18n-cdn.md) | 횡단: 캐시·i18n·CDN | 프리워밍·i18n(ko/en/zh/ja, UI copy only, amended 2026-07-19)·CloudFront CACHING_DISABLED | 성능효율성 |
 | [015](015-operational-self-healing.md) | 운영 자가치유 | 호스트 자기 서비스 force-new-deployment 자율 복구(Aurora secret 회전), default-off·IAM 1 ARN·secret-id fail-closed; **ADR-005 불완화**(별개 범주) | 안정성·보안 |
 | [016](016-v1-decommission.md) | v1 레거시 폐기 | 5단계 폐기(데이터확보→도메인컷오버→정지/유예→삭제→코드정리) + `awsops.atomai.click` v2 컷오버; owner 지시, ADR-005 무관(수동 작업) | 비용최적화·운영우수성 |
+| [017](017-curated-official-mcp-presets.md) | 큐레이션 공식 MCP 프리셋 | external-obs `mcpServer` target으로 벤더 공식 MCP(Datadog/ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk 등) 등록; 자체 람다 유지보수 이관, capability=read 고정, `custom_mcp`(임의 BYO) 폐기 불변. **현재 `do-not-enable`** — 런타임 툴 allowlist 미구현(§2 GATED 표) | 운영우수성·보안 |
 
 새 ADR 추가: 최고번호+1, single Status, **같은 PR에서 이 §3(또는 §2) 갱신 필수**(anti-drift, §1).

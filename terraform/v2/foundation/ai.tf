@@ -57,9 +57,58 @@ variable "istio_vpc_enabled" {
   default     = false
 }
 
+# ADR-017 — curated official-vendor MCP presets registered as external-obs `mcpServer` gateway
+# targets (scripts/v2/agentcore/provision.py), replacing the hand-written Lambda for kinds that
+# ship a vendor-official MCP server (Datadog/ClickHouse/Tempo/Jaeger/Grafana/Dynatrace/Splunk/...).
+# Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0, plan = No changes).
+variable "official_mcp_enabled" {
+  type        = bool
+  description = "Register curated official-vendor MCP servers (ADR-017) as external-obs gateway mcpServer targets. Requires agentcore_enabled + integrations_enabled. Default false → no-op ($0)."
+  default     = false
+}
+
+# preset_key (matches scripts/v2/agentcore/catalog.py MCP_SERVER_TARGETS) -> https endpoint. Only
+# presets with an entry here are provisioned; the rest SKIP (same convention as agent_lambdas +
+# missing lambda_arn). Deployment-specific — set in terraform.tfvars, not hardcoded here.
+variable "official_mcp_endpoints" {
+  type        = map(string)
+  description = "preset_key -> MCP server https endpoint (ADR-017). Deployment-specific; unset presets SKIP. e.g. { datadog = \"https://mcp.datadoghq.com/v1/mcp\" }."
+  default     = {}
+  # kiro review MAJOR finding, 2026-07-31: without this, an http:// typo would send the bearer
+  # token in plaintext, and an arbitrary URL is a de facto BYO-MCP / SSRF-adjacent escape hatch.
+  # provision.py additionally re-checks scheme (belt-and-suspenders, since a tfvars change doesn't
+  # require a plan/apply of THIS validation to take effect on an existing endpoint value).
+  validation {
+    condition     = alltrue([for v in values(var.official_mcp_endpoints) : can(regex("^https://", v))])
+    error_message = "every official_mcp_endpoints value must be an https:// URL (ADR-017 presets carry a bearer/API-key credential — plaintext http would leak it)."
+  }
+}
+
+# ADR-017 CRITICAL gate (kiro review, 2026-07-31): provision.py has no server-side tool allowlist
+# for mcpServer targets (unlike the Lambda targets' toolSchema.inlinePayload) — it exposes 100% of
+# whatever the vendor's remote MCP server advertises. Each preset's read_only_note
+# (scripts/v2/agentcore/catalog.py MCP_SERVER_TARGETS) describes a VENDOR-SIDE control (RBAC scope,
+# --disable-write, etc) that provision.py cannot verify from the control plane. This var is the
+# explicit, per-preset, dated operator acknowledgment that the vendor-side control was actually
+# checked before flipping it on — default {} means NOTHING provisions (fail-closed).
+#
+# type = map(string), NOT map(bool) (round-3 review MAJOR, 2026-07-31 fix): a bare bool acks the
+# preset_key forever, independent of WHICH endpoint was reviewed — an operator could ack once, then
+# later repoint official_mcp_endpoints[preset_key] at any other URL without re-acking, silently
+# sending the stored mcp:<preset_key> credential to an unreviewed endpoint. The ack value must be
+# the exact endpoint string that was reviewed; provision.py treats the preset as un-acked (fail-
+# closed, same as never-acked) whenever the current official_mcp_endpoints[preset_key] value
+# differs from the acked string — so changing the endpoint requires a matching re-ack.
+variable "official_mcp_read_only_ack" {
+  type        = map(string)
+  description = "preset_key -> the exact official_mcp_endpoints[preset_key] URL the operator reviewed and verified the read-only vendor-side control (catalog.py read_only_note) against (ADR-017). Must equal the CURRENT endpoint value or the preset is treated as un-acked (fail-closed, retires any live target) — changing the endpoint requires re-acking with the new URL. Default {} = nothing provisions."
+  default     = {}
+}
+
 locals {
-  ac_count    = var.agentcore_enabled ? 1 : 0
-  integ_count = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
+  ac_count           = var.agentcore_enabled ? 1 : 0
+  integ_count        = var.agentcore_enabled && var.integrations_enabled ? 1 : 0
+  official_mcp_count = var.official_mcp_enabled && local.integ_count > 0 ? 1 : 0
   # AgentCore runtime name — a FIXED product-level constant (like v1's `awsops_agent`), NOT
   # project-derived. MUST stay in sync with RUNTIME_NAME in scripts/v2/agentcore/provision.py
   # ("awsops_v2_agent"); the provisioner appends a control-plane-generated `-<id>` suffix. IAM
@@ -818,6 +867,20 @@ output "agentcore" {
     ssm_runtime_arn    = aws_ssm_parameter.agentcore_runtime_arn[0].name
     ssm_interpreter_id = aws_ssm_parameter.agentcore_interpreter_id[0].name
     ssm_memory_id      = aws_ssm_parameter.agentcore_memory_id[0].name
+    # ADR-017 — curated official-MCP preset endpoints (empty map when official_mcp_enabled=false).
+    # provision.py SKIPs any catalog.MCP_SERVER_TARGETS preset whose key is missing here.
+    official_mcp_endpoints = local.official_mcp_count > 0 ? var.official_mcp_endpoints : {}
+    # ADR-017 CRITICAL gate — map(string), NOT bools: the value must be the EXACT
+    # official_mcp_endpoints[preset_key] URL the operator reviewed. provision.py refuses to
+    # provision (and retires any live target for) every preset whose ack is missing or != the
+    # current endpoint, regardless of credential. See var.official_mcp_read_only_ack above.
+    official_mcp_read_only_ack = local.official_mcp_count > 0 ? var.official_mcp_read_only_ack : {}
+    # Same secret the web BFF writes preset credentials into (web/lib/integration-credentials.ts,
+    # namespaced key = "mcp:<preset_key>", e.g. secret["mcp:datadog"] — NOT the plain preset_key,
+    # which is a separate legacy datasource-connector kind-mirror) — provision.py reads the
+    # namespaced key to create/refresh each preset's AgentCore Identity API-key credential
+    # provider. null when integrations_enabled=false.
+    integrations_secret_name = local.integ_count > 0 ? aws_secretsmanager_secret.integrations[0].name : null
     # Runtime VPC mode (Pattern 2): ENIs in our private subnets (apne2-az1/az2, AgentCore-supported)
     # so section agents can reach private resources (Aurora/EKS) directly. Reuse the service SG —
     # the Aurora SG already allows it (C8), and its egress→NAT lets the runtime still reach

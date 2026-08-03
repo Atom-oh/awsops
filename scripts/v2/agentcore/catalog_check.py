@@ -6,6 +6,8 @@ Asserts the invariants for scripts/v2/agentcore/catalog.py:
   - every tool has a non-empty `name` and `description`;
   - every tool `inputSchema` is a dict with type == 'object';
   - NO tool carries `target_account_id` (provision.py injects it);
+  - (ADR-017) every MCP_SERVER_TARGETS `gateway` is a known GATEWAYS short-key, `preset_key` is
+    unique, and `auth.mode` is one of "api_key"/"none" with the fields that mode requires;
   - prints `OK` + the sorted set of lambda_keys (for cross-checking ai.tf agent_lambdas).
 
 Exit non-zero on any failure.
@@ -64,6 +66,33 @@ for lk in lambda_keys:
     if lk in seen:
         errors.append(f"duplicate lambda_key '{lk}' across TARGETS")
     seen.add(lk)
+
+# ADR-017 — MCP_SERVER_TARGETS invariants.
+MCP_SERVER_TARGETS = catalog.MCP_SERVER_TARGETS
+seen_preset_keys = set()
+for target_name, entry in MCP_SERVER_TARGETS.items():
+    gw = entry.get("gateway")
+    if gw not in GATEWAYS:
+        errors.append(f"{target_name}: gateway '{gw}' not in GATEWAYS {sorted(GATEWAYS)}")
+
+    preset_key = entry.get("preset_key")
+    if not preset_key:
+        errors.append(f"{target_name}: missing/empty preset_key")
+    elif preset_key in seen_preset_keys:
+        errors.append(f"duplicate preset_key '{preset_key}' across MCP_SERVER_TARGETS")
+    else:
+        seen_preset_keys.add(preset_key)
+
+    if not entry.get("description"):
+        errors.append(f"{target_name}: missing/empty description")
+
+    auth = entry.get("auth")
+    if not isinstance(auth, dict) or auth.get("mode") not in ("api_key", "none"):
+        errors.append(f"{target_name}: auth.mode must be 'api_key' or 'none'")
+    elif auth["mode"] == "api_key":
+        for field in ("credential_location", "credential_parameter_name"):
+            if not auth.get(field):
+                errors.append(f"{target_name}: auth.mode=api_key requires '{field}'")
 
 if errors:
     print("FAIL")

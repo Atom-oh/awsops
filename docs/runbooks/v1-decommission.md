@@ -261,6 +261,21 @@ cd web && npx vitest run && npm run build && cd ..
 terraform -chdir=terraform/v2/foundation validate && terraform -chdir=terraform/v2/foundation plan   # No changes 기대
 ```
 
+## Phase 6 — docs-site v1 콘텐츠 아카이브 표기 (진행 중) / docs-site v1 content archival (in progress)
+
+Phase 5의 코드 삭제와 별개로, `docs-site/docs/**`(및 `i18n/{en,ja,zh}/**` 미러)에는 여전히 v1 시절 절차·설정을 **현재(current) 가이드**로 서술하는 페이지가 남아 있다. PR #193(ja/zh 로케일 추가)에서 `compute/eks-auth.md`(EC2+Steampipe 인증 → 실제 v2는 `eks.tf`의 web task role Access Entry)와 `compute/ecs-container-cost.md`(`data/config.json` `fargatePricing`, 구버전 단가 → 실제 v2는 `inventory-derived.ts`)에 4개 로케일 전체 `:::caution v1 아카이브 문서` 배너를 적용한 것이 이 표기 패턴의 시작점이다.
+
+**미완료 — 최소 10개 이상의 페이지가 추정됨**(오디팅 미완). 최우선 후보: `getting-started/deployment.md`(배포 절차 자체가 v1/v2 혼재 가능성 높음). 페이지를 발견할 때마다 이 표에 추가하고 배너를 적용한다:
+
+| 페이지 | 상태 |
+|---|---|
+| `compute/eks-auth.md` | ✅ 배너 적용 (PR #193) |
+| `compute/ecs-container-cost.md` | ✅ 배너 적용 (PR #193) |
+| `getting-started/deployment.md` | ⬜ 미확인 |
+| (나머지 v1 패턴 페이지) | ⬜ 미확인 |
+
+완료 조건: 전체 `docs/**` 오디팅 후 이 표가 ⬜ 없이 채워지고, `data/config.json`·EC2 SSH·Steampipe kubernetes 플러그인 등 v1 전용 문자열을 참조하는 모든 `current` 페이지가 배너 또는 재작성으로 처리됨.
+
 ## 관련 ADR / Related ADR
 - ADR-016 (v1 decommission)
 - ADR-011 (multi-account — spoke cross-account role 보존 근거)
