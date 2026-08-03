@@ -104,11 +104,11 @@ describe('POST /api/diagnosis', () => {
     expect(j.report_id).toBe(42);
     expect(j.tier).toBe('mid');
     // create BEFORE enqueue (FK-safe), with NULL fk; link AFTER enqueue with the canonical job_id.
-    expect(createReport).toHaveBeenCalledWith('mid', 'u@x.io', 'sonnet');
+    expect(createReport).toHaveBeenCalledWith('mid', 'u', 'sonnet');
     expect(enqueueJob).toHaveBeenCalledWith(
       'report',
-      expect.objectContaining({ tier: 'mid', model: 'sonnet', requested_by: 'u@x.io', report_id: 42 }),
-      expect.objectContaining({ idempotencyKey: expect.stringContaining('report:u@x.io:mid:sonnet:') }),
+      expect.objectContaining({ tier: 'mid', model: 'sonnet', requested_by: 'u', report_id: 42 }),
+      expect.objectContaining({ idempotencyKey: expect.stringContaining('report:u:mid:sonnet:') }),
     );
     expect(linkReportJob).toHaveBeenCalledWith(42, 'j1');
   });
@@ -119,19 +119,19 @@ describe('POST /api/diagnosis', () => {
     const j = await r.json();
     expect(j.tier).toBe('deep');
     expect(j.model).toBe('sonnet');
-    expect(createReport).toHaveBeenCalledWith('deep', 'u@x.io', 'sonnet');
+    expect(createReport).toHaveBeenCalledWith('deep', 'u', 'sonnet');
   });
 
   it('honors model=opus only on the deep tier', async () => {
     (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
     await POST(req({ tier: 'deep', model: 'opus' }));
-    expect(createReport).toHaveBeenCalledWith('deep', 'u@x.io', 'opus');
+    expect(createReport).toHaveBeenCalledWith('deep', 'u', 'opus');
   });
 
   it('pins model to sonnet when opus is requested on a non-deep tier', async () => {
     (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
     await POST(req({ tier: 'mid', model: 'opus' }));
-    expect(createReport).toHaveBeenCalledWith('mid', 'u@x.io', 'sonnet');
+    expect(createReport).toHaveBeenCalledWith('mid', 'u', 'sonnet');
   });
 
   it('returns the existing report on idempotency hit (deduped)', async () => {
@@ -154,7 +154,7 @@ describe('POST /api/diagnosis', () => {
   it('coerces an unknown tier to mid', async () => {
     (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
     await POST(req({ tier: 'bogus' }));
-    expect(createReport).toHaveBeenCalledWith('mid', 'u@x.io', 'sonnet');
+    expect(createReport).toHaveBeenCalledWith('mid', 'u', 'sonnet');
   });
 
   it('503 + no work when AWS_ACCOUNT_ID is unset (fails fast, no empty account to the LLM)', async () => {

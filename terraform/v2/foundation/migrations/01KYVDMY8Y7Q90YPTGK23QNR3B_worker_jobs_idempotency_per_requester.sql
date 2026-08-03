@@ -8,6 +8,10 @@
 -- requester — surfacing as "idempotency conflict but no existing row" (a 500 / failed report for
 -- the victim). Round-2 pentest-remediation MAJOR: cross-user idempotency-key DoS.
 --
+-- (Comment corrected: an earlier revision said a cross-requester collision surfaces as an uncaught
+-- 23505 / 500. It does not any more — the same PR made lib/jobs.ts catch that code, fall back to the
+-- requester-scoped lookup, and return a clean 409 when no row of the caller's own turns up.)
+--
 -- Fix: scope the uniqueness by requester instead of globally, via two partial unique indexes.
 -- requested_by IS NULL rows (internal-only enqueues with no end-user principal, e.g. the reaper)
 -- have nothing to scope by, and must stay deduped globally amongst themselves exactly like before,

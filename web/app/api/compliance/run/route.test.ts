@@ -7,6 +7,10 @@ vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query
 vi.mock('@/lib/jobs', () => ({
   enqueueJob: (...a: unknown[]) => enqueueJob(...a),
   EnqueueDeliveryError: class extends Error {},
+  // The route imports this too (the 409 path). The two other test files that mock @/lib/jobs got
+  // the shim; this one was missed, and vitest throws on a missing named export — every test in this
+  // file would fail (PR #195 review MAJOR).
+  IdempotencyKeyCollisionError: class extends Error {},
 }));
 const req = (body: unknown) =>
   new Request('http://x/api/compliance/run', {

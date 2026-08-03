@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   if (typeof benchmark !== 'string' || !ALLOWED.has(benchmark)) {
     return NextResponse.json({ message: `unknown benchmark; allowed: ${[...ALLOWED].join(', ')}` }, { status: 400 });
   }
-  const requestedBy = (user as { email?: string; sub?: string }).email || (user as { sub?: string }).sub || 'unknown';
+  const requestedBy = user.sub;   // immutable ownership key — see the note in app/api/jobs/route.ts
 
   // Account scoping (diagnosis-route precedent): absent/'' → 'all' (aggregator — every account
   // merged, the previous implicit behavior); a 12-digit id must be a known ENABLED account (host

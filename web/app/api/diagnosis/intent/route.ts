@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
   }
 
   const action = String(body?.action ?? '');
-  const createdBy = identity(user);
+  const createdBy = user.sub;   // immutable ownership key — see the note in app/api/jobs/route.ts
 
   if (action === 'propose') {
     const candidates = await proposeCandidates(createdBy);

@@ -65,7 +65,14 @@ export async function POST(req: NextRequest) {
   // ledger-write failure → 500; SQS delivery failure after the row is durably 'queued' → 202 with
   // enqueue:'failed' (the client can poll; a redrive/reaper recovers).
   try {
-    const requestedBy = identity(user);
+    // PR #195 review MAJOR (4 models, three lenses): ownership must not hang off a MUTABLE
+    // attribute. Cognito has username_attributes = ["email"], so an email change leaves the old
+    // email-keyed rows matching neither key — list gone, detail 403, permanently orphaned — and a
+    // reused address lets a new sub reach the previous holder's rows. New writes therefore record
+    // the immutable sub. matchesIdentity() still accepts identity(user), so rows written before
+    // this stay readable by their owner; converging those rows (backfill + retiring the email
+    // branch) is the follow-up, PR #203.
+    const requestedBy = user.sub;
     // round-7 review MAJOR: this route accepts a caller-supplied idempotency_key, and the legacy
     // global UNIQUE(idempotency_key) is still in place during Phase 1 — so an authenticated
     // attacker could squat a *victim's* key and deny them service. The diagnosis keys are

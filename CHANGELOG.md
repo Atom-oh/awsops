@@ -470,6 +470,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 보안
 
+- 소유권 검증이 jobs 뿐 아니라 **진단·컴플라이언스 read 경로**에도 적용된다: `GET /api/diagnosis`(목록),
+  `GET /api/diagnosis/[id]`, `GET /api/diagnosis/[id]/download`, `GET /api/compliance/runs`(목록),
+  `GET /api/compliance/runs/[id]` 전부 owner-or-admin 게이트를 통과해야 한다. 이전에는 인증된 사용자
+  누구나 **다른 사용자의 진단 리포트를 열람·다운로드**하고 다른 사용자의 CIS 컴플라이언스 실행 결과를
+  읽을 수 있었다 (EN 섹션에만 있던 항목 — KO/EN 대칭 규약 위반이라 보충)
 - `POST /api/jobs`에 인증 요구 + `GET /api/jobs`(`/[id]`)에 소유권 검증 추가. 범용 `report`/`compliance`
   잡 타입은 허용 목록에서 완전히 제거 — 해당 타입은 클라이언트가 넘긴 `report_id`/`run_id`/`requested_by`를
   소유권 검증 없이 신뢰하므로, 범용 라우트로 도달 가능한 상태는 cross-user IDOR 쓰기였음. 이제

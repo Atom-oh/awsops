@@ -65,25 +65,25 @@ export async function POST(req: Request) {
       if (rows.length > 0) { account = requested; scope = requested; }
     } catch { /* fall back to host */ }
   }
-  const email = identity(user);
+  const owner = user.sub;   // immutable ownership key — see the note in app/api/jobs/route.ts
 
   // [GATE-FIX R2 CRITICAL] Idempotency-FIRST → create the report with NULL fk → enqueue (inserts
   // worker_jobs) → LINK. The FK is only set once worker_jobs(job_id) exists.
   const hour = new Date().toISOString().slice(0, 13);
-  const key = `report:${email}:${tier}:${model}:${scope}:${hour}`;
+  const key = `report:${owner}:${tier}:${model}:${scope}:${hour}`;
 
   const existing = await reportForIdempotencyKey(key);
   if (existing) {
     return NextResponse.json({ report_id: existing, tier, model, deduped: true }, { status: 202 });
   }
 
-  const reportId = await createReport(tier, email, model); // worker_job_id = NULL (FK-safe)
+  const reportId = await createReport(tier, owner, model); // worker_job_id = NULL (FK-safe)
   let job: { job_id: string; status: string };
   try {
     job = await enqueueJob(
       'report',
-      { account, scope, tier, model, requested_by: email, report_id: reportId },
-      { idempotencyKey: key, requestedBy: email },
+      { account, scope, tier, model, requested_by: owner, report_id: reportId },
+      { idempotencyKey: key, requestedBy: owner },
     );
   } catch (e) {
     await markReportFailed(reportId, 'enqueue failed'); // no orphan running row

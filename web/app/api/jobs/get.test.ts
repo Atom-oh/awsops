@@ -88,7 +88,7 @@ describe('POST /api/jobs', () => {
     const { POST } = await import('./route');
     const res = await POST(postReq({ type: 'noop' }));
     expect(res.status).toBe(202);
-    expect(enqueueJob.mock.calls[0][2]).toMatchObject({ requestedBy: 'u@x.io' });
+    expect(enqueueJob.mock.calls[0][2]).toMatchObject({ requestedBy: 'u' });
   });
   // round-6 review MAJOR: a cross-requester idempotency_key collision on the legacy global
   // UNIQUE(idempotency_key) constraint (still present alongside the new per-requester partial
@@ -117,7 +117,7 @@ describe('POST /api/jobs', () => {
     // Must NOT reach the ledger as the victim's key...
     expect(passedKey).not.toBe(victimKey);
     // ...and must be scoped to the attacker's own identity instead.
-    expect(passedKey).toBe(`u:attacker@x.io:${victimKey}`);
+    expect(passedKey).toBe(`u:attacker-sub:${victimKey}`);
   });
 
   it('leaves idempotencyKey null when the caller supplies none', async () => {

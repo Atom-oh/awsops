@@ -130,7 +130,13 @@ export async function enqueueJob(
     // as a raw 23505 instead of being caught by DO NOTHING. Fall through to the same
     // requester-scoped recovery lookup the named-arbiter conflict path uses below — `ins` stays
     // null, so the `!ins` branch runs findOwnJob() for us.
-    if ((e as { code?: string })?.code !== '23505') throw e;
+    // Narrow to the idempotency constraint. A 23505 from worker_jobs_pkey (a duplicate caller-
+    // supplied jobId) is a different failure and must not be reported as an idempotency conflict
+    // (review MINOR). Unnamed 23505s still take the recovery path — the legacy global constraint is
+    // the one we are catching and older Postgres error payloads do not always carry `constraint`.
+    const err = e as { code?: string; constraint?: string };
+    if (err?.code !== '23505') throw e;
+    if (err.constraint && !err.constraint.includes('idempotency_key')) throw e;
   }
   if (ins && ins.rows.length > 0) {
     jobId = ins.rows[0].job_id;
