@@ -136,14 +136,25 @@ describe('runSteampipeQuery — guard + row cap (pg mocked)', () => {
 });
 
 describe('steampipeAvailable — probe + cache', () => {
+  const ORIGINAL_FLAG = process.env.STEAMPIPE_ENABLED;
+  afterEach(() => { process.env.STEAMPIPE_ENABLED = ORIGINAL_FLAG; });
+
   it('true when SELECT 1 succeeds, cached (no second probe)', async () => {
+    process.env.STEAMPIPE_ENABLED = 'true';
     queryMock.mockResolvedValue({ rows: [{ '?column?': 1 }] });
     expect(await steampipeAvailable()).toBe(true);
     expect(await steampipeAvailable()).toBe(true);
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
   it('false (not a throw) when the probe fails', async () => {
+    process.env.STEAMPIPE_ENABLED = 'true';
     queryMock.mockRejectedValue(new Error('ENOTFOUND steampipe.awsops-v2-stg.internal'));
     expect(await steampipeAvailable()).toBe(false);
+  });
+  it('false without touching the network when steampipe_enabled is off (unset)', async () => {
+    delete process.env.STEAMPIPE_ENABLED;
+    queryMock.mockResolvedValue({ rows: [{ '?column?': 1 }] });
+    expect(await steampipeAvailable()).toBe(false);
+    expect(queryMock).not.toHaveBeenCalled();
   });
 });

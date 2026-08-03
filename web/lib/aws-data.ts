@@ -105,8 +105,12 @@ export async function runSteampipeQuery(sql: string): Promise<SteampipeResult> {
 }
 
 /** Availability probe (SELECT 1) with a short cache. Covers 'secret missing' and 'service down'
- *  BEFORE the chat handler commits to the aws-data stream — the code-route fail-open pattern. */
+ *  BEFORE the chat handler commits to the aws-data stream — the code-route fail-open pattern.
+ *  Gated on STEAMPIPE_ENABLED (unset when steampipe_enabled=false — steampipe.tf provisions
+ *  NOTHING in that state, so a probe would just be a doomed connection attempt to a host that
+ *  doesn't exist): short-circuits to false without touching the network or the cache. */
 export async function steampipeAvailable(): Promise<boolean> {
+  if (!process.env.STEAMPIPE_ENABLED) return false;
   if (availCache && Date.now() - availCache.at < (availCache.ok ? AVAIL_OK_TTL_MS : AVAIL_FAIL_TTL_MS)) {
     return availCache.ok;
   }
