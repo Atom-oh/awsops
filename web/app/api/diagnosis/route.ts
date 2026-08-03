@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { verifyUser, identity, matchesIdentity } from '@/lib/auth';
+import { verifyUser, identity, matchesIdentity, ownerKeysForRead } from '@/lib/auth';
 import {
+  getReport,
   listReports,
   createReport,
   linkReportJob,
@@ -23,7 +24,7 @@ export async function GET(req: Request) {
   const me = identity(user); // pentest-remediation P2-1: match canMutateReport's `||`
   // PR #195 round-4 review MAJOR #1: also scope by the raw sub, so a legacy row (requested_by =
   // sub, written before the identity() switch) still shows up for its real owner.
-  const reports = await listReports(50, admin ? null : [me, user.sub]);
+  const reports = await listReports(50, admin ? null : ownerKeysForRead(user));
   return NextResponse.json({
     reports: reports.map((r) => ({ ...r, can_edit: admin || matchesIdentity(r.requested_by, user) })),
   });
@@ -116,6 +117,23 @@ export async function POST(req: Request) {
     ? rawLedgerId
     : null;
   if (ledgerReportId !== null && ledgerReportId !== reportId) {
+    // Is the ledger's report still there? reportForIdempotencyKey filters deleted_at, so it never
+    // sees a soft-deleted report and lets a same-key retry through to createReport — but
+    // findOwnJob() (lib/jobs.ts) matches worker_jobs purely on idempotency_key with no such filter,
+    // so it can still return the OLD job whose payload names the now-deleted report (PR #195 review
+    // MAJOR: deduped onto a deleted id → 202 with a report_id that 404s, for the rest of the hour
+    // bucket). Keeping our fresh row is not available either — enqueueJob already deduped, so no
+    // message carrying our report_id was ever sent and the worker will never render it. Say what is
+    // true instead of handing back a broken pointer.
+    const ledgerLive = await getReport(ledgerReportId);
+    if (!ledgerLive) {
+      await softDeleteReport(reportId);
+      return NextResponse.json({
+        status: 'error',
+        message: `the report this window already produced (${ledgerReportId}) was deleted; this `
+          + `${tier} diagnosis can be re-run once the hour bucket rolls over`,
+      }, { status: 409 });
+    }
     await softDeleteReport(reportId);   // never ran, never will — not a FAILED diagnosis
     return NextResponse.json(
       { job_id: job.job_id, report_id: ledgerReportId, tier, model, deduped: true }, { status: 202 });

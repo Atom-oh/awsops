@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifyUser, identity } from '@/lib/auth';
+import { verifyUser, ownerKeysForRead } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { getPool } from '@/lib/db';
 
@@ -22,7 +22,7 @@ export async function GET(req: Request) {
       ? await getPool().query(`SELECT ${cols} FROM compliance_runs ORDER BY started_at DESC LIMIT 50`)
       : await getPool().query(
           `SELECT ${cols} FROM compliance_runs WHERE requested_by = ANY($1) ORDER BY started_at DESC LIMIT 50`,
-          [[identity(user), user.sub]],
+          [[...ownerKeysForRead(user)]],
         );
     return NextResponse.json({ runs: r.rows });
   } catch (e) {

@@ -3,7 +3,11 @@ const verifyUser = vi.fn();
 const isAdmin = vi.fn();
 const query = vi.fn();
 const enqueueJob = vi.fn();
-vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a), identity: (u: any) => u.email || u.sub }));
+vi.mock('@/lib/auth', () => ({
+  verifyUser: (...a: unknown[]) => verifyUser(...a),
+  identity: (u: any) => u.email || u.sub,
+  ownerKeysForRead: (u: any) => (u.email ? [u.email, u.sub] : [u.sub]),
+}));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 vi.mock('@/lib/jobs', () => ({
@@ -35,7 +39,9 @@ describe('GET /api/jobs', () => {
     expect((await res.json()).jobs[0].job_id).toBe('j1');
     // non-admin caller: query must be scoped by requested_by, not the unfiltered ORDER BY-only form.
     expect(query.mock.calls[0][0]).toMatch(/WHERE requested_by = ANY\(\$1\)/);
-    expect(query.mock.calls[0][1]).toEqual([['u', 'u']]);
+    // A user with no email yields just the sub — ownerKeysForRead() adds the legacy email
+    // key only when there is one and only while LEGACY_EMAIL_OWNER_MATCH is on.
+    expect(query.mock.calls[0][1]).toEqual([['u']]);
   });
   // round-5 review MAJOR: jobs/[id] and listReports already fall back to the raw sub for legacy
   // rows; the LIST endpoint must too, or an owner can never discover the UUID to fetch it directly.

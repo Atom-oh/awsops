@@ -6,6 +6,7 @@ vi.mock('@/lib/auth', () => {
     verifyUser: vi.fn(),
     identity,
     matchesIdentity: (owner: any, u: any) => !!owner && (owner === identity(u) || owner === u.sub),
+    ownerKeysForRead: (u: any) => (u.email ? [u.email, u.sub] : [u.sub]),
   };
 });
 vi.mock('@/lib/diagnosis', () => ({
@@ -18,6 +19,7 @@ vi.mock('@/lib/diagnosis', () => ({
   reportForIdempotencyKey: vi.fn(async () => null),
   markReportFailed: vi.fn(async () => undefined),
   softDeleteReport: vi.fn(async () => undefined),
+  getReport: vi.fn(async () => ({ id: 7 })),
 }));
 vi.mock('@/lib/admin', () => ({ isAdmin: vi.fn(async () => false) }));
 vi.mock('@/lib/jobs', () => ({
@@ -33,6 +35,7 @@ import {
   reportForIdempotencyKey,
   markReportFailed,
   softDeleteReport,
+  getReport,
 } from '@/lib/diagnosis';
 import { enqueueJob } from '@/lib/jobs';
 import { GET, POST } from './route';
@@ -221,5 +224,38 @@ describe('POST /api/diagnosis — idempotency conflict must not strand the secon
     await POST(req({ tier: 'mid' }) as any);
     // Switching this to the sub created a rolling-deploy discontinuity for no benefit.
     expect((reportForIdempotencyKey as any).mock.calls[0][0]).toContain('report:u@x.io:');
+  });
+});
+
+// PR #195 review MAJOR: reportForIdempotencyKey filters deleted_at, so a soft-deleted report is
+// invisible to it — but findOwnJob() (lib/jobs.ts) matches worker_jobs purely on idempotency_key and
+// has no such filter, so a same-key retry can still dedupe onto the OLD job whose payload names the
+// now-deleted report. Deduping onto it returned 202 with an id that 404s on fetch, for the rest of
+// the hour bucket.
+describe('POST /api/diagnosis — the deduped-to report was deleted', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.AWS_ACCOUNT_ID = '123456789012';
+    (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    (reportForIdempotencyKey as any).mockResolvedValue(null);
+    (createReport as any).mockResolvedValue(42);
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 7 } });
+  });
+
+  it('409s instead of handing back a deleted report id', async () => {
+    (getReport as any).mockResolvedValue(null);           // 7 was soft-deleted
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    expect(res.status).toBe(409);
+    expect((await res.json()).message).toContain('was deleted');
+    expect(softDeleteReport).toHaveBeenCalledWith(42);    // no orphan running row
+  });
+
+  it('still dedupes normally when the ledger report is alive', async () => {
+    (getReport as any).mockResolvedValue({ id: 7 });
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    expect(res.status).toBe(202);
+    expect((await res.json())).toMatchObject({ report_id: 7, deduped: true });
   });
 });

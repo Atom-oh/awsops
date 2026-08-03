@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const verifyUser = vi.fn();
 const isAdmin = vi.fn();
 const query = vi.fn();
-vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a), identity: (u: any) => u.email || u.sub }));
+vi.mock('@/lib/auth', () => ({
+  verifyUser: (...a: unknown[]) => verifyUser(...a),
+  identity: (u: any) => u.email || u.sub,
+  ownerKeysForRead: (u: any) => (u.email ? [u.email, u.sub] : [u.sub]),
+}));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 const req = () => new Request('http://x/api/compliance/runs', { headers: { cookie: 'awsops_token=t' } });
@@ -22,7 +26,9 @@ describe('GET /api/compliance/runs', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).runs[0]).toMatchObject({ id: 2, benchmark: 'cis_v300' });
     expect(query.mock.calls[0][0]).toMatch(/WHERE requested_by = ANY\(\$1\)/);
-    expect(query.mock.calls[0][1]).toEqual([['u', 'u']]);
+    // A user with no email yields just the sub — ownerKeysForRead() adds the legacy email
+    // key only when there is one and only while LEGACY_EMAIL_OWNER_MATCH is on.
+    expect(query.mock.calls[0][1]).toEqual([['u']]);
   });
   // round-5 review MAJOR: same identity-OR-raw-sub fallback as /api/jobs list, so a legacy
   // sub-keyed run still shows up for its real owner.

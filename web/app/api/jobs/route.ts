@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
-import { verifyUser, identity } from '@/lib/auth';
+import { verifyUser, ownerKeysForRead } from '@/lib/auth';
 import { isAdmin } from '@/lib/admin';
 import { enqueueJob, EnqueueDeliveryError, IdempotencyKeyCollisionError } from '@/lib/jobs';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
@@ -126,7 +126,7 @@ export async function GET(req: NextRequest) {
       : await getPool().query(
           `SELECT job_id, type, status, runtime, error, created_at, updated_at
            FROM worker_jobs WHERE requested_by = ANY($1) ORDER BY created_at DESC LIMIT 50`,
-          [[identity(user), user.sub]],
+          [[...ownerKeysForRead(user)]],
         );
     return NextResponse.json({ jobs: r.rows });
   } catch (e) {
