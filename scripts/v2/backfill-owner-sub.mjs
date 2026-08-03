@@ -24,7 +24,10 @@
 //
 // So it does not guess. It emits a plan with the evidence it has, and an operator decides. Deleting
 // an entry from the plan is how you refuse it. Only entries present in the approved plan are applied,
-// and each is re-verified against the database at apply time.
+// and each is re-verified at apply time against BOTH the database (the rows still hold the planned
+// old value) and Cognito (the address still resolves to the planned sub, with a verified email).
+// Verifying only the database was the earlier gap: the plan records an operator's approval of
+// specific ROWS, not a standing guarantee about the IDENTITY behind an address.
 //
 // A second refusal, added after review (codex stop-gate): only users whose Cognito `email_verified`
 // is "true" are eligible at all. verifyUser() already refuses to honour an unverified email claim on
@@ -175,6 +178,29 @@ async function apply(client) {
   const parsed = JSON.parse(readFileSync(APPLY_FROM, 'utf8'));
   const entries = parsed.entries || [];
   if (entries.length === 0) die(`${APPLY_FROM} has no entries`);
+
+  // RE-CHECK COGNITO HERE, not just in plan() (codex stop-gate). The verified-email gate lived only
+  // in cognitoUsersByEmail(), which plan() calls — apply() trusted the plan file's from→to pairing
+  // outright. A plan written before that gate existed, or one whose addresses changed or lost
+  // verification in between, would have been applied anyway. The plan is an operator's *approval*
+  // of specific rows; it is not evidence that the identity behind an address is still the same one,
+  // and this is the step that cannot be undone.
+  const users = cognitoUsersByEmail();
+  if (users.size === 0) die('Cognito returned no users with a verified email — refusing to apply');
+  const rejected = [];
+  for (const e of entries) {
+    const hit = users.get(String(e.from).toLowerCase());
+    if (!hit) {
+      rejected.push(`${e.from} -> ${e.to}: no user holds this address with a VERIFIED email now`);
+    } else if (hit.sub !== e.to) {
+      rejected.push(`${e.from} -> ${e.to}: address now belongs to ${hit.sub}, not the planned sub`);
+    }
+  }
+  if (rejected.length > 0) {
+    console.error('\nREFUSING TO APPLY — the plan no longer matches Cognito:');
+    for (const r of rejected) console.error(`  ${r}`);
+    die('re-run the plan step and review the new plan; an ownership rewrite is not reversible');
+  }
 
   // Journal BEFORE writing, per row id — an UPDATE erases the old value, so a journal written
   // afterwards from in-memory counts cannot reverse a partial failure (PR #195 review MAJOR: the
