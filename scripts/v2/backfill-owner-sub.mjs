@@ -209,6 +209,9 @@ async function apply(client) {
   // lie, and the reverse ordering (journal after COMMIT) loses the record if the process dies between
   // the two. Stamping the outcome covers both.
   const journalPath = `${APPLY_FROM.replace(/\.json$/, '')}-applied.json`;
+  // `entries` gains a `changedIds` per entry once the UPDATEs run — that, not the planned `ids`, is
+  // the reversal scope (they differ when a row moved on since the plan). A `rolled-back` journal has
+  // them stripped, since nothing was changed.
   const journal = (status) => writeFileSync(
     journalPath, JSON.stringify({ startedFrom: APPLY_FROM, status, entries }, null, 2), { mode: 0o600 });
   journal('attempting');
@@ -233,13 +236,20 @@ async function apply(client) {
     for (const e of entries) {
       // Update exactly the planned rows: scoped to the ids AND still holding the planned old value,
       // so rows that changed since the plan are left alone.
+      // RETURNING the pk so the journal records the rows this run ACTUALLY changed, not the rows it
+      // planned to. The two differ whenever a row moved on since the plan (reported below as "left
+      // alone"), and a reversal scoped to the PLANNED ids could then overwrite a row this run never
+      // touched — one that happens to hold the same sub because something else set it (codex
+      // stop-gate). The journal's whole job is to be a reversal record, so it has to hold the real set.
       const r = await client.query(
         `UPDATE ${e.table} SET ${e.column} = $1
-          WHERE ${e.pk}::text = ANY($2::text[]) AND ${e.column} = $3`,
+          WHERE ${e.pk}::text = ANY($2::text[]) AND ${e.column} = $3
+          RETURNING ${e.pk}::text AS __changed_id`,
         [e.to, e.ids, e.from]);
-      total += r.rowCount;
-      const skipped = e.ids.length - r.rowCount;
-      applied.push(`${e.table}.${e.column}: ${e.from} -> ${e.to} (${r.rowCount}/${e.ids.length} rows` +
+      e.changedIds = r.rows.map((row) => row.__changed_id);
+      total += e.changedIds.length;
+      const skipped = e.ids.length - e.changedIds.length;
+      applied.push(`${e.table}.${e.column}: ${e.from} -> ${e.to} (${e.changedIds.length}/${e.ids.length} rows` +
         `${skipped ? `, ${skipped} changed since the plan — left alone` : ''})`);
     }
     await client.query('COMMIT');
@@ -251,6 +261,9 @@ async function apply(client) {
     // try, so a failing journal WRITE after a successful COMMIT rolled into this handler and recorded
     // `rolled-back` — telling the operator nothing changed when everything had).
     await client.query('ROLLBACK').catch(() => {});
+    // Drop any changedIds collected before the failure: the transaction rolled back, so those rows
+    // were NOT changed, and leaving them in a journal would read as a partial rewrite that happened.
+    for (const e of entries) delete e.changedIds;
     try { journal('rolled-back'); } catch { /* the message below is the real signal */ }
     console.error('\nROLLED BACK — nothing was rewritten:');
     console.error(`  ${err?.message || err}`);
@@ -272,15 +285,21 @@ async function apply(client) {
     console.error(`\nCOMMITTED, but the journal could not be written: ${err?.message || err}`);
     console.error(`The rewrite IS applied. Record it by hand from the plan, which is still on disk:`);
     console.error(`  ${APPLY_FROM}`);
-    console.error(`To reverse an entry, scope to that entry's OWN row ids — never to the sub:`);
+    console.error(`To reverse, scope to the rows this run ACTUALLY changed — never to the sub, and`);
+    console.error(`never to the planned ids (some may have been left alone):`);
     for (const e of entries) {
+      if (!e.changedIds?.length) {
+        console.error(`  ${e.table}.${e.column}: ${e.from} -> ${e.to} — 0 rows changed, nothing to reverse`);
+        continue;
+      }
       console.error(`  UPDATE ${e.table} SET ${e.column} = '${e.from}'`);
-      console.error(`    WHERE ${e.pk}::text = ANY(ARRAY[${e.ids.map((i) => `'${i}'`).join(',')}])`);
+      console.error(`    WHERE ${e.pk}::text = ANY(ARRAY[${e.changedIds.map((i) => `'${i}'`).join(',')}])`);
       console.error(`      AND ${e.column} = '${e.to}';`);
     }
-    console.error(`(A bare "WHERE ${'${column}'} = <sub>" would also revert rows that legitimately hold`);
-    console.error(` that sub — every post-cut-over write, plus any other plan entry mapping a`);
-    console.error(` different address to the same person. The ids are the only safe scope.)`);
+    console.error(`(A bare "WHERE <column> = <sub>" would also revert rows that legitimately hold that`);
+    console.error(` sub — every post-cut-over write, plus any other plan entry mapping a different`);
+    console.error(` address to the same person. The planned ids are wrong too: a planned row that was`);
+    console.error(` left alone may hold that sub for an unrelated reason. Only the changed ids are safe.)`);
   }
   for (const line of applied) console.log(line);
   console.log(`\nrewrote ${total} rows (one transaction, committed).`);
