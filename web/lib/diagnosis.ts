@@ -87,8 +87,12 @@ export async function getReport(id: number): Promise<DiagnosisReport | null> {
  * `ownerKeys` mirrors the READ path (ownerKeysForRead) so the lineage narrows to sub-only exactly
  * when LEGACY_EMAIL_OWNER_MATCH is turned off; matching the new key alone would silently drop the
  * baseline for every user whose earlier reports are still email-keyed, and `parent_report_id` is
- * stamped at INSERT so nothing recovers it afterwards. Empty keys or a null account narrow rather
- * than widen — no parent beats the wrong one.
+ * stamped at INSERT so nothing recovers it afterwards. Empty keys narrow (they fall back to
+ * `requestedBy`) — no parent beats the wrong one. A null `account` is the opposite: it drops the
+ * account predicate entirely, so the baseline may come from another account. That is the "account
+ * not applicable" case (the value is optional in the job payload), NOT a safe default — every
+ * caller that knows the account must pass it, and both current callers do (PR #203 review MINOR:
+ * this comment used to claim a null account narrowed too).
  */
 export async function createReport(
   tier: DiagnosisTier,

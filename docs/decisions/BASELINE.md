@@ -52,7 +52,7 @@
 | 상태 | 항목 | flag | 켜는 조건 / 비고 | 근거 ADR |
 |---|---|---|---|---|
 | **FROZEN** | AWS 리소스 변경(SSM/Change Manager) + 자율 mitigation substrate | `remediation_enabled` | **do-not-enable.** 재활성화 = 새 ADR로 2026-06-11 reversal 명시 번복 + 멀티-AI 패널 + owner-override. flag-OFF substrate는 보존(삭제 아님) | ADR-005 |
-| **마이그레이션 창** (feature gate 아님) | legacy email-keyed 소유권 매칭을 읽기에서 수용 | `legacy_email_owner_match` — **기본 true** | 이관 스위치. `make backfill-owner-sub` 가 clean(unmapped·unverified 0) 하게 끝난 뒤에만 `false` 로 내린다. 그전에 내리면 legacy 행이 소유자에게 안 보인다. 켜져 있는 동안은 재할당된 주소가 전 소유자의 legacy 행과 일치할 수 있다(단 `verifyUser()` 가 `email_verified` 를 요구하고 client `write_attributes` 에서 email 이 빠져 self-service 경로는 닫힘) | ADR-009 |
+| **마이그레이션 창** (feature gate 아님) | legacy email-keyed 소유권 매칭을 읽기에서 수용 | `legacy_email_owner_match` — **기본 true** | 이관 스위치. `make` target 은 **plan-only** 이므로 clean plan 만으로는 조건이 아니다 — clean plan 은 아직 아무 행도 rewrite 되지 않은 상태에서도 성립한다. **`--apply` 가 성공하고 잔여 legacy email-keyed row 가 0 임을 확인한 뒤에만** `false` 로 내린다. 그전에 내리면 legacy 행이 소유자에게 안 보인다. 켜져 있는 동안은 재할당된 주소가 전 소유자의 legacy 행과 일치할 수 있다(기존 계정의 email 변경 경로는 `write_attributes` 축소로, 재할당 mailbox 로의 신규 signup 경로는 `allow_admin_create_user_only` 로 닫았다 — 둘 다 이 PR 에서) | ADR-009 |
 | **GATED** | 자율 인시던트 라이프사이클 | `incident_lifecycle_enabled` | analysis-only(read-only triage/RCA, 권고전용, mutation 라우팅 금지). 활성화해도 자율 조치 없음 | ADR-006 |
 | **GATED** | RCA write-back (OpsCenter/Incident Manager 관측메타 write) | `rca_writeback_enabled` | `incident_lifecycle_enabled` + **자족 role 분리 선행**(현재 frozen remediation role 상속 → 분리 전 do-not-enable) | ADR-006 |
 | **GATED** | K8sGPT 인클러스터 진단 | `k8sgpt_enabled` | GET-only(Result CRD read), 클러스터 write 없음, 오퍼레이터는 out-of-band 설치 | ADR-006 |

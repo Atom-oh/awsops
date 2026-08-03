@@ -4,6 +4,16 @@ resource "aws_cognito_user_pool" "main" {
   username_attributes      = ["email"]
   mfa_configuration        = "OFF"
 
+  # Third half of the self-service-email fix (PR #203 review MAJOR, 2 models). Narrowing
+  # write_attributes stops an EXISTING account from changing its email, but the pool allowed public
+  # SignUp, so whoever holds a departed colleague's reassigned mailbox could just create a NEW account
+  # on that address and self-verify it via the emailed code (auto_verified_attributes = email) —
+  # inheriting that person's legacy email-keyed rows for as long as legacy_email_owner_match is on.
+  # This is an internal ops dashboard: accounts are provisioned, never self-registered.
+  admin_create_user_config {
+    allow_admin_create_user_only = true
+  }
+
   password_policy {
     minimum_length    = 8
     require_uppercase = true

@@ -72,13 +72,14 @@ The cutoff lookup goes through a **5-second per-sub in-process cache** (`web/lib
 
 관리자 강제는 서버측에서 수행한다(UI 숨김은 표시적 장치일 뿐 강제 경계가 아니다). 모든 변경 라우트는 검증된 ID 토큰에서 신원을 추출한 뒤 관리자 여부를 재확인한다. 사용자는 **Cognito `ADMIN_GROUP`**(`cognito:groups` 클레임)에 속하거나 **SSM 파라미터 allowlist**(`SSM_ADMIN_EMAILS_PARAM`, 쉼표 구분, 5분 캐시)에 이메일이 있으면 관리자로 판정된다(`web/lib/admin.ts`). 판정은 **fail-closed**다. 설정의 source of truth는 SSM이다.
 
-**개정 (PR #203):** `verifyUser()` 는 이제 **`email_verified === true` 일 때만** 토큰의 `email` claim 을 채택한다(unverified 주소는 `undefined` 로 떨어진다). Cognito 가 사용자에게 자기 email 변경을 허용하므로 unverified claim 을 신뢰하면 email 기반 소유권·admin 판정을 self-service 로 통과할 수 있었다. 따라서 **SSM allowlist 판정도 verified email 에만 적용된다** — allowlist 에 있는 주소가 해당 계정에서 verified 가 아니면 그 사용자는 admin 이 아니다(fail-closed 방향이지만, 배포 시 allowlist 대상들의 verified 상태를 먼저 확인해야 lockout 을 피한다). user pool client 의 `write_attributes` 에서도 `email`·`email_verified` 를 제거했다.
+**개정 (PR #203):** `verifyUser()` 는 이제 **`email_verified === true` 일 때만** 토큰의 `email` claim 을 채택한다(unverified 주소는 `undefined` 로 떨어진다). Cognito 는 기본적으로 사용자가 자기 email 을 바꿀 수 있게 했으므로(이 PR 이 client `write_attributes` 축소 + `allow_admin_create_user_only` 로 그 경로를 닫기 전까지) unverified claim 을 신뢰하면 email 기반 소유권·admin 판정을 self-service 로 통과할 수 있었다. 따라서 **SSM allowlist 판정도 verified email 에만 적용된다** — allowlist 에 있는 주소가 해당 계정에서 verified 가 아니면 그 사용자는 admin 이 아니다(fail-closed 방향이지만, 배포 시 allowlist 대상들의 verified 상태를 먼저 확인해야 lockout 을 피한다). user pool client 의 `write_attributes` 에서도 `email`·`email_verified` 를 제거했다.
 
 Admin enforcement is server-side (UI hiding is cosmetic, not the enforcement boundary). Every mutating route extracts identity from the verified ID token and re-checks admin status. A user is admin if they are in the **Cognito `ADMIN_GROUP`** (`cognito:groups` claim) **OR** their email is in an **SSM-parameter allowlist** (`SSM_ADMIN_EMAILS_PARAM`, comma-separated, 5-min cache) — `web/lib/admin.ts`. The check is **fail-closed**. SSM is the configuration source of truth.
 
 **Amended (PR #203):** `verifyUser()` now adopts the token's `email` claim **only when
-`email_verified === true`** (an unverified address becomes `undefined`). Cognito lets a user change
-their own email, so honouring an unverified claim let email-based ownership *and* the admin check be
+`email_verified === true`** (an unverified address becomes `undefined`). Cognito let a user change their own
+email by default — until this PR narrowed the client's `write_attributes` and set
+`allow_admin_create_user_only` — so honouring an unverified claim let email-based ownership *and* the admin check be
 passed self-service. The SSM allowlist therefore applies **only to verified emails** — an address on
 the allowlist that is not verified on its account does not grant admin. That is the fail-closed
 direction, but check the verified state of every allowlisted address before deploying, or those

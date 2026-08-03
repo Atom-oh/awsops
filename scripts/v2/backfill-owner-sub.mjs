@@ -39,7 +39,7 @@
 // LEGACY_EMAIL_OWNER_MATCH=false — step 3.
 
 import { execSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import pg from 'pg';
 
@@ -54,7 +54,7 @@ const ROOT = new URL('../..', import.meta.url).pathname;
 //       globs — `backfill-owner-sub-review.json` passed and was still committable;
 //   (2) `--apply <path>` was not checked at all, and the journal path derives from it, so
 //       `--apply approved.json` wrote `approved-applied.json`: the full email->sub mapping plus row
-//       ids, untracked by any ignore rule. The comment claiming "the gitignore patterns key off this
+//       ids, untracked by any ignore rule. The comment claiming "the gitignore pattern keys off this
 //       prefix" was guarding exactly one of the two paths that produce these files.
 const ARTIFACT_PREFIX = 'backfill-owner-sub';
 /** True only for basenames the .gitignore rules actually cover. */
@@ -69,13 +69,16 @@ function requireIgnoredArtifactName(p, what) {
       + `other name is committable. Got: ${p}`);
   }
 }
-const PLAN_PATH = process.env.PLAN_PATH || `${ARTIFACT_PREFIX}-plan.json`;
-requireIgnoredArtifactName(PLAN_PATH, 'PLAN_PATH');
-if (APPLY_FROM) requireIgnoredArtifactName(APPLY_FROM, 'the --apply plan path');
-
+// Argument parsing comes FIRST: the guards below read APPLY_FROM, and when the two calls sat above
+// this block the `const` was still in its temporal dead zone, so every invocation — plan and apply
+// alike — died with a ReferenceError before doing anything (PR #203 review CRITICAL, 7 cells).
 const applyIdx = process.argv.indexOf('--apply');
 const APPLY_FROM = applyIdx >= 0 ? process.argv[applyIdx + 1] : null;
 if (applyIdx >= 0 && !APPLY_FROM) die('--apply needs a plan file path');
+
+const PLAN_PATH = process.env.PLAN_PATH || `${ARTIFACT_PREFIX}-plan.json`;
+requireIgnoredArtifactName(PLAN_PATH, 'PLAN_PATH');
+if (APPLY_FROM) requireIgnoredArtifactName(APPLY_FROM, 'the --apply plan path');
 
 // Every column that carries an ownership key. Keep in sync with matchesIdentity()'s callers.
 const TARGETS = [
@@ -165,10 +168,13 @@ async function plan(client) {
 
   const users = cognitoUsersByEmail();
   if (users.size === 0) {
-    die('there are legacy email-keyed rows but Cognito returned no users with a verified email — '
+    die('there are legacy email-keyed rows but Cognito returned no users at all — '
       + 'refusing to write a plan (every entry would be unmappable)');
   }
-  console.log(`pool: ${users.size} users with a verified email`);
+  // The map deliberately keeps unverified users so plan() can report them as a distinct cause, so the
+  // total is NOT a verified count — say what it actually is (PR #203 review MINOR).
+  const verifiedCount = [...users.values()].filter((u) => u.verified).length;
+  console.log(`pool: ${users.size} Cognito users (${verifiedCount} with a verified email)`);
 
   const entries = [];
   const unmapped = [];    // no such user
@@ -190,6 +196,7 @@ async function plan(client) {
   }
 
   writeFileSync(PLAN_PATH, JSON.stringify({ generated: 'plan', entries }, null, 2), { mode: 0o600 });
+  chmodSync(PLAN_PATH, 0o600); // see the journal writer: `mode` alone does not tighten an existing file
   console.log(`\nplan written: ${PLAN_PATH} (${entries.length} entries, ${entries.reduce((a, e) => a + e.rows, 0)} rows) — NOTHING CHANGED`);
   console.log('Review every entry. Delete the ones you cannot vouch for, then:');
   console.log(`  node scripts/v2/backfill-owner-sub.mjs --apply ${PLAN_PATH}`);
@@ -253,8 +260,14 @@ async function apply(client) {
   // `entries` gains a `changedIds` per entry once the UPDATEs run — that, not the planned `ids`, is
   // the reversal scope (they differ when a row moved on since the plan). A `rolled-back` journal has
   // them stripped, since nothing was changed.
-  const journal = (status) => writeFileSync(
-    journalPath, JSON.stringify({ startedFrom: APPLY_FROM, status, entries }, null, 2), { mode: 0o600 });
+  // chmod after the write, not just `mode:` — `mode` applies only when the file is CREATED, so
+  // re-running over a file that already existed with looser bits kept the PII world-readable
+  // (PR #203 review MINOR, 3 model families).
+  const journal = (status) => {
+    writeFileSync(journalPath, JSON.stringify({ startedFrom: APPLY_FROM, status, entries }, null, 2),
+      { mode: 0o600 });
+    chmodSync(journalPath, 0o600);
+  };
   journal('attempting');
   console.log(`journal (pre-write, row-specific): ${journalPath}`);
 
@@ -271,6 +284,7 @@ async function apply(client) {
 
   let total = 0;
   let committed = false;
+  let commitSent = false;
   const applied = [];
   await client.query('BEGIN');
   try {
@@ -304,14 +318,29 @@ async function apply(client) {
       total += e.changedIds.length;
       applied.push(`${e.table}.${e.column}: ${e.from} -> ${e.to} (${e.changedIds.length} rows)`);
     }
+    commitSent = true;
     await client.query('COMMIT');
     committed = true;
   } catch (err) {
-    // Only reachable while the transaction is still open — `committed` is set immediately after
-    // COMMIT returns and nothing else runs inside the try, so this branch can never be entered for a
-    // run whose data is already durable (codex stop-gate: journal('committed') used to sit inside the
-    // try, so a failing journal WRITE after a successful COMMIT rolled into this handler and recorded
-    // `rolled-back` — telling the operator nothing changed when everything had).
+    // A throw AFTER the COMMIT was sent does not mean the transaction rolled back: a lost response or
+    // a dropped connection leaves the server's decision unknown to us, and it may well have committed.
+    // Recording `rolled-back` there would put a false "nothing was rewritten" in the journal, whose
+    // truthfulness is this tool's stated contract (PR #203 review MAJOR). Keep the changedIds — if it
+    // did commit, they are the reversal scope — and make the operator resolve it by re-querying.
+    if (commitSent) {
+      try { journal('unknown'); } catch { /* the message below is the real signal */ }
+      console.error('\nUNKNOWN OUTCOME — the COMMIT was sent but its result was not received:');
+      console.error(`  ${err?.message || err}`);
+      console.error(`  The journal (${journalPath}) is stamped "unknown" and still holds the row ids.`);
+      console.error('  Re-query before doing anything: for each entry, count rows whose id is in');
+      console.error('  changedIds and whose column still holds `from` (0 => it committed, all => it');
+      console.error('  did not). Do NOT re-run --apply until you know which.');
+      die('outcome unknown — verify against the database first');
+    }
+    // Past the commitSent branch the transaction is definitely still open and definitely not durable:
+    // the failure happened before COMMIT was even sent (codex stop-gate: journal('committed') used to
+    // sit inside the try, so a failing journal WRITE after a successful COMMIT rolled into this
+    // handler and recorded `rolled-back` — telling the operator nothing changed when everything had).
     await client.query('ROLLBACK').catch(() => {});
     // Drop any changedIds collected before the failure: the transaction rolled back, so those rows
     // were NOT changed, and leaving them in a journal would read as a partial rewrite that happened.

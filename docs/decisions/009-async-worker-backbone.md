@@ -88,11 +88,20 @@ that rather than a 202 pointing at an id that 404s.
   (`/api/jobs`, `/api/diagnosis`, `/api/compliance/run`); `/api/diagnosis/intent` is admin CRUD, not
   an enqueue path, and records the same key as `created_by`. `report_schedules` and its dispatcher
   use the sub as well.
-- **dual-key 읽기 = legacy 전용, 종료 예정** — 읽기 게이트만 두 형태를 수용한다
-  (`matchesIdentity()`, `ownerKeysForRead()`), 컷오버 이전에 기록된 email-keyed 행 때문이다. diff lineage(`createReport()` 의 `parent_report_id` 서브쿼리, BFF·`schedule_dispatcher` 양쪽)도 같은 키를 쓰므로 플래그를 내리면 정확히 함께 sub-only 로 좁아진다 — 리뷰 시점에는 BFF lineage 가 owner 키를 아예 쓰지 않아 이 서술이 사실과 달랐고(경로별로 baseline 이 달라졌다), 같은 PR 에서 정합화했다.
-  **Dual-key reads = legacy only, time-limited** — only the read gate accepts both forms, for rows
-  written before the cut-over. Diff lineage uses the same keys, so it narrows to sub-only exactly
-  when the flag is turned off.
+- **dual-key = legacy 전용, 종료 예정** — 두 형태를 수용하는 곳은 `matchesIdentity()` 를 쓰는 게이트다:
+  읽기(`ownerKeysForRead()`)뿐 아니라 **`canMutateReport()`(리포트 PATCH/DELETE)도 포함**한다. 즉 legacy
+  email match 의 노출 범위는 읽기에 그치지 않는다(PR #203 리뷰 MAJOR). 컷오버 이전에 기록된 email-keyed
+  행 때문이며, 플래그를 내리면 이들이 함께 sub-only 로 좁아진다. diff lineage(`createReport()` 의
+  `parent_report_id` 서브쿼리)는 **BFF 에서만** dual key(`ownerKeysForRead()`)를 쓴다 — `schedule_dispatcher`
+  는 sub 단독이며(아래 "비대칭" 항목), 리뷰 시점에는 BFF lineage 가 owner 키를 아예 쓰지 않아 경로별로
+  baseline 이 달라졌던 것을 같은 PR 에서 정합화했다.
+  **Dual keys = legacy only, time-limited** — both forms are accepted wherever `matchesIdentity()`
+  gates access, which is **not only reads** (`ownerKeysForRead()`) but also `canMutateReport()`, the
+  report PATCH/DELETE gate — so the legacy email match's blast radius includes mutation (PR #203
+  review MAJOR). It exists for rows written before the cut-over, and turning the flag off narrows all
+  of them to sub-only together. Diff lineage (`createReport()`'s `parent_report_id` subquery) uses the
+  dual key **in the BFF only** — `schedule_dispatcher` is sub-only, see the "Asymmetry" bullet below;
+  before this PR the BFF lineage used no owner key at all, so the two paths disagreed on the baseline.
 - **리스크(명시)** — email 은 mutable 이다. 변경되면 옛 email-keyed 행이 진짜 소유자에게서 잠기고,
   **재할당되면** 새 보유자가 전 소유자의 행과 일치한다. **이것은 admin 전용 조작이 아니다**: Cognito 는
   사용자가 자기 email 을 직접 바꿀 수 있게 하므로 원래 self-service 였다(PR #203 리뷰 MAJOR, 2개 모델).
