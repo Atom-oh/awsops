@@ -127,13 +127,25 @@ class TestInventoryViewContract(unittest.TestCase):
                             f"{table}'s column list embeds SQL literals inside a '…' string — use "
                             f"$$…$$ (PR #197 review CRITICAL)")
 
-    def test_secret_bearing_keys_are_not_on_the_data_allowlist(self):
-        # CloudFront origins carry CustomHeaders[].HeaderValue — the origin secret the projection
-        # exists to keep out. It was on the allowlist, which re-opened exactly that leak.
-        exposed = _allowlisted_keys("inventory_resources")
-        for k in ("origins", "CustomHeaders", "custom_headers"):
-            self.assertNotIn(k, exposed, f"{k!r} may carry origin secrets — keep it off the allowlist")
-        self.assertNotIn("origins", inv.PROJECTIONS.get("cloudfront", []))
+    def test_customheaders_never_appears_in_the_origins_projection(self):
+        """`origins` IS on the allowlist (PR #197 review MAJOR: dropping it broke the CloudFront
+        "empty origin" finding, which reads only origin.DomainName). What must never survive is
+        CustomHeaders[].HeaderValue — the origin secret. The column-list SQL builds each origins[]
+        element with a per-key CASE, not a blanket pass-through; assert that shape rather than a key
+        name, since "origins is absent" is no longer the invariant this migration holds."""
+        cols = _view_columns("inventory_resources")
+        self.assertIn("origins", _allowlisted_keys("inventory_resources"))
+        self.assertNotIn("CustomHeaders", cols)
+        self.assertNotIn("custom_headers", cols.lower().replace("customheaders", ""))
+        # The transform must be a per-element rebuild keyed to exactly one field, not a pass-through
+        # of the raw array (which is what would let CustomHeaders back in).
+        self.assertRegex(cols, r"jsonb_build_object\('DomainName'")
+        self.assertRegex(cols, r"CASE WHEN k = 'origins'")
+
+    def test_inventory_read_mcp_projections_keeps_origins_on_the_cloudfront_list(self):
+        # The connector-side allowlist must ask for the key the view now safely exposes — otherwise
+        # the fix on the SQL side is inert.
+        self.assertIn("origins", inv.PROJECTIONS.get("cloudfront", []))
 
 
     def test_every_do_block_closes_where_it_should(self):

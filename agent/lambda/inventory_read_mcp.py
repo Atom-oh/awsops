@@ -226,11 +226,13 @@ PROJECTIONS = {
     "target_group": ["target_group_arn", "target_group_name", "load_balancer_arns", "target_health_descriptions"],
     "alb": ["name", "dns_name", "arn"],
     "nlb": ["name", "dns_name", "arn"],
-    # `origins` deliberately absent: it carries CustomHeaders[].HeaderValue (origin secrets), so the
-    # sql_reader view does not expose it (migration 01KYVY9J…, INVARIANT rule 5) and asking for it
-    # here would only ever read null. CloudFront->origin detail needs the ingest side to stop storing
-    # the header values first (PR #197 review CRITICAL).
-    "cloudfront": ["id", "domain_name", "enabled", "aliases"],
+    # `origins` IS present, but the sql_reader view (migration 01KYVY9J…) projects each element down
+    # to `{DomainName}` only — detect_unused()/build_topology_chain() read nothing else off an origin
+    # object (grepped). A prior revision dropped the key entirely to keep CustomHeaders[].HeaderValue
+    # (an origin secret) out, which silently disabled the "CloudFront (empty origin)" high-severity
+    # finding (PR #197 review MAJOR, 3 models). The per-element projection is what actually closes
+    # the leak, so the key belongs back on this list.
+    "cloudfront": ["id", "domain_name", "enabled", "origins", "aliases"],
     "ebs": ["volume_id", "state", "size", "volume_type"],
 }
 
@@ -267,8 +269,21 @@ def _fetch_by_type(types):
 
 
 def _fetch_one_type(rtype, limit):
-    rows = _execute("SELECT data FROM inventory_resources WHERE account_id = 'self' "
-                    "AND resource_type = :rt LIMIT " + str(int(limit)),
+    """Backs `query_inventory`, the one tool where the model picks `rtype` — so unlike
+    `_fetch_by_type` (called only with the fixed TOPOLOGY_TYPES set), this can be asked about a type
+    with no PROJECTIONS entry.
+
+    Selecting bare `data` for such a type used to look like it returned the full row, but reads run
+    as `awsops_sql_reader`, whose view already limits `data` to the union of every projected key
+    across ALL types (PR #197 review MAJOR, codex-L2) — so an unregistered type came back with
+    whatever keys happened to overlap by accident, silently incomplete rather than genuinely absent.
+    Being explicit about the same projection (harmless — `_projected_select` falls back to bare
+    `data` for an unregistered type too, since that is what the view already limits it to either
+    way) does not fix the incompleteness by itself; the honesty fix is the `limited` flag the caller
+    surfaces so nothing downstream mistakes a partial object for a complete one.
+    """
+    rows = _execute("SELECT " + _projected_select(rtype) + " AS data FROM inventory_resources "
+                    "WHERE account_id = 'self' AND resource_type = :rt LIMIT " + str(int(limit)),
                     params=[{"name": "rt", "value": {"stringValue": rtype}}])
     return [_coerce(r.get("data")) for r in rows]
 
@@ -328,7 +343,19 @@ def lambda_handler(event, context):
         except (TypeError, ValueError):
             limit = 200  # a hallucinated non-numeric limit must not 500
         rows = _fetch_one_type(rtype, limit)
-        return _ok({"resource_type": rtype, "count": len(rows), "resources": rows})
+        result = {"resource_type": rtype, "count": len(rows), "resources": rows}
+        if rtype not in PROJECTIONS:
+            # PR #197 review MAJOR: an unregistered type's `resources` entries only carry whatever
+            # keys happen to be on SOME other type's projection allowlist — genuinely absent fields
+            # read the same as accidentally-omitted ones. Say so, rather than let a model (or a
+            # human reading the response) mistake this for the resource's full JSON.
+            result["note"] = (
+                f"field-level detail for resource_type={rtype!r} is limited by the sql_reader "
+                f"view's security boundary (only fields curated for other types may appear, by "
+                f"coincidence) — use inventory_summary/find_unused_resources/get_topology, or the "
+                f"AWS describe_* tools, for this type's full detail."
+            )
+        return _ok(result)
 
     if tool_name == "inventory_summary":
         return _ok({"sync": _sync_freshness(), "note": COVERAGE_NOTE})

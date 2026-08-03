@@ -311,10 +311,34 @@ resource "aws_iam_role_policy" "agent_lambda_integrations_secret" {
 # see the `agent_sql_reader_role` migration), whose password lives in its own secret below. The
 # master secret ARN and its CMK Decrypt grant are gone from this policy, so a future bypass lands in
 # an unprivileged session. Removing a privilege — not an ADR-005 capability grant.
-resource "aws_iam_role_policy" "agent_lambda_inventory" {
+# PR #197 review MAJOR (codex-L3 + kiro-gpt-L3, 2-model convergence): this policy used to attach to
+# the SHARED `agent_lambda` role — the same role all 19 agent-Lambda slices run under (network, iam,
+# cost, clickhouse, notion, ...). That handed the reader-secret credential and rds-data execute
+# permission to every slice, not just the two that call the RDS Data API, which is exactly the
+# least-privilege regression this PR's own DB-role hardening was supposed to be moving away from.
+#
+# Dedicated role for the two RDS Data API consumers (rds-mcp, inventory-read) instead. It carries
+# ONLY what those two Lambdas' code actually calls (verified: neither imports any boto3 client but
+# `rds`/`rds-data`/`sts` — grep confirmed, no ec2/dynamodb/cloudwatch/etc.), not the full
+# network+container+cost+monitoring+iac+security grant bundle the other 17 slices need. The 17
+# other slices are unaffected — `agent_lambda_read` (their combined grant) is untouched, and this
+# role is additive.
+resource "aws_iam_role" "agent_lambda_reader" {
+  count              = local.ac_count
+  name               = "${var.project}-agent-lambda-reader"
+  assume_role_policy = data.aws_iam_policy_document.agent_lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "agent_lambda_reader_logs" {
+  count      = local.ac_count
+  role       = aws_iam_role.agent_lambda_reader[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "agent_lambda_reader_scoped" {
   count = local.ac_count
-  name  = "${var.project}-agent-lambda-inventory"
-  role  = aws_iam_role.agent_lambda[0].id
+  name  = "${var.project}-agent-lambda-reader-scoped"
+  role  = aws_iam_role.agent_lambda_reader[0].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -335,6 +359,24 @@ resource "aws_iam_role_policy" "agent_lambda_inventory" {
         Effect   = "Allow"
         Action   = "secretsmanager:GetSecretValue"
         Resource = aws_secretsmanager_secret.agent_sql_reader[0].arn
+      },
+      {
+        # rds-mcp's other 5 tools (list/describe) — carried over from the shared role's DataRead
+        # statement so moving rds-mcp off that role does not remove capability, only narrow it.
+        Sid      = "RdsDescribeRead"
+        Effect   = "Allow"
+        Action   = ["rds:Describe*", "rds:ListTagsForResource"]
+        Resource = "*"
+      },
+      {
+        # Cross-account describe/list for rds-mcp's non-execute_sql tools (execute_sql itself
+        # rejects a foreign target_account_id before this could even be reached — see
+        # aws_rds_mcp.py's lambda_handler top-of-function guard). Carried over unchanged from the
+        # shared role's CrossAccountAssumeReadOnly statement.
+        Sid      = "CrossAccountAssumeReadOnly"
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = "arn:aws:iam::*:role/AWSopsReadOnlyRole"
       },
     ]
   })
@@ -784,9 +826,11 @@ data "archive_file" "agent" {
 }
 
 resource "aws_lambda_function" "agent" {
-  for_each         = local.agent_lambdas
-  function_name    = "${var.project}-agent-${each.key}"
-  role             = aws_iam_role.agent_lambda[0].arn
+  for_each      = local.agent_lambdas
+  function_name = "${var.project}-agent-${each.key}"
+  # rds-mcp/inventory-read run under the dedicated reader role (agent_lambda_reader) — see the
+  # PR #197 review comment above that role's definition. Every other slice is unaffected.
+  role             = contains(["rds-mcp", "inventory-read"], each.key) ? aws_iam_role.agent_lambda_reader[0].arn : aws_iam_role.agent_lambda[0].arn
   runtime          = "python3.11"
   handler          = each.value.handler
   filename         = data.archive_file.agent[each.key].output_path

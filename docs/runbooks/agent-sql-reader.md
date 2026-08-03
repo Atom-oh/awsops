@@ -55,8 +55,14 @@ re-running it will NOT recreate a role whose migration is already recorded — t
 failure it is.
 
 ```
-make migrate-status     # is 01KYVY9J…_agent_sql_reader_role still pending?
+DRY_RUN=1 make migrate  # is 01KYVY9J…_agent_sql_reader_role still pending, against the LIVE DB?
 ```
+
+Not `make migrate-status` (PR #197 review MAJOR) — that target is explicitly offline (`Makefile`: "no DB
+connect"; it only compares the app version to migration files on disk). It cannot tell you whether a
+migration was actually applied to THIS environment's database, which is exactly the question this
+step needs answered. `DRY_RUN=1 make migrate` connects and diffs against the live
+`schema_migrations` ledger without executing anything.
 
 - **Still pending** (fresh environment, or migrations never ran): `make migrate` applies it and
   creates the role. Done.

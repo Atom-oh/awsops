@@ -219,15 +219,24 @@ BEGIN
       -- attempt at this fix did (codex stop-gate). Tagged delimiters nest; untagged ones do not.
       -- For the same reason this comment does not spell the untagged delimiter out: a dollar-quoted
       -- body is not comment-aware, so writing it here would end the block just as surely.
-      -- `origins` is NOT on the allowlist: CloudFront origins carry CustomHeaders[].HeaderValue —
-      -- the origin secret this projection exists to keep out — so listing it re-opened precisely the
-      -- leak described above (PR #197 review CRITICAL). The real fix for wanting origin detail here
-      -- is upstream: stop storing the header values at ingest. Until then execute_sql and
-      -- inventory-read do not see origins.
+      -- `origins`: PR #197 round-1 removed it entirely (CloudFront origins carry
+      -- CustomHeaders[].HeaderValue — an origin secret), which broke the "CloudFront (empty
+      -- origin)" high-severity finding in detect_unused() and build_topology_chain(): both read
+      -- ONLY origin.DomainName (grepped — no other field of an origin object is read anywhere in
+      -- inventory_read_mcp.py) (PR #197 review MAJOR, 3 models). Neither "expose the whole array"
+      -- nor "drop the key" was survivable, so this projects each origins[] element down to just
+      -- DomainName — the one field actually consumed — which cannot carry CustomHeaders because
+      -- nothing else survives the projection.
       ('inventory_resources',
        $cols$resource_type, account_id, region, resource_id, captured_at,
-         (SELECT jsonb_object_agg(k, v) FROM jsonb_each(data) AS e(k, v)
-           WHERE k = ANY(ARRAY['target_group_arn','target_group_name','load_balancer_arns','target_health_descriptions','name','dns_name','arn','id','domain_name','enabled','aliases','volume_id','state','size','volume_type'])) AS data$cols$),
+         (SELECT jsonb_object_agg(
+            k,
+            CASE WHEN k = 'origins' THEN (
+              SELECT jsonb_agg(jsonb_build_object('DomainName', o -> 'DomainName'))
+              FROM jsonb_array_elements(v) o
+            ) ELSE v END
+          ) FROM jsonb_each(data) AS e(k, v)
+           WHERE k = ANY(ARRAY['target_group_arn','target_group_name','load_balancer_arns','target_health_descriptions','name','dns_name','arn','id','domain_name','enabled','origins','aliases','volume_id','state','size','volume_type'])) AS data$cols$),
       ('inventory_sync_runs',
        'resource_type, account_id, started_at, finished_at, status, row_count'),
       -- `meta` (JSONB) likewise projected, and the stakes are sharper here: flow-topology.ts copies
