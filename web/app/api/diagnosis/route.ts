@@ -6,6 +6,7 @@ import {
   linkReportJob,
   reportForIdempotencyKey,
   markReportFailed,
+  softDeleteReport,
   type DiagnosisModel,
 } from '@/lib/diagnosis';
 import { isAdmin } from '@/lib/admin';
@@ -70,26 +71,21 @@ export async function POST(req: Request) {
   // [GATE-FIX R2 CRITICAL] Idempotency-FIRST → create the report with NULL fk → enqueue (inserts
   // worker_jobs) → LINK. The FK is only set once worker_jobs(job_id) exists.
   const hour = new Date().toISOString().slice(0, 13);
-  const key = `report:${owner}:${tier}:${model}:${scope}:${hour}`;
+  // The idempotency key deliberately stays on identity(), NOT on the ownership key. They are separate
+  // concerns — this one only has to be stable per requester within the hour — and switching it to the
+  // sub bought nothing while creating a rolling-deploy discontinuity: a new pod writing
+  // `report:<sub>:…` is invisible to an old pod that only knows `report:<email>:…`, so the same user
+  // gets a SECOND Bedrock run. A fallback lookup only covered one direction, which is why the
+  // key itself is left alone (PR #195 review MAJOR). requested_by below is the immutable sub.
+  const key = `report:${identity(user)}:${tier}:${model}:${scope}:${hour}`;
 
-  // Moving the key from the email to the sub is a DISCONTINUITY, and the deploy lands inside a live
-  // hour bucket: a request already deduped under `report:<email>:…` would not be found under
-  // `report:<sub>:…`, so the same user would get a SECOND report — and a diagnosis run is a Bedrock
-  // job, not a cheap retry. Check the legacy spelling too while the user still has an email; the
-  // window closes on its own once the hour rolls over, and disappears entirely for users with no
-  // email claim.
-  const legacyKey = user.email && user.email !== owner
-    ? `report:${user.email}:${tier}:${model}:${scope}:${hour}`
-    : null;
-
-  const existing = (await reportForIdempotencyKey(key))
-    ?? (legacyKey ? await reportForIdempotencyKey(legacyKey) : null);
+  const existing = await reportForIdempotencyKey(key);
   if (existing) {
     return NextResponse.json({ report_id: existing, tier, model, deduped: true }, { status: 202 });
   }
 
   const reportId = await createReport(tier, owner, model); // worker_job_id = NULL (FK-safe)
-  let job: { job_id: string; status: string };
+  let job: { job_id: string; status: string; payload?: Record<string, unknown> };
   try {
     job = await enqueueJob(
       'report',
@@ -105,6 +101,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ status: 'error', message: e.message }, { status: 409 });
     }
     throw e;
+  }
+  // Concurrent same-key requests both pass the check above (it joins through worker_job_id, which is
+  // NULL until the link happens), so the second one gets the FIRST job from the conflict path. The
+  // LEDGER payload decides who owns it, because the worker obeys the payload — linking our row to a
+  // job whose payload names another report strands ours as `running` for good, with no
+  // markReportFailed and no reaper coverage (the reaper only reconciles worker_jobs).
+  const ledgerReportId = Number((job.payload as { report_id?: unknown } | undefined)?.report_id);
+  if (Number.isFinite(ledgerReportId) && ledgerReportId !== reportId) {
+    await softDeleteReport(reportId);   // never ran, never will — not a FAILED diagnosis
+    return NextResponse.json(
+      { job_id: job.job_id, report_id: ledgerReportId, tier, model, deduped: true }, { status: 202 });
   }
   await linkReportJob(reportId, job.job_id); // FK now satisfiable
   return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier, model }, { status: 202 });

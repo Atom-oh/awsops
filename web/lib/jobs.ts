@@ -22,6 +22,13 @@ export interface EnqueueOpts {
 export interface EnqueueResult {
   job_id: string;
   status: string;
+  /**
+   * The LEDGER's payload for this job — this request's on a fresh insert, the FIRST request's on an
+   * idempotent replay. Callers that create a domain row per request must compare against it: the
+   * worker runs THIS payload, so a caller whose row is not named here owns a row that will never be
+   * rendered and never be failed (PR #195 review MAJOR: permanent `running`).
+   */
+  payload: Record<string, unknown>;
 }
 
 /**
@@ -179,5 +186,5 @@ export async function enqueueJob(
     throw new EnqueueDeliveryError(jobId, status, e);
   }
 
-  return { job_id: jobId, status };
+  return { job_id: jobId, status, payload: sendPayload };
 }

@@ -17,6 +17,7 @@ vi.mock('@/lib/diagnosis', () => ({
   linkReportJob: vi.fn(async () => undefined),
   reportForIdempotencyKey: vi.fn(async () => null),
   markReportFailed: vi.fn(async () => undefined),
+  softDeleteReport: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/admin', () => ({ isAdmin: vi.fn(async () => false) }));
 vi.mock('@/lib/jobs', () => ({
@@ -31,6 +32,7 @@ import {
   linkReportJob,
   reportForIdempotencyKey,
   markReportFailed,
+  softDeleteReport,
 } from '@/lib/diagnosis';
 import { enqueueJob } from '@/lib/jobs';
 import { GET, POST } from './route';
@@ -51,7 +53,8 @@ beforeEach(() => {
   (linkReportJob as any).mockResolvedValue(undefined);
   (reportForIdempotencyKey as any).mockResolvedValue(null);
   (markReportFailed as any).mockResolvedValue(undefined);
-  (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued' });
+  // payload names the report this request created — the ledger arbiter compares against it.
+  (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 42 } });
 });
 
 describe('GET /api/diagnosis', () => {
@@ -108,7 +111,7 @@ describe('POST /api/diagnosis', () => {
     expect(enqueueJob).toHaveBeenCalledWith(
       'report',
       expect.objectContaining({ tier: 'mid', model: 'sonnet', requested_by: 'u', report_id: 42 }),
-      expect.objectContaining({ idempotencyKey: expect.stringContaining('report:u:mid:sonnet:') }),
+      expect.objectContaining({ idempotencyKey: expect.stringContaining('report:u@x.io:mid:sonnet:') }),
     );
     expect(linkReportJob).toHaveBeenCalledWith(42, 'j1');
   });
@@ -167,38 +170,44 @@ describe('POST /api/diagnosis', () => {
   });
 });
 
-// PR #195 review + codex stop-gate: moving the idempotency key from the email to the sub is a
-// discontinuity, and the deploy lands inside a live hour bucket. Without checking the legacy
-// spelling, a request already deduped under report:<email>:… is invisible under report:<sub>:… and
-// the same user gets a SECOND Bedrock diagnosis run.
-describe('POST /api/diagnosis — idempotency across the email→sub cutover', () => {
+// PR #195 review MAJOR: concurrent same-key requests both pass the pre-check (it joins through
+// worker_job_id, NULL until the link), so the second gets the FIRST job from the conflict path. The
+// ledger payload names the first report, so linking the second one to that job strands it as
+// `running` forever — no markReportFailed, and the reaper only reconciles worker_jobs.
+describe('POST /api/diagnosis — idempotency conflict must not strand the second report', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.AWS_ACCOUNT_ID = '123456789012';
     (verifyUser as any).mockResolvedValue({ sub: 'u', email: 'u@x.io' });
+    (reportForIdempotencyKey as any).mockResolvedValue(null);
     (createReport as any).mockResolvedValue(42);
-    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued' });
   });
 
-  it('dedupes onto a report keyed by the legacy email form', async () => {
-    (reportForIdempotencyKey as any)
-      .mockImplementationOnce(async () => null)   // sub-form: nothing yet
-      .mockImplementationOnce(async () => 7);     // email-form: the in-flight one
+  it('retires its own report and returns the one the ledger payload names', async () => {
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 7 } });
     const { POST } = await import('./route');
     const res = await POST(req({ tier: 'mid' }) as any);
     const body = await res.json();
     expect(body).toMatchObject({ report_id: 7, deduped: true });
-    expect(createReport).not.toHaveBeenCalled();  // must NOT start a second run
-    const keys = (reportForIdempotencyKey as any).mock.calls.map((c: any[]) => c[0]);
-    expect(keys[0]).toContain('report:u:');
-    expect(keys[1]).toContain('report:u@x.io:');
+    expect(softDeleteReport).toHaveBeenCalledWith(42);
+    expect(linkReportJob).not.toHaveBeenCalled();
   });
 
-  it('does not look up a legacy key when the user has no email claim', async () => {
-    (verifyUser as any).mockResolvedValue({ sub: 'u' });
-    (reportForIdempotencyKey as any).mockResolvedValue(null);
+  it('links its own report when the ledger payload names it', async () => {
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 42 } });
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    const body = await res.json();
+    expect(body.report_id).toBe(42);
+    expect(linkReportJob).toHaveBeenCalledWith(42, 'j1');
+    expect(softDeleteReport).not.toHaveBeenCalled();
+  });
+
+  it('keeps the idempotency key on identity(), not the ownership key', async () => {
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 42 } });
     const { POST } = await import('./route');
     await POST(req({ tier: 'mid' }) as any);
-    expect((reportForIdempotencyKey as any).mock.calls).toHaveLength(1);
+    // Switching this to the sub created a rolling-deploy discontinuity for no benefit.
+    expect((reportForIdempotencyKey as any).mock.calls[0][0]).toContain('report:u@x.io:');
   });
 });

@@ -161,7 +161,9 @@ describe('enqueueJob — legacy global UNIQUE(idempotency_key) constraint fallba
     selectResult = { rows: [{ job_id: 'my-own-job', status: 'running' }] };
     const result = await enqueueJob('report', {}, { idempotencyKey: 'k', requestedBy: 'a@x.io', jobId: 'j11' });
     // Recovered via the requester-scoped lookup, not a thrown error.
-    expect(result).toEqual({ job_id: 'my-own-job', status: 'running' });
+    // `payload` comes back too: callers that create a domain row per request compare against it
+    // (the diagnosis route's ledger arbiter).
+    expect(result).toEqual({ job_id: 'my-own-job', status: 'running', payload: {} });
     const select = queryCalls.find((c) => /^SELECT/.test(c.sql));
     expect(select?.params).toEqual(['k', 'a@x.io']);
   });
