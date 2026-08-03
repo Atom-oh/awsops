@@ -89,7 +89,11 @@ terraform -chdir=terraform/v2/foundation apply tfplan
 # Build + push the web image, roll ECS, wait for /api/health
 make deploy
 
-# After apply: build/push the agent image, run the idempotent AgentCore provisioner
+# After apply: apply DB migrations FIRST (creates the awsops_sql_reader role and syncs its
+# password — make agentcore does neither, and skipping it leaves execute_sql and inventory-read
+# failing Data API auth). See docs/runbooks/agent-sql-reader.md.
+make migrate
+# then build/push the agent image and run the idempotent AgentCore provisioner
 make agentcore
 
 # After apply with workers_enabled=true: build/push the worker image
@@ -244,7 +248,11 @@ terraform -chdir=terraform/v2/foundation apply tfplan
 # web 이미지 빌드+푸시, ECS 롤링, /api/health 대기
 make deploy
 
-# apply 이후: agent 이미지 빌드+푸시, 멱등 AgentCore provisioner 실행
+# apply 이후: 먼저 DB 마이그레이션 (awsops_sql_reader 롤 생성 + 비밀번호 동기화 —
+# make agentcore는 둘 다 하지 않으므로 생략하면 execute_sql·inventory-read가 Data API auth 실패).
+# docs/runbooks/agent-sql-reader.md 참조.
+make migrate
+# 그 다음 agent 이미지 빌드+푸시, 멱등 AgentCore provisioner 실행
 make agentcore
 
 # workers_enabled=true로 apply 이후: worker 이미지 빌드+푸시
