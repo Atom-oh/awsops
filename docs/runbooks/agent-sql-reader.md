@@ -93,6 +93,30 @@ cluster or an unset env var is a configuration error, not an auth error — see
 `agent/lambda/aws_rds_mcp.py`. Only the host's own foundation Aurora cluster is reachable;
 cross-account and caller-supplied `secret_arn`/`database` are fail-closed.
 
+## Verified against a real Postgres 17
+
+The migration and its projections were executed on `postgres:17-alpine` (2026-08-03), not just
+inspected — the contract test in `agent/lambda/test_inventory_view_contract.py` matches migration
+TEXT and cannot tell you whether the SQL parses, which is how two separate parse-breaking bugs
+shipped during review (an unescaped quote, then an untagged dollar delimiter closing the enclosing
+DO block).
+
+Applied `data/schema.sql` + all 37 ULID migrations in order. Three role migrations plus this one need
+roles RDS provides (`rds_iam`, `awsops_admin`); create them first on a vanilla server. Then, as
+`awsops_sql_reader`:
+
+| Check | Result |
+|---|---|
+| `SELECT ... FROM public.inventory_resources` | `ERROR: permission denied for table` |
+| `UPDATE sql_reader.inventory_resources` | `ERROR: permission denied for view` |
+| `SELECT task_token FROM sql_reader.worker_jobs` | `ERROR: column "task_token" does not exist` |
+| CloudFront `data` projection | `{"id","aliases","enabled","origins":[{"DomainName":...}]}` — `CustomHeaders` value absent, `cache_behaviors` absent |
+| `topology_nodes.meta` projection | `{"invType":...}` — the whole-row copy under `row` absent |
+
+The origins case is the one worth re-running after any edit to that projection: it must keep
+`DomainName` (the "CloudFront (empty origin)" finding reads it) while dropping
+`CustomHeaders[].HeaderValue` (an origin secret). Both halves failed at some point during review.
+
 ## Related
 
 - `terraform/v2/foundation/migrations/01KYVY9J2E8AMF35WR4J7036A3_agent_sql_reader_role.sql` — role + views
