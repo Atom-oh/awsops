@@ -33,7 +33,21 @@ resource "aws_cognito_user_pool_client" "main" {
   # authorization-code (PKCE) flow above coexists as the edge dark fallback. No ALLOW_REFRESH_TOKEN_AUTH:
   # the refresh flow is not implemented (least privilege — the BFF discards the RefreshToken immediately).
   # Token lifetimes are declared explicitly to match the live deployment (id/access = 12h).
-  explicit_auth_flows   = ["ALLOW_USER_PASSWORD_AUTH"]
+  explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH"]
+
+  # Second half of the self-service-email fix (PR #203 review MAJOR, 2 models). The legacy ownership
+  # branch authorizes reads on the token's `email` claim, and by default this client can write EVERY
+  # standard attribute — so an ordinary user could UpdateUserAttributes their own email to a departed
+  # colleague's address and inherit that person's legacy rows. Narrowing write_attributes to the
+  # harmless ones removes the ability entirely. Note this also drops `email_verified` from the
+  # writable set, which is the part that makes verifyUser()'s email_verified check meaningful — by
+  # default a client can write that flag too, so a user could have self-verified whatever address
+  # they had just set and the token check would have passed. read_attributes must stay broad: the BFF
+  # needs `email` on READ; only WRITING it is the escalation. Admin APIs (AdminCreateUser, used by
+  # aws_cognito_user.admin below) are NOT constrained by client attribute lists.
+  read_attributes  = ["email", "email_verified", "name"]
+  write_attributes = ["name"]
+
   id_token_validity     = 12
   access_token_validity = 12
   token_validity_units {

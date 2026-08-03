@@ -101,13 +101,17 @@ make workers
 ```bash
 make help              # list all available targets
 make migrate-status    # offline: app version + each pending migration's release
+make backfill-owner-sub # PLAN the legacy email-keyed requested_by -> Cognito sub rewrite (changes
+                        # nothing). Review the plan, delete entries you cannot vouch for, then
+                        # `node scripts/v2/backfill-owner-sub.mjs --apply <plan.json>`. Step 2 of
+                        # ADR-009's Ownership Amendment; step 3 is legacy_email_owner_match=false.
 DRY_RUN=1 make migrate  # preview pending DB migrations before applying
 make upgrade            # safe release upgrade: RDS snapshot -> migrate -> deploy
 ```
 
 ## Configuration
 
-Runtime configuration is **flag-gated in Terraform** (`variables.tf`), booleans all default `false` so a fresh `plan` is a no-op:
+Runtime configuration is **flag-gated in Terraform** (`variables.tf`). The feature gates below all default `false`, so a fresh `plan` is a no-op. Two operational switches deliberately do NOT: `legacy_email_owner_match` (default **true** — accepts the legacy email-keyed ownership match on read; flip to `false` only after `make backfill-owner-sub` reports a clean run, see ADR-009's Ownership Amendment) and the pre-existing `create_network` / `allow_vpc_db_access`:
 
 | Flag | Gates |
 |------|-------|
@@ -256,13 +260,17 @@ make workers
 ```bash
 make help               # 사용 가능한 전체 타겟 목록
 make migrate-status     # 오프라인: 앱 버전 + 각 미적용 마이그레이션의 release
+make backfill-owner-sub # legacy email-keyed requested_by -> Cognito sub 재작성 '계획'만 생성(변경 없음).
+                        # 계획을 검토해 확신 못 하는 항목을 지운 뒤
+                        # `node scripts/v2/backfill-owner-sub.mjs --apply <plan.json>`.
+                        # ADR-009 소유권 Amendment 2단계; 3단계는 legacy_email_owner_match=false.
 DRY_RUN=1 make migrate  # DB 마이그레이션 적용 전 미리보기
 make upgrade             # 안전한 릴리스 업그레이드: RDS 스냅샷 -> migrate -> deploy
 ```
 
 ## 환경 설정
 
-런타임 설정은 **Terraform에서 flag-gated**(`variables.tf`)이며, 불리언 플래그는 모두 기본값 `false`라 갓 받은 상태에서 `plan`은 no-op입니다:
+런타임 설정은 **Terraform에서 flag-gated**(`variables.tf`)입니다. 아래 표의 feature gate 는 모두 기본값 `false`라 갓 받은 상태에서 `plan`은 no-op입니다. 다만 **의도적으로 그렇지 않은 운영 스위치가 둘** 있습니다: `legacy_email_owner_match`(기본 **true** — legacy email-keyed 소유권 매칭을 읽기에서 계속 수용합니다. `make backfill-owner-sub` 가 clean 하게 끝난 뒤에만 `false` 로 내리세요. ADR-009 소유권 Amendment 참조)와, 기존부터 있던 `create_network` / `allow_vpc_db_access`:
 
 | Flag | 게이트 대상 |
 |------|-------------|
