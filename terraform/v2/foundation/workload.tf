@@ -133,6 +133,8 @@ resource "aws_iam_role_policy" "task_metrics" {
         "ec2:DescribeTransitGatewayAttachments",
         "ec2:DescribeTransitGatewayRouteTables",
         "ec2:SearchTransitGatewayRoutes",
+        # /vpc-endpoints: 엔드포인트 리스트+분석 (PrivateLink 메트릭 미사용 감지)
+        "ec2:DescribeVpcEndpoints",
       ]
       Resource = "*"
       }, {

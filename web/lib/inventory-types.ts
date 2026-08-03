@@ -505,6 +505,8 @@ const GROUPS: Record<string, GroupMeta> = {
       { key: 'dns-query', href: '/dns-query', labelKey: 'nav.dnsQuery' },
       // IP 인벤토리/조회 (ENI + EIP + 파드 IP 조인 — IP→리소스 검색, 미사용 EIP)
       { key: 'ip-addresses', href: '/ip-addresses', labelKey: 'nav.ipAddresses' },
+      // VPC Endpoint 리스트+분석 (PrivateLink 메트릭 기반 미사용 감지, 커버리지 갭)
+      { key: 'vpc-endpoints', href: '/vpc-endpoints', labelKey: 'nav.vpcEndpoints' },
     ],
     subgroups: [
       { key: 'loadBalancing', labelKey: 'group.network.loadBalancing', types: ['alb', 'nlb', 'target_group', 'alb_listener_rule'] },
