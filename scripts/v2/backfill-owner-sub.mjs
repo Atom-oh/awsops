@@ -26,6 +26,12 @@
 // an entry from the plan is how you refuse it. Only entries present in the approved plan are applied,
 // and each is re-verified against the database at apply time.
 //
+// A second refusal, added after review (codex stop-gate): only users whose Cognito `email_verified`
+// is "true" are eligible at all. verifyUser() already refuses to honour an unverified email claim on
+// READ; trusting one here would undo that in the irreversible direction, since the rewrite moves the
+// rows onto that sub permanently and sub-keyed rows are fully trusted afterwards. Guarding only the
+// reversible path is not a guard.
+//
 // After a clean apply (every legacy row rewritten, nothing left pending), deploy with
 // LEGACY_EMAIL_OWNER_MATCH=false — step 3.
 
@@ -72,7 +78,15 @@ function loadCreds() {
   };
 }
 
-/** email (lowercased) -> { sub, accountCreated } for every user in the pool. */
+/** email (lowercased) -> { sub, accountCreated } for every user whose email is VERIFIED.
+ *
+ * Unverified addresses are deliberately excluded, which makes them show up as unmapped rather than
+ * as a rewrite target (codex stop-gate). This is the same rule verifyUser() applies to the token
+ * claim, and skipping it here would have undone that fix in the worst possible direction: the read
+ * gate refuses to honour an unverified email, but a rewrite keyed off one moves the victim's rows
+ * onto that sub PERMANENTLY — and rows owned by sub are fully trusted afterwards. A control that
+ * only guards the reversible path while the irreversible path stays open is not a control.
+ */
 function cognitoUsersByEmail() {
   const poolId = tf('cognito_user_pool_id');
   const map = new Map();
@@ -88,7 +102,8 @@ function cognitoUsersByEmail() {
     const page = JSON.parse(out);
     for (const u of page.u || []) {
       const byName = Object.fromEntries((u.a || []).map((a) => [a.Name, a.Value]));
-      if (byName.email && byName.sub) {
+      // `email_verified` arrives as the STRING "true" from Cognito's attribute list, not a boolean.
+      if (byName.email && byName.sub && byName.email_verified === 'true') {
         map.set(byName.email.toLowerCase(), { sub: byName.sub, accountCreated: u.c || null });
       }
     }
@@ -143,9 +158,15 @@ async function plan(client) {
   console.log('Review every entry. Delete the ones you cannot vouch for, then:');
   console.log(`  node scripts/v2/backfill-owner-sub.mjs --apply ${PLAN_PATH}`);
   if (unmapped.length > 0) {
-    console.log(`\nNOT IN THE PLAN — no Cognito user holds these addresses (deleted users):`);
+    console.log(`\nNOT IN THE PLAN — no user holds these addresses with a VERIFIED email:`);
     for (const g of unmapped) console.log(`  ${g.owner}  (${g.table}, ${g.n} rows)`);
-    console.log('Resolve by hand: find the original sub, or retire the rows. Until then keep the flag on.');
+    console.log('Two different causes, and they need different handling:');
+    console.log('  - the address exists in the pool but is UNVERIFIED -> do NOT rewrite. An');
+    console.log('    unverified address proves nothing about who controls the mailbox, and a');
+    console.log('    rewrite is irreversible. Verify it (or correct the holder) first.');
+    console.log('  - the address is absent (deleted user) -> find the original sub, or retire the');
+    console.log('    rows. Nothing here can recover the owner.');
+    console.log('Either way keep LEGACY_EMAIL_OWNER_MATCH=true until these are resolved.');
   }
   process.exitCode = 2;   // a plan is not a completed migration
 }

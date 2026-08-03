@@ -111,13 +111,16 @@ that rather than a 202 pointing at an id that 404s.
   2. `make backfill-owner-sub` 가 **계획만** 쓴다(아무것도 바꾸지 않음). 운영자가 확신할 수 없는 항목을
      지운 뒤 `--apply <plan.json>` 로 계획에 남은 행 id 만 재작성한다. Cognito 는 "행이 기록된 시점에
      이 주소를 소유한 sub" 를 답할 수 없으므로 **추론하지 않는다** — 계획에서 항목을 지우는 것이 거부다.
-     매핑되지 않는 주소(삭제된 사용자)는 계획에 넣지 않고 따로 보고한다. 적용은 쓰기 **전에** 행 id 단위
+     매핑 대상은 **`email_verified` 가 true 인 사용자만**이다 — unverified 주소는 계획에 들어가지 않는다(읽기에서 unverified email 을 거부하면서 backfill 이 그것을 신뢰하면, 되돌릴 수 없는 방향으로 그 수정을 무효화한다: rewrite 는 행을 그 sub 로 영구 이전하고 이후 sub-keyed 행은 전적으로 신뢰된다). 매핑되지 않는 주소(삭제된 사용자, 또는 unverified)는 계획에 넣지 않고 사유를 구분해 보고한다. 적용은 쓰기 **전에** 행 id 단위
      journal 을 남긴다(UPDATE 후엔 이전 값이 사라진다).
      `make backfill-owner-sub` writes a PLAN only and changes nothing; an operator deletes any entry
      they cannot vouch for, then `--apply <plan.json>` rewrites just the planned row ids. Cognito
      cannot say which sub owned an address *when a row was written*, so nothing is inferred —
-     deleting a plan entry is how you refuse it. Unmapped addresses (deleted users) are excluded from
-     the plan and reported separately. Apply journals row ids BEFORE writing, since an UPDATE
+     deleting a plan entry is how you refuse it. Only users whose Cognito `email_verified` is true are eligible — an unverified address never
+     enters the plan, because honouring one here would undo verifyUser()'s check in the
+     irreversible direction (the rewrite moves rows onto that sub permanently, and sub-keyed
+     rows are fully trusted afterwards). Unmapped addresses (deleted OR unverified) are
+     excluded from the plan and reported with the cause distinguished. Apply journals row ids BEFORE writing, since an UPDATE
      destroys the old value.
   3. `LEGACY_EMAIL_OWNER_MATCH=false` 로 배포(Terraform `legacy_email_owner_match`, 기본 **true**).
      Deploy with `LEGACY_EMAIL_OWNER_MATCH=false` (Terraform `legacy_email_owner_match`, default
