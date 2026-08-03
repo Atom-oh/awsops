@@ -42,23 +42,29 @@ def _wire(monkeypatch, due_rows, fail_for=None):
     inserted = []
     monkeypatch.setattr(sd, "QUEUE_URL", "https://sqs.example/jobs")
     monkeypatch.setattr(sd.db, "connect", lambda: conn)
-    monkeypatch.setattr(sd.db, "insert_job", lambda c, jid, t, p, **k: inserted.append((jid, t, p)))
+    monkeypatch.setattr(sd.db, "insert_job", lambda c, jid, t, p, **k: inserted.append((jid, t, p, k)))
     sqs = FakeSqs(fail_for)
     monkeypatch.setattr(sd, "_sqs", sqs)
     return conn, inserted, sqs
 
 
 def test_enqueues_a_linked_report_per_due_schedule(monkeypatch):
+    # report_schedules.user_sub now stores identity() (email-preferring) per the round-2 pentest fix
+    # in web/app/api/diagnosis/schedule/route.ts — the column name is legacy, the value isn't
+    # necessarily a raw Cognito sub. u1 here stands in for that stored identity value.
     rows = [("u1", "weekly", {"tier": "deep", "model": "opus"}), ("u2", "monthly", {"tier": "mid"})]
     conn, inserted, sqs = _wire(monkeypatch, rows)
     out = sd.lambda_handler({}, None)
     assert out == {"due": 2, "enqueued": 2, "failed": 0}
     # each run pre-creates a visible diagnosis_reports row, then a worker_jobs row carrying its report_id
     assert sum(s.startswith("INSERT INTO diagnosis_reports") for s in conn.sql_log) == 2
-    assert [t for _, t, _ in inserted] == ["report", "report"]
+    assert [t for _, t, _, _ in inserted] == ["report", "report"]
     assert inserted[0][2]["tier"] == "deep" and inserted[0][2]["requested_by"] == "u1"
     assert inserted[0][2]["model"] == "opus" and inserted[1][2]["model"] == "sonnet"  # deep+opus→opus, mid→sonnet
     assert inserted[0][2]["report_id"] == 1 and inserted[0][2]["scheduled"] is True
+    # round-2 MAJOR: worker_jobs.requested_by must match the report's requested_by, or GET
+    # /api/jobs/[id] (owner-or-admin) 403s the very user this scheduled run was created for.
+    assert inserted[0][3]["requested_by"] == "u1" and inserted[1][3]["requested_by"] == "u2"
     # the report is linked to the job (UPDATE ... SET worker_job_id ...)
     assert any("UPDATE diagnosis_reports SET worker_job_id" in s for s in conn.sql_log)
     assert len(sqs.sent) == 2 and sqs.sent[0]["type"] == "report"

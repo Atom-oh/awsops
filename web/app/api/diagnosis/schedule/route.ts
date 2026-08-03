@@ -1,6 +1,6 @@
 // Per-user auto-diagnosis schedule. THIN-BFF: this route ONLY reads/writes the report_schedules row — it never
 // runs a diagnosis inline. The EventBridge-driven schedule_dispatcher (worker tier) scans report_schedules and
-// enqueues the runs. Scoped by the authenticated user's sub (no cross-user access).
+// enqueues the runs. Scoped by the authenticated user's immutable Cognito sub (no cross-user access).
 import { NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
 import { readSchedule, upsertSchedule, SCHEDULE_FREQS, type ScheduleFreq } from '@/lib/diagnosis-schedule';

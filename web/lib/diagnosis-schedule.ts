@@ -48,13 +48,12 @@ function mapRow(r: Row): DiagnosisSchedule {
   };
 }
 
-/** The caller's current schedule, or null if they have none yet. Scoped by user_sub (no cross-user read). */
+const SELECT_SQL = `SELECT schedule_type, enabled, next_run_at, last_run_at, config
+     FROM report_schedules WHERE user_sub = $1 ORDER BY enabled DESC, updated_at DESC LIMIT 1`;
+
+/** The caller's current schedule, or null if they have none yet. Scoped by immutable Cognito sub. */
 export async function readSchedule(userSub: string): Promise<DiagnosisSchedule | null> {
-  const { rows } = await getPool().query<Row>(
-    `SELECT schedule_type, enabled, next_run_at, last_run_at, config
-       FROM report_schedules WHERE user_sub = $1 ORDER BY enabled DESC, updated_at DESC LIMIT 1`,
-    [userSub],
-  );
+  const { rows } = await getPool().query<Row>(SELECT_SQL, [userSub]);
   return rows.length ? mapRow(rows[0]) : null;
 }
 
