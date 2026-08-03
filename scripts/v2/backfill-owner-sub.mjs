@@ -270,14 +270,34 @@ async function apply(client) {
     journal('committed');
   } catch (err) {
     console.error(`\nCOMMITTED, but the journal could not be written: ${err?.message || err}`);
-    console.error(`Record this by hand — the rewrite IS applied. Reverse it with, per plan entry:`);
-    console.error(`  UPDATE <table> SET <column> = <from> WHERE <column> = <to>;`);
-    console.error(`Plan (still on disk): ${APPLY_FROM}`);
+    console.error(`The rewrite IS applied. Record it by hand from the plan, which is still on disk:`);
+    console.error(`  ${APPLY_FROM}`);
+    console.error(`To reverse an entry, scope to that entry's OWN row ids — never to the sub:`);
+    for (const e of entries) {
+      console.error(`  UPDATE ${e.table} SET ${e.column} = '${e.from}'`);
+      console.error(`    WHERE ${e.pk}::text = ANY(ARRAY[${e.ids.map((i) => `'${i}'`).join(',')}])`);
+      console.error(`      AND ${e.column} = '${e.to}';`);
+    }
+    console.error(`(A bare "WHERE ${'${column}'} = <sub>" would also revert rows that legitimately hold`);
+    console.error(` that sub — every post-cut-over write, plus any other plan entry mapping a`);
+    console.error(` different address to the same person. The ids are the only safe scope.)`);
   }
   for (const line of applied) console.log(line);
   console.log(`\nrewrote ${total} rows (one transaction, committed).`);
 
-  const left = await scan(client);
+  // The remaining-rows check is a REPORT, not part of the rewrite. Letting it throw would reach
+  // main()'s catch -> die() -> exit 1, which reads as "the apply failed" for a run that committed
+  // (codex stop-gate: the same misreport class as the journal case above).
+  let left;
+  try {
+    left = await scan(client);
+  } catch (err) {
+    console.error(`\nCOMMITTED. The remaining-rows check could not run: ${err?.message || err}`);
+    console.error(`Re-run the plan step to see what is left; keep LEGACY_EMAIL_OWNER_MATCH=true until`);
+    console.error(`you have confirmed no legacy email-keyed rows remain.`);
+    process.exitCode = 2;   // not finished — but NOT "the rewrite failed"
+    return;
+  }
   if (left.length > 0) {
     console.log('\nLegacy email-keyed rows REMAIN:');
     for (const g of left) console.log(`  ${g.owner}  (${g.table}, ${g.n} rows)`);
