@@ -34,9 +34,11 @@ def _entries():
     out = {}
     for m in re.finditer(r"\(\s*'([a-z_]+)'\s*,\s*", src):
         table, i = m.group(1), m.end()
-        if src[i:i + 2] == "$$":
-            j = src.index("$$", i + 2)
-            out[table] = src[i + 2:j]
+        m2 = re.match(r"\$([A-Za-z_]*)\$", src[i:])
+        if m2:
+            tag = m2.group(0)
+            j = src.index(tag, i + len(tag))
+            out[table] = src[i + len(tag):j]
         elif src[i] == "'":
             # chain of adjacent single-quoted fragments
             frags, k = [], i
@@ -64,9 +66,9 @@ def _sql_literal_is_intact(raw_src, table):
     containing ARRAY['key',…], so the literal ENDED at the first inner quote and the migration would
     not have parsed. $$…$$ entries are immune, which is why the file uses them.
     """
-    m = re.search(r"\(\s*'" + re.escape(table) + r"'\s*,\s*(\$\$)?", raw_src)
+    m = re.search(r"\(\s*'" + re.escape(table) + r"'\s*,\s*(\$[A-Za-z_]*\$)?", raw_src)
     assert m, table
-    return m.group(1) == "$$" or "ARRAY[" not in _view_columns(table)
+    return m.group(1) is not None or "ARRAY[" not in _view_columns(table)
 
 
 def _allowlisted_keys(table):
@@ -132,6 +134,31 @@ class TestInventoryViewContract(unittest.TestCase):
         for k in ("origins", "CustomHeaders", "custom_headers"):
             self.assertNotIn(k, exposed, f"{k!r} may carry origin secrets — keep it off the allowlist")
         self.assertNotIn("origins", inv.PROJECTIONS.get("cloudfront", []))
+
+
+    def test_every_do_block_closes_where_it_should(self):
+        """Pair the BARE $$ delimiters in order; each DO block must end at its own END.
+
+        The failure this catches: a bare $$ used for a column list inside `DO $$ … $$` closes the
+        block early, so everything after it is parsed as top-level SQL and the file is invalid
+        (codex stop-gate). An earlier version of this test looked for "a bare $$ between DO $$ and
+        the next $$", which models the bug as if it were correct — the next $$ IS the premature
+        close. Pairing the delimiters and checking where each block actually ends is the property.
+        """
+        src = open(MIGRATION, encoding="utf-8").read()
+        # Remove TAGGED dollar-quoted regions ($cols$ … $cols$) — those nest legally.
+        stripped = re.sub(r"\$([A-Za-z_]+)\$.*?\$\1\$", "", src, flags=re.S)
+        parts = stripped.split("$$")
+        self.assertEqual(len(parts) % 2, 1,
+                         "odd number of bare $$ delimiters — one is unclosed")
+        for k in range(1, len(parts), 2):          # parts[k] = inside a $$ … $$ region
+            body = parts[k].strip()
+            opener = parts[k - 1].rstrip().split("\n")[-1].strip()
+            if opener.upper().endswith("DO"):
+                self.assertRegex(
+                    body, r"END\s*;?\s*$",
+                    "a DO $$ … $$ block does not end at its own END — a bare $$ inside it closed "
+                    "it early; use a tagged quote like $cols$")
 
 
 if __name__ == "__main__":
