@@ -193,6 +193,18 @@ describe('POST /api/diagnosis — idempotency conflict must not strand the secon
     expect(linkReportJob).not.toHaveBeenCalled();
   });
 
+  it('does not treat a null ledger report_id as report 0 (fresh run must survive)', async () => {
+    // Number(null) === 0 and Number.isFinite(0) is true, so the earlier guard read "the ledger names
+    // report 0", soft-deleted the fresh report and answered with 0 (codex stop-gate).
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: null } });
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    const body = await res.json();
+    expect(body.report_id).toBe(42);
+    expect(softDeleteReport).not.toHaveBeenCalled();
+    expect(linkReportJob).toHaveBeenCalledWith(42, 'j1');
+  });
+
   it('links its own report when the ledger payload names it', async () => {
     (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 42 } });
     const { POST } = await import('./route');

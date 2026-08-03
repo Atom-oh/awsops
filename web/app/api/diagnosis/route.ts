@@ -107,8 +107,15 @@ export async function POST(req: Request) {
   // LEDGER payload decides who owns it, because the worker obeys the payload — linking our row to a
   // job whose payload names another report strands ours as `running` for good, with no
   // markReportFailed and no reaper coverage (the reaper only reconciles worker_jobs).
-  const ledgerReportId = Number((job.payload as { report_id?: unknown } | undefined)?.report_id);
-  if (Number.isFinite(ledgerReportId) && ledgerReportId !== reportId) {
+  // Only a POSITIVE INTEGER counts as a ledger report id. `Number(null)` is 0 and
+  // `Number.isFinite(0)` is true, so the previous guard treated a payload carrying
+  // `report_id: null` — or no id at all, stored as null — as "the ledger names report 0", then
+  // soft-deleted the FRESH report and answered with id 0 (codex stop-gate). Absent must mean absent.
+  const rawLedgerId = (job.payload as { report_id?: unknown } | undefined)?.report_id;
+  const ledgerReportId = typeof rawLedgerId === 'number' && Number.isInteger(rawLedgerId) && rawLedgerId > 0
+    ? rawLedgerId
+    : null;
+  if (ledgerReportId !== null && ledgerReportId !== reportId) {
     await softDeleteReport(reportId);   // never ran, never will — not a FAILED diagnosis
     return NextResponse.json(
       { job_id: job.job_id, report_id: ledgerReportId, tier, model, deduped: true }, { status: 202 });
