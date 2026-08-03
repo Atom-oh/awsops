@@ -468,6 +468,24 @@ class TestExecuteSqlNonFoundationCluster(unittest.TestCase):
         self.assertEqual(
             self.rds_data_client.begin_transaction.call_args.kwargs["resourceArn"], CLUSTER_ARN)
 
+    def test_cross_account_returns_400_even_when_assume_role_fails(self):
+        # PR #197 review MAJOR: get_client() assumes the target role EAGERLY, so a foreign account
+        # whose role is absent/untrusted used to raise before the branch's cross-account guard ran,
+        # producing a raw 500. The previous tests could not catch this because their mocked
+        # get_client never assumes. Make it raise, the way the real one does.
+        def _boom(service, region, role_arn=None):
+            if role_arn:
+                raise Exception("AccessDenied: not authorized to perform sts:AssumeRole")
+            return self.rds_client
+        with mock.patch.object(rds_mcp, "get_client", side_effect=_boom), \
+             mock.patch.object(rds_mcp, "get_role_arn", return_value="arn:aws:iam::999999999999:role/X"):
+            resp = rds_mcp.lambda_handler(
+                {**_event("SELECT 1", resource_arn=CLUSTER_ARN),
+                 "arguments": {**_event("SELECT 1", resource_arn=CLUSTER_ARN)["arguments"],
+                               "target_account_id": "999999999999"}}, None)
+        self.assertEqual(resp["statusCode"], 400)
+        self.assertIn("cross-account execute_sql is unsupported", json.loads(resp["body"])["error"])
+
     def test_missing_cluster_arn_env_fails_closed(self):
         env = {k: v for k, v in _READER_ENV.items() if k != "AURORA_CLUSTER_ARN"}
         with mock.patch.dict(os.environ, env, clear=True):

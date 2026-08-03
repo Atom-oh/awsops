@@ -10,6 +10,12 @@
 --   3. Adding a column to a view here is a SECURITY-RELEVANT change. It widens what a
 --      model-invocable tool can print. It needs review, not a drive-by edit.
 --   4. Adding a whole new view is likewise a widening — justify the diagnostic need in the diff.
+--   5. NEVER list a JSONB blob column (inventory_resources.data, topology_nodes.meta). Those hold
+--      raw provider payloads — CloudFront origin CustomHeaders values among them — and topology
+--      copies the ENTIRE source row into meta.row, so listing one reopens column-level fail-open
+--      one level down, inside the JSON, defeating rule 3. A projection of NAMED keys is fine; the
+--      column itself is not. A key blocklist would be fail-open by construction — do not.
+--      (PR #197 review MAJOR, 2 models independently.)
 -- ══════════════════════════════════════════════════════════════════════════════════════════════════
 --
 -- WHY (PR #197 rounds 3-7): execute_sql's read-only guarantee rested on two things that are not
@@ -188,12 +194,22 @@ BEGIN
     -- never user input — so raw %s interpolation below is safe.
     SELECT * FROM (VALUES
       -- inventory / topology (the inventory-read connector's own queries)
+      -- `data` (JSONB) is DELIBERATELY EXCLUDED. Listing it would undo the very inversion this
+      -- migration is for: an explicit column list replaces a table allowlist so that anything not
+      -- named is absent rather than silently exposed — but a whole JSONB column is fail-open again,
+      -- one level down, at the JSON-key granularity. sync_lambda.py stores raw provider payloads in
+      -- it, including CloudFront origin CustomHeaders values (origin secrets), and nothing keeps a
+      -- future provider field from landing there. Excluded means `execute_sql` cannot dump it.
+      -- (PR #197 review MAJOR, 2 models.) A per-resource-type safe projection can be added later as
+      -- its own migration; a key blocklist would be fail-open by construction, so it is not that.
       ('inventory_resources',
-       'resource_type, account_id, region, resource_id, data, captured_at'),
+       'resource_type, account_id, region, resource_id, captured_at'),
       ('inventory_sync_runs',
        'resource_type, account_id, started_at, finished_at, status, row_count'),
+      -- `meta` (JSONB) excluded for the same reason, and more sharply: flow-topology.ts copies the
+      -- ENTIRE source row into meta.row, so exposing it re-exposes every column this file excludes.
       ('topology_nodes',
-       'account_id, id, kind, label, meta, run_id, captured_at, class'),
+       'account_id, id, kind, label, run_id, captured_at, class'),
       ('topology_edges',
        'id, account_id, source, target, rel, confidence, run_id, captured_at, class'),
       -- async job tier: metadata only (no task_token / payload / result / error)

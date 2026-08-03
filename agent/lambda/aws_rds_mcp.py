@@ -29,6 +29,17 @@ def lambda_handler(event, context):
         else: t = "list_db_instances"
         args = params
 
+    # PR #197 review MAJOR (L2, 2 models): this check must come BEFORE the RDS client is built.
+    # get_client() assumes the target role eagerly, so for a genuinely foreign target_account_id whose
+    # role is missing or does not trust us, the AssumeRole raised on the first line of the try below
+    # and surfaced as a raw 500 — the execute_sql branch's own cross-account guard never ran. The PR's
+    # stated goal ("say so instead of attempting a doomed call") was defeated on the error path, and
+    # the unit tests hid it because a mocked get_client never assumes anything.
+    if t == "execute_sql" and role_arn:
+        return err("read-only: cross-account execute_sql is unsupported — the Data API "
+                   "credential is the host account's least-privilege reader role "
+                   "(awsops_sql_reader); host-account PostgreSQL only")
+
     try:
         rds = get_client('rds', region, role_arn)
 
@@ -90,6 +101,10 @@ def lambda_handler(event, context):
             # (cross_account.get_role_arn) — so a truthy role_arn means a genuinely different
             # account. The other rds-mcp tools keep their cross-account path unchanged.
             if role_arn:
+                # Defence-in-depth. The authoritative check is at the top of lambda_handler, before
+                # the RDS client (and therefore before AssumeRole) — see the comment there. Keeping
+                # this one means a future refactor that moves the eager client cannot silently
+                # reopen the cross-account path.
                 return err("read-only: cross-account execute_sql is unsupported — the Data API "
                            "credential is the host account's least-privilege reader role "
                            "(awsops_sql_reader); host-account PostgreSQL only")
