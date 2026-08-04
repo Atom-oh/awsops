@@ -116,7 +116,28 @@ async function scheduleConflicts(client, ids, from, to) {
   return rows;
 }
 
+// The schedule_type of each planned row, needed to spot two PLANNED rewrites claiming the same
+// (sub, type). Cognito lowercases nothing on our behalf: the DB may hold `X@e.io` and `x@e.io` as two
+// distinct owner values that map to the SAME single user, and if both have a weekly schedule the second
+// UPDATE violates UNIQUE (user_sub, schedule_type). The old check only looked at rows ALREADY holding
+// the sub, so both entered the plan, the apply rolled back, and re-planning reproduced it forever —
+// the backfill could never finish (review P2).
+async function scheduleTypes(client, ids, from) {
+  const { rows } = await client.query(
+    `SELECT id::text AS id, schedule_type, enabled
+       FROM report_schedules WHERE id::text = ANY($1::text[]) AND user_sub = $2`,
+    [ids, from]);
+  return new Map(rows.map((r) => [r.id, r]));
+}
+
 function die(m) { console.error(`backfill-owner-sub: ${m}`); process.exit(1); }
+
+// Every value interpolated into the hand-recovery SQL this script PRINTS goes through here. An email
+// may legitimately contain an apostrophe (o'connor@example.com), which made the printed statement
+// invalid SQL — and a value chosen to close the quote could change what a copied statement does
+// (review P2). Doubling the quote is the standard escape; standard_conforming_strings is on in PG
+// (default since 9.1) so backslashes are literal and need no handling.
+function lit(v) { return `'${String(v).replace(/'/g, "''")}'`; }
 const tf = (out) => execSync(`terraform -chdir=terraform/v2/foundation output -raw ${out}`,
   { cwd: ROOT, encoding: 'utf8' }).trim();
 
@@ -221,6 +242,8 @@ async function plan(client) {
   const unverified = [];  // user exists, email not verified — NOT a rewrite target
   const ambiguous = [];   // >1 user maps to the same lowercased address — refuse, don't guess
   const conflicts = [];   // report_schedules: the sub already has a schedule of that type
+  const planClashes = [];       // two PLANNED rewrites claim the same (sub, schedule_type)
+  const claimedSchedules = new Map(); // `${sub}\0${type}` -> the entry that claimed it first
   for (const g of groups) {
     const hit = users.get(String(g.owner).toLowerCase());
     if (!hit) { unmapped.push(g); continue; }
@@ -232,8 +255,26 @@ async function plan(client) {
       if (clash.length > 0) {
         conflicts.push({ ...g, clash, to: hit.sub });
         ids = g.ids.filter((id) => !clash.some((c) => c.id === id));
-        if (ids.length === 0) continue;
       }
+      // Then the intra-plan collisions: whoever claimed (sub, type) first keeps it, the rest are
+      // reported. First-wins is arbitrary but stable, and both sides are named in the output.
+      if (ids.length > 0) {
+        const types = await scheduleTypes(client, ids, g.owner);
+        const keep = [];
+        for (const id of ids) {
+          const row = types.get(id);
+          const key = row ? `${hit.sub}\u0000${row.schedule_type}` : null;
+          const prior = key && claimedSchedules.get(key);
+          if (prior) {
+            planClashes.push({ ...g, to: hit.sub, id, schedule_type: row.schedule_type, prior });
+            continue;
+          }
+          if (key) claimedSchedules.set(key, { owner: g.owner, id });
+          keep.push(id);
+        }
+        ids = keep;
+      }
+      if (ids.length === 0) continue;
     }
     entries.push({
       table: g.table, column: g.column, pk: g.pk,
@@ -303,7 +344,19 @@ async function plan(client) {
     console.log('one that reflects what the user wants, remove the other, then re-plan. The address\'s');
     console.log('other rows ARE in the plan.');
   }
-  if (unverified.length > 0 || unmapped.length > 0 || ambiguous.length > 0 || conflicts.length > 0) {
+  if (planClashes.length > 0) {
+    console.log('\nNOT IN THE PLAN — two legacy addresses would be rewritten onto the SAME schedule slot:');
+    for (const c of planClashes) {
+      console.log(`  report_schedules id=${c.id} ${c.owner} -> ${c.to} type=${c.schedule_type}`
+        + `  (slot already claimed by ${c.prior.owner}, id=${c.prior.id})`);
+    }
+    console.log('These addresses differ only in letter case, so they are the same Cognito user, but the');
+    console.log('DB kept them as separate owner values. UNIQUE (user_sub, schedule_type) allows only one');
+    console.log('to survive, and planning both would abort the whole apply on every attempt. Merge or');
+    console.log('delete the duplicate schedule rows first, then re-plan.');
+  }
+  if (unverified.length > 0 || unmapped.length > 0 || ambiguous.length > 0 || conflicts.length > 0
+      || planClashes.length > 0) {
     console.log('\nKeep LEGACY_EMAIL_OWNER_MATCH=true until these are resolved.');
   }
   process.exitCode = 2;   // a plan is not a completed migration
@@ -477,9 +530,9 @@ async function apply(client) {
         console.error(`  ${e.table}.${e.column}: ${e.from} -> ${e.to} — 0 rows changed, nothing to reverse`);
         continue;
       }
-      console.error(`  UPDATE ${e.table} SET ${e.column} = '${e.from}'`);
-      console.error(`    WHERE ${e.pk}::text = ANY(ARRAY[${e.changedIds.map((i) => `'${i}'`).join(',')}])`);
-      console.error(`      AND ${e.column} = '${e.to}';`);
+      console.error(`  UPDATE ${e.table} SET ${e.column} = ${lit(e.from)}`);
+      console.error(`    WHERE ${e.pk}::text = ANY(ARRAY[${e.changedIds.map(lit).join(',')}])`);
+      console.error(`      AND ${e.column} = ${lit(e.to)};`);
     }
     console.error(`(A bare "WHERE <column> = <sub>" would also revert rows that legitimately hold that`);
     console.error(` sub — every post-cut-over write, plus any other plan entry mapping a different`);
