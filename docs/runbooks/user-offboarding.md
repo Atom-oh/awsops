@@ -45,14 +45,23 @@ SSM_ADMIN_EMAILS_PARAM=${SSM_ADMIN_EMAILS_PARAM:-/ops/awsops-v2/admin_emails}
 # database, so `:?` fails closed. Authenticate the way the app does — IAM DB auth, not the master secret.
 # This is the complete recipe (the previous text pointed at v1-to-v2-aurora-backfill.md, which documents
 # only the master-secret path, so it was not followable — review finding, 2 models).
+# set -e 를 이 블록에도 건다. 없으면 terraform/aws 명령이 실패해도 대입이 진행되어 endpoint 가 빈 문자열이
+# 되고, DSN 은 `postgresql://awsops_web@:5432/...` 처럼 **비어 있지 않게** 만들어져 `:?` 가드를 통과한다
+# (리뷰 지적: 그 가드는 fail-closed 가 아니었다). 그래서 각 조각을 개별로 검증한다.
+# `set -e` here too: without it a failing terraform/aws call still assigns, the endpoint ends up empty, and
+# DSN comes out NONEMPTY (`postgresql://awsops_web@:5432/...`) — sailing straight through the `:?` guard
+# (review finding: that guard was not fail-closed). So each piece is checked on its own.
+set -euo pipefail
 AWS_REGION=${AWS_REGION:-ap-northeast-2}
-AURORA_ENDPOINT=$(terraform -chdir=terraform/v2/foundation output -raw aurora_endpoint)
 PGUSER=${PGUSER:-awsops_web}          # 앱과 같은 역할 / the role the app uses
+AURORA_ENDPOINT=$(terraform -chdir=terraform/v2/foundation output -raw aurora_endpoint)
+: "${AURORA_ENDPOINT:?terraform output gave no aurora_endpoint}"
+case "$AURORA_ENDPOINT" in *.rds.amazonaws.com) ;; *) echo "unexpected endpoint: $AURORA_ENDPOINT"; exit 1;; esac
 PGPASSWORD=$(aws rds generate-db-auth-token --hostname "$AURORA_ENDPOINT" --port 5432 \
   --username "$PGUSER" --region "$AWS_REGION")     # 15분 유효 / valid 15 minutes
+: "${PGPASSWORD:?generate-db-auth-token returned nothing}"
 export PGPASSWORD
 DSN="postgresql://${PGUSER}@${AURORA_ENDPOINT}:5432/awsops?sslmode=require"
-: "${DSN:?DSN is empty — the terraform output above must have failed}"
 ```
 
 ```bash
@@ -150,56 +159,59 @@ SUB_NOW=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$
 # depend on the database come FIRST. With the DB step first, an Aurora outage aborts the script before the
 # account is disabled and before admin rights are pulled — fail-OPEN (review finding).
 
-# 1) 계정 비활성화 — DB 무관, 새 로그인을 즉시 막는다 / Disable the account: no DB, blocks new logins now
+# --- DB 를 쓰지 않는 단계 먼저 / the steps that need no database, first ---
+
+# 1) 계정 비활성화 — 새 로그인을 즉시 막는다 / Disable the account: blocks new logins now
 aws cognito-idp admin-disable-user --user-pool-id "$V2_POOL" --username "$EMAIL"
 
-# 2) 스케줄을 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다.
-#    Aurora 장애로 여기서 멈추면 **스케줄은 아직 살아 있다** — 복구 후 이 지점부터 다시 실행한다.
-#    Disable the schedule: report_schedules rows outlive the account and the dispatcher fires every enabled
-#    row. If an Aurora outage stops the script here, THE SCHEDULE IS STILL LIVE — resume from this step.
+# 2) admin 권한 회수 — SSM allowlist 는 EMAIL 로 매칭하므로 계정을 지워도 항목이 남고, 주소가 재할당되면
+#    새 보유자가 admin 을 물려받는다. **DB 단계보다 앞에 둔다** — 뒤에 두면 Aurora 장애 시 여기 도달 전에
+#    abort 되어 allowlist 항목이 살아남는다(리뷰 지적).
+#    Pull admin rights. The allowlist matches on EMAIL, so the entry outlives the account and a reassigned
+#    address inherits admin. This goes BEFORE the DB steps: behind them, an Aurora outage aborts the script
+#    first and the entry survives (review finding).
+aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value --output text
+#    타입은 StringList 다(workload.tf) — `--type String` 은 AWS 가 거부한다.
+#    The parameter is a StringList (workload.tf); `--type String` is rejected on overwrite.
+#    새 목록도 붙여넣기이므로 tty 에서 읽는다(주소 하나가 적대적일 수 있다).
+#    The new list is a paste too, so read it from the tty — one of those addresses may be hostile.
+unset ADMIN_LIST
+printf 'remaining admin emails (comma separated): '; IFS= read -r ADMIN_LIST < /dev/tty
+: "${ADMIN_LIST:?nothing entered - write a single space to mean cognito:groups-only}"
+aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type StringList --overwrite \
+  --value "$ADMIN_LIST"                            # 반영까지 최대 5분 (캐시 TTL) / up to 5 min cache TTL
+#    마지막 admin 을 지우는 경우 빈 문자열은 거부되므로 공백 하나를 넣는다(= cognito:groups 만 사용).
+#    Removing the last entry: an empty value is rejected, so write a single space, which means
+#    "cognito:groups only" — how Terraform seeds it. Terraform has `ignore_changes = [value]` on this
+#    parameter, so a CLI edit is not reverted by the next apply.
+# admins 그룹에 있었다면 / if they were in the group:
+aws cognito-idp admin-remove-user-from-group --user-pool-id "$V2_POOL" \
+  --username "$EMAIL" --group-name "${ADMIN_GROUP:-admins}"
+
+# --- 여기서부터 Aurora 가 필요하다 / from here on Aurora is required ---
+# 장애로 아래에서 멈추면 남는 것: 예약 진단은 계속 발화하고, 이미 발급된 세션 쿠키는 최대 12h 유효하다
+# (그 토큰이 담은 `cognito:groups` 도 그 동안 유효하다 — group 제거는 새 토큰부터 적용된다). 복구 후
+# 멈춘 지점부터 재개한다.
+# If an outage stops the script below, what remains: the scheduled diagnosis keeps firing, and the session
+# cookie already issued stays valid for up to 12h — including whatever `cognito:groups` that token carries,
+# since removing the group only affects NEW tokens. Resume from the step that failed once Aurora is back.
+
+# 3) 스케줄을 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다.
+#    Disable the schedule: report_schedules rows outlive the account and the dispatcher fires every enabled row.
 psql "$DSN" -v sub="$SUB" -v email="$EMAIL" -c \
   "UPDATE report_schedules SET enabled = false WHERE user_sub IN (:'sub', :'email')"
 
-# 3) 이미 발급된 세션을 끊는다 — admin-disable-user 는 새 로그인만 막고, 손에 든 awsops_token
-#    쿠키는 최대 12h 그대로 유효하다. 이 앱은 verifyUser() 가 session_revocations 를 보므로,
-#    그 sub 의 cutoff 를 지금으로 올리면 기존 쿠키가 즉시 무효가 된다(캐시 TTL 5초).
-#    Cut the session that already exists: admin-disable-user only blocks NEW logins, and the
-#    awsops_token cookie in their hand stays valid for up to 12h — Cognito cannot revoke an id_token.
-#    verifyUser() consults session_revocations, so advancing this sub's cutoff to now invalidates
-#    every cookie issued before it (5s cache TTL). Caveat: isRevoked() is fail-OPEN if Aurora is
-#    unreachable (documented in ADR-002), so during a DB outage this step does not hold — steps 2/5 are
-#    what survive that. / 단, isRevoked() 는 Aurora 장애 시 fail-open 이므로(ADR-002) DB 장애 중에는
-#    이 단계가 보장되지 않는다 — 그때 남는 것은 2/5 단계다.
+# 4) 이미 발급된 세션을 끊는다 — admin-disable-user 는 새 로그인만 막고, 손에 든 awsops_token 쿠키는
+#    최대 12h 유효하다(Cognito 는 id_token 을 취소할 수 없다). verifyUser() 가 session_revocations 를
+#    보므로 그 sub 의 cutoff 를 지금으로 올리면 기존 쿠키가 무효가 된다(캐시 TTL 5초).
+#    Cut the existing session: admin-disable-user blocks only NEW logins and the cookie in their hand is
+#    good for up to 12h (Cognito cannot revoke an id_token). verifyUser() consults session_revocations, so
+#    advancing this sub's cutoff invalidates every cookie issued before it (5s cache TTL). isRevoked() is
+#    fail-OPEN during an Aurora outage (ADR-002), which is exactly why steps 1-2 run before this one.
 psql "$DSN" -v sub="$SUB" -c \
   "INSERT INTO session_revocations (user_sub, revoked_at) VALUES (:'sub', NOW())
    ON CONFLICT (user_sub) DO UPDATE SET revoked_at = NOW()
    WHERE session_revocations.revoked_at < NOW()"
-
-# 4) admin 권한 회수 — SSM allowlist 는 EMAIL 로 매칭하므로 계정을 지워도 항목이 남는다.
-#    주소가 재할당되고 새 보유자가 그 주소를 verified 로 만들면 그 사람이 admin 이 된다.
-#    Revoke standing authority: the SSM admin allowlist matches on EMAIL, so the entry outlives the
-#    account. If the address is reassigned and the new holder gets it verified, they become admin.
-aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value --output text
-#    타입은 StringList 다(workload.tf). --type String 으로 덮어쓰면 AWS 가 타입 변경을 거부한다.
-#    The parameter is a StringList (workload.tf); passing --type String is rejected — AWS will not
-#    change an existing parameter's type on overwrite.
-# 새 목록도 붙여넣기이므로 같은 방식으로 읽는다(주소 하나가 적대적일 수 있다). 역시 `< /dev/tty`.
-# The new list is a paste too, so read it the same way — one of those addresses may be hostile. `< /dev/tty`
-# for the same reason as above.
-unset ADMIN_LIST
-printf 'remaining admin emails (comma separated): '; IFS= read -r ADMIN_LIST < /dev/tty
-: "${ADMIN_LIST:?nothing entered — write a single space to mean cognito:groups-only}"
-aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type StringList --overwrite \
-  --value "$ADMIN_LIST"                            # 반영까지 최대 5분 (캐시 TTL) / up to 5 min cache TTL
-#    마지막 admin 을 지우는 경우 빈 문자열은 거부되므로 공백 하나를 넣는다(= cognito:groups 만 사용).
-#    Removing the last entry: an empty value is rejected, so write a single space — that means
-#    "cognito:groups only", which is how Terraform seeds it.
-#    Terraform 은 이 값에 `ignore_changes` 를 걸어두었으므로 CLI 수정이 다음 apply 로 되돌아가지 않는다.
-#    Terraform sets `ignore_changes = [value]` on this parameter, so a CLI edit is not reverted by the
-#    next apply.
-# admins 그룹에 있었다면 / if they were in the group:
-aws cognito-idp admin-remove-user-from-group --user-pool-id "$V2_POOL" \
-  --username "$EMAIL" --group-name "${ADMIN_GROUP:-admins}"
 
 # 삭제는 이 블록에 없다 — 아래 별도 단계 5 참조 / Deletion is NOT here: see step 5 below.
 ```
@@ -215,7 +227,30 @@ comment says "after the grace period" (review finding). Deletion is irreversible
 like `diagnosis_reports.requested_by` without an owner, so run this single line separately once the grace
 period has actually elapsed. Nothing is urgent — the account is already disabled.
 
+이 블록은 **며칠 뒤 다른 셸에서** 실행되므로 `$EMAIL`·`$V2_POOL` 을 물려받지 않는다 — 잔여 변수를 믿고
+비가역 삭제를 하는 것이 이 절차에서 가장 위험한 실수다(리뷰 지적). 그래서 자체적으로 다시 묻고, 계정이
+정말 비활성인지 확인하고, 주소를 재입력받는다.
+
+This block runs **days later in a different shell**, so it inherits nothing: trusting a leftover `$EMAIL`
+or `$V2_POOL` for an irreversible delete is the worst mistake available here (review finding). It therefore
+re-prompts, checks the account really is disabled, and requires the address to be retyped.
+
 ```bash
+set -euo pipefail
+unset EMAIL
+V2_POOL=$(terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)
+: "${V2_POOL:?terraform output gave no cognito_user_pool_id}"
+printf 'address to DELETE: '; IFS= read -r EMAIL < /dev/tty
+: "${EMAIL:?no address entered}"
+
+# 비활성 상태여야 한다 — 활성 계정을 지우는 것은 이 절차를 건너뛴 것이다.
+# It must already be disabled: deleting an enabled account means the procedure above was skipped.
+ENABLED=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$EMAIL" \
+  --query Enabled --output text)
+[ "$ENABLED" = "False" ] || { echo "account is still enabled ($ENABLED) - run the Action block first"; exit 1; }
+
+printf 'retype %s to delete irreversibly: ' "$EMAIL"; IFS= read -r CONFIRM < /dev/tty
+[ "$CONFIRM" = "$EMAIL" ] || { echo 'mismatch - nothing was deleted'; exit 1; }
 aws cognito-idp admin-delete-user --user-pool-id "$V2_POOL" --username "$EMAIL"
 ```
 
