@@ -334,11 +334,30 @@ async function plan(client) {
     });
   }
 
-  writeFileSync(PLAN_PATH, JSON.stringify({ generated: 'plan', entries }, null, 2), { mode: 0o600 });
-  chmodSync(PLAN_PATH, 0o600); // see the journal writer: `mode` alone does not tighten an existing file
-  console.log(`\nplan written: ${PLAN_PATH} (${entries.length} entries, ${entries.reduce((a, e) => a + e.rows, 0)} rows) — NOTHING CHANGED`);
+  // NEVER overwrite an existing plan. Deleting an entry is how an operator REFUSES it, so the plan file
+  // is the only record of those refusals — and it was written to a fixed path with an unconditional
+  // overwrite. A second `make backfill-owner-sub` (this repo warns that concurrent sessions are normal)
+  // replaced a reviewed plan with a fresh one in which every refused entry is back, and `--apply` would
+  // then rewrite them: its automatic re-checks cover DB and Cognito state, not the operator's judgement
+  // (PR #203 review MAJOR). The journal already defended exactly this with wx + a counting suffix; the
+  // plan being the unprotected one was the asymmetry.
+  const planPath = (() => {
+    const base = PLAN_PATH.replace(/\.json$/, '');
+    let p = `${base}.json`;
+    for (let i = 2; existsSync(p); i += 1) p = `${base}-${i}.json`;
+    return p;
+  })();
+  writeFileSync(planPath, JSON.stringify({ generated: 'plan', entries }, null, 2),
+    { mode: 0o600, flag: 'wx' });
+  chmodSync(planPath, 0o600); // see the journal writer: `mode` alone does not tighten an existing file
+  if (planPath !== PLAN_PATH) {
+    console.log(`\nNOTE: ${PLAN_PATH} already exists and was NOT touched — this plan went to a new file.`);
+    console.log('If you reviewed the earlier one, apply THAT path; if you meant to re-plan, delete the old');
+    console.log('file first so there is no doubt which set of entries you approved.');
+  }
+  console.log(`\nplan written: ${planPath} (${entries.length} entries, ${entries.reduce((a, e) => a + e.rows, 0)} rows) — NOTHING CHANGED`);
   console.log('Review every entry. Delete the ones you cannot vouch for, then:');
-  console.log(`  node scripts/v2/backfill-owner-sub.mjs --apply ${PLAN_PATH}`);
+  console.log(`  node scripts/v2/backfill-owner-sub.mjs --apply ${planPath}`);
   console.log('');
   console.log('QUIESCE THE SCHEDULE DISPATCHER FIRST. It claims report_schedules rows, holds the owner');
   console.log('value in memory, and inserts diagnosis_reports/worker_jobs afterwards — so a call that is');

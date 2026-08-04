@@ -63,7 +63,7 @@ those tiles per requester would make them meaningless. The boundary is **attribu
 and rates do not reveal who ran what, and row-identifying fields (`requested_by`, job_id, report
 contents) are not covered.
 
-**한 job 당 live link 1개 / One LIVE LINK per job (PR #203):** — 이름은 "one report per job" 이지만 index 가
+**한 job 당 live link 1개 / One LIVE LINK per job (PR #203):** — 패자를 어떻게 처리하는지가 두 갈래이니 먼저 구분한다: **payload 가 지목하지 않은** report(= ledger 판정에서 진 쪽)는 아무도 렌더하지 않으므로 **soft-delete** 하고, **payload 가 지목한** report 는 링크 경합에서 졌더라도 워커가 그 행을 렌더하므로 **보존하고 링크만 포기**한다. 아래 서술은 이 구분을 전제로 읽는다. 이름은 "one report per job" 이지만 index 가
 실제로 보장하는 것은 그것이 아니다(codex stop-gate). predicate 가 `deleted_at IS NULL` 이므로 **어느 시점에나
 링크를 든 살아있는 report 가 하나**일 뿐, 한 job 의 생애 동안 여러 report 가 차례로 링크를 들었을 수 있다(앞선
 것들이 soft-delete 된 경우). 그리고 링크 경합에서 진 report 는 **삭제되지 않는다** — payload 가 지목하면 워커가

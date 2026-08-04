@@ -44,7 +44,8 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" \
 
 # 2) 그 사람 명의로 남아있는 상태 / what still exists in their name
 #    (sub 는 list-users 의 Attributes 에서 확인)
-psql -c "SELECT 'schedules' AS what, count(*) FROM report_schedules WHERE user_sub IN ('<sub>','<email>') AND enabled
+# DSN 은 이 디렉토리의 v1-to-v2-aurora-backfill.md 와 같은 컨벤션 / same convention as the sibling runbook
+psql "$DSN" -c "SELECT 'schedules' AS what, count(*) FROM report_schedules WHERE user_sub IN ('<sub>','<email>') AND enabled
          UNION ALL SELECT 'reports', count(*) FROM diagnosis_reports WHERE requested_by IN ('<sub>','<email>') AND deleted_at IS NULL"
 ```
 
@@ -53,7 +54,7 @@ psql -c "SELECT 'schedules' AS what, count(*) FROM report_schedules WHERE user_s
 # 1) 스케줄을 먼저 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다
 #    Disable the schedule FIRST: deleting the account does not remove report_schedules rows, and the
 #    dispatcher fires every enabled row regardless of whether the user still exists.
-psql -c "UPDATE report_schedules SET enabled = false, updated_at = NOW() WHERE user_sub IN ('<sub>','<email>')"
+psql "$DSN" -c "UPDATE report_schedules SET enabled = false, updated_at = NOW() WHERE user_sub IN ('<sub>','<email>')"
 
 # 2) 계정 비활성화 (되돌릴 수 있음 — 인수 경로는 즉시 닫힌다)
 #    Disable the account (reversible, and it closes the takeover path immediately)
@@ -65,8 +66,11 @@ aws cognito-idp admin-disable-user --user-pool-id "$V2_POOL" --username "<email>
 #    Cut the session that already exists: admin-disable-user only blocks NEW logins, and the
 #    awsops_token cookie in their hand stays valid for up to 12h — Cognito cannot revoke an id_token.
 #    verifyUser() consults session_revocations, so advancing this sub's cutoff to now invalidates
-#    every cookie issued before it (5s cache TTL).
-psql -c "INSERT INTO session_revocations (user_sub, revoked_at) VALUES ('<sub>', NOW())
+#    every cookie issued before it (5s cache TTL). Caveat: isRevoked() is fail-OPEN if Aurora is
+#    unreachable (documented in ADR-002), so during a DB outage this step does not hold — steps 2/5 are
+#    what survive that. / 단, isRevoked() 는 Aurora 장애 시 fail-open 이므로(ADR-002) DB 장애 중에는
+#    이 단계가 보장되지 않는다 — 그때 남는 것은 2/5 단계다.
+psql "$DSN" -c "INSERT INTO session_revocations (user_sub, revoked_at) VALUES ('<sub>', NOW())
          ON CONFLICT (user_sub) DO UPDATE SET revoked_at = NOW()
          WHERE session_revocations.revoked_at < NOW()"
 
@@ -109,14 +113,17 @@ Skip step 3 and the person stays logged in for **up to 12 more hours**. Step 4 i
 the allowlist trusts an ADDRESS, not an account, so an entry left behind hands admin to whoever holds that
 address next.
 
-MFA 가 `OFF` 인 현재 상태에서는 **비활성화/삭제가 이 경로의 유일한 확실한 차단**이다. 그리고 `legacy_email_owner_match=true` 인 동안에는 주소가 재할당되면
+**비활성화/삭제가 이 경로의 유일한 확실한 차단**이다. MFA 를 켜도 그것만으로는 부족하다 — MFA 는 이미 enroll 된 계정만 보호하고, 미등록 계정은 복구 후 `MFA_SETUP` 을 공격자가 스스로 끝낼 수 있다. 그리고 `legacy_email_owner_match=true` 인 동안에는 주소가 재할당되면
 그 주소로 기록된 legacy 행이 새 보유자와 매칭된다. 컷오버(ADR-009) 이후에는 sub 만 매칭하므로 legacy 행
-노출은 사라지지만, **계정 인수 경로는 그대로다**(MFA 를 켜지 않는 한).
+노출은 사라지지만, **계정 인수 경로는 그대로다** — 그 계정을 지우지 않는 한. MFA 는 enroll 된 계정에만 유효하다.
 
-With MFA `OFF` as it is today, disabling/deleting is the only certain block for this path. And while
+Disabling/deleting is the only certain block for this path. Turning MFA on is not a substitute: it
+protects accounts that are already ENROLLED, while an unenrolled one lets the attacker finish the
+`MFA_SETUP` challenge themselves after recovery. And while
 `legacy_email_owner_match=true`, a reassigned address
 matches the legacy rows written under it. After the cutover (ADR-009) only the sub matches, so that
-exposure ends, but **the account-takeover path does not** unless MFA is turned on.
+exposure ends, but **the account-takeover path does not** — not unless the account itself is gone. MFA
+only helps for accounts that are enrolled.
 
 ## 관련 파일 / Related files
 - `terraform/v2/foundation/auth.tf` — user pool, `allow_admin_create_user_only`, `write_attributes`, `mfa_configuration`
@@ -125,5 +132,5 @@ exposure ends, but **the account-takeover path does not** unless MFA is turned o
 - `docs/runbooks/v1-decommission.md` — v1→v2 사용자 이관 및 pool 명부 대조
 
 ## ADR
-- **ADR-002** — 인증/로그인, `email_verified` 게이트, 계정 복구 인수 = 수용된 잔여 위험(통제: 이 런북 + MFA)
+- **ADR-002** — 인증/로그인, `email_verified` 게이트, 계정 복구 인수 = 수용된 잔여 위험(통제: 이 런북. MFA 는 enroll 된 계정에 한해 보조)
 - **ADR-009** — 소유권 키 컷오버(`legacy_email_owner_match`), backfill 절차

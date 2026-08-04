@@ -103,8 +103,9 @@ make help              # list all available targets
 make migrate-status    # offline: app version + each pending migration's release
 make backfill-owner-sub # PLAN the legacy email-keyed requested_by -> Cognito sub rewrite (changes
                         # nothing). Review the plan, delete entries you cannot vouch for, then
-                        # `node scripts/v2/backfill-owner-sub.mjs --apply <plan.json>`. Step 2 of
-                        # ADR-009's Ownership Amendment; step 3 is legacy_email_owner_match=false.
+                        # `node scripts/v2/backfill-owner-sub.mjs --apply <plan.json>`. Quiesce the
+                        # schedule dispatcher first — the plan output prints the exact commands. Step 2
+                        # of ADR-009's Ownership Amendment; step 3 is legacy_email_owner_match=false.
 DRY_RUN=1 make migrate  # preview pending DB migrations before applying
 make upgrade            # safe release upgrade: RDS snapshot -> migrate -> deploy
 ```
@@ -263,6 +264,7 @@ make migrate-status     # 오프라인: 앱 버전 + 각 미적용 마이그레�
 make backfill-owner-sub # legacy email-keyed requested_by -> Cognito sub 재작성 '계획'만 생성(변경 없음).
                         # 계획을 검토해 확신 못 하는 항목을 지운 뒤
                         # `node scripts/v2/backfill-owner-sub.mjs --apply <plan.json>`.
+                        # apply 전에 schedule dispatcher 를 정지한다(명령은 plan 출력에 있음).
                         # ADR-009 소유권 Amendment 2단계; 3단계는 legacy_email_owner_match=false.
 DRY_RUN=1 make migrate  # DB 마이그레이션 적용 전 미리보기
 make upgrade             # 안전한 릴리스 업그레이드: RDS 스냅샷 -> migrate -> deploy
