@@ -128,6 +128,11 @@ Two limits, both deliberate and both easy to misread from the section above:
 - It fires only when a kind's deterministic catalog produces **zero** ready rows. The "non-K8s Prometheus
   shows a single CPU chip" case has one ready row, so it does not trigger — improving *partial* catalog
   matching is a separate change, not this one (review MAJOR: the motivating example is not covered).
+- Loki and Tempo have **no server-side execution bound** reachable through their connectors — only `limit`.
+  A heavy LogQL/TraceQL can therefore hold the connector Lambda until its own timeout; ClickHouse
+  (`max_execution_time` + `timeout_overflow_mode=throw`) and Prometheus/Mimir (`timeout`) do have one. This
+  asymmetry is accepted for a `limit=1` dry run and is the reason the generated expression is not put on any
+  automated recurring path.
 - Generated rows reach the **Explore chips only**. `_signal_plan` excludes them from the diagnosis report,
   because that prompt judges severity from `pillar`/`threshold` which a generated row does not carry. So
   the report's loki/tempo/clickhouse coverage is unchanged by this feature; the chips are what widen.

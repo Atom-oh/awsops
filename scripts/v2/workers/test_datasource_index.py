@@ -232,6 +232,25 @@ class TestGeneratedFallback:
         monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v3")
         assert dsi._schema_version(schema) != now   # every v3 row, plain marker included, rebuilds once
 
+    def test_the_weekly_budget_survives_a_schema_change(self, monkeypatch):
+        """The version hashes the whole schema and a production Prometheus changes its metric set on every
+        deploy, so keying the cap to the version turned "3 tries a week" into a daily Bedrock call (review
+        MAJOR-3). The marker is read regardless of which version prefixes it."""
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        schema = {"metrics": ["custom_only"]}
+        for i in range(6):                       # a different schema — hence version — every single run
+            drifting = {"metrics": ["custom_only", f"new_metric_{i}"]}
+            c = FakeConn(kind="prometheus", schema=drifting,
+                         existing_version=None if i == 0 else version)
+            version = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)["schema_version"]
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS   # not one per run
+        assert version.endswith(f":spent{dsi._iso_week()}")
+
     def test_a_rejected_answer_parks_for_the_week_and_does_not_freeze(self, monkeypatch):
         """The model is not deterministic and the gates change, so "failed a gate once" is not a permanent
         fact about the schema. Recording the plain version for REJECTED froze the instance until the schema

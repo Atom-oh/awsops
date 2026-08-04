@@ -161,32 +161,40 @@ def _iso_week():
     return datetime.now(timezone.utc).strftime("%G%V")
 
 
+_MARKER_RE = re.compile(r":(?:retry(\d+)w|spent)(\d{5,8})$")
+
+
 def _retry_state(existing, version):
     """(attempts_used, exhausted_this_week) read back from the stored version marker.
 
-    The budget resets weekly. Spending it used to be PERMANENT — the plain version was stored and the
-    schema never changes for a quiet datasource, so an instance that happened to be idle for three runs
-    (night, low traffic) stayed chip-less forever (review MAJOR, L4-M3). `:retryN w<week>` counts this
-    week's tries; `:spent<week>` means they are gone, and since neither marker equals `version` the
-    rebuild still runs each day — it just skips the Bedrock call until the week rolls over.
+    The budget is per INSTANCE per ISO week, and deliberately NOT per schema_version: the version hashes
+    the whole schema, and a production Prometheus changes its metric/label set on every deploy, so keying
+    the cap to it turned "3 tries a week" back into a daily Bedrock call (review MAJOR). The marker is
+    therefore read out of the stored string regardless of which version prefixes it — a schema that drifted
+    mid-week does not buy a fresh budget, which is the point of a cost cap.
+
+    Spending it used to be PERMANENT — the plain version was stored and the schema never changes for a quiet
+    datasource, so an instance that happened to be idle for three runs stayed chip-less forever (review
+    MAJOR, L4-M3). `:retryN w<week>` counts this week's tries; `:spent<week>` means they are gone, and since
+    neither marker equals `version` the rebuild still runs each day — it just skips the Bedrock call until
+    the week rolls over.
+
+    UPGRADE PATH. Two older encodings can be in the column, and neither may become a permanent park:
+      * the plain hash meaning "gave up" — unreachable from a deployed row, because this change also puts
+        the whole schema and the querygen flag into the hash basis (main hashed `metrics` + the catalog
+        version only), so every pre-existing row's version differs and rebuilds once;
+      * `:retryN` without a week, written by an earlier commit on this branch — it does not match the marker
+        pattern and reads as a FRESH budget, which is the safe direction (retry, not park).
     """
-    # UPGRADE PATH. Two older encodings can be in the column, and neither may become a permanent park:
-    #   * the plain hash meaning "gave up" — unreachable from a deployed row, because this change also puts
-    #     the whole schema and both querygen flags into the hash basis (main hashed `metrics` + the catalog
-    #     version only), so every pre-existing row's version differs and rebuilds once;
-    #   * `:retryN` without a week, written by an earlier commit on this branch — it falls through both
-    #     patterns below and reads as a FRESH budget, which is the safe direction (retry, not park).
-    if not existing or not existing.startswith(f"{version}:"):
+    m = _MARKER_RE.search(existing or "")
+    if not m:
         return 0, False
-    marker, week = existing[len(version) + 1:], _iso_week()
-    m = re.match(r"retry(\d+)w(\d+)$", marker)
-    if m:
-        return (int(m.group(1)), False) if m.group(2) == week else (0, False)
-    m = re.match(r"spent(\d+)$", marker)
-    if m:
-        current = m.group(1) == week
-        return (_MAX_GENERATION_ATTEMPTS if current else 0), current
-    return 0, False
+    tries, week = m.group(1), m.group(2)
+    if week != _iso_week():
+        return 0, False           # last week's marker: full budget again
+    if tries is None:
+        return _MAX_GENERATION_ATTEMPTS, True    # `:spent<week>` — exhausted for this week
+    return int(tries), False
 
 
 def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
