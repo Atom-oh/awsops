@@ -100,6 +100,18 @@ describe('diagnosis queries', () => {
     expect(query.mock.calls).toHaveLength(1); // the link query is never reached
     expect(query.mock.calls[0][0]).toContain("payload->>'report_id'");
   });
+  it('reportForIdempotencyKey returns null when the payload names a DELETED report', async () => {
+    // Not the link's report: the payload is what the worker obeyed, so a named-but-deleted report means
+    // there is no live report for this key. Falling back here would name one the worker never rendered
+    // (codex stop-gate). The fallback query itself excludes jobs whose payload carries an id.
+    query.mockClear();
+    query.mockImplementationOnce(async () => ({ rows: [] }));  // payload names 42, but it is deleted
+    query.mockImplementationOnce(async (sql: string) => {
+      expect(sql).toContain("j.payload->>'report_id' IS NULL");
+      return { rows: [] };
+    });
+    expect(await reportForIdempotencyKey('k')).toBeNull();
+  });
   it('reportForIdempotencyKey falls back to the link when the payload has no id', async () => {
     query.mockClear();
     query.mockImplementationOnce(async () => ({ rows: [] }));            // no payload match

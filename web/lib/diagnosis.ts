@@ -160,9 +160,16 @@ export async function reportForIdempotencyKey(key: string): Promise<number | nul
     [key],
   );
   if (byPayload.rows[0]) return Number(byPayload.rows[0].id);
+  // The fallback is for jobs whose payload names NO report — not for jobs whose named report is gone.
+  // Without that predicate, a payload naming a soft-deleted report fell through to the link and handed
+  // back a report the worker never rendered, which is the exact confusion the payload-first order was
+  // added to remove (codex stop-gate). A named-but-deleted report means "no live report for this key",
+  // and the caller's own deleted-ledger branch already knows what to do with that.
   const { rows } = await getPool().query(
     `SELECT r.id FROM diagnosis_reports r JOIN worker_jobs j ON j.job_id = r.worker_job_id
-     WHERE j.idempotency_key = $1 AND r.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1`,
+     WHERE j.idempotency_key = $1 AND r.deleted_at IS NULL
+       AND (j.payload->>'report_id' IS NULL OR j.payload->>'report_id' !~ '^[0-9]+$')
+     ORDER BY r.id DESC LIMIT 1`,
     [key],
   );
   return rows[0] ? Number(rows[0].id) : null;
