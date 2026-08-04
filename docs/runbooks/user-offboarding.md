@@ -50,12 +50,16 @@ SSM_ADMIN_EMAILS_PARAM=${SSM_ADMIN_EMAILS_PARAM:-/ops/awsops-v2/admin_emails}
 ```bash
 V2_POOL=$(terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)
 
-# 주소는 변수로만 다룬다 — 이 런북의 위협모델이 "명부에 없는 self-registered 계정"이라 주소를 공격자가
-# 골랐을 수 있다. `'` 나 `$( )` 가 든 주소를 명령줄에 그대로 치환하면 SQL 오작동/셸 주입이 된다.
-# Keep the address in a variable. This runbook's own threat model is "self-registered accounts nobody
-# recognises", so the address may be ATTACKER-CHOSEN: pasting one containing `'` or `$( )` straight into a
-# command is a SQL or shell injection (review finding).
-EMAIL='<email>'          # 따옴표 안에 그대로 / verbatim, inside the quotes
+# 주소는 **셸 문법을 거치지 않고** 읽는다. 이 런북의 위협모델이 "명부에 없는 self-registered 계정"이라
+# 주소는 공격자가 고른 값일 수 있고, `EMAIL='<여기>'` 처럼 따옴표 안에 붙여넣게 하면 그 붙여넣기 자체가
+# 주입 지점이 된다 — `';touch /tmp/pwned;'` 를 넣으면 실제로 실행된다(리뷰 지적, 재현 확인).
+# `read -r` 은 입력을 한 줄의 리터럴로 받으므로 셸이 그 내용을 해석하지 않는다.
+# Read the address WITHOUT shell syntax. This runbook's threat model is "self-registered accounts nobody
+# recognises", so the address may be attacker-chosen — and telling an operator to paste it inside quotes
+# (`EMAIL='<here>'`) makes that paste the injection point: `';touch /tmp/pwned;'` really does run
+# (review finding, reproduced). `read -r` takes the line literally; the shell never parses it.
+printf 'departing address: '; IFS= read -r EMAIL
+: "${EMAIL:?no address entered}"
 
 # 1) pool 전체를 명부와 대조 — sub 도 함께 뽑는다(아래 단계들이 요구한다)
 #    Reconcile the pool against your roster, and project the sub too: the steps below need it, and the
@@ -86,7 +90,7 @@ set -euo pipefail
 : "${DSN:?set DSN (postgresql://<user>@<aurora-endpoint>:5432/awsops?sslmode=require) first}"
 : "${V2_POOL:?set V2_POOL (terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)}"
 : "${SSM_ADMIN_EMAILS_PARAM:=/ops/awsops-v2/admin_emails}"
-: "${EMAIL:?set EMAIL to the departing person's address (quoted, verbatim)}"
+: "${EMAIL:?set EMAIL first — see the Verification block's read -r step, never by pasting into quotes}"
 : "${SUB:?set SUB — see the Verification block's admin-get-user step}"
 
 # 1) 스케줄을 먼저 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다
@@ -122,8 +126,12 @@ aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value -
 #    타입은 StringList 다(workload.tf). --type String 으로 덮어쓰면 AWS 가 타입 변경을 거부한다.
 #    The parameter is a StringList (workload.tf); passing --type String is rejected — AWS will not
 #    change an existing parameter's type on overwrite.
+# 새 목록도 붙여넣기이므로 같은 방식으로 읽는다(주소 하나가 적대적일 수 있다).
+# The new list is a paste too, so read it the same way — one of those addresses may be hostile.
+printf 'remaining admin emails (comma separated): '; IFS= read -r ADMIN_LIST
+: "${ADMIN_LIST:?nothing entered — write a single space to mean cognito:groups-only}"
 aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type StringList --overwrite \
-  --value "<remaining,comma,separated,emails>"     # 반영까지 최대 5분 (캐시 TTL) / up to 5 min cache TTL
+  --value "$ADMIN_LIST"                            # 반영까지 최대 5분 (캐시 TTL) / up to 5 min cache TTL
 #    마지막 admin 을 지우는 경우 빈 문자열은 거부되므로 공백 하나를 넣는다(= cognito:groups 만 사용).
 #    Removing the last entry: an empty value is rejected, so write a single space — that means
 #    "cognito:groups only", which is how Terraform seeds it.
