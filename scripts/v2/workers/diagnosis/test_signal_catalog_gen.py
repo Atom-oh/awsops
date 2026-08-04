@@ -382,6 +382,24 @@ class TestAliasesCannotImpersonateSchemaNames:
         assert scg._is_constant_expr("clickhouse", sch, "SELECT 1 duration FROM spans") is True
         assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM (SELECT 1) spans") is True
 
+    def test_a_name_in_a_string_literal_or_comment_is_not_a_reference(self):
+        # `SELECT 'duration' FROM spans` and `SELECT 1 /* duration */ FROM spans` are constants, yet both
+        # anchored on the column `duration` and were stored as ready signals.
+        sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}, {"name": "service"}]}]}
+        for q in ("SELECT 'duration' FROM spans",
+                  "SELECT 1 /* duration */ FROM spans",
+                  "SELECT 1 -- duration\nFROM spans",
+                  "SELECT concat('service','x') FROM spans"):
+            assert scg._is_constant_expr("clickhouse", sch, q) is True, q
+        # a literal elsewhere does not disqualify a query that really measures a column
+        assert scg._is_constant_expr(
+            "clickhouse", sch, "SELECT avg(duration) FROM spans WHERE service = 'duration'") is False
+
+    def test_a_promql_metric_named_only_in_a_label_or_comment_does_not_anchor(self):
+        sch = {"metrics": ["up"]}
+        assert scg._mentions_schema_vocabulary("prometheus", sch, 'vector(1) # up') is False
+        assert scg._mentions_schema_vocabulary("prometheus", sch, 'count(up{job="up"})') is True
+
     def test_a_keyword_or_operator_before_a_name_is_not_an_alias(self):
         # An implicit alias only follows a COMPLETE operand. After DISTINCT or an operator the trailing name
         # is the measured column itself, and stripping it there rejected valid SQL.

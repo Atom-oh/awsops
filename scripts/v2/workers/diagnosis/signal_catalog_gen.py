@@ -377,7 +377,7 @@ def _sql_value_is_measured(schema, expr):
         column-free aggregate that is a real signal — otherwise `SELECT 1 AS x FROM spans` passed by
         merely containing a letter (review, fourth pass).
     """
-    text = (expr or "").lower()
+    text = _strip_literals("clickhouse", (expr or "").lower())
     sel = re.search(r"\bselect\b(.*?)\bfrom\b", text, re.DOTALL)
     frm = _SQL_AFTER_FROM.search(text)
     if not sel or not frm:
@@ -416,6 +416,23 @@ def _anchor_names(kind, schema):
     return _vocab_names(schema, _VOCAB_KEY.get(kind, "names"))
 
 
+# A name inside a STRING LITERAL or a COMMENT is not a reference to it: `SELECT 'duration' FROM spans`
+# and `SELECT 1 /* duration */ FROM spans` are constants, yet both anchored on the column `duration` and
+# were stored as ready signals (review, fourteenth pass). Literals are blanked before any name matching.
+_SQL_COMMENT = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
+_SQL_STRING = re.compile(r"'(?:[^']|'')*'")
+_PROM_COMMENT = re.compile(r"#[^\n]*")
+_PROM_STRING = re.compile(r"'[^']*'|\"[^\"]*\"|`[^`]*`")
+
+
+def _strip_literals(kind, text):
+    """Blank string literals and comments. Dialect-specific: ClickHouse double-quotes are IDENTIFIERS
+    (so they stay), while in PromQL/LogQL/TraceQL they quote strings; `#` comments PromQL, `--` SQL."""
+    if kind == "clickhouse":
+        return _SQL_STRING.sub(" '' ", _SQL_COMMENT.sub(" ", text))
+    return _PROM_STRING.sub(" '' ", _PROM_COMMENT.sub(" ", text))
+
+
 def _mentions_schema_vocabulary(kind, schema, expr):
     """True when `expr` references at least one name from THIS instance's schema, as a whole token.
 
@@ -433,9 +450,10 @@ def _mentions_schema_vocabulary(kind, schema, expr):
     names = _anchor_names(kind, schema)
     if not names:
         return False          # nothing to anchor to → cannot establish relevance
+    text = _strip_literals(kind, (expr or "").lower())
     if kind == "clickhouse":
-        return _references_schema_table(schema, (expr or "").lower())
-    return any(_token_present(n, (expr or "").lower()) for n in names)
+        return _references_schema_table(schema, text)
+    return any(_token_present(n, text) for n in names)
 
 
 def _dry_run_check(kind, expr, integration_id, invoke_connector):
