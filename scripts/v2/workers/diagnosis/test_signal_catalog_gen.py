@@ -58,24 +58,28 @@ class TestDryRunCheck:
     def test_fails_on_an_error_envelope_response(self):
         assert scg._dry_run_check("prometheus", "up", 7, lambda args: {"error": "no such metric"}) == (False, False)
 
-    def test_fails_on_a_falsy_response(self):
-        assert scg._dry_run_check("prometheus", "up", 7, lambda args: None) == (False, False)
+    def test_a_falsy_response_is_retryable(self):
+        # No payload at all is not a verdict on the query either — same reasoning as the empty cases.
+        assert scg._dry_run_check("prometheus", "up", 7, lambda args: None) == (False, True)
 
     # A 200 carrying no rows is not evidence the query works: an invented metric name returns
     # `result: []`, and the signal would be stored as a ready chip that stays permanently empty
     # (review MAJOR, 2 models). The spec asks for a non-error, NON-EMPTY-shape response.
-    def test_fails_on_an_empty_prometheus_result(self):
-        assert scg._dry_run_check("prometheus", "up", 7, lambda args: {"data": {"result": []}})[0] is False
-        assert scg._dry_run_check("prometheus", "up", 7, lambda args: {"result": []})[0] is False
+    def test_empty_results_are_retryable_not_conclusive(self):
+        # A quiet window legitimately returns nothing; calling that conclusive froze the instance
+        # signal-less until the schema drifted (review MAJOR). The vocabulary check rejects queries that
+        # can never match; emptiness alone only means "not now".
+        assert scg._dry_run_check("prometheus", "up", 7, lambda args: {"data": {"result": []}}) == (False, True)
+        assert scg._dry_run_check("prometheus", "up", 7, lambda args: {"result": []}) == (False, True)
 
-    def test_fails_on_empty_loki_streams_and_tempo_traces(self):
-        assert scg._dry_run_check("loki", '{job=~".+"}', 7, lambda args: {"data": {"streams": []}})[0] is False
-        assert scg._dry_run_check("tempo", "{}", 7, lambda args: {"data": {"traces": []}})[0] is False
+    def test_empty_loki_streams_and_tempo_traces_are_retryable(self):
+        assert scg._dry_run_check("loki", '{job=~".+"}', 7, lambda args: {"data": {"streams": []}}) == (False, True)
+        assert scg._dry_run_check("tempo", "{}", 7, lambda args: {"data": {"traces": []}}) == (False, True)
 
-    def test_fails_on_an_empty_envelope_of_any_shape(self):
-        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: {})[0] is False
-        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: {"rows": []})[0] is False
-        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: [])[0] is False
+    def test_empty_envelopes_of_any_shape_are_retryable(self):
+        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: {}) == (False, True)
+        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: {"rows": []}) == (False, True)
+        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: []) == (False, True)
 
     def test_passes_when_rows_are_actually_present(self):
         assert scg._dry_run_check("prometheus", "up", 7,
@@ -87,7 +91,7 @@ class TestDryRunCheck:
 
 class TestTryGenerateSignal:
     def _stub(self, monkeypatch, *, static_ok=True, dry_ok=True, expr="rate(custom_app_requests_total[5m])"):
-        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         monkeypatch.setattr(scg, "_generate_expr", lambda kind, schema, invoke=None: expr)
         monkeypatch.setattr(scg, "_static_check", lambda kind, e: static_ok)
         # returns (ok, transient) now — the status API needs to tell a broken attempt from a bad query
@@ -95,7 +99,7 @@ class TestTryGenerateSignal:
                             lambda kind, e, iid, invoke_connector: (dry_ok, False))
 
     def test_returns_none_when_disabled(self, monkeypatch):
-        monkeypatch.delenv("GRAPH_QUERYGEN_ENABLED", raising=False)
+        monkeypatch.delenv("DIAG_SIGNAL_QUERYGEN_ENABLED", raising=False)
         assert scg.try_generate_signal("prometheus", SCHEMA, 7, lambda a: {}) is None
 
     def test_returns_a_ready_generated_row_when_every_check_passes(self, monkeypatch):
@@ -114,7 +118,7 @@ class TestTryGenerateSignal:
         assert scg.try_generate_signal("prometheus", SCHEMA, 7, lambda a: {}) is None
 
     def test_never_raises_when_generation_itself_throws(self, monkeypatch):
-        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         def boom(kind, schema, invoke=None):
             raise RuntimeError("bedrock down")
         monkeypatch.setattr(scg, "_generate_expr", boom)
@@ -126,26 +130,26 @@ class TestGenerationStatus:
     version, stop rebuilding) from "the attempt broke" (retry next run) — review finding."""
 
     def test_disabled_when_the_flag_is_off(self, monkeypatch):
-        monkeypatch.delenv("GRAPH_QUERYGEN_ENABLED", raising=False)
+        monkeypatch.delenv("DIAG_SIGNAL_QUERYGEN_ENABLED", raising=False)
         row, status = scg.try_generate_signal_with_status("loki", {"labels": ["job"]}, 7, lambda a: {})
         assert row is None and status == scg.DISABLED
 
     def test_rejected_when_the_static_check_fails(self, monkeypatch):
-        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         monkeypatch.setattr(scg, "_generate_expr", lambda kind, schema, invoke=None: "DROP TABLE t")
         row, status = scg.try_generate_signal_with_status(
             "clickhouse", {"tables": {"t": ["c"]}}, 7, lambda a: {"rows": [[1]]})
         assert row is None and status == scg.REJECTED
 
-    def test_rejected_when_the_dry_run_comes_back_empty(self, monkeypatch):
-        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+    def test_transient_when_the_dry_run_comes_back_empty(self, monkeypatch):
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         row, status = scg.try_generate_signal_with_status(
             "loki", {"labels": ["job"]}, 7, lambda a: {"data": {"streams": []}},
             invoke_llm=lambda prompt: 'count_over_time({job="x"}[5m])')
-        assert row is None and status == scg.REJECTED
+        assert row is None and status == scg.TRANSIENT
 
     def test_transient_when_the_connector_throws(self, monkeypatch):
-        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         def boom(args):
             raise RuntimeError("connector down")
         row, status = scg.try_generate_signal_with_status(
@@ -153,7 +157,7 @@ class TestGenerationStatus:
         assert row is None and status == scg.TRANSIENT
 
     def test_transient_when_generation_itself_raises(self, monkeypatch):
-        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         def boom_llm(prompt):
             raise RuntimeError("bedrock throttled")
         row, status = scg.try_generate_signal_with_status(
@@ -161,9 +165,51 @@ class TestGenerationStatus:
         assert row is None and status == scg.TRANSIENT
 
     def test_generated_on_success_and_the_wrapper_still_returns_the_row(self, monkeypatch):
-        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         args = ("loki", {"labels": ["job"]}, 7, lambda a: {"data": {"streams": [{"values": [["1", "x"]]}]}})
         kw = {"invoke_llm": lambda prompt: 'count_over_time({job="x"}[5m])'}
         row, status = scg.try_generate_signal_with_status(*args, **kw)
         assert status == scg.GENERATED and row["meta"]["provenance"] == "generated"
         assert scg.try_generate_signal(*args, **kw)["signal_key"] == "generated_signal"
+
+
+class TestVocabularyGate:
+    """A generated query has to be about THIS instance. `SELECT 1` / `vector(1)` passed the static check
+    and the dry run — they execute and return a row — and were stored as a ready signal the diagnosis
+    report then trusted: a silent misdiagnosis, worse than no signal (review MAJOR)."""
+
+    def test_constant_queries_are_rejected(self, monkeypatch):
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        for kind, schema, expr in (
+            ("clickhouse", {"tables": {"spans": ["ts"]}}, "SELECT 1"),
+            ("prometheus", {"metrics": ["custom_app_requests_total"]}, "vector(1)"),
+            ("loki", {"labels": ["job"]}, 'count_over_time({unrelated="x"}[5m])'),
+        ):
+            monkeypatch.setattr(scg, "_generate_expr", lambda k, s, invoke=None, e=expr: e)
+            row, status = scg.try_generate_signal_with_status(
+                kind, schema, 7, lambda a: {"rows": [[1]], "data": {"result": [1], "streams": [1]}})
+            assert (row, status) == (None, scg.REJECTED), f"{kind} {expr}"
+
+    def test_a_query_naming_a_schema_item_passes(self, monkeypatch):
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(scg, "_generate_expr",
+                            lambda k, s, invoke=None: "rate(custom_app_requests_total[5m])")
+        row, status = scg.try_generate_signal_with_status(
+            "prometheus", {"metrics": ["custom_app_requests_total"]}, 7,
+            lambda a: {"data": {"result": [{"value": [0, "1"]}]}})
+        assert status == scg.GENERATED and row["signal_key"] == "generated_signal"
+
+    def test_no_vocabulary_at_all_cannot_be_anchored(self):
+        assert scg._mentions_schema_vocabulary("prometheus", {"metrics": []}, "vector(1)") is False
+
+
+class TestVocabNames:
+    def test_dict_shaped_tables_are_supported(self):
+        # clickhouse's schema["tables"] is {table: [columns]}; slicing a dict raised TypeError, which the
+        # caller turned into TRANSIENT on every run — clickhouse could never generate and retried forever.
+        got = scg._vocab_names({"tables": {"spans": ["trace_id", "duration"]}}, "tables")
+        assert got[0] == "spans" and "trace_id" in got
+
+    def test_list_shapes_still_work(self):
+        assert scg._vocab_names({"metrics": ["up", {"name": "http_requests_total"}]}, "metrics") == \
+            ["up", "http_requests_total"]

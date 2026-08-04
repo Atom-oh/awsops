@@ -4,7 +4,7 @@ overlap the curated per-kind vocabulary at all (a custom/non-standard instrument
 graph_querygen.py's pipeline exactly, generalized across query languages (PromQL/LogQL/TraceQL/SQL/
 metricSelector) instead of one hardcoded ClickHouse SQL shape.
 
-Gated on GRAPH_QUERYGEN_ENABLED (shared with graph_querygen.py — same on/off intent: "is generation
+Gated on DIAG_SIGNAL_QUERYGEN_ENABLED (its own flag, NOT graph_querygen_enabled: "is generation
 allowed at all"); never raises; returns None on ANY failure at any stage, so the caller's signal
 just stays absent (the deterministic catalog's own `unavailable` rows are the safe fallback).
 
@@ -49,8 +49,24 @@ _PROMPT_TEMPLATE = (
 
 
 def _vocab_names(schema, key):
+    """Names from the instance's schema for this kind's vocabulary key.
+
+    Handles the DICT shape too: clickhouse's `tables` is {table: [columns]}, and slicing a dict raised
+    TypeError — inside the caller's try/except that surfaced as a TRANSIENT generation failure on every
+    single run, so clickhouse could never produce a generated signal and retried forever (found while
+    fixing the review's unbounded-retry finding). Table names come first, then their columns.
+    """
     items = (schema or {}).get(key) or []
     names = []
+    if isinstance(items, dict):
+        for table, cols in list(items.items())[:40]:
+            if isinstance(table, str):
+                names.append(table)
+            if isinstance(cols, (list, tuple)):
+                names.extend(c for c in cols[:20] if isinstance(c, str))
+        return names[:60]
+    if not isinstance(items, (list, tuple)):
+        return names
     for x in items[:40]:
         if isinstance(x, str):
             names.append(x)
@@ -138,6 +154,25 @@ TRANSIENT = "transient"    # something threw: retry next run
 GENERATED = "generated"
 
 
+def _mentions_schema_vocabulary(kind, schema, expr):
+    """True when `expr` names at least one thing from THIS instance's schema.
+
+    Without it `SELECT 1` / `vector(1)` pass the static check and the dry run (they execute and return a
+    row), so a constant unrelated to the datasource was stored as a ready "AI 생성 신호" and the diagnosis
+    report then treated it as a real signal — worse than having no signal, because it is a silent
+    misdiagnosis (review MAJOR). Deterministic catalog rows are vocabulary-checked by
+    signal_catalog._missing_for; generated ones bypassed that entirely.
+
+    Substring matching is deliberate: the model may legitimately wrap a name in a function, a label
+    matcher or a subquery, and this is a relevance floor, not a parser.
+    """
+    names = _vocab_names(schema, _VOCAB_KEY.get(kind, "names"))
+    if not names:
+        return False          # nothing to anchor to → cannot establish relevance
+    text = (expr or "").lower()
+    return any(n and n.lower() in text for n in names)
+
+
 def _dry_run_check(kind, expr, integration_id, invoke_connector):
     """(b) Live dry run against the connector. Returns (ok, transient): False on a generic
     error-envelope response or an empty payload (conclusive for this schema — see _nonempty_result),
@@ -151,10 +186,13 @@ def _dry_run_check(kind, expr, integration_id, invoke_connector):
     except Exception:
         return False, True      # connector down / timeout — not a verdict on the query
     if not result:
-        return False, False
+        return False, True
     if isinstance(result, dict) and "error" in result:
-        return False, False
-    return _nonempty_result(kind, result), False
+        return False, False       # the connector judged the query: conclusive
+    # Empty-but-successful is TRANSIENT, not a verdict: a quiet window (night, low traffic) legitimately
+    # returns no samples, and treating that as conclusive froze the instance signal-less until the schema
+    # drifted (review MAJOR). The vocabulary check below is what rejects a query that cannot ever match.
+    return (True, False) if _nonempty_result(kind, result) else (False, True)
 
 
 def try_generate_signal(kind, schema, integration_id, invoke_connector, invoke_llm=None):
@@ -172,11 +210,18 @@ def try_generate_signal_with_status(kind, schema, integration_id, invoke_connect
     means the model answered and its answer failed a check, which will repeat for the same schema;
     TRANSIENT means the attempt itself broke and the next run should try again.
     """
-    if os.environ.get("GRAPH_QUERYGEN_ENABLED") != "true":
+    # DIAG_SIGNAL_QUERYGEN_ENABLED, not GRAPH_QUERYGEN_ENABLED: consenting to one ClickHouse graph query
+    # is not consenting to daily LLM generation + live dry runs across every fallback-eligible kind
+    # (review MAJOR, 4 models across 3 lenses).
+    if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") != "true":
         return None, DISABLED
     try:
         expr = _generate_expr(kind, schema, invoke=invoke_llm)
         if not _static_check(kind, expr):
+            return None, REJECTED
+        if not _mentions_schema_vocabulary(kind, schema, expr):
+            logging.warning("[signal_catalog_gen] generated expr for integration %s mentions nothing from "
+                            "its schema; rejecting", integration_id)
             return None, REJECTED
         ok, transient = _dry_run_check(kind, expr, integration_id, invoke_connector)
         if not ok:

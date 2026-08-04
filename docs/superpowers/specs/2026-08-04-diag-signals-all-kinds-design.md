@@ -155,16 +155,33 @@ switch left the previous instance's chips clickable.
 
 The version is recorded only when the outcome is CONCLUSIVE. `try_generate_signal_with_status()` reports DISABLED / REJECTED / TRANSIENT / GENERATED, and on TRANSIENT (Bedrock throttled, connector down — anything that threw) the rows are still written but under a deliberately mismatching `{version}:retry`, so the next run rebuilds. This is not limited to an empty build: loki/tempo normally produce `unavailable` rows, and persisting those under the real version would skip the retry just as effectively (a second review pass caught exactly that). Recording the version there would have frozen a retryable failure into a permanent skip: the schema never changes, so the daily job would skip forever and the signal would never appear even after the outage ended (review finding on the first version of the sentinel).
 
-The `GRAPH_QUERYGEN_ENABLED` scope note in Decision 2 ("renamed scope-wise in docs") is now honoured in
-`terraform/v2/foundation/variables.tf`: the operator-facing description says the flag gates the
-diag-signal fallback for every fallback-eligible kind, not just the ClickHouse graph query.
+Decision 2 said this would ride on `GRAPH_QUERYGEN_ENABLED` ("renamed scope-wise in docs"). It does
+not: the fallback has its own flag, `diag_signal_querygen_enabled` /
+`DIAG_SIGNAL_QUERYGEN_ENABLED`, default off. Consenting to "one ClickHouse graph query" is not
+consenting to LLM generation plus live dry runs across every fallback-eligible kind on every daily
+run, and four models across three lenses said so twice. Both flags are now in BASELINE §2's gated
+register, which the first version of this PR left untouched — an anti-drift violation in its own
+right.
+
+Two more gates were added to the generated query, beyond what Decision 2 described:
+- **it must name something from the instance's own schema.** `SELECT 1` and `vector(1)` passed the
+  static check and the dry run — they execute and return a row — and were stored as ready "AI 생성
+  신호" that the diagnosis report then trusted. A constant unrelated to the datasource is worse than
+  no signal, because it is a silent misdiagnosis. Deterministic rows get this via `_missing_for`;
+  generated ones bypassed it.
+- **an empty dry-run result is retryable, not conclusive.** A quiet window returns no samples, and
+  treating that as a verdict froze the instance signal-less until the schema drifted.
+
+While adding the vocabulary gate, `_vocab_names` turned out to raise `TypeError` on clickhouse's
+dict-shaped `tables` — inside the caller's try/except that surfaced as TRANSIENT on every run, so
+clickhouse could never generate a signal and retried forever. Fixed, with tests for both shapes.
 
 ## Data model
 
 No schema changes. `datasource_diag_signals` keeps its existing columns; `query` JSONB shape is
 unchanged (`{tool, queries: [{label, expr}]}` for metrics-matcher entries — table/label/tag-matcher
 entries populate the same shape with a kind-appropriate `tool` name, e.g. `clickhouse_query`,
-`loki_query_range`, `tempo_search`, `jaeger_query`).
+`loki_query_range`, `tempo_search`, `jaeger_search`).  <!-- corrected 2026-08-04: the code has _search -->
 
 ## Error handling
 

@@ -97,7 +97,7 @@
 | `/api/datasources/test` | POST | 저장 전 연결 probe — SSRF 가드 (admin) | verifyUser |
 | `/api/datasources/[id]` | DELETE | 인스턴스 삭제 — 스키마 캐시/크리덴셜 cascade, 기본값 재선정 (admin) | verifyUser |
 | `/api/datasources/[id]/default` | POST | kind별 기본 인스턴스 지정 — 트랜잭션으로 기존 기본 해제 (admin) | verifyUser |
-| `/api/datasources/[id]/diag-signals` | GET | 사전 정의 진단 시그널 (DB read only, egress 없음) | verifyUser |
+| `/api/datasources/[id]/diag-signals` | GET | 사전 정의 진단 시그널 — Explore 칩 (DB read only, egress 없음). kind 범위: prometheus/mimir/loki/tempo 는 결정론 카탈로그, clickhouse 는 `diag_signal_querygen_enabled` 게이트의 LLM 폴백만, jaeger/dynatrace/datadog 는 아직 배선 없음(빈 응답) | verifyUser |
 | `/api/db` | GET | Aurora ping — public 테이블 카운트, `AURORA_ENDPOINT` 미설정 시 503 | 없음 |
 | `/api/diagnosis` | GET, POST | AI 종합진단 리포트 목록/생성 — worker enqueue + 멱등키 | verifyUser |
 | `/api/diagnosis/intent` | GET, POST | Plan-2 Intent Engine — `architecture_intent` 조회(auth) + 쓰기(admin) | verifyUser |

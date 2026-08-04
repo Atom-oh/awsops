@@ -6,7 +6,10 @@ warm/refresh path), attempts a LIVE re-introspection via the connector's `{kind}
 detection — docs/superpowers/specs/2026-07-08-registry-graph-sources-design.md), and rebuilds two
 independent tables, each gated on its OWN schema-version hash so a rebuild only happens when something
 actually changed:
-  - datasource_diag_signals (diagnosis/signal_catalog.py) — all datasource kinds; per-kind catalog +
+  - datasource_diag_signals (diagnosis/signal_catalog.py) — prometheus/mimir/loki/tempo deterministic,
+    clickhouse via the flag-gated LLM fallback only; jaeger/dynatrace/datadog are NOT wired
+    (DIAG_SIGNAL_KINDS, the daily dispatcher's _LIST_SQL and ds_connector_arns are all 5-kind).
+    Per-kind catalog +
     LLM hybrid fallback when a kind's catalog has zero ready matches.
   - datasource_graph_queries (graph_catalog.py) — ALL 5 connector kinds (capability-driven: only
     clickhouse/tempo get span queries, prometheus/mimir get them only with a service-graph metric,
