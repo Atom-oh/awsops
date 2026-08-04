@@ -63,7 +63,11 @@ those tiles per requester would make them meaningless. The boundary is **attribu
 and rates do not reveal who ran what, and row-identifying fields (`requested_by`, job_id, report
 contents) are not covered.
 
-**한 job 당 report 1개 / One report per job (PR #203):** 동시 같은-key 요청은 사전조회를 둘 다 통과한다
+**한 job 당 live link 1개 / One LIVE LINK per job (PR #203):** — 이름은 "one report per job" 이지만 index 가
+실제로 보장하는 것은 그것이 아니다(codex stop-gate). predicate 가 `deleted_at IS NULL` 이므로 **어느 시점에나
+링크를 든 살아있는 report 가 하나**일 뿐, 한 job 의 생애 동안 여러 report 가 차례로 링크를 들었을 수 있다(앞선
+것들이 soft-delete 된 경우). 그리고 링크 경합에서 진 report 는 **삭제되지 않는다** — payload 가 지목하면 워커가
+그 행을 렌더하므로, 링크 없이 남는다. 링크는 조회·lineage 용 편의이고 **payload 가 ledger 다.** 동시 같은-key 요청은 사전조회를 둘 다 통과한다
 (그 조회는 `worker_job_id` 를 경유하고 그 값은 link 전까지 NULL 이다). 승자는 **ledger payload** 가 정한다 —
 워커가 `payload.report_id` 를 실행하므로 link 순서로 정하면 워커가 쓰는 대상과 어긋난다. 마이그레이션
 `01KZ2A4M…` 의 partial unique index(`worker_job_id IS NOT NULL AND deleted_at IS NULL`)가 DB 층에서

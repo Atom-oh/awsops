@@ -49,6 +49,14 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" --query 'Users[].Username' 
 
 v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user`만 실행하면 사용자가 `FORCE_CHANGE_PASSWORD` challenge 상태로 남는데, v2 로그인(ADR-042 자체 `/login` → `InitiateAuth(USER_PASSWORD_AUTH)`)은 Cognito challenge를 처리하는 플로우가 없어 그 상태로는 **로그인 자체가 실패한다**(비밀번호 재설정 불가로 사실상 락아웃). `admin-set-user-password --permanent`로 즉시 permanent 상태로 만든 뒤, 그 임시 비밀번호를 사용자에게 전달(다음 로그인 시 직접 변경하도록 안내).
 
+**Offboarding 에서 Cognito 사용자를 반드시 삭제/비활성화한다** (PR #203). 계정을 남겨두면 그 주소가 재할당됐을 때 새 보유자가 public `ForgotPassword` 로 **그 계정을 인수**할 수 있고, 그러면 email-keyed 행뿐 아니라 sub-keyed 행까지 전부 넘어간다. `admin-disable-user`(되돌릴 수 있음) 또는 `admin-delete-user` 를 퇴사 절차에 넣는다 — 이 경로를 확실히 막는 유일한 방법이다(ADR-002 잔여 위험 참조).
+
+**Delete or disable the Cognito user during offboarding** (PR #203). Leaving the account alive means
+that once the address is reassigned, the new holder can take the account over with the public
+`ForgotPassword` flow — which hands them the sub-keyed rows too, not just the email-keyed ones. Put
+`admin-disable-user` (reversible) or `admin-delete-user` in the offboarding checklist; it is the only
+certain block for that path (see ADR-002, accepted residual risk).
+
 **신규 signup 차단은 기존 계정을 정리하지 않는다** (PR #203, codex stop-gate). `allow_admin_create_user_only = true` 는 앞으로의 `SignUp` 만 막고, **이미 self-registered 된 계정은 그대로 살아 있다** — 자기가 고른 주소가 verified 인 채로. 그 계정이 퇴사자의 재할당 mailbox 주소를 들고 있으면 이 PR 의 컨트롤을 모두 우회한다. Terraform 으로는 판정할 수 없다(Cognito 는 "누가 만들었는지"를 기록하지 않는다) — 배포 직후 **한 번** 아래로 대조하고, 알려진 운영자가 아닌 계정은 비활성화한다:
 
 ```bash

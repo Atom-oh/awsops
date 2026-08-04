@@ -38,6 +38,12 @@
 -- deleted_at IS NULL is part of the predicate (PR #203 review): the race LOSER is soft-deleted, and
 -- without this it would keep occupying the job's unique slot — a later legitimate retry for the same
 -- job could never link. Soft-deleted rows are not the live report and must not reserve it.
+--
+-- So what this enforces is precisely ONE LIVE LINK per job, not "one report per job" for all time
+-- (codex stop-gate on the file name and the surrounding prose). Over a job's life several reports may
+-- each have held the link, as long as every earlier one is soft-deleted by then, and a report whose
+-- link lost the race is NOT deleted — it stays unlinked, because the worker renders the report the
+-- payload names. The link is a convenience for lookups and lineage; the payload is the ledger.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_diagnosis_reports_worker_job_id
   ON diagnosis_reports (worker_job_id)
   WHERE worker_job_id IS NOT NULL AND deleted_at IS NULL;
