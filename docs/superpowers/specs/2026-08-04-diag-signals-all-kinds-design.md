@@ -119,6 +119,17 @@ row does not have. Gated on its **own** `diag_signal_querygen_enabled` (NOT the 
 for K8s Prometheus/Mimir is unaffected. Note the schema identifiers (table/metric/label names) of the
 external datasource are sent to Bedrock; no credentials are.
 
+### 2b. Scope of the fallback (what it does NOT do)
+
+Two limits, both deliberate and both easy to misread from the section above:
+
+- It fires only when a kind's deterministic catalog produces **zero** ready rows. The "non-K8s Prometheus
+  shows a single CPU chip" case has one ready row, so it does not trigger — improving *partial* catalog
+  matching is a separate change, not this one (review MAJOR: the motivating example is not covered).
+- Generated rows reach the **Explore chips only**. `_signal_plan` excludes them from the diagnosis report,
+  because that prompt judges severity from `pillar`/`threshold` which a generated row does not carry. So
+  the report's loki/tempo/clickhouse coverage is unchanged by this feature; the chips are what widen.
+
 ### 3. Remove the kind gates
 
 - `datasource_index.py`: widen `_DIAG_KINDS` to the 5 wired connector kinds — `_rebuild_diag_signals`
@@ -171,7 +182,10 @@ every run and re-invoked Bedrock daily wherever the flag is on; and `DiagSignalC
 state at the start of every effect, since after the kind gate was removed a failed fetch on a datasource
 switch left the previous instance's chips clickable.
 
-The version is recorded only when the outcome is CONCLUSIVE. `try_generate_signal_with_status()` reports DISABLED / REJECTED / TRANSIENT / GENERATED, and on TRANSIENT (Bedrock throttled, connector down — anything that threw) the rows are still written but under a deliberately mismatching `{version}:retry`, so the next run rebuilds. This is not limited to an empty build: loki/tempo normally produce `unavailable` rows, and persisting those under the real version would skip the retry just as effectively (a second review pass caught exactly that). Recording the version there would have frozen a retryable failure into a permanent skip: the schema never changes, so the daily job would skip forever and the signal would never appear even after the outage ended (review finding on the first version of the sentinel).
+The version is recorded only when the outcome is CONCLUSIVE. `try_generate_signal_with_status()` reports DISABLED / REJECTED / TRANSIENT / GENERATED, and on TRANSIENT (Bedrock throttled, connector down — anything that threw) the rows are still written but under a deliberately mismatching `{version}:retryNw<week>`, so the next run rebuilds. REJECTED is treated
+the same way: the model is not deterministic and the gates change, so a single failed gate is not a
+permanent fact about the schema (a later review found the plain-version encoding froze it). Only DISABLED
+records the plain version — and the flag is part of the hash, so flipping it rebuilds anyway. This is not limited to an empty build: loki/tempo normally produce `unavailable` rows, and persisting those under the real version would skip the retry just as effectively (a second review pass caught exactly that). Recording the version there would have frozen a retryable failure into a permanent skip: the schema never changes, so the daily job would skip forever and the signal would never appear even after the outage ended (review finding on the first version of the sentinel).
 
 Decision 2 said this would ride on `GRAPH_QUERYGEN_ENABLED` ("renamed scope-wise in docs"). It does
 not: the fallback has its own flag, `diag_signal_querygen_enabled` /
@@ -194,9 +208,12 @@ A third pass found the anchor check alone insufficient: a query can name a real 
 
 Later passes added four things the earlier ones had not reached:
 
-- **A connector 4xx is a verdict, not an outage.** `_lambda_invoke` raises for both, so classifying every
-  exception as TRANSIENT re-invoked Bedrock daily for a query that can never work. The status code is read
-  out of the message: 4xx → REJECTED, 5xx / FunctionError / anything else → TRANSIENT.
+- **A connector 4xx is NOT a verdict** (this reverses an earlier draft of this spec, which a later review
+  found to be the reverse of the shipped code). `prometheus_mcp.py`'s handler wraps upstream failures, SSRF
+  blocks and runtime errors alike into `err(...)` = 400, so a 503 from the datasource arrives as a 400 and
+  "4xx means the query is wrong" would freeze a genuine outage into a skip. Every exception is TRANSIENT,
+  and the cost is bounded the other way instead: at most `_MAX_GENERATION_ATTEMPTS` tries per ISO week,
+  after which the instance is parked for the rest of the week (`:spent<week>`).
 - **The static check must not be looser than the connector it feeds.** It lacked the ClickHouse
   table-function denylist, so `FROM url('http://169.254.169.254/…')` reached the dry run and the check
   itself became the egress attempt. `_TABLE_FN` now mirrors `clickhouse_mcp.py` deliberately — a check that

@@ -137,8 +137,11 @@ def _schema_version(schema):
     # continuity with versions written before the split.
     flag = "1" if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") == "true" else "0"
     gflag = "1" if os.environ.get("GRAPH_QUERYGEN_ENABLED") == "true" else "0"
+    # Only the flag that changes THIS table's content: GRAPH_QUERYGEN_ENABLED belongs to
+    # _graph_schema_version, and mixing it in here rebuilt signals when a graph feature was toggled
+    # (review MINOR). Safe to drop now — CATALOG_VERSION v4 already invalidates every stored hash once.
     basis = (json.dumps(schema, sort_keys=True, separators=(",", ":")) + "|" + _cat.CATALOG_VERSION
-             + "|querygen=" + gflag + "|dsquerygen=" + flag)
+             + "|dsquerygen=" + flag)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
@@ -220,7 +223,14 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # for a query that may never work. `:retryN` means N generations already ran, so this run is number N+1
     # and _MAX_GENERATION_ATTEMPTS counts GENERATIONS, not extra ones. Spending the budget parks the
     # instance for the rest of the ISO week (see _retry_state), not forever.
-    retry_needed = gen_status == _signal_gen.TRANSIENT and not any(r["status"] == "ready" for r in rows)
+    # REJECTED parks like TRANSIENT, it does not freeze. The model is not deterministic and the prompt,
+    # the catalog and the gates all change over time, so "the answer failed a gate once" is not a permanent
+    # fact about this schema — recording the plain version for it meant one bad generation froze the
+    # instance until the schema drifted (review CRITICAL, 3 models / 2 lenses). One rule for every
+    # non-success: up to _MAX_GENERATION_ATTEMPTS tries, then park for the rest of the week. DISABLED is
+    # excluded on purpose — the flag is part of the hash, so flipping it rebuilds anyway.
+    retry_needed = (gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED)
+                    and not any(r["status"] == "ready" for r in rows))
     if exhausted:
         stored_version = existing_version   # keep this week's `:spent` marker; retry when the week rolls
     elif not retry_needed:

@@ -35,6 +35,15 @@ _KIND_TOOL = {
     "clickhouse": "clickhouse_query",
 }
 
+# The connector's own argument name for the expression. Kept NEXT TO the tool map rather than derived from
+# the tool's name prefix, which silently sends the wrong key if a tool is ever renamed (review MINOR).
+TOOL_EXPR_ARG = {"clickhouse_query": "sql"}
+DEFAULT_EXPR_ARG = "query"
+
+
+def expr_arg_for_tool(tool):
+    return TOOL_EXPR_ARG.get(tool, DEFAULT_EXPR_ARG)
+
 # Each entry: key, title, pillar, required_metrics, queries[{expr,label}], threshold, unit.
 # `topk(10, …)` bounds the result; aggregations use clamp_min to avoid divide-by-zero.
 CATALOG = [

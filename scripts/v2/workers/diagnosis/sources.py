@@ -514,6 +514,17 @@ def _summarize_result(body):
     return out
 
 
+def _expr_arg_for_tool(tool):
+    """The connector's own argument name for the expression, from the map that sits beside _KIND_TOOL —
+    a name-prefix test silently sends the wrong key if a tool is renamed (review MINOR). Import is dual
+    (package under fargate/tests, flat in the lambda zip) exactly as datasource_index.py does it."""
+    try:
+        from diagnosis import signal_catalog as _sigcat
+    except ImportError:
+        import signal_catalog as _sigcat
+    return _sigcat.expr_arg_for_tool(tool)
+
+
 def _signal_plan(conn, iid):
     """Pre-built diagnostic-signal plan for a prom/mimir instance from datasource_diag_signals.
 
@@ -547,8 +558,9 @@ def _signal_plan(conn, iid):
                     # The arg key is per-connector: ClickHouse's takes `sql`, everything else `query`.
                     # This was hardcoded to `query`, which is invisible today because the caller only
                     # reaches here for prom/mimir — but it is a landmine for the PR that widens that gate,
-                    # and the signal rows for clickhouse already exist (review MAJOR).
-                    arg = "sql" if str(tool).startswith("clickhouse") else "query"
+                    # and the signal rows for clickhouse already exist (review MAJOR). The map lives beside
+                    # _KIND_TOOL so renaming a tool cannot silently change the key (review MINOR).
+                    arg = _expr_arg_for_tool(tool)
                     plan.append((tool, {arg: expr}, f"{r['signal_key']}:{q.get('label', 'q')}"))
             m = r.get("meta") or {}
             sig_meta.append({"key": r["signal_key"], "title": r.get("title"),

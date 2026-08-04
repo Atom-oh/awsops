@@ -19,8 +19,8 @@
 ## Global Constraints
 
 - `build_signals(kind, schema)` and every matcher function stay PURE — no DB, no boto3, no egress, never raises (spec §Error handling).
-- The LLM fallback is gated on `GRAPH_QUERYGEN_ENABLED` (reuse the existing env var — spec §Decision 2) and follows `graph_querygen.py`'s exact contract: any failure at any stage returns no candidates, never raises, never blocks the deterministic rebuild.
-- `signal_catalog.CATALOG_VERSION` must be bumped once, at the end, after all catalog entries are added (spec §Decision 4) — forces a one-time rebuild across all instances via the existing daily dispatcher.
+- **DRIFTED (2026-08-04):** the LLM fallback is gated on its OWN `DIAG_SIGNAL_QUERYGEN_ENABLED`, not the shared `GRAPH_QUERYGEN_ENABLED` this plan assumed (spec Amended #4) and follows `graph_querygen.py`'s exact contract: any failure at any stage returns no candidates, never raises, never blocks the deterministic rebuild.
+- `signal_catalog.CATALOG_VERSION` must be bumped once, at the end, after all catalog entries are added (spec §Decision 4; shipped value is `v4`) — forces a one-time rebuild across all instances via the existing daily dispatcher.
 - `datasource_diag_signals` table schema is unchanged — no migration in this plan.
 - Metric/table/label/tag names used in matchers are module constants only, never derived from user input (spec, `signal_catalog.py`'s existing docstring guarantee).
 

@@ -145,7 +145,7 @@ class TestDefensive:
 class TestGeneratedFallback:
     def test_fallback_invoked_and_appended_when_catalog_has_zero_ready(self, monkeypatch):
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: ({
                 "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                 "query": {"tool": "loki_query_range", "queries": [{"label": "g", "expr": "count_over_time({job=\"x\"}[5m])"}]},
@@ -163,7 +163,7 @@ class TestGeneratedFallback:
         # A Bedrock throttle or a connector outage is retryable: recording the REAL version would freeze
         # it into a permanent skip, since the schema never changes (review finding).
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})  # catalog yields nothing
@@ -178,7 +178,7 @@ class TestGeneratedFallback:
         # as effectively (review, second pass). The rows are still written (the UI shows their "metric X
         # missing" text); only the version is tagged.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         c = FakeConn(kind="loki", schema={"labels": ["custom_label_only"]})  # rows, none ready
@@ -193,7 +193,7 @@ class TestGeneratedFallback:
         # work (review, tenth pass). Once _MAX_GENERATION_ATTEMPTS tries are used up the instance is parked
         # for the rest of the ISO week — `:spent<week>`, not the plain version, so the park expires.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         base = dsi._schema_version({"tables": {"t": ["c"]}})
@@ -209,7 +209,7 @@ class TestGeneratedFallback:
         # comparing N (rather than N+1) against the cap spent one attempt more than the name promises.
         calls = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
         }))
@@ -232,12 +232,26 @@ class TestGeneratedFallback:
         monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v3")
         assert dsi._schema_version(schema) != now   # every v3 row, plain marker included, rebuilds once
 
+    def test_a_rejected_answer_parks_for_the_week_and_does_not_freeze(self, monkeypatch):
+        """The model is not deterministic and the gates change, so "failed a gate once" is not a permanent
+        fact about the schema. Recording the plain version for REJECTED froze the instance until the schema
+        drifted (review CRITICAL)."""
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "rejected")),
+        }))
+        schema = {"tables": {"t": ["c"]}}
+        base = dsi._schema_version(schema)
+        c = FakeConn(kind="clickhouse", schema=schema)
+        out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
+        assert out["schema_version"] == f"{base}:retry1w{dsi._iso_week()}"   # not the plain version
+
     def test_a_weekless_legacy_marker_reads_as_a_fresh_budget(self, monkeypatch):
         # An earlier commit wrote `:retryN` with no week. It must not park the instance — reading it as a
         # fresh budget is the safe direction, and the plain-hash "gave up" encoding cannot reach this code
         # from a deployed row because the hash basis itself changed in this commit.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         schema = {"tables": {"t": ["c"]}}
@@ -251,7 +265,7 @@ class TestGeneratedFallback:
         # changes, an instance idle for three runs stayed chip-less forever (review MAJOR, L4-M3).
         calls = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
         }))
@@ -271,7 +285,7 @@ class TestGeneratedFallback:
 
     def test_the_attempt_counter_advances(self, monkeypatch):
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         base = dsi._schema_version({"tables": {"t": ["c"]}})
@@ -283,7 +297,7 @@ class TestGeneratedFallback:
         # Flag off (or the model answered and was rejected): nothing will change until the schema or an
         # operator does, so the version IS recorded and the next run skips.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "disabled")),
         }))
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})
@@ -294,7 +308,7 @@ class TestGeneratedFallback:
     def test_fallback_not_invoked_when_catalog_already_has_a_ready_row(self, monkeypatch):
         called = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (called.append(1) or None, "rejected")),
         }))
@@ -332,15 +346,16 @@ class TestSchemaVersionCoversFullSchemaAndFlag:
 
     def test_flag_flip_with_unchanged_schema_forces_rebuild_not_skip(self, monkeypatch):
         schema = {"labels": ["custom_label_only"]}  # zero catalog matches → fallback-eligible
-        monkeypatch.delenv("GRAPH_QUERYGEN_ENABLED", raising=False)
+        # the DIAG flag, not the graph one: only the flag that changes THIS table's content is hashed
+        monkeypatch.delenv("DIAG_SIGNAL_QUERYGEN_ENABLED", raising=False)
         c0 = FakeConn(kind="loki", schema=schema)
         dsi.run({"integration_id": 7, "kind": "loki"}, c0)
         version_off = c0.inserts[0]["sv"]
         assert not any(p["st"] == "ready" for p in c0.inserts)  # no fallback while the flag was off
 
-        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient",
+            "TRANSIENT": "transient", "REJECTED": "rejected",
             "try_generate_signal_with_status": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: ({
                 "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                 "query": {"tool": "loki_query_range", "queries": [{"label": "g", "expr": "x"}]},
@@ -354,7 +369,7 @@ class TestSchemaVersionCoversFullSchemaAndFlag:
 
     def test_same_flag_state_and_schema_still_skips(self, monkeypatch):
         schema = {"labels": ["job"]}
-        monkeypatch.delenv("GRAPH_QUERYGEN_ENABLED", raising=False)
+        monkeypatch.delenv("DIAG_SIGNAL_QUERYGEN_ENABLED", raising=False)
         c0 = FakeConn(kind="loki", schema=schema)
         dsi.run({"integration_id": 7, "kind": "loki"}, c0)
         version = c0.inserts[0]["sv"]
