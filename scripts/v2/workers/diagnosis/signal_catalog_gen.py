@@ -167,32 +167,71 @@ _CONST_VALUE_FN = re.compile(r"^\s*(?:vector|scalar)\s*\(\s*[-+0-9.eE]+\s*\)\s*$
 _COUNT_ONLY = re.compile(r"\bcount\s*\(\s*\*?\s*\)", re.IGNORECASE)
 
 
-# Identifier quoting has to come off before any adjacency test: ClickHouse accepts `db`.`table` and
-# "db"."table", and with the quotes still in place the character before `table` is a backtick rather than
-# the dot, so a cross-database reference slipped past the FROM check (review, eighth pass).
-_SQL_QUOTE_CHARS = str.maketrans("", "", '`"')
+# Table references are TOKENIZED, not regex-matched. Stripping quotes globally (the previous attempt)
+# destroys the distinction that matters: `other_db`.`spans` is a qualified reference while
+# `other_db.spans` is ONE identifier whose name contains a dot — after stripping, both read as
+# other_db.spans and no adjacency test can tell them apart (review, ninth pass). Two earlier attempts
+# failed the other way: a dot-excluding lookbehind rejected ordinary `s.duration`, and a permissive one
+# accepted a same-named table in another database.
+_IDENT = re.compile(r'`((?:[^`]|``)*)`|"((?:[^"]|"")*)"|([A-Za-z_][\w$]*)')
 
 
-def _unquote_sql(text):
-    return (text or "").translate(_SQL_QUOTE_CHARS)
+def _parse_ident_chains(text):
+    """Every dotted identifier chain in `text`, as lists of parts, with quoting honoured.
 
-
-def _token_present(name, text, allow_dot_prefix=True):
-    """`name` appears in `text` as a whole word.
-
-    `allow_dot_prefix=True` (columns) tolerates a qualifier: `SELECT s.duration` must match the column
-    `duration`, since qualifying a column is how SQL is normally written, and refusing a preceding dot
-    rejected ordinary queries (review, fifth pass).
-
-    `allow_dot_prefix=False` (tables in the FROM) does NOT: a cached `otel.spans` yields the bare segment
-    `spans`, and allowing a qualifier there made `FROM other_db.spans` match it — a different table in a
-    different database (review, seventh pass). Unqualified `FROM spans` still matches, which is the
-    legitimate current-database spelling.
+    `` FROM `otel`.`spans` s `` → [["otel", "spans"], ["s"]];  `` FROM `other_db.spans` `` →
+    [["other_db.spans"]] — one part, because that is one identifier.
     """
+    chains, current, pos = [], [], 0
+    while pos < len(text):
+        m = _IDENT.match(text, pos)
+        if m:
+            part = next(g for g in m.groups() if g is not None)
+            current.append(part.replace("``", "`").replace('""', '"').lower())
+            pos = m.end()
+            if pos < len(text) and text[pos] == ".":
+                pos += 1
+                continue
+            chains.append(current)
+            current = []
+            continue
+        if current:
+            chains.append(current)
+            current = []
+        pos += 1
+    if current:
+        chains.append(current)
+    return chains
+
+
+def _table_ref_matches(cached, chain):
+    """Does a parsed reference name the cached table?
+
+    The cache holds one string, so both readings of a dotted name are honoured: `otel.spans` may be
+    db+table or a single dotted identifier. An unqualified chain matches the cached last segment — the
+    legitimate current-database spelling — but a DIFFERENTLY qualified chain never does.
+    """
+    cached = (cached or "").lower()
+    if not cached:
+        return False
+    parts = cached.split(".")
+    if chain == parts or chain == [cached]:
+        return True
+    return len(chain) == 1 and chain[0] == parts[-1]
+
+
+def _references_schema_table(schema, text):
+    chains = _parse_ident_chains(text)
+    return any(_table_ref_matches(t, c) for t in _schema_table_names(schema) for c in chains)
+
+
+def _token_present(name, text):
+    """`name` appears in `text` as a whole word, tolerating a qualifier: `SELECT s.duration` has to match
+    the column `duration`, since qualifying a column is how SQL is normally written (review, fifth pass).
+    Columns and the non-SQL vocabularies use this; table references go through _references_schema_table."""
     if not name:
         return False
-    left = r"(?<!\w)" if allow_dot_prefix else r"(?<![\w.])"
-    return bool(re.search(left + re.escape(name.lower()) + r"(?!\w)", text))
+    return bool(re.search(r"(?<!\w)" + re.escape(name.lower()) + r"(?!\w)", text))
 
 
 def _sql_tables(schema):
@@ -233,14 +272,10 @@ def _sql_tables(schema):
 
 
 def _schema_table_names(schema):
-    """Table names, plus the last dotted segment: the cache may hold `otel.spans` while the query says
-    `FROM spans` (or the reverse), and either spelling refers to the same table."""
-    names = []
-    for t, _ in _sql_tables(schema):
-        names.append(t)
-        if "." in t:
-            names.append(t.rsplit(".", 1)[-1])
-    return names
+    """Cached table names, verbatim. The unqualified spelling is handled by _table_ref_matches, not by
+    adding a bare segment here — a derived segment matched a qualified reference to a different
+    database's same-named table (review, seventh pass)."""
+    return [t for t, _ in _sql_tables(schema)]
 
 
 def _schema_column_names(schema):
@@ -264,19 +299,20 @@ def _sql_value_is_measured(schema, expr):
         column-free aggregate that is a real signal — otherwise `SELECT 1 AS x FROM spans` passed by
         merely containing a letter (review, fourth pass).
     """
-    text = _unquote_sql((expr or "").lower())
+    text = (expr or "").lower()
     sel = re.search(r"\bselect\b(.*?)\bfrom\b", text, re.DOTALL)
     frm = _SQL_AFTER_FROM.search(text)
     if not sel or not frm:
         return False
-    tables = _schema_table_names(schema)
-    # strict: the FROM must reference one of THIS instance's tables, not a same-named table elsewhere
-    if not any(_token_present(t, frm.group(1), allow_dot_prefix=False) for t in tables):
+    # the FROM must reference one of THIS instance's tables, not a same-named table elsewhere
+    if not _references_schema_table(schema, frm.group(1)):
         return False
     select_list = sel.group(1)
     if _COUNT_ONLY.search(select_list):
         return True
-    return any(_token_present(n, select_list) for n in tables + _schema_column_names(schema))
+    if _references_schema_table(schema, select_list):
+        return True
+    return any(_token_present(n, select_list) for n in _schema_column_names(schema))
 
 
 def _is_constant_expr(kind, schema, expr):
@@ -318,10 +354,9 @@ def _mentions_schema_vocabulary(kind, schema, expr):
     names = _anchor_names(kind, schema)
     if not names:
         return False          # nothing to anchor to → cannot establish relevance
-    text = (expr or "").lower()
     if kind == "clickhouse":
-        text = _unquote_sql(text)
-    return any(_token_present(n, text) for n in names)
+        return _references_schema_table(schema, (expr or "").lower())
+    return any(_token_present(n, (expr or "").lower()) for n in names)
 
 
 def _dry_run_check(kind, expr, integration_id, invoke_connector):

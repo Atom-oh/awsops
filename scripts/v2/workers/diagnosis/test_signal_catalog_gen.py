@@ -257,7 +257,7 @@ class TestVocabularyGate:
         real = {"tables": [{"name": "otel.spans",
                             "columns": [{"name": "Duration", "type": "UInt64"},
                                         {"name": "Timestamp", "type": "DateTime"}]}]}
-        assert scg._schema_table_names(real) == ["otel.spans", "spans"]   # both spellings
+        assert scg._schema_table_names(real) == ["otel.spans"]   # verbatim; spellings are matched, not derived
         assert "Duration" in scg._schema_column_names(real)
         assert scg._is_constant_expr("clickhouse", real,
                                      "SELECT quantile(0.9)(Duration) FROM otel.spans") is False
@@ -275,6 +275,17 @@ class TestVocabularyGate:
         # and an unqualified cached name is not matched by a qualified reference either
         flat = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
         assert scg._is_constant_expr("clickhouse", flat, "SELECT count() FROM other.spans") is True
+
+    def test_a_dot_inside_one_quoted_identifier_is_not_a_qualifier(self):
+        # References are parsed rather than string-matched, so `other_db.spans` (ONE identifier whose name
+        # contains a dot) and `other_db`.`spans` (a qualified reference) stay distinct instead of being
+        # flattened into the same text. Measured honestly: the previous quote-stripping form ALSO rejected
+        # this particular expression, so this is not a regression test for a live bypass — it pins the
+        # parser's semantics, which is what makes the distinction available at all.
+        real = {"tables": [{"name": "otel.spans", "columns": [{"name": "Duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", real, "SELECT count() FROM `other_db.spans`") is True
+        assert scg._parse_ident_chains("`other_db.spans`") == [["other_db.spans"]]
+        assert scg._parse_ident_chains("`otel`.`spans` s") == [["otel", "spans"], ["s"]]
 
     def test_quoted_identifiers_do_not_defeat_the_cross_database_check(self):
         # ClickHouse accepts `db`.`table` and "db"."table". With the quotes in place the character before
