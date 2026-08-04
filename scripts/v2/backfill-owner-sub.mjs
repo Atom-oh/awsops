@@ -101,9 +101,14 @@ const TARGETS = [
 // The UPDATE would raise 23505 and roll the whole apply back (fail-closed, but unfinishable), so the
 // plan finds these first and leaves them out: which of the two schedules is authoritative is a
 // decision, not something this tool can infer.
+// Both rows' `enabled` come back, because that is what decides how bad the leftover is: two enabled
+// rows means the diagnosis already runs twice; only the legacy one enabled means the person's real
+// schedule is still email-keyed and its output goes invisible at flag-off. Reporting just one flag
+// would leave the operator guessing which case they are in.
 async function scheduleConflicts(client, ids, from, to) {
   const { rows } = await client.query(
-    `SELECT l.id::text AS id, l.schedule_type, l.enabled
+    `SELECT l.id::text AS id, l.schedule_type, l.enabled AS legacy_enabled,
+            s.id::text AS other_id, s.enabled AS other_enabled
        FROM report_schedules l
        JOIN report_schedules s ON s.user_sub = $3 AND s.schedule_type = l.schedule_type
       WHERE l.id::text = ANY($1::text[]) AND l.user_sub = $2`,
@@ -271,12 +276,23 @@ async function plan(client) {
     console.log('\nNOT IN THE PLAN — the target sub ALREADY has a schedule of the same type:');
     for (const g of conflicts) {
       for (const c of g.clash) {
-        console.log(`  report_schedules id=${c.id} ${g.owner} -> ${g.to}  type=${c.schedule_type} enabled=${c.enabled}`);
+        const both = c.legacy_enabled && c.other_enabled;
+        const why = both
+          ? 'BOTH ENABLED — this diagnosis is ALREADY running twice'
+          : c.legacy_enabled
+            ? 'only the legacy row is enabled — this person\'s live schedule is still email-keyed, and '
+              + 'at flag-off its reports become invisible to them'
+            : 'only the sub-keyed row is enabled — the legacy row is dormant, so deleting it is usually right';
+        console.log(`  type=${c.schedule_type}: legacy id=${c.id} (${g.owner}, enabled=${c.legacy_enabled})`
+          + ` vs id=${c.other_id} (${g.to}, enabled=${c.other_enabled})`);
+        console.log(`    -> ${why}`);
       }
     }
-    console.log('UNIQUE (user_sub, schedule_type) means the rewrite cannot merge them, and both rows');
-    console.log('enabled = the diagnosis runs twice. Decide which is authoritative, disable/delete the');
-    console.log('other, then re-plan. The address\'s other rows ARE in the plan.');
+    console.log('UNIQUE (user_sub, schedule_type) makes the rewrite impossible without merging, and the');
+    console.log('merge is a decision this tool will not make. Note that leaving it alone is NOT neutral:');
+    console.log('the dispatcher runs every enabled row regardless of the flag, so the legacy row keeps');
+    console.log('firing and keeps writing email-keyed reports. Disable/delete the one you do not want,');
+    console.log('then re-plan. The address\'s other rows ARE in the plan.');
   }
   if (unverified.length > 0 || unmapped.length > 0 || ambiguous.length > 0 || conflicts.length > 0) {
     console.log('\nKeep LEGACY_EMAIL_OWNER_MATCH=true until these are resolved.');
