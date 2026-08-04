@@ -14,6 +14,7 @@ Node deps는 `scripts/v2/package.json`(pg, @inquirer/prompts, secrets-manager) �
 - `v2/*.itest.mjs` — 일회용 PostgreSQL 17 컨테이너 대상 마이그레이션 통합 테스트 (integration tests against a disposable PG17 container)
 - `v2/upgrade.sh` — `make upgrade`: RDS 스냅샷 → migrate → deploy. `CONFIRM=go` 없으면 프리뷰 (safe release upgrade; preview unless CONFIRM=go)
 - `pr-review/` — lens×모델 매트릭스 리뷰 패널: `run-panel.sh`(병렬 fan-out, lens당 `*.txt` 프롬프트), `synthesize.sh`(의장 종합), `lib.sh`(슬롯/크리덴셜 스크럽) (lens x model review panel fan-out + chair synthesis)
+  - **의장 호출은 `--strict-mcp-config` 필수** — 유저 스코프 MCP(예: github)가 세션 초기화 때 로드되고 그 인증이 깨지면 `claude -p` 가 에러 없이 도구를 기다리며 600s 무응답으로 멈춘다. primary/fallback 이 함께 죽어 게이트가 diff 와 무관하게 FAIL 한다(관찰: PR #194/#197/#202/#203). `--allowedTools` 는 permission allowlist 라 MCP 로드를 끄지 못하므로 대체재가 아니다. / The chair call MUST pass `--strict-mcp-config`: a user-scope MCP server whose auth is broken makes `claude -p` wait silently for the tool until the 600s timeout, killing both chairs and failing the gate regardless of the diff. `--allowedTools` is a permission allowlist and does not stop MCP loading.
 
 ## 마이그레이션 파일명 규칙 / Migration Filename Rule
 - `terraform/v2/foundation/migrations/<ULID>_<snake_name>.sql`
