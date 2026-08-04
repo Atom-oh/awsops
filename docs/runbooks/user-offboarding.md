@@ -63,7 +63,18 @@ V2_POOL=$(terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool
 # (reproduced). `read -r` takes the line literally; the shell never parses it. `< /dev/tty` is required
 # too: this block is meant to be pasted whole, and a bare `read` would consume the pasted block's OWN
 # NEXT LINE as the address (also reproduced). Export EMAIL beforehand to skip the prompt non-interactively.
-[ -n "${EMAIL:-}" ] || { printf 'departing address: '; IFS= read -r EMAIL < /dev/tty; }
+# 비어 있을 때만 묻는 방식은 쓰지 않는다 — 같은 셸에서 **앞사람 오프보딩의 EMAIL 이 남아 있으면** 프롬프트가
+# 조용히 건너뛰어지고 파괴적 명령이 엉뚱한 사람에게 실행된다(리뷰 지적). 항상 묻고, 비대화형은 명시적으로
+# 옵트인한다.
+# Do NOT use "prompt only if empty": a leftover EMAIL from the PREVIOUS person's offboarding in the same
+# shell would silently skip the prompt and point the destructive commands at the wrong person (review
+# finding). Always prompt; opt IN to non-interactive explicitly.
+if [ -n "${OFFBOARD_NONINTERACTIVE:-}" ]; then
+  : "${EMAIL:?OFFBOARD_NONINTERACTIVE is set, so EMAIL must be set too}"
+else
+  unset EMAIL SUB                      # 이전 실행의 잔여값 제거 / drop anything left from a previous run
+  printf 'departing address: '; IFS= read -r EMAIL < /dev/tty
+fi
 : "${EMAIL:?no address entered}"
 
 # 1) pool 전체를 명부와 대조 — sub 도 함께 뽑는다(아래 단계들이 요구한다)
@@ -95,8 +106,16 @@ set -euo pipefail
 : "${DSN:?set DSN (postgresql://<user>@<aurora-endpoint>:5432/awsops?sslmode=require) first}"
 : "${V2_POOL:?set V2_POOL (terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)}"
 : "${SSM_ADMIN_EMAILS_PARAM:=/ops/awsops-v2/admin_emails}"
-: "${EMAIL:?set EMAIL first — see the Verification block's read -r step, never by pasting into quotes}"
+: "${EMAIL:?set EMAIL first — see the Verification block's prompt, never by pasting into quotes}"
 : "${SUB:?set SUB — see the Verification block's admin-get-user step}"
+
+# 여기서부터 파괴적이다. 값을 눈으로 확인하고 주소를 다시 입력하게 한다 — 잔여 변수/오타로 엉뚱한 사람을
+# 지우는 것을 막는 마지막 관문이며, 이 확인 없이는 어떤 명령도 실행되지 않는다.
+# Everything below is destructive. Show the resolved values and require the address to be typed again: the
+# last stop against a stale variable or a typo taking out the wrong person. No command runs without it.
+printf 'about to offboard:\n  EMAIL=%s\n  SUB=%s\nretype the address to proceed: ' "$EMAIL" "$SUB"
+if [ -n "${OFFBOARD_NONINTERACTIVE:-}" ]; then CONFIRM="$EMAIL"; else IFS= read -r CONFIRM < /dev/tty; fi
+[ "$CONFIRM" = "$EMAIL" ] || { echo 'mismatch — nothing was done'; exit 1; }
 
 # 1) 스케줄을 먼저 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다
 #    Disable the schedule FIRST: deleting the account does not remove report_schedules rows, and the
@@ -134,8 +153,12 @@ aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value -
 # 새 목록도 붙여넣기이므로 같은 방식으로 읽는다(주소 하나가 적대적일 수 있다). 역시 `< /dev/tty`.
 # The new list is a paste too, so read it the same way — one of those addresses may be hostile. `< /dev/tty`
 # for the same reason as above.
-[ -n "${ADMIN_LIST:-}" ] || { printf 'remaining admin emails (comma separated): '
-  IFS= read -r ADMIN_LIST < /dev/tty; }
+if [ -n "${OFFBOARD_NONINTERACTIVE:-}" ]; then
+  : "${ADMIN_LIST:?OFFBOARD_NONINTERACTIVE is set, so ADMIN_LIST must be set too}"
+else
+  unset ADMIN_LIST
+  printf 'remaining admin emails (comma separated): '; IFS= read -r ADMIN_LIST < /dev/tty
+fi
 : "${ADMIN_LIST:?nothing entered — write a single space to mean cognito:groups-only}"
 aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type StringList --overwrite \
   --value "$ADMIN_LIST"                            # 반영까지 최대 5분 (캐시 TTL) / up to 5 min cache TTL
