@@ -231,8 +231,13 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # excluded on purpose — the flag is part of the hash, so flipping it rebuilds anyway.
     retry_needed = (gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED)
                     and not any(r["status"] == "ready" for r in rows))
-    if exhausted:
-        stored_version = existing_version   # keep this week's `:spent` marker; retry when the week rolls
+    if exhausted and not any(r["status"] == "ready" for r in rows):
+        # Still nothing ready → keep this week's `:spent` marker and retry when the week rolls over.
+        # Conditional on purpose: a park that outlives the reason for it never converges to the plain
+        # version, so the daily job would rebuild this instance forever (Codex stop-gate). Once the build
+        # HAS a ready row — the catalog gained an entry, or the deterministic match started working — the
+        # outcome is conclusive and falls through to `stored_version = version`, which ends the rebuilds.
+        stored_version = existing_version
     elif not retry_needed:
         stored_version = version
     elif attempts + 1 >= _MAX_GENERATION_ATTEMPTS:

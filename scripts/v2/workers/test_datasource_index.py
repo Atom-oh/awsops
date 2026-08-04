@@ -260,6 +260,21 @@ class TestGeneratedFallback:
         assert dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"] == \
             f"{base}:retry1w{dsi._iso_week()}"
 
+    def test_a_park_ends_as_soon_as_something_is_ready(self, monkeypatch):
+        """A park that outlives its reason never converges: keeping `:spent` while the build now has a ready
+        row means the stored version never equals the plain one, so the daily job rebuilds this instance
+        forever (Codex stop-gate)."""
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+        }))
+        schema = {"labels": ["job"]}     # loki: the catalog DOES match this → a ready row exists
+        base = dsi._schema_version(schema)
+        c = FakeConn(kind="loki", schema=schema, existing_version=f"{base}:spent{dsi._iso_week()}")
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert any(p["st"] == "ready" for p in c.inserts)
+        assert out["schema_version"] == base      # converged: no more daily rebuilds
+
     def test_the_park_expires_when_the_week_rolls_over(self, monkeypatch):
         # It used to be permanent: the plain version was stored, and since a quiet datasource's schema never
         # changes, an instance idle for three runs stayed chip-less forever (review MAJOR, L4-M3).
