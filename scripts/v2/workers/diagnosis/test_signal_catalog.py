@@ -154,3 +154,35 @@ class TestLokiLabelSignals:
         assert by["loki_error_rate"]["status"] == "unavailable"
         assert "job" in by["loki_error_rate"]["missing_metrics"]
         assert by["loki_log_volume_by_namespace"]["status"] == "unavailable"
+
+
+class TestTraceAndApmSignals:
+    def test_tempo_signals_ready_whenever_introspected(self):
+        rows = sc.build_signals("tempo", {"tags": ["service.name"]})
+        by = _by_key(rows)
+        assert by["trace_recent_errors"]["status"] == "ready"
+        assert by["trace_recent_errors"]["query"]["tool"] == "tempo_search"
+
+    def test_jaeger_signals_ready_whenever_introspected(self):
+        rows = sc.build_signals("jaeger", {"services": ["frontend"]})
+        by = _by_key(rows)
+        assert by["trace_slow_requests"]["status"] == "ready"
+        assert by["trace_slow_requests"]["query"]["tool"] == "jaeger_search"
+
+    def test_dynatrace_ready_when_metric_present(self):
+        rows = sc.build_signals("dynatrace", {"metrics": ["builtin:host.cpu.usage"]})
+        by = _by_key(rows)
+        assert by["dynatrace_host_cpu"]["status"] == "ready"
+        assert by["dynatrace_host_mem"]["status"] == "unavailable"
+
+    def test_datadog_ready_when_metric_present(self):
+        rows = sc.build_signals("datadog", {"metrics": ["system.cpu.user"]})
+        by = _by_key(rows)
+        assert by["datadog_host_cpu"]["status"] == "ready"
+        assert by["datadog_host_cpu"]["query"]["tool"] == "datadog_query"
+
+    def test_clickhouse_system_signals_still_use_clickhouse_query_tool(self):
+        # regression: widening _KIND_TOOL must not change Task 3's tool resolution
+        rows = sc.build_signals("clickhouse", {"tables": []})
+        by = _by_key(rows)
+        assert by["clickhouse_slow_queries"]["query"]["tool"] == "clickhouse_query"

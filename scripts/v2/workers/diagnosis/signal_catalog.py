@@ -18,7 +18,12 @@ rebuild even when the datasource's metric set is unchanged.
 CATALOG_VERSION = "v1"
 
 # kind → connector tool name (PromQL is identical for both)
-_KIND_TOOL = {"prometheus": "prometheus_query", "mimir": "mimir_query", "loki": "loki_query_range"}
+_KIND_TOOL = {
+    "prometheus": "prometheus_query", "mimir": "mimir_query", "loki": "loki_query_range",
+    "tempo": "tempo_search", "jaeger": "jaeger_search",
+    "dynatrace": "dynatrace_query", "datadog": "datadog_query",
+    "clickhouse": "clickhouse_query",
+}
 
 # Each entry: key, title, pillar, required_metrics, queries[{expr,label}], threshold, unit.
 # `topk(10, …)` bounds the result; aggregations use clamp_min to avoid divide-by-zero.
@@ -172,6 +177,46 @@ CATALOG = [
             "expr": 'sum(count_over_time({job=~".+"} |~ "(?i)panic|fatal" [15m]))',
         }],
         "threshold": 0, "unit": "count",
+    },
+    {
+        "key": "trace_recent_errors", "title": "최근 에러 트레이스", "pillar": "reliability",
+        "matcher": "tags_or_services", "kinds": ("tempo", "jaeger"),
+        "queries": [{"label": "error_traces", "expr": '{status=error}'}],
+        "threshold": 0, "unit": "count",
+    },
+    {
+        "key": "trace_slow_requests", "title": "느린 요청 상위", "pillar": "performance",
+        "matcher": "tags_or_services", "kinds": ("tempo", "jaeger"),
+        "queries": [{"label": "slow_traces", "expr": '{duration>500ms}'}],
+        "threshold": 500, "unit": "ms",
+    },
+    {
+        "key": "dynatrace_host_cpu", "title": "호스트 CPU 사용률", "pillar": "performance",
+        "matcher": "metrics", "kinds": ("dynatrace",),
+        "required_metrics": ["builtin:host.cpu.usage"],
+        "queries": [{"label": "cpu_usage", "expr": "builtin:host.cpu.usage:avg"}],
+        "threshold": 85, "unit": "percent",
+    },
+    {
+        "key": "dynatrace_host_mem", "title": "호스트 메모리 사용률", "pillar": "reliability",
+        "matcher": "metrics", "kinds": ("dynatrace",),
+        "required_metrics": ["builtin:host.mem.usage"],
+        "queries": [{"label": "mem_usage", "expr": "builtin:host.mem.usage:avg"}],
+        "threshold": 85, "unit": "percent",
+    },
+    {
+        "key": "datadog_host_cpu", "title": "호스트 CPU 사용률", "pillar": "performance",
+        "matcher": "metrics", "kinds": ("datadog",),
+        "required_metrics": ["system.cpu.user"],
+        "queries": [{"label": "cpu_user", "expr": "avg:system.cpu.user{*}"}],
+        "threshold": 85, "unit": "percent",
+    },
+    {
+        "key": "datadog_host_mem", "title": "호스트 메모리 사용률", "pillar": "reliability",
+        "matcher": "metrics", "kinds": ("datadog",),
+        "required_metrics": ["system.mem.used"],
+        "queries": [{"label": "mem_used", "expr": "avg:system.mem.used{*}"}],
+        "threshold": 0, "unit": "bytes",
     },
 ]
 
