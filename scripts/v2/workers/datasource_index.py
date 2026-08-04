@@ -230,7 +230,13 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
         logging.warning("[datasource_index] integration %s: generation failed on all %s attempts this week; "
                         "parking it until the week rolls over or the schema changes", iid, attempts + 1)
         retry_needed = False
-    spent = attempts + (1 if gen_status is not None else 0)
+    # Count only the attempts that actually reached the model. DISABLED means the flag is off, so no Bedrock
+    # call happened — charging the budget for it meant three rebuilds with the feature OFF exhausted the
+    # week, and then turning the flag ON did nothing for up to a week: the flag change rebuilds (it is in
+    # the hash) but `attempts` is read whatever hash prefixes it, so the instance was already "exhausted".
+    # Enabling a feature must not be pre-empted by the period it spent disabled (Codex stop-gate).
+    charged = gen_status is not None and gen_status != _signal_gen.DISABLED
+    spent = attempts + (1 if charged else 0)
     stored_version = _marker(version, spent, done=not retry_needed)
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and

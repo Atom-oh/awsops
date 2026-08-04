@@ -150,7 +150,7 @@ def prev_base(dsi_mod):
 class TestGeneratedFallback:
     def test_fallback_invoked_and_appended_when_catalog_has_zero_ready(self, monkeypatch):
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: ({
                 "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                 "query": {"tool": "loki_query_range", "queries": [{"label": "g", "expr": "count_over_time({job=\"x\"}[5m])"}]},
@@ -168,7 +168,7 @@ class TestGeneratedFallback:
         # A Bedrock throttle or a connector outage is retryable: recording the REAL version would freeze
         # it into a permanent skip, since the schema never changes (review finding).
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})  # catalog yields nothing
@@ -183,7 +183,7 @@ class TestGeneratedFallback:
         # as effectively (review, second pass). The rows are still written (the UI shows their "metric X
         # missing" text); only the version is tagged.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         c = FakeConn(kind="loki", schema={"labels": ["custom_label_only"]})  # rows, none ready
@@ -198,7 +198,7 @@ class TestGeneratedFallback:
         # work (review, tenth pass). Once _MAX_GENERATION_ATTEMPTS tries are used up the instance is parked
         # for the rest of the ISO week — `:spent<week>`, not the plain version, so the park expires.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         base = dsi._schema_version({"tables": {"t": ["c"]}})
@@ -214,7 +214,7 @@ class TestGeneratedFallback:
         # comparing N (rather than N+1) against the cap spent one attempt more than the name promises.
         calls = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
         }))
@@ -237,13 +237,41 @@ class TestGeneratedFallback:
         monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v3")
         assert dsi._schema_version(schema) != now   # every v3 row, plain marker included, rebuilds once
 
+    def test_the_flag_being_off_does_not_spend_the_budget(self, monkeypatch):
+        """DISABLED means no Bedrock call happened. Charging for it exhausted the week with the feature OFF,
+        and since `attempts` is read whatever hash prefixes the marker, turning the flag ON was then a no-op
+        for up to a week — the flag change rebuilds, but the instance already read as exhausted."""
+        calls = []
+        disabled = type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append("off"), (None, "disabled"))[1]),
+        })
+        monkeypatch.setattr(dsi, "_signal_gen", disabled)
+        schema = {"metrics": ["custom_only"]}
+        version = None
+        for i in range(4):                      # drifting schema, flag off: rebuilds but never charges
+            drifting = {"metrics": ["custom_only", f"m{i}"]}
+            c = FakeConn(kind="prometheus", schema=drifting, existing_version=version)
+            version = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)["schema_version"]
+        assert version.endswith(f":done0w{dsi._iso_week()}")     # 0 spent, not 3
+
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {   # operator turns the flag on
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append("on"), (None, "transient"))[1]),
+        }))
+        c = FakeConn(kind="prometheus", schema={"metrics": ["custom_only", "m9"]}, existing_version=version)
+        out = dsi.run({"integration_id": 7, "kind": "prometheus"}, c)
+        assert calls.count("on") == 1 and out["schema_version"].endswith(f":pend1w{dsi._iso_week()}")
+
     def test_the_weekly_budget_survives_a_schema_change(self, monkeypatch):
         """The version hashes the whole schema and a production Prometheus changes its metric set on every
         deploy, so keying the cap to the version turned "3 tries a week" into a daily Bedrock call (review
         MAJOR-3). The marker is read regardless of which version prefixes it."""
         calls = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
         }))
@@ -261,7 +289,7 @@ class TestGeneratedFallback:
         fact about the schema. Recording the plain version for REJECTED froze the instance until the schema
         drifted (review CRITICAL)."""
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "rejected")),
         }))
         schema = {"tables": {"t": ["c"]}}
@@ -275,7 +303,7 @@ class TestGeneratedFallback:
         # fresh budget is the safe direction, and the plain-hash "gave up" encoding cannot reach this code
         # from a deployed row because the hash basis itself changed in this commit.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         schema = {"tables": {"t": ["c"]}}
@@ -289,7 +317,7 @@ class TestGeneratedFallback:
         stored a value that never equalled the plain version, which rebuilt the instance every single day
         (cheap, but pointless churn); and a park that never converged was the Codex stop-gate finding."""
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         schema = {"labels": ["job"]}
@@ -308,7 +336,7 @@ class TestGeneratedFallback:
         """A conclusive outcome must not ERASE the week's usage: dropping the marker let an instance whose
         catalog match flaps in and out buy a fresh 3-try budget on every flap (Codex stop-gate)."""
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         ready_schema = {"labels": ["job"]}                  # catalog matches → conclusive, no generation
@@ -323,7 +351,7 @@ class TestGeneratedFallback:
         # changes, an instance idle for three runs stayed chip-less forever (review MAJOR, L4-M3).
         calls = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
         }))
@@ -343,7 +371,7 @@ class TestGeneratedFallback:
 
     def test_the_attempt_counter_advances(self, monkeypatch):
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         base = dsi._schema_version({"tables": {"t": ["c"]}})
@@ -355,7 +383,7 @@ class TestGeneratedFallback:
         # Flag off (or the model answered and was rejected): nothing will change until the schema or an
         # operator does, so the version IS recorded and the next run skips.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "disabled")),
         }))
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})
@@ -366,7 +394,7 @@ class TestGeneratedFallback:
     def test_fallback_not_invoked_when_catalog_already_has_a_ready_row(self, monkeypatch):
         called = []
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (called.append(1) or None, "rejected")),
         }))
@@ -413,7 +441,7 @@ class TestSchemaVersionCoversFullSchemaAndFlag:
 
         monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
-            "TRANSIENT": "transient", "REJECTED": "rejected",
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
             "try_generate_signal_with_status": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: ({
                 "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
                 "query": {"tool": "loki_query_range", "queries": [{"label": "g", "expr": "x"}]},

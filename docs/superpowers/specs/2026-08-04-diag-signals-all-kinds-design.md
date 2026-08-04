@@ -224,7 +224,9 @@ Later passes added four things the earlier ones had not reached:
   marker is read whatever version prefixes it, because the version hashes the whole schema and a production
   Prometheus changes its metric set on every deploy — keying the cap to the version made it a daily call.
   A conclusive outcome keeps the week's usage (`:doneN`), so an instance whose catalog match flaps in and
-  out cannot buy a fresh budget per flap.
+  out cannot buy a fresh budget per flap. Only attempts that reached the model are charged: with the flag
+  off no call happens, so those runs cost nothing and enabling the flag is never pre-empted by the period it
+  spent disabled.
 - **The static check must not be looser than the connector it feeds.** It lacked the ClickHouse
   table-function denylist, so `FROM url('http://169.254.169.254/…')` reached the dry run and the check
   itself became the egress attempt. `_TABLE_FN` now mirrors `clickhouse_mcp.py` deliberately — a check that
