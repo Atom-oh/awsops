@@ -52,11 +52,13 @@ class FakeConn:
     (`graph_inserts`/`graph_deletes`, new) independently, since the two tables have independent
     schema-version hashes and independent skip-on-unchanged behavior."""
     def __init__(self, *, kind="prometheus", metrics=PROM_METRICS, schema_present=True,
-                 schema=None, existing_version=None, existing_graph_version=None):
+                 schema=None, existing_version=None, existing_graph_version=None,
+                 existing_rows=None):
         self.kind, self.metrics, self.schema_present = kind, metrics, schema_present
         self._schema_override = schema
         self.existing_version = existing_version
         self.existing_graph_version = existing_graph_version
+        self.existing_rows = existing_rows or []
         self.inserts, self.deletes = [], []
         self.graph_inserts, self.graph_deletes = [], []
         self.schema_writes = []
@@ -72,6 +74,9 @@ class FakeConn:
             return [[1, self.existing_version]] if self.existing_version is not None else [[0, None]]
         if "COUNT(DISTINCT schema_version)" in sql and "datasource_graph_queries" in sql:
             return [[1, self.existing_graph_version]] if self.existing_graph_version is not None else [[0, None]]
+        if "FROM datasource_diag_signals" in sql and "SELECT" in sql and "COUNT" not in sql:
+            return [[r["signal_key"], r.get("title"), r["status"], json.dumps(r.get("query")),
+                     None, json.dumps(r.get("meta"))] for r in self.existing_rows]
         if sql.strip().startswith("INSERT INTO datasource_diag_signals"):
             self.inserts.append(p); return []
         if sql.strip().startswith("DELETE FROM datasource_diag_signals"):
@@ -236,6 +241,36 @@ class TestGeneratedFallback:
         now = dsi._schema_version(schema)
         monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v3")
         assert dsi._schema_version(schema) != now   # every v3 row, plain marker included, rebuilds once
+
+    GENERATED_ROW = {"signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
+                     "query": {"tool": "loki_query_range",
+                               "queries": [{"label": "generated",
+                                            "expr": 'count_over_time({job="a"} |= "error" [5m])'}]},
+                     "meta": {"kind": "loki", "provenance": "generated"}}
+
+    def test_a_failed_reverification_keeps_the_last_good_generated_chip(self, monkeypatch):
+        """The rebuild is mark-and-sweep, so a chip generated last week was DELETED the moment the weekly
+        retry hit a connector blip — a transient outage permanently removing verified content (MAJOR-2)."""
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+            "still_relevant": staticmethod(lambda *a: True),
+        }))
+        schema = {"labels": ["custom_only"]}        # loki catalog matches nothing → fallback-only
+        c = FakeConn(kind="loki", schema=schema, existing_rows=[self.GENERATED_ROW])
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert any(p["sk"] == "generated_signal" and p["st"] == "ready" for p in c.inserts)
+
+    def test_a_stale_generated_chip_is_not_resurrected(self, monkeypatch):
+        """Carrying it over must not resurrect one whose table/metric has since disappeared."""
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
+            "still_relevant": staticmethod(lambda *a: False),
+        }))
+        c = FakeConn(kind="loki", schema={"labels": ["custom_only"]}, existing_rows=[self.GENERATED_ROW])
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert not any(p["sk"] == "generated_signal" for p in c.inserts)
 
     def test_the_flag_being_off_does_not_spend_the_budget(self, monkeypatch):
         """DISABLED means no Bedrock call happened. Charging for it exhausted the week with the feature OFF,

@@ -101,7 +101,9 @@ def _bound(data):
 def _timeout_param(v):
     """Optional Prometheus API `timeout` (e.g. "5s"), clamped to 1..60s. The connector bounds response SIZE
     but had no execution bound, which matters now that a caller can run model-written PromQL (review)."""
-    m = re.fullmatch(r"\s*(\d{1,3})s?\s*", str(v or ""))
+    # No digit cap: `\d{1,3}` made "1000" or "3600s" fall through to None, i.e. NO bound — a clamp that
+    # fails open for exactly the values that need clamping (review MINOR). Only non-numeric input is None.
+    m = re.fullmatch(r"\s*(\d+)s?\s*", str(v or ""))
     return f"{max(1, min(60, int(m.group(1))))}s" if m else None
 
 

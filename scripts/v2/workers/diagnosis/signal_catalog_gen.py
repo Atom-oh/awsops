@@ -324,6 +324,23 @@ def _references_schema_table(schema, text):
     return any(_table_ref_matches(t, c) for t in _schema_table_names(schema) for c in chains)
 
 
+def _from_clause_references_schema_table(schema, from_text):
+    """Like _references_schema_table, but only the FIRST ident chain of each table reference counts.
+
+    `FROM other_db.spans spans` left the implicit alias `spans` behind as a second chain, and that matched
+    the schema table — a query against an unapproved database passed the relevance gate on the strength of
+    its own alias (review MAJOR-3). In a FROM/JOIN list, position decides: first chain = the table,
+    anything after it = the alias.
+    """
+    cleaned = _strip_alias_defs(_strip_parens(from_text))
+    names = _schema_table_names(schema)
+    for part in re.split(r",|\bjoin\b", cleaned):
+        chains = _parse_ident_chains(part)
+        if chains and any(_table_ref_matches(t, chains[0]) for t in names):
+            return True
+    return False
+
+
 def _token_present(name, text):
     """`name` appears in `text` as a whole word, tolerating a qualifier: `SELECT s.duration` has to match
     the column `duration`, since qualifying a column is how SQL is normally written (review, fifth pass).
@@ -404,7 +421,7 @@ def _sql_value_is_measured(schema, expr):
     if not sel or not frm:
         return False
     # the FROM must reference one of THIS instance's tables, not a same-named table elsewhere
-    if not _references_schema_table(schema, frm.group(1)):
+    if not _from_clause_references_schema_table(schema, frm.group(1)):
         return False
     select_list = sel.group(1)
     if _COUNT_ONLY.search(select_list):
@@ -521,6 +538,14 @@ def _dry_run_check(kind, expr, integration_id, invoke_connector):
     # returns no samples, and treating that as conclusive froze the instance signal-less until the schema
     # drifted (review MAJOR). The vocabulary check below is what rejects a query that cannot ever match.
     return (True, False) if _nonempty_result(kind, result) else (False, True)
+
+
+def still_relevant(kind, schema, expr):
+    """Pure: does this already-stored expression still measure something in THIS schema? Used by
+    datasource_index to carry a verified generated row through a failed re-generation (review MAJOR-2)
+    without resurrecting one whose table/metric has since disappeared. No LLM, no connector call."""
+    return bool(_static_check(kind, expr)) and not _is_constant_expr(kind, schema, expr) \
+        and _mentions_schema_vocabulary(kind, schema, expr)
 
 
 def try_generate_signal(kind, schema, integration_id, invoke_connector, invoke_llm=None):

@@ -195,6 +195,34 @@ def _marker(version, attempts, done):
     return f"{version}:{_DONE if done else _PEND}{attempts}w{_iso_week()}"
 
 
+def _keep_last_good_generated(conn, wdb, iid, kind, schema, rows):
+    """Carry a previously VERIFIED generated row through a failed re-generation.
+
+    The rebuild is mark-and-sweep: sweep_diag_signals deletes every key not written this time, so a chip
+    that generated fine last week was destroyed the moment the weekly retry hit a connector blip — a
+    transient outage permanently removing verified content (review MAJOR-2). It is only carried over if its
+    expression STILL matches the current schema's vocabulary and still measures something, which is the same
+    pure check the generator gates on; a stored query whose table has since disappeared is not resurrected.
+    """
+    try:
+        existing = [r for r in wdb.list_diag_signals(conn, iid)
+                    if (r.get("meta") or {}).get("provenance") == "generated" and r.get("status") == "ready"]
+    except Exception:                      # noqa: BLE001 — read failure must not break the rebuild
+        return rows
+    kept = []
+    for r in existing:
+        exprs = [q.get("expr") for q in ((r.get("query") or {}).get("queries") or [])]
+        if not exprs or not all(exprs):
+            continue
+        if all(_signal_gen.still_relevant(kind, schema, e) for e in exprs):
+            kept.append({"signal_key": r["signal_key"], "title": r.get("title"), "status": "ready",
+                         "query": r["query"], "missing_metrics": None, "meta": r.get("meta")})
+        else:
+            logging.info("[datasource_index] integration %s: dropping generated row %s — its expression no "
+                         "longer matches the schema", iid, r["signal_key"])
+    return list(rows) + kept
+
+
 def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     version = _schema_version(schema)
     existing_version = wdb.read_signal_schema_version(conn, iid)
@@ -212,6 +240,8 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
             lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
         if generated:
             rows = list(rows) + [generated]
+        else:
+            rows = _keep_last_good_generated(conn, wdb, iid, kind, schema, rows)
     # WHICH OUTCOMES ARE WORTH REMEMBERING. A build with no ready signal is remembered (plus a sentinel row
     # when there is nothing at all) so the daily job stops rebuilding — but only when the outcome is
     # conclusive, and "conclusive" cost three review rounds to pin down:

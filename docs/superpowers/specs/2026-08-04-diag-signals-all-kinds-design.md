@@ -1,7 +1,11 @@
-# Explore diagnostic-signal chips — extend to all datasource kinds
-# Explore "자주 쓰는 쿼리" 칩 — 전체 데이터소스 kind로 확장
+# Explore diagnostic-signal chips — extend to the 5 wired datasource kinds
+# Explore "자주 쓰는 쿼리" 칩 — 배선된 5개 데이터소스 kind로 확장
 
-**Status:** Approved 2026-08-04.
+**Status:** Approved 2026-08-04, **amended in place 2026-08-04** — the shipped scope is 5 kinds
+(prometheus/mimir/loki/tempo deterministic + clickhouse fallback-only), not 7, and one generated candidate
+rather than 3–5. Every superseded statement is corrected where it stands; the reasons are listed under
+[Amended](#amended-2026-08-04-implementation-reality). A reader must not have to reach the end of the
+document to learn the front of it is obsolete (review MAJOR).
 
 ## 요약 (한국어)
 
@@ -11,11 +15,12 @@ kube-state-metrics/node-exporter)만 요구한다. 그 결과 K8s가 아닌 Prom
 (clickhouse/loki/tempo/jaeger/dynatrace/datadog)를 연결하면 `cpu_saturation`(node_cpu_seconds_total만
 요구) 하나만 유일하게 "ready"가 되어, 어떤 데이터소스를 넣어도 "높은 CPU" 카드만 뜨는 버그가 된다.
 
-이 설계는 (1) kind별 매칭 전략(matcher)을 카탈로그에 추가해 5종 전부에 5~8개 신규 질문 템플릿을
-채우고, (2) 결정론적 카탈로그가 전부 unavailable일 때만 스키마의 실제 이름을 근거로 LLM(Bedrock
-Haiku)이 후보 쿼리를 생성해 정적 검사 + dry-run으로 검증하는 하이브리드 폴백(`graph_querygen.py`
-패턴 재사용)을 추가하고, (3) `datasource_index.py`의 `_DIAG_KINDS` 게이트와 `DiagSignalChips.tsx`의
-kind 제한을 제거해 모든 kind에서 칩이 뜨도록 한다.
+이 설계는 (1) kind별 매칭 전략(matcher)을 카탈로그에 추가해 **loki(3건)·tempo(2건)** 신규 항목을
+채우고(clickhouse 결정론 항목은 배송되지 않음 — Amended #1), (2) 결정론적 카탈로그가 ready 0행일 때만
+스키마의 실제 이름을 근거로 LLM(Bedrock Haiku)이 **후보 쿼리 1건**을 생성해 정적 검사 + 관련성 게이트 +
+dry-run으로 검증하는 하이브리드 폴백을 추가하고, (3) `datasource_index.py`의 `_DIAG_KINDS`를 배선된 5개
+kind로 넓히고 `DiagSignalChips.tsx`의 kind 제한을 제거해 그 kind들에서 칩이 뜨도록 한다.
+jaeger/dynatrace/datadog은 인덱스 파이프라인에 배선되어 있지 않아 범위 밖이다(Amended #2).
 
 ## Problem
 
@@ -49,8 +54,12 @@ Two compounding issues:
   for diagnostic (not graph) signals.
 - **The LLM hybrid-fallback pipeline**: `graph_querygen.py`'s `try_generate_clickhouse_trace_spans` —
   prompt template → static read-only/single-statement check → advisory Code Interpreter check → live
-  `LIMIT 1` dry-run — is the exact shape reused for the new diag-signal fallback, just parameterized
-  per kind instead of hardcoded to one ClickHouse table shape.
+  `LIMIT 1` dry-run — is the shape this fallback follows, parameterized per kind instead of hardcoded to one
+  ClickHouse table shape. **Not identically**, and the difference matters to a reviewer: the shipped
+  `signal_catalog_gen.py` has NO Code Interpreter stage (it would need `agentcore_enabled` and its own IAM,
+  as `workers.tf` grants for graph_querygen). In its place it gained a stage graph_querygen does not have —
+  the relevance gate (the expression must name this instance's vocabulary and must not measure a constant),
+  which is where most of this feature's review time went (review MAJOR).
 - **Cached schema shapes**: unchanged (`web/lib/datasource-schema.ts`'s docstring: `tables`
   (clickhouse), `metrics` (prometheus/mimir/dynatrace/datadog), `labels` (prometheus/mimir/loki),
   `tags` (tempo), `services` (jaeger)).
@@ -71,7 +80,7 @@ shape:
 - `matcher: "metrics"` (existing 8 K8s entries, unchanged behavior) — `required_metrics` ⊆
   `schema['metrics']`. (Planned dynatrace/datadog entries were dropped — those kinds are not wired into
   the index pipeline; see Amended #2.)
-- `matcher: "table_columns"` (clickhouse) — entry declares `required_columns: [...]`; ready when some
+- ~~`matcher: "table_columns"` (clickhouse)~~ — **not shipped** (Amended #1): entry would declare `required_columns: [...]`, ready when some
   table in `schema['tables']` has a superset of those columns (mirrors `graph_catalog._OTEL_REQUIRED_COLUMNS`
   matching, generalized to non-trace shapes like slow-query/error-count tables).
 - `matcher: "labels"` (loki) — entry declares `required_labels: [...]`; ready when `schema['labels']`
@@ -116,7 +125,8 @@ Amended #3). The candidate goes through:
 Only a candidate that passes all three is persisted as a `ready` row with `meta.provenance = "generated"`;
 everything else stays `unavailable`. Generated rows feed the **Explore chips only** — `_signal_plan`
 excludes them from the diagnosis report, which judges severity from `pillar`/`threshold` that a generated
-row does not have. Gated on its **own** `diag_signal_querygen_enabled` (NOT the shared
+row does not have. Governed by [ADR-018](../../decisions/018-llm-query-generation.md) (what sending schema identifiers to
+Bedrock and live-running a model-written query commits to) and gated on its **own** `diag_signal_querygen_enabled` (NOT the shared
 `GRAPH_QUERYGEN_ENABLED` the plan assumed — Amended #4), default off, so today's zero-LLM-cost behavior
 for K8s Prometheus/Mimir is unaffected. Note the schema identifiers (table/metric/label names) of the
 external datasource are sent to Bedrock; no credentials are.
@@ -268,14 +278,17 @@ never raises, never blocks the deterministic rebuild.
 
 ## Testing
 
-- `test_signal_catalog.py`: one test class per new matcher (`table_columns`, `labels`,
-  `tags_or_services`) mirroring the existing `TestMissingMetrics`/`TestFullSchemaAllReady` shape —
-  full schema → all new entries ready; a schema missing one required column/label/tag → that entry
-  (and only that entry) unavailable with the right `missing_*` list.
+- `test_signal_catalog.py`: one test class per SHIPPED matcher (`labels`, `tags_or_services`; there is no
+  `table_columns` matcher — clickhouse ships zero deterministic entries, Amended #1) mirroring the existing
+  `TestMissingMetrics`/`TestFullSchemaAllReady` shape — full schema → all new entries ready; a schema
+  missing one required label/tag → that entry (and only that entry) unavailable with the right `missing_*`.
 - New `test_signal_catalog_gen.py` (or extend `test_graph_querygen.py`'s pattern): injectable `invoke`
   for the LLM call, injectable connector invoke for dry-run — assert a bad/mutating candidate is
-  rejected, a valid candidate that fails dry-run is rejected, a valid candidate that passes both is
-  returned with `provenance: "generated"`.
+  rejected, a candidate that measures a constant or names nothing from the schema is rejected, a valid
+  candidate that fails dry-run is rejected, a valid candidate that passes every gate is returned with
+  `provenance: "generated"`. Plus the weekly-budget behaviour in `test_datasource_index.py`: the budget
+  survives schema churn, is not charged while the flag is off, is carried through conclusive outcomes, and a
+  failed re-verification keeps the last-known-good chip.
 - `test_datasource_index.py`: assert `_rebuild_diag_signals` is now called (not skipped) for a
   non-prometheus/mimir kind.
 - `ExplorePanel.test.tsx` / `DiagSignalChips` test: assert chips render for a non-prometheus kind
