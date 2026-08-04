@@ -249,6 +249,25 @@ class TestVocabularyGate:
                      "SELECT count() FROM otel.logs"):
             assert scg._is_constant_expr("clickhouse", sch, expr) is False, expr
 
+    def test_the_real_cached_schema_shape_is_understood(self):
+        # web/lib/datasource-schema.ts caches tables as a LIST of {name, columns:[{name,type}]} — the
+        # shape graph_catalog._clickhouse_trace_spans iterates. The first version of this gate assumed a
+        # {table: [cols]} dict, found no table names against a real schema, and rejected EVERY clickhouse
+        # query (review, sixth pass).
+        real = {"tables": [{"name": "otel.spans",
+                            "columns": [{"name": "Duration", "type": "UInt64"},
+                                        {"name": "Timestamp", "type": "DateTime"}]}]}
+        assert scg._schema_table_names(real) == ["otel.spans", "spans"]   # both spellings
+        assert "Duration" in scg._schema_column_names(real)
+        assert scg._is_constant_expr("clickhouse", real,
+                                     "SELECT quantile(0.9)(Duration) FROM otel.spans") is False
+        # the cache may be db-qualified while the query is not, and vice versa
+        assert scg._is_constant_expr("clickhouse", real, "SELECT count() FROM spans") is False
+        assert scg._is_constant_expr("clickhouse", real, "SELECT 1 AS x FROM otel.spans") is True
+
+    def test_bare_table_name_list_is_also_accepted(self):
+        assert scg._schema_table_names({"tables": ["spans"]}) == ["spans"]
+
     def test_count_over_a_table_outside_the_schema_is_not_a_signal(self):
         # `count()` is allowed as the column-free aggregate, but only over one of THIS instance's tables:
         # counting rows of an unrelated system table measures nothing about the datasource (review).

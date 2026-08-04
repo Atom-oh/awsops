@@ -180,20 +180,58 @@ def _token_present(name, text):
     return bool(re.search(r"(?<!\w)" + re.escape(name.lower()) + r"(?!\w)", text))
 
 
+def _sql_tables(schema):
+    """[(table, [columns])] from whatever shape `schema["tables"]` is in.
+
+    The REAL cached shape is a LIST of {name, columns:[{name,type}]} — see web/lib/datasource-schema.ts
+    and graph_catalog._clickhouse_trace_spans, which iterates exactly that. My first version assumed a
+    {table: [cols]} dict, so against a real schema it found no table names at all and the FROM check
+    rejected every ClickHouse query (review, sixth pass). Both shapes are accepted now, plus a bare list
+    of names, because the tests in this repo use the dict form.
+    """
+    tables = (schema or {}).get("tables") or []
+    out = []
+    if isinstance(tables, dict):
+        for t, cols in list(tables.items())[:40]:
+            if isinstance(t, str):
+                out.append((t, [c for c in (cols or []) if isinstance(c, str)][:40]))
+        return out
+    if not isinstance(tables, (list, tuple)):
+        return out
+    for t in tables[:40]:
+        if isinstance(t, str):
+            out.append((t, []))
+            continue
+        if not isinstance(t, dict):
+            continue
+        name = t.get("name")
+        if not isinstance(name, str):
+            continue
+        cols = []
+        for c in (t.get("columns") or [])[:40]:
+            if isinstance(c, str):
+                cols.append(c)
+            elif isinstance(c, dict) and isinstance(c.get("name"), str):
+                cols.append(c["name"])
+        out.append((name, cols))
+    return out
+
+
 def _schema_table_names(schema):
-    tables = (schema or {}).get("tables") or {}
-    if not isinstance(tables, dict):
-        return []
-    return [t for t in list(tables.keys())[:40] if isinstance(t, str)]
+    """Table names, plus the last dotted segment: the cache may hold `otel.spans` while the query says
+    `FROM spans` (or the reverse), and either spelling refers to the same table."""
+    names = []
+    for t, _ in _sql_tables(schema):
+        names.append(t)
+        if "." in t:
+            names.append(t.rsplit(".", 1)[-1])
+    return names
 
 
 def _schema_column_names(schema):
-    tables = (schema or {}).get("tables") or {}
     names = []
-    if isinstance(tables, dict):
-        for cols in list(tables.values())[:40]:
-            if isinstance(cols, (list, tuple)):
-                names.extend(c for c in cols[:40] if isinstance(c, str))
+    for _, cols in _sql_tables(schema):
+        names.extend(cols)
     return names
 
 
@@ -236,18 +274,15 @@ def _is_constant_expr(kind, schema, expr):
 
 
 def _anchor_names(kind, schema):
-    """The names a generated query must actually reference to count as being about this instance.
+    """The names a generated query must reference to count as being about this instance.
 
-    For dict-shaped schemas (clickhouse's {table: [columns]}) only the TABLE names anchor: every SQL
-    query needs a FROM, while column names like `count` or `ts` are generic enough that a constant query
-    (`SELECT count() FROM system.tables`) would match one by accident. For the other kinds the vocabulary
-    IS the anchor set (metrics / labels / tags / services).
+    For clickhouse only TABLE names anchor: every SQL query needs a FROM, while column names like
+    `count` or `ts` are generic enough that a constant query would match one by accident. For the other
+    kinds the vocabulary IS the anchor set (metrics / labels / tags / services).
     """
-    key = _VOCAB_KEY.get(kind, "names")
-    items = (schema or {}).get(key) or []
-    if isinstance(items, dict):
-        return [t for t in list(items.keys())[:40] if isinstance(t, str)]
-    return _vocab_names(schema, key)
+    if kind == "clickhouse":
+        return _schema_table_names(schema)
+    return _vocab_names(schema, _VOCAB_KEY.get(kind, "names"))
 
 
 def _mentions_schema_vocabulary(kind, schema, expr):
