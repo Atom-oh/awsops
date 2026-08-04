@@ -168,37 +168,61 @@ _COUNT_ONLY = re.compile(r"\bcount\s*\(\s*\*?\s*\)", re.IGNORECASE)
 
 
 def _token_present(name, text):
-    """`name` appears in `text` as a whole token (boundary is non-word-and-non-dot)."""
+    """`name` appears in `text` as a whole word.
+
+    Word boundary only — NOT "not preceded by a dot": that stricter form rejected ordinary SQL, since
+    `SELECT s.duration FROM spans s` qualifies the column and `s.duration` never matched `duration`
+    (review, fifth pass). A trailing/leading dot is part of how the name is legitimately written. Short
+    names are still safe: `up` does not match inside `GROUP`, because `O` is a word character.
+    """
     if not name:
         return False
-    return bool(re.search(r"(?<![\w.])" + re.escape(name.lower()) + r"(?![\w.])", text))
+    return bool(re.search(r"(?<!\w)" + re.escape(name.lower()) + r"(?!\w)", text))
 
 
-def _sql_value_is_measured(schema, expr):
-    """For clickhouse: does the SELECT list actually measure something from this schema?
+def _schema_table_names(schema):
+    tables = (schema or {}).get("tables") or {}
+    if not isinstance(tables, dict):
+        return []
+    return [t for t in list(tables.keys())[:40] if isinstance(t, str)]
 
-    "Contains a letter" was the first rule and it is trivially bypassed — `SELECT 1 AS x FROM spans`,
-    `SELECT toInt8(1) FROM spans` both have letters and still measure a literal (review, fourth pass).
-    So the VALUE POSITION has to name a column or table from the instance's own schema, with `count()` /
-    `count(*)` allowed as the one column-free aggregate that is a real signal. No FROM at all → nothing
-    is being measured either.
-    """
-    text = (expr or "").lower()
-    m = re.search(r"\bselect\b(.*?)\bfrom\b", text, re.DOTALL)
-    if not m:
-        return False
-    select_list = m.group(1)
-    if _COUNT_ONLY.search(select_list):
-        return True
+
+def _schema_column_names(schema):
     tables = (schema or {}).get("tables") or {}
     names = []
     if isinstance(tables, dict):
-        for t, cols in list(tables.items())[:40]:
-            if isinstance(t, str):
-                names.append(t)
+        for cols in list(tables.values())[:40]:
             if isinstance(cols, (list, tuple)):
                 names.extend(c for c in cols[:40] if isinstance(c, str))
-    return any(_token_present(n, select_list) for n in names)
+    return names
+
+
+_SQL_AFTER_FROM = re.compile(
+    r"\bfrom\b(.*?)(?:\bwhere\b|\bgroup\b|\border\b|\blimit\b|\bhaving\b|$)", re.DOTALL)
+
+
+def _sql_value_is_measured(schema, expr):
+    """For clickhouse: is this query measuring something from THIS instance's schema?
+
+    Two conditions, because each direction was wrong on its own:
+      * the FROM must name a schema table — otherwise `SELECT count() FROM system.tables` counted rows
+        of an unrelated system table and passed (review, fifth pass);
+      * the SELECT list must name a schema column/table, or be `count()` / `count(*)`, the one
+        column-free aggregate that is a real signal — otherwise `SELECT 1 AS x FROM spans` passed by
+        merely containing a letter (review, fourth pass).
+    """
+    text = (expr or "").lower()
+    sel = re.search(r"\bselect\b(.*?)\bfrom\b", text, re.DOTALL)
+    frm = _SQL_AFTER_FROM.search(text)
+    if not sel or not frm:
+        return False
+    tables = _schema_table_names(schema)
+    if not any(_token_present(t, frm.group(1)) for t in tables):
+        return False
+    select_list = sel.group(1)
+    if _COUNT_ONLY.search(select_list):
+        return True
+    return any(_token_present(n, select_list) for n in tables + _schema_column_names(schema))
 
 
 def _is_constant_expr(kind, schema, expr):

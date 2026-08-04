@@ -240,6 +240,22 @@ class TestVocabularyGate:
                                      "SELECT avg(duration) FROM spans WHERE ts > now()") is False
         assert scg._is_constant_expr("prometheus", {"metrics": ["up"]}, "rate(up[5m])") is False
 
+    def test_qualified_and_aliased_columns_are_real_queries(self):
+        # The value check must not reject ordinary SQL: qualifying a column is how it is normally written,
+        # and the first boundary rule ("not preceded by a dot") rejected `s.duration` (review, fifth pass).
+        sch = {"tables": {"spans": ["duration", "ts"], "otel.logs": ["body"]}}
+        for expr in ("SELECT s.duration FROM spans s",
+                     "SELECT quantile(0.9)(s.duration) FROM spans AS s GROUP BY s.ts",
+                     "SELECT count() FROM otel.logs"):
+            assert scg._is_constant_expr("clickhouse", sch, expr) is False, expr
+
+    def test_count_over_a_table_outside_the_schema_is_not_a_signal(self):
+        # `count()` is allowed as the column-free aggregate, but only over one of THIS instance's tables:
+        # counting rows of an unrelated system table measures nothing about the datasource (review).
+        sch = {"tables": {"spans": ["duration"]}}
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM system.tables") is True
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM spans") is False
+
     def test_literal_dressed_up_as_a_column_is_still_a_constant(self):
         # "the select list contains a letter" was the first rule and these bypass it trivially
         # (review, fourth pass): the VALUE has to name something from the schema.
