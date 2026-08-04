@@ -61,6 +61,14 @@ psql "$DSN" -c "SELECT 'schedules' AS what, count(*) FROM report_schedules WHERE
 
 ## 조치 / Action
 ```bash
+# 이 블록만 복사해 실행하는 경우가 많으므로 가드를 여기에도 둔다 — 위 '확인' 블록에만 있으면 소용없다.
+# The guard is repeated here because this is the block people copy on its own; having it only in the
+# Verification block above protects nothing. Unset DSN => psql would silently use a local socket.
+set -euo pipefail
+: "${DSN:?set DSN (postgresql://<user>@<aurora-endpoint>:5432/awsops?sslmode=require) first}"
+: "${V2_POOL:?set V2_POOL (terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)}"
+: "${SSM_ADMIN_EMAILS_PARAM:=/ops/awsops-v2/admin_emails}"
+
 # 1) 스케줄을 먼저 끈다 — 계정을 지워도 report_schedules 행은 남아 계속 실행된다
 #    Disable the schedule FIRST: deleting the account does not remove report_schedules rows, and the
 #    dispatcher fires every enabled row regardless of whether the user still exists.
