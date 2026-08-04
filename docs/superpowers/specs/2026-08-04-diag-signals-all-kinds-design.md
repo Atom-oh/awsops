@@ -172,6 +172,8 @@ Two more gates were added to the generated query, beyond what Decision 2 describ
 - **an empty dry-run result is retryable, not conclusive.** A quiet window returns no samples, and
   treating that as a verdict froze the instance signal-less until the schema drifted.
 
+Two follow-on corrections from the next review pass: the flag has to be mixed into `_schema_version` (only the graph flag was, so turning the new one on left every already-indexed instance's version unchanged → skip → the fallback never ran for the instances it was added for), and the vocabulary check matches whole tokens rather than substrings — plain `in` let `SELECT 1 GROUP BY 1` match a metric named `up` inside "GROUP", and `SELECT count() FROM system.tables` match a clickhouse column named `count`. For dict-shaped schemas only TABLE names anchor, since every SQL query needs a FROM while column names are generic enough to match by accident.
+
 While adding the vocabulary gate, `_vocab_names` turned out to raise `TypeError` on clickhouse's
 dict-shaped `tables` — inside the caller's try/except that surfaced as TRANSIENT on every run, so
 clickhouse could never generate a signal and retried forever. Fixed, with tests for both shapes.

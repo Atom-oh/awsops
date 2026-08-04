@@ -216,6 +216,16 @@ class TestSchemaVersionCoversFullSchemaAndFlag:
     tempo/jaeger) hashed to a CONSTANT — label/table drift and GRAPH_QUERYGEN_ENABLED flips never
     triggered a rebuild for them. Mirrors _graph_schema_version's existing flag-mixing precedent."""
 
+    def test_flipping_the_diag_signal_flag_changes_the_version(self, monkeypatch):
+        # The version mixed only GRAPH_QUERYGEN_ENABLED, so turning the NEW flag on left every
+        # already-indexed instance's version unchanged → skip → the fallback never ran for exactly the
+        # instances it was added for (review finding).
+        schema = {"labels": ["job"]}
+        monkeypatch.delenv("DIAG_SIGNAL_QUERYGEN_ENABLED", raising=False)
+        off = dsi._schema_version(schema)
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        assert dsi._schema_version(schema) != off
+
     def test_label_only_schema_change_is_not_treated_as_unchanged(self):
         # loki schema has no "metrics" key at all — the old hash basis was a constant for this kind.
         c0 = FakeConn(kind="loki", schema={"labels": ["job"]})

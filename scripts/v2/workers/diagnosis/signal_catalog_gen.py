@@ -154,23 +154,45 @@ TRANSIENT = "transient"    # something threw: retry next run
 GENERATED = "generated"
 
 
-def _mentions_schema_vocabulary(kind, schema, expr):
-    """True when `expr` names at least one thing from THIS instance's schema.
+def _anchor_names(kind, schema):
+    """The names a generated query must actually reference to count as being about this instance.
 
-    Without it `SELECT 1` / `vector(1)` pass the static check and the dry run (they execute and return a
-    row), so a constant unrelated to the datasource was stored as a ready "AI 생성 신호" and the diagnosis
-    report then treated it as a real signal — worse than having no signal, because it is a silent
-    misdiagnosis (review MAJOR). Deterministic catalog rows are vocabulary-checked by
-    signal_catalog._missing_for; generated ones bypassed that entirely.
-
-    Substring matching is deliberate: the model may legitimately wrap a name in a function, a label
-    matcher or a subquery, and this is a relevance floor, not a parser.
+    For dict-shaped schemas (clickhouse's {table: [columns]}) only the TABLE names anchor: every SQL
+    query needs a FROM, while column names like `count` or `ts` are generic enough that a constant query
+    (`SELECT count() FROM system.tables`) would match one by accident. For the other kinds the vocabulary
+    IS the anchor set (metrics / labels / tags / services).
     """
-    names = _vocab_names(schema, _VOCAB_KEY.get(kind, "names"))
+    key = _VOCAB_KEY.get(kind, "names")
+    items = (schema or {}).get(key) or []
+    if isinstance(items, dict):
+        return [t for t in list(items.keys())[:40] if isinstance(t, str)]
+    return _vocab_names(schema, key)
+
+
+def _mentions_schema_vocabulary(kind, schema, expr):
+    """True when `expr` references at least one name from THIS instance's schema, as a whole token.
+
+    Without this, `SELECT 1` / `vector(1)` passed the static check and the dry run (they execute and
+    return a row), so a constant unrelated to the datasource was stored as a ready "AI 생성 신호" and the
+    diagnosis report treated it as real — a silent misdiagnosis, worse than no signal (review MAJOR).
+    Deterministic catalog rows are vocabulary-checked by signal_catalog._missing_for; generated ones
+    bypassed that entirely.
+
+    Token, not substring: plain `in` let `SELECT 1 GROUP BY 1` match a metric named `up` (inside
+    "GROUP") and `SELECT count() FROM system.tables` match a column named `count` — both constants with
+    nothing to do with the instance (second review pass). The boundary is non-word-and-non-dot so
+    `spans` still matches `otel.spans` and `sum(up)` still matches `up`.
+    """
+    names = _anchor_names(kind, schema)
     if not names:
         return False          # nothing to anchor to → cannot establish relevance
     text = (expr or "").lower()
-    return any(n and n.lower() in text for n in names)
+    for n in names:
+        if not n:
+            continue
+        if re.search(r"(?<![\w.])" + re.escape(n.lower()) + r"(?![\w.])", text):
+            return True
+    return False
 
 
 def _dry_run_check(kind, expr, integration_id, invoke_connector):

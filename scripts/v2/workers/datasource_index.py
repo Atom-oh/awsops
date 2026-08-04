@@ -123,15 +123,21 @@ def _reintrospect(kind, integration_id):
 def _schema_version(schema):
     """Stable cross-process hash of the FULL schema (all kinds' catalog entries key off different
     parts of it — labels/tables/tags, not just metric names) + signal_catalog.CATALOG_VERSION + the
-    querygen flag's on/off state. Mirrors _graph_schema_version's reasoning exactly: the flag is
-    mixed in so flipping GRAPH_QUERYGEN_ENABLED — with the schema itself unchanged — still changes
+    querygen flags' on/off state. Mirrors _graph_schema_version's reasoning: a flag is
+    mixed in so flipping it — with the schema itself unchanged — still changes
     the version and forces a rebuild; otherwise an instance first indexed while the flag was off
     (catalog matched zero ready rows, LLM fallback skipped) would stay permanently stuck with zero
     ready signals even after the flag turns on, since nothing about the schema itself would ever
     drift again. NOT salted hash()."""
-    flag = "1" if os.environ.get("GRAPH_QUERYGEN_ENABLED") == "true" else "0"
+    # DIAG_SIGNAL_QUERYGEN_ENABLED is the flag that gates THIS pipeline's fallback (graph_querygen has
+    # its own), so it is the one that must be mixed in. Mixing only the graph flag meant turning the new
+    # one on left every already-indexed instance's version unchanged → skip → the fallback never ran for
+    # exactly the instances it was added for (review finding). Both are included: the graph flag stays for
+    # continuity with versions written before the split.
+    flag = "1" if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") == "true" else "0"
+    gflag = "1" if os.environ.get("GRAPH_QUERYGEN_ENABLED") == "true" else "0"
     basis = (json.dumps(schema, sort_keys=True, separators=(",", ":")) + "|" + _cat.CATALOG_VERSION
-             + "|querygen=" + flag)
+             + "|querygen=" + gflag + "|dsquerygen=" + flag)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 

@@ -202,6 +202,25 @@ class TestVocabularyGate:
     def test_no_vocabulary_at_all_cannot_be_anchored(self):
         assert scg._mentions_schema_vocabulary("prometheus", {"metrics": []}, "vector(1)") is False
 
+    # Token match, not substring (second review pass): plain `in` let a constant query match a short or
+    # generic name that merely appears inside another word.
+    def test_a_short_metric_name_inside_another_word_does_not_count(self):
+        assert scg._mentions_schema_vocabulary("prometheus", {"metrics": ["up"]},
+                                               "SELECT 1 GROUP BY 1") is False
+        assert scg._mentions_schema_vocabulary("prometheus", {"metrics": ["up"]}, "sum(up)") is True
+
+    def test_clickhouse_anchors_on_tables_not_generic_columns(self):
+        schema = {"tables": {"spans": ["count", "ts"]}}
+        # `count` is a column here, and a constant query mentioning count() is not about this instance
+        assert scg._mentions_schema_vocabulary("clickhouse", schema,
+                                               "SELECT count() FROM system.tables") is False
+        assert scg._mentions_schema_vocabulary("clickhouse", schema,
+                                               "SELECT count() FROM spans") is True
+
+    def test_dotted_names_still_match(self):
+        assert scg._mentions_schema_vocabulary("prometheus", {"metrics": ["otel.spans"]},
+                                               "rate(otel.spans[5m])") is True
+
 
 class TestVocabNames:
     def test_dict_shaped_tables_are_supported(self):
