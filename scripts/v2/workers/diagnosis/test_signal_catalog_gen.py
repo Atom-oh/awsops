@@ -395,6 +395,18 @@ class TestAliasesCannotImpersonateSchemaNames:
         assert scg._is_constant_expr(
             "clickhouse", sch, "SELECT avg(duration) FROM spans WHERE service = 'duration'") is False
 
+    def test_backslash_escaped_quotes_do_not_end_the_literal(self):
+        # Both dialects write `'it\\'s'`. Ending the literal at the escaped quote left its tail exposed as
+        # code, so `'a\\'duration\\''` anchored on the column `duration` while measuring a constant.
+        sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}, {"name": "service"}]}]}
+        assert scg._is_constant_expr("clickhouse", sch, r"SELECT 'a\'duration\'' FROM spans") is True
+        assert scg._is_constant_expr("clickhouse", sch, r"SELECT 'x\\' , 'duration' FROM spans") is True
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT 'it''s duration' FROM spans") is True
+        assert scg._is_constant_expr(
+            "clickhouse", sch, "SELECT avg(duration) FROM spans WHERE service = 'a\\'b'") is False
+        assert scg._mentions_schema_vocabulary(
+            "prometheus", {"metrics": ["up"]}, r'vector(1) + 0*count(foo{a="\" up \""})') is False
+
     def test_a_promql_metric_named_only_in_a_label_or_comment_does_not_anchor(self):
         sch = {"metrics": ["up"]}
         assert scg._mentions_schema_vocabulary("prometheus", sch, 'vector(1) # up') is False

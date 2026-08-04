@@ -420,9 +420,12 @@ def _anchor_names(kind, schema):
 # and `SELECT 1 /* duration */ FROM spans` are constants, yet both anchored on the column `duration` and
 # were stored as ready signals (review, fourteenth pass). Literals are blanked before any name matching.
 _SQL_COMMENT = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
-_SQL_STRING = re.compile(r"'(?:[^']|'')*'")
+# BACKSLASH escapes, not just doubling: ClickHouse and PromQL both write `'it\\'s'`, and a regex that
+# ends the literal at the escaped quote leaves its tail exposed as code — `'a\\'duration\\''` then anchored
+# on the column `duration` (review, fifteenth pass). Backticks are RAW in both dialects (no escapes).
+_SQL_STRING = re.compile(r"'(?:[^'\\]|\\.|'')*'", re.DOTALL)
 _PROM_COMMENT = re.compile(r"#[^\n]*")
-_PROM_STRING = re.compile(r"'[^']*'|\"[^\"]*\"|`[^`]*`")
+_PROM_STRING = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`[^`]*`", re.DOTALL)
 
 
 def _strip_literals(kind, text):
