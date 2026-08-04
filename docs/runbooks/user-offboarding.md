@@ -75,8 +75,17 @@ psql -c "INSERT INTO session_revocations (user_sub, revoked_at) VALUES ('<sub>',
 #    Revoke standing authority: the SSM admin allowlist matches on EMAIL, so the entry outlives the
 #    account. If the address is reassigned and the new holder gets it verified, they become admin.
 aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value --output text
-aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type String --overwrite \
+#    타입은 StringList 다(workload.tf). --type String 으로 덮어쓰면 AWS 가 타입 변경을 거부한다.
+#    The parameter is a StringList (workload.tf); passing --type String is rejected — AWS will not
+#    change an existing parameter's type on overwrite.
+aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type StringList --overwrite \
   --value "<remaining,comma,separated,emails>"     # 반영까지 최대 5분 (캐시 TTL) / up to 5 min cache TTL
+#    마지막 admin 을 지우는 경우 빈 문자열은 거부되므로 공백 하나를 넣는다(= cognito:groups 만 사용).
+#    Removing the last entry: an empty value is rejected, so write a single space — that means
+#    "cognito:groups only", which is how Terraform seeds it.
+#    Terraform 은 이 값에 `ignore_changes` 를 걸어두었으므로 CLI 수정이 다음 apply 로 되돌아가지 않는다.
+#    Terraform sets `ignore_changes = [value]` on this parameter, so a CLI edit is not reverted by the
+#    next apply.
 # admins 그룹에 있었다면 / if they were in the group:
 aws cognito-idp admin-remove-user-from-group --user-pool-id "$V2_POOL" \
   --username "<email>" --group-name "${ADMIN_GROUP:-admins}"
