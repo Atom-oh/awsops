@@ -138,3 +138,19 @@ class TestClickhouseSystemTableSignals:
         rows = sc.build_signals("prometheus", {"metrics": ALL_METRICS})
         keys = {r["signal_key"] for r in rows}
         assert "clickhouse_slow_queries" not in keys
+
+
+class TestLokiLabelSignals:
+    def test_loki_signals_ready_when_labels_present(self):
+        rows = sc.build_signals("loki", {"labels": ["job", "namespace", "level"]})
+        by = _by_key(rows)
+        for key in ("loki_error_rate", "loki_log_volume_by_namespace", "loki_panic_grep"):
+            assert by[key]["status"] == "ready"
+            assert by[key]["query"]["tool"] == "loki_query_range"
+
+    def test_loki_signal_unavailable_when_required_label_missing(self):
+        rows = sc.build_signals("loki", {"labels": ["level"]})  # no 'job', no 'namespace'
+        by = _by_key(rows)
+        assert by["loki_error_rate"]["status"] == "unavailable"
+        assert "job" in by["loki_error_rate"]["missing_metrics"]
+        assert by["loki_log_volume_by_namespace"]["status"] == "unavailable"

@@ -18,7 +18,7 @@ rebuild even when the datasource's metric set is unchanged.
 CATALOG_VERSION = "v1"
 
 # kind → connector tool name (PromQL is identical for both)
-_KIND_TOOL = {"prometheus": "prometheus_query", "mimir": "mimir_query"}
+_KIND_TOOL = {"prometheus": "prometheus_query", "mimir": "mimir_query", "loki": "loki_query_range"}
 
 # Each entry: key, title, pillar, required_metrics, queries[{expr,label}], threshold, unit.
 # `topk(10, …)` bounds the result; aggregations use clamp_min to avoid divide-by-zero.
@@ -140,6 +140,36 @@ CATALOG = [
             "label": "error_rate",
             "expr": ("SELECT count() FROM system.text_log "
                      "WHERE level = 'Error' AND event_time >= now() - INTERVAL 1 HOUR"),
+        }],
+        "threshold": 0, "unit": "count",
+    },
+    {
+        "key": "loki_error_rate", "title": "에러 로그 비율", "pillar": "reliability",
+        "matcher": "labels", "kinds": ("loki",),
+        "required_labels": ["job"],
+        "queries": [{
+            "label": "error_rate",
+            "expr": 'sum by(job) (count_over_time({job=~".+"} |~ "(?i)error|exception|fatal" [5m]))',
+        }],
+        "threshold": 0, "unit": "count",
+    },
+    {
+        "key": "loki_log_volume_by_namespace", "title": "네임스페이스별 로그량", "pillar": "cost",
+        "matcher": "labels", "kinds": ("loki",),
+        "required_labels": ["namespace"],
+        "queries": [{
+            "label": "volume",
+            "expr": 'sum by(namespace) (count_over_time({namespace=~".+"} [5m]))',
+        }],
+        "threshold": 0, "unit": "count",
+    },
+    {
+        "key": "loki_panic_grep", "title": "Panic·Fatal 로그", "pillar": "reliability",
+        "matcher": "labels", "kinds": ("loki",),
+        "required_labels": ["job"],
+        "queries": [{
+            "label": "panic_count",
+            "expr": 'sum(count_over_time({job=~".+"} |~ "(?i)panic|fatal" [15m]))',
         }],
         "threshold": 0, "unit": "count",
     },
