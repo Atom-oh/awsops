@@ -85,7 +85,31 @@ const TARGETS = [
   { table: 'worker_jobs', column: 'requested_by', pk: 'job_id' },
   { table: 'diagnosis_reports', column: 'requested_by', pk: 'id' },
   { table: 'compliance_runs', column: 'requested_by', pk: 'id' },
+  // report_schedules.user_sub is NOT always a sub: the round-2 pentest fix stored identity() there
+  // (email-preferring), so pre-cut-over schedules hold an email despite the column name — see
+  // scripts/v2/workers/test_schedule_dispatcher.py. Leaving it out made the completion check
+  // ("0 residual legacy rows -> step 3 is safe") false: the dispatcher passes user_sub straight
+  // through as requested_by, so those schedules keep MINTING new email-keyed reports after the
+  // backfill, their owner loses them at flag-off, and readSchedule(sub) cannot see the row, so a user
+  // who re-creates a schedule ends up with two enabled rows and the diagnosis runs twice
+  // (PR #203 review MAJOR, 2 models independently, L2+L4).
+  { table: 'report_schedules', column: 'user_sub', pk: 'id' },
 ];
+
+// report_schedules has UNIQUE (user_sub, schedule_type), so rewriting email->sub collides whenever the
+// same person already has a sub-keyed schedule of that type — exactly the double-schedule case above.
+// The UPDATE would raise 23505 and roll the whole apply back (fail-closed, but unfinishable), so the
+// plan finds these first and leaves them out: which of the two schedules is authoritative is a
+// decision, not something this tool can infer.
+async function scheduleConflicts(client, ids, from, to) {
+  const { rows } = await client.query(
+    `SELECT l.id::text AS id, l.schedule_type, l.enabled
+       FROM report_schedules l
+       JOIN report_schedules s ON s.user_sub = $3 AND s.schedule_type = l.schedule_type
+      WHERE l.id::text = ANY($1::text[]) AND l.user_sub = $2`,
+    [ids, from, to]);
+  return rows;
+}
 
 function die(m) { console.error(`backfill-owner-sub: ${m}`); process.exit(1); }
 const tf = (out) => execSync(`terraform -chdir=terraform/v2/foundation output -raw ${out}`,
@@ -131,11 +155,22 @@ function cognitoUsersByEmail() {
       // user", and conflating them tells an operator a live colleague is gone (review MINOR, 2 models;
       // the ADR already promised the distinction). Eligibility is checked at the use site.
       if (byName.email && byName.sub) {
-        map.set(byName.email.toLowerCase(), {
-          sub: byName.sub,
-          accountCreated: u.c || null,
-          verified: byName.email_verified === 'true',
-        });
+        const key = byName.email.toLowerCase();
+        // Two users whose addresses differ only in case collapse to one key. The pool does not pin
+        // username_configuration, so this is possible, and `map.set` silently kept whichever page came
+        // last — an arbitrary, irreversible ownership transfer decided by pagination order, from a tool
+        // whose contract is "infer nothing" (PR #203 review MAJOR, 2 models). Record the collision
+        // instead; the use sites refuse the address outright.
+        const prev = map.get(key);
+        if (prev && prev.sub !== byName.sub) {
+          map.set(key, { ...prev, ambiguous: [...(prev.ambiguous || [prev.sub]), byName.sub] });
+        } else if (!prev) {
+          map.set(key, {
+            sub: byName.sub,
+            accountCreated: u.c || null,
+            verified: byName.email_verified === 'true',
+          });
+        }
       }
     }
     token = page.t || null;
@@ -179,13 +214,25 @@ async function plan(client) {
   const entries = [];
   const unmapped = [];    // no such user
   const unverified = [];  // user exists, email not verified — NOT a rewrite target
+  const ambiguous = [];   // >1 user maps to the same lowercased address — refuse, don't guess
+  const conflicts = [];   // report_schedules: the sub already has a schedule of that type
   for (const g of groups) {
     const hit = users.get(String(g.owner).toLowerCase());
     if (!hit) { unmapped.push(g); continue; }
+    if (hit.ambiguous) { ambiguous.push({ ...g, subs: hit.ambiguous }); continue; }
     if (!hit.verified) { unverified.push(g); continue; }
+    let ids = g.ids;
+    if (g.table === 'report_schedules') {
+      const clash = await scheduleConflicts(client, g.ids, g.owner, hit.sub);
+      if (clash.length > 0) {
+        conflicts.push({ ...g, clash, to: hit.sub });
+        ids = g.ids.filter((id) => !clash.some((c) => c.id === id));
+        if (ids.length === 0) continue;
+      }
+    }
     entries.push({
       table: g.table, column: g.column, pk: g.pk,
-      from: g.owner, to: hit.sub, rows: g.n, ids: g.ids,
+      from: g.owner, to: hit.sub, rows: ids.length, ids,
       evidence: {
         rowsWritten: `${g.oldest} .. ${g.newest}`,
         currentHolderAccountCreated: hit.accountCreated,
@@ -214,7 +261,24 @@ async function plan(client) {
     console.log('Nothing here can recover the owner. Find the original sub by hand, or retire the');
     console.log('rows.');
   }
-  if (unverified.length > 0 || unmapped.length > 0) {
+  if (ambiguous.length > 0) {
+    console.log('\nNOT IN THE PLAN — more than one Cognito user maps to this address (case-only difference):');
+    for (const g of ambiguous) console.log(`  ${g.owner}  (${g.table}, ${g.n} rows) -> ${g.subs.join(' | ')}`);
+    console.log('Picking one would be a guess, and the rewrite is irreversible. Resolve the duplicate');
+    console.log('accounts in the pool first.');
+  }
+  if (conflicts.length > 0) {
+    console.log('\nNOT IN THE PLAN — the target sub ALREADY has a schedule of the same type:');
+    for (const g of conflicts) {
+      for (const c of g.clash) {
+        console.log(`  report_schedules id=${c.id} ${g.owner} -> ${g.to}  type=${c.schedule_type} enabled=${c.enabled}`);
+      }
+    }
+    console.log('UNIQUE (user_sub, schedule_type) means the rewrite cannot merge them, and both rows');
+    console.log('enabled = the diagnosis runs twice. Decide which is authoritative, disable/delete the');
+    console.log('other, then re-plan. The address\'s other rows ARE in the plan.');
+  }
+  if (unverified.length > 0 || unmapped.length > 0 || ambiguous.length > 0 || conflicts.length > 0) {
     console.log('\nKeep LEGACY_EMAIL_OWNER_MATCH=true until these are resolved.');
   }
   process.exitCode = 2;   // a plan is not a completed migration
@@ -238,6 +302,9 @@ async function apply(client) {
     const hit = users.get(String(e.from).toLowerCase());
     if (!hit) {
       rejected.push(`${e.from} -> ${e.to}: no user holds this address now`);
+    } else if (hit.ambiguous) {
+      rejected.push(`${e.from} -> ${e.to}: ${hit.ambiguous.length} users now map to this address `
+        + `(${hit.ambiguous.join(', ')}) — refusing to guess`);
     } else if (!hit.verified) {
       rejected.push(`${e.from} -> ${e.to}: the address is no longer VERIFIED on ${hit.sub}`);
     } else if (hit.sub !== e.to) {

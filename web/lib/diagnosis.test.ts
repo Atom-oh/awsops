@@ -69,6 +69,17 @@ describe('diagnosis queries', () => {
     // Lineage args appended: dual owner keys (read-path parity) + account.
     expect(args).toEqual(['mid', 'u@x.io', 'sonnet', ['u@x.io'], null]);
   });
+  it('createReport binds BOTH owner keys during the legacy window, and scopes by account', async () => {
+    // The dual-key path is the one that matters while legacy_email_owner_match is on: the caller's
+    // sub AND their email, exactly as ownerKeysForRead() returns them, so the lineage baseline is the
+    // same row the read gate would show. Only the single-key shape was covered before
+    // (PR #203 review MINOR).
+    await createReport('mid', 'sub-1', 'sonnet', { ownerKeys: ['sub-1', 'u@x.io'], account: '1234' });
+    const [sql, args] = query.mock.calls.at(-1) as [string, unknown[]];
+    expect(sql).toContain('r.requested_by = ANY($4::text[])');
+    expect(sql).toContain("j.payload->>'account' = $5");
+    expect(args).toEqual(['mid', 'sub-1', 'sonnet', ['sub-1', 'u@x.io'], '1234']);
+  });
   it('createReport persists the selected model (deep + opus)', async () => {
     await createReport('deep', 'u@x.io', 'opus');
     const [, args] = query.mock.calls.at(-1) as [string, unknown[]];
