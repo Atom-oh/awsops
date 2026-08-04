@@ -75,13 +75,22 @@ export async function upsertSchedule(
   // One active schedule per user. The table's conflict key is (user_sub, schedule_type), so changing
   // frequency (e.g. weekly→monthly) would INSERT a new row and leave the previous one enabled — the
   // dispatcher (WHERE enabled) would then fire BOTH, and readSchedule (LIMIT 1) would hide the leak.
-  // Disable every other-frequency row for this user before upserting the chosen one.
-  await getPool().query(
-    `UPDATE report_schedules SET enabled = false WHERE user_sub = $1 AND schedule_type <> $2`,
-    [userSub, input.scheduleType],
-  );
+  // Disable every other-frequency row for this user, then upsert the chosen one.
+  //
+  // ONE TRANSACTION on ONE connection. These were two separate pool queries, which means two separate
+  // autocommit transactions on possibly different connections: between them the user has NO enabled
+  // schedule (a dispatcher tick in that gap silently skips them), and two concurrent saves can
+  // interleave as disable/disable/insert/insert — which uq_schedule_one_active now turns into a hard
+  // 23505 for the second, where before it merely left the table wrong (PR #203 review MAJOR). Inside
+  // one transaction the pair is atomic and the second saver waits on the first's row locks.
+  const client = await getPool().connect();
   try {
-    const { rows } = await getPool().query<Row>(
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE report_schedules SET enabled = false WHERE user_sub = $1 AND schedule_type <> $2`,
+      [userSub, input.scheduleType],
+    );
+    const { rows } = await client.query<Row>(
       `INSERT INTO report_schedules (user_sub, schedule_type, enabled, next_run_at, config)
        VALUES ($1, $2, $3, $4, $5::jsonb)
        ON CONFLICT (user_sub, schedule_type)
@@ -89,8 +98,10 @@ export async function upsertSchedule(
        RETURNING schedule_type, enabled, next_run_at, last_run_at, config`,
       [userSub, input.scheduleType, input.enabled, nextRunAt, JSON.stringify(config)],
     );
+    await client.query('COMMIT');
     return mapRow(rows[0]);
   } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
     // uq_schedule_one_active (migration 01KZ3C7Q…) now enforces one enabled row per user at the DB.
     // The disable above means this insert cannot collide with the caller's own rows, so reaching here
     // means something else claimed the slot concurrently — in practice the owner-sub backfill moving a
@@ -101,5 +112,7 @@ export async function upsertSchedule(
       throw new ScheduleSlotTakenError();
     }
     throw e;
+  } finally {
+    client.release();
   }
 }

@@ -106,7 +106,11 @@ export async function createReport(
     `INSERT INTO diagnosis_reports (worker_job_id, tier, requested_by, status, parent_report_id, model)
      VALUES (NULL, $1, $2, 'running',
        (SELECT r.id FROM diagnosis_reports r
-          JOIN worker_jobs j ON j.job_id = r.worker_job_id
+          -- Reached through the link OR the payload: a report whose link lost the one-report-per-job
+          -- race is still the row the worker renders (the payload names it), so excluding it here would
+          -- silently drop a real baseline and stamp NULL parent instead (PR #203 review MAJOR).
+          JOIN worker_jobs j ON (j.job_id = r.worker_job_id
+            OR (j.payload->>'report_id' ~ '^[0-9]+$' AND (j.payload->>'report_id')::bigint = r.id))
          WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
            AND r.status = 'succeeded' AND r.deleted_at IS NULL
            AND ($5::text IS NULL OR j.payload->>'account' = $5)

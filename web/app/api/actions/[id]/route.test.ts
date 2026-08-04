@@ -10,7 +10,11 @@ const query = vi.fn();
 const ssmSend = vi.fn();
 const sqsSend = vi.fn();
 
-vi.mock('@/lib/auth', () => ({ verifyUser: (...a: unknown[]) => verifyUser(...a) }));
+vi.mock('@/lib/auth', () => ({
+  verifyUser: (...a: unknown[]) => verifyUser(...a),
+  // real behaviour: the 4-eyes gate depends on it, so a stub would test nothing
+  identityKeys: (u: any) => (u.email ? [u.sub, u.email] : [u.sub]),
+}));
 vi.mock('@/lib/admin', () => ({ isAdmin: (...a: unknown[]) => isAdmin(...a) }));
 vi.mock('@/lib/db', () => ({ getPool: () => ({ query: (...a: unknown[]) => query(...a) }) }));
 vi.mock('@/lib/remediation', () => ({
@@ -107,6 +111,52 @@ describe('POST /api/actions/[id] execute — hard gates', () => {
     expect(res.status).toBe(403);
     expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({ decision: 'denied_self_approval' }));
     expect(setApprovedAndExecuting).not.toHaveBeenCalled();
+  });
+
+  it('403 self-approval when the plan holds the approver\'s EMAIL and the token yields the sub', async () => {
+    // The bypass this closes: /api/actions writes `user.email ?? user.sub`, so created_by can be an
+    // email, while after the email_verified gate the same human's later token carries only the sub.
+    // `created_by === approver` compared two spellings of one person and let them self-approve
+    // (PR #203 review MAJOR). The keys must be compared as a set.
+    process.env.REMEDIATION_ENABLED = 'true';
+    process.env.MUTATING_ACTIONS_SSM = 'p';
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'true' } });
+    verifyUser.mockResolvedValue({ sub: 'a', email: 'approver@x', groups: ['admins'] });
+    getPlan.mockResolvedValue(plannedPlan({ created_by: 'a' }));  // recorded under the sub this time
+    const { POST } = await import('./route');
+    const res = await POST(...post(ID, { op: 'execute' }));
+    expect(res.status).toBe(403);
+    expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({ decision: 'denied_self_approval' }));
+    expect(setApprovedAndExecuting).not.toHaveBeenCalled();
+  });
+
+  it('403 when 4-eyes cannot be proven (email-keyed creator, no verified email on the approver)', async () => {
+    process.env.REMEDIATION_ENABLED = 'true';
+    process.env.MUTATING_ACTIONS_SSM = 'p';
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'true' } });
+    verifyUser.mockResolvedValue({ sub: 'b', groups: ['admins'] }); // unverified address -> no email claim
+    getPlan.mockResolvedValue(plannedPlan({ created_by: 'someone@x' }));
+    const { POST } = await import('./route');
+    const res = await POST(...post(ID, { op: 'execute' }));
+    expect(res.status).toBe(403);
+    expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({ decision: 'denied_unprovable_4eyes' }));
+    expect(setApprovedAndExecuting).not.toHaveBeenCalled();
+  });
+
+  it('passes every approver key to the SQL guard, not just the display name', async () => {
+    process.env.REMEDIATION_ENABLED = 'true';
+    process.env.MUTATING_ACTIONS_SSM = 'p';
+    process.env.JOBS_QUEUE_URL = 'https://sqs.example/q';
+    ssmSend.mockResolvedValue({ Parameter: { Value: 'true' } });
+    getPlan.mockResolvedValue(plannedPlan({ created_by: 'creator@x' }));
+    getAction.mockResolvedValue(enabledAction);
+    setApprovedAndExecuting.mockResolvedValue(true);
+    query.mockResolvedValue({ rowCount: 1 });
+    sqsSend.mockResolvedValue({});
+    const { POST } = await import('./route');
+    await POST(...post(ID, { op: 'execute' }));
+    expect(setApprovedAndExecuting).toHaveBeenCalledWith(ID, 'approver@x', expect.any(String),
+      ['a', 'approver@x']);
   });
 
   it('410 expired plan', async () => {

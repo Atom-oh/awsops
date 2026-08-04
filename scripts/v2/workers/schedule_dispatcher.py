@@ -66,7 +66,11 @@ def _create_report(conn, tier, owner_sub, model, account=None):
         # the backfill BEFORE relying on scheduled regression diffs. The log line below makes the
         # loss visible; without it the user just sees "no change" instead of "no baseline".
         "  (SELECT r.id FROM diagnosis_reports r "
-        "     JOIN worker_jobs j ON j.job_id = r.worker_job_id "
+        # link OR payload: the worker renders the report_id the payload names, so a report whose link
+        # lost the one-report-per-job race is still a real baseline (PR #203 review MAJOR).
+        "     JOIN worker_jobs j ON (j.job_id = r.worker_job_id "
+        "        OR (j.payload->>'report_id' ~ '^[0-9]+$' "
+        "            AND (j.payload->>'report_id')::bigint = r.id)) "
         "    WHERE r.tier = :t AND r.requested_by = ANY(:ok) "
         "      AND r.status = 'succeeded' AND r.deleted_at IS NULL "
         "      AND (:acct IS NULL OR j.payload->>'account' = :acct) "

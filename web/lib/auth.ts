@@ -367,6 +367,18 @@ export function ownerKeysForRead(user: User): string[] {
 }
 
 /**
+ * Every key this token could have been recorded under, NOT gated on legacy_email_owner_match.
+ *
+ * ownerKeysForRead() is for POSITIVE checks — "may I see this row?" — where dropping the legacy form
+ * costs visibility. This is for NEGATIVE ones, where a missed match is a security hole instead: the
+ * 4-eyes gate rejects an approver who EQUALS the creator, so if the comparison misses the legacy form
+ * the same human approves their own plan. Flipping the flag off must not re-open that.
+ */
+export function identityKeys(user: User): string[] {
+  return user.email ? [user.sub, user.email] : [user.sub];
+}
+
+/**
  * Canonical ownership check. `user.sub` is the only key new rows carry; the legacy email form is
  * accepted separately and only while the flag above is on.
  */
