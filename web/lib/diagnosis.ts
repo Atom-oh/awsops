@@ -109,9 +109,20 @@ export async function createReport(
           -- Reached through the link OR the payload: a report whose link lost the one-report-per-job
           -- race is still the row the worker renders (the payload names it), so excluding it here would
           -- silently drop a real baseline and stamp NULL parent instead (PR #203 review MAJOR).
+          --
+          -- The payload branch is fenced three ways, because a payload is client-adjacent data:
+          --   type = 'report'  — the generic POST /api/jobs allowlist is {noop, noop-heavy}, so a
+          --                      report job can only come from /api/diagnosis (server-computed
+          --                      report_id, account validated against the accounts table) or the dispatcher;
+          --   {1,18} digits    — an unbounded ^[0-9]+$ passes a 23-digit string that then overflows
+          --                      bigint and aborts the whole query with 22003;
+          --   same owner       — and NOT type alone (codex stop-gate: a type value is not provenance).
+          --                      The job that supplies the account must belong to the same principal as
+          --                      the report, so no other user's job can label someone's baseline.
           JOIN worker_jobs j ON (j.job_id = r.worker_job_id
             OR (j.type = 'report' AND j.payload->>'report_id' ~ '^[0-9]{1,18}$'
-                AND (j.payload->>'report_id')::bigint = r.id))
+                AND (j.payload->>'report_id')::bigint = r.id
+                AND j.requested_by = r.requested_by))
          WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
            AND r.status = 'succeeded' AND r.deleted_at IS NULL
            AND ($5::text IS NULL OR j.payload->>'account' = $5)

@@ -68,9 +68,13 @@ def _create_report(conn, tier, owner_sub, model, account=None):
         "  (SELECT r.id FROM diagnosis_reports r "
         # link OR payload: the worker renders the report_id the payload names, so a report whose link
         # lost the one-report-per-job race is still a real baseline (PR #203 review MAJOR).
+        # link OR payload, and the payload branch is fenced: type (the generic /api/jobs allowlist
+        # excludes 'report'), an 18-digit bound (an unbounded regex lets a value through that then
+        # overflows bigint), and same-owner — a type value alone is not provenance.
         "     JOIN worker_jobs j ON (j.job_id = r.worker_job_id "
         "        OR (j.type = 'report' AND j.payload->>'report_id' ~ '^[0-9]{1,18}$' "
-        "            AND (j.payload->>'report_id')::bigint = r.id)) "
+        "            AND (j.payload->>'report_id')::bigint = r.id "
+        "            AND j.requested_by = r.requested_by)) "
         "    WHERE r.tier = :t AND r.requested_by = ANY(:ok) "
         "      AND r.status = 'succeeded' AND r.deleted_at IS NULL "
         "      AND (:acct IS NULL OR j.payload->>'account' = :acct) "
