@@ -51,10 +51,29 @@ describe('verifyUser', () => {
     const { verifyUser } = await import('./auth');
     expect(await verifyUser('foo=bar; baz=1')).toBeNull();
   });
-  it('returns {sub,email} for a valid id token', async () => {
-    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', email: 'a@b.com', token_use: 'id', iat: NOW } });
+  it('returns {sub,email} for a valid id token with a VERIFIED email', async () => {
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', email: 'a@b.com', email_verified: true, token_use: 'id', iat: NOW } });
     const { verifyUser } = await import('./auth');
     expect(await verifyUser('awsops_token=eyJ...; x=1')).toEqual({ sub: 'u-1', email: 'a@b.com', groups: [] });
+  });
+  // PR #203 review MAJOR (2 models): the legacy ownership branch authorizes reads — and PATCH/DELETE
+  // via canMutateReport — on this claim, and Cognito lets a user change their own email. Adopting an
+  // UNVERIFIED address made the exposure self-service: set your email to a departed colleague's and
+  // inherit their legacy rows. The user stays authenticated; they just lose the legacy email match.
+  it('drops an UNVERIFIED email claim but keeps the session', async () => {
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', email: 'victim@b.com', email_verified: false, token_use: 'id', iat: NOW } });
+    const { verifyUser } = await import('./auth');
+    expect(await verifyUser('awsops_token=eyJ...')).toEqual({ sub: 'u-1', email: undefined, groups: [] });
+  });
+  it('drops an email claim with no email_verified at all (absent !== verified)', async () => {
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', email: 'victim@b.com', token_use: 'id', iat: NOW } });
+    const { verifyUser } = await import('./auth');
+    expect(await verifyUser('awsops_token=eyJ...')).toEqual({ sub: 'u-1', email: undefined, groups: [] });
+  });
+  it('does not accept the string "true" as verified', async () => {
+    jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', email: 'victim@b.com', email_verified: 'true', token_use: 'id', iat: NOW } });
+    const { verifyUser } = await import('./auth');
+    expect((await verifyUser('awsops_token=eyJ...'))?.email).toBeUndefined();
   });
   it('returns null when token_use is not id', async () => {
     jwtVerify.mockResolvedValue({ payload: { sub: 'u-1', token_use: 'access', iat: NOW } });

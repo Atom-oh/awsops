@@ -98,6 +98,10 @@ async function syncSqlReaderPassword(client) {
 
 async function main() {
   const client = new pg.Client({ ...loadCreds(), statement_timeout: 300_000, lock_timeout: 30_000 });
+  // Surface server-side notices. A migration that decides something irreversibly (e.g. which duplicate
+  // row to disable) can only leave an audit trail through RAISE NOTICE, and without a listener node-pg
+  // drops those silently — the record existed only in the migration author's imagination (review).
+  client.on('notice', (n) => console.log(`  [db] ${n.message ?? n}`));
   await client.connect();
   let locked = false;
   try {
