@@ -167,17 +167,22 @@ _CONST_VALUE_FN = re.compile(r"^\s*(?:vector|scalar)\s*\(\s*[-+0-9.eE]+\s*\)\s*$
 _COUNT_ONLY = re.compile(r"\bcount\s*\(\s*\*?\s*\)", re.IGNORECASE)
 
 
-def _token_present(name, text):
+def _token_present(name, text, allow_dot_prefix=True):
     """`name` appears in `text` as a whole word.
 
-    Word boundary only — NOT "not preceded by a dot": that stricter form rejected ordinary SQL, since
-    `SELECT s.duration FROM spans s` qualifies the column and `s.duration` never matched `duration`
-    (review, fifth pass). A trailing/leading dot is part of how the name is legitimately written. Short
-    names are still safe: `up` does not match inside `GROUP`, because `O` is a word character.
+    `allow_dot_prefix=True` (columns) tolerates a qualifier: `SELECT s.duration` must match the column
+    `duration`, since qualifying a column is how SQL is normally written, and refusing a preceding dot
+    rejected ordinary queries (review, fifth pass).
+
+    `allow_dot_prefix=False` (tables in the FROM) does NOT: a cached `otel.spans` yields the bare segment
+    `spans`, and allowing a qualifier there made `FROM other_db.spans` match it — a different table in a
+    different database (review, seventh pass). Unqualified `FROM spans` still matches, which is the
+    legitimate current-database spelling.
     """
     if not name:
         return False
-    return bool(re.search(r"(?<!\w)" + re.escape(name.lower()) + r"(?!\w)", text))
+    left = r"(?<!\w)" if allow_dot_prefix else r"(?<![\w.])"
+    return bool(re.search(left + re.escape(name.lower()) + r"(?!\w)", text))
 
 
 def _sql_tables(schema):
@@ -255,7 +260,8 @@ def _sql_value_is_measured(schema, expr):
     if not sel or not frm:
         return False
     tables = _schema_table_names(schema)
-    if not any(_token_present(t, frm.group(1)) for t in tables):
+    # strict: the FROM must reference one of THIS instance's tables, not a same-named table elsewhere
+    if not any(_token_present(t, frm.group(1), allow_dot_prefix=False) for t in tables):
         return False
     select_list = sel.group(1)
     if _COUNT_ONLY.search(select_list):

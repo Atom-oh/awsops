@@ -265,6 +265,17 @@ class TestVocabularyGate:
         assert scg._is_constant_expr("clickhouse", real, "SELECT count() FROM spans") is False
         assert scg._is_constant_expr("clickhouse", real, "SELECT 1 AS x FROM otel.spans") is True
 
+    def test_a_same_named_table_in_another_database_is_not_this_instance(self):
+        # The bare segment derived from a cached `otel.spans` must only match an UNQUALIFIED reference:
+        # `FROM other_db.spans` is a different table that happens to share a name (review, seventh pass).
+        real = {"tables": [{"name": "otel.spans", "columns": [{"name": "Duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", real, "SELECT count() FROM other_db.spans") is True
+        assert scg._is_constant_expr("clickhouse", real, "SELECT count() FROM spans") is False
+        assert scg._is_constant_expr("clickhouse", real, "SELECT count() FROM otel.spans") is False
+        # and an unqualified cached name is not matched by a qualified reference either
+        flat = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", flat, "SELECT count() FROM other.spans") is True
+
     def test_bare_table_name_list_is_also_accepted(self):
         assert scg._schema_table_names({"tables": ["spans"]}) == ["spans"]
 
