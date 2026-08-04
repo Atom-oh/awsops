@@ -257,17 +257,31 @@ SUB=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$EMAI
 ENABLED=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$EMAIL" \
   --query Enabled --output text)
 [ "$ENABLED" = "False" ] || { echo "step 1 not done: account still enabled ($ENABLED)"; exit 1; }
+# 마지막 수정 시각 — step 1/2 가 계정을 건드리므로 이 시각 이후의 revocation 만 "이번 오프보딩" 것이다.
+# Last-modified: steps 1 and 2 touch the account, so only a revocation AFTER this belongs to THIS run.
+MODIFIED=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$EMAIL" \
+  --query UserLastModifiedDate --output text)
+: "${MODIFIED:?admin-get-user returned no UserLastModifiedDate}"
 
 LEFT=$(psql "$DSN" -At -v sub="$SUB" -v email="$EMAIL" -c \
   "SELECT count(*) FROM report_schedules WHERE user_sub IN (:'sub', :'email') AND enabled")
 [ "$LEFT" = "0" ] || { echo "step 3 not done: $LEFT schedule(s) still enabled"; exit 1; }
 
-REVOKED=$(psql "$DSN" -At -v sub="$SUB" -c \
-  "SELECT count(*) FROM session_revocations WHERE user_sub = :'sub'")
-[ "$REVOKED" = "1" ] || { echo "step 4 not done: no session_revocations row for this sub"; exit 1; }
+# 행이 있는 것만으로는 부족하다 — 사용자가 예전에 스스로 로그아웃했다면 그 행이 이미 있다(리뷰 지적).
+# 이번 오프보딩에서 올린 cutoff 인지 확인하려면 계정 수정 시각 이후여야 한다.
+# A row existing is not enough: the user's own past logout already leaves one (review finding). To be THIS
+# run's cutoff it has to postdate the account modification made by steps 1-2.
+REVOKED=$(psql "$DSN" -At -v sub="$SUB" -v modified="$MODIFIED" -c \
+  "SELECT count(*) FROM session_revocations
+    WHERE user_sub = :'sub' AND revoked_at >= (:'modified')::timestamptz")
+[ "$REVOKED" = "1" ] || { echo "step 4 not done: no session_revocations row newer than $MODIFIED"; exit 1; }
 
+# 대소문자 무시 — 앱(web/lib/admin.ts)이 양쪽을 lowercase 로 비교하므로 `A@X.io` 항목도 여전히 admin 이다.
+# Case-insensitive: the app (web/lib/admin.ts) lowercases both sides, so an `A@X.io` entry still grants admin.
 ALLOW=$(aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value --output text)
-case ",${ALLOW// /}," in *,"$EMAIL",*) echo "step 2 not done: still in the admin allowlist"; exit 1;; esac
+ALLOW_LC=$(printf '%s' "${ALLOW// /}" | tr '[:upper:]' '[:lower:]')
+EMAIL_LC=$(printf '%s' "$EMAIL" | tr '[:upper:]' '[:lower:]')
+case ",${ALLOW_LC}," in *,"$EMAIL_LC",*) echo "step 2 not done: still in the admin allowlist"; exit 1;; esac
 
 printf 'all steps verified. retype %s to delete irreversibly: ' "$EMAIL"; IFS= read -r CONFIRM < /dev/tty
 [ "$CONFIRM" = "$EMAIL" ] || { echo 'mismatch - nothing was deleted'; exit 1; }
