@@ -138,6 +138,10 @@ data "archive_file" "workers_src" {
     filename = "signal_catalog.py"
   }
   source {
+    content  = file("${local.workers_src}/diagnosis/signal_catalog_gen.py")
+    filename = "signal_catalog_gen.py"
+  }
+  source {
     content  = file("${local.workers_src}/graph_catalog.py")
     filename = "graph_catalog.py"
   }

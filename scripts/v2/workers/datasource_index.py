@@ -118,10 +118,17 @@ def _reintrospect(kind, integration_id):
 
 
 def _schema_version(schema):
-    """Stable cross-process hash of the metric-name set + signal_catalog.CATALOG_VERSION (diag scope:
-    only prometheus/mimir signals care about metric names). NOT salted hash()."""
-    metrics = sorted({m for m in (schema.get("metrics") or []) if isinstance(m, str)})
-    basis = json.dumps(metrics, separators=(",", ":")) + "|" + _cat.CATALOG_VERSION
+    """Stable cross-process hash of the FULL schema (all kinds' catalog entries key off different
+    parts of it — labels/tables/tags, not just metric names) + signal_catalog.CATALOG_VERSION + the
+    querygen flag's on/off state. Mirrors _graph_schema_version's reasoning exactly: the flag is
+    mixed in so flipping GRAPH_QUERYGEN_ENABLED — with the schema itself unchanged — still changes
+    the version and forces a rebuild; otherwise an instance first indexed while the flag was off
+    (catalog matched zero ready rows, LLM fallback skipped) would stay permanently stuck with zero
+    ready signals even after the flag turns on, since nothing about the schema itself would ever
+    drift again. NOT salted hash()."""
+    flag = "1" if os.environ.get("GRAPH_QUERYGEN_ENABLED") == "true" else "0"
+    basis = (json.dumps(schema, sort_keys=True, separators=(",", ":")) + "|" + _cat.CATALOG_VERSION
+             + "|querygen=" + flag)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 

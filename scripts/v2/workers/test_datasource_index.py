@@ -4,7 +4,8 @@ Widened (registry-driven graph sources, 2026-07-08) to also: (a) accept `kind` i
 dispatcher now looks it up once so the job never has to), (b) attempt a live re-introspection via the
 connector's `{kind}_schema` tool and write back to datasource_schemas on drift, falling back to the
 cache on any failure, and (c) build pre-computed topology-graph queries (graph_catalog.py) across ALL
-5 datasource kinds — independent of the diag-signals build, which stays prometheus/mimir-only.
+5 datasource kinds — independent of the diag-signals build, which now covers every kind too (its own
+per-kind catalog + an LLM hybrid fallback when a kind's catalog matches zero ready rows).
 
 A by-pattern FakeConn drives the real db helpers (upsert/read-version/sweep) through run(), so the
 test exercises the actual SQL helpers too. No Aurora, no real connector egress: `_reintrospect` is
@@ -154,6 +155,8 @@ class TestGeneratedFallback:
         c = FakeConn(kind="loki", schema={"labels": ["custom_label_only"]})
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert any(p["sk"] == "generated_signal" for p in c.inserts)
+        assert out["built"] == 4  # 3 catalog rows (all unavailable) + 1 generated
+        assert out["ready"] == 1  # only the generated row is ready
 
     def test_fallback_not_invoked_when_catalog_already_has_a_ready_row(self, monkeypatch):
         called = []
@@ -163,6 +166,56 @@ class TestGeneratedFallback:
         c = FakeConn(kind="loki", schema={"labels": ["job"]})  # loki_error_rate matches → 1+ ready
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert called == []
+
+
+class TestSchemaVersionCoversFullSchemaAndFlag:
+    """_schema_version used to hash only schema['metrics'], so non-metrics kinds (loki/clickhouse/
+    tempo/jaeger) hashed to a CONSTANT — label/table drift and GRAPH_QUERYGEN_ENABLED flips never
+    triggered a rebuild for them. Mirrors _graph_schema_version's existing flag-mixing precedent."""
+
+    def test_label_only_schema_change_is_not_treated_as_unchanged(self):
+        # loki schema has no "metrics" key at all — the old hash basis was a constant for this kind.
+        c0 = FakeConn(kind="loki", schema={"labels": ["job"]})
+        dsi.run({"integration_id": 7, "kind": "loki"}, c0)
+        version = c0.inserts[0]["sv"]
+        # Different labels, same existing_version recorded under the old (constant) hash — must NOT
+        # be read as "unchanged" now that the full schema feeds the hash.
+        c1 = FakeConn(kind="loki", schema={"labels": ["namespace"]}, existing_version=version)
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c1)
+        assert out.get("skipped") is not True
+        assert c1.inserts != []
+
+    def test_flag_flip_with_unchanged_schema_forces_rebuild_not_skip(self, monkeypatch):
+        schema = {"labels": ["custom_label_only"]}  # zero catalog matches → fallback-eligible
+        monkeypatch.delenv("GRAPH_QUERYGEN_ENABLED", raising=False)
+        c0 = FakeConn(kind="loki", schema=schema)
+        dsi.run({"integration_id": 7, "kind": "loki"}, c0)
+        version_off = c0.inserts[0]["sv"]
+        assert not any(p["st"] == "ready" for p in c0.inserts)  # no fallback while the flag was off
+
+        monkeypatch.setenv("GRAPH_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "try_generate_signal": staticmethod(lambda kind, schema, iid, invoke_connector, invoke_llm=None: {
+                "signal_key": "generated_signal", "title": "AI 생성 신호", "status": "ready",
+                "query": {"tool": "loki_query_range", "queries": [{"label": "g", "expr": "x"}]},
+                "missing_metrics": None, "meta": {"kind": "loki", "provenance": "generated"},
+            }),
+        }))
+        c1 = FakeConn(kind="loki", schema=schema, existing_version=version_off)
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c1)
+        assert out.get("skipped") is not True
+        assert any(p["sk"] == "generated_signal" for p in c1.inserts)
+
+    def test_same_flag_state_and_schema_still_skips(self, monkeypatch):
+        schema = {"labels": ["job"]}
+        monkeypatch.delenv("GRAPH_QUERYGEN_ENABLED", raising=False)
+        c0 = FakeConn(kind="loki", schema=schema)
+        dsi.run({"integration_id": 7, "kind": "loki"}, c0)
+        version = c0.inserts[0]["sv"]
+        c1 = FakeConn(kind="loki", schema=schema, existing_version=version)
+        out = dsi.run({"integration_id": 7, "kind": "loki"}, c1)
+        assert out.get("skipped") is True
+        assert c1.inserts == []
 
 
 # ── Task 11: end-to-end smoke — catalog → index(build) → diag_signals → collect → coverage "사용" ──
