@@ -285,25 +285,35 @@ case ",${ALLOW_LC}," in *,"$EMAIL_LC",*) echo "step 2 not done: still in the adm
 
 # 이 계정이 Terraform 관리 대상인지 확인한다 — `aws_cognito_user.admin`(auth.tf)이 있다. CLI 로 지우면
 # 다음 `terraform apply` 가 tfvars 의 `admin_email`/`admin_password` 로 **같은 계정을 재생성**해 오프보딩이
-# 조용히 되돌아간다(리뷰 지적, base 로 확인).
-# Check whether this account is Terraform-managed: `aws_cognito_user.admin` exists in auth.tf. Deleting it
-# with the CLI lets the next `terraform apply` RECREATE it from tfvars (`admin_email`/`admin_password`),
-# silently undoing the offboarding (review finding, confirmed against base).
-TF_ADMIN=$(terraform -chdir=terraform/v2/foundation state list 2>/dev/null | grep -c '^aws_cognito_user\.' || true)
-if [ "${TF_ADMIN:-0}" != "0" ]; then
-  TF_ADMIN_EMAIL=$(terraform -chdir=terraform/v2/foundation state show aws_cognito_user.admin 2>/dev/null \
-    | sed -n 's/^ *username *= *"\(.*\)"$/\1/p')
-  if [ "$TF_ADMIN_EMAIL" = "$EMAIL" ]; then
-    echo "STOP: $EMAIL is aws_cognito_user.admin in Terraform state."
+# 조용히 되돌아간다.
+# **판정 불가는 거부다**: 이전 판은 `state list` 를 `2>/dev/null || true` 로 감싸서, init 안 된 디렉터리나
+# backend 자격증명 문제로 조회가 실패하면 가드를 건너뛰고 삭제를 진행했다(리뷰 지적 — fail-open).
+# Is this account Terraform-managed? `aws_cognito_user.admin` exists in auth.tf, and deleting it with the
+# CLI lets the next `terraform apply` recreate it from tfvars, silently undoing the offboarding.
+# **Not being able to tell is a refusal**: the previous version wrapped `state list` in
+# `2>/dev/null || true`, so an uninitialised directory or a backend credential problem skipped the guard
+# and went ahead with the delete (review finding — fail-open).
+TF_STATE=$(terraform -chdir=terraform/v2/foundation state list 2>&1) || {
+  echo "cannot read terraform state - refusing to delete. Check aws_cognito_user manually:"
+  echo "  terraform -chdir=terraform/v2/foundation init && terraform -chdir=terraform/v2/foundation state list"
+  exit 1; }
+MANAGED=$(printf '%s\n' "$TF_STATE" | grep '^aws_cognito_user\.' || true)
+for ADDR in $MANAGED; do          # 하나만 보지 않는다 / not just .admin
+  SHOWN=$(terraform -chdir=terraform/v2/foundation state show "$ADDR" 2>&1) || {
+    echo "cannot read $ADDR - refusing to delete"; exit 1; }
+  TF_USER=$(printf '%s\n' "$SHOWN" | sed -n 's/^ *username *= *"\(.*\)"$/\1/p' | head -1)
+  [ -n "$TF_USER" ] || { echo "could not parse username out of $ADDR - refusing to delete"; exit 1; }
+  TF_USER_LC=$(printf '%s' "$TF_USER" | tr '[:upper:]' '[:lower:]')
+  if [ "$TF_USER_LC" = "$EMAIL_LC" ]; then
+    echo "STOP: $EMAIL is $ADDR in Terraform state."
     echo "  Deleting it here would be undone by the next apply. Instead:"
     echo "   1. point terraform.tfvars' admin_email at the person taking over (and rotate admin_password),"
     echo "   2. terraform plan -out tfplan && apply tfplan  # replaces the account under management,"
-    echo "   3. or remove the resource and 'terraform state rm aws_cognito_user.admin' if no admin user"
-    echo "      should be managed at all."
+    echo "   3. or remove the resource and 'terraform state rm $ADDR' if no admin user should be managed."
     echo "  The disable/revoke/allowlist steps above have already run and still hold."
     exit 1
   fi
-fi
+done
 
 printf 'all steps verified. retype %s to delete irreversibly: ' "$EMAIL"; IFS= read -r CONFIRM < /dev/tty
 [ "$CONFIRM" = "$EMAIL" ] || { echo 'mismatch - nothing was deleted'; exit 1; }
