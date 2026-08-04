@@ -47,11 +47,13 @@ aws cognito-idp list-users --user-pool-id "$V1_POOL" --query 'Users[].Username' 
 aws cognito-idp list-users --user-pool-id "$V2_POOL" --query 'Users[].Username' --output text
 ```
 
-v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user`만 실행하면 사용자가 `FORCE_CHANGE_PASSWORD` challenge 상태로 남는데, v2 로그인(ADR-042 자체 `/login` → `InitiateAuth(USER_PASSWORD_AUTH)`)은 Cognito challenge를 처리하는 플로우가 없어 그 상태로는 **로그인 자체가 실패한다**(비밀번호 재설정 불가로 사실상 락아웃). `admin-set-user-password --permanent`로 즉시 permanent 상태로 만든 뒤, 그 임시 비밀번호를 사용자에게 전달(다음 로그인 시 직접 변경하도록 안내):
+v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user`만 실행하면 사용자가 `FORCE_CHANGE_PASSWORD` challenge 상태로 남는데, v2 로그인(ADR-042 자체 `/login` → `InitiateAuth(USER_PASSWORD_AUTH)`)은 Cognito challenge를 처리하는 플로우가 없어 그 상태로는 **로그인 자체가 실패한다**(비밀번호 재설정 불가로 사실상 락아웃). `admin-set-user-password --permanent`로 즉시 permanent 상태로 만든 뒤, 그 임시 비밀번호를 사용자에게 전달(다음 로그인 시 직접 변경하도록 안내).
+
+**`email_verified=true` 를 반드시 함께 준다**(PR #203): `verifyUser()` 는 `email_verified` 가 true 일 때만 토큰의 `email` claim 을 채택하므로, 이 값이 빠진 채 생성된 사용자는 email 이 `undefined` 가 되어 (1) SSM allowlist admin 판정에서 탈락하고, (2) legacy email-keyed 행의 소유권 매칭이 끊기고, (3) `make backfill-owner-sub` 계획에서 "unverified" 로 제외된다. `admin-create-user` 는 client 의 `write_attributes` 제약을 받지 않으므로 여기서 설정 가능하다. 이미 이 절차로 만든 사용자는 `admin-update-user-attributes ... Name=email_verified,Value=true` 로 보정한다:
 
 ```bash
 aws cognito-idp admin-create-user --user-pool-id "$V2_POOL" --username <email> \
-  --user-attributes Name=email,Value=<email> --message-action SUPPRESS
+  --user-attributes Name=email,Value=<email> Name=email_verified,Value=true --message-action SUPPRESS
 aws cognito-idp admin-set-user-password --user-pool-id "$V2_POOL" --username <email> \
   --password '<temp-password>' --permanent
 # 완료 조건: 실제 로그인 성공까지 확인 (POST /api/auth/login 200 응답)

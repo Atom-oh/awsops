@@ -10,10 +10,12 @@ class FakeConn:
         self.due_rows = due_rows
         self.closed = False
         self.sql_log = []
+        self.calls = []  # (sql, kwargs) — the lineage binds are the point of one test below
         self._rid = 0
 
     def run(self, sql, **_kw):
         self.sql_log.append(sql)
+        self.calls.append((sql, _kw))
         if sql.startswith("UPDATE report_schedules"):
             return self.due_rows
         if sql.startswith("INSERT INTO diagnosis_reports"):
@@ -83,6 +85,22 @@ def test_claim_sql_is_advance_first_enabled_only_returning():
     assert "enabled = true" in sql
     assert "next_run_at <= now()" in sql
     assert "RETURNING" in sql  # claim+advance in one statement → concurrent run claims 0 (no double-fire)
+
+
+def test_lineage_parent_is_scoped_by_owner_and_account(monkeypatch):
+    # The parent_report_id subquery must not pick a baseline from another owner or another account —
+    # the BFF's createReport() scopes both, and the two paths disagreeing means the same diagnosis
+    # reports a different diff depending on who started it (PR #203). The dispatcher can only offer
+    # the sub (it has no token, hence no email), so the assertion is: bound, and bound to the sub.
+    monkeypatch.setattr(sd, "HOST_ACCOUNT", "180294183052")
+    rows = [("u1", "weekly", {"tier": "mid"})]
+    conn, _inserted, _sqs = _wire(monkeypatch, rows)
+    sd.lambda_handler({}, None)
+    sql, kw = next(c for c in conn.calls if c[0].startswith("INSERT INTO diagnosis_reports"))
+    assert "r.requested_by = ANY(:ok)" in sql
+    assert "(:acct IS NULL OR j.payload->>'account' = :acct)" in sql
+    assert "JOIN worker_jobs j ON j.job_id = r.worker_job_id" in sql
+    assert kw["ok"] == ["u1"] and kw["acct"] == "180294183052"
 
 
 def test_string_config_is_tolerated(monkeypatch):

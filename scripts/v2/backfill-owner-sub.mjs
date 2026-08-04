@@ -39,7 +39,7 @@
 // LEGACY_EMAIL_OWNER_MATCH=false — step 3.
 
 import { execSync } from 'node:child_process';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import pg from 'pg';
 
@@ -348,16 +348,28 @@ async function apply(client) {
   // now transactional: a file named "-applied" that was left behind by a rolled-back run would be a
   // lie, and the reverse ordering (journal after COMMIT) loses the record if the process dies between
   // the two. Stamping the outcome covers both.
-  const journalPath = `${APPLY_FROM.replace(/\.json$/, '')}-applied.json`;
+  // One journal PER RUN, never reused. The path used to be a pure function of the plan name, so a
+  // second `--apply` with the same plan overwrote the first run's journal — and its very first act is
+  // journal('attempting'), which strips changedIds. A committed run's reversal record was therefore
+  // destroyed by the next run before that run had written anything (PR #203 review MAJOR). The suffix
+  // counts up until an unused name is found and the first write is exclusive (`wx`), so an existing
+  // journal can never be clobbered even if two operators run at once.
+  const journalBase = `${APPLY_FROM.replace(/\.json$/, '')}-applied`;
+  let journalPath = `${journalBase}.json`;
+  for (let i = 2; existsSync(journalPath); i += 1) journalPath = `${journalBase}-${i}.json`;
   // `entries` gains a `changedIds` per entry once the UPDATEs run — that, not the planned `ids`, is
   // the reversal scope (they differ when a row moved on since the plan). A `rolled-back` journal has
   // them stripped, since nothing was changed.
   // chmod after the write, not just `mode:` — `mode` applies only when the file is CREATED, so
   // re-running over a file that already existed with looser bits kept the PII world-readable
   // (PR #203 review MINOR, 3 model families).
+  let journalCreated = false;
   const journal = (status) => {
-    writeFileSync(journalPath, JSON.stringify({ startedFrom: APPLY_FROM, status, entries }, null, 2),
-      { mode: 0o600 });
+    const body = JSON.stringify({ startedFrom: APPLY_FROM, status, entries }, null, 2);
+    // `wx` on the first write: if something created that name in the meantime, fail rather than
+    // overwrite someone else's record. Later writes (the outcome stamp) target the file we made.
+    writeFileSync(journalPath, body, journalCreated ? { mode: 0o600 } : { mode: 0o600, flag: 'wx' });
+    journalCreated = true;
     chmodSync(journalPath, 0o600);
   };
   journal('attempting');
