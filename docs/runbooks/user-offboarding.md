@@ -55,26 +55,22 @@ V2_POOL=$(terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool
 # 주입 지점이 된다 — `';touch /tmp/pwned;'` 를 넣으면 실제로 실행된다(리뷰 지적, 재현 확인).
 # `read -r` 은 입력을 한 줄의 리터럴로 받으므로 셸이 그 내용을 해석하지 않는다. 그리고 **`< /dev/tty` 가
 # 필수다**: 이 블록은 통째로 붙여넣는 용도이고, 그냥 `read` 면 붙여넣은 **다음 줄을 주소로 삼아버린다**
-# (재현 확인 — EMAIL 에 스크립트 한 줄이 들어가고 나머지가 그대로 실행된다). 비대화형으로 돌릴 때는
-# EMAIL 을 미리 export 해두면 read 를 건너뛴다.
+# (재현 확인 — EMAIL 에 스크립트 한 줄이 들어가고 나머지가 그대로 실행된다). 이 런북은 사람이 tty 앞에서
+# 실행하는 것을 전제한다 — 비대화형 경로는 두지 않는다(아래 확인 단계 주석 참조).
 # Read the address WITHOUT shell syntax. This runbook's threat model is "self-registered accounts nobody
 # recognises", so the address may be attacker-chosen — and telling an operator to paste it inside quotes
 # (`EMAIL='<here>'`) makes that paste the injection point: `';touch /tmp/pwned;'` really does run
 # (reproduced). `read -r` takes the line literally; the shell never parses it. `< /dev/tty` is required
 # too: this block is meant to be pasted whole, and a bare `read` would consume the pasted block's OWN
-# NEXT LINE as the address (also reproduced). Export EMAIL beforehand to skip the prompt non-interactively.
+# NEXT LINE as the address (also reproduced). This runbook assumes a human at a tty; there is deliberately
+# no non-interactive path (see the confirmation step below for why).
 # 비어 있을 때만 묻는 방식은 쓰지 않는다 — 같은 셸에서 **앞사람 오프보딩의 EMAIL 이 남아 있으면** 프롬프트가
-# 조용히 건너뛰어지고 파괴적 명령이 엉뚱한 사람에게 실행된다(리뷰 지적). 항상 묻고, 비대화형은 명시적으로
-# 옵트인한다.
+# 조용히 건너뛰어지고 파괴적 명령이 엉뚱한 사람에게 실행된다(리뷰 지적). 그래서 조건 없이 항상 묻는다.
 # Do NOT use "prompt only if empty": a leftover EMAIL from the PREVIOUS person's offboarding in the same
 # shell would silently skip the prompt and point the destructive commands at the wrong person (review
-# finding). Always prompt; opt IN to non-interactive explicitly.
-if [ -n "${OFFBOARD_NONINTERACTIVE:-}" ]; then
-  : "${EMAIL:?OFFBOARD_NONINTERACTIVE is set, so EMAIL must be set too}"
-else
-  unset EMAIL SUB                      # 이전 실행의 잔여값 제거 / drop anything left from a previous run
-  printf 'departing address: '; IFS= read -r EMAIL < /dev/tty
-fi
+# finding). So it always prompts, unconditionally.
+unset EMAIL SUB                        # 이전 실행의 잔여값 제거 / drop anything left from a previous run
+printf 'departing address: '; IFS= read -r EMAIL < /dev/tty
 : "${EMAIL:?no address entered}"
 
 # 1) pool 전체를 명부와 대조 — sub 도 함께 뽑는다(아래 단계들이 요구한다)
@@ -106,7 +102,7 @@ set -euo pipefail
 : "${DSN:?set DSN (postgresql://<user>@<aurora-endpoint>:5432/awsops?sslmode=require) first}"
 : "${V2_POOL:?set V2_POOL (terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)}"
 : "${SSM_ADMIN_EMAILS_PARAM:=/ops/awsops-v2/admin_emails}"
-: "${EMAIL:?set EMAIL first — see the Verification block's prompt, never by pasting into quotes}"
+: "${EMAIL:?set EMAIL first — run the Verification block above, which prompts for it}"
 : "${SUB:?set SUB — see the Verification block's admin-get-user step}"
 
 # 여기서부터 파괴적이다. 값을 눈으로 확인하고 주소를 다시 입력하게 한다 — 잔여 변수/오타로 엉뚱한 사람을
@@ -114,16 +110,15 @@ set -euo pipefail
 # Everything below is destructive. Show the resolved values and require the address to be typed again: the
 # last stop against a stale variable or a typo taking out the wrong person. No command runs without it.
 printf 'about to offboard:\n  EMAIL=%s\n  SUB=%s\nretype the address to proceed: ' "$EMAIL" "$SUB"
-if [ -n "${OFFBOARD_NONINTERACTIVE:-}" ]; then
-  # 비대화형에서 CONFIRM="$EMAIL" 로 자동 통과시키면 이 관문이 그 경로에서 사라진다 — 잔여 EMAIL 이 스스로를
-  # 승인하게 된다(리뷰 지적). 호출자가 주소를 **독립적으로 한 번 더** 명시해야 한다.
-  # Auto-satisfying this in non-interactive mode deletes the gate on that path: a stale EMAIL confirms
-  # itself (review finding). The caller must state the address a SECOND, independent time.
-  : "${OFFBOARD_CONFIRM_EMAIL:?non-interactive: set OFFBOARD_CONFIRM_EMAIL to the same address to confirm}"
-  CONFIRM="$OFFBOARD_CONFIRM_EMAIL"
-else
-  IFS= read -r CONFIRM < /dev/tty
-fi
+# 확인은 **반드시 tty 에서** 받는다. 비대화형 모드를 뒀다가 두 번 연속 지적을 받았는데, 근본 원인은 환경변수로는
+# "방금 사람이 이 주소를 확인했다"를 증명할 수 없다는 것이다 — 확인용 변수를 추가해도 그 변수 자체가 앞사람
+# 실행의 잔여값일 수 있다. 그래서 이 블록에는 비대화형 경로를 두지 않는다. 자동화가 필요하면 각자 래퍼를
+# 만들고 그 위험을 각자 감수한다.
+# Confirmation comes from the TTY, always. Two consecutive review findings landed on the non-interactive
+# path, and the root cause is that an environment cannot prove "a human just checked this address" —
+# adding a confirmation variable only moves the staleness into that variable. So this block has no
+# non-interactive path. Automate it yourself if you must, and own that risk.
+IFS= read -r CONFIRM < /dev/tty
 [ "$CONFIRM" = "$EMAIL" ] || { echo 'mismatch — nothing was done'; exit 1; }
 
 # SUB 은 변수라 잔여값일 수 있다. EMAIL 로 다시 조회해 일치를 강제한다 — 이러면 stale SUB 은 모드와 무관하게
@@ -172,12 +167,8 @@ aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value -
 # 새 목록도 붙여넣기이므로 같은 방식으로 읽는다(주소 하나가 적대적일 수 있다). 역시 `< /dev/tty`.
 # The new list is a paste too, so read it the same way — one of those addresses may be hostile. `< /dev/tty`
 # for the same reason as above.
-if [ -n "${OFFBOARD_NONINTERACTIVE:-}" ]; then
-  : "${ADMIN_LIST:?OFFBOARD_NONINTERACTIVE is set, so ADMIN_LIST must be set too}"
-else
-  unset ADMIN_LIST
-  printf 'remaining admin emails (comma separated): '; IFS= read -r ADMIN_LIST < /dev/tty
-fi
+unset ADMIN_LIST
+printf 'remaining admin emails (comma separated): '; IFS= read -r ADMIN_LIST < /dev/tty
 : "${ADMIN_LIST:?nothing entered — write a single space to mean cognito:groups-only}"
 aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type StringList --overwrite \
   --value "$ADMIN_LIST"                            # 반영까지 최대 5분 (캐시 TTL) / up to 5 min cache TTL
