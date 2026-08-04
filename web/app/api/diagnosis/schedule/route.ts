@@ -3,7 +3,9 @@
 // enqueues the runs. Scoped by the authenticated user's immutable Cognito sub (no cross-user access).
 import { NextResponse } from 'next/server';
 import { verifyUser } from '@/lib/auth';
-import { readSchedule, upsertSchedule, SCHEDULE_FREQS, type ScheduleFreq } from '@/lib/diagnosis-schedule';
+import {
+  readSchedule, upsertSchedule, ScheduleSlotTakenError, SCHEDULE_FREQS, type ScheduleFreq,
+} from '@/lib/diagnosis-schedule';
 import { readJsonBounded, BodyTooLargeError } from '@/lib/http-body';
 
 export const dynamic = 'force-dynamic';
@@ -38,6 +40,14 @@ export async function PUT(req: Request) {
   const model = typeof body?.model === 'string' ? (body.model as string) : null;
 
   // Persist only — the dispatcher (not this route) enqueues runs.
-  const schedule = await upsertSchedule(user.sub, { scheduleType, enabled, tier, model });
+  let schedule;
+  try {
+    schedule = await upsertSchedule(user.sub, { scheduleType, enabled, tier, model });
+  } catch (e) {
+    if (e instanceof ScheduleSlotTakenError) {
+      return NextResponse.json({ status: 'error', message: e.message }, { status: 409 });
+    }
+    throw e;
+  }
   return NextResponse.json({ schedule });
 }

@@ -39,6 +39,20 @@ describe('POST /api/jobs', () => {
     expect(res.status).toBe(401);
     expect(enqueueJob).not.toHaveBeenCalled();
   });
+  // The diagnosis lineage join treats `worker_jobs.type = 'report'` as provenance for a payload-supplied
+  // report_id, which only holds while this allowlist excludes it. If someone ever adds 'report' here, a
+  // client could name any report_id and account (PR #203 codex stop-gate).
+  it('rejects report/compliance: they trust payload-supplied ids, so only their own routes may enqueue them',
+    async () => {
+      verifyUser.mockResolvedValue({ sub: 'u-1' });
+      const { POST } = await import('./route');
+      for (const type of ['report', 'compliance']) {
+        const res = await POST(req({ type }) as any);
+        expect(res.status).toBe(400);
+      }
+      expect(enqueueJob).not.toHaveBeenCalled();
+    });
+
   it('202 with job_id when authenticated', async () => {
     verifyUser.mockResolvedValue({ sub: 'u-1' });
     enqueueJob.mockResolvedValue({ job_id: 'j1', status: 'queued' });

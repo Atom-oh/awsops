@@ -47,11 +47,12 @@
 
 ## §2 게이트 / 동결 register (Gated / Frozen)
 
-> 2-티어: **FROZEN**(do-not-enable, 풀려면 새 ADR+패널+owner-override) vs **GATED**(거버넌스 하 활성화 가능, 현재 OFF). 모든 항목 terraform flag default=false와 일치.
+> 2-티어: **FROZEN**(do-not-enable, 풀려면 새 ADR+패널+owner-override) vs **GATED**(거버넌스 하 활성화 가능, 현재 OFF). 아래 **feature gate** 는 전부 terraform flag default=false 와 일치한다. 예외로 아래 **마이그레이션 창 스위치**(`legacy_email_owner_match`) 행은 기본 **true** 다 — 기능을 켜는 플래그가 아니라 이관이 끝날 때까지 legacy 동작을 유지하는 스위치이므로, 기본값이 반대다.
 
 | 상태 | 항목 | flag | 켜는 조건 / 비고 | 근거 ADR |
 |---|---|---|---|---|
 | **FROZEN** | AWS 리소스 변경(SSM/Change Manager) + 자율 mitigation substrate | `remediation_enabled` | **do-not-enable.** 재활성화 = 새 ADR로 2026-06-11 reversal 명시 번복 + 멀티-AI 패널 + owner-override. flag-OFF substrate는 보존(삭제 아님) | ADR-005 |
+| **마이그레이션 창** (feature gate 아님) | legacy email-keyed 소유권 매칭을 수용(읽기 + report PATCH/DELETE — `matchesIdentity()` 를 거치는 모든 게이트) | `legacy_email_owner_match` — **기본 true** | 이관 스위치. `make` target 은 **plan-only** 이므로 clean plan 만으로는 조건이 아니다 — clean plan 은 아직 아무 행도 rewrite 되지 않은 상태에서도 성립한다. **`--apply` 가 성공하고 잔여 legacy email-keyed row 가 0 임을 확인한 뒤에만** `false` 로 내린다(애초에 legacy 행이 없어 plan 이 zero-row 로 끝난 경우도 이 조건을 만족한다 — 재작성할 것이 없었으므로). 그전에 내리면 legacy 행이 소유자에게 안 보인다. 켜져 있는 동안은 재할당된 주소가 전 소유자의 legacy 행과 일치할 수 있다. 세 경로 중 **둘만** 닫혔다: 기존 계정의 email *변경*은 `write_attributes` 축소로, *신규* 계정 signup 은 `allow_admin_create_user_only` 로. **세 번째는 계정 복구였고 이 PR 에서 닫았다** — public `ForgotPassword` 는 그 주소로 코드를 보내므로 mailbox 보유자가 기존 계정을 인수할 수 있었다(그 경우 legacy 행뿐 아니라 sub-keyed 행까지 넘어간다). `account_recovery_setting = admin_only` 로 self-service 복구 자체를 제거했다 — 대가는 비밀번호 재설정이 운영자 작업이 되는 것이고, 이 pool 은 이미 admin-create-only 라 그 모델과 일치한다. 오프보딩(`docs/runbooks/user-offboarding.md`)은 여전히 필요하다(세션·admin allowlist·스케줄 정리). ADR-002 참조 | ADR-009 |
 | **GATED** | 자율 인시던트 라이프사이클 | `incident_lifecycle_enabled` | analysis-only(read-only triage/RCA, 권고전용, mutation 라우팅 금지). 활성화해도 자율 조치 없음 | ADR-006 |
 | **GATED** | RCA write-back (OpsCenter/Incident Manager 관측메타 write) | `rca_writeback_enabled` | `incident_lifecycle_enabled` + **자족 role 분리 선행**(현재 frozen remediation role 상속 → 분리 전 do-not-enable) | ADR-006 |
 | **GATED** | K8sGPT 인클러스터 진단 | `k8sgpt_enabled` | GET-only(Result CRD read), 클러스터 write 없음, 오퍼레이터는 out-of-band 설치 | ADR-006 |

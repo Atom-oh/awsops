@@ -5,6 +5,7 @@ import {
   listReports,
   createReport,
   linkReportJob,
+  ReportJobAlreadyLinkedError,
   reportForIdempotencyKey,
   markReportFailed,
   softDeleteReport,
@@ -85,7 +86,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ report_id: existing, tier, model, deduped: true }, { status: 202 });
   }
 
-  const reportId = await createReport(tier, owner, model); // worker_job_id = NULL (FK-safe)
+  // Lineage keys mirror the READ path, and the account keeps the baseline inside the account being
+  // diagnosed — same predicate schedule_dispatcher uses, so both paths pick the same parent.
+  const reportId = await createReport(tier, owner, model, {
+    ownerKeys: ownerKeysForRead(user), account,
+  }); // worker_job_id = NULL (FK-safe)
   let job: { job_id: string; status: string; payload?: Record<string, unknown> };
   try {
     job = await enqueueJob(
@@ -112,10 +117,16 @@ export async function POST(req: Request) {
   // `Number.isFinite(0)` is true, so the previous guard treated a payload carrying
   // `report_id: null` — or no id at all, stored as null — as "the ledger names report 0", then
   // soft-deleted the FRESH report and answered with id 0 (codex stop-gate). Absent must mean absent.
+  // The payload is JSON out of Aurora, and node-pg used to hand int8 ids back as STRINGS, so rows
+  // written by any earlier deploy carry `report_id: "42"`. `typeof === 'number'` rejected those, the
+  // loser skipped this whole branch, and both reports raced into linkReportJob — silently sharing one
+  // job before the partial unique index existed, and a 500 with a permanent `running` orphan after it
+  // (PR #203 review MAJOR). Accept a numeric string; keep rejecting absent/null/0/negative/fractional.
   const rawLedgerId = (job.payload as { report_id?: unknown } | undefined)?.report_id;
-  const ledgerReportId = typeof rawLedgerId === 'number' && Number.isInteger(rawLedgerId) && rawLedgerId > 0
+  const parsedLedgerId = typeof rawLedgerId === 'number'
     ? rawLedgerId
-    : null;
+    : (typeof rawLedgerId === 'string' && /^\d+$/.test(rawLedgerId) ? Number(rawLedgerId) : NaN);
+  const ledgerReportId = Number.isInteger(parsedLedgerId) && parsedLedgerId > 0 ? parsedLedgerId : null;
   if (ledgerReportId !== null && ledgerReportId !== reportId) {
     // Is the ledger's report still there? reportForIdempotencyKey filters deleted_at, so it never
     // sees a soft-deleted report and lets a same-key retry through to createReport — but
@@ -138,6 +149,34 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { job_id: job.job_id, report_id: ledgerReportId, tier, model, deduped: true }, { status: 202 });
   }
-  await linkReportJob(reportId, job.job_id); // FK now satisfiable
+  try {
+    await linkReportJob(reportId, job.job_id); // FK now satisfiable
+  } catch (e) {
+    // Someone else's report got there first (partial unique index). Our row will never be rendered —
+    // enqueueJob deduped, so no message names it — so retire it and answer with the one that exists,
+    // the same shape the ledger branch above returns.
+    if (e instanceof ReportJobAlreadyLinkedError) {
+      // The worker resolves which report to render from the JOB PAYLOAD, not from this link. So if the
+      // payload names OUR report, the render is going to happen to our row whatever the link says —
+      // deleting it would destroy the row the worker is about to write, and pointing the caller at
+      // another report would name one this job will never render (codex stop-gate). Only the
+      // convenience link (used for idempotency lookups and lineage) is lost.
+      if (ledgerReportId === reportId) {
+        return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier, model }, { status: 202 });
+      }
+      await softDeleteReport(reportId);
+      const winner = await reportForIdempotencyKey(key);
+      if (winner) {
+        return NextResponse.json(
+          { job_id: job.job_id, report_id: winner, tier, model, deduped: true }, { status: 202 });
+      }
+      return NextResponse.json({
+        status: 'error',
+        message: `another request already produced the report for this ${tier} window; re-run once the `
+          + 'hour bucket rolls over',
+      }, { status: 409 });
+    }
+    throw e;
+  }
   return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier, model }, { status: 202 });
 }

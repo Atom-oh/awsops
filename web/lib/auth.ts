@@ -302,7 +302,16 @@ export async function verifyUser(cookieHeader: string | null): Promise<User | nu
     const groups = Array.isArray(rawGroups) ? rawGroups.map(String) : [];
     return {
       sub,
-      email: payload.email ? String(payload.email) : undefined,
+      // Only a VERIFIED email is adopted. The legacy ownership branch authorizes reads (and
+      // PATCH/DELETE via canMutateReport) on this value, and Cognito lets a user change their own
+      // email — so an unverified claim made the exposure self-service rather than admin-only: set
+      // your address to a departed colleague's, read their reports (PR #203 review MAJOR, 2 models).
+      // Deleted users' rows are exactly the ones the backfill leaves unmapped, so that window would
+      // also have been the longest-lived. auth.tf additionally removes email from the client's
+      // writable attributes; this is the half that holds even if a pool is reconfigured by hand.
+      // Dropping the claim (rather than rejecting the token) is deliberate: an unverified-email user
+      // stays logged in and keeps every sub-keyed row — they simply lose the legacy email match.
+      email: payload.email && payload.email_verified === true ? String(payload.email) : undefined,
       groups,
     };
   } catch {
@@ -355,6 +364,18 @@ export function matchesLegacyEmailOwner(owner: string, user: User): boolean {
  */
 export function ownerKeysForRead(user: User): string[] {
   return legacyEmailMatchEnabled() && user.email ? [user.email, user.sub] : [user.sub];
+}
+
+/**
+ * Every key this token could have been recorded under, NOT gated on legacy_email_owner_match.
+ *
+ * ownerKeysForRead() is for POSITIVE checks — "may I see this row?" — where dropping the legacy form
+ * costs visibility. This is for NEGATIVE ones, where a missed match is a security hole instead: the
+ * 4-eyes gate rejects an approver who EQUALS the creator, so if the comparison misses the legacy form
+ * the same human approves their own plan. Flipping the flag off must not re-open that.
+ */
+export function identityKeys(user: User): string[] {
+  return user.email ? [user.sub, user.email] : [user.sub];
 }
 
 /**
