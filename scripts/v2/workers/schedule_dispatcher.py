@@ -69,7 +69,7 @@ def _create_report(conn, tier, owner_sub, model, account=None):
         # link OR payload: the worker renders the report_id the payload names, so a report whose link
         # lost the one-report-per-job race is still a real baseline (PR #203 review MAJOR).
         "     JOIN worker_jobs j ON (j.job_id = r.worker_job_id "
-        "        OR (j.payload->>'report_id' ~ '^[0-9]+$' "
+        "        OR (j.type = 'report' AND j.payload->>'report_id' ~ '^[0-9]{1,18}$' "
         "            AND (j.payload->>'report_id')::bigint = r.id)) "
         "    WHERE r.tier = :t AND r.requested_by = ANY(:ok) "
         "      AND r.status = 'succeeded' AND r.deleted_at IS NULL "

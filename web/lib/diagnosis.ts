@@ -110,7 +110,8 @@ export async function createReport(
           -- race is still the row the worker renders (the payload names it), so excluding it here would
           -- silently drop a real baseline and stamp NULL parent instead (PR #203 review MAJOR).
           JOIN worker_jobs j ON (j.job_id = r.worker_job_id
-            OR (j.payload->>'report_id' ~ '^[0-9]+$' AND (j.payload->>'report_id')::bigint = r.id))
+            OR (j.type = 'report' AND j.payload->>'report_id' ~ '^[0-9]{1,18}$'
+                AND (j.payload->>'report_id')::bigint = r.id))
          WHERE r.tier = $1 AND r.requested_by = ANY($4::text[])
            AND r.status = 'succeeded' AND r.deleted_at IS NULL
            AND ($5::text IS NULL OR j.payload->>'account' = $5)
@@ -158,7 +159,8 @@ export async function reportForIdempotencyKey(key: string): Promise<number | nul
   const byPayload = await getPool().query(
     `SELECT r.id FROM worker_jobs j
        JOIN diagnosis_reports r ON r.id = (j.payload->>'report_id')::bigint
-      WHERE j.idempotency_key = $1 AND j.payload->>'report_id' ~ '^[0-9]+$'
+      WHERE j.idempotency_key = $1 AND j.type = 'report'
+        AND j.payload->>'report_id' ~ '^[0-9]{1,18}$'
         AND r.deleted_at IS NULL
       ORDER BY r.id DESC LIMIT 1`,
     [key],
@@ -172,7 +174,7 @@ export async function reportForIdempotencyKey(key: string): Promise<number | nul
   const { rows } = await getPool().query(
     `SELECT r.id FROM diagnosis_reports r JOIN worker_jobs j ON j.job_id = r.worker_job_id
      WHERE j.idempotency_key = $1 AND r.deleted_at IS NULL
-       AND (j.payload->>'report_id' IS NULL OR j.payload->>'report_id' !~ '^[0-9]+$')
+       AND (j.payload->>'report_id' IS NULL OR j.payload->>'report_id' !~ '^[0-9]{1,18}$')
      ORDER BY r.id DESC LIMIT 1`,
     [key],
   );

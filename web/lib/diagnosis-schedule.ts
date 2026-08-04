@@ -107,8 +107,14 @@ export async function upsertSchedule(
     // means something else claimed the slot concurrently — in practice the owner-sub backfill moving a
     // legacy email-keyed row onto this sub. Say so with a 409 rather than letting a raw 23505 surface
     // as a 500.
-    if ((e as { code?: string }).code === '23505'
-        && String((e as { constraint?: string }).constraint || '').includes('one_active')) {
+    const code = (e as { code?: string }).code;
+    // 23505 = the index refused a second active row. 40P01/40001 = two concurrent saves for the same
+    // user deadlocked or failed to serialize (opposing frequency changes lock the same rows in opposite
+    // order). All three mean "someone else was writing this user's schedule" and all three are
+    // retryable, so none of them should surface as a 500 (codex stop-gate).
+    if ((code === '23505'
+          && String((e as { constraint?: string }).constraint || '').includes('one_active'))
+        || code === '40P01' || code === '40001') {
       throw new ScheduleSlotTakenError();
     }
     throw e;

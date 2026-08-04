@@ -78,10 +78,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     await recordAudit({ planId: params.id, phase: 'execute', principal: approver, decision: 'denied_self_approval' });
     return NextResponse.json({ message: '4-eyes: approver must differ from creator' }, { status: 403 });
   }
-  // Creator recorded under an email, approver's token carries none (unverified address): the two
-  // cannot be compared at all, so 4-eyes is unprovable. A security gate that cannot prove distinctness
-  // must refuse, not assume.
-  if (!user.email && plan.created_by.includes('@')) {
+  // An email-keyed created_by cannot be compared to a token identity at all: emails are mutable and
+  // reassignable, so "not one of my current keys" does not mean "not me" (it could be an address this
+  // same sub used before). Plans are now written with the sub, and they expire after 5 minutes, so the
+  // only email-keyed plans that can exist are ones created seconds before this deploy. Refuse those
+  // rather than guess — a security gate that cannot prove distinctness must not assume it.
+  if (plan.created_by.includes('@')) {
     await recordAudit({ planId: params.id, phase: 'execute', principal: approver, decision: 'denied_unprovable_4eyes' });
     return NextResponse.json({
       message: '4-eyes cannot be verified: this plan was created under an email-keyed identity and your '

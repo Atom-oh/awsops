@@ -42,7 +42,7 @@ function post(id: string, body: unknown, cookie = 'awsops_token=t') {
 
 const enabledAction = { name: 'ec2-create-tags', executorType: 'ssm', enabled: true } as any;
 function plannedPlan(over: Record<string, unknown> = {}) {
-  return { plan_id: ID, action_name: 'ec2-create-tags', status: 'planned', created_by: 'creator@x',
+  return { plan_id: ID, action_name: 'ec2-create-tags', status: 'planned', created_by: 'sub-creator',
     dry_run: { inputs: { resourceArn: 'arn' } }, rollback_plan: { action: 'ec2-create-tags' }, expired: false, ...over };
 }
 
@@ -122,7 +122,7 @@ describe('POST /api/actions/[id] execute — hard gates', () => {
     process.env.MUTATING_ACTIONS_SSM = 'p';
     ssmSend.mockResolvedValue({ Parameter: { Value: 'true' } });
     verifyUser.mockResolvedValue({ sub: 'a', email: 'approver@x', groups: ['admins'] });
-    getPlan.mockResolvedValue(plannedPlan({ created_by: 'a' }));  // recorded under the sub this time
+    getPlan.mockResolvedValue(plannedPlan({ created_by: 'a' }));  // recorded under the sub
     const { POST } = await import('./route');
     const res = await POST(...post(ID, { op: 'execute' }));
     expect(res.status).toBe(403);
@@ -130,11 +130,14 @@ describe('POST /api/actions/[id] execute — hard gates', () => {
     expect(setApprovedAndExecuting).not.toHaveBeenCalled();
   });
 
-  it('403 when 4-eyes cannot be proven (email-keyed creator, no verified email on the approver)', async () => {
+  it('403 when 4-eyes cannot be proven (any email-keyed creator — emails are mutable)', async () => {
+    // Not just "the approver has no email": an email-keyed created_by cannot be compared to a token
+    // identity at all, because the address may be one this same sub used earlier (codex stop-gate).
+    // Plans are written with the sub and expire in 5 minutes, so such rows only exist across a deploy.
     process.env.REMEDIATION_ENABLED = 'true';
     process.env.MUTATING_ACTIONS_SSM = 'p';
     ssmSend.mockResolvedValue({ Parameter: { Value: 'true' } });
-    verifyUser.mockResolvedValue({ sub: 'b', groups: ['admins'] }); // unverified address -> no email claim
+    verifyUser.mockResolvedValue({ sub: 'b', email: 'other@x', groups: ['admins'] });
     getPlan.mockResolvedValue(plannedPlan({ created_by: 'someone@x' }));
     const { POST } = await import('./route');
     const res = await POST(...post(ID, { op: 'execute' }));
@@ -148,7 +151,7 @@ describe('POST /api/actions/[id] execute — hard gates', () => {
     process.env.MUTATING_ACTIONS_SSM = 'p';
     process.env.JOBS_QUEUE_URL = 'https://sqs.example/q';
     ssmSend.mockResolvedValue({ Parameter: { Value: 'true' } });
-    getPlan.mockResolvedValue(plannedPlan({ created_by: 'creator@x' }));
+    getPlan.mockResolvedValue(plannedPlan({ created_by: 'sub-creator' }));
     getAction.mockResolvedValue(enabledAction);
     setApprovedAndExecuting.mockResolvedValue(true);
     query.mockResolvedValue({ rowCount: 1 });
