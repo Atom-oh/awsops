@@ -234,13 +234,20 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
     exhausted = attempts >= _MAX_GENERATION_ATTEMPTS
     gen_status = None
-    if not any(r["status"] == "ready" for r in rows) and not exhausted:
-        generated, gen_status = _signal_gen.try_generate_signal_with_status(
-            kind, schema, iid,
-            lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
-        if generated:
-            rows = list(rows) + [generated]
-        else:
+    if not any(r["status"] == "ready" for r in rows):
+        if not exhausted:
+            generated, gen_status = _signal_gen.try_generate_signal_with_status(
+                kind, schema, iid,
+                lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
+            if generated:
+                rows = list(rows) + [generated]
+        # Carrying the last-known-good chip is PART OF THE FEATURE, so it is gated like the feature: with
+        # the flag off, generated content must stop being served, and preserving it there kept an LLM row
+        # alive indefinitely after the gate closed (Codex stop-gate). It must also run when the week is
+        # parked (`exhausted`, so no generation was attempted at all) — otherwise the park itself swept the
+        # chip away, which is the same deletion MAJOR-2 was about.
+        if os.environ.get("DIAG_SIGNAL_QUERYGEN_ENABLED") == "true" \
+                and not any(r["status"] == "ready" for r in rows):
             rows = _keep_last_good_generated(conn, wdb, iid, kind, schema, rows)
     # WHICH OUTCOMES ARE WORTH REMEMBERING. A build with no ready signal is remembered (plus a sentinel row
     # when there is nothing at all) so the daily job stops rebuilding — but only when the outcome is

@@ -256,6 +256,7 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
             "still_relevant": staticmethod(lambda *a: True),
         }))
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         schema = {"labels": ["custom_only"]}        # loki catalog matches nothing → fallback-only
         c = FakeConn(kind="loki", schema=schema, existing_rows=[self.GENERATED_ROW])
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
@@ -268,9 +269,40 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
             "still_relevant": staticmethod(lambda *a: False),
         }))
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         c = FakeConn(kind="loki", schema={"labels": ["custom_only"]}, existing_rows=[self.GENERATED_ROW])
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert not any(p["sk"] == "generated_signal" for p in c.inserts)
+
+    def test_the_flag_being_off_stops_serving_the_generated_chip(self, monkeypatch):
+        """Preservation is part of the feature, so it is gated like the feature: with the flag off an LLM row
+        stayed alive indefinitely after the gate closed (Codex stop-gate)."""
+        monkeypatch.delenv("DIAG_SIGNAL_QUERYGEN_ENABLED", raising=False)
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "disabled")),
+            "still_relevant": staticmethod(lambda *a: True),
+        }))
+        c = FakeConn(kind="loki", schema={"labels": ["custom_only"]}, existing_rows=[self.GENERATED_ROW])
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert not any(p["sk"] == "generated_signal" for p in c.inserts)
+
+    def test_a_parked_week_does_not_sweep_the_chip_away(self, monkeypatch):
+        """The park skips generation entirely, so without preservation the park itself deleted the chip —
+        the same deletion MAJOR-2 was about."""
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient", "REJECTED": "rejected", "DISABLED": "disabled",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: pytest.fail("must not generate while parked")),
+            "still_relevant": staticmethod(lambda *a: True),
+        }))
+        schema = {"labels": ["custom_only"]}
+        parked = f"{prev_base(dsi)}:pend{dsi._MAX_GENERATION_ATTEMPTS}w{dsi._iso_week()}"
+        c = FakeConn(kind="loki", schema=schema, existing_version=parked,
+                     existing_rows=[self.GENERATED_ROW])
+        dsi.run({"integration_id": 7, "kind": "loki"}, c)
+        assert any(p["sk"] == "generated_signal" and p["st"] == "ready" for p in c.inserts)
 
     def test_the_flag_being_off_does_not_spend_the_budget(self, monkeypatch):
         """DISABLED means no Bedrock call happened. Charging for it exhausted the week with the feature OFF,
