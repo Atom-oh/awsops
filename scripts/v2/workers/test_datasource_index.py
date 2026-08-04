@@ -222,6 +222,16 @@ class TestGeneratedFallback:
         assert version == f"{base}:spent{dsi._iso_week()}"
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS
 
+    def test_the_catalog_version_retires_the_ambiguous_plain_marker(self, monkeypatch):
+        """v3 wrote the PLAIN hash for an exhausted budget, which reads exactly like the legitimate
+        "conclusively nothing to build" row that must keep skipping — so such a row would never generate
+        again (Codex stop-gate). The only way out is to invalidate every hash once."""
+        assert dsi._cat.CATALOG_VERSION == "v4", "bump the catalog version to retire v3's plain-hash marker"
+        schema = {"tables": {"t": ["c"]}}
+        now = dsi._schema_version(schema)
+        monkeypatch.setattr(dsi._cat, "CATALOG_VERSION", "v3")
+        assert dsi._schema_version(schema) != now   # every v3 row, plain marker included, rebuilds once
+
     def test_a_weekless_legacy_marker_reads_as_a_fresh_budget(self, monkeypatch):
         # An earlier commit wrote `:retryN` with no week. It must not park the instance — reading it as a
         # fresh budget is the safe direction, and the plain-hash "gave up" encoding cannot reach this code

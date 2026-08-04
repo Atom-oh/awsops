@@ -136,6 +136,11 @@ manual backfill needed.
 
 ## Amended 2026-08-04 (implementation reality)
 
+> `CATALOG_VERSION` is **v4**, not v3. v3 encoded "generation budget exhausted" as the plain schema hash,
+> which is indistinguishable from the legitimate "conclusively nothing to build" row that must keep
+> skipping — a row written that way would never generate again. The bump invalidates every hash once, so
+> the ambiguous encoding cannot survive; exhaustion is `:spent<week>` from v4 on.
+
 The panel review found this spec and the implementation disagreeing on five points. The implementation
 is what shipped; the spec is corrected here rather than the code being bent to match a plan written
 before the connectors were probed.

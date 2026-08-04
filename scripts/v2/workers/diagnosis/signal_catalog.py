@@ -16,11 +16,16 @@ never inject into a query.
 rebuild even when the datasource's metric set is unchanged.
 """
 
-CATALOG_VERSION = "v3"  # bumped 2026-08-04: kind-scoped matchers + loki/tempo catalog entries +
+CATALOG_VERSION = "v4"  # bumped 2026-08-04: kind-scoped matchers + loki/tempo catalog entries +
                          # LLM hybrid fallback for kinds with zero deterministic entries.
-                         # main is on "v1"; "v2" existed only in an intermediate commit of this PR, so
-                         # deployed instances jump v1 -> v3 (review: the comment said "was v2", which
-                         # was true of the branch and false of everything deployed).
+                         # main is on "v1"; v2/v3 existed only in intermediate commits of this PR, so
+                         # deployed instances jump v1 -> v4.
+                         # v3 -> v4 exists for the UPGRADE PATH, not for a catalog edit: v3 encoded
+                         # "generation budget exhausted" as the PLAIN schema hash, which is
+                         # indistinguishable from the legitimate "conclusively nothing to build" row that
+                         # must keep skipping (Codex stop-gate). A row written that way under v3 would
+                         # never generate again. The bump changes every hash once, so the ambiguous
+                         # encoding cannot survive into v4, where exhaustion is `:spent<week>` instead
 
 # kind → connector tool name (PromQL is identical for both)
 _KIND_TOOL = {
