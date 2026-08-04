@@ -25,6 +25,7 @@ _KIND_TOOL = {"prometheus": "prometheus_query", "mimir": "mimir_query"}
 CATALOG = [
     {
         "key": "container_cpu_throttling", "title": "컨테이너 CPU 스로틀링", "pillar": "performance",
+        "matcher": "metrics",
         "required_metrics": ["container_cpu_cfs_throttled_periods_total", "container_cpu_cfs_periods_total"],
         "queries": [{
             "label": "throttled_ratio",
@@ -35,6 +36,7 @@ CATALOG = [
     },
     {
         "key": "oom_kills", "title": "OOM Kill", "pillar": "reliability",
+        "matcher": "metrics",
         "required_metrics": ["kube_pod_container_status_last_terminated_reason"],
         "queries": [{
             "label": "oomkilled_pods",
@@ -45,6 +47,7 @@ CATALOG = [
     },
     {
         "key": "node_memory_pressure", "title": "노드 메모리 압박", "pillar": "reliability",
+        "matcher": "metrics",
         "required_metrics": ["node_memory_MemAvailable_bytes", "node_memory_MemTotal_bytes"],
         "queries": [{
             "label": "mem_used_ratio",
@@ -54,6 +57,7 @@ CATALOG = [
     },
     {
         "key": "node_disk_usage", "title": "노드 디스크 사용률", "pillar": "reliability",
+        "matcher": "metrics",
         "required_metrics": ["node_filesystem_avail_bytes", "node_filesystem_size_bytes"],
         "queries": [{
             "label": "disk_used_ratio",
@@ -64,6 +68,7 @@ CATALOG = [
     },
     {
         "key": "network_pps", "title": "네트워크 PPS·드롭", "pillar": "performance",
+        "matcher": "metrics",
         "required_metrics": ["node_network_receive_packets_total", "node_network_receive_drop_total"],
         "queries": [
             {"label": "rx_pps", "expr": "topk(10, rate(node_network_receive_packets_total[5m]))"},
@@ -73,6 +78,7 @@ CATALOG = [
     },
     {
         "key": "pod_right_sizing", "title": "Pod 라이트사이징", "pillar": "cost",
+        "matcher": "metrics",
         "required_metrics": ["container_memory_working_set_bytes", "kube_pod_container_resource_requests"],
         "queries": [
             {"label": "mem_usage_p95",
@@ -85,6 +91,7 @@ CATALOG = [
     },
     {
         "key": "cpu_saturation", "title": "노드 CPU 포화", "pillar": "performance",
+        "matcher": "metrics",
         "required_metrics": ["node_cpu_seconds_total"],
         "queries": [{
             "label": "cpu_busy_ratio",
@@ -94,6 +101,7 @@ CATALOG = [
     },
     {
         "key": "pod_restarts", "title": "Pod 재시작", "pillar": "reliability",
+        "matcher": "metrics",
         "required_metrics": ["kube_pod_container_status_restarts_total"],
         "queries": [{
             "label": "restarts_1h",
@@ -104,21 +112,50 @@ CATALOG = [
 ]
 
 
+def _missing_for(sig, schema):
+    """Return the list of missing required items for one catalog entry, per its matcher. Pure;
+    never raises. An entry with an unrecognized/absent matcher is treated as always-missing
+    (defensive — every entry added in this module must declare a matcher)."""
+    matcher = sig.get("matcher")
+    if matcher == "metrics":
+        have = set()
+        if isinstance(schema, dict):
+            have = {m for m in (schema.get("metrics") or []) if isinstance(m, str)}
+        return [m for m in sig["required_metrics"] if m not in have]
+    if matcher == "table_columns":
+        tables = (schema or {}).get("tables") or [] if isinstance(schema, dict) else []
+        required = set(sig["required_columns"])
+        for t in tables:
+            if not isinstance(t, dict):
+                continue
+            cols = {c.get("name") for c in (t.get("columns") or []) if isinstance(c, dict)}
+            if required.issubset(cols):
+                return []
+        return list(required)
+    if matcher == "labels":
+        have = set()
+        if isinstance(schema, dict):
+            have = {l for l in (schema.get("labels") or []) if isinstance(l, str)}
+        return [l for l in sig["required_labels"] if l not in have]
+    if matcher == "tags_or_services":
+        # ready whenever the schema was successfully introspected at all (mirrors
+        # graph_catalog._tempo_trace_spans: a reachable endpoint is the only capability needed)
+        return [] if isinstance(schema, dict) else ["datasource has never been introspected"]
+    return ["unrecognized matcher"]
+
+
 def build_signals(kind, schema):
     """Resolve the catalog against a cached schema. Pure; never raises.
 
-    kind: 'prometheus' | 'mimir' (others → tool falls back to '<kind>_query' but typically unused).
-    schema: the cached introspected schema dict; uses schema['metrics'] (list of metric-name strings).
+    kind: the datasource kind ('prometheus' | 'mimir' | 'clickhouse' | 'loki' | 'tempo' | 'jaeger' |
+    'dynatrace' | 'datadog'). schema: the cached introspected schema dict — shape varies by kind
+    (metrics/labels/tags/tables/services — see web/lib/datasource-schema.ts's docstring).
     Returns a list of rows: {signal_key, title, status, query|None, missing_metrics|None, meta}.
     """
     tool = _KIND_TOOL.get(kind, f"{kind}_query")
-    have = set()
-    if isinstance(schema, dict):
-        have = {m for m in (schema.get("metrics") or []) if isinstance(m, str)}
-
     rows = []
     for sig in CATALOG:
-        missing = [m for m in sig["required_metrics"] if m not in have]
+        missing = _missing_for(sig, schema)
         meta = {"pillar": sig["pillar"], "threshold": sig["threshold"],
                 "kind": kind, "unit": sig["unit"]}
         if missing:

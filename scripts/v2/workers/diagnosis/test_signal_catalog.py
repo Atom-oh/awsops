@@ -80,6 +80,23 @@ class TestEmptyAndDefensive:
         assert all(r["status"] == "unavailable" for r in rows)
 
 
+class TestMatcherDispatch:
+    def test_existing_entries_are_tagged_metrics_matcher(self):
+        assert all(sig.get("matcher") == "metrics" for sig in sc.CATALOG if sig["key"] in
+                   ("container_cpu_throttling", "oom_kills", "node_memory_pressure",
+                    "node_disk_usage", "network_pps", "pod_right_sizing", "cpu_saturation",
+                    "pod_restarts"))
+
+    def test_metrics_matcher_behavior_unchanged(self):
+        # exact assertions from TestFullSchemaAllReady, re-run post-refactor as a regression guard
+        rows = sc.build_signals("prometheus", {"metrics": ALL_METRICS})
+        by = _by_key(rows)
+        for key in ("container_cpu_throttling", "oom_kills", "node_memory_pressure",
+                    "node_disk_usage", "network_pps", "pod_right_sizing", "cpu_saturation",
+                    "pod_restarts"):
+            assert by[key]["status"] == "ready"
+
+
 class TestCatalogShape:
     def test_catalog_version_is_stable_string(self):
         assert isinstance(sc.CATALOG_VERSION, str) and sc.CATALOG_VERSION
