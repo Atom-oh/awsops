@@ -161,8 +161,10 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
     conn.run("BEGIN")
     try:
-        wdb.upsert_diag_signals(conn, iid, rows, version)
-        wdb.sweep_diag_signals(conn, iid, [r["signal_key"] for r in rows])
+        written = wdb.upsert_diag_signals(conn, iid, rows, version)
+        # Sweep against what was WRITTEN, not against `rows`: an empty build writes a version sentinel
+        # (db.SCHEMA_VERSION_SENTINEL_KEY) and sweeping `rows` would delete it right back.
+        wdb.sweep_diag_signals(conn, iid, written)
         conn.run("COMMIT")
     except Exception:
         conn.run("ROLLBACK")

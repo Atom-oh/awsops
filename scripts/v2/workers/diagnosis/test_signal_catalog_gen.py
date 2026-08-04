@@ -61,6 +61,29 @@ class TestDryRunCheck:
     def test_fails_on_a_falsy_response(self):
         assert scg._dry_run_check("prometheus", "up", 7, lambda args: None) is False
 
+    # A 200 carrying no rows is not evidence the query works: an invented metric name returns
+    # `result: []`, and the signal would be stored as a ready chip that stays permanently empty
+    # (review MAJOR, 2 models). The spec asks for a non-error, NON-EMPTY-shape response.
+    def test_fails_on_an_empty_prometheus_result(self):
+        assert scg._dry_run_check("prometheus", "up", 7, lambda args: {"data": {"result": []}}) is False
+        assert scg._dry_run_check("prometheus", "up", 7, lambda args: {"result": []}) is False
+
+    def test_fails_on_empty_loki_streams_and_tempo_traces(self):
+        assert scg._dry_run_check("loki", '{job=~".+"}', 7, lambda args: {"data": {"streams": []}}) is False
+        assert scg._dry_run_check("tempo", "{}", 7, lambda args: {"data": {"traces": []}}) is False
+
+    def test_fails_on_an_empty_envelope_of_any_shape(self):
+        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: {}) is False
+        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: {"rows": []}) is False
+        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: []) is False
+
+    def test_passes_when_rows_are_actually_present(self):
+        assert scg._dry_run_check("prometheus", "up", 7,
+                                  lambda args: {"data": {"result": [{"value": [0, "1"]}]}}) is True
+        assert scg._dry_run_check("loki", '{job=~".+"}', 7,
+                                  lambda args: {"data": {"streams": [{"values": [["1", "x"]]}]}}) is True
+        assert scg._dry_run_check("clickhouse", "SELECT 1", 7, lambda args: {"rows": [[1]]}) is True
+
 
 class TestTryGenerateSignal:
     def _stub(self, monkeypatch, *, static_ok=True, dry_ok=True, expr="rate(custom_app_requests_total[5m])"):

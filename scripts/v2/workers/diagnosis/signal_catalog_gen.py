@@ -104,9 +104,34 @@ def _static_check(kind, expr):
     return True
 
 
+def _nonempty_result(kind, result):
+    """True only when the connector's payload actually carries data.
+
+    A successful-but-EMPTY response is not evidence the query works: an invented metric name returns
+    Prometheus `result: []` with HTTP 200, and the signal would then be stored as a ready chip that is
+    permanently empty until the schema drifts (review MAJOR, 2 models). The spec asks for a
+    "non-error, non-empty-shape response", so the shape is checked per kind and anything unrecognised
+    falls back to "must not be an empty container".
+    """
+    if isinstance(result, dict):
+        data = result.get("data", result)
+        if isinstance(data, dict):
+            # prometheus/mimir: {"data": {"result": [...]}} — loki shares this shape
+            if "result" in data:
+                return bool(data.get("result"))
+            # loki (streams response) / tempo (traces) / datadog-ish envelopes
+            for key in ("streams", "traces", "series", "values", "rows", "data"):
+                if key in data:
+                    return bool(data.get(key))
+            return bool(data)
+        return bool(data)
+    return bool(result)
+
+
 def _dry_run_check(kind, expr, integration_id, invoke_connector):
-    """(b) Live dry run against the connector; False on ANY failure (conservative), and False on a
-    generic error-envelope response even when no exception was raised."""
+    """(b) Live dry run against the connector; False on ANY failure (conservative), False on a
+    generic error-envelope response even when no exception was raised, and False when the response
+    succeeded but carried no rows (see _nonempty_result)."""
     arg_name = "sql" if kind == "clickhouse" else "query"
     args = {arg_name: expr, "instance_id": integration_id}
     if kind == "clickhouse":
@@ -119,7 +144,7 @@ def _dry_run_check(kind, expr, integration_id, invoke_connector):
         return False
     if isinstance(result, dict) and "error" in result:
         return False
-    return True
+    return _nonempty_result(kind, result)
 
 
 def try_generate_signal(kind, schema, integration_id, invoke_connector, invoke_llm=None):

@@ -233,6 +233,8 @@ git commit -m "feat(diag-signals): scope each catalog entry to its applicable ki
 
 ## Task 3: new `table_columns` matcher entries for clickhouse
 
+> **NOT SHIPPED (amended 2026-08-04).** The clickhouse entries below were dropped: the assumed `system.*` shape is not what the connector exposes, so they would have been permanently `unavailable`. `build_signals("clickhouse", …)` returns `[]` and clickhouse is fallback-only. See the spec's "Amended 2026-08-04" section.
+
 **Files:**
 - Modify: `scripts/v2/workers/diagnosis/signal_catalog.py`
 - Test: `scripts/v2/workers/diagnosis/test_signal_catalog.py`
@@ -430,6 +432,8 @@ git commit -m "feat(diag-signals): loki label-matched signals (error rate, volum
 ---
 
 ## Task 5: new `tags_or_services` matcher entries for tempo/jaeger, and `metrics` entries for dynatrace/datadog
+
+> **PARTIALLY SHIPPED (amended 2026-08-04).** tempo entries shipped; jaeger/dynatrace/datadog were dropped because those kinds are not wired into the index pipeline (`DIAG_SIGNAL_KINDS`, the daily dispatcher's `_LIST_SQL`, the worker's `ds_connector_arns` are all 5-kind), so their catalog entries would never be built. Follow-up work. See the spec's "Amended 2026-08-04" section.
 
 **Files:**
 - Modify: `scripts/v2/workers/diagnosis/signal_catalog.py`

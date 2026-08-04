@@ -4,7 +4,11 @@ import { useI18n } from '@/components/shell/LanguageProvider';
 
 // Explore "자주 쓰는 쿼리" — pre-built diagnostic signals (datasource_index) surfaced as clickable
 // chips. Ready signals fill+run their query via onPick; unavailable signals render disabled with a
-// "metric X 없음 — Refresh schema" tooltip. All datasource kinds now have kind-scoped catalog
+// "metric X 없음 — Refresh schema" tooltip. Kind-scoped catalog entries exist for
+// prometheus/mimir/loki/tempo; clickhouse has none deterministically and depends on the flag-gated LLM
+// fallback, and jaeger/dynatrace/datadog are not wired into the index pipeline yet (DIAG_SIGNAL_KINDS,
+// the daily dispatcher's _LIST_SQL and the worker's ds_connector_arns are all 5-kind) — the fetch is
+// harmless for those, it just returns nothing. Review MAJOR: the comment used to claim all kinds
 // entries (see signal_catalog.py).
 interface ReadySignal { signalKey: string; title: string; query: { tool: string; queries: { label: string; expr: string }[] } }
 interface UnavailableSignal { signalKey: string; title: string; missingMetrics: string[] }
@@ -23,7 +27,13 @@ export default function DiagSignalChips({ instanceId, kind, onPick }: Props) {
   const enabled = !!instanceId;
 
   useEffect(() => {
-    if (!enabled) { setReady([]); setUnavailable([]); return; }
+    // Clear FIRST, on every instance change. Before the kind gate was removed, switching to a
+    // non-prom kind hit the `!enabled` branch and cleared; now `enabled = !!instanceId`, so a switch
+    // whose fetch fails (`!r.ok` returns early) left the PREVIOUS instance's chips on screen — and
+    // clicking a loki chip while a clickhouse instance is selected sends LogQL to the clickhouse
+    // connector (the connector guard rejects it, so this is UX, not a mutation risk). Review MAJOR.
+    setReady([]); setUnavailable([]);
+    if (!enabled) return;
     let alive = true;
     (async () => {
       try {

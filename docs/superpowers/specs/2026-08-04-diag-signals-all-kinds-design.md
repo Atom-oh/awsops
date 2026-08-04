@@ -120,6 +120,43 @@ Bumping `signal_catalog.CATALOG_VERSION` forces every existing instance's `schem
 change, triggering a one-time rebuild across all instances via the existing daily dispatcher — no
 manual backfill needed.
 
+## Amended 2026-08-04 (implementation reality)
+
+The panel review found this spec and the implementation disagreeing on five points. The implementation
+is what shipped; the spec is corrected here rather than the code being bent to match a plan written
+before the connectors were probed.
+
+1. **No clickhouse `system_table` entries.** The planned three deterministic clickhouse signals assumed
+   an OTel-exporter-shaped `system.*` layout that the connector does not expose the same way, so they
+   would have been permanently `unavailable`. `build_signals("clickhouse", …)` returns `[]` by design
+   (the tests assert exactly that), which makes clickhouse a fallback-only kind.
+2. **No jaeger/dynatrace/datadog entries.** The planned six entries are dropped: those kinds are not
+   wired into the index pipeline at all — `DIAG_SIGNAL_KINDS` (BFF enqueue), the daily dispatcher's
+   `_LIST_SQL` and the worker's `ds_connector_arns` are each 5-kind. Catalog entries alone would never
+   be built. Wiring them is follow-up work, and until then the honest scope of this change is
+   **prometheus / mimir / loki / tempo, plus clickhouse via the flag-gated LLM fallback**.
+3. **One generated candidate, not 3–5.** Decision 2 above says "3–5 candidate signal queries"; the
+   implementation asks for a single expression and validates that one. Generating several would
+   multiply the Bedrock cost and the dry-run traffic for a chip that only ever shows one query, and
+   nothing consumes the runners-up.
+4. **`CATALOG_VERSION` is `v3`, not `v2`.** main is on `v1`; `v2` existed only in an intermediate commit
+   of this branch, so deployed instances move v1 → v3 in one step.
+5. **The dry run now enforces the non-empty shape this spec already required.** Decision 2 asks for "a
+   non-error, non-empty-shape response", but the first implementation accepted any successful envelope —
+   so an invented metric name returning Prometheus `result: []` was stored as a ready chip that stays
+   permanently empty. `_nonempty_result()` checks the payload per kind.
+
+Two further review findings changed code, not scope: a schema whose catalog yields nothing now records
+its `schema_version` through a sentinel row (`db.SCHEMA_VERSION_SENTINEL_KEY`, filtered out of the BFF
+read) instead of leaving no row at all — with no row there is no version, so `datasource_index` rebuilt
+every run and re-invoked Bedrock daily wherever the flag is on; and `DiagSignalChips` clears its chip
+state at the start of every effect, since after the kind gate was removed a failed fetch on a datasource
+switch left the previous instance's chips clickable.
+
+The `GRAPH_QUERYGEN_ENABLED` scope note in Decision 2 ("renamed scope-wise in docs") is now honoured in
+`terraform/v2/foundation/variables.tf`: the operator-facing description says the flag gates the
+diag-signal fallback for every fallback-eligible kind, not just the ClickHouse graph query.
+
 ## Data model
 
 No schema changes. `datasource_diag_signals` keeps its existing columns; `query` JSONB shape is

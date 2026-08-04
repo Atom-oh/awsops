@@ -45,6 +45,19 @@ describe('DiagSignalChips', () => {
     expect(onPick).toHaveBeenCalledWith('sum by(job) (count_over_time({job=~".+"} |~ "(?i)error|exception|fatal" [5m]))');
   });
 
+  it('clears the previous instance chips when the switch fetch fails', async () => {
+    // Before the kind gate was removed, switching to a non-prom kind hit `!enabled` and cleared. Now
+    // `enabled = !!instanceId`, so a failed fetch after a switch used to leave the OLD instance's chips
+    // on screen — and clicking a loki chip while a clickhouse instance is selected sends LogQL to the
+    // clickhouse connector (review MAJOR).
+    const { rerender } = render(<DiagSignalChips instanceId={7} kind="loki" onPick={vi.fn()} />);
+    await waitFor(() => screen.getByText('OOM Kill'));
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, json: async () => ({}) })));
+    rerender(<DiagSignalChips instanceId={8} kind="clickhouse" onPick={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText('OOM Kill')).toBeNull());
+    expect(screen.queryByTestId('diag-signal-chips')).toBeNull();
+  });
+
   it('renders nothing without an instanceId', async () => {
     render(<DiagSignalChips kind="prometheus" onPick={vi.fn()} />);
     expect(screen.queryByTestId('diag-signal-chips')).toBeNull();

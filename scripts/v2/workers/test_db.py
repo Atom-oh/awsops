@@ -61,10 +61,24 @@ class TestUpsert:
         ready_call = next(p for _, p in c.calls if p["sk"] == "oom_kills")
         assert json.loads(ready_call["q"])["tool"] == "prometheus_query"
 
-    def test_upsert_empty_rows_is_noop(self):
+    def test_upsert_empty_rows_records_a_version_sentinel(self):
+        # NOT a no-op: with no row at all there is no schema_version, so read_signal_schema_version()
+        # returns None forever and datasource_index rebuilds every run — re-invoking Bedrock daily where
+        # the fallback flag is on (review MAJOR). The sentinel remembers "this schema yields nothing".
         c = FakeConn()
-        db.upsert_diag_signals(c, 1, [], "v")
-        assert c.calls == []
+        written = db.upsert_diag_signals(c, 1, [], "v")
+        assert written == [db.SCHEMA_VERSION_SENTINEL_KEY]
+        assert len(c.calls) == 1
+        params = c.calls[0][1]
+        assert params["sk"] == db.SCHEMA_VERSION_SENTINEL_KEY
+        assert params["sv"] == "v"          # the whole point: the version IS recorded
+        assert params["st"] == "unavailable"
+        assert params["q"] is None          # no query: it is bookkeeping, not a signal
+
+    def test_upsert_returns_written_keys_so_the_sweep_keeps_the_sentinel(self):
+        # Sweeping the caller's own rows would delete the sentinel in the same transaction.
+        c = FakeConn()
+        assert db.upsert_diag_signals(c, 1, [READY], "v") == [READY["signal_key"]]
 
 
 class TestReadSchemaVersion:

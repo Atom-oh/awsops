@@ -119,10 +119,35 @@ def _maybe_json(v):
     return v
 
 
+# A kind whose catalog matches nothing (clickhouse today) produces zero rows, and with no row there is
+# no schema_version — so read_signal_schema_version() returns None forever and datasource_index rebuilds
+# on EVERY run, re-invoking Bedrock daily wherever the fallback flag is on (review MAJOR, 2 models). This
+# sentinel records the version without being a signal: the BFF read path filters it out, so it never
+# reaches the UI as a chip.
+SCHEMA_VERSION_SENTINEL_KEY = "__schema_version__"
+
+
 def upsert_diag_signals(conn, integration_id, rows, schema_version):
     """Idempotent upsert of built signal rows for one instance. jsonb fields are bound + cast (never
-    inlined). Caller sweeps stale keys via sweep_diag_signals. No-op on empty rows."""
-    for r in rows or []:
+    inlined). Caller sweeps stale keys via sweep_diag_signals.
+
+    Empty rows are NOT a no-op any more: a sentinel row carries schema_version so that "this schema
+    genuinely yields no signals" is remembered instead of being retried forever.
+
+    Returns the signal_keys actually written, which is what the caller must sweep against — sweeping the
+    caller's own `rows` would delete the sentinel in the same transaction, and unconditionally KEEPING it
+    would leave a stale-version row next to real ones, making read_signal_schema_version() see two
+    versions and rebuild every run. Neither is what we want.
+    """
+    rows = list(rows or [])
+    if not rows:
+        rows = [{
+            "signal_key": SCHEMA_VERSION_SENTINEL_KEY,
+            "title": "(no signals for this schema)",
+            "status": "unavailable", "query": None, "missing_metrics": None,
+            "meta": {"sentinel": True},
+        }]
+    for r in rows:
         conn.run(
             "INSERT INTO datasource_diag_signals "
             "(account_id, integration_id, signal_key, title, status, query, missing_metrics, meta, schema_version, built_at) "
@@ -136,6 +161,7 @@ def upsert_diag_signals(conn, integration_id, rows, schema_version):
             mm=(json.dumps(r["missing_metrics"]) if r.get("missing_metrics") is not None else None),
             me=json.dumps(r.get("meta") or {}), sv=schema_version,
         )
+    return [r["signal_key"] for r in rows]
 
 
 def read_signal_schema_version(conn, integration_id):

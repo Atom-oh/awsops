@@ -154,7 +154,7 @@ def _compliance(payload, dry_run):
 
 
 def _datasource_index(payload, dry_run):
-    """(Re)build pre-computed diagnostic signals for one datasource (all kinds). Short + read-only
+    """(Re)build pre-computed diagnostic signals for one datasource. Short + read-only
     (reads the cached schema, writes datasource_diag_signals) → lambda runtime. payload: {integration_id}."""
     iid = payload.get("integration_id")
     if dry_run:

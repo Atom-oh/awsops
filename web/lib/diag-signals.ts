@@ -26,6 +26,10 @@ export async function getDiagSignals(integrationId: number): Promise<DiagSignals
     `SELECT signal_key, title, status, query, missing_metrics, meta
        FROM datasource_diag_signals
       WHERE account_id = 'self' AND integration_id = $1
+        -- '__schema_version__' is the worker's bookkeeping row (db.py SCHEMA_VERSION_SENTINEL_KEY):
+        -- it exists so a schema that yields no signals is remembered rather than rebuilt every run,
+        -- and it is not a signal, so it must never reach the UI as a chip.
+        AND signal_key <> '__schema_version__'
       ORDER BY signal_key`,
     [integrationId],
   );
