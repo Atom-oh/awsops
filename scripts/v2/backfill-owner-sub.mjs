@@ -149,6 +149,16 @@ function die(m) { console.error(`backfill-owner-sub: ${m}`); process.exit(1); }
 // (review P2). Doubling the quote is the standard escape; standard_conforming_strings is on in PG
 // (default since 9.1) so backslashes are literal and need no handling.
 function lit(v) { return `'${String(v).replace(/'/g, "''")}'`; }
+
+// True only when the account provably existed before the oldest row it would inherit. Missing or
+// unparseable timestamps are NOT ok: see the plan-side gate.
+function ageOk(accountCreated, rowsWritten) {
+  const oldest = String(rowsWritten ?? '').split(' .. ')[0];
+  const a = accountCreated ? new Date(accountCreated) : null;
+  const r = oldest ? new Date(oldest) : null;
+  if (!a || !r || Number.isNaN(+a) || Number.isNaN(+r)) return false;
+  return a <= r;
+}
 const tf = (out) => execSync(`terraform -chdir=terraform/v2/foundation output -raw ${out}`,
   { cwd: ROOT, encoding: 'utf8' }).trim();
 
@@ -252,6 +262,7 @@ async function plan(client) {
   const unmapped = [];    // no such user
   const unverified = [];  // user exists, email not verified — NOT a rewrite target
   const ambiguous = [];   // >1 user maps to the same lowercased address — refuse, don't guess
+  const tooYoung = [];    // the account postdates the rows — it cannot have written them
   const conflicts = [];   // report_schedules: the sub already has a schedule of that type
   const planClashes = [];       // two PLANNED rewrites claim the same (sub, schedule_type)
   const claimedSchedules = new Map(); // `${sub}\0${type}` -> the entry that claimed it first
@@ -261,6 +272,21 @@ async function plan(client) {
     if (!hit) { unmapped.push(g); continue; }
     if (hit.ambiguous) { ambiguous.push({ ...g, subs: hit.ambiguous }); continue; }
     if (!hit.verified) { unverified.push(g); continue; }
+    // Account-age gate, fail-closed. This was only "evidence" for the operator to weigh, but for the one
+    // case we can actually decide it is decisive: if the Cognito account was created AFTER the oldest row
+    // written under its address, that account did not write those rows — the address was acquired later,
+    // which is exactly the reassigned-mailbox takeover this PR exists to stop (codex stop-gate: signup
+    // being blocked now does nothing about accounts that already exist). Refuse instead of asking.
+    // Fail-closed on missing data too: if either timestamp is absent we cannot establish that this
+    // account predates the rows, and "cannot tell" must not read as "fine" in a gate whose whole job is
+    // to stop an irreversible transfer.
+    const acctAge = hit.accountCreated ? new Date(hit.accountCreated) : null;
+    const rowAge = g.oldest ? new Date(g.oldest) : null;
+    if (!acctAge || !rowAge || Number.isNaN(+acctAge) || Number.isNaN(+rowAge) || acctAge > rowAge) {
+      tooYoung.push({ ...g, accountCreated: hit.accountCreated, sub: hit.sub,
+        undecidable: !acctAge || !rowAge || Number.isNaN(+acctAge) || Number.isNaN(+rowAge) });
+      continue;
+    }
     let ids = g.ids;
     if (g.table === 'report_schedules') {
       const clash = await scheduleConflicts(client, g.ids, g.owner, hit.sub);
@@ -301,8 +327,9 @@ async function plan(client) {
       evidence: {
         rowsWritten: `${g.oldest} .. ${g.newest}`,
         currentHolderAccountCreated: hit.accountCreated,
-        // Stated for every entry, not just suspicious ones: the tool cannot tell these apart.
-        note: 'Cognito does not record WHEN this address was acquired. Confirm this sub owned it for the whole window above, then keep this entry; delete it to refuse.',
+        // The account is at least as old as the oldest row (entries that fail that are excluded), so
+        // what remains unknowable is whether the address changed hands BETWEEN accounts of similar age.
+        note: 'This account predates the oldest row above, so it existed when they were written — but Cognito does not record WHEN the address was acquired. Confirm this sub held it for the whole window, then keep this entry; delete it to refuse.',
       },
     });
   }
@@ -398,8 +425,21 @@ async function plan(client) {
     console.log('to survive, and planning both would abort the whole apply on every attempt. Merge or');
     console.log('delete the duplicate schedule rows first, then re-plan.');
   }
+  if (tooYoung.length > 0) {
+    console.log('\nNOT IN THE PLAN — the Cognito account is NEWER than the rows it would inherit:');
+    for (const g of tooYoung) {
+      console.log(`  ${g.owner}  (${g.table}, ${g.n} rows written ${g.oldest} .. ${g.newest})`);
+      console.log(g.undecidable
+        ? `    account ${g.sub} — cannot establish its age (created=${g.accountCreated ?? 'unknown'},`
+          + ` oldest row=${g.oldest ?? 'unknown'}), so the check cannot pass`
+        : `    account ${g.sub} created ${g.accountCreated} — after the oldest row, so it did not write them`);
+    }
+    console.log('That is the reassigned-mailbox case: someone holds the address now, but a different');
+    console.log('person wrote those rows. Rewriting would hand their data over irreversibly. If the');
+    console.log('account was legitimately re-created for the SAME person, move the rows by hand.');
+  }
   if (unverified.length > 0 || unmapped.length > 0 || ambiguous.length > 0 || conflicts.length > 0
-      || planClashes.length > 0) {
+      || planClashes.length > 0 || tooYoung.length > 0) {
     console.log('\nKeep LEGACY_EMAIL_OWNER_MATCH=true until these are resolved.');
   }
   process.exitCode = 2;   // a plan is not a completed migration
@@ -428,6 +468,10 @@ async function apply(client) {
         + `(${hit.ambiguous.join(', ')}) — refusing to guess`);
     } else if (!hit.verified) {
       rejected.push(`${e.from} -> ${e.to}: the address is no longer VERIFIED on ${hit.sub}`);
+    } else if (!ageOk(hit.accountCreated, e.evidence?.rowsWritten)) {
+      rejected.push(`${e.from} -> ${e.to}: cannot establish that the account holding this address `
+        + `(created ${hit.accountCreated ?? 'unknown'}) predates the oldest row it would inherit `
+        + `(${String(e.evidence?.rowsWritten ?? 'unknown').split(' .. ')[0]}) — re-plan`);
     } else if (hit.sub !== e.to) {
       rejected.push(`${e.from} -> ${e.to}: address now belongs to ${hit.sub}, not the planned sub`);
     }
