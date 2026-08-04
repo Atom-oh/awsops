@@ -136,11 +136,6 @@ manual backfill needed.
 
 ## Amended 2026-08-04 (implementation reality)
 
-> `CATALOG_VERSION` is **v4**, not v3. v3 encoded "generation budget exhausted" as the plain schema hash,
-> which is indistinguishable from the legitimate "conclusively nothing to build" row that must keep
-> skipping — a row written that way would never generate again. The bump invalidates every hash once, so
-> the ambiguous encoding cannot survive; exhaustion is `:spent<week>` from v4 on.
-
 The panel review found this spec and the implementation disagreeing on five points. The implementation
 is what shipped; the spec is corrected here rather than the code being bent to match a plan written
 before the connectors were probed.
@@ -158,8 +153,12 @@ before the connectors were probed.
    implementation asks for a single expression and validates that one. Generating several would
    multiply the Bedrock cost and the dry-run traffic for a chip that only ever shows one query, and
    nothing consumes the runners-up.
-4. **`CATALOG_VERSION` is `v3`, not `v2`.** main is on `v1`; `v2` existed only in an intermediate commit
-   of this branch, so deployed instances move v1 → v3 in one step.
+4. **`CATALOG_VERSION` is `v4`, not `v2`.** main is on `v1`; `v2` and `v3` existed only in intermediate
+   commits of this branch, so deployed instances move v1 → v4 in one step. The v3 → v4 step is not a
+   catalog edit: v3 encoded "generation budget exhausted" as the plain schema hash, which is
+   indistinguishable from the legitimate "conclusively nothing to build" row that must keep skipping, so a
+   row written that way would never generate again. The bump invalidates every hash once, and from v4 on
+   exhaustion is `:spent<week>` while the plain hash means only "conclusive".
 5. **The dry run now enforces the non-empty shape this spec already required.** Decision 2 asks for "a
    non-error, non-empty-shape response", but the first implementation accepted any successful envelope —
    so an invented metric name returning Prometheus `result: []` was stored as a ready chip that stays

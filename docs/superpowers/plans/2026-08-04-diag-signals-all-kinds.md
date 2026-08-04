@@ -1,6 +1,6 @@
 > **THIS PLAN HAS DRIFTED FROM THE SHIPPED CODE (2026-08-04).** The spec's
 > "Amended 2026-08-04" section is the accurate record. Beyond the per-task banners below: Task 9 says
-> `CATALOG_VERSION = "v2"` but the shipped value is `v3` (main is on `v1`); Task 7's wiring example
+> `CATALOG_VERSION = "v2"` but the shipped value is `v4` (main is on `v1`); Task 7's wiring example
 > shows APIs that no longer exist (`try_generate_signal(...)` without a status, a 3-argument
 > `upsert_diag_signals`, a list-comprehension sweep); and Task 6's module body predates
 > `_nonempty_result`, the status constants, the schema-vocabulary gate and the separate
