@@ -20,8 +20,16 @@ function asArr(v: unknown): unknown[] {
   return [];
 }
 
-/** Read this instance's pre-built signals, split into clickable (ready) and disabled (unavailable). */
+/** Read this instance's pre-built signals, split into clickable (ready) and disabled (unavailable).
+ *
+ * LLM-generated rows are gated on the READ side too, not only on the write side. Turning
+ * `diag_signal_querygen_enabled` off makes the worker sweep them on the next rebuild, but that rebuild
+ * needs the worker to actually run — with `workers_enabled`/`datasource_diagnosis_enabled` off, or the
+ * daily job paused, the stored rows would keep being served indefinitely after the gate closed (review).
+ * A flag-off read serves only deterministic-catalog signals, whatever is still in the table.
+ */
 export async function getDiagSignals(integrationId: number): Promise<DiagSignals> {
+  const generatedAllowed = process.env.DIAG_SIGNAL_QUERYGEN_ENABLED === 'true';
   const { rows } = await getPool().query(
     `SELECT signal_key, title, status, query, missing_metrics, meta
        FROM datasource_diag_signals
@@ -30,8 +38,9 @@ export async function getDiagSignals(integrationId: number): Promise<DiagSignals
         -- it exists so a schema that yields no signals is remembered rather than rebuilt every run,
         -- and it is not a signal, so it must never reach the UI as a chip.
         AND signal_key <> '__schema_version__'
+        AND ($2::boolean OR (meta->>'provenance') IS DISTINCT FROM 'generated')
       ORDER BY signal_key`,
-    [integrationId],
+    [integrationId, generatedAllowed],
   );
   const ready: ReadySignal[] = [];
   const unavailable: UnavailableSignal[] = [];
