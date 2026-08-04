@@ -15,7 +15,8 @@ poisoned schema can only make a signal `unavailable`, never inject into a query.
 rebuild even when the datasource's metric set is unchanged.
 """
 
-CATALOG_VERSION = "v1"
+CATALOG_VERSION = "v2"  # bumped 2026-08-04: kind-scoped matchers + clickhouse/loki/tempo/jaeger/
+                         # dynatrace/datadog catalog entries + LLM hybrid fallback (was "v1")
 
 # kind → connector tool name (PromQL is identical for both)
 _KIND_TOOL = {
