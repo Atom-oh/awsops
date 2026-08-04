@@ -161,49 +161,50 @@ def _iso_week():
     return datetime.now(timezone.utc).strftime("%G%V")
 
 
-_MARKER_RE = re.compile(r":(?:retry(\d+)w|spent)(\d{5,8})$")
+# The stored value is `<hash>` or `<hash>:<state><attempts>w<isoweek>`, state ∈ {pend, done}.
+# `attempts` is how many GENERATIONS this instance has spent this week; `done` means nothing more should be
+# tried until the week rolls. Three review rounds shaped this grammar and each constraint came from one:
+#   * the budget must survive schema churn — the marker is read regardless of which hash prefixes it, or a
+#     Prometheus whose metric set moves on every deploy gets a fresh budget daily (MAJOR-3);
+#   * a spent budget must not freeze the instance — the week rolls and the retry comes back (L4-M3);
+#   * a READY (or otherwise conclusive) outcome must not erase the week's usage either, or an instance whose
+#     catalog match flaps in and out buys 3 more tries per flap (Codex stop-gate) — hence `done` still
+#     carries `attempts`, where the earlier encoding dropped the marker entirely.
+_MARKER_RE = re.compile(r":(pend|done)(\d+)w(\d{5,8})$")
+_PEND, _DONE = "pend", "done"
 
 
-def _retry_state(existing, version):
-    """(attempts_used, exhausted_this_week) read back from the stored version marker.
+def _marker_state(existing):
+    """(base_hash, attempts_used_this_week, done_for_this_week) from the stored schema_version.
 
-    The budget is per INSTANCE per ISO week, and deliberately NOT per schema_version: the version hashes
-    the whole schema, and a production Prometheus changes its metric/label set on every deploy, so keying
-    the cap to it turned "3 tries a week" back into a daily Bedrock call (review MAJOR). The marker is
-    therefore read out of the stored string regardless of which version prefixes it — a schema that drifted
-    mid-week does not buy a fresh budget, which is the point of a cost cap.
-
-    Spending it used to be PERMANENT — the plain version was stored and the schema never changes for a quiet
-    datasource, so an instance that happened to be idle for three runs stayed chip-less forever (review
-    MAJOR, L4-M3). `:retryN w<week>` counts this week's tries; `:spent<week>` means they are gone, and since
-    neither marker equals `version` the rebuild still runs each day — it just skips the Bedrock call until
-    the week rolls over.
-
-    UPGRADE PATH. Two older encodings can be in the column, and neither may become a permanent park:
-      * the plain hash meaning "gave up" — unreachable from a deployed row, because this change also puts
-        the whole schema and the querygen flag into the hash basis (main hashed `metrics` + the catalog
-        version only), so every pre-existing row's version differs and rebuilds once;
-      * `:retryN` without a week, written by an earlier commit on this branch — it does not match the marker
-        pattern and reads as a FRESH budget, which is the safe direction (retry, not park).
+    Legacy encodings: a plain hash is conclusive and keeps skipping (CATALOG_VERSION v4 retired its
+    ambiguous "gave up" meaning), while this branch's earlier `:retryN`, `:retryNw<week>` and `:spent<week>`
+    forms read as a fresh, NOT-settled budget — retrying is the safe direction for an unrecognised marker.
     """
     m = _MARKER_RE.search(existing or "")
     if not m:
-        return 0, False
-    tries, week = m.group(1), m.group(2)
+        base, _, marker = (existing or "").partition(":")
+        return base, 0, bool(base) and not marker   # plain hash = a conclusive outcome was recorded
+    state, attempts, week = m.group(1), int(m.group(2)), m.group(3)
     if week != _iso_week():
-        return 0, False           # last week's marker: full budget again
-    if tries is None:
-        return _MAX_GENERATION_ATTEMPTS, True    # `:spent<week>` — exhausted for this week
-    return int(tries), False
+        return existing[:m.start()], 0, False     # last week's marker: full budget, retry allowed
+    return existing[:m.start()], attempts, state == _DONE
+
+
+def _marker(version, attempts, done):
+    return f"{version}:{_DONE if done else _PEND}{attempts}w{_iso_week()}"
 
 
 def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     version = _schema_version(schema)
     existing_version = wdb.read_signal_schema_version(conn, iid)
-    if existing_version == version:
-        return {"skipped": True, "schema_version": version}
+    base, attempts, done = _marker_state(existing_version)
+    # Skip only when the schema is unchanged AND this week is settled — either the last outcome was
+    # conclusive or the budget is spent. A `pend` marker means a retry is owed, so it must NOT skip.
+    if base == version and done:
+        return {"skipped": True, "schema_version": existing_version}
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
-    attempts, exhausted = _retry_state(existing_version, version)
+    exhausted = attempts >= _MAX_GENERATION_ATTEMPTS
     gen_status = None
     if not any(r["status"] == "ready" for r in rows) and not exhausted:
         generated, gen_status = _signal_gen.try_generate_signal_with_status(
@@ -211,46 +212,26 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
             lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
         if generated:
             rows = list(rows) + [generated]
-    # A build with no ready signal is remembered via the recorded schema_version (plus a sentinel row when
-    # there is nothing at all) so the daily job stops rebuilding — but ONLY when that outcome is
-    # conclusive. A Bedrock throttle or a connector outage returns TRANSIENT, and recording the real
-    # version then freezes a retryable failure into a permanent skip: the schema never changes, so the job
-    # skips forever and the signal never appears even after the outage ends.
-    #
-    # Note this is NOT limited to an empty build (review, second pass): loki/tempo normally produce
-    # `unavailable` catalog rows, and persisting THOSE under the real version skips the retry just as
-    # effectively. So the rows are still written — they carry the "metric X missing" text the UI shows —
-    # but under a deliberately mismatching version, which makes the next run rebuild and retry.
-    # BOUNDED retry, per week. A transient failure must not record the real version (that skips forever),
-    # but it must not retry forever either: the connectors collapse upstream 503s into the same 400 as a bad
-    # query, so the cause is unknowable from the response and an unbounded `:retry` meant daily Bedrock calls
-    # for a query that may never work. `:retryN` means N generations already ran, so this run is number N+1
-    # and _MAX_GENERATION_ATTEMPTS counts GENERATIONS, not extra ones. Spending the budget parks the
-    # instance for the rest of the ISO week (see _retry_state), not forever.
-    # REJECTED parks like TRANSIENT, it does not freeze. The model is not deterministic and the prompt,
-    # the catalog and the gates all change over time, so "the answer failed a gate once" is not a permanent
-    # fact about this schema — recording the plain version for it meant one bad generation froze the
-    # instance until the schema drifted (review CRITICAL, 3 models / 2 lenses). One rule for every
-    # non-success: up to _MAX_GENERATION_ATTEMPTS tries, then park for the rest of the week. DISABLED is
-    # excluded on purpose — the flag is part of the hash, so flipping it rebuilds anyway.
+    # WHICH OUTCOMES ARE WORTH REMEMBERING. A build with no ready signal is remembered (plus a sentinel row
+    # when there is nothing at all) so the daily job stops rebuilding — but only when the outcome is
+    # conclusive, and "conclusive" cost three review rounds to pin down:
+    #   * TRANSIENT (Bedrock throttled, connector down — every exception, since the connectors collapse a
+    #     503 into the same 400 as a bad query) is not conclusive. Recording it froze a retryable failure
+    #     into a permanent skip, and NOT only for an empty build: loki/tempo normally produce `unavailable`
+    #     rows, and persisting THOSE settled the week just as effectively.
+    #   * REJECTED is not conclusive either. The model is not deterministic and the prompt, catalog and
+    #     gates all change, so "the answer failed a gate once" is not a fact about this schema.
+    #   * DISABLED is — the flag is part of the hash, so flipping it rebuilds anyway.
+    # The rows are written either way (they carry the "metric X missing" text the UI shows); what differs is
+    # whether the marker says this week is settled.
     retry_needed = (gen_status in (_signal_gen.TRANSIENT, _signal_gen.REJECTED)
                     and not any(r["status"] == "ready" for r in rows))
-    if exhausted and not any(r["status"] == "ready" for r in rows):
-        # Still nothing ready → keep this week's `:spent` marker and retry when the week rolls over.
-        # Conditional on purpose: a park that outlives the reason for it never converges to the plain
-        # version, so the daily job would rebuild this instance forever (Codex stop-gate). Once the build
-        # HAS a ready row — the catalog gained an entry, or the deterministic match started working — the
-        # outcome is conclusive and falls through to `stored_version = version`, which ends the rebuilds.
-        stored_version = existing_version
-    elif not retry_needed:
-        stored_version = version
-    elif attempts + 1 >= _MAX_GENERATION_ATTEMPTS:
+    if retry_needed and attempts + 1 >= _MAX_GENERATION_ATTEMPTS:
         logging.warning("[datasource_index] integration %s: generation failed on all %s attempts this week; "
                         "parking it until the week rolls over or the schema changes", iid, attempts + 1)
         retry_needed = False
-        stored_version = f"{version}:spent{_iso_week()}"
-    else:
-        stored_version = f"{version}:retry{attempts + 1}w{_iso_week()}"
+    spent = attempts + (1 if gen_status is not None else 0)
+    stored_version = _marker(version, spent, done=not retry_needed)
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.
