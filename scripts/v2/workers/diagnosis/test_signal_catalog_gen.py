@@ -276,6 +276,19 @@ class TestVocabularyGate:
         flat = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
         assert scg._is_constant_expr("clickhouse", flat, "SELECT count() FROM other.spans") is True
 
+    def test_quoted_identifiers_do_not_defeat_the_cross_database_check(self):
+        # ClickHouse accepts `db`.`table` and "db"."table". With the quotes in place the character before
+        # the table name is a backtick, not the dot, so a cross-database reference slipped through
+        # (review, eighth pass). Quotes are stripped before any adjacency test.
+        real = {"tables": [{"name": "otel.spans", "columns": [{"name": "Duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", real, "SELECT count() FROM other_db.`spans`") is True
+        assert scg._is_constant_expr("clickhouse", real, 'SELECT count() FROM "other_db"."spans"') is True
+        # and the legitimate quoted spellings still work
+        assert scg._is_constant_expr("clickhouse", real, "SELECT count() FROM `spans`") is False
+        assert scg._is_constant_expr("clickhouse", real, "SELECT count() FROM `otel`.`spans`") is False
+        assert scg._is_constant_expr("clickhouse", real,
+                                     "SELECT `s`.`Duration` FROM `otel`.`spans` s") is False
+
     def test_bare_table_name_list_is_also_accepted(self):
         assert scg._schema_table_names({"tables": ["spans"]}) == ["spans"]
 

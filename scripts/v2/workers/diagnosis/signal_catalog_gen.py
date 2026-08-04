@@ -167,6 +167,16 @@ _CONST_VALUE_FN = re.compile(r"^\s*(?:vector|scalar)\s*\(\s*[-+0-9.eE]+\s*\)\s*$
 _COUNT_ONLY = re.compile(r"\bcount\s*\(\s*\*?\s*\)", re.IGNORECASE)
 
 
+# Identifier quoting has to come off before any adjacency test: ClickHouse accepts `db`.`table` and
+# "db"."table", and with the quotes still in place the character before `table` is a backtick rather than
+# the dot, so a cross-database reference slipped past the FROM check (review, eighth pass).
+_SQL_QUOTE_CHARS = str.maketrans("", "", '`"')
+
+
+def _unquote_sql(text):
+    return (text or "").translate(_SQL_QUOTE_CHARS)
+
+
 def _token_present(name, text, allow_dot_prefix=True):
     """`name` appears in `text` as a whole word.
 
@@ -254,7 +264,7 @@ def _sql_value_is_measured(schema, expr):
         column-free aggregate that is a real signal — otherwise `SELECT 1 AS x FROM spans` passed by
         merely containing a letter (review, fourth pass).
     """
-    text = (expr or "").lower()
+    text = _unquote_sql((expr or "").lower())
     sel = re.search(r"\bselect\b(.*?)\bfrom\b", text, re.DOTALL)
     frm = _SQL_AFTER_FROM.search(text)
     if not sel or not frm:
@@ -309,6 +319,8 @@ def _mentions_schema_vocabulary(kind, schema, expr):
     if not names:
         return False          # nothing to anchor to → cannot establish relevance
     text = (expr or "").lower()
+    if kind == "clickhouse":
+        text = _unquote_sql(text)
     return any(_token_present(n, text) for n in names)
 
 
