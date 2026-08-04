@@ -75,7 +75,9 @@ aws cognito-idp list-users --user-pool-id "$V2_POOL" \
 - 그 사람이 **지금도** 그 mailbox 를 보유하는가 (퇴사자 주소 재할당이 이 PR 이 막는 위협모델이다)
 - 그 주소가 SSM admin allowlist 에 있다면, 그 사람에게 admin 을 주는 것이 맞는가
 
-확인되지 않는 주소는 **`email_verified` 없이 생성한다** — fail-closed 다. 그 사용자는 로그인은 되지만 email claim 이 없어 admin 판정과 legacy 행 매칭에서 빠지고, `make backfill-owner-sub` 계획에도 "unverified" 로 남아 눈에 보인다. 확인이 끝난 뒤 개별로 `admin-update-user-attributes --user-attributes Name=email_verified,Value=true` 로 올린다. (`admin-create-user`/`admin-update-user-attributes` 는 client 의 `write_attributes` 제약을 받지 않으므로 여기서 설정 가능하다 — 사용자 자신은 바꿀 수 없다.) 아래 명령의 `email_verified` 부분은 위 확인을 통과한 주소에만 붙인다. **효력은 다음 로그인부터다** — id_token 이 12h 유효하므로 방금 verified 로 올린 사용자도 재로그인 전까지는 email claim 이 없고, 반대로 회수한 경우에도 기존 토큰은 최대 12h 동안 남는다(즉시 필요하면 재인증을 요구한다):
+확인되지 않는 주소는 **그 주소로 계정을 만들지 않는다.** 이게 실제 결정 지점이다 — `email_verified` 를 빼두는 것은 fail-closed 가 아니다: 위에서 본 대로 사용자는 `InitiateAuth` → `VerifyUserAttribute` 로 **자기 계정에 이미 설정된 주소를 스스로 verified 로 만들 수 있다.** 즉 플래그를 빼는 것은 초기값일 뿐이고 지속적인 운영자 통제가 아니다(리뷰 지적: 이전 서술은 이 절차를 fail-closed 라고 불렀는데, 사용자가 그 자리에서 뒤집을 수 있으므로 사실이 아니다). 통제는 **주소 자체**다 — 계정에 올린 주소는 그 사람이 검증할 수 있고, 검증되면 그 주소로 기록된 legacy 행의 소유권과 (allowlist 에 있다면) admin 자격이 따라온다. 그러므로 확인 못 한 주소는 아예 쓰지 말고, 확인된 뒤에 계정을 만든다. 계정을 이미 만들었다면 정정 방법은 플래그가 아니라 계정을 지우는 것(`admin-delete-user`)이다.
+
+아래 명령의 주소는 위 확인을 통과한 것이어야 하고, `email_verified=true` 는 그 확인을 명시적으로 기록하는 의미다(사용자가 스스로 만들 수도 있는 상태이므로 보류해도 얻는 것이 없다). **효력은 다음 로그인부터다** — id_token 이 12h 유효하므로 방금 verified 로 올린 사용자도 재로그인 전까지는 email claim 이 없고, 반대로 회수한 경우에도 기존 토큰은 최대 12h 동안 남는다(즉시 필요하면 재인증을 요구한다):
 
 **`email_verified` is this procedure's decision point** (PR #203). `verifyUser()` adopts the token's
 `email` claim only when `email_verified` is true, so setting this flag is **not a verification — it is
@@ -98,14 +100,17 @@ that assertion any lighter.
   threat model this PR exists for)
 - if the address is on the SSM admin allowlist, granting them admin is intended
 
-Anything you cannot confirm is created **without** the flag — that is fail-closed and visible: they can
-log in, but carry no email claim, so they are excluded from the admin check and from legacy ownership
-matching, and they show up as "unverified" in the `make backfill-owner-sub` plan until resolved.
-Promote per user afterwards with `admin-update-user-attributes
---user-attributes Name=email_verified,Value=true`. (`admin-create-user` and
-`admin-update-user-attributes` are not bound by the client's `write_attributes`, so they can set it —
-the user themselves cannot.) Add the `email_verified` part of the command below only for addresses that
-passed those checks. **It takes effect at their next login** — an id_token is valid for 12h, so a user
+Anything you cannot confirm: **do not create an account on that address at all.** That is the real
+decision point — withholding `email_verified` is NOT fail-closed, because as noted above the user can
+verify an address already on their own account themselves (`InitiateAuth` → `VerifyUserAttribute`). The
+flag is an initial state, not an ongoing operator control (review finding: the earlier text called this
+procedure fail-closed, which it is not). The control is the ADDRESS: whatever address you put on the
+account, that person can get verified, and verification carries ownership of the legacy rows written
+under it plus admin eligibility if it is on the allowlist. So confirm first and create afterwards; if the
+account already exists, the correction is `admin-delete-user`, not the flag.
+
+passed those checks, and `email_verified=true` records that the check happened (withholding it buys
+nothing, since the user can set it). **It takes effect at their next login** — an id_token is valid for 12h, so a user
 you just verified has no email claim until they sign in again, and a revocation likewise leaves the old
 token usable for up to 12h (force re-authentication if it must be immediate):
 
