@@ -333,3 +333,58 @@ class TestVocabNames:
     def test_list_shapes_still_work(self):
         assert scg._vocab_names({"metrics": ["up", {"name": "http_requests_total"}]}, "metrics") == \
             ["up", "http_requests_total"]
+
+
+class TestConnector4xxIsAVerdict:
+    """`_lambda_invoke` raises for both "the connector said 400 because the query is wrong" and "the invoke
+    failed". Treating every exception as transient re-invoked Bedrock daily for a query that can never work
+    (review MAJOR)."""
+
+    def _boom(self, msg):
+        def f(args):
+            raise RuntimeError(msg)
+        return f
+
+    def test_4xx_is_conclusive(self):
+        assert scg._dry_run_check("clickhouse", "SELECT 1", 7,
+                                  self._boom("clickhouse-mcp clickhouse_query returned statusCode 400")) == (False, False)
+        assert scg._dry_run_check("loki", "{}", 7,
+                                  self._boom("loki-mcp loki_query_range returned statusCode 422")) == (False, False)
+
+    def test_5xx_and_function_errors_stay_retryable(self):
+        assert scg._dry_run_check("loki", "{}", 7,
+                                  self._boom("loki-mcp loki_query_range returned statusCode 503")) == (False, True)
+        assert scg._dry_run_check("loki", "{}", 7,
+                                  self._boom("loki-mcp invoke FunctionError: Unhandled")) == (False, True)
+        assert scg._dry_run_check("loki", "{}", 7, self._boom("connection reset")) == (False, True)
+
+
+class TestStaticCheckMatchesTheConnectorGuard:
+    """This pre-check must not be LOOSER than the connector it feeds: a generated
+    `FROM url('http://169.254.169.254/…')` used to reach the dry run, making the check itself the egress
+    attempt (review MAJOR). Mirrors clickhouse_mcp._TABLE_FN."""
+
+    def test_table_functions_are_rejected(self):
+        for expr in ("SELECT * FROM url('http://169.254.169.254/latest/meta-data/')",
+                     "SELECT count() FROM s3('https://x/y.csv')",
+                     "SELECT count() FROM numbers(10)",
+                     "SELECT count() FROM remote('other:9000', system.tables)"):
+            assert scg._static_check("clickhouse", expr) is False, expr
+
+    def test_ordinary_queries_still_pass(self):
+        assert scg._static_check("clickhouse", "SELECT avg(duration) FROM spans") is True
+
+
+class TestAliasesCannotImpersonateSchemaNames:
+    def test_alias_named_after_a_column_is_not_a_measurement(self):
+        sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT 1 AS duration FROM spans") is True
+
+    def test_table_function_aliased_to_a_schema_table_is_not_that_table(self):
+        sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM numbers(10) AS spans") is True
+
+    def test_aliasing_a_real_measurement_is_fine(self):
+        sch = {"tables": [{"name": "spans", "columns": [{"name": "duration"}]}]}
+        assert scg._is_constant_expr("clickhouse", sch,
+                                     "SELECT avg(s.duration) AS avg_ms FROM spans s") is False

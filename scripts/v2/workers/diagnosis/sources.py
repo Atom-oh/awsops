@@ -536,7 +536,12 @@ def _signal_plan(conn, iid):
             for q in (r["query"].get("queries") or []):
                 expr = q.get("expr")
                 if tool and expr:
-                    plan.append((tool, {"query": expr}, f"{r['signal_key']}:{q.get('label', 'q')}"))
+                    # The arg key is per-connector: ClickHouse's takes `sql`, everything else `query`.
+                    # This was hardcoded to `query`, which is invisible today because the caller only
+                    # reaches here for prom/mimir — but it is a landmine for the PR that widens that gate,
+                    # and the signal rows for clickhouse already exist (review MAJOR).
+                    arg = "sql" if str(tool).startswith("clickhouse") else "query"
+                    plan.append((tool, {arg: expr}, f"{r['signal_key']}:{q.get('label', 'q')}"))
             m = r.get("meta") or {}
             sig_meta.append({"key": r["signal_key"], "title": r.get("title"),
                              "pillar": m.get("pillar"), "threshold": m.get("threshold")})
@@ -586,6 +591,12 @@ def collect_datasources(conn):
             break
         # Prom/Mimir: PREFER pre-built diagnostic signals (datasource_index); fall back to the generic
         # schema-driven planner when signals aren't materialized yet (decouples from the index pipeline).
+        #
+        # DELIBERATELY still prom/mimir only. datasource_index now materializes signal rows for loki and
+        # tempo too (and clickhouse via the flag-gated fallback), but those are consumed by the Explore
+        # CHIPS, not by this report — so they are chip-only, not dead code, and widening this gate is a
+        # separate decision that needs the per-kind thresholds/pillars the sig_meta path assumes
+        # (review MAJOR: worth stating, since the rows exist and the asymmetry is invisible otherwise).
         sig = _signal_plan(conn, iid) if kind in ("prometheus", "mimir") else None
         if sig is not None:
             plan, unavail, version, sig_meta = sig

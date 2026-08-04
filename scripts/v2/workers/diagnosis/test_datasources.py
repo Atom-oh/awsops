@@ -199,6 +199,19 @@ def _unavail_row(key, missing):
     return [key, key, "unavailable", None, _json.dumps(missing), _json.dumps({"pillar": "reliability"})]
 
 
+def test_signal_plan_uses_the_connectors_own_arg_key():
+    """ClickHouse's connector takes `sql`, everyone else `query`. The plan builder hardcoded `query`,
+    which is invisible while only prom/mimir reach it but breaks the moment that gate widens — and the
+    clickhouse signal rows already exist (review MAJOR)."""
+    rows = [["gen", "AI 생성 신호", "ready",
+             _json.dumps({"tool": "clickhouse_query", "queries": [{"label": "g", "expr": "SELECT count() FROM spans"}]}),
+             None, _json.dumps({"kind": "clickhouse", "provenance": "generated"})]]
+    conn = SignalConn([(9, "ch", "clickhouse", True)], rows)
+    plan, _unavail, _version, _meta = src._signal_plan(conn, 9)
+    assert plan and plan[0][0] == "clickhouse_query"
+    assert plan[0][1] == {"sql": "SELECT count() FROM spans"}   # not {"query": …}
+
+
 def test_prebuilt_signals_executed_when_present(monkeypatch):
     fake = _patch_lambda(monkeypatch, FakeLambda())
     conn = SignalConn([(5, "prod-prom", "prometheus", True)],

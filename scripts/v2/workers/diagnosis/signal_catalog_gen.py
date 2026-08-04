@@ -22,6 +22,17 @@ _FORBIDDEN_SQL_KEYWORDS = (
     "attach", "detach", "rename", "optimize", "system", "kill", "exchange",
 )
 
+# Mirrors agent/lambda/clickhouse_mcp.py's _TABLE_FN. Without it this pre-check was LOOSER than the
+# connector it feeds: a generated `SELECT … FROM url('http://169.254.169.254/…')` passed here and was only
+# stopped at execution, so the dry run itself became the egress attempt (review MAJOR). Kept deliberately
+# in sync rather than "improved" — a check that disagrees with the real guard is worse than none, because
+# it invites treating this one as the boundary. The connector remains the boundary.
+_TABLE_FN = re.compile(
+    r"\b(url|file|remote|hdfs|s3|gcs|iceberg|hudi|deltaLake|azureBlobStorage|mongodb|mysql|postgresql|"
+    r"redis|sqlite|jdbc|odbc|input|cluster|executable|numbers|generateRandom|zeros)\w*\s*\(",
+    re.IGNORECASE,
+)
+
 _KIND_TOOL = {
     "prometheus": "prometheus_query", "mimir": "mimir_query", "loki": "loki_query_range",
     "tempo": "tempo_search", "jaeger": "jaeger_search", "clickhouse": "clickhouse_query",
@@ -114,6 +125,8 @@ def _static_check(kind, expr):
             return False
         if not lowered.lstrip().startswith("select"):
             return False
+        if _TABLE_FN.search(lowered):
+            return False
         for kw in _FORBIDDEN_SQL_KEYWORDS:
             if re.search(rf"\b{kw}\b", lowered):
                 return False
@@ -176,6 +189,18 @@ _COUNT_ONLY = re.compile(r"\bcount\s*\(\s*\*?\s*\)", re.IGNORECASE)
 _IDENT = re.compile(r'`((?:[^`]|``)*)`|"((?:[^"]|"")*)"|([A-Za-z_][\w$]*)')
 
 
+_ALIAS_DEF = re.compile(r"\bas\s+(?:`(?:[^`]|``)*`|\"(?:[^\"]|\"\")*\"|[A-Za-z_][\w$]*)", re.IGNORECASE)
+
+
+def _strip_alias_defs(text):
+    """Remove `AS <name>` so an alias cannot impersonate a schema name.
+
+    `SELECT 1 AS duration FROM spans` and `FROM numbers(10) AS spans` both borrowed the vocabulary without
+    measuring anything from it (review MAJOR): the alias was matched as if it were the real column/table.
+    """
+    return _ALIAS_DEF.sub(" ", text)
+
+
 def _parse_ident_chains(text):
     """Every dotted identifier chain in `text`, as lists of parts, with quoting honoured.
 
@@ -221,7 +246,9 @@ def _table_ref_matches(cached, chain):
 
 
 def _references_schema_table(schema, text):
-    chains = _parse_ident_chains(text)
+    # aliases stripped first, and a chain that is a table function's name (immediately followed by `(`)
+    # is not a table reference — `FROM numbers(10) AS spans` names no table of this instance
+    chains = _parse_ident_chains(_strip_alias_defs(text))
     return any(_table_ref_matches(t, c) for t in _schema_table_names(schema) for c in chains)
 
 
@@ -312,7 +339,7 @@ def _sql_value_is_measured(schema, expr):
         return True
     if _references_schema_table(schema, select_list):
         return True
-    return any(_token_present(n, select_list) for n in _schema_column_names(schema))
+    return any(_token_present(n, _strip_alias_defs(select_list)) for n in _schema_column_names(schema))
 
 
 def _is_constant_expr(kind, schema, expr):
@@ -369,8 +396,17 @@ def _dry_run_check(kind, expr, integration_id, invoke_connector):
         args["max_rows"] = 1
     try:
         result = invoke_connector(args)
-    except Exception:
-        return False, True      # connector down / timeout — not a verdict on the query
+    except Exception as e:      # noqa: BLE001 — classified below, never propagated
+        # datasource_index._lambda_invoke raises RuntimeError for BOTH "the connector said 400 because the
+        # query is wrong" and "the invoke failed". Treating every exception as transient meant a query that
+        # is permanently invalid (bad syntax, missing table) got `{version}:retry` forever, so Bedrock was
+        # re-invoked daily for a query that can never work (review MAJOR). A 4xx is the connector judging
+        # the query — conclusive. 5xx / FunctionError / anything else is the attempt failing — retryable.
+        msg = str(e)
+        m = re.search(r"statusCode\s+(\d{3})", msg)
+        if m and 400 <= int(m.group(1)) < 500:
+            return False, False
+        return False, True
     if not result:
         return False, True
     if isinstance(result, dict) and "error" in result:
