@@ -154,6 +154,29 @@ TRANSIENT = "transient"    # something threw: retry next run
 GENERATED = "generated"
 
 
+# A query can name a real table and still measure nothing: `SELECT 1 FROM spans` passes the anchor check
+# and the dry run (it returns a row), and `vector(1)` is the PromQL equivalent. These reject the value
+# position being a bare literal (review: "the vocabulary gate still accepts constant queries").
+#
+# This is a lexical floor, NOT a proof of relevance — the same caveat agent/lambda/CLAUDE.md makes about
+# keyword denylists applies here: do not grow it until it looks complete. What actually bounds the damage
+# is that execution goes through the read-only connector, the row is labelled provenance='generated', and
+# a human sees the chip before trusting it.
+_CONST_VALUE_FN = re.compile(r"^\s*(?:vector|scalar)\s*\(\s*[-+0-9.eE]+\s*\)\s*$", re.IGNORECASE)
+
+
+def _is_constant_expr(kind, expr):
+    """True when the expression's value is a literal, however real the names around it are."""
+    text = (expr or "").strip()
+    if not text:
+        return True
+    if kind == "clickhouse":
+        m = re.search(r"\bselect\b(.*?)\bfrom\b", text, re.IGNORECASE | re.DOTALL)
+        # a select list with no identifier at all is `SELECT 1` / `SELECT 1, 2` — `count()` has letters
+        return bool(m) and not re.search(r"[A-Za-z_]", m.group(1))
+    return bool(_CONST_VALUE_FN.match(text))
+
+
 def _anchor_names(kind, schema):
     """The names a generated query must actually reference to count as being about this instance.
 
@@ -240,6 +263,10 @@ def try_generate_signal_with_status(kind, schema, integration_id, invoke_connect
     try:
         expr = _generate_expr(kind, schema, invoke=invoke_llm)
         if not _static_check(kind, expr):
+            return None, REJECTED
+        if _is_constant_expr(kind, expr):
+            logging.warning("[signal_catalog_gen] generated expr for integration %s measures a constant; "
+                            "rejecting", integration_id)
             return None, REJECTED
         if not _mentions_schema_vocabulary(kind, schema, expr):
             logging.warning("[signal_catalog_gen] generated expr for integration %s mentions nothing from "

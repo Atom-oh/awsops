@@ -172,6 +172,8 @@ Two more gates were added to the generated query, beyond what Decision 2 describ
 - **an empty dry-run result is retryable, not conclusive.** A quiet window returns no samples, and
   treating that as a verdict froze the instance signal-less until the schema drifted.
 
+A third pass found the anchor check alone insufficient: a query can name a real table and still measure nothing (`SELECT 1 FROM spans`, `vector(1)`), so the value position is checked for being a bare literal as well. Both checks are a lexical floor, not a proof of relevance — the same caveat `agent/lambda/CLAUDE.md` makes about keyword denylists applies, and what actually bounds the damage is that execution goes through the read-only connector, the row is labelled `provenance='generated'`, and a person sees the chip before trusting it.
+
 Two follow-on corrections from the next review pass: the flag has to be mixed into `_schema_version` (only the graph flag was, so turning the new one on left every already-indexed instance's version unchanged → skip → the fallback never ran for the instances it was added for), and the vocabulary check matches whole tokens rather than substrings — plain `in` let `SELECT 1 GROUP BY 1` match a metric named `up` inside "GROUP", and `SELECT count() FROM system.tables` match a clickhouse column named `count`. For dict-shaped schemas only TABLE names anchor, since every SQL query needs a FROM while column names are generic enough to match by accident.
 
 While adding the vocabulary gate, `_vocab_names` turned out to raise `TypeError` on clickhouse's

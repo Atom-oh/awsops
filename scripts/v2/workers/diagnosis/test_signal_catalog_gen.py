@@ -217,6 +217,25 @@ class TestVocabularyGate:
         assert scg._mentions_schema_vocabulary("clickhouse", schema,
                                                "SELECT count() FROM spans") is True
 
+    # A query can name a real table and still measure nothing (review, third pass).
+    def test_constant_value_with_a_real_table_is_rejected(self, monkeypatch):
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        for kind, schema, expr in (
+            ("clickhouse", {"tables": {"spans": ["ts"]}}, "SELECT 1 FROM spans"),
+            ("clickhouse", {"tables": {"spans": ["ts"]}}, "SELECT 1, 2 FROM spans"),
+            ("prometheus", {"metrics": ["up"]}, "vector(1)"),
+            ("prometheus", {"metrics": ["up"]}, "scalar( 1.5 )"),
+        ):
+            monkeypatch.setattr(scg, "_generate_expr", lambda k, sc, invoke=None, e=expr: e)
+            row, status = scg.try_generate_signal_with_status(
+                kind, schema, 7, lambda a: {"rows": [[1]], "data": {"result": [1]}})
+            assert (row, status) == (None, scg.REJECTED), f"{kind} {expr}"
+
+    def test_aggregates_over_a_real_table_are_not_constants(self):
+        assert scg._is_constant_expr("clickhouse", "SELECT count() FROM spans") is False
+        assert scg._is_constant_expr("clickhouse", "SELECT quantile(0.9)(duration) FROM spans") is False
+        assert scg._is_constant_expr("prometheus", "rate(up[5m])") is False
+
     def test_dotted_names_still_match(self):
         assert scg._mentions_schema_vocabulary("prometheus", {"metrics": ["otel.spans"]},
                                                "rate(otel.spans[5m])") is True
