@@ -276,13 +276,17 @@ async function plan(client) {
     console.log('\nNOT IN THE PLAN — the target sub ALREADY has a schedule of the same type:');
     for (const g of conflicts) {
       for (const c of g.clash) {
-        const both = c.legacy_enabled && c.other_enabled;
-        const why = both
+        // Four cases, not three: both-disabled fell through to the sub-keyed-only branch and was
+        // reported as "the sub-keyed row is enabled" when nothing was (stop-gate).
+        const why = c.legacy_enabled && c.other_enabled
           ? 'BOTH ENABLED — this diagnosis is ALREADY running twice'
           : c.legacy_enabled
             ? 'only the legacy row is enabled — this person\'s live schedule is still email-keyed, and '
               + 'at flag-off its reports become invisible to them'
-            : 'only the sub-keyed row is enabled — the legacy row is dormant, so deleting it is usually right';
+            : c.other_enabled
+              ? 'only the sub-keyed row is enabled — the legacy row is dormant, so deleting it is usually right'
+              : 'NEITHER is enabled — nothing is running; both rows are dormant leftovers and deleting '
+                + 'the legacy one is safe';
         console.log(`  type=${c.schedule_type}: legacy id=${c.id} (${g.owner}, enabled=${c.legacy_enabled})`
           + ` vs id=${c.other_id} (${g.to}, enabled=${c.other_enabled})`);
         console.log(`    -> ${why}`);
