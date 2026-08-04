@@ -163,17 +163,51 @@ GENERATED = "generated"
 # is that execution goes through the read-only connector, the row is labelled provenance='generated', and
 # a human sees the chip before trusting it.
 _CONST_VALUE_FN = re.compile(r"^\s*(?:vector|scalar)\s*\(\s*[-+0-9.eE]+\s*\)\s*$", re.IGNORECASE)
+# count() / count(*) are the legitimate column-free aggregates: "how many rows" is a real signal.
+_COUNT_ONLY = re.compile(r"\bcount\s*\(\s*\*?\s*\)", re.IGNORECASE)
 
 
-def _is_constant_expr(kind, expr):
+def _token_present(name, text):
+    """`name` appears in `text` as a whole token (boundary is non-word-and-non-dot)."""
+    if not name:
+        return False
+    return bool(re.search(r"(?<![\w.])" + re.escape(name.lower()) + r"(?![\w.])", text))
+
+
+def _sql_value_is_measured(schema, expr):
+    """For clickhouse: does the SELECT list actually measure something from this schema?
+
+    "Contains a letter" was the first rule and it is trivially bypassed — `SELECT 1 AS x FROM spans`,
+    `SELECT toInt8(1) FROM spans` both have letters and still measure a literal (review, fourth pass).
+    So the VALUE POSITION has to name a column or table from the instance's own schema, with `count()` /
+    `count(*)` allowed as the one column-free aggregate that is a real signal. No FROM at all → nothing
+    is being measured either.
+    """
+    text = (expr or "").lower()
+    m = re.search(r"\bselect\b(.*?)\bfrom\b", text, re.DOTALL)
+    if not m:
+        return False
+    select_list = m.group(1)
+    if _COUNT_ONLY.search(select_list):
+        return True
+    tables = (schema or {}).get("tables") or {}
+    names = []
+    if isinstance(tables, dict):
+        for t, cols in list(tables.items())[:40]:
+            if isinstance(t, str):
+                names.append(t)
+            if isinstance(cols, (list, tuple)):
+                names.extend(c for c in cols[:40] if isinstance(c, str))
+    return any(_token_present(n, select_list) for n in names)
+
+
+def _is_constant_expr(kind, schema, expr):
     """True when the expression's value is a literal, however real the names around it are."""
     text = (expr or "").strip()
     if not text:
         return True
     if kind == "clickhouse":
-        m = re.search(r"\bselect\b(.*?)\bfrom\b", text, re.IGNORECASE | re.DOTALL)
-        # a select list with no identifier at all is `SELECT 1` / `SELECT 1, 2` — `count()` has letters
-        return bool(m) and not re.search(r"[A-Za-z_]", m.group(1))
+        return not _sql_value_is_measured(schema, text)
     return bool(_CONST_VALUE_FN.match(text))
 
 
@@ -210,12 +244,7 @@ def _mentions_schema_vocabulary(kind, schema, expr):
     if not names:
         return False          # nothing to anchor to → cannot establish relevance
     text = (expr or "").lower()
-    for n in names:
-        if not n:
-            continue
-        if re.search(r"(?<![\w.])" + re.escape(n.lower()) + r"(?![\w.])", text):
-            return True
-    return False
+    return any(_token_present(n, text) for n in names)
 
 
 def _dry_run_check(kind, expr, integration_id, invoke_connector):
@@ -264,7 +293,7 @@ def try_generate_signal_with_status(kind, schema, integration_id, invoke_connect
         expr = _generate_expr(kind, schema, invoke=invoke_llm)
         if not _static_check(kind, expr):
             return None, REJECTED
-        if _is_constant_expr(kind, expr):
+        if _is_constant_expr(kind, schema, expr):
             logging.warning("[signal_catalog_gen] generated expr for integration %s measures a constant; "
                             "rejecting", integration_id)
             return None, REJECTED

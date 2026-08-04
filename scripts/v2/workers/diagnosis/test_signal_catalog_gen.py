@@ -232,9 +232,21 @@ class TestVocabularyGate:
             assert (row, status) == (None, scg.REJECTED), f"{kind} {expr}"
 
     def test_aggregates_over_a_real_table_are_not_constants(self):
-        assert scg._is_constant_expr("clickhouse", "SELECT count() FROM spans") is False
-        assert scg._is_constant_expr("clickhouse", "SELECT quantile(0.9)(duration) FROM spans") is False
-        assert scg._is_constant_expr("prometheus", "rate(up[5m])") is False
+        sch = {"tables": {"spans": ["duration", "ts"]}}
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT count() FROM spans") is False
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT count(*) FROM spans") is False
+        assert scg._is_constant_expr("clickhouse", sch, "SELECT quantile(0.9)(duration) FROM spans") is False
+        assert scg._is_constant_expr("clickhouse", sch,
+                                     "SELECT avg(duration) FROM spans WHERE ts > now()") is False
+        assert scg._is_constant_expr("prometheus", {"metrics": ["up"]}, "rate(up[5m])") is False
+
+    def test_literal_dressed_up_as_a_column_is_still_a_constant(self):
+        # "the select list contains a letter" was the first rule and these bypass it trivially
+        # (review, fourth pass): the VALUE has to name something from the schema.
+        sch = {"tables": {"spans": ["duration", "ts"]}}
+        for expr in ("SELECT 1 FROM spans", "SELECT 1 AS x FROM spans", "SELECT toInt8(1) FROM spans",
+                     "SELECT 1"):
+            assert scg._is_constant_expr("clickhouse", sch, expr) is True, expr
 
     def test_dotted_names_still_match(self):
         assert scg._mentions_schema_vocabulary("prometheus", {"metrics": ["otel.spans"]},
