@@ -1,4 +1,4 @@
-"""Deterministic diagnostic-signal catalog for Prometheus/Mimir datasources.
+"""Deterministic diagnostic-signal catalog for Prometheus/Mimir/Loki/Tempo datasources.
 
 A curated map of ops diagnostic INTENTS → standard PromQL templates (cadvisor / node-exporter /
 kube-state-metrics names). `build_signals(kind, schema)` is PURE — no DB, no boto3, no egress: it
@@ -8,15 +8,16 @@ signal, `ready` (with a runnable query) when every required metric is present, e
 datasource-index time; the diagnosis worker only executes the stored `ready` queries.
 
 The catalog is intentionally datasource-AGNOSTIC except for kind→tool: prometheus→prometheus_query,
-mimir→mimir_query (identical PromQL). Metric names are module constants — never user input — so a
-poisoned schema can only make a signal `unavailable`, never inject into a query.
+mimir→mimir_query (identical PromQL), loki→loki_query_range, tempo→tempo_search. Metric names are
+module constants — never user input — so a poisoned schema can only make a signal `unavailable`,
+never inject into a query.
 
 `CATALOG_VERSION` is mixed into the per-instance schema hash so editing this catalog forces a
 rebuild even when the datasource's metric set is unchanged.
 """
 
-CATALOG_VERSION = "v2"  # bumped 2026-08-04: kind-scoped matchers + clickhouse/loki/tempo/jaeger/
-                         # dynatrace/datadog catalog entries + LLM hybrid fallback (was "v1")
+CATALOG_VERSION = "v3"  # bumped 2026-08-04: kind-scoped matchers + loki/tempo catalog entries +
+                         # LLM hybrid fallback for kinds with zero deterministic entries (was "v2")
 
 # kind → connector tool name (PromQL is identical for both)
 _KIND_TOOL = {
@@ -116,40 +117,6 @@ CATALOG = [
         "threshold": 3, "unit": "count",
     },
     {
-        "key": "clickhouse_slow_queries", "title": "느린 쿼리 상위", "pillar": "performance",
-        "matcher": "table_columns", "kinds": ("clickhouse",), "system_table": True,
-        "required_columns": ["query_duration_ms", "query"],
-        "queries": [{
-            "label": "slow_queries",
-            "expr": ("SELECT query, query_duration_ms, event_time FROM system.query_log "
-                     "WHERE type = 'QueryFinish' ORDER BY query_duration_ms DESC LIMIT 20"),
-        }],
-        "threshold": 1000, "unit": "ms",
-    },
-    {
-        "key": "clickhouse_table_growth", "title": "테이블 크기 상위", "pillar": "cost",
-        "matcher": "table_columns", "kinds": ("clickhouse",), "system_table": True,
-        "required_columns": ["database", "table", "bytes_on_disk"],
-        "queries": [{
-            "label": "table_bytes",
-            "expr": ("SELECT database, table, sum(bytes_on_disk) AS bytes "
-                     "FROM system.parts WHERE active GROUP BY database, table "
-                     "ORDER BY bytes DESC LIMIT 20"),
-        }],
-        "threshold": 0, "unit": "bytes",
-    },
-    {
-        "key": "clickhouse_error_log_rate", "title": "에러 로그 비율", "pillar": "reliability",
-        "matcher": "table_columns", "kinds": ("clickhouse",), "system_table": True,
-        "required_columns": ["level", "message", "event_time"],
-        "queries": [{
-            "label": "error_rate",
-            "expr": ("SELECT count() FROM system.text_log "
-                     "WHERE level = 'Error' AND event_time >= now() - INTERVAL 1 HOUR"),
-        }],
-        "threshold": 0, "unit": "count",
-    },
-    {
         "key": "loki_error_rate", "title": "에러 로그 비율", "pillar": "reliability",
         "matcher": "labels", "kinds": ("loki",),
         "required_labels": ["job"],
@@ -181,43 +148,15 @@ CATALOG = [
     },
     {
         "key": "trace_recent_errors", "title": "최근 에러 트레이스", "pillar": "reliability",
-        "matcher": "tags_or_services", "kinds": ("tempo", "jaeger"),
-        "queries": [{"label": "error_traces", "expr": '{status=error}'}],
+        "matcher": "tags_or_services", "kinds": ("tempo",),
+        "queries": [{"label": "error_traces", "expr": '{ status = error }'}],
         "threshold": 0, "unit": "count",
     },
     {
         "key": "trace_slow_requests", "title": "느린 요청 상위", "pillar": "performance",
-        "matcher": "tags_or_services", "kinds": ("tempo", "jaeger"),
-        "queries": [{"label": "slow_traces", "expr": '{duration>500ms}'}],
+        "matcher": "tags_or_services", "kinds": ("tempo",),
+        "queries": [{"label": "slow_traces", "expr": '{ duration > 500ms }'}],
         "threshold": 500, "unit": "ms",
-    },
-    {
-        "key": "dynatrace_host_cpu", "title": "호스트 CPU 사용률", "pillar": "performance",
-        "matcher": "metrics", "kinds": ("dynatrace",),
-        "required_metrics": ["builtin:host.cpu.usage"],
-        "queries": [{"label": "cpu_usage", "expr": "builtin:host.cpu.usage:avg"}],
-        "threshold": 85, "unit": "percent",
-    },
-    {
-        "key": "dynatrace_host_mem", "title": "호스트 메모리 사용률", "pillar": "reliability",
-        "matcher": "metrics", "kinds": ("dynatrace",),
-        "required_metrics": ["builtin:host.mem.usage"],
-        "queries": [{"label": "mem_usage", "expr": "builtin:host.mem.usage:avg"}],
-        "threshold": 85, "unit": "percent",
-    },
-    {
-        "key": "datadog_host_cpu", "title": "호스트 CPU 사용률", "pillar": "performance",
-        "matcher": "metrics", "kinds": ("datadog",),
-        "required_metrics": ["system.cpu.user"],
-        "queries": [{"label": "cpu_user", "expr": "avg:system.cpu.user{*}"}],
-        "threshold": 85, "unit": "percent",
-    },
-    {
-        "key": "datadog_host_mem", "title": "호스트 메모리 사용률", "pillar": "reliability",
-        "matcher": "metrics", "kinds": ("datadog",),
-        "required_metrics": ["system.mem.used"],
-        "queries": [{"label": "mem_used", "expr": "avg:system.mem.used{*}"}],
-        "threshold": 0, "unit": "bytes",
     },
 ]
 
@@ -232,18 +171,6 @@ def _missing_for(sig, schema):
         if isinstance(schema, dict):
             have = {m for m in (schema.get("metrics") or []) if isinstance(m, str)}
         return [m for m in sig["required_metrics"] if m not in have]
-    if matcher == "table_columns":
-        if sig.get("system_table"):
-            return []  # ClickHouse built-in system tables are always present — no schema check needed
-        tables = (schema or {}).get("tables") or [] if isinstance(schema, dict) else []
-        required = set(sig["required_columns"])
-        for t in tables:
-            if not isinstance(t, dict):
-                continue
-            cols = {c.get("name") for c in (t.get("columns") or []) if isinstance(c, dict)}
-            if required.issubset(cols):
-                return []
-        return list(required)
     if matcher == "labels":
         have = set()
         if isinstance(schema, dict):

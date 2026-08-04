@@ -10,6 +10,12 @@ const SIGNALS = {
                   missingMetrics: ['node_filesystem_avail_bytes'] }],
 };
 
+const LOKI_SIGNALS = {
+  ready: [{ signalKey: 'loki_error_rate', title: '에러 로그 비율',
+            query: { tool: 'loki_query_range', queries: [{ label: 'error_rate', expr: 'sum by(job) (count_over_time({job=~".+"} |~ "(?i)error|exception|fatal" [5m]))' }] } }],
+  unavailable: [],
+};
+
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => SIGNALS })));
 });
@@ -30,9 +36,13 @@ describe('DiagSignalChips', () => {
   });
 
   it('renders chips for a non-prom/mimir kind (loki) now that it has its own catalog', async () => {
-    render(<DiagSignalChips instanceId={7} kind="loki" onPick={vi.fn()} />);
-    await waitFor(() => screen.getByText('OOM Kill')); // SIGNALS fixture is kind-agnostic in this test file
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => LOKI_SIGNALS })));
+    const onPick = vi.fn();
+    render(<DiagSignalChips instanceId={7} kind="loki" onPick={onPick} />);
+    await waitFor(() => screen.getByText('에러 로그 비율'));
     expect((global.fetch as any)).toHaveBeenCalledWith('/api/datasources/7/diag-signals');
+    fireEvent.click(screen.getByText('에러 로그 비율'));
+    expect(onPick).toHaveBeenCalledWith('sum by(job) (count_over_time({job=~".+"} |~ "(?i)error|exception|fatal" [5m]))');
   });
 
   it('renders nothing without an instanceId', async () => {

@@ -53,8 +53,14 @@ describe('enqueueDatasourceIndex', () => {
     await enqueueDatasourceIndex(5, 'prometheus');
     expect(enqueueJob).toHaveBeenCalledWith('datasource_index', { integration_id: 5 });
   });
-  it('skips non-prom/mimir kinds (v1 scope)', async () => {
-    await enqueueDatasourceIndex(5, 'loki');
+  it.each(['loki', 'tempo', 'clickhouse'])('enqueues for %s (wired into the diag-signal pipeline)', async (kind) => {
+    process.env.DATASOURCE_DIAGNOSIS_ENABLED = 'true';
+    await enqueueDatasourceIndex(5, kind);
+    expect(enqueueJob).toHaveBeenCalledWith('datasource_index', { integration_id: 5 });
+  });
+  it('skips kinds not wired into the diag-signal pipeline (jaeger)', async () => {
+    process.env.DATASOURCE_DIAGNOSIS_ENABLED = 'true';
+    await enqueueDatasourceIndex(5, 'jaeger');
     expect(enqueueJob).not.toHaveBeenCalled();
   });
   it('swallows enqueue failure (never blocks the caller)', async () => {

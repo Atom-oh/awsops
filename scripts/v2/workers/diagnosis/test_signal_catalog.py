@@ -126,18 +126,13 @@ class TestKindScoping:
         assert "cpu_saturation" not in keys
 
 
-class TestClickhouseSystemTableSignals:
-    def test_system_table_signals_always_ready_for_clickhouse(self):
-        rows = sc.build_signals("clickhouse", {"tables": []})  # empty user-table list
-        by = _by_key(rows)
-        for key in ("clickhouse_slow_queries", "clickhouse_table_growth", "clickhouse_error_log_rate"):
-            assert by[key]["status"] == "ready", f"{key} should be ready (system table, schema-independent)"
-            assert by[key]["query"]["tool"] == "clickhouse_query"
-
-    def test_clickhouse_signals_absent_for_other_kinds(self):
-        rows = sc.build_signals("prometheus", {"metrics": ALL_METRICS})
-        keys = {r["signal_key"] for r in rows}
-        assert "clickhouse_slow_queries" not in keys
+class TestClickhouseHasNoDeterministicSignals:
+    def test_clickhouse_yields_zero_catalog_rows(self):
+        # the 3 system.* signals were dropped (Fix 1): they always 400 at the connector's
+        # read-only guard (SYSTEM keyword rejected) — clickhouse now falls through to the LLM
+        # hybrid fallback instead of a deterministic catalog row.
+        rows = sc.build_signals("clickhouse", {"tables": []})
+        assert rows == []
 
 
 class TestLokiLabelSignals:
@@ -163,26 +158,21 @@ class TestTraceAndApmSignals:
         assert by["trace_recent_errors"]["status"] == "ready"
         assert by["trace_recent_errors"]["query"]["tool"] == "tempo_search"
 
-    def test_jaeger_signals_ready_whenever_introspected(self):
+    def test_trace_expr_uses_spaced_traceql_house_style(self):
+        # matches sources.py's '{ status = error }' / ExplorePanel's '{ duration > 500ms }' style
+        by = _by_key(sc.build_signals("tempo", {"tags": ["service.name"]}))
+        assert by["trace_recent_errors"]["query"]["queries"][0]["expr"] == '{ status = error }'
+        assert by["trace_slow_requests"]["query"]["queries"][0]["expr"] == '{ duration > 500ms }'
+
+    def test_jaeger_gets_zero_trace_signals(self):
+        # jaeger's query grammar (service=<name>, no TraceQL) is incompatible with these entries —
+        # dropped from `kinds` entirely (Fix 2); jaeger relies on the LLM hybrid fallback instead.
         rows = sc.build_signals("jaeger", {"services": ["frontend"]})
-        by = _by_key(rows)
-        assert by["trace_slow_requests"]["status"] == "ready"
-        assert by["trace_slow_requests"]["query"]["tool"] == "jaeger_search"
+        assert rows == []
 
-    def test_dynatrace_ready_when_metric_present(self):
-        rows = sc.build_signals("dynatrace", {"metrics": ["builtin:host.cpu.usage"]})
-        by = _by_key(rows)
-        assert by["dynatrace_host_cpu"]["status"] == "ready"
-        assert by["dynatrace_host_mem"]["status"] == "unavailable"
-
-    def test_datadog_ready_when_metric_present(self):
-        rows = sc.build_signals("datadog", {"metrics": ["system.cpu.user"]})
-        by = _by_key(rows)
-        assert by["datadog_host_cpu"]["status"] == "ready"
-        assert by["datadog_host_cpu"]["query"]["tool"] == "datadog_query"
-
-    def test_clickhouse_system_signals_still_use_clickhouse_query_tool(self):
-        # regression: widening _KIND_TOOL must not change Task 3's tool resolution
-        rows = sc.build_signals("clickhouse", {"tables": []})
-        by = _by_key(rows)
-        assert by["clickhouse_slow_queries"]["query"]["tool"] == "clickhouse_query"
+    def test_dynatrace_and_datadog_have_no_catalog_entries(self):
+        # dynatrace/datadog were never wired into the production dispatch pipeline
+        # (datasource_index_dispatcher.py / workers.tf only list prometheus/mimir/loki/tempo/
+        # clickhouse) — their entries were dead code and were dropped (Fix 3).
+        assert sc.build_signals("dynatrace", {"metrics": ["builtin:host.cpu.usage"]}) == []
+        assert sc.build_signals("datadog", {"metrics": ["system.cpu.user"]}) == []

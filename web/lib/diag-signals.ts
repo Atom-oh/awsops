@@ -43,11 +43,15 @@ export async function getDiagSignals(integrationId: number): Promise<DiagSignals
   return { ready, unavailable };
 }
 
-/** Ask the worker to (re)build signals for one instance (after add / schema refresh). Prom/Mimir only;
+// kinds actually wired into the production diag-signal pipeline (datasource_index_dispatcher.py's
+// _LIST_SQL + workers.tf's ds_connector_arns) — other kinds have no worker IAM grant to invoke.
+const DIAG_SIGNAL_KINDS = new Set(['prometheus', 'mimir', 'loki', 'tempo', 'clickhouse']);
+
+/** Ask the worker to (re)build signals for one instance (after add / schema refresh).
  *  best-effort — a worker-queue hiccup must never fail the datasource write that triggered it. */
 export async function enqueueDatasourceIndex(integrationId: number, kind?: string): Promise<void> {
   if (process.env.DATASOURCE_DIAGNOSIS_ENABLED !== 'true') return;
-  if (kind && kind !== 'prometheus' && kind !== 'mimir') return;  // v1 scope
+  if (kind && !DIAG_SIGNAL_KINDS.has(kind)) return;  // kinds wired into the diag-signal production pipeline
   try {
     await enqueueJob('datasource_index', { integration_id: integrationId });
   } catch {
