@@ -53,12 +53,17 @@ V2_POOL=$(terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool
 # 주소는 **셸 문법을 거치지 않고** 읽는다. 이 런북의 위협모델이 "명부에 없는 self-registered 계정"이라
 # 주소는 공격자가 고른 값일 수 있고, `EMAIL='<여기>'` 처럼 따옴표 안에 붙여넣게 하면 그 붙여넣기 자체가
 # 주입 지점이 된다 — `';touch /tmp/pwned;'` 를 넣으면 실제로 실행된다(리뷰 지적, 재현 확인).
-# `read -r` 은 입력을 한 줄의 리터럴로 받으므로 셸이 그 내용을 해석하지 않는다.
+# `read -r` 은 입력을 한 줄의 리터럴로 받으므로 셸이 그 내용을 해석하지 않는다. 그리고 **`< /dev/tty` 가
+# 필수다**: 이 블록은 통째로 붙여넣는 용도이고, 그냥 `read` 면 붙여넣은 **다음 줄을 주소로 삼아버린다**
+# (재현 확인 — EMAIL 에 스크립트 한 줄이 들어가고 나머지가 그대로 실행된다). 비대화형으로 돌릴 때는
+# EMAIL 을 미리 export 해두면 read 를 건너뛴다.
 # Read the address WITHOUT shell syntax. This runbook's threat model is "self-registered accounts nobody
 # recognises", so the address may be attacker-chosen — and telling an operator to paste it inside quotes
 # (`EMAIL='<here>'`) makes that paste the injection point: `';touch /tmp/pwned;'` really does run
-# (review finding, reproduced). `read -r` takes the line literally; the shell never parses it.
-printf 'departing address: '; IFS= read -r EMAIL
+# (reproduced). `read -r` takes the line literally; the shell never parses it. `< /dev/tty` is required
+# too: this block is meant to be pasted whole, and a bare `read` would consume the pasted block's OWN
+# NEXT LINE as the address (also reproduced). Export EMAIL beforehand to skip the prompt non-interactively.
+[ -n "${EMAIL:-}" ] || { printf 'departing address: '; IFS= read -r EMAIL < /dev/tty; }
 : "${EMAIL:?no address entered}"
 
 # 1) pool 전체를 명부와 대조 — sub 도 함께 뽑는다(아래 단계들이 요구한다)
@@ -126,9 +131,11 @@ aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value -
 #    타입은 StringList 다(workload.tf). --type String 으로 덮어쓰면 AWS 가 타입 변경을 거부한다.
 #    The parameter is a StringList (workload.tf); passing --type String is rejected — AWS will not
 #    change an existing parameter's type on overwrite.
-# 새 목록도 붙여넣기이므로 같은 방식으로 읽는다(주소 하나가 적대적일 수 있다).
-# The new list is a paste too, so read it the same way — one of those addresses may be hostile.
-printf 'remaining admin emails (comma separated): '; IFS= read -r ADMIN_LIST
+# 새 목록도 붙여넣기이므로 같은 방식으로 읽는다(주소 하나가 적대적일 수 있다). 역시 `< /dev/tty`.
+# The new list is a paste too, so read it the same way — one of those addresses may be hostile. `< /dev/tty`
+# for the same reason as above.
+[ -n "${ADMIN_LIST:-}" ] || { printf 'remaining admin emails (comma separated): '
+  IFS= read -r ADMIN_LIST < /dev/tty; }
 : "${ADMIN_LIST:?nothing entered — write a single space to mean cognito:groups-only}"
 aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type StringList --overwrite \
   --value "$ADMIN_LIST"                            # 반영까지 최대 5분 (캐시 TTL) / up to 5 min cache TTL
