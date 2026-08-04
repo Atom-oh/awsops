@@ -31,6 +31,11 @@ name, or a roster audit finds users in the pool nobody recognises.
 
 ## 확인 / Verification
 ```bash
+# 환경변수는 web task def 와 같은 값 / same values the web task definition uses
+SSM_ADMIN_EMAILS_PARAM=${SSM_ADMIN_EMAILS_PARAM:-/ops/awsops-v2/admin_emails}
+```
+
+```bash
 V2_POOL=$(terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)
 
 # 1) pool 전체를 명부와 대조 / reconcile the whole pool against your roster
@@ -54,13 +59,46 @@ psql -c "UPDATE report_schedules SET enabled = false, updated_at = NOW() WHERE u
 #    Disable the account (reversible, and it closes the takeover path immediately)
 aws cognito-idp admin-disable-user --user-pool-id "$V2_POOL" --username "<email>"
 
-# 3) 유예기간 후 삭제 / delete after your grace period
+# 3) 이미 발급된 세션을 끊는다 — admin-disable-user 는 새 로그인만 막고, 손에 든 awsops_token
+#    쿠키는 최대 12h 그대로 유효하다. 이 앱은 verifyUser() 가 session_revocations 를 보므로,
+#    그 sub 의 cutoff 를 지금으로 올리면 기존 쿠키가 즉시 무효가 된다(캐시 TTL 5초).
+#    Cut the session that already exists: admin-disable-user only blocks NEW logins, and the
+#    awsops_token cookie in their hand stays valid for up to 12h — Cognito cannot revoke an id_token.
+#    verifyUser() consults session_revocations, so advancing this sub's cutoff to now invalidates
+#    every cookie issued before it (5s cache TTL).
+psql -c "INSERT INTO session_revocations (user_sub, revoked_at) VALUES ('<sub>', NOW())
+         ON CONFLICT (user_sub) DO UPDATE SET revoked_at = NOW()
+         WHERE session_revocations.revoked_at < NOW()"
+
+# 4) admin 권한 회수 — SSM allowlist 는 EMAIL 로 매칭하므로 계정을 지워도 항목이 남는다.
+#    주소가 재할당되고 새 보유자가 그 주소를 verified 로 만들면 그 사람이 admin 이 된다.
+#    Revoke standing authority: the SSM admin allowlist matches on EMAIL, so the entry outlives the
+#    account. If the address is reassigned and the new holder gets it verified, they become admin.
+aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value --output text
+aws ssm put-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --type String --overwrite \
+  --value "<remaining,comma,separated,emails>"     # 반영까지 최대 5분 (캐시 TTL) / up to 5 min cache TTL
+# admins 그룹에 있었다면 / if they were in the group:
+aws cognito-idp admin-remove-user-from-group --user-pool-id "$V2_POOL" \
+  --username "<email>" --group-name "${ADMIN_GROUP:-admins}"
+
+# 5) 유예기간 후 삭제 / delete after your grace period
 aws cognito-idp admin-delete-user --user-pool-id "$V2_POOL" --username "<email>"
 ```
 
 **순서가 중요하다**: 2번만 하고 1번을 빠뜨리면 스케줄이 계속 진단을 돌려 Bedrock 비용이 나가고, 그
 결과물은 소유자가 없어 아무에게도 보이지 않는다. **Order matters**: disable the account without disabling
 the schedule and the diagnosis keeps running (billed Bedrock) while its output belongs to nobody.
+
+**2번만으로는 접근이 끊기지 않는다** — 이것이 이 절차에서 가장 놓치기 쉬운 지점이다. `admin-disable-user`
+는 *새* 인증만 막고, id_token 은 서버가 발급 후 취소할 수 없는 자기완결 토큰이다. 3번(세션 revocation)을
+하지 않으면 그 사람은 **최대 12시간 더 로그인 상태로 남는다.** 4번도 마찬가지로 잊기 쉽다: allowlist 는
+계정이 아니라 **주소**를 신뢰하므로, 항목을 남겨두면 그 주소를 나중에 쥔 사람이 admin 을 물려받는다.
+
+**Step 2 alone does not cut access** — the easiest thing to miss here. `admin-disable-user` blocks only
+*new* authentication, and an id_token is self-contained: nothing server-side can retract it once issued.
+Skip step 3 and the person stays logged in for **up to 12 more hours**. Step 4 is equally easy to forget:
+the allowlist trusts an ADDRESS, not an account, so an entry left behind hands admin to whoever holds that
+address next.
 
 MFA 가 `OFF` 인 현재 상태에서는 **비활성화/삭제가 이 경로의 유일한 확실한 차단**이다. 그리고 `legacy_email_owner_match=true` 인 동안에는 주소가 재할당되면
 그 주소로 기록된 legacy 행이 새 보유자와 매칭된다. 컷오버(ADR-009) 이후에는 sub 만 매칭하므로 legacy 행
