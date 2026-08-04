@@ -62,10 +62,12 @@ _PROMPT_TEMPLATE = (
 def _vocab_names(schema, key):
     """Names from the instance's schema for this kind's vocabulary key.
 
-    Handles the DICT shape too: clickhouse's `tables` is {table: [columns]}, and slicing a dict raised
-    TypeError — inside the caller's try/except that surfaced as a TRANSIENT generation failure on every
-    single run, so clickhouse could never produce a generated signal and retried forever (found while
-    fixing the review's unbounded-retry finding). Table names come first, then their columns.
+    Both shapes carry columns, and BOTH must yield them. The dict shape ({table: [columns]}) is what a
+    cached schema can look like; the LIST shape ([{name, columns:[...]}]) is what the ClickHouse connector
+    actually returns, and it used to contribute table names only — so the model was asked to write SQL
+    against tables whose columns it had never been told, invented plausible ones, and the relevance gate
+    rejected the result. ClickHouse generation could effectively never succeed (review MAJOR, codex L2+L4).
+    Table names come first, then their columns.
     """
     items = (schema or {}).get(key) or []
     names = []
@@ -81,9 +83,15 @@ def _vocab_names(schema, key):
     for x in items[:40]:
         if isinstance(x, str):
             names.append(x)
-        elif isinstance(x, dict) and isinstance(x.get("name"), str):
-            names.append(x["name"])
-    return names
+        elif isinstance(x, dict):
+            if isinstance(x.get("name"), str):
+                names.append(x["name"])
+            for col in (x.get("columns") or [])[:20]:
+                if isinstance(col, str):
+                    names.append(col)
+                elif isinstance(col, dict) and isinstance(col.get("name"), str):
+                    names.append(col["name"])
+    return names[:60]
 
 
 def _bedrock_invoke(prompt):

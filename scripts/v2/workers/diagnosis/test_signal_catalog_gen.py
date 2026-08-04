@@ -456,6 +456,18 @@ class TestClickhouseGenerationReachesGenerated:
                                       {"name": "ServiceName", "type": "String"},
                                       {"name": "Timestamp", "type": "DateTime"}]}]}
 
+    def test_the_prompt_names_columns_not_just_tables(self):
+        """The LIST shape is what the ClickHouse connector actually returns, and it used to contribute table
+        names only — the model was asked for SQL against tables whose columns it had never seen, invented
+        plausible ones, and the relevance gate rejected them (review MAJOR, codex L2+L4)."""
+        assert scg._vocab_names(self.SCHEMA, "tables") == ["otel_traces", "Duration", "ServiceName",
+                                                           "Timestamp"]
+        seen = {}
+        scg._generate_expr("clickhouse", self.SCHEMA,
+                           invoke=lambda prompt: seen.setdefault("p", prompt) and "SELECT 1")
+        for name in ("otel_traces", "Duration", "ServiceName"):
+            assert name in seen["p"], name
+
     def test_a_realistic_clickhouse_query_is_generated(self, monkeypatch):
         monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
         expr = ("SELECT avg(Duration) AS avg_ns FROM otel_traces "
