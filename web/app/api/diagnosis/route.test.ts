@@ -20,6 +20,8 @@ vi.mock('@/lib/diagnosis', () => ({
   markReportFailed: vi.fn(async () => undefined),
   softDeleteReport: vi.fn(async () => undefined),
   getReport: vi.fn(async () => ({ id: 7 })),
+  // real class: the route narrows on `instanceof`, so a plain object would take the rethrow path
+  ReportJobAlreadyLinkedError: class ReportJobAlreadyLinkedError extends Error {},
 }));
 vi.mock('@/lib/admin', () => ({ isAdmin: vi.fn(async () => false) }));
 vi.mock('@/lib/jobs', () => ({
@@ -32,6 +34,7 @@ import {
   listReports,
   createReport,
   linkReportJob,
+  ReportJobAlreadyLinkedError,
   reportForIdempotencyKey,
   markReportFailed,
   softDeleteReport,
@@ -216,6 +219,49 @@ describe('POST /api/diagnosis — idempotency conflict must not strand the secon
     expect(body.report_id).toBe(42);
     expect(linkReportJob).toHaveBeenCalledWith(42, 'j1');
     expect(softDeleteReport).not.toHaveBeenCalled();
+  });
+
+  it('treats a STRING ledger report_id the same as a number (node-pg int8 -> string)', async () => {
+    // The payload is JSON out of Aurora and node-pg hands int8 back as a string, so rows written by
+    // any earlier deploy carry report_id: "7". `typeof === 'number'` rejected those, so the loser
+    // skipped the arbiter entirely and linked its own report to the winner's job — silently sharing a
+    // job before the partial unique index, a 500 plus a permanent `running` orphan after it
+    // (PR #203 review MAJOR).
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: '7' } });
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    expect(await res.json()).toMatchObject({ report_id: 7, deduped: true });
+    expect(softDeleteReport).toHaveBeenCalledWith(42);
+    expect(linkReportJob).not.toHaveBeenCalled();
+  });
+
+  it('ignores a non-numeric ledger report_id string rather than reading it as an id', async () => {
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 'abc' } });
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    expect((await res.json()).report_id).toBe(42);
+    expect(softDeleteReport).not.toHaveBeenCalled();
+  });
+
+  it('answers 202 deduped when the link loses the one-report-per-job race', async () => {
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 42 } });
+    (linkReportJob as any).mockRejectedValueOnce(new ReportJobAlreadyLinkedError('j1'));
+    (reportForIdempotencyKey as any).mockResolvedValueOnce(null).mockResolvedValueOnce(9);
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    expect(res.status).toBe(202);
+    expect(await res.json()).toMatchObject({ report_id: 9, deduped: true });
+    expect(softDeleteReport).toHaveBeenCalledWith(42);
+  });
+
+  it('answers 409 when the link loses and the winner cannot be found', async () => {
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 42 } });
+    (linkReportJob as any).mockRejectedValueOnce(new ReportJobAlreadyLinkedError('j1'));
+    (reportForIdempotencyKey as any).mockResolvedValue(null);
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    expect(res.status).toBe(409);
+    expect(softDeleteReport).toHaveBeenCalledWith(42);
   });
 
   it('keeps the idempotency key on identity(), not the ownership key', async () => {

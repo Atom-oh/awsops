@@ -105,12 +105,23 @@ const TARGETS = [
 // rows means the diagnosis already runs twice; only the legacy one enabled means the person's real
 // schedule is still email-keyed and its output goes invisible at flag-off. Reporting just one flag
 // would leave the operator guessing which case they are in.
+// Two ways a rewrite can land badly, so both are checked here:
+//   same type  -> UNIQUE (user_sub, schedule_type) makes the UPDATE impossible (23505).
+//   any type, both enabled -> allowed by the constraint but it breaks the app's invariant. base
+//     web/lib/diagnosis-schedule.ts upsertSchedule() disables every OTHER frequency for a user
+//     precisely so exactly one schedule is ever active; transferring a legacy weekly (enabled) onto a
+//     sub that already has an enabled monthly leaves two active rows, so the dispatcher (WHERE
+//     enabled) fires both — a doubled diagnosis and doubled Bedrock spend — while readSchedule()'s
+//     LIMIT 1 hides one of them in the UI. No constraint fires, so nothing rolls back
+//     (PR #203 review MAJOR).
 async function scheduleConflicts(client, ids, from, to) {
   const { rows } = await client.query(
     `SELECT l.id::text AS id, l.schedule_type, l.enabled AS legacy_enabled,
-            s.id::text AS other_id, s.enabled AS other_enabled
+            s.id::text AS other_id, s.enabled AS other_enabled, s.schedule_type AS other_type,
+            (s.schedule_type = l.schedule_type) AS same_type
        FROM report_schedules l
-       JOIN report_schedules s ON s.user_sub = $3 AND s.schedule_type = l.schedule_type
+       JOIN report_schedules s ON s.user_sub = $3
+        AND (s.schedule_type = l.schedule_type OR (s.enabled AND l.enabled))
       WHERE l.id::text = ANY($1::text[]) AND l.user_sub = $2`,
     [ids, from, to]);
   return rows;
@@ -293,6 +304,14 @@ async function plan(client) {
   console.log(`\nplan written: ${PLAN_PATH} (${entries.length} entries, ${entries.reduce((a, e) => a + e.rows, 0)} rows) — NOTHING CHANGED`);
   console.log('Review every entry. Delete the ones you cannot vouch for, then:');
   console.log(`  node scripts/v2/backfill-owner-sub.mjs --apply ${PLAN_PATH}`);
+  console.log('');
+  console.log('QUIESCE THE SCHEDULE DISPATCHER FIRST. It claims report_schedules rows, holds the owner');
+  console.log('value in memory, and inserts diagnosis_reports/worker_jobs afterwards — so a call that is');
+  console.log('in flight during the apply can write a NEW email-keyed row AFTER the final "0 legacy rows');
+  console.log('left" check, and flipping the flag then hides that row from its owner. It runs hourly, so');
+  console.log('the window is narrow but real:');
+  console.log('  aws events disable-rule --name awsops-v2-schedule-dispatcher   # before --apply');
+  console.log('  aws events enable-rule  --name awsops-v2-schedule-dispatcher   # after, once clean');
   // Two causes, reported separately because they need different handling — and because telling an
   // operator a live colleague is "gone" would be wrong.
   if (unverified.length > 0) {
@@ -314,7 +333,7 @@ async function plan(client) {
     console.log('accounts in the pool first.');
   }
   if (conflicts.length > 0) {
-    console.log('\nNOT IN THE PLAN — the target sub ALREADY has a schedule of the same type:');
+    console.log('\nNOT IN THE PLAN — the target sub already has a schedule that collides:');
     for (const g of conflicts) {
       for (const c of g.clash) {
         // Four cases, not three: both-disabled fell through to the sub-keyed-only branch and was
@@ -323,7 +342,11 @@ async function plan(client) {
         // row is disposable: both rows still carry schedule_type/config a user can re-enable, and
         // this tool's contract is to infer nothing about intent (second stop-gate on the same lines).
         const why = c.legacy_enabled && c.other_enabled
-          ? 'BOTH ENABLED — this diagnosis is ALREADY running twice'
+          ? (c.same_type
+            ? 'BOTH ENABLED — this diagnosis is ALREADY running twice'
+            : 'BOTH ENABLED on different frequencies — the app keeps exactly one schedule active per '
+              + 'user (upsertSchedule disables the others), so moving this row onto that sub would '
+              + 'leave two firing and hide one in the UI')
           : c.legacy_enabled
             ? 'only the legacy row is enabled — this person\'s live schedule is still email-keyed, and '
               + 'at flag-off its reports become invisible to them'
@@ -332,13 +355,16 @@ async function plan(client) {
                 + 'is already sub-keyed; the legacy row\'s config is still there if it was the one they meant'
               : 'NEITHER is enabled — nothing is firing, so this one is not urgent; both rows still hold '
                 + 'a config that can be re-enabled, so which survives is still a decision';
-        console.log(`  type=${c.schedule_type}: legacy id=${c.id} (${g.owner}, enabled=${c.legacy_enabled})`
-          + ` vs id=${c.other_id} (${g.to}, enabled=${c.other_enabled})`);
+        console.log(`  legacy id=${c.id} (${g.owner}, type=${c.schedule_type}, enabled=${c.legacy_enabled})`
+          + ` vs id=${c.other_id} (${g.to}, type=${c.other_type}, enabled=${c.other_enabled})`
+          + `${c.same_type ? '  [same type — UNIQUE would reject the rewrite]' : '  [different type — both would be ACTIVE]'}`);
         console.log(`    -> ${why}`);
       }
     }
-    console.log('UNIQUE (user_sub, schedule_type) makes the rewrite impossible without merging, and the');
-    console.log('merge is a decision this tool will not make. Note that leaving it alone is NOT neutral:');
+    console.log('Same type: UNIQUE (user_sub, schedule_type) makes the rewrite impossible. Different type');
+    console.log('with both enabled: the constraint allows it, but the app keeps one active schedule per');
+    console.log('user, so the result would be two firing at once. Either way the merge is a decision this');
+    console.log('tool will not make. Note that leaving it alone is NOT neutral:');
     console.log('the dispatcher runs every enabled row regardless of the flag, so an enabled legacy row');
     console.log('keeps firing and keeps writing email-keyed reports. Compare the two configs, keep the');
     console.log('one that reflects what the user wants, remove the other, then re-plan. The address\'s');
@@ -541,6 +567,8 @@ async function apply(client) {
   }
   for (const line of applied) console.log(line);
   console.log(`\nrewrote ${total} rows (one transaction, committed).`);
+  console.log('If you disabled awsops-v2-schedule-dispatcher for this apply, re-enable it AFTER the');
+  console.log('residual check below reads 0:  aws events enable-rule --name awsops-v2-schedule-dispatcher');
 
   // The remaining-rows check is a REPORT, not part of the rewrite. Letting it throw would reach
   // main()'s catch -> die() -> exit 1, which reads as "the apply failed" for a run that committed

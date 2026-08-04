@@ -55,7 +55,7 @@ v2에 없는 사용자는 아래로 생성한다. **주의**: `admin-create-user
 - 그 사람이 **지금도** 그 mailbox 를 보유하는가 (퇴사자 주소 재할당이 이 PR 이 막는 위협모델이다)
 - 그 주소가 SSM admin allowlist 에 있다면, 그 사람에게 admin 을 주는 것이 맞는가
 
-확인되지 않는 주소는 **`email_verified` 없이 생성한다** — fail-closed 다. 그 사용자는 로그인은 되지만 email claim 이 없어 admin 판정과 legacy 행 매칭에서 빠지고, `make backfill-owner-sub` 계획에도 "unverified" 로 남아 눈에 보인다. 확인이 끝난 뒤 개별로 `admin-update-user-attributes --user-attributes Name=email_verified,Value=true` 로 올린다. (`admin-create-user`/`admin-update-user-attributes` 는 client 의 `write_attributes` 제약을 받지 않으므로 여기서 설정 가능하다 — 사용자 자신은 바꿀 수 없다.) 아래 명령의 `email_verified` 부분은 위 확인을 통과한 주소에만 붙인다:
+확인되지 않는 주소는 **`email_verified` 없이 생성한다** — fail-closed 다. 그 사용자는 로그인은 되지만 email claim 이 없어 admin 판정과 legacy 행 매칭에서 빠지고, `make backfill-owner-sub` 계획에도 "unverified" 로 남아 눈에 보인다. 확인이 끝난 뒤 개별로 `admin-update-user-attributes --user-attributes Name=email_verified,Value=true` 로 올린다. (`admin-create-user`/`admin-update-user-attributes` 는 client 의 `write_attributes` 제약을 받지 않으므로 여기서 설정 가능하다 — 사용자 자신은 바꿀 수 없다.) 아래 명령의 `email_verified` 부분은 위 확인을 통과한 주소에만 붙인다. **효력은 다음 로그인부터다** — id_token 이 12h 유효하므로 방금 verified 로 올린 사용자도 재로그인 전까지는 email claim 이 없고, 반대로 회수한 경우에도 기존 토큰은 최대 12h 동안 남는다(즉시 필요하면 재인증을 요구한다):
 
 **`email_verified` is this procedure's decision point** (PR #203). `verifyUser()` adopts the token's
 `email` claim only when `email_verified` is true, so setting this flag is **not a verification — it is
@@ -76,7 +76,9 @@ Promote per user afterwards with `admin-update-user-attributes
 --user-attributes Name=email_verified,Value=true`. (`admin-create-user` and
 `admin-update-user-attributes` are not bound by the client's `write_attributes`, so they can set it —
 the user themselves cannot.) Add the `email_verified` part of the command below only for addresses that
-passed those checks:
+passed those checks. **It takes effect at their next login** — an id_token is valid for 12h, so a user
+you just verified has no email claim until they sign in again, and a revocation likewise leaves the old
+token usable for up to 12h (force re-authentication if it must be immediate):
 
 ```bash
 aws cognito-idp admin-create-user --user-pool-id "$V2_POOL" --username <email> \

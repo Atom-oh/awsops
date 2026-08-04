@@ -74,6 +74,8 @@ The cutoff lookup goes through a **5-second per-sub in-process cache** (`web/lib
 
 **개정 (PR #203):** `verifyUser()` 는 이제 **`email_verified === true` 일 때만** 토큰의 `email` claim 을 채택한다(unverified 주소는 `undefined` 로 떨어진다). Cognito 는 기본적으로 사용자가 자기 email 을 바꿀 수 있게 했으므로(이 PR 이 client `write_attributes` 축소 + `allow_admin_create_user_only` 로 그 경로를 닫기 전까지) unverified claim 을 신뢰하면 email 기반 소유권·admin 판정을 self-service 로 통과할 수 있었다. 따라서 **SSM allowlist 판정도 verified email 에만 적용된다** — allowlist 에 있는 주소가 해당 계정에서 verified 가 아니면 그 사용자는 admin 이 아니다(fail-closed 방향이지만, 배포 시 allowlist 대상들의 verified 상태를 먼저 확인해야 lockout 을 피한다). user pool client 의 `write_attributes` 에서도 `email`·`email_verified` 를 제거했다.
 
+**효력 시점: 신규 토큰부터다.** `verifyUser()` 는 토큰 안의 claim 만 본다. id_token 유효기간이 12h 이므로 배포 **이전에** 발급된 토큰(`email_verified: true` + 그 당시 email)은 최대 12h 동안 계속 legacy 소유권 매칭을 통과한다 — 컨트롤을 켠 그 순간부터 닫히는 게 아니다. 반대 방향도 있다: 배포 직후 verified 로 올려준 admin 은 **재로그인 전까지 admin 이 아니다**(옛 토큰에 `email_verified` 가 없거나 false). 따라서 (a) 이 변경이 즉시 유효해야 한다면 강제 재인증(쿠키 무효화)을 함께 하고, (b) 아니라면 12h 가 지나기 전에는 "닫혔다"고 간주하지 않는다.
+
 Admin enforcement is server-side (UI hiding is cosmetic, not the enforcement boundary). Every mutating route extracts identity from the verified ID token and re-checks admin status. A user is admin if they are in the **Cognito `ADMIN_GROUP`** (`cognito:groups` claim) **OR** their email is in an **SSM-parameter allowlist** (`SSM_ADMIN_EMAILS_PARAM`, comma-separated, 5-min cache) — `web/lib/admin.ts`. The check is **fail-closed**. SSM is the configuration source of truth.
 
 **Amended (PR #203):** `verifyUser()` now adopts the token's `email` claim **only when
@@ -85,6 +87,14 @@ the allowlist that is not verified on its account does not grant admin. That is 
 direction, but check the verified state of every allowlisted address before deploying, or those
 admins are locked out. The pool client's `write_attributes` also no longer includes `email` or
 `email_verified`.
+
+**These controls take effect for NEWLY ISSUED tokens only.** `verifyUser()` reads claims out of the
+token, and an id_token is valid for 12h, so a token minted BEFORE the deploy — carrying
+`email_verified: true` and whatever email it had then — keeps passing the legacy ownership match for
+up to 12 more hours. The reverse also holds: an admin whose address you verify at deploy time is not
+an admin until they log in again, because their current token says otherwise. So either force
+re-authentication (invalidate the cookie) when the change must be immediate, or do not treat the hole
+as closed until 12h have passed.
 
 ```
 Browser ──HTTPS──► CloudFront

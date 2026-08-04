@@ -115,15 +115,33 @@ export async function createReport(
      RETURNING id`,
     [tier, requestedBy, model, ownerKeys, account],
   );
-  return rows[0].id as number;
+  // Number() as well as the pool-level int8 parser: a unit test with a mocked pool, or any future
+  // client that skips getPool(), would otherwise hand a string to callers typed `number`.
+  return Number(rows[0].id);
 }
 
 // Link the report to its job AFTER enqueueJob has inserted worker_jobs(job_id) (FK now satisfiable).
+// One report per job is enforced by a partial unique index (migration 01KZ2A4M…), so this UPDATE can
+// legitimately lose a race: a concurrent same-key request linked its own report to the same job first.
+// Postgres reports that as 23505, and the caller's job is to recognise it rather than surface a 500
+// with a permanently `running` orphan behind it (PR #203 review MAJOR).
+export class ReportJobAlreadyLinkedError extends Error {
+  constructor(public readonly workerJobId: string) {
+    super(`worker job ${workerJobId} already has a report`);
+    this.name = 'ReportJobAlreadyLinkedError';
+  }
+}
+
 export async function linkReportJob(reportId: number, workerJobId: string): Promise<void> {
-  await getPool().query(
-    `UPDATE diagnosis_reports SET worker_job_id = $1 WHERE id = $2`,
-    [workerJobId, reportId],
-  );
+  try {
+    await getPool().query(
+      `UPDATE diagnosis_reports SET worker_job_id = $1 WHERE id = $2`,
+      [workerJobId, reportId],
+    );
+  } catch (e) {
+    if ((e as { code?: string }).code === '23505') throw new ReportJobAlreadyLinkedError(workerJobId);
+    throw e;
+  }
 }
 
 // Idempotency-first: return the report already attached to an existing job for this key, if any.
@@ -133,7 +151,7 @@ export async function reportForIdempotencyKey(key: string): Promise<number | nul
      WHERE j.idempotency_key = $1 AND r.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1`,
     [key],
   );
-  return rows[0]?.id ?? null;
+  return rows[0] ? Number(rows[0].id) : null;
 }
 
 // Fail an orphaned 'running' row (e.g. when enqueue throws after createReport).

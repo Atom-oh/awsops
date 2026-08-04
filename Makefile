@@ -26,7 +26,9 @@ migrate: ## Apply pending DB migrations (collision-free ULID files, advisory-loc
 	@node scripts/v2/migrate.mjs
 
 backfill-owner-sub: ## PLAN the legacy email-keyed requested_by -> Cognito sub rewrite (ADR-009 Amendment step 2). Writes a plan, changes nothing. Apply with: node scripts/v2/backfill-owner-sub.mjs --apply <plan.json>
-	@node scripts/v2/backfill-owner-sub.mjs
+	@# exit 2 = "a plan was written, nothing was applied", which is the SUCCESS path here — make must
+	@# not report it as a failure (review MINOR). Any other non-zero still fails the target.
+	@node scripts/v2/backfill-owner-sub.mjs; rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 2 ] || exit $$rc
 
 migrate-status: ## Offline: app version + each migration's declared release (no DB connect)
 	@node scripts/v2/migrate.mjs --status
