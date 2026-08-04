@@ -4,7 +4,8 @@ import { useI18n } from '@/components/shell/LanguageProvider';
 
 // Explore "자주 쓰는 쿼리" — pre-built diagnostic signals (datasource_index) surfaced as clickable
 // chips. Ready signals fill+run their query via onPick; unavailable signals render disabled with a
-// "metric X 없음 — Refresh schema" tooltip. Prom/Mimir only (others have no pre-built signals).
+// "metric X 없음 — Refresh schema" tooltip. All datasource kinds now have kind-scoped catalog
+// entries (see signal_catalog.py).
 interface ReadySignal { signalKey: string; title: string; query: { tool: string; queries: { label: string; expr: string }[] } }
 interface UnavailableSignal { signalKey: string; title: string; missingMetrics: string[] }
 interface Props {
@@ -19,7 +20,7 @@ export default function DiagSignalChips({ instanceId, kind, onPick }: Props) {
   const { tt } = useI18n();
   const [ready, setReady] = useState<ReadySignal[]>([]);
   const [unavailable, setUnavailable] = useState<UnavailableSignal[]>([]);
-  const enabled = !!instanceId && (kind === 'prometheus' || kind === 'mimir');
+  const enabled = !!instanceId;
 
   useEffect(() => {
     if (!enabled) { setReady([]); setUnavailable([]); return; }

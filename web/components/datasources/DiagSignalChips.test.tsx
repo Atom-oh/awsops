@@ -29,10 +29,10 @@ describe('DiagSignalChips', () => {
     expect(un.getAttribute('title')).toMatch(/node_filesystem_avail_bytes/);
   });
 
-  it('renders nothing for a non-prom/mimir kind (no fetch)', async () => {
+  it('renders chips for a non-prom/mimir kind (loki) now that it has its own catalog', async () => {
     render(<DiagSignalChips instanceId={7} kind="loki" onPick={vi.fn()} />);
-    expect(screen.queryByTestId('diag-signal-chips')).toBeNull();
-    expect((global.fetch as any)).not.toHaveBeenCalled();
+    await waitFor(() => screen.getByText('OOM Kill')); // SIGNALS fixture is kind-agnostic in this test file
+    expect((global.fetch as any)).toHaveBeenCalledWith('/api/datasources/7/diag-signals');
   });
 
   it('renders nothing without an instanceId', async () => {
