@@ -277,16 +277,20 @@ async function plan(client) {
     for (const g of conflicts) {
       for (const c of g.clash) {
         // Four cases, not three: both-disabled fell through to the sub-keyed-only branch and was
-        // reported as "the sub-keyed row is enabled" when nothing was (stop-gate).
+        // reported as "the sub-keyed row is enabled" when nothing was (stop-gate). Each case states
+        // what IS, and stops there — `enabled = false` says nothing is running right now, not that a
+        // row is disposable: both rows still carry schedule_type/config a user can re-enable, and
+        // this tool's contract is to infer nothing about intent (second stop-gate on the same lines).
         const why = c.legacy_enabled && c.other_enabled
           ? 'BOTH ENABLED — this diagnosis is ALREADY running twice'
           : c.legacy_enabled
             ? 'only the legacy row is enabled — this person\'s live schedule is still email-keyed, and '
               + 'at flag-off its reports become invisible to them'
             : c.other_enabled
-              ? 'only the sub-keyed row is enabled — the legacy row is dormant, so deleting it is usually right'
-              : 'NEITHER is enabled — nothing is running; both rows are dormant leftovers and deleting '
-                + 'the legacy one is safe';
+              ? 'only the sub-keyed row is enabled — the legacy row is not firing, and the live schedule '
+                + 'is already sub-keyed; the legacy row\'s config is still there if it was the one they meant'
+              : 'NEITHER is enabled — nothing is firing, so this one is not urgent; both rows still hold '
+                + 'a config that can be re-enabled, so which survives is still a decision';
         console.log(`  type=${c.schedule_type}: legacy id=${c.id} (${g.owner}, enabled=${c.legacy_enabled})`
           + ` vs id=${c.other_id} (${g.to}, enabled=${c.other_enabled})`);
         console.log(`    -> ${why}`);
@@ -294,9 +298,10 @@ async function plan(client) {
     }
     console.log('UNIQUE (user_sub, schedule_type) makes the rewrite impossible without merging, and the');
     console.log('merge is a decision this tool will not make. Note that leaving it alone is NOT neutral:');
-    console.log('the dispatcher runs every enabled row regardless of the flag, so the legacy row keeps');
-    console.log('firing and keeps writing email-keyed reports. Disable/delete the one you do not want,');
-    console.log('then re-plan. The address\'s other rows ARE in the plan.');
+    console.log('the dispatcher runs every enabled row regardless of the flag, so an enabled legacy row');
+    console.log('keeps firing and keeps writing email-keyed reports. Compare the two configs, keep the');
+    console.log('one that reflects what the user wants, remove the other, then re-plan. The address\'s');
+    console.log('other rows ARE in the plan.');
   }
   if (unverified.length > 0 || unmapped.length > 0 || ambiguous.length > 0 || conflicts.length > 0) {
     console.log('\nKeep LEGACY_EMAIL_OWNER_MATCH=true until these are resolved.');
