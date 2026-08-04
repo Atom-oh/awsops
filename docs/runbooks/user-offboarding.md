@@ -240,16 +240,36 @@ set -euo pipefail
 unset EMAIL
 V2_POOL=$(terraform -chdir=terraform/v2/foundation output -raw cognito_user_pool_id)
 : "${V2_POOL:?terraform output gave no cognito_user_pool_id}"
+SSM_ADMIN_EMAILS_PARAM=${SSM_ADMIN_EMAILS_PARAM:-/ops/awsops-v2/admin_emails}
+: "${DSN:?rebuild DSN first - the recipe is in the Verification block above}"
 printf 'address to DELETE: '; IFS= read -r EMAIL < /dev/tty
 : "${EMAIL:?no address entered}"
 
-# 비활성 상태여야 한다 — 활성 계정을 지우는 것은 이 절차를 건너뛴 것이다.
-# It must already be disabled: deleting an enabled account means the procedure above was skipped.
+# 삭제는 sub<->email 매핑을 없앤다 — 그래서 **오프보딩이 실제로 끝났는지** 먼저 검사한다. 미완인 채로
+# 지우면 남은 단계(스케줄 정지·세션 revocation)를 수행할 sub 를 다시 얻을 수 없다(리뷰 지적: 이전 판은
+# Enabled=False 만 보고 부분 완료 상태를 통과시켰다).
+# Deleting destroys the sub<->email mapping, so check the offboarding actually FINISHED first: delete it
+# half-done and there is no way to recover the sub for the remaining steps (review finding — the previous
+# version checked only Enabled=False and accepted a partially completed run).
+SUB=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$EMAIL" \
+  --query 'UserAttributes[?Name==`sub`]|[0].Value' --output text)
+: "${SUB:?admin-get-user returned no sub}"
 ENABLED=$(aws cognito-idp admin-get-user --user-pool-id "$V2_POOL" --username "$EMAIL" \
   --query Enabled --output text)
-[ "$ENABLED" = "False" ] || { echo "account is still enabled ($ENABLED) - run the Action block first"; exit 1; }
+[ "$ENABLED" = "False" ] || { echo "step 1 not done: account still enabled ($ENABLED)"; exit 1; }
 
-printf 'retype %s to delete irreversibly: ' "$EMAIL"; IFS= read -r CONFIRM < /dev/tty
+LEFT=$(psql "$DSN" -At -v sub="$SUB" -v email="$EMAIL" -c \
+  "SELECT count(*) FROM report_schedules WHERE user_sub IN (:'sub', :'email') AND enabled")
+[ "$LEFT" = "0" ] || { echo "step 3 not done: $LEFT schedule(s) still enabled"; exit 1; }
+
+REVOKED=$(psql "$DSN" -At -v sub="$SUB" -c \
+  "SELECT count(*) FROM session_revocations WHERE user_sub = :'sub'")
+[ "$REVOKED" = "1" ] || { echo "step 4 not done: no session_revocations row for this sub"; exit 1; }
+
+ALLOW=$(aws ssm get-parameter --name "$SSM_ADMIN_EMAILS_PARAM" --query Parameter.Value --output text)
+case ",${ALLOW// /}," in *,"$EMAIL",*) echo "step 2 not done: still in the admin allowlist"; exit 1;; esac
+
+printf 'all steps verified. retype %s to delete irreversibly: ' "$EMAIL"; IFS= read -r CONFIRM < /dev/tty
 [ "$CONFIRM" = "$EMAIL" ] || { echo 'mismatch - nothing was deleted'; exit 1; }
 aws cognito-idp admin-delete-user --user-pool-id "$V2_POOL" --username "$EMAIL"
 ```
