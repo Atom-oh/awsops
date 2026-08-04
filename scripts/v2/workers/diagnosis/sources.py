@@ -531,6 +531,14 @@ def _signal_plan(conn, iid):
         return None  # signals not materialized yet → generic fallback
     plan, unavail, sig_meta = [], [], []
     for r in rows:
+        # LLM-GENERATED rows are for the Explore chips only, never the report. They carry no
+        # pillar/threshold (the deterministic catalog's do), and `external_obs_signals` prompts the model
+        # with signals[].pillar/threshold to justify a verdict — feeding it a threshold-less row makes it
+        # judge severity with nothing to judge against. Non-K8s Prometheus is exactly the case this PR
+        # widens, so the row really would arrive here (review MAJOR, L4-M1). The comment claiming chips-only
+        # was true for loki/tempo/clickhouse and wrong for prom/mimir; this makes it true for all of them.
+        if (r.get("meta") or {}).get("provenance") == "generated":
+            continue
         if r.get("status") == "ready" and isinstance(r.get("query"), dict):
             tool = r["query"].get("tool")
             for q in (r["query"].get("queries") or []):

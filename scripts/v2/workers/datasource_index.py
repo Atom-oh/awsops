@@ -9,8 +9,7 @@ actually changed:
   - datasource_diag_signals (diagnosis/signal_catalog.py) — prometheus/mimir/loki/tempo deterministic,
     clickhouse via the flag-gated LLM fallback only; jaeger/dynatrace/datadog are NOT wired
     (DIAG_SIGNAL_KINDS, the daily dispatcher's _LIST_SQL and ds_connector_arns are all 5-kind).
-    Per-kind catalog +
-    LLM hybrid fallback when a kind's catalog has zero ready matches.
+    Per-kind catalog + LLM hybrid fallback when a kind's catalog has zero ready matches.
   - datasource_graph_queries (graph_catalog.py) — ALL 5 connector kinds (capability-driven: only
     clickhouse/tempo get span queries, prometheus/mimir get them only with a service-graph metric,
     loki is structurally unavailable — see graph_catalog.py).
@@ -22,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 
 import boto3
 
@@ -32,6 +32,7 @@ except ImportError:  # noqa: F401
 
 import graph_catalog as _graph_cat  # always flat next to this file — never under a package
 import graph_querygen as _querygen  # hybrid LLM fallback (v1 scope: clickhouse trace_spans only)
+from datetime import datetime, timezone
 
 try:  # fargate/tests: package path; lambda worker zip flattens it to signal_catalog_gen.py
     from diagnosis import signal_catalog_gen as _signal_gen
@@ -154,7 +155,33 @@ def _graph_schema_version(schema):
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
-_MAX_GENERATION_ATTEMPTS = 3   # TOTAL tries per schema_version, retries included
+_MAX_GENERATION_ATTEMPTS = 3   # TOTAL tries per schema_version PER ISO WEEK, retries included
+
+
+def _iso_week():
+    return datetime.now(timezone.utc).strftime("%G%V")
+
+
+def _retry_state(existing, version):
+    """(attempts_used, exhausted_this_week) read back from the stored version marker.
+
+    The budget resets weekly. Spending it used to be PERMANENT — the plain version was stored and the
+    schema never changes for a quiet datasource, so an instance that happened to be idle for three runs
+    (night, low traffic) stayed chip-less forever (review MAJOR, L4-M3). `:retryN w<week>` counts this
+    week's tries; `:spent<week>` means they are gone, and since neither marker equals `version` the
+    rebuild still runs each day — it just skips the Bedrock call until the week rolls over.
+    """
+    if not existing or not existing.startswith(f"{version}:"):
+        return 0, False
+    marker, week = existing[len(version) + 1:], _iso_week()
+    m = re.match(r"retry(\d+)w(\d+)$", marker)
+    if m:
+        return (int(m.group(1)), False) if m.group(2) == week else (0, False)
+    m = re.match(r"spent(\d+)$", marker)
+    if m:
+        current = m.group(1) == week
+        return (_MAX_GENERATION_ATTEMPTS if current else 0), current
+    return 0, False
 
 
 def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
@@ -163,8 +190,9 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     if existing_version == version:
         return {"skipped": True, "schema_version": version}
     rows = _cat.build_signals(kind, schema)  # present-but-empty metrics → all unavailable
+    attempts, exhausted = _retry_state(existing_version, version)
     gen_status = None
-    if not any(r["status"] == "ready" for r in rows):
+    if not any(r["status"] == "ready" for r in rows) and not exhausted:
         generated, gen_status = _signal_gen.try_generate_signal_with_status(
             kind, schema, iid,
             lambda args: _lambda_invoke(kind, _cat._KIND_TOOL.get(kind, f"{kind}_query"), args))
@@ -180,27 +208,24 @@ def _rebuild_diag_signals(conn, wdb, iid, kind, schema):
     # `unavailable` catalog rows, and persisting THOSE under the real version skips the retry just as
     # effectively. So the rows are still written — they carry the "metric X missing" text the UI shows —
     # but under a deliberately mismatching version, which makes the next run rebuild and retry.
-    # BOUNDED retry. A transient generation failure must not record the real version (that skips forever),
-    # but it must not retry forever either: the connectors collapse upstream 503s into the same 400 as a
-    # bad query, so the cause is unknowable from the response and an unbounded `:retry` meant daily Bedrock
-    # calls for a query that may never work (review, twice). The attempt count rides in the stored version;
-    # calls for a query that may never work (review, twice). The attempt count rides in the stored version:
-    # `:retryN` means N generations already ran, so this run is number N+1 and _MAX_GENERATION_ATTEMPTS is a
-    # count of GENERATIONS, not of extra ones (review, thirteenth pass — it was off by one the other way).
-    # Once they are used up we store the plain version and stop until the schema itself changes.
+    # BOUNDED retry, per week. A transient failure must not record the real version (that skips forever),
+    # but it must not retry forever either: the connectors collapse upstream 503s into the same 400 as a bad
+    # query, so the cause is unknowable from the response and an unbounded `:retry` meant daily Bedrock calls
+    # for a query that may never work. `:retryN` means N generations already ran, so this run is number N+1
+    # and _MAX_GENERATION_ATTEMPTS counts GENERATIONS, not extra ones. Spending the budget parks the
+    # instance for the rest of the ISO week (see _retry_state), not forever.
     retry_needed = gen_status == _signal_gen.TRANSIENT and not any(r["status"] == "ready" for r in rows)
-    attempt = 0
-    if existing_version and existing_version.startswith(f"{version}:retry"):
-        try:
-            attempt = int(existing_version.rsplit("retry", 1)[1] or 0)
-        except ValueError:
-            attempt = 0
-    if retry_needed and attempt + 1 >= _MAX_GENERATION_ATTEMPTS:
-        logging.warning("[datasource_index] integration %s: generation failed on all %s attempts for this "
-                        "schema; recording the version and giving up until the schema changes",
-                        iid, attempt + 1)
+    if exhausted:
+        stored_version = existing_version   # keep this week's `:spent` marker; retry when the week rolls
+    elif not retry_needed:
+        stored_version = version
+    elif attempts + 1 >= _MAX_GENERATION_ATTEMPTS:
+        logging.warning("[datasource_index] integration %s: generation failed on all %s attempts this week; "
+                        "parking it until the week rolls over or the schema changes", iid, attempts + 1)
         retry_needed = False
-    stored_version = f"{version}:retry{attempt + 1}" if retry_needed else version
+        stored_version = f"{version}:spent{_iso_week()}"
+    else:
+        stored_version = f"{version}:retry{attempts + 1}w{_iso_week()}"
     # Atomic upsert+sweep (M3): a partial upsert must not leave some rows on the new schema_version
     # while others stay stale — the next run would read a new-version row, judge "unchanged", and
     # lock in the stale/missing signals. One transaction makes the rebuild all-or-nothing.

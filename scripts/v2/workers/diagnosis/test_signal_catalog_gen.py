@@ -3,6 +3,7 @@
 every external call (LLM, connector dry-run) is injectable, so these tests make zero real calls.
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -366,8 +367,61 @@ class TestStaticCheckMatchesTheConnectorGuard:
                      "SELECT count() FROM remote('other:9000', system.tables)"):
             assert scg._static_check("clickhouse", expr) is False, expr
 
+    @staticmethod
+    def _tokens(pattern):
+        # the connector writes it as adjacent r"..." literals, so drop the quoting before matching
+        flat = pattern.replace("\n", "").replace('r"', "").replace('"', "").replace(" ", "")
+        return set(re.search(r"\\b\((.*?)\)\\w", flat).group(1).split("|"))
+
+    def test_the_mirror_covers_every_table_function_the_connector_blocks(self):
+        """The generator MIRRORS clickhouse_mcp._TABLE_FN instead of importing it (the worker zip does not
+        bundle agent/lambda), so the copy can silently fall behind when a table function is added to the
+        connector (review MAJOR, L3-M1). The mirror must never be LOOSER; it is deliberately STRICTER,
+        adding the constant-row generators, which are not an SSRF concern but are not a signal either."""
+        import pathlib
+        text = (pathlib.Path(__file__).resolve().parents[4] / "agent" / "lambda"
+                / "clickhouse_mcp.py").read_text(encoding="utf-8")
+        start = text.index("_TABLE_FN = re.compile(")
+        connector = self._tokens(text[start:text.index("re.IGNORECASE", start)])
+        mine = self._tokens(scg._TABLE_FN.pattern)
+        assert connector - mine == set(), f"mirror fell behind the connector: {connector - mine}"
+        assert mine - connector == {"numbers", "generateRandom", "zeros"}
+
     def test_ordinary_queries_still_pass(self):
         assert scg._static_check("clickhouse", "SELECT avg(duration) FROM spans") is True
+
+
+class TestClickhouseGenerationReachesGenerated:
+    """The clickhouse path had no test proving a generated row can actually be produced, and a review read
+    the vocabulary gate as a structural dead-end (L4-M2). It is not — but only a real, list-shaped schema
+    as the connector returns it proves that, so this pins the whole path end to end."""
+
+    SCHEMA = {"tables": [{"name": "otel_traces",
+                          "columns": [{"name": "Duration", "type": "Int64"},
+                                      {"name": "ServiceName", "type": "String"},
+                                      {"name": "Timestamp", "type": "DateTime"}]}]}
+
+    def test_a_realistic_clickhouse_query_is_generated(self, monkeypatch):
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        expr = ("SELECT avg(Duration) AS avg_ns FROM otel_traces "
+                "WHERE Timestamp > now() - INTERVAL 15 MINUTE")
+        row, status = scg.try_generate_signal_with_status(
+            "clickhouse", self.SCHEMA, 7,
+            lambda args: {"rowCount": 1, "rows": [{"avg_ns": 1234}]},
+            invoke_llm=lambda *a, **k: expr)
+        assert status == scg.GENERATED
+        assert row["query"]["queries"][0]["expr"] == expr
+        assert row["meta"] == {"kind": "clickhouse", "provenance": "generated"}
+
+    def test_the_dry_run_bounds_the_scan(self, monkeypatch):
+        # max_rows caps the RETURNED rows only; a generated `count()` still scans the table (L4-M4).
+        seen = {}
+        monkeypatch.setenv("DIAG_SIGNAL_QUERYGEN_ENABLED", "true")
+        scg.try_generate_signal_with_status(
+            "clickhouse", self.SCHEMA, 7,
+            lambda args: (seen.update(args), {"rowCount": 1, "rows": [{"c": 1}]})[1],
+            invoke_llm=lambda *a, **k: "SELECT count() FROM otel_traces")
+        assert seen["max_execution_time"] == 5
 
 
 class TestAliasesCannotImpersonateSchemaNames:

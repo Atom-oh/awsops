@@ -120,7 +120,7 @@ CATALOG = [
         "threshold": 3, "unit": "count",
     },
     {
-        "key": "loki_error_rate", "title": "에러 로그 비율", "pillar": "reliability",
+        "key": "loki_error_count", "title": "에러 로그 수(5분)", "pillar": "reliability",
         "matcher": "labels", "kinds": ("loki",),
         "required_labels": ["job"],
         "queries": [{
@@ -189,8 +189,9 @@ def _missing_for(sig, schema):
 def build_signals(kind, schema):
     """Resolve the catalog against a cached schema. Pure; never raises.
 
-    kind: the datasource kind ('prometheus' | 'mimir' | 'clickhouse' | 'loki' | 'tempo' | 'jaeger' |
-    'dynatrace' | 'datadog'). schema: the cached introspected schema dict — shape varies by kind
+    kind: one of the 5 WIRED kinds ('prometheus' | 'mimir' | 'loki' | 'tempo' | 'clickhouse'); clickhouse
+    has no deterministic entries (fallback-only) and jaeger/dynatrace/datadog are not wired into the index
+    pipeline at all, so both return []. schema: the cached introspected schema dict — shape varies by kind
     (metrics/labels/tags/tables/services — see web/lib/datasource-schema.ts's docstring).
     Returns a list of rows: {signal_key, title, status, query|None, missing_metrics|None, meta}.
     """

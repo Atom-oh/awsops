@@ -57,6 +57,11 @@ Two compounding issues:
 
 ## Decisions
 
+> Superseded points are **corrected in place** below and the reason recorded in
+> [Amended 2026-08-04](#amended-2026-08-04-implementation-reality) — the review found the two sections
+> asserting different truths (all kinds vs 5 kinds, 3–5 candidates vs one, shared flag vs its own), which
+> made the spec unusable as a reference (review MAJOR, L5-M1).
+
 ### 1. Catalog gains a `matcher` field; each entry declares its own match strategy
 
 Today every `CATALOG` entry implicitly matches on `required_metrics` against `schema['metrics']`.
@@ -64,14 +69,15 @@ Each entry gets an explicit `"matcher"` key so `build_signals` dispatches instea
 shape:
 
 - `matcher: "metrics"` (existing 8 K8s entries, unchanged behavior) — `required_metrics` ⊆
-  `schema['metrics']`. Also used for new dynatrace/datadog entries (their schema is `metrics: [...]`
-  too).
+  `schema['metrics']`. (Planned dynatrace/datadog entries were dropped — those kinds are not wired into
+  the index pipeline; see Amended #2.)
 - `matcher: "table_columns"` (clickhouse) — entry declares `required_columns: [...]`; ready when some
   table in `schema['tables']` has a superset of those columns (mirrors `graph_catalog._OTEL_REQUIRED_COLUMNS`
   matching, generalized to non-trace shapes like slow-query/error-count tables).
 - `matcher: "labels"` (loki) — entry declares `required_labels: [...]`; ready when `schema['labels']`
   is a superset.
-- `matcher: "tags_or_services"` (tempo/jaeger) — ready whenever the schema was introspected at all
+- `matcher: "tags_or_services"` (tempo only; jaeger is not wired — Amended #2) — ready whenever the
+  schema was introspected at all
   (mirrors `graph_catalog._tempo_trace_spans`: a reachable endpoint is the only capability needed),
   OR (for jaeger) `schema['services']` non-empty.
 
@@ -80,10 +86,10 @@ implementation detail decided during planning, not this spec):
 
 | kind | new signal examples |
 |---|---|
-| clickhouse | slow queries top-N, error-log rate (if a log-shaped table exists), table row-count growth, disk usage by table, query count by user |
+| clickhouse | **none shipped** — the assumed `system.*` shape is not exposed that way, so clickhouse is fallback-only (Amended #1) |
 | loki | error-log rate spike, warn/error ratio by namespace, log volume by job, panic/fatal grep hit count |
-| tempo / jaeger | slowest services (p95 latency), highest error-rate services, most-called service pairs, trace count by service |
-| dynatrace / datadog | problem/alert count, top hosts by CPU/mem tag, anomaly count by entity |
+| tempo | slowest services (p95 latency), highest error-rate services, most-called service pairs, trace count by service |
+| ~~jaeger / dynatrace / datadog~~ | **dropped** — not wired into the index pipeline (Amended #2) |
 
 Each new entry follows the existing row shape: `{signal_key, title, status, query, missing_metrics|missing_*, meta}`.
 
@@ -91,24 +97,32 @@ Each new entry follows the existing row shape: `{signal_key, title, status, quer
 
 If, after matching, **zero** entries for the instance's kind are `ready`, a new
 `signal_catalog_gen.py` (mirrors `graph_querygen.py`) is invoked with the instance's actual schema
-names (table/column names, or label/tag/service names) to generate 3–5 candidate signal queries via
-Bedrock Haiku. Each candidate goes through:
+names (table/column names, or label/tag/service names) to generate **ONE** candidate signal expression via
+Bedrock Haiku (3–5 was the plan; one keeps the cost and the review surface proportionate to a chip —
+Amended #3). The candidate goes through:
 
 1. Static read-only / single-statement check (kind-appropriate: reuse the SQL guard for clickhouse;
    a lighter "no mutating verbs" check for PromQL/LogQL/TraceQL, which have no mutating verbs to begin
    with, so this step is a no-op pass-through for those).
-2. Live dry-run against the connector (`{kind}_query` / `{kind}_search` with the smallest applicable
-   window/limit), asserting a non-error, non-empty-shape response.
+2. A **relevance** gate: the expression must mention this instance's own schema vocabulary and must not
+   merely measure a constant (`SELECT 1`, `vector(1)`, a name inside a string literal or an alias). This
+   was not in the plan and is the gate most of the review passes were spent on.
+3. Live dry-run against the connector (`{kind}_query` / `{kind}_search` with the smallest applicable
+   window/limit and a 5s ClickHouse execution bound), asserting a non-error response. An empty response
+   is retryable, not a verdict — a quiet window is not a wrong query.
 
-Only candidates that pass both are persisted as `ready` rows with `meta.provenance = "generated"`;
-everything else stays `unavailable`. This is gated on the same `GRAPH_QUERYGEN_ENABLED` flag (renamed
-scope-wise in docs to cover both call sites; the env var itself is unchanged) — default off, so
-today's zero-LLM-cost behavior for K8s Prometheus/Mimir is unaffected.
+Only a candidate that passes all three is persisted as a `ready` row with `meta.provenance = "generated"`;
+everything else stays `unavailable`. Generated rows feed the **Explore chips only** — `_signal_plan`
+excludes them from the diagnosis report, which judges severity from `pillar`/`threshold` that a generated
+row does not have. Gated on its **own** `diag_signal_querygen_enabled` (NOT the shared
+`GRAPH_QUERYGEN_ENABLED` the plan assumed — Amended #4), default off, so today's zero-LLM-cost behavior
+for K8s Prometheus/Mimir is unaffected. Note the schema identifiers (table/metric/label names) of the
+external datasource are sent to Bedrock; no credentials are.
 
 ### 3. Remove the kind gates
 
-- `datasource_index.py`: delete `_DIAG_KINDS` restriction — `_rebuild_diag_signals` runs for every
-  kind (the catalog itself safely returns all-`unavailable` for a kind with no matching entries, so
+- `datasource_index.py`: widen `_DIAG_KINDS` to the 5 wired connector kinds — `_rebuild_diag_signals`
+  runs for each of them (the catalog itself safely returns all-`unavailable` for a kind with no matching entries, so
   this is a no-op widening, not a behavior change for kinds not yet covered by step 1).
 - `DiagSignalChips.tsx`: `enabled = !!instanceId` (drop the `kind === 'prometheus' || kind === 'mimir'`
   check). The component already renders `null` when both `ready` and `unavailable` are empty, so no

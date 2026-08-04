@@ -11,7 +11,7 @@ const SIGNALS = {
 };
 
 const LOKI_SIGNALS = {
-  ready: [{ signalKey: 'loki_error_rate', title: '에러 로그 비율',
+  ready: [{ signalKey: 'loki_error_count', title: '에러 로그 수(5분)',
             query: { tool: 'loki_query_range', queries: [{ label: 'error_rate', expr: 'sum by(job) (count_over_time({job=~".+"} |~ "(?i)error|exception|fatal" [5m]))' }] } }],
   unavailable: [],
 };
@@ -39,9 +39,9 @@ describe('DiagSignalChips', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => LOKI_SIGNALS })));
     const onPick = vi.fn();
     render(<DiagSignalChips instanceId={7} kind="loki" onPick={onPick} />);
-    await waitFor(() => screen.getByText('에러 로그 비율'));
+    await waitFor(() => screen.getByText('에러 로그 수(5분)'));
     expect((global.fetch as any)).toHaveBeenCalledWith('/api/datasources/7/diag-signals');
-    fireEvent.click(screen.getByText('에러 로그 비율'));
+    fireEvent.click(screen.getByText('에러 로그 수(5분)'));
     expect(onPick).toHaveBeenCalledWith('sum by(job) (count_over_time({job=~".+"} |~ "(?i)error|exception|fatal" [5m]))');
   });
 

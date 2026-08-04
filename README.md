@@ -120,6 +120,8 @@ Runtime configuration is **flag-gated in Terraform** (`variables.tf`), booleans 
 | `workers_enabled` | the async worker tier (SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | the Steampipe inventory-sync data layer |
 | `official_mcp_enabled` | ADR-017 curated official-vendor MCP presets (external-obs `mcpServer` targets) |
+| `graph_querygen_enabled` | LLM fallback for the ONE ClickHouse `trace_spans` graph query (ADR-007) |
+| `diag_signal_querygen_enabled` | LLM fallback for an Explore diag-signal chip on kinds whose deterministic catalog is empty — separate from `graph_querygen_enabled`, both need `datasource_diagnosis_enabled` |
 
 Two companion **maps** (not booleans, both default `{}`) configure ADR-017 per preset — `official_mcp_endpoints` (`map(string)`, `preset_key` -> `https://` endpoint) and `official_mcp_read_only_ack` (`map(string)`, `preset_key` -> **the exact endpoint URL the operator reviewed**, echoed verbatim — *not* `true`). A preset provisions only when its ack equals its current endpoint; anything else is a fail-closed SKIP that retires any live target:
 
@@ -279,6 +281,8 @@ make upgrade             # 안전한 릴리스 업그레이드: RDS 스냅샷 ->
 | `workers_enabled` | 비동기 워커 계층(SQS/SFN/Lambda/Fargate) |
 | `steampipe_enabled` | Steampipe 인벤토리 sync 데이터 계층 |
 | `official_mcp_enabled` | ADR-017 큐레이션 공식 벤더 MCP 프리셋(external-obs `mcpServer` target) |
+| `graph_querygen_enabled` | ClickHouse `trace_spans` 그래프 쿼리 **1건**에 대한 LLM 폴백 (ADR-007) |
+| `diag_signal_querygen_enabled` | 결정론 카탈로그가 빈 kind의 Explore diag-signal 칩 LLM 폴백 — `graph_querygen_enabled`와 **별개**, 둘 다 `datasource_diagnosis_enabled` 선행 |
 
 ADR-017은 프리셋별 설정용 **맵 변수 2개**(불리언 아님, 둘 다 기본 `{}`)를 함께 씁니다 — `official_mcp_endpoints`(`map(string)`, `preset_key` -> `https://` 엔드포인트)와 `official_mcp_read_only_ack`(`map(string)`, `preset_key` -> **운영자가 검토한 엔드포인트 URL 그대로**. `true`가 아닙니다). ack 값이 현재 엔드포인트와 정확히 같을 때만 provisioning되고, 그 밖의 모든 경우는 fail-closed SKIP(기존 target 회수)입니다:
 

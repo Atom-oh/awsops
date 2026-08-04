@@ -467,6 +467,9 @@ def _dry_run_check(kind, expr, integration_id, invoke_connector):
     args = {arg_name: expr, "instance_id": integration_id}
     if kind == "clickhouse":
         args["max_rows"] = 1
+        # max_rows caps the RETURNED rows, not the SCAN: `SELECT count() FROM spans` reads the whole table
+        # on every rebuild (review MAJOR, L4-M4). 5s is plenty for a signal query and cheap to abandon.
+        args["max_execution_time"] = 5
     try:
         result = invoke_connector(args)
     except Exception:           # noqa: BLE001 — never propagated; see the note below
@@ -475,7 +478,7 @@ def _dry_run_check(kind, expr, integration_id, invoke_connector):
         # 503 from the datasource arrives as 400 and "4xx means the query is wrong" would freeze a genuine
         # outage into a permanent skip (review). Since the signal cannot be recovered from the response, the
         # retry is BOUNDED instead: datasource_index counts attempts in the stored version and stops after
-        # _MAX_RETRY_ATTEMPTS, which caps the Bedrock cost without pretending to know the cause.
+        # _MAX_GENERATION_ATTEMPTS, which caps the Bedrock cost without pretending to know the cause.
         return False, True
     if not result:
         return False, True

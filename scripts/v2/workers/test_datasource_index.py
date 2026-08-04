@@ -168,9 +168,9 @@ class TestGeneratedFallback:
         }))
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}})  # catalog yields nothing
         out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
-        assert out["schema_version"].endswith(":retry1") and out.get("retry")
+        assert out["schema_version"].endswith(f":retry1w{dsi._iso_week()}") and out.get("retry")
         # the stored version cannot equal the version the next run computes, so it rebuilds
-        assert all(p["sv"].endswith(":retry1") for p in c.inserts)
+        assert all(p["sv"].endswith(f":retry1w{dsi._iso_week()}") for p in c.inserts)
 
     def test_transient_failure_with_unavailable_catalog_rows_also_retries(self, monkeypatch):
         # The first version of this guard only fired on an EMPTY build, so loki/tempo — which normally
@@ -184,24 +184,25 @@ class TestGeneratedFallback:
         c = FakeConn(kind="loki", schema={"labels": ["custom_label_only"]})  # rows, none ready
         out = dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert out["built"] > 0 and out["ready"] == 0
-        assert out["schema_version"].endswith(":retry1") and out.get("retry")
-        assert c.inserts and all(p["sv"].endswith(":retry1") for p in c.inserts)
+        assert out["schema_version"].endswith(f":retry1w{dsi._iso_week()}") and out.get("retry")
+        assert c.inserts and all(p["sv"].endswith(f":retry1w{dsi._iso_week()}") for p in c.inserts)
 
     def test_the_retry_is_bounded(self, monkeypatch):
         # The connectors collapse upstream failures into the same 400 as a bad query, so the cause cannot be
         # read off the response — an unbounded `:retry` meant daily Bedrock calls for a query that may never
-        # work (review, tenth pass). Once _MAX_GENERATION_ATTEMPTS tries are used up the real version is
-        # stored and the daily job skips until the schema itself changes.
+        # work (review, tenth pass). Once _MAX_GENERATION_ATTEMPTS tries are used up the instance is parked
+        # for the rest of the ISO week — `:spent<week>`, not the plain version, so the park expires.
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
             "TRANSIENT": "transient",
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         base = dsi._schema_version({"tables": {"t": ["c"]}})
         c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}},
-                     existing_version=f"{base}:retry{dsi._MAX_GENERATION_ATTEMPTS - 1}")
+                     existing_version=f"{base}:retry{dsi._MAX_GENERATION_ATTEMPTS - 1}w{dsi._iso_week()}")
         out = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)
-        assert out["schema_version"] == base and not out.get("retry")
-        assert all(p["sv"] == base for p in c.inserts)
+        spent = f"{base}:spent{dsi._iso_week()}"
+        assert out["schema_version"] == spent and not out.get("retry")
+        assert all(p["sv"] == spent for p in c.inserts)
 
     def test_the_generation_runs_exactly_max_attempts_times(self, monkeypatch):
         # _MAX_GENERATION_ATTEMPTS counts GENERATIONS, not extra ones: `:retryN` already means N ran, so
@@ -218,10 +219,31 @@ class TestGeneratedFallback:
         for _ in range(10):   # more runs than the cap: the extra ones must not generate again
             c = FakeConn(kind="clickhouse", schema=schema, existing_version=version)
             version = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"]
-            if version == base:
-                break
-        assert version == base
+        assert version == f"{base}:spent{dsi._iso_week()}"
         assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS
+
+    def test_the_park_expires_when_the_week_rolls_over(self, monkeypatch):
+        # It used to be permanent: the plain version was stored, and since a quiet datasource's schema never
+        # changes, an instance idle for three runs stayed chip-less forever (review MAJOR, L4-M3).
+        calls = []
+        monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
+            "TRANSIENT": "transient",
+            "try_generate_signal_with_status": staticmethod(
+                lambda *a, **k: (calls.append(1), (None, "transient"))[1]),
+        }))
+        schema = {"tables": {"t": ["c"]}}
+        base = dsi._schema_version(schema)
+        monkeypatch.setattr(dsi, "_iso_week", lambda: "202601")
+        version = None
+        for _ in range(5):
+            c = FakeConn(kind="clickhouse", schema=schema, existing_version=version)
+            version = dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"]
+        assert version == f"{base}:spent202601" and len(calls) == dsi._MAX_GENERATION_ATTEMPTS
+        monkeypatch.setattr(dsi, "_iso_week", lambda: "202602")   # next week: a fresh budget
+        c = FakeConn(kind="clickhouse", schema=schema, existing_version=version)
+        assert dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"] == \
+            f"{base}:retry1w202602"
+        assert len(calls) == dsi._MAX_GENERATION_ATTEMPTS + 1
 
     def test_the_attempt_counter_advances(self, monkeypatch):
         monkeypatch.setattr(dsi, "_signal_gen", type("M", (), {
@@ -229,8 +251,9 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(lambda *a, **k: (None, "transient")),
         }))
         base = dsi._schema_version({"tables": {"t": ["c"]}})
-        c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}}, existing_version=f"{base}:retry1")
-        assert dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"] == f"{base}:retry2"
+        c = FakeConn(kind="clickhouse", schema={"tables": {"t": ["c"]}}, existing_version=f"{base}:retry1w{dsi._iso_week()}")
+        assert dsi.run({"integration_id": 7, "kind": "clickhouse"}, c)["schema_version"] == \
+            f"{base}:retry2w{dsi._iso_week()}"
 
     def test_conclusive_empty_build_records_the_sentinel(self, monkeypatch):
         # Flag off (or the model answered and was rejected): nothing will change until the schema or an
@@ -251,7 +274,7 @@ class TestGeneratedFallback:
             "try_generate_signal_with_status": staticmethod(
                 lambda *a, **k: (called.append(1) or None, "rejected")),
         }))
-        c = FakeConn(kind="loki", schema={"labels": ["job"]})  # loki_error_rate matches → 1+ ready
+        c = FakeConn(kind="loki", schema={"labels": ["job"]})  # loki_error_count matches → 1+ ready
         dsi.run({"integration_id": 7, "kind": "loki"}, c)
         assert called == []
 
