@@ -244,7 +244,8 @@ describe('POST /api/diagnosis — idempotency conflict must not strand the secon
   });
 
   it('answers 202 deduped when the link loses the one-report-per-job race', async () => {
-    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 42 } });
+    // payload carries no id, so the arbiter has nothing to compare and the link is the only signal
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: {} });
     (linkReportJob as any).mockRejectedValueOnce(new ReportJobAlreadyLinkedError('j1'));
     (reportForIdempotencyKey as any).mockResolvedValueOnce(null).mockResolvedValueOnce(9);
     const { POST } = await import('./route');
@@ -254,8 +255,22 @@ describe('POST /api/diagnosis — idempotency conflict must not strand the secon
     expect(softDeleteReport).toHaveBeenCalledWith(42);
   });
 
-  it('answers 409 when the link loses and the winner cannot be found', async () => {
+  it('keeps its own report when the ledger names it and only the link lost', async () => {
+    // The worker resolves the report from the payload, so if the payload names OUR report the render
+    // happens to our row whether or not the link was recorded. Deleting it would destroy the row the
+    // worker writes to, and answering with another report would name one this job never renders
+    // (codex stop-gate).
     (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: { report_id: 42 } });
+    (linkReportJob as any).mockRejectedValueOnce(new ReportJobAlreadyLinkedError('j1'));
+    const { POST } = await import('./route');
+    const res = await POST(req({ tier: 'mid' }) as any);
+    expect(res.status).toBe(202);
+    expect((await res.json()).report_id).toBe(42);
+    expect(softDeleteReport).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 when the link loses and the winner cannot be found', async () => {
+    (enqueueJob as any).mockResolvedValue({ job_id: 'j1', status: 'queued', payload: {} });
     (linkReportJob as any).mockRejectedValueOnce(new ReportJobAlreadyLinkedError('j1'));
     (reportForIdempotencyKey as any).mockResolvedValue(null);
     const { POST } = await import('./route');

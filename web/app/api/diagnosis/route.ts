@@ -156,6 +156,14 @@ export async function POST(req: Request) {
     // enqueueJob deduped, so no message names it — so retire it and answer with the one that exists,
     // the same shape the ledger branch above returns.
     if (e instanceof ReportJobAlreadyLinkedError) {
+      // The worker resolves which report to render from the JOB PAYLOAD, not from this link. So if the
+      // payload names OUR report, the render is going to happen to our row whatever the link says —
+      // deleting it would destroy the row the worker is about to write, and pointing the caller at
+      // another report would name one this job will never render (codex stop-gate). Only the
+      // convenience link (used for idempotency lookups and lineage) is lost.
+      if (ledgerReportId === reportId) {
+        return NextResponse.json({ job_id: job.job_id, report_id: reportId, tier, model }, { status: 202 });
+      }
       await softDeleteReport(reportId);
       const winner = await reportForIdempotencyKey(key);
       if (winner) {

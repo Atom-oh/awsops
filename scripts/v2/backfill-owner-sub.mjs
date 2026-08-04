@@ -255,6 +255,7 @@ async function plan(client) {
   const conflicts = [];   // report_schedules: the sub already has a schedule of that type
   const planClashes = [];       // two PLANNED rewrites claim the same (sub, schedule_type)
   const claimedSchedules = new Map(); // `${sub}\0${type}` -> the entry that claimed it first
+  const claimedActive = new Map();    // sub -> the entry that already claims an ENABLED schedule
   for (const g of groups) {
     const hit = users.get(String(g.owner).toLowerCase());
     if (!hit) { unmapped.push(g); continue; }
@@ -274,13 +275,20 @@ async function plan(client) {
         const keep = [];
         for (const id of ids) {
           const row = types.get(id);
-          const key = row ? `${hit.sub}\u0000${row.schedule_type}` : null;
-          const prior = key && claimedSchedules.get(key);
+          if (!row) { keep.push(id); continue; }
+          const key = `${hit.sub}\u0000${row.schedule_type}`;
+          // Same (sub, type) is a hard UNIQUE collision; a second ENABLED row of ANY type under the
+          // same sub breaks the one-active-schedule invariant instead (see scheduleConflicts). Both
+          // are plan-level clashes between two rows this very plan would move.
+          const prior = claimedSchedules.get(key)
+            || (row.enabled ? claimedActive.get(hit.sub) : null);
           if (prior) {
-            planClashes.push({ ...g, to: hit.sub, id, schedule_type: row.schedule_type, prior });
+            planClashes.push({ ...g, to: hit.sub, id, schedule_type: row.schedule_type, prior,
+              sameType: claimedSchedules.has(key) });
             continue;
           }
-          if (key) claimedSchedules.set(key, { owner: g.owner, id });
+          claimedSchedules.set(key, { owner: g.owner, id, schedule_type: row.schedule_type });
+          if (row.enabled) claimedActive.set(hit.sub, { owner: g.owner, id, schedule_type: row.schedule_type });
           keep.push(id);
         }
         ids = keep;
@@ -310,8 +318,16 @@ async function plan(client) {
   console.log('in flight during the apply can write a NEW email-keyed row AFTER the final "0 legacy rows');
   console.log('left" check, and flipping the flag then hides that row from its owner. It runs hourly, so');
   console.log('the window is narrow but real:');
-  console.log('  aws events disable-rule --name awsops-v2-schedule-dispatcher   # before --apply');
-  console.log('  aws events enable-rule  --name awsops-v2-schedule-dispatcher   # after, once clean');
+  console.log('  aws events disable-rule --name awsops-v2-schedule-dispatcher   # stops NEW invocations');
+  console.log('  # disable-rule does NOT stop an invocation that is already running (codex stop-gate).');
+  console.log('  # Its timeout is 120s, so wait past that AND confirm nothing is in flight before you');
+  console.log('  # apply — Invocations over the last 5 min must be 0:');
+  console.log('  sleep 150');
+  console.log('  aws cloudwatch get-metric-statistics --namespace AWS/Lambda --metric-name Invocations \\');
+  console.log('    --dimensions Name=FunctionName,Value=awsops-v2-schedule-dispatcher \\');
+  console.log('    --start-time "$(date -u -d \'-5 min\' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)" \\');
+  console.log('    --period 300 --statistics Sum');
+  console.log('  aws events enable-rule --name awsops-v2-schedule-dispatcher    # after, once clean');
   // Two causes, reported separately because they need different handling — and because telling an
   // operator a live colleague is "gone" would be wrong.
   if (unverified.length > 0) {
@@ -374,7 +390,8 @@ async function plan(client) {
     console.log('\nNOT IN THE PLAN — two legacy addresses would be rewritten onto the SAME schedule slot:');
     for (const c of planClashes) {
       console.log(`  report_schedules id=${c.id} ${c.owner} -> ${c.to} type=${c.schedule_type}`
-        + `  (slot already claimed by ${c.prior.owner}, id=${c.prior.id})`);
+        + `  (${c.sameType ? 'same slot' : 'an ENABLED schedule'} already claimed by ${c.prior.owner},`
+        + ` id=${c.prior.id}, type=${c.prior.schedule_type})`);
     }
     console.log('These addresses differ only in letter case, so they are the same Cognito user, but the');
     console.log('DB kept them as separate owner values. UNIQUE (user_sub, schedule_type) allows only one');
@@ -502,6 +519,26 @@ async function apply(client) {
       applied.push(`${e.table}.${e.column}: ${e.from} -> ${e.to} (${e.changedIds.length} rows)`);
     }
     commitSent = true;
+    // The DB enforces (user_sub, schedule_type) itself, but nothing enforces "one ENABLED schedule per
+    // user" — that invariant lives in upsertSchedule(). So a schedule created (or re-enabled) between
+    // plan and apply would sail through the plan-time checks and leave two rows firing, with no
+    // constraint violation to roll anything back (codex stop-gate). Assert it here, where it cannot be
+    // bypassed: any target sub holding more than one enabled row aborts the whole apply.
+    const touchedSubs = [...new Set(entries.filter((e) => e.table === 'report_schedules').map((e) => e.to))];
+    if (touchedSubs.length > 0) {
+      const { rows: dup } = await client.query(
+        `SELECT user_sub, count(*)::int AS n, array_agg(id::text ORDER BY id) AS ids
+           FROM report_schedules WHERE user_sub = ANY($1::text[]) AND enabled
+          GROUP BY user_sub HAVING count(*) > 1`,
+        [touchedSubs]);
+      if (dup.length > 0) {
+        throw new Error(
+          'the rewrite would leave more than one ENABLED schedule per user, which makes the diagnosis '
+          + 'run twice: '
+          + dup.map((d) => `${d.user_sub} -> ${d.n} rows (${d.ids.join(', ')})`).join('; ')
+          + ' — something changed since the plan; re-plan against reality');
+      }
+    }
     await client.query('COMMIT');
     committed = true;
   } catch (err) {
